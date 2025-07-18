@@ -1610,6 +1610,8 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
             pytest.xfail("Only test atomic bfloat16/float16 ops on GPU")
     if "uint" in dtype_x_str and mode in ["min_neg", "all_neg"]:
         pytest.xfail("uint cannot be negative")
+    if is_xpu() and dtype_x_str == 'bfloat16':
+        pytest.skip("bfloat16 not yet supported for xpu")
 
     n_programs = 5
 
@@ -1698,6 +1700,8 @@ def test_atomic_rmw_predicate(num_ctas, device):
                           for check_return_val in ([True, False] if is_hip() else [True])])
 def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, check_return_val, device):
     check_type_supported(dtype_x_str, device)
+    if is_xpu() and dtype_x_str == 'bfloat16':
+        pytest.skip("bfloat16 not yet supported for xpu")
     shape0, shape1 = shape
     # triton kernel
 
@@ -1777,6 +1781,8 @@ def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, check_return_val,
                                                          for dtype_x_str in ['bfloat16', 'float16', 'float32']])
 def test_tensor_atomic_add_non_exclusive_offset(size, num_ctas, dtype_x_str, device):
     check_type_supported(dtype_x_str, device)
+    if is_xpu() and dtype_x_str == 'bfloat16':
+        pytest.skip("bfloat16 not yet supported for xpu")
 
     @triton.jit
     def kernel(X, val, NUM: tl.constexpr):
@@ -1798,9 +1804,11 @@ def test_tensor_atomic_add_non_exclusive_offset(size, num_ctas, dtype_x_str, dev
 @pytest.mark.parametrize("size, num_ctas, dtype_x_str", [(size, num_ctas, dtype_x_str)
                                                          for size in [2, 4, 8, 32, 64, 128]
                                                          for num_ctas in num_ctas_list
-                                                         for dtype_x_str in ['float16', 'float32']])
+                                                         for dtype_x_str in ['bfloat16', 'float16', 'float32']])
 def test_tensor_atomic_add_shift_1(size, num_ctas, dtype_x_str, device):
     check_type_supported(dtype_x_str, device)
+    if is_xpu() and dtype_x_str == 'bfloat16':
+        pytest.skip("bfloat16 not yet supported for xpu")
 
     @triton.jit
     def kernel(X, val, NUM: tl.constexpr):
@@ -1836,6 +1844,9 @@ def test_tensor_atomic_add_access_patterns(shape, idx_order, mask_step, num_ctas
     check_type_supported(dtype_x_str, device)
     if is_interpreter():
         pytest.xfail("not supported in the interpreter")
+
+    if is_xpu() and dtype_x_str == 'bfloat16':
+        pytest.skip("bfloat16 not yet supported for xpu")
 
     @triton.jit
     def kernel(in_ptr, idx_ptr, out_ptr, shape0, shape1, mask_step, XBLOCK: tl.constexpr):
@@ -3284,6 +3295,8 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, add_ov
         pytest.skip("Skipping because tensor shape is smaller than M(f)maLayout instr_shape")
     if reduce_op == "sum" and dtype_str == "float16" and M * N > 1024:
         pytest.xfail("Skipping sum reduction on float16 due to accuracy issues")
+    if isinstance(src_layout, LinearLayout) and THREADS_PER_WARP != (1 << len(src_layout.lane)):
+        pytest.xfail(f"Skipping. This LinearLayout assumes {1 << len(src_layout.lane)} threads per warp")
 
     if isinstance(src_layout, MmaLayout) and src_layout.version == 3:
         src_layout.instr_shape[2] = 16 if dtype_str == "float16" else 8
@@ -7682,11 +7695,11 @@ def test_gather_warp_shuffle(src_shape, indices_shape, axis, src_layout, indices
         pat += str(axis)
         pat += r" : i32, efficient_layout} : \(tensor\<"
         pat += src_spec
-        pat += r", (#[a-z]+[0-9]*)\>, tensor\<"
+        pat += r", (#[a-z]+[0-9]+)\>, tensor\<"
         pat += indices_spec
-        pat += r", (#[a-z]+[0-9]*)\>\) -> tensor\<"
+        pat += r", (#[a-z]+[0-9]+)\>\) -> tensor\<"
         pat += output_spec
-        pat += r", (#[a-z]+[0-9]*)\>"
+        pat += r", (#[a-z]+[0-9]+)\>"
 
         repl = r"""
     %src = ttg.convert_layout \2 : tensor<""" + src_spec + r""", \4> -> tensor<""" + src_spec + r""", #src_layout>
