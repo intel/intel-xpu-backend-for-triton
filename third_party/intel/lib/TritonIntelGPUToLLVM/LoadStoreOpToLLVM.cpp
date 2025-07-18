@@ -3307,13 +3307,14 @@ struct AtomicRMWOpConversion
               valueElemNBits == 64) &&
              "Unexpected width");
 
-      Value zero;
-      llvm::TypeSwitch<mlir::Type>(valueElemTy)
-          .Case<mlir::IntegerType>(
-              [&](auto ty) { zero = b.int_val(valueElemNBits, 0); })
-          .Case<mlir::Float16Type>([&](auto ty) { zero = b.f16_val(0); })
-          .Case<mlir::Float32Type>([&](auto ty) { zero = b.f32_val(0); })
-          .Case<mlir::Float64Type>([&](auto ty) { zero = b.f64_val(0); });
+      Value zero =
+          TypeSwitch<mlir::Type, Value>(valueElemTy)
+              .Case<mlir::IntegerType>(
+                  [&](auto ty) { return b.int_val(valueElemNBits, 0); })
+              .Case<mlir::Float16Type>([&](auto) { return b.f16_val(0); })
+              .Case<mlir::BFloat16Type>([&](auto) { return b.bf16_val(0); })
+              .Case<mlir::Float32Type>([&](auto) { return b.f32_val(0); })
+              .Case<mlir::Float64Type>([&](auto) { return b.f64_val(0); });
 
       // TODO: check device capabilities to avoid unnecessary emulation or
       // emit unsupported feature error.
@@ -3321,11 +3322,10 @@ struct AtomicRMWOpConversion
       bool support16BitAtomics = moduleOp->hasAttr(
           TritonIntelGPUDialect::getSupport16BitAtomicsAttrName());
       if (valueElemNBits == 16 && !support16BitAtomics) {
-        op.emitWarning(
-            "'tt.atomic_rmw' op fp16 datatype is not supported in the target "
-            "HW, software emulation is an experimental feature (use at own "
-            "risk)");
-        Block *endBlock = emulateFp16AtomicRmw(
+        op.emitWarning("'tt.atomic_rmw' op fp16/bf16 datatype is not supported "
+                       "in the target HW, software emulation is an "
+                       "experimental feature (use at own risk)");
+        Block *endBlock = emulate16BitsAtomicRmw(
             rewriter, loc, atomicRmwAttr, valueElemTy, rmwPtr, rmwVal,
             maybeAnd(rewriter, loc, b.true_val(), rmwMask), {zero});
         ret = endBlock->getArgument(0);
@@ -3391,10 +3391,10 @@ struct AtomicRMWOpConversion
 
   // Emulate 16-bit atomicrmw through a loop with 32-bit cmpxchg.
   // TODO: optimize for the case when rmwMask is a true constant?
-  Block *emulateFp16AtomicRmw(ConversionPatternRewriter &rewriter, Location loc,
-                              mlir::triton::RMWOp atomicOp, Type valueElemTy,
-                              Value rmwPtr, Value rmwVal, Value rmwMask,
-                              ArrayRef<Value> ops) const {
+  Block *emulate16BitsAtomicRmw(ConversionPatternRewriter &rewriter,
+                                Location loc, mlir::triton::RMWOp atomicOp,
+                                Type valueElemTy, Value rmwPtr, Value rmwVal,
+                                Value rmwMask, ArrayRef<Value> ops) const {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     Block *insertionBlock = rewriter.getInsertionBlock();
     Block *headerBlock =
