@@ -193,6 +193,14 @@ static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockStoreOp op) {
       op.getTileWidth() == 16 && op.getVBlocks() == 1)
     return false;
 
+  // FIXME: The SPV block store only support sub-group-size=16.
+  auto mod = op->getParentOfType<mlir::ModuleOp>();
+  if (mod) {
+    int subGroupSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    if (subGroupSize != 16)
+      return false;
+  }
+
   return true;
 }
 
