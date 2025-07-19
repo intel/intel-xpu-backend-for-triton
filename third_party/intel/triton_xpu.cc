@@ -300,9 +300,9 @@ void init_triton_intel(py::module &&m) {
       for (Instruction &inst : instructions(func)) {
         if (auto *op = dyn_cast<FPMathOperator>(&inst)) {
           FastMathFlags FMF;
-          // Allow contract when default fp fusion is enabled.
-          if ((enableFpFusion.has_value() && enableFpFusion.value()) &&
-              !fastMath.has_value()) {
+          // Default to allow contract when default fp fusion is not disabled.
+          if ((!enableFpFusion.has_value() || enableFpFusion.value()) &&
+              !fastMath.has_value() && inst.hasNoNaNs()) {
             if (op->getOpcode() == Instruction::FAdd ||
                 op->getOpcode() == Instruction::FMul)
               FMF.setAllowContract(true);
