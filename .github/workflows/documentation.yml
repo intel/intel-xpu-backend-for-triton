@@ -4,8 +4,7 @@ on:
   schedule:
     - cron: "0 0 * * *"
 
-permissions:
-  contents: write
+permissions: read-all
 
 jobs:
   Build-Documentation:

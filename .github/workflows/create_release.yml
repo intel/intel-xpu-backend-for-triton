@@ -15,14 +15,14 @@ on:
   pull_request:
     paths: [.github/workflows/create_release.yml]
 
+permissions: read-all
+
 jobs:
 
   release:
     if: ${{ github.repository == 'triton-lang/triton' }}
     name: Create Release
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     outputs:
       release_name: "${{ steps.release_name.outputs.name }}"
     steps:
