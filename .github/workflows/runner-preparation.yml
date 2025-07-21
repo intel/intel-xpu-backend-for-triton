@@ -10,6 +10,8 @@ on:
       matrix-MACOS:
         value: ${{ jobs.prepare.outputs.matrix-MACOS }}
 
+permissions: read-all
+
 jobs:
   prepare:
     runs-on: ubuntu-latest
