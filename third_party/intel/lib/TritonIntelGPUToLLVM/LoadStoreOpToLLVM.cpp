@@ -25,6 +25,24 @@ using namespace mlir::triton::gpu::intel;
 
 #define S(v) StringAttr::get(ctx, (v))
 
+#if defined(_MSC_VER) && !defined(__clang__)
+// from https://gist.github.com/pps83/3210a2f980fd02bb2ba2e5a1fc4a2ef0
+#include <intrin.h>
+
+static int __builtin_clz(unsigned x) {
+  unsigned long r;
+  _BitScanReverse(&r, x);
+  return static_cast<int>(r ^ 31);
+}
+
+static int __builtin_ctz(unsigned x) {
+  unsigned long r;
+  _BitScanForward(&r, x);
+  return static_cast<int>(r);
+}
+
+#endif
+
 namespace {
 
 Value maybeAnd(RewriterBase &rewriter, Location loc, Value a, Value b) {
@@ -2513,19 +2531,31 @@ struct LoadOpToBlockIOConversion
     // TODO: use the axis info to general the handling for both regular pointer
     // and block pointer.
     const bool memoryRowMajor = isMemoryRowMajor(op);
-    // FIXME: Add support of column major.
-    if (!memoryRowMajor)
-      return failure();
-
     unsigned contiguousDim = memoryRowMajor ? 1 : 0;
     const bool isTransposeRequired = contiguousDim != colDim;
-    if (isTransposeRequired)
-      return matchAndRewriteTranspose(op, adaptor, rewriter);
+
+    if (isTransposeRequired) {
+      // TODO: support load column major data.
+      return failure();
+    }
 
     Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     MLIRContext *ctx = rewriter.getContext();
 
+    StringAttr kRegister = S("register");
+    std::vector<std::vector<int>> bases(regPackedBases->size());
+    llvm::transform(*regPackedBases, bases.begin(),
+                    [&](int base) { return std::vector<int>{base}; });
+    LinearLayout regMapping({{kRegister, bases}},
+                            {{kRegister, llEncoding->getInDimSize(kRegister)}},
+                            /*requireSurjective=*/true);
+
+    unsigned threadsPerWarp =
+        TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>());
+
+    Value baseWidth, baseHeight, pitch;
+    unsigned baseHeightInt;
     // Get the LLVM values for pointers
     Value llPtr = adaptor.getPtr();
     SmallVector<Value> ptrElems = unpackLLElements(loc, llPtr, rewriter);
@@ -2557,14 +2587,55 @@ struct LoadOpToBlockIOConversion
       }
 
       // Check the constancy of the mask support to load the memory in 2D block.
-      if (!(maskConstancyHor >= (tileWidth * numPackedVals) &&
-            maskConstancyVer >= tileHeight))
-        return failure();
+      if (!(maskConstancyHor >= (tileWidth * numPackedVals)))
+        return failure(); // The tileWidth and numPackedVals is not changeable
+                          // for now.
 
       // Adjust vBlock to fit the constancy of mask.
       vBlocks = std::min(vBlocks, mlir::ceil<int>(maskConstancyHor,
                                                   tileWidth * numPackedVals));
       assert(llvm::isPowerOf2_64(vBlocks) && "vBlocks has to be power of 2");
+
+      // Check the constancy of the mask support to load the memory in 2D block.
+      if (maskConstancyVer < tileHeight) {
+        unsigned minTileHeight =
+            mlir::ceil<unsigned>(threadsPerWarp, tileWidth);
+        if (maskConstancyVer < minTileHeight)
+          return failure();
+
+        unsigned numBasesForPackedVals = __builtin_ctz(numPackedVals);
+        unsigned numBasesForTileWidth =
+            __builtin_ctz(mlir::ceil<unsigned>(tileWidth, threadsPerWarp));
+        unsigned numBasesForNewTileHeight =
+            __builtin_ctz(maskConstancyVer / minTileHeight);
+        unsigned numBasesForOldTileHeight =
+            __builtin_ctz(tileHeight / minTileHeight);
+        unsigned numBasesForVBlocks = __builtin_ctz(vBlocks);
+
+        std::vector<std::vector<int32_t>> rearangeMap;
+        for (int i = 0; i < __builtin_ctz(numElems); i++) {
+          rearangeMap.emplace_back().push_back(1 << i);
+        }
+
+        // Rotate the bases of the ole tile height after the vBlocks.
+        unsigned rotateStart = numBasesForPackedVals + numBasesForTileWidth +
+                               numBasesForNewTileHeight;
+        unsigned rotateNum =
+            numBasesForOldTileHeight - numBasesForNewTileHeight;
+        std::rotate(rearangeMap.begin() + rotateStart,
+                    rearangeMap.begin() + rotateStart + rotateNum,
+                    rearangeMap.begin() + rotateStart + rotateNum +
+                        numBasesForVBlocks);
+
+        LinearLayout rearangeMapping(
+            {{kRegister, rearangeMap}},
+            {{kRegister, regMapping.getInDimSize(kRegister)}},
+            /*requireSurjective=*/true);
+        tileHeight = maskConstancyVer;
+        assert(((tileHeight - 1) & tileHeight) == 0 &&
+               "the tileHeight has to be power of 2.");
+        rearangeMapping = rearangeMapping.compose(regMapping);
+      }
     }
 
     // Get the LLVM values for `other`
@@ -2595,47 +2666,80 @@ struct LoadOpToBlockIOConversion
       }
     }
 
-    unsigned threadsPerWarp =
-        TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>());
-    int64_t numElemsPerLoad = mlir::ceil(
-        tileHeight * tileWidth * numPackedVals * vBlocks, (int)threadsPerWarp);
-    unsigned numValuesPerLoad = mlir::ceil((int)numElemsPerLoad, numPackedVals);
+    baseWidth = b.i32_val(
+        std::max(64u, vBlocks * tileWidth * (packedElemSizeInBits / 8)));
+    // If the stride is 0, we want to load only the first row.
+    int stride = getStride(ptr, 0);
+    baseHeightInt = (stride == 0 ? 1 : tileHeight);
+    baseHeight = b.i32_val(baseHeightInt);
+    pitch = getPitch(rewriter, ptr, elemSizeInBits, memoryRowMajor ? 0 : 1);
+    if (!pitch)
+      return failure();
+
+    int64_t numElemsPerLoad =
+        tileHeight * tileWidth * numPackedVals * vBlocks / threadsPerWarp;
+
+    int64_t numValuesPerLoad = numElemsPerLoad / numPackedVals;
     Type packedType = IntegerType::get(ctx, packedElemSizeInBits);
     Type load2DGenXType = LLVM::getVectorType(packedType, numValuesPerLoad);
     Type unpackedType = LLVM::getVectorType(eltTy, numElemsPerLoad);
 
-    Value pitch =
-        getPitch(rewriter, ptr, elemSizeInBits, memoryRowMajor ? 0 : 1);
-    if (!pitch)
-      return failure();
-
-    // If the stride is 0, we want to load only the first row.
-    int stride = getStride(ptr, memoryRowMajor ? 0 : 1);
-    unsigned baseHeightInt = (stride == 0 ? 1 : tileHeight);
-    Value baseHeight = b.i32_val(baseHeightInt);
-    Value baseWidth = b.i32_val(
-        std::max(64u, vBlocks * tileWidth * (packedElemSizeInBits / 8)));
-
-    StringAttr kRegister = str_attr("register");
-    StringAttr kLane = str_attr("lane");
-    StringAttr kWarp = str_attr("warp");
-    StringAttr kBlock = str_attr("block");
-
-    assert(regPackedBases.has_value() &&
-           "invalid register bases for packing elems.");
-    std::vector<std::vector<int>> bases(regPackedBases->size());
-    llvm::transform(*regPackedBases, bases.begin(),
-                    [](int base) { return std::vector<int>{base}; });
-    LinearLayout regMapping({{kRegister, bases}},
-                            {{kRegister, llEncoding->getInDimSize(kRegister)}},
-                            /*requireSurjective=*/true);
-
     bool useVNNIFormat = false;
     Type packedDPASOperandType;
-    if (hasDotDpasEncoding(tensorType)) {
+    if (hasDpasEncoding(tensorType) || hasDotDpasEncoding(tensorType)) {
+
+      // There are three types for block load here for DPAS layout
+      // (Otherwise there are only two types are used.):
+      // 1. load2DGenXType -
+      // 2. packedDPASOperandType - (It is null for non DPAS layout.)
+      // 3. unpackedType -
+      //
+      // clang-format off
+      // The tt.load generated block load op:
+      //   %0 = load_2d %ptr : <load2DGenXType>
+      //   %1 = shufflevector <load2DGenXType> %0, <load2DGenXType> %0, <8 x i32> <i32 0, i32 1, i32  2, i32  3, i32  4, i32  5, i32  6, i32  7>
+      //   %2 = shufflevector <load2DGenXType> %0, <load2DGenXType> %0, <8 x i32> <i32 8, i32 9, i32 10, i32 11, i32 12, i32 13, i32 14, i32 15>
+      //   %3 = bitcast %1 : <packedDPASOperandType> -> <unpackedType>
+      //   %4 = bitcast %2 : <packedDPASOperandType> -> <unpackedType>
+      //   <ops for packLLElements>
+      // clang-format on
+      //
+      // The tt.dot generated DPAS op:
+      // clang-format off
+      //   <ops for unpackLLElements>
+      //   %5 = bitcast %3 : <unpackedType> -> <packedDPASOperandType>
+      //   %6 = bitcast %4 : <unpackedType> -> <packedDPASOperandType>
+      //   %7 = dpas %5, %6, %other : <packedDPASOperandType>, <packedDPASOperandType>, <packedDPASOperandType>
+      // clang-format on
+      //
+      // The LLVM optimizer will remove the redundant expression of pack/unpack
+      // elements pair and bitcast pair. The final IR would be simple for dot
+      // product:
+      // clang-format off
+      //   %0 = load_2d %ptr : <load2DGenXType>
+      //   %1 = shufflevector <load2DGenXType> %0, <load2DGenXType> %0, <8 x i32> <i32 0, i32 1, i32  2, i32  3, i32  4, i32  5, i32  6, i32  7>
+      //   %2 = shufflevector <load2DGenXType> %0, <load2DGenXType> %0, <8 x i32> <i32 8, i32 9, i32 10, i32 11, i32 12, i32 13, i32 14, i32 15>
+      //   %3 = dpas %1, %2, %other : <packedDPASOperandType>, <packedDPASOperandType>, <packedDPASOperandType>
+      // clang-format on
+      // The packedDPASOperandType and the shufflevector operation define the
+      // computation flow for the dot product.
+
       DpasEncodingAttr::OpIdx opIdx = getOpIdx(tensorType);
       auto dpasLayout = getDpasLayout(tensorType);
-      if (opIdx == DpasEncodingAttr::OpIdx::OperandB) {
+      switch (opIdx) {
+      case DpasEncodingAttr::OpIdx::OperandA: {
+        unsigned elemsPerLanePerDPASInst =
+            product<unsigned>(dpasLayout.getDPASInstShapeA()) / threadsPerWarp;
+        // Block 2D contain at least one DotOp A.
+        if (numElemsPerLoad >= elemsPerLanePerDPASInst) {
+          packedDPASOperandType = LLVM::getVectorType(
+              packedType, elemsPerLanePerDPASInst / numPackedVals);
+          unpackedType = LLVM::getVectorType(eltTy, elemsPerLanePerDPASInst);
+        }
+      } break;
+      case DpasEncodingAttr::OpIdx::OperandB: {
+        assert(numPackedVals == 1 &&
+               "invalid number of packed values for DPAS operand B.");
         unsigned elemsPerLanePerDPASInst =
             product<unsigned>(dpasLayout.getDPASInstShapeB()) / threadsPerWarp;
         // Block 2D contain at least one DotOp B.
@@ -2659,6 +2763,19 @@ struct LoadOpToBlockIOConversion
           }
           unpackedType = LLVM::getVectorType(eltTy, elemsPerLanePerDPASInst);
         }
+      } break;
+      case DpasEncodingAttr::OpIdx::OperandC: {
+        unsigned elemsPerLanePerDPASInst =
+            product<unsigned>(dpasLayout.getDPASInstShapeC()) / threadsPerWarp;
+        // Block 2D contain at least one DotOp C.
+        if (numElemsPerLoad >= elemsPerLanePerDPASInst) {
+          packedDPASOperandType = LLVM::getVectorType(
+              packedType, elemsPerLanePerDPASInst / numPackedVals);
+          unpackedType = LLVM::getVectorType(eltTy, elemsPerLanePerDPASInst);
+        }
+      } break;
+      default:
+        llvm_unreachable("unexpected OpIdx type.");
       }
     }
     SmallVector<Value> unpackedLoadedVals(numElems);
@@ -2674,6 +2791,9 @@ struct LoadOpToBlockIOConversion
       Value pred;
       if (maskElems.size()) {
         pred = targetInfo.shuffleIdx(rewriter, loc, maskElems[registerIdx], 0);
+      }
+
+      if (pred) {
         // We leverage the GPU block I/O hardware out-of-bound protection
         // feature by setting the offset to an invalid value when 'pred'
         // is false (the HW will not read out-of-bounds values). Later on,

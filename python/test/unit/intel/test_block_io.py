@@ -119,9 +119,9 @@ layouts = [
 @pytest.mark.parametrize("dtype_str", ["float32", "float16", "int8"])
 @pytest.mark.parametrize("layout", layouts)
 @pytest.mark.parametrize("load_block_ptr, store_block_ptr", [(True, True), (False, False), (True, False),
-                                                             (False, True)])
+@pytest.mark.parametrize("transpose", [True, False])                                             (False, True)])
 @pytest.mark.skipif(not is_xpu(), reason="Block store tests are specific to the XPU backend")
-def test_block_io(M, N, dtype_str, layout, load_block_ptr, store_block_ptr, device, tmp_path: pathlib.Path):
+def test_block_io(M, N, dtype_str, layout, load_block_ptr, store_block_ptr, transpose, device, tmp_path: pathlib.Path):
 
     warps = warps_per_cta(layout)
     num_warps = int(np.prod(warps))
@@ -132,16 +132,18 @@ def test_block_io(M, N, dtype_str, layout, load_block_ptr, store_block_ptr, devi
 
     support_block_io = torch.xpu.get_device_capability()['has_subgroup_2d_block_io']
 
+    block_io = "\"column_major\"" if transpose else "\"row_major\""
+
     if load_block_ptr:
         load_ops = f"""
-            %src_ptr = tt.make_tensor_ptr %src, [%M_i64, %N_i64], [%N_i64, %c1_i64], [%c0_i32, %c0_i32] {{order = array<i32: 1, 0>}} : <tensor<{M}x{N}x{ty}, #layout>>
-            %store_val = tt.load %src_ptr {{ttig.block_io = "row_major", boundaryCheck = array<i32: 0, 1>, padding = 1 : i32}} : !tt.ptr<tensor<{M}x{N}x{ty}, #layout>>
+            %src_ptr = tt.make_tensor_ptr %src, [%M_i64, %N_i64], {"[%c1_i64, %M_i64]" if transpose else "[%N_i64, %c1_i64]"}, [%c0_i32, %c0_i32] {{order = array<i32: 1, 0>}} : <tensor<{M}x{N}x{ty}, #layout>>
+            %store_val = tt.load %src_ptr {{ttig.block_io = {block_io}, boundaryCheck = array<i32: 0, 1>, padding = 1 : i32}} : !tt.ptr<tensor<{M}x{N}x{ty}, #layout>>
             """
     else:
         load_ops = f"""
             %src_base = tt.splat %src : !tt.ptr<{ty}> -> tensor<{M}x{N}x!tt.ptr<{ty}>, #layout>
-            %src_ptr = tt.addptr %src_base, %row_major_off : tensor<{M}x{N}x!tt.ptr<{ty}>, #layout>, tensor<{M}x{N}xi32, #layout>
-            %store_val = tt.load %src_ptr {{ttig.block_io = "row_major"}} : tensor<{M}x{N}x!tt.ptr<{ty}>, #layout>
+            %src_ptr = tt.addptr %src_base, {"%col_major_off" if transpose else "%row_major_off" } : tensor<{M}x{N}x!tt.ptr<{ty}>, #layout>, tensor<{M}x{N}xi32, #layout>
+            %store_val = tt.load %src_ptr {{ttig.block_io = {block_io}}} : tensor<{M}x{N}x!tt.ptr<{ty}>, #layout>
             """
     if store_block_ptr:
         store_ops = f"""
@@ -164,7 +166,6 @@ def test_block_io(M, N, dtype_str, layout, load_block_ptr, store_block_ptr, devi
             %N_i64 = arith.constant {N} : i64
             %c1_i64 = arith.constant 1 : i64
             %c0_i32 = arith.constant 0 : i32
-
             %stride_N = arith.constant dense<{N}> : tensor<{M}x1xi32, #layout>
             %1 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #ttg.slice<{{dim = 1, parent = #layout}}>>
             %2 = tt.expand_dims %1 {{axis = 1 : i32}} : tensor<{M}xi32, #ttg.slice<{{dim = 1, parent = #layout}}>> -> tensor<{M}x1xi32, #layout>
@@ -174,6 +175,14 @@ def test_block_io(M, N, dtype_str, layout, load_block_ptr, store_block_ptr, devi
             %6 = tt.broadcast %row_stride : tensor<{M}x1xi32, #layout> -> tensor<{M}x{N}xi32, #layout>
             %7 = tt.broadcast %5 : tensor<1x{N}xi32, #layout> -> tensor<{M}x{N}xi32, #layout>
             %row_major_off = arith.addi %6, %7 : tensor<{M}x{N}xi32, #layout>
+
+
+            %stride_M = arith.constant dense<{M}> : tensor<1x{N}xi32, #layout>
+            %col_stride = arith.muli %5, %stride_M : tensor<1x{N}xi32, #layout>
+            %8 = tt.broadcast %2 : tensor<{M}x1xi32, #layout> -> tensor<{M}x{N}xi32, #layout>
+            %9 = tt.broadcast %col_stride : tensor<1x{N}xi32, #layout> -> tensor<{M}x{N}xi32, #layout>
+            %col_major_off = arith.addi %8, %9 : tensor<{M}x{N}xi32, #layout>
+            {load_ops}
 
             {load_ops}
             {store_ops}
@@ -195,6 +204,8 @@ def test_block_io(M, N, dtype_str, layout, load_block_ptr, store_block_ptr, devi
     temp_file.write_text(ir)
     kernel = triton.compile(str(temp_file))
 
+    a = a.permute(1, 0).contiguous().permute(1, 0) if transpose else a
+
     kernel[(1, 1, 1)](a, x)
     assert torch.equal(a, x)
 
@@ -202,3 +213,5 @@ def test_block_io(M, N, dtype_str, layout, load_block_ptr, store_block_ptr, devi
         if not load_block_ptr:
             assert 'spirv_Subgroup2DBlockLoad' in kernel.asm['llir'] or 'GenISA.LSC2DBlockRead' in kernel.asm['llir']
         assert 'spirv_Subgroup2DBlockStoreINTEL' in kernel.asm['llir'] or 'GenISA.LSC2DBlockWrite' in kernel.asm['llir']
+        if not block_ptr:
+            assert 'spirv_Subgroup2DBlockLoad' in kernel.asm['llir'] or 'GenISA.LSC2DBlockRead' in kernel.asm['llir']
