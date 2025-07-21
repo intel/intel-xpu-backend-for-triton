@@ -344,14 +344,14 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
         }
         return isMMAorMMADerived;
       };
-      if (llvm::all_of(info.encodings, checkMMAorMMADerived)) {
-        if (storeOp.getMask())
-          setEncoding({storeOp.getPtr(), storeOp.getValue(), storeOp.getMask()},
-                      info, changed, user);
-        else
-          setEncoding({storeOp.getPtr(), storeOp.getValue()}, info, changed,
-                      user);
-      }
+      // if (llvm::all_of(info.encodings, checkMMAorMMADerived)) {
+      if (storeOp.getMask())
+        setEncoding({storeOp.getPtr(), storeOp.getValue(), storeOp.getMask()},
+                    info, changed, user);
+      else
+        setEncoding({storeOp.getPtr(), storeOp.getValue()}, info, changed,
+                    user);
+      // }
       continue;
     }
     if (user->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
@@ -1259,8 +1259,8 @@ LogicalResult LayoutRematerialization::getRematerializableSlice(
     OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
     DenseMap<Value, Attribute> &layout,
     std::function<bool(Operation *)> stopPropagation, bool includeForOp) {
-  LogicalResult result = getConvertBackwardSlice(root, rootEncoding, slice,
-                                                 layout, stopPropagation, includeForOp);
+  LogicalResult result = getConvertBackwardSlice(
+      root, rootEncoding, slice, layout, stopPropagation, includeForOp);
   if (result.failed() || slice.empty())
     return failure();
 
