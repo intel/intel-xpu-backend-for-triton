@@ -175,12 +175,12 @@ bool cvtIsSubGroupShuffle(RankedTensorType srcTy, RankedTensorType dstTy) {
   StringAttr kBlock = str_attr("block");
 
   std::optional<LinearLayout> srcLayout =
-      toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
+      toLinearLayout(srcTy.getShape(), srcTy.getEncoding(), {});
   if (!srcLayout)
     return false;
 
   std::optional<LinearLayout> dstLayout =
-      toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
+      toLinearLayout(dstTy.getShape(), dstTy.getEncoding(), {});
   if (!dstLayout)
     return false;
 
@@ -263,12 +263,12 @@ bool cvtIsSubGroupTranspose(RankedTensorType srcTy, RankedTensorType dstTy) {
   StringAttr kBlock = str_attr("block");
 
   std::optional<LinearLayout> srcLayout =
-      toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
+      toLinearLayout(srcTy.getShape(), srcTy.getEncoding(), {});
   if (!srcLayout)
     return false;
 
   std::optional<LinearLayout> dstLayout =
-      toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
+      toLinearLayout(dstTy.getShape(), dstTy.getEncoding(), {});
   if (!dstLayout)
     return false;
 
