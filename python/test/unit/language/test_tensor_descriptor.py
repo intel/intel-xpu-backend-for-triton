@@ -1507,7 +1507,9 @@ def test_tensor_descriptor_reduce(kind, descriptor, dtype_str, num_ctas, M_BLOCK
             pytest.skip("Broken on rocm")
         if is_xpu():
             if (kind, dtype_str) in [("add", "bfloat16")]:
-                pytest.skip("FIXME: issue #4375")
+                if descriptor == "host":
+                    pytest.skip("FIXME: issue #4289")
+                pytest.skip("FIXME: issue #3914")
 
     @triton.jit(debug=True)
     def kernel(out_desc, out_ptr, a_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr, kind: tl.constexpr):
