@@ -825,20 +825,9 @@ bool LayoutPropagation::rewriteTensorPtrStoreOp(StoreOp storeOp) {
                                          tensorType.getElementType(), encoding);
     newPtrType = PointerType::get(tmpType, ptrType.getAddressSpace());
   } else {
-    Attribute convertOpDstEncoding = convertOp.getType().getEncoding();
     RankedTensorType convertOpSrcType = convertOp.getSrc().getType();
-    if (((!convertOpDstEncoding) ||
-         isa<ttgi::DpasEncodingAttr>(convertOpDstEncoding)) ||
-        (!convertOpSrcType ||
-         !isa<ttgi::DpasEncodingAttr>(convertOpSrcType.getEncoding())))
-      return false;
 
     auto ptrType = cast<PointerType>(makeTensorPtrOp.getType());
-    auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
-    // If the output type of the MakeTensorPtrOp already has a
-    // DPAS encoding, we do not forward the previous DPAS encoding.
-    if (isa<ttgi::DpasEncodingAttr>(tensorType.getEncoding()))
-      return false;
 
     newPtrType = PointerType::get(convertOpSrcType, ptrType.getAddressSpace());
 
