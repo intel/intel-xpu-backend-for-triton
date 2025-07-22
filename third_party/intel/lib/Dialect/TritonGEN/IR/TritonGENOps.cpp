@@ -242,7 +242,6 @@ verify2DBlockLoadHWRestriction(TritonGEN::Matrix2DBlockLoadOp op) {
   unsigned resSize = resTy.getNumElements() * resElemTySize;
   unsigned subgroupSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(
       op->getParentOfType<mlir::ModuleOp>());
-  ;
   unsigned expectedSize = op.getElemSizeInBits() * op.getTileHeight() *
                           op.getTileWidth() * op.getVBlocks() / subgroupSize;
   if (resSize != expectedSize)
