@@ -211,7 +211,7 @@ void init_triton_intel(py::module &&m) {
         // It vectorizes @llvm.fmuladd.f32 with @llvm.fmuladd.v32f32. We can
         // consider to reenable SLP vectorization when the failure is
         // investigated.
-        tuningOptions.SLPVectorization = false;
+        tuningOptions.SLPVectorization = true;
 
         PassBuilder pb(nullptr /*targetMachine*/, tuningOptions, std::nullopt,
                        instrCbPtr);
