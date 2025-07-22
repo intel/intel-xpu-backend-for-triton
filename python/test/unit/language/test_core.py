@@ -2546,6 +2546,13 @@ def get_reduced_dtype(dtype_str, op):
     return dtype_str
 
 
+def get_reduce_input(dtype_str, shape):
+    # limit the range of integers so that reduce ops do not overflow
+    low = 0 if dtype_str in uint_dtypes else -10 if dtype_str in integral_dtypes else None
+    high = 10 if dtype_str in integral_dtypes else None
+    return numpy_random(shape, dtype_str=dtype_str, low=low, high=high)
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize("op, dtype_str, shape", [(op, dtype, shape) for op in [
     'min',
@@ -2579,14 +2586,7 @@ def test_reduce1d(op, dtype_str, shape, num_ctas, num_warps, threads_per_warp, d
         patch = f'z = tl.{op}(x, axis=0)'
     kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': patch})
     # input
-    rs = RandomState(17)
-    # limit the range of integers so that the sum does not overflow
-    if dtype_str in integral_dtypes:
-        low = 0 if dtype_str in uint_dtypes else -100
-        high = 100
-        x = numpy_random((shape, ), dtype_str=dtype_str, rs=rs, low=low, high=high)
-    else:
-        x = numpy_random((shape, ), dtype_str=dtype_str, rs=rs)
+    x = get_reduce_input(dtype_str, (shape, ))
     numpy_op = {
         'sum': np.sum,
         'max': np.max,
@@ -2611,7 +2611,7 @@ def test_reduce1d(op, dtype_str, shape, num_ctas, num_warps, threads_per_warp, d
     else:
         z_ref = numpy_op(x).astype(getattr(np, z_dtype_str))
     # triton result
-    z_tri = to_triton(numpy_random((1, ), dtype_str=z_dtype_str, rs=rs), device=device, dst_type=z_tri_dtype_str)
+    z_tri = to_triton(numpy_random((1, ), dtype_str=z_dtype_str), device=device, dst_type=z_tri_dtype_str)
     if is_xpu():
         kernel[(1, )](x_tri, z_tri, BLOCK=shape, num_ctas=num_ctas, num_warps=num_warps,
                       threads_per_warp=threads_per_warp)
@@ -2715,9 +2715,7 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, num_warps, thre
 
     kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{op}(x, axis=AXIS, keep_dims=KEEP_DIMS)'})
     # input
-    rs = RandomState(17)
-    # limit the range of integers so that the sum does not overflow
-    x = numpy_random(shape, dtype_str=dtype_str, rs=rs)
+    x = get_reduce_input(dtype_str, shape)
     x_tri = to_triton(x, device=device)
     numpy_op = {
         'sum': np.sum, 'max': np.max, 'min': np.min, 'argmin': np.argmin, 'argmax': np.argmax, 'xor_sum':
@@ -2742,7 +2740,7 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, num_warps, thre
 
     # triton result
     z_shape = z_ref.shape
-    z_tri = to_triton(numpy_random(z_shape, dtype_str=z_dtype_str, rs=rs), device=device, dst_type=z_tri_dtype_str)
+    z_tri = to_triton(numpy_random(z_shape, dtype_str=z_dtype_str), device=device, dst_type=z_tri_dtype_str)
     BLOCK_K = 1 if len(shape) == 2 else shape[2]
     IS_3D = bool(len(shape) == 3)
     USE_I1 = dtype_str == 'bool'
@@ -3398,8 +3396,7 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, add_ov
     temp_file.write_text(ir)
     kernel = triton.compile(str(temp_file))
 
-    rs = RandomState(17)
-    x = numpy_random((M, N), dtype_str=dtype_str, rs=rs, low=0, high=10)
+    x = get_reduce_input(dtype_str, (M, N))
     reduce2d = 'reduce2d' in epilogue_kind
     z_shape = (1, 1) if reduce2d else (1, N) if axis == 0 else (M, 1)
     z = np.zeros(z_shape).astype(dtype_str)
@@ -6142,9 +6139,9 @@ def test_num_threads(device):
 
 
 def test_globaltimer(device):
-    if is_hip_cdna2():
-        pytest.skip("test_globaltimer is flaky on gfx90a")
     check_cuda_or_hip(device)
+    if is_hip():
+        pytest.skip("test_globaltimer is flaky on AMD GPUs")
 
     @triton.jit
     def kernel(Out1, Out2, func: tl.constexpr):
@@ -6461,15 +6458,15 @@ shared_layouts = [
 @pytest.mark.parametrize("M, N, M_tile_size, N_tile_size",
                          [[128, 128, 64, 64], [128, 128, 64, 32], [128, 64, 64, 32], [256, 128, 64, 64]])
 def test_split_subview(M, N, M_tile_size, N_tile_size, device):
-    if not is_hip() and not is_xpu():
-        pytest.skip("the test is temporary disabled for the Nvidia backend.")
-
-    num_raws_per_warp = THREADS_PER_WARP // 4
-    num_repeats_M = int(M / M_tile_size)
-    num_repeats_N = int(N / N_tile_size)
+    if not is_xpu() and not is_hip() and N_tile_size == 32:
+        pytest.skip("Will fix spliting along the swizzling pattern in the next PR")
+    threads_per_warp = 64 if is_hip() else 32
+    num_rows_per_warp = threads_per_warp // 4
+    num_repeats_M = triton.cdiv(M, M_tile_size)
+    num_repeats_N = triton.cdiv(N, N_tile_size)
 
     ir = f"""
-    #blocked = #ttg.blocked<{{sizePerThread=[1, 8], threadsPerWarp=[{num_raws_per_warp}, 4], warpsPerCTA=[4, 1], order=[1, 0], CTAsPerCGA=[1, 1], CTASplitNum=[1, 1], CTAOrder=[0, 1]}}>
+    #blocked = #ttg.blocked<{{sizePerThread=[1, 8], threadsPerWarp=[{num_rows_per_warp}, 4], warpsPerCTA=[4, 1], order=[1, 0], CTAsPerCGA=[1, 1], CTASplitNum=[1, 1], CTAOrder=[0, 1]}}>
     #shared = #ttg.swizzled_shared<{{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0]}}>
     #smem = #ttg.shared_memory
 

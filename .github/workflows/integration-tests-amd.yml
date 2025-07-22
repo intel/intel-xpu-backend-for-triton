@@ -7,6 +7,8 @@ on:
         required: true
         type: string
 
+permissions: read-all
+
 jobs:
   integration-tests-amd:
     runs-on: ${{ matrix.runner }}

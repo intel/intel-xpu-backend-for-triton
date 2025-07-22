@@ -123,6 +123,24 @@ LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
   return ret;
 }
 
+static LinearLayout memdescSubview(LinearLayout layout,
+                                   ArrayRef<int64_t> shape) {
+  // We remove the extra bases from the inverse of the layout and then invert it
+  // back This is sound as the initial layout is invertible so we don't lose any
+  // information in the process of inverting twice
+  auto inverse = layout.invert();
+  auto bases = inverse.getBases();
+  for (auto [s, dim] : llvm::zip(shape, inverse.getInDimNames())) {
+    auto &base = bases[dim];
+    base.resize(llvm::Log2_32(s));
+  }
+  auto subviewInv =
+      LinearLayout(bases, inverse.getOutDims(), /*requiresSurjective=*/false);
+  // subviewInv is injective but not surjective
+  // subviewInv.pseudoinvert() is surjective
+  return subviewInv.pseudoinvert();
+}
+
 LinearLayout swizzledSharedToLinearLayout(ArrayRef<int64_t> shape,
                                           SwizzledSharedEncodingAttr shared) {
   MLIRContext *ctx = shared.getContext();
@@ -439,25 +457,56 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
           {outDimNames[order[0]], outDimNames[order[1]]});
   } else {
     assert(getMDim() == 16);
-    // For mfma with 16x16 output, each of the 64 threads holds 4 elements.
-    //
-    // For the register (i.e., element) dimension, these 4 elements are along
-    // the matrix C's M dimension, with 4 consecutive elements spanning 4 rows.
-    //
-    // For the lane (i.e., thread) dimension, these threads are along the
-    // matrix C's N dimension, with 16 consecutive threads covering a whole
-    // row and the next 16 threads start after a gap spanning 4 rows.
-    tileLayout = LinearLayout(
-        {{kRegister, {{0, 1}, {0, 2}}},
-         {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, /*gap*/ {0, 4}, {0, 8}}}},
-        {outDimNames[order[0]], outDimNames[order[1]]});
-    // For mfma.transposed layout, the element ownership among threads are
-    // "transposed" within each warp.
-    if (getIsTransposed())
+    auto elementType = getElementType();
+    if (!(elementType && elementType->isF64())) {
+      // For mfma with 16x16 output (<= 32 bits), each of the 64 threads holds 4
+      // elements.
+      //
+      // For the register (i.e., element) dimension, these 4 elements are along
+      // the matrix C's M dimension, with 4 consecutive elements spanning 4
+      // rows.
+      //
+      // For the lane (i.e., thread) dimension, these threads are along the
+      // matrix C's N dimension, with 16 consecutive threads covering a whole
+      // row and the next 16 threads start after a gap spanning 4 rows.
       tileLayout = LinearLayout(
-          {{kRegister, {{1, 0}, {2, 0}}},
-           {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, /*gap*/ {4, 0}, {8, 0}}}},
+          {{kRegister, {{0, 1}, {0, 2}}},
+           {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, /*gap*/ {0, 4}, {0, 8}}}},
           {outDimNames[order[0]], outDimNames[order[1]]});
+      // For mfma.transposed layout, the element ownership among threads are
+      // "transposed" within each warp.
+      if (getIsTransposed())
+        tileLayout = LinearLayout(
+            {{kRegister, {{1, 0}, {2, 0}}},
+             {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, /*gap*/ {4, 0}, {8, 0}}}},
+            {outDimNames[order[0]], outDimNames[order[1]]});
+
+    } else {
+      // For 64 bit mfma with 16x16 output, each of the 64 threads holds 4
+      // elements across 8 VGPRs. each 64 bit element is split across pairs of 2
+      // VGPRs each. The first VGPR holds the first 32 bits and second holding
+      // the last 32 bits.
+      //
+      // For the register (i.e., element) dimension, these 4 elements are along
+      // the matrix C's M dimension, with 4 consecutive elements spanning 4
+      // rows.
+      //
+      // For the lane (i.e., thread) dimension, these threads are along the
+      // matrix C's N dimension, with each group of 16 consecutive threads
+      // covering a whole adjacent row. Unlike the <=32 bit cases, there's no
+      // row gaps between the groups.
+      tileLayout = LinearLayout(
+          {{kRegister, {{0, 4}, {0, 8}}},
+           {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 1}, {0, 2}}}},
+          {outDimNames[order[0]], outDimNames[order[1]]});
+      // For mfma.transposed layout, the element ownership among threads are
+      // "transposed" within each warp.
+      if (getIsTransposed())
+        tileLayout = LinearLayout(
+            {{kRegister, {{4, 0}, {8, 0}}},
+             {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {1, 0}, {2, 0}}}},
+            {outDimNames[order[0]], outDimNames[order[1]]});
+    }
   }
 
   // Instead of defining the layout on a CTA tile and using the
@@ -1106,7 +1155,8 @@ LinearLayout SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   // First compute the linear layout for this layout's parent.
   SmallVector<int64_t> parentShape(shape);
   parentShape.insert(parentShape.begin() + getDim(), 1);
-  LinearLayout parentLL = triton::gpu::toLinearLayout(parentShape, getParent());
+  LinearLayout parentLL =
+      triton::gpu::toLinearLayout(parentShape, getParent(), {});
 
   // Remove dimension getDim() from the parent layout.
   //
@@ -1145,9 +1195,12 @@ LinearLayout SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
                       llvm::to_vector(sliceLL.getOutDimNames()));
 }
 
-LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
-                                              Attribute layout) {
-  CacheKey key{std::vector<int64_t>(shape.begin(), shape.end()), layout};
+LinearLayout
+TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
+                                 ArrayRef<int64_t> allocationShape) {
+  CacheKey key{
+      std::vector<int64_t>(shape.begin(), shape.end()), layout,
+      std::vector<int64_t>(allocationShape.begin(), allocationShape.end())};
   if (auto result = llCache.get(key)) {
     return *result;
   }
@@ -1156,16 +1209,35 @@ LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
   // To add a new layout add an else-if clause
   LinearLayout result = LinearLayout::empty();
   if (auto distributed = dyn_cast<DistributedEncodingTrait>(layout)) {
+    assert(allocationShape.empty() &&
+           "allocationShape not supported for distributed layout");
     result = distributed.toLinearLayout(shape);
   } else {
+    assert(!allocationShape.empty() &&
+           "allocationShape not supported for shared layout");
+    allocationShape = allocationShape.take_back(shape.size());
+    assert(llvm::all_of(allocationShape,
+                        [](int64_t dim) {
+                          return llvm::isPowerOf2_32(dim) && dim >= 1;
+                        }) &&
+           "allocationShape must be a postive power of 2");
+    assert(llvm::all_of(llvm::zip(allocationShape, shape),
+                        [](auto dims) {
+                          return std::get<0>(dims) >= std::get<1>(dims);
+                        }) &&
+           "allocationShape must be at least as large as shape");
+
     if (auto shared = dyn_cast<SwizzledSharedEncodingAttr>(layout)) {
-      result = swizzledSharedToLinearLayout(shape, shared);
+      result = swizzledSharedToLinearLayout(allocationShape, shared);
     } else if (auto shared = dyn_cast<NVMMASharedEncodingAttr>(layout)) {
-      result = nvmmaSharedToLinearLayout(shape, shared);
+      result = nvmmaSharedToLinearLayout(allocationShape, shared);
     } else if (auto sbl = dyn_cast<AMDRotatingSharedEncodingAttr>(layout)) {
-      result = sharedToLinearLayoutAMDRotating(shape, sbl);
+      result = sharedToLinearLayoutAMDRotating(allocationShape, sbl);
     } else {
       assert(0 && "unknown layout");
+    }
+    if (shape != allocationShape) {
+      result = memdescSubview(result, shape);
     }
   }
 
@@ -1173,10 +1245,29 @@ LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
   return result;
 }
 
-LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout) {
+LinearLayout toLinearLayout(RankedTensorType type) {
+  return toLinearLayout(type.getShape(), type.getEncoding(), {});
+}
+
+LinearLayout toLinearLayout(MemDescType type) {
+  return toLinearLayout(type.getShape(), type.getEncoding(),
+                        type.getAllocShape());
+}
+
+LinearLayout toLinearLayout(TensorOrMemDesc type) {
+  if (auto ranked = dyn_cast<RankedTensorType>(type)) {
+    return toLinearLayout(ranked);
+  } else {
+    auto memDesc = cast<MemDescType>(type);
+    return toLinearLayout(memDesc);
+  }
+}
+
+LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
+                            ArrayRef<int64_t> allocationShape) {
   auto *ctx = layout.getContext();
-  return ctx->getLoadedDialect<TritonGPUDialect>()->toLinearLayout(shape,
-                                                                   layout);
+  return ctx->getLoadedDialect<TritonGPUDialect>()->toLinearLayout(
+      shape, layout, allocationShape);
 }
 
 LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {

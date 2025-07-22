@@ -3,6 +3,8 @@ name: Pre-Commit Check
 on:
   workflow_call:
 
+permissions: read-all
+
 jobs:
   pre-commit:
     name: pre-commit (code formatting)
