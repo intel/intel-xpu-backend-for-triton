@@ -2756,9 +2756,10 @@ struct StoreOpToBlockIOConversion
       offsetBaseX = offsetX;
       offsetBaseY = offsetY;
     } else {
-      static const bool enableBlockStore = triton::tools::getBoolEnv(
-          "TRITON_INTEL_ENABLE_BLOCK_IO_STORE_ON_REGULAR_PTR");
-      if (!enableBlockStore)
+      std::optional<bool> enableBlockStore =
+          mlir::triton::tools::isEnvValueBool(mlir::triton::tools::getStrEnv(
+              "TRITON_INTEL_ENABLE_BLOCK_IO_STORE_ON_REGULAR_PTR"));
+      if (enableBlockStore.has_value() && !enableBlockStore.value())
         return failure();
       // Get the LLVM values for pointers
       ptrElems = unpackLLElements(loc, llPtr, rewriter);
