@@ -17,6 +17,15 @@ std::ostream &operator<<(std::ostream &os, StringAttr str) {
 } // namespace mlir
 
 namespace mlir::triton::gpu {
+
+static LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout) {
+  if (isa<DistributedEncodingTrait>(layout)) {
+    return toLinearLayout(shape, layout, {});
+  } else {
+    assert(isa<SharedEncodingTrait>(layout));
+    return toLinearLayout(shape, layout, shape);
+  }
+}
 namespace {
 
 class LinearLayoutConversionsTest : public ::testing::Test {
@@ -56,7 +65,8 @@ public:
   AMDMfmaEncodingAttr
   mfma(ArrayRef<unsigned> warps, unsigned mDim, unsigned nDim,
        bool isTransposed,
-       std::optional<ArrayRef<unsigned>> maybeTilesPerWarp = std::nullopt) {
+       std::optional<ArrayRef<unsigned>> maybeTilesPerWarp = std::nullopt,
+       std::optional<Type> elementType = std::nullopt) {
     SmallVector<unsigned> cpg(warps.size(), 1u);
     SmallVector<unsigned> cSplit(warps.size(), 1u);
     SmallVector<unsigned> cOrd(warps.size());
@@ -66,10 +76,11 @@ public:
 
     if (maybeTilesPerWarp.has_value()) {
       return AMDMfmaEncodingAttr::get(&ctx, 2, warps, maybeTilesPerWarp.value(),
-                                      mDim, nDim, isTransposed, ctaLayout);
+                                      mDim, nDim, isTransposed, ctaLayout,
+                                      elementType);
     } else {
       return AMDMfmaEncodingAttr::get(&ctx, 2, warps, mDim, nDim, isTransposed,
-                                      ctaLayout);
+                                      ctaLayout, elementType);
     }
   }
 
