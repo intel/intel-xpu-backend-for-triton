@@ -145,18 +145,22 @@ llvm.func @triton_gen.dpas(%c : vector<8xf32>, %a : vector<8xi16>, %b : vector<8
 
 // -----
 
+module attributes {"ttg.threads-per-warp" = 16 : i32} {
 llvm.func @matrix_2Dblockload(%ptr : !llvm.ptr, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // expected-error @+1 {{'triton_gen.2Dblockload' op result size of 256 bits does not match the expected size of 128 bits}}
   %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=1, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32) -> vector<16xi16>
   llvm.return
 }
+}
 
 // -----
 
+module attributes {"ttg.threads-per-warp" = 16 : i32} {
 llvm.func @matrix_2Dblockload(%ptr : !llvm.ptr, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // expected-error @+1 {{'triton_gen.2Dblockload' op transpose and vnni_transform are mutually exclusive}}
   %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=16, tile_height=8, v_blocks=1, transpose=true, vnni_transform=true, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32) -> vector<2xi32>
   llvm.return
+}
 }
 
 // -----
@@ -177,18 +181,22 @@ llvm.func @matrix_2Dblockload(%ptr : !llvm.ptr, %base_width : i32, %base_height 
 
 // -----
 
+module attributes {"ttg.threads-per-warp" = 16 : i32} {
 llvm.func @matrix_2Dblockload(%ptr : !llvm.ptr, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // expected-error @+1 {{'triton_gen.2Dblockload' op transpose is only supported for 32 and 64 bit elements}}
   %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=1, transpose=true, vnni_transform=false, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32) -> vector<8xi16>
   llvm.return
 }
+}
 
 // -----
 
+module attributes {"ttg.threads-per-warp" = 16 : i32} {
 llvm.func @matrix_2Dblockload(%ptr : !llvm.ptr, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // expected-error @+1 {{'triton_gen.2Dblockload' op vnni_transform is only supported for 8 and 16 bit elements}}
   %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=32, tile_width=8, tile_height=8, v_blocks=1, transpose=false, vnni_transform=true, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32) -> vector<4xi32>
   llvm.return
+}
 }
 
 // -----
@@ -316,10 +324,12 @@ llvm.func @matrix_2Dblockload(%ptr : !llvm.ptr, %base_width : i32, %base_height 
 
 // -----
 
+module attributes {"ttg.threads-per-warp" = 16 : i32} {
 llvm.func @matrix_2Dblockload(%ptr : !llvm.ptr, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // expected-error @+1 {{'triton_gen.2Dblockload' op expecting result element type to be 32 bits}}
   %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=32, tile_width=8, tile_height=8, v_blocks=1, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32) -> vector<8xi16>
   llvm.return
+}
 }
 
 // -----
