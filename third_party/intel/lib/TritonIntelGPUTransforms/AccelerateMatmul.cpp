@@ -123,9 +123,11 @@ public:
     size_t rank = retShape.size();
     SmallVector<unsigned> repCluster(rank, 1);
 
+    unsigned repeatCount =
+        std::min(dpasCap.repeatCount, (unsigned)retShape[rank - 2] /*M*/);
     unsigned threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
     auto dpasEnc = ttgi::DpasEncodingAttr::get(
-        oldRetType.getContext(), dpasCap.repeatCount, dpasCap.systolicDepth,
+        oldRetType.getContext(), repeatCount, dpasCap.systolicDepth,
         dpasCap.executionSize, opsPerChan, warpsPerTile, repCluster,
         threadsPerWarp);
 
@@ -157,7 +159,7 @@ public:
       repCluster[rank - 1] = repClusterDimN;
 
       dpasEnc = ttgi::DpasEncodingAttr::get(
-          oldRetType.getContext(), dpasCap.repeatCount, dpasCap.systolicDepth,
+          oldRetType.getContext(), repeatCount, dpasCap.systolicDepth,
           dpasCap.executionSize, opsPerChan, warpsPerTile, repCluster,
           threadsPerWarp);
     }
