@@ -1,0 +1,32 @@
+Subject: [PATCH] Remove the min number constrain on block M in flex_decoding.py
+---
+Index: torch/_inductor/kernel/flex_decoding.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/torch/_inductor/kernel/flex_decoding.py b/torch/_inductor/kernel/flex_decoding.py
+--- a/torch/_inductor/kernel/flex_decoding.py	(revision 5329b5b5623af429a64cc7e679b1fa03f47225d8)
++++ b/torch/_inductor/kernel/flex_decoding.py	(revision beef69e50627af4d6009bcb9c9f758fa9f4aa81c)
+@@ -457,15 +457,12 @@
+         kernel_options.setdefault(
+             "BLOCK_M",
+             (
+-                max(
+-                    next_power_of_2(
+-                        V.graph.sizevars.size_hint(
+-                            seq_len_q,
+-                            fallback=torch._inductor.config.unbacked_symint_fallback,  # type: ignore[arg-type]
+-                        )
+-                        * gqa_shared_heads
+-                    ),
+-                    8,
++                next_power_of_2(
++                    V.graph.sizevars.size_hint(
++                        seq_len_q,
++                        fallback=torch._inductor.config.unbacked_symint_fallback,  # type: ignore[arg-type]
++                    )
++                    * gqa_shared_heads
+                 )
+             ),
+         )
