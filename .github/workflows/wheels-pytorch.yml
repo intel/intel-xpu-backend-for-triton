@@ -42,11 +42,6 @@ jobs:
         run: |
           rm -rf /c/gh*
 
-      - name: Clean up old pytorch build
-        shell: bash
-        run: |
-          rm -rf /c/pytorch/build
-
       # Copy workspace to a temporary location with a shorter name.
       - name: Copy workspace
         run: |
