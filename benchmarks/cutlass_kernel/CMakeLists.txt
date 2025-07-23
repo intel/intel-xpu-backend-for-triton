@@ -12,7 +12,9 @@ set(CONFIG_TOOL ${CMAKE_CURRENT_SOURCE_DIR}/config-tool.py)
 
 # Input and output files
 # The name of this file must be kept in sync with the best known CUTLASS config.
-set(GEMM_CONFIG_INPUT  ${CUTLASSLibrary_BENCHMARK_CONFIG_DIR}/input_gemm.in)
+# TODO: Re-enable gemm config input to come from `CUTLASSLibrary_BENCHMARK_CONFIG_DIR`
+# set(GEMM_CONFIG_INPUT  ${CUTLASSLibrary_BENCHMARK_CONFIG_DIR}/input_gemm.in)
+set(GEMM_CONFIG_INPUT ${CMAKE_CURRENT_SOURCE_DIR}/gemm/input_gemm.in)
 set(GEMM_CONFIG_OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/gemm_table.hpp)
 set(GEMM_CONFIG_NAME "gemm_config")
 
@@ -29,8 +31,6 @@ add_custom_command(
 
 # Create a target that other targets can depend on
 add_custom_target(generate_gemm_config DEPENDS ${GEMM_CONFIG_OUTPUT})
-
-
 
 Python3_add_library(cutlass_kernel MODULE WITH_SOABI python_main.cpp)
 
