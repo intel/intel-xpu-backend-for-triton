@@ -65,6 +65,7 @@ jobs:
           $env:CMAKE_MODULE_LINKER_FLAGS = "/FORCE:MULTIPLE"
           $env:CMAKE_EXE_LINKER_FLAGS = "/FORCE:MULTIPLE"
           $env:TORCH_XPU_ARCH_LIST = "bmg,dg2,arl-h,mtl-h"
+          bash -c "rm -rf /c/pytorch/build"
           bash -c "PYTORCH_PROJ=/c/pytorch ./scripts/install-pytorch.sh --source --check-wheel"
 
       - name: PyTorch version
