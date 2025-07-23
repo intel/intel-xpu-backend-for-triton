@@ -169,7 +169,7 @@ jobs:
         if: ${{ always() }}
         shell: bash
         run: |
-          rm -rf /c/pytorch
+          rm -rf /c/pytorch/build
 
       - name: Clean up temporary files
         if: ${{ always() }}
