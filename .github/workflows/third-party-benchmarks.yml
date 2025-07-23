@@ -135,7 +135,7 @@ jobs:
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
           export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
-          cd benchmarks/third_party/sglang
+          cd benchmarks/triton_kernels_benchmark
           python prefill_attention_benchmark.py --reports $REPORTS
 
           source ../../../scripts/capture-hw-details.sh
@@ -145,7 +145,7 @@ jobs:
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
           export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
-          cd benchmarks/third_party/sglang
+          cd benchmarks/triton_kernels_benchmark
           python decode_attention_benchmark.py --reports $REPORTS
 
           source ../../../scripts/capture-hw-details.sh
@@ -155,7 +155,7 @@ jobs:
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
           export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
-          cd benchmarks/third_party/sglang
+          cd benchmarks/triton_kernels_benchmark
           python extended_attention_benchmark.py --reports $REPORTS
 
           source ../../../scripts/capture-hw-details.sh
@@ -165,7 +165,7 @@ jobs:
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
           export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
-          cd benchmarks/third_party/sglang
+          cd benchmarks/triton_kernels_benchmark
           python block_fp8_gemm_benchmark.py --reports $REPORTS
 
           source ../../../scripts/capture-hw-details.sh
