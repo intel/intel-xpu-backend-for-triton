@@ -135,4 +135,4 @@ jobs:
         if: ${{ always() }}
         shell: bash
         run: |
-          rm -rf rm -rf /tmp/triton-* /tmp/tmp* /tmp/torch_*
+          rm -rf /tmp/triton-* /tmp/tmp* /tmp/torch_*
