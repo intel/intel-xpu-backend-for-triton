@@ -346,6 +346,15 @@ jobs:
           cd benchmarks/micro_benchmarks
           python run_benchmarks.py --reports $REPORTS
 
+      - name: Run Llama 3.1 performance benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'micro_benchmarks.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'micro_benchmarks') }}
+        run: |
+          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
+          cd benchmarks/triton_kernels_benchmark
+          git clone https://github.com/hoshibara/flex_attention-pr-check.git
+          git apply ../transformers-patch-for-timing.diff
+          python run_llm_inductor_greedy.py -m meta-llama/Meta-Llama-3.1-8B --max-new-tokens 128 --input-tokens 1024 --num-warmup 2 --num-iter 7 --compile --profile
+
       - name: Upload benchmark reports
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         uses: actions/upload-artifact@v4
