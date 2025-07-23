@@ -39,3 +39,4 @@ apply_patch ./patch/flex_attn_143553.patch
 apply_patch ./patch/pytorch_fp64.patch
 apply_patch ./patch/pytorch_global_scratch.patch
 apply_patch ./patch/test_compile_subprocess.patch
+apply_patch ./patch/flex_decoding.patch
