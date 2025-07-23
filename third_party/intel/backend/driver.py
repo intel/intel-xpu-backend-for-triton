@@ -511,10 +511,6 @@ static inline void checkDevicePointer(DevicePtrInfo *ptr_info, int idx, const sy
     PyErr_Format(PyExc_ValueError,
                  "Cannot get memory properties for pointer argument (at %d, err=%d)", idx, res);
     ptr_info->valid = false;
-  }} else if (prop.type != ZE_MEMORY_TYPE_DEVICE) {{
-    PyErr_Format(PyExc_ValueError,
-                 "Pointer argument (at %d) doesn't reference XPU device memory (cpu tensor?)", idx);
-    ptr_info->valid = false;
   }}
 }}
 
