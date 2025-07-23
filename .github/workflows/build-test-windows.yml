@@ -167,8 +167,9 @@ jobs:
 
       - name: Clear previous PyTorch build
         if: ${{ always() }}
+        shell: bash
         run: |
-          bash -c "rm -rf /c/pytorch/build"
+          rm -rf /c/pytorch/build
 
       - name: Clean up temporary files
         if: ${{ always() }}
