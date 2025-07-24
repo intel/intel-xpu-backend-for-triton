@@ -352,19 +352,7 @@ jobs:
           export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
           git clone https://github.com/huggingface/transformers.git
 
-          echo "Listing contents of the current directory after cloning:"
-          ls -l
-
           cd transformers
-
-          echo "Listing contents of the parent directory:"
-          ls -l ..
-
-          echo "Listing contents of the benchmarks directory:"
-          ls -l ../benchmarks
-
-          echo "Listing contents of the flex_attention-pr-check directory:"
-          ls -l ../benchmarks/flex_attention-pr-check
 
           git checkout $(<../benchmarks/flex_attention-pr-check/transformers-commit.txt)
           git apply ../benchmarks/flex_attention-pr-check/transformers-patch-for-timing.diff
