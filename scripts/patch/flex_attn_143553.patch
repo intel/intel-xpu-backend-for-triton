@@ -716,7 +716,7 @@ index 9a7507631cc4..1a761bf3833e 100644
      # Default config for warp specialization
      num_consumer_groups, num_buffers_warp_spec = 0, 0
 diff --git a/torch/_inductor/kernel/flex_decoding.py b/torch/_inductor/kernel/flex_decoding.py
-index 7e0aef981856..25d87d2f2eef 100644
+index 7e0aef981856..628bfc6419be 100644
 --- a/torch/_inductor/kernel/flex_decoding.py
 +++ b/torch/_inductor/kernel/flex_decoding.py
 @@ -310,7 +310,10 @@ def flex_decoding_grid(batch_size, kv_heads, gqa_group_size, n_keys, d_model, me
@@ -747,7 +747,7 @@ index 7e0aef981856..25d87d2f2eef 100644
                      * gqa_shared_heads
                  ),
 -                16,
-+                8 if torch.xpu.is_available() else 16,
++                float('-inf') if torch.xpu.is_available() else 16,
              )
          ),
      )
