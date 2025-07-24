@@ -1,5 +1,6 @@
 // RUN: triton-opt %s -split-input-file -verify-diagnostics | FileCheck %s
 
+module attributes {"ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.barrier() {
   // CHECK-LABEL: triton_gen.barrier
   // CHECK: triton_gen.barrier {mem_fence = Local}
@@ -74,4 +75,5 @@ llvm.func @triton_gen.sub_group_block_write(%ptr : !llvm.ptr<3>, %val : i32) {
   // CHECK-NEXT:    triton_gen.sub_group_block_write %arg0, %arg1 : !llvm.ptr<3>, i32
   triton_gen.sub_group_block_write %ptr, %val : !llvm.ptr<3>, i32
   llvm.return
+}
 }
