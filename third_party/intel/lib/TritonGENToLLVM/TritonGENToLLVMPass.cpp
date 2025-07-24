@@ -115,6 +115,11 @@ loadCacheControlToCacheControls(Builder &builder,
 static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
   // FIXME: The following signatures are not valid in SPV interface.
 
+  // intel_sub_group_2d_block_read_8b_8r8x1c
+  if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 8 &&
+      op.getTileWidth() == 8 && op.getVBlocks() == 1 && !op.getVnniTransform())
+    return false;
+
   // intel_sub_group_2d_block_read_8b_8r8x2c
   if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 8 &&
       op.getTileWidth() == 8 && op.getVBlocks() == 2 && !op.getVnniTransform())
@@ -148,6 +153,11 @@ static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
   // intel_sub_group_2d_block_read_8b_32r16x2c
   if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 32 &&
       op.getTileWidth() == 16 && op.getVBlocks() == 2 && !op.getVnniTransform())
+    return false;
+
+  // intel_sub_group_2d_block_read_16b_8r8x1c
+  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 8 &&
+      op.getTileWidth() == 8 && op.getVBlocks() == 1 && !op.getVnniTransform())
     return false;
 
   // intel_sub_group_2d_block_read_16b_8r8x2c
