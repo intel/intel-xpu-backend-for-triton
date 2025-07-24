@@ -165,6 +165,12 @@ jobs:
         run: |
           Remove-Item -LiteralPath ${{ env.NEW_WORKSPACE }} -Force -Recurse -ErrorAction Ignore
 
+      - name: Clear previous PyTorch build
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          rm -rf /c/pytorch/build
+
       - name: Clean up temporary files
         if: ${{ always() }}
         shell: bash

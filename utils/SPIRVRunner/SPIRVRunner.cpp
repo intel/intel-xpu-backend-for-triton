@@ -285,6 +285,10 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
             "Type entry is missing in JSON argument_list\n");
       }
     }
+    if (narg != expected_num_params) {
+      // global scratch.
+      cgh.set_arg(narg++, nullptr);
+    }
     if (triton_args.shared_memory) {
       using share_mem_t = sycl::local_accessor<int8_t, 1>;
       share_mem_t local_buffer = share_mem_t(triton_args.shared_memory, cgh);
