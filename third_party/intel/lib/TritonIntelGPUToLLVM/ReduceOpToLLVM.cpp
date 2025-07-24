@@ -292,7 +292,7 @@ private:
     // size is [elems / sizeInterWarps, N] -> [elems / sizeInterWarps, ceil(N,
     // numLanes)] in each reduce iteration.
     unsigned problemBatchSize = elems / sizeInterWarps;
-    for (unsigned problemSize = sizeInterWarps; problemSize > 0;
+    for (unsigned problemSize = sizeInterWarps; problemSize > 1;
          problemSize = problemSize / numLanes) {
       unsigned reduceLaneNumber = std::min(problemSize, numLanes);
       unsigned totalProblemSizePerIter = problemSize * problemBatchSize;
