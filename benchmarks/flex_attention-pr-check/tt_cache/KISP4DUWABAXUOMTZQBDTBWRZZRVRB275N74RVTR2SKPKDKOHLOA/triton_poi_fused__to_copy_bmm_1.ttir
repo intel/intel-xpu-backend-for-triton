@@ -1,0 +1,16 @@
+#loc = loc("/tmp/torchinductor_jovyan/23/c2346u3dpnaxqazwi4jpwdjwmhxea5pfgxvgf3imf5o6jnmoumdd.py":18:0)
+module {
+  tt.func public @triton_poi_fused__to_copy_bmm_1(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32} loc("/tmp/torchinductor_jovyan/23/c2346u3dpnaxqazwi4jpwdjwmhxea5pfgxvgf3imf5o6jnmoumdd.py":18:0), %arg1: !tt.ptr<i64> {tt.divisibility = 16 : i32} loc("/tmp/torchinductor_jovyan/23/c2346u3dpnaxqazwi4jpwdjwmhxea5pfgxvgf3imf5o6jnmoumdd.py":18:0)) attributes {noinline = false} {
+    %0 = tt.load %arg1 : !tt.ptr<i64> loc(#loc1)
+    %1 = arith.sitofp %0 : i64 to f32 loc(#loc2)
+    %2 = tt.splat %1 : f32 -> tensor<1xf32> loc(#loc2)
+    %3 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1x!tt.ptr<f32>> loc(#loc3)
+    tt.store %3, %2 : tensor<1x!tt.ptr<f32>> loc(#loc4)
+    tt.return loc(#loc5)
+  } loc(#loc)
+} loc(#loc)
+#loc1 = loc("/tmp/torchinductor_jovyan/23/c2346u3dpnaxqazwi4jpwdjwmhxea5pfgxvgf3imf5o6jnmoumdd.py":23:19)
+#loc2 = loc("/tmp/torchinductor_jovyan/23/c2346u3dpnaxqazwi4jpwdjwmhxea5pfgxvgf3imf5o6jnmoumdd.py":25:19)
+#loc3 = loc("/tmp/torchinductor_jovyan/23/c2346u3dpnaxqazwi4jpwdjwmhxea5pfgxvgf3imf5o6jnmoumdd.py":26:28)
+#loc4 = loc("/tmp/torchinductor_jovyan/23/c2346u3dpnaxqazwi4jpwdjwmhxea5pfgxvgf3imf5o6jnmoumdd.py":26:67)
+#loc5 = loc("/tmp/torchinductor_jovyan/23/c2346u3dpnaxqazwi4jpwdjwmhxea5pfgxvgf3imf5o6jnmoumdd.py":26:4)

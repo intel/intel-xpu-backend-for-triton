@@ -1,0 +1,755 @@
+; ModuleID = 'LLVMDialectModule'
+source_filename = "LLVMDialectModule"
+target datalayout = "e-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:256-v256:256-v512:512-v1024:1024-n8:16:32:64"
+target triple = "spir64-unknown-unknown"
+
+@assertFunc_ = internal addrspace(1) constant [8 x i8] c"unknown\00"
+@assertFile_ = internal addrspace(1) constant [85 x i8] c"/tmp/torchinductor_jovyan/xy/cxyoogamh7dg7j34p4loxlxkukmxdlc3ahbomu6gjvshyzn4v5uk.py\00"
+@assertMessage_ = internal addrspace(1) constant [114 x i8] c"index out of bounds: 0 <= tl.where(ks4 + r0_2 + ks0*x0 < 0, ks4 + ks5 + r0_2 + ks0*x0, ks4 + r0_2 + ks0*x0) < ks5\00"
+@__spirv_BuiltInGlobalInvocationId = external dso_local local_unnamed_addr addrspace(1) constant <3 x i64>, align 32
+@__spirv_BuiltInLocalInvocationId = external dso_local local_unnamed_addr addrspace(1) constant <3 x i64>, align 32
+
+; Function Attrs: convergent mustprogress nounwind willreturn
+declare !dbg !9 spir_func i64 @_Z27__spirv_GroupNonUniformIAddiimj(i32, i32, i64, i32) local_unnamed_addr #0
+
+; Function Attrs: convergent mustprogress nounwind willreturn
+declare !dbg !12 spir_func i64 @_Z27__spirv_GroupNonUniformIAddiim(i32, i32, i64) local_unnamed_addr #0
+
+; Function Attrs: convergent mustprogress nounwind willreturn
+declare !dbg !13 spir_func void @_Z7barrierj(i32) local_unnamed_addr #0
+
+; Function Attrs: mustprogress nofree nosync nounwind willreturn memory(none)
+declare !dbg !14 spir_func i64 @_Z12get_local_idj(i32) local_unnamed_addr #1
+
+; Function Attrs: mustprogress nofree nosync nounwind willreturn memory(none)
+declare !dbg !15 spir_func i64 @_Z12get_group_idj(i32) local_unnamed_addr #1
+
+; Function Attrs: nounwind
+define spir_kernel void @triton_red_fused__to_copy_add_arange_bitwise_and_constant_pad_nd_eq_gt_index_le_lt_permute_sum_view_1(ptr addrspace(1) readonly captures(none) %0, ptr addrspace(1) readonly captures(none) %1, ptr addrspace(1) writeonly captures(none) %2, ptr addrspace(1) writeonly captures(none) %3, i64 %4, i64 %5, i64 %6, i64 %7, i64 %8, i64 %9, i32 %10, i32 %11, ptr addrspace(1) readnone captures(none) %12, ptr addrspace(3) captures(none) %13) local_unnamed_addr #2 !dbg !16 !intel_reqd_sub_group_size !17 !max_work_group_size !18 {
+  %15 = tail call spir_func i64 @_Z12get_group_idj(i32 0) #4, !dbg !19
+  %16 = trunc i64 %15 to i32, !dbg !19
+  %17 = shl i32 %16, 3, !dbg !20
+  %18 = tail call spir_func i64 @_Z12get_local_idj(i32 0) #4, !dbg !21
+  %19 = trunc i64 %18 to i32, !dbg !21
+  %20 = and i32 %19, 511, !dbg !21
+  %21 = and i32 %19, 31, !dbg !21
+  %22 = lshr i32 %20, 5, !dbg !21
+  %23 = and i32 %19, 7, !dbg !21
+  %24 = or disjoint i32 %17, 1, !dbg !22
+  %25 = or disjoint i32 %17, 2, !dbg !22
+  %26 = or disjoint i32 %17, 3, !dbg !22
+  %27 = or disjoint i32 %17, 4, !dbg !22
+  %28 = or disjoint i32 %17, 5, !dbg !22
+  %29 = or disjoint i32 %17, 6, !dbg !22
+  %30 = or disjoint i32 %17, 7, !dbg !22
+  %31 = or disjoint i32 %23, %17, !dbg !22
+  %32 = icmp slt i32 %17, %10, !dbg !23
+  %33 = icmp slt i32 %24, %10, !dbg !23
+  %34 = icmp slt i32 %25, %10, !dbg !23
+  %35 = icmp slt i32 %26, %10, !dbg !23
+  %36 = icmp slt i32 %27, %10, !dbg !23
+  %37 = icmp slt i32 %28, %10, !dbg !23
+  %38 = icmp slt i32 %29, %10, !dbg !23
+  %39 = icmp slt i32 %30, %10, !dbg !23
+  %40 = icmp slt i32 %31, %10, !dbg !23
+  %41 = sext i32 %17 to i64, !dbg !24
+  %42 = sext i32 %24 to i64, !dbg !24
+  %43 = sext i32 %25 to i64, !dbg !24
+  %44 = sext i32 %26 to i64, !dbg !24
+  %45 = sext i32 %27 to i64, !dbg !24
+  %46 = sext i32 %28 to i64, !dbg !24
+  %47 = sext i32 %29 to i64, !dbg !24
+  %48 = sext i32 %30 to i64, !dbg !24
+  %.frozen = freeze i64 %41, !dbg !24
+  %.frozen81 = freeze i64 %5, !dbg !24
+  %49 = sdiv i64 %.frozen, %.frozen81, !dbg !24
+  %.frozen82 = freeze i64 %42, !dbg !24
+  %.frozen83 = freeze i64 %5, !dbg !24
+  %50 = sdiv i64 %.frozen82, %.frozen83, !dbg !24
+  %.frozen85 = freeze i64 %43, !dbg !24
+  %.frozen86 = freeze i64 %5, !dbg !24
+  %51 = sdiv i64 %.frozen85, %.frozen86, !dbg !24
+  %.frozen88 = freeze i64 %44, !dbg !24
+  %.frozen89 = freeze i64 %5, !dbg !24
+  %52 = sdiv i64 %.frozen88, %.frozen89, !dbg !24
+  %.frozen91 = freeze i64 %45, !dbg !24
+  %.frozen92 = freeze i64 %5, !dbg !24
+  %53 = sdiv i64 %.frozen91, %.frozen92, !dbg !24
+  %.frozen94 = freeze i64 %46, !dbg !24
+  %.frozen95 = freeze i64 %5, !dbg !24
+  %54 = sdiv i64 %.frozen94, %.frozen95, !dbg !24
+  %.frozen97 = freeze i64 %47, !dbg !24
+  %.frozen98 = freeze i64 %5, !dbg !24
+  %55 = sdiv i64 %.frozen97, %.frozen98, !dbg !24
+  %.frozen100 = freeze i64 %48, !dbg !24
+  %.frozen101 = freeze i64 %5, !dbg !24
+  %56 = sdiv i64 %.frozen100, %.frozen101, !dbg !24
+  %57 = mul i64 %49, %.frozen81, !dbg !25
+  %.decomposed = sub i64 %.frozen, %57, !dbg !25
+  %58 = mul i64 %50, %.frozen83, !dbg !25
+  %.decomposed84 = sub i64 %.frozen82, %58, !dbg !25
+  %59 = mul i64 %51, %.frozen86, !dbg !25
+  %.decomposed87 = sub i64 %.frozen85, %59, !dbg !25
+  %60 = mul i64 %52, %.frozen89, !dbg !25
+  %.decomposed90 = sub i64 %.frozen88, %60, !dbg !25
+  %61 = mul i64 %53, %.frozen92, !dbg !25
+  %.decomposed93 = sub i64 %.frozen91, %61, !dbg !25
+  %62 = mul i64 %54, %.frozen95, !dbg !25
+  %.decomposed96 = sub i64 %.frozen94, %62, !dbg !25
+  %63 = mul i64 %55, %.frozen98, !dbg !25
+  %.decomposed99 = sub i64 %.frozen97, %63, !dbg !25
+  %64 = mul i64 %56, %.frozen101, !dbg !25
+  %.decomposed102 = sub i64 %.frozen100, %64, !dbg !25
+  %65 = icmp slt i64 %4, 0, !dbg !26
+  %66 = mul i64 %49, %4, !dbg !30
+  %67 = mul i64 %50, %4, !dbg !30
+  %68 = mul i64 %51, %4, !dbg !30
+  %69 = mul i64 %52, %4, !dbg !30
+  %70 = mul i64 %53, %4, !dbg !30
+  %71 = mul i64 %54, %4, !dbg !30
+  %72 = mul i64 %55, %4, !dbg !30
+  %73 = mul i64 %56, %4, !dbg !30
+  %74 = mul i64 %.decomposed, %4, !dbg !31
+  %75 = mul i64 %.decomposed84, %4, !dbg !31
+  %76 = mul i64 %.decomposed87, %4, !dbg !31
+  %77 = mul i64 %.decomposed90, %4, !dbg !31
+  %78 = mul i64 %.decomposed93, %4, !dbg !31
+  %79 = mul i64 %.decomposed96, %4, !dbg !31
+  %80 = mul i64 %.decomposed99, %4, !dbg !31
+  %81 = mul i64 %.decomposed102, %4, !dbg !31
+  %82 = add i64 %9, %8, !dbg !32
+  %83 = icmp sgt i32 %11, 0, !dbg !33
+  br i1 %83, label %.lr.ph, label %._crit_edge, !dbg !33
+
+.lr.ph:                                           ; preds = %14
+  %84 = load i64, ptr addrspace(1) @__spirv_BuiltInGlobalInvocationId, align 32
+  %85 = load i64, ptr addrspace(1) getelementptr inbounds nuw (i8, ptr addrspace(1) @__spirv_BuiltInGlobalInvocationId, i64 8), align 8
+  %86 = load i64, ptr addrspace(1) getelementptr inbounds nuw (i8, ptr addrspace(1) @__spirv_BuiltInGlobalInvocationId, i64 16), align 16
+  %87 = load i64, ptr addrspace(1) @__spirv_BuiltInLocalInvocationId, align 32
+  %88 = load i64, ptr addrspace(1) getelementptr inbounds nuw (i8, ptr addrspace(1) @__spirv_BuiltInLocalInvocationId, i64 8), align 8
+  %89 = load i64, ptr addrspace(1) getelementptr inbounds nuw (i8, ptr addrspace(1) @__spirv_BuiltInLocalInvocationId, i64 16), align 16
+  br label %90, !dbg !33
+
+90:                                               ; preds = %.lr.ph, %295
+  %91 = phi i64 [ 0, %.lr.ph ], [ %315, %295 ]
+  %92 = phi i64 [ 0, %.lr.ph ], [ %318, %295 ]
+  %93 = phi i64 [ 0, %.lr.ph ], [ %321, %295 ]
+  %94 = phi i64 [ 0, %.lr.ph ], [ %324, %295 ]
+  %95 = phi i64 [ 0, %.lr.ph ], [ %327, %295 ]
+  %96 = phi i64 [ 0, %.lr.ph ], [ %330, %295 ]
+  %97 = phi i64 [ 0, %.lr.ph ], [ %333, %295 ]
+  %98 = phi i64 [ 0, %.lr.ph ], [ %336, %295 ]
+  %99 = phi i32 [ 0, %.lr.ph ], [ %337, %295 ]
+  %100 = or disjoint i32 %99, %20, !dbg !34
+  %101 = icmp slt i32 %100, %11, !dbg !35
+  %102 = sext i32 %100 to i64, !dbg !36
+  %.frozen103 = freeze i64 %102, !dbg !36
+  %.frozen104 = freeze i64 %4, !dbg !36
+  %103 = sdiv i64 %.frozen103, %.frozen104, !dbg !36
+  %104 = mul i64 %103, %.frozen104, !dbg !37
+  %.decomposed105 = sub i64 %.frozen103, %104, !dbg !37
+  %.not = icmp ne i64 %.decomposed105, 0, !dbg !38
+  %105 = icmp slt i32 %99, 0, !dbg !39
+  %106 = xor i1 %65, %105, !dbg !40
+  %narrow = select i1 %106, i1 %.not, i1 false, !dbg !41
+  %107 = sext i1 %narrow to i64, !dbg !41
+  %108 = add nsw i64 %103, %107, !dbg !41
+  %109 = add i64 %108, %66, !dbg !42
+  %110 = add i64 %108, %67, !dbg !42
+  %111 = add i64 %108, %68, !dbg !42
+  %112 = add i64 %108, %69, !dbg !42
+  %113 = add i64 %108, %70, !dbg !42
+  %114 = add i64 %108, %71, !dbg !42
+  %115 = add i64 %108, %72, !dbg !42
+  %116 = add i64 %108, %73, !dbg !42
+  %117 = icmp slt i64 %109, %6, !dbg !43
+  %118 = icmp slt i64 %110, %6, !dbg !43
+  %119 = icmp slt i64 %111, %6, !dbg !43
+  %120 = icmp slt i64 %112, %6, !dbg !43
+  %121 = icmp slt i64 %113, %6, !dbg !43
+  %122 = icmp slt i64 %114, %6, !dbg !43
+  %123 = icmp slt i64 %115, %6, !dbg !43
+  %124 = icmp slt i64 %116, %6, !dbg !43
+  %125 = add i64 %.decomposed105, %74, !dbg !44
+  %126 = add i64 %.decomposed105, %75, !dbg !44
+  %127 = add i64 %.decomposed105, %76, !dbg !44
+  %128 = add i64 %.decomposed105, %77, !dbg !44
+  %129 = add i64 %.decomposed105, %78, !dbg !44
+  %130 = add i64 %.decomposed105, %79, !dbg !44
+  %131 = add i64 %.decomposed105, %80, !dbg !44
+  %132 = add i64 %.decomposed105, %81, !dbg !44
+  %133 = icmp slt i64 %125, %7, !dbg !45
+  %134 = icmp slt i64 %126, %7, !dbg !45
+  %135 = icmp slt i64 %127, %7, !dbg !45
+  %136 = icmp slt i64 %128, %7, !dbg !45
+  %137 = icmp slt i64 %129, %7, !dbg !45
+  %138 = icmp slt i64 %130, %7, !dbg !45
+  %139 = icmp slt i64 %131, %7, !dbg !45
+  %140 = icmp slt i64 %132, %7, !dbg !45
+  %141 = and i1 %133, %117, !dbg !46
+  %142 = and i1 %134, %118, !dbg !46
+  %143 = and i1 %135, %119, !dbg !46
+  %144 = and i1 %136, %120, !dbg !46
+  %145 = and i1 %137, %121, !dbg !46
+  %146 = and i1 %138, %122, !dbg !46
+  %147 = and i1 %139, %123, !dbg !46
+  %148 = and i1 %140, %124, !dbg !46
+  %149 = load i64, ptr addrspace(1) %0, align 8, !dbg !47
+  %150 = select i1 %141, i64 %149, i64 0, !dbg !48
+  %151 = select i1 %142, i64 %149, i64 0, !dbg !48
+  %152 = select i1 %143, i64 %149, i64 0, !dbg !48
+  %153 = select i1 %144, i64 %149, i64 0, !dbg !48
+  %154 = select i1 %145, i64 %149, i64 0, !dbg !48
+  %155 = select i1 %146, i64 %149, i64 0, !dbg !48
+  %156 = select i1 %147, i64 %149, i64 0, !dbg !48
+  %157 = select i1 %148, i64 %149, i64 0, !dbg !48
+  %158 = add i64 %150, %109, !dbg !49
+  %159 = add i64 %151, %110, !dbg !49
+  %160 = add i64 %152, %111, !dbg !49
+  %161 = add i64 %153, %112, !dbg !49
+  %162 = add i64 %154, %113, !dbg !49
+  %163 = add i64 %155, %114, !dbg !49
+  %164 = add i64 %156, %115, !dbg !49
+  %165 = add i64 %157, %116, !dbg !49
+  %166 = add i64 %.decomposed105, %8, !dbg !50
+  %167 = add i64 %166, %74, !dbg !51
+  %168 = add i64 %166, %75, !dbg !51
+  %169 = add i64 %166, %76, !dbg !51
+  %170 = add i64 %166, %77, !dbg !51
+  %171 = add i64 %166, %78, !dbg !51
+  %172 = add i64 %166, %79, !dbg !51
+  %173 = add i64 %166, %80, !dbg !51
+  %174 = add i64 %166, %81, !dbg !51
+  %175 = icmp sle i64 %167, %158, !dbg !52
+  %176 = icmp sle i64 %168, %159, !dbg !52
+  %177 = icmp sle i64 %169, %160, !dbg !52
+  %178 = icmp sle i64 %170, %161, !dbg !52
+  %179 = icmp sle i64 %171, %162, !dbg !52
+  %180 = icmp sle i64 %172, %163, !dbg !52
+  %181 = icmp sle i64 %173, %164, !dbg !52
+  %182 = icmp sle i64 %174, %165, !dbg !52
+  %183 = icmp slt i64 %167, 0, !dbg !53
+  %184 = icmp slt i64 %168, 0, !dbg !53
+  %185 = icmp slt i64 %169, 0, !dbg !53
+  %186 = icmp slt i64 %170, 0, !dbg !53
+  %187 = icmp slt i64 %171, 0, !dbg !53
+  %188 = icmp slt i64 %172, 0, !dbg !53
+  %189 = icmp slt i64 %173, 0, !dbg !53
+  %190 = icmp slt i64 %174, 0, !dbg !53
+  %191 = add i64 %82, %.decomposed105, !dbg !54
+  %192 = add i64 %191, %74, !dbg !55
+  %193 = add i64 %191, %75, !dbg !55
+  %194 = add i64 %191, %76, !dbg !55
+  %195 = add i64 %191, %77, !dbg !55
+  %196 = add i64 %191, %78, !dbg !55
+  %197 = add i64 %191, %79, !dbg !55
+  %198 = add i64 %191, %80, !dbg !55
+  %199 = add i64 %191, %81, !dbg !55
+  %200 = select i1 %183, i64 %192, i64 %167, !dbg !56
+  %201 = select i1 %184, i64 %193, i64 %168, !dbg !56
+  %202 = select i1 %185, i64 %194, i64 %169, !dbg !56
+  %203 = select i1 %186, i64 %195, i64 %170, !dbg !56
+  %204 = select i1 %187, i64 %196, i64 %171, !dbg !56
+  %205 = select i1 %188, i64 %197, i64 %172, !dbg !56
+  %206 = select i1 %189, i64 %198, i64 %173, !dbg !56
+  %207 = select i1 %190, i64 %199, i64 %174, !dbg !56
+  %208 = icmp slt i64 %200, 0, !dbg !57
+  %209 = icmp slt i64 %201, 0, !dbg !57
+  %210 = icmp slt i64 %202, 0, !dbg !57
+  %211 = icmp slt i64 %203, 0, !dbg !57
+  %212 = icmp slt i64 %204, 0, !dbg !57
+  %213 = icmp slt i64 %205, 0, !dbg !57
+  %214 = icmp slt i64 %206, 0, !dbg !57
+  %215 = icmp slt i64 %207, 0, !dbg !57
+  %216 = icmp sge i64 %200, %9, !dbg !58
+  %217 = icmp sge i64 %201, %9, !dbg !58
+  %218 = icmp sge i64 %202, %9, !dbg !58
+  %219 = icmp sge i64 %203, %9, !dbg !58
+  %220 = icmp sge i64 %204, %9, !dbg !58
+  %221 = icmp sge i64 %205, %9, !dbg !58
+  %222 = icmp sge i64 %206, %9, !dbg !58
+  %223 = icmp sge i64 %207, %9, !dbg !58
+  %.not6 = or i1 %208, %216, !dbg !59
+  %.not11 = or i1 %209, %217, !dbg !59
+  %.not16 = or i1 %210, %218, !dbg !59
+  %.not21 = or i1 %211, %219, !dbg !59
+  %.not26 = or i1 %212, %220, !dbg !59
+  %.not31 = or i1 %213, %221, !dbg !59
+  %.not36 = or i1 %214, %222, !dbg !59
+  %.not41 = or i1 %215, %223, !dbg !60
+  %224 = and i1 %101, %141, !dbg !60
+  %225 = and i1 %101, %142, !dbg !60
+  %226 = and i1 %101, %143, !dbg !60
+  %227 = and i1 %101, %144, !dbg !60
+  %228 = and i1 %101, %145, !dbg !60
+  %229 = and i1 %101, %146, !dbg !60
+  %230 = and i1 %101, %147, !dbg !60
+  %231 = and i1 %101, %148, !dbg !60
+  %232 = and i1 %32, %224, !dbg !61
+  %233 = and i1 %33, %225, !dbg !61
+  %234 = and i1 %34, %226, !dbg !61
+  %235 = and i1 %35, %227, !dbg !61
+  %236 = and i1 %36, %228, !dbg !61
+  %237 = and i1 %37, %229, !dbg !61
+  %238 = and i1 %38, %230, !dbg !61
+  %239 = and i1 %39, %231, !dbg !61
+  %.not3 = and i1 %.not6, %232, !dbg !62
+  %.not8 = and i1 %.not11, %233, !dbg !62
+  %.not13 = and i1 %.not16, %234, !dbg !62
+  %.not18 = and i1 %.not21, %235, !dbg !62
+  %.not23 = and i1 %.not26, %236, !dbg !62
+  %.not28 = and i1 %.not31, %237, !dbg !62
+  %.not33 = and i1 %.not36, %238, !dbg !62
+  %.not38 = and i1 %.not41, %239, !dbg !63
+  %240 = or i1 %.not3, %.not8, !dbg !63
+  %241 = or i1 %.not13, %240, !dbg !63
+  %242 = or i1 %.not18, %241, !dbg !63
+  %243 = or i1 %.not23, %242, !dbg !63
+  %244 = or i1 %.not28, %243, !dbg !63
+  %245 = or i1 %.not33, %244, !dbg !63
+  %246 = or i1 %.not38, %245, !dbg !63
+  br i1 %246, label %247, label %248, !dbg !63
+
+247:                                              ; preds = %90
+  tail call spir_func void @__devicelib_assert_fail(ptr addrspace(4) noundef addrspacecast (ptr addrspace(1) @assertMessage_ to ptr addrspace(4)), ptr addrspace(4) noundef addrspacecast (ptr addrspace(1) @assertFile_ to ptr addrspace(4)), i32 noundef 53, ptr addrspace(4) noundef addrspacecast (ptr addrspace(1) @assertFunc_ to ptr addrspace(4)), i64 noundef %84, i64 noundef %85, i64 noundef %86, i64 noundef %87, i64 noundef %88, i64 noundef %89) #5, !dbg !63
+  br label %248, !dbg !63
+
+248:                                              ; preds = %247, %90
+  tail call spir_func void @_Z7barrierj(i32 1) #6, !dbg !63
+  %249 = getelementptr i1, ptr addrspace(1) %1, i64 %201, !dbg !64
+  %250 = getelementptr i1, ptr addrspace(1) %1, i64 %202, !dbg !64
+  %251 = getelementptr i1, ptr addrspace(1) %1, i64 %203, !dbg !64
+  %252 = getelementptr i1, ptr addrspace(1) %1, i64 %204, !dbg !64
+  %253 = getelementptr i1, ptr addrspace(1) %1, i64 %205, !dbg !64
+  %254 = getelementptr i1, ptr addrspace(1) %1, i64 %206, !dbg !64
+  %255 = getelementptr i1, ptr addrspace(1) %1, i64 %207, !dbg !64
+  br i1 %232, label %256, label %260, !dbg !65
+
+256:                                              ; preds = %248
+  %257 = getelementptr i1, ptr addrspace(1) %1, i64 %200, !dbg !64
+  %258 = load i8, ptr addrspace(1) %257, align 1, !dbg !65
+  %259 = icmp ne i8 %258, 0, !dbg !65
+  br label %260, !dbg !65
+
+260:                                              ; preds = %256, %248
+  %261 = phi i1 [ %259, %256 ], [ false, %248 ], !dbg !65
+  br i1 %233, label %262, label %265, !dbg !65
+
+262:                                              ; preds = %260
+  %263 = load i8, ptr addrspace(1) %249, align 1, !dbg !65
+  %264 = icmp ne i8 %263, 0, !dbg !65
+  br label %265, !dbg !65
+
+265:                                              ; preds = %262, %260
+  %266 = phi i1 [ %264, %262 ], [ false, %260 ], !dbg !65
+  br i1 %234, label %267, label %270, !dbg !65
+
+267:                                              ; preds = %265
+  %268 = load i8, ptr addrspace(1) %250, align 1, !dbg !65
+  %269 = icmp ne i8 %268, 0, !dbg !65
+  br label %270, !dbg !65
+
+270:                                              ; preds = %267, %265
+  %271 = phi i1 [ %269, %267 ], [ false, %265 ], !dbg !65
+  br i1 %235, label %272, label %275, !dbg !65
+
+272:                                              ; preds = %270
+  %273 = load i8, ptr addrspace(1) %251, align 1, !dbg !65
+  %274 = icmp ne i8 %273, 0, !dbg !65
+  br label %275, !dbg !65
+
+275:                                              ; preds = %272, %270
+  %276 = phi i1 [ %274, %272 ], [ false, %270 ], !dbg !65
+  br i1 %236, label %277, label %280, !dbg !65
+
+277:                                              ; preds = %275
+  %278 = load i8, ptr addrspace(1) %252, align 1, !dbg !65
+  %279 = icmp ne i8 %278, 0, !dbg !65
+  br label %280, !dbg !65
+
+280:                                              ; preds = %277, %275
+  %281 = phi i1 [ %279, %277 ], [ false, %275 ], !dbg !65
+  br i1 %237, label %282, label %285, !dbg !65
+
+282:                                              ; preds = %280
+  %283 = load i8, ptr addrspace(1) %253, align 1, !dbg !65
+  %284 = icmp ne i8 %283, 0, !dbg !65
+  br label %285, !dbg !65
+
+285:                                              ; preds = %282, %280
+  %286 = phi i1 [ %284, %282 ], [ false, %280 ], !dbg !65
+  br i1 %238, label %287, label %290, !dbg !65
+
+287:                                              ; preds = %285
+  %288 = load i8, ptr addrspace(1) %254, align 1, !dbg !65
+  %289 = icmp ne i8 %288, 0, !dbg !65
+  br label %290, !dbg !65
+
+290:                                              ; preds = %287, %285
+  %291 = phi i1 [ %289, %287 ], [ false, %285 ], !dbg !65
+  br i1 %239, label %292, label %295, !dbg !65
+
+292:                                              ; preds = %290
+  %293 = load i8, ptr addrspace(1) %255, align 1, !dbg !65
+  %294 = icmp ne i8 %293, 0, !dbg !65
+  br label %295, !dbg !65
+
+295:                                              ; preds = %292, %290
+  %296 = phi i1 [ %294, %292 ], [ false, %290 ], !dbg !65
+  %297 = and i1 %175, %261, !dbg !66
+  %298 = and i1 %176, %266, !dbg !66
+  %299 = and i1 %177, %271, !dbg !66
+  %300 = and i1 %178, %276, !dbg !66
+  %301 = and i1 %179, %281, !dbg !66
+  %302 = and i1 %180, %286, !dbg !66
+  %303 = and i1 %181, %291, !dbg !66
+  %304 = and i1 %182, %296, !dbg !66
+  %305 = and i1 %32, %101, !dbg !67
+  %306 = and i1 %33, %101, !dbg !67
+  %307 = and i1 %34, %101, !dbg !67
+  %308 = and i1 %35, %101, !dbg !67
+  %309 = and i1 %36, %101, !dbg !67
+  %310 = and i1 %37, %101, !dbg !67
+  %311 = and i1 %38, %101, !dbg !67
+  %312 = and i1 %39, %101, !dbg !67
+  %313 = select i1 %305, i1 %141, i1 false, !dbg !68
+  %narrow42 = select i1 %313, i1 %297, i1 false, !dbg !68
+  %314 = zext i1 %narrow42 to i64, !dbg !68
+  %315 = add i64 %91, %314, !dbg !68
+  %316 = select i1 %306, i1 %142, i1 false, !dbg !68
+  %narrow43 = select i1 %316, i1 %298, i1 false, !dbg !68
+  %317 = zext i1 %narrow43 to i64, !dbg !68
+  %318 = add i64 %92, %317, !dbg !68
+  %319 = select i1 %307, i1 %143, i1 false, !dbg !68
+  %narrow44 = select i1 %319, i1 %299, i1 false, !dbg !68
+  %320 = zext i1 %narrow44 to i64, !dbg !68
+  %321 = add i64 %93, %320, !dbg !68
+  %322 = select i1 %308, i1 %144, i1 false, !dbg !68
+  %narrow45 = select i1 %322, i1 %300, i1 false, !dbg !68
+  %323 = zext i1 %narrow45 to i64, !dbg !68
+  %324 = add i64 %94, %323, !dbg !68
+  %325 = select i1 %309, i1 %145, i1 false, !dbg !68
+  %narrow46 = select i1 %325, i1 %301, i1 false, !dbg !68
+  %326 = zext i1 %narrow46 to i64, !dbg !68
+  %327 = add i64 %95, %326, !dbg !68
+  %328 = select i1 %310, i1 %146, i1 false, !dbg !68
+  %narrow47 = select i1 %328, i1 %302, i1 false, !dbg !68
+  %329 = zext i1 %narrow47 to i64, !dbg !68
+  %330 = add i64 %96, %329, !dbg !68
+  %331 = select i1 %311, i1 %147, i1 false, !dbg !68
+  %narrow48 = select i1 %331, i1 %303, i1 false, !dbg !68
+  %332 = zext i1 %narrow48 to i64, !dbg !68
+  %333 = add i64 %97, %332, !dbg !68
+  %334 = select i1 %312, i1 %148, i1 false, !dbg !68
+  %narrow49 = select i1 %334, i1 %304, i1 false, !dbg !68
+  %335 = zext i1 %narrow49 to i64, !dbg !68
+  %336 = add i64 %98, %335, !dbg !68
+  %337 = add i32 %99, 512, !dbg !33
+  %338 = icmp slt i32 %337, %11, !dbg !33
+  br i1 %338, label %90, label %._crit_edge, !dbg !33
+
+._crit_edge:                                      ; preds = %295, %14
+  %339 = phi i64 [ 0, %14 ], [ %315, %295 ], !dbg !69
+  %340 = phi i64 [ 0, %14 ], [ %318, %295 ], !dbg !69
+  %341 = phi i64 [ 0, %14 ], [ %321, %295 ], !dbg !69
+  %342 = phi i64 [ 0, %14 ], [ %324, %295 ], !dbg !69
+  %343 = phi i64 [ 0, %14 ], [ %327, %295 ], !dbg !69
+  %344 = phi i64 [ 0, %14 ], [ %330, %295 ], !dbg !69
+  %345 = phi i64 [ 0, %14 ], [ %333, %295 ], !dbg !69
+  %346 = phi i64 [ 0, %14 ], [ %336, %295 ], !dbg !69
+  %347 = tail call spir_func i64 @_Z27__spirv_GroupNonUniformIAddiim(i32 3, i32 0, i64 %339) #6, !dbg !70
+  %348 = tail call spir_func i64 @_Z27__spirv_GroupNonUniformIAddiim(i32 3, i32 0, i64 %340) #6, !dbg !70
+  %349 = tail call spir_func i64 @_Z27__spirv_GroupNonUniformIAddiim(i32 3, i32 0, i64 %341) #6, !dbg !70
+  %350 = tail call spir_func i64 @_Z27__spirv_GroupNonUniformIAddiim(i32 3, i32 0, i64 %342) #6, !dbg !70
+  %351 = tail call spir_func i64 @_Z27__spirv_GroupNonUniformIAddiim(i32 3, i32 0, i64 %343) #6, !dbg !70
+  %352 = tail call spir_func i64 @_Z27__spirv_GroupNonUniformIAddiim(i32 3, i32 0, i64 %344) #6, !dbg !70
+  %353 = tail call spir_func i64 @_Z27__spirv_GroupNonUniformIAddiim(i32 3, i32 0, i64 %345) #6, !dbg !70
+  %354 = tail call spir_func i64 @_Z27__spirv_GroupNonUniformIAddiim(i32 3, i32 0, i64 %346) #6, !dbg !70
+  %355 = icmp eq i32 %21, 0, !dbg !70
+  br i1 %355, label %.critedge, label %.critedge55, !dbg !70
+
+.critedge:                                        ; preds = %._crit_edge
+  %356 = zext nneg i32 %22 to i64, !dbg !70
+  %357 = getelementptr i64, ptr addrspace(3) %13, i64 %356, !dbg !70
+  store i64 %347, ptr addrspace(3) %357, align 4, !dbg !70
+  %358 = getelementptr i8, ptr addrspace(3) %357, i64 128, !dbg !70
+  store i64 %348, ptr addrspace(3) %358, align 4, !dbg !70
+  %359 = getelementptr i8, ptr addrspace(3) %357, i64 256, !dbg !70
+  store i64 %349, ptr addrspace(3) %359, align 4, !dbg !70
+  %360 = getelementptr i8, ptr addrspace(3) %357, i64 384, !dbg !70
+  store i64 %350, ptr addrspace(3) %360, align 4, !dbg !70
+  %361 = getelementptr i8, ptr addrspace(3) %357, i64 512, !dbg !70
+  store i64 %351, ptr addrspace(3) %361, align 4, !dbg !70
+  %362 = getelementptr i8, ptr addrspace(3) %357, i64 640, !dbg !70
+  store i64 %352, ptr addrspace(3) %362, align 4, !dbg !70
+  %363 = getelementptr i8, ptr addrspace(3) %357, i64 768, !dbg !70
+  store i64 %353, ptr addrspace(3) %363, align 4, !dbg !70
+  %364 = getelementptr i8, ptr addrspace(3) %357, i64 896, !dbg !70
+  store i64 %354, ptr addrspace(3) %364, align 4, !dbg !70
+  br label %.critedge55, !dbg !70
+
+.critedge55:                                      ; preds = %._crit_edge, %.critedge
+  tail call spir_func void @_Z7barrierj(i32 1) #6, !dbg !70
+  %365 = icmp samesign ult i32 %20, 128, !dbg !70
+  %366 = and i64 %18, 511, !dbg !70
+  %367 = getelementptr i64, ptr addrspace(3) %13, i64 %366, !dbg !70
+  br i1 %365, label %368, label %370, !dbg !70
+
+368:                                              ; preds = %.critedge55
+  %369 = load i64, ptr addrspace(3) %367, align 4, !dbg !70
+  br label %370, !dbg !70
+
+370:                                              ; preds = %368, %.critedge55
+  %371 = phi i64 [ %369, %368 ], [ undef, %.critedge55 ], !dbg !73
+  %372 = tail call spir_func i64 @_Z27__spirv_GroupNonUniformIAddiimj(i32 3, i32 3, i64 %371, i32 16) #6, !dbg !70
+  %373 = and i32 %19, 15, !dbg !70
+  %374 = icmp eq i32 %373, 0, !dbg !70
+  %375 = and i1 %365, %374, !dbg !70
+  br i1 %375, label %376, label %377, !dbg !70
+
+376:                                              ; preds = %370
+  store i64 %372, ptr addrspace(3) %367, align 4, !dbg !70
+  br label %377, !dbg !70
+
+377:                                              ; preds = %376, %370
+  tail call spir_func void @_Z7barrierj(i32 1) #6, !dbg !70
+  %378 = load i64, ptr addrspace(3) %13, align 4, !dbg !70
+  %379 = getelementptr i8, ptr addrspace(3) %13, i64 128, !dbg !70
+  %380 = load i64, ptr addrspace(3) %379, align 4, !dbg !70
+  %381 = getelementptr i8, ptr addrspace(3) %13, i64 256, !dbg !70
+  %382 = load i64, ptr addrspace(3) %381, align 4, !dbg !70
+  %383 = getelementptr i8, ptr addrspace(3) %13, i64 384, !dbg !70
+  %384 = load i64, ptr addrspace(3) %383, align 4, !dbg !70
+  %385 = getelementptr i8, ptr addrspace(3) %13, i64 512, !dbg !70
+  %386 = load i64, ptr addrspace(3) %385, align 4, !dbg !70
+  %387 = getelementptr i8, ptr addrspace(3) %13, i64 640, !dbg !70
+  %388 = load i64, ptr addrspace(3) %387, align 4, !dbg !70
+  %389 = getelementptr i8, ptr addrspace(3) %13, i64 768, !dbg !70
+  %390 = load i64, ptr addrspace(3) %389, align 4, !dbg !70
+  %391 = getelementptr i8, ptr addrspace(3) %13, i64 896, !dbg !70
+  %392 = load i64, ptr addrspace(3) %391, align 4, !dbg !70
+  %393 = icmp sgt i64 %378, 0, !dbg !74
+  %394 = icmp sgt i64 %380, 0, !dbg !74
+  %395 = icmp sgt i64 %382, 0, !dbg !74
+  %396 = icmp sgt i64 %384, 0, !dbg !74
+  %397 = icmp sgt i64 %386, 0, !dbg !74
+  %398 = icmp sgt i64 %388, 0, !dbg !74
+  %399 = icmp sgt i64 %390, 0, !dbg !74
+  %400 = icmp sgt i64 %392, 0, !dbg !74
+  %401 = mul i64 %4, %4, !dbg !75
+  %402 = icmp slt i64 %378, %401, !dbg !76
+  %403 = icmp slt i64 %380, %401, !dbg !76
+  %404 = icmp slt i64 %382, %401, !dbg !76
+  %405 = icmp slt i64 %384, %401, !dbg !76
+  %406 = icmp slt i64 %386, %401, !dbg !76
+  %407 = icmp slt i64 %388, %401, !dbg !76
+  %408 = icmp slt i64 %390, %401, !dbg !76
+  %409 = icmp slt i64 %392, %401, !dbg !76
+  %410 = and i1 %393, %402, !dbg !77
+  %411 = and i1 %394, %403, !dbg !77
+  %412 = and i1 %395, %404, !dbg !77
+  %413 = and i1 %396, %405, !dbg !77
+  %414 = and i1 %397, %406, !dbg !77
+  %415 = and i1 %398, %407, !dbg !77
+  %416 = and i1 %399, %408, !dbg !77
+  %417 = and i1 %400, %409, !dbg !77
+  tail call spir_func void @_Z7barrierj(i32 1) #6, !dbg !78
+  %418 = zext i1 %410 to i8, !dbg !78
+  %419 = zext i1 %411 to i8, !dbg !78
+  %420 = zext i1 %412 to i8, !dbg !78
+  %421 = zext i1 %413 to i8, !dbg !78
+  %422 = zext i1 %414 to i8, !dbg !78
+  %423 = zext i1 %415 to i8, !dbg !78
+  %424 = zext i1 %416 to i8, !dbg !78
+  %425 = zext i1 %417 to i8, !dbg !78
+  %426 = insertelement <1 x i8> poison, i8 %418, i64 0, !dbg !78
+  store <1 x i8> %426, ptr addrspace(3) %13, align 1, !dbg !78
+  %427 = getelementptr inbounds nuw i8, ptr addrspace(3) %13, i64 2, !dbg !78
+  %428 = insertelement <1 x i8> poison, i8 %419, i64 0, !dbg !78
+  store <1 x i8> %428, ptr addrspace(3) %427, align 1, !dbg !78
+  %429 = getelementptr inbounds nuw i8, ptr addrspace(3) %13, i64 4, !dbg !78
+  %430 = insertelement <1 x i8> poison, i8 %420, i64 0, !dbg !78
+  store <1 x i8> %430, ptr addrspace(3) %429, align 1, !dbg !78
+  %431 = getelementptr inbounds nuw i8, ptr addrspace(3) %13, i64 6, !dbg !78
+  %432 = insertelement <1 x i8> poison, i8 %421, i64 0, !dbg !78
+  store <1 x i8> %432, ptr addrspace(3) %431, align 1, !dbg !78
+  %433 = getelementptr inbounds nuw i8, ptr addrspace(3) %13, i64 8, !dbg !78
+  %434 = insertelement <1 x i8> poison, i8 %422, i64 0, !dbg !78
+  store <1 x i8> %434, ptr addrspace(3) %433, align 1, !dbg !78
+  %435 = getelementptr inbounds nuw i8, ptr addrspace(3) %13, i64 10, !dbg !78
+  %436 = insertelement <1 x i8> poison, i8 %423, i64 0, !dbg !78
+  store <1 x i8> %436, ptr addrspace(3) %435, align 1, !dbg !78
+  %437 = getelementptr inbounds nuw i8, ptr addrspace(3) %13, i64 12, !dbg !78
+  %438 = insertelement <1 x i8> poison, i8 %424, i64 0, !dbg !78
+  store <1 x i8> %438, ptr addrspace(3) %437, align 1, !dbg !78
+  %439 = getelementptr inbounds nuw i8, ptr addrspace(3) %13, i64 14, !dbg !78
+  %440 = insertelement <1 x i8> poison, i8 %425, i64 0, !dbg !78
+  store <1 x i8> %440, ptr addrspace(3) %439, align 1, !dbg !78
+  tail call spir_func void @_Z7barrierj(i32 1) #6, !dbg !78
+  %441 = shl i64 %18, 1, !dbg !78
+  %442 = and i64 %441, 14, !dbg !78
+  %443 = getelementptr inbounds nuw i8, ptr addrspace(3) %13, i64 %442, !dbg !78
+  %444 = load <1 x i8>, ptr addrspace(3) %443, align 1, !dbg !78
+  %445 = icmp eq i64 %378, %401, !dbg !79
+  %446 = icmp eq i64 %380, %401, !dbg !79
+  %447 = icmp eq i64 %382, %401, !dbg !79
+  %448 = icmp eq i64 %384, %401, !dbg !79
+  %449 = icmp eq i64 %386, %401, !dbg !79
+  %450 = icmp eq i64 %388, %401, !dbg !79
+  %451 = icmp eq i64 %390, %401, !dbg !79
+  %452 = icmp eq i64 %392, %401, !dbg !79
+  tail call spir_func void @_Z7barrierj(i32 1) #6, !dbg !78
+  %453 = zext i1 %445 to i8, !dbg !78
+  %454 = zext i1 %446 to i8, !dbg !78
+  %455 = zext i1 %447 to i8, !dbg !78
+  %456 = zext i1 %448 to i8, !dbg !78
+  %457 = zext i1 %449 to i8, !dbg !78
+  %458 = zext i1 %450 to i8, !dbg !78
+  %459 = zext i1 %451 to i8, !dbg !78
+  %460 = zext i1 %452 to i8, !dbg !78
+  %461 = insertelement <1 x i8> poison, i8 %453, i64 0, !dbg !78
+  store <1 x i8> %461, ptr addrspace(3) %13, align 1, !dbg !78
+  %462 = insertelement <1 x i8> poison, i8 %454, i64 0, !dbg !78
+  store <1 x i8> %462, ptr addrspace(3) %427, align 1, !dbg !78
+  %463 = insertelement <1 x i8> poison, i8 %455, i64 0, !dbg !78
+  store <1 x i8> %463, ptr addrspace(3) %429, align 1, !dbg !78
+  %464 = insertelement <1 x i8> poison, i8 %456, i64 0, !dbg !78
+  store <1 x i8> %464, ptr addrspace(3) %431, align 1, !dbg !78
+  %465 = insertelement <1 x i8> poison, i8 %457, i64 0, !dbg !78
+  store <1 x i8> %465, ptr addrspace(3) %433, align 1, !dbg !78
+  %466 = insertelement <1 x i8> poison, i8 %458, i64 0, !dbg !78
+  store <1 x i8> %466, ptr addrspace(3) %435, align 1, !dbg !78
+  %467 = insertelement <1 x i8> poison, i8 %459, i64 0, !dbg !78
+  store <1 x i8> %467, ptr addrspace(3) %437, align 1, !dbg !78
+  %468 = insertelement <1 x i8> poison, i8 %460, i64 0, !dbg !78
+  store <1 x i8> %468, ptr addrspace(3) %439, align 1, !dbg !78
+  tail call spir_func void @_Z7barrierj(i32 1) #6, !dbg !78
+  %469 = and i32 %19, 24, !dbg !80
+  %470 = icmp eq i32 %469, 0, !dbg !80
+  %471 = icmp samesign ult i32 %20, 32, !dbg !80
+  %472 = and i1 %470, %471, !dbg !80
+  %473 = and i1 %472, %40, !dbg !80
+  br i1 %473, label %474, label %.critedge57, !dbg !80
+
+474:                                              ; preds = %377
+  %475 = load i8, ptr addrspace(3) %443, align 1, !dbg !78
+  %476 = icmp ne i8 %475, 0, !dbg !78
+  %477 = zext i1 %476 to i32, !dbg !78
+  %478 = extractelement <1 x i8> %444, i64 0, !dbg !78
+  %479 = icmp ne i8 %478, 0, !dbg !78
+  %480 = zext i1 %479 to i32, !dbg !78
+  %481 = insertelement <1 x i32> poison, i32 %480, i64 0, !dbg !80
+  %482 = sext i32 %31 to i64, !dbg !81
+  %483 = getelementptr i32, ptr addrspace(1) %2, i64 %482, !dbg !81
+  store <1 x i32> %481, ptr addrspace(1) %483, align 4, !dbg !80
+  %484 = insertelement <1 x i32> poison, i32 %477, i64 0, !dbg !82
+  %485 = getelementptr i32, ptr addrspace(1) %3, i64 %482, !dbg !83
+  store <1 x i32> %484, ptr addrspace(1) %485, align 4, !dbg !82
+  br label %.critedge57, !dbg !82
+
+.critedge57:                                      ; preds = %377, %474
+  ret void, !dbg !84
+}
+
+; Function Attrs: convergent mustprogress norecurse nounwind
+declare extern_weak dso_local spir_func void @__devicelib_assert_fail(ptr addrspace(4) noundef, ptr addrspace(4) noundef, i32 noundef, ptr addrspace(4) noundef, i64 noundef, i64 noundef, i64 noundef, i64 noundef, i64 noundef, i64 noundef) local_unnamed_addr #3
+
+attributes #0 = { convergent mustprogress nounwind willreturn }
+attributes #1 = { mustprogress nofree nosync nounwind willreturn memory(none) }
+attributes #2 = { nounwind }
+attributes #3 = { convergent mustprogress norecurse nounwind "frame-pointer"="all" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "sycl-module-id"="/netbatch/donb74095_00/dir/workspace/NIT/xmain-rel/LX/xmainefi2linux_release/ws/icsws/llvm/libdevice/fallback-cassert.cpp" "sycl-optlevel"="2" }
+attributes #4 = { nounwind willreturn memory(none) }
+attributes #5 = { convergent nounwind }
+attributes #6 = { convergent nounwind willreturn }
+
+!llvm.dbg.cu = !{!0}
+!llvm.module.flags = !{!2, !3, !4, !5}
+!opencl.spir.version = !{!6, !6, !6, !6, !6, !6, !6, !6, !6, !6, !6, !6, !6, !6, !6, !6, !6, !6, !6, !6}
+!spirv.Source = !{!7, !7, !7, !7, !7, !7, !7, !7, !7, !7, !7, !7, !7, !7, !7, !7, !7, !7, !7, !7}
+!llvm.ident = !{!8, !8, !8, !8, !8, !8, !8, !8, !8, !8, !8, !8, !8, !8, !8, !8, !8, !8, !8, !8}
+
+!0 = distinct !DICompileUnit(language: DW_LANG_C, file: !1, producer: "triton", isOptimized: true, runtimeVersion: 0, emissionKind: LineTablesOnly)
+!1 = !DIFile(filename: "cxyoogamh7dg7j34p4loxlxkukmxdlc3ahbomu6gjvshyzn4v5uk.py", directory: "/tmp/torchinductor_jovyan/xy")
+!2 = !{i32 2, !"Debug Info Version", i32 3}
+!3 = !{i32 1, !"wchar_size", i32 4}
+!4 = !{i32 1, !"sycl-device", i32 1}
+!5 = !{i32 7, !"frame-pointer", i32 2}
+!6 = !{i32 1, i32 2}
+!7 = !{i32 3, i32 100000}
+!8 = !{!"Intel(R) oneAPI DPC++/C++ Compiler 2025.0.0 (2025.0.0.20241008)"}
+!9 = !DISubprogram(name: "_Z27__spirv_GroupNonUniformIAddiimj", linkageName: "_Z27__spirv_GroupNonUniformIAddiimj", scope: !1, file: !1, line: 18, type: !10, scopeLine: 18, spFlags: DISPFlagOptimized)
+!10 = !DISubroutineType(cc: DW_CC_normal, types: !11)
+!11 = !{}
+!12 = !DISubprogram(name: "_Z27__spirv_GroupNonUniformIAddiim", linkageName: "_Z27__spirv_GroupNonUniformIAddiim", scope: !1, file: !1, line: 18, type: !10, scopeLine: 18, spFlags: DISPFlagOptimized)
+!13 = !DISubprogram(name: "_Z7barrierj", linkageName: "_Z7barrierj", scope: !1, file: !1, line: 18, type: !10, scopeLine: 18, spFlags: DISPFlagOptimized)
+!14 = !DISubprogram(name: "_Z12get_local_idj", linkageName: "_Z12get_local_idj", scope: !1, file: !1, line: 18, type: !10, scopeLine: 18, spFlags: DISPFlagOptimized)
+!15 = !DISubprogram(name: "_Z12get_group_idj", linkageName: "_Z12get_group_idj", scope: !1, file: !1, line: 18, type: !10, scopeLine: 18, spFlags: DISPFlagOptimized)
+!16 = distinct !DISubprogram(name: "triton_red_fused__to_copy_add_arange_bitwise_and_constant_pad_nd_eq_gt_index_le_lt_permute_sum_view_1", linkageName: "triton_red_fused__to_copy_add_arange_bitwise_and_constant_pad_nd_eq_gt_index_le_lt_permute_sum_view_1", scope: !1, file: !1, line: 18, type: !10, scopeLine: 18, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0)
+!17 = !{i32 32}
+!18 = !{i64 512, i64 1, i64 1}
+!19 = !DILocation(line: 21, column: 28, scope: !16)
+!20 = !DILocation(line: 21, column: 33, scope: !16)
+!21 = !DILocation(line: 22, column: 44, scope: !16)
+!22 = !DILocation(line: 22, column: 23, scope: !16)
+!23 = !DILocation(line: 23, column: 21, scope: !16)
+!24 = !DILocation(line: 26, column: 19, scope: !16)
+!25 = !DILocation(line: 27, column: 19, scope: !16)
+!26 = !DILocation(line: 76, column: 36, scope: !27, inlinedAt: !29)
+!27 = distinct !DILexicalBlockFile(scope: !16, file: !28, discriminator: 0)
+!28 = !DIFile(filename: "triton_helpers.py", directory: "/home/jovyan/envs/miniforge3/envs/triton/lib/python3.10/site-packages/torch/_inductor/runtime")
+!29 = !DILocation(line: 35, column: 59, scope: !16)
+!30 = !DILocation(line: 37, column: 26, scope: !16)
+!31 = !DILocation(line: 40, column: 26, scope: !16)
+!32 = !DILocation(line: 53, column: 72, scope: !16)
+!33 = !DILocation(line: 30, column: 40, scope: !16)
+!34 = !DILocation(line: 31, column: 31, scope: !16)
+!35 = !DILocation(line: 32, column: 29, scope: !16)
+!36 = !DILocation(line: 73, column: 16, scope: !27, inlinedAt: !29)
+!37 = !DILocation(line: 74, column: 20, scope: !27, inlinedAt: !29)
+!38 = !DILocation(line: 75, column: 34, scope: !27, inlinedAt: !29)
+!39 = !DILocation(line: 76, column: 25, scope: !27, inlinedAt: !29)
+!40 = !DILocation(line: 76, column: 32, scope: !27, inlinedAt: !29)
+!41 = !DILocation(line: 76, column: 47, scope: !27, inlinedAt: !29)
+!42 = !DILocation(line: 37, column: 22, scope: !16)
+!43 = !DILocation(line: 39, column: 22, scope: !16)
+!44 = !DILocation(line: 40, column: 22, scope: !16)
+!45 = !DILocation(line: 42, column: 22, scope: !16)
+!46 = !DILocation(line: 43, column: 22, scope: !16)
+!47 = !DILocation(line: 44, column: 23, scope: !16)
+!48 = !DILocation(line: 46, column: 36, scope: !16)
+!49 = !DILocation(line: 48, column: 24, scope: !16)
+!50 = !DILocation(line: 49, column: 22, scope: !16)
+!51 = !DILocation(line: 49, column: 29, scope: !16)
+!52 = !DILocation(line: 50, column: 25, scope: !16)
+!53 = !DILocation(line: 53, column: 63, scope: !16)
+!54 = !DILocation(line: 53, column: 78, scope: !16)
+!55 = !DILocation(line: 53, column: 85, scope: !16)
+!56 = !DILocation(line: 53, column: 93, scope: !16)
+!57 = !DILocation(line: 53, column: 32, scope: !16)
+!58 = !DILocation(line: 53, column: 202, scope: !16)
+!59 = !DILocation(line: 53, column: 118, scope: !16)
+!60 = !DILocation(line: 53, column: 222, scope: !16)
+!61 = !DILocation(line: 53, column: 229, scope: !16)
+!62 = !DILocation(line: 53, column: 210, scope: !16)
+!63 = !DILocation(line: 53, column: 237, scope: !16)
+!64 = !DILocation(line: 54, column: 35, scope: !16)
+!65 = !DILocation(line: 54, column: 119, scope: !16)
+!66 = !DILocation(line: 55, column: 24, scope: !16)
+!67 = !DILocation(line: 61, column: 36, scope: !16)
+!68 = !DILocation(line: 61, column: 50, scope: !16)
+!69 = !DILocation(line: 28, column: 44, scope: !16)
+!70 = !DILocation(line: 290, column: 36, scope: !71, inlinedAt: !73)
+!71 = distinct !DILexicalBlockFile(scope: !16, file: !72, discriminator: 0)
+!72 = !DIFile(filename: "standard.py", directory: "/home/jovyan/intel-xpu-backend-for-triton/python/triton/language")
+!73 = !DILocation(line: 62, column: 27, scope: !16)
+!74 = !DILocation(line: 64, column: 20, scope: !16)
+!75 = !DILocation(line: 65, column: 16, scope: !16)
+!76 = !DILocation(line: 66, column: 20, scope: !16)
+!77 = !DILocation(line: 67, column: 20, scope: !16)
+!78 = !DILocation(line: 0, scope: !16)
+!79 = !DILocation(line: 70, column: 21, scope: !16)
+!80 = !DILocation(line: 73, column: 37, scope: !16)
+!81 = !DILocation(line: 73, column: 25, scope: !16)
+!82 = !DILocation(line: 74, column: 37, scope: !16)
+!83 = !DILocation(line: 74, column: 25, scope: !16)
+!84 = !DILocation(line: 74, column: 4, scope: !16)

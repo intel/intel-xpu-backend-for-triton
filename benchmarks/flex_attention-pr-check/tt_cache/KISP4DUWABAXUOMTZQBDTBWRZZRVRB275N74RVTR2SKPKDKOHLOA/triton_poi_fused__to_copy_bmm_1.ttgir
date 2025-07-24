@@ -1,0 +1,17 @@
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#loc = loc("/tmp/torchinductor_jovyan/23/c2346u3dpnaxqazwi4jpwdjwmhxea5pfgxvgf3imf5o6jnmoumdd.py":18:0)
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32, ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, ttig.support_dpas, ttig.support_sg_2d_block, ttig.target_arch = "spir64"} {
+  tt.func public @triton_poi_fused__to_copy_bmm_1(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32} loc("/tmp/torchinductor_jovyan/23/c2346u3dpnaxqazwi4jpwdjwmhxea5pfgxvgf3imf5o6jnmoumdd.py":18:0), %arg1: !tt.ptr<i64> {tt.divisibility = 16 : i32} loc("/tmp/torchinductor_jovyan/23/c2346u3dpnaxqazwi4jpwdjwmhxea5pfgxvgf3imf5o6jnmoumdd.py":18:0)) attributes {noinline = false} {
+    %0 = tt.load %arg1 : !tt.ptr<i64> loc(#loc1)
+    %1 = arith.sitofp %0 : i64 to f32 loc(#loc2)
+    %2 = tt.splat %1 : f32 -> tensor<1xf32, #blocked> loc(#loc2)
+    %3 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1x!tt.ptr<f32>, #blocked> loc(#loc3)
+    tt.store %3, %2 : tensor<1x!tt.ptr<f32>, #blocked> loc(#loc4)
+    tt.return loc(#loc5)
+  } loc(#loc)
+} loc(#loc)
+#loc1 = loc("/tmp/torchinductor_jovyan/23/c2346u3dpnaxqazwi4jpwdjwmhxea5pfgxvgf3imf5o6jnmoumdd.py":23:19)
+#loc2 = loc("/tmp/torchinductor_jovyan/23/c2346u3dpnaxqazwi4jpwdjwmhxea5pfgxvgf3imf5o6jnmoumdd.py":25:19)
+#loc3 = loc("/tmp/torchinductor_jovyan/23/c2346u3dpnaxqazwi4jpwdjwmhxea5pfgxvgf3imf5o6jnmoumdd.py":26:28)
+#loc4 = loc("/tmp/torchinductor_jovyan/23/c2346u3dpnaxqazwi4jpwdjwmhxea5pfgxvgf3imf5o6jnmoumdd.py":26:67)
+#loc5 = loc("/tmp/torchinductor_jovyan/23/c2346u3dpnaxqazwi4jpwdjwmhxea5pfgxvgf3imf5o6jnmoumdd.py":26:4)

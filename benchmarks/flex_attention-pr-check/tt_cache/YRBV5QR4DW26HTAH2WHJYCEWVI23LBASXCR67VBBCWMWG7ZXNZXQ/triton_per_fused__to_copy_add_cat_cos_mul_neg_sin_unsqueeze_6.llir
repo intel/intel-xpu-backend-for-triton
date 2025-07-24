@@ -1,0 +1,1132 @@
+; ModuleID = 'LLVMDialectModule'
+source_filename = "LLVMDialectModule"
+target datalayout = "e-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:256-v256:256-v512:512-v1024:1024-n8:16:32:64"
+target triple = "spir64-unknown-unknown"
+
+; Function Attrs: mustprogress nofree nosync nounwind willreturn memory(none)
+declare !dbg !9 spir_func i64 @_Z12get_local_idj(i32) local_unnamed_addr #0
+
+; Function Attrs: mustprogress nofree nosync nounwind willreturn memory(none)
+declare !dbg !12 spir_func i64 @_Z12get_group_idj(i32) local_unnamed_addr #0
+
+; Function Attrs: mustprogress nofree nounwind willreturn memory(argmem: readwrite)
+define spir_kernel void @triton_per_fused__to_copy_add_cat_cos_mul_neg_sin_unsqueeze_6(ptr addrspace(1) readonly captures(none) %0, ptr addrspace(1) readonly captures(none) %1, ptr addrspace(1) writeonly captures(none) %2, ptr addrspace(1) writeonly captures(none) %3, i32 %4, i32 %5, ptr addrspace(1) readnone captures(none) %6) local_unnamed_addr #1 !dbg !13 !intel_reqd_sub_group_size !14 !max_work_group_size !15 {
+  %8 = tail call spir_func i64 @_Z12get_group_idj(i32 0) #4, !dbg !16
+  %9 = trunc i64 %8 to i32, !dbg !16
+  %10 = icmp slt i32 %9, 32, !dbg !17
+  %11 = shl i64 %8, 32, !dbg !18
+  br i1 %10, label %12, label %84, !dbg !19
+
+12:                                               ; preds = %7
+  %sext56 = add i64 %11, 1786706395136, !dbg !18
+  %13 = ashr exact i64 %sext56, 32, !dbg !18
+  %sext55 = add i64 %11, 1649267441664, !dbg !18
+  %14 = ashr exact i64 %sext55, 32, !dbg !18
+  %sext54 = add i64 %11, 1511828488192, !dbg !18
+  %15 = ashr exact i64 %sext54, 32, !dbg !18
+  %sext53 = add i64 %11, 1374389534720, !dbg !18
+  %16 = ashr exact i64 %sext53, 32, !dbg !18
+  %sext52 = add i64 %11, 1236950581248, !dbg !18
+  %17 = ashr exact i64 %sext52, 32, !dbg !18
+  %sext51 = add i64 %11, 1099511627776, !dbg !18
+  %18 = ashr exact i64 %sext51, 32, !dbg !18
+  %sext50 = add i64 %11, 962072674304, !dbg !18
+  %19 = ashr exact i64 %sext50, 32, !dbg !18
+  %sext49 = add i64 %11, 824633720832, !dbg !18
+  %20 = ashr exact i64 %sext49, 32, !dbg !18
+  %sext48 = add i64 %11, 687194767360, !dbg !18
+  %21 = ashr exact i64 %sext48, 32, !dbg !18
+  %sext47 = add i64 %11, 549755813888, !dbg !18
+  %22 = ashr exact i64 %sext47, 32, !dbg !18
+  %sext46 = add i64 %11, 412316860416, !dbg !18
+  %23 = ashr exact i64 %sext46, 32, !dbg !18
+  %sext45 = add i64 %11, 274877906944, !dbg !18
+  %24 = ashr exact i64 %sext45, 32, !dbg !18
+  %sext44 = add i64 %11, 137438953472, !dbg !18
+  %25 = ashr exact i64 %sext44, 32, !dbg !18
+  %26 = getelementptr float, ptr addrspace(1) %0, i64 %13, !dbg !18
+  %27 = getelementptr float, ptr addrspace(1) %0, i64 %14, !dbg !18
+  %28 = getelementptr float, ptr addrspace(1) %0, i64 %15, !dbg !18
+  %29 = getelementptr float, ptr addrspace(1) %0, i64 %16, !dbg !18
+  %30 = getelementptr float, ptr addrspace(1) %0, i64 %17, !dbg !18
+  %31 = getelementptr float, ptr addrspace(1) %0, i64 %18, !dbg !18
+  %32 = getelementptr float, ptr addrspace(1) %0, i64 %19, !dbg !18
+  %33 = getelementptr float, ptr addrspace(1) %0, i64 %20, !dbg !18
+  %34 = getelementptr float, ptr addrspace(1) %0, i64 %21, !dbg !18
+  %35 = getelementptr float, ptr addrspace(1) %0, i64 %22, !dbg !18
+  %36 = getelementptr float, ptr addrspace(1) %0, i64 %23, !dbg !18
+  %37 = getelementptr float, ptr addrspace(1) %0, i64 %24, !dbg !18
+  %38 = getelementptr float, ptr addrspace(1) %0, i64 %25, !dbg !18
+  %39 = ashr exact i64 %11, 30, !dbg !18
+  %40 = getelementptr i8, ptr addrspace(1) %0, i64 %39, !dbg !18
+  %41 = load float, ptr addrspace(1) %40, align 4, !dbg !19
+  %42 = load float, ptr addrspace(1) %38, align 4, !dbg !19
+  %43 = load float, ptr addrspace(1) %37, align 4, !dbg !19
+  %44 = load float, ptr addrspace(1) %36, align 4, !dbg !19
+  %45 = load float, ptr addrspace(1) %35, align 4, !dbg !19
+  %46 = load float, ptr addrspace(1) %34, align 4, !dbg !19
+  %47 = load float, ptr addrspace(1) %33, align 4, !dbg !19
+  %48 = load float, ptr addrspace(1) %32, align 4, !dbg !19
+  %49 = load float, ptr addrspace(1) %31, align 4, !dbg !19
+  %50 = load float, ptr addrspace(1) %30, align 4, !dbg !19
+  %51 = load float, ptr addrspace(1) %29, align 4, !dbg !19
+  %52 = load float, ptr addrspace(1) %28, align 4, !dbg !19
+  %53 = load float, ptr addrspace(1) %27, align 4, !dbg !19
+  %54 = load float, ptr addrspace(1) %26, align 4, !dbg !19
+  %55 = getelementptr float, ptr addrspace(1) %1, i64 %13, !dbg !20
+  %56 = getelementptr float, ptr addrspace(1) %1, i64 %14, !dbg !20
+  %57 = getelementptr float, ptr addrspace(1) %1, i64 %15, !dbg !20
+  %58 = getelementptr float, ptr addrspace(1) %1, i64 %16, !dbg !20
+  %59 = getelementptr float, ptr addrspace(1) %1, i64 %17, !dbg !20
+  %60 = getelementptr float, ptr addrspace(1) %1, i64 %18, !dbg !20
+  %61 = getelementptr float, ptr addrspace(1) %1, i64 %19, !dbg !20
+  %62 = getelementptr float, ptr addrspace(1) %1, i64 %20, !dbg !20
+  %63 = getelementptr float, ptr addrspace(1) %1, i64 %21, !dbg !20
+  %64 = getelementptr float, ptr addrspace(1) %1, i64 %22, !dbg !20
+  %65 = getelementptr float, ptr addrspace(1) %1, i64 %23, !dbg !20
+  %66 = getelementptr float, ptr addrspace(1) %1, i64 %24, !dbg !20
+  %67 = getelementptr float, ptr addrspace(1) %1, i64 %25, !dbg !20
+  %68 = ashr exact i64 %11, 30, !dbg !20
+  %69 = getelementptr i8, ptr addrspace(1) %1, i64 %68, !dbg !20
+  %70 = load float, ptr addrspace(1) %69, align 4, !dbg !21
+  %71 = load float, ptr addrspace(1) %67, align 4, !dbg !21
+  %72 = load float, ptr addrspace(1) %66, align 4, !dbg !21
+  %73 = load float, ptr addrspace(1) %65, align 4, !dbg !21
+  %74 = load float, ptr addrspace(1) %64, align 4, !dbg !21
+  %75 = load float, ptr addrspace(1) %63, align 4, !dbg !21
+  %76 = load float, ptr addrspace(1) %62, align 4, !dbg !21
+  %77 = load float, ptr addrspace(1) %61, align 4, !dbg !21
+  %78 = load float, ptr addrspace(1) %60, align 4, !dbg !21
+  %79 = load float, ptr addrspace(1) %59, align 4, !dbg !21
+  %80 = load float, ptr addrspace(1) %58, align 4, !dbg !21
+  %81 = load float, ptr addrspace(1) %57, align 4, !dbg !21
+  %82 = load float, ptr addrspace(1) %56, align 4, !dbg !21
+  %83 = load <1 x float>, ptr addrspace(1) %55, align 4, !dbg !21
+  br label %84, !dbg !21
+
+84:                                               ; preds = %7, %12
+  %85 = phi float [ %54, %12 ], [ 0.000000e+00, %7 ]
+  %86 = phi float [ %52, %12 ], [ 0.000000e+00, %7 ]
+  %87 = phi float [ %50, %12 ], [ 0.000000e+00, %7 ]
+  %88 = phi float [ %48, %12 ], [ 0.000000e+00, %7 ]
+  %89 = phi float [ %46, %12 ], [ 0.000000e+00, %7 ]
+  %90 = phi float [ %44, %12 ], [ 0.000000e+00, %7 ]
+  %91 = phi float [ %42, %12 ], [ 0.000000e+00, %7 ]
+  %92 = phi float [ %41, %12 ], [ 0.000000e+00, %7 ]
+  %93 = phi float [ %43, %12 ], [ 0.000000e+00, %7 ]
+  %94 = phi float [ %45, %12 ], [ 0.000000e+00, %7 ]
+  %95 = phi float [ %47, %12 ], [ 0.000000e+00, %7 ]
+  %96 = phi float [ %49, %12 ], [ 0.000000e+00, %7 ]
+  %97 = phi float [ %51, %12 ], [ 0.000000e+00, %7 ]
+  %98 = phi float [ %53, %12 ], [ 0.000000e+00, %7 ]
+  %99 = phi float [ %54, %12 ], [ 0xFFF0000000000000, %7 ]
+  %100 = phi float [ %53, %12 ], [ 0xFFF0000000000000, %7 ]
+  %101 = phi float [ %52, %12 ], [ 0xFFF0000000000000, %7 ]
+  %102 = phi float [ %51, %12 ], [ 0xFFF0000000000000, %7 ]
+  %103 = phi float [ %50, %12 ], [ 0xFFF0000000000000, %7 ]
+  %104 = phi float [ %49, %12 ], [ 0xFFF0000000000000, %7 ]
+  %105 = phi float [ %48, %12 ], [ 0xFFF0000000000000, %7 ]
+  %106 = phi float [ %47, %12 ], [ 0xFFF0000000000000, %7 ]
+  %107 = phi float [ %46, %12 ], [ 0xFFF0000000000000, %7 ]
+  %108 = phi float [ %45, %12 ], [ 0xFFF0000000000000, %7 ]
+  %109 = phi float [ %44, %12 ], [ 0xFFF0000000000000, %7 ]
+  %110 = phi float [ %43, %12 ], [ 0xFFF0000000000000, %7 ]
+  %111 = phi float [ %42, %12 ], [ 0xFFF0000000000000, %7 ]
+  %112 = phi float [ %41, %12 ], [ 0xFFF0000000000000, %7 ]
+  %113 = phi float [ %82, %12 ], [ 0.000000e+00, %7 ]
+  %114 = phi float [ %80, %12 ], [ 0.000000e+00, %7 ]
+  %115 = phi float [ %78, %12 ], [ 0.000000e+00, %7 ]
+  %116 = phi float [ %76, %12 ], [ 0.000000e+00, %7 ]
+  %117 = phi float [ %74, %12 ], [ 0.000000e+00, %7 ]
+  %118 = phi float [ %72, %12 ], [ 0.000000e+00, %7 ]
+  %119 = phi float [ %70, %12 ], [ 0.000000e+00, %7 ]
+  %120 = phi float [ %71, %12 ], [ 0.000000e+00, %7 ]
+  %121 = phi float [ %73, %12 ], [ 0.000000e+00, %7 ]
+  %122 = phi float [ %75, %12 ], [ 0.000000e+00, %7 ]
+  %123 = phi float [ %77, %12 ], [ 0.000000e+00, %7 ]
+  %124 = phi float [ %79, %12 ], [ 0.000000e+00, %7 ]
+  %125 = phi float [ %81, %12 ], [ 0.000000e+00, %7 ]
+  %126 = phi <1 x float> [ %83, %12 ], [ zeroinitializer, %7 ], !dbg !21
+  %127 = extractelement <1 x float> %126, i64 0, !dbg !21
+  %128 = fcmp ogt float %112, %111, !dbg !22
+  %129 = fcmp uno float %112, 0.000000e+00, !dbg !26
+  %130 = or i1 %128, %129, !dbg !27
+  %131 = select i1 %130, float %112, float %111, !dbg !28
+  %132 = fcmp ogt float %131, %110, !dbg !22
+  %133 = fcmp uno float %131, 0.000000e+00, !dbg !26
+  %134 = or i1 %132, %133, !dbg !27
+  %135 = select i1 %134, float %131, float %110, !dbg !28
+  %136 = fcmp ogt float %135, %109, !dbg !22
+  %137 = fcmp uno float %135, 0.000000e+00, !dbg !26
+  %138 = or i1 %136, %137, !dbg !27
+  %139 = select i1 %138, float %135, float %109, !dbg !28
+  %140 = fcmp ogt float %139, %108, !dbg !22
+  %141 = fcmp uno float %139, 0.000000e+00, !dbg !26
+  %142 = or i1 %140, %141, !dbg !27
+  %143 = select i1 %142, float %139, float %108, !dbg !28
+  %144 = fcmp ogt float %143, %107, !dbg !22
+  %145 = fcmp uno float %143, 0.000000e+00, !dbg !26
+  %146 = or i1 %144, %145, !dbg !27
+  %147 = select i1 %146, float %143, float %107, !dbg !28
+  %148 = fcmp ogt float %147, %106, !dbg !22
+  %149 = fcmp uno float %147, 0.000000e+00, !dbg !26
+  %150 = or i1 %148, %149, !dbg !27
+  %151 = select i1 %150, float %147, float %106, !dbg !28
+  %152 = fcmp ogt float %151, %105, !dbg !22
+  %153 = fcmp uno float %151, 0.000000e+00, !dbg !26
+  %154 = or i1 %152, %153, !dbg !27
+  %155 = select i1 %154, float %151, float %105, !dbg !28
+  %156 = fcmp ogt float %155, %104, !dbg !22
+  %157 = fcmp uno float %155, 0.000000e+00, !dbg !26
+  %158 = or i1 %156, %157, !dbg !27
+  %159 = select i1 %158, float %155, float %104, !dbg !28
+  %160 = fcmp ogt float %159, %103, !dbg !22
+  %161 = fcmp uno float %159, 0.000000e+00, !dbg !26
+  %162 = or i1 %160, %161, !dbg !27
+  %163 = select i1 %162, float %159, float %103, !dbg !28
+  %164 = fcmp ogt float %163, %102, !dbg !22
+  %165 = fcmp uno float %163, 0.000000e+00, !dbg !26
+  %166 = or i1 %164, %165, !dbg !27
+  %167 = select i1 %166, float %163, float %102, !dbg !28
+  %168 = fcmp ogt float %167, %101, !dbg !22
+  %169 = fcmp uno float %167, 0.000000e+00, !dbg !26
+  %170 = or i1 %168, %169, !dbg !27
+  %171 = select i1 %170, float %167, float %101, !dbg !28
+  %172 = fcmp ogt float %171, %100, !dbg !22
+  %173 = fcmp uno float %171, 0.000000e+00, !dbg !26
+  %174 = or i1 %172, %173, !dbg !27
+  %175 = select i1 %174, float %171, float %100, !dbg !28
+  %176 = fcmp ogt float %175, %99, !dbg !22
+  %177 = fcmp uno float %175, 0.000000e+00, !dbg !26
+  %178 = or i1 %176, %177, !dbg !27
+  %179 = select i1 %178, float %175, float %99, !dbg !28
+  %180 = fcmp oeq float %179, 0xFFF0000000000000, !dbg !29
+  %181 = fsub float %92, %179, !dbg !30
+  %182 = fsub float %91, %179, !dbg !30
+  %183 = fsub float %93, %179, !dbg !30
+  %184 = fsub float %90, %179, !dbg !30
+  %185 = fsub float %94, %179, !dbg !30
+  %186 = fsub float %89, %179, !dbg !30
+  %187 = fsub float %95, %179, !dbg !30
+  %188 = fsub float %88, %179, !dbg !30
+  %189 = fsub float %96, %179, !dbg !30
+  %190 = fsub float %87, %179, !dbg !30
+  %191 = fsub float %97, %179, !dbg !30
+  %192 = fsub float %86, %179, !dbg !30
+  %193 = fsub float %98, %179, !dbg !30
+  %194 = fsub float %85, %179, !dbg !30
+  %195 = select i1 %180, float 0.000000e+00, float %181, !dbg !31
+  %196 = select i1 %180, float 0.000000e+00, float %182, !dbg !31
+  %197 = select i1 %180, float 0.000000e+00, float %183, !dbg !31
+  %198 = select i1 %180, float 0.000000e+00, float %184, !dbg !31
+  %199 = select i1 %180, float 0.000000e+00, float %185, !dbg !31
+  %200 = select i1 %180, float 0.000000e+00, float %186, !dbg !31
+  %201 = select i1 %180, float 0.000000e+00, float %187, !dbg !31
+  %202 = select i1 %180, float 0.000000e+00, float %188, !dbg !31
+  %203 = select i1 %180, float 0.000000e+00, float %189, !dbg !31
+  %204 = select i1 %180, float 0.000000e+00, float %190, !dbg !31
+  %205 = select i1 %180, float 0.000000e+00, float %191, !dbg !31
+  %206 = select i1 %180, float 0.000000e+00, float %192, !dbg !31
+  %207 = select i1 %180, float 0.000000e+00, float %193, !dbg !31
+  %208 = select i1 %180, float 0.000000e+00, float %194, !dbg !31
+  %209 = tail call spir_func noundef float @_Z16__spirv_ocl_rintf(float noundef %195) #5, !dbg !32
+  %210 = fsub float %195, %209, !dbg !32
+  %211 = fptosi float %209 to i32, !dbg !32
+  %212 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef 0x3F24499000000000, float noundef %210, float noundef 0x3F55F48C60000000) #5, !dbg !32
+  %213 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %210, float noundef 5.000000e-01, float noundef 1.000000e+00) #5, !dbg !32
+  %214 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %212, float noundef %210, float noundef 0x3F83B29960000000) #5, !dbg !32
+  %215 = fadd float %213, -1.000000e+00, !dbg !32
+  %216 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %214, float noundef %210, float noundef 0x3FAC6AECC0000000) #5, !dbg !32
+  %217 = fneg float %215, !dbg !32
+  %218 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %210, float noundef 5.000000e-01, float noundef %217) #5, !dbg !32
+  %219 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %216, float noundef %210, float noundef 0x3FCEBFBE20000000) #5, !dbg !32
+  %220 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %219, float noundef %210, float noundef 0x3FC8B90C40000000) #5, !dbg !32
+  %221 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %220, float noundef %210, float noundef %218) #5, !dbg !32
+  %222 = fadd float %213, %221, !dbg !32
+  %223 = add i32 %211, -127, !dbg !32
+  %224 = icmp ult i32 %223, -252, !dbg !32
+  br i1 %224, label %230, label %225, !dbg !32
+
+225:                                              ; preds = %84
+  %226 = bitcast float %222 to i32, !dbg !32
+  %227 = shl nsw i32 %211, 23, !dbg !32
+  %228 = add i32 %227, %226, !dbg !32
+  %229 = bitcast i32 %228 to float, !dbg !32
+  br label %__devicelib_imf_exp2f.exit18, !dbg !32
+
+230:                                              ; preds = %84
+  %231 = tail call float @llvm.fabs.f32(float %195), !dbg !32
+  %232 = bitcast float %231 to i32, !dbg !32
+  %233 = icmp samesign ugt i32 %232, 2139095039, !dbg !32
+  br i1 %233, label %234, label %238, !dbg !32
+
+234:                                              ; preds = %230
+  %235 = fcmp oeq float %195, 0xFFF0000000000000, !dbg !32
+  %236 = fadd float %195, %195, !dbg !32
+  %237 = select i1 %235, float 0.000000e+00, float %236, !dbg !32
+  br label %__devicelib_imf_exp2f.exit18, !dbg !32
+
+238:                                              ; preds = %230
+  %239 = tail call spir_func noundef float @_Z16__spirv_ocl_fminff(float noundef %195, float noundef 1.920000e+02) #5, !dbg !32
+  %240 = tail call spir_func noundef float @_Z16__spirv_ocl_fmaxff(float noundef %239, float noundef -1.920000e+02) #5, !dbg !32
+  %241 = tail call spir_func noundef float @_Z16__spirv_ocl_rintf(float noundef %240) #5, !dbg !32
+  %242 = fptosi float %241 to i32, !dbg !32
+  %243 = ashr i32 %242, 1, !dbg !32
+  %244 = sub nsw i32 %242, %243, !dbg !32
+  %245 = shl i32 %244, 23, !dbg !32
+  %246 = add i32 %245, 1065353216, !dbg !32
+  %247 = shl i32 %243, 23, !dbg !32
+  %248 = add i32 %247, 1065353216, !dbg !32
+  %249 = bitcast i32 %246 to float, !dbg !32
+  %250 = fmul float %222, %249, !dbg !32
+  %251 = bitcast i32 %248 to float, !dbg !32
+  %252 = fmul float %250, %251, !dbg !32
+  br label %__devicelib_imf_exp2f.exit18, !dbg !32
+
+__devicelib_imf_exp2f.exit18:                     ; preds = %225, %234, %238
+  %253 = phi float [ %252, %238 ], [ %229, %225 ], [ %237, %234 ], !dbg !32
+  %254 = tail call spir_func noundef float @_Z16__spirv_ocl_rintf(float noundef %196) #5, !dbg !32
+  %255 = fsub float %196, %254, !dbg !32
+  %256 = fptosi float %254 to i32, !dbg !32
+  %257 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef 0x3F24499000000000, float noundef %255, float noundef 0x3F55F48C60000000) #5, !dbg !32
+  %258 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %255, float noundef 5.000000e-01, float noundef 1.000000e+00) #5, !dbg !32
+  %259 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %257, float noundef %255, float noundef 0x3F83B29960000000) #5, !dbg !32
+  %260 = fadd float %258, -1.000000e+00, !dbg !32
+  %261 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %259, float noundef %255, float noundef 0x3FAC6AECC0000000) #5, !dbg !32
+  %262 = fneg float %260, !dbg !32
+  %263 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %255, float noundef 5.000000e-01, float noundef %262) #5, !dbg !32
+  %264 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %261, float noundef %255, float noundef 0x3FCEBFBE20000000) #5, !dbg !32
+  %265 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %264, float noundef %255, float noundef 0x3FC8B90C40000000) #5, !dbg !32
+  %266 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %265, float noundef %255, float noundef %263) #5, !dbg !32
+  %267 = fadd float %258, %266, !dbg !32
+  %268 = add i32 %256, -127, !dbg !32
+  %269 = icmp ult i32 %268, -252, !dbg !32
+  br i1 %269, label %275, label %270, !dbg !32
+
+270:                                              ; preds = %__devicelib_imf_exp2f.exit18
+  %271 = bitcast float %267 to i32, !dbg !32
+  %272 = shl nsw i32 %256, 23, !dbg !32
+  %273 = add i32 %272, %271, !dbg !32
+  %274 = bitcast i32 %273 to float, !dbg !32
+  br label %__devicelib_imf_exp2f.exit17, !dbg !32
+
+275:                                              ; preds = %__devicelib_imf_exp2f.exit18
+  %276 = tail call float @llvm.fabs.f32(float %196), !dbg !32
+  %277 = bitcast float %276 to i32, !dbg !32
+  %278 = icmp samesign ugt i32 %277, 2139095039, !dbg !32
+  br i1 %278, label %279, label %283, !dbg !32
+
+279:                                              ; preds = %275
+  %280 = fcmp oeq float %196, 0xFFF0000000000000, !dbg !32
+  %281 = fadd float %196, %196, !dbg !32
+  %282 = select i1 %280, float 0.000000e+00, float %281, !dbg !32
+  br label %__devicelib_imf_exp2f.exit17, !dbg !32
+
+283:                                              ; preds = %275
+  %284 = tail call spir_func noundef float @_Z16__spirv_ocl_fminff(float noundef %196, float noundef 1.920000e+02) #5, !dbg !32
+  %285 = tail call spir_func noundef float @_Z16__spirv_ocl_fmaxff(float noundef %284, float noundef -1.920000e+02) #5, !dbg !32
+  %286 = tail call spir_func noundef float @_Z16__spirv_ocl_rintf(float noundef %285) #5, !dbg !32
+  %287 = fptosi float %286 to i32, !dbg !32
+  %288 = ashr i32 %287, 1, !dbg !32
+  %289 = sub nsw i32 %287, %288, !dbg !32
+  %290 = shl i32 %289, 23, !dbg !32
+  %291 = add i32 %290, 1065353216, !dbg !32
+  %292 = shl i32 %288, 23, !dbg !32
+  %293 = add i32 %292, 1065353216, !dbg !32
+  %294 = bitcast i32 %291 to float, !dbg !32
+  %295 = fmul float %267, %294, !dbg !32
+  %296 = bitcast i32 %293 to float, !dbg !32
+  %297 = fmul float %295, %296, !dbg !32
+  br label %__devicelib_imf_exp2f.exit17, !dbg !32
+
+__devicelib_imf_exp2f.exit17:                     ; preds = %270, %279, %283
+  %298 = phi float [ %297, %283 ], [ %274, %270 ], [ %282, %279 ], !dbg !32
+  %299 = tail call spir_func noundef float @_Z16__spirv_ocl_rintf(float noundef %197) #5, !dbg !32
+  %300 = fsub float %197, %299, !dbg !32
+  %301 = fptosi float %299 to i32, !dbg !32
+  %302 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef 0x3F24499000000000, float noundef %300, float noundef 0x3F55F48C60000000) #5, !dbg !32
+  %303 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %300, float noundef 5.000000e-01, float noundef 1.000000e+00) #5, !dbg !32
+  %304 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %302, float noundef %300, float noundef 0x3F83B29960000000) #5, !dbg !32
+  %305 = fadd float %303, -1.000000e+00, !dbg !32
+  %306 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %304, float noundef %300, float noundef 0x3FAC6AECC0000000) #5, !dbg !32
+  %307 = fneg float %305, !dbg !32
+  %308 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %300, float noundef 5.000000e-01, float noundef %307) #5, !dbg !32
+  %309 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %306, float noundef %300, float noundef 0x3FCEBFBE20000000) #5, !dbg !32
+  %310 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %309, float noundef %300, float noundef 0x3FC8B90C40000000) #5, !dbg !32
+  %311 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %310, float noundef %300, float noundef %308) #5, !dbg !32
+  %312 = fadd float %303, %311, !dbg !32
+  %313 = add i32 %301, -127, !dbg !32
+  %314 = icmp ult i32 %313, -252, !dbg !32
+  br i1 %314, label %320, label %315, !dbg !32
+
+315:                                              ; preds = %__devicelib_imf_exp2f.exit17
+  %316 = bitcast float %312 to i32, !dbg !32
+  %317 = shl nsw i32 %301, 23, !dbg !32
+  %318 = add i32 %317, %316, !dbg !32
+  %319 = bitcast i32 %318 to float, !dbg !32
+  br label %__devicelib_imf_exp2f.exit16, !dbg !32
+
+320:                                              ; preds = %__devicelib_imf_exp2f.exit17
+  %321 = tail call float @llvm.fabs.f32(float %197), !dbg !32
+  %322 = bitcast float %321 to i32, !dbg !32
+  %323 = icmp samesign ugt i32 %322, 2139095039, !dbg !32
+  br i1 %323, label %324, label %328, !dbg !32
+
+324:                                              ; preds = %320
+  %325 = fcmp oeq float %197, 0xFFF0000000000000, !dbg !32
+  %326 = fadd float %197, %197, !dbg !32
+  %327 = select i1 %325, float 0.000000e+00, float %326, !dbg !32
+  br label %__devicelib_imf_exp2f.exit16, !dbg !32
+
+328:                                              ; preds = %320
+  %329 = tail call spir_func noundef float @_Z16__spirv_ocl_fminff(float noundef %197, float noundef 1.920000e+02) #5, !dbg !32
+  %330 = tail call spir_func noundef float @_Z16__spirv_ocl_fmaxff(float noundef %329, float noundef -1.920000e+02) #5, !dbg !32
+  %331 = tail call spir_func noundef float @_Z16__spirv_ocl_rintf(float noundef %330) #5, !dbg !32
+  %332 = fptosi float %331 to i32, !dbg !32
+  %333 = ashr i32 %332, 1, !dbg !32
+  %334 = sub nsw i32 %332, %333, !dbg !32
+  %335 = shl i32 %334, 23, !dbg !32
+  %336 = add i32 %335, 1065353216, !dbg !32
+  %337 = shl i32 %333, 23, !dbg !32
+  %338 = add i32 %337, 1065353216, !dbg !32
+  %339 = bitcast i32 %336 to float, !dbg !32
+  %340 = fmul float %312, %339, !dbg !32
+  %341 = bitcast i32 %338 to float, !dbg !32
+  %342 = fmul float %340, %341, !dbg !32
+  br label %__devicelib_imf_exp2f.exit16, !dbg !32
+
+__devicelib_imf_exp2f.exit16:                     ; preds = %315, %324, %328
+  %343 = phi float [ %342, %328 ], [ %319, %315 ], [ %327, %324 ], !dbg !32
+  %344 = tail call spir_func noundef float @_Z16__spirv_ocl_rintf(float noundef %198) #5, !dbg !32
+  %345 = fsub float %198, %344, !dbg !32
+  %346 = fptosi float %344 to i32, !dbg !32
+  %347 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef 0x3F24499000000000, float noundef %345, float noundef 0x3F55F48C60000000) #5, !dbg !32
+  %348 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %345, float noundef 5.000000e-01, float noundef 1.000000e+00) #5, !dbg !32
+  %349 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %347, float noundef %345, float noundef 0x3F83B29960000000) #5, !dbg !32
+  %350 = fadd float %348, -1.000000e+00, !dbg !32
+  %351 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %349, float noundef %345, float noundef 0x3FAC6AECC0000000) #5, !dbg !32
+  %352 = fneg float %350, !dbg !32
+  %353 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %345, float noundef 5.000000e-01, float noundef %352) #5, !dbg !32
+  %354 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %351, float noundef %345, float noundef 0x3FCEBFBE20000000) #5, !dbg !32
+  %355 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %354, float noundef %345, float noundef 0x3FC8B90C40000000) #5, !dbg !32
+  %356 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %355, float noundef %345, float noundef %353) #5, !dbg !32
+  %357 = fadd float %348, %356, !dbg !32
+  %358 = add i32 %346, -127, !dbg !32
+  %359 = icmp ult i32 %358, -252, !dbg !32
+  br i1 %359, label %365, label %360, !dbg !32
+
+360:                                              ; preds = %__devicelib_imf_exp2f.exit16
+  %361 = bitcast float %357 to i32, !dbg !32
+  %362 = shl nsw i32 %346, 23, !dbg !32
+  %363 = add i32 %362, %361, !dbg !32
+  %364 = bitcast i32 %363 to float, !dbg !32
+  br label %__devicelib_imf_exp2f.exit15, !dbg !32
+
+365:                                              ; preds = %__devicelib_imf_exp2f.exit16
+  %366 = tail call float @llvm.fabs.f32(float %198), !dbg !32
+  %367 = bitcast float %366 to i32, !dbg !32
+  %368 = icmp samesign ugt i32 %367, 2139095039, !dbg !32
+  br i1 %368, label %369, label %373, !dbg !32
+
+369:                                              ; preds = %365
+  %370 = fcmp oeq float %198, 0xFFF0000000000000, !dbg !32
+  %371 = fadd float %198, %198, !dbg !32
+  %372 = select i1 %370, float 0.000000e+00, float %371, !dbg !32
+  br label %__devicelib_imf_exp2f.exit15, !dbg !32
+
+373:                                              ; preds = %365
+  %374 = tail call spir_func noundef float @_Z16__spirv_ocl_fminff(float noundef %198, float noundef 1.920000e+02) #5, !dbg !32
+  %375 = tail call spir_func noundef float @_Z16__spirv_ocl_fmaxff(float noundef %374, float noundef -1.920000e+02) #5, !dbg !32
+  %376 = tail call spir_func noundef float @_Z16__spirv_ocl_rintf(float noundef %375) #5, !dbg !32
+  %377 = fptosi float %376 to i32, !dbg !32
+  %378 = ashr i32 %377, 1, !dbg !32
+  %379 = sub nsw i32 %377, %378, !dbg !32
+  %380 = shl i32 %379, 23, !dbg !32
+  %381 = add i32 %380, 1065353216, !dbg !32
+  %382 = shl i32 %378, 23, !dbg !32
+  %383 = add i32 %382, 1065353216, !dbg !32
+  %384 = bitcast i32 %381 to float, !dbg !32
+  %385 = fmul float %357, %384, !dbg !32
+  %386 = bitcast i32 %383 to float, !dbg !32
+  %387 = fmul float %385, %386, !dbg !32
+  br label %__devicelib_imf_exp2f.exit15, !dbg !32
+
+__devicelib_imf_exp2f.exit15:                     ; preds = %360, %369, %373
+  %388 = phi float [ %387, %373 ], [ %364, %360 ], [ %372, %369 ], !dbg !32
+  %389 = tail call spir_func noundef float @_Z16__spirv_ocl_rintf(float noundef %199) #5, !dbg !32
+  %390 = fsub float %199, %389, !dbg !32
+  %391 = fptosi float %389 to i32, !dbg !32
+  %392 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef 0x3F24499000000000, float noundef %390, float noundef 0x3F55F48C60000000) #5, !dbg !32
+  %393 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %390, float noundef 5.000000e-01, float noundef 1.000000e+00) #5, !dbg !32
+  %394 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %392, float noundef %390, float noundef 0x3F83B29960000000) #5, !dbg !32
+  %395 = fadd float %393, -1.000000e+00, !dbg !32
+  %396 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %394, float noundef %390, float noundef 0x3FAC6AECC0000000) #5, !dbg !32
+  %397 = fneg float %395, !dbg !32
+  %398 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %390, float noundef 5.000000e-01, float noundef %397) #5, !dbg !32
+  %399 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %396, float noundef %390, float noundef 0x3FCEBFBE20000000) #5, !dbg !32
+  %400 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %399, float noundef %390, float noundef 0x3FC8B90C40000000) #5, !dbg !32
+  %401 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %400, float noundef %390, float noundef %398) #5, !dbg !32
+  %402 = fadd float %393, %401, !dbg !32
+  %403 = add i32 %391, -127, !dbg !32
+  %404 = icmp ult i32 %403, -252, !dbg !32
+  br i1 %404, label %410, label %405, !dbg !32
+
+405:                                              ; preds = %__devicelib_imf_exp2f.exit15
+  %406 = bitcast float %402 to i32, !dbg !32
+  %407 = shl nsw i32 %391, 23, !dbg !32
+  %408 = add i32 %407, %406, !dbg !32
+  %409 = bitcast i32 %408 to float, !dbg !32
+  br label %__devicelib_imf_exp2f.exit14, !dbg !32
+
+410:                                              ; preds = %__devicelib_imf_exp2f.exit15
+  %411 = tail call float @llvm.fabs.f32(float %199), !dbg !32
+  %412 = bitcast float %411 to i32, !dbg !32
+  %413 = icmp samesign ugt i32 %412, 2139095039, !dbg !32
+  br i1 %413, label %414, label %418, !dbg !32
+
+414:                                              ; preds = %410
+  %415 = fcmp oeq float %199, 0xFFF0000000000000, !dbg !32
+  %416 = fadd float %199, %199, !dbg !32
+  %417 = select i1 %415, float 0.000000e+00, float %416, !dbg !32
+  br label %__devicelib_imf_exp2f.exit14, !dbg !32
+
+418:                                              ; preds = %410
+  %419 = tail call spir_func noundef float @_Z16__spirv_ocl_fminff(float noundef %199, float noundef 1.920000e+02) #5, !dbg !32
+  %420 = tail call spir_func noundef float @_Z16__spirv_ocl_fmaxff(float noundef %419, float noundef -1.920000e+02) #5, !dbg !32
+  %421 = tail call spir_func noundef float @_Z16__spirv_ocl_rintf(float noundef %420) #5, !dbg !32
+  %422 = fptosi float %421 to i32, !dbg !32
+  %423 = ashr i32 %422, 1, !dbg !32
+  %424 = sub nsw i32 %422, %423, !dbg !32
+  %425 = shl i32 %424, 23, !dbg !32
+  %426 = add i32 %425, 1065353216, !dbg !32
+  %427 = shl i32 %423, 23, !dbg !32
+  %428 = add i32 %427, 1065353216, !dbg !32
+  %429 = bitcast i32 %426 to float, !dbg !32
+  %430 = fmul float %402, %429, !dbg !32
+  %431 = bitcast i32 %428 to float, !dbg !32
+  %432 = fmul float %430, %431, !dbg !32
+  br label %__devicelib_imf_exp2f.exit14, !dbg !32
+
+__devicelib_imf_exp2f.exit14:                     ; preds = %405, %414, %418
+  %433 = phi float [ %432, %418 ], [ %409, %405 ], [ %417, %414 ], !dbg !32
+  %434 = tail call spir_func noundef float @_Z16__spirv_ocl_rintf(float noundef %200) #5, !dbg !32
+  %435 = fsub float %200, %434, !dbg !32
+  %436 = fptosi float %434 to i32, !dbg !32
+  %437 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef 0x3F24499000000000, float noundef %435, float noundef 0x3F55F48C60000000) #5, !dbg !32
+  %438 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %435, float noundef 5.000000e-01, float noundef 1.000000e+00) #5, !dbg !32
+  %439 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %437, float noundef %435, float noundef 0x3F83B29960000000) #5, !dbg !32
+  %440 = fadd float %438, -1.000000e+00, !dbg !32
+  %441 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %439, float noundef %435, float noundef 0x3FAC6AECC0000000) #5, !dbg !32
+  %442 = fneg float %440, !dbg !32
+  %443 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %435, float noundef 5.000000e-01, float noundef %442) #5, !dbg !32
+  %444 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %441, float noundef %435, float noundef 0x3FCEBFBE20000000) #5, !dbg !32
+  %445 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %444, float noundef %435, float noundef 0x3FC8B90C40000000) #5, !dbg !32
+  %446 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %445, float noundef %435, float noundef %443) #5, !dbg !32
+  %447 = fadd float %438, %446, !dbg !32
+  %448 = add i32 %436, -127, !dbg !32
+  %449 = icmp ult i32 %448, -252, !dbg !32
+  br i1 %449, label %455, label %450, !dbg !32
+
+450:                                              ; preds = %__devicelib_imf_exp2f.exit14
+  %451 = bitcast float %447 to i32, !dbg !32
+  %452 = shl nsw i32 %436, 23, !dbg !32
+  %453 = add i32 %452, %451, !dbg !32
+  %454 = bitcast i32 %453 to float, !dbg !32
+  br label %__devicelib_imf_exp2f.exit13, !dbg !32
+
+455:                                              ; preds = %__devicelib_imf_exp2f.exit14
+  %456 = tail call float @llvm.fabs.f32(float %200), !dbg !32
+  %457 = bitcast float %456 to i32, !dbg !32
+  %458 = icmp samesign ugt i32 %457, 2139095039, !dbg !32
+  br i1 %458, label %459, label %463, !dbg !32
+
+459:                                              ; preds = %455
+  %460 = fcmp oeq float %200, 0xFFF0000000000000, !dbg !32
+  %461 = fadd float %200, %200, !dbg !32
+  %462 = select i1 %460, float 0.000000e+00, float %461, !dbg !32
+  br label %__devicelib_imf_exp2f.exit13, !dbg !32
+
+463:                                              ; preds = %455
+  %464 = tail call spir_func noundef float @_Z16__spirv_ocl_fminff(float noundef %200, float noundef 1.920000e+02) #5, !dbg !32
+  %465 = tail call spir_func noundef float @_Z16__spirv_ocl_fmaxff(float noundef %464, float noundef -1.920000e+02) #5, !dbg !32
+  %466 = tail call spir_func noundef float @_Z16__spirv_ocl_rintf(float noundef %465) #5, !dbg !32
+  %467 = fptosi float %466 to i32, !dbg !32
+  %468 = ashr i32 %467, 1, !dbg !32
+  %469 = sub nsw i32 %467, %468, !dbg !32
+  %470 = shl i32 %469, 23, !dbg !32
+  %471 = add i32 %470, 1065353216, !dbg !32
+  %472 = shl i32 %468, 23, !dbg !32
+  %473 = add i32 %472, 1065353216, !dbg !32
+  %474 = bitcast i32 %471 to float, !dbg !32
+  %475 = fmul float %447, %474, !dbg !32
+  %476 = bitcast i32 %473 to float, !dbg !32
+  %477 = fmul float %475, %476, !dbg !32
+  br label %__devicelib_imf_exp2f.exit13, !dbg !32
+
+__devicelib_imf_exp2f.exit13:                     ; preds = %450, %459, %463
+  %478 = phi float [ %477, %463 ], [ %454, %450 ], [ %462, %459 ], !dbg !32
+  %479 = tail call spir_func noundef float @_Z16__spirv_ocl_rintf(float noundef %201) #5, !dbg !32
+  %480 = fsub float %201, %479, !dbg !32
+  %481 = fptosi float %479 to i32, !dbg !32
+  %482 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef 0x3F24499000000000, float noundef %480, float noundef 0x3F55F48C60000000) #5, !dbg !32
+  %483 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %480, float noundef 5.000000e-01, float noundef 1.000000e+00) #5, !dbg !32
+  %484 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %482, float noundef %480, float noundef 0x3F83B29960000000) #5, !dbg !32
+  %485 = fadd float %483, -1.000000e+00, !dbg !32
+  %486 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %484, float noundef %480, float noundef 0x3FAC6AECC0000000) #5, !dbg !32
+  %487 = fneg float %485, !dbg !32
+  %488 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %480, float noundef 5.000000e-01, float noundef %487) #5, !dbg !32
+  %489 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %486, float noundef %480, float noundef 0x3FCEBFBE20000000) #5, !dbg !32
+  %490 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %489, float noundef %480, float noundef 0x3FC8B90C40000000) #5, !dbg !32
+  %491 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %490, float noundef %480, float noundef %488) #5, !dbg !32
+  %492 = fadd float %483, %491, !dbg !32
+  %493 = add i32 %481, -127, !dbg !32
+  %494 = icmp ult i32 %493, -252, !dbg !32
+  br i1 %494, label %500, label %495, !dbg !32
+
+495:                                              ; preds = %__devicelib_imf_exp2f.exit13
+  %496 = bitcast float %492 to i32, !dbg !32
+  %497 = shl nsw i32 %481, 23, !dbg !32
+  %498 = add i32 %497, %496, !dbg !32
+  %499 = bitcast i32 %498 to float, !dbg !32
+  br label %__devicelib_imf_exp2f.exit12, !dbg !32
+
+500:                                              ; preds = %__devicelib_imf_exp2f.exit13
+  %501 = tail call float @llvm.fabs.f32(float %201), !dbg !32
+  %502 = bitcast float %501 to i32, !dbg !32
+  %503 = icmp samesign ugt i32 %502, 2139095039, !dbg !32
+  br i1 %503, label %504, label %508, !dbg !32
+
+504:                                              ; preds = %500
+  %505 = fcmp oeq float %201, 0xFFF0000000000000, !dbg !32
+  %506 = fadd float %201, %201, !dbg !32
+  %507 = select i1 %505, float 0.000000e+00, float %506, !dbg !32
+  br label %__devicelib_imf_exp2f.exit12, !dbg !32
+
+508:                                              ; preds = %500
+  %509 = tail call spir_func noundef float @_Z16__spirv_ocl_fminff(float noundef %201, float noundef 1.920000e+02) #5, !dbg !32
+  %510 = tail call spir_func noundef float @_Z16__spirv_ocl_fmaxff(float noundef %509, float noundef -1.920000e+02) #5, !dbg !32
+  %511 = tail call spir_func noundef float @_Z16__spirv_ocl_rintf(float noundef %510) #5, !dbg !32
+  %512 = fptosi float %511 to i32, !dbg !32
+  %513 = ashr i32 %512, 1, !dbg !32
+  %514 = sub nsw i32 %512, %513, !dbg !32
+  %515 = shl i32 %514, 23, !dbg !32
+  %516 = add i32 %515, 1065353216, !dbg !32
+  %517 = shl i32 %513, 23, !dbg !32
+  %518 = add i32 %517, 1065353216, !dbg !32
+  %519 = bitcast i32 %516 to float, !dbg !32
+  %520 = fmul float %492, %519, !dbg !32
+  %521 = bitcast i32 %518 to float, !dbg !32
+  %522 = fmul float %520, %521, !dbg !32
+  br label %__devicelib_imf_exp2f.exit12, !dbg !32
+
+__devicelib_imf_exp2f.exit12:                     ; preds = %495, %504, %508
+  %523 = phi float [ %522, %508 ], [ %499, %495 ], [ %507, %504 ], !dbg !32
+  %524 = tail call spir_func noundef float @_Z16__spirv_ocl_rintf(float noundef %202) #5, !dbg !32
+  %525 = fsub float %202, %524, !dbg !32
+  %526 = fptosi float %524 to i32, !dbg !32
+  %527 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef 0x3F24499000000000, float noundef %525, float noundef 0x3F55F48C60000000) #5, !dbg !32
+  %528 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %525, float noundef 5.000000e-01, float noundef 1.000000e+00) #5, !dbg !32
+  %529 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %527, float noundef %525, float noundef 0x3F83B29960000000) #5, !dbg !32
+  %530 = fadd float %528, -1.000000e+00, !dbg !32
+  %531 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %529, float noundef %525, float noundef 0x3FAC6AECC0000000) #5, !dbg !32
+  %532 = fneg float %530, !dbg !32
+  %533 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %525, float noundef 5.000000e-01, float noundef %532) #5, !dbg !32
+  %534 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %531, float noundef %525, float noundef 0x3FCEBFBE20000000) #5, !dbg !32
+  %535 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %534, float noundef %525, float noundef 0x3FC8B90C40000000) #5, !dbg !32
+  %536 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %535, float noundef %525, float noundef %533) #5, !dbg !32
+  %537 = fadd float %528, %536, !dbg !32
+  %538 = add i32 %526, -127, !dbg !32
+  %539 = icmp ult i32 %538, -252, !dbg !32
+  br i1 %539, label %545, label %540, !dbg !32
+
+540:                                              ; preds = %__devicelib_imf_exp2f.exit12
+  %541 = bitcast float %537 to i32, !dbg !32
+  %542 = shl nsw i32 %526, 23, !dbg !32
+  %543 = add i32 %542, %541, !dbg !32
+  %544 = bitcast i32 %543 to float, !dbg !32
+  br label %__devicelib_imf_exp2f.exit11, !dbg !32
+
+545:                                              ; preds = %__devicelib_imf_exp2f.exit12
+  %546 = tail call float @llvm.fabs.f32(float %202), !dbg !32
+  %547 = bitcast float %546 to i32, !dbg !32
+  %548 = icmp samesign ugt i32 %547, 2139095039, !dbg !32
+  br i1 %548, label %549, label %553, !dbg !32
+
+549:                                              ; preds = %545
+  %550 = fcmp oeq float %202, 0xFFF0000000000000, !dbg !32
+  %551 = fadd float %202, %202, !dbg !32
+  %552 = select i1 %550, float 0.000000e+00, float %551, !dbg !32
+  br label %__devicelib_imf_exp2f.exit11, !dbg !32
+
+553:                                              ; preds = %545
+  %554 = tail call spir_func noundef float @_Z16__spirv_ocl_fminff(float noundef %202, float noundef 1.920000e+02) #5, !dbg !32
+  %555 = tail call spir_func noundef float @_Z16__spirv_ocl_fmaxff(float noundef %554, float noundef -1.920000e+02) #5, !dbg !32
+  %556 = tail call spir_func noundef float @_Z16__spirv_ocl_rintf(float noundef %555) #5, !dbg !32
+  %557 = fptosi float %556 to i32, !dbg !32
+  %558 = ashr i32 %557, 1, !dbg !32
+  %559 = sub nsw i32 %557, %558, !dbg !32
+  %560 = shl i32 %559, 23, !dbg !32
+  %561 = add i32 %560, 1065353216, !dbg !32
+  %562 = shl i32 %558, 23, !dbg !32
+  %563 = add i32 %562, 1065353216, !dbg !32
+  %564 = bitcast i32 %561 to float, !dbg !32
+  %565 = fmul float %537, %564, !dbg !32
+  %566 = bitcast i32 %563 to float, !dbg !32
+  %567 = fmul float %565, %566, !dbg !32
+  br label %__devicelib_imf_exp2f.exit11, !dbg !32
+
+__devicelib_imf_exp2f.exit11:                     ; preds = %540, %549, %553
+  %568 = phi float [ %567, %553 ], [ %544, %540 ], [ %552, %549 ], !dbg !32
+  %569 = tail call spir_func noundef float @_Z16__spirv_ocl_rintf(float noundef %203) #5, !dbg !32
+  %570 = fsub float %203, %569, !dbg !32
+  %571 = fptosi float %569 to i32, !dbg !32
+  %572 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef 0x3F24499000000000, float noundef %570, float noundef 0x3F55F48C60000000) #5, !dbg !32
+  %573 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %570, float noundef 5.000000e-01, float noundef 1.000000e+00) #5, !dbg !32
+  %574 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %572, float noundef %570, float noundef 0x3F83B29960000000) #5, !dbg !32
+  %575 = fadd float %573, -1.000000e+00, !dbg !32
+  %576 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %574, float noundef %570, float noundef 0x3FAC6AECC0000000) #5, !dbg !32
+  %577 = fneg float %575, !dbg !32
+  %578 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %570, float noundef 5.000000e-01, float noundef %577) #5, !dbg !32
+  %579 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %576, float noundef %570, float noundef 0x3FCEBFBE20000000) #5, !dbg !32
+  %580 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %579, float noundef %570, float noundef 0x3FC8B90C40000000) #5, !dbg !32
+  %581 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %580, float noundef %570, float noundef %578) #5, !dbg !32
+  %582 = fadd float %573, %581, !dbg !32
+  %583 = add i32 %571, -127, !dbg !32
+  %584 = icmp ult i32 %583, -252, !dbg !32
+  br i1 %584, label %590, label %585, !dbg !32
+
+585:                                              ; preds = %__devicelib_imf_exp2f.exit11
+  %586 = bitcast float %582 to i32, !dbg !32
+  %587 = shl nsw i32 %571, 23, !dbg !32
+  %588 = add i32 %587, %586, !dbg !32
+  %589 = bitcast i32 %588 to float, !dbg !32
+  br label %__devicelib_imf_exp2f.exit10, !dbg !32
+
+590:                                              ; preds = %__devicelib_imf_exp2f.exit11
+  %591 = tail call float @llvm.fabs.f32(float %203), !dbg !32
+  %592 = bitcast float %591 to i32, !dbg !32
+  %593 = icmp samesign ugt i32 %592, 2139095039, !dbg !32
+  br i1 %593, label %594, label %598, !dbg !32
+
+594:                                              ; preds = %590
+  %595 = fcmp oeq float %203, 0xFFF0000000000000, !dbg !32
+  %596 = fadd float %203, %203, !dbg !32
+  %597 = select i1 %595, float 0.000000e+00, float %596, !dbg !32
+  br label %__devicelib_imf_exp2f.exit10, !dbg !32
+
+598:                                              ; preds = %590
+  %599 = tail call spir_func noundef float @_Z16__spirv_ocl_fminff(float noundef %203, float noundef 1.920000e+02) #5, !dbg !32
+  %600 = tail call spir_func noundef float @_Z16__spirv_ocl_fmaxff(float noundef %599, float noundef -1.920000e+02) #5, !dbg !32
+  %601 = tail call spir_func noundef float @_Z16__spirv_ocl_rintf(float noundef %600) #5, !dbg !32
+  %602 = fptosi float %601 to i32, !dbg !32
+  %603 = ashr i32 %602, 1, !dbg !32
+  %604 = sub nsw i32 %602, %603, !dbg !32
+  %605 = shl i32 %604, 23, !dbg !32
+  %606 = add i32 %605, 1065353216, !dbg !32
+  %607 = shl i32 %603, 23, !dbg !32
+  %608 = add i32 %607, 1065353216, !dbg !32
+  %609 = bitcast i32 %606 to float, !dbg !32
+  %610 = fmul float %582, %609, !dbg !32
+  %611 = bitcast i32 %608 to float, !dbg !32
+  %612 = fmul float %610, %611, !dbg !32
+  br label %__devicelib_imf_exp2f.exit10, !dbg !32
+
+__devicelib_imf_exp2f.exit10:                     ; preds = %585, %594, %598
+  %613 = phi float [ %612, %598 ], [ %589, %585 ], [ %597, %594 ], !dbg !32
+  %614 = tail call spir_func noundef float @_Z16__spirv_ocl_rintf(float noundef %204) #5, !dbg !32
+  %615 = fsub float %204, %614, !dbg !32
+  %616 = fptosi float %614 to i32, !dbg !32
+  %617 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef 0x3F24499000000000, float noundef %615, float noundef 0x3F55F48C60000000) #5, !dbg !32
+  %618 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %615, float noundef 5.000000e-01, float noundef 1.000000e+00) #5, !dbg !32
+  %619 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %617, float noundef %615, float noundef 0x3F83B29960000000) #5, !dbg !32
+  %620 = fadd float %618, -1.000000e+00, !dbg !32
+  %621 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %619, float noundef %615, float noundef 0x3FAC6AECC0000000) #5, !dbg !32
+  %622 = fneg float %620, !dbg !32
+  %623 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %615, float noundef 5.000000e-01, float noundef %622) #5, !dbg !32
+  %624 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %621, float noundef %615, float noundef 0x3FCEBFBE20000000) #5, !dbg !32
+  %625 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %624, float noundef %615, float noundef 0x3FC8B90C40000000) #5, !dbg !32
+  %626 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %625, float noundef %615, float noundef %623) #5, !dbg !32
+  %627 = fadd float %618, %626, !dbg !32
+  %628 = add i32 %616, -127, !dbg !32
+  %629 = icmp ult i32 %628, -252, !dbg !32
+  br i1 %629, label %635, label %630, !dbg !32
+
+630:                                              ; preds = %__devicelib_imf_exp2f.exit10
+  %631 = bitcast float %627 to i32, !dbg !32
+  %632 = shl nsw i32 %616, 23, !dbg !32
+  %633 = add i32 %632, %631, !dbg !32
+  %634 = bitcast i32 %633 to float, !dbg !32
+  br label %__devicelib_imf_exp2f.exit9, !dbg !32
+
+635:                                              ; preds = %__devicelib_imf_exp2f.exit10
+  %636 = tail call float @llvm.fabs.f32(float %204), !dbg !32
+  %637 = bitcast float %636 to i32, !dbg !32
+  %638 = icmp samesign ugt i32 %637, 2139095039, !dbg !32
+  br i1 %638, label %639, label %643, !dbg !32
+
+639:                                              ; preds = %635
+  %640 = fcmp oeq float %204, 0xFFF0000000000000, !dbg !32
+  %641 = fadd float %204, %204, !dbg !32
+  %642 = select i1 %640, float 0.000000e+00, float %641, !dbg !32
+  br label %__devicelib_imf_exp2f.exit9, !dbg !32
+
+643:                                              ; preds = %635
+  %644 = tail call spir_func noundef float @_Z16__spirv_ocl_fminff(float noundef %204, float noundef 1.920000e+02) #5, !dbg !32
+  %645 = tail call spir_func noundef float @_Z16__spirv_ocl_fmaxff(float noundef %644, float noundef -1.920000e+02) #5, !dbg !32
+  %646 = tail call spir_func noundef float @_Z16__spirv_ocl_rintf(float noundef %645) #5, !dbg !32
+  %647 = fptosi float %646 to i32, !dbg !32
+  %648 = ashr i32 %647, 1, !dbg !32
+  %649 = sub nsw i32 %647, %648, !dbg !32
+  %650 = shl i32 %649, 23, !dbg !32
+  %651 = add i32 %650, 1065353216, !dbg !32
+  %652 = shl i32 %648, 23, !dbg !32
+  %653 = add i32 %652, 1065353216, !dbg !32
+  %654 = bitcast i32 %651 to float, !dbg !32
+  %655 = fmul float %627, %654, !dbg !32
+  %656 = bitcast i32 %653 to float, !dbg !32
+  %657 = fmul float %655, %656, !dbg !32
+  br label %__devicelib_imf_exp2f.exit9, !dbg !32
+
+__devicelib_imf_exp2f.exit9:                      ; preds = %630, %639, %643
+  %658 = phi float [ %657, %643 ], [ %634, %630 ], [ %642, %639 ], !dbg !32
+  %659 = tail call spir_func noundef float @_Z16__spirv_ocl_rintf(float noundef %205) #5, !dbg !32
+  %660 = fsub float %205, %659, !dbg !32
+  %661 = fptosi float %659 to i32, !dbg !32
+  %662 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef 0x3F24499000000000, float noundef %660, float noundef 0x3F55F48C60000000) #5, !dbg !32
+  %663 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %660, float noundef 5.000000e-01, float noundef 1.000000e+00) #5, !dbg !32
+  %664 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %662, float noundef %660, float noundef 0x3F83B29960000000) #5, !dbg !32
+  %665 = fadd float %663, -1.000000e+00, !dbg !32
+  %666 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %664, float noundef %660, float noundef 0x3FAC6AECC0000000) #5, !dbg !32
+  %667 = fneg float %665, !dbg !32
+  %668 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %660, float noundef 5.000000e-01, float noundef %667) #5, !dbg !32
+  %669 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %666, float noundef %660, float noundef 0x3FCEBFBE20000000) #5, !dbg !32
+  %670 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %669, float noundef %660, float noundef 0x3FC8B90C40000000) #5, !dbg !32
+  %671 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %670, float noundef %660, float noundef %668) #5, !dbg !32
+  %672 = fadd float %663, %671, !dbg !32
+  %673 = add i32 %661, -127, !dbg !32
+  %674 = icmp ult i32 %673, -252, !dbg !32
+  br i1 %674, label %680, label %675, !dbg !32
+
+675:                                              ; preds = %__devicelib_imf_exp2f.exit9
+  %676 = bitcast float %672 to i32, !dbg !32
+  %677 = shl nsw i32 %661, 23, !dbg !32
+  %678 = add i32 %677, %676, !dbg !32
+  %679 = bitcast i32 %678 to float, !dbg !32
+  br label %__devicelib_imf_exp2f.exit8, !dbg !32
+
+680:                                              ; preds = %__devicelib_imf_exp2f.exit9
+  %681 = tail call float @llvm.fabs.f32(float %205), !dbg !32
+  %682 = bitcast float %681 to i32, !dbg !32
+  %683 = icmp samesign ugt i32 %682, 2139095039, !dbg !32
+  br i1 %683, label %684, label %688, !dbg !32
+
+684:                                              ; preds = %680
+  %685 = fcmp oeq float %205, 0xFFF0000000000000, !dbg !32
+  %686 = fadd float %205, %205, !dbg !32
+  %687 = select i1 %685, float 0.000000e+00, float %686, !dbg !32
+  br label %__devicelib_imf_exp2f.exit8, !dbg !32
+
+688:                                              ; preds = %680
+  %689 = tail call spir_func noundef float @_Z16__spirv_ocl_fminff(float noundef %205, float noundef 1.920000e+02) #5, !dbg !32
+  %690 = tail call spir_func noundef float @_Z16__spirv_ocl_fmaxff(float noundef %689, float noundef -1.920000e+02) #5, !dbg !32
+  %691 = tail call spir_func noundef float @_Z16__spirv_ocl_rintf(float noundef %690) #5, !dbg !32
+  %692 = fptosi float %691 to i32, !dbg !32
+  %693 = ashr i32 %692, 1, !dbg !32
+  %694 = sub nsw i32 %692, %693, !dbg !32
+  %695 = shl i32 %694, 23, !dbg !32
+  %696 = add i32 %695, 1065353216, !dbg !32
+  %697 = shl i32 %693, 23, !dbg !32
+  %698 = add i32 %697, 1065353216, !dbg !32
+  %699 = bitcast i32 %696 to float, !dbg !32
+  %700 = fmul float %672, %699, !dbg !32
+  %701 = bitcast i32 %698 to float, !dbg !32
+  %702 = fmul float %700, %701, !dbg !32
+  br label %__devicelib_imf_exp2f.exit8, !dbg !32
+
+__devicelib_imf_exp2f.exit8:                      ; preds = %675, %684, %688
+  %703 = phi float [ %702, %688 ], [ %679, %675 ], [ %687, %684 ], !dbg !32
+  %704 = tail call spir_func noundef float @_Z16__spirv_ocl_rintf(float noundef %206) #5, !dbg !32
+  %705 = fsub float %206, %704, !dbg !32
+  %706 = fptosi float %704 to i32, !dbg !32
+  %707 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef 0x3F24499000000000, float noundef %705, float noundef 0x3F55F48C60000000) #5, !dbg !32
+  %708 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %705, float noundef 5.000000e-01, float noundef 1.000000e+00) #5, !dbg !32
+  %709 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %707, float noundef %705, float noundef 0x3F83B29960000000) #5, !dbg !32
+  %710 = fadd float %708, -1.000000e+00, !dbg !32
+  %711 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %709, float noundef %705, float noundef 0x3FAC6AECC0000000) #5, !dbg !32
+  %712 = fneg float %710, !dbg !32
+  %713 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %705, float noundef 5.000000e-01, float noundef %712) #5, !dbg !32
+  %714 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %711, float noundef %705, float noundef 0x3FCEBFBE20000000) #5, !dbg !32
+  %715 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %714, float noundef %705, float noundef 0x3FC8B90C40000000) #5, !dbg !32
+  %716 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %715, float noundef %705, float noundef %713) #5, !dbg !32
+  %717 = fadd float %708, %716, !dbg !32
+  %718 = add i32 %706, -127, !dbg !32
+  %719 = icmp ult i32 %718, -252, !dbg !32
+  br i1 %719, label %725, label %720, !dbg !32
+
+720:                                              ; preds = %__devicelib_imf_exp2f.exit8
+  %721 = bitcast float %717 to i32, !dbg !32
+  %722 = shl nsw i32 %706, 23, !dbg !32
+  %723 = add i32 %722, %721, !dbg !32
+  %724 = bitcast i32 %723 to float, !dbg !32
+  br label %__devicelib_imf_exp2f.exit7, !dbg !32
+
+725:                                              ; preds = %__devicelib_imf_exp2f.exit8
+  %726 = tail call float @llvm.fabs.f32(float %206), !dbg !32
+  %727 = bitcast float %726 to i32, !dbg !32
+  %728 = icmp samesign ugt i32 %727, 2139095039, !dbg !32
+  br i1 %728, label %729, label %733, !dbg !32
+
+729:                                              ; preds = %725
+  %730 = fcmp oeq float %206, 0xFFF0000000000000, !dbg !32
+  %731 = fadd float %206, %206, !dbg !32
+  %732 = select i1 %730, float 0.000000e+00, float %731, !dbg !32
+  br label %__devicelib_imf_exp2f.exit7, !dbg !32
+
+733:                                              ; preds = %725
+  %734 = tail call spir_func noundef float @_Z16__spirv_ocl_fminff(float noundef %206, float noundef 1.920000e+02) #5, !dbg !32
+  %735 = tail call spir_func noundef float @_Z16__spirv_ocl_fmaxff(float noundef %734, float noundef -1.920000e+02) #5, !dbg !32
+  %736 = tail call spir_func noundef float @_Z16__spirv_ocl_rintf(float noundef %735) #5, !dbg !32
+  %737 = fptosi float %736 to i32, !dbg !32
+  %738 = ashr i32 %737, 1, !dbg !32
+  %739 = sub nsw i32 %737, %738, !dbg !32
+  %740 = shl i32 %739, 23, !dbg !32
+  %741 = add i32 %740, 1065353216, !dbg !32
+  %742 = shl i32 %738, 23, !dbg !32
+  %743 = add i32 %742, 1065353216, !dbg !32
+  %744 = bitcast i32 %741 to float, !dbg !32
+  %745 = fmul float %717, %744, !dbg !32
+  %746 = bitcast i32 %743 to float, !dbg !32
+  %747 = fmul float %745, %746, !dbg !32
+  br label %__devicelib_imf_exp2f.exit7, !dbg !32
+
+__devicelib_imf_exp2f.exit7:                      ; preds = %720, %729, %733
+  %748 = phi float [ %747, %733 ], [ %724, %720 ], [ %732, %729 ], !dbg !32
+  %749 = tail call spir_func noundef float @_Z16__spirv_ocl_rintf(float noundef %207) #5, !dbg !32
+  %750 = fsub float %207, %749, !dbg !32
+  %751 = fptosi float %749 to i32, !dbg !32
+  %752 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef 0x3F24499000000000, float noundef %750, float noundef 0x3F55F48C60000000) #5, !dbg !32
+  %753 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %750, float noundef 5.000000e-01, float noundef 1.000000e+00) #5, !dbg !32
+  %754 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %752, float noundef %750, float noundef 0x3F83B29960000000) #5, !dbg !32
+  %755 = fadd float %753, -1.000000e+00, !dbg !32
+  %756 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %754, float noundef %750, float noundef 0x3FAC6AECC0000000) #5, !dbg !32
+  %757 = fneg float %755, !dbg !32
+  %758 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %750, float noundef 5.000000e-01, float noundef %757) #5, !dbg !32
+  %759 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %756, float noundef %750, float noundef 0x3FCEBFBE20000000) #5, !dbg !32
+  %760 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %759, float noundef %750, float noundef 0x3FC8B90C40000000) #5, !dbg !32
+  %761 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %760, float noundef %750, float noundef %758) #5, !dbg !32
+  %762 = fadd float %753, %761, !dbg !32
+  %763 = add i32 %751, -127, !dbg !32
+  %764 = icmp ult i32 %763, -252, !dbg !32
+  br i1 %764, label %770, label %765, !dbg !32
+
+765:                                              ; preds = %__devicelib_imf_exp2f.exit7
+  %766 = bitcast float %762 to i32, !dbg !32
+  %767 = shl nsw i32 %751, 23, !dbg !32
+  %768 = add i32 %767, %766, !dbg !32
+  %769 = bitcast i32 %768 to float, !dbg !32
+  br label %__devicelib_imf_exp2f.exit6, !dbg !32
+
+770:                                              ; preds = %__devicelib_imf_exp2f.exit7
+  %771 = tail call float @llvm.fabs.f32(float %207), !dbg !32
+  %772 = bitcast float %771 to i32, !dbg !32
+  %773 = icmp samesign ugt i32 %772, 2139095039, !dbg !32
+  br i1 %773, label %774, label %778, !dbg !32
+
+774:                                              ; preds = %770
+  %775 = fcmp oeq float %207, 0xFFF0000000000000, !dbg !32
+  %776 = fadd float %207, %207, !dbg !32
+  %777 = select i1 %775, float 0.000000e+00, float %776, !dbg !32
+  br label %__devicelib_imf_exp2f.exit6, !dbg !32
+
+778:                                              ; preds = %770
+  %779 = tail call spir_func noundef float @_Z16__spirv_ocl_fminff(float noundef %207, float noundef 1.920000e+02) #5, !dbg !32
+  %780 = tail call spir_func noundef float @_Z16__spirv_ocl_fmaxff(float noundef %779, float noundef -1.920000e+02) #5, !dbg !32
+  %781 = tail call spir_func noundef float @_Z16__spirv_ocl_rintf(float noundef %780) #5, !dbg !32
+  %782 = fptosi float %781 to i32, !dbg !32
+  %783 = ashr i32 %782, 1, !dbg !32
+  %784 = sub nsw i32 %782, %783, !dbg !32
+  %785 = shl i32 %784, 23, !dbg !32
+  %786 = add i32 %785, 1065353216, !dbg !32
+  %787 = shl i32 %783, 23, !dbg !32
+  %788 = add i32 %787, 1065353216, !dbg !32
+  %789 = bitcast i32 %786 to float, !dbg !32
+  %790 = fmul float %762, %789, !dbg !32
+  %791 = bitcast i32 %788 to float, !dbg !32
+  %792 = fmul float %790, %791, !dbg !32
+  br label %__devicelib_imf_exp2f.exit6, !dbg !32
+
+__devicelib_imf_exp2f.exit6:                      ; preds = %765, %774, %778
+  %793 = phi float [ %792, %778 ], [ %769, %765 ], [ %777, %774 ], !dbg !32
+  %794 = tail call spir_func noundef float @_Z16__spirv_ocl_rintf(float noundef %208) #5, !dbg !32
+  %795 = fsub float %208, %794, !dbg !32
+  %796 = fptosi float %794 to i32, !dbg !32
+  %797 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef 0x3F24499000000000, float noundef %795, float noundef 0x3F55F48C60000000) #5, !dbg !32
+  %798 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %795, float noundef 5.000000e-01, float noundef 1.000000e+00) #5, !dbg !32
+  %799 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %797, float noundef %795, float noundef 0x3F83B29960000000) #5, !dbg !32
+  %800 = fadd float %798, -1.000000e+00, !dbg !32
+  %801 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %799, float noundef %795, float noundef 0x3FAC6AECC0000000) #5, !dbg !32
+  %802 = fneg float %800, !dbg !32
+  %803 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %795, float noundef 5.000000e-01, float noundef %802) #5, !dbg !32
+  %804 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %801, float noundef %795, float noundef 0x3FCEBFBE20000000) #5, !dbg !32
+  %805 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %804, float noundef %795, float noundef 0x3FC8B90C40000000) #5, !dbg !32
+  %806 = tail call spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef %805, float noundef %795, float noundef %803) #5, !dbg !32
+  %807 = fadd float %798, %806, !dbg !32
+  %808 = add i32 %796, -127, !dbg !32
+  %809 = icmp ult i32 %808, -252, !dbg !32
+  br i1 %809, label %815, label %810, !dbg !32
+
+810:                                              ; preds = %__devicelib_imf_exp2f.exit6
+  %811 = bitcast float %807 to i32, !dbg !32
+  %812 = shl nsw i32 %796, 23, !dbg !32
+  %813 = add i32 %812, %811, !dbg !32
+  %814 = bitcast i32 %813 to float, !dbg !32
+  br label %__devicelib_imf_exp2f.exit5, !dbg !32
+
+815:                                              ; preds = %__devicelib_imf_exp2f.exit6
+  %816 = tail call float @llvm.fabs.f32(float %208), !dbg !32
+  %817 = bitcast float %816 to i32, !dbg !32
+  %818 = icmp samesign ugt i32 %817, 2139095039, !dbg !32
+  br i1 %818, label %819, label %823, !dbg !32
+
+819:                                              ; preds = %815
+  %820 = fcmp oeq float %208, 0xFFF0000000000000, !dbg !32
+  %821 = fadd float %208, %208, !dbg !32
+  %822 = select i1 %820, float 0.000000e+00, float %821, !dbg !32
+  br label %__devicelib_imf_exp2f.exit5, !dbg !32
+
+823:                                              ; preds = %815
+  %824 = tail call spir_func noundef float @_Z16__spirv_ocl_fminff(float noundef %208, float noundef 1.920000e+02) #5, !dbg !32
+  %825 = tail call spir_func noundef float @_Z16__spirv_ocl_fmaxff(float noundef %824, float noundef -1.920000e+02) #5, !dbg !32
+  %826 = tail call spir_func noundef float @_Z16__spirv_ocl_rintf(float noundef %825) #5, !dbg !32
+  %827 = fptosi float %826 to i32, !dbg !32
+  %828 = ashr i32 %827, 1, !dbg !32
+  %829 = sub nsw i32 %827, %828, !dbg !32
+  %830 = shl i32 %829, 23, !dbg !32
+  %831 = add i32 %830, 1065353216, !dbg !32
+  %832 = shl i32 %828, 23, !dbg !32
+  %833 = add i32 %832, 1065353216, !dbg !32
+  %834 = bitcast i32 %831 to float, !dbg !32
+  %835 = fmul float %807, %834, !dbg !32
+  %836 = bitcast i32 %833 to float, !dbg !32
+  %837 = fmul float %835, %836, !dbg !32
+  br label %__devicelib_imf_exp2f.exit5, !dbg !32
+
+__devicelib_imf_exp2f.exit5:                      ; preds = %810, %819, %823
+  %838 = phi float [ %837, %823 ], [ %814, %810 ], [ %822, %819 ], !dbg !32
+  %839 = tail call spir_func i64 @_Z12get_local_idj(i32 0) #4, !dbg !33
+  %840 = and i64 %839, 63, !dbg !33
+  %841 = icmp eq i64 %840, 0, !dbg !33
+  %842 = and i1 %10, %841, !dbg !33
+  br i1 %842, label %843, label %.critedge, !dbg !33
+
+843:                                              ; preds = %__devicelib_imf_exp2f.exit5
+  %844 = fmul float %119, %253, !dbg !34
+  %845 = fmul float %120, %298, !dbg !34
+  %846 = fadd float %844, %845, !dbg !35
+  %847 = fmul float %118, %343, !dbg !34
+  %848 = fadd float %846, %847, !dbg !35
+  %849 = fmul float %121, %388, !dbg !34
+  %850 = fadd float %848, %849, !dbg !35
+  %851 = fmul float %117, %433, !dbg !34
+  %852 = fadd float %850, %851, !dbg !35
+  %853 = fmul float %122, %478, !dbg !34
+  %854 = fadd float %852, %853, !dbg !35
+  %855 = fmul float %116, %523, !dbg !34
+  %856 = fadd float %854, %855, !dbg !35
+  %857 = fmul float %123, %568, !dbg !34
+  %858 = fadd float %856, %857, !dbg !35
+  %859 = fmul float %115, %613, !dbg !34
+  %860 = fadd float %858, %859, !dbg !35
+  %861 = fmul float %124, %658, !dbg !34
+  %862 = fadd float %860, %861, !dbg !35
+  %863 = fmul float %114, %703, !dbg !34
+  %864 = fadd float %862, %863, !dbg !35
+  %865 = fmul float %125, %748, !dbg !34
+  %866 = fadd float %864, %865, !dbg !35
+  %867 = fmul float %113, %793, !dbg !34
+  %868 = fadd float %866, %867, !dbg !35
+  %869 = fmul float %127, %838, !dbg !34
+  %870 = fadd float %868, %869, !dbg !35
+  %871 = fadd float %870, 0.000000e+00, !dbg !35
+  %872 = ashr exact i64 %11, 30, !dbg !39
+  %873 = getelementptr i8, ptr addrspace(1) %2, i64 %872, !dbg !39
+  store float %179, ptr addrspace(1) %873, align 4, !dbg !33
+  %874 = getelementptr i8, ptr addrspace(1) %3, i64 %872, !dbg !40
+  store float %871, ptr addrspace(1) %874, align 4, !dbg !41
+  br label %.critedge, !dbg !41
+
+.critedge:                                        ; preds = %__devicelib_imf_exp2f.exit5, %843
+  ret void, !dbg !42
+}
+
+; Function Attrs: convergent mustprogress nofree nounwind willreturn memory(none)
+declare dso_local spir_func noundef float @_Z16__spirv_ocl_rintf(float noundef) local_unnamed_addr #2
+
+; Function Attrs: convergent mustprogress nofree nounwind willreturn memory(none)
+declare dso_local spir_func noundef float @_Z15__spirv_ocl_fmafff(float noundef, float noundef, float noundef) local_unnamed_addr #2
+
+; Function Attrs: mustprogress nocallback nofree nosync nounwind speculatable willreturn memory(none)
+declare float @llvm.fabs.f32(float) #3
+
+; Function Attrs: convergent mustprogress nofree nounwind willreturn memory(none)
+declare dso_local spir_func noundef float @_Z16__spirv_ocl_fminff(float noundef, float noundef) local_unnamed_addr #2
+
+; Function Attrs: convergent mustprogress nofree nounwind willreturn memory(none)
+declare dso_local spir_func noundef float @_Z16__spirv_ocl_fmaxff(float noundef, float noundef) local_unnamed_addr #2
+
+attributes #0 = { mustprogress nofree nosync nounwind willreturn memory(none) }
+attributes #1 = { mustprogress nofree nounwind willreturn memory(argmem: readwrite) }
+attributes #2 = { convergent mustprogress nofree nounwind willreturn memory(none) "frame-pointer"="all" "no-trapping-math"="true" "stack-protector-buffer-size"="8" }
+attributes #3 = { mustprogress nocallback nofree nosync nounwind speculatable willreturn memory(none) }
+attributes #4 = { nounwind willreturn memory(none) }
+attributes #5 = { convergent nounwind willreturn memory(none) }
+
+!llvm.dbg.cu = !{!0}
+!llvm.module.flags = !{!2, !3, !4, !5}
+!opencl.spir.version = !{!6, !6, !6, !6, !6, !6, !6, !6, !6, !6, !6, !6, !6, !6, !6, !6, !6, !6, !6, !6}
+!spirv.Source = !{!7, !7, !7, !7, !7, !7, !7, !7, !7, !7, !7, !7, !7, !7, !7, !7, !7, !7, !7, !7}
+!llvm.ident = !{!8, !8, !8, !8, !8, !8, !8, !8, !8, !8, !8, !8, !8, !8, !8, !8, !8, !8, !8, !8}
+
+!0 = distinct !DICompileUnit(language: DW_LANG_C, file: !1, producer: "triton", isOptimized: true, runtimeVersion: 0, emissionKind: LineTablesOnly)
+!1 = !DIFile(filename: "cybxcm2ysqqjeppp4gqjrwzvxkghmjsswnfi5vbuprncjjcw2hqd.py", directory: "/tmp/torchinductor_jovyan/yb")
+!2 = !{i32 2, !"Debug Info Version", i32 3}
+!3 = !{i32 1, !"wchar_size", i32 4}
+!4 = !{i32 1, !"sycl-device", i32 1}
+!5 = !{i32 7, !"frame-pointer", i32 2}
+!6 = !{i32 1, i32 2}
+!7 = !{i32 3, i32 100000}
+!8 = !{!"Intel(R) oneAPI DPC++/C++ Compiler 2025.0.0 (2025.0.0.20241008)"}
+!9 = !DISubprogram(name: "_Z12get_local_idj", linkageName: "_Z12get_local_idj", scope: !1, file: !1, line: 18, type: !10, scopeLine: 18, spFlags: DISPFlagOptimized)
+!10 = !DISubroutineType(cc: DW_CC_normal, types: !11)
+!11 = !{}
+!12 = !DISubprogram(name: "_Z12get_group_idj", linkageName: "_Z12get_group_idj", scope: !1, file: !1, line: 18, type: !10, scopeLine: 18, spFlags: DISPFlagOptimized)
+!13 = distinct !DISubprogram(name: "triton_per_fused__to_copy_add_cat_cos_mul_neg_sin_unsqueeze_6", linkageName: "triton_per_fused__to_copy_add_cat_cos_mul_neg_sin_unsqueeze_6", scope: !1, file: !1, line: 18, type: !10, scopeLine: 18, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0)
+!14 = !{i32 32}
+!15 = !{i64 64, i64 1, i64 1}
+!16 = !DILocation(line: 24, column: 28, scope: !13)
+!17 = !DILocation(line: 26, column: 21, scope: !13)
+!18 = !DILocation(line: 34, column: 30, scope: !13)
+!19 = !DILocation(line: 34, column: 45, scope: !13)
+!20 = !DILocation(line: 35, column: 30, scope: !13)
+!21 = !DILocation(line: 35, column: 45, scope: !13)
+!22 = !DILocation(line: 111, column: 15, scope: !23, inlinedAt: !25)
+!23 = distinct !DILexicalBlockFile(scope: !13, file: !24, discriminator: 0)
+!24 = !DIFile(filename: "triton_helpers.py", directory: "/home/jovyan/envs/miniforge3/envs/triton/lib/python3.10/site-packages/torch/_inductor/runtime")
+!25 = !DILocation(line: 38, column: 37, scope: !13)
+!26 = !DILocation(line: 113, column: 21, scope: !23, inlinedAt: !25)
+!27 = !DILocation(line: 113, column: 16, scope: !23, inlinedAt: !25)
+!28 = !DILocation(line: 114, column: 29, scope: !23, inlinedAt: !25)
+!29 = !DILocation(line: 40, column: 19, scope: !13)
+!30 = !DILocation(line: 41, column: 18, scope: !13)
+!31 = !DILocation(line: 43, column: 33, scope: !13)
+!32 = !DILocation(line: 44, column: 27, scope: !13)
+!33 = !DILocation(line: 49, column: 36, scope: !13)
+!34 = !DILocation(line: 45, column: 19, scope: !13)
+!35 = !DILocation(line: 260, column: 15, scope: !36, inlinedAt: !38)
+!36 = distinct !DILexicalBlockFile(scope: !13, file: !37, discriminator: 0)
+!37 = !DIFile(filename: "standard.py", directory: "/home/jovyan/intel-xpu-backend-for-triton/python/triton/language")
+!38 = !DILocation(line: 48, column: 26, scope: !13)
+!39 = !DILocation(line: 49, column: 25, scope: !13)
+!40 = !DILocation(line: 50, column: 25, scope: !13)
+!41 = !DILocation(line: 50, column: 37, scope: !13)
+!42 = !DILocation(line: 50, column: 4, scope: !13)
