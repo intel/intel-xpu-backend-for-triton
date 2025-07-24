@@ -353,14 +353,14 @@ jobs:
           git clone https://github.com/huggingface/transformers.git
           cd transformers
 
-          git checkout $(</data/liyang/flex_attention-pr-check/transformers-commit.txt)
-          git apply /data/liyang/flex_attention-pr-check/transformers-patch-for-timing.diff
+          git checkout $(<benchmarks/flex_attention-pr-check/transformers-commit.txt)
+          git apply benchmarks/flex_attention-pr-check/transformers-patch-for-timing.diff
 
           git submodule sync
           git submodule update --init --recursive
           python setup.py develop
 
-          cd /data/liyang/flex_attention-pr-check/
+          cd benchmarks/flex_attention-pr-check
           bash triton-llama3-profiling.sh
 
       - name: Upload benchmark reports
