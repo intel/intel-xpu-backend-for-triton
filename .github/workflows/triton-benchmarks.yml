@@ -357,9 +357,6 @@ jobs:
 
           cd transformers
 
-          echo "Listing contents of the transformers directory:"
-          ls -l
-
           echo "Listing contents of the parent directory:"
           ls -l ..
 
