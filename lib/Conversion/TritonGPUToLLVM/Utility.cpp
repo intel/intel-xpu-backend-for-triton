@@ -930,8 +930,8 @@ SmallVector<Value> loadSharedToDistributed(triton::gpu::LocalLoadOp localLoadOp,
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value> ret;
   bool success = emitTransferBetweenRegistersAndShared(
-      dstTy, srcTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemObj, loc,
-      rewriter, target, [&](VectorType vecTy, Value vecAddr) {
+      dstTy, srcTy, elemLlvmTy, /*maxVecElems=*/256, smemObj, loc, rewriter,
+      target, [&](VectorType vecTy, Value vecAddr) {
         auto vecVal = b.load(vecTy, vecAddr);
         target.localLoadOpAnnotation(localLoadOp, vecVal);
         vecVal.setAlignment(vecTy.getNumElements() *

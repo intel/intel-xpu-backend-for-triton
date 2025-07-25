@@ -108,7 +108,8 @@ def mxfp_matmul(  #
 def test_mxfp_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TRANS, PACK_B_ALONG_K, A_DATA_TYPE, B_DATA_TYPE,
                      WITH_A_SCALE, WITH_B_SCALE, device):
     if A_DATA_TYPE == "float4" and B_DATA_TYPE == "float4":
-        pytest.skip("Float4 for both A and B has [ZE]0x78000011 error")
+        pass
+        # pytest.skip("Float4 for both A and B has [ZE]0x78000011 error")
     if not PACK_B_ALONG_K and B_DATA_TYPE != "float4":
         pytest.xfail("Pack along K can only be False for float4")
 
