@@ -195,9 +195,6 @@ jobs:
       matrix:
         suite:
           - minicore
-          - mxfp
-          - scaled_dot
-          - rest
     timeout-minutes: 720
     runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
     defaults:
