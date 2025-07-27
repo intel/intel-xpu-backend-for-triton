@@ -1,0 +1,13 @@
+diff --git a/torch/_inductor/template_heuristics.py b/torch/_inductor/template_heuristics.py
+index 65a6851192a..e205e944d17 100644
+--- a/torch/_inductor/template_heuristics.py
++++ b/torch/_inductor/template_heuristics.py
+@@ -380,7 +380,7 @@ class BaseConfigHeuristic(metaclass=BaseHeuristicSingleton):
+             FlexConfig(BLOCK1, BLOCK2, s, w)
+             for BLOCK1 in [32, 64]
+             for BLOCK2 in [32, 64, 128]
+-            for s in [1, 3, 4, 5]  # num_stages
++            for s in [1,]  # num_stages; FIXME: add later: 3, 4, 5
+             for w in ([4, 8] if BLOCK1 >= 128 or BLOCK2 >= 128 else [4])
+             if BLOCK2 % BLOCK1 == 0
+         ]
