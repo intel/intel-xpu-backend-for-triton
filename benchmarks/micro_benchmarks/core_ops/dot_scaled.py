@@ -1,6 +1,12 @@
+import os
+import sys
+
 import torch
 import triton
 import triton.language as tl
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+from triton_kernels_benchmark import Benchmark, do_bench, perf_report  # pylint: disable=C0413
 
 
 @triton.jit
@@ -37,8 +43,8 @@ def dot_scaled(M, N, K, x, y, z, scale_x, scale_y, type_a, type_b, num_warps):
 
 
 # Benchmark Performance
-@triton.testing.perf_report(
-    triton.testing.Benchmark(
+@perf_report(
+    Benchmark(
         # argument names to use as an x-axis for the plot
         x_names=['M', 'K', 'N', 'col_a', 'col_b', 'rhs_scale', 'mxfp_type', 'normal_type'],
         x_vals=[(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type)
@@ -55,7 +61,7 @@ def dot_scaled(M, N, K, x, y, z, scale_x, scale_y, type_a, type_b, num_warps):
         line_names=['Triton'],
         # line styles
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
-        ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
+        ylabel=('GB/s', ),  # label name for the y-axis
         plot_name='scaled-dot',
         # name for the plot. Used also as a file name for saving the plot.
         args={},
@@ -122,7 +128,7 @@ def benchmark(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, provider
     if provider == 'triton':
         triton_fn = lambda: dot_scaled(M, N, K, x, y, z, scale_x, scale_y, type_a, type_b, num_warps)
 
-        ms, min_ms, max_ms = triton.testing.do_bench(triton_fn, quantiles=quantiles)
+        _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 
@@ -141,8 +147,12 @@ def benchmark(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, provider
         scale_size = (M * K // 32) if rhs_scale else (N * K // 32)
         return (tensor_size + scale_size + 4.0 * (M * N)) * (1e-9) / (ms * 1e-3)
 
-    return gbps(ms), gbps(max_ms), gbps(min_ms)
+    return (gbps(mean_ms), gbps(max_ms), gbps(min_ms)), cv
+
+
+def run_benchmarks():
+    benchmark.run(show_plots=False, print_data=True)
 
 
 if __name__ == '__main__':
-    benchmark.run(show_plots=False, print_data=True)
+    run_benchmarks()
