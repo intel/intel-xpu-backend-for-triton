@@ -348,7 +348,8 @@ jobs:
           python run_benchmarks.py --reports $REPORTS
 
       - name: Run Llama 3.1 performance benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'run_llm_inductor_greedy.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'run_llm_inductor_greedy.py') }}
+        # if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'run_llm_inductor_greedy.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'run_llm_inductor_greedy.py') }}
+        if: ${{ !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'run_llm_inductor_greedy.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'run_llm_inductor_greedy.py') }}
         run: |
           export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
           # git clone https://github.com/huggingface/transformers.git
