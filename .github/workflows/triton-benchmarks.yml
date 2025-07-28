@@ -370,7 +370,7 @@ jobs:
           python transform_results.py $REPORTS/llama31.compile.xpu.profile.log $REPORTS/llama31-triton-report.csv --tag $TAG
 
       - name: Upload benchmark reports
-        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        # if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-reports
