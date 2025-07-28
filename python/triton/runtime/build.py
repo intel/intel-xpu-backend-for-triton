@@ -92,7 +92,7 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
         numpy_include_dir = np.get_include()
         include_dirs = include_dirs + [numpy_include_dir]
         # Use -fsycl when CXX is icpx or /abs-path-to/icpx
-        if icpx and icpx.endswith(cxx):
+        if icpx and os.path.basename(icpx) == os.path.basename(cxx):
             extra_compile_args += ["-fsycl"]
         else:
             if os.name != "nt":
