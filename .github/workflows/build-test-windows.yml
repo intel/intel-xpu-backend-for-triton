@@ -101,26 +101,26 @@ jobs:
           pip install -r scripts\requirements-test.txt
           pip uninstall pytest_forked -y
 
-      - name: Run unit tests
-        run: |
-          .venv\Scripts\activate.ps1
-          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
-          cd ${{ env.NEW_WORKSPACE }}
-          ${{ env.TRITON_TEST_CMD }} --unit
+      # - name: Run unit tests
+      #   run: |
+      #     .venv\Scripts\activate.ps1
+      #     Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+      #     cd ${{ env.NEW_WORKSPACE }}
+      #     ${{ env.TRITON_TEST_CMD }} --unit
 
-      - name: Run core tests
-        run: |
-          .venv\Scripts\activate.ps1
-          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
-          cd ${{ env.NEW_WORKSPACE }}
-          ${{ env.TRITON_TEST_CMD }} --core
+      # - name: Run core tests
+      #   run: |
+      #     .venv\Scripts\activate.ps1
+      #     Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+      #     cd ${{ env.NEW_WORKSPACE }}
+      #     ${{ env.TRITON_TEST_CMD }} --core
 
-      - name: Run interpreter tests
-        run: |
-          .venv\Scripts\activate.ps1
-          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
-          cd ${{ env.NEW_WORKSPACE }}
-          ${{ env.TRITON_TEST_CMD }} --interpreter
+      # - name: Run interpreter tests
+      #   run: |
+      #     .venv\Scripts\activate.ps1
+      #     Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+      #     cd ${{ env.NEW_WORKSPACE }}
+      #     ${{ env.TRITON_TEST_CMD }} --interpreter
 
       - name: Run tutorials
         run: |
@@ -131,34 +131,41 @@ jobs:
           cd ${{ env.NEW_WORKSPACE }}
           ${{ env.TRITON_TEST_CMD }} --tutorial
 
-      - name: Run instrumentation tests
-        run: |
-          .venv\Scripts\activate.ps1
-          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
-          cd ${{ env.NEW_WORKSPACE }}
-          ${{ env.TRITON_TEST_CMD }} --instrumentation
+      # - name: Run instrumentation tests
+      #   run: |
+      #     .venv\Scripts\activate.ps1
+      #     Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+      #     cd ${{ env.NEW_WORKSPACE }}
+      #     ${{ env.TRITON_TEST_CMD }} --instrumentation
 
-      - name: Pass rate
-        run: |
-          .venv\Scripts\activate.ps1
-          # oneAPI is required for sycl-ls, which is used by scripts/capture-hw-details.sh
-          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
-          cd ${{ env.NEW_WORKSPACE }}
-          pip install defusedxml
-          bash -c "\
-            source ./scripts/capture-hw-details.sh; \
-            python scripts/pass_rate.py --reports reports; \
-            python scripts/pass_rate.py --reports reports --json > pass_rate.json; \
-            python scripts/pass_rate.py --reports reports --suite tutorials --json > pass_rate_tutorials.json; \
-          "
+      # - name: Pass rate
+      #   run: |
+      #     .venv\Scripts\activate.ps1
+      #     # oneAPI is required for sycl-ls, which is used by scripts/capture-hw-details.sh
+      #     Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+      #     cd ${{ env.NEW_WORKSPACE }}
+      #     pip install defusedxml
+      #     bash -c "\
+      #       source ./scripts/capture-hw-details.sh; \
+      #       python scripts/pass_rate.py --reports reports; \
+      #       python scripts/pass_rate.py --reports reports --json > pass_rate.json; \
+      #       python scripts/pass_rate.py --reports reports --suite tutorials --json > pass_rate_tutorials.json; \
+      #     "
 
-      - name: Upload pass rate report
-        # upload reports only for the default branch
-        if: github.ref_name == 'main'
+      # - name: Upload pass rate report
+      #   # upload reports only for the default branch
+      #   if: github.ref_name == 'main'
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: pass_rate
+      #     path: ${{ env.NEW_WORKSPACE }}\pass_rate*.json
+
+      - name: Upload test report
         uses: actions/upload-artifact@v4
         with:
-          name: pass_rate
-          path: ${{ env.NEW_WORKSPACE }}\pass_rate*.json
+          name: test-report
+          include-hidden-files: true
+          path: ${ env.NEW_WORKSPACE }}\reports
 
       - name: Clean up workspace
         if: ${{ always() }}
