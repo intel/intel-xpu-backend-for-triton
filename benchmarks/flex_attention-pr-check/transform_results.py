@@ -61,23 +61,23 @@ def parse_llama_log(log_file_path, output_csv_path, tag):
         'p90_rest_token_latency': metrics.get('p90_rest_token_latency', 0),
     }])
     
-    host_info = {
-        n: os.getenv(n.upper(), default="")
-        for n in [
-            "libigc1_version",
-            "level_zero_version",
-            "gpu_device",
-            "agama_version",
-            "torch_version",
-            "compiler_version",
-            "benchmarking_method",
-        ]
-    }
-    if not host_info["gpu_device"]:
-        raise RuntimeError("Could not find GPU device description, was `capture-hw-details.sh` called?")
+    # host_info = {
+    #     n: os.getenv(n.upper(), default="")
+    #     for n in [
+    #         "libigc1_version",
+    #         "level_zero_version",
+    #         "gpu_device",
+    #         "agama_version",
+    #         "torch_version",
+    #         "compiler_version",
+    #         "benchmarking_method",
+    #     ]
+    # }
+    # if not host_info["gpu_device"]:
+    #     raise RuntimeError("Could not find GPU device description, was `capture-hw-details.sh` called?")
     
-    for name, val in host_info.items():
-        df_results[name] = val
+    # for name, val in host_info.items():
+    #     df_results[name] = val
     
     df_results.to_csv(output_csv_path, index=False)
     
