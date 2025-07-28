@@ -1,1 +1,1 @@
-from .float_conversion import benchmark  # type: ignore # noqa: F401
+from .float_conversion import get_benchmarks, run_benchmarks  # type: ignore # noqa: F401
