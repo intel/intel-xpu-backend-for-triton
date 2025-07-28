@@ -102,6 +102,7 @@ jobs:
           # Return the captured return code at the end
           exit "$RET_CODE"
 
+
       - name: Upload benchmark reports
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         uses: actions/upload-artifact@v4

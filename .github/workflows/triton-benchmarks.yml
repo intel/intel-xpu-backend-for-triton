@@ -311,7 +311,7 @@ jobs:
         run: |
           export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
           cd benchmarks/triton_kernels_benchmark
-          python flex_attention_benchmark_causal_mask.py --reports $REPORTS --n_runs $N_RUNS
+          python p.py --reports $REPORTS --n_runs $N_RUNS
 
           source ../../scripts/capture-hw-details.sh
           python build_report.py $REPORTS/flexAttnCausal-performance.csv $REPORTS/flexAttnCausal-triton-report.csv --benchmark flex-attn-causal --compiler triton --param_cols "Z,H_q,H_kv,N_CTX_q,N_CTX_kv,D_HEAD_qk,D_HEAD_v" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
@@ -334,7 +334,7 @@ jobs:
       - name: Run Prefix Sums kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'prefix_sums.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'prefix_sums.py') }}
         run: |
-          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
+          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PAreportTH
           cd benchmarks/triton_kernels_benchmark
           python prefix_sums.py --reports $REPORTS --n_runs $N_RUNS
           source ../../scripts/capture-hw-details.sh
@@ -364,6 +364,9 @@ jobs:
 
           cd ../benchmarks/flex_attention-pr-check
           bash triton-llama3-profiling.sh
+
+          cp llama31.compile.xpu.profile.log $REPORTS/llama31.compile.xpu.profile.log
+          python transform_results.py $REPORTS/llama31.compile.xpu.profile.log $REPORTS/llama31-triton-report.csv --tag $TAG
 
       - name: Upload benchmark reports
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
