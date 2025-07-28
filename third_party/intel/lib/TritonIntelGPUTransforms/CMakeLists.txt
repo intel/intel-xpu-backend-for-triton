@@ -18,6 +18,7 @@ add_triton_library(TritonIntelGPUTransforms
   Utility.cpp
 
   DEPENDS
+  TritonGPUTransforms
   TritonIntelGPUTransformsIncGen
 
   LINK_LIBS PUBLIC
