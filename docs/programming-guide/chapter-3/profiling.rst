@@ -2,7 +2,7 @@
 Profiling kernels compilation
 =============================
 
-If a kernel takes too much time to compile, the first step to start profiling it 
+If a kernel takes too much time to compile, the first step to start profiling it
 is to run it with the following environment variables:
 
 .. code-block:: bash
