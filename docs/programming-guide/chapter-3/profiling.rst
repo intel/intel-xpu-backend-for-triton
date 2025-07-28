@@ -2,8 +2,8 @@
 Profiling kernels compilation
 =============================
 
-If some kernel takes to much time to compile, the first step to start the profiling with
-is to run the program with the following environment variables:
+If a kernel takes too much time to compile, the first step to start profiling it 
+is to run it with the following environment variables:
 
 .. code-block:: bash
 
@@ -12,7 +12,7 @@ is to run the program with the following environment variables:
     export LLVM_ENABLE_TIMING=1
     python -m pytest python/test/unit/intel/test_mxfp_matmul.py::test_mxfp_matmul[True-True-float4-float4-True-True-1-128-128-128-1024-512-512] --device=xpu -s
 
-For the variables description, see the README.md file in the root directory of the project.
+For the environment variables description, see the README.md file in the root directory of the project.
 The output will contain the statistic for each phase of the compilation and for MLIR passes.
 Here is an example:
 
@@ -46,7 +46,7 @@ Here is an example:
 
 What we can see here is that the most time-consuming part of the compilation is something,
 which is called "Rest" and we don't know what it is. For further investigation, we can
-use the Python's `cProfiler`. To profile not the entire program, but only individual functions,
+use the Python's `cProfiler`. To profile individual functions,
 we can use the following decorator:
 
 .. code-block:: python
@@ -86,7 +86,7 @@ and running the program again, we will get the following results:
         1    0.231    0.231    0.231    0.231 {built-in method triton._C.libtriton.llvm.to_module}
         ...
 
-Now we see that the most time is spent in the `optimize_module` function, which is a native function,
+The new profile information indicates that most of the time is spent in the `optimize_module` function, which is a native function,
 written in C++. To profile this function, we will use `gperftools`. On an Ubuntu system, we need
 the following packages to be installed:
 
