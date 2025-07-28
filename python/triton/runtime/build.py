@@ -79,7 +79,7 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
 
     if is_xpu():
         icpx = shutil.which("icpx")
-        cxx = os.environ.get("CXX")
+        cxx = shutil.which(os.environ.get("CXX", "shutil-dummy-value"))
         if cxx is None:
             clangpp = shutil.which("clang++")
             gxx = shutil.which("g++")
@@ -91,8 +91,7 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
         import numpy as np
         numpy_include_dir = np.get_include()
         include_dirs = include_dirs + [numpy_include_dir]
-        # Use -fsycl when CXX is icpx or /abs-path-to/icpx
-        if icpx and os.path.basename(icpx) == os.path.basename(cxx):
+        if cxx is icpx:
             extra_compile_args += ["-fsycl"]
         else:
             if os.name != "nt":
