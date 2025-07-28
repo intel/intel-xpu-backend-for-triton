@@ -1,11 +1,10 @@
 import argparse
+import csv
 import re
 import os
 import uuid
 import json
 from datetime import datetime
-
-import pandas as pd
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Parse Llama 3.1 profiling log')
@@ -42,11 +41,7 @@ def parse_llama_log(log_file_path, output_csv_path, tag):
     prompt_match = re.search(r'Prompt size:\s+(\d+)', content)
     prompt_size = int(prompt_match.group(1)) if prompt_match else 1024
 
-    # Create DataFrame with results
-    df_results = pd.DataFrame()
-    
-    # Add the metrics as DataFrame columns
-    df_results = pd.DataFrame([{
+    result_data = {
         'benchmark': 'flex_attention-pr-check',
         'model': 'meta-llama/Llama-3.1-8B',
         'run_uuid': uuid.uuid4().hex,
@@ -59,33 +54,19 @@ def parse_llama_log(log_file_path, output_csv_path, tag):
         'first_token_latency': metrics.get('first_token_latency', 0),
         'rest_token_latency': metrics.get('rest_token_latency', 0),
         'p90_rest_token_latency': metrics.get('p90_rest_token_latency', 0),
-    }])
+    }
     
-    # host_info = {
-    #     n: os.getenv(n.upper(), default="")
-    #     for n in [
-    #         "libigc1_version",
-    #         "level_zero_version",
-    #         "gpu_device",
-    #         "agama_version",
-    #         "torch_version",
-    #         "compiler_version",
-    #         "benchmarking_method",
-    #     ]
-    # }
-    # if not host_info["gpu_device"]:
-    #     raise RuntimeError("Could not find GPU device description, was `capture-hw-details.sh` called?")
-    
-    # for name, val in host_info.items():
-    #     df_results[name] = val
-    
-    df_results.to_csv(output_csv_path, index=False)
+    with open(output_csv_path, 'w', newline='') as csvfile:
+        fieldnames = result_data.keys()
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerow(result_data)
     
     print(f"Successfully parsed log and created CSV: {output_csv_path}")
     print(f"Extracted metrics: {json.dumps(metrics, indent=2)}")
-    print(f"DataFrame shape: {df_results.shape}")
+    print(f"Data written: {len(result_data)} fields")
     
-    return df_results
+    return result_data
 
 
 def main():
@@ -94,7 +75,7 @@ def main():
         print(f"Error: Log file {args.log_file} not found")
         return 1
     
-    df_results = parse_llama_log(args.log_file, args.output_csv, args.tag)
+    result_data = parse_llama_log(args.log_file, args.output_csv, args.tag)
     print(f"Transformed CSV saved to {args.output_csv}")
     return 0
 
