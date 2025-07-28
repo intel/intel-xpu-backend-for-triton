@@ -165,7 +165,7 @@ jobs:
         with:
           name: test-report
           include-hidden-files: true
-          path: ${ env.NEW_WORKSPACE }}\reports
+          path: ${{ env.NEW_WORKSPACE }}\reports
 
       - name: Clean up workspace
         if: ${{ always() }}
