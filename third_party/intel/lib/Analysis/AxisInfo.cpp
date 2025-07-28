@@ -84,7 +84,11 @@ public:
   AxisInfo
   getAxisInfo(Operation *op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) final {
-    return getAxisInfo(cast<OpTy>(op), operands);
+    // llvm::outs() << " axis info op: " << *op << "\n";
+    auto axis = getAxisInfo(cast<OpTy>(op), operands);
+    // axis.print(llvm::outs());
+    // llvm::outs() << "\n";
+    return axis;
   }
 
   bool match(Operation *op) final { return isa<OpTy>(op); }
