@@ -363,7 +363,7 @@ jobs:
           # git submodule update --init --recursive
           # python setup.py develop
 
-          # cd ../benchmarks/flex_attention-pr-check
+          cd ../benchmarks/flex_attention-pr-check
           # bash triton-llama3-profiling.sh
 
           cp llama31.compile.xpu.profile.log $REPORTS/llama31.compile.xpu.profile.log
