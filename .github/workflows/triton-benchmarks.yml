@@ -113,27 +113,27 @@ jobs:
         run: |
           pip install wheel cmake
 
-      - name: Setup PyTorch
-        uses: ./.github/actions/setup-pytorch
+      # - name: Setup PyTorch
+      #   uses: ./.github/actions/setup-pytorch
 
-      - name: Setup Triton
-        uses: ./.github/actions/setup-triton
+      # - name: Setup Triton
+      #   uses: ./.github/actions/setup-triton
 
       - name: Create reports dir
         run: |
           mkdir reports
           echo "REPORTS=$PWD/reports" >> $GITHUB_ENV
 
-      - name: Install benchmarks
-        id: install
-        run: |
-          cd benchmarks
-          pip install .
-          pip install intel-pti==0.12.3
-          PTI_LIBS_DIR=$(python -c "import sysconfig; print(sysconfig.get_paths()['stdlib']+'/..')")
-          # the output should contain: `libpti.so`, `libpti_metrics.so.0.12.3` and `libpti_view.so.0.12.3`
-          ls $PTI_LIBS_DIR
-          echo "PTI_LIBS_DIR=$PTI_LIBS_DIR" >> $GITHUB_ENV
+      # - name: Install benchmarks
+      #   id: install
+      #   run: |
+      #     cd benchmarks
+      #     pip install .
+      #     pip install intel-pti==0.12.3
+      #     PTI_LIBS_DIR=$(python -c "import sysconfig; print(sysconfig.get_paths()['stdlib']+'/..')")
+      #     # the output should contain: `libpti.so`, `libpti_metrics.so.0.12.3` and `libpti_view.so.0.12.3`
+      #     ls $PTI_LIBS_DIR
+      #     echo "PTI_LIBS_DIR=$PTI_LIBS_DIR" >> $GITHUB_ENV
 
       - name: Run Triton Softmax kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'fused_softmax.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'fused_softmax.py') }}
