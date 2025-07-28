@@ -185,3 +185,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
     tt.return
   }
 }
+
+// -----
+
+// COM: Ensure i64 element type is supported in materialize block pointer.
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, ttig.support_sg_2d_block} {
+  // CHECK-LABEL: tt.func public @materialize_block_pointer(
+  tt.func public @materialize_block_pointer(%arg0: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %pitch: i64 {tt.divisibility = 16 : i32}) {
+    %c0_i32 = arith.constant 0 : i32
+    %c0_i64 = arith.constant 0 : i64
+    %c1_i64 = arith.constant 1 : i64
+
+    // CHECK: tt.load {{.*}} {ttig.block_io = "row_major"}
+    %0 = tt.make_tensor_ptr %arg0, [%c0_i64, %c0_i64], [%pitch, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<64x32xi64, #dot_a>>
+    %1 = tt.load %0 : !tt.ptr<tensor<64x32xi64, #dot_a>>
+    // CHECK: tt.store {{.*}} {ttig.block_io = "row_major"}
+    tt.store %0, %1 : !tt.ptr<tensor<64x32xi64, #dot_a>>
+
+    tt.return
+  }
+}

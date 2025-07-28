@@ -609,7 +609,8 @@ def test_make_tensor_descriptor_matmul(num_stages, num_ctas, BLOCK_M, BLOCK_N, B
     if BLOCK_M >= 64 * num_ctas and BLOCK_N >= 64 and is_hopper():
         # TODO: The use of stmatrix for Blackwell is currently not supported.
         # Only a subset of TMEM and stmatrix layout pairs are compatible, for example 16x256bx2 and m8n8x4.
-        assert "stmatrix.sync.aligned.m8n8.x4.shared.b16" in kernel.asm["ptx"]
+        assert "stmatrix.sync.aligned.m8n8.x4.shared.b16" in kernel.asm[
+            "ptx"] or "stmatrix.sync.aligned.x4.m8n8.shared.b16" in kernel.asm["ptx"]
 
 
 @triton.jit
@@ -1506,7 +1507,9 @@ def test_tensor_descriptor_reduce(kind, descriptor, dtype_str, num_ctas, M_BLOCK
             pytest.skip("Broken on rocm")
         if is_xpu():
             if (kind, dtype_str) in [("add", "bfloat16")]:
-                pytest.skip("FIXME: issue #4375")
+                if descriptor == "host":
+                    pytest.skip("FIXME: issue #4289")
+                pytest.skip("FIXME: issue #3914")
 
     @triton.jit(debug=True)
     def kernel(out_desc, out_ptr, a_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr, kind: tl.constexpr):
@@ -1686,4 +1689,5 @@ def test_host_tensor_descriptor_matmul(num_stages, num_ctas, BLOCK_M, BLOCK_N, B
     if BLOCK_M >= 64 * num_ctas and BLOCK_N >= 64 and is_cuda() and is_hopper():
         # TODO: The use of stmatrix for Blackwell is currently not supported.
         # Only a subset of TMEM and stmatrix layout pairs are compatible, for example 16x256bx2 and m8n8x4.
-        assert "stmatrix.sync.aligned.m8n8.x4.shared.b16" in kernel.asm["ptx"]
+        assert "stmatrix.sync.aligned.m8n8.x4.shared.b16" in kernel.asm[
+            "ptx"] or "stmatrix.sync.aligned.x4.m8n8.shared.b16" in kernel.asm["ptx"]

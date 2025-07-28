@@ -1,0 +1,26 @@
+diff --git a/torch/_inductor/kernel/flex_decoding.py b/torch/_inductor/kernel/flex_decoding.py
+index 628bfc6419b..e86aca59db6 100644
+--- a/torch/_inductor/kernel/flex_decoding.py
++++ b/torch/_inductor/kernel/flex_decoding.py
+@@ -459,15 +459,12 @@ def create_flex_decoding_kernel(*args, **kwargs):
+             # m
+             # if V.graph.sizevars.evaluate_expr(sympy.Lt(query.get_size()[-2], 0))
+             # else  # Always use a BLOCK_M > 16 before Triton fix https://github.com/triton-lang/triton/pull/4061 is in pin
+-            max(
+-                next_power_of_2(
+-                    V.graph.sizevars.size_hint(
+-                        seq_len_q,
+-                        fallback=torch._inductor.config.unbacked_symint_fallback,  # type: ignore[arg-type]
+-                    )
+-                    * gqa_shared_heads
+-                ),
+-                float('-inf') if torch.xpu.is_available() else 16,
++            next_power_of_2(
++                V.graph.sizevars.size_hint(
++                    seq_len_q,
++                    fallback=torch._inductor.config.unbacked_symint_fallback,  # type: ignore[arg-type]
++                )
++                * gqa_shared_heads
+             )
+         ),
+     )

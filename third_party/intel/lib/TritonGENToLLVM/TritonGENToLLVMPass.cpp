@@ -115,19 +115,19 @@ loadCacheControlToCacheControls(Builder &builder,
 static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
   // FIXME: The following signatures are not valid in SPV interface.
 
-  // intel_sub_group_2d_block_read_8b_32r16x1c
-  if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 32 &&
-      op.getTileWidth() == 16 && op.getVBlocks() == 1 && !op.getVnniTransform())
+  // intel_sub_group_2d_block_read_8b_8r8x1c
+  if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 8 &&
+      op.getTileWidth() == 8 && op.getVBlocks() == 1 && !op.getVnniTransform())
     return false;
 
-  // intel_sub_group_2d_block_read_8b_32r16x2c
-  if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 32 &&
-      op.getTileWidth() == 16 && op.getVBlocks() == 2 && !op.getVnniTransform())
+  // intel_sub_group_2d_block_read_8b_8r8x2c
+  if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 8 &&
+      op.getTileWidth() == 8 && op.getVBlocks() == 2 && !op.getVnniTransform())
     return false;
 
-  // intel_sub_group_2d_block_read_8b_16r16x2c
-  if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 16 &&
-      op.getTileWidth() == 16 && op.getVBlocks() == 2 && !op.getVnniTransform())
+  // intel_sub_group_2d_block_read_8b_8r8x4c
+  if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 8 &&
+      op.getTileWidth() == 8 && op.getVBlocks() == 4 && !op.getVnniTransform())
     return false;
 
   // intel_sub_group_2d_block_read_8b_8r16x1c
@@ -140,9 +140,45 @@ static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
       op.getTileWidth() == 16 && op.getVBlocks() == 2 && !op.getVnniTransform())
     return false;
 
+  // intel_sub_group_2d_block_read_8b_16r16x2c
+  if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 16 &&
+      op.getTileWidth() == 16 && op.getVBlocks() == 2 && !op.getVnniTransform())
+    return false;
+
+  // intel_sub_group_2d_block_read_8b_32r16x1c
+  if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 32 &&
+      op.getTileWidth() == 16 && op.getVBlocks() == 1 && !op.getVnniTransform())
+    return false;
+
+  // intel_sub_group_2d_block_read_8b_32r16x2c
+  if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 32 &&
+      op.getTileWidth() == 16 && op.getVBlocks() == 2 && !op.getVnniTransform())
+    return false;
+
+  // intel_sub_group_2d_block_read_16b_8r8x1c
+  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 8 &&
+      op.getTileWidth() == 8 && op.getVBlocks() == 1 && !op.getVnniTransform())
+    return false;
+
+  // intel_sub_group_2d_block_read_16b_8r8x2c
+  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 8 &&
+      op.getTileWidth() == 8 && op.getVBlocks() == 2 && !op.getVnniTransform())
+    return false;
+
+  // intel_sub_group_2d_block_read_16b_8r8x4c
+  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 8 &&
+      op.getTileWidth() == 8 && op.getVBlocks() == 4 && !op.getVnniTransform())
+    return false;
+
   // intel_sub_group_2d_block_read_16b_16r8x4c
   if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 16 &&
       op.getTileWidth() == 8 && op.getVBlocks() == 4 && !op.getVnniTransform())
+    return false;
+
+  // FIXME: The SPV block load only support subgroup size 16.
+  int subGroupSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(
+      op->getParentOfType<mlir::ModuleOp>());
+  if (subGroupSize != 16)
     return false;
 
   return true;
@@ -181,16 +217,10 @@ static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockStoreOp op) {
       op.getTileWidth() == 8 && op.getVBlocks() == 1)
     return false;
 
-  // FIXME: The following signatures have correctness issue with SPV interface.
-
-  // intel_sub_group_2d_block_write_8b_1r32x1c
-  if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 1 &&
-      op.getTileWidth() == 32 && op.getVBlocks() == 1)
-    return false;
-
-  // intel_sub_group_2d_block_write_16b_2r16x1c
-  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 2 &&
-      op.getTileWidth() == 16 && op.getVBlocks() == 1)
+  // FIXME: The SPV block store only support subgroup size 16.
+  int subGroupSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(
+      op->getParentOfType<mlir::ModuleOp>());
+  if (subGroupSize != 16)
     return false;
 
   return true;
