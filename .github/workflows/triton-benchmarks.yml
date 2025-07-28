@@ -352,9 +352,9 @@ jobs:
         if: ${{ !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'run_llm_inductor_greedy.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'run_llm_inductor_greedy.py') }}
         run: |
           export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
-          # git clone https://github.com/huggingface/transformers.git
+          git clone https://github.com/huggingface/transformers.git
 
-          # cd transformers
+          cd transformers
 
           # git checkout $(<../benchmarks/flex_attention-pr-check/transformers-commit.txt)
           # git apply ../benchmarks/flex_attention-pr-check/transformers-patch-for-timing.diff
