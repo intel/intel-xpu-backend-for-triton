@@ -110,10 +110,7 @@ jobs:
       - name: Run Llama 3.1 performance benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'llama3-1')) }}
         run: |
-          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
-
-          rm -rfv benchmarks/flex_attention-pr-check
-          git clone https://github.com/LiyangLingIntel/flex_attention-pr-check.git benchmarks/flex_attention-pr-check
+          source ./scripts/capture-hw-details.sh
 
           git clone https://github.com/huggingface/transformers.git
 

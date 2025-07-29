@@ -1,10 +1,11 @@
 import argparse
-import csv
 import re
 import os
 import uuid
 import json
 from datetime import datetime
+
+import pandas as pd
 
 
 def parse_args():
@@ -19,7 +20,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def parse_llm_log(log_file_path, output_csv_path, tag, model, max_new_tokens, batch_size):
+def parse_llm_log(log_file_path, tag, model, max_new_tokens, batch_size):
     """Parse the LLM profiling log and extract performance metrics."""
 
     with open(log_file_path, 'r', encoding='utf-8') as f:
@@ -46,32 +47,56 @@ def parse_llm_log(log_file_path, output_csv_path, tag, model, max_new_tokens, ba
     prompt_match = re.search(r'Prompt size:\s+(\d+)', content)
     prompt_size = int(prompt_match.group(1)) if prompt_match else 1024
 
-    result_data = {
-        'benchmark': 'flex_attention-pr-check',
+    params = {
         'model': model,
-        'run_uuid': uuid.uuid4().hex,
-        'datetime': datetime.now().isoformat(),
-        'tag': tag,
         'input_tokens': prompt_size,
         'max_new_tokens': max_new_tokens,
         'batch_size': batch_size,
-        'inference_latency': metrics.get('inference_latency', 0),
-        'first_token_latency': metrics.get('first_token_latency', 0),
-        'rest_token_latency': metrics.get('rest_token_latency', 0),
-        'p90_rest_token_latency': metrics.get('p90_rest_token_latency', 0),
     }
+    params_json = json.dumps(params)
 
-    with open(output_csv_path, 'w', newline='', encoding='utf-8') as csvfile:
-        fieldnames = result_data.keys()
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerow(result_data)
+    rows = []
+    run_uuid = uuid.uuid4().hex
+    current_datetime = datetime.now().isoformat()
 
-    print(f'Successfully parsed log and created CSV: {output_csv_path}')
+    # Create one row for each metric
+    for metric_name, metric_value in metrics.items():
+        row = {
+            'benchmark': 'flex_attention-pr-check',
+            'run_uuid': run_uuid,
+            'datetime': current_datetime,
+            'compiler': 'triton',
+            'metric_name': metric_name,
+            'metric_value': metric_value,
+            'params': params_json,
+            'tag': tag,
+        }
+        rows.append(row)
+
+    df_results = pd.DataFrame(rows)
+
+    host_info = {
+        n: os.getenv(n.upper(), default='')
+        for n in [
+            'libigc1_version',
+            'level_zero_version',
+            'gpu_device',
+            'agama_version',
+            'torch_version',
+            'compiler_version',
+            'benchmarking_method',
+        ]
+    }
+    if not host_info['gpu_device']:
+        raise RuntimeError('Could not find GPU device description, was `capture-hw-details.sh` called?')
+
+    for name, val in host_info.items():
+        df_results[name] = val
+
     print(f'Extracted metrics: {json.dumps(metrics, indent=2)}')
-    print(f'Data written: {len(result_data)} fields')
+    print(f'DataFrame shape: {df_results.shape}')
 
-    return result_data
+    return df_results
 
 
 def main():
@@ -80,7 +105,8 @@ def main():
         print(f'Error: Log file {args.log_file} not found')
         return 1
 
-    parse_llm_log(args.log_file, args.output_csv, args.tag, args.model, args.max_new_tokens, args.batch_size)
+    df_results = parse_llm_log(args.log_file, args.tag, args.model, args.max_new_tokens, args.batch_size)
+    df_results.to_csv(args.output_csv, index=False)
     print(f'Transformed CSV saved to {args.output_csv}')
     return 0
 
