@@ -6,29 +6,31 @@ import uuid
 import json
 from datetime import datetime
 
+
 def parse_args():
     parser = argparse.ArgumentParser(description='Parse LLM profiling log')
     parser.add_argument('log_file', help='Path to the LLM profiling log file')
     parser.add_argument('output_csv', help='Path to output CSV file')
-    parser.add_argument("--tag", help="Tag for the benchmark run", default="")
-    parser.add_argument("--model", help="Model name", default="unknown-model")
-    parser.add_argument("--max-new-tokens", type=int, help="Maximum new tokens", default=128)
-    parser.add_argument("--batch-size", type=int, help="Batch size", default=1)
+    parser.add_argument('--tag', help='Tag for the benchmark run', default='')
+    parser.add_argument('--model', help='Model name', default='unknown-model')
+    parser.add_argument('--max-new-tokens', type=int, help='Maximum new tokens', default=128)
+    parser.add_argument('--batch-size', type=int, help='Batch size', default=1)
 
     return parser.parse_args()
 
+
 def parse_llm_log(log_file_path, output_csv_path, tag, model, max_new_tokens, batch_size):
     """Parse the LLM profiling log and extract performance metrics."""
-    
-    with open(log_file_path, 'r') as f:
+
+    with open(log_file_path, 'r', encoding='utf-8') as f:
         content = f.read()
-    
+
     metrics = {}
-    
+
     inference_match = re.search(r'inference-latency:\s+([\d.]+)\s+sec\.', content)
     if inference_match:
         metrics['inference_latency'] = float(inference_match.group(1))
-    
+
     first_token_match = re.search(r'first-token-latency:\s+([\d.]+)\s+sec\.', content)
     if first_token_match:
         metrics['first_token_latency'] = float(first_token_match.group(1))
@@ -36,11 +38,11 @@ def parse_llm_log(log_file_path, output_csv_path, tag, model, max_new_tokens, ba
     rest_token_match = re.search(r'rest-token-latency:\s+([\d.]+)\s+sec\.', content)
     if rest_token_match:
         metrics['rest_token_latency'] = float(rest_token_match.group(1))
-    
+
     p90_match = re.search(r'P90-rest-token-latency:\s+([\d.]+)\s+sec\.', content)
     if p90_match:
         metrics['p90_rest_token_latency'] = float(p90_match.group(1))
-    
+
     prompt_match = re.search(r'Prompt size:\s+(\d+)', content)
     prompt_size = int(prompt_match.group(1)) if prompt_match else 1024
 
@@ -58,30 +60,30 @@ def parse_llm_log(log_file_path, output_csv_path, tag, model, max_new_tokens, ba
         'rest_token_latency': metrics.get('rest_token_latency', 0),
         'p90_rest_token_latency': metrics.get('p90_rest_token_latency', 0),
     }
-    
-    with open(output_csv_path, 'w', newline='') as csvfile:
+
+    with open(output_csv_path, 'w', newline='', encoding='utf-8') as csvfile:
         fieldnames = result_data.keys()
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerow(result_data)
-    
-    print(f"Successfully parsed log and created CSV: {output_csv_path}")
-    print(f"Extracted metrics: {json.dumps(metrics, indent=2)}")
-    print(f"Data written: {len(result_data)} fields")
-    
+
+    print(f'Successfully parsed log and created CSV: {output_csv_path}')
+    print(f'Extracted metrics: {json.dumps(metrics, indent=2)}')
+    print(f'Data written: {len(result_data)} fields')
+
     return result_data
 
 
 def main():
     args = parse_args()
     if not os.path.exists(args.log_file):
-        print(f"Error: Log file {args.log_file} not found")
+        print(f'Error: Log file {args.log_file} not found')
         return 1
-    
-    result_data = parse_llm_log(args.log_file, args.output_csv, args.tag, 
-                               args.model, args.max_new_tokens, args.batch_size)
-    print(f"Transformed CSV saved to {args.output_csv}")
+
+    parse_llm_log(args.log_file, args.output_csv, args.tag, args.model, args.max_new_tokens, args.batch_size)
+    print(f'Transformed CSV saved to {args.output_csv}')
     return 0
 
-if __name__ == "__main__":
+
+if __name__ == '__main__':
     main()
