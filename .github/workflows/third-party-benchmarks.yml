@@ -28,6 +28,7 @@ permissions: read-all
 env:
   PYTHON_VERSION: "3.10"
   TAG: ${{ inputs.tag || (github.event_name == 'pull_request' && format('pr-{0}', github.event.number)) || (github.event_name == 'schedule' && 'ci') || 'test' }}
+  HF_TOKEN: ${{ secrets.HUGGING_FACE_HUB_TOKEN || '' }}
 
 jobs:
   build:
