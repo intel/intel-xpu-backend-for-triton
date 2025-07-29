@@ -71,29 +71,34 @@ jobs:
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
-          python -c 'import
+          python -c 'import torch;print(torch.__version__)'
 
       - name: Report environment details
         run: |
           .venv\Scripts\activate.ps1
           cd ${{ env.NEW_WORKSPACE }}
-          bash -c "\
-          mkdir -p reports
-          cat <<EOF | tee reports/.env
-          TIMESTAMP=$(date '+%Y%m%d%H%M%S')
-          GITHUB_RUN_ID=$GITHUB_RUN_ID
-          GITHUB_RUN_NUMBER=$GITHUB_RUN_NUMBER
-          GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT
-          PYTHON_VERSION=${{ inputs.python_version }}
-          PYTORCH_REPO=$PYTORCH_REPO
-          PYTORCH_COMMIT_ID=$PYTORCH_COMMIT_ID
-          PYTORCH_VERSION=$PYTORCH_VERSION
-          TRITON_REPO=$GITHUB_REPOSITORY
-          TRITON_COMMIT_ID=$GITHUB_SHA
+
+          New-Item -ItemType Directory -Force -Path reports
+    
+          $timestamp = Get-Date -Format "yyyyMMddHHmmss"
+          @"
+          TIMESTAMP=$timestamp
+          GITHUB_RUN_ID=$env:GITHUB_RUN_ID
+          GITHUB_RUN_NUMBER=$env:GITHUB_RUN_NUMBER
+          GITHUB_RUN_ATTEMPT=$env:GITHUB_RUN_ATTEMPT
+          PYTHON_VERSION=3.10
+          PYTORCH_REPO=$env:PYTORCH_REPO
+          PYTORCH_COMMIT_ID=$env:PYTORCH_COMMIT_ID
+          PYTORCH_VERSION=$env:PYTORCH_VERSION
+          TRITON_REPO=$env:GITHUB_REPOSITORY
+          TRITON_COMMIT_ID=$env:GITHUB_SHA
           OS=win
+          "@ | Tee-Object -FilePath reports\.env
+
           EOF
-          ./scripts/capture-hw-details.sh | tee -a reports/.env
-          " torch;print(torch.__version__)'
+
+          bash -c "./scripts/capture-hw-details.sh" | Tee-Object -FilePath reports\.env -Append
+
 
       - name: Clean up Triton cache
         shell: bash
