@@ -82,26 +82,55 @@ jobs:
           mkdir reports
           echo "REPORTS=$PWD/reports" >> $GITHUB_ENV
 
-      - name: Run Liger-Kernel benchmarks
+      # - name: Run Liger-Kernel benchmarks
+      #   if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+      #   run: |
+      #     source ./scripts/capture-hw-details.sh
+
+      #     cd benchmarks/third_party/liger_kernels
+
+      #     git clone https://github.com/linkedin/Liger-Kernel
+      #     pip install -e Liger-Kernel
+
+      #     # To remember return code, but still copy results
+      #     RET_CODE=0
+      #     bash ./run_benchmarks.sh || RET_CODE=$?
+
+      #     cp Liger-Kernel/benchmark/data/all_benchmark_data.csv $REPORTS/liger-raw.csv
+      #     python transform.py $REPORTS/liger-raw.csv $REPORTS/liger-report.csv --tag $TAG
+
+      #     # Return the captured return code at the end
+      #     exit "$RET_CODE"
+
+      - name: Run Llama 3.1 performance benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        # if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'run_llm_inductor_greedy.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'run_llm_inductor_greedy.py') }}
         run: |
-          source ./scripts/capture-hw-details.sh
+          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
 
-          cd benchmarks/third_party/liger_kernels
+          rm -rfv benchmarks/flex_attention-pr-check
+          git clone https://github.com/LiyangLingIntel/flex_attention-pr-check.git benchmarks/flex_attention-pr-check
 
-          git clone https://github.com/linkedin/Liger-Kernel
-          pip install -e Liger-Kernel
+          git clone https://github.com/huggingface/transformers.git
 
-          # To remember return code, but still copy results
-          RET_CODE=0
-          bash ./run_benchmarks.sh || RET_CODE=$?
+          cd transformers
 
-          cp Liger-Kernel/benchmark/data/all_benchmark_data.csv $REPORTS/liger-raw.csv
-          python transform.py $REPORTS/liger-raw.csv $REPORTS/liger-report.csv --tag $TAG
+          git checkout $(<../benchmarks/flex_attention-pr-check/transformers-commit.txt)
+          git apply ../benchmarks/flex_attention-pr-check/transformers-patch-for-timing.diff
 
-          # Return the captured return code at the end
-          exit "$RET_CODE"
+          git submodule sync
+          git submodule update --init --recursive
+          python setup.py develop
 
+          cd ../benchmarks/flex_attention-pr-check
+          
+          IGC_VectorizerAllowEXP2=1 IGC_VectorizerAllowMAXNUM=1 IGC_VectorizerAllowWAVEALL=1 IGC_VectorizerAllowCMP=1 IGC_VectorizerAllowSelect=1 TRITON_INTEL_ENABLE_BLOCK_IO_STORE_ON_REGULAR_PTR=1 TRITON_INTEL_ONE_MATRIX_PER_LOAD_BT=1 IGC_DisableCodeScheduling=0 \
+          python run_llm_inductor_greedy.py -m meta-llama/Llama-3.1-8B --max-new-tokens 128 --input-tokens 1024 --num-warmup 2 --num-iter 7 --compile --profile | tee llama31.compile.xpu.profile.log
+
+          echo "llama profiling log is stored into $PWD/llama31.compile.xpu.profile.log"
+
+          cp llama31.compile.xpu.profile.log $REPORTS/llama31.compile.xpu.profile.log
+          python transform_results.py $REPORTS/llama31.compile.xpu.profile.log $REPORTS/llama31-triton-report.csv --tag $TAG
 
       - name: Upload benchmark reports
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
