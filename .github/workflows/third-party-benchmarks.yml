@@ -11,6 +11,10 @@ on:
         description: Tag for benchmark results
         type: string
         default: "test"
+      benchmarks:
+        description: JSON list of benchmarks to run. Leave empty to run all benchmarks.
+        type: string
+        default: ""
       use_pyenv_python:
         description: Use Python built with pyenv
         type: boolean
@@ -83,7 +87,7 @@ jobs:
           echo "REPORTS=$PWD/reports" >> $GITHUB_ENV
 
       - name: Run Liger-Kernel benchmarks
-        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'liger-kernel')) }}
         run: |
           source ./scripts/capture-hw-details.sh
 
