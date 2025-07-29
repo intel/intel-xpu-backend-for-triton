@@ -113,11 +113,11 @@ jobs:
         run: |
           pip install wheel cmake
 
-      # - name: Setup PyTorch
-      #   uses: ./.github/actions/setup-pytorch
+      - name: Setup PyTorch
+        uses: ./.github/actions/setup-pytorch
 
-      # - name: Setup Triton
-      #   uses: ./.github/actions/setup-triton
+      - name: Setup Triton
+        uses: ./.github/actions/setup-triton
 
       - name: Create reports dir
         run: |
@@ -348,29 +348,35 @@ jobs:
           python run_benchmarks.py --reports $REPORTS
 
       - name: Run Llama 3.1 performance benchmark
-        # if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'run_llm_inductor_greedy.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'run_llm_inductor_greedy.py') }}
-        if: ${{ !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'run_llm_inductor_greedy.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'run_llm_inductor_greedy.py') }}
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'run_llm_inductor_greedy.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'run_llm_inductor_greedy.py') }}
         run: |
           export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
+
+          rm -rfv benchmarks/flex_attention-pr-check
+          git clone https://github.com/LiyangLingIntel/flex_attention-pr-check.git benchmarks/flex_attention-pr-check
+
           git clone https://github.com/huggingface/transformers.git
 
           cd transformers
 
-          # git checkout $(<../benchmarks/flex_attention-pr-check/transformers-commit.txt)
-          # git apply ../benchmarks/flex_attention-pr-check/transformers-patch-for-timing.diff
+          git checkout $(<../benchmarks/flex_attention-pr-check/transformers-commit.txt)
+          git apply ../benchmarks/flex_attention-pr-check/transformers-patch-for-timing.diff
 
-          # git submodule sync
-          # git submodule update --init --recursive
-          # python setup.py develop
+          git submodule sync
+          git submodule update --init --recursive
+          python setup.py develop
 
           cd ../benchmarks/flex_attention-pr-check
-          # bash triton-llama3-profiling.sh
+          
+          IGC_VectorizerAllowEXP2=1 IGC_VectorizerAllowMAXNUM=1 IGC_VectorizerAllowWAVEALL=1 IGC_VectorizerAllowCMP=1 IGC_VectorizerAllowSelect=1 TRITON_INTEL_ENABLE_BLOCK_IO_STORE_ON_REGULAR_PTR=1 TRITON_INTEL_ONE_MATRIX_PER_LOAD_BT=1 IGC_DisableCodeScheduling=0 \
+          python run_llm_inductor_greedy.py -m meta-llama/Llama-3.1-8B --max-new-tokens 128 --input-tokens 1024 --num-warmup 2 --num-iter 7 --compile --profile | tee llama31.compile.xpu.profile.log
+
 
           cp llama31.compile.xpu.profile.log $REPORTS/llama31.compile.xpu.profile.log
           python transform_results.py $REPORTS/llama31.compile.xpu.profile.log $REPORTS/llama31-triton-report.csv --tag $TAG
 
       - name: Upload benchmark reports
-        # if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-reports
