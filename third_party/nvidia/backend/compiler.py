@@ -435,6 +435,10 @@ class CUDABackend(BaseBackend):
             ]
             try:
                 subprocess.run(ptxas_cmd, check=True, close_fds=False, stderr=flog)
+                if knobs.nvidia.dump_ptxas_log:
+                    with open(flog.name) as log_file:
+                        print(log_file.read())
+
                 # Skip deleting on Windows to avoid
                 # PermissionError: [WinError 32] The process cannot access the file because it is being used by another process
                 if os.path.exists(fsrc.name) and os.name != "nt":
