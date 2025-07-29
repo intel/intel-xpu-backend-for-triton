@@ -101,6 +101,27 @@ jobs:
           pip install -r scripts\requirements-test.txt
           pip uninstall pytest_forked -y
 
+      - name: Report environment details
+        run: |
+          .venv\Scripts\activate.ps1
+          cd ${{ env.NEW_WORKSPACE }}
+          bash -c "\
+          cat <<EOF | tee reports/.env
+          TIMESTAMP=$(date '+%Y%m%d%H%M%S')
+          GITHUB_RUN_ID=$GITHUB_RUN_ID
+          GITHUB_RUN_NUMBER=$GITHUB_RUN_NUMBER
+          GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT
+          PYTHON_VERSION=${{ inputs.python_version }}
+          PYTORCH_REPO=$PYTORCH_REPO
+          PYTORCH_COMMIT_ID=$PYTORCH_COMMIT_ID
+          PYTORCH_VERSION=$PYTORCH_VERSION
+          TRITON_REPO=$GITHUB_REPOSITORY
+          TRITON_COMMIT_ID=$env:GITHUB_SHA
+          OS=win
+          EOF
+          ./scripts/capture-hw-details.sh | tee -a reports/.env
+          "
+
       # - name: Run unit tests
       #   run: |
       #     .venv\Scripts\activate.ps1
@@ -160,12 +181,15 @@ jobs:
       #     name: pass_rate
       #     path: ${{ env.NEW_WORKSPACE }}\pass_rate*.json
 
-      - name: Upload test report
+      - name: Upload tutorial performance
         uses: actions/upload-artifact@v4
         with:
-          name: test-report
+          name: tutorials-report
+          if-no-files-found: warn
           include-hidden-files: true
-          path: ${{ env.NEW_WORKSPACE }}\reports
+          path: |
+            ${{ env.NEW_WORKSPACE }}\reports\*\*.csv
+            ${{ env.NEW_WORKSPACE }}\.env
 
       - name: Clean up workspace
         if: ${{ always() }}
