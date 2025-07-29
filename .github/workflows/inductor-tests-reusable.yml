@@ -29,6 +29,7 @@ permissions: read-all
 env:
   PYTHON_VERSION: "${{ inputs.python_version }}"
   PYTORCH_REPO: "${{ inputs.pytorch_repo }}"
+  TRITON_LESS_FLEX_ATTN_BWD_CONFIGS: 1
 
 jobs:
   build:
