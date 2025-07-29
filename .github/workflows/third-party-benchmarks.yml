@@ -127,13 +127,22 @@ jobs:
 
           cd ../benchmarks/flex_attention-pr-check
           
+          MODEL_NAME="meta-llama/Llama-3.1-8B"
+          MAX_NEW_TOKENS=128
+          INPUT_TOKENS=1024
+          BATCH_SIZE=1
+          
           IGC_VectorizerAllowEXP2=1 IGC_VectorizerAllowMAXNUM=1 IGC_VectorizerAllowWAVEALL=1 IGC_VectorizerAllowCMP=1 IGC_VectorizerAllowSelect=1 TRITON_INTEL_ENABLE_BLOCK_IO_STORE_ON_REGULAR_PTR=1 TRITON_INTEL_ONE_MATRIX_PER_LOAD_BT=1 IGC_DisableCodeScheduling=0 \
-          python run_llm_inductor_greedy.py -m meta-llama/Llama-3.1-8B --max-new-tokens 128 --input-tokens 1024 --num-warmup 2 --num-iter 7 --compile --profile | tee llama31.compile.xpu.profile.log
+          python run_llm_inductor_greedy.py -m $MODEL_NAME --max-new-tokens $MAX_NEW_TOKENS --input-tokens $INPUT_TOKENS --num-warmup 2 --num-iter 7 --compile --profile | tee llm.compile.xpu.profile.log
 
-          echo "llama profiling log is stored into $PWD/llama31.compile.xpu.profile.log"
+          echo "LLM profiling log is stored into $PWD/llm.compile.xpu.profile.log"
 
-          cp llama31.compile.xpu.profile.log $REPORTS/llama31.compile.xpu.profile.log
-          python transform_results.py $REPORTS/llama31.compile.xpu.profile.log $REPORTS/llama31-triton-report.csv --tag $TAG
+          cp llm.compile.xpu.profile.log $REPORTS/llm.compile.xpu.profile.log
+          python ../third_party/flex_attention-pr-check/transform_results.py $REPORTS/llm.compile.xpu.profile.log $REPORTS/llm-triton-report.csv \
+            --tag $TAG \
+            --model "$MODEL_NAME" \
+            --max-new-tokens $MAX_NEW_TOKENS \
+            --batch-size $BATCH_SIZE
 
       - name: Upload benchmark reports
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
