@@ -1,0 +1,21 @@
+diff --git a/torch/_inductor/template_heuristics.py b/torch/_inductor/template_heuristics.py
+index 65a6851192a..1dbfb414ce3 100644
+--- a/torch/_inductor/template_heuristics.py
++++ b/torch/_inductor/template_heuristics.py
+@@ -3,6 +3,7 @@ from __future__ import annotations
+ import dataclasses
+ import itertools
+ import math
++import os
+ from functools import partial
+ from threading import Lock
+ from typing import Any, Callable, Optional, TYPE_CHECKING
+@@ -380,7 +381,7 @@ class BaseConfigHeuristic(metaclass=BaseHeuristicSingleton):
+             FlexConfig(BLOCK1, BLOCK2, s, w)
+             for BLOCK1 in [32, 64]
+             for BLOCK2 in [32, 64, 128]
+-            for s in [1, 3, 4, 5]  # num_stages
++            for s in ([1] if os.getenv("TRITON_LESS_FLEX_ATTN_BWD_CONFIGS") == '1' else [1, 3, 4, 5])  # num_stages
+             for w in ([4, 8] if BLOCK1 >= 128 or BLOCK2 >= 128 else [4])
+             if BLOCK2 % BLOCK1 == 0
+         ]
