@@ -89,7 +89,6 @@ jobs:
 
           cat <<EOF | tee /c/gh${{ github.run_id }}/reports/.env
           TIMESTAMP=$(date '+%Y%m%d%H%M%S')
-          JOB_NAME=${{ join(inputs.*, '-') }}
           GITHUB_RUN_ID=$GITHUB_RUN_ID
           GITHUB_RUN_NUMBER=$GITHUB_RUN_NUMBER
           GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT
@@ -103,6 +102,7 @@ jobs:
           LEVEL_ZERO_VERSION=$LEVEL_ZERO_VERSION
           GPU_DEVICE=$GPU_DEVICE
           AGAMA_VERSION=$AGAMA_VERSION
+          TRITON_BRANCH=$GITHUB_REF_NAME
           OS=${{ runner.os }}
           EOF
 
