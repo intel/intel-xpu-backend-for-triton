@@ -204,10 +204,11 @@ using FARunPtr = int (*)(const at::Tensor &Q, const at::Tensor &K,
                          int SeqLengthKV, int HeadSizeQK, int HeadSizeVO,
                          float sm_scale);
 
-auto attention(const at::Tensor &Q, const at::Tensor &K, const at::Tensor &V,
-               at::Tensor &O, int Batch, int NumHeadsQ, int NumHeadsKV,
-               int SeqLengthQO, int SeqLengthKV, int HeadSizeQK, int HeadSizeVO,
-               bool Causal, float sm_scale) -> int {
+auto attention_kernel(const at::Tensor &Q, const at::Tensor &K,
+                      const at::Tensor &V, at::Tensor &O, int Batch,
+                      int NumHeadsQ, int NumHeadsKV, int SeqLengthQO,
+                      int SeqLengthKV, int HeadSizeQK, int HeadSizeVO,
+                      bool Causal, float sm_scale) -> int {
   constexpr int PipelineStages = 2;
   FARunPtr f = nullptr;
 
