@@ -106,6 +106,7 @@ jobs:
           .venv\Scripts\activate.ps1
           cd ${{ env.NEW_WORKSPACE }}
           bash -c "\
+          mkdir -p reports
           cat <<EOF | tee reports/.env
           TIMESTAMP=$(date '+%Y%m%d%H%M%S')
           GITHUB_RUN_ID=$GITHUB_RUN_ID
@@ -116,7 +117,7 @@ jobs:
           PYTORCH_COMMIT_ID=$PYTORCH_COMMIT_ID
           PYTORCH_VERSION=$PYTORCH_VERSION
           TRITON_REPO=$GITHUB_REPOSITORY
-          TRITON_COMMIT_ID=$env:GITHUB_SHA
+          TRITON_COMMIT_ID=$GITHUB_SHA
           OS=win
           EOF
           ./scripts/capture-hw-details.sh | tee -a reports/.env
