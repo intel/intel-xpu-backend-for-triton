@@ -124,16 +124,16 @@ jobs:
           mkdir reports
           echo "REPORTS=$PWD/reports" >> $GITHUB_ENV
 
-      # - name: Install benchmarks
-      #   id: install
-      #   run: |
-      #     cd benchmarks
-      #     pip install .
-      #     pip install intel-pti==0.12.3
-      #     PTI_LIBS_DIR=$(python -c "import sysconfig; print(sysconfig.get_paths()['stdlib']+'/..')")
-      #     # the output should contain: `libpti.so`, `libpti_metrics.so.0.12.3` and `libpti_view.so.0.12.3`
-      #     ls $PTI_LIBS_DIR
-      #     echo "PTI_LIBS_DIR=$PTI_LIBS_DIR" >> $GITHUB_ENV
+      - name: Install benchmarks
+        id: install
+        run: |
+          cd benchmarks
+          pip install .
+          pip install intel-pti==0.12.3
+          PTI_LIBS_DIR=$(python -c "import sysconfig; print(sysconfig.get_paths()['stdlib']+'/..')")
+          # the output should contain: `libpti.so`, `libpti_metrics.so.0.12.3` and `libpti_view.so.0.12.3`
+          ls $PTI_LIBS_DIR
+          echo "PTI_LIBS_DIR=$PTI_LIBS_DIR" >> $GITHUB_ENV
 
       - name: Run Triton Softmax kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'fused_softmax.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'fused_softmax.py') }}
@@ -371,6 +371,7 @@ jobs:
           IGC_VectorizerAllowEXP2=1 IGC_VectorizerAllowMAXNUM=1 IGC_VectorizerAllowWAVEALL=1 IGC_VectorizerAllowCMP=1 IGC_VectorizerAllowSelect=1 TRITON_INTEL_ENABLE_BLOCK_IO_STORE_ON_REGULAR_PTR=1 TRITON_INTEL_ONE_MATRIX_PER_LOAD_BT=1 IGC_DisableCodeScheduling=0 \
           python run_llm_inductor_greedy.py -m meta-llama/Llama-3.1-8B --max-new-tokens 128 --input-tokens 1024 --num-warmup 2 --num-iter 7 --compile --profile | tee llama31.compile.xpu.profile.log
 
+          echo "llama profiling log is stored into $PWD/llama31.compile.xpu.profile.log"
 
           cp llama31.compile.xpu.profile.log $REPORTS/llama31.compile.xpu.profile.log
           python transform_results.py $REPORTS/llama31.compile.xpu.profile.log $REPORTS/llama31-triton-report.csv --tag $TAG
