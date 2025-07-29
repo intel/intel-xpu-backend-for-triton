@@ -116,14 +116,14 @@ jobs:
 
           cd transformers
 
-          git checkout $(<../benchmarks/flex_attention-pr-check/transformers-commit.txt)
-          git apply ../benchmarks/flex_attention-pr-check/transformers-patch-for-timing.diff
+          git checkout $(<../benchmarks/third_party/flex_attention-pr-check/transformers-commit.txt)
+          git apply ../benchmarks/third_party/flex_attention-pr-check/transformers-patch-for-timing.diff
 
           git submodule sync
           git submodule update --init --recursive
           python setup.py develop
 
-          cd ../benchmarks/flex_attention-pr-check
+          cd ../benchmarks/third_party/flex_attention-pr-check
 
           MODEL_NAME="meta-llama/Llama-3.1-8B"
           MAX_NEW_TOKENS=128
@@ -136,7 +136,7 @@ jobs:
           echo "LLM profiling log is stored into $PWD/llm.compile.xpu.profile.log"
 
           cp llm.compile.xpu.profile.log $REPORTS/llm.compile.xpu.profile.log
-          python ../third_party/flex_attention-pr-check/transform_results.py $REPORTS/llm.compile.xpu.profile.log $REPORTS/llm-triton-report.csv \
+          python transform_results.py $REPORTS/llm.compile.xpu.profile.log $REPORTS/llm-triton-report.csv \
             --tag $TAG \
             --model "$MODEL_NAME" \
             --max-new-tokens $MAX_NEW_TOKENS \
