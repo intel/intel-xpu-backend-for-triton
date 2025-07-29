@@ -268,7 +268,7 @@ jobs:
           PYTORCH_VERSION=$PYTORCH_VERSION
           TRITON_REPO=$GITHUB_REPOSITORY
           TRITON_COMMIT_ID=$GITHUB_SHA
-          OS=linux
+          OS=${{ runner.os }}
           EOF
           ./scripts/capture-hw-details.sh | tee -a "$reports_file"
 

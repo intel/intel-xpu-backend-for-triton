@@ -73,32 +73,38 @@ jobs:
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           python -c 'import torch;print(torch.__version__)'
 
-      - name: Report environment details
+      - name: Identify GPU
         run: |
-          .venv\Scripts\activate.ps1
-          cd ${{ env.NEW_WORKSPACE }}
+          # Initializing oneAPI to enable sycl-ls, which is used in capture-hw-details.sh on Windows.
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          bash -c './scripts/capture-hw-details.sh | tee -a $GITHUB_ENV'
 
-          New-Item -ItemType Directory -Force -Path reports
-    
-          $timestamp = Get-Date -Format "yyyyMMddHHmmss"
-          @"
-          TIMESTAMP=$timestamp
-          GITHUB_RUN_ID=$env:GITHUB_RUN_ID
-          GITHUB_RUN_NUMBER=$env:GITHUB_RUN_NUMBER
-          GITHUB_RUN_ATTEMPT=$env:GITHUB_RUN_ATTEMPT
-          PYTHON_VERSION=3.10
-          PYTORCH_REPO=$env:PYTORCH_REPO
-          PYTORCH_COMMIT_ID=$env:PYTORCH_COMMIT_ID
-          PYTORCH_VERSION=$env:PYTORCH_VERSION
-          TRITON_REPO=$env:GITHUB_REPOSITORY
-          TRITON_COMMIT_ID=$env:GITHUB_SHA
-          OS=win
-          "@ | Tee-Object -FilePath reports\.env
+      - name: Report environment details
+        shell: bash
+        run: |
+          cd /c/gh${{ github.run_id }}
+          mkdir -p reports
 
+          cat <<EOF | tee /c/gh${{ github.run_id }}/reports/.env
+          TIMESTAMP=$(date '+%Y%m%d%H%M%S')
+          JOB_NAME=${{ join(inputs.*, '-') }}
+          GITHUB_RUN_ID=$GITHUB_RUN_ID
+          GITHUB_RUN_NUMBER=$GITHUB_RUN_NUMBER
+          GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT
+          PYTHON_VERSION=$PYTHON_VERSION
+          PYTORCH_REPO=pytorch/pytorch
+          PYTORCH_COMMIT_ID=$(<.github/pins/pytorch.txt)"
+          PYTORCH_VERSION=$PYTORCH_VERSION
+          BENCHMARK_REPO=$BENCHMARK_REPO
+          BENCHMARK_COMMIT_ID=$BENCHMARK_COMMIT_ID
+          TRITON_REPO=$GITHUB_REPOSITORY
+          TRITON_COMMIT_ID=$GITHUB_SHA
+          LIBIGC1_VERSION=$LIBIGC1_VERSION
+          LEVEL_ZERO_VERSION=$LEVEL_ZERO_VERSION
+          GPU_DEVICE=$GPU_DEVICE
+          AGAMA_VERSION=$AGAMA_VERSION
+          OS=${{ runner.os }}
           EOF
-
-          bash -c "./scripts/capture-hw-details.sh" | Tee-Object -FilePath reports\.env -Append
-
 
       - name: Clean up Triton cache
         shell: bash
