@@ -146,6 +146,7 @@ jobs:
       - name: Run Triton GEMM kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_benchmark.py') }}
         run: |
+          export IGC_ShaderDumpEnable=1 IGC_DumpToCustomDir=$REPORTS/mm_dumps
           export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
           cd benchmarks/triton_kernels_benchmark
           python gemm_benchmark.py --reports $REPORTS --n_runs $N_RUNS
