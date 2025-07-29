@@ -11,6 +11,10 @@ on:
         description: Tag for benchmark results
         type: string
         default: "test"
+      benchmarks:
+        description: JSON list of benchmarks to run. Leave empty to run all benchmarks.
+        type: string
+        default: ""
       use_pyenv_python:
         description: Use Python built with pyenv
         type: boolean
@@ -82,29 +86,28 @@ jobs:
           mkdir reports
           echo "REPORTS=$PWD/reports" >> $GITHUB_ENV
 
-      # - name: Run Liger-Kernel benchmarks
-      #   if: ${{ steps.install.outcome == 'success' && !cancelled() }}
-      #   run: |
-      #     source ./scripts/capture-hw-details.sh
+      - name: Run Liger-Kernel benchmarks
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'liger-kernel')) }}
+        run: |
+          source ./scripts/capture-hw-details.sh
 
-      #     cd benchmarks/third_party/liger_kernels
+          cd benchmarks/third_party/liger_kernels
 
-      #     git clone https://github.com/linkedin/Liger-Kernel
-      #     pip install -e Liger-Kernel
+          git clone https://github.com/linkedin/Liger-Kernel
+          pip install -e Liger-Kernel
 
-      #     # To remember return code, but still copy results
-      #     RET_CODE=0
-      #     bash ./run_benchmarks.sh || RET_CODE=$?
+          # To remember return code, but still copy results
+          RET_CODE=0
+          bash ./run_benchmarks.sh || RET_CODE=$?
 
-      #     cp Liger-Kernel/benchmark/data/all_benchmark_data.csv $REPORTS/liger-raw.csv
-      #     python transform.py $REPORTS/liger-raw.csv $REPORTS/liger-report.csv --tag $TAG
+          cp Liger-Kernel/benchmark/data/all_benchmark_data.csv $REPORTS/liger-raw.csv
+          python transform.py $REPORTS/liger-raw.csv $REPORTS/liger-report.csv --tag $TAG
 
-      #     # Return the captured return code at the end
-      #     exit "$RET_CODE"
+          # Return the captured return code at the end
+          exit "$RET_CODE"
 
       - name: Run Llama 3.1 performance benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
-        # if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'run_llm_inductor_greedy.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'run_llm_inductor_greedy.py') }}
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'llama-3-1')) }}
         run: |
           export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
 
