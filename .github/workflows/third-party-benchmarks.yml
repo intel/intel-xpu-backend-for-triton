@@ -107,7 +107,7 @@ jobs:
           # Return the captured return code at the end
           exit "$RET_CODE"
 
-      - name: Run Llama 3.1 performance benchmark
+      - name: Run e2e Llama 3.1 flex attention performance benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'llama3-1')) }}
         run: |
           source ./scripts/capture-hw-details.sh
@@ -116,14 +116,14 @@ jobs:
 
           cd transformers
 
-          git checkout $(<../benchmarks/third_party/flex_attention-pr-check/transformers-commit.txt)
-          git apply ../benchmarks/third_party/flex_attention-pr-check/transformers-patch-for-timing.diff
+          git checkout $(<../benchmarks/third_party/e2e-flex_attention/transformers-commit.txt)
+          git apply ../benchmarks/third_party/e2e-flex_attention/transformers-patch-for-timing.diff
 
           git submodule sync
           git submodule update --init --recursive
           python setup.py develop
 
-          cd ../benchmarks/third_party/flex_attention-pr-check
+          cd ../benchmarks/third_party/e2e-flex_attention
 
           MODEL_NAME="meta-llama/Llama-3.1-8B"
           MAX_NEW_TOKENS=128

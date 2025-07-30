@@ -59,13 +59,10 @@ def parse_llm_log(log_file_path, tag, model, max_new_tokens, batch_size):
     run_uuid = uuid.uuid4().hex
     current_datetime = datetime.now().isoformat()
 
-    model_name = model.split('/')[-1] if '/' in model else model
-    benchmark_name = f'{model_name.lower()}-flex-attention'
-
     # Create one row for each metric
     for metric_name, metric_value in metrics.items():
         row = {
-            'benchmark': benchmark_name,
+            'benchmark': 'e2e-flex-attention',
             'run_uuid': run_uuid,
             'datetime': current_datetime,
             'compiler': 'triton',
