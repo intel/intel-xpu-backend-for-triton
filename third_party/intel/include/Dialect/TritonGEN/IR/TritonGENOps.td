@@ -409,6 +409,26 @@ def TritonGEN_PredicatedLoadOp
   }];
 }
 
+def TritonGEN_PredicatedStoreOp
+: TritonGEN_Op<"predicated_store"> {
+  let summary = "Predicated store operation";
+  let description = [{
+    The `triton_gen.predicated_store` operation stores a value to memory
+    conditionally based on the predicate. If the predicate is true, the value
+    is stored to the specified pointer; otherwise, no operation is performed.
+  }];
+  let arguments = (ins
+      Arg<LLVM_AnyPointer, "", [MemWrite]>:$ptr,
+      AnyType:$value,
+      I64: $alignment,
+      I1:$predicate);
+  let results = (outs);
+  let assemblyFormat = [{
+    $ptr `,` $value `,` $alignment `,` $predicate attr-dict `:` qualified(type($ptr)) `,`
+    type($value) `,` type($alignment) `,` type($predicate)
+  }];
+}
+
 def TritonGEN_FToTf32Op
     : TritonGEN_Op<"f_to_tf32", [SameOperandsAndResultType]> {
   let summary = "Rounding instruction from float to tensor float (TF32) data format";

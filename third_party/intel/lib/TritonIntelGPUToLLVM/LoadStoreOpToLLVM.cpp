@@ -3750,19 +3750,17 @@ struct StoreOpConversion
         vecWord = b.insert_element(vecTy, vecWord, llWord, b.i32_val(index));
       }
 
-      auto createStore = [&]() -> ArrayRef<Value> {
-        Value addrElem =
-            b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
-        uint32_t alignment = nWords * width / 8;
-        b.store(vecWord, addrElem, alignment);
-        return ArrayRef<Value>();
-      };
-
+      Value addrElem = b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
+      uint32_t alignment = nWords * width / 8;
       if (maskVal) {
         // Create a predicated store operation.
-        LLVM::intel::createPredicatedBlock(rewriter, loc, maskVal, createStore);
+        unsigned numElems = valArgTy.getIntOrFloatBitWidth() * nWords /
+                            valueElemTy.getIntOrFloatBitWidth();
+        vecWord = b.bitcast(vecWord, vec_ty(valueElemTy, numElems));
+        rewriter.create<TritonGEN::PredicatedStoreOp>(
+            loc, addrElem, vecWord, b.i64_val(alignment), maskVal);
       } else {
-        auto _ = createStore();
+        b.store(vecWord, addrElem, alignment);
       }
 
     } // for
