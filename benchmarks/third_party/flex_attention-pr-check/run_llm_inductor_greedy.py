@@ -70,7 +70,6 @@ elif args.dtype == "fp16":
 else:
     assert False, "This script only support bf16 and fp32 as dtype"
 
-# attn_type = "paged_attention" #"flex_attention"#
 attn_type = "flex_attention"
 tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
 model = AutoModelForCausalLM.from_pretrained(args.model_name_or_path, torch_dtype=load_dtype,
@@ -79,12 +78,6 @@ if attn_type == "paged_attention":
     model.generation_config.cache_implementation = "paged"
     model.config.page_size = args.page_size
 
-# from torch._inductor import config as inductor_config
-# if args.profile:
-#     inductor_config.profiler_mark_wrapper_call = True
-#     inductor_config.cpp.enable_kernel_profile = True
-# inductor_config.cpp_wrapper = True
-# inductor_config.max_autotune = True
 if args.compile:
     with torch.no_grad(), torch.autocast(enabled=amp_enabled, device_type=args.device, dtype=load_dtype):
         print("compile Enabled")
@@ -119,8 +112,7 @@ print(f"---- Prompt size: {input_size}")
 
 # warmup
 with torch.no_grad(), torch.autocast(enabled=amp_enabled, device_type=args.device, dtype=load_dtype):
-    for i in range(args.num_warmup):
-        # input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(args.device)
+    for _ in range(args.num_warmup):
         model.generate(input_ids, attention_mask=attention_mask, max_new_tokens=args.max_new_tokens, **generate_kwargs)
 
 if args.profile:
@@ -131,10 +123,6 @@ if args.profile:
                                 record_shapes=True) as prof:
         with torch.no_grad(), torch.autocast(enabled=amp_enabled, device_type=args.device, dtype=load_dtype):
             for i in range(7):
-                # input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(args.device)
-
-                # from torchinfo import summary
-                # summary(model, input_data=input_ids, depth=10)
 
                 model.generate(input_ids, attention_mask=attention_mask, max_new_tokens=args.max_new_tokens,
                                **generate_kwargs)
@@ -145,10 +133,9 @@ total_time = 0.0
 total_list = []
 gen_text = None
 with torch.no_grad(), torch.autocast(enabled=amp_enabled, device_type=args.device, dtype=load_dtype):
-    for i in range(num_iter):
+    for _ in range(num_iter):
         torch.xpu.synchronize()
         tic = time.time()
-        # input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(args.device)
         output = model.generate(input_ids, attention_mask=attention_mask, max_new_tokens=args.max_new_tokens,
                                 **generate_kwargs)
         gen_ids = output[0]
