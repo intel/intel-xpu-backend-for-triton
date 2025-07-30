@@ -2596,10 +2596,6 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
 
       Value ret;
       // Create a predicated load operation.
-      //; CHECK: %load = call <64 x i32>
-      //@llvm.genx.GenISA.PredicatedLoad.v64i32.p1v64i32.v64i32(<64 x i32>
-      // addrspace(1)* %src, i64 4, i1 [[NOT]], <64 x i32> %data)
-
       Value addrElem = b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
       uint32_t alignment = nWords * width / 8;
       if (pred) {
@@ -3057,19 +3053,14 @@ struct StoreOpConversion
         vecWord = b.insert_element(vecTy, vecWord, llWord, b.i32_val(index));
       }
 
-      auto createStore = [&]() -> ArrayRef<Value> {
-        Value addrElem =
-            b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
-        uint32_t alignment = nWords * width / 8;
-        b.store(vecWord, addrElem, alignment);
-        return ArrayRef<Value>();
-      };
-
+      Value addrElem = b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
+      uint32_t alignment = nWords * width / 8;
       if (maskVal) {
         // Create a predicated store operation.
-        LLVM::intel::createPredicatedBlock(rewriter, loc, maskVal, createStore);
+        rewriter.create<TritonGEN::PredicatedStoreOp>(
+            loc, addrElem, vecWord, b.i64_val(alignment), maskVal);
       } else {
-        auto _ = createStore();
+        b.store(vecWord, addrElem, alignment);
       }
 
     } // for
