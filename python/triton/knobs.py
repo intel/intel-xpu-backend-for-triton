@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import importlib
 import os
 import re
@@ -171,6 +172,7 @@ class NvidiaTool:
     version: str
 
     @staticmethod
+    @functools.lru_cache
     def from_path(path: str) -> Optional[NvidiaTool]:
         try:
             result = subprocess.check_output([path, "--version"], stderr=subprocess.STDOUT)
