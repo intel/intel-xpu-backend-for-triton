@@ -512,7 +512,7 @@ def test_compile_link_matmul(generate_native_code):
     with tempfile.TemporaryDirectory() as tmp_dir:
         dtype = "fp16"
         BM, BN, BK = 16, 16, 16
-        threads_per_warp = 16
+        threads_per_warp = 16 if is_xpu() else 32
 
         kernel_path = write_triton_kernels(tmp_dir, kernel_src, kernel_utils_src)
         compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, threads_per_warp, generate_native_code,
@@ -602,7 +602,7 @@ def test_compile_link_autotune_matmul():
             [64, 64, 32],
         ]
 
-        threads_per_warp = 16
+        threads_per_warp = 16 if is_xpu() else 32
 
         for ts in tile_sizes:
             BM, BN, BK = ts[0], ts[1], ts[2]
