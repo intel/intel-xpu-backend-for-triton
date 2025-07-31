@@ -302,10 +302,10 @@ bool ttgi::preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
   LLVM_DEBUG({
     DBGS() << "Loads to pipeline:\n";
     unsigned prefetchBytes = 0;
-    for (const LoadDotOperand &load : loads) {
-      const tt::LoadOp &op = load.load;
+    for (LoadDotOperand &load : loads) {
+      tt::LoadOp &op = load.load;
       if (auto tensorType =
-              dyn_cast<RankedTensorType>(op->getResultTypes()[0])) {
+              dyn_cast<RankedTensorType>(op.getResult().getType())) {
         ArrayRef<int64_t> shape = tensorType.getShape();
         auto numElems = product<int64_t>(shape);
         prefetchBytes +=
