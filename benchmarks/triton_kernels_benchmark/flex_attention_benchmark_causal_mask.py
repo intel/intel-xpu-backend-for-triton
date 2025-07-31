@@ -179,8 +179,8 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 
-    qk_flops = H_q * N_CTX_q * N_CTX_kv * D_HEAD_qk * 2 // 2  # mul + add, causal=True. Only the lower triangle is computed.
-    pv_flops = H_q * N_CTX_q * D_HEAD_v * N_CTX_kv * 2 // 2  # mul + add, causal=True. Only the lower triangle is computed.
+    qk_flops = H_q * N_CTX_q * N_CTX_kv * D_HEAD_qk  # mul + add, causal=True. Only the lower triangle is computed.
+    pv_flops = H_q * N_CTX_q * D_HEAD_v * N_CTX_kv  # mul + add, causal=True. Only the lower triangle is computed.
     tflops = lambda mean: Z * (qk_flops + pv_flops) * (1e-12) / (mean * 1e-3)
 
     q_elems = H_q * N_CTX_q * D_HEAD_qk
