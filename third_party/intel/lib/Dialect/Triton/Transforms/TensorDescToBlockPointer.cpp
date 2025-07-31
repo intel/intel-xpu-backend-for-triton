@@ -234,7 +234,7 @@ private:
     assert(op && "Expecting a valid operation");
 
     // At this point we expect to have transformed `make_tensor_descriptor` into
-    // into a `make_block_ptr` operation, except when the tensor descriptor is
+    // a `make_block_ptr` operation, except when the tensor descriptor is
     // allocated on the host and passed to the kernel as an argument.
     Value operand = op.getOperand(0);
     if (isa<tt::TensorDescType>(operand.getType()))
