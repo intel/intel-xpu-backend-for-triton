@@ -408,7 +408,7 @@ def compile_aot_kernel_no_specialization(dir, kernel_path, dtype, BM, BN, BK, ge
         out_name=name,
         out_path=name,
         num_warps=1,
-        threads_per_warp=16,
+        threads_per_warp=32,
         grid=grid,
         generate_native_code=generate_native_code,
         kernel_path=kernel_path,

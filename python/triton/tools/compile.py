@@ -86,6 +86,7 @@ def main():
 
 
 def compile_kernel(args: CompileArgs):
+    print("Compiling kernel with args:", args)
     out_name = args.out_name if args.out_name else args.kernel_name
     out_path = args.out_path if args.out_path else Path(out_name)
 
@@ -153,6 +154,8 @@ def compile_kernel(args: CompileArgs):
         }
     options = backend.parse_options(kwargs)
     ccinfo = triton.compile(src, target=target, options=options.__dict__)
+    print("ccinfo.metadata ", ccinfo.metadata)
+    args.threads_per_warp = ccinfo.metadata.threads_per_warp
 
     if getattr(ccinfo.metadata, "global_scratch_size", 0) > 0:
         raise RuntimeError("AOT compiling kernels with global scratch requirements is not yet implemented")
