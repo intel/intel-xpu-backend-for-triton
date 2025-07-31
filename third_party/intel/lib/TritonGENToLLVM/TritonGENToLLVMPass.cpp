@@ -923,13 +923,16 @@ struct TritonFToTf32OpLowering
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
     Value value = op->getOperand(0);
-    SmallVector<Type> argTypes{f32_ty};
+    Type valueType = value.getType();
+
+    SmallVector<Type> argTypes{valueType};
     SmallVector<Value> args{value};
 
-    const StringLiteral funcName = "_Z25__spirv_RoundFToTF32INTELf";
-    auto retType = f32_ty;
+    std::string fnName = "__spirv_RoundFToTF32INTEL";
+    fnName = intel::mangle(fnName, argTypes);
+    auto retType = valueType;
     auto callOp = intel::createDeviceFunctionCall(
-        rewriter, funcName, retType, {argTypes}, {args}, {},
+        rewriter, fnName, retType, {argTypes}, {args}, {},
         intel::noUnwindWillReturnAttrs);
     rewriter.replaceOp(op, callOp);
     return success();
