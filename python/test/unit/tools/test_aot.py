@@ -365,8 +365,8 @@ def write_triton_kernels(dir, src, util_src):
     return kernel_path
 
 
-def _compile_kernel(dir, signature, kernel_name, out_name, out_path, num_warps, grid, generate_native_code,
-                    kernel_path):
+def _compile_kernel(dir, signature, kernel_name, out_name, out_path, num_warps, threads_per_warp, grid,
+                    generate_native_code, kernel_path):
     compiler_path = os.path.join(triton.tools.__path__[0], "compile.py")
 
     subprocess.run(
@@ -383,6 +383,8 @@ def _compile_kernel(dir, signature, kernel_name, out_name, out_path, num_warps, 
             out_path,
             "-w",
             str(num_warps),
+            "-tpw",
+            str(threads_per_warp),
             "-g",
             grid,
             *(["-gnc"] if generate_native_code else []),
@@ -406,13 +408,14 @@ def compile_aot_kernel_no_specialization(dir, kernel_path, dtype, BM, BN, BK, ge
         out_name=name,
         out_path=name,
         num_warps=1,
+        threads_per_warp=16,
         grid=grid,
         generate_native_code=generate_native_code,
         kernel_path=kernel_path,
     )
 
 
-def compile_aot_kernels(dir, kernel_path, dtype, BM, BN, BK, generate_native_code, ha_hb_hints):
+def compile_aot_kernels(dir, kernel_path, dtype, BM, BN, BK, threads_per_warp, generate_native_code, ha_hb_hints):
     # compile all desired configs
     for ha, hb in ha_hb_hints:
         sig = f"*fp32:16, *{dtype}:16, *{dtype}:16, i32, i32, i32, i32{ha}, i32:1, i32{hb}, i32:1, i32:16, i32:1, {BM}, {BN}, {BK}"
@@ -425,6 +428,7 @@ def compile_aot_kernels(dir, kernel_path, dtype, BM, BN, BK, generate_native_cod
             out_name=name,
             out_path=name,
             num_warps=1,
+            threads_per_warp=threads_per_warp,
             grid=grid,
             generate_native_code=generate_native_code,
             kernel_path=kernel_path,
@@ -508,9 +512,11 @@ def test_compile_link_matmul(generate_native_code):
     with tempfile.TemporaryDirectory() as tmp_dir:
         dtype = "fp16"
         BM, BN, BK = 16, 16, 16
+        threads_per_warp = 16
 
         kernel_path = write_triton_kernels(tmp_dir, kernel_src, kernel_utils_src)
-        compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, generate_native_code, ha_hb_hints=[(":16", ":16")])
+        compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, threads_per_warp, generate_native_code,
+                            ha_hb_hints=[(":16", ":16")])
         if is_hip():
             check_hasco_binary_str(tmp_dir, dtype)
             return
@@ -543,9 +549,11 @@ def test_launcher_has_no_available_kernel(generate_native_code):
     with tempfile.TemporaryDirectory() as tmp_dir:
         dtype = "fp16"
         BM, BN, BK = 16, 16, 16
+        threads_per_warp = 32
 
         kernel_path = write_triton_kernels(tmp_dir, kernel_src, kernel_utils_src)
-        compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, generate_native_code, ha_hb_hints=[(":1", ":1")])
+        compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, threads_per_warp, generate_native_code,
+                            ha_hb_hints=[(":1", ":1")])
         if is_hip():
             check_hasco_binary_str(tmp_dir, dtype)
             return
@@ -594,9 +602,11 @@ def test_compile_link_autotune_matmul():
             [64, 64, 32],
         ]
 
+        threads_per_warp = 16
+
         for ts in tile_sizes:
             BM, BN, BK = ts[0], ts[1], ts[2]
-            compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, generate_native_code,
+            compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, threads_per_warp, generate_native_code,
                                 ha_hb_hints=[(":16", ":16"), (":16", ""), ("", ":16")])
 
         link_aot_kernels(tmp_dir)
