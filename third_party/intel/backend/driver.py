@@ -1,5 +1,6 @@
 import importlib.metadata
 import os
+import re
 import hashlib
 import shutil
 import ctypes
@@ -13,6 +14,7 @@ from triton.runtime.build import _build, platform_key, _load_module_from_path
 from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import DriverBase
+from triton.tools.tensor_descriptor import TensorDescriptor
 
 # A hard-coded cache version that can be updated when we know that the cached file is invalid and
 # there are no other ways to detect that the runtime environment has changed. For example, a shared
@@ -370,10 +372,40 @@ _BASE_ARGS_FORMAT = "iiiOOOOOO"
 
 def make_launcher(constants, signature):
 
-    def _serialize_signature(sig):
+    def _expand_signature(signature):
+        output = []
+        # Expand tensor descriptor arguments into base pointer, shape, and
+        # strides
+        for sig in signature:
+            if isinstance(sig, str) and sig.startswith("tensordesc"):
+                match = re.match("tensordesc<([^[>]*)\\[([^]]*)\\]", sig)
+                dtype = match.group(1)
+                shape = match.group(2)
+                ndim = shape.count(",") + 1
+
+                output.append("*" + dtype)
+                # Currently the host side tensor descriptors get passed in as a
+                # tensor desc, shape, and strides. We have no way to use these
+                # shape and strides when processing tensor descriptors which is
+                # why we provide our own decomposition above. Sadly this means
+                # we have to pass the shape and strides twice.
+                for _ in range(2 * ndim):
+                    output.append("i64")
+                for _ in range(ndim):
+                    output.append("i32")
+                for _ in range(ndim):
+                    output.append("i64")
+            else:
+                output.append(sig)
+
+        return output
+
+    def _flatten_signature(sig, output):
         if isinstance(sig, tuple):
-            return ','.join(map(_serialize_signature, sig))
-        return sig
+            for x in sig:
+                _flatten_signature(x, output)
+        else:
+            output.append(sig)
 
     def _extracted_type(ty):
         if isinstance(ty, tuple):
@@ -408,11 +440,20 @@ def make_launcher(constants, signature):
             "uint64_t": "K",
         }[ty_to_cpp(ty)]
 
+
+#    print("Before expansion - signature: ", signature)
+
+    expand_signature = _expand_signature(signature.values())
+    signature = {i: s for i, s in enumerate(expand_signature)}
+    #    print("After expansion - signature: ", signature)
+
     args_format = ''.join([format_of(ty) for ty in signature.values()])
     format = _BASE_ARGS_FORMAT + args_format
-    signature = ','.join(map(_serialize_signature, signature.values()))
-    signature = list(filter(bool, signature.split(',')))
-    signature = {i: s for i, s in enumerate(signature)}
+
+    flat_signature = []
+    for sig in signature.values():
+        _flatten_signature(sig, flat_signature)
+    signature = {i: s for i, s in enumerate(flat_signature)}
     args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
     # Record the end of regular arguments;
     # subsequent arguments are architecture-specific descriptors.
@@ -632,9 +673,10 @@ extern "C" EXPORT_FUNC PyObject* launch(PyObject* args) {{
   PyObject* py_kernel;
 
   {newline.join([f"{_extracted_type(ty)} _arg{i};" for i, ty in signature.items()])}
-  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &py_obj_stream, &py_kernel,
-                                      &kernel_metadata, &launch_metadata,
-                                      &launch_enter_hook, &launch_exit_hook {args_list})) {{
+  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ,
+                                           &py_obj_stream, &py_kernel,
+                                           &kernel_metadata, &launch_metadata,
+                                           &launch_enter_hook, &launch_exit_hook{args_list})) {{
     return NULL;
   }}
 
@@ -700,7 +742,38 @@ extern "C" EXPORT_FUNC PyObject* launch(PyObject* args) {{
   Py_RETURN_NONE;
 }}
 """
+    #    print("src:\n", src)
     return src
+
+
+def wrap_handle_tensor_descriptor(launcher):
+    """
+    Replace all tensor descriptors with the base ptr, shape, and strides
+    """
+
+    def inner(*args):
+        #print("args: ", args)
+        meta_args = args[:len(_BASE_ARGS_FORMAT)]
+        #print("meta_args: ", meta_args)
+        raw_kernel_args = args[len(_BASE_ARGS_FORMAT):]
+        #print("raw_kernel_args: ", raw_kernel_args)
+        final_args = []
+        for arg in raw_kernel_args:
+            if isinstance(arg, TensorDescriptor):
+                # Currently the host side tensor descriptors get decomposed in
+                # the frontend to tensor desc, shape, and strides. We have no
+                # way to use these shape and strides when processing tensor
+                # descriptors which is why we provide our own decomposition
+                # above. Sadly this means we have to pass the shape and strides
+                # twice.
+                final_args.extend([arg.base, *arg.shape, *arg.strides, *arg.shape, *arg.strides])
+            else:
+                final_args.append(arg)
+
+        #print("final_args: ", final_args)
+        return launcher(*meta_args, *final_args)
+
+    return inner
 
 
 def serialize_args(args, constants, signature):
@@ -767,17 +840,23 @@ class XPULauncher(object):
     def __init__(self, src, metadata):
         constants = src.constants if hasattr(src, "constants") else dict()
         arg_idx = lambda x: (src.fn.arg_names.index(x), ) if isinstance(x, str) else x
-        self.constants = {arg_idx(idx): value for idx, value in constants.items()}
-        self.signature = {idx: value for idx, value in src.signature.items()}
-        src = make_launcher(self.constants, self.signature)
+        constants = {arg_idx(idx): value for idx, value in constants.items()}
+        signature = {idx: value for idx, value in src.signature.items()}
+        src = make_launcher(constants, signature)
         self.mod = compile_module_from_src(src=src, name="__triton_launcher")
+        has_tensor_desc_arg = any(isinstance(sig, str) and sig.startswith("tensordesc") for sig in signature.values())
+
+        self.launch = wrap_handle_tensor_descriptor(self.mod.launch) if has_tensor_desc_arg else self.mod.launch
+
         # Serialize KernelArguments for SPIR-V Runner
         self.serialize_kernel_args = knobs.intel.dump_spirv_kernel_args
+        self.constants = constants
+        self.signature = signature
 
-    def __call__(self, *args, **kwargs):
+    def __call__(self, *args):
         if self.serialize_kernel_args:
             serialize_args(args, self.constants, self.signature)
-        self.mod.launch(args)
+        self.launch(args)
 
 
 class XPUDriver(DriverBase):
