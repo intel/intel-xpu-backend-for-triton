@@ -13,6 +13,7 @@ import signal
 import os
 import subprocess
 from pathlib import Path
+from .track import track
 
 
 @dataclass
@@ -207,6 +208,7 @@ class XPUBackend(BaseBackend):
         return split_barriers_scope
 
     @staticmethod
+    @track
     def make_ttir(mod, metadata, opt):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
@@ -226,6 +228,7 @@ class XPUBackend(BaseBackend):
         return mod
 
     @staticmethod
+    @track
     def make_ttgir(mod, metadata, opt, properties):
         cluster_info = intel.ClusterInfo()
         if opt.cluster_dims is not None:
@@ -303,6 +306,7 @@ class XPUBackend(BaseBackend):
         return mod
 
     @staticmethod
+    @track
     def make_llir(src, metadata, options):
         mod = src
         # TritonGPU -> LLVM-IR (MLIR)
@@ -340,7 +344,9 @@ class XPUBackend(BaseBackend):
             paths = [path for (name, path) in options.extern_libs]
             llvm.link_extern_libs(llvm_mod, paths)
 
-        intel.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
+        with track("optimize_module") as tr:
+            intel.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, tr.callback("passes"))
+
         intel.post_process_llir(llvm_mod)
 
         # Get some metadata
@@ -357,6 +363,7 @@ class XPUBackend(BaseBackend):
         return ret
 
     @staticmethod
+    @track
     def make_spv(src, metadata, options, device_arch):
         spirv, name = intel.translate_to_spirv(src)
         metadata["name"] = name
@@ -384,7 +391,7 @@ class XPUBackend(BaseBackend):
         metadata["generate_native_code"] = options.generate_native_code
 
         if options.generate_native_code:
-            with tempfile.TemporaryDirectory() as temp_dir:
+            with track("generate_native_code"), tempfile.TemporaryDirectory() as temp_dir:
                 with tempfile.NamedTemporaryFile(mode='wb', suffix='.spv', dir=temp_dir, delete=False) as fsrc:
                     fsrc.write(spirv)
                 fbin = fsrc.name + '.o'
