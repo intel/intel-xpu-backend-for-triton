@@ -137,6 +137,8 @@ batch_sizes = [16, 32, 64] if throughput_test else [1]
         args={},
     ))
 def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provider):
+    print(f'Benchmarking FlexAttention with Z={Z}, H_q={H_q}, H_kv={H_kv}, N_CTX_q={N_CTX_q}, '
+          f'N_CTX_kv={N_CTX_kv}, D_HEAD_qk={D_HEAD_qk}, D_HEAD_v={D_HEAD_v}, MODE={MODE}, provider={provider}')
     assert MODE in ['fwd']
     dtype = torch.float16
     q = torch.randn((Z, H_q, N_CTX_q, D_HEAD_qk), device=DEVICE, dtype=dtype, requires_grad=MODE == 'bwd')
