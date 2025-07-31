@@ -307,6 +307,7 @@ jobs:
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flex_attention_benchmark_causal_mask.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flex_attention_benchmark_causal_mask.py') }}
         run: |
           export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
+          export IGC_ShaderDumpEnable=1 IGC_DumpToCustomDir=$REPORTS/mm_dumps
           cd benchmarks/triton_kernels_benchmark
           python flex_attention_benchmark_causal_mask.py --reports $REPORTS --n_runs $N_RUNS
 
