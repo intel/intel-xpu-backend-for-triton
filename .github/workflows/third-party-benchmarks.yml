@@ -11,6 +11,10 @@ on:
         description: Tag for benchmark results
         type: string
         default: "test"
+      benchmarks:
+        description: JSON list of benchmarks to run. Leave empty to run all benchmarks.
+        type: string
+        default: ""
       use_pyenv_python:
         description: Use Python built with pyenv
         type: boolean
@@ -24,6 +28,7 @@ permissions: read-all
 env:
   PYTHON_VERSION: "3.10"
   TAG: ${{ inputs.tag || (github.event_name == 'pull_request' && format('pr-{0}', github.event.number)) || (github.event_name == 'schedule' && 'ci') || 'test' }}
+  HF_TOKEN: ${{ secrets.HF_TOKEN || '' }}
 
 jobs:
   build:
@@ -83,7 +88,7 @@ jobs:
           echo "REPORTS=$PWD/reports" >> $GITHUB_ENV
 
       - name: Run Liger-Kernel benchmarks
-        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'liger-kernel')) }}
         run: |
           source ./scripts/capture-hw-details.sh
 
@@ -101,6 +106,40 @@ jobs:
 
           # Return the captured return code at the end
           exit "$RET_CODE"
+
+      - name: Run e2e Llama 3.1 flex attention performance benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'llama3-1')) }}
+        run: |
+          source ./scripts/capture-hw-details.sh
+
+          git clone https://github.com/huggingface/transformers.git
+
+          cd transformers
+
+          git checkout $(<../benchmarks/third_party/e2e-flex_attention/transformers-commit.txt)
+          git apply ../benchmarks/third_party/e2e-flex_attention/transformers-patch-for-timing.diff
+
+          git submodule sync
+          git submodule update --init --recursive
+          python setup.py develop
+
+          cd ../benchmarks/third_party/e2e-flex_attention
+
+          MODEL_NAME="meta-llama/Llama-3.1-8B"
+          MAX_NEW_TOKENS=128
+          INPUT_TOKENS=1024
+          BATCH_SIZE=1
+
+          python run_llm_inductor_greedy.py -m $MODEL_NAME --max-new-tokens $MAX_NEW_TOKENS --input-tokens $INPUT_TOKENS --num-warmup 2 --num-iter 7 --compile --profile | tee llm.compile.xpu.profile.log
+
+          echo "LLM profiling log is stored into $PWD/llm.compile.xpu.profile.log"
+
+          cp llm.compile.xpu.profile.log $REPORTS/llm.compile.xpu.profile.log
+          python transform_results.py $REPORTS/llm.compile.xpu.profile.log $REPORTS/llm-triton-report.csv \
+            --tag $TAG \
+            --model "$MODEL_NAME" \
+            --max-new-tokens $MAX_NEW_TOKENS \
+            --batch-size $BATCH_SIZE
 
       - name: Upload benchmark reports
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
