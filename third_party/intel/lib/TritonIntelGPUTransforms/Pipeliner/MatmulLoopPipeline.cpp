@@ -304,11 +304,10 @@ bool ttgi::preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
     unsigned prefetchBytes = 0;
     for (const LoadDotOperand &load : loads) {
       const tt::LoadOp &op = load.load;
-      RankedTensorType tensorType =
-          dyn_cast<RankedTensorType>(op->getResultTypes()[0]);
-      if (tensorType) {
+      if (auto tensorType =
+              dyn_cast<RankedTensorType>(op->getResultTypes()[0])) {
         ArrayRef<int64_t> shape = tensorType.getShape();
-        int64_t numElems = product<int64_t>(shape);
+        auto numElems = product<int64_t>(shape);
         prefetchBytes +=
             numElems * tensorType.getElementType().getIntOrFloatBitWidth() / 8;
       }
@@ -316,7 +315,7 @@ bool ttgi::preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
     }
     prefetchBytes *= numStages;
     constexpr unsigned BYTES_PER_KB = 1024;
-    DBGS() << "Total number bytes to prefetch: "
+    DBGS() << "Total number of bytes to prefetch: "
            << (prefetchBytes > BYTES_PER_KB
                    ? std::to_string(prefetchBytes / BYTES_PER_KB) + " KB"
                    : std::to_string(prefetchBytes) + " B")
