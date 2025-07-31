@@ -319,7 +319,7 @@ bool ttgi::preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
            << (prefetchBytes > BYTES_PER_KB
                    ? std::to_string(prefetchBytes / BYTES_PER_KB) + " KB"
                    : std::to_string(prefetchBytes) + " B")
-           << " in stages:" << numStages << "\n";
+           << " in " << numStages << " stages\n";
   });
 
   // 2. Create the prefetching operations for the loads collected.
