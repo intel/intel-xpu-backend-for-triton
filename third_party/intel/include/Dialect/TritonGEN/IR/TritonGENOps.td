@@ -394,8 +394,8 @@ def TritonGEN_FToTf32Op
     a 32-bit floating point type to TF32 with rounding to the nearest even.
   }];
 
-  let arguments = (ins AnyType:$val);
-  let results = (outs AnyType:$res);
+  let arguments = (ins LLVM_ScalarOrVectorOf<F32>:$val);
+  let results = (outs LLVM_ScalarOrVectorOf<F32>:$res);
   let assemblyFormat = [{
     $val attr-dict `:` type($val)
   }];
