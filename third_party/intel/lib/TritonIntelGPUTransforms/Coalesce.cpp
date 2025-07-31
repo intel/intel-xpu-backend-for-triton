@@ -15,6 +15,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
+#include <chrono>
 #include <optional>
 
 #define DEBUG_TYPE "tritonintelgpu-coalesce"
@@ -39,7 +40,8 @@ private:
                        Operation *op, int numWarps, int threadsPerWarp,
                        llvm::MapVector<Operation *, Attribute> &layoutMap) {
     Value ptr = getMemAccessPtr(op);
-
+    // auto start = std::chrono::high_resolution_clock::now();
+    // llvm::outs() << "HERE ";
     LLVM_DEBUG({
       llvm::dbgs() << "[" DEBUG_TYPE "]: Considering op: " << *op << "\n";
       llvm::dbgs().indent(2) << "axis info of pointer: ";
@@ -61,13 +63,14 @@ private:
     // The desired divisibility is the maximum divisibility among all dependent
     // pointers which have the same shape and order as `ptr`.
     llvm::SmallSetVector<Operation *, 32> memAccessesSameOrder;
-    memAccessesSameOrder.insert(op);
+    // memAccessesSameOrder.insert(op);
     if (ptr.getDefiningOp()) {
-      for (Operation *use : mlir::multiRootGetSlice(op)) {
+      for (Operation *use :
+           mlir::multiRootGetSlice(op, nullptr, nullptr, false)) {
         Value val = getMemAccessPtr(use);
-        if (!val || !matchesShape(val) || memAccessesSameOrder.contains(use))
+        if (!val || memAccessesSameOrder.contains(use) || !matchesShape(val))
           continue;
-        auto currOrder = getOrderFromContiguity(
+        const auto &currOrder = getOrderFromContiguity(
             axisInfoAnalysis.getAxisInfo(val)->getContiguity());
         if (order == currOrder) {
           LLVM_DEBUG(llvm::dbgs().indent(2)
@@ -77,7 +80,10 @@ private:
         }
       }
     }
-
+    // auto end12 = std::chrono::high_resolution_clock::now();
+    // llvm::outs() << "\tTime12: " <<
+    // (std::chrono::duration_cast<std::chrono::milliseconds>(end12 -
+    // start)).count() << " millisecs\n";
     auto shapePerCTA = ttg::getShapePerCTA(refTensorType);
     int numElems = product<int64_t>(shapePerCTA);
     int numThreads = numWarps * threadsPerWarp;
@@ -90,8 +96,8 @@ private:
     });
 
     for (Operation *opSameOrder : memAccessesSameOrder) {
-      if (opSameOrder == op)
-        continue;
+      // if (opSameOrder == op)
+      //   continue;
       unsigned currPerThread =
           ttgi::getNumElementsPerThread(opSameOrder, order, axisInfoAnalysis);
       LLVM_DEBUG(llvm::dbgs().indent(2)
@@ -119,6 +125,10 @@ private:
     layoutMap[op] = ttg::BlockedEncodingAttr::get(
         &getContext(), refTensorType.getShape(), sizePerThread, order, numWarps,
         threadsPerWarp, CTALayout);
+    // auto end11 = std::chrono::high_resolution_clock::now();
+    // llvm::outs() << "Time11: " <<
+    // (std::chrono::duration_cast<std::chrono::milliseconds>(end11 -
+    // start)).count() << " millisecs\n";
   }
 
   static RankedTensorType getNewType(RankedTensorType tensorType,
@@ -439,12 +449,17 @@ private:
 public:
   void runOnOperation() override {
     // Run axis info analysis
+    auto start = std::chrono::high_resolution_clock::now();
     ModuleOp moduleOp = getOperation();
     tt::intel::ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
-
+    auto end10 = std::chrono::high_resolution_clock::now();
+    llvm::outs() << "Time10: "
+                 << ((std::chrono::duration<double>)(end10 - start)).count()
+                 << " secs\n";
     // For each i/o operation, we determine what layout
     // the pointers should have for best memory coalescing
     llvm::MapVector<Operation *, Attribute> layoutMap;
+    int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(moduleOp);
     moduleOp.walk([&](Operation *curr) {
       Value ptr = getMemAccessPtr(curr);
       if (!ptr)
@@ -455,11 +470,14 @@ public:
         return;
 
       int numWarps = ttg::lookupNumWarps(curr);
-      int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(moduleOp);
       setCoalescedEncoding(axisInfoAnalysis, curr, numWarps, threadsPerWarp,
                            layoutMap);
     });
 
+    auto end1 = std::chrono::high_resolution_clock::now();
+    llvm::outs() << "Time1: "
+                 << ((std::chrono::duration<double>)(end1 - start)).count()
+                 << " secs\n";
     LLVM_DEBUG({
       llvm::dbgs() << "[" DEBUG_TYPE "]: " << "layoutMap:\n";
       if (layoutMap.empty())
@@ -479,10 +497,12 @@ public:
     //    produces a tensor with layout L2
     // 4. Convert the output of this new memory op back to L1
     // 5. Replace all the uses of the original memory op by the new one
-    for (auto [op, layout] : layoutMap) {
-      coalesceOp(layout, op);
-    }
-
+    for (auto &kv : layoutMap)
+      coalesceOp(kv.second, kv.first);
+    auto end2 = std::chrono::high_resolution_clock::now();
+    llvm::outs() << "Time2: "
+                 << ((std::chrono::duration<double>)(end2 - start)).count()
+                 << " secs\n";
     assert(succeeded(verify(moduleOp)) && "Module verification failed");
   }
 };

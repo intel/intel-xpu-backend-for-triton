@@ -781,6 +781,7 @@ class XPULauncher(object):
     def __call__(self, *args, **kwargs):
         if self.serialize_kernel_args:
             serialize_args(args, self.constants, self.signature)
+        print(f"cache dir: {args[5].cache_dir}")
         self.mod.launch(args)
 
 

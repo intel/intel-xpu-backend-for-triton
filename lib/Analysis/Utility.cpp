@@ -7,6 +7,7 @@
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/Matchers.h"
+#include "mlir/IR/Threading.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Conversion/MLIRTypes.h"
@@ -17,6 +18,7 @@
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
+#include "llvm/Support/Threading.h"
 
 namespace mlir {
 
@@ -964,30 +966,47 @@ multiRootTopologicalSort(const SetVector<Operation *> &toSort) {
 
 SetVector<Operation *> multiRootGetSlice(Operation *op,
                                          TransitiveFilter backwardFilter,
-                                         TransitiveFilter forwardFilter) {
+                                         TransitiveFilter forwardFilter,
+                                         bool sort) {
   SetVector<Operation *> slice;
   slice.insert(op);
 
   unsigned currentIndex = 0;
   SetVector<Operation *> backwardSlice;
   SetVector<Operation *> forwardSlice;
+  BackwardSliceOptions opt;
+  opt.omitBlockArguments = true;
+  opt.filter = backwardFilter;
+  llvm::SmallVector<SetVector<Operation *>, 2> results(2);
   while (currentIndex != slice.size()) {
     auto *currentOp = (slice)[currentIndex];
     // Compute and insert the backwardSlice starting from currentOp.
-    backwardSlice.clear();
-    BackwardSliceOptions opt;
-    opt.omitBlockArguments = true;
-    opt.filter = backwardFilter;
-    (void)getBackwardSlice(currentOp, &backwardSlice, opt);
-    slice.insert(backwardSlice.begin(), backwardSlice.end());
+    // backwardSlice.clear();
+    // forwardSlice.clear();
+    results[0].clear();
+    results[1].clear();
+    mlir::parallelFor(op->getContext(), 0, 2, [&](int i) {
+      if (i == 0) {
+        (void)getBackwardSlice(currentOp, &results[0], opt);
+      } else {
+        getForwardSlice(currentOp, &results[1], forwardFilter);
+      }
+    });
+
+    //(void)getBackwardSlice(currentOp, &backwardSlice, opt);
+    slice.insert(results[0].begin(), results[0].end());
 
     // Compute and insert the forwardSlice starting from currentOp.
-    forwardSlice.clear();
-    getForwardSlice(currentOp, &forwardSlice, forwardFilter);
-    slice.insert(forwardSlice.begin(), forwardSlice.end());
+    // forwardSlice.clear();
+    // getForwardSlice(currentOp, &forwardSlice, forwardFilter);
+    slice.insert(results[1].begin(), results[1].end());
     ++currentIndex;
   }
-  return multiRootTopologicalSort(slice);
+  // llvm::outs() << "size: " << slice.size() << "\n";
+  if (sort)
+    return multiRootTopologicalSort(slice);
+  else
+    return slice;
 }
 
 namespace {

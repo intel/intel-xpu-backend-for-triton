@@ -297,12 +297,15 @@ def triton_key():
     # backend
     libtriton_hash = hashlib.sha256()
     ext = sysconfig.get_config_var("EXT_SUFFIX").split(".")[-1]
+    from time import time
+    start = time()
     with open(os.path.join(TRITON_PATH, "_C", f"libtriton.{ext}"), "rb") as f:
         while True:
             chunk = f.read(1024**2)
             if not chunk:
                 break
             libtriton_hash.update(chunk)
+    print(f"iter time: {time()-start}")
     contents.append(libtriton_hash.hexdigest())
     # language
     language_path = os.path.join(TRITON_PATH, 'language')

@@ -6,6 +6,7 @@
 #include "mlir/Dialect/Index/IR/IndexDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
+#include <chrono>
 
 #include "intel/include/Analysis/AxisInfo.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
@@ -148,7 +149,7 @@ struct ConvertTritonGPUToLLVM
 
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();
-
+    auto start = std::chrono::high_resolution_clock::now();
     mod.walk([&](LLVM::LLVMFuncOp funcOp) {
       for (unsigned i = 0; i < funcOp.getNumArguments(); ++i) {
         funcOp.removeArgAttr(i, "tt.divisibility");
@@ -156,6 +157,12 @@ struct ConvertTritonGPUToLLVM
         funcOp.removeArgAttr(i, "tt.contiguity");
       }
     });
+    // Засекаем конец
+    auto end = std::chrono::high_resolution_clock::now();
+    // Разница во времени
+    llvm::outs() << "New Time: "
+                 << ((std::chrono::duration<double>)(end - start)).count()
+                 << " secs\n";
   }
 
 private:
