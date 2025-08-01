@@ -64,7 +64,7 @@ void TargetInfo::storeMatrixShared(RewriterBase &rewriter, Location loc,
 
 Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
                               std::optional<Value> ctaId, Type elemTy,
-                              Value pred) const {
+                              Value pred, Operation *localLoadOp) const {
   assert(cast<mlir::LLVM::LLVMPointerType>(ptr.getType()).getAddressSpace() ==
              3 &&
          "Invalid addr space for loadShared");
