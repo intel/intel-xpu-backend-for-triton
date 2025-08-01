@@ -126,6 +126,12 @@ public:
     unsigned repeatCount =
         std::min(dpasCap.repeatCount, (unsigned)retShape[rank - 2] /*M*/);
     unsigned threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
+    unsigned numElemsPerRowForA =
+        opsPerChan == 1
+            ? dpasCap.systolicDepth
+            : dpasCap.systolicDepth * 2; // A is packed to i16 or i32.
+    unsigned minM = mlir::ceil<unsigned>(threadsPerWarp, numElemsPerRowForA);
+    repeatCount = std::max(repeatCount, minM);
     auto dpasEnc = ttgi::DpasEncodingAttr::get(
         oldRetType.getContext(), repeatCount, dpasCap.systolicDepth,
         dpasCap.executionSize, opsPerChan, warpsPerTile, repCluster,
