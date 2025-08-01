@@ -3047,10 +3047,14 @@ struct StoreOpConversion
       }
 
       auto vecTy = vec_ty(valArgTy, nWords);
-      Value vecWord = b.undef(vecTy);
-      for (int index = 0; index < asmArgs.size(); ++index) {
-        auto llWord = asmArgs[index].first;
-        vecWord = b.insert_element(vecTy, vecWord, llWord, b.i32_val(index));
+      Value vecWord = asmArgs[0].first;
+      if (asmArgs.size() != 1) {
+        // Otherwise, we need to compose the vector from multiple words.
+        vecWord = b.undef(vecTy);
+        for (int index = 0; index < asmArgs.size(); ++index) {
+          auto llWord = asmArgs[index].first;
+          vecWord = b.insert_element(vecTy, vecWord, llWord, b.i32_val(index));
+        }
       }
 
       Value addrElem = b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
