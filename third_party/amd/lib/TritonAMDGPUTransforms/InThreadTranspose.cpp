@@ -68,12 +68,12 @@ void refineGlobalLoadLayout(PatternRewriter &rewriter, Attribute encoding,
     }
   }
 
+  auto loadType = load.getType();
   // Construct new load with the new encoding
   auto attrs = load->getAttrs();
-  auto newLoad = tt::LoadOp::create(rewriter, loc, newArgs, attrs);
+  auto newLoad = tt::LoadOp::create(loc, loadType, newArgs, attrs);
 
   // Cast the results back to the original layout
-  auto loadType = load.getType();
   Value newResult = newLoad.getResult();
   rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(load, loadType, newResult);
 }
