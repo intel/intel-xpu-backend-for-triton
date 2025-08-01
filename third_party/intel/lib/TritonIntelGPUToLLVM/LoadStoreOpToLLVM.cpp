@@ -13,6 +13,7 @@
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+#include "intel/include/Utils/Utility.h"
 #include "triton/Tools/LinearLayout.h"
 #include <optional>
 #include <triton/Tools/Sys/GetEnv.hpp>
@@ -1540,6 +1541,21 @@ struct LoadOpToBlockIOConversion
       pitch = b.trunc(i32_ty, colStride);
       std::swap(baseWidth, baseHeight);
     }
+    // HW requires the pitch to be at least 64 bytes.
+    std::function<Value(Value)> skipTrunc = [&](Value v) {
+      if (dyn_cast_or_null<LLVM::TruncOp>(v.getDefiningOp()))
+        return skipTrunc(v.getDefiningOp()->getOperand(0));
+      return v;
+    };
+    if (Operation *op = skipTrunc(pitch).getDefiningOp()) {
+      std::optional<int64_t> pitchConst =
+          mlir::triton::intel::getFoldedConstantValue(op);
+      if (pitchConst.has_value()) {
+        if ((*pitchConst * elemSizeInBits / 8) < 64)
+          return failure();
+      }
+    }
+
     baseWidth = b.trunc(i32_ty, baseWidth);
     baseHeight = b.trunc(i32_ty, baseHeight);
 
