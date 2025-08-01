@@ -440,12 +440,8 @@ def make_launcher(constants, signature):
             "uint64_t": "K",
         }[ty_to_cpp(ty)]
 
-
-#    print("Before expansion - signature: ", signature)
-
     expand_signature = _expand_signature(signature.values())
     signature = {i: s for i, s in enumerate(expand_signature)}
-    #    print("After expansion - signature: ", signature)
 
     args_format = ''.join([format_of(ty) for ty in signature.values()])
     format = _BASE_ARGS_FORMAT + args_format
@@ -742,7 +738,6 @@ extern "C" EXPORT_FUNC PyObject* launch(PyObject* args) {{
   Py_RETURN_NONE;
 }}
 """
-    #    print("src:\n", src)
     return src
 
 
@@ -751,12 +746,9 @@ def wrap_handle_tensor_descriptor(launcher):
     Replace all tensor descriptors with the base ptr, shape, and strides
     """
 
-    def inner(*args):
-        #print("args: ", args)
+    def inner(args):
         meta_args = args[:len(_BASE_ARGS_FORMAT)]
-        #print("meta_args: ", meta_args)
         raw_kernel_args = args[len(_BASE_ARGS_FORMAT):]
-        #print("raw_kernel_args: ", raw_kernel_args)
         final_args = []
         for arg in raw_kernel_args:
             if isinstance(arg, TensorDescriptor):
@@ -770,8 +762,7 @@ def wrap_handle_tensor_descriptor(launcher):
             else:
                 final_args.append(arg)
 
-        #print("final_args: ", final_args)
-        return launcher(*meta_args, *final_args)
+        return launcher(meta_args + tuple(final_args))
 
     return inner
 
