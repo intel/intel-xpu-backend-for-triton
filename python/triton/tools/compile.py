@@ -205,12 +205,16 @@ def compile_kernel(args: CompileArgs):
         "_placeholder": "",
     }
     if is_xpu():
+        if args.generate_native_code:
+            format_name = "native"
+        else:
+            format_name = "spirv"
         params |= {
             "arg_types": ", ".join(ty_to_cpp(arg) for arg in arg_types_not_1),
             "grf_mode": args.grf_mode,
             "build_flags": ccinfo.metadata.build_flags,
             "threads_per_warp": args.threads_per_warp,
-            "is_spv": "false" if args.generate_native_code else "true",
+            "format_name": format_name,
         }
     output_files = []
     backend_name = target.backend
