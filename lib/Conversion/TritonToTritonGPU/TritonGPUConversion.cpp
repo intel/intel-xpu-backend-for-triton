@@ -40,15 +40,16 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
   // Add encoding for tensor pointer
   addConversion([this](triton::PointerType ptrType) -> triton::PointerType {
     // Check whether tensor pointer `tt.ptr<tensor<>>`
-    auto pointeeTensorType =
-        dyn_cast<RankedTensorType>(ptrType.getPointeeType());
-    if (pointeeTensorType == nullptr)
-      return ptrType;
-
-    // Add layout into the tensor
-    auto convertedTensorType = convertType(pointeeTensorType);
-    return triton::PointerType::get(convertedTensorType,
-                                    ptrType.getAddressSpace());
+    return ptrType;
+    // auto pointeeTensorType =
+    //     dyn_cast<RankedTensorType>(ptrType.getPointeeType());
+    // if (pointeeTensorType == nullptr)
+    //   return ptrType;
+    //
+    // // Add layout into the tensor
+    // auto convertedTensorType = convertType(pointeeTensorType);
+    // return triton::PointerType::get(convertedTensorType,
+    //                                 ptrType.getAddressSpace());
   });
 
   // If the origValue still has live user(s), use this to
