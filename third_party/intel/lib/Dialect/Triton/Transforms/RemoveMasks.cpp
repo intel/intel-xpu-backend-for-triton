@@ -432,8 +432,6 @@ public:
     for (Value res : forOp.getResults()) {
       if (!res.getUsers().empty())
         res.replaceAllUsesWith(ifOp->getResult(idx++));
-      else
-        idx++;
     }
 
     forOp.erase();
