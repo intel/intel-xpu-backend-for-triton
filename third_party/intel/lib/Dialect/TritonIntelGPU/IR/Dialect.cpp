@@ -291,7 +291,7 @@ LogicalResult DpasEncodingAttr::verify(
     ::llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
     unsigned repeatCount, unsigned systolicDepth, unsigned executionSize,
     unsigned opsPerChan, ::llvm::ArrayRef<unsigned> warpsPerCTA,
-    ::llvm::ArrayRef<unsigned> repCluster, unsigned sugGroupSize) {
+    ::llvm::ArrayRef<unsigned> repCluster, unsigned subGroupSize) {
   if (repeatCount > 8 || repeatCount < 1) {
     return emitError() << "repeatCount must be in the range [1, 8], but was:"
                        << repeatCount;
@@ -309,6 +309,12 @@ LogicalResult DpasEncodingAttr::verify(
   if (!(repCluster.size() == 2 || repCluster.size() == 3)) {
     return emitError() << "expected rank 2 or 3 of repCluster, but the rank is:"
                        << repCluster.size();
+  }
+
+  if (subGroupSize < executionSize) {
+    return emitError() << "threadsPerWarp could not be smaller than the "
+                          "execution size. got subGroupSize:"
+                       << subGroupSize << ", executionSize:" << executionSize;
   }
 
   return success();

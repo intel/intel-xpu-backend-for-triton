@@ -746,6 +746,24 @@ LogicalResult DotOperandEncodingAttr::verify(
           return emitError() << "ttg.dot_op kWidth parameter must match the "
                                 "parent's opsPerChannel";
       }
+
+      unsigned repeatCount = parentAttr.getRepeatCount();
+      unsigned systolicDepth = parentAttr.getSystolicDepth();
+      unsigned threadsPerWarp = parentAttr.getThreadsPerWarp();
+      // OpsPerChannel: 4 is for i8 type. 2 is for f16/bf16 type. 1 is for
+      // float32 type. 2 i8 elements are packed into i16. The number of packed
+      // elements per row for A operand is: 8, 16, 16.
+      unsigned numPackedElemPerRowForA =
+          opsPerChannel == 1 ? systolicDepth : systolicDepth * 2;
+      if (repeatCount * numPackedElemPerRowForA < threadsPerWarp)
+        return emitError()
+               << "The DPAS encoding implies an invalid layout for A "
+                  "operand. The non-uniform matrix A could not be "
+                  "referred in kernel with threadsPerWarp: "
+               << threadsPerWarp
+               << ". numPackedElemPerRowForA:" << numPackedElemPerRowForA
+               << ". RC:" << repeatCount << ", systolicDepth:" << systolicDepth
+               << ", opsPerChan:" << opsPerChannel;
     } else {
       // operand B
       if (kWidth != parentAttr.getOpsPerChannel())
