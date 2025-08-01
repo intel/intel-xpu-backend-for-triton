@@ -6419,13 +6419,14 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device, t
                 # expect compute scratch buffer to not error on xpu
                 raise
             pytest.skip("Can't compute scratch buffer size")
-        lds_size = get_hip_lds_size()
+        lds_size = triton.runtime.driver.active.utils.get_device_properties(
+            triton.runtime.driver.active.get_current_device())["max_shared_mem"] if is_xpu() else get_hip_lds_size()
         # consider int32 dtype in scratch buffer size,
         # because it is the largest dtype used in convert_layout in this test
         int32_size = 4
         # skip even if scratch buffer equal to lds_size, because real scratch buffer is typically larger due to padding
         if scratch_shape[0] * scratch_shape[1] * int32_size >= lds_size:
-            pytest.skip("Scratch buffer is too large")
+            pytest.xfail("Scratch buffer is too large")
     if is_cuda() and isinstance(interm_layout, PaddedSharedLayout):
         pytest.skip("PaddedSharedLayout is not supported on CUDA")
 
