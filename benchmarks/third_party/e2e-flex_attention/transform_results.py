@@ -62,12 +62,13 @@ def parse_llm_log(log_file_path, tag, model, max_new_tokens, batch_size):
     # Create one row for each metric
     for metric_name, metric_value in metrics.items():
         row = {
-            'benchmark': 'e2e-flex-attention',
             'run_uuid': run_uuid,
-            'datetime': current_datetime,
+            'ts': current_datetime,
+            'benchmark_group': 'e2e-flex-attention',
+            'benchmark': 'e2e-flex-attention',
             'compiler': 'triton',
-            'metric_name': metric_name,
-            'metric_value': metric_value,
+            'value_name': metric_name + '_s',
+            'value': metric_value,
             'params': params_json,
             'tag': tag,
         }
