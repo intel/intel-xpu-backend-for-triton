@@ -160,6 +160,12 @@ static Operation *predicateOp(RewriterBase &rewriter, Operation *op,
 
   return TypeSwitch<Operation *, Operation *>(op)
       .Case<tt::LoadOp, ttgi::PrefetchOp>([&](auto op) {
+        Value ptr = op.getPtr();
+        if (mlir::triton::isTensorPointerType(ptr.getType())) {
+          // Work around: prefech op with scalar bool is reverted.
+          // Block pointer has been protected by boundary.
+          return op;
+        }
         rewriter.setInsertionPoint(op);
         Value mask = tt::getPredMask(rewriter, op.getPtr().getType(),
                                      op.getMask(), pred);
