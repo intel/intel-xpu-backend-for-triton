@@ -77,7 +77,8 @@ void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
       padding.has_value()
           ? PaddingOptionAttr::get(builder.getContext(), padding.value())
           : PaddingOptionAttr();
-  LoadOp::build(builder, state, ptr, mask, other,
+  Type resultTy = getPointeeType(ptr.getType());
+  LoadOp::build(builder, state, resultTy, ptr, mask, other,
                 builder.getDenseI32ArrayAttr(boundaryCheck), paddingAttr, cache,
                 evict, isVolatile);
 }
@@ -126,6 +127,34 @@ void LoadOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                          MLIRContext *context) {
   results.add<CanonicalizeMaskedLoadPattern>(context);
 }
+
+#if 0
+LogicalResult
+LoadOp::inferReturnTypes(MLIRContext *context,
+  ::std::optional<Location> location,
+  ValueRange operands,
+  DictionaryAttr attributes,
+  OpaqueProperties properties,
+  RegionRange regions,
+  ::llvm::SmallVectorImpl<Type>&inferredReturnTypes) {
+  // type is the same as the pointer
+  llvm::outs() << "johnlu the inffer return types:" << inferredReturnTypes.size() << "\n";
+  llvm::outs() << "johnlu the operands:" << operands.size() << "\n";
+  // for (const auto& opa : operands) {
+  //   llvm::outs() << "  johnlu ops:" << opa << "\n";
+  // }
+  // if (auto ptrType = dyn_cast<PointerType>(operands[0].getType())) {
+  //   if (auto tensorTy = dyn_cast<RankedTensorType>(ptrType.getPointeeType())) {
+  //     // Block pointer
+  //     return failure();
+  //   }
+  // }
+  auto pointeeType = getPointeeType(operands[0].getType());
+  inferredReturnTypes.push_back(pointeeType);
+
+  return success();
+}
+#endif
 
 //-- StoreOp --
 void StoreOp::build(OpBuilder &builder, OperationState &state, Value ptr,
@@ -535,7 +564,7 @@ llvm::SmallVector<Type> ReduceOp::getElementTypes() {
   return getElementTypesImpl(this->getOperands());
 }
 
-::mlir::Operation *ReduceOp::getSingleCombiner() {
+Operation *ReduceOp::getSingleCombiner() {
   if (getNumOperands() != 1 || getNumResults() != 1)
     return nullptr;
   Block *block = &(*getCombineOp().begin());

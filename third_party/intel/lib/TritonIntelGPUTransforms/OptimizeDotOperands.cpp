@@ -434,9 +434,10 @@ private:
     if (auto loadOp = dyn_cast<tt::LoadOp>(user)) {
       OpBuilder rewriter(loadOp);
       auto newLoadOp = rewriter.create<tt::LoadOp>(
-          loadOp.getLoc(), newVal, loadOp.getMask(), loadOp.getOther(),
-          loadOp.getBoundaryCheckAttr(), loadOp.getPaddingAttr(),
-          loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
+          loadOp.getLoc(), triton::getPointeeType(newVal.getType()), newVal,
+          loadOp.getMask(), loadOp.getOther(), loadOp.getBoundaryCheckAttr(),
+          loadOp.getPaddingAttr(), loadOp.getCache(), loadOp.getEvict(),
+          loadOp.getIsVolatile());
 
       StringRef blockIOAttrName =
           ttgi::TritonIntelGPUDialect::getBlockIOAttrName();

@@ -2494,9 +2494,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     Type valueElemTy =
         typeConverter->convertType(getElementTypeOrSelf(op.getType()));
     unsigned numElems = getTotalElemsPerThread(op.getType());
-    unsigned vec = getVectorSize(ptr);
-    if (llMask)
-      vec = std::min<size_t>(vec, getMaskAlignment(mask));
+    unsigned vec = 1;
 
     SmallVector<Value> ptrElems, maskElems, otherElems;
     bool otherIsSplatConstInt = false;
@@ -2512,6 +2510,10 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       Value other = op.getOther();
       Value llPtr = adaptor.getPtr();
       Value llOther = adaptor.getOther();
+
+      vec = getVectorSize(ptr);
+      if (llMask)
+        vec = std::min<size_t>(vec, getMaskAlignment(mask));
 
       // Get the LLVM values for pointers
       ptrElems = unpackLLElements(loc, llPtr, rewriter);
