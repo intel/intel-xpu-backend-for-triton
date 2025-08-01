@@ -228,8 +228,8 @@ def TT_LoadOp : TT_Op<"load", [
   SameLoadStoreOperandsAndResultEncoding,
   AttrSizedOperandSegments,
   DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
-  DeclareOpInterfaceMethods<InferTypeOpInterface>,
-  TypesMatchWith<"result matches ptr type", "ptr", "result", "getPointeeType($_self)">,
+//  DeclareOpInterfaceMethods<InferTypeOpInterface>,
+//  TypesMatchWith<"result matches ptr type", "ptr", "result", "getPointeeType($_self)">,
   TypesMatchWith<"mask type matches ptr type", "ptr", "mask", "getI1SameShape(getPointeeType($_self))",
                  "($_op.getOperands().size() <= 1) || std::equal_to<>()">,
   TypesMatchWith<"other matches ptr type", "ptr", "other", "getPointeeType($_self)",
@@ -292,7 +292,7 @@ def TT_LoadOp : TT_Op<"load", [
         `cacheModifier` `=` $cache |
         `evictionPolicy` `=` $evict
       )
-      attr-dict `:` type($ptr)
+      attr-dict `:` type($ptr) `->` type($result)
     }];
 
     let hasCanonicalizer = 1;
