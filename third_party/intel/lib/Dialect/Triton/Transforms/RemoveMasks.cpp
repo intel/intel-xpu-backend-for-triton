@@ -497,13 +497,9 @@ public:
     }
 
     // Replace the uses of the original loop results.
-    unsigned idx = 0;
-    for (Value res : forOp.getResults()) {
-      if (!res.getUsers().empty())
-        res.replaceAllUsesWith(ifOp->getResult(idx++));
-      else
-        idx++;
-    }
+    for (const auto &[i, v] : llvm::enumerate(forOp.getResults()))
+      if (!v.getUsers().empty())
+        v.replaceAllUsesWith(ifOp->getResult(i));
 
     forOp.erase();
     return true;
