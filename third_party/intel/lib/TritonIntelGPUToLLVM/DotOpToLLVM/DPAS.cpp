@@ -351,19 +351,17 @@ private:
           for (int repOuter = 0; repOuter < repClusterOuter; ++repOuter) {
             for (int repInner = 0; repInner < repClusterInner; ++repInner) {
               Value matVal = rewriter.create<LLVM::UndefOp>(loc, dotOpTy);
-              for (int k = 0; k < numElemsPerOperand; ++k) {
-                matVal = tb.insert_element(dotOpTy, matVal, elems[offset++],
-                                           tb.i32_val(k));
-              }
-              if (isFToTF32Enabled) {
-                auto t32Val = rewriter.create<TritonGEN::FToTf32Op>(loc, matVal)
-                                  .getResult();
-                vals[{b, i * repClusterOuter + repOuter,
-                      j * repClusterInner + repInner}] = t32Val;
-              } else {
-                vals[{b, i * repClusterOuter + repOuter,
-                      j * repClusterInner + repInner}] = matVal;
-              }
+              if (numElemsPerOperand != 1)
+                for (int k = 0; k < numElemsPerOperand; ++k)
+                  matVal = tb.insert_element(dotOpTy, matVal, elems[offset++],
+                                             tb.i32_val(k));
+              else
+                matVal = elems[offset++];
+              if (isFToTF32Enabled)
+                matVal = rewriter.create<TritonGEN::FToTf32Op>(loc, matVal)
+                             .getResult();
+              vals[{b, i * repClusterOuter + repOuter,
+                    j * repClusterInner + repInner}] = matVal;
             }
           }
         }
