@@ -1507,8 +1507,6 @@ def test_tensor_descriptor_reduce(kind, descriptor, dtype_str, num_ctas, M_BLOCK
             pytest.skip("Broken on rocm")
         if is_xpu():
             if (kind, dtype_str) in [("add", "bfloat16")]:
-                if descriptor == "host":
-                    pytest.skip("FIXME: issue #4289")
                 pytest.skip("FIXME: issue #3914")
 
     @triton.jit(debug=True)
@@ -1593,8 +1591,6 @@ def test_tensor_descriptor_reduce(kind, descriptor, dtype_str, num_ctas, M_BLOCK
 def test_host_tensor_descriptor_load(dtype_str, num_ctas, M_BLOCK, N_BLOCK, device):
     if num_ctas == 2 and (not is_cuda() or torch.cuda.get_device_capability(0)[0] not in (9, 10)):
         pytest.xfail("CTAs is unsupported for these cards")
-    if is_xpu():
-        pytest.skip("FIXME: issue #4289")
 
     @triton.jit(debug=True)
     def kernel(out_ptr, desc, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
@@ -1658,8 +1654,6 @@ def test_host_tensor_descriptor_matmul(num_stages, num_ctas, BLOCK_M, BLOCK_N, B
 
     if is_hip() and (BLOCK_M, BLOCK_N, BLOCK_K, num_stages) == (256, 128, 32, 4):
         pytest.skip("Insufficient shared memory on HIP devices")
-    if is_xpu():
-        pytest.skip("FIXME: issue #4289")
 
     if is_interpreter():
         M, N, K = BLOCK_M, BLOCK_N, BLOCK_K
