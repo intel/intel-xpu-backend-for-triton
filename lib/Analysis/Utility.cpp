@@ -719,24 +719,6 @@ bool supportMMA(Value value, int version) {
          (elemTy.isInteger(8) && version >= 2);
 }
 
-// For MMAV3 dotOperand layout matches mma operand for f16 and bf16 cases.
-bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
-                                   RankedTensorType dstTy) {
-  auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(srcTy.getEncoding());
-  auto dotOperandLayout = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
-  if (!mmaLayout || !dotOperandLayout) {
-    return false;
-  }
-  int elementTypeSize = srcTy.getElementType().getIntOrFloatBitWidth();
-  auto parentTy = srcTy.cloneWithEncoding(dotOperandLayout.getParent());
-  auto ans = mmaLayout.getVersionMajor() == 3 &&
-             dotOperandLayout.getOpIdx() == 0 &&
-             mmaLayout.getWarpsPerCTA()[1] == 1 &&
-             !cvtNeedsSharedMemory(parentTy, srcTy) && elementTypeSize == 8 &&
-             dotOperandLayout.getKWidth() == 32 / elementTypeSize;
-  return ans;
-}
-
 bool matchMFMAAndDotOperandShuffleCase(RankedTensorType srcTy,
                                        RankedTensorType dstTy) {
   auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(srcTy.getEncoding());
@@ -817,7 +799,6 @@ bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
   return !cvtReordersRegisters(srcTy, dstTy) &&
          !cvtNeedsWarpShuffle(srcTy, dstTy) &&
          !triton::gpu::intel::isDpasToDotShortcut(srcTy, dstTy) &&
-         !matchMmaV3AndDotOperandLayout(srcTy, dstTy) &&
          // to be removed when generalized warp shuffle conversions
          // are ready:
          !matchMFMAAndDotOperandShuffleCase(srcTy, dstTy);

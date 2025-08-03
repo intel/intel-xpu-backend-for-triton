@@ -705,7 +705,7 @@ bool emitTransferBetweenRegistersAndShared(
                                           {kBlock, blockId}},
                                          regIds);
 
-  // Compute affine offset given by memdesc_subview
+  // Compute affine offset given by memdesc_subslice
   auto offset = smemObj.getShmemOffset(loc, rewriter, sharedTy);
   SmallVector<Value> vecAddrVec;
   for (auto &indices : indicesVec) {
@@ -751,8 +751,8 @@ SmallVector<Value> loadSharedToDistributed(triton::gpu::LocalLoadOp localLoadOp,
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value> ret;
   bool success = emitTransferBetweenRegistersAndShared(
-      dstTy, srcTy, elemLlvmTy, /*maxVecElems=*/256, smemObj, loc, rewriter,
-      target, [&](VectorType vecTy, Value vecAddr) {
+      dstTy, srcTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemObj, loc,
+      rewriter, target, [&](VectorType vecTy, Value vecAddr) {
         auto vecVal = b.load(vecTy, vecAddr);
         target.localLoadOpAnnotation(localLoadOp, vecVal);
         vecVal.setAlignment(vecTy.getNumElements() *
@@ -1205,7 +1205,7 @@ Value SharedMemoryObject::getShmemOffset(Location loc, RewriterBase &rewriter,
   auto ctx = srcTy.getContext();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-  // If it did not have a memdesc_subview, we don't need to compute the offset
+  // If it did not have a memdesc_subslice we don't need to compute the offset
   // as it is zero
   if (!isAffineSharedMemoryAccess(srcTy)) {
     return b.i32_val(0);
@@ -1862,6 +1862,65 @@ Value transferWithinBlockPadding(triton::gpu::ConvertLayoutOp op, Value src,
   Value result =
       packLLElements(loc, typeConverter, outVals, rewriter, op.getType());
   return result;
+}
+
+SmallVector<Value> inlineRegionImpl(RewriterBase &rewriter, Region &region,
+                                    ArrayRef<Value> args,
+                                    mlir::TypeID terminatorTypeId,
+                                    Location loc) {
+  // Inline regions with multiple blocks
+  //
+  //        Before                                   After
+  //                                              ┌─────────┐
+  //                                              │ op1     │
+  //                    ┌──────────┐              │ cf.br   │
+  //                    │region[0] │              └────┬────┘
+  //                    │cf.cond_br├─┐            ┌────▼─────┐
+  //                    └────┬─────┘ │            │region[0] │
+  //                         │       │            │cf.cond_br├─┐
+  // ┌───────┐          ┌────▼────┐  │            └────┬─────┘ │
+  // │  op1  │  IP      │region[1]│  │            ┌────▼────┐  │
+  // │       │◄───      │yield ...│  │            │region[1]│  │
+  // │  op2  │          └─────────┘  │          ┌─┤cf.br    │  │
+  // └───────┘                       │          │ └─────────┘  │
+  //                    ┌─────────┐  │          │ ┌─────────┐  │
+  //                    │region[2]│◄─┘          │ │region[2]│◄─┘
+  //                    │yield    │             │ │cf.br    │
+  //                    └─────────┘             │ └────┬────┘
+  //                                            │ ┌────▼────┐
+  //                                            └►│op2      │
+  //                                              └─────────┘
+  auto *curBlock = rewriter.getInsertionBlock();
+  auto opPosition = rewriter.getInsertionPoint();
+  auto *remainingOpsBlock = rewriter.splitBlock(curBlock, opPosition);
+
+  IRMapping regionMap;
+  Region &parent = *curBlock->getParent();
+  rewriter.cloneRegionBefore(region, parent, parent.end(), regionMap);
+  rewriter.setInsertionPointToEnd(curBlock);
+  rewriter.create<LLVM::BrOp>(loc, args, regionMap.lookup(&region.front()));
+
+  ValueRange terminatorOperands;
+  for (Block &origBlock : region) {
+    Block *newBlock = regionMap.lookup(&origBlock);
+    rewriter.moveBlockBefore(newBlock, remainingOpsBlock);
+
+    auto terminator = newBlock->getTerminator();
+    if (terminator->getRegisteredInfo()->getTypeID() == terminatorTypeId) {
+      terminatorOperands = terminator->getOperands();
+      rewriter.setInsertionPointAfter(terminator);
+      rewriter.replaceOpWithNewOp<LLVM::BrOp>(terminator, terminatorOperands,
+                                              remainingOpsBlock);
+    }
+  }
+
+  rewriter.setInsertionPointToStart(remainingOpsBlock);
+  SmallVector<Value> vals;
+  for (auto resultTy : terminatorOperands.getType()) {
+    auto val = remainingOpsBlock->addArgument(resultTy, loc);
+    vals.push_back(val);
+  }
+  return vals;
 }
 
 } // namespace mlir
