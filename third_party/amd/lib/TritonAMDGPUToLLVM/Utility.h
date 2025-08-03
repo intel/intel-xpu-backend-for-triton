@@ -42,13 +42,9 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
 
 // Loads from shared or global memory with predication.
 // `otherElems` is used to mask out the elements that are not loaded
-// forceNoAliasAsyncLoads=true adds alias information to the llvm.load to
-// signal its not aliasing with any AsyncCopyGlobalToLocal/BufferLoadToLocal to
-// avoid conservative waits. See `addLocalLoadNoAliasScope` for more details
 Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
              Value pred, Value falseVal,
-             triton::CacheModifier cm = triton::CacheModifier::NONE,
-             bool forceNoAliasAsyncLoads = false);
+             triton::CacheModifier cm = triton::CacheModifier::NONE);
 
 // Stores to shared or global memory with predication.
 // forceNoAliasAsyncLoads=true adds alias information to the llvm.store to

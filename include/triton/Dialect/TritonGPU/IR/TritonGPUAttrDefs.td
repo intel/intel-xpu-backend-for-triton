@@ -370,7 +370,7 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
   let genVerifyDecl = 1;
 }
 
-def PaddedSharedEncodingAttr
+def PaddeddSharedEncodingAttr
     : TritonGPU_Attr<"PaddedSharedEncoding", "padded_shared_encoding",
                      [SharedEncodingTrait, LayoutEncodingTrait]> {
   let mnemonic = "padded_shared";
