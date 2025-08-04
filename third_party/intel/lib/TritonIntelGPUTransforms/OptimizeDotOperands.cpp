@@ -329,7 +329,7 @@ private:
     if (auto loadOp = dyn_cast<tt::LoadOp>(user)) {
       OpBuilder rewriter(loadOp);
       auto newLoadOp = tt::LoadOp::create(
-          rewriter, loadOp.getLoc(), triton::getPointeeType(newVal.getType()), newVal, loadOp.getMask(),
+          rewriter, loadOp.getLoc(), newVal, loadOp.getMask(),
           loadOp.getOther(), loadOp.getBoundaryCheckAttr(),
           loadOp.getPaddingAttr(), loadOp.getCache(), loadOp.getEvict(),
           loadOp.getIsVolatile());
