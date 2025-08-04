@@ -1,7 +1,7 @@
-diff --git a/torch/_inductor/kernel/flex_decoding.py b/torch/_inductor/kernel/flex_decoding.py
-index 628bfc6419b..e86aca59db6 100644
---- a/torch/_inductor/kernel/flex_decoding.py
-+++ b/torch/_inductor/kernel/flex_decoding.py
+diff --git a/torch/_inductor/kernel/flex/flex_decoding.py b/torch/_inductor/kernel/flex/flex_decoding.py
+index 83c6b59cec96..e89981286ed8 100644
+--- a/torch/_inductor/kernel/flex/flex_decoding.py
++++ b/torch/_inductor/kernel/flex/flex_decoding.py
 @@ -459,15 +459,12 @@ def create_flex_decoding_kernel(*args, **kwargs):
              # m
              # if V.graph.sizevars.evaluate_expr(sympy.Lt(query.get_size()[-2], 0))
@@ -14,7 +14,7 @@ index 628bfc6419b..e86aca59db6 100644
 -                    )
 -                    * gqa_shared_heads
 -                ),
--                float('-inf') if torch.xpu.is_available() else 16,
+-                1 if torch.xpu.is_available() else 16,
 +            next_power_of_2(
 +                V.graph.sizevars.size_hint(
 +                    seq_len_q,

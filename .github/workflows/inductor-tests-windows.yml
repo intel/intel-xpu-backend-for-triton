@@ -39,7 +39,6 @@ env:
   PYTHONIOENCODING: utf-8
   PYTHON_VERSION: "${{ inputs.python_version || '3.10' }}"
   NEW_WORKSPACE: C:\gh${{ github.run_id }}
-  TRITON_LESS_FLEX_ATTN_BWD_CONFIGS: 1
 
 jobs:
   build:
@@ -145,6 +144,7 @@ jobs:
           cd ${{ env.NEW_WORKSPACE }}
 
           $env:PYTORCH_TESTING_DEVICE_ONLY_FOR = "bmg"
+          $env:TRITON_LESS_FLEX_ATTN_BWD_CONFIGS = "1"
           bash scripts/test-pytorch.sh ${{ inputs.suite }}
 
       - name: Upload test logs

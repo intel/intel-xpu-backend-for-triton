@@ -140,6 +140,11 @@ static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
       op.getTileWidth() == 16 && op.getVBlocks() == 2 && !op.getVnniTransform())
     return false;
 
+  // intel_sub_group_2d_block_read_8b_16r8x4c
+  if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 16 &&
+      op.getTileWidth() == 8 && op.getVBlocks() == 4 && !op.getVnniTransform())
+    return false;
+
   // intel_sub_group_2d_block_read_8b_16r16x2c
   if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 16 &&
       op.getTileWidth() == 16 && op.getVBlocks() == 2 && !op.getVnniTransform())

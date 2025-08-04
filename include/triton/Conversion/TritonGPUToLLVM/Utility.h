@@ -356,12 +356,12 @@ public:
                                 RewriterBase &rewriter) const;
 
   // Returns a mask representing all the bits of the memdesc offsets that
-  // may be modified by an affine offset coming from a memdesc_subview.
+  // may be modified by an affine offset coming from a memdesc_subslice.
   // The offsets are considered to be in the type of the memdesc.
   // For padded layouts, we return the offsets without padding.
   static uint64_t getMaskSpanOffsets(triton::gpu::MemDescType srcTy);
 
-  // Returns whether the shared memory access had a memdesc_subview
+  // Returns whether the shared memory access had a memdesc_subslice
   // that is rank-preserving (soon to be called memdesc_slice)
   static bool isAffineSharedMemoryAccess(triton::gpu::MemDescType srcTy) {
     return getMaskSpanOffsets(srcTy) != 0;
@@ -644,6 +644,19 @@ Value transferWithinBlockPadding(triton::gpu::ConvertLayoutOp op, Value src,
                                  const TargetInfoBase &targetInfo,
                                  const LLVMTypeConverter *typeConverter,
                                  RewriterBase &rewriter);
+
+SmallVector<Value> inlineRegionImpl(RewriterBase &rewriter, Region &region,
+                                    ArrayRef<Value> args,
+                                    mlir::TypeID terminatorTypeId,
+                                    Location loc);
+
+template <typename TerminatorOp>
+SmallVector<Value> inlineRegion(RewriterBase &rewriter, Region &region,
+                                ArrayRef<Value> args, Location loc) {
+  return inlineRegionImpl(rewriter, region, args,
+                          mlir::TypeID::get<TerminatorOp>(), loc);
+}
+
 } // namespace mlir
 
 #endif
