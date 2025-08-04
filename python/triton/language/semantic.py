@@ -9,8 +9,6 @@ from triton.runtime import driver
 from .._C.libtriton import ir
 from . import core as tl
 
-import triton
-
 T = TypeVar('T')
 TensorTy = TypeVar('TensorTy')
 
@@ -1921,8 +1919,8 @@ class TritonSemantic(Generic[TensorTy]):
             )
 
         last_stride = tl._unwrap_if_constexpr(strides[-1])
-        backend = triton.runtime.driver.active.get_current_target().backend
-        if backend != "xpu" and last_stride != 1:
+        backend = self.builder.options.backend_name
+        if backend != "intel" and last_stride != 1:
             raise ValueError(f"Tensor descriptor last dim must be 1 but got {last_stride}")
 
         shape = [self.make_scalar(x, tl.int32) for x in shape]
