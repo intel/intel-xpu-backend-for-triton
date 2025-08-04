@@ -524,6 +524,8 @@ python/test/unit/language/test_matmul.py::test_simple_matmul[False-False-4-1-32-
 python/test/unit/language/test_matmul.py::test_simple_matmul[False-False-4-1-64-16-16-4-float64-float64]
 python/test/unit/language/test_matmul.py::test_simple_matmul[False-False-8-1-32-32-32-4-float64-float64]
 python/test/unit/language/test_matmul.py::test_simple_matmul[False-False-8-1-64-16-16-4-float64-float64]
+python/test/unit/language/test_matmul.py::test_simple_matmul[False-True-4-1-32-32-32-4-float64-float64]
+python/test/unit/language/test_matmul.py::test_simple_matmul[False-True-4-1-64-16-16-4-float64-float64]
 # test_indirect_matmul
 python/test/unit/language/test_pipeliner.py::test_indirect_matmul[3-128-128-128]
 python/test/unit/language/test_pipeliner.py::test_indirect_matmul[1-128-128-128]
@@ -753,3 +755,13 @@ python/test/unit/language/test_annotations.py::test_float_annotation[dtype12-0.0
 python/test/unit/language/test_annotations.py::test_float_annotation[dtype13-42.0]
 python/test/unit/language/test_annotations.py::test_float_annotation[dtype14-inf]
 python/test/unit/language/test_annotations.py::test_float_annotation[dtype15-nan]
+# test_gather
+python/test/unit/language/test_core.py::test_gather[src_shape2-indices_shape2-0]
+# test_gather_warp_shuffle
+python/test/unit/language/test_core.py::test_gather_warp_shuffle[src_shape1-indices_shape1-0-linear<{register = [[0, 2], [32, 0], [2, 0], [0, 16], [0, 32], [64, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]], warp = [[0, 1], [0, 4]], block = []}>-linear<{register = [[0, 2], [32, 0], [0, 32], [2, 0], [0, 16], [64, 0], [128, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]], warp = [[0, 1], [0, 4]], block = []}>]
+# test_tensor_descriptor_batched_gemm_2d_tma
+python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_batched_gemm_2d_tma
+# test_tensor_descriptor_batched_gemm_3d_tma
+python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_batched_gemm_3d_tma
+# test_tensor_atomic_add_access_patterns
+python/test/unit/language/test_core.py::test_tensor_atomic_add_access_patterns[shape128-random_no_duplication-3-1-float32]
