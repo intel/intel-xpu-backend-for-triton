@@ -92,6 +92,8 @@ std::pair<int, int> getArrivalCount(ArefCreateOp op) {
   std::optional<int> producerArrivalCount, consumerArrivalCount;
 
   for (auto user : op->getUsers()) {
+    if (isa<ArefDestroyOp>(user))
+      continue;
     auto [wgOp, idx] = getWarpGroupIdx(user);
     auto numWarps = wgOp.getNumWarps()[idx];
 
@@ -194,21 +196,16 @@ SmallVector<Value> getSubViews(ArefValue arefVal, Value stage, Location loc,
                                OpBuilder &rewriter) {
   SmallVector<Value> views;
   for (auto buffer : arefVal.buffers) {
-    SmallVector<Value> offsetsVal{stage};
     auto memDescType = cast<MemDescType>(buffer.getType());
     auto shape = memDescType.getShape();
     auto rank = shape.size() - 1;
 
-    for (int i = 0; i < rank; ++i) {
-      offsetsVal.push_back(rewriter.create<arith::ConstantIntOp>(
-          loc, 0, rewriter.getIntegerType(32)));
-    }
     SmallVector<int64_t> tensorShape(shape.begin() + 1, shape.end());
     auto memDescTypeNew = MemDescType::get(
         tensorShape, memDescType.getElementType(), memDescType.getEncoding(),
         memDescType.getMemorySpace(), true);
-    Value singleBuffer = rewriter.create<MemDescSubviewOp>(loc, memDescTypeNew,
-                                                           buffer, offsetsVal);
+    Value singleBuffer =
+        rewriter.create<MemDescIndexOp>(loc, memDescTypeNew, buffer, stage);
     views.push_back(singleBuffer);
   }
 
@@ -343,6 +340,26 @@ LogicalResult rewriteGetExitOp(ArefGetExitOp op, PatternRewriter &rewriter,
   return insertArriveBarrier(loc, op.getAsyncOps(), rewriter, emptyBarrier);
 }
 
+LogicalResult rewriteArefDestroyOp(ArefDestroyOp op, PatternRewriter &rewriter,
+                                   ArefValue arefVal) {
+  auto loc = op->getLoc();
+
+  rewriter.setInsertionPointAfter(op);
+  auto lb = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
+  auto ub = rewriter.create<arith::ConstantIntOp>(loc, arefVal.depth, 32);
+  auto step = rewriter.create<arith::ConstantIntOp>(loc, 1, 32);
+  auto dLoop = rewriter.create<scf::ForOp>(loc, lb, ub, step);
+
+  rewriter.setInsertionPointToStart(dLoop.getBody());
+  auto emptyMbar = createSingleBufferView(rewriter, arefVal.emptyMbars,
+                                          dLoop.getInductionVar());
+  rewriter.create<InvalBarrierOp>(loc, emptyMbar);
+  auto fullMbar = createSingleBufferView(rewriter, arefVal.fullMbars,
+                                         dLoop.getInductionVar());
+  rewriter.create<InvalBarrierOp>(loc, fullMbar);
+  return success();
+}
+
 class LowerArefCreate : public OpRewritePattern<ArefCreateOp> {
 public:
   using OpRewritePattern::OpRewritePattern;
@@ -368,6 +385,10 @@ public:
       } else if (auto user = dyn_cast<ArefGetExitOp>(userOp)) {
         opToDelete.insert(user);
         if (rewriteGetExitOp(user, rewriter, aref).failed())
+          return failure();
+      } else if (auto user = dyn_cast<ArefDestroyOp>(userOp)) {
+        opToDelete.insert(user);
+        if (rewriteArefDestroyOp(user, rewriter, aref).failed())
           return failure();
       } else {
         llvm_unreachable("users of aref can only be ArefPut or ArefGet");

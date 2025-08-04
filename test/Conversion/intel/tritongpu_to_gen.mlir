@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm --convert-tritongen-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm
+// RUN: triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm --convert-tritongen-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm --dump-input-context=20
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: llvm.func spir_kernelcc @test_empty_kernel(%arg0: i64, %arg1: !llvm.ptr<1>, %arg2: !llvm.ptr<1>)
@@ -624,20 +624,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-NEXT: llvm.mlir.constant(1 : i32) : i32
     // CHECK-NEXT: llvm.mlir.constant(32 : i32) : i32
     // CHECK-NEXT: llvm.mlir.constant(512 : i32) : i32
-    // CHECK-NEXT: llvm.mlir.constant(0 : i32) : i32
     // CHECK-NEXT: llvm.mul
-    // CHECK-NEXT: llvm.add
-    // CHECK-NEXT: llvm.mul
-    // CHECK-NEXT: llvm.add
-    // CHECK-NEXT: llvm.mul
-    // CHECK-NEXT: llvm.add
-    // CHECK-NEXT: llvm.add
-    // CHECK-NEXT: llvm.add
     // CHECK-NEXT: llvm.getelementptr
     %index = arith.constant 1 : i32
-    %zero = arith.constant 0 : i32
     %0 = ttg.local_alloc : () -> !ttg.memdesc<128x16x32xf32, #shared0, #smem, mutable>
-    %1 = ttg.memdesc_subview %0[%index, %zero, %zero] : !ttg.memdesc<128x16x32xf32, #shared0, #smem, mutable> -> !ttg.memdesc<16x32xf32, #shared0, #smem, mutable>
+    %1 = ttg.memdesc_index %0, %index : !ttg.memdesc<128x16x32xf32, #shared0, #smem, mutable> -> !ttg.memdesc<16x32xf32, #shared0, #smem, mutable>
     tt.return
   }
 }
@@ -1945,7 +1936,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
   tt.func public @test_local_load_bf16() {
     %c0_i32 = arith.constant 0 : i32
     %19 = ttg.local_alloc  : () -> !ttg.memdesc<1x1x2048xbf16, #shared, #smem, mutable>
-    %22 = ttg.memdesc_subview %19[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x1x2048xbf16, #shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<1x2048xbf16, #shared, #ttg.shared_memory, mutable>
+    %22 = ttg.memdesc_index %19, %c0_i32 : !ttg.memdesc<1x1x2048xbf16, #shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<1x2048xbf16, #shared, #ttg.shared_memory, mutable>
     %39 = ttg.local_load %22 : !ttg.memdesc<1x2048xbf16, #shared, #ttg.shared_memory, mutable> -> tensor<1x2048xbf16, #blocked>
     %40 = arith.extf %39 : tensor<1x2048xbf16, #blocked> to tensor<1x2048xf32, #blocked>
     tt.return
@@ -1977,7 +1968,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   tt.func public @test_local_store_subview(%arg0: tensor<1xf32, #blocked>) {
     %c0_i32 = arith.constant 0 : i32
     %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<1xf32, #shared, #smem, mutable>
-    %sv = ttg.memdesc_subview %0[%c0_i32] : !ttg.memdesc<1xf32, #shared, #smem, mutable> -> !ttg.memdesc<1xf32, #shared, #smem, mutable>
+    %sv = ttg.memdesc_subslice %0[0] : !ttg.memdesc<1xf32, #shared, #smem, mutable> -> !ttg.memdesc<1xf32, #shared, #smem, mutable>
     ttg.local_store %arg0, %sv : tensor<1xf32, #blocked> -> !ttg.memdesc<1xf32, #shared, #smem, mutable>
     tt.return
   }

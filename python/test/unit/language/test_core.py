@@ -3903,9 +3903,11 @@ def get_test_dot_small_k_mfma_cases():
 
 # M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size
 # introduced in #4516
-def get_test_dot_small_mn_fma_cases():
+def get_test_dot_small_mn_mfma_cases():
+    if not is_hip_cdna():
+        return []
     return [(*shape_nw, False, False, epilogue, 'ieee', in_dtype, out_dtype, 1, None)
-            for shape_nw in [(2, 2, 16, 1), (1, 64, 64, 1), (64, 2, 64, 2), (64, 64, 4, 4), (8, 16, 16, 1)]
+            for shape_nw in [(4, 64, 64, 1), (64, 4, 64, 1)]
             for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols']
             for in_dtype, out_dtype in [('float16', 'float16'), ('float32', 'float32')]]
 
@@ -3945,7 +3947,7 @@ def get_test_small_dots_cases():
     get_test_dot_mfma_edge_cases() + \
     get_test_dot_fp8_output_cases() + \
     get_test_dot_small_k_mfma_cases() + \
-    get_test_dot_small_mn_fma_cases() + \
+    get_test_dot_small_mn_mfma_cases() + \
     get_test_dot_softmax() + \
     get_test_small_dots_cases())
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
@@ -4144,13 +4146,15 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         return
 
     if is_hip_cdna():
-        if M != 4:
-            return
         amdgcn = pgm.asm['amdgcn']
-        if in_dtype == 'float16':
-            assert 'v_dot2c_f32_f16' in amdgcn
-        elif (in_dtype == 'bfloat16') and is_hip_cdna4():
-            assert 'v_dot2c_f32_bf16' in amdgcn
+
+        if (M, N) == (4, 64) or (M, N) == (64, 4):
+            assert 'v_mfma_f32_4x4' in amdgcn
+        elif (M, N) == (4, 32):
+            if in_dtype == 'float16':
+                assert 'v_dot2c_f32_f16' in amdgcn
+            elif (in_dtype == 'bfloat16') and is_hip_cdna4():
+                assert 'v_dot2c_f32_bf16' in amdgcn
         return
 
     # make sure ld/st are vectorized
@@ -5808,6 +5812,110 @@ def test_inline_asm_packed_multiple_outputs(device):
 
 
 # -----------------------
+# test map elementwise
+# -----------------------
+
+
+@pytest.mark.parametrize("num_ctas", num_ctas_list)
+def test_map_elementwise(num_ctas, device):
+
+    @triton.jit
+    def compare(x, y):
+        if x < y:
+            return -1
+        elif x == y:
+            return 0
+        else:
+            return 1
+
+    @triton.jit
+    def kernel(X, Y, Z, BLOCK: tl.constexpr):
+        x = tl.load(X + tl.arange(0, BLOCK))
+        y = tl.load(Y + tl.arange(0, BLOCK))
+        z = tl.map_elementwise(compare, x, y)
+        tl.store(Z + tl.arange(0, BLOCK), z)
+
+    shape = (128, )
+    rs = RandomState(17)
+    x = numpy_random(shape, dtype_str='int32', rs=rs)
+    y = numpy_random(shape, dtype_str='int32', rs=rs)
+    x_tri = to_triton(x, device=device)
+    y_tri = to_triton(y, device=device)
+    z_tri = to_triton(numpy_random(shape, dtype_str='int32', rs=rs), device=device)
+    kernel[(1, )](x_tri, y_tri, z_tri, BLOCK=shape[0], num_ctas=num_ctas)
+    z_ref = (x > y).astype(int) - (y > x).astype(int)
+    np.testing.assert_equal(z_ref, to_numpy(z_tri))
+
+
+def test_map_elementwise_multiple_outputs(device):
+
+    @triton.jit
+    def divmod(a, b):
+        return a // b, a % b
+
+    @triton.jit
+    def kernel(A, B, C, D, BLOCK: tl.constexpr):
+        a = tl.load(A + tl.arange(0, BLOCK))
+        b = tl.load(B + tl.arange(0, BLOCK))
+
+        c, d = tl.map_elementwise(divmod, a, b)
+
+        tl.store(C + tl.arange(0, BLOCK), c)
+        tl.store(D + tl.arange(0, BLOCK), d)
+
+    shape = (512, )
+    rs = RandomState(17)
+    A = numpy_random(shape, dtype_str='uint32', rs=rs)
+    B = numpy_random(shape, dtype_str='uint32', rs=rs)
+    A_tri = to_triton(A, device=device)
+    B_tri = to_triton(B, device=device)
+    C_tri = to_triton(numpy_random(shape, dtype_str='uint32', rs=rs), device=device)
+    D_tri = to_triton(numpy_random(shape, dtype_str='uint32', rs=rs), device=device)
+    kernel[(1, )](A_tri, B_tri, C_tri, D_tri, BLOCK=shape[0])
+
+    C_ref = A // B
+    D_ref = A % B
+
+    np.testing.assert_equal(C_ref, to_numpy(C_tri))
+    np.testing.assert_equal(D_ref, to_numpy(D_tri))
+
+
+def test_map_elementwise_pack(device):
+
+    @triton.jit
+    def divmod(a0, a1, b0, b1):
+        return a0 // b0, a1 // b1, a0 % b0, a1 % b1
+
+    @triton.jit
+    def kernel(A, B, C, D, BLOCK: tl.constexpr):
+        a = tl.load(A + tl.arange(0, BLOCK))
+        b = tl.load(B + tl.arange(0, BLOCK))
+
+        c, d = tl.map_elementwise(divmod, a, b, pack=2)
+
+        tl.store(C + tl.arange(0, BLOCK), c)
+        tl.store(D + tl.arange(0, BLOCK), d)
+
+    shape = (512, )
+    rs = RandomState(17)
+    A = numpy_random(shape, dtype_str='uint32', rs=rs)
+    B = numpy_random(shape, dtype_str='uint32', rs=rs)
+    A_tri = to_triton(A, device=device)
+    B_tri = to_triton(B, device=device)
+    C_tri = to_triton(numpy_random(shape, dtype_str='uint32', rs=rs), device=device)
+    D_tri = to_triton(numpy_random(shape, dtype_str='uint32', rs=rs), device=device)
+    h = kernel[(1, )](A_tri, B_tri, C_tri, D_tri, BLOCK=shape[0])
+    print(h.asm["llir"])
+    print(h.asm["ttir"])
+
+    C_ref = A // B
+    D_ref = A % B
+
+    np.testing.assert_equal(C_ref, to_numpy(C_tri))
+    np.testing.assert_equal(D_ref, to_numpy(D_tri))
+
+
+# -----------------------
 # test control flow
 # -----------------------
 
@@ -6516,7 +6624,7 @@ def test_split_subview(M, N, M_tile_size, N_tile_size, device, tmp_path: pathlib
         %c0_i32 = arith.constant 0 : i32
 
         %12 = ttg.local_alloc : () -> !ttg.memdesc<1x{M}x{N}xf16, #shared, #smem, mutable>
-        %13 = ttg.memdesc_subview %12[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x{M}x{N}xf16, #shared, #smem, mutable> -> !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable>
+        %13 = ttg.memdesc_index %12, %c0_i32 : !ttg.memdesc<1x{M}x{N}xf16, #shared, #smem, mutable> -> !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable>
         ttg.local_store %11, %13 : tensor<{M}x{N}xf16, #blocked> -> !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable>
 
     """
@@ -6527,10 +6635,7 @@ def test_split_subview(M, N, M_tile_size, N_tile_size, device, tmp_path: pathlib
             m_offset = m * M_tile_size
             n_offset = n * N_tile_size
             ir += f"""
-        %off0_{m}_{n} = arith.constant {m_offset} : i32
-        %off1_{m}_{n} = arith.constant {n_offset} : i32
-
-        %view{linear_idx} = ttg.memdesc_subview %13[%off0_{m}_{n}, %off1_{m}_{n}] : !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable> -> !ttg.memdesc<{M_tile_size}x{N_tile_size}xf16, #shared, #smem, mutable, {M}x{N}>
+        %view{linear_idx} = ttg.memdesc_subslice %13[{m_offset}, {n_offset}] : !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable> -> !ttg.memdesc<{M_tile_size}x{N_tile_size}xf16, #shared, #smem, mutable, {M}x{N}>
         %data{linear_idx} = ttg.local_load %view{linear_idx} : !ttg.memdesc<{M_tile_size}x{N_tile_size}xf16, #shared, #smem, mutable, {M}x{N}> -> tensor<{M_tile_size}x{N_tile_size}xf16, #blocked>
         %inc{linear_idx} = arith.constant dense<{linear_idx}.0> : tensor<{M_tile_size}x{N_tile_size}xf16, #blocked>
 
