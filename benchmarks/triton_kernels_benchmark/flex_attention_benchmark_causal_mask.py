@@ -12,7 +12,7 @@ import torch.nn.functional as F
 import torch._inductor
 import torch._inductor.lowering
 import torch._inductor.kernel
-import torch._inductor.kernel.flex_attention as flex_attn
+import torch._inductor.kernel.flex.flex_attention as flex_attn
 from torch._inductor.template_heuristics import FlexConfig, FlexDecodeConfig
 
 import triton_kernels_benchmark as benchmark_suit
