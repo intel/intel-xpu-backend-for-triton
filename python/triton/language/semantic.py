@@ -9,8 +9,6 @@ from triton.runtime import driver
 from .._C.libtriton import ir
 from . import core as tl
 
-import triton
-
 T = TypeVar('T')
 TensorTy = TypeVar('TensorTy')
 
