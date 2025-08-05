@@ -48,10 +48,12 @@ on:
     branches:
       - main
       - release/**
+      - stacked/**
   push:
     branches:
       - main
       - release/**
+      - stacked/**
 
 # Cancels in-progress PR runs when the PR is updated. Manual runs are never cancelled.
 concurrency:
