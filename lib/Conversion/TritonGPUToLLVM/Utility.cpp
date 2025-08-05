@@ -681,6 +681,8 @@ bool emitTransferBetweenRegistersAndShared(
   int vecElems =
       std::min({regToSharedLayout.getNumConsecutiveInOut(),
                 maxVecElems.value_or(std::numeric_limits<int>::max())});
+  if (vecElems < 4)
+    vecElems = 4;
   if (paddedLayout) {
     vecElems = std::min(vecElems, int(paddedLayout.getMinInterval()));
   }
