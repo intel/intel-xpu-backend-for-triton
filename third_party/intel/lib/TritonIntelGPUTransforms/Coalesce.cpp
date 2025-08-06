@@ -185,7 +185,11 @@ private:
 
     assert(op->getNumResults() == 1 &&
            "Expecting operation yielding one result");
-    propagateLayout(op, op->getResult(0), layout, rewriter);
+    
+    for (Value res : op->getResults()) {
+      if (res == opRes)
+        propagateLayout(op, res, layout, rewriter);
+    }
   }
 
   // Propagate the layout of the \p root operation's result to its users.
@@ -326,9 +330,8 @@ private:
         continue;
       }
 
-      assert(user->getNumResults() == 1 &&
-             "Expecting operation yielding one result");
-      changeAndPropagateLayout(user, user->getResult(0), layout, rewriter);
+      for (auto res : user->getResults())
+        changeAndPropagateLayout(user, res, layout, rewriter);
     }
 
     LLVM_DEBUG({
