@@ -75,6 +75,8 @@ def do_bench_elapsed_time(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quan
     :param quantiles: Performance percentile to return in addition to the median.
     :type quantiles: list[float]
     """
+    print("do_bench_elapsed_time")
+
     assert return_mode in ["min", "max", "mean", "median"]
 
     # We maintain a buffer of 256 MB that we clear
@@ -124,6 +126,7 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
     :param quantiles: Performance percentile to return in addition to the median.
     :type quantiles: list[float]
     """
+    print("do_bench_upstream_pytorch_profiler")
 
     assert return_mode in ["min", "max", "mean", "median"]
 
@@ -357,6 +360,7 @@ class Mark:
         for bench in benchmarks:
             benchmark_dfs = []
             for run_counter in range(args.n_runs):
+                print("run_counter:", run_counter)
                 df = self._run(bench, args.reports, show_plots, print_data, run_counter=run_counter, **kwargs)
                 df["datetime"] = datetime.datetime.now()
                 df["run_counter"] = run_counter + 1
