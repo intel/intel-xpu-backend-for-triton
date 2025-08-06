@@ -556,8 +556,6 @@ def get_benchmark(
 
     supported_providers = {
         'triton': 'Triton',
-        'xetla': 'XeTLA',
-        'cutlass': 'CUTLASS',
     }
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
@@ -569,12 +567,12 @@ def get_benchmark(
         benchmark_suite.Benchmark(
             # argument names to use as an x-axis for the plot
             x_names=['Z', 'H', 'N_CTX', 'D_HEAD', 'CAUSAL', 'MODE'],
-            x_vals=[[z, h, 16384 // z, dhead, causal, mode]
-                    for z in [1, 2, 4, 8, 16, 32]
-                    for (h, dhead) in [(16, 128), (32, 64)]
-                    for causal in [False, True]
-                    for mode in [fa_kernel_mode]]  #
-            + [[4, 48, 1024, 64, causal, mode] for causal in [False, True] for mode in [fa_kernel_mode]],
+            x_vals=[[z, h, seqlen, dhead, causal, mode]
+                    for z in [1]
+                    for seqlen in [2048,4096,8192,16384,32768]
+                    for (h, dhead) in [(32, 128), (32, 64)]
+                    for causal in [False]
+                    for mode in [fa_kernel_mode]],  #
             line_arg='provider',
             # argument name whose value corresponds to a different line in the plot
             # possible values for `line_arg``
