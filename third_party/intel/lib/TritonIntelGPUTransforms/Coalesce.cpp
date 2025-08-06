@@ -185,7 +185,7 @@ private:
 
     assert(op->getNumResults() == 1 &&
            "Expecting operation yielding one result");
-    
+
     for (Value res : op->getResults()) {
       if (res == opRes)
         propagateLayout(op, res, layout, rewriter);
