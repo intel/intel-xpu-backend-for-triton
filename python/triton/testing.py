@@ -8,59 +8,6 @@ from contextlib import contextmanager
 from typing import Any, Dict, List
 from . import language as tl
 from . import runtime
-import time
-import logging
-
-
-@functools.cache
-def _support_elapsed_time():
-    import torch
-
-    support = True
-    message_unsupported = "Wall time is used instead of elapsed_time (not supported). \
-        The timing measurements could be innacurate."
-
-    message_bug = "Wall time is used instead of elapsed_time because of the bug ('negative timings'). \
-        Should be fixed in DLE 2025.1. The timing measurements could be innacurate."
-
-    e1 = torch.xpu.Event(enable_timing=True)
-    e1.record()
-    e1.synchronize()
-
-    e2 = torch.xpu.Event(enable_timing=True)
-    e2.record()
-    e2.synchronize()
-
-    try:
-        if e1.elapsed_time(e2) <= 0:
-            logging.warning(message_bug)
-            support = False
-    except Exception:
-        logging.warning(message_unsupported)
-        support = False
-
-    return support
-
-
-class WallEvent():
-
-    def __init__(self, **kwargs):
-        self.record()
-
-    def record(self):
-        self.timestamp = time.perf_counter_ns() / 1_000_000
-
-    def elapsed_time(self, end):
-        return end.timestamp - self.timestamp
-
-
-def Event(**kwargs):
-    if _support_elapsed_time():
-        import torch
-
-        return torch.xpu.Event(**kwargs)
-    else:
-        return WallEvent(**kwargs)
 
 
 def nvsmi(attrs):
@@ -205,27 +152,21 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
     cache = runtime.driver.active.get_empty_cache_for_benchmark()
 
     # Estimate the runtime of the function
-    start_event = Event(enable_timing=True)
-    end_event = Event(enable_timing=True)
-    USE_WALL_TIME = isinstance(start_event, WallEvent)
-
+    start_event = di.Event(enable_timing=True)
+    end_event = di.Event(enable_timing=True)
     start_event.record()
     for _ in range(5):
         runtime.driver.active.clear_cache(cache)
         fn()
-        if USE_WALL_TIME:
-            di.synchronize()
     end_event.record()
-    if not USE_WALL_TIME:
-        di.synchronize()
-
+    di.synchronize()
     estimate_ms = start_event.elapsed_time(end_event) / 5
 
     # compute number of warmup and repeat
     n_warmup = max(1, int(warmup / estimate_ms))
     n_repeat = max(1, int(rep / estimate_ms))
-    start_event = [Event(enable_timing=True) for i in range(n_repeat)]
-    end_event = [Event(enable_timing=True) for i in range(n_repeat)]
+    start_event = [di.Event(enable_timing=True) for i in range(n_repeat)]
+    end_event = [di.Event(enable_timing=True) for i in range(n_repeat)]
     # Warm-up
     for _ in range(n_warmup):
         fn()
@@ -239,18 +180,12 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
                 x.grad = None
         # we clear the L2 cache before each run
         runtime.driver.active.clear_cache(cache)
-        if USE_WALL_TIME:
-            di.synchronize()
         # record time of `fn`
         start_event[i].record()
         fn()
-        if USE_WALL_TIME:
-            di.synchronize()
         end_event[i].record()
     # Record clocks
-    if not USE_WALL_TIME:
-        di.synchronize()
-
+    di.synchronize()
     times = [s.elapsed_time(e) for s, e in zip(start_event, end_event)]
     return _summarize_statistics(times, quantiles, return_mode)
 
