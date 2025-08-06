@@ -159,7 +159,6 @@ jobs:
           cd /c/pytorch
           echo "BENCHMARK_COMMIT_ID=$(<.github/ci_commit_pins/torchbench.txt)" | tee -a "$GITHUB_ENV"
           echo "TORCHVISION_COMMIT_ID=$(<.github/ci_commit_pins/vision.txt)" | tee -a "$GITHUB_ENV"
-          echo "TORCHTEXT_COMMIT_ID=$(<.github/ci_commit_pins/text.txt)" | tee -a "$GITHUB_ENV"
           echo "TORCHAUDIO_COMMIT_ID=$(<.github/ci_commit_pins/audio.txt)" | tee -a "$GITHUB_ENV"
           echo "TRANSFORMERS_VERSION=$(<.ci/docker/ci_commit_pins/huggingface.txt)" | tee -a "$GITHUB_ENV"
           echo "TIMM_COMMIT_ID=$(<.ci/docker/ci_commit_pins/timm.txt)" | tee -a "$GITHUB_ENV"
@@ -189,16 +188,6 @@ jobs:
           package: torchvision
           repository: pytorch/vision
           ref: ${{ env.TORCHVISION_COMMIT_ID }}
-          extra-cache-key: ${{ env.PYTORCH_VERSION }}
-          workspace: /c/gh${{ github.run_id }}
-
-      - name: Install torchtext package
-        if: inputs.suite == 'all' || inputs.suite == 'torchbench'
-        uses: ./.github/actions/install-dependency
-        with:
-          package: torchtext
-          repository: pytorch/text
-          ref: ${{ env.TORCHTEXT_COMMIT_ID }}
           extra-cache-key: ${{ env.PYTORCH_VERSION }}
           workspace: /c/gh${{ github.run_id }}
 
@@ -346,7 +335,6 @@ jobs:
           TRITON_REPO=$GITHUB_REPOSITORY
           TRITON_COMMIT_ID=$GITHUB_SHA
           TORCHVISION_COMMIT_ID=$TORCHVISION_COMMIT_ID
-          TORCHTEXT_COMMIT_ID=$TORCHTEXT_COMMIT_ID
           TORCHAUDIO_COMMIT_ID=$TORCHAUDIO_COMMIT_ID
           TRANSFORMERS_VERSION=$TRANSFORMERS_VERSION
           TIMM_COMMIT_ID=$TIMM_COMMIT_ID
