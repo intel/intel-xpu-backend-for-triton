@@ -71,6 +71,7 @@ jobs:
       - name: Run inductor tests
         run: |
           export PYTORCH_TESTING_DEVICE_ONLY_FOR="xpu"
+          export TORCHINDUCTOR_AUTOTUNE_IN_SUBPROC="1"
           bash scripts/test-pytorch.sh ${{ inputs.suite }}
 
       - name: Report environment details
