@@ -68,6 +68,11 @@ env:
   VERIFY: ${{ (github.event_name == 'pull_request' || github.event_name == 'schedule' || inputs.verify) && '1' || '0' }}
   TAG: ${{ inputs.tag || (github.event_name == 'pull_request' && format('pr-{0}', github.event.number)) || (github.event_name == 'schedule' && 'ci') || 'test' }}
   N_RUNS: ${{ inputs.n_runs || '1' }}
+  IGC_VectorizerAllowWAVEALL: '1'
+  IGC_VectorizerAllowCMP: '1'
+  IGC_VectorizerAllowSelect: '1'
+  IGC_VectorizerAllowFPTRUNC: '0'
+  IGC_DisableLoopSinking: '0'
 
 jobs:
   build:
