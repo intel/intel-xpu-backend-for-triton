@@ -49,11 +49,6 @@ jobs:
           # cmake 3.22.1 does not work with the recent torchaudio: https://github.com/intel/intel-xpu-backend-for-triton/issues/2079
           pip install wheel cmake
 
-      # https://github.com/pytorch/data/blob/e316c5ca1ab2a4f69dd6d48e8fc9c6f8d0c7c468/README.md?plain=1#L6-L15
-      - name: Install pinned torchdata
-        run: |
-          pip install torchdata==0.9.0
-
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
 

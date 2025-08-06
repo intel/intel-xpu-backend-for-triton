@@ -90,11 +90,6 @@ jobs:
           # cmake<4.0.0 is required as a workaround for CMake Error at third_party/double-conversion/CMakeLists.txt:1 (cmake_minimum_required)
           pip install wheel 'cmake<4.0.0'
 
-      # https://github.com/pytorch/data/blob/e316c5ca1ab2a4f69dd6d48e8fc9c6f8d0c7c468/README.md?plain=1#L6-L15
-      - name: Install pinned torchdata
-        run: |
-          pip install torchdata==0.9.0
-
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
         with:
