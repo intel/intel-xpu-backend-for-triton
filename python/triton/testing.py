@@ -25,9 +25,11 @@ def _support_elapsed_time():
 
     e1 = torch.xpu.Event(enable_timing=True)
     e1.record()
+    e1.synchronize()
 
     e2 = torch.xpu.Event(enable_timing=True)
     e2.record()
+    e2.synchronize()
 
     try:
         if e1.elapsed_time(e2) <= 0:
