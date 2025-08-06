@@ -10,6 +10,12 @@ on:
     paths:
       - .github/workflows/nightly-wheels.yml
       - .github/pins/pytorch.txt
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/nightly-wheels.yml
+      - .github/pins/pytorch.txt
 
 permissions: read-all
 
@@ -30,6 +36,7 @@ jobs:
           - "3.10"
           - "3.11"
           - "3.12"
+          - "3.14"
       fail-fast: false
       max-parallel: 2
     defaults:
