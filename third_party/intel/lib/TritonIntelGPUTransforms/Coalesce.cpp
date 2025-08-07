@@ -222,10 +222,11 @@ private:
       }
       if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
         if (auto loopOp = yieldOp->getParentOfType<LoopLikeOpInterface>()) {
-          for (OpOperand &operand : yieldOp->getOpOperands())
-            if (operand.get() == val)
-              propagateLayoutToLoopResult(loopOp, operand.getOperandNumber(),
-                                          layout, rewriter);
+          for (OpOperand &operand : llvm::make_filter_range(
+                   yieldOp->getOpOperands(),
+                   [&val](OpOperand &operand) { return operand.get() == val; }))
+            propagateLayoutToLoopResult(loopOp, operand.getOperandNumber(),
+                                        layout, rewriter);
           continue;
         }
       }
