@@ -184,9 +184,6 @@ private:
       op->dumpPretty();
     });
 
-    assert(op->getNumResults() == 1 &&
-           "Expecting operation yielding one result");
-
     for (OpResult res : op->getResults())
       if (res == opRes)
         propagateLayout(op, res, layout, rewriter);
