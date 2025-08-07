@@ -144,6 +144,7 @@ jobs:
           cd ${{ env.NEW_WORKSPACE }}
 
           $env:PYTORCH_TESTING_DEVICE_ONLY_FOR = "bmg"
+          $env:TRITON_LESS_FLEX_ATTN_BWD_CONFIGS = "1"
           bash scripts/test-pytorch.sh ${{ inputs.suite }}
 
       - name: Upload test logs

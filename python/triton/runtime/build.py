@@ -78,12 +78,11 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
     include_dirs = include_dirs + [srcdir, py_include_dir, *custom_backend_dirs]
 
     if is_xpu():
-        icpx = None
-        cxx = os.environ.get("CXX")
+        icpx = shutil.which("icpx")
+        cxx = shutil.which(os.environ.get("CXX", "shutil-dummy-value"))
         if cxx is None:
             clangpp = shutil.which("clang++")
             gxx = shutil.which("g++")
-            icpx = shutil.which("icpx")
             cl = shutil.which("cl")
             cxx = icpx or cl if os.name == "nt" else icpx or clangpp or gxx
             if cxx is None:

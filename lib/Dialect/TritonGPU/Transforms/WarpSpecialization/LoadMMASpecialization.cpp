@@ -422,6 +422,7 @@ LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
   for (Operation *asyncUser : distinctAsyncUsers) {
     if (auto mmaOp = dyn_cast<ttng::MMAv5OpInterface>(asyncUser)) {
       mmaOp.addCompletionBarrier(curEmptyBar, b.boolCst(true));
+      mmaOp.setIsAsync(true);
       continue;
     }
     llvm::report_fatal_error("FIXME: unhandled async user of pipelined load: " +
@@ -752,7 +753,7 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
         }
       } else {
         b.setInsertionPoint(domOp);
-        if (isa<scf::IfOp>(domOp->getParentOp()))
+        if (isa<scf::IfOp>(domOp->getParentOp()) && accIsMultiBuffered)
           b.setInsertionPointToStart(domOp->getBlock());
         Value bar = createSingleBufferView(b, node.barPrev, node.index);
         b.createInto<ttng::WaitBarrierOp>(*partition, nodeStageCluster, bar,
@@ -764,9 +765,10 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
         b.setInsertionPoint(mmaOp);
         Value bar = createSingleBufferView(b, node.barNext, node.index);
         mmaOp.addCompletionBarrier(bar, userPred);
+        mmaOp.setIsAsync(true);
       } else {
         b.setInsertionPointAfter(lastOp);
-        if (isa<scf::IfOp>(lastOp->getParentOp()))
+        if (isa<scf::IfOp>(lastOp->getParentOp()) && accIsMultiBuffered)
           b.setInsertionPoint(lastOp->getBlock()->getTerminator());
         Value bar = createSingleBufferView(b, node.barNext, node.index);
         b.createInto<ttng::ArriveBarrierOp>(*partition, nodeStageCluster, bar,
@@ -802,6 +804,7 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
     b.createInto<ttng::WaitBarrierOp>(*schedule.getPartition(mmaOp),
                                       getStageCluster(mmaOp), readyBar, phase);
     mmaOp.addCompletionBarrier(emptyBar, b.boolCst(true));
+    mmaOp.setIsAsync(true);
   }
 
   if (nodes.back().barNext) {

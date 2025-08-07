@@ -1,4 +1,5 @@
 from __future__ import annotations
+import math
 from typing import TypeVar, List, TYPE_CHECKING, Tuple
 from functools import wraps
 
@@ -6,11 +7,12 @@ if TYPE_CHECKING:
     from triton._C.libtriton.gluon_ir import GluonOpBuilder
     from ._semantic import GluonSemantic
 
-from ._layouts import SharedLayout, DistributedLayout
+from ._layouts import SharedLayout, DistributedLayout, AutoLayout
 from triton._C.libtriton import ir
 import triton.language.core as tl_core
 from triton.language.core import (
     constexpr,
+    constexpr_function,
     base_value,
     base_type,
     dtype,
@@ -37,6 +39,7 @@ from triton.language.core import (
     float64,
     _unwrap_if_constexpr,
     _unwrap_shape,
+    static_range,
     tensor,
     tuple,
     tuple_type,
@@ -48,6 +51,7 @@ _IMPORT_FROM_TRITON: List[str] = [
     "inline_asm_elementwise",
     "join",
     "load",
+    "map_elementwise",
     "maximum",
     "max_constancy",
     "max_contiguous",
@@ -67,6 +71,7 @@ _IMPORT_FROM_TRITON: List[str] = [
 
 __all__ = [
     "constexpr",
+    "constexpr_function",
     "base_value",
     "base_type",
     "dtype",
@@ -102,7 +107,9 @@ __all__ = [
     "full",
     "convert_layout",
     "allocate_shared_memory",
+    "set_auto_layout",
     "shared_memory_descriptor",
+    "static_range",
     "warp_specialize",
     *_IMPORT_FROM_TRITON,
 ]
@@ -214,6 +221,10 @@ class shared_memory_descriptor(base_value):
     @property
     def rank(self):
         return len(self.shape)
+
+    @property
+    def numel(self) -> int:
+        return math.prod(self.shape)
 
     @property
     def layout(self):
@@ -372,6 +383,8 @@ def convert_layout(value, layout, assert_trivial=False, _semantic=None):
         tensor: The tensor with the new layout.
     """
     layout = _unwrap_if_constexpr(layout)
+    if isinstance(value.type.layout, AutoLayout):
+        return set_auto_layout(value, layout, _semantic=_semantic)
     return _semantic.convert_layout(value, layout, assert_trivial)
 
 
@@ -415,6 +428,22 @@ def allocate_shared_memory(element_ty, shape, layout, value=None, _semantic=None
     shape = [_unwrap_if_constexpr(s) for s in shape]
     layout = _unwrap_if_constexpr(layout)
     return _semantic.allocate_shared(element_ty, shape, layout, value)
+
+
+@builtin
+def set_auto_layout(value, layout, _semantic=None):
+    """
+    Set a a tensor with AutoLayout to a concrete layout
+
+    Args:
+        value (tensor): The input tensor.
+        layout (DistribtedLayout): The target layout.
+
+    Returns:
+        tensor: The tensor with the new layout.
+    """
+    layout = _unwrap_if_constexpr(layout)
+    return _semantic.set_auto_layout(value, layout)
 
 
 @builtin

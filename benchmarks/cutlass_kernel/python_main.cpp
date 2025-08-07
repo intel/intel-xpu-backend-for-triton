@@ -24,6 +24,6 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 PYBIND11_MODULE(cutlass_kernel, m) {
-  m.def("gemm", &gemm, "gemm (CUTLASS)");
-  m.def("attention", &attention, "attention (CUTLASS)");
+  m.def("gemm", &gemm_kernel, "gemm (CUTLASS)");
+  m.def("attention", &attention_kernel, "attention (CUTLASS)");
 }

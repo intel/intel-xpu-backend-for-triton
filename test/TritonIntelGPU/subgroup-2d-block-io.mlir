@@ -8,7 +8,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, tt
     tt.func public @subgroup_2d_block_load(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16: i32}, %arg3: !tt.ptr<f16> {tt.divisibility = 16: i32}) attributes {noinline = false} {
         %0 = tt.get_program_id x : i32
         %M_i64 = arith.constant 16 : i64
-        %N_i64 = arith.constant 16 : i64
+        %N_i64 = arith.constant 64 : i64
         %c1_i64 = arith.constant 1 : i64
         %c0_i32 = arith.constant 0 : i32
 
@@ -29,7 +29,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, tt
     tt.func public @subgroup_2d_block_load(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16: i32}, %arg3: !tt.ptr<f16> {tt.divisibility = 16: i32}) attributes {noinline = false} {
         %0 = tt.get_program_id x : i32
         %M_i64 = arith.constant 16 : i64
-        %N_i64 = arith.constant 16 : i64
+        %N_i64 = arith.constant 64 : i64
         %c1_i64 = arith.constant 1 : i64
         %c0_i32 = arith.constant 0 : i32
 
@@ -50,7 +50,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, tt
     tt.func public @subgroup_2d_block_load(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16: i32}, %arg3: !tt.ptr<f16> {tt.divisibility = 16: i32}) attributes {noinline = false} {
         %0 = tt.get_program_id x : i32
         %M_i64 = arith.constant 16 : i64
-        %N_i64 = arith.constant 16 : i64
+        %N_i64 = arith.constant 64 : i64
         %c1_i64 = arith.constant 1 : i64
         %c0_i32 = arith.constant 0 : i32
 
@@ -71,7 +71,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, tt
     tt.func public @subgroup_2d_block_load(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16: i32}, %arg3: !tt.ptr<f16> {tt.divisibility = 16: i32}) attributes {noinline = false} {
         %0 = tt.get_program_id x : i32
         %M_i64 = arith.constant 16 : i64
-        %N_i64 = arith.constant 16 : i64
+        %N_i64 = arith.constant 64 : i64
         %c1_i64 = arith.constant 1 : i64
         %c0_i32 = arith.constant 0 : i32
 
@@ -92,7 +92,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, tt
     tt.func public @subgroup_2d_block_load(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16: i32}, %arg3: !tt.ptr<f16> {tt.divisibility = 16: i32}) attributes {noinline = false} {
         %0 = tt.get_program_id x : i32
         %M_i64 = arith.constant 32 : i64
-        %N_i64 = arith.constant 16 : i64
+        %N_i64 = arith.constant 64 : i64
         %c1_i64 = arith.constant 1 : i64
         %c0_i32 = arith.constant 0 : i32
 
@@ -113,7 +113,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, tt
     tt.func public @subgroup_2d_block_load(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16: i32}, %arg3: !tt.ptr<f16> {tt.divisibility = 16: i32}) attributes {noinline = false} {
         %0 = tt.get_program_id x : i32
         %M_i64 = arith.constant 32 : i64
-        %N_i64 = arith.constant 16 : i64
+        %N_i64 = arith.constant 64 : i64
         %c1_i64 = arith.constant 1 : i64
         %c0_i32 = arith.constant 0 : i32
 
@@ -134,7 +134,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, tt
     tt.func public @subgroup_2d_block_load(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16: i32}, %arg3: !tt.ptr<f16> {tt.divisibility = 16: i32}) attributes {noinline = false} {
         %0 = tt.get_program_id x : i32
         %M_i64 = arith.constant 32 : i64
-        %N_i64 = arith.constant 16 : i64
+        %N_i64 = arith.constant 64 : i64
         %c1_i64 = arith.constant 1 : i64
         %c0_i32 = arith.constant 0 : i32
 
@@ -155,7 +155,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, tt
     tt.func public @subgroup_2d_block_load(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16: i32}, %arg3: !tt.ptr<f16> {tt.divisibility = 16: i32}) attributes {noinline = false} {
         %0 = tt.get_program_id x : i32
         %M_i64 = arith.constant 32 : i64
-        %N_i64 = arith.constant 16 : i64
+        %N_i64 = arith.constant 64 : i64
         %c1_i64 = arith.constant 1 : i64
         %c0_i32 = arith.constant 0 : i32
 
@@ -176,7 +176,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, tt
     tt.func public @subgroup_2d_block_load(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16: i32}, %arg3: !tt.ptr<f16> {tt.divisibility = 16: i32}) attributes {noinline = false} {
         %0 = tt.get_program_id x : i32
         %M_i64 = arith.constant 64 : i64
-        %N_i64 = arith.constant 16 : i64
+        %N_i64 = arith.constant 64 : i64
         %c1_i64 = arith.constant 1 : i64
         %c0_i32 = arith.constant 0 : i32
 
@@ -197,7 +197,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, tt
     tt.func public @subgroup_2d_block_load(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16: i32}, %arg3: !tt.ptr<f16> {tt.divisibility = 16: i32}) attributes {noinline = false} {
         %0 = tt.get_program_id x : i32
         %M_i64 = arith.constant 64 : i64
-        %N_i64 = arith.constant 16 : i64
+        %N_i64 = arith.constant 64 : i64
         %c1_i64 = arith.constant 1 : i64
         %c0_i32 = arith.constant 0 : i32
 
@@ -218,7 +218,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, tt
     tt.func public @subgroup_2d_block_load(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16: i32}, %arg3: !tt.ptr<f16> {tt.divisibility = 16: i32}) attributes {noinline = false} {
         %0 = tt.get_program_id x : i32
         %M_i64 = arith.constant 64 : i64
-        %N_i64 = arith.constant 16 : i64
+        %N_i64 = arith.constant 64 : i64
         %c1_i64 = arith.constant 1 : i64
         %c0_i32 = arith.constant 0 : i32
 
@@ -239,7 +239,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, tt
     tt.func public @subgroup_2d_block_load(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16: i32}, %arg3: !tt.ptr<f16> {tt.divisibility = 16: i32}) attributes {noinline = false} {
         %0 = tt.get_program_id x : i32
         %M_i64 = arith.constant 64 : i64
-        %N_i64 = arith.constant 32 : i64
+        %N_i64 = arith.constant 64 : i64
         %c1_i64 = arith.constant 1 : i64
         %c0_i32 = arith.constant 0 : i32
 
@@ -260,7 +260,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, tt
     tt.func public @subgroup_2d_block_load(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16: i32}, %arg3: !tt.ptr<f16> {tt.divisibility = 16: i32}) attributes {noinline = false} {
         %0 = tt.get_program_id x : i32
         %M_i64 = arith.constant 64 : i64
-        %N_i64 = arith.constant 32 : i64
+        %N_i64 = arith.constant 64 : i64
         %c1_i64 = arith.constant 1 : i64
         %c0_i32 = arith.constant 0 : i32
 
@@ -281,7 +281,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, tt
     tt.func public @subgroup_2d_block_load(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16: i32}, %arg3: !tt.ptr<f16> {tt.divisibility = 16: i32}) attributes {noinline = false} {
         %0 = tt.get_program_id x : i32
         %M_i64 = arith.constant 64 : i64
-        %N_i64 = arith.constant 32 : i64
+        %N_i64 = arith.constant 64 : i64
         %c1_i64 = arith.constant 1 : i64
         %c0_i32 = arith.constant 0 : i32
 
@@ -302,7 +302,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, tt
     tt.func public @subgroup_2d_block_load(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16: i32}, %arg3: !tt.ptr<f16> {tt.divisibility = 16: i32}) attributes {noinline = false} {
         %0 = tt.get_program_id x : i32
         %M_i64 = arith.constant 128 : i64
-        %N_i64 = arith.constant 32 : i64
+        %N_i64 = arith.constant 64 : i64
         %c1_i64 = arith.constant 1 : i64
         %c0_i32 = arith.constant 0 : i32
 
@@ -323,7 +323,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, tt
     tt.func public @subgroup_2d_block_load(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16: i32}, %arg3: !tt.ptr<f16> {tt.divisibility = 16: i32}) attributes {noinline = false} {
         %0 = tt.get_program_id x : i32
         %M_i64 = arith.constant 256 : i64
-        %N_i64 = arith.constant 32 : i64
+        %N_i64 = arith.constant 64 : i64
         %c1_i64 = arith.constant 1 : i64
         %c0_i32 = arith.constant 0 : i32
 
@@ -344,7 +344,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, tt
     tt.func public @subgroup_2d_block_load(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16: i32}, %arg3: !tt.ptr<f16> {tt.divisibility = 16: i32}) attributes {noinline = false} {
         %0 = tt.get_program_id x : i32
         %M_i64 = arith.constant 256 : i64
-        %N_i64 = arith.constant 32 : i64
+        %N_i64 = arith.constant 64 : i64
         %c1_i64 = arith.constant 1 : i64
         %c0_i32 = arith.constant 0 : i32
 
@@ -365,7 +365,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, tt
     tt.func public @subgroup_2d_block_load(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16: i32}, %arg3: !tt.ptr<f16> {tt.divisibility = 16: i32}) attributes {noinline = false} {
         %0 = tt.get_program_id x : i32
         %M_i64 = arith.constant 256 : i64
-        %N_i64 = arith.constant 32 : i64
+        %N_i64 = arith.constant 64 : i64
         %c1_i64 = arith.constant 1 : i64
         %c0_i32 = arith.constant 0 : i32
 

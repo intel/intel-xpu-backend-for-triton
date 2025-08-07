@@ -140,6 +140,11 @@ static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
       op.getTileWidth() == 16 && op.getVBlocks() == 2 && !op.getVnniTransform())
     return false;
 
+  // intel_sub_group_2d_block_read_8b_16r8x4c
+  if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 16 &&
+      op.getTileWidth() == 8 && op.getVBlocks() == 4 && !op.getVnniTransform())
+    return false;
+
   // intel_sub_group_2d_block_read_8b_16r16x2c
   if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 16 &&
       op.getTileWidth() == 16 && op.getVBlocks() == 2 && !op.getVnniTransform())
@@ -923,13 +928,16 @@ struct TritonFToTf32OpLowering
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
     Value value = op->getOperand(0);
-    SmallVector<Type> argTypes{f32_ty};
+    Type valueType = value.getType();
+
+    SmallVector<Type> argTypes{valueType};
     SmallVector<Value> args{value};
 
-    const StringLiteral funcName = "_Z25__spirv_RoundFToTF32INTELf";
-    auto retType = f32_ty;
+    std::string fnName = "__spirv_RoundFToTF32INTEL";
+    fnName = intel::mangle(fnName, argTypes);
+    auto retType = valueType;
     auto callOp = intel::createDeviceFunctionCall(
-        rewriter, funcName, retType, {argTypes}, {args}, {},
+        rewriter, fnName, retType, {argTypes}, {args}, {},
         intel::noUnwindWillReturnAttrs);
     rewriter.replaceOp(op, callOp);
     return success();

@@ -107,3 +107,34 @@ module {
   // CHECK:           tt.return
   // CHECK:         }
 }
+
+// -----
+
+module {
+  // COM: From Liger-Kernel
+  // COM: For details: https://github.com/intel/intel-xpu-backend-for-triton/issues/4796
+  // CHECK-LABEL: _error_repro_kernel
+  tt.func public @_error_repro_kernel(%input_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %input_row_stride: i32 {tt.divisibility = 16 : i32}, %temp_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %temp_row_stride: i32 {tt.divisibility = 16 : i32}, %output_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %n_rows: i32, %n_cols: i32 {tt.divisibility = 16 : i32}) {
+    %c1_i32 = arith.constant 1 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<64xf32>
+    %col_offsets = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32>
+    %mask = tt.splat %n_cols : i32 -> tensor<64xi32>
+    %mask_0 = arith.cmpi slt, %col_offsets, %mask : tensor<64xi32>
+    // CHECK: %[[IF:.*]]:3 = scf.if %{{.*}} -> (!tt.ptr<f32>, !tt.ptr<f32>, tensor<64xf32>) {
+    %output_row:3 = scf.for %_ = %c0_i32 to %n_rows step %c1_i32 iter_args(%input_ptr_1 = %input_ptr, %temp_ptr_2 = %temp_ptr, %output_row_3 = %cst) -> (!tt.ptr<f32>, !tt.ptr<f32>, tensor<64xf32>)  : i32 {
+      %input_row = tt.splat %input_ptr_1 : !tt.ptr<f32> -> tensor<64x!tt.ptr<f32>>
+      %input_row_4 = tt.addptr %input_row, %col_offsets : tensor<64x!tt.ptr<f32>>, tensor<64xi32>
+      %input_row_5 = tt.load %input_row_4, %mask_0, %cst : tensor<64x!tt.ptr<f32>>
+      %temp_ptr_6 = tt.addptr %temp_ptr_2, %temp_row_stride : !tt.ptr<f32>, i32
+      %output_row_7 = arith.addf %output_row_3, %input_row_5 : tensor<64xf32>
+      %input_ptr_8 = tt.addptr %input_ptr_1, %input_row_stride : !tt.ptr<f32>, i32
+      scf.yield %input_ptr_8, %temp_ptr_6, %output_row_7 : !tt.ptr<f32>, !tt.ptr<f32>, tensor<64xf32>
+    }
+    %0 = tt.splat %output_ptr : !tt.ptr<f32> -> tensor<64x!tt.ptr<f32>>
+    %1 = tt.addptr %0, %col_offsets : tensor<64x!tt.ptr<f32>>, tensor<64xi32>
+    // CHECK: tt.store %{{.*}}, %[[IF]]#2, %{{.*}} : tensor<64x!tt.ptr<f32>>
+    tt.store %1, %output_row#2, %mask_0 : tensor<64x!tt.ptr<f32>>
+    tt.return
+  }
+}

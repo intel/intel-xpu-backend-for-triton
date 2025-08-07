@@ -261,3 +261,28 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+// COM: Case 5:
+// COM: Checks that block encoding has been forwarded to the store op
+// COM: and the ttg.convert_layout operation has been removed
+// CHECK: #[[BLOCKED:.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_sg_2d_block"} {
+  tt.func public @matmul_kernel_with_block_pointers(%arg0: !tt.ptr<f16>) {
+    %c8_i32 = arith.constant 8 : i32
+    %c64_i64 = arith.constant 64 : i64
+    %c1_i64 = arith.constant 1 : i64
+    %c256_i64 = arith.constant 256 : i64
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x256xf16, #blocked>
+    // CHECK-NOT: ttg.convert_layout
+    %25 = ttg.convert_layout %cst : tensor<64x256xf16, #blocked> -> tensor<64x256xf16, #blocked1>
+    // CHECK: tt.make_tensor_ptr {{.*}}, {{\[}}{{.*}}, {{.*}}], {{\[}}{{.*}}, {{.*}}], {{\[}}{{.*}}, {{.*}}] {order = array<i32: 1, 0>} : <tensor<64x256xf16, #[[BLOCKED]]>>
+    %27 = tt.make_tensor_ptr %arg0, [%c256_i64, %c256_i64], [%c64_i64, %c1_i64], [%c8_i32, %c8_i32] {order = array<i32: 1, 0>} : <tensor<64x256xf16, #blocked1>>
+    // CHECK: tt.store {{.*}}, {{.*}} {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<64x256xf16, #[[BLOCKED]]>>
+    tt.store %27, %25 {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<64x256xf16, #blocked1>>
+    tt.return
+  }
+}

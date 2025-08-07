@@ -18,17 +18,21 @@ def parse_args():
 def transform_df(df, tag):
     df_results = pd.DataFrame()
 
-    df = df[df["metric_name"].eq("speed") & ~df["gpu_name"].str.contains("NVIDIA")]
+    df = df[~df["gpu_name"].str.contains("NVIDIA")]
 
     if len(df) == 0:
         raise ValueError("No new results found, did all benchmarks just fail?")
 
-    df_results["benchmark"] = df["kernel_name"] + "-" + df["kernel_operation_mode"]
+    # df_results["benchmark"] = df["kernel_name"] + "-" + df["kernel_operation_mode"]
+    df_results["benchmark"] = df["kernel_name"]
+    mapping = {"speed": "_ms", "memory": "_memory_mb"}
+    df_results["value_name"] = df["kernel_operation_mode"] + df["metric_name"].map(mapping)
+    df_results["value"] = df["y_value_50"]
+    df_results["benchmark_group"] = "liger"
     df_results["run_uuid"] = uuid.uuid4().hex  # Generate a unique run ID
-    df_results["datetime"] = datetime.datetime.now()
+    df_results["ts"] = datetime.datetime.now()
     df_results["compiler"] = df["kernel_provider"]
     # Use the 50th percentile value.
-    df_results["time_ms"] = df["y_value_50"]
     df_results["comment"] = ""  # Empty comment
 
     # Create the parameters JSON, handling different x_value types correctly.

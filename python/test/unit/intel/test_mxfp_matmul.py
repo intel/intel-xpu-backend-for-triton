@@ -97,7 +97,7 @@ def mxfp_matmul(  #
 
 
 @pytest.mark.parametrize("M, N, K", [(1024, 512, 512)])
-@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128)])
+@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(64, 64, 64)])
 @pytest.mark.parametrize("NUM_STAGES", [1, 3])
 @pytest.mark.parametrize("B_TRANS", [True, False])
 @pytest.mark.parametrize("PACK_B_ALONG_K", [True, False])

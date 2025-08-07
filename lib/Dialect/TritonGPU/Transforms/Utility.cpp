@@ -1307,11 +1307,11 @@ void populateForOpDeadArgumentElimination(RewritePatternSet &patterns) {
 
 ttg::LocalAllocOp findShmemAlloc(Value operand) {
   // If it's a shmem operand, it must either be defined outside the loop, or
-  // come from an MemDescSubview op. Only ConvertLayout and Trans ops are
+  // come from an MemDescIndex op. Only ConvertLayout and MemdescView ops are
   // allowed in between.
   Value transitiveOperand = operand;
   while (isa_and_nonnull<ttg::ConvertLayoutOp, tt::TransOp, ttg::MemDescTransOp,
-                         ttg::MemDescReshapeOp>(
+                         ttg::MemDescReshapeOp, ttg::MemDescSubsliceOp>(
              transitiveOperand.getDefiningOp()) ||
          isa<BlockArgument>(transitiveOperand)) {
     if (auto blockArg = dyn_cast<BlockArgument>(transitiveOperand)) {
@@ -1324,7 +1324,7 @@ ttg::LocalAllocOp findShmemAlloc(Value operand) {
       transitiveOperand = transitiveOperand.getDefiningOp()->getOperand(0);
     }
   }
-  if (auto subView = dyn_cast_or_null<ttg::MemDescSubviewOp>(
+  if (auto subView = dyn_cast_or_null<ttg::MemDescIndexOp>(
           transitiveOperand.getDefiningOp())) {
     // Multi-buffered operand
     return dyn_cast_or_null<ttg::LocalAllocOp>(
@@ -1488,14 +1488,22 @@ void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
     // `subview(old_op)` is replaced by a new `subview(val)`.
     builder.setInsertionPoint(user);
     Value newVal;
-    if (auto subview = dyn_cast<ttg::MemDescSubviewOp>(user)) {
+    if (auto subview = dyn_cast<ttg::MemDescIndexOp>(user)) {
       ttg::MemDescType oldType = subview.getType();
       bool isMutable = cast<ttg::MemDescType>(val.getType()).getMutableMemory();
       Type newDstType = ttg::MemDescType::get(
           oldType.getShape(), oldType.getElementType(), oldType.getEncoding(),
-          oldType.getMemorySpace(), isMutable);
-      newVal = builder.create<ttg::MemDescSubviewOp>(
-          subview.getLoc(), newDstType, val, subview.getOffsets());
+          oldType.getMemorySpace(), isMutable, oldType.getAllocShape());
+      newVal = builder.create<ttg::MemDescIndexOp>(subview.getLoc(), newDstType,
+                                                   val, subview.getIndex());
+    } else if (auto subslice = dyn_cast<ttg::MemDescSubsliceOp>(user)) {
+      ttg::MemDescType oldType = subslice.getType();
+      bool isMutable = cast<ttg::MemDescType>(val.getType()).getMutableMemory();
+      Type newDstType = ttg::MemDescType::get(
+          oldType.getShape(), oldType.getElementType(), oldType.getEncoding(),
+          oldType.getMemorySpace(), isMutable, oldType.getAllocShape());
+      newVal = builder.create<ttg::MemDescSubsliceOp>(
+          subslice.getLoc(), newDstType, val, subslice.getOffsets());
     } else if (auto trans = dyn_cast<ttg::MemDescTransOp>(user)) {
       newVal = builder.create<ttg::MemDescTransOp>(trans.getLoc(), val,
                                                    trans.getOrder());
@@ -1532,9 +1540,10 @@ void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
     op->erase();
 }
 
-void replaceUsesWithLocalLoad(OpBuilder &builder, OpResult old,
-                              TypedValue<ttg::MemDescType> alloc,
-                              TypedValue<ttg::AsyncTokenType> token) {
+ttg::LocalLoadOp
+replaceUsesWithLocalLoad(OpBuilder &builder, OpResult old,
+                         TypedValue<ttg::MemDescType> alloc,
+                         TypedValue<ttg::AsyncTokenType> token) {
   //  Remove redundant local_load -> local_alloc
   auto allocTy = alloc.getType();
   SmallVector<ttg::LocalAllocOp> allocsToErase;
@@ -1549,16 +1558,18 @@ void replaceUsesWithLocalLoad(OpBuilder &builder, OpResult old,
 
   // If there are some uses that were not local_allocs, we need to create a
   // local_load for them.
+  ttg::LocalLoadOp maybeLocalLoad;
   if (std::distance(old.getUsers().begin(), old.getUsers().end()) >
       allocsToErase.size()) {
     auto loc = old.getOwner()->getLoc();
-    auto sharedLoad = builder.template create<ttg::LocalLoadOp>(
+    maybeLocalLoad = builder.template create<ttg::LocalLoadOp>(
         loc, old.getType(), alloc, token);
-    old.replaceAllUsesWith(sharedLoad.getResult());
+    old.replaceAllUsesWith(maybeLocalLoad);
   }
   for (auto alloc : allocsToErase) {
     alloc.erase();
   }
+  return maybeLocalLoad;
 }
 
 bool comesFromLoadOrBlockArg(Value v) {

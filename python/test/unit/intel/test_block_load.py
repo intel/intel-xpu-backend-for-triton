@@ -16,9 +16,6 @@ from triton._internal_testing import is_xpu
 @pytest.mark.xfail(not torch.xpu.get_device_capability()['has_subgroup_2d_block_io'],
                    reason="Block loads not supported on this architecture")
 def test_block_load_dpas_layout(M, N, dtype_str, transpose, device, tmp_path: pathlib.Path):
-    if transpose and N == 8:
-        pytest.xfail("Pitch = 8 is not allowed by block IO")
-
     # modify the layouts to ensure the correct OCL/SPIRV intrinsic is called for each datatype
     if dtype_str == "int8":
         A_width = 2

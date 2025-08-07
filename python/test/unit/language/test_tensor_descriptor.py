@@ -4,7 +4,7 @@ import numpy as np
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_blackwell, is_hopper, is_interpreter, numpy_random, to_triton, unwrap_tensor, tma_dtypes, to_numpy
+from triton._internal_testing import is_hopper, is_interpreter, numpy_random, to_triton, unwrap_tensor, tma_dtypes, to_numpy
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from typing import Optional
 from triton._internal_testing import is_cuda, is_hip, is_hip_cdna3, is_xpu
@@ -1326,7 +1326,7 @@ def torch_gather_rows(input, idx, y, block_y):
 @pytest.mark.parametrize("BLOCK_X, BLOCK_Y", [(32, 32), (64, 128), (16, 128), (512, 16)])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.int8])
 @pytest.mark.parametrize("y", [0, 32, 48])
-@pytest.mark.skipif(not is_xpu() and not is_blackwell(), reason="TMA Gather requires blackwell")
+@pytest.mark.skipif(is_hopper(), reason="TMA Scatter is not supported on hopper")
 def test_tma_gather(X, Y, BLOCK_X, BLOCK_Y, dtype, y, device):
     if BLOCK_X > X or y + BLOCK_Y > Y:
         pytest.xfail()
@@ -1378,7 +1378,7 @@ def tma_gather_dot_pipeline(  #
 @pytest.mark.interpreter
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(16, 16, 16)])
 @pytest.mark.parametrize("K", [128])
-@pytest.mark.skipif(not is_xpu() and not is_blackwell(), reason="TMA Gather requires blackwell")
+@pytest.mark.skipif(is_hopper(), reason="TMA Scatter is not supported on hopper")
 def test_tma_gather_dot_pipeline(BLOCK_M, BLOCK_N, BLOCK_K, K, device):
 
     def alloc_fn(size: int, align: int, steam):
@@ -1425,7 +1425,7 @@ def tma_scatter_rows_kernel(out_ptr, in_ptr, idx_ptr, y, X: tl.constexpr, Y: tl.
 @pytest.mark.parametrize("BLOCK_X, BLOCK_Y", [(32, 32), (64, 128), (16, 128), (512, 16)])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.int8])
 @pytest.mark.parametrize("y", [0, 32, 48])
-@pytest.mark.skipif(not is_xpu() and not is_blackwell(), reason="TMA Scatter requires blackwell")
+@pytest.mark.skipif(is_hopper(), reason="TMA Scatter is not supported on hopper")
 def test_tma_scatter(X, Y, BLOCK_X, BLOCK_Y, dtype, y, device):
     if BLOCK_X > X or y + BLOCK_Y > Y:
         pytest.xfail()
@@ -1507,8 +1507,6 @@ def test_tensor_descriptor_reduce(kind, descriptor, dtype_str, num_ctas, M_BLOCK
             pytest.skip("Broken on rocm")
         if is_xpu():
             if (kind, dtype_str) in [("add", "bfloat16")]:
-                if descriptor == "host":
-                    pytest.skip("FIXME: issue #4289")
                 pytest.skip("FIXME: issue #3914")
 
     @triton.jit(debug=True)
@@ -1593,8 +1591,6 @@ def test_tensor_descriptor_reduce(kind, descriptor, dtype_str, num_ctas, M_BLOCK
 def test_host_tensor_descriptor_load(dtype_str, num_ctas, M_BLOCK, N_BLOCK, device):
     if num_ctas == 2 and (not is_cuda() or torch.cuda.get_device_capability(0)[0] not in (9, 10)):
         pytest.xfail("CTAs is unsupported for these cards")
-    if is_xpu():
-        pytest.skip("FIXME: issue #4289")
 
     @triton.jit(debug=True)
     def kernel(out_ptr, desc, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
@@ -1658,8 +1654,6 @@ def test_host_tensor_descriptor_matmul(num_stages, num_ctas, BLOCK_M, BLOCK_N, B
 
     if is_hip() and (BLOCK_M, BLOCK_N, BLOCK_K, num_stages) == (256, 128, 32, 4):
         pytest.skip("Insufficient shared memory on HIP devices")
-    if is_xpu():
-        pytest.skip("FIXME: issue #4289")
 
     if is_interpreter():
         M, N, K = BLOCK_M, BLOCK_N, BLOCK_K

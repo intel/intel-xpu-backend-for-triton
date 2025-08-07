@@ -119,16 +119,7 @@ std::optional<int64_t> getFoldedConstantValue(Operation *op) {
   if (results.size() != 1)
     return std::nullopt;
 
-  std::optional<int64_t> intAttr = getIntAttr(results[0]);
-  if (intAttr.has_value())
-    return intAttr.value();
-
-  auto val = cast<Value>(results[0]);
-  auto constOp = val.getDefiningOp<arith::ConstantOp>();
-  if (!constOp)
-    return std::nullopt;
-
-  return getIntAttr(constOp.getValue());
+  return getConstantIntValue(results[0]);
 }
 
 bool isConstant(Value val, int64_t expected) {

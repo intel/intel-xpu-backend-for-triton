@@ -1,5 +1,6 @@
 import importlib.metadata
 import os
+import re
 import hashlib
 import shutil
 import ctypes
@@ -9,10 +10,11 @@ from pathlib import Path
 from functools import cached_property
 
 from triton import knobs
-from triton.runtime.build import _build, platform_key
+from triton.runtime.build import _build, platform_key, _load_module_from_path
 from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import DriverBase
+from triton.tools.tensor_descriptor import TensorDescriptor
 
 # A hard-coded cache version that can be updated when we know that the cached file is invalid and
 # there are no other ways to detect that the runtime environment has changed. For example, a shared
@@ -252,7 +254,7 @@ class TritonLauncher:
             ctypes.windll.kernel32.FreeLibrary(handle)
 
 
-def compile_module_from_src(src, name):
+def compile_module_from_src(src: str, name: str):
     hasher = hashlib.sha256(__CACHE_VERSION.encode("utf-8"))
     hasher.update((src + platform_key()).encode("utf-8"))
     key = hasher.hexdigest()
@@ -278,18 +280,14 @@ def compile_module_from_src(src, name):
 
     if name == 'arch_utils':
         return ArchParser(cache_path)
-    elif name == 'spirv_utils':
+    if name == 'spirv_utils':
         return SpirvUtils(cache_path)
-    elif name == '__triton_launcher':
+    if name == '__triton_launcher':
         return TritonLauncher(cache_path)
-    elif name == 'proton_utils':
+    if name == 'proton_utils':
         return cache_path
 
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(name, cache_path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    return _load_module_from_path(name, cache_path)
 
 
 # ------------------------
@@ -308,12 +306,12 @@ class XPUUtils(object):
         dirname = os.path.dirname(os.path.realpath(__file__))
         # we save `spirv_utils` module so that the destructor is not called prematurely, which will unload the dll
         # and can cause `Fatal Python error: Segmentation fault`
-        self.mod = compile_module_from_src(Path(os.path.join(dirname, "driver.c")).read_text(), "spirv_utils")
-        self.load_binary = self.mod.load_binary
-        self.get_device_properties = self.mod.get_device_properties
-        self.device_count = self.mod.init_devices(self.get_sycl_queue())
-        self.wait_on_sycl_queue = self.mod.wait_on_sycl_queue
-        self.has_opencl_extension = self.mod.has_opencl_extension
+        mod = compile_module_from_src(src=Path(os.path.join(dirname, "driver.c")).read_text(), name="spirv_utils")
+        self.load_binary = mod.load_binary
+        self.get_device_properties = mod.get_device_properties
+        self.device_count = mod.init_devices(self.get_sycl_queue())
+        self.wait_on_sycl_queue = mod.wait_on_sycl_queue
+        self.has_opencl_extension = mod.has_opencl_extension
 
     def get_current_device(self):
         import torch
@@ -369,13 +367,45 @@ FLOAT_PACK_FUNCTION = {
     "fp64": "pack_fp64",
 }
 
+_BASE_ARGS_FORMAT = "iiiOOOOOO"
+
 
 def make_launcher(constants, signature):
 
-    def _serialize_signature(sig):
+    def _expand_signature(signature):
+        output = []
+        # Expand tensor descriptor arguments into base pointer, shape, and
+        # strides
+        for sig in signature:
+            if isinstance(sig, str) and sig.startswith("tensordesc"):
+                match = re.match("tensordesc<([^[>]*)\\[([^]]*)\\]", sig)
+                dtype = match.group(1)
+                shape = match.group(2)
+                ndim = shape.count(",") + 1
+
+                output.append("*" + dtype)
+                # Currently the host side tensor descriptors get passed in as a
+                # tensor desc, shape, and strides. We have no way to use these
+                # shape and strides when processing tensor descriptors which is
+                # why we provide our own decomposition above. Sadly this means
+                # we have to pass the shape and strides twice.
+                for _ in range(2 * ndim):
+                    output.append("i64")
+                for _ in range(ndim):
+                    output.append("i32")
+                for _ in range(ndim):
+                    output.append("i64")
+            else:
+                output.append(sig)
+
+        return output
+
+    def _flatten_signature(sig, output):
         if isinstance(sig, tuple):
-            return ','.join(map(_serialize_signature, sig))
-        return sig
+            for x in sig:
+                _flatten_signature(x, output)
+        else:
+            output.append(sig)
 
     def _extracted_type(ty):
         if isinstance(ty, tuple):
@@ -410,13 +440,17 @@ def make_launcher(constants, signature):
             "uint64_t": "K",
         }[ty_to_cpp(ty)]
 
-    args_format = ''.join([format_of(ty) for ty in signature.values()])
-    format = "iiiOOOOOO" + args_format
-    signature = ','.join(map(_serialize_signature, signature.values()))
-    signature = list(filter(bool, signature.split(',')))
-    signature = {i: s for i, s in enumerate(signature)}
-    args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
+    expand_signature = _expand_signature(signature.values())
+    signature = {i: s for i, s in enumerate(expand_signature)}
 
+    args_format = ''.join([format_of(ty) for ty in signature.values()])
+    format = _BASE_ARGS_FORMAT + args_format
+
+    flat_signature = []
+    for sig in signature.values():
+        _flatten_signature(sig, flat_signature)
+    signature = {i: s for i, s in enumerate(flat_signature)}
+    args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
     # Record the end of regular arguments;
     # subsequent arguments are architecture-specific descriptors.
     arg_decl_list = []
@@ -635,9 +669,10 @@ extern "C" EXPORT_FUNC PyObject* launch(PyObject* args) {{
   PyObject* py_kernel;
 
   {newline.join([f"{_extracted_type(ty)} _arg{i};" for i, ty in signature.items()])}
-  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &py_obj_stream, &py_kernel,
-                                      &kernel_metadata, &launch_metadata,
-                                      &launch_enter_hook, &launch_exit_hook {args_list})) {{
+  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ,
+                                           &py_obj_stream, &py_kernel,
+                                           &kernel_metadata, &launch_metadata,
+                                           &launch_enter_hook, &launch_exit_hook{args_list})) {{
     return NULL;
   }}
 
@@ -706,13 +741,30 @@ extern "C" EXPORT_FUNC PyObject* launch(PyObject* args) {{
     return src
 
 
-def serialize_kernel_metadata(arg, args_dict):
-    args_dict['num_warps'] = arg.num_warps
-    args_dict['threads_per_warp'] = arg.threads_per_warp
-    args_dict['shared_memory'] = arg.shared
-    args_dict['kernel_name'] = arg.name
-    args_dict['spv_name'] = f"{arg.name}.spv"
-    args_dict['build_flags'] = arg.build_flags
+def wrap_handle_tensor_descriptor(launcher):
+    """
+    Replace all tensor descriptors with the base ptr, shape, and strides
+    """
+
+    def inner(args):
+        meta_args = args[:len(_BASE_ARGS_FORMAT)]
+        raw_kernel_args = args[len(_BASE_ARGS_FORMAT):]
+        final_args = []
+        for arg in raw_kernel_args:
+            if isinstance(arg, TensorDescriptor):
+                # Currently the host side tensor descriptors get decomposed in
+                # the frontend to tensor desc, shape, and strides. We have no
+                # way to use these shape and strides when processing tensor
+                # descriptors which is why we provide our own decomposition
+                # above. Sadly this means we have to pass the shape and strides
+                # twice.
+                final_args.extend([arg.base, *arg.shape, *arg.strides, *arg.shape, *arg.strides])
+            else:
+                final_args.append(arg)
+
+        return launcher(meta_args + tuple(final_args))
+
+    return inner
 
 
 def serialize_args(args, constants, signature):
@@ -722,6 +774,14 @@ def serialize_args(args, constants, signature):
     if not os.path.exists(dir_path):
         os.makedirs(dir_path)
         print(f"Path to directory consisting of SPIR-V Runner data: {dir_path}")
+
+    def serialize_kernel_metadata(arg, args_dict):
+        args_dict['num_warps'] = arg.num_warps
+        args_dict['threads_per_warp'] = arg.threads_per_warp
+        args_dict['shared_memory'] = arg.shared
+        args_dict['kernel_name'] = arg.name
+        args_dict['spv_name'] = f"{arg.name}.spv"
+        args_dict['build_flags'] = arg.build_flags
 
     cnt = 0
     args_dict = {"gridX": int(args[cnt]), "gridY": int(args[cnt + 1]), "gridZ": int(args[cnt + 2])}
@@ -771,23 +831,30 @@ class XPULauncher(object):
     def __init__(self, src, metadata):
         constants = src.constants if hasattr(src, "constants") else dict()
         arg_idx = lambda x: (src.fn.arg_names.index(x), ) if isinstance(x, str) else x
-        self.constants = {arg_idx(idx): value for idx, value in constants.items()}
-        self.signature = {idx: value for idx, value in src.signature.items()}
-        src = make_launcher(self.constants, self.signature)
-        self.mod = compile_module_from_src(src, "__triton_launcher")
+        constants = {arg_idx(idx): value for idx, value in constants.items()}
+        signature = {idx: value for idx, value in src.signature.items()}
+        src = make_launcher(constants, signature)
+        self.mod = compile_module_from_src(src=src, name="__triton_launcher")
+        has_tensor_desc_arg = any(isinstance(sig, str) and sig.startswith("tensordesc") for sig in signature.values())
+
+        self.launch = wrap_handle_tensor_descriptor(self.mod.launch) if has_tensor_desc_arg else self.mod.launch
+
         # Serialize KernelArguments for SPIR-V Runner
         self.serialize_kernel_args = knobs.intel.dump_spirv_kernel_args
+        self.constants = constants
+        self.signature = signature
 
-    def __call__(self, *args, **kwargs):
+    def __call__(self, *args):
         if self.serialize_kernel_args:
             serialize_args(args, self.constants, self.signature)
-        self.mod.launch(args)
+        self.launch(args)
 
 
 class XPUDriver(DriverBase):
 
     def __init__(self):
         self.launcher_cls = XPULauncher
+        super().__init__()
 
     def __getattr__(self, name):
         # Lazily initialize utils to avoid unnecessary XPU runtime invocations.
@@ -805,45 +872,46 @@ class XPUDriver(DriverBase):
         import torch
         return torch.xpu.current_stream().sycl_queue
 
-    def update_advanced_features(self, device, dev_property):
-        if knobs.intel.device_extensions:
-            # May be useful when using the `TRITON INTEL_DEVICE_ARCH` environment variable
-            # to be able to flexibly turn on/off the advanced feature.
-            supported_extensions = set()
-            supported_extensions.update(knobs.intel.device_extensions.split(" "))
-            dev_property[
-                "has_subgroup_matrix_multiply_accumulate"] = "cl_intel_subgroup_matrix_multiply_accumulate" in supported_extensions
-            dev_property[
-                "has_subgroup_matrix_multiply_accumulate_tensor_float32"] = "cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32" in supported_extensions
-            dev_property["has_subgroup_2d_block_io"] = "cl_intel_subgroup_2d_block_io" in supported_extensions
-            dev_property["has_bfloat16_conversions"] = "cl_intel_bfloat16_conversions" in supported_extensions
-        else:
-            check = self.utils.has_opencl_extension
-            # FIXME: eventually even LTS driver will support OpenCL extensions.
-            # Please remove this after upgrading to a new version.
-            # https://github.com/intel/intel-xpu-backend-for-triton/issues/4708
-            is_lts = "1.3" in dev_property["driver_version"]
-            dev_property["has_subgroup_matrix_multiply_accumulate"] = check(
-                device, b"cl_intel_subgroup_matrix_multiply_accumulate") if not is_lts else False
-            dev_property["has_subgroup_matrix_multiply_accumulate_tensor_float32"] = check(
-                device, b"cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32") if not is_lts else False
-            dev_property["has_subgroup_2d_block_io"] = check(device,
-                                                             b"cl_intel_subgroup_2d_block_io") if not is_lts else False
-            dev_property["has_bfloat16_conversions"] = check(device,
-                                                             b"cl_intel_bfloat16_conversions") if not is_lts else False
-
     def get_current_target(self):
         import torch
         device = self.get_current_device()
         dev_property = torch.xpu.get_device_capability(device)
-        self.update_advanced_features(device, dev_property)
+
+        def update_advanced_features(device, dev_property):
+            if knobs.intel.device_extensions:
+                # May be useful when using the `TRITON INTEL_DEVICE_ARCH` environment variable
+                # to be able to flexibly turn on/off the advanced feature.
+                supported_extensions = set()
+                supported_extensions.update(knobs.intel.device_extensions.split(" "))
+                dev_property[
+                    "has_subgroup_matrix_multiply_accumulate"] = "cl_intel_subgroup_matrix_multiply_accumulate" in supported_extensions
+                dev_property[
+                    "has_subgroup_matrix_multiply_accumulate_tensor_float32"] = "cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32" in supported_extensions
+                dev_property["has_subgroup_2d_block_io"] = "cl_intel_subgroup_2d_block_io" in supported_extensions
+                dev_property["has_bfloat16_conversions"] = "cl_intel_bfloat16_conversions" in supported_extensions
+            else:
+                check = self.utils.has_opencl_extension
+                # FIXME: eventually even LTS driver will support OpenCL extensions.
+                # Please remove this after upgrading to a new version.
+                # https://github.com/intel/intel-xpu-backend-for-triton/issues/4708
+                is_lts = "1.3" in dev_property["driver_version"]
+                dev_property["has_subgroup_matrix_multiply_accumulate"] = check(
+                    device, b"cl_intel_subgroup_matrix_multiply_accumulate") if not is_lts else False
+                dev_property["has_subgroup_matrix_multiply_accumulate_tensor_float32"] = check(
+                    device, b"cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32") if not is_lts else False
+                dev_property["has_subgroup_2d_block_io"] = check(
+                    device, b"cl_intel_subgroup_2d_block_io") if not is_lts else False
+                dev_property["has_bfloat16_conversions"] = check(
+                    device, b"cl_intel_bfloat16_conversions") if not is_lts else False
+
+        update_advanced_features(device, dev_property)
         return GPUTarget("xpu", dev_property, warp_size=32)
 
     def build_proton_help_lib(self):
         from triton.backends.intel.driver import compile_module_from_src
 
         dirname = os.path.dirname(os.path.realpath(__file__))
-        return compile_module_from_src(Path(dirname).joinpath("proton_utils.cpp").read_text(), "proton_utils")
+        return compile_module_from_src(src=Path(dirname).joinpath("proton_utils.cpp").read_text(), name="proton_utils")
 
     def get_active_torch_device(self):
         import torch

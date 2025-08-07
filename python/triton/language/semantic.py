@@ -9,8 +9,6 @@ from triton.runtime import driver
 from .._C.libtriton import ir
 from . import core as tl
 
-import triton
-
 T = TypeVar('T')
 TensorTy = TypeVar('TensorTy')
 
@@ -620,6 +618,9 @@ class TritonSemantic(Generic[TensorTy]):
             return value
         ret_ty = tl.block_type(value.dtype, shape)
         return self.tensor(self.builder.create_splat(ret_ty.to_ir(self.builder), value.handle), ret_ty)
+
+    def unsplat(self, value: TensorTy) -> TensorTy:
+        return self.tensor(self.builder.create_unsplat(value.handle), value.dtype)
 
     def reshape(self, input: TensorTy, dst_shape: List[int], can_reorder: bool) -> TensorTy:
         numel = 1
@@ -1730,6 +1731,36 @@ class TritonSemantic(Generic[TensorTy]):
         gather = self.builder.create_gather(src.handle, index.handle, axis)
         return self.wrap_tensor(gather, src.type.scalar, index.type.shape)
 
+# ===----------------------------------------------------------------------===
+#                               Map Elementwise
+# ===----------------------------------------------------------------------===
+
+    def broadcast_tensors(self, *inputs):
+        if not inputs:
+            return ()
+        head, *tail = inputs
+        for i in range(len(tail)):
+            head, tail[i] = self.broadcast_impl_value(head, tail[i])
+        for i in range(len(tail)):
+            head, tail[i] = self.broadcast_impl_value(head, tail[i])
+        return (head, *tail)
+
+    def map_elementwise(self, inputs: Sequence[tl.tensor], result_types: Sequence[tl.dtype], pack: int,
+                        region_builder_fn) -> Tuple[tl.tensor, ...]:
+        inputs = self.broadcast_tensors(*inputs)
+
+        assert len(inputs) > 0, "map_elementwise must have at least 1 input tensor"
+        result_types = [inputs[0].type.with_element_ty(ty.scalar) for ty in result_types]
+        elementwise_op = self.builder.create_map_elementwise(
+            [t.handle for t in inputs],
+            [ty.to_ir(self.builder) for ty in result_types],
+            pack,
+        )
+        region_builder_fn(elementwise_op)
+        # assert elementwise_op.verify()
+
+        return tuple(self.tensor(elementwise_op.get_result(i), ty) for i, ty in enumerate(result_types))
+
 
 # ===----------------------------------------------------------------------===
 #                               Histogram
@@ -1887,13 +1918,13 @@ class TritonSemantic(Generic[TensorTy]):
                 f"Descriptor block shape must have at least 16 bytes in the last dimension, but got {contig_dim_size} * {elem_size} = {contig_dim_size * elem_size} bytes"
             )
 
-        strides[-1] = tl._unwrap_if_constexpr(strides[-1])
-        backend = triton.runtime.driver.active.get_current_target().backend
-        if backend != "xpu" and strides[-1] != 1:
-            raise ValueError(f"Tensor descriptor last dim must be 1 but got {strides[-1]}")
+        last_stride = tl._unwrap_if_constexpr(strides[-1])
+        backend = self.builder.options.backend_name
+        if backend != "intel" and last_stride != 1:
+            raise ValueError(f"Tensor descriptor last dim must be 1 but got {last_stride}")
 
         shape = [self.make_scalar(x, tl.int32) for x in shape]
-        strides = [self.make_scalar(x, tl.int64) for x in strides]
+        strides = [self.make_scalar(tl._unwrap_if_constexpr(x), tl.int64) for x in strides]
 
         # Check whether `block_shape` is static
         block_shape = tl._unwrap_shape(block_shape)

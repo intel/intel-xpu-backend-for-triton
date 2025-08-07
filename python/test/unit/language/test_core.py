@@ -37,6 +37,7 @@ from triton._internal_testing import (
     is_hip_cdna3,
     is_hip_cdna4,
     is_hip_gfx12,
+    get_hip_lds_size,
     is_xpu,
     get_arch,
     torch_float8_dtypes,
@@ -251,7 +252,7 @@ class BlockedLayout:
         return f"#{GPU_DIALECT}.blocked<{{sizePerThread={self.sz_per_thread}, threadsPerWarp={self.threads_per_warp}, warpsPerCTA={self.warps_per_cta}, order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
 
 
-class SharedLayout:
+class SwizzledSharedLayout:
 
     def __init__(self, vec, per_phase, max_phase, order, ctas_per_cga, cta_split_num, cta_order):
         self.vec = vec
@@ -264,6 +265,19 @@ class SharedLayout:
 
     def __str__(self):
         return f"#{GPU_DIALECT}.swizzled_shared<{{vec={self.vec}, perPhase={self.per_phase}, maxPhase={self.max_phase}, order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
+
+
+class PaddedSharedLayout:
+
+    def __init__(self, interval_padding_pairs, order, ctas_per_cga, cta_split_num, cta_order):
+        self.interval_padding_pairs = "[" + ", ".join(f"{v[0]}:{v[1]:+d}" for v in interval_padding_pairs) + "]"
+        self.order = order
+        self.ctas_per_cga = ctas_per_cga
+        self.cta_split_num = cta_split_num
+        self.cta_order = cta_order
+
+    def __str__(self):
+        return f"#{GPU_DIALECT}.padded_shared<{self.interval_padding_pairs} {{order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
 
 
 class NVMMASharedLayout:
@@ -328,7 +342,7 @@ def warps_per_cta(layout, shape):
 
 
 def is_layout_applicable(layout) -> bool:
-    if isinstance(layout, (BlockedLayout, SharedLayout, LinearLayout)):
+    if isinstance(layout, (BlockedLayout, SwizzledSharedLayout, LinearLayout)):
         return True
     elif isinstance(layout, SliceLayout):
         return is_layout_applicable(layout.parent)
@@ -341,7 +355,9 @@ def is_layout_applicable(layout) -> bool:
         return True
     elif is_hip():
         target_arch = triton.runtime.driver.active.get_current_target().arch
-        if "gfx11" in target_arch:
+        if isinstance(layout, PaddedSharedLayout):
+            return true
+        elif "gfx11" in target_arch:
             # RDNA 3
             return isinstance(layout, WmmaLayout)
         elif any(arch for arch in ["gfx8", "gfx9"] if arch in target_arch):
@@ -3903,9 +3919,11 @@ def get_test_dot_small_k_mfma_cases():
 
 # M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size
 # introduced in #4516
-def get_test_dot_small_mn_fma_cases():
+def get_test_dot_small_mn_mfma_cases():
+    if not is_hip_cdna():
+        return []
     return [(*shape_nw, False, False, epilogue, 'ieee', in_dtype, out_dtype, 1, None)
-            for shape_nw in [(2, 2, 16, 1), (1, 64, 64, 1), (64, 2, 64, 2), (64, 64, 4, 4), (8, 16, 16, 1)]
+            for shape_nw in [(4, 64, 64, 1), (64, 4, 64, 1)]
             for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols']
             for in_dtype, out_dtype in [('float16', 'float16'), ('float32', 'float32')]]
 
@@ -3945,7 +3963,7 @@ def get_test_small_dots_cases():
     get_test_dot_mfma_edge_cases() + \
     get_test_dot_fp8_output_cases() + \
     get_test_dot_small_k_mfma_cases() + \
-    get_test_dot_small_mn_fma_cases() + \
+    get_test_dot_small_mn_mfma_cases() + \
     get_test_dot_softmax() + \
     get_test_small_dots_cases())
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
@@ -4144,13 +4162,15 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         return
 
     if is_hip_cdna():
-        if M != 4:
-            return
         amdgcn = pgm.asm['amdgcn']
-        if in_dtype == 'float16':
-            assert 'v_dot2c_f32_f16' in amdgcn
-        elif (in_dtype == 'bfloat16') and is_hip_cdna4():
-            assert 'v_dot2c_f32_bf16' in amdgcn
+
+        if (M, N) == (4, 64) or (M, N) == (64, 4):
+            assert 'v_mfma_f32_4x4' in amdgcn
+        elif (M, N) == (4, 32):
+            if in_dtype == 'float16':
+                assert 'v_dot2c_f32_f16' in amdgcn
+            elif (in_dtype == 'bfloat16') and is_hip_cdna4():
+                assert 'v_dot2c_f32_bf16' in amdgcn
         return
 
     # make sure ld/st are vectorized
@@ -5808,6 +5828,110 @@ def test_inline_asm_packed_multiple_outputs(device):
 
 
 # -----------------------
+# test map elementwise
+# -----------------------
+
+
+@pytest.mark.parametrize("num_ctas", num_ctas_list)
+def test_map_elementwise(num_ctas, device):
+
+    @triton.jit
+    def compare(x, y):
+        if x < y:
+            return -1
+        elif x == y:
+            return 0
+        else:
+            return 1
+
+    @triton.jit
+    def kernel(X, Y, Z, BLOCK: tl.constexpr):
+        x = tl.load(X + tl.arange(0, BLOCK))
+        y = tl.load(Y + tl.arange(0, BLOCK))
+        z = tl.map_elementwise(compare, x, y)
+        tl.store(Z + tl.arange(0, BLOCK), z)
+
+    shape = (128, )
+    rs = RandomState(17)
+    x = numpy_random(shape, dtype_str='int32', rs=rs)
+    y = numpy_random(shape, dtype_str='int32', rs=rs)
+    x_tri = to_triton(x, device=device)
+    y_tri = to_triton(y, device=device)
+    z_tri = to_triton(numpy_random(shape, dtype_str='int32', rs=rs), device=device)
+    kernel[(1, )](x_tri, y_tri, z_tri, BLOCK=shape[0], num_ctas=num_ctas)
+    z_ref = (x > y).astype(int) - (y > x).astype(int)
+    np.testing.assert_equal(z_ref, to_numpy(z_tri))
+
+
+def test_map_elementwise_multiple_outputs(device):
+
+    @triton.jit
+    def divmod(a, b):
+        return a // b, a % b
+
+    @triton.jit
+    def kernel(A, B, C, D, BLOCK: tl.constexpr):
+        a = tl.load(A + tl.arange(0, BLOCK))
+        b = tl.load(B + tl.arange(0, BLOCK))
+
+        c, d = tl.map_elementwise(divmod, a, b)
+
+        tl.store(C + tl.arange(0, BLOCK), c)
+        tl.store(D + tl.arange(0, BLOCK), d)
+
+    shape = (512, )
+    rs = RandomState(17)
+    A = numpy_random(shape, dtype_str='uint32', rs=rs)
+    B = numpy_random(shape, dtype_str='uint32', rs=rs)
+    A_tri = to_triton(A, device=device)
+    B_tri = to_triton(B, device=device)
+    C_tri = to_triton(numpy_random(shape, dtype_str='uint32', rs=rs), device=device)
+    D_tri = to_triton(numpy_random(shape, dtype_str='uint32', rs=rs), device=device)
+    kernel[(1, )](A_tri, B_tri, C_tri, D_tri, BLOCK=shape[0])
+
+    C_ref = A // B
+    D_ref = A % B
+
+    np.testing.assert_equal(C_ref, to_numpy(C_tri))
+    np.testing.assert_equal(D_ref, to_numpy(D_tri))
+
+
+def test_map_elementwise_pack(device):
+
+    @triton.jit
+    def divmod(a0, a1, b0, b1):
+        return a0 // b0, a1 // b1, a0 % b0, a1 % b1
+
+    @triton.jit
+    def kernel(A, B, C, D, BLOCK: tl.constexpr):
+        a = tl.load(A + tl.arange(0, BLOCK))
+        b = tl.load(B + tl.arange(0, BLOCK))
+
+        c, d = tl.map_elementwise(divmod, a, b, pack=2)
+
+        tl.store(C + tl.arange(0, BLOCK), c)
+        tl.store(D + tl.arange(0, BLOCK), d)
+
+    shape = (512, )
+    rs = RandomState(17)
+    A = numpy_random(shape, dtype_str='uint32', rs=rs)
+    B = numpy_random(shape, dtype_str='uint32', rs=rs)
+    A_tri = to_triton(A, device=device)
+    B_tri = to_triton(B, device=device)
+    C_tri = to_triton(numpy_random(shape, dtype_str='uint32', rs=rs), device=device)
+    D_tri = to_triton(numpy_random(shape, dtype_str='uint32', rs=rs), device=device)
+    h = kernel[(1, )](A_tri, B_tri, C_tri, D_tri, BLOCK=shape[0])
+    print(h.asm["llir"])
+    print(h.asm["ttir"])
+
+    C_ref = A // B
+    D_ref = A % B
+
+    np.testing.assert_equal(C_ref, to_numpy(C_tri))
+    np.testing.assert_equal(D_ref, to_numpy(D_tri))
+
+
+# -----------------------
 # test control flow
 # -----------------------
 
@@ -6096,6 +6220,36 @@ def test_constexpr_if_return(device):
     assert out.item() >= 0
 
 
+def test_constexpr_flattens():
+    assert tl.constexpr(tl.constexpr(5)) == tl.constexpr(5)
+    assert tl.constexpr(tl.constexpr(tl.constexpr(5))) == tl.constexpr(5)
+
+
+@pytest.mark.parametrize("literal, tensor_ty", [(10, tl.int32), (32.1, tl.float32),
+                                                ((5, 6, 7), None),  # tuples can't be lifted to tensors
+                                                ])
+def test_constexpr_assignment(literal, tensor_ty):
+    from triton.language.core import constexpr_type
+
+    @triton.jit
+    def kernel(input_literal: tl.constexpr, tensor_type: tl.constexpr):
+        patched_literal: tl.constexpr = PATCHED
+        # Sanity checks
+        tl.static_assert(patched_literal.type == constexpr_type(PATCHED))
+        tl.static_assert(input_literal.type == constexpr_type(PATCHED))
+
+        assigned_literal: tl.constexpr = input_literal
+        tl.static_assert(assigned_literal.type == constexpr_type(PATCHED))
+        tl.static_assert(assigned_literal == patched_literal)
+
+        if tensor_type is not None:
+            assigned_variable = input_literal
+            tl.static_assert(assigned_variable.type == tensor_type)
+
+    kernel_patched = patch_kernel(kernel, {'PATCHED': f"{literal}"})
+    kernel_patched[(1, )](literal, tensor_ty)
+
+
 @triton.jit
 def return_poison(x):
     a = False
@@ -6218,10 +6372,12 @@ layouts = [
 
 intermediate_layouts = [
     None,
-    SharedLayout(1, 1, 1, [0, 1], [1, 1], [1, 1], [0, 1]),
-    SharedLayout(1, 1, 1, [1, 0], [1, 1], [1, 1], [0, 1]),
-    SharedLayout(4, 2, 4, [1, 0], [1, 1], [1, 1], [0, 1]),
-    SharedLayout(2, 2, 4, [1, 0], [1, 1], [1, 1], [0, 1]),
+    SwizzledSharedLayout(1, 1, 1, [0, 1], [1, 1], [1, 1], [0, 1]),
+    SwizzledSharedLayout(1, 1, 1, [1, 0], [1, 1], [1, 1], [0, 1]),
+    SwizzledSharedLayout(4, 2, 4, [1, 0], [1, 1], [1, 1], [0, 1]),
+    SwizzledSharedLayout(2, 2, 4, [1, 0], [1, 1], [1, 1], [0, 1]),
+    PaddedSharedLayout([[32, 8]], [1, 0], [1, 1], [1, 1], [0, 1]),
+    PaddedSharedLayout([[64, 4], [128, 8]], [1, 0], [1, 1], [1, 1], [0, 1])
 ]
 
 
@@ -6263,14 +6419,16 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device, t
                 # expect compute scratch buffer to not error on xpu
                 raise
             pytest.skip("Can't compute scratch buffer size")
-        shared_mem_size = triton.runtime.driver.active.utils.get_device_properties(
-            triton.runtime.driver.active.get_current_device())["max_shared_mem"] if is_xpu() else 65536
+        lds_size = triton.runtime.driver.active.utils.get_device_properties(
+            triton.runtime.driver.active.get_current_device())["max_shared_mem"] if is_xpu() else get_hip_lds_size()
         # consider int32 dtype in scratch buffer size,
         # because it is the largest dtype used in convert_layout in this test
         int32_size = 4
-        # skip even if scratch buffer equal to shared mem size, because real scratch buffer is typically larger due to padding
-        if scratch_shape[0] * scratch_shape[1] * int32_size >= shared_mem_size:
+        # skip even if scratch buffer equal to lds_size, because real scratch buffer is typically larger due to padding
+        if scratch_shape[0] * scratch_shape[1] * int32_size >= lds_size:
             pytest.xfail("Scratch buffer is too large")
+    if is_cuda() and isinstance(interm_layout, PaddedSharedLayout):
+        pytest.skip("PaddedSharedLayout is not supported on CUDA")
 
     layouts = f"""
     #src = {src_layout}
@@ -6340,10 +6498,10 @@ layouts_3d = [
 ]
 
 shared_layouts_3d = [
-    SharedLayout(1, 1, 1, [2, 1, 0], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
-    SharedLayout(4, 2, 4, [1, 2, 0], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
-    SharedLayout(8, 2, 4, [0, 2, 1], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
-    SharedLayout(4, 2, 1, [2, 0, 1], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
+    SwizzledSharedLayout(1, 1, 1, [2, 1, 0], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
+    SwizzledSharedLayout(4, 2, 4, [1, 2, 0], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
+    SwizzledSharedLayout(8, 2, 4, [0, 2, 1], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
+    SwizzledSharedLayout(4, 2, 1, [2, 0, 1], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
 ]
 
 
@@ -6449,19 +6607,16 @@ dot_layouts = [
 ]
 
 shared_layouts = [
-    SharedLayout(4, 2, 4, [0, 1], [1, 1], [1, 1], [0, 1]),
-    SharedLayout(8, 1, 8, [1, 0], [1, 1], [1, 1], [0, 1]),
-    SharedLayout(16, 1, 16, [1, 0], [1, 1], [1, 1], [0, 1]),
+    SwizzledSharedLayout(4, 2, 4, [0, 1], [1, 1], [1, 1], [0, 1]),
+    SwizzledSharedLayout(8, 1, 8, [1, 0], [1, 1], [1, 1], [0, 1]),
+    SwizzledSharedLayout(16, 1, 16, [1, 0], [1, 1], [1, 1], [0, 1]),
 ]
 
 
 @pytest.mark.parametrize("M, N, M_tile_size, N_tile_size",
                          [[128, 128, 64, 64], [128, 128, 64, 32], [128, 64, 64, 32], [256, 128, 64, 64]])
-def test_split_subview(M, N, M_tile_size, N_tile_size, device):
-    if not is_xpu() and not is_hip() and N_tile_size == 32:
-        pytest.skip("Will fix spliting along the swizzling pattern in the next PR")
-    threads_per_warp = 64 if is_hip() else 32
-    num_rows_per_warp = threads_per_warp // 4
+def test_split_subview(M, N, M_tile_size, N_tile_size, device, tmp_path: pathlib.Path):
+    num_rows_per_warp = THREADS_PER_WARP // 4
     num_repeats_M = triton.cdiv(M, M_tile_size)
     num_repeats_N = triton.cdiv(N, N_tile_size)
 
@@ -6489,7 +6644,7 @@ def test_split_subview(M, N, M_tile_size, N_tile_size, device):
         %c0_i32 = arith.constant 0 : i32
 
         %12 = ttg.local_alloc : () -> !ttg.memdesc<1x{M}x{N}xf16, #shared, #smem, mutable>
-        %13 = ttg.memdesc_subview %12[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x{M}x{N}xf16, #shared, #smem, mutable> -> !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable>
+        %13 = ttg.memdesc_index %12, %c0_i32 : !ttg.memdesc<1x{M}x{N}xf16, #shared, #smem, mutable> -> !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable>
         ttg.local_store %11, %13 : tensor<{M}x{N}xf16, #blocked> -> !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable>
 
     """
@@ -6500,10 +6655,7 @@ def test_split_subview(M, N, M_tile_size, N_tile_size, device):
             m_offset = m * M_tile_size
             n_offset = n * N_tile_size
             ir += f"""
-        %off0_{m}_{n} = arith.constant {m_offset} : i32
-        %off1_{m}_{n} = arith.constant {n_offset} : i32
-
-        %view{linear_idx} = ttg.memdesc_subview %13[%off0_{m}_{n}, %off1_{m}_{n}] : !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable> -> !ttg.memdesc<{M_tile_size}x{N_tile_size}xf16, #shared, #smem, mutable, {M}x{N}>
+        %view{linear_idx} = ttg.memdesc_subslice %13[{m_offset}, {n_offset}] : !ttg.memdesc<{M}x{N}xf16, #shared, #smem, mutable> -> !ttg.memdesc<{M_tile_size}x{N_tile_size}xf16, #shared, #smem, mutable, {M}x{N}>
         %data{linear_idx} = ttg.local_load %view{linear_idx} : !ttg.memdesc<{M_tile_size}x{N_tile_size}xf16, #shared, #smem, mutable, {M}x{N}> -> tensor<{M_tile_size}x{N_tile_size}xf16, #blocked>
         %inc{linear_idx} = arith.constant dense<{linear_idx}.0> : tensor<{M_tile_size}x{N_tile_size}xf16, #blocked>
 
@@ -6519,11 +6671,9 @@ def test_split_subview(M, N, M_tile_size, N_tile_size, device):
     }}
     """
 
-    import tempfile
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
-        f.write(ir)
-        f.flush()
-        kernel = triton.compile(f.name)
+    temp_file = tmp_path / "test_split_subview.ttgir"
+    temp_file.write_text(ir)
+    kernel = triton.compile(str(temp_file))
 
     triton_result = torch.zeros((M, N), device=device, dtype=torch.float16)
     kernel[(1, 1, 1)](triton_result.data_ptr())
@@ -6607,7 +6757,7 @@ mma_layouts = [
 ]
 
 shared_layouts = [
-    SharedLayout(8, 1, 1, [1, 0], [1, 1], [1, 1], [0, 1]),
+    SwizzledSharedLayout(8, 1, 1, [1, 0], [1, 1], [1, 1], [0, 1]),
     NVMMASharedLayout(64, False, 16, [1, 1], [1, 1], [0, 1]),
     NVMMASharedLayout(128, False, 16, [1, 1], [1, 1], [0, 1]),
 ]

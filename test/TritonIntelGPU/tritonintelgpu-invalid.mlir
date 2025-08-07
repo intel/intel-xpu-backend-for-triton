@@ -214,3 +214,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+#dpas = #ttig.dpas<{repeatCount = 1, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [1, 1]}>
+// expected-error @below {{The DPAS encoding implies an invalid layout for A operand. The non-uniform matrix A could not be referred in kernel}}
+#dot_a = #ttg.dot_op<{opIdx=0, parent=#dpas, kWidth=1}>
+
+// -----
+
+// expected-error @below {{threadsPerWarp could not be smaller than the execution size}}
+#dpas = #ttig.dpas<{repeatCount = 1, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 8, warpsPerCTA = [2, 2], repCluster = [1, 1]}>

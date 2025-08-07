@@ -1,0 +1,135 @@
+diff --git a/src/transformers/generation/utils.py b/src/transformers/generation/utils.py
+index fe38e0d2b1..ab371a278c 100644
+--- a/src/transformers/generation/utils.py
++++ b/src/transformers/generation/utils.py
+@@ -19,6 +19,7 @@ import os
+ import warnings
+ from dataclasses import dataclass
+ from typing import TYPE_CHECKING, Any, Callable, Optional, Union
++import time
+ 
+ import numpy as np
+ import torch
+@@ -2373,6 +2374,7 @@ class GenerationMixin(ContinuousMixin):
+             return custom_generate_function(model=self, **generate_arguments)
+ 
+         # 1. Handle `generation_config` and kwargs that might update it, and validate the `.generate()` call
++        self.token_latency = kwargs.pop("token_latency", None)
+         tokenizer = kwargs.pop("tokenizer", None)  # Pull this out first, we only use it for stopping criteria
+         assistant_tokenizer = kwargs.pop("assistant_tokenizer", None)  # only used for assisted generation
+ 
+@@ -3547,6 +3549,7 @@ class GenerationMixin(ContinuousMixin):
+             `model.config.is_encoder_decoder=True`.
+         """
+         # init values
++        latency_list = []
+         pad_token_id = generation_config._pad_token_tensor
+         output_attentions = generation_config.output_attentions
+         output_hidden_states = generation_config.output_hidden_states
+@@ -3602,6 +3605,7 @@ class GenerationMixin(ContinuousMixin):
+             is_prefill = True
+ 
+         while self._has_unfinished_sequences(this_peer_finished, synced_gpus, device=input_ids.device):
++            tic = time.time()
+             # prepare model inputs
+             model_inputs = self.prepare_inputs_for_generation(input_ids, **model_kwargs)
+ 
+@@ -3675,13 +3679,16 @@ class GenerationMixin(ContinuousMixin):
+             # This is needed to properly delete outputs.logits which may be very large for first iteration
+             # Otherwise a reference to outputs is kept which keeps the logits alive in the next iteration
+             del outputs
++            if self.token_latency:
++                torch.xpu.synchronize()
++            latency_list.append(time.time() - tic)
+ 
+         if streamer is not None:
+             streamer.end()
+ 
+         if return_dict_in_generate:
+             if self.config.is_encoder_decoder:
+-                return GenerateEncoderDecoderOutput(
++                output_result = GenerateEncoderDecoderOutput(
+                     sequences=input_ids,
+                     scores=scores,
+                     logits=raw_logits,
+@@ -3693,7 +3700,7 @@ class GenerationMixin(ContinuousMixin):
+                     past_key_values=model_kwargs.get("past_key_values"),
+                 )
+             else:
+-                return GenerateDecoderOnlyOutput(
++                output_result = GenerateDecoderOnlyOutput(
+                     sequences=input_ids,
+                     scores=scores,
+                     logits=raw_logits,
+@@ -3702,7 +3709,12 @@ class GenerationMixin(ContinuousMixin):
+                     past_key_values=model_kwargs.get("past_key_values"),
+                 )
+         else:
+-            return input_ids
++            output_result = input_ids
++            
++        if self.token_latency is not None:
++            return (output_result, latency_list)
++        else:
++            return output_result
+ 
+     @staticmethod
+     def _flatten_beam_dim(tensor: torch.Tensor) -> torch.Tensor:
+@@ -3983,6 +3995,7 @@ class GenerationMixin(ContinuousMixin):
+         """
+ 
+         # 1. init beam_search values
++        latency_list = []
+         pad_token_id = generation_config._pad_token_tensor
+         eos_token_id = generation_config._eos_token_tensor
+         output_attentions = generation_config.output_attentions
+@@ -4085,6 +4098,7 @@ class GenerationMixin(ContinuousMixin):
+ 
+         # 4. run the generation loop
+         while self._has_unfinished_sequences(this_peer_finished, synced_gpus, device=input_ids.device):
++            tic = time.time()
+             # a. Forward current tokens, obtain the logits
+             flat_running_sequences = self._flatten_beam_dim(running_sequences[:, :, :cur_len])
+             model_inputs = self.prepare_inputs_for_generation(flat_running_sequences, **model_kwargs)
+@@ -4138,6 +4152,9 @@ class GenerationMixin(ContinuousMixin):
+             # This is needed to properly delete logits which may be very large for first iteration
+             # Otherwise a reference to outputs is kept which keeps the logits alive in the next iteration
+             del model_outputs
++            if self.token_latency:
++                torch.xpu.synchronize()
++            latency_list.append(time.time() - tic)
+ 
+             log_probs = self._unflatten_beam_dim(log_probs, batch_size, num_beams)
+             log_probs = log_probs + running_beam_scores[:, :, None]
+@@ -4246,7 +4263,7 @@ class GenerationMixin(ContinuousMixin):
+                 beam_scores = None
+ 
+             if self.config.is_encoder_decoder:
+-                return GenerateBeamEncoderDecoderOutput(
++                output_result = GenerateBeamEncoderDecoderOutput(
+                     sequences=sequences,
+                     sequences_scores=beam_scores,
+                     scores=all_scores,
+@@ -4260,7 +4277,7 @@ class GenerationMixin(ContinuousMixin):
+                     past_key_values=model_kwargs.get("past_key_values"),
+                 )
+             else:
+-                return GenerateBeamDecoderOnlyOutput(
++                output_result = GenerateBeamDecoderOnlyOutput(
+                     sequences=sequences,
+                     sequences_scores=beam_scores,
+                     scores=all_scores,
+@@ -4271,7 +4288,12 @@ class GenerationMixin(ContinuousMixin):
+                     past_key_values=model_kwargs.get("past_key_values"),
+                 )
+         else:
+-            return sequences
++            output_result = sequences
++
++        if self.token_latency is not None:
++            return (output_result, latency_list)
++        else:
++            return output_result
+ 
+     def _group_beam_search(
+         self,

@@ -95,7 +95,7 @@ static std::optional<NVVM::ReduxKind> matchReduxKind(triton::ReduceOp op,
   Operation *reduceOp = op.getSingleCombiner();
   if (!reduceOp)
     return std::nullopt;
-  if (computeCapability >= 100 && reduceOp->getResultTypes()[0].isF32()) {
+  if (computeCapability == 100 && reduceOp->getResultTypes()[0].isF32()) {
     if (isa<arith::MinimumFOp, arith::MaximumFOp>(reduceOp))
       useNanQualifier = true;
     if (isa<arith::MaxNumFOp, arith::MaximumFOp>(reduceOp))
@@ -289,7 +289,7 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
 
 Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
                               std::optional<Value> ctaId, Type loadTy,
-                              Value pred) const {
+                              Value pred, Operation *localLoadOp) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   MLIRContext *ctx = rewriter.getContext();
   auto ptrTy = cast<LLVM::LLVMPointerType>(ptr.getType());

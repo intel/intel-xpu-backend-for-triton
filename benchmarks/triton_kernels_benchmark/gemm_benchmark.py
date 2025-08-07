@@ -430,6 +430,13 @@ def get_benchmark(
             name = 'gemm'
             func = getattr(cutlass_kernel, name)
 
+            # Special case where the b matrix needs to be transposed (see: `./cutlass_kernel/gemm/input_gemm.in`)
+            if (B, M, N, K) == (1, 1, 1024, 4096):
+                _, b_shape = get_shapes(B, M, N, K, transpose_a=False, transpose_b=True)
+                b = torch.reshape(b, b_shape)
+                torch_b = b
+                torch_b = torch.transpose(torch_b, -2, -1)
+
             def cutlass_invoker():
                 if B == 1:
                     c = torch.zeros((M, N), device='xpu', dtype=torch.float32)

@@ -114,10 +114,9 @@ static bool isConvertLayoutTrivial(RankedTensorType dstTy, Value value) {
   auto srcTy = cast<RankedTensorType>(value.getType());
   if (srcTy.getEncoding() == dstTy.getEncoding())
     return true;
-  // Handle unresolved layouts. auto -> T is trivial but T -> auto is not
-  // necessarily.
+  // Fail safe on unresolved layouts.
   if (isa<gluon::AutoEncodingAttr>(srcTy.getEncoding()))
-    return true;
+    return false;
   if (isa<gluon::AutoEncodingAttr>(dstTy.getEncoding()))
     return false;
 
@@ -384,11 +383,16 @@ void init_gluon_ir(py::module &&m) {
              return self.create<ttg::LocalDeallocOp>(memDesc);
            })
 
-      .def("create_memdesc_subview",
+      .def("create_memdesc_index",
            [](GluonOpBuilder &self, Type resultType, Value src,
-              std::vector<Value> &offsets) -> Value {
-             return self.create<ttg::MemDescSubviewOp>(resultType, src,
-                                                       offsets);
+              Value index) -> Value {
+             return self.create<ttg::MemDescIndexOp>(resultType, src, index);
+           })
+      .def("create_memdesc_subslice",
+           [](GluonOpBuilder &self, Type resultType, Value src,
+              std::vector<int32_t> &offsets) -> Value {
+             return self.create<ttg::MemDescSubsliceOp>(resultType, src,
+                                                        offsets);
            })
       .def("create_memdesc_trans",
            [](GluonOpBuilder &self, Value src,
@@ -403,6 +407,10 @@ void init_gluon_ir(py::module &&m) {
       .def("create_memdesc_reinterpret",
            [](GluonOpBuilder &self, Type resultType, Value src) -> Value {
              return self.create<ttg::MemDescReinterpretOp>(resultType, src);
+           })
+      .def("create_set_auto_layout",
+           [](GluonOpBuilder &self, Attribute layout, Value value) -> Value {
+             return self.create<gluon::SetAutoLayoutOp>(layout, value);
            })
       .def("create_split",
            [](GluonOpBuilder &self, Value &a) -> py::tuple {

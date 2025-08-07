@@ -114,7 +114,7 @@ class XPUBackend(BaseBackend):
         if not isinstance(target.arch, dict):
             raise TypeError("target.arch is not a dict")
         dirname = os.path.dirname(os.path.realpath(__file__))
-        mod = compile_module_from_src(Path(os.path.join(dirname, "arch_parser.c")).read_text(), "arch_utils")
+        mod = compile_module_from_src(src=Path(os.path.join(dirname, "arch_parser.c")).read_text(), name="arch_utils")
         self.device_arch = knobs.intel.device_arch or mod.parse_device_arch(target.arch.get('architecture', 0))
         self.properties = self.parse_target(target.arch)
         self.binary_ext = "spv"
@@ -320,8 +320,8 @@ class XPUBackend(BaseBackend):
         intel.passes.ttgpuir.add_to_llvmir(pm, options.advanced_path, options.one_matrix_per_load_for_bt,
                                            options.enable_tile_load_linear_layout)
         intel.passes.ttgpuir.add_gen_to_llvm(pm)
-        intel.passes.ttgpuir.add_rewrite_stack_ptr(pm)
         passes.common.add_canonicalizer(pm)
+        intel.passes.ttgpuir.add_rewrite_stack_ptr(pm)
         passes.common.add_cse(pm)
         passes.convert.add_arith_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)
