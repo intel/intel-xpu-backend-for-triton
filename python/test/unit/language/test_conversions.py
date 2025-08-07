@@ -234,17 +234,9 @@ def downcast_test(src_dtype, dst_dtype, rounding, exponent_bits, mantissa_bits, 
 
     src = launch_exhaustive_populate(src_dtype, offset << 24, 2**24, False, src_dtype.primitive_bitwidth, max_repr, device)
     dst = launch_type_convert_triton(src, src_dtype, dst_dtype, device=device, rounding=rounding)
-    # Emulated cast always works on fp32. In XPU Triton kernels FP32 is casted to FP8 through FP16, which
-    # in some cases gives different results compared to direct FP32 to FP8 conversion (some precision might
-    # be lost due to two-step conversion). To get matching results, we convert FP32 source data to FP16 and
-    # back to FP32. This will need to be changed back when HW FP32->FP8 convertion is used for XPU.
-    if device=='xpu' and src_dtype.primitive_bitwidth == 32 and dst_dtype.primitive_bitwidth == 8:
-        src = launch_type_convert_triton(src, src_dtype, tl.float16, device=device, rounding=rounding)
-        src = launch_type_convert_triton(src, tl.float16, tl.float32, device=device)
-    else:
-        src = launch_type_convert_triton(src, src_dtype, tl.float32, device=device)
+    src = launch_type_convert_triton(src, src_dtype, tl.float32, device=device)
 
-    dst2 = launch_downcast_emulated(src, src_dtype, dst_dtype, rounding, exponent_bits, mantissa_bits, exponent_bias, device=device)
+    dst2 = launch_downcast_emulated(src, tl.float32, dst_dtype, rounding, exponent_bits, mantissa_bits, exponent_bias, device=device)
 
     dst = launch_upcast_emulated(dst, exponent_bits, mantissa_bits, exponent_bias, device=device)
     dst2 = launch_upcast_emulated(dst2, exponent_bits, mantissa_bits, exponent_bias, device=device)
