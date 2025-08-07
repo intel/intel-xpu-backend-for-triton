@@ -9,7 +9,6 @@ import pathlib
 import triton
 from triton._internal_testing import is_xpu
 
-os.environ["TRITON_INTEL_ENABLE_BLOCK_IO_STORE_ON_REGULAR_PTR"] = "1"
 os.environ["TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS"] = "1"
 
 
