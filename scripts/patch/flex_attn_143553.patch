@@ -33,7 +33,7 @@ index a0e7dce3df4d..9cd30e0178bf 100644
  RUN bash ./install_xpu.sh && rm install_xpu.sh
  
 diff --git a/test/inductor/test_flex_attention.py b/test/inductor/test_flex_attention.py
-index e78cf68244ee..79cb9d102bdd 100644
+index 8e4746212a0b..31c914399fae 100644
 --- a/test/inductor/test_flex_attention.py
 +++ b/test/inductor/test_flex_attention.py
 @@ -42,20 +42,26 @@
@@ -372,7 +372,7 @@ index e78cf68244ee..79cb9d102bdd 100644
      def test_captured_reduction(self, device, dtype):
          scale = torch.randn((B, 8), device=device)
  
-@@ -2296,6 +2364,7 @@ def f(q, k, v):
+@@ -2340,6 +2408,7 @@ def f(q, k, v):
      @supported_platform
      @dtypes(*device_configs["cpu"].dtypes)
      @dtypesIfCUDA(*device_configs["cuda"].dtypes)
@@ -380,7 +380,7 @@ index e78cf68244ee..79cb9d102bdd 100644
      def test_njt_causal(self, device, dtype):
          offsets = torch.tensor(
              [0, 1024, 1024 + 512, S], device=device, dtype=torch.int32
-@@ -2358,6 +2427,7 @@ def bias_mod(score, batch, head, token_q, token_kv):
+@@ -2402,6 +2471,7 @@ def bias_mod(score, batch, head, token_q, token_kv):
      @common_utils.parametrize("score_mod", test_score_mods)
      @dtypes(*device_configs["cpu"].dtypes)
      @dtypesIfCUDA(*device_configs["cuda"].dtypes)
@@ -388,7 +388,7 @@ index e78cf68244ee..79cb9d102bdd 100644
      @common_utils.parametrize("head_dims", [(D, D // 2), (D // 2, D)])
      def test_non_equal_head_dims(self, device, dtype, score_mod, head_dims):
          qk_d, v_d = head_dims
-@@ -2451,6 +2521,7 @@ def causal(b, h, q_idx, kv_idx):
+@@ -2495,6 +2565,7 @@ def causal(b, h, q_idx, kv_idx):
      @common_utils.parametrize("head_dim", [17, 24, 94, 121])
      @dtypes(*device_configs["cpu"].dtypes_fast)
      @dtypesIfCUDA(*device_configs["cuda"].dtypes_fast)
@@ -396,7 +396,7 @@ index e78cf68244ee..79cb9d102bdd 100644
      def test_non_pow_2_headdim(self, device, dtype, head_dim):
          self.run_test(_rel_bias, dtype, device, B, H, S, head_dim, B, H, S, head_dim)
  
-@@ -2515,6 +2586,7 @@ def causal_constructor(S):
+@@ -2559,6 +2630,7 @@ def causal_constructor(S):
      @skip_on_cpu
      @dtypes(*device_configs["cpu"].dtypes)
      @dtypesIfCUDA(*device_configs["cuda"].dtypes)
@@ -404,7 +404,7 @@ index e78cf68244ee..79cb9d102bdd 100644
      @common_utils.parametrize("score_mod", [_identity, _causal])
      def test_logsumexp_correctness(self, device, dtype, score_mod):
          make_tensor = functools.partial(
-@@ -2971,7 +3043,7 @@ def test_flex_attention_backward_stride_ordering(
+@@ -3015,7 +3087,7 @@ def test_flex_attention_backward_stride_ordering(
      def test_non_contiguous_last_dim(self, device):
          """Test flex_attention with tensors having non contiguous last dimension."""
          B, H, D = 4, 8, 64
@@ -413,7 +413,7 @@ index e78cf68244ee..79cb9d102bdd 100644
          for S in [16, 64]:
  
              def column_major_tensor():
-@@ -3803,7 +3875,7 @@ def forward(self, arg0_1: "f64[]", arg1_1: "i32[]", arg2_1: "i32[]", arg3_1: "i3
+@@ -3847,7 +3919,7 @@ def forward(self, arg0_1: "f64[]", arg1_1: "i32[]", arg2_1: "i32[]", arg3_1: "i3
  
      class mask_graph0(torch.nn.Module):
          def forward(self, arg0_1: "i32[]", arg1_1: "i32[]", arg2_1: "i32[]", arg3_1: "i32[]"):
@@ -422,7 +422,7 @@ index e78cf68244ee..79cb9d102bdd 100644
              return full_default
  """.replace(  # noqa: B950
              "GPU_TYPE", torch.device(device).type
-@@ -4091,9 +4163,9 @@ def flex_attn_fn(x):
+@@ -4135,9 +4207,9 @@ def flex_attn_fn(x):
                  return output
  
          flex_module = SacModule(hidden_size=512, num_heads=8, context_fn=context_fn).to(
@@ -434,7 +434,7 @@ index e78cf68244ee..79cb9d102bdd 100644
  
          # Run without compilation
          output_module = flex_module(x)
-@@ -4188,12 +4260,13 @@ def make_tensor():
+@@ -4232,12 +4304,13 @@ def make_tensor():
  
      @supported_platform
      @skip_on_cpu
@@ -450,7 +450,7 @@ index e78cf68244ee..79cb9d102bdd 100644
              dtype=torch.bfloat16,
          )
          query, key, value = make_tensor(), make_tensor(), make_tensor()
-@@ -4777,6 +4850,7 @@ def flex_attention_fn():
+@@ -4821,6 +4894,7 @@ def flex_attention_fn():
          )
  
      @supported_platform
@@ -458,7 +458,7 @@ index e78cf68244ee..79cb9d102bdd 100644
      def test_create_is_cuda_graphable(self, device):
          def mask_mod(b, h, q, kv):
              return q >= kv
-@@ -4958,7 +5032,7 @@ def test_block_mask_operations_with_none_q_indices(self, device):
+@@ -5002,7 +5076,7 @@ def test_block_mask_operations_with_none_q_indices(self, device):
              self.assertIsNone(cpu_mask.q_indices)
  
  
@@ -467,7 +467,7 @@ index e78cf68244ee..79cb9d102bdd 100644
  class TestPagedAttention(InductorTestCase):
      def setUp(self):
          super().setUp()
-@@ -5273,6 +5347,7 @@ def test_update(self, device):
+@@ -5317,6 +5391,7 @@ def test_update(self, device):
      @supported_platform
      @dtypes(*device_configs["cpu"].dtypes)
      @dtypesIfCUDA(*device_configs["cuda"].dtypes)
@@ -475,7 +475,7 @@ index e78cf68244ee..79cb9d102bdd 100644
      @common_utils.parametrize("score_mod", test_score_mods)
      def test_paged_builtin_score_mods(
          self, device, dtype: torch.dtype, score_mod: Callable
-@@ -5401,14 +5476,17 @@ def get_params(dtypes: list[torch.dtype]) -> list[Params]:
+@@ -5445,14 +5520,17 @@ def get_params(dtypes: list[torch.dtype]) -> list[Params]:
  
  
  supports_learnable_bias = unittest.skipUnless(
@@ -497,7 +497,16 @@ index e78cf68244ee..79cb9d102bdd 100644
  class TestLearnableBiases(InductorTestCase):
      def setUp(self):
          super().setUp()
-@@ -6299,10 +6377,22 @@ def _test_learnable_bias_inner(
+@@ -5505,7 +5583,7 @@ def _gold_check(self, eager, compiled, gold, tensor_name, fudge_factor=1.35):
+     def _check_outputs_and_grads(
+         self, out_eager, out_compiled, out_gold, tensors, names=None
+     ):
+-        backwards_grad = torch.randn_like(out_eager)
++        backwards_grad = torch.randn_like(out_eager, device="cpu").to(out_eager.device)
+         grads_eager = torch.autograd.grad((out_eager,), tensors, backwards_grad)
+         grads_compiled = torch.autograd.grad((out_compiled,), tensors, backwards_grad)
+         grads_gold = torch.autograd.grad((out_gold,), tensors, backwards_grad)
+@@ -6343,10 +6421,22 @@ def _test_learnable_bias_inner(
              )
  
  
@@ -690,14 +699,14 @@ index b5ec59dc291c..777892a0ce2d 100644
  if __name__ == "__main__":
      from torch._inductor.test_case import run_tests
 diff --git a/third_party/xpu.txt b/third_party/xpu.txt
-index f3cfe7166aa7..d13f6ae35d03 100644
+index b84ebb55a901..42d53a213bd4 100644
 --- a/third_party/xpu.txt
 +++ b/third_party/xpu.txt
 @@ -1 +1 @@
--3a9419c8bb6a98dd3e3cd473c36691fb4abeae40
-+3f07dd52aac2e466c3c3efc15f88118f21428272
+-1f7a57f50745a429b7da10dddf2e366687659b87
++2d6a5c68eca42378e0df9c92171f090eecdf5f96
 diff --git a/torch/_inductor/kernel/flex/flex_attention.py b/torch/_inductor/kernel/flex/flex_attention.py
-index 0553fd06755d..d094a48627fb 100644
+index b6f5646bb57c..0cc877e75ebf 100644
 --- a/torch/_inductor/kernel/flex/flex_attention.py
 +++ b/torch/_inductor/kernel/flex/flex_attention.py
 @@ -531,7 +531,9 @@ def flex_attention(
@@ -711,7 +720,7 @@ index 0553fd06755d..d094a48627fb 100644
  
      # Mark SPARSE_KV_BLOCK_SIZE & SPARSE_Q_BLOCK_SIZE as static shapes and add guards.
      SPARSE_KV_BLOCK_SIZE = V.graph.sizevars.guard_int(SPARSE_KV_BLOCK_SIZE)
-@@ -1653,7 +1655,9 @@ def flex_attention_backward(*args, **kwargs):
+@@ -1655,7 +1657,9 @@ def flex_attention_backward(*args, **kwargs):
  
      dtype = query.get_dtype()
      head_dim = V.graph.sizevars.guard_int(query.get_size()[-1])
@@ -723,7 +732,7 @@ index 0553fd06755d..d094a48627fb 100644
      # Default config for warp specialization
      num_consumer_groups, num_buffers_warp_spec = 0, 0
 diff --git a/torch/_inductor/kernel/flex/flex_decoding.py b/torch/_inductor/kernel/flex/flex_decoding.py
-index 83c6b59cec96..e89981286ed8 100644
+index 7f92fbc705a5..c5868cb21bae 100644
 --- a/torch/_inductor/kernel/flex/flex_decoding.py
 +++ b/torch/_inductor/kernel/flex/flex_decoding.py
 @@ -354,7 +354,10 @@ def flex_decoding_grid(batch_size, kv_heads, gqa_group_size, n_keys, d_model, me
@@ -738,7 +747,7 @@ index 83c6b59cec96..e89981286ed8 100644
      bh = max(B * H, 1)  # NOTE: Handle B*h=0 case
      assert isinstance(bh, (int, sympy.Integer)), "B and H must be concrete integers"
      split_k = num_SM // bh * 2  # Each SM should at least get one block.
-@@ -458,7 +461,9 @@ def create_flex_decoding_kernel(*args, **kwargs):
+@@ -459,7 +462,9 @@ def create_flex_decoding_kernel(*args, **kwargs):
      choices: list[Any] = []
      dtype = key.get_dtype()
      head_dim = V.graph.sizevars.guard_int(key.get_size()[-1])
@@ -749,7 +758,7 @@ index 83c6b59cec96..e89981286ed8 100644
  
      # TODO: fix autotuning.
  
-@@ -505,7 +510,7 @@ def create_flex_decoding_kernel(*args, **kwargs):
+@@ -506,7 +511,7 @@ def create_flex_decoding_kernel(*args, **kwargs):
                      )
                      * gqa_shared_heads
                  ),
@@ -759,7 +768,7 @@ index 83c6b59cec96..e89981286ed8 100644
          ),
      )
 diff --git a/torch/_inductor/template_heuristics.py b/torch/_inductor/template_heuristics.py
-index eec1d055ddf7..f7a5aefb5cd1 100644
+index 57eaef9b4dbb..f5f414a68539 100644
 --- a/torch/_inductor/template_heuristics.py
 +++ b/torch/_inductor/template_heuristics.py
 @@ -3,6 +3,7 @@
@@ -770,7 +779,7 @@ index eec1d055ddf7..f7a5aefb5cd1 100644
  from functools import partial
  from threading import Lock
  from typing import Any, Callable, Optional, TYPE_CHECKING
-@@ -1203,6 +1204,97 @@ class XPUConfigHeuristic(BaseConfigHeuristic):
+@@ -1208,6 +1209,114 @@ class XPUConfigHeuristic(BaseConfigHeuristic):
      Placeholder child class for XPU specific overrides.
      """
  
@@ -788,6 +797,23 @@ index eec1d055ddf7..f7a5aefb5cd1 100644
 +            (torch.float16, 128): FlexConfig(128, 64, 1, 16),
 +            (torch.float16, 256): FlexConfig(32, 64, 1, 4),
 +        }
++        self.flex_attn_fwd_autotune_configs: list[FlexConfig] = [
++            FlexConfig(32, 16, 2, 4),
++            FlexConfig(128, 64, 2, 16),
++            FlexConfig(128, 64, 2, 8),
++            FlexConfig(128, 32, 2, 16),
++            FlexConfig(128, 32, 2, 8),
++        ]
++        self.flex_decode_autotune_configs: list[FlexDecodeConfig] = [
++            FlexDecodeConfig(32, 1, 2),
++            FlexDecodeConfig(32, 1, 1),
++            FlexDecodeConfig(32, 2, 2),
++            FlexDecodeConfig(32, 2, 1),
++            FlexDecodeConfig(64, 1, 2),
++            FlexDecodeConfig(64, 1, 1),
++            FlexDecodeConfig(64, 2, 2),
++            FlexDecodeConfig(64, 2, 1),
++        ]
 +
 +    def get_flex_attn_fwd_configs(self, head_dim: int, dtype: Any) -> list[FlexConfig]:
 +        flex_attn_fwd_configs: list[FlexConfig] = []
@@ -899,7 +925,7 @@ index ec8027595e6f..f1d290467fb5 100644
              "FlexAttention is only supported on CUDA, CPU or HPU devices. "
              f"Found input tensors on {query.device.type} device."
 diff --git a/torch/testing/_internal/common_device_type.py b/torch/testing/_internal/common_device_type.py
-index 01499280da8f..6a5951fde65d 100644
+index 528497ba5457..061c2a2eb819 100644
 --- a/torch/testing/_internal/common_device_type.py
 +++ b/torch/testing/_internal/common_device_type.py
 @@ -1342,8 +1342,8 @@ def dep_fn(self, *args, **kwargs):
