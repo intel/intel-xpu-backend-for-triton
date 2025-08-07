@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-distribute-to-warps | FileCheck %s
+// RUN: env TRITON_INTEL_ADVANCED_PATH=1 triton-opt %s -split-input-file -tritonintelgpu-distribute-to-warps | FileCheck %s
 
 #blocked1 = #ttg.blocked<{sizePerThread = [32, 32], threadsPerWarp = [1, 1], warpsPerCTA = [4, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [32, 32], threadsPerWarp = [1, 1], warpsPerCTA = [1, 4], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>

@@ -6704,13 +6704,17 @@ def test_local_load_store_dot(M, N, dtype, dist_layout, shared_layout, device, t
     elif dtype == "float8e5":
         mlir_dtype = "f8E5M2"
 
+    num_warps = 4
+    if isinstance(dist_layout, DotOperandLayout) and isinstance(dist_layout.parent, DpasLayout):
+        num_warps = math.prod(dist_layout.parent.warps_per_cta)
+
     layouts = f"""
     #dist = {dist_layout}
     #shared = {shared_layout}
     #smem = #ttg.shared_memory
     """
     ir = layouts + f"""
-  module attributes {{"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32}} {{
+  module attributes {{"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = {num_warps} : i32, "ttg.threads-per-warp" = 32 : i32}} {{
   tt.func public @kernel(%arg0: !tt.ptr<{mlir_dtype}> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<{mlir_dtype}> {{tt.divisibility = 16 : i32}}) attributes {{noinline = false}} {{
     %cst = arith.constant dense<{N}> : tensor<{M}x1xi32, #dist>
     %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #ttg.slice<{{dim = 1, parent = #dist}}>>
