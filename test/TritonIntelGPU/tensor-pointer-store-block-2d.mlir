@@ -54,7 +54,7 @@ module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 16 : i32} {
 
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 4, threadsPerWarp = 16, warpsPerCTA = [4, 4], repCluster = [2, 2]}>
 #dot_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 2}>
-module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 16 : i32} {
+module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: @regular_pointer_block_io
   tt.func public @regular_pointer_block_io(%arg0: !tt.ptr<i8>) {
     %0 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #dot_a}>>
@@ -69,7 +69,7 @@ module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 16 : i32} {
     %9 = tt.splat %arg0 : !tt.ptr<i8> -> tensor<256x64x!tt.ptr<i8>, #dot_a>
     %addr = tt.addptr %9, %8 : tensor<256x64x!tt.ptr<i8>, #dot_a>, tensor<256x64xi32, #dot_a>
     %cst = arith.constant dense<0> : tensor<256x64xi8, #dot_a>
-    // CHECK-COUNT-32: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
+    // CHECK-COUNT-16: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
     tt.store %addr, %cst {ttig.block_io = "row_major"} : tensor<256x64x!tt.ptr<i8>, #dot_a>
 
     tt.return
@@ -80,7 +80,7 @@ module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 16 : i32} {
 
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [4, 4], repCluster = [2, 2]}>
 #dot_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
-module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 16 : i32} {
+module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: @regular_pointer_block_io
   tt.func public @regular_pointer_block_io(%arg0: !tt.ptr<f32>) {
     %0 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #dot_a}>>
@@ -95,7 +95,7 @@ module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 16 : i32} {
     %9 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<256x64x!tt.ptr<f32>, #dot_a>
     %addr = tt.addptr %9, %8 : tensor<256x64x!tt.ptr<f32>, #dot_a>, tensor<256x64xi32, #dot_a>
     %cst = arith.constant dense<0.000000e+00> : tensor<256x64xf32, #dot_a>
-    // CHECK-COUNT-128: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 32, tile_width = 8, tile_height = 8, v_blocks = 1, cache_control = Default}
+    // CHECK-COUNT-64: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 32, tile_width = 8, tile_height = 8, v_blocks = 1, cache_control = Default}
     tt.store %addr, %cst {ttig.block_io = "row_major"} : tensor<256x64x!tt.ptr<f32>, #dot_a>
 
     tt.return
@@ -106,7 +106,7 @@ module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 16 : i32} {
 
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [4, 4], repCluster = [2, 2]}>
 #dot_b = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 1}>
-module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 16 : i32} {
+module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: @regular_pointer_block_io
   tt.func public @regular_pointer_block_io(%arg0: !tt.ptr<f32>) {
     %0 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #dot_b}>>
@@ -121,7 +121,7 @@ module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 16 : i32} {
     %9 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<256x64x!tt.ptr<f32>, #dot_b>
     %addr = tt.addptr %9, %8 : tensor<256x64x!tt.ptr<f32>, #dot_b>, tensor<256x64xi32, #dot_b>
     %cst = arith.constant dense<0.000000e+00> : tensor<256x64xf32, #dot_b>
-    // CHECK-COUNT-128: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 32, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
+    // CHECK-COUNT-64: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 32, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
     tt.store %addr, %cst {ttig.block_io = "row_major"} : tensor<256x64x!tt.ptr<f32>, #dot_b>
 
     tt.return
@@ -131,7 +131,7 @@ module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 16 : i32} {
 // -----
 
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [4, 4], repCluster = [2, 2]}>
-module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 16 : i32} {
+module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: @regular_pointer_block_io
   tt.func public @regular_pointer_block_io(%arg0: !tt.ptr<f32>) {
     %0 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #dpas}>>
@@ -146,7 +146,7 @@ module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 16 : i32} {
     %9 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<256x64x!tt.ptr<f32>, #dpas>
     %addr = tt.addptr %9, %8 : tensor<256x64x!tt.ptr<f32>, #dpas>, tensor<256x64xi32, #dpas>
     %cst = arith.constant dense<0.000000e+00> : tensor<256x64xf32, #dpas>
-    // CHECK-COUNT-32: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 32, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
+    // CHECK-COUNT-16: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 32, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
     tt.store %addr, %cst {ttig.block_io = "row_major"} : tensor<256x64x!tt.ptr<f32>, #dpas>
 
     tt.return
