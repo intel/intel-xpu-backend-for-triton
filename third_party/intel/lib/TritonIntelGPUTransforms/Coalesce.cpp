@@ -7,11 +7,13 @@
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/Verifier.h"
+#include "mlir/Interfaces/LoopLikeInterface.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/StrUtil.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
@@ -154,9 +156,9 @@ private:
     return false;
   }
 
-  // Change the \p layout of the \p op result and propagate the new result type
-  // to its users.
-  void changeAndPropagateLayout(Operation *op, Attribute layout,
+  // Change the \p layout of the \p op's result \p opRes and propagate the new
+  // result type to its users.
+  void changeAndPropagateLayout(Operation *op, Value opRes, Attribute layout,
                                 IRRewriter &rewriter) const {
     assert(op && op->getNumResults() != 0 &&
            "Expecting operation yielding results");
@@ -164,18 +166,17 @@ private:
     LLVM_DEBUG({
       llvm::dbgs() << "[" DEBUG_TYPE "]: " << "ChangeAndPropagateLayout for: ";
       op->dumpPretty();
+      llvm::dbgs() << "opRes: ";
+      opRes.printAsOperand(llvm::dbgs(), {});
+      llvm::dbgs() << "\n";
     });
 
     rewriter.modifyOpInPlace(op, [&]() {
-      for (Value res : op->getResults()) {
-        if (!tt::isTensorPointerType(res.getType()))
-          continue;
-
-        auto ptrType = cast<tt::PointerType>(res.getType());
-        auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
-        res.setType(tt::PointerType::get(getNewType(tensorType, layout),
+      assert(tt::isTensorPointerType(opRes.getType()));
+      auto ptrType = cast<tt::PointerType>(opRes.getType());
+      auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
+      opRes.setType(tt::PointerType::get(getNewType(tensorType, layout),
                                          ptrType.getAddressSpace()));
-      }
     });
 
     LLVM_DEBUG({
@@ -183,26 +184,30 @@ private:
       op->dumpPretty();
     });
 
-    propagateLayout(op, layout, rewriter);
+    for (OpResult res : op->getResults())
+      if (res == opRes)
+        propagateLayout(op, res, layout, rewriter);
   }
 
   // Propagate the layout of the \p root operation's result to its users.
-  void propagateLayout(Operation *root, Attribute layout,
+  void propagateLayout(Operation *op, Value opRes, Attribute layout,
                        IRRewriter &rewriter) const {
-    assert(root->getNumResults() != 0 &&
+    assert(op && op->getNumResults() != 0 &&
            "Expecting an operation yielding a result");
-
-    auto mod = root->getParentOfType<ModuleOp>();
+    assert(opRes &&
+           llvm::any_of(op->getResults(),
+                        [&](OpResult res) { return res == opRes; }) &&
+           "Expecting operation to yield 'opRes'");
 
     LLVM_DEBUG({
-      if (!root->getUsers().empty()) {
+      if (!opRes.getUsers().empty()) {
         llvm::dbgs() << "[" DEBUG_TYPE "]: "
-                     << "Propagate layout to operations using: ";
-        root->dumpPretty();
+                     << "Propagate layout to operations using: " << opRes
+                     << "\n";
       }
     });
 
-    for (Operation *user : root->getUsers()) {
+    for (Operation *user : opRes.getUsers()) {
       if (filterUser(user))
         continue;
 
@@ -212,49 +217,70 @@ private:
       });
 
       if (auto forOp = dyn_cast<scf::ForOp>(user)) {
-        propagateLayoutToArgsAndBody(forOp, root, layout, rewriter);
+        propagateLayoutToArgsAndBody(forOp, opRes, layout, rewriter);
         continue;
       }
       if (auto whileOp = dyn_cast<scf::WhileOp>(user)) {
-        propagateLayoutToArgsAndBody(whileOp, root, layout, rewriter);
+        propagateLayoutToArgsAndBody(whileOp, opRes, layout, rewriter);
         continue;
       }
-
       if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
-        if (auto forOp = yieldOp->getParentOfType<scf::ForOp>())
-          propagateLayoutToLoopResults(forOp, layout, rewriter);
-        if (auto whileOp = yieldOp->getParentOfType<scf::WhileOp>())
-          propagateLayoutToLoopResults(whileOp, layout, rewriter);
-        continue;
+        if (auto loopOp = yieldOp->getParentOfType<LoopLikeOpInterface>()) {
+          for (OpOperand &operand : yieldOp->getOpOperands())
+            if (operand.get() == opRes)
+              propagateLayoutToLoopResults(loopOp, operand.getOperandNumber(),
+                                           layout, rewriter);
+          continue;
+        }
       }
 
       LLVM_DEBUG({
         llvm::dbgs() << "[" DEBUG_TYPE "]: After propagating layout:\n";
-        mod->dumpPretty();
+        op->getParentOfType<ModuleOp>()->dumpPretty();
       });
 
-      changeAndPropagateLayout(user, layout, rewriter);
+      for (OpResult res : user->getResults())
+        changeAndPropagateLayout(user, res, layout, rewriter);
     }
   }
 
   // Propagate the layout of the \p arg block argument to its users.
   void propagateLayout(BlockArgument arg, Attribute layout,
                        IRRewriter &rewriter) const {
+    LLVM_DEBUG({
+      if (!arg.getUsers().empty()) {
+        llvm::dbgs() << "[" DEBUG_TYPE "]: "
+                     << "Propagate layout to operations using: ";
+        arg.printAsOperand(llvm::dbgs(), {});
+        llvm::dbgs() << "\n";
+      }
+    });
+
     for (Operation *user : arg.getUsers()) {
       if (filterUser(user))
         continue;
 
       LLVM_DEBUG({
-        llvm::dbgs() << "[" DEBUG_TYPE "]: " << "arg's user: ";
+        llvm::dbgs() << "[" DEBUG_TYPE "]: " << "user: ";
         user->dumpPretty();
       });
 
-      if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
-        if (auto forOp = yieldOp->getParentOfType<scf::ForOp>())
-          propagateLayoutToLoopResults(forOp, layout, rewriter);
-        if (auto whileOp = yieldOp->getParentOfType<scf::WhileOp>())
-          propagateLayoutToLoopResults(whileOp, layout, rewriter);
+      if (auto forOp = dyn_cast<scf::ForOp>(user)) {
+        propagateLayoutToArgsAndBody(forOp, arg, layout, rewriter);
         continue;
+      }
+      if (auto whileOp = dyn_cast<scf::WhileOp>(user)) {
+        propagateLayoutToArgsAndBody(whileOp, arg, layout, rewriter);
+        continue;
+      }
+      if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
+        if (auto loopOp = yieldOp->getParentOfType<LoopLikeOpInterface>()) {
+          for (OpOperand &operand : yieldOp->getOpOperands())
+            if (operand.get() == arg)
+              propagateLayoutToLoopResults(loopOp, operand.getOperandNumber(),
+                                           layout, rewriter);
+          continue;
+        }
       }
       if (auto condOp = dyn_cast<scf::ConditionOp>(user)) {
         if (auto whileOp = condOp->getParentOfType<scf::WhileOp>()) {
@@ -284,7 +310,8 @@ private:
         continue;
       }
 
-      changeAndPropagateLayout(user, layout, rewriter);
+      for (OpResult res : user->getResults())
+        changeAndPropagateLayout(user, res, layout, rewriter);
     }
 
     LLVM_DEBUG({
@@ -300,74 +327,48 @@ private:
   // loop body that use that argument.
   template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
                                  OpType, scf::ForOp, scf::WhileOp>::value>>
-  void propagateLayoutToArgsAndBody(OpType loopOp, Operation *root,
+  void propagateLayoutToArgsAndBody(OpType loopOp, Value opRes,
                                     Attribute layout,
                                     IRRewriter &rewriter) const {
-    assert(llvm::any_of(root->getUsers(),
-                        [&](Operation *user) { return user == loopOp; }) &&
-           "Expecting the loop to be a user of the root operation");
+    for (auto [initArg, arg] :
+         llvm::zip(loopOp.getInitsMutable(), loopOp.getRegionIterArgs())) {
+      if (initArg.get() != opRes)
+        continue;
 
-    for (BlockArgument arg : loopOp.getRegionIterArgs()) {
-      Value loopArg;
-      if constexpr (std::is_same<OpType, scf::ForOp>::value)
-        loopArg = loopOp.getInitArgs()[arg.getArgNumber() - 1];
-      if constexpr (std::is_same<OpType, scf::WhileOp>::value)
-        loopArg = loopOp.getInits()[arg.getArgNumber()];
+      // Modify the layout of the loop init argument...
+      auto ptrType = cast<tt::PointerType>(arg.getType());
+      auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
+      arg.setType(tt::PointerType::get(getNewType(tensorType, layout),
+                                       ptrType.getAddressSpace()));
 
-      for (OpResult res : root->getResults()) {
-        if (res != loopArg || !tt::isTensorPointerType(res.getType()))
-          continue;
-        // Modify the layout of the loop init argument...
-        tt::PointerType ptrType = cast<tt::PointerType>(arg.getType());
-        auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
-        arg.setType(tt::PointerType::get(getNewType(tensorType, layout),
-                                         ptrType.getAddressSpace()));
-        LLVM_DEBUG({
-          llvm::dbgs() << "[" DEBUG_TYPE "]: " << "Propagated layout to: ";
-          arg.printAsOperand(llvm::dbgs(), {});
-          llvm::dbgs() << "\n";
-        });
+      LLVM_DEBUG({
+        llvm::dbgs() << "[" DEBUG_TYPE "]: " << "Propagated layout to: ";
+        arg.printAsOperand(llvm::dbgs(), {});
+        llvm::dbgs() << "\n";
+      });
 
-        // ... and then propagate it to the operations in the loop.
-        propagateLayout(arg, layout, rewriter);
-      }
+      // ... and then propagate it to the operations in the loop.
+      propagateLayout(arg, layout, rewriter);
     }
   }
 
-  // Modify the given loop \p loopOpt and propagate its results to their users.
-  template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
-                                 OpType, scf::ForOp, scf::WhileOp>::value>>
-  void propagateLayoutToLoopResults(OpType loopOp, Attribute layout,
+  // Modify the \p layout to the loop's operand identified by \p resNum, and
+  // propagate the modified loop results to its users.
+  void propagateLayoutToLoopResults(LoopLikeOpInterface loopOp, unsigned resNum,
+                                    Attribute layout,
                                     IRRewriter &rewriter) const {
-    Operation *yieldOp = nullptr;
-    if constexpr (std::is_same<OpType, scf::ForOp>::value)
-      yieldOp = loopOp.getBody()->getTerminator();
-    if constexpr (std::is_same<OpType, scf::WhileOp>::value)
-      yieldOp = loopOp.getYieldOp();
-
+    Value loopRes = loopOp->getResult(resNum);
     rewriter.modifyOpInPlace(loopOp, [&]() {
-      for (auto [yieldOperandType, res] :
-           llvm::zip(yieldOp->getOperandTypes(), loopOp.getResults())) {
-        Type resType = res.getType();
-        if (yieldOperandType == resType)
-          continue;
-
-        assert(tt::isTensorPointerType(resType) &&
-               tt::isTensorPointerType(yieldOperandType) &&
-               "Expecting blocked pointers");
-        assert(cast<RankedTensorType>(
-                   cast<tt::PointerType>(yieldOperandType).getPointeeType())
-                       .getEncoding() == layout &&
-               "Unexpected layout");
-
-        auto ptrType = cast<tt::PointerType>(res.getType());
-        RankedTensorType tensorType = ttgi::getRankedTensorType(resType);
-        res.setType(tt::PointerType::get(getNewType(tensorType, layout),
-                                         ptrType.getAddressSpace()));
-      }
+      assert(tt::isTensorPointerType(loopRes.getType()) &&
+             "Expecting blocked pointers");
+      Type resType = loopRes.getType();
+      auto ptrType = cast<tt::PointerType>(resType);
+      RankedTensorType tensorType = ttgi::getRankedTensorType(resType);
+      loopRes.setType(tt::PointerType::get(getNewType(tensorType, layout),
+                                           ptrType.getAddressSpace()));
     });
 
-    propagateLayout(loopOp, layout, rewriter);
+    propagateLayout(loopOp, loopRes, layout, rewriter);
   }
 
   void coalesceOp(Attribute encoding, Operation *op) {
@@ -404,7 +405,8 @@ private:
         }
 
         IRRewriter rewriter(builder);
-        changeAndPropagateLayout(*defOp, encoding, rewriter);
+        changeAndPropagateLayout(*defOp, defOp->getResult(), encoding,
+                                 rewriter);
         newArgs.push_back(operand);
       }
     }

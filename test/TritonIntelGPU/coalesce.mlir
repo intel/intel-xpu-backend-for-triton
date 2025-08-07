@@ -558,3 +558,32 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 }
+
+// -----
+
+// COM: Reproducer for issue #4854
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-DAG: [[BLOCKED_LAYOUT:#.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+  // CHECK-DAG: [[BLOCKED_LAYOUT1:#.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+  // CHECK: @test_4854
+  tt.func public @test_4854(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
+    %c0_i32 = arith.constant 0 : i32
+    %c16_i32 = arith.constant 16 : i32
+    %c128_i64 = arith.constant 128 : i64
+    %c1_i64 = arith.constant 1 : i64
+    %c32_i32 = arith.constant 32 : i32
+    %0 = tt.make_tensor_ptr %arg0, [%c128_i64, %c128_i64], [%c1_i64, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 0, 1>} : <tensor<128x32xf32, #blocked>>
+    %1 = tt.make_tensor_ptr %arg1, [%c128_i64, %c128_i64], [%c1_i64, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<32x128xf32, #blocked1>>
+    %2:2 = scf.for %arg2 = %c0_i32 to %c32_i32 step %c32_i32 iter_args(%arg3 = %0, %arg4 = %1) -> (!tt.ptr<tensor<128x32xf32, #blocked>>, !tt.ptr<tensor<32x128xf32, #blocked1>>)  : i32 {
+      %5 = tt.advance %arg4, [%c32_i32, %c0_i32] : <tensor<32x128xf32, #blocked1>>
+      scf.yield %arg3, %5 : !tt.ptr<tensor<128x32xf32, #blocked>>, !tt.ptr<tensor<32x128xf32, #blocked1>>
+    }
+    // CHECK: [[ADV:%.*]] = tt.advance {{.*}} : <tensor<128x32xf32, [[BLOCKED_LAYOUT]]>>
+    %3 = tt.advance %2#0, [%c0_i32, %c16_i32] : <tensor<128x32xf32, #blocked>>
+    // CHECK: [[LOAD:%.*]] = tt.load {{.*}} : !tt.ptr<tensor<32x128xf32, [[BLOCKED_LAYOUT1]]>>
+    %4 = tt.load %1 {boundaryCheck = array<i32: 0>, padding = 1 : i32} : !tt.ptr<tensor<32x128xf32, #blocked1>>
+    tt.return
+  }
+}
