@@ -3002,7 +3002,15 @@ struct TritonGPUVerifyTensorLayoutInterface
     // Number of threads per warp.
     auto kLane = StringAttr::get(module.getContext(), "lane");
     int moduleThreadsPerWarp = TritonGPUDialect::getThreadsPerWarp(module);
-    if (ll.getInDimSize(kLane) != moduleThreadsPerWarp) {
+    // FIXME: ll.getInDimSize(kLane) does not return the correct threads per
+    // warp. https://github.com/intel/intel-xpu-backend-for-triton/issues/4861
+    unsigned layoutThreadsPerWarp = ll.getInDimSize(kLane);
+    if (auto dotOperandLayout =
+            dyn_cast<DotOperandEncodingAttr>(rankedTy.getEncoding()))
+      if (auto dpasLayout =
+              dyn_cast<intel::DpasEncodingAttr>(dotOperandLayout.getParent()))
+        layoutThreadsPerWarp = dpasLayout.getThreadsPerWarp();
+    if (layoutThreadsPerWarp != moduleThreadsPerWarp) {
       return makeErr() << layout << ".\nLayout has " << ll.getInDimSize(kLane)
                        << " threads per warp, but the module specifies "
                        << moduleThreadsPerWarp << " threads per warp.";
