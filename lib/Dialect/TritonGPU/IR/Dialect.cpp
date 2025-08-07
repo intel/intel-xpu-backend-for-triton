@@ -23,6 +23,7 @@
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/MathExtras.h"
@@ -2981,6 +2982,8 @@ struct TritonGPUVerifyTensorLayoutInterface
     if (!distr)
       return makeErr()
              << "Non-distributed layout is not allowed in tensor type.";
+    if (mlir::triton::tools::getBoolEnv("TRITON_INTEL_ADVANCED_PATH"))
+      return success();
     auto rank = distr.getRepOrder().size();
     if (rank != rankedTy.getRank())
       return makeErr() << "Layout has rank " << rank
