@@ -235,10 +235,9 @@ private:
                 propagateLayoutToOperationResult(op, opNum, layout, rewriter);
               })
               .Default([](auto op) {
-                llvm::errs() << op << "\n";
-                llvm::report_fatal_error(
-                    ("Unsupported parent operation for scf.yield: expected LoopLikeOpInterface or scf.IfOp, but got '" +
-                     op->getName().getStringRef() + "'").str());
+                llvm::report_fatal_error(llvm::Twine(
+                    "Unsupported parent operation for scf.yield: '" +
+                    op->getName().getStringRef() + "'"));
               });
 
           continue;
