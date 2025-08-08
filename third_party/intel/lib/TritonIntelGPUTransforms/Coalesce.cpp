@@ -184,79 +184,26 @@ private:
       op->dumpPretty();
     });
 
-    for (OpResult res : op->getResults())
-      if (res == opRes)
-        propagateLayout(op, res, layout, rewriter);
+    propagateLayout(opRes, layout, rewriter);
   }
 
-  // Propagate the layout of the \p root operation's result to its users.
-  void propagateLayout(Operation *op, Value opRes, Attribute layout,
-                       IRRewriter &rewriter) const {
-    assert(op && op->getNumResults() != 0 &&
-           "Expecting an operation yielding a result");
-    assert(opRes &&
-           llvm::any_of(op->getResults(),
-                        [&](OpResult res) { return res == opRes; }) &&
-           "Expecting operation to yield 'opRes'");
-
-    LLVM_DEBUG({
-      if (!opRes.getUsers().empty()) {
-        llvm::dbgs() << "[" DEBUG_TYPE "]: "
-                     << "Propagate layout to operations using: " << opRes
-                     << "\n";
-      }
-    });
-
-    for (Operation *user : opRes.getUsers()) {
-      if (filterUser(user))
-        continue;
-
-      LLVM_DEBUG({
-        llvm::dbgs() << "[" DEBUG_TYPE "]: " << "user: ";
-        user->dumpPretty();
-      });
-
-      if (auto forOp = dyn_cast<scf::ForOp>(user)) {
-        propagateLayoutToArgsAndBody(forOp, opRes, layout, rewriter);
-        continue;
-      }
-      if (auto whileOp = dyn_cast<scf::WhileOp>(user)) {
-        propagateLayoutToArgsAndBody(whileOp, opRes, layout, rewriter);
-        continue;
-      }
-      if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
-        if (auto loopOp = yieldOp->getParentOfType<LoopLikeOpInterface>()) {
-          for (OpOperand &operand : yieldOp->getOpOperands())
-            if (operand.get() == opRes)
-              propagateLayoutToLoopResults(loopOp, operand.getOperandNumber(),
-                                           layout, rewriter);
-          continue;
-        }
-      }
-
-      LLVM_DEBUG({
-        llvm::dbgs() << "[" DEBUG_TYPE "]: After propagating layout:\n";
-        op->getParentOfType<ModuleOp>()->dumpPretty();
-      });
-
-      for (OpResult res : user->getResults())
-        changeAndPropagateLayout(user, res, layout, rewriter);
-    }
-  }
-
-  // Propagate the layout of the \p arg block argument to its users.
-  void propagateLayout(BlockArgument arg, Attribute layout,
+  // Propagate \p layout to users of \p val.
+  void propagateLayout(Value val, Attribute layout,
                        IRRewriter &rewriter) const {
     LLVM_DEBUG({
-      if (!arg.getUsers().empty()) {
+      if (!val.getUsers().empty()) {
         llvm::dbgs() << "[" DEBUG_TYPE "]: "
                      << "Propagate layout to operations using: ";
-        arg.printAsOperand(llvm::dbgs(), {});
-        llvm::dbgs() << "\n";
+        if (isa<BlockArgument>(val)) {
+          val.printAsOperand(llvm::dbgs(), {});
+          llvm::dbgs() << "\n";
+        } else {
+          llvm::dbgs() << val << "\n";
+        }
       }
     });
 
-    for (Operation *user : arg.getUsers()) {
+    for (Operation *user : val.getUsers()) {
       if (filterUser(user))
         continue;
 
@@ -266,19 +213,20 @@ private:
       });
 
       if (auto forOp = dyn_cast<scf::ForOp>(user)) {
-        propagateLayoutToArgsAndBody(forOp, arg, layout, rewriter);
+        propagateLayoutToArgsAndBody(forOp, val, layout, rewriter);
         continue;
       }
       if (auto whileOp = dyn_cast<scf::WhileOp>(user)) {
-        propagateLayoutToArgsAndBody(whileOp, arg, layout, rewriter);
+        propagateLayoutToArgsAndBody(whileOp, val, layout, rewriter);
         continue;
       }
       if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
         if (auto loopOp = yieldOp->getParentOfType<LoopLikeOpInterface>()) {
-          for (OpOperand &operand : yieldOp->getOpOperands())
-            if (operand.get() == arg)
-              propagateLayoutToLoopResults(loopOp, operand.getOperandNumber(),
-                                           layout, rewriter);
+          for (OpOperand &operand : llvm::make_filter_range(
+                   yieldOp->getOpOperands(),
+                   [&val](OpOperand &operand) { return operand.get() == val; }))
+            propagateLayoutToLoopResult(loopOp, operand.getOperandNumber(),
+                                        layout, rewriter);
           continue;
         }
       }
@@ -288,7 +236,7 @@ private:
           for (auto [condOperand, loopArg] :
                llvm::zip(condOp->getOperands().drop_front(),
                          whileOp.getAfterArguments())) {
-            if (condOperand != arg ||
+            if (condOperand != val ||
                 !tt::isTensorPointerType(condOperand.getType()))
               continue;
 
@@ -310,24 +258,19 @@ private:
         continue;
       }
 
+      LLVM_DEBUG({
+        llvm::dbgs() << "[" DEBUG_TYPE "]: After propagating layout:\n";
+        val.getParentRegion()->getParentOfType<ModuleOp>()->dumpPretty();
+      });
+
       for (OpResult res : user->getResults())
         changeAndPropagateLayout(user, res, layout, rewriter);
     }
-
-    LLVM_DEBUG({
-      auto mod =
-          arg.getParentBlock()->getParentOp()->getParentOfType<ModuleOp>();
-      llvm::dbgs() << "[" DEBUG_TYPE "]: After propagating layout:\n";
-      mod->dumpPretty();
-    });
   }
 
-  // Propagate the layout of the \p root operation's result to the \p loopOp
-  // loop init argument that uses it, and transitively to the operations in the
-  // loop body that use that argument.
-  template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
-                                 OpType, scf::ForOp, scf::WhileOp>::value>>
-  void propagateLayoutToArgsAndBody(OpType loopOp, Value opRes,
+  // Propagate \p layout to the \p loopOp init arguments that use \p opRes, and
+  // transitively to the operations in the loop body that use those arguments.
+  void propagateLayoutToArgsAndBody(LoopLikeOpInterface loopOp, Value opRes,
                                     Attribute layout,
                                     IRRewriter &rewriter) const {
     for (auto [initArg, arg] :
@@ -354,9 +297,9 @@ private:
 
   // Modify the \p layout to the loop's operand identified by \p resNum, and
   // propagate the modified loop results to its users.
-  void propagateLayoutToLoopResults(LoopLikeOpInterface loopOp, unsigned resNum,
-                                    Attribute layout,
-                                    IRRewriter &rewriter) const {
+  void propagateLayoutToLoopResult(LoopLikeOpInterface loopOp, unsigned resNum,
+                                   Attribute layout,
+                                   IRRewriter &rewriter) const {
     Value loopRes = loopOp->getResult(resNum);
     rewriter.modifyOpInPlace(loopOp, [&]() {
       assert(tt::isTensorPointerType(loopRes.getType()) &&
@@ -368,7 +311,7 @@ private:
                                            ptrType.getAddressSpace()));
     });
 
-    propagateLayout(loopOp, loopRes, layout, rewriter);
+    propagateLayout(loopRes, layout, rewriter);
   }
 
   void coalesceOp(Attribute encoding, Operation *op) {
