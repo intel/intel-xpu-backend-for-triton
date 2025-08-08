@@ -5,6 +5,7 @@ add_triton_library(TritonIntelGPUTransforms
   DistributeToWarps.cpp
   MatchTargetSize.cpp
   MaterializeBlockPointer.cpp
+  OptimizeDotOperands.cpp
   OptimizeReductionLocality.cpp
   Pipeliner/MatmulLoopPipeline.cpp
   Pipeliner/SoftwarePipeliner.cpp
@@ -17,6 +18,7 @@ add_triton_library(TritonIntelGPUTransforms
   Utility.cpp
 
   DEPENDS
+  TritonGPUTransforms
   TritonIntelGPUTransformsIncGen
 
   LINK_LIBS PUBLIC

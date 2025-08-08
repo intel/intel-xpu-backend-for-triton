@@ -325,7 +325,7 @@ private:
       bases;
 
   llvm::MapVector<StringAttr, int32_t /*size*/> outDims;
-  bool surjective = true;
+  int32_t rank = 0;
 
 public:
   using BasesT = decltype(bases);
@@ -425,10 +425,11 @@ public:
       ArrayRef<std::pair<StringAttr, std::vector<std::vector<int32_t>>>> bases,
       ArrayRef<std::pair<StringAttr, int32_t>> outDims, bool requireSurjective);
 
-  bool isSurjective() const { return surjective; }
+  bool isSurjective() const { return rank == getTotalOutDimSizeLog2(); }
+  bool isInjective() const { return rank == getTotalInDimSizeLog2(); }
 
   bool isInvertible() const {
-    return surjective && getTotalInDimSize() == getTotalOutDimSize();
+    return isSurjective() && getTotalInDimSize() == getTotalOutDimSize();
   }
 
   const BasesT &getBases() const { return bases; }
@@ -452,6 +453,11 @@ public:
   auto getInDimNames() const { return llvm::make_first_range(bases); }
   auto getOutDimNames() const { return llvm::make_first_range(outDims); }
   auto getOutDimSizes() const { return llvm::make_second_range(outDims); }
+
+  // Relevant for reshaping
+  SmallVector<std::pair<StringAttr, int32_t>> getOutDims() const {
+    return to_vector(outDims);
+  }
 
   // Gets the position that this outDim occupies in getOutDimNames().  Asserts
   // if the dim is not present.
@@ -620,6 +626,7 @@ public:
 
   // Compute a C such that A = B * C if it exists.
   // In other words, C = B^{-1} * A.
+  // For divideRight, we compute A = C * B, that is, C = A * B^{-1}.
   // Note that such a C exists iff (every pair of input/output dim of) A is
   // of the form
   // [[B, 0],
@@ -633,6 +640,8 @@ public:
   // same dimensions as A ensures that C is well-defined.
   friend std::optional<LinearLayout> divideLeft(const LinearLayout &A,
                                                 const LinearLayout &B);
+  friend std::optional<LinearLayout> divideRight(const LinearLayout &A,
+                                                 const LinearLayout &B);
 
   // Returns true if this layout acts trivially (as the identity) on the given
   // dimensions. This means that it's the identity on those dimensions, and it
@@ -798,9 +807,10 @@ private:
   SmallVector<size_t> action;
   StringAttr inDim;
   size_t inSizeLog2;
-  bool isIdentity;
+  bool m_isIdentity = true;
 
 public:
+  ColumnAction() = default;
   ColumnAction(ArrayRef<size_t> action, StringAttr inDim, size_t inSizeLog2)
       : action(action), inDim(inDim), inSizeLog2(inSizeLog2) {
     auto it = llvm::max_element(action);
@@ -808,7 +818,8 @@ public:
     assert(it == action.end() || *it < inSizeLog2);
     // In many cases the action will be the identity, so we save that as an
     // early return
-    isIdentity = action.size() == inSizeLog2 && llvm::is_sorted(action);
+    m_isIdentity = action.size() == inSizeLog2 &&
+                   llvm::equal(action, llvm::seq<size_t>(action.size()));
   }
 
   // Act on the columns of a layout
@@ -827,6 +838,14 @@ public:
 
   // Inverse of the action
   ColumnAction inverse() const;
+
+  static ColumnAction identity(StringAttr inDim, size_t inSizeLog2) {
+    return ColumnAction(llvm::to_vector(llvm::seq<size_t>(inSizeLog2)), inDim,
+                        inSizeLog2);
+  }
+
+  // Returns true if the action is the identity
+  bool isIdentity() const { return m_isIdentity; }
 
   std::string toString() const;
 };

@@ -3,7 +3,7 @@
 include(FetchContent)
 
 if (NOT CUTLASSLibrary_FOUND)
-    # TODO: switch ot FetchContent_MakeAvailable once CUTLASS supports it
+    # TODO: switch to FetchContent_MakeAvailable once CUTLASS supports it
     cmake_policy(SET CMP0169 OLD)
 
     set(CUTLASSLibrary_SOURCE_DIR
@@ -27,6 +27,9 @@ if (NOT CUTLASSLibrary_FOUND)
 
     set(CUTLASSLibrary_INCLUDE_DIR "${CUTLASSLibrary_SOURCE_DIR}/include" CACHE INTERNAL "CUTLASSLibrary_SOURCE_DIR")
     set(CUTLASSLibrary_INCLUDE_TOOL_DIR "${CUTLASSLibrary_SOURCE_DIR}/tools/util/include" CACHE INTERNAL "CUTLASSLibrary_SOURCE_DIR")
+    set(CUTLASSLibrary_INCLUDE_APPLICATION_DIR "${CUTLASSLibrary_SOURCE_DIR}/applications" CACHE INTERNAL "CUTLASSLibrary_SOURCE_DIR")
+    set(CUTLASSLibrary_INCLUDE_BENCHMARK_DIR "${CUTLASSLibrary_SOURCE_DIR}/benchmarks" CACHE INTERNAL "CUTLASSLibrary_SOURCE_DIR")
+    set(CUTLASSLibrary_BENCHMARK_CONFIG_DIR "${CUTLASSLibrary_SOURCE_DIR}/benchmarks/device/pvc/input_files" CACHE INTERNAL "CUTLASSLibrary_SOURCE_DIR")
 
     find_package_handle_standard_args(
             CUTLASSLibrary

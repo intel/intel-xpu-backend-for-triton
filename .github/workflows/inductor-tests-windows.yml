@@ -27,7 +27,7 @@ on:
       python_version:
         description: Python version
         type: string
-        default: "3.9"
+        default: "3.10"
       run_name:
         description: Custom run name
         type: string
@@ -37,7 +37,7 @@ permissions: read-all
 
 env:
   PYTHONIOENCODING: utf-8
-  PYTHON_VERSION: "${{ inputs.python_version || '3.9' }}"
+  PYTHON_VERSION: "${{ inputs.python_version || '3.10' }}"
   NEW_WORKSPACE: C:\gh${{ github.run_id }}
 
 jobs:
@@ -144,6 +144,7 @@ jobs:
           cd ${{ env.NEW_WORKSPACE }}
 
           $env:PYTORCH_TESTING_DEVICE_ONLY_FOR = "bmg"
+          $env:TRITON_LESS_FLEX_ATTN_BWD_CONFIGS = "1"
           bash scripts/test-pytorch.sh ${{ inputs.suite }}
 
       - name: Upload test logs

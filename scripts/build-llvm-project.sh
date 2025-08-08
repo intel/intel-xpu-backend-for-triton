@@ -3,7 +3,7 @@
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 
 LLVM_TARGETS=${LLVM_TARGETS:-Native;NVPTX;AMDGPU}
-LLVM_PROJECTS=${LLVM_PROJECTS:-mlir;llvm}
+LLVM_PROJECTS=${LLVM_PROJECTS:-mlir;llvm;lld}
 LLVM_BUILD_TYPE=${LLVM_BUILD_TYPE:-Debug}
 LLVM_COMMIT_HASH=${LLVM_COMMIT_HASH:-$(cat "$REPO_ROOT/cmake/llvm-hash.txt")}
 LLVM_PROJECT_PATH=${LLVM_PROJECT_PATH:-"$REPO_ROOT/llvm-project"}
@@ -42,6 +42,7 @@ if [ ! -e "$LLVM_PROJECT_PATH" ]; then
     git clone "$LLVM_PROJECT_URL" "$LLVM_PROJECT_PATH"
 fi
 echo "Resetting to $LLVM_COMMIT_HASH"
+git -C "$LLVM_PROJECT_PATH" fetch origin "$LLVM_COMMIT_HASH"
 git -C "$LLVM_PROJECT_PATH" reset --hard "$LLVM_COMMIT_HASH"
 echo "Configuring with ${CMAKE_ARGS[@]}"
 cmake "${CMAKE_ARGS[@]}"

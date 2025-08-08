@@ -18,7 +18,7 @@ on:
       python_version:
         description: Python version
         type: string
-        default: "3.9"
+        default: "3.10"
       pytorch_repo:
         description: PyTorch repo (e.g. user/repo)
         type: string
@@ -35,7 +35,8 @@ jobs:
     name: Test
     runs-on:
       - linux
-      - ${{ inputs.runner_label || 'rolling' }}
+      - rolling
+      - ${{ inputs.runner_label || 'max1100' }}
     timeout-minutes: 960
     defaults:
       run:
@@ -71,6 +72,7 @@ jobs:
       - name: Run inductor tests
         run: |
           export PYTORCH_TESTING_DEVICE_ONLY_FOR="xpu"
+          export TRITON_LESS_FLEX_ATTN_BWD_CONFIGS="1"
           bash scripts/test-pytorch.sh ${{ inputs.suite }}
 
       - name: Report environment details

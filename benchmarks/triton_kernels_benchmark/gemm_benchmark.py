@@ -233,23 +233,36 @@ def get_shapes(B, M, N, K, transpose_a, transpose_b):
 
 
 X_VALS = [  #
-    [1, 1024 * i, 1024 * i, 1024 * i] for i in [1, 2, 4, 8]
-] + [  #
-    [1, m, n, 4096] for m in [1, 8] for n in [1024, 4096, 6144, 14336, 28672, 128256]
-] + [  #
-    [1, m, 4096, 14336] for m in [1, 8]
-] + [  #
+    [1, 1, 1024, 4096],
+    [1, 1, 4096, 4096],
+    [1, 1, 4096, 14336],
+    [1, 1, 6144, 4096],
     [1, 1, 13824, 5120],
+    [1, 1, 14336, 4096],
+    [1, 1, 28672, 4096],
+    [1, 1, 128256, 4096],
     [1, 4, 12288, 4096],
+    [1, 8, 1024, 4096],
+    [1, 8, 4096, 4096],
+    [1, 8, 4096, 14336],
+    [1, 8, 6144, 4096],
+    [1, 8, 14336, 4096],
+    [1, 8, 28672, 4096],
+    [1, 8, 128256, 4096],
     [1, 512, 8192, 8192],
     [1, 512, 8192, 32768],
     [1, 512, 32768, 8192],
+    [1, 1024, 1024, 1024],
     [1, 1024, 8192, 16384],
     [1, 1024, 8192, 28672],
+    [1, 2048, 2048, 2048],
     [1, 3072, 3072, 4096],  # FIXME: Remove this case when gemm_streamk_benchmark can get better performance
+    [1, 4096, 4096, 4096],
     [1, 4096, 8192, 16384],
     [1, 8192, 1024, 16384],
+    [1, 8192, 4096, 4096],
     [1, 8192, 4096, 16384],
+    [1, 8192, 8192, 8192],
     [1, 16384, 1024, 8192],
     [1, 16384, 4096, 8192],
     [1, 16384, 8192, 1024],
@@ -259,7 +272,6 @@ X_VALS = [  #
     [32, 4096, 128, 4096],
     [4096, 8, 128, 16384],
     [4096, 8, 16384, 128],
-    [1, 8192, 4096, 4096],
 ]
 
 DEVICE_NAME = torch.xpu.get_device_name()
@@ -301,7 +313,9 @@ def get_benchmark(
     }
     # use_cutlass
     if not (transpose_a or transpose_b):
-        supported_providers['cutlass'] = 'CUTLASS'
+        if torch.xpu.get_device_name() != 'Intel(R) Arc(TM) Graphics':
+            # FIXME: enable cutlass on LNL
+            supported_providers['cutlass'] = 'CUTLASS'
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
     # Benchmark Performance
@@ -415,6 +429,13 @@ def get_benchmark(
         elif provider == 'cutlass':
             name = 'gemm'
             func = getattr(cutlass_kernel, name)
+
+            # Special case where the b matrix needs to be transposed (see: `./cutlass_kernel/gemm/input_gemm.in`)
+            if (B, M, N, K) == (1, 1, 1024, 4096):
+                _, b_shape = get_shapes(B, M, N, K, transpose_a=False, transpose_b=True)
+                b = torch.reshape(b, b_shape)
+                torch_b = b
+                torch_b = torch.transpose(torch_b, -2, -1)
 
             def cutlass_invoker():
                 if B == 1:

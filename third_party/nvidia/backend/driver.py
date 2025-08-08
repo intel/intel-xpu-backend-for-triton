@@ -11,8 +11,6 @@ from triton.runtime import _allocation
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver
 
-from triton.tools.tensor_descriptor import TensorDescriptor
-
 dirname = os.path.dirname(os.path.realpath(__file__))
 include_dirs = [os.path.join(dirname, "include")]
 libdevice_dir = os.path.join(dirname, "lib")
@@ -24,7 +22,7 @@ def libcuda_dirs():
     if env_libcuda_path := knobs.nvidia.libcuda_path:
         return [env_libcuda_path]
 
-    libs = subprocess.check_output(["/sbin/ldconfig", "-p"]).decode()
+    libs = subprocess.check_output(["/sbin/ldconfig", "-p"]).decode(errors="ignore")
     # each line looks like the following:
     # libcuda.so.1 (libc6,x86-64) => /lib/x86_64-linux-gnu/libcuda.so.1
     locs = [line.split()[-1] for line in libs.splitlines() if "libcuda.so.1" in line]
@@ -96,14 +94,29 @@ def ty_to_cpp(ty):
         "u16": "uint16_t",
         "u32": "uint32_t",
         "u64": "uint64_t",
-        "fp16": "float",
-        "bf16": "float",
-        "fp32": "float",
-        "f32": "float",
+        "fp16": "double",
+        "bf16": "double",
+        "fp32": "double",
+        "f32": "double",
         "fp64": "double",
         "nvTmaDesc": "CUtensorMap",
     }[ty]
 
+
+FLOAT_STORAGE_TYPE = {
+    "fp16": "uint16_t",
+    "bf16": "uint16_t",
+    "fp32": "uint32_t",
+    "f32": "uint32_t",
+    "fp64": "uint64_t",
+}
+FLOAT_PACK_FUNCTION = {
+    "fp16": "pack_fp16",
+    "bf16": "pack_bf16",
+    "fp32": "pack_fp32",
+    "f32": "pack_fp32",
+    "fp64": "pack_fp64",
+}
 
 _BASE_ARGS_FORMAT = "iiiKKppOOOOO"
 
@@ -121,8 +134,10 @@ def make_launcher(constants, signature, tensordesc_meta):
                 meta = tensordesc_meta[tensordesc_idx] if tensordesc_meta else None
                 tensordesc_idx += 1
 
-                ndim = sig.count(",") + 1
-                dtype = re.match("tensordesc<([^[>]*)", sig).group()
+                match = re.match("tensordesc<([^[>]*)\\[([^]]*)\\]", sig)
+                dtype = match.group(1)
+                shape = match.group(2)
+                ndim = shape.count(",") + 1
 
                 if meta is None:
                     output.append("*" + dtype)
@@ -175,7 +190,6 @@ def make_launcher(constants, signature, tensordesc_meta):
         if ty.startswith("tensordesc"):
             return "O"
         return {
-            "float": "f",
             "double": "d",
             "long": "l",
             "int8_t": "b",
@@ -201,11 +215,21 @@ def make_launcher(constants, signature, tensordesc_meta):
     args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
     # Record the end of regular arguments;
     # subsequent arguments are architecture-specific descriptors, such as tensor descriptors for CUDA.
-    arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items() if ty != "constexpr")
+    arg_decl_list = []
+    for i, ty in signature.items():
+        if ty == "constexpr":
+            continue
+        if ty in FLOAT_STORAGE_TYPE:
+            arg_decl_list.append(f"{FLOAT_STORAGE_TYPE[ty]} arg{i}")
+        else:
+            arg_decl_list.append(f"{ty_to_cpp(ty)} arg{i}")
+    arg_decls = ', '.join(arg_decl_list)
     internal_args_list = []
     for i, ty in signature.items():
         if ty[0] == "*":
             internal_args_list.append(f"ptr_info{i}.dev_ptr")
+        elif ty in FLOAT_STORAGE_TYPE:
+            internal_args_list.append(f"_arg{i}_storage")
         elif ty == "nvTmaDesc":
             # Note: we have to dereference the pointer
             internal_args_list.append(f"*tma_ptr{i}")
@@ -223,6 +247,11 @@ def make_launcher(constants, signature, tensordesc_meta):
     tma_decls = [
         f"CUtensorMap* tma_ptr{i} = getTmaDesc(_arg{i}); if (!tma_ptr{i}) return NULL;" for i, ty in signature.items()
         if ty == "nvTmaDesc"
+    ]
+    float_storage_decls = [
+        f"{FLOAT_STORAGE_TYPE[ty]} _arg{i}_storage = {FLOAT_PACK_FUNCTION[ty]}(_arg{i});"
+        for i, ty in signature.items()
+        if ty in FLOAT_STORAGE_TYPE
     ]
     params = [f"&arg{i}" for i, ty in signature.items() if ty != "constexpr"]
     params.append("&global_scratch")
@@ -300,7 +329,7 @@ static cuLaunchKernelEx_t getLaunchKernelExHandle() {{
 static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int launch_cooperative_grid, int launch_pdl, int clusterDimX, int clusterDimY, int clusterDimZ, int shared_memory, CUstream stream, CUfunction function, CUdeviceptr global_scratch{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
   void *params[] = {{ {', '.join(params)} }};
   if (gridX*gridY*gridZ > 0) {{
-    // 4 attributes that we can currently pass maxmimum
+    // 4 attributes that we can currently pass maximum
     CUlaunchAttribute launchAttr[4];
     static cuLaunchKernelEx_t cuLaunchKernelExHandle = NULL;
     if (cuLaunchKernelExHandle == NULL) {{
@@ -467,6 +496,32 @@ static void ensureCudaContext() {{
   }}
 }}
 
+static uint16_t pack_fp16(double f) {{
+    uint16_t result;
+    // from https://github.com/python/pythoncapi-compat
+#if 0x030600B1 <= PY_VERSION_HEX && PY_VERSION_HEX <= 0x030B00A1 && !defined(PYPY_VERSION)
+    _PyFloat_Pack2(f, (unsigned char*)&result, 1);
+#else
+    PyFloat_Pack2(f, (unsigned char*)&result, 1);
+#endif
+    return result;
+}}
+
+static uint16_t pack_bf16(double f) {{
+    float f32 = (float)f;
+    uint32_t u32 = *(uint32_t*)&f32;
+    return (uint16_t)(u32 >> 16);
+}}
+
+static uint32_t pack_fp32(double f) {{
+    float f32 = (float)f;
+    return *(uint32_t*)&f32;
+}}
+
+static uint64_t pack_fp64(double f) {{
+    return *(uint64_t*)&f;
+}}
+
 static PyObject* launch(PyObject* self, PyObject* args) {{
   // ensure cuda context is valid before calling any CUDA APIs, e.g. before getPointer calls cuPointerGetAttributes
   ensureCudaContext();
@@ -517,6 +572,7 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   // raise exception asap
   {newline.join(ptr_decls)}
   {newline.join(tma_decls)}
+  {newline.join(float_storage_decls)}
   Py_BEGIN_ALLOW_THREADS;
   _launch(gridX, gridY, gridZ, num_warps, num_ctas, launch_cooperative_grid, launch_pdl, clusterDimX, clusterDimY, clusterDimZ, shared_memory, (CUstream)_stream, (CUfunction)_function, global_scratch{', ' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
   Py_END_ALLOW_THREADS;
@@ -581,7 +637,6 @@ TMA_DTYPE_DEVICE_TO_HOST[10] = 9
 
 
 def make_tensordesc_arg(arg, metadata):
-    assert isinstance(arg, TensorDescriptor)
     if metadata is None:
         # Currently the host side tensor descriptors get decomposed in
         # the frontend to tensor desc, shape, and strides. We have no
@@ -622,6 +677,8 @@ def make_tensordesc_arg(arg, metadata):
 
 
 def wrap_handle_tensordesc(launcher, tensordesc_meta):
+    from triton.tools.tensor_descriptor import TensorDescriptor
+    from triton.experimental.gluon.nvidia.hopper import TensorDescriptor as GluonTensorDescriptor
 
     def inner(*args):
         meta_args = args[:len(_BASE_ARGS_FORMAT)]
@@ -629,7 +686,7 @@ def wrap_handle_tensordesc(launcher, tensordesc_meta):
         tensordesc_idx = 0
         final_args = []
         for i, arg in enumerate(raw_kernel_args):
-            if isinstance(arg, TensorDescriptor):
+            if isinstance(arg, (TensorDescriptor, GluonTensorDescriptor)):
                 meta = tensordesc_meta[tensordesc_idx] if tensordesc_meta else None
                 tensordesc_idx += 1
                 final_args.extend(make_tensordesc_arg(arg, meta))
@@ -706,6 +763,9 @@ class CudaDriver(GPUDriver):
             return torch.cuda.is_available() and (torch.version.hip is None)
         except ImportError:
             return False
+
+    def map_python_to_cpp_type(self, ty: str) -> str:
+        return ty_to_cpp(ty)
 
     def get_benchmarker(self):
         from triton.testing import do_bench

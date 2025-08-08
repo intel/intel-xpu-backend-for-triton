@@ -1,9 +1,9 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s
+// RUN: triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s
 
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [32, 1], repCluster = [1, 2], A = [8, 16], B = [16, 32], C = [8, 32]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_dpas, ttig.support_sg_2d_block} {
   // CHECK-LABEL: convert_dpas_to_dot_rep_cluster_1_2
-  // CHECK-SAME:  %[[VAL_0:.*]]: !llvm.struct<({{.*}})>) attributes {intel_reqd_sub_group_size = 16 : i32, reqd_work_group_size = array<i32: 512, 1, 1>} {
+  // CHECK-SAME:  %[[VAL_0:.*]]: !llvm.struct<({{.*}})>, %[[PTR_1:.*]]: !llvm.ptr<1>) attributes {intel_reqd_sub_group_size = 16 : i32, reqd_work_group_size = array<i32: 512, 1, 1>} {
   tt.func public @convert_dpas_to_dot_rep_cluster_1_2(%arg: tensor<1024x32xf16, #dpas>) {
     // COM: The repetitions order of dot layout and dpas layout are same when the GEMM tiling is clustered as repCluster [1, 2].
     // CHECK-NO: llvm.insertvalue
@@ -18,7 +18,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [32, 1], repCluster = [2, 2], A = [8, 16], B = [16, 32], C = [8, 32]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_dpas, ttig.support_sg_2d_block} {
   // CHECK-LABEL: convert_dpas_to_dot_rep_cluster_2_2
-  // CHECK-SAME:  %[[VAL_0:.*]]: !llvm.struct<({{.*}})>) attributes {intel_reqd_sub_group_size = 16 : i32, reqd_work_group_size = array<i32: 512, 1, 1>} {
+  // CHECK-SAME:  %[[VAL_0:.*]]: !llvm.struct<({{.*}})>, %[[PTR_1:.*]]: !llvm.ptr<1>) attributes {intel_reqd_sub_group_size = 16 : i32, reqd_work_group_size = array<i32: 512, 1, 1>} {
   tt.func public @convert_dpas_to_dot_rep_cluster_2_2(%arg: tensor<1024x32xf16, #dpas>) {
     // COM: The repetitions order of dpas layout when the GEMM tiling is clustered as repCluster [2, 2]:
     // COM:   - 0, 1, 2, 3, 4, 5, 6, 7.
@@ -163,7 +163,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [32, 1], repCluster = [4, 2], A = [8, 16], B = [16, 32], C = [8, 32]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_dpas, ttig.support_sg_2d_block} {
   // CHECK-LABEL: convert_dpas_to_dot_rep_cluster_4_2
-  // CHECK-SAME:  %[[VAL_0:.*]]: !llvm.struct<({{.*}})>) attributes {intel_reqd_sub_group_size = 16 : i32, reqd_work_group_size = array<i32: 512, 1, 1>} {
+  // CHECK-SAME:  %[[VAL_0:.*]]: !llvm.struct<({{.*}})>, %[[PTR_1:.*]]: !llvm.ptr<1>) attributes {intel_reqd_sub_group_size = 16 : i32, reqd_work_group_size = array<i32: 512, 1, 1>} {
   tt.func public @convert_dpas_to_dot_rep_cluster_4_2(%arg: tensor<1024x32xf16, #dpas>) {
     // COM: The repetitions order of dpas layout when the GEMM tiling is clustered as repCluster [4, 2]:
     // COM:   - 0, 1, 2, 3, 4, 5, 6, 7.

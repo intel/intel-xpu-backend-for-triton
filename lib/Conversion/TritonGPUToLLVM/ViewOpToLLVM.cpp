@@ -60,6 +60,18 @@ struct SplatOpConversion : public ConvertOpToLLVMPattern<triton::SplatOp> {
     return success();
   }
 };
+
+struct UnsplatOpConversion : public ConvertOpToLLVMPattern<triton::UnsplatOp> {
+  using ConvertOpToLLVMPattern<triton::UnsplatOp>::ConvertOpToLLVMPattern;
+  LogicalResult matchAndRewrite(triton::UnsplatOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const {
+    auto loc = op->getLoc();
+    auto scrVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    rewriter.replaceOp(op, scrVals[0]);
+    return success();
+  }
+};
+
 // This pattern helps to convert arith::ConstantOp(with SplatElementsAttr),
 // the logic is the same as triton::SplatOp, so the underlying implementation
 // is reused.
@@ -98,6 +110,44 @@ struct ArithConstantSplatOpConversion
     return success();
   }
 };
+
+// Convert arith::ConstantOp with an array DenseElementsAttr to a
+// LLVM::StructType value.
+struct ArithConstantArrayOpConversion
+    : public ConvertOpToLLVMPattern<arith::ConstantOp> {
+  using ConvertOpToLLVMPattern<arith::ConstantOp>::ConvertOpToLLVMPattern;
+  LogicalResult
+  matchAndRewrite(arith::ConstantOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto value = op.getValue();
+    if (!mlir::dyn_cast<DenseElementsAttr>(value))
+      return failure();
+    if (mlir::isa<SplatElementsAttr>(value))
+      return failure();
+    auto tensorTy = cast<RankedTensorType>(op.getType());
+    auto loc = op->getLoc();
+    auto values = mlir::dyn_cast<DenseElementsAttr>(op.getValue());
+    auto elemType = values.getElementType();
+    SmallVector<Value> llVals;
+    for (auto v : values.getValues<APInt>()) {
+      auto ll = rewriter.create<LLVM::ConstantOp>(loc, elemType, v);
+      llVals.push_back(ll);
+    }
+    size_t elemsPerThread = getTotalElemsPerThread(tensorTy);
+
+    if (elemsPerThread != llVals.size()) {
+      op->emitError(
+          "Right now we only support constant arrays with the same number of "
+          "elements as the number of threads per warp");
+      return failure();
+    }
+    auto llStruct =
+        packLLElements(loc, getTypeConverter(), llVals, rewriter, op.getType());
+    rewriter.replaceOp(op, {llStruct});
+    return success();
+  }
+};
+
 struct CatOpConversion : public ConvertOpToLLVMPattern<CatOp> {
   using OpAdaptor = typename CatOp::Adaptor;
   explicit CatOpConversion(LLVMTypeConverter &typeConverter,
@@ -148,7 +198,7 @@ struct JoinOpConversion : public ConvertOpToLLVMPattern<JoinOp> {
     // two different chunks.
     Location loc = op->getLoc();
     RankedTensorType dstTy = op.getType();
-    auto ll = toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
+    auto ll = toLinearLayout(dstTy);
     int splitDim = dstTy.getRank() - 1;
     auto kReg = mlir::StringAttr::get(dstTy.getContext(), "register");
     const auto &bases = ll.getBases();
@@ -199,7 +249,7 @@ struct SplitOpConversion : public ConvertOpToLLVMPattern<SplitOp> {
     // registers belong to the same chunk then we separate the registers between
     // two different chunks.
     auto srcTy = cast<RankedTensorType>(op.getSrc().getType());
-    auto ll = toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
+    auto ll = toLinearLayout(srcTy);
     int splitDim = srcTy.getRank() - 1;
     auto kReg = mlir::StringAttr::get(srcTy.getContext(), "register");
     const auto &bases = ll.getBases();
@@ -330,6 +380,8 @@ struct MemDescReshapeOpConversion
     auto srcSmemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                       llvmElemTy, rewriter);
     SmallVector<Value> offsets = srcSmemObj.getOffsets();
+    // FIXME: This should be done by composing a linear layout with its
+    // reshaped counterpart.
     SmallVector<unsigned> srcShape;
     for (int64_t d : op.getSrc().getType().getShape())
       srcShape.push_back(d);
@@ -413,13 +465,46 @@ struct BroadcastOpConversion
   }
 };
 
-struct MemDescSubviewOpConversion
-    : public ConvertOpToLLVMPattern<triton::gpu::MemDescSubviewOp> {
+struct MemDescIndexOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::MemDescIndexOp> {
   using ConvertOpToLLVMPattern<
-      triton::gpu::MemDescSubviewOp>::ConvertOpToLLVMPattern;
+      triton::gpu::MemDescIndexOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(triton::gpu::MemDescSubviewOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::gpu::MemDescIndexOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    auto *ctx = op->getContext();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto srcTy = op.getSrc().getType();
+    auto destTy = op.getResult().getType();
+    auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
+
+    auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
+                                                   llvmElemTy, rewriter);
+    auto base = smemObj.getBase();
+    auto elemPtrTy = base.getType();
+    Value stride = smemObj.getStrides(srcTy, loc, rewriter).front();
+    Value offset = b.mul(op.getIndex(), stride);
+    auto prevOffsets = smemObj.getOffsets();
+    SmallVector<Value> offsetVals(prevOffsets.end() - destTy.getRank(),
+                                  prevOffsets.end());
+    // Advance the pointer and keep the opOffsets as the new shape
+    smemObj = SharedMemoryObject(b.gep(elemPtrTy, llvmElemTy, base, offset),
+                                 llvmElemTy, offsetVals);
+    auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
+    rewriter.replaceOp(op, retVal);
+    return success();
+  }
+};
+
+struct MemDescSubsliceOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::MemDescSubsliceOp> {
+  using ConvertOpToLLVMPattern<
+      triton::gpu::MemDescSubsliceOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::MemDescSubsliceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     auto *ctx = op->getContext();
@@ -430,56 +515,46 @@ struct MemDescSubviewOpConversion
     auto layoutOrder = getOrder(srcTy);
     auto enc = srcTy.getEncoding();
 
-    // newBase = base + offset
     auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                    llvmElemTy, rewriter);
-    auto smemStrides = smemObj.getStrides(srcTy, loc, rewriter);
-    SmallVector<Value> opOffsetVals = op.getOffsets();
-    // We assume we always create a subview of the last dimensions
-    SmallVector<Value> opSmemStrides(smemStrides.end() - opOffsetVals.size(),
-                                     smemStrides.end());
-    // Compute total offset
-    SmallVector<Value> offsetVals;
-    auto destRank = op.getResult().getType().getRank();
-    auto rankReduced = srcTy.getRank() - destRank;
-    for (int i = rankReduced; i < opOffsetVals.size(); i++) {
-      offsetVals.push_back(b.add(opOffsetVals[i], smemObj.getOffsets()[i]));
-    }
-
-    Value offset;
-    if (rankReduced || (destTy.getRank() == 1 && destTy.getDimSize(0) == 1)) {
-      // We are splitting the pipelining dimension which may not be a power of 2
-      // so we can't use LinearLayouts
-      offset = dot(rewriter, loc, opOffsetVals, opSmemStrides);
-    } else {
-      auto dimNames = standardOutDimNames(ctx, opOffsetVals.size());
-      SmallVector<std::pair<StringAttr, Value>> logicalOffsets;
-      // This assumes the subviews are additive, in the sense that we can
-      // compute the offset of one and an add it to the offset of the previous
-      // one we computed. We check for this in the verifier.
-      for (int i = 0; i < rankReduced; i++) {
-        logicalOffsets.push_back({dimNames[i], b.i32_val(0)});
-      }
-      for (int i = rankReduced; i < opOffsetVals.size(); i++) {
-        logicalOffsets.push_back({dimNames[i], offsetVals[i - rankReduced]});
-      }
-      // The order gives us the honest-to-goodness layout rank
-      auto srcAllocShape =
-          srcTy.getAllocShape().take_back(getOrder(srcTy).size());
-      auto llInv = toLinearLayout(srcAllocShape, srcTy.getEncoding()).invert();
-      offset =
-          applyLinearLayout(loc, rewriter, llInv, logicalOffsets)[0].second;
-    }
+    auto opOffsetVals = op.getOffsets();
 
     auto base = smemObj.getBase();
     auto elemPtrTy = base.getType();
-    smemObj = SharedMemoryObject(b.gep(elemPtrTy, llvmElemTy, base, offset),
-                                 llvmElemTy, offsetVals);
+    // Accumulate the logical offsets
+    SmallVector<Value> offsetVals;
+    for (auto [oldOffVal, opOff] :
+         llvm::zip(smemObj.getOffsets(), opOffsetVals)) {
+      offsetVals.push_back(b.add(oldOffVal, b.i32_val(opOff)));
+    }
+    smemObj = SharedMemoryObject(base, llvmElemTy, offsetVals);
     auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
     rewriter.replaceOp(op, retVal);
     return success();
   }
 };
+
+struct MemDescReinterpretOpConversion
+    : public ConvertOpToLLVMPattern<MemDescReinterpretOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult matchAndRewrite(MemDescReinterpretOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &b) const override {
+    Location loc = op.getLoc();
+    MemDescType srcTy = op.getSrc().getType();
+    MemDescType dstTy = op.getType();
+    Type srcElemTy = getTypeConverter()->convertType(srcTy.getElementType());
+    Type dstElemTy = getTypeConverter()->convertType(dstTy.getElementType());
+
+    auto smemObj =
+        getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(), srcElemTy, b);
+    SharedMemoryObject newObj(smemObj.getBase(), dstElemTy, dstTy.getRank(),
+                              loc, b);
+    b.replaceOp(op, getStructFromSharedMemoryObject(loc, newObj, b));
+    return success();
+  }
+};
+
 } // namespace
 
 void mlir::triton::populateViewOpToLLVMPatterns(
@@ -488,7 +563,9 @@ void mlir::triton::populateViewOpToLLVMPatterns(
   patterns.add<ReshapeOpConversion>(typeConverter, benefit);
   patterns.add<ExpandDimsOpConversion>(typeConverter, benefit);
   patterns.add<SplatOpConversion>(typeConverter, benefit);
+  patterns.add<UnsplatOpConversion>(typeConverter, benefit);
   patterns.add<ArithConstantSplatOpConversion>(typeConverter, benefit);
+  patterns.add<ArithConstantArrayOpConversion>(typeConverter, benefit);
   patterns.add<CatOpConversion>(typeConverter, benefit);
   patterns.add<JoinOpConversion>(typeConverter, benefit);
   patterns.add<SplitOpConversion>(typeConverter, benefit);
@@ -496,5 +573,7 @@ void mlir::triton::populateViewOpToLLVMPatterns(
       typeConverter, benefit);
   patterns.add<TransOpConversion>(typeConverter, benefit);
   patterns.add<BroadcastOpConversion>(typeConverter, benefit);
-  patterns.add<MemDescSubviewOpConversion>(typeConverter, benefit);
+  patterns.add<MemDescSubsliceOpConversion, MemDescIndexOpConversion>(
+      typeConverter, benefit);
+  patterns.add<MemDescReinterpretOpConversion>(typeConverter, benefit);
 }

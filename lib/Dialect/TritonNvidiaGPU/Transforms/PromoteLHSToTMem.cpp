@@ -69,7 +69,8 @@ public:
         isDistributedLayoutTMemCompatible(tcGen5MMAOp, srcType, lhsMemDescType);
     Attribute newLayout = srcLayout;
     if (!layoutTmemCompatible) {
-      if (triton::tools::getBoolEnv("ALLOW_LHS_TMEM_LAYOUT_CONVERSION")) {
+      if (!comesFromLoadOrBlockArg(src) ||
+          triton::tools::getBoolEnv("ALLOW_LHS_TMEM_LAYOUT_CONVERSION")) {
         newLayout = getLHSTMemLayout(tcGen5MMAOp, srcType);
       } else {
         return failure();
@@ -78,8 +79,7 @@ public:
     rewriter.setInsertionPointAfter(localAllocOp);
     if (newLayout != srcLayout) {
       auto ty = cast<RankedTensorType>(src.getType());
-      auto newTy =
-          RankedTensorType::get(ty.getShape(), ty.getElementType(), newLayout);
+      auto newTy = ty.cloneWithEncoding(newLayout);
       src = rewriter.create<ttg::ConvertLayoutOp>(loc, newTy, src);
     }
     Value tMemAlloc = rewriter.create<TMEMAllocOp>(loc, lhsMemDescType, src);

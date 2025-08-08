@@ -9,7 +9,7 @@ import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
 from triton_kernels_benchmark import xetla_kernel
-import numpy as np
+from triton_kernels_benchmark import cutlass_kernel
 
 
 # pylint: disable=unused-argument
@@ -154,7 +154,7 @@ def _attn_fwd_with_block_pointers(Q, K, V, sm_scale, M, Out,  #
     # epilogue
     m_i += tl.math.log2(l_i)
     acc = acc / l_i[:, None]
-    tl.store(O_block_ptr, acc.to(Out.type.element_ty))
+    tl.store(O_block_ptr, acc.to(Out.type.element_ty), boundary_check=(0, 1))
 
 
 configs = [
@@ -528,25 +528,10 @@ class _attention(torch.autograd.Function):
 attention = _attention.apply
 
 
-def check_close(f_val, f_ref, atol, rtol):
-    x = f_val()
-    y = f_ref()
-    x = x.cpu().detach().numpy()
-    y = y.cpu().detach().numpy()
-    close = np.isclose(x, y, atol=atol, rtol=rtol)
-    num_close = np.count_nonzero(close)
-    num_not_close = close.size - num_close
-    num_perc = num_not_close / close.size * 100
-    if num_not_close != 0:
-        print(f'Warning: {num_not_close}, out of {close.size} elements do not match ({num_perc:.2f}%) in XeTLA impl')
-
-
 def get_benchmark(
     providers_filter: Optional[list[str]] = None,
     fa_kernel_mode='fwd',
     attn_fwd=_attn_fwd_with_block_pointers,
-    xetla_assert_result=False,
-    xetla_warn_mismatch=True,
 ):
     """
     Returns a Mark object containing a Benchmark object constructed at runtime and parameterized by the provided option values.
@@ -556,6 +541,7 @@ def get_benchmark(
     supported_providers = {
         'triton': 'Triton',
         'xetla': 'XeTLA',
+        'cutlass': 'CUTLASS',
     }
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
@@ -645,33 +631,6 @@ def get_benchmark(
             )
 
         elif provider == 'xetla':
-            xetla_fn = None
-            if MODE == 'fwd':
-                module_name = f'flash_attn_causal_{CAUSAL}'.lower()
-                func = getattr(xetla_kernel, module_name)
-                out = torch.empty_like(q, device='xpu', dtype=dtype)
-                size_score = Z * H * N_CTX * N_CTX
-                size_attn_mask = Z * N_CTX * N_CTX
-                dropout_mask = torch.empty((size_score, ), device='xpu', dtype=torch.uint8)
-                bias = torch.empty((size_attn_mask, ), device='xpu', dtype=dtype)
-                size_ml = Z * H * N_CTX
-                m = torch.empty((size_ml, ), device='xpu', dtype=torch.float)
-                l = torch.empty((size_ml, ), device='xpu', dtype=torch.float)
-
-                def xetla_fwd_fn():
-                    func(q, k, v, out, dropout_mask, bias, m, l, Z, H, D_HEAD, N_CTX, N_CTX, sm_scale)
-                    return out
-
-                xetla_fn = xetla_fwd_fn
-
-                def check_xetla_fwd_result():
-                    if xetla_assert_result:
-                        benchmark_suite.assert_close(xetla_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='xetla to torch')
-                    elif xetla_warn_mismatch:
-                        check_close(xetla_fn, torch_fn, atol, 1e-3)
-
-                check_xetla_fwd_result()
-
             if MODE == 'bwd':
                 module_name = f'flash_attn_bwd_causal_{CAUSAL}'.lower()
                 func = getattr(xetla_kernel, module_name)
@@ -699,14 +658,43 @@ def get_benchmark(
                          bias_strideN, bias_strideF, attn_mask_padding)
                     return out
 
-                xetla_fn = xetla_bwd_fn
+                _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
+                    xetla_bwd_fn,
+                    n_warmup=10,
+                    n_repeat=10,
+                    quantiles=quantiles,
+                )
 
-            _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
-                xetla_fn,
-                n_warmup=10,
-                n_repeat=10,
-                quantiles=quantiles,
-            )
+            else:
+                min_ms = float('nan')
+                max_ms = float('nan')
+                mean = float('nan')
+                cv = float('nan')
+
+        elif provider == 'cutlass':
+            if MODE == 'fwd':
+                name = 'attention'
+                func = getattr(cutlass_kernel, name)
+                out = torch.zeros((Z, H, N_CTX, D_HEAD), device='xpu', dtype=torch.float32, requires_grad=True)
+
+                def cutlass_fwd_fn():
+                    func(q, k, v, out, Z, H, H, N_CTX, N_CTX, D_HEAD, D_HEAD, CAUSAL, sm_scale)
+                    return out
+
+                benchmark_suite.assert_close(cutlass_fwd_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='cutlass to torch')
+
+                _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
+                    cutlass_fwd_fn,
+                    n_warmup=10,
+                    n_repeat=10,
+                    quantiles=quantiles,
+                )
+
+            else:
+                min_ms = float('nan')
+                max_ms = float('nan')
+                mean = float('nan')
+                cv = float('nan')
 
         else:
             raise NotImplementedError(f'Unsupported provider {provider}')
@@ -724,9 +712,5 @@ def get_benchmark(
 
 
 if __name__ == '__main__':
-    _benchmark = get_benchmark(
-        fa_kernel_mode=os.getenv('FA_KERNEL_MODE', 'fwd'),
-        xetla_assert_result=(os.getenv('XETLA_ASSERT_RESULT', '0') == '1'),
-        xetla_warn_mismatch=(os.getenv('XETLA_WARN_MISMATCH', '1') == '1'),
-    )
+    _benchmark = get_benchmark(fa_kernel_mode=os.getenv('FA_KERNEL_MODE', 'fwd'), )
     _benchmark.run(show_plots=False, print_data=True)

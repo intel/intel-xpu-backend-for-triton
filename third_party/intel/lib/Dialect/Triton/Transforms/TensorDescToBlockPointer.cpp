@@ -95,7 +95,9 @@ public:
           .Default([&](auto) { return WalkResult::advance(); });
     });
 
-    finalize();
+    if (!cleanUp.empty())
+      tt::intel::eraseOperations(cleanUp);
+
     assert(succeeded(verify(moduleOp)) && "Module verification failed");
   }
 
@@ -230,18 +232,24 @@ private:
                              bool> = true>
   LogicalResult rewriteDescriptorLoadOrStoreOp(OpTy op) {
     assert(op && "Expecting a valid operation");
+
+    // At this point we expect to have transformed `make_tensor_descriptor` into
+    // a `make_block_ptr` operation, except when the tensor descriptor is
+    // allocated on the host and passed to the kernel as an argument.
+    Value operand = op.getOperand(0);
+    if (isa<tt::TensorDescType>(operand.getType()))
+      return failure();
+
     LLVM_DEBUG(llvm::dbgs() << "Rewriting: " << op << "\n");
 
     OpBuilder builder(op);
     Location loc = op.getLoc();
-    Value ptr = op.getOperand(0);
-    assert(triton::isTensorPointerType(ptr.getType()) &&
+    assert(triton::isTensorPointerType(operand.getType()) &&
            "Expecting a block ptr");
-    auto ptrType = cast<tt::PointerType>(ptr.getType());
+    auto ptrType = cast<tt::PointerType>(operand.getType());
     auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
-
-    ptr =
-        builder.create<tt::AdvanceOp>(loc, ptr.getType(), ptr, op.getIndices());
+    Value ptr =
+        builder.create<tt::AdvanceOp>(loc, ptrType, operand, op.getIndices());
 
     SmallVector<int32_t> boundaryCheck;
     for (size_t i = 0; i < tensorType.getRank(); ++i)
@@ -265,31 +273,6 @@ private:
     cleanUp.insert(op);
 
     return success();
-  }
-
-  void finalize() {
-    // Cleanup unused operations.
-    bool erasedOperation;
-    do {
-      erasedOperation = false;
-      SmallPtrSet<Operation *, 8> erased;
-      for (Operation *op : cleanUp) {
-        if (!op->getUsers().empty() || !op->getRegions().empty())
-          continue;
-
-        erased.insert(op);
-        op->erase();
-        erasedOperation = true;
-      }
-      cleanUp.remove_if([&](Operation *op) { return erased.contains(op); });
-    } while (erasedOperation);
-
-    // Remove operations that contain a region.
-    for (Operation *op : cleanUp) {
-      if (!op->getUsers().empty())
-        continue;
-      op->erase();
-    }
   }
 
 private:

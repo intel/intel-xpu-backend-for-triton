@@ -20,6 +20,7 @@ TEST:
     --attention
     --instrumentation
     --inductor
+    --sglang
 
 OPTION:
     --unskip
@@ -57,6 +58,7 @@ TEST_BENCHMARK_GEMM=false
 TEST_BENCHMARK_ATTENTION=false
 TEST_INSTRUMENTATION=false
 TEST_INDUCTOR=false
+TEST_SGLANG=false
 VENV=false
 TRITON_TEST_REPORTS=false
 TRITON_TEST_WARNING_REPORTS=false
@@ -138,6 +140,11 @@ while (( $# != 0 )); do
       ;;
     --inductor)
       TEST_INDUCTOR=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --sglang)
+      TEST_SGLANG=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -326,7 +333,7 @@ run_scaled_dot_tests() {
   cd $TRITON_PROJ/python/test/unit
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=scaled_dot \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py --ignore=language/test_frontend.py\
     -k "test_scaled_dot"
 }
 
@@ -368,12 +375,6 @@ run_tutorial_tests() {
   run_tutorial_test "09-persistent-matmul"
   run_tutorial_test "10-experimental-block-pointer"
   run_tutorial_test "10i-experimental-block-pointer"
-
-  echo "***************************************************"
-  echo "Running with TRITON_INTEL_RAISE_BLOCK_POINTER      "
-  echo "***************************************************"
-
-  run_tutorial_test "03i-matrix-multiplication"
 }
 
 run_microbench_tests() {
@@ -476,6 +477,29 @@ run_inductor_tests() {
   grep AlbertForMaskedLM inductor_log.csv | grep -q ,pass,
 }
 
+run_sglang_tests() {
+  echo "***************************************************"
+  echo "******    Running SGLang Triton tests       ******"
+  echo "***************************************************"
+
+  if ! [ -d "./sglang" ]; then
+    git clone https://github.com/sgl-project/sglang.git
+  fi
+  cd sglang
+
+  if ! pip list | grep "sglang" ; then
+    git apply $TRITON_PROJ/benchmarks/third_party/sglang/sglang-fix.patch
+    pip install "./python[dev_xpu]"
+
+    # SGLang installation breaks the default PyTorch and Triton versions, so we need to reinstall them.
+    $SCRIPTS_DIR/install-pytorch.sh --force-reinstall
+    $SCRIPTS_DIR/compile-triton.sh --triton
+  fi
+
+  pip install pytest pytest-xdist
+  run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-4} test/srt/test_triton_attention_kernels.py
+}
+
 test_triton() {
   if [ "$TEST_UNIT" = true ]; then
     run_unit_tests
@@ -522,6 +546,9 @@ test_triton() {
   fi
   if [ "$TEST_INDUCTOR" == true ]; then
     run_inductor_tests
+  fi
+  if [ "$TEST_SGLANG" == true ]; then
+    run_sglang_tests
   fi
 }
 

@@ -19,7 +19,6 @@ import matplotlib.pyplot as plt
 import torch
 from torch.profiler import profile, ProfilerActivity, record_function
 
-import triton
 from triton.testing import assert_close as triton_assert_close, Benchmark, do_bench as triton_do_bench
 
 from triton_kernels_benchmark import build_report
@@ -93,9 +92,6 @@ def do_bench_elapsed_time(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quan
         fn()
     end_event.record()
     synchronize()
-    # FIXME: to avoid negative timings before DLE 2025.1;
-    # this workaround doesn't work for BMG.
-    triton.runtime.driver.active.utils.wait()
     estimate_ms = start_event.elapsed_time(end_event) / 5
 
     # The cache is also maintained in `triton_do_bench` function,

@@ -1,8 +1,8 @@
+#include "AsyncUtility.h"
 #include "AtomicRMWOpsEmitter.h"
 #include "BufferOpsEmitter.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "PatternTritonGPUOpToLLVM.h"
-#include "SchedInstructions.h"
 #include "TargetInfo.h"
 #include "Utility.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
@@ -19,13 +19,13 @@
 using namespace mlir;
 using namespace mlir::triton::gpu;
 
-using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryBase;
 using ::mlir::LLVM::AMD::getVectorSize;
 using ::mlir::LLVM::AMD::llLoad;
 using ::mlir::LLVM::AMD::llStore;
 using ::mlir::triton::AMD::ISAFamily;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
+
 namespace {
 
 std::optional<const char *> getAMDGPUMemScopeStr(MemSyncScope scope) {
@@ -40,6 +40,132 @@ std::optional<const char *> getAMDGPUMemScopeStr(MemSyncScope scope) {
   default:
     return "";
   }
+}
+
+std::pair<bool, bool> getOrderingFlags(MemSemantic memOrdering) {
+  bool emitReleaseFence = false;
+  bool emitAcquireFence = false;
+  switch (memOrdering) {
+  case MemSemantic::RELAXED:
+    // In this case, no memory fences are needed
+    break;
+  case MemSemantic::RELEASE:
+    emitReleaseFence = true;
+    break;
+  case MemSemantic::ACQUIRE:
+    emitAcquireFence = true;
+    break;
+  case MemSemantic::ACQUIRE_RELEASE:
+    emitAcquireFence = true;
+    emitReleaseFence = true;
+  default:
+    // default == acq_rel, so we emit the same barriers
+    emitAcquireFence = true;
+    emitReleaseFence = true;
+  }
+  return {emitAcquireFence, emitReleaseFence};
+}
+
+LogicalResult emitFence(Operation *op, ConversionPatternRewriter &rewriter,
+                        Location loc, MemSemantic memOrdering,
+                        MemSyncScope memScope, bool preAtomic) {
+  // This function emits an LLVM::FenceOp which will get lowered by the
+  // LLVM backend to the right scope and ordering instructions, as
+  // described in the "atomicrmw" entries for "global" address-space,
+  // in the "AMDHSA Memory Model Code Sequences GFX942"
+  // table in https://llvm.org/docs/AMDGPUUsage.html#memory-model-gfx942
+  //
+  // Triton supports three scopes for atomic access
+  // 1. System
+  // 2. GPU (default) ('Agent' for AMDGPU)
+  // 3. CTA ('Workgroup' for AMDGPU)
+  //
+  // and 4 orderings
+  // 1. Relaxed
+  // 2. Acquire
+  // 3. Release
+  // 4. AcquireRelease
+  //
+  // The following table shows the scope and ordering instructions that
+  // are emitted by this function for each combination of scope and ordering
+  // for buffer-atomic instructions.
+  //
+  // Note: In the following comments, "[buffer-atomic_0.. buffer-atomic_n]"
+  // represents a sequence of buffer-atomic instructions that are lowered from
+  // a single tl.atomic_*
+  //
+  // Unordered(Relaxed):
+  //   agent/workgroup: Instr seq: [buffer-atomic_0.. buffer-atomic_n]
+  //                    No scope/ordering instrs are required.
+  //   system: //TODO:
+  // Acquire:
+  //   workgroup: Instr seq: [buffer-atomic_0.. buffer-atomic_n]
+  //              All waves in the workgroup use same L1 and L2.
+  //              No scope/ordering instrs are required.
+  //   agent: Instr seq: [buffer-atomic_0.. buffer-atomic_n],
+  //                     s_waitcnt vmcnt(0), buffer_inv sc1=1
+  //          Waves across an agent may use different L1 and L2.
+  //          Atomic ops bypass L1 and operate on L2.
+  //          s_waitcnt vmcnt(0) ensures that the atomicrmw has completed
+  //          before invalidating the cache. buffer_inv sc1=1 will a) L1:
+  //          invalidate cache b) L2: Invalidate non-coherently modified lines
+  //          if multiple L2s are configured, NOP otherwise. This buffer_inv
+  //          ensures that following loads do not see stale global values.
+  //   system: //TODO:
+  //
+  // Release:
+  //   workgroup: Instr seq: [buffer-atomic_0.. buffer-atomic_n]
+  //              All waves in the workgroup use same L1 and L2 so all
+  //              previous global writes of a waver are visible to all other
+  //              waves in the workgroup. LDS operations for all waves are
+  //              executed in a total global ordering and are observed by all
+  //              waves in the workgroup. So LDS stores issued before the
+  //              release will be visible to LDS loads after the read of the
+  //              released buffer-atomic. So, swait_cnt lgkmcnt is not
+  //              required.
+  //   agent: Instr seq: buffer_wbl2 sc1=1, s_waitcnt vmcnt(0),
+  //                     [buffer-atomic_0.. buffer-atomic_n]
+  //          buffer_wbl2 sc1=1 ensures that dirtly L2 lines are visible to
+  //          CUs that don't use the same L2.
+  //          From SIMemoryLegalizer.cpp SIGfx940CacheControl::insertRelease:
+  //            "Inserting a "S_WAITCNT vmcnt(0)" before is not required
+  //             because the hardware does not reorder memory operations by
+  //             the same wave with respect to a following "BUFFER_WBL2".
+  //             The "BUFFER_WBL2" is guaranteed to initiate writeback of
+  //             any dirty cache lines of earlier writes by the same wave.
+  //             A "S_WAITCNT vmcnt(0)" is needed after to ensure the writeback
+  //             has completed.""
+  //   system: //TODO:
+  //
+  // AcquireRelease:
+  //   Instr seq: Release scope/order insts,
+  //              [buffer-atomic_0..buffer-atomic_n],
+  //              Acquire scope/order instrs.
+  //
+  // LLVM::FenceOp lowering will emit the required cache ops and s_waitcnt
+  // vmcnt(0) instrs
+
+  auto [emitReleaseFence, emitAcquireFence] = getOrderingFlags(memOrdering);
+  if (MemSyncScope::SYSTEM == memScope)
+    return rewriter.notifyMatchFailure(
+        op, "System memory scope is not supported for Buffer Atomic Ops");
+  auto scopeStr = getAMDGPUMemScopeStr(memScope);
+  if (!scopeStr)
+    return rewriter.notifyMatchFailure(
+        op, "Unsupported memory scope for Buffer Atomic Ops");
+
+  StringAttr scope = mlir::StringAttr::get(loc.getContext(), *scopeStr);
+
+  if (emitReleaseFence && preAtomic) {
+    rewriter.create<LLVM::FenceOp>(loc, TypeRange{},
+                                   LLVM::AtomicOrdering::release, scope);
+  }
+
+  if (emitAcquireFence && !preAtomic) {
+    rewriter.create<LLVM::FenceOp>(loc, TypeRange{},
+                                   LLVM::AtomicOrdering::acquire, scope);
+  }
+  return success();
 }
 
 // Return a predicate that is true only if the current thread holds unique data,
@@ -163,18 +289,14 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
                                   RankedTensorType srcTy, MemDescType dstTy,
                                   unsigned vectorSize,
                                   bool hasSwizzling) const {
-
     int vecBits = vectorSize * dstTy.getElementTypeBitWidth();
     if (!targetInfo.supportsDirectToLdsLoadBitWidth(vecBits)) {
       LDBG(op << " results in unsupported load bitwidth: " << vecBits);
       return failure();
     }
     // Compute the blocked -> shared linear layout to check preconditions
-    auto shape = srcTy.getShape();
-    LinearLayout srcLayout =
-        triton::gpu::toLinearLayout(shape, srcTy.getEncoding());
-    LinearLayout sharedLayout =
-        triton::gpu::toLinearLayout(shape, dstTy.getEncoding());
+    LinearLayout srcLayout = triton::gpu::toLinearLayout(srcTy);
+    LinearLayout sharedLayout = triton::gpu::toLinearLayout(dstTy);
     LinearLayout srcToSharedLayout = srcLayout.invertAndCompose(sharedLayout);
 
     unsigned threadsPerWarp = lookupThreadsPerWarp(rewriter);
@@ -192,67 +314,126 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     return success();
   }
 
-  // Determine the vector size per load and collect the shared addresses. This
-  // will only emit the address calculation and not the actual loads.
-  // For swizzled loads we get the non swizzled/coalesced shared addresses
-  // from a temporary non swizzled layout. Those addresses will be used as the
-  // store addresses. Additionally, we compute the swizzled shared memory
-  // addresses which will be used to compute which lane holds the global ptr
-  // to the coalesced address
-  void emitSharedAddresses(RewriterBase &rewriter, Operation *op,
-                           RankedTensorType srcTy, MemDescType dstTy,
-                           bool hasSwizzling, Type resElemTy, Value llDst,
-                           SmallVector<Value> &coalescedShmemAddr,
-                           SmallVector<Value> &swizzledShmemAddr,
-                           VectorType &vecTy) const {
-    auto emitSharedAddresses = [&](MemDescType dstTy,
-                                   SmallVector<Value> &shmemAddrs,
-                                   VectorType &vecTy) {
-      auto loc = op->getLoc();
-      auto smemObj = mlir::LLVM::getSharedMemoryObjectFromStruct(
-          loc, llDst, resElemTy, rewriter);
-      bool ok = emitTransferBetweenRegistersAndShared(
-          srcTy, dstTy, resElemTy, {}, smemObj, loc, rewriter, targetInfo,
-          [&](VectorType vecTy_, Value shmemAddr) {
-            vecTy = vecTy_;
-            shmemAddrs.push_back(shmemAddr);
-          });
-      assert(ok);
-    };
+  // Determine the vecTy per async load to LDS and collect the warp uniform
+  // shared memory addresses per vecTy. This will only emit the address
+  // calculation and not the actual loads.
+  std::pair<SmallVector<Value>, VectorType> emitWarpStartSharedAddresses(
+      RewriterBase &rewriter, Operation *op, RankedTensorType srcTy,
+      MemDescType dstTy, bool hasSwizzling, Type resElemTy, Value llDst) const {
+    auto loc = op->getLoc();
+    TritonLLVMOpBuilder b(loc, rewriter);
 
-    if (!hasSwizzling) {
-      emitSharedAddresses(dstTy, coalescedShmemAddr, vecTy);
-    } else {
-      emitSharedAddresses(dstTy, swizzledShmemAddr, vecTy);
-      // Create non swizzled/coalesced encoding
+    // On GFX9 the shared memory address is a scalar so we need to compute the
+    // start address by setting lane_id to 0 and ignore swizzling
+
+    if (hasSwizzling) {
+      // Overwrite the shared encoding with a non swizzled
+      // one to get the base address of the warp
+      // TODO (alex): this is only correct as long as the lds view is a
+      // contigous block. So this can break if we slice along the 2 minor
+      // dimensions.
       auto dstEnc = cast<SwizzledSharedEncodingAttr>(dstTy.getEncoding());
       auto flatSharedEnc = SwizzledSharedEncodingAttr::get(
           op->getContext(), dstEnc.getVec(), 1, 1, dstEnc.getOrder(),
           dstEnc.getCTALayout());
-      auto flatDstTy =
-          MemDescType::get(dstTy.getShape(), dstTy.getElementType(),
-                           flatSharedEnc, dstTy.getMemorySpace());
-      VectorType coalescedVecTy;
-      emitSharedAddresses(flatDstTy, coalescedShmemAddr, coalescedVecTy);
-      assert(coalescedVecTy == vecTy);
+      dstTy = MemDescType::get(dstTy.getShape(), dstTy.getElementType(),
+                               flatSharedEnc, dstTy.getMemorySpace());
     }
+
+    auto smemObj = mlir::LLVM::getSharedMemoryObjectFromStruct(
+        loc, llDst, resElemTy, rewriter);
+    auto regLayout = triton::gpu::toLinearLayout(srcTy);
+
+    // The warp ID is always a scalar so we use the ThreadId from the first lane
+    // to compute the warp ID which improves codegen. shuffleIdx will be lowered
+    // to readlane 0 placing it into a SGPR and hinting at LLVM that it
+    // should use scalar ops which also allows it to better hoist values
+    Value tid =
+        targetInfo.shuffleIdx(rewriter, loc, getThreadId(rewriter, loc), 0);
+    int threadsPerWarp = triton::gpu::lookupThreadsPerWarp(rewriter);
+    Value warpSizeVal = b.i32_val(threadsPerWarp);
+    Value warpId = b.udiv(tid, warpSizeVal);
+
+    VectorType vecTy;
+    SmallVector<Value> warpStartAddrs;
+    bool ok = emitTransferBetweenRegistersAndShared(
+        regLayout, dstTy, resElemTy, {}, smemObj, loc, rewriter, targetInfo,
+        /*laneId=*/b.i32_val(0), warpId,
+        [&](VectorType vecTy_, Value shmemAddr) {
+          vecTy = vecTy_;
+          warpStartAddrs.push_back(shmemAddr);
+        });
+    assert(ok);
+
+    return {std::move(warpStartAddrs), vecTy};
   }
 
-  // Emits the computation to get the lane index which holds the source
-  // pointers/offsets we need to store to shared memory
-  Value emitSwizzledLaneIndex(RewriterBase &rewriter, TritonLLVMOpBuilder &b,
-                              Location loc, Value coalescedShmem,
-                              Value swizzledShmem, Value vecBytes) const {
-    // Compute the laneOffset based on the difference in elements between
-    // the two shmem addresses. laneOffset will be negative for half the
-    // lanes because a smaller laneId might hold our global_ptr.
-    auto coalescedAddr = b.ptrtoint(i64_ty, coalescedShmem);
-    auto swizzledAddr = b.ptrtoint(i64_ty, swizzledShmem);
-    auto diff = b.trunc(i32_ty, b.sub(swizzledAddr, coalescedAddr));
-    Value laneOffset = b.sdiv(diff, vecBytes);
-    // laneId + laneOffset will always stay inside the warp [0,
-    // threadsPerWarp) because we only swizzle inside a warp
-    return b.add(getLaneId(rewriter, loc), laneOffset);
+  // For each load emit the computation to get the lane id offset which holds
+  // the source pointers/offsets we need to store to shared memory
+  SmallVector<Value>
+  emitSwizzledLaneOffsets(RewriterBase &rewriter, Operation *op,
+                          RankedTensorType srcTy, MemDescType dstTy,
+                          bool hasSwizzling, Value llDst, Type resElemTy,
+                          VectorType vecTy) const {
+    auto loc = op->getLoc();
+    TritonLLVMOpBuilder b(loc, rewriter);
+
+    // Create the non swizzled/flat encoding
+    auto dstEnc = cast<SwizzledSharedEncodingAttr>(dstTy.getEncoding());
+    auto flatSharedEnc = SwizzledSharedEncodingAttr::get(
+        srcTy.getContext(), dstEnc.getVec(), 1, 1, dstEnc.getOrder(),
+        dstEnc.getCTALayout());
+    auto flatTy = MemDescType::get(dstTy.getShape(), dstTy.getElementType(),
+                                   flatSharedEnc, dstTy.getMemorySpace());
+
+    // Create regToShared layout for the swizzled and flat encoding
+    auto regLayout = triton::gpu::toLinearLayout(srcTy);
+
+    auto sharedSwizz = triton::gpu::toLinearLayout(dstTy);
+    auto sharedFlat = triton::gpu::toLinearLayout(flatTy);
+
+    auto regToSharedSwizzled = regLayout.invertAndCompose(sharedSwizz);
+    auto regToSharedFlat = regLayout.invertAndCompose(sharedFlat);
+
+    MLIRContext *ctx = rewriter.getContext();
+    StringAttr kBlock = str_attr("block");
+    StringAttr kRegister = str_attr("register");
+    StringAttr kLane = str_attr("lane");
+    StringAttr kWarp = str_attr("warp");
+    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+    Value blockId = b.i32_val(0);
+
+    int numberOfLoads =
+        regToSharedSwizzled.getInDimSize(kRegister) / vecTy.getNumElements();
+
+    // For each load compute the difference between the flat and the swizzled
+    // linear offsets into shared memory
+    // TODO (alex): this is only correct as long as the lds view is a contigous
+    // block. So this can break if we slice along the 2 minor dimensions
+    SmallVector<Value> swizzledOffsets;
+    swizzledOffsets.reserve(numberOfLoads);
+    for (int i = 0; i < numberOfLoads; i++) {
+      auto regId = b.i32_val(i * vecTy.getNumElements());
+
+      std::array<std::pair<StringAttr, Value>, 4> indices{{
+          {kRegister, regId},
+          {kLane, laneId},
+          {kWarp, warpId},
+          {kBlock, blockId},
+      }};
+
+      Value swizzledOffset =
+          applyLinearLayout(loc, rewriter, regToSharedSwizzled, indices)[0]
+              .second;
+      Value flatOffset =
+          applyLinearLayout(loc, rewriter, regToSharedFlat, indices)[0].second;
+
+      // Normalize the offset by vecTy to obtain the offset in lanes
+      auto laneOffet = b.sdiv(b.sub(swizzledOffset, flatOffset),
+                              b.i32_val(vecTy.getNumElements()));
+      swizzledOffsets.push_back(laneOffet);
+    }
+    return swizzledOffsets;
   }
 
   // Swizzle the mask (1bit) based on selectLane via ballot
@@ -264,6 +445,21 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     // Extract the selectLane bit
     auto bitMask = b.lshr(warpMask, b.zext(rewriter.getI64Type(), selectLane));
     return b.trunc(i1_ty, bitMask);
+  }
+
+  // For direct-to-lds the order of the shared encoding decides the order we
+  // load elements from global memory. This function returns true if the fastest
+  // dim for the sharedEnc is contiguous for the global ptrs/offsets
+  bool isFastedLoadDimContiguous(Value srcPtrOrOffset,
+                                 MemDescType sharedTy) const {
+    auto fastestDim = triton::gpu::getOrder(sharedTy)[0];
+    AxisInfo *axisInfo = axisAnalysisPass.getAxisInfo(srcPtrOrOffset);
+
+    // This can happen if axis analysis fails (e.g. lit tests).
+    if (axisInfo->getRank() <= fastestDim)
+      return false;
+
+    return axisInfo->getContiguity(fastestDim) > 1;
   }
 };
 
@@ -358,8 +554,6 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     Value resultStruct = packLLElements(loc, getTypeConverter(), loadedVals,
                                         rewriter, llvmResultStructTy);
 
-    setNumGeneratedGlobalLoads(op, numVecs, vecTy);
-
     rewriter.replaceOp(op, {resultStruct});
     return success();
   }
@@ -446,9 +640,6 @@ struct BufferLoadOpConversion
     Value resultStruct = packLLElements(loc, getTypeConverter(), loadedVals,
                                         rewriter, llvmResultStructTy);
 
-    const int numVecs = numElems / vec;
-    setNumGeneratedGlobalLoads(op, numVecs, vecTy);
-
     rewriter.replaceOp(op, {resultStruct});
     return success();
   }
@@ -515,16 +706,18 @@ struct BufferLoadToLocalOpConversion
       return failure();
     }
 
-    VectorType vecTy;
-    // Will hold the coalesced shared addresses we need to store into
-    SmallVector<Value> coalescedShmemAddr;
-    // If the shared encoding is swizzled we will compute the swizzled shared
-    // addresses to apply the reverse swizzling to the source offsets
-    SmallVector<Value> swizzledShmemAddr;
-    emitSharedAddresses(rewriter, op, ptrType, dstTy, hasSwizzling, resElemTy,
-                        llDst, coalescedShmemAddr, swizzledShmemAddr, vecTy);
+    auto [ldsWarpStartAddrs, vecTy] = emitWarpStartSharedAddresses(
+        rewriter, op, ptrType, dstTy, hasSwizzling, resElemTy, llDst);
     assert(vecTy.getNumElements() == vec);
 
+    SmallVector<Value> swizzledLaneOffsets;
+    if (hasSwizzling) {
+      swizzledLaneOffsets = emitSwizzledLaneOffsets(
+          rewriter, op, ptrType, dstTy, hasSwizzling, llDst, resElemTy, vecTy);
+      assert(ldsWarpStartAddrs.size() == swizzledLaneOffsets.size());
+    }
+
+    Value laneId = getLaneId(rewriter, loc);
     int vecBytes =
         (vecTy.getNumElements() * vecTy.getElementTypeBitWidth()) / 8;
     assert(llvm::isPowerOf2_32(vecBytes));
@@ -534,18 +727,30 @@ struct BufferLoadToLocalOpConversion
     // based on the collected shared addresses and vector size
     Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr, llStride);
 
-    for (int i = 0; i < coalescedShmemAddr.size(); i++) {
+    for (int i = 0; i < ldsWarpStartAddrs.size(); i++) {
       auto srcIdx = i * vec;
       auto offsetIn = offsetElems[srcIdx];
       Value pred = mask ? maskElems[srcIdx] : b.true_val();
 
       if (hasSwizzling) {
         // Apply swizzling to the src offsets
-        Value swizzledLaneId =
-            emitSwizzledLaneIndex(rewriter, b, loc, coalescedShmemAddr[i],
-                                  swizzledShmemAddr[i], vecBytesVal);
-        offsetIn =
-            targetInfo.shuffleIdx(rewriter, loc, offsetIn, swizzledLaneId);
+        auto swizzleLaneOffset = swizzledLaneOffsets[i];
+        // laneId + swizzleOffset will always stay inside the warp [0,
+        // threadsPerWarp) because we only swizzle inside a warp
+        Value swizzledLaneId = b.add(laneId, swizzleLaneOffset);
+        if (isFastedLoadDimContiguous(offset, cast<MemDescType>(dstTy))) {
+          // Because rows are contiguous and we only swizzle inside rows by
+          // swapping elements between lanes we can add laneOffset * vecSize to
+          // the offset to apply the swizzling
+          offsetIn = b.add(offsetIn, b.mul(swizzleLaneOffset,
+                                           b.i32_val(vecTy.getNumElements())));
+        } else {
+          // If rows are not contiguous in memory we need to shuffle the
+          // pointers to apply the swizzling to the src pointers
+          offsetIn =
+              targetInfo.shuffleIdx(rewriter, loc, offsetIn, swizzledLaneId);
+        }
+
         if (mask) {
           pred =
               shuffleMask(rewriter, b, loc, targetInfo, swizzledLaneId, pred);
@@ -553,15 +758,21 @@ struct BufferLoadToLocalOpConversion
       }
 
       auto bufferLoadToLds = bufferEmitter.emitLoadToLds(
-          vecTy, vecBytesVal, rsrcDesc, offsetIn, coalescedShmemAddr[i], pred,
+          vecTy, vecBytesVal, rsrcDesc, offsetIn, ldsWarpStartAddrs[i], pred,
           op.getCache());
-      LLVM::AMD::addAsyncCopyAliasScope(bufferLoadToLds);
+      AMD::addAsyncCopyAliasScope(bufferLoadToLds);
       if (!otherElems.empty()) {
         Value storeVal = packElementRangeIntoVector(
             rewriter, this->getTypeConverter(), loc, vecTy, otherElems, srcIdx);
-        llStore(rewriter, loc,
-                hasSwizzling ? swizzledShmemAddr[i] : coalescedShmemAddr[i],
-                storeVal, b.icmp_ne(pred, b.true_val()), op.getCache(),
+        Type ptrTy = ldsWarpStartAddrs[i].getType();
+
+        // otherDstPtr = warpStartAddr + (laneId + [swizzleLaneOffset]) * vecTy
+        Value ldsAddr = b.gep(ptrTy, vecTy, ldsWarpStartAddrs[i], laneId);
+        if (hasSwizzling)
+          ldsAddr = b.gep(ptrTy, vecTy, ldsAddr, swizzledLaneOffsets[i]);
+
+        llStore(rewriter, loc, ldsAddr, storeVal,
+                b.icmp_ne(maskElems[srcIdx], b.true_val()), op.getCache(),
                 /*forceNoAliasAsyncLoads=*/true);
       }
     }
@@ -625,24 +836,6 @@ struct AsyncCopyGlobalToLocalOpConversion
       return failure();
     }
 
-    VectorType vecTy;
-    // Will hold the coalesced shared addresses we need to store into
-    SmallVector<Value> coalescedShmemAddr;
-    // If the shared encoding is swizzled we will compute the swizzled shared
-    // addresses to apply the reverse swizzling to the source pointers
-    SmallVector<Value> swizzledShmemAddr;
-    emitSharedAddresses(rewriter, op, srcTy, dstTy, hasSwizzling, resElemTy,
-                        llDst, coalescedShmemAddr, swizzledShmemAddr, vecTy);
-    assert(vecTy.getNumElements() == maxVec);
-
-    int vecBytes =
-        (vecTy.getNumElements() * vecTy.getElementTypeBitWidth()) / 8;
-    assert(llvm::isPowerOf2_32(vecBytes));
-    Value vecBytesVal = b.i32_val(vecBytes);
-    int32_t cacheModifiers =
-        mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
-            op.getCache(), /*isLoad=*/true, targetInfo);
-
     Value llMask = adaptor.getMask();
     SmallVector<Value> maskElems;
     if (llMask) {
@@ -656,19 +849,51 @@ struct AsyncCopyGlobalToLocalOpConversion
       assert(srcElems.size() == otherElems.size());
     }
 
+    auto [ldsWarpStartAddrs, vecTy] = emitWarpStartSharedAddresses(
+        rewriter, op, srcTy, dstTy, hasSwizzling, resElemTy, llDst);
+    assert(vecTy.getNumElements() == maxVec);
+
+    SmallVector<Value> swizzledLaneOffsets;
+    if (hasSwizzling) {
+      swizzledLaneOffsets = emitSwizzledLaneOffsets(
+          rewriter, op, srcTy, dstTy, hasSwizzling, llDst, resElemTy, vecTy);
+      assert(ldsWarpStartAddrs.size() == swizzledLaneOffsets.size());
+    }
+
+    Value laneId = getLaneId(rewriter, loc);
+    int vecBytes =
+        (vecTy.getNumElements() * vecTy.getElementTypeBitWidth()) / 8;
+    assert(llvm::isPowerOf2_32(vecBytes));
+    Value vecBytesVal = b.i32_val(vecBytes);
+    int32_t cacheModifiers =
+        mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
+            op.getCache(), /*isLoad=*/true, targetInfo);
+
     // Emit the load to lds based on the collected shared addresses and vector
     // size
-    for (int i = 0; i < coalescedShmemAddr.size(); i++) {
+    for (int i = 0; i < ldsWarpStartAddrs.size(); i++) {
       auto srcIdx = i * maxVec;
       Value srcPtr = srcElems[srcIdx];
       Value pred = maskElements.empty() ? b.true_val() : maskElems[srcIdx];
 
+      // Apply swizzling to the src pointers
       if (hasSwizzling) {
-        // Apply swizzling to the src pointers
+        // laneId + laneOffset will always stay inside the warp [0,
+        // threadsPerWarp) because we only swizzle inside a warp
         Value swizzledLaneId =
-            emitSwizzledLaneIndex(rewriter, b, loc, coalescedShmemAddr[i],
-                                  swizzledShmemAddr[i], vecBytesVal);
-        srcPtr = targetInfo.shuffleIdx(rewriter, loc, srcPtr, swizzledLaneId);
+            b.add(getLaneId(rewriter, loc), swizzledLaneOffsets[i]);
+
+        if (isFastedLoadDimContiguous(op.getSrc(), cast<MemDescType>(dstTy))) {
+          // Because rows are contiguous and we only swizzle inside rows by
+          // swapping elements between lanes we can move the vecTy typed src
+          // pointer by laneOffset elements to apply the swizzling.
+          srcPtr =
+              b.gep(srcPtr.getType(), vecTy, srcPtr, swizzledLaneOffsets[i]);
+        } else {
+          // If rows are not contiguous in memory we need to shuffle the
+          // pointers to apply the swizzling to the src pointers
+          srcPtr = targetInfo.shuffleIdx(rewriter, loc, srcPtr, swizzledLaneId);
+        }
         if (!maskElements.empty()) {
           pred =
               shuffleMask(rewriter, b, loc, targetInfo, swizzledLaneId, pred);
@@ -678,11 +903,11 @@ struct AsyncCopyGlobalToLocalOpConversion
       if (maskElems.empty()) {
         auto globalLoadLdsOp = rewriter.create<ROCDL::GlobalLoadLDSOp>(
             loc,
-            /*globalPtr=*/srcPtr, /*ldsPtr=*/coalescedShmemAddr[i],
+            /*globalPtr=*/srcPtr, /*ldsPtr=*/ldsWarpStartAddrs[i],
             /*size=*/vecBytes, /*offset=*/0,
             /*aux=*/cacheModifiers, /*alias_scopes=*/nullptr,
             /*noalias_scopes=*/nullptr, /*tbaa=*/nullptr);
-        LLVM::AMD::addAsyncCopyAliasScope(globalLoadLdsOp);
+        AMD::addAsyncCopyAliasScope(globalLoadLdsOp);
         continue;
       }
 
@@ -694,19 +919,25 @@ struct AsyncCopyGlobalToLocalOpConversion
       rewriter.create<LLVM::CondBrOp>(loc, pred, loadBlock, afterLoad);
       rewriter.setInsertionPointToStart(loadBlock);
       auto globalLoadLdsOp = rewriter.create<ROCDL::GlobalLoadLDSOp>(
-          loc, srcPtr, coalescedShmemAddr[i], vecBytes,
+          loc, srcPtr, ldsWarpStartAddrs[i], vecBytes,
           /*offset=*/0, cacheModifiers, nullptr, nullptr, nullptr);
-      LLVM::AMD::addAsyncCopyAliasScope(globalLoadLdsOp);
+      AMD::addAsyncCopyAliasScope(globalLoadLdsOp);
 
       rewriter.create<LLVM::BrOp>(loc, afterLoad);
       rewriter.setInsertionPointToStart(afterLoad);
       if (!otherElems.empty()) {
         Value storeVal = packElementRangeIntoVector(
             rewriter, this->getTypeConverter(), loc, vecTy, otherElems, srcIdx);
-        llStore(rewriter, loc,
-                hasSwizzling ? swizzledShmemAddr[i] : coalescedShmemAddr[i],
-                storeVal, b.icmp_ne(maskElems[srcIdx], b.true_val()),
-                op.getCache(), /*forceNoAliasAsyncLoads=*/true);
+        Type ptrTy = ldsWarpStartAddrs[i].getType();
+
+        // otherDstPtr = warpStartAddr + (laneId + [swizzleLaneOffset]) * vecTy
+        Value ldsAddr = b.gep(ptrTy, vecTy, ldsWarpStartAddrs[i], laneId);
+        if (hasSwizzling)
+          ldsAddr = b.gep(ptrTy, vecTy, ldsAddr, swizzledLaneOffsets[i]);
+
+        llStore(rewriter, loc, ldsAddr, storeVal,
+                b.icmp_ne(maskElems[srcIdx], b.true_val()), op.getCache(),
+                /*forceNoAliasAsyncLoads=*/true);
       }
     }
 
@@ -869,118 +1100,26 @@ struct BufferAtomicRMWOpConversion
     SmallVector<Value> maskElems =
         getMaskElemsAndUpdateVeclen(rewriter, loc, llMask, mask, vec);
 
-    // We need to manually emit memory fences (LLVM doesn't do this for buffer
-    // ops) see: https://llvm.org/docs/AMDGPUUsage.html#memory-model-gfx942
-    auto memOrdering = op.getSem();
-    auto rel = LLVM::AtomicOrdering::release;
-    auto acq = LLVM::AtomicOrdering::acquire;
-
-    bool emitReleaseFence = false;
-    bool emitAcquireFence = false;
-    switch (memOrdering) {
-    case MemSemantic::RELAXED:
-      // In this case, no memory fences are needed
-      break;
-    case MemSemantic::RELEASE:
-      emitReleaseFence = true;
-      break;
-    case MemSemantic::ACQUIRE:
-      emitAcquireFence = true;
-      break;
-    case MemSemantic::ACQUIRE_RELEASE:
-      emitAcquireFence = true;
-      emitReleaseFence = true;
-    default:
-      // default == acq_rel, so we emit the same barriers
-      emitAcquireFence = true;
-      emitReleaseFence = true;
-    }
-
     Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr, llStride);
     SmallVector<Value> loadedVals;
 
-    // set the scope
+    // We need to manually emit memory fences (LLVM doesn't do this for buffer
+    // ops) see: https://llvm.org/docs/AMDGPUUsage.html#memory-model-gfx942
+    auto memOrdering = op.getSem();
     auto memScope = op.getScope();
-    // System scope is not supported yet
-    if (MemSyncScope::SYSTEM == memScope)
-      return rewriter.notifyMatchFailure(
-          op, "System memory scope is not supported for Buffer Atomic RMW");
-    auto scopeStr = getAMDGPUMemScopeStr(memScope);
-    if (!scopeStr)
-      return rewriter.notifyMatchFailure(
-          op, "Unsupported memory scope for Buffer Atomic RMW");
-
-    StringAttr scope = mlir::StringAttr::get(loc.getContext(), *scopeStr);
-
-    if (emitReleaseFence)
-      rewriter.create<LLVM::FenceOp>(loc, TypeRange{}, rel, scope);
+    if (failed(emitFence(op, rewriter, loc, memOrdering, memScope,
+                         true /*preAtomic*/))) {
+      return failure();
+    }
 
     mlir::Operation *lastRMWOp;
     MLIRContext *ctx = rewriter.getContext();
     GCNBuilder waitcntBuilder;
 
-    // Triton supports three scopes for atomic access
-    // 1. System
-    // 2. GPU (default)
-    // 3. CTA (i.e., threadblock or warp-group)
-    //
-    // Currently, the AMD backend emits atomics with agent-scope.
-    //
-    // The following properties are used to emit proper synchronization
-    // primitives between sequential buffer atomics See: Memory Model GFX942
-    // (CDNA3 series)
-    // https://llvm.org/docs/AMDGPUUsage.html#memory-model-gfx942:
-    //
-    // buffer/global/flat_load/store/atomic instructions to global memory are
-    // termed vector memory operations.
-    //
-    // 1. Vector memory operations access a single vector L1 cache shared by
-    // all SIMDs a CU.
-    //    No special action is required for coherence between wavefronts in the
-    //    same work-group since they execute on the same CU.
-    //
-    // 2. Each CU has a separate request queue per channel for its associated
-    // L2.
-    //    Therefore, the vector and scalar memory operations performed by
-    //    wavefronts executing with different L1 caches and the same L2 cache
-    //    can be reordered relative to each other. A `s_waitcnt vmcnt(0)` is
-    //    required to ensure synchronization between vector memory operations of
-    //    different CUs. It ensures a previous vector memory operation has
-    //    completed before executing a subsequent vector memory or LDS operation
-    //    and so can be used to meet the requirements of acquire and release.
-    //
-    // 3. Atomic read-modify-write instructions implicitly bypass the L1 cache
-    //    (specific to gfx942)
-    //    Therefore, they do not use the sc0 bit for coherence and instead use
-    //    it to indicate if the instruction returns the original value being
-    //    updated. They do use sc1 to indicate system or agent scope coherence.
-    //    See the cache modifiers word in BufferEmitter::fillCommonArgs for
-    //    more details.
-    //
-    // In summary:
-    // 1. We have to emit memory fences (i.e., acq/rel/acq_rel) before and after
-    //    our buffer atomics.
-    // 2. Because buffer atomic rmw ops skip the l1 cache, s_waitcnt vmcnt(0) is
-    //    sufficient for synchronization between instructions.
-    //    We don't need to invalidate L1 between these ops on GFX942, just after
-    //    (i.e., we can skip `buffer_wbinvl1_vol`)
-    // 3. We don't have to explicitly write to the l2 cache because
-    //    `s_waitcnt vmcnt(0)` already does this as-per the CDNA3 ISA
-    //    docs: "Decremented for reads when the data has been written back to
-    //    the VGPRs, and for writes when the data has been written to the L2
-    //    cache. Ordering: Memory reads and writes return in the order they were
-    //    issued, including mixing reads and writes"
-    // 4. We set GLC=1, to return the old value. Atomics in GFX942 execute with
+    //    We set GLC=1, to return the old value. Atomics in GFX942 execute with
     //    either device (default) or system scope (controlled by the sc1 flag).
     //    This is distinct from the memory scope of the atomic (i.e, the memory
     //    fences which appear before/after the ops).
-
-    if (memScope == MemSyncScope::GPU) {
-      waitcntBuilder.create<>("s_waitcnt vmcnt(0)")->operator()();
-    } else if (memScope == MemSyncScope::CTA) {
-      // TODO: Within a CTA we can possibly relax this?
-      waitcntBuilder.create<>("s_waitcnt vmcnt(0)")->operator()();
-    }
 
     // Check if the op has users, if it does we set GLC=1, otherwise GLC=0
     auto opUsers = op.getResult().getUsers();
@@ -1013,14 +1152,6 @@ struct BufferAtomicRMWOpConversion
       // Track the last op, so we can emit a fenceop after the loop
       lastRMWOp = loadVal.getDefiningOp();
 
-      // To sync vector memory ops between CUs within an agent, we need an
-      // s_waitcnt skip doing this on the last iteration of the loop
-      // In the relaxed memory ordering, we don't need this barrier
-      if (vecStart < numElems - vec && (emitReleaseFence || emitAcquireFence)) {
-        Value inst =
-            waitcntBuilder.launch(rewriter, lastRMWOp->getLoc(), void_ty(ctx));
-        lastRMWOp = inst.getDefiningOp();
-      }
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
             rewriter, loc, getTypeConverter()->getIndexType(), ii);
@@ -1030,9 +1161,126 @@ struct BufferAtomicRMWOpConversion
     } // end vec
 
     // Acquire Fence post-atomic
-    if (emitAcquireFence)
-      rewriter.create<LLVM::FenceOp>(lastRMWOp->getLoc(), TypeRange{}, acq,
-                                     scope);
+    if (failed(emitFence(op, rewriter, lastRMWOp->getLoc(), memOrdering,
+                         memScope, false /*preAtomic*/))) {
+      return failure();
+    }
+
+    Type llvmResultStructTy = getTypeConverter()->convertType(valueTy);
+    Value resultStruct = packLLElements(loc, getTypeConverter(), loadedVals,
+                                        rewriter, llvmResultStructTy);
+
+    rewriter.replaceOp(op, {resultStruct});
+    return success();
+  }
+};
+
+struct BufferAtomicCASOpConversion
+    : public ConvertOpToLLVMPattern<triton::amdgpu::BufferAtomicCASOp>,
+      public LoadStoreConversionBase {
+  using ConvertOpToLLVMPattern<
+      triton::amdgpu::BufferAtomicCASOp>::ConvertOpToLLVMPattern;
+
+  BufferAtomicCASOpConversion(LLVMTypeConverter &converter,
+                              const AMD::TargetInfo &targetInfo,
+                              ModuleAxisInfoAnalysis &axisAnalysisPass,
+                              PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::amdgpu::BufferAtomicCASOp>(converter,
+                                                                  benefit),
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+
+  LogicalResult
+  matchAndRewrite(triton::amdgpu::BufferAtomicCASOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo);
+
+    // original values
+    Value ptr = op.getPtr();
+    Value offset = op.getOffsets();
+    Value cmp = op.getCmp();
+    Value val = op.getVal();
+
+    Value llPtr = adaptor.getPtr();
+    Value llOffset = adaptor.getOffsets();
+    Value llVal = adaptor.getVal();
+    Value llCmp = adaptor.getCmp();
+    Value llStride = adaptor.getStride();
+
+    // Determine the vectorization size
+    Type valueTy = val.getType();
+    Type valueElemTy =
+        typeConverter->convertType(getElementTypeOrSelf(valueTy));
+    Type ptrType = getPointerTypeWithShape(ptr, offset);
+
+    unsigned numElems = getTotalElemsPerThread(ptrType);
+    // Max supported vectorization for i32 and i64 is 1x
+    // on CDNA3 and CDNA4
+    // BUFFER_ATOMIC_CMPSWAP(i32) and BUFFER_ATOMIC_CMPSWAP_X2(i64)
+    unsigned vec = 1u;
+
+    // Get the offsets, val, and cmp
+    SmallVector<Value> offsetElems = unpackLLElements(loc, llOffset, rewriter);
+    SmallVector<Value> valElems = unpackLLElements(loc, llVal, rewriter);
+    SmallVector<Value> cmpElems = unpackLLElements(loc, llCmp, rewriter);
+
+    Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr, llStride);
+    SmallVector<Value> loadedVals;
+
+    // We need to manually emit memory fences (LLVM doesn't do this for buffer
+    // ops)
+    auto memOrdering = op.getSem();
+    auto memScope = op.getScope();
+    // Release Fence pre-atomic
+    if (failed(emitFence(op, rewriter, loc, memOrdering, memScope,
+                         true /*preAtomic*/))) {
+      return failure();
+    }
+
+    mlir::Operation *lastCASOp;
+    MLIRContext *ctx = rewriter.getContext();
+    GCNBuilder waitcntBuilder;
+
+    // Check if the op has users, if it does we set GLC=1, otherwise GLC=0
+    auto opUsers = op.getResult().getUsers();
+    auto hasUsers = !op.getResult().getUsers().empty();
+    auto moduleOp = op->getParentOfType<ModuleOp>();
+    auto freeVarMasks = getFreeVariableMasks(valueTy);
+    Value threadPred = emitRedundantThreadPredicate(moduleOp, freeVarMasks,
+                                                    rewriter, loc, targetInfo);
+
+    for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
+      Type vecTy = LLVM::getVectorType(valueElemTy, vec);
+      Value pred = threadPred;
+      // Create the store val
+      Value casStoreVal = packElementRangeIntoVector(
+          rewriter, this->getTypeConverter(), loc, cast<VectorType>(vecTy),
+          valElems, vecStart);
+      // Create the cmp val
+      Value casCmpVal = packElementRangeIntoVector(
+          rewriter, this->getTypeConverter(), loc, cast<VectorType>(vecTy),
+          cmpElems, vecStart);
+
+      Value loadVal =
+          bufferEmitter.emitAtomicCAS(vecTy, rsrcDesc, offsetElems[vecStart],
+                                      casCmpVal, casStoreVal, pred, hasUsers);
+      // Track the last op, so we can emit a fenceop after the loop
+      lastCASOp = loadVal.getDefiningOp();
+
+      for (size_t ii = 0; ii < vec; ++ii) {
+        Value vecIdx = createIndexAttrConstant(
+            rewriter, loc, getTypeConverter()->getIndexType(), ii);
+        Value loaded = b.extract_element(valueElemTy, loadVal, vecIdx);
+        loadedVals.push_back(loaded);
+      }
+    } // end vec
+
+    // Emit post-atomic acquire fence
+    if (failed(emitFence(op, rewriter, lastCASOp->getLoc(), memOrdering,
+                         memScope, false /*preAtomic*/))) {
+      return failure();
+    }
 
     Type llvmResultStructTy = getTypeConverter()->convertType(valueTy);
     Value resultStruct = packLLElements(loc, getTypeConverter(), loadedVals,
@@ -1372,7 +1620,6 @@ struct AtomicRMWOpConversion
     // TODO: support data types less than 32 bits
     enableIntraWaveReduce &= valueElemTy.getIntOrFloatBitWidth() >= 32;
 
-    bool checkPairs = true;
     if (tensorTy) {
       bool isF16Ty = valueElemTy.isF16() || valueElemTy.isBF16();
       unsigned availableVecSize = isF16Ty ? 2 : 1;
@@ -1388,7 +1635,6 @@ struct AtomicRMWOpConversion
       auto threadOrder = getThreadOrder(tensorTy);
       unsigned contigWithinLanes =
           axisAnalysisPass.getAxisInfo(ptr)->getContiguity(threadOrder.front());
-      checkPairs = !(contigWithinLanes > 1 && contigWithinLanes % 2 == 0);
       enableIntraWaveReduce &= contigWithinLanes == 1;
     }
 
@@ -1413,7 +1659,7 @@ struct AtomicRMWOpConversion
       Value rmwMask = llMask ? b.and_(mask, maskElements[i]) : mask;
       if (applyPackingF16) {
         resultVals[i] = emitter.emitPairedAtomicForEvenTID(
-            rewriter, ptrElements[i], valElements[i], rmwMask, checkPairs);
+            rewriter, ptrElements[i], valElements[i], rmwMask);
       } else {
         Value valElement;
         if (vec == 1) {
@@ -1424,6 +1670,29 @@ struct AtomicRMWOpConversion
             vecVal = b.insert_element(vecTy, vecVal, valElements[i + ii],
                                       b.i32_val(ii));
           valElement = vecVal;
+        }
+
+        // If we have a single tl.atomic_rmw that is lowered into multiple
+        // llvm.atomic_rmw, and we set the ordering for each to aql_rel (the
+        // default if no sem value is explicitly set in the DSL level
+        // tl.atomic_add. The llvm backend will insert extra buffer invalidates
+        // and L2 write backs causing a perforance degration. To avoid this we
+        // set the ordering to release for the first, acquire for the last, and
+        // relaxed for anything in between so that only a single set of
+        // buffer_inv and buffer_wbl2 instructions are inserted by the backend
+        // for any "cluster" of atomic ops.
+        if ((vec > 1 || elemsPerThread > 1) &&
+            op.getSem() == MemSemantic::ACQUIRE_RELEASE) {
+          if (i == 0) {
+            // First
+            emitter.setAtomicOrdering(LLVM::AtomicOrdering::release);
+          } else if (i == elemsPerThread - vec) {
+            // Last
+            emitter.setAtomicOrdering(LLVM::AtomicOrdering::acquire);
+          } else {
+            // Middle
+            emitter.setAtomicOrdering(LLVM::AtomicOrdering::monotonic);
+          }
         }
 
         Value retVal =
@@ -1445,6 +1714,7 @@ struct AtomicRMWOpConversion
           Value atomPtr = *atomicSharedMemBase;
           b.barrier();
           Value ret = b.load(valueElemTy, atomPtr);
+
           rewriter.replaceOp(op, {ret});
         }
       }
@@ -1535,8 +1805,9 @@ void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
   patterns.add<AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
                StoreOpConversion, BufferLoadOpConversion,
                BufferLoadToLocalOpConversion, BufferStoreOpConversion,
-               BufferAtomicRMWOpConversion, AsyncCopyGlobalToLocalOpConversion>(
-      typeConverter, targetInfo, axisInfoAnalysis, benefit);
+               BufferAtomicRMWOpConversion, AsyncCopyGlobalToLocalOpConversion,
+               BufferAtomicCASOpConversion>(typeConverter, targetInfo,
+                                            axisInfoAnalysis, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<AsyncCommitGroupOpConversion>(typeConverter, benefit);
 }

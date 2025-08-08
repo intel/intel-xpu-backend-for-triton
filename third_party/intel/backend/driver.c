@@ -20,12 +20,12 @@
 
 #include "sycl_functions.h"
 
-#define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #include <Python.h>
-#include <numpy/arrayobject.h>
 
 static std::vector<std::pair<sycl::device, ze_device_handle_t>>
     g_sycl_l0_device_list;
+
+static std::vector<sycl::device> sycl_opencl_device_list;
 
 template <typename T>
 static inline T checkSyclErrors(const std::tuple<T, ze_result_t> tuple) {
@@ -306,13 +306,10 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
                          n_spills, n_max_threads);
 
   } catch (const std::exception &e) {
-    char err[1024] = {0};
-    std::string_view error_str(e.what());
-    strncat(err, error_str.data(), std::min(error_str.size(), size_t(1024)));
     PyGILState_STATE gil_state;
     gil_state = PyGILState_Ensure();
-    PyErr_SetString(PyExc_RuntimeError, err);
-    std::cerr << "Error during Intel loadBinary: " << err << std::endl;
+    PyErr_SetString(PyExc_RuntimeError, e.what());
+    std::cerr << "Error during Intel loadBinary: " << e.what() << std::endl;
     PyGILState_Release(gil_state);
     return NULL;
   }
@@ -335,6 +332,15 @@ extern "C" EXPORT_FUNC PyObject *init_devices(PyObject *cap) {
     g_sycl_l0_device_list.push_back(std::make_pair(
         sycl_devices[i], sycl::get_native<sycl::backend::ext_oneapi_level_zero>(
                              sycl_devices[i])));
+    // workaround to get opencl extensions
+    const auto &name = sycl_devices[i].get_info<sycl::info::device::name>();
+    sycl::device opencl_device([&](const sycl::device &dev) -> int {
+      return (dev.get_backend() == sycl::backend::opencl &&
+              dev.get_info<sycl::info::device::name>() == name)
+                 ? 1
+                 : -1;
+    });
+    sycl_opencl_device_list.push_back(opencl_device);
   }
 
   return Py_BuildValue("(i)", deviceCount);
@@ -348,4 +354,17 @@ extern "C" EXPORT_FUNC PyObject *wait_on_sycl_queue(PyObject *cap) {
   sycl_queue->wait();
 
   return Py_None;
+}
+
+extern "C" EXPORT_FUNC PyObject *has_opencl_extension(int device_id,
+                                                      const char *extension) {
+  if (device_id > sycl_opencl_device_list.size()) {
+    std::cerr << "Device is not found " << std::endl << std::flush;
+    return NULL;
+  }
+  const sycl::device &device = sycl_opencl_device_list[device_id];
+
+  if (sycl::opencl::has_extension(device, extension))
+    Py_RETURN_TRUE;
+  Py_RETURN_FALSE;
 }

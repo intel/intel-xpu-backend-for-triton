@@ -177,7 +177,14 @@ template <typename T> auto seq(T start, T end, T step) {
 Value getPredMask(RewriterBase &rewriter, Type typeLike, Value currentMask,
                   Value pred);
 
+// Get the value of the induction variable at the end of the loop.
+Value getLastInductionValue(OpBuilder &b, scf::ForOp loop);
+
 MakeTensorPtrOp getMakeTensorPtrOp(Value v);
+
+bool isHostSideDescriptor(Value v);
+
+bool isKernel(FunctionOpInterface funcOp);
 
 } // namespace triton
 } // namespace mlir

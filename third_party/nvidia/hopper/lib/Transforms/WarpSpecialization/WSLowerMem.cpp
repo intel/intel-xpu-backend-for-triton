@@ -57,8 +57,8 @@ createAsyncCopy(const DenseMap<Channel *, Value> &bufferMap, Channel *c,
 
   // Get shape, layout and type of a slice
   auto sliceShape = tensorType.getShape();
-  auto sharedLayout = ttg::NVMMASharedEncodingAttr::get(
-      context, sliceShape, order, CTALayout, elemType, /*fp4Padded*/ false);
+  auto sharedLayout =
+      dyn_cast<triton::gpu::MemDescType>(buffer.getType()).getEncoding();
   auto sliceType = RankedTensorType::get(sliceShape, elemType, sharedLayout);
 
   Attribute sharedMemorySpace =
@@ -67,14 +67,10 @@ createAsyncCopy(const DenseMap<Channel *, Value> &bufferMap, Channel *c,
       ttg::MemDescType::get(sliceType.getShape(), sliceType.getElementType(),
                             sliceType.getEncoding(), sharedMemorySpace,
                             /*mutableMemory=*/true);
-  Value zero = builder.createWithAsyncTaskIds<arith::ConstantIntOp>(
-      loadOp.getLoc(), 0, 32);
-  SmallVector<Value> copyOffsets(sliceType.getRank() + 1, zero);
-  copyOffsets[0] = bufferIdx;
   builder.setAsyncTaskIdsFromOp(loadOp);
   builder.setInsertionPointAfter(loadOp);
-  auto view = builder.createWithAsyncTaskIds<ttg::MemDescSubviewOp>(
-      loadOp.getLoc(), subviewTy, buffer, copyOffsets);
+  auto view = builder.createWithAsyncTaskIds<ttg::MemDescIndexOp>(
+      loadOp.getLoc(), subviewTy, buffer, bufferIdx);
   // Create cp.async
   Operation *copy =
       builder.createWithAsyncTaskIds<ttg::AsyncCopyGlobalToLocalOp>(
@@ -85,10 +81,8 @@ createAsyncCopy(const DenseMap<Channel *, Value> &bufferMap, Channel *c,
   // Extract part.
   builder.setAsyncTaskIdsFromValueUsers(loadResult);
   builder.setInsertionPoint(c->getDstOp());
-  SmallVector<Value> loadOffsets(sliceType.getRank() + 1, zero);
-  loadOffsets[0] = bufferIdxExtract;
-  auto viewLoad = builder.createWithAsyncTaskIds<ttg::MemDescSubviewOp>(
-      loadOp.getLoc(), subviewTy, buffer, loadOffsets);
+  auto viewLoad = builder.createWithAsyncTaskIds<ttg::MemDescIndexOp>(
+      loadOp.getLoc(), subviewTy, buffer, bufferIdxExtract);
   auto sharedLoad = builder.createWithAsyncTaskIds<ttg::LocalLoadOp>(
       loadOp.getLoc(), loadOp.getType(), viewLoad /*,wait->getResult(0)*/);
   // Replace all uses of loadResult
@@ -118,8 +112,8 @@ createLocalCopy(const DenseMap<Channel *, Value> &bufferMap, Channel *channel,
 
   // Get shape, layout and type of a slice
   auto sliceShape = tensorType.getShape();
-  auto sharedLayout = ttg::NVMMASharedEncodingAttr::get(
-      context, sliceShape, order, CTALayout, elemType, /*fp4Padded*/ false);
+  auto sharedLayout =
+      dyn_cast<triton::gpu::MemDescType>(buffer.getType()).getEncoding();
   auto sliceType = RankedTensorType::get(sliceShape, elemType, sharedLayout);
 
   Attribute sharedMemorySpace =
@@ -133,12 +127,8 @@ createLocalCopy(const DenseMap<Channel *, Value> &bufferMap, Channel *channel,
   OpBuilderWithAsyncTaskIds builder(dstOp);
   builder.setAsyncTaskIdsFromOp(dstOp);
   builder.setInsertionPoint(dstOp);
-  Value zero = builder.createWithAsyncTaskIds<arith::ConstantIntOp>(
-      dstOp->getLoc(), 0, 32);
-  SmallVector<Value> loadOffsets(sliceType.getRank() + 1, zero);
-  loadOffsets[0] = dstBufferIdx;
-  auto dstView = builder.createWithAsyncTaskIds<ttg::MemDescSubviewOp>(
-      dstOp->getLoc(), subviewTy, buffer, loadOffsets);
+  auto dstView = builder.createWithAsyncTaskIds<ttg::MemDescIndexOp>(
+      dstOp->getLoc(), subviewTy, buffer, dstBufferIdx);
   auto sharedLoad = builder.createWithAsyncTaskIds<ttg::LocalLoadOp>(
       dstOp->getLoc(), srcValue.getType(), dstView);
   srcValue.replaceAllUsesWith(sharedLoad.getResult());
@@ -146,13 +136,9 @@ createLocalCopy(const DenseMap<Channel *, Value> &bufferMap, Channel *channel,
   // Producer part. Create local_store for new producers.
   builder.setAsynTaskIdsFromArray(channel->relation.first);
   builder.setInsertionPoint(srcOp->getParentOp());
-  zero = builder.createWithAsyncTaskIds<arith::ConstantIntOp>(srcOp->getLoc(),
-                                                              0, 32);
-  SmallVector<Value> storeOffsets(sliceType.getRank() + 1, zero);
-  storeOffsets[0] = srcBufferIdx;
   builder.setInsertionPointAfter(srcOp);
-  auto srcView = builder.createWithAsyncTaskIds<ttg::MemDescSubviewOp>(
-      srcOp->getLoc(), subviewTy, buffer, storeOffsets);
+  auto srcView = builder.createWithAsyncTaskIds<ttg::MemDescIndexOp>(
+      srcOp->getLoc(), subviewTy, buffer, srcBufferIdx);
   // Create local_alloc
   Operation *copy = builder.createWithAsyncTaskIds<ttg::LocalStoreOp>(
       srcOp->getLoc(), srcValue, srcView);
@@ -175,15 +161,8 @@ static Value createBufferView(OpBuilderWithAsyncTaskIds &builder, Value alloc,
       shape, allocDescType.getElementType(), allocDescType.getEncoding(),
       allocDescType.getMemorySpace(), allocDescType.getMutableMemory(),
       /*allocShape=*/allocDescType.getAllocShape());
-  SmallVector<Value> idxs = {idx};
-  if (allocDescType.getShape().size() > 1) {
-    Value zero = builder.create<arith::ConstantIntOp>(alloc.getLoc(), 0, 32);
-    for (unsigned i = 1; i < allocDescType.getShape().size(); i++) {
-      idxs.push_back(zero);
-    }
-  }
-  return builder.create<triton::gpu::MemDescSubviewOp>(
-      alloc.getLoc(), viewDescType, alloc, idxs);
+  return builder.create<triton::gpu::MemDescIndexOp>(alloc.getLoc(),
+                                                     viewDescType, alloc, idx);
 }
 
 static int getTMALoadSize(tt::DescriptorLoadOp &tmaLoad) {
@@ -205,8 +184,8 @@ Value getBufferForPipelineStage(OpBuilderWithAsyncTaskIds &builder,
 
   // Get shape, layout and type of a slice
   auto sliceShape = tensorType.getShape();
-  auto sharedLayout = ttg::NVMMASharedEncodingAttr::get(
-      context, sliceShape, order, CTALayout, elemType, /*fp4Padded*/ false);
+  auto sharedLayout =
+      dyn_cast<triton::gpu::MemDescType>(buffer.getType()).getEncoding();
   auto sliceType = RankedTensorType::get(sliceShape, elemType, sharedLayout);
 
   Attribute sharedMemorySpace =
@@ -216,13 +195,8 @@ Value getBufferForPipelineStage(OpBuilderWithAsyncTaskIds &builder,
                             sliceType.getEncoding(), sharedMemorySpace,
                             /*mutableMemOry=*/mutableMem);
 
-  Value zero = builder.createWithAsyncTaskIds<arith::ConstantIntOp>(
-      buffer.getLoc(), 0, 32);
-  SmallVector<Value> copyOffsets(sliceType.getRank() + 1, zero);
-  copyOffsets[0] = bufferIdx;
-
-  return builder.createWithAsyncTaskIds<ttg::MemDescSubviewOp>(
-      buffer.getLoc(), subviewTy, buffer, copyOffsets);
+  return builder.createWithAsyncTaskIds<ttg::MemDescIndexOp>(
+      buffer.getLoc(), subviewTy, buffer, bufferIdx);
 }
 
 Operation *optimizeTMALoads(OpBuilderWithAsyncTaskIds &builder,
@@ -258,12 +232,10 @@ Operation *optimizeTMALoads(OpBuilderWithAsyncTaskIds &builder,
     builder.setInsertionPoint(tmaLoad);
     auto pipelineBuffer = getBufferForPipelineStage(builder, tmaLoad.getType(),
                                                     buffer, bufferIdx, true);
-    Value tmaPtr =
-        builder
-            .createWithAsyncTaskIds<triton::nvidia_gpu::TensorDescToTMAPtrOp>(
-                loc, tmaLoad.getDesc());
+    // FIXME: translateTMAIndices
     copy = builder.createWithAsyncTaskIds<ttng::AsyncTMACopyGlobalToLocalOp>(
-        loc, tmaPtr, tmaLoad.getIndices(), prodBarrier, pipelineBuffer, pred);
+        loc, tmaLoad.getDesc(), tmaLoad.getIndices(), prodBarrier,
+        pipelineBuffer, pred);
   }
 
   // Create a wait_barrier before the first consumer.

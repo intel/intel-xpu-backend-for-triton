@@ -27,6 +27,19 @@ def TritonIntelGPUAccelerateMatmul
   ];
 }
 
+def TritonIntelGPUOptimizeDotOperands
+    : Pass<"tritonintelgpu-optimize-dot-operands", "mlir::ModuleOp"> {
+  let summary = "Intel optimize dot operands";
+
+  let description = [{
+    Re-arranged layouts of tensors used as matrix multiplication operands to
+    promote the use of hardware-accelerated operations.
+  }];
+
+  let dependentDialects = ["mlir::triton::TritonDialect",
+                           "mlir::triton::gpu::TritonGPUDialect"];
+}
+
 def TritonIntelGPUCoalesce
     : Pass<"tritonintelgpu-coalesce", "mlir::ModuleOp"> {
   let summary = "Intel Coalesce";

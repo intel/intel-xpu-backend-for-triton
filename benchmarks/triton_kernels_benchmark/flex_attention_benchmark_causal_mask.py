@@ -9,8 +9,51 @@ from torch.nn.attention.flex_attention import (
 
 import torch
 import torch.nn.functional as F
+import torch._inductor
+import torch._inductor.lowering
+import torch._inductor.kernel
+import torch._inductor.kernel.flex.flex_attention as flex_attn
+from torch._inductor.template_heuristics import FlexConfig, FlexDecodeConfig
 
 import triton_kernels_benchmark as benchmark_suit
+import triton
+
+DEVICE = triton.runtime.driver.active.get_active_torch_device()
+
+# Use TORCHINDUCTOR_MAX_AUTOTUNE_GEMM=1 or uncomment the following line to print the auto-tune results.
+# torch._inductor.config.max_autotune_gemm = True
+
+
+def get_flex_attn_fwd_configs(*args, **kwargs):  # pylint: disable=unused-argument
+    configs = [
+        FlexConfig(32, 16, 2, 4),
+        FlexConfig(128, 64, 2, 16),
+        FlexConfig(128, 64, 2, 8),
+        FlexConfig(128, 32, 2, 16),
+        FlexConfig(128, 32, 2, 8),
+    ]
+    return configs
+
+
+def get_flex_decode_configs(*args, **kwargs):  # pylint: disable=unused-argument
+    configs = [
+        FlexDecodeConfig(32, 1, 2),
+        FlexDecodeConfig(32, 1, 1),
+        FlexDecodeConfig(32, 2, 2),
+        FlexDecodeConfig(32, 2, 1),
+        FlexDecodeConfig(64, 1, 2),
+        FlexDecodeConfig(64, 1, 1),
+        FlexDecodeConfig(64, 2, 2),
+        FlexDecodeConfig(64, 2, 1),
+    ]
+    return configs
+
+
+# There is a auto-tuning requirement to get the best configuration for the flex attention.
+# The pytorch flex attention doesn't support auto-tuning by user by default.
+# Overriding the get_flex_attention_fwd_configs method to provide custom configurations for auto-tuning on XPU.
+flex_attn.V.choices.get_flex_attention_fwd_configs = get_flex_attn_fwd_configs
+flex_attn.V.choices.get_flex_decode_configs = get_flex_decode_configs
 
 torch._dynamo.config.recompile_limit = 100  # pylint: disable=protected-access
 
@@ -19,7 +62,7 @@ compiled_flex_attention = torch.compile(flex_attention, dynamic=False)
 
 
 @lru_cache
-def create_block_mask_cached(score_mod, B, H, M, N, device='xpu'):
+def create_block_mask_cached(score_mod, B, H, M, N, device=DEVICE):
     block_mask = create_block_mask(score_mod, B, H, M, N, device=device)
     return block_mask
 
@@ -48,10 +91,7 @@ batch_sizes = [16, 32, 64] if throughput_test else [1]
 
         # Multi-query attention. H_kv equals 1.
         # Append shapes of Deepseek-v3 (Nope)
-        [
-            # RuntimeError: No valid triton configs. OutOfResources: out of resource: shared memory, Required: 133120, Hardware limit: 131072.
-            # [z, 128, 1, 512, 1024 + 128 + 512, 64, 512, 'fwd'] for z in batch_sizes
-        ] +
+        [[z, 128, 1, 512, 1024 + 128 + 512, 64, 512, 'fwd'] for z in batch_sizes] +
         # Append shapes of Deepseek-v3 (Rope)
         [] +
 
@@ -81,7 +121,9 @@ batch_sizes = [16, 32, 64] if throughput_test else [1]
         ] +
         # Decode shapes of Deepseek-v3 (Nope)
         [
-            # RuntimeError: No valid triton configs. OutOfResources: out of resource: shared memory, Required: 264192, Hardware limit: 131072.
+            # There is an known issue in IGC for kernel with extreme register pressure.
+            # Enable this case later with new IGC.
+            # RuntimeError: ZE_RESULT_ERROR_INVALID_KERNEL_NAME
             # [z, 128, 1, 1, 1024, 64, 512, 'fwd'] for z in batch_sizes
         ] +
         # Decode shapes of Deepseek-v3 (Rope)
@@ -97,22 +139,23 @@ batch_sizes = [16, 32, 64] if throughput_test else [1]
 def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provider):
     assert MODE in ['fwd']
     dtype = torch.float16
-    q = torch.randn((Z, H_q, N_CTX_q, D_HEAD_qk), device='xpu', dtype=dtype, requires_grad=MODE == 'bwd')
-    k = torch.randn((Z, H_kv, N_CTX_kv, D_HEAD_qk), device='xpu', dtype=dtype, requires_grad=MODE == 'bwd')
-    v = torch.randn((Z, H_kv, N_CTX_kv, D_HEAD_v), device='xpu', dtype=dtype, requires_grad=MODE == 'bwd')
+    q = torch.randn((Z, H_q, N_CTX_q, D_HEAD_qk), device=DEVICE, dtype=dtype, requires_grad=MODE == 'bwd')
+    k = torch.randn((Z, H_kv, N_CTX_kv, D_HEAD_qk), device=DEVICE, dtype=dtype, requires_grad=MODE == 'bwd')
+    v = torch.randn((Z, H_kv, N_CTX_kv, D_HEAD_v), device=DEVICE, dtype=dtype, requires_grad=MODE == 'bwd')
     sm_scale = 0.125
     if MODE == 'bwd':
         sm_scale = 1.3
 
     quantiles = [0.5, 0.0, 1.0]
-    block_mask = create_block_mask_cached(causal_mask, 1, 1, N_CTX_q, N_CTX_kv, device='xpu')
+    block_mask = create_block_mask_cached(causal_mask, 1, 1, N_CTX_q, N_CTX_kv, device=DEVICE)
     torch_fn = lambda: flex_attention(q, k, v, block_mask=block_mask, scale=sm_scale, enable_gqa=not H_q == H_kv)
 
     if provider == 'torch':
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(torch_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
+        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(torch_fn, n_warmup=10, n_repeat=10, quantiles=quantiles,
+                                                              device=DEVICE)
 
     elif provider == 'triton':
-        kernel_options = {'num_stages': 2, 'num_warps': 16 if D_HEAD_qk == 128 else 8, 'BLOCKS_ARE_CONTIGUOUS': True}
+        kernel_options = {'BLOCKS_ARE_CONTIGUOUS': True}
         triton_fn = lambda: compiled_flex_attention(q, k, v, block_mask=block_mask, scale=sm_scale, enable_gqa=(
             not H_q == H_kv), kernel_options=kernel_options)
         if MODE == 'bwd':
@@ -121,7 +164,8 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
             triton_fn = lambda: triton_o.backward(triton_do, retain_graph=True)
 
         benchmark_suit.assert_close(triton_fn, torch_fn, atol=1e-2, rtol=1e-3, err_msg='triton to torch')
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
+        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10, quantiles=quantiles,
+                                                              device=DEVICE)
 
     elif provider == 'onednn':
         # OneDNN only supports MHA.
@@ -140,8 +184,8 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 
-    qk_flops = H_q * N_CTX_q * N_CTX_kv * D_HEAD_qk * 2  # mul + add
-    pv_flops = H_q * N_CTX_q * D_HEAD_v * N_CTX_kv * 2  # mul + add
+    qk_flops = H_q * N_CTX_q * N_CTX_kv * D_HEAD_qk  # mul + add, causal=True. Only the lower triangle is computed.
+    pv_flops = H_q * N_CTX_q * D_HEAD_v * N_CTX_kv  # mul + add, causal=True. Only the lower triangle is computed.
     tflops = lambda mean: Z * (qk_flops + pv_flops) * (1e-12) / (mean * 1e-3)
 
     q_elems = H_q * N_CTX_q * D_HEAD_qk

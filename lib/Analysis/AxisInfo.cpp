@@ -1,12 +1,11 @@
+#include "triton/Analysis/AxisInfo.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
-#include "llvm/Support/Debug.h"
-#include "llvm/Support/raw_ostream.h"
-
-#include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/raw_ostream.h"
 
 #define DEBUG_TYPE "axis-info"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -51,28 +50,6 @@ int64_t multiplyDivisor(int64_t lhs, int64_t rhs) {
     return maxDivisor;
   return lhs * rhs;
 }
-
-class AxisInfoVisitor {
-public:
-  AxisInfoVisitor() = default;
-  virtual ~AxisInfoVisitor() = default;
-
-  static bool isContiguousDim(const AxisInfo &info, ArrayRef<int64_t> shape,
-                              int dim) {
-    return info.getContiguity(dim) == shape[dim];
-  }
-
-  static bool isConstantDim(const AxisInfo &info, ArrayRef<int64_t> shape,
-                            int dim) {
-    return info.getConstancy(dim) == shape[dim];
-  }
-
-  virtual AxisInfo
-  getAxisInfo(Operation *op,
-              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) = 0;
-
-  virtual bool match(Operation *op) = 0;
-};
 
 // Base class for all operations
 template <typename OpTy> class AxisInfoVisitorImpl : public AxisInfoVisitor {
@@ -147,25 +124,6 @@ protected:
   }
 };
 
-class AxisInfoVisitorList {
-public:
-  template <typename... Ts, typename = std::enable_if_t<sizeof...(Ts) != 0>>
-  void append() {
-    (visitors.emplace_back(std::make_unique<Ts>()), ...);
-  }
-
-  AxisInfo apply(Operation *op,
-                 ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) {
-    for (auto &visitor : visitors)
-      if (visitor->match(op))
-        return visitor->getAxisInfo(op, operands);
-    return AxisInfo();
-  }
-
-private:
-  std::vector<std::unique_ptr<AxisInfoVisitor>> visitors;
-};
-
 class AxisInfoAnalysis : public dataflow::SparseForwardDataFlowAnalysis<
                              dataflow::Lattice<AxisInfo>> {
 private:
@@ -193,7 +151,8 @@ private:
   }
 
 public:
-  AxisInfoAnalysis(DataFlowSolver &solver);
+  AxisInfoAnalysis(DataFlowSolver &solver,
+                   axisinfo::CallbackType callback = nullptr);
   using dataflow::SparseForwardDataFlowAnalysis<
       dataflow::Lattice<AxisInfo>>::getLatticeElement;
   using FuncAxisInfoMapT = DenseMap<FunctionOpInterface, AxisInfo>;
@@ -521,11 +480,19 @@ private:
 
   int64_t getDivisibility(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                           int dim) override {
-    // lhs: d_lhs * k = gcd(d_lhs, d_rhs) * k' * k = gcd(d_lhs, d_rhs) * k''
-    // rhs: d_rhs * p = gcd(d_lhs, d_rhs) * p' * p = gcd(d_lhs, d_rhs) * p''
-    // lhs = gcd(d_lhs, d_rhs) * k'' = gcd(d_lhs, d_rhs) * d + r
-    // r must be divisible by gcd(d_lhs, d_rhs)
-    return gcd(lhs.getDivisibility(dim), rhs.getDivisibility(dim));
+    auto resTy = dyn_cast<RankedTensorType>(op.getType());
+    if (rhs.getConstancy(dim) > 1) {
+      // lhs: d_lhs * k = gcd(d_lhs, d_rhs) * k' * k = gcd(d_lhs, d_rhs) * k''
+      // rhs: d_rhs * p = gcd(d_lhs, d_rhs) * p' * p = gcd(d_lhs, d_rhs) * p''
+      // lhs = gcd(d_lhs, d_rhs) * k'' = gcd(d_lhs, d_rhs) * d + r
+      // r must be divisible by gcd(d_lhs, d_rhs)
+      return gcd(lhs.getDivisibility(dim), rhs.getDivisibility(dim));
+    }
+    // Otherwise we shouldn't assume any divisibility.
+    // For example:
+    // lhs: [2, 2, 4, 4], rhs: [0, 1, 2, 3]
+    // lhs % rhs = [0, 0, 0, 1]
+    return 1;
   };
 
   int64_t getConstancy(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
@@ -1031,7 +998,8 @@ public:
 // AxisInfoAnalysis
 //===----------------------------------------------------------------------===//
 
-AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
+AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver,
+                                   axisinfo::CallbackType callback)
     : dataflow::SparseForwardDataFlowAnalysis<dataflow::Lattice<AxisInfo>>(
           solver) {
   // UnrealizedConversionCast:
@@ -1070,6 +1038,9 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
                   MaxMinOpAxisInfoVisitor<arith::MinSIOp>,
                   MaxMinOpAxisInfoVisitor<arith::MinUIOp>>();
   visitors.append<LoadOpAxisInfoVisitor>();
+
+  if (callback)
+    callback(visitors);
 }
 
 LogicalResult AxisInfoAnalysis::visitOperation(
@@ -1261,8 +1232,7 @@ unsigned ModuleAxisInfoAnalysis::getContiguity(Value offsetsValue,
   // the analysis to one dimension. We should determine contiguity on the
   // flattenOuts() layout
   auto tensorTy = cast<RankedTensorType>(offsetsValue.getType());
-  auto linAttr =
-      gpu::toLinearEncoding(tensorTy.getEncoding(), tensorTy.getShape());
+  auto linAttr = gpu::toLinearEncoding(tensorTy);
   auto order = linAttr.getOrder();
   unsigned align = getAlignment(offsetsValue, elementBitWidth);
 
@@ -1295,8 +1265,7 @@ unsigned ModuleAxisInfoAnalysis::getAlignment(Value offsetsValue,
   auto *axisInfo = getAxisInfo(offsetsValue);
   if (!axisInfo)
     return 1;
-  auto linAttr =
-      gpu::toLinearEncoding(tensorTy.getEncoding(), tensorTy.getShape());
+  auto linAttr = gpu::toLinearEncoding(tensorTy);
   auto order = linAttr.getOrder();
   auto maxMultipleBytes = axisInfo->getDivisibility(order[0]);
   auto maxContig = axisInfo->getContiguity(order[0]);
@@ -1324,8 +1293,7 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
   auto *axisInfo = getAxisInfo(mask);
   if (!axisInfo)
     return 1;
-  auto linAttr =
-      gpu::toLinearEncoding(tensorTy.getEncoding(), tensorTy.getShape());
+  auto linAttr = gpu::toLinearEncoding(tensorTy);
   auto maskOrder = linAttr.getOrder();
   auto alignment = std::max<unsigned>(axisInfo->getConstancy(maskOrder[0]), 1);
   LDBG("getMaskAlignment maskOrder[0] " << maskOrder[0] << " alignment "
@@ -1339,9 +1307,10 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
   return alignment;
 }
 
-void ModuleAxisInfoAnalysis::initialize(FunctionOpInterface funcOp) {
+void ModuleAxisInfoAnalysis::initialize(FunctionOpInterface funcOp,
+                                        axisinfo::CallbackType callback) {
   std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
-  AxisInfoAnalysis *analysis = solver->load<AxisInfoAnalysis>();
+  AxisInfoAnalysis *analysis = solver->load<AxisInfoAnalysis>(callback);
   // Walk pre-order so analysis results can be propagated into nested isolated
   // regions.
   WalkResult result =

@@ -30,6 +30,7 @@
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Dialect/Triton/IR/Interfaces.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -115,11 +116,11 @@ Attribute getTmemLoadStoreLayout32x32b(unsigned M, unsigned N,
     unsigned numWarpGroups = numWarps / 4;
     if (numBlocks == 1) {
       // Split along the N dimension
-      sizePerThread = {1, N / (numWarpGroups * 2)};
+      sizePerThread = {1, ceil<unsigned>(N, numWarpGroups * 2)};
       threadsPerWarp = {16, 2};
       warpsPerCTA = {4, numWarpGroups};
     } else {
-      sizePerThread = {1, N / 2};
+      sizePerThread = {1, ceil<unsigned>(N, 2)};
       threadsPerWarp = {16, 2};
       warpsPerCTA = {0, 0};
       // Distribute at most as many warp groups as there is blocks
@@ -137,7 +138,7 @@ Attribute getTmemLoadStoreLayout32x32b(unsigned M, unsigned N,
       warpsPerCTA = {4 * numWarpGroups, 1};
     } else {
       // Split along N dimension
-      sizePerThread = {1, N / numWarpGroups};
+      sizePerThread = {1, ceil<unsigned>(N, numWarpGroups)};
       threadsPerWarp = {32, 1};
       warpsPerCTA = {4, numWarpGroups};
     }
@@ -205,19 +206,37 @@ bool isDistributedLayoutTMemCompatible(Operation *op,
 
   auto ll16x256 =
       getTmemLoadStoreLayout16x256(blockM, blockN, tensorType, numWarps);
+  auto enc =
+      cast<triton::gpu::DistributedEncodingTrait>(tensorType.getEncoding());
   if (ll16x256.has_value() &&
       areLayoutsEquivalent(
           tensorType.getShape(),
           LinearEncodingAttr::get(tensorType.getContext(), ll16x256.value()),
-          tensorType.getEncoding()))
+          enc))
     return true;
-  Attribute layout = nvidia_gpu::getTmemLoadStoreLayout32x32b(
-      blockM, blockN, tensorType, numWarps);
+  auto layout = cast<triton::gpu::DistributedEncodingTrait>(
+      nvidia_gpu::getTmemLoadStoreLayout32x32b(blockM, blockN, tensorType,
+                                               numWarps));
   // TODO: Add support for more layout compatible with tmem load/store. There
   // will only be a discret set of layout possible due to the limiations of
   // tmem_load/store.
-  return areLayoutsEquivalent(tensorType.getShape(), layout,
-                              tensorType.getEncoding());
+  return areLayoutsEquivalent(tensorType.getShape(), layout, enc);
+}
+
+LogicalResult impl::verifyMMAv5Op(Operation *op) {
+  auto isInterleaved = [](MemDescType memdesc) {
+    auto enc = dyn_cast<TensorMemoryEncodingAttr>(memdesc.getEncoding());
+    return enc && getTmemAllocSizes(memdesc).numRows != 64 &&
+           enc.getBlockM() == 64;
+  };
+
+  auto itf = cast<MMAv5OpInterface>(op);
+  if (isInterleaved(itf.getA().getType()) &&
+      isInterleaved(itf.getAccumulator().getType())) {
+    return op->emitOpError(
+        "does not support blockM=64 with interleaved blocks in TMEM layout");
+  }
+  return success();
 }
 
 } // namespace nvidia_gpu
@@ -264,6 +283,7 @@ void TritonNvidiaGPUDialect::initialize() {
 #include "triton/Dialect/TritonNvidiaGPU/IR/Ops.cpp.inc"
       >();
   addInterfaces<TritonGPUOpAsmInterface>();
+  addInterfaces<TritonInlinerInterface>();
 }
 
 // verify TritonNvidiaGPU ops

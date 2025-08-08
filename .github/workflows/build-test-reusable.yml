@@ -249,10 +249,15 @@ jobs:
           python -c 'import triton; print(triton.__version__)'
 
       - name: Report environment details
-        if: matrix.suite == 'minicore'
         run: |
+          if [ "${{ matrix.suite }}" == "minicore" ]; then
+            reports_file="reports/.env"
+          else
+            reports_file="/dev/null"
+          fi
+
           mkdir -p reports
-          cat <<EOF | tee reports/.env
+          cat <<EOF | tee "$reports_file"
           TIMESTAMP=$(date '+%Y%m%d%H%M%S')
           GITHUB_RUN_ID=$GITHUB_RUN_ID
           GITHUB_RUN_NUMBER=$GITHUB_RUN_NUMBER
@@ -262,8 +267,11 @@ jobs:
           PYTORCH_COMMIT_ID=$PYTORCH_COMMIT_ID
           PYTORCH_VERSION=$PYTORCH_VERSION
           TRITON_REPO=$GITHUB_REPOSITORY
+          TRITON_COMMIT_ID=$GITHUB_SHA
+          TRITON_BRANCH=$GITHUB_REF_NAME
+          OS=${{ runner.os }}
           EOF
-          ./scripts/capture-hw-details.sh | tee -a reports/.env
+          ./scripts/capture-hw-details.sh | tee -a "$reports_file"
 
       - name: Install test dependencies
         run: |
@@ -306,14 +314,14 @@ jobs:
         if: matrix.suite == 'mxfp'
         run: |
           cat <<EOF | tee tutorials.txt
-          09-persistent-matmul
+          06-fused-attention
           EOF
 
       - name: Select tutorials to run (scaled_dot)
         if: matrix.suite == 'scaled_dot'
         run: |
           cat <<EOF | tee tutorials.txt
-          06-fused-attention
+          09-persistent-matmul
           EOF
 
       - name: Select tutorials to run (rest)
@@ -323,7 +331,6 @@ jobs:
           01-vector-add
           02-fused-softmax
           03-matrix-multiplication
-          03i-matrix-multiplication
           04-low-memory-dropout
           05-layer-norm
           07-extern-functions
@@ -356,7 +363,7 @@ jobs:
       - name: Run E2E test
         if: matrix.suite == 'rest'
         run: |
-          ${{ env.TRITON_TEST_CMD }} --inductor
+          timeout -s KILL 4900 ${{ env.TRITON_TEST_CMD }} --inductor || ${{ inputs.ignore_errors }}
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}

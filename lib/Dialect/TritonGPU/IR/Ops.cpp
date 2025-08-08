@@ -14,6 +14,29 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/LogicalResult.h"
 
+// Provide custom directive handlers for declarative assemblyFormat.
+// They must be visible before including the generated op classes.
+static mlir::ParseResult parseOffsets(mlir::OpAsmParser &p,
+                                      mlir::DenseI32ArrayAttr &attr) {
+  llvm::SmallVector<int32_t> values;
+  if (p.parseCommaSeparatedList([&]() {
+        int32_t v;
+        if (p.parseInteger(v))
+          return mlir::failure();
+        values.push_back(v);
+        return mlir::success();
+      }))
+    return mlir::failure();
+  attr = p.getBuilder().getDenseI32ArrayAttr(values);
+  return mlir::success();
+}
+
+static void printOffsets(mlir::OpAsmPrinter &p, mlir::Operation *op,
+                         mlir::DenseI32ArrayAttr attr) {
+  auto vals = attr.asArrayRef();
+  llvm::interleaveComma(vals, p, [&](int32_t v) { p << v; });
+}
+
 #define GET_OP_CLASSES
 #include "triton/Dialect/TritonGPU/IR/Ops.cpp.inc"
 
@@ -120,12 +143,24 @@ struct CanonicalizeConvertFromHistogram
   mlir::LogicalResult
   matchAndRewrite(triton::HistogramOp op,
                   PatternRewriter &rewriter) const override {
-    auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
-    if (!convert)
+    auto src = op.getSrc();
+    auto convert = src.getDefiningOp<ConvertLayoutOp>();
+    if (!convert) {
       return failure();
+    }
+    src = convert.getSrc();
+
+    // If mask is present, convert the layout of mask to match new src layout
+    auto mask = op.getMask();
+    if (mask) {
+      auto sharedType = getI1SameShape(src.getType());
+      rewriter.setInsertionPoint(op);
+      mask = rewriter.create<ConvertLayoutOp>(op.getLoc(), sharedType, mask);
+    }
+
     rewriter.replaceOpWithNewOp<triton::HistogramOp>(
-        op, op->getResult(0).getType(), convert.getSrc());
-    return mlir::success();
+        op, op->getResult(0).getType(), src, mask);
+    return success();
   }
 };
 
@@ -265,7 +300,8 @@ struct CanonicalizeConvertFromConvert
       // For histogram ops the input and output layouts are independent, so we
       // can always fold convert into the histogram op.
       rewriter.replaceOpWithNewOp<HistogramOp>(op, op->getResult(0).getType(),
-                                               histogram.getSrc());
+                                               histogram.getSrc(),
+                                               histogram.getMask());
       return success();
     }
 
@@ -417,7 +453,7 @@ OpFoldResult MemDescTransOp::fold(FoldAdaptor adaptor) {
 
 LogicalResult
 MemDescTransOp::inferReturnTypes(MLIRContext *context,
-                                 std::optional<Location> location,
+                                 std::optional<Location> loc,
                                  MemDescTransOp::Adaptor adaptor,
                                  SmallVectorImpl<Type> &inferredReturnTypes) {
 
@@ -433,20 +469,25 @@ MemDescTransOp::inferReturnTypes(MLIRContext *context,
   if (argEncoding) {
     Dialect &dialect = argEncoding.getDialect();
     auto inferLayoutInterface = cast<DialectInferLayoutInterface>(&dialect);
-    if (inferLayoutInterface
-            ->inferTransOpEncoding(argEncoding, shape, order, retEncoding)
-            .failed()) {
+    if (failed(inferLayoutInterface->inferTransOpEncoding(
+            argEncoding, shape, order, retEncoding, loc))) {
       return failure();
     }
   }
+
+  // Permute the last `rank` dims of the source alloc shape.
+  SmallVector<int64_t> allocShape =
+      applyPermutation(argTy.getAllocShape().take_back(order.size()), order);
+  allocShape.insert(allocShape.begin(), argTy.getAllocShape().begin(),
+                    argTy.getAllocShape().end() - order.size());
+
   inferredReturnTypes.push_back(
       MemDescType::get(retShape, retEltTy, retEncoding, argTy.getMemorySpace(),
-                       argTy.getMutableMemory()));
+                       argTy.getMutableMemory(), allocShape));
   return success();
 }
 
 // MemDescReshapeOp
-
 LogicalResult MemDescReshapeOp::verify() {
   MemDescType dstType = getResult().getType();
   MemDescType srcType = getSrc().getType();
@@ -457,19 +498,102 @@ LogicalResult MemDescReshapeOp::verify() {
   if (dstType.getElementType() != srcType.getElementType()) {
     return emitError("result element type must match src element type");
   }
+  auto srcShape = srcType.getShape();
+  if (srcType.getAllocShape().take_back(srcShape.size()) != srcShape) {
+    return emitError("NYI: memdesc_reshape of memdesc_subslice");
+  }
 
-  // Infer the dst layout from the source and verify that it is equivalent.
-  auto srcEncoding = srcType.getEncoding();
-  Attribute inferedDstEncoding;
-
-  LinearLayout ll = inferReshapeLinearLayout(
-      srcType.getShape(), srcType.getEncoding(), dstType.getShape());
-  LinearLayout llDst =
-      triton::gpu::toLinearLayout(dstType.getShape(), dstType.getEncoding());
-  if (ll != llDst) {
+  MemDescType expectedTy;
+  if (failed(inferReturnTypes(getContext(), getLoc(), srcType,
+                              dstType.getShape(), expectedTy)))
+    return failure();
+  // Check that the alloc shape separately to give a cleaner error, given that
+  // it's the most likely source of the error.
+  if (expectedTy.getAllocShape() != dstType.getAllocShape()) {
+    return emitError(
+        "The result alloc shape does not match the expected alloc shape.");
+  }
+  if (expectedTy != dstType) {
     return emitError("source and destination layout are incompatible.");
   }
   return success();
+}
+
+static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
+                                                   Attribute srcEnc,
+                                                   ArrayRef<int64_t> dstShape,
+                                                   Attribute &dstEnc) {
+  if (auto mmaEncoding = dyn_cast<NVMMASharedEncodingAttr>(srcEnc)) {
+    // TODO: supporting reshape of CTA layouts is non-trivial.
+    if (getNumCTAs(mmaEncoding) > 1)
+      return failure();
+    int innerDimDst =
+        mmaEncoding.getTransposed() ? dstShape.front() : dstShape.back();
+    int innerDimSrc =
+        mmaEncoding.getTransposed() ? srcShape.front() : srcShape.back();
+    // For now disallow reshape of the inner dimension.
+    if (innerDimDst != innerDimSrc)
+      return failure();
+    auto *ctx = srcEnc.getContext();
+
+    // CTALayout can be all 1's because we bailed on multi-CTA layouts above.
+    auto CTALayout = CTALayoutAttr::get(
+        ctx,
+        /*CTAsPerCGA=*/SmallVector<unsigned>(dstShape.size(), 1),
+        /*CTASplitNum=*/SmallVector<unsigned>(dstShape.size(), 1),
+        /*CTAOrder=*/llvm::to_vector(llvm::seq<unsigned>(dstShape.size())));
+    dstEnc = NVMMASharedEncodingAttr::get(
+        ctx, mmaEncoding.getSwizzlingByteWidth(), mmaEncoding.getTransposed(),
+        mmaEncoding.getElementBitWidth(), mmaEncoding.getFp4Padded(),
+        CTALayout);
+    // Big guns, check linear layouts are equivalent
+    // We disallow reshaping memdesc_subslice in the verifier
+    auto srcLL = toLinearLayout(srcShape, srcEnc, srcShape);
+    auto dstLL = toLinearLayout(dstShape, dstEnc, dstShape);
+    if (reshapeLayout(ctx, srcLL, dstShape) != dstLL) {
+      return failure();
+    }
+    return success();
+  }
+  return failure();
+}
+
+LogicalResult MemDescReshapeOp::inferReturnTypes(
+    MLIRContext *context, std::optional<Location> loc, MemDescType srcTy,
+    ArrayRef<int64_t> dstShape, MemDescType &inferredReturnType) {
+  if (product<int64_t>(dstShape) != product<int64_t>(srcTy.getShape()))
+    return emitOptionalError(
+        loc, "dst shape has different number of elements than src");
+
+  Attribute dstEncoding;
+  if (Attribute srcEnc = srcTy.getEncoding()) {
+    if (failed(inferMemDescReshapeOpEncoding(srcTy.getShape(), srcEnc, dstShape,
+                                             dstEncoding)))
+      return failure();
+  }
+
+  SmallVector<int64_t> dstAllocShape =
+      to_vector(srcTy.getAllocShape().take_front(srcTy.getAllocShape().size() -
+                                                 srcTy.getShape().size()));
+  dstAllocShape.append(dstShape.begin(), dstShape.end());
+
+  inferredReturnType = MemDescType::get(
+      dstShape, srcTy.getElementType(), dstEncoding, srcTy.getMemorySpace(),
+      srcTy.getMutableMemory(), dstAllocShape);
+  return success();
+}
+
+// MemDescReinterpretOp
+LogicalResult MemDescReinterpretOp::verify() {
+  if (getSrc().getType().getMemorySpace() != getType().getMemorySpace())
+    return emitError("source and destination memory space must match");
+  return success();
+}
+
+OpFoldResult MemDescReinterpretOp::fold(FoldAdaptor adaptor) {
+  if (getType() == getSrc().getType())
+    return getSrc();
+  return {};
 }
 
 // LocalAllocOp
@@ -506,8 +630,22 @@ OpFoldResult LocalAllocOp::fold(FoldAdaptor adaptor) {
   return loadSrc;
 }
 
-LogicalResult LocalAllocOp::verifyAllocOp(Operation *op, Value src,
-                                          MemDescType dstTy) {
+LogicalResult verifyMemoryOpTypes(Operation *op, ShapedType srcTy,
+                                  ShapedType dstTy) {
+  if (srcTy.getElementType() != dstTy.getElementType()) {
+    return op->emitOpError("source element type ")
+           << srcTy << " must match "
+           << "destination element type " << dstTy.getElementType();
+  }
+  if (srcTy.getShape() != dstTy.getShape()) {
+    return op->emitOpError("source shape [")
+           << srcTy.getShape() << "] must match ["
+           << "destination shape " << dstTy.getShape() << "]";
+  }
+  return success();
+}
+
+LogicalResult verifyAllocOp(Operation *op, Value src, MemDescType dstTy) {
   if (dstTy.getShape() != dstTy.getAllocShape())
     return op->emitOpError("result shape and its alloc shape must match");
 
@@ -519,12 +657,7 @@ LogicalResult LocalAllocOp::verifyAllocOp(Operation *op, Value src,
     return success();
   }
 
-  auto srcTy = cast<RankedTensorType>(src.getType());
-  if (srcTy.getElementType() != dstTy.getElementType())
-    return op->emitOpError("result element type must source element type");
-  if (srcTy.getShape() != dstTy.getShape())
-    return op->emitOpError("result shape must match source shape");
-  return success();
+  return verifyMemoryOpTypes(op, cast<RankedTensorType>(src.getType()), dstTy);
 }
 
 LogicalResult LocalAllocOp::verify() {
@@ -538,7 +671,12 @@ LogicalResult LocalAllocOp::verify() {
 LogicalResult LocalStoreOp::verify() {
   if (!getDst().getType().getMutableMemory())
     return emitOpError("Cannot store into immutable memory");
-  return success();
+  return verifyMemoryOpTypes(*this, getSrc().getType(), getDst().getType());
+}
+
+// LocalLoadOp
+LogicalResult LocalLoadOp::verify() {
+  return verifyMemoryOpTypes(*this, getSrc().getType(), getType());
 }
 
 // AsyncCopyGlobalToLocalOp
@@ -548,7 +686,55 @@ LogicalResult AsyncCopyGlobalToLocalOp::verify() {
   return success();
 }
 
-LogicalResult MemDescSubviewOp::verify() {
+LogicalResult MemDescIndexOp::verify() {
+  auto srcTy = getSrc().getType();
+  auto dstTy = getType();
+  if (srcTy.getElementType() != dstTy.getElementType()) {
+    return emitError("result element type must match desc element type");
+  }
+  bool is1D =
+      srcTy.getRank() == 1 && dstTy.getRank() == 1 && dstTy.getDimSize(0) == 1;
+  bool correctRank = srcTy.getRank() == dstTy.getRank() + 1 || is1D;
+  if (!correctRank) {
+    return emitError(
+        "result rank must be less than or equal to input rank or 1D -> 1D");
+  }
+  if (srcTy.getAllocShape().size() != srcTy.getRank()) {
+    return emitError("We don't allow taking memdesc_index of a memdesc_index");
+  }
+
+  if (!is1D && ArrayRef(srcTy.getShape()).take_back(dstTy.getRank()) !=
+                   dstTy.getShape()) {
+    return emitError("result shape must equal to srcShape[1:]");
+  }
+
+  bool isSubview = srcTy.getAllocShape() != srcTy.getShape();
+  if (isSubview) {
+    return emitError("We don't support memdesc_index of a subview");
+  }
+
+  auto srcEnc = srcTy.getEncoding();
+  auto dstEnc = dstTy.getEncoding();
+  if (bool(srcEnc) != bool(dstEnc)) {
+    return emitError("src and result must both have or not have an encoding");
+  }
+
+  if (isa<SharedEncodingTrait>(srcEnc) != isa<SharedEncodingTrait>(dstEnc)) {
+    return emitError("src and dst must have the same type of encoding");
+  }
+
+  if (isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(srcEnc)) {
+    // We support only 3D -> 2D subviews with only first offset being non-zero.
+    if (srcTy.getRank() != 3 || dstTy.getRank() != 2) {
+      return emitError("only 3D -> 2D subviews are supported for "
+                       "TensorMemoryEncodingAttr");
+    }
+    return success();
+  }
+  return success();
+}
+
+LogicalResult MemDescSubsliceOp::verify() {
   auto srcTy = getSrc().getType();
   auto dstTy = getType();
 
@@ -558,124 +744,33 @@ LogicalResult MemDescSubviewOp::verify() {
   if (getOffsets().size() != srcTy.getRank()) {
     return emitError("offsets must have the same rank as input");
   }
-  if (srcTy.getRank() < dstTy.getRank()) {
-    return emitError("result rank must be less than or equal to input rank");
-  }
-  auto rankDiff = srcTy.getRank() - dstTy.getRank();
-  for (int i = 0; i < dstTy.getRank(); i++) {
-    if (dstTy.getDimSize(i) > srcTy.getDimSize(i + rankDiff)) {
-      return emitError(
-                 "result shape cannot be larger than input shape at dimension ")
-             << i;
-    }
+  if (srcTy.getRank() != dstTy.getRank()) {
+    return emitError("result rank must equal to input rank");
   }
 
   auto srcEnc = srcTy.getEncoding();
   auto dstEnc = dstTy.getEncoding();
-  if (!!srcEnc != !!dstEnc) {
+  if (bool(srcEnc) != bool(dstEnc)) {
     return emitError("src and result must both have or not have an encoding");
   }
-
-  if (!isa<SharedEncodingTrait>(srcEnc) &&
-      !isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(srcEnc)) {
-    return emitError("src encoding must be SharedEncodingTrait");
-  }
-  if (!isa<SharedEncodingTrait>(dstEnc) &&
-      !isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(srcEnc)) {
-    return emitError("result encoding must be SharedEncodingTrait");
+  if (!isa<SharedEncodingTrait>(srcEnc) || !isa<SharedEncodingTrait>(dstEnc)) {
+    return emitError("src and dst must both be of shared memory encoding");
   }
 
-  if (isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(srcEnc)) {
-    // We support only 3D -> 2D subviews with only first offset being non-zero.
-    if (srcTy.getRank() != 3 || dstTy.getRank() != 2) {
-      return emitError("only 3D -> 2D subviews are supported for "
-                       "TensorMemoryEncodingAttr");
-    }
-    for (int i = 1; i < srcTy.getRank(); i++) {
-      if (auto constOp = getOffsets()[i].getDefiningOp<arith::ConstantOp>()) {
-        if (!isa<IntegerAttr>(constOp.getValue()) ||
-            cast<IntegerAttr>(constOp.getValue()).getInt() != 0) {
-          return emitError("only first offset can be non-zero for the subview"
-                           "of TensorMemoryEncodingAttr");
-        }
-      } else {
-        return emitError(
-            "offsets other than the first one must be constant zeros");
-      }
-    }
-    return success();
-  }
-
-  assert(isa<SharedEncodingTrait>(srcEnc));
-
-  // corner case: 1D -> 1D into a 1 element tensor (we don't have 0D tensors)
-  if (srcTy.getRank() == 1 && dstTy.getRank() == 1 &&
-      dstTy.getDimSize(0) == 1) {
-    return success();
-  }
-
-  // There are two cases:
-  // 1. The subview is rank-reducing
-  //  - We split along the first dimension. It can be with non-constant offsets
-  if (srcTy.getRank() != dstTy.getRank()) {
-    if (srcTy.getRank() - dstTy.getRank() != 1) {
-      return emitError(
-          "only nD -> (n-1)D rank-reducing subviews are supported");
-    }
-    for (auto offset : getOffsets().take_back(dstTy.getRank())) {
-      if (auto constOp = offset.getDefiningOp<arith::ConstantOp>()) {
-        if (auto offsetInt = dyn_cast<IntegerAttr>(constOp.getValue())) {
-          if (offsetInt.getInt() != 0) {
-            return emitError("only first offset can be non-zero for a "
-                             "rank-reducing subview");
-          }
-        } else {
-          return emitError(
-              "only integer constant values are allowed for the split");
-        }
-      } else {
-        return emitError("only constant values are allowed outside the front "
-                         "dimension in a rank-reducing subview");
-      }
-    }
-    return success();
-  }
-  assert(srcTy.getRank() == dstTy.getRank());
-  // 2. The src is non-rank-reducing
-  //  - We split along at most one dim, but just with constant values
-  //  - The values where the split happens must not be within the swizzling
-  //  pattern
-  // Check which dimension we are splitting along
-  int dim = -1;
+  SetVector<int> splitDims{};
   for (int i = 0; i < srcTy.getRank(); i++) {
     if (srcTy.getDimSize(i) != dstTy.getDimSize(i)) {
-      if (dim != -1) {
-        return emitError(
-            "We don't allow subviews that split along multiple dimensions");
-      }
-      dim = i;
+      splitDims.insert(i);
     }
   }
-  SmallVector<int64_t> offsets;
-  for (auto offset : getOffsets()) {
-    if (auto constOp = offset.getDefiningOp<arith::ConstantOp>()) {
-      if (auto offsetInt = dyn_cast<IntegerAttr>(constOp.getValue())) {
-        offsets.push_back(offsetInt.getInt());
-      } else {
-        return emitError(
-            "only integer constant values are allowed for the split");
-      }
-    } else {
-      return emitError("only constant values are allowed for the split");
-    }
-  }
+  SmallVector<int64_t> offsets(getOffsets().begin(), getOffsets().end());
   // Identity subview
-  if (dim == -1) {
+  if (splitDims.empty()) {
     return success();
   }
 
-  for (auto [i, offset] : llvm::enumerate(offsets)) {
-    if (i != dim) {
+  for (auto [dim, offset] : llvm::enumerate(offsets)) {
+    if (!splitDims.contains(dim)) {
       if (offset != 0) {
         return emitError("A non zero offset found in a dimension that is "
                          "not being split");
@@ -686,22 +781,29 @@ LogicalResult MemDescSubviewOp::verify() {
       }
     }
   }
+
   auto ctx = getContext();
-  // The order gives us the honest-to-goodness layout rank
-  auto srcAllocShape = srcTy.getAllocShape().take_back(getOrder(srcTy).size());
-  auto llInv =
-      triton::gpu::toLinearLayout(srcAllocShape, srcTy.getEncoding()).invert();
-  auto kDim = mlir::StringAttr::get(ctx, "dim" + llvm::Twine(dim));
-  llvm::SmallVector<std::pair<mlir::StringAttr, int32_t>> namedOffsets;
-  for (auto d : standardOutDimNames(ctx, srcTy.getRank())) {
-    namedOffsets.push_back({d, 0});
+  auto ll = triton::gpu::toLinearLayout(srcTy);
+  // NYI: We don't support non-trivial block dimension for now.
+  auto kBlock = mlir::StringAttr::get(getContext(), "block");
+  if (ll.getInDimSize(kBlock) != 1) {
+    return emitError("non-trivial block dimension not supported");
   }
-  for (int dimSize = dstTy.getDimSize(dim); dimSize < srcTy.getDimSize(dim);
-       dimSize *= 2) {
-    namedOffsets[dim] = {kDim, dimSize};
-    if (!llvm::isPowerOf2_32(llInv.apply(namedOffsets)[0].second)) {
-      return emitError(
-          "We don't support splitting along the swizzling pattern");
+
+  auto llInv = ll.invert();
+  for (auto dim : splitDims) {
+    auto kDim = mlir::StringAttr::get(ctx, "dim" + llvm::Twine(dim));
+    llvm::SmallVector<std::pair<mlir::StringAttr, int32_t>> namedOffsets;
+    for (auto d : standardOutDimNames(ctx, srcTy.getRank())) {
+      namedOffsets.push_back({d, 0});
+    }
+    for (int dimSize = dstTy.getDimSize(dim); dimSize < srcTy.getDimSize(dim);
+         dimSize *= 2) {
+      namedOffsets[dim] = {kDim, dimSize};
+      if (!llvm::isPowerOf2_32(llInv.apply(namedOffsets)[0].second)) {
+        return emitError(
+            "We don't support splitting along the swizzling pattern");
+      }
     }
   }
   return success();
@@ -724,8 +826,7 @@ int32_t LocalAllocOp::getAlignmentOrDefault() {
 
 static Type removeEncodingIfTensor(Type type) {
   if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
-    return RankedTensorType::get(tensorType.getShape(),
-                                 tensorType.getElementType());
+    return tensorType.cloneWithEncoding({});
   }
   return type;
 }
@@ -886,6 +987,13 @@ void WarpSpecializeOp::build(OpBuilder &builder, OperationState &state,
   Block *container = builder.createBlock(state.regions.back().get());
   builder.create<WarpSpecializePartitionsOp>(state.location,
                                              partitionNumRegions);
+}
+
+void WarpSpecializeOp::build(OpBuilder &builder, OperationState &state,
+                             TypeRange resultTypes, ValueRange explicitCaptures,
+                             ArrayRef<int32_t> partitionNumWarps) {
+  build(builder, state, resultTypes, explicitCaptures, partitionNumWarps, {},
+        {}, {});
 }
 
 ParseResult WarpSpecializeOp::parse(OpAsmParser &p, OperationState &result) {

@@ -15,10 +15,6 @@ public:
 
   llvm::AMDGPU::GPUKind getGPUKind() const;
 
-  bool isCDNA() const;
-
-  bool isRDNA() const;
-
   int getWarpSize() const;
 
   int getSharedMemorySize() const;
@@ -34,8 +30,8 @@ public:
                     std::optional<Value> ctaId, Value val,
                     Value pred) const override;
   Value loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
-                    std::optional<Value> ctaId, Type elemTy,
-                    Value pred) const override;
+                    std::optional<Value> ctaId, Type elemTy, Value pred,
+                    Operation *localLoadOp = nullptr) const override;
   bool canUseLDSTransLoad(int bitwidth) const;
 
   bool canUseStMatrix(RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
@@ -78,10 +74,6 @@ public:
   int getAddressSpace(Attribute addressSpace) const override;
 
   bool supportVectorizedAtomics() const override;
-
-  void localStoreOpAnnotation(triton::gpu::LocalStoreOp op,
-                              size_t localStoreOpCount,
-                              Type type) const override;
 
   bool supportsDirectToLdsLoadBitWidth(int bitWidth) const;
 

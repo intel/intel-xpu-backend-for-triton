@@ -2,6 +2,7 @@
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "amd/lib/TritonAMDGPUToLLVM/Utility.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "third_party/amd/include/Analysis/AxisInfoExt.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
@@ -68,10 +69,8 @@ struct CoalesceAsyncCopyWrites
     // layout e.g. if the order of the blocked and shared encoding is different
     // we can only load one element at a time or if the shared encoding is
     // swizzled we cannot exceed the vector size of the swizzling pattern
-    LinearLayout regLayout =
-        triton::gpu::toLinearLayout(srcTy.getShape(), blockedEnc);
-    LinearLayout sharedLayout =
-        triton::gpu::toLinearLayout(srcTy.getShape(), sharedEnc);
+    LinearLayout regLayout = triton::gpu::toLinearLayout(srcTy);
+    LinearLayout sharedLayout = triton::gpu::toLinearLayout(dstTy);
     auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
     loadContig = std::min<unsigned>(loadContig,
                                     regToSharedLayout.getNumConsecutiveInOut());
@@ -112,8 +111,7 @@ struct CoalesceAsyncCopyWrites
     // Convert layout of src, mask and other to new encoding
     auto convertLayout = [&rewriter](auto loc, Value old, auto newEnc) {
       auto oldTy = cast<RankedTensorType>(old.getType());
-      RankedTensorType newSrcTy = RankedTensorType::get(
-          oldTy.getShape(), oldTy.getElementType(), newEnc);
+      RankedTensorType newSrcTy = oldTy.cloneWithEncoding(newEnc);
       return rewriter.create<ttg::ConvertLayoutOp>(loc, newSrcTy, old);
     };
 
@@ -171,7 +169,7 @@ public:
     // Precompute the contiguity of all AsyncCopy ops based on the src and
     // mask contiguity/alignment to avoid rebuilding ModuleAxisInfoAnalysis
     // after every IR change.
-    triton::ModuleAxisInfoAnalysis axisAnalysis(m);
+    AMD::ModuleAxisInfoAnalysis axisAnalysis(m);
     DenseMap<ttg::AsyncCopyGlobalToLocalOp, unsigned> asyncCopyContiguity;
     m->walk([&](ttg::AsyncCopyGlobalToLocalOp copyOp) {
       unsigned contiguity =

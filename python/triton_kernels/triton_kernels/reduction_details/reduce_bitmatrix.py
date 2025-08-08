@@ -56,11 +56,14 @@ def _sum_bitmatrix_rows(B, shape_bm, stride_bm: tl.constexpr, stride_bn: tl.cons
 
     tl.static_assert(BLOCK_MM % BLOCK_M == 0)
     TILE_SIZE: tl.constexpr = BLOCK_MM // BLOCK_M
+    if isinstance(shape_bm, tl.tensor) and shape_bm.dtype.is_ptr():
+        shape_bm = tl.load(shape_bm)
     pid_m = tl.program_id(0)
     pid_n = tl.program_id(1)
     offs_m = pid_m * BLOCK_MM + tl.arange(0, BLOCK_MM)
     offs_n = pid_n * 32 + tl.arange(0, 32)
-    bits = tl.load(B + pid_n * stride_bn + offs_m * stride_bm, mask=offs_m < shape_bm, other=0)
+    n_rows = shape_bm
+    bits = tl.load(B + pid_n * stride_bn + offs_m * stride_bm, mask=offs_m < n_rows, other=0)
     bits = tl.reshape(bits, [TILE_SIZE, BLOCK_M])
     ret = vpopc(bits)  # [TILE_SIZE, 32]
 
@@ -83,25 +86,26 @@ def sum_bitmatrix_rows(x, out_ret, partials_block_size=None):
     cdiv = triton.cdiv
     PARTIALS_BLOCK_M = partials_block_size
     n_rows, n_cols = x.shape
+    n_rows_max = x.shape_max[0]
     assert out_ret.shape == (n_cols, )
 
-    TILE_SIZE = 2
+    TILE_SIZE = max(1, 128 // PARTIALS_BLOCK_M)
     BLOCK_MM = PARTIALS_BLOCK_M * TILE_SIZE
 
-    pids_x = cdiv(n_rows, BLOCK_MM)
+    pids_x = cdiv(n_rows_max, BLOCK_MM)
     pids_y = cdiv(n_cols, 32)
     out_partials = torch.empty((pids_y * 32, pids_x * TILE_SIZE), device=out_ret.device, dtype=torch.int32)
     out_partials = torch.transpose(out_partials, 0, 1)
 
     # output tensors
     _sum_bitmatrix_rows[(pids_x, pids_y)](
-        x.data, x.data.shape[0], x.data.stride(0), x.data.stride(1),  # input
+        x.storage.data, n_rows, x.stride(0), x.stride(1),  # input
         out_ret,  # output [final reduction]
         out_partials, out_partials.stride(0), out_partials.stride(1),
         out_partials.shape[1],  # output [partial reductions]
         BLOCK_M=PARTIALS_BLOCK_M, BLOCK_MM=BLOCK_MM,  # constants
         num_warps=8)
 
-    out_partials = out_partials[:cdiv(n_rows, PARTIALS_BLOCK_M), :n_cols]
+    out_partials = out_partials[:cdiv(n_rows_max, PARTIALS_BLOCK_M), :]
 
     return out_ret, out_partials

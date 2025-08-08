@@ -24,8 +24,8 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-
 #include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUOpInterfaces.cpp.inc"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/Utility.h"
 
 using namespace mlir::triton::gpu;
 
@@ -59,10 +59,33 @@ LogicalResult WarpGroupDotOp::inferReturnTypes(
 }
 
 LogicalResult WarpGroupDotOp::verify() {
-  auto nvmmaEnc =
-      dyn_cast<NvidiaMmaEncodingAttr>(getD().getType().getEncoding());
+  auto resTy = getD().getType();
+  auto nvmmaEnc = dyn_cast<NvidiaMmaEncodingAttr>(resTy.getEncoding());
   if (!nvmmaEnc || !nvmmaEnc.isHopper())
     return emitOpError("WGMMA result layout must be Hopper NVMMA");
+  auto numWarps = gpu::lookupNumWarps(getOperation());
+  if (numWarps % 4)
+    return emitOpError("WGMMA requires num_warps to be divisible by 4");
+  auto retShapePerCTA = getShapePerCTA(resTy);
+  int rank = retShapePerCTA.size();
+  if (rank != 2)
+    return emitOpError("WGMMA result shape must be 2D");
+  if (retShapePerCTA[0] % 64 != 0)
+    return emitOpError("WGMMA result M dimension must be divisible by 64");
+  if (retShapePerCTA[1] % 8 != 0)
+    return emitOpError("WGMMA result N dimension must be divisible by 8");
+  auto aElemTy = getA().getType().getElementType();
+  if (!(llvm::isa<Float8E5M2Type, Float8E4M3FNType>(aElemTy) ||
+        aElemTy.isInteger(8) || aElemTy.isF16() || aElemTy.isBF16() ||
+        aElemTy.isF32()))
+    return emitOpError("WGMMA result element type must be F16, BF16, F32, "
+                       "F8E5M2, F8E4M3FN, or integer type");
+  if (getMaxNumImpreciseAcc() < 32 &&
+      (llvm::isa<Float8E5M2Type, Float8E4M3FNType>(aElemTy)) &&
+      resTy.getElementType().isF32()) {
+    return emitOpError("Cannot use F32 as the accumulator element type when "
+                       "the max_num_imprecise_acc is less than 32");
+  }
   return success();
 }
 
@@ -108,15 +131,6 @@ LogicalResult WarpGroupDotWaitOp::inferReturnTypes(
   return mlir::success();
 }
 
-static LogicalResult
-verifyBarrierType(Operation *op, mlir::triton::gpu::MemDescType barrierType) {
-  if (!barrierType.getElementType().isInteger(64) ||
-      barrierType.getShape() != ArrayRef<int64_t>({1}))
-    return op->emitOpError(
-        "barrier allocation must be a descriptor of 1xi64 type");
-  return success();
-}
-
 // -- InitBarrierOp --
 LogicalResult InitBarrierOp::verify() {
   if (failed(verifyBarrierType(*this, getAlloc().getType())))
@@ -152,18 +166,6 @@ LogicalResult ArriveBarrierOp::verify() {
   if (getCount() < 1)
     return emitOpError("count must be greater than or equal to 1");
   return success();
-}
-
-// -- TensorDescToTMAPtrOp --
-LogicalResult TensorDescToTMAPtrOp::canonicalize(TensorDescToTMAPtrOp op,
-                                                 PatternRewriter &rewriter) {
-  // tensor_desc_to_tma_ptr(reinterpret_tensor_desc(ptr)) -> ptr
-  if (auto reinterpret =
-          op.getDesc().getDefiningOp<triton::ReinterpretTensorDescOp>()) {
-    rewriter.replaceOp(op, reinterpret.getRawDesc());
-    return success();
-  }
-  return failure();
 }
 
 // -- AsyncTMACopyGlobalToLocalOp --
@@ -241,6 +243,13 @@ static void printToken(OpAsmPrinter &p, Operation *op, Value dep, Type token) {
   p << ']';
 }
 
+LogicalResult TCGen5MMAOp::verify() {
+  if (!getIsAsync() && !getBarriers().empty()) {
+    return emitOpError("The op is synchronous but a barrier is present.");
+  }
+  return success();
+}
+
 void TCGen5MMAOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
@@ -294,12 +303,23 @@ void TCGen5MMAOp::setPredicate(Value pred) { getPredMutable().assign(pred); }
 void TCGen5MMAOp::build(OpBuilder &builder, OperationState &state, Type token,
                         Value a, Value b, Value d, Value accDep, Value useD,
                         Value pred, bool useTwoCTAs, ValueRange barriers,
-                        ValueRange barrierPreds) {
+                        ValueRange barrierPreds, bool isAsync) {
+  if (!barriers.empty()) {
+    isAsync = true;
+  }
   build(builder, state, token, a, b, d, accDep, useD, pred, barriers,
-        barrierPreds, useTwoCTAs ? builder.getUnitAttr() : UnitAttr());
+        barrierPreds, isAsync ? builder.getUnitAttr() : UnitAttr(),
+        useTwoCTAs ? builder.getUnitAttr() : UnitAttr());
 }
 
 // -- TCGen5MMAScaledOp --
+LogicalResult TCGen5MMAScaledOp::verify() {
+  if (!getIsAsync() && !getBarriers().empty()) {
+    return emitOpError("The op is synchronous but a barrier is present.");
+  }
+  return success();
+}
+
 void TCGen5MMAScaledOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
@@ -448,12 +468,15 @@ void TCGen5MMAScaledOp::build(OpBuilder &builder, OperationState &state,
                               Value accDep, Value aScale, Value bScale,
                               ScaleDotElemType aType, ScaleDotElemType bType,
                               Value useD, Value pred, ValueRange barriers,
-                              ValueRange barrierPreds) {
+                              ValueRange barrierPreds, bool isAsync) {
   MLIRContext *ctx = builder.getContext();
+  if (!barriers.empty()) {
+    isAsync = true;
+  }
   build(builder, state, token, a, b, d, accDep, aScale, bScale,
         ScaleDotElemTypeAttr::get(ctx, aType),
         ScaleDotElemTypeAttr::get(ctx, bType), useD, pred, barriers,
-        barrierPreds);
+        barrierPreds, isAsync ? builder.getUnitAttr() : UnitAttr());
 }
 
 // -- TMEMStoreOp --
@@ -467,7 +490,8 @@ LogicalResult TMEMStoreOp::verify() {
   if (!getDst().getType().getMutableMemory()) {
     return emitOpError("Cannot store into an immutable alloc");
   }
-  return success();
+  return triton::gpu::verifyMemoryOpTypes(*this, getSrc().getType(),
+                                          getDst().getType());
 }
 
 // -- TMEMLoadOp --
@@ -478,7 +502,7 @@ LogicalResult TMEMLoadOp::verify() {
   if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
           getSrc().getType().getEncoding()))
     return emitOpError("should use tensor memory encoding.");
-  return success();
+  return triton::gpu::verifyMemoryOpTypes(*this, getSrc().getType(), getType());
 }
 
 // -- TMEMAllocOp --
@@ -488,8 +512,7 @@ LogicalResult TMEMAllocOp::verify() {
   if (!isa<TensorMemoryEncodingAttr, TensorMemoryScalesEncodingAttr>(
           getType().getEncoding()))
     return emitOpError("should use tensor memory encoding");
-
-  return LocalAllocOp::verifyAllocOp(*this, getSrc(), getType());
+  return triton::gpu::verifyAllocOp(*this, getSrc(), getType());
 }
 
 void TMEMAllocOp::getEffects(
@@ -552,8 +575,11 @@ LogicalResult TMEMSubSliceOp::verify() {
       srcTy.getEncoding());
   if (!encoding)
     return emitOpError("The source must be a tensor memory buffer.");
-  if (encoding.getBlockM() != 128)
-    return emitOpError("The source must be a 128xN layout.");
+  if (!llvm::is_contained({64, 128}, encoding.getBlockM())) {
+    return emitOpError("The source tensor memory descriptor must have a 128xN "
+                       "or 64xN layout, got block_m=")
+           << encoding.getBlockM();
+  }
   auto dstTy = cast<triton::gpu::MemDescType>(getResult().getType());
   auto dstEncoding = dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
       dstTy.getEncoding());
@@ -583,6 +609,24 @@ void TMEMSubSliceOp::build(OpBuilder &builder, OperationState &state,
       shape, allocTy.getElementType(), newEncoding, allocTy.getMemorySpace(),
       allocTy.getMutableMemory());
   build(builder, state, subsliceType, alloc, offset);
+}
+
+// -- TensormapCreateOp --
+LogicalResult TensormapCreateOp::verify() {
+  auto rank = getBoxDim().size();
+  if (getGlobalDim().size() != rank) {
+    return emitError("Rank mismatch for global dim. Got ")
+           << getGlobalDim().size() << " but expected " << rank;
+  }
+  if (getGlobalStride().size() + 1 != rank) {
+    return emitError("Rank mismatch for global stride. Got ")
+           << getGlobalStride().size() << " but expected " << rank - 1;
+  }
+  if (getElementStride().size() != rank) {
+    return emitError("Rank mismatch for element stride. Got ")
+           << getElementStride().size() << " but expected " << rank;
+  }
+  return success();
 }
 
 } // namespace nvidia_gpu

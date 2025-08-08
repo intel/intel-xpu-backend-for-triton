@@ -10,6 +10,12 @@ on:
     paths:
       - .github/workflows/nightly-wheels.yml
       - .github/pins/pytorch.txt
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/nightly-wheels.yml
+      - .github/pins/pytorch.txt
 
 permissions: read-all
 
@@ -20,7 +26,7 @@ jobs:
   build:
     name: Build
     runs-on:
-      - max1550
+      - max1100
       - rolling
       - runner-0.0.22
     strategy:
@@ -30,6 +36,8 @@ jobs:
           - "3.10"
           - "3.11"
           - "3.12"
+          - "3.13"
+          - "3.14.0-rc.1"
       fail-fast: false
       max-parallel: 2
     defaults:
@@ -49,11 +57,6 @@ jobs:
           # cmake 3.22.1 does not work with the recent torchaudio: https://github.com/intel/intel-xpu-backend-for-triton/issues/2079
           pip install wheel cmake
 
-      # https://github.com/pytorch/data/blob/e316c5ca1ab2a4f69dd6d48e8fc9c6f8d0c7c468/README.md?plain=1#L6-L15
-      - name: Install pinned torchdata
-        run: |
-          pip install torchdata==0.9.0
-
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
 
@@ -61,7 +64,6 @@ jobs:
         run: |
           cd pytorch
           echo "TORCHVISION_COMMIT_ID=$(<.github/ci_commit_pins/vision.txt)" | tee -a $GITHUB_ENV
-          echo "TORCHTEXT_COMMIT_ID=$(<.github/ci_commit_pins/text.txt)" | tee -a $GITHUB_ENV
           echo "TORCHAUDIO_COMMIT_ID=$(<.github/ci_commit_pins/audio.txt)" | tee -a $GITHUB_ENV
           echo "TRANSFORMERS_VERSION=$(<.ci/docker/ci_commit_pins/huggingface.txt)" | tee -a $GITHUB_ENV
           echo "TIMM_COMMIT_ID=$(<.ci/docker/ci_commit_pins/timm.txt)" | tee -a $GITHUB_ENV
@@ -83,14 +85,6 @@ jobs:
           package: torchvision
           repository: pytorch/vision
           ref: ${{ env.TORCHVISION_COMMIT_ID }}
-          extra-cache-key: ${{ env.PYTORCH_VERSION }}
-
-      - name: Install torchtext package
-        uses: ./.github/actions/install-dependency
-        with:
-          package: torchtext
-          repository: pytorch/text
-          ref: ${{ env.TORCHTEXT_COMMIT_ID }}
           extra-cache-key: ${{ env.PYTORCH_VERSION }}
 
       - name: Install torchaudio package
@@ -124,7 +118,6 @@ jobs:
           cp -L pytorch/dist/*.whl wheels/
           cp -L dist/*.whl wheels/
           cp -L torchvision*/dist/*.whl wheels/
-          cp -L torchtext*/dist/*.whl wheels/
           cp -L torchaudio*/dist/*.whl wheels/
           cp -L timm*/dist/*.whl wheels/
           cp -L transformers*/dist/*.whl wheels/
@@ -148,7 +141,6 @@ jobs:
           TRITON_REPO=intel/intel-xpu-backend-for-triton
           TRITON_COMMIT_ID=$TRITON_COMMIT_ID
           TORCHVISION_COMMIT_ID=$TORCHVISION_COMMIT_ID
-          TORCHTEXT_COMMIT_ID=$TORCHTEXT_COMMIT_ID
           TORCHAUDIO_COMMIT_ID=$TORCHAUDIO_COMMIT_ID
           EOF
 

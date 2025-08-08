@@ -161,9 +161,8 @@ static Operation *predicateOp(RewriterBase &rewriter, Operation *op,
   return TypeSwitch<Operation *, Operation *>(op)
       .Case<tt::LoadOp, ttgi::PrefetchOp>([&](auto op) {
         rewriter.setInsertionPoint(op);
-        Value mask =
-            tt::getPredMask(rewriter, tt::getPointeeType(op.getPtr().getType()),
-                            op.getMask(), pred);
+        Value mask = tt::getPredMask(rewriter, op.getPtr().getType(),
+                                     op.getMask(), pred);
         op.getMaskMutable().assign(mask);
         return op;
       });
@@ -302,8 +301,25 @@ bool ttgi::preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
 
   LLVM_DEBUG({
     DBGS() << "Loads to pipeline:\n";
-    for (const LoadDotOperand &load : loads)
-      DBGS() << "  " << *load.load << "\n";
+    unsigned prefetchBytes = 0;
+    for (LoadDotOperand &load : loads) {
+      tt::LoadOp &op = load.load;
+      if (auto tensorType =
+              dyn_cast<RankedTensorType>(op.getResult().getType())) {
+        ArrayRef<int64_t> shape = tensorType.getShape();
+        auto numElems = product<int64_t>(shape);
+        prefetchBytes +=
+            numElems * tensorType.getElementType().getIntOrFloatBitWidth() / 8;
+      }
+      DBGS() << "  " << *op << "\n";
+    }
+    prefetchBytes *= numStages;
+    constexpr unsigned BYTES_PER_KB = 1024;
+    DBGS() << "Total number of bytes to prefetch: "
+           << (prefetchBytes > BYTES_PER_KB
+                   ? std::to_string(prefetchBytes / BYTES_PER_KB) + " KB"
+                   : std::to_string(prefetchBytes) + " B")
+           << " in " << numStages << " stages\n";
   });
 
   // 2. Create the prefetching operations for the loads collected.

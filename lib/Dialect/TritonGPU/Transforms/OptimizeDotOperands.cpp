@@ -57,11 +57,10 @@ public:
     auto ctx = getContext();
     auto oldCTALayout = triton::gpu::getCTALayout(srcTy.getEncoding());
     auto newCTALayout = permuteCTALayout(ctx, oldCTALayout, trans.getOrder());
-    assert(succeeded(newCTALayout));
     auto newInnerCvtEnc =
         SwizzledSharedEncodingAttr::get(ctx, cvtEncoding, srcTy.getShape(),
                                         /*order=*/getOrderForMemory(srcTy),
-                                        *newCTALayout, srcTy.getElementType(),
+                                        newCTALayout, srcTy.getElementType(),
                                         /*needTrans=*/true);
     if (newInnerCvtEnc == cvtEncoding)
       return failure();
@@ -129,9 +128,8 @@ public:
     auto ctx = getContext();
     auto newCTALayout =
         permuteCTALayout(ctx, allocEncoding.getCTALayout(), {1, 0});
-    assert(succeeded(newCTALayout));
     auto newInnerEnc = NVMMASharedEncodingAttr::get(
-        getContext(), srcTy.getShape(), newInnerCvtOrder, *newCTALayout,
+        getContext(), srcTy.getShape(), newInnerCvtOrder, newCTALayout,
         srcTy.getElementType(), allocEncoding.getFp4Padded());
 
     MemDescType innerTy =
@@ -144,43 +142,6 @@ public:
     return success();
   }
 };
-
-static Attribute inferSrcEncodingMemDescReshape(Attribute dstEncoding,
-                                                ArrayRef<int64_t> srcShape,
-                                                ArrayRef<int64_t> dstShape) {
-  auto mmaEncoding = dyn_cast<NVMMASharedEncodingAttr>(dstEncoding);
-  if (!mmaEncoding)
-    return {};
-  // TODO: supporting reshape of CTA layouts is non-trivial.
-  if (getNumCTAs(mmaEncoding) > 1)
-    return {};
-  int innerDimDst =
-      mmaEncoding.getTransposed() ? dstShape.front() : dstShape.back();
-  int innerDimSrc =
-      mmaEncoding.getTransposed() ? srcShape.front() : srcShape.back();
-  // For now disallow reshape of the inner dimension.
-  if (innerDimDst != innerDimSrc)
-    return {};
-
-  // CTALayout can be all 1's because we bailed on multi-CTA layouts above.
-  auto CTALayout = CTALayoutAttr::get(
-      dstEncoding.getContext(),
-      /*CTAsPerCGA=*/SmallVector<unsigned>(srcShape.size(), 1),
-      /*CTASplitNum=*/SmallVector<unsigned>(srcShape.size(), 1),
-      /*CTAOrder=*/llvm::to_vector(llvm::seq<unsigned>(srcShape.size())));
-  auto srcEncoding = NVMMASharedEncodingAttr::get(
-      dstEncoding.getContext(), mmaEncoding.getSwizzlingByteWidth(),
-      mmaEncoding.getTransposed(), mmaEncoding.getElementBitWidth(),
-      mmaEncoding.getFp4Padded(), CTALayout);
-  // Big guns, check linear layouts are equivalent
-  auto srcLL = toLinearLayout(srcShape, srcEncoding);
-  auto dstLL = toLinearLayout(dstShape, dstEncoding);
-  auto ctx = dstEncoding.getContext();
-  if (reshapeLayout(ctx, srcLL, dstShape) != dstLL) {
-    return {};
-  }
-  return srcEncoding;
-}
 
 // Rewrite
 //
@@ -205,14 +166,17 @@ public:
     auto allocEncoding = allocType.getEncoding();
 
     RankedTensorType srcTy = reshapeOp.getSrc().getType();
-    auto newAllocEncoding = inferSrcEncodingMemDescReshape(
-        allocEncoding, srcTy.getShape(), allocType.getShape());
-    if (!newAllocEncoding)
+    auto srcShape = srcTy.getShape();
+    auto dstShape = allocType.getShape();
+
+    // We use the fact that forward and backward inference are the same for
+    // MemDescReshapeOp to infer the source MemDescType that would produce
+    // `allocType` after a reshape.
+    MemDescType innerTy;
+    if (failed(MemDescReshapeOp::inferReturnTypes(
+            getContext(), allocOp.getLoc(), allocType, srcShape, innerTy)))
       return failure();
 
-    MemDescType innerTy =
-        MemDescType::get(srcTy.getShape(), srcTy.getElementType(),
-                         newAllocEncoding, allocType.getMemorySpace());
     auto newAlloc = rewriter.create<LocalAllocOp>(allocOp.getLoc(), innerTy,
                                                   reshapeOp.getSrc());
     rewriter.replaceOpWithNewOp<MemDescReshapeOp>(allocOp, allocOp.getType(),

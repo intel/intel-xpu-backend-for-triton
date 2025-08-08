@@ -159,7 +159,7 @@ int getEffectiveRegs(bool unpackedb16, bool useStridedMessage, int numRegs) {
   if (useStridedMessage) {
     numRegs /= 2;
   }
-  return numRegs;
+  return std::max(1, numRegs);
 }
 
 // If the workload runtime requires fewer registers than the default message
@@ -175,7 +175,8 @@ TMemMessageTraits constrainMessageFromWorkload(TMemMessageTraits m,
               (m.atom.colsPerThread * m.atom.rowsPerThread);
   // Half as many registers are needed for 16-bit packed elements,
   // so twice as many columns are accessed per message.
-  m.numCols *= info.numElementsPer32B;
+  if (info.unpackedb16)
+    m.numCols *= info.numElementsPer32B;
   m.numRepeats = m.numCols / (m.atom.opBitWidth / 32);
   return m;
 }
@@ -213,7 +214,7 @@ static bool is16x256Layout(RankedTensorType tensorType, Attribute memEncoding,
   int blockN = tmemLayout.getBlockN();
   std::optional<LinearLayout> ll0 =
       getTmemLoadStoreLayout16x256(blockM, blockN, tensorType, numWarps);
-  auto ll1 = toLinearLayout(tensorType.getShape(), tensorType.getEncoding());
+  auto ll1 = toLinearLayout(tensorType);
   return ll0.has_value() && ll0.value() == ll1;
 }
 
@@ -293,10 +294,13 @@ TMemRuntimeInfo getTMemRuntimeInfo(Operation *op, RankedTensorType tensorType,
 void calculateAddressAndEmitTmemMessage(
     Location loc, Value baseAddress, const TMemRuntimeInfo &info,
     const TMemMessageTraits &message, ConversionPatternRewriter &rewriter,
-    const std::function<void(Value, int, bool, int, bool)> &createMemoryOp) {
+    const std::function<void(Value, int, std::optional<int>, bool, int, bool)>
+        &createMemoryOp) {
 
   TritonLLVMOpBuilder b(loc, rewriter);
   Value warpId = rewriter.create<nvgpu::WarpIdOp>(loc);
+  // Note: optimizing this when we know `info.numWarpGroups` is 1 can result in
+  // performance regressions.
   Value warpIdInGroup = b.urem(warpId, b.i32_val(4));
   Value warpGroupId = b.udiv(warpId, b.i32_val(4));
 
@@ -344,9 +348,10 @@ void calculateAddressAndEmitTmemMessage(
     // are required to cover the entire set of rows per warp.
     int numRowPerWarp =
         (info.layoutAtom.rowStored == 16 && info.blockM == 64) ? 16 : 32;
+
     for (int rowStart = 0; rowStart < numRowPerWarp;
          rowStart += message.numRows) {
-      for (int colStart = 0; colStart < numColumns;
+      for (int colStart = 0; colStart < std::max(1, numColumns);
            colStart += message.numCols) {
 
         Value rowOffset = b.add(blockRowId, b.i32_val(rowStart));
@@ -354,23 +359,23 @@ void calculateAddressAndEmitTmemMessage(
             b.add(address, b.shl(rowOffset, b.i32_val(16)));
         warpGroupAddress = b.add(warpGroupAddress, startColumnId);
 
-        Value msgAddress = b.add(warpGroupAddress, b.i32_val(colStart));
-        int secondHalfColOffset = 0;
+        std::optional<int> secondHalfColOffset;
         if (info.useStridedMessage) {
           // Offset to half way through the set of columns for this warpgroup.
           secondHalfColOffset = numColumns;
         }
-        createMemoryOp(msgAddress, secondHalfColOffset, info.unpackedb16,
-                       message.numRegs, info.useStridedMessage);
+        createMemoryOp(warpGroupAddress, colStart, secondHalfColOffset,
+                       info.unpackedb16, message.numRegs,
+                       info.useStridedMessage);
       }
     }
   }
 }
 
-void createTensorMemoryStore(Location loc, Value address,
-                             SmallVector<Value> &srcs, int secondHalfOffset,
-                             Value pred, bool unpacked,
-                             const TMemAccessAtom &atom,
+void createTensorMemoryStore(Location loc, Value address, int colOffset,
+                             SmallVector<Value> &srcs,
+                             std::optional<int> secondHalfOffset, Value pred,
+                             bool unpacked, const TMemAccessAtom &atom,
                              ConversionPatternRewriter &rewriter) {
   PTXBuilder ptxBuilder;
   std::string packedStr = unpacked ? ".unpack::16b" : "";
@@ -378,10 +383,11 @@ void createTensorMemoryStore(Location loc, Value address,
   std::string opcode = "@$0 tcgen05.st.sync.aligned." +
                        std::string(atom.opShape) + ".x" +
                        std::to_string(numRepeats) + packedStr;
+  opcode += ".b32 [$1 + " + std::to_string(colOffset) + "], ";
   if (secondHalfOffset)
-    opcode += ".b32 [$1], " + std::to_string(secondHalfOffset) + ", {";
+    opcode += std::to_string(*secondHalfOffset) + ", {";
   else
-    opcode += ".b32 [$1], {";
+    opcode += "{";
 
   SmallVector<PTXInstr::Operand *> operands;
   operands.push_back(ptxBuilder.newOperand(pred, "b"));
@@ -495,13 +501,14 @@ static void lowerStoreToTensorMemory(Location loc, Operation *op, Value src,
   int regIdx = 0;
   calculateAddressAndEmitTmemMessage(
       loc, tmemBase, info, message, rewriter,
-      [&](Value startAddress, int secondHalfColOffset, bool unpackedb16,
+      [&](Value startAddress, int colOffset,
+          std::optional<int> secondHalfColOffset, bool unpackedb16,
           int regsPerMsg, bool useStridedMessage) {
         SmallVector<Value> srcValuesSlice(srcValues.begin() + regIdx,
                                           srcValues.begin() + regIdx +
                                               regsPerMsg);
         regIdx += regsPerMsg;
-        createTensorMemoryStore(loc, startAddress, srcValuesSlice,
+        createTensorMemoryStore(loc, startAddress, colOffset, srcValuesSlice,
                                 secondHalfColOffset, pred, unpackedb16,
                                 message.atom, rewriter);
       });
@@ -550,7 +557,8 @@ struct TensorMemoryAllocOpConversion
 };
 
 Value createTensorMemoryLoad(Location loc, triton::nvidia_gpu::TMEMLoadOp op,
-                             Value address, int secondHalfOffset, bool unpacked,
+                             Value address, int colOffset,
+                             std::optional<int> secondHalfOffset, bool unpacked,
                              int numRegPerMessage, const TMemAccessAtom &atom,
                              ConversionPatternRewriter &rewriter) {
   PTXBuilder ptxBuilder;
@@ -569,17 +577,25 @@ Value createTensorMemoryLoad(Location loc, triton::nvidia_gpu::TMEMLoadOp op,
     if (i < numRegPerMessage - 1)
       opcode += ", ";
   }
-  opcode += "}, [$" + std::to_string(numRegPerMessage) + "]";
+  opcode += "}, [$" + std::to_string(numRegPerMessage) + " + " +
+            std::to_string(colOffset) + "]";
   if (secondHalfOffset)
-    opcode += ", " + std::to_string(secondHalfOffset);
+    opcode += ", " + std::to_string(*secondHalfOffset);
   opcode += ";";
   operands.push_back(ptxBuilder.newOperand(address, "r"));
   auto &ld = *ptxBuilder.create<PTXInstr>(opcode);
   ld(operands, /*onlyAttachMLIRArgs=*/true);
-  SmallVector<Type> elemTypes(numRegPerMessage, i32_ty);
-  MLIRContext *ctx = op.getContext();
-  Type structTy = struct_ty(elemTypes);
-  Value ret = ptxBuilder.launch(rewriter, loc, structTy);
+
+  // LLVM inline_asm with 1 result cannot return a struct.
+  Type retTy;
+  if (numRegPerMessage == 1) {
+    retTy = i32_ty;
+  } else {
+    SmallVector<Type> elemTypes(numRegPerMessage, i32_ty);
+    MLIRContext *ctx = op.getContext();
+    retTy = struct_ty(elemTypes);
+  }
+  Value ret = ptxBuilder.launch(rewriter, loc, retTy);
   return ret;
 }
 
@@ -592,8 +608,8 @@ static SmallVector<Value> unpackResults(Value packedValues, Type elemTy,
   Type packedType = elemTy;
   if (numElementsPer32B > 1)
     packedType = vec_ty(elemTy, numElementsPer32B);
-  for (int i = 0; i < numCols; i++) {
-    Value result = b.extract_val(i32_ty, packedValues, i);
+
+  auto unpackElement = [&](Value result) {
     result = b.bitcast(result, packedType);
     if (numElementsPer32B > 1) {
       for (int j = 0; j < numElementsPer32B; j++) {
@@ -603,6 +619,15 @@ static SmallVector<Value> unpackResults(Value packedValues, Type elemTy,
     } else {
       resultVals.push_back(result);
     }
+  };
+
+  if (isa<LLVM::LLVMStructType>(packedValues.getType())) {
+    for (int i = 0; i < numCols; i++) {
+      Value result = b.extract_val(i32_ty, packedValues, i);
+      unpackElement(result);
+    }
+  } else {
+    unpackElement(packedValues);
   }
   return resultVals;
 }
@@ -634,11 +659,12 @@ struct TensorMemoryLoadOpConversion
     SmallVector<Value> resultVals;
     calculateAddressAndEmitTmemMessage(
         loc, tmemBase, info, message, rewriter,
-        [&](Value startAddress, int secondHalfColOffset, bool unpackedb16,
+        [&](Value startAddress, int colOffset,
+            std::optional<int> secondHalfColOffset, bool unpackedb16,
             int regsPerMessage, bool useStridedMessage) {
           Value packedValues = createTensorMemoryLoad(
-              loc, op, startAddress, secondHalfColOffset, unpackedb16,
-              regsPerMessage, message.atom, rewriter);
+              loc, op, startAddress, colOffset, secondHalfColOffset,
+              unpackedb16, regsPerMessage, message.atom, rewriter);
           auto results =
               unpackResults(packedValues, op.getType().getElementType(),
                             regsPerMessage, loc, rewriter);
@@ -739,7 +765,7 @@ struct TensorMemoryCopyOpConversion
     // the warpx4.32x128b mode, to load blocked scales from MXFP.
     // We will expand the support as we find more use cases for the instruction.
 
-    auto ll = toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
+    auto ll = toLinearLayout(srcTy);
     // flattenOuts flattens into fortran order, so need to transpose first to
     // get C-order
     auto ctx = op.getContext();
@@ -784,6 +810,7 @@ struct TensorMemoryCopyOpConversion
     // * (rep_m x 32, 16B), meant only for TMEMCopy unit tests
     // * (rep_m, rep_k * 32 x 4 x 4B), 2D scale load with cp.async
     // * (rep_m, rep_k, 32, 16B), 4D scale load with TMA
+    // * (1, rep_m, rep_k, 2, 256B), 5D scale load with TMA
     // * (rep_m, rep_k, 32, 4, 4B), 5D scale load with cp.async
     auto elemBits = srcTy.getElementType().getIntOrFloatBitWidth();
     int prodInner = 1;
@@ -800,8 +827,14 @@ struct TensorMemoryCopyOpConversion
           repMorN = srcTy.getDimSize(0);
           repK = prodInner * elemBits / (32 * 128);
         } else {
-          repMorN = srcTy.getDimSize(0);
-          repK = srcTy.getDimSize(1);
+          if (srcTy.getDimSize(0) == 1 &&
+              srcTy.getDimSize(srcTy.getRank() - 1) == 256) {
+            repMorN = srcTy.getDimSize(1);
+            repK = srcTy.getDimSize(2);
+          } else {
+            repMorN = srcTy.getDimSize(0);
+            repK = srcTy.getDimSize(1);
+          }
         }
         break;
       }
@@ -820,13 +853,13 @@ struct TensorMemoryCopyOpConversion
   }
 };
 
-struct MemDescSubviewOpConversion
-    : public ConvertOpToLLVMPattern<triton::gpu::MemDescSubviewOp> {
+struct MemDescIndexOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::MemDescIndexOp> {
   using ConvertOpToLLVMPattern<
-      triton::gpu::MemDescSubviewOp>::ConvertOpToLLVMPattern;
+      triton::gpu::MemDescIndexOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(triton::gpu::MemDescSubviewOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::gpu::MemDescIndexOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -841,24 +874,33 @@ struct MemDescSubviewOpConversion
 
     // newBase = base + offset
     auto tmemBase = adaptor.getSrc();
-    SmallVector<Value> opOffsetVals = op.getOffsets();
-    size_t destRank = op.getResult().getType().getRank();
-    SmallVector<Value> offsetVals;
-    int rankReduced = srcTy.getRank() - destRank;
-    for (int i = rankReduced; i < opOffsetVals.size(); i++) {
-      offsetVals.push_back(opOffsetVals[i]);
-    }
-
+    auto idx = op.getIndex();
     triton::nvidia_gpu::TMemAllocation tmemAlloc =
         triton::nvidia_gpu::getTmemAllocSizes(cast<MemDescType>(dstTy));
     int numColOffset = tmemAlloc.numCols;
     Value newBase = b.ptrtoint(rewriter.getI32Type(), tmemBase);
     newBase = rewriter.create<LLVM::AddOp>(
         loc, newBase,
-        rewriter.create<LLVM::MulOp>(loc, opOffsetVals[0],
-                                     b.i32_val(numColOffset)));
+        rewriter.create<LLVM::MulOp>(loc, idx, b.i32_val(numColOffset)));
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
     rewriter.replaceOp(op, b.inttoptr(elemPtrTy, newBase));
+    return success();
+  }
+};
+
+class MemDescReinterpretOpConversion
+    : public ConvertOpToLLVMPattern<MemDescReinterpretOp> {
+public:
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(MemDescReinterpretOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
+            op.getSrc().getType().getEncoding())) {
+      return failure();
+    }
+    rewriter.replaceOp(op, adaptor.getSrc());
     return success();
   }
 };
@@ -879,19 +921,37 @@ struct TMEMSubSliceOpConversion
 
     auto encoding = dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
         srcTy.getEncoding());
-    if (!encoding) {
-      return failure();
-    }
     auto shapePerCTA = getShapePerCTA(srcTy);
     int blockN = encoding.getBlockN();
     int blockM = encoding.getBlockM();
     int offsetCol = 0;
     int offsetRow = 0;
-    // TODO: support the more complex layout when M == 64.
-    if (shapePerCTA[0] != 128) {
-      return failure();
-    }
+    assert(llvm::is_contained({64, 128}, blockM) && "checked by the verifier");
     offsetCol = op.getN();
+
+    if (blockM == 64) {
+      // The layout interleaves blocks along the N dimension with the rows, such
+      // that the odd numbered blocks are in lanes [16, 32), below the previous
+      // even-numbered block.
+      int blockOffset = op.getN() / blockN;
+      if (blockOffset % 2) {
+        // Offset into rows [16, 32).
+        offsetRow = 16;
+        // Normalize column offset to the even block.
+        offsetCol -= blockN;
+      }
+      offsetCol -= blockN * (blockOffset / 2);
+    }
+
+    if (!encoding.getUnpacked()) {
+      // Adjust the column offset based on the element size.
+      int numElementsPer32B = 32 / srcTy.getElementTypeBitWidth();
+      if (offsetCol % numElementsPer32B != 0) {
+        return failure();
+      }
+      offsetCol /= numElementsPer32B;
+    }
+
     Value tmemBase = adaptor.getSrc();
     Value offsetVal = b.i32_val(offsetCol | offsetRow << 16);
     Value newBase = b.add(b.ptrtoint(i32_ty, tmemBase), offsetVal);
@@ -915,6 +975,7 @@ void mlir::triton::NVIDIA::populateTensorMemoryOpToLLVMPattern(
 void mlir::triton::NVIDIA::populateTensorMemorySubviewOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
-  patterns.add<MemDescSubviewOpConversion>(typeConverter, benefit);
+  patterns.add<MemDescIndexOpConversion>(typeConverter, benefit);
+  patterns.add<MemDescReinterpretOpConversion>(typeConverter, benefit);
   return;
 }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import importlib
 import os
 import re
@@ -171,6 +172,7 @@ class NvidiaTool:
     version: str
 
     @staticmethod
+    @functools.lru_cache
     def from_path(path: str) -> Optional[NvidiaTool]:
         try:
             result = subprocess.check_output([path, "--version"], stderr=subprocess.STDOUT)
@@ -411,6 +413,7 @@ class compilation_knobs(base_knobs):
     disable_line_info: env_bool = env_bool("TRITON_DISABLE_LINE_INFO")
     front_end_debugging: env_bool = env_bool("TRITON_FRONT_END_DEBUGGING")
     allow_non_constexpr_globals: env_bool = env_bool("TRITON_ALLOW_NON_CONSTEXPR_GLOBALS")
+    enable_experimental_consan: env_bool = env_bool("TRITON_ENABLE_EXPERIMENTAL_CONSAN")
     listener: Union[CompilationListener, None] = None
 
 
@@ -481,6 +484,7 @@ class nvidia_knobs(base_knobs):
     dump_nvptx: env_bool = env_bool("NVPTX_ENABLE_DUMP")
     disable_ptxas_opt: env_bool = env_bool("DISABLE_PTXAS_OPT")
     mock_ptx_version: env_opt_str = env_opt_str("TRITON_MOCK_PTX_VERSION")
+    dump_ptxas_log: env_bool = env_bool("TRITON_DUMP_PTXAS_LOG")
 
     libdevice_path: env_opt_str = env_opt_str("TRITON_LIBDEVICE_PATH")
     libcuda_path: env_opt_str = env_opt_str("TRITON_LIBCUDA_PATH")
@@ -489,6 +493,7 @@ class nvidia_knobs(base_knobs):
 class intel_knobs(base_knobs):
     spirv_dis: env_intel_tool = env_intel_tool("spirv-dis")
 
+    dump_shader_info: env_bool = env_bool("TRITON_INTEL_ENABLE_IGC_SHADER_DUMP", False)
     gen_native_code: env_bool = env_bool("TRITON_XPU_GEN_NATIVE_CODE", False)
     tile_load_ll: env_bool = env_bool("TRITON_XPU_ENABLE_TILE_LOAD_LINEAR_LAYOUT", True)
     advanced_path: env_bool = env_bool("TRITON_INTEL_ADVANCED_PATH", False)
@@ -496,14 +501,21 @@ class intel_knobs(base_knobs):
     reduce_transpose: env_bool = env_bool("TRITON_INTEL_REDUCE_TRANSPOSE", False)
     disable_igc_opt: env_bool = env_bool("TRITON_INTEL_DISABLE_IGC_OPT", False)
 
-    raise_block_pointer: env_str = env_str("TRITON_INTEL_RAISE_BLOCK_POINTER", "0")
     dump_spirv_kernel_args: env_opt_str = env_opt_str("TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS")
 
     libdevice_path: env_opt_str = env_opt_str("TRITON_LIBDEVICE_PATH")
 
+    # Space separated list of device extensions, similar to the output of
+    # `ocloc query CL_DEVICE_EXTENSIONS`. If not set, a compiler calls `ocloc` in runtime to get
+    # the actual device extensions.
+    device_extensions: env_opt_str = env_opt_str("TRITON_INTEL_DEVICE_EXTENSIONS")
+    device_arch: env_opt_str = env_opt_str("TRITON_INTEL_DEVICE_ARCH")
+
 
 class amd_knobs(base_knobs):
     use_buffer_ops: env_bool = env_bool("AMDGCN_USE_BUFFER_OPS", True)
+    # Note: This requires use_buffer_ops be true to have any effect
+    use_buffer_atomics: env_bool = env_bool("AMDGCN_USE_BUFFER_ATOMICS", True)
     dump_amdgcn: env_bool = env_bool("AMDGCN_ENABLE_DUMP")
     libhip_path: env_opt_str = env_opt_str("TRITON_LIBHIP_PATH")
     lld_path: env_opt_str = env_opt_str("TRITON_HIP_LLD_PATH")
@@ -519,7 +531,7 @@ class amd_knobs(base_knobs):
 
 
 class proton_knobs(base_knobs):
-    cupti_path: env_opt_str = env_opt_str("TRITON_CUPTI_LIB_PATH")
+    cupti_dir: env_opt_str = env_opt_str("TRITON_CUPTI_LIB_PATH")
 
 
 build = build_knobs()

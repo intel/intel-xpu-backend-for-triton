@@ -1,8 +1,8 @@
 #include "PatternTritonGPUOpToLLVM.h"
-
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/IR/ValueRange.h"
+#include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "llvm/ADT/SmallVector.h"
@@ -10,82 +10,41 @@
 using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
-using namespace mlir::triton::gpu::intel;
 
 namespace {
-SmallVector<Value> convertMxfp4x2ToBf16x2(RewriterBase &rewriter, Location loc,
-                                          ArrayRef<Value> values) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  SmallVector<Value> results;
-  for (auto v : values) {
-    auto em0 = b.and_(v, b.i8_val(0x7));
-    auto em1 = b.and_(v, b.i8_val(0x70));
-    Value v0 =
-        b.or_(b.shl(b.zext(i16_ty, em0), b.i16_val(6)),
-              b.shl(b.zext(i16_ty, b.and_(v, b.i8_val(0x8))), b.i16_val(12)));
-    Value v1 =
-        b.or_(b.shl(b.zext(i16_ty, em1), b.i16_val(2)),
-              b.shl(b.zext(i16_ty, b.and_(v, b.i8_val(0x80))), b.i16_val(8)));
-    // Three cases:
-    // 1) x is normal and non-zero: Correct bias
-    v0 = b.select(b.icmp_ne(b.and_(em0, b.i8_val(0x6)), b.i8_val(0)),
-                  b.add(v0, b.i16_val((127 - 1) << 7)), v0);
-    v1 = b.select(b.icmp_ne(b.and_(em1, b.i8_val(0x60)), b.i8_val(0)),
-                  b.add(v1, b.i16_val((127 - 1) << 7)), v1);
-    // 2) x is subnormal (x == 0bs001 where s is the sign): Map to +-0.5 in
-    // bf16
-    v0 = b.bitcast(
-        b.select(b.icmp_eq(em0, b.i8_val(0x1)),
-                 b.or_(b.i16_val(16128), b.and_(v0, b.i16_val(0x8000))), v0),
-        bf16_ty);
-    v1 = b.bitcast(
-        b.select(b.icmp_eq(em1, b.i8_val(0x10)),
-                 b.or_(b.i16_val(16128), b.and_(v1, b.i16_val(0x8000))), v1),
-        bf16_ty);
-    // 3) x is zero, nothing to do
-    results.push_back(v0);
-    results.push_back(v1);
+
+class CachingBuilder : public TritonLLVMOpBuilder {
+public:
+  CachingBuilder(Location loc, OpBuilder &builder)
+      : TritonLLVMOpBuilder(loc, builder) {}
+
+  Value dense_val(ShapedType type, ArrayRef<Attribute> values) const {
+    auto attr = DenseElementsAttr::get(type, values);
+    return getOrCreateConstant(type, attr);
   }
-  return results;
-}
 
-SmallVector<Value> convertMxfp4x2ToFp16x2(RewriterBase &rewriter, Location loc,
-                                          ArrayRef<Value> values) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  SmallVector<Value> results;
-  for (auto v : values) {
-    auto em0 = b.and_(v, b.i8_val(0x7));
-    auto em1 = b.and_(v, b.i8_val(0x70));
-    // FP16 bits: sign = 1, exponent = 5, mantissa = 10
-    Value v0 =
-        b.or_(b.shl(b.zext(i16_ty, em0), b.i16_val(10 - 1)),
-              b.shl(b.zext(i16_ty, b.and_(v, b.i8_val(0x8))), b.i16_val(12)));
-    Value v1 =
-        b.or_(b.shl(b.zext(i16_ty, em1), b.i16_val(10 - 1 - 4)),
-              b.shl(b.zext(i16_ty, b.and_(v, b.i8_val(0x80))), b.i16_val(8)));
+  Value i8_val(int64_t val) const { return int_val(8, val); }
+  Value i32_val(int64_t val) const { return int_val(32, val); }
 
-    // Three cases:
-    // 1) x is normal and non-zero: Correct bias
-    v0 = b.select(b.icmp_ne(b.and_(em0, b.i8_val(0x6)), b.i8_val(0)),
-                  b.add(v0, b.i16_val((15 - 1) << 10)), v0);
-    v1 = b.select(b.icmp_ne(b.and_(em1, b.i8_val(0x60)), b.i8_val(0)),
-                  b.add(v1, b.i16_val((15 - 1) << 10)), v1);
-
-    // 2) x is subnormal (x == 0bs001 where s is the sign): Map to fp16 +-0.5
-    v0 = b.bitcast(
-        b.select(b.icmp_eq(em0, b.i8_val(0x1)),
-                 b.or_(b.i16_val(0x3800), b.and_(v0, b.i16_val(0x8000))), v0),
-        f16_ty);
-    v1 = b.bitcast(
-        b.select(b.icmp_eq(em1, b.i8_val(0x10)),
-                 b.or_(b.i16_val(0x3800), b.and_(v1, b.i16_val(0x8000))), v1),
-        f16_ty);
-    // 3) x is zero, nothing to do
-    results.push_back(v0);
-    results.push_back(v1);
+  Value int_val(unsigned bitwidth, int64_t val) const {
+    IntegerType type = builder->getIntegerType(bitwidth);
+    IntegerAttr attr = builder->getIntegerAttr(type, val);
+    return getOrCreateConstant(type, attr);
   }
-  return results;
-}
+
+private:
+  mutable DenseMap<std::pair<Type, TypedAttr>, Value> cache;
+
+  Value getOrCreateConstant(Type type, TypedAttr attr) const {
+    auto key = std::make_pair(type, attr);
+    auto it = cache.find(key);
+    if (it != cache.end())
+      return it->second;
+    auto cst = builder->create<LLVM::ConstantOp>(loc, type, attr);
+    cache[key] = cst;
+    return cst;
+  }
+};
 
 class Fp4ToFpOpPattern : public ConvertOpToLLVMPattern<Fp4ToFpOp> {
 public:
@@ -96,20 +55,231 @@ public:
   matchAndRewrite(Fp4ToFpOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
-    auto *ctx = op.getContext();
-    Type elemType = op.getType().getElementType();
-    assert(elemType == f16_ty || elemType == bf16_ty);
-    bool toFp16 = elemType == f16_ty;
+    CachingBuilder b(loc, rewriter);
 
-    SmallVector<Value> xVals =
-        unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    xVals = toFp16 ? convertMxfp4x2ToFp16x2(rewriter, loc, xVals)
-                   : convertMxfp4x2ToBf16x2(rewriter, loc, xVals);
+    // Create a constant vector containing all the possible values.
+    Value table;
+    {
+      auto elemTy = dyn_cast<FloatType>(op.getType().getElementType());
+      assert(elemTy == f16_ty || elemTy == bf16_ty);
+      SmallVector<Attribute, 16> values;
+      for (double v : {0., 0.5, 1., 1.5, 2., 3., 4., 6., -0., -0.5, -1., -1.5,
+                       -2., -3., -4., -6.})
+        values.push_back(b.builder->getFloatAttr(elemTy, v));
+      table = b.dense_val(VectorType::get({16}, elemTy), values);
+    }
 
-    Value result =
-        packLLElements(loc, getTypeConverter(), xVals, rewriter, op.getType());
-    rewriter.replaceOp(op, result);
+    SmallVector<Value> values;
+    Value src = adaptor.getSrc();
+    auto i8Ty = b.builder->getI8Type();
+    collectValues(b, src, values);
+
+    SmallVector<Value> results;
+    for (Value value : values) {
+      if (auto vecTy = dyn_cast_or_null<VectorType>(value.getType()); !vecTy) {
+        assert(value.getType() == i8Ty);
+        Value idx1 = b.and_(value, b.i8_val(15));
+        Value idx2 = b.lshr(value, b.i8_val(4));
+        results.push_back(b.extract_element(table, idx1));
+        results.push_back(b.extract_element(table, idx2));
+      } else if (vecTy.getElementType() == b.builder->getI32Type()) {
+        ShapedType i8VecTy = VectorType::get(4, i8Ty);
+        Value andVect =
+            b.dense_val(vecTy, b.builder->getI32IntegerAttr(0x0F0F0F0F));
+        Value shVec = b.dense_val(vecTy, b.builder->getI32IntegerAttr(4));
+        Value i32IdxVec1 = b.and_(value, andVect);
+        Value i32IdxVec2 = b.and_(b.lshr(value, shVec), andVect);
+        // Extract each value from i32 vectors and cast to i8 vectors
+        for (int32_t i = 0, n = vecTy.getNumElements(); i < n; ++i) {
+          Value idx = b.i32_val(i);
+          Value i1 = b.extract_element(i32IdxVec1, idx);
+          Value i2 = b.extract_element(i32IdxVec2, idx);
+          Value idxVec1 = b.bitcast(i1, i8VecTy);
+          Value idxVec2 = b.bitcast(i2, i8VecTy);
+          extractFloats(b, idxVec1, idxVec2, vecTy.getNumElements(), results,
+                        table);
+        }
+      } else {
+        assert(vecTy.getElementType() == i8Ty);
+        Value andVect = b.dense_val(vecTy, b.builder->getI8IntegerAttr(0x0F));
+        Value shVec = b.dense_val(vecTy, b.builder->getI8IntegerAttr(4));
+        Value idxVec1 = b.and_(value, andVect);
+        Value idxVec2 = b.lshr(value, shVec);
+        extractFloats(b, idxVec1, idxVec2, vecTy.getNumElements(), results,
+                      table);
+      }
+    }
+
+    rewriter.replaceOp(op, packLLElements(loc, getTypeConverter(), results,
+                                          rewriter, op.getType()));
     return success();
+  }
+
+private:
+  static void collectValues(CachingBuilder &b, Value src,
+                            SmallVector<Value> &values) {
+    auto structTy = dyn_cast_or_null<LLVM::LLVMStructType>(src.getType());
+    if (!structTy) {
+      values.emplace_back(src);
+      return;
+    }
+
+    // If the entire struct consists of subsequent insertvalue:
+    // %str = llvm.mlir.undef : !llvm.struct<(i8, i8)>
+    // %str0 = llvm.insertvalue %v0, %str[0] : !llvm.struct<(i8, i8)>
+    // %str1 = llvm.insertvalue %v1, %str0[1] : !llvm.struct<(i8, i8)>
+    // use the inserted values (%v0 and %v1) instead of adding the
+    // extractvalue operations.
+    IntegerType i8Ty = b.builder->getI8Type();
+    size_t remaining = structTy.getBody().size();
+    values.resize(remaining);
+    for (auto ins = src.getDefiningOp<LLVM::InsertValueOp>();
+         ins && ins.getPosition()[0] == remaining - 1;
+         ins = ins.getContainer().getDefiningOp<LLVM::InsertValueOp>()) {
+      values[--remaining] = ins.getValue();
+      assert(values[remaining].getType() == i8Ty);
+    }
+
+    // Add the remaining values, if any.
+    if (remaining) {
+      for (auto [i, type] : llvm::enumerate(
+               llvm::make_range(structTy.getBody().begin(),
+                                structTy.getBody().begin() + remaining))) {
+        assert(type == i8Ty);
+        values[i] = b.extract_val(type, src, i);
+      }
+    }
+
+    // Detect subsequent extractions of all vallues from an i8 vector:
+    // %c0 = llvm.mlir.constant(0 : i32) : i32
+    // %e0 = llvm.extractelement %i8vec[%c0 : i32] : vector<2xi8>
+    // %c1 = llvm.mlir.constant(1 : i32) : i32
+    // %e1 = llvm.extractelement %i8vec[%c1 : i32] : vector<2xi8>
+    // If values[i] == e0 and values[i + 1] == e1, replace them with i8vec.
+    if (replaceVectorExtracts(b, src, values)) {
+      // Detect subsequent extractions from i32 vector and casts to i8 vector:
+      // %c0 = llvm.mlir.constant(0 : i32) : i32
+      // %i0 = llvm.extractelement %i32vec[%c0 : i32] : vector<2xi32>
+      // %i8vec0 = llvm.bitcast %i0 : i32 to vector<4xi8>
+      // %c1 = llvm.mlir.constant(1 : i32) : i32
+      // %i1 = llvm.extractelement %i32vec[%c1 : i32] : vector<2xi32>
+      // %i8vec1 = llvm.bitcast %i1 : i32 to vector<4xi8>
+      // If values[i] == i8vec0 and values[i + 1] == i8vec1, replace them with
+      // i32vec.
+      replaceVectorCastExtracts(b, src, values);
+    }
+  }
+
+  // Extract floats from the lookup table by indices.
+  static void extractFloats(CachingBuilder &b, Value idxVec1, Value idxVec2,
+                            int32_t size, SmallVector<Value> &results,
+                            Value table) {
+    size_t off = results.size();
+    results.resize(off + size * 2);
+    for (int32_t i = 0; i < size; ++i) {
+      Value idx = b.extract_element(idxVec1, b.i32_val(i));
+      results[off + 2 * i] = b.extract_element(table, idx);
+    }
+    for (int32_t i = 0; i < size; ++i) {
+      Value idx = b.extract_element(idxVec2, b.i32_val(i));
+      results[off + 2 * i + 1] = b.extract_element(table, idx);
+    }
+  }
+
+  // Detect the subsequent extractions of all vallues from an i8 vector and
+  // replace them with the vector.
+  static bool replaceVectorExtracts(CachingBuilder &b, Value src,
+                                    SmallVector<Value> &values) {
+    bool replaced = false;
+    for (size_t i = 0; i < values.size(); ++i) {
+      // If the value is an extractelement from a vector and the index is 0
+      // and the subsequent values are the extraction of all values from the
+      // same vector, replace all these values with the original vector.
+      if (Value vec = isVectorExtract(values[i], 0);
+          vec && replaceValues(
+                     values, i,
+                     dyn_cast<VectorType>(vec.getType()).getNumElements() - 1,
+                     vec, isVectorExtract)) {
+        assert(dyn_cast<VectorType>(vec.getType()).getElementType() ==
+               b.builder->getI8Type());
+        replaced = true;
+      }
+    }
+    return replaced;
+  }
+
+  // If a value is a bitcast of a value extracted from an i32 vector and the
+  // subsequent values are also extracts from the same vector, replace all
+  // them with the original vector.
+  static void replaceVectorCastExtracts(CachingBuilder &b, Value src,
+                                        SmallVector<Value> &values) {
+    auto isCastExtract =
+        [i8Ty = b.builder->getI8Type(),
+         i32Ty = b.builder->getI32Type()](Value &value, unsigned pos) -> Value {
+      if (auto bitcast = value.getDefiningOp<LLVM::BitcastOp>()) {
+        if (auto vecTy = dyn_cast_or_null<VectorType>(bitcast.getType());
+            vecTy && vecTy.getElementType() == i8Ty &&
+            vecTy.getNumElements() == 4) {
+          Value operand = bitcast.getOperand();
+          if (Value vec = isVectorExtract(operand, pos)) {
+            if (auto elType =
+                    dyn_cast<VectorType>(vec.getType()).getElementType();
+                elType == i32Ty) {
+              return vec;
+            }
+          }
+        }
+      }
+      return {};
+    };
+
+    for (unsigned i = 0; i < values.size(); i++) {
+      if (auto vec = isCastExtract(values[i], 0)) {
+        replaceValues(values, i,
+                      dyn_cast<VectorType>(vec.getType()).getNumElements() - 1,
+                      vec, isCastExtract);
+      }
+    }
+  }
+
+  // Check if the value is an extraction from a vector at the specified
+  // position and the vector size is > 1, return the vector.
+  static Value isVectorExtract(Value value, unsigned pos) {
+    if (auto extract = value.getDefiningOp<LLVM::ExtractElementOp>()) {
+      Value operand = extract.getOperand(0);
+      if (auto vecTy = dyn_cast_or_null<VectorType>(operand.getType());
+          vecTy && vecTy.getNumElements() > 1) {
+        if (auto idx =
+                extract.getPosition().getDefiningOp<LLVM::ConstantOp>()) {
+          if (auto attr = dyn_cast_or_null<IntegerAttr>(idx.getValue());
+              attr && attr.getInt() == pos) {
+            return operand;
+          }
+        }
+      }
+    }
+    return {};
+  }
+
+  // Replace the value at the `position` with the `replacement` and erase the
+  // `count` values after it, if the `map` function returns the `replacement`
+  // for all these values.
+  static bool
+  replaceValues(SmallVector<Value> &values, unsigned position, unsigned count,
+                Value replacement,
+                const std::function<Value(Value &, unsigned)> &map) {
+    if (position + count + 1 > values.size())
+      return false;
+    for (auto [i, v] : llvm::enumerate(
+             llvm::make_range(values.begin() + position + 1,
+                              values.begin() + position + 1 + count))) {
+      if (map(v, i + 1) != replacement)
+        return false;
+    }
+    values[position] = replacement;
+    values.erase(values.begin() + position + 1,
+                 values.begin() + position + 1 + count);
+    return true;
   }
 };
 } // anonymous namespace
