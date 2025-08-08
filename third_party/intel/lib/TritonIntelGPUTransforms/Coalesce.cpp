@@ -236,7 +236,9 @@ private:
               })
               .Default([](auto op) {
                 llvm::errs() << op << "\n";
-                llvm::report_fatal_error("unsupported op");
+                llvm::report_fatal_error(
+                    ("Unsupported parent operation for scf.yield: expected LoopLikeOpInterface or scf.IfOp, but got '" +
+                     op->getName().getStringRef() + "'").str());
               });
 
           continue;
