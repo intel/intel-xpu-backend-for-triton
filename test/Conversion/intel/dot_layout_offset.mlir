@@ -2,7 +2,7 @@
 
 #dpas = #ttig.dpas<{repeatCount=8, systolicDepth=8, executionSize = 8, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA=[1, 1], repCluster=[2, 2]}>
 #dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#dpas, kWidth=1}>
-module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @dot_layout_emit_offset(%arg0: !llvm.ptr<1>)
   tt.func public @dot_layout_emit_offset() {
     %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf16, #dot_operand_a>
@@ -11,12 +11,10 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     // COM: Base index of the dot layout.
     // CHECK:           %[[THREAD_ID_I64:.*]] = llvm.call spir_funccc @_Z12get_local_idj
     // CHECK:           %[[THREAD_ID_I32:.*]] = llvm.trunc %[[THREAD_ID_I64]] : i64 to i32
-    // CHECK:           %[[CST_63:.*]] = llvm.mlir.constant(63 : i32) : i32
-    // CHECK:           %[[RTID:.*]] = llvm.and %[[THREAD_ID_I32]], %[[CST_63]] : i32
+    // CHECK:           %[[CST_63:.*]] = llvm.mlir.constant(15 : i32) : i32
+    // CHECK:           %[[LANE_ID:.*]] = llvm.and %[[THREAD_ID_I32]], %[[CST_63]] : i32
     // CHECK:           %[[VAL_145:.*]] = llvm.mlir.constant(16 : i32) : i32
-    // CHECK:           %[[LANE_ID:.*]] = llvm.urem %[[RTID]], %[[VAL_145]]  : i32
-    // CHECK:           %[[WARP_ID:.*]] = llvm.udiv %[[RTID]], %[[VAL_145]]  : i32
-    // CHECK-COUNT-4:   %[[CST_0:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK-COUNT-5:   %[[CST_0:.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK:           %[[VAL_149:.*]] = llvm.mlir.constant(1 : i32) : i32
     // CHECK:           %[[VAL_150:.*]] = llvm.and %[[LANE_ID]], %[[VAL_149]]  : i32
     // CHECK:           %[[VAL_151:.*]] = llvm.icmp "eq" %[[VAL_150]], %[[CST_0]] : i32
@@ -324,7 +322,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 #dpas = #ttig.dpas<{repeatCount=8, systolicDepth=8, executionSize = 8, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA=[1, 1], repCluster=[2, 2]}>
 #dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#dpas, kWidth=2}>
-module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.num-ctas" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
 
   // CHECK-LABEL:   llvm.func spir_kernelcc @dot_layout_emit_offset(%arg0: !llvm.ptr<1>)
   tt.func public @dot_layout_emit_offset() {
@@ -335,12 +333,10 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
     // COM: Base index of the dot layout.
     // CHECK:           %[[THREAD_ID_I64:.*]] = llvm.call spir_funccc @_Z12get_local_idj(%[[VAL_142]])
     // CHECK:           %[[THREAD_ID_I32:.*]] = llvm.trunc %[[THREAD_ID_I64]] : i64 to i32
-    // CHECK-DAG:       %[[CST_63:.*]] = llvm.mlir.constant(63 : i32) : i32
-    // CHECK-DAG:       %[[RTID:.*]] = llvm.and %[[THREAD_ID_32:.*]], %[[CST_63]] : i32
+    // CHECK-DAG:       %[[CST_63:.*]] = llvm.mlir.constant(15 : i32) : i32
+    // CHECK-DAG:       %[[LANE_ID:.*]] = llvm.and %[[THREAD_ID_32:.*]], %[[CST_63]] : i32
     // CHECK-DAG:       %[[VAL_145:.*]] = llvm.mlir.constant(16 : i32) : i32
-    // CHECK-DAG:       %[[LANE_ID:.*]] = llvm.urem %[[RTID]], %[[VAL_145]]  : i32
-    // CHECK-DAG:       %[[WARP_ID:.*]] = llvm.udiv %[[RTID]], %[[VAL_145]]  : i32
-    // CHECK-COUNT-4:   %[[CST_0:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK-COUNT-5:   %[[CST_0:.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK:           %[[VAL_149:.*]] = llvm.mlir.constant(1 : i32) : i32
     // CHECK:           %[[VAL_150:.*]] = llvm.and %[[LANE_ID]], %[[VAL_149]]  : i32
     // CHECK:           %[[VAL_151:.*]] = llvm.icmp "eq" %[[VAL_150]], %[[CST_0]] : i32
