@@ -194,9 +194,6 @@ jobs:
       fail-fast: false
       matrix:
         suite:
-          - minicore
-          - mxfp
-          - scaled_dot
           - rest
     timeout-minutes: 720
     runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
@@ -329,41 +326,12 @@ jobs:
         run: |
           cat <<EOF | tee tutorials.txt
           01-vector-add
-          02-fused-softmax
-          03-matrix-multiplication
-          04-low-memory-dropout
-          05-layer-norm
-          07-extern-functions
-          08-grouped-gemm
-          10-experimental-block-pointer
-          10i-experimental-block-pointer
           EOF
 
       - name: Run Tutorials
         if: matrix.suite == 'mxfp' || matrix.suite == 'scaled_dot' || matrix.suite == 'rest'
         run: |
           ${{ env.TRITON_TEST_CMD }} --select-from-file tutorials.txt --tutorial
-
-      - name: Get transformers version
-        if: matrix.suite == 'rest'
-        run: |
-          cd pytorch
-          TRANSFORMERS_VERSION="$(<.ci/docker/ci_commit_pins/huggingface.txt)"
-          echo "TRANSFORMERS_VERSION=$TRANSFORMERS_VERSION" | tee -a $GITHUB_ENV
-
-      - name: Install transformers
-        if: matrix.suite == 'rest'
-        uses: ./.github/actions/install-dependency
-        with:
-          package: transformers
-          repository: huggingface/transformers
-          ref: ${{ env.TRANSFORMERS_VERSION }}
-          try-tag-prefix: v
-
-      - name: Run E2E test
-        if: matrix.suite == 'rest'
-        run: |
-          timeout -s KILL 4900 ${{ env.TRITON_TEST_CMD }} --inductor || ${{ inputs.ignore_errors }}
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}

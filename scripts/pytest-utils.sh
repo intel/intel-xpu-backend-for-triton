@@ -77,6 +77,7 @@ run_tutorial_test() {
         )
     fi
 
+    export IGC_ShaderDumpEnable=1 IGC_DumpToCustomDir=$TRITON_TEST_REPORTS_DIR/mm_dumps
     python -u "$SCRIPTS_DIR/run_tutorial.py" "${run_tutorial_args[@]}" || $TRITON_TEST_IGNORE_ERRORS
 }
 
