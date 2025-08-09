@@ -79,20 +79,6 @@ def add(x: torch.Tensor, y: torch.Tensor):
 
 
 # %%
-# We can now use the above function to compute the element-wise sum of two `torch.tensor` objects and test its correctness:
-
-torch.manual_seed(0)
-size = 98432
-x = torch.rand(size, device=DEVICE)
-y = torch.rand(size, device=DEVICE)
-output_torch = x + y
-output_triton = add(x, y)
-print(output_torch)
-print(output_triton)
-print(f'The maximum difference between torch and triton is '
-      f'{torch.max(torch.abs(output_torch - output_triton))}')
-
-# %%
 # Seems like we're good to go!
 
 # %%
@@ -104,6 +90,10 @@ print(f'The maximum difference between torch and triton is '
 # for different problem sizes.
 
 
+import os.path
+os.environ['NEO_CACHE_PERSISTENT'] = "0"
+os.environ['IGC_ShaderDumpEnable'] = "1"
+os.environ['IGC_DumpToCustomDir'] = "/runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/reports/mm_dumps"
 @triton.testing.perf_report(
     triton.testing.Benchmark(
         x_names=['size'],  # Argument names to use as an x-axis for the plot.
