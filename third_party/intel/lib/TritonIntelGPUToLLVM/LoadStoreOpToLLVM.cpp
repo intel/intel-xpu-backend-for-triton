@@ -376,6 +376,14 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
   }
 
   // Returns the pitch (stride in bytes) of \p ptr.
+  //
+  // \param rewriter The pattern rewriter to use.
+  // \param ptr The pointer value whose pitch is to be computed.
+  // \param elemSizeInBits The size of each element in bits.
+  // \param dim The dimension along which to compute the pitch (stride).
+  //            The default value is 0, which typically refers to the first (innermost) dimension.
+  //            Use the default when you want the pitch for the first dimension; specify another
+  //            value if you need the pitch for a different dimension.
   Value getPitch(ConversionPatternRewriter &rewriter, Value ptr,
                  unsigned elemSizeInBits, unsigned dim = 0) const {
     Location loc = ptr.getLoc();
@@ -2298,7 +2306,7 @@ struct LoadOpToBlockIOConversion
                   .second;
           Value val = b.extract_element(unpackedVal, b.i32_val(i));
 
-          // TODO: this is another implementation for othterElems, which is with
+          // TODO: this is another implementation for otherElems, which is with
           // more `select` ops but less register pressure. Need to compare the
           // impact of the two implementations.
           // if (otherElems.size()) {
