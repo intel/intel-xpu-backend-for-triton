@@ -213,35 +213,26 @@ private:
         user->dumpPretty();
       });
 
-      if (auto forOp = dyn_cast<scf::ForOp>(user)) {
-        propagateLayoutToArgsAndBody(forOp, val, layout, rewriter);
-        continue;
-      }
-      if (auto whileOp = dyn_cast<scf::WhileOp>(user)) {
-        propagateLayoutToArgsAndBody(whileOp, val, layout, rewriter);
+      if (auto loopOp = dyn_cast<LoopLikeOpInterface>(user)) {
+        propagateLayoutToArgsAndBody(loopOp, val, layout, rewriter);
         continue;
       }
       if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
         Operation *parentOp = yieldOp->getParentOp();
         for (OpOperand &operand : llvm::make_filter_range(
                  yieldOp->getOpOperands(),
-                 [&val](OpOperand &operand) { return operand.get() == val; })) {
-          unsigned opNum = operand.getOperandNumber();
+                 [&val](OpOperand &operand) { return operand.get() == val; }))
           TypeSwitch<Operation *>(parentOp)
-              .Case<LoopLikeOpInterface>([&](auto op) {
-                propagateLayoutToOperationResult(op, opNum, layout, rewriter);
-              })
-              .Case<scf::IfOp>([&](auto op) {
-                propagateLayoutToOperationResult(op, opNum, layout, rewriter);
+              .Case<LoopLikeOpInterface, scf::IfOp>([&](auto op) {
+                propagateLayoutToOperationResult(op, operand.getOperandNumber(),
+                                                 layout, rewriter);
               })
               .Default([](auto op) {
                 llvm::report_fatal_error(llvm::Twine(
                     "Unsupported parent operation for scf.yield: '" +
                     op->getName().getStringRef() + "'"));
               });
-
-          continue;
-        }
+        continue;
       }
       if (auto condOp = dyn_cast<scf::ConditionOp>(user)) {
         if (auto whileOp = condOp->getParentOfType<scf::WhileOp>()) {
