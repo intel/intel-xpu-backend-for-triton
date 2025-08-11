@@ -204,9 +204,6 @@ def test_block_store(M, N, dtype_str, layout, block_ptr, transpose, device, tmp_
 
     a = a.permute(1, 0).contiguous().permute(1, 0) if transpose else a
 
-    print("a:", a.shape, a.stride())
-    print("x:", x.shape, x.stride())
-
     kernel[(1, 1, 1)](a, x)
     assert torch.equal(a, x)
 
