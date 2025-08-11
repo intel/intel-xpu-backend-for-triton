@@ -3175,7 +3175,7 @@ struct AtomicCASOpConversion
              "Unexpected width");
 
       Value zero = (valueElemNBits == 32) ? b.i32_val(0) : b.i64_val(0);
-      if (!atomicNeedsSharedMemory(op.getResult()))
+      if (op.getResult().use_empty())
         rewriter.create<TritonGEN::BarrierOp>(loc, TritonGEN::MemFence::GLOBAL);
 
       auto createAtomicCASInstruction = [&]() -> SmallVector<Value, 1> {
@@ -3208,7 +3208,7 @@ struct AtomicCASOpConversion
                        : b.extract_element(valueElemTy, ret, b.i32_val(ii));
         }
       } else {
-        if (!atomicNeedsSharedMemory(op.getResult())) {
+        if (op.getResult().use_empty()) {
           rewriter.eraseOp(op);
           return success();
         }
@@ -3342,7 +3342,7 @@ struct AtomicRMWOpConversion
             maybeAnd(rewriter, loc, b.true_val(), rmwMask), {zero});
         ret = endBlock->getArgument(0);
       } else {
-        if (!atomicNeedsSharedMemory(op.getResult()))
+        if (op.getResult().use_empty())
           rewriter.create<TritonGEN::BarrierOp>(loc,
                                                 TritonGEN::MemFence::GLOBAL);
 
@@ -3377,7 +3377,7 @@ struct AtomicRMWOpConversion
                        : b.extract_element(valueElemTy, ret, b.i32_val(ii));
         }
       } else {
-        if (!atomicNeedsSharedMemory(op.getResult())) {
+        if (op.getResult().use_empty()) {
           rewriter.eraseOp(op);
           return success();
         }
