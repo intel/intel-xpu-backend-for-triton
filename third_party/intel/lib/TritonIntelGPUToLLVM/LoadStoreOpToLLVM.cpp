@@ -26,7 +26,11 @@ using namespace mlir::triton::gpu::intel;
 #define S(v) StringAttr::get(ctx, (v))
 
 #if defined(_MSC_VER) && !defined(__clang__)
-// from https://gist.github.com/pps83/3210a2f980fd02bb2ba2e5a1fc4a2ef0
+// MSVC does not provide the GCC/Clang built-ins __builtin_clz and __builtin_ctz.
+// The following implementations use MSVC intrinsics to provide equivalent functionality.
+// This is only needed when compiling with MSVC (and not Clang), to ensure cross-platform compatibility.
+// See: https://gist.github.com/pps83/3210a2f980fd02bb2ba2e5a1fc4a2ef0
+#if defined(_MSC_VER) && !defined(__clang__)
 #include <intrin.h>
 
 static int __builtin_clz(unsigned x) {
