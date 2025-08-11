@@ -373,11 +373,11 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
 
   // Returns the pitch (stride in bytes) of \p ptr.
   Value getPitch(ConversionPatternRewriter &rewriter, Value ptr,
-                 unsigned elemSizeInBits) const {
+                 unsigned elemSizeInBits, unsigned dim = 0) const {
     Location loc = ptr.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-    int stride = getStride(ptr, 0);
+    int stride = getStride(ptr, dim);
     // If the stride is 0, we assume a minimum pitch of 64 bytes.
     constexpr int MIN_PITCH = 64;
     if (stride == 0)
@@ -1884,17 +1884,6 @@ struct LoadOpToBlockIOConversion
     // HW issue for vblock = 4
     vBlocks = vBlocks == 4 ? 1 : vBlocks;
 
-    // TODO: use the axis info to general the handling for both regular pointer
-    // and block pointer.
-    const bool memoryRowMajor = isMemoryRowMajor(op);
-    unsigned contiguousDim = memoryRowMajor ? 1 : 0;
-    const bool isTransposeRequired = contiguousDim != colDim;
-
-    if (isTransposeRequired) {
-      // TODO: support load column major data.
-      return failure();
-    }
-
     Location loc = op.getLoc();
     MLIRContext *ctx = op.getContext();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -2012,13 +2001,59 @@ struct LoadOpToBlockIOConversion
       otherElems = unpackLLElements(loc, llOther, rewriter);
     }
 
+    // TODO: use the axis info to general the handling for both regular pointer
+    // and block pointer.
+    const bool memoryRowMajor = isMemoryRowMajor(op);
+    unsigned contiguousDim = memoryRowMajor ? 1 : 0;
+    const bool isTransposeRequired = contiguousDim != colDim;
+
+    if (isTransposeRequired) {
+      if (numPackedVals > 1)
+        return failure();
+      if (elemSizeInBits > 32)
+        return failure();
+      if (tileWidth > 32)
+        return failure(); // tileWidth is limited to 32 for transpose 2d load.
+
+      vBlocks = 1;
+
+      // use the d32 for transpose 2d load.
+      packedElemSizeInBits = 32;
+      numPackedVals = packedElemSizeInBits / elemSizeInBits;
+      tileHeight = std::min(tileHeight / numPackedVals, 8);
+
+      // transpose the width and height of the tile
+      std::swap(tileHeight, tileWidth);
+      if (tileHeight * tileWidth < threadsPerWarp)
+        return failure(); // The tile size is not large enough for IGC scalar
+                          // backend vectorization.
+      // if (oneMatrixPerLoadForBT) {
+      //   // Only load 1 operand per inst on row.
+      //   numOperandsPer2DLoadM = 1;
+      //   tileHeight = elemsPerDPASInst[threadOrder[rank - 2]];
+      // } else {
+      //   // We can decompose the matrix returned by transposed large 2d load
+      //   // when threads per warp < column size. Otherwise we have to load one
+      //   // operand per inst.
+      //   // Note: the tileHeight and numOperandsPer2DLoadM are the column size
+      //   // now.
+      //   numOperandsPer2DLoadM =
+      //       (threadsPerWarp <= tileHeight) ? repCluster[rank - 1] : 1;
+      // }
+      // // The transpose 2d load only support 1 operand per inst on column.
+      // // (vBlocks = 1)
+      // numOperandsPer2DloadN = 1;
+      // // TODO: support load column major data.
+      // return failure();
+    }
+
     baseWidth = b.i32_val(
         std::max(64u, vBlocks * tileWidth * (packedElemSizeInBits / 8)));
     // If the stride is 0, we want to load only the first row.
-    int stride = getStride(ptr, 0);
+    int stride = getStride(ptr, memoryRowMajor ? 0 : 1);
     baseHeightInt = (stride == 0 ? 1 : tileHeight);
     baseHeight = b.i32_val(baseHeightInt);
-    pitch = getPitch(rewriter, ptr, elemSizeInBits);
+    pitch = getPitch(rewriter, ptr, elemSizeInBits, memoryRowMajor ? 0 : 1);
     if (!pitch)
       return failure();
 
@@ -2161,7 +2196,7 @@ struct LoadOpToBlockIOConversion
           /*tile_width*/ tileWidth,
           /*tile_height*/ tileHeight,
           /*v_blocks*/ vBlocks,
-          /*transpose*/ false,
+          /*transpose*/ isTransposeRequired,
           /*vnni_transform*/ useVNNIFormat);
 
       // When strides[0] is 0, we only want to load the first row, so we
