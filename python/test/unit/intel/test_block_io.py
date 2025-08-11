@@ -120,28 +120,32 @@ layouts = [
 @pytest.mark.parametrize("layout", layouts)
 @pytest.mark.parametrize("load_block_ptr, store_block_ptr", [(True, True), (False, False), (True, False),
                                                              (False, True)])
+@pytest.mark.parametrize("transpose", [True, False])
 @pytest.mark.skipif(not is_xpu(), reason="Block store tests are specific to the XPU backend")
-def test_block_io(M, N, dtype_str, layout, load_block_ptr, store_block_ptr, device, tmp_path: pathlib.Path):
+def test_block_io(M, N, dtype_str, layout, load_block_ptr, store_block_ptr, transpose, device, tmp_path: pathlib.Path):
 
     warps = warps_per_cta(layout)
     num_warps = int(np.prod(warps))
     threads_per_warp = layout.threads_per_warp
+
     threads_per_warp = int(np.prod(threads_per_warp))
 
     ty = {"float32": "f32", "float16": "f16", "bfloat16": "i16", "int8": "i8"}[dtype_str]
 
     support_block_io = torch.xpu.get_device_capability()['has_subgroup_2d_block_io']
 
+    block_io = "\"column_major\"" if transpose else "\"row_major\""
+
     if load_block_ptr:
         load_ops = f"""
-            %src_ptr = tt.make_tensor_ptr %src, [%M_i64, %N_i64], [%N_i64, %c1_i64], [%c0_i32, %c0_i32] {{order = array<i32: 1, 0>}} : <tensor<{M}x{N}x{ty}, #layout>>
-            %store_val = tt.load %src_ptr {{ttig.block_io = "row_major", boundaryCheck = array<i32: 0, 1>, padding = 1 : i32}} : !tt.ptr<tensor<{M}x{N}x{ty}, #layout>>
+            %src_ptr = tt.make_tensor_ptr %src, [%M_i64, %N_i64], {"[%c1_i64, %M_i64]" if transpose else "[%N_i64, %c1_i64]"}, [%c0_i32, %c0_i32] {{order = array<i32: 1, 0>}} : <tensor<{M}x{N}x{ty}, #layout>>
+            %store_val = tt.load %src_ptr {{ttig.block_io = {block_io}, boundaryCheck = array<i32: 0, 1>, padding = 1 : i32}} : !tt.ptr<tensor<{M}x{N}x{ty}, #layout>>
             """
     else:
         load_ops = f"""
             %src_base = tt.splat %src : !tt.ptr<{ty}> -> tensor<{M}x{N}x!tt.ptr<{ty}>, #layout>
-            %src_ptr = tt.addptr %src_base, %row_major_off : tensor<{M}x{N}x!tt.ptr<{ty}>, #layout>, tensor<{M}x{N}xi32, #layout>
-            %store_val = tt.load %src_ptr {{ttig.block_io = "row_major"}} : tensor<{M}x{N}x!tt.ptr<{ty}>, #layout>
+            %src_ptr = tt.addptr %src_base, {"%col_major_off" if transpose else "%row_major_off" } : tensor<{M}x{N}x!tt.ptr<{ty}>, #layout>, tensor<{M}x{N}xi32, #layout>
+            %store_val = tt.load %src_ptr {{ttig.block_io = {block_io}}} : tensor<{M}x{N}x!tt.ptr<{ty}>, #layout>
             """
     if store_block_ptr:
         store_ops = f"""
@@ -194,6 +198,8 @@ def test_block_io(M, N, dtype_str, layout, load_block_ptr, store_block_ptr, devi
     temp_file = tmp_path / "test_block_io.ttgir"
     temp_file.write_text(ir)
     kernel = triton.compile(str(temp_file))
+
+    a = a.permute(1, 0).contiguous().permute(1, 0) if transpose else a
 
     kernel[(1, 1, 1)](a, x)
     assert torch.equal(a, x)

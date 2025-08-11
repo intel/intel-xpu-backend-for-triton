@@ -2524,20 +2524,6 @@ struct LoadOpToBlockIOConversion
     // HW issue for vblock = 4
     vBlocks = vBlocks == 4 ? 1 : vBlocks;
 
-    // TODO: use the axis info to general the handling for both regular pointer
-    // and block pointer.
-    const bool memoryRowMajor = isMemoryRowMajor(op);
-    // FIXME: Add support of column major.
-    if (!memoryRowMajor)
-      return failure();
-    unsigned contiguousDim = memoryRowMajor ? 1 : 0;
-    const bool isTransposeRequired = contiguousDim != colDim;
-
-    if (isTransposeRequired) {
-      // TODO: support load column major data.
-      return failure();
-    }
-
     Location loc = op.getLoc();
     MLIRContext *ctx = op.getContext();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -2664,10 +2650,59 @@ struct LoadOpToBlockIOConversion
         otherElems = unpackLLElements(loc, llOther, rewriter);
       }
 
+    // TODO: use the axis info to general the handling for both regular pointer
+    // and block pointer.
+    const bool memoryRowMajor = isMemoryRowMajor(op);
+    unsigned contiguousDim = memoryRowMajor ? 1 : 0;
+    const bool isTransposeRequired = contiguousDim != colDim;
+
+    if (isTransposeRequired) {
+      if (numPackedVals > 1)
+        return failure();
+      if (elemSizeInBits > 32)
+        return failure();
+      if (tileWidth > 32)
+        return failure(); // tileWidth is limited to 32 for transpose 2d load.
+
+      vBlocks = 1;
+
+      // use the d32 for transpose 2d load.
+      packedElemSizeInBits = 32;
+      numPackedVals = packedElemSizeInBits / elemSizeInBits;
+      if (numPackedVals > 1 && tileWidth != threadsPerWarp)
+        return failure(); // Couldn't use the transpose 2d load for un-packable
+                          // along tile height dim.
+      tileHeight = std::min(tileHeight / numPackedVals, 8);
+
+      if (tileHeight * tileWidth < threadsPerWarp)
+        return failure(); // The tile size is not large enough for IGC scalar
+                          // backend vectorization.
+      // transpose the width and height of the tile
+      std::swap(tileHeight, tileWidth);
+      // if (oneMatrixPerLoadForBT) {
+      //   // Only load 1 operand per inst on row.
+      //   numOperandsPer2DLoadM = 1;
+      //   tileHeight = elemsPerDPASInst[threadOrder[rank - 2]];
+      // } else {
+      //   // We can decompose the matrix returned by transposed large 2d load
+      //   // when threads per warp < column size. Otherwise we have to load one
+      //   // operand per inst.
+      //   // Note: the tileHeight and numOperandsPer2DLoadM are the column size
+      //   // now.
+      //   numOperandsPer2DLoadM =
+      //       (threadsPerWarp <= tileHeight) ? repCluster[rank - 1] : 1;
+      // }
+      // // The transpose 2d load only support 1 operand per inst on column.
+      // // (vBlocks = 1)
+      // numOperandsPer2DloadN = 1;
+      // // TODO: support load column major data.
+      // return failure();
+    }
+
     baseWidth = b.i32_val(
         std::max(64u, vBlocks * tileWidth * (packedElemSizeInBits / 8)));
     // If the stride is 0, we want to load only the first row.
-    int stride = getStride(ptr, 0);
+    int stride = getStride(ptr, memoryRowMajor ? 0 : 1);
     baseHeightInt = (stride == 0 ? 1 : tileHeight);
     baseHeight = b.i32_val(baseHeightInt);
     pitch = getPitch(rewriter, ptr, elemSizeInBits, memoryRowMajor ? 0 : 1);
@@ -2736,17 +2771,19 @@ struct LoadOpToBlockIOConversion
         }
       } break;
       case DpasEncodingAttr::OpIdx::OperandB: {
-        assert(numPackedVals == 1 &&
-               "invalid number of packed values for DPAS operand B.");
+        // assert(numPackedVals == 1 &&
+        //        "invalid number of packed values for DPAS operand B.");
         unsigned elemsPerLanePerDPASInst =
             product<unsigned>(dpasLayout.getDPASInstShapeB()) / threadsPerWarp;
         // Block 2D contain at least one DotOp B.
         if (numElemsPerLoad >= elemsPerLanePerDPASInst) {
           unsigned opsPerChannel = dpasLayout.getOpsPerChannel();
           unsigned sysDepth = dpasLayout.getSystolicDepth();
-          if (tileHeight >= (opsPerChannel * sysDepth) &&
-              ((opsPerChannel == 4 && elemSizeInBits == 8) ||
-               (opsPerChannel == 2 && elemSizeInBits == 16))) {
+          if ((opsPerChannel == 4 && elemSizeInBits == 8) ||
+              (opsPerChannel == 2 && elemSizeInBits == 16)) {
+            assert(!isTransposeRequired ||
+                   opsPerChannel == numPackedVals &&
+                       "invalid opsPerChannel for transposed DotOp B");
             // Use the VNNI packing format for DotOp B layout.
             numValuesPerLoad = numElemsPerLoad / opsPerChannel;
             packedType = i32_ty;
@@ -2813,8 +2850,8 @@ struct LoadOpToBlockIOConversion
           /*tile_width*/ tileWidth,
           /*tile_height*/ tileHeight,
           /*v_blocks*/ vBlocks,
-          /*transpose*/ false,
-          /*vnni_transform*/ useVNNIFormat);
+          /*transpose*/ isTransposeRequired,
+          /*vnni_transform*/ !isTransposeRequired && useVNNIFormat);
 
       // When strides[0] is 0, we only want to load the first row, so we
       // set the base height to be 1. If tile height is bigger than 1,
