@@ -240,6 +240,16 @@ void LayoutPropagation::initAnchorLayout() {
       }
     }
   });
+
+  LLVM_DEBUG({
+    DBGS() << "Anchors: \n";
+    for (auto [v, info] : layouts) {
+      DBGS().indent(2) << "Value:  " << v << "\n";
+      DBGS().indent(2) << "Encodings (" << info.encodings.size() << "):\n";
+      for (Attribute encoding : info.encodings)
+        DBGS().indent(4) << encoding << "\n";
+    }
+  });
 }
 
 void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
@@ -337,12 +347,10 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
         return isMMAorMMADerived;
       };
       if (llvm::all_of(info.encodings, checkMMAorMMADerived)) {
+        SmallVector<Value> valuesToChange{storeOp.getPtr(), storeOp.getValue()};
         if (storeOp.getMask())
-          setEncoding({storeOp.getPtr(), storeOp.getValue(), storeOp.getMask()},
-                      info, changed, user);
-        else
-          setEncoding({storeOp.getPtr(), storeOp.getValue()}, info, changed,
-                      user);
+          valuesToChange.emplace_back(storeOp.getMask());
+        setEncoding(valuesToChange, info, changed, user);
       }
       continue;
     }
@@ -481,8 +489,11 @@ void LayoutPropagation::rewriteRegion(Region &region) {
       }
     }
   }
-  for (Operation *op : llvm::reverse(opToDelete))
-    op->erase();
+
+  for (Operation *op : llvm::reverse(opToDelete)) {
+    if (op->getUsers().empty())
+      op->erase();
+  }
 }
 
 void LayoutPropagation::map(Value old, Value newV) {
