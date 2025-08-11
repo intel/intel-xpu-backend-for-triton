@@ -1,22 +1,20 @@
 #include "Dialect/TritonIntelGPU/IR/Dialect.h"
-#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
-#include "mlir/IR/Matchers.h"
-#include "mlir/IR/TypeUtilities.h"
-#include "triton/Tools/LayoutUtils.h"
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/TypeSwitch.h"
-
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
 #include "Utility.h"
-#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "intel/include/Utils/Utility.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/IR/Matchers.h"
+#include "mlir/IR/TypeUtilities.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/TypeSwitch.h"
 #include <optional>
-#include <triton/Tools/Sys/GetEnv.hpp>
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -26,11 +24,11 @@ using namespace mlir::triton::gpu::intel;
 #define S(v) StringAttr::get(ctx, (v))
 
 #if defined(_MSC_VER) && !defined(__clang__)
-// MSVC does not provide the GCC/Clang built-ins __builtin_clz and __builtin_ctz.
-// The following implementations use MSVC intrinsics to provide equivalent functionality.
-// This is only needed when compiling with MSVC (and not Clang), to ensure cross-platform compatibility.
-// See: https://gist.github.com/pps83/3210a2f980fd02bb2ba2e5a1fc4a2ef0
-#if defined(_MSC_VER) && !defined(__clang__)
+// MSVC does not provide the GCC/Clang built-ins __builtin_clz and
+// __builtin_ctz. The following implementations use MSVC intrinsics to provide
+// equivalent functionality. This is only needed when compiling with MSVC (and
+// not Clang), to ensure cross-platform compatibility. See:
+// https://gist.github.com/pps83/3210a2f980fd02bb2ba2e5a1fc4a2ef0
 #include <intrin.h>
 
 static int __builtin_clz(unsigned x) {
@@ -44,7 +42,6 @@ static int __builtin_ctz(unsigned x) {
   _BitScanForward(&r, x);
   return static_cast<int>(r);
 }
-
 #endif
 
 namespace {
@@ -381,9 +378,10 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
   // \param ptr The pointer value whose pitch is to be computed.
   // \param elemSizeInBits The size of each element in bits.
   // \param dim The dimension along which to compute the pitch (stride).
-  //            The default value is 0, which typically refers to the first (innermost) dimension.
-  //            Use the default when you want the pitch for the first dimension; specify another
-  //            value if you need the pitch for a different dimension.
+  //            The default value is 0, which typically refers to the first
+  //            (innermost) dimension. Use the default when you want the pitch
+  //            for the first dimension; specify another value if you need the
+  //            pitch for a different dimension.
   Value getPitch(ConversionPatternRewriter &rewriter, Value ptr,
                  unsigned elemSizeInBits, unsigned dim = 0) const {
     Location loc = ptr.getLoc();
