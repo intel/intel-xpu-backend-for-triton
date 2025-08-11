@@ -180,6 +180,21 @@ static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
       op.getTileWidth() == 8 && op.getVBlocks() == 4 && !op.getVnniTransform())
     return false;
 
+  // intel_sub_group_2d_block_read_transpose_32b_8r8x1c
+  if (op.getElemSizeInBits() == 32 && op.getTileHeight() == 8 &&
+      op.getTileWidth() == 8 && op.getVBlocks() == 1 && op.getTranspose())
+    return false;
+
+  // intel_sub_group_2d_block_read_transpose_32b_8r4x1c
+  if (op.getElemSizeInBits() == 32 && op.getTileHeight() == 8 &&
+      op.getTileWidth() == 4 && op.getVBlocks() == 1 && op.getTranspose())
+    return false;
+
+  // intel_sub_group_2d_block_read_transpose_32b_8r2x1c
+  if (op.getElemSizeInBits() == 32 && op.getTileHeight() == 8 &&
+      op.getTileWidth() == 2 && op.getVBlocks() == 1 && op.getTranspose())
+    return false;
+
   // FIXME: The SPV block load only support subgroup size 16.
   int subGroupSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(
       op->getParentOfType<mlir::ModuleOp>());
