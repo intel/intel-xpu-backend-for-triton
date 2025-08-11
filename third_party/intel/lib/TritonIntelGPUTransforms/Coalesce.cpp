@@ -14,6 +14,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
@@ -212,23 +213,26 @@ private:
         user->dumpPretty();
       });
 
-      if (auto forOp = dyn_cast<scf::ForOp>(user)) {
-        propagateLayoutToArgsAndBody(forOp, val, layout, rewriter);
-        continue;
-      }
-      if (auto whileOp = dyn_cast<scf::WhileOp>(user)) {
-        propagateLayoutToArgsAndBody(whileOp, val, layout, rewriter);
+      if (auto loopOp = dyn_cast<LoopLikeOpInterface>(user)) {
+        propagateLayoutToArgsAndBody(loopOp, val, layout, rewriter);
         continue;
       }
       if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
-        if (auto loopOp = yieldOp->getParentOfType<LoopLikeOpInterface>()) {
-          for (OpOperand &operand : llvm::make_filter_range(
-                   yieldOp->getOpOperands(),
-                   [&val](OpOperand &operand) { return operand.get() == val; }))
-            propagateLayoutToLoopResult(loopOp, operand.getOperandNumber(),
-                                        layout, rewriter);
-          continue;
-        }
+        Operation *parentOp = yieldOp->getParentOp();
+        for (OpOperand &operand : llvm::make_filter_range(
+                 yieldOp->getOpOperands(),
+                 [&val](OpOperand &operand) { return operand.get() == val; }))
+          TypeSwitch<Operation *>(parentOp)
+              .Case<LoopLikeOpInterface, scf::IfOp>([&](auto op) {
+                propagateLayoutToOperationResult(op, operand.getOperandNumber(),
+                                                 layout, rewriter);
+              })
+              .Default([](auto op) {
+                llvm::report_fatal_error(llvm::Twine(
+                    "Unsupported parent operation for scf.yield: '" +
+                    op->getName().getStringRef() + "'"));
+              });
+        continue;
       }
       if (auto condOp = dyn_cast<scf::ConditionOp>(user)) {
         if (auto whileOp = condOp->getParentOfType<scf::WhileOp>()) {
@@ -295,13 +299,16 @@ private:
     }
   }
 
-  // Modify the \p layout to the loop's operand identified by \p resNum, and
-  // propagate the modified loop results to its users.
-  void propagateLayoutToLoopResult(LoopLikeOpInterface loopOp, unsigned resNum,
-                                   Attribute layout,
-                                   IRRewriter &rewriter) const {
-    Value loopRes = loopOp->getResult(resNum);
-    rewriter.modifyOpInPlace(loopOp, [&]() {
+  // Modify the \p layout of the operation \p op result identified by \p resNum,
+  // and propagate the modified operation result to its users.
+  template <typename OpType,
+            typename = std::enable_if_t<
+                llvm::is_one_of<OpType, LoopLikeOpInterface, scf::IfOp>::value>>
+  void propagateLayoutToOperationResult(OpType op, unsigned resNum,
+                                        Attribute layout,
+                                        IRRewriter &rewriter) const {
+    Value loopRes = op->getResult(resNum);
+    rewriter.modifyOpInPlace(op, [&]() {
       assert(tt::isTensorPointerType(loopRes.getType()) &&
              "Expecting blocked pointers");
       Type resType = loopRes.getType();
