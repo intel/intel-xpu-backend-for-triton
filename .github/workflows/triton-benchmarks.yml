@@ -70,9 +70,9 @@ env:
   N_RUNS: ${{ inputs.n_runs || '1' }}
   IGC_DisableCodeScheduling: '0'
   IGC_CodeSchedulingOnlyRecompilation: '0'
-  IGC_VectorizerAllowWAVEALL: '1'
-  IGC_VectorizerAllowCMP: '1'
-  IGC_VectorizerAllowSelect: '1'
+  IGC_VectorizerAllowWAVEALL: '0'
+  IGC_VectorizerAllowCMP: '0'
+  IGC_VectorizerAllowSelect: '0'
   IGC_VectorizerAllowFPTRUNC: '1'
 
 jobs:
