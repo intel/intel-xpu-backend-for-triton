@@ -280,44 +280,55 @@ private:
   SmallVector<MemEffects> getMemEffects(Operation *op) {
     SmallVector<MemEffects> effects;
     if (auto copyOp = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
-      effects.emplace_back(
-          MemEffects{.buf = copyOp.getResult(),
-                     .rw = MemEffects::RW::Write,
-                     .barriersAndPreds = {{copyOp.getBarrier(), nullptr}},
-                     .pred = copyOp.getPred()});
+      MemEffects effect;
+      effect.buf = copyOp.getResult();
+      effect.rw = MemEffects::RW::Write;
+      effect.barriersAndPreds = {{copyOp.getBarrier(), nullptr}};
+      effect.pred = copyOp.getPred();
+      effects.emplace_back(effect);
     }
     if (auto copyOp = dyn_cast<ttg::AsyncCopyGlobalToLocalOp>(op)) {
-      effects.emplace_back(MemEffects{.buf = copyOp.getResult(),
-                                      .rw = MemEffects::RW::Write,
-                                      .commitTracking = true});
+      MemEffects effect;
+      effect.buf = copyOp.getResult();
+      effect.rw = MemEffects::RW::Write;
+      effect.commitTracking = true;
+      effects.emplace_back(effect);
     }
     if (auto loadOp = dyn_cast<ttng::TMEMLoadOp>(op)) {
-      effects.emplace_back(
-          MemEffects{.buf = loadOp.getSrc(), .rw = MemEffects::RW::Read});
+      MemEffects effect;
+      effect.buf = loadOp.getSrc();
+      effect.rw = MemEffects::RW::Read;
+      effects.emplace_back(effect);
     }
     if (auto storeOp = dyn_cast<ttng::TMEMStoreOp>(op)) {
-      effects.emplace_back(
-          MemEffects{.buf = storeOp.getDst(), .rw = MemEffects::RW::Write});
+      MemEffects effect;
+      effect.buf = storeOp.getDst();
+      effect.rw = MemEffects::RW::Write;
+      effects.emplace_back(effect);
     }
     if (auto mmav5Op = dyn_cast<ttng::TCGen5MMAOp>(op)) {
       SmallVector<std::tuple<Value, Value>> barriersAndPreds = llvm::to_vector(
           llvm::zip(mmav5Op.getBarriers(), mmav5Op.getBarrierPreds()));
 
-      effects.emplace_back(MemEffects{.buf = mmav5Op.getA(),
-                                      .rw = MemEffects::RW::Read,
-                                      .barriersAndPreds = barriersAndPreds,
-                                      .pred = mmav5Op.getPred()});
+      MemEffects effect;
+      effect.buf = mmav5Op.getA();
+      effect.rw = MemEffects::RW::Read;
+      effect.barriersAndPreds = barriersAndPreds;
+      effect.pred = mmav5Op.getPred();
+      effects.emplace_back(effect);
 
-      effects.emplace_back(MemEffects{.buf = mmav5Op.getB(),
-                                      .rw = MemEffects::RW::Read,
-                                      .barriersAndPreds = barriersAndPreds,
-                                      .pred = mmav5Op.getPred()});
+      effect.buf = mmav5Op.getB();
+      effect.rw = MemEffects::RW::Read;
+      effect.barriersAndPreds = barriersAndPreds;
+      effect.pred = mmav5Op.getPred();
+      effects.emplace_back(effect);
 
-      effects.emplace_back(MemEffects{.buf = mmav5Op.getAccumulator(),
-                                      .rw = MemEffects::RW::Write,
-                                      .barriersAndPreds = barriersAndPreds,
-                                      .hwPipelined = true,
-                                      .pred = mmav5Op.getPred()});
+      effect.buf = mmav5Op.getAccumulator();
+      effect.rw = MemEffects::RW::Write;
+      effect.barriersAndPreds = barriersAndPreds;
+      effect.hwPipelined = true;
+      effect.pred = mmav5Op.getPred();
+      effects.emplace_back(effect);
     }
     return effects;
   }
