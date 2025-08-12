@@ -3,12 +3,8 @@
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
-using ::mlir::transferWithinBlockPadding;
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
-using ::mlir::triton::gpu::AMDWmmaEncodingAttr;
 using ::mlir::triton::gpu::ConvertLayoutOp;
-using ::mlir::triton::gpu::DotOperandEncodingAttr;
-using ::mlir::triton::gpu::MemDescType;
 using ::triton::gpu::LinearEncodingAttr;
 
 namespace {
@@ -119,14 +115,14 @@ private:
   const TargetInfoBase &targetInfo;
 };
 
-struct ConvertLayoutForcedPadding
+class ConvertLayoutForcedPadding
     : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
-
-  explicit ConvertLayoutForcedPadding(LLVMTypeConverter &typeConverter,
-                                      const TargetInfoBase &targetInfo,
-                                      PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<ConvertLayoutOp>(typeConverter, benefit),
-        targetInfo(targetInfo) {}
+public:
+  ConvertLayoutForcedPadding(LLVMTypeConverter &typeConverter,
+                             const TargetInfoBase &targetInfo,
+                             PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
+  }
 
   LogicalResult
   matchAndRewrite(ConvertLayoutOp op, OpAdaptor adaptor,
@@ -144,10 +140,9 @@ struct ConvertLayoutForcedPadding
     return success();
   }
 
-protected:
+private:
   const TargetInfoBase &targetInfo;
 };
-
 } // namespace
 
 void mlir::triton::AMD::populateConvertLayoutOpToLLVMPatterns(
@@ -156,4 +151,6 @@ void mlir::triton::AMD::populateConvertLayoutOpToLLVMPatterns(
   patterns.add<ConvertLayoutOpMFMAToLinearConversion>(typeConverter, targetInfo,
                                                       benefit);
   patterns.add<ConvertLayoutForcedPadding>(typeConverter, targetInfo, benefit);
+  // No need to convert when ForcedSwizzling as it's already the default
+  // lowering
 }
