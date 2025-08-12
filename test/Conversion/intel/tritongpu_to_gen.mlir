@@ -615,16 +615,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #shared0 = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  // CHECK-LABEL: basic_subview
-  tt.func @basic_subview() {
-    // CHECK: llvm.extractvalue
-    // CHECK-NEXT: llvm.extractvalue
-    // CHECK-NEXT: llvm.extractvalue
-    // CHECK-NEXT: llvm.extractvalue
-    // CHECK-NEXT: llvm.mlir.constant(1 : i32) : i32
-    // CHECK-NEXT: llvm.mlir.constant(32 : i32) : i32
-    // CHECK-NEXT: llvm.mlir.constant(512 : i32) : i32
+  // CHECK-LABEL: rank_reducing_subview
+  tt.func @rank_reducing_subview() {
+    // CHECK: llvm.mlir.addressof @global_smem
+    // CHECK: llvm.mlir.constant(512 : i32) : i32
     // CHECK-NEXT: llvm.mul
+    // CHECK-NEXT: llvm.extractvalue
+    // CHECK-NEXT: llvm.extractvalue
+    // CHECK-NEXT: llvm.extractvalue
+    // CHECK-NEXT: llvm.extractvalue
     // CHECK-NEXT: llvm.getelementptr
     %index = arith.constant 1 : i32
     %0 = ttg.local_alloc : () -> !ttg.memdesc<128x16x32xf32, #shared0, #smem, mutable>
