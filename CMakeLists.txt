@@ -9,6 +9,8 @@ endif()
 include(ExternalProject)
 
 set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF) 
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
@@ -20,8 +22,6 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 # Options
 if(WIN32)
   set(DEFAULT_BUILD_PROTON OFF)
-elseif(UNIX AND NOT APPLE)
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-c++20-extensions")
 else()
   set(DEFAULT_BUILD_PROTON ON)
 endif()
