@@ -120,4 +120,6 @@ void mlir::triton::AMD::populateConvertLayoutOpToLLVMPatterns(
     RewritePatternSet &patterns, PatternBenefit benefit) {
   patterns.add<ConvertLayoutOpMFMAToLinearConversion>(typeConverter, targetInfo,
                                                       benefit);
+  // No need to convert when ForcedSwizzling as it's already the default
+  // lowering
 }
