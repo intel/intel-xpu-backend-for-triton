@@ -1,9 +1,14 @@
+#include "Analysis/AMDGPUAllocation.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
+using ::mlir::transferWithinBlockPadding;
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
+using ::mlir::triton::gpu::AMDWmmaEncodingAttr;
 using ::mlir::triton::gpu::ConvertLayoutOp;
+using ::mlir::triton::gpu::DotOperandEncodingAttr;
+using ::mlir::triton::gpu::MemDescType;
 using ::triton::gpu::LinearEncodingAttr;
 
 namespace {
@@ -113,6 +118,36 @@ public:
 private:
   const TargetInfoBase &targetInfo;
 };
+
+struct ConvertLayoutForcedPadding
+    : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
+
+  explicit ConvertLayoutForcedPadding(LLVMTypeConverter &typeConverter,
+                                      const TargetInfoBase &targetInfo,
+                                      PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<ConvertLayoutOp>(typeConverter, benefit),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(ConvertLayoutOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (!op->hasAttr(mlir::triton::AMD::AttrSharedMemPadded))
+      return failure();
+    auto srcType = op.getSrc().getType();
+    auto dstType = op.getType();
+    if (!cvtNeedsSharedMemory(srcType, dstType))
+      return failure();
+
+    auto result = transferWithinBlockPadding(op, adaptor.getSrc(), targetInfo,
+                                             getTypeConverter(), rewriter);
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+
+protected:
+  const TargetInfoBase &targetInfo;
+};
+
 } // namespace
 
 void mlir::triton::AMD::populateConvertLayoutOpToLLVMPatterns(
@@ -120,4 +155,5 @@ void mlir::triton::AMD::populateConvertLayoutOpToLLVMPatterns(
     RewritePatternSet &patterns, PatternBenefit benefit) {
   patterns.add<ConvertLayoutOpMFMAToLinearConversion>(typeConverter, targetInfo,
                                                       benefit);
+  patterns.add<ConvertLayoutForcedPadding>(typeConverter, targetInfo, benefit);
 }
