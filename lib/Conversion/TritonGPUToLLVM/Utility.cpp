@@ -76,44 +76,6 @@ LinearLayout getRegToSharedLayout(MLIRContext *ctx, ArrayRef<int64_t> shape,
 namespace mlir {
 
 namespace triton::gpu {
-
-std::pair<SmallVector<LocalMemOpTile>, SmallVector<LocalMemOpTile>>
-getSrcDstTiles(const TargetInfoBase &targetInfo, int bitwidth) {
-  assert(bitwidth <= 128 && "bitwidth must be <= 128");
-  assert(llvm::isPowerOf2_32(bitwidth) && "bitwidth must be a power of two");
-  SmallVector<LocalMemOpTile> src;
-  SmallVector<LocalMemOpTile> dst;
-
-  // ld.shared/st.shared
-  auto ldstshared = LocalMemOpTile{{}, {0, 1, 2}};
-  src.push_back(ldstshared);
-  dst.push_back(ldstshared);
-
-  if (targetInfo.supportLdMatrix() || targetInfo.supportStMatrix()) {
-    // ldmatrix/stmatrix
-    if (bitwidth <= 32) {
-      auto ldstmatrix = LocalMemOpTile{{0, 1}, {2, 3, 4}};
-      if (targetInfo.supportStMatrix()) {
-        src.push_back(ldstmatrix);
-      }
-      if (targetInfo.supportLdMatrix()) {
-        dst.push_back(ldstmatrix);
-      }
-    }
-    // ldmatrix.trans/stmatrix.trans
-    if (bitwidth == 16) {
-      auto ldstmatrixtrans = LocalMemOpTile{{2, 3, 4}, {0, 1}};
-      if (targetInfo.supportStMatrix()) {
-        src.push_back(ldstmatrixtrans);
-      }
-      if (targetInfo.supportLdMatrix()) {
-        dst.push_back(ldstmatrixtrans);
-      }
-    }
-  }
-  return {std::move(src), std::move(dst)};
-}
-
 Type getFunctionType(Type resultType, ValueRange operands) {
   SmallVector<Type> operandTypes(operands.getTypes());
   return LLVM::LLVMFunctionType::get(resultType, operandTypes);
@@ -600,12 +562,8 @@ SmallVector<Value> lowerLdSt(
   assert(quot.has_value() && "cvt must be divisible by tile");
   LinearLayout reps = zerosLike(tile) * *quot;
 
-  LinearLayout addrLayout =
-      LinearLayout({{kLane, reps.getBases().lookup(kLane)},
-                    {kWarp, reps.getBases().lookup(kWarp)}},
-                   reps.getOutDims(), false);
   auto [nAdditive, permStrides] =
-      actionAdditiveStrides(reps, addrLayout, maskSpanAffineOffset);
+      actionAdditiveStrides(reps, maskSpanAffineOffset);
   reps = permStrides.apply(reps);
   if (isStore) {
     vals = permStrides.apply(vals);
@@ -617,17 +575,15 @@ SmallVector<Value> lowerLdSt(
   // shl, which often it's not able to do.
   auto i8Tile =
       zerosLike(LinearLayout::identity1D(bitwidth / 8, kReg, kOffset));
-  auto i8AddrLayout = i8Tile * addrLayout;
+  auto i8Reps = i8Tile * reps;
 
   auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
   auto regBaseI8 =
       applyLinearLayout(
-          loc, rewriter, i8AddrLayout,
+          loc, rewriter, i8Reps,
           {{kReg, b.i32_val(0)}, {kLane, laneId}, {kWarp, warpId}})[0]
           .second;
-
-  // It's fine that we don't compute the offset in bytes as affineOffset
-  // will be folded into a constant
+  // TODO compute the offset already in i8
   auto affineOffsetI8 = b.mul(affineOffset, b.i32_val(bitwidth / 8));
   regBaseI8 = b.xor_(regBaseI8, affineOffsetI8);
   SmallVector<Value> outVals;
@@ -928,6 +884,24 @@ std::optional<LLVM::AtomicOrdering> getMemoryOrdering(MemSemantic memOrdering) {
   default:
     return {};
   }
+}
+
+bool isSimpleSharedMemoryAccess(ArrayRef<int64_t> shape,
+                                ArrayRef<int64_t> allocShape,
+                                triton::gpu::SharedEncodingTrait sharedEnc) {
+  auto rank = shape.size();
+  auto paddedLayout =
+      dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedEnc);
+  auto swizzledLayout =
+      dyn_cast<triton::gpu::SwizzledSharedEncodingAttr>(sharedEnc);
+  auto nvmmaLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(sharedEnc);
+  bool noSwizzling = paddedLayout ||
+                     (swizzledLayout && swizzledLayout.getMaxPhase() == 1) ||
+                     (nvmmaLayout && nvmmaLayout.getSwizzlingByteWidth() == 0);
+  return /*no swizzling*/ noSwizzling ||
+         /*swizzling but same shape*/ shape == allocShape ||
+         /*swizzling and rank-reduced and rank >= 2*/
+         (shape == allocShape.take_back(rank) && rank >= 2);
 }
 
 llvm::MapVector<StringAttr, int32_t> getAllFreeVarMasks(MLIRContext *ctx) {
@@ -1641,7 +1615,14 @@ SmallVector<Value> transferWithinBlockImpl(ArrayRef<Value> inVals,
   // don't need to avoid duplicate writes.
   // Input dims: [reg, lane, warp]
   // Output dims: [offset, iteration]
-  LinearLayout shmemStoreLayout = srcLayout.invertAndCompose(sharedLayout);
+  bool isStMatrix = targetInfo.canUseStMatrix(
+      op.getSrc().getType(), scratchConfig.repShape,
+      scratchConfig.paddedRepShape, scratchConfig.order,
+      /*swizzleByteSize=*/0);
+  LinearLayout shmemStoreLayout =
+      isStMatrix ? triton::gpu::chooseStMatrixLayout(ctx, op.getSrc().getType(),
+                                                     /*swizzleByteSize=*/0)
+                 : srcLayout.invertAndCompose(sharedLayout);
 
   const int shmemAllocatedNumElems =
       getNumScratchElements(scratchConfig.paddedRepShape);
@@ -1739,7 +1720,8 @@ SmallVector<Value> transferWithinBlockImpl(ArrayRef<Value> inVals,
 
     // When using `stmatrix`, we can store `inVec` elements even if they are
     // not contiguous
-    auto inVec = scratchConfig.inVec;
+    auto inVec = isStMatrix ? shmemStoreLayout.getNumConsecutiveInOut()
+                            : scratchConfig.inVec;
     for (int j = 0; j < inVals.size() / iterations; j += inVec) {
       auto inRegSlice = inRegs[j];
       Value vecAddr = getVecAddr(shmemStoreLayout, storeBase, inRegSlice);
@@ -1747,8 +1729,12 @@ SmallVector<Value> transferWithinBlockImpl(ArrayRef<Value> inVals,
       for (int k = 0; k < inVec; k++)
         inValsVec.push_back(inVals[inRegSlice + k]);
       Value valsVec = packLLVector(loc, inValsVec, rewriter);
-      targetInfo.storeDShared(rewriter, loc, vecAddr, std::nullopt, valsVec,
-                              /*pred=*/b.true_val());
+      if (isStMatrix) {
+        targetInfo.storeMatrixShared(rewriter, loc, vecAddr, valsVec);
+      } else {
+        targetInfo.storeDShared(rewriter, loc, vecAddr, std::nullopt, valsVec,
+                                /*pred=*/b.true_val());
+      }
     }
 
     b.barrier();
@@ -1846,124 +1832,6 @@ Value transferWithinBlockPadding(triton::gpu::ConvertLayoutOp op, Value src,
   Value result =
       packLLElements(loc, typeConverter, outVals, rewriter, op.getType());
   return result;
-}
-SmallVector<Value> transferWithinBlockSwizzlingImpl(
-    Location loc, RewriterBase &rewriter, const LinearLayout &srcLayout,
-    const LinearLayout &dstLayout, const TargetInfoBase &targetInfo,
-    ArrayRef<Value> inVals, Type llvmElemTy, Value smemBase) {
-  auto *ctx = rewriter.getContext();
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  // We handle transformations recursively as they all need a preprocessing
-  // and a postprocessing step.
-
-  // Handle pointer types as 64-bit integers
-  if (isa<LLVM::LLVMPointerType>(llvmElemTy)) {
-    auto llvmElemTyPtr = i64_ty;
-    auto newInVals = llvm::to_vector(llvm::map_range(inVals, [&](Value v) {
-      return b.ptrtoint(llvmElemTyPtr, v).getResult();
-    }));
-    auto outVals = transferWithinBlockSwizzlingImpl(
-        loc, rewriter, srcLayout, dstLayout, targetInfo, newInVals,
-        llvmElemTyPtr, smemBase);
-    for (auto &v : outVals) {
-      v = b.inttoptr(llvmElemTy, v);
-    }
-    return outVals;
-  }
-
-  // Handle sub-byte elements like i1
-  if (llvmElemTy.getIntOrFloatBitWidth() < 8) {
-    // Upcast to i8
-    auto i8ElemTy = i8_ty;
-    auto newInVals = llvm::to_vector(llvm::map_range(
-        inVals, [&](Value v) { return b.zext(i8ElemTy, v).getResult(); }));
-    auto outVals = transferWithinBlockSwizzlingImpl(
-        loc, rewriter, srcLayout, dstLayout, targetInfo, newInVals, i8ElemTy,
-        smemBase);
-    for (auto &v : outVals) {
-      v = b.trunc(llvmElemTy, v);
-    }
-    return outVals;
-  }
-
-  // Remove broadcasting in src
-  auto removeBroadcastSrc = actionRemoveBroadcastedRegs(srcLayout);
-  if (!removeBroadcastSrc.isIdentity()) {
-    auto prmtSrc = removeBroadcastSrc.apply(srcLayout);
-    auto newInVals = removeBroadcastSrc.apply(inVals);
-    return transferWithinBlockSwizzlingImpl(loc, rewriter, prmtSrc, dstLayout,
-                                            targetInfo, newInVals, llvmElemTy,
-                                            smemBase);
-  }
-
-  // Remove broadcasting in dst
-  auto removeBroadcastDst = actionRemoveBroadcastedRegs(dstLayout);
-  if (!removeBroadcastDst.isIdentity()) {
-    auto prmtDst = removeBroadcastDst.apply(dstLayout);
-    auto outVals = transferWithinBlockSwizzlingImpl(loc, rewriter, srcLayout,
-                                                    prmtDst, targetInfo, inVals,
-                                                    llvmElemTy, smemBase);
-    return broadcastAs(outVals, dstLayout);
-  }
-
-  // At this point we have a type that's at least 8-bit
-  // and we don't have broadcasting in the registers
-  auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
-  auto smem = triton::gpu::optimalSwizzlingLdSt(srcLayout, dstLayout, bitwidth);
-
-  // Extract reps from smem
-  auto kReg = str_attr("register");
-  auto kReps = str_attr("reps");
-  auto nReps = smem.getInDimSize(kReps);
-  auto reps = LinearLayout::identity1D(nReps, kReg, kReps);
-
-  auto totalStoreCvt = srcLayout.invertAndCompose(smem);
-  auto totalLoadCvt = dstLayout.invertAndCompose(smem);
-
-  // The permutation exists by construction of the reps dimension in
-  // optimalSwizzling
-  auto permStore =
-      regPermForDivide(totalStoreCvt, reps, /*left=*/false).value();
-  totalStoreCvt = permStore.apply(totalStoreCvt);
-  auto permutedInVals = permStore.apply(inVals);
-  auto permLoad = regPermForDivide(totalLoadCvt, reps, /*left=*/false).value();
-  totalLoadCvt = permLoad.apply(totalLoadCvt);
-
-  // Remove the reps and flatten into offset
-  auto storeCvt = *divideRight(totalStoreCvt, reps);
-  auto loadCvt = *divideRight(totalLoadCvt, reps);
-  auto kOffset = str_attr("offset");
-  storeCvt = storeCvt.reshapeOuts({{kOffset, storeCvt.getTotalOutDimSize()}});
-  loadCvt = loadCvt.reshapeOuts({{kOffset, loadCvt.getTotalOutDimSize()}});
-
-  auto tileSize = storeCvt.getInDimSize(kReg);
-
-  assert(permutedInVals.size() == tileSize * nReps);
-  SmallVector<Value> outVals;
-  auto noPaddingOffset = [](Value v) { return v; };
-  auto affineOffset = b.i32_val(0);
-  auto maskSpanAffineOffset = 0;
-  for (int i = 0; i < nReps; ++i) {
-    if (i > 0)
-      b.barrier();
-
-    auto tileInVals =
-        ArrayRef<Value>(permutedInVals).slice(i * tileSize, tileSize);
-    // Store
-    lowerLdStShared(loc, ctx, storeCvt, tileInVals, llvmElemTy, smemBase,
-                    noPaddingOffset, affineOffset, maskSpanAffineOffset,
-                    rewriter, targetInfo);
-    b.barrier();
-    // Load
-    SmallVector<Value> tileOutVals = lowerLdStShared(
-        loc, ctx, loadCvt, {}, llvmElemTy, smemBase, noPaddingOffset,
-        affineOffset, maskSpanAffineOffset, rewriter, targetInfo);
-    llvm::append_range(outVals, tileOutVals);
-  }
-
-  // Undo the permLoad used to divideRight
-  outVals = permLoad.inverse().apply(outVals);
-  return outVals;
 }
 
 SmallVector<Value> inlineRegionImpl(RewriterBase &rewriter, Region &region,

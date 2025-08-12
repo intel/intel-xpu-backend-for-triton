@@ -184,8 +184,6 @@ public:
     if (computeCapability < 90)
       return;
     ModuleOp mod = getOperation();
-    // This pass does not depend on the amount of shared memory allocated
-    // so we can use the default allocation analysis scratch size function
     ModuleAllocation allocation(mod);
     ModuleMembarOrFenceAnalysis<ProxyFenceAnalysis> analysis(&allocation,
                                                              filterFn);

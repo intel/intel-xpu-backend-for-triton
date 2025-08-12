@@ -22,8 +22,6 @@ std::unique_ptr<OperationPass<ModuleOp>>
 createConvertTritonGPUToLLVMPass(int32_t computeCapability);
 std::unique_ptr<OperationPass<ModuleOp>>
 createConvertTritonGPUToLLVMPass(int32_t computeCapability, int32_t ptxVersion);
-std::unique_ptr<OperationPass<ModuleOp>>
-createAllocateSharedMemoryNvPass(int32_t computeCapability, int32_t ptxVersion);
 
 #define GEN_PASS_REGISTRATION
 #include "nvidia/include/TritonNVIDIAGPUToLLVM/Passes.h.inc"

@@ -121,8 +121,3 @@ bool tt::isHostSideDescriptor(Value v) {
     return false;
   return tt::isKernel(funcOp);
 }
-
-unsigned tt::getBitwidth(RankedTensorType ty) {
-  auto isPtr = isa<PointerType>(ty.getElementType());
-  return isPtr ? kPtrBitWidth : std::max(ty.getElementTypeBitWidth(), 8u);
-}

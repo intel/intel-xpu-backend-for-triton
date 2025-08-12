@@ -7,9 +7,6 @@
 
 namespace mlir {
 
-// Bitwidth of pointers
-constexpr int kPtrBitWidth = 64;
-
 template <typename T, typename U> SmallVector<T> convertType(ArrayRef<U> in) {
   SmallVector<T> out;
   for (const auto &i : in)
@@ -189,7 +186,6 @@ bool isHostSideDescriptor(Value v);
 
 bool isKernel(FunctionOpInterface funcOp);
 
-unsigned getBitwidth(RankedTensorType ty);
 } // namespace triton
 } // namespace mlir
 
