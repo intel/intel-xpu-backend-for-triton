@@ -76,6 +76,8 @@ public:
                              StringRef name, StringRef value,
                              unsigned addressSpace) const;
 
+  bool isXpu() const override { return true; }
+
 protected:
   virtual bool isSupportedWarpReduceOp(Operation *op, unsigned numLanesToReduce,
                                        unsigned warpSize) const = 0;

@@ -279,8 +279,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     assert(cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
 
     // Try to use swizzling to implement the conversion
-    if (succeeded(
-            transferWithinBlockSwizzling(op, adaptor.getSrc(), rewriter))) {
+    // HACK Remove once XPU tests pass for the swizzling path
+    if (!targetInfo.isXpu() && succeeded(transferWithinBlockSwizzling(
+                                   op, adaptor.getSrc(), rewriter))) {
       return success();
     }
 
