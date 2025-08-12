@@ -1225,7 +1225,7 @@ struct AsyncCopyGlobalToLocalOpConversion
         emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
 
     auto emitCpAsync = [&b, threadPred, ptrTy, hasMask = bool(llMask)](
-                           ConversionPatternRewriter &rewriter, Location loc,
+                           RewriterBase &rewriter, Location loc,
                            ArrayRef<Value> vals, Value shmemAddr, int startIdx,
                            VectorType vecTy) -> SmallVector<Value> {
       assert(isa<VectorType>(vecTy));
