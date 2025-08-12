@@ -8,7 +8,7 @@ endif()
 
 include(ExternalProject)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 17)
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
@@ -20,6 +20,8 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 # Options
 if(WIN32)
   set(DEFAULT_BUILD_PROTON OFF)
+elseif(UNIX AND NOT APPLE)
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pedantic")
 else()
   set(DEFAULT_BUILD_PROTON ON)
 endif()
