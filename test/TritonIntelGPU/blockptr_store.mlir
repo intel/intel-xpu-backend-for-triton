@@ -286,10 +286,14 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
 
     // COM: replica [0, 0]
     // CHECK:          llvm.call spir_funccc @_Z12get_local_idj
-    // CHECK-COUNT-4:   llvm.mlir.constant(0 : i32) : i32
-    // CHECK:           %[[VAL_186:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:           %[[OFFSET_X:.*]] = llvm.add %[[OFF_1]], %[[VAL_186]] : i32
-    // CHECK:           %[[OFFSET_Y:.*]] = llvm.add %[[OFF_0]], %[[VAL_186]] : i32
+    // CHECK-COUNT-5:   %[[VAL_185:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK-COUNT-2:   %[[VAL_186:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_188:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_189:.*]] = llvm.xor %[[VAL_185]], %[[VAL_188]] : i32
+    // CHECK:           %[[VAL_190:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_191:.*]] = llvm.xor %[[VAL_185]], %[[VAL_190]] : i32
+    // CHECK:           %[[OFFSET_X:.*]] = llvm.add %[[OFF_1]], %[[VAL_191]] : i32
+    // CHECK:           %[[OFFSET_Y:.*]] = llvm.add %[[OFF_0]], %[[VAL_189]] : i32
     // CHECK:           llvm.mlir.undef : vector<8xf16>
     // CHECK-COUNT-8:   llvm.insertelement %{{[0-9]+}}, %{{[0-9]+}}{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %[[WIDTH_IN_BYTES]], %[[HEIGHT]], %[[ROW_STRIDE_IN_BYTES]], %[[OFFSET_X]], %[[OFFSET_Y]], {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32, vector<8xi16>)
@@ -299,8 +303,14 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK-COUNT-2:   llvm.mlir.constant(0 : i32) : i32
     // CHECK:           %[[VAL_210:.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK:           %[[VAL_211:.*]] = llvm.mlir.constant(16 : i32) : i32
-    // CHECK:           %[[OFFSET_X:.*]] = llvm.add %[[OFF_1]], %[[VAL_211]] : i32
-    // CHECK:           %[[OFFSET_Y:.*]] = llvm.add %[[OFF_0]], %[[VAL_210]] : i32
+    // CHECK:           %[[VAL_212:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_213:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_215:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_216:.*]] = llvm.xor %[[VAL_210]], %[[VAL_215]] : i32
+    // CHECK:           %[[VAL_217:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_218:.*]] = llvm.xor %[[VAL_211]], %[[VAL_217]] : i32
+    // CHECK:           %[[OFFSET_X:.*]] = llvm.add %[[OFF_1]], %[[VAL_218]] : i32
+    // CHECK:           %[[OFFSET_Y:.*]] = llvm.add %[[OFF_0]], %[[VAL_216]] : i32
     // CHECK:           llvm.mlir.undef : vector<8xf16>
     // CHECK-COUNT-8:   llvm.insertelement %{{[0-9]+}}, %{{[0-9]+}}{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %[[WIDTH_IN_BYTES]], %[[HEIGHT]], %[[ROW_STRIDE_IN_BYTES]], %[[OFFSET_X]], %[[OFFSET_Y]], {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32, vector<8xi16>)
@@ -310,8 +320,14 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK-COUNT-2:   llvm.mlir.constant(0 : i32) : i32
     // CHECK:           %[[VAL_235:.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK:           %[[VAL_236:.*]] = llvm.mlir.constant(8 : i32) : i32
-    // CHECK:           %[[OFFSET_X:.*]] = llvm.add %[[OFF_1]], %[[VAL_235]] : i32
-    // CHECK:           %[[OFFSET_Y:.*]] = llvm.add %[[OFF_0]], %[[VAL_236]] : i32
+    // CHECK:           %[[VAL_237:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_238:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_239:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_240:.*]] = llvm.xor %[[VAL_236]], %[[VAL_239]] : i32
+    // CHECK:           %[[VAL_241:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_242:.*]] = llvm.xor %[[VAL_235]], %[[VAL_241]] : i32
+    // CHECK:           %[[OFFSET_X:.*]] = llvm.add %[[OFF_1]], %[[VAL_242]] : i32
+    // CHECK:           %[[OFFSET_Y:.*]] = llvm.add %[[OFF_0]], %[[VAL_240]] : i32
     // CHECK:           llvm.mlir.undef : vector<8xf16>
     // CHECK-COUNT-8:   llvm.insertelement %{{[0-9]+}}, %{{[0-9]+}}{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %[[WIDTH_IN_BYTES]], %[[HEIGHT]], %[[ROW_STRIDE_IN_BYTES]], %[[OFFSET_X]], %[[OFFSET_Y]], {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32, vector<8xi16>)
@@ -321,8 +337,14 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK-COUNT-3:   llvm.mlir.constant(0 : i32) : i32
     // CHECK:           %[[VAL_261:.*]] = llvm.mlir.constant(8 : i32) : i32
     // CHECK:           %[[VAL_262:.*]] = llvm.mlir.constant(16 : i32) : i32
-    // CHECK:           %[[OFFSET_X:.*]] = llvm.add %[[OFF_1]], %[[VAL_262]] : i32
-    // CHECK:           %[[OFFSET_Y:.*]] = llvm.add %[[OFF_0]], %[[VAL_261]] : i32
+    // CHECK:           %[[VAL_263:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_264:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_265:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_266:.*]] = llvm.xor %[[VAL_261]], %[[VAL_265]] : i32
+    // CHECK:           %[[VAL_267:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_268:.*]] = llvm.xor %[[VAL_262]], %[[VAL_267]] : i32
+    // CHECK:           %[[OFFSET_X:.*]] = llvm.add %[[OFF_1]], %[[VAL_268]] : i32
+    // CHECK:           %[[OFFSET_Y:.*]] = llvm.add %[[OFF_0]], %[[VAL_266]] : i32
     // CHECK:           llvm.mlir.undef : vector<8xf16>
     // CHECK-COUNT-8:   llvm.insertelement %{{[0-9]+}}, %{{[0-9]+}}{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %[[WIDTH_IN_BYTES]], %[[HEIGHT]], %[[ROW_STRIDE_IN_BYTES]], %[[OFFSET_X]], %[[OFFSET_Y]], {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32, vector<8xi16>)
@@ -332,8 +354,14 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK-COUNT-2:   llvm.mlir.constant(0 : i32) : i32
     // CHECK:           %[[VAL_286:.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK:           %[[VAL_287:.*]] = llvm.mlir.constant(16 : i32) : i32
-    // CHECK:           %[[OFFSET_X:.*]] = llvm.add %[[OFF_1]], %[[VAL_286]] : i32
-    // CHECK:           %[[OFFSET_Y:.*]] = llvm.add %[[OFF_0]], %[[VAL_287]] : i32
+    // CHECK:           %[[VAL_288:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_289:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_290:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_291:.*]] = llvm.xor %[[VAL_287]], %[[VAL_290]] : i32
+    // CHECK:           %[[VAL_292:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_293:.*]] = llvm.xor %[[VAL_286]], %[[VAL_292]] : i32
+    // CHECK:           %[[OFFSET_X:.*]] = llvm.add %[[OFF_1]], %[[VAL_293]] : i32
+    // CHECK:           %[[OFFSET_Y:.*]] = llvm.add %[[OFF_0]], %[[VAL_291]] : i32
     // CHECK:           llvm.mlir.undef : vector<8xf16>
     // CHECK-COUNT-8:   llvm.insertelement %{{[0-9]+}}, %{{[0-9]+}}{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %[[WIDTH_IN_BYTES]], %[[HEIGHT]], %[[ROW_STRIDE_IN_BYTES]], %[[OFFSET_X]], %[[OFFSET_Y]], {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32, vector<8xi16>)
@@ -343,8 +371,14 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK-COUNT-3:   llvm.mlir.constant(0 : i32) : i32
     // CHECK:           %[[VAL_312:.*]] = llvm.mlir.constant(16 : i32) : i32
     // CHECK:           %[[VAL_313:.*]] = llvm.mlir.constant(16 : i32) : i32
-    // CHECK:           %[[OFFSET_X:.*]] = llvm.add %[[OFF_1]], %[[VAL_313]] : i32
-    // CHECK:           %[[OFFSET_Y:.*]] = llvm.add %[[OFF_0]], %[[VAL_312]] : i32
+    // CHECK:           %[[VAL_314:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_315:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_316:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_317:.*]] = llvm.xor %[[VAL_312]], %[[VAL_316]] : i32
+    // CHECK:           %[[VAL_318:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_319:.*]] = llvm.xor %[[VAL_313]], %[[VAL_318]] : i32
+    // CHECK:           %[[OFFSET_X:.*]] = llvm.add %[[OFF_1]], %[[VAL_319]] : i32
+    // CHECK:           %[[OFFSET_Y:.*]] = llvm.add %[[OFF_0]], %[[VAL_317]] : i32
     // CHECK:           llvm.mlir.undef : vector<8xf16>
     // CHECK-COUNT-8:   llvm.insertelement %{{[0-9]+}}, %{{[0-9]+}}{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %[[WIDTH_IN_BYTES]], %[[HEIGHT]], %[[ROW_STRIDE_IN_BYTES]], %[[OFFSET_X]], %[[OFFSET_Y]], {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32, vector<8xi16>)
@@ -354,8 +388,14 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK-COUNT-2:   llvm.mlir.constant(0 : i32) : i32
     // CHECK:           %[[VAL_337:.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK:           %[[VAL_338:.*]] = llvm.mlir.constant(24 : i32) : i32
-    // CHECK:           %[[OFFSET_X:.*]] = llvm.add %[[OFF_1]], %[[VAL_337]] : i32
-    // CHECK:           %[[OFFSET_Y:.*]] = llvm.add %[[OFF_0]], %[[VAL_338]] : i32
+    // CHECK:           %[[VAL_339:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_340:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_341:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_342:.*]] = llvm.xor %[[VAL_338]], %[[VAL_341]] : i32
+    // CHECK:           %[[VAL_343:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_344:.*]] = llvm.xor %[[VAL_337]], %[[VAL_343]] : i32
+    // CHECK:           %[[OFFSET_X:.*]] = llvm.add %[[OFF_1]], %[[VAL_344]] : i32
+    // CHECK:           %[[OFFSET_Y:.*]] = llvm.add %[[OFF_0]], %[[VAL_342]] : i32
     // CHECK:           llvm.mlir.undef : vector<8xf16>
     // CHECK-COUNT-8:   llvm.insertelement %{{[0-9]+}}, %{{[0-9]+}}{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %[[WIDTH_IN_BYTES]], %[[HEIGHT]], %[[ROW_STRIDE_IN_BYTES]], %[[OFFSET_X]], %[[OFFSET_Y]], {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32, vector<8xi16>)
@@ -365,8 +405,14 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK-COUNT-3:   llvm.mlir.constant(0 : i32) : i32
     // CHECK:           %[[VAL_363:.*]] = llvm.mlir.constant(24 : i32) : i32
     // CHECK:           %[[VAL_364:.*]] = llvm.mlir.constant(16 : i32) : i32
-    // CHECK:           %[[OFFSET_X:.*]] = llvm.add %[[OFF_1]], %[[VAL_364]] : i32
-    // CHECK:           %[[OFFSET_Y:.*]] = llvm.add %[[OFF_0]], %[[VAL_363]] : i32
+    // CHECK:           %[[VAL_365:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_366:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_367:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_368:.*]] = llvm.xor %[[VAL_363]], %[[VAL_367]] : i32
+    // CHECK:           %[[VAL_369:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_370:.*]] = llvm.xor %[[VAL_364]], %[[VAL_369]] : i32
+    // CHECK:           %[[OFFSET_X:.*]] = llvm.add %[[OFF_1]], %[[VAL_370]] : i32
+    // CHECK:           %[[OFFSET_Y:.*]] = llvm.add %[[OFF_0]], %[[VAL_368]] : i32
     // CHECK:           llvm.mlir.undef : vector<8xf16>
     // CHECK-COUNT-8:   llvm.insertelement %{{[0-9]+}}, %{{[0-9]+}}{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %[[WIDTH_IN_BYTES]], %[[HEIGHT]], %[[ROW_STRIDE_IN_BYTES]], %[[OFFSET_X]], %[[OFFSET_Y]], {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32, vector<8xi16>)
