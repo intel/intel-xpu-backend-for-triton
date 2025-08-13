@@ -63,8 +63,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     } else if (llvm::is_contained(dims, kWarp)) {
       // Case 2: Transfer between values in the same CTA, in which case we move
       //         values through shared memory.
-      transferWithinBlockSwizzling(op, adaptor.getSrc(), rewriter);
-      return success();
+      return transferWithinBlock(op, srcLayout, dstLayout, adaptor, rewriter);
     } else if (llvm::is_contained(dims, kLane)) {
       // Case 3. Transfer between values in the same warp, in which case we try
       //         to move values using warp shuffles, though if the pattern is
@@ -75,8 +74,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       // TODO: Since data is only transferred within a warp over shared memory,
       // we should use `bar.warp.sync` instead of `barrier`, which will improve
       // latency when warps issue barriers on different cycles.
-      transferWithinBlockSwizzling(op, adaptor.getSrc(), rewriter);
-      return success();
+      return transferWithinBlock(op, srcLayout, dstLayout, adaptor, rewriter);
     } else if (llvm::is_contained(dims, kRegister)) {
       // Case 4. Transfer between values in the same thread, in which case we
       //         simply reorder the elements of adaptor.getSrc().
@@ -108,6 +106,27 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     }
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
                                   op.getType());
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+
+  LogicalResult transferWithinBlock(ConvertLayoutOp op,
+                                    const LinearLayout &srcLayout,
+                                    const LinearLayout &dstLayout,
+                                    OpAdaptor adaptor,
+                                    ConversionPatternRewriter &rewriter) const {
+    assert(cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
+
+    // Try to use swizzling to implement the conversion
+    // HACK Remove once XPU tests pass for the swizzling path
+    if (!targetInfo.isXpu()) {
+      transferWithinBlockSwizzling(op, adaptor.getSrc(), rewriter);
+      return success();
+    }
+
+    Value result = transferWithinBlockPadding(op, adaptor.getSrc(), targetInfo,
+                                              getTypeConverter(), rewriter);
+
     rewriter.replaceOp(op, result);
     return success();
   }
