@@ -75,7 +75,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
 
 // -----
 
-// COM: Case 2: Similar to Case1 but the loads do not have the blockIO "row_major" attribute.
+// COM: Case 2: Similar to Case 1 but the loads do not have the blockIO "row_major" attribute.
 // COM: Checks that DPAS encoding has been forwarded from the dot op to the store op via the loop return values
 // COM: and that the ttg.convert_layout operation has been removed.
 // CHECK: #[[DPAS:.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
