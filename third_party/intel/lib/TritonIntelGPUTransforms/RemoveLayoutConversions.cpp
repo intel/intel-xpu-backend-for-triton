@@ -1093,16 +1093,16 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
           assert(it != layout.end());
 
           Type resType = res.getType();
-          Type newType;
           if (auto oldType = dyn_cast<RankedTensorType>(resType)) {
-            newType = oldType.cloneWithEncoding(it->second);
+            Type newType = oldType.cloneWithEncoding(it->second);
+            newTypes.push_back(newType);
           } else if (auto ptrType = dyn_cast<PointerType>(resType)) {
             auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
-            newType = triton::PointerType::get(
+            Type newType = triton::PointerType::get(
                 tensorType.cloneWithEncoding(it->second),
                 ptrType.getAddressSpace());
+            newTypes.push_back(newType);
           }
-          newTypes.push_back(newType);
         }
       }
       scf::IfOp newIfOp =
