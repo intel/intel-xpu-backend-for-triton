@@ -143,7 +143,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
 
 // -----
 
-// COM: Case 3: Similar to Case 1 but with with an additional store after the loop
+// COM: Case 3: Similar to Case 1 but with an additional store after the loop
 // COM: Checks that DPAS encoding has been forwarded from the dot op to the store op via the loop return values
 // COM: The `tt.make_tensor_ptr` has multiple users (the storeOp + another OP)
 // COM: The initial `tt.make_tensor_ptr` with non-DPAS encoding must be kept.
