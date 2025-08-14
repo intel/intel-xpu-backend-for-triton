@@ -136,12 +136,10 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
     cache_size = 256 * 1024 * 1024
     cache = torch.empty(int(cache_size // 4), dtype=torch.int, device=device)
 
-    # Warm-up
-    for _ in range(n_warmup):
-        fn()
     # Benchmark
+    n_total = n_warmup + n_repeat
     with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.XPU]) as prof:
-        for _ in range(n_repeat):
+        for _ in range(n_warmup + n_repeat):
             # we don't want `fn` to accumulate gradient values
             # if it contains a backward pass. So we clear the
             # provided gradients
@@ -175,14 +173,18 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
     # For details: https://github.com/pytorch/pytorch/issues/144778
     kernels = [kernel for kernel in kernels if kernel != []]
     relax_profiling_data_check = os.getenv("TRITON_RELAX_PROFILING_CHECK", "0") == "1"
-    if not (len(kernels) >= n_repeat - 1 if relax_profiling_data_check else len(kernels) == n_repeat):
+    if not (len(kernels) >= n_total - 1 if relax_profiling_data_check else len(kernels) == n_total):
         raise AssertionError(
-            f"the profiling number not match; {n_repeat=}, {kernels=}, "
+            f"the profiling number not match; {n_total=}, {kernels=}, "
             f"top functions by xpu_time:\n {prof.key_averages(group_by_stack_n=5).table(sort_by='xpu_time')}",
             "You may try to relax profiling check by setting env variable TRITON_RELAX_PROFILING_CHECK=1",
         )
     # Make the time to the milliseconds.
     times = torch.tensor([sum((k.duration for k in ks)) * 1e-3 for ks in kernels], dtype=torch.float)
+    print(times)
+    print("Warmup", times[:n_warmup])
+    print("Results", times[n_warmup:])
+    times = times[n_warmup:]
     return _summarize_statistics(times, quantiles, return_mode)
 
 
