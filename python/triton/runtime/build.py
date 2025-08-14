@@ -47,9 +47,9 @@ def _cc_cmd(cc, src, out, include_dirs, library_dirs, libraries):
 
 
 def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_dirs: list[str], libraries: list[str],
-           extra_compile_args: list[str] = []) -> str:
+           ccflags: list[str] = []) -> str:
     if impl := knobs.build.impl:
-        return impl(name, src, srcdir, library_dirs, include_dirs, libraries, extra_compile_args)
+        return impl(name, src, srcdir, library_dirs, include_dirs, libraries, ccflags)
     suffix = sysconfig.get_config_var('EXT_SUFFIX')
     so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))
     # try to avoid setuptools if possible
@@ -92,12 +92,12 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
         numpy_include_dir = np.get_include()
         include_dirs = include_dirs + [numpy_include_dir]
         if cxx is icpx:
-            extra_compile_args += ["-fsycl"]
+            ccflags += ["-fsycl"]
         else:
             if os.name != "nt":
-                extra_compile_args += ["--std=c++17"]
+                ccflags += ["--std=c++17"]
             if os.environ.get("TRITON_SUPPRESS_GCC_HOST_CODE_DEPRECATION_WARNINGS", "1") == "1":
-                extra_compile_args += ["-Wno-deprecated-declarations"]
+                ccflags += ["-Wno-deprecated-declarations"]
         if os.name == "nt":
             library_dirs = library_dirs + [
                 os.path.abspath(os.path.join(sysconfig.get_paths(scheme=scheme)["stdlib"], "..", "libs"))
@@ -107,7 +107,7 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
 
     # for -Wno-psabi, see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=111047
     cc_cmd = _cc_cmd(cc, src, so, include_dirs, library_dirs, libraries)
-    cc_cmd += extra_compile_args
+    cc_cmd += ccflags
 
     if os.getenv("VERBOSE"):
         print(" ".join(cc_cmd))
@@ -132,7 +132,8 @@ def _load_module_from_path(name: str, path: str) -> ModuleType:
 
 
 def compile_module_from_src(src: str, name: str, library_dirs: list[str] | None = None,
-                            include_dirs: list[str] | None = None, libraries: list[str] | None = None) -> ModuleType:
+                            include_dirs: list[str] | None = None, libraries: list[str] | None = None,
+                            ccflags: list[str] | None = None) -> ModuleType:
     key = hashlib.sha256((src + platform_key()).encode("utf-8")).hexdigest()
     cache = get_cache_manager(key)
     suffix = sysconfig.get_config_var("EXT_SUFFIX")
@@ -149,7 +150,7 @@ def compile_module_from_src(src: str, name: str, library_dirs: list[str] | None 
         src_path = os.path.join(tmpdir, name + ".c")
         with open(src_path, "w") as f:
             f.write(src)
-        so = _build(name, src_path, tmpdir, library_dirs or [], include_dirs or [], libraries or [])
+        so = _build(name, src_path, tmpdir, library_dirs or [], include_dirs or [], libraries or [], ccflags or [])
         with open(so, "rb") as f:
             cache_path = cache.put(f.read(), f"{name}{suffix}", binary=True)
 
