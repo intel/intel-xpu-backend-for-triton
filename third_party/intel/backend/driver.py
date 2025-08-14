@@ -274,7 +274,7 @@ def compile_module_from_src(src: str, name: str):
                     extra_compiler_args += ["-Wl,-rpath," + dir for dir in COMPILATION_HELPER.libsycl_dir]
 
             so = _build(name, src_path, tmpdir, COMPILATION_HELPER.library_dir, COMPILATION_HELPER.include_dir,
-                        COMPILATION_HELPER.libraries, extra_compile_args=extra_compiler_args)
+                        COMPILATION_HELPER.libraries, ccflags=extra_compiler_args)
             with open(so, "rb") as f:
                 cache_path = cache.put(f.read(), f"{name}{suffix}", binary=True)
 
