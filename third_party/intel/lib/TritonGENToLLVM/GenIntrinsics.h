@@ -1,15 +1,27 @@
 /*========================== begin_copyright_notice ============================
 
-Copyright (C) 2017-2021 Intel Corporation
+INTEL CONFIDENTIAL
 
-SPDX-License-Identifier: MIT
+Copyright (C) 2014-2021 Intel Corporation
+
+This software and the related documents are Intel copyrighted materials,
+and your use of them is governed by the express license under which they were
+provided to you ("License"). Unless the License provides otherwise,
+you may not use, modify, copy, publish, distribute, disclose or transmit this
+software or the related documents without Intel's prior written permission.
+
+This software and the related documents are provided as is, with no express or
+implied warranties, other than those that are expressly stated in the License.
 
 ============================= end_copyright_notice ===========================*/
 #pragma once
 
 #include "GenIntrinsicEnum.h"
 
+// #include "common/LLVMWarningsPush.hpp"
+// #include "llvm/ADT/None.h"
 #include "llvm/IR/Function.h"
+// #include "common/LLVMWarningsPop.hpp"
 
 #include <string>
 #include <vector>
@@ -20,14 +32,8 @@ namespace GenISAIntrinsic {
 
 /// Intrinsic::getName(ID) - Return the LLVM name for an intrinsic, such as
 /// "llvm.ppc.altivec.lvx".
-std::string getName(ID id, ArrayRef<Type *> Tys = std::nullopt);
-
-/// Intrinsic::getType(ID) - Return the function type for an intrinsic.
-///
-FunctionType *getType(LLVMContext &Context, ID id,
-                      ArrayRef<Type *> Tys = std::nullopt);
-
-llvm::AttributeList getGenIntrinsicAttributes(LLVMContext &Context, ID id);
+std::string getName(ID id, ArrayRef<Type *> Tys = {},
+                    ArrayRef<Type *> OverloadedPointeeTys = {});
 
 struct IntrinsicComments {
   const char *funcDescription;
@@ -54,10 +60,11 @@ IntrinsicComments getIntrinsicComments(ID id);
 ///    Type Ts[2]{int4, int4}: to resolve to the second.
 #if defined(ANDROID) || defined(__linux__)
 __attribute__((visibility("default"))) Function *
-getDeclaration(Module *M, ID id, ArrayRef<Type *> OverloadedTys = std::nullopt);
+getDeclaration(Module *M, ID id, ArrayRef<Type *> OverloadedTys = {},
+               ArrayRef<Type *> OverloadedPointeeTys = {});
 #else
-Function *getDeclaration(Module *M, ID id,
-                         ArrayRef<Type *> OverloadedTys = None);
+Function *getDeclaration(Module *M, ID id, ArrayRef<Type *> OverloadedTys = {},
+                         ArrayRef<Type *> OverloadedPointeeTys = {});
 #endif
 
 // Override of isIntrinsic method defined in Function.h
