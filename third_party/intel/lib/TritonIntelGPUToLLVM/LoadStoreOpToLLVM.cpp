@@ -25,6 +25,24 @@ using namespace mlir::triton::gpu::intel;
 
 #define S(v) StringAttr::get(ctx, (v))
 
+#if defined(_MSC_VER) && !defined(__clang__)
+// from https://gist.github.com/pps83/3210a2f980fd02bb2ba2e5a1fc4a2ef0
+#include <intrin.h>
+
+static int __builtin_clz(unsigned x) {
+  unsigned long r;
+  _BitScanReverse(&r, x);
+  return static_cast<int>(r ^ 31);
+}
+
+static int __builtin_ctz(unsigned x) {
+  unsigned long r;
+  _BitScanForward(&r, x);
+  return static_cast<int>(r);
+}
+
+#endif
+
 namespace {
 
 Value maybeAnd(RewriterBase &rewriter, Location loc, Value a, Value b) {
@@ -2559,8 +2577,8 @@ struct LoadOpToBlockIOConversion
               .getAxisInfo(mask);
       unsigned maskConstancyHor = 1, maskConstancyVer = 1;
       if (axisInfo) {
-        maskConstancyHor = axisInfo->getConstancy(rank - 1);
-        maskConstancyVer = axisInfo->getConstancy(rank - 2);
+        maskConstancyHor = axisInfo->getConstancy(colDim);
+        maskConstancyVer = axisInfo->getConstancy(rowDim);
         // The mask constancy has to be power of 2 for block IO.
         if (!llvm::isPowerOf2_64(maskConstancyHor) ||
             !llvm::isPowerOf2_64(maskConstancyVer))
@@ -2570,7 +2588,7 @@ struct LoadOpToBlockIOConversion
       // Check the constancy of the mask support to load the memory in 2D block.
       if (!(maskConstancyHor >= (tileWidth * numPackedVals)))
         return failure(); // The tileWidth and numPackedVals is not changeable
-      // for now.
+                          // for now.
 
       // Adjust the vBlock to fit the constancy of mask
       vBlocks = std::min(vBlocks, mlir::ceil<int>(maskConstancyHor,
@@ -2579,12 +2597,45 @@ struct LoadOpToBlockIOConversion
              "the vBlocks has to be power of 2.");
 
       // Check the constancy of the mask support to load the memory in 2D block.
-      if (!(maskConstancyVer >= tileHeight))
-        return failure();
-    } else {
-      // no mask
-      maskConstancyHor = std::numeric_limits<unsigned>::max();
-      maskConstancyVer = std::numeric_limits<unsigned>::max();
+      if (maskConstancyVer < tileHeight) {
+        unsigned minTileHeight =
+            mlir::ceil<unsigned>(threadsPerWarp, tileWidth);
+        if (maskConstancyVer < minTileHeight)
+          return failure();
+
+        unsigned numBasesForPackedVals = __builtin_ctz(numPackedVals);
+        unsigned numBasesForTileWidth =
+            __builtin_ctz(mlir::ceil<unsigned>(tileWidth, threadsPerWarp));
+        unsigned numBasesForNewTileHeight =
+            __builtin_ctz(maskConstancyVer / minTileHeight);
+        unsigned numBasesForOldTileHeight =
+            __builtin_ctz(tileHeight / minTileHeight);
+        unsigned numBasesForVBlocks = __builtin_ctz(vBlocks);
+
+        std::vector<std::vector<int32_t>> rearangeMap;
+        for (int i = 0; i < __builtin_ctz(numElems); i++) {
+          rearangeMap.emplace_back().push_back(1 << i);
+        }
+
+        // Rotate the bases of the ole tile height after the vBlocks.
+        unsigned rotateStart = numBasesForPackedVals + numBasesForTileWidth +
+                               numBasesForNewTileHeight;
+        unsigned rotateNum =
+            numBasesForOldTileHeight - numBasesForNewTileHeight;
+        std::rotate(rearangeMap.begin() + rotateStart,
+                    rearangeMap.begin() + rotateStart + rotateNum,
+                    rearangeMap.begin() + rotateStart + rotateNum +
+                        numBasesForVBlocks);
+
+        LinearLayout rearangeMapping(
+            {{kRegister, rearangeMap}},
+            {{kRegister, regMapping.getInDimSize(kRegister)}},
+            /*requireSurjective=*/true);
+        tileHeight = maskConstancyVer;
+        assert(((tileHeight - 1) & tileHeight) == 0 &&
+               "the tileHeight has to be power of 2.");
+        rearangeMapping = rearangeMapping.compose(regMapping);
+      }
     }
 
     // Get the LLVM values for `other`
