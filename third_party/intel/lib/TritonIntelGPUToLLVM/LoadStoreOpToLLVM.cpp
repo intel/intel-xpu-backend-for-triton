@@ -2633,6 +2633,98 @@ struct LoadOpToBlockIOConversion
 
     bool useVNNIFormat = false;
     Type packedDPASOperandType;
+    if (hasDpasEncoding(tensorType) || hasDotDpasEncoding(tensorType)) {
+
+      // There are three types for block load here for DPAS layout
+      // (Otherwise there are only two types are used.):
+      // 1. load2DGenXType -
+      // 2. packedDPASOperandType -
+      // 3. unpackedType -
+      //
+      // clang-format off
+      // The block load generated op:
+      //   %0 = load_2d %ptr : <load2DGenXType>
+      //   %1 = shufflevector <load2DGenXType> %0, <load2DGenXType> %0, <8 x i32> <i32 0, i32 1, i32  2, i32  3, i32  4, i32  5, i32  6, i32  7>
+      //   %2 = shufflevector <load2DGenXType> %0, <load2DGenXType> %0, <8 x i32> <i32 8, i32 9, i32 10, i32 11, i32 12, i32 13, i32 14, i32 15>
+      //   %3 = bitcast %1 : <packedDPASOperandType> -> <unpackedType>
+      //   %4 = bitcast %2 : <packedDPASOperandType> -> <unpackedType>
+      //   <ops for packLLElements>
+      // clang-format on
+      //
+      // The DPAS generated op:
+      // clang-format off
+      //   <ops for unpackLLElements>
+      //   %5 = bitcast %3 : <unpackedType> -> <packedDPASOperandType>
+      //   %6 = bitcast %4 : <unpackedType> -> <packedDPASOperandType>
+      //   %7 = dpas %5, %6, %other : <packedDPASOperandType>, <packedDPASOperandType>, <packedDPASOperandType>
+      // clang-format on
+      //
+      // The LLVM optimizer will remove the redundant expression of pack/unpack
+      // elements pair and bitcast pair. The final IR would be simple for dot
+      // product:
+      // clang-format off
+      //   %0 = load_2d %ptr : <load2DGenXType>
+      //   %1 = shufflevector <load2DGenXType> %0, <load2DGenXType> %0, <8 x i32> <i32 0, i32 1, i32  2, i32  3, i32  4, i32  5, i32  6, i32  7>
+      //   %2 = shufflevector <load2DGenXType> %0, <load2DGenXType> %0, <8 x i32> <i32 8, i32 9, i32 10, i32 11, i32 12, i32 13, i32 14, i32 15>
+      //   %3 = dpas %1, %2, %other : <packedDPASOperandType>, <packedDPASOperandType>, <packedDPASOperandType>
+      // clang-format on
+      // The packedDPASOperandType and the shufflevector operation define the
+      // computation flow for the dot product.
+
+      DpasEncodingAttr::OpIdx opIdx = getOpIdx(tensorType);
+      auto dpasLayout = getDpasLayout(tensorType);
+      switch (opIdx) {
+      case DpasEncodingAttr::OpIdx::OperandA: {
+        unsigned elemsPerLanePerDPASInst =
+            product<unsigned>(dpasLayout.getDPASInstShapeA()) / threadsPerWarp;
+        // Block 2D contain at least one DotOp A.
+        if (numElemsPerLoad >= elemsPerLanePerDPASInst) {
+          packedDPASOperandType = LLVM::getVectorType(
+              packedType, elemsPerLanePerDPASInst / numPackedVals);
+          unpackedType = LLVM::getVectorType(eltTy, elemsPerLanePerDPASInst);
+        }
+      } break;
+      case DpasEncodingAttr::OpIdx::OperandB: {
+        assert(numPackedVals == 1 &&
+               "invalid number of packed values for DPAS operand B.");
+        unsigned elemsPerLanePerDPASInst =
+            product<unsigned>(dpasLayout.getDPASInstShapeB()) / threadsPerWarp;
+        // Block 2D contain at least one DotOp B.
+        if (numElemsPerLoad >= elemsPerLanePerDPASInst) {
+          unsigned opsPerChannel = dpasLayout.getOpsPerChannel();
+          unsigned sysDepth = dpasLayout.getSystolicDepth();
+          if (tileHeight >= (opsPerChannel * sysDepth) &&
+              ((opsPerChannel == 4 && elemSizeInBits == 8) ||
+               (opsPerChannel == 2 && elemSizeInBits == 16))) {
+            // Use the VNNI packing format for DotOp B layout.
+            numValuesPerLoad = numElemsPerLoad / opsPerChannel;
+            packedType = i32_ty;
+            load2DGenXType = LLVM::getVectorType(packedType, numValuesPerLoad);
+            packedDPASOperandType = LLVM::getVectorType(
+                packedType, elemsPerLanePerDPASInst / opsPerChannel);
+            useVNNIFormat = true;
+          } else {
+            packedDPASOperandType =
+                LLVM::getVectorType(IntegerType::get(ctx, packedElemSizeInBits),
+                                    elemsPerLanePerDPASInst / numPackedVals);
+          }
+          unpackedType = LLVM::getVectorType(eltTy, elemsPerLanePerDPASInst);
+        }
+      } break;
+      case DpasEncodingAttr::OpIdx::OperandC: {
+        unsigned elemsPerLanePerDPASInst =
+            product<unsigned>(dpasLayout.getDPASInstShapeC()) / threadsPerWarp;
+        // Block 2D contain at least one DotOp C.
+        if (numElemsPerLoad >= elemsPerLanePerDPASInst) {
+          packedDPASOperandType = LLVM::getVectorType(
+              packedType, elemsPerLanePerDPASInst / numPackedVals);
+          unpackedType = LLVM::getVectorType(eltTy, elemsPerLanePerDPASInst);
+        }
+      } break;
+      default:
+        llvm_unreachable("unexpected OpIdx::OperandC");
+      }
+    }
 
     SmallVector<Value> unpackedLoadedVals(numElems);
     for (size_t elemIdx = 0; elemIdx < numElems; elemIdx += numElemsPerLoad) {
