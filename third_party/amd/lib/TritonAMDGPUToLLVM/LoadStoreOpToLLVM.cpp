@@ -1361,16 +1361,33 @@ struct AtomicCASOpConversion
                  : valueTy;
     auto valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
     auto elemsPerThread = getTotalElemsPerThread(op.getVal().getType());
+    // vec = 1 for scalar
+    auto vec = getVectorSize(op.getPtr(), axisAnalysisPass);
+    // tensor
+    if (tensorTy) {
+      auto valTy = cast<RankedTensorType>(op.getVal().getType());
+      vec = std::min<unsigned>(vec, valTy.getElementType().isF16() ? 2 : 1);
+    }
+
+    auto vecTy = vec_ty(valueElemTy, vec);
     SmallVector<Value> resultVals(elemsPerThread);
 
     // atomic ops
-    for (size_t i = 0; i < elemsPerThread; i += 1) {
-      Value casVal = valElements[i];
-      Value casCmp = cmpElements[i];
+    for (size_t i = 0; i < elemsPerThread; i += vec) {
+      Value casVal = b.undef(vecTy);
+      for (int ii = 0; ii < vec; ++ii) {
+        Value iiVal = createIndexAttrConstant(
+            rewriter, loc, getTypeConverter()->getIndexType(), ii);
+        casVal = b.insert_element(vecTy, casVal, valElements[i + ii], iiVal);
+      }
+
       Value casPtr = ptrElements[i];
+      Value casCmp = cmpElements[i];
+      casVal = valElements[i];
+
       // use op
       if (tensorTy) { // for tensor
-        auto retType = valueElemTy;
+        auto retType = vec == 1 ? valueElemTy : vecTy;
         // TODO: USE ATOMIC CAS OP on Tensor
         auto successOrdering = *atomicMemOrdering;
         auto failureOrdering = LLVM::AtomicOrdering::monotonic;
@@ -1380,7 +1397,12 @@ struct AtomicCASOpConversion
 
         // Extract the new_loaded value from the pair.
         Value ret = b.extract_val(valueElemTy, cmpxchg, i);
-        resultVals[i] = ret;
+
+        for (int ii = 0; ii < vec; ++ii) {
+          resultVals[i + ii] =
+              vec == 1 ? ret
+                       : b.extract_element(valueElemTy, ret, b.i32_val(ii));
+        }
       } else { // for scalar
         // Build blocks to bypass the atomic instruction for ~rmwMask.
         auto *curBlock = rewriter.getInsertionBlock();
