@@ -200,3 +200,5 @@ def test_block_io(M, N, dtype_str, layout, load_block_ptr, store_block_ptr, devi
 
     if support_block_io:
         assert 'spirv_Subgroup2DBlockStoreINTEL' in kernel.asm['llir'] or 'GenISA.LSC2DBlockWrite' in kernel.asm['llir']
+        if not load_block_ptr:
+            assert 'spirv_Subgroup2DBlockLoad' in kernel.asm['llir'] or 'GenISA.LSC2DBlockRead' in kernel.asm['llir']
