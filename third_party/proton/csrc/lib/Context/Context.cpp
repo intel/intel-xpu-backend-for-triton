@@ -7,6 +7,7 @@ namespace proton {
 
 std::atomic<size_t> Scope::scopeIdCounter{1};
 
-/*static*/ thread_local std::map<OpInterface *, bool> OpInterface::opInProgress;
+/*static*/ thread_local std::map<ThreadLocalOpInterface *, bool>
+    ThreadLocalOpInterface::opInProgress;
 
 } // namespace proton

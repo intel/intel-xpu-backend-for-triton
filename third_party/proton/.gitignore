@@ -3,4 +3,3 @@ proton.egg-info
 proton/_C/libproton.so
 
 *.hatchet
-*.chrome_trace

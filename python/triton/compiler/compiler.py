@@ -436,7 +436,6 @@ class CompiledKernel:
             file.suffix[1:]: file.read_bytes() if file.suffix[1:] == binary_ext else file.read_text()
             for file in asm_files
         })
-        self.metadata_group = metadata_group
         self.kernel = self.asm[binary_ext]
         # binaries are lazily initialized
         # because it involves doing runtime things
@@ -469,8 +468,6 @@ class CompiledKernel:
             warp_size = driver.active.get_current_target().warp_size
         if self.metadata.num_warps * warp_size > self.n_max_threads:
             raise OutOfResources(self.metadata.num_warps * warp_size, self.n_max_threads, "threads")
-        if knobs.runtime.init_handle_hook is not None:
-            knobs.runtime.init_handle_hook(self.module, self.function, self.name, self.metadata_group)
 
     def __getattribute__(self, name):
         if name == 'run':
@@ -480,11 +477,14 @@ class CompiledKernel:
     def launch_metadata(self, grid, stream, *args):
         if knobs.runtime.launch_enter_hook is None:
             return None
-        self._init_handles()
         ret = LazyDict({"name": self.name, "function": self.function, "stream": stream})
         if not isinstance(self.src, ASTSource) or self.src.fn.launch_metadata is None:
             return ret
-        arg_dict = {name: arg for name, arg in zip(self.src.fn.arg_names, args)}
+        arg_dict = {}
+        arg_idx = 0
+        for i, arg_name in enumerate(self.src.fn.arg_names):
+            arg_dict[arg_name] = args[arg_idx]
+            arg_idx += 1
         ret.add(self.src.fn.launch_metadata, (grid, self.metadata, arg_dict))
         return ret
 

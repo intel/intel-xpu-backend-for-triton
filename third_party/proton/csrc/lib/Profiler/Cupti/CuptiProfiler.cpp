@@ -1,7 +1,7 @@
 #include "Profiler/Cupti/CuptiProfiler.h"
 #include "Context/Context.h"
 #include "Data/Metric.h"
-#include "Device.h"
+#include "Driver/Device.h"
 #include "Driver/GPU/CudaApi.h"
 #include "Driver/GPU/CuptiApi.h"
 #include "Profiler/Cupti/CuptiPCSampling.h"
@@ -35,8 +35,7 @@ std::shared_ptr<Metric> convertActivityToMetric(CUpti_Activity *activity) {
           static_cast<uint64_t>(kernel->start),
           static_cast<uint64_t>(kernel->end), 1,
           static_cast<uint64_t>(kernel->deviceId),
-          static_cast<uint64_t>(DeviceType::CUDA),
-          static_cast<uint64_t>(kernel->streamId));
+          static_cast<uint64_t>(DeviceType::CUDA));
     } // else: not a valid kernel activity
     break;
   }

@@ -20,7 +20,7 @@ namespace proton {
 // CuptiProfiler, should be a singleton.
 template <typename ConcreteProfilerT>
 class GPUProfiler : public Profiler,
-                    public OpInterface,
+                    public ThreadLocalOpInterface,
                     public Singleton<ConcreteProfilerT> {
 public:
   GPUProfiler() = default;

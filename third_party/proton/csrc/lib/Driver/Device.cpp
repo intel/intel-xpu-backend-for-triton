@@ -1,4 +1,4 @@
-#include "Device.h"
+#include "Driver/Device.h"
 #include "Driver/GPU/CudaApi.h"
 #include "Driver/GPU/HipApi.h"
 #ifdef TRITON_BUILD_PROTON_XPU
