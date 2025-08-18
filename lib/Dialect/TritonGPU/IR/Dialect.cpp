@@ -740,7 +740,8 @@ LogicalResult DotOperandEncodingAttr::verify(
     if (kWidth != 16 && parentAttr.getVersion() == 1 ||
         kWidth != 8 && kWidth != 16 && parentAttr.getVersion() == 2)
       return emitError() << "ttg.dot_op kWidth parameter must be 16 for "
-                            "gfx11 and 8/16 for gfx12";
+                            "gfx11 and 4/8/16 for gfx12 (including packed "
+                            "cases for `scaled_dot`)";
     return success();
   }
 
