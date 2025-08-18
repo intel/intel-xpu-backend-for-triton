@@ -27,13 +27,11 @@
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/BuiltinOps.h"
-#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Dialect.h"
 
 // TritonNvidiaGPU depends on Triton
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h.inc"
 
 namespace mlir::triton::nvidia_gpu::impl {
@@ -63,19 +61,13 @@ struct TMemAllocation {
 
 TMemAllocation getTmemAllocSizes(gpu::MemDescType memDescType);
 
-gpu::DistributedEncodingTrait getTmemCompatibleLayout(unsigned M, unsigned N,
-                                                      RankedTensorType oltType,
-                                                      unsigned numWarps);
-gpu::DistributedEncodingTrait
-getTmemLoadLayoutSplitLongM(RankedTensorType tensorType,
-                            gpu::MemDescType memType, int numWarps);
-SmallVector<gpu::DistributedEncodingTrait>
-getTmemCompatibleLayouts(Operation *op, RankedTensorType tensorType,
-                         gpu::MemDescType memType);
+Attribute getTmemCompatibleLayout(unsigned M, unsigned N,
+                                  RankedTensorType oltType, unsigned numWarps);
 
 bool isDistributedLayoutTMemCompatible(Operation *op,
                                        RankedTensorType tensorType,
                                        gpu::MemDescType memType);
+
 bool isDistributedLayoutSplitMTmemLoadStore(RankedTensorType tensorType,
                                             gpu::MemDescType memType,
                                             int numWarps);
