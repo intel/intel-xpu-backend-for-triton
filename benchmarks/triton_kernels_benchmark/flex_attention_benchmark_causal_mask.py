@@ -172,8 +172,8 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
         is_bmg = any(name in torch.xpu.get_device_name().lower() for name in ('b570', 'b580'))
         if is_bmg:
             benchmark_suit.do_prewarmup(triton_fn)
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10, quantiles=quantiles,
-                                                              device=DEVICE)
+        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=200 if is_bmg else 10, n_repeat=10,
+                                                              quantiles=quantiles, device=DEVICE)
 
     elif provider == 'onednn':
         # OneDNN only supports MHA.
