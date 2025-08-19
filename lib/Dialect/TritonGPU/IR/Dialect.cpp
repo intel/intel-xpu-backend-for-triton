@@ -1396,6 +1396,8 @@ void SliceEncodingAttr::print(mlir::AsmPrinter &printer) const {
 LogicalResult
 SliceEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                           unsigned dim, DistributedEncodingTrait parent) {
+  if (mlir::triton::tools::getBoolEnv("TRITON_INTEL_ADVANCED_PATH"))
+    return success();
   unsigned rank = cast<LayoutEncodingTrait>(parent).getRank();
   if (rank <= 1)
     return emitError() << "parent layout must have at least rank >= 2";
@@ -2141,9 +2143,11 @@ LogicalResult DotOperandEncodingAttr::verify(
 
   if (auto parentAttr = mlir::dyn_cast<AMDWmmaEncodingAttr>(parent)) {
     if (kWidth != 16 && parentAttr.getVersion() == 1 ||
-        kWidth != 8 && kWidth != 16 && parentAttr.getVersion() == 2)
+        kWidth != 4 && kWidth != 8 && kWidth != 16 &&
+            parentAttr.getVersion() == 2)
       return emitError() << "ttg.dot_op kWidth parameter must be 16 for "
-                            "gfx11 and 8/16 for gfx12";
+                            "gfx11 and 4/8/16 for gfx12 (including packed "
+                            "cases for `scaled_dot`)";
     return success();
   }
 
