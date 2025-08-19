@@ -635,18 +635,6 @@ SmallVector<unsigned> Subgroup2DBlockEncodingAttr::getRepOrder() const {
   return getMatrixOrder(getRank(), /*rowMajor*/ true);
 }
 
-SmallVector<unsigned> Subgroup2DBlockEncodingAttr::getCTAsPerCGA() const {
-  return SmallVector<unsigned>(getCTALayout().getCTAsPerCGA());
-}
-
-SmallVector<unsigned> Subgroup2DBlockEncodingAttr::getCTAOrder() const {
-  return SmallVector<unsigned>(getCTALayout().getCTAOrder());
-}
-
-SmallVector<unsigned> Subgroup2DBlockEncodingAttr::getCTASplitNum() const {
-  return SmallVector<unsigned>(getCTALayout().getCTASplitNum());
-}
-
 SmallVector<unsigned>
 Subgroup2DBlockEncodingAttr::getRepOrderForOperand(int opIdx) const {
   return getOrderForDotOperand(opIdx, getRank(), /*kContig*/ true);
