@@ -1304,6 +1304,7 @@ void LayoutRematerialization::backwardRematerialization() {
               auto convOp = rewriter.create<ConvertLayoutOp>(
                   loc, loadOp.getType(), newLoadOp.getResult());
               loadOp->replaceAllUsesWith(convOp);
+              opToDelete.insert(loadOp);
               LLVM_DEBUG({
                 DBGS() << "Replaced:\n\t" << *loadOp << "\n";
                 DBGS() << "with:\n\t" << *newLoadOp << "\n"
@@ -1332,9 +1333,9 @@ void LayoutRematerialization::backwardRematerialization() {
               });
             })
             .Default([](auto op) {
-              llvm::report_fatal_error(
-                  llvm::Twine("Unsupported operation: '" +
-                              op->getName().getStringRef() + "'"));
+              llvm::report_fatal_error(llvm::Twine(
+                  "Unsupported operation in backward rematerialization: '" +
+                  op->getName().getStringRef() + "'"));
             });
       }
     }
