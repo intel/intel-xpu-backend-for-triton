@@ -349,15 +349,15 @@ def fp8e8m0_to_float32(scale):
 
 @pytest.mark.parametrize("M, N, K", [(1024, 512, 256), (128, 256, 256), (128, 128, 128), (2, 4, 64)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (256, 128, 128), (128, 256, 128),
-                                                       (128, 256, 256), (128, 128, 64), (128, 64, 128)])
+                                                       (128, 256, 256), (128, 64, 32), (128, 64, 128)])
 @pytest.mark.parametrize("NUM_STAGES", [1, 3])
 @pytest.mark.parametrize("NUM_WARPS", [4, 8])
 @pytest.mark.parametrize("nonKDim", ([0, 16, 32] if is_hip_cdna() else [0]))
 def test_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS, device):
     if K % BLOCK_K != 0:
         pytest.skip("Kernel requires shapes aligned by K dimension")
-    if is_cuda() and torch.cuda.get_device_capability()[0] < 10:
-        pytest.skip("Requires compute capability >= 10")
+    # if is_cuda() and torch.cuda.get_device_capability()[0] < 10:
+    #     pytest.skip("Requires compute capability >= 10")
     elif is_hip():
         if not is_hip_cdna4():
             pytest.skip("Scaled mxfp8 matmul is only natively supported on CDNA4")
@@ -583,7 +583,7 @@ def _gemm_afp4_wfp4_kernel_preshuffled_scales_cdna4(a_ptr, b_ptr, c_ptr, a_scale
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 256), (64, 64, 512), [32, 32, 64]])
 @pytest.mark.parametrize("mfma_nonkdim", [16, 32])
 @pytest.mark.parametrize("preshuffle", [True, False])
-@pytest.mark.skipif(is_cuda() and torch.cuda.get_device_capability()[0] == 10, reason="Compilation bug for GB200.")
+# @pytest.mark.skipif(is_cuda() and torch.cuda.get_device_capability()[0] == 10, reason="Compilation bug for GB200.")
 @pytest.mark.skipif(is_hip() and not is_hip_cdna4(), reason="Scaled dot is not emulated on other archs yet.")
 def test_preshuffle_scale_mxfp_cdna4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, mfma_nonkdim, preshuffle, device):
     # This test primarily evaluates correctness for efficient scale packing for MFMA-scaled instructions.
@@ -726,8 +726,8 @@ def test_preshuffle_scale_mxfp_cdna4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, mfma_no
                                                        (128, 128, 256), (128, 256, 256)])
 @pytest.mark.parametrize("NUM_STAGES", [1, 2, 4])
 @pytest.mark.parametrize("USE_2D_SCALE_LOAD", [False, True])
-@pytest.mark.skipif(is_hip() or (is_cuda() and torch.cuda.get_device_capability()[0] != 10),
-                    reason="Requires compute capability == 10")
+# @pytest.mark.skipif(is_hip() or (is_cuda() and torch.cuda.get_device_capability()[0] != 10),
+#                     reason="Requires compute capability == 10")
 def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_2D_SCALE_LOAD, device):
     if is_xpu():
         pytest.xfail("XPU does not natively support scaled mxfp matmul")
@@ -802,8 +802,8 @@ def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_
                                                        (256, 64, 32)])
 @pytest.mark.parametrize("a_trans", [False, True])
 @pytest.mark.parametrize("dtype_src_str", ["float32", "float16", "float8e5"])
-@pytest.mark.skipif(is_hip() or (is_cuda() and torch.cuda.get_device_capability()[0] != 10),
-                    reason="Requires compute capability == 10")
+# @pytest.mark.skipif(is_hip() or (is_cuda() and torch.cuda.get_device_capability()[0] != 10),
+#                     reason="Requires compute capability == 10")
 def test_lhs_in_tmem(BLOCK_M, BLOCK_N, BLOCK_K, a_trans, dtype_src_str, device, monkeypatch):
     if is_xpu():
         pytest.xfail("XPU does not natively support tmem")
@@ -872,8 +872,8 @@ def lhs_in_tmem_kernel_mxfp(  #
     tl.store(output_ptrs, accumulator)
 
 
-@pytest.mark.skipif(is_hip() or (is_cuda() and torch.cuda.get_device_capability()[0] != 10),
-                    reason="Requires compute capability == 10")
+# @pytest.mark.skipif(is_hip() or (is_cuda() and torch.cuda.get_device_capability()[0] != 10),
+#                     reason="Requires compute capability == 10")
 def test_lhs_in_tmem_mxfp(device, monkeypatch):
     if is_xpu():
         pytest.xfail("XPU does not natively support scaled mxfp matmul and tmem")
