@@ -357,9 +357,6 @@ public:
 
   SmallVector<Type> getTypes() const;
 
-  SmallVector<Value> getStrides(triton::gpu::MemDescType memDesc, Location loc,
-                                RewriterBase &rewriter) const;
-
   // Returns a mask representing all the bits of the memdesc offsets that
   // may be modified by an affine offset coming from a memdesc_subslice.
   // The offsets are considered to be in the type of the memdesc.
@@ -385,14 +382,6 @@ public:
   Value getBaseBeforeSlice(int dim, Location loc, RewriterBase &rewriter) const;
 
 private:
-  static SmallVector<unsigned> getOrderForShape(ArrayRef<int64_t> shape,
-                                                ArrayRef<unsigned> layoutOrder);
-
-  static SmallVector<Value> getStridesForShape(ArrayRef<int64_t> shape,
-                                               ArrayRef<unsigned> layoutOrder,
-                                               Location loc,
-                                               RewriterBase &rewriter);
-
   Value base; // i32 ptr. The start address of the shared memory object.
   Type baseElemType;
   SmallVector<Value>
@@ -624,6 +613,9 @@ inline bool isCanonicalIndex(unsigned index, unsigned freeVarMask) {
 // Certain lowerings may introduce references to function arguments. Keep warp
 // group code isolated from above by invoking this function.
 void makeAllWarpGroupsIsolatedFromAbove(Operation *op);
+
+// Set the correct loop annotation on LLVM branch ops.
+void fixUpLoopAnnotation(ModuleOp mod);
 
 /// Converts ConverLayoutOp to llvm using padded pattern.
 /// This pattern adds unused memory locations after every rows of tensor fastest

@@ -2119,6 +2119,8 @@ struct LoadOpToBlockIOConversion
       return failure();
     numOperandsPer2DLoadN =
         std::min(numOperandsPer2DLoadN, MAX_WIDTH / totalBytesPerRowPerDPASOp);
+    // vBlocks has HW limitation of 4.
+    numOperandsPer2DLoadN = std::min(numOperandsPer2DLoadN, 4u);
 
     tileHeight = instHeight * numOperandsPer2DLoadM;
     tileWidth = instWidth;

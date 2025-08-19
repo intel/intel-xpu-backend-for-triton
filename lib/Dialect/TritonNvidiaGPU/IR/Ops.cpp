@@ -63,9 +63,17 @@ LogicalResult WarpGroupDotOp::verify() {
   auto nvmmaEnc = dyn_cast<NvidiaMmaEncodingAttr>(resTy.getEncoding());
   if (!nvmmaEnc || !nvmmaEnc.isHopper())
     return emitOpError("WGMMA result layout must be Hopper NVMMA");
+
+  if (!isa<NVMMASharedEncodingAttr, DotOperandEncodingAttr>(
+          getA().getType().getEncoding()))
+    return emitOpError("WGMMA A operand must have NVMMA shared or dot layout");
+  if (!isa<NVMMASharedEncodingAttr>(getB().getType().getEncoding()))
+    return emitOpError("WGMMA B operand must have NVMMA shared layout");
+
   auto numWarps = gpu::lookupNumWarps(getOperation());
   if (numWarps % 4)
     return emitOpError("WGMMA requires num_warps to be divisible by 4");
+
   auto retShapePerCTA = getShapePerCTA(resTy);
   int rank = retShapePerCTA.size();
   if (rank != 2)
@@ -74,12 +82,14 @@ LogicalResult WarpGroupDotOp::verify() {
     return emitOpError("WGMMA result M dimension must be divisible by 64");
   if (retShapePerCTA[1] % 8 != 0)
     return emitOpError("WGMMA result N dimension must be divisible by 8");
+
   auto aElemTy = getA().getType().getElementType();
   if (!(llvm::isa<Float8E5M2Type, Float8E4M3FNType>(aElemTy) ||
         aElemTy.isInteger(8) || aElemTy.isF16() || aElemTy.isBF16() ||
         aElemTy.isF32()))
     return emitOpError("WGMMA result element type must be F16, BF16, F32, "
                        "F8E5M2, F8E4M3FN, or integer type");
+
   if (getMaxNumImpreciseAcc() < 32 &&
       (llvm::isa<Float8E5M2Type, Float8E4M3FNType>(aElemTy)) &&
       resTy.getElementType().isF32()) {
@@ -122,13 +132,18 @@ bool WarpGroupDotOp::verifyDims() {
 
 // -- WarpGroupDotWaitOp --
 LogicalResult WarpGroupDotWaitOp::inferReturnTypes(
-    ::mlir::MLIRContext *context, ::std::optional<::mlir::Location> location,
-    ::mlir::ValueRange operands, ::mlir::DictionaryAttr attributes,
-    ::mlir::OpaqueProperties properties, ::mlir::RegionRange regions,
-    ::llvm::SmallVectorImpl<::mlir::Type> &inferredReturnTypes) {
+    MLIRContext *context, std::optional<Location> location, ValueRange operands,
+    DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
+    SmallVectorImpl<Type> &inferredReturnTypes) {
   for (Value operand : operands)
     inferredReturnTypes.push_back(operand.getType());
-  return mlir::success();
+  return success();
+}
+
+LogicalResult WarpGroupDotWaitOp::verify() {
+  if (getOperands().empty())
+    return emitOpError("expected to be waiting on at least one dependency");
+  return success();
 }
 
 // -- InitBarrierOp --
