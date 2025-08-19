@@ -336,27 +336,29 @@ private:
       effects.emplace_back(effect);
     }
     if (auto storeOp = dyn_cast<ttng::AsyncTMACopyLocalToGlobalOp>(op)) {
-      effects.emplace_back(MemEffects{
-          .rw = MemEffects::RW::Read,
-          .trackingKind = MemEffects::TrackingKind::None, // async tma writes
-                                                          // not modelled yet
-          .buf = storeOp.getSrc()});
+      MemEffects effect;
+      effect.rw = MemEffects::RW::Read;
+      effect.trackingKind = MemEffects::TrackingKind::None; // async tma writes
+                                                            // not modelled yet
+      effect.buf = storeOp.getSrc();
+      effects.emplace_back(effect);
     }
     if (auto gatherOp = dyn_cast<ttng::AsyncTMAGatherOp>(op)) {
-      effects.emplace_back(
-          MemEffects{.rw = MemEffects::RW::Write,
-                     .trackingKind = MemEffects::TrackingKind::Barrier,
-                     .buf = gatherOp.getResult(),
-                     .barriersAndPreds = {{gatherOp.getBarrier(), nullptr}},
-                     .pred = gatherOp.getPred()});
+      MemEffects effect;
+      effect.rw = MemEffects::RW::Write;
+      effect.trackingKind = MemEffects::TrackingKind::Barrier;
+      effect.buf = gatherOp.getResult();
+      effect.barriersAndPreds = {{gatherOp.getBarrier(), nullptr}};
+      effect.pred = gatherOp.getPred();
+      effects.emplace_back(effect);
     }
     if (auto scatterOp = dyn_cast<ttng::AsyncTMAScatterOp>(op)) {
-      effects.emplace_back(MemEffects{
-          .rw = MemEffects::RW::Read,
-          .trackingKind = MemEffects::TrackingKind::None, // async tma writes
-                                                          // not modelled yet
-          .buf = scatterOp.getSrc(),
-      });
+      MemEffects effect;
+      effect.rw = MemEffects::RW::Read;
+      effect.trackingKind = MemEffects::TrackingKind::None; // async tma writes
+                                                            // not modelled yet
+      effect.buf = scatterOp.getSrc();
+      effects.emplace_back(effect);
     }
     if (auto copyOp = dyn_cast<ttg::AsyncCopyGlobalToLocalOp>(op)) {
       MemEffects effect;
