@@ -62,6 +62,13 @@ def TritonIntelGPU_Dialect : Dialect {
     static constexpr llvm::StringRef getSupport16BitAtomicsAttrName() {
       return "ttig.support_16bit_atomics";
     }
+
+    /// FIXME: Remove once IGC can split large 2D block loads.
+    /// Get the name of the attribute used to indicate that a region (e.g. a loop)
+    /// contains chained dot operations.
+    static constexpr llvm::StringRef getContainsChainedDotAttrName() {
+      return "ttig.contains_chained_dot";
+    }
   }];
 
   let useDefaultAttributePrinterParser = 1;

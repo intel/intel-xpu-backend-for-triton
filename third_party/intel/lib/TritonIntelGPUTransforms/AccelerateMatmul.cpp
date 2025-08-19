@@ -40,10 +40,17 @@ getWarpsPerTile(tt::DotOp dotOp, ttgi::DpasEncodingAttr::DPASCapability dpasCap,
   };
 
   SetVector<Operation *> slices = multiRootGetSlice(dotOp, {filter});
-  // TODO: revisit this in flash attention.
-  for (Operation *op : slices)
-    if (isa<tt::DotOp>(op) && (op != dotOp))
+  for (Operation *op : slices) {
+    if (isa<tt::DotOp>(op) && (op != dotOp)) {
+      // FIXME: Remove once IGC can split large 2D block loads.
+      if (auto forOp = op->getParentOfType<scf::ForOp>()) {
+        forOp->setAttr(
+            ttgi::TritonIntelGPUDialect::getContainsChainedDotAttrName(),
+            UnitAttr::get(forOp->getContext()));
+      }
       return {numWarps, 1};
+    }
+  }
 
   size_t rank = shape.size();
   SmallVector<unsigned> ret(rank, 1);

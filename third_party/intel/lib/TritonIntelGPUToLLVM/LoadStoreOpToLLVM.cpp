@@ -987,6 +987,12 @@ struct LoadOpToBlockIOConversion
   LogicalResult
   rewriteTensorPointerLoad(triton::LoadOp op, OpAdaptor adaptor,
                            ConversionPatternRewriter &rewriter) const {
+    // FIXME: Remove once IGC can split large 2D block loads.
+    if (auto forOp = op->getParentOfType<scf::ForOp>())
+      oneMatrixPerLoadForBT |=
+          (op->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
+                           getContainsChainedDotAttrName()));
+
     Value ptr = op.getPtr();
     assert(isTensorPointerType(ptr.getType()) &&
            "Expecting tensor pointer type");
@@ -2466,7 +2472,7 @@ struct LoadOpToBlockIOConversion
   }
 
 private:
-  bool oneMatrixPerLoadForBT;
+  mutable bool oneMatrixPerLoadForBT;
   bool useTileLoadLinearLayout;
 };
 
