@@ -7533,6 +7533,9 @@ def test_disable_licm():
         for i in tl.range(0, n, disable_licm=True):
             print("i", i)
 
+    if is_xpu():
+        pytest.skip("FIXME: issue #4916")
+
     compiled_kernel1 = while_no_licm.warmup(10, grid=(1, ))
     assert "llvm.licm.disable" in compiled_kernel1.asm["llir"]
 
