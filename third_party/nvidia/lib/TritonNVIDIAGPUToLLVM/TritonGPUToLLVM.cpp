@@ -201,6 +201,7 @@ struct ConvertTritonGPUToLLVM
         id.replaceAllUsesWith(zero);
       });
     }
+    fixUpLoopAnnotation(mod);
 
     // Ensure warp group code is isolated from above.
     makeAllWarpGroupsIsolatedFromAbove(mod);
