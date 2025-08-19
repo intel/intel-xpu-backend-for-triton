@@ -8,6 +8,7 @@
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include <TritonGENToLLVM/GenIntrinsicHelper.h>
 #include <optional>
 
 using namespace mlir;
@@ -92,6 +93,12 @@ public:
       Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
       return {cTy, cTy, aTy, bTy};
     }
+    case DPASEngineType::FP32_FP32_FP8_FP8: {
+      Type cTy = vec_ty(fp32Ty, elemNumC);
+      Type aTy = vec_ty(i16Ty, elemNumA / 2);             // pack 2 fp8 to i16.
+      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
+      return {cTy, cTy, aTy, bTy};
+    }
     default:
       llvm::report_fatal_error("Unsupported dpas type found");
     }
@@ -117,7 +124,8 @@ public:
   ///      gen.matrix.dpas C, A, B {pa, pb, rc=M, sd=8}
   ///        : (vector<8xf32>, vector<4xi32>, vector<4xi32>) -> vector<8xf32>
   ///
-  LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor) const {
+  template <typename OpTy>
+  LogicalResult convertDot(OpTy op, typename OpTy::Adaptor adaptor) const {
     Value A = op.getA(), B = op.getB(), C = op.getC(), D = op.getResult();
     Value loadedA = adaptor.getA(), loadedB = adaptor.getB(),
           loadedC = adaptor.getC();
@@ -180,24 +188,27 @@ public:
       llvm::dbgs() << "fc.size()= " << fc.size() << "\n";
     });
 
-#if 0
-    auto mod = op->getParentOfType<ModuleOp>();
-    auto warpSize =
-        i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
-    Value warpId = udiv(getThreadId(rewriter, loc), warpSize);
-    Value laneId = urem(getThreadId(rewriter, loc), warpSize);
-    Value programId =
-        targetInfo.programId(rewriter, loc,
-                             rewriter.getInsertionBlock()->getParent()->getParentOfType<ModuleOp>(),
-                             0);
-#endif
+    GenISA_Dpas dpasOp(rewriter, cTy, cTy, aTy, bTy);
 
     auto generateDPASOp = [&](unsigned b, unsigned m, unsigned n, unsigned k) {
       auto tb = TritonLLVMOpBuilder(loc, rewriter);
       Value valA = ha.at({b, m, k});
       Value valB = hb.at({b, n, k});
       Value valc = fc.at({b, m, n});
-
+#if 1
+      // refer the call signature in GenISA
+      fc.at({b, m, n}) =
+          dpasOp(rewriter, loc, tb.bitcast(valc, cTy), tb.bitcast(valA, aTy),
+                 tb.bitcast(valB, bTy),
+                 tb.i32_val(
+                     static_cast<unsigned>(APrecision)), /*src0's precision*/
+                 tb.i32_val(
+                     static_cast<unsigned>(BPrecision)), /*src1's precision*/
+                 tb.i32_val(dpasEncoding.getSystolicDepth()), /*systolic depth*/
+                 tb.i32_val(dpasEncoding.getRepeatCount()),   /*repeate count*/
+                 tb.int_val(1, 0) /*is double = false*/)
+              ->getResult(0);
+#else
       TritonGEN::PrecisionTypeAttr pA =
           TritonGEN::PrecisionTypeAttr::get(A.getContext(), APrecision);
       TritonGEN::PrecisionTypeAttr pB =
@@ -207,6 +218,7 @@ public:
       fc.at({b, m, n}) = rewriter.create<TritonGEN::MatrixDPASOp>(
           loc, dTy, tb.bitcast(valc, cTy), tb.bitcast(valA, aTy),
           tb.bitcast(valB, bTy), pA, pB, RC);
+#endif
     };
 
     ArrayRef<unsigned> repCluster = dpasEncoding.getRepCluster();
@@ -419,6 +431,10 @@ private:
         return TritonGEN::PrecisionType::BF16;
       if (isa<Float16Type>(elemType))
         return TritonGEN::PrecisionType::FP16;
+      if (isa<Float8E5M2Type>(elemType))
+        return TritonGEN::PrecisionType::BF8;
+      if (isa<Float8E4M3Type>(elemType))
+        return TritonGEN::PrecisionType::HF8;
     } else if (width == 8) {
       return elemType.isUnsignedInteger() ? TritonGEN::PrecisionType::U8
                                           : TritonGEN::PrecisionType::S8;
@@ -439,12 +455,14 @@ private:
 } // namespace
 
 namespace fma_details {
-LogicalResult convertDPAS(triton::DotOp op, triton::DotOp::Adaptor adaptor,
+template <typename OpTy>
+LogicalResult convertDPAS(OpTy op, typename OpTy::Adaptor adaptor,
                           TritonIntelGPUToLLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter,
                           const TargetInfoBase &targetInfo) {
   LLVM_DEBUG({
-    auto module = op->getParentOfType<ModuleOp>();
+    Operation *opPtr = op.getOperation();
+    auto module = opPtr->getParentOfType<ModuleOp>();
     llvm::dbgs() << "module before DPAS generation\n";
     module->dump();
   });
@@ -474,4 +492,17 @@ LogicalResult convertDPAS(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 
   return helper.convertDot(op, adaptor);
 }
+
+template LogicalResult
+convertDPAS<DotOp>(DotOp op, DotOp::Adaptor adaptor,
+                   TritonIntelGPUToLLVMTypeConverter *typeConverter,
+                   ConversionPatternRewriter &rewriter,
+                   const TargetInfoBase &targetInfo);
+
+template LogicalResult
+convertDPAS<DotScaledOp>(DotScaledOp op, DotScaledOp::Adaptor adaptor,
+                         TritonIntelGPUToLLVMTypeConverter *typeConverter,
+                         ConversionPatternRewriter &rewriter,
+                         const TargetInfoBase &targetInfo);
+
 } // namespace fma_details
