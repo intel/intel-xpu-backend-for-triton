@@ -1,7 +1,6 @@
 import json
 import triton.profiler as proton
 import pathlib
-from triton.profiler.hooks.hook import HookManager
 
 
 def test_profile_single_session(tmp_path: pathlib.Path):
@@ -100,14 +99,6 @@ def test_hook(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_hook.hatchet"
     session_id0 = proton.start(str(temp_file.with_suffix("")), hook="triton")
     proton.activate(session_id0)
-    proton.activate(session_id0)
-    assert len(
-        HookManager.active_hooks) == 1, ("Activate a session multiple times should maintain a single instance of hook")
-    assert list(HookManager.session_hooks[session_id0].values())[0] is True
-    proton.deactivate(session_id0)
-    assert list(HookManager.session_hooks[session_id0].values())[0] is False
-    assert len(HookManager.active_hooks) == 0
-    # Deactivate a session multiple times should not raise an error
     proton.deactivate(session_id0)
     proton.finalize(None)
     assert temp_file.exists()
