@@ -75,8 +75,6 @@ throughput_test = os.getenv('THROUGHPUT_TEST', '0') == '1'
 batch_size = int(os.getenv('BATCH_SIZE', '1'))
 batch_sizes = [16, 32, 64] if throughput_test else [batch_size]
 
-need_prewarmup = True
-
 
 # Kernel profiling for Backward mode is not working as expected:
 # For details: https://github.com/pytorch/pytorch/issues/144778
