@@ -59,8 +59,8 @@ def DeclareSharedEncodingMethods : DeclareAttrInterfaceMethods<
 // Base Attribute
 //===----------------------------------------------------------------------===//
 
-class TritonGPU_Attr<string name, string attrMnemonic, list<Trait> traits = []>
-  : AttrDef<TritonGPU_Dialect, name, traits> {
+class TritonGPU_Attr<string name, string attrMnemonic, list<Trait> traits = [], Dialect dialect = TritonGPU_Dialect>
+  : AttrDef<dialect, name, traits> {
 
   let description = [{
 TritonGPU tensors differ from usual tensors in that they contain a _layout_ attribute which determines
@@ -659,8 +659,9 @@ We call each individual tile "rep".
   ];
 }
 
-class DistributedEncoding<string name, string attrMnemonic, list<Trait> traits = []>
-  : TritonGPU_Attr<name, attrMnemonic, !listconcat([DistributedEncodingTrait, LayoutEncodingTrait], traits)> {
+class DistributedEncoding<string name, string attrMnemonic, list<Trait> traits = [],
+                     Dialect dialect = TritonGPU_Dialect>
+  : TritonGPU_Attr<name, attrMnemonic, !listconcat([DistributedEncodingTrait, LayoutEncodingTrait], traits), dialect> {
 
   let description = [{
 Distributed encodings have a layout function L that is entirely characterized
