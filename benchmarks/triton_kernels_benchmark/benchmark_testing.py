@@ -45,10 +45,14 @@ def synchronize():
 def do_prewarmup(fn, min_seconds=5):
     """Looks like some functions require pre-warmup with minimum time to do the compilation.
     It has to be done once."""
+    if not BENCHMARKING_CONFIG["do_prewarmup"]:
+        return
+
     start = time.time()
     while time.time() - start < min_seconds:
         fn()
         synchronize()
+    BENCHMARKING_CONFIG["do_prewarmup"] = False
 
 
 def _summarize_statistics(times, quantiles, return_mode):
