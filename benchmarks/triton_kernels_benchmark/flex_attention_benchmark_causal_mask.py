@@ -75,6 +75,8 @@ throughput_test = os.getenv('THROUGHPUT_TEST', '0') == '1'
 batch_size = int(os.getenv('BATCH_SIZE', '1'))
 batch_sizes = [16, 32, 64] if throughput_test else [batch_size]
 
+need_prewarmup = True
+
 
 # Kernel profiling for Backward mode is not working as expected:
 # For details: https://github.com/pytorch/pytorch/issues/144778
@@ -166,9 +168,13 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
 
         benchmark_suit.assert_close(triton_fn, torch_fn, atol=1e-2, rtol=1e-3, err_msg='triton to torch')
         # Need more warmups on B580 due to the torch.compile
+
         is_bmg = any(name in torch.xpu.get_device_name().lower() for name in ('b570', 'b580'))
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=200 if is_bmg else 10, n_repeat=10,
-                                                              quantiles=quantiles, device=DEVICE)
+        if is_bmg and benchmark_suit.BenchmarkConfig['do_prewarmup']:
+            benchmark_suit.do_prewarmup(triton_fn)
+            benchmark_suit.BenchmarkConfig['do_prewarmup'] = False
+        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10, quantiles=quantiles,
+                                                              device=DEVICE)
 
     elif provider == 'onednn':
         # OneDNN only supports MHA.
