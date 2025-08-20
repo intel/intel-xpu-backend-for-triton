@@ -29,9 +29,9 @@ public:
     // data types for dot scaled.
     FP32_FP32_BF16_FP8,
     FP32_FP32_BF16_FP4,
-    FP32_FP32_FP8_BF16,
     FP32_FP32_FP16_FP8,
     FP32_FP32_FP16_FP4,
+    FP32_FP32_FP8_BF16,
     FP32_FP32_FP8_FP16,
     FP32_FP32_FP8_FP8,
     FP32_FP32_FP8_FP4,
