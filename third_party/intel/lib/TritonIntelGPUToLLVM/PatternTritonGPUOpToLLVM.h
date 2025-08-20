@@ -77,8 +77,7 @@ void populateFp4ToFpToLLVMPatterns(LLVMTypeConverter &typeConverter,
 void populateLoadStoreOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
     RewritePatternSet &patterns, const ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    PatternBenefit benefit, std::optional<bool> oneMatrixPerLoadForBT,
-    bool useTileLoadLinearLayout);
+    PatternBenefit benefit, bool useTileLoadLinearLayout);
 
 void populateTensorPtrOpsToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                         RewritePatternSet &patterns,

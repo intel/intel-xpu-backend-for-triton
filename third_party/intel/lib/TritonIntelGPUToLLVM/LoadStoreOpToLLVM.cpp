@@ -977,18 +977,19 @@ struct LoadOpToBlockIOConversion
   LoadOpToBlockIOConversion(
       LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
-      PatternBenefit benefit, std::optional<bool> oneMatrixPerLoadForBT,
-      bool useTileLoadLinearLayout)
+      PatternBenefit benefit, bool useTileLoadLinearLayout)
       : ConvertTritonGPUOpToLLVMPattern<triton::LoadOp>(converter, benefit),
         BlockIOConversionBase(targetInfo, axisAnalysisPass),
-        oneMatrixPerLoadForBT(oneMatrixPerLoadForBT),
         useTileLoadLinearLayout(useTileLoadLinearLayout) {}
 
   LogicalResult
   rewriteTensorPointerLoad(triton::LoadOp op, OpAdaptor adaptor,
                            ConversionPatternRewriter &rewriter) const {
+    // FIXME: Remove once IGC can split large 2D block loads.
+    std::optional<bool> oneMatrixPerLoadForBT =
+        mlir::triton::tools::isEnvValueBool(mlir::triton::tools::getStrEnv(
+            "TRITON_INTEL_ONE_MATRIX_PER_LOAD_BT"));
     if (!oneMatrixPerLoadForBT.has_value()) {
-      // FIXME: Remove once IGC can split large 2D block loads.
       oneMatrixPerLoadForBT = false;
       if (auto forOp = op->getParentOfType<scf::ForOp>()) {
         oneMatrixPerLoadForBT =
@@ -2476,7 +2477,6 @@ struct LoadOpToBlockIOConversion
   }
 
 private:
-  mutable std::optional<bool> oneMatrixPerLoadForBT;
   bool useTileLoadLinearLayout;
 };
 
@@ -3508,15 +3508,14 @@ void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
     RewritePatternSet &patterns,
     const intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    PatternBenefit benefit, std::optional<bool> oneMatrixPerLoadForBT,
-    bool useTileLoadLinearLayout) {
+    PatternBenefit benefit, bool useTileLoadLinearLayout) {
   patterns.add<AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
                StoreOpConversion, PrefetchOpConversion>(
       typeConverter, targetInfo, axisInfoAnalysis, benefit);
   // BlockIO is more efficient than gather load or scatter store.
   patterns.add<LoadOpToBlockIOConversion>(
       typeConverter, targetInfo, axisInfoAnalysis, benefit.getBenefit() + 2,
-      oneMatrixPerLoadForBT, useTileLoadLinearLayout);
+      useTileLoadLinearLayout);
   patterns.add<StoreOpToBlockIOConversion>(
       typeConverter, targetInfo, axisInfoAnalysis, benefit.getBenefit() + 2);
 }
