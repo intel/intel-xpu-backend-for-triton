@@ -170,6 +170,21 @@ public:
         typeConverter->convertType(CTensorTy.getElementType()),
         DpasEncodingAttr::OpIdx::OperandC);
 
+    ValueTable scaleA, scaleB;
+    if constexpr (std::is_same<OpTy, DotScaledOp>::value) {
+      auto scaleAVal = adaptor.getAScale();
+      if (scaleAVal) {
+        scaleA = getScaleValuesFromDotOperandLayoutStruct(scaleAVal, repBatch,
+                                                          repM, repK, 3);
+      }
+
+      auto scaleBVal = adaptor.getBScale();
+      if (scaleBVal) {
+        scaleB = getScaleValuesFromDotOperandLayoutStruct(scaleBVal, repBatch,
+                                                          repN, repK, 4);
+      }
+    }
+
     Type resElemTy = DTensorTy.getElementType();
 
     TritonGEN::PrecisionType APrecision =
@@ -188,7 +203,12 @@ public:
       llvm::dbgs() << "fc.size()= " << fc.size() << "\n";
     });
 
-    GenISA_Dpas dpasOp(rewriter, cTy, cTy, aTy, bTy);
+    Intrinsic dpas;
+    if constexpr (std::is_same<OpTy, DotScaledOp>::value) {
+      dpas = GenISA_BDpas(rewriter, cTy, cTy, aTy, bTy, i8_ty, i8_ty);
+    } else {
+      dpas = GenISA_Dpas(rewriter, cTy, cTy, aTy, bTy);
+    }
 
     auto generateDPASOp = [&](unsigned b, unsigned m, unsigned n, unsigned k) {
       auto tb = TritonLLVMOpBuilder(loc, rewriter);
@@ -197,17 +217,27 @@ public:
       Value valc = fc.at({b, m, n});
 #if 1
       // refer the call signature in GenISA
-      fc.at({b, m, n}) =
-          dpasOp(rewriter, loc, tb.bitcast(valc, cTy), tb.bitcast(valA, aTy),
-                 tb.bitcast(valB, bTy),
-                 tb.i32_val(
-                     static_cast<unsigned>(APrecision)), /*src0's precision*/
-                 tb.i32_val(
-                     static_cast<unsigned>(BPrecision)), /*src1's precision*/
-                 tb.i32_val(dpasEncoding.getSystolicDepth()), /*systolic depth*/
-                 tb.i32_val(dpasEncoding.getRepeatCount()),   /*repeate count*/
-                 tb.int_val(1, 0) /*is double = false*/)
-              ->getResult(0);
+      if constexpr (std::is_same<OpTy, DotScaledOp>::value) {
+        Value sA = scaleA.at({b, m, k});
+        Value sB = scaleB.at({b, n, k});
+        fc.at({b, m, n}) = dpas(
+            rewriter, loc,
+            {tb.bitcast(valc, cTy), tb.bitcast(valA, aTy),
+             tb.bitcast(valB, bTy), sA, sB,
+             tb.i32_val(static_cast<unsigned>(APrecision)), /*src0's precision*/
+             tb.i32_val(static_cast<unsigned>(BPrecision)),
+             /*src1's precision*/});
+      } else {
+        fc.at({b, m, n}) = dpas(
+            rewriter, loc,
+            {tb.bitcast(valc, cTy), tb.bitcast(valA, aTy),
+             tb.bitcast(valB, bTy),
+             tb.i32_val(static_cast<unsigned>(APrecision)), /*src0's precision*/
+             tb.i32_val(static_cast<unsigned>(BPrecision)), /*src1's precision*/
+             tb.i32_val(dpasEncoding.getSystolicDepth()),   /*systolic depth*/
+             tb.i32_val(dpasEncoding.getRepeatCount()),     /*repeate count*/
+             tb.int_val(1, 0) /*is double = false*/});
+      }
 #else
       TritonGEN::PrecisionTypeAttr pA =
           TritonGEN::PrecisionTypeAttr::get(A.getContext(), APrecision);
@@ -404,6 +434,54 @@ private:
                              .getResult();
               vals[{b, i * repClusterOuter + repOuter,
                     j * repClusterInner + repInner}] = matVal;
+            }
+          }
+        }
+      }
+    }
+
+    return vals;
+  }
+
+  ValueTable getScaleValuesFromDotOperandLayoutStruct(Value val, int64_t batch,
+                                                      int64_t outer,
+                                                      int64_t inner,
+                                                      unsigned opIdx) const {
+    SmallVector<Value> elems = unpackLLElements(loc, val, rewriter);
+
+    ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
+    size_t rank = repCluster.size();
+    unsigned repClusterOuter = 0u;
+    unsigned repClusterInner = 0u;
+    bool isOperandA = false;
+    bool isOperandB = false;
+    switch (opIdx) {
+    case 3:
+      // operand A
+      repClusterOuter = repCluster[rank - 2];
+      repClusterInner = 1;
+      isOperandA = true;
+      break;
+    case 4:
+      // operand B
+      repClusterInner = 1;
+      repClusterOuter = repCluster[rank - 1];
+      isOperandB = true;
+      break;
+    default:
+      llvm_unreachable("error");
+    }
+
+    size_t totalElems = elems.size();
+    int offset = 0;
+    ValueTable vals;
+    for (unsigned b = 0; b < batch; ++b) {
+      for (int i = 0; i < outer; ++i) {
+        for (int j = 0; j < inner; ++j) {
+          for (int repOuter = 0; repOuter < repClusterOuter; ++repOuter) {
+            for (int repInner = 0; repInner < repClusterInner; ++repInner) {
+              vals[{b, i * repClusterOuter + repOuter,
+                    j * repClusterInner + repInner}] = elems[offset++];
             }
           }
         }
