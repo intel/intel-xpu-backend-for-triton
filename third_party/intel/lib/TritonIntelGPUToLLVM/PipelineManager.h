@@ -32,7 +32,6 @@
 #include "PatternTritonGPUOpToLLVM.h"
 
 #include "third_party/proton/dialect/include/TritonProtonToLLVM/PatternTritonProtonOpToLLVM.h"
-#include <optional>
 
 namespace mlir {
 
