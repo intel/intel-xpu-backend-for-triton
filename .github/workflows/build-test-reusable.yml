@@ -149,7 +149,7 @@ jobs:
             skiplist="--skip-list $GITHUB_WORKSPACE/scripts/skiplist/default"
           fi
 
-          TRITON_TEST_CMD="bash -x scripts/test-triton.sh --skip-pip-install --warning-reports --skip-pytorch-install --reports-dir $GITHUB_WORKSPACE/reports ${{ inputs.ignore_errors && '--ignore-errors' || '' }} $skiplist"
+          TRITON_TEST_CMD="bash -x scripts/test-triton.sh --triton-kernels --skip-pip-install --warning-reports --skip-pytorch-install --reports-dir $GITHUB_WORKSPACE/reports ${{ inputs.ignore_errors && '--ignore-errors' || '' }} $skiplist"
           echo "command=$TRITON_TEST_CMD" | tee -a $GITHUB_OUTPUT
           echo "TRITON_TEST_CMD=$TRITON_TEST_CMD" | tee -a $GITHUB_ENV
 
