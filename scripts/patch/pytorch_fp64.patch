@@ -1,8 +1,8 @@
 diff --git a/benchmarks/dynamo/common.py b/benchmarks/dynamo/common.py
-index 1088634ce911e8..4e70bf5bfce434 100644
+index 469ece2958..54ba0d7b3c 100644
 --- a/benchmarks/dynamo/common.py
 +++ b/benchmarks/dynamo/common.py
-@@ -1598,6 +1598,12 @@ def cast_to_fp32(model, inputs):
+@@ -1659,6 +1659,12 @@ def cast_to_fp32(model, inputs):
      return cast_to(torch.float32, model, inputs)
  
  
@@ -15,7 +15,7 @@ index 1088634ce911e8..4e70bf5bfce434 100644
  class DummyGradScaler:
      def scale(self, loss):
          return loss
-@@ -2097,10 +2103,24 @@ def record_status(accuracy_status, dynamo_start_stats):
+@@ -2162,10 +2168,24 @@ class BenchmarkRunner:
              model_fp64 = None
              inputs_fp64 = None
              try:
@@ -44,7 +44,7 @@ index 1088634ce911e8..4e70bf5bfce434 100644
                  self.init_optimizer(name, current_device, model_fp64.parameters())
                  fp64_outputs = self.run_n_iterations(
                      model_fp64, inputs_fp64, self.model_iter_fn
-@@ -2111,11 +2131,19 @@ def record_status(accuracy_status, dynamo_start_stats):
+@@ -2176,11 +2196,19 @@ class BenchmarkRunner:
                      else x,
                      fp64_outputs,
                  )
