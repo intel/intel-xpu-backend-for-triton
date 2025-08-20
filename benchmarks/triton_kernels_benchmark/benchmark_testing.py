@@ -141,16 +141,18 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
 
     assert return_mode in ["min", "max", "mean", "median"]
 
-    # Warm-up
-    for _ in range(n_warmup + 1):
-        fn()
-        synchronize()
+    fn()
+    synchronize()
 
     # We maintain a buffer of 256 MB that we clear
     # before each kernel call to make sure that the L2
     # doesn't contain any input data before the run
     cache_size = 256 * 1024 * 1024
     cache = torch.empty(int(cache_size // 4), dtype=torch.int, device=device)
+
+    # Warm-up
+    for _ in range(n_warmup):
+        fn()
 
     # Benchmark
     with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.XPU]) as prof:
