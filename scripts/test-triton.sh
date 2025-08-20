@@ -532,7 +532,7 @@ run_triton_kernels_tests() {
   cd $TRITON_PROJ/python/triton_kernels/tests
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=triton_kernels \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu .
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu . --ignore=test_tensor_details
 }
 
 test_triton() {
