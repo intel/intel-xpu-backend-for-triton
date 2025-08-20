@@ -990,7 +990,7 @@ struct LoadOpToBlockIOConversion
     // FIXME: Remove once IGC can split large 2D block loads.
     if (auto forOp = op->getParentOfType<scf::ForOp>())
       oneMatrixPerLoadForBT |=
-          (op->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
+          (forOp->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
                            getContainsChainedDotAttrName()));
 
     Value ptr = op.getPtr();
