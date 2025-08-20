@@ -977,7 +977,7 @@ struct LoadOpToBlockIOConversion
   LoadOpToBlockIOConversion(
       LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
-      PatternBenefit benefit, bool oneMatrixPerLoadForBT,
+      PatternBenefit benefit, std::optional<bool> oneMatrixPerLoadForBT,
       bool useTileLoadLinearLayout)
       : ConvertTritonGPUOpToLLVMPattern<triton::LoadOp>(converter, benefit),
         BlockIOConversionBase(targetInfo, axisAnalysisPass),
@@ -987,11 +987,15 @@ struct LoadOpToBlockIOConversion
   LogicalResult
   rewriteTensorPointerLoad(triton::LoadOp op, OpAdaptor adaptor,
                            ConversionPatternRewriter &rewriter) const {
-    // FIXME: Remove once IGC can split large 2D block loads.
-    if (auto forOp = op->getParentOfType<scf::ForOp>())
-      oneMatrixPerLoadForBT |=
-          (forOp->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
-                           getContainsChainedDotAttrName()));
+    if (!oneMatrixPerLoadForBT.has_value()) {
+      // FIXME: Remove once IGC can split large 2D block loads.
+      oneMatrixPerLoadForBT = false;
+      if (auto forOp = op->getParentOfType<scf::ForOp>()) {
+        oneMatrixPerLoadForBT =
+            (forOp->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
+                                getContainsChainedDotAttrName()));
+      }
+    }
 
     Value ptr = op.getPtr();
     assert(isTensorPointerType(ptr.getType()) &&
@@ -1348,7 +1352,7 @@ struct LoadOpToBlockIOConversion
       if (!usePackedType)
         return failure();
 
-      if (oneMatrixPerLoadForBT) {
+      if (*oneMatrixPerLoadForBT) {
         // Only load 1 operand per inst on row.
         numOperandsPer2DLoadM = 1;
         tileHeight = elemsPerDPASInst[threadOrder[rank - 2]];
@@ -1397,7 +1401,7 @@ struct LoadOpToBlockIOConversion
     tileLayout *= LinearLayout::identity1D(numOperandsOuterDimPerLoad,
                                            kIteration, dimOuterStr);
     tileLayout *=
-        LinearLayout::identity1D(isTransposeRequired && oneMatrixPerLoadForBT
+        LinearLayout::identity1D(isTransposeRequired && *oneMatrixPerLoadForBT
                                      ? 1
                                      : numOperandsInnerDimPerLoad,
                                  kIteration, dimInnerStr);
@@ -2472,7 +2476,7 @@ struct LoadOpToBlockIOConversion
   }
 
 private:
-  mutable bool oneMatrixPerLoadForBT;
+  mutable std::optional<bool> oneMatrixPerLoadForBT;
   bool useTileLoadLinearLayout;
 };
 
@@ -3504,7 +3508,7 @@ void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
     RewritePatternSet &patterns,
     const intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    PatternBenefit benefit, bool oneMatrixPerLoadForBT,
+    PatternBenefit benefit, std::optional<bool> oneMatrixPerLoadForBT,
     bool useTileLoadLinearLayout) {
   patterns.add<AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
                StoreOpConversion, PrefetchOpConversion>(

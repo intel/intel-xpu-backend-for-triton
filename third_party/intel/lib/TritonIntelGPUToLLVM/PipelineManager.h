@@ -32,6 +32,7 @@
 #include "PatternTritonGPUOpToLLVM.h"
 
 #include "third_party/proton/dialect/include/TritonProtonToLLVM/PatternTritonProtonOpToLLVM.h"
+#include <optional>
 
 namespace mlir {
 
@@ -180,7 +181,7 @@ private:
 class TritonGPUToLLVMPipelineManager {
 public:
   TritonGPUToLLVMPipelineManager(ModuleOp &mod, MLIRContext *ctx, bool advanced,
-                                 bool oneMatrixPerLoadForBT,
+                                 std::optional<bool> oneMatrixPerLoadForBT,
                                  bool useTileLoadLinearLayout)
       : mod(mod), ctx(ctx), isAdvancedPathEnabled(advanced),
         oneMatrixPerLoadForBT(oneMatrixPerLoadForBT),
@@ -278,7 +279,7 @@ private:
   /// FIXME: this is temporary and should be removed once we have an analysis to
   /// determine whether a kernel uses block pointers.
   bool isAdvancedPathEnabled = false;
-  bool oneMatrixPerLoadForBT = false;
+  std::optional<bool> oneMatrixPerLoadForBT = std::nullopt;
   bool useTileLoadLinearLayout = true;
 };
 
