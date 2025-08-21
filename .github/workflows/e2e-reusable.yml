@@ -135,6 +135,7 @@ jobs:
 
       - name: Install python test dependencies
         run: |
+          pip install fbgemm-gpu --index-url https://download.pytorch.org/whl/cpu
           pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec
 
       - name: Install transformers package
