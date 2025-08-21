@@ -9,7 +9,7 @@
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
 
 // CHECK-LABEL: matmul_kernel_tma_persistent
-tt.func public @matmul_kernel_tma_persistent(%arg0: !tt.tensordesc<tensor<128x64xf16, #shared>>, %arg1: !tt.tensordesc<tensor<256x64xf16, #shared>>, %arg2: !tt.tensordesc<tensor<128x256xf16, #shared>>, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+tt.func public @matmul_kernel_tma_persistent(%arg0: !tt.tensordesc<tensor<128x64xf16, #shared>>, %arg1: !tt.tensordesc<tensor<256x64xf16, #shared>>, %arg2: !tt.tensordesc<tensor<128x256xf16, #shared>>, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}) {
   %c2_i32 = arith.constant 2 : i32
   %c1_i32 = arith.constant 1 : i32
   %c0_i32 = arith.constant 0 : i32
@@ -19,13 +19,13 @@ tt.func public @matmul_kernel_tma_persistent(%arg0: !tt.tensordesc<tensor<128x64
   // CHECK: [[LHS_BUFFERS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x128x64xf16,
   // CHECK: [[RHS_BUFFERS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<4x256x64xf16,
 
-  // CHECK: [[LHS_BARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64,
+  // CHECK: [[LHS_BARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64,
   // CHECK-NEXT: [[LHS_BAR0:%.*]] = ttg.memdesc_index [[LHS_BARS]], %c0_i32
   // CHECK-NEXT: ttng.init_barrier [[LHS_BAR0]]
   // CHECK-NEXT: [[LHS_BAR1:%.*]] = ttg.memdesc_index [[LHS_BARS]], %c1_i32
   // CHECK-NEXT: ttng.init_barrier [[LHS_BAR1]]
 
-  // CHECK: [[RHS_BARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<4xi64,
+  // CHECK: [[RHS_BARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<4x1xi64,
   // CHECK-NEXT: [[RHS_BAR0:%.*]] = ttg.memdesc_index [[RHS_BARS]], %c0_i32
   // CHECK-NEXT: ttng.init_barrier [[RHS_BAR0]]
   // CHECK-NEXT: [[RHS_BAR1:%.*]] = ttg.memdesc_index [[RHS_BARS]], %c1_i32

@@ -33,8 +33,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
         start_n = tl.multiple_of(start_n, BLOCK_N)
         # -- compute qk ----
         k = desc_k.load([0, offsetk_y])
-        qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
-        qk += tl.dot(q, k)
+        qk = tl.dot(q, k)
         if STAGE == 2:
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])
             qk = qk * qk_scale + tl.where(mask, 0, -1.0e6)
@@ -47,7 +46,6 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
         # -- compute correction factor
         alpha = tl.math.exp2(m_i - m_ij)
         l_ij = tl.sum(p, 1)
-        l_i = l_i * alpha + l_ij
         # -- update output accumulator --
         acc = acc * alpha[:, None]
         # prepare p and v for the dot
@@ -57,6 +55,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
         acc = tl.dot(p, v, acc)
         # update m_i and l_i
         # place this at the end of the loop to reduce register pressure
+        l_i = l_i * alpha + l_ij
         m_i = m_ij
         offsetk_y += BLOCK_N
         offsetv_y += BLOCK_N
@@ -141,22 +140,14 @@ def _attn_fwd_with_tensor_desc(Q, K, V, sm_scale, M, Out,  #
 def get_benchmark(
     providers_filter: Optional[list[str]] = None,
     fa_kernel_mode='fwd',
-    xetla_assert_result=False,
-    xetla_warn_mismatch=False,
 ):
     return flash_attention_benchmark.get_benchmark(
         providers_filter=providers_filter,
         fa_kernel_mode=fa_kernel_mode,
         attn_fwd=_attn_fwd_with_tensor_desc,
-        xetla_assert_result=xetla_assert_result,
-        xetla_warn_mismatch=xetla_warn_mismatch,
     )
 
 
 if __name__ == '__main__':
-    _benchmark = get_benchmark(
-        fa_kernel_mode=os.getenv('FA_KERNEL_MODE', 'fwd'),
-        xetla_assert_result=(os.getenv('XETLA_ASSERT_RESULT', '0') == '1'),
-        xetla_warn_mismatch=(os.getenv('XETLA_WARN_MISMATCH', '0') == '1'),
-    )
+    _benchmark = get_benchmark(fa_kernel_mode=os.getenv('FA_KERNEL_MODE', 'fwd'), )
     _benchmark.run(show_plots=False, print_data=True)

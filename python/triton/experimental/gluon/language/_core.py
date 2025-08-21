@@ -7,7 +7,7 @@ if TYPE_CHECKING:
     from triton._C.libtriton.gluon_ir import GluonOpBuilder
     from ._semantic import GluonSemantic
 
-from ._layouts import SharedLayout, DistributedLayout, AutoLayout
+from ._layouts import SharedLayout, DistributedLayout
 from triton._C.libtriton import ir
 import triton.language.core as tl_core
 from triton.language.core import (
@@ -46,15 +46,23 @@ from triton.language.core import (
 )
 
 _IMPORT_FROM_TRITON: List[str] = [
+    "atomic_add",
+    "atomic_and",
+    "atomic_cas",
+    "atomic_max",
+    "atomic_min",
+    "atomic_or",
+    "atomic_xchg",
+    "atomic_xor",
     "broadcast",
     "expand_dims",
     "inline_asm_elementwise",
     "join",
     "load",
     "map_elementwise",
-    "maximum",
     "max_constancy",
     "max_contiguous",
+    "maximum",
     "minimum",
     "multiple_of",
     "permute",
@@ -383,13 +391,11 @@ def convert_layout(value, layout, assert_trivial=False, _semantic=None):
         tensor: The tensor with the new layout.
     """
     layout = _unwrap_if_constexpr(layout)
-    if isinstance(value.type.layout, AutoLayout):
-        return set_auto_layout(value, layout, _semantic=_semantic)
     return _semantic.convert_layout(value, layout, assert_trivial)
 
 
 @builtin
-def full(shape, value, dtype, layout, _semantic=None):
+def full(shape, value, dtype, layout=None, _semantic=None):
     """
     Create a tensor filled with a scalar value, with specified shape, dtype, and layout.
 
@@ -397,7 +403,7 @@ def full(shape, value, dtype, layout, _semantic=None):
         shape (Sequence[int]): The shape of the tensor.
         value (int or float): The fill value.
         dtype (dtype): The data type for the tensor.
-        layout (DistributedLayout): The layout of the output tensor.
+        layout (Optional[DistributedLayout]): The layout of the output tensor, defaults to AutoLayout().
 
     Returns:
         tensor: A tensor where every element equals value.
@@ -447,7 +453,7 @@ def set_auto_layout(value, layout, _semantic=None):
 
 
 @builtin
-def warp_specialize(args, default_partition, worker_partitions, worker_num_warps, worker_num_regs,  #
+def warp_specialize(default_args, default_partition, worker_args, worker_partitions, worker_num_warps, worker_num_regs,
                     _semantic=None, _generator=None):
     """
     Create a warp-specialized execution region, partitioning work across warps.
@@ -465,7 +471,7 @@ def warp_specialize(args, default_partition, worker_partitions, worker_num_warps
     """
     worker_num_warps = [_unwrap_if_constexpr(w) for w in worker_num_warps]
     worker_num_regs = [_unwrap_if_constexpr(r) for r in worker_num_regs]
-    return _semantic.warp_specialize(args, default_partition, worker_partitions, worker_num_warps,  #
+    return _semantic.warp_specialize(default_args, default_partition, worker_args, worker_partitions, worker_num_warps,
                                      worker_num_regs, _generator)
 
 

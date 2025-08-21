@@ -158,6 +158,8 @@ class GluonSemantic(TritonSemantic[TensorTy]):
 
     def full(self, shape, value, dtype, layout):
         scalar = self.make_scalar(value, dtype)
+        if layout is None:
+            layout = AutoLayout()
         return self.splat(scalar, shape, layout)
 
     def convert_layout(self, value, layout, assert_trivial=False):
@@ -296,8 +298,8 @@ class GluonSemantic(TritonSemantic[TensorTy]):
             self._wrap_handle_infer_layout(reduce_op.get_result(i), inputs[i].type.scalar, ret_shape)
             for i in range(len(inputs)))
 
-    def warp_specialize(self, args, default_partition, worker_partitions, worker_num_warps: Sequence[int],
-                        worker_num_regs: Sequence[int], generator):
+    def warp_specialize(self, default_args, default_partition, worker_args, worker_partitions,
+                        worker_num_warps: Sequence[int], worker_num_regs: Sequence[int], generator):
         num_partitions = len(worker_partitions)
         assert num_partitions == len(
             worker_num_warps
@@ -312,7 +314,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         # Emit the default partition to get the result types.
         default_block = builder.new_block()
         builder.set_insertion_point_to_start(default_block)
-        default_results = generator.call_JitFunction(default_partition, args, kwargs={})
+        default_results = generator.call_JitFunction(default_partition, default_args, kwargs={})
         mlir_results = []
         if default_results is not None:
             mlir_results = flatten_values_to_ir(default_results)
@@ -321,7 +323,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
 
         # Create the warp specialize op.
         builder.restore_insertion_point(insert_pt)
-        mlir_args = flatten_values_to_ir(args)
+        mlir_args = flatten_values_to_ir(worker_args)
         ws_op = builder.create_warp_specialize(result_types, mlir_args, worker_num_warps)
         ws_op.get_default_region().push_back(default_block)
         ws_op.set_requested_registers(worker_num_regs)
@@ -334,7 +336,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
             caller_context = GluonCallerContext(num_warps=worker_num_warps[i])
             block = builder.create_block_with_parent(partitions_op.get_region(i), arg_types)
             block_args = [block.get_argument(j) for j in range(len(mlir_args))]
-            block_args = unflatten_ir_values(block_args, [arg.type for arg in args])
+            block_args = unflatten_ir_values(block_args, [arg.type for arg in worker_args])
             generator.call_JitFunction(worker_partitions[i], block_args, kwargs={}, caller_context=caller_context)
             builder.create_warp_return()
 

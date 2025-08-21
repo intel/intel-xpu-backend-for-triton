@@ -64,9 +64,7 @@ def TTG_AsyncCommitGroupOp : TTG_Op<"async_commit_group"> {
   let results = (outs TTG_AsyncToken:$asyncToken);
   let arguments = (ins Variadic<TTG_AsyncToken>:$inputTokens);
 
-  let assemblyFormat = [{
-    $inputTokens attr-dict
-  }];
+  let assemblyFormat = [{($inputTokens ^)?attr-dict}];
 
   let extraClassDeclaration = [{
     static bool isSupported(int computeCapability) {
@@ -214,8 +212,6 @@ def TTG_MemDescIndexOp : TTG_Op<"memdesc_index", [Pure, MemDescViewTrait]> {
      - the output shape is 4x16xf16, and
      - index = 1.
     Then the output descriptor is equivalent to input[1], where input is the logical tensor.
-
-    When the input is of rank 1 (i.e, shape=[k]), the output will have shape=[1].
   }];
 
   let arguments = (ins TTG_MemDescType:$src, I32:$index);

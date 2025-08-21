@@ -337,8 +337,8 @@ class CUDABackend(BaseBackend):
 
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
         passes.ttgpuir.add_allocate_warp_groups(pm)
-        passes.convert.add_scf_to_cf(pm)
-        passes.ttgpuir.add_allocate_shared_memory(pm)
+        passes.convert.add_triton_scf_to_cf(pm)
+        nvidia.passes.ttgpuir.add_allocate_shared_memory_nv(pm, capability, ptx_version)
         nvidia.passes.ttnvgpuir.add_allocate_tensor_memory(pm)
         if knobs.compilation.enable_experimental_consan:
             # Call ConcurrencySanitizerPass here, before allocating global scratch memory but after allocating tensor and shared
@@ -421,8 +421,18 @@ class CUDABackend(BaseBackend):
             fsrc.flush()
             fbin = fsrc.name + '.o'
 
-            line_info = ["-lineinfo", "-suppress-debug-info"] if knobs.compilation.disable_line_info else ["-lineinfo"]
-            fmad = [] if opt.enable_fp_fusion else ['--fmad=false']
+            debug_info = []
+            if knobs.compilation.disable_line_info:
+                # This option is ignored if used without -lineinfo
+                debug_info += ["-lineinfo", "-suppress-debug-info"]
+            elif knobs.nvidia.disable_ptxas_opt:
+                # Synthesize complete debug info
+                debug_info += ["-g"]
+            else:
+                # Only emit line info
+                debug_info += ["-lineinfo"]
+
+            fmad = [] if opt.enable_fp_fusion else ["--fmad=false"]
             arch = sm_arch_from_capability(capability)
 
             # Disable ptxas optimizations if requested
@@ -432,8 +442,8 @@ class CUDABackend(BaseBackend):
             ptx_extra_options = opt.ptx_options.split(" ") if opt.ptx_options else []
 
             ptxas_cmd = [
-                ptxas, *line_info, *fmad, '-v', *disable_opt, *ptx_extra_options, f'--gpu-name={arch}', fsrc.name, '-o',
-                fbin
+                ptxas, *debug_info, *fmad, '-v', *disable_opt, *ptx_extra_options, f'--gpu-name={arch}', fsrc.name,
+                '-o', fbin
             ]
             try:
                 subprocess.run(ptxas_cmd, check=True, close_fds=False, stderr=flog)
@@ -460,9 +470,20 @@ class CUDABackend(BaseBackend):
                 else:
                     error = f'`ptxas` failed with error code {e.returncode}'
 
-                raise PTXASError(f"{error}\n"
-                                 f"`ptxas` stderr:\n{log}\n"
-                                 f'Repro command: {" ".join(ptxas_cmd)}\n')
+                error = (f"{error}\n"
+                         f"`ptxas` stderr:\n{log}\n"
+                         f'Repro command: {" ".join(ptxas_cmd)}\n')
+
+                print(f"""
+
+================================================================
+{error}
+
+{src}
+================================================================
+please share the reproducer above with Triton project.
+""")
+                raise PTXASError(error)
 
             with open(fbin, 'rb') as f:
                 cubin = f.read()

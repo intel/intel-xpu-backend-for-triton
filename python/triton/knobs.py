@@ -361,7 +361,7 @@ class base_knobs:
 class BuildImpl(Protocol):
 
     def __call__(self, name: str, src: str, srcdir: str, library_dirs: list[str], include_dirs: list[str],
-                 libraries: list[str], extra_compile_args: list[str], /) -> str:
+                 libraries: list[str], ccflags: list[str], /) -> str:
         ...
 
 
@@ -518,7 +518,6 @@ class amd_knobs(base_knobs):
     use_buffer_atomics: env_bool = env_bool("AMDGCN_USE_BUFFER_ATOMICS", True)
     dump_amdgcn: env_bool = env_bool("AMDGCN_ENABLE_DUMP")
     libhip_path: env_opt_str = env_opt_str("TRITON_LIBHIP_PATH")
-    lld_path: env_opt_str = env_opt_str("TRITON_HIP_LLD_PATH")
 
     # We use strs so that we can have a default value based on other runtime info
     use_block_pingpong: env_opt_bool = env_opt_bool("TRITON_HIP_USE_BLOCK_PINGPONG")
