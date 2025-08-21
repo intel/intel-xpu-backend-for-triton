@@ -44,9 +44,19 @@ getWarpsPerTile(tt::DotOp dotOp, ttgi::DpasEncodingAttr::DPASCapability dpasCap,
     if (isa<tt::DotOp>(op) && (op != dotOp)) {
       // FIXME: Remove once IGC can split large 2D block loads.
       if (auto forOp = op->getParentOfType<scf::ForOp>()) {
-        forOp->setAttr(
-            ttgi::TritonIntelGPUDialect::getContainsChainedDotAttrName(),
-            UnitAttr::get(forOp->getContext()));
+        MLIRContext *ctx = forOp->getContext();
+        auto setAttrOnBOperand = [&](tt::DotOp dotOp, StringRef attrName,
+                                     Attribute attr) {
+          Operation *defOp = dotOp.getB().getDefiningOp();
+          if (!defOp)
+            return;
+          if (auto loadOp = dyn_cast<tt::LoadOp>(defOp))
+            loadOp->setAttr(attrName, attr);
+        };
+        auto attrName =
+            ttgi::TritonIntelGPUDialect::getOneMatrixPerLoadAttrName();
+        setAttrOnBOperand(dotOp, attrName, UnitAttr::get(ctx));
+        setAttrOnBOperand(cast<tt::DotOp>(op), attrName, UnitAttr::get(ctx));
       }
       return {numWarps, 1};
     }

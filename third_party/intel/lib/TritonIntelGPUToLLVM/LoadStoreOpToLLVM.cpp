@@ -989,14 +989,10 @@ struct LoadOpToBlockIOConversion
     std::optional<bool> oneMatrixPerLoadForBT =
         mlir::triton::tools::isEnvValueBool(mlir::triton::tools::getStrEnv(
             "TRITON_INTEL_ONE_MATRIX_PER_LOAD_BT"));
-    if (!oneMatrixPerLoadForBT.has_value()) {
-      oneMatrixPerLoadForBT = false;
-      if (auto forOp = op->getParentOfType<scf::ForOp>()) {
-        oneMatrixPerLoadForBT =
-            (forOp->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
-                                getContainsChainedDotAttrName()));
-      }
-    }
+    if (!oneMatrixPerLoadForBT.has_value())
+      oneMatrixPerLoadForBT =
+          op->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
+                          getOneMatrixPerLoadAttrName());
 
     Value ptr = op.getPtr();
     assert(isTensorPointerType(ptr.getType()) &&

@@ -64,10 +64,10 @@ def TritonIntelGPU_Dialect : Dialect {
     }
 
     /// FIXME: Remove once IGC can split large 2D block loads.
-    /// Get the name of the attribute used to indicate that a region (e.g. a loop)
-    /// contains chained dot operations.
-    static constexpr llvm::StringRef getContainsChainedDotAttrName() {
-      return "ttig.contains_chained_dot";
+    /// Get the name of the attribute used to indicate that a load operation
+    /// should use 'one matrix per load'.
+    static constexpr llvm::StringRef getOneMatrixPerLoadAttrName() {
+      return "ttig.one_matrix_per_load";
     }
   }];
 
