@@ -132,3 +132,39 @@ jobs:
       only_one_model: ${{ inputs.only_one_model }}
       runner_label: ${{ inputs.runner_label || 'max1100' }}
       TORCH_COMPILE_DEBUG: ${{ inputs.TORCH_COMPILE_DEBUG }}
+
+  summary:
+    name: Aggregate results
+    needs: run_tests
+    runs-on: linux
+    if: always()
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: separate-reports
+
+      - name: Run aggregation script
+        run: |
+          pip install pandas numpy
+          ls -la separate-reports
+          python scripts/aggregate_results.py \
+          #   --input-dir separate-reports \
+          #   --output-dir aggregated-results
+          mkdir aggregated-results
+          echo results > aggregated-results/results.csv
+
+      - name: Upload aggregated results
+        uses: actions/upload-artifact@v4
+        with:
+          name: aggregated-results-${{ github.run_id }}
+          path: aggregated-results
+          include-hidden-files: true
