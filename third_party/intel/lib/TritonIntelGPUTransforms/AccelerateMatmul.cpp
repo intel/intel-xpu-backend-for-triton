@@ -49,13 +49,8 @@ getWarpsPerTile(tt::DotOp dotOp, ttgi::DpasEncodingAttr::DPASCapability dpasCap,
         auto setAttrOnBOperand = [&](tt::DotOp dotOp, StringRef attrName,
                                      Attribute attr) {
           Operation *defOp = dotOp.getB().getDefiningOp();
-          if (auto convOp = dyn_cast_or_null<ttg::ConvertLayoutOp>(defOp)) {
-            Operation *defOp = convOp.getSrc().getDefiningOp();
-            while (defOp && isa<ttg::ConvertLayoutOp>(defOp)) {
-              auto convOp = cast<ttg::ConvertLayoutOp>(defOp);
-              defOp = convOp.getSrc().getDefiningOp();
-            }
-          }
+          while (auto convOp = dyn_cast_or_null<ttg::ConvertLayoutOp>(defOp))
+            defOp = convOp.getSrc().getDefiningOp();
           if (auto loadOp = dyn_cast_or_null<tt::LoadOp>(defOp))
             loadOp->setAttr(attrName, attr);
         };
