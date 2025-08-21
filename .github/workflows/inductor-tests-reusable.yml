@@ -35,8 +35,7 @@ jobs:
     name: Test
     runs-on:
       - linux
-      - rolling
-      - ${{ inputs.runner_label || 'max1100' }}
+      - ${{ inputs.runner_label || 'rolling' }}
     timeout-minutes: 960
     defaults:
       run:
