@@ -153,6 +153,9 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
     # Warm-up
     for _ in range(n_warmup):
         fn()
+        # To be consistent with the benchmark measurements
+        if sync_submitting:
+            synchronize()
 
     # Benchmark
     with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.XPU]) as prof:
