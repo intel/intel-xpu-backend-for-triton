@@ -999,7 +999,8 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
         if (nonKDim == 16 and BLOCK_K < 128) or (nonKDim == 32 and BLOCK_K < 64):
             pytest.skip(f"CDNA4 does not support {BLOCK_K=} for scaled mfma {nonKDim=} variants")
     elif is_xpu():
-        pytest.xfail("XPU does not natively support scaled fp4 matmul")
+        if scale_type != 'float8_e8m0fnu':
+            pytest.skip("XPU only supports E8M0 scale")
 
     NUM_STAGES = 1
     torch.manual_seed(42)
@@ -1009,8 +1010,6 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
     # Generate b with k-major layout, pack two e2m1 along k or n, then logical transpose to K, N
     b_mxfp4 = MXFP4Tensor(size=(N, K), device=device).random()
     b = b_mxfp4.to_packed_tensor(dim=packing_dim).T
-    # No need to pack along K since we convert each e2m1 to f32 directly for the reference matmul
-    b_ref = b_mxfp4.to(torch.float32).T
 
     a_size = (M, (K + VEC_SIZE - 1) // VEC_SIZE)
     b_size = (N, (K + VEC_SIZE - 1) // VEC_SIZE)
@@ -1027,16 +1026,11 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
         a_scale_ref = a_scale
         b_scale_ref = b_scale
 
-    a_scale_ref = a_scale_ref.to(torch.float32).repeat_interleave(VEC_SIZE, dim=1)[:M, :K]
-    b_scale_ref = b_scale_ref.to(torch.float32).repeat_interleave(VEC_SIZE, dim=1).T.contiguous()[:K, :N]
     stride_scale = a_scale.stride(0)
     if not with_a_scale:
         a_scale = None
-        a_scale_ref = 1.0
     if not with_b_scale:
         b_scale = None
-        b_scale_ref = 1.0
-    ref_out = torch.matmul(a_mxfp4.to(torch.float32) * a_scale_ref, b_ref * b_scale_ref)
 
     output = a.new_empty((M, N), dtype=torch.float32)
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
@@ -1047,6 +1041,22 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
                                      b.stride(0), b.stride(1), output.stride(0), output.stride(1), VEC_SIZE, BLOCK_M,
                                      BLOCK_N, BLOCK_K, NUM_STAGES=NUM_STAGES, PACK_ALONG_K=pack_along_k,
                                      **kernel_kwargs)
+
+    print("johnlu finish block_scale_fp4_matmul")
+
+    # No need to pack along K since we convert each e2m1 to f32 directly for the reference matmul
+    b_ref = b_mxfp4.to(torch.float32).T
+    a_scale_ref = a_scale_ref.cpu()
+    b_scale_ref = b_scale_ref.cpu()
+
+    a_scale_ref = a_scale_ref.to(torch.float32).repeat_interleave(VEC_SIZE, dim=1)[:M, :K]
+    b_scale_ref = b_scale_ref.to(torch.float32).repeat_interleave(VEC_SIZE, dim=1).T.contiguous()[:K, :N]
+    if not with_a_scale:
+        a_scale_ref = 1.0
+    if not with_b_scale:
+        b_scale_ref = 1.0
+
+    ref_out = torch.matmul(a_mxfp4.cpu().to(torch.float32) * a_scale_ref, b_ref * b_scale_ref)
     torch.testing.assert_close(ref_out, output, atol=1e-2, rtol=1e-2)
     if is_cuda():
         ptx = k.asm["ptx"]
