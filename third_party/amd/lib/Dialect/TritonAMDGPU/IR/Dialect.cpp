@@ -34,8 +34,6 @@
 #include "Dialect/TritonAMDGPU/IR/Dialect.cpp.inc"
 // clang-format on
 
-#include "third_party/amd/include/Dialect/TritonAMDGPU/Utility/CommonUtils.h"
-
 using namespace mlir;
 using namespace mlir::triton::amdgpu;
 
@@ -88,8 +86,8 @@ bool hasMatchingCTATileLayoutForSliceConcat(
   auto [laneSrc, laneDst] = getBases("lane");
   auto [warpSrc, warpDst] = getBases("warp");
 
-  auto shapeCTASrc = mlir::triton::AMD::getShapePerCTATile(srcTy);
-  auto shapeCTADst = mlir::triton::AMD::getShapePerCTATile(dstTy);
+  auto shapeCTASrc = mlir::triton::gpu::getShapePerCTATile(srcTy);
+  auto shapeCTADst = mlir::triton::gpu::getShapePerCTATile(dstTy);
   if (shapeCTASrc != shapeCTADst) {
     emitError(
         "CTA tile shapes must match between source and destination tensors.");
@@ -161,7 +159,7 @@ LogicalResult ExtractSliceOp::verify() {
   auto srcShape = srcTy.getShape();
   auto dstShape = dstTy.getShape();
   auto offsets = getStaticOffsets();
-  auto shapePerCTATile = mlir::triton::AMD::getShapePerCTATile(srcTy);
+  auto shapePerCTATile = mlir::triton::gpu::getShapePerCTATile(srcTy);
   size_t rank = srcShape.size();
 
   auto failDim = [&](StringRef msg, int i) -> LogicalResult {
@@ -538,5 +536,4 @@ void ConcatOp::getCanonicalizationPatterns(mlir::RewritePatternSet &patterns,
                                            mlir::MLIRContext *context) {
   patterns.add(foldConcatOpFromSingleSource);
 }
-
 } // namespace mlir::triton::amdgpu

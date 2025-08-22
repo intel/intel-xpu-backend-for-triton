@@ -22,15 +22,15 @@ using namespace mlir;
 using namespace mlir::triton::gpu;
 
 constexpr int kPtrBitWidth = 64;
-struct ConvertLayoutOpConversion
+struct ConvertLayoutOpUsingLinearLayoutsConversion
     : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
   const TargetInfoBase &targetInfo;
 
   // Set benefit to 2 so that this pattern applies before other convert-layout
   // conversions.  TODO(jlebar): Eventually we want this to be the only pattern.
-  explicit ConvertLayoutOpConversion(LLVMTypeConverter &typeConverter,
-                                     const TargetInfoBase &targetInfo,
-                                     PatternBenefit benefit = 1)
+  explicit ConvertLayoutOpUsingLinearLayoutsConversion(
+      LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
+      PatternBenefit benefit = 1)
       : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
   }
 
@@ -591,5 +591,6 @@ struct ConvertLayoutOpConversion
 void mlir::triton::populateConvertLayoutOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit) {
-  patterns.add<ConvertLayoutOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<ConvertLayoutOpUsingLinearLayoutsConversion>(
+      typeConverter, targetInfo, benefit);
 }

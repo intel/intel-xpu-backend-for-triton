@@ -11,7 +11,13 @@ SmallVector<unsigned> getCTATileOrder(MLIRContext *ctx,
   auto &bases = layout.getBases().find(regDim)->second;
 
   // Compute number of CTA tiles in a layout.
-  auto numCTAs = product(triton::gpu::getCTAsPerCGA(llEnc));
+  unsigned totalElems = layout.getTotalOutDimSize();
+  auto ctaShape = llEnc.getShapePerCTATile();
+  unsigned elemsPerCTA =
+      std::accumulate(ctaShape.begin(), ctaShape.end(), 1, std::multiplies<>());
+  assert((totalElems % elemsPerCTA) == 0 &&
+         "Total elements must be divisible by elemsPerCTA");
+  unsigned numCTAs = totalElems / elemsPerCTA;
 
   // To determine the CTA tile order, start by identifying the register basis
   // vector that corresponds to the first element of the second CTA tile. The
