@@ -102,9 +102,9 @@ template <typename Op> static LogicalResult verify2DBlockHWRestriction(Op op) {
 
   uint32_t tileWidth = op.getTileWidth();
   uint32_t vBlocks = op.getVBlocks();
-  if (elemSizeInBits * tileWidth * vBlocks > 512)
+  if (elemSizeInBits * tileWidth * vBlocks > 1024)
     return op->emitOpError(
-        "expecting elem_size_in_bits * tile_width * v_blocks <= 512");
+        "expecting elem_size_in_bits * tile_width * v_blocks <= 1024");
 
   assert(tileWidth >= 1 && tileWidth <= 64 &&
          "tile_width should be between 1 and 64");
