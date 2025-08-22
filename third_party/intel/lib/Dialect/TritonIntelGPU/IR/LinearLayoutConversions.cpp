@@ -519,7 +519,7 @@ LinearLayout DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
 // clang-format off
 // There are only 8 values for scale A per bdpas.
 // The values is duplicated within the warp.
-// Example of repeat_count=8 for warp size 32.
+// Example of repeat_count=8, operands_per_chan=4 for warp size 32.
 // For Scale A operand:
 //                       RC = 8
 // <------------------------------------------------------------------->
@@ -528,22 +528,42 @@ LinearLayout DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
 // In this case, the LinearLayout bases are:
 // Register:  size 1 dimension
 // Lane:      {{0,1}, {0,2}, {0,4}, {0,0}, {0,0}}
+//
+// Example of repeat_count=8, operands_per_chan=8 for warp size 32.
+//                       RC = 8
+// <--------------------------------------->
+// t0|t16   t1|t17   ...   t6|t22    t7|t23    ^
+// t8|t24   t9|t25   ...   t14|t30   t15|t31   v  K = (systolic*ops_per_chan)/32 = 2
+// In this case, the LinearLayout bases are:
+// Register:  size 1 dimension
+// Lane:      {{0,1}, {0,2}, {0,4}, {0,1}, {0,0}}
+//
 // clang-format on
-std::vector<std::vector<int32_t>> BlockScaledDPASRegBasesScaleA() {
+std::vector<std::vector<int32_t>>
+BlockScaledDPASRegBasesScaleA(int opsPerChannel, int threadsPerWarp) {
   std::vector<std::vector<int32_t>> regBases;
+
+  assert((opsPerChannel == 4 || opsPerChannel == 8) &&
+         "invalid opsPerChannel number for bdpas.");
   // The register is size 1 dimension.
   return regBases;
 }
 
 std::vector<std::vector<int32_t>>
-BlockScaledDPASLaneBasesScaleA(int repeatCount, int threadsPerWarp) {
+BlockScaledDPASLaneBasesScaleA(int repeatCount, int opsPerChannel,
+                               int threadsPerWarp) {
   std::vector<std::vector<int32_t>> laneBases;
 
   assert((repeatCount == 8) && "invalid repeatCount number for bdpas.");
+  assert((opsPerChannel == 4 || opsPerChannel == 8) &&
+         "invalid opsPerChannel number for bdpas.");
 
   int tid;
   for (tid = 1; tid < repeatCount; tid *= 2) {
     laneBases.push_back({tid, 0});
+  }
+  for (; tid < repeatCount * (opsPerChannel / 4); tid *= 2) {
+    laneBases.push_back({0, 1});
   }
   for (; tid < threadsPerWarp; tid *= 2) {
     laneBases.push_back({0, 0});
@@ -554,8 +574,8 @@ BlockScaledDPASLaneBasesScaleA(int repeatCount, int threadsPerWarp) {
 // clang-format off
 // There are only 16 values for scale B per bdpas.
 // The values is duplicated within the warp.
-// Example of exec_size=8 for warp size 32.
-// For Scale A operand:
+// Example of exec_size=16, operands_per_chan=4 for warp size 32.
+// For Scale B operand:
 //                       exec_size = 16
 // <------------------------------------------------------------------->
 // t0|t16   t1|t17|   t2|t18   t3|t19  ... t13|t29|   t14|t30   t15|t31
@@ -563,15 +583,31 @@ BlockScaledDPASLaneBasesScaleA(int repeatCount, int threadsPerWarp) {
 // In this case, the LinearLayout bases are:
 // Register:  size 1 dimension
 // Lane:      {{0,1}, {0,2}, {0,4}, {0,8}, {0,0}}
+//
+// Example of exec_size=16, operands_per_chan=8 for warp size 32.
+//                       exec_size = 16
+// <------------------------------------------------------------------->
+// t0   t1   t2   t3                ...                 t13   t14   t15
+// t16  t17  t18  t19               ...                 t29   t30   t31
+//
+// In this case, the LinearLayout bases are:
+// Register:  size 1 dimension
+// Lane:      {{0,1}, {0,2}, {0,4}, {0,8}, {0,1}}
 // clang-format on
-std::vector<std::vector<int32_t>> BlockScaledDPASRegBasesScaleB() {
+std::vector<std::vector<int32_t>>
+BlockScaledDPASRegBasesScaleB(int opsPerChannel, int threadsPerWarp) {
   std::vector<std::vector<int32_t>> regBases;
-  // The register is size 1 dimension.
+  assert((opsPerChannel == 4 || opsPerChannel == 8) &&
+         "invalid opsPerChannel number for bdpas.");
+  if (opsPerChannel == 8 && threadsPerWarp == 16) {
+    regBases.push_back({0, 1});
+  }
   return regBases;
 }
 
 std::vector<std::vector<int32_t>>
-BlockScaledDPASLaneBasesScaleB(int execSize, int threadsPerWarp) {
+BlockScaledDPASLaneBasesScaleB(int execSize, int opsPerChannel,
+                               int threadsPerWarp) {
   std::vector<std::vector<int32_t>> laneBases;
 
   assert((execSize == 16) && "invalid execSize number for bdpas.");
@@ -579,6 +615,10 @@ BlockScaledDPASLaneBasesScaleB(int execSize, int threadsPerWarp) {
   int tid;
   for (tid = 1; tid < execSize; tid *= 2) {
     laneBases.push_back({tid, 0});
+  }
+  for (; tid < std::min(threadsPerWarp, execSize * (opsPerChannel / 4));
+       tid *= 2) {
+    laneBases.push_back({0, 1});
   }
   for (; tid < threadsPerWarp; tid *= 2) {
     laneBases.push_back({0, 0});
@@ -615,13 +655,20 @@ LinearLayout BlockScaledDPAStoLinearLayout(ArrayRef<int64_t> shape,
   auto tileLayout = LinearLayout::empty();
   int repeatCount = dpas.getRepeatCount();
   int executionSize = dpas.getExecutionSize();
+  std::optional<unsigned> fp4Kpack = dpas.getFp4KPack();
+  int opsPerChannel = fp4Kpack ? dpas.getOpsPerChannel() * (*fp4Kpack)
+                               : dpas.getOpsPerChannel();
+  assert(opsPerChannel == 4 ||
+         opsPerChannel == 8 &&
+             "block scaled dpas only supports opsPerChannel=4 or 8");
   unsigned dpasKDim, dpasNonKDim;
   unsigned scaleOpNonKIdx = rank + (scaleOpKDim ^ 0x1);
   unsigned scaleOpKIdx = rank + scaleOpKDim;
   if (opIdx == 3) { // Operand Scale A
-    auto regBasesA = BlockScaledDPASRegBasesScaleA();
-    auto laneBasesA =
-        BlockScaledDPASLaneBasesScaleA(repeatCount, threadsPerWarp);
+    auto regBasesA =
+        BlockScaledDPASRegBasesScaleA(opsPerChannel, threadsPerWarp);
+    auto laneBasesA = BlockScaledDPASLaneBasesScaleA(repeatCount, opsPerChannel,
+                                                     threadsPerWarp);
     tileLayout = LinearLayout({{kRegister, regBasesA}, {kLane, laneBasesA}},
                               ArrayRef(outDimNames).take_back(2));
     llvm::outs() << "johnlu tileLayout:" << tileLayout << "\n";
@@ -656,9 +703,10 @@ LinearLayout BlockScaledDPAStoLinearLayout(ArrayRef<int64_t> shape,
           LinearLayout::identity1D(warpsPerCTA[0], kWarp, outDimNames[0]);
 
   } else { // Operand Scale B
-    auto regBasesB = BlockScaledDPASRegBasesScaleB();
-    auto laneBasesB =
-        BlockScaledDPASLaneBasesScaleB(executionSize, threadsPerWarp);
+    auto regBasesB =
+        BlockScaledDPASRegBasesScaleB(opsPerChannel, threadsPerWarp);
+    auto laneBasesB = BlockScaledDPASLaneBasesScaleB(
+        executionSize, opsPerChannel, threadsPerWarp);
     tileLayout = LinearLayout({{kRegister, regBasesB}, {kLane, laneBasesB}},
                               ArrayRef(outDimNames).take_back(2));
     llvm::outs() << "johnlu tileLayout:" << tileLayout << "\n";

@@ -26,10 +26,11 @@ public:
   DpasEncodingAttr dpas(ArrayRef<unsigned> warps, unsigned repeatCount,
                         unsigned systolicDepth, unsigned executionSize,
                         unsigned opsPerChannel, ArrayRef<unsigned> repCluster,
-                        unsigned threadsPerWarp) {
+                        unsigned threadsPerWarp,
+                        std::optional<unsigned> fp4KPack = std::nullopt) {
     return DpasEncodingAttr::get(&ctx, repeatCount, systolicDepth,
                                  executionSize, opsPerChannel, warps,
-                                 repCluster, threadsPerWarp);
+                                 repCluster, threadsPerWarp, fp4KPack);
   }
 
   StringAttr S(StringRef str) { return StringAttr::get(&ctx, str); }
@@ -227,6 +228,43 @@ TEST_F(DPAStoLinearLayoutTest, DPAS_OperandScaleA) {
                     {S("block"), {}},
                 },
                 {S("dim0"), S("dim1")}));
+
+  EXPECT_EQ(BlockScaledDPAStoLinearLayout(
+                {128, 4},
+                dpas({2, 2}, 8, 8, 16, 4, {4, 2}, 32, std::make_optional(2)),
+                3),
+            LinearLayout(
+                {
+                    {S("register"), {{8, 0}, {16, 0}, {0, 2}, {64, 0}}},
+                    {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {0, 1}, {0, 0}}},
+                    {S("warp"), {{0, 0}, {32, 0}}},
+                    {S("block"), {}},
+                },
+                {S("dim0"), S("dim1")}));
+
+  EXPECT_EQ(BlockScaledDPAStoLinearLayout(
+                {128, 2}, dpas({2, 2}, 8, 8, 16, 4, {4, 2}, 16), 3),
+            LinearLayout(
+                {
+                    {S("register"), {{8, 0}, {16, 0}, {0, 1}, {64, 0}}},
+                    {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {0, 0}}},
+                    {S("warp"), {{0, 0}, {32, 0}}},
+                    {S("block"), {}},
+                },
+                {S("dim0"), S("dim1")}));
+
+  EXPECT_EQ(BlockScaledDPAStoLinearLayout(
+                {128, 4},
+                dpas({2, 2}, 8, 8, 16, 4, {4, 2}, 16, std::make_optional(2)),
+                3),
+            LinearLayout(
+                {
+                    {S("register"), {{8, 0}, {16, 0}, {0, 2}, {64, 0}}},
+                    {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {0, 1}}},
+                    {S("warp"), {{0, 0}, {32, 0}}},
+                    {S("block"), {}},
+                },
+                {S("dim0"), S("dim1")}));
 }
 
 TEST_F(DPAStoLinearLayoutTest, DPAS_OperandScaleB) {
@@ -236,6 +274,40 @@ TEST_F(DPAStoLinearLayoutTest, DPAS_OperandScaleB) {
                 {
                     {S("register"), {{16, 0}, {0, 1}, {64, 0}}},
                     {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 0}}},
+                    {S("warp"), {{32, 0}, {0, 0}}},
+                    {S("block"), {}},
+                },
+                {S("dim0"), S("dim1")}));
+  EXPECT_EQ(BlockScaledDPAStoLinearLayout(
+                {128, 2}, dpas({2, 2}, 8, 8, 16, 4, {4, 2}, 16), 4),
+            LinearLayout(
+                {
+                    {S("register"), {{16, 0}, {0, 1}, {64, 0}}},
+                    {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}}},
+                    {S("warp"), {{32, 0}, {0, 0}}},
+                    {S("block"), {}},
+                },
+                {S("dim0"), S("dim1")}));
+  EXPECT_EQ(BlockScaledDPAStoLinearLayout(
+                {128, 4},
+                dpas({2, 2}, 8, 8, 16, 4, {4, 2}, 32, std::make_optional(2)),
+                4),
+            LinearLayout(
+                {
+                    {S("register"), {{16, 0}, {0, 2}, {64, 0}}},
+                    {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 1}}},
+                    {S("warp"), {{32, 0}, {0, 0}}},
+                    {S("block"), {}},
+                },
+                {S("dim0"), S("dim1")}));
+  EXPECT_EQ(BlockScaledDPAStoLinearLayout(
+                {128, 4},
+                dpas({2, 2}, 8, 8, 16, 4, {4, 2}, 16, std::make_optional(2)),
+                4),
+            LinearLayout(
+                {
+                    {S("register"), {{0, 1}, {16, 0}, {0, 2}, {64, 0}}},
+                    {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}}},
                     {S("warp"), {{32, 0}, {0, 0}}},
                     {S("block"), {}},
                 },

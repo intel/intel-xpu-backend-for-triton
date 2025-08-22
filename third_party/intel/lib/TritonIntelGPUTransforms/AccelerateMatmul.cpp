@@ -299,10 +299,16 @@ public:
             : dpasCap.systolicDepth * 2; // A is packed to i16 or i32.
     unsigned minM = mlir::ceil<unsigned>(threadsPerWarp, numElemsPerRowForA);
     repeatCount = std::max(repeatCount, minM);
+
+    auto dpasType = dpasAnalysis.getDPASType(dotScaledOp);
     auto dpasEnc = ttgi::DpasEncodingAttr::get(
         oldRetType.getContext(), repeatCount, dpasCap.systolicDepth,
         dpasCap.executionSize, opsPerChan, warpsPerTile, repCluster,
-        threadsPerWarp);
+        threadsPerWarp,
+        dpasType == triton::gpu::intel::DPASAnalysis::DPASEngineType::
+                        FP32_FP32_FP4_FP4
+            ? std::make_optional(2)
+            : std::nullopt);
 
     if (dpasCap.isPVC() || dpasCap.isFalconShore()) {
       unsigned dpasElemBitWidths =
@@ -330,7 +336,11 @@ public:
       dpasEnc = ttgi::DpasEncodingAttr::get(
           oldRetType.getContext(), repeatCount, dpasCap.systolicDepth,
           dpasCap.executionSize, opsPerChan, warpsPerTile, repCluster,
-          threadsPerWarp);
+          threadsPerWarp,
+          dpasType == triton::gpu::intel::DPASAnalysis::DPASEngineType::
+                          FP32_FP32_FP4_FP4
+              ? std::make_optional(2)
+              : std::nullopt);
     }
 
     RankedTensorType newRetType =

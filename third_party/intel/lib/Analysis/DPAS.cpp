@@ -182,6 +182,11 @@ DPASAnalysis::getDPASType(OpTy op) {
         if (aElemTy.isInteger(8) &&
             isa<Float8E4M3FNType, Float8E5M2Type>(bElemTy))
           return DPASEngineType::FP32_FP32_FP4_FP8;
+        if (aElemTy.isInteger(8) &&
+            op.getAElemType() == ScaleDotElemType::E2M1 && op.getLhsKPack() &&
+            bElemTy.isInteger(8) &&
+            op.getBElemType() == ScaleDotElemType::E2M1 && op.getRhsKPack())
+          return DPASEngineType::FP32_FP32_FP4_FP4;
       }
     }
   }

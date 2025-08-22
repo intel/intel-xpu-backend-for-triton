@@ -186,8 +186,21 @@ The semantic of this `tt.dot` includes GEMM tiling configuration as:
     "unsigned":$opsPerChannel,
     ArrayRefParameter<"unsigned">:$warpsPerCTA,
     ArrayRefParameter<"unsigned">:$repCluster,
-    "unsigned":$threadsPerWarp
+    "unsigned":$threadsPerWarp,
+    "std::optional<unsigned>":$fp4KPack // Optional parameter for FP4K packing
   );
+
+  let builders = [
+      AttrBuilder<(ins "unsigned":$repeatCount,
+                        "unsigned":$systolicDepth,
+                        "unsigned":$executionSize,
+                        "unsigned":$opsPerChannel,
+                        "ArrayRef<unsigned>":$warpsPerCTA,
+                        "ArrayRef<unsigned>":$repCluster,
+                        "unsigned":$threadsPerWarp), [{
+        return $_get(context, repeatCount, systolicDepth, executionSize, opsPerChannel, warpsPerCTA, repCluster, threadsPerWarp, std::nullopt);
+      }]>
+    ];
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
     enum class OpIdx : unsigned {
