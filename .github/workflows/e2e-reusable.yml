@@ -135,7 +135,7 @@ jobs:
 
       - name: Install python test dependencies
         run: |
-          pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec
+          pip install pyyaml pandas scipy 'numpy==1.26.4' psutil pyre_extensions torchrec
 
       - name: Install transformers package
         if: ${{ inputs.suite == 'huggingface' }}
