@@ -135,7 +135,10 @@ jobs:
 
       - name: Install python test dependencies
         run: |
+          # deps for torchrec_dlrm
+          # https://github.com/intel/torch-xpu-ops/blob/f2bcd8a4b87c8ff508640ebda24736abed92decd/.github/actions/pt2e/action.yml#L78
           pip install fbgemm-gpu --index-url https://download.pytorch.org/whl/cpu
+          pip install --no-deps lightning-utilities==0.14.3 torchmetrics==1.0.3
           pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec
 
       - name: Install transformers package
