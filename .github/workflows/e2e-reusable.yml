@@ -98,7 +98,7 @@ jobs:
       - name: Identify pinned versions
         run: |
           cd pytorch
-          echo "BENCHMARK_COMMIT_ID=$(<.github/ci_commit_pins/torchbench.txt)" | tee -a "$GITHUB_ENV"
+          echo "BENCHMARK_COMMIT_ID=$(<.ci/docker/ci_commit_pins/torchbench.txt)" | tee -a "$GITHUB_ENV"
           echo "TORCHVISION_COMMIT_ID=$(<.github/ci_commit_pins/vision.txt)" | tee -a "$GITHUB_ENV"
           echo "TORCHAUDIO_COMMIT_ID=$(<.github/ci_commit_pins/audio.txt)" | tee -a "$GITHUB_ENV"
           echo "TIMM_COMMIT_ID=$(<.ci/docker/ci_commit_pins/timm.txt)" | tee -a "$GITHUB_ENV"
