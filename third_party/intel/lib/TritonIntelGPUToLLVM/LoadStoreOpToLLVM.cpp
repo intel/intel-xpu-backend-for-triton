@@ -2902,6 +2902,8 @@ struct StoreOpToBlockIOConversion
           addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, offsetX);
           offsetX = b.i32_val(0);
         } else {
+          assert(numPackedVals > 0 &&
+                 "numPackedVals should be greater than zero.");
           // The offsetX of linear layout is in original elements.
           // The 2d block io requires the offsetX in number of packed elements.
           offsetX = b.udiv(offsetX, b.i32_val(numPackedVals));
