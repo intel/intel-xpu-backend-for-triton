@@ -102,10 +102,10 @@ class HookManager:
 
     @staticmethod
     def unregister(session: Optional[int] = None) -> None:
-        if session is not None and session not in HookManager.session_hooks:
+        if session and session not in HookManager.session_hooks:
             return
 
-        if session is None:
+        if not session:
             for hook in HookManager.active_hooks:
                 hook.deactivate()
             HookManager.active_hooks.clear()
