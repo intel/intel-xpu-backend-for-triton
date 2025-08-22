@@ -2901,6 +2901,10 @@ struct StoreOpToBlockIOConversion
           // The offsetX is number of elements instead of packed elements.
           addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, offsetX);
           offsetX = b.i32_val(0);
+        } else {
+          // The offsetX of linear layout is in original elements.
+          // The 2d block io requires the offsetX is number of packed elements.
+          offsetX = b.udiv(offsetX, b.i32_val(numPackedVals));
         }
         if (!boundaryCheck.contains(rowDim)) {
           baseHeight = b.i32_val(tileHeight);
