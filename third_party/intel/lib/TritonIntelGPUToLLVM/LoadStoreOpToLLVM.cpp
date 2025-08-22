@@ -2903,7 +2903,7 @@ struct StoreOpToBlockIOConversion
           offsetX = b.i32_val(0);
         } else {
           // The offsetX of linear layout is in original elements.
-          // The 2d block io requires the offsetX is number of packed elements.
+          // The 2d block io requires the offsetX in number of packed elements.
           offsetX = b.udiv(offsetX, b.i32_val(numPackedVals));
         }
         if (!boundaryCheck.contains(rowDim)) {
