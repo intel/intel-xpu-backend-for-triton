@@ -33,6 +33,13 @@ def is_hip_cdna4():
     return cached_capabilities["is_hip_cdna4"]
 
 
+def is_xpu():
+    if "is_xpu" not in cached_capabilities:
+        target = triton.runtime.driver.active.get_current_target()
+        cached_capabilities["is_xpu"] = False if target is None else target.backend == "xpu"
+    return cached_capabilities["is_xpu"]
+
+
 def cuda_capability_geq(major, minor=0):
     """
     Determines whether we have compute capability >= (major, minor) and
@@ -74,4 +81,7 @@ def has_native_mxfp():
 
 
 def num_sms():
-    return torch.cuda.get_device_properties(0).multi_processor_count
+    if is_cuda():
+        return torch.cuda.get_device_properties(0).multi_processor_count
+    if is_xpu():
+        return torch.xpu.get_device_properties(0).max_compute_units
