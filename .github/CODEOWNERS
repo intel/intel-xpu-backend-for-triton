@@ -46,6 +46,7 @@ lib/Dialect/TritonGPU/Transforms/TritonGPUConversion.cpp @ptillet
 # third_party
 # -----------
 third_party/amd/ @antiagainst @zhanglx13
+third_party/proton/ @Jokeren @crobeck @fywkevin
 
 # -----------
 # gluon
@@ -56,3 +57,9 @@ python/test/gluon @peterbell10
 test/Gluon @peterbell10
 include/triton/Dialect/Gluon @peterbell10
 lib/Dialect/Gluon @peterbell10
+
+# -----------
+# Linear Layouts
+# -----------
+lib/Tools/ @lezcano
+lib/Dialect/TritonGPU/IR/LinearLayoutConversions.cpp @lezcano
