@@ -1,6 +1,5 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefixes=STD-CHECK,CHECK
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-intel-gpu-to-llvm=one_matrix_per_load_for_bt=1 | FileCheck %s --check-prefixes=ONE-MATRIX-CHECK
-
+// RUN: TRITON_INTEL_ONE_MATRIX_PER_LOAD_BT=0 triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefixes=STD-CHECK,CHECK
+// RUN: TRITON_INTEL_ONE_MATRIX_PER_LOAD_BT=1 triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefixes=ONE-MATRIX-CHECK
 
 // COM: A matrix, 16x16 block size, 1 warp w/ repCluster=1
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1]}>

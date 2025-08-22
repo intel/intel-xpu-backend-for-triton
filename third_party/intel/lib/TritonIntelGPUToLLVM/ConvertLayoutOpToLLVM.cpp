@@ -28,10 +28,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     auto dstTy = op.getType();
 
     LinearLayout conversion = minimalCvtLayout(srcTy, dstTy);
-    LinearLayout srcLayout =
-        toLinearLayout(srcTy.getShape(), srcTy.getEncoding(), {});
-    LinearLayout dstLayout =
-        toLinearLayout(dstTy.getShape(), dstTy.getEncoding(), {});
+    LinearLayout srcLayout = toLinearLayout(srcTy);
+    LinearLayout dstLayout = toLinearLayout(dstTy);
 
     StringAttr kLane = str_attr("lane");
 

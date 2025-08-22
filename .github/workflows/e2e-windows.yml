@@ -157,7 +157,7 @@ jobs:
         shell: bash
         run: |
           cd /c/pytorch
-          echo "BENCHMARK_COMMIT_ID=$(<.github/ci_commit_pins/torchbench.txt)" | tee -a "$GITHUB_ENV"
+          echo "BENCHMARK_COMMIT_ID=$(<.ci/docker/ci_commit_pins/torchbench.txt)" | tee -a "$GITHUB_ENV"
           echo "TORCHVISION_COMMIT_ID=$(<.github/ci_commit_pins/vision.txt)" | tee -a "$GITHUB_ENV"
           echo "TORCHAUDIO_COMMIT_ID=$(<.github/ci_commit_pins/audio.txt)" | tee -a "$GITHUB_ENV"
           echo "TIMM_COMMIT_ID=$(<.ci/docker/ci_commit_pins/timm.txt)" | tee -a "$GITHUB_ENV"
@@ -165,7 +165,7 @@ jobs:
       - name: Install python test dependencies
         run: |
           .venv\Scripts\activate.ps1
-          pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec
+          pip install pyyaml pandas scipy 'numpy==1.26.4' psutil pyre_extensions torchrec
 
       - name: Install transformers package
         if: inputs.suite == 'all' || inputs.suite == 'huggingface'

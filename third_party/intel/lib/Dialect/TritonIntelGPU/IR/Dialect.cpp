@@ -1094,8 +1094,8 @@ struct TritonIntelGPUInferLayoutInterface
       return success();
     }
     // Check whether the encodings are structurally the same.
-    const auto &expectedLL = triton::gpu::toLinearLayout(shape, expected, {});
-    const auto &gotLL = triton::gpu::toLinearLayout(shape, got, {});
+    const auto &expectedLL = triton::gpu::toLinearLayout(shape, expected);
+    const auto &gotLL = triton::gpu::toLinearLayout(shape, got);
     if (expectedLL != gotLL) {
       return emitOptionalError(loc, "Expected result encoding ", expected,
                                " but was ", got);
@@ -1117,7 +1117,7 @@ struct TritonIntelGPUInferLayoutInterface
     // Once LinearLayouts are more widely used, we can remove
     // inferReshapeOpLegacyEncoding and simply use LLs.
     auto *ctx = getContext();
-    auto src = toLinearLayout(srcShape, srcEnc, {});
+    auto src = toLinearLayout(srcShape, srcEnc);
 
     if (product(srcShape) != product(dstShape)) {
       return emitOptionalError(loc, "numel of dst shape does not match "

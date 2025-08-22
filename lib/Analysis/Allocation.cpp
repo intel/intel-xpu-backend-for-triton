@@ -208,10 +208,8 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
     auto dstTy = cvtLayout.getType();
     if (!cvtNeedsSharedMemory(srcTy, dstTy))
       return 0;
-    // Pesimistically take the max. We will revisit later
-    auto elems = std::max(getNumScratchElemsSwizzledCvt(srcTy, dstTy),
-                          getNumScratchElemsPaddedCvt(srcTy, dstTy));
-
+    // The generic pass uses swizzling
+    auto elems = getNumScratchElemsSwizzledCvt(srcTy, dstTy);
     return elems * getBitwidth(srcTy) / 8;
   }
   if (isa<AtomicRMWOp, AtomicCASOp>(op)) {
