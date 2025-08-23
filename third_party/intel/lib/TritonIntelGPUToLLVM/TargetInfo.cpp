@@ -33,6 +33,12 @@ Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
   return reduced_val;
 }
 
+void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
+                         bool isWarpSync) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  b.barrier();
+}
+
 Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   // Clusters of thread blocks aren't supported.
