@@ -19,6 +19,9 @@ Value shuffleUp(Location loc, RewriterBase &rewriter, Value val, int i);
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i);
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i);
 
+Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,
+              Value selector);
+
 /// Create a predicated block, using \p cond as the condition and \p ops for the
 /// values supplied by the conditional branch to the exit block. The \p
 /// thenOpsFn function is used to inject operations in the 'then' branch:
