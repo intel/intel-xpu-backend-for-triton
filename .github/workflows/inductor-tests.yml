@@ -50,8 +50,7 @@ env:
     inductor/test_aot_inductor.py
     inductor/test_select_algorithm.py
     inductor/test_max_autotune.py
-    # FIXME: enable them later
-    # inductor/test_compile_subprocess.py
+    inductor/test_compile_subprocess.py
 
 jobs:
   compute-params:

@@ -180,10 +180,8 @@ private:
 class TritonGPUToLLVMPipelineManager {
 public:
   TritonGPUToLLVMPipelineManager(ModuleOp &mod, MLIRContext *ctx, bool advanced,
-                                 bool oneMatrixPerLoadForBT,
                                  bool useTileLoadLinearLayout)
       : mod(mod), ctx(ctx), isAdvancedPathEnabled(advanced),
-        oneMatrixPerLoadForBT(oneMatrixPerLoadForBT),
         useTileLoadLinearLayout(useTileLoadLinearLayout) {}
 
   /// FIXME: remove once the block ptr conversion path is capable of handling
@@ -224,7 +222,7 @@ public:
           typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
       intel::populateLoadStoreOpToLLVMPatterns(
           typeConverter, targetInfo, patterns, axisInfoAnalysis, benefit,
-          oneMatrixPerLoadForBT, useTileLoadLinearLayout);
+          useTileLoadLinearLayout);
       intel::populateReduceOpToLLVMPatterns(typeConverter, patterns, targetInfo,
                                             benefit);
       mlir::triton::populateScanOpToLLVMPatterns(typeConverter, patterns,
@@ -278,7 +276,6 @@ private:
   /// FIXME: this is temporary and should be removed once we have an analysis to
   /// determine whether a kernel uses block pointers.
   bool isAdvancedPathEnabled = false;
-  bool oneMatrixPerLoadForBT = false;
   bool useTileLoadLinearLayout = true;
 };
 

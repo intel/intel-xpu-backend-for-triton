@@ -609,7 +609,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
     // CHECK: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x8, 0x8
     // CHECK: nvvm.cp.async.commit.group
     %73 = ttg.async_copy_global_to_local %66, %subview : tensor<64x!tt.ptr<i64>, #slice1d0> -> !ttg.memdesc<64xi64, #shared1D, #smem, mutable>
-    ttg.async_commit_group %73
+    ttg.async_commit_group tokens %73
     tt.return
   }
 }
@@ -872,11 +872,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   tt.func @convert_layout_blocked_blocked_multi_rep(%arg0: tensor<32x32xf32, #blocked0>) {
     // CHECK: llvm.mlir.addressof @global_smem
     // CHECK: llvm.store {{.*}} vector<4xi32>
-    // CHECK: nvvm.barrier0
+    // CHECK: nvvm.bar.warp.sync
     // CHECK: nvgpu.ldmatrix %{{.*}} : (!llvm.ptr<3>) -> !llvm.struct<(i32, i32, i32, i32)>
-    // CHECK: nvvm.barrier0
+    // CHECK: nvvm.bar.warp.sync
     // CHECK: llvm.store {{.*}} vector<4xi32>
-    // CHECK: nvvm.barrier0
+    // CHECK: nvvm.bar.warp.sync
     // CHECK: nvgpu.ldmatrix %{{.*}} : (!llvm.ptr<3>) -> !llvm.struct<(i32, i32, i32, i32)>
     %0 = ttg.convert_layout %arg0 : tensor<32x32xf32, #blocked0> -> tensor<32x32xf32, #blocked1>
     tt.return
@@ -1275,7 +1275,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // CHECK-LABEL: convert_blocked1d_to_slice0
   tt.func @convert_blocked1d_to_slice0(%src:tensor<32xi32, #blocked0>) {
     // CHECK: llvm.store {{.*}} : vector<1xi32>
-    // CHECK: nvvm.barrier0
+    // CHECK: nvvm.bar.warp.sync
     // CHECK-COUNT-1: llvm.load {{.*}} -> vector<4xi32>
     %cvt = ttg.convert_layout %src : tensor<32xi32, #blocked0> -> tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked1}>>
     tt.return
@@ -1304,7 +1304,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   tt.func @convert_blocked_to_blocked_ptr(%src:tensor<32x!tt.ptr<f32>, #blocked0>) {
     // CHECK: llvm.ptrtoint
     // CHECK: llvm.store
-    // CHECK: nvvm.barrier0
+    // CHECK: nvvm.bar.warp.sync
     // CHECK: llvm.inttoptr
     // CHECK-COUNT-4: llvm.insertvalue
     %cvt = ttg.convert_layout %src : tensor<32x!tt.ptr<f32>, #blocked0> -> tensor<32x!tt.ptr<f32>, #blocked1>

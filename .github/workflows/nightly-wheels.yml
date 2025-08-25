@@ -65,7 +65,6 @@ jobs:
           cd pytorch
           echo "TORCHVISION_COMMIT_ID=$(<.github/ci_commit_pins/vision.txt)" | tee -a $GITHUB_ENV
           echo "TORCHAUDIO_COMMIT_ID=$(<.github/ci_commit_pins/audio.txt)" | tee -a $GITHUB_ENV
-          echo "TRANSFORMERS_VERSION=$(<.ci/docker/ci_commit_pins/huggingface.txt)" | tee -a $GITHUB_ENV
           echo "TIMM_COMMIT_ID=$(<.ci/docker/ci_commit_pins/timm.txt)" | tee -a $GITHUB_ENV
 
       - name: Identify Triton commit id
@@ -104,13 +103,9 @@ jobs:
           extra-cache-key: ${{ env.PYTORCH_VERSION }}
 
       - name: Install transformers package
-        uses: ./.github/actions/install-dependency
-        with:
-          package: transformers
-          repository: huggingface/transformers
-          ref: ${{ env.TRANSFORMERS_VERSION }}
-          try-tag-prefix: v
-          extra-cache-key: ${{ env.PYTORCH_VERSION }}
+        run: |
+          cd pytorch
+          pip install -r .ci/docker/ci_commit_pins/huggingface-requirements.txt
 
       - name: Prepare wheels for upload
         run: |
@@ -120,7 +115,6 @@ jobs:
           cp -L torchvision*/dist/*.whl wheels/
           cp -L torchaudio*/dist/*.whl wheels/
           cp -L timm*/dist/*.whl wheels/
-          cp -L transformers*/dist/*.whl wheels/
           ls -lh wheels/
 
       - name: Report environment details

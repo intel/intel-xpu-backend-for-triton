@@ -62,6 +62,13 @@ def TritonIntelGPU_Dialect : Dialect {
     static constexpr llvm::StringRef getSupport16BitAtomicsAttrName() {
       return "ttig.support_16bit_atomics";
     }
+
+    /// FIXME: Remove once IGC can split large 2D block loads.
+    /// Get the name of the attribute used to indicate that a load operation
+    /// should use 'one matrix per load'.
+    static constexpr llvm::StringRef getOneMatrixPerLoadAttrName() {
+      return "ttig.one_matrix_per_load";
+    }
   }];
 
   let useDefaultAttributePrinterParser = 1;

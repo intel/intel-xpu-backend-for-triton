@@ -334,34 +334,6 @@ class constexpr(base_value):
         return self.value.__getitem__(*args)
 
 
-def constexpr_function(f):
-    """
-    Wraps an arbitrary Python function so that it can be called at
-    compile-time on constexpr arguments in a Triton function and
-    returns a constexpr result.
-    """
-
-    @wraps(f)
-    def wrapper(*args, _semantic=None, **kwargs):
-        # de-constexpr arguments and discard the _semantic keyword argument:
-        args = [_unwrap_if_constexpr(x) for x in args]
-        kwargs = {k: _unwrap_if_constexpr(v) for (k, v) in kwargs.items()}
-
-        # call the raw Python function f:
-        res = f(*args, **kwargs)
-
-        # convert result back to a Triton constexpr:
-        if knobs.runtime.interpret:
-            return res  # No constexpr in interpreter
-        return constexpr(res)
-
-    # disguise the function as a Triton builtin to avoid raising an error
-    # that we're calling a non-JIT function from within a Triton kernel:
-    wrapper.__triton_builtin__ = True
-    wrapper.__module__ = constexpr_function.__module__
-    return wrapper
-
-
 CONSTEXPR_0 = constexpr(0)
 
 
@@ -1277,7 +1249,7 @@ def _type_for_tuple_values(values, fields=None):
 
 class tuple(base_value):
 
-    def __init__(self, args: Sequence, type: tuple_type = None):
+    def __init__(self, args: Sequence, type: Optional[tuple_type] = None):
         self.values = [i for i in args]
         if isinstance(type, tuple_type):
             self.type = type
@@ -1299,10 +1271,9 @@ class tuple(base_value):
         return self.values[self.type.fields.index(name)]
 
     # TODO: remove
-    def __setitem__(self, idx: constexpr, value):
-        if isinstance(idx, int):
-            idx = constexpr(idx)
-        assert isinstance(idx, constexpr)
+    def _setitem(self, idx, value):
+        idx = _unwrap_if_constexpr(idx)
+        assert isinstance(idx, int)
         self.values[idx] = value
         self.type = _type_for_tuple_values(self.values, self.type.fields)
 

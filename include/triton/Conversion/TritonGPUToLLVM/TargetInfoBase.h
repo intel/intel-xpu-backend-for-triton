@@ -15,6 +15,13 @@ public:
   virtual Value ballot(RewriterBase &rewriter, Location loc, Type type,
                        Value cmp) const = 0;
 
+  // Insert a synchronization barrier. If isWarpSync is true, emit a warp-level
+  // synchronization when supported by the backend; otherwise emit a block/CTA
+  // level barrier. Backends that do not support warp-level barriers should
+  // conservatively emit a block-level barrier.
+  virtual void barrier(Location loc, RewriterBase &rewriter,
+                       bool isWarpSync = false) const = 0;
+
   // Store/load a value from shared memory, either in the same CTA or, if
   // `ctaId` is non-nullopt, in another CTA in the same group.
   //
@@ -47,6 +54,9 @@ public:
                            int i) const = 0;
   virtual Value shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
                            Value i) const = 0;
+
+  virtual Value permute(RewriterBase &rewriter, Location loc, Value a, Value b,
+                        Value selector) const = 0;
 
   virtual Value programId(RewriterBase &rewriter, Location loc,
                           ModuleOp moduleOp, ProgramIDDim axis) const = 0;
@@ -89,7 +99,6 @@ public:
   virtual bool supportLdMatrix() const { return false; }
   virtual bool supportStMatrix() const { return false; }
   virtual bool isCuda() const { return false; }
-  virtual bool isXpu() const { return false; }
 
   // Annotate target specific information to local load operations during
   // lowering to LLVM. `llLoadOp` is the generated LLVM load op.

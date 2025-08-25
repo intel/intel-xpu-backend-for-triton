@@ -64,9 +64,9 @@ void init_triton_intel_passes_ttir(py::module &&m) {
 }
 
 void init_triton_intel_passes_ttgpuir(py::module &&m) {
-  ADD_PASS_OPTION_WRAPPER_3("add_to_llvmir",
+  ADD_PASS_OPTION_WRAPPER_2("add_to_llvmir",
                             gpu::intel::createConvertTritonIntelGPUToLLVM, bool,
-                            bool, bool);
+                            bool);
   ADD_PASS_WRAPPER_0("add_gen_to_llvm", createConvertTritonGENToLLVM);
   ADD_PASS_WRAPPER_0("add_accelerate_matmul",
                      gpu::intel::createTritonIntelGPUAccelerateMatmul);

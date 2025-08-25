@@ -95,8 +95,7 @@ jobs:
         inductor/test_aot_inductor.py
         inductor/test_select_algorithm.py
         inductor/test_max_autotune.py
-        # FIXME: enable them later
-        # inductor/test_compile_subprocess.py
+        inductor/test_compile_subprocess.py
       runner_label: ${{ inputs.runner_label }}
       python_version: "3.9"
 

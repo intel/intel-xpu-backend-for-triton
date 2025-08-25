@@ -27,6 +27,7 @@ from triton_kernels_benchmark.benchmark_shapes_parser import ShapePatternParser
 BENCHMARKING_METHOD = os.getenv("BENCHMARKING_METHOD", "UPSTREAM_PYTORCH_PROFILER")
 BENCHMARKING_CONFIG = {
     "verify": os.getenv("VERIFY", "1") == "1",
+    "do_prewarmup": os.getenv("PREWARMUP", "1") == "1",
 }
 
 
@@ -39,6 +40,19 @@ def synchronize():
         torch.cuda.synchronize()
     elif torch.xpu.is_available():
         torch.xpu.synchronize()
+
+
+def do_prewarmup(fn, min_seconds=5):
+    """Looks like some functions require pre-warmup with minimum time to do the compilation.
+    It has to be done once."""
+    if not BENCHMARKING_CONFIG["do_prewarmup"]:
+        return
+
+    start = time.time()
+    while time.time() - start < min_seconds:
+        fn()
+        synchronize()
+    BENCHMARKING_CONFIG["do_prewarmup"] = False
 
 
 def _summarize_statistics(times, quantiles, return_mode):
@@ -139,6 +153,10 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
     # Warm-up
     for _ in range(n_warmup):
         fn()
+        # To be consistent with the benchmark measurements
+        if sync_submitting:
+            synchronize()
+
     # Benchmark
     with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.XPU]) as prof:
         for _ in range(n_repeat):

@@ -37,24 +37,24 @@ tt.func @no_tensor_computations(%arg0: i32) {
 
 // CHECK-LABEL: @small_tensor_computation
 tt.func @small_tensor_computation(%arg0: i32) {
-  %alloc = ttg.local_alloc : () -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<128xi32, #shared_1d, #smem, mutable>
   ttg.warp_specialize(%arg0, %alloc)
   default {
     ttg.warp_yield
   }
   // CHECK: partition0({{.*}}) num_warps(1)
-  partition0(%arg1: i32, %arg2: !ttg.memdesc<128xi32, #shared, #smem, mutable>) num_warps(8) {
+  partition0(%arg1: i32, %arg2: !ttg.memdesc<128xi32, #shared_1d, #smem, mutable>) num_warps(8) {
     %0 = tt.splat %arg1 : i32 -> tensor<128xi32, #blocked8>
-    ttg.local_store %0, %arg2 : tensor<128xi32, #blocked8> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+    ttg.local_store %0, %arg2 : tensor<128xi32, #blocked8> -> !ttg.memdesc<128xi32, #shared_1d, #smem, mutable>
     ttg.warp_return
   }
   // CHECK: partition1({{.*}}) num_warps(1)
-  partition1(%arg1: i32, %arg2: !ttg.memdesc<128xi32, #shared, #smem, mutable>) num_warps(4) {
+  partition1(%arg1: i32, %arg2: !ttg.memdesc<128xi32, #shared_1d, #smem, mutable>) num_warps(4) {
     %0 = tt.splat %arg1 : i32 -> tensor<128xi32, #blocked4>
     %1 = ttg.convert_layout %0 : tensor<128xi32, #blocked4> -> tensor<128xi32, #blocked4_broadcast>
-    ttg.local_store %1, %arg2 : tensor<128xi32, #blocked4_broadcast> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+    ttg.local_store %1, %arg2 : tensor<128xi32, #blocked4_broadcast> -> !ttg.memdesc<128xi32, #shared_1d, #smem, mutable>
     ttg.warp_return
-  } : (i32, !ttg.memdesc<128xi32, #shared, #smem, mutable>) -> ()
+  } : (i32, !ttg.memdesc<128xi32, #shared_1d, #smem, mutable>) -> ()
   tt.return
 }
 

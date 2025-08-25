@@ -10,11 +10,12 @@
 #shared_trans = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 16}>
 #nvmma_smem = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8}>
 #smem = #ttg.shared_memory
+#scales = #ttg.linear<{register = [[0, 1], [0, 2], [32, 0], [64, 0], [0, 4]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[0, 0], [0, 0]], block = []}>
 // CHECK-DAG: [[ACC_TMEM:#.*]] = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
 #acc_tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
 
-#lhs_layout = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
-#lhs_tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = false>
+#lhs_layout = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#lhs_tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, unpacked = false>
 
 #fp4_padded_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8, fp4Padded = true, CTAsPerCGA = [1, 1, 1], CTASplitNum = [1, 1, 1], CTAOrder = [2, 1, 0]}>
 
@@ -128,10 +129,11 @@ tt.func @warp_specialize_tma_matmul(
     // CHECK-NEXT: yield %{{[0-9]+}}, [[IDX_NEXT]], [[PHASE_NEXT]]
     scf.yield %c : tensor<128x128xf32, #acc_layout>
 
-  // CHECK-NEXT: ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32]
+  // CHECK-NEXT: ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32], ttg.warp_specialize.tag = 0 : i32
   } {tt.warp_specialize, tt.num_stages = 2 : i32}
 
-  // CHECK-NEXT: ttng.wait_barrier [[DONE_MBAR0]], %c0_i32
+  // CHECK-NEXT: [[DONE_MBAR0a:%.*]] = ttg.memdesc_index [[DONE_MBAR]], [[C0]] {ttg.partition = 1 : i32, ttg.warp_specialize.tag = 0 : i32}
+  // CHECK-NEXT: ttng.wait_barrier [[DONE_MBAR0a]], %c0_i32 {ttg.partition = 1 : i32, ttg.warp_specialize.tag = 0 : i32}
   // CHECK-NEXT: ttng.inval_barrier [[DONE_MBAR0]]
   // CHECK-NEXT: ttg.local_dealloc [[DONE_MBAR]]
 
@@ -151,7 +153,6 @@ tt.func @warp_specialize_tma_matmul(
   "use"(%result) : (tensor<128x128xf32, #acc_layout>) -> ()
   tt.return
 }
-
 // FUNC-LABEL: @unsupported_load
 // TMEM: ttng.tmem_alloc
 // TMEM: scf.for
@@ -162,6 +163,7 @@ tt.func @unsupported_load() {
   %c1_i32 = arith.constant 1 : i32
   %true = arith.constant true
   // CHECK-DAG: [[ZERO:%.*]] = arith.constant dense<0.0
+  // CHECK-DAG: [[C0:%.*]] = arith.constant 0 : i32
   %zero = arith.constant dense<0.0> : tensor<128x128xf32, #acc_layout>
   %k_tiles = arith.constant 32 : i32
 
@@ -190,10 +192,11 @@ tt.func @unsupported_load() {
     %c, %load_tok = ttng.tmem_load %c_tmem[%mma_tok] : !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #acc_layout>
 
     scf.yield %c : tensor<128x128xf32, #acc_layout>
-  // CHECK: ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32]
+  // CHECK: ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32], ttg.warp_specialize.tag = 1 : i32
   } {tt.warp_specialize}
 
-  // CHECK-NEXT: ttng.wait_barrier [[DONE_MBAR0]], %c0_i32
+  // CHECK-NEXT: [[DONE_MBAR0a:%.*]] = ttg.memdesc_index [[DONE_MBAR]], [[C0]] {ttg.partition = 1 : i32, ttg.warp_specialize.tag = 1 : i32}
+  // CHECK-NEXT: ttng.wait_barrier [[DONE_MBAR0a]], %c0_i32 {ttg.partition = 1 : i32, ttg.warp_specialize.tag = 1 : i32}
   // CHECK-NEXT: ttng.inval_barrier [[DONE_MBAR0]]
   // CHECK-NEXT: ttg.local_dealloc [[DONE_MBAR]]
 
@@ -775,8 +778,8 @@ tt.func @matmul_scaled_rhs_scales_tma(
   %BLOCK_K = arith.constant 64 : i32
   %zero = arith.constant dense<0.0> : tensor<128x128xf32, #acc_layout>
 
-  %a_scales_const = arith.constant dense<127> : tensor<128x8xi8, #oper_layout>
-  %a_scales_tmem = ttng.tmem_alloc %a_scales_const : (tensor<128x8xi8, #oper_layout>) -> !ttg.memdesc<128x8xi8, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>
+  %a_scales_const = arith.constant dense<127> : tensor<128x8xi8, #scales>
+  %a_scales_tmem = ttng.tmem_alloc %a_scales_const : (tensor<128x8xi8, #scales>) -> !ttg.memdesc<128x8xi8, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>
 
   // CHECK-COUNT-2: ttg.local_alloc : () -> !ttg.memdesc<3x1xi64,
   // CHECK-NOT: ttg.local_alloc : () -> !ttg.memdesc<3x1xi64,
@@ -790,7 +793,7 @@ tt.func @matmul_scaled_rhs_scales_tma(
     // CHECK-COUNT-3: async_tma_copy_global_to_local {{.*}} {ttg.partition = 2 : i32}
     %a_reg = tt.descriptor_load %a_desc[%off_m, %off_k] : !tt.tensordesc<tensor<128x64xf8E4M3FN, #nvmma_smem>> -> tensor<128x64xf8E4M3FN, #oper_layout>
     %b_reg = tt.descriptor_load %b_desc[%off_n, %off_k] : !tt.tensordesc<tensor<128x64xf8E4M3FN, #nvmma_smem>> -> tensor<128x64xf8E4M3FN, #oper_layout>
-    %b_scales_reg = tt.descriptor_load %b_scale_desc[%off_m, %c0_i32] : !tt.tensordesc<tensor<128x8xi8, #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [4, 3, 2, 1, 0]}>>> -> tensor<128x8xi8, #oper_layout>
+    %b_scales_reg = tt.descriptor_load %b_scale_desc[%off_m, %c0_i32] : !tt.tensordesc<tensor<128x8xi8, #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [4, 3, 2, 1, 0]}>>> -> tensor<128x8xi8, #scales>
 
     %a_sh = ttg.local_alloc %a_reg : (tensor<128x64xf8E4M3FN, #oper_layout>) -> !ttg.memdesc<128x64xf8E4M3FN, #nvmma_smem, #smem>
     %b_sh_raw = ttg.local_alloc %b_reg : (tensor<128x64xf8E4M3FN, #oper_layout>) -> !ttg.memdesc<128x64xf8E4M3FN, #nvmma_smem, #smem>
@@ -799,7 +802,7 @@ tt.func @matmul_scaled_rhs_scales_tma(
 
     // CHECK-NEXT: wait_barrier {{.*}} {ttg.partition = 1 : i32}
 
-    %b_scales_tmem = ttng.tmem_alloc %b_scales_reg : (tensor<128x8xi8, #oper_layout>) -> !ttg.memdesc<128x8xi8, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>
+    %b_scales_tmem = ttng.tmem_alloc %b_scales_reg : (tensor<128x8xi8, #scales>) -> !ttg.memdesc<128x8xi8, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>
 
     %c_tmem, %c_tok = ttng.tmem_alloc %acc : (tensor<128x128xf32, #acc_layout>) -> (!ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
 
@@ -1128,9 +1131,10 @@ tt.func @load_scale_mma_user(
     %scales_reg = ttg.local_load %scales_shared : !ttg.memdesc<8x128xi8, #shared, #smem> -> tensor<8x128xi8, #oper_layout>
     // CHECK-NEXT: [[SCALES_TRANS:%.*]] = tt.trans [[SCALES_REG]] {{.*}}partition = 0
     %scales_T = tt.trans %scales_reg {order = array<i32: 1, 0>} : tensor<8x128xi8, #oper_layout> -> tensor<128x8xi8, #oper_layout_trans>
+    %scales_cvt = ttg.convert_layout %scales_T : tensor<128x8xi8, #oper_layout_trans> -> tensor<128x8xi8, #scales>
     // CHECK-NEXT: wait_barrier [[SCALES_TMEM_BAR:%.*]], %arg{{[0-9]+}} {{.*}}partition = 0
     // CHECK-NEXT: tmem_store [[SCALES_TRANS]], [[SCALES_TMEM:%.*]], %true {{.*}}partition = 0
-    %scales_tmem = ttng.tmem_alloc %scales_T : (tensor<128x8xi8, #oper_layout_trans>) -> !ttg.memdesc<128x8xi8, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>
+    %scales_tmem = ttng.tmem_alloc %scales_cvt : (tensor<128x8xi8, #scales>) -> !ttg.memdesc<128x8xi8, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>
     // CHECK-NEXT: arrive_barrier [[SCALES_READY_BAR:%.*]], 1 {{.*}}partition = 0
 
     // CHECK: wait_barrier [[USER_DONE:%.*]], %arg{{[0-9]+}}, %true {{.*}}partition = 1
@@ -1568,10 +1572,11 @@ tt.func public @attention_forward(
     // CHECK-NEXT: yield [[NEXT_L_I]], [[ROW_MAX]], %{{[0-9]+}}, [[K_NEXT_INDEX]], [[K_NEXT_PHASE]], [[V_NEXT_INDEX]], [[V_NEXT_PHASE]], [[QK_NEXT_INDEX]], [[QK_NEXT_PHASE]], [[NEXT_PV_PHASE]], [[NEXT_P_PHASE]]
 
     scf.yield %next_l_i, %O, %row_max : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>, tensor<256x64xf32, #blocked>, tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
-  // CHECK-NEXT: ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32, 1 : i32]
+  // CHECK-NEXT: ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32, 1 : i32], ttg.warp_specialize.tag = 0 : i32
   } {tt.warp_specialize}
 
-  // CHECK-NEXT: wait_barrier [[PV_READY_BAR0]], [[OUTS]]#9
+  // CHECK-NEXT: [[PV_READY_BAR0a:%.*]] = ttg.memdesc_index [[PV_READY_MBARS]], %c0_i32 {ttg.partition = 3 : i32, ttg.warp_specialize.tag = 0 : i32}
+  // CHECK-NEXT: wait_barrier [[PV_READY_BAR0a]], [[OUTS]]#9 {ttg.partition = 3 : i32, ttg.warp_specialize.tag = 0 : i32}
 
   "use"(%loop_outs#0, %loop_outs#1, %loop_outs#2) : (tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>, tensor<256x64xf32, #blocked>, tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>) -> ()
 

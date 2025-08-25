@@ -208,10 +208,8 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
     auto dstTy = cvtLayout.getType();
     if (!cvtNeedsSharedMemory(srcTy, dstTy))
       return 0;
-    // Pesimistically take the max. We will revisit later
-    auto elems = std::max(getNumScratchElemsSwizzledCvt(srcTy, dstTy),
-                          getNumScratchElemsPaddedCvt(srcTy, dstTy));
-
+    // The generic pass uses swizzling
+    auto elems = getNumScratchElemsSwizzledCvt(srcTy, dstTy);
     return elems * getBitwidth(srcTy) / 8;
   }
   if (isa<AtomicRMWOp, AtomicCASOp>(op)) {
@@ -263,10 +261,10 @@ private:
       return;
     auto allocType = alloc.getType();
     int64_t numElems = 0;
-    if (auto paddedLayout =
+    if (auto paddedEnc =
             dyn_cast<gpu::PaddedSharedEncodingAttr>(allocType.getEncoding())) {
       SmallVector<int64_t> unpaddedShape = gpu::getShapePerCTA(allocType);
-      numElems = paddedLayout.getPaddedSize(unpaddedShape);
+      numElems = paddedEnc.getPaddedSize(unpaddedShape);
     } else {
       auto shapePerCTA = gpu::getAllocationShapePerCTA(allocType);
       numElems = product<int64_t>(shapePerCTA);

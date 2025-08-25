@@ -1279,10 +1279,11 @@ struct AsyncCopyGlobalToLocalOpConversion
         {str_attr("offset")});
     auto affineOffset = smemObj.getShmemOffset(loc, rewriter, dstTy);
     auto maskSpanAffineOffset = SharedMemoryObject::getMaskSpanOffsets(dstTy);
+    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
     lowerLdSt(
         loc, ctx, cvt, vals, resElemTy, smemObj.getBase(),
-        [](Value v) { return v; }, affineOffset, maskSpanAffineOffset, rewriter,
-        targetInfo, maxVec, emitCpAsync);
+        [](Value v) { return v; }, affineOffset, maskSpanAffineOffset, laneId,
+        warpId, rewriter, targetInfo, maxVec, emitCpAsync);
 
     // Drop the result token.
     Value zero = rewriter.create<LLVM::ConstantOp>(
@@ -1585,6 +1586,7 @@ static LinearLayout getUnswizzledLayout(triton::gpu::MemDescType type) {
     assert(isa<ttg::SwizzledSharedEncodingAttr>(type.getEncoding()));
     return ttg::toLinearLayout(type);
   }
+  assert(type.getShape() == type.getAllocShape().take_back(type.getRank()));
   return ttg::nvmmaSharedToLinearLayout(
       type.getShape(), cast<NVMMASharedEncodingAttr>(type.getEncoding()),
       /*disableSwizzle=*/true);
