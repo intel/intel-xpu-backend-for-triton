@@ -25,12 +25,10 @@ def is_hip_cdna4():
     return tl.target_info.current_target().arch == "gfx950"
 
 
+@triton.constexpr_function
 def is_xpu():
-    if "is_xpu" not in cached_capabilities:
-        target = triton.runtime.driver.active.get_current_target()
-        cached_capabilities["is_xpu"] = False if target is None else target.backend == "xpu"
-    return cached_capabilities["is_xpu"]
- 
+    return tl.target_info.current_target().arch == "xpu"
+
 
 @triton.constexpr_function
 def cuda_capability_geq(major, minor=0):
