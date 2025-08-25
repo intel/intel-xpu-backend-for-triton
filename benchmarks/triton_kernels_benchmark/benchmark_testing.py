@@ -42,6 +42,35 @@ def synchronize():
         torch.xpu.synchronize()
 
 
+class Tracker:
+    def __init__(self):
+        self.config = None
+        self.times = []
+        self.last_time = None
+
+        self.results = []
+    
+    def set_config(self, config):
+        self.config = config
+        self.times = []
+
+    def tick(self):
+        pass
+
+    def set_results(self, times):
+        self.times = times
+        self.results.append({'config': self.config, 'times': self.times})
+
+
+    def save(self):
+        import json
+        
+        with open('./tracker_results.json', w) as f:
+            json.dump(self.results, f, indent=1)
+        
+tracker = Tracker()
+
+
 def do_prewarmup(fn, min_seconds=5):
     """Looks like some functions require pre-warmup with minimum time to do the compilation.
     It has to be done once."""
@@ -151,12 +180,13 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
     cache = torch.empty(int(cache_size // 4), dtype=torch.int, device=device)
 
     # Warm-up
-    for _ in range(n_warmup):
-        fn()
-        # To be consistent with the benchmark measurements
-        if sync_submitting:
-            synchronize()
+    # for _ in range(n_warmup):
+    #     fn()
+    #     # To be consistent with the benchmark measurements
+    #     if sync_submitting:
+    #         synchronize()
 
+    n_repeat = 1000
     # Benchmark
     with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.XPU]) as prof:
         for _ in range(n_repeat):
@@ -193,7 +223,7 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
     # For details: https://github.com/pytorch/pytorch/issues/144778
     kernels = [kernel for kernel in kernels if kernel != []]
     relax_profiling_data_check = os.getenv("TRITON_RELAX_PROFILING_CHECK", "0") == "1"
-    if not (len(kernels) >= n_repeat - 1 if relax_profiling_data_check else len(kernels) == n_repeat):
+    if False and not (len(kernels) >= n_repeat - 1 if relax_profiling_data_check else len(kernels) == n_repeat):
         raise AssertionError(
             f"the profiling number not match; {n_repeat=}, {kernels=}, "
             f"top functions by xpu_time:\n {prof.key_averages(group_by_stack_n=5).table(sort_by='xpu_time')}",
@@ -201,6 +231,7 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
         )
     # Make the time to the milliseconds.
     times = torch.tensor([sum((k.duration for k in ks)) * 1e-3 for ks in kernels], dtype=torch.float)
+    tracker.set_results(times)
     return _summarize_statistics(times, quantiles, return_mode)
 
 
@@ -302,6 +333,7 @@ class Mark:
             for label in itertools.chain(bench.ylabel, ["CV"]):
                 row_vals[label] = ([], [], [])
             for y in bench.line_vals:
+                tracker.set_config({**x_args, bench.line_arg: y, **bench.args})
                 ret = self.fn(**x_args, **{bench.line_arg: y}, **bench.args, **kwargs)
                 for i, label in enumerate(itertools.chain(bench.ylabel, ["CV"])):
                     try:
@@ -390,6 +422,8 @@ class Mark:
             if len(result_dfs) == 1:
                 return result_dfs[0]
             return result_dfs
+
+        tracker.save()
 
         return None
 

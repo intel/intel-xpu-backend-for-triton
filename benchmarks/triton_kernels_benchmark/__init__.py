@@ -2,6 +2,7 @@ import os
 
 from .benchmark_testing import (
     assert_close,
+    tracker,
     do_bench,
     do_prewarmup,
     filter_providers,
@@ -19,6 +20,7 @@ if BENCHMARKING_METHOD == "UPSTREAM_PYTORCH_PROFILER":
 
 __all__ = [
     "assert_close",
+    "tracker",
     "do_bench",
     "do_prewarmup",
     "filter_providers",
