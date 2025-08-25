@@ -27,7 +27,7 @@ def is_hip_cdna4():
 
 @triton.constexpr_function
 def is_xpu():
-    return tl.target_info.current_target().arch == "xpu"
+    return tl.target_info.current_target().backend == "xpu"
 
 
 @triton.constexpr_function
