@@ -99,6 +99,12 @@ public:
       Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
       return {cTy, cTy, aTy, bTy};
     }
+    case DPASEngineType::FP32_FP32_FP4_FP4: {
+      Type cTy = vec_ty(fp32Ty, elemNumC);
+      Type aTy = vec_ty(i16Ty, elemNumA / 2);             // pack 2 fp8 to i16.
+      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
+      return {cTy, cTy, aTy, bTy};
+    }
     default:
       llvm::report_fatal_error("Unsupported dpas type found");
     }
@@ -187,10 +193,29 @@ public:
 
     Type resElemTy = DTensorTy.getElementType();
 
-    TritonGEN::PrecisionType APrecision =
-                                 getElementPrecision(ATensorTy, resElemTy),
-                             BPrecision =
-                                 getElementPrecision(BTensorTy, resElemTy);
+    TritonGEN::PrecisionType APrecision;
+    TritonGEN::PrecisionType BPrecision;
+    Intrinsic dpas;
+    if constexpr (std::is_same<OpTy, DotScaledOp>::value) {
+      auto aElemtype = adaptor.getBElemType();
+      APrecision = (aElemtype == ScaleDotElemType::E2M1)
+                       ? TritonGEN::PrecisionType::BF4
+                       : getElementPrecision(ATensorTy, resElemTy);
+      auto bElemtype = adaptor.getBElemType();
+      BPrecision = (bElemtype == ScaleDotElemType::E2M1)
+                       ? TritonGEN::PrecisionType::BF4
+                       : getElementPrecision(BTensorTy, resElemTy);
+
+      if (bElemtype == ScaleDotElemType::E2M1)
+        dpas =
+            GenISA_BDpas(rewriter, cTy, cTy, aTy, bTy, i8_ty, vec_ty(i8_ty, 2));
+      else
+        dpas = GenISA_BDpas(rewriter, cTy, cTy, aTy, bTy, i8_ty, i8_ty);
+    } else {
+      APrecision = getElementPrecision(ATensorTy, resElemTy),
+      BPrecision = getElementPrecision(BTensorTy, resElemTy);
+      dpas = GenISA_Dpas(rewriter, cTy, cTy, aTy, bTy);
+    }
 
     assert(APrecision == BPrecision &&
            "A and B precision enumerators do not match");
@@ -203,12 +228,13 @@ public:
       llvm::dbgs() << "fc.size()= " << fc.size() << "\n";
     });
 
-    Intrinsic dpas;
-    if constexpr (std::is_same<OpTy, DotScaledOp>::value) {
-      dpas = GenISA_BDpas(rewriter, cTy, cTy, aTy, bTy, i8_ty, i8_ty);
-    } else {
-      dpas = GenISA_Dpas(rewriter, cTy, cTy, aTy, bTy);
-    }
+#if 0
+    auto mod = op->getParentOfType<ModuleOp>();
+    auto warpSize =
+        i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
+    Value warpId = udiv(getThreadId(rewriter, loc), warpSize);
+    Value laneId = urem(getThreadId(rewriter, loc), warpSize);
+#endif
 
     auto generateDPASOp = [&](unsigned b, unsigned m, unsigned n, unsigned k) {
       auto tb = TritonLLVMOpBuilder(loc, rewriter);
@@ -473,15 +499,28 @@ private:
     }
 
     size_t totalElems = elems.size();
+    unsigned packedElem = totalElems / (batch * outer * inner *
+                                        repClusterOuter * repClusterInner);
     int offset = 0;
+    auto tb = TritonLLVMOpBuilder(loc, rewriter);
     ValueTable vals;
     for (unsigned b = 0; b < batch; ++b) {
       for (int i = 0; i < outer; ++i) {
         for (int j = 0; j < inner; ++j) {
           for (int repOuter = 0; repOuter < repClusterOuter; ++repOuter) {
             for (int repInner = 0; repInner < repClusterInner; ++repInner) {
+              Value matVal;
+              if (packedElem != 1) {
+                VectorType scaleOpTy = vec_ty(i8_ty, packedElem);
+                matVal = rewriter.create<LLVM::UndefOp>(loc, scaleOpTy);
+                for (int k = 0; k < packedElem; ++k)
+                  matVal =
+                      tb.insert_element(matVal, elems[offset++], tb.i32_val(k));
+              } else
+                matVal = elems[offset++];
+
               vals[{b, i * repClusterOuter + repOuter,
-                    j * repClusterInner + repInner}] = elems[offset++];
+                    j * repClusterInner + repInner}] = matVal;
             }
           }
         }
