@@ -25,11 +25,9 @@ def parse_folder_name(folder_name):
     if len(parts) < 4 or parts[0] != 'logs' or parts[-1] != 'accuracy':
         return None, None, None
 
-    # Extract suite (second part)
     suite = parts[1]
-
-    # Extract dtype (third part, could be compound like amp_bf16)
     dtype = parts[2]
+    # Extract mode, can include dashes
     mode = '-'.join(parts[3:-1])
 
     return suite, dtype, mode
@@ -43,11 +41,9 @@ def build_suite_report(combined_df, output_path):
                                 'name']).count().max().max() == 1, 'Discovered unexpected duplicates in results!'
 
     def fn(df):
-        # import pdb; pdb.set_trace()
         results = df['accuracy'].value_counts().to_dict()
         errors = df[~df['accuracy'].str.startswith('pass')]
         errors = errors.groupby('accuracy')['name'].apply(';'.join).to_dict()
-        # results = {**results, **{n + '_models': models for n, models in errors.items()}}
 
         return results, errors
 

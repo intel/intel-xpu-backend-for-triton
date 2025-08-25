@@ -134,7 +134,7 @@ jobs:
       TORCH_COMPILE_DEBUG: ${{ inputs.TORCH_COMPILE_DEBUG }}
 
   summary:
-    name: Aggregate results
+    name: Aggregate and check results
     needs: run_tests
     runs-on: linux
     if: always()
@@ -172,13 +172,14 @@ jobs:
       - name: Check results against reference
         if: ${{ inputs.models == 'all' && inputs.only_one_model == '' }}
         run: |
+          PYTORCH_XPU_OPS_REF="$(<.github/pins/e2e_reference_torch-xpu-ops.txt)"
           git clone https://github.com/intel/torch-xpu-ops.git
           cd torch-xpu-ops
-          git checkout f2bcd8a4b87c8ff508640ebda24736abed92decd
+          git checkout $PYTORCH_XPU_OPS_REF
           cd ..
           ./scripts/e2e_checks/compare_reference.sh \
-            --result-dir aggregated-results \
-            --torch-dir "./torch-xpu-ops" \
-            --suites ${{ needs.setup.outputs.suite }} \
-            --modes ${{ needs.setup.outputs.mode }} \
-            --dtypes ${{ needs.setup.outputs.dtype }}
+            aggregated-results \
+            "./torch-xpu-ops" \
+            '${{ needs.setup.outputs.suite }}. \
+            '${{ needs.setup.outputs.mode }}. \
+            '${{ needs.setup.outputs.dtype }}.

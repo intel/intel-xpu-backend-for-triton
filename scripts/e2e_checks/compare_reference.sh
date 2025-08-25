@@ -6,9 +6,9 @@ set -u  # Exit on undefined variables
 # Input arguments
 RESULT_DIR=$1
 TORCH_DIR=$2
-SUITES=${3:-"huggingface torchbench timm_models"}
-MODES=${4:-"training inference"}
-DTYPES=${5:-"float32 bfloat16 float16 amp_bf16 amp_fp16"}
+SUITES=${3:-'["huggingface", "torchbench", "timm_models"]'}
+MODES=${4:-'["training", "inference"]'}
+DTYPES=${5:-'["float32", "bfloat16", "float16", "amp_bf16", "amp_fp16"]'}
 
 # Function to convert JSON array to space-separated string
 convert_json_array() {
