@@ -223,13 +223,17 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
     zeDeviceGetComputeProperties(l0_device, &compute_properties);
     int32_t n_max_threads = compute_properties.maxTotalGroupSize;
 
+    const bool is_GRF_mode_specified = build_flags.hasGRFSizeFlag();
+    if (!is_GRF_mode_specified)
+      build_flags.addLargeGRFSizeFlag();
+
     auto [l0_module, l0_kernel, n_spills] =
         compileLevelZeroObjects(binary_ptr, binary_size, kernel_name, l0_device,
                                 l0_context, build_flags(), is_spv);
 
     const bool debugEnabled = getBoolEnv("TRITON_DEBUG");
 
-    if (is_spv) {
+    if (false && is_spv) {
       constexpr int32_t max_reg_spill = 1000;
       const bool is_GRF_mode_specified = build_flags.hasGRFSizeFlag();
 
