@@ -60,9 +60,9 @@ failed_models_output=""
 missing_files=()
 exit_code=0
 
-echo "$SUITES"
-echo "$MODES"
-echo "$DTYPES"
+echo "Suites: $SUITES"
+echo "Modes: $MODES"
+echo "Dtypes: $DTYPES"
 
 # Nested loops
 for suite in "${suites[@]}"; do
