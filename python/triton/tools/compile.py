@@ -5,7 +5,7 @@ import sys
 from argparse import ArgumentParser
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 import triton
 from triton._internal_testing import is_xpu
@@ -23,12 +23,12 @@ class CompileArgs:
     grid: str = ''
     grf_mode: str = ''
     generate_native_code: bool = False
-    target: str | None = None
+    target: Optional[str] = None
     num_warps: int = 1
     threads_per_warp: int = 32
     num_stages: int = 3
-    out_name: str | None = None
-    out_path: Path | None = None
+    out_name: Optional[str] = None
+    out_path: Optional[Path] = None
 
 
 desc = """
