@@ -180,6 +180,6 @@ jobs:
           ./scripts/e2e_checks/compare_reference.sh \
             aggregated-results \
             "./torch-xpu-ops" \
-            '${{ needs.setup.outputs.suite }}. \
-            '${{ needs.setup.outputs.mode }}. \
-            '${{ needs.setup.outputs.dtype }}.
+            '${{ needs.setup.outputs.suite }}' \
+            '${{ needs.setup.outputs.mode }}' \
+            '${{ needs.setup.outputs.dtype }}'
