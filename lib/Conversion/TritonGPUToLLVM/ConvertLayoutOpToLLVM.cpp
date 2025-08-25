@@ -72,9 +72,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       if (cvtNeedsWarpShuffle(srcTy, dstTy))
         return transferWithinWarp(op, adaptor, rewriter);
 
-      // TODO: Since data is only transferred within a warp over shared memory,
-      // we should use `bar.warp.sync` instead of `barrier`, which will improve
-      // latency when warps issue barriers on different cycles.
       transferWithinBlockSwizzling(op, adaptor.getSrc(), rewriter);
       return success();
     } else if (llvm::is_contained(dims, kRegister)) {
@@ -212,9 +209,11 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     auto affineOffset = b.i32_val(0);
     auto maskSpanAffineOffset = 0;
     auto noPaddingOffset = [](Value v) { return v; };
+
+    bool isWarpSync = mlir::isCvtWarpSync(srcLayout, dstLayout);
     for (int i = 0; i < nReps; ++i) {
       if (i > 0)
-        b.barrier();
+        targetInfo.barrier(loc, rewriter, isWarpSync);
 
       auto tileInVals =
           ArrayRef<Value>(permutedInVals).slice(i * tileSize, tileSize);
@@ -222,7 +221,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       lowerLdStShared(loc, ctx, storeCvt, tileInVals, llvmElemTy, smemBase,
                       noPaddingOffset, affineOffset, maskSpanAffineOffset,
                       rewriter, targetInfo);
-      b.barrier();
+      targetInfo.barrier(loc, rewriter, isWarpSync);
       // Load
       SmallVector<Value> tileOutVals = lowerLdStShared(
           loc, ctx, loadCvt, {}, llvmElemTy, smemBase, noPaddingOffset,
