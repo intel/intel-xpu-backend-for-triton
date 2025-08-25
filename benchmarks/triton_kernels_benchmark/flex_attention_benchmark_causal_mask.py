@@ -152,7 +152,7 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
     torch_fn = lambda: flex_attention(q, k, v, block_mask=block_mask, scale=sm_scale, enable_gqa=not H_q == H_kv)
 
     if provider == 'torch':
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(torch_fn, n_warmup=10, n_repeat=10, quantiles=quantiles,
+        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(torch_fn, n_warmup=400, n_repeat=10, quantiles=quantiles,
                                                               device=DEVICE)
 
     elif provider == 'triton':
@@ -168,7 +168,7 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
 
         # Needs more warmup on B580 for some reason
         benchmark_suit.do_prewarmup(triton_fn)
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=200, n_repeat=10, quantiles=quantiles,
+        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=400, n_repeat=10, quantiles=quantiles,
                                                               device=DEVICE)
 
     elif provider == 'onednn':
@@ -180,7 +180,7 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
                 xformers_o = xformers_fn()
                 xformers_do = torch.randn_like(xformers_o)
                 xformers_fn = lambda: xformers_o.backward(xformers_do, retain_graph=True)
-            _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xformers_fn, n_warmup=10, n_repeat=10,
+            _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xformers_fn, n_warmup=400, n_repeat=10,
                                                                   quantiles=quantiles)
         else:
             _, min_ms, max_ms, mean, cv = float('nan'), float('nan'), float('nan'), float('nan'), float('nan')

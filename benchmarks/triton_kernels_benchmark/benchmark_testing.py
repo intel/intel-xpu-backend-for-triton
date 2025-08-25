@@ -150,6 +150,21 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
     cache_size = 256 * 1024 * 1024
     cache = torch.empty(int(cache_size // 4), dtype=torch.int, device=device)
 
+    # Estimate the runtime of the function
+    start_event = torch.xpu.Event(enable_timing=True)
+    end_event = torch.xpu.Event(enable_timing=True)
+    start_event.record()
+    for _ in range(5):
+        cache.zero_()
+        fn()
+        # To be consistent with the benchmark measurements
+        if sync_submitting:
+            synchronize()
+    end_event.record()
+    synchronize()
+    estimate_ms = start_event.elapsed_time(end_event) / 5
+    n_warmup = max(1, n_warmup / estimate_ms)
+
     # Warm-up
     for _ in range(n_warmup):
         fn()
