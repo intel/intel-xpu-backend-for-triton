@@ -76,12 +76,12 @@ jobs:
           CACHE_NUMBER: 2
         with:
           path: $HOME/.cache/pip
-          key: pip-3.10-${{ hashFiles('.pre-commit-config.yaml') }}-${{ env.CACHE_NUMBER }}
+          key: pip-3.9-${{ hashFiles('.pre-commit-config.yaml') }}-${{ env.CACHE_NUMBER }}
 
-      - name: Install Python 3.10
+      - name: Install Python 3.9
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.9'
 
       - name: Run pre-commit checks
         run: |
@@ -108,7 +108,7 @@ jobs:
       fail-fast: false
       matrix:
         python:
-          - "3.10"
+          - "3.9"
         driver: ${{ fromJson((inputs.runner_label || '') == '' && '["rolling", "lts"]' || '["rolling"]') }}
 
     uses: ./.github/workflows/build-test-reusable.yml
