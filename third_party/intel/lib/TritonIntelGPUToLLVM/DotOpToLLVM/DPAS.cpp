@@ -207,8 +207,8 @@ public:
                        : getElementPrecision(BTensorTy, resElemTy);
 
       if (bElemtype == ScaleDotElemType::E2M1)
-        dpas =
-            GenISA_BDpas(rewriter, cTy, cTy, aTy, bTy, i8_ty, vec_ty(i8_ty, 2));
+        dpas = GenISA_BDpas(rewriter, cTy, cTy, aTy, bTy, vec_ty(i8_ty, 2),
+                            vec_ty(i8_ty, 2));
       else
         dpas = GenISA_BDpas(rewriter, cTy, cTy, aTy, bTy, i8_ty, i8_ty);
     } else {

@@ -235,8 +235,8 @@ TEST_F(DPAStoLinearLayoutTest, DPAS_OperandScaleA) {
                 3),
             LinearLayout(
                 {
-                    {S("register"), {{8, 0}, {16, 0}, {0, 2}, {64, 0}}},
-                    {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {0, 1}, {0, 0}}},
+                    {S("register"), {{0, 1}, {8, 0}, {16, 0}, {0, 2}, {64, 0}}},
+                    {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {0, 0}, {0, 0}}},
                     {S("warp"), {{0, 0}, {32, 0}}},
                     {S("block"), {}},
                 },
@@ -259,8 +259,8 @@ TEST_F(DPAStoLinearLayoutTest, DPAS_OperandScaleA) {
                 3),
             LinearLayout(
                 {
-                    {S("register"), {{8, 0}, {16, 0}, {0, 2}, {64, 0}}},
-                    {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {0, 1}}},
+                    {S("register"), {{0, 1}, {8, 0}, {16, 0}, {0, 2}, {64, 0}}},
+                    {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {0, 0}}},
                     {S("warp"), {{0, 0}, {32, 0}}},
                     {S("block"), {}},
                 },

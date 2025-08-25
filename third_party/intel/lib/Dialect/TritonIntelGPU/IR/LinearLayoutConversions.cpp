@@ -540,30 +540,26 @@ LinearLayout DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
 //
 // clang-format on
 std::vector<std::vector<int32_t>>
-BlockScaledDPASRegBasesScaleA(int opsPerChannel, int threadsPerWarp) {
+BlockScaledDPASRegBasesScaleA(int opsPerChannel) {
   std::vector<std::vector<int32_t>> regBases;
 
   assert((opsPerChannel == 4 || opsPerChannel == 8) &&
          "invalid opsPerChannel number for bdpas.");
-  // The register is size 1 dimension.
+  if (opsPerChannel == 8) {
+    regBases.push_back({0, 1});
+  }
   return regBases;
 }
 
 std::vector<std::vector<int32_t>>
-BlockScaledDPASLaneBasesScaleA(int repeatCount, int opsPerChannel,
-                               int threadsPerWarp) {
+BlockScaledDPASLaneBasesScaleA(int repeatCount, int threadsPerWarp) {
   std::vector<std::vector<int32_t>> laneBases;
 
   assert((repeatCount == 8) && "invalid repeatCount number for bdpas.");
-  assert((opsPerChannel == 4 || opsPerChannel == 8) &&
-         "invalid opsPerChannel number for bdpas.");
 
   int tid;
   for (tid = 1; tid < repeatCount; tid *= 2) {
     laneBases.push_back({tid, 0});
-  }
-  for (; tid < repeatCount * (opsPerChannel / 4); tid *= 2) {
-    laneBases.push_back({0, 1});
   }
   for (; tid < threadsPerWarp; tid *= 2) {
     laneBases.push_back({0, 0});
@@ -595,19 +591,18 @@ BlockScaledDPASLaneBasesScaleA(int repeatCount, int opsPerChannel,
 // Lane:      {{0,1}, {0,2}, {0,4}, {0,8}, {0,1}}
 // clang-format on
 std::vector<std::vector<int32_t>>
-BlockScaledDPASRegBasesScaleB(int opsPerChannel, int threadsPerWarp) {
+BlockScaledDPASRegBasesScaleB(int opsPerChannel) {
   std::vector<std::vector<int32_t>> regBases;
   assert((opsPerChannel == 4 || opsPerChannel == 8) &&
          "invalid opsPerChannel number for bdpas.");
-  if (opsPerChannel == 8 && threadsPerWarp == 16) {
+  if (opsPerChannel == 8) {
     regBases.push_back({0, 1});
   }
   return regBases;
 }
 
 std::vector<std::vector<int32_t>>
-BlockScaledDPASLaneBasesScaleB(int execSize, int opsPerChannel,
-                               int threadsPerWarp) {
+BlockScaledDPASLaneBasesScaleB(int execSize, int threadsPerWarp) {
   std::vector<std::vector<int32_t>> laneBases;
 
   assert((execSize == 16) && "invalid execSize number for bdpas.");
@@ -615,10 +610,6 @@ BlockScaledDPASLaneBasesScaleB(int execSize, int opsPerChannel,
   int tid;
   for (tid = 1; tid < execSize; tid *= 2) {
     laneBases.push_back({tid, 0});
-  }
-  for (; tid < std::min(threadsPerWarp, execSize * (opsPerChannel / 4));
-       tid *= 2) {
-    laneBases.push_back({0, 1});
   }
   for (; tid < threadsPerWarp; tid *= 2) {
     laneBases.push_back({0, 0});
@@ -665,10 +656,9 @@ LinearLayout BlockScaledDPAStoLinearLayout(ArrayRef<int64_t> shape,
   unsigned scaleOpNonKIdx = rank + (scaleOpKDim ^ 0x1);
   unsigned scaleOpKIdx = rank + scaleOpKDim;
   if (opIdx == 3) { // Operand Scale A
-    auto regBasesA =
-        BlockScaledDPASRegBasesScaleA(opsPerChannel, threadsPerWarp);
-    auto laneBasesA = BlockScaledDPASLaneBasesScaleA(repeatCount, opsPerChannel,
-                                                     threadsPerWarp);
+    auto regBasesA = BlockScaledDPASRegBasesScaleA(opsPerChannel);
+    auto laneBasesA =
+        BlockScaledDPASLaneBasesScaleA(repeatCount, threadsPerWarp);
     tileLayout = LinearLayout({{kRegister, regBasesA}, {kLane, laneBasesA}},
                               ArrayRef(outDimNames).take_back(2));
     llvm::outs() << "johnlu tileLayout:" << tileLayout << "\n";
@@ -703,10 +693,9 @@ LinearLayout BlockScaledDPAStoLinearLayout(ArrayRef<int64_t> shape,
           LinearLayout::identity1D(warpsPerCTA[0], kWarp, outDimNames[0]);
 
   } else { // Operand Scale B
-    auto regBasesB =
-        BlockScaledDPASRegBasesScaleB(opsPerChannel, threadsPerWarp);
-    auto laneBasesB = BlockScaledDPASLaneBasesScaleB(
-        executionSize, opsPerChannel, threadsPerWarp);
+    auto regBasesB = BlockScaledDPASRegBasesScaleB(opsPerChannel);
+    auto laneBasesB =
+        BlockScaledDPASLaneBasesScaleB(executionSize, threadsPerWarp);
     tileLayout = LinearLayout({{kRegister, regBasesB}, {kLane, laneBasesB}},
                               ArrayRef(outDimNames).take_back(2));
     llvm::outs() << "johnlu tileLayout:" << tileLayout << "\n";
