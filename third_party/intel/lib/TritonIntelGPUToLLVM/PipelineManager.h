@@ -74,9 +74,13 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
   ///   * Non-kernel functions:
   ///       Uses the second last param as the shared scratch stack.
   ///
-  /// - Global memory:
+  /// - Global scratch memory:
   ///   * Both kernel and non-kernel functions:
-  ///       Use the last param as the global scratch stack.
+  ///       Use the last but one param as the global scratch stack.
+  ///
+  /// - Profile scratch memory:
+  ///   * Both kernel and non-kernel functions:
+  ///       Use the last param as the profile scratch stack.
   triton::FuncOp amendFuncOp(triton::FuncOp funcOp,
                              ConversionPatternRewriter &rewriter,
                              const TargetInfoBase &targetInfo) const {
@@ -87,6 +91,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     auto sharedPtrTy =
         LLVM::LLVMPointerType::get(ctx, targetInfo.getSharedAddressSpace());
     Type globalPtrTy = LLVM::LLVMPointerType::get(ctx, 1);
+    Type profilePtrTy = LLVM::LLVMPointerType::get(ctx, 1);
 
     // 1. Modify the function type to add the new arguments.
     FunctionType funcTy = funcOp.getFunctionType();
@@ -96,6 +101,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       amendedInputTy.push_back(sharedPtrTy);
 
     amendedInputTy.push_back(globalPtrTy);
+    amendedInputTy.push_back(profilePtrTy);
     auto amendedFuncTy =
         FunctionType::get(ctx, amendedInputTy, funcTy.getResults());
     // 2. Modify the argument attributes to add the new argument.
@@ -120,6 +126,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       region.addArgument(sharedPtrTy, loc);
 
     region.addArgument(globalPtrTy, loc);
+    region.addArgument(profilePtrTy, loc);
     rewriter.inlineRegionBefore(region, amendedFuncOp.getBody(),
                                 amendedFuncOp.end());
     return amendedFuncOp;

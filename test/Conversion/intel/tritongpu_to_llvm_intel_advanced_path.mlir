@@ -227,7 +227,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
   }
 
   // CHECK-LABEL: llvm.func spir_kernelcc @addptr(
-  // CHECK-SAME:                                  [[VAL_0:%.*]]: !llvm.ptr<1>, [[PTR_1:%.*]]: !llvm.ptr<1>) -> !llvm.ptr<1> attributes {intel_reqd_sub_group_size = 16 : i32, reqd_work_group_size = array<i32: 128, 1, 1>}
+  // CHECK-SAME:  [[VAL_0:%.*]]: !llvm.ptr<1>, [[PTR_1:%.*]]: !llvm.ptr<1>, [[PTR_2:%.*]]: !llvm.ptr<1>) ->
+  // CHECK-SAME:  !llvm.ptr<1> attributes {intel_reqd_sub_group_size = 16 : i32, reqd_work_group_size = array<i32: 128, 1, 1>}
   tt.func public @addptr(%arg0: !tt.ptr<f16>) -> !tt.ptr<f16> {
     // CHECK: [[VAL_1:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: [[VAL_2:%.*]] = llvm.call spir_funccc @_Z12get_group_idj([[VAL_1]]) {{.*}} : (i32) -> i64
