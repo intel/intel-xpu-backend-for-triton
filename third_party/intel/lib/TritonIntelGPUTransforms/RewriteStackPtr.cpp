@@ -24,9 +24,6 @@ public:
       TritonIntelGPURewriteStackPtrPass>::TritonIntelGPURewriteStackPtrBase;
 
   void runOnOperation() override {
-    // Засекаем начало
-    // auto start = std::chrono::high_resolution_clock::now();
-
     ModuleOp mod = getOperation();
     MLIRContext *ctx = &getContext();
     LLVM::LLVMPointerType ptrTy =
@@ -39,12 +36,6 @@ public:
     CallGraph<Allocation> allocation(mod);
     bool usePoison =
         (mod->getAttrOfType<IntegerAttr>("ttg.shared").getInt() == 0);
-
-    // Засекаем конец
-    // auto end = std::chrono::high_resolution_clock::now();
-    // Разница во времени
-    // llvm::outs() << "Time1: " << ((std::chrono::duration<double>)(end -
-    // start)).count() << " secs\n";
 
     // 1: Process function arguments for root functions
     if (!usePoison) {
@@ -67,11 +58,7 @@ public:
         }
       }
     });
-    // Засекаем конец
-    // auto end3 = std::chrono::high_resolution_clock::now();
-    // Разница во времени
-    // llvm::outs() << "Time3: " << ((std::chrono::duration<double>)(end3 -
-    // start)).count() << " secs\n";
+
     // 3: Update collected AddressOfOp
     OpBuilder builder(ctx);
     for (LLVM::AddressOfOp addressOp : addressOps) {

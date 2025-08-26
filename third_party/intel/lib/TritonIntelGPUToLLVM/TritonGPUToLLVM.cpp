@@ -157,9 +157,7 @@ struct ConvertTritonGPUToLLVM
         funcOp.removeArgAttr(i, "tt.contiguity");
       }
     });
-    // Засекаем конец
     auto end = std::chrono::high_resolution_clock::now();
-    // Разница во времени
     llvm::outs() << "New Time: "
                  << ((std::chrono::duration<double>)(end - start)).count()
                  << " secs\n";
