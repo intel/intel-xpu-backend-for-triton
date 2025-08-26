@@ -135,7 +135,7 @@ jobs:
 
   summary:
     name: Aggregate and check results
-    needs: run_tests
+    needs: [run_tests, setup]
     runs-on: linux
     if: always()
     steps:
@@ -180,6 +180,6 @@ jobs:
           ./scripts/e2e_checks/compare_reference.sh \
             aggregated-results \
             "./torch-xpu-ops" \
-            "${{ needs.setup.outputs.suite }}" \
-            "${{ needs.setup.outputs.mode }}" \
-            "${{ needs.setup.outputs.dtype }}"
+            '${{ needs.setup.outputs.suite }}' \
+            '${{ needs.setup.outputs.mode }}' \
+            '${{ needs.setup.outputs.dtype }}'
