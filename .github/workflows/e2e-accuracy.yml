@@ -178,8 +178,6 @@ jobs:
           git checkout $PYTORCH_XPU_OPS_REF
           echo "${{ needs.setup.outputs.suite }}"
           cd ..
-          ls -la
-          ls -la scripts
           mkdir -p aggregated-results
 
           ./scripts/e2e_checks/compare_reference.sh \
