@@ -288,6 +288,8 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
     if (narg != expected_num_params) {
       // global scratch.
       cgh.set_arg(narg++, nullptr);
+      // profile scratch
+      cgh.set_arg(narg++, nullptr);
     }
     if (triton_args.shared_memory) {
       using share_mem_t = sycl::local_accessor<int8_t, 1>;

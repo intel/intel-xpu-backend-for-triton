@@ -42,6 +42,8 @@ class XPUOptions:
     generate_native_code: bool = False
     advanced_path: bool = False
     enable_tile_load_linear_layout: bool = True
+    # FIXME: enable for XPU: https://github.com/intel/intel-xpu-backend-for-triton/issues/4954
+    instrumentation_mode: str = ""
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -81,6 +83,7 @@ def min_dot_size(device_props: dict):
 
 class XPUBackend(BaseBackend):
     device_props: dict = {}
+    instrumentation = None
 
     # AdvancedPath pass pipeline for kernels using block pointers.
     class AdvancedPath:
@@ -168,6 +171,8 @@ class XPUBackend(BaseBackend):
 
     def load_dialects(self, ctx):
         intel.load_dialects(ctx)
+        if XPUBackend.instrumentation:
+            XPUBackend.instrumentation.load_dialects(ctx)
 
     @staticmethod
     def validate_options(opt, properties):
@@ -316,6 +321,9 @@ class XPUBackend(BaseBackend):
         if not knobs.intel.reduce_transpose:
             intel.passes.ttgpuir.add_allocate_shared_memory(pm)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
+        # instrumentation point here so we can override IRs above (e.g., ttir and ttgir)
+        if XPUBackend.instrumentation:
+            XPUBackend.instrumentation.patch("ttgpuir_to_llvmir", pm, mod.context)
         intel.passes.ttgpuir.add_to_llvmir(pm, options.advanced_path, options.enable_tile_load_linear_layout)
         intel.passes.ttgpuir.add_gen_to_llvm(pm)
         passes.common.add_canonicalizer(pm)
@@ -327,6 +335,8 @@ class XPUBackend(BaseBackend):
         passes.common.add_symbol_dce(pm)
         if not knobs.compilation.disable_line_info:
             passes.llvmir.add_di_scope(pm)
+        if XPUBackend.instrumentation:
+            XPUBackend.instrumentation.patch("llvmir_to_llvm", pm, mod.context)
         pm.run(mod)
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
         llvm.init_targets()
@@ -349,6 +359,8 @@ class XPUBackend(BaseBackend):
         metadata["shared"] = src.get_int_attr("ttg.shared")
         metadata["global_scratch_size"] = src.get_int_attr("ttg.global_scratch_memory_size")
         metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment")
+        metadata["profile_scratch_size"] = src.get_int_attr("ttg.profile_scratch_memory_size") or 0
+        metadata["profile_scratch_align"] = src.get_int_attr("ttg.profile_scratch_memory_alignment") or 1
         ret = str(llvm_mod)
         del llvm_mod
         del context
