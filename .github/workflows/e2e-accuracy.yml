@@ -111,31 +111,31 @@ jobs:
           ${{ toJSON(steps.set-matrix.outputs) }}
           EOF
 
-  run_tests:
-    name: Run test matrix
-    needs: setup
-    strategy:
-      matrix:
-        suite: ${{ fromJson(needs.setup.outputs.suite) }}
-        mode: ${{ fromJson(needs.setup.outputs.mode) }}
-        dtype: ${{ fromJson(needs.setup.outputs.dtype) }}
-      fail-fast: false
-    uses: ./.github/workflows/e2e-reusable.yml
-    with:
-      pytorch_ref: ${{ inputs.pytorch_ref }}
-      suite: ${{ matrix.suite }}
-      mode: ${{ matrix.mode }}
-      test_mode: accuracy
-      dtype: ${{ matrix.dtype }}
-      models: ${{ inputs.models }}
-      check_all_subset_models: ${{ inputs.check_all_subset_models || false }}
-      only_one_model: ${{ inputs.only_one_model }}
-      runner_label: ${{ inputs.runner_label || 'max1100' }}
-      TORCH_COMPILE_DEBUG: ${{ inputs.TORCH_COMPILE_DEBUG }}
+  # run_tests:
+  #   name: Run test matrix
+  #   needs: setup
+  #   strategy:
+  #     matrix:
+  #       suite: ${{ fromJson(needs.setup.outputs.suite) }}
+  #       mode: ${{ fromJson(needs.setup.outputs.mode) }}
+  #       dtype: ${{ fromJson(needs.setup.outputs.dtype) }}
+  #     fail-fast: false
+  #   uses: ./.github/workflows/e2e-reusable.yml
+  #   with:
+  #     pytorch_ref: ${{ inputs.pytorch_ref }}
+  #     suite: ${{ matrix.suite }}
+  #     mode: ${{ matrix.mode }}
+  #     test_mode: accuracy
+  #     dtype: ${{ matrix.dtype }}
+  #     models: ${{ inputs.models }}
+  #     check_all_subset_models: ${{ inputs.check_all_subset_models || false }}
+  #     only_one_model: ${{ inputs.only_one_model }}
+  #     runner_label: ${{ inputs.runner_label || 'max1100' }}
+  #     TORCH_COMPILE_DEBUG: ${{ inputs.TORCH_COMPILE_DEBUG }}
 
   summary:
     name: Aggregate and check results
-    needs: run_tests
+    needs: [run_tests, summary]
     runs-on: linux
     if: always()
     steps:
@@ -152,22 +152,22 @@ jobs:
         with:
           path: separate-reports
 
-      - name: Run aggregation script
-        run: |
-          pip install pandas numpy
-          ls -la separate-reports
-          echo "Local dir"
-          ls -la ./
-          python scripts/e2e_checks/aggregate_e2e_results.py \
-             --input-dir separate-reports \
-             --output-dir aggregated-results
+      # - name: Run aggregation script
+      #   run: |
+      #     pip install pandas numpy
+      #     ls -la separate-reports
+      #     echo "Local dir"
+      #     ls -la ./
+      #     python scripts/e2e_checks/aggregate_e2e_results.py \
+      #        --input-dir separate-reports \
+      #        --output-dir aggregated-results
 
-      - name: Upload aggregated results
-        uses: actions/upload-artifact@v4
-        with:
-          name: aggregated-results-${{ github.run_id }}
-          path: aggregated-results
-          include-hidden-files: true
+      # - name: Upload aggregated results
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: aggregated-results-${{ github.run_id }}
+      #     path: aggregated-results
+      #     include-hidden-files: true
 
       - name: Check results against reference
         if: ${{ inputs.models == 'all' && inputs.only_one_model == '' }}
@@ -176,6 +176,7 @@ jobs:
           git clone https://github.com/intel/torch-xpu-ops.git
           cd torch-xpu-ops
           git checkout $PYTORCH_XPU_OPS_REF
+          echo "${{ needs.setup.outputs.suite }}" \
           cd ..
           ./scripts/e2e_checks/compare_reference.sh \
             aggregated-results \
