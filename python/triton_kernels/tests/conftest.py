@@ -1,5 +1,4 @@
 import pytest
-import torch
 
 
 def pytest_addoption(parser):
@@ -9,16 +8,6 @@ def pytest_addoption(parser):
 @pytest.fixture
 def device(request):
     return request.config.getoption("--device")
-
-
-def get_device_capability(device):
-    """Get device capability for the given device type."""
-    if device == "cuda":
-        return torch.cuda.get_device_capability()
-    elif device == "xpu":
-        return (9, )
-    else:
-        return (0, )
 
 
 @pytest.fixture
