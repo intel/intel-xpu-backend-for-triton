@@ -31,8 +31,6 @@
 
 #include "PatternTritonGPUOpToLLVM.h"
 
-#include "third_party/proton/dialect/include/TritonProtonToLLVM/PatternTritonProtonOpToLLVM.h"
-
 namespace mlir {
 
 FailureOr<LLVM::LLVMFuncOp>
@@ -243,8 +241,6 @@ public:
                                     benefit);
       mlir::triton::populateMemoryOpToLLVMPatterns(typeConverter, targetInfo,
                                                    patterns, benefit);
-      mlir::triton::proton::populateRecordOpToLLVMPattern(
-          typeConverter, patterns, targetInfo, benefit);
       intel::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
                                                 targetInfo, benefit);
       mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
