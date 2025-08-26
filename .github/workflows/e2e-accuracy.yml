@@ -180,6 +180,7 @@ jobs:
           cd ..
           ls -la
           ls -la scripts
+          mkdir -p aggregated-results
 
           ./scripts/e2e_checks/compare_reference.sh \
             aggregated-results \
