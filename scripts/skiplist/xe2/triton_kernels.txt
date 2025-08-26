@@ -1,0 +1,3 @@
+tests/test_matmul.py::test_op
+tests/test_matmul.py::test_fused_act
+tests/test_matmul.py::test_zero_reduction_dim
