@@ -10,6 +10,12 @@ SUITES=${3:-'["huggingface", "torchbench", "timm_models"]'}
 MODES=${4:-'["training", "inference"]'}
 DTYPES=${5:-'["float32", "bfloat16", "float16", "amp_bf16", "amp_fp16"]'}
 
+
+echo "Suites: $SUITES"
+echo "Modes: $MODES"
+echo "Dtypes: $DTYPES"
+
+
 # Function to convert JSON array to space-separated string
 convert_json_array() {
     local input="$1"
