@@ -178,7 +178,7 @@ jobs:
           git checkout $PYTORCH_XPU_OPS_REF
           cd ..
           ./scripts/e2e_checks/compare_reference.sh \
-            aggregated-results \
+            separate-reports \
             "./torch-xpu-ops" \
             '${{ needs.setup.outputs.suite }}' \
             '${{ needs.setup.outputs.mode }}' \
