@@ -11,6 +11,7 @@ import argparse
 import datetime
 import os
 import time
+import math
 
 import scipy.stats
 import pandas as pd
@@ -163,7 +164,7 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=400, n_repeat=100, grad_to_n
     end_event.record()
     synchronize()
     estimate_ms = start_event.elapsed_time(end_event) / 5
-    n_warmup = max(1, n_warmup / estimate_ms)
+    n_warmup = max(1, math.ceil(n_warmup / estimate_ms))
 
     # Warm-up
     for _ in range(n_warmup):
