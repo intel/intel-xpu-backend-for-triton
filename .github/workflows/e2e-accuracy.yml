@@ -179,7 +179,7 @@ jobs:
           echo "${{ needs.setup.outputs.suite }}"
           cd ..
           ls -la
-          ls -la scrips
+          ls -la scripts
 
           ./scripts/e2e_checks/compare_reference.sh \
             aggregated-results \
