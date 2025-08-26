@@ -135,7 +135,7 @@ jobs:
 
   summary:
     name: Aggregate and check results
-    needs: [run_tests, summary]
+    needs: summary
     runs-on: linux
     if: always()
     steps:
