@@ -176,8 +176,11 @@ jobs:
           git clone https://github.com/intel/torch-xpu-ops.git
           cd torch-xpu-ops
           git checkout $PYTORCH_XPU_OPS_REF
-          echo "${{ needs.setup.outputs.suite }}" \
+          echo "${{ needs.setup.outputs.suite }}"
           cd ..
+          ls -la
+          ls -la scrips
+
           ./scripts/e2e_checks/compare_reference.sh \
             aggregated-results \
             "./torch-xpu-ops" \
