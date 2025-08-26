@@ -188,7 +188,7 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   const char *name, *build_flags_ptr;
   int shared;
   PyObject *py_bytes;
-  bool is_spv;
+  int is_spv;
   int devId;
 
   if (!PyArg_ParseTuple(args, "sSispi", &name, &py_bytes, &shared,
