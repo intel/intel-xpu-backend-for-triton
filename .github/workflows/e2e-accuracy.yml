@@ -135,7 +135,7 @@ jobs:
 
   summary:
     name: Aggregate and check results
-    needs: summary
+    needs: setup
     runs-on: linux
     if: always()
     steps:
