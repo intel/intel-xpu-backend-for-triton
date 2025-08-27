@@ -157,9 +157,6 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
 
     elif provider == 'triton':
         kernel_options = {'BLOCKS_ARE_CONTIGUOUS': True, 'USE_TMA': True}
-        # FIXME: USE_TMA is not supported on Decode shapes.
-        if N_CTX_q == 1:
-            kernel_options = {'BLOCKS_ARE_CONTIGUOUS': True, 'USE_TMA': False}
         triton_fn = lambda: compiled_flex_attention(q, k, v, block_mask=block_mask, scale=sm_scale, enable_gqa=(
             not H_q == H_kv), kernel_options=kernel_options)
         if MODE == 'bwd':
