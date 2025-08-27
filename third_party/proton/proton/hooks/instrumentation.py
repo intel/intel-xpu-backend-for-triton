@@ -123,6 +123,8 @@ def _get_backend_name() -> str:
         return "nvidia"
     elif backend == "hip":
         return "amd"
+    elif backend == "xpu":
+        return "intel"
     else:
         raise RuntimeError(f"Unsupported backend: {backend}")
 
