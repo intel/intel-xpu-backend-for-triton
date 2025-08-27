@@ -35,6 +35,7 @@ on:
     paths:
       - .github/pins/pytorch.txt
       - .github/workflows/inductor-tests.yml
+      - .github/workflows/inductor-tests-reusable.yml
 
 permissions: read-all
 
