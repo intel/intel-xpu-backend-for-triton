@@ -33,10 +33,7 @@ env:
 jobs:
   build:
     name: Test
-    runs-on:
-      - linux
-      - rolling
-      - ${{ inputs.runner_label || 'max1100' }}
+    runs-on: ${{ startsWith(inputs.runner_label, 'igc') && fromJSON(format('["linux","{0}"]', inputs.runner_label)) || fromJSON(format('["linux","rolling","{0}"]', inputs.runner_label || 'max1100')) }}
     timeout-minutes: 960
     defaults:
       run:
