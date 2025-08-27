@@ -114,7 +114,7 @@ jobs:
     uses: ./.github/workflows/build-test-reusable.yml
     with:
       driver_version: ${{ matrix.driver }}
-      runner_label: ${{ inputs.runner_label }}
+      runner_label: 'dle-2025.2.1'
       pytorch_ref: ${{ inputs.pytorch_ref }}
       pytorch_mode: ${{ inputs.pytorch_mode || 'source' }}
       python_version: ${{ matrix.python }}
