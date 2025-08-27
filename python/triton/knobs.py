@@ -207,7 +207,7 @@ class IntelTool:
             if version is None:
                 return None
             return IntelTool(path, version.group(1))
-        except subprocess.CalledProcessError:
+        except (subprocess.CalledProcessError, FileNotFoundError):
             return None
 
 
@@ -242,32 +242,26 @@ class env_intel_tool(env_base[str, IntelTool]):
     def __init__(self, binary: str) -> None:
         binary += sysconfig.get_config_var("EXE")
         self.binary = binary
-        super().__init__(f"TRITON_{binary.upper().replace('-', '_')}_PATH", lambda: os.path.join(
-            os.path.dirname(__file__),
-            "backends",
-            "intel",
-            "bin",
-            self.binary,
-        ))
+        self.default_path = os.path.join(os.path.dirname(__file__), "backends", "intel", "bin", binary)
+        super().__init__(f"TRITON_{binary.upper()}_PATH")
+
+    def get(self) -> IntelTool:
+        return self.transform(getenv(self.key))
 
     def transform(self, path: str) -> IntelTool:
-        paths = [
-            path,
-            # We still add default as fallback in case the pointed binary isn't
-            # accessible.
-            self.default(),
-            shutil.which(self.binary) or "",
-        ]
+        # We still add default as fallback in case the pointed binary isn't
+        # accessible.
+        if path is not None:
+            paths = [path, self.default_path]
+        else:
+            paths = [self.default_path]
+        if shutil_path := shutil.which(self.binary):
+            paths += [shutil_path]
         for path in paths:
-            if not path or not os.access(path, os.X_OK):
-                continue
             if tool := IntelTool.from_path(path):
                 return tool
 
         raise RuntimeError(f"Cannot find {self.binary}")
-
-    def from_env(self, val: str) -> str:
-        return val
 
 
 # Separate classes so that types are correct
