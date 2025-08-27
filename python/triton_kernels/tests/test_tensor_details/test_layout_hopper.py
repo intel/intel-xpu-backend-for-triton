@@ -19,7 +19,7 @@ import torch
 @pytest.mark.parametrize("trans", [False, True])
 @pytest.mark.parametrize("mx_axis", [0, 1])
 @pytest.mark.parametrize("mma_version", [2, 3])
-@pytest.mark.xfail(condition=is_xpu(), reason="Test expected to fail on XPU devices")
+@pytest.mark.xfail(condition=not is_cuda(), reason="Only supported on CUDA")
 def test_mxfp4_value_roundtrip(shape, trans, mx_axis, mma_version):
     x = torch.randint(0, 256, shape, dtype=torch.uint8, device="cuda")
     if trans:
@@ -34,7 +34,7 @@ def test_mxfp4_value_roundtrip(shape, trans, mx_axis, mma_version):
 @pytest.mark.parametrize("mx_axis", [0, 1])
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("shape", [(256, 64), (256, 128), (256, 256)])
-@pytest.mark.xfail(condition=is_xpu(), reason="Test expected to fail on XPU devices")
+@pytest.mark.xfail(condition=not is_cuda(), reason="Only supported on CUDA")
 def test_mxfp4_scale_roundtrip(shape, mx_axis, num_warps):
     x = torch.randint(0, 256, shape, dtype=torch.uint8, device="cuda")
     layout = HopperMXScaleLayout(x.shape, mx_axis=mx_axis, num_warps=num_warps)
@@ -73,9 +73,9 @@ def _upcast_mxfp4_to_bf16(Y, X, XScale, x_stride_m, x_stride_n, x_scale_stride_m
     tl.store(Y + offs_y, y)
 
 
-@pytest.mark.skipif(not is_cuda() and not is_xpu(), reason="Only supported on CUDA or XPU")
+@pytest.mark.xfail(condition=not is_cuda(), reason="Only supported on CUDA")
+@pytest.mark.skipif(not is_cuda() and not is_xpu(), reason="Only supported on CUDA")
 @pytest.mark.skipif(is_cuda() and not cuda_capability_geq(9), reason="Only supported for capability >= 9")
-@pytest.mark.xfail(condition=is_xpu(), reason="Test expected to fail on XPU devices")
 def test_upcast_mxfp4_to_bf16():
     mx_axis = 0
     num_warps = 4
