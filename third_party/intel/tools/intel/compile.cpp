@@ -32,7 +32,7 @@ unsigned char BIN_NAME[{bin_size}] = {{ {bin_data} }};
 // sycl globals
 const sycl::device sycl_device;
 const auto ctx =
-#if SYCL_COMPILER_VERSION >= 20250200
+#if __SYCL_COMPILER_VERSION >= 20250604
     sycl_device.get_platform().khr_get_default_context();
 #else
     sycl_device.get_platform().ext_oneapi_get_default_context();

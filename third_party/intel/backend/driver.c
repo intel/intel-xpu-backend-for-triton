@@ -169,7 +169,7 @@ sycl::context get_default_context(const sycl::device &sycl_device) {
 #ifdef WIN32
   sycl::context ctx;
   try {
-#if SYCL_COMPILER_VERSION >= 20250200
+#if __SYCL_COMPILER_VERSION >= 20250604
     ctx = platform.khr_get_default_context();
 #else
     ctx = platform.ext_oneapi_get_default_context();
@@ -184,7 +184,7 @@ sycl::context get_default_context(const sycl::device &sycl_device) {
   }
   return ctx;
 #else
-#if SYCL_COMPILER_VERSION >= 20250200
+#if __SYCL_COMPILER_VERSION >= 20250604
   return platform.khr_get_default_context();
 #else
   return platform.ext_oneapi_get_default_context();
