@@ -111,14 +111,13 @@ runs:
       run: |
         source ${{ inputs.oneapi }}/setvars.sh
 
-        export MAX_JOBS=16
         # Limit AOT to PVC when compiling with LTS driver
         # See https://github.com/intel/intel-xpu-backend-for-triton/pull/3548#issuecomment-2685718019
         source ./scripts/capture-hw-details.sh
         if [[ $AGAMA_VERSION =~ 803 ]]; then
           export TORCH_XPU_ARCH_LIST="pvc"
         else
-          export TORCH_XPU_ARCH_LIST="pvc,bmg,dg2,arl-h,mtl-h"
+          export TORCH_XPU_ARCH_LIST="pvc"
         fi
 
         cd pytorch
