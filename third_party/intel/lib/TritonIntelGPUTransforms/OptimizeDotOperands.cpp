@@ -449,6 +449,7 @@ private:
               : nullptr;
       assert(newAttr && "Expecting a valid blockIO attribute");
 
+      newLoadOp->setAttrs(loadOp->getAttrs());
       newLoadOp->setAttr(blockIOAttrName, newAttr);
       LLVM_DEBUG(llvm::dbgs().indent(2) << "newLoadOp: " << newLoadOp << "\n");
       cleanUp.insert(loadOp);
