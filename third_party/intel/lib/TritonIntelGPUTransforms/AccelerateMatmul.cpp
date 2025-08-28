@@ -33,6 +33,18 @@ namespace mlir::triton::gpu::intel {
 
 namespace {
 
+// FIXME: Remove once IGC can split large 2D block loads.
+static void setAttrOnBOperand(tt::DotOp dotOp, StringRef attrName,
+                              Attribute attr) {
+  Operation *defOp = dotOp.getB().getDefiningOp();
+  while (auto convOp = dyn_cast_or_null<ttg::ConvertLayoutOp>(defOp))
+    defOp = convOp.getSrc().getDefiningOp();
+  if (auto transOp = dyn_cast_or_null<tt::TransOp>(defOp))
+    defOp = transOp.getOperand().getDefiningOp();
+  if (auto loadOp = dyn_cast_or_null<tt::LoadOp>(defOp))
+    loadOp->setAttr(attrName, attr);
+}
+
 SmallVector<unsigned>
 getWarpsPerTile(tt::DotOp dotOp, ttgi::DpasEncodingAttr::DPASCapability dpasCap,
                 const ArrayRef<int64_t> shape, unsigned numWarps) {
@@ -46,14 +58,6 @@ getWarpsPerTile(tt::DotOp dotOp, ttgi::DpasEncodingAttr::DPASCapability dpasCap,
       if (auto forOp = op->getParentOfType<scf::ForOp>()) {
         // FIXME: Remove once IGC can split large 2D block loads.
         MLIRContext *ctx = forOp->getContext();
-        auto setAttrOnBOperand = [&](tt::DotOp dotOp, StringRef attrName,
-                                     Attribute attr) {
-          Operation *defOp = dotOp.getB().getDefiningOp();
-          while (auto convOp = dyn_cast_or_null<ttg::ConvertLayoutOp>(defOp))
-            defOp = convOp.getSrc().getDefiningOp();
-          if (auto loadOp = dyn_cast_or_null<tt::LoadOp>(defOp))
-            loadOp->setAttr(attrName, attr);
-        };
         StringRef attrName =
             ttgi::TritonIntelGPUDialect::getOneMatrixPerLoadAttrName();
         setAttrOnBOperand(dotOp, attrName, UnitAttr::get(ctx));
