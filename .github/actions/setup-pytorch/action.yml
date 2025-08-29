@@ -117,7 +117,7 @@ runs:
         if [[ $AGAMA_VERSION =~ 803 ]]; then
           export TORCH_XPU_ARCH_LIST="pvc"
         else
-          export TORCH_XPU_ARCH_LIST="pvc"
+          export TORCH_XPU_ARCH_LIST="pvc,bmg,dg2,arl-h,mtl-h"
         fi
 
         cd pytorch
