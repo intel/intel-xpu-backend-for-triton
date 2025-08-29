@@ -417,6 +417,7 @@ run_tutorial_tests() {
     "10i-experimental-block-pointer"
   )
   if [ "${TEST_TUTORIAL_FA:-false}" = true ]; then
+    export TRITON_PRINT_AUTOTUNING=1
     tutorials=(
       "06-fused-attention"
     )

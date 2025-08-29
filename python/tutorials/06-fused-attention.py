@@ -12,7 +12,7 @@ Extra Credits:
 * Rabe and Staats (https://arxiv.org/pdf/2112.05682v2.pdf)
 
 """
-
+import logging
 import pytest
 import torch
 import os
@@ -22,6 +22,17 @@ import triton.language as tl
 from triton.tools.tensor_descriptor import TensorDescriptor
 
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+handler = logging.StreamHandler()
+handler.setLevel(logging.INFO)
+# Add formatter with timestamp
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+handler.setFormatter(formatter)
+logger.addHandler(handler)
+logger.info('Test log message')
+print('Test print message')
 
 
 def parse_config():
@@ -761,6 +772,7 @@ for HEAD_DIM in HEAD_DIM_OPTIONS:
 
 @triton.testing.perf_report(configs)
 def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, warp_specialize, mode, provider, device=DEVICE):
+    logger.info(f"Config: {BATCH} {H} {N_CTX} {HEAD_DIM} {causal}")
     assert mode in ["fwd", "bwd"]
     dtype = torch.float16
     if "triton" in provider:
@@ -779,6 +791,7 @@ def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, warp_specialize, mo
             o = fn()
             do = torch.randn_like(o)
             fn = lambda: o.backward(do, retain_graph=True)
+        logging.info("Calling do_bench")
         ms = triton.testing.do_bench(fn)
 
     if provider == "flash":
