@@ -33,6 +33,11 @@ struct TritonAnnotateModule
       mod->setAttr(intel::TritonIntelGPUDialect::getSupportDPASAttrName(),
                    builder.getUnitAttr());
 
+    if (supportBlockScaleDPAS)
+      mod->setAttr(
+          intel::TritonIntelGPUDialect::getSupportBlockScaleDPASAttrName(),
+          builder.getUnitAttr());
+
     if (supportBF16Conversion)
       mod->setAttr(
           intel::TritonIntelGPUDialect::getSupportBF16ConversionAttrName(),

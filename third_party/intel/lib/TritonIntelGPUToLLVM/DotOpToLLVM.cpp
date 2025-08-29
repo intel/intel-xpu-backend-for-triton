@@ -10,22 +10,31 @@ namespace fma_details {
 LogicalResult convertDPAS(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                           TritonIntelGPUToLLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter);
+template <typename OpTy>
+LogicalResult convertDPAS(OpTy op, typename OpTy::Adaptor adaptor,
+                          TritonIntelGPUToLLVMTypeConverter *typeConverter,
+                          ConversionPatternRewriter &rewriter);
 } // namespace fma_details
 
 namespace {
-struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::DotOp>::ConvertTritonGPUOpToLLVMPattern;
+template <typename OpTy>
+struct DotLikeOpConversion : public ConvertTritonGPUOpToLLVMPattern<OpTy> {
+
+  DotLikeOpConversion(LLVMTypeConverter &converter,
+                      const TargetInfoBase &targetInfo, PatternBenefit benefit)
+      : ConvertTritonGPUOpToLLVMPattern<OpTy>(converter, benefit),
+        targetInfo(targetInfo) {}
+
+  const TargetInfoBase &targetInfo;
 
   LogicalResult
-  matchAndRewrite(triton::DotOp op, OpAdaptor adaptor,
+  matchAndRewrite(OpTy op, typename OpTy::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     // D = A * B + C
     Value A = op.getA();
     Value D = op.getResult();
 
-    // Here we assume the DotOp's operands always comes from shared memory.
     auto AShapePerCTA = getShapePerCTA(A.getType());
     size_t reduceAxis = 1;
     unsigned K = AShapePerCTA[reduceAxis];
@@ -33,13 +42,15 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
 
     if (!isOuter && isa<DpasEncodingAttr>(
                         cast<RankedTensorType>(D.getType()).getEncoding())) {
-      return fma_details::convertDPAS(op, adaptor, getTypeConverter(),
+      return fma_details::convertDPAS(op, adaptor, this->getTypeConverter(),
                                       rewriter);
     }
 
-    if (isa<BlockedEncodingAttr>(
-            cast<RankedTensorType>(D.getType()).getEncoding()))
-      return convertFMADot(op, adaptor, getTypeConverter(), rewriter);
+    if constexpr (std::is_same<OpTy, DotOp>::value) {
+      if (isa<BlockedEncodingAttr>(
+              cast<RankedTensorType>(D.getType()).getEncoding()))
+        return convertFMADot(op, adaptor, this->getTypeConverter(), rewriter);
+    }
 
     llvm::report_fatal_error(
         "Unsupported DotOp found when converting TritonGPU to LLVM.");
@@ -50,5 +61,6 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
 void mlir::triton::intel::populateDotOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
-  patterns.add<DotOpConversion>(typeConverter, benefit);
+  patterns.add<DotLikeOpConversion<DotOp>, DotLikeOpConversion<DotScaledOp>>(
+      typeConverter, benefit);
 }
