@@ -26,6 +26,11 @@ def is_hip_cdna4():
 
 
 @triton.constexpr_function
+def is_xpu():
+    return tl.target_info.current_target().backend == "xpu"
+
+
+@triton.constexpr_function
 def cuda_capability_geq(major, minor=0):
     """
     Determines whether we have compute capability >= (major, minor) and
@@ -67,4 +72,7 @@ def has_native_mxfp():
 
 
 def num_sms():
-    return torch.cuda.get_device_properties(0).multi_processor_count
+    if is_cuda():
+        return torch.cuda.get_device_properties(0).multi_processor_count
+    if is_xpu():
+        return torch.xpu.get_device_properties(0).max_compute_units
