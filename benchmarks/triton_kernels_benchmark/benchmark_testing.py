@@ -166,7 +166,7 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=400, n_repeat=100, grad_to_n
     estimate_ms = start_event.elapsed_time(end_event) / 5
     # Hardcode for the experiment
     n_warmup = 400
-    n_warmup = max(1, math.ceil(n_warmup / estimate_ms))
+    n_warmup = max(10, math.ceil(n_warmup / estimate_ms))
 
     # Warm-up
     for _ in range(n_warmup):
