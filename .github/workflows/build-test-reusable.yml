@@ -195,9 +195,12 @@ jobs:
       matrix:
         suite:
           - minicore
-          - mxfp
           - scaled_dot
           - rest
+          - tutorial-fa1
+          - tutorial-fa2
+          - tutorial-fa3
+          - tutorial-fa4
     timeout-minutes: 720
     runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
     defaults:
@@ -295,7 +298,7 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --minicore
 
       - name: Run mxfp tests
-        if: matrix.suite == 'mxfp'
+        if: matrix.suite == 'rest'
         run: |
           ${{ env.TRITON_TEST_CMD }} --mxfp
 
@@ -309,15 +312,7 @@ jobs:
         run: |
           ${{ env.TRITON_TEST_CMD }} --interpreter
 
-      # FIXME: make sure new tutorials are added to one of the groups (mxfp, scaled_dot, rest)
-
-      - name: Select tutorials to run (mxfp)
-        if: matrix.suite == 'mxfp'
-        run: |
-          cat <<EOF | tee tutorials.txt
-          06-fused-attention
-          EOF
-
+      # FIXME: make sure new tutorials are added to one of the groups (scaled_dot, rest, tutorial-faX)
       - name: Select tutorials to run (scaled_dot)
         if: matrix.suite == 'scaled_dot'
         run: |
@@ -341,9 +336,15 @@ jobs:
           EOF
 
       - name: Run Tutorials
-        if: matrix.suite == 'mxfp' || matrix.suite == 'scaled_dot' || matrix.suite == 'rest'
+        if: matrix.suite == 'scaled_dot' || matrix.suite == 'rest'
         run: |
           ${{ env.TRITON_TEST_CMD }} --select-from-file tutorials.txt --tutorial
+
+      # Run 06-fused-attention.py separately, because it is split into 4 configs
+      - name: Run flash attention tutorials
+        if: matrix.suite == 'tutorial-fa1' || matrix.suite == 'tutorial-fa2' || matrix.suite == 'tutorial-fa3' || matrix.suite == 'tutorial-fa4'
+        run: |
+          ${{ env.TRITON_TEST_CMD }} "--${{ matrix.suite }}"
 
       - name: Install transformers
         if: matrix.suite == 'rest'

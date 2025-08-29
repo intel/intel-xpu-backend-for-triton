@@ -18,6 +18,10 @@ TEST:
     --softmax
     --gemm
     --flash-attention
+    - tutorial-fa1
+    - tutorial-fa2
+    - tutorial-fa3
+    - tutorial-fa4
     --flex-attention
     --instrumentation
     --inductor
@@ -107,6 +111,34 @@ while (( $# != 0 )); do
       ;;
     --tutorial)
       TEST_TUTORIAL=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --tutorial-fa1)
+      TEST_TUTORIAL=true
+      TEST_TUTORIAL_FA=true
+      FA_CONFIG="HEAD_DIM=64 CAUSAL=0"
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --tutorial-fa2)
+      TEST_TUTORIAL=true
+      TEST_TUTORIAL_FA=true
+      FA_CONFIG="HEAD_DIM=64 CAUSAL=1"
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --tutorial-fa3)
+      TEST_TUTORIAL=true
+      TEST_TUTORIAL_FA=true
+      FA_CONFIG="HEAD_DIM=128 CAUSAL=0"
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --tutorial-fa4)
+      TEST_TUTORIAL=true
+      TEST_TUTORIAL_FA=true
+      FA_CONFIG="HEAD_DIM=128 CAUSAL=1"
       TEST_DEFAULT=false
       shift
       ;;
@@ -371,17 +403,37 @@ run_tutorial_tests() {
   python -m pip install matplotlib pandas tabulate -q
   cd $TRITON_PROJ/python/tutorials
 
-  run_tutorial_test "01-vector-add"
-  run_tutorial_test "02-fused-softmax"
-  run_tutorial_test "03-matrix-multiplication"
-  run_tutorial_test "04-low-memory-dropout"
-  run_tutorial_test "05-layer-norm"
-  run_tutorial_test "06-fused-attention"
-  run_tutorial_test "07-extern-functions"
-  run_tutorial_test "08-grouped-gemm"
-  run_tutorial_test "09-persistent-matmul"
-  run_tutorial_test "10-experimental-block-pointer"
-  run_tutorial_test "10i-experimental-block-pointer"
+  tutorials=(
+    "01-vector-add"
+    "02-fused-softmax"
+    "03-matrix-multiplication"
+    "04-low-memory-dropout"
+    "05-layer-norm"
+    "06-fused-attention"
+    "07-extern-functions"
+    "08-grouped-gemm"
+    "09-persistent-matmul"
+    "10-experimental-block-pointer"
+    "10i-experimental-block-pointer"
+  )
+  if [ "${TEST_TUTORIAL_FA:-false}" = true ]; then
+    tutorials=(
+      "06-fused-attention"
+    )
+
+    if [ -n "${FA_CONFIG:-}" ]; then
+      # Containst specific config for Fused attention tutorial
+      export $FA_CONFIG
+    fi
+  fi
+
+  for tutorial in "${tutorials[@]}"; do
+    if [[ -f $TRITON_TEST_SELECTFILE ]] && ! grep -qF "$tutorial" "$TRITON_TEST_SELECTFILE"; then
+        continue
+    fi
+
+    run_tutorial_test "$tutorial"
+  done
 }
 
 run_microbench_tests() {

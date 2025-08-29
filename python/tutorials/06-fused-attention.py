@@ -24,6 +24,36 @@ from triton.tools.tensor_descriptor import TensorDescriptor
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
 
+def parse_config():
+    head_dim_options = [64, 128]
+    causal_options = [True, False]
+
+    head_dim_txt = os.getenv("HEAD_DIM")
+    causal_txt = os.getenv("CAUSAL")
+
+    print("HEAD_DIM", head_dim_txt)
+    print("CAUSAL", causal_txt)
+
+    try:
+        if head_dim_txt:
+            head_dim = int(head_dim_txt)
+            head_dim_options = [head_dim]
+    except ValueError:
+        pass
+
+    try:
+        if causal_txt:
+            causal = int(causal_txt)
+            causal_options = [bool(causal)]
+    except ValueError:
+        pass
+
+    return head_dim_options, causal_options
+
+
+HEAD_DIM_OPTIONS, CAUSAL_OPTIONS = parse_config()
+
+
 def is_hip():
     return triton.runtime.driver.active.get_current_target().backend == "hip"
 
@@ -699,9 +729,9 @@ TORCH_HAS_FP8 = hasattr(torch, 'float8_e5m2')
 BATCH, N_HEADS = 4, 32
 # vary seq length for fixed head and batch=4
 configs = []
-for HEAD_DIM in [64, 128]:
+for HEAD_DIM in HEAD_DIM_OPTIONS:
     for mode in ["fwd", "bwd"]:
-        for causal in [True, False]:
+        for causal in CAUSAL_OPTIONS:
             # Enable warpspec for causal fwd on Hopper
             enable_ws = mode == "fwd" and (is_blackwell() or (is_hopper() and not causal))
             for warp_specialize in [False, True] if enable_ws else [False]:
