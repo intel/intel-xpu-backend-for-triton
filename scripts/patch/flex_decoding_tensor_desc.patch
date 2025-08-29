@@ -1,0 +1,88 @@
+diff --git a/torch/_inductor/kernel/flex/flex_decoding.py b/torch/_inductor/kernel/flex/flex_decoding.py
+index 679caa9f09..4c89d1a669 100644
+--- a/torch/_inductor/kernel/flex/flex_decoding.py
++++ b/torch/_inductor/kernel/flex/flex_decoding.py
+@@ -6,6 +6,7 @@ from typing import Any
+ import sympy
+ 
+ import torch
++from torch._inductor.utils import can_use_tma
+ from torch._inductor.virtualized import V
+ 
+ from ... import ir
+@@ -326,6 +327,10 @@ def create_flex_decoding_kernel(*args, **kwargs):
+         # Set default to False
+         cur_kernel_options.setdefault("USE_TMA", False)
+ 
++        # Change to True if block pointer implementation is removed.
++        if torch.xpu.is_available() and can_use_tma(query, key, value):
++            cur_kernel_options["USE_TMA"] = False
++
+         # Add ROCm-specific parameters if they exist in the config
+         for attrib in ["kpack", "matrix_instr_nonkdim", "waves_per_eu"]:
+             if hasattr(conf, attrib):
+diff --git a/torch/_inductor/kernel/flex/templates/flex_decode.py.jinja b/torch/_inductor/kernel/flex/templates/flex_decode.py.jinja
+index f4596070c8..01a9b0dffa 100644
+--- a/torch/_inductor/kernel/flex/templates/flex_decode.py.jinja
++++ b/torch/_inductor/kernel/flex/templates/flex_decode.py.jinja
+@@ -143,11 +143,28 @@
+         block_shape=(BLOCK_N, V_HEAD_DIM_ROUNDED),
+         order=(1, 0)
+     )
++    desc_k = None
++    desc_v = None
++    {%- if USE_TMA %}
++    desc_k = tl.make_tensor_descriptor(
++        base=K,
++        shape=[KV_LEN, QK_HEAD_DIM],
++        strides=[stride_kn, 1],
++        block_shape=[BLOCK_N, QK_HEAD_DIM_ROUNDED],
++    )
++
++    desc_v = tl.make_tensor_descriptor(
++        base=V,
++        shape=[KV_LEN, V_HEAD_DIM],
++        strides=[stride_vn, 1],
++        block_shape=[BLOCK_N, V_HEAD_DIM_ROUNDED],
++    )
++    {%- endif %}
+     offs_n = tl.arange(0, BLOCK_N) + off_n
+ 
+     acc, l_i, m_i = forward_inner(
+         {{gen_argdefs()}},
+-        q, K_block_ptr, V_block_ptr, None, None, Q_LEN, KV_LEN,
++        q, K_block_ptr, V_block_ptr, desc_k, desc_v, Q_LEN, KV_LEN,
+         # accumulatd values
+         acc, l_i, m_i,
+         #offsets
+@@ -193,11 +210,29 @@
+             block_shape=(BLOCK_N, V_HEAD_DIM_ROUNDED),
+             order=(1, 0)
+         )
++        desc_k = None
++        desc_v = None
++        {%- if USE_TMA %}
++        desc_k = tl.make_tensor_descriptor(
++            base=K,
++            shape=[KV_LEN, QK_HEAD_DIM],
++            strides=[stride_kn, 1],
++            block_shape=[BLOCK_N, QK_HEAD_DIM_ROUNDED],
++        )
++
++        desc_v = tl.make_tensor_descriptor(
++            base=V,
++            shape=[KV_LEN, V_HEAD_DIM],
++            strides=[stride_vn, 1],
++            block_shape=[BLOCK_N, V_HEAD_DIM_ROUNDED],
++        )
++        {%- endif %}
++
+         offs_n = tl.arange(0, BLOCK_N) + off_n
+ 
+         acc, l_i, m_i = forward_inner(
+             {{gen_argdefs()}},
+-            q, K_block_ptr, V_block_ptr, None, None, Q_LEN, KV_LEN,
++            q, K_block_ptr, V_block_ptr, desc_k, desc_v, Q_LEN, KV_LEN,
+             # accumulatd values
+             acc, l_i, m_i,
+             #offsets
