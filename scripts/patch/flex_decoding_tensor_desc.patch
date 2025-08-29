@@ -1,8 +1,16 @@
 diff --git a/torch/_inductor/kernel/flex/flex_decoding.py b/torch/_inductor/kernel/flex/flex_decoding.py
-index 679caa9f09..08fb95b03b 100644
+index 679caa9f09..4c89d1a669 100644
 --- a/torch/_inductor/kernel/flex/flex_decoding.py
 +++ b/torch/_inductor/kernel/flex/flex_decoding.py
-@@ -326,6 +326,10 @@ def create_flex_decoding_kernel(*args, **kwargs):
+@@ -6,6 +6,7 @@ from typing import Any
+ import sympy
+ 
+ import torch
++from torch._inductor.utils import can_use_tma
+ from torch._inductor.virtualized import V
+ 
+ from ... import ir
+@@ -326,6 +327,10 @@ def create_flex_decoding_kernel(*args, **kwargs):
          # Set default to False
          cur_kernel_options.setdefault("USE_TMA", False)
  
