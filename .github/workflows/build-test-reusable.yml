@@ -119,7 +119,7 @@ jobs:
           mode: ${{ inputs.pytorch_mode }}
 
       - name: Build Proton with XPU support
-        if: inputs.driver_version == 'rolling' && inputs.device == 'max1100'
+        if: inputs.driver_version == 'rolling' && inputs.device == 'non-existent'
         run: |
           echo TRITON_BUILD_PROTON_XPU=1 | tee -a $GITHUB_ENV
 
@@ -282,7 +282,7 @@ jobs:
           echo "TRITON_TEST_CMD=${{ needs.build.outputs.test-triton-command }}" | tee -a $GITHUB_ENV
 
       - name: Run Proton tests
-        if: matrix.suite == 'rest' && inputs.driver_version == 'rolling' && inputs.device == 'max1100'
+        if: matrix.suite == 'rest' && inputs.driver_version == 'rolling' && inputs.device == 'non-existent'
         run: |
           cd third_party/proton/test
           # FIXME: enable 'test_record.py' back
