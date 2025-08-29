@@ -717,8 +717,7 @@ struct TritonMatrixDPASLowering
                      static_cast<unsigned>(op.getPb())), /*src1's precision*/
                  builder.i32_val(sysDepth),              /*systolic depth*/
                  builder.i32_val(rc),                    /*repeate count*/
-                 builder.int_val(1, 0) /*is double = false*/)
-              ->getResult(0);
+                 builder.int_val(1, 0) /*is double = false*/);
     } else {
       std::string fnName = "__spirv_SubgroupMatrixMultiplyAccumulateINTEL";
       SmallVector<Type> argTypes{int32Ty, aTy, bTy, cTy, int32Ty};

@@ -72,7 +72,7 @@ DPASAnalysis::canUseDPAS(FunctionOpInterface funcOp) const {
   assert(minSGSize == 8 || minSGSize == 16 ||
          minSGSize == 32 && "Unexpected minimum subgroup size");
 
-  if (enableWarp32 && minSGSize != 8) {
+  if (enableWarp32) {
     // We can support threads_per_warp=16 or 32 on Xe+ and later architectures.
     return (threadsPerWarp == 16 || threadsPerWarp == 32) ? Result::True
                                                           : Result::False;
@@ -180,7 +180,10 @@ DPASAnalysis::getDPASType(OpTy op) {
         if (aElemTy.isInteger(8) &&
             isa<Float8E4M3FNType, Float8E5M2Type>(bElemTy))
           return DPASEngineType::FP32_FP32_FP4_FP8;
-        if (aElemTy.isInteger(8) && bElemTy.isInteger(8))
+        if (aElemTy.isInteger(8) &&
+            op.getAElemType() == ScaleDotElemType::E2M1 && op.getLhsKPack() &&
+            bElemTy.isInteger(8) &&
+            op.getBElemType() == ScaleDotElemType::E2M1 && op.getRhsKPack())
           return DPASEngineType::FP32_FP32_FP4_FP4;
       }
     }

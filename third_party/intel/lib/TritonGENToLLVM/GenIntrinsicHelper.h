@@ -44,13 +44,13 @@ public:
   }
 
   template <typename... Args>
-  LLVM::CallOp operator()(OpBuilder &rewriter, Location loc, Args... args) {
+  Value operator()(OpBuilder &rewriter, Location loc, Args... args) {
     auto funName = intrinsicDecl.getName();
     auto retType = intrinsicDecl.getResultTypes();
     auto funCall = rewriter.create<LLVM::CallOp>(loc, retType, funName,
                                                  ValueRange{args...});
     funCall.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
-    return funCall;
+    return funCall.getResult();
   }
 };
 
@@ -66,6 +66,13 @@ class GenISA_Dpas
 
 public:
   using GenISA<llvm::GenISAIntrinsic::ID::GenISA_sub_group_dpas>::GenISA;
+};
+
+class GenISA_BDpas
+    : public GenISA<llvm::GenISAIntrinsic::ID::GenISA_sub_group_bdpas> {
+
+public:
+  using GenISA<llvm::GenISAIntrinsic::ID::GenISA_sub_group_bdpas>::GenISA;
 };
 
 } // namespace intel
