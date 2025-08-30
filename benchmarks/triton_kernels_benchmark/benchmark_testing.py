@@ -247,7 +247,7 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
         )
     # Make the time to the milliseconds.
     times = torch.tensor([sum((k.duration for k in ks)) * 1e-3 for ks in kernels], dtype=torch.float)
-    tracker.set_results(times)
+    tracker.set_results(times.tolist())
     return _summarize_statistics(times, quantiles, return_mode)
 
 
