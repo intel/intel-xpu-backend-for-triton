@@ -32,7 +32,11 @@ unsigned char BIN_NAME[{bin_size}] = {{ {bin_data} }};
 // sycl globals
 const sycl::device sycl_device;
 const auto ctx =
+#if __SYCL_COMPILER_VERSION >= 20250604
+    sycl_device.get_platform().khr_get_default_context();
+#else
     sycl_device.get_platform().ext_oneapi_get_default_context();
+#endif
 const auto l0_device =
     sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_device);
 const auto l0_context =
@@ -125,6 +129,7 @@ int32_t {kernel_name}(sycl::queue &stream, {signature}) {{
   std::string kernel_name = sycl_kernel.get_info<sycl::info::kernel::function_name>();
   std::string driver_version = stream.get_device().get_info<sycl::info::device::driver_version>();
   void* global_scratch = nullptr;
+  void* profile_scratch = nullptr;
   void *params[] = {{ {arg_pointers} }};
   uint32_t num_params = sizeof(params)/sizeof(params[0]);
   uint32_t expected_num_params = sycl_kernel.get_info<sycl::info::kernel::num_args>();

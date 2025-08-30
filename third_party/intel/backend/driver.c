@@ -169,10 +169,14 @@ sycl::context get_default_context(const sycl::device &sycl_device) {
 #ifdef WIN32
   sycl::context ctx;
   try {
+#if __SYCL_COMPILER_VERSION >= 20250604
+    ctx = platform.khr_get_default_context();
+#else
     ctx = platform.ext_oneapi_get_default_context();
+#endif
   } catch (const std::runtime_error &ex) {
     // This exception is thrown on Windows because
-    // ext_oneapi_get_default_context is not implemented. But it can be safely
+    // khr_get_default_context is not implemented. But it can be safely
     // ignored it seems.
 #if _DEBUG
     std::cout << "ERROR: " << ex.what() << std::endl;
@@ -180,7 +184,11 @@ sycl::context get_default_context(const sycl::device &sycl_device) {
   }
   return ctx;
 #else
+#if __SYCL_COMPILER_VERSION >= 20250604
+  return platform.khr_get_default_context();
+#else
   return platform.ext_oneapi_get_default_context();
+#endif
 #endif
 }
 
@@ -188,7 +196,7 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   const char *name, *build_flags_ptr;
   int shared;
   PyObject *py_bytes;
-  bool is_spv;
+  int is_spv;
   int devId;
 
   if (!PyArg_ParseTuple(args, "sSispi", &name, &py_bytes, &shared,

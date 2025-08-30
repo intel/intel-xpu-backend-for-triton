@@ -36,9 +36,9 @@ class HookManager:
     session_hooks: Dict[int, Dict[Hook, bool]] = defaultdict(lambda: defaultdict(bool))
 
     @staticmethod
-    def init_handle(module: Any, function: Any, name: str, metadata_group: Dict[str, str]) -> None:
+    def init_handle(module: Any, function: Any, name: str, metadata_group: Dict[str, str], hash: str) -> None:
         for hook in HookManager.active_hooks:
-            hook.init_handle(module, function, name, metadata_group)
+            hook.init_handle(module, function, name, metadata_group, hash)
 
     @staticmethod
     def enter(lazy_dict: LazyDict) -> None:
@@ -77,8 +77,9 @@ class HookManager:
         deactivated_hooks = set()
         for session in sessions:
             for hook in HookManager.session_hooks[session]:
+                if hook in HookManager.active_hooks:
+                    deactivated_hooks.add(hook)
                 HookManager.session_hooks[session][hook] = False
-                deactivated_hooks.add(hook)
 
         # Check if any other sessions rely on this hook
         for hook in deactivated_hooks:
@@ -98,14 +99,14 @@ class HookManager:
         if knobs.runtime.launch_enter_hook is None:
             knobs.runtime.launch_enter_hook = HookManager.enter
             knobs.runtime.launch_exit_hook = HookManager.exit
-            knobs.runtime.init_handle_hook = HookManager.init_handle
+            knobs.runtime.kernel_load_end_hook = HookManager.init_handle
 
     @staticmethod
     def unregister(session: Optional[int] = None) -> None:
-        if session and session not in HookManager.session_hooks:
+        if session is not None and session not in HookManager.session_hooks:
             return
 
-        if not session:
+        if session is None:
             for hook in HookManager.active_hooks:
                 hook.deactivate()
             HookManager.active_hooks.clear()
@@ -123,4 +124,4 @@ class HookManager:
         if not HookManager.active_hooks:
             knobs.runtime.launch_enter_hook = None
             knobs.runtime.launch_exit_hook = None
-            knobs.runtime.init_handle_hook = None
+            knobs.runtime.kernel_load_end_hook = None
