@@ -170,6 +170,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
     # Warm-up
     for _ in range(n_warmup):
         fn()
+        # logger.info("Warmup")
     # Benchmark
     for i in range(n_repeat):
         # we don't want `fn` to accumulate gradient values
@@ -184,6 +185,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
         start_event[i].record()
         fn()
         end_event[i].record()
+        # logger.info("Repeat")
     # Record clocks
     di.synchronize()
     times = [s.elapsed_time(e) for s, e in zip(start_event, end_event)]
