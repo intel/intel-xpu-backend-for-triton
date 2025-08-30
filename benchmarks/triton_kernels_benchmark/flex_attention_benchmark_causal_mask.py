@@ -23,8 +23,11 @@ DEVICE = triton.runtime.driver.active.get_active_torch_device()
 # Use TORCHINDUCTOR_MAX_AUTOTUNE_GEMM=1 or uncomment the following line to print the auto-tune results.
 # torch._inductor.config.max_autotune_gemm = True
 
+origin_flex_attn_configs = flex_attn.V.choices.get_flex_attention_fwd_configs
+origin_flex_decode_configs = flex_attn.V.choices.get_flex_decode_configs
 
-def get_flex_attn_fwd_configs(*args, **kwargs):  # pylint: disable=unused-argument
+
+def get_flex_attn_fwd_configs(*args, **kwargs):
     configs = [
         FlexConfig(32, 16, 2, 4),
         FlexConfig(128, 64, 2, 16),
@@ -32,10 +35,12 @@ def get_flex_attn_fwd_configs(*args, **kwargs):  # pylint: disable=unused-argume
         FlexConfig(128, 32, 2, 16),
         FlexConfig(128, 32, 2, 8),
     ]
+    if DEVICE != 'xpu':
+        configs = origin_flex_attn_configs(*args, **kwargs)
     return configs
 
 
-def get_flex_decode_configs(*args, **kwargs):  # pylint: disable=unused-argument
+def get_flex_decode_configs(*args, **kwargs):
     configs = [
         FlexDecodeConfig(32, 1, 2),
         FlexDecodeConfig(32, 1, 1),
@@ -46,6 +51,8 @@ def get_flex_decode_configs(*args, **kwargs):  # pylint: disable=unused-argument
         FlexDecodeConfig(64, 2, 2),
         FlexDecodeConfig(64, 2, 1),
     ]
+    if DEVICE != 'xpu':
+        configs += origin_flex_decode_configs(*args, **kwargs)
     return configs
 
 
