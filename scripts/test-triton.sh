@@ -18,10 +18,9 @@ TEST:
     --softmax
     --gemm
     --flash-attention
-    - tutorial-fa1
-    - tutorial-fa2
-    - tutorial-fa3
-    - tutorial-fa4
+    - tutorial-fa-64
+    - tutorial-fa-128-fwdfp8
+    - tutorial-fa-128-nofwdfp8
     --flex-attention
     --instrumentation
     --inductor
@@ -114,31 +113,24 @@ while (( $# != 0 )); do
       TEST_DEFAULT=false
       shift
       ;;
-    --tutorial-fa1)
+    --tutorial-fa-64)
       TEST_TUTORIAL=true
       TEST_TUTORIAL_FA=true
-      FA_CONFIG="HEAD_DIM=64 CAUSAL=0"
+      FA_CONFIG="HEAD_DIM=64"
       TEST_DEFAULT=false
       shift
       ;;
-    --tutorial-fa2)
+    --tutorial-fa-128-fwdfp8)
       TEST_TUTORIAL=true
       TEST_TUTORIAL_FA=true
-      FA_CONFIG="HEAD_DIM=64 CAUSAL=1"
+      FA_CONFIG="HEAD_DIM=128 FWD_FP8_ONLY=1"
       TEST_DEFAULT=false
       shift
       ;;
-    --tutorial-fa3)
+    --tutorial-fa-128-nofwdfp8)
       TEST_TUTORIAL=true
       TEST_TUTORIAL_FA=true
-      FA_CONFIG="HEAD_DIM=128 CAUSAL=0"
-      TEST_DEFAULT=false
-      shift
-      ;;
-    --tutorial-fa4)
-      TEST_TUTORIAL=true
-      TEST_TUTORIAL_FA=true
-      FA_CONFIG="HEAD_DIM=128 CAUSAL=1"
+      FA_CONFIG="HEAD_DIM=128 FWD_FP8_SKIP=1"
       TEST_DEFAULT=false
       shift
       ;;

@@ -1,4 +1,3 @@
-import logging
 import functools
 import math
 import os
@@ -10,7 +9,6 @@ from typing import Any, Dict, List
 from . import language as tl
 from . import runtime
 
-logger = logging.getLogger()
 
 def nvsmi(attrs):
     attrs = ','.join(attrs)
@@ -145,15 +143,11 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
     :type return_mode: str
     """
     assert return_mode in ["min", "max", "mean", "median", "all"]
-    # import pdb
-    # pdb.set_trace()
-    logger.info("Bench started")
 
     di = runtime.driver.active.get_device_interface()
 
     fn()
     di.synchronize()
-    logger.info("First call done")
 
     cache = runtime.driver.active.get_empty_cache_for_benchmark()
 
@@ -167,12 +161,10 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
     end_event.record()
     di.synchronize()
     estimate_ms = start_event.elapsed_time(end_event) / 5
-    logger.info(f"Esimate time ms {estimate_ms}")
 
     # compute number of warmup and repeat
     n_warmup = max(1, int(warmup / estimate_ms))
     n_repeat = max(1, int(rep / estimate_ms))
-    logger.info(f"n_warmup {n_warmup} n_repeat {n_repeat}")
     start_event = [di.Event(enable_timing=True) for i in range(n_repeat)]
     end_event = [di.Event(enable_timing=True) for i in range(n_repeat)]
     # Warm-up
@@ -196,7 +188,6 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
         # logger.info("Repeat")
     # Record clocks
     di.synchronize()
-    logger.info("Sync")
     times = [s.elapsed_time(e) for s, e in zip(start_event, end_event)]
     return _summarize_statistics(times, quantiles, return_mode)
 
@@ -347,7 +338,6 @@ class Mark:
 
             row_mean, row_min, row_max = [], [], []
             for y in bench.line_vals:
-                logging.info("Calling fn")
                 ret = self.fn(**x_args, **{bench.line_arg: y}, **bench.args, **kwrags)
                 try:
                     y_mean, y_min, y_max = ret
@@ -401,7 +391,6 @@ class Mark:
         result_dfs = []
         try:
             for bench in benchmarks:
-                logging.info("Bench {bench}")
                 result_dfs.append(self._run(bench, save_path, show_plots, print_data, **kwargs))
         finally:
             if save_path:

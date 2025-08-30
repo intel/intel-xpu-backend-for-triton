@@ -36,33 +36,44 @@ print('Test print message')
 
 
 def parse_config():
-    head_dim_options = [64, 128]
-    causal_options = [True, False]
-
-    head_dim_txt = os.getenv("HEAD_DIM")
-    causal_txt = os.getenv("CAUSAL")
-
+    head_dim_txt = os.getenv("HEAD_DIM", "")
     print("HEAD_DIM", head_dim_txt)
-    print("CAUSAL", causal_txt)
 
+    head_dims = [64, 128]
     try:
-        if head_dim_txt:
-            head_dim = int(head_dim_txt)
-            head_dim_options = [head_dim]
+        head_dim = int(head_dim_txt)
+        head_dims = [head_dim]
     except ValueError:
         pass
 
-    try:
-        if causal_txt:
-            causal = int(causal_txt)
-            causal_options = [bool(causal)]
-    except ValueError:
-        pass
+    # With FWD_FP8_ONLY we will only run forward with FP8 and will not run backward
+    # With FWD_FP8_SKIP we will skip forward with FP8, but will run forward with FP16 and backward with FP8 & FP16
+    # The reason is that currenlty the slowest step is kernel autotuning, which is only done for forward pass
+    # The slowest autotune is FP8, which is several times slower than FP16
+    # However, backward pass currently involves calling forward pass, hence, has the same slow time
+    # But, backward pass for FP8 is actually just backward pass for FP16, there is no difference, so it uses FP16 forward tuning.
+    # So from a workload perspective the best strategy for parallel execution is to run separately
+    # 1. Forward pass with FP8, which will trigger autotune(FP8-FWD)
+    # 2. Forward pass with FP16 and backward with FP8 & FP16, which will trigger only autotune(FP16-FWD)
+    fwd_fp8_only_txt = os.getenv("FWD_FP8_ONLY", "0")
+    fwd_fp8_skip_txt = os.getenv("FWD_FP8_SKIP", "0")
+    print("FWD_FP8_ONLY", fwd_fp8_only_txt)
+    print("FWD_FP8_SKIP", fwd_fp8_skip_txt)
+    if fwd_fp8_only_txt == "1":
+        fwd_dtypes = ['fp8']
+        modes = ['fwd']
+    elif fwd_fp8_skip_txt == "1":
+        fwd_dtypes = ['fp16']
+        modes = ['fwd', 'bwd']
+    else:
+        fwd_dtypes = ['fp8', 'fp16']
+        modes = ['fwd', 'bwd']
 
-    return head_dim_options, causal_options
+    return head_dims, fwd_dtypes, modes
 
 
-HEAD_DIM_OPTIONS, CAUSAL_OPTIONS = parse_config()
+HEAD_DIMS, FWD_DTYPES, MODES = parse_config()
+print("HEAD_DIM_OPTIONS", HEAD_DIMS, "FWD_DTYPES", FWD_DTYPES, "MODES", MODES)
 
 
 def is_hip():
@@ -740,21 +751,29 @@ TORCH_HAS_FP8 = hasattr(torch, 'float8_e5m2')
 BATCH, N_HEADS = 4, 32
 # vary seq length for fixed head and batch=4
 configs = []
-for HEAD_DIM in HEAD_DIM_OPTIONS:
+for HEAD_DIM in [64, 128]:
     for mode in ["fwd", "bwd"]:
-        for causal in CAUSAL_OPTIONS:
+        for causal in [True, False]:
             # Enable warpspec for causal fwd on Hopper
             enable_ws = mode == "fwd" and (is_blackwell() or (is_hopper() and not causal))
             for warp_specialize in [False, True] if enable_ws else [False]:
+
+                if HEAD_DIM not in HEAD_DIMS or mode not in MODES:
+                    continue
+                include_fp8 = mode != 'fwd' or 'fp8' in FWD_DTYPES
+                include_fp16 = mode != 'fwd' or 'fp16' in FWD_DTYPES
+
                 configs.append(
                     triton.testing.Benchmark(
                         x_names=["N_CTX"],
                         x_vals=[2**i for i in range(10, 15)],
                         line_arg="provider",
-                        line_vals=["triton-fp16"] + (["triton-fp8"] if TORCH_HAS_FP8 else []) +
-                        (["flash"] if HAS_FLASH else []),
-                        line_names=["Triton [FP16]"] + (["Triton [FP8]"] if TORCH_HAS_FP8 else []) +
-                        (["Flash-2"] if HAS_FLASH else []),
+                        line_vals=((["triton-fp16"] if include_fp16 else []) +
+                                   (["triton-fp8"] if TORCH_HAS_FP8 and include_fp8 else []) +
+                                   (["flash"] if HAS_FLASH else [])),
+                        line_names=((["Triton [FP16]"] if include_fp16 else []) +
+                                    (["Triton [FP8]"] if TORCH_HAS_FP8 and include_fp8 else []) +
+                                    (["Flash-2"] if HAS_FLASH else [])),
                         styles=[("red", "-"), ("blue", "-"), ("green", "-")],
                         ylabel="TFLOPS",
                         plot_name=
@@ -793,6 +812,7 @@ def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, warp_specialize, mo
             fn = lambda: o.backward(do, retain_graph=True)
         logging.info("Calling do_bench")
         ms = triton.testing.do_bench(fn)
+        logging.info("Calling do_bench: done")
 
     if provider == "flash":
         qkv = torch.randn((BATCH, N_CTX, 3, H, HEAD_DIM), dtype=dtype, device=device, requires_grad=True)

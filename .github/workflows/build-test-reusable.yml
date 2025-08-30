@@ -197,10 +197,9 @@ jobs:
           - minicore
           - scaled_dot
           - rest
-          - tutorial-fa1
-          - tutorial-fa2
-          - tutorial-fa3
-          - tutorial-fa4
+          - tutorial-fa-64
+          - tutorial-fa-128-fwdfp8
+          - tutorial-fa-128-nofwdfp8
     timeout-minutes: 720
     runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
     defaults:
