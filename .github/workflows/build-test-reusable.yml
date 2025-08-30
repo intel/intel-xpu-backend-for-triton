@@ -341,7 +341,7 @@ jobs:
 
       # Run 06-fused-attention.py separately, because it is split into 4 configs
       - name: Run flash attention tutorials
-        if: matrix.suite == 'tutorial-fa1' || matrix.suite == 'tutorial-fa2' || matrix.suite == 'tutorial-fa3' || matrix.suite == 'tutorial-fa4'
+        if: matrix.suite == 'tutorial-fa-64' || matrix.suite == 'tutorial-fa-128-fwdfp8' || matrix.suite == 'tutorial-fa-128-nofwdfp8'
         run: |
           ${{ env.TRITON_TEST_CMD }} "--${{ matrix.suite }}"
 
