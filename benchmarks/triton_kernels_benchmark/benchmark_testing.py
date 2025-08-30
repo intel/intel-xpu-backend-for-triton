@@ -63,9 +63,25 @@ class Tracker:
 
 
     def save(self):
+        import sys
         import json
-        
-        with open('./tracker_results.json', w) as f:
+
+        from pathlib import Path
+
+        name = sys.argv[0].split('/')[-1][:-3]
+        folder_dir = Path('../../reports/dump') / name
+        folder_dir.mkdir(parents=True, exist_ok=True)
+
+        # Find next available numbered filename with 5 leading zeros
+        counter = 0
+        while True:
+            filename = f'{counter:05d}.json'
+            filepath = folder_dir / filename
+            if not filepath.exists():
+                break
+            counter += 1
+
+        with open(filepath, 'w') as f:
             json.dump(self.results, f, indent=1)
         
 tracker = Tracker()
@@ -411,6 +427,7 @@ class Mark:
                 df["datetime"] = datetime.datetime.now()
                 df["run_counter"] = run_counter + 1
                 benchmark_dfs.append(df)
+                tracker.save()
 
             if args.reports:
                 merged_df = pd.concat(benchmark_dfs, axis=0)
@@ -423,7 +440,6 @@ class Mark:
                 return result_dfs[0]
             return result_dfs
 
-        tracker.save()
 
         return None
 
