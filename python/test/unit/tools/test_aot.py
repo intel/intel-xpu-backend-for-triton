@@ -580,7 +580,7 @@ def test_launcher_has_no_available_kernel(generate_native_code):
 @pytest.mark.skipif(not is_cuda() and not is_xpu(), reason="Requires CUDA or XPU")
 def test_compile_link_autotune_matmul():
     # this test is pretty slow, so we only run with the native binary
-    generate_native_code = True
+    generate_native_code = False
 
     np.random.seed(3)
 
