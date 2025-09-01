@@ -339,14 +339,6 @@ jobs:
         run: |
           ${{ env.TRITON_TEST_CMD }} --select-from-file tutorials.txt --tutorial
 
-      - name: Debug matrix suite value
-        run: |
-          echo "Current matrix.suite value: '${{ matrix.suite }}'"
-          echo "Condition evaluation:"
-          echo "  tutorial-fa-64: ${{ matrix.suite == 'tutorial-fa-64' }}"
-          echo "  tutorial-fa-128-fwdfp8: ${{ matrix.suite == 'tutorial-fa-128-fwdfp8' }}"
-          echo "  tutorial-fa-128-nofwdfp8: ${{ matrix.suite == 'tutorial-fa-128-nofwdfp8' }}"
-
       # Run 06-fused-attention.py separately, because it is split into 3 configs
       - name: Run Flash Attention tutorials
         if: matrix.suite == 'tutorial-fa-64' || matrix.suite == 'tutorial-fa-128-fwdfp8' || matrix.suite == 'tutorial-fa-128-nofwdfp8'
