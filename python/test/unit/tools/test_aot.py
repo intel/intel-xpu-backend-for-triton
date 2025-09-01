@@ -465,7 +465,7 @@ def check_hasco_binary_str(tmp_dir: str, dtype: str):
 
 
 # Test edge case where the provided kernel signature has no specializations
-@pytest.mark.parametrize("generate_native_code", [False])
+@pytest.mark.parametrize("generate_native_code", [True, False])
 def test_compile_link_matmul_no_specialization(generate_native_code):
     np.random.seed(3)
 
@@ -501,7 +501,7 @@ def test_compile_link_matmul_no_specialization(generate_native_code):
         np.testing.assert_allclose(c_tri, c_ref * c_ref, atol=1e-4, rtol=0.0)
 
 
-@pytest.mark.parametrize("generate_native_code", [False])
+@pytest.mark.parametrize("generate_native_code", [True, False])
 def test_compile_link_matmul(generate_native_code):
     np.random.seed(3)
 
@@ -536,7 +536,7 @@ def test_compile_link_matmul(generate_native_code):
         np.testing.assert_allclose(c_tri, c_ref * c_ref, atol=1e-4, rtol=0.0)
 
 
-@pytest.mark.parametrize("generate_native_code", [False])
+@pytest.mark.parametrize("generate_native_code", [True, False])
 def test_launcher_has_no_available_kernel(generate_native_code):
     np.random.seed(3)
 
@@ -580,7 +580,7 @@ def test_launcher_has_no_available_kernel(generate_native_code):
 @pytest.mark.skipif(not is_cuda() and not is_xpu(), reason="Requires CUDA or XPU")
 def test_compile_link_autotune_matmul():
     # this test is pretty slow, so we only run with the native binary
-    generate_native_code = False
+    generate_native_code = True
 
     np.random.seed(3)
 
