@@ -43,13 +43,14 @@ def synchronize():
 
 
 class Tracker:
+
     def __init__(self):
         self.config = None
         self.times = []
         self.last_time = None
 
         self.results = []
-    
+
     def set_config(self, config):
         self.config = config
         self.times = []
@@ -59,8 +60,9 @@ class Tracker:
 
     def set_results(self, times):
         self.times = times
+        if 'dtype' in self.config:
+            self.config['dtype'] = str(self.config['dtype'])
         self.results.append({'config': self.config, 'times': self.times})
-
 
     def save(self):
         import sys
@@ -83,7 +85,8 @@ class Tracker:
 
         with open(filepath, 'w') as f:
             json.dump(self.results, f, indent=1)
-        
+
+
 tracker = Tracker()
 
 
@@ -439,7 +442,6 @@ class Mark:
             if len(result_dfs) == 1:
                 return result_dfs[0]
             return result_dfs
-
 
         return None
 
