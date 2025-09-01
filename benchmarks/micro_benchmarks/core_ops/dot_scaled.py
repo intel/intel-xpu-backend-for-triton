@@ -1,12 +1,8 @@
-import os
-import sys
-
 import torch
 import triton
 import triton.language as tl
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
-from triton_kernels_benchmark import Benchmark, do_bench, perf_report  # pylint: disable=C0413
+from triton_kernels_benchmark import Benchmark, do_bench, perf_report
 
 
 @triton.jit
