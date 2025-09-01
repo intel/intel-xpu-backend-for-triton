@@ -112,10 +112,6 @@ SmallVector<unsigned> getContigPerThread(RankedTensorType type) {
   return toLinearEncoding(type).getContigPerThread();
 }
 
-SmallVector<unsigned> getShapePerCTATile(RankedTensorType type) {
-  return toLinearEncoding(type).getShapePerCTATile();
-}
-
 bool isExpensiveView(Type srcType, Type dstType) {
   auto tensorSrcType = cast<RankedTensorType>(srcType);
   auto tensorDstType = cast<RankedTensorType>(dstType);
@@ -978,18 +974,6 @@ SmallVector<unsigned> LinearEncodingAttr::getSizePerThread() const {
     registers.pop_back();
   }
   return basesPerDimImpl(bases, kRegister, rank);
-}
-
-SmallVector<unsigned> LinearEncodingAttr::getShapePerCTATile() const {
-  auto sizePerThread = getSizePerThread();
-  auto threadsPerWarp = getThreadsPerWarp();
-  auto warpsPerCTA = getWarpsPerCTA();
-  SmallVector<unsigned> shape;
-  for (auto [size, thread, warp] :
-       llvm::zip(sizePerThread, threadsPerWarp, warpsPerCTA)) {
-    shape.push_back(size * thread * warp);
-  }
-  return shape;
 }
 
 SmallVector<unsigned> LinearEncodingAttr::getOrder() const {
@@ -3433,11 +3417,18 @@ int triton::gpu::lookupNumWarps(Operation *op) {
 
 int triton::gpu::lookupThreadsPerWarp(OpBuilder &rewriter) {
   assert(rewriter.getInsertionBlock() && "expected an insertion point");
-  Operation *op = rewriter.getInsertionBlock()->getParentOp();
-  while (op && !isa<ModuleOp>(op))
-    op = op->getParentOp();
+  Operation *op =
+      rewriter.getInsertionBlock()->getParentOp()->getParentOfType<ModuleOp>();
   assert(op && "cannot create thread ID outside of module");
   return triton::gpu::TritonGPUDialect::getThreadsPerWarp(cast<ModuleOp>(op));
+}
+
+int triton::gpu::lookupNumCTAs(OpBuilder &rewriter) {
+  assert(rewriter.getInsertionBlock() && "expected an insertion point");
+  Operation *op =
+      rewriter.getInsertionBlock()->getParentOp()->getParentOfType<ModuleOp>();
+  assert(op && "cannot create thread ID outside of module");
+  return triton::gpu::TritonGPUDialect::getNumCTAs(cast<ModuleOp>(op));
 }
 
 bool triton::gpu::areLayoutsEquivalent(ArrayRef<int64_t> shape,
