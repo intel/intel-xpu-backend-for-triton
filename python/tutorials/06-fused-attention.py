@@ -37,7 +37,7 @@ def parse_config():
 
     # With FWD_FP8_ONLY we will only run forward with FP8 and will not run backward
     # With FWD_FP8_SKIP we will skip forward with FP8, but will run forward with FP16 and backward with FP8 & FP16
-    # The reason is that currenlty the slowest step is kernel autotuning, which is only done for forward pass
+    # The reason is that currently the slowest step is kernel autotuning, which is only done for forward pass
     # The slowest autotune is FP8, which is several times slower than FP16
     # However, backward pass currently involves calling forward pass, hence, has the same slow time
     # But, backward pass for FP8 is actually just backward pass for FP16, there is no difference, so it uses FP16 forward tuning.
