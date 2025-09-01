@@ -277,8 +277,8 @@ struct ConvertLayoutOpConversion
     StringAttr kReg = str_attr("register");
     StringAttr kLane = str_attr("lane");
 
-    auto factors = getWarpLayoutConvertDecomposition(srcTy, dstTy);
-    auto &[pReg, pLane, mixedTranspositions] = factors;
+    auto factors = getWarpLayoutConvertDecomposition(srcTy, dstTy, bitwidth);
+    auto &[pReg, pLane, mixedTranspositions, nPack] = factors;
     int m = mixedTranspositions.size();
     bool pLaneIsTrivial = squareSublayoutIsIdentity(pLane, kLane);
     assert((m > 0 || !pLaneIsTrivial) && "Shuffles not needed for conversion");
@@ -325,43 +325,7 @@ struct ConvertLayoutOpConversion
       regDim = pRegDim;
     }
 
-    // The `mixedTranspositions` and `pReg` apply to register indices before any
-    // packing (i.e., register indices should be read as element indices). To
-    // ensure that only elements which end up in the same destination lane are
-    // packed into a common register, we swap any 'low' register bits out with
-    // unused higher index register bits in the list of `mixedTranspositions`
-    // and apply their effects to `inVals` before packing.
-    //
-    // The fraction of elements in a lane that must be moved to another lane
-    // under the layout conversion is 1 - (1/2)^m. The remaining fraction can be
-    // packed into 32-bit registers so long as they fit.
-    auto elemTy = getTypeConverter()->convertType(srcTy.getElementType());
-    int bitwidth =
-        elemTy.isIntOrFloat() ? elemTy.getIntOrFloatBitWidth() : kPtrBitWidth;
-    int nPackPrelim = llvm::Log2_32(std::clamp(32 / bitwidth, 1, 4));
-    int nReg = pReg.getTotalInDimSizeLog2();
-    int nPack = std::min(nPackPrelim, nReg - m);
-
-    // Determine any needed register bit conjugations.
-    SmallVector<std::pair<int32_t, int32_t>> regConjugations;
-    llvm::SmallSet<int32_t, 6> usedRegBits;
-    if (nPack > 0) {
-      // Any `regBitIdx` not originally in `mixedTranspositions` and `>= nPack`
-      // can be used to swap out the original 'low' bit index.
-      for (auto [regBitIdx, laneBitIdx] : mixedTranspositions)
-        usedRegBits.insert(regBitIdx);
-      int potentialHighIdx = nPack;
-      for (auto &[regBitIdx, laneBitIdx] : mixedTranspositions) {
-        if (regBitIdx < nPack) {
-          while (usedRegBits.contains(potentialHighIdx))
-            ++potentialHighIdx;
-          regConjugations.emplace_back(regBitIdx, potentialHighIdx);
-          regBitIdx = potentialHighIdx++;
-        }
-      }
-    }
-
-    // Apply pReg and any conjugations.
+    // Apply pReg.
     SmallVector<Value> newInVals(regDim);
     auto swapBits = [](const auto &p, int num) {
       int bit0 = (num >> p.first) & 1;
