@@ -511,6 +511,19 @@ def make_launcher(constants, signature):
 #include <stdio.h>
 #include <numpy/arrayobject.h>
 
+namespace {{
+
+bool getBoolEnv(const std::string &env) {{
+            const char *s = std::getenv(env.c_str());
+            std::string str(s ? s : "");
+            std::transform(str.begin(), str.end(), str.begin(),
+                            [](unsigned char c) {{ return std::tolower(c); }});
+            return (str == "on" || str == "true" || str == "1");
+}}
+
+}}
+
+
 static inline void gpuAssert(ze_result_t code, const char *file, int line)
 {{
   if (code != ZE_RESULT_SUCCESS)
@@ -615,6 +628,27 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ, i
   sycl::nd_range<3> parallel_work_size(global_range, local_range);
   if (shared_memory) {{
     expected_num_params -= 1;
+  }}
+
+  static bool launchDebug = getBoolEnv("TRITON_INTEL_LAUNCH_DEBUG");
+  if (launchDebug){{
+    std::cout << "kernel info name:" << kernel_name << " @" << &kernel_ptr << std::endl;
+    std::cout << "kernel info attributes:" << kernel_ptr.get_info<sycl::info::kernel::attributes>() << std::endl;
+    std::cout << "kernel info reference_count:" << kernel_ptr.get_info<sycl::info::kernel::reference_count>() << std::endl;
+    std::cout << "kernel info num_args:" << kernel_ptr.get_info<sycl::info::kernel::num_args>() << std::endl;
+
+    std::cout << "launch num param:" << num_params << std::endl;
+    std::cout << "  gridx: " << gridX << std::endl;
+    std::cout << "  gridY: " << gridY << std::endl;
+    std::cout << "  gridZ: " << gridZ << std::endl;
+    std::cout << "  num_warps: " << num_warps << std::endl;
+    std::cout << "  threads_per_warp: " << threads_per_warp << std::endl;
+    std::cout << "  global range:[" << "x:"<< global_range_x << ", y:" << global_range_y << ", z:" << global_range_z << "]" << std::endl;
+    std::cout << "  local range:[" << "x:"<< local_range_x << ", y:" << local_range_y << ", z:" << local_range_z << "]" << std::endl;
+    std::cout << "  shared_memory: " << shared_memory << std::endl;
+
+    // param
+    {" ".join(f'std::cout << "  param {idx}:" << *({ty_to_cpp(item)}*)params[{idx}] << std::endl;' for idx, item in enumerate([signature[i] for i in signature if signature[i] != "constexpr"]))}
   }}
   assert(num_params == expected_num_params && "number of kernel param not matched");
   // Submit the imported kernel.

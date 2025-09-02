@@ -1,25 +1,34 @@
 diff --git a/torch/_inductor/kernel/flex/flex_decoding.py b/torch/_inductor/kernel/flex/flex_decoding.py
-index 679caa9f09..6192275691 100644
+index 91ba941da06..2eba71224c6 100644
 --- a/torch/_inductor/kernel/flex/flex_decoding.py
 +++ b/torch/_inductor/kernel/flex/flex_decoding.py
-@@ -326,6 +326,9 @@ def create_flex_decoding_kernel(*args, **kwargs):
+@@ -6,6 +6,7 @@ from typing import Any
+ import sympy
+ 
+ import torch
++from torch._inductor.utils import can_use_tma
+ from torch._inductor.virtualized import V
+ 
+ from ... import ir
+@@ -326,6 +327,10 @@ def create_flex_decoding_kernel(*args, **kwargs):
          # Set default to False
          cur_kernel_options.setdefault("USE_TMA", False)
  
-+        if torch.xpu.is_available():
-+            cur_kernel_options["USE_TMA"] = True
++        # Change to True if block pointer implementation is removed.
++        if torch.xpu.is_available() and can_use_tma(query, key, value):
++            cur_kernel_options["USE_TMA"] = False
 +
          # Add ROCm-specific parameters if they exist in the config
          for attrib in ["kpack", "matrix_instr_nonkdim", "waves_per_eu"]:
              if hasattr(conf, attrib):
 diff --git a/torch/_inductor/kernel/flex/templates/flex_decode.py.jinja b/torch/_inductor/kernel/flex/templates/flex_decode.py.jinja
-index f4e894d9b7..3fb3b2c5bd 100644
+index 31c64055e35..a75792787a1 100644
 --- a/torch/_inductor/kernel/flex/templates/flex_decode.py.jinja
 +++ b/torch/_inductor/kernel/flex/templates/flex_decode.py.jinja
-@@ -128,11 +128,28 @@
-     # last valid block according to sparse mask
+@@ -130,10 +130,27 @@
      block_n_last_valid = tl.minimum(kv_num_blocks * SPARSE_KV_MULTIPLE, tl.maximum(tl.cdiv(KV_LEN, BLOCK_N), 1))
  
+     offs_n = tl.arange(0, BLOCK_N) + off_n
 +    desc_k = None
 +    desc_v = None
 +    {%- if USE_TMA %}
@@ -37,7 +46,6 @@ index f4e894d9b7..3fb3b2c5bd 100644
 +        block_shape=[BLOCK_N, V_HEAD_DIM_ROUNDED],
 +    )
 +    {%- endif %}
-     offs_n = tl.arange(0, BLOCK_N) + off_n
  
      acc, l_i, m_i = forward_inner(
          {{gen_argdefs()}},
@@ -46,9 +54,9 @@ index f4e894d9b7..3fb3b2c5bd 100644
          # accumulatd values
          acc, l_i, m_i,
          #offsets
-@@ -163,11 +180,29 @@
-         # last valid block according to sparse mask
-         block_n_last_valid = tl.minimum(kv_num_blocks * SPARSE_KV_MULTIPLE, tl.maximum(tl.cdiv(KV_LEN, BLOCK_N), 1))
+@@ -166,9 +183,27 @@
+ 
+         offs_n = tl.arange(0, BLOCK_N) + off_n
  
 +        desc_k = None
 +        desc_v = None
@@ -68,8 +76,6 @@ index f4e894d9b7..3fb3b2c5bd 100644
 +        )
 +        {%- endif %}
 +
-         offs_n = tl.arange(0, BLOCK_N) + off_n
- 
          acc, l_i, m_i = forward_inner(
              {{gen_argdefs()}},
 -            q, K, V, None, None, Q_LEN, KV_LEN,

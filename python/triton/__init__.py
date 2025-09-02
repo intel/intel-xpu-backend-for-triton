@@ -1,5 +1,5 @@
 """isort:skip_file"""
-__version__ = '3.4.0'
+__version__ = '3.5.0'
 
 # ---------------------------------------
 # Note: import order is significant here.
@@ -68,6 +68,7 @@ def cdiv(x: int, y: int):
     return (x + y - 1) // y
 
 
+@constexpr_function
 def next_power_of_2(n: int):
     """Return the smallest power of 2 greater than or equal to n"""
     n -= 1
