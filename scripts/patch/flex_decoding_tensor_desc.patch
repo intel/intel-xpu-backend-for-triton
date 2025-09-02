@@ -1,5 +1,5 @@
 diff --git a/torch/_inductor/kernel/flex/flex_decoding.py b/torch/_inductor/kernel/flex/flex_decoding.py
-index 91ba941da06..2eba71224c6 100644
+index 91ba941da0..a6b87212ad 100644
 --- a/torch/_inductor/kernel/flex/flex_decoding.py
 +++ b/torch/_inductor/kernel/flex/flex_decoding.py
 @@ -6,6 +6,7 @@ from typing import Any
@@ -10,19 +10,18 @@ index 91ba941da06..2eba71224c6 100644
  from torch._inductor.virtualized import V
  
  from ... import ir
-@@ -326,6 +327,10 @@ def create_flex_decoding_kernel(*args, **kwargs):
+@@ -326,6 +327,9 @@ def create_flex_decoding_kernel(*args, **kwargs):
          # Set default to False
          cur_kernel_options.setdefault("USE_TMA", False)
  
-+        # Change to True if block pointer implementation is removed.
 +        if torch.xpu.is_available() and can_use_tma(query, key, value):
-+            cur_kernel_options["USE_TMA"] = False
++            cur_kernel_options["USE_TMA"] = True
 +
          # Add ROCm-specific parameters if they exist in the config
          for attrib in ["kpack", "matrix_instr_nonkdim", "waves_per_eu"]:
              if hasattr(conf, attrib):
 diff --git a/torch/_inductor/kernel/flex/templates/flex_decode.py.jinja b/torch/_inductor/kernel/flex/templates/flex_decode.py.jinja
-index 31c64055e35..a75792787a1 100644
+index 31c64055e3..a75792787a 100644
 --- a/torch/_inductor/kernel/flex/templates/flex_decode.py.jinja
 +++ b/torch/_inductor/kernel/flex/templates/flex_decode.py.jinja
 @@ -130,10 +130,27 @@
