@@ -1272,10 +1272,10 @@ void LayoutRematerialization::backwardRematerialization() {
   // Reduce loop carried values if the value can be removed by using another
   // loop yielded value plus a convert layout operation.
   for (auto [pair, val] : rematMapping) {
-    if (!isa<BlockArgument>(pair.first))
+    auto arg = dyn_cast<BlockArgument>(pair.first);
+    if (!arg)
       continue;
 
-    auto arg = cast<BlockArgument>(pair.first);
     if (!isTensorPointerType(arg.getType()))
       continue;
 
@@ -1292,8 +1292,7 @@ void LayoutRematerialization::backwardRematerialization() {
       auto rematArg = cast<BlockArgument>(val);
       OpResult rematRes = loopOp.getTiedLoopResult(rematArg);
 
-      for (OpOperand &use : loopRes.getUses()) {
-        Operation *user = use.getOwner();
+      for (Operation *user : loopRes.getUsers()) {
         Location loc = user->getLoc();
         OpBuilder rewriter(user);
 
