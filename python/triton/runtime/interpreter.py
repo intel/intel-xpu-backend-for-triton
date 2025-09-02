@@ -2,7 +2,7 @@ from __future__ import annotations
 import ast
 import textwrap
 import inspect
-from typing import Tuple, List, Dict
+from typing import Tuple, List, Dict, Callable
 
 import math
 import numpy as np
@@ -12,7 +12,7 @@ import triton.language as tl
 import dataclasses
 from dataclasses import dataclass
 
-from triton.language import semantic
+from triton.language.semantic import TritonSemantic
 from triton.tools.tensor_descriptor import TensorDescriptor
 from .errors import InterpreterError
 from functools import partial
@@ -88,6 +88,7 @@ class TensorDescHandle:
         assert self.base.data.item() % 16 == 0, "base must be 16-byte aligned"
         assert len(self.strides) == self.ndim
         assert len(self.block_shape) == self.ndim
+        assert self.ndim >= 1, "descriptor cannot be 0 dimensional"
 
         for stride in self.strides[:-1]:
             assert stride.data.item() % 16 == 0, "stride must be 16-byte aligned"
@@ -119,7 +120,7 @@ class InterpreterOptions:
     sanitize_overflow: bool = True
     arch: str = None
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e5b16", "fp8e4nv", "fp8e4b8", "fp8e4b15")
-    deprecated_fp8_dtypes: Tuple[str] = ()
+    deprecated_fp8_dot_operand_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "tf32"
     allowed_dot_input_precisions: Tuple[str] = ("tf32", "tf32x3", "ieee")
     max_num_imprecise_acc_default: int = 0
@@ -253,8 +254,8 @@ np_umulhi_u64 = np.vectorize(_umulhi_64, otypes=[np.uint64])
 class ExtraFunctions:
 
     @staticmethod
-    def _convert_custom_types(input, dst_ty, fp_downcast_rounding, _builder):
-        return tl.tensor(_builder.create_fp_to_fp(input.handle, dst_ty, fp_downcast_rounding), dst_ty)
+    def _convert_custom_types(input, dst_ty, fp_downcast_rounding, _semantic):
+        return tl.tensor(_semantic.builder.create_fp_to_fp(input.handle, dst_ty, fp_downcast_rounding), dst_ty)
 
 
 class InterpreterBuilder:
@@ -595,11 +596,18 @@ class InterpreterBuilder:
             b_data = _convert_float(b_data, b.dtype, tl.float16, None).view(np.float16)
         return TensorHandle(np.matmul(a_data, b_data, dtype=d.data.dtype) + d.data, d.dtype.scalar)
 
-    def create_make_range(self, start, stop):
+    def create_make_range(self, ret_ty, start, stop):
         return TensorHandle(np.arange(start, stop, dtype=np.int32), tl.int32)
 
-    def create_histogram(self, data, bins):
-        return TensorHandle(np.histogram(data.data, bins=bins, range=(0, bins))[0], tl.int32)
+    def create_histogram(self, data, bins, mask):
+        if mask is None:
+            mask = TensorHandle(np.ones_like(data.data, dtype=bool), tl.int1)
+        # force all masked elements to zero
+        data = np.where(mask.data, data.data, np.zeros_like(data.data))
+        histogram = np.histogram(data, bins=bins, range=(0, bins))[0]
+        # remove overcounted elements
+        histogram[0] -= np.logical_not(mask.data).sum()
+        return TensorHandle(histogram, tl.int32)
 
     def create_gather(self, src, indices, axis):
         return TensorHandle(np.take_along_axis(src.data, indices.data, axis=axis), src.dtype.scalar)
@@ -649,11 +657,15 @@ class InterpreterBuilder:
         # Triton only supports splitting the original tensor into two along the last axis
         return (TensorHandle(val.data[..., 0], val.dtype.scalar), TensorHandle(val.data[..., 1], val.dtype.scalar))
 
-    def create_splat(self, arg, shape):
+    def create_splat(self, ret_ty, arg):
+        shape = ret_ty.shape
         if isinstance(arg.dtype, tl.block_type):
             return TensorHandle(np.full(shape, arg.data[0], dtype=_get_np_dtype(arg.dtype)), arg.dtype.scalar)
         else:  # scalar
             return TensorHandle(np.full(shape, arg.data, dtype=_get_np_dtype(arg.dtype)), arg.dtype.scalar)
+
+    def create_unsplat(self, arg):
+        return TensorHandle(np.full((1, ), arg.data[0], dtype=_get_np_dtype(arg.dtype)), arg.dtype.scalar)
 
     def create_atomic_cas(self, ptr, cmp, val, sem, scope):
         if sem not in self.ir_sem_to_interpreter_sem:
@@ -723,6 +735,7 @@ class InterpreterBuilder:
         shape: List[TensorHandle],
         strides: List[TensorHandle],
         tensor_shape: List[int],
+        is_signed: bool,
     ):
         desc = TensorDescHandle(base, shape, strides, tensor_shape)
         desc.validate()
@@ -768,10 +781,11 @@ class InterpreterBuilder:
 
 
 def _patch_attr(obj, name, member, builder):
+    semantic = TritonSemantic(builder)
     new_member = lambda *args, member=member, **kwargs: (member(*args, **
                                                                 {k: v
                                                                  for k, v in kwargs.items()
-                                                                 if k != "_builder"}, _builder=builder))
+                                                                 if k != "_semantic"}, _semantic=semantic))
     setattr(obj, name, new_member)
 
 
@@ -924,9 +938,9 @@ class ReduceOps(ReduceScanOpInterface):
         elif self.combine_fn == tl.standard._argmax_combine_tie_break_left:
             return self.min_max(input[0], val_reduce_op=np.max, idx_reduce_op=np.argmax)
         elif self.combine_fn == tl.standard._elementwise_max:
-            return self.min_max(input[0], val_reduce_op=np.max, idx_reduce_op=None)
+            return self.min_max(input[0], val_reduce_op=np.nanmax, idx_reduce_op=None)
         elif self.combine_fn == tl.standard._elementwise_min:
-            return self.min_max(input[0], val_reduce_op=np.min, idx_reduce_op=None)
+            return self.min_max(input[0], val_reduce_op=np.nanmin, idx_reduce_op=None)
         elif self.combine_fn == tl.standard._sum_combine:
             return self.sum(input[0])
         else:
@@ -1115,7 +1129,7 @@ def _tuple_create(arg, contents):
 # TODO: wrap everything in triton tensors
 def _implicit_cvt(arg):
     if isinstance(arg, int):
-        ty = tl.str_to_ty(triton.runtime.jit.mangle_type(arg))
+        ty = tl.str_to_ty(triton.runtime.jit.mangle_type(arg), None)
         dtype = np.int32
         if -2**31 <= arg < 2**31:
             dtype = np.int32
@@ -1130,7 +1144,7 @@ def _implicit_cvt(arg):
         handle = TensorHandle(np.array([arg], dtype=dtype), ty)
         return tl.tensor(handle, ty)
     if hasattr(arg, "data_ptr"):
-        ty = tl.str_to_ty(triton.runtime.jit.mangle_type(arg))
+        ty = tl.str_to_ty(triton.runtime.jit.mangle_type(arg), None)
         handle = TensorHandle(np.array([arg.data_ptr()], dtype=np.uint64), ty)
         return tl.tensor(handle, ty)
     elif isinstance(arg, tuple):
@@ -1139,17 +1153,18 @@ def _implicit_cvt(arg):
         strides = [_implicit_cvt(s) for s in arg.strides]
         assert arg.strides[-1] == 1
         strides[-1] = tl.constexpr(1)
+        semantic = TritonSemantic(InterpreterBuilder())
         return semantic.make_tensor_descriptor(
             base=_implicit_cvt(arg.base),
             shape=[_implicit_cvt(s) for s in arg.shape],
             strides=strides,
             block_shape=[tl.constexpr(b) for b in arg.block_shape],
-            builder=InterpreterBuilder(),
         )
     return arg
 
 
 interpreter_builder = InterpreterBuilder()
+interpreter_semantic = TritonSemantic(interpreter_builder)
 
 
 def _unwrap_tensor(t):
@@ -1263,6 +1278,8 @@ class GridExecutor:
                         interpreter_builder.set_grid_idx(x, y, z)
                         self.fn(**args)
         except Exception as e:
+            if triton.knobs.compilation.front_end_debugging:
+                raise
             raise InterpreterError(repr(e)) from e
         # copy arguments back to propagate side-effects
         self._restore_args_dev(args_dev, args_hst, kwargs, kwargs_hst)
@@ -1277,14 +1294,10 @@ class ASTTransformer(ast.NodeTransformer):
         if len(names) > 1:
             raise ValueError("Multiple assignments are not supported")
         # Modify the assignment x = value to
-        # triton.language.semantic.to_tensor(value, interpreter_builder, False)
+        # interpreter_semantic.to_tensor(value, False)
         node.value = ast.Call(
-            func=ast.Attribute(
-                value=ast.Attribute(
-                    value=ast.Attribute(value=ast.Name(id='triton', ctx=ast.Load()), attr='language', ctx=ast.Load()),
-                    attr='semantic', ctx=ast.Load()), attr='to_tensor', ctx=ast.Load()),
-            args=[node.value, ast.Name(id='interpreter_builder', ctx=ast.Load()),
-                  ast.Constant(value=False)], keywords=[])
+            func=ast.Attribute(value=ast.Name(id="interpreter_semantic", ctx=ast.Load()), attr="to_tensor",
+                               ctx=ast.Load()), args=[node.value, ast.Constant(value=False)], keywords=[])
         return node
 
 
@@ -1359,11 +1372,12 @@ class FunctionRewriter:
 
 class InterpretedFunction:
     # Cache all rewritten functions
-    rewritten_fn = {}
+    rewritten_fn: Dict[Callable, Callable] = {}
 
     def __init__(self, fn, **kwargs) -> None:
         self.fn = fn
         self.rewriter = FunctionRewriter(fn, **kwargs)
+        self.kwargs = kwargs
 
         def run(*args, **kwargs):
             grid = kwargs["grid"]

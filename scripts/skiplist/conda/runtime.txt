@@ -1,7 +1,7 @@
-test/unit/runtime/test_bindings.py::test_module_walk
-test/unit/runtime/test_autotuner.py::test_kwargs[False]
-test/unit/runtime/test_autotuner.py::test_restore
-test/unit/runtime/test_autotuner.py::test_hooks
-test/unit/runtime/test_autotuner.py::test_prune_configs[False]
-test/unit/runtime/test_autotuner.py::test_prune_configs[True]
-test/unit/runtime/test_cache.py::test_jit_debug
+python/test/unit/runtime/test_bindings.py::test_module_walk
+python/test/unit/runtime/test_autotuner.py::test_kwargs[False]
+python/test/unit/runtime/test_autotuner.py::test_restore
+python/test/unit/runtime/test_autotuner.py::test_hooks
+python/test/unit/runtime/test_autotuner.py::test_prune_configs[False]
+python/test/unit/runtime/test_autotuner.py::test_prune_configs[True]
+python/test/unit/runtime/test_cache.py::test_jit_debug

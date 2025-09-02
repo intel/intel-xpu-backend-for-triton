@@ -30,6 +30,77 @@ class TritonGEN_Op<string mnemonic, list<Trait> traits = []> :
   Op<TritonGEN_Dialect, mnemonic, traits>;
 
 //===----------------------------------------------------------------------===//
+// Synchronization
+//===----------------------------------------------------------------------===//
+
+def TritonGEN_BarrierOp : TritonGEN_Op<"barrier"> {
+  let summary = "Workgroup barrier";
+  let description = [{
+    The `triton_gen.barrier` operation performs a workgroup barrier and ensures
+    all outstanding memory transaction using local or global memory are complete.
+  }];
+  let arguments = (ins TritonGEN_MemFence:$mem_fence);
+  let results = (outs);
+  let assemblyFormat = "attr-dict";
+  let assemblyFormat = [{
+    ` ` `{` `mem_fence` `=` $mem_fence `}` attr-dict
+  }];
+}
+
+def TritonGEN_SplitBarrierArriveOp : TritonGEN_Op<"split_barrier_arrive"> {
+  let summary = "Split barrier signal";
+  let description = [{
+    Indicates that an invocation has arrived at a split control barrier. This
+    may allow other invocations waiting on the split control barrier to continue
+    executing.
+
+    When `Execution` is `Workgroup` or larger, behavior is undefined unless all
+    invocations within `Execution` execute the same dynamic instance of this
+    instruction. When `Execution` is `Subgroup` or `Invocation`, the behavior of
+    this instruction in non-uniform control flow is defined by the client API.
+
+    If `Semantics` is not `None`, this instruction also serves as the start of a
+    memory barrier similar to an `OpMemoryBarrier` instruction with the same
+    `Memory` and `Semantics` operands. This allows atomically specifying both a
+    control barrier and a memory barrier (that is, without needing two
+    instructions). If `Semantics` is `None`, `Memory` is ignored.
+  }];
+  let arguments = (ins TritonGEN_MemScope:$execution_scope, TritonGEN_MemScope:$memory_scope);
+  let results = (outs);
+  let assemblyFormat = [{
+    ` ` `{` `execution_scope` `=` $execution_scope `,` `memory_scope` `=` $memory_scope `}` attr-dict
+  }];
+}
+
+def TritonGEN_SplitBarrierWaitOp : TritonGEN_Op<"split_barrier_wait"> {
+  let summary = "Split barrier wait";
+  let description = [{
+    Waits for other invocations of this module to arrive at a split control
+    barrier.
+
+    When `Execution` is `Workgroup` or larger, behavior is undefined unless all
+    invocations within `Execution` execute the same dynamic instance of this
+    instruction. When `Execution` is `Subgroup` or `Invocation`, the behavior of
+    this instruction in non-uniform control flow is defined by the client API.
+
+    If `Semantics` is not `None`, this instruction also serves as the end of a
+    memory barrier similar to an `OpMemoryBarrier` instruction with the same
+    `Memory` and `Semantics` operands. This ensures that memory accesses issued
+    before arriving at the split barrier are observed before memory accesses
+    issued after this instruction. This control is ensured only for memory
+    accesses issued by this invocation and observed by another invocation
+    executing within `Memory` scope. This allows atomically specifying both a
+    control barrier and a memory barrier (that is, without needing two
+    instructions). If `Semantics` is `None`, `Memory` is ignored.
+  }];
+  let arguments = (ins TritonGEN_MemScope:$execution_scope, TritonGEN_MemScope:$memory_scope);
+  let results = (outs);
+  let assemblyFormat = [{
+    ` ` `{` `execution_scope` `=` $execution_scope `,` `memory_scope` `=` $memory_scope `}` attr-dict
+  }];
+}
+
+//===----------------------------------------------------------------------===//
 // Matrix operations
 //===----------------------------------------------------------------------===//
 
@@ -83,7 +154,7 @@ def TritonGEN_MatrixDPASOp : TritonGEN_Op<"dpas">,
 }
 
 def TritonGEN_Matrix2DBlockLoadOp : TritonGEN_Op<"2Dblockload">,
-  Results<(outs FixedVectorOfNonZeroRankOf<[TritonGEN_MatrixElemType]>:$res)>,
+  Results<(outs FixedVectorOfNonZeroRankOf<[TritonGEN_MatrixElemType, AnyI64]>:$res)>,
   Arguments<(ins
     Arg<LLVM_AnyPointer, "", [MemRead]>:$ptr,
     I32:$base_width,
@@ -109,6 +180,7 @@ def TritonGEN_Matrix2DBlockLoadOp : TritonGEN_Op<"2Dblockload">,
       $base_width, $base_height, $base_pitch - the shape of matrix
       $x, $y, $tile_width, $tile_height - the starting offsets and shape of the tile to load
       $elem_size_in_bits - the size in bits of the matrix element
+        - 64 for f64, i64
         - 32 for f32, bf32
         - 16 for f16, int16, bf16
         - 8 for int8, int4, int2
@@ -146,7 +218,7 @@ def TritonGEN_Matrix2DBlockStoreOp : TritonGEN_Op<"2Dblockstore">,
     I32Attr:$tile_width,
     I32Attr:$tile_height,
     I32Attr:$v_blocks,
-    FixedVectorOfNonZeroRankOf<[TritonGEN_MatrixElemType]>:$stored_val,
+    FixedVectorOfNonZeroRankOf<[TritonGEN_MatrixElemType, AnyI64]>:$stored_val,
     DefaultValuedAttr<TritonGEN_StoreCacheControl, "::mlir::triton::TritonGEN::StoreCacheControl::DEFAULT">:$cache_control
   )> {
 
@@ -159,6 +231,7 @@ def TritonGEN_Matrix2DBlockStoreOp : TritonGEN_Op<"2Dblockstore">,
       $base_width, $base_height, $base_pitch - the shape of the matrix
       $x, $y, $tile_width, $tile_height - the starting offsets and shape of the tile to store
       $elem_size_in_bits - the size in bits of the matrix element
+        - 64 for f64, i64
         - 32 for f32, bf32
         - 16 for f16, int16, bf16
         - 8 for int8, int4, int2
@@ -203,6 +276,7 @@ def TritonGEN_Matrix2DBlockPrefetchOp : TritonGEN_Op<"2Dblockprefetch">,
       $base_width, $base_height, $base_pitch - the shape of the matrix
     $x, $y, $tile_width, $tile_height - the starting offsets and shape of tile to prefetch
     $elem_size_in_bits - the size in bits of the matrix element
+      - 64 for f64, i64
       - 32 for f32, bf32
       - 16 for f16, int16, bf16
       - 8 for int8, int4, int2
@@ -323,8 +397,8 @@ def TritonGEN_FToTf32Op
     a 32-bit floating point type to TF32 with rounding to the nearest even.
   }];
 
-  let arguments = (ins F32:$val);
-  let results = (outs F32:$res);
+  let arguments = (ins LLVM_ScalarOrVectorOf<F32>:$val);
+  let results = (outs LLVM_ScalarOrVectorOf<F32>:$res);
   let assemblyFormat = [{
     $val attr-dict `:` type($val)
   }];

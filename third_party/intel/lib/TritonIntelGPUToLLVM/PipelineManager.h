@@ -25,19 +25,19 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Utils.h"
 #include "intel/include/GPUToTritonGEN/GPUToTritonGENPass.h"
 #include "intel/include/TritonGENToLLVM/TritonGENToLLVMPass.h"
+#include "intel/include/TritonGENToSPIRV/TritonGENToSPIRVPass.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 
 #include "PatternTritonGPUOpToLLVM.h"
-
-#include "third_party/proton/dialect/include/TritonProtonToLLVM/PatternTritonProtonOpToLLVM.h"
 
 namespace mlir {
 
 FailureOr<LLVM::LLVMFuncOp>
 convertFuncOpToLLVMFuncOp(FunctionOpInterface funcOp,
                           ConversionPatternRewriter &rewriter,
-                          const LLVMTypeConverter &converter);
+                          const LLVMTypeConverter &converter,
+                          SymbolTableCollection *symbolTables = nullptr);
 }
 
 namespace mlir::triton::intel {
@@ -66,7 +66,21 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       result.push_back(attr);
     }
   }
-
+  /// Calling convention for the scratch buffer on shared and global:
+  ///
+  /// - Shared memory:
+  ///   * Kernel functions:
+  ///       Use the address of `global_smem` as the scratch stack.
+  ///   * Non-kernel functions:
+  ///       Uses the second last param as the shared scratch stack.
+  ///
+  /// - Global scratch memory:
+  ///   * Both kernel and non-kernel functions:
+  ///       Use the last but one param as the global scratch stack.
+  ///
+  /// - Profile scratch memory:
+  ///   * Both kernel and non-kernel functions:
+  ///       Use the last param as the profile scratch stack.
   triton::FuncOp amendFuncOp(triton::FuncOp funcOp,
                              ConversionPatternRewriter &rewriter,
                              const TargetInfoBase &targetInfo) const {
@@ -77,6 +91,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     auto sharedPtrTy =
         LLVM::LLVMPointerType::get(ctx, targetInfo.getSharedAddressSpace());
     Type globalPtrTy = LLVM::LLVMPointerType::get(ctx, 1);
+    Type profilePtrTy = LLVM::LLVMPointerType::get(ctx, 1);
 
     // 1. Modify the function type to add the new arguments.
     FunctionType funcTy = funcOp.getFunctionType();
@@ -86,6 +101,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       amendedInputTy.push_back(sharedPtrTy);
 
     amendedInputTy.push_back(globalPtrTy);
+    amendedInputTy.push_back(profilePtrTy);
     auto amendedFuncTy =
         FunctionType::get(ctx, amendedInputTy, funcTy.getResults());
     // 2. Modify the argument attributes to add the new argument.
@@ -110,6 +126,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       region.addArgument(sharedPtrTy, loc);
 
     region.addArgument(globalPtrTy, loc);
+    region.addArgument(profilePtrTy, loc);
     rewriter.inlineRegionBefore(region, amendedFuncOp.getBody(),
                                 amendedFuncOp.end());
     return amendedFuncOp;
@@ -119,9 +136,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
   matchAndRewrite(triton::FuncOp funcOp, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // Prevent LLVM's inliner to inline this function
-    auto amendedFuncOp = funcOp;
-    if (!LLVM::isKernel(funcOp))
-      amendedFuncOp = amendFuncOp(funcOp, rewriter, targetInfo);
+    auto amendedFuncOp = amendFuncOp(funcOp, rewriter, targetInfo);
 
     FailureOr<LLVM::LLVMFuncOp> maybeNewFuncOp =
         mlir::convertFuncOpToLLVMFuncOp(amendedFuncOp, rewriter,
@@ -142,20 +157,20 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       newFuncOp.setCConv(LLVM::CConv::SPIR_FUNC);
     }
 
-    newFuncOp->setAttr(
-        TritonGEN::TritonGENDialect::getMaxWorkGroupSizeAttrName(),
-        rewriter.getDenseI32ArrayAttr({threadsPerWarp * numWarps, 1, 1}));
+    constexpr size_t numDims = 3;
+    std::array<int, numDims> localSize{threadsPerWarp * numWarps, 1, 1};
+    newFuncOp.setReqdWorkGroupSize(localSize);
     newFuncOp.setIntelReqdSubGroupSize(threadsPerWarp);
 
     if (!LLVM::isKernel(funcOp)) {
       newFuncOp.setPassthroughAttr(
           ArrayAttr::get(ctx, rewriter.getStringAttr("noinline")));
       newFuncOp.setLinkage(LLVM::Linkage::Internal);
-      rewriter.eraseOp(amendedFuncOp);
     }
 
     // required by AxisInfoAnalysis
     rewriter.eraseOp(funcOp);
+    rewriter.eraseOp(amendedFuncOp);
     return success();
   }
 
@@ -170,10 +185,8 @@ private:
 class TritonGPUToLLVMPipelineManager {
 public:
   TritonGPUToLLVMPipelineManager(ModuleOp &mod, MLIRContext *ctx, bool advanced,
-                                 bool oneMatrixPerLoadForBT,
                                  bool useTileLoadLinearLayout)
       : mod(mod), ctx(ctx), isAdvancedPathEnabled(advanced),
-        oneMatrixPerLoadForBT(oneMatrixPerLoadForBT),
         useTileLoadLinearLayout(useTileLoadLinearLayout) {}
 
   /// FIXME: remove once the block ptr conversion path is capable of handling
@@ -214,7 +227,7 @@ public:
           typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
       intel::populateLoadStoreOpToLLVMPatterns(
           typeConverter, targetInfo, patterns, axisInfoAnalysis, benefit,
-          oneMatrixPerLoadForBT, useTileLoadLinearLayout);
+          useTileLoadLinearLayout);
       intel::populateReduceOpToLLVMPatterns(typeConverter, patterns, targetInfo,
                                             benefit);
       mlir::triton::populateScanOpToLLVMPatterns(typeConverter, patterns,
@@ -235,8 +248,6 @@ public:
                                     benefit);
       mlir::triton::populateMemoryOpToLLVMPatterns(typeConverter, targetInfo,
                                                    patterns, benefit);
-      mlir::triton::proton::populateRecordOpToLLVMPattern(
-          typeConverter, patterns, targetInfo, benefit);
       intel::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
                                                 targetInfo, benefit);
       mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
@@ -253,7 +264,6 @@ public:
     // to help convert scalar expression to LLVM.
     arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
     populateMathToLLVMConversionPatterns(typeConverter, patterns);
-    triton::populateTritonGENToLLVMConversionPatterns(typeConverter, patterns);
     triton::populateGPUToTritonGENConversionPatterns(typeConverter, patterns);
     cf::populateControlFlowToLLVMConversionPatterns(typeConverter, patterns);
     populateGpuToLLVMSPVConversionPatterns(typeConverter, patterns);
@@ -269,7 +279,6 @@ private:
   /// FIXME: this is temporary and should be removed once we have an analysis to
   /// determine whether a kernel uses block pointers.
   bool isAdvancedPathEnabled = false;
-  bool oneMatrixPerLoadForBT = false;
   bool useTileLoadLinearLayout = true;
 };
 

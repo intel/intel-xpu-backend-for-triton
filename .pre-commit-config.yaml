@@ -40,6 +40,12 @@ repos:
     hooks:
       - id: clang-format
 
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: "v1.15.0"
+    hooks:
+      - id: mypy
+        pass_filenames: false
+
   # Expand YAML anchors in files used by github workflows, because github can't
   # do this itself.  This lets us use anchors, which avoids code duplication.
   - repo: local
@@ -119,6 +125,10 @@ repos:
         name: mypy for scripts
         stages: [pre-commit, pre-push, manual]
         files: '^scripts/.*'
+        args:
+          - --config-file=
+          - --ignore-missing-imports
+          - --scripts-are-modules
 
 exclude: |
   (?x)(

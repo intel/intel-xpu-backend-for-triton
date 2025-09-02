@@ -74,8 +74,8 @@ def alibi_functional(score, _, h, q_idx, kv_idx):
            for mask in ['NATTEN', 'Alibi']
            for mode in [os.getenv('FA_KERNEL_MODE', 'fwd')]],
         line_arg='provider',
-        line_vals=['triton', 'onednn'],
-        line_names=['Triton', 'OneDNN'],
+        line_vals=['triton'] + (['onednn'] if '580' not in torch.xpu.get_device_name() else []),
+        line_names=['Triton'] + (['OneDNN'] if '580' not in torch.xpu.get_device_name() else []),
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel=['GB/s', 'TFlops'],
         plot_name='flexAttnMasks-performance',
@@ -112,7 +112,9 @@ def benchmark(Z, H, N_CTX, D_HEAD, MASK, MODE, provider):
             triton_o = triton_fn()
             triton_do = torch.randn_like(triton_o)
             triton_fn = lambda: triton_o.backward(triton_do, retain_graph=True)
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=5, n_repeat=5, quantiles=quantiles)
+        # Needs more warmup on B580 for some reason
+        benchmark_suit.do_prewarmup(triton_fn)
+        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=5, quantiles=quantiles)
         # Values checking cannot be implemented for these case as :
         # "The operator 'aten::_scaled_dot_product_flash_attention_for_cpu' is not currently implemented for the XPU device"
 

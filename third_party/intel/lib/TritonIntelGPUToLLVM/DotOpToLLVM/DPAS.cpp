@@ -5,6 +5,7 @@
 #include "intel/include/Analysis/DPAS.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include <optional>
@@ -350,20 +351,15 @@ private:
           for (int repOuter = 0; repOuter < repClusterOuter; ++repOuter) {
             for (int repInner = 0; repInner < repClusterInner; ++repInner) {
               Value matVal = rewriter.create<LLVM::UndefOp>(loc, dotOpTy);
-              for (int k = 0; k < numElemsPerOperand; ++k) {
-                if (isFToTF32Enabled) {
-                  Value f32Val = elems[offset++];
-                  auto t32Val =
-                      rewriter.create<TritonGEN::FToTf32Op>(loc, f32Val)
-                          .getResult();
-                  matVal =
-                      tb.insert_element(dotOpTy, matVal, t32Val, tb.i32_val(k));
-
-                } else {
+              if (numElemsPerOperand != 1)
+                for (int k = 0; k < numElemsPerOperand; ++k)
                   matVal = tb.insert_element(dotOpTy, matVal, elems[offset++],
                                              tb.i32_val(k));
-                }
-              }
+              else
+                matVal = elems[offset++];
+              if (isFToTF32Enabled)
+                matVal = rewriter.create<TritonGEN::FToTf32Op>(loc, matVal)
+                             .getResult();
               vals[{b, i * repClusterOuter + repOuter,
                     j * repClusterInner + repInner}] = matVal;
             }

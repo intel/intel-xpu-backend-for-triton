@@ -39,18 +39,8 @@ Install Microsoft Visual Studio 2022 and make sure the following [components](ht
 
 ### Intel® Deep Learning Essentials
 
-Install [Intel® Deep Learning Essentials 2025.0.1](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html?packages=dl-essentials&dl-essentials-os=windows&dl-win=offline).
+Install [Intel® Deep Learning Essentials 2025.1.1](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html?packages=dl-essentials&dl-essentials-os=windows&dl-win=offline).
 By default, it is installed to `C:\Program Files (x86)\Intel\oneAPI`.
-
-### Level Zero SDK
-
-Identify Level Zero version installed with the GPU Driver:
-
-```shell
-(Get-Item C:\Windows\system32\ze_loader.dll).VersionInfo.ProductVersion
-```
-
-Find the corresponding release in https://github.com/oneapi-src/level-zero/releases, download its archive and extract to `c:\level_zero` or other location.
 
 ### Chocolatey
 
@@ -131,12 +121,6 @@ Initialize Intel® Deep Learning Essentials, for example:
 Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
 ```
 
-Set `LEVEL_ZERO_V1_SDK_PATH` to the location of Level Zero SDK, for example:
-
-```
-$env:LEVEL_ZERO_V1_SDK_PATH = "C:\level_zero"
-```
-
 Build and install PyTorch:
 
 ```
@@ -163,7 +147,6 @@ pip install -U wheel pybind11 cython cmake
 Build and install Triton:
 
 ```
-cd python
 pip install -v '.[build,tests,tutorials]'
 cd ..
 ```
@@ -182,7 +165,6 @@ Initialize environment variables:
 ```
 .venv\Scripts\activate.ps1
 Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
-$env:LEVEL_ZERO_V1_SDK_PATH = "C:\level_zero"
 ```
 
 Check that PyTorch and Triton are available:

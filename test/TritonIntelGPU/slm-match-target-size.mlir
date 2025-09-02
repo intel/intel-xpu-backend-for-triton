@@ -1,6 +1,6 @@
-// RUN: env TRITON_INTEL_ENABLE_FIRST_LOAD_TO_SLM=1 triton-opt %s -tritonintelgpu-match-target-size | FileCheck %s
+// RUN: env TRITON_INTEL_ADVANCED_PATH=1 TRITON_INTEL_ENABLE_FIRST_LOAD_TO_SLM=1 triton-opt %s -tritonintelgpu-match-target-size | FileCheck %s
 
-#warp = #triton_intel_gpu.warp<{sizePerThread = [32, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
+#warp = #ttig.warp<{sizePerThread = [32, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #warp}>
 #dot1 = #ttg.dot_op<{opIdx = 1, parent = #warp}>
 
@@ -39,15 +39,15 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32}
     %18 = tt.load %10 : !tt.ptr<tensor<32x64xf16, #dot0>>
     // CHECK: [[subA1:%.*]] = tt.load {{.*}} {DotIdx = 0 : i32} : !tt.ptr<tensor<32x32xf16>>
     // CHECK: [[subA2:%.*]] = tt.load {{.*}} {DotIdx = 0 : i32} : !tt.ptr<tensor<32x32xf16>>
-    // CHECK: [[glueA:%.*]] = triton_intel_gpu.glue [[subA1]], [[subA2]] : (tensor<32x32xf16>, tensor<32x32xf16>) -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 0, parent = #warp}>>
-    // CHECK: [[extracA1:%.*]] = triton_intel_gpu.extract [[glueA]][0] : tensor<32x64xf16, #ttg.dot_op<{opIdx = 0, parent = #warp}>> -> tensor<16x64xf16>
+    // CHECK: [[glueA:%.*]] = ttig.glue [[subA1]], [[subA2]] : (tensor<32x32xf16>, tensor<32x32xf16>) -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 0, parent = #warp}>>
+    // CHECK: [[extracA1:%.*]] = ttig.extract [[glueA]][0] : tensor<32x64xf16, #ttg.dot_op<{opIdx = 0, parent = #warp}>> -> tensor<16x64xf16>
     // CHECK: tt.store {{.*}}, [[extracA1]] : !tt.ptr<tensor<16x64xf16>, 3>
-    // CHECK: [[extracA2:%.*]] = triton_intel_gpu.extract [[glueA]][1] : tensor<32x64xf16, #ttg.dot_op<{opIdx = 0, parent = #warp}>> -> tensor<16x64xf16>
+    // CHECK: [[extracA2:%.*]] = ttig.extract [[glueA]][1] : tensor<32x64xf16, #ttg.dot_op<{opIdx = 0, parent = #warp}>> -> tensor<16x64xf16>
     // CHECK: tt.store {{.*}}, [[extracA2]] : !tt.ptr<tensor<16x64xf16>, 3>
     %21:3 = scf.for %arg6 = %c0_i32 to %c1024_i32 step %c64_i32 iter_args(%arg8 = %cst_1, %arg10 = %10, %arg11 = %14) -> (tensor<32x64xf32, #warp>, !tt.ptr<tensor<32x64xf16, #dot0>>, !tt.ptr<tensor<64x64xf16, #dot1>>) : i32 {
       // CHECK: [[loadA1:%.*]] = tt.load {{.*}} {DotIdx = 0 : i32} : !tt.ptr<tensor<16x64xf16>, 3>
       // CHECK: [[loadA2:%.*]] = tt.load {{.*}} {DotIdx = 0 : i32} : !tt.ptr<tensor<16x64xf16>, 3>
-      // CHECK: [[extractDotA:%.*]] = triton_intel_gpu.extract [[loadA1]][0] : tensor<16x64xf16> -> tensor<8x16xf16>
+      // CHECK: [[extractDotA:%.*]] = ttig.extract [[loadA1]][0] : tensor<16x64xf16> -> tensor<8x16xf16>
       // CHECK: [[dot1:%.*]] = tt.dot [[extractDotA]], {{.*}}, {{.*}}, inputPrecision = tf32 : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
       %25 = tt.load %arg11 : !tt.ptr<tensor<64x64xf16, #dot1>>
       %26 = tt.dot %18, %25, %cst_1, inputPrecision = tf32 : tensor<32x64xf16, #dot0> * tensor<64x64xf16, #dot1> -> tensor<32x64xf32, #warp>

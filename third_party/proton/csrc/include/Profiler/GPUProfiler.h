@@ -20,7 +20,7 @@ namespace proton {
 // CuptiProfiler, should be a singleton.
 template <typename ConcreteProfilerT>
 class GPUProfiler : public Profiler,
-                    public ThreadLocalOpInterface,
+                    public OpInterface,
                     public Singleton<ConcreteProfilerT> {
 public:
   GPUProfiler() = default;
@@ -49,6 +49,11 @@ public:
 
   ConcreteProfilerT &setSyclQueue(void *syclQueue) {
     this->syclQueue = syclQueue;
+    return dynamic_cast<ConcreteProfilerT &>(*this);
+  }
+
+  ConcreteProfilerT &setUtilsCachePath(const std::string &utils_cache_path) {
+    this->utils_cache_path = utils_cache_path;
     return dynamic_cast<ConcreteProfilerT &>(*this);
   }
 
@@ -139,6 +144,7 @@ protected:
   static thread_local ThreadState threadState;
   Correlation correlation;
   void *syclQueue;
+  std::string utils_cache_path;
 
   // Use the pimpl idiom to hide the implementation details. This lets us avoid
   // including the cupti header from this header. The cupti header and the

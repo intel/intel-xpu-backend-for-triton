@@ -16,31 +16,6 @@ namespace {
 /* ----- FP8E5M2 ------ */
 // This data-type is the standard FP8E5M2 format
 static SmallVector<Value>
-Fp16_to_Fp8E5M2_RTNE(Location loc, ConversionPatternRewriter &rewriter,
-                     const SmallVector<Value> &v) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value val = b.zext(i32_ty, b.bitcast(v[0], i16_ty));
-  Value sign = b.and_(i32_ty, val, b.i32_val(0x8000));
-  Value nosign = b.and_(i32_ty, val, b.i32_val(0x7fff));
-
-  Value truncated = b.and_(i32_ty, nosign, b.i32_val(0x7f00));
-  Value tail = b.and_(i32_ty, nosign, b.i32_val(0xff));
-  Value odd_trunc =
-      b.icmp_ne(b.and_(i32_ty, truncated, b.i32_val(0x100)), b.i32_val(0));
-  Value round_up = b.or_(b.icmp_ugt(tail, b.i32_val(0x80)),
-                         b.and_(b.icmp_eq(tail, b.i32_val(0x80)), odd_trunc));
-  // Skip round-up if it leads to inf/nan.
-  round_up = b.and_(round_up, b.icmp_ult(truncated, b.i32_val(0x7b00)));
-  truncated = b.select(round_up, b.add(truncated, b.i32_val(0x100)), truncated);
-
-  Value res_val = b.or_(i32_ty, truncated, sign);
-  auto fp8x4VecTy = vec_ty(i8_ty, 4);
-  Value res = b.bitcast(res_val, fp8x4VecTy);
-
-  return {b.extract_element(i8_ty, res, b.i32_val(1))};
-}
-
-static SmallVector<Value>
 Fp16_to_Fp8E5M2_RTZ(Location loc, ConversionPatternRewriter &rewriter,
                     const SmallVector<Value> &v) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -269,63 +244,6 @@ static SmallVector<Value> Bf16_to_Fp8E5M2(Location loc,
           b.extract_element(i8_ty, fp8x4Vec, b.i32_val(3))};
 }
 
-static SmallVector<Value>
-Bf16_to_Fp8E5M2_RTNE(Location loc, ConversionPatternRewriter &rewriter,
-                     const SmallVector<Value> &v) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value val = b.zext(i32_ty, b.bitcast(v[0], i16_ty));
-  Value sign = b.and_(i32_ty, val, b.i32_val(0x8000));
-  Value nosign = b.and_(i32_ty, val, b.i32_val(0x7fff));
-
-  Value exp = b.and_(i32_ty, b.lshr(nosign, b.i32_val(7)), b.i32_val(0xff));
-  // Check if we need a translation to a subnormal value. This happens when
-  // exp value is in range [110, 112].
-  Value is_subnormal =
-      b.and_(b.icmp_uge(exp, b.i32_val(110)), b.icmp_ule(exp, b.i32_val(112)));
-  Value shift = b.sub(i32_ty, exp, b.i32_val(110));
-  Value subnormal = b.and_(i32_ty, nosign, b.i32_val(0x7f));
-  subnormal = b.or_(i32_ty, subnormal, b.i32_val(0x80));
-  // Make rounding with respect to bits we are going to shift and cut off.
-  Value round_step = b.lshr(i32_ty, b.i32_val(0x100), shift);
-  Value tail_mask = b.sub(i32_ty, round_step, b.i32_val(1));
-  Value tail = b.and_(i32_ty, subnormal, tail_mask);
-  Value threshold = b.lshr(i32_ty, b.i32_val(0x80), shift);
-  Value odd_truncated =
-      b.icmp_ne(b.and_(i32_ty, subnormal, round_step), b.i32_val(0));
-  Value round_up = b.or_(b.icmp_ugt(tail, threshold),
-                         b.and_(b.icmp_eq(tail, threshold), odd_truncated));
-  subnormal =
-      b.select(round_up, b.add(i32_ty, subnormal, round_step), subnormal);
-  // Now shift to get the final result.
-  subnormal = b.shl(i32_ty, subnormal, shift);
-
-  // Normalized case. Start with rounding, then apply exp range to fit 5 bits,
-  // adjust bias and shift left.
-  // TODO: NaN values might be mishandled.
-  tail = b.and_(i32_ty, nosign, b.i32_val(0x1f));
-  odd_truncated =
-      b.icmp_ne(b.and_(i32_ty, nosign, b.i32_val(0x20)), b.i32_val(0));
-  round_up = b.or_(b.icmp_ugt(tail, b.i32_val(0x10)),
-                   b.and_(b.icmp_eq(tail, b.i32_val(0x10)), odd_truncated));
-  Value rounded =
-      b.and_(i32_ty, b.add(i32_ty, nosign, b.i32_val(0x20)), b.i32_val(0x7fe0));
-  nosign = b.select(round_up, rounded, nosign);
-
-  nosign = b.umax(i32_ty, nosign, b.i32_val(0x3800));
-  nosign = b.umin(i32_ty, nosign, b.i32_val(0x57e0));
-  nosign = b.sub(i32_ty, nosign, b.i32_val(0x3800));
-  nosign = b.shl(i32_ty, nosign, b.i32_val(3));
-
-  // Choose between subnormal and normal values.
-  nosign = b.select(is_subnormal, subnormal, nosign);
-
-  Value res_val = b.or_(i32_ty, nosign, sign);
-  auto fp8x4VecTy = vec_ty(i8_ty, 4);
-  Value res = b.bitcast(res_val, fp8x4VecTy);
-
-  return {b.extract_element(i8_ty, res, b.i32_val(1))};
-}
-
 /* ----- FP8E4M3B15 ------ */
 // This data-type is a variant of the standard FP8E4M3 format.
 // It was designed for fast software conversion to FP16 on GPUs that do not
@@ -524,60 +442,69 @@ static SmallVector<Value> Fp16_to_Fp8E4M3Nv(Location loc,
           b.extract_element(i8_ty, b0, b.i32_val(3))};
 }
 
-static SmallVector<Value>
-Fp16_to_Fp8E4M3Nv_RTNE(Location loc, ConversionPatternRewriter &rewriter,
-                       const SmallVector<Value> &v) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value val = b.bitcast(v[0], i16_ty);
-  Value sign = b.and_(i16_ty, val, b.i16_val(0x8000));
-  Value nosign = b.and_(i16_ty, val, b.i16_val(0x7fff));
+template <typename SrcTy, typename DstTy,
+          int64_t SrcBits = std::is_same_v<SrcTy, Float16Type> ? 16 : 32,
+          int64_t SrcEBits = std::is_same_v<SrcTy, Float16Type> ? 5 : 8,
+          int64_t DstEBits = std::is_same_v<DstTy, Float8E4M3Type> ? 4 : 5,
+          int64_t SrcMBits = SrcBits - SrcEBits - 1,
+          int64_t DstMBits = 8 - DstEBits - 1,
+          int64_t SrcBias = (1L << (SrcEBits - 1)) - 1,
+          int64_t DstBias = (1L << (DstEBits - 1)) - 1>
+static SmallVector<Value> Fp_to_Fp8_RTNE(Location loc,
+                                         ConversionPatternRewriter &rewriter,
+                                         const SmallVector<Value> &v) {
+  static_assert((std::is_same_v<SrcTy, Float16Type>) ||
+                (std::is_same_v<SrcTy, Float32Type>) ||
+                (std::is_same_v<SrcTy, BFloat16Type>));
+  static_assert((std::is_same_v<DstTy, Float8E4M3Type>) ||
+                (std::is_same_v<DstTy, Float8E5M2Type>));
+  constexpr int64_t SRC_MASK = (1L << (SrcBits - 1)) - 1;
+  constexpr int64_t SRC_MMASK = (1L << SrcMBits) - 1;
+  constexpr int64_t DST_NAN = 0x7F;
+  constexpr int64_t DST_MAX =
+      std::is_same_v<DstTy, Float8E5M2Type> ? 0x7B : DST_NAN - 1;
+  constexpr bool IS_FP16 = std::is_same_v<SrcTy, Float16Type>;
+  TritonLLVMIRRewriter b(loc, rewriter);
+  auto srcTy = IS_FP16 ? f16_ty : f32_ty; // BF16 is converted to FP32 below
+  auto srcITy = rewriter.getIntegerType(SrcBits);
+  auto fval = [&b](float v) { return IS_FP16 ? b.f16_val(v) : b.f32_val(v); };
+  auto ival = [&](int64_t v) { return b.int_val(SrcBits, v); };
+  auto zero = ival(0);
 
-  Value exp = b.and_(i16_ty, b.lshr(nosign, b.i16_val(10)), b.i16_val(0x1f));
-  // Check if we need a translation to a subnormal value. This happens when
-  // exp value is in range [5, 8].
-  Value is_subnormal =
-      b.and_(b.icmp_uge(exp, b.i16_val(5)), b.icmp_ule(exp, b.i16_val(8)));
-  Value shift = b.sub(i16_ty, b.i16_val(8), exp);
-  Value subnormal = b.and_(i16_ty, nosign, b.i16_val(0x3ff));
-  subnormal = b.or_(i16_ty, subnormal, b.i16_val(0x400));
-  // Make rounding with respect to bits we are going to shift and cut off.
-  Value round_step = b.shl(i16_ty, b.i16_val(0x100), shift);
-  Value tail_mask = b.sub(i16_ty, round_step, b.i16_val(1));
-  Value tail = b.and_(i16_ty, subnormal, tail_mask);
-  Value threshold = b.shl(i16_ty, b.i16_val(0x80), shift);
-  Value odd_truncated =
-      b.icmp_ne(b.and_(i16_ty, subnormal, round_step), b.i16_val(0));
-  Value round_up = b.or_(b.icmp_ugt(tail, threshold),
-                         b.and_(b.icmp_eq(tail, threshold), odd_truncated));
-  subnormal =
-      b.select(round_up, b.add(i16_ty, subnormal, round_step), subnormal);
-  // Now shift to get the final result.
-  subnormal = b.lshr(i16_ty, subnormal, shift);
+  Value val = v[0];
+  if constexpr (std::is_same_v<SrcTy, BFloat16Type>) {
+    // Convert to FP32 since the nearbyint intrinsic does not support BF16
+    val = b.shl(b.zext(srcITy, b.bitcast(val, i16_ty)), ival(16));
+  } else {
+    val = b.bitcast(val, srcITy);
+  }
+  Value sign = b.and_(val, ival(1L << (SrcBits - 1)));
+  Value nosign = b.and_(val, ival(SRC_MASK));
+  Value exp = b.lshr(nosign, ival(SrcMBits));
+  Value man = b.and_(nosign, ival(SRC_MMASK));
+  // NaN if exp is all ones and man is all zeroes
+  Value isNan = b.icmp_ugt(nosign, ival(SRC_MASK ^ SRC_MMASK));
 
-  // Normalized case. Start with rounding, then apply exp range to fit 4 bits,
-  // adjust bias and shift left.
-  // TODO: NaN values might be mishandled.
-  tail = b.and_(i16_ty, nosign, b.i16_val(0x7f));
-  odd_truncated =
-      b.icmp_ne(b.and_(i16_ty, nosign, b.i16_val(0x80)), b.i16_val(0));
-  round_up = b.or_(b.icmp_ugt(tail, b.i16_val(0x40)),
-                   b.and_(b.icmp_eq(tail, b.i16_val(0x40)), odd_truncated));
-  Value rounded =
-      b.and_(i16_ty, b.add(i16_ty, nosign, b.i16_val(0x80)), b.i16_val(0x7f80));
-  Value normal = b.select(round_up, rounded, nosign);
+  // dstExp = max(0, srcExp - SrcBias + DstBias)
+  // if (dstExp) dstMan = srcMan * 2^(DstMBits - SrcMBits)
+  // else dstMan = src * 2^(DstMBits + DstBias - 1)
+  Value scale = fval(1.0 / static_cast<float>(1 << (SrcMBits - DstMBits)));
+  man = b.create<LLVM::UIToFPOp>(srcTy, man);
+  if constexpr (SrcBias != DstBias) {
+    exp = b.smax(b.sub(exp, ival(SrcBias - DstBias)), zero);
+    Value isSubnorm = b.icmp_eq(exp, zero);
+    man = b.select(isSubnorm, b.bitcast(nosign, srcTy), man);
+    scale = b.select(isSubnorm,
+                     fval(static_cast<float>(1 << (DstMBits + DstBias - 1))),
+                     scale);
+  }
+  man = b.fmul(man, scale, LLVM::FastmathFlags::fast);
+  man = b.create<LLVM::FPToUIOp>(srcITy, b.create<LLVM::NearbyintOp>(man));
 
-  normal = b.umax(i16_ty, normal, b.i16_val(0x2000));
-  normal = b.umin(i16_ty, normal, b.i16_val(0x5f00));
-  normal = b.sub(i16_ty, normal, b.i16_val(0x2000));
-  normal = b.shl(i16_ty, normal, b.i16_val(1));
-
-  // Choose between subnormal and normal values.
-  Value res_val = b.select(is_subnormal, subnormal, normal);
-  res_val = b.or_(i16_ty, res_val, sign);
-  auto fp8x4VecTy = vec_ty(i8_ty, 2);
-  Value res = b.bitcast(res_val, fp8x4VecTy);
-
-  return {b.extract_element(i8_ty, res, b.i16_val(1))};
+  val = b.add(b.shl(exp, ival(DstMBits)), man);
+  val = b.umin(ival(DST_MAX), val);
+  val = b.or_(b.lshr(sign, ival(SrcBits - 8)), val);
+  return {b.select(isNan, b.i8_val(DST_NAN), b.trunc(i8_ty, val))};
 }
 
 static SmallVector<Value> Fp8E4M3Nv_to_Bf16(Location loc,
@@ -767,63 +694,6 @@ static SmallVector<Value> Bf16_to_Fp8E4M3Nv(Location loc,
           b.extract_element(i8_ty, fp8x4Vec, b.i32_val(3))};
 }
 
-static SmallVector<Value>
-Bf16_to_Fp8E4M3Nv_RTNE(Location loc, ConversionPatternRewriter &rewriter,
-                       const SmallVector<Value> &v) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value val = b.zext(i32_ty, b.bitcast(v[0], i16_ty));
-  Value sign = b.and_(i32_ty, val, b.i32_val(0x8000));
-  Value nosign = b.and_(i32_ty, val, b.i32_val(0x7fff));
-
-  Value exp = b.and_(i32_ty, b.lshr(nosign, b.i32_val(7)), b.i32_val(0xff));
-  // Check if we need a translation to a subnormal value. This happens when
-  // exp value is in range [117, 120].
-  Value is_subnormal =
-      b.and_(b.icmp_uge(exp, b.i32_val(117)), b.icmp_ule(exp, b.i32_val(120)));
-  Value shift = b.sub(i32_ty, exp, b.i32_val(117));
-  Value subnormal = b.and_(i32_ty, nosign, b.i32_val(0x7f));
-  subnormal = b.or_(i32_ty, subnormal, b.i32_val(0x80));
-  // Make rounding with respect to bits we are going to shift and cut off.
-  Value round_step = b.lshr(i32_ty, b.i32_val(0x100), shift);
-  Value tail_mask = b.sub(i32_ty, round_step, b.i32_val(1));
-  Value tail = b.and_(i32_ty, subnormal, tail_mask);
-  Value threshold = b.lshr(i32_ty, b.i32_val(0x80), shift);
-  Value odd_truncated =
-      b.icmp_ne(b.and_(i32_ty, subnormal, round_step), b.i32_val(0));
-  Value round_up = b.or_(b.icmp_ugt(tail, threshold),
-                         b.and_(b.icmp_eq(tail, threshold), odd_truncated));
-  subnormal =
-      b.select(round_up, b.add(i32_ty, subnormal, round_step), subnormal);
-  // Now shift to get the final result.
-  subnormal = b.shl(i32_ty, subnormal, shift);
-
-  // Normalized case. Start with rounding, then apply exp range to fit 4 bits,
-  // adjust bias and shift left.
-  // TODO: NaN values might be mishandled.
-  tail = b.and_(i32_ty, nosign, b.i32_val(0xf));
-  odd_truncated =
-      b.icmp_ne(b.and_(i32_ty, nosign, b.i32_val(0x10)), b.i32_val(0));
-  round_up = b.or_(b.icmp_ugt(tail, b.i32_val(0x8)),
-                   b.and_(b.icmp_eq(tail, b.i32_val(0x8)), odd_truncated));
-  Value rounded =
-      b.and_(i32_ty, b.add(i32_ty, nosign, b.i32_val(0x10)), b.i32_val(0x7ff0));
-  nosign = b.select(round_up, rounded, nosign);
-
-  nosign = b.umax(i32_ty, nosign, b.i32_val(0x3c00));
-  nosign = b.umin(i32_ty, nosign, b.i32_val(0x4380));
-  nosign = b.sub(i32_ty, nosign, b.i32_val(0x3c00));
-  nosign = b.shl(i32_ty, nosign, b.i32_val(4));
-
-  // Choose between subnormal and normal values.
-  nosign = b.select(is_subnormal, subnormal, nosign);
-
-  Value res_val = b.or_(i32_ty, nosign, sign);
-  auto fp8x4VecTy = vec_ty(i8_ty, 4);
-  Value res = b.bitcast(res_val, fp8x4VecTy);
-
-  return {b.extract_element(i8_ty, res, b.i32_val(1))};
-}
-
 static SmallVector<Value> Bf16_to_Fp16(Location loc,
                                        ConversionPatternRewriter &rewriter,
                                        const SmallVector<Value> &v) {
@@ -965,23 +835,28 @@ struct FpToFpOpConversion
              {Fp16_to_Fp8E4M3B15, 4}},
             {{F16TyID, F8E4M3TyID, RoundingMode::RTZ}, {Fp16_to_Fp8E4M3Nv, 2}},
             {{F16TyID, F8E4M3TyID, RoundingMode::RTNE},
-             {Fp16_to_Fp8E4M3Nv_RTNE, 1}},
+             {Fp_to_Fp8_RTNE<Float16Type, Float8E4M3Type>, 1}},
             {{F16TyID, F8E5M2TyID, RoundingMode::RTZ},
              {Fp16_to_Fp8E5M2_RTZ, 4}},
             {{F16TyID, F8E5M2TyID, RoundingMode::RTNE},
-             {Fp16_to_Fp8E5M2_RTNE, 1}},
+             {Fp_to_Fp8_RTNE<Float16Type, Float8E5M2Type>, 1}},
             // F8 -> BF16
             {{F8E5M2TyID, BF16TyID, undefRounding}, {Fp8E5M2_to_Bf16, 4}},
             {{F8E4M3TyID, BF16TyID, undefRounding}, {Fp8E4M3Nv_to_Bf16, 4}},
             // BF16 -> F8
             {{BF16TyID, F8E5M2TyID, RoundingMode::RTZ}, {Bf16_to_Fp8E5M2, 4}},
             {{BF16TyID, F8E5M2TyID, RoundingMode::RTNE},
-             {Bf16_to_Fp8E5M2_RTNE, 1}},
+             {Fp_to_Fp8_RTNE<BFloat16Type, Float8E5M2Type>, 1}},
             {{BF16TyID, F8E4M3TyID, RoundingMode::RTZ}, {Bf16_to_Fp8E4M3Nv, 4}},
             {{BF16TyID, F8E4M3TyID, RoundingMode::RTNE},
-             {Bf16_to_Fp8E4M3Nv_RTNE, 1}},
+             {Fp_to_Fp8_RTNE<BFloat16Type, Float8E4M3Type>, 1}},
             // BF16 -> F16
             {{BF16TyID, F16TyID, undefRounding}, {Bf16_to_Fp16, 2}},
+            // F32 -> F8
+            {{F32TyID, F8E4M3TyID, RoundingMode::RTNE},
+             {Fp_to_Fp8_RTNE<Float32Type, Float8E4M3Type>, 1}},
+            {{F32TyID, F8E5M2TyID, RoundingMode::RTNE},
+             {Fp_to_Fp8_RTNE<Float32Type, Float8E5M2Type>, 1}},
         };
 
     std::tuple<TypeID, TypeID, RoundingMode> key = {
@@ -1043,7 +918,19 @@ struct FpToFpOpConversion
       return outVals;
     }
 
-    bool useFP16IntermediateSrc = srcElementType.isF32();
+    if (srcElementType.isBF16() && dstElementType.isF32()) {
+      SmallVector<Value> outVals;
+      for (Value v : operands[0]) {
+        outVals.push_back(intel::convertBf16ToFp32(loc, rewriter, v));
+      }
+      return outVals;
+    }
+
+    bool useFP16IntermediateSrc =
+        srcElementType.isF32() &&
+        !((roundingMode == RoundingMode::RTNE) &&
+          (dstElementType.getTypeID() == TypeID::get<Float8E4M3FNType>() ||
+           dstElementType.getTypeID() == TypeID::get<Float8E5M2Type>()));
     bool isDstFP32 = dstElementType.isF32();
     Type srcType = useFP16IntermediateSrc ? f16_ty : srcElementType;
     Type dstType = isDstFP32 ? f16_ty : dstElementType;

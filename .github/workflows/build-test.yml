@@ -53,6 +53,11 @@ on:
       - main
       - release/**
 
+# Cancels in-progress PR runs when the PR is updated. Manual runs are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && github.run_id || github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'keep-going') && github.run_id || github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
 permissions: read-all
 
 jobs:
@@ -87,7 +92,7 @@ jobs:
         run: |
           pip install pytest pytest-xdist defusedxml
           cd scripts
-          pytest -n 4 test_*.py
+          pytest -v -n 4 test_*.py
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}
@@ -103,7 +108,7 @@ jobs:
       fail-fast: false
       matrix:
         python:
-          - "3.9"
+          - "3.10"
         driver: ${{ fromJson((inputs.runner_label || '') == '' && '["rolling", "lts"]' || '["rolling"]') }}
 
     uses: ./.github/workflows/build-test-reusable.yml

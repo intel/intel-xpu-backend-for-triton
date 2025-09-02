@@ -1,6 +1,12 @@
 project(Proton LANGUAGES CXX)
 
 set(PROTON_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/csrc")
+set(PROTON_COMMON_DIR "${CMAKE_CURRENT_SOURCE_DIR}/common")
+
+option(TRITON_BUILD_PROTON_XPU "Build Proton with XPU support" OFF)
+if(TRITON_BUILD_PROTON_XPU)
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DTRITON_BUILD_PROTON_XPU")
+endif()
 
 # ============ Check for includes =============
 if(NOT CUPTI_INCLUDE_DIR)
@@ -11,22 +17,6 @@ if(NOT ROCTRACER_INCLUDE_DIR)
 endif()
 if (NOT XPUPTI_INCLUDE_DIR)
   message(FATAL_ERROR "XPUPTI include directory not defined")
-else()
-  option(ENABLE_XPUTPI_PROFILER "Enable Xpupti Profiler" ON)
-  set(ENABLE_XPUTPI_PROFILER ${ENABLE_XPUTPI_PROFILER} CACHE BOOL "Enable Xpupti Profiler" FORCE)
-
-  find_path(SYCL_INCLUDE_DIR
-    NAMES "sycl/sycl.hpp"
-    HINTS "/opt/intel/oneapi/compiler/latest/include"
-  )
-
-  if(SYCL_INCLUDE_DIR)
-    list(APPEND XPUPTI_INCLUDE_DIR "${SYCL_INCLUDE_DIR}")
-    list(APPEND XPUPTI_INCLUDE_DIR "${SYCL_INCLUDE_DIR}/sycl")
-  else()
-    message(WARNING "SYCL FOLDER not found")
-    set(ENABLE_XPUTPI_PROFILER, OFF)
-  endif()
 endif()
 if(NOT JSON_INCLUDE_DIR)
   message(FATAL_ERROR "JSON include directory not defined")
@@ -56,6 +46,7 @@ function(add_proton_library name)
       "${CUPTI_INCLUDE_DIR}"
       "${JSON_INCLUDE_DIR}"
       "${XPUPTI_INCLUDE_DIR}"
+      "${PROTON_COMMON_DIR}/include"
       "${PROTON_SRC_DIR}/include"
   )
 
@@ -67,7 +58,11 @@ function(add_proton_library name)
 endfunction()
 
 # ============ Add subdirectory with actual code that calls add_proton_library ============
+add_subdirectory("${PROTON_COMMON_DIR}")
 add_subdirectory("${PROTON_SRC_DIR}")
+
+# ============ Add subdirectory with proton tests ============
+add_subdirectory(test)
 
 # ============ Possibly handle macOS specifics ============
 if(APPLE)
@@ -92,16 +87,9 @@ endforeach()
 add_library(proton SHARED ${_proton_obj_sources})
 
 target_link_libraries(proton PRIVATE Python3::Module)
-find_library(SYCL_LIB
-  NAMES sycl
-  HINTS "/opt/intel/oneapi/compiler/latest/lib"
-)
 find_library(ZE_TRACING_LIB NAMES ze_tracing_layer PATHS /usr/lib/x86_64-linux-gnu)
 find_library(ZE_LOADER_LIB NAMES ze_loader PATHS /usr/lib/x86_64-linux-gnu)
 
-if(SYCL_LIB)
-    target_link_libraries(proton PRIVATE ${SYCL_LIB})
-endif()
 if(ZE_TRACING_LIB)
     target_link_libraries(proton PRIVATE ${ZE_TRACING_LIB})
 endif()

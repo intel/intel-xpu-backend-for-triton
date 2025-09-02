@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from typing import Callable, ClassVar, Dict, Optional, List, Union, Set
+from abc import ABC, abstractmethod
+from typing import Callable, ClassVar, Dict, Optional, List, Tuple, Union, Set
+from collections.abc import Iterable
 from enum import Enum
 from dataclasses import dataclass, field
 import itertools
@@ -8,21 +10,24 @@ import itertools
 import argparse
 import datetime
 import os
+import time
 
+import scipy.stats
 import pandas as pd
 import matplotlib.pyplot as plt
 
 import torch
 from torch.profiler import profile, ProfilerActivity, record_function
 
-import triton
 from triton.testing import assert_close as triton_assert_close, Benchmark, do_bench as triton_do_bench
 
 from triton_kernels_benchmark import build_report
+from triton_kernels_benchmark.benchmark_shapes_parser import ShapePatternParser
 
 BENCHMARKING_METHOD = os.getenv("BENCHMARKING_METHOD", "UPSTREAM_PYTORCH_PROFILER")
 BENCHMARKING_CONFIG = {
     "verify": os.getenv("VERIFY", "1") == "1",
+    "do_prewarmup": os.getenv("PREWARMUP", "1") == "1",
 }
 
 
@@ -35,6 +40,19 @@ def synchronize():
         torch.cuda.synchronize()
     elif torch.xpu.is_available():
         torch.xpu.synchronize()
+
+
+def do_prewarmup(fn, min_seconds=5):
+    """Looks like some functions require pre-warmup with minimum time to do the compilation.
+    It has to be done once."""
+    if not BENCHMARKING_CONFIG["do_prewarmup"]:
+        return
+
+    start = time.time()
+    while time.time() - start < min_seconds:
+        fn()
+        synchronize()
+    BENCHMARKING_CONFIG["do_prewarmup"] = False
 
 
 def _summarize_statistics(times, quantiles, return_mode):
@@ -88,9 +106,6 @@ def do_bench_elapsed_time(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quan
         fn()
     end_event.record()
     synchronize()
-    # FIXME: to avoid negative timings before DLE 2025.1;
-    # this workaround doesn't work for BMG.
-    triton.runtime.driver.active.utils.wait()
     estimate_ms = start_event.elapsed_time(end_event) / 5
 
     # The cache is also maintained in `triton_do_bench` function,
@@ -138,6 +153,10 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
     # Warm-up
     for _ in range(n_warmup):
         fn()
+        # To be consistent with the benchmark measurements
+        if sync_submitting:
+            synchronize()
+
     # Benchmark
     with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.XPU]) as prof:
         for _ in range(n_repeat):
@@ -177,7 +196,9 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
     if not (len(kernels) >= n_repeat - 1 if relax_profiling_data_check else len(kernels) == n_repeat):
         raise AssertionError(
             f"the profiling number not match; {n_repeat=}, {kernels=}, "
-            f"top functions by xpu_time:\n {prof.key_averages(group_by_stack_n=5).table(sort_by='xpu_time')}")
+            f"top functions by xpu_time:\n {prof.key_averages(group_by_stack_n=5).table(sort_by='xpu_time')}",
+            "You may try to relax profiling check by setting env variable TRITON_RELAX_PROFILING_CHECK=1",
+        )
     # Make the time to the milliseconds.
     times = torch.tensor([sum((k.duration for k in ks)) * 1e-3 for ks in kernels], dtype=torch.float)
     return _summarize_statistics(times, quantiles, return_mode)
@@ -227,26 +248,26 @@ class MarkArgs:
     n_runs: int = 1
 
     @classmethod
-    def parse_common_args(cls) -> tuple[argparse.Namespace, list[str]]:
+    def _get_parser(cls) -> argparse.ArgumentParser:
         """Parses arguments via CLI, allows save_path overloading to `reports`."""
         parser = argparse.ArgumentParser()
         parser.add_argument(
             "--reports",
             type=str,
             default="",
-            help="directory to save reports",
+            help="Path to directory to save reports.",
         )
         parser.add_argument(
             "--n_runs",
             type=int,
             default=1,
-            help="number of runs for this benchmark",
+            help="Number of runs for this benchmark. The default is one.",
         )
-        return parser.parse_known_args()
+        return parser
 
     @classmethod
     def from_args(cls) -> "MarkArgs":
-        args, _ = cls.parse_common_args()
+        args = cls._get_parser().parse_args()
         return MarkArgs(args.reports, args.n_runs)
 
 
@@ -354,8 +375,6 @@ class Mark:
         for bench in benchmarks:
             benchmark_dfs = []
             for run_counter in range(args.n_runs):
-                if run_counter > 0:
-                    disable_verification()
                 df = self._run(bench, args.reports, show_plots, print_data, run_counter=run_counter, **kwargs)
                 df["datetime"] = datetime.datetime.now()
                 df["run_counter"] = run_counter + 1
@@ -374,60 +393,200 @@ class Mark:
 
         return None
 
+    def run_constrained(
+        self,
+        shapes: List[ShapeValue],
+        show_plots=False,
+        print_data=False,
+        save_precision=6,
+        mark_args=None,
+        **kwargs,
+    ) -> pd.DataFrame:
+        if not isinstance(self.benchmarks, Benchmark):
+            raise NotImplementedError("Only single benchmark is supported")
+        x_vals = self.benchmarks.x_vals
+        self.benchmarks.x_vals = [shape.dims for shape in shapes]
+        res_df = self.run(
+            show_plots=show_plots,
+            print_data=print_data,
+            save_precision=save_precision,
+            return_df=True,
+            mark_args=mark_args,
+            **kwargs,
+        )
+        self.benchmarks.x_vals = x_vals
+        return [res_df] if isinstance(res_df, pd.DataFrame) else res_df
+
 
 class BenchmarkCategory(Enum):
     SOFTMAX = "softmax"
     GEMM = "gemm"
     FLASH_ATTENTION = "flash_attention"
+    PREFIX_SUMS = "prefix_sums"
     CORE = "core"
     OPTIONAL = "optional"
     EXPERIMENTAL = "experimental"
 
 
+DimValue = Union[int, str, bool]
+DimValues = Union[DimValue, List[DimValue], Tuple[DimValue, ...]]
+
+
 @dataclass
-class BenchmarkSummary:
-    key: str
-    plot_name: str
-    variant_fields: List[str]
-    variants: List[Union[int, str, List[str]]]
-    supported_providers: Dict[str, str]
-    selected_providers: Dict[str, str]
-    perf_metrics: List[str]
+class ShapeValue:
+    dims: DimValues
+    matcher: Optional[ShapePatternParser]
+
+    @property
+    def matches_pattern(self) -> bool:
+        return self.matcher(str(self)) if self.matcher else True
+
+    def to_list(self) -> List[Union[str, int, bool]]:
+        values = self.dims
+        return values if isinstance(values, list) else list(values) if isinstance(values, tuple) else [values]
+
+    def _to_iterable(self) -> Iterable[Union[str, int, bool]]:
+        return self.dims if isinstance(self.dims, Iterable) else [self.dims]
+
+    def __str__(self):
+        return "[" + "-".join([str(value) for value in self._to_iterable()]) + "]"
+
+    @classmethod
+    def from_vals(
+        cls,
+        x_vals: List[DimValues],
+        pattern_matcher: Optional[ShapePatternParser],
+    ) -> List[ShapeValue]:
+        return [ShapeValue(x_val, pattern_matcher) for x_val in x_vals]
+
+
+@dataclass
+class _BenchmarkSummary(ABC):
+    shape_pattern: Optional[ShapePatternParser] = field(default=None, init=True)
 
     memory_metric: ClassVar[str] = "GB/s"
     compute_metric: ClassVar[str] = "TFlops"
 
-    def __post_init__(self):
+    @property
+    @abstractmethod
+    def _benchmark(self) -> Benchmark:
+        pass
+
+    @property
+    @abstractmethod
+    def _full_benchmark(self) -> Benchmark:
+        pass
+
+    @property
+    def plot_name(self) -> str:
+        return self._benchmark.plot_name
+
+    @property
+    def supported_shapes(self) -> List[ShapeValue]:
+        return ShapeValue.from_vals(self._benchmark.x_vals, self.shape_pattern)
+
+    @property
+    def shape_dimensions(self):
+        return self._benchmark.x_names
+
+    @property
+    def selected_shapes(self) -> List[ShapeValue]:
+        return [shape for shape in self.supported_shapes if shape.matches_pattern]
+
+    @property
+    def shapes(self) -> List[str]:
+        return [str(shape) for shape in self.supported_shapes if shape.matches_pattern]
+
+    @property
+    def supported_providers(self) -> Dict[str, str]:
+        return dict(zip(self._full_benchmark.line_vals, self._full_benchmark.line_names))
+
+    @property
+    def selected_providers(self) -> Dict[str, str]:
+        return dict(zip(self._benchmark.line_vals, self._benchmark.line_names))
+
+    @property
+    def primary_metric(self) -> str:
         known_metrics = [self.memory_metric, self.compute_metric]
         for metric in self.perf_metrics:
             if metric not in known_metrics:
                 raise NotImplementedError(f"Unsupported {metric} metric. Known metrics are {known_metrics}")
+        return self.compute_metric
 
-    def __str__(self) -> str:
-        variants_repr = []
-        for variant in self.variants:
-            variant_list = variant if isinstance(variant, list) else [variant]
-            variant_value = [str(value) for value in variant_list]
-            variants_repr.append(f"{self.key}[" + "-".join(variant_value) + "]")
-        summary = [
-            f"Name: {self.key}",
-            f"Variant fields: {self.variant_fields}",
-            "Variants:",
-            *variants_repr,
+    @property
+    def perf_metrics(self) -> str:
+        return self._benchmark.ylabel
+
+    @property
+    def reference_provider(self) -> Optional[str]:
+        all_providers = list(self.selected_providers.keys())
+        non_triton_providers = [provider for provider in all_providers if not provider.startswith("triton")]
+        if "xetla" in non_triton_providers:
+            return "xetla"
+        if "onednn" in non_triton_providers:
+            return "onednn"
+        if len(all_providers) < 2:
+            return None
+        if len(non_triton_providers) > 0:
+            return non_triton_providers[0]
+        return all_providers[1]
+
+
+@dataclass
+class BenchmarkRunResult(_BenchmarkSummary, ABC):
+    res_df_list: Optional[List[pd.DataFrame]] = field(default=None, init=False)
+    run_time: Optional[float] = field(default=None, init=False)
+
+    @property
+    def run_summary_detailed_df_list(self) -> List[pd.DataFrame]:
+        return [self._run_summary_df(res_df.copy()) for res_df in self.res_df_list]
+
+    @property
+    def run_summary_df_list(self) -> List[pd.DataFrame]:
+        return [self._run_summary_df(res_df.copy(), True) for res_df in self.res_df_list]
+
+    def _run_summary_df(self, res_df: pd.DataFrame, primary_metric_only: bool = False) -> pd.DataFrame:
+
+        def _keep_column(column: str) -> bool:
+            return (any(column.startswith(p + "-") for p in providers) and not column.endswith(("-min", "-max"))
+                    and (not primary_metric_only or column.endswith(self.primary_metric)))
+
+        shape_fields = self.shape_dimensions
+        shape_name = "[" + "-".join(shape_fields) + "]"
+        shape_fields_w_floats = [
+            float_col for float_col in res_df.select_dtypes(include="float").columns if float_col in shape_fields
         ]
-        return "\n".join(summary)
-
-    @classmethod
-    def from_benchmarks(cls, key, benchmark: Benchmark, full_benchmark: Benchmark) -> BenchmarkSummary:
-        return BenchmarkSummary(
-            key=key,
-            plot_name=benchmark.plot_name,
-            variant_fields=benchmark.x_names,
-            variants=benchmark.x_vals,
-            supported_providers=dict(zip(full_benchmark.line_vals, full_benchmark.line_names)),
-            selected_providers=dict(zip(benchmark.line_vals, benchmark.line_names)),
-            perf_metrics=benchmark.ylabel,
+        for shape_field_w_floats in shape_fields_w_floats:
+            res_df[shape_field_w_floats] = res_df[shape_field_w_floats].astype(int)
+        res_df[shape_name] = "[" + res_df[shape_fields].astype(str).agg("-".join, axis=1) + "]"
+        res_df.drop(
+            columns=shape_fields + ["run_counter", "datetime"] +
+            [c for c in res_df.columns if c.endswith(("-min", "-max", "-CV"))], )
+        providers = self.selected_providers.values()
+        metric_cols = [column for column in res_df.columns if _keep_column(column)]
+        column_tuples = [tuple(col.split("-", 1)) for col in metric_cols]
+        metrics_df = res_df[metric_cols].copy()
+        metrics_df.index = res_df[shape_name]
+        metrics_df.index.name = shape_name
+        metrics_df.columns = pd.MultiIndex.from_tuples(column_tuples, names=["provider", "metric"])
+        geomeans_df = pd.DataFrame(
+            [metrics_df.select_dtypes(include="number").apply(scipy.stats.gmean)],
+            index=["GeoMean"],
         )
+        summary_df = pd.concat([metrics_df, geomeans_df])
+
+        ref_provider = self.reference_provider if self.reference_provider else ""
+        metric = self.primary_metric
+        ref_provider_name = next((provider for provider in providers if provider.lower() == ref_provider.lower()), None)
+        if ref_provider and primary_metric_only:
+            non_ref_providers = [provider for provider in providers if provider.lower() != ref_provider.lower()]
+            for non_ref_provider in non_ref_providers:
+                summary_df[(non_ref_provider, "%diff")] = (
+                    (100 *
+                     (summary_df[(non_ref_provider, metric)] / summary_df[(ref_provider_name, metric)])).round(1).map(
+                         "{:.1f}%".format)  # pylint: disable=C0209
+                )
+        return summary_df
 
 
 @dataclass
@@ -438,7 +597,6 @@ class BenchmarkConfig:
     description: str = ""
     providers_filter: Optional[list[str]] = None
     run_opts: Dict[str, Union[str, bool, List[str]]] = field(default_factory=dict)
-    config_summary: BenchmarkSummary = field(init=False)
 
     def _get_benchmark(self, apply_providers_filter=True) -> Mark:
         run_opts = self.run_opts
@@ -450,73 +608,65 @@ class BenchmarkConfig:
                 "Benchmark config list is not supported, exactly one benchmark config is expected.")
         return mark
 
-    def __post_init__(self):
-        self.config_summary = BenchmarkSummary.from_benchmarks(
-            self.key,
-            benchmark=self._get_benchmark().benchmarks,
-            full_benchmark=self._get_benchmark(False).benchmarks,
-        )
+
+@dataclass
+class BenchmarkConfigRunResult(BenchmarkRunResult, BenchmarkConfig):
+
+    @property
+    def shapes_repr(self) -> List[str]:
+        return [f"{self.key}{shape}" for shape in self.shapes]
+
+    @property
+    def _benchmark(self) -> Benchmark:
+        return self._get_benchmark().benchmarks
+
+    @property
+    def _full_benchmark(self) -> Benchmark:
+        return self._get_benchmark(False).benchmarks
 
     def __str__(self) -> str:
+
+        def _shapes_repr(shapes: List[ShapeValue]):
+            return ", ".join([self.key + str(shape) for shape in shapes])
+
         str_repr = [
             f"Config: {self.key}",
             f"Config categories: {[category.value for category in self.categories]}",
             f"Run options: {self.run_opts}",
-            f"Supported providers: {self.config_summary.supported_providers}",
-            f"Selected providers: {self.config_summary.selected_providers}",
-            str(self.config_summary),
+            f"Shape dimensions: {self.shape_dimensions}",
+            f"Shapes pattern: {str(self.shape_pattern) if str(self.shape_pattern) else 'Not set'}",
+            f"Supported shapes: {_shapes_repr(self.supported_shapes)}",
+            f"Selected shapes: {_shapes_repr(self.supported_shapes)}",
+            f"Supported providers: {self.supported_providers}",
+            f"Selected providers: {self.selected_providers}",
         ]
         return "\n".join(str_repr)
 
-    def _pretty_print_results(self, res_df: pd.DataFrame):
-        pd.set_option("display.float_format", "{:.2f}".format)  # pylint: disable=consider-using-f-string
-        variant_fields = self.config_summary.variant_fields
-        variant_name = "[" + "-".join(variant_fields) + "]"
-        variant_fields_w_floats = [
-            float_col for float_col in res_df.select_dtypes(include="float").columns if float_col in variant_fields
-        ]
-        for variant_field_w_floats in variant_fields_w_floats:
-            res_df[variant_field_w_floats] = res_df[variant_field_w_floats].astype(int)
-        res_df[variant_name] = "[" + res_df[variant_fields].astype(str).agg("-".join, axis=1) + "]"
-        res_df.drop(columns=variant_fields + ["run_counter", "datetime"] +
-                    [c for c in res_df.columns if c.endswith(("-min", "-max", "-CV"))])
-        providers = self.config_summary.selected_providers.values()
-        metric_cols = [
-            column for column in res_df.columns
-            if any(column.startswith(p + "-") for p in providers) and not column.endswith(("-min", "-max"))
-        ]
-        column_tuples = [tuple(col.split("-", 1)) for col in metric_cols]
-        metrics_df = res_df[metric_cols].copy()
-        metrics_df.index = res_df[variant_name]
-        metrics_df.index.name = variant_name
-        metrics_df.columns = pd.MultiIndex.from_tuples(column_tuples, names=["provider", "metric"])
-        print(metrics_df)
+    def run(self, args: MarkArgs) -> BenchmarkConfigRunResult:
+        start_time = time.perf_counter()
+        # FIXME: Eliminate mark_args argument
+        # This is useful for unit testing, composite becnhmark configs and results caching
+        self.res_df_list = (self.get_benchmark().run_constrained(shapes=self.selected_shapes, mark_args=args)
+                            if self.res_df_list is None else self.res_df_list)
+        self.run_time = time.perf_counter() - start_time
+        return self
 
-    def run(self, collect_only: bool, args: MarkArgs, tag: str = ""):
-        if collect_only:
-            print(str(self))
-            return
-        # FIXME: add run summary - total timings, etc
-        print(f"Running {self.key}")
-        res_df: pd.DataFrame = self._get_benchmark().run(show_plots=False, print_data=False, return_df=True,
-                                                         mark_args=args)
-        variant_cols_for_report_builder = [
+    def build_report(self, reports_folder: str, tag: str = ""):
+        res_df = pd.concat(self.res_df_list, axis=0, ignore_index=True)
+        shape_cols_for_report_builder = [
             column for column in res_df.select_dtypes(include=["number", "bool"]).columns
-            if column in self.config_summary.variant_fields
+            if column in self.shape_dimensions
         ]
-        print(str(self))
-        self._pretty_print_results(res_df)
-        if args.reports:
-            for provider_key, provider_label in self.config_summary.selected_providers.items():
-                report_args = build_report.PassedArgs(
-                    source=f"{args.reports}/{self.config_summary.plot_name}.csv",
-                    target=f"{args.reports}/{self.key}-{provider_key}-report.csv",
-                    param_cols=",".join(variant_cols_for_report_builder),
-                    benchmark=self.key,
-                    compiler=str(provider_key),
-                    tflops_col=f"{provider_label}-{BenchmarkSummary.compute_metric}",
-                    hbm_col=f"{provider_label}-{BenchmarkSummary.memory_metric}",
-                    tag=tag,
-                    mask=False,
-                )
-                build_report.build_report(report_args)
+        for provider_key, provider_label in self.selected_providers.items():
+            report_args = build_report.PassedArgs(
+                source=f"{reports_folder}/{self.plot_name}.csv",
+                target=f"{reports_folder}/{self.key}-{provider_key}-report.csv",
+                param_cols=",".join(shape_cols_for_report_builder),
+                benchmark=self.key,
+                compiler=str(provider_key),
+                tflops_col=f"{provider_label}-{self.compute_metric}",
+                hbm_col=f"{provider_label}-{self.memory_metric}",
+                tag=tag,
+                mask=False,
+            )
+            build_report.build_report(report_args, res_df)

@@ -23,17 +23,13 @@ jobs:
     runs-on:
       - windows
     steps:
-      - name: Enable long paths
-        run: |
-          git config --system core.longPaths true
-
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Install Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.9'
+          python-version: '3.10'
 
       - name: Clean up old workspaces
         shell: bash
@@ -57,7 +53,6 @@ jobs:
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           cd ${{ env.NEW_WORKSPACE }}
-          cd python
           pip install -U wheel pybind11 cython cmake
           pip install -v '.[build]'
 

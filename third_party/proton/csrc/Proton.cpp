@@ -2,6 +2,7 @@
 
 #include <map>
 #include <stdexcept>
+#include <string>
 
 #include "pybind11/pybind11.h"
 #include "pybind11/stl.h"
@@ -17,17 +18,19 @@ static void initProton(pybind11::module &&m) {
       "start",
       [](const std::string &path, const std::string &contextSourceName,
          const std::string &dataName, const std::string &profilerName,
-         const std::string &profilerPath, long sycl_queue) {
+         const std::string &mode, const std::string &profilerPath,
+         long sycl_queue, const std::string &utils_cache_path) {
         void *queue = reinterpret_cast<void *>(sycl_queue);
         auto sessionId = SessionManager::instance().addSession(
-            path, profilerName, profilerPath, contextSourceName, dataName,
-            queue);
+            path, profilerName, profilerPath, contextSourceName, dataName, mode,
+            queue, utils_cache_path);
         SessionManager::instance().activateSession(sessionId);
         return sessionId;
       },
       pybind11::arg("path"), pybind11::arg("contextSourceName"),
       pybind11::arg("dataName"), pybind11::arg("profilerName"),
-      pybind11::arg("profilerPath"), pybind11::arg("sycl_queue") = 0);
+      pybind11::arg("mode") = "", pybind11::arg("profilerPath") = "",
+      pybind11::arg("sycl_queue") = 0, pybind11::arg("utils_cache_path") = "");
 
   m.def("activate", [](size_t sessionId) {
     SessionManager::instance().activateSession(sessionId);
@@ -44,13 +47,11 @@ static void initProton(pybind11::module &&m) {
         []() { SessionManager::instance().deactivateAllSessions(); });
 
   m.def("finalize", [](size_t sessionId, const std::string &outputFormat) {
-    auto outputFormatEnum = parseOutputFormat(outputFormat);
-    SessionManager::instance().finalizeSession(sessionId, outputFormatEnum);
+    SessionManager::instance().finalizeSession(sessionId, outputFormat);
   });
 
   m.def("finalize_all", [](const std::string &outputFormat) {
-    auto outputFormatEnum = parseOutputFormat(outputFormat);
-    SessionManager::instance().finalizeAllSessions(outputFormatEnum);
+    SessionManager::instance().finalizeAllSessions(outputFormat);
   });
 
   m.def("record_scope", []() { return Scope::getNewScopeId(); });
@@ -69,6 +70,28 @@ static void initProton(pybind11::module &&m) {
 
   m.def("exit_op", [](size_t scopeId, const std::string &name) {
     SessionManager::instance().exitOp(Scope(scopeId, name));
+  });
+
+  m.def("init_function_metadata",
+        [](uint64_t functionId, const std::string &functionName,
+           const std::vector<std::pair<size_t, std::string>> &scopeIdNames,
+           const std::vector<std::pair<size_t, size_t>> &scopeIdParents,
+           const std::string &metadataPath) {
+          SessionManager::instance().initFunctionMetadata(
+              functionId, functionName, scopeIdNames, scopeIdParents,
+              metadataPath);
+        });
+
+  m.def("enter_instrumented_op", [](uint64_t streamId, uint64_t functionId,
+                                    uint64_t buffer, size_t size) {
+    SessionManager::instance().enterInstrumentedOp(
+        streamId, functionId, reinterpret_cast<uint8_t *>(buffer), size);
+  });
+
+  m.def("exit_instrumented_op", [](uint64_t streamId, uint64_t functionId,
+                                   uint64_t buffer, size_t size) {
+    SessionManager::instance().exitInstrumentedOp(
+        streamId, functionId, reinterpret_cast<uint8_t *>(buffer), size);
   });
 
   m.def("enter_state", [](const std::string &state) {

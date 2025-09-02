@@ -1,10 +1,10 @@
 add_triton_library(TritonIntelGPUToLLVM
+    AllocateSharedMemory.cpp
     ArithOpsToLLVM.cpp
     BF16Casts.cpp
     ControlFlowOpToLLVM.cpp
     ConvertLayoutOpToLLVM.cpp
     DotOpToLLVM/DPAS.cpp
-    DotOpToLLVM/FMA.cpp
     DotOpToLLVM.cpp
     ElementwiseOpToLLVM.cpp
     Fp4ToFpOpToLLVM.cpp
@@ -32,7 +32,7 @@ add_triton_library(TritonIntelGPUToLLVM
     MLIRSPIRVToLLVM
     TritonGENIR
     TritonGENToLLVM
+    TritonGENToSPIRV
     TritonIntelGPUIR
     TritonIntelUtils
-    TritonProtonToLLVM
 )

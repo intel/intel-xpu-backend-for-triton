@@ -87,7 +87,7 @@ triton::AMD::TritonIntegerRangeAnalysis::maybeGetTripCount(
 namespace {
 
 constexpr int64_t kDefaultMaxTripCount = 1024;
-constexpr int64_t kDefaultMaxPrograms = 2 << 15; // 65536
+constexpr uint64_t kDefaultMaxPrograms = 1L << 31; // 2147483648
 
 void getEnclosingLoops(Operation &op, SmallVector<LoopLikeOpInterface> &ops) {
   Operation *currOp = op.getParentOp();
@@ -306,7 +306,7 @@ TritonIntegerRangeAnalysis::maybeGetAssumedRange(Value anchor) const {
 
 int64_t
 TritonIntegerRangeAnalysis::getTotalLoopTripCount(LoopLikeOpInterface loop) {
-  SmallVector loops{loop};
+  SmallVector<LoopLikeOpInterface> loops{loop};
   getEnclosingLoops(*loop, loops);
   return std::accumulate(loops.begin(), loops.end(), (int64_t)1,
                          [this](int64_t accum, LoopLikeOpInterface loop) {
@@ -601,7 +601,8 @@ struct FoldTrueCmpIOp : OpRewritePattern<arith::CmpIOp> {
 
   LogicalResult matchAndRewrite(arith::CmpIOp cmpOp,
                                 PatternRewriter &rewriter) const override {
-    if (cmpIIsStaticallyTrue(*solver, cmpOp)) {
+    if (llvm::isa<IntegerType, IndexType>(cmpOp.getType()) &&
+        cmpIIsStaticallyTrue(*solver, cmpOp)) {
       if (failed(mlir::dataflow::maybeReplaceWithConstant(*solver, rewriter,
                                                           cmpOp.getResult()))) {
         LDBG("failed to replace with constant op: " << cmpOp);

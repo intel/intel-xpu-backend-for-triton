@@ -6,6 +6,8 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
+#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 
@@ -88,8 +90,8 @@ static void createPrefetchOp(scf::ForOp &forOp, tt::LoadOp loadOp) {
   OpBuilder builder(forOp);
   builder.setInsertionPoint(loadOp);
   auto prefetchOp = builder.create<ttgi::PrefetchOp>(
-      loadOp->getLoc(), loadOp.getPtr(), loadOp.getCache(), loadOp.getEvict(),
-      loadOp.getIsVolatile());
+      loadOp->getLoc(), loadOp.getPtr(), loadOp.getMask(), loadOp.getCache(),
+      loadOp.getEvict(), loadOp.getIsVolatile());
 
   // inherit attributes from the load operation
   auto attrs = loadOp->getAttrDictionary();
@@ -116,8 +118,7 @@ static std::optional<LoadDotOperand> loadDotOperand(tt::LoadOp loadOp) {
 
 /// Collect loads to pipeline. Return success if we can pipeline this loop.
 static void collectOpsToPipeline(scf::ForOp forOp,
-                                 SmallVectorImpl<LoadDotOperand> &loadOps,
-                                 bool supportRegularPtr) {
+                                 SmallVectorImpl<LoadDotOperand> &loadOps) {
   assert(loadOps.empty() && "Expecting an empty list of load operations");
 
   ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
@@ -127,18 +128,19 @@ static void collectOpsToPipeline(scf::ForOp forOp,
   // operations in the loop body block.
   for (Operation &op : forOp) {
     if (auto loadOp = dyn_cast<tt::LoadOp>(&op)) {
-      Value ptr = loadOp.getPtr();
-      bool isBlockPtr = mlir::triton::isTensorPointerType(ptr.getType());
-      if (!isBlockPtr && !supportRegularPtr)
-        continue;
-
-      // Check if the memory is structed densely. If not, we do not prefetch it
-      // to avoid polluting the cache.
+      // In order to avoid polluting the cache, do not prefetch loads unless the
+      // memory they reference is densely structured.
       Attribute blockIOAttr =
           loadOp->getAttr(mlir::triton::gpu::intel::TritonIntelGPUDialect::
                               getBlockIOAttrName());
       if (!blockIOAttr) {
         LDBG("Skipping LoadOp without block_io attribute" << *loadOp);
+        continue;
+      }
+
+      // Currently we can only prefetch 2D loads.
+      if (cast<RankedTensorType>(loadOp.getType()).getRank() != 2) {
+        LDBG("Skipping LoadOp with non 2D tensor type" << *loadOp);
         continue;
       }
 
@@ -149,36 +151,21 @@ static void collectOpsToPipeline(scf::ForOp forOp,
   }
 }
 
-/// Combine the current mask with the given predicate.
-static Value getPredMask(RewriterBase &rewriter, Type typeLike,
-                         Value currentMask, Value pred) {
-  Location loc = pred.getLoc();
-  Value mask = pred;
-  Type maskType = tt::getI1SameShape(typeLike);
-
-  if (isa<RankedTensorType>(maskType))
-    mask = rewriter.create<tt::SplatOp>(loc, maskType, pred);
-
-  return currentMask ? rewriter.create<arith::AndIOp>(loc, mask, currentMask)
-                     : mask;
-}
-
 /// Function to mask operations during scheduling.
 static Operation *predicateOp(RewriterBase &rewriter, Operation *op,
                               Value pred) {
   OpBuilder::InsertionGuard guard(rewriter);
-  if (mlir::isMemoryEffectFree(op) || isa<ttgi::PrefetchOp>(op))
+  if (mlir::isMemoryEffectFree(op))
     return op;
 
-  if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
-    rewriter.setInsertionPoint(loadOp);
-    Value mask = getPredMask(rewriter, loadOp.getPtr().getType(),
-                             loadOp.getMask(), pred);
-    loadOp.getMaskMutable().assign(mask);
-    return loadOp;
-  }
-
-  llvm_unreachable("don't know how to predicate this operation");
+  return TypeSwitch<Operation *, Operation *>(op)
+      .Case<tt::LoadOp, ttgi::PrefetchOp>([&](auto op) {
+        rewriter.setInsertionPoint(op);
+        Value mask = tt::getPredMask(rewriter, op.getPtr().getType(),
+                                     op.getMask(), pred);
+        op.getMaskMutable().assign(mask);
+        return op;
+      });
 }
 
 /// Helper to get the defining operation of a value.
@@ -302,12 +289,11 @@ createSchedule(scf::ForOp forOp, int numStages) {
 }
 
 bool ttgi::preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
-                                        bool supportRegularPtr,
                                         mlir::scf::PipeliningOption &options) {
   // 1. First collect "interesting" operations with a stage where to schedule
   // them. This gives a coarse scheduling for the loop.
   SmallVector<LoadDotOperand> loads;
-  collectOpsToPipeline(forOp, loads, supportRegularPtr);
+  collectOpsToPipeline(forOp, loads);
   if (loads.empty()) {
     LDBG("No loads to pipeline");
     return false;
@@ -315,8 +301,25 @@ bool ttgi::preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
 
   LLVM_DEBUG({
     DBGS() << "Loads to pipeline:\n";
-    for (const LoadDotOperand &load : loads)
-      DBGS() << "  " << *load.load << "\n";
+    unsigned prefetchBytes = 0;
+    for (LoadDotOperand &load : loads) {
+      tt::LoadOp &op = load.load;
+      if (auto tensorType =
+              dyn_cast<RankedTensorType>(op.getResult().getType())) {
+        ArrayRef<int64_t> shape = tensorType.getShape();
+        auto numElems = product<int64_t>(shape);
+        prefetchBytes +=
+            numElems * tensorType.getElementType().getIntOrFloatBitWidth() / 8;
+      }
+      DBGS() << "  " << *op << "\n";
+    }
+    prefetchBytes *= numStages;
+    constexpr unsigned BYTES_PER_KB = 1024;
+    DBGS() << "Total number of bytes to prefetch: "
+           << (prefetchBytes > BYTES_PER_KB
+                   ? std::to_string(prefetchBytes / BYTES_PER_KB) + " KB"
+                   : std::to_string(prefetchBytes) + " B")
+           << " in " << numStages << " stages\n";
   });
 
   // 2. Create the prefetching operations for the loads collected.

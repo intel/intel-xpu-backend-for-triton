@@ -1,3 +1,4 @@
+#include "TritonAMDGPUTransforms/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -7,6 +8,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "third_party/amd/include/Analysis/AxisInfoExt.h"
 #include "third_party/amd/include/Analysis/RangeAnalysis.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "third_party/amd/lib/TritonAMDGPUToLLVM/Utility.h"
@@ -17,20 +19,21 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/TypeSwitch.h"
 
-#define GEN_PASS_CLASSES
-#include "TritonAMDGPUTransforms/Passes.h"
-
 #undef DEBUG_TYPE
 #define DEBUG_TYPE "tritonamdgpu-convert-buffer-ops"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
-using namespace mlir;
 using ::mlir::LLVM::AMD::getVectorSize;
 using mlir::triton::AMD::ISAFamily;
 
 namespace ttg = mlir::triton::gpu;
 namespace tt = mlir::triton;
+
+namespace mlir {
+
+#define GEN_PASS_DEF_TRITONAMDGPUCONVERTTOBUFFEROPS
+#include "TritonAMDGPUTransforms/Passes.h.inc"
 
 namespace {
 
@@ -200,6 +203,10 @@ bool verifyNonNegativeExpr(
             return verifyNonSmallerByAssumption(op.getLhs(), assumptions,
                                                 op.getRhs());
           })
+          .Case<triton::amdgpu::ExtractSliceOp>([&](auto op) {
+            return verifyNonNegativeExpr(op->getOperand(0), assumptions,
+                                         solver);
+          })
           .Default([&](Operation *) {
             // Conservatively assume that the expression is negative
             LDBG("  Unhandled op, cannot assume non-negative");
@@ -252,7 +259,96 @@ Value getBlockStride(Location loc, Value offset, PatternRewriter &rewriter) {
   return nullptr;
 }
 
-} // namespace
+// /*-----------------AtomicCAS-------------------*/
+
+struct ConvertTritonAtomicCASOpToBufferAtomicCAS
+    : public mlir::OpRewritePattern<triton::AtomicCASOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  ConvertTritonAtomicCASOpToBufferAtomicCAS(
+      mlir::MLIRContext *context,
+      DenseMap<Value, SetVector<Operation *>> &assumptions,
+      ModuleAxisInfoAnalysis &axisAnalysisPass,
+      std::shared_ptr<DataFlowSolver> solver)
+      : mlir::OpRewritePattern<triton::AtomicCASOp>(context),
+        assumptions(assumptions), axisAnalysisPass(axisAnalysisPass),
+        solver(std::move(solver)) {}
+
+  mlir::LogicalResult
+  matchAndRewrite(triton::AtomicCASOp op,
+                  PatternRewriter &rewriter) const override {
+    LDBG("Try to convert: " << op);
+    Value ptr = op.getPtr();
+    auto sem = op.getSem();
+    auto scope = op.getScope();
+
+    if (!canUseBufferOps(ptr, assumptions, solver)) {
+      return rewriter.notifyMatchFailure(op, "canUseBufferOps check failed");
+    }
+
+    switch (scope) {
+    case MemSyncScope::GPU:
+    case MemSyncScope::CTA:
+      break;
+    default:
+      return rewriter.notifyMatchFailure(op, "CAS with unsupported scope");
+    }
+    LDBG("CAS supported scope");
+
+    switch (sem) {
+    case MemSemantic::RELAXED:
+    case MemSemantic::RELEASE:
+    case MemSemantic::ACQUIRE:
+    case MemSemantic::ACQUIRE_RELEASE:
+      break;
+    default:
+      return rewriter.notifyMatchFailure(
+          op, "CAS with unsupported memory ordering");
+    }
+
+    auto addPtrOp = ptr.getDefiningOp<triton::AddPtrOp>();
+    Value tensorPtr = addPtrOp.getPtr();
+    Value tensorOffset = addPtrOp.getOffset();
+    auto splatOp = tensorPtr.getDefiningOp<triton::SplatOp>();
+    Value basePtr = splatOp.getSrc();
+
+    // Buffer atomic CAS only supports i32/i64
+    auto checkType = getElementTypeOrSelf(op.getVal());
+    bool isSupportedType = checkType.isInteger(32) || checkType.isInteger(64);
+    if (!isSupportedType) {
+      return rewriter.notifyMatchFailure(op, "AtomicCAS with unsupported type");
+    }
+    LDBG("AtomicCAS supported type");
+
+    // Buffer atomics support 32 and 64-bit operations, so inputs must be at
+    // least 32-bits. Otherwise, fall back to the existing path for atomics
+    auto opValueType = op.getVal().getType();
+    auto opBitWidth = 0;
+    if (auto tensorType = dyn_cast<RankedTensorType>(opValueType)) {
+      auto elemBitWidth = tensorType.getElementTypeBitWidth();
+      opBitWidth =
+          getVectorSize(basePtr, tensorOffset, axisAnalysisPass) * elemBitWidth;
+    } else {
+      opBitWidth = opValueType.getIntOrFloatBitWidth();
+    }
+
+    if (opBitWidth < 32) {
+      return rewriter.notifyMatchFailure(
+          op, "BufferAtomicCAS requires opBitWidth >= 32");
+    }
+    Value blockStride = getBlockStride(op->getLoc(), tensorOffset, rewriter);
+    rewriter.replaceOpWithNewOp<triton::amdgpu::BufferAtomicCASOp>(
+        op, op.getVal().getType(), basePtr, tensorOffset, op.getCmp(),
+        op.getVal(), blockStride, sem, scope);
+    return success();
+  }
+
+private:
+  // Assumptions collected through the function
+  const DenseMap<Value, SetVector<Operation *>> &assumptions;
+  ModuleAxisInfoAnalysis &axisAnalysisPass;
+  std::shared_ptr<DataFlowSolver> solver;
+};
 
 struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     : public mlir::OpRewritePattern<triton::AtomicRMWOp> {
@@ -262,10 +358,10 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
       mlir::MLIRContext *context,
       DenseMap<Value, SetVector<Operation *>> &assumptions,
       ModuleAxisInfoAnalysis &axisAnalysisPass,
-      std::shared_ptr<DataFlowSolver> solver)
+      std::shared_ptr<DataFlowSolver> solver, ISAFamily isaFamily)
       : mlir::OpRewritePattern<triton::AtomicRMWOp>(context),
         assumptions(assumptions), axisAnalysisPass(axisAnalysisPass),
-        solver(std::move(solver)) {}
+        solver(std::move(solver)), isaFamily(isaFamily) {}
 
   mlir::LogicalResult
   matchAndRewrite(triton::AtomicRMWOp op,
@@ -322,6 +418,14 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
       return rewriter.notifyMatchFailure(op, "RMW with unsupported type");
     }
     LDBG("RMW supported type");
+
+    // float16 is the only 16-bit dtype supported by buffer atomic fadd on
+    // gfx942
+    if (isaFamily == ISAFamily::CDNA3 && checkType.isBF16() &&
+        atomicRmwOp == RMWOp::FADD) {
+      return rewriter.notifyMatchFailure(op, "RMW FADD does not support bf16");
+    }
+    LDBG("RMW FADD supported 16-bit type");
 
     auto vecSize = getVectorSize(ptr, axisAnalysisPass);
     // f16/bf16 dtypes could only be efficiently calculated using instructions
@@ -387,6 +491,7 @@ private:
   DenseMap<Value, SetVector<Operation *>> assumptions;
   ModuleAxisInfoAnalysis &axisAnalysisPass;
   std::shared_ptr<DataFlowSolver> solver;
+  ISAFamily isaFamily;
 };
 
 // Workaround to allow static_assert(false) on older compilers as it was
@@ -443,15 +548,6 @@ struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
 
       assert(bufferLoadOp);
 
-      // Propagate `OpIdxAttr` if the currently processed `tt.LoadOp` was
-      // labeled it. The attribute needs to be preserved for custom instruction
-      // scheduling.
-      if (auto opIdxAttr =
-              op->template getAttrOfType<triton::amdgpu::OpIdxAttr>(
-                  triton::amdgpu::OpIdxAttr::getMnemonic())) {
-        bufferLoadOp->setAttr(triton::amdgpu::OpIdxAttr::getMnemonic(),
-                              opIdxAttr);
-      }
       rewriter.replaceOp(op, bufferLoadOp);
       return success();
     }
@@ -508,15 +604,13 @@ private:
   std::shared_ptr<DataFlowSolver> solver;
 };
 
-class TritonAMDGPUConvertToBufferOpsPass
-    : public TritonAMDGPUConvertToBufferOpsBase<
-          TritonAMDGPUConvertToBufferOpsPass> {
+} // anonymous namespace
 
-public:
-  TritonAMDGPUConvertToBufferOpsPass() = default;
-  TritonAMDGPUConvertToBufferOpsPass(StringRef archGen) {
-    this->archGenerationName = archGen.data();
-  };
+struct TritonAMDGPUConvertToBufferOpsPass
+    : impl::TritonAMDGPUConvertToBufferOpsBase<
+          TritonAMDGPUConvertToBufferOpsPass> {
+  using Base::Base;
+
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     RewritePatternSet patterns(context);
@@ -532,7 +626,7 @@ public:
     if (failed(solver->initializeAndRun(getOperation())))
       return signalPassFailure();
 
-    ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
+    AMD::ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
     patterns.add<ConvertTritonLoadToBufferLoad<tt::LoadOp>,
                  ConvertTritonLoadToBufferLoad<ttg::AsyncCopyGlobalToLocalOp>,
                  ConvertTritonStoreToBufferStore>(context, assumptions, solver);
@@ -540,16 +634,17 @@ public:
     // Gate buffer atomics behind CDNA3 for now
     // GFX942-specific assumptions regarding cache coherence are made when
     // lowering to LLVM
-    if (ISAFamily::CDNA3 == triton::AMD::deduceISAFamily(archGenerationName))
+    triton::AMD::ISAFamily isaFamily =
+        triton::AMD::deduceISAFamily(archGenerationName);
+    if (this->allowBufferAtomics && ISAFamily::CDNA3 == isaFamily)
       patterns.add<ConvertTritonAtomicRMWOpToBufferAtomicRMW>(
-          context, assumptions, axisInfoAnalysis, solver);
+          context, assumptions, axisInfoAnalysis, solver, isaFamily);
+    patterns.add<ConvertTritonAtomicCASOpToBufferAtomicCAS>(
+        context, assumptions, axisInfoAnalysis, solver);
 
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
   }
 };
 
-std::unique_ptr<Pass>
-mlir::createTritonAMDGPUConvertToBufferOpsPass(std::string archGen) {
-  return std::make_unique<TritonAMDGPUConvertToBufferOpsPass>(archGen);
-}
+} // namespace mlir

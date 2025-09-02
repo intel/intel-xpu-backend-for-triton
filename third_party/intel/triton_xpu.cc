@@ -3,6 +3,7 @@
 #include "passes.h"
 
 #include "llvm/IR/InstIterator.h"
+#include "llvm/IR/Operator.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
@@ -16,14 +17,15 @@
 #include "intel/include/Target/LLVMIR/Dialect/TritonGEN/TritonGENToLLVMIRTranslation.h"
 #include "intel/include/Target/LLVMIR/PostProcess.h"
 #include "intel/include/TritonAnnotateModule/Passes.h"
+#include "intel/include/TritonGENToLLVM/Passes.h"
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h"
-#include "intel/include/TritonRaiseBlockPointer/Passes.h"
 #include "intel/include/TritonToTritonGPUWarp/Passes.h"
 #include "intel/lib/Target/LLVMIR/LLVMPasses.h"
 
 #include "intel/include/Target/SPIRV/SPIRVTranslation.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 
+#include <pybind11/gil.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
@@ -39,24 +41,6 @@ struct BreakStructPhiNodesPass : PassInfoMixin<BreakStructPhiNodesPass> {
 
 using namespace mlir::triton;
 using ret = py::return_value_policy;
-
-// Macros to create a pass that takes pass options.
-#define ADD_PASS_WRAPPER_OPT_1(name, builder, ty0)                             \
-  m.def(name,                                                                  \
-        [](mlir::PassManager &pm, ty0 val0) { pm.addPass(builder({val0})); })
-#define ADD_PASS_WRAPPER_OPT_2(name, builder, ty0, ty1)                        \
-  m.def(name, [](mlir::PassManager &pm, ty0 val0, ty1 val1) {                  \
-    pm.addPass(builder({val0, val1}));                                         \
-  })
-#define ADD_PASS_WRAPPER_OPT_3(name, builder, ty0, ty1, ty2)                   \
-  m.def(name, [](mlir::PassManager &pm, ty0 val0, ty1 val1, ty2 val2) {        \
-    pm.addPass(builder({val0, val1, val2}));                                   \
-  })
-#define ADD_PASS_WRAPPER_OPT_6(name, builder, ty0, ty1, ty2, ty3, ty4, ty5)    \
-  m.def(name, [](mlir::PassManager &pm, ty0 val0, ty1 val1, ty2 val2,          \
-                 ty3 val3, ty4 val4, ty5 val5) {                               \
-    pm.addPass(builder({val0, val1, val2, val3, val4, val5}));                 \
-  })
 
 static uint32_t findKernels(llvm::Module &M,
                             std::set<llvm::Function *> &functions) {
@@ -74,44 +58,71 @@ void init_triton_intel_passes_ttir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_convert_tdesc_to_block_pointer",
                      intel::createTritonIntelTensorDescToBlockPointer);
   ADD_PASS_WRAPPER_0("add_remove_masks", intel::createTritonIntelRemoveMasks);
-  ADD_PASS_WRAPPER_OPT_1("add_raise_block_pointer",
-                         intel::createTritonRaiseBlockPointer, bool);
-  ADD_PASS_WRAPPER_OPT_1("add_convert_to_ttgpuir_warp",
-                         intel::createConvertTritonToTritonGPUWarp, unsigned);
+  ADD_PASS_OPTION_WRAPPER_1("add_convert_to_ttgpuir_warp",
+                            intel::createConvertTritonToTritonGPUWarp,
+                            unsigned);
 }
 
 void init_triton_intel_passes_ttgpuir(py::module &&m) {
-  ADD_PASS_WRAPPER_OPT_3("add_to_llvmir",
-                         gpu::intel::createConvertTritonIntelGPUToLLVM, bool,
-                         bool, bool);
+  ADD_PASS_OPTION_WRAPPER_2("add_to_llvmir",
+                            gpu::intel::createConvertTritonIntelGPUToLLVM, bool,
+                            bool);
+  ADD_PASS_WRAPPER_0("add_gen_to_llvm", createConvertTritonGENToLLVM);
   ADD_PASS_WRAPPER_0("add_accelerate_matmul",
                      gpu::intel::createTritonIntelGPUAccelerateMatmul);
   ADD_PASS_WRAPPER_0("add_rewrite_stack_ptr",
                      gpu::intel::createTritonIntelGPURewriteStackPtr);
-  ADD_PASS_WRAPPER_OPT_3("add_pipeline",
-                         gpu::intel::createTritonIntelGPUPipeline, int, bool,
-                         enum gpu::intel::SplitBarrierScope);
+  ADD_PASS_OPTION_WRAPPER_2("add_pipeline",
+                            gpu::intel::createTritonIntelGPUPipeline, int,
+                            enum gpu::intel::SplitBarrierScope);
+  ADD_PASS_WRAPPER_0("add_allocate_shared_memory",
+                     gpu::intel::createIntelAllocateSharedMemory);
   ADD_PASS_WRAPPER_0("add_remove_layout_conversions",
                      gpu::intel::createTritonIntelGPURemoveLayoutConversions);
+  ADD_PASS_WRAPPER_0("add_optimize_dot_operands",
+                     gpu::intel::createTritonIntelGPUOptimizeDotOperands);
   ADD_PASS_WRAPPER_0("add_coalesce", gpu::intel::createTritonIntelGPUCoalesce);
-  ADD_PASS_WRAPPER_OPT_2("add_prefetch_block",
-                         gpu::intel::createTritonIntelGPUPrefetchBlock, int,
-                         bool);
+  ADD_PASS_OPTION_WRAPPER_2("add_prefetch_block",
+                            gpu::intel::createTritonIntelGPUPrefetchBlock, int,
+                            bool);
   ADD_PASS_WRAPPER_0("add_distribute_to_warps",
                      gpu::intel::createTritonIntelGPUDistributeToWarps);
   ADD_PASS_WRAPPER_0("add_match_target_size",
                      gpu::intel::createTritonIntelGPUMatchTargetSize);
   ADD_PASS_WRAPPER_0("add_schedule_load",
                      gpu::intel::createTritonIntelGPUScheduleLoad);
-  ADD_PASS_WRAPPER_OPT_6("add_triton_annotate_module",
-                         gpu::intel::createTritonAnnotateModule, unsigned, bool,
-                         bool, bool, unsigned, const std::string &);
+
+  py::class_<gpu::intel::TritonAnnotateModuleOptions>(m,
+                                                      "AnnotateModuleOptions")
+      .def(py::init<>())
+      .def_readwrite("min_sg_size",
+                     &gpu::intel::TritonAnnotateModuleOptions::minSGSize)
+      .def_readwrite("support_sg_2d_block",
+                     &gpu::intel::TritonAnnotateModuleOptions::supportSG2DBlock)
+      .def_readwrite("support_dpas",
+                     &gpu::intel::TritonAnnotateModuleOptions::supportDPAS)
+      .def_readwrite(
+          "support_bf16_conversion",
+          &gpu::intel::TritonAnnotateModuleOptions::supportBF16Conversion)
+      .def_readwrite(
+          "support_16bit_atomics",
+          &gpu::intel::TritonAnnotateModuleOptions::support16BitAtomics)
+      .def_readwrite("threads_per_warp",
+                     &gpu::intel::TritonAnnotateModuleOptions::threadsPerWarp)
+      .def_readwrite("target_arch",
+                     &gpu::intel::TritonAnnotateModuleOptions::targetArch);
+  ADD_PASS_OPTION_WRAPPER_1("add_triton_annotate_module",
+                            gpu::intel::createTritonAnnotateModule,
+                            gpu::intel::TritonAnnotateModuleOptions);
+
   ADD_PASS_WRAPPER_0("add_reduce_data_duplication",
                      gpu::intel::createTritonIntelGPUReduceDataDuplication);
   ADD_PASS_WRAPPER_0("add_materialize_block_pointer",
                      gpu::intel::createTritonIntelGPUMaterializeBlockPointer);
   ADD_PASS_WRAPPER_0("add_optimize_reduction_locality",
                      gpu::intel::createTritonIntelGPUOptimizeReductionLocality);
+  ADD_PASS_WRAPPER_0("add_reduce_variable_liveness",
+                     gpu::intel::createTritonIntelGPUReduceVariableLiveness);
 }
 
 void init_triton_intel_passes_arith(py::module &&m) {
@@ -151,107 +162,111 @@ void init_triton_intel(py::module &&m) {
       .value("Workgroup", gpu::intel::SplitBarrierScope::Workgroup)
       .value("Subgroup", gpu::intel::SplitBarrierScope::Subgroup);
 
-  m.def("optimize_module", [](llvm::Module *mod,
-                              const llvm::OptimizationLevel &opt) {
-    if (mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT"))
-      return;
-    // Check to see if we are passing a list of flags to disable optimizations.
-    auto flagList = mlir::triton::tools::getStrEnv("DISABLE_LLVM_OPT");
-    using namespace llvm;
-    if (!flagList.empty()) {
-      auto options = llvm::cl::getRegisteredOptions();
-      llvm::SmallVector<StringRef, 3> split;
-      StringRef(flagList.c_str()).split(split, ',');
-      for (auto flag : split) {
-        auto optIt = options.find(flag);
-        if (optIt != options.end()) {
-          auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
-          *optPtr = true;
+  m.def(
+      "optimize_module",
+      [](llvm::Module *mod, const llvm::OptimizationLevel &opt) {
+        if (mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT"))
+          return;
+        // Check to see if we are passing a list of flags to disable
+        // optimizations.
+        auto flagList = mlir::triton::tools::getStrEnv("DISABLE_LLVM_OPT");
+        using namespace llvm;
+        if (!flagList.empty()) {
+          auto options = llvm::cl::getRegisteredOptions();
+          llvm::SmallVector<StringRef, 3> split;
+          StringRef(flagList.c_str()).split(split, ',');
+          for (auto flag : split) {
+            auto optIt = options.find(flag);
+            if (optIt != options.end()) {
+              auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
+              *optPtr = true;
+            }
+          }
         }
-      }
-    }
-    LoopAnalysisManager lam;
-    FunctionAnalysisManager fam;
-    CGSCCAnalysisManager cgam;
-    ModuleAnalysisManager mam;
+        LoopAnalysisManager lam;
+        FunctionAnalysisManager fam;
+        CGSCCAnalysisManager cgam;
+        ModuleAnalysisManager mam;
 
-    PassInstrumentationCallbacks *instrCbPtr = nullptr;
-    PassInstrumentationCallbacks passInstrCb;
-    StandardInstrumentations standardInstr(mod->getContext(),
-                                           /*DebugLogging*/ true);
-    if (mlir::triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
-      auto optMap = llvm::cl::getRegisteredOptions();
-      auto optIt = optMap.find("print-after-all");
-      if (optIt != optMap.end()) {
-        auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
-        *optPtr = true;
-      }
-      standardInstr.registerCallbacks(passInstrCb, &mam);
-      instrCbPtr = &passInstrCb;
-    }
+        PassInstrumentationCallbacks *instrCbPtr = nullptr;
+        PassInstrumentationCallbacks passInstrCb;
+        StandardInstrumentations standardInstr(mod->getContext(),
+                                               /*DebugLogging*/ true);
+        if (mlir::triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
+          auto optMap = llvm::cl::getRegisteredOptions();
+          auto optIt = optMap.find("print-after-all");
+          if (optIt != optMap.end()) {
+            auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
+            *optPtr = true;
+          }
+          standardInstr.registerCallbacks(passInstrCb, &mam);
+          instrCbPtr = &passInstrCb;
+        }
 
-    PipelineTuningOptions tuningOptions;
-    tuningOptions.LoopUnrolling = true;
-    tuningOptions.LoopInterleaving = true;
-    tuningOptions.LoopVectorization = true;
-    // SLPVectorizer causes test_core.py::test_dot_mulbroadcasted to fail.
-    // It vectorizes @llvm.fmuladd.f32 with @llvm.fmuladd.v32f32. We can
-    // consider to reenable SLP vectorization when the failure is
-    // investigated.
-    tuningOptions.SLPVectorization = false;
+        PipelineTuningOptions tuningOptions;
+        tuningOptions.LoopUnrolling = true;
+        tuningOptions.LoopInterleaving = true;
+        tuningOptions.LoopVectorization = true;
+        // SLPVectorizer causes test_core.py::test_dot_mulbroadcasted to fail.
+        // It vectorizes @llvm.fmuladd.f32 with @llvm.fmuladd.v32f32. We can
+        // consider to reenable SLP vectorization when the failure is
+        // investigated.
+        tuningOptions.SLPVectorization = false;
 
-    PassBuilder pb(nullptr /*targetMachine*/, tuningOptions, std::nullopt,
-                   instrCbPtr);
+        PassBuilder pb(nullptr /*targetMachine*/, tuningOptions, std::nullopt,
+                       instrCbPtr);
 
-    std::string pluginFile =
-        mlir::triton::tools::getStrEnv("LLVM_PASS_PLUGIN_PATH");
+        std::string pluginFile =
+            mlir::triton::tools::getStrEnv("LLVM_PASS_PLUGIN_PATH");
 
-    if (!pluginFile.empty()) {
-      // TODO: Add some logging here that we inserted a pass into the LLVM
-      // pass pipeline
-      auto passPlugin = llvm::PassPlugin::Load(pluginFile);
-      if (!passPlugin) {
-        llvm::Error Err = passPlugin.takeError();
-        std::string ErrMsg =
-            "Pass Plugin Error: " + llvm::toString(std::move(Err));
-        throw std::runtime_error(ErrMsg);
-      }
-      passPlugin->registerPassBuilderCallbacks(pb);
-    }
+        if (!pluginFile.empty()) {
+          // TODO: Add some logging here that we inserted a pass into the LLVM
+          // pass pipeline
+          auto passPlugin = llvm::PassPlugin::Load(pluginFile);
+          if (!passPlugin) {
+            llvm::Error Err = passPlugin.takeError();
+            std::string ErrMsg =
+                "Pass Plugin Error: " + llvm::toString(std::move(Err));
+            throw std::runtime_error(ErrMsg);
+          }
+          passPlugin->registerPassBuilderCallbacks(pb);
+        }
 
-    pb.registerModuleAnalyses(mam);
-    pb.registerCGSCCAnalyses(cgam);
-    pb.registerFunctionAnalyses(fam);
-    pb.registerLoopAnalyses(lam);
-    pb.crossRegisterProxies(lam, fam, cgam, mam);
+        pb.registerModuleAnalyses(mam);
+        pb.registerCGSCCAnalyses(cgam);
+        pb.registerFunctionAnalyses(fam);
+        pb.registerLoopAnalyses(lam);
+        pb.crossRegisterProxies(lam, fam, cgam, mam);
 
-    ModulePassManager mpm;
-    pb.registerVectorizerStartEPCallback(
-        [&](llvm::FunctionPassManager &fpm, llvm::OptimizationLevel level) {
-          // Triton generates large structure of scalars which may pessimise
-          // optimizations, we run a pass to break up phi of struct to make
-          // sure all the struct are removed for the following passes.
-          fpm.addPass(BreakStructPhiNodesPass());
-          fpm.addPass(InstCombinePass());
-        });
-    pb.registerPeepholeEPCallback(
-        [&](llvm::FunctionPassManager &fpm, llvm::OptimizationLevel level) {
-          // The Triton masked load pattern can generate instances where the
-          // mask value causes undefined behavior in sdiv/srem instructions. The
-          // language allows this UB as the result of those arithmetic
-          // instructions is never used, and control flow to avoid computation
-          // of these instructions would negatively affect performance. But,
-          // LLVM SimplifyCFG aggressively marks code paths with undefined
-          // behavior as dead. This can result in removal of the mask path and
-          // incorrect results from legal Triton kernels due to masked elements
-          // being used in computation. Run a pass to add a freeze instruction
-          // between masked loads and sdiv/srem to signal to LLVM we consider
-          // the sdiv/srem operands to be well defined.
-          fpm.addPass(FreezeMaskedDivRemPass());
-        });
-    mpm.addPass(pb.buildPerModuleDefaultPipeline(opt));
-    mpm.run(*mod, mam);
-  });
+        ModulePassManager mpm;
+        pb.registerVectorizerStartEPCallback(
+            [&](llvm::FunctionPassManager &fpm, llvm::OptimizationLevel level) {
+              // Triton generates large structure of scalars which may pessimise
+              // optimizations, we run a pass to break up phi of struct to make
+              // sure all the struct are removed for the following passes.
+              fpm.addPass(BreakStructPhiNodesPass());
+              fpm.addPass(InstCombinePass());
+            });
+        pb.registerPeepholeEPCallback(
+            [&](llvm::FunctionPassManager &fpm, llvm::OptimizationLevel level) {
+              // The Triton masked load pattern can generate instances where the
+              // mask value causes undefined behavior in sdiv/srem instructions.
+              // The language allows this UB as the result of those arithmetic
+              // instructions is never used, and control flow to avoid
+              // computation of these instructions would negatively affect
+              // performance. But, LLVM SimplifyCFG aggressively marks code
+              // paths with undefined behavior as dead. This can result in
+              // removal of the mask path and incorrect results from legal
+              // Triton kernels due to masked elements being used in
+              // computation. Run a pass to add a freeze instruction between
+              // masked loads and sdiv/srem to signal to LLVM we consider the
+              // sdiv/srem operands to be well defined.
+              fpm.addPass(FreezeMaskedDivRemPass());
+            });
+        mpm.addPass(pb.buildPerModuleDefaultPipeline(opt));
+        mpm.run(*mod, mam);
+      },
+      py::call_guard<py::gil_scoped_release>());
 
   // load dialects
   m.def("load_dialects", [](mlir::MLIRContext &context) {
@@ -273,12 +288,26 @@ void init_triton_intel(py::module &&m) {
   // fast math semantics on all arithmetic operations.
   // https://github.com/intel/intel-xpu-backend-for-triton/issues/3862
   m.def("set_fast_math", [](llvm::Module *mod) {
+    std::optional<bool> fastMath = mlir::triton::tools::isEnvValueBool(
+        mlir::triton::tools::getStrEnv("TRITON_INTEL_FAST_MATH"));
+    std::optional<bool> enableFpFusion = mlir::triton::tools::isEnvValueBool(
+        mlir::triton::tools::getStrEnv("TRITON_DEFAULT_FP_FUSION"));
+    if (fastMath.has_value() && !fastMath.value())
+      return;
+
     using namespace llvm;
     for (Function &func : *mod) {
       for (Instruction &inst : instructions(func)) {
         if (auto *op = dyn_cast<FPMathOperator>(&inst)) {
           FastMathFlags FMF;
-          FMF.setFast(true);
+          // Default to allow contract when default fp fusion is not disabled.
+          if ((!enableFpFusion.has_value() || enableFpFusion.value()) &&
+              !fastMath.has_value()) {
+            if (op->getOpcode() == Instruction::FAdd ||
+                op->getOpcode() == Instruction::FMul)
+              FMF.setAllowContract(true);
+          } else if (fastMath.has_value() && fastMath.value())
+            FMF.setFast(true);
           inst.setFastMathFlags(FMF);
         }
       }

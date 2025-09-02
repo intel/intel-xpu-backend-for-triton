@@ -69,6 +69,7 @@ private:
       opOffsetVal = b.i32_val(opOffset);
     }
 
+#if 0
     Value globalScratchPtr = LLVM::getGlobalScratchPtr(
         loc, rewriter, targetInfo, caller, opOffsetVal);
     auto callee = cast<FunctionOpInterface>(callOp.resolveCallable());
@@ -81,7 +82,12 @@ private:
     }
 
     promotedOperands.push_back(globalScratchPtr);
-
+#else
+    promotedOperands.push_back(LLVM::getGlobalScratchPtr(
+        loc, rewriter, targetInfo, caller, opOffsetVal));
+    promotedOperands.push_back(
+        LLVM::getProfileScratchPtr(loc, rewriter, caller));
+#endif
     return promotedOperands;
   }
   LLVM::CallOp

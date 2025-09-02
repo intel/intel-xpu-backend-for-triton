@@ -18,12 +18,12 @@ on:
           - torchbench
         default: all
       mode:
-        description: Inference, inference-no-freezing, or training
+        description: Inference, inference-with-freezing, or training
         type: choice
         options:
           - all
           - inference
-          - inference-no-freezing
+          - inference-with-freezing
           - training
         default: all
       dtype:
@@ -38,14 +38,14 @@ on:
           - float32
         default: all
       models:
-        description: Run all models or a subset from .github/models/performance/{suite}.txt
+        description: Run all models or a subset from .github/models/accuracy/{suite}.txt
         type: choice
         options:
           - all
           - subset
         default: all
       check_all_subset_models:
-        description: In "subset" mode, check all subset models
+        description: In "subset" mode, keep going after errors
         type: boolean
         default: false
       only_one_model:
@@ -70,7 +70,7 @@ permissions: read-all
 jobs:
   setup:
     name: Setup
-    runs-on: Linux
+    runs-on: linux
     outputs:
       suite: ${{ steps.set-matrix.outputs.suite }}
       mode: ${{ steps.set-matrix.outputs.mode }}
@@ -86,7 +86,7 @@ jobs:
             suite='["${{ inputs.suite }}"]'
           fi
           if [[ -z "${{ inputs.mode }}" || "${{ inputs.mode }}" == "all" ]]; then
-            mode='["inference", "inference-no-freezing", "training"]'
+            mode='["inference", "inference-with-freezing", "training"]'
           else
             mode='["${{ inputs.mode }}"]'
           fi
@@ -99,18 +99,17 @@ jobs:
           echo "mode=$mode" >> $GITHUB_OUTPUT
           echo "dtype=$dtype" >> $GITHUB_OUTPUT
 
-  print_inputs:
-    name: Print inputs
-    needs: setup
-    runs-on: Linux
-    steps:
       - name: Print inputs
         run: |
-          echo "${{ toJSON(github.event.inputs) }}"
+          cat <<EOF
+          ${{ toJSON(github.event.inputs) }}
+          EOF
 
       - name: Print setup outputs
         run: |
-          echo "${{ toJSON(needs.setup.outputs) }}"
+          cat <<EOF
+          ${{ toJSON(steps.set-matrix.outputs) }}
+          EOF
 
   run_tests:
     name: Run test matrix
@@ -131,5 +130,56 @@ jobs:
       models: ${{ inputs.models }}
       check_all_subset_models: ${{ inputs.check_all_subset_models || false }}
       only_one_model: ${{ inputs.only_one_model }}
-      runner_label: ${{ inputs.runner_label }}
+      runner_label: ${{ inputs.runner_label || 'max1100' }}
       TORCH_COMPILE_DEBUG: ${{ inputs.TORCH_COMPILE_DEBUG }}
+
+  summary:
+    name: Aggregate and check results
+    needs: [run_tests, setup]
+    runs-on: linux
+    if: always()
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: separate-reports
+
+      - name: Run aggregation script
+        run: |
+          pip install pandas numpy
+          ls -la separate-reports
+          echo "Local dir"
+          ls -la ./
+          python scripts/e2e_checks/aggregate_e2e_results.py \
+             --input-dir separate-reports \
+             --output-dir aggregated-results
+
+      - name: Upload aggregated results
+        uses: actions/upload-artifact@v4
+        with:
+          name: aggregated-results-${{ github.run_id }}
+          path: aggregated-results
+          include-hidden-files: true
+
+      - name: Check results against reference
+        if: ${{ inputs.models == 'all' && inputs.only_one_model == '' }}
+        run: |
+          PYTORCH_XPU_OPS_REF="$(<.github/pins/e2e_reference_torch-xpu-ops.txt)"
+          git clone https://github.com/intel/torch-xpu-ops.git
+          cd torch-xpu-ops
+          git checkout $PYTORCH_XPU_OPS_REF
+          cd ..
+          ./scripts/e2e_checks/compare_reference.sh \
+            separate-reports \
+            "./torch-xpu-ops" \
+            '${{ needs.setup.outputs.suite }}' \
+            '${{ needs.setup.outputs.mode }}' \
+            '${{ needs.setup.outputs.dtype }}'

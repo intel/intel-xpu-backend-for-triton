@@ -51,8 +51,9 @@ public:
     scaledA = cvtDotOperand(scaledA, 0);
     auto scaledB = scaleArg(rewriter, scaledDotOp, 1, computeType);
     scaledB = cvtDotOperand(scaledB, 1);
-    auto newDot = rewriter.create<DotOp>(scaledDotOp.getLoc(), scaledA, scaledB,
-                                         scaledDotOp.getC());
+    auto newDot =
+        rewriter.create<DotOp>(scaledDotOp.getLoc(), scaledA, scaledB,
+                               scaledDotOp.getC(), InputPrecision::TF32, 0);
 
     rewriter.replaceOpWithNewOp<ConvertLayoutOp>(scaledDotOp,
                                                  scaledDotOp.getType(), newDot);
@@ -148,31 +149,19 @@ private:
                                        DotScaledOp scaledDotOp, ModuleOp mod,
                                        TypedValue<RankedTensorType> mxfp,
                                        TypedValue<RankedTensorType> scale,
-                                       FloatType computeType, int dim) const {
+                                       int dim) const {
     // Implement tl.where(scale == 0xFF, float("nan"), mxfp)
     auto loc = scale.getLoc();
 
-    // FIXME: use large int type (int32) for comparing with 0xFF to avoid
-    // accidently masking non-NaN values to NaN.
-    // This piece of code will be removed after
-    // https://github.com/intel/intel-xpu-backend-for-triton/issues/3605
-    FloatType largeFpType = computeType == rewriter.getF16Type()
-                                ? rewriter.getF32Type()
-                                : computeType;
-    int intWidth = largeFpType.getIntOrFloatBitWidth();
-    auto intType = rewriter.getIntegerType(intWidth);
-    // Use large int scale type, incase it get nonNaN to NaN
-    auto scaleTy = scale.getType().clone(intType);
-    auto zexted = rewriter.create<arith::ExtUIOp>(loc, scaleTy, scale);
-
     // Scale is NaN
+    auto scaleTy = scale.getType();
     auto constFF = rewriter.create<arith::ConstantOp>(
         loc, scaleTy,
         DenseElementsAttr::get(scaleTy,
                                APInt(scaleTy.getElementTypeBitWidth(), 0xff)));
     auto scaleIsNan = cast<TypedValue<RankedTensorType>>(
         rewriter
-            .create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq, zexted,
+            .create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq, scale,
                                    constFF)
             .getResult());
     auto cond = broadcastScale(rewriter, scaledDotOp, mod, scaleIsNan, dim);
@@ -197,6 +186,7 @@ private:
                                         DotScaledOp scaledDotOp, int opIdx,
                                         FloatType computeType) const {
     auto v = opIdx == 0 ? scaledDotOp.getA() : scaledDotOp.getB();
+    auto res = scaledDotOp.getD();
     auto scale = opIdx == 0 ? scaledDotOp.getAScale() : scaledDotOp.getBScale();
     auto isFp4 =
         ScaleDotElemType::E2M1 ==
@@ -211,8 +201,14 @@ private:
 
     // 0) Upcast value to computeType (fp16/bf16)
     if (isFp4) {
-      // We always pack along the fastest moving dimension, kDim
-      v = rewriter.create<Fp4ToFpOp>(loc, v, computeType, kDim);
+      auto resShape = res.getType().getShape();
+      auto vShape = v.getType().getShape();
+      auto packDim = kDim;
+      if ((opIdx == 0 && resShape[rank - 2] != vShape[rank - 2]) ||
+          (opIdx == 1 && resShape[rank - 1] != vShape[rank - 1])) {
+        packDim = (packDim + 1) % 2;
+      }
+      v = rewriter.create<Fp4ToFpOp>(loc, v, computeType, packDim);
     } else {
       auto vType16 = v.getType().clone(computeType);
       v = cast<TypedValue<RankedTensorType>>(
@@ -247,7 +243,7 @@ private:
       return mxfp;
 
     // 4) If the scale is NaN, return NaN, else return the scaled value.
-    return maskNan(rewriter, scaledDotOp, mod, mxfp, scale, computeType, kDim);
+    return maskNan(rewriter, scaledDotOp, mod, mxfp, scale, kDim);
   }
 };
 

@@ -25,13 +25,6 @@ namespace mlir::triton::gpu::intel {
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h.inc"
 } // namespace mlir::triton::gpu::intel
 
-namespace mlir {
-FailureOr<LLVM::LLVMFuncOp>
-convertFuncOpToLLVMFuncOp(FunctionOpInterface funcOp,
-                          ConversionPatternRewriter &rewriter,
-                          const LLVMTypeConverter &converter);
-}
-
 using namespace mlir;
 
 namespace {
@@ -51,7 +44,7 @@ public:
   explicit TritonLLVMConversionTarget(MLIRContext &ctx)
       : ConversionTarget(ctx) {
     addLegalDialect<LLVM::LLVMDialect>();
-    addIllegalDialect<triton::TritonGEN::TritonGENDialect>();
+    addLegalDialect<triton::TritonGEN::TritonGENDialect>();
     addIllegalDialect<triton::TritonDialect>();
     addIllegalDialect<triton::gpu::TritonGPUDialect>();
     addIllegalDialect<triton::gpu::intel::TritonIntelGPUDialect>();
@@ -68,10 +61,8 @@ struct ConvertTritonGPUToLLVM
           ConvertTritonGPUToLLVM> {
   using ConvertTritonIntelGPUToLLVMBase::ConvertTritonIntelGPUToLLVMBase;
   ConvertTritonGPUToLLVM() = default;
-  ConvertTritonGPUToLLVM(bool advancedPath, bool oneMatrixPerLoadForBT,
-                         bool useTileLoadLinearLayout) {
+  ConvertTritonGPUToLLVM(bool advancedPath, bool useTileLoadLinearLayout) {
     this->advancedPath = advancedPath;
-    this->oneMatrixPerLoadForBT = oneMatrixPerLoadForBT;
     this->useTileLoadLinearLayout = useTileLoadLinearLayout;
   }
 
@@ -94,14 +85,13 @@ struct ConvertTritonGPUToLLVM
                               getSupportDPASAttrName()) &&
              "Target do not support blocked load/mma");
     mlir::triton::intel::TritonGPUToLLVMPipelineManager pipelineManager(
-        mod, context, isAdvancedPathEnabled, oneMatrixPerLoadForBT,
-        useTileLoadLinearLayout);
+        mod, context, isAdvancedPathEnabled, useTileLoadLinearLayout);
     mlir::LowerToLLVMOptions option(context);
     auto targetInfo = mlir::triton::intel::createTargetInfo(mod);
     TritonIntelGPUToLLVMTypeConverter typeConverter(
         context, option, *targetInfo, isAdvancedPathEnabled);
     TritonLLVMConversionTarget convTarget(*context);
-    int numWarps = triton::gpu::lookupNumWarps(&*mod.getOps().begin());
+    int numWarps = triton::gpu::lookupNumWarps(mod);
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
@@ -155,6 +145,8 @@ struct ConvertTritonGPUToLLVM
 
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();
+
+    fixUpLoopAnnotation(mod);
 
     mod.walk([&](LLVM::LLVMFuncOp funcOp) {
       for (unsigned i = 0; i < funcOp.getNumArguments(); ++i) {

@@ -400,7 +400,11 @@ private:
       return lhs.getStride(dim) * rhs.getConstantValue().value();
     if (rhs.getStride(dim) > 0 && lhs.getConstantValue().has_value())
       return lhs.getConstantValue().value() * rhs.getStride(dim);
-    if (lhs.getStride(dim) == 0 || rhs.getStride(dim) == 0)
+    auto strideZero = [&](const AxisInfo axisInfo) {
+      return axisInfo.getConstantValue().has_value() ||
+             axisInfo.getStride(dim) == 0 || !isa<TensorType>(op.getType());
+    };
+    if (strideZero(lhs) && strideZero(rhs))
       return 0;
     return -1;
   }
@@ -1263,6 +1267,46 @@ void AxisInfoAnalysis::visitForOpInductionVar(
 
 } // anonymous namespace
 
+ModuleAxisInfoAnalysis::ModuleAxisInfoAnalysis(ModuleOp moduleOp)
+    : triton::ModuleAxisInfoAnalysis(moduleOp) {
+  funcMap.clear();
+
+  SmallVector<FunctionOpInterface> funcs;
+  for (auto root : getRoots()) {
+    walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
+        // Pre-order edge walk callback
+        [](CallOpInterface callOp, FunctionOpInterface funcOp) {},
+        // Post-order node walk callback
+        [&](FunctionOpInterface funcOp) {
+          funcs.push_back(funcOp);
+          funcMap.try_emplace(funcOp, AxisInfoMapT{});
+        });
+  }
+  SetVector<FunctionOpInterface> sortedFuncs(funcs.begin(), funcs.end());
+  SymbolTableCollection symbolTable;
+  for (auto funcOp : llvm::reverse(sortedFuncs)) {
+    initialize(funcOp);
+    funcOp.walk([&](CallOpInterface callOp) {
+      auto callee = dyn_cast<FunctionOpInterface>(
+          callOp.resolveCallableInTable(&symbolTable));
+      update(callOp, callee);
+    });
+  }
+}
+
+AxisInfo *ModuleAxisInfoAnalysis::getAxisInfo(Value value) {
+  auto funcOp = value.getParentRegion()->getParentOfType<FunctionOpInterface>();
+  auto *axisInfoMap = getFuncData(funcOp);
+  if (!axisInfoMap) {
+    return nullptr;
+  }
+  auto it = axisInfoMap->find(value);
+  if (it == axisInfoMap->end()) {
+    return nullptr;
+  }
+  return &(it->second);
+}
+
 unsigned ModuleAxisInfoAnalysis::getContiguity(Value value) {
   auto tensorTy = ttgi::getRankedTensorType(value.getType());
   if (!tensorTy)
@@ -1270,8 +1314,7 @@ unsigned ModuleAxisInfoAnalysis::getContiguity(Value value) {
   // FIXME: This is not as good as it could be, as we don't need to restrict
   // the analysis to one dimension. We should determine contiguity on the
   // flattenOuts() layout
-  auto linAttr =
-      gpu::toLinearEncoding(tensorTy.getEncoding(), tensorTy.getShape());
+  auto linAttr = gpu::toLinearEncoding(tensorTy);
   auto order = linAttr.getOrder();
   unsigned align = getAlignment(value);
 
@@ -1292,8 +1335,7 @@ unsigned ModuleAxisInfoAnalysis::getAlignment(Value value) {
   auto *axisInfo = getAxisInfo(value);
   if (!axisInfo)
     return 1;
-  auto linAttr =
-      gpu::toLinearEncoding(tensorTy.getEncoding(), tensorTy.getShape());
+  auto linAttr = gpu::toLinearEncoding(tensorTy);
   auto order = linAttr.getOrder();
 
   // FIXME: should this be an assertion instead?
@@ -1334,8 +1376,7 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
   auto *axisInfo = getAxisInfo(mask);
   if (!axisInfo)
     return 1;
-  auto linAttr =
-      gpu::toLinearEncoding(tensorTy.getEncoding(), tensorTy.getShape());
+  auto linAttr = gpu::toLinearEncoding(tensorTy);
 
   // FIXME: should this be an assertion instead?
   // Temporarily added to avoid crashing on some tests.

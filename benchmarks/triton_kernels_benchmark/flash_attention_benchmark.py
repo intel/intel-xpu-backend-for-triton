@@ -1,6 +1,6 @@
 import os
 import contextlib
-from typing import Optional
+from typing import Callable, Optional
 
 import torch
 from torch.profiler import record_function
@@ -9,7 +9,7 @@ import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
 from triton_kernels_benchmark import xetla_kernel
-import numpy as np
+from triton_kernels_benchmark import cutlass_kernel
 
 
 # pylint: disable=unused-argument
@@ -64,18 +64,22 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
 
 
 @triton.jit
-def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
-              stride_qz: tl.constexpr, stride_qh: tl.constexpr, stride_qm: tl.constexpr, stride_qk: tl.constexpr,  #
-              stride_kz: tl.constexpr, stride_kh: tl.constexpr, stride_kn: tl.constexpr, stride_kk: tl.constexpr,  #
-              stride_vz: tl.constexpr, stride_vh: tl.constexpr, stride_vk: tl.constexpr, stride_vn: tl.constexpr,  #
-              stride_oz: tl.constexpr, stride_oh: tl.constexpr, stride_om: tl.constexpr, stride_on: tl.constexpr,  #
-              Z: tl.constexpr, H: tl.constexpr,  #
-              N_CTX: tl.constexpr,  #
-              BLOCK_M: tl.constexpr,  #
-              BLOCK_DMODEL: tl.constexpr,  #
-              BLOCK_N: tl.constexpr,  #
-              STAGE: tl.constexpr  #
-              ):  # pylint: disable=unused-argument
+def _attn_fwd_with_block_pointers(Q, K, V, sm_scale, M, Out,  #
+                                  stride_qz: tl.constexpr, stride_qh: tl.constexpr, stride_qm: tl.constexpr,
+                                  stride_qk: tl.constexpr,  #
+                                  stride_kz: tl.constexpr, stride_kh: tl.constexpr, stride_kn: tl.constexpr,
+                                  stride_kk: tl.constexpr,  #
+                                  stride_vz: tl.constexpr, stride_vh: tl.constexpr, stride_vk: tl.constexpr,
+                                  stride_vn: tl.constexpr,  #
+                                  stride_oz: tl.constexpr, stride_oh: tl.constexpr, stride_om: tl.constexpr,
+                                  stride_on: tl.constexpr,  #
+                                  Z: tl.constexpr, H: tl.constexpr,  #
+                                  N_CTX: tl.constexpr,  #
+                                  BLOCK_M: tl.constexpr,  #
+                                  BLOCK_DMODEL: tl.constexpr,  #
+                                  BLOCK_N: tl.constexpr,  #
+                                  STAGE: tl.constexpr  #
+                                  ):  # pylint: disable=unused-argument
 
     start_m = tl.program_id(2)
     off_z = tl.program_id(0)
@@ -132,8 +136,8 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
     # load q: it will stay in SRAM throughout
     q = tl.load(Q_block_ptr)
     # stage 1: off-band
-    # For causal = True, STAGE = 3 and _attn_fwd_inner gets 1 as its STAGE
-    # For causal = False, STAGE = 1, and _attn_fwd_inner gets 3 as its STAGE
+    # For causal = True, STAGE = 3 the kernel gets 1 as its STAGE
+    # For causal = False, STAGE = 1, the kernel gets 3 as its STAGE
     if STAGE & 1:
         acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_block_ptr, V_block_ptr,  #
                                         start_m, qk_scale,  #
@@ -150,21 +154,18 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
     # epilogue
     m_i += tl.math.log2(l_i)
     acc = acc / l_i[:, None]
-    # m_ptrs = M + off_hz * N_CTX + offs_m
-    # tl.store(m_ptrs, m_i)
-    tl.store(O_block_ptr, acc.to(Out.type.element_ty))
+    tl.store(O_block_ptr, acc.to(Out.type.element_ty), boundary_check=(0, 1))
 
 
 configs = [
-    triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN, 'grf_mode': 'large', 'one_matrix_per_load_for_bt': True}, num_stages=s, num_warps=w) \
+    triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN, 'grf_mode': 'large'}, num_stages=s, num_warps=w) \
     for BM in [128, 256] \
-    for BN in [32, 64, 128] \
+    for BN in [32, 64] \
     for s in [2, 3, 4] \
     for w in [8, 16, 32] \
     ]
 
-tuner = triton.autotune(configs, key=['N_CTX', 'BLOCK_DMODEL'])
-tune_attn_fwd = tuner(_attn_fwd)
+tuner = triton.autotune(configs, key=['N_CTX', 'BLOCK_DMODEL', 'STAGE'])
 
 
 @triton.jit
@@ -418,9 +419,11 @@ def _attn_bwd(Q, K, V, sm_scale,  #
 
 
 class _attention(torch.autograd.Function):
+    tune_attn_fwd: Callable = None
+    attn_fwd: Callable = None
 
     @staticmethod
-    def forward(ctx, q, k, v, causal, sm_scale):
+    def forward(ctx, q, k, v, causal, sm_scale, dq, dk, dv, delta):
         # shape constraints
         Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
         assert Lq == Lk and Lk == Lv
@@ -439,7 +442,7 @@ class _attention(torch.autograd.Function):
 
         if os.getenv('TRITON_INTEL_ADVANCED_PATH', '0') == '0':
             # default pipeline
-            tune_attn_fwd[grid](
+            _attention.tune_attn_fwd[grid](  # pylint: disable=unsubscriptable-object
                 q, k, v, sm_scale, M, o,  #
                 q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
                 k.stride(0), k.stride(1), k.stride(2), k.stride(3),  #
@@ -452,7 +455,7 @@ class _attention(torch.autograd.Function):
                 split_barriers_scope='None',  # possible scope value: 'Subgroup','Workgroup'
             )
         else:
-            _attn_fwd[grid](
+            _attention.attn_fwd[grid](  # pylint: disable=unsubscriptable-object
                 q, k, v, sm_scale, M, o,  #
                 q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
                 k.stride(0), k.stride(1), k.stride(2), k.stride(3),  #
@@ -470,7 +473,7 @@ class _attention(torch.autograd.Function):
                 advanced_path=True,  #
             )
 
-        ctx.save_for_backward(q, k, v, o, M)
+        ctx.save_for_backward(q, k, v, o, M, dq, dk, dv, delta)
         ctx.grid = grid
         ctx.sm_scale = sm_scale
         ctx.HEAD_DIM = Lk
@@ -485,12 +488,9 @@ class _attention(torch.autograd.Function):
         with record_function(
                 '__profile_kernel_of_func_bwd_fa'
         ) if benchmark_suite.BENCHMARKING_METHOD == 'UPSTREAM_PYTORCH_PROFILER' else contextlib.nullcontext():
-            q, k, v, o, M = ctx.saved_tensors
+            q, k, v, o, M, dq, dk, dv, delta = ctx.saved_tensors
             assert do.is_contiguous()
             assert q.stride() == k.stride() == v.stride() == o.stride() == do.stride()
-            dq = torch.empty_like(q)
-            dk = torch.empty_like(k)
-            dv = torch.empty_like(v)
             BATCH, N_HEAD, N_CTX = q.shape[:3]
             PRE_BLOCK = 128
             NUM_WARPS, NUM_STAGES = 4, 5
@@ -502,7 +502,6 @@ class _attention(torch.autograd.Function):
             PRE_BLOCK = 128
             assert N_CTX % PRE_BLOCK == 0
             pre_grid = (N_CTX // PRE_BLOCK, BATCH * N_HEAD)
-            delta = torch.empty_like(M)
             _attn_bwd_preprocess[pre_grid](
                 o, do,  #
                 delta,  #
@@ -523,30 +522,16 @@ class _attention(torch.autograd.Function):
                 num_stages=NUM_STAGES  #
             )
 
-        return dq, dk, dv, None, None
+        return dq, dk, dv, None, None, None, None, None, None
 
 
 attention = _attention.apply
 
 
-def check_close(f_val, f_ref, atol, rtol):
-    x = f_val()
-    y = f_ref()
-    x = x.cpu().detach().numpy()
-    y = y.cpu().detach().numpy()
-    close = np.isclose(x, y, atol=atol, rtol=rtol)
-    num_close = np.count_nonzero(close)
-    num_not_close = close.size - num_close
-    num_perc = num_not_close / close.size * 100
-    if num_not_close != 0:
-        print(f'Warning: {num_not_close}, out of {close.size} elements do not match ({num_perc:.2f}%) in XeTLA impl')
-
-
 def get_benchmark(
     providers_filter: Optional[list[str]] = None,
     fa_kernel_mode='fwd',
-    xetla_assert_result=False,
-    xetla_warn_mismatch=True,
+    attn_fwd=_attn_fwd_with_block_pointers,
 ):
     """
     Returns a Mark object containing a Benchmark object constructed at runtime and parameterized by the provided option values.
@@ -556,8 +541,13 @@ def get_benchmark(
     supported_providers = {
         'triton': 'Triton',
         'xetla': 'XeTLA',
+        'cutlass': 'CUTLASS',
     }
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
+
+    # Initialize _attention class forward kernel (untuned for the advanced path and tuned for the default path).
+    _attention.attn_fwd = attn_fwd
+    _attention.tune_attn_fwd = tuner(attn_fwd)
 
     @benchmark_suite.perf_report(
         benchmark_suite.Benchmark(
@@ -592,8 +582,13 @@ def get_benchmark(
         k = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype, requires_grad=True)
         v = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype, requires_grad=True)
         sm_scale = 0.125
+        dq, dk, dv, delta = None, None, None, None
         if MODE == 'bwd':
             sm_scale = 1.3
+            dq = torch.empty_like(q)
+            dk = torch.empty_like(k)
+            dv = torch.empty_like(v)
+            delta = torch.empty_like(q)
         quantiles = [0.5, 0.0, 1.0]
         atol = 1e-1 if N_CTX == 16384 else 1e-2
         # FIXME: use torch sdpa for result check after https://github.com/intel/intel-xpu-backend-for-triton/issues/2042 fixed
@@ -613,7 +608,7 @@ def get_benchmark(
             )
 
         elif provider == 'triton':
-            triton_fn = lambda: attention(q, k, v, CAUSAL, sm_scale)
+            triton_fn = lambda: attention(q, k, v, CAUSAL, sm_scale, dq, dk, dv, delta)
             if MODE == 'bwd':
                 triton_o = triton_fn()
                 triton_do = torch.randn_like(triton_o)
@@ -636,33 +631,6 @@ def get_benchmark(
             )
 
         elif provider == 'xetla':
-            xetla_fn = None
-            if MODE == 'fwd':
-                module_name = f'flash_attn_causal_{CAUSAL}'.lower()
-                func = getattr(xetla_kernel, module_name)
-                out = torch.empty_like(q, device='xpu', dtype=dtype)
-                size_score = Z * H * N_CTX * N_CTX
-                size_attn_mask = Z * N_CTX * N_CTX
-                dropout_mask = torch.empty((size_score, ), device='xpu', dtype=torch.uint8)
-                bias = torch.empty((size_attn_mask, ), device='xpu', dtype=dtype)
-                size_ml = Z * H * N_CTX
-                m = torch.empty((size_ml, ), device='xpu', dtype=torch.float)
-                l = torch.empty((size_ml, ), device='xpu', dtype=torch.float)
-
-                def xetla_fwd_fn():
-                    func(q, k, v, out, dropout_mask, bias, m, l, Z, H, D_HEAD, N_CTX, N_CTX, sm_scale)
-                    return out
-
-                xetla_fn = xetla_fwd_fn
-
-                def check_xetla_fwd_result():
-                    if xetla_assert_result:
-                        benchmark_suite.assert_close(xetla_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='xetla to torch')
-                    elif xetla_warn_mismatch:
-                        check_close(xetla_fn, torch_fn, atol, 1e-3)
-
-                check_xetla_fwd_result()
-
             if MODE == 'bwd':
                 module_name = f'flash_attn_bwd_causal_{CAUSAL}'.lower()
                 func = getattr(xetla_kernel, module_name)
@@ -690,14 +658,43 @@ def get_benchmark(
                          bias_strideN, bias_strideF, attn_mask_padding)
                     return out
 
-                xetla_fn = xetla_bwd_fn
+                _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
+                    xetla_bwd_fn,
+                    n_warmup=10,
+                    n_repeat=10,
+                    quantiles=quantiles,
+                )
 
-            _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
-                xetla_fn,
-                n_warmup=10,
-                n_repeat=10,
-                quantiles=quantiles,
-            )
+            else:
+                min_ms = float('nan')
+                max_ms = float('nan')
+                mean = float('nan')
+                cv = float('nan')
+
+        elif provider == 'cutlass':
+            if MODE == 'fwd':
+                name = 'attention'
+                func = getattr(cutlass_kernel, name)
+                out = torch.zeros((Z, H, N_CTX, D_HEAD), device='xpu', dtype=torch.float32, requires_grad=True)
+
+                def cutlass_fwd_fn():
+                    func(q, k, v, out, Z, H, H, N_CTX, N_CTX, D_HEAD, D_HEAD, CAUSAL, sm_scale)
+                    return out
+
+                benchmark_suite.assert_close(cutlass_fwd_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='cutlass to torch')
+
+                _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
+                    cutlass_fwd_fn,
+                    n_warmup=10,
+                    n_repeat=10,
+                    quantiles=quantiles,
+                )
+
+            else:
+                min_ms = float('nan')
+                max_ms = float('nan')
+                mean = float('nan')
+                cv = float('nan')
 
         else:
             raise NotImplementedError(f'Unsupported provider {provider}')
@@ -715,9 +712,5 @@ def get_benchmark(
 
 
 if __name__ == '__main__':
-    _benchmark = get_benchmark(
-        fa_kernel_mode=os.getenv('FA_KERNEL_MODE', 'fwd'),
-        xetla_assert_result=(os.getenv('XETLA_ASSERT_RESULT', '0') == '1'),
-        xetla_warn_mismatch=(os.getenv('XETLA_WARN_MISMATCH', '1') == '1'),
-    )
+    _benchmark = get_benchmark(fa_kernel_mode=os.getenv('FA_KERNEL_MODE', 'fwd'), )
     _benchmark.run(show_plots=False, print_data=True)

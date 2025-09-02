@@ -221,7 +221,7 @@ struct DpasOperandPattern final : OpRewritePattern<ReduceOp> {
     // Allowing single operand for now
     if (operands.size() != 1)
       return failure();
-    // Check this is has `triton_intel_gpu.dpas` encoding.
+    // Check this is has `ttig.dpas` encoding.
     Value operand = operands.front();
     auto type = cast<RankedTensorType>(operand.getType());
     // Only support reduction after 2D-dot for now.

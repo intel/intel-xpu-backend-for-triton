@@ -20,13 +20,12 @@
 
 #include "sycl_functions.h"
 
-#define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #include <Python.h>
-#include <numpy/arrayobject.h>
 
-static std::vector<ze_device_handle_t> g_devices;
 static std::vector<std::pair<sycl::device, ze_device_handle_t>>
     g_sycl_l0_device_list;
+
+static std::vector<sycl::device> sycl_opencl_device_list;
 
 template <typename T>
 static inline T checkSyclErrors(const std::tuple<T, ze_result_t> tuple) {
@@ -170,10 +169,14 @@ sycl::context get_default_context(const sycl::device &sycl_device) {
 #ifdef WIN32
   sycl::context ctx;
   try {
+#if __SYCL_COMPILER_VERSION >= 20250604
+    ctx = platform.khr_get_default_context();
+#else
     ctx = platform.ext_oneapi_get_default_context();
+#endif
   } catch (const std::runtime_error &ex) {
     // This exception is thrown on Windows because
-    // ext_oneapi_get_default_context is not implemented. But it can be safely
+    // khr_get_default_context is not implemented. But it can be safely
     // ignored it seems.
 #if _DEBUG
     std::cout << "ERROR: " << ex.what() << std::endl;
@@ -181,7 +184,11 @@ sycl::context get_default_context(const sycl::device &sycl_device) {
   }
   return ctx;
 #else
+#if __SYCL_COMPILER_VERSION >= 20250604
+  return platform.khr_get_default_context();
+#else
   return platform.ext_oneapi_get_default_context();
+#endif
 #endif
 }
 
@@ -189,10 +196,11 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   const char *name, *build_flags_ptr;
   int shared;
   PyObject *py_bytes;
+  int is_spv;
   int devId;
 
-  if (!PyArg_ParseTuple(args, "sSisi", &name, &py_bytes, &shared,
-                        &build_flags_ptr, &devId)) {
+  if (!PyArg_ParseTuple(args, "sSispi", &name, &py_bytes, &shared,
+                        &build_flags_ptr, &is_spv, &devId)) {
     std::cerr << "loadBinary arg parse failed" << std::endl;
     return NULL;
   }
@@ -208,24 +216,26 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
 
     const auto &sycl_l0_device_pair = g_sycl_l0_device_list[devId];
     const sycl::device sycl_device = sycl_l0_device_pair.first;
+    const auto l0_device = sycl_l0_device_pair.second;
 
     const std::string kernel_name = name;
     const size_t binary_size = PyBytes_Size(py_bytes);
 
     uint8_t *binary_ptr = (uint8_t *)PyBytes_AsString(py_bytes);
     const auto &ctx = get_default_context(sycl_device);
-    const auto l0_device =
-        sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_device);
     const auto l0_context =
         sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
 
-    const auto use_native_code =
-        isEnvValueBool(getStrEnv("TRITON_XPU_GEN_NATIVE_CODE"));
-    const bool is_spv = use_native_code ? !(*use_native_code) : true;
+    ze_device_compute_properties_t compute_properties = {};
+    compute_properties.stype = ZE_STRUCTURE_TYPE_DEVICE_COMPUTE_PROPERTIES;
+    zeDeviceGetComputeProperties(l0_device, &compute_properties);
+    int32_t n_max_threads = compute_properties.maxTotalGroupSize;
 
     auto [l0_module, l0_kernel, n_spills] =
         compileLevelZeroObjects(binary_ptr, binary_size, kernel_name, l0_device,
                                 l0_context, build_flags(), is_spv);
+
+    const bool debugEnabled = getBoolEnv("TRITON_DEBUG");
 
     if (is_spv) {
       constexpr int32_t max_reg_spill = 1000;
@@ -234,8 +244,6 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
       // If the register mode isn't set, and the number of spills is greater
       // than the threshold, recompile the kernel using large GRF mode.
       if (!is_GRF_mode_specified && n_spills > max_reg_spill) {
-        const std::optional<bool> debugEnabled =
-            isEnvValueBool(getStrEnv("TRITON_DEBUG"));
         if (debugEnabled)
           std::cout << "(I): Detected " << n_spills
                     << " spills, recompiling the kernel using large GRF mode"
@@ -244,13 +252,32 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
         build_flags.addLargeGRFSizeFlag();
 
         try {
-          auto [l0_module, l0_kernel, n_spills] = compileLevelZeroObjects(
-              binary_ptr, binary_size, kernel_name, l0_device, l0_context,
-              build_flags(), is_spv);
+          auto [l0_module_dgrf, l0_kernel_dgrf, n_spills_dgrf] =
+              compileLevelZeroObjects(binary_ptr, binary_size, kernel_name,
+                                      l0_device, l0_context, build_flags(),
+                                      is_spv);
 
           if (debugEnabled)
-            std::cout << "(I): Kernel has now " << n_spills << " spills"
+            std::cout << "(I): Kernel has now " << n_spills_dgrf << " spills"
                       << std::endl;
+
+          std::swap(l0_module, l0_module_dgrf);
+          std::swap(l0_kernel, l0_kernel_dgrf);
+          std::swap(n_spills, n_spills_dgrf);
+
+          // clean up the unused module and kernel.
+          auto error_no = zeKernelDestroy(l0_kernel_dgrf);
+          if (error_no != ZE_RESULT_SUCCESS) {
+            std::cerr
+                << "[Ignoring] Intel - Error during destroy unused L0 kernel"
+                << std::endl;
+          }
+          error_no = zeModuleDestroy(l0_module_dgrf);
+          if (error_no != ZE_RESULT_SUCCESS) {
+            std::cerr
+                << "[Ignoring] Intel - Error during destroy unused L0 module"
+                << std::endl;
+          }
         } catch (const std::exception &e) {
           std::cerr << "[Ignoring] Error during Intel loadBinary with large "
                        "registers: "
@@ -259,6 +286,11 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
           build_flags = BuildFlags(build_flags_ptr);
         }
       }
+    }
+
+    if (debugEnabled && n_spills) {
+      std::cout << "(I): Detected " << n_spills << " spills for  \""
+                << kernel_name << "\"" << std::endl;
     }
 
     auto n_regs = build_flags.n_regs();
@@ -278,17 +310,14 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
     auto kernel_bundle_py = PyCapsule_New(reinterpret_cast<void *>(mod),
                                           "kernel_bundle", freeKernelBundle);
 
-    return Py_BuildValue("(OOii)", kernel_bundle_py, kernel_py, n_regs,
-                         n_spills);
+    return Py_BuildValue("(OOiii)", kernel_bundle_py, kernel_py, n_regs,
+                         n_spills, n_max_threads);
 
   } catch (const std::exception &e) {
-    char err[1024] = {0};
-    std::string_view error_str(e.what());
-    strncat(err, error_str.data(), std::min(error_str.size(), size_t(1024)));
     PyGILState_STATE gil_state;
     gil_state = PyGILState_Ensure();
-    PyErr_SetString(PyExc_RuntimeError, err);
-    std::cerr << "Error during Intel loadBinary: " << err << std::endl;
+    PyErr_SetString(PyExc_RuntimeError, e.what());
+    std::cerr << "Error during Intel loadBinary: " << e.what() << std::endl;
     PyGILState_Release(gil_state);
     return NULL;
   }
@@ -311,8 +340,15 @@ extern "C" EXPORT_FUNC PyObject *init_devices(PyObject *cap) {
     g_sycl_l0_device_list.push_back(std::make_pair(
         sycl_devices[i], sycl::get_native<sycl::backend::ext_oneapi_level_zero>(
                              sycl_devices[i])));
-    g_devices.push_back(sycl::get_native<sycl::backend::ext_oneapi_level_zero>(
-        sycl_devices[i]));
+    // workaround to get opencl extensions
+    const auto &name = sycl_devices[i].get_info<sycl::info::device::name>();
+    sycl::device opencl_device([&](const sycl::device &dev) -> int {
+      return (dev.get_backend() == sycl::backend::opencl &&
+              dev.get_info<sycl::info::device::name>() == name)
+                 ? 1
+                 : -1;
+    });
+    sycl_opencl_device_list.push_back(opencl_device);
   }
 
   return Py_BuildValue("(i)", deviceCount);
@@ -326,4 +362,17 @@ extern "C" EXPORT_FUNC PyObject *wait_on_sycl_queue(PyObject *cap) {
   sycl_queue->wait();
 
   return Py_None;
+}
+
+extern "C" EXPORT_FUNC PyObject *has_opencl_extension(int device_id,
+                                                      const char *extension) {
+  if (device_id > sycl_opencl_device_list.size()) {
+    std::cerr << "Device is not found " << std::endl << std::flush;
+    return NULL;
+  }
+  const sycl::device &device = sycl_opencl_device_list[device_id];
+
+  if (sycl::opencl::has_extension(device, extension))
+    Py_RETURN_TRUE;
+  Py_RETURN_FALSE;
 }

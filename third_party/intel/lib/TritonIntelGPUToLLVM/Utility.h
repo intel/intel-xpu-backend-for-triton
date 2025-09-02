@@ -9,6 +9,7 @@
 #ifndef TRITON_CONVERSION_TRITONINTELGPU_TO_LLVM_UTILITY_H
 #define TRITON_CONVERSION_TRITONINTELGPU_TO_LLVM_UTILITY_H
 
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 namespace mlir::LLVM::intel {
@@ -17,6 +18,9 @@ Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i);
 Value shuffleUp(Location loc, RewriterBase &rewriter, Value val, int i);
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i);
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i);
+
+Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,
+              Value selector);
 
 /// Create a predicated block, using \p cond as the condition and \p ops for the
 /// values supplied by the conditional branch to the exit block. The \p

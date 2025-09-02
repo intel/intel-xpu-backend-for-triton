@@ -1,7 +1,9 @@
-#include "Driver/Device.h"
+#include "Device.h"
 #include "Driver/GPU/CudaApi.h"
 #include "Driver/GPU/HipApi.h"
+#ifdef TRITON_BUILD_PROTON_XPU
 #include "Driver/GPU/XpuApi.h"
+#endif
 
 #include "Utility/Errors.h"
 
@@ -14,9 +16,11 @@ Device getDevice(DeviceType type, uint64_t index) {
   if (type == DeviceType::HIP) {
     return hip::getDevice(index);
   }
+#ifdef TRITON_BUILD_PROTON_XPU
   if (type == DeviceType::XPU) {
     return xpu::getDevice(index);
   }
+#endif
   throw std::runtime_error("DeviceType not supported");
 }
 

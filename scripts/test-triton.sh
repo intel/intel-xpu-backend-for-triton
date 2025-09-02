@@ -17,9 +17,11 @@ TEST:
     --benchmarks
     --softmax
     --gemm
-    --attention
+    --flash-attention
+    --flex-attention
     --instrumentation
     --inductor
+    --sglang
 
 OPTION:
     --unskip
@@ -35,7 +37,7 @@ OPTION:
 "
 
 err() {
-    echo $@
+    echo "$@"
     exit 1
 }
 
@@ -54,9 +56,11 @@ TEST_MICRO_BENCHMARKS=false
 TEST_BENCHMARKS=false
 TEST_BENCHMARK_SOFTMAX=false
 TEST_BENCHMARK_GEMM=false
-TEST_BENCHMARK_ATTENTION=false
+TEST_BENCHMARK_FLASH_ATTENTION=false
+TEST_BENCHMARK_FLEX_ATTENTION=false
 TEST_INSTRUMENTATION=false
 TEST_INDUCTOR=false
+TEST_SGLANG=false
 VENV=false
 TRITON_TEST_REPORTS=false
 TRITON_TEST_WARNING_REPORTS=false
@@ -126,8 +130,13 @@ while (( $# != 0 )); do
       TEST_DEFAULT=false
       shift
       ;;
-    --attention)
-      TEST_BENCHMARK_ATTENTION=true
+    --flash-attention)
+      TEST_BENCHMARK_FLASH_ATTENTION=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --flex-attention)
+      TEST_BENCHMARK_FLEX_ATTENTION=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -138,6 +147,11 @@ while (( $# != 0 )); do
       ;;
     --inductor)
       TEST_INDUCTOR=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --sglang)
+      TEST_SGLANG=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -238,13 +252,13 @@ run_unit_tests() {
   echo "***************************************************"
   echo "******      Running Triton CXX unittests     ******"
   echo "***************************************************"
-  cd $TRITON_PROJ/python/build/cmake* || err "****** ERROR: Build Triton first ******"
+  cd $TRITON_PROJ/build/cmake* || err "****** ERROR: Build Triton first ******"
   ctest .
 
   echo "***************************************************"
   echo "******       Running Triton LIT tests        ******"
   echo "***************************************************"
-  cd $TRITON_PROJ/python/build/cmake*/test
+  cd $TRITON_PROJ/build/cmake*/test
   lit -v . || $TRITON_TEST_IGNORE_ERRORS
 }
 
@@ -277,7 +291,7 @@ run_minicore_tests() {
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=language \
     run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py \
-    -k "not test_mxfp and not test_scaled_dot"
+    -k "not test_mxfp and not test_preshuffle_scale_mxfp_cdna4 and not test_scaled_dot"
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=subprocess \
     run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/test_subprocess.py
@@ -300,7 +314,7 @@ run_minicore_tests() {
     run_pytest_command -n ${PYTEST_MAX_PROCESSES:-8} -k "not test_disam_cubin" --verbose tools
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=intel \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu intel/
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu intel/ --ignore=intel/test_mxfp_matmul.py
 
   cd $TRITON_PROJ/third_party/intel/python/test
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=third_party \
@@ -316,8 +330,7 @@ run_mxfp_tests() {
   cd $TRITON_PROJ/python/test/unit
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=mxfp \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py \
-    -k "test_mxfp"
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu intel/test_mxfp_matmul.py
 }
 
 run_scaled_dot_tests() {
@@ -327,7 +340,7 @@ run_scaled_dot_tests() {
   cd $TRITON_PROJ/python/test/unit
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=scaled_dot \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py --ignore=language/test_frontend.py\
     -k "test_scaled_dot"
 }
 
@@ -366,16 +379,9 @@ run_tutorial_tests() {
   run_tutorial_test "06-fused-attention"
   run_tutorial_test "07-extern-functions"
   run_tutorial_test "08-grouped-gemm"
-  TRITON_TEST_REPORTS=false run_tutorial_test "09-persistent-matmul"
+  run_tutorial_test "09-persistent-matmul"
   run_tutorial_test "10-experimental-block-pointer"
   run_tutorial_test "10i-experimental-block-pointer"
-
-  echo "***************************************************"
-  echo "Running with TRITON_INTEL_RAISE_BLOCK_POINTER      "
-  echo "***************************************************"
-
-  TRITON_TEST_REPORTS=false TRITON_INTEL_RAISE_BLOCK_POINTER=1 \
-    run_tutorial_test "03-matrix-multiplication"
 }
 
 run_microbench_tests() {
@@ -411,15 +417,18 @@ run_benchmark_gemm() {
   python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_tensor_desc_benchmark.py
 }
 
-run_benchmark_attention() {
+run_benchmark_flash_attention() {
   echo "****************************************************"
-  echo "*****            Running ATTENTION             *****"
+  echo "*****          Running FlashAttention          *****"
   echo "****************************************************"
   cd $TRITON_PROJ/benchmarks
   pip install .
 
   echo "Forward - Default path:"
   python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
+
+  echo "Forward - with tensor descriptor:"
+  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_tensor_desc_benchmark.py
 
   echo "Forward - Advanced path:"
   TRITON_INTEL_ADVANCED_PATH=1 \
@@ -431,12 +440,23 @@ run_benchmark_attention() {
     python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
 }
 
+run_benchmark_flex_attention() {
+  echo "****************************************************"
+  echo "*****          Running FlexAttention           *****"
+  echo "****************************************************"
+  cd $TRITON_PROJ/benchmarks
+  pip install .
+
+  echo "FlexAttention - causal mask:"
+  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flex_attention_benchmark_causal_mask.py
+}
+
 run_benchmarks() {
   cd $TRITON_PROJ/benchmarks
   pip install .
   for file in $TRITON_PROJ/benchmarks/triton_kernels_benchmark/*.py; do
     benchmark=$(basename -- "$file" .py)
-    if [[ $benchmark = @("__init__"|"benchmark_driver"|"benchmark_testing") ]]; then
+    if [[ $benchmark = @("__init__"|"benchmark_shapes_parser"|"benchmark_testing"|"benchmark_utils"|"build_report") ]]; then
       continue
     fi
     echo
@@ -447,14 +467,15 @@ run_benchmarks() {
 }
 
 run_instrumentation_tests() {
-  INSTRUMENTATION_LIB_DIR=$(ls -1d $TRITON_PROJ/python/build/*lib*/triton/instrumentation) || err "Could not find $TRITON_PROJ/python/build/*lib*/triton/instrumentation, build Triton first"
+  INSTRUMENTATION_LIB_DIR=$(ls -1d $TRITON_PROJ/build/*lib*/triton/instrumentation) || err "Could not find $TRITON_PROJ/build/*lib*/triton/instrumentation, build Triton first"
   INSTRUMENTATION_LIB_NAME=$(ls -1 $INSTRUMENTATION_LIB_DIR/*GPUInstrumentationTestLib* | head -n1)
 
   cd $TRITON_PROJ/python/test/unit
 
+  # FIXME: `-n 1` is not required, but a workaround for pytest-skip, which does report a false positive skip list item not matching to any test.
   TRITON_TEST_SUITE=instrumentation \
     TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${INSTRUMENTATION_LIB_NAME} \
-    run_pytest_command -vvv --device xpu instrumentation/test_gpuhello.py
+    run_pytest_command -vvv -n 1 --device xpu instrumentation/test_gpuhello.py
 }
 
 run_inductor_tests() {
@@ -465,13 +486,36 @@ run_inductor_tests() {
     git checkout $rev
   )
 
-  pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec
+  pip install pyyaml pandas scipy 'numpy==1.26.4' psutil pyre_extensions torchrec
 
   # TODO: Find the fastest Hugging Face model
   ZE_AFFINITY_MASK=0 python pytorch/benchmarks/dynamo/huggingface.py --accuracy --float32 -dxpu -n10 --no-skip --dashboard --inference --freezing --total-partitions 1 --partition-id 0 --only AlbertForMaskedLM --backend=inductor --timeout=4800 --output=$(pwd -P)/inductor_log.csv
 
   cat inductor_log.csv
   grep AlbertForMaskedLM inductor_log.csv | grep -q ,pass,
+}
+
+run_sglang_tests() {
+  echo "***************************************************"
+  echo "******    Running SGLang Triton tests       ******"
+  echo "***************************************************"
+
+  if ! [ -d "./sglang" ]; then
+    git clone https://github.com/sgl-project/sglang.git
+  fi
+  cd sglang
+
+  if ! pip list | grep "sglang" ; then
+    git apply $TRITON_PROJ/benchmarks/third_party/sglang/sglang-fix.patch
+    pip install "./python[dev_xpu]"
+
+    # SGLang installation breaks the default PyTorch and Triton versions, so we need to reinstall them.
+    $SCRIPTS_DIR/install-pytorch.sh --force-reinstall
+    $SCRIPTS_DIR/compile-triton.sh --triton
+  fi
+
+  pip install pytest pytest-xdist
+  run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-4} test/srt/test_triton_attention_kernels.py
 }
 
 test_triton() {
@@ -512,14 +556,20 @@ test_triton() {
   if [ "$TEST_BENCHMARK_GEMM" = true ]; then
     run_benchmark_gemm
   fi
-  if [ "$TEST_BENCHMARK_ATTENTION" = true ]; then
-    run_benchmark_attention
+  if [ "$TEST_BENCHMARK_FLASH_ATTENTION" = true ]; then
+    run_benchmark_flash_attention
+  fi
+  if [ "$TEST_BENCHMARK_FLEX_ATTENTION" = true ]; then
+    run_benchmark_flex_attention
   fi
   if [ "$TEST_INSTRUMENTATION" == true ]; then
     run_instrumentation_tests
   fi
   if [ "$TEST_INDUCTOR" == true ]; then
     run_inductor_tests
+  fi
+  if [ "$TEST_SGLANG" == true ]; then
+    run_sglang_tests
   fi
 }
 

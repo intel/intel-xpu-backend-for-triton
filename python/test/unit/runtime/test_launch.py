@@ -37,9 +37,9 @@ def test_metadata() -> None:
         pass
 
     # launch kernel
-    triton.compiler.CompiledKernel.launch_enter_hook = hook
+    triton.knobs.runtime.launch_enter_hook = hook
     kernel[(1, 3, 2)](6)
-    triton.compiler.CompiledKernel.launch_enter_hook = None
+    triton.knobs.runtime.launch_enter_hook = None
     assert used_hook
 
 
@@ -69,6 +69,39 @@ def test_memory_leak(device) -> None:
         assert end - begin < 30000
     finally:
         tracemalloc.stop()
+
+
+def test_load_hook() -> None:
+
+    used_start_hook = False
+    start_hash = None
+
+    def hook_start(module, function, name, metadata_group, hash):
+        nonlocal used_start_hook
+        nonlocal start_hash
+        start_hash = hash
+        used_start_hook = True
+
+    used_end_hook = False
+    end_hash = None
+
+    def hook_end(module, function, name, metadata_group, hash):
+        nonlocal used_end_hook
+        nonlocal end_hash
+        end_hash = hash
+        used_end_hook = True
+
+    @triton.jit
+    def kernel(x):
+        pass
+
+    # launch kernel
+    triton.knobs.runtime.kernel_load_start_hook = hook_start
+    triton.knobs.runtime.kernel_load_end_hook = hook_end
+    kernel[(1, 3, 2)](6)
+    assert used_start_hook
+    assert used_end_hook
+    assert start_hash == end_hash
 
 
 # LATENCY_THRESHOLD_US = 46

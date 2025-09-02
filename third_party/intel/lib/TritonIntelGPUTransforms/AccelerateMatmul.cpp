@@ -15,6 +15,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/Casting.h"
 #include <optional>
 
 #define PVC_2D_LOAD_MAXIMUM_NUMBER_OF_ROWS 32
@@ -32,6 +33,18 @@ namespace mlir::triton::gpu::intel {
 
 namespace {
 
+// FIXME: Remove once IGC can split large 2D block loads.
+static void setAttrOnBOperand(tt::DotOp dotOp, StringRef attrName,
+                              Attribute attr) {
+  Operation *defOp = dotOp.getB().getDefiningOp();
+  while (auto convOp = dyn_cast_or_null<ttg::ConvertLayoutOp>(defOp))
+    defOp = convOp.getSrc().getDefiningOp();
+  if (auto transOp = dyn_cast_or_null<tt::TransOp>(defOp))
+    defOp = transOp.getOperand().getDefiningOp();
+  if (auto loadOp = dyn_cast_or_null<tt::LoadOp>(defOp))
+    loadOp->setAttr(attrName, attr);
+}
+
 SmallVector<unsigned>
 getWarpsPerTile(tt::DotOp dotOp, ttgi::DpasEncodingAttr::DPASCapability dpasCap,
                 const ArrayRef<int64_t> shape, unsigned numWarps) {
@@ -40,10 +53,19 @@ getWarpsPerTile(tt::DotOp dotOp, ttgi::DpasEncodingAttr::DPASCapability dpasCap,
   };
 
   SetVector<Operation *> slices = multiRootGetSlice(dotOp, {filter});
-  // TODO: revisit this in flash attention.
-  for (Operation *op : slices)
-    if (isa<tt::DotOp>(op) && (op != dotOp))
+  for (Operation *op : slices) {
+    if (isa<tt::DotOp>(op) && (op != dotOp)) {
+      if (auto forOp = op->getParentOfType<scf::ForOp>()) {
+        // FIXME: Remove once IGC can split large 2D block loads.
+        MLIRContext *ctx = forOp->getContext();
+        StringRef attrName =
+            ttgi::TritonIntelGPUDialect::getOneMatrixPerLoadAttrName();
+        setAttrOnBOperand(dotOp, attrName, UnitAttr::get(ctx));
+        setAttrOnBOperand(cast<tt::DotOp>(op), attrName, UnitAttr::get(ctx));
+      }
       return {numWarps, 1};
+    }
+  }
 
   size_t rank = shape.size();
   SmallVector<unsigned> ret(rank, 1);
@@ -123,9 +145,17 @@ public:
     size_t rank = retShape.size();
     SmallVector<unsigned> repCluster(rank, 1);
 
+    unsigned repeatCount =
+        std::min(dpasCap.repeatCount, (unsigned)retShape[rank - 2] /*M*/);
     unsigned threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
+    unsigned numElemsPerRowForA =
+        opsPerChan == 1
+            ? dpasCap.systolicDepth
+            : dpasCap.systolicDepth * 2; // A is packed to i16 or i32.
+    unsigned minM = mlir::ceil<unsigned>(threadsPerWarp, numElemsPerRowForA);
+    repeatCount = std::max(repeatCount, minM);
     auto dpasEnc = ttgi::DpasEncodingAttr::get(
-        oldRetType.getContext(), dpasCap.repeatCount, dpasCap.systolicDepth,
+        oldRetType.getContext(), repeatCount, dpasCap.systolicDepth,
         dpasCap.executionSize, opsPerChan, warpsPerTile, repCluster,
         threadsPerWarp);
 
@@ -157,7 +187,7 @@ public:
       repCluster[rank - 1] = repClusterDimN;
 
       dpasEnc = ttgi::DpasEncodingAttr::get(
-          oldRetType.getContext(), dpasCap.repeatCount, dpasCap.systolicDepth,
+          oldRetType.getContext(), repeatCount, dpasCap.systolicDepth,
           dpasCap.executionSize, opsPerChan, warpsPerTile, repCluster,
           threadsPerWarp);
     }

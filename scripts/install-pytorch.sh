@@ -10,35 +10,74 @@ CHECK_WHEEL=false
 PYTORCH_CURRENT_COMMIT=""
 VENV=false
 CLEAN=true
-for arg in "$@"; do
-  case $arg in
+TRITON_REPO=intel/intel-xpu-backend-for-triton
+TRITON_REPO_BRANCH=main
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     --source)
       BUILD_PYTORCH=true
+      shift
       ;;
     --latest)
       # Build from the latest pytorch commit in the main branch.
       BUILD_PYTORCH=true
       BUILD_LATEST=true
+      shift
       ;;
     --force-reinstall)
       FORCE_REINSTALL=true
+      shift
       ;;
     --check-wheel)
       # Check if PyTorch wheel exists
       CHECK_WHEEL=true
+      shift
       ;;
     --venv)
       VENV=true
+      shift
       ;;
     -nc|--no-clean)
       CLEAN=false
+      shift
+      ;;
+    --triton-repo)
+      TRITON_REPO="$2"
+      shift 2
+      ;;
+    --triton-repo-branch)
+      TRITON_REPO_BRANCH="$2"
+      shift 2
       ;;
     --help)
-      echo "Example usage: ./install-pytorch.sh [--source | --latest | --force-reinstall | --check-wheel | --venv]"
+        cat <<EOF
+Usage: ./install-pytorch.sh [options]
+
+Options:
+  --source                Build PyTorch from source using pinned commit.
+  --latest                Build PyTorch from the latest commit in the main branch.
+  --force-reinstall       Force reinstallation of PyTorch and pinned dependencies.
+  --check-wheel           Check if a prebuilt PyTorch wheel already exists before building.
+  --venv                  Activate Python virtual environment from .venv/ before installation.
+  -nc, --no-clean         Do not clean existing PyTorch source directory before build.
+
+  --triton-repo <repo>          GitHub repo to fetch prebuilt PyTorch wheels from
+                                (default: intel/intel-xpu-backend-for-triton)
+
+  --triton-repo-branch <branch> Branch to fetch prebuilt PyTorch wheels from
+                                (default: main)
+
+  --help                  Show this help message and exit.
+
+Examples:
+  ./install-pytorch.sh --source
+  ./install-pytorch.sh --latest --venv
+  ./install-pytorch.sh --triton-repo my_fork/intel-xpu-backend-for-triton --triton-repo-branch dev
+EOF
       exit 1
       ;;
     *)
-      echo "Unknown argument: $arg."
+      echo "Unknown argument: $1."
       exit 1
       ;;
   esac
@@ -90,7 +129,7 @@ fi
 ############################################################################
 # Check installed torch pinned dependencies
 
-PINNED_TORCH_DEPENDENCIES_REGEX="^torchtext==|^torchaudio==|^torchvision=="
+PINNED_TORCH_DEPENDENCIES_REGEX="^torchaudio==|^torchvision=="
 INSTALLED_PINNED_TORCH_DEPENDENCIES=$(pip list --format=freeze | grep -iE "$PINNED_TORCH_DEPENDENCIES_REGEX" || true)
 
 if [ -n "$INSTALLED_PINNED_TORCH_DEPENDENCIES" ]; then
@@ -104,7 +143,7 @@ if [ -n "$INSTALLED_PINNED_TORCH_DEPENDENCIES" ]; then
     echo "**** INFO: PyTorch pinned dependencies build from source mode is not supported. ****"
     exit 1
   fi
-  pip uninstall -y torchtext torchaudio torchvision
+  pip uninstall -y torchaudio torchvision
 fi
 
 ############################################################################
@@ -117,11 +156,11 @@ if [ "$BUILD_PYTORCH" = false ]; then
   fi
   echo "**** Download nightly builds. ****"
   PYTHON_VERSION=$(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-  RUN_ID=$(gh run list -w "Triton wheels" -R intel/intel-xpu-backend-for-triton --json databaseId,conclusion | jq -r '[.[] | select(.conclusion=="success")][0].databaseId')
+  RUN_ID=$(gh run list --workflow nightly-wheels.yml --branch $TRITON_REPO_BRANCH -R $TRITON_REPO --json databaseId,conclusion | jq -r '[.[] | select(.conclusion=="success")][0].databaseId')
   TEMP_DIR=$(mktemp -d)
   WHEEL_PATTERN="wheels-pytorch-py${PYTHON_VERSION}*"
   gh run download $RUN_ID \
-    --repo intel/intel-xpu-backend-for-triton \
+    --repo $TRITON_REPO \
     --pattern "$WHEEL_PATTERN" \
     --dir $TEMP_DIR
   cd $TEMP_DIR/$WHEEL_PATTERN
@@ -144,6 +183,7 @@ mkdir -p $BASE
 
 function pytorch_wheel_exists {
   if [[ ! -d $PYTORCH_PROJ/dist ]]; then
+    echo "check-wheel: $PYTORCH_PROJ/dist does not exist"
     return 1
   fi
   PYTHON_VERSION=$(python -c "import sys; print(f'{sys.version_info.major}{sys.version_info.minor}')")
@@ -158,10 +198,13 @@ function pytorch_wheel_exists {
   fi
   PYTORCH_WHEEL_NAME="torch-${PYTORCH_VERSION}+git${PYTORCH_COMMIT:0:7}-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-${PYTORCH_OS}_${PYTORCH_ARCH}.whl"
   if [[ -f $PYTORCH_PROJ/dist/$PYTORCH_WHEEL_NAME ]]; then
-    echo "**** $PYTORCH_WHEEL_NAME exists ****"
+    echo "check-wheel: $PYTORCH_WHEEL_NAME exists"
     return 0
   else
-    echo "**** $PYTORCH_WHEEL_NAME does not exist ****"
+    echo "check-wheel: $PYTORCH_WHEEL_NAME does not exist"
+    if [[ -d $PYTORCH_PROJ/dist ]]; then
+      echo "check-wheel: existing files:" $(cd $PYTORCH_PROJ/dist && ls)
+    fi
     return 1
   fi
 }
@@ -199,6 +242,17 @@ function build_pytorch {
   pip install 'cmake<4.0.0'
   pip install -r requirements.txt
   pip install cmake ninja
+  if [[ $OSTYPE = msys ]]; then
+    # Another way (but we don't use conda): conda install -c conda-forge libuv=1.40.0
+    # Ref https://github.com/pytorch/pytorch/blob/8c2e45008282cf5202b72a0ecb0c2951438abeea/.ci/pytorch/windows/setup_build.bat#L23
+    # This is an artifact (around 330kb) that PyTorch uses, however it may not be very good to use here.
+    # FIXME: Maybe better to build it ourselves, but for now it is used as a workaround.
+    curl -k https://s3.amazonaws.com/ossci-windows/libuv-1.40.0-h8ffe710_0.tar.bz2 -o libuv-1.40.0-h8ffe710_0.tar.bz2
+    mkdir libuv-1.40.0
+    tar -xvjf libuv-1.40.0-h8ffe710_0.tar.bz2 -C libuv-1.40.0
+    export libuv_ROOT="$PYTORCH_PROJ/libuv-1.40.0"
+  fi
+
   USE_XCCL=1 USE_STATIC_MKL=1 python setup.py bdist_wheel
 }
 

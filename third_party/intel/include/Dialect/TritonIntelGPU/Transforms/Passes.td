@@ -27,6 +27,19 @@ def TritonIntelGPUAccelerateMatmul
   ];
 }
 
+def TritonIntelGPUOptimizeDotOperands
+    : Pass<"tritonintelgpu-optimize-dot-operands", "mlir::ModuleOp"> {
+  let summary = "Intel optimize dot operands";
+
+  let description = [{
+    Re-arranged layouts of tensors used as matrix multiplication operands to
+    promote the use of hardware-accelerated operations.
+  }];
+
+  let dependentDialects = ["mlir::triton::TritonDialect",
+                           "mlir::triton::gpu::TritonGPUDialect"];
+}
+
 def TritonIntelGPUCoalesce
     : Pass<"tritonintelgpu-coalesce", "mlir::ModuleOp"> {
   let summary = "Intel Coalesce";
@@ -122,9 +135,6 @@ def TritonIntelGPUPipeline : Pass<"tritonintelgpu-pipeline", "mlir::ModuleOp"> {
     Option<"numStages", "num-stages",
            "int32_t", /*default*/"3",
            "number of pipeline stages">,
-    Option<"supportRegularPtr", "support-regular-ptr",
-           "bool", /*default*/"false",
-           "Enable support for prefetching non-block pointers">,
     Option<"splitBarrierScope", "split-barriers-scope",
            "enum SplitBarrierScope", "SplitBarrierScope::None",
            "insert split barriers in a loop",
@@ -147,7 +157,7 @@ def TritonIntelGPURemoveLayoutConversions : Pass<"tritonintelgpu-remove-layout-c
     ```mlir
     #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [1, 0]}>
     #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
-    #dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4], A = [8, 16], B = [16, 16], C = [8, 16]}>
+    #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4], A = [8, 16], B = [16, 16], C = [8, 16]}>
     ...
     %28 = tt.load %arg11 {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<64x32xf16, #blocked>>
     %29 = tt.load %arg12 {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<32x256xf16, #blocked1>>
@@ -161,7 +171,7 @@ def TritonIntelGPURemoveLayoutConversions : Pass<"tritonintelgpu-remove-layout-c
     Like this:
 
     ```mlir
-    #dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4], A = [8, 16], B = [16, 16], C = [8, 16]}>
+    #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4], A = [8, 16], B = [16, 16], C = [8, 16]}>
     ...
     %28 = tt.load %arg11 {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #dpas}>>>
     %29 = tt.load %arg12 {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #dpas}>>
@@ -305,7 +315,7 @@ def TritonIntelGPUOptimizeReductionLocality
     sub-group reductions are converted to `tt.reshape`, `tt.reduce`, and
     `ttg.convert_layout` operations, e.g.:
     ```mlir
-#mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [2, 2]}>
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [2, 2]}>
 tt.func @test(%arg0: tensor<16x32xf32, #mma>) -> tensor<16xf32, #ttg.slice<{dim = 1, parent = #mma}>> {
   %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
   ^bb0(%arg1: f32, %arg2: f32):
@@ -321,7 +331,7 @@ tt.func @test(%arg0: tensor<16x32xf32, #mma>) -> tensor<16xf32, #ttg.slice<{dim 
 #blocked1 = #ttg.blocked<{sizePerThread = [16, 1, 1, 1, 1], threadsPerWarp = [1, 8, 2, 1, 1], warpsPerCTA = [1, 1, 1, 1, 1], order = [0, 1, 2, 3, 4]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [16, 1, 1, 1], threadsPerWarp = [1, 16, 1, 1], warpsPerCTA = [1, 1, 1, 1], order = [0, 1, 2, 3]}>
 #blocked3 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [0, 1]}>
-#mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
 tt.func @test(%arg0: tensor<16x32xf32, #mma>) -> tensor<16xf32, #ttg.slice<{dim = 1, parent = #mma}>> {
   %0 = tt.reshape %arg0 allow_reorder efficient_layout : tensor<16x32xf32, #mma> -> tensor<16x8x2x2x1x1x1xf32, #blocked>
   %1 = "tt.reduce"(%0) <{axis = 2 : i32}> ({
@@ -360,7 +370,7 @@ tt.func @test(%arg0: tensor<16x32xf32, #mma>) -> tensor<16xf32, #ttg.slice<{dim 
     type is important: reshape to original shape and set an anchor for the
     layout conversion removal pass, and convert to original layout.
 
-    Note this pass only supports `triton_intel_gpu.dpas` input layouts at the
+    Note this pass only supports `ttig.dpas` input layouts at the
     moment, but it should be easily extended.
 
     See pass implementation for more detailed implementation documentation.
@@ -384,5 +394,19 @@ def TritonIntelGPURewriteStackPtr
     "mlir::triton::gpu::intel::TritonIntelGPUDialect", "mlir::scf::SCFDialect",
     "mlir::arith::ArithDialect"
   ];
+}
+
+def TritonIntelGPUReduceVariableLiveness
+    : Pass<"tritonintelgpu-reduce-variable-liveness", "mlir::ModuleOp"> {
+  let summary = "Attempt to reduce the variable liveness";
+
+  let description = [{
+    This pass attempts to reduce the variable liveness
+    by reducing the distance between loads and usage.
+  }];
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::scf::SCFDialect",
+                           "mlir::arith::ArithDialect"];
 }
 #endif // TRITON_INTEL_GPU_PASSES

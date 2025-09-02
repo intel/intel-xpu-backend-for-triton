@@ -1,11 +1,11 @@
-# Keep in sync with extra_require.tests from python/setup.py
+# Keep in sync with extra_require.tests from setup.py
 lit
 numpy
 pytest
 scipy>=1.7.1
 llnl-hatchet
 
-# Keep in sync with extra_require.tutorials from python/setup.py
+# Keep in sync with extra_require.tutorials from setup.py
 matplotlib
 pandas
 tabulate
@@ -13,7 +13,7 @@ tabulate
 # Used by test-triton.sh
 pytest-xdist
 pytest-forked
-pytest-rerunfailures
+pytest-rerunfailures<16
 pytest-skip
 pytest-timeout
 

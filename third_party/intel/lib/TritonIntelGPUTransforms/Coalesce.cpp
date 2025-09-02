@@ -2,19 +2,25 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Utils.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+#include "intel/include/Utils/Utility.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/Verifier.h"
+#include "mlir/Interfaces/LoopLikeInterface.h"
 #include "mlir/Support/LLVM.h"
+#include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/StrUtil.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
+#include <optional>
 
 #define DEBUG_TYPE "tritonintelgpu-coalesce"
-#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
-#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace mlir::triton::gpu::intel {
 #define GEN_PASS_DEF_TRITONINTELGPUCOALESCE
@@ -36,18 +42,18 @@ private:
                        Operation *op, int numWarps, int threadsPerWarp,
                        llvm::MapVector<Operation *, Attribute> &layoutMap) {
     Value ptr = getMemAccessPtr(op);
-    LDBG("ptr: " << ptr);
 
-    LDBG("Considering op: " << *op);
     LLVM_DEBUG({
-      DBGS() << "axis info of pointer: ";
-      axisInfoAnalysis.getAxisInfo(ptr)->print(llvm::dbgs());
+      llvm::dbgs() << "[" DEBUG_TYPE "]: Considering op: " << *op << "\n";
+      llvm::dbgs().indent(2) << "axis info of pointer: ";
+      axisInfoAnalysis.getAxisInfo(ptr)->print(llvm::dbgs().indent(2));
       llvm::dbgs() << "\n";
     });
 
     const auto &contiguity = axisInfoAnalysis.getAxisInfo(ptr)->getContiguity();
-    SmallVector<unsigned> order = argSort(contiguity);
-    LDBG("order=[" << triton::join(order, ", ") << "]");
+    SmallVector<unsigned> order = getOrderFromContiguity(contiguity);
+    LLVM_DEBUG(llvm::dbgs().indent(2)
+                   << "order=[" << tt::join(order, ", ") << "]\n";);
 
     RankedTensorType refTensorType = ttgi::getRankedTensorType(ptr.getType());
     auto matchesShape = [&refTensorType](const Value &val) {
@@ -64,37 +70,42 @@ private:
         Value val = getMemAccessPtr(use);
         if (!val || !matchesShape(val) || memAccessesSameOrder.contains(use))
           continue;
-        auto currOrder =
-            argSort(axisInfoAnalysis.getAxisInfo(val)->getContiguity());
+        auto currOrder = getOrderFromContiguity(
+            axisInfoAnalysis.getAxisInfo(val)->getContiguity());
         if (order == currOrder) {
-          LDBG("multi-root-slice: insert to memAccessesSameOrder " << *use);
+          LLVM_DEBUG(llvm::dbgs().indent(2)
+                     << "multi-root-slice: insert to memAccessesSameOrder "
+                     << *use << "\n");
           memAccessesSameOrder.insert(use);
         }
       }
     }
 
     auto shapePerCTA = ttg::getShapePerCTA(refTensorType);
-    LDBG("shapePerCTA=[" << triton::join(shapePerCTA, ", ") << "]");
-
     int numElems = product<int64_t>(shapePerCTA);
     int numThreads = numWarps * threadsPerWarp;
     unsigned perThread =
         ttgi::getNumElementsPerThread(op, order, axisInfoAnalysis);
-    LDBG("perThread for op: " << perThread);
+    LLVM_DEBUG({
+      llvm::dbgs().indent(2)
+          << "shapePerCTA=[" << tt::join(shapePerCTA, ", ") << "]\n";
+      llvm::dbgs().indent(2) << "perThread for op: " << perThread << "\n";
+    });
 
     for (Operation *opSameOrder : memAccessesSameOrder) {
       if (opSameOrder == op)
         continue;
       unsigned currPerThread =
           ttgi::getNumElementsPerThread(opSameOrder, order, axisInfoAnalysis);
-      LDBG("perThread for opSameOrder: " << currPerThread);
+      LLVM_DEBUG(llvm::dbgs().indent(2)
+                 << "perThread for opSameOrder: " << currPerThread);
       perThread = std::max(perThread, currPerThread);
     }
 
     perThread = std::min<int>(perThread, std::max(numElems / numThreads, 1));
-    LDBG("perThread: " << perThread);
+    LLVM_DEBUG(llvm::dbgs().indent(2) << "perThread: " << perThread << "\n");
 
-    if (!dyn_cast<triton::LoadOp>(op)) {
+    if (!dyn_cast<tt::LoadOp>(op)) {
       // For ops that can result in a global memory write, we should enforce
       // that each thread handles at most 128 bits, which is the widest
       // available vectorized store op; otherwise, the store will have "gaps"
@@ -119,39 +130,15 @@ private:
                                  tensorType.getElementType(), encoding);
   }
 
-  // Find the defining makeTensorPtrOp operation of the given value.
-  static std::optional<tt::MakeTensorPtrOp>
-  findDefiningMakeTensorPtrOp(Value val) {
-    LDBG("Attempting to find `makeTensorPtrOp` defining: " << val);
-
-    if (auto arg = dyn_cast<BlockArgument>(val)) {
-      Operation *parentOp = val.getParentBlock()->getParentOp();
-      assert(isa<scf::ForOp>(parentOp) && "Expected a scf::ForOp");
-      auto loopArg =
-          cast<scf::ForOp>(parentOp).getInitArgs()[arg.getArgNumber() - 1];
-      return findDefiningMakeTensorPtrOp(loopArg);
-    }
-
-    if (auto advanceOp = val.getDefiningOp<tt::AdvanceOp>())
-      return findDefiningMakeTensorPtrOp(advanceOp.getPtr());
-    if (auto makePtrOp = val.getDefiningOp<tt::MakeTensorPtrOp>())
-      return makePtrOp;
-    if (auto opRes = dyn_cast<OpResult>(val)) {
-      Operation *defOp = opRes.getOwner();
-      if (auto forOp = dyn_cast<scf::ForOp>(defOp)) {
-        Value val = forOp.getYieldedValues()[opRes.getResultNumber()];
-        return findDefiningMakeTensorPtrOp(val);
-      }
-      assert(false && "unhandled operation");
-    }
-
-    return std::nullopt;
-  }
-
   static bool filterUser(Operation *op) {
     // Yield operations trigger updating the layout of the containing loop
     // results, don't skip them.
     if (isa<scf::YieldOp>(op))
+      return false;
+
+    // Condition operations trigger updating the layout of the 'after' region in
+    // the containing while loop, don't skip them.
+    if (isa<scf::ConditionOp>(op))
       return false;
 
     // Skip operations that don't yield a result and contain no regions.
@@ -170,132 +157,174 @@ private:
     return false;
   }
 
-  // Change the \p layout of the \p op result and propagate the new result type
-  // to its users.
-  void changeAndPropagateLayout(Operation *op, Attribute layout,
+  // Change the \p layout of the \p op's result \p opRes and propagate the new
+  // result type to its users.
+  void changeAndPropagateLayout(Operation *op, Value opRes, Attribute layout,
                                 IRRewriter &rewriter) const {
-    assert(op && op->getNumResults() == 1 &&
-           "Expecting operation yielding a result");
+    assert(op && op->getNumResults() != 0 &&
+           "Expecting operation yielding results");
+
+    LLVM_DEBUG({
+      llvm::dbgs() << "[" DEBUG_TYPE "]: " << "ChangeAndPropagateLayout for: ";
+      op->dumpPretty();
+      llvm::dbgs() << "opRes: ";
+      opRes.printAsOperand(llvm::dbgs(), {});
+      llvm::dbgs() << "\n";
+    });
 
     rewriter.modifyOpInPlace(op, [&]() {
-      Value res = op->getOpResult(0);
-      assert(tt::isTensorPointerType(res.getType()) &&
-             "Expecting a block pointer");
-
-      auto ptrType = cast<tt::PointerType>(res.getType());
+      assert(tt::isTensorPointerType(opRes.getType()));
+      auto ptrType = cast<tt::PointerType>(opRes.getType());
       auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
-      res.setType(tt::PointerType::get(getNewType(tensorType, layout),
-                                       ptrType.getAddressSpace()));
+      opRes.setType(tt::PointerType::get(getNewType(tensorType, layout),
+                                         ptrType.getAddressSpace()));
     });
-    LDBG("Coalesced op: " << *op);
 
-    propagateLayout(op, layout, rewriter);
+    LLVM_DEBUG({
+      llvm::dbgs() << "[" DEBUG_TYPE "]: Coalesced op: ";
+      op->dumpPretty();
+    });
+
+    propagateLayout(opRes, layout, rewriter);
   }
 
-  // Propagate the layout of the \p root operation's result to its users.
-  void propagateLayout(Operation *root, Attribute layout,
+  // Propagate \p layout to users of \p val.
+  void propagateLayout(Value val, Attribute layout,
                        IRRewriter &rewriter) const {
-    assert(root->getNumResults() != 0 &&
-           "Expecting an operation yielding a result");
+    LLVM_DEBUG({
+      if (!val.getUsers().empty()) {
+        llvm::dbgs() << "[" DEBUG_TYPE "]: "
+                     << "Propagate layout to operations using: ";
+        if (isa<BlockArgument>(val)) {
+          val.printAsOperand(llvm::dbgs(), {});
+          llvm::dbgs() << "\n";
+        } else {
+          llvm::dbgs() << val << "\n";
+        }
+      }
+    });
 
-    LDBG("root: " << *root);
-    for (Operation *user : root->getUsers()) {
+    for (Operation *user : val.getUsers()) {
       if (filterUser(user))
         continue;
 
-      LDBG("root's user: " << *user << "\n");
-      if (auto forOp = dyn_cast<scf::ForOp>(user)) {
-        propagateLayoutToArgsAndBody(forOp, root, layout, rewriter);
+      LLVM_DEBUG({
+        llvm::dbgs() << "[" DEBUG_TYPE "]: " << "user: ";
+        user->dumpPretty();
+      });
+
+      if (auto loopOp = dyn_cast<LoopLikeOpInterface>(user)) {
+        propagateLayoutToArgsAndBody(loopOp, val, layout, rewriter);
         continue;
       }
       if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
-        if (auto forOp = yieldOp->getParentOfType<scf::ForOp>())
-          propagateLayoutToLoopResults(forOp, layout, rewriter);
+        Operation *parentOp = yieldOp->getParentOp();
+        for (OpOperand &operand : llvm::make_filter_range(
+                 yieldOp->getOpOperands(),
+                 [&val](OpOperand &operand) { return operand.get() == val; }))
+          TypeSwitch<Operation *>(parentOp)
+              .Case<LoopLikeOpInterface, scf::IfOp>([&](auto op) {
+                propagateLayoutToOperationResult(op, operand.getOperandNumber(),
+                                                 layout, rewriter);
+              })
+              .Default([](auto op) {
+                llvm::report_fatal_error(llvm::Twine(
+                    "Unsupported parent operation for scf.yield: '" +
+                    op->getName().getStringRef() + "'"));
+              });
         continue;
       }
-      changeAndPropagateLayout(user, layout, rewriter);
+      if (auto condOp = dyn_cast<scf::ConditionOp>(user)) {
+        if (auto whileOp = condOp->getParentOfType<scf::WhileOp>()) {
+          // Propagate layout to "after" region arguments.
+          for (auto [condOperand, loopArg] :
+               llvm::zip(condOp->getOperands().drop_front(),
+                         whileOp.getAfterArguments())) {
+            if (condOperand != val ||
+                !tt::isTensorPointerType(condOperand.getType()))
+              continue;
+
+            // Modify the layout of the loop argument...
+            tt::PointerType ptrType = cast<tt::PointerType>(loopArg.getType());
+            auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
+            loopArg.setType(tt::PointerType::get(getNewType(tensorType, layout),
+                                                 ptrType.getAddressSpace()));
+            LLVM_DEBUG({
+              llvm::dbgs() << "[" DEBUG_TYPE "]: " << "Propagated layout to: ";
+              loopArg.printAsOperand(llvm::dbgs(), {});
+              llvm::dbgs() << "\n";
+            });
+
+            // ... and then propagate it to the operations in the loop.
+            propagateLayout(loopArg, layout, rewriter);
+          }
+        }
+        continue;
+      }
+
+      LLVM_DEBUG({
+        llvm::dbgs() << "[" DEBUG_TYPE "]: After propagating layout:\n";
+        val.getParentRegion()->getParentOfType<ModuleOp>()->dumpPretty();
+      });
+
+      for (OpResult res : user->getResults())
+        changeAndPropagateLayout(user, res, layout, rewriter);
     }
   }
 
-  // Propagate the layout of the \p arg block argument to its users.
-  void propagateLayout(BlockArgument arg, Attribute layout,
-                       IRRewriter &rewriter) const {
-    LDBG("arg: " << arg);
-    for (Operation *user : arg.getUsers()) {
-      if (filterUser(user))
-        continue;
-
-      LDBG("arg's user: " << *user << "\n");
-      if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
-        if (auto forOp = yieldOp->getParentOfType<scf::ForOp>())
-          propagateLayoutToLoopResults(forOp, layout, rewriter);
-        continue;
-      }
-      changeAndPropagateLayout(user, layout, rewriter);
-    }
-  }
-
-  // Propagate the layout of the \p root operation's result to the \p forOp loop
-  // init argument that uses it, and transitively to the operations in the loop
-  // body that use that argument.
-  void propagateLayoutToArgsAndBody(scf::ForOp forOp, Operation *root,
+  // Propagate \p layout to the \p loopOp init arguments that use \p opRes, and
+  // transitively to the operations in the loop body that use those arguments.
+  void propagateLayoutToArgsAndBody(LoopLikeOpInterface loopOp, Value opRes,
                                     Attribute layout,
                                     IRRewriter &rewriter) const {
-    assert(llvm::any_of(root->getUsers(),
-                        [&](Operation *user) { return user == forOp; }) &&
-           "Expecting the loop to be a user of the root operation");
+    for (auto [initArg, arg] :
+         llvm::zip(loopOp.getInitsMutable(), loopOp.getRegionIterArgs())) {
+      if (initArg.get() != opRes)
+        continue;
 
-    for (BlockArgument arg : forOp.getRegionIterArgs()) {
-      Value loopArg = forOp.getInitArgs()[arg.getArgNumber() - 1];
-      for (OpResult res : root->getResults()) {
-        if (res != loopArg || !tt::isTensorPointerType(res.getType()))
-          continue;
+      // Modify the layout of the loop init argument...
+      auto ptrType = cast<tt::PointerType>(arg.getType());
+      auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
+      arg.setType(tt::PointerType::get(getNewType(tensorType, layout),
+                                       ptrType.getAddressSpace()));
 
-        LDBG("loopArg: " << loopArg);
+      LLVM_DEBUG({
+        llvm::dbgs() << "[" DEBUG_TYPE "]: " << "Propagated layout to: ";
+        arg.printAsOperand(llvm::dbgs(), {});
+        llvm::dbgs() << "\n";
+      });
 
-        // Modify the layout of the loop init argument...
-        tt::PointerType ptrType = cast<tt::PointerType>(arg.getType());
-        auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
-        arg.setType(tt::PointerType::get(getNewType(tensorType, layout),
-                                         ptrType.getAddressSpace()));
-
-        // ... and then propagate it to the operations in the loop.
-        propagateLayout(arg, layout, rewriter);
-      }
+      // ... and then propagate it to the operations in the loop.
+      propagateLayout(arg, layout, rewriter);
     }
   }
 
-  // Modify the given loop \p forOp and propagate the result of the enclosing
-  // loop.
-  void propagateLayoutToLoopResults(scf::ForOp forOp, Attribute layout,
-                                    IRRewriter &rewriter) const {
-    Operation *yieldOp = forOp.getBody()->getTerminator();
-
-    rewriter.modifyOpInPlace(forOp, [&]() {
-      for (auto [opType, res] :
-           llvm::zip(yieldOp->getOperandTypes(), forOp.getResults())) {
-        if (opType == res.getType())
-          continue;
-
-        assert(tt::isTensorPointerType(res.getType()) &&
-               tt::isTensorPointerType(opType) && "Expecting blocked pointers");
-        assert(cast<RankedTensorType>(
-                   cast<tt::PointerType>(opType).getPointeeType())
-                       .getEncoding() == layout &&
-               "Unexpected layout");
-
-        auto resType = cast<tt::PointerType>(res.getType());
-        RankedTensorType tensorType = ttgi::getRankedTensorType(resType);
-        res.setType(tt::PointerType::get(getNewType(tensorType, layout),
-                                         resType.getAddressSpace()));
-      }
+  // Modify the \p layout of the operation \p op result identified by \p resNum,
+  // and propagate the modified operation result to its users.
+  template <typename OpType,
+            typename = std::enable_if_t<
+                llvm::is_one_of<OpType, LoopLikeOpInterface, scf::IfOp>::value>>
+  void propagateLayoutToOperationResult(OpType op, unsigned resNum,
+                                        Attribute layout,
+                                        IRRewriter &rewriter) const {
+    Value loopRes = op->getResult(resNum);
+    rewriter.modifyOpInPlace(op, [&]() {
+      assert(tt::isTensorPointerType(loopRes.getType()) &&
+             "Expecting blocked pointers");
+      Type resType = loopRes.getType();
+      auto ptrType = cast<tt::PointerType>(resType);
+      RankedTensorType tensorType = ttgi::getRankedTensorType(resType);
+      loopRes.setType(tt::PointerType::get(getNewType(tensorType, layout),
+                                           ptrType.getAddressSpace()));
     });
 
-    propagateLayout(forOp, layout, rewriter);
+    propagateLayout(loopRes, layout, rewriter);
   }
 
   void coalesceOp(Attribute encoding, Operation *op) {
-    LDBG("Coalescing op: " << *op);
+    LLVM_DEBUG({
+      llvm::dbgs() << "[" DEBUG_TYPE "]: " << "Coalescing op: " << *op << "\n";
+    });
 
     OpBuilder builder(op);
 
@@ -308,18 +337,26 @@ private:
     for (Value operand : op->getOperands()) {
       auto tensorType = dyn_cast<RankedTensorType>(operand.getType());
       if (tensorType &&
-          !isa<triton::gpu::SharedEncodingTrait>(tensorType.getEncoding())) {
+          !isa<ttg::SharedEncodingTrait>(tensorType.getEncoding())) {
         RankedTensorType newType = getNewType(tensorType, encoding);
         newArgs.push_back(builder.create<ttg::ConvertLayoutOp>(
             op->getLoc(), newType, operand));
       } else {
-        assert(isa<tt::PointerType>(operand.getType()) &&
+        assert(tt::isTensorPointerType(operand.getType()) &&
                "Expecting operand to have blocked pointer type");
-        auto defOp = findDefiningMakeTensorPtrOp(operand);
-        assert(defOp && "Expected a make_tensor_ptr operation");
-        LDBG("Found make_tensor_ptr definition: " << *defOp);
+        std::optional<tt::MakeTensorPtrOp> defOp =
+            triton::intel::findDefiningMakeTensorPtrOp(operand);
+        if (!defOp) {
+          LLVM_DEBUG(llvm::dbgs()
+                     << "[" DEBUG_TYPE
+                        "]: Could not find 'make_tensor_ptr' definition for "
+                     << operand << "\n");
+          return;
+        }
+
         IRRewriter rewriter(builder);
-        changeAndPropagateLayout(*defOp, encoding, rewriter);
+        changeAndPropagateLayout(*defOp, defOp->getResult(), encoding,
+                                 rewriter);
         newArgs.push_back(operand);
       }
     }
@@ -347,10 +384,7 @@ private:
       op->getResult(i).replaceAllUsesWith(newResult);
     }
 
-    LDBG("Old op: " << *op);
-    LDBG("newOp: " << *newOp);
     op->erase();
-
     assert(succeeded(verify(newOp)) && "Operation verification failed");
   }
 
@@ -379,14 +413,15 @@ public:
     });
 
     LLVM_DEBUG({
-      DBGS() << "layoutMap:\n";
+      llvm::dbgs() << "[" DEBUG_TYPE "]: " << "layoutMap:\n";
       if (layoutMap.empty())
-        DBGS() << "\t<empty>";
+        llvm::dbgs() << "[" DEBUG_TYPE "]: " << "\t<empty>";
       for (auto [op, encoding] : layoutMap) {
-        DBGS() << "\top: " << *op << "\n";
-        DBGS() << "\tencoding: " << encoding << "\n";
+        llvm::dbgs() << "[" DEBUG_TYPE "]: " << "\top: " << *op << "\n";
+        llvm::dbgs() << "[" DEBUG_TYPE "]: " << "\tencoding: " << encoding
+                     << "\n";
       }
-      llvm::errs() << "\n";
+      llvm::dbgs() << "\n";
     });
 
     // For each memory op that has a layout L1:

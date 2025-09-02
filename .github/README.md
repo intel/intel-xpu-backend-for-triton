@@ -14,22 +14,29 @@ Intel® XPU Backend for Triton\* is a out of tree backend module for [Triton](ht
   * [Intel® Data Center GPU Max Series](https://www.intel.com/content/www/us/en/products/details/discrete-gpus/data-center-gpu/max-series.html)
   * [Intel® Data Center Flex Series](https://www.intel.com/content/www/us/en/products/details/discrete-gpus/data-center-gpu/flex-series.html)
   * [Intel® Arc A770](https://www.intel.com/content/www/us/en/products/sku/229151/intel-arc-a770-graphics-16gb/specifications.html)
+  * [Intel® Arc B580](https://www.intel.com/content/www/us/en/products/sku/241598/intel-arc-b580-graphics/specifications.html)
 * GPU Drivers:
   * Latest [Long Term Support (LTS) Release](https://dgpu-docs.intel.com/driver/installation.html)
   * Latest [Rolling Release](https://dgpu-docs.intel.com/driver/installation-rolling.html)
 * Toolchain:
-  * [Intel® Deep Learning Essentials 2025.0.1](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html?packages=dl-essentials&dl-lin=offline&dl-essentials-os=linux)
+  * [Intel® Deep Learning Essentials 2025.1.1](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html?packages=dl-essentials&dl-lin=offline&dl-essentials-os=linux)
 
 Note that Intel® XPU Backend for Triton\* is not compatible with Intel® Extension for PyTorch\* and Intel® oneAPI Base Toolkit\*.
 
 See also: [experimental support for Windows](WINDOWS.md).
+
+# Triton is included in the PyTorch
+
+If you have PyTorch on XPU installed from [binaries](https://docs.pytorch.org/docs/stable/notes/get_start_xpu.html#binaries), you already have Triton installed and don't need any additional installations, unless you want to use the latest version of Triton from `main`.
+
+You can check existing installation by running one of the [tutorials](/python/tutorials/01-vector-add.py).
 
 # Quick Installation
 
 ## Prerequisites
 
 1. Latest [Rolling Release](https://dgpu-docs.intel.com/driver/installation-rolling.html) or [Long Term Support Release](https://dgpu-docs.intel.com/driver/installation.html) of GPU driver
-2. [Intel® Deep Learning Essentials 2025.0.1](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html?packages=dl-essentials&dl-lin=offline&dl-essentials-os=linux)
+2. [Intel® Deep Learning Essentials 2025.1.1](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html?packages=dl-essentials&dl-lin=offline&dl-essentials-os=linux)
 
 ## Install PyTorch and Triton from nightly wheels
 
@@ -135,10 +142,10 @@ which must be in the same directory as `intel-xpu-backend-for-triton`:
   (probably because, in our build, users don't invoke cmake directly, but
   instead use setup.py).  Teach vscode how to compile Triton as follows.
 
-    - Do a local build. Run command `pip install -e python`
+    - Do a local build. Run command `pip install -e .`
     - Get the full path to the `compile_commands.json` file produced by the build:
-      `find python/build -name 'compile_commands.json' | xargs readlink -f`.
-      You might get a full path similar to `/Users/{username}/triton/python/build/cmake.macosx-11.1-arm64-cpython-3.12/compile_commands.json`
+      `find build -name 'compile_commands.json' | xargs readlink -f`.
+      You might get a full path similar to `/Users/{username}/triton/build/cmake.macosx-11.1-arm64-cpython-3.12/compile_commands.json`
     - In vscode, install the
       [C/C++
       extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools),

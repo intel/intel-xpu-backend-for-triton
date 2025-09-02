@@ -1,67 +1,247 @@
 // RUN: triton-opt %s -split-input-file --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm
 
-// CHECK: llvm.func spir_funccc @_Z42intel_sub_group_2d_block_write_16b_8r16x1cPU3AS1viiiDv2_iPt(!llvm.ptr<1> {llvm.nonnull, llvm.writeonly}, i32, i32, i32, vector<2xi32>, !llvm.ptr {llvm.nonnull, llvm.readonly}) attributes {no_unwind, will_return}
-#dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
-#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
-#dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>
-module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  tt.func public @matmul_no_scf_with_advance_kernel(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f16>, %arg3: i64, %arg4: i64, %arg5: i64, %arg6: i64, %arg7: i64) {
-    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #dpas>
-    %c32_i32 = arith.constant 32 : i32
-    %c-64_i32 = arith.constant -64 : i32
-    %c-32_i32 = arith.constant -32 : i32
-    %c64_i32 = arith.constant 64 : i32
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [4, 4], repCluster = [2, 2]}>
+#dot_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {ttig.support_sg_2d_block,  "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL:   llvm.func spir_kernelcc @dot_a_layout
+  tt.func public @dot_a_layout(%arg0: !tt.ptr<i8>, %col_stride: i64) {
+      %cst = arith.constant dense<0> : tensor<256x64xi8, #dot_a>
+      %c64_i64 = arith.constant 64 : i64
+      %c1_i64 = arith.constant 1 : i64
+      %c0_i32 = arith.constant 0 : i32
+      %0 = tt.make_tensor_ptr %arg0, [%c64_i64, %c64_i64], [%c1_i64, %col_stride], [%c0_i32, %c0_i32] {order = array<i32: 0, 1>} : <tensor<256x64xi8, #dot_a>>
+      // CHECK:           %[[OFF_0:.*]] = llvm.extractvalue {{.*}}[0] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+      // CHECK:           %[[OFF_1:.*]] = llvm.extractvalue {{.*}}[1] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+      // CHECK:           %[[HEIGHT_i64:.*]] = llvm.extractvalue {{.*}}[2] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+      // CHECK:           %[[WIDTH_i64:.*]] = llvm.extractvalue {{.*}}[3] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+      // CHECK:           %[[ROW_STRIDE_i64:.*]] = llvm.extractvalue {{.*}}[4] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+      // CHECK:           %[[COL_STRIDE_i64:.*]] = llvm.extractvalue {{.*}}[5] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+      // CHECK:           %[[BASE_PTR:.*]] = llvm.extractvalue {{.*}}[6] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+
+      // CHECK:           %[[HEIGHT:.*]] = llvm.trunc %[[HEIGHT_i64]] : i64 to i32
+
+      // CHECK:           %[[OFFSET:.*]] = llvm.add %[[OFF_0]], {{.*}} : i32
+      // CHECK:           %[[BASE:.*]] = llvm.getelementptr %[[BASE_PTR]]{{.*}} : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>, i8
+      // CHECK:           %[[OFFSET_X:.*]] = llvm.mlir.constant(0 : i32) : i32
+      // CHECK:           %[[OFFSET_Y:.*]] = llvm.select {{.*}}, %[[OFFSET]], %[[HEIGHT]] : i1, i32
+      // CHECK:           llvm.mlir.undef : vector<4xi8>
+      // CHECK-COUNT-4:   llvm.insertelement %{{[0-9]+}}, %{{[0-9]+}}{{\[}}{{.*}} : i32] : vector<4xi8>
+      // CHECK: triton_gen.2Dblockstore {{.*}}, %[[OFFSET_X]], %[[OFFSET_Y]], {{.*}} {elem_size_in_bits = 8, tile_width = 8, tile_height = 8, v_blocks = 1, cache_control = Default}
+      tt.store %0, %cst {ttig.block_io = "row_major", boundaryCheck = array<i32: 0>} : !tt.ptr<tensor<256x64xi8, #dot_a>>
+      // CHECK-COUNT-63: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 8, tile_width = 8, tile_height = 8, v_blocks = 1, cache_control = Default}
+
+      tt.return
+  }
+}
+
+// -----
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [4, 4], repCluster = [2, 2]}>
+#dot_b = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 1}>
+module attributes {ttig.support_sg_2d_block,  "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL:   llvm.func spir_kernelcc @dot_b_layout
+  tt.func public @dot_b_layout(%arg0: !tt.ptr<i8>, %col_stride: i64) {
+      %cst = arith.constant dense<0> : tensor<256x64xi8, #dot_b>
+      %c64_i64 = arith.constant 64 : i64
+      %c1_i64 = arith.constant 1 : i64
+      %c0_i32 = arith.constant 0 : i32
+      %0 = tt.make_tensor_ptr %arg0, [%c64_i64, %c64_i64], [%c1_i64, %col_stride], [%c0_i32, %c0_i32] {order = array<i32: 0, 1>} : <tensor<256x64xi8, #dot_b>>
+      // CHECK:           %[[OFF_0:.*]] = llvm.extractvalue {{.*}}[0] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+      // CHECK:           %[[OFF_1:.*]] = llvm.extractvalue {{.*}}[1] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+      // CHECK:           %[[HEIGHT_i64:.*]] = llvm.extractvalue {{.*}}[2] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+      // CHECK:           %[[WIDTH_i64:.*]] = llvm.extractvalue {{.*}}[3] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+      // CHECK:           %[[ROW_STRIDE_i64:.*]] = llvm.extractvalue {{.*}}[4] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+      // CHECK:           %[[COL_STRIDE_i64:.*]] = llvm.extractvalue {{.*}}[5] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+      // CHECK:           %[[BASE_PTR:.*]] = llvm.extractvalue {{.*}}[6] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+
+      // CHECK:           %[[HEIGHT:.*]] = llvm.trunc %[[HEIGHT_i64]] : i64 to i32
+
+      // CHECK:           %[[OFFSET:.*]] = llvm.add %[[OFF_0]], {{.*}} : i32
+      // CHECK:           %[[BASE:.*]] = llvm.getelementptr %[[BASE_PTR]]{{.*}} : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>, i8
+      // CHECK:           %[[OFFSET_X:.*]] = llvm.mlir.constant(0 : i32) : i32
+      // CHECK:           %[[OFFSET_Y:.*]] = llvm.select {{.*}}, %[[OFFSET]], %[[HEIGHT]] : i1, i32
+      // CHECK:           llvm.mlir.undef : vector<8xi8>
+      // CHECK-COUNT-8:   llvm.insertelement %{{[0-9]+}}, %{{[0-9]+}}{{\[}}{{.*}} : i32] : vector<8xi8>
+      // CHECK: triton_gen.2Dblockstore {{.*}}, %[[OFFSET_X]], %[[OFFSET_Y]], {{.*}} {elem_size_in_bits = 8, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
+      tt.store %0, %cst {ttig.block_io = "row_major", boundaryCheck = array<i32: 0>} : !tt.ptr<tensor<256x64xi8, #dot_b>>
+      // CHECK-COUNT-63: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 8, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
+
+      tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4, 2], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 8, 2], order = [2, 1, 0]}>
+#slice = #ttg.slice<{dim = 1, parent = #blocked}>
+module attributes {ttig.support_sg_2d_block,  "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL:   llvm.func spir_kernelcc @slice_layout
+  tt.func public @slice_layout(%arg0: !tt.ptr<i8>, %col_stride: i64) {
+      %cst = arith.constant dense<0> : tensor<256x64xi8, #slice>
+      %c64_i64 = arith.constant 64 : i64
+      %c1_i64 = arith.constant 1 : i64
+      %c0_i32 = arith.constant 0 : i32
+      %0 = tt.make_tensor_ptr %arg0, [%c64_i64, %c64_i64], [%c1_i64, %col_stride], [%c0_i32, %c0_i32] {order = array<i32: 0, 1>} : <tensor<256x64xi8, #slice>>
+      // CHECK:           %[[OFF_0:.*]] = llvm.extractvalue {{.*}}[0] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+      // CHECK:           %[[OFF_1:.*]] = llvm.extractvalue {{.*}}[1] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+      // CHECK:           %[[HEIGHT_i64:.*]] = llvm.extractvalue {{.*}}[2] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+      // CHECK:           %[[WIDTH_i64:.*]] = llvm.extractvalue {{.*}}[3] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+      // CHECK:           %[[ROW_STRIDE_i64:.*]] = llvm.extractvalue {{.*}}[4] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+      // CHECK:           %[[COL_STRIDE_i64:.*]] = llvm.extractvalue {{.*}}[5] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+      // CHECK:           %[[BASE_PTR:.*]] = llvm.extractvalue {{.*}}[6] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+
+      // CHECK:           %[[HEIGHT:.*]] = llvm.trunc %[[HEIGHT_i64]] : i64 to i32
+
+      // CHECK:           %[[OFFSET:.*]] = llvm.add %[[OFF_0]], {{.*}} : i32
+      // CHECK:           %[[BASE:.*]] = llvm.getelementptr %[[BASE_PTR]]{{.*}} : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>, i8
+      // CHECK:           %[[OFFSET_X:.*]] = llvm.mlir.constant(0 : i32) : i32
+      // CHECK:           %[[OFFSET_Y:.*]] = llvm.select {{.*}}, %[[OFFSET]], %[[HEIGHT]] : i1, i32
+      // CHECK:           llvm.mlir.undef : vector<16xi8>
+      // CHECK-COUNT-16:   llvm.insertelement %{{[0-9]+}}, %{{[0-9]+}}{{\[}}{{.*}} : i32] : vector<16xi8>
+      // CHECK: triton_gen.2Dblockstore {{.*}}, %[[OFFSET_X]], %[[OFFSET_Y]], {{.*}} {elem_size_in_bits = 16, tile_width = 32, tile_height = 8, v_blocks = 1, cache_control = Default}
+      tt.store %0, %cst {ttig.block_io = "row_major", boundaryCheck = array<i32: 0>} : !tt.ptr<tensor<256x64xi8, #slice>>
+      // CHECK-COUNT-31: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 16, tile_width = 32, tile_height = 8, v_blocks = 1, cache_control = Default}
+
+      tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4, 2], threadsPerWarp = [1, 32], warpsPerCTA = [8, 2], order = [1, 0]}>
+module attributes {ttig.support_sg_2d_block,  "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL:   llvm.func spir_kernelcc @block_layout
+  tt.func public @block_layout(%arg0: !tt.ptr<i8>, %col_stride: i64) {
+      %cst = arith.constant dense<0> : tensor<256x64xi8, #blocked>
+      %c64_i64 = arith.constant 64 : i64
+      %c1_i64 = arith.constant 1 : i64
+      %c0_i32 = arith.constant 0 : i32
+      %0 = tt.make_tensor_ptr %arg0, [%c64_i64, %c64_i64], [%c1_i64, %col_stride], [%c0_i32, %c0_i32] {order = array<i32: 0, 1>} : <tensor<256x64xi8, #blocked>>
+      // CHECK:           %[[OFF_0:.*]] = llvm.extractvalue {{.*}}[0] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+      // CHECK:           %[[OFF_1:.*]] = llvm.extractvalue {{.*}}[1] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+      // CHECK:           %[[HEIGHT_i64:.*]] = llvm.extractvalue {{.*}}[2] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+      // CHECK:           %[[WIDTH_i64:.*]] = llvm.extractvalue {{.*}}[3] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+      // CHECK:           %[[ROW_STRIDE_i64:.*]] = llvm.extractvalue {{.*}}[4] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+      // CHECK:           %[[COL_STRIDE_i64:.*]] = llvm.extractvalue {{.*}}[5] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+      // CHECK:           %[[BASE_PTR:.*]] = llvm.extractvalue {{.*}}[6] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+
+      // CHECK:           %[[HEIGHT:.*]] = llvm.trunc %[[HEIGHT_i64]] : i64 to i32
+
+      // CHECK:           %[[OFFSET:.*]] = llvm.add %[[OFF_0]], {{.*}} : i32
+      // CHECK:           %[[BASE:.*]] = llvm.getelementptr %[[BASE_PTR]]{{.*}} : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>, i8
+      // CHECK:           %[[OFFSET_X:.*]] = llvm.mlir.constant(0 : i32) : i32
+      // CHECK:           %[[OFFSET_Y:.*]] = llvm.select {{.*}}, %[[OFFSET]], %[[HEIGHT]] : i1, i32
+      // CHECK:           llvm.mlir.undef : vector<8xi8>
+      // CHECK-COUNT-8:   llvm.insertelement %{{[0-9]+}}, %{{[0-9]+}}{{\[}}{{.*}} : i32] : vector<8xi8>
+      // CHECK: triton_gen.2Dblockstore {{.*}}, %[[OFFSET_X]], %[[OFFSET_Y]], {{.*}} {elem_size_in_bits = 16, tile_width = 32, tile_height = 4, v_blocks = 1, cache_control = Default}
+      tt.store %0, %cst {ttig.block_io = "row_major", boundaryCheck = array<i32: 0>} : !tt.ptr<tensor<256x64xi8, #blocked>>
+      // CHECK-COUNT-7: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 16, tile_width = 32, tile_height = 4, v_blocks = 1, cache_control = Default}
+
+      tt.return
+  }
+}
+
+// -----
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_sg_2d_block"} {
+  tt.func public @matmul_no_scf_with_advance_kernel(%base: !tt.ptr<f16>, %width: i64, %height: i64, %rowStride: i64) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf16, #dpas>
     %c0_i32 = arith.constant 0 : i32
     %c1_i64 = arith.constant 1 : i64
-    %3 = tt.make_tensor_ptr %arg0, [%arg3, %arg5], [%arg6, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<64x32xf16, #dot0>>
-    %6 = tt.make_tensor_ptr %arg1, [%arg3, %arg4], [%arg7, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<32x64xf16, #dot1>>
-    %7 = tt.advance %3, [%c64_i32, %c-32_i32] : <tensor<64x32xf16, #dot0>>
-    %8 = tt.advance %7, [%c-64_i32, %c32_i32] : <tensor<64x32xf16, #dot0>>
-    %9 = tt.load %8 {boundaryCheck = array<i32: 1>, padding = 1 : i32, triton_intel_gpu.block_io = "row_major"} : !tt.ptr<tensor<64x32xf16, #dot0>>
-    %10 = tt.load %6 {boundaryCheck = array<i32: 0>, padding = 1 : i32, triton_intel_gpu.block_io = "row_major"} : !tt.ptr<tensor<32x64xf16, #dot1>>
-    %11 = tt.dot %9, %10, %cst, inputPrecision = tf32 : tensor<64x32xf16, #dot0> * tensor<32x64xf16, #dot1> -> tensor<64x64xf32, #dpas>
-    %12 = arith.truncf %11#0 : tensor<64x64xf32, #dpas> to tensor<64x64xf16, #dpas>
-    %13 = tt.make_tensor_ptr %arg2, [%arg3, %arg5], [%arg6, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<64x64xf16, #dpas>>
-    // The next two lines is used to start checking constant related to the BlockStore.
-    // CHECK-COUNT-3: llvm.call spir_funccc @_Z16get_sub_group_id
-    // CHECK-COUNT-39: llvm.extractvalue
-    // Next constant must be equal to warpsPerCTA[0]
-    // CHECK: %[[CST_4:.*]] = llvm.mlir.constant(4 : i32) : i32
-    // CHECK: %[[VAL_0:.*]] = llvm.urem %{{[0-9]+}}, %[[CST_4]] : i32
-    // Next constant must be equal to warpsPerCTA[1]
-    // CHECK: %[[CST_2:.*]] = llvm.mlir.constant(2 : i32) : i32
-    // CHECK: %[[VAL_1:.*]] = llvm.urem %{{[0-9]+}}, %[[CST_2]] : i32
-    // Next constant must is elemsPerInstr[0]
-    // CHECK: %[[CST_8:.*]] = llvm.mlir.constant(8 : i32) : i32
-    // CHECK: llvm.mul %[[VAL_0]], %[[CST_8]] : i32
-    // Next constant must is elemsPerInstr[1]
-    // CHECK: %[[CST_16:.*]] = llvm.mlir.constant(16 : i32) : i32
-    // CHECK: llvm.mul %[[VAL_1]], %[[CST_16]] : i32
+    %0 = tt.make_tensor_ptr %base, [%width, %height], [%rowStride, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<64x64xf16, #dpas>>
+    // CHECK: %[[WARP_ID:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id() {no_unwind, will_return} : () -> i32
+    // CHECK: %[[offsetBaseY:.*]] = llvm.extractvalue {{.*}}[0] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+    // CHECK: %[[offsetBaseX:.*]] = llvm.extractvalue {{.*}}[1] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+    // CHECK: %[[baseHeight:.*]] = llvm.extractvalue {{.*}}[2] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+    // CHECK: %[[baseWidth:.*]] = llvm.extractvalue {{.*}}[3] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+    // CHECK: %[[rowStride:.*]] = llvm.extractvalue {{.*}}[4] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+    // CHECK: %[[colStride:.*]] = llvm.extractvalue {{.*}}[5] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+    // CHECK: %[[base:.*]] = llvm.extractvalue {{.*}}[6] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+    // CHECK-COUNT-32: llvm.extractvalue {{.*}} : !llvm.struct<(f16, f16, {{.*}})>
+    // COM: Skip the register, lane, warp and block to the offset computation which should be covered by the LL tests.
+    // CHECK: %[[OFFSET_X:.*]] = llvm.add %[[offsetBaseY]], {{.*}} : i32
     // CHECK: llvm.mlir.undef : vector<8xf16>
     // CHECK-COUNT-8: llvm.insertelement %{{[0-9]+}}, %{{[0-9]+}}{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK: llvm.call spir_funccc @_Z42intel_sub_group_2d_block_write_16b_8r16x1cPU3AS1viiiDv2_iPt{{.*}}
+    // CHECK: triton_gen.2Dblockstore {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[OFFSET_X]], {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
+
+    // CHECK: %[[OFFSET_X:.*]] = llvm.add %[[offsetBaseY]], {{.*}} : i32
     // CHECK: llvm.mlir.undef : vector<8xf16>
     // CHECK-COUNT-8: llvm.insertelement %{{[0-9]+}}, %{{[0-9]+}}{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK: llvm.call spir_funccc @_Z42intel_sub_group_2d_block_write_16b_8r16x1cPU3AS1viiiDv2_iPt{{.*}}
+    // CHECK: triton_gen.2Dblockstore {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[OFFSET_X]], {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
+
+    // CHECK: %[[OFFSET_X:.*]] = llvm.add %[[offsetBaseY]], {{.*}} : i32
     // CHECK: llvm.mlir.undef : vector<8xf16>
     // CHECK-COUNT-8: llvm.insertelement %{{[0-9]+}}, %{{[0-9]+}}{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK: llvm.call spir_funccc @_Z42intel_sub_group_2d_block_write_16b_8r16x1cPU3AS1viiiDv2_iPt{{.*}}
+    // CHECK: triton_gen.2Dblockstore {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[OFFSET_X]], {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
+
+    // CHECK: %[[OFFSET_X:.*]] = llvm.add %[[offsetBaseY]], {{.*}} : i32
     // CHECK: llvm.mlir.undef : vector<8xf16>
     // CHECK-COUNT-8: llvm.insertelement %{{[0-9]+}}, %{{[0-9]+}}{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK: llvm.call spir_funccc @_Z42intel_sub_group_2d_block_write_16b_8r16x1cPU3AS1viiiDv2_iPt{{.*}}
-    tt.store %13, %12 {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<64x64xf16, #dpas>>
+    // CHECK: triton_gen.2Dblockstore {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[OFFSET_X]], {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
+    tt.store %0, %cst {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "row_major"} : !tt.ptr<tensor<64x64xf16, #dpas>>
     tt.return
   }
 }
 
 // -----
 
-// CHECK: llvm.func spir_funccc @_Z42intel_sub_group_2d_block_write_16b_8r16x1cPU3AS1viiiDv2_iPt(!llvm.ptr<1> {llvm.nonnull, llvm.writeonly}, i32, i32, i32, vector<2xi32>, !llvm.ptr {llvm.nonnull, llvm.readonly}) attributes {no_unwind, will_return}
-#dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
-module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_sg_2d_block"} {
+  tt.func public @no_boundary_check(%base: !tt.ptr<f16>, %width: i64, %height: i64, %rowStride: i64) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf16, #dpas>
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %0 = tt.make_tensor_ptr %base, [%width, %height], [%rowStride, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<64x64xf16, #dpas>>
+
+    // CHECK: %[[WARP_ID:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id() {no_unwind, will_return} : () -> i32
+
+    // CHECK: %[[offsetBaseY:.*]] = llvm.extractvalue {{.*}}[0] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+    // CHECK: %[[offsetBaseX:.*]] = llvm.extractvalue {{.*}}[1] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+    // CHECK: %[[baseHeight:.*]] = llvm.extractvalue {{.*}}[2] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+    // CHECK: %[[baseWidth:.*]] = llvm.extractvalue {{.*}}[3] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+    // CHECK: %[[rowStride:.*]] = llvm.extractvalue {{.*}}[4] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+    // CHECK: %[[colStride:.*]] = llvm.extractvalue {{.*}}[5] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+    // CHECK: %[[base:.*]] = llvm.extractvalue {{.*}}[6] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+
+    // CHECK: %[[C2:.*]] = llvm.mlir.constant(2 : i32) : i32
+    // CHECK: %[[rowStride_i32:.*]] = llvm.trunc %[[rowStride]] : i64 to i32
+    // CHECK: %[[PITCH:.*]] = llvm.mul %[[rowStride_i32]], %[[C2]]
+    // CHECK-COUNT-32: llvm.extractvalue {{.*}} : !llvm.struct<(f16, f16, {{.*}})>
+
+    // COM: Skip the register, lane, warp and block to the offset computation which should be covered by the LL tests.
+    // CHECK: %[[OFFSET_X:.*]] = llvm.add %[[offsetBaseX]], {{.*}} : i32
+    // CHECK: %[[OFFSET_Y:.*]] = llvm.add %[[offsetBaseY]], {{.*}} : i32
+
+    // COM: When boundary check is absent:
+    // CHECK: %[[baseWidth:.*]] = llvm.mlir.constant(64 : i32)
+    // CHECK: %[[base1:.*]] = llvm.getelementptr %[[base]][%[[OFFSET_X]]] : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>, f16
+    // CHECK: %[[OFFSET_X:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: %[[baseHeight:.*]] = llvm.mlir.constant(8 : i32)
+    // CHECK: %[[OFF:.*]] = llvm.mul %[[OFFSET_Y]], %[[PITCH]] : i32
+    // CHECK: %[[base:.*]] = llvm.getelementptr %[[base1]][%[[OFF]]] : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>, i8
+    // CHECK: %[[OFFSET_Y:.*]] = llvm.mlir.constant(0 : i32) : i32
+
+    // CHECK: llvm.mlir.undef : vector<8xf16>
+    // CHECK-COUNT-7: llvm.insertelement %{{[0-9]+}}, %{{[0-9]+}}{{\[}}{{.*}} : i32] : vector<8xf16>
+    // CHECK: %[[VAL0:.*]] = llvm.insertelement %{{[0-9]+}}, %{{[0-9]+}}{{\[}}{{.*}} : i32] : vector<8xf16>
+    // CHECK: %[[VAL:.*]] = llvm.bitcast %[[VAL0]] : vector<8xf16> to vector<8xi16>
+
+    // CHECK: triton_gen.2Dblockstore %[[base]], %[[baseWidth]], %[[baseHeight]], %[[PITCH]], %[[OFFSET_X]], %[[OFFSET_Y]], %[[VAL]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
+    // CHECK-COUNT-3: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
+
+    tt.store %0, %cst {ttig.block_io = "row_major"} : !tt.ptr<tensor<64x64xf16, #dpas>>
+    tt.return
+  }
+}
+
+// -----
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_sg_2d_block"} {
 // CHECK-LABEL:   llvm.func spir_kernelcc @dpas_layout_2d_store_rep_cluster_4_2(
-// CHECK-SAME:      %[[base:.*]]: !llvm.ptr<1>,
-// CHECK-SAME:      %[[width:.*]]: i64, %[[height:.*]]: i64, %[[rowStride:.*]]: i64) attributes {intel_reqd_sub_group_size = 16 : i32, triton_gen.max_work_group_size = array<i32: 128, 1, 1>} {
+// CHECK-SAME:      %[[base:.*]]: !llvm.ptr<1>, %[[width:.*]]: i64, %[[height:.*]]: i64, %[[rowStride:.*]]: i64, %[[PTR_1:.*]]: !llvm.ptr<1>,
+// CHECK-SAME:      %[[PTR_2:.*]]: !llvm.ptr<1>) attributes {intel_reqd_sub_group_size = 16 : i32, reqd_work_group_size = array<i32: 16, 1, 1>} {
   tt.func public @dpas_layout_2d_store_rep_cluster_4_2(%base: !tt.ptr<f16>, %width: i64, %height: i64, %rowStride: i64) {
     %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf16, #dpas>
     %c0_i32 = arith.constant 0 : i32
@@ -82,107 +262,20 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:           %[[VAL_79:.*]] = llvm.insertvalue %[[rowStride]], %[[VAL_78]][4] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
     // CHECK:           %[[VAL_80:.*]] = llvm.insertvalue %[[CST_1]], %[[VAL_79]][5] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
     // CHECK:           %[[BLOCK_PTR:.*]] = llvm.insertvalue %[[base]], %[[VAL_80]][6] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
-    // CHECK:           %[[CST_2:.*]] = llvm.mlir.constant(2 : i32) : i32
-    // CHECK:           %[[SUB_GROUP_ID_RAW:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id()
-    // CHECK:           %[[SUB_GROUP_ID_EXT:.*]] = llvm.zext %[[SUB_GROUP_ID_RAW]] : i32 to i64
-    // CHECK:           %[[SUB_GROUP_ID:.*]] = llvm.trunc %[[SUB_GROUP_ID_EXT]] : i64 to i32
-    // CHECK:           %[[CST_1:.*]] = llvm.mlir.constant(1 : i32) : i32
-    // CHECK:           %[[SUB_GROUP_ID_N:.*]] = llvm.urem %[[SUB_GROUP_ID]], %[[CST_1]]  : i32
-    // CHECK:           %[[SUB_GROUP_ID_M_:.*]] = llvm.udiv %[[SUB_GROUP_ID]], %[[CST_1]]  : i32
-    // CHECK:           %[[CST_1:.*]] = llvm.mlir.constant(1 : i32) : i32
-    // CHECK:           %[[SUB_GROUP_ID_M:.*]] = llvm.urem %[[SUB_GROUP_ID_M_]], %[[CST_1]]  : i32
-    // CHECK:           %[[OFFSET_0:.*]] = llvm.extractvalue %[[BLOCK_PTR]][0] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
-    // CHECK:           %[[OFFSET_1:.*]] = llvm.extractvalue %[[BLOCK_PTR]][1] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
-    // CHECK:           %[[WIDTH_i64:.*]] = llvm.extractvalue %[[BLOCK_PTR]][2] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
-    // CHECK:           %[[HEIGHT_i64:.*]] = llvm.extractvalue %[[BLOCK_PTR]][3] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+    // CHECK:           %[[OFF_0:.*]] = llvm.extractvalue %[[BLOCK_PTR]][0] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+    // CHECK:           %[[OFF_1:.*]] = llvm.extractvalue %[[BLOCK_PTR]][1] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+    // CHECK:           %[[HEIGHT_i64:.*]] = llvm.extractvalue %[[BLOCK_PTR]][2] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+    // CHECK:           %[[WIDTH_i64:.*]] = llvm.extractvalue %[[BLOCK_PTR]][3] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
     // CHECK:           %[[ROW_STRIDE_i64:.*]] = llvm.extractvalue %[[BLOCK_PTR]][4] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
     // CHECK:           %[[COL_STRIDE_i64:.*]] = llvm.extractvalue %[[BLOCK_PTR]][5] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
     // CHECK:           %[[BASE_PTR:.*]] = llvm.extractvalue %[[BLOCK_PTR]][6] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+    // CHECK:           %[[SCALAR_BYTES:.*]] = llvm.mlir.constant(2 : i32) : i32
+    // CHECK:           %[[WIDTH:.*]] = llvm.trunc %[[WIDTH_i64]] : i64 to i32
+    // CHECK:           %[[ROW_STRIDE:.*]] = llvm.trunc %[[ROW_STRIDE_i64]] : i64 to i32
+    // CHECK:           %[[WIDTH_IN_BYTES:.*]] = llvm.mul %[[WIDTH]], %[[SCALAR_BYTES]] : i32
+    // CHECK:           %[[HEIGHT:.*]] = llvm.trunc %[[HEIGHT_i64]] : i64 to i32
+    // CHECK:           %[[ROW_STRIDE_IN_BYTES:.*]] = llvm.mul %[[ROW_STRIDE]], %[[SCALAR_BYTES]] : i32
     %13 = tt.make_tensor_ptr %base, [%width, %height], [%rowStride, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<32x32xf16, #dpas>>
-
-    // COM: The decomposed values of the tensor with DPAS layout.
-    // CHECK:           %[[VAL_97:.*]] = llvm.extractvalue %[[VAL_71]][0]
-    // CHECK:           %[[VAL_98:.*]] = llvm.extractvalue %[[VAL_71]][1]
-    // CHECK:           %[[VAL_99:.*]] = llvm.extractvalue %[[VAL_71]][2]
-    // CHECK:           %[[VAL_100:.*]] = llvm.extractvalue %[[VAL_71]][3]
-    // CHECK:           %[[VAL_101:.*]] = llvm.extractvalue %[[VAL_71]][4]
-    // CHECK:           %[[VAL_102:.*]] = llvm.extractvalue %[[VAL_71]][5]
-    // CHECK:           %[[VAL_103:.*]] = llvm.extractvalue %[[VAL_71]][6]
-    // CHECK:           %[[VAL_104:.*]] = llvm.extractvalue %[[VAL_71]][7]
-    // CHECK:           %[[VAL_105:.*]] = llvm.extractvalue %[[VAL_71]][8]
-    // CHECK:           %[[VAL_106:.*]] = llvm.extractvalue %[[VAL_71]][9]
-    // CHECK:           %[[VAL_107:.*]] = llvm.extractvalue %[[VAL_71]][10]
-    // CHECK:           %[[VAL_108:.*]] = llvm.extractvalue %[[VAL_71]][11]
-    // CHECK:           %[[VAL_109:.*]] = llvm.extractvalue %[[VAL_71]][12]
-    // CHECK:           %[[VAL_110:.*]] = llvm.extractvalue %[[VAL_71]][13]
-    // CHECK:           %[[VAL_111:.*]] = llvm.extractvalue %[[VAL_71]][14]
-    // CHECK:           %[[VAL_112:.*]] = llvm.extractvalue %[[VAL_71]][15]
-    // CHECK:           %[[VAL_113:.*]] = llvm.extractvalue %[[VAL_71]][16]
-    // CHECK:           %[[VAL_114:.*]] = llvm.extractvalue %[[VAL_71]][17]
-    // CHECK:           %[[VAL_115:.*]] = llvm.extractvalue %[[VAL_71]][18]
-    // CHECK:           %[[VAL_116:.*]] = llvm.extractvalue %[[VAL_71]][19]
-    // CHECK:           %[[VAL_117:.*]] = llvm.extractvalue %[[VAL_71]][20]
-    // CHECK:           %[[VAL_118:.*]] = llvm.extractvalue %[[VAL_71]][21]
-    // CHECK:           %[[VAL_119:.*]] = llvm.extractvalue %[[VAL_71]][22]
-    // CHECK:           %[[VAL_120:.*]] = llvm.extractvalue %[[VAL_71]][23]
-    // CHECK:           %[[VAL_121:.*]] = llvm.extractvalue %[[VAL_71]][24]
-    // CHECK:           %[[VAL_122:.*]] = llvm.extractvalue %[[VAL_71]][25]
-    // CHECK:           %[[VAL_123:.*]] = llvm.extractvalue %[[VAL_71]][26]
-    // CHECK:           %[[VAL_124:.*]] = llvm.extractvalue %[[VAL_71]][27]
-    // CHECK:           %[[VAL_125:.*]] = llvm.extractvalue %[[VAL_71]][28]
-    // CHECK:           %[[VAL_126:.*]] = llvm.extractvalue %[[VAL_71]][29]
-    // CHECK:           %[[VAL_127:.*]] = llvm.extractvalue %[[VAL_71]][30]
-    // CHECK:           %[[VAL_128:.*]] = llvm.extractvalue %[[VAL_71]][31]
-    // CHECK:           %[[VAL_129:.*]] = llvm.extractvalue %[[VAL_71]][32]
-    // CHECK:           %[[VAL_130:.*]] = llvm.extractvalue %[[VAL_71]][33]
-    // CHECK:           %[[VAL_131:.*]] = llvm.extractvalue %[[VAL_71]][34]
-    // CHECK:           %[[VAL_132:.*]] = llvm.extractvalue %[[VAL_71]][35]
-    // CHECK:           %[[VAL_133:.*]] = llvm.extractvalue %[[VAL_71]][36]
-    // CHECK:           %[[VAL_134:.*]] = llvm.extractvalue %[[VAL_71]][37]
-    // CHECK:           %[[VAL_135:.*]] = llvm.extractvalue %[[VAL_71]][38]
-    // CHECK:           %[[VAL_136:.*]] = llvm.extractvalue %[[VAL_71]][39]
-    // CHECK:           %[[VAL_137:.*]] = llvm.extractvalue %[[VAL_71]][40]
-    // CHECK:           %[[VAL_138:.*]] = llvm.extractvalue %[[VAL_71]][41]
-    // CHECK:           %[[VAL_139:.*]] = llvm.extractvalue %[[VAL_71]][42]
-    // CHECK:           %[[VAL_140:.*]] = llvm.extractvalue %[[VAL_71]][43]
-    // CHECK:           %[[VAL_141:.*]] = llvm.extractvalue %[[VAL_71]][44]
-    // CHECK:           %[[VAL_142:.*]] = llvm.extractvalue %[[VAL_71]][45]
-    // CHECK:           %[[VAL_143:.*]] = llvm.extractvalue %[[VAL_71]][46]
-    // CHECK:           %[[VAL_144:.*]] = llvm.extractvalue %[[VAL_71]][47]
-    // CHECK:           %[[VAL_145:.*]] = llvm.extractvalue %[[VAL_71]][48]
-    // CHECK:           %[[VAL_146:.*]] = llvm.extractvalue %[[VAL_71]][49]
-    // CHECK:           %[[VAL_147:.*]] = llvm.extractvalue %[[VAL_71]][50]
-    // CHECK:           %[[VAL_148:.*]] = llvm.extractvalue %[[VAL_71]][51]
-    // CHECK:           %[[VAL_149:.*]] = llvm.extractvalue %[[VAL_71]][52]
-    // CHECK:           %[[VAL_150:.*]] = llvm.extractvalue %[[VAL_71]][53]
-    // CHECK:           %[[VAL_151:.*]] = llvm.extractvalue %[[VAL_71]][54]
-    // CHECK:           %[[VAL_152:.*]] = llvm.extractvalue %[[VAL_71]][55]
-    // CHECK:           %[[VAL_153:.*]] = llvm.extractvalue %[[VAL_71]][56]
-    // CHECK:           %[[VAL_154:.*]] = llvm.extractvalue %[[VAL_71]][57]
-    // CHECK:           %[[VAL_155:.*]] = llvm.extractvalue %[[VAL_71]][58]
-    // CHECK:           %[[VAL_156:.*]] = llvm.extractvalue %[[VAL_71]][59]
-    // CHECK:           %[[VAL_157:.*]] = llvm.extractvalue %[[VAL_71]][60]
-    // CHECK:           %[[VAL_158:.*]] = llvm.extractvalue %[[VAL_71]][61]
-    // CHECK:           %[[VAL_159:.*]] = llvm.extractvalue %[[VAL_71]][62]
-    // CHECK:           %[[VAL_160:.*]] = llvm.extractvalue %[[VAL_71]][63]
-
-    // CHECK:           %[[HEIGHT_i32:.*]] = llvm.trunc %[[HEIGHT_i64]] : i64 to i32
-    // CHECK:           %[[WIDTH_i32:.*]] = llvm.trunc %[[WIDTH_i64]] : i64 to i32
-    // CHECK:           %[[ROW_STRIDE_i32:.*]] = llvm.trunc %[[ROW_STRIDE_i64]] : i64 to i32
-    // CHECK:           %[[baseWidth:.*]] = llvm.mul %[[HEIGHT_i32]], %[[CST_2]] : i32
-    // CHECK:           %[[basePitch:.*]] = llvm.mul %[[ROW_STRIDE_i32]], %[[CST_2]] : i32
-    // CHECK:           %[[VAL_166:.*]] = llvm.mlir.constant(1 : i32) : i32
-    // CHECK:           %[[outerDimWarpId:.*]] = llvm.urem %[[SUB_GROUP_ID_M]], %[[VAL_166]]  : i32
-    // CHECK:           %[[VAL_168:.*]] = llvm.mlir.constant(1 : i32) : i32
-    // CHECK:           %[[innerDimWarpId:.*]] = llvm.urem %[[SUB_GROUP_ID_N]], %[[VAL_168]]  : i32
-    // CHECK:           %[[VAL_170:.*]] = llvm.mlir.constant(32 : i32) : i32
-    // CHECK:           %[[dimWarpId0:.*]] = llvm.mul %[[outerDimWarpId]], %[[VAL_170]] : i32
-    // CHECK:           %[[VAL_172:.*]] = llvm.mlir.constant(32 : i32) : i32
-    // CHECK:           %[[dimWarpId1:.*]] = llvm.mul %[[innerDimWarpId]], %[[VAL_172]] : i32
-    // CHECK:           %[[warpId0Offset:.*]] = llvm.add %[[dimWarpId0]], %[[OFFSET_0]] : i32
-    // CHECK:           %[[warpId1Offset:.*]] = llvm.add %[[dimWarpId1]], %[[OFFSET_1]] : i32
-    // CHECK:           %[[VAL_176:.*]] = llvm.mlir.constant(0 : i32) : i32
-
 
     // COM: The shape of DPAS layout replica is [4, 2]
     // COM: The replica order are [0, 1]
@@ -191,164 +284,221 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // COM:                       [6, 7]
 
     // COM: replica [0, 0]
-    // CHECK:           %[[offsetY:.*]] = llvm.add %[[warpId0Offset]], %[[VAL_176]] : i32
+    // CHECK:          llvm.call spir_funccc @_Z12get_local_idj
+    // CHECK-COUNT-4:   %[[VAL_164:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_168:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_169:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_170:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_171:.*]] = llvm.shl {{.*}}, %[[VAL_170]] : i32
+    // CHECK:           %[[VAL_172:.*]] = llvm.or %[[VAL_169]], %[[VAL_171]] : i32
+    // CHECK:           %[[VAL_173:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_174:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_175:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_176:.*]] = llvm.or disjoint %[[VAL_174]], %[[VAL_175]] : i32
+    // CHECK:           %[[VAL_177:.*]] = llvm.xor %[[VAL_168]], %[[VAL_176]] : i32
     // CHECK:           %[[VAL_178:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:           %[[offsetX:.*]] = llvm.add %[[warpId1Offset]], %[[VAL_178]] : i32
-    // CHECK:           %[[VAL_180:.*]] = llvm.mlir.undef : vector<8xf16>
-    // CHECK:           %[[VAL_182:.*]] = llvm.insertelement %[[VAL_97]], %[[VAL_180]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_184:.*]] = llvm.insertelement %[[VAL_98]], %[[VAL_182]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_186:.*]] = llvm.insertelement %[[VAL_99]], %[[VAL_184]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_188:.*]] = llvm.insertelement %[[VAL_100]], %[[VAL_186]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_190:.*]] = llvm.insertelement %[[VAL_101]], %[[VAL_188]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_192:.*]] = llvm.insertelement %[[VAL_102]], %[[VAL_190]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_194:.*]] = llvm.insertelement %[[VAL_103]], %[[VAL_192]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_196:.*]] = llvm.insertelement %[[VAL_104]], %[[VAL_194]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_197:.*]] = llvm.bitcast %[[VAL_196]] : vector<8xf16> to vector<8xi16>
-    // CHECK:           %[[VAL_198:.*]] = llvm.trunc %[[offsetY]] : i32 to i32
-    // CHECK:           %[[VAL_199:.*]] = llvm.trunc %[[offsetX]] : i32 to i32
-    // CHECK:           %[[VAL_200:.*]] = llvm.mlir.constant(8 : i32) : i32
-    // CHECK:           %[[VAL_201:.*]] = llvm.alloca %[[VAL_200]] x i16 : (i32) -> !llvm.ptr
-    // CHECK:           llvm.store %[[VAL_197]], %[[VAL_201]] : vector<8xi16>, !llvm.ptr
-    // CHECK:           %[[VAL_202:.*]] = llvm.mlir.constant(1 : i32) : i32
-    // CHECK:           %[[VAL_203:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:           %[[VAL_204:.*]] = llvm.mlir.undef : vector<2xi32>
-    // CHECK:           %[[VAL_205:.*]] = llvm.insertelement %[[VAL_199]], %[[VAL_204]]{{\[}}%[[VAL_203]] : i32] : vector<2xi32>
-    // CHECK:           %[[VAL_206:.*]] = llvm.insertelement %[[VAL_198]], %[[VAL_205]]{{\[}}%[[VAL_202]] : i32] : vector<2xi32>
-    // CHECK:           llvm.call spir_funccc @_Z42intel_sub_group_2d_block_write_16b_8r16x1cPU3AS1viiiDv2_iPt(%[[BASE_PTR]], %[[baseWidth]], %[[WIDTH_i32]], %[[basePitch]], %[[VAL_206]], %[[VAL_201]])
+    // CHECK:           %[[VAL_179:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_180:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_181:.*]] = llvm.or disjoint %[[VAL_179]], %[[VAL_180]] : i32
+    // CHECK:           %[[VAL_182:.*]] = llvm.xor %[[VAL_168]], %[[VAL_181]] : i32
+    // CHECK:           %[[ADD:.*]] = llvm.add %[[OFF_1]], %[[VAL_182]] : i32
+    // CHECK:           %[[OFFSET_Y:.*]] = llvm.add %[[OFF_0]], %[[VAL_177]] : i32
+    // CHECK:           %[[NUM_PACKED_VALS:.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK-NEXT:      %[[OFFSET_X:.*]] = llvm.udiv %[[ADD]], %[[NUM_PACKED_VALS]] : i32
+    // CHECK:           llvm.mlir.undef : vector<8xf16>
+    // CHECK-COUNT-8:   llvm.insertelement %{{[0-9]+}}, %{{[0-9]+}}{{\[}}{{.*}} : i32] : vector<8xf16>
+    // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %[[WIDTH_IN_BYTES]], %[[HEIGHT]], %[[ROW_STRIDE_IN_BYTES]], %[[OFFSET_X]], %[[OFFSET_Y]], {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32, vector<8xi16>)
 
     // COM: replica [0, 1]
-    // CHECK:           %[[VAL_207:.*]] = llvm.mlir.constant(16 : i32) : i32
-    // CHECK:           %[[VAL_208:.*]] = llvm.add %[[warpId1Offset]], %[[VAL_207]] : i32
-    // CHECK:           %[[VAL_209:.*]] = llvm.mlir.undef : vector<8xf16>
-    // CHECK:           %[[VAL_211:.*]] = llvm.insertelement %[[VAL_105]], %[[VAL_209]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_213:.*]] = llvm.insertelement %[[VAL_106]], %[[VAL_211]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_215:.*]] = llvm.insertelement %[[VAL_107]], %[[VAL_213]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_217:.*]] = llvm.insertelement %[[VAL_108]], %[[VAL_215]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_219:.*]] = llvm.insertelement %[[VAL_109]], %[[VAL_217]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_221:.*]] = llvm.insertelement %[[VAL_110]], %[[VAL_219]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_223:.*]] = llvm.insertelement %[[VAL_111]], %[[VAL_221]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_225:.*]] = llvm.insertelement %[[VAL_112]], %[[VAL_223]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_226:.*]] = llvm.bitcast %[[VAL_225]] : vector<8xf16> to vector<8xi16>
-    // CHECK:           %[[VAL_229:.*]] = llvm.mlir.constant(8 : i32) : i32
-    // CHECK:           %[[VAL_230:.*]] = llvm.alloca %[[VAL_229]] x i16 : (i32) -> !llvm.ptr
-    // CHECK:           llvm.store %[[VAL_226]], %[[VAL_230]] : vector<8xi16>, !llvm.ptr
-    // CHECK:           llvm.call spir_funccc @_Z42intel_sub_group_2d_block_write_16b_8r16x1cPU3AS1viiiDv2_iPt(%[[BASE_PTR]], %[[baseWidth]], %[[WIDTH_i32]], %[[basePitch]], {{.*}}, %[[VAL_230]])
+    // CHECK:           llvm.mlir.constant(8 : i32) : i32
+    // CHECK-COUNT-2:   llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_208:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_209:.*]] = llvm.mlir.constant(16 : i32) : i32
+    // CHECK:           %[[VAL_210:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_211:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_212:.*]] = llvm.shl {{.*}}, %[[VAL_211]] : i32
+    // CHECK:           %[[VAL_213:.*]] = llvm.or %[[VAL_210]], %[[VAL_212]] : i32
+    // CHECK:           %[[VAL_214:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_215:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_216:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_217:.*]] = llvm.or disjoint %[[VAL_215]], %[[VAL_216]] : i32
+    // CHECK:           %[[VAL_218:.*]] = llvm.xor %[[VAL_208]], %[[VAL_217]] : i32
+    // CHECK:           %[[VAL_219:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_220:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_221:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_222:.*]] = llvm.or disjoint %[[VAL_220]], %[[VAL_221]] : i32
+    // CHECK:           %[[VAL_223:.*]] = llvm.xor %[[VAL_209]], %[[VAL_222]] : i32
+    // CHECK:           %[[ADD:.*]] = llvm.add %[[OFF_1]], %[[VAL_223]] : i32
+    // CHECK:           %[[OFFSET_Y:.*]] = llvm.add %[[OFF_0]], %[[VAL_218]] : i32
+    // CHECK:           %[[NUM_PACKED_VALS:.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK-NEXT:      %[[OFFSET_X:.*]] = llvm.udiv %[[ADD]], %[[NUM_PACKED_VALS]] : i32
+    // CHECK:           llvm.mlir.undef : vector<8xf16>
+    // CHECK-COUNT-8:   llvm.insertelement %{{[0-9]+}}, %{{[0-9]+}}{{\[}}{{.*}} : i32] : vector<8xf16>
+    // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %[[WIDTH_IN_BYTES]], %[[HEIGHT]], %[[ROW_STRIDE_IN_BYTES]], %[[OFFSET_X]], %[[OFFSET_Y]], {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32, vector<8xi16>)
 
     // COM: replica [1, 0]
-    // CHECK:           %[[VAL_236:.*]] = llvm.mlir.constant(8 : i32) : i32
-    // CHECK:           %[[VAL_237:.*]] = llvm.add %[[warpId0Offset]], %[[VAL_236]] : i32
-    // CHECK:           %[[VAL_238:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:           %[[VAL_239:.*]] = llvm.add %[[warpId1Offset]], %[[VAL_238]] : i32
-    // CHECK:           %[[VAL_240:.*]] = llvm.mlir.undef : vector<8xf16>
-    // CHECK:           %[[VAL_242:.*]] = llvm.insertelement %[[VAL_113]], %[[VAL_240]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_244:.*]] = llvm.insertelement %[[VAL_114]], %[[VAL_242]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_246:.*]] = llvm.insertelement %[[VAL_115]], %[[VAL_244]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_248:.*]] = llvm.insertelement %[[VAL_116]], %[[VAL_246]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_250:.*]] = llvm.insertelement %[[VAL_117]], %[[VAL_248]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_252:.*]] = llvm.insertelement %[[VAL_118]], %[[VAL_250]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_254:.*]] = llvm.insertelement %[[VAL_119]], %[[VAL_252]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_256:.*]] = llvm.insertelement %[[VAL_120]], %[[VAL_254]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_257:.*]] = llvm.bitcast %[[VAL_256]] : vector<8xf16> to vector<8xi16>
-    // CHECK:           %[[VAL_260:.*]] = llvm.mlir.constant(8 : i32) : i32
-    // CHECK:           %[[VAL_261:.*]] = llvm.alloca %[[VAL_260]] x i16 : (i32) -> !llvm.ptr
-    // CHECK:           llvm.store %[[VAL_257]], %[[VAL_261]] : vector<8xi16>, !llvm.ptr
-    // CHECK:           llvm.call spir_funccc @_Z42intel_sub_group_2d_block_write_16b_8r16x1cPU3AS1viiiDv2_iPt(%[[BASE_PTR]], %[[baseWidth]], %[[WIDTH_i32]], %[[basePitch]], {{.*}}, %[[VAL_261]])
+    // CHECK:           llvm.mlir.constant(16 : i32) : i32
+    // CHECK-COUNT-2:   llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_249:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_250:.*]] = llvm.mlir.constant(8 : i32) : i32
+    // CHECK:           %[[VAL_251:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_252:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_253:.*]] = llvm.shl {{.*}}, %[[VAL_252]] : i32
+    // CHECK:           %[[VAL_254:.*]] = llvm.or %[[VAL_251]], %[[VAL_253]] : i32
+    // CHECK:           %[[VAL_255:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_256:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_257:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_258:.*]] = llvm.or disjoint %[[VAL_256]], %[[VAL_257]] : i32
+    // CHECK:           %[[VAL_259:.*]] = llvm.xor %[[VAL_250]], %[[VAL_258]] : i32
+    // CHECK:           %[[VAL_260:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_261:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_262:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_263:.*]] = llvm.or disjoint %[[VAL_261]], %[[VAL_262]] : i32
+    // CHECK:           %[[VAL_264:.*]] = llvm.xor %[[VAL_249]], %[[VAL_263]] : i32
+    // CHECK:           %[[ADD:.*]] = llvm.add %[[OFF_1]], %[[VAL_264]] : i32
+    // CHECK:           %[[OFFSET_Y:.*]] = llvm.add %[[OFF_0]], %[[VAL_259]] : i32
+    // CHECK:           %[[NUM_PACKED_VALS:.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK-NEXT:      %[[OFFSET_X:.*]] = llvm.udiv %[[ADD]], %[[NUM_PACKED_VALS]] : i32
+    // CHECK:           llvm.mlir.undef : vector<8xf16>
+    // CHECK-COUNT-8:   llvm.insertelement %{{[0-9]+}}, %{{[0-9]+}}{{\[}}{{.*}} : i32] : vector<8xf16>
+    // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %[[WIDTH_IN_BYTES]], %[[HEIGHT]], %[[ROW_STRIDE_IN_BYTES]], %[[OFFSET_X]], %[[OFFSET_Y]], {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32, vector<8xi16>)
 
     // COM: replica [1, 1]
-    // CHECK:           %[[VAL_267:.*]] = llvm.mlir.constant(16 : i32) : i32
-    // CHECK:           %[[VAL_268:.*]] = llvm.add %[[warpId1Offset]], %[[VAL_267]] : i32
-    // CHECK:           %[[VAL_269:.*]] = llvm.mlir.undef : vector<8xf16>
-    // CHECK:           %[[VAL_271:.*]] = llvm.insertelement %[[VAL_121]], %[[VAL_269]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_273:.*]] = llvm.insertelement %[[VAL_122]], %[[VAL_271]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_275:.*]] = llvm.insertelement %[[VAL_123]], %[[VAL_273]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_277:.*]] = llvm.insertelement %[[VAL_124]], %[[VAL_275]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_279:.*]] = llvm.insertelement %[[VAL_125]], %[[VAL_277]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_281:.*]] = llvm.insertelement %[[VAL_126]], %[[VAL_279]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_283:.*]] = llvm.insertelement %[[VAL_127]], %[[VAL_281]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_285:.*]] = llvm.insertelement %[[VAL_128]], %[[VAL_283]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_286:.*]] = llvm.bitcast %[[VAL_285]] : vector<8xf16> to vector<8xi16>
-    // CHECK:           %[[VAL_289:.*]] = llvm.mlir.constant(8 : i32) : i32
-    // CHECK:           %[[VAL_290:.*]] = llvm.alloca %[[VAL_289]] x i16 : (i32) -> !llvm.ptr
-    // CHECK:           llvm.store %[[VAL_286]], %[[VAL_290]] : vector<8xi16>, !llvm.ptr
-    // CHECK:           llvm.call spir_funccc @_Z42intel_sub_group_2d_block_write_16b_8r16x1cPU3AS1viiiDv2_iPt(%[[BASE_PTR]], %[[baseWidth]], %[[WIDTH_i32]], %[[basePitch]], {{.*}}, %[[VAL_290]])
+    // CHECK:           llvm.mlir.constant(24 : i32) : i32
+    // CHECK-COUNT-3:   llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_291:.*]] = llvm.mlir.constant(8 : i32) : i32
+    // CHECK:           %[[VAL_292:.*]] = llvm.mlir.constant(16 : i32) : i32
+    // CHECK:           %[[VAL_293:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_294:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_295:.*]] = llvm.shl {{.*}}, %[[VAL_294]] : i32
+    // CHECK:           %[[VAL_296:.*]] = llvm.or %[[VAL_293]], %[[VAL_295]] : i32
+    // CHECK:           %[[VAL_297:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_298:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_299:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_300:.*]] = llvm.or disjoint %[[VAL_298]], %[[VAL_299]] : i32
+    // CHECK:           %[[VAL_301:.*]] = llvm.xor %[[VAL_291]], %[[VAL_300]] : i32
+    // CHECK:           %[[VAL_302:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_303:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_304:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_305:.*]] = llvm.or disjoint %[[VAL_303]], %[[VAL_304]] : i32
+    // CHECK:           %[[VAL_306:.*]] = llvm.xor %[[VAL_292]], %[[VAL_305]] : i32
+    // CHECK:           %[[ADD:.*]] = llvm.add %[[OFF_1]], %[[VAL_306]] : i32
+    // CHECK:           %[[OFFSET_Y:.*]] = llvm.add %[[OFF_0]], %[[VAL_301]] : i32
+    // CHECK:           %[[NUM_PACKED_VALS:.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK-NEXT:      %[[OFFSET_X:.*]] = llvm.udiv %[[ADD]], %[[NUM_PACKED_VALS]] : i32
+    // CHECK:           llvm.mlir.undef : vector<8xf16>
+    // CHECK-COUNT-8:   llvm.insertelement %{{[0-9]+}}, %{{[0-9]+}}{{\[}}{{.*}} : i32] : vector<8xf16>
+    // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %[[WIDTH_IN_BYTES]], %[[HEIGHT]], %[[ROW_STRIDE_IN_BYTES]], %[[OFFSET_X]], %[[OFFSET_Y]], {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32, vector<8xi16>)
 
     // COM: replica [2, 0]
-    // CHECK:           %[[VAL_296:.*]] = llvm.mlir.constant(16 : i32) : i32
-    // CHECK:           %[[VAL_297:.*]] = llvm.add %[[warpId0Offset]], %[[VAL_296]] : i32
-    // CHECK:           %[[VAL_298:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:           %[[VAL_299:.*]] = llvm.add %[[warpId1Offset]], %[[VAL_298]] : i32
-    // CHECK:           %[[VAL_300:.*]] = llvm.mlir.undef : vector<8xf16>
-    // CHECK:           %[[VAL_302:.*]] = llvm.insertelement %[[VAL_129]], %[[VAL_300]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_304:.*]] = llvm.insertelement %[[VAL_130]], %[[VAL_302]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_306:.*]] = llvm.insertelement %[[VAL_131]], %[[VAL_304]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_308:.*]] = llvm.insertelement %[[VAL_132]], %[[VAL_306]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_310:.*]] = llvm.insertelement %[[VAL_133]], %[[VAL_308]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_312:.*]] = llvm.insertelement %[[VAL_134]], %[[VAL_310]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_314:.*]] = llvm.insertelement %[[VAL_135]], %[[VAL_312]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_316:.*]] = llvm.insertelement %[[VAL_136]], %[[VAL_314]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_317:.*]] = llvm.bitcast %[[VAL_316]] : vector<8xf16> to vector<8xi16>
-    // CHECK:           %[[VAL_320:.*]] = llvm.mlir.constant(8 : i32) : i32
-    // CHECK:           %[[VAL_321:.*]] = llvm.alloca %[[VAL_320]] x i16 : (i32) -> !llvm.ptr
-    // CHECK:           llvm.store %[[VAL_317]], %[[VAL_321]] : vector<8xi16>, !llvm.ptr
-    // CHECK:           llvm.call spir_funccc @_Z42intel_sub_group_2d_block_write_16b_8r16x1cPU3AS1viiiDv2_iPt(%[[BASE_PTR]], %[[baseWidth]], %[[WIDTH_i32]], %[[basePitch]], {{.*}}, %[[VAL_321]])
+    // CHECK:           llvm.mlir.constant(32 : i32) : i32
+    // CHECK-COUNT-2:   llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_332:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_333:.*]] = llvm.mlir.constant(16 : i32) : i32
+    // CHECK:           %[[VAL_334:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_335:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_336:.*]] = llvm.shl {{.*}}, %[[VAL_335]] : i32
+    // CHECK:           %[[VAL_337:.*]] = llvm.or %[[VAL_334]], %[[VAL_336]] : i32
+    // CHECK:           %[[VAL_338:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_339:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_340:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_341:.*]] = llvm.or disjoint %[[VAL_339]], %[[VAL_340]] : i32
+    // CHECK:           %[[VAL_342:.*]] = llvm.xor %[[VAL_333]], %[[VAL_341]] : i32
+    // CHECK:           %[[VAL_343:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_344:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_345:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_346:.*]] = llvm.or disjoint %[[VAL_344]], %[[VAL_345]] : i32
+    // CHECK:           %[[VAL_347:.*]] = llvm.xor %[[VAL_332]], %[[VAL_346]] : i32
+    // CHECK:           %[[ADD:.*]] = llvm.add %[[OFF_1]], %[[VAL_347]] : i32
+    // CHECK:           %[[OFFSET_Y:.*]] = llvm.add %[[OFF_0]], %[[VAL_342]] : i32
+    // CHECK:           %[[NUM_PACKED_VALS:.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK-NEXT:      %[[OFFSET_X:.*]] = llvm.udiv %[[ADD]], %[[NUM_PACKED_VALS]] : i32
+    // CHECK:           llvm.mlir.undef : vector<8xf16>
+    // CHECK-COUNT-8:   llvm.insertelement %{{[0-9]+}}, %{{[0-9]+}}{{\[}}{{.*}} : i32] : vector<8xf16>
+    // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %[[WIDTH_IN_BYTES]], %[[HEIGHT]], %[[ROW_STRIDE_IN_BYTES]], %[[OFFSET_X]], %[[OFFSET_Y]], {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32, vector<8xi16>)
 
     // COM: replica [2, 1]
-    // CHECK:           %[[VAL_327:.*]] = llvm.mlir.constant(16 : i32) : i32
-    // CHECK:           %[[VAL_328:.*]] = llvm.add %[[warpId1Offset]], %[[VAL_327]] : i32
-    // CHECK:           %[[VAL_329:.*]] = llvm.mlir.undef : vector<8xf16>
-    // CHECK:           %[[VAL_331:.*]] = llvm.insertelement %[[VAL_137]], %[[VAL_329]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_333:.*]] = llvm.insertelement %[[VAL_138]], %[[VAL_331]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_335:.*]] = llvm.insertelement %[[VAL_139]], %[[VAL_333]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_337:.*]] = llvm.insertelement %[[VAL_140]], %[[VAL_335]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_339:.*]] = llvm.insertelement %[[VAL_141]], %[[VAL_337]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_341:.*]] = llvm.insertelement %[[VAL_142]], %[[VAL_339]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_343:.*]] = llvm.insertelement %[[VAL_143]], %[[VAL_341]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_345:.*]] = llvm.insertelement %[[VAL_144]], %[[VAL_343]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_346:.*]] = llvm.bitcast %[[VAL_345]] : vector<8xf16> to vector<8xi16>
-    // CHECK:           %[[VAL_349:.*]] = llvm.mlir.constant(8 : i32) : i32
-    // CHECK:           %[[VAL_350:.*]] = llvm.alloca %[[VAL_349]] x i16 : (i32) -> !llvm.ptr
-    // CHECK:           llvm.store %[[VAL_346]], %[[VAL_350]] : vector<8xi16>, !llvm.ptr
-    // CHECK:           llvm.call spir_funccc @_Z42intel_sub_group_2d_block_write_16b_8r16x1cPU3AS1viiiDv2_iPt(%[[BASE_PTR]], %[[baseWidth]], %[[WIDTH_i32]], %[[basePitch]], {{.*}}, %[[VAL_350]])
+    // CHECK:           llvm.mlir.constant(40 : i32) : i32
+    // CHECK-COUNT-3:   llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_374:.*]] = llvm.mlir.constant(16 : i32) : i32
+    // CHECK:           %[[VAL_375:.*]] = llvm.mlir.constant(16 : i32) : i32
+    // CHECK:           %[[VAL_376:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_377:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_378:.*]] = llvm.shl {{.*}}, %[[VAL_377]] : i32
+    // CHECK:           %[[VAL_379:.*]] = llvm.or %[[VAL_376]], %[[VAL_378]] : i32
+    // CHECK:           %[[VAL_380:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_381:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_382:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_383:.*]] = llvm.or disjoint %[[VAL_381]], %[[VAL_382]] : i32
+    // CHECK:           %[[VAL_384:.*]] = llvm.xor %[[VAL_374]], %[[VAL_383]] : i32
+    // CHECK:           %[[VAL_385:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_386:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_387:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_388:.*]] = llvm.or disjoint %[[VAL_386]], %[[VAL_387]] : i32
+    // CHECK:           %[[VAL_389:.*]] = llvm.xor %[[VAL_375]], %[[VAL_388]] : i32
+    // CHECK:           %[[ADD:.*]] = llvm.add %[[OFF_1]], %[[VAL_389]] : i32
+    // CHECK:           %[[OFFSET_Y:.*]] = llvm.add %[[OFF_0]], %[[VAL_384]] : i32
+    // CHECK:           %[[NUM_PACKED_VALS:.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK-NEXT:      %[[OFFSET_X:.*]] = llvm.udiv %[[ADD]], %[[NUM_PACKED_VALS]] : i32
+    // CHECK:           llvm.mlir.undef : vector<8xf16>
+    // CHECK-COUNT-8:   llvm.insertelement %{{[0-9]+}}, %{{[0-9]+}}{{\[}}{{.*}} : i32] : vector<8xf16>
+    // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %[[WIDTH_IN_BYTES]], %[[HEIGHT]], %[[ROW_STRIDE_IN_BYTES]], %[[OFFSET_X]], %[[OFFSET_Y]], {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32, vector<8xi16>)
 
     // COM: replica [3, 0]
-    // CHECK:           %[[VAL_356:.*]] = llvm.mlir.constant(24 : i32) : i32
-    // CHECK:           %[[VAL_357:.*]] = llvm.add %[[warpId0Offset]], %[[VAL_356]] : i32
-    // CHECK:           %[[VAL_358:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:           %[[VAL_359:.*]] = llvm.add %[[warpId1Offset]], %[[VAL_358]] : i32
-    // CHECK:           %[[VAL_360:.*]] = llvm.mlir.undef : vector<8xf16>
-    // CHECK:           %[[VAL_362:.*]] = llvm.insertelement %[[VAL_145]], %[[VAL_360]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_364:.*]] = llvm.insertelement %[[VAL_146]], %[[VAL_362]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_366:.*]] = llvm.insertelement %[[VAL_147]], %[[VAL_364]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_368:.*]] = llvm.insertelement %[[VAL_148]], %[[VAL_366]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_370:.*]] = llvm.insertelement %[[VAL_149]], %[[VAL_368]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_372:.*]] = llvm.insertelement %[[VAL_150]], %[[VAL_370]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_374:.*]] = llvm.insertelement %[[VAL_151]], %[[VAL_372]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_376:.*]] = llvm.insertelement %[[VAL_152]], %[[VAL_374]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_377:.*]] = llvm.bitcast %[[VAL_376]] : vector<8xf16> to vector<8xi16>
-    // CHECK:           %[[VAL_380:.*]] = llvm.mlir.constant(8 : i32) : i32
-    // CHECK:           %[[VAL_381:.*]] = llvm.alloca %[[VAL_380]] x i16 : (i32) -> !llvm.ptr
-    // CHECK:           llvm.store %[[VAL_377]], %[[VAL_381]] : vector<8xi16>, !llvm.ptr
-    // CHECK:           llvm.call spir_funccc @_Z42intel_sub_group_2d_block_write_16b_8r16x1cPU3AS1viiiDv2_iPt(%[[BASE_PTR]], %[[baseWidth]], %[[WIDTH_i32]], %[[basePitch]], {{.*}}, %[[VAL_381]])
+    // CHECK:           llvm.mlir.constant(48 : i32) : i32
+    // CHECK-COUNT-2:   llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_415:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_416:.*]] = llvm.mlir.constant(24 : i32) : i32
+    // CHECK:           %[[VAL_417:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_418:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_419:.*]] = llvm.shl {{.*}}, %[[VAL_418]] : i32
+    // CHECK:           %[[VAL_420:.*]] = llvm.or %[[VAL_417]], %[[VAL_419]] : i32
+    // CHECK:           %[[VAL_421:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_422:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_423:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_424:.*]] = llvm.or disjoint %[[VAL_422]], %[[VAL_423]] : i32
+    // CHECK:           %[[VAL_425:.*]] = llvm.xor %[[VAL_416]], %[[VAL_424]] : i32
+    // CHECK:           %[[VAL_426:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_427:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_428:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_429:.*]] = llvm.or disjoint %[[VAL_427]], %[[VAL_428]] : i32
+    // CHECK:           %[[VAL_430:.*]] = llvm.xor %[[VAL_415]], %[[VAL_429]] : i32
+    // CHECK:           %[[ADD:.*]] = llvm.add %[[OFF_1]], %[[VAL_430]] : i32
+    // CHECK:           %[[OFFSET_Y:.*]] = llvm.add %[[OFF_0]], %[[VAL_425]] : i32
+    // CHECK:           %[[NUM_PACKED_VALS:.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK-NEXT:      %[[OFFSET_X:.*]] = llvm.udiv %[[ADD]], %[[NUM_PACKED_VALS]] : i32
+    // CHECK:           llvm.mlir.undef : vector<8xf16>
+    // CHECK-COUNT-8:   llvm.insertelement %{{[0-9]+}}, %{{[0-9]+}}{{\[}}{{.*}} : i32] : vector<8xf16>
+    // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %[[WIDTH_IN_BYTES]], %[[HEIGHT]], %[[ROW_STRIDE_IN_BYTES]], %[[OFFSET_X]], %[[OFFSET_Y]], {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32, vector<8xi16>)
 
     // COM: replica [3, 1]
-    // CHECK:           %[[VAL_387:.*]] = llvm.mlir.constant(16 : i32) : i32
-    // CHECK:           %[[VAL_388:.*]] = llvm.add %[[warpId1Offset]], %[[VAL_387]] : i32
-    // CHECK:           %[[VAL_389:.*]] = llvm.mlir.undef : vector<8xf16>
-    // CHECK:           %[[VAL_391:.*]] = llvm.insertelement %[[VAL_153]], %[[VAL_389]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_393:.*]] = llvm.insertelement %[[VAL_154]], %[[VAL_391]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_395:.*]] = llvm.insertelement %[[VAL_155]], %[[VAL_393]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_397:.*]] = llvm.insertelement %[[VAL_156]], %[[VAL_395]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_399:.*]] = llvm.insertelement %[[VAL_157]], %[[VAL_397]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_401:.*]] = llvm.insertelement %[[VAL_158]], %[[VAL_399]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_403:.*]] = llvm.insertelement %[[VAL_159]], %[[VAL_401]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_405:.*]] = llvm.insertelement %[[VAL_160]], %[[VAL_403]]{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_406:.*]] = llvm.bitcast %[[VAL_405]] : vector<8xf16> to vector<8xi16>
-    // CHECK:           %[[VAL_409:.*]] = llvm.mlir.constant(8 : i32) : i32
-    // CHECK:           %[[VAL_410:.*]] = llvm.alloca %[[VAL_409]] x i16 : (i32) -> !llvm.ptr
-    // CHECK:           llvm.store %[[VAL_406]], %[[VAL_410]] : vector<8xi16>, !llvm.ptr
-    // CHECK:           llvm.call spir_funccc @_Z42intel_sub_group_2d_block_write_16b_8r16x1cPU3AS1viiiDv2_iPt(%[[BASE_PTR]], %[[baseWidth]], %[[WIDTH_i32]], %[[basePitch]], {{.*}}, %[[VAL_410]])
+    // CHECK:           llvm.mlir.constant(56 : i32) : i32
+    // CHECK-COUNT-3:   llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_457:.*]] = llvm.mlir.constant(24 : i32) : i32
+    // CHECK:           %[[VAL_458:.*]] = llvm.mlir.constant(16 : i32) : i32
+    // CHECK:           %[[VAL_459:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_460:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_461:.*]] = llvm.shl {{.*}}, %[[VAL_460]] : i32
+    // CHECK:           %[[VAL_462:.*]] = llvm.or %[[VAL_459]], %[[VAL_461]] : i32
+    // CHECK:           %[[VAL_463:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_464:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_465:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_466:.*]] = llvm.or disjoint %[[VAL_464]], %[[VAL_465]] : i32
+    // CHECK:           %[[VAL_467:.*]] = llvm.xor %[[VAL_457]], %[[VAL_466]] : i32
+    // CHECK:           %[[VAL_468:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_469:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_470:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[VAL_471:.*]] = llvm.or disjoint %[[VAL_469]], %[[VAL_470]] : i32
+    // CHECK:           %[[VAL_472:.*]] = llvm.xor %[[VAL_458]], %[[VAL_471]] : i32
+    // CHECK:           %[[ADD:.*]] = llvm.add %[[OFF_1]], %[[VAL_472]] : i32
+    // CHECK:           %[[OFFSET_Y:.*]] = llvm.add %[[OFF_0]], %[[VAL_467]] : i32
+    // CHECK:           %[[NUM_PACKED_VALS:.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK-NEXT:      %[[OFFSET_X:.*]] = llvm.udiv %[[ADD]], %[[NUM_PACKED_VALS]] : i32
+    // CHECK:           llvm.mlir.undef : vector<8xf16>
+    // CHECK-COUNT-8:   llvm.insertelement %{{[0-9]+}}, %{{[0-9]+}}{{\[}}{{.*}} : i32] : vector<8xf16>
+    // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %[[WIDTH_IN_BYTES]], %[[HEIGHT]], %[[ROW_STRIDE_IN_BYTES]], %[[OFFSET_X]], %[[OFFSET_Y]], {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32, vector<8xi16>)
 
-    tt.store %13, %cst {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<32x32xf16, #dpas>>
+    tt.store %13, %cst {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "row_major"} : !tt.ptr<tensor<32x32xf16, #dpas>>
     tt.return
   }
 }
@@ -366,10 +516,12 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
       %0 = tt.make_tensor_ptr %arg0, [%c64_i64, %c64_i64], [%c1_i64, %col_stride], [%c0_i32, %c0_i32] {order = array<i32: 0, 1>} : <tensor<64x16xf16, #blocked>>
       // CHECK: llvm.call spir_funccc @_Z12get_local_idj
       // CHECK-NOT: llvm.icmp "slt"
-      // CHECK: %[[threadID:.*]] = llvm.call spir_funccc @_Z12get_local_idj
-      // CHECK: %[[VAL_583:.*]] = llvm.trunc %[[threadID]] : i64 to i32
-      // CHECK: %[[VAL_584:.*]] = llvm.mlir.constant(16 : i32) : i32
-      // CHECK: %[[VAL_586:.*]] = llvm.udiv %[[VAL_583]], %[[VAL_584]] : i32
+      // CHECK: %[[THREAD_ID:.*]] = llvm.call spir_funccc @_Z12get_local_idj
+      // CHECK: %[[THREAD_ID_32:.*]] = llvm.trunc %[[THREAD_ID]] : i64 to i32
+      // CHECK-DAG: %[[CST_127:.*]] = llvm.mlir.constant(127 : i32) : i32
+      // CHECK-DAG: %[[RTID:.*]] = llvm.and %[[THREAD_ID_32:.*]], %[[CST_127]] : i32
+      // CHECK-DAG: %[[VAL_584:.*]] = llvm.mlir.constant(16 : i32) : i32
+      // CHECK: %[[VAL_586:.*]] = llvm.udiv %[[RTID]], %[[VAL_584]] : i32
       // CHECK: %[[VAL_587:.*]] = llvm.mlir.constant(3 : i32) : i32
       // CHECK: %[[VAL_588:.*]] = llvm.and %[[VAL_586]], %[[VAL_587]] : i32
       // CHECK: %[[threadPred:.*]] = llvm.icmp "eq" %[[VAL_588]], {{.*}} : i32

@@ -11,7 +11,6 @@ using namespace mlir::triton::gpu;
 using namespace mlir::triton::NVIDIA;
 namespace ttng = mlir::triton::nvidia_gpu;
 
-using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::triton::gpu::NVMMASharedEncodingAttr;
 
 //===----------------------------------------------------------------------===//
@@ -26,33 +25,37 @@ mlir::triton::NVIDIA::DotOpMmaV5TmemLoader::DotOpMmaV5TmemLoader(
   auto ty = cast<MemDescType>(tensor.getType());
   auto tmemEncoding = cast<ttng::TensorMemoryEncodingAttr>(ty.getEncoding());
   unpacked = tmemEncoding.getUnpacked();
+  // When using TMEM to store operands mma operands the TMEM block size may be
+  // smaller than mma k block. Therefore we need to adjust the offset
+  // calculation.
+  numSlicePerBlockN = tmemEncoding.getBlockN() / instrShape[1];
   int elTyWidth = ty.getElementTypeBitWidth();
   numElementsPer32b = unpacked ? 1 : 32 / elTyWidth;
   auto shapePerCTA = triton::gpu::getShapePerCTA(ty);
   numRepM = ceil<unsigned>(shapePerCTA[0], instrShape[0]);
 }
 
-Value mlir::triton::NVIDIA::DotOpMmaV5TmemLoader::tmemLoad(
+MemDescOperand mlir::triton::NVIDIA::DotOpMmaV5TmemLoader::tmemLoad(
     int a, int b, ConversionPatternRewriter &rewriter, Location loc) const {
-  auto tb = TritonLLVMOpBuilder(loc, rewriter);
   int numRows = 64;
   if (interleaved || instrShape[0] >= 128)
     numRows = 128;
   int numColPerBlock =
-      ((instrShape[0] * instrShape[1]) / numRows) / numElementsPer32b;
-  Value address = base;
-  int blockId = a + b * numRepM;
-  address = tb.ptrtoint(i32_ty, address);
+      ((instrShape[0] * numSlicePerBlockN * instrShape[1]) / numRows) /
+      numElementsPer32b;
+  int blockId = a + (b / numSlicePerBlockN) * numRepM;
+  int offset;
   if (!interleaved) {
-    address = tb.add(address, tb.i32_val(numColPerBlock * blockId));
+    offset = numColPerBlock * blockId;
   } else {
     int blockIdIsOdd = blockId & 1;
     int blockIdPrevEven = blockId - blockIdIsOdd;
-    Value offset = tb.i32_val(numColPerBlock * blockIdPrevEven +
-                              ((16 * blockIdIsOdd) << 16));
-    address = tb.add(address, offset);
+    offset = numColPerBlock * blockIdPrevEven + ((16 * blockIdIsOdd) << 16);
   }
-  return address;
+  offset += (b % numSlicePerBlockN) * (instrShape[1] / numElementsPer32b);
+  auto tb = TritonLLVMOpBuilder(loc, rewriter);
+  Value address = tb.ptrtoint(i32_ty, base);
+  return {address, offset};
 }
 
 //===----------------------------------------------------------------------===//
@@ -229,9 +232,9 @@ static Value createScaleInstDescriptor(ConversionPatternRewriter &rewriter,
 //===----------------------------------------------------------------------===//
 
 static void createGen5MMA(ConversionPatternRewriter &rewriter, Location loc,
-                          ttng::TCGen5MMAOp op, Value a, Value b, Value d,
-                          Value pred, Value instDescriptor, Value useInitAcc,
-                          bool aInTMem, bool twoCTAs) {
+                          ttng::TCGen5MMAOp op, MemDescOperand a, Value b,
+                          MemDescOperand d, Value pred, Value instDescriptor,
+                          Value useInitAcc, bool aInTMem, bool twoCTAs) {
   PTXBuilder ptxBuilder;
   std::string opcode =
       "tcgen05.mma.cta_group::" + std::to_string(twoCTAs ? 2 : 1) + ".kind::";
@@ -244,9 +247,10 @@ static void createGen5MMA(ConversionPatternRewriter &rewriter, Location loc,
     opcode += "f8f6f4";
   else
     assert(0 && "Unsupported type.");
-  auto *accOp = ptxBuilder.newAddrOperand(d, "r");
-  auto *aOp = aInTMem ? ptxBuilder.newAddrOperand(a, "r")
-                      : ptxBuilder.newOperand(a, "l");
+  auto *accOp = ptxBuilder.newAddrOperand(d.base, "r", *d.offset);
+  assert(a.offset.has_value() == aInTMem);
+  auto *aOp = aInTMem ? ptxBuilder.newAddrOperand(a.base, "r", *a.offset)
+                      : ptxBuilder.newOperand(a.base, "l");
   auto *bOp = ptxBuilder.newOperand(b, "l");
   auto *instDescOp = ptxBuilder.newOperand(instDescriptor, "r");
   auto *useInitAccOp = ptxBuilder.newOperand(useInitAcc, "b");
@@ -257,10 +261,10 @@ static void createGen5MMA(ConversionPatternRewriter &rewriter, Location loc,
 
 static void createScaledGen5MMA(ConversionPatternRewriter &rewriter,
                                 Location loc, ttng::TCGen5MMAScaledOp op,
-                                Value a, Value b, Value d, Value scaleA,
-                                Value scaleB, Value pred, Value instDescriptor,
-                                Value useInitAcc, bool aInTmem,
-                                mxfpKind mxfpInstKind) {
+                                MemDescOperand a, Value b, MemDescOperand d,
+                                Value scaleA, Value scaleB, Value pred,
+                                Value instDescriptor, Value useInitAcc,
+                                bool aInTmem, mxfpKind mxfpInstKind) {
   PTXBuilder ptxBuilder;
   std::string opcode;
   if (mxfpInstKind == mxfpKind::mxf8f6f4) {
@@ -274,9 +278,10 @@ static void createScaledGen5MMA(ConversionPatternRewriter &rewriter,
   } else {
     assert(0 && "Unsupported mxfp kind.");
   }
-  auto *accOp = ptxBuilder.newAddrOperand(d, "r");
-  auto *aOp = aInTmem ? ptxBuilder.newAddrOperand(a, "r")
-                      : ptxBuilder.newOperand(a, "l");
+  auto *accOp = ptxBuilder.newAddrOperand(d.base, "r", *d.offset);
+  assert(aInTmem == a.offset.has_value());
+  auto *aOp = aInTmem ? ptxBuilder.newAddrOperand(a.base, "r", *a.offset)
+                      : ptxBuilder.newOperand(a.base, "l");
   auto *bOp = ptxBuilder.newOperand(b, "l");
   auto *instDescOp = ptxBuilder.newOperand(instDescriptor, "r");
   auto *scaleAOp = ptxBuilder.newAddrOperand(scaleA, "r");
@@ -335,11 +340,11 @@ struct DotConversion {
     bool aInTmem;
   };
 
-  using GetAccAddressFn = std::function<Value(
+  using GetAccAddressFn = std::function<MemDescOperand(
       ConversionPatternRewriter &, Location, int, int, const InstDesc &)>;
-  using CreateMMAInstFn =
-      std::function<void(ConversionPatternRewriter &, Location, Value, Value,
-                         Value, Value, Value, const InstDesc &, int, int, int)>;
+  using CreateMMAInstFn = std::function<void(
+      ConversionPatternRewriter &, Location, MemDescOperand, MemDescOperand,
+      Value, Value, Value, const InstDesc &, int, int, int)>;
 
   struct {
     unsigned M;
@@ -367,7 +372,7 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
                     Value b, Value loadedA, Value loadedB,
                     MemDescType dTensorTy, Value useDFlag, Value pred,
                     ValueRange barriers, ValueRange barrierPreds, bool twoCTAs,
-                    const DotConversion &op) {
+                    bool opKindIsMXFP4, const DotConversion &op) {
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
 
   // Only run mma on one thread. We currently use elect as ptxas is not able to
@@ -406,16 +411,10 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
 
   Value baseA = loadedA;
   if (!aInTmem) {
-    baseA = getSharedMemoryObjectFromStruct(
-                loc, loadedA,
-                typeConverter.convertType(aTensorTy.getElementType()), rewriter)
-                .getBase();
+    baseA = getOffsetedBase(loadedA, aTensorTy, &typeConverter, rewriter, loc);
   }
   Value baseB =
-      getSharedMemoryObjectFromStruct(
-          loc, loadedB, typeConverter.convertType(bTensorTy.getElementType()),
-          rewriter)
-          .getBase();
+      getOffsetedBase(loadedB, bTensorTy, &typeConverter, rewriter, loc);
 
   auto [M, N, K] = op.shape;
 
@@ -437,17 +436,32 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
   SmallVector<int64_t> shapeB = op.shapeB;
   SmallVector<unsigned> aOperandShape = {mmaSizeM, mmaSizeK};
 
+  auto getAllocShape = [&](MemDescType tensorTy, int kDim) {
+    // allocationShape uses the shape, not the `allocShape`?
+    auto fullAllocShape = triton::gpu::getAllocationShapePerCTA(
+        tensorTy.getEncoding(), tensorTy.getAllocShape());
+    auto ret = to_vector(ArrayRef<int64_t>(fullAllocShape).take_back(2));
+
+    if (opKindIsMXFP4) {
+      ret[kDim] *= 2;
+    }
+    return ret;
+  };
+
   std::unique_ptr<DotOpMmaMemLoader> aLoader;
   if (aInTmem) {
     aLoader = std::make_unique<DotOpMmaV5TmemLoader>(a, baseA, aOperandShape,
                                                      interleaved, transA);
   } else {
+    auto allocShapeA = getAllocShape(aTensorTy, 1);
     aLoader = std::make_unique<DotOpMmaV3SmemLoader>(
-        a, baseA, shapeA, shapeA, zero, 1, transA, aOperandShape,
+        a, baseA, shapeA, allocShapeA, zero, 1, transA, aOperandShape,
         op.numBitsPerElementA, rewriter, loc);
   }
+
+  auto allocShapeB = getAllocShape(bTensorTy, 0);
   DotOpMmaV3SmemLoader bLoader = DotOpMmaV3SmemLoader(
-      b, baseB, shapeB, shapeB, zero, 1, transB, {mmaSizeN, mmaSizeK},
+      b, baseB, shapeB, allocShapeB, zero, 1, transB, {mmaSizeN, mmaSizeK},
       op.numBitsPerElementB, rewriter, loc);
 
   DotConversion::InstDesc desc{mmaSizeM, mmaSizeN, {numRepM, numRepN, numRepK},
@@ -456,9 +470,9 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
   for (int m = 0; m < numRepM; m++) {
     for (int n = 0; n < numRepN; n++) {
       Value useInitAcc = useDFlag;
-      Value accAddress = op.getAccAddress(rewriter, loc, m, n, desc);
+      MemDescOperand accAddress = op.getAccAddress(rewriter, loc, m, n, desc);
       for (int k = 0; k < numRepK; k++) {
-        Value a = aLoader->memLoad(m, k, rewriter, loc);
+        MemDescOperand a = aLoader->memLoad(m, k, rewriter, loc);
         Value b = bLoader.smemLoad(n, k, rewriter, loc);
         op.createMMAInst(rewriter, loc, accAddress, a, b, elect, useInitAcc,
                          desc, m, n, k);
@@ -482,7 +496,7 @@ void convertDot(const LLVMTypeConverter &typeConverter,
   MemDescType aTensorTy = op.getA().getType();
   MemDescType bTensorTy = op.getB().getType();
   MemDescType dTensorTy = op.getD().getType();
-  bool twoCTAs = op.getTwoCtas().has_value();
+  bool twoCTAs = op.getTwoCtas();
 
   DotConversion dot;
 
@@ -506,9 +520,10 @@ void convertDot(const LLVMTypeConverter &typeConverter,
   };
 
   dot.createMMAInst = [&](ConversionPatternRewriter &rewriter, Location loc,
-                          Value accAddress, Value a, Value b, Value pred,
-                          Value useInitAcc, const DotConversion::InstDesc &desc,
-                          int m, int n, int k) {
+                          MemDescOperand accAddress, MemDescOperand a, Value b,
+                          Value pred, Value useInitAcc,
+                          const DotConversion::InstDesc &desc, int m, int n,
+                          int k) {
     Value instDescriptor = createInstDescriptor(
         rewriter, op, twoCTAs ? desc.mmaSizeM * 2 : desc.mmaSizeM,
         desc.mmaSizeN, desc.transA, desc.transB);
@@ -519,7 +534,8 @@ void convertDot(const LLVMTypeConverter &typeConverter,
   convertDotImpl(typeConverter, rewriter, loc, op.getA(), op.getB(),
                  adaptor.getA(), adaptor.getB(), dTensorTy, adaptor.getUseD(),
                  adaptor.getPred(), adaptor.getBarriers(),
-                 adaptor.getBarrierPreds(), twoCTAs, dot);
+                 adaptor.getBarrierPreds(), twoCTAs, /*opKindIsMXFP4=*/false,
+                 dot);
 }
 
 int64_t getFormatBitSize(ScaleDotElemType type) {
@@ -598,13 +614,14 @@ void convertScaledDot(const LLVMTypeConverter &typeConverter,
                                        dTensorTy.getElementTypeBitWidth(),
                                    numRows * colSizeInBits);
     int blockId = m + n * desc.repShape.numRepM;
-    return tb.add(baseD, tb.i32_val(numColPerBlock * blockId));
+    return MemDescOperand{baseD, numColPerBlock * blockId};
   };
 
   dot.createMMAInst = [&](ConversionPatternRewriter &rewriter, Location loc,
-                          Value accAddress, Value a, Value b, Value pred,
-                          Value useInitAcc, const DotConversion::InstDesc &desc,
-                          int m, int n, int k) {
+                          MemDescOperand accAddress, MemDescOperand a, Value b,
+                          Value pred, Value useInitAcc,
+                          const DotConversion::InstDesc &desc, int m, int n,
+                          int k) {
     auto [numRepM, numRepN, numRepK] = desc.repShape;
     int scaleFactorColsPerSet = getScaleFactorColsPerSet(mxfpInstKind);
     int numColPerScaleBlockA = ceil<int>(
@@ -632,7 +649,8 @@ void convertScaledDot(const LLVMTypeConverter &typeConverter,
   convertDotImpl(typeConverter, rewriter, loc, op.getA(), op.getB(),
                  adaptor.getA(), adaptor.getB(), dTensorTy, adaptor.getUseD(),
                  adaptor.getPred(), adaptor.getBarriers(),
-                 adaptor.getBarrierPreds(), /*twoCTAs=*/false, dot);
+                 adaptor.getBarrierPreds(), /*twoCTAs=*/false, opKindIsMXFP4,
+                 dot);
 }
 
 //===----------------------------------------------------------------------===//
@@ -653,8 +671,6 @@ struct TCGen5MMAOpConversion
         "Operand A should use Shared or Tensor memory layout.");
     assert(isa<NVMMASharedEncodingAttr>(BEnc) &&
            "Operand B should use Shared layout.");
-    assert(!op.getBarriers().empty() &&
-           "tensorcore op should have a barrier at this point.");
     convertDot(*getTypeConverter(), rewriter, op.getLoc(), op, adaptor);
     rewriter.eraseOp(op);
     return success();
@@ -668,9 +684,31 @@ struct TCGen5MMAScaledOpConversion
   LogicalResult
   matchAndRewrite(ttng::TCGen5MMAScaledOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    assert(!op.getBarriers().empty() &&
-           "tensorcore op should have a barrier at this point.");
     convertScaledDot(*getTypeConverter(), rewriter, op.getLoc(), op, adaptor);
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct TCGen5CommitOpConversion
+    : public ConvertOpToLLVMPattern<ttng::TCGen5CommitOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(ttng::TCGen5CommitOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    TritonLLVMOpBuilder b(loc, rewriter);
+
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
+        loc, adaptor.getBarrier(), rewriter.getI64Type(), rewriter);
+    Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
+
+    if (adaptor.getPred())
+      pred = b.and_(adaptor.getPred(), pred);
+
+    createMMACommit(rewriter, op.getLoc(), smemObj.getBase(), pred,
+                    op.getTwoCtas());
     rewriter.eraseOp(op);
     return success();
   }
@@ -685,8 +723,8 @@ namespace NVIDIA {
 void populateTCGen5MMAOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                       RewritePatternSet &patterns,
                                       PatternBenefit benefit) {
-  patterns.add<TCGen5MMAOpConversion, TCGen5MMAScaledOpConversion>(
-      typeConverter, benefit);
+  patterns.add<TCGen5MMAOpConversion, TCGen5MMAScaledOpConversion,
+               TCGen5CommitOpConversion>(typeConverter, benefit);
 }
 
 } // namespace NVIDIA

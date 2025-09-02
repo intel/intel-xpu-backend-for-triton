@@ -523,7 +523,7 @@ tt.func @for_if(%i1: i1, %arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
       scf.yield %arg1 : tensor<128x64x!tt.ptr<f16>>
     }
     // CHECK: tt.addptr
-    // CHECK-SAME: contiguity = [1, 1], divisibility = [16, 16], constancy = [128, 64], constant_value = <none>
+    // CHECK-SAME: contiguity = [1, 1], divisibility = [1, 1], constancy = [128, 64], constant_value = <none>
     %4 = tt.addptr %3, %cst : tensor<128x64x!tt.ptr<f16>>, tensor<128x64xi32>
     // CHECK: scf.for
     // CHECK: contiguity = [1, 1], divisibility = [16, 16], constancy = [128, 64], constant_value = <none>
@@ -553,7 +553,7 @@ tt.func @for_if_for(%i1: i1, %arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %
   // CHECK: scf.if
   // CHECK: contiguity = [1, 1], divisibility = [8, 8], constancy = [128, 64], constant_value = <none>
   // CHECK: tt.addptr
-  // CHECK-SAME: contiguity = [1, 1], divisibility = [8, 8], constancy = [128, 64], constant_value = <none>
+  // CHECK-SAME: contiguity = [1, 1], divisibility = [1, 1], constancy = [128, 64], constant_value = <none>
   // CHECK: scf.for
   // CHECK: contiguity = [1, 1], divisibility = [16, 16], constancy = [128, 64], constant_value = <none>
   %3 = scf.for %arg9 = %c0_i32 to %c10_i32 step %c1_i32 iter_args(%arg2 = %1) -> (tensor<128x64x!tt.ptr<f16>>) : i32 {
@@ -857,7 +857,7 @@ tt.func public @chained_for(%8: tensor<128x64x!tt.ptr<bf16>> {tt.divisibility = 
     scf.yield %11 : tensor<128x64x!tt.ptr<bf16>>
   }
   // CHECK: contiguity = [1, 1], divisibility = [16, 16], constancy = [1, 1], constant_value = <none>
-  // CHECK: contiguity = [1, 1], divisibility = [16, 16], constancy = [1, 1], constant_value = <none>
+  // CHECK: contiguity = [1, 1], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
   %10 = scf.for %arg7 = %c0_i32 to %c16_i32 step %c1_i32 iter_args(%arg8 = %9) -> (tensor<128x64x!tt.ptr<bf16>>)  : i32 {
     tt.store %arg8, %cst : tensor<128x64x!tt.ptr<bf16>>
     %11 = tt.addptr %arg8, %cst_0 : tensor<128x64x!tt.ptr<bf16>>, tensor<128x64xi32>
@@ -897,7 +897,7 @@ tt.func public @make_tensor_ptr(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f8E5M2> {tt.
 // -----
 
 // CHECK-LABEL: @ptr_offset
-tt.func public @ptr_offset(%arg0: i32) {
+tt.func public @ptr_offset(%arg0: i32, %arg1: tensor<128x1xi32>) {
   // CHECK: stride = [0, 0], contiguity = [1, 1], divisibility = [512, 512], constancy = [128, 1], constant_value = 512
   %cst_0 = arith.constant dense<512> : tensor<128x1xi32>
   // CHECK: stride = [0], contiguity = [1], divisibility = [512], constancy = [128], constant_value = 512
@@ -920,5 +920,7 @@ tt.func public @ptr_offset(%arg0: i32) {
   %6 = arith.muli %5, %cst_0 : tensor<128x1xi32>
   // CHECK: stride = [512, 0], contiguity = [1, 1], divisibility = [512, 512], constancy = [1, 64], constant_value = <none>
   %7 = tt.broadcast %6 : tensor<128x1xi32> -> tensor<128x64xi32>
+  // CHECK: stride = [-1, -1], contiguity = [1, 1], divisibility = [512, 512], constancy = [1, 1], constant_value = <none>
+  %8 = arith.muli %arg1, %cst_0 : tensor<128x1xi32>
   tt.return
 }

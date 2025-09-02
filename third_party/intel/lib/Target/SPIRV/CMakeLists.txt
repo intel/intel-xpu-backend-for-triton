@@ -39,3 +39,6 @@ target_include_directories(TritonSPIRV PRIVATE ${SPIRVToLLVMTranslator_INCLUDE_D
 
 set_property(GLOBAL APPEND PROPERTY TRITON_LIBS TritonSPIRV)
 llvm_update_compile_flags(TritonSPIRV)
+
+# unused target
+set_target_properties(llvm-spirv PROPERTIES EXCLUDE_FROM_ALL TRUE)

@@ -23,6 +23,7 @@
 
 #include "MMAHelpers.h"
 #include "Utility.h"
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Support/LLVM.h"
 
 using namespace mlir;
@@ -125,8 +126,8 @@ mlir::triton::NVIDIA::DotOpMmaV3SmemLoader::DotOpMmaV3SmemLoader(
   uint32_t widthInByte = allocSwizzleShape[fastMovingDim] * elemBits / 8;
   int64_t swizzling = getSwizzlingFromLayout(sharedLayout, widthInByte);
 
-  descriptor =
-      createDescriptor(rewriter, loc, swizzling, shape[1 - fastMovingDim]);
+  descriptor = createDescriptor(rewriter, loc, swizzling,
+                                allocSwizzleShape[1 - fastMovingDim]);
 }
 
 Value mlir::triton::NVIDIA::DotOpMmaV3SmemLoader::smemLoad(
@@ -151,14 +152,10 @@ Value mlir::triton::NVIDIA::DotOpMmaV3SmemLoader::smemLoad(
   } else {
     off1 = tb.mul(tb.i32_val(elemBits / 8), offset);
   }
-  Value off_ = tb.zext(i64_ty, tb.udiv(off1, tb.i32_val(16)));
-
-  Value loadDesc = tb.add(descriptor, off_);
-  // Add the base at the end to make it easier to do loop invariant code
-  // motion.
-  loadDesc = tb.add(
-      loadDesc, tb.lshr(tb.shl(tb.ptrtoint(i64_ty, base), tb.int_val(64, 46)),
-                        tb.int_val(64, 50)));
+  Value smemBase = tb.ptrtoint(i32_ty, base);
+  smemBase = tb.add(smemBase, off1);
+  smemBase = tb.lshr(tb.and_(smemBase, tb.i32_val(0x3FFFF)), tb.i32_val(4));
+  Value loadDesc = tb.add(descriptor, tb.zext(i64_ty, smemBase));
   return loadDesc;
 }
 
@@ -352,7 +349,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
                          uint32_t maxNumImpreciseAcc, bool sync, Value thread) {
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
   auto aTensorTy = cast<triton::gpu::TensorOrMemDesc>(a.getType());
-  auto bTensorTy = cast<triton::gpu::TensorOrMemDesc>(b.getType());
+  auto bTensorTy = cast<triton::gpu::MemDescType>(b.getType());
   auto dTensorTy = cast<RankedTensorType>(d.getType());
   auto aSharedLayout =
       dyn_cast<NVMMASharedEncodingAttr>(aTensorTy.getEncoding());
@@ -362,15 +359,9 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   Value baseA;
   Value baseB;
   if (aSharedLayout)
-    baseA =
-        getSharedMemoryObjectFromStruct(
-            loc, loadedA,
-            typeConverter->convertType(aTensorTy.getElementType()), rewriter)
-            .getBase();
-  baseB = getSharedMemoryObjectFromStruct(
-              loc, loadedB,
-              typeConverter->convertType(bTensorTy.getElementType()), rewriter)
-              .getBase();
+    baseA = getOffsetedBase(loadedA, cast<MemDescType>(aTensorTy),
+                            typeConverter, rewriter, loc);
+  baseB = getOffsetedBase(loadedB, bTensorTy, typeConverter, rewriter, loc);
   if (aSharedLayout) {
     transA = aSharedLayout.getTransposed();
   }
@@ -412,7 +403,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
                                               : triton::nvgpu::WGMMALayout::col;
 
   auto func = op->getParentOfType<LLVM::LLVMFuncOp>();
-  Operation *startSequence = rewriter.create<triton::nvgpu::WGMMAFenceOp>(loc);
+  Operation *startSequence = rewriter.create<NVVM::WgmmaFenceAlignedOp>(loc);
   SmallVector<Value> mmaResults;
   for (int m = 0; m < numRepM; ++m) {
     for (int n = 0; n < numRepN; ++n) {
@@ -483,7 +474,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
       }
     }
   }
-  rewriter.create<triton::nvgpu::WGMMACommitGroupOp>(loc);
+  rewriter.create<NVVM::WgmmaGroupSyncAlignedOp>(loc);
 
   if (sync)
     mmaResults = emitWait(rewriter, loc, mmaResults, 0);
@@ -506,10 +497,6 @@ LogicalResult convertWGMMA(triton::nvidia_gpu::WarpGroupDotOp op,
                            ConversionPatternRewriter &rewriter, Value thread) {
   auto AEnc = op.getA().getType().getEncoding();
   auto BEnc = op.getB().getType().getEncoding();
-  assert(mlir::isa<NVMMASharedEncodingAttr>(AEnc) ||
-         mlir::isa<DotOperandEncodingAttr>(AEnc));
-  assert(mlir::isa<NVMMASharedEncodingAttr>(BEnc) &&
-         "Operand B should use Shared layout.");
   return convertDot(typeConverter, rewriter, op.getLoc(), op.getOperation(),  //
                     op.getA(), op.getB(), op.getC(), op.getD(), op.getUseC(), //
                     adaptor.getA(), adaptor.getB(), adaptor.getC(),           //

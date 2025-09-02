@@ -7,7 +7,6 @@ TRITON_TEST_SKIPLIST_DIR="${TRITON_TEST_SKIPLIST_DIR:-$SCRIPTS_DIR/skiplist/defa
 TRITON_TEST_SELECTFILE="${TRITON_TEST_SELECTFILE:=}"
 TRITON_TEST_WARNING_REPORTS="${TRITON_TEST_WARNING_REPORTS:-false}"
 TRITON_TEST_IGNORE_ERRORS="${TRITON_TEST_IGNORE_ERRORS:-false}"
-TRITON_INTEL_RAISE_BLOCK_POINTER="${TRITON_INTEL_RAISE_BLOCK_POINTER:-false}"
 
 if [[ $TEST_UNSKIP = true ]]; then
     TRITON_TEST_IGNORE_ERRORS=true
@@ -16,7 +15,9 @@ fi
 TRITON_TEST_SKIPLIST_DIR="$(cd "$TRITON_TEST_SKIPLIST_DIR" && pwd)"
 
 pytest() {
-    pytest_extra_args=()
+    pytest_extra_args=(
+        "--dist=worksteal"
+    )
 
     if [[ -v TRITON_TEST_SUITE && $TRITON_TEST_REPORTS = true ]]; then
         mkdir -p "$TRITON_TEST_REPORTS_DIR"
@@ -42,6 +43,7 @@ pytest() {
         if [[ $TEST_UNSKIP = false ]]; then
             pytest_extra_args+=(
                 "--skip-from-file=$TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt"
+                "--select-fail-on-missing"
             )
         else
             pytest_extra_args+=(
@@ -56,40 +58,26 @@ pytest() {
 }
 
 run_tutorial_test() {
+    if [[ -f $TRITON_TEST_SELECTFILE ]] && ! grep -qF "$1" "$TRITON_TEST_SELECTFILE"; then
+        return
+    fi
+
     echo
     echo "****** Running $1 test ******"
     echo
 
-    TUTORIAL_RESULT=TODO
-
-    if [[ -f $TRITON_TEST_SKIPLIST_DIR/tutorials.txt ]]; then
-        if grep --fixed-strings --quiet "$1" "$TRITON_TEST_SKIPLIST_DIR/tutorials.txt"; then
-            TUTORIAL_RESULT=SKIP
-        fi
-    fi
+    run_tutorial_args=(
+        "--skip-list=$TRITON_TEST_SKIPLIST_DIR/tutorials.txt"
+        "$1.py"
+    )
 
     if [[ $TRITON_TEST_REPORTS = true ]]; then
-        RUN_TUTORIAL="python -u $SCRIPTS_DIR/run_tutorial.py --reports $TRITON_TEST_REPORTS_DIR $1.py"
-    else
-        RUN_TUTORIAL="python -u $1.py"
+        run_tutorial_args+=(
+            "--reports=$TRITON_TEST_REPORTS_DIR"
+        )
     fi
 
-    if [[ $TUTORIAL_RESULT = TODO ]]; then
-        if $RUN_TUTORIAL; then
-            TUTORIAL_RESULT=PASS
-        else
-            TUTORIAL_RESULT=FAIL
-        fi
-    fi
-
-    if [[ $TRITON_TEST_REPORTS = true ]]; then
-        mkdir -p "$TRITON_TEST_REPORTS_DIR"
-        echo $TUTORIAL_RESULT > "$TRITON_TEST_REPORTS_DIR/tutorial-$1.txt"
-    fi
-
-    if [[ $TUTORIAL_RESULT = FAIL && $TRITON_TEST_IGNORE_ERRORS = false ]]; then
-        exit 1
-    fi
+    python -u "$SCRIPTS_DIR/run_tutorial.py" "${run_tutorial_args[@]}" || $TRITON_TEST_IGNORE_ERRORS
 }
 
 capture_runtime_env() {
@@ -102,7 +90,7 @@ capture_runtime_env() {
 
     # Exit script execution as long as one of those components is not found.
     local TRITON_COMMIT=""
-    WHEELS=($SCRIPTS_DIR/../python/dist/*.whl)
+    WHEELS=($SCRIPTS_DIR/../dist/*.whl)
     # This covers cases when multiple whls are found, it will get the commit id only when they have the same commit id
     # otherwise this script fail to execute
     if [[ "${#WHEELS[@]}" -gt 1 ]]; then

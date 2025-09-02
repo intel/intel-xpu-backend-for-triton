@@ -1,15 +1,20 @@
 #include "Profiler/Xpupti/XpuptiProfiler.h"
 #include "Context/Context.h"
 #include "Data/Metric.h"
-#include "Driver/Device.h"
+#include "Device.h"
 // #include "Driver/GPU/CudaApi.h"
 #include "Driver/GPU/XpuptiApi.h"
 #include "Utility/Map.h"
 
 #include "pti/pti_view.h"
+#include <cassert>
+#include <cstring>
 #include <level_zero/layers/zel_tracing_api.h>
 #include <level_zero/zet_api.h>
-#include <sycl/sycl.hpp>
+
+#include <algorithm>
+#include <array>
+#include <dlfcn.h>
 
 #include <cstdlib>
 #include <iostream>
@@ -29,35 +34,6 @@ thread_local std::deque<size_t>
 namespace {
 
 std::vector<std::array<uint8_t, 16>> deviceUUIDs_ = {};
-
-// FIXME: Should it be in DeviceInfo class?
-// Inspired by Kineto: `XpuptiActivityProfiler.cpp`
-void enumDeviceUUIDs() {
-  if (!deviceUUIDs_.empty()) {
-    return;
-  }
-  auto platform_list = sycl::platform::get_platforms();
-  // Enumerated GPU devices from the specific platform.
-  for (const auto &platform : platform_list) {
-    if (platform.get_backend() != sycl::backend::ext_oneapi_level_zero) {
-      continue;
-    }
-    auto device_list = platform.get_devices();
-    for (const auto &device : device_list) {
-      if (device.is_gpu()) {
-        if (device.has(sycl::aspect::ext_intel_device_info_uuid)) {
-          deviceUUIDs_.push_back(
-              device.get_info<sycl::ext::intel::info::device::uuid>());
-        } else {
-          std::cerr << "Warnings: UUID is not supported for this XPU device. "
-                       "The device index of records will be 0."
-                    << std::endl;
-          deviceUUIDs_.push_back(std::array<uint8_t, 16>{});
-        }
-      }
-    }
-  }
-}
 
 uint8_t getDeviceIdxFromUUID(const uint8_t deviceUUID[16]) {
   std::array<unsigned char, 16> key;
@@ -83,7 +59,8 @@ convertActivityToMetric(xpupti::Pti_Activity *activity) {
           static_cast<uint64_t>(kernel->_start_timestamp),
           static_cast<uint64_t>(kernel->_end_timestamp), 1,
           static_cast<uint64_t>(getDeviceIdxFromUUID(kernel->_device_uuid)),
-          static_cast<uint64_t>(DeviceType::XPU));
+          static_cast<uint64_t>(DeviceType::XPU),
+          static_cast<uint64_t>(kernel->_sycl_queue_id));
     } // else: not a valid kernel activity
     break;
   }
@@ -353,9 +330,63 @@ void XpuptiProfiler::XpuptiProfilerPimpl::completeBuffer(uint8_t *buffer,
 
 zel_tracer_handle_t tracer = nullptr;
 
+typedef void (*EnumDeviceUUIDsFunc)(std::vector<std::array<uint8_t, 16>>);
+
+int callEnumDeviceUUIDs(const std::string &utils_cache_path) {
+  void *handle = dlopen(utils_cache_path.data(), RTLD_LAZY);
+  if (!handle) {
+    std::cerr << "Failed to load library: " << dlerror() << std::endl;
+    return 1;
+  }
+
+  dlerror();
+  EnumDeviceUUIDsFunc enumDeviceUUIDs =
+      (EnumDeviceUUIDsFunc)dlsym(handle, "enumDeviceUUIDs");
+  const char *dlsym_error = dlerror();
+  if (dlsym_error) {
+    std::cerr << "Failed to load function: " << dlsym_error << std::endl;
+    dlclose(handle);
+    return 1;
+  }
+
+  enumDeviceUUIDs(deviceUUIDs_);
+
+  dlclose(handle);
+  return 0;
+}
+
+typedef void (*WaitOnSyclQueueFunc)(void *);
+
+int callWaitOnSyclQueue(const std::string &utils_cache_path, void *syclQueue) {
+  void *handle = dlopen(utils_cache_path.data(), RTLD_LAZY);
+  if (!handle) {
+    std::cerr << "Failed to load library: " << dlerror() << std::endl;
+    return 1;
+  }
+
+  dlerror();
+  WaitOnSyclQueueFunc waitOnSyclQueue =
+      (WaitOnSyclQueueFunc)dlsym(handle, "waitOnSyclQueue");
+  const char *dlsym_error = dlerror();
+  if (dlsym_error) {
+    std::cerr << "Failed to load function: " << dlsym_error << std::endl;
+    dlclose(handle);
+    return 1;
+  }
+
+  waitOnSyclQueue(syclQueue);
+
+  dlclose(handle);
+  return 0;
+}
+
 void XpuptiProfiler::XpuptiProfilerPimpl::doStart() {
   // xpupti::subscribe<true>(&subscriber, callbackFn, nullptr);
-  enumDeviceUUIDs();
+  // should be call to shared lib
+  XpuptiProfiler &profiler = threadState.profiler;
+  if (profiler.utils_cache_path != "") {
+    callEnumDeviceUUIDs(profiler.utils_cache_path);
+  }
   // auto res = ptiViewPushExternalCorrelationId(
   //     pti_view_external_kind::PTI_VIEW_EXTERNAL_KIND_CUSTOM_1, 42);
   //  std::cout << "res: " << res << "\n" << std::flush;
@@ -405,8 +436,7 @@ void XpuptiProfiler::XpuptiProfilerPimpl::doFlush() {
   std::cout << "flush\n" << std::flush;
   XpuptiProfiler &profiler = threadState.profiler;
   if (profiler.syclQueue != nullptr) {
-    sycl::queue *syclQueue = static_cast<sycl::queue *>(profiler.syclQueue);
-    syclQueue->wait();
+    callWaitOnSyclQueue(profiler.utils_cache_path, profiler.syclQueue);
   }
 
   profiler.correlation.flush(

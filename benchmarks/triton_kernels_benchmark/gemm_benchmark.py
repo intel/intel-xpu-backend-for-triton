@@ -15,6 +15,7 @@ import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
 from triton_kernels_benchmark import xetla_kernel
+from triton_kernels_benchmark import cutlass_kernel
 
 
 def get_matmul_autotune_configs() -> List[triton.Config]:
@@ -231,18 +232,37 @@ def get_shapes(B, M, N, K, transpose_a, transpose_b):
     return a_shape, b_shape
 
 
-X_VALS = [[1, 1024 * i, 1024 * i, 1024 * i] for i in [1, 2, 4, 8]] + [
+X_VALS = [  #
+    [1, 1, 1024, 4096],
+    [1, 1, 4096, 4096],
+    [1, 1, 4096, 14336],
+    [1, 1, 6144, 4096],
     [1, 1, 13824, 5120],
+    [1, 1, 14336, 4096],
+    [1, 1, 28672, 4096],
+    [1, 1, 128256, 4096],
     [1, 4, 12288, 4096],
+    [1, 8, 1024, 4096],
+    [1, 8, 4096, 4096],
+    [1, 8, 4096, 14336],
+    [1, 8, 6144, 4096],
+    [1, 8, 14336, 4096],
+    [1, 8, 28672, 4096],
+    [1, 8, 128256, 4096],
     [1, 512, 8192, 8192],
     [1, 512, 8192, 32768],
     [1, 512, 32768, 8192],
+    [1, 1024, 1024, 1024],
     [1, 1024, 8192, 16384],
     [1, 1024, 8192, 28672],
+    [1, 2048, 2048, 2048],
     [1, 3072, 3072, 4096],  # FIXME: Remove this case when gemm_streamk_benchmark can get better performance
+    [1, 4096, 4096, 4096],
     [1, 4096, 8192, 16384],
     [1, 8192, 1024, 16384],
+    [1, 8192, 4096, 4096],
     [1, 8192, 4096, 16384],
+    [1, 8192, 8192, 8192],
     [1, 16384, 1024, 8192],
     [1, 16384, 4096, 8192],
     [1, 16384, 8192, 1024],
@@ -291,9 +311,11 @@ def get_benchmark(
         'triton': 'Triton',
         'onednn': 'OneDNN',
     }
-    # use_xetla
+    # use_cutlass
     if not (transpose_a or transpose_b):
-        supported_providers['xetla'] = 'XeTLA'
+        if torch.xpu.get_device_name() != 'Intel(R) Arc(TM) Graphics':
+            # FIXME: enable cutlass on LNL
+            supported_providers['cutlass'] = 'CUTLASS'
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
     # Benchmark Performance
@@ -341,6 +363,7 @@ def get_benchmark(
                 n_repeat=10,
                 quantiles=quantiles,
             )
+
         elif provider == 'triton':
             if len(a.shape) != len(b.shape):
                 raise AssertionError(f'Incompatible sizes {len(a.shape)} and {len(b.shape)}', )
@@ -354,8 +377,8 @@ def get_benchmark(
                 a,
                 b,
                 c,
-                matmul_kernel=matmul_kernel_with_block_pointers,
-                matmul_kernel_batched=matmul_kernel_with_block_pointers_batched,
+                matmul_kernel=matmul_kernel,
+                matmul_kernel_batched=matmul_kernel_batched,
                 transpose_a=transpose_a,
                 transpose_b=transpose_b,
             )
@@ -368,6 +391,7 @@ def get_benchmark(
                 n_repeat=10,
                 quantiles=quantiles,
             )
+
         elif provider == 'xetla':
             if B == 1:
                 c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
@@ -401,6 +425,38 @@ def get_benchmark(
                 n_repeat=10,
                 quantiles=quantiles,
             )
+
+        elif provider == 'cutlass':
+            name = 'gemm'
+            func = getattr(cutlass_kernel, name)
+
+            # Special case where the b matrix needs to be transposed (see: `./cutlass_kernel/gemm/input_gemm.in`)
+            if (B, M, N, K) == (1, 1, 1024, 4096):
+                _, b_shape = get_shapes(B, M, N, K, transpose_a=False, transpose_b=True)
+                b = torch.reshape(b, b_shape)
+                torch_b = b
+                torch_b = torch.transpose(torch_b, -2, -1)
+
+            def cutlass_invoker():
+                if B == 1:
+                    c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
+                else:
+                    c = torch.zeros((B, M, N), device='xpu', dtype=torch.float32)
+                func(a, b, c, M, N, K, B)
+                return c
+
+            cutlass_fn = cutlass_invoker
+            torch_fn = lambda: torch.matmul(torch_a, torch_b).to(torch.float32)
+
+            rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
+            benchmark_suite.assert_close(cutlass_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='cutlass to torch')
+            _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
+                cutlass_fn,
+                n_warmup=10,
+                n_repeat=10,
+                quantiles=quantiles,
+            )
+
         else:
             raise NotImplementedError(f'Unsupported provider {provider}')
 

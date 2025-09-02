@@ -34,10 +34,12 @@ public:
 
   // Create the loop versioning condition based on the mask.
   virtual Value getVersioningCond(scf::ForOp &forOp, Value mask) const = 0;
+
+  virtual std::string getName() const = 0;
 };
 
 // A mask validator which ensures that the mask can be reduced to the form:
-//  `END < N-i*END`.
+//  `END-1 < N-i*END`
 class CanonicalMaskValidator final : public MaskValidatorBase {
 public:
   // This structure is used to store the information about a mask in canonical
@@ -47,7 +49,7 @@ public:
     unsigned END;
   };
 
-  // Check whether the mask is equivalent to the form: `END < N-i*END`.
+  // Check whether the mask is equivalent to the form: `END-1 < N-i*END`.
   virtual bool isValidMask(scf::ForOp &forOp, Value mask) const {
     assert(mask && "Expecting a valid mask");
 
@@ -102,8 +104,8 @@ public:
   // `(N+END-1)%END > 0 && N > END`.
   virtual Value getVersioningCond(scf::ForOp &forOp, Value mask) const {
     MaskInfo maskInfo = getMaskInfo(forOp, mask);
-    assert(hasCanonicalUpperBound(forOp, maskInfo) &&
-           "Loop upper bound not in canonical form");
+    if (!hasCanonicalUpperBound(forOp, maskInfo))
+      return nullptr;
 
     OpBuilder builder(forOp);
     Location loc = forOp.getLoc();
@@ -113,12 +115,13 @@ public:
 
     // The loop UB is a constant.
     if (isa<arith::ConstantIntOp>(defOp)) {
-      int64_t valN =
+      int64_t UB = cast<arith::ConstantIntOp>(defOp).value();
+      int64_t N =
           cast<arith::ConstantIntOp>(maskInfo.N.getDefiningOp()).value();
-      bool cond1 = ((valN + maskInfo.END - 1) % maskInfo.END) > 0;
-      bool cond2 = valN > maskInfo.END;
-      return builder.create<arith::ConstantIntOp>(
-          forOp.getLoc(), cond1 && cond2, builder.getI1Type());
+      unsigned END = maskInfo.END;
+      bool cond = UB == ((N - END) / END) + 1;
+      return builder.create<arith::ConstantIntOp>(forOp.getLoc(), cond,
+                                                  builder.getI1Type());
     }
 
     auto divOp = cast<arith::DivSIOp>(defOp);
@@ -137,6 +140,8 @@ public:
     return builder.create<arith::AndIOp>(loc, cmp1, cmp2);
   }
 
+  virtual std::string getName() const { return "CanonicalMaskValidator"; }
+
   // Ensure the loop upper bound is in canonical form (N+END-1)/END.
   static bool hasCanonicalUpperBound(scf::ForOp &forOp,
                                      const MaskInfo &maskInfo) {
@@ -148,10 +153,11 @@ public:
     // If the loop UB is constant, use `MaskInfo` to determine whether the UB
     // was folded from a canonical form.
     if (isa<arith::ConstantIntOp>(defOp)) {
-      int64_t valN =
+      int64_t UB = cast<arith::ConstantIntOp>(defOp).value();
+      int64_t N =
           cast<arith::ConstantIntOp>(maskInfo.N.getDefiningOp()).value();
-      return ((valN + maskInfo.END - 1) / maskInfo.END) ==
-             cast<arith::ConstantIntOp>(defOp).value();
+      unsigned END = maskInfo.END;
+      return UB == ((N - END) / END) + 1;
     }
 
     if (!isa<arith::DivSIOp>(defOp))
@@ -279,6 +285,8 @@ public:
     llvm_unreachable("Unexpected mask");
     return {};
   }
+
+  virtual std::string getName() const { return "InvariantMaskValidator"; }
 };
 
 // Collects masked operations in a loop that satisfy the condition imposed by
@@ -300,7 +308,8 @@ public:
             maskValidator.isValidMask(forOp, tt::intel::getFinalValue(mask))) {
           maskedOps.insert(op);
           LLVM_DEBUG(llvm::dbgs()
-                     << "Collected masked operation: " << *op << "\n");
+                     << maskValidator.getName()
+                     << ": collected masked operation: " << *op << "\n");
         }
       }
     };
@@ -435,7 +444,7 @@ public:
            "Expecting a non-empty collection of masked operations");
 
     // Collect the (loop invariant) mask conditions.
-    std::set<Operation *> maskConds;
+    SmallPtrSet<Operation *, 8> maskConds;
     for (Operation *maskedOp : collector.getMaskedOps()) {
       if (auto loadOp = dyn_cast<tt::LoadOp>(maskedOp))
         maskConds.insert(loadOp.getMask().getDefiningOp());
@@ -488,11 +497,9 @@ public:
     }
 
     // Replace the uses of the original loop results.
-    unsigned idx = 0;
-    for (Value res : forOp.getResults()) {
-      if (!res.getUsers().empty())
-        res.replaceAllUsesWith(ifOp->getResult(idx++));
-    }
+    for (const auto &[i, v] : llvm::enumerate(forOp.getResults()))
+      if (!v.getUsers().empty())
+        v.replaceAllUsesWith(ifOp->getResult(i));
 
     forOp.erase();
     return true;

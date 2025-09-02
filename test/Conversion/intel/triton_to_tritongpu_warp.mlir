@@ -288,7 +288,7 @@ module {
     // CHECK1: [[EXP_DIM2:%.*]] = tt.expand_dims {{%.*}} {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi32, #blocked>
     %31 = tt.expand_dims %19 {axis = 1 : i32} : tensor<128xi32> -> tensor<128x1xi32>
     %32 = tt.expand_dims %20 {axis = 0 : i32} : tensor<64xi32> -> tensor<1x64xi32>
-    // CHECK1: [[BC1:%.*]] = triton_intel_gpu.broadcast [[EXP_DIM1]] : tensor<128x1xi32, #blocked> -> tensor<128x64xi32, #blocked>
+    // CHECK1: [[BC1:%.*]] = ttig.broadcast [[EXP_DIM1]] : tensor<128x1xi32, #blocked> -> tensor<128x64xi32, #blocked>
     %33 = tt.broadcast %31 : tensor<128x1xi32> -> tensor<128x64xi32>
     %34 = tt.splat %21 : f32 -> tensor<128x64xf32>
     %35:5 = scf.for %arg6 = %26 to %28 step %c64_i32 iter_args(%arg7 = %25#0, %arg8 = %25#1, %arg9 = %25#2, %arg10 = %30, %arg11 = %29) -> (tensor<128xf32>, tensor<128x64xf32>, tensor<128xf32>, !tt.ptr<tensor<64x64xf16>>, !tt.ptr<tensor<64x64xf16>>)  : i32 {
@@ -297,7 +297,7 @@ module {
       %41 = tt.splat %arg6 : i32 -> tensor<1x64xi32>
       // CHECK1: [[OFFSET:%.*]] = arith.addi {{%.*}}, [[EXP_DIM2]] : tensor<1x64xi32, #blocked>
       %42 = arith.addi %41, %32 : tensor<1x64xi32>
-      // CHECK1: [[BC2:%.*]] = triton_intel_gpu.broadcast [[OFFSET]] : tensor<1x64xi32, #blocked> -> tensor<128x64xi32, #blocked>
+      // CHECK1: [[BC2:%.*]] = ttig.broadcast [[OFFSET]] : tensor<1x64xi32, #blocked> -> tensor<128x64xi32, #blocked>
       %43 = tt.broadcast %42 : tensor<1x64xi32> -> tensor<128x64xi32>
       // CHECK1: arith.cmpi sge, [[BC1]], [[BC2]] : tensor<128x64xi32, #blocked>
       %44 = arith.cmpi sge, %33, %43 : tensor<128x64xi32>

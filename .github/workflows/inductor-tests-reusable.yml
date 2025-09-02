@@ -15,10 +15,14 @@ on:
         description: Runner label, keep empty for default
         type: string
         default: ""
+      runner_version:
+        description: Runner label for version
+        type: string
+        default: runner-0.0.22
       python_version:
         description: Python version
         type: string
-        default: "3.9"
+        default: "3.10"
       pytorch_repo:
         description: PyTorch repo (e.g. user/repo)
         type: string
@@ -33,13 +37,11 @@ env:
 jobs:
   build:
     name: Test
-    runs-on:
-      - linux
-      - ${{ inputs.runner_label || 'rolling' }}
+    runs-on: ${{ startsWith(inputs.runner_label, 'igc') && fromJSON(format('["linux","{0}"]', inputs.runner_label)) || fromJSON(format('["linux","rolling","{0}","{1}"]', inputs.runner_label || 'max1100', inputs.runner_version)) }}
     timeout-minutes: 960
     defaults:
       run:
-        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/2025.0/oneapi-vars.sh > /dev/null; source {0}"
+        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
     steps:
       - name: Print inputs
         run: |
@@ -71,6 +73,7 @@ jobs:
       - name: Run inductor tests
         run: |
           export PYTORCH_TESTING_DEVICE_ONLY_FOR="xpu"
+          export TRITON_LESS_FLEX_ATTN_BWD_CONFIGS="1"
           bash scripts/test-pytorch.sh ${{ inputs.suite }}
 
       - name: Report environment details

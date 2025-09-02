@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-distribute-to-warps | FileCheck %s
+// RUN: env TRITON_INTEL_ADVANCED_PATH=1 triton-opt %s -split-input-file -tritonintelgpu-distribute-to-warps | FileCheck %s
 
 #blocked1 = #ttg.blocked<{sizePerThread = [32, 32], threadsPerWarp = [1, 1], warpsPerCTA = [4, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [32, 32], threadsPerWarp = [1, 1], warpsPerCTA = [1, 4], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
@@ -6,8 +6,8 @@
 #blockedA = #ttg.dot_op<{opIdx = 0, parent = #blockedC}>
 #blockedB = #ttg.dot_op<{opIdx = 1, parent = #blockedC}>
 
-// CHECK-DAG: [[WARP1:#.*]] = #triton_intel_gpu.warp<{sizePerThread = [64, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
-// CHECK-DAG: [[WARP2:#.*]] = #triton_intel_gpu.warp<{sizePerThread = [32, 32], threadsPerWarp = [1, 1], order = [1, 0]}>
+// CHECK-DAG: [[WARP1:#.*]] = #ttig.warp<{sizePerThread = [64, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
+// CHECK-DAG: [[WARP2:#.*]] = #ttig.warp<{sizePerThread = [32, 32], threadsPerWarp = [1, 1], order = [1, 0]}>
 // COM: In the loop body:
 // COM:   - thread block works on: 128x128xf32 = 128x32xf16 * 32x128xf16
 // COM:   - each warp works on:    64x64xf32   =  64x32xf16 * 32x64xf16
@@ -32,13 +32,13 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 1 : i32} 
     // CHECK:      scf.for {{.*}} iter_args([[ARG10:%.*]] = [[CST]], [[ARG11:%.*]] = [[TPTR1]], [[ARG12:%.*]] = [[TPTR2]])
     // CHECK-DAG:    [[LOAD1:%.*]] = tt.load [[ARG11]] : !tt.ptr<tensor<32x32xf16, [[WARP2]]>>
     // CHECK-DAG:    [[LOAD2:%.*]] = tt.load [[ARG12]] : !tt.ptr<tensor<32x32xf16, [[WARP2]]>>
-    // CHECK:        [[ALLOC1:%.*]] = triton_intel_gpu.alloc : <f16, 3>
+    // CHECK:        [[ALLOC1:%.*]] = ttig.alloc : <f16, 3>
     // CHECK:        [[PTR1:%.*]] = tt.make_tensor_ptr [[ALLOC1]], {{.*}} {order = array<i32: 1, 0>} : <tensor<32x32xf16, [[WARP2]]>, 3>
     // CHECK:        tt.store [[PTR1]], [[LOAD1]] : !tt.ptr<tensor<32x32xf16, [[WARP2]]>, 3>
     // CHECK:        gpu.barrier
     // CHECK:        [[PTR2:%.*]] = tt.make_tensor_ptr [[ALLOC1]], {{.*}} {order = array<i32: 1, 0>} : <tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = [[WARP1]]}>>, 3>
     // CHECK:        [[LOAD3:%.*]] = tt.load [[PTR2]] : !tt.ptr<tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = [[WARP1]]}>>, 3>
-    // CHECK:        [[ALLOC2:%.*]] = triton_intel_gpu.alloc : <f16, 3>
+    // CHECK:        [[ALLOC2:%.*]] = ttig.alloc : <f16, 3>
     // CHECK:        [[PTR3:%.*]] = tt.make_tensor_ptr [[ALLOC2]], {{.*}} {order = array<i32: 1, 0>} : <tensor<32x32xf16, [[WARP2]]>, 3>
     // CHECK:        tt.store [[PTR3]], [[LOAD2]] : !tt.ptr<tensor<32x32xf16, [[WARP2]]>, 3>
     // CHECK:        gpu.barrier
@@ -166,7 +166,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 1 : i32} 
 // COM: test for flash-attention related ops
 #blocked = #ttg.blocked<{sizePerThread = [16, 64], threadsPerWarp = [1, 1], warpsPerCTA = [8, 1], order = [1, 0]}>
 
-// CHECK: [[WARP:#.*]] = #triton_intel_gpu.warp<{sizePerThread = [16, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
+// CHECK: [[WARP:#.*]] = #ttig.warp<{sizePerThread = [16, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 1 : i32} {
   tt.func public @_attn_fwd(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f16>, %arg3: f32, %arg4: !tt.ptr<f32>, %arg5: !tt.ptr<f32>) {
     // CHECK: @_attn_fwd

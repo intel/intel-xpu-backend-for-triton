@@ -25,9 +25,8 @@ on:
 permissions: read-all
 
 env:
-  PYTHON_VERSION: '3.9'
-  # FIXME: temporary initialize oneapi/ccl because our pytorch build requires it
-  TRITON_TEST_CMD: "source /opt/intel/oneapi/ccl/latest/env/vars.sh && scripts/test-triton.sh --skip-pytorch-install"
+  PYTHON_VERSION: '3.10'
+  TRITON_TEST_CMD: scripts/test-triton.sh --skip-pytorch-install
 
 jobs:
   tests:
@@ -51,30 +50,18 @@ jobs:
           gh_token: ${{ secrets.GITHUB_TOKEN }}
           python_version: ${{ env.PYTHON_VERSION }}
           # transformers package is required for the inductor (e2e) test
-          wheels_pattern: '{torch,transformers}-*.whl'
+          wheels_pattern: 'torch-*.whl'
 
-      - name: Setup Triton
+      - name: Install Triton
         uses: ./.github/actions/setup-triton
 
-      - name: Attempt to get PyTorch XPU dependencies
+      - name: Install runtime dependencies
         run: |
-          set +e
-          curl -sSLO https://raw.githubusercontent.com/pytorch/pytorch/$(<.github/pins/pytorch.txt)/.github/scripts/generate_binary_build_matrix.py
+          curl -sSLO --retry 10 https://raw.githubusercontent.com/pytorch/pytorch/$(<.github/pins/pytorch.txt)/.github/scripts/generate_binary_build_matrix.py
           sed -i '/^validate_nccl_dep_consistency.*/d' generate_binary_build_matrix.py
-          python -c "from generate_binary_build_matrix import PYTORCH_EXTRA_INSTALL_REQUIREMENTS; print(' '.join(PYTORCH_EXTRA_INSTALL_REQUIREMENTS['xpu'].split(' | ')))"
-
-      # FIXME: dependencies for PyTorch XPU are currently maintained manually below.
-      # https://github.com/pytorch/pytorch/blob/d6513f3246e7956a49b6c9f3922eec8330b489e9/.github/scripts/generate_binary_build_matrix.py#L108
-      - name: Install Triton runtime dependencies
-        run: |
-          pip install \
-            intel-cmplr-lib-rt==2025.0.2 \
-            intel-cmplr-lib-ur==2025.0.2 \
-            intel-cmplr-lic-rt==2025.0.2 \
-            intel-sycl-rt==2025.0.2 \
-            tcmlib==1.2.0 \
-            umf==0.9.1 \
-            intel-pti==0.10.0
+          python -c "from generate_binary_build_matrix import PYTORCH_EXTRA_INSTALL_REQUIREMENTS; print('\n'.join(PYTORCH_EXTRA_INSTALL_REQUIREMENTS['xpu'].split(' | ')))" | tee /tmp/requirements.txt
+          pip install -r /tmp/requirements.txt
+          pip install transformers==4.54.0
 
       - name: Run core tests
         run: |

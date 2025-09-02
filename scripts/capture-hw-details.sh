@@ -98,7 +98,7 @@ export AGAMA_VERSION="$(agama_version)"
 export GPU_DEVICE="$(gpu_device)"
 
 if python -c "import torch" &> /dev/null; then
-    export TORCH_VERSION=$(python -c "import torch; from packaging.version import Version; print(Version(torch.__version__).base_version)")
+    export TORCH_VERSION=$(python -c "import torch; print(torch.__version__)")
 else
     export TORCH_VERSION="Not installed"
 fi
@@ -110,13 +110,13 @@ else
 fi
 
 if [[ $QUIET = false ]]; then
-    echo "LIBIGC1_VERSION=\"$LIBIGC1_VERSION\""
-    echo "LEVEL_ZERO_VERSION=\"$LEVEL_ZERO_VERSION\""
-    echo "AGAMA_VERSION=\"$AGAMA_VERSION\""
-    echo "GPU_DEVICE=\"$GPU_DEVICE\""
-    echo "TORCH_VERSION=\"$TORCH_VERSION\""
-    echo "COMPILER_VERSION=\"$COMPILER_VERSION\""
+    echo "LIBIGC1_VERSION=$LIBIGC1_VERSION"
+    echo "LEVEL_ZERO_VERSION=$LEVEL_ZERO_VERSION"
+    echo "AGAMA_VERSION=$AGAMA_VERSION"
+    echo "GPU_DEVICE=$GPU_DEVICE"
+    echo "TORCH_VERSION=$TORCH_VERSION"
+    echo "COMPILER_VERSION=$COMPILER_VERSION"
     if [[ ${BENCHMARKING_METHOD:-} ]]; then
-        echo "BENCHMARKING_METHOD=\"$BENCHMARKING_METHOD\""
+        echo "BENCHMARKING_METHOD=$BENCHMARKING_METHOD"
     fi
 fi

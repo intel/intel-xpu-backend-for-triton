@@ -4,6 +4,9 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Value.h"
 
+namespace mlir::triton {
+class MakeTensorPtrOp;
+}
 namespace mlir::triton::intel {
 
 // Lookup for a integer constant with the given value and bitwidth in the
@@ -11,6 +14,10 @@ namespace mlir::triton::intel {
 // otherwise create a new one.
 Value findOrCreateIntConstant(Location loc, int val, unsigned bitWidth,
                               OpBuilder &builder);
+
+// Find the defining makeTensorPtrOp operation of the given value.
+std::optional<mlir::triton::MakeTensorPtrOp>
+findDefiningMakeTensorPtrOp(Value val);
 
 // This function folds the `op` operation and returns the constant value if it
 // has successfully folded to a constant. Otherwise, it returns `std::nullopt`.
@@ -21,6 +28,9 @@ std::optional<int64_t> getFoldedConstantValue(Operation *op);
 bool isConstant(Value val, int64_t expected);
 
 Value getFinalValue(Value value);
+
+// Erase the operations in \p operations.
+void eraseOperations(SmallPtrSetImpl<Operation *> &operations);
 
 } // namespace mlir::triton::intel
 

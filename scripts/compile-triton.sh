@@ -63,7 +63,7 @@ export PACKAGES_DIR=$BASE/packages
 export LLVM_PROJ=$BASE/llvm
 export LLVM_PROJ_BUILD=$LLVM_PROJ/build
 export TRITON_PROJ=$BASE/$TRITON_PROJ_NAME
-export TRITON_PROJ_BUILD=$TRITON_PROJ/python/build
+export TRITON_PROJ_BUILD=$TRITON_PROJ/build
 
 if [ "$CLEAN" = true ]; then
   echo "**** Cleaning $PACKAGES_DIR, $LLVM_PROJ, and $TRITON_PROJ_BUILD before build ****"
@@ -79,9 +79,6 @@ fi
 
 if [ ! -d "$PACKAGES_DIR" ]; then
   mkdir $PACKAGES_DIR
-fi
-if [ $BASE != $HOME ]; then
-  ln -sfT $PACKAGES_DIR $HOME/packages
 fi
 
 ############################################################################
@@ -183,12 +180,8 @@ build_triton() {
     export TRITON_BUILD_WITH_CCACHE=true
   fi
 
-  cd python
   # Install triton and its dependencies.
   pip install -v -e '.[build,tests]'
-
-  # Copy compile_commands.json in the build directory (so that cland vscode plugin can find it).
-  cp $(find $TRITON_PROJ_BUILD -name compile_commands.json) $TRITON_PROJ/
 }
 
 build() {
