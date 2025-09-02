@@ -886,7 +886,6 @@ class XPULauncher(object):
     def __call__(self, *args):
         if self.serialize_kernel_args:
             serialize_args(args, self.constants, self.signature)
-
         self.launch(args)
 
 

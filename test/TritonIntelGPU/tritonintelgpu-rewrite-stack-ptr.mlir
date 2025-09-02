@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --convert-triton-intel-gpu-to-llvm  | FileCheck %s
+// RUN: triton-opt %s -split-input-file --convert-triton-intel-gpu-to-llvm --tritonintelgpu-rewrite-stack-ptr| FileCheck %s
 
 module attributes {triton_intel_gpu.target_arch = "spir64", "ttg.num-warps" = 1 : i32, ttg.shared = 0 : i32} {
   // CHECK-LABEL: llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
@@ -8,8 +8,8 @@ module attributes {triton_intel_gpu.target_arch = "spir64", "ttg.num-warps" = 1 
     %1 = tt.load %arg1 : !tt.ptr<f32>
     // CHECK: [[LOAD0:%.*]] = llvm.extractelement {{.*}}[{{.*}}]
     // CHECK: [[LOAD1:%.*]] = llvm.extractelement {{.*}}[{{.*}}]
-    // CHECK: [[AGGR_GLOBAL_SMEM:%.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
-    // CHECK: llvm.call spir_funccc @noinline_simple_fn__fp32_fp32_Pfp32__([[LOAD0]], [[LOAD1]], %arg2, [[AGGR_GLOBAL_SMEM]], %arg3, %arg4)
+    // CHECK: [[POISON:%.*]] = llvm.mlir.poison : !llvm.ptr<3>
+    // CHECK: llvm.call spir_funccc @noinline_simple_fn__fp32_fp32_Pfp32__([[LOAD0]], [[LOAD1]], %arg2, [[POISON]], %arg3, %arg4)
     tt.call @noinline_simple_fn__fp32_fp32_Pfp32__(%0, %1, %arg2) : (f32, f32, !tt.ptr<f32>) -> ()
     tt.return
   }
@@ -29,14 +29,13 @@ module attributes {triton_intel_gpu.target_arch = "spir64", "ttg.num-warps" = 1 
 #smem = #ttg.shared_memory
 module attributes {triton_intel_gpu.target_arch = "spir64", "ttg.num-warps" = 1 : i32, ttg.shared = 1280 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
-  // CHECK: llvm.func spir_kernelcc @kernel(%arg0: !llvm.ptr<1>, %arg1: !llvm.ptr<1>, %arg2: !llvm.ptr<1>, [[GLOBAL_PTR:%.*]]: !llvm.ptr<1>, [[PROFILE_PTR:%.*]]: !llvm.ptr<1>)
+  // CHECK: llvm.func spir_kernelcc @kernel(%arg0: !llvm.ptr<1>, %arg1: !llvm.ptr<1>, %arg2: !llvm.ptr<1>, [[GLOBAL_PTR:%.*]]: !llvm.ptr<1>, [[PROFILE_PTR:%.*]]: !llvm.ptr<1>, [[SHARED_MEM_PTR:%.*]]: !llvm.ptr<3>)
   tt.func public @kernel(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>, %arg2: !tt.ptr<f32>) {
     %0 = tt.load %arg0 : !tt.ptr<f32>
     %1 = tt.load %arg1 : !tt.ptr<f32>
     // CHECK: [[LOAD0:%.*]] = llvm.extractelement {{.*}}[{{.*}}]
     // CHECK: [[LOAD1:%.*]] = llvm.extractelement {{.*}}[{{.*}}]
-    // CHECK: [[AGGR_GLOBAL_SMEM:%.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
-    // CHECK: llvm.call spir_funccc @noinline_shared_fn([[LOAD0]], [[LOAD1]], %arg2, [[AGGR_GLOBAL_SMEM]], [[GLOBAL_PTR]], [[PROFILE_PTR]])
+    // CHECK: llvm.call spir_funccc @noinline_shared_fn([[LOAD0]], [[LOAD1]], %arg2, [[SHARED_MEM_PTR]], [[GLOBAL_PTR]], [[PROFILE_PTR]])
     tt.call @noinline_shared_fn(%0, %1, %arg2) {allocation.offset = 0 : i32} : (f32, f32, !tt.ptr<f32>) -> ()
     tt.return
   }
