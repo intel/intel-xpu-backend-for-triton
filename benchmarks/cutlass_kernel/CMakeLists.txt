@@ -1,9 +1,33 @@
+# from https://github.com/pytorch/pytorch/blob/b7e207ca9f046ddd716076965a0cce403ba99052/cmake/Modules/FindSYCLToolkit.cmake#L44
+function(parse_sycl_compiler_version version_number)
+  # Execute the SYCL compiler with the --version flag to match the version string.
+  execute_process(COMMAND ${CMAKE_CXX_COMPILER} --version OUTPUT_VARIABLE SYCL_VERSION_STRING)
+  string(REGEX REPLACE "Intel\\(R\\) (.*) Compiler ([0-9]+\\.[0-9]+\\.[0-9]+) (.*)" "\\2"
+               SYCL_VERSION_STRING_MATCH ${SYCL_VERSION_STRING})
+  string(REPLACE "." ";" SYCL_VERSION_LIST ${SYCL_VERSION_STRING_MATCH})
+  # Split the version number list into major, minor, and patch components.
+  list(GET SYCL_VERSION_LIST 0 VERSION_MAJOR)
+  list(GET SYCL_VERSION_LIST 1 VERSION_MINOR)
+  list(GET SYCL_VERSION_LIST 2 VERSION_PATCH)
+  # Calculate the version number in the format XXXXYYZZ, using the formula (major * 10000 + minor * 100 + patch).
+  math(EXPR VERSION_NUMBER_MATCH "${VERSION_MAJOR} * 10000 + ${VERSION_MINOR} * 100 + ${VERSION_PATCH}")
+  set(${version_number} "${VERSION_NUMBER_MATCH}" PARENT_SCOPE)
+endfunction()
+
+parse_sycl_compiler_version(SYCL_COMPILER_VERSION)
+
+set(SPIRV_EXTENSIONS "+SPV_INTEL_split_barrier")
+
+if (SYCL_COMPILER_VERSION GREATER_EQUAL 20250200)
+  string(APPEND SPIRV_EXTENSIONS ",+SPV_INTEL_2d_block_io,+SPV_INTEL_subgroup_matrix_multiply_accumulate")
+endif()
+
 set(CUTLASS_KERNEL_FLAGS ${CUTLASS_KERNEL_FLAGS}
   -fsycl
   -fsycl-device-code-split=per_kernel
   -fsycl-targets=intel_gpu_pvc,intel_gpu_bmg_g21
-  "SHELL:-Xspirv-translator=intel_gpu_pvc --spirv-ext=+SPV_INTEL_split_barrier,+SPV_INTEL_2d_block_io,+SPV_INTEL_subgroup_matrix_multiply_accumulate"
-  "SHELL:-Xspirv-translator=intel_gpu_bmg_g21 --spirv-ext=+SPV_INTEL_split_barrier,+SPV_INTEL_2d_block_io,+SPV_INTEL_subgroup_matrix_multiply_accumulate"
+  "SHELL:-Xspirv-translator=intel_gpu_pvc --spirv-ext=${SPIRV_EXTENSIONS}"
+  "SHELL:-Xspirv-translator=intel_gpu_bmg_g21 --spirv-ext=${SPIRV_EXTENSIONS}"
   -Xs "-options \"-igc_opts 'VISAOptions=-perfmodel,VectorAliasBBThreshold=1000,ExtraOCLOptions=-cl-intel-256-GRF-per-thread'\" -options -ze-opt-large-register-file"
 )
 
