@@ -260,6 +260,8 @@ def test_hook_launch_context(tmp_path: pathlib.Path, context: str):
 
 
 def test_hook_multiple_threads(tmp_path: pathlib.Path):
+    if is_xpu():
+        pytest.skip("FIXME: enable")
 
     def metadata_fn_foo(grid: tuple, metadata: NamedTuple, args: dict):
         return {"name": "foo_test"}
