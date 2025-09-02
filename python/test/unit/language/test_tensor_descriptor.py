@@ -432,7 +432,7 @@ def test_tensor_descriptor_in_function(device):
     torch.testing.assert_close(expect, out)
 
 
-@triton.jit(noinline=True)
+@triton.jit(noinline=False)
 def tensor_descriptor_return_helper(ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
     return tl.make_tensor_descriptor(
         ptr,
