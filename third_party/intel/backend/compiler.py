@@ -327,7 +327,7 @@ class XPUBackend(BaseBackend):
         intel.passes.ttgpuir.add_to_llvmir(pm, options.advanced_path, options.enable_tile_load_linear_layout)
         intel.passes.ttgpuir.add_gen_to_llvm(pm)
         passes.common.add_canonicalizer(pm)
-#        intel.passes.ttgpuir.add_rewrite_stack_ptr(pm)
+        intel.passes.ttgpuir.add_rewrite_stack_ptr(pm)
         passes.common.add_cse(pm)
         passes.convert.add_arith_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)

@@ -35,7 +35,7 @@ module attributes {triton_intel_gpu.target_arch = "spir64", "ttg.num-warps" = 1 
     %1 = tt.load %arg1 : !tt.ptr<f32>
     // CHECK: [[LOAD0:%.*]] = llvm.extractelement {{.*}}[{{.*}}]
     // CHECK: [[LOAD1:%.*]] = llvm.extractelement {{.*}}[{{.*}}]
-    // CHECK: [[AGGR_GLOBAL_SMEM:%.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>    
+    // CHECK: [[AGGR_GLOBAL_SMEM:%.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
     // CHECK: llvm.call spir_funccc @noinline_shared_fn([[LOAD0]], [[LOAD1]], %arg2, [[AGGR_GLOBAL_SMEM]], [[GLOBAL_PTR]], [[PROFILE_PTR]])
     tt.call @noinline_shared_fn(%0, %1, %arg2) {allocation.offset = 0 : i32} : (f32, f32, !tt.ptr<f32>) -> ()
     tt.return

@@ -144,8 +144,8 @@ void mlir::triton::intel::populateControlFlowOpToLLVMPattern(
   patterns.add<FixCallCConv>(typeConverter);
   // Overwrite the CallOpConversion pattern added by the call to
   // populateControlFlowOpToLLVMPattern.
-  patterns.add<CallOpConversion>(typeConverter, targetInfo,
-                                 benefit.getBenefit() + 1);
+  // patterns.add<CallOpConversion>(typeConverter, targetInfo,
+  //                                 benefit.getBenefit() + 1);
   mlir::triton::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
                                                    targetInfo, benefit);
 }
