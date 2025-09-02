@@ -2,8 +2,8 @@ set(CUTLASS_KERNEL_FLAGS ${CUTLASS_KERNEL_FLAGS}
   -fsycl
   -fsycl-device-code-split=per_kernel
   -fsycl-targets=intel_gpu_pvc,intel_gpu_bmg_g21
-  "SHELL:-Xspirv-translator=intel_gpu_pvc --spirv-ext=+SPV_INTEL_split_barrier"
-  "SHELL:-Xspirv-translator=intel_gpu_bmg_g21 --spirv-ext=+SPV_INTEL_split_barrier"
+  "SHELL:-Xspirv-translator=intel_gpu_pvc --spirv-ext=+SPV_INTEL_split_barrier,+SPV_INTEL_2d_block_io,+SPV_INTEL_subgroup_matrix_multiply_accumulate"
+  "SHELL:-Xspirv-translator=intel_gpu_bmg_g21 --spirv-ext=+SPV_INTEL_split_barrier,+SPV_INTEL_2d_block_io,+SPV_INTEL_subgroup_matrix_multiply_accumulate"
   -Xs "-options \"-igc_opts 'VISAOptions=-perfmodel,VectorAliasBBThreshold=1000,ExtraOCLOptions=-cl-intel-256-GRF-per-thread'\" -options -ze-opt-large-register-file"
 )
 
