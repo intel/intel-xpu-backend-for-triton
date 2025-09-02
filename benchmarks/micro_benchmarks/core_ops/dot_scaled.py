@@ -57,7 +57,7 @@ def dot_scaled(M, N, K, x, y, z, scale_x, scale_y, type_a, type_b, num_warps):
         line_names=['Triton'],
         # line styles
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
-        ylabel=('GB/s', ),  # label name for the y-axis
+        ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
         plot_name='scaled-dot',
         # name for the plot. Used also as a file name for saving the plot.
         args={},
@@ -143,7 +143,11 @@ def benchmark(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, provider
         scale_size = (M * K // 32) if rhs_scale else (N * K // 32)
         return (tensor_size + scale_size + 4.0 * (M * N)) * (1e-9) / (ms * 1e-3)
 
-    return (gbps(mean_ms), gbps(max_ms), gbps(min_ms)), cv
+    def tflops(ms):
+        scale_size = (M * K // 32) if rhs_scale else (N * K // 32)
+        return (2 * M * N * K + scale_size) * (1e-12) / (ms * 1e-3)
+
+    return (gbps(mean_ms), gbps(max_ms), gbps(min_ms)), (tflops(mean_ms), tflops(max_ms), tflops(min_ms)), cv
 
 
 def run_benchmarks():
