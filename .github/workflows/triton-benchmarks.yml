@@ -126,16 +126,10 @@ jobs:
         run: |
           cd benchmarks
           pip install .
-          pip install intel-pti==0.12.4
-          PTI_LIBS_DIR=$(python -c "import sysconfig; print(sysconfig.get_paths()['stdlib']+'/..')")
-          # the output should contain: `libpti.so`, `libpti_metrics.so.0.12.4` and `libpti_view.so.0.12.4`
-          ls $PTI_LIBS_DIR
-          echo "PTI_LIBS_DIR=$PTI_LIBS_DIR" >> $GITHUB_ENV
 
       - name: Run Triton Softmax kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'fused_softmax.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'fused_softmax.py') }}
         run: |
-          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
           cd benchmarks/triton_kernels_benchmark
           python fused_softmax.py --reports $REPORTS --n_runs $N_RUNS
           source ../../scripts/capture-hw-details.sh
@@ -146,7 +140,6 @@ jobs:
       - name: Run Triton GEMM kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_benchmark.py') }}
         run: |
-          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
           cd benchmarks/triton_kernels_benchmark
           python gemm_benchmark.py --reports $REPORTS --n_runs $N_RUNS
           mv $REPORTS/matmul-performance.csv $REPORTS/matmul-performance-base.csv
@@ -160,7 +153,6 @@ jobs:
       - name: Run Triton GEMM kernel benchmark - with tensor of pointer
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm_tensor_of_ptr_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_tensor_of_ptr_benchmark.py') }}
         run: |
-          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
           cd benchmarks/triton_kernels_benchmark
           python gemm_tensor_of_ptr_benchmark.py --reports $REPORTS --n_runs $N_RUNS
           source ../../scripts/capture-hw-details.sh
@@ -173,7 +165,6 @@ jobs:
       - name: Run Triton GEMM kernel benchmark - with tensor descriptor
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm_tensor_desc_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_tensor_desc_benchmark.py') }}
         run: |
-          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
           cd benchmarks/triton_kernels_benchmark
           python gemm_tensor_desc_benchmark.py --reports $REPORTS --n_runs $N_RUNS
           source ../../scripts/capture-hw-details.sh
@@ -186,7 +177,6 @@ jobs:
       - name: Run Triton GEMM (A@B^t) kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm_benchmark.py_abt')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_benchmark.py_abt') }}
         run: |
-          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
           cd benchmarks/triton_kernels_benchmark
           TRANSPOSE_B=1 python gemm_benchmark.py --reports $REPORTS --n_runs $N_RUNS
           mv $REPORTS/matmul-performance.csv $REPORTS/matmul-performance-bt.csv
@@ -198,7 +188,6 @@ jobs:
       - name: Run Triton GEMM (A^t@B) kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm_benchmark.py_atb')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_benchmark.py_atb') }}
         run: |
-          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
           cd benchmarks/triton_kernels_benchmark
           TRANSPOSE_A=1 python gemm_benchmark.py --reports $REPORTS --n_runs $N_RUNS
           mv $REPORTS/matmul-performance.csv $REPORTS/matmul-performance-at.csv
@@ -210,7 +199,6 @@ jobs:
       - name: Run Triton GEMM (stream-k) kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm_streamk_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_streamk_benchmark.py') }}
         run: |
-          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
           cd benchmarks/triton_kernels_benchmark
           python gemm_streamk_benchmark.py --reports $REPORTS --n_runs $N_RUNS
           source ../../scripts/capture-hw-details.sh
@@ -220,7 +208,6 @@ jobs:
       - name: Run Triton GEMM (split-k) kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm_splitk_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_splitk_benchmark.py') }}
         run: |
-          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
           cd benchmarks/triton_kernels_benchmark
           python gemm_splitk_benchmark.py --reports $REPORTS --n_runs $N_RUNS
           source ../../scripts/capture-hw-details.sh
@@ -230,7 +217,6 @@ jobs:
       - name: Run Triton GEMM + PreOp (exp) kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm_preop_exp_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_preop_exp_benchmark.py') }}
         run: |
-          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
           cd benchmarks/triton_kernels_benchmark
           python gemm_preop_exp_benchmark.py --reports $REPORTS --n_runs $N_RUNS
           source ../../scripts/capture-hw-details.sh
@@ -239,7 +225,6 @@ jobs:
       - name: Run Triton GEMM + PostOp (Gelu) kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm_postop_gelu_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_postop_gelu_benchmark.py') }}
         run: |
-          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
           cd benchmarks/triton_kernels_benchmark
           python gemm_postop_gelu_benchmark.py --reports $REPORTS --n_runs $N_RUNS
           source ../../scripts/capture-hw-details.sh
@@ -248,7 +233,6 @@ jobs:
       - name: Run Triton GEMM + PostOp (add matrix) kernel benchmark bfloat16
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm_postop_addmatrix_benchmark_bfloat16.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_postop_addmatrix_benchmark_bfloat16.py') }}
         run: |
-          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
           cd benchmarks/triton_kernels_benchmark
           python gemm_postop_addmatrix_benchmark.py --reports $REPORTS --n_runs $N_RUNS
           source ../../scripts/capture-hw-details.sh
@@ -258,7 +242,6 @@ jobs:
       - name: Run Triton GEMM + PostOp (add matrix) kernel benchmark int8
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm_postop_addmatrix_benchmark_int8.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_postop_addmatrix_benchmark_int8.py') }}
         run: |
-          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
           cd benchmarks/triton_kernels_benchmark
           INT8_ONLY=1 python gemm_postop_addmatrix_benchmark.py --reports $REPORTS --n_runs $N_RUNS
           source ../../scripts/capture-hw-details.sh
@@ -268,7 +251,6 @@ jobs:
       - name: Run Triton FA fwd kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flash_attention_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flash_attention_benchmark.py') }}
         run: |
-          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
           cd benchmarks/triton_kernels_benchmark
           python flash_attention_benchmark.py --reports $REPORTS --n_runs $N_RUNS
 
@@ -279,7 +261,6 @@ jobs:
       - name: Run Triton FA bwd kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flash_attention_bwd_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flash_attention_bwd_benchmark.py') }}
         run: |
-          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
           cd benchmarks/triton_kernels_benchmark
           FA_KERNEL_MODE="bwd" \
             python flash_attention_benchmark.py --reports $REPORTS --n_runs $N_RUNS
@@ -292,7 +273,6 @@ jobs:
       - name: Run Triton FA fwd kernel benchmark - with tensor descriptors
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flash_attention_tensor_desc_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flash_attention_tensor_desc_benchmark.py') }}
         run: |
-          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
           cd benchmarks/triton_kernels_benchmark
           python flash_attention_tensor_desc_benchmark.py --reports $REPORTS --n_runs $N_RUNS
           mv $REPORTS/attn-performance.csv $REPORTS/attn-tensor-desc-performance.csv
@@ -304,7 +284,6 @@ jobs:
       - name: Run Triton FlexAttention Causal Mask fwd kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flex_attention_benchmark_causal_mask.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flex_attention_benchmark_causal_mask.py') }}
         run: |
-          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
           cd benchmarks/triton_kernels_benchmark
           python flex_attention_benchmark_causal_mask.py --reports $REPORTS --n_runs $N_RUNS
 
@@ -315,7 +294,6 @@ jobs:
       - name: Run Triton FlexAttention (batch_size=4) Causal Mask fwd kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flex_attention_benchmark_batch4-causal_mask.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flex_attention_benchmark_batch4-causal_mask.py') }}
         run: |
-          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
           cd benchmarks/triton_kernels_benchmark
           BATCH_SIZE=4 python flex_attention_benchmark_causal_mask.py --reports $REPORTS --n_runs $N_RUNS
 
@@ -326,7 +304,6 @@ jobs:
       - name: Run Triton FlexAttention (batch_size=16) Causal Mask fwd kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flex_attention_benchmark_batch16-causal_mask.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flex_attention_benchmark_batch16-causal_mask.py') }}
         run: |
-          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
           cd benchmarks/triton_kernels_benchmark
           BATCH_SIZE=16 python flex_attention_benchmark_causal_mask.py --reports $REPORTS --n_runs $N_RUNS
 
@@ -337,7 +314,6 @@ jobs:
       - name: Run Triton FlexAttention Custom Masks fwd kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flex_attention_benchmark_custom_masks.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flex_attention_benchmark_custom_masks.py') }}
         run: |
-          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
           cd benchmarks/triton_kernels_benchmark
           python flex_attention_benchmark_custom_masks.py --reports $REPORTS --n_runs $N_RUNS
 
@@ -351,7 +327,6 @@ jobs:
       - name: Run Prefix Sums kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'prefix_sums.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'prefix_sums.py') }}
         run: |
-          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
           cd benchmarks/triton_kernels_benchmark
           python prefix_sums.py --reports $REPORTS --n_runs $N_RUNS
           source ../../scripts/capture-hw-details.sh
@@ -360,7 +335,6 @@ jobs:
       - name: Run micro benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'micro_benchmarks.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'micro_benchmarks') }}
         run: |
-          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
           cd benchmarks/micro_benchmarks
           python run_benchmarks.py --reports $REPORTS
 
