@@ -3239,10 +3239,9 @@ struct AtomicCASOpConversion
     }
 
     if (tensorTy) {
-      Type structTy = getTypeConverter()->convertType(tensorTy);
-      Value resultStruct = packLLElements(loc, getTypeConverter(), resultVals,
-                                          rewriter, structTy);
-      rewriter.replaceOp(op, {resultStruct});
+      finalizeTensorAtomicResults(op, tensorTy, rewriter, resultVals,
+                                  valueElemTy, b, mask, targetInfo,
+                                  getTypeConverter());
     }
     return success();
   }
@@ -3409,10 +3408,9 @@ struct AtomicRMWOpConversion
     }
 
     if (tensorTy) {
-      Type structTy = getTypeConverter()->convertType(tensorTy);
-      Value resultStruct = packLLElements(loc, getTypeConverter(), resultVals,
-                                          rewriter, structTy);
-      rewriter.replaceOp(op, {resultStruct});
+      finalizeTensorAtomicResults(op, tensorTy, rewriter, resultVals,
+                                  valueElemTy, b, threadPred, targetInfo,
+                                  getTypeConverter());
     }
     return success();
   }
