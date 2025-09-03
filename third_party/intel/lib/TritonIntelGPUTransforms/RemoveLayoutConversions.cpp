@@ -1014,10 +1014,10 @@ void LayoutRematerialization::updateRematMapping(
 /// removed by using another loop yielded value plus a convert layout operation.
 void LayoutRematerialization::reduceLoopCarriedValues() {
   for (auto [pair, val] : rematMapping) {
-    if (!isa<BlockArgument>(pair.first))
+    auto arg = dyn_cast<BlockArgument>(pair.first);
+    if (!arg)
       continue;
 
-    auto arg = cast<BlockArgument>(pair.first);
     if (!isTensorPointerType(arg.getType()))
       continue;
 
