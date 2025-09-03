@@ -7440,9 +7440,6 @@ def test_disable_licm():
         for i in tl.range(0, n, disable_licm=True):
             print("i", i)
 
-    if is_xpu():
-        pytest.skip("FIXME: issue #4916")
-
     compiled_kernel1 = while_no_licm.warmup(10, grid=(1, ))
     assert "llvm.licm.disable" in compiled_kernel1.asm["llir"]
 
@@ -7659,6 +7656,7 @@ def test_side_effectful_reduction_2d(device, reduce_dim):
     torch.testing.assert_close(Z, X.sum(reduce_dim).to(torch.int32))
 
 
+@pytest.mark.interpreter
 def test_dtype(device):
 
     @triton.jit
@@ -7669,7 +7667,7 @@ def test_dtype(device):
         tl.static_assert(dtype_x == tl.int8 or (dtype_x == tl.int16 or dtype_x == tl.int32))
 
     X = torch.empty(1, dtype=torch.int32, device=device)
-    kernel.warmup(X, grid=(1, ))
+    kernel[(1, )](X)
 
 
 def test_side_effectful_scan(device):

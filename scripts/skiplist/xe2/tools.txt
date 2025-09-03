@@ -1,0 +1,7 @@
+python/test/unit/tools/test_aot.py::test_launcher_has_no_available_kernel[True]
+python/test/unit/tools/test_aot.py::test_launcher_has_no_available_kernel[False]
+python/test/unit/tools/test_aot.py::test_compile_link_matmul_no_specialization[True]
+python/test/unit/tools/test_aot.py::test_compile_link_matmul_no_specialization[False]
+python/test/unit/tools/test_aot.py::test_compile_link_matmul[True]
+python/test/unit/tools/test_aot.py::test_compile_link_matmul[False]
+python/test/unit/tools/test_aot.py::test_compile_link_autotune_matmul
