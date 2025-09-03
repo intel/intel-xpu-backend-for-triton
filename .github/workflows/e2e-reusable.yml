@@ -98,10 +98,9 @@ jobs:
       - name: Identify pinned versions
         run: |
           cd pytorch
-          echo "BENCHMARK_COMMIT_ID=$(<.github/ci_commit_pins/torchbench.txt)" | tee -a "$GITHUB_ENV"
+          echo "BENCHMARK_COMMIT_ID=$(<.ci/docker/ci_commit_pins/torchbench.txt)" | tee -a "$GITHUB_ENV"
           echo "TORCHVISION_COMMIT_ID=$(<.github/ci_commit_pins/vision.txt)" | tee -a "$GITHUB_ENV"
           echo "TORCHAUDIO_COMMIT_ID=$(<.github/ci_commit_pins/audio.txt)" | tee -a "$GITHUB_ENV"
-          echo "TRANSFORMERS_VERSION=$(<.ci/docker/ci_commit_pins/huggingface.txt)" | tee -a "$GITHUB_ENV"
           echo "TIMM_COMMIT_ID=$(<.ci/docker/ci_commit_pins/timm.txt)" | tee -a "$GITHUB_ENV"
 
       - name: Generate Triton cache key
@@ -136,17 +135,13 @@ jobs:
 
       - name: Install python test dependencies
         run: |
-          pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec
+          pip install pyyaml pandas scipy 'numpy==1.26.4' psutil pyre_extensions torchrec
 
       - name: Install transformers package
         if: ${{ inputs.suite == 'huggingface' }}
-        uses: ./.github/actions/install-dependency
-        with:
-          package: transformers
-          repository: huggingface/transformers
-          ref: ${{ env.TRANSFORMERS_VERSION }}
-          try-tag-prefix: v
-          extra-cache-key: ${{ env.PYTORCH_VERSION }}
+        run: |
+          cd pytorch
+          pip install -r .ci/docker/ci_commit_pins/huggingface-requirements.txt
 
       - name: Install torchvision package
         if: ${{ inputs.suite == 'timm_models' || inputs.suite == 'torchbench' }}
@@ -264,7 +259,6 @@ jobs:
           TRITON_COMMIT_ID=$GITHUB_SHA
           TORCHVISION_COMMIT_ID=$TORCHVISION_COMMIT_ID
           TORCHAUDIO_COMMIT_ID=$TORCHAUDIO_COMMIT_ID
-          TRANSFORMERS_VERSION=$TRANSFORMERS_VERSION
           TIMM_COMMIT_ID=$TIMM_COMMIT_ID
           LIBIGC1_VERSION=$LIBIGC1_VERSION
           LEVEL_ZERO_VERSION=$LEVEL_ZERO_VERSION

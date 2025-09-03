@@ -9,11 +9,13 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/DecomposeScaledBlocked.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
+using ::mlir::LLVM::AMD::hasTransInDefChain;
 using ::mlir::LLVM::AMD::isChainDotHead;
 using ::mlir::LLVM::AMD::isChainDotTail;
 using ::mlir::LLVM::AMD::scaleDotElemTypeToMLIRType;
@@ -514,15 +516,30 @@ public:
     // to increase ds_read vector size
     // However, in FA, the second dot can only use kWidth = kBase since it's
     // limited by the result of the first dot, which is of mfmaLayout.
-    if (!isChainDotTail(dotOp))
+    auto isDotChainTail = isChainDotTail(dotOp);
+    if (!isDotChainTail)
       kWidth *= kPack;
 
-    // For FA kernel with f16 elementTy, we limit the 2nd dot to have
+    // For FA fwd kernel with f16 elementTy, we limit the 2nd dot to have
     // kWidth = 4 so that the coversion from #mma (result of 1st dot)
     // to #dotOp (operand 0 of 2nd dot) is a no-op.
     // TODO (lixun): relax the condition for 8-bit elementTy.
-    if ((aElemTy.isF16() || aElemTy.isBF16()) && isChainDotTail(dotOp))
+    auto is16BitElemTy = (aElemTy.isF16() || aElemTy.isBF16());
+    if (is16BitElemTy && isDotChainTail) {
       kWidth = 4;
+    }
+    // For FA bwd kernel (detected using hasTransInDefChain), depending on
+    // whether the dot is a head or tail in the chain, we adjust the kWidth
+    // accordingly. This will enable us to create the same shared encoding per
+    // pair of tt.dot ops that both use the same tt.load result, one directly
+    // and one via tt.trans, later in the pass pipeline.
+    if (is16BitElemTy && hasTransInDefChain(dotOp, 1u)) {
+      if (isChainDotHead(dotOp)) {
+        kWidth = 4;
+      } else if (isDotChainTail) {
+        kWidth = 8;
+      }
+    }
 
     Value newDot;
     if (withScale) {
@@ -685,7 +702,9 @@ public:
       // Don't need to covert int8 holding mxfp4--the upcast_mxfp op can
       // take int8 tensor as input.
       if (type == ScaleDotElemType::BF16 || type == ScaleDotElemType::FP16 ||
-          type == ScaleDotElemType::E2M1)
+          type == ScaleDotElemType::E2M1 ||
+          (mfmaVersion == 4 &&
+           (type == ScaleDotElemType::E4M3 || type == ScaleDotElemType::E5M2)))
         return v;
 
       auto upcastedType = RankedTensorType::get(
@@ -1434,6 +1453,11 @@ struct TritonAMDGPUAccelerateMatmulPass
           /*benefit=*/2);
       break;
     case ISAFamily::RDNA3:
+      // Only gfx12 is supported for now
+      if (getWmmaVersion(archGenerationName) == 2) {
+        ttg::populateDecomposeScaledBlockedPatterns(mfmaPatterns,
+                                                    /*benefit=*/3);
+      }
       mfmaPatterns.add<::BlockedToWMMA>(
           context, getWmmaVersion(archGenerationName), matrixInstructionSize,
           /*benefit=*/2);

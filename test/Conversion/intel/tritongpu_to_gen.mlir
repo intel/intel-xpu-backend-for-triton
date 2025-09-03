@@ -1,7 +1,7 @@
 // RUN: triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm --convert-tritongen-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm --dump-input-context=20
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  // CHECK: llvm.func spir_kernelcc @test_empty_kernel(%arg0: i64, %arg1: !llvm.ptr<1>, %arg2: !llvm.ptr<1>)
+  // CHECK: llvm.func spir_kernelcc @test_empty_kernel(%arg0: i64, %arg1: !llvm.ptr<1>, %arg2: !llvm.ptr<1>, %arg3: !llvm.ptr<1>)
   // Here the 128 comes from the 4 in module attribute multiples 32
   // CHECK-SAME: attributes {intel_reqd_sub_group_size = 32 : i32, reqd_work_group_size = array<i32: 128, 1, 1>} {
   tt.func @test_empty_kernel(%lb : index, %A : !tt.ptr<f16>) {
@@ -816,12 +816,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK-LABEL: convert_layout_dpas_block
   tt.func @convert_layout_dpas_blocked(%arg0: tensor<32x16xf32, #dpas>) {
     // CHECK: llvm.store
-    // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
+    // CHECK-SAME: vector<2xf32>, !llvm.ptr<3>
     // CHECK: llvm.store
-    // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
+    // CHECK-SAME: vector<2xf32>, !llvm.ptr<3>
     // CHECK: llvm.call spir_funccc @_Z7barrierj({{.*}}) {{.*}} : (i32) -> ()
     // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3> -> vector<4xf32>
+    // CHECK-SAME: !llvm.ptr<3> -> vector<2xf32>
     %0 = ttg.convert_layout %arg0 : tensor<32x16xf32, #dpas> -> tensor<32x16xf32, #blocked0>
     tt.return
   }
@@ -836,13 +836,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK-LABEL: convert_layout_dpas_block
   tt.func @convert_layout_dpas_blocked(%arg0: tensor<32x64xf32, #dpas>) {
     // CHECK: llvm.store
-    // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
+    // CHECK-SAME: vector<4xf32>, !llvm.ptr<3>
     // CHECK: llvm.store
-    // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
+    // CHECK-SAME: vector<4xf32>, !llvm.ptr<3>
     // CHECK: llvm.store
-    // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
+    // CHECK-SAME: vector<4xf32>, !llvm.ptr<3>
     // CHECK: llvm.store
-    // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
+    // CHECK-SAME: vector<4xf32>, !llvm.ptr<3>
     // CHECK: llvm.call spir_funccc @_Z7barrierj({{.*}}) {{.*}} : (i32) -> ()
     // CHECK: llvm.load
     // CHECK-SAME: !llvm.ptr<3> -> vector<4xf32>
@@ -858,9 +858,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: convert_layout_dpas_transpose
   tt.func @convert_layout_dpas_transpose(%arg0: tensor<128x256xf8E5M2, #dpas>) {
-    // CHECK-COUNT-128: llvm.store %{{.*}} : vector<1xi8>, !llvm.ptr<3>
+    // CHECK-COUNT-16: llvm.store %{{.*}} : vector<16xi8>, !llvm.ptr<3>
     // CHECK: llvm.call spir_funccc @_Z7barrierj({{.*}}) {{.*}} : (i32) -> ()
-    // CHECK-COUNT-80: llvm.load %{{.*}} : !llvm.ptr<3> -> vector<1xi8>
+    // CHECK-COUNT-2: llvm.load %{{.*}} : !llvm.ptr<3> -> vector<16xi8>
     %0 = ttg.convert_layout %arg0 : tensor<128x256xf8E5M2, #dpas> -> tensor<128x256xf8E5M2, #blocked>
     tt.return
   }
@@ -902,7 +902,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // CHECK-LABEL: convert_blocked1d_to_slice1
   tt.func @convert_blocked1d_to_slice1(%src:tensor<32xi32, #blocked0>) {
-    // CHECK-COUNT-8: llvm.load {{.*}} : !llvm.ptr<3>
+    // CHECK-COUNT-2: llvm.load {{.*}} : !llvm.ptr<3> -> vector<4xi32>
     %cvt = ttg.convert_layout %src : tensor<32xi32, #blocked0> -> tensor<32xi32, #ttg.slice<{dim = 1, parent = #blocked1}>>
     tt.return
   }

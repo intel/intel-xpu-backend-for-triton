@@ -127,10 +127,14 @@ sycl::context get_default_context(const sycl::device &sycl_device) {
 #ifdef WIN32
   sycl::context ctx;
   try {
+#if __SYCL_COMPILER_VERSION >= 20250604
+    ctx = platform.khr_get_default_context();
+#else
     ctx = platform.ext_oneapi_get_default_context();
+#endif
   } catch (const std::runtime_error &ex) {
     // This exception is thrown on Windows because
-    // ext_oneapi_get_default_context is not implemented. But it can be safely
+    // khr_get_default_context is not implemented. But it can be safely
     // ignored it seems.
 #if _DEBUG
     std::cout << "ERROR: " << ex.what() << std::endl;
@@ -138,7 +142,11 @@ sycl::context get_default_context(const sycl::device &sycl_device) {
   }
   return ctx;
 #else
+#if __SYCL_COMPILER_VERSION >= 20250604
+  return platform.khr_get_default_context();
+#else
   return platform.ext_oneapi_get_default_context();
+#endif
 #endif
 }
 
@@ -287,6 +295,8 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
     }
     if (narg != expected_num_params) {
       // global scratch.
+      cgh.set_arg(narg++, nullptr);
+      // profile scratch
       cgh.set_arg(narg++, nullptr);
     }
     if (triton_args.shared_memory) {

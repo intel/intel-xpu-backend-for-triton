@@ -128,6 +128,7 @@ class CUDAOptions:
     backend_name: str = 'cuda'
     sanitize_overflow: bool = True
     arch: str = None
+    instrumentation_mode: str = ""
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -147,6 +148,7 @@ class CUDAOptions:
 
 
 class CUDABackend(BaseBackend):
+    instrumentation = None
 
     @staticmethod
     def supports_target(target: GPUTarget):
@@ -171,6 +173,11 @@ class CUDABackend(BaseBackend):
         args = {'arch': knobs.runtime.override_arch or f"sm{self.target.arch}"}
         args.update({k: opts[k] for k in CUDAOptions.__dataclass_fields__.keys() if k in opts if opts[k] is not None})
         capability = int(self._parse_arch(args["arch"]))
+
+        if args.get("num_ctas", 1) > 1 and capability < 90:
+            raise ValueError((f"num_ctas > 1 requires NVIDIA SM90+ (Hopper). "
+                              f"Current target is sm_{capability}. This configuration will fail. "
+                              f"Please set num_ctas=1 or target an SM90+ GPU."))
 
         if "supported_fp8_dtypes" not in args:
             supported_fp8_dtypes = set(CUDAOptions.supported_fp8_dtypes)
@@ -215,6 +222,8 @@ class CUDABackend(BaseBackend):
 
     def load_dialects(self, ctx):
         nvidia.load_dialects(ctx)
+        if CUDABackend.instrumentation:
+            CUDABackend.instrumentation.load_dialects(ctx)
 
     @staticmethod
     def make_ttir(mod, metadata, opt, capability):
@@ -305,6 +314,7 @@ class CUDABackend(BaseBackend):
         nvidia.passes.ttnvgpuir.add_lower_mma(pm)
         passes.common.add_sccp(pm)
         passes.common.add_canonicalizer(pm)
+
         pm.run(mod)
         metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
         tensordesc_meta = mod.get_tensordesc_metadata()
@@ -337,7 +347,7 @@ class CUDABackend(BaseBackend):
 
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
         passes.ttgpuir.add_allocate_warp_groups(pm)
-        passes.convert.add_scf_to_cf(pm)
+        passes.convert.add_triton_scf_to_cf(pm)
         nvidia.passes.ttgpuir.add_allocate_shared_memory_nv(pm, capability, ptx_version)
         nvidia.passes.ttnvgpuir.add_allocate_tensor_memory(pm)
         if knobs.compilation.enable_experimental_consan:
@@ -345,6 +355,9 @@ class CUDABackend(BaseBackend):
             passes.ttgpuir.add_concurrency_sanitizer(pm)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
         nvidia.passes.ttnvgpuir.add_proxy_fence_insertion(pm, capability)
+        # instrumentation point here so we can override IRs above (e.g., ttir and ttgir)
+        if CUDABackend.instrumentation:
+            CUDABackend.instrumentation.patch("ttgpuir_to_llvmir", pm, mod.context)
         nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, ptx_version)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
@@ -356,6 +369,9 @@ class CUDABackend(BaseBackend):
         passes.convert.add_nvvm_to_llvm(pm)
         if not knobs.compilation.disable_line_info:
             passes.llvmir.add_di_scope(pm)
+        if CUDABackend.instrumentation:
+            CUDABackend.instrumentation.patch("llvmir_to_llvm", pm, mod.context)
+
         pm.run(mod)
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
         llvm.init_targets()
@@ -371,7 +387,7 @@ class CUDABackend(BaseBackend):
         llvm.attach_datalayout(llvm_mod, triple, proc, features)
         nvidia.set_nvvm_reflect_ftz(llvm_mod)
 
-        if options.extern_libs:
+        if options.extern_libs and nvidia.has_extern_deps(llvm_mod):
             paths = [path for (name, path) in options.extern_libs]
             llvm.link_extern_libs(llvm_mod, paths)
 
@@ -386,6 +402,8 @@ class CUDABackend(BaseBackend):
         metadata["tmem_size"] = src.get_int_attr("ttg.tensor_memory_size")
         metadata["global_scratch_size"] = src.get_int_attr("ttg.global_scratch_memory_size")
         metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment")
+        metadata["profile_scratch_size"] = src.get_int_attr("ttg.profile_scratch_memory_size") or 0
+        metadata["profile_scratch_align"] = src.get_int_attr("ttg.profile_scratch_memory_alignment") or 1
         ret = str(llvm_mod)
         del llvm_mod
         del context

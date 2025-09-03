@@ -22,7 +22,10 @@
  */
 
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/Diagnostics.h"
 #include "mlir/Support/LLVM.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUOpInterfaces.cpp.inc"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Utility.h"
@@ -132,13 +135,18 @@ bool WarpGroupDotOp::verifyDims() {
 
 // -- WarpGroupDotWaitOp --
 LogicalResult WarpGroupDotWaitOp::inferReturnTypes(
-    ::mlir::MLIRContext *context, ::std::optional<::mlir::Location> location,
-    ::mlir::ValueRange operands, ::mlir::DictionaryAttr attributes,
-    ::mlir::OpaqueProperties properties, ::mlir::RegionRange regions,
-    ::llvm::SmallVectorImpl<::mlir::Type> &inferredReturnTypes) {
+    MLIRContext *context, std::optional<Location> location, ValueRange operands,
+    DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
+    SmallVectorImpl<Type> &inferredReturnTypes) {
   for (Value operand : operands)
     inferredReturnTypes.push_back(operand.getType());
-  return mlir::success();
+  return success();
+}
+
+LogicalResult WarpGroupDotWaitOp::verify() {
+  if (getOperands().empty())
+    return emitOpError("expected to be waiting on at least one dependency");
+  return success();
 }
 
 // -- InitBarrierOp --
@@ -490,16 +498,45 @@ void TCGen5MMAScaledOp::build(OpBuilder &builder, OperationState &state,
 }
 
 // -- TMEMStoreOp --
+static LogicalResult verifyTMEMOperand(Operation *op, RankedTensorType type,
+                                       MemDescType memdesc, StringRef regName) {
+  if (type.getRank() != 2)
+    return op->emitOpError(regName) << " must be a 2D tensor";
+  if (type.getEncoding()) {
+    auto enc = dyn_cast<DistributedEncodingTrait>(type.getEncoding());
+    if (!enc) {
+      return op->emitOpError(regName)
+             << " does not have an distributed encoding";
+    }
+    SmallVector<DistributedEncodingTrait> layouts =
+        getTmemCompatibleLayouts(op, type, memdesc);
+    if (layouts.empty()) {
+      return op->emitOpError(regName)
+             << " does not have any TMEM compatible layouts";
+    }
+    if (llvm::none_of(layouts, [&](DistributedEncodingTrait layout) {
+          return areLayoutsEquivalent(type.getShape(), layout, enc);
+        })) {
+      InFlightDiagnostic diag = op->emitOpError(regName)
+                                << " layout is not TMEM compatible";
+      for (Attribute layout : layouts)
+        diag.attachNote() << "potential TMEM layout: " << layout;
+      return diag;
+    }
+  }
+  return success();
+}
+
 LogicalResult TMEMStoreOp::verify() {
-  if (!isa<triton::nvidia_gpu::TensorMemorySpaceAttr>(
-          getDst().getType().getMemorySpace()))
-    return emitOpError("destination must be a tensor memory buffer.");
   if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr,
            TensorMemoryScalesEncodingAttr>(getDst().getType().getEncoding()))
     return emitOpError("should use tensor memory encoding.");
   if (!getDst().getType().getMutableMemory()) {
     return emitOpError("Cannot store into an immutable alloc");
   }
+  if (failed(verifyTMEMOperand(*this, getSrc().getType(), getDst().getType(),
+                               "source")))
+    return failure();
   return triton::gpu::verifyMemoryOpTypes(*this, getSrc().getType(),
                                           getDst().getType());
 }
@@ -512,16 +549,19 @@ LogicalResult TMEMLoadOp::verify() {
   if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
           getSrc().getType().getEncoding()))
     return emitOpError("should use tensor memory encoding.");
+  if (failed(verifyTMEMOperand(*this, getType(), getSrc().getType(), "result")))
+    return failure();
   return triton::gpu::verifyMemoryOpTypes(*this, getSrc().getType(), getType());
 }
 
 // -- TMEMAllocOp --
 LogicalResult TMEMAllocOp::verify() {
-  if (!isa<TensorMemorySpaceAttr>(getType().getMemorySpace()))
-    return emitOpError("should create a buffer of tensor memory");
   if (!isa<TensorMemoryEncodingAttr, TensorMemoryScalesEncodingAttr>(
           getType().getEncoding()))
     return emitOpError("should use tensor memory encoding");
+  if (getSrc() &&
+      failed(verifyTMEMOperand(*this, getSrc().getType(), getType(), "source")))
+    return failure();
   return triton::gpu::verifyAllocOp(*this, getSrc(), getType());
 }
 
@@ -617,7 +657,7 @@ void TMEMSubSliceOp::build(OpBuilder &builder, OperationState &state,
       encoding.getUnpacked(), encoding.getCTASplitM(), encoding.getCTASplitN());
   auto subsliceType = gpu::MemDescType::get(
       shape, allocTy.getElementType(), newEncoding, allocTy.getMemorySpace(),
-      allocTy.getMutableMemory());
+      allocTy.getMutableMemory(), allocTy.getAllocShape());
   build(builder, state, subsliceType, alloc, offset);
 }
 

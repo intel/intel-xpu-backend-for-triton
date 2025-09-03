@@ -181,8 +181,17 @@ private:
 // `pReg` and `pLane` are square layouts each with only one input and output
 // dimension. `mixedTranspositions` holds pairs of integers (i, j)
 // corresponding to the transposition (r_i l_j) of the i-th register basis
-// vector with the j-th lane basis vector.
+// vector with the j-th lane basis vector along with 16-bit selectors for byte
+// permute instructions (where each of the four nybbles is in the range [0, 7]).
 struct DecomposedWarpConversion {
+  struct TranspositionInfo {
+    std::pair<int, int> transposition;
+    uint16_t topPreSel = 0x3210;
+    uint16_t botPreSel = 0x7654;
+    uint16_t topPostSel = 0x3210;
+    uint16_t botPostSel = 0x7654;
+  };
+
   triton::LinearLayout pReg, pLane;
   SmallVector<std::pair<int, int>> mixedTranspositions;
 };
@@ -412,6 +421,9 @@ protected:
 };
 // Create a basic DataFlowSolver with constant and dead code analysis included.
 std::unique_ptr<DataFlowSolver> createDataFlowSolver();
+
+bool isCvtWarpSync(const triton::LinearLayout &srcLayout,
+                   const triton::LinearLayout &dstLayout);
 
 } // namespace mlir
 

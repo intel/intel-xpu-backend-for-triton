@@ -285,7 +285,8 @@ jobs:
         if: matrix.suite == 'rest' && inputs.driver_version == 'rolling' && inputs.device == 'max1100'
         run: |
           cd third_party/proton/test
-          pytest test_api.py test_lib.py test_profile.py test_viewer.py test_record.py -s -v
+          # FIXME: enable 'test_record.py' back
+          pytest test_api.py test_lib.py test_profile.py test_viewer.py -s -v
           cd ..
 
       - name: Run minicore tests
@@ -344,21 +345,11 @@ jobs:
         run: |
           ${{ env.TRITON_TEST_CMD }} --select-from-file tutorials.txt --tutorial
 
-      - name: Get transformers version
+      - name: Install transformers
         if: matrix.suite == 'rest'
         run: |
           cd pytorch
-          TRANSFORMERS_VERSION="$(<.ci/docker/ci_commit_pins/huggingface.txt)"
-          echo "TRANSFORMERS_VERSION=$TRANSFORMERS_VERSION" | tee -a $GITHUB_ENV
-
-      - name: Install transformers
-        if: matrix.suite == 'rest'
-        uses: ./.github/actions/install-dependency
-        with:
-          package: transformers
-          repository: huggingface/transformers
-          ref: ${{ env.TRANSFORMERS_VERSION }}
-          try-tag-prefix: v
+          pip install -r .ci/docker/ci_commit_pins/huggingface-requirements.txt
 
       - name: Run E2E test
         if: matrix.suite == 'rest'

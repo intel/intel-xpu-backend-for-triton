@@ -13,7 +13,7 @@ import torch._inductor
 import torch._inductor.lowering
 import torch._inductor.kernel
 import torch._inductor.kernel.flex.flex_attention as flex_attn
-from torch._inductor.template_heuristics import FlexConfig, FlexDecodeConfig
+from torch._inductor.template_heuristics.triton import FlexConfig, FlexDecodeConfig
 
 import triton_kernels_benchmark as benchmark_suit
 import triton
@@ -165,7 +165,10 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
             triton_fn = lambda: triton_o.backward(triton_do, retain_graph=True)
 
         benchmark_suit.assert_close(triton_fn, torch_fn, atol=1e-2, rtol=1e-3, err_msg='triton to torch')
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10, quantiles=quantiles,
+
+        # Needs more warmup on B580 for some reason
+        benchmark_suit.do_prewarmup(triton_fn)
+        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=200, n_repeat=10, quantiles=quantiles,
                                                               device=DEVICE)
 
     elif provider == 'onednn':

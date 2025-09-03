@@ -485,6 +485,7 @@ def make_launcher(constants, signature):
     ]
     params = [f"&arg{i}" for i, ty in signature.items() if ty != "constexpr"]
     params.append("&global_scratch")
+    params.append("&profile_scratch")
     num_params = len(params)
     params_decl = ""
     if num_params:
@@ -509,6 +510,19 @@ def make_launcher(constants, signature):
 #include <Python.h>
 #include <stdio.h>
 #include <numpy/arrayobject.h>
+
+namespace {{
+
+bool getBoolEnv(const std::string &env) {{
+            const char *s = std::getenv(env.c_str());
+            std::string str(s ? s : "");
+            std::transform(str.begin(), str.end(), str.begin(),
+                            [](unsigned char c) {{ return std::tolower(c); }});
+            return (str == "on" || str == "true" || str == "1");
+}}
+
+}}
+
 
 static inline void gpuAssert(ze_result_t code, const char *file, int line)
 {{
@@ -595,7 +609,7 @@ static inline void set_scalar_arg(sycl::handler &cgh, int index, const void *val
   cgh.set_arg(index, *static_cast<const T *>(value));
 }}
 
-static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ, int num_warps, int threads_per_warp, int shared_memory, sycl::queue& stream, sycl::kernel& kernel_ptr, void* global_scratch{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
+static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ, int num_warps, int threads_per_warp, int shared_memory, sycl::queue& stream, sycl::kernel& kernel_ptr, void* global_scratch, void* profile_scratch{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
 
   std::string kernel_name = kernel_ptr.get_info<sycl::info::kernel::function_name>();
   { 'RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {});' if COMPILATION_HELPER.inject_pytorch_dep else "" }
@@ -614,6 +628,27 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ, i
   sycl::nd_range<3> parallel_work_size(global_range, local_range);
   if (shared_memory) {{
     expected_num_params -= 1;
+  }}
+
+  static bool launchDebug = getBoolEnv("TRITON_INTEL_LAUNCH_DEBUG");
+  if (launchDebug){{
+    std::cout << "kernel info name:" << kernel_name << " @" << &kernel_ptr << std::endl;
+    std::cout << "kernel info attributes:" << kernel_ptr.get_info<sycl::info::kernel::attributes>() << std::endl;
+    std::cout << "kernel info reference_count:" << kernel_ptr.get_info<sycl::info::kernel::reference_count>() << std::endl;
+    std::cout << "kernel info num_args:" << kernel_ptr.get_info<sycl::info::kernel::num_args>() << std::endl;
+
+    std::cout << "launch num param:" << num_params << std::endl;
+    std::cout << "  gridx: " << gridX << std::endl;
+    std::cout << "  gridY: " << gridY << std::endl;
+    std::cout << "  gridZ: " << gridZ << std::endl;
+    std::cout << "  num_warps: " << num_warps << std::endl;
+    std::cout << "  threads_per_warp: " << threads_per_warp << std::endl;
+    std::cout << "  global range:[" << "x:"<< global_range_x << ", y:" << global_range_y << ", z:" << global_range_z << "]" << std::endl;
+    std::cout << "  local range:[" << "x:"<< local_range_x << ", y:" << local_range_y << ", z:" << local_range_z << "]" << std::endl;
+    std::cout << "  shared_memory: " << shared_memory << std::endl;
+
+    // param
+    {" ".join(f'std::cout << "  param {idx}:" << *({ty_to_cpp(item)}*)params[{idx}] << std::endl;' for idx, item in enumerate([signature[i] for i in signature if signature[i] != "constexpr"]))}
   }}
   assert(num_params == expected_num_params && "number of kernel param not matched");
   // Submit the imported kernel.
@@ -661,6 +696,7 @@ static uint64_t pack_fp64(double f) {{
 extern "C" EXPORT_FUNC PyObject* launch(PyObject* args) {{
   int gridX, gridY, gridZ;
   void* global_scratch = nullptr;
+  void* profile_scratch = nullptr;
   PyObject *launch_enter_hook = NULL;
   PyObject *launch_exit_hook = NULL;
   PyObject *kernel_metadata = NULL;
@@ -721,7 +757,7 @@ extern "C" EXPORT_FUNC PyObject* launch(PyObject* args) {{
 
   {newline.join(ptr_decls)}
   {newline.join(float_storage_decls)}
-  sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp, shared_memory, stream, kernel, global_scratch{',' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
+  sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp, shared_memory, stream, kernel, global_scratch, profile_scratch{',' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
   if (PyErr_Occurred()) {{
     return NULL;
   }}

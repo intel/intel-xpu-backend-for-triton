@@ -977,16 +977,23 @@ struct LoadOpToBlockIOConversion
   LoadOpToBlockIOConversion(
       LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
-      PatternBenefit benefit, bool oneMatrixPerLoadForBT,
-      bool useTileLoadLinearLayout)
+      PatternBenefit benefit, bool useTileLoadLinearLayout)
       : ConvertTritonGPUOpToLLVMPattern<triton::LoadOp>(converter, benefit),
         BlockIOConversionBase(targetInfo, axisAnalysisPass),
-        oneMatrixPerLoadForBT(oneMatrixPerLoadForBT),
         useTileLoadLinearLayout(useTileLoadLinearLayout) {}
 
   LogicalResult
   rewriteTensorPointerLoad(triton::LoadOp op, OpAdaptor adaptor,
                            ConversionPatternRewriter &rewriter) const {
+    // FIXME: Remove once IGC can split large 2D block loads.
+    std::optional<bool> oneMatrixPerLoadForBT =
+        mlir::triton::tools::isEnvValueBool(mlir::triton::tools::getStrEnv(
+            "TRITON_INTEL_ONE_MATRIX_PER_LOAD_BT"));
+    if (!oneMatrixPerLoadForBT.has_value())
+      oneMatrixPerLoadForBT =
+          op->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
+                          getOneMatrixPerLoadAttrName());
+
     Value ptr = op.getPtr();
     assert(isTensorPointerType(ptr.getType()) &&
            "Expecting tensor pointer type");
@@ -1342,7 +1349,7 @@ struct LoadOpToBlockIOConversion
       if (!usePackedType)
         return failure();
 
-      if (oneMatrixPerLoadForBT) {
+      if (*oneMatrixPerLoadForBT) {
         // Only load 1 operand per inst on row.
         numOperandsPer2DLoadM = 1;
         tileHeight = elemsPerDPASInst[threadOrder[rank - 2]];
@@ -1391,7 +1398,7 @@ struct LoadOpToBlockIOConversion
     tileLayout *= LinearLayout::identity1D(numOperandsOuterDimPerLoad,
                                            kIteration, dimOuterStr);
     tileLayout *=
-        LinearLayout::identity1D(isTransposeRequired && oneMatrixPerLoadForBT
+        LinearLayout::identity1D(isTransposeRequired && *oneMatrixPerLoadForBT
                                      ? 1
                                      : numOperandsInnerDimPerLoad,
                                  kIteration, dimInnerStr);
@@ -2466,7 +2473,6 @@ struct LoadOpToBlockIOConversion
   }
 
 private:
-  bool oneMatrixPerLoadForBT;
   bool useTileLoadLinearLayout;
 };
 
@@ -2677,9 +2683,11 @@ struct StoreOpToBlockIOConversion
   LogicalResult
   matchAndRewrite(triton::StoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
-    static const bool enableBlockIOForAllLayout =
-        triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS");
-    if (!isBlockIOCandidate(op, enableBlockIOForAllLayout))
+    std::optional<bool> enableBlockIOForAllLayout =
+        mlir::triton::tools::isEnvValueBool(mlir::triton::tools::getStrEnv(
+            "TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS"));
+    if (!isBlockIOCandidate(op, !enableBlockIOForAllLayout.has_value() ||
+                                    enableBlockIOForAllLayout.value()))
       return failure();
 
     Location loc = op.getLoc();
@@ -2895,6 +2903,12 @@ struct StoreOpToBlockIOConversion
           // The offsetX is number of elements instead of packed elements.
           addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, offsetX);
           offsetX = b.i32_val(0);
+        } else {
+          assert(numPackedVals > 0 &&
+                 "numPackedVals should be greater than zero.");
+          // The offsetX of linear layout is in original elements.
+          // The 2d block io requires the offsetX in number of packed elements.
+          offsetX = b.udiv(offsetX, b.i32_val(numPackedVals));
         }
         if (!boundaryCheck.contains(rowDim)) {
           baseHeight = b.i32_val(tileHeight);
@@ -3498,15 +3512,14 @@ void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
     RewritePatternSet &patterns,
     const intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    PatternBenefit benefit, bool oneMatrixPerLoadForBT,
-    bool useTileLoadLinearLayout) {
+    PatternBenefit benefit, bool useTileLoadLinearLayout) {
   patterns.add<AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
                StoreOpConversion, PrefetchOpConversion>(
       typeConverter, targetInfo, axisInfoAnalysis, benefit);
   // BlockIO is more efficient than gather load or scatter store.
   patterns.add<LoadOpToBlockIOConversion>(
       typeConverter, targetInfo, axisInfoAnalysis, benefit.getBenefit() + 2,
-      oneMatrixPerLoadForBT, useTileLoadLinearLayout);
+      useTileLoadLinearLayout);
   patterns.add<StoreOpToBlockIOConversion>(
       typeConverter, targetInfo, axisInfoAnalysis, benefit.getBenefit() + 2);
 }

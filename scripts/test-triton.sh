@@ -17,7 +17,8 @@ TEST:
     --benchmarks
     --softmax
     --gemm
-    --attention
+    --flash-attention
+    --flex-attention
     --instrumentation
     --inductor
     --sglang
@@ -55,7 +56,8 @@ TEST_MICRO_BENCHMARKS=false
 TEST_BENCHMARKS=false
 TEST_BENCHMARK_SOFTMAX=false
 TEST_BENCHMARK_GEMM=false
-TEST_BENCHMARK_ATTENTION=false
+TEST_BENCHMARK_FLASH_ATTENTION=false
+TEST_BENCHMARK_FLEX_ATTENTION=false
 TEST_INSTRUMENTATION=false
 TEST_INDUCTOR=false
 TEST_SGLANG=false
@@ -128,8 +130,13 @@ while (( $# != 0 )); do
       TEST_DEFAULT=false
       shift
       ;;
-    --attention)
-      TEST_BENCHMARK_ATTENTION=true
+    --flash-attention)
+      TEST_BENCHMARK_FLASH_ATTENTION=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --flex-attention)
+      TEST_BENCHMARK_FLEX_ATTENTION=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -410,9 +417,9 @@ run_benchmark_gemm() {
   python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_tensor_desc_benchmark.py
 }
 
-run_benchmark_attention() {
+run_benchmark_flash_attention() {
   echo "****************************************************"
-  echo "*****            Running ATTENTION             *****"
+  echo "*****          Running FlashAttention          *****"
   echo "****************************************************"
   cd $TRITON_PROJ/benchmarks
   pip install .
@@ -431,6 +438,17 @@ run_benchmark_attention() {
   echo "Backward - Default path:"
   FA_KERNEL_MODE="bwd" \
     python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
+}
+
+run_benchmark_flex_attention() {
+  echo "****************************************************"
+  echo "*****          Running FlexAttention           *****"
+  echo "****************************************************"
+  cd $TRITON_PROJ/benchmarks
+  pip install .
+
+  echo "FlexAttention - causal mask:"
+  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flex_attention_benchmark_causal_mask.py
 }
 
 run_benchmarks() {
@@ -468,7 +486,7 @@ run_inductor_tests() {
     git checkout $rev
   )
 
-  pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec
+  pip install pyyaml pandas scipy 'numpy==1.26.4' psutil pyre_extensions torchrec
 
   # TODO: Find the fastest Hugging Face model
   ZE_AFFINITY_MASK=0 python pytorch/benchmarks/dynamo/huggingface.py --accuracy --float32 -dxpu -n10 --no-skip --dashboard --inference --freezing --total-partitions 1 --partition-id 0 --only AlbertForMaskedLM --backend=inductor --timeout=4800 --output=$(pwd -P)/inductor_log.csv
@@ -538,8 +556,11 @@ test_triton() {
   if [ "$TEST_BENCHMARK_GEMM" = true ]; then
     run_benchmark_gemm
   fi
-  if [ "$TEST_BENCHMARK_ATTENTION" = true ]; then
-    run_benchmark_attention
+  if [ "$TEST_BENCHMARK_FLASH_ATTENTION" = true ]; then
+    run_benchmark_flash_attention
+  fi
+  if [ "$TEST_BENCHMARK_FLEX_ATTENTION" = true ]; then
+    run_benchmark_flex_attention
   fi
   if [ "$TEST_INSTRUMENTATION" == true ]; then
     run_instrumentation_tests

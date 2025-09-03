@@ -442,6 +442,26 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
 
 // -----
 
+// CHECK-LABEL: padded_shared_layout_vectorization
+// CHECK-NOT: llvm.load
+// CHECK: llvm.load {{.*}} !llvm.ptr<3> -> vector<8xf16>
+// CHECK-NOT: llvm.load
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+#shared = #ttg.padded_shared<[32:+4] {order = [1, 0]}>
+#smem = #ttg.shared_memory
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [2, 4], instrShape = [16, 16], isTransposed = true}>
+module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @padded_shared_layout_vectorization(%arg0: tensor<16x32xf16, #blocked>) {
+    %0 = ttg.local_alloc %arg0 : (tensor<16x32xf16, #blocked>) -> !ttg.memdesc<16x32xf16, #shared, #smem, mutable>
+    %1 = ttg.local_load %0: !ttg.memdesc<16x32xf16, #shared, #smem, mutable, 16x32> -> tensor<16x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
+    ttg.local_store %1, %0 : tensor<16x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> -> !ttg.memdesc<16x32xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 // GFX950-LABEL: reduce_32x32
 // GFX950: llvm.call_intrinsic "llvm.amdgcn.permlane32.swap"
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
@@ -474,7 +494,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // -----
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
-  tt.func public @atomic_kernel_bf16(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) attributes {noinline = false} {
+  tt.func public @atomic_kernel_bf16(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
     // CHECK: llvm.atomicrmw {{.*}}, {{.*}} syncscope({{"agent"}}) release
     // CHECK: llvm.atomicrmw {{.*}}, {{.*}} syncscope({{"agent"}}) acquire
     %cst = arith.constant dense<true> : tensor<1024xi1, #blocked>
@@ -495,7 +515,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 #blocked = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
-  tt.func public @atomic_kernel_bf16(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) attributes {noinline = false} {
+  tt.func public @atomic_kernel_bf16(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
     // CHECK: llvm.atomicrmw {{.*}}, {{.*}} syncscope({{"agent"}}) release
     // CHECK: llvm.atomicrmw {{.*}}, {{.*}} syncscope({{"agent"}}) monotonic
     // CHECK: llvm.atomicrmw {{.*}}, {{.*}} syncscope({{"agent"}}) monotonic
@@ -518,7 +538,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 #blocked = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
-  tt.func public @atomic_kernel_fp32(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @atomic_kernel_fp32(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
     // CHECK: llvm.atomicrmw {{.*}}, {{.*}} syncscope({{"agent"}}) release
     // CHECK: llvm.atomicrmw {{.*}}, {{.*}} syncscope({{"agent"}}) monotonic
     // CHECK: llvm.atomicrmw {{.*}}, {{.*}} syncscope({{"agent"}}) monotonic
