@@ -609,7 +609,10 @@ static inline void set_scalar_arg(sycl::handler &cgh, int index, const void *val
   cgh.set_arg(index, *static_cast<const T *>(value));
 }}
 
-static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ, int num_warps, int threads_per_warp, int shared_memory, sycl::queue& stream, sycl::kernel& kernel_ptr, void* global_scratch, void* profile_scratch{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
+static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
+                               int num_warps, int threads_per_warp, int shared_memory,
+                               sycl::queue& stream, sycl::kernel& kernel_ptr,
+                               void* global_scratch, void* profile_scratch{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
 
   std::string kernel_name = kernel_ptr.get_info<sycl::info::kernel::function_name>();
   { 'RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {});' if COMPILATION_HELPER.inject_pytorch_dep else "" }
