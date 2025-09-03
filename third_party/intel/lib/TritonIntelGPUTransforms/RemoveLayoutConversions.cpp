@@ -25,6 +25,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "llvm/ADT/TypeSwitch.h"
 #include <deque>
 
 namespace mlir::triton::gpu::intel {
@@ -1265,6 +1266,77 @@ void LayoutRematerialization::backwardRematerialization() {
       // backward slices.
       addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
                     convertOp.getResult());
+    }
+  }
+
+  // Reduce loop carried values if the value can be removed by using another
+  // loop yielded value plus a convert layout operation.
+  for (auto [pair, val] : rematMapping) {
+    auto arg = dyn_cast<BlockArgument>(pair.first);
+    if (!arg)
+      continue;
+
+    if (!isTensorPointerType(arg.getType()))
+      continue;
+
+    if (auto loopOp =
+            dyn_cast<LoopLikeOpInterface>(arg.getOwner()->getParentOp())) {
+      // Loop arguments that corresponds to a loop result which is not used are
+      // not interesting.
+      OpResult loopRes = loopOp.getTiedLoopResult(arg);
+      if (loopRes.getNumUses() == 0)
+        continue;
+
+      // Replace the loop result corresponding to the argument with an
+      // equivalent loop result.
+      auto rematArg = cast<BlockArgument>(val);
+      OpResult rematRes = loopOp.getTiedLoopResult(rematArg);
+
+      for (Operation *user : loopRes.getUsers()) {
+        Location loc = user->getLoc();
+        OpBuilder rewriter(user);
+
+        TypeSwitch<Operation *>(user)
+            .Case<LoadOp>([&](auto loadOp) {
+              auto newLoadOp =
+                  rewriter.create<LoadOp>(loc, rematRes, loadOp->getAttrs());
+              auto convOp = rewriter.create<ConvertLayoutOp>(
+                  loc, loadOp.getType(), newLoadOp.getResult());
+              loadOp->replaceAllUsesWith(convOp);
+              opToDelete.insert(loadOp);
+              LLVM_DEBUG({
+                DBGS() << "Replaced:\n\t" << *loadOp << "\n";
+                DBGS() << "with:\n\t" << *newLoadOp << "\n"
+                       << "\t" << *convOp << "\n";
+              });
+            })
+            .Case<StoreOp>([&](auto storeOp) {
+              Value data = storeOp.getOperand(1);
+              auto dataType = cast<RankedTensorType>(data.getType());
+              auto newPtrType = cast<PointerType>(rematRes.getType());
+              Attribute encoding =
+                  cast<RankedTensorType>(newPtrType.getPointeeType())
+                      .getEncoding();
+              RankedTensorType newDataType =
+                  dataType.cloneWithEncoding(encoding);
+              auto convOp =
+                  rewriter.create<ConvertLayoutOp>(loc, newDataType, data);
+              auto newStoreOp = rewriter.create<StoreOp>(
+                  loc, rematRes, convOp, storeOp.getBoundaryCheck(),
+                  storeOp.getCache(), storeOp.getEvict());
+              opToDelete.insert(storeOp);
+              LLVM_DEBUG({
+                DBGS() << "Replaced:\n\t" << *storeOp << "\n";
+                DBGS() << "with:\n\t" << *convOp << "\n"
+                       << "\t" << *newStoreOp << "\n";
+              });
+            })
+            .Default([](auto op) {
+              llvm::report_fatal_error(llvm::Twine(
+                  "Unsupported operation in backward rematerialization: '" +
+                  op->getName().getStringRef() + "'"));
+            });
+      }
     }
   }
 }
