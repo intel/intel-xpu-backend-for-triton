@@ -82,7 +82,7 @@ runs:
       uses: ./.github/actions/load
       env:
         # Increase this value to reset cache
-        CACHE_NUMBER: 16
+        CACHE_NUMBER: 17
       with:
         path: pytorch
         key: pytorch-$PYTORCH_CACHE_KEY-$CACHE_NUMBER
