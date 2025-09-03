@@ -1,6 +1,6 @@
-// RUN: triton-opt %s -split-input-file --convert-triton-intel-gpu-to-llvm --tritonintelgpu-rewrite-stack-ptr| FileCheck %s
+// RUN: triton-opt %s -split-input-file --convert-triton-intel-gpu-to-llvm --tritonintelgpu-rewrite-stack-ptr | FileCheck %s
 
-module attributes {triton_intel_gpu.target_arch = "spir64", "ttg.num-warps" = 1 : i32, ttg.shared = 0 : i32} {
+module attributes {"ttg.num-warps" = 1 : i32, ttg.shared = 0 : i32} {
   // CHECK-LABEL: llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
   // CHECK: llvm.func spir_kernelcc @kernel(%arg0: !llvm.ptr<1>, %arg1: !llvm.ptr<1>, %arg2: !llvm.ptr<1>, [[GLOBAL_PTR:%.*]]: !llvm.ptr<1>, [[PROFILE_PTR:%.*]]: !llvm.ptr<1>)
   tt.func public @kernel(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>, %arg2: !tt.ptr<f32>) {
@@ -27,7 +27,7 @@ module attributes {triton_intel_gpu.target_arch = "spir64", "ttg.num-warps" = 1 
 #mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [2, 1], A = [16, 8], B = [8, 16], C = [16, 16]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
-module attributes {triton_intel_gpu.target_arch = "spir64", "ttg.num-warps" = 1 : i32, ttg.shared = 1280 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {"ttg.num-warps" = 1 : i32, ttg.shared = 1280 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
   // CHECK: llvm.func spir_kernelcc @kernel(%arg0: !llvm.ptr<1>, %arg1: !llvm.ptr<1>, %arg2: !llvm.ptr<1>, [[GLOBAL_PTR:%.*]]: !llvm.ptr<1>, [[PROFILE_PTR:%.*]]: !llvm.ptr<1>, [[SHARED_MEM_PTR:%.*]]: !llvm.ptr<3>)
   tt.func public @kernel(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>, %arg2: !tt.ptr<f32>) {
