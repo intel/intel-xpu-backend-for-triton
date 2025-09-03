@@ -217,6 +217,7 @@ if [ "$TEST_DEFAULT" = true ]; then
   TEST_CORE=true
   TEST_TUTORIAL=true
   TEST_MICRO_BENCHMARKS=true
+  TEST_TRITON_KERNELS=true
 fi
 
 if [ "$VENV" = true ]; then
