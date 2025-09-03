@@ -47,13 +47,7 @@ warnings.filterwarnings("ignore", message="Package .* is absent from the `packag
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from python.build_helpers import (
-    get_base_dir,
-    get_cmake_dir,
-    get_build_lib,
-    get_build_temp,
-    get_bdist_dir,
-)
+from python.build_helpers import get_base_dir, get_cmake_dir
 
 
 def is_git_repo():
@@ -395,10 +389,6 @@ class CMakeClean(clean):
 
 class CMakeBuildPy(build_py):
 
-    def initialize_options(self):
-        super().initialize_options()
-        self.build_lib = get_build_lib().as_posix()
-
     def run(self) -> None:
         self.run_command('build_ext')
         return super().run()
@@ -420,8 +410,6 @@ class CMakeBuild(build_ext):
     def initialize_options(self):
         build_ext.initialize_options(self)
         self.base_dir = get_base_dir()
-        self.build_lib = get_build_lib()
-        self.build_temp = get_build_temp()
 
     def finalize_options(self):
         build_ext.finalize_options(self)
@@ -726,10 +714,6 @@ def add_links(external_only):
 
 
 class plugin_bdist_wheel(bdist_wheel):
-
-    def initialize_options(self):
-        super().initialize_options()
-        self.bdist_dir = get_bdist_dir()
 
     def run(self):
         add_links(external_only=True)
