@@ -13,7 +13,7 @@ import torch._inductor
 import torch._inductor.lowering
 import torch._inductor.kernel
 import torch._inductor.kernel.flex.flex_attention as flex_attn
-from torch._inductor.template_heuristics import FlexConfig, FlexDecodeConfig
+from torch._inductor.template_heuristics.triton import FlexConfig, FlexDecodeConfig
 
 import triton_kernels_benchmark as benchmark_suit
 import triton
@@ -156,7 +156,7 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
                                                               device=DEVICE)
 
     elif provider == 'triton':
-        kernel_options = {'BLOCKS_ARE_CONTIGUOUS': True}
+        kernel_options = {'BLOCKS_ARE_CONTIGUOUS': True, 'USE_TMA': True}
         triton_fn = lambda: compiled_flex_attention(q, k, v, block_mask=block_mask, scale=sm_scale, enable_gqa=(
             not H_q == H_kv), kernel_options=kernel_options)
         if MODE == 'bwd':
