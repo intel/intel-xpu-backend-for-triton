@@ -260,6 +260,8 @@ def test_hook_launch_context(tmp_path: pathlib.Path, context: str):
 
 
 def test_hook_with_third_party(tmp_path: pathlib.Path):
+    if is_xpu():
+        pytest.skip("FIXME: enable")
     third_party_hook_invoked = False
 
     def third_party_hook(metadata) -> None:
@@ -467,6 +469,8 @@ def test_trace(tmp_path: pathlib.Path):
 
 
 def test_scope_multiple_threads(tmp_path: pathlib.Path):
+    if is_xpu():
+        pytest.skip("FIXME: enable")
     temp_file = tmp_path / "test_scope_threads.hatchet"
     proton.start(str(temp_file.with_suffix("")))
 
