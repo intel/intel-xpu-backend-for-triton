@@ -91,14 +91,6 @@ Value TargetInfo::shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
   return LLVM::intel::shuffleIdx(loc, rewriter, val, i);
 }
 
-Value TargetInfo::permute(RewriterBase &rewriter, Location loc, Value a,
-                          Value b, Value selector) const {
-  // Warning: The `a` and `b` operands are ordered to align with Nvidia's `prmt`
-  // Both use little-endian ordering, but AMD puts the MSBs of the data in the
-  // 0-th operand.
-  return LLVM::intel::permute(loc, rewriter, b, a, selector);
-}
-
 Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
                             ModuleOp moduleOp, ProgramIDDim axis) const {
   Value blockId =

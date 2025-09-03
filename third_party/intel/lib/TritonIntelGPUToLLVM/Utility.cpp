@@ -101,11 +101,6 @@ Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i) {
   return shuffleCommon(loc, rewriter, val, i, mlir::gpu::ShuffleMode::IDX);
 }
 
-Value permute(Location loc, RewriterBase &rewriter, Value x, Value y,
-              Value selector) {
-  llvm_unreachable("not implemented");
-}
-
 LLVM::RoundingMode
 convertTritonRoundingModeToLLVM(const triton::RoundingMode rounding) {
   LLVM::RoundingMode roundingMode;
