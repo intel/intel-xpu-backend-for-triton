@@ -183,14 +183,6 @@ private:
 // corresponding to the transposition (r_i l_j) of the i-th register basis
 // vector with the j-th lane basis vector.
 struct DecomposedWarpConversion {
-  struct TranspositionInfo {
-    std::pair<int, int> transposition;
-    uint16_t topPreSel = 0x3210;
-    uint16_t botPreSel = 0x7654;
-    uint16_t topPostSel = 0x3210;
-    uint16_t botPostSel = 0x7654;
-  };
-
   triton::LinearLayout pReg, pLane;
   SmallVector<std::pair<int, int>> mixedTranspositions;
 };
