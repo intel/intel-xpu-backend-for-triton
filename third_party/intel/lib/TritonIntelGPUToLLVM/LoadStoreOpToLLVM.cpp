@@ -2683,11 +2683,9 @@ struct StoreOpToBlockIOConversion
   LogicalResult
   matchAndRewrite(triton::StoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
-    std::optional<bool> enableBlockIOForAllLayout =
-        mlir::triton::tools::isEnvValueBool(mlir::triton::tools::getStrEnv(
-            "TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS"));
-    if (!isBlockIOCandidate(op, !enableBlockIOForAllLayout.has_value() ||
-                                    enableBlockIOForAllLayout.value()))
+    static const bool enableBlockIOForAllLayout =
+        triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS");
+    if (!isBlockIOCandidate(op, enableBlockIOForAllLayout))
       return failure();
 
     Location loc = op.getLoc();
