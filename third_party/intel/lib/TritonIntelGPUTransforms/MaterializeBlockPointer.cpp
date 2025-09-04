@@ -161,12 +161,14 @@ private:
 
     LDBG("Considering tensor of pointer of memory accessing op: " << *op);
 
+#if 0
     if (auto loadOp = dyn_cast<tt::LoadOp>(*op)) {
       if (loadOp.getMask()) {
         LDBG("Load op has mask, skip block IO attribute");
         return;
       }
     }
+#endif
 
     // The axis info gives the information about the value of the indices
     // tensor. For example, if the indices tensor is tensor<8x16xi32> and
@@ -231,6 +233,12 @@ private:
       LDBG("Setting row_major attribute\n");
       op->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
                   StringAttr::get(context, "row_major"));
+    }
+
+    if (isMajor(0 /*fastChangeDim*/)) {
+      LDBG("Setting column_major attribute\n");
+      op->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
+                  StringAttr::get(context, "column_major"));
     }
 
     // TODO: set column_major attribute

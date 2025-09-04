@@ -50,7 +50,8 @@ LogicalResult getConvertBackwardSlice(
     DenseMap<Value, Attribute> &layout,
     std::function<bool(Operation *)> stopPropagation = nullptr,
     std::function<Value(OpOperand &, Attribute)> getExistingConversion =
-        nullptr);
+        nullptr,
+    bool includeForOp = false);
 
 LLVM::LLVMFuncOp lookupOrCreateSPIRVFn(Operation *symbolTable, StringRef name,
                                        ArrayRef<Type> paramTypes,
