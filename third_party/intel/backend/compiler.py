@@ -313,7 +313,7 @@ class XPUBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
 
-        passes.convert.add_triton_scf_to_cf(pm)
+        passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
         # FIXME: Advanced path uses custom type conversion and needs hacky
         # solutions for SLM allocation, so this will crash on some operations

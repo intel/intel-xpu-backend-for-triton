@@ -1253,7 +1253,7 @@ void MatchTargetSizePass::transformMakeRangeOp(tt::MakeRangeOp op) {
   SmallVector<Value> subRanges;
   for (int i = 0; i < end / subgroupSize; ++i) {
     Value offset =
-        b.create<arith::ConstantIntOp>(loc, i * subgroupSize, elemTy);
+        b.create<arith::ConstantIntOp>(loc, elemTy, i * subgroupSize);
     Value offsetTensor = b.create<tt::SplatOp>(loc, subRangeTy, offset);
     subRanges.push_back(b.create<arith::AddIOp>(loc, subRange, offsetTensor));
   }
