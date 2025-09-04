@@ -20,6 +20,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Install /usr/bin/file
+        run: |
+          sudo apt install -y file
+
       - name: Install Python 3.10
         uses: actions/setup-python@v5
         with:
