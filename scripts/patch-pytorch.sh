@@ -36,3 +36,4 @@ echo "Applying PyTorch patches in $REPO_ROOT"
 
 # put your patch applies here
 apply_patch ./patch/flex_decoding_tensor_desc.patch
+apply_patch ./patch/use_tma.patch
