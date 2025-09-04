@@ -205,7 +205,8 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
     #     if sync_submitting:
     #         synchronize()
 
-    n_repeat = 1000
+    # slow test signal
+    n_repeat = 1000 if n_repeat != 777 else 100
     # Benchmark
     with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.XPU]) as prof:
         for _ in range(n_repeat):
