@@ -87,7 +87,7 @@ jobs:
           EOF
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Python
         if: ${{ !(inputs.use_pyenv_python || false) }}
