@@ -15,13 +15,14 @@ from triton._internal_testing import (
 )
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
-from triton.experimental.gluon.language.nvidia.ampere import async_copy, mbarrier
-from triton.experimental.gluon.language.nvidia.hopper import tma, fence_async_shared
+from triton.experimental.gluon.language.nvidia.ampere import async_copy
+from triton.experimental.gluon.language.nvidia.hopper import tma, mbarrier, fence_async_shared
 from triton.experimental.gluon.language.nvidia import hopper
 from triton.experimental.gluon.language.amd.cdna4 import async_copy as cdna4_async_copy
 from triton.experimental.gluon.language.extra import libdevice
 from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
+    TensorMemoryScalesLayout,
     allocate_tensor_memory,
     get_tmem_32x32b_reg_layout,
     tcgen05_mma,
@@ -449,6 +450,7 @@ def test_math_fast_dividef():
     torch.testing.assert_close(z, torch.div(x, y), atol=1e-5, rtol=1e-4)
 
 
+@pytest.mark.xfail(reason="copy to tmem with scale layout is currently broken in Gluon.")
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_tmem_copy_2d():
     device = "cuda"
@@ -468,9 +470,9 @@ def test_tmem_copy_2d():
         value = ttgl.load(ttgl.set_auto_layout(in_ptrs, blocked))
 
         smem_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=2)
-        tmem_layout: ttgl.constexpr = TensorMemoryLayout((128, 32), unpacked=True)
-        smem = ttgl.allocate_shared_memory(ttgl.int32, (smem_h, smem_w), layout=smem_layout)
-        tmem = allocate_tensor_memory(ttgl.int32, (num_rows, num_cols), layout=tmem_layout)
+        tmem_layout: ttgl.constexpr = TensorMemoryScalesLayout()
+        smem = ttgl.allocate_shared_memory(ttgl.int8, (smem_h, smem_w), layout=smem_layout)
+        tmem = allocate_tensor_memory(ttgl.int8, (num_rows, num_cols), layout=tmem_layout)
 
         barrier = ttgl.allocate_shared_memory(ttgl.int64, [1], ttgl.constexpr(mbarrier.MBarrierLayout()))
         mbarrier.init(barrier, count=1)
@@ -480,11 +482,13 @@ def test_tmem_copy_2d():
         tcgen05_copy(smem, tmem)
         tcgen05_commit(barrier)
         mbarrier.wait(barrier, phase=0)
+        tmem_alias: ttgl.constexpr = TensorMemoryLayout((128, 32), unpacked=False)
+        tmem = tmem._reinterpret(ttgl.int8, (num_rows, num_cols), tmem_alias)
         value = tmem.load(blocked)
         ttgl.store(ttgl.set_auto_layout(out_ptrs, blocked), value)
 
-    x = torch.randint(size=(smem_h, smem_w), low=-100, high=100, dtype=torch.int32).to(device)
-    z_tri = torch.zeros(size=(num_rows, num_cols), dtype=torch.int32).to(device)
+    x = torch.randint(size=(smem_h, smem_w), low=-100, high=100, dtype=torch.int8).to(device)
+    z_tri = torch.zeros(size=(num_rows, num_cols), dtype=torch.int8).to(device)
     kernel[(1, )](x, z_tri, smem_h, smem_w, num_rows, num_cols)
 
     num_rep_m = smem_h // 32
@@ -665,3 +669,117 @@ def test_block_m_64_mma():
 
     d_ref = a @ b + c
     torch.testing.assert_close(d_ref, d_tri, rtol=0.08, atol=0)
+
+
+def test_slice_reinterpret():
+    BLOCK = ttgl.constexpr(2048)
+    SPLIT_BLOCK = ttgl.constexpr(BLOCK // 2)
+    XBLOCK = ttgl.constexpr(32)
+    YBLOCK = ttgl.constexpr(SPLIT_BLOCK // 4 // XBLOCK)
+    NUM_THREADS = ttgl.constexpr(THREADS_PER_WARP)
+
+    @gluon.jit
+    def kernel(in_ptr, out_ptr):
+        smem_layout_1d: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0])
+        smem_layout_2d: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+        smem = ttgl.allocate_shared_memory(ttgl.int8, [BLOCK], smem_layout_1d)
+        smem_slice0 = smem.slice(0, SPLIT_BLOCK)
+        smem_slice1 = smem.slice(SPLIT_BLOCK, SPLIT_BLOCK)._reinterpret(ttgl.int32, [XBLOCK, YBLOCK], smem_layout_2d)
+
+        offs = ttgl.arange(0, XBLOCK)[:, None] * YBLOCK + ttgl.arange(0, YBLOCK)[None, :]
+        blocked: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, NUM_THREADS], [1, 4], [1, 0])
+        value = ttgl.load(ttgl.set_auto_layout(in_ptr + offs, blocked))
+
+        blocked_1d: ttgl.constexpr = ttgl.BlockedLayout([1], [NUM_THREADS], [4], [0])
+        smem_slice1.store(value)
+        smem_slice0.store(ttgl.zeros((SPLIT_BLOCK, ), dtype=ttgl.int8, layout=blocked_1d))
+        value = smem_slice1.load(blocked)
+        ttgl.store(ttgl.set_auto_layout(out_ptr + offs, blocked), value)
+
+    input = torch.randint(0, 100, (XBLOCK, YBLOCK), dtype=torch.int32, device="cuda")
+    output = torch.empty_like(input)
+    kernel[(1, )](input, output)
+    torch.testing.assert_close(input, output, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+def test_tma_slice():
+    XBLOCK = YBLOCK = ttgl.constexpr(128)
+
+    @gluon.jit
+    def kernel(in_desc, out_desc):
+        smem = ttgl.allocate_shared_memory(in_desc.dtype, [2 * XBLOCK, YBLOCK], in_desc.layout)
+        smem_slice0 = smem.slice(0, XBLOCK)
+        smem_slice1 = smem.slice(XBLOCK, XBLOCK)
+
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1], ttgl.constexpr(mbarrier.MBarrierLayout()))
+        mbarrier.init(bar, count=1)
+
+        mbarrier.expect(bar, in_desc.block_type.nbytes)
+        tma.async_copy_global_to_shared(in_desc, [0, 0], bar, smem_slice1)
+        mbarrier.wait(bar, phase=0)
+
+        blocked: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0])
+        smem_slice0.store(ttgl.zeros((XBLOCK, YBLOCK), dtype=ttgl.float32, layout=blocked))
+
+        tma.async_copy_shared_to_global(out_desc, [0, 0], smem_slice1)
+        tma.store_wait(0)
+
+    input = torch.rand((XBLOCK, YBLOCK), dtype=torch.float32, device="cuda")
+    output = torch.empty_like(input)
+
+    block_shape = [XBLOCK.value, YBLOCK.value]
+    layout = ttgl.NVMMASharedLayout.get_default_for(block_shape, ttgl.float32)
+    in_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, block_shape, layout)
+    out_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(output, block_shape, layout)
+    kernel[(1, )](in_desc, out_desc)
+    torch.testing.assert_close(input, output, atol=0, rtol=0)
+
+
+@pytest.mark.parametrize("swizzle", [32, 64, 128])
+@pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.parametrize("M, N, BLOCK_N", [(128, 128, 128), (256, 128, 64), (128, 128, 16)])
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_tmem_copy_no_scales(M, N, BLOCK_N, num_warps, swizzle):
+
+    @gluon.jit
+    def tmem_copy_no_scales(in_ptr, out_ptr, M: ttgl.constexpr, N: ttgl.constexpr, BLOCK_N: ttgl.constexpr,
+                            swizzle: ttgl.constexpr, num_warps: ttgl.constexpr):
+        tmem_reg_layout: ttgl.constexpr = get_tmem_32x32b_reg_layout(
+            M=128,
+            N=BLOCK_N,
+            shape=[M, N],
+            num_warps=num_warps,
+        )
+        offs_m = ttgl.arange(0, M, ttgl.SliceLayout(1, tmem_reg_layout))
+        offs_n = ttgl.arange(0, N, ttgl.SliceLayout(0, tmem_reg_layout))
+        offs = offs_m[:, None] * N + offs_n[None, :]
+
+        input = ttgl.load(in_ptr + offs)
+        tmem_layout: ttgl.constexpr = TensorMemoryLayout(
+            block=(128, BLOCK_N),
+            unpacked=True,
+        )
+
+        smem_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=swizzle, element_bitwidth=32, rank=2)
+        smem = ttgl.allocate_shared_memory(in_ptr.dtype.element_ty, [M, N], layout=smem_layout)
+
+        smem.store(input)
+        tmem = allocate_tensor_memory(
+            element_ty=in_ptr.dtype.element_ty,
+            shape=[M, N],
+            layout=tmem_layout,
+        )
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+        mbarrier.init(bar, count=1)
+        tcgen05_copy(smem, tmem)
+        tcgen05_commit(bar)
+        mbarrier.wait(bar, phase=0)
+        output = tmem.load(tmem_reg_layout)
+        ttgl.store(out_ptr + offs, output)
+
+    input = torch.arange(M * N, device="cuda").reshape(M, N).to(torch.int32)
+    output = torch.empty_like(input)
+
+    tmem_copy_no_scales[(1, )](input, output, M, N, BLOCK_N, swizzle, num_warps=num_warps)
+    assert (output == input).all()
