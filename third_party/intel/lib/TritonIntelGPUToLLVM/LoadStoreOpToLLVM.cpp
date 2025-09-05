@@ -3199,37 +3199,61 @@ struct AtomicCASOpConversion
                                                ? *getMemoryOrdering(memSem)
                                                : LLVM::AtomicOrdering::acq_rel;
     LLVM::AtomicOrdering failureOrdering = LLVM::AtomicOrdering::monotonic;
+
+    bool support16BitAtomics = moduleOp->hasAttr(
+        TritonIntelGPUDialect::getSupport16BitAtomicsAttrName());
+
     for (size_t i = 0; i < elemsPerThread; ++i) {
       Value casPtr = ptrElements[i];
       Value casCmp = cmpElements[i];
       Value casVal = valElements[i];
 
-      assert((valueElemNBits == 32 || valueElemNBits == 64) &&
+      assert((valueElemNBits == 16 || valueElemNBits == 32 ||
+              valueElemNBits == 64) &&
              "Unexpected width");
 
-      Value zero = (valueElemNBits == 32) ? b.i32_val(0) : b.i64_val(0);
-      if (op.getResult().use_empty())
-        rewriter.create<TritonGEN::BarrierOp>(loc, TritonGEN::MemFence::GLOBAL);
-
-      auto createAtomicCASInstruction = [&]() -> SmallVector<Value, 1> {
-        // casPtr = b.bitcast(casPtr, ptr_ty(ctx, 1));
-        casCmp = b.bitcast(casCmp, zero.getType());
-        casVal = b.bitcast(casVal, zero.getType());
-
-        auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
-            loc, casPtr, casCmp, casVal, successOrdering, failureOrdering);
-        Value newLoaded =
-            rewriter.create<LLVM::ExtractValueOp>(loc, cmpxchg, 0);
-        return SmallVector<Value, 1>{newLoaded};
-      };
-
       Value ret;
-      if (mask) {
-        Block &endBlock = LLVM::intel::createPredicatedBlock(
-            rewriter, loc, mask, {zero}, createAtomicCASInstruction);
-        ret = endBlock.getArgument(0);
+      Value zero = (valueElemNBits == 32) ? b.i32_val(0) : b.i64_val(0);
+
+      if (valueElemNBits == 16) {
+        zero =
+            TypeSwitch<mlir::Type, Value>(valueElemTy)
+                .Case<mlir::IntegerType>(
+                    [&](auto ty) { return b.int_val(valueElemNBits, 0); })
+                .Case<mlir::Float16Type>([&](auto) { return b.f16_val(0); })
+                .Case<mlir::BFloat16Type>([&](auto) { return b.bf16_val(0); });
+        op.emitWarning("'tt.atomic_cas' op fp16/bf16 datatype is not supported "
+                       "in the target HW, software emulation is an "
+                       "experimental feature (use at own risk)");
+
+        Block *endBlock =
+            emulate16BitsCAS(rewriter, loc, valueElemTy, casPtr, casCmp, casVal,
+                             mask ? mask : b.true_val(), {zero});
+        ret = endBlock->getArgument(0);
       } else {
-        ret = createAtomicCASInstruction()[0];
+        if (op.getResult().use_empty())
+          rewriter.create<TritonGEN::BarrierOp>(loc,
+                                                TritonGEN::MemFence::GLOBAL);
+
+        auto createAtomicCASInstruction = [&]() -> SmallVector<Value, 1> {
+          Value localCasCmp = b.bitcast(casCmp, zero.getType());
+          Value localCasVal = b.bitcast(casVal, zero.getType());
+
+          auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
+              loc, casPtr, localCasCmp, localCasVal, successOrdering,
+              failureOrdering);
+          Value newLoaded =
+              rewriter.create<LLVM::ExtractValueOp>(loc, cmpxchg, 0);
+          return SmallVector<Value, 1>{newLoaded};
+        };
+
+        if (mask) {
+          Block &endBlock = LLVM::intel::createPredicatedBlock(
+              rewriter, loc, mask, {zero}, createAtomicCASInstruction);
+          ret = endBlock.getArgument(0);
+        } else {
+          ret = createAtomicCASInstruction()[0];
+        }
       }
 
       ret = b.bitcast(ret, valueElemTy);
@@ -3257,6 +3281,72 @@ struct AtomicCASOpConversion
                                   getTypeConverter());
     }
     return success();
+  }
+
+  Block *emulate16BitsCAS(ConversionPatternRewriter &rewriter, Location loc,
+                          Type valueElemTy, Value casPtr, Value casCmp,
+                          Value casVal, Value mask, ArrayRef<Value> ops) const {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    Block *insertionBlock = rewriter.getInsertionBlock();
+    Block *headerBlock =
+        rewriter.splitBlock(insertionBlock, rewriter.getInsertionPoint());
+    Block *endBlock = rewriter.splitBlock(headerBlock, headerBlock->begin());
+
+    rewriter.setInsertionPointToEnd(insertionBlock);
+    rewriter.create<cf::CondBranchOp>(loc, mask, headerBlock, endBlock, ops);
+    rewriter.setInsertionPointToStart(headerBlock);
+
+    casCmp = b.bitcast(casCmp, valueElemTy);
+    casVal = b.bitcast(casVal, valueElemTy);
+
+    auto intPtr = b.ptrtoint(i64_ty, casPtr);
+    auto lowPtrBits = b.and_(intPtr, b.i64_val(3));
+    auto elemIndex = b.trunc(i32_ty, b.lshr(lowPtrBits, b.i64_val(1)));
+    auto alignedPtr =
+        b.inttoptr(casPtr.getType(), b.sub(intPtr, lowPtrBits).getResult());
+
+    auto firstValInt = b.load(i32_ty, alignedPtr, 4, false, false, false, false,
+                              LLVM::AtomicOrdering::acquire);
+
+    Block *bodyBlock =
+        rewriter.splitBlock(headerBlock, rewriter.getInsertionPoint());
+    auto origValInt =
+        bodyBlock->addArgument(firstValInt.getType(), firstValInt.getLoc());
+    rewriter.setInsertionPointToEnd(headerBlock);
+    rewriter.create<cf::BranchOp>(loc, bodyBlock,
+                                  SmallVector<Value, 1>{firstValInt});
+    rewriter.setInsertionPointToEnd(bodyBlock);
+
+    auto origValVec = b.bitcast(origValInt, vec_ty(valueElemTy, 2));
+    auto origVal = b.extract_element(origValVec, elemIndex);
+
+    Value isEqual;
+    if (isa<mlir::IntegerType>(valueElemTy)) {
+      isEqual = b.icmp_eq(origVal, casCmp);
+    } else {
+      isEqual = b.fcmp_eq(origVal, casCmp);
+    }
+
+    Value selectedVal = b.select(isEqual, casVal, origVal);
+    Value newValVec = b.insert_element(origValVec, selectedVal, elemIndex);
+    Value newValInt = b.bitcast(newValVec, i32_ty);
+
+    auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
+        loc, alignedPtr, origValInt, newValInt, LLVM::AtomicOrdering::acq_rel,
+        LLVM::AtomicOrdering::monotonic);
+
+    auto newLoaded = b.extract_val(cmpxchg, 0);
+    auto done = b.extract_val(cmpxchg, 1);
+
+    SmallVector<Value, 1> endOps = {origVal};
+    rewriter.create<cf::CondBranchOp>(loc, done, endBlock, endOps, bodyBlock,
+                                      SmallVector<Value, 1>{newLoaded});
+
+    for (Value op : ops)
+      endBlock->addArgument(op.getType(), op.getLoc());
+
+    rewriter.setInsertionPointToStart(endBlock);
+    return endBlock;
   }
 };
 
