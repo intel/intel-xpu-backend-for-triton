@@ -383,7 +383,9 @@ def test_tensor_descriptor_store_nd(dtype_str, num_ctas, ndim, INNER_BLOCK, devi
 
 
 @pytest.mark.interpreter
-def test_tensor_descriptor_padding():
+def test_tensor_descriptor_padding(device):
+    if not is_cuda():
+        pytest.xfail("padding is unsupported")
 
     @triton.jit
     def device_tma_load(in_ptr, out_ptr, IM, IN, YM, YN, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr,
@@ -414,7 +416,7 @@ def test_tensor_descriptor_padding():
 
     # TMA descriptors require a global memory allocation
     def alloc_fn(size: int, alignment: float, stream: float):
-        return torch.ones(size, device="cuda", dtype=torch.float32)
+        return torch.ones(size, device=device, dtype=torch.float32)
 
     triton.set_allocator(alloc_fn)
 
@@ -423,16 +425,16 @@ def test_tensor_descriptor_padding():
     M_BLOCK = 32
     N_BLOCK = 32
     padding = "nan"
-    input = torch.arange(IM * IN, device="cuda", dtype=torch.float32)
+    input = torch.arange(IM * IN, device=device, dtype=torch.float32)
     input = input.reshape(IM, IN)
-    out_device_tma = torch.zeros((OM, ON), device="cuda", dtype=torch.float32)
-    out_host_tma = torch.zeros((OM, ON), device="cuda", dtype=torch.float32)
+    out_device_tma = torch.zeros((OM, ON), device=device, dtype=torch.float32)
+    out_host_tma = torch.zeros((OM, ON), device=device, dtype=torch.float32)
     dummy_block = [M_BLOCK, N_BLOCK]
     in_desc = TensorDescriptor(input, input.shape, input.stride(), dummy_block, padding=padding)
     grid = (triton.cdiv(OM, M_BLOCK), triton.cdiv(ON, N_BLOCK))
     device_tma_load[grid](input, out_device_tma, IM, IN, OM, ON, M_BLOCK, N_BLOCK, padding)
     host_tma_load[grid](in_desc, out_host_tma, OM, ON, M_BLOCK, N_BLOCK)
-    expected = torch.zeros((OM, ON), device="cuda", dtype=torch.float32)
+    expected = torch.zeros((OM, ON), device=device, dtype=torch.float32)
     expected[0:IN, 0:IM] = input
     expected[:, IN:ON] = float('nan')
     expected[IM:OM, :] = float('nan')
