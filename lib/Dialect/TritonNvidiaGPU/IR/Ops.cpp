@@ -30,6 +30,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUOpInterfaces.cpp.inc"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Utility.h"
+#include "llvm/Support/ErrorHandling.h"
 
 #if defined(_MSC_VER) && !defined(__clang__)
 #define __builtin_unreachable() __assume(0)
@@ -281,7 +282,7 @@ static std::string strMMADTypeKind(MMADTypeKind kind) {
   case MMADTypeKind::i8:
     return "i8";
   }
-  __builtin_unreachable();
+  llvm_unreachable("unknown mma dtype kind");
 }
 
 static std::optional<std::pair<MMADTypeKind, SmallVector<Type>>>
