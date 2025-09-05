@@ -143,7 +143,7 @@ void unload_{name}();
     if is_xpu():
         return f"""
 int32_t {name}(sycl::queue &stream, {gen_signature_with_full_args(metas[-1])});
-void load_{name}();
+void load_{name}(sycl::queue &stream);
 void unload_{name}();
         """
 
@@ -161,7 +161,7 @@ void unload_{meta.orig_kernel_name}();
         return f"""
 EXPORT_FUNC int32_t {meta.orig_kernel_name}_default(sycl::queue &stream, {gen_signature_with_full_args(meta)});
 EXPORT_FUNC int32_t {meta.orig_kernel_name}(sycl::queue &stream, {gen_signature_with_full_args(meta)}, int algo_id);
-EXPORT_FUNC void load_{meta.orig_kernel_name}();
+EXPORT_FUNC void load_{meta.orig_kernel_name}(sycl::queue &stream);
 EXPORT_FUNC void unload_{meta.orig_kernel_name}();
         """
 
@@ -229,13 +229,17 @@ def make_kernel_hints_dispatcher(name: str, metas: Sequence[KernelLinkerMeta]) -
     src += "}\n"
 
     for mode in ["load", "unload"]:
+        param, argum = "", ""
+        if is_xpu() and mode == "load":
+            param = "sycl::queue &stream"
+            argum = "stream"
         src += f"\n// {mode} for: {name}\n"
         for meta in sorted(metas, key=lambda m: -m.num_specs):
-            src += f"void {mode}_{meta.orig_kernel_name}_{meta.sig_hash}_{meta.suffix}();\n"
-        src += f"void {mode}_{name}() {{"
+            src += f"void {mode}_{meta.orig_kernel_name}_{meta.sig_hash}_{meta.suffix}({param});\n"
+        src += f"void {mode}_{name}({param}) {{"
         src += "\n"
         for meta in sorted(metas, key=lambda m: -m.num_specs):
-            src += (f"  {mode}_{meta.orig_kernel_name}_{meta.sig_hash}_{meta.suffix}();\n")
+            src += (f"  {mode}_{meta.orig_kernel_name}_{meta.sig_hash}_{meta.suffix}({argum});\n")
         src += "}\n"
     return src
 
@@ -273,9 +277,13 @@ def make_func_pointers(names: str, meta: KernelLinkerMeta) -> str:
 def make_kernel_load_def(names: str, meta: KernelLinkerMeta) -> str:
     src = ""
     for mode in ["load", "unload"]:
-        src += f"EXPORT_FUNC void {mode}_{meta.orig_kernel_name}(void){{\n"
+        param, argum = "void", ""
+        if is_xpu() and mode == "load":
+            param = "sycl::queue &stream"
+            argum = "stream"
+        src += f"EXPORT_FUNC void {mode}_{meta.orig_kernel_name}({param}){{\n"
         for name in names:
-            src += f"  {mode}_{name}();\n"
+            src += f"  {mode}_{name}({argum});\n"
         src += "}\n\n"
     return src
 
