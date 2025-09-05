@@ -316,6 +316,35 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
            hasDotDpasEncoding(tensorTy);
   }
 
+  static bool
+  check2DBlockAddressPayloadRestriction(unsigned packedElemSizeInBits,
+                                        unsigned tileWidth) {
+    // Return false if tile width is not supported by HW.
+    // Note: Tile width is not changeable.
+    switch (packedElemSizeInBits) {
+    case 8:
+      if (tileWidth < 4 || tileWidth > 64)
+        return false;
+      break;
+    case 16:
+      if (tileWidth < 2 || tileWidth > 32)
+        return false;
+      break;
+    case 32:
+      if (tileWidth > 16)
+        return false;
+      break;
+    case 64:
+      if (tileWidth > 8)
+        return false;
+      break;
+    default:
+      // invalid element type for 2D block io.
+      return false;
+    }
+    return true;
+  }
+
   template <
       typename OpTy,
       std::enable_if_t<llvm::is_one_of<OpTy, triton::gpu::intel::PrefetchOp,
@@ -2182,6 +2211,9 @@ struct LoadOpToBlockIOConversion
     if (!pitch)
       return failure();
 
+    if (!check2DBlockAddressPayloadRestriction(elemSizeInBits, tileWidth))
+      return failure();
+
     // If the stride is 0, we want to load only the first row.
     int stride = getStride(ptr, 0);
     unsigned baseHeightInt = (stride == 0 ? 1 : tileHeight);
@@ -2715,32 +2747,8 @@ struct StoreOpToBlockIOConversion
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
     unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
     unsigned numElems = getTotalElemsPerThread(tensorType);
-    // 2D block store supports 64 bits element at most.
-    if (packedElemSizeInBits > 64)
+    if (!check2DBlockAddressPayloadRestriction(packedElemSizeInBits, tileWidth))
       return failure();
-    // Tile width is not changeable. Return failure if it is not supported by
-    // HW.
-    switch (packedElemSizeInBits) {
-    case 8:
-      if (tileWidth < 4 || tileWidth > 64)
-        return failure();
-      break;
-    case 16:
-      if (tileWidth < 2 || tileWidth > 32)
-        return failure();
-      break;
-    case 32:
-      if (tileWidth > 16)
-        return failure();
-      break;
-    case 64:
-      if (tileWidth > 8)
-        return failure();
-      break;
-    default:
-      // invalid element type for 2D block store.
-      return failure();
-    }
 
     // TODO: use the axis info to general the handling for both regular pointer
     // and block pointer.
