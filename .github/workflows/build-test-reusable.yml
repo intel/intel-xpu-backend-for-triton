@@ -90,7 +90,7 @@ jobs:
           ${{ toJSON(inputs) }}
           EOF
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Load pip cache
         id: pip-cache
@@ -213,7 +213,7 @@ jobs:
           EOF
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Load pip cache
         id: pip-cache
@@ -377,7 +377,7 @@ jobs:
     needs: integration-tests
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Load pip cache
         id: pip-cache
