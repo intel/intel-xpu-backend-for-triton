@@ -602,8 +602,8 @@ def get_benchmark(
         if provider == 'onednn':
             _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
                 torch_fn,
-                n_warmup=10 if MODE == 'fwd' else 777,
-                n_repeat=10,
+                n_warmup=10,
+                n_repeat=10 if MODE == 'fwd' else 777,
                 quantiles=quantiles,
             )
 
@@ -625,8 +625,8 @@ def get_benchmark(
                 )
             _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
                 triton_fn,
-                n_warmup=10 if MODE == 'fwd' else 777,
-                n_repeat=10,
+                n_warmup=10,
+                n_repeat=10 if MODE == 'fwd' else 777,
                 quantiles=quantiles,
             )
 
@@ -685,8 +685,8 @@ def get_benchmark(
 
                 _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
                     cutlass_fwd_fn,
-                    n_warmup=10 if MODE == 'fwd' else 777,
-                    n_repeat=10,
+                    n_warmup=10,
+                    n_repeat=10 if MODE == 'fwd' else 777,
                     quantiles=quantiles,
                 )
 
