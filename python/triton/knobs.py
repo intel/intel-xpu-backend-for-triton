@@ -498,7 +498,9 @@ class JITHook(Protocol):
 
 class runtime_knobs(base_knobs):
     interpret: env_bool = env_bool("TRITON_INTERPRET")
-    debug: env_bool = env_bool("TRITON_DEBUG")
+    # debug is on critical path for kernel launches
+    # avoid repeated reads from env-var by calling get directly
+    debug: bool = env_bool("TRITON_DEBUG").get()
     override_arch: env_opt_str = env_opt_str("TRITON_OVERRIDE_ARCH")
 
     launch_enter_hook: HookChain[LaunchHook] = HookChain()
@@ -586,3 +588,7 @@ nvidia = nvidia_knobs()
 intel = intel_knobs()
 amd = amd_knobs()
 proton = proton_knobs()
+
+
+def refresh_knobs():
+    runtime.debug = env_bool("TRITON_DEBUG").get()
