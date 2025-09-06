@@ -34,16 +34,3 @@ index 91ba941da0..a6b87212ad 100644
          # Add ROCm-specific parameters if they exist in the config
          for attrib in ["kpack", "matrix_instr_nonkdim", "waves_per_eu"]:
              if hasattr(conf, attrib):
-diff --git a/torch/_inductor/utils.py b/torch/_inductor/utils.py
-index 0876f99307..4fa1c87560 100644
---- a/torch/_inductor/utils.py
-+++ b/torch/_inductor/utils.py
-@@ -1696,7 +1696,7 @@ def can_use_tma(*matrices: IRNode, add_guards: bool = False) -> bool:
-             strides_i = [V.graph.sizevars.symbolic_hint(st) for st in strides]
- 
-         # Every logical size ≥ 2
--        if any(not V.graph.sizevars.statically_known_geq(s, 2) for s in sizes_i):
-+        if not torch.xpu.is_available() and any(not V.graph.sizevars.statically_known_geq(s, 2) for s in sizes_i):
-             return False
- 
-         # Find the single contiguous (“inner”) dim
