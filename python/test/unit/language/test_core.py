@@ -270,15 +270,13 @@ class SwizzledSharedLayout:
 
 class PaddedSharedLayout:
 
-    def __init__(self, interval_padding_pairs, order, ctas_per_cga, cta_split_num, cta_order):
+    def __init__(self, interval_padding_pairs, linear_layout_offset_bases, linear_layout_block_bases):
         self.interval_padding_pairs = "[" + ", ".join(f"{v[0]}:{v[1]:+d}" for v in interval_padding_pairs) + "]"
-        self.order = order
-        self.ctas_per_cga = ctas_per_cga
-        self.cta_split_num = cta_split_num
-        self.cta_order = cta_order
+        self.offset_bases = linear_layout_offset_bases
+        self.block_bases = linear_layout_block_bases
 
     def __str__(self):
-        return f"#{GPU_DIALECT}.padded_shared<{self.interval_padding_pairs} {{order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
+        return f"#{GPU_DIALECT}.padded_shared<{self.interval_padding_pairs} {{offset={self.offset_bases}, block={self.block_bases}}}>"
 
 
 class NVMMASharedLayout:
@@ -358,8 +356,8 @@ def is_layout_applicable(layout) -> bool:
         target_arch = triton.runtime.driver.active.get_current_target().arch
         if isinstance(layout, PaddedSharedLayout):
             return True
-        elif "gfx11" in target_arch:
-            # RDNA 3
+        elif any(arch for arch in ["gfx11", "gfx12"] if arch in target_arch):
+            # RDNA 3, 4
             return isinstance(layout, WmmaLayout)
         elif any(arch for arch in ["gfx8", "gfx9"] if arch in target_arch):
             # CDNA 1, 2, 3, 4
