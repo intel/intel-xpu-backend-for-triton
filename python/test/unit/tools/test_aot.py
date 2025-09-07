@@ -307,7 +307,7 @@ int main(int argc, char ** argv) {{
     q.memcpy(B, hB, K * N * 2).wait();
 
     // launch kernel
-    load_matmul_fp16(q);
+    load_matmul_fp16();
     int32_t ret;
     int algo_id = {algo_id};
     if (algo_id == 0) {{

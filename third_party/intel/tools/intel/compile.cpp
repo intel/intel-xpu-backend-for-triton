@@ -45,18 +45,16 @@ static ze_module_format_t get_module_format(const std::string& format_name) {{
 }}
 
 void load_{kernel_name}(sycl::queue &stream) {{
-    const auto &sycl_context = stream.get_context();
-    const std::vector<sycl::device> &sycl_devices = sycl_context.get_devices();
-    const sycl::device &sycl_device = sycl_devices[0];
-    const auto &ctx =
-#if __SYCL_COMPILER_VERSION >= 20250604
-      sycl_device.get_platform().khr_get_default_context();
-#else
-      sycl_device.get_platform().ext_oneapi_get_default_context();
-#endif
-    const auto &l0_device =
+    static sycl::device sycl_device;
+    static auto ctx =
+    #if __SYCL_COMPILER_VERSION >= 20250604
+        sycl_device.get_platform().khr_get_default_context();
+    #else
+        sycl_device.get_platform().ext_oneapi_get_default_context();
+    #endif
+    static auto l0_device =
         sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_device);
-    const auto &l0_context =
+    static auto l0_context =
         sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
     uint8_t *binary_ptr = (uint8_t *)&BIN_NAME;
     size_t binary_size = {bin_size};
