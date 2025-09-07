@@ -44,7 +44,7 @@ static ze_module_format_t get_module_format(const std::string& format_name) {{
   }}
 }}
 
-void load_{kernel_name}(sycl::queue &stream) {{
+void load_{kernel_name}() {{
     static sycl::device sycl_device;
     static auto ctx =
     #if __SYCL_COMPILER_VERSION >= 20250604
