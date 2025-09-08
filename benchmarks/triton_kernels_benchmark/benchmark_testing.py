@@ -152,28 +152,33 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=400, n_repeat=100, grad_to_n
     cache = torch.empty(int(cache_size // 4), dtype=torch.int, device=device)
 
     # Estimate the runtime of the function
-    start_event = torch.xpu.Event(enable_timing=True)
-    end_event = torch.xpu.Event(enable_timing=True)
-    start_event.record()
-    for _ in range(5):
-        cache.zero_()
-        fn()
-        # To be consistent with the benchmark measurements
-        if sync_submitting:
-            synchronize()
-    end_event.record()
-    synchronize()
-    estimate_ms = start_event.elapsed_time(end_event) / 5
+    # start_event = torch.xpu.Event(enable_timing=True)
+    # end_event = torch.xpu.Event(enable_timing=True)
+    # start_event.record()
+    # for _ in range(5):
+    #     cache.zero_()
+    #     fn()
+    #     # To be consistent with the benchmark measurements
+    #     if sync_submitting:
+    #         synchronize()
+    # end_event.record()
+    # synchronize()
+    # estimate_ms = start_event.elapsed_time(end_event) / 5
+    # n_warmup = max(10, math.ceil(n_warmup / estimate_ms))
     # Hardcode for the experiment
-    n_warmup = 400
-    n_warmup = max(10, math.ceil(n_warmup / estimate_ms))
+    n_warmup = 1000
+    time_budget_ms = 1000.0
+    assert sync_submitting
 
     # Warm-up
+    start = time.time()
     for _ in range(n_warmup):
         fn()
         # To be consistent with the benchmark measurements
         if sync_submitting:
             synchronize()
+        if time.time() - start > 1000 * time_budget_ms:
+            break
 
     # Benchmark
     with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.XPU]) as prof:
