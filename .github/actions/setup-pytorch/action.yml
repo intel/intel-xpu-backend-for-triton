@@ -74,7 +74,7 @@ runs:
       run: |
         ONEAPI_LINK=$(readlink /opt/intel/oneapi || true)
         ONEAPI_KEY=$(sha256sum /opt/intel/installed.txt 2> /dev/null | cut -d\  -f1 || true)
-        PYTORCH_CACHE_KEY=$(echo $PYTHON_VERSION $PYTORCH_COMMIT_ID ${{ hashFiles('scripts/patch-pytorch.sh') }} ${{ inputs.mode }}${ONEAPI_KEY}${ONEAPI_LINK} | sha256sum - | cut -d\  -f1)
+        PYTORCH_CACHE_KEY=$(echo "dle2" $PYTHON_VERSION $PYTORCH_COMMIT_ID ${{ hashFiles('scripts/patch-pytorch.sh') }} ${{ inputs.mode }}${ONEAPI_KEY}${ONEAPI_LINK} | sha256sum - | cut -d\  -f1)
         echo "PYTORCH_CACHE_KEY=$PYTORCH_CACHE_KEY" | tee -a "$GITHUB_ENV"
 
     - name: Load PyTorch from a cache
