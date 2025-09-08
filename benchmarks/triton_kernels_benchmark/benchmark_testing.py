@@ -58,11 +58,11 @@ class Tracker:
     def tick(self):
         pass
 
-    def set_results(self, times):
+    def set_results(self, times, runtime):
         self.times = times
         if 'dtype' in self.config:
             self.config['dtype'] = str(self.config['dtype'])
-        self.results.append({'config': self.config, 'times': self.times})
+        self.results.append({'config': self.config, 'times': self.times, 'runtime': runtime})
 
     def save(self):
         import sys
@@ -207,6 +207,8 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
 
     # slow test signal
     n_repeat = 1000 if n_repeat != 777 else 100
+    start = time.perf_counter()
+    runtime = []
     # Benchmark
     with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.XPU]) as prof:
         for _ in range(n_repeat):
@@ -220,6 +222,8 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
             cache.zero_()
             if sync_submitting:
                 synchronize()
+                runtime.append(start - time.perf_counter())
+
             # record time of `fn`
             with record_function("__profile_kernel_of_func"):
                 fn()
@@ -251,7 +255,7 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
         )
     # Make the time to the milliseconds.
     times = torch.tensor([sum((k.duration for k in ks)) * 1e-3 for ks in kernels], dtype=torch.float)
-    tracker.set_results(times.tolist())
+    tracker.set_results(times.tolist(), runtime)
     return _summarize_statistics(times, quantiles, return_mode)
 
 
