@@ -45,7 +45,7 @@ def make_default_opt_flags_intel(
     epilogue_effective_itemsize,
     constraints,
 ):
-    constraints_supported = ["block_m", "block_k", "split_k", "is_persistent", "fused_scatter", "epilogue_subtile", "num_stages", "idle_sms"]
+    constraints_supported = ["block_m", "block_k", "split_k", "is_persistent", "fused_scatter", "epilogue_subtile", "num_stages"]
     assert not any([c not in constraints_supported for c in constraints]), constraints.keys()
     # tokens per expert
     if routing_data is None:
@@ -65,26 +65,14 @@ def make_default_opt_flags_intel(
     else:
         block_m = max(16, min(triton.next_power_of_2(tokens_per_expt), 128))
     # block n
-    arch = None
-    block_n = opt_flags_intel.compute_block_n(n, arch, precision_config)
+    block_n = opt_flags_intel.compute_block_n(n)
     # is_persistent
-    grid_size = opt_flags_intel.compute_grid_size(routing_data, m, n, block_m, block_n)
-    n_sms = torch.xpu.get_device_properties(0).multi_processor_count
-    tiles_per_sm = grid_size / n_sms
-    supports_persistent = can_use_persistent_tma and (arch is None or int(arch[2:-1]) >= 9)
-    if constraints.get("is_persistent", None) is not None:
-        is_persistent = constraints["is_persistent"]
-    else:
-        has_simple_epilogue = precision_config.max_num_imprecise_acc is None
-        is_persistent = supports_persistent and has_simple_epilogue and (tiles_per_sm >= 2.0 or lhs_dtype.itemsize <= 1) and out_dtype.itemsize < 4
-        # TEMP CHANGE
-        if precision_config.act_scale is not None or precision_config.out_scale is not None:
-            is_persistent = False
+    is_persistent = constraints.get("is_persistent", False)
     # block k
     if constraints.get("block_k", None) is not None:
         block_k = constraints["block_k"]
     else:
-        block_k = opt_flags_intel.compute_block_k(m, k, is_persistent, lhs_dtype, rhs_dtype, precision_config)
+        block_k = opt_flags_intel.compute_block_k(k, is_persistent, precision_config)
     # split_k
     if constraints.get("split_k", None) is not None:
         split_k = constraints["split_k"]
@@ -93,56 +81,27 @@ def make_default_opt_flags_intel(
     else:
         estimated_actual_grid_size = opt_flags_intel.compute_grid_size(None, m, n, block_m, block_n)
         split_k = opt_flags_intel.compute_split_k(block_k, k, estimated_actual_grid_size)
-    if split_k > 1:
-        # With split_k, results are written in f32. Use that for the following computations.
-        out_dtype = torch.float32
-    compute_num_stages_args = (
-        precision_config,
-        is_persistent,
 
-        block_m,
-        block_n,
-        block_k,
-        out_dtype,
-        lhs_dtype,
-        rhs_dtype,
-    )
+    epilogue_subtile = constraints.get('epilogue_subtile', None)
+    if epilogue_subtile is None:
+        epilogue_subtile = 1
 
-    if constraints.get("epilogue_subtile", None) is not None:
-        subtiles_to_check = [constraints["epilogue_subtile"]]
-    else:
-        subtiles_to_check = [1, 2, 4]
-    num_stages = -1
-    for ep in subtiles_to_check:
-        ns = opt_flags_intel.compute_num_stages(*compute_num_stages_args, ep, epilogue_effective_itemsize)
-        if ns > num_stages:
-            epilogue_subtile, num_stages = ep, ns
-    assert num_stages >= 1
-    if constraints.get("num_stages", None):
-        num_stages = constraints["num_stages"]
-    # fused scatter scratchpad
-    if constraints.get("fused_scatter", None) is not None:
-        fused_scatter = constraints["fused_scatter"]
-    else:
-        fused_scatter = can_use_fused_scatter and split_k == 1
-    # Handshake with the HBM swizzling
-    num_warps = opt_flags_intel.compute_num_warps(block_m, block_n, precision_config)
     ret = OptFlags(
         block_m=block_m,
         block_n=block_n,
         block_k=block_k,
-        num_warps=num_warps,
-        num_stages=num_stages,
-        fused_scatter=fused_scatter,
+        num_warps=opt_flags_intel.compute_num_warps(block_m, block_n),
+        num_stages=constraints.get("num_stages", 2),
+        fused_scatter=constraints.get('fused_scatter', False),
         group_m=group_m,
         xcd_swizzle=xcd_swizzle,
         w_cache_modifier=None,
         split_k=split_k,
         is_persistent=is_persistent,
         epilogue_subtile=epilogue_subtile,
-        arch=arch,
+        arch=None,
         target_kernel_kwargs=dict(),
-        idle_sms=constraints.get("idle_sms", 0),
+        idle_sms=0,
     )
     # check constraints
     assert all(getattr(ret, ck) == cv for ck, cv in constraints.items() if cv is not None), f"{ret} != {constraints}"
