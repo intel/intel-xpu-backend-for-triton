@@ -316,6 +316,35 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
            hasDotDpasEncoding(tensorTy);
   }
 
+  static bool
+  check2DBlockAddressPayloadRestriction(unsigned packedElemSizeInBits,
+                                        unsigned tileWidth) {
+    // Return false if tile width is not supported by HW.
+    // Note: Tile width is not changeable.
+    switch (packedElemSizeInBits) {
+    case 8:
+      if (tileWidth < 4 || tileWidth > 64)
+        return false;
+      break;
+    case 16:
+      if (tileWidth < 2 || tileWidth > 32)
+        return false;
+      break;
+    case 32:
+      if (tileWidth > 16)
+        return false;
+      break;
+    case 64:
+      if (tileWidth > 8)
+        return false;
+      break;
+    default:
+      // invalid element type for 2D block io.
+      return false;
+    }
+    return true;
+  }
+
   template <
       typename OpTy,
       std::enable_if_t<llvm::is_one_of<OpTy, triton::gpu::intel::PrefetchOp,
@@ -2182,6 +2211,9 @@ struct LoadOpToBlockIOConversion
     if (!pitch)
       return failure();
 
+    if (!check2DBlockAddressPayloadRestriction(elemSizeInBits, tileWidth))
+      return failure();
+
     // If the stride is 0, we want to load only the first row.
     int stride = getStride(ptr, 0);
     unsigned baseHeightInt = (stride == 0 ? 1 : tileHeight);
@@ -2715,32 +2747,8 @@ struct StoreOpToBlockIOConversion
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
     unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
     unsigned numElems = getTotalElemsPerThread(tensorType);
-    // 2D block store supports 64 bits element at most.
-    if (packedElemSizeInBits > 64)
+    if (!check2DBlockAddressPayloadRestriction(packedElemSizeInBits, tileWidth))
       return failure();
-    // Tile width is not changeable. Return failure if it is not supported by
-    // HW.
-    switch (packedElemSizeInBits) {
-    case 8:
-      if (tileWidth < 4 || tileWidth > 64)
-        return failure();
-      break;
-    case 16:
-      if (tileWidth < 2 || tileWidth > 32)
-        return failure();
-      break;
-    case 32:
-      if (tileWidth > 16)
-        return failure();
-      break;
-    case 64:
-      if (tileWidth > 8)
-        return failure();
-      break;
-    default:
-      // invalid element type for 2D block store.
-      return failure();
-    }
 
     // TODO: use the axis info to general the handling for both regular pointer
     // and block pointer.
@@ -3154,18 +3162,10 @@ struct AtomicCASOpConversion
                  : valueTy;
     auto valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
     auto elemsPerThread = getTotalElemsPerThread(op.getVal().getType());
-    // vec = 1 for scalar
-    auto vec = getVectorSize(op.getPtr());
-    // tensor
-    if (tensorTy) {
-      auto valTy = cast<RankedTensorType>(op.getVal().getType());
-      vec = std::min<unsigned>(vec, valTy.getElementType().isF16() ? 2 : 1);
-    }
 
     auto freeVarMasks = getFreeVariableMasks(valueTy);
     Value mask =
         emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
-    auto vecTy = vec_ty(valueElemTy, vec);
     SmallVector<Value> resultVals(elemsPerThread);
 
     MemSemantic memSem = op.getSem();
@@ -3173,17 +3173,10 @@ struct AtomicCASOpConversion
                                                ? *getMemoryOrdering(memSem)
                                                : LLVM::AtomicOrdering::acq_rel;
     LLVM::AtomicOrdering failureOrdering = LLVM::AtomicOrdering::monotonic;
-    for (size_t i = 0; i < elemsPerThread; i += vec) {
-      Value casVal = b.undef(vecTy);
-      for (int ii = 0; ii < vec; ++ii) {
-        Value iiVal = createIndexAttrConstant(
-            rewriter, loc, getTypeConverter()->getIndexType(), ii);
-        casVal = b.insert_element(vecTy, casVal, valElements[i + ii], iiVal);
-      }
-
+    for (size_t i = 0; i < elemsPerThread; ++i) {
       Value casPtr = ptrElements[i];
       Value casCmp = cmpElements[i];
-      casVal = valElements[i];
+      Value casVal = valElements[i];
 
       assert((valueElemNBits == 32 || valueElemNBits == 64) &&
              "Unexpected width");
@@ -3212,15 +3205,11 @@ struct AtomicCASOpConversion
       } else {
         ret = createAtomicCASInstruction()[0];
       }
-      Type retType = (!tensorTy || vec == 1) ? valueElemTy : vecTy;
-      ret = b.bitcast(ret, retType);
+
+      ret = b.bitcast(ret, valueElemTy);
 
       if (tensorTy) {
-        for (int ii = 0; ii < vec; ++ii) {
-          resultVals[i + ii] =
-              vec == 1 ? ret
-                       : b.extract_element(valueElemTy, ret, b.i32_val(ii));
-        }
+        resultVals[i] = ret;
       } else {
         if (op.getResult().use_empty()) {
           rewriter.eraseOp(op);
@@ -3237,10 +3226,9 @@ struct AtomicCASOpConversion
     }
 
     if (tensorTy) {
-      Type structTy = getTypeConverter()->convertType(tensorTy);
-      Value resultStruct = packLLElements(loc, getTypeConverter(), resultVals,
-                                          rewriter, structTy);
-      rewriter.replaceOp(op, {resultStruct});
+      finalizeTensorAtomicResults(op, tensorTy, rewriter, resultVals,
+                                  valueElemTy, b, mask, targetInfo,
+                                  getTypeConverter());
     }
     return success();
   }
@@ -3407,10 +3395,9 @@ struct AtomicRMWOpConversion
     }
 
     if (tensorTy) {
-      Type structTy = getTypeConverter()->convertType(tensorTy);
-      Value resultStruct = packLLElements(loc, getTypeConverter(), resultVals,
-                                          rewriter, structTy);
-      rewriter.replaceOp(op, {resultStruct});
+      finalizeTensorAtomicResults(op, tensorTy, rewriter, resultVals,
+                                  valueElemTy, b, threadPred, targetInfo,
+                                  getTypeConverter());
     }
     return success();
   }

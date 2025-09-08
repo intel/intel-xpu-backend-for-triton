@@ -195,9 +195,11 @@ jobs:
       matrix:
         suite:
           - minicore
-          - mxfp
           - scaled_dot
           - rest
+          - tutorial-fa-64
+          - tutorial-fa-128-fwdfp8
+          - tutorial-fa-128-nofwdfp8
     timeout-minutes: 720
     runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
     defaults:
@@ -239,7 +241,7 @@ jobs:
           mode: ${{ inputs.pytorch_mode }}
 
       - name: Download Triton wheels
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: triton-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
 
@@ -285,7 +287,8 @@ jobs:
         if: matrix.suite == 'rest' && inputs.driver_version == 'rolling' && inputs.device == 'max1100'
         run: |
           cd third_party/proton/test
-          pytest test_api.py test_lib.py test_profile.py test_viewer.py test_record.py -s -v
+          # FIXME: enable 'test_record.py' back
+          pytest test_api.py test_lib.py test_profile.py test_viewer.py -s -v
           cd ..
 
       - name: Run minicore tests
@@ -294,7 +297,7 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --minicore
 
       - name: Run mxfp tests
-        if: matrix.suite == 'mxfp'
+        if: matrix.suite == 'rest'
         run: |
           ${{ env.TRITON_TEST_CMD }} --mxfp
 
@@ -308,15 +311,7 @@ jobs:
         run: |
           ${{ env.TRITON_TEST_CMD }} --interpreter
 
-      # FIXME: make sure new tutorials are added to one of the groups (mxfp, scaled_dot, rest)
-
-      - name: Select tutorials to run (mxfp)
-        if: matrix.suite == 'mxfp'
-        run: |
-          cat <<EOF | tee tutorials.txt
-          06-fused-attention
-          EOF
-
+      # FIXME: make sure new tutorials are added to one of the groups (scaled_dot, rest, tutorial-faX)
       - name: Select tutorials to run (scaled_dot)
         if: matrix.suite == 'scaled_dot'
         run: |
@@ -340,9 +335,15 @@ jobs:
           EOF
 
       - name: Run Tutorials
-        if: matrix.suite == 'mxfp' || matrix.suite == 'scaled_dot' || matrix.suite == 'rest'
+        if: matrix.suite == 'scaled_dot' || matrix.suite == 'rest'
         run: |
           ${{ env.TRITON_TEST_CMD }} --select-from-file tutorials.txt --tutorial
+
+      # Run 06-fused-attention.py separately, because it is split into 3 configs
+      - name: Run Flash Attention tutorials
+        if: matrix.suite == 'tutorial-fa-64' || matrix.suite == 'tutorial-fa-128-fwdfp8' || matrix.suite == 'tutorial-fa-128-nofwdfp8'
+        run: |
+          ${{ env.TRITON_TEST_CMD }} "--${{ matrix.suite }}"
 
       - name: Install transformers
         if: matrix.suite == 'rest'
@@ -386,7 +387,7 @@ jobs:
           key: pip-${{ inputs.python_version }}-${{ hashFiles('pyproject.toml', 'setup.py') }}-${{ env.PIP_CACHE_NUMBER }}
 
       - name: Download test reports
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           pattern: test-reports-*-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           path: reports

@@ -33,7 +33,6 @@ add_triton_library(TritonAMDGPUToLLVM
     LINK_LIBS PUBLIC
     TritonGPUToLLVM
     TritonAMDGPUIR
-    TritonProtonToLLVM
     LLVMCore
     LLVMPasses
     LLVMSupport

@@ -319,6 +319,12 @@ public:
 #define str_attr(str) ::mlir::StringAttr::get(ctx, (str))
 
 namespace mlir {
+
+// See FuncOpToLLVM.cpp for details about Triton's function calling conventions
+constexpr int kProfileScratchBufferOffset = -1;
+constexpr int kGlobalScratchBufferOffset = -2;
+constexpr int kSharedMemoryOffset = -3;
+
 namespace triton {
 
 namespace gpu {
@@ -371,6 +377,8 @@ public:
 
   Value getShmemOffset(Location loc, RewriterBase &rewriter,
                        triton::gpu::MemDescType srcTy) const;
+  Value getShmemAffineBase(Location loc, RewriterBase &rewriter,
+                           triton::gpu::MemDescType srcTy) const;
 
   // TODO(Keren): deprecate the method once AMD backend has cleaned up
   Value getCSwizzleOffset(int dim) const {
@@ -438,6 +446,9 @@ Value getStackPointer(RewriterBase &rewriter, FunctionOpInterface funcOp);
 Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
                           const TargetInfoBase &targetInfo,
                           FunctionOpInterface funcOp, Value allocOffset);
+
+Value getProfileScratchPtr(Location loc, RewriterBase &rewriter,
+                           FunctionOpInterface funcOp);
 
 Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
                           const TargetInfoBase &target, Operation *op);
@@ -558,6 +569,7 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                 std::function<Value(Value)> calcPaddedOffset,
                 Value affineOffset, uint64_t maskSpanAffineOffset,
                 RewriterBase &rewriter, const TargetInfoBase &targetInfo,
+                std::optional<int> maybeMaxVecElems = {},
                 Operation *localLoadOp = nullptr);
 
 // Lower an ld/st-like operation given a layout and a callback that creates the
@@ -617,26 +629,6 @@ void makeAllWarpGroupsIsolatedFromAbove(Operation *op);
 
 // Set the correct loop annotation on LLVM branch ops.
 void fixUpLoopAnnotation(ModuleOp mod);
-
-/// Converts ConverLayoutOp to llvm using padded pattern.
-/// This pattern adds unused memory locations after every rows of tensor fastest
-/// changing dimension:
-/// e0 e1 e2 e3 p p \
-/// e4 e5 e6 e7 p p \
-/// ...
-/// e e e e p p
-/// Dimension order is chosen in order to use wide output reads.
-///
-/// \param op operation to convert
-/// \param src llvm structure containing operation input
-/// \param targetInfo
-/// \param typeConverter
-/// \param rewriter
-/// \returns llvm structure containing converted output
-Value transferWithinBlockPadding(triton::gpu::ConvertLayoutOp op, Value src,
-                                 const TargetInfoBase &targetInfo,
-                                 const LLVMTypeConverter *typeConverter,
-                                 RewriterBase &rewriter);
 
 LogicalResult
 transferWithinBlockSwizzling(triton::gpu::ConvertLayoutOp op, Value src,

@@ -97,11 +97,12 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
   }
   // Every dimension but the first (to allow for pipelining) must be a power of
   // 2
-  if (!isa<PaddedSharedEncodingAttr>(encoding) &&
-      llvm::any_of(shape.drop_front(1),
-                   [](int64_t dim) { return !llvm::isPowerOf2_64(dim); }))
-    return emitError() << "shape must have power-of-2 dimensions; got "
-                       << shape;
+  if (!llvm::all_of(shape.drop_front(1), [](int64_t dim) {
+        return llvm::isPowerOf2_64(dim) && dim > 0;
+      }))
+    return emitError()
+           << "shape must have power-of-2 and non-zero dimensions; got "
+           << shape;
   if (allocShape.size() < shape.size())
     return emitError()
            << "alloc shape must have at least as many dimensions as shape";
@@ -155,10 +156,54 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     if (memorySpace != nvidia_gpu::TensorMemorySpaceAttr::get(ctx)) {
       return emitError() << "memorySpace must be TensorMemorySpace";
     }
-    // TODO Add rest of verifier
+    if (allocShape.size() != 2) {
+      return emitError() << "Scales don't currently support multibuffering";
+    }
+    auto bitwidth = elementType.getIntOrFloatBitWidth();
+    if (bitwidth != 8) {
+      return emitError() << "bitwidth must be 8";
+    }
   } else {
     return emitError() << encoding << " is not a valid encoding";
   }
+
+  // PaddedSharedEncodingAttr is also a SharedEncodingTrait but we have some
+  // additional rules to verify.
+  if (auto enc = dyn_cast<PaddedSharedEncodingAttr>(encoding)) {
+    auto rank = enc.getRank();
+
+    if (rank != shape.size() && rank != shape.size() - 1) {
+      return emitError() << "padding rank must be equal to or one less than "
+                         << "the shape size when pipelining.";
+    }
+
+    // Subslices are not yet implemented
+    auto subsliceAllocSize =
+        allocShape.drop_front(allocShape.size() - shape.size());
+    for (auto [allocDim, shapeDim] : llvm::zip(shape, subsliceAllocSize)) {
+      if (allocDim != shapeDim) {
+        return emitError() << "Subslices with padded encodings are not yet "
+                           << "implemented.";
+      }
+    }
+
+    // Ensure linear component's outDims match the alloc size ignoring
+    // pipelining dimension
+    auto outDims = standardOutDimNames(ctx, rank);
+    const auto &ll = enc.getLinearComponent();
+    auto expectedShape = shape;
+    if (shape.size() == allocShape.size() && shape.size() == rank + 1)
+      expectedShape = expectedShape.drop_front(1);
+
+    for (auto d = 0; d < rank; d++) {
+      if (ll.getOutDimSize(outDims[d]) != expectedShape[d]) {
+        return emitError() << "Mismatch in expected shape for dimension " << d
+                           << ". Expected: " << ll.getOutDimSize(outDims[d])
+                           << ", got: " << expectedShape[d];
+      }
+    }
+  }
+
   return success();
 }
 

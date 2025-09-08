@@ -15,6 +15,7 @@ dirname = os.path.dirname(os.path.realpath(__file__))
 include_dirs = [os.path.join(dirname, "include")]
 libdevice_dir = os.path.join(dirname, "lib")
 libraries = ['cuda']
+PyCUtensorMap = None
 
 
 @functools.lru_cache()
@@ -66,6 +67,8 @@ class CudaUtils(object):
             include_dirs=include_dirs,
             libraries=libraries,
         )
+        global PyCUtensorMap
+        PyCUtensorMap = mod.PyCUtensorMap
         self.load_binary = mod.load_binary
         self.get_device_properties = mod.get_device_properties
         self.cuOccupancyMaxActiveClusters = mod.cuOccupancyMaxActiveClusters
@@ -118,7 +121,8 @@ FLOAT_PACK_FUNCTION = {
     "fp64": "pack_fp64",
 }
 
-_BASE_ARGS_FORMAT = "iiiKKppOOOOO"
+_BASE_ARGS_FORMAT = "iiiKKppOOOOOO"
+_BASE_ARGS_FORMAT_LEN = len(_BASE_ARGS_FORMAT)
 
 
 def make_launcher(constants, signature, tensordesc_meta):
@@ -148,6 +152,7 @@ def make_launcher(constants, signature, tensordesc_meta):
                     # we have to pass the shape and strides twice.
                     for _ in range(2 * ndim):
                         output.append("i64")
+                    output.append("i1")
                 else:
                     output.append("nvTmaDesc")
 
@@ -255,16 +260,24 @@ def make_launcher(constants, signature, tensordesc_meta):
     ]
     params = [f"&arg{i}" for i, ty in signature.items() if ty != "constexpr"]
     params.append("&global_scratch")
+    params.append("&profile_scratch")
     src = f"""
 #include \"cuda.h\"
-#include <stdbool.h>
-#include <Python.h>
 #ifndef _WIN32
 #include <dlfcn.h>
 #else
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #endif
+#include <stdbool.h>
+#include <stdlib.h>
+#define PY_SSIZE_T_CLEAN
+#include <Python.h>
+
+typedef struct {{
+  PyObject_HEAD;
+  _Alignas(128) CUtensorMap tensorMap;
+}} PyCUtensorMapObject;
 
 static inline void gpuAssert(CUresult code, const char *file, int line)
 {{
@@ -326,7 +339,7 @@ static cuLaunchKernelEx_t getLaunchKernelExHandle() {{
 }}
 #endif
 
-static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int launch_cooperative_grid, int launch_pdl, int clusterDimX, int clusterDimY, int clusterDimZ, int shared_memory, CUstream stream, CUfunction function, CUdeviceptr global_scratch{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
+static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int launch_cooperative_grid, int launch_pdl, int clusterDimX, int clusterDimY, int clusterDimZ, int shared_memory, CUstream stream, CUfunction function, CUdeviceptr global_scratch, CUdeviceptr profile_scratch{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
   void *params[] = {{ {', '.join(params)} }};
   if (gridX*gridY*gridZ > 0) {{
     // 4 attributes that we can currently pass maximum
@@ -394,7 +407,7 @@ typedef struct _DevicePtrInfo {{
 }} DevicePtrInfo;
 
 static PyObject* data_ptr_str = NULL;
-static PyObject* tma_desc_cpu_ptr_str = NULL;
+static PyObject* py_tensor_map_type = NULL;
 
 static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
   DevicePtrInfo ptr_info;
@@ -445,29 +458,18 @@ static inline CUtensorMap* getTmaDesc(PyObject *obj) {{
     return NULL;
   }}
 
-  PyObject *method_ret = PyObject_CallMethodNoArgs(obj, tma_desc_cpu_ptr_str);
-  if (!method_ret) {{
+if (Py_TYPE(obj) != (PyTypeObject*)py_tensor_map_type) {{
+    PyErr_Format(PyExc_TypeError, "object must be of type PyCUtensorMap, got %s", Py_TYPE(obj)->tp_name);
     return NULL;
-  }}
+}}
 
-  if (!PyLong_Check(method_ret)) {{
-    PyErr_SetString(PyExc_TypeError, "tma_desc_cpu_ptr() must return 64-bit int");
-    Py_DECREF(method_ret);
+  CUtensorMap* map = &((PyCUtensorMapObject*)obj)->tensorMap;
+  uintptr_t align_128 = (uintptr_t)map & (128 - 1);
+  if (align_128 != 0) {{
+    PyErr_Format(PyExc_ValueError, "CUtensorMap must be aligned to 128B, but got (&map) mod 128 = %ld", align_128);
     return NULL;
   }}
-
-  uint64_t ptr_as_uint = PyLong_AsUnsignedLongLong(method_ret);
-  Py_DECREF(method_ret);
-  if (!ptr_as_uint) {{
-    PyErr_SetString(PyExc_ValueError, "received NULL ptr from tma_desc_cpu_ptr()");
-    return NULL;
-  }}
-  if (ptr_as_uint % 64 != 0) {{
-    PyErr_SetString(PyExc_ValueError, "tma_desc_cpu_ptr() must be 64-byte aligned");
-    return NULL;
-  }}
-
-  return (CUtensorMap*)(ptr_as_uint);
+  return map;
 }}
 
 static void ensureCudaContext() {{
@@ -522,9 +524,10 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   PyObject *kernel_metadata = NULL;
   PyObject *launch_metadata = NULL;
   PyObject *global_scratch_obj = NULL;
+  PyObject *profile_scratch_obj = NULL;
   {newline.join([f"{_extracted_type(ty)} _arg{i};" for i, ty in signature.items()])}
   if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ,
-                                           &_stream, &_function, &launch_cooperative_grid, &launch_pdl, &global_scratch_obj,
+                                           &_stream, &_function, &launch_cooperative_grid, &launch_pdl, &global_scratch_obj, &profile_scratch_obj,
                                            &kernel_metadata, &launch_metadata,
                                            &launch_enter_hook, &launch_exit_hook{args_list})) {{
     return NULL;
@@ -553,12 +556,21 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
     global_scratch = global_scratch_info.dev_ptr;
   }}
 
+  CUdeviceptr profile_scratch = 0;
+  if (profile_scratch_obj != Py_None) {{
+    DevicePtrInfo profile_scratch_info = getPointer(profile_scratch_obj, -1);
+    if (!profile_scratch_info.valid) {{
+      return NULL;
+    }}
+    profile_scratch = profile_scratch_info.dev_ptr;
+  }}
+
   // raise exception asap
   {newline.join(ptr_decls)}
   {newline.join(tma_decls)}
   {newline.join(float_storage_decls)}
   Py_BEGIN_ALLOW_THREADS;
-  _launch(gridX, gridY, gridZ, num_warps, num_ctas, launch_cooperative_grid, launch_pdl, clusterDimX, clusterDimY, clusterDimZ, shared_memory, (CUstream)_stream, (CUfunction)_function, global_scratch{', ' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
+  _launch(gridX, gridY, gridZ, num_warps, num_ctas, launch_cooperative_grid, launch_pdl, clusterDimX, clusterDimY, clusterDimZ, shared_memory, (CUstream)_stream, (CUfunction)_function, global_scratch, profile_scratch{', ' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
   Py_END_ALLOW_THREADS;
   if (PyErr_Occurred()) {{
     return NULL;
@@ -588,16 +600,21 @@ static struct PyModuleDef ModuleDef = {{
 }};
 
 PyMODINIT_FUNC PyInit___triton_launcher(void) {{
-  PyObject *m = PyModule_Create(&ModuleDef);
-  if(m == NULL) {{
-    return NULL;
-  }}
   data_ptr_str = PyUnicode_InternFromString("data_ptr");
   if(data_ptr_str == NULL) {{
     return NULL;
   }}
-  tma_desc_cpu_ptr_str = PyUnicode_InternFromString("tma_desc_cpu_ptr");
-  if(tma_desc_cpu_ptr_str == NULL) {{
+  PyObject* driver_mod = PyImport_ImportModule("triton.backends.nvidia.driver");
+  if (driver_mod == NULL) {{
+    return NULL;
+  }}
+  py_tensor_map_type = PyObject_GetAttrString(driver_mod, "PyCUtensorMap");
+  if (py_tensor_map_type == NULL) {{
+    return NULL;
+  }}
+
+  PyObject *m = PyModule_Create(&ModuleDef);
+  if(m == NULL) {{
     return NULL;
   }}
   PyModule_AddFunctions(m, ModuleMethods);
@@ -605,18 +622,6 @@ PyMODINIT_FUNC PyInit___triton_launcher(void) {{
 }}
 """
     return src
-
-
-class TmaDescKernelParam:
-    TMA_DESC_SIZE = 128
-
-    def __init__(self):
-        import torch
-        self.desc = torch.empty(self.TMA_DESC_SIZE, dtype=torch.uint8, device="cpu")
-
-    # Return a CUtensorMap* pointer in host memory
-    def tma_desc_cpu_ptr(self):
-        return self.desc.data_ptr()
 
 
 # The TMA dtype enum values are slightly different on host vs device...
@@ -634,7 +639,7 @@ def make_tensordesc_arg(arg, metadata):
         # descriptors which is why we provide our own decomposition
         # above. Sadly this means we have to pass the shape and strides
         # twice.
-        return [arg.base, *arg.shape, *arg.strides, *arg.shape, *arg.strides]
+        return [arg.base, *arg.shape, *arg.strides, arg.padding == "nan", *arg.shape, *arg.strides]
 
     swizzle = metadata["swizzle"]
     elem_size = metadata["elem_size"]
@@ -642,48 +647,50 @@ def make_tensordesc_arg(arg, metadata):
     block_size = metadata["block_size"]
     fp4_padded = metadata["fp4_padded"]
 
-    data_ptr = arg.base.data_ptr()
     shape = arg.shape
     strides = arg.strides
     assert strides[-1] == 1
-
-    desc = TmaDescKernelParam()
-    result = [desc, *shape, *strides]
+    padding = 1 if arg.padding == "nan" else 0
 
     if fp4_padded:
         shape = list(shape)
         shape[-1] *= 2
-    triton.runtime.driver.active.utils.fill_tma_descriptor(
-        desc.tma_desc_cpu_ptr(),
-        data_ptr,
+
+    cu_tensor_map = triton.runtime.driver.active.utils.fill_tma_descriptor(
+        arg.base.data_ptr(),
         swizzle,
         elem_size,
         TMA_DTYPE_DEVICE_TO_HOST[elem_type],
         block_size,
         shape,
         strides,
+        padding,
     )
-    return result
+
+    return [cu_tensor_map, *shape, *strides]
 
 
-def wrap_handle_tensordesc(launcher, tensordesc_meta):
-    from triton.tools.tensor_descriptor import TensorDescriptor
-    from triton.experimental.gluon.nvidia.hopper import TensorDescriptor as GluonTensorDescriptor
+def wrap_handle_tensordesc(launcher, signature, tensordesc_meta):
+    has_tensor_desc_arg = any(isinstance(sig, str) and sig.startswith("tensordesc") for sig in signature.values())
+    if not has_tensor_desc_arg:
+        return launcher
+
+    tensordesc_indices = set(
+        [i for i, sig in enumerate(signature.values()) if isinstance(sig, str) and sig.startswith("tensordesc")])
+    assert not tensordesc_meta or len(tensordesc_meta) == len(tensordesc_indices)
+    if not tensordesc_meta:
+        tensordesc_meta = [None] * len(tensordesc_indices)
 
     def inner(*args):
-        meta_args = args[:len(_BASE_ARGS_FORMAT)]
-        raw_kernel_args = args[len(_BASE_ARGS_FORMAT):]
+        final_args = list(args[:_BASE_ARGS_FORMAT_LEN])
         tensordesc_idx = 0
-        final_args = []
-        for i, arg in enumerate(raw_kernel_args):
-            if isinstance(arg, (TensorDescriptor, GluonTensorDescriptor)):
-                meta = tensordesc_meta[tensordesc_idx] if tensordesc_meta else None
+        for i, arg in enumerate(args[_BASE_ARGS_FORMAT_LEN:]):
+            if i in tensordesc_indices:
+                final_args.extend(make_tensordesc_arg(arg, tensordesc_meta[tensordesc_idx]))
                 tensordesc_idx += 1
-                final_args.extend(make_tensordesc_arg(arg, meta))
             else:
                 final_args.append(arg)
-        assert not tensordesc_meta or tensordesc_idx == len(tensordesc_meta)
-        return launcher(*meta_args, *final_args)
+        return launcher(*final_args)
 
     return inner
 
@@ -704,25 +711,31 @@ class CudaLauncher(object):
             include_dirs=include_dirs,
             libraries=libraries,
         )
-        has_tensor_desc_arg = any(isinstance(sig, str) and sig.startswith("tensordesc") for sig in signature.values())
 
         self.num_ctas = functools.reduce(operator.mul, metadata.cluster_dims, 1)
-        self.launch = wrap_handle_tensordesc(mod.launch, tensordesc_meta) if has_tensor_desc_arg else mod.launch
+        self.launch = wrap_handle_tensordesc(mod.launch, signature, tensordesc_meta)
         self.global_scratch_size = metadata.global_scratch_size
         self.global_scratch_align = metadata.global_scratch_align
+        self.profile_scratch_size = metadata.profile_scratch_size
+        self.profile_scratch_align = metadata.profile_scratch_align
         self.launch_cooperative_grid = metadata.launch_cooperative_grid
         self.launch_pdl = metadata.launch_pdl
 
     def __call__(self, gridX, gridY, gridZ, stream, function, *args):
-        if self.global_scratch_size > 0:
-            grid_size = gridX * gridY * gridZ
-            alloc_size = grid_size * self.num_ctas * self.global_scratch_size
-            alloc_fn = _allocation._allocator.get()
-            global_scratch = alloc_fn(alloc_size, self.global_scratch_align, stream)
-        else:
-            global_scratch = None
+
+        def allocate_scratch(size, align, allocator):
+            if size > 0:
+                grid_size = gridX * gridY * gridZ
+                alloc_size = grid_size * self.num_ctas * size
+                alloc_fn = allocator.get()
+                return alloc_fn(alloc_size, align, stream)
+            return None
+
+        global_scratch = allocate_scratch(self.global_scratch_size, self.global_scratch_align, _allocation._allocator)
+        profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
+                                           _allocation._profile_allocator)
         self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, self.launch_pdl,
-                    global_scratch, *args)
+                    global_scratch, profile_scratch, *args)
 
 
 class CudaDriver(GPUDriver):
