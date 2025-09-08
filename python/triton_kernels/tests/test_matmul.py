@@ -20,7 +20,7 @@ from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, upcast_from_m
 # testing utilities
 from triton_kernels.testing import assert_close, compute_actual_scale
 # target-specific utilities
-from triton_kernels.target_info import is_hip, is_hip_cdna3, is_cuda, is_hip_cdna4
+from triton_kernels.target_info import is_hip, is_hip_cdna3, is_cuda, is_xpu, is_hip_cdna4
 
 # ---------------
 # initialize data
@@ -73,7 +73,7 @@ def init_compute_data(m, n, k, gindx, sindx, n_expts_tot, n_expts_act, n_expt_sh
     if mode == 'batched' or (not has_y_gammas) or (has_y_gammas and (gindx is not None) and act_dtype.itemsize >= 2):
         gs0 = None
         gs1 = None
-    if "float8" in str(weight_dtype) and torch.cuda.get_device_capability()[0] < 10:
+    if is_cuda() and "float8" in str(weight_dtype) and torch.cuda.get_device_capability()[0] < 10:
         w = w.transpose(-1, -2).contiguous().transpose(-1, -2)
     return x, w, bias, gs0, gs1
 
@@ -294,6 +294,12 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         if split_k > 1:
             pytest.skip("splitK hasn't been fully tested on AMD GPU.")
 
+    elif is_xpu():
+        if split_k > 1:
+            pytest.skip("splitK hasn't been fully tested on INTEL GPU.")
+        if "float8_e4m3fn" in act_dtype_str and "float8_e4m3fn" in weight_dtype_str:
+            pytest.skip("FIXME")
+
     if "float8_e4m3fnuz" in (weight_dtype_str, act_dtype_str) and not is_hip_cdna3():
         pytest.skip("float8_e4m3fnuz only tested on AMD CDNA3 Platform")
 
@@ -308,20 +314,21 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
                 pytest.skip("Non-scale swizzling not supported on CDNA4 yet")
             if n % 32 != 0 or k % (32 * 8) != 0:
                 pytest.skip(f"Shape {m}x{n}x{k} is not supported for scale swizzling on AMD GPU")
-        if torch.cuda.get_device_capability()[0] < 9:
-            pytest.skip("NYI. Ampere swizzling.")
-        if torch.cuda.get_device_capability()[0] < 10:
-            if "mxfloat4" not in weight_dtype_str:
-                pytest.skip("NYI. Hopper swizzling just implemented for mxfp4.")
-            if k % 64 != 0 or n % 64 != 0:
-                # Automatic padding not implemented for Hopper swizzle
-                pytest.skip("Hopper swizzling acts on a 64x64 tile (4x1 mma tiles).")
+        if is_cuda():
+            if torch.cuda.get_device_capability()[0] < 9:
+                pytest.skip("NYI. Ampere swizzling.")
+            if torch.cuda.get_device_capability()[0] < 10:
+                if "mxfloat4" not in weight_dtype_str:
+                    pytest.skip("NYI. Hopper swizzling just implemented for mxfp4.")
+                if k % 64 != 0 or n % 64 != 0:
+                    # Automatic padding not implemented for Hopper swizzle
+                    pytest.skip("Hopper swizzling acts on a 64x64 tile (4x1 mma tiles).")
 
     # launch metadata for batched / mx types may not work yet.
     torch.manual_seed(0)
 
     block_k = None
-    if is_persistent and weight_dtype_str.startswith("mx") and torch.cuda.get_device_capability()[0] < 10:
+    if is_cuda() and is_persistent and weight_dtype_str.startswith("mx") and torch.cuda.get_device_capability()[0] < 10:
         # Override block_k for testing correctness. The default is temporarily 128 for
         # performance reasons which doesn't work with persistent matmul.
         # TODO: revisit when Triton is better for H100 + MXFP4
@@ -436,7 +443,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
 
     round_y = lambda y: (y / y_scale).to(act_dtype).to(torch.float32) * y_scale if sep_scatter else y
     ref_y = matmul_ogs_torch(x_ref, w_ref, bias_ref,  #
-                             rdata, gindx, sindx, round_x=round_x, round_y=round_y, gammas=gs1_ref)
+                             rdata, gindx, sindx, round_x=round_x, round_y=round_y, gammas=gs1_ref, device=device)
     scale = lambda val, scal: val if scal is None else val / scal
     if n_expt_shards > 1:
         if do_scatter:

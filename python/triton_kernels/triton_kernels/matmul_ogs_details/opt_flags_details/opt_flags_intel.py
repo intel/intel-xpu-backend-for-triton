@@ -18,7 +18,7 @@ def compute_block_n(n: int):
 
 def compute_block_k(k: int | None, is_persistent: bool, precision_config):
     if k is not None:
-        block_k = max(16, min(128, triton.next_power_of_2(k)))
+        block_k = max(32, min(128, triton.next_power_of_2(k)))
     has_mx_weight_scale = precision_config is not None and precision_config.weight_scale is not None
     if is_persistent and has_mx_weight_scale:
         block_k = min(block_k, 128)
