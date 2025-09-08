@@ -2486,9 +2486,8 @@ struct LoadOpToBlockIOConversion
     if (!isBlockIOCandidate(op, enableBlockIOForAllLayout))
       return failure();
 
-    Value value = op.getResult();
-    auto tensorType = cast<RankedTensorType>(value.getType());
     // Get the max tile shape supported by the layout.
+    auto tensorType = cast<RankedTensorType>(op.getResult().getType());
     Attribute encoding = tensorType.getEncoding();
     std::optional<LinearLayout> llEncoding =
         cast<DistributedEncodingTrait>(encoding).toLinearLayout(
@@ -2524,11 +2523,69 @@ struct LoadOpToBlockIOConversion
     // HW issue for vblock = 4
     vBlocks = vBlocks == 4 ? 1 : vBlocks;
 
+    // TODO: use the axis info to general the handling for both regular pointer
+    // and block pointer.
+    const bool memoryRowMajor = isMemoryRowMajor(op);
+    unsigned contiguousDim = memoryRowMajor ? 1 : 0;
+    const bool isTransposeRequired = contiguousDim != colDim;
+
+    if (isTransposeRequired) {
+      if (numPackedVals > 1)
+        return failure();
+      if (elemSizeInBits > 32)
+        return failure();
+      if (tileWidth > 32)
+        return failure(); // tileWidth is limited to 32 for transpose 2d load.
+
+      vBlocks = 1;
+
+      unsigned threadsPerWarp =
+          TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>());
+      // use the d32 for transpose 2d load.
+      packedElemSizeInBits = 32;
+      numPackedVals = packedElemSizeInBits / elemSizeInBits;
+      if (numPackedVals > 1 && tileWidth != threadsPerWarp)
+        return failure(); // Couldn't use the transpose 2d load for un-packable
+                          // along tile height dim.
+      tileHeight = std::min(tileHeight / numPackedVals, 8);
+
+      if (tileHeight * tileWidth < threadsPerWarp)
+        return failure(); // The tile size is not large enough for IGC scalar
+                          // backend vectorization.
+      // transpose the width and height of the tile
+      std::swap(tileHeight, tileWidth);
+      // if (oneMatrixPerLoadForBT) {
+      //   // Only load 1 operand per inst on row.
+      //   numOperandsPer2DLoadM = 1;
+      //   tileHeight = elemsPerDPASInst[threadOrder[rank - 2]];
+      // } else {
+      //   // We can decompose the matrix returned by transposed large 2d load
+      //   // when threads per warp < column size. Otherwise we have to load one
+      //   // operand per inst.
+      //   // Note: the tileHeight and numOperandsPer2DLoadM are the column size
+      //   // now.
+      //   numOperandsPer2DLoadM =
+      //       (threadsPerWarp <= tileHeight) ? repCluster[rank - 1] : 1;
+      // }
+      // // The transpose 2d load only support 1 operand per inst on column.
+      // // (vBlocks = 1)
+      // numOperandsPer2DloadN = 1;
+      // // TODO: support load column major data.
+      // return failure();
+    }
+
     Location loc = op.getLoc();
-    MLIRContext *ctx = op.getContext();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto typeConverter = getTypeConverter();
+    MLIRContext *ctx = rewriter.getContext();
+
+    SmallVector<Value> ptrElems, maskElems, otherElems;
+    Value baseWidth, baseHeight, pitch;
+    unsigned numElems = getTotalElemsPerThread(op.getType());
+
     StringAttr kRegister = S("register");
+
+    assert(regPackedBases.has_value() &&
+           "invalid register bases for packing elems.");
     std::vector<std::vector<int>> bases(regPackedBases->size());
     llvm::transform(*regPackedBases, bases.begin(),
                     [&](int base) { return std::vector<int>{base}; });
@@ -2536,14 +2593,6 @@ struct LoadOpToBlockIOConversion
                             {{kRegister, llEncoding->getInDimSize(kRegister)}},
                             /*requireSurjective=*/true);
 
-    unsigned numElems = getTotalElemsPerThread(op.getType());
-    unsigned threadsPerWarp =
-        TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>());
-
-    SmallVector<Value> ptrElems, maskElems, otherElems;
-    Value baseWidth, baseHeight, pitch;
-    unsigned baseHeightInt;
-    Value mask = op.getMask();
     // Get the LLVM values for pointers
     Value llPtr = adaptor.getPtr();
     ptrElems = unpackLLElements(loc, llPtr, rewriter);
@@ -2551,9 +2600,13 @@ struct LoadOpToBlockIOConversion
            "the number of pointer values is not matched with the number of "
            "elements");
 
+    unsigned threadsPerWarp =
+        TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>());
+
     Value llMask = adaptor.getMask();
     // Get the LLVM values for mask
     if (llMask) {
+      Value mask = op.getMask();
       maskElems = unpackLLElements(loc, llMask, rewriter);
       assert(maskElems.size() == numElems &&
              "the number of mask values is not matched with the number of "
@@ -2650,60 +2703,11 @@ struct LoadOpToBlockIOConversion
         otherElems = unpackLLElements(loc, llOther, rewriter);
       }
 
-    // TODO: use the axis info to general the handling for both regular pointer
-    // and block pointer.
-    const bool memoryRowMajor = isMemoryRowMajor(op);
-    unsigned contiguousDim = memoryRowMajor ? 1 : 0;
-    const bool isTransposeRequired = contiguousDim != colDim;
-
-    if (isTransposeRequired) {
-      if (numPackedVals > 1)
-        return failure();
-      if (elemSizeInBits > 32)
-        return failure();
-      if (tileWidth > 32)
-        return failure(); // tileWidth is limited to 32 for transpose 2d load.
-
-      vBlocks = 1;
-
-      // use the d32 for transpose 2d load.
-      packedElemSizeInBits = 32;
-      numPackedVals = packedElemSizeInBits / elemSizeInBits;
-      if (numPackedVals > 1 && tileWidth != threadsPerWarp)
-        return failure(); // Couldn't use the transpose 2d load for un-packable
-                          // along tile height dim.
-      tileHeight = std::min(tileHeight / numPackedVals, 8);
-
-      if (tileHeight * tileWidth < threadsPerWarp)
-        return failure(); // The tile size is not large enough for IGC scalar
-                          // backend vectorization.
-      // transpose the width and height of the tile
-      std::swap(tileHeight, tileWidth);
-      // if (oneMatrixPerLoadForBT) {
-      //   // Only load 1 operand per inst on row.
-      //   numOperandsPer2DLoadM = 1;
-      //   tileHeight = elemsPerDPASInst[threadOrder[rank - 2]];
-      // } else {
-      //   // We can decompose the matrix returned by transposed large 2d load
-      //   // when threads per warp < column size. Otherwise we have to load one
-      //   // operand per inst.
-      //   // Note: the tileHeight and numOperandsPer2DLoadM are the column size
-      //   // now.
-      //   numOperandsPer2DLoadM =
-      //       (threadsPerWarp <= tileHeight) ? repCluster[rank - 1] : 1;
-      // }
-      // // The transpose 2d load only support 1 operand per inst on column.
-      // // (vBlocks = 1)
-      // numOperandsPer2DloadN = 1;
-      // // TODO: support load column major data.
-      // return failure();
-    }
-
     baseWidth = b.i32_val(
         std::max(64u, vBlocks * tileWidth * (packedElemSizeInBits / 8)));
     // If the stride is 0, we want to load only the first row.
     int stride = getStride(ptr, memoryRowMajor ? 0 : 1);
-    baseHeightInt = (stride == 0 ? 1 : tileHeight);
+    unsigned baseHeightInt = (stride == 0 ? 1 : tileHeight);
     baseHeight = b.i32_val(baseHeightInt);
     pitch = getPitch(rewriter, ptr, elemSizeInBits, memoryRowMajor ? 0 : 1);
     if (!pitch)
@@ -2826,12 +2830,8 @@ struct LoadOpToBlockIOConversion
       // Use the top-left address and mask of the block to store the data.
       // (The first value refer by the elemIdx.)
       if (maskElems.size()) {
-        assert(maskElems.size() == otherElems.size() &&
-               "Invalid size of the masks.");
         pred = targetInfo.shuffleIdx(rewriter, loc, maskElems[registerIdx], 0);
-      }
 
-      if (pred) {
         // We leverage the GPU block I/O hardware out-of-bound protection
         // feature by setting the offset to an invalid value when 'pred'
         // is false (the HW will not read out-of-bounds values).
@@ -2959,6 +2959,7 @@ struct LoadOpToBlockIOConversion
       }
     }
 
+    auto typeConverter = getTypeConverter();
     Type llvmResultStructTy = typeConverter->convertType(op.getType());
     Value resultStruct = packLLElements(loc, typeConverter, unpackedLoadedVals,
                                         rewriter, llvmResultStructTy);
