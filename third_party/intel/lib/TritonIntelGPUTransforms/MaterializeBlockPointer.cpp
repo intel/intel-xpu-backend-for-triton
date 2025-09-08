@@ -153,7 +153,10 @@ private:
     assert(!tt::isTensorPointerType(ptr.getType()) &&
            "Expected pointer refer to a tensor.");
 
-    auto tensorTy = cast<RankedTensorType>(ptr.getType());
+    auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
+    if (!tensorTy)
+      return;
+
     LDBG("Considering tensor of pointer of memory accessing op: " << op);
 
     // The axis info gives the information about the value of the indices
