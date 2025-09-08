@@ -171,13 +171,13 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=400, n_repeat=100, grad_to_n
     assert sync_submitting
 
     # Warm-up
-    start = time.time()
+    start = time.perf_counter()
     for _ in range(n_warmup):
         fn()
         # To be consistent with the benchmark measurements
         if sync_submitting:
             synchronize()
-        if time.time() - start > 1000 * time_budget_ms:
+        if time.perf_counter() - start > 1000 * time_budget_ms:
             break
 
     # Benchmark
