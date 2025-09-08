@@ -17,7 +17,6 @@
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
-#include "llvm/ADT/SmallSet.h"
 
 namespace mlir {
 
@@ -254,11 +253,6 @@ unsigned ScanLoweringHelper::getScratchSizeInBytes() {
   return elementSizeInBytes * getScratchSizeInElems();
 }
 
-static SmallVector<DecomposedWarpConversion::TranspositionInfo>
-getTranspositionSelectors(SmallVector<std::pair<int, int>> &mixedTranspositions,
-                          std::vector<std::vector<int32_t>> &regBases,
-                          int bitwidth);
-
 DecomposedWarpConversion
 getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
                                   RankedTensorType dstTy) {
@@ -480,226 +474,6 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   return {std::move(pReg), std::move(pLane), std::move(mixedTranspositions)};
 }
 
-static SmallVector<DecomposedWarpConversion::TranspositionInfo>
-getTranspositionSelectors(SmallVector<std::pair<int, int>> &mixedTranspositions,
-                          std::vector<std::vector<int32_t>> &regBases,
-                          int bitwidth) {
-  // When possible, we fuse permutations of 'low' register bits together
-  // with a mixed transposition, resulting in byte permute instructions instead
-  // of `select` instructions. After processing, no low register bits appear in
-  // the returned list of mixed transpositions.
-  int m = mixedTranspositions.size();
-  int nRegBases = regBases.size();
-  int nPackPrelim = llvm::Log2_32(std::clamp(32 / bitwidth, 1, 4));
-  int nPack = std::min(nPackPrelim, nRegBases - m);
-
-  SmallVector<DecomposedWarpConversion::TranspositionInfo> ret;
-  ret.reserve(mixedTranspositions.size());
-  if (nPack == 0) {
-    for (auto &t : mixedTranspositions)
-      ret.push_back(DecomposedWarpConversion::TranspositionInfo{t});
-    return ret;
-  }
-  // Consider for example the cycle
-  //
-  //        (r2 r1 l0 r0 r3) = (r0 l0) * (r2 r1 r0 r3)
-  //                         = (r3 r0) * (r3 l0) * (r3 r1) * (r3 r2)
-  //
-  // with `nPack` = 2 so that r0 and r1 are considered low bits. We want to
-  // factor out any low bits from `pReg` and to incorporate them into the data
-  // of the mixed transposition. After processing, the contribution to `pReg`
-  // is reduced to (r3 r2) and the mixed transposition recorded is (r3 l0), with
-  // the effects of (r3 r0) and (r3 r1) encoded in the returned selectors.
-  // In general, low bits occurring immediately before l_j modify the selectors
-  // of the `prmt` before the shuffle, while low bits occurring immediately
-  // after l_k modify the selectors of the `prmt` after the shuffle. Unmodified
-  // selectors correspond to `select` instructions.
-  // Cases like (l0 r0 r1) must be handled by selecting a 'partner' bit that is
-  // not used in another mixed transposition and conjugating out a low bit:
-  //
-  //           (l0 r0 r1) = (r2 r1) * (l0 r0 r2) * (r2 r1)
-  //                      = (r2 r1) * (r2 r0) * (r2 l0) * (r2 r1).
-  //
-  // Conjugation does not affect `pReg`. However, the set of fused mixed and
-  // low-bit transpositions is noncommutative in cases where there are no
-  // intervening high bits in between distinct sequences of lane bits as the
-  // paired low bit is used in modifying the selectors of both factors:
-  //
-  //    (l0 r0 r1 l1 r2) = (r3 r0)(r3 l0)(r3 r0) * (r2 l1)(r2 r1)(r2 r0).
-  //
-  // The `*` is standard composition of permutations. The groupings correspond
-  // to different `TranspositionInfo` objects. For example, the permutation
-  // `(r3 r0)(r3 l0)(r3 r0) = (r0 l0)` has mixed transposition `(r3 l0)` with
-  // pre- and post-shuffle selectors determined by the `r0` bit.
-  // Processing of mixed transpositions is performed by determining the `head`
-  // and `tail` of an excision of bits in cycles of `pReg` and building lists
-  // of low bits acting as selector modifiers. In the noncommutative cases, we
-  // opt to restrict the number of post-shuffle modifiers to one.
-
-  auto permuteSelector = [nPack](uint16_t sel, int bitIdx) {
-    int lo = bitIdx + (2 - nPack);
-    uint16_t maskHi = 0x4444;
-    uint16_t maskLo = 0x1111 << lo;
-    uint16_t fixed = sel & ~maskHi & ~maskLo;
-    int shift = 2 - lo;
-    return fixed | ((maskHi & sel) >> shift) | ((maskLo & sel) << shift);
-  };
-  auto generateSelectors = [&](int head, int tail, auto &&lowBits) {
-    uint16_t topSel = 0x3210;
-    uint16_t botSel = 0x7654;
-    for (auto lowBit : lowBits) {
-      topSel = permuteSelector(topSel, lowBit);
-      botSel = permuteSelector(botSel, lowBit);
-      if (lowBit != head && lowBit != tail)
-        regBases[lowBit][0] = 1 << lowBit;
-    }
-    return std::pair{topSel, botSel};
-  };
-
-  llvm::SmallSet<int32_t, 6> pairedRegBits;
-  for (auto [rBit, lBit] : mixedTranspositions)
-    pairedRegBits.insert(rBit);
-
-  // A low bit in a mixed transposition must be replaced by a high bit. The
-  // choice of high bit can affect instruction count. If the first high bit
-  // found when walking along `pReg` is unpaired, then that bit is the best
-  // choice. We reorder the transpositions to guarantee this during processing.
-  auto next = [&](int b) { return llvm::Log2_32(regBases[b][0]); };
-  auto nextHighFree = [&](auto p) {
-    int curr = p.first;
-    do {
-      if (curr >= nPack)
-        return curr == p.first || !pairedRegBits.contains(curr);
-      curr = next(curr);
-    } while (curr != p.first);
-    return false;
-  };
-  std::stable_partition(mixedTranspositions.begin(), mixedTranspositions.end(),
-                        nextHighFree);
-  // If `P` has an isolated low-bit mixed transposition, and `pReg` maps a low
-  // bit to an open high bit, then the high bit should be used as the partner.
-  auto prev = [&](int b) {
-    int tail = b;
-    int curr = next(b);
-    while (curr != b) {
-      tail = curr;
-      curr = next(curr);
-    }
-    return tail;
-  };
-  auto findPartner = [&](int lowBit, auto &preShufLoBits) {
-    if (nPack == 2) {
-      int otherLow = 1 - lowBit;
-      int b = next(otherLow);
-      if (next(lowBit) == lowBit && b >= nPack && !pairedRegBits.contains(b) &&
-          !pairedRegBits.contains(otherLow)) {
-        preShufLoBits.push_back(otherLow);
-        regBases[prev(otherLow)][0] = 1 << b;
-        pairedRegBits.insert(b);
-        return b;
-      }
-    }
-    int potentialPartner = nPack;
-    while (pairedRegBits.contains(potentialPartner))
-      ++potentialPartner;
-    pairedRegBits.insert(potentialPartner);
-    return potentialPartner;
-  };
-
-  for (auto p : mixedTranspositions) {
-    int rBit = p.first;
-    int lBit = p.second;
-    SmallVector<int> cycle;
-    int currBit = rBit;
-    do {
-      cycle.push_back(currBit);
-      currBit = next(currBit);
-    } while (currBit != rBit);
-
-    // Find any low register bits adjacent to the excised lane bits which aren't
-    // used in other mixed transpositions.
-    auto isBoundary = [&](int bit) {
-      return bit >= nPack || (pairedRegBits.contains(bit) && bit != rBit);
-    };
-    auto forwardEnd = llvm::find_if(cycle, isBoundary);
-    auto backwardEnd = std::find_if(cycle.rbegin(), cycle.rend(), isBoundary);
-    SmallVector<int> postShufLoBits(cycle.begin(), forwardEnd);
-    SmallVector<int> preShufLoBits(cycle.rbegin(), backwardEnd);
-    int head;
-    int tail;
-    int partnerBit = -1;
-
-    // Case work to determine what to conjugate out.
-    if (forwardEnd != cycle.end()) {
-      if (*forwardEnd == rBit || !pairedRegBits.contains(*forwardEnd)) {
-        // End at original or unpaired high bit. E.g. (l0 r0 r2) or (l0 r2)
-        // No conjugation needed.
-        head = partnerBit = *forwardEnd;
-      } else {
-        // End at different paired bit. E.g. (l0 r0 r1 l1 r2)
-        // Non-leading factor in a noncommutative case.
-        // Conjugate by first low bit in forward walk.
-        head = postShufLoBits.front();
-        preShufLoBits.push_back(head);
-        postShufLoBits.resize(1);
-        pairedRegBits.erase(head);
-      }
-      tail = *backwardEnd;
-      if (tail < nPack && pairedRegBits.contains(tail)) {
-        // Non-terminal factor in a noncommutative case.
-        preShufLoBits.insert(preShufLoBits.begin(), tail);
-      }
-    } else {
-      if (next(rBit) != rBit && pairedRegBits.contains(next(rBit))) {
-        // Symmetric noncommutative case. E.g. (l0 r0 l1 r1)
-        preShufLoBits.erase(preShufLoBits.begin());
-        postShufLoBits.pop_back();
-        pairedRegBits.erase(postShufLoBits.front());
-        head = rBit;
-        tail = next(rBit);
-      } else {
-        // Isolated low bits with single mixed transposition. E.g. (l0 r0 r1)
-        if (postShufLoBits.size() == 2)
-          postShufLoBits.pop_back();
-        head = tail = preShufLoBits.front();
-      }
-    }
-
-    if (partnerBit < 0)
-      partnerBit = findPartner(head, preShufLoBits);
-    auto [topPostSel, botPostSel] =
-        generateSelectors(head, tail, llvm::reverse(postShufLoBits));
-    auto [topPreSel, botPreSel] = generateSelectors(head, tail, preShufLoBits);
-    regBases[tail][0] = 1 << head;
-
-    DecomposedWarpConversion::TranspositionInfo info;
-    info.transposition = {partnerBit, lBit};
-    info.topPreSel = topPreSel;
-    info.botPreSel = botPreSel;
-    info.topPostSel = topPostSel;
-    info.botPostSel = botPostSel;
-
-    // In noncommutative cases, post-shuffle selectors of non-leading terms come
-    // from a single low bit by design, so we can determine where to insert a
-    // non-terminal factor by examining processed selectors.
-    if (!preShufLoBits.empty()) {
-      uint16_t sel = (nPack - preShufLoBits.back()) == 2 ? 0x6240 : 0x5410;
-      auto it =
-          llvm::find_if(ret, [&](auto &t) { return t.topPostSel == sel; });
-      ret.insert(it, info);
-    } else {
-      ret.push_back(info);
-    }
-  }
-  if (nPack == 2 && regBases[0][0] == 2 && regBases[1][0] == 1 && ret.size()) {
-    // If (r0 r1) was originally in `P`, fold it into a mixed transposition.
-    auto &t = ret.back();
-    t.topPostSel = 0x3120;
-    t.botPostSel = 0x7564;
-  }
-  return ret;
-}
-
 SmallVector<std::pair<SmallVector<int64_t>, SmallVector<int64_t>>>
 getReshapeDecomposition(ArrayRef<int64_t> srcShape,
                         ArrayRef<int64_t> dstShape) {
@@ -875,6 +649,8 @@ bool supportMMA(triton::DotOp op, int version) {
   if (version == 5) {
     if (triton::tools::getBoolEnv("DISABLE_MMA_V5"))
       return false;
+    RankedTensorType typeA = op.getA().getType();
+    int k = typeA.getShape().back();
     auto retType = op.getType();
     auto retShapePerCTA = getShapePerCTA(retType);
     auto rank = retShapePerCTA.size();
@@ -888,8 +664,11 @@ bool supportMMA(triton::DotOp op, int version) {
       // Currently only support numWarps 4 or 8 for TMEM load and store.
       return false;
     }
+    // If k size is smaller than the native mma size, we cannot use MMA.
+    if (k < 256 / aElemTy.getIntOrFloatBitWidth())
+      return false;
     if (!(retShapePerCTA[rank - 2] % 64 == 0 &&
-          retShapePerCTA[rank - 1] % 8 == 0))
+          retShapePerCTA[rank - 1] % 16 == 0))
       return false;
     return true;
   }
@@ -909,7 +688,7 @@ bool supportMMA(triton::DotOp op, int version) {
     if (rank == 3)
       return false;
     if (!(numWarps % 4 == 0 && retShapePerCTA[rank - 2] % 64 == 0 &&
-          retShapePerCTA[rank - 1] % 8 == 0 &&
+          retShapePerCTA[rank - 1] % 16 == 0 &&
           (llvm::isa<Float8E5M2Type, Float8E4M3FNType>(aElemTy) ||
            aElemTy.isInteger(8) || aElemTy.isF16() || aElemTy.isBF16() ||
            aElemTy.isF32()))) {

@@ -151,10 +151,11 @@ static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
       }
     } else {
       if (!llvm::is_contained({ISAFamily::CDNA2, ISAFamily::CDNA3,
-                               ISAFamily::CDNA4, ISAFamily::RDNA3},
+                               ISAFamily::CDNA4, ISAFamily::RDNA3,
+                               ISAFamily::RDNA4},
                               isaFamily)) {
-        // DPP is only supported for CDNA2/CDNA3/CDNA4/RDNA3 right now, so we
-        // fallback to ds_swizzle for other architectures.
+        // DPP is only supported for CDNA2/CDNA3/CDNA4/RDNA3/RDNA4 right now, so
+        // we fallback to ds_swizzle for other architectures.
         //
         // This map facilates the butterfly shuffle pattern for a stride less
         // than 16. The pattern stride is the key of the map.
@@ -282,23 +283,6 @@ Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i,
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   return shuffleCommon(loc, rewriter, isaFamily, val, i, 0, ShflKind::idx,
                        b.i32_val(0x1f));
-}
-
-Value permute(Location loc, RewriterBase &rewriter, Value x, Value y,
-              Value selector) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value prmt_mask = selector;
-  // convert from nybble mask to byte mask:
-  prmt_mask =
-      b.or_(b.and_(prmt_mask, b.i32_val(0x000000ff)),
-            b.shl(b.and_(prmt_mask, b.i32_val(0x0000ff00)), b.i32_val(8)));
-  prmt_mask =
-      b.or_(b.and_(prmt_mask, b.i32_val(0x000f000f)),
-            b.shl(b.and_(prmt_mask, b.i32_val(0x00f000f0)), b.i32_val(4)));
-  Value args[] = {x, y, prmt_mask};
-  auto op = createLLVMIntrinsicCallOp(rewriter, loc, "llvm.amdgcn.perm", i32_ty,
-                                      args);
-  return op.getResult(0);
 }
 
 Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,

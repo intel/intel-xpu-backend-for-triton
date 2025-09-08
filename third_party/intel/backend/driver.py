@@ -391,6 +391,7 @@ def make_launcher(constants, signature):
                 # we have to pass the shape and strides twice.
                 for _ in range(2 * ndim):
                     output.append("i64")
+                output.append("i1")
                 for _ in range(ndim):
                     output.append("i32")
                 for _ in range(ndim):
@@ -609,7 +610,10 @@ static inline void set_scalar_arg(sycl::handler &cgh, int index, const void *val
   cgh.set_arg(index, *static_cast<const T *>(value));
 }}
 
-static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ, int num_warps, int threads_per_warp, int shared_memory, sycl::queue& stream, sycl::kernel& kernel_ptr, void* global_scratch, void* profile_scratch{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
+static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
+                               int num_warps, int threads_per_warp, int shared_memory,
+                               sycl::queue& stream, sycl::kernel& kernel_ptr,
+                               void* global_scratch, void* profile_scratch{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
 
   std::string kernel_name = kernel_ptr.get_info<sycl::info::kernel::function_name>();
   { 'RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {});' if COMPILATION_HELPER.inject_pytorch_dep else "" }
@@ -794,7 +798,7 @@ def wrap_handle_tensor_descriptor(launcher):
                 # descriptors which is why we provide our own decomposition
                 # above. Sadly this means we have to pass the shape and strides
                 # twice.
-                final_args.extend([arg.base, *arg.shape, *arg.strides, *arg.shape, *arg.strides])
+                final_args.extend([arg.base, *arg.shape, *arg.strides, arg.padding == "nan", *arg.shape, *arg.strides])
             else:
                 final_args.append(arg)
 

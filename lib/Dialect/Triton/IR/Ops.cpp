@@ -465,7 +465,6 @@ static LogicalResult verifyRegionsImpl(Op &op) {
                             << " arguments, but given block with "
                             << block.getNumArguments() << " arguments";
   }
-  unsigned i = 0;
   const auto &blockArgTypes = block.getArgumentTypes();
   for (unsigned i = 0; i < numArgs; ++i) {
     const auto &blockArgTy = blockArgTypes[i];
@@ -966,7 +965,7 @@ LogicalResult BroadcastOp::verify() {
   if (srcShape.size() != resultShape.size()) {
     return emitError("rank of source must be same as rank of result");
   }
-  for (int i = 0; i < srcShape.size(); i++) {
+  for (size_t i = 0; i < srcShape.size(); i++) {
     if (srcShape[i] != 1 && srcShape[i] != resultShape[i]) {
       return emitError("Different dimensions at index ")
              << i << " between source and result.  "
@@ -1020,8 +1019,8 @@ OpFoldResult AdvanceOp::fold(FoldAdaptor adaptor) {
 //-- MakeTensorDescOp --
 void MakeTensorDescOp::build(OpBuilder &builder, OperationState &state,
                              Value base, ValueRange shape, ValueRange strides,
-                             ArrayRef<int32_t> blockShape,
-                             bool isSignedInteger) {
+                             ArrayRef<int32_t> blockShape, bool isSignedInteger,
+                             triton::PaddingOption padding) {
   auto ptrTy = dyn_cast<triton::PointerType>(base.getType());
   if (!ptrTy) {
     llvm::report_fatal_error("Expected pointer type");
@@ -1031,7 +1030,8 @@ void MakeTensorDescOp::build(OpBuilder &builder, OperationState &state,
   auto blockTy = RankedTensorType::get(blockShape64, elemTy);
   auto descTy =
       TensorDescType::get(builder.getContext(), blockTy, isSignedInteger);
-  return build(builder, state, descTy, base, shape, strides);
+  auto paddingAttr = PaddingOptionAttr::get(builder.getContext(), padding);
+  return build(builder, state, descTy, base, shape, strides, paddingAttr);
 }
 
 // The following ops, including `call`, `func`, and `return` are copied and
@@ -1288,7 +1288,7 @@ LogicalResult GatherOp::verify() {
   if (getAxis() >= srcTy.getRank()) {
     return emitOpError("gather dimension must be less than the input rank");
   }
-  for (int dim = 0; dim < indicesTy.getRank(); ++dim) {
+  for (uint32_t dim = 0; dim < indicesTy.getRank(); ++dim) {
     if (dim == getAxis())
       continue;
     if (indicesTy.getShape()[dim] != srcTy.getShape()[dim]) {

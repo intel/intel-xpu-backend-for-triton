@@ -70,7 +70,7 @@ tt.func public @too_few_offsets(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>) {
 tt.func public @result_rank_too_large(%arg0: !ttg.memdesc<3x8x16xf32, #shared, #smem>) {
     %zero = arith.constant 0 : i32
     // expected-error @+1 {{result rank}}
-    %a = ttg.memdesc_index %arg0, %zero : !ttg.memdesc<3x8x16xf32, #shared, #smem> -> !ttg.memdesc<3x8x16xf32, #shared, #smem>
+    %a = ttg.memdesc_index %arg0[%zero] : !ttg.memdesc<3x8x16xf32, #shared, #smem> -> !ttg.memdesc<3x8x16xf32, #shared, #smem>
     tt.return
 }
 // -----
@@ -80,7 +80,7 @@ tt.func public @result_rank_too_large(%arg0: !ttg.memdesc<3x8x16xf32, #shared, #
 tt.func public @result_1d_to_1d(%arg0: !ttg.memdesc<8xf32, #shared, #smem>) {
     %zero = arith.constant 0 : i32
     // expected-error @+1 {{result rank}}
-    %a = ttg.memdesc_index %arg0, %zero : !ttg.memdesc<8xf32, #shared, #smem> -> !ttg.memdesc<2xf32, #shared, #smem>
+    %a = ttg.memdesc_index %arg0[%zero] : !ttg.memdesc<8xf32, #shared, #smem> -> !ttg.memdesc<2xf32, #shared, #smem>
     tt.return
 }
 
@@ -113,7 +113,7 @@ tt.func public @subview_along_swizzling(%arg0: !ttg.memdesc<8x16xf32, #shared, #
 tt.func public @result_dim_too_large(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>) {
     %zero = arith.constant 0 : i32
     // expected-error @+1 {{result shape}}
-    %a = ttg.memdesc_index %arg0, %zero : !ttg.memdesc<8x16xf32, #shared, #smem> -> !ttg.memdesc<32xf32, #shared, #smem>
+    %a = ttg.memdesc_index %arg0[%zero] : !ttg.memdesc<8x16xf32, #shared, #smem> -> !ttg.memdesc<32xf32, #shared, #smem>
     tt.return
 }
 
@@ -436,3 +436,33 @@ tt.func @async_copy_invalid_other_type(%input: tensor<64x64x!tt.ptr<f16>, #block
 
 // expected-error @below {{rank 0 memdesc is not allowed}}
 !memdesc = !ttg.memdesc<i64, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>
+
+// -----
+
+#shared = #ttg.padded_shared<[4:+4] {offset=[[1, 0], [2, 0], [0, 1], [0, 2]], block=[]}>
+// expected-error @below {{padding rank must be equal to or one less than the shape size}}
+!rank_too_high = !ttg.memdesc<4x4x4x4xf32, #shared, #ttg.shared_memory>
+
+// -----
+
+#shared = #ttg.padded_shared<[4:+4] {offset=[[1, 0], [2, 0], [0, 1], [0, 2]], block=[]}>
+// expected-error @below {{padding rank must be equal to or one less than the shape size}}
+!rank_too_small = !ttg.memdesc<4xf32, #shared, #ttg.shared_memory>
+
+// -----
+
+#shared = #ttg.padded_shared<[4:+4] {offset=[[1, 0], [2, 0], [0, 1], [0, 2]], block=[]}>
+// expected-error @below {{Subslices with padded encodings are not yet implemented}}
+!unsupported_subslice = !ttg.memdesc<2x2xf32, #shared, #ttg.shared_memory, 4x4>
+
+// -----
+
+#shared = #ttg.padded_shared<[4:+4] {offset=[[1, 0], [2, 0], [0, 1], [0, 2]], block=[]}>
+// expected-error @below {{Mismatch in expected shape for dimension 0. Expected: 4, got: 2}}
+!out_dim_too_small = !ttg.memdesc<2x2xf32, #shared, #ttg.shared_memory>
+
+// -----
+
+#shared = #ttg.padded_shared<[4:+4] {offset=[[1, 0], [2, 0], [0, 1], [0, 2]], block=[]}>
+// expected-error @below {{Mismatch in expected shape for dimension 0. Expected: 4, got: 8}}
+!out_dim_too_large = !ttg.memdesc<8x8xf32, #shared, #ttg.shared_memory>
