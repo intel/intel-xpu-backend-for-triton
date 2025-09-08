@@ -15,7 +15,6 @@ def dtype_str_to_torch(dtype_str: str) -> torch.dtype:
     return torch.uint8 if dtype_str == "float4_e2m1" else getattr(torch, dtype_str)
 
 
-
 @pytest.mark.parametrize("dst_dtype", ["float16", "bfloat16", "float32"])
 def test_mxfp4_rounding_cases(dst_dtype, device):
     dst_dtype = dtype_str_to_torch(dst_dtype)
