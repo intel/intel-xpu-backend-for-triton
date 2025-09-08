@@ -120,16 +120,16 @@ bool isExpensiveLoadOrStore(Operation *op) {
   if (isSingleValue(base))
     return false;
 
-  // Loads that use a block pointer are expensive if they cannot be lowered to
-  // 2D block read operations. Temporarily leverage the
+  // Loads or stores that use a block pointer are expensive if they cannot be
+  // lowered to 2D block read/write operations. Temporarily leverage the
   // "ttig.block_io" attribute to filter out inexpensive loads.
   Attribute blockIOAttr =
       op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
   if (blockIOAttr)
     return false;
 
-  // Loads that use more threads than elements can be presumed to have a high
-  // hit-rate that makes them cheap to load.
+  // Loads or stores that use more threads than elements can be presumed to have
+  // a high hit-rate that makes them cheap.
   if (auto ptrType = getRankedTensorType(base.getType())) {
     int numWarps = ttg::lookupNumWarps(op);
     auto mod = op->getParentOfType<ModuleOp>();
@@ -197,6 +197,11 @@ LogicalResult getConvertBackwardSlice(
 
   auto updateLayout = [&](Value value, Attribute encoding) {
     assert(isTensorOrTensorPointerType(value.getType()));
+
+    RankedTensorType tensorType = getRankedTensorType(value.getType());
+    if (tensorType.getEncoding() == encoding)
+      return success();
+
     slice.insert(value);
     Attribute &existing = layout[value];
     if (existing && existing != encoding)
