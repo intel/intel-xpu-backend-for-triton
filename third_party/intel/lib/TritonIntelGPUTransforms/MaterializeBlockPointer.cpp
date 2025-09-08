@@ -215,9 +215,9 @@ private:
     };
 
     const bool isRowMajor = isMajor(tensorTy, 1 /*fastChangeDim*/, *axisInfo);
-    if (isRowMajor)
-      op->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
-                  StringAttr::get(op.getContext(), "row_major"));
+    op->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
+                StringAttr::get(op.getContext(),
+                                isRowMajor ? "row_major" : "column_major"));
   }
 
   // Return the load layout if it is a dot layout. If it is not, check if the
