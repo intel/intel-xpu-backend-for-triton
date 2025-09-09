@@ -23,12 +23,6 @@ def is_cuda():
 
 
 @constexpr_function
-def is_xpu():
-    target = current_target()
-    return target is not None and target.backend == "xpu"
-
-
-@constexpr_function
 def cuda_capability_geq(major, minor=0):
     """
     Determines whether we have compute capability >= (major, minor) and

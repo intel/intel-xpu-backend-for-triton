@@ -588,7 +588,7 @@ def matmul_ogs_torch(x, w, bias,
         else:
             idx = gather_indx.src_indx[lo:hi] // n_expts_act
         batch = i if is_input_batched else 0
-        out = torch.matmul(round_x(x[batch, idx, :], torch.arange(lo, hi, device="xpu")).float(),
+        out = torch.matmul(round_x(x[batch, idx, :], torch.arange(lo, hi, device=device)).float(),
                            w[i].float())
         if bias is not None:
             out += bias[i, :] if betas is None else bias[i, :] * betas[lo:hi, None]

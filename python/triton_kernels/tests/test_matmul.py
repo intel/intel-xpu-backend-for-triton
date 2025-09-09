@@ -296,9 +296,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
 
     elif is_xpu():
         if split_k > 1:
-            pytest.skip("splitK hasn't been fully tested on INTEL GPU.")
-        if "float8_e4m3fn" in act_dtype_str and "float8_e4m3fn" in weight_dtype_str:
-            pytest.skip("FIXME")
+            pytest.skip("FIXME: https://github.com/intel/intel-xpu-backend-for-triton/issues/5074")
 
     if "float8_e4m3fnuz" in (weight_dtype_str, act_dtype_str) and not is_hip_cdna3():
         pytest.skip("float8_e4m3fnuz only tested on AMD CDNA3 Platform")

@@ -6,7 +6,6 @@ from triton.language.target_info import (
     cuda_capability_geq,
     is_cuda,
     is_hip,
-    is_xpu,
     is_hip_cdna3,
     is_hip_cdna4,
     is_xpu,
