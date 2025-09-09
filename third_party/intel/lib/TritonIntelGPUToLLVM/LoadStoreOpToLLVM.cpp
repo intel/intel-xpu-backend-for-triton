@@ -667,7 +667,7 @@ struct PrefetchOpConversion
     Value ptr = op.getPtr();
     auto ptrType = cast<PointerType>(ptr.getType());
     auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
-    Type eltTy = tensorType.getElementType();
+    Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
     const ArrayRef<int64_t> shapeRef = tensorType.getShape();
     SmallVector<int64_t> tensorShape{shapeRef.begin(), shapeRef.end()};
 
@@ -882,7 +882,7 @@ struct PrefetchOpConversion
         mlir::ceil<int64_t>(shardTensorShape[0], prefetchShape[0]),
         mlir::ceil<int64_t>(shardTensorShape[1], prefetchShape[1])};
 
-    Type eltTy = tensorType.getElementType();
+    Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
     unsigned tileWidthInElem = prefetchShape[1];
     unsigned tileHeightInElem = prefetchShape[0];
@@ -1061,7 +1061,7 @@ struct LoadOpToBlockIOConversion
            "Only row_major or column_major is allowed");
     const bool isTransposeRequired = valueRowMajor ^ memoryRowMajor;
 
-    Type eltTy = tensorType.getElementType();
+    Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
 
     auto tileParams = Subgroup2DBlockEncodingAttr::getInstrShapeForLayout(
@@ -1893,7 +1893,7 @@ struct LoadOpToBlockIOConversion
 
     // Step 2: Right now we only support DPAS related layout to simplify the
     // lowering.
-    Type eltTy = tensorType.getElementType();
+    Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
     DpasEncodingAttr dpasLayout = getDpasLayout(tensorType);
     const ArrayRef<int64_t> tensorShape = tensorType.getShape();
