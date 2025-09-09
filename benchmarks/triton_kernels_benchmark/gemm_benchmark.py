@@ -359,7 +359,7 @@ def get_benchmark(
         if provider == 'onednn':
             _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
                 lambda: torch.matmul(torch_a, torch_b),
-                n_warmup=10,
+                n_warmup=600,
                 n_repeat=10,
                 quantiles=quantiles,
             )
@@ -387,7 +387,7 @@ def get_benchmark(
             benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
             _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
                 triton_fn,
-                n_warmup=10,
+                n_warmup=800,
                 n_repeat=10,
                 quantiles=quantiles,
             )
@@ -452,7 +452,7 @@ def get_benchmark(
             benchmark_suite.assert_close(cutlass_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='cutlass to torch')
             _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
                 cutlass_fn,
-                n_warmup=10,
+                n_warmup=600,
                 n_repeat=10,
                 quantiles=quantiles,
             )

@@ -276,7 +276,7 @@ def benchmark(M, N, K, provider):
         triton_fn = lambda: matmul(a, b, c)
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
         benchmark_suit.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=1e-2, err_msg='triton to torch')
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10,
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, n_warmup=650, n_repeat=10,
                                                                  quantiles=quantiles)
     elif provider == 'xetla':
         c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
@@ -289,7 +289,8 @@ def benchmark(M, N, K, provider):
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
 
         # benchmark_suit.assert_close(xetla_fn, torch_fn, atol=1e-4, rtol=1.0, err_msg='xetla to torch')
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(xetla_fn, n_warmup=10, n_repeat=10,
+        # There's no real benefit in longer warmup on B580
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(xetla_fn, n_warmup=100, n_repeat=10,
                                                                  quantiles=quantiles)
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
