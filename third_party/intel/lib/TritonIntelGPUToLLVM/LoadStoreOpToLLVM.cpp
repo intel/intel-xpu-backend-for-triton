@@ -1877,6 +1877,33 @@ struct LoadOpToBlockIOConversion
             tensorType.getShape());
     assert(llEncoding.has_value() &&
            "unexpected failure when getting linear layout");
+
+    constexpr unsigned MAX_TILE_HEIGHT = 32;
+    BlockIOTileSizeInfo sizeInfo =
+        getBlockIOTileSize<MAX_TILE_HEIGHT>(llEncoding.value());
+    if (!sizeInfo.isValid())
+      return failure();
+    auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
+          regPackedBases] = sizeInfo;
+
+    Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
+    unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
+    unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
+    if (!check2DBlockAddressPayloadRestriction(packedElemSizeInBits, tileWidth))
+      return failure();
+
+    // 2D block load supports 64 bytes per row at most.
+    constexpr int MAX_WIDTH = 64;
+    unsigned totalBytesPerRowPerMatrix = tileWidth * packedElemSizeInBits / 8;
+    if (totalBytesPerRowPerMatrix > MAX_WIDTH)
+      return failure();
+
+    // Load multiple dot operands by enlarging the vBlocks.
+    vBlocks = std::min(vBlocks,
+                       static_cast<int>(MAX_WIDTH / totalBytesPerRowPerMatrix));
+    // vBlocks has HW limitation of 4.
+    vBlocks = std::min(vBlocks, 4);
+
     auto llAttr = LinearEncodingAttr::get(rewriter.getContext(), *llEncoding);
     SmallVector<unsigned> threadOrder(llAttr.getThreadOrder());
     size_t rank = threadOrder.size();
@@ -1893,8 +1920,6 @@ struct LoadOpToBlockIOConversion
 
     // Step 2: Right now we only support DPAS related layout to simplify the
     // lowering.
-    Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
-    unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
     DpasEncodingAttr dpasLayout = getDpasLayout(tensorType);
     const ArrayRef<int64_t> tensorShape = tensorType.getShape();
     unsigned numElems = getTotalElemsPerThread(resultType);
@@ -2022,9 +2047,9 @@ struct LoadOpToBlockIOConversion
         std::min<unsigned>(warpsPerCTA[dimInner], innerDimRequiredWarpNum);
 
     // Step 3: Get the tile size of load.
-    unsigned tileWidth = dpasInstShape[threadOrder[rank - 2]];
-    unsigned tileHeight = dpasInstShape[threadOrder[rank - 1]];
-    unsigned vBlocks = 1;
+    tileWidth = dpasInstShape[threadOrder[rank - 2]];
+    tileHeight = dpasInstShape[threadOrder[rank - 1]];
+    vBlocks = 1;
     unsigned numOperandsOuterDimPerLoad = 1;
     unsigned numOperandsInnerDimPerLoad = 1;
     unsigned maskConstancyHor = 1, maskConstancyVer = 1;
@@ -2151,11 +2176,12 @@ struct LoadOpToBlockIOConversion
 
     // PVC 2D load supports 32 rows at most. Load multiple dot operands in by
     // enlarging the tileHeight.
-    numOperandsPer2DLoadM = std::min(numOperandsPer2DLoadM, 32 / tileHeight);
+    numOperandsPer2DLoadM =
+        std::min(numOperandsPer2DLoadM,
+                 static_cast<unsigned>(MAX_TILE_HEIGHT / tileHeight));
 
     // PVC 2D load supports 64 bytes per row at most. Load multiple dot operands
     // by enlarging the vBlocks.
-    constexpr int MAX_WIDTH = 64;
     unsigned totalBytesPerRowPerDPASOp = tileWidth * elemSizeInBits / 8;
     if (totalBytesPerRowPerDPASOp > MAX_WIDTH)
       return failure();
@@ -2215,9 +2241,6 @@ struct LoadOpToBlockIOConversion
 
     Value pitch = getPitch(rewriter, ptr, elemSizeInBits);
     if (!pitch)
-      return failure();
-
-    if (!check2DBlockAddressPayloadRestriction(elemSizeInBits, tileWidth))
       return failure();
 
     // If the stride is 0, we want to load only the first row.
