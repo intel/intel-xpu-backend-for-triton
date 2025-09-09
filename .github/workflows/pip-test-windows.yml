@@ -131,6 +131,13 @@ jobs:
           cd ${{ env.NEW_WORKSPACE }}
           ${{ env.TRITON_TEST_CMD }} --interpreter
 
+      - name: Run triton kernels tests
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cd ${{ env.NEW_WORKSPACE }}
+          ${{ env.TRITON_TEST_CMD }} --triton-kernels
+
       - name: Run tutorials
         run: |
           .venv\Scripts\activate.ps1

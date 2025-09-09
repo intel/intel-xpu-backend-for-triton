@@ -6,13 +6,14 @@ HELP="\
 Example usage: ./test-triton.sh [TEST]... [OPTION]...
 
 TEST:
-    --unit          default
-    --core          default
-    --tutorial      default
-    --microbench    default
-    --minicore      part of core
-    --mxfp          part of core
-    --scaled-dot    part of core
+    --unit            default
+    --core            default
+    --tutorial        default
+    --microbench      default
+    --triton-kernels  default
+    --minicore        part of core
+    --mxfp            part of core
+    --scaled-dot      part of core
     --interpreter
     --benchmarks
     --softmax
@@ -25,7 +26,6 @@ TEST:
     --instrumentation
     --inductor
     --sglang
-    --triton-kernels
 
 OPTION:
     --unskip
