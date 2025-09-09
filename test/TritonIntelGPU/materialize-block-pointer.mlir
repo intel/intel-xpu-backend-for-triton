@@ -183,7 +183,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
     // CHECK: tt.load {{.*}} {ttig.block_io = "row_major"}
     tt.load %4 : tensor<256x32x!tt.ptr<bf16>, #blocked>
 
-    %6 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<156xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %6 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
     %7 = tt.expand_dims %6 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<256x1xi32, #blocked>
     %8 = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<256x1x!tt.ptr<bf16>, #blocked>
     %9 = tt.addptr %8, %7 : tensor<256x1x!tt.ptr<bf16>, #blocked>, tensor<256x1xi32, #blocked>

@@ -692,11 +692,11 @@ LinearLayout mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
   int mIndex = 0 + hasBatchDim;
 
   int32_t kWidth = dotMfmaLayout.getKWidth();
-  auto kDimIndex = dotMfmaLayout.getOpIdx() == 0 ? rank - 1 : rank - 2;
+  auto nonKDimIndex = dotMfmaLayout.getOpIdx() == 0 ? rank - 2 : rank - 1;
 
   auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
   auto tilesPerWarp = mfmaLayout.getTilesPerWarp();
-  auto tilePerWarpNonK = tilesPerWarp[kDimIndex];
+  auto tilePerWarpNonK = tilesPerWarp[nonKDimIndex];
 
   auto mDim = mfmaLayout.getMDim();
   auto nDim = mfmaLayout.getNDim();
@@ -704,6 +704,7 @@ LinearLayout mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
   auto nonKDim = opIdx == 0 ? mDim : nDim;
   constexpr int warpSize = 64;
 
+  auto kDimIndex = dotMfmaLayout.getOpIdx() == 0 ? rank - 1 : rank - 2;
   int32_t kSize = shape[kDimIndex];
 
   MLIRContext *ctx = dotMfmaLayout.getContext();
