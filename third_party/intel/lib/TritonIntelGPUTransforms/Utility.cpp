@@ -198,9 +198,9 @@ LogicalResult getConvertBackwardSlice(
   auto updateLayout = [&](Value value, Attribute encoding) {
     assert(isTensorOrTensorPointerType(value.getType()));
 
-    RankedTensorType tensorType = getRankedTensorType(value.getType());
-    if (tensorType.getEncoding() == encoding)
-      return success();
+    if (RankedTensorType tensorType = getRankedTensorType(value.getType()))
+      if (tensorType.getEncoding() == encoding)
+        return success();
 
     slice.insert(value);
     Attribute &existing = layout[value];
