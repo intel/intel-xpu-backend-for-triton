@@ -1887,7 +1887,7 @@ struct LoadOpToBlockIOConversion
 
     // Step 2: Right now we only support DPAS related layout to simplify the
     // lowering.
-    Type eltTy = tensorType.getElementType();
+    Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
     DpasEncodingAttr dpasLayout = getDpasLayout(tensorType);
     const ArrayRef<int64_t> tensorShape = tensorType.getShape();
