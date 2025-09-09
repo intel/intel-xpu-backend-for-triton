@@ -6,13 +6,14 @@ HELP="\
 Example usage: ./test-triton.sh [TEST]... [OPTION]...
 
 TEST:
-    --unit          default
-    --core          default
-    --tutorial      default
-    --microbench    default
-    --minicore      part of core
-    --mxfp          part of core
-    --scaled-dot    part of core
+    --unit            default
+    --core            default
+    --tutorial        default
+    --microbench      default
+    --triton-kernels  default
+    --minicore        part of core
+    --mxfp            part of core
+    --scaled-dot      part of core
     --interpreter
     --benchmarks
     --softmax
@@ -64,6 +65,7 @@ TEST_BENCHMARK_FLEX_ATTENTION=false
 TEST_INSTRUMENTATION=false
 TEST_INDUCTOR=false
 TEST_SGLANG=false
+TEST_TRITON_KERNELS=false
 VENV=false
 TRITON_TEST_REPORTS=false
 TRITON_TEST_WARNING_REPORTS=false
@@ -179,6 +181,11 @@ while (( $# != 0 )); do
       TEST_DEFAULT=false
       shift
       ;;
+    --triton-kernels)
+      TEST_TRITON_KERNELS=true
+      TEST_DEFAULT=false
+      shift
+      ;;
     --venv)
       VENV=true
       shift
@@ -234,6 +241,7 @@ if [ "$TEST_DEFAULT" = true ]; then
   TEST_CORE=true
   TEST_TUTORIAL=true
   TEST_MICRO_BENCHMARKS=true
+  TEST_TRITON_KERNELS=true
 fi
 
 if [ "$VENV" = true ]; then
@@ -562,6 +570,16 @@ run_sglang_tests() {
   run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-4} test/srt/test_triton_attention_kernels.py
 }
 
+run_triton_kernels_tests() {
+  echo "***************************************************"
+  echo "******    Running Triton Kernels tests      ******"
+  echo "***************************************************"
+  cd $TRITON_PROJ/python/triton_kernels/tests
+
+  TRITON_TEST_SUITE=triton_kernels \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu .
+}
+
 test_triton() {
   if [ "$TEST_UNIT" = true ]; then
     run_unit_tests
@@ -614,6 +632,9 @@ test_triton() {
   fi
   if [ "$TEST_SGLANG" == true ]; then
     run_sglang_tests
+  fi
+  if [ "$TEST_TRITON_KERNELS" == true ]; then
+    run_triton_kernels_tests
   fi
 }
 
