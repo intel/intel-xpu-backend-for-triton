@@ -3,11 +3,10 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "intel/include/Utils/Utility.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/Visitors.h"
-#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 #include <optional>
 
@@ -36,18 +35,6 @@ public:
       TritonIntelGPUMaterializeBlockPointerPass>::
       TritonIntelGPUMaterializeBlockPointerBase;
 
-  static Value getPointerFromOp(Operation *op) {
-    return TypeSwitch<Operation *, Value>(op)
-        .Case<tt::LoadOp, tt::StoreOp>([](auto op) { return op.getPtr(); })
-        .Default([&](auto) {
-          llvm_unreachable(
-              +("Invalid operation: " + op->getName().getStringRef())
-                   .str()
-                   .c_str());
-          return Value{};
-        });
-  }
-
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     if (!mod->hasAttr(
@@ -55,103 +42,114 @@ public:
       return;
 
     tt::intel::ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
-
     MLIRContext *context = &getContext();
-    mod.walk([&](Operation *op) {
-      if (!isa<tt::LoadOp, tt::StoreOp>(op)) {
-        return;
-      }
-      LDBG("Considering op: " << *op);
-
-      Value ptr = getPointerFromOp(op);
-      if (!tt::isTensorPointerType(ptr.getType()))
-        return MaterializeTensorOfPointers(op, axisInfoAnalysis);
-
-      // Find the make tensor ptr operation that created the base ptr.
-      std::optional<tt::MakeTensorPtrOp> defOp =
-          tt::intel::findDefiningMakeTensorPtrOp(ptr);
-      if (!defOp) {
-        LDBG("Could not find make tensor ptr op for: " << *op);
-        return;
-      }
-
-      tt::MakeTensorPtrOp makeTensorPtrOp = *defOp;
-      LDBG("Make tensor ptr op: " << makeTensorPtrOp);
-
-      Operation::operand_range shape = makeTensorPtrOp.getShape();
-      unsigned rank = shape.size();
-      LDBG("Rank: " << rank);
-      if (rank == 1)
-        return;
-
-      if (!satisfies2DBlockReadAlignment(op, axisInfoAnalysis)) {
-        LDBG("Alignment checks failed for: " << *op);
-        return;
-      }
-
-      auto ptrType = cast<tt::PointerType>(makeTensorPtrOp.getType());
-      auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
-      unsigned elementWidth = tensorType.getElementTypeBitWidth();
-      LDBG("elementWidth: " << elementWidth);
-
-      Operation::operand_range strides = makeTensorPtrOp.getStrides();
-      std::optional<unsigned> strideOneDim = getStrideOneDim(makeTensorPtrOp);
-      assert((strideOneDim && strideOneDim.value() < strides.size()) &&
-             "Expected strideOneDim to be set and less than strides.size()");
-      unsigned strideOneDimVal = strideOneDim.value();
-
-      if (strideOneDimVal == rank - 2 && elementWidth == 8) {
-        // TODO: column major layout w/ fp8 has performance regression
-        return;
-      }
-
-      if (strideOneDimVal >= (rank - 2)) {
-        // HW 2D block read instruction only supports contiguous access.
-        Value fastChangeStride = strides[strideOneDimVal];
-        if (!tt::intel::isConstant(fastChangeStride, 1))
-          return;
-
-        // Across Intel platforms, the strictest pitch restriction is to be a
-        // multiple of OWord(128 bits).
-        Value pitch =
-            strides[(strideOneDimVal == rank - 1) ? rank - 2 : rank - 1];
-        LDBG("Pitch: " << pitch);
-        if (!ttgi::isDivisible(pitch, llvm::divideCeil(128, elementWidth)))
-          return;
-
-        const bool isRowMajor = (strideOneDimVal == rank - 1);
-        std::optional<ttg::DotOperandEncodingAttr> dotLayout = getDotLayout(op);
-        if (dotLayout) {
-          // Check if the load is being used by a tt.dot operation, and if so is
-          // this the first operand and is it a transposed row major matrix. If
-          // so, skip the block ptr attribute as performance is worse than if we
-          // remove the tensor pointer.
-          LDBG("dotLayout: " << *dotLayout);
-          auto opIdx =
-              static_cast<ttgi::DpasEncodingAttr::OpIdx>(dotLayout->getOpIdx());
-          auto dotOrder = tt::gpu::getThreadOrder(tensorType);
-          const bool valueRowMajor = (dotOrder[0] == 1 && dotOrder[1] == 0);
-          if (opIdx == ttgi::DpasEncodingAttr::OpIdx::OperandA &&
-              valueRowMajor ^ isRowMajor) {
-            LDBG("Skipping block pointer attribute for transposed A matrix in "
-                 "dot operation");
-            return;
-          }
-        }
-
-        op->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
-                    StringAttr::get(context,
-                                    isRowMajor ? "row_major" : "column_major"));
-      }
-    });
+    mod.walk(
+        [&](tt::LoadOp op) { return visit(op, axisInfoAnalysis, context); });
+    mod.walk(
+        [&](tt::StoreOp op) { return visit(op, axisInfoAnalysis, context); });
   }
 
 private:
+  template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
+                                 OpType, tt::LoadOp, tt::StoreOp>::value>>
+  void visit(OpType op, tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+             MLIRContext *context) const {
+    LDBG("Considering op: " << *op);
+
+    Value ptr = op.getPtr();
+    if (!tt::isTensorPointerType(ptr.getType()))
+      return MaterializeTensorOfPointers(op, axisInfoAnalysis);
+
+    // Find the make tensor ptr operation that created the base ptr.
+    std::optional<tt::MakeTensorPtrOp> defOp =
+        tt::intel::findDefiningMakeTensorPtrOp(ptr);
+    if (!defOp) {
+      LDBG("Could not find make tensor ptr op for: " << *op);
+      return;
+    }
+
+    tt::MakeTensorPtrOp makeTensorPtrOp = *defOp;
+    LDBG("Make tensor ptr op: " << makeTensorPtrOp);
+
+    Operation::operand_range shape = makeTensorPtrOp.getShape();
+    unsigned rank = shape.size();
+    LDBG("Rank: " << rank);
+    if (rank == 1)
+      return;
+
+    if (!satisfies2DBlockReadAlignment(op, axisInfoAnalysis)) {
+      LDBG("Alignment checks failed for: " << *op);
+      return;
+    }
+
+    auto ptrType = cast<tt::PointerType>(makeTensorPtrOp.getType());
+    auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
+    unsigned elementWidth = tensorType.getElementTypeBitWidth();
+    LDBG("elementWidth: " << elementWidth);
+
+    Operation::operand_range strides = makeTensorPtrOp.getStrides();
+    std::optional<unsigned> strideOneDim = getStrideOneDim(makeTensorPtrOp);
+    assert((strideOneDim && strideOneDim.value() < strides.size()) &&
+           "Expected strideOneDim to be set and less than strides.size()");
+    unsigned strideOneDimVal = strideOneDim.value();
+
+    if (strideOneDimVal == rank - 2 && elementWidth == 8) {
+      // TODO: column major layout w/ fp8 has performance regression
+      return;
+    }
+
+    if (strideOneDimVal >= (rank - 2)) {
+      // HW 2D block read instruction only supports contiguous access.
+      Value fastChangeStride = strides[strideOneDimVal];
+      if (!tt::intel::isConstant(fastChangeStride, 1))
+        return;
+
+      // Across Intel platforms, the strictest pitch restriction is to be a
+      // multiple of OWord(128 bits).
+      Value pitch =
+          strides[(strideOneDimVal == rank - 1) ? rank - 2 : rank - 1];
+      LDBG("Pitch: " << pitch);
+      if (!ttgi::isDivisible(pitch, llvm::divideCeil(128, elementWidth)))
+        return;
+
+      const bool isRowMajor = (strideOneDimVal == rank - 1);
+      std::optional<ttg::DotOperandEncodingAttr> dotLayout = getDotLayout(op);
+      if (dotLayout) {
+        // Check if the load is being used by a tt.dot operation, and if so is
+        // this the first operand and is it a transposed row major matrix. If
+        // so, skip the block ptr attribute as performance is worse than if we
+        // remove the tensor pointer.
+        LDBG("dotLayout: " << *dotLayout);
+        auto opIdx =
+            static_cast<ttgi::DpasEncodingAttr::OpIdx>(dotLayout->getOpIdx());
+        auto dotOrder = tt::gpu::getThreadOrder(tensorType);
+        const bool valueRowMajor = (dotOrder[0] == 1 && dotOrder[1] == 0);
+        if (opIdx == ttgi::DpasEncodingAttr::OpIdx::OperandA &&
+            valueRowMajor ^ isRowMajor) {
+          LDBG("Skipping block pointer attribute for transposed A matrix in "
+               "dot operation");
+          return;
+        }
+      }
+
+      op->setAttr(
+          ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
+          StringAttr::get(context, isRowMajor ? "row_major" : "column_major"));
+    }
+  }
+
+  template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
+                                 OpType, tt::LoadOp, tt::StoreOp>::value>>
   void MaterializeTensorOfPointers(
-      Operation *op,
-      tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) const {
-    MLIRContext *context = op->getContext();
-    Value ptr = getPointerFromOp(op);
+      OpType op, tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) const {
+    if constexpr (std::is_same_v<OpType, tt::LoadOp>) {
+      if (op.getMask()) {
+        LDBG("Load op has mask, skip block IO attribute");
+        return;
+      }
+    }
+
+    Value ptr = op.getPtr();
     assert(!tt::isTensorPointerType(ptr.getType()) &&
            "Expected pointer refer to a tensor.");
 
@@ -159,14 +157,7 @@ private:
     if (!tensorTy)
       return;
 
-    LDBG("Considering tensor of pointer of memory accessing op: " << *op);
-
-    if (auto loadOp = dyn_cast<tt::LoadOp>(*op)) {
-      if (loadOp.getMask()) {
-        LDBG("Load op has mask, skip block IO attribute");
-        return;
-      }
-    }
+    LDBG("Considering tensor of pointer of memory accessing op: " << op);
 
     // The axis info gives the information about the value of the indices
     // tensor. For example, if the indices tensor is tensor<8x16xi32> and
@@ -187,21 +178,22 @@ private:
     }
 
     // Determine if LoadOp is row-major or column-major.
-    auto isMajor = [&](unsigned fastChangeDim) {
+    auto isMajor = [](RankedTensorType tensorTy, unsigned fastChangeDim,
+                      const tt::AxisInfo &axisInfo) {
       assert((fastChangeDim == 0 || fastChangeDim == 1) &&
              "fastChangeDim is expected to be 0 or 1");
       const unsigned otherDim = !fastChangeDim;
       // Limit to full row being contiguous.
-      if (axisInfo->getContiguity(fastChangeDim) !=
+      if (axisInfo.getContiguity(fastChangeDim) !=
           tensorTy.getDimSize(fastChangeDim)) {
         LDBG("Found non-contiguous row: "
-             << axisInfo->getContiguity(fastChangeDim));
+             << axisInfo.getContiguity(fastChangeDim));
         return false;
       }
 
       // Value -1 is used to represent the unknown stride.
-      if (axisInfo->getStride(otherDim) < 0) {
-        LDBG("Found unknown stride: " << axisInfo->getStride(otherDim));
+      if (axisInfo.getStride(otherDim) < 0) {
+        LDBG("Found unknown stride: " << axisInfo.getStride(otherDim));
         return false;
       }
 
@@ -209,38 +201,35 @@ private:
       Type elemTy =
           cast<tt::PointerType>(tensorTy.getElementType()).getPointeeType();
       unsigned elemSizeInBytes = elemTy.getIntOrFloatBitWidth() / 8;
-      if ((axisInfo->getStride(otherDim) * elemSizeInBytes) % 16 != 0) {
+      if ((axisInfo.getStride(otherDim) * elemSizeInBytes) % 16 != 0) {
         LDBG("Found Non 16 bytes aligned stride: "
-             << axisInfo->getStride(otherDim));
+             << axisInfo.getStride(otherDim));
         return false;
       }
 
       // Base pointer can be compensate by the offset and base width, where they
       // each has restriction that it has to be 4 bytes aligned.
-      if (axisInfo->getDivisibility(fastChangeDim) % 4 != 0) {
-        LDBG(
-            "Found Non 4 bytes aligned base: " << axisInfo->getDivisibility(1));
+      if (axisInfo.getDivisibility(fastChangeDim) % 4 != 0) {
+        LDBG("Found Non 4 bytes aligned base: " << axisInfo.getDivisibility(1));
         return false;
       }
 
       return true;
     };
 
-    // Check if loadOp is row major, i.e., fast changing dimension is one.
-    if (isMajor(1 /*fastChangeDim*/)) {
-      LDBG("Setting row_major attribute\n");
+    const bool isRowMajor = isMajor(tensorTy, 1 /*fastChangeDim*/, *axisInfo);
+    if (isRowMajor)
       op->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
-                  StringAttr::get(context, "row_major"));
-    }
-
-    // TODO: set column_major attribute
+                  StringAttr::get(op.getContext(), "row_major"));
   }
 
   // Return the load layout if it is a dot layout. If it is not, check if the
   // load result is converted to a dot layout. If so, return the dot layout,
   // otherwise return nullopt.
-  std::optional<ttg::DotOperandEncodingAttr> getDotLayout(Operation *op) const {
-    Value ptr = getPointerFromOp(op);
+  template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
+                                 OpType, tt::LoadOp, tt::StoreOp>::value>>
+  std::optional<ttg::DotOperandEncodingAttr> getDotLayout(OpType op) const {
+    Value ptr = op.getPtr();
     if (!tt::isTensorPointerType(ptr.getType()))
       return std::nullopt;
 
@@ -294,10 +283,11 @@ private:
     return strideOneDim;
   }
 
+  template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
+                                 OpType, tt::LoadOp, tt::StoreOp>::value>>
   bool satisfies2DBlockReadAlignment(
-      Operation *op,
-      tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) const {
-    Value ptr = getPointerFromOp(op);
+      OpType op, tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) const {
+    Value ptr = op.getPtr();
     assert(tt::isTensorPointerType(ptr.getType()) &&
            "Expected a ptr to a tensor of ptrs.");
 
