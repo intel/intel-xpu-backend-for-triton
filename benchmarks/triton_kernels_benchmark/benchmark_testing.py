@@ -122,7 +122,7 @@ def do_bench_elapsed_time(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quan
     return _summarize_statistics(times, quantiles, return_mode)
 
 
-def do_bench_upstream_pytorch_profiler(fn, n_warmup=400, n_repeat=100, grad_to_none=None, quantiles=None,
+def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quantiles=None,
                                        return_mode="mean", device="xpu", sync_submitting=True):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
@@ -151,33 +151,20 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=400, n_repeat=100, grad_to_n
     cache_size = 256 * 1024 * 1024
     cache = torch.empty(int(cache_size // 4), dtype=torch.int, device=device)
 
-    # Estimate the runtime of the function
-    # start_event = torch.xpu.Event(enable_timing=True)
-    # end_event = torch.xpu.Event(enable_timing=True)
-    # start_event.record()
-    # for _ in range(5):
-    #     cache.zero_()
-    #     fn()
-    #     # To be consistent with the benchmark measurements
-    #     if sync_submitting:
-    #         synchronize()
-    # end_event.record()
-    # synchronize()
-    # estimate_ms = start_event.elapsed_time(end_event) / 5
-    # n_warmup = max(10, math.ceil(n_warmup / estimate_ms))
     # Hardcode for the experiment
-    n_warmup = 1000
-    time_budget_ms = 1000.0
+    MAX_WARMUP_ITERS = 1000
+    warmup_time_s = n_warmup / 1000
     assert sync_submitting
 
     # Warm-up
+    # Stop either on max iteration number or max time
     start = time.perf_counter()
-    for _ in range(n_warmup):
+    for _ in range(MAX_WARMUP_ITERS):
         fn()
         # To be consistent with the benchmark measurements
         if sync_submitting:
             synchronize()
-        if time.perf_counter() - start > (time_budget_ms / 1000):
+        if time.perf_counter() - start > warmup_time_s:
             break
 
     # Benchmark
