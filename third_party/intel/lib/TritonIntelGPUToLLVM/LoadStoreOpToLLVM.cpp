@@ -424,6 +424,11 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     int rowDim;
     int colDim;
     std::optional<SetVector<unsigned>> regPackedBases;
+
+    bool isValid() const {
+      return tileHeight >= 0 && tileWidth >= 0 && numElemPerPackedVal >= 0 &&
+             vBlocks >= 0 && rowDim >= 0 && colDim >= 0;
+    }
   };
 
   // Return the tileHeight, tileWidth, numElemPerPackedVal, vBlocks, row Dim and
@@ -1870,7 +1875,8 @@ struct LoadOpToBlockIOConversion
     std::optional<LinearLayout> llEncoding =
         cast<DistributedEncodingTrait>(encoding).toLinearLayout(
             tensorType.getShape());
-    assert(llEncoding.has_value() && "invalid dot layout to linear layout");
+    assert(llEncoding.has_value() &&
+           "unexpected failure when getting linear layout");
     auto llAttr = LinearEncodingAttr::get(rewriter.getContext(), *llEncoding);
     SmallVector<unsigned> threadOrder(llAttr.getThreadOrder());
     size_t rank = threadOrder.size();
@@ -2720,13 +2726,8 @@ struct StoreOpToBlockIOConversion
     if (!isBlockIOCandidate(op, enableBlockIOForAllLayout))
       return failure();
 
-    Location loc = op.getLoc();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    Type resultType = op.getValue().getType();
-    auto tensorType = cast<RankedTensorType>(resultType);
-    MLIRContext *ctx = rewriter.getContext();
-
     // Get the max tile shape supported by the layout.
+    auto tensorType = cast<RankedTensorType>(op.getValue().getType());
     Attribute encoding = tensorType.getEncoding();
     std::optional<LinearLayout> llEncoding =
         cast<DistributedEncodingTrait>(encoding).toLinearLayout(
@@ -2734,21 +2735,21 @@ struct StoreOpToBlockIOConversion
     assert(llEncoding.has_value() &&
            "unexpected failure when getting linear layout");
 
-    auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
-          regPackedBases] =
-        getBlockIOTileSize<8 /*MAX_TILE_HEIGHT*/>(*llEncoding);
-    // Limit vBlock to 1
-    vBlocks = 1;
-    // no valid tile shape for 2D block IO.
-    if (colDim < 0)
+    BlockIOTileSizeInfo sizeInfo =
+        getBlockIOTileSize<8 /*MAX_TILE_HEIGHT*/>(llEncoding.value());
+    if (!sizeInfo.isValid())
       return failure();
+    auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
+          regPackedBases] = sizeInfo;
 
     Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
     unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
-    unsigned numElems = getTotalElemsPerThread(tensorType);
     if (!check2DBlockAddressPayloadRestriction(packedElemSizeInBits, tileWidth))
       return failure();
+
+    // Limit vBlock to 1
+    vBlocks = 1;
 
     // TODO: use the axis info to general the handling for both regular pointer
     // and block pointer.
@@ -2759,6 +2760,9 @@ struct StoreOpToBlockIOConversion
       return failure();
     }
 
+    Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    MLIRContext *ctx = rewriter.getContext();
     Value warpId = rewriter.create<arith::IndexCastOp>(
         loc, i32_ty,
         rewriter.create<mlir::gpu::SubgroupIdOp>(loc,
@@ -2770,6 +2774,7 @@ struct StoreOpToBlockIOConversion
     Value baseWidth, baseHeight, pitch, offsetBaseX, offsetBaseY;
 
     Value ptr = op.getPtr();
+    unsigned numElems = getTotalElemsPerThread(tensorType);
     bool isBlockPointer = isTensorPointerType(ptr.getType());
     if (isBlockPointer) {
       auto [base, width, height, rowStride, colStride, offsetX, offsetY] =
@@ -2794,7 +2799,6 @@ struct StoreOpToBlockIOConversion
              "the number of pointer values is not matched with the number of "
              "elements");
 
-      unsigned maskConstancyHor = 1, maskConstancyVer = 1;
       Value llMask = adaptor.getMask();
       // Get the LLVM values for mask
       if (llMask) {
@@ -2806,23 +2810,22 @@ struct StoreOpToBlockIOConversion
         auto axisInfo = const_cast<triton::intel::ModuleAxisInfoAnalysis &>(
                             axisAnalysisPass)
                             .getAxisInfo(mask);
+        unsigned maskConstancyHor = 1, maskConstancyVer = 1;
         if (axisInfo) {
           maskConstancyHor = axisInfo->getConstancy(colDim);
           maskConstancyVer = axisInfo->getConstancy(rowDim);
-        } else {
-          maskConstancyHor = 1;
-          maskConstancyVer = 1;
+          // The mask constancy has to be power of 2 for block IO.
+          if (!llvm::isPowerOf2_64(maskConstancyHor) ||
+              !llvm::isPowerOf2_64(maskConstancyVer))
+            return failure();
         }
-      } else {
-        // no mask
-        maskConstancyHor = std::numeric_limits<unsigned>::max();
-        maskConstancyVer = std::numeric_limits<unsigned>::max();
-      }
 
-      // Check the constancy of the mask support to load the memory in 2D block.
-      if (!(maskConstancyHor >= (tileWidth * numPackedVals) &&
-            maskConstancyVer >= tileHeight))
-        return failure();
+        // Check the constancy of the mask support to load the memory in 2D
+        // block.
+        if (!(maskConstancyHor >= (tileWidth * numPackedVals) &&
+              maskConstancyVer >= tileHeight))
+          return failure();
+      }
 
       baseWidth = b.i32_val(
           std::max(64u, vBlocks * tileWidth * (packedElemSizeInBits / 8)));
