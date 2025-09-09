@@ -137,6 +137,8 @@ fa_kernel_mode = os.getenv('FA_KERNEL_MODE', 'fwd')
         args={},
     ))
 def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provider):
+    if MODE not in ('fwd', 'bwd'):
+        raise ValueError(f"Invalid MODE: {MODE}. Expected 'fwd' or 'bwd'.")
     dtype = torch.float16
     q = torch.randn((Z, H_q, N_CTX_q, D_HEAD_qk), device=DEVICE, dtype=dtype, requires_grad=MODE == 'bwd')
     k = torch.randn((Z, H_kv, N_CTX_kv, D_HEAD_qk), device=DEVICE, dtype=dtype, requires_grad=MODE == 'bwd')
