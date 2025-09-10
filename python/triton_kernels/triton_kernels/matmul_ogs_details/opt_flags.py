@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import triton
 from triton_kernels.target_info import get_cdna_version
 import torch
-from .opt_flags_details import opt_flags_amd, opt_flags_nvidia
+from .opt_flags_details import opt_flags_amd, opt_flags_nvidia, opt_flags_intel
 
 
 @dataclass
@@ -28,6 +28,84 @@ class OptFlags:
     def __post_init__(self):
         if self.fused_scatter and self.split_k != 1:
             raise ValueError("Not supported")
+
+
+def make_default_opt_flags_intel(
+    out_dtype,
+    lhs_dtype,
+    rhs_dtype,
+    precision_config,
+    m,
+    n,
+    k,
+    routing_data,
+    can_use_persistent_tma,
+    can_use_fused_scatter,
+    enforce_bitwise_invariance,
+    epilogue_effective_itemsize,
+    constraints,
+):
+    constraints_supported = ["block_m", "block_k", "split_k", "is_persistent", "fused_scatter", "epilogue_subtile", "num_stages"]
+    assert not any([c not in constraints_supported for c in constraints]), constraints.keys()
+    # tokens per expert
+    if routing_data is None:
+        tokens_per_expt = m
+    elif routing_data.expected_tokens_per_expt is None:
+        tokens_per_expt = max(1, m // routing_data.n_expts_tot)
+    else:
+        tokens_per_expt = routing_data.expected_tokens_per_expt
+    # pid swizzling
+    group_m = 8
+    xcd_swizzle = 1
+    # block_m
+    if constraints.get("block_m", None):
+        block_m = constraints["block_m"]
+    elif enforce_bitwise_invariance:
+        block_m = 128
+    else:
+        block_m = max(16, min(triton.next_power_of_2(tokens_per_expt), 128))
+    # block n
+    block_n = opt_flags_intel.compute_block_n(n)
+    # is_persistent
+    is_persistent = constraints.get("is_persistent", False)
+    # block k
+    if constraints.get("block_k", None) is not None:
+        block_k = constraints["block_k"]
+    else:
+        block_k = opt_flags_intel.compute_block_k(k, is_persistent, precision_config)
+    # split_k
+    if constraints.get("split_k", None) is not None:
+        split_k = constraints["split_k"]
+    elif is_persistent or enforce_bitwise_invariance or precision_config.act_scale is not None or precision_config.out_scale is not None:
+        split_k = 1
+    else:
+        estimated_actual_grid_size = opt_flags_intel.compute_grid_size(None, m, n, block_m, block_n)
+        split_k = opt_flags_intel.compute_split_k(block_k, k, estimated_actual_grid_size)
+
+    epilogue_subtile = constraints.get('epilogue_subtile', None)
+    if epilogue_subtile is None:
+        epilogue_subtile = 1
+
+    ret = OptFlags(
+        block_m=block_m,
+        block_n=block_n,
+        block_k=block_k,
+        num_warps=opt_flags_intel.compute_num_warps(block_m, block_n),
+        num_stages=constraints.get("num_stages", 2),
+        fused_scatter=constraints.get('fused_scatter', False),
+        group_m=group_m,
+        xcd_swizzle=xcd_swizzle,
+        w_cache_modifier=None,
+        split_k=split_k,
+        is_persistent=is_persistent,
+        epilogue_subtile=epilogue_subtile,
+        arch=None,
+        target_kernel_kwargs=dict(),
+        idle_sms=0,
+    )
+    # check constraints
+    assert all(getattr(ret, ck) == cv for ck, cv in constraints.items() if cv is not None), f"{ret} != {constraints}"
+    return ret
 
 
 def make_default_opt_flags_amd(
@@ -296,6 +374,8 @@ def make_opt_flags(
             enforce_bitwise_invariance, epilogue_effective_itemsize,
             _opt_flags_constraints]
     backend = triton.runtime.driver.active.get_current_target().backend
+    if backend == "xpu":
+        return make_default_opt_flags_intel(*args)
     if backend == "hip":
         return make_default_opt_flags_amd(*args)
     if backend == "cuda":
