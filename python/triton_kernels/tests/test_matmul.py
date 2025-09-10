@@ -554,21 +554,21 @@ def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, fused_scatter,
     (4096, 4096, 0),
 ])
 @pytest.mark.parametrize("view_x_as_zero_cols", [False, True])
-def test_zero_reduction_dim(m, n, k, view_x_as_zero_cols):
+def test_zero_reduction_dim(m, n, k, view_x_as_zero_cols, device):
     torch.manual_seed(0)
 
     if view_x_as_zero_cols:
-        x = torch.randn(m, m, device="cuda", dtype=torch.bfloat16)
+        x = torch.randn(m, m, device=device, dtype=torch.bfloat16)
         x = x[:0, :].transpose(-1, -2)
     else:
-        x = torch.randn(m, k, device="cuda", dtype=torch.bfloat16)
-    w = torch.randn(k, n, device="cuda", dtype=torch.bfloat16)
-    bias = torch.randn(n, device="cuda", dtype=torch.float32)
+        x = torch.randn(m, k, device=device, dtype=torch.bfloat16)
+    w = torch.randn(k, n, device=device, dtype=torch.bfloat16)
+    bias = torch.randn(n, device=device, dtype=torch.float32)
 
     try:
         tri_y = matmul_ogs(x, w, bias)
     except opt_flags.InapplicableConstraint:
         pytest.skip("inapplicable constraint")
-    ref_y = matmul_ogs_torch(x, w, bias, round_x=lambda x, idx: x, round_y=lambda y: y)
+    ref_y = matmul_ogs_torch(x, w, bias, round_x=lambda x, idx: x, round_y=lambda y: y, device=device)
 
     assert_close(ref_y, tri_y)
