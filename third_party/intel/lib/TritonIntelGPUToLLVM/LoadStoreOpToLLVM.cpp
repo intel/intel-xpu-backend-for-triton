@@ -1884,7 +1884,7 @@ struct LoadOpToBlockIOConversion
     if (!sizeInfo.isValid())
       return failure();
     auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
-          regPackedBases] = sizeInfo;
+          regPackedBases] = std::move(sizeInfo);
 
     Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
@@ -2763,7 +2763,7 @@ struct StoreOpToBlockIOConversion
     if (!sizeInfo.isValid())
       return failure();
     auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
-          regPackedBases] = sizeInfo;
+          regPackedBases] = std::move(sizeInfo);
 
     Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
