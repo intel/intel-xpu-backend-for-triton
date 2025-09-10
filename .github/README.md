@@ -19,7 +19,7 @@ Intel® XPU Backend for Triton\* is a out of tree backend module for [Triton](ht
   * Latest [Long Term Support (LTS) Release](https://dgpu-docs.intel.com/driver/installation.html)
   * Latest [Rolling Release](https://dgpu-docs.intel.com/driver/installation-rolling.html)
 * Toolchain:
-  * [Intel® Deep Learning Essentials 2025.1.1](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html?packages=dl-essentials&dl-lin=offline&dl-essentials-os=linux)
+  * [Intel® Deep Learning Essentials 2025.2.1](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html?packages=dl-essentials&dl-lin=offline&dl-essentials-os=linux)
 
 Note that Intel® XPU Backend for Triton\* is not compatible with Intel® Extension for PyTorch\* and Intel® oneAPI Base Toolkit\*.
 
@@ -36,7 +36,7 @@ You can check existing installation by running one of the [tutorials](/python/tu
 ## Prerequisites
 
 1. Latest [Rolling Release](https://dgpu-docs.intel.com/driver/installation-rolling.html) or [Long Term Support Release](https://dgpu-docs.intel.com/driver/installation.html) of GPU driver
-2. [Intel® Deep Learning Essentials 2025.1.1](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html?packages=dl-essentials&dl-lin=offline&dl-essentials-os=linux)
+2. [Intel® Deep Learning Essentials 2025.2.1](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html?packages=dl-essentials&dl-lin=offline&dl-essentials-os=linux)
 
 ## Install PyTorch and Triton from nightly wheels
 

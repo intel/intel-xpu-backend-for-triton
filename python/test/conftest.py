@@ -89,7 +89,7 @@ def device(request):
 @pytest.fixture
 def fresh_triton_cache():
     from triton import knobs
-    with knobs.compilation.scope():
+    with knobs.compilation.scope(), knobs.runtime.scope():
         knobs.compilation.always_compile = True
         yield
 
@@ -100,7 +100,7 @@ def fresh_triton_cache_scope():
 
     @contextlib.contextmanager
     def fresh_cache():
-        with knobs.compilation.scope():
+        with knobs.compilation.scope(), knobs.runtime.scope():
             knobs.compilation.always_compile = True
             yield
 

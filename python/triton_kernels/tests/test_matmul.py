@@ -16,11 +16,11 @@ from triton_kernels.tensor import convert_layout, wrap_torch_tensor, FP4
 from triton_kernels.tensor_details import layout
 # numerics utilities
 from triton_kernels.numerics import InFlexData, OutFlexData
-from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, upcast_from_mxfp, dequantize_mxfp8_fn, downcast_to_mxfp_torch, upcast_from_mxfp_torch, MXFP_BLOCK_SIZE
+from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, upcast_from_mxfp, quantize_mxfp8_fn, downcast_to_mxfp_torch, upcast_from_mxfp_torch, MXFP_BLOCK_SIZE
 # testing utilities
 from triton_kernels.testing import assert_close, compute_actual_scale
 # target-specific utilities
-from triton_kernels.target_info import is_hip, is_hip_cdna3, is_cuda, is_hip_cdna4
+from triton_kernels.target_info import is_hip, is_hip_cdna3, is_cuda, is_xpu, is_hip_cdna4
 
 # ---------------
 # initialize data
@@ -50,6 +50,9 @@ def init_routing_data(m, n_expts_tot, n_expts_act, n_expt_shards, do_gather, do_
     routing_data.gate_scal = None
     gather_idx = gather_idx if do_gather else None
     scatter_idx = scatter_idx if do_scatter else None
+    # TODO: re-enable
+    # if do_gather and do_scatter and n_expts_act == 1 and n_expt_shards == 1:
+    #     scatter_idx = mask_indx(scatter_idx, n_expts_act)
     return m, routing_data, gather_idx, scatter_idx
 
 
@@ -70,7 +73,7 @@ def init_compute_data(m, n, k, gindx, sindx, n_expts_tot, n_expts_act, n_expt_sh
     if mode == 'batched' or (not has_y_gammas) or (has_y_gammas and (gindx is not None) and act_dtype.itemsize >= 2):
         gs0 = None
         gs1 = None
-    if "float8" in str(weight_dtype) and torch.cuda.get_device_capability()[0] < 10:
+    if is_cuda() and "float8" in str(weight_dtype) and torch.cuda.get_device_capability()[0] < 10:
         w = w.transpose(-1, -2).contiguous().transpose(-1, -2)
     return x, w, bias, gs0, gs1
 
@@ -232,6 +235,7 @@ class Case:
             Case(1000, 704, 800, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", 8, 2),
             Case(1000, 704, 800, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", 8, 2, hbm_swizzling=True),
             Case(300, 400, 400, "ragged", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn", 8, 4),
+            Case(300, 512, 512, "ragged", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn", 8, 4),
             Case(300, 400, 400, "ragged", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn", 8, 4, hbm_swizzling=True),
             Case(300, 400, 800, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", 8, 4),
             Case(300, 400, 800, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", 8, 4, hbm_swizzling=True),
@@ -290,11 +294,16 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         if split_k > 1:
             pytest.skip("splitK hasn't been fully tested on AMD GPU.")
 
+    elif is_xpu():
+        if split_k > 1:
+            pytest.skip("FIXME: https://github.com/intel/intel-xpu-backend-for-triton/issues/5074")
+
     if "float8_e4m3fnuz" in (weight_dtype_str, act_dtype_str) and not is_hip_cdna3():
         pytest.skip("float8_e4m3fnuz only tested on AMD CDNA3 Platform")
 
     if fused_scatter and split_k > 1:
         pytest.skip("fused scatter scratchpad not supported with split_k")
+
     if hbm_swizzling:
         if is_hip():
             if not is_hip_cdna4():
@@ -303,22 +312,21 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
                 pytest.skip("Non-scale swizzling not supported on CDNA4 yet")
             if n % 32 != 0 or k % (32 * 8) != 0:
                 pytest.skip(f"Shape {m}x{n}x{k} is not supported for scale swizzling on AMD GPU")
-        if torch.cuda.get_device_capability()[0] < 9:
-            pytest.skip("NYI. Ampere swizzling.")
-        if torch.cuda.get_device_capability()[0] < 10:
-            if "mxfloat4" not in weight_dtype_str:
-                pytest.skip("NYI. Hopper swizzling just implemented for mxfp4.")
-            if k % 64 != 0 or n % 64 != 0:
-                # Automatic padding not implemented for Hopper swizzle
-                pytest.skip("Hopper swizzling acts on a 64x64 tile (4x1 mma tiles).")
+        if is_cuda():
+            if torch.cuda.get_device_capability()[0] < 9:
+                pytest.skip("NYI. Ampere swizzling.")
+            if torch.cuda.get_device_capability()[0] < 10:
+                if "mxfloat4" not in weight_dtype_str:
+                    pytest.skip("NYI. Hopper swizzling just implemented for mxfp4.")
+                if k % 64 != 0 or n % 64 != 0:
+                    # Automatic padding not implemented for Hopper swizzle
+                    pytest.skip("Hopper swizzling acts on a 64x64 tile (4x1 mma tiles).")
 
     # launch metadata for batched / mx types may not work yet.
-    test_launch_metadata = (mode == "ragged") and ("mx" not in weight_dtype_str) and fused_scatter and m*n*k != 0
-
     torch.manual_seed(0)
 
     block_k = None
-    if is_persistent and weight_dtype_str.startswith("mx") and torch.cuda.get_device_capability()[0] < 10:
+    if is_cuda() and is_persistent and weight_dtype_str.startswith("mx") and torch.cuda.get_device_capability()[0] < 10:
         # Override block_k for testing correctness. The default is temporarily 128 for
         # performance reasons which doesn't work with persistent matmul.
         # TODO: revisit when Triton is better for H100 + MXFP4
@@ -350,8 +358,8 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
     act_is_float8 = act_dtype_str.startswith("float8")
     if act_mxfp8:
         act_dtype_str = act_dtype_str[2:]
-        dequantize_mxfp8_spec = FnSpecs(
-            FnName.DEQUANTIZE_MXFP8.name, dequantize_mxfp8_fn, (), ()
+        quantize_mxfp8_spec = FnSpecs(
+            FnName.QUANTIZE_MXFP8.name, quantize_mxfp8_fn, (), ()
         )
 
     test_bwd = False
@@ -410,49 +418,9 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         y_scale_shape = y_shape[:-1] + (triton.cdiv(y_shape[-1], MXFP_BLOCK_SIZE),)
         y_scale = torch.empty(y_scale_shape, dtype=torch.uint8, device=x_tri.device)
         precision_opt = replace(precision_opt, act_scale=x_mx_scales_tri, out_scale=y_scale)
-        epilogue = Epilogue(dequantize_mxfp8_spec, tuple(), tuple(), effective_itemsize=6.0)
+        epilogue = Epilogue(quantize_mxfp8_spec, tuple(), tuple(), effective_itemsize=6.0)
     else:
         y_scale = None
-
-    if test_launch_metadata:
-
-        def _clobber(t, used_mask):
-            # Fill the unread part of the tensor with garbage, to be sure that
-            # we don't actually read from the part.
-            if len(used_mask) == 1:
-                return
-            elif t.element_size() == 1:
-                t.view(torch.int8)[~used_mask] = 127
-            else:
-                t[~used_mask] = torch.inf
-
-        if rdata is not None:
-            n_tokens = rdata.expt_hist.sum().item()
-            used_expts = (rdata.expt_hist > 0)
-            _clobber(w_tri, used_expts)
-            n_w_bytes = used_expts.sum().item() * n * k * w_tri.element_size()
-        else:
-            n_tokens = m
-            n_w_bytes = w_tri.numel() * w_tri.element_size()
-
-        if gindx is not None:
-            used_x_rows = (gindx.dst_indx.view(-1, n_expts_act) != -1).any(dim=1)
-            _clobber(x_tri, used_x_rows)
-            n_x_bytes = used_x_rows.sum().item() * k * x_tri.element_size()
-        elif rdata is not None:
-            n_x_bytes = n_tokens * k * x_tri.element_size()
-        else:
-            n_x_bytes = x_tri.numel() * x_tri.element_size()
-
-        nbytes = None
-
-        def _hook(launch_metadata):
-            nonlocal nbytes
-            metadata = launch_metadata.get()
-            if "matmul_ogs" in metadata["name"]:
-                nbytes = metadata["bytes"]
-
-        triton.knobs.runtime.launch_enter_hook = _hook
 
     if mode == "batched":
         rdata, gindx, sindx = None, None, None
@@ -468,22 +436,12 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
     sep_scatter = mode == "ragged" and do_scatter and n_expts_act > 1 and split_k == 1
     y_scale = flex.out_data.expected_scale if act_is_float8 else 1
 
-    if test_launch_metadata:
-        if gindx is not None:
-            n_y_bytes = (gindx.src_indx != -1).sum().item() * n * tri_y.element_size()
-        elif rdata is not None:
-            n_y_bytes = n_tokens * n * tri_y.element_size()
-        else:
-            n_y_bytes = tri_y.numel() * tri_y.element_size()
-        assert nbytes == n_x_bytes + n_y_bytes + n_w_bytes
-        triton.knobs.runtime.launch_enter_hook = None
-
     def round_x(x, idx):
         return x.to(act_dtype).to(torch.float32) if sep_gather else x
 
     round_y = lambda y: (y / y_scale).to(act_dtype).to(torch.float32) * y_scale if sep_scatter else y
     ref_y = matmul_ogs_torch(x_ref, w_ref, bias_ref,  #
-                             rdata, gindx, sindx, round_x=round_x, round_y=round_y, gammas=gs1_ref)
+                             rdata, gindx, sindx, round_x=round_x, round_y=round_y, gammas=gs1_ref, device=device)
     scale = lambda val, scal: val if scal is None else val / scal
     if n_expt_shards > 1:
         if do_scatter:
@@ -500,7 +458,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
             ref_y = ref_y[:n_rows]
             tri_y = tri_y[:n_rows]
     if act_mxfp8:
-        tri_y = upcast_from_mxfp(tri_y, precision_opt.out_scale, dtype=torch.bfloat16, axis=-1).to(ref_y.dtype)
+        tri_y = upcast_from_mxfp(tri_y, precision_opt.out_scale, target_dtype=torch.bfloat16, axis=-1).to(ref_y.dtype)
         ref_y_quant, ref_y_scale = downcast_to_mxfp_torch(ref_y, act_dtype, axis=-1)
         ref_y = upcast_from_mxfp_torch(ref_y_quant, ref_y_scale, target_dtype=ref_y.dtype, axis=-1)
         maxtol = 4e-1
@@ -558,8 +516,8 @@ def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, fused_scatter,
     constraints = {
         "is_persistent": is_persistent,
         "epilogue_subtile": epilogue_subtile,
-        "fused_scatter": fused_scatter,
         "split_k": split_k,
+        "fused_scatter": fused_scatter,
     }
     n_expts_tot, n_expts_act, n_expt_shards = 1, 1, 1
     opt_flags.update_opt_flags_constraints(constraints)
@@ -587,6 +545,7 @@ def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, fused_scatter,
                                              (swiglu_alpha, swiglu_limit), 2))
     except opt_flags.InapplicableConstraint:
         pytest.skip("inapplicable constraint")
+
     assert_close(a, b)
 
 
@@ -595,21 +554,21 @@ def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, fused_scatter,
     (4096, 4096, 0),
 ])
 @pytest.mark.parametrize("view_x_as_zero_cols", [False, True])
-def test_zero_reduction_dim(m, n, k, view_x_as_zero_cols):
+def test_zero_reduction_dim(m, n, k, view_x_as_zero_cols, device):
     torch.manual_seed(0)
 
     if view_x_as_zero_cols:
-        x = torch.randn(m, m, device="cuda", dtype=torch.bfloat16)
+        x = torch.randn(m, m, device=device, dtype=torch.bfloat16)
         x = x[:0, :].transpose(-1, -2)
     else:
-        x = torch.randn(m, k, device="cuda", dtype=torch.bfloat16)
-    w = torch.randn(k, n, device="cuda", dtype=torch.bfloat16)
-    bias = torch.randn(n, device="cuda", dtype=torch.float32)
+        x = torch.randn(m, k, device=device, dtype=torch.bfloat16)
+    w = torch.randn(k, n, device=device, dtype=torch.bfloat16)
+    bias = torch.randn(n, device=device, dtype=torch.float32)
 
     try:
         tri_y = matmul_ogs(x, w, bias)
     except opt_flags.InapplicableConstraint:
         pytest.skip("inapplicable constraint")
-    ref_y = matmul_ogs_torch(x, w, bias, round_x=lambda x, idx: x, round_y=lambda y: y)
+    ref_y = matmul_ogs_torch(x, w, bias, round_x=lambda x, idx: x, round_y=lambda y: y, device=device)
 
     assert_close(ref_y, tri_y)

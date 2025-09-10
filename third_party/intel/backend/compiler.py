@@ -42,6 +42,7 @@ class XPUOptions:
     generate_native_code: bool = False
     advanced_path: bool = False
     enable_tile_load_linear_layout: bool = True
+    arch: str = None
     # FIXME: enable for XPU: https://github.com/intel/intel-xpu-backend-for-triton/issues/4954
     instrumentation_mode: str = ""
 
@@ -313,7 +314,7 @@ class XPUBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
 
-        passes.convert.add_triton_scf_to_cf(pm)
+        passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
         # FIXME: Advanced path uses custom type conversion and needs hacky
         # solutions for SLM allocation, so this will crash on some operations
