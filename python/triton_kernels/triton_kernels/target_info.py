@@ -18,6 +18,7 @@ __all__ = [
     "has_native_mxfp",
     "is_cuda",
     "is_hip",
+    "is_xpu",
     "is_hip_cdna3",
     "is_hip_cdna4",
     "is_xpu",
