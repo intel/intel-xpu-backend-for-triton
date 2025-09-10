@@ -20,7 +20,7 @@ from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, upcast_from_m
 # testing utilities
 from triton_kernels.testing import assert_close, compute_actual_scale
 # target-specific utilities
-from triton_kernels.target_info import is_hip, is_hip_cdna3, is_cuda, is_xpu, is_hip_cdna4
+from triton_kernels.target_info import is_hip, is_hip_cdna3, is_cuda, is_hip_cdna4
 
 # ---------------
 # initialize data
@@ -293,10 +293,6 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
             pytest.skip("NYI: Persistent kernel not supported on AMD GPU")
         if split_k > 1:
             pytest.skip("splitK hasn't been fully tested on AMD GPU.")
-
-    elif is_xpu():
-        if split_k > 1:
-            pytest.skip("FIXME: https://github.com/intel/intel-xpu-backend-for-triton/issues/5074")
 
     if "float8_e4m3fnuz" in (weight_dtype_str, act_dtype_str) and not is_hip_cdna3():
         pytest.xfail("float8_e4m3fnuz only tested on AMD CDNA3 Platform")
