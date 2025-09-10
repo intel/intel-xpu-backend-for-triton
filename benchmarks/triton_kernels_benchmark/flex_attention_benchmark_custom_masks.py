@@ -112,7 +112,8 @@ def benchmark(Z, H, N_CTX, D_HEAD, MASK, MODE, provider):
             triton_o = triton_fn()
             triton_do = torch.randn_like(triton_o)
             triton_fn = lambda: triton_o.backward(triton_do, retain_graph=True)
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=100, n_repeat=5, quantiles=quantiles)
+        # TODO: There is strange effect, preliminary experiments show improved perf at 1000iters, but I don't see it with 100ms warmups
+        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=5000, n_repeat=5, quantiles=quantiles)
         # Values checking cannot be implemented for these case as :
         # "The operator 'aten::_scaled_dot_product_flash_attention_for_cpu' is not currently implemented for the XPU device"
 

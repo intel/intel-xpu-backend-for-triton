@@ -11,7 +11,6 @@ import argparse
 import datetime
 import os
 import time
-import math
 
 import scipy.stats
 import pandas as pd
@@ -30,6 +29,9 @@ BENCHMARKING_CONFIG = {
     "verify": os.getenv("VERIFY", "1") == "1",
     "do_prewarmup": os.getenv("PREWARMUP", "1") == "1",
 }
+
+# We never have more warmup iterations that this parameter
+MAX_WARMUP_ITERS = 1000
 
 
 def disable_verification():
@@ -151,21 +153,19 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
     cache_size = 256 * 1024 * 1024
     cache = torch.empty(int(cache_size // 4), dtype=torch.int, device=device)
 
-    # Hardcode for the experiment
-    MAX_WARMUP_ITERS = 1000
-    warmup_time_s = n_warmup / 1000
-    assert sync_submitting
-
     # Warm-up
     # Stop either on max iteration number or max time
+    warmup_time_s = n_warmup / 1000
+    assert sync_submitting
     start = time.perf_counter()
-    for _ in range(MAX_WARMUP_ITERS):
+    i = 0
+    while i < MAX_WARMUP_ITERS and time.perf_counter() - start < warmup_time_s:
         fn()
         # To be consistent with the benchmark measurements
         if sync_submitting:
             synchronize()
-        if time.perf_counter() - start > warmup_time_s:
-            break
+        i += 1
+    print(f"Stopped warmup after {i} iterations")
 
     # Benchmark
     with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.XPU]) as prof:

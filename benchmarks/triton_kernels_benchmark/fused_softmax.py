@@ -145,7 +145,7 @@ def get_benchmark(providers_filter: Optional[list[str]] = None):
             _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
                 triton_fn,
                 quantiles=quantiles,
-                n_warmup=300,
+                n_warmup=800,
                 n_repeat=10,
             )
 
@@ -170,8 +170,8 @@ def get_benchmark(providers_filter: Optional[list[str]] = None):
             onednn_fn = lambda: func(M, N, x, out, 1)
             torch_fn = lambda: torch.softmax(x, axis=-1)
             benchmark_suite.assert_close(onednn_fn, torch_fn, err_msg="onednn to torch")
-            # More warmup makes performance worse
-            _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(onednn_fn, quantiles=quantiles, n_warmup=10,
+            # More warmup very slowly makes performance worse
+            _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(onednn_fn, quantiles=quantiles, n_warmup=800,
                                                                    n_repeat=10)
 
         else:

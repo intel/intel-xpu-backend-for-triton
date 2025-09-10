@@ -357,7 +357,7 @@ def benchmark(B, M, N, K, dtype, provider):
             benchmark_suit.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
         # Some configs increase performance with warmup as a step function, but some slowly decrease with saturation
         # Performance is best at 150-400ms range (50-200 for INT8), but we want stable, not just best
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, n_warmup=800, n_repeat=10,
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, n_warmup=1000, n_repeat=10,
                                                                  quantiles=quantiles)
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
