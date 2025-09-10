@@ -217,10 +217,17 @@ private:
       return true;
     };
 
+    const StringRef blockIOAttrName =
+        ttgi::TritonIntelGPUDialect::getBlockIOAttrName();
     const bool isRowMajor = isMajor(tensorTy, 1 /*fastChangeDim*/, *axisInfo);
     if (isRowMajor)
-      op->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
+      op->setAttr(blockIOAttrName,
                   StringAttr::get(op.getContext(), "row_major"));
+
+    const bool isColMajor = isMajor(tensorTy, 0 /*fastChangeDim*/, *axisInfo);
+    if (isColMajor)
+      op->setAttr(blockIOAttrName,
+                  StringAttr::get(op.getContext(), "column_major"));
   }
 
   // Return the load layout if it is a dot layout. If it is not, check if the
