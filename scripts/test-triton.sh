@@ -577,7 +577,7 @@ run_triton_kernels_tests() {
   cd $TRITON_PROJ/python/triton_kernels/tests
 
   TRITON_TEST_SUITE=triton_kernels \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu .
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-4} --device xpu .
 }
 
 test_triton() {
