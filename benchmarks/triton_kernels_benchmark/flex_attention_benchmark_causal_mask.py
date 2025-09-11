@@ -172,7 +172,7 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
             triton_grads = torch.autograd.grad((triton_o, ), (q, k, v), backwards_grad, retain_graph=True)
             compiled_tensors = (triton_o, *triton_grads)
 
-            tensor_names = (['out', 'grad_query', 'grad_key', 'grad_value'])
+            tensor_names = ['out', 'grad_query', 'grad_key', 'grad_value']
             for eager, compiled, name in zip(eager_tensors, compiled_tensors, tensor_names):
                 benchmark_suit.assert_close(lambda: eager, lambda: compiled, atol=1e-2, rtol=1e-3,  # pylint: disable=cell-var-from-loop
                                             err_msg=f'Error comparing {name} between triton and torch')
