@@ -164,7 +164,7 @@ void printModuleKernelName(ze_module_handle_t hModule) {
 
 std::tuple<ze_module_handle_t, ze_result_t>
 create_module(ze_context_handle_t context, ze_device_handle_t device,
-              uint8_t *binary_ptr, size_t binary_size, const char *build_flags, ze_module_build_log_handle_t *buildlog,
+              uint8_t *binary_ptr, size_t binary_size, const char *build_flags, ze_module_build_log_handle_t *buildlog2,
               const bool is_spv = true) {
   assert(binary_ptr != nullptr && "binary_ptr should not be NULL");
   assert(build_flags != nullptr && "build_flags should not be NULL");
@@ -178,21 +178,25 @@ create_module(ze_context_handle_t context, ze_device_handle_t device,
   module_description.inputSize = static_cast<uint32_t>(binary_size);
   module_description.pInputModule = binary_ptr;
   module_description.pBuildFlags = flags.c_str();
+  ze_module_build_log_handle_t buildlog;
   ze_module_handle_t module;
   std::cout << "MARK#1\n";
   // Even if the return code is successful, it may no longer include the kernel name and have
   // the required information in the logs, but only if debug information is enabled (`-g`).
   auto error_no =
-      zeModuleCreate(context, device, &module_description, &module, buildlog);
+      zeModuleCreate(context, device, &module_description, &module, &buildlog);
+  std::cout << "MARK#1\n";
+  std::cout << "MARK#1\n";
+  std::cout << "MARK#1\n";
   printModuleKernelName(module);
   std::cout << "MARK#2\n";
-  if (error_no != ZE_RESULT_SUCCESS) {
-    size_t szLog = 0;
+  if (true || error_no != ZE_RESULT_SUCCESS) {
+    size_t szLog;
     std::cout << "MARK#3\n" << std::flush;
-    ZE_CHECK(zeModuleBuildLogGetString(*buildlog, &szLog, nullptr));
+    ZE_CHECK(zeModuleBuildLogGetString(buildlog, &szLog, nullptr));
     std::cout << "MARK#4\n" << std::flush;
     char *strLog = (char *)malloc(szLog);
-    auto error_no_build_log = zeModuleBuildLogGetString(*buildlog, &szLog, strLog);
+    auto error_no_build_log = zeModuleBuildLogGetString(buildlog, &szLog, strLog);
     if (error_no_build_log != ZE_RESULT_SUCCESS) {
       free(strLog);
       ZE_CHECK(error_no_build_log);
@@ -201,7 +205,7 @@ create_module(ze_context_handle_t context, ze_device_handle_t device,
     std::cerr << "L0 build module failed. Log: " << strLog << " end message" << std::endl << std::flush;
     free(strLog);
     std::cout << "MARK#6\n" << std::flush;
-    ZE_CHECK(zeModuleBuildLogDestroy(*buildlog));
+    ZE_CHECK(zeModuleBuildLogDestroy(buildlog));
     std::cout << "MARK#7\n" << std::flush;
   }
   ZE_CHECK(error_no);
@@ -223,15 +227,20 @@ create_function(ze_module_handle_t module, ze_kernel_flags_t flag,
   }
   std::cout << "create_function: MARK#10\n";
   auto kernel_create_no = zeKernelCreate(module, &kernel_description, &kernel);
-  if (kernel_create_no == ZE_RESULT_ERROR_INVALID_KERNEL_NAME) {
+  if (false && kernel_create_no == ZE_RESULT_ERROR_INVALID_KERNEL_NAME) {
+    std::cout << "MARK100\n";
     size_t szLog = 0;
     ZE_CHECK(zeModuleBuildLogGetString(*buildlog, &szLog, nullptr));
     char *strLog = (char *)malloc(szLog);
     auto error_no_build_log = zeModuleBuildLogGetString(*buildlog, &szLog, strLog);
-    ZE_CHECK(zeModuleBuildLogDestroy(*buildlog));
+    //ZE_CHECK(zeModuleBuildLogDestroy(*buildlog));
+    std::cout << "MARK1000\n";
     if (error_no_build_log == ZE_RESULT_SUCCESS) {
+      std::cout << "MARK101\n";
       const char* root_cause = "exceeding max permitted PTSS, drop SIMD";
+      std::cout << "message: " << strLog << std::endl << std::flush;
       if (strstr(strLog, root_cause)) {
+        std::cout << "MARK102\n";
         free(strLog);
         throw std::runtime_error(root_cause);        
       }

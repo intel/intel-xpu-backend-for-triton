@@ -318,32 +318,38 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
     PyGILState_STATE gil_state;
     gil_state = PyGILState_Ensure();
 
-    PyObject *cls = nullptr;
-    PyObject *mod = PyImport_ImportModule("triton.runtime.errors");
-    if (!mod) {
-        PyErr_SetString(PyExc_ImportError, "cannot import triton.errors");
-        return NULL;
-    }
-    cls = PyObject_GetAttrString(mod, "OutOfResources");
-    Py_DECREF(mod);
-    if (!cls) {
-        PyErr_SetString(PyExc_AttributeError, "cannot find OutOfResources");
-        return NULL;
-    }
+    const char* root_cause = "exceeding max permitted PTSS, drop SIMD";
+    std::cout << "EXCEPTION: " << e.what() << std::endl << std::flush;
+    if (strstr(e.what(), root_cause)) {
+      std::cout << "HERE\n";
+      PyObject *cls = nullptr;
+      PyObject *mod = PyImport_ImportModule("triton.runtime.errors");
+      if (!mod) {
+          PyErr_SetString(PyExc_ImportError, "cannot import triton.errors");
+          return NULL;
+      }
+      cls = PyObject_GetAttrString(mod, "OutOfResources");
+      Py_DECREF(mod);
+      if (!cls) {
+          PyErr_SetString(PyExc_AttributeError, "cannot find OutOfResources");
+          return NULL;
+      }
 
-    PyObject* args = Py_BuildValue("(sss)", "unknown", "unknown", "exceeding max permitted PTSS, drop SIMD");
-    PyObject* exc = PyObject_CallObject(cls, args);
-    Py_DECREF(cls);
-    Py_DECREF(args);
-    if (!exc) {
-        PyErr_SetString(PyExc_RuntimeError, "cannot create OutOfResources");
-        return NULL;
-    }
+      PyObject* args = Py_BuildValue("(sss)", "unknown", "unknown", "exceeding max permitted PTSS, drop SIMD");
+      PyObject* exc = PyObject_CallObject(cls, args);
+      Py_DECREF(cls);
+      Py_DECREF(args);
+      if (!exc) {
+          PyErr_SetString(PyExc_RuntimeError, "cannot create OutOfResources");
+          return NULL;
+      }
 
-    PyErr_SetObject(cls, exc);
-    Py_DECREF(exc);
-    // PyErr_SetString(PyExc_RuntimeError, e.what());
-    std::cerr << "Error during Intel loadBinary: " << e.what() << std::endl;
+      PyErr_SetObject(cls, exc);
+      Py_DECREF(exc);
+    } else {
+      PyErr_SetString(PyExc_RuntimeError, e.what());
+      std::cerr << "Error during Intel loadBinary: " << e.what() << std::endl;
+    }
     PyGILState_Release(gil_state);
     return NULL;
   }
