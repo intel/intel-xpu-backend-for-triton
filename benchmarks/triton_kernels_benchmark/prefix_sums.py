@@ -49,7 +49,7 @@ def get_benchmark(providers_filter: Optional[List[str]] = None):
 
         if provider == "triton":
             triton_fn = lambda: scan_kernel[(1, )](x, BLOCK_SIZE_M=M, BLOCK_SIZE_N=N, AXIS=AXIS)
-            _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(triton_fn, quantiles=quantiles, n_warmup=800,
+            _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(triton_fn, quantiles=quantiles, n_warmup=1000,
                                                                       n_repeat=100)
         else:
             raise NotImplementedError(f"Unsupported provider {provider}")

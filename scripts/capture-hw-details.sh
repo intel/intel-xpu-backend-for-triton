@@ -1,5 +1,7 @@
 #!/bin/bash
 
+export TRITON_PRINT_AUTOTUNING="1"
+
 QUIET=false
 for arg in "$@"; do
   case $arg in
