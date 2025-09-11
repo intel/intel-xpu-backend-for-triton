@@ -166,13 +166,6 @@ private:
              MLIRContext *context) const {
     LDBG("Considering op: " << *op);
 
-    if constexpr (std::is_same_v<OpType, tt::LoadOp>) {
-      if (op.getMask()) {
-        LDBG("Load op has mask, skip block IO attribute");
-        return;
-      }
-    }
-
     Value ptr = op.getPtr();
     assert(!tt::isTensorPointerType(ptr.getType()) &&
            "Expected pointer refer to a tensor.");
