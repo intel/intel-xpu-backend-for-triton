@@ -279,6 +279,8 @@ def test_inductor_cummax_bool(device):
 
 
 def test_permutation_ptxas_bug(device):
+    if device == "xpu":
+        pytest.xfail("Not designed for XPU")
 
     @triton.jit
     def _matmul(
