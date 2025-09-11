@@ -42,6 +42,7 @@ class XPUOptions:
     generate_native_code: bool = False
     advanced_path: bool = False
     enable_tile_load_linear_layout: bool = True
+    arch: str = None
     # FIXME: enable for XPU: https://github.com/intel/intel-xpu-backend-for-triton/issues/4954
     instrumentation_mode: str = ""
 

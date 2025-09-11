@@ -366,9 +366,10 @@ extern "C" EXPORT_FUNC PyObject *wait_on_sycl_queue(PyObject *cap) {
 
 extern "C" EXPORT_FUNC PyObject *has_opencl_extension(int device_id,
                                                       const char *extension) {
-  if (device_id > sycl_opencl_device_list.size()) {
-    std::cerr << "Device is not found " << std::endl << std::flush;
-    return NULL;
+  if (device_id >= sycl_opencl_device_list.size()) {
+    std::cerr << "Device is not found, extension " << extension << std::endl
+              << std::flush;
+    Py_RETURN_FALSE;
   }
   const sycl::device &device = sycl_opencl_device_list[device_id];
 
