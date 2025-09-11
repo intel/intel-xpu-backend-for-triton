@@ -143,10 +143,12 @@ private:
   void MaterializeTensorOfPointers(
       OpType op, tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) const {
     if constexpr (std::is_same_v<OpType, tt::LoadOp>) {
+#if 0
       if (op.getMask()) {
         LDBG("Load op has mask, skip block IO attribute");
         return;
       }
+#endif
     }
 
     Value ptr = op.getPtr();
