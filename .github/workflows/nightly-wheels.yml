@@ -6,13 +6,7 @@ on:
     - cron: "5 23 * * *"
   push:
     branches:
-      - main
-    paths:
-      - .github/workflows/nightly-wheels.yml
-      - .github/pins/pytorch.txt
-  pull_request:
-    branches:
-      - main
+      - main-cri
     paths:
       - .github/workflows/nightly-wheels.yml
       - .github/pins/pytorch.txt
