@@ -291,7 +291,7 @@ LogicalResult DpasEncodingAttr::verify(
     ::llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
     unsigned repeatCount, unsigned systolicDepth, unsigned executionSize,
     unsigned opsPerChan, ::llvm::ArrayRef<unsigned> warpsPerCTA,
-    ::llvm::ArrayRef<unsigned> repCluster, unsigned sugGroupSize) {
+    ::llvm::ArrayRef<unsigned> repCluster, unsigned subGroupSize) {
   if (repeatCount > 8 || repeatCount < 1) {
     return emitError() << "repeatCount must be in the range [1, 8], but was:"
                        << repeatCount;
@@ -309,6 +309,12 @@ LogicalResult DpasEncodingAttr::verify(
   if (!(repCluster.size() == 2 || repCluster.size() == 3)) {
     return emitError() << "expected rank 2 or 3 of repCluster, but the rank is:"
                        << repCluster.size();
+  }
+
+  if (subGroupSize < executionSize) {
+    return emitError() << "threadsPerWarp could not be smaller than the "
+                          "execution size. got subGroupSize:"
+                       << subGroupSize << ", executionSize:" << executionSize;
   }
 
   return success();
@@ -627,18 +633,6 @@ Attribute Subgroup2DBlockEncodingAttr::parse(AsmParser &parser, Type type) {
 
 SmallVector<unsigned> Subgroup2DBlockEncodingAttr::getRepOrder() const {
   return getMatrixOrder(getRank(), /*rowMajor*/ true);
-}
-
-SmallVector<unsigned> Subgroup2DBlockEncodingAttr::getCTAsPerCGA() const {
-  return SmallVector<unsigned>(getCTALayout().getCTAsPerCGA());
-}
-
-SmallVector<unsigned> Subgroup2DBlockEncodingAttr::getCTAOrder() const {
-  return SmallVector<unsigned>(getCTALayout().getCTAOrder());
-}
-
-SmallVector<unsigned> Subgroup2DBlockEncodingAttr::getCTASplitNum() const {
-  return SmallVector<unsigned>(getCTALayout().getCTASplitNum());
 }
 
 SmallVector<unsigned>
@@ -1100,8 +1094,8 @@ struct TritonIntelGPUInferLayoutInterface
       return success();
     }
     // Check whether the encodings are structurally the same.
-    const auto &expectedLL = triton::gpu::toLinearLayout(shape, expected, {});
-    const auto &gotLL = triton::gpu::toLinearLayout(shape, got, {});
+    const auto &expectedLL = triton::gpu::toLinearLayout(shape, expected);
+    const auto &gotLL = triton::gpu::toLinearLayout(shape, got);
     if (expectedLL != gotLL) {
       return emitOptionalError(loc, "Expected result encoding ", expected,
                                " but was ", got);
@@ -1123,7 +1117,7 @@ struct TritonIntelGPUInferLayoutInterface
     // Once LinearLayouts are more widely used, we can remove
     // inferReshapeOpLegacyEncoding and simply use LLs.
     auto *ctx = getContext();
-    auto src = toLinearLayout(srcShape, srcEnc, {});
+    auto src = toLinearLayout(srcShape, srcEnc);
 
     if (product(srcShape) != product(dstShape)) {
       return emitOptionalError(loc, "numel of dst shape does not match "

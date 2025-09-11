@@ -5,7 +5,7 @@ import sys
 from argparse import ArgumentParser
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 import triton
 from triton._internal_testing import is_xpu
@@ -23,12 +23,12 @@ class CompileArgs:
     grid: str = ''
     grf_mode: str = ''
     generate_native_code: bool = False
-    target: str | None = None
+    target: Optional[str] = None
     num_warps: int = 1
     threads_per_warp: int = 32
     num_stages: int = 3
-    out_name: str | None = None
-    out_path: Path | None = None
+    out_name: Optional[str] = None
+    out_path: Optional[Path] = None
 
 
 desc = """
@@ -153,9 +153,12 @@ def compile_kernel(args: CompileArgs):
         }
     options = backend.parse_options(kwargs)
     ccinfo = triton.compile(src, target=target, options=options.__dict__)
+    args.threads_per_warp = ccinfo.metadata.threads_per_warp
 
     if getattr(ccinfo.metadata, "global_scratch_size", 0) > 0:
         raise RuntimeError("AOT compiling kernels with global scratch requirements is not yet implemented")
+    if ccinfo.metadata.profile_scratch_size > 0:
+        raise RuntimeError("AOT compiling kernels with profile scratch requirements is not yet implemented")
 
     arg_names = []
     arg_types = []
@@ -193,24 +196,28 @@ def compile_kernel(args: CompileArgs):
         "bin_data": ", ".join([f"0x{x}{y}" for x, y in zip(hex_[::2], hex_[1::2])]),
         "signature": ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names_not_1, arg_types_not_1)]),
         "full_signature": ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names, arg_types)]),
-        "arg_pointers": ", ".join([f"&{arg}" for arg in arg_names_not_1] + ["&global_scratch"]),
-        "num_args": len(arg_names_not_1) + 1,
+        "arg_pointers": ", ".join([f"&{arg}" for arg in arg_names_not_1] + ["&global_scratch"] + ["&profile_scratch"]),
+        "num_args": len(arg_names_not_1) + 2,  # +2 for global and profile scratch
         "kernel_docstring": doc_string,
         "shared": ccinfo.metadata.shared,
         "num_warps": args.num_warps,
-        "algo_info": '_'.join([const_sig, meta_sig]),
+        "algo_info": "_".join([const_sig, meta_sig]),
         "gridX": grid[0],
         "gridY": grid[1],
         "gridZ": grid[2],
         "_placeholder": "",
     }
     if is_xpu():
+        if args.generate_native_code:
+            format_name = "native"
+        else:
+            format_name = "spirv"
         params |= {
             "arg_types": ", ".join(ty_to_cpp(arg) for arg in arg_types_not_1),
             "grf_mode": args.grf_mode,
             "build_flags": ccinfo.metadata.build_flags,
             "threads_per_warp": args.threads_per_warp,
-            "is_spv": "false" if args.generate_native_code else "true",
+            "format_name": format_name,
         }
     output_files = []
     backend_name = target.backend

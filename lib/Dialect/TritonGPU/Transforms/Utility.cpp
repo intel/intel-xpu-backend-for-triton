@@ -1168,6 +1168,55 @@ getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
   return attr;
 }
 
+static Type getNewType(Type type, Attribute encoding) {
+  RankedTensorType tensorType = cast<RankedTensorType>(type);
+  return RankedTensorType::get(tensorType.getShape(),
+                               tensorType.getElementType(), encoding);
+}
+
+Operation *convertDistributedOpEncoding(Attribute encoding, Operation *op) {
+  OpBuilder builder(op);
+  // Convert operands
+  // For load/store with tensor pointers, we don't have to change the
+  // operands' type, we do this by changing the outputs' type of
+  // `make_tensor_ptr`
+  SmallVector<Value, 4> newArgs;
+  for (auto operand : op->getOperands()) {
+    auto tensorType = dyn_cast<RankedTensorType>(operand.getType());
+    if (tensorType &&
+        !isa<triton::gpu::SharedEncodingTrait>(tensorType.getEncoding())) {
+      Type newType = getNewType(tensorType, encoding);
+      newArgs.push_back(builder.create<triton::gpu::ConvertLayoutOp>(
+          op->getLoc(), newType, operand));
+    } else {
+      newArgs.push_back(operand);
+    }
+  }
+
+  // Convert output types
+  SmallVector<Type, 4> newTypes;
+  for (auto t : op->getResultTypes()) {
+    bool isAsync = isa<triton::gpu::AsyncCopyGlobalToLocalOp>(op);
+    newTypes.push_back(isAsync ? t : getNewType(t, encoding));
+  }
+
+  // Construct new op with the new encoding
+  Operation *newOp = builder.create(op->getLoc(), op->getName().getIdentifier(),
+                                    newArgs, newTypes, op->getAttrs());
+
+  // Cast the results back to the original layout
+  for (size_t i = 0; i < op->getNumResults(); i++) {
+    Value newResult = newOp->getResult(i);
+    if (newTypes[i] != op->getResultTypes()[i]) {
+      newResult = builder.create<triton::gpu::ConvertLayoutOp>(
+          op->getLoc(), op->getResult(i).getType(), newResult);
+    }
+    op->getResult(i).replaceAllUsesWith(newResult);
+  }
+  op->erase();
+  return newOp;
+}
+
 namespace {
 
 /// Detect dead arguments in scf.for op by assuming all the values are dead and
@@ -1307,11 +1356,11 @@ void populateForOpDeadArgumentElimination(RewritePatternSet &patterns) {
 
 ttg::LocalAllocOp findShmemAlloc(Value operand) {
   // If it's a shmem operand, it must either be defined outside the loop, or
-  // come from an MemDescSubview op. Only ConvertLayout and Trans ops are
+  // come from an MemDescIndex op. Only ConvertLayout and MemdescView ops are
   // allowed in between.
   Value transitiveOperand = operand;
   while (isa_and_nonnull<ttg::ConvertLayoutOp, tt::TransOp, ttg::MemDescTransOp,
-                         ttg::MemDescReshapeOp>(
+                         ttg::MemDescReshapeOp, ttg::MemDescSubsliceOp>(
              transitiveOperand.getDefiningOp()) ||
          isa<BlockArgument>(transitiveOperand)) {
     if (auto blockArg = dyn_cast<BlockArgument>(transitiveOperand)) {
@@ -1324,7 +1373,7 @@ ttg::LocalAllocOp findShmemAlloc(Value operand) {
       transitiveOperand = transitiveOperand.getDefiningOp()->getOperand(0);
     }
   }
-  if (auto subView = dyn_cast_or_null<ttg::MemDescSubviewOp>(
+  if (auto subView = dyn_cast_or_null<ttg::MemDescIndexOp>(
           transitiveOperand.getDefiningOp())) {
     // Multi-buffered operand
     return dyn_cast_or_null<ttg::LocalAllocOp>(
@@ -1463,8 +1512,10 @@ void eraseLoopCarriedValues(scf::ForOp &loop, llvm::BitVector indices) {
 } // namespace mlir
 
 namespace mlir::triton {
-void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
-                                 Value val) {
+
+void replaceUsesAndPropagateType(
+    OpBuilder &builder, Operation *oldUse, Value val,
+    std::function<void(Operation *, Operation *)> callback) {
   OpBuilder::InsertionGuard guard(builder);
   SmallVector<Operation *> opsToDelete;
   SmallVector<OpOperand *> operandsToReplace;
@@ -1488,14 +1539,22 @@ void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
     // `subview(old_op)` is replaced by a new `subview(val)`.
     builder.setInsertionPoint(user);
     Value newVal;
-    if (auto subview = dyn_cast<ttg::MemDescSubviewOp>(user)) {
+    if (auto subview = dyn_cast<ttg::MemDescIndexOp>(user)) {
       ttg::MemDescType oldType = subview.getType();
       bool isMutable = cast<ttg::MemDescType>(val.getType()).getMutableMemory();
       Type newDstType = ttg::MemDescType::get(
           oldType.getShape(), oldType.getElementType(), oldType.getEncoding(),
-          oldType.getMemorySpace(), isMutable);
-      newVal = builder.create<ttg::MemDescSubviewOp>(
-          subview.getLoc(), newDstType, val, subview.getOffsets());
+          oldType.getMemorySpace(), isMutable, oldType.getAllocShape());
+      newVal = builder.create<ttg::MemDescIndexOp>(subview.getLoc(), newDstType,
+                                                   val, subview.getIndex());
+    } else if (auto subslice = dyn_cast<ttg::MemDescSubsliceOp>(user)) {
+      ttg::MemDescType oldType = subslice.getType();
+      bool isMutable = cast<ttg::MemDescType>(val.getType()).getMutableMemory();
+      Type newDstType = ttg::MemDescType::get(
+          oldType.getShape(), oldType.getElementType(), oldType.getEncoding(),
+          oldType.getMemorySpace(), isMutable, oldType.getAllocShape());
+      newVal = builder.create<ttg::MemDescSubsliceOp>(
+          subslice.getLoc(), newDstType, val, subslice.getOffsets());
     } else if (auto trans = dyn_cast<ttg::MemDescTransOp>(user)) {
       newVal = builder.create<ttg::MemDescTransOp>(trans.getLoc(), val,
                                                    trans.getOrder());
@@ -1507,7 +1566,10 @@ void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
     assert(newVal && "unhandled memdesc view");
     newVal.getDefiningOp()->setAttrs(user->getAttrs());
     replaceUsesAndPropagateType(builder, user, newVal);
-    opsToDelete.push_back(use.getOwner());
+    opsToDelete.push_back(user);
+    if (callback) {
+      callback(user, newVal.getDefiningOp());
+    }
   }
 
   // Perform late replacement.
@@ -1522,7 +1584,6 @@ void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
       wait.replaceAllUsesWith(newWait.getResults());
       wait.erase();
     } else {
-      Operation *op = operand->getOwner();
       operand->set(val);
     }
   }
@@ -1532,9 +1593,10 @@ void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
     op->erase();
 }
 
-void replaceUsesWithLocalLoad(OpBuilder &builder, OpResult old,
-                              TypedValue<ttg::MemDescType> alloc,
-                              TypedValue<ttg::AsyncTokenType> token) {
+ttg::LocalLoadOp
+replaceUsesWithLocalLoad(OpBuilder &builder, OpResult old,
+                         TypedValue<ttg::MemDescType> alloc,
+                         TypedValue<ttg::AsyncTokenType> token) {
   //  Remove redundant local_load -> local_alloc
   auto allocTy = alloc.getType();
   SmallVector<ttg::LocalAllocOp> allocsToErase;
@@ -1549,16 +1611,18 @@ void replaceUsesWithLocalLoad(OpBuilder &builder, OpResult old,
 
   // If there are some uses that were not local_allocs, we need to create a
   // local_load for them.
+  ttg::LocalLoadOp maybeLocalLoad;
   if (std::distance(old.getUsers().begin(), old.getUsers().end()) >
       allocsToErase.size()) {
     auto loc = old.getOwner()->getLoc();
-    auto sharedLoad = builder.template create<ttg::LocalLoadOp>(
+    maybeLocalLoad = builder.template create<ttg::LocalLoadOp>(
         loc, old.getType(), alloc, token);
-    old.replaceAllUsesWith(sharedLoad.getResult());
+    old.replaceAllUsesWith(maybeLocalLoad);
   }
   for (auto alloc : allocsToErase) {
     alloc.erase();
   }
+  return maybeLocalLoad;
 }
 
 bool comesFromLoadOrBlockArg(Value v) {

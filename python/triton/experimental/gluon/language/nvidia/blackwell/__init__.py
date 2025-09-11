@@ -2,23 +2,26 @@ from __future__ import annotations
 from typing import Optional, Tuple, List, TYPE_CHECKING
 
 from dataclasses import dataclass
+from triton.runtime.jit import constexpr_function
 from triton.experimental.gluon.language import _core as ttgl
 from triton.experimental.gluon.language._core import builtin, base_type, base_value, _unwrap_if_constexpr
+from triton.experimental.gluon.language._layouts import BlockedLayout, _get_shape_per_cta
 from triton.experimental.gluon.language._semantic import _check
 
 from . import tma
 from ..hopper import fence_async_shared, mbarrier
 from ..ampere import async_copy
 
+from triton._C.libtriton import ir
 if TYPE_CHECKING:
     from triton._C.libtriton.gluon_ir import GluonOpBuilder
-    from triton._C.libtriton import gluon_ir as ir
     from ..._semantic import GluonSemantic
 
 __all__ = [
     "allocate_tensor_memory",
     "async_copy",
     "fence_async_shared",
+    "get_tmem_32x32b_reg_layout",
     "mbarrier",
     "tensor_memory_descriptor",
     "TensorMemoryLayout",
@@ -59,6 +62,74 @@ class TensorMemoryLayout:
         return f"TL{block_str}{unpacked_str}{cta_split_str}TL"
 
 
+@dataclass(frozen=True, eq=True)
+class TensorMemoryScalesLayout:
+    """
+    Describes the layout for tensor memory scales in Blackwell architecture.
+
+    Args:
+        cta_split_num (Optional[Tuple[int, int]]): CTA split factors. Defaults to None.
+    """
+    cta_split_num: Optional[Tuple[int, int]] = None
+
+    def __post_init__(self):
+        assert self.cta_split_num is None or len(self.cta_split_num) == 2
+
+    def _to_ir(self, builder):
+        cta_split_num = self.cta_split_num or [1, 1]
+        return builder.get_tensor_memory_scales_layout(cta_split_num, )
+
+    def mangle(self) -> str:
+        cta_split_str = f"CS{self.cta_split_num[0]}x{self.cta_split_num[1]}" if self.cta_split_num else ""
+        return f"TLS{cta_split_str}TLS"
+
+
+@constexpr_function
+def _cdiv(x, div):
+    return (x + div - 1) // div
+
+
+@constexpr_function
+def get_tmem_32x32b_reg_layout(M, N, shape, num_warps, ctas_per_cga=None, cta_split_num=None, cta_order=None):
+    """Returns a BlockedLayout compatible with load/store on tensor memory with the 32x32b instruction variant.
+    """
+    assert len(shape) == 2, "expected a 2D tensor"
+    assert num_warps in [4, 8], "expected 4 or 8 warps"
+
+    shape_per_cta = _get_shape_per_cta(shape, cta_split_num)
+    blocks_per_tile = [shape_per_cta[0] // M, shape_per_cta[1] // N]
+    num_blocks = blocks_per_tile[0] * blocks_per_tile[1]
+
+    num_warp_groups = num_warps // 4
+    if M == 64:
+        threads_per_warp = [16, 2]
+        if num_blocks == 1:
+            size_per_thread = [1, _cdiv(N, num_warp_groups * 2)]
+            warps_per_cta = [4, num_warp_groups]
+        else:
+            size_per_thread = [1, _cdiv(N, 2)]
+            warps_per_cta = [4 * min(blocks_per_tile[0], num_warp_groups)]
+            warps_per_cta.append(_cdiv(num_warp_groups, warps_per_cta[0] // 4))
+    else:
+        if shape[0] > 128:
+            size_per_thread = [1, N]
+            threads_per_warp = [32, 1]
+            warps_per_cta = [4 * num_warp_groups, 1]
+        else:
+            size_per_thread = [1, _cdiv(N, num_warp_groups)]
+            threads_per_warp = [32, 1]
+            warps_per_cta = [4, num_warp_groups]
+    return BlockedLayout(
+        size_per_thread=size_per_thread,
+        threads_per_warp=threads_per_warp,
+        warps_per_cta=warps_per_cta,
+        order=[0, 1],
+        ctas_per_cga=ctas_per_cga,
+        cta_split_num=cta_split_num,
+        cta_order=cta_order,
+    )
+
+
 class tensor_memory_descriptor_type(base_type):
 
     def __init__(self, element_ty, shape, layout, alloc_shape):
@@ -66,7 +137,7 @@ class tensor_memory_descriptor_type(base_type):
         self.shape = shape
         self.layout = layout
         self.alloc_shape = alloc_shape
-        assert isinstance(layout, TensorMemoryLayout)
+        assert isinstance(layout, TensorMemoryLayout) or isinstance(layout, TensorMemoryScalesLayout)
 
     def to_ir(self, builder: GluonOpBuilder) -> None:
         return builder.get_tensor_mem_desc_ty(
@@ -199,12 +270,10 @@ class tensor_memory_descriptor(base_value):
         """
         index = _semantic.to_tensor(index)
         builder = _semantic.builder
-        offsets = [builder.get_int32(0)] * self.rank
-        offsets[0] = index.handle
         shape = self.shape[1:]
         layout = self.layout
         ret = tensor_memory_descriptor(None, self.dtype, shape, layout, self.type.alloc_shape)
-        ret.handle = builder.create_memdesc_subview(ret.type.to_ir(builder), self.handle, offsets)
+        ret.handle = builder.create_memdesc_index(ret.type.to_ir(builder), self.handle, index.handle)
         return ret
 
     @builtin
@@ -255,6 +324,23 @@ def allocate_tensor_memory(element_ty, shape, layout, value=None, _semantic=None
 
 
 @builtin
+def tcgen05_copy(src, dst, _semantic=None):
+    """
+    Start an asynchronous copy from shared memory to tensor memory.
+
+    WARNING: The current semantics of the instruction are not well defined and
+    the API will change in the future. Use at your own risk.
+
+    Args:
+        src (shared_memory_descriptor): Shared memory to copy from.
+        dst (tensor_memory_descriptor): Tensor memory to copy to.
+    """
+    assert isinstance(src, ttgl.shared_memory_descriptor), "source must be a shared memory descriptor"
+    assert isinstance(dst, tensor_memory_descriptor), "destination must be a tensor memory descriptor"
+    _semantic.builder.create_tmem_copy(src.handle, dst.handle)
+
+
+@builtin
 def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_preds=None, _semantic=None):
     """
     Emit a 5th generation TensorCore MMA instruction.
@@ -290,4 +376,12 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_
 
 @builtin
 def tcgen05_commit(barrier, _semantic=None):
+    """
+    This instruction causes the provided mbarrier to be arrived-on with a count
+    of 1 when all async tcgen05 MMA and copy instructions previously issued by
+    the thread are complete.
+
+    Args:
+        barrier (shared_memory_descriptor): The barrier to track completion of tcgen05 MMA and copy instructions.
+    """
     _semantic.builder.create_tcgen05_commit(barrier.handle)

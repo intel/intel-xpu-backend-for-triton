@@ -21,6 +21,7 @@ permissions: read-all
 
 env:
   PYTHONIOENCODING: utf-8
+  PYTHON_VERSION: "3.10"
   NEW_WORKSPACE: C:\gh${{ github.run_id }}
   SKIPLIST: --skip-list scripts/skiplist/${{ inputs.skip_list }}
   TRITON_TEST_CMD: bash -x scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --skip-list scripts/skiplist/${{ inputs.skip_list }} --reports-dir reports --ignore-errors
@@ -71,7 +72,39 @@ jobs:
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
-          python -c 'import torch;print(torch.__version__)'
+          python -c 'import torch; print(torch.__version__)' | Tee-Object -Variable PYTORCH_VERSION
+          echo "PYTORCH_VERSION=$PYTORCH_VERSION" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Identify GPU
+        run: |
+          # Initializing oneAPI to enable sycl-ls, which is used in capture-hw-details.sh on Windows.
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          bash -c './scripts/capture-hw-details.sh | tee -a $GITHUB_ENV'
+
+      - name: Report environment details
+        shell: bash
+        run: |
+          cd /c/gh${{ github.run_id }}
+          mkdir -p reports
+
+          cat <<EOF | tee /c/gh${{ github.run_id }}/reports/.env
+          TIMESTAMP=$(date '+%Y%m%d%H%M%S')
+          GITHUB_RUN_ID=$GITHUB_RUN_ID
+          GITHUB_RUN_NUMBER=$GITHUB_RUN_NUMBER
+          GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT
+          PYTHON_VERSION=$PYTHON_VERSION
+          PYTORCH_REPO=pytorch/pytorch
+          PYTORCH_COMMIT_ID=$(<.github/pins/pytorch.txt)"
+          PYTORCH_VERSION=$PYTORCH_VERSION
+          TRITON_REPO=$GITHUB_REPOSITORY
+          TRITON_COMMIT_ID=$GITHUB_SHA
+          TRITON_BRANCH=$GITHUB_REF_NAME
+          OS=${{ runner.os }}
+          LIBIGC1_VERSION=$LIBIGC1_VERSION
+          LEVEL_ZERO_VERSION=$LEVEL_ZERO_VERSION
+          AGAMA_VERSION=$AGAMA_VERSION
+          GPU_DEVICE=$GPU_DEVICE
+          EOF
 
       - name: Clean up Triton cache
         shell: bash
@@ -114,6 +147,13 @@ jobs:
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           cd ${{ env.NEW_WORKSPACE }}
           ${{ env.TRITON_TEST_CMD }} --core
+
+      - name: Run triton kernels tests
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          cd ${{ env.NEW_WORKSPACE }}
+          ${{ env.TRITON_TEST_CMD }} --triton-kernels
 
       - name: Run interpreter tests
         run: |
@@ -160,10 +200,26 @@ jobs:
           name: pass_rate
           path: ${{ env.NEW_WORKSPACE }}\pass_rate*.json
 
+      - name: Upload tutorial performance
+        uses: actions/upload-artifact@v4
+        with:
+          name: tutorials-report
+          if-no-files-found: warn
+          include-hidden-files: true
+          path: |
+            ${{ env.NEW_WORKSPACE }}\reports\*\*.csv
+            ${{ env.NEW_WORKSPACE }}\reports\.env
+
       - name: Clean up workspace
         if: ${{ always() }}
         run: |
           Remove-Item -LiteralPath ${{ env.NEW_WORKSPACE }} -Force -Recurse -ErrorAction Ignore
+
+      - name: Clear previous PyTorch build
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          rm -rf /c/pytorch/build
 
       - name: Clean up temporary files
         if: ${{ always() }}

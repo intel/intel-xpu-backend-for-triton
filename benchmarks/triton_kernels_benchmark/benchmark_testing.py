@@ -19,7 +19,6 @@ import matplotlib.pyplot as plt
 import torch
 from torch.profiler import profile, ProfilerActivity, record_function
 
-import triton
 from triton.testing import assert_close as triton_assert_close, Benchmark, do_bench as triton_do_bench
 
 from triton_kernels_benchmark import build_report
@@ -28,6 +27,7 @@ from triton_kernels_benchmark.benchmark_shapes_parser import ShapePatternParser
 BENCHMARKING_METHOD = os.getenv("BENCHMARKING_METHOD", "UPSTREAM_PYTORCH_PROFILER")
 BENCHMARKING_CONFIG = {
     "verify": os.getenv("VERIFY", "1") == "1",
+    "do_prewarmup": os.getenv("PREWARMUP", "1") == "1",
 }
 
 
@@ -40,6 +40,19 @@ def synchronize():
         torch.cuda.synchronize()
     elif torch.xpu.is_available():
         torch.xpu.synchronize()
+
+
+def do_prewarmup(fn, min_seconds=5):
+    """Looks like some functions require pre-warmup with minimum time to do the compilation.
+    It has to be done once."""
+    if not BENCHMARKING_CONFIG["do_prewarmup"]:
+        return
+
+    start = time.time()
+    while time.time() - start < min_seconds:
+        fn()
+        synchronize()
+    BENCHMARKING_CONFIG["do_prewarmup"] = False
 
 
 def _summarize_statistics(times, quantiles, return_mode):
@@ -93,9 +106,6 @@ def do_bench_elapsed_time(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quan
         fn()
     end_event.record()
     synchronize()
-    # FIXME: to avoid negative timings before DLE 2025.1;
-    # this workaround doesn't work for BMG.
-    triton.runtime.driver.active.utils.wait()
     estimate_ms = start_event.elapsed_time(end_event) / 5
 
     # The cache is also maintained in `triton_do_bench` function,
@@ -112,7 +122,7 @@ def do_bench_elapsed_time(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quan
 
 
 def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quantiles=None,
-                                       return_mode="mean", device="xpu", sync_submitting=True):
+                                       return_mode="mean", device="xpu", sync_submitting=True, benchmark_label=None):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -143,6 +153,10 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
     # Warm-up
     for _ in range(n_warmup):
         fn()
+        # To be consistent with the benchmark measurements
+        if sync_submitting:
+            synchronize()
+
     # Benchmark
     with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.XPU]) as prof:
         for _ in range(n_repeat):
@@ -162,7 +176,9 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
         # Record clocks
         synchronize()
 
-    profiling_func_filter = filter(lambda x: x.name.startswith("__profile_kernel_of_func"), prof.events())
+    profiling_func_filter = filter(
+        lambda x: x.name.startswith("__profile_kernel_of_func" if benchmark_label is None else benchmark_label),
+        prof.events())
     functions = list(profiling_func_filter)
 
     def extract_kernels(funcs):

@@ -37,6 +37,21 @@ namespace mlir {
 
 namespace {
 
+// Return true iff the given value v is a tensor splatting from 1 (int).
+// The usefulness of this func stems from the fact than if a buffer-op's mask
+// operand is a all-1-tensor, it does not need to take this operand.
+bool isSplatOneConstTensor(const Value v) {
+  auto constantOp = v.getDefiningOp<arith::ConstantOp>();
+  if (!constantOp)
+    return false;
+
+  if (auto denseAttr =
+          dyn_cast<DenseIntElementsAttr>(constantOp.getValueAttr()))
+    return denseAttr.isSplat() && denseAttr.getSplatValue<APInt>().isOne();
+
+  return false;
+}
+
 bool verifyNonSmallerByAssumption(
     Value expr, const DenseMap<Value, SetVector<Operation *>> &assumptions,
     const std::function<bool(Value)> &matchesOther) {
@@ -259,6 +274,97 @@ Value getBlockStride(Location loc, Value offset, PatternRewriter &rewriter) {
   return nullptr;
 }
 
+// /*-----------------AtomicCAS-------------------*/
+
+struct ConvertTritonAtomicCASOpToBufferAtomicCAS
+    : public mlir::OpRewritePattern<triton::AtomicCASOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  ConvertTritonAtomicCASOpToBufferAtomicCAS(
+      mlir::MLIRContext *context,
+      DenseMap<Value, SetVector<Operation *>> &assumptions,
+      ModuleAxisInfoAnalysis &axisAnalysisPass,
+      std::shared_ptr<DataFlowSolver> solver)
+      : mlir::OpRewritePattern<triton::AtomicCASOp>(context),
+        assumptions(assumptions), axisAnalysisPass(axisAnalysisPass),
+        solver(std::move(solver)) {}
+
+  mlir::LogicalResult
+  matchAndRewrite(triton::AtomicCASOp op,
+                  PatternRewriter &rewriter) const override {
+    LDBG("Try to convert: " << op);
+    Value ptr = op.getPtr();
+    auto sem = op.getSem();
+    auto scope = op.getScope();
+
+    if (!canUseBufferOps(ptr, assumptions, solver)) {
+      return rewriter.notifyMatchFailure(op, "canUseBufferOps check failed");
+    }
+
+    switch (scope) {
+    case MemSyncScope::GPU:
+    case MemSyncScope::CTA:
+      break;
+    default:
+      return rewriter.notifyMatchFailure(op, "CAS with unsupported scope");
+    }
+    LDBG("CAS supported scope");
+
+    switch (sem) {
+    case MemSemantic::RELAXED:
+    case MemSemantic::RELEASE:
+    case MemSemantic::ACQUIRE:
+    case MemSemantic::ACQUIRE_RELEASE:
+      break;
+    default:
+      return rewriter.notifyMatchFailure(
+          op, "CAS with unsupported memory ordering");
+    }
+
+    auto addPtrOp = ptr.getDefiningOp<triton::AddPtrOp>();
+    Value tensorPtr = addPtrOp.getPtr();
+    Value tensorOffset = addPtrOp.getOffset();
+    auto splatOp = tensorPtr.getDefiningOp<triton::SplatOp>();
+    Value basePtr = splatOp.getSrc();
+
+    // Buffer atomic CAS only supports i32/i64
+    auto checkType = getElementTypeOrSelf(op.getVal());
+    bool isSupportedType = checkType.isInteger(32) || checkType.isInteger(64);
+    if (!isSupportedType) {
+      return rewriter.notifyMatchFailure(op, "AtomicCAS with unsupported type");
+    }
+    LDBG("AtomicCAS supported type");
+
+    // Buffer atomics support 32 and 64-bit operations, so inputs must be at
+    // least 32-bits. Otherwise, fall back to the existing path for atomics
+    auto opValueType = op.getVal().getType();
+    auto opBitWidth = 0;
+    if (auto tensorType = dyn_cast<RankedTensorType>(opValueType)) {
+      auto elemBitWidth = tensorType.getElementTypeBitWidth();
+      opBitWidth =
+          getVectorSize(basePtr, tensorOffset, axisAnalysisPass) * elemBitWidth;
+    } else {
+      opBitWidth = opValueType.getIntOrFloatBitWidth();
+    }
+
+    if (opBitWidth < 32) {
+      return rewriter.notifyMatchFailure(
+          op, "BufferAtomicCAS requires opBitWidth >= 32");
+    }
+    Value blockStride = getBlockStride(op->getLoc(), tensorOffset, rewriter);
+    rewriter.replaceOpWithNewOp<triton::amdgpu::BufferAtomicCASOp>(
+        op, op.getVal().getType(), basePtr, tensorOffset, op.getCmp(),
+        op.getVal(), blockStride, sem, scope);
+    return success();
+  }
+
+private:
+  // Assumptions collected through the function
+  const DenseMap<Value, SetVector<Operation *>> &assumptions;
+  ModuleAxisInfoAnalysis &axisAnalysisPass;
+  std::shared_ptr<DataFlowSolver> solver;
+};
+
 struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     : public mlir::OpRewritePattern<triton::AtomicRMWOp> {
   using OpRewritePattern::OpRewritePattern;
@@ -385,7 +491,7 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     }
 
     Value maybeMask{};
-    if (op.getMask() && !isZeroConst(op.getMask()))
+    if (op.getMask() && !isSplatOneConstTensor(op.getMask()))
       maybeMask = op.getMask();
     Value blockStride = getBlockStride(op->getLoc(), tensorOffset, rewriter);
     rewriter.replaceOpWithNewOp<triton::amdgpu::BufferAtomicRMWOp>(
@@ -434,7 +540,7 @@ struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
       if (op.getOther() && !isZeroConst(op.getOther()))
         maybeOther = op.getOther();
       Value maybeMask{};
-      if (op.getMask() && !isZeroConst(op.getMask()))
+      if (op.getMask() && !isSplatOneConstTensor(op.getMask()))
         maybeMask = op.getMask();
       Value blockStride = getBlockStride(op->getLoc(), tensorOffset, rewriter);
 
@@ -495,7 +601,7 @@ struct ConvertTritonStoreToBufferStore
       auto splatOp = tensorPtr.getDefiningOp<triton::SplatOp>();
       Value basePtr = splatOp.getSrc();
       Value maybeMask{};
-      if (op.getMask() && !isZeroConst(op.getMask()))
+      if (op.getMask() && !isSplatOneConstTensor(op.getMask()))
         maybeMask = op.getMask();
       Value blockStride = getBlockStride(op->getLoc(), tensorOffset, rewriter);
       rewriter.replaceOpWithNewOp<triton::amdgpu::BufferStoreOp>(
@@ -515,13 +621,10 @@ private:
 
 } // anonymous namespace
 
-class TritonAMDGPUConvertToBufferOpsPass
-    : public impl::TritonAMDGPUConvertToBufferOpsBase<
+struct TritonAMDGPUConvertToBufferOpsPass
+    : impl::TritonAMDGPUConvertToBufferOpsBase<
           TritonAMDGPUConvertToBufferOpsPass> {
-
-public:
-  using impl::TritonAMDGPUConvertToBufferOpsBase<
-      TritonAMDGPUConvertToBufferOpsPass>::TritonAMDGPUConvertToBufferOpsBase;
+  using Base::Base;
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -551,6 +654,8 @@ public:
     if (this->allowBufferAtomics && ISAFamily::CDNA3 == isaFamily)
       patterns.add<ConvertTritonAtomicRMWOpToBufferAtomicRMW>(
           context, assumptions, axisInfoAnalysis, solver, isaFamily);
+    patterns.add<ConvertTritonAtomicCASOpToBufferAtomicCAS>(
+        context, assumptions, axisInfoAnalysis, solver);
 
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();

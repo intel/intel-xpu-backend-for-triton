@@ -10,7 +10,7 @@ include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td"
 //===----------------------------------------------------------------------===//
 
 def DpasEncodingAttr : DistributedEncoding<"DpasEncoding", "intel_dpas_encoding",
-                                          [MmaEncodingTrait], TritonIntelGPU_Dialect> {
+                                          [MmaEncodingTrait, DeclareLayoutEncodingMethods], TritonIntelGPU_Dialect> {
   let mnemonic = "dpas";
 
   let description = [{
@@ -254,7 +254,7 @@ The semantic of this `tt.dot` includes GEMM tiling configuration as:
 //===----------------------------------------------------------------------===//
 
 def WarpEncodingAttr : DistributedEncoding<"WarpEncoding", "intel_warp_encoding",
-                                     [], TritonIntelGPU_Dialect> {
+                                     [DeclareLayoutEncodingMethods], TritonIntelGPU_Dialect> {
   let mnemonic = "warp";
 
   let description = [{

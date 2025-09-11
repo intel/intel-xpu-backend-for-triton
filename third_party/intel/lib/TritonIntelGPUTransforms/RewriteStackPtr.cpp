@@ -38,11 +38,9 @@ public:
 
     // 1: Process function arguments for root functions
     if (!usePoison) {
-      mod.walk([&](FunctionOpInterface funcOp) {
-        if (allocation.isRoot(funcOp)) {
-          insertFuncArguments(funcOp, ptrTy);
-        }
-      });
+      for (auto &root : allocation.getRoots()) {
+        insertFuncArguments(root, ptrTy);
+      }
     }
 
     // 2: Collect all AddressOfOp that need updating

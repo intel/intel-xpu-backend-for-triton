@@ -82,7 +82,7 @@ runs:
       uses: ./.github/actions/load
       env:
         # Increase this value to reset cache
-        CACHE_NUMBER: 16
+        CACHE_NUMBER: 17
       with:
         path: pytorch
         key: pytorch-$PYTORCH_CACHE_KEY-$CACHE_NUMBER
@@ -126,7 +126,7 @@ runs:
         # CMake Error at third_party/protobuf/cmake/CMakeLists.txt:2 (cmake_minimum_required)
         pip install 'cmake<4.0.0'
         pip install -r requirements.txt
-        USE_XCCL=1 USE_STATIC_MKL=1 CFLAGS="-Wno-error=maybe-uninitialized" python setup.py bdist_wheel 2>&1 | grep -v \
+        USE_XCCL=1 USE_STATIC_MKL=1 python setup.py bdist_wheel 2>&1 | grep -v \
           "Double arithmetic operation is not supported on this platform with FP64 conversion emulation mode (poison FP64 kernels is enabled)." | grep -v '^$'
 
     - name: Install PyTorch (built from source)

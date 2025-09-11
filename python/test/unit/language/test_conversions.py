@@ -7,7 +7,7 @@ import pytest
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_cuda, is_hip, is_hip_cdna2, is_hip_cdna3, is_hip_cdna4, is_xpu
+from triton._internal_testing import is_cuda, is_xpu, is_hip, is_hip_cdna2, is_hip_cdna3, is_hip_cdna4, is_hip_gfx12
 
 
 def matching_int(dtype):
@@ -234,17 +234,9 @@ def downcast_test(src_dtype, dst_dtype, rounding, exponent_bits, mantissa_bits, 
 
     src = launch_exhaustive_populate(src_dtype, offset << 24, 2**24, False, src_dtype.primitive_bitwidth, max_repr, device)
     dst = launch_type_convert_triton(src, src_dtype, dst_dtype, device=device, rounding=rounding)
-    # Emulated cast always works on fp32. In XPU Triton kernels FP32 is casted to FP8 through FP16, which
-    # in some cases gives different results compared to direct FP32 to FP8 conversion (some precision might
-    # be lost due to two-step conversion). To get matching results, we convert FP32 source data to FP16 and
-    # back to FP32. This will need to be changed back when HW FP32->FP8 convertion is used for XPU.
-    if device=='xpu' and src_dtype.primitive_bitwidth == 32 and dst_dtype.primitive_bitwidth == 8:
-        src = launch_type_convert_triton(src, src_dtype, tl.float16, device=device, rounding=rounding)
-        src = launch_type_convert_triton(src, tl.float16, tl.float32, device=device)
-    else:
-        src = launch_type_convert_triton(src, src_dtype, tl.float32, device=device)
+    src = launch_type_convert_triton(src, src_dtype, tl.float32, device=device)
 
-    dst2 = launch_downcast_emulated(src, src_dtype, dst_dtype, rounding, exponent_bits, mantissa_bits, exponent_bias, device=device)
+    dst2 = launch_downcast_emulated(src, tl.float32, dst_dtype, rounding, exponent_bits, mantissa_bits, exponent_bias, device=device)
 
     dst = launch_upcast_emulated(dst, exponent_bits, mantissa_bits, exponent_bias, device=device)
     dst2 = launch_upcast_emulated(dst2, exponent_bits, mantissa_bits, exponent_bias, device=device)
@@ -322,8 +314,8 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
             with pytest.raises(triton.CompilationError, match="not supported in this architecture"):
                 launch_exhaustive_populate(getattr(tl, src_dtype), 0, 65536, False, 8, 0x7f, device=device)
             return
-        if src_dtype in ('float8e4b8', 'float8e5b16') and is_hip_cdna2():
-            pytest.skip(f"{src_dtype} is not supported on AMDGPU CDNA2")
+        if src_dtype in ('float8e4b8', 'float8e5b16') and (is_hip_cdna2() or is_hip_gfx12()):
+            pytest.skip(f"{src_dtype} is not supported on AMDGPU CDNA2 and RDNA4")
     elif is_xpu():
         if (src_dtype in ('float8e4b8', 'float8e5b16')):
             # If the dtype should error out in the given device, we assert that and return
@@ -381,8 +373,8 @@ def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
             pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on AMDGPU CDNA3")
 
     if is_hip():
-        if dst_dtype in ('float8e4b8', 'float8e5b16') and is_hip_cdna2():
-            pytest.skip(f"{dst_dtype} is not supported on AMDGPU CDNA2")
+        if dst_dtype in ('float8e4b8', 'float8e5b16') and (is_hip_cdna2() or is_hip_gfx12()):
+            pytest.skip(f"{dst_dtype} is not supported on AMDGPU CDNA2 and RDNA4")
 
     if is_xpu():
         if dst_dtype in ('float8e5b16', 'float8e4b8') and rounding == 'rtne':

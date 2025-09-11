@@ -34,6 +34,8 @@
 #include "Dialect/TritonAMDGPU/IR/Dialect.cpp.inc"
 // clang-format on
 
+#include "third_party/amd/include/Dialect/TritonAMDGPU/Utility/CommonUtils.h"
+
 using namespace mlir;
 using namespace mlir::triton::amdgpu;
 
@@ -86,8 +88,8 @@ bool hasMatchingCTATileLayoutForSliceConcat(
   auto [laneSrc, laneDst] = getBases("lane");
   auto [warpSrc, warpDst] = getBases("warp");
 
-  auto shapeCTASrc = mlir::triton::gpu::getShapePerCTATile(srcTy);
-  auto shapeCTADst = mlir::triton::gpu::getShapePerCTATile(dstTy);
+  auto shapeCTASrc = mlir::triton::AMD::getShapePerCTATile(srcTy);
+  auto shapeCTADst = mlir::triton::AMD::getShapePerCTATile(dstTy);
   if (shapeCTASrc != shapeCTADst) {
     emitError(
         "CTA tile shapes must match between source and destination tensors.");
@@ -159,7 +161,7 @@ LogicalResult ExtractSliceOp::verify() {
   auto srcShape = srcTy.getShape();
   auto dstShape = dstTy.getShape();
   auto offsets = getStaticOffsets();
-  auto shapePerCTATile = mlir::triton::gpu::getShapePerCTATile(srcTy);
+  auto shapePerCTATile = mlir::triton::AMD::getShapePerCTATile(srcTy);
   size_t rank = srcShape.size();
 
   auto failDim = [&](StringRef msg, int i) -> LogicalResult {
@@ -253,9 +255,11 @@ LogicalResult UpcastMXFPOp::verify() {
   Builder b(getContext());
   if (xTy.getElementType() != b.getBF16Type() &&
       xTy.getElementType() != b.getF16Type() &&
-      xTy.getElementType() != b.getI8Type()) {
-    return emitOpError(
-        "element type of the first operand must be bf16/fp16 or i8");
+      xTy.getElementType() != b.getI8Type() &&
+      xTy.getElementType() != b.getType<Float8E4M3FNType>() &&
+      xTy.getElementType() != b.getType<Float8E5M2Type>()) {
+    return emitOpError("element type of the first operand must be bf16/fp16, "
+                       "OCP fp8/bf8 or i8");
   }
 
   if (scaleTy.getElementType() != b.getI8Type()) {
@@ -328,27 +332,30 @@ UpcastMXFPOp::deduceOutputType(TypedValue<RankedTensorType> inputTensor,
                                Type outputElemType) {
   MLIRContext *ctx = inputTensor.getContext();
   auto xTy = inputTensor.getType();
-  if (inputElemType != ScaleDotElemType::E2M1)
+  if (!(inputElemType == ScaleDotElemType::E2M1 ||
+        inputElemType == ScaleDotElemType::E4M3 ||
+        inputElemType == ScaleDotElemType::E5M2))
     return xTy;
 
+  auto factor = inputElemType == ScaleDotElemType::E2M1 ? 2 : 1;
   auto xShape = xTy.getShape();
   auto newShape = llvm::to_vector(xShape);
   auto encoding = xTy.getEncoding();
   if (!encoding) {
-    newShape.back() *= 2;
+    newShape.back() *= factor;
     return RankedTensorType::get(xShape, outputElemType);
   }
 
   auto oldEncoding = cast<DotOperandEncodingAttr>(encoding);
-  auto newVEncoding = DotOperandEncodingAttr::get(ctx, oldEncoding.getOpIdx(),
-                                                  oldEncoding.getParent(),
-                                                  oldEncoding.getKWidth() * 2);
+  auto newVEncoding = DotOperandEncodingAttr::get(
+      ctx, oldEncoding.getOpIdx(), oldEncoding.getParent(),
+      oldEncoding.getKWidth() * factor);
   // Figure out the K dimension for the input A/B, given that the return
   // type is upcasted A/B type so we need to update the proper dim size.
   const int opIdx = oldEncoding.getOpIdx();
   const bool hasBatch = xShape.size() == 3;
   const int kIdx = (opIdx == 0 ? 1 : 0) + hasBatch;
-  newShape[kIdx] *= 2;
+  newShape[kIdx] *= factor;
   return RankedTensorType::get(newShape, outputElemType, newVEncoding);
 }
 
@@ -458,6 +465,61 @@ LogicalResult ConcatOp::verify() {
   return success();
 }
 
+LogicalResult LocalLoadPackedTransposedOp::verify() {
+  auto srcTy = getSrc().getType();
+  auto dstTy = getType();
+  auto srcShape = srcTy.getShape();
+
+  auto dotEnc = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
+  if (!dotEnc)
+    return emitOpError("only works with DotOperandEncodingAttr dst encoding");
+
+  auto sharedEnc =
+      dyn_cast<triton::gpu::SwizzledSharedEncodingAttr>(srcTy.getEncoding());
+  if (!sharedEnc)
+    return emitOpError(
+        "only works with SwizzledSharedEncodingAttr src encoding");
+
+  auto order = sharedEnc.getOrder();
+  bool isA = dotEnc.getOpIdx() == 0;
+
+  // operand A: [0, 1] / [1, 2, 0]
+  // operand B: [1, 0] / [2, 1, 0]
+  bool hasBatchDim = srcShape.size() == 3;
+
+  if (isA) {
+    bool matchingOrderA =
+        order.equals({0, 1}) || (hasBatchDim && order.equals({1, 2, 0}));
+    if (!matchingOrderA)
+      return emitOpError("Order of dimensions don't match expected");
+
+    SmallVector<int64_t> srcShapeBasedOnDstA(dstTy.getShape());
+    srcShapeBasedOnDstA[hasBatchDim ? 1 : 0] /= 2;
+    srcShapeBasedOnDstA[hasBatchDim ? 2 : 1] *= 2;
+
+    bool aDimMatch = srcShape.equals(ArrayRef(srcShapeBasedOnDstA));
+    if (!aDimMatch)
+      return emitOpError(
+          "Input and output dimensions don't match after packing changes");
+  } else {
+    bool matchingOrderB =
+        order.equals({1, 0}) || (hasBatchDim && order.equals({2, 1, 0}));
+    if (!matchingOrderB)
+      return emitOpError("Order of dimensions don't match expected");
+
+    SmallVector<int64_t> srcShapeBasedOnDstB(dstTy.getShape());
+    srcShapeBasedOnDstB[hasBatchDim ? 1 : 0] *= 2;
+    srcShapeBasedOnDstB[hasBatchDim ? 2 : 1] /= 2;
+
+    bool bDimMatch = srcShape.equals(ArrayRef(srcShapeBasedOnDstB));
+    if (!bDimMatch)
+      return emitOpError(
+          "Input and output dimensions don't match after packing changes");
+  }
+
+  return success();
+}
+
 // This pattern removes a concatOp if it has a single input operand.
 // This scenario can potentially happen as a result of ops refinement.
 mlir::LogicalResult foldConcatOpFromSingleSource(amdgpu::ConcatOp op,
@@ -476,4 +538,5 @@ void ConcatOp::getCanonicalizationPatterns(mlir::RewritePatternSet &patterns,
                                            mlir::MLIRContext *context) {
   patterns.add(foldConcatOpFromSingleSource);
 }
+
 } // namespace mlir::triton::amdgpu

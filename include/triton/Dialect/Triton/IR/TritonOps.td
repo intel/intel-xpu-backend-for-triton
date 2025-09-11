@@ -383,8 +383,14 @@ def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [
     }];
 }
 
-def TT_AtomicCASOp : TT_Op<"atomic_cas", [SameOperandsAndResultShape,
-                                          SameOperandsAndResultEncoding]> {
+def TT_AtomicCASOp : TT_Op<"atomic_cas", [
+  SameOperandsAndResultShape,
+  SameOperandsAndResultEncoding,
+  TypesMatchWith<"ptr type matches cmp type", "cmp", "ptr",
+                  "getPointerTypeSameShape($_self)">,
+  TypesMatchWith<"ptr type matches value type", "val", "ptr",
+                  "getPointerTypeSameShape($_self)">
+]> {
     let summary = "atomic cas";
 
     let description = [{
@@ -430,6 +436,16 @@ def TT_SplatOp : TT_Op<"splat", [Pure,
     let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
 
     let hasFolder = 1;
+}
+
+def TT_UnsplatOp : TT_Op<"unsplat", [Pure,
+                                     DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
+    let summary = "convert a tensor with a single element to a scalar";
+    let arguments = (ins TT_Tensor:$src);
+    let results = (outs TT_Type:$result);
+
+    let assemblyFormat = "$src attr-dict `:` type($src)";
+    let hasVerifier = 1;
 }
 
 def TT_ExpandDimsOp : TT_Op<"expand_dims", [Pure,
@@ -781,6 +797,26 @@ def TT_ScanReturnOp: TT_Op<"scan.return",
     let assemblyFormat = "$result attr-dict `:` type($result)";
 }
 
+//
+// Map Elementwise op
+//
+def TT_MapElementwiseOp: TT_Op<"map_elementwise", [SameOperandsAndResultEncoding,
+                                                   SameOperandsAndResultShape,
+                                                   RecursiveMemoryEffects]> {
+    let summary = "Map a scalar subregion over a tensor";
+    let arguments = (ins Variadic<TT_Tensor>:$srcs, I32Attr:$pack);
+    let results = (outs Variadic<TT_Tensor>:$result);
+    let regions = (region AnyRegion:$scalarOp);
+    let hasVerifier = 1;
+    let hasRegionVerifier = 1;
+}
+
+def TT_MapElementwiseReturnOp: TT_Op<"map_elementwise.return",
+                               [HasParent<"MapElementwiseOp">, Pure, Terminator, ReturnLike]> {
+    let summary = "terminator for map elementwise operator";
+    let arguments = (ins Variadic<AnyType>:$result);
+    let assemblyFormat = "attr-dict ($result^ `:` type($result))?";
+}
 
 //
 // External Elementwise op
@@ -1015,7 +1051,8 @@ def TT_MakeTensorDescOp : TT_Op<"make_tensor_descriptor", [
   let arguments = (ins
     TT_Ptr:$base,
     Variadic<I32>:$shape,
-    Variadic<I64>:$strides
+    Variadic<I64>:$strides,
+    DefaultValuedAttr<TT_PaddingOptionAttr, "::mlir::triton::PaddingOption::PAD_ZERO">:$padding
   );
 
   let results = (outs TT_TensorDescType:$result);
@@ -1023,7 +1060,8 @@ def TT_MakeTensorDescOp : TT_Op<"make_tensor_descriptor", [
   let assemblyFormat = "$base `,` `[` $shape `]` `,` `[` $strides `]` attr-dict `:` type($base) `,` type($result)";
 
   let builders = [
-    OpBuilder<(ins "Value":$base, "ValueRange":$shape, "ValueRange":$strides, "ArrayRef<int32_t>":$blockShape, "bool":$isSignedInteger)>
+    OpBuilder<(ins "Value":$base, "ValueRange":$shape, "ValueRange":$strides, "ArrayRef<int32_t>":$blockShape, "bool":$isSignedInteger,
+    "triton::PaddingOption":$padding)>
   ];
 
   let extraClassDeclaration = [{
@@ -1239,7 +1277,7 @@ def ReturnOp : TT_Op<"return", [Pure, HasParent<"FuncOp">, /*MemRefsNormalizable
   let arguments = (ins Variadic<AnyType>:$srcs);
 
   let builders = [OpBuilder<(ins), [{
-    build($_builder, $_state, std::nullopt);
+    build($_builder, $_state, mlir::ValueRange());
   }]>];
 
   let assemblyFormat = "attr-dict ($srcs^ `:` type($srcs))?";

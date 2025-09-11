@@ -21,11 +21,15 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#include "Utilities.h"
+#include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/AttrTypeSubElements.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/IR/Location.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
@@ -36,7 +40,12 @@
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Partition.h"
+#include "triton/Dialect/TritonGPU/Transforms/PartitionBuilder.h"
+#include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "llvm/Support/ErrorHandling.h"
 
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
@@ -55,294 +64,339 @@ namespace triton {
 
 namespace {
 
-struct ArefUseNode {
-  ArefUseNode *parent;
-  Operation *op;
-  SmallVector<ArefUseNode *> subOps;
-  bool containsAsync = false;
-};
+// ----------------------------------------------------------------------------
+
+void assignStageCluster(Operation *op, std::optional<PartitionId> partitionId,
+                        StageCluster stageCluster, OpBuilder &builder) {
+  if (partitionId) {
+    op->setAttr(kPartitionAttrName,
+                builder.getI32IntegerAttr(partitionId->index()));
+    if (stageCluster) {
+      op->setAttr(triton::kLoopStageAttrName,
+                  builder.getI32IntegerAttr(stageCluster->first));
+      op->setAttr(triton::kLoopClusterAttrName,
+                  builder.getI32IntegerAttr(stageCluster->second));
+    }
+  }
+}
 
 struct ArefValue {
   Value emptyMbars;
   Value fullMbars;
   int depth;
-  SmallVector<ArefUseNode *> users;
-  SmallVector<Value> updatedValues;
+  SmallVector<Value> buffers;
 };
 
-struct ArefUseGraph {
-  llvm::MapVector<Operation *, ArefUseNode> nodes;
-  llvm::MapVector<Value, ArefValue> arefs;
+Value getEmptyBarrier(PatternRewriter &rewriter, Location loc, ArefValue aref,
+                      Value stage) {
+  return createSingleBufferView(rewriter, aref.emptyMbars, stage);
+}
+
+Value getFullBarrier(PatternRewriter &rewriter, Location loc, ArefValue aref,
+                     Value stage) {
+  return createSingleBufferView(rewriter, aref.fullMbars, stage);
+}
+
+struct BarrierCount {
+  int producerPendingCount;
+  int consumerPendingCount;
 };
 
-MemDescType getMemDesc(PatternRewriter &rewriter, llvm::ArrayRef<int64_t> shape,
-                       Type intType) {
-  auto ctx = rewriter.getContext();
-  Attribute sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
-  auto barrierCTALayout = CTALayoutAttr::get(
-      /*context=*/ctx, /*CTAsPerCGA=*/{1},
-      /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
-  auto barrierEncoding =
-      SwizzledSharedEncodingAttr::get(ctx, 1, 1, 1, {0}, barrierCTALayout);
-  return MemDescType::get(shape, intType, barrierEncoding, sharedMemorySpace,
-                          /*mutableMemory=*/true);
-}
-MemDescType getBarrierMemDesc(PatternRewriter &rewriter,
-                              llvm::ArrayRef<int64_t> shape) {
-  return getMemDesc(rewriter, shape, rewriter.getI64Type());
+BarrierCount getArrivalCount(ArefCreateOp op) {
+  std::optional<int> producerPendingCount, consumerPendingCount;
+  std::set<PartitionId> consumerGroups;
+
+  for (auto user : op->getUsers()) {
+    auto partitionId = getPartitionId(user);
+    if (!partitionId)
+      continue;
+
+    if (auto putExitOp = dyn_cast<ArefPutExitOp>(user)) {
+      int pendingCount = 0;
+      for (auto prod : putExitOp.getAsyncOps()) {
+        auto kind = dyn_cast<AsyncOpAttr>(prod).getValue();
+        switch (kind) {
+        case AsyncOp::TC5MMA:
+        case AsyncOp::TMALoad:
+        case AsyncOp::NONE:
+          pendingCount += 1;
+          break;
+        default:
+          llvm_unreachable("unsupported producer kind");
+        }
+      }
+
+      if (consumerPendingCount) {
+        assert(*consumerPendingCount == pendingCount &&
+               "inconsistent consumer pending count");
+      } else {
+        consumerPendingCount = pendingCount;
+      }
+    } else if (auto getExitOp = dyn_cast<ArefGetExitOp>(user)) {
+      int pendingCount = 0;
+      for (auto consumer : getExitOp.getAsyncOps()) {
+        auto kind = dyn_cast<AsyncOpAttr>(consumer).getValue();
+        switch (kind) {
+        case AsyncOp::TC5MMA:
+        case AsyncOp::WGMMA:
+        case AsyncOp::NONE:
+          pendingCount += 1;
+          break;
+        default:
+          llvm_unreachable("unsupported consumer kind");
+        }
+      }
+
+      if (producerPendingCount) {
+        assert(*producerPendingCount == pendingCount &&
+               "inconsistent producer pending count");
+      }
+      producerPendingCount = pendingCount;
+      consumerGroups.insert(*partitionId);
+    }
+  }
+
+  assert(producerPendingCount);
+  assert(consumerPendingCount);
+  int numGroupConsumers = consumerGroups.size();
+  *producerPendingCount *= numGroupConsumers;
+
+  return {*producerPendingCount, *consumerPendingCount};
 }
 
-Value getBarrierAt(PatternRewriter &rewriter, Location loc, Value mbars,
-                   Value idx) {
-  auto memDesc = getBarrierMemDesc(rewriter, {1});
-  return rewriter.create<triton::gpu::MemDescSubviewOp>(
-      loc, memDesc, mbars, SmallVector<Value>{idx});
+Value createBarriers(ImplicitLocOpBuilder &b1, ImplicitLocOpBuilder &b2,
+                     int numBarriers, int arrivalCount) {
+  Value barrierAlloc = createScalarAlloc(b1, b1.getI64Type(), numBarriers);
+  for (unsigned i = 0; i < numBarriers; i++) {
+    Value barrierView = createSingleBufferView(b1, barrierAlloc, i);
+    b1.create<InitBarrierOp>(barrierView, arrivalCount);
+  }
+  // Invalidate and deallocate the barriers.
+  for (unsigned i = 0; i < numBarriers; i++) {
+    Value barrierView = createSingleBufferView(b2, barrierAlloc, i);
+    b2.create<InvalBarrierOp>(barrierView);
+  }
+  b2.create<LocalDeallocOp>(barrierAlloc);
+  return barrierAlloc;
 }
 
-Value getBarrier(PatternRewriter &rewriter, Location loc, Value mBars,
-                 Value idx) {
-  return getBarrierAt(rewriter, loc, mBars, idx);
+ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter) {
+  BarrierCount count = getArrivalCount(op);
+
+  auto arefTy = op.getType();
+  auto arefBufTypes = llvm::to_vector(llvm::map_range(
+      arefTy.getBaseType(), [](Type type) { return cast<MemDescType>(type); }));
+  auto shape = arefBufTypes[0].getShape();
+  auto depth = shape[0];
+
+  SetVector<Operation *> arefUsers;
+  for (auto user : op->getUsers())
+    arefUsers.insert(user);
+  auto sorted = topologicalSort(arefUsers);
+
+  ImplicitLocOpBuilder b1(op->getLoc(), op), b2(op->getLoc(), op);
+  auto op1 = op->getBlock()->findAncestorOpInBlock(*sorted.back());
+  b2.setInsertionPointAfter(op1);
+
+  auto emptyMbars = createBarriers(b1, b2, depth, count.producerPendingCount);
+  auto fullMbars = createBarriers(b1, b2, depth, count.consumerPendingCount);
+
+  return ArefValue{emptyMbars, fullMbars, static_cast<int>(depth),
+                   op.getOperands()};
 }
 
-void waitOnMbar(PatternRewriter &rewriter, Location loc, Value mBars, Value idx,
-                Value phase) {
-  auto ctx = rewriter.getContext();
-  auto barrier = getBarrier(rewriter, loc, mBars, idx);
-  // wait on empty/full
-  auto waitOp =
-      rewriter.create<triton::nvidia_gpu::WaitBarrierOp>(loc, barrier, phase);
+SmallVector<Value> getSubViews(ArefValue arefVal, Value stage, Location loc,
+                               OpBuilder &rewriter) {
+  SmallVector<Value> views;
+  for (auto buffer : arefVal.buffers) {
+    auto memDescType = cast<MemDescType>(buffer.getType());
+    auto shape = memDescType.getShape();
+    auto rank = shape.size() - 1;
+
+    SmallVector<int64_t> tensorShape(shape.begin() + 1, shape.end());
+    auto memDescTypeNew = MemDescType::get(
+        tensorShape, memDescType.getElementType(), memDescType.getEncoding(),
+        memDescType.getMemorySpace(), true);
+    Value singleBuffer =
+        rewriter.create<MemDescIndexOp>(loc, memDescTypeNew, buffer, stage);
+    views.push_back(singleBuffer);
+  }
+
+  return views;
 }
 
-void signalArrival(PatternRewriter &rewriter, Location loc, Value mBars,
-                   Value idx) {
-  // And a barrier arrive to signal completion of the region if none of the
-  // underlying ops are already async.
-  auto barrier = getBarrierAt(rewriter, loc, mBars, idx);
-  // wait on empty. Use a default phase for now, will rewrite later
-  rewriter.create<triton::nvidia_gpu::ArriveBarrierOp>(loc, barrier, 1);
+void lowerAsyncLoads(ArefPutEnterOp op, PatternRewriter &rewriter,
+                     ArefValue arefVal) {
+  auto loc = op.getLoc();
+  // for now handle TMA loads in PutEnterOp
+  SmallVector<Operation *> loadOps;
+  for (auto result : op.getResults()) {
+    for (auto user : result.getUsers()) {
+      // Temporary workaround for lit testing: handle TMA loads here until a
+      // dedicated tma_load op is added to the NVWS dialect
+      if (user->getName().getStringRef() == "tma_load")
+        loadOps.push_back(user);
+    }
+  }
+  assert(loadOps.size() <= op.getResults().size());
+  if (loadOps.empty())
+    return;
+
+  // Use the token to find the matching enter / exit pair
+  //   %bufs:n, %token = aref_put.enter %aref[%enter_idx]
+  //   tma_load %bufs[0]
+  //   ..
+  //   tma_load %bufs[n-1]
+  //   aref_put.exit %aref[%exit_idx], %token
+  ArefPutExitOp arefPutExitOp;
+  for (auto user : op.getToken().getUsers()) {
+    if (auto exitOp = dyn_cast<ArefPutExitOp>(user)) {
+      arefPutExitOp = exitOp;
+      break;
+    }
+  }
+  assert(arefPutExitOp);
+  assert(arefPutExitOp.getAref() == op.getAref() &&
+         "Expecting matching Aref on the ArefPutExitOp");
+
+  Value fullBarrier =
+      getFullBarrier(rewriter, loc, arefVal, arefPutExitOp.getStage());
+  Value pred = rewriter.create<arith::ConstantIntOp>(loc, 1, 1);
+  rewriter.create<triton::nvidia_gpu::BarrierExpectOp>(loc, fullBarrier, 0,
+                                                       pred);
+  return;
+}
+
+void insertWaitOp(PatternRewriter &rewriter, Operation *op, Value barrier,
+                  Value phase, Value stage) {
+  auto waitOp = rewriter.create<WaitBarrierOp>(op->getLoc(), barrier, phase);
+  assignStageCluster(waitOp, getPartitionId(op), getStageCluster(op), rewriter);
+}
+
+void rewritePutEnterOp(ArefCreateOp arefOp, ArefPutEnterOp op,
+                       PatternRewriter &rewriter, ArefValue arefVal) {
+  auto loc = op.getLoc();
+  rewriter.setInsertionPointAfter(op);
+
+  // get empty barrier at a given stage
+  Value emptyBarrier = getEmptyBarrier(rewriter, loc, arefVal, op.getStage());
+
+  insertWaitOp(rewriter, op, emptyBarrier, op.getPhase(), op.getStage());
+  auto views = getSubViews(arefVal, op.getStage(), loc, rewriter);
+  assert(views.size() == op.getBuffers().size());
+
+  // TMA load need special handling as it requires fullMbarrier that
+  // we need to get from matching ArefPutExitOp
+  lowerAsyncLoads(op, rewriter, arefVal);
+
+  // replaces uses with views
+  for (int i = 0; i < arefVal.buffers.size(); ++i)
+    op.getBuffers()[i].replaceAllUsesWith(views[i]);
+}
+
+void rewriteGetEnterOp(ArefCreateOp arefOp, ArefGetEnterOp op,
+                       PatternRewriter &rewriter, ArefValue arefVal) {
+  auto loc = op.getLoc();
+  rewriter.setInsertionPointAfter(op);
+
+  Value fullBarrier = getFullBarrier(rewriter, loc, arefVal, op.getStage());
+  insertWaitOp(rewriter, op, fullBarrier, op.getPhase(), op.getStage());
+  auto views = getSubViews(arefVal, op.getStage(), loc, rewriter);
+  assert(views.size() == op.getBuffers().size());
+
+  for (int i = 0; i < arefVal.buffers.size(); ++i)
+    op.getBuffers()[i].replaceAllUsesWith(views[i]);
+}
+
+void insertArriveBarrier(Location loc, ArrayAttr asyncOps,
+                         PatternRewriter &rewriter, Value mbar,
+                         std::optional<PartitionId> partitionId,
+                         StageCluster stageCluster) {
+  for (auto asyncOp : asyncOps) {
+    auto asyncOpEnum = cast<AsyncOpAttr>(asyncOp).getValue();
+    Operation *arriveOp = {};
+    switch (asyncOpEnum) {
+    case AsyncOp::NONE:
+    case AsyncOp::WGMMA:
+      arriveOp = rewriter.create<nvidia_gpu::ArriveBarrierOp>(loc, mbar, 1);
+      break;
+    case AsyncOp::TC5MMA:
+    case AsyncOp::TMEMCopy:
+      arriveOp = rewriter.create<nvidia_gpu::TCGen5CommitOp>(loc, mbar);
+      break;
+
+    case AsyncOp::TMALoad:
+      // nothing to do, TMA load is handled by lowering putEnterOp
+      break;
+    case AsyncOp::CpAsync:
+    default:
+      llvm_unreachable("unknown async op");
+    }
+    if (arriveOp)
+      assignStageCluster(arriveOp, partitionId, stageCluster, rewriter);
+  }
+}
+
+void rewritePutExitOp(ArefPutExitOp op, PatternRewriter &rewriter,
+                      ArefValue arefVal) {
+  auto loc = op->getLoc();
+  rewriter.setInsertionPointAfter(op);
+  Value fullBarrier = getFullBarrier(rewriter, loc, arefVal, op.getStage());
+  insertArriveBarrier(loc, op.getAsyncOps(), rewriter, fullBarrier,
+                      getPartitionId(op), getStageCluster(op));
+}
+
+void rewriteGetExitOp(ArefGetExitOp op, PatternRewriter &rewriter,
+                      ArefValue arefVal) {
+  auto loc = op->getLoc();
+  rewriter.setInsertionPointAfter(op);
+  Value emptyBarrier = getEmptyBarrier(rewriter, loc, arefVal, op.getStage());
+  insertArriveBarrier(loc, op.getAsyncOps(), rewriter, emptyBarrier,
+                      getPartitionId(op), getStageCluster(op));
 }
 
 class LowerArefCreate : public OpRewritePattern<ArefCreateOp> {
-  ArefUseGraph &graph;
-
 public:
   using OpRewritePattern::OpRewritePattern;
 
-  LowerArefCreate(mlir::MLIRContext *context, ArefUseGraph &graph)
-      : OpRewritePattern<ArefCreateOp>(context), graph(graph) {}
-
   LogicalResult matchAndRewrite(ArefCreateOp op,
                                 PatternRewriter &rewriter) const override {
-    if (graph.arefs.contains(op.getResult())) {
-      // We've already added the barriers for this op
-      return failure();
-    }
-    auto loc = op.getLoc();
-    auto ctx = op.getContext();
-    auto uses = op.getResult().getUses();
-    auto numBatches = op.getResult().getType().getNumBatchAxes();
-
-    int rank = 0;
-    if (numBatches)
-      rank = *numBatches;
-    if (rank > 1)
-      op.emitError("TODO: Implement multi-axis slicing");
-
-    int depth = 1;
-    if (rank == 1) {
-      if (auto mType = dyn_cast<MemDescType>(op.getOperand(0).getType()))
-        depth = mType.getShape()[0];
-      if (auto rType = dyn_cast<RankedTensorType>(op.getOperand(0).getType()))
-        depth = rType.getShape()[0];
+    auto aref = createAndInitMbar(op, rewriter);
+    SetVector<Operation *> opToDelete;
+    opToDelete.insert(op.getOperation());
+    for (auto userOp : op->getUsers()) {
+      opToDelete.insert(userOp);
+      if (auto user = dyn_cast<ArefPutEnterOp>(userOp)) {
+        rewritePutEnterOp(op, user, rewriter, aref);
+      } else if (auto user = dyn_cast<ArefGetEnterOp>(userOp)) {
+        rewriteGetEnterOp(op, user, rewriter, aref);
+      } else if (auto user = dyn_cast<ArefPutExitOp>(userOp)) {
+        rewritePutExitOp(user, rewriter, aref);
+      } else if (auto user = dyn_cast<ArefGetExitOp>(userOp)) {
+        rewriteGetExitOp(user, rewriter, aref);
+      } else {
+        llvm_unreachable("users of aref can only be ArefPut or ArefGet");
+      }
     }
 
-    rewriter.setInsertionPointAfter(op);
-    Attribute sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
-    auto barrierCTALayout = CTALayoutAttr::get(
-        /*context=*/ctx, /*CTAsPerCGA=*/{1},
-        /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
-    auto barrierEncoding =
-        SwizzledSharedEncodingAttr::get(ctx, 1, 1, 1, {0}, barrierCTALayout);
-    auto barrierType = MemDescType::get(
-        SmallVector<int64_t>{depth}, rewriter.getI64Type(), barrierEncoding,
-        sharedMemorySpace, /*mutableMemory=*/true);
-    // Create two mbarriers
-    auto emptyMbars = rewriter.create<LocalAllocOp>(loc, barrierType, Value());
-    emptyMbars->setAttr("aref_empty_mbarriers", rewriter.getUnitAttr());
-
-    auto fullMbars = rewriter.create<LocalAllocOp>(loc, barrierType, Value());
-    fullMbars->setAttr("aref_full_mbarriers", rewriter.getUnitAttr());
-
-    auto lb = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
-    auto ub = rewriter.create<arith::ConstantIntOp>(loc, depth, 32);
-    auto step = rewriter.create<arith::ConstantIntOp>(loc, 1, 32);
-    auto dLoop = rewriter.create<scf::ForOp>(loc, lb, ub, step);
-    rewriter.setInsertionPointToStart(dLoop.getBody());
-
-    for (int i = 0; i < 2; ++i) {
-      auto memDesc = getBarrierMemDesc(rewriter, {1});
-      auto singleBarrier = rewriter.create<triton::gpu::MemDescSubviewOp>(
-          loc, memDesc, i == 0 ? emptyMbars.getResult() : fullMbars.getResult(),
-          SmallVector<Value>{dLoop.getInductionVar()});
-      int count = i == 0 ? 0 : 1;
-      rewriter.create<InitBarrierOp>(loc, singleBarrier, count);
+    auto sorted = topologicalSort(opToDelete);
+    OpBuilder b(op);
+    auto replToken =
+        b.create<ub::PoisonOp>(op.getLoc(), b.getType<AsyncTokenType>());
+    for (auto op : sorted) {
+      if (auto enterOp = dyn_cast<ArefPutEnterOp>(op))
+        enterOp.getToken().replaceAllUsesWith(replToken);
+      else if (auto enterOp = dyn_cast<ArefGetEnterOp>(op))
+        enterOp.getToken().replaceAllUsesWith(replToken);
     }
-
-    graph.arefs[op] =
-        ArefValue{emptyMbars.getResult(), fullMbars.getResult(), depth};
-    for (auto user : op.getResult().getUsers())
-      graph.arefs[op].users.push_back(&graph.nodes[user]);
+    for (auto it = sorted.rbegin(); it != sorted.rend(); ++it)
+      rewriter.eraseOp(*it);
 
     return success();
   }
 };
 
-template <bool put, typename T>
-LogicalResult LowerEnter(T op, PatternRewriter &rewriter, ArefUseGraph &graph) {
-  auto ctx = op.getContext();
-  auto loc = op.getLoc();
-  auto aref = op.getAref();
-  auto emptyMbars = graph.arefs[aref].emptyMbars;
-  auto fullMbars = graph.arefs[aref].fullMbars;
-
-  rewriter.setInsertionPoint(op);
-
-  auto zero = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
-  auto one = rewriter.create<arith::ConstantIntOp>(loc, 1, 32);
-
-  waitOnMbar(rewriter, loc, put ? emptyMbars : fullMbars, op.getIndex(),
-             op.getPhase());
-
-  SmallVector<Value> views;
-
-  // slice aref values
-  for (auto value : aref.template getDefiningOp<ArefCreateOp>().getOperands()) {
-    if (auto mType = dyn_cast<MemDescType>(value.getType())) {
-      auto shape = mType.getShape();
-      SmallVector<int64_t> tensorShape(shape.begin() + 1, shape.end());
-      auto memDescTypeNew =
-          MemDescType::get(tensorShape, mType.getElementType(),
-                           mType.getEncoding(), mType.getMemorySpace(), true);
-      SmallVector<Value> offsets(mType.getShape().size(), zero);
-      offsets[0] = op.getIndex();
-      Value singleBuffer = rewriter.create<triton::gpu::MemDescSubviewOp>(
-          loc, memDescTypeNew, value, offsets);
-      views.push_back(singleBuffer);
-    } else if (auto rType = dyn_cast<RankedTensorType>(value.getType())) {
-      return op.emitError("FIXME: In-register Tensors not yet supported");
-    } else {
-      return op.emitError("Aref input type not supported for slicing");
-    }
-  }
-
-  if (op.getResults().size() != views.size())
-    return op.emitError("number of views and arguments mismatch.");
-  for (auto [ret, view] : zip(op.getResults(), views))
-    ret.replaceAllUsesWith(view);
-
-  rewriter.eraseOp(op);
-  return success();
-}
-
-template <bool put, typename T>
-LogicalResult LowerExit(T op, PatternRewriter &rewriter, ArefUseGraph &graph) {
-  auto ctx = op.getContext();
-  auto loc = op.getLoc();
-  auto aref = op.getAref();
-  auto emptyMbars = graph.arefs[aref].emptyMbars;
-  auto fullMbars = graph.arefs[aref].fullMbars;
-
-  signalArrival(rewriter, loc, put ? fullMbars : emptyMbars, op.getIndex());
-  rewriter.eraseOp(op);
-  return success();
-}
-
-class LowerArefGetEnter : public OpRewritePattern<ArefGetEnterOp> {
-  ArefUseGraph &graph;
-
-public:
-  using OpRewritePattern::OpRewritePattern;
-
-  LowerArefGetEnter(mlir::MLIRContext *context, ArefUseGraph &graph)
-      : OpRewritePattern<ArefGetEnterOp>(context), graph(graph) {}
-
-  LogicalResult matchAndRewrite(ArefGetEnterOp op,
-                                PatternRewriter &rewriter) const override {
-    return LowerEnter<false>(op, rewriter, graph);
-  }
-};
-
-class LowerArefGetExit : public OpRewritePattern<ArefGetExitOp> {
-  ArefUseGraph &graph;
-
-public:
-  using OpRewritePattern::OpRewritePattern;
-
-  LowerArefGetExit(mlir::MLIRContext *context, ArefUseGraph &graph)
-      : OpRewritePattern<ArefGetExitOp>(context), graph(graph) {}
-
-  LogicalResult matchAndRewrite(ArefGetExitOp op,
-                                PatternRewriter &rewriter) const override {
-    return LowerExit<false>(op, rewriter, graph);
-  }
-};
-
-class LowerArefPutEnter : public OpRewritePattern<ArefPutEnterOp> {
-  ArefUseGraph &graph;
-
-public:
-  using OpRewritePattern::OpRewritePattern;
-
-  LowerArefPutEnter(mlir::MLIRContext *context, ArefUseGraph &graph)
-      : OpRewritePattern<ArefPutEnterOp>(context), graph(graph) {}
-
-  LogicalResult matchAndRewrite(ArefPutEnterOp op,
-                                PatternRewriter &rewriter) const override {
-    return LowerEnter<true>(op, rewriter, graph);
-  }
-};
-
-class LowerArefPutExit : public OpRewritePattern<ArefPutExitOp> {
-  ArefUseGraph &graph;
-
-public:
-  using OpRewritePattern::OpRewritePattern;
-
-  LowerArefPutExit(mlir::MLIRContext *context, ArefUseGraph &graph)
-      : OpRewritePattern<ArefPutExitOp>(context), graph(graph) {}
-
-  LogicalResult matchAndRewrite(ArefPutExitOp op,
-                                PatternRewriter &rewriter) const override {
-    return LowerExit<true>(op, rewriter, graph);
-  }
-};
-
-static ArefUseGraph analyzeArefUseDef(ModuleOp m) {
-  ArefUseGraph graph;
-  DenseSet<Operation *> seen;
-
-  ArefUseNode *parent = nullptr;
-  std::function<void(Operation * op)> createGraph;
-  // Psuedo recursion to get the dependency graph
-  createGraph = [&](Operation *op) {
-    if (seen.contains(op))
-      return;
-    ArefUseNode node;
-    node.parent = parent;
-    node.op = op;
-    if (isa<ArefCreateOp>(op)) {
-      graph.nodes[op] = node;
-    } else {
-      // TODO: Fill this out
-      return;
-    }
-    seen.insert(op);
-  };
-
-  m.walk(createGraph);
-
-  return graph;
-}
+// ----------------------------------------------------------------------------
 
 } // anonymous namespace
 
@@ -352,29 +406,13 @@ public:
     MLIRContext *context = &getContext();
     mlir::ModuleOp m = getOperation();
 
-    ArefUseGraph graph = analyzeArefUseDef(m);
-
     mlir::RewritePatternSet patterns(context);
-    patterns.add<LowerArefCreate>(context, graph);
+    patterns.add<LowerArefCreate>(context);
     GreedyRewriteConfig config;
-
     if (applyPatternsGreedily(m, std::move(patterns), config).failed())
       signalPassFailure();
-
-    OpPassManager pm;
-    pm.addPass(mlir::createCSEPass());
-    if (failed(runPipeline(pm, m)))
-      return signalPassFailure();
-
-    mlir::RewritePatternSet patterns2(context);
-    patterns2.add<LowerArefGetEnter, LowerArefGetExit, LowerArefPutEnter,
-                  LowerArefPutExit>(context, graph);
-    GreedyRewriteConfig config2;
-
-    if (applyPatternsGreedily(m, std::move(patterns2), config2).failed())
-      signalPassFailure();
   }
-};
+}; // namespace triton
 
 } // namespace triton
 } // namespace mlir

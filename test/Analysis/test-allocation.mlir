@@ -21,9 +21,14 @@
 #NVMMA_SHARED_64 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
 #NVMMA_SHARED_128 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #NVMMA_SHARED_FP4PADDED = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8, fp4Padded = true}>
-#PADDED_SHARED_0 = #ttg.padded_shared<[256:+8] {order = [1, 0]}>
-#PADDED_SHARED_1 = #ttg.padded_shared<[128:+4, 256:+8] {order = [1, 0]}>
-#PADDED_SHARED_2 = #ttg.padded_shared<[64:+2, 128:+4, 256:+8] {order = [1, 0]}>
+
+#PADDED_SHARED_0_1x256 = #ttg.padded_shared<[256:+8] {order = [1, 0], shape = [1, 256]}>
+#PADDED_SHARED_0_1x512 = #ttg.padded_shared<[256:+8] {order = [1, 0], shape = [1, 512]}>
+#PADDED_SHARED_0_16x16 = #ttg.padded_shared<[256:+8] {order = [1, 0], shape = [16, 16]}>
+#PADDED_SHARED_0_16x32 = #ttg.padded_shared<[256:+8] {order = [1, 0], shape = [16, 32]}>
+
+#PADDED_SHARED_1_16x256 = #ttg.padded_shared<[128:+4, 256:+8] {order = [1, 0], shape = [16, 256]}>
+#PADDED_SHARED_2_16x256 = #ttg.padded_shared<[64:+2, 128:+4, 256:+8] {order = [1, 0], shape = [16, 256]}>
 
 #smem = #ttg.shared_memory
 
@@ -201,22 +206,22 @@ tt.func @longlive(%A : !tt.ptr<f16>) {
 
 // This example triggers graph coloring with > 1 colors.
 // expected-remark @below {{multi_color}}
-// expected-remark @below {{size = 1504}}
+// expected-remark @below {{size = 1376}}
 tt.func @multi_color(%A : !tt.ptr<f16>) {
-  // expected-remark @below {{offset = 1152, size = 64}}
+  // expected-remark @below {{offset = 1024, size = 64}}
   %cst = ttg.local_alloc : () -> !ttg.memdesc<4x8xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // expected-remark @below {{offset = 1472, size = 32}}
+  // expected-remark @below {{offset = 1344, size = 32}}
   %cst_0 = ttg.local_alloc : () -> !ttg.memdesc<4x4xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // expected-remark @below {{offset = 1216, size = 128}}
+  // expected-remark @below {{offset = 1088, size = 128}}
   %cst_1 = ttg.local_alloc : () -> !ttg.memdesc<16x4xf16, #A_SHARED, #ttg.shared_memory, mutable>
   %cst_2 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
-  // expected-remark @below {{scratch offset = 0, size = 1152}}
+  // expected-remark @below {{scratch offset = 0, size = 1024}}
   %0 = ttg.convert_layout %cst_2 : tensor<16x32xf16, #AL> -> tensor<16x32xf16, #BL>
   %1 = ttg.local_load %cst : !ttg.memdesc<4x8xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<4x8xf16, #AL>
   // expected-remark @below {{offset = 0, size = 128}}
   %cst_3 = ttg.local_alloc : () -> !ttg.memdesc<4x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   %2 = ttg.local_load %cst_0 : !ttg.memdesc<4x4xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<4x4xf16, #AL>
-  // expected-remark @below {{scratch offset = 0, size = 1152}}
+  // expected-remark @below {{scratch offset = 0, size = 1024}}
   %3 = ttg.convert_layout %cst_2 : tensor<16x32xf16, #AL> -> tensor<16x32xf16, #BL>
   // expected-remark @below {{offset = 512, size = 256}}
   %cst_4 = ttg.local_alloc : () -> !ttg.memdesc<4x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
@@ -226,7 +231,7 @@ tt.func @multi_color(%A : !tt.ptr<f16>) {
   %5 = ttg.local_load %cst_5 : !ttg.memdesc<4x8xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<4x8xf16, #AL>
   // expected-remark @below {{offset = 0, size = 512}}
   %cst_6 = ttg.local_alloc : () -> !ttg.memdesc<8x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // expected-remark @below {{offset = 1344, size = 128}}
+  // expected-remark @below {{offset = 1216, size = 128}}
   %cst_7 = ttg.local_alloc : () -> !ttg.memdesc<2x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
   %6 = ttg.local_load %cst_0 : !ttg.memdesc<4x4xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<4x4xf16, #AL>
   // expected-remark @below {{offset = 0, size = 512}}
@@ -237,7 +242,7 @@ tt.func @multi_color(%A : !tt.ptr<f16>) {
   %cst_10 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   %7 = ttg.local_load %cst_1 : !ttg.memdesc<16x4xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<16x4xf16, #AL>
   %8 = ttg.local_load %cst_4 : !ttg.memdesc<4x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<4x32xf16, #AL>
-  // expected-remark @below {{scratch offset = 0, size = 1152}}
+  // expected-remark @below {{scratch offset = 0, size = 1024}}
   %9 = ttg.convert_layout %cst_2 : tensor<16x32xf16, #AL> -> tensor<16x32xf16, #BL>
   %cst_11 = arith.constant dense<0.000000e+00> : tensor<4x4xf16, #AL>
   %10 = ttg.local_load %cst_7 : !ttg.memdesc<2x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<2x32xf16, #AL>
@@ -248,16 +253,16 @@ tt.func @multi_color(%A : !tt.ptr<f16>) {
 
 // This example triggers graph coloring with multiple rounds
 // expected-remark @below {{multi_color_multi_rounds}}
-// expected-remark @below {{size = 9504}}
+// expected-remark @below {{size = 9376}}
 tt.func @multi_color_multi_rounds(%arg0: !tt.ptr<f16>) {
-  // expected-remark @below {{offset = 9472, size = 32}}
+  // expected-remark @below {{offset = 9344, size = 32}}
   %cst = ttg.local_alloc : () -> !ttg.memdesc<4x4xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // expected-remark @below {{offset = 9344, size = 128}}
+  // expected-remark @below {{offset = 9216, size = 128}}
   %cst_0 = ttg.local_alloc : () -> !ttg.memdesc<16x4xf16, #A_SHARED, #ttg.shared_memory, mutable>
   // expected-remark @below {{offset = 0, size = 8192}}
   %cst_1 = ttg.local_alloc : () -> !ttg.memdesc<1024x4xf16, #A_SHARED, #ttg.shared_memory, mutable>
   %cst_2 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
-  // expected-remark @below {{scratch offset = 8192, size = 1152}}
+  // expected-remark @below {{scratch offset = 8192, size = 1024}}
   %0 = ttg.convert_layout %cst_2 : tensor<16x32xf16, #AL> -> tensor<16x32xf16, #BL>
   %1 = ttg.local_load %cst : !ttg.memdesc<4x4xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<4x4xf16, #AL>
   // expected-remark @below {{offset = 8704, size = 128}}
@@ -267,7 +272,7 @@ tt.func @multi_color_multi_rounds(%arg0: !tt.ptr<f16>) {
   %cst_4 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   %3 = ttg.local_load %cst_0 : !ttg.memdesc<16x4xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<16x4xf16, #AL>
   %4 = ttg.local_load %cst_1 : !ttg.memdesc<1024x4xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<1024x4xf16, #AL>
-  // expected-remark @below {{scratch offset = 0, size = 1152}}
+  // expected-remark @below {{scratch offset = 0, size = 1024}}
   %5 = ttg.convert_layout %cst_2 : tensor<16x32xf16, #AL> -> tensor<16x32xf16, #BL>
   %6 = ttg.local_load %cst_3 : !ttg.memdesc<2x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<2x32xf16, #AL>
   tt.return
@@ -326,7 +331,7 @@ tt.func @extract_slice(%A : !tt.ptr<f16>) {
   // expected-remark @below {{offset = 0, size = 512}}
   %cst0 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   %index = arith.constant 0 : i32
-  %cst1 = ttg.memdesc_subview %cst0[%index, %index, %index] : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  %cst1 = ttg.memdesc_index %cst0[%index] : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   tt.return
 }
 
@@ -445,7 +450,7 @@ tt.func @for_if_slice(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>
     scf.if %i1 {
       %zero = arith.constant 0 : i32
       %index = arith.constant 8 : i32
-      %cst0 = ttg.memdesc_subview %a_shared[%index, %zero] : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> !ttg.memdesc<32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+      %cst0 = ttg.memdesc_index %a_shared[%index] : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> !ttg.memdesc<32xf16, #A_SHARED, #ttg.shared_memory, mutable>
       scf.yield
     }
     scf.yield %b_shared, %a_shared, %a_shared : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
@@ -832,9 +837,9 @@ tt.func @aliasing_in_partition() {
   }
   partition0() num_warps(4) {
     // expected-remark @below {{offset = 0, size = 16}}
-    %0 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64, #A_SHARED, #smem, mutable>
     %c0_i32 = arith.constant 0 : i32
-    %1 = ttg.memdesc_subview %0[%c0_i32] : !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable> -> !ttg.memdesc<1xi64, #A_SHARED, #smem, mutable>
+    %1 = ttg.memdesc_index %0[%c0_i32] : !ttg.memdesc<2x1xi64, #A_SHARED, #smem, mutable> -> !ttg.memdesc<1xi64, #A_SHARED, #smem, mutable>
     // expected-remark @below {{offset = 16, size = 16}}
     %2 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
     "use"(%1) : (!ttg.memdesc<1xi64, #A_SHARED, #smem, mutable>) -> ()
@@ -942,62 +947,47 @@ tt.func @nvmma_alignment(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f
 
 
 // expected-remark @below {{padded_shared_layout_size}}
-// expected-remark @below {{size = 1058}}
+// expected-remark @below {{size = 1040}}
 tt.func @padded_shared_layout_size() {
-  // expected-remark @+2 {{offset = 0, size = 510}}
-  // 255 * 2B = 510B
-  %alloc0 = ttg.local_alloc : () -> !ttg.memdesc<1x255xf16, #PADDED_SHARED_0, #ttg.shared_memory, mutable>
-  // expected-remark @+2 {{offset = 0, size = 528}}
-  // (256 + 8) * 2B = 528B
-  %alloc1 = ttg.local_alloc : () -> !ttg.memdesc<1x256xf16, #PADDED_SHARED_0, #ttg.shared_memory, mutable>
-  // expected-remark @+2 {{offset = 0, size = 530}}
-  // (257 + 8) * 2B = 530B
-  %alloc2 = ttg.local_alloc : () -> !ttg.memdesc<1x257xf16, #PADDED_SHARED_0, #ttg.shared_memory, mutable>
-  // expected-remark @+2 {{offset = 0, size = 1038}}
-  // (511 + 8) * 2B = 1038B
-  %alloc3 = ttg.local_alloc : () -> !ttg.memdesc<1x511xf16, #PADDED_SHARED_0, #ttg.shared_memory, mutable>
-  // expected-remark @+2 {{offset = 0, size = 1056}}
-  // (512 + 8 * 2) * 2B = 1056B
-  %alloc4 = ttg.local_alloc : () -> !ttg.memdesc<1x512xf16, #PADDED_SHARED_0, #ttg.shared_memory, mutable>
-  // expected-remark @+2 {{offset = 0, size = 1058}}
-  // (513 + 8 * 2) * 2B = 1058B
-  %alloc5 = ttg.local_alloc : () -> !ttg.memdesc<1x513xf16, #PADDED_SHARED_0, #ttg.shared_memory, mutable>
-  // expected-remark @+2 {{offset = 0, size = 528}}
-  // (16 * 16 + 8) * 2B = 528B
-  %alloc6 = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16, #PADDED_SHARED_0, #ttg.shared_memory, mutable>
-  // expected-remark @+2 {{offset = 0, size = 1056}}
-  // (16 * 32 + 8 * 2) * 2B = 1056B
-  %alloc7 = ttg.local_alloc : () -> !ttg.memdesc<16x32xf16, #PADDED_SHARED_0, #ttg.shared_memory, mutable>
-  // expected-remark @+2 {{offset = 0, size = 1008}}
-  // (31 * 16 + 8) * 2B = 1008B
-  %alloc8 = ttg.local_alloc : () -> !ttg.memdesc<31x16xf16, #PADDED_SHARED_0, #ttg.shared_memory, mutable>
+  // expected-remark @+2 {{offset = 0, size = 512}}
+  // 256 * 2B = 512B
+  %alloc0 = ttg.local_alloc : () -> !ttg.memdesc<1x256xf16, #PADDED_SHARED_0_1x256, #ttg.shared_memory, mutable>
+  // expected-remark @+2 {{offset = 0, size = 1040}}
+  // (512 + 8 * 1) * 2B = 1040B
+  %alloc4 = ttg.local_alloc : () -> !ttg.memdesc<1x512xf16, #PADDED_SHARED_0_1x512, #ttg.shared_memory, mutable>
+  // expected-remark @+2 {{offset = 0, size = 512}}
+  // 16 * 16 * 2B = 512B
+  %alloc6 = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16, #PADDED_SHARED_0_16x16, #ttg.shared_memory, mutable>
+  // expected-remark @+2 {{offset = 0, size = 1040}}
+  // (16 * 32 + 8 * 1) * 2B = 1040B
+  %alloc7 = ttg.local_alloc : () -> !ttg.memdesc<16x32xf16, #PADDED_SHARED_0_16x32, #ttg.shared_memory, mutable>
   tt.return
 }
 
 // expected-remark @below {{padded_shared_layout_element_type}}
-// expected-remark @below {{size = 16896}}
+// expected-remark @below {{size = 2080}}
 tt.func @padded_shared_layout_element_type() {
-  // expected-remark @+2 {{offset = 0, size = 4224}}
-  // (16 * 256 + 8 * 16) * 1B = 4224B
-  %alloc0 = ttg.local_alloc : () -> !ttg.memdesc<16x256xi8, #PADDED_SHARED_0, #ttg.shared_memory, mutable>
-  // expected-remark @+2 {{offset = 0, size = 8448}}
-  // (16 * 256 + 8 * 16) * 2B = 8448B
-  %alloc1 = ttg.local_alloc : () -> !ttg.memdesc<16x256xf16, #PADDED_SHARED_0, #ttg.shared_memory, mutable>
-  // expected-remark @+2 {{offset = 0, size = 16896}}
-  // (16 * 256 + 8 * 16) * 4B = 16896B
-  %alloc2 = ttg.local_alloc : () -> !ttg.memdesc<16x256xf32, #PADDED_SHARED_0, #ttg.shared_memory, mutable>
+  // expected-remark @+2 {{offset = 0, size = 520}}
+  // (16 * 32 + 8 * 1) * 1B = 520B
+  %alloc0 = ttg.local_alloc : () -> !ttg.memdesc<16x32xi8, #PADDED_SHARED_0_16x32, #ttg.shared_memory, mutable>
+  // expected-remark @+2 {{offset = 0, size = 1040}}
+  // (16 * 256 + 8 * 15) * 2B = 1040B
+  %alloc1 = ttg.local_alloc : () -> !ttg.memdesc<16x32xf16, #PADDED_SHARED_0_16x32, #ttg.shared_memory, mutable>
+  // expected-remark @+2 {{offset = 0, size = 2080}}
+  // (16 * 256 + 8 * 15) * 4B = 2080B
+  %alloc2 = ttg.local_alloc : () -> !ttg.memdesc<16x32xf32, #PADDED_SHARED_0_16x32, #ttg.shared_memory, mutable>
   tt.return
 }
 
 // expected-remark @below {{padded_shared_layout_multi_tier}}
-// expected-remark @below {{size = 4480}}
+// expected-remark @below {{size = 4466}}
 tt.func @padded_shared_layout_multi_tier() {
-  // expected-remark @+2 {{offset = 0, size = 4352}}
-  // (16 * 256 + 4 * 32 + 8 * 16) * 1B = 4352B
-  %alloc0 = ttg.local_alloc : () -> !ttg.memdesc<16x256xi8, #PADDED_SHARED_1, #ttg.shared_memory, mutable>
-  // expected-remark @+2 {{offset = 0, size = 4480}}
-  // (16 * 256 + 2 * 64 + 4 * 32 + 8 * 16) * 1B = 4480B
-  %alloc1 = ttg.local_alloc : () -> !ttg.memdesc<16x256xi8, #PADDED_SHARED_2, #ttg.shared_memory, mutable>
+  // expected-remark @+2 {{offset = 0, size = 4340}}
+  // (16 * 256 + 4 * 31 + 8 * 15) * 1B = 4340B
+  %alloc0 = ttg.local_alloc : () -> !ttg.memdesc<16x256xi8, #PADDED_SHARED_1_16x256, #ttg.shared_memory, mutable>
+  // expected-remark @+2 {{offset = 0, size = 4466}}
+  // (16 * 256 + 2 * 63 + 4 * 31 + 8 * 15) * 1B = 4466B
+  %alloc1 = ttg.local_alloc : () -> !ttg.memdesc<16x256xi8, #PADDED_SHARED_2_16x256, #ttg.shared_memory, mutable>
   tt.return
 }
 }

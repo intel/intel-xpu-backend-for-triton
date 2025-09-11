@@ -11,7 +11,6 @@ using namespace mlir::triton::gpu;
 using namespace mlir::triton::NVIDIA;
 namespace ttng = mlir::triton::nvidia_gpu;
 
-using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::triton::gpu::NVMMASharedEncodingAttr;
 
 //===----------------------------------------------------------------------===//
@@ -412,16 +411,10 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
 
   Value baseA = loadedA;
   if (!aInTmem) {
-    baseA = getSharedMemoryObjectFromStruct(
-                loc, loadedA,
-                typeConverter.convertType(aTensorTy.getElementType()), rewriter)
-                .getBase();
+    baseA = getOffsetedBase(loadedA, aTensorTy, &typeConverter, rewriter, loc);
   }
   Value baseB =
-      getSharedMemoryObjectFromStruct(
-          loc, loadedB, typeConverter.convertType(bTensorTy.getElementType()),
-          rewriter)
-          .getBase();
+      getOffsetedBase(loadedB, bTensorTy, &typeConverter, rewriter, loc);
 
   auto [M, N, K] = op.shape;
 
@@ -503,7 +496,7 @@ void convertDot(const LLVMTypeConverter &typeConverter,
   MemDescType aTensorTy = op.getA().getType();
   MemDescType bTensorTy = op.getB().getType();
   MemDescType dTensorTy = op.getD().getType();
-  bool twoCTAs = op.getTwoCtas().has_value();
+  bool twoCTAs = op.getTwoCtas();
 
   DotConversion dot;
 

@@ -2,13 +2,30 @@
 
 // CHECK-LABEL: @cluster_id
 llvm.func @cluster_id() -> i32 {
-  // CHECK:      %cluster_ctaid.x;
-  // CHECK-SAME: %cluster_ctaid.y;
-  // CHECK-SAME: %cluster_ctaid.z;
-  // CHECK-SAME: %cluster_nctaid.x;
-  // CHECK-SAME: %cluster_nctaid.y;
+  // CHECK: nvvm.read.ptx.sreg.cluster.ctaid.x
+  // CHECK: nvvm.read.ptx.sreg.cluster.ctaid.y
+  // CHECK: nvvm.read.ptx.sreg.cluster.ctaid.z
+  // CHECK: nvvm.read.ptx.sreg.cluster.nctaid.x
+  // CHECK: nvvm.read.ptx.sreg.cluster.nctaid.y
   %id = nvgpu.cluster_id
   llvm.return %id : i32
+}
+
+// -----
+
+// CHECK-LABEL: @ldmatrix
+llvm.func @ldmatrix(%ptr: !llvm.ptr<3>) -> !llvm.struct<(i32, i32, i32, i32)> {
+  // CHECK: ldmatrix.sync.aligned.m8n8.x4.shared.b16 {$0, $1, $2, $3}, [$4];
+  %0 = nvgpu.ldmatrix %ptr, m8n8, 16 : (!llvm.ptr<3>) -> !llvm.struct<(i32, i32, i32, i32)>
+  // CHECK: ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {$0, $1, $2, $3}, [$4];
+  %1 = nvgpu.ldmatrix %ptr, m8n8, 16 {trans} : (!llvm.ptr<3>) -> !llvm.struct<(i32, i32, i32, i32)>
+  // CHECK: ldmatrix.sync.aligned.m16n16.x4.trans.shared.b8 {$0, $1, $2, $3}, [$4];
+  %l = nvgpu.ldmatrix %ptr, m16n16, 8 {trans} : (!llvm.ptr<3>) -> !llvm.struct<(i32, i32, i32, i32)>
+  %2 = llvm.extractvalue %1[0] : !llvm.struct<(i32, i32, i32, i32)>
+  %3 = llvm.insertvalue %2, %0[0] : !llvm.struct<(i32, i32, i32, i32)>
+  %4 = llvm.extractvalue %l[0] : !llvm.struct<(i32, i32, i32, i32)>
+  %5 = llvm.insertvalue %4, %3[1] : !llvm.struct<(i32, i32, i32, i32)>
+  llvm.return %5 : !llvm.struct<(i32, i32, i32, i32)>
 }
 
 // -----
@@ -69,6 +86,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   //      CHECK:    %[[AR:.+]] = llvm.load %[[SHMEM]] : !llvm.ptr<3> -> i32
   //      CHECK:    nvvm.barrier0
   //      CHECK:    "@$0 tcgen05.relinquish_alloc_permit.cta_group::1.sync.aligned;", "b" %[[PRED]]  : (i1) -> !llvm.void
+  //      CHECK:    nvvm.barrier0
   //      CHECK:    llvm.inline_asm has_side_effects asm_dialect = att operand_attrs = [] "@$0 tcgen05.dealloc.cta_group::1.sync.aligned.b32 $1, 128;", "b,r" %[[PRED]], %{{.+}} : (i1, !llvm.ptr<6>) -> !llvm.void
   llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
   llvm.func @tensor_memory_base_lowering() -> i32 attributes {nvvm.kernel = 1 : ui1, nvvm.maxntid = array<i32: 128>} {

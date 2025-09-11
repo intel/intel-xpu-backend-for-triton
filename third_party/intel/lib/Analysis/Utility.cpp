@@ -174,13 +174,11 @@ bool cvtIsSubGroupShuffle(RankedTensorType srcTy, RankedTensorType dstTy) {
   StringAttr kWarp = str_attr("warp");
   StringAttr kBlock = str_attr("block");
 
-  std::optional<LinearLayout> srcLayout =
-      toLinearLayout(srcTy.getShape(), srcTy.getEncoding(), {});
+  std::optional<LinearLayout> srcLayout = toLinearLayout(srcTy);
   if (!srcLayout)
     return false;
 
-  std::optional<LinearLayout> dstLayout =
-      toLinearLayout(dstTy.getShape(), dstTy.getEncoding(), {});
+  std::optional<LinearLayout> dstLayout = toLinearLayout(dstTy);
   if (!dstLayout)
     return false;
 
@@ -262,13 +260,11 @@ bool cvtIsSubGroupTranspose(RankedTensorType srcTy, RankedTensorType dstTy) {
   StringAttr kWarp = str_attr("warp");
   StringAttr kBlock = str_attr("block");
 
-  std::optional<LinearLayout> srcLayout =
-      toLinearLayout(srcTy.getShape(), srcTy.getEncoding(), {});
+  std::optional<LinearLayout> srcLayout = toLinearLayout(srcTy);
   if (!srcLayout)
     return false;
 
-  std::optional<LinearLayout> dstLayout =
-      toLinearLayout(dstTy.getShape(), dstTy.getEncoding(), {});
+  std::optional<LinearLayout> dstLayout = toLinearLayout(dstTy);
   if (!dstLayout)
     return false;
 

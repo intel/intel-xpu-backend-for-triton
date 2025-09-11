@@ -23,17 +23,6 @@ namespace triton {
 
 namespace {
 
-const std::string kClusterCtaIdOp = "{\n"
-                                    ".reg .u32 a<5>;              \n"
-                                    "mov.u32 a0, %cluster_ctaid.x;\n"  // x
-                                    "mov.u32 a1, %cluster_ctaid.y;\n"  // y
-                                    "mov.u32 a2, %cluster_ctaid.z;\n"  // z
-                                    "mov.u32 a3, %cluster_nctaid.x;\n" // nx
-                                    "mov.u32 a4, %cluster_nctaid.y;\n" // ny
-                                    "mad.lo.u32 a1, a2, a4, a1;     \n"
-                                    "mad.lo.u32 $0, a1, a3, a0;     \n"
-                                    "}";
-
 bool isNumber(const std::string &s) {
   return !s.empty() && std::find_if(s.begin(), s.end(), [](unsigned char c) {
                          return !std::isdigit(c);
@@ -235,6 +224,142 @@ public:
     warpId = LLVM::NVIDIA::shuffleIdx(loc, rewriter, warpId, 0);
     rewriter.replaceOp(op, warpId);
     return success();
+  }
+};
+
+class ClusterCTAIdOpPattern : public OpRewritePattern<ttn::ClusterCTAIdOp> {
+  using OpRewritePattern<ttn::ClusterCTAIdOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ttn::ClusterCTAIdOp op,
+                                PatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto a0 = rewriter.create<NVVM::BlockInClusterIdXOp>(loc, i32_ty);
+    auto a1 = rewriter.create<NVVM::BlockInClusterIdYOp>(loc, i32_ty);
+    auto a2 = rewriter.create<NVVM::BlockInClusterIdZOp>(loc, i32_ty);
+    auto a3 = rewriter.create<NVVM::ClusterDimBlocksXOp>(loc, i32_ty);
+    auto a4 = rewriter.create<NVVM::ClusterDimBlocksYOp>(loc, i32_ty);
+    auto p1 = rewriter.create<LLVM::MulOp>(loc, a2, a4);
+    auto s1 = rewriter.create<LLVM::AddOp>(loc, a1, p1);
+    auto p2 = rewriter.create<LLVM::MulOp>(loc, s1, a3);
+    auto res = rewriter.create<LLVM::AddOp>(loc, a0, p2);
+    rewriter.replaceOp(op, res);
+    return success();
+  }
+};
+
+// Base class for Matrix Operation Patterns
+template <typename MatrixOpType, typename ConcreteMatrixOpPattern>
+class MatrixOpPattern : public OpRewritePattern<MatrixOpType> {
+public:
+  using OpRewritePattern<MatrixOpType>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(MatrixOpType op,
+                                PatternRewriter &rewriter) const override {
+    unsigned vecSize = getVectorSize(op);
+    bool trans = op.getTrans();
+    // Template method for PTX assembly generation
+    std::string ptxAsm =
+        (llvm::Twine(ConcreteMatrixOpPattern::kOpCode) +
+         getPtxModifiers(vecSize, trans, op.getShape(), op.getBitWidth()) +
+         " " + getOperands(op, vecSize) + ";")
+            .str();
+
+    OperandsAndConstraints operandAndConstraints =
+        getOperandsAndConstraints(op, vecSize);
+    Constraints outputConstraints = getOutputConstraints(op, vecSize);
+
+    return rewriteAsPtxAsm(op, rewriter, ptxAsm, operandAndConstraints,
+                           outputConstraints);
+  }
+
+protected:
+  // Shared helper methods
+  std::string getPtxModifiers(unsigned vecSize, bool trans,
+                              triton::nvgpu::LoadMatrixShape shape,
+                              int bitWidth) const {
+    std::string ptxAsmBase = std::string(".sync.aligned");
+    switch (shape) {
+    case triton::nvgpu::LoadMatrixShape::m8n8:
+      ptxAsmBase += ".m8n8";
+      break;
+    case triton::nvgpu::LoadMatrixShape::m16n16:
+      ptxAsmBase += ".m16n16";
+      break;
+    default:
+      llvm_unreachable("Invalid load matrix shape");
+    }
+    std::string suffix = trans ? ".trans.shared" : ".shared";
+    suffix += ".b" + std::to_string(bitWidth);
+    switch (vecSize) {
+    case 1:
+      return ptxAsmBase + ".x1" + suffix;
+    case 2:
+      return ptxAsmBase + ".x2" + suffix;
+    case 4:
+      return ptxAsmBase + ".x4" + suffix;
+    default:
+      llvm_unreachable("Invalid vector size");
+    }
+  }
+
+  std::string getPtxRegOperands(unsigned startIdx, unsigned count) const {
+    llvm::SmallString<20> regOperands;
+    llvm::raw_svector_ostream stream(regOperands);
+    stream << "{";
+    for (unsigned i = 0; i < count; i++) {
+      stream << "$" + llvm::utostr(startIdx + i);
+      if (i != count - 1)
+        stream << ", ";
+    }
+    stream << "}";
+    return std::string(regOperands.str());
+  }
+
+  std::string getPtxAddrOperand(unsigned idx) const {
+    return (llvm::Twine("[$") + llvm::utostr(idx) + "]").str();
+  }
+
+  virtual std::string getOperands(MatrixOpType op, unsigned vecSize) const = 0;
+  virtual OperandsAndConstraints
+  getOperandsAndConstraints(MatrixOpType op, unsigned vecSize) const = 0;
+  virtual Constraints getOutputConstraints(MatrixOpType op,
+                                           unsigned vecSize) const = 0;
+  virtual unsigned getVectorSize(MatrixOpType op) const = 0;
+};
+
+// LoadMatrixOp Pattern
+class LoadMatrixOpPattern
+    : public MatrixOpPattern<ttn::LoadMatrixOp, LoadMatrixOpPattern> {
+public:
+  using MatrixOpPattern<ttn::LoadMatrixOp,
+                        LoadMatrixOpPattern>::MatrixOpPattern;
+  static constexpr const char *kOpCode = "ldmatrix";
+
+protected:
+  unsigned getVectorSize(ttn::LoadMatrixOp op) const override {
+    auto resultType = op.getType();
+    if (auto structTy = dyn_cast<LLVM::LLVMStructType>(resultType)) {
+      return structTy.getBody().size();
+    }
+    return 1;
+  }
+
+  std::string getOperands(ttn::LoadMatrixOp op,
+                          unsigned vecSize) const override {
+    return (llvm::Twine(getPtxRegOperands(0, vecSize)) + ", " +
+            getPtxAddrOperand(vecSize))
+        .str();
+  }
+
+  OperandsAndConstraints
+  getOperandsAndConstraints(ttn::LoadMatrixOp op,
+                            unsigned vecSize) const override {
+    return {{op.getAddr(), "r"}};
+  }
+
+  Constraints getOutputConstraints(ttn::LoadMatrixOp op,
+                                   unsigned vecSize) const override {
+    return Constraints(vecSize, "=r");
   }
 };
 
@@ -535,6 +660,7 @@ void freeTMAlloc(LLVM::LLVMFuncOp func, Value alloc, size_t size, Value pred,
     auto ctx = ret->getContext();
     auto loc = ret.getLoc();
     auto voidTy = void_ty(ctx);
+    b.create<NVVM::Barrier0Op>(loc);
     PTXBuilder ptxBuilder;
     // Calculate the predicate in the inline asm to avoid creating long
     // liveranges.
@@ -620,11 +746,10 @@ public:
     ModuleOp mod = getOperation();
     RewritePatternSet patterns(context);
 
-    patterns.add<NVGPUOpGenericPattern<ttn::ClusterCTAIdOp>>(
-        context, kClusterCtaIdOp, Constraints({"=r"}), Constraints());
-
-    patterns.add<WGMMAOpPattern, LoadAcquireOpPattern, WGMMAWaitGroupOpPattern,
-                 WarpIdOpPattern>(context);
+    patterns
+        .add<ClusterCTAIdOpPattern, LoadMatrixOpPattern, WGMMAOpPattern,
+             LoadAcquireOpPattern, WGMMAWaitGroupOpPattern, WarpIdOpPattern>(
+            context);
 
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();

@@ -13,6 +13,8 @@
 #include "llvm/ADT/STLExtras.h"
 #include <cstdint>
 
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
+
 using namespace mlir;
 using namespace mlir::triton;
 
@@ -100,9 +102,9 @@ template <typename Op> static LogicalResult verify2DBlockHWRestriction(Op op) {
 
   uint32_t tileWidth = op.getTileWidth();
   uint32_t vBlocks = op.getVBlocks();
-  if (elemSizeInBits * tileWidth * vBlocks > 512)
+  if (elemSizeInBits * tileWidth * vBlocks > 1024)
     return op->emitOpError(
-        "expecting elem_size_in_bits * tile_width * v_blocks <= 512");
+        "expecting elem_size_in_bits * tile_width * v_blocks <= 1024");
 
   assert(tileWidth >= 1 && tileWidth <= 64 &&
          "tile_width should be between 1 and 64");
@@ -238,7 +240,8 @@ verify2DBlockLoadHWRestriction(TritonGEN::Matrix2DBlockLoadOp op) {
   VectorType resTy = op.getRes().getType();
   unsigned resElemTySize = resTy.getElementType().getIntOrFloatBitWidth();
   unsigned resSize = resTy.getNumElements() * resElemTySize;
-  constexpr unsigned subgroupSize = 16;
+  unsigned subgroupSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(
+      op->getParentOfType<mlir::ModuleOp>());
   unsigned expectedSize = op.getElemSizeInBits() * op.getTileHeight() *
                           op.getTileWidth() * op.getVBlocks() / subgroupSize;
   if (resSize != expectedSize)
