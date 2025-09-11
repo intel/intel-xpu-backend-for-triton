@@ -107,12 +107,13 @@ compileLevelZeroObjects(uint8_t *binary_ptr, const size_t binary_size,
                         const std::string &kernel_name, L0_DEVICE l0_device,
                         L0_CONTEXT l0_context, const std::string &build_flags,
                         const bool is_spv) {
+  ze_module_build_log_handle_t buildlog;
   auto l0_module =
       checkSyclErrors(create_module(l0_context, l0_device, binary_ptr,
-                                    binary_size, build_flags.data(), is_spv));
+                                    binary_size, build_flags.data(), &buildlog, is_spv));
 
   // Retrieve the kernel properties (e.g. register spills).
-  auto l0_kernel = checkSyclErrors(create_function(l0_module, kernel_name));
+  auto l0_kernel = checkSyclErrors(create_function(l0_module, kernel_name, &buildlog));
 
   ze_kernel_properties_t props;
   props.stype = ZE_STRUCTURE_TYPE_KERNEL_PROPERTIES;
@@ -230,11 +231,11 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
     compute_properties.stype = ZE_STRUCTURE_TYPE_DEVICE_COMPUTE_PROPERTIES;
     zeDeviceGetComputeProperties(l0_device, &compute_properties);
     int32_t n_max_threads = compute_properties.maxTotalGroupSize;
-
+    std::cout << "load_binary: MARK#1" << std::endl << std::flush;
     auto [l0_module, l0_kernel, n_spills] =
         compileLevelZeroObjects(binary_ptr, binary_size, kernel_name, l0_device,
                                 l0_context, build_flags(), is_spv);
-
+    std::cout << "load_binary: MARK#2" << std::endl << std::flush;
     const bool debugEnabled = getBoolEnv("TRITON_DEBUG");
 
     if (is_spv) {
@@ -292,7 +293,7 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
       std::cout << "(I): Detected " << n_spills << " spills for  \""
                 << kernel_name << "\"" << std::endl;
     }
-
+    std::cout << "load_binary: MARK#3" << std::endl << std::flush;
     auto n_regs = build_flags.n_regs();
 
     auto mod = new sycl::kernel_bundle<sycl::bundle_state::executable>(
@@ -316,7 +317,32 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   } catch (const std::exception &e) {
     PyGILState_STATE gil_state;
     gil_state = PyGILState_Ensure();
-    PyErr_SetString(PyExc_RuntimeError, e.what());
+
+    PyObject *cls = nullptr;
+    PyObject *mod = PyImport_ImportModule("triton.runtime.errors");
+    if (!mod) {
+        PyErr_SetString(PyExc_ImportError, "cannot import triton.errors");
+        return NULL;
+    }
+    cls = PyObject_GetAttrString(mod, "OutOfResources");
+    Py_DECREF(mod);
+    if (!cls) {
+        PyErr_SetString(PyExc_AttributeError, "cannot find OutOfResources");
+        return NULL;
+    }
+
+    PyObject* args = Py_BuildValue("(sss)", "unknown", "unknown", "exceeding max permitted PTSS, drop SIMD");
+    PyObject* exc = PyObject_CallObject(cls, args);
+    Py_DECREF(cls);
+    Py_DECREF(args);
+    if (!exc) {
+        PyErr_SetString(PyExc_RuntimeError, "cannot create OutOfResources");
+        return NULL;
+    }
+
+    PyErr_SetObject(cls, exc);
+    Py_DECREF(exc);
+    // PyErr_SetString(PyExc_RuntimeError, e.what());
     std::cerr << "Error during Intel loadBinary: " << e.what() << std::endl;
     PyGILState_Release(gil_state);
     return NULL;

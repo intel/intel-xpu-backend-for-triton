@@ -9,6 +9,8 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <cstring>
+#include <cstdio>
 
 #include <level_zero/ze_api.h>
 #include <sycl/sycl.hpp>
@@ -144,13 +146,30 @@ inline std::optional<bool> isEnvValueBool(std::string str) {
   return std::nullopt;
 }
 
+void printModuleKernelName(ze_module_handle_t hModule) {
+  std::cout << "printModuleKernelName start\n" << std::flush;
+  uint32_t Count = 0;
+  [[maybe_unused]] auto ret = zeModuleGetKernelNames(hModule, &Count, nullptr);
+  assert(ret == ZE_RESULT_SUCCESS);
+  std::unique_ptr<const char *[]> PNames(new const char *[Count]);
+  ret = zeModuleGetKernelNames(hModule, &Count, PNames.get());
+  assert(ret == ZE_RESULT_SUCCESS);
+  if (true) {
+    for (uint32_t i = 0; i < Count; ++i) {
+      std::cout << std::string(PNames[i]) << std::endl << std::flush;
+    }
+  }
+  std::cout << "printModuleKernelName end\n" << std::flush;
+}
+
 std::tuple<ze_module_handle_t, ze_result_t>
 create_module(ze_context_handle_t context, ze_device_handle_t device,
-              uint8_t *binary_ptr, size_t binary_size, const char *build_flags,
+              uint8_t *binary_ptr, size_t binary_size, const char *build_flags, ze_module_build_log_handle_t *buildlog,
               const bool is_spv = true) {
   assert(binary_ptr != nullptr && "binary_ptr should not be NULL");
   assert(build_flags != nullptr && "build_flags should not be NULL");
-
+  std::string flags(build_flags);
+  flags += ",-g";
   const ze_module_format_t format =
       is_spv ? ZE_MODULE_FORMAT_IL_SPIRV : ZE_MODULE_FORMAT_NATIVE;
   ze_module_desc_t module_description = {};
@@ -158,19 +177,32 @@ create_module(ze_context_handle_t context, ze_device_handle_t device,
   module_description.format = format;
   module_description.inputSize = static_cast<uint32_t>(binary_size);
   module_description.pInputModule = binary_ptr;
-  module_description.pBuildFlags = build_flags;
-  ze_module_build_log_handle_t buildlog;
+  module_description.pBuildFlags = flags.c_str();
   ze_module_handle_t module;
+  std::cout << "MARK#1\n";
+  // Even if the return code is successful, it may no longer include the kernel name and have
+  // the required information in the logs, but only if debug information is enabled (`-g`).
   auto error_no =
-      zeModuleCreate(context, device, &module_description, &module, &buildlog);
+      zeModuleCreate(context, device, &module_description, &module, buildlog);
+  printModuleKernelName(module);
+  std::cout << "MARK#2\n";
   if (error_no != ZE_RESULT_SUCCESS) {
     size_t szLog = 0;
-    ZE_CHECK(zeModuleBuildLogGetString(buildlog, &szLog, nullptr));
+    std::cout << "MARK#3\n" << std::flush;
+    ZE_CHECK(zeModuleBuildLogGetString(*buildlog, &szLog, nullptr));
+    std::cout << "MARK#4\n" << std::flush;
     char *strLog = (char *)malloc(szLog);
-    ZE_CHECK(zeModuleBuildLogGetString(buildlog, &szLog, strLog));
-    std::cerr << "L0 build module failed. Log: " << strLog << std::endl;
+    auto error_no_build_log = zeModuleBuildLogGetString(*buildlog, &szLog, strLog);
+    if (error_no_build_log != ZE_RESULT_SUCCESS) {
+      free(strLog);
+      ZE_CHECK(error_no_build_log);
+    }
+    std::cout << "MARK#5\n" << std::flush;
+    std::cerr << "L0 build module failed. Log: " << strLog << " end message" << std::endl << std::flush;
     free(strLog);
-    ZE_CHECK(zeModuleBuildLogDestroy(buildlog));
+    std::cout << "MARK#6\n" << std::flush;
+    ZE_CHECK(zeModuleBuildLogDestroy(*buildlog));
+    std::cout << "MARK#7\n" << std::flush;
   }
   ZE_CHECK(error_no);
   return std::make_tuple(module, error_no);
@@ -178,7 +210,7 @@ create_module(ze_context_handle_t context, ze_device_handle_t device,
 
 std::tuple<ze_kernel_handle_t, ze_result_t>
 create_function(ze_module_handle_t module, ze_kernel_flags_t flag,
-                std::string_view func_name) {
+                std::string_view func_name, ze_module_build_log_handle_t *buildlog) {
   ze_kernel_handle_t kernel;
   ze_kernel_desc_t kernel_description = {};
   kernel_description.stype = ZE_STRUCTURE_TYPE_KERNEL_DESC;
@@ -189,27 +221,35 @@ create_function(ze_module_handle_t module, ze_kernel_flags_t flag,
   if (getBoolEnv("MLIR_ENABLE_DUMP")) {
     std::cout << "create kernel:" << func_name << std::endl;
   }
-  ZE_CHECK(zeKernelCreate(module, &kernel_description, &kernel));
+  std::cout << "create_function: MARK#10\n";
+  auto kernel_create_no = zeKernelCreate(module, &kernel_description, &kernel);
+  if (kernel_create_no == ZE_RESULT_ERROR_INVALID_KERNEL_NAME) {
+    size_t szLog = 0;
+    ZE_CHECK(zeModuleBuildLogGetString(*buildlog, &szLog, nullptr));
+    char *strLog = (char *)malloc(szLog);
+    auto error_no_build_log = zeModuleBuildLogGetString(*buildlog, &szLog, strLog);
+    ZE_CHECK(zeModuleBuildLogDestroy(*buildlog));
+    if (error_no_build_log == ZE_RESULT_SUCCESS) {
+      const char* root_cause = "exceeding max permitted PTSS, drop SIMD";
+      if (strstr(strLog, root_cause)) {
+        free(strLog);
+        throw std::runtime_error(root_cause);        
+      }
+    }
+    free(strLog);
+    // nothing to do
+  }
+  std::cout << "name: " << parseZeResultCode(kernel_create_no) << "\n" << std::flush;
+  ZE_CHECK(kernel_create_no);
+  std::cout << "create_function: MARK#11\n";
   return std::make_tuple(kernel, ZE_RESULT_SUCCESS);
 }
 
 std::tuple<ze_kernel_handle_t, ze_result_t>
-create_function(ze_module_handle_t module, std::string_view func_name) {
-  return create_function(module, ZE_KERNEL_FLAG_FORCE_RESIDENCY, func_name);
+create_function(ze_module_handle_t module, std::string_view func_name, ze_module_build_log_handle_t *buildlog) {
+  return create_function(module, ZE_KERNEL_FLAG_FORCE_RESIDENCY, func_name, buildlog);
 }
 
-void printModuleKernelName(ze_module_handle_t hModule) {
-  uint32_t Count = 0;
-  [[maybe_unused]] auto ret = zeModuleGetKernelNames(hModule, &Count, nullptr);
-  assert(ret == ZE_RESULT_SUCCESS);
-  std::unique_ptr<const char *[]> PNames(new const char *[Count]);
-  ret = zeModuleGetKernelNames(hModule, &Count, PNames.get());
-  assert(ret == ZE_RESULT_SUCCESS);
-  if (getBoolEnv("MLIR_ENABLE_DUMP")) {
-    for (uint32_t i = 0; i < Count; ++i) {
-      std::cout << std::string(PNames[i]) << std::endl;
-    }
-  }
-}
+
 
 #endif // SYCL_FUNCTIONS_INCLUDE_H_
