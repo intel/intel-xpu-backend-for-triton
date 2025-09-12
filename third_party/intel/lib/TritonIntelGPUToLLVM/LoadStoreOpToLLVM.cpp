@@ -3213,10 +3213,9 @@ struct AtomicCASOpConversion
              "Unexpected width");
 
       Value ret;
-      Value zero = (valueElemNBits == 32) ? b.i32_val(0) : b.i64_val(0);
 
-      if (valueElemNBits == 16) {
-        zero =
+      if (valueElemNBits == 16 && !support16BitAtomics) {
+        Value zero =
             TypeSwitch<mlir::Type, Value>(valueElemTy)
                 .Case<mlir::IntegerType>(
                     [&](auto ty) { return b.int_val(valueElemNBits, 0); })
@@ -3231,6 +3230,7 @@ struct AtomicCASOpConversion
                              mask ? mask : b.true_val(), {zero});
         ret = endBlock->getArgument(0);
       } else {
+        Value zero = (valueElemNBits == 32) ? b.i32_val(0) : b.i64_val(0);
         if (op.getResult().use_empty())
           rewriter.create<TritonGEN::BarrierOp>(loc,
                                                 TritonGEN::MemFence::GLOBAL);
@@ -3324,7 +3324,8 @@ struct AtomicCASOpConversion
     if (isa<mlir::IntegerType>(valueElemTy)) {
       isEqual = b.icmp_eq(origVal, casCmp);
     } else {
-      isEqual = b.fcmp_eq(origVal, casCmp);
+      isEqual =
+          b.icmp_eq(b.bitcast(origVal, i16_ty), b.bitcast(casCmp, i16_ty));
     }
 
     Value selectedVal = b.select(isEqual, casVal, origVal);
