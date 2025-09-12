@@ -317,7 +317,7 @@ LogicalResult genFMALoop(DotOp op, ValueTableFMA &has, ValueTableFMA &hbs,
           }
 
           // Store the result.
-          builder.insert_element(vecD, acc, accIdx);
+          vecD = builder.insert_element(vecD, acc, accIdx);
           rewriter.restoreInsertionPoint(afterOuterLoop);
         }
 
