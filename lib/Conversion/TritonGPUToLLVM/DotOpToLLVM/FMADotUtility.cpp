@@ -301,7 +301,7 @@ LogicalResult genFMALoop(DotOp op, ValueTableFMA &has, ValueTableFMA &hbs,
 
           // Get the value for operand C.
           //  TODO: generate FMA for integer here.
-          Value accIdx = builder.fma(innerUB, outerIV, innerIV);
+          Value accIdx = builder.add(builder.mul(innerUB, outerIV), innerIV);
           Value acc = builder.extract_element(vecC, accIdx);
 
           // Perform the FMAs.
