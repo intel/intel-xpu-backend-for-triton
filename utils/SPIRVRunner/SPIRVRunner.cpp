@@ -175,8 +175,8 @@ loadBinary(const std::string &kernel_name, const std::string &build_flags,
 
   ze_module_build_log_handle_t buildlog;
   auto l0_module = checkSyclErrors(
-      create_module(l0_context, l0_device, binary_ptr, binary_size, &buildlog,
-                    build_flags.c_str()));
+      create_module(l0_context, l0_device, binary_ptr, binary_size,
+                    build_flags.c_str(), &buildlog));
   auto l0_kernel =
       checkSyclErrors(create_function(l0_module, kernel_name, &buildlog));
 
