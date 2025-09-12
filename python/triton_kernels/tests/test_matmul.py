@@ -20,7 +20,7 @@ from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, upcast_from_m
 # testing utilities
 from triton_kernels.testing import assert_close, compute_actual_scale
 # target-specific utilities
-from triton_kernels.target_info import is_hip, is_hip_cdna3, is_cuda, is_xpu, is_hip_cdna4
+from triton_kernels.target_info import is_hip, is_hip_cdna3, is_cuda, is_hip_cdna4
 
 # ---------------
 # initialize data
@@ -294,15 +294,11 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         if split_k > 1:
             pytest.skip("splitK hasn't been fully tested on AMD GPU.")
 
-    elif is_xpu():
-        if split_k > 1:
-            pytest.skip("FIXME: https://github.com/intel/intel-xpu-backend-for-triton/issues/5074")
-
     if "float8_e4m3fnuz" in (weight_dtype_str, act_dtype_str) and not is_hip_cdna3():
-        pytest.skip("float8_e4m3fnuz only tested on AMD CDNA3 Platform")
+        pytest.xfail("float8_e4m3fnuz only tested on AMD CDNA3 Platform")
 
     if fused_scatter and split_k > 1:
-        pytest.skip("fused scatter scratchpad not supported with split_k")
+        pytest.xfail("fused scatter scratchpad not supported with split_k")
 
     if hbm_swizzling:
         if is_hip():
@@ -430,7 +426,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
     try:
         tri_y = matmul_ogs(x_tri, w_tri, bias_tri, rdata, gindx, sindx, precision_opt, gammas=gs1_ref, epilogue=epilogue)
     except (opt_flags.InapplicableConstraint, NotImplementedError):
-        pytest.skip("inapplicable opt_flags constraint")
+        pytest.xfail("inapplicable opt_flags constraint")
     # If split_k > 1, then the intermediate tensor is fp32.
     sep_gather = mode == "ragged" and do_gather and n_expts_act > 1 and split_k == 1
     sep_scatter = mode == "ragged" and do_scatter and n_expts_act > 1 and split_k == 1
