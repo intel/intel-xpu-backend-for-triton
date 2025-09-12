@@ -20,9 +20,8 @@ jobs:
   build:
     name: Build
     runs-on:
-      - max1100
+      - cri
       - rolling
-      - runner-0.0.22
     strategy:
       matrix:
         python:
