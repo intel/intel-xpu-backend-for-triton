@@ -37,6 +37,7 @@ OPTION:
     --warning-reports
     --ignore-errors
     --skip-list SKIPLIST
+    --extra-skip-list-suffixes SEMICOLON-SEPARATED LIST OF SUFFIXES
     --select-from-file SELECTFILE
 "
 
@@ -219,6 +220,10 @@ while (( $# != 0 )); do
     --skip-list)
       # Must be absolute
       TRITON_TEST_SKIPLIST_DIR="$(mkdir -p "$2" && cd "$2" && pwd)"
+      shift 2
+      ;;
+    --extra-skip-list-suffixes)
+      TRITON_EXTRA_SKIPLIST_SUFFIXES="$2"
       shift 2
       ;;
     --select-from-file)
