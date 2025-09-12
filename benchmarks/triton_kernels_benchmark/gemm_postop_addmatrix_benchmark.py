@@ -315,6 +315,9 @@ X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
         args={},
     ))
 def benchmark(B, M, N, K, dtype, provider):
+    # Maximum across onednn=600, triton=1000
+    # For onednn and triton: Some configs increase performance with warmup as a step function, but some slowly decrease with saturation. Performance is best at 150-200ms range, but we want stable, not just best
+    n_warmup = 1000
     res_dtype = torch.float32 if dtype.is_floating_point else torch.int32
     if dtype.is_floating_point:
         rand = lambda shape, dtype: torch.rand(shape, device='xpu', dtype=dtype)
@@ -332,9 +335,7 @@ def benchmark(B, M, N, K, dtype, provider):
     quantiles = [0.5, 0.0, 1.0]
 
     if provider == 'onednn':
-        # Some configs increase performance with warmup as a step function, but some slowly decrease with saturation
-        # Performance is best at 150-200ms range, but we want stable, not just best
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(lambda: torch.matmul(a, b) + d, n_warmup=600,
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(lambda: torch.matmul(a, b) + d, n_warmup=n_warmup,
                                                                  n_repeat=10, quantiles=quantiles)
     elif provider == 'triton':
         assert len(a.shape) == len(b.shape), 'Incompatible sizes'
@@ -355,9 +356,7 @@ def benchmark(B, M, N, K, dtype, provider):
                                                        [1, 512, 8192, 32768], [4, 32768, 4096, 128]]:
             # torch int8 matmul on GPU is not supported. only check a few int8 shapes to reduce runtime
             benchmark_suit.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
-        # Some configs increase performance with warmup as a step function, but some slowly decrease with saturation
-        # Performance is best at 150-400ms range (50-200 for INT8), but we want stable, not just best
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, n_warmup=1000, n_repeat=10,
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, n_warmup=n_warmup, n_repeat=10,
                                                                  quantiles=quantiles)
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')

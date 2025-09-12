@@ -575,6 +575,12 @@ def get_benchmark(
     # pylint: disable=too-many-branches
     def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
         modes = ['fwd', 'bwd']
+        # For FWD mode in triton & cutlass: Some configs increase performance with warmup as a step function, but some slowly decrease with saturation
+        # Performance is best at 250-400ms range, but we want stable, not just best at ~600ms (triton/cutlass providers)
+        n_warmup_fwd = 600
+        # For BWD mode: Performance doesn't really improve much with warmup for triton, but xetla benefit from more warmup
+        n_warmup_bwd = 400  # Maximum across xetla=400, triton=10, onednn=10
+        n_warmup = n_warmup_fwd if MODE == 'fwd' else n_warmup_bwd
         if MODE not in modes:
             raise AssertionError(f'Unknown {MODE}, supported modes are {modes}')
         dtype = torch.float16
@@ -602,7 +608,7 @@ def get_benchmark(
         if provider == 'onednn':
             _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
                 torch_fn,
-                n_warmup=10,
+                n_warmup=n_warmup,
                 n_repeat=10,
                 quantiles=quantiles,
             )
@@ -613,13 +619,8 @@ def get_benchmark(
                 triton_o = triton_fn()
                 triton_do = torch.randn_like(triton_o)
                 triton_fn = lambda: triton_o.backward(triton_do, retain_graph=True)
-                # It looks like performance doesn't really improve much with warmup for bwd
-                n_warmup = 10
             if MODE == 'fwd':
                 benchmark_suite.assert_close(triton_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='triton to torch')
-                # Some configs increase performance with warmup as a step function, but some slowly decrease with saturation
-                # Performance is best at 250-400ms range then there is a very slow decrease with saturation, stable enough at ~600ms
-                n_warmup = 600
             else:
                 benchmark_suite.assert_close(
                     lambda: triton_o,
@@ -628,9 +629,6 @@ def get_benchmark(
                     rtol=0,
                     err_msg='triton to torch',
                 )
-                n_warmup = 10
-        # Some configs increase performance with warmup as a step function, but some slowly decrease with saturation
-        # Performance is best at 250-400ms range, but we want stable, not just best
 
             _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
                 triton_fn,
@@ -669,7 +667,7 @@ def get_benchmark(
 
                 _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
                     xetla_bwd_fn,
-                    n_warmup=400,
+                    n_warmup=n_warmup,
                     n_repeat=10,
                     quantiles=quantiles,
                 )
@@ -692,12 +690,9 @@ def get_benchmark(
 
                 benchmark_suite.assert_close(cutlass_fwd_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='cutlass to torch')
 
-                # For FWD:
-                # Some configs increase performance with warmup as a step function, but some slowly decrease with saturation
-                # Performance is best at 250-400ms range, but we want stable, not just best
                 _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
                     cutlass_fwd_fn,
-                    n_warmup=600,
+                    n_warmup=n_warmup,
                     n_repeat=10,
                     quantiles=quantiles,
                 )

@@ -44,12 +44,13 @@ def get_benchmark(providers_filter: Optional[List[str]] = None):
             args={},
         ))
     def benchmark(M, N, AXIS, provider):
+        n_warmup = 1000
         quantiles = [0.5, 0.0, 1.0]
         x = torch.rand(M, N, device="xpu", dtype=torch.float32)
 
         if provider == "triton":
             triton_fn = lambda: scan_kernel[(1, )](x, BLOCK_SIZE_M=M, BLOCK_SIZE_N=N, AXIS=AXIS)
-            _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(triton_fn, quantiles=quantiles, n_warmup=1000,
+            _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(triton_fn, quantiles=quantiles, n_warmup=n_warmup,
                                                                       n_repeat=100)
         else:
             raise NotImplementedError(f"Unsupported provider {provider}")
