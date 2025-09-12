@@ -232,9 +232,11 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
     compute_properties.stype = ZE_STRUCTURE_TYPE_DEVICE_COMPUTE_PROPERTIES;
     zeDeviceGetComputeProperties(l0_device, &compute_properties);
     int32_t n_max_threads = compute_properties.maxTotalGroupSize;
+
     auto [l0_module, l0_kernel, n_spills] =
         compileLevelZeroObjects(binary_ptr, binary_size, kernel_name, l0_device,
                                 l0_context, build_flags(), is_spv);
+
     const bool debugEnabled = getBoolEnv("TRITON_DEBUG");
 
     if (is_spv) {
@@ -292,6 +294,7 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
       std::cout << "(I): Detected " << n_spills << " spills for  \""
                 << kernel_name << "\"" << std::endl;
     }
+
     auto n_regs = build_flags.n_regs();
 
     auto mod = new sycl::kernel_bundle<sycl::bundle_state::executable>(

@@ -3,7 +3,6 @@
 
 #include <algorithm>
 #include <cassert>
-#include <cstdio>
 #include <cstring>
 #include <iostream>
 #include <memory>
@@ -161,14 +160,12 @@ create_module(ze_context_handle_t context, ze_device_handle_t device,
   module_description.inputSize = static_cast<uint32_t>(binary_size);
   module_description.pInputModule = binary_ptr;
   module_description.pBuildFlags = build_flags;
-  // ze_module_build_log_handle_t buildlog;
   ze_module_handle_t module;
   auto error_no =
       zeModuleCreate(context, device, &module_description, &module, buildlog);
   if (error_no != ZE_RESULT_SUCCESS) {
-    size_t szLog;
+    size_t szLog = 0;
     ZE_CHECK(zeModuleBuildLogGetString(*buildlog, &szLog, nullptr));
-    std::cout << "szLog: " << szLog << std::endl << std::flush;
     char *strLog = (char *)malloc(szLog);
     auto error_no_build_log =
         zeModuleBuildLogGetString(*buildlog, &szLog, strLog);
@@ -200,18 +197,15 @@ create_function(ze_module_handle_t module, ze_kernel_flags_t flag,
   }
   auto kernel_create_no = zeKernelCreate(module, &kernel_description, &kernel);
   if (kernel_create_no == ZE_RESULT_ERROR_INVALID_KERNEL_NAME) {
-    std::cout << "MARK100\n";
     size_t szLog = 0;
     ZE_CHECK(zeModuleBuildLogGetString(*buildlog, &szLog, nullptr));
     char *strLog = (char *)malloc(szLog);
     auto error_no_build_log =
         zeModuleBuildLogGetString(*buildlog, &szLog, strLog);
-    // ZE_CHECK(zeModuleBuildLogDestroy(*buildlog));
-    std::cout << "MARK1000\n";
+    ZE_CHECK(zeModuleBuildLogDestroy(*buildlog));
     if (error_no_build_log == ZE_RESULT_SUCCESS) {
-      std::cout << "MARK101\n";
       const char *root_cause = "exceeding max permitted PTSS, drop SIMD";
-      std::cout << "message: " << strLog << std::endl << std::flush;
+      std::cerr << "L0 build module failed. Log: " << strLog << std::endl;
       if (strstr(strLog, root_cause)) {
         free(strLog);
         throw std::runtime_error(root_cause);
@@ -220,8 +214,6 @@ create_function(ze_module_handle_t module, ze_kernel_flags_t flag,
     free(strLog);
     // nothing to do
   }
-  std::cout << "name: " << parseZeResultCode(kernel_create_no) << "\n"
-            << std::flush;
   ZE_CHECK(kernel_create_no);
   return std::make_tuple(kernel, ZE_RESULT_SUCCESS);
 }
