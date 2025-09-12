@@ -21,7 +21,7 @@ from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, upcast_from_m
 # testing utilities
 from triton_kernels.testing import assert_close, compute_actual_scale
 # target-specific utilities
-from triton_kernels.target_info import is_hip, is_hip_cdna3, is_cuda, is_hip_cdna4
+from triton_kernels.target_info import is_hip, is_xpu, is_hip_cdna3, is_cuda, is_hip_cdna4
 
 # ---------------
 # initialize data
@@ -479,6 +479,8 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
 def test_small_batch_matmul(m, n, k):
     if is_hip():
         pytest.skip("Not fully tested on AMD")
+    if is_xpu():
+        pytest.xfail("Enable: https://github.com/intel/intel-xpu-backend-for-triton/issues/5092")
 
     if m * n * k > 16384:
         pytest.skip()

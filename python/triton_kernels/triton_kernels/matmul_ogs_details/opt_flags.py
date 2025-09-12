@@ -35,6 +35,7 @@ def make_default_opt_flags_intel(
     lhs_dtype,
     rhs_dtype,
     precision_config,
+    batch_size,
     m,
     n,
     k,
