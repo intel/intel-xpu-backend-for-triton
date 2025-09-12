@@ -120,8 +120,8 @@ public:
           cast<arith::ConstantIntOp>(maskInfo.N.getDefiningOp()).value();
       unsigned END = maskInfo.END;
       bool cond = UB == ((N - END) / END) + 1;
-      return builder.create<arith::ConstantIntOp>(forOp.getLoc(), cond,
-                                                  builder.getI1Type());
+      return builder.create<arith::ConstantIntOp>(forOp.getLoc(),
+                                                  builder.getI1Type(), cond);
     }
 
     auto divOp = cast<arith::DivSIOp>(defOp);
@@ -276,8 +276,8 @@ public:
       [[maybe_unused]] auto rangeOp = cast<tt::MakeRangeOp>(rhs);
       assert(rangeOp.getStart() < rangeOp.getEnd() && "Invalid range");
       unsigned start = rangeOp.getStart();
-      auto cstOp = builder.createOrFold<arith::ConstantIntOp>(loc, start,
-                                                              lhsVal.getType());
+      auto cstOp = builder.createOrFold<arith::ConstantIntOp>(
+          loc, lhsVal.getType(), start);
       return builder.createOrFold<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
                                                  lhsVal, cstOp);
     }

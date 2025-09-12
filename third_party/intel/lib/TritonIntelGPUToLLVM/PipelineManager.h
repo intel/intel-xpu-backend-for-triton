@@ -31,8 +31,6 @@
 
 #include "PatternTritonGPUOpToLLVM.h"
 
-#include "third_party/proton/dialect/include/TritonProtonToLLVM/PatternTritonProtonOpToLLVM.h"
-
 namespace mlir {
 
 FailureOr<LLVM::LLVMFuncOp>
@@ -76,9 +74,13 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
   ///   * Non-kernel functions:
   ///       Uses the second last param as the shared scratch stack.
   ///
-  /// - Global memory:
+  /// - Global scratch memory:
   ///   * Both kernel and non-kernel functions:
-  ///       Use the last param as the global scratch stack.
+  ///       Use the last but one param as the global scratch stack.
+  ///
+  /// - Profile scratch memory:
+  ///   * Both kernel and non-kernel functions:
+  ///       Use the last param as the profile scratch stack.
   triton::FuncOp amendFuncOp(triton::FuncOp funcOp,
                              ConversionPatternRewriter &rewriter,
                              const TargetInfoBase &targetInfo) const {
@@ -89,6 +91,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     auto sharedPtrTy =
         LLVM::LLVMPointerType::get(ctx, targetInfo.getSharedAddressSpace());
     Type globalPtrTy = LLVM::LLVMPointerType::get(ctx, 1);
+    Type profilePtrTy = LLVM::LLVMPointerType::get(ctx, 1);
 
     // 1. Modify the function type to add the new arguments.
     FunctionType funcTy = funcOp.getFunctionType();
@@ -98,6 +101,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       amendedInputTy.push_back(sharedPtrTy);
 
     amendedInputTy.push_back(globalPtrTy);
+    amendedInputTy.push_back(profilePtrTy);
     auto amendedFuncTy =
         FunctionType::get(ctx, amendedInputTy, funcTy.getResults());
     // 2. Modify the argument attributes to add the new argument.
@@ -122,6 +126,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       region.addArgument(sharedPtrTy, loc);
 
     region.addArgument(globalPtrTy, loc);
+    region.addArgument(profilePtrTy, loc);
     rewriter.inlineRegionBefore(region, amendedFuncOp.getBody(),
                                 amendedFuncOp.end());
     return amendedFuncOp;
@@ -180,10 +185,8 @@ private:
 class TritonGPUToLLVMPipelineManager {
 public:
   TritonGPUToLLVMPipelineManager(ModuleOp &mod, MLIRContext *ctx, bool advanced,
-                                 bool oneMatrixPerLoadForBT,
                                  bool useTileLoadLinearLayout)
       : mod(mod), ctx(ctx), isAdvancedPathEnabled(advanced),
-        oneMatrixPerLoadForBT(oneMatrixPerLoadForBT),
         useTileLoadLinearLayout(useTileLoadLinearLayout) {}
 
   /// FIXME: remove once the block ptr conversion path is capable of handling
@@ -224,7 +227,7 @@ public:
           typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
       intel::populateLoadStoreOpToLLVMPatterns(
           typeConverter, targetInfo, patterns, axisInfoAnalysis, benefit,
-          oneMatrixPerLoadForBT, useTileLoadLinearLayout);
+          useTileLoadLinearLayout);
       intel::populateReduceOpToLLVMPatterns(typeConverter, patterns, targetInfo,
                                             benefit);
       mlir::triton::populateScanOpToLLVMPatterns(typeConverter, patterns,
@@ -245,8 +248,6 @@ public:
                                     benefit);
       mlir::triton::populateMemoryOpToLLVMPatterns(typeConverter, targetInfo,
                                                    patterns, benefit);
-      mlir::triton::proton::populateRecordOpToLLVMPattern(
-          typeConverter, patterns, targetInfo, benefit);
       intel::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
                                                 targetInfo, benefit);
       mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
@@ -278,7 +279,6 @@ private:
   /// FIXME: this is temporary and should be removed once we have an analysis to
   /// determine whether a kernel uses block pointers.
   bool isAdvancedPathEnabled = false;
-  bool oneMatrixPerLoadForBT = false;
   bool useTileLoadLinearLayout = true;
 };
 

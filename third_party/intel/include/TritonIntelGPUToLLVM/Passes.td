@@ -25,9 +25,6 @@ def ConvertTritonIntelGPUToLLVM
     Option<"advancedPath", "advanced_path",
            "bool", /*default*/"false",
            "enable advanced path">,
-    Option<"oneMatrixPerLoadForBT", "one_matrix_per_load_for_bt",
-           "bool", /*default*/"false",
-           "Only load one DPAS operands per load for transposed B matrix">,
     Option<"useTileLoadLinearLayout", "use_tile_load_linear_layout",
            "bool", /*default*/"true",
            "Use linear layouts to generate the tile load sizes and offsets">

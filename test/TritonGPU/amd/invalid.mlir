@@ -1,16 +1,5 @@
 // RUN: triton-opt --split-input-file %s --verify-diagnostics
 
-// expected-error @+1 {{Transposed WMMA is supported only for version 2}}
-#wmma = #ttg.amd_wmma<{version = 1, isTranspose = true, warpsPerCTA = [2, 2]}>
-module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
-    tt.func public @fn(%arg0: !tt.ptr<i32>) {
-        %t = tt.splat %arg0 : !tt.ptr<i32,1> -> tensor<32x32x!tt.ptr<i32,1>, #wmma>
-        tt.return
-    }
-}
-
-// -----
-
 // expected-error @+1 {{WMMA version must be in the [1, 2] range}}
 #wmma = #ttg.amd_wmma<{version = 0, isTranspose = false, warpsPerCTA = [2, 2]}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
@@ -112,11 +101,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   tt.func @local_load_packed_tranposed_wrong_op_idx2(%arg0: !ttg.memdesc<64x16xi8, #shared, #smem, mutable>) {
 // expected-error @+1 {{Input and output dimensions don't match after packing changes}}
     %1 = amdgpu.local_load_packed_tranposed %arg0 : !ttg.memdesc<64x16xi8, #shared, #smem, mutable> -> tensor<32x32xi8, #ttg.dot_op<{opIdx = 0, parent = #mma32, kWidth = 16}>>
-    tt.return
-  }
-  tt.func @local_load_packed_tranposed_wrong_attr(%arg1: !ttg.memdesc<128x8xi8, #blocked, #smem, mutable>) {
-// expected-error @+1 {{only works with SwizzledSharedEncodingAttr src encoding}}
-    %1 = amdgpu.local_load_packed_tranposed %arg1 : !ttg.memdesc<128x8xi8, #blocked, #smem, mutable> -> tensor<64x16xi8, #ttg.dot_op<{opIdx = 1, parent = #mma32, kWidth = 16}>>
     tt.return
   }
   //  CHECK-LABEL: ds_transpose_t_fp4_mfma16

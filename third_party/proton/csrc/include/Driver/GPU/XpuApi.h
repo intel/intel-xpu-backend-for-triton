@@ -1,7 +1,7 @@
 #ifndef PROTON_DRIVER_GPU_SYCL_H_
 #define PROTON_DRIVER_GPU_SYCL_H_
 
-#include "Driver/Device.h"
+#include "Device.h"
 #include <level_zero/ze_api.h>
 
 namespace proton {

@@ -11,13 +11,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.sha
     %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf16, #mma>
 
     // CHECK-DAG:       %[[CST_3:.*]] = llvm.mlir.constant(3 : i32) : i32
-    // CHECK-DAG:       %[[CST_16384:.*]] = llvm.mlir.constant(16384 : i32) : i32
     // CHECK-DAG:       %[[CST_8192:.*]] = llvm.mlir.constant(8192 : i32) : i32
+    // CHECK-DAG:       %[[CST_387:.*]] = llvm.mlir.constant(387 : i32) : i32
     // CHECK-DAG:       %[[CST_384:.*]] = llvm.mlir.constant(384 : i32) : i32
-    // CHECK-DAG:       %[[CST_112:.*]] = llvm.mlir.constant(112 : i32) : i32
+    // CHECK-DAG:       %[[CST_64:.*]] = llvm.mlir.constant(64 : i32) : i32
+    // CHECK-DAG:       %[[CST_48:.*]] = llvm.mlir.constant(48 : i32) : i32
     // CHECK-DAG:       %[[CST_15:.*]] = llvm.mlir.constant(15 : i32) : i32
-    // CHECK-DAG:       %[[CST_8:.*]] = llvm.mlir.constant(8 : i32) : i32
-    // CHECK-DAG:       %[[CST_6:.*]] = llvm.mlir.constant(6 : i32) : i32
+    // CHECK-DAG:       %[[CST_14:.*]] = llvm.mlir.constant(14 : i32) : i32
+    // CHECK-DAG:       %[[CST_12:.*]] = llvm.mlir.constant(12 : i32) : i32
     // CHECK-DAG:       %[[CST_4:.*]] = llvm.mlir.constant(4 : i32) : i32
     // CHECK-DAG:       %[[CST_2:.*]] = llvm.mlir.constant(2 : i32) : i32
     // CHECK-DAG:       %[[CST_1:.*]] = llvm.mlir.constant(1 : i32) : i32
@@ -35,36 +36,39 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.sha
     // CHECK:           %[[VAL_26:.*]] = llvm.or %[[CST_0]], %[[VAL_25]] : i32
     // CHECK:           %[[VAL_27:.*]] = llvm.shl %[[warpId]], %[[CST_4]] : i32
     // CHECK:           %[[VAL_28:.*]] = llvm.or %[[VAL_26]], %[[VAL_27]] : i32
-    // CHECK:           %[[VAL_29:.*]] = llvm.and %[[VAL_28]], %[[CST_384]] : i32
-    // CHECK:           %[[VAL_30:.*]] = llvm.shl %[[VAL_29]], %[[CST_6]] : i32
-    // CHECK:           %[[VAL_31:.*]] = llvm.xor %[[CST_0]], %[[VAL_30]] : i32
-    // CHECK:           %[[VAL_32:.*]] = llvm.and %[[VAL_28]], %[[CST_112]] : i32
-    // CHECK:           %[[VAL_33:.*]] = llvm.shl %[[VAL_32]], %[[CST_1]] : i32
-    // CHECK:           %[[VAL_34:.*]] = llvm.xor %[[VAL_31]], %[[VAL_33]] : i32
-    // CHECK:           %[[VAL_35:.*]] = llvm.and %[[VAL_28]], %[[CST_15]] : i32
-    // CHECK:           %[[VAL_36:.*]] = llvm.lshr %[[VAL_35]], %[[CST_0]] : i32
-    // CHECK:           %[[VAL_37:.*]] = llvm.xor %[[VAL_34]], %[[VAL_36]] : i32
-    // CHECK:           %[[VAL_38:.*]] = llvm.xor %[[CST_0]], %[[VAL_37]] : i32
-    // CHECK:           %[[VAL_39:.*]] = llvm.and %[[VAL_28]], %[[CST_511]] : i32
-    // CHECK:           %[[VAL_40:.*]] = llvm.shl %[[VAL_39]], %[[CST_3]] : i32
-    // CHECK:           %[[VAL_41:.*]] = llvm.xor %[[CST_0]], %[[VAL_40]] : i32
-    // CHECK:           %[[VAL_42:.*]] = llvm.xor %[[CST_0]], %[[VAL_41]] : i32
-    // CHECK:           %[[VAL_43:.*]] = llvm.xor %[[VAL_38]], %[[CST_0]] : i32
-    // CHECK:           %[[VAL_44:.*]] = llvm.lshr %[[VAL_43]], %[[CST_8]] : i32
-    // CHECK:           %[[VAL_45:.*]] = llvm.shl %[[VAL_44]], %[[CST_3]] : i32
-    // CHECK:           %[[offset:.*]] = llvm.add %[[VAL_45]], %[[VAL_43]] : i32
-    // CHECK:           %[[VAL_65:.*]] = llvm.getelementptr inbounds %[[SMEM]]{{\[}}%[[offset]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, f16
-    // CHECK:           %[[VAL_66:.*]] = llvm.insertelement {{.*}}, {{.*}}{{\[}}%[[CST_0]] : i32] : vector<1xf16>
+    // CHECK:           %[[VAL_29:.*]] = llvm.and %[[VAL_28]], %[[CST_3]] : i32
+    // CHECK:           %[[VAL_30:.*]] = llvm.shl %[[VAL_29]], %[[CST_14]] : i32
+    // CHECK:           %[[VAL_32:.*]] = llvm.and %[[VAL_28]], %[[CST_387]] : i32
+    // CHECK:           %[[VAL_33:.*]] = llvm.shl %[[VAL_32]], %[[CST_4]] : i32
+    // CHECK:           %[[VAL_35:.*]] = llvm.and %[[VAL_28]], %[[CST_48]] : i32
+    // CHECK:           %[[VAL_36:.*]] = llvm.shl %[[VAL_35]], %[[CST_1]] : i32
+    // CHECK:           %[[VAL_38:.*]] = llvm.and %[[VAL_28]], %[[CST_12]] : i32
+    // CHECK:           %[[VAL_39:.*]] = llvm.lshr %[[VAL_38]], %[[CST_0]] : i32
+    // CHECK:           %[[VAL_40:.*]] = llvm.and %[[VAL_28]], %[[CST_64]] : i32
+    // CHECK:           %[[VAL_41:.*]] = llvm.icmp "eq" %[[VAL_40]], %[[CST_0]] : i32
+    // CHECK:           %[[VAL_42:.*]] = llvm.select %[[VAL_41]], %[[CST_0]], %[[CST_8192]] : i1, i32
+    // CHECK:           %[[VAL_43:.*]] = llvm.or disjoint %[[VAL_30]], %[[VAL_42]] : i32
+    // CHECK:           %[[VAL_45:.*]] = llvm.xor %[[VAL_33]], %[[VAL_36]] : i32
+    // CHECK:           %[[VAL_46:.*]] = llvm.xor %[[VAL_45]], %[[VAL_39]] : i32
+    // CHECK:           %[[VAL_47:.*]] = llvm.or disjoint %[[VAL_43]], %[[VAL_46]] : i32
+    // CHECK:           %[[VAL_48:.*]] = llvm.xor %[[CST_0]], %[[VAL_47]] : i32
+    // CHECK:           %[[VAL_49:.*]] = llvm.mul %[[CST_0]], %[[CST_2]] : i32
+    // CHECK:           %[[VAL_50:.*]] = llvm.xor %[[VAL_48]], %[[VAL_49]] : i32
+    // CHECK:           %[[VAL_51:.*]] = llvm.xor %[[VAL_50]], %[[CST_0]] : i32
+    // CHECK:           %[[offset:.*]] = llvm.add %[[VAL_51]], %[[CST_0]] : i32
+    // CHECK:           %[[VAL_65:.*]] = llvm.getelementptr inbounds %[[SMEM]]{{\[}}%[[offset]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK:           %[[VAL_66:.*]] = llvm.insertelement {{.*}}, {{.*}}{{\[}}%[[CST_0]] : i32] : vector<2xf16>
+    // CHECK:           %[[VAL_67:.*]] = llvm.insertelement {{.*}}, %[[VAL_66]]{{\[}}%[[CST_1]] : i32] : vector<2xf16>
 
-    // COM: Because the values per thread of DPAS layout is not contiguous. The values are stored in the SLM in a non-vectorized way.
-    // COM: Total 64 stores are generated to save the tensor of the DPAS layout to the SLM. 128*256/(4*8*16) = 64
-    // CHECK:           llvm.store %[[VAL_66]], %[[VAL_65]] : vector<1xf16>, !llvm.ptr<3>
-    // CHECK-COUNT-63:  llvm.store {{.*}}, {{.*}} : vector<1xf16>, !llvm.ptr<3>
+    // COM: Because the values per thread of DPAS layout is contiguous. The values are stored in the SLM in vectorized way.
+    // COM: Total 32 stores are generated to save the tensor of the DPAS layout to the SLM. 128*256/(4*8*16*2) = 32
+    // CHECK:           llvm.store %[[VAL_67]], %[[VAL_65]] : vector<2xf16>, !llvm.ptr<3>
+    // CHECK-COUNT-31:  llvm.store {{.*}}, {{.*}} : vector<2xf16>, !llvm.ptr<3>
     // CHECK:           llvm.call spir_funccc @_Z7barrierj(%[[CST_1]]) {convergent, no_unwind, will_return} : (i32) -> ()
 
     // COM: Because the values per thread of blocked layout is contiguous. The values are loaded from the SLM in a vectorized way.
     // COM: Total 8 loads are generated to load the tensor of the blocked layout from the SLM. 128*256/(16*2*16*8) = 8
-    // CHECK-COUNT-8:    {{.*}} = llvm.load {{.*}} : !llvm.ptr<3> -> vector<8xf16>
+    // CHECK-COUNT-4:    {{.*}} = llvm.load {{.*}} : !llvm.ptr<3> -> vector<4xf16>
 
     %93 = ttg.convert_layout %cst {allocation.offset = 0 : i32} : tensor<128x256xf16, #mma> -> tensor<128x256xf16, #blocked>
     %80 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x1x!tt.ptr<f16>, #blocked>
@@ -90,11 +94,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.sha
     // CHECK-DAG:           %[[CST_3:.*]] = llvm.mlir.constant(3 : i32) : i32
     // CHECK-DAG:           %[[CST_8192:.*]] = llvm.mlir.constant(8192 : i32) : i32
     // CHECK-DAG:           %[[CST_4096:.*]] = llvm.mlir.constant(4096 : i32) : i32
+    // CHECK-DAG:           %[[CST_387:.*]] = llvm.mlir.constant(387 : i32) : i32
     // CHECK-DAG:           %[[CST_384:.*]] = llvm.mlir.constant(384 : i32) : i32
-    // CHECK-DAG:           %[[CST_112:.*]] = llvm.mlir.constant(112 : i32) : i32
+    // CHECK-DAG:           %[[CST_64:.*]] = llvm.mlir.constant(64 : i32) : i32
+    // CHECK-DAG:           %[[CST_48:.*]] = llvm.mlir.constant(48 : i32) : i32
     // CHECK-DAG:           %[[CST_15:.*]] = llvm.mlir.constant(15 : i32) : i32
-    // CHECK-DAG:           %[[CST_8:.*]] = llvm.mlir.constant(8 : i32) : i32
-    // CHECK-DAG:           %[[CST_5:.*]] = llvm.mlir.constant(5 : i32) : i32
+    // CHECK-DAG:           %[[CST_14:.*]] = llvm.mlir.constant(14 : i32) : i32
+    // CHECK-DAG:           %[[CST_12:.*]] = llvm.mlir.constant(12 : i32) : i32
     // CHECK-DAG:           %[[CST_4:.*]] = llvm.mlir.constant(4 : i32) : i32
     // CHECK-DAG:           %[[CST_2:.*]] = llvm.mlir.constant(2 : i32) : i32
     // CHECK-DAG:           %[[CST_1:.*]] = llvm.mlir.constant(1 : i32) : i32
@@ -113,43 +119,39 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.sha
     // CHECK:           %[[VAL_26:.*]] = llvm.or %[[CST_0]], %[[VAL_25]] : i32
     // CHECK:           %[[VAL_27:.*]] = llvm.shl %[[warpId]], %[[CST_4]] : i32
     // CHECK:           %[[VAL_28:.*]] = llvm.or %[[VAL_26]], %[[VAL_27]] : i32
-    // CHECK:           %[[VAL_29:.*]] = llvm.and %[[VAL_28]], %[[CST_384]] : i32
-    // CHECK:           %[[VAL_30:.*]] = llvm.shl %[[VAL_29]], %[[CST_5]] : i32
-    // CHECK:           %[[VAL_31:.*]] = llvm.xor %[[CST_0]], %[[VAL_30]] : i32
-    // CHECK:           %[[VAL_32:.*]] = llvm.and %[[VAL_28]], %[[CST_112]] : i32
-    // CHECK:           %[[VAL_33:.*]] = llvm.shl %[[VAL_32]], %[[CST_1]] : i32
-    // CHECK:           %[[VAL_34:.*]] = llvm.xor %[[VAL_31]], %[[VAL_33]] : i32
-    // CHECK:           %[[VAL_35:.*]] = llvm.and %[[VAL_28]], %[[CST_15]] : i32
-    // CHECK:           %[[VAL_36:.*]] = llvm.lshr %[[VAL_35]], %[[CST_0]] : i32
-    // CHECK:           %[[VAL_37:.*]] = llvm.xor %[[VAL_34]], %[[VAL_36]] : i32
-    // CHECK:           %[[VAL_38:.*]] = llvm.xor %[[CST_0]], %[[VAL_37]] : i32
-    // CHECK:           %[[VAL_39:.*]] = llvm.and %[[VAL_28]], %[[CST_511]] : i32
-    // CHECK:           %[[VAL_40:.*]] = llvm.shl %[[VAL_39]], %[[CST_3]] : i32
-    // CHECK:           %[[VAL_41:.*]] = llvm.xor %[[CST_0]], %[[VAL_40]] : i32
-    // CHECK:           %[[VAL_42:.*]] = llvm.xor %[[CST_0]], %[[VAL_41]] : i32
-    // CHECK:           %[[VAL_43:.*]] = llvm.xor %[[VAL_38]], %[[CST_0]] : i32
-    // CHECK:           %[[VAL_44:.*]] = llvm.lshr %[[VAL_43]], %[[CST_8]] : i32
-    // CHECK:           %[[VAL_45:.*]] = llvm.shl %[[VAL_44]], %[[CST_3]] : i32
-    // CHECK:           %[[offset:.*]] = llvm.add %[[VAL_45]], %[[VAL_43]] : i32
-    // CHECK:           %[[VAL_65:.*]] = llvm.getelementptr inbounds %[[SMEM]]{{\[}}%[[offset]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, f16
-    // CHECK:           %[[VAL_66:.*]] = llvm.insertelement {{.*}}, {{.*}}{{\[}}%[[CST_0]] : i32] : vector<1xf16>
+    // CHECK:           %[[VAL_29:.*]] = llvm.and %[[VAL_28]], %[[CST_3]] : i32
+    // CHECK:           %[[VAL_30:.*]] = llvm.shl %[[VAL_29]], %[[CST_14]] : i32
+    // CHECK:           %[[VAL_32:.*]] = llvm.and %[[VAL_28]], %[[CST_387]] : i32
+    // CHECK:           %[[VAL_33:.*]] = llvm.shl %[[VAL_32]], %[[CST_4]] : i32
+    // CHECK:           %[[VAL_35:.*]] = llvm.and %[[VAL_28]], %[[CST_48]] : i32
+    // CHECK:           %[[VAL_36:.*]] = llvm.shl %[[VAL_35]], %[[CST_1]] : i32
+    // CHECK:           %[[VAL_38:.*]] = llvm.and %[[VAL_28]], %[[CST_12]] : i32
+    // CHECK:           %[[VAL_39:.*]] = llvm.lshr %[[VAL_38]], %[[CST_0]] : i32
+    // CHECK:           %[[VAL_40:.*]] = llvm.and %[[VAL_28]], %[[CST_64]] : i32
+    // CHECK:           %[[VAL_41:.*]] = llvm.icmp "eq" %[[VAL_40]], %[[CST_0]] : i32
+    // CHECK:           %[[VAL_42:.*]] = llvm.select %[[VAL_41]], %[[CST_0]], %[[CST_8192]] : i1, i32
+    // CHECK:           %[[VAL_43:.*]] = llvm.or disjoint %[[VAL_30]], %[[VAL_42]] : i32
+    // CHECK:           %[[VAL_45:.*]] = llvm.xor %[[VAL_33]], %[[VAL_36]] : i32
+    // CHECK:           %[[VAL_46:.*]] = llvm.xor %[[VAL_45]], %[[VAL_39]] : i32
+    // CHECK:           %[[VAL_47:.*]] = llvm.or disjoint %[[VAL_43]], %[[VAL_46]] : i32
+    // CHECK:           %[[VAL_48:.*]] = llvm.xor %[[CST_0]], %[[VAL_47]] : i32
+    // CHECK:           %[[VAL_49:.*]] = llvm.mul %[[CST_0]], %[[CST_2]] : i32
+    // CHECK:           %[[VAL_50:.*]] = llvm.xor %[[VAL_48]], %[[VAL_49]] : i32
+    // CHECK:           %[[VAL_51:.*]] = llvm.xor %[[VAL_50]], %[[CST_0]] : i32
+    // CHECK:           %[[offset:.*]] = llvm.add %[[VAL_51]], %[[CST_0]] : i32
+    // CHECK:           %[[VAL_65:.*]] = llvm.getelementptr inbounds %[[SMEM]]{{\[}}%[[offset]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK:           %[[VAL_66:.*]] = llvm.insertelement {{.*}}, {{.*}}{{\[}}%[[CST_0]] : i32] :  vector<2xf16>
+    // CHECK:           %[[VAL_67:.*]] = llvm.insertelement {{.*}}, %[[VAL_66]]{{\[}}%[[CST_1]] : i32] : vector<2xf16>
 
-    // COM: Because the values per thread of DPAS layout is not contiguous. The values are stored in the SLM in a non-vectorized way.
-    // COM: Total 32 stores are generated to save the tensor of the DPAS layout to the SLM. 64*256/(4*8*16) = 32
-    // CHECK:           llvm.store %[[VAL_66]], %[[VAL_65]] : vector<1xf16>, !llvm.ptr<3>
-    // CHECK-COUNT-31:  llvm.store {{.*}}, {{.*}} : vector<1xf16>, !llvm.ptr<3>
+    // COM: Because the values per thread of DPAS layout is contiguous. The values are stored in the SLM in vectorized way.
+    // COM: Total 32 stores are generated to save the tensor of the DPAS layout to the SLM. 128*256/(4*8*16*2) = 32
+    // CHECK:           llvm.store %[[VAL_67]], %[[VAL_65]] : vector<2xf16>, !llvm.ptr<3>
+    // CHECK-COUNT-31:  llvm.store {{.*}}, {{.*}} : vector<2xf16>, !llvm.ptr<3>
     // CHECK:           llvm.call spir_funccc @_Z7barrierj(%[[CST_1]]) {convergent, no_unwind, will_return} : (i32) -> ()
 
     // COM: Because the values per thread of blocked layout is contiguous. The values are loaded from the SLM in a vectorized way.
-    // COM: Total 4 loads are generated to load the tensor of the blocked layout from the SLM. 128*256/(16*2*16*8) = 8
-    // CHECK-COUNT-4:    {{.*}} = llvm.load {{.*}} : !llvm.ptr<3> -> vector<8xf16>
-
-    // COM: The 2nd round of exchanging values.
-    // CHECK:           llvm.call spir_funccc @_Z7barrierj(%[[CST_1]]) {convergent, no_unwind, will_return} : (i32) -> ()
-    // CHECK-COUNT-32:  llvm.store {{.*}}, {{.*}} : vector<1xf16>, !llvm.ptr<3>
-    // CHECK:           llvm.call spir_funccc @_Z7barrierj(%[[CST_1]]) {convergent, no_unwind, will_return} : (i32) -> ()
-    // CHECK-COUNT-4:    {{.*}} = llvm.load {{.*}} : !llvm.ptr<3> -> vector<8xf16>
-
+    // COM: Total 16 loads are generated to load the tensor of the blocked layout from the SLM. 128*256/(16*2*16*4) = 16
+    // CHECK-COUNT-16:    {{.*}} = llvm.load {{.*}} : !llvm.ptr<3> -> vector<4xf16>
     %93 = ttg.convert_layout %cst {allocation.offset = 0 : i32} : tensor<128x256xf16, #mma> -> tensor<128x256xf16, #blocked>
     %80 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x1x!tt.ptr<f16>, #blocked>
     %83 = tt.broadcast %80 : tensor<128x1x!tt.ptr<f16>, #blocked> -> tensor<128x256x!tt.ptr<f16>, #blocked>

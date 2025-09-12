@@ -50,7 +50,7 @@ jobs:
           gh_token: ${{ secrets.GITHUB_TOKEN }}
           python_version: ${{ env.PYTHON_VERSION }}
           # transformers package is required for the inductor (e2e) test
-          wheels_pattern: '{torch,transformers}-*.whl'
+          wheels_pattern: 'torch-*.whl'
 
       - name: Install Triton
         uses: ./.github/actions/setup-triton
@@ -61,6 +61,7 @@ jobs:
           sed -i '/^validate_nccl_dep_consistency.*/d' generate_binary_build_matrix.py
           python -c "from generate_binary_build_matrix import PYTORCH_EXTRA_INSTALL_REQUIREMENTS; print('\n'.join(PYTORCH_EXTRA_INSTALL_REQUIREMENTS['xpu'].split(' | ')))" | tee /tmp/requirements.txt
           pip install -r /tmp/requirements.txt
+          pip install transformers==4.54.0
 
       - name: Run core tests
         run: |
@@ -69,6 +70,10 @@ jobs:
       - name: Run interpreter tests
         run: |
           ${{ env.TRITON_TEST_CMD }} --interpreter --skip-pip-install
+
+      - name: Run triton kernels tests
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --triton-kernels --skip-pip-install
 
       - name: Run Tutorials
         run: |

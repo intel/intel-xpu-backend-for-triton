@@ -39,7 +39,7 @@ Install Microsoft Visual Studio 2022 and make sure the following [components](ht
 
 ### Intel® Deep Learning Essentials
 
-Install [Intel® Deep Learning Essentials 2025.1.1](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html?packages=dl-essentials&dl-essentials-os=windows&dl-win=offline).
+Install [Intel® Deep Learning Essentials 2025.2.1](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html?packages=dl-essentials&dl-essentials-os=windows&dl-win=offline).
 By default, it is installed to `C:\Program Files (x86)\Intel\oneAPI`.
 
 ### Chocolatey

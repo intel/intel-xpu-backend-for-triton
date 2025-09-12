@@ -33,6 +33,12 @@ Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
   return reduced_val;
 }
 
+void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
+                         bool isWarpSync) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  b.barrier();
+}
+
 Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   // Clusters of thread blocks aren't supported.
@@ -47,19 +53,6 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
     b.store(val, ptr);
     return ArrayRef<Value>();
   });
-}
-
-bool TargetInfo::canUseStMatrix(RankedTensorType tensorTy,
-                                ArrayRef<unsigned> repShape,
-                                ArrayRef<unsigned> paddedRepShape,
-                                ArrayRef<unsigned> order,
-                                int swizzleByteSize) const {
-  return false;
-}
-
-void TargetInfo::storeMatrixShared(RewriterBase &rewriter, Location loc,
-                                   Value ptr, Value val) const {
-  llvm::report_fatal_error("IntelGPU does not support stmatrix");
 }
 
 Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
@@ -99,16 +92,9 @@ Value TargetInfo::shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
 }
 
 Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
-                            ModuleOp moduleOp, int axis) const {
-  assert(axis >= 0);
-  assert(axis < 3);
-  assert(moduleOp);
-
-  constexpr mlir::gpu::Dimension dims[] = {mlir::gpu::Dimension::x,
-                                           mlir::gpu::Dimension::y,
-                                           mlir::gpu::Dimension::z};
-
-  Value blockId = rewriter.create<::mlir::gpu::BlockIdOp>(loc, dims[axis]);
+                            ModuleOp moduleOp, ProgramIDDim axis) const {
+  Value blockId =
+      rewriter.create<::mlir::gpu::BlockIdOp>(loc, mlir::gpu::Dimension(axis));
   return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
 }
 

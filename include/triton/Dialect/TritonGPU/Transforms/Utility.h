@@ -213,8 +213,9 @@ std::optional<StringRef> getAMDArch(Operation *module);
 std::optional<mlir::triton::gpu::SwizzledSharedEncodingAttr>
 getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible);
 
-// Convert \param op operands and results to layout \param encoding.
-void convertOpEncoding(Attribute encoding, Operation *op);
+// Convert \param op to use \param encoding attribute.
+// Skips operands if they're in shared encoding.
+Operation *convertDistributedOpEncoding(Attribute encoding, Operation *op);
 
 // Returns the original memory allocation for a memdesc value
 triton::gpu::LocalAllocOp findShmemAlloc(Value operand);
@@ -255,8 +256,11 @@ namespace mlir::triton {
 /// Replace all uses of `oldUse` with `val` and propagate the type if needed.
 /// This is useful when we need to change a memory descriptor from immutable to
 /// mutable.
-void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
-                                 Value val);
+/// The callback is invoked for each pair of an old and a cloned memdesc op
+/// as the type is propagated.
+void replaceUsesAndPropagateType(
+    OpBuilder &builder, Operation *oldUse, Value val,
+    std::function<void(Operation *, Operation *)> callback = nullptr);
 
 /// Replace all uses of `old` with a local load from `alloc` unless the use is a
 /// `ttg.local_alloc` with a matching shared encoding, in which case the shared

@@ -1,6 +1,7 @@
 project(Proton LANGUAGES CXX)
 
 set(PROTON_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/csrc")
+set(PROTON_COMMON_DIR "${CMAKE_CURRENT_SOURCE_DIR}/common")
 
 option(TRITON_BUILD_PROTON_XPU "Build Proton with XPU support" OFF)
 if(TRITON_BUILD_PROTON_XPU)
@@ -45,6 +46,7 @@ function(add_proton_library name)
       "${CUPTI_INCLUDE_DIR}"
       "${JSON_INCLUDE_DIR}"
       "${XPUPTI_INCLUDE_DIR}"
+      "${PROTON_COMMON_DIR}/include"
       "${PROTON_SRC_DIR}/include"
   )
 
@@ -56,7 +58,11 @@ function(add_proton_library name)
 endfunction()
 
 # ============ Add subdirectory with actual code that calls add_proton_library ============
+add_subdirectory("${PROTON_COMMON_DIR}")
 add_subdirectory("${PROTON_SRC_DIR}")
+
+# ============ Add subdirectory with proton tests ============
+add_subdirectory(test)
 
 # ============ Possibly handle macOS specifics ============
 if(APPLE)

@@ -6,18 +6,23 @@ HELP="\
 Example usage: ./test-triton.sh [TEST]... [OPTION]...
 
 TEST:
-    --unit          default
-    --core          default
-    --tutorial      default
-    --microbench    default
-    --minicore      part of core
-    --mxfp          part of core
-    --scaled-dot    part of core
+    --unit            default
+    --core            default
+    --tutorial        default
+    --microbench      default
+    --triton-kernels  default
+    --minicore        part of core
+    --mxfp            part of core
+    --scaled-dot      part of core
     --interpreter
     --benchmarks
     --softmax
     --gemm
-    --attention
+    --flash-attention
+    - tutorial-fa-64
+    - tutorial-fa-128-fwdfp8
+    - tutorial-fa-128-nofwdfp8
+    --flex-attention
     --instrumentation
     --inductor
     --sglang
@@ -55,10 +60,12 @@ TEST_MICRO_BENCHMARKS=false
 TEST_BENCHMARKS=false
 TEST_BENCHMARK_SOFTMAX=false
 TEST_BENCHMARK_GEMM=false
-TEST_BENCHMARK_ATTENTION=false
+TEST_BENCHMARK_FLASH_ATTENTION=false
+TEST_BENCHMARK_FLEX_ATTENTION=false
 TEST_INSTRUMENTATION=false
 TEST_INDUCTOR=false
 TEST_SGLANG=false
+TEST_TRITON_KERNELS=false
 VENV=false
 TRITON_TEST_REPORTS=false
 TRITON_TEST_WARNING_REPORTS=false
@@ -108,6 +115,27 @@ while (( $# != 0 )); do
       TEST_DEFAULT=false
       shift
       ;;
+    --tutorial-fa-64)
+      TEST_TUTORIAL=true
+      TEST_TUTORIAL_FA=true
+      FA_CONFIG="HEAD_DIM=64"
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --tutorial-fa-128-fwdfp8)
+      TEST_TUTORIAL=true
+      TEST_TUTORIAL_FA=true
+      FA_CONFIG="HEAD_DIM=128 FWD_FP8_ONLY=1"
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --tutorial-fa-128-nofwdfp8)
+      TEST_TUTORIAL=true
+      TEST_TUTORIAL_FA=true
+      FA_CONFIG="HEAD_DIM=128 FWD_FP8_SKIP=1"
+      TEST_DEFAULT=false
+      shift
+      ;;
     --microbench)
       TEST_MICRO_BENCHMARKS=true
       TEST_DEFAULT=false
@@ -128,8 +156,13 @@ while (( $# != 0 )); do
       TEST_DEFAULT=false
       shift
       ;;
-    --attention)
-      TEST_BENCHMARK_ATTENTION=true
+    --flash-attention)
+      TEST_BENCHMARK_FLASH_ATTENTION=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --flex-attention)
+      TEST_BENCHMARK_FLEX_ATTENTION=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -145,6 +178,11 @@ while (( $# != 0 )); do
       ;;
     --sglang)
       TEST_SGLANG=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --triton-kernels)
+      TEST_TRITON_KERNELS=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -203,6 +241,7 @@ if [ "$TEST_DEFAULT" = true ]; then
   TEST_CORE=true
   TEST_TUTORIAL=true
   TEST_MICRO_BENCHMARKS=true
+  TEST_TRITON_KERNELS=true
 fi
 
 if [ "$VENV" = true ]; then
@@ -284,7 +323,7 @@ run_minicore_tests() {
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=language \
     run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py \
-    -k "not test_mxfp and not test_scaled_dot"
+    -k "not test_mxfp and not test_preshuffle_scale_mxfp_cdna4 and not test_scaled_dot"
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=subprocess \
     run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/test_subprocess.py
@@ -364,17 +403,37 @@ run_tutorial_tests() {
   python -m pip install matplotlib pandas tabulate -q
   cd $TRITON_PROJ/python/tutorials
 
-  run_tutorial_test "01-vector-add"
-  run_tutorial_test "02-fused-softmax"
-  run_tutorial_test "03-matrix-multiplication"
-  run_tutorial_test "04-low-memory-dropout"
-  run_tutorial_test "05-layer-norm"
-  run_tutorial_test "06-fused-attention"
-  run_tutorial_test "07-extern-functions"
-  run_tutorial_test "08-grouped-gemm"
-  run_tutorial_test "09-persistent-matmul"
-  run_tutorial_test "10-experimental-block-pointer"
-  run_tutorial_test "10i-experimental-block-pointer"
+  tutorials=(
+    "01-vector-add"
+    "02-fused-softmax"
+    "03-matrix-multiplication"
+    "04-low-memory-dropout"
+    "05-layer-norm"
+    "06-fused-attention"
+    "07-extern-functions"
+    "08-grouped-gemm"
+    "09-persistent-matmul"
+    "10-experimental-block-pointer"
+    "10i-experimental-block-pointer"
+  )
+  if [ "${TEST_TUTORIAL_FA:-false}" = true ]; then
+    tutorials=(
+      "06-fused-attention"
+    )
+
+    if [ -n "${FA_CONFIG:-}" ]; then
+      # Containst specific config for Fused attention tutorial
+      export $FA_CONFIG
+    fi
+  fi
+
+  for tutorial in "${tutorials[@]}"; do
+    if [[ -f $TRITON_TEST_SELECTFILE ]] && ! grep -qF "$tutorial" "$TRITON_TEST_SELECTFILE"; then
+        continue
+    fi
+
+    run_tutorial_test "$tutorial"
+  done
 }
 
 run_microbench_tests() {
@@ -410,9 +469,9 @@ run_benchmark_gemm() {
   python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_tensor_desc_benchmark.py
 }
 
-run_benchmark_attention() {
+run_benchmark_flash_attention() {
   echo "****************************************************"
-  echo "*****            Running ATTENTION             *****"
+  echo "*****          Running FlashAttention          *****"
   echo "****************************************************"
   cd $TRITON_PROJ/benchmarks
   pip install .
@@ -431,6 +490,17 @@ run_benchmark_attention() {
   echo "Backward - Default path:"
   FA_KERNEL_MODE="bwd" \
     python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
+}
+
+run_benchmark_flex_attention() {
+  echo "****************************************************"
+  echo "*****          Running FlexAttention           *****"
+  echo "****************************************************"
+  cd $TRITON_PROJ/benchmarks
+  pip install .
+
+  echo "FlexAttention - causal mask:"
+  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flex_attention_benchmark_causal_mask.py
 }
 
 run_benchmarks() {
@@ -468,7 +538,7 @@ run_inductor_tests() {
     git checkout $rev
   )
 
-  pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec
+  pip install pyyaml pandas scipy 'numpy==1.26.4' psutil pyre_extensions torchrec
 
   # TODO: Find the fastest Hugging Face model
   ZE_AFFINITY_MASK=0 python pytorch/benchmarks/dynamo/huggingface.py --accuracy --float32 -dxpu -n10 --no-skip --dashboard --inference --freezing --total-partitions 1 --partition-id 0 --only AlbertForMaskedLM --backend=inductor --timeout=4800 --output=$(pwd -P)/inductor_log.csv
@@ -498,6 +568,16 @@ run_sglang_tests() {
 
   pip install pytest pytest-xdist
   run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-4} test/srt/test_triton_attention_kernels.py
+}
+
+run_triton_kernels_tests() {
+  echo "***************************************************"
+  echo "******    Running Triton Kernels tests      ******"
+  echo "***************************************************"
+  cd $TRITON_PROJ/python/triton_kernels/tests
+
+  TRITON_TEST_SUITE=triton_kernels \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-4} --device xpu .
 }
 
 test_triton() {
@@ -538,8 +618,11 @@ test_triton() {
   if [ "$TEST_BENCHMARK_GEMM" = true ]; then
     run_benchmark_gemm
   fi
-  if [ "$TEST_BENCHMARK_ATTENTION" = true ]; then
-    run_benchmark_attention
+  if [ "$TEST_BENCHMARK_FLASH_ATTENTION" = true ]; then
+    run_benchmark_flash_attention
+  fi
+  if [ "$TEST_BENCHMARK_FLEX_ATTENTION" = true ]; then
+    run_benchmark_flex_attention
   fi
   if [ "$TEST_INSTRUMENTATION" == true ]; then
     run_instrumentation_tests
@@ -549,6 +632,9 @@ test_triton() {
   fi
   if [ "$TEST_SGLANG" == true ]; then
     run_sglang_tests
+  fi
+  if [ "$TEST_TRITON_KERNELS" == true ]; then
+    run_triton_kernels_tests
   fi
 }
 

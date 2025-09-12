@@ -98,7 +98,7 @@ export AGAMA_VERSION="$(agama_version)"
 export GPU_DEVICE="$(gpu_device)"
 
 if python -c "import torch" &> /dev/null; then
-    export TORCH_VERSION=$(python -c "import torch; from packaging.version import Version; print(Version(torch.__version__).base_version)")
+    export TORCH_VERSION=$(python -c "import torch; print(torch.__version__)")
 else
     export TORCH_VERSION="Not installed"
 fi

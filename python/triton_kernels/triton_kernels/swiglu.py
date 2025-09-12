@@ -35,7 +35,7 @@ class SwiGLU(torch.autograd.Function):
         # optimization hyperparameters
         BLOCK_M, BLOCK_N = 32 // a.itemsize, 128
         num_warps = 4
-        kwargs = {'maxnreg': 64} if not target_info.is_hip() else {}
+        kwargs = {'maxnreg': 64} if not target_info.is_hip() and not target_info.is_xpu() else {}
         # launch semi-persistent kernel
         N_BLOCKS = triton.cdiv(N // 2, BLOCK_N)
         num_sms = target_info.num_sms()

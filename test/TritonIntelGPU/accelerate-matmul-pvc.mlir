@@ -1,4 +1,4 @@
-// RUN: env TRITON_INTEL_DECOMPOSE_SCALED_BLOCKED=1 triton-opt %s -split-input-file --tritonintelgpu-accelerate-matmul | FileCheck %s
+// RUN: env TRITON_INTEL_ENABLE_DPAS_FOR_WARP_SIZE_32=1 triton-opt %s -split-input-file --tritonintelgpu-accelerate-matmul | FileCheck %s
 
 // CHECK: #[[$DPAS:.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
 // CHECK: #[[$DPAS_1:.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
@@ -208,48 +208,77 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [1, 0]}>
 
-module attributes {"ttg.target" = "xpu", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.min_sg_size" = 16 : i32} {
+module attributes {"ttg.target" = "xpu", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.min_sg_size" = 16 : i32, ttig.support_dpas} {
   // CHECK-DAG: [[BLOCKED:#.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [1, 0]}>
   // CHECK-DAG: [[BLOCKED1:#.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
   // CHECK-DAG: [[BLOCKED2:#.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
-  // CHECK-DAG: [[BLOCKED3:#.+]] = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [1, 0]}>
-  // CHECK-DAG: [[BLOCKED4:#.+]] = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [8, 2, 1], warpsPerCTA = [4, 1, 1], order = [2, 1, 0]}>
+  // CHECK-DAG: [[BLOCKED3:#.+]] = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [8, 2, 1], warpsPerCTA = [4, 1, 1], order = [2, 1, 0]}>
+  // CHECK-DAG: [[BLOCKED4:#.+]] = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [1, 0]}>
+  // CHECK-DAG: [[BLOCKED5:#.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 4], order = [0, 1]}>
+  // CHECK-DAG: [[BLOCKED6:#.+]] = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 16, 1], warpsPerCTA = [1, 4, 1], order = [2, 1, 0]}>
+  // CHECK-DAG: [[BLOCKED7:#.+]] = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 1, 16], warpsPerCTA = [1, 1, 4], order = [1, 2, 0]}>
   // CHECK-DAG: [[LINEAR:#.+]] = #ttg.linear<{{.*}}>
+  // CHECK-DAG: [[LINEAR1:#.+]] = #ttg.linear<{{.*}}>
+  // CHECK-DAG: [[LINEAR2:#.+]] = #ttg.linear<{{.*}}>
+  // CHECK-DAG: [[DPAS:#.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
 
-  // CHECK: tt.func @dot_scaled([[ARG0:%.*]]: tensor<128x32xi8, [[BLOCKED]]>, [[ARG1:%.*]]: tensor<128x2xi8, [[BLOCKED1]]>, [[ARG2:%.*]]: tensor<64x128xbf16, [[BLOCKED2]]>) -> tensor<128x128xf32, [[BLOCKED2]]> {
-  tt.func @dot_scaled(%a: tensor<128x32xi8, #blocked2>, %scale: tensor<128x2xi8, #blocked1>, %b: tensor<64x128xbf16, #blocked>) -> tensor<128x128xf32, #blocked> {
-    // CHECK: [[NAN:%.*]] = arith.constant dense<0x7FC0> : tensor<128x64xbf16, [[BLOCKED3]]>
-    // CHECK: [[C:%.*]] = arith.constant dense<0.000000e+00> : tensor<128x128xf32, [[BLOCKED2]]>
-    // CHECK: [[FP4TOFP:%.*]] = ttg.fp4_to_fp [[ARG0]] {axis = 1 : i32} : tensor<128x32xi8, #blocked> -> tensor<128x64xbf16, [[BLOCKED3]]>
-    // CHECK: [[SCALE:%.*]] = ttg.convert_layout {{.*}} : tensor<128x64xbf16, [[LINEAR]]> -> tensor<128x64xbf16, [[BLOCKED3]]>
-    // CHECK: [[UPCAST:%.*]] = arith.mulf [[FP4TOFP]], [[SCALE]] : tensor<128x64xbf16, [[BLOCKED3]]>
-    // CHECK: [[MASKNAN:%.*]] = arith.select {{.*}}, [[NAN]], [[UPCAST]] : tensor<128x64xi1, [[BLOCKED3]]>, tensor<128x64xbf16, [[BLOCKED3]]>
-    // CHECK: [[CVT_ARG0:%.*]] = ttg.convert_layout [[MASKNAN]] : tensor<128x64xbf16, [[BLOCKED3]]> -> tensor<128x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[BLOCKED2]]}>>
-    // CHECK: [[CVT_ARG2:%.*]] = ttg.convert_layout [[ARG2]] : tensor<64x128xbf16, [[BLOCKED2]]> -> tensor<64x128xbf16, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED2]]}>>
-    // CHECK: [[A:%.*]] = tt.fp_to_fp [[CVT_ARG0]] : tensor<128x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[BLOCKED2]]}>> -> tensor<128x64xf32, #ttg.dot_op<{opIdx = 0, parent = [[BLOCKED2]]}>>
-    // CHECK: [[B:%.*]] = tt.fp_to_fp [[CVT_ARG2]] : tensor<64x128xbf16, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED2]]}>> -> tensor<64x128xf32, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED2]]}>>
-    // CHECK: [[D:%.*]] = tt.dot [[A]], [[B]], [[C]] : tensor<128x64xf32, #ttg.dot_op<{opIdx = 0, parent = [[BLOCKED2]]}>> * tensor<64x128xf32, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED2]]}>> -> tensor<128x128xf32, [[BLOCKED2]]>
-    // CHECK: [[RES:%.*]] = ttg.convert_layout [[D]] : tensor<128x128xf32, [[BLOCKED2]]> -> tensor<128x128xf32, [[BLOCKED2]]>
+  // CHECK: tt.func @dot_scaled_fp8_bf16([[ARG0:%.*]]: tensor<128x64xf8E4M3FN, [[BLOCKED]]>, [[ARG1:%.*]]: tensor<128x2xi8, [[BLOCKED1]]>, [[ARG2:%.*]]: tensor<64x128xbf16, [[BLOCKED2]]>) -> tensor<128x128xf32, [[BLOCKED2]]> {
+  tt.func @dot_scaled_fp8_bf16(%a: tensor<128x64xf8E4M3FN, #blocked2>, %scale: tensor<128x2xi8, #blocked1>, %b: tensor<64x128xbf16, #blocked>) -> tensor<128x128xf32, #blocked> {
+    // CHECK: [[NAN:%.*]] = arith.constant dense<0x7FC0> : tensor<128x64xbf16, [[BLOCKED]]>
+    // CHECK: [[CST:%.*]] = arith.constant dense<0.000000e+00> : tensor<128x128xf32, [[BLOCKED2]]>
+    // CHECK: [[FPTOFP:%.*]] = tt.fp_to_fp [[ARG0]] : tensor<128x64xf8E4M3FN, #blocked> -> tensor<128x64xbf16, #blocked>
+    // CHECK: [[SCALE:%.*]] = ttg.convert_layout {{.*}} : tensor<128x64xbf16, [[LINEAR]]> -> tensor<128x64xbf16, [[BLOCKED]]>
+    // CHECK: [[UPCAST:%.*]] = arith.mulf [[FPTOFP]], [[SCALE]] : tensor<128x64xbf16, [[BLOCKED]]>
+    // CHECK: [[MASKNAN:%.*]] = arith.select {{.*}}, [[NAN]], [[UPCAST]] : tensor<128x64xi1, [[BLOCKED]]>, tensor<128x64xbf16, [[BLOCKED]]>
+    // CHECK: [[BLOCKED_A:%.*]] = ttg.convert_layout [[MASKNAN]] : tensor<128x64xbf16, [[BLOCKED]]> -> tensor<128x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[BLOCKED2]]}>>
+    // CHECK: [[BLOCKED_B:%.*]] = ttg.convert_layout [[ARG2]] : tensor<64x128xbf16, [[BLOCKED2]]> -> tensor<64x128xbf16, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED2]]}>>
+    // CHECK: [[C:%.*]] = ttg.convert_layout [[CST]] : tensor<128x128xf32, [[BLOCKED2]]> -> tensor<128x128xf32, [[DPAS]]>
+    // CHECK: [[A:%.*]] = ttg.convert_layout [[BLOCKED_A]] : tensor<128x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[BLOCKED2]]}>> -> tensor<128x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[DPAS]], kWidth = 1}>>
+    // CHECK: [[B:%.*]] = ttg.convert_layout [[BLOCKED_B]] : tensor<64x128xbf16, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED2]]}>> -> tensor<64x128xbf16, #ttg.dot_op<{opIdx = 1, parent = [[DPAS]], kWidth = 2}>>
+    // CHECK: [[D:%.*]] = tt.dot [[A]], [[B]], [[C]], inputPrecision = tf32 : tensor<128x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[DPAS]], kWidth = 1}>> * tensor<64x128xbf16, #ttg.dot_op<{opIdx = 1, parent = [[DPAS]], kWidth = 2}>> -> tensor<128x128xf32, [[DPAS]]>
+    // CHECK: [[RES:%.*]] = ttg.convert_layout [[D]] : tensor<128x128xf32, [[DPAS]]> -> tensor<128x128xf32, [[BLOCKED2]]>
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
-    %dot_res1 = tt.dot_scaled %a scale %scale, %b, %cst lhs = e2m1 rhs = bf16 {fastMath = false} : tensor<128x32xi8, #blocked2>, tensor<128x2xi8, #blocked1> * tensor<64x128xbf16, #blocked> -> tensor<128x128xf32, #blocked>
+    %dot_res1 = tt.dot_scaled %a scale %scale, %b, %cst lhs = e4m3 rhs = bf16 {fastMath = false} : tensor<128x64xf8E4M3FN, #blocked2>, tensor<128x2xi8, #blocked1> * tensor<64x128xbf16, #blocked> -> tensor<128x128xf32, #blocked>
     tt.return %dot_res1 : tensor<128x128xf32, #blocked>
   }
 
-  // CHECK: tt.func @dot_scaled_fp8([[ARG0:%.*]]: tensor<128x32xi8, [[BLOCKED]]>, [[ARG1:%.*]]: tensor<128x2xi8, [[BLOCKED1]]>, [[ARG2:%.*]]: tensor<64x128xf8E4M3FN, [[BLOCKED2]]>) -> tensor<128x128xf32, [[BLOCKED2]]> {
-  tt.func @dot_scaled_fp8(%a: tensor<128x32xi8, #blocked2>, %scale: tensor<128x2xi8, #blocked1>, %b: tensor<64x128xf8E4M3FN, #blocked>) -> tensor<128x128xf32, #blocked> {
-    // CHECK: [[C:%.*]] = arith.constant dense<0.000000e+00> : tensor<128x128xf32, [[BLOCKED2]]>
-    // CHECK: [[FP4TOFP:%.*]] = ttg.fp4_to_fp [[ARG0]] {axis = 1 : i32} : tensor<128x32xi8, #blocked> -> tensor<128x64xbf16, [[BLOCKED3]]>
-    // CHECK: [[SCALE:%.*]] = ttg.convert_layout {{.*}} : tensor<128x64xbf16, [[LINEAR]]> -> tensor<128x64xbf16, [[BLOCKED3]]>
-    // CHECK: [[UPCAST:%.*]] = arith.mulf [[FP4TOFP]], [[SCALE]] : tensor<128x64xbf16, [[BLOCKED3]]>
-    // CHECK: [[CVT_ARG0:%.*]] = ttg.convert_layout [[UPCAST]] : tensor<128x64xbf16, [[BLOCKED3]]> -> tensor<128x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[BLOCKED2]]}>>
+  // CHECK: tt.func @dot_scaled_fp4_fp8([[ARG0:%.*]]: tensor<128x32xi8, [[BLOCKED]]>, [[ARG1:%.*]]: tensor<128x2xi8, [[BLOCKED1]]>, [[ARG2:%.*]]: tensor<64x128xf8E4M3FN, [[BLOCKED2]]>) -> tensor<128x128xf32, [[BLOCKED2]]> {
+  tt.func @dot_scaled_fp4_fp8(%a: tensor<128x32xi8, #blocked2>, %scale: tensor<128x2xi8, #blocked1>, %b: tensor<64x128xf8E4M3FN, #blocked>) -> tensor<128x128xf32, #blocked> {
+    // CHECK: [[CST:%.*]] = arith.constant dense<0.000000e+00> : tensor<128x128xf32, [[BLOCKED2]]>
+    // CHECK: [[FP4TOFP:%.*]] = ttg.fp4_to_fp [[ARG0]] {axis = 1 : i32} : tensor<128x32xi8, [[BLOCKED]]> -> tensor<128x64xbf16, [[BLOCKED4]]>
+    // CHECK: [[SCALE:%.*]] = ttg.convert_layout {{.*}} : tensor<128x64xbf16, [[LINEAR]]> -> tensor<128x64xbf16, [[BLOCKED4]]>
+    // CHECK: [[UPCAST:%.*]] = arith.mulf [[FP4TOFP]], [[SCALE]] : tensor<128x64xbf16, [[BLOCKED4]]>
+    // CHECK: [[CVT_ARG0:%.*]] = ttg.convert_layout [[UPCAST]] : tensor<128x64xbf16, [[BLOCKED4]]> -> tensor<128x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[BLOCKED2]]}>>
     // CHECK: [[FPTOFP:%.*]] = tt.fp_to_fp [[ARG2]] : tensor<64x128xf8E4M3FN, [[BLOCKED2]]> -> tensor<64x128xbf16, [[BLOCKED2]]>
     // CHECK: [[CVT_ARG2:%.*]] = ttg.convert_layout [[FPTOFP]] : tensor<64x128xbf16, [[BLOCKED2]]> -> tensor<64x128xbf16, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED2]]}>>
-    // CHECK: [[A:%.*]] = tt.fp_to_fp [[CVT_ARG0]] : tensor<128x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[BLOCKED2]]}>> -> tensor<128x64xf32, #ttg.dot_op<{opIdx = 0, parent = [[BLOCKED2]]}>>
-    // CHECK: [[B:%.*]] = tt.fp_to_fp [[CVT_ARG2:%.*]] : tensor<64x128xbf16, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED2]]}>> -> tensor<64x128xf32, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED2]]}>>
-    // CHECK: [[D:%.*]] = tt.dot [[A]], [[B]], [[C]] : tensor<128x64xf32, #ttg.dot_op<{opIdx = 0, parent = [[BLOCKED2]]}>> * tensor<64x128xf32, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED2]]}>> -> tensor<128x128xf32, [[BLOCKED2]]>
-    // CHECK: [[RES:%.*]] = ttg.convert_layout [[D]] : tensor<128x128xf32, [[BLOCKED2]]> -> tensor<128x128xf32, [[BLOCKED2]]>
+    // CHECK: [[C:%.*]] = ttg.convert_layout [[CST]] : tensor<128x128xf32, [[BLOCKED2]]> -> tensor<128x128xf32, [[DPAS]]>
+    // CHECK: [[A:%.*]] = ttg.convert_layout [[CVT_ARG0]] : tensor<128x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[BLOCKED2]]}>> -> tensor<128x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[DPAS]], kWidth = 1}>>
+    // CHECK: [[B:%.*]] = ttg.convert_layout [[CVT_ARG2]] : tensor<64x128xbf16, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED2]]}>> -> tensor<64x128xbf16, #ttg.dot_op<{opIdx = 1, parent = [[DPAS]], kWidth = 2}>>
+    // CHECK: [[D:%.*]] = tt.dot [[A]], [[B]], [[C]], inputPrecision = tf32 : tensor<128x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[DPAS]], kWidth = 1}>> * tensor<64x128xbf16, #ttg.dot_op<{opIdx = 1, parent = [[DPAS]], kWidth = 2}>> -> tensor<128x128xf32, [[DPAS]]>
+    // CHECK: [[RES:%.*]] = ttg.convert_layout [[D]] : tensor<128x128xf32, [[DPAS]]> -> tensor<128x128xf32, [[BLOCKED2]]>
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
     %result = tt.dot_scaled %a scale %scale, %b, %cst lhs = e2m1 rhs = e4m3 {fastMath = true} : tensor<128x32xi8, #blocked2>, tensor<128x2xi8, #blocked1> * tensor<64x128xf8E4M3FN, #blocked> -> tensor<128x128xf32, #blocked>
+    tt.return %result : tensor<128x128xf32, #blocked>
+  }
+
+  // CHECK: tt.func @dot_scaled_fp4_fp4([[ARG0:%.*]]: tensor<128x32xi8, [[BLOCKED]]>, [[ARG1:%.*]]: tensor<128x2xi8, [[BLOCKED1]]>, [[ARG2:%.*]]: tensor<32x128xi8, [[BLOCKED2]]>, [[ARG3:%.*]]: tensor<128x2xi8, [[BLOCKED1]]>) -> tensor<128x128xf32, [[BLOCKED2]]> {
+  tt.func @dot_scaled_fp4_fp4(%a: tensor<128x32xi8, #blocked2>, %scale_a: tensor<128x2xi8, #blocked1>, %b: tensor<32x128xi8, #blocked>, %scale_b: tensor<128x2xi8, #blocked1>) -> tensor<128x128xf32, #blocked> {
+    // CHECK: [[CST:%.*]] = arith.constant dense<0.000000e+00> : tensor<128x128xf32, [[BLOCKED2]]>
+    // CHECK: [[FP4TOFP:%.*]] = ttg.fp4_to_fp [[ARG0]] {axis = 1 : i32} : tensor<128x32xi8, [[BLOCKED]]> -> tensor<128x64xbf16, [[BLOCKED4]]>
+    // CHECK: [[SCALE:%.*]] = ttg.convert_layout {{.*}} : tensor<128x64xbf16, [[LINEAR]]> -> tensor<128x64xbf16, [[BLOCKED4]]>
+    // CHECK: [[UPCAST:%.*]] = arith.mulf [[FP4TOFP]], [[SCALE]] : tensor<128x64xbf16, [[BLOCKED4]]>
+    // CHECK: [[CVT_ARG0:%.*]] = ttg.convert_layout [[UPCAST]] : tensor<128x64xbf16, [[BLOCKED4]]> -> tensor<128x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[BLOCKED2]]}>>
+    // CHECK: [[FP4TOFP1:%.*]] = ttg.fp4_to_fp [[ARG2]] {axis = 0 : i32} : tensor<32x128xi8, [[BLOCKED2]]> -> tensor<64x128xbf16, [[LINEAR1]]>
+    // CHECK: [[SCALE1:%.*]] = ttg.convert_layout {{.*}} : tensor<64x128xbf16, [[LINEAR2]]> -> tensor<64x128xbf16, [[LINEAR1]]>
+    // CHECK: [[UPCAST1:%.*]] = arith.mulf [[FP4TOFP1]], [[SCALE1]] : tensor<64x128xbf16, [[LINEAR1]]>
+    // CHECK: [[CVT_ARG2:%.*]] = ttg.convert_layout [[UPCAST1]] : tensor<64x128xbf16, [[LINEAR1]]> -> tensor<64x128xbf16, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED2]]}>>
+    // CHECK: [[C:%.*]] = ttg.convert_layout [[CST]] : tensor<128x128xf32, [[BLOCKED2]]> -> tensor<128x128xf32, [[DPAS]]>
+    // CHECK: [[A:%.*]] = ttg.convert_layout [[CVT_ARG0]] : tensor<128x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[BLOCKED2]]}>> -> tensor<128x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[DPAS]], kWidth = 1}>>
+    // CHECK: [[B:%.*]] = ttg.convert_layout [[CVT_ARG2]] : tensor<64x128xbf16, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED2]]}>> -> tensor<64x128xbf16, #ttg.dot_op<{opIdx = 1, parent = [[DPAS]], kWidth = 2}>>
+    // CHECK: [[D:%.*]] = tt.dot [[A]], [[B]], [[C]], inputPrecision = tf32 : tensor<128x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[DPAS]], kWidth = 1}>> * tensor<64x128xbf16, #ttg.dot_op<{opIdx = 1, parent = [[DPAS]], kWidth = 2}>> -> tensor<128x128xf32, [[DPAS]]>
+    // CHECK: [[RES:%.*]] = ttg.convert_layout [[D]] : tensor<128x128xf32, [[DPAS]]> -> tensor<128x128xf32, [[BLOCKED2]]>
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
+    %result = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %cst lhs = e2m1 rhs = e2m1 {fastMath = true} : tensor<128x32xi8, #blocked2>, tensor<128x2xi8, #blocked1> * tensor<32x128xi8, #blocked>, tensor<128x2xi8, #blocked1> -> tensor<128x128xf32, #blocked>
     tt.return %result : tensor<128x128xf32, #blocked>
   }
 }
@@ -261,7 +290,7 @@ module attributes {"ttg.target" = "xpu", "ttg.num-ctas" = 1 : i32, "ttg.num-warp
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked3 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
 
-module attributes {ttg.target = "xpu", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.min_sg_size" = 16 : i32} {
+module attributes {ttg.target = "xpu", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.min_sg_size" = 16 : i32, ttig.support_dpas} {
 
   // CHECK-DAG: [[BLOCKED:#.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [1, 0]}>
   // CHECK-DAG: [[BLOCKED1:#.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -273,6 +302,7 @@ module attributes {ttg.target = "xpu", "ttg.num-ctas" = 1 : i32, "ttg.num-warps"
   // CHECK-DAG: [[BLOCKED7:#.+]] = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [2, 8], warpsPerCTA = [1, 4], order = [0, 1]}>
   // CHECK: [[LINEAR:#.*]] = #ttg.linear<{{.*}}>
   // CHECK-NEXT: [[LINEAR1:#.+]] = #ttg.linear<{{.*}}>
+  // CHECK-DAG: [[DPAS:#.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
 
   // CHECK: tt.func @dot_scale_transpose([[ARG0:%.*]]: tensor<128x64xf8E4M3FN, [[BLOCKED]]>, [[ARG1:%.*]]: tensor<32x32xi8, [[BLOCKED1]]>, [[ARG2:%.*]]: tensor<32x2xi8, [[BLOCKED2]]>, %arg3: tensor<128x32x!tt.ptr<bf16>, [[BLOCKED3]]>) {
   tt.func @dot_scale_transpose(%a: tensor<128x64xf8E4M3FN, #blocked>, %b: tensor<32x32xi8, #blocked1>, %scale: tensor<32x2xi8, #blocked2>, %d: tensor<128x32x!tt.ptr<bf16>, #blocked3>) {
@@ -295,11 +325,11 @@ module attributes {ttg.target = "xpu", "ttg.num-ctas" = 1 : i32, "ttg.num-warps"
       // CHECK: [[CVT_ARG1:%.*]] = ttg.convert_layout [[MASKNAN]] : tensor<32x64xbf16, [[LINEAR]]> -> tensor<32x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[BLOCKED4]]}>>
       // CHECK: [[FPTOFP:%.*]] = tt.fp_to_fp [[TRANS_A]] : tensor<64x128xf8E4M3FN, [[BLOCKED5]]> -> tensor<64x128xbf16, [[BLOCKED5]]>
       // CHECK: [[CVT_ARG0:%.*]] = ttg.convert_layout [[FPTOFP]] : tensor<64x128xbf16, [[BLOCKED5]]> -> tensor<64x128xbf16, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED4]]}>>
-      // CHECK: [[A:%.*]] = tt.fp_to_fp [[CVT_ARG1]] : tensor<32x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[BLOCKED4]]}>> -> tensor<32x64xf32, #ttg.dot_op<{opIdx = 0, parent = [[BLOCKED4]]}>>
-      // CHECK: [[B:%.*]] = tt.fp_to_fp [[CVT_ARG0]] : tensor<64x128xbf16, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED4]]}>> -> tensor<64x128xf32, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED4]]}>>
-      // CHECK: [[D:%.*]] = tt.dot [[A]], [[B]], [[ARG5]] : tensor<32x64xf32, #ttg.dot_op<{opIdx = 0, parent = [[BLOCKED4]]}>> * tensor<64x128xf32, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED4]]}>> -> tensor<32x128xf32, [[BLOCKED4]]>
-      // CHECK: [[RES:%.*]] = ttg.convert_layout [[D]] : tensor<32x128xf32, [[BLOCKED4]]> -> tensor<32x128xf32, [[BLOCKED4]]>
-      // CHECK: scf.yield [[RES]] : tensor<32x128xf32, [[BLOCKED4]]>
+      // CHECK: [[C:%.*]] = ttg.convert_layout [[ARG5]] : tensor<32x128xf32, [[BLOCKED4]]> -> tensor<32x128xf32, [[DPAS]]>
+      // CHECK: [[A:%.*]] = ttg.convert_layout [[CVT_ARG1]] : tensor<32x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[BLOCKED4]]}>> -> tensor<32x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[DPAS]], kWidth = 1}>>
+      // CHECK: [[B:%.*]] = ttg.convert_layout [[CVT_ARG0]] : tensor<64x128xbf16, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED4]]}>> -> tensor<64x128xbf16, #ttg.dot_op<{opIdx = 1, parent = [[DPAS]], kWidth = 2}>>
+      // CHECK: [[D:%.*]] = tt.dot [[A]], [[B]], [[C]], inputPrecision = tf32 : tensor<32x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[DPAS]], kWidth = 1}>> * tensor<64x128xbf16, #ttg.dot_op<{opIdx = 1, parent = [[DPAS]], kWidth = 2}>> -> tensor<32x128xf32, [[DPAS]]>
+      // CHECK: [[RES:%.*]] = ttg.convert_layout [[D]] : tensor<32x128xf32, [[DPAS]]> -> tensor<32x128xf32, [[BLOCKED4]]>
       %3 = tt.dot_scaled %a, %b scale %scale, %arg5 lhs = e4m3 rhs = e2m1 {fastMath = false} : tensor<128x64xf8E4M3FN, #blocked> * tensor<32x32xi8, #blocked1>, tensor<32x2xi8, #blocked2> -> tensor<128x32xf32, #blocked1>
       scf.yield %3 : tensor<128x32xf32, #blocked1>
     }
@@ -365,6 +395,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     %result2 = tt.dot %a2, %b, %zero2 : tensor<4x128xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<128x16xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<4x16xf32, #blocked>
     %result_ptr2 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<4x16x!tt.ptr<f32>, #blocked>
     tt.store %result_ptr2, %result2 : tensor<4x16x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// CHECK: #[[$DPAS:.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 32, warpsPerCTA = [1, 1], repCluster = [4, 1], A = [32, 8], B = [8, 16], C = [32, 16]}>
+#blocked = #ttg.blocked<{sizePerThread = [4, 2], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32, "ttig.min_sg_size" = 16 : i32, "ttig.support_dpas"} {
+  // CHECK-LABEL: dpas_sub_group_size_32
+  tt.func @dpas_sub_group_size_32(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
+    %zero_f32 = arith.constant dense<0.000000e+00> : tensor<128x16xf32, #blocked>
+    %a = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %b = arith.constant dense<0.000000e+00> : tensor<128x16xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+
+    // CHECK: tt.dot {{.*}}, {{.*}}, {{.*}}, inputPrecision = tf32 : tensor<128x128xf32, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>> * tensor<128x16xf32, #ttg.dot_op<{opIdx = 1, parent = #[[$DPAS]], kWidth = 1}>> -> tensor<128x16xf32, #[[$DPAS]]>
+    %result = tt.dot %a, %b, %zero_f32, inputPrecision = tf32 : tensor<128x128xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<128x16xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x16xf32, #blocked>
+    %result_ptr = tt.splat %arg0 : !tt.ptr<f32> -> tensor<128x16x!tt.ptr<f32>, #blocked>
+    tt.store %result_ptr, %result : tensor<128x16x!tt.ptr<f32>, #blocked>
     tt.return
   }
 }

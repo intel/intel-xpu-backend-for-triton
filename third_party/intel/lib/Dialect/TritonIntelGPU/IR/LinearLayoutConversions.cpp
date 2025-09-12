@@ -196,55 +196,6 @@ LinearLayout shrinkCodomain(const LinearLayout &layout, StringAttr inDimName,
   return layout.compose(transform);
 }
 
-// Combines the layout of a CTA (input dims [register, lane, warp]) with the
-// layout of a CGA (i.e. a block), and ensures that the resulting layout has the
-// given shape.
-//
-// See the nomenclature note at the top of the file for why the variable with
-// type CTALayoutAttr is called cgaLayoutAttr.
-LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
-                                    CTALayoutAttr cgaLayoutAttr,
-                                    ArrayRef<int64_t> shape) {
-  int rank = shape.size();
-  assert(ctaLayout.getNumOutDims() == rank &&
-         "ctaLayout must have the same rank as shape");
-  assert(cgaLayoutAttr.getCTAOrder().size() == rank &&
-         "cgaLayoutAttr must have the same rank as shape");
-  MLIRContext *ctx = cgaLayoutAttr.getContext();
-
-  SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
-
-  llvm::SmallDenseMap<StringAttr, int64_t> labeledShape;
-  for (auto [dim, size] : llvm::zip(outDimNames, shape)) {
-    labeledShape[dim] = size;
-  }
-
-  LinearLayout cgaLayout =
-      ensureLayoutNotLargerThan(makeCgaLayout(cgaLayoutAttr), labeledShape)
-          .transposeOuts(llvm::to_vector(ctaLayout.getOutDimNames()));
-
-  // Calculate the shape of the ctaLayout, which is `shape` divided by the
-  // cgaLayout's size.
-  llvm::SmallDenseMap<StringAttr, int64_t> ctaShape;
-  assert(llvm::to_vector(ctaLayout.getOutDimNames()) ==
-             llvm::to_vector(cgaLayout.getOutDimNames()) &&
-         "bad layout");
-  for (auto dim : ctaLayout.getOutDimNames()) {
-    ctaShape[dim] =
-        std::max(int64_t{1}, labeledShape[dim] / cgaLayout.getOutDimSize(dim));
-  }
-
-  ctaLayout = ensureLayoutNotSmallerThan(ctaLayout, ctaShape);
-  ctaLayout = ensureLayoutNotLargerThan(ctaLayout, ctaShape);
-
-  LinearLayout ret =
-      (std::move(ctaLayout) * std::move(cgaLayout)).transposeOuts(outDimNames);
-  for (auto dim : ret.getOutDimNames()) {
-    assert(ret.getOutDimSize(dim) == labeledShape[dim] && "bad shape");
-  }
-  return ret;
-}
-
 } // anonymous namespace
 
 // clang-format off

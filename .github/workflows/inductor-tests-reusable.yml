@@ -15,6 +15,10 @@ on:
         description: Runner label, keep empty for default
         type: string
         default: ""
+      runner_version:
+        description: Runner label for version
+        type: string
+        default: runner-0.0.22
       python_version:
         description: Python version
         type: string
@@ -33,10 +37,7 @@ env:
 jobs:
   build:
     name: Test
-    runs-on:
-      - linux
-      - rolling
-      - ${{ inputs.runner_label || 'max1100' }}
+    runs-on: ${{ startsWith(inputs.runner_label, 'igc') && fromJSON(format('["linux","{0}"]', inputs.runner_label)) || fromJSON(format('["linux","rolling","{0}","{1}"]', inputs.runner_label || 'max1100', inputs.runner_version)) }}
     timeout-minutes: 960
     defaults:
       run:

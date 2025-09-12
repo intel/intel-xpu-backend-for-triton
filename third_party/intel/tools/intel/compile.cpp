@@ -29,14 +29,6 @@ static inline void gpuAssert(ze_result_t code, const char *file, int line) {{
 ze_module_handle_t {kernel_name}_mod = NULL;
 ze_kernel_handle_t {kernel_name}_func = NULL;
 unsigned char BIN_NAME[{bin_size}] = {{ {bin_data} }};
-// sycl globals
-const sycl::device sycl_device;
-const auto ctx =
-    sycl_device.get_platform().ext_oneapi_get_default_context();
-const auto l0_device =
-    sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_device);
-const auto l0_context =
-    sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
 
 void unload_{kernel_name}(void) {{
     // Not implemeted
@@ -53,6 +45,17 @@ static ze_module_format_t get_module_format(const std::string& format_name) {{
 }}
 
 void load_{kernel_name}() {{
+    static sycl::device sycl_device;
+    static auto ctx =
+    #if __SYCL_COMPILER_VERSION >= 20250604
+        sycl_device.get_platform().khr_get_default_context();
+    #else
+        sycl_device.get_platform().ext_oneapi_get_default_context();
+    #endif
+    static auto l0_device =
+        sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_device);
+    static auto l0_context =
+        sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
     uint8_t *binary_ptr = (uint8_t *)&BIN_NAME;
     size_t binary_size = {bin_size};
 
@@ -116,6 +119,7 @@ static inline void set_argument(sycl::handler &cgh, int index, const std::string
 }}
 
 int32_t {kernel_name}(sycl::queue &stream, {signature}) {{
+  const auto &ctx = stream.get_context();
   auto sycl_mod = sycl::make_kernel_bundle<sycl::backend::ext_oneapi_level_zero,
                                       sycl::bundle_state::executable>(
       {{{kernel_name}_mod, sycl::ext::oneapi::level_zero::ownership::transfer}}, ctx);
@@ -125,6 +129,7 @@ int32_t {kernel_name}(sycl::queue &stream, {signature}) {{
   std::string kernel_name = sycl_kernel.get_info<sycl::info::kernel::function_name>();
   std::string driver_version = stream.get_device().get_info<sycl::info::device::driver_version>();
   void* global_scratch = nullptr;
+  void* profile_scratch = nullptr;
   void *params[] = {{ {arg_pointers} }};
   uint32_t num_params = sizeof(params)/sizeof(params[0]);
   uint32_t expected_num_params = sycl_kernel.get_info<sycl::info::kernel::num_args>();

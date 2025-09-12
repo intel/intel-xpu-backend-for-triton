@@ -238,7 +238,7 @@ void distributeMakeRangeOp(tt::MakeRangeOp op, Value warpId) {
   // case, we would need to determine a dimension-specific offset similar to
   // `tt.make_tensor_ptr`' distribution pattern.
   auto elemTy = convTy.getElementType();
-  auto numElemsConst = b.create<arith::ConstantIntOp>(loc, numElems, elemTy);
+  auto numElemsConst = b.create<arith::ConstantIntOp>(loc, elemTy, numElems);
   auto rangeOffset = b.create<arith::MulIOp>(loc, warpId, numElemsConst);
   auto splat = b.create<tt::SplatOp>(loc, convTy, rangeOffset);
   auto newRange = b.create<arith::AddIOp>(loc, subRange, splat);

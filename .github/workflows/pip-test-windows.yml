@@ -90,7 +90,7 @@ jobs:
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           cd ${{ env.NEW_WORKSPACE }}
-          pip install -U wheel pybind11 cython cmake intel-sycl-rt==2025.1.1
+          pip install -U wheel pybind11 cython cmake intel-sycl-rt==2025.2.1
           python setup.py -v bdist_wheel
           pip install (Get-Item ${{ env.NEW_WORKSPACE }}\dist\*.whl)
 
@@ -130,6 +130,13 @@ jobs:
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           cd ${{ env.NEW_WORKSPACE }}
           ${{ env.TRITON_TEST_CMD }} --interpreter
+
+      - name: Run triton kernels tests
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cd ${{ env.NEW_WORKSPACE }}
+          ${{ env.TRITON_TEST_CMD }} --triton-kernels
 
       - name: Run tutorials
         run: |

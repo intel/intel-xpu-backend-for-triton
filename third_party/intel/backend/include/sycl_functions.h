@@ -167,7 +167,12 @@ create_module(ze_context_handle_t context, ze_device_handle_t device,
     size_t szLog = 0;
     ZE_CHECK(zeModuleBuildLogGetString(buildlog, &szLog, nullptr));
     char *strLog = (char *)malloc(szLog);
-    ZE_CHECK(zeModuleBuildLogGetString(buildlog, &szLog, strLog));
+    auto error_no_build_log =
+        zeModuleBuildLogGetString(buildlog, &szLog, strLog);
+    if (error_no_build_log != ZE_RESULT_SUCCESS) {
+      free(strLog);
+      ZE_CHECK(error_no_build_log);
+    }
     std::cerr << "L0 build module failed. Log: " << strLog << std::endl;
     free(strLog);
     ZE_CHECK(zeModuleBuildLogDestroy(buildlog));

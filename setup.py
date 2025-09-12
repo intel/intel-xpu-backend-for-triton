@@ -649,6 +649,7 @@ def get_package_dirs():
 
     if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
         yield ("triton.profiler", "third_party/proton/proton")
+        yield ("triton.profiler.hooks", "third_party/proton/proton/hooks")
 
 
 def get_packages():
@@ -794,7 +795,7 @@ def get_git_version_suffix():
 
 
 # keep it separate for easy substitution
-TRITON_VERSION = "3.4.0" + get_git_version_suffix() + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", "")
+TRITON_VERSION = "3.5.0" + get_git_version_suffix() + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", "")
 
 # Dynamically define supported Python versions and classifiers
 MIN_PYTHON = (3, 9)
@@ -820,7 +821,6 @@ setup(
     description="A language and compiler for custom Deep Learning operations",
     long_description="",
     install_requires=[
-        "setuptools>=70.2.0",
         "importlib-metadata; python_version < '3.10'",
     ],
     packages=list(get_packages()),

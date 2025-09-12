@@ -1,5 +1,5 @@
 #include "Driver/GPU/XpuptiApi.h"
-#include "Driver/Device.h"
+#include "Device.h"
 #include "Driver/Dispatch.h"
 
 namespace proton {

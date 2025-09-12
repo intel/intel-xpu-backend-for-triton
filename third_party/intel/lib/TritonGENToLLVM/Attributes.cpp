@@ -10,6 +10,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "llvm/IR/Value.h"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "attributes"

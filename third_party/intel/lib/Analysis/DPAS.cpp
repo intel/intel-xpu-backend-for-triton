@@ -2,6 +2,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include <triton/Tools/Sys/GetEnv.hpp>
 #include <type_traits>
 
 namespace mlir::triton::gpu::intel {
@@ -66,6 +67,17 @@ DPASAnalysis::canUseDPAS(FunctionOpInterface funcOp) const {
   unsigned minSGSize = mod->getAttrOfType<IntegerAttr>(
                               TritonIntelGPUDialect::getMinSGSizeAttrName())
                            .getInt();
+  bool enableWarp32 =
+      tools::getBoolEnv("TRITON_INTEL_ENABLE_DPAS_FOR_WARP_SIZE_32");
+  assert(minSGSize == 8 || minSGSize == 16 ||
+         minSGSize == 32 && "Unexpected minimum subgroup size");
+
+  if (enableWarp32 && minSGSize != 8) {
+    // We can support threads_per_warp=16 or 32 on Xe+ and later architectures.
+    return (threadsPerWarp == 16 || threadsPerWarp == 32) ? Result::True
+                                                          : Result::False;
+  }
+
   return (threadsPerWarp == minSGSize) ? Result::True : Result::False;
 }
 
@@ -145,14 +157,12 @@ DPASAnalysis::getDPASType(OpTy op) {
       if (dElemTy.isF32()) {
         if (aElemTy.isBF16() && isa<Float8E4M3FNType, Float8E5M2Type>(bElemTy))
           return DPASEngineType::FP32_FP32_BF16_FP8;
-        // 2 E2M1 are packed into 1 int8
         if (aElemTy.isBF16() && bElemTy.isInteger(8))
           return DPASEngineType::FP32_FP32_BF16_FP4;
         if (isa<Float8E4M3FNType, Float8E5M2Type>(aElemTy) && bElemTy.isBF16())
           return DPASEngineType::FP32_FP32_FP8_BF16;
         if (aElemTy.isF16() && isa<Float8E4M3FNType, Float8E5M2Type>(bElemTy))
           return DPASEngineType::FP32_FP32_FP16_FP8;
-        // 2 E2M1 are packed into 1 int8
         if (aElemTy.isF16() && bElemTy.isInteger(8))
           return DPASEngineType::FP32_FP32_FP16_FP4;
         if (isa<Float8E4M3FNType, Float8E5M2Type>(aElemTy) && bElemTy.isF16())
@@ -170,6 +180,8 @@ DPASAnalysis::getDPASType(OpTy op) {
         if (aElemTy.isInteger(8) &&
             isa<Float8E4M3FNType, Float8E5M2Type>(bElemTy))
           return DPASEngineType::FP32_FP32_FP4_FP8;
+        if (aElemTy.isInteger(8) && bElemTy.isInteger(8))
+          return DPASEngineType::FP32_FP32_FP4_FP4;
       }
     }
   }

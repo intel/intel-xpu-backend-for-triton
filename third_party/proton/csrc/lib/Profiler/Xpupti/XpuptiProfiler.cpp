@@ -1,7 +1,7 @@
 #include "Profiler/Xpupti/XpuptiProfiler.h"
 #include "Context/Context.h"
 #include "Data/Metric.h"
-#include "Driver/Device.h"
+#include "Device.h"
 // #include "Driver/GPU/CudaApi.h"
 #include "Driver/GPU/XpuptiApi.h"
 #include "Utility/Map.h"
@@ -59,7 +59,8 @@ convertActivityToMetric(xpupti::Pti_Activity *activity) {
           static_cast<uint64_t>(kernel->_start_timestamp),
           static_cast<uint64_t>(kernel->_end_timestamp), 1,
           static_cast<uint64_t>(getDeviceIdxFromUUID(kernel->_device_uuid)),
-          static_cast<uint64_t>(DeviceType::XPU));
+          static_cast<uint64_t>(DeviceType::XPU),
+          static_cast<uint64_t>(kernel->_sycl_queue_id));
     } // else: not a valid kernel activity
     break;
   }
