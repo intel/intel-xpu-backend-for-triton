@@ -288,7 +288,7 @@ LogicalResult genFMALoop(DotOp op, ValueTableFMA &has, ValueTableFMA &hbs,
           Value innerUB = outerStep;
           Value innerStep = one;
           Block *innerBody =
-              createEmptyLoop(outerIV, innerUB, innerStep, rewriter, loc);
+              createEmptyLoop(innerIV, innerUB, innerStep, rewriter, loc);
           rewriter.setInsertionPointToStart(innerBody);
 
           // Get the values for operand B.
