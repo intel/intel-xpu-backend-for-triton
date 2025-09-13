@@ -14,7 +14,7 @@ tabulate
 pytest-xdist
 pytest-forked
 pytest-rerunfailures
-pytest-skip
+pytest-skip>=0.2.0
 pytest-timeout
 
 # To set the process title to the name of the test
