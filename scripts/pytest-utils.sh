@@ -4,6 +4,7 @@ SCRIPTS_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd 
 TRITON_TEST_REPORTS="${TRITON_TEST_REPORTS:-false}"
 TRITON_TEST_REPORTS_DIR="${TRITON_TEST_REPORTS_DIR:-$HOME/reports/$TIMESTAMP}"
 TRITON_TEST_SKIPLIST_DIR="${TRITON_TEST_SKIPLIST_DIR:-$SCRIPTS_DIR/skiplist/default}"
+TRITON_EXTRA_SKIPLIST_SUFFIXES="${TRITON_EXTRA_SKIPLIST_SUFFIXES:=}"
 TRITON_TEST_SELECTFILE="${TRITON_TEST_SELECTFILE:=}"
 TRITON_TEST_WARNING_REPORTS="${TRITON_TEST_WARNING_REPORTS:-false}"
 TRITON_TEST_IGNORE_ERRORS="${TRITON_TEST_IGNORE_ERRORS:-false}"
@@ -41,8 +42,21 @@ pytest() {
 
     if [[ ! -f $TRITON_TEST_SELECTFILE && -v TRITON_TEST_SUITE && -f $TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt ]]; then
         if [[ $TEST_UNSKIP = false ]]; then
+            SKIPFILES="$TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt"
+            if [[ -n "$TRITON_EXTRA_SKIPLIST_SUFFIXES" ]]; then
+                IFS=',' read -ra SUFFIXES <<< "$TRITON_EXTRA_SKIPLIST_SUFFIXES"
+                for SUFFIX in "${SUFFIXES[@]}"; do
+                    SKIPFILE="$TRITON_TEST_SKIPLIST_DIR/${TRITON_TEST_SUITE}-${SUFFIX}.txt"
+                    if [[ -f "$SKIPFILE" ]]; then
+                        SKIPFILES+=";$SKIPFILE"
+                    else
+                        echo "ERROR: $SKIPFILE not found"
+                        exit 1
+                    fi
+                done
+            fi
             pytest_extra_args+=(
-                "--skip-from-file=$TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt"
+                "--skip-from-file=$SKIPFILES"
                 "--select-fail-on-missing"
             )
         else
