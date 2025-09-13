@@ -36,7 +36,7 @@ export TRITON_PROJ=$BASE/intel-xpu-backend-for-triton
 export TRITON_PROJ_BUILD=$TRITON_PROJ/python/build
 export SCRIPTS_DIR=$(cd $(dirname "$0") && pwd)
 
-python3 -m pip install lit pytest pytest-xdist 'pytest-rerunfailures<16' 'pytest-skip>=0.2.0'
+python3 -m pip install lit pytest pytest-xdist pytest-rerunfailures 'pytest-skip>=0.2.0'
 
 source $SCRIPTS_DIR/pytest-utils.sh
 $SCRIPTS_DIR/install-pytorch.sh $([ $VENV = true ] && echo "--venv")
