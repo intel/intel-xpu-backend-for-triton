@@ -3230,7 +3230,7 @@ struct AtomicCASOpConversion
                              mask ? mask : b.true_val(), {zero});
         ret = endBlock->getArgument(0);
       } else {
-        Value zero = (valueElemNBits == 32) ? b.i32_val(0) : b.i64_val(0);
+        Value zero = b.int_val(valueElemNBits, 0);
         if (op.getResult().use_empty())
           rewriter.create<TritonGEN::BarrierOp>(loc,
                                                 TritonGEN::MemFence::GLOBAL);
