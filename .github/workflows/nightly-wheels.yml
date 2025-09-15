@@ -25,14 +25,12 @@ jobs:
     strategy:
       matrix:
         python:
-          - "3.9"
           - "3.10"
           - "3.11"
           - "3.12"
           - "3.13"
           - "3.14.0-rc.1"
       fail-fast: false
-      max-parallel: 2
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
