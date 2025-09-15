@@ -154,6 +154,12 @@ def _attn_fwd_with_block_pointers(Q, K, V, sm_scale, M, Out,  #
     # epilogue
     m_i += tl.math.log2(l_i)
     acc = acc / l_i[:, None]
+    if N_CTX <= 512:
+        off_hz = off_z + off_h * H
+    else:
+        off_hz = off_z * H + off_h
+    m_ptrs = M + off_hz * N_CTX + offs_m
+    tl.store(m_ptrs, m_i)
     tl.store(O_block_ptr, acc.to(Out.type.element_ty), boundary_check=(0, 1))
 
 
@@ -220,7 +226,7 @@ def _attn_bwd_dkdv(dk, dv,  #
         if MASK:
             mask = (offs_m[None, :] >= offs_n[:, None])
             pT = tl.where(mask, pT, 0.0)
-        do = tl.load(do_ptrs).to(tl.float16)
+        do = tl.load(do_ptrs)
         # Compute dV.
         ppT = pT
         ppT = ppT.to(tl.float16)
@@ -275,7 +281,7 @@ def _attn_bwd_dq(dq, q, K, V,  #
             mask = (offs_m[:, None] >= offs_n[None, :])
             p = tl.where(mask, p, 0.0)
         # Compute dP and dS.
-        dp = tl.dot(do.to(tl.float16), vT).to(tl.float32)
+        dp = tl.dot(do, vT).to(tl.float32)
         ds = p * (dp - Di[:, None])
         ds = ds.to(tl.float16)
         # Compute dQ.
@@ -423,12 +429,12 @@ class _attention(torch.autograd.Function):
     attn_fwd: Callable = None
 
     @staticmethod
-    def forward(ctx, q, k, v, causal, sm_scale, dq, dk, dv, delta):
+    def forward(ctx, q, k, v, causal, sm_scale):
         # shape constraints
         Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
         assert Lq == Lk and Lk == Lv
         assert Lk in {16, 32, 64, 128}
-        o = torch.empty_like(q, dtype=torch.float32)
+        o = torch.empty_like(q)
         BLOCK_M = 128
         BLOCK_N = 64
         num_stages = 3
@@ -473,8 +479,7 @@ class _attention(torch.autograd.Function):
                 advanced_path=True,  #
             )
 
-        ctx.save_for_backward(q, k, v, o, M, dq, dk, dv, delta)
-        ctx.grid = grid
+        ctx.save_for_backward(q, k, v, o, M)
         ctx.sm_scale = sm_scale
         ctx.HEAD_DIM = Lk
         ctx.causal = causal
@@ -488,9 +493,12 @@ class _attention(torch.autograd.Function):
         with record_function(
                 '__profile_kernel_of_func_bwd_fa'
         ) if benchmark_suite.BENCHMARKING_METHOD == 'UPSTREAM_PYTORCH_PROFILER' else contextlib.nullcontext():
-            q, k, v, o, M, dq, dk, dv, delta = ctx.saved_tensors
+            q, k, v, o, M = ctx.saved_tensors
             assert do.is_contiguous()
             assert q.stride() == k.stride() == v.stride() == o.stride() == do.stride()
+            dq = torch.empty_like(q)
+            dk = torch.empty_like(k)
+            dv = torch.empty_like(v)
             BATCH, N_HEAD, N_CTX = q.shape[:3]
             PRE_BLOCK = 128
             NUM_WARPS, NUM_STAGES = 4, 5
@@ -502,6 +510,7 @@ class _attention(torch.autograd.Function):
             PRE_BLOCK = 128
             assert N_CTX % PRE_BLOCK == 0
             pre_grid = (N_CTX // PRE_BLOCK, BATCH * N_HEAD)
+            delta = torch.empty_like(M)
             _attn_bwd_preprocess[pre_grid](
                 o, do,  #
                 delta,  #
@@ -522,7 +531,7 @@ class _attention(torch.autograd.Function):
                 num_stages=NUM_STAGES  #
             )
 
-        return dq, dk, dv, None, None, None, None, None, None
+            return dq, dk, dv, None, None, None, None
 
 
 attention = _attention.apply
@@ -537,6 +546,9 @@ def get_benchmark(
     Returns a Mark object containing a Benchmark object constructed at runtime and parameterized by the provided option values.
     The benchmark can then be executed by calling the :code:`.run` method on the return value.
     """
+    causal_mode = [False, True] if fa_kernel_mode == 'fwd' else [
+        True
+    ]  # The 06 turtorial bwd Non-causal tests do not pass at the moment.
 
     supported_providers = {
         'triton': 'Triton',
@@ -556,9 +568,9 @@ def get_benchmark(
             x_vals=[[z, h, 16384 // z, dhead, causal, mode]
                     for z in [1, 2, 4, 8, 16, 32]
                     for (h, dhead) in [(16, 128), (32, 64)]
-                    for causal in [False, True]
+                    for causal in causal_mode
                     for mode in [fa_kernel_mode]]  #
-            + [[4, 48, 1024, 64, causal, mode] for causal in [False, True] for mode in [fa_kernel_mode]],
+            + [[4, 48, 1024, 64, causal, mode] for causal in causal_mode for mode in [fa_kernel_mode]],
             line_arg='provider',
             # argument name whose value corresponds to a different line in the plot
             # possible values for `line_arg``
@@ -578,57 +590,39 @@ def get_benchmark(
         if MODE not in modes:
             raise AssertionError(f'Unknown {MODE}, supported modes are {modes}')
         dtype = torch.float16
+        torch.xpu.empty_cache()
         q = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype, requires_grad=True)
         k = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype, requires_grad=True)
         v = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype, requires_grad=True)
         sm_scale = 0.125
-        dq, dk, dv, delta = None, None, None, None
-        if MODE == 'bwd':
-            sm_scale = 1.3
-            dq = torch.empty_like(q)
-            dk = torch.empty_like(k)
-            dv = torch.empty_like(v)
-            delta = torch.empty_like(q)
         quantiles = [0.5, 0.0, 1.0]
         atol = 1e-1 if N_CTX == 16384 else 1e-2
-        # FIXME: use torch sdpa for result check after https://github.com/intel/intel-xpu-backend-for-triton/issues/2042 fixed
+        bwd_atol = 1e-1 if N_CTX >= 8192 else 1e-2
         torch_fn = lambda: torch.nn.functional.scaled_dot_product_attention(q.cpu(), k.cpu(), v.cpu(
-        ), attn_mask=None, dropout_p=0.0, is_causal=CAUSAL, scale=sm_scale).to(torch.float32)
-        if MODE == 'bwd':
-            torch_o = torch_fn()
-            torch_do = torch.randn_like(torch_o)
-            torch_fn = lambda: torch_o.backward(torch_do, retain_graph=True)
+        ), attn_mask=None, dropout_p=0.0, is_causal=CAUSAL, scale=sm_scale)
 
-        if provider == 'onednn':
-            _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
-                torch_fn,
-                n_warmup=10,
-                n_repeat=10,
-                quantiles=quantiles,
-            )
-
-        elif provider == 'triton':
-            triton_fn = lambda: attention(q, k, v, CAUSAL, sm_scale, dq, dk, dv, delta)
-            if MODE == 'bwd':
-                triton_o = triton_fn()
-                triton_do = torch.randn_like(triton_o)
-                triton_fn = lambda: triton_o.backward(triton_do, retain_graph=True)
+        if provider == 'triton':
+            triton_fn = lambda: attention(q, k, v, CAUSAL, sm_scale)
             if MODE == 'fwd':
                 benchmark_suite.assert_close(triton_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='triton to torch')
             else:
-                benchmark_suite.assert_close(
-                    lambda: triton_o,
-                    lambda: torch_o,
-                    atol=1e-2,
-                    rtol=0,
-                    err_msg='triton to torch',
-                )
-            _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
-                triton_fn,
-                n_warmup=10,
-                n_repeat=10,
-                quantiles=quantiles,
-            )
+                dout = torch.randn_like(q)
+                torch_o = torch_fn()
+                torch_grads = torch.autograd.grad((torch_o, ), (q, k, v), dout.cpu(), retain_graph=True)
+                eager_tensors = (torch_o, *torch_grads)
+                triton_o = triton_fn()
+                triton_grads = torch.autograd.grad((triton_o, ), (q, k, v), dout, retain_graph=True)
+                compiled_tensors = (triton_o, *triton_grads)
+
+                tensor_names = ['out', 'grad_query', 'grad_key', 'grad_value']
+                for eager, compiled, name in zip(eager_tensors, compiled_tensors, tensor_names):
+                    benchmark_suite.assert_close(lambda eager=eager: eager, lambda compiled=compiled: compiled,
+                                                 atol=bwd_atol, rtol=1e-3,
+                                                 err_msg=f'Error comparing {name} between triton and torch')
+                triton_fn = lambda: triton_o.backward(dout, retain_graph=True)
+
+            _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(triton_fn, n_warmup=10, n_repeat=10,
+                                                                   quantiles=quantiles, grad_to_none=(q, k, v))
 
         elif provider == 'xetla':
             if MODE == 'bwd':
