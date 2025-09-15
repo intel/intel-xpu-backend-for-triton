@@ -562,7 +562,7 @@ def test_set_idle_sms():
 def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, fused_scatter, is_persistent, epilogue_subtile,
                    swiglu_alpha, swiglu_limit, device, opt_flags_scope):
     if fused_scatter and split_k > 1:
-        pytest.skip("fused scatter scratchpad not supported with split_k")
+        pytest.xfail("fused scatter scratchpad not supported with split_k")
     torch.manual_seed(0)
     constraints = {
         "is_persistent": is_persistent,
@@ -595,7 +595,7 @@ def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, fused_scatter,
             fused_activation=FusedActivation(FnSpecs("swiglu", swiglu_fn, ("alpha", "limit")),
                                              (swiglu_alpha, swiglu_limit), 2))
     except opt_flags.InapplicableConstraint:
-        pytest.skip("inapplicable constraint")
+        pytest.xfail("inapplicable constraint")
 
     assert_close(a, b)
 
@@ -619,7 +619,7 @@ def test_zero_reduction_dim(m, n, k, view_x_as_zero_cols, device):
     try:
         tri_y = matmul_ogs(x, w, bias)
     except opt_flags.InapplicableConstraint:
-        pytest.skip("inapplicable constraint")
+        pytest.xfail("inapplicable constraint")
     ref_y = matmul_ogs_torch(x, w, bias, round_x=lambda x, idx: x, round_y=lambda y: y, device=device)
 
     assert_close(ref_y, tri_y)
