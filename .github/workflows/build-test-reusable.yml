@@ -311,6 +311,11 @@ jobs:
         run: |
           ${{ env.TRITON_TEST_CMD }} --interpreter
 
+      - name: Run triton kernels tests
+        if: matrix.suite == 'rest'
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --triton-kernels
+
       # FIXME: make sure new tutorials are added to one of the groups (scaled_dot, rest, tutorial-faX)
       - name: Select tutorials to run (scaled_dot)
         if: matrix.suite == 'scaled_dot'

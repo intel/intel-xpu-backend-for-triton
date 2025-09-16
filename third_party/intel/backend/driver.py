@@ -174,15 +174,17 @@ class ArchParser:
     if os.name != 'nt':
 
         def __del__(self):
-            handle = self.shared_library._handle
-            self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
-            self.shared_library.dlclose(handle)
+            if hasattr(self, "shared_library"):
+                handle = self.shared_library._handle
+                self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
+                self.shared_library.dlclose(handle)
     else:
 
         def __del__(self):
-            handle = self.shared_library._handle
-            ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
-            ctypes.windll.kernel32.FreeLibrary(handle)
+            if hasattr(self, "shared_library"):
+                handle = self.shared_library._handle
+                ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
+                ctypes.windll.kernel32.FreeLibrary(handle)
 
 
 class SpirvUtils:
@@ -215,15 +217,17 @@ class SpirvUtils:
     if os.name != 'nt':
 
         def __del__(self):
-            handle = self.shared_library._handle
-            self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
-            self.shared_library.dlclose(handle)
+            if hasattr(self, "shared_library"):
+                handle = self.shared_library._handle
+                self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
+                self.shared_library.dlclose(handle)
     else:
 
         def __del__(self):
-            handle = self.shared_library._handle
-            ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
-            ctypes.windll.kernel32.FreeLibrary(handle)
+            if hasattr(self, "shared_library"):
+                handle = self.shared_library._handle
+                ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
+                ctypes.windll.kernel32.FreeLibrary(handle)
 
 
 class TritonLauncher:
@@ -243,15 +247,17 @@ class TritonLauncher:
     if os.name != 'nt':
 
         def __del__(self):
-            handle = self.shared_library._handle
-            self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
-            self.shared_library.dlclose(handle)
+            if hasattr(self, "shared_library"):
+                handle = self.shared_library._handle
+                self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
+                self.shared_library.dlclose(handle)
     else:
 
         def __del__(self):
-            handle = self.shared_library._handle
-            ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
-            ctypes.windll.kernel32.FreeLibrary(handle)
+            if hasattr(self, "shared_library"):
+                handle = self.shared_library._handle
+                ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
+                ctypes.windll.kernel32.FreeLibrary(handle)
 
 
 def compile_module_from_src(src: str, name: str):
@@ -391,6 +397,7 @@ def make_launcher(constants, signature):
                 # we have to pass the shape and strides twice.
                 for _ in range(2 * ndim):
                     output.append("i64")
+                output.append("i1")
                 for _ in range(ndim):
                     output.append("i32")
                 for _ in range(ndim):
@@ -741,9 +748,7 @@ extern "C" EXPORT_FUNC PyObject* launch(PyObject* args) {{
   Py_DECREF(clusterDim);
   // extract launch metadata
   if (launch_enter_hook != Py_None){{
-    PyObject* args = Py_BuildValue("(O)", launch_metadata);
-    PyObject* ret = PyObject_CallObject(launch_enter_hook, args);
-    Py_DECREF(args);
+    PyObject* ret = PyObject_CallOneArg(launch_enter_hook, launch_metadata);
     if (!ret)
       return NULL;
     Py_DECREF(ret);
@@ -766,9 +771,7 @@ extern "C" EXPORT_FUNC PyObject* launch(PyObject* args) {{
   }}
 
   if(launch_exit_hook != Py_None){{
-    PyObject* args = Py_BuildValue("(O)", launch_metadata);
-    PyObject* ret = PyObject_CallObject(launch_exit_hook, args);
-    Py_DECREF(args);
+    PyObject* ret = PyObject_CallOneArg(launch_exit_hook, launch_metadata);
     if (!ret)
       return NULL;
     Py_DECREF(ret);
@@ -797,7 +800,7 @@ def wrap_handle_tensor_descriptor(launcher):
                 # descriptors which is why we provide our own decomposition
                 # above. Sadly this means we have to pass the shape and strides
                 # twice.
-                final_args.extend([arg.base, *arg.shape, *arg.strides, *arg.shape, *arg.strides])
+                final_args.extend([arg.base, *arg.shape, *arg.strides, arg.padding == "nan", *arg.shape, *arg.strides])
             else:
                 final_args.append(arg)
 

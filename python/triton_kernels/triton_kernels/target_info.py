@@ -8,6 +8,7 @@ from triton.language.target_info import (
     is_hip,
     is_hip_cdna3,
     is_hip_cdna4,
+    is_xpu,
 )
 
 __all__ = [
@@ -17,8 +18,10 @@ __all__ = [
     "has_native_mxfp",
     "is_cuda",
     "is_hip",
+    "is_xpu",
     "is_hip_cdna3",
     "is_hip_cdna4",
+    "is_xpu",
     "num_sms",
 ]
 
@@ -51,4 +54,7 @@ def has_native_mxfp():
 
 
 def num_sms():
-    return torch.cuda.get_device_properties(0).multi_processor_count
+    if is_cuda():
+        return torch.cuda.get_device_properties(0).multi_processor_count
+    if is_xpu():
+        return torch.xpu.get_device_properties(0).max_compute_units
