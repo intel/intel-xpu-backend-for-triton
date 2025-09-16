@@ -4,8 +4,8 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Value.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/TypeSwitch.h"
-#include "llvm/Support/raw_ostream.h"
 
 using namespace mlir;
 
@@ -94,38 +94,41 @@ struct LoopInfo {
 ///   blocks.
 LoopInfo createEmptyLoop(Value iv, Value ub, Value step, Value initArg,
                          ConversionPatternRewriter &rewriter, Location loc) {
-  // Create loop harness.
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   MLIRContext *ctx = rewriter.getContext();
+
+  // Create loop blocks.
   Block *insertionBlock = rewriter.getInsertionBlock();
   Block *headerBlock =
       rewriter.splitBlock(insertionBlock, rewriter.getInsertionPoint());
   Block *bodyBlock = rewriter.splitBlock(headerBlock, headerBlock->begin());
   Block *endBlock = rewriter.splitBlock(bodyBlock, bodyBlock->begin());
 
+  // Add arguments to blocks.
   Type ivTy = iv.getType();
   Type initArgTy = initArg.getType();
   headerBlock->addArguments({ivTy, initArgTy}, {loc, loc});
   bodyBlock->addArguments({ivTy, initArgTy}, {loc, loc});
   endBlock->addArgument(initArgTy, loc);
 
-  // Loop header.
+  // Connect insertion block to header block.
   rewriter.setInsertionPointToEnd(insertionBlock);
-  rewriter.create<cf::BranchOp>(loc, headerBlock,
-                                SmallVector<Value>{iv, initArg});
+  rewriter.create<cf::BranchOp>(loc, headerBlock, ValueRange{iv, initArg});
+
+  // Build header block.
   rewriter.setInsertionPointToStart(headerBlock);
+  Value cond = b.icmp_slt(headerBlock->getArgument(0), ub);
+  rewriter.create<cf::CondBranchOp>(loc, cond, bodyBlock,
+                                    headerBlock->getArguments(), endBlock,
+                                    ValueRange{headerBlock->getArgument(1)});
 
-  auto cond = b.icmp_slt(headerBlock->getArgument(0), ub);
-  auto headerArgs = headerBlock->getArguments();
-  rewriter.create<cf::CondBranchOp>(loc, cond, bodyBlock, headerArgs, endBlock,
-                                    headerArgs.drop_front());
+  // Build body block.
   rewriter.setInsertionPointToStart(bodyBlock);
+  Value nextIV = b.add(bodyBlock->getArgument(0), step);
+  rewriter.create<cf::BranchOp>(loc, headerBlock,
+                                ValueRange{nextIV, bodyBlock->getArgument(1)});
 
-  // Loop body.
-  auto nextIV = b.add(bodyBlock->getArgument(0), step);
-  SmallVector<Value> args1{nextIV};
-  args1.push_back(bodyBlock->getArgument(1));
-  rewriter.create<cf::BranchOp>(loc, headerBlock, args1);
+  // Set insertion point to end block.
   rewriter.setInsertionPointToStart(endBlock);
 
   return {headerBlock, bodyBlock, endBlock};
@@ -147,15 +150,10 @@ Value createIV(Value init, ConversionPatternRewriter &rewriter, Location loc) {
 
 namespace mlir::triton::gpu {
 
-enum class CodeGenMode {
-  Unroll,
-  Loop,
-} codeGenMode = CodeGenMode::Loop;
-
 LogicalResult genFMALoop(DotOp, ValueTableFMA &, ValueTableFMA &,
                          ArrayRef<Value>, ArrayRef<unsigned>,
                          ArrayRef<unsigned>, unsigned, Type,
-                         ConversionPatternRewriter &);
+                         ConversionPatternRewriter &, FMAVectorMultiplier &);
 
 LogicalResult parametricConvertFMADot(DotOp op, DotOp::Adaptor adaptor,
                                       const LLVMTypeConverter *typeConverter,
@@ -216,10 +214,21 @@ LogicalResult parametricConvertFMADot(DotOp op, DotOp::Adaptor adaptor,
 
   SmallVector<Value> acc = cc;
 
-  if (codeGenMode == CodeGenMode::Loop) {
+  llvm::errs() << "repetitions: " << repetitions[0] << " " << repetitions[1]
+               << " " << repetitions[2] << "\n";
+  llvm::errs() << "sizePerThread: " << sizePerThread[0] << " "
+               << sizePerThread[1] << " " << sizePerThread[2] << "\n";
+
+  auto mod = op->getParentOfType<ModuleOp>();
+  llvm::errs() << "at line: " << __LINE__ << "\n";
+  llvm::errs() << "Module: ";
+  mod->dumpPretty();
+  llvm::errs() << "\n";
+
+  if (triton::tools::getBoolEnv("TRITON_INTEL_LOWER_DOT_TO_LOOP")) {
     Type dType = typeConverter->convertType(dTensorTy);
     return genFMALoop(op, has, hbs, acc, sizePerThread, repetitions, K, dType,
-                      rewriter);
+                      rewriter, multiplier);
   }
 
   for (unsigned bRep = 0; bRep < repetitions[0]; ++bRep)
@@ -252,89 +261,90 @@ LogicalResult parametricConvertFMADot(DotOp op, DotOp::Adaptor adaptor,
   auto res = packLLElements(loc, typeConverter, acc, rewriter, dTensorTy);
   rewriter.replaceOp(op, res);
 
+  llvm::errs() << "at line: " << __LINE__ << "\n";
+  llvm::errs() << "Module: ";
+  mod->dumpPretty();
+  llvm::errs() << "\n";
+
   return success();
 }
 
 LogicalResult genFMALoop(DotOp op, ValueTableFMA &has, ValueTableFMA &hbs,
                          ArrayRef<Value> acc, ArrayRef<unsigned> sizePerThread,
                          ArrayRef<unsigned> repetitions, unsigned K, Type dType,
-                         ConversionPatternRewriter &rewriter) {
+                         ConversionPatternRewriter &rewriter,
+                         FMAVectorMultiplier &multiplier) {
   ModuleOp mod = op->getParentOfType<ModuleOp>();
   MLIRContext *ctx = rewriter.getContext();
   Location loc = op.getLoc();
+  auto builder = TritonLLVMOpBuilder(loc, rewriter);
 
-  // Copy struct into vector for operand A.
-  SmallVector<Value> v1;
+  // Copy struct into vector for operand A,B.C.
+  SmallVector<Value> aOpVector, bOpVector;
   for (unsigned bRep = 0; bRep < repetitions[0]; ++bRep)
     for (unsigned mRep = 0; mRep < repetitions[1]; ++mRep)
-      for (unsigned b = 0; b < sizePerThread[0]; ++b)
-        for (unsigned m = 0; m < sizePerThread[1]; ++m)
-          for (unsigned k = 0; k < K; ++k)
-            v1.push_back(has.at({bRep, mRep, b, m, k}));
-  Value vecA = packLLVector(loc, v1, rewriter);
+      for (unsigned nRep = 0; nRep < repetitions[2]; ++nRep)
+        for (unsigned b = 0; b < sizePerThread[0]; ++b)
+          for (unsigned m = 0; m < sizePerThread[1]; ++m)
+            for (unsigned n = 0; n < sizePerThread[2]; ++n)
+              for (unsigned k = 0; k < K; ++k) {
+                aOpVector.push_back(has.at({bRep, mRep, b, m, k}));
+                bOpVector.push_back(hbs.at({bRep, nRep, b, n, k}));
+              }
 
-  // Copy struct into vector for operand B.
-  SmallVector<Value> v2;
-  for (unsigned bRep = 0; bRep < repetitions[0]; ++bRep)
-    for (unsigned nRep = 0; nRep < repetitions[2]; ++nRep)
-      for (unsigned b = 0; b < sizePerThread[0]; ++b)
-        for (unsigned n = 0; n < sizePerThread[2]; ++n)
-          for (unsigned k = 0; k < K; ++k)
-            v2.push_back(hbs.at({bRep, nRep, b, n, k}));
-  Value vecB = packLLVector(loc, v2, rewriter);
-
-  // Copy struct into vector for operand C.
+  Value vecA = packLLVector(loc, aOpVector, rewriter);
+  Value vecB = packLLVector(loc, bOpVector, rewriter);
   Value vecC = packLLVector(loc, acc, rewriter);
 
-  const unsigned len = acc.size();
-  Type elemType = acc.front().getType();
-  auto builder = TritonLLVMOpBuilder(loc, rewriter);
+  auto getFragment = [&](Value vec, Value iv, unsigned size) {
+    SmallVector<Value> elems;
+    for (unsigned i = 0; i < size; ++i) {
+      Value idx = (i != 0) ? builder.add(iv, builder.i32_val(i)) : iv;
+      elems.push_back(builder.extract_element(vec, idx));
+    }
+    return elems;
+  };
 
   Value vecD;
   Value zero = builder.i32_val(0), one = builder.i32_val(1);
+  Type elemType = acc.front().getType();
+
   for (unsigned bRep = 0; bRep < repetitions[0]; ++bRep)
     for (unsigned mRep = 0; mRep < repetitions[1]; ++mRep)
       for (unsigned nRep = 0; nRep < repetitions[2]; ++nRep)
         for (unsigned b = 0; b < sizePerThread[0]; ++b) {
           // Generate the outer loop.
-          Value outerIV = createIV(zero, rewriter, loc);
           Value outerUB = builder.i32_val(sizePerThread[1]);
           Value outerStep = builder.i32_val(sizePerThread[2]);
-          LoopInfo outerLoopInfo = createEmptyLoop(outerIV, outerUB, outerStep,
-                                                   {vecC}, rewriter, loc);
+          LoopInfo outerLoopInfo =
+              createEmptyLoop(createIV(zero, rewriter, loc), outerUB, outerStep,
+                              {vecC}, rewriter, loc);
           Block *outerBody = outerLoopInfo.body;
           Block *outerEnd = outerLoopInfo.end;
+          Value outerIV = outerBody->getArgument(0);
           auto outerLatch = cast<cf::BranchOp>(outerBody->getTerminator());
           vecD = outerEnd->getArgument(0);
           auto afterOuterLoop = rewriter.saveInsertionPoint();
           rewriter.setInsertionPointToStart(outerLoopInfo.body);
 
           // Get the values for operand A.
-          SmallVector<Value> AElems;
-          for (unsigned i = 0; i < sizePerThread[2]; ++i) {
-            Value idx = builder.add(outerIV, builder.i32_val(i));
-            AElems.push_back(builder.extract_element(vecA, idx));
-          }
+          SmallVector<Value> AElems = getFragment(vecA, outerIV, K);
 
           // Generate the inner loop.
-          Value innerIV = createIV(zero, rewriter, loc);
           Value innerUB = outerStep;
           Value innerStep = one;
           Value initArg =
               outerBody->getArgument(outerBody->getNumArguments() - 1);
-          LoopInfo innerLoopInfo = createEmptyLoop(innerIV, innerUB, innerStep,
-                                                   initArg, rewriter, loc);
+          LoopInfo innerLoopInfo =
+              createEmptyLoop(createIV(zero, rewriter, loc), innerUB, innerStep,
+                              initArg, rewriter, loc);
           Block *innerBody = innerLoopInfo.body;
           Block *innerEnd = innerLoopInfo.end;
+          Value innerIV = innerBody->getArgument(0);
           rewriter.setInsertionPointToStart(innerLoopInfo.body);
 
           // Get the values for operand B.
-          SmallVector<Value> BElems;
-          for (unsigned j = 0; j < sizePerThread[2]; ++j) {
-            Value idx =
-                builder.add(innerIV, builder.i32_val(sizePerThread[2] * j));
-            BElems.push_back(builder.extract_element(vecB, idx));
-          }
+          SmallVector<Value> BElems = getFragment(vecB, innerIV, K);
 
           // Get the value for operand C.
           Value accIdx = builder.add(builder.mul(innerUB, outerIV), innerIV);
@@ -342,8 +352,11 @@ LogicalResult genFMALoop(DotOp op, ValueTableFMA &has, ValueTableFMA &hbs,
               innerBody->getArgument(innerBody->getNumArguments() - 1);
           Value acc = builder.extract_element(innerInitArg, accIdx);
 
+#if 1
           // Perform the FMAs.
-          for (unsigned k = 0; k < sizePerThread[2]; ++k) {
+          acc = multiplier.multiplyVectors(AElems, BElems, acc);
+#else
+          for (unsigned k = 0; k < K; ++k) {
             TypeSwitch<Type>(elemType)
                 .Case<FloatType>([&](auto) {
                   acc = rewriter.create<LLVM::FMulAddOp>(loc, AElems[k],
@@ -353,6 +366,7 @@ LogicalResult genFMALoop(DotOp op, ValueTableFMA &has, ValueTableFMA &hbs,
                   acc = builder.fma(AElems[k], BElems[k], acc);
                 });
           }
+#endif
 
           // Store the result.
           innerInitArg = builder.insert_element(innerInitArg, acc, accIdx);
@@ -369,7 +383,7 @@ LogicalResult genFMALoop(DotOp op, ValueTableFMA &has, ValueTableFMA &hbs,
         }
 
   // Create a loop to copy the result into a struct.
-  Value ub = builder.i32_val(len);
+  Value ub = builder.i32_val(acc.size());
   auto structPtr =
       rewriter.create<LLVM::AllocaOp>(loc, ptr_ty(ctx), elemType, ub);
   Value iv = createIV(zero, rewriter, loc);
@@ -388,7 +402,7 @@ LogicalResult genFMALoop(DotOp op, ValueTableFMA &has, ValueTableFMA &hbs,
   rewriter.replaceOp(op, loadVal);
 
   llvm::errs() << "at line: " << __LINE__ << "\n";
-  llvm::errs() << "Module after:\n";
+  llvm::errs() << "Module: ";
   mod->dumpPretty();
   llvm::errs() << "\n";
 
