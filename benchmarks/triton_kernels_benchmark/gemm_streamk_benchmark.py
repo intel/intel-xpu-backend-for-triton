@@ -297,7 +297,7 @@ def benchmark(M, N, K, provider):
         raise NotImplementedError(f'Unsupported provider {provider}')
 
     tflops = lambda mean: 2 * M * N * K * (1e-12) / (mean * 1e-3)
-    gbps = lambda mean: 2 * (M * K + K * N) + 4.0 * (M * N) * (1e-9) / (mean * 1e-3)
+    gbps = lambda mean: (2 * (M * K + K * N) + 4.0 * M * N) * (1e-9) / (mean * 1e-3)
 
     return (gbps(mean_ms), gbps(max_ms), gbps(min_ms)), (tflops(mean_ms), tflops(max_ms), tflops(min_ms)), cv
 
