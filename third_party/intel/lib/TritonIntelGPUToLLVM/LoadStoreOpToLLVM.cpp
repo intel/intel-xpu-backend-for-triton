@@ -384,11 +384,11 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
 
   // Returns the pitch (stride in bytes) of \p ptr.
   Value getPitch(ConversionPatternRewriter &rewriter, Value ptr,
-                 unsigned elemSizeInBits) const {
+                 unsigned elemSizeInBits, unsigned dim) const {
     Location loc = ptr.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-    int stride = getStride(ptr, 0);
+    int stride = getStride(ptr, dim);
     // If the stride is 0, we assume a minimum pitch of 64 bytes.
     constexpr int MIN_PITCH = 64;
     if (stride == 0)
@@ -931,7 +931,8 @@ struct PrefetchOpConversion
         masks[offset] = maskElems[i];
     }
 
-    Value rowStrideInBytes = getPitch(rewriter, op.getPtr(), elemSizeInBits);
+    Value rowStrideInBytes =
+        getPitch(rewriter, op.getPtr(), elemSizeInBits, memoryRowMajor ? 0 : 1);
     if (!rowStrideInBytes)
       return failure();
 
@@ -2239,7 +2240,8 @@ struct LoadOpToBlockIOConversion
       break;
     }
 
-    Value pitch = getPitch(rewriter, ptr, elemSizeInBits);
+    Value pitch =
+        getPitch(rewriter, ptr, elemSizeInBits, memoryRowMajor ? 0 : 1);
     if (!pitch)
       return failure();
 
@@ -2853,7 +2855,7 @@ struct StoreOpToBlockIOConversion
       baseWidth = b.i32_val(
           std::max(64u, vBlocks * tileWidth * (packedElemSizeInBits / 8)));
       baseHeight = b.i32_val(tileHeight);
-      pitch = getPitch(rewriter, ptr, elemSizeInBits);
+      pitch = getPitch(rewriter, ptr, elemSizeInBits, memoryRowMajor ? 0 : 1);
       if (!pitch)
         return failure();
       offsetBaseX = b.i32_val(0);
