@@ -213,17 +213,18 @@ def _attn_bwd_dkdv(dk, dv,  #
                    # Filled in by the wrapper.
                    start_n, start_m, num_steps,  #
                    MASK: tl.constexpr):
-    offs_m = start_m + tl.arange(0, BLOCK_M1)
     offs_n = start_n + tl.arange(0, BLOCK_N1)
-    offs_k = tl.arange(0, HEAD_DIM)
-    qT_ptrs = Q + offs_m[None, :] * stride_tok + offs_k[:, None] * stride_d
-    do_ptrs = DO + offs_m[:, None] * stride_tok + offs_k[None, :] * stride_d
+    qT_desc = tl.make_tensor_descriptor(Q, shape=[HEAD_DIM, N_CTX], strides=[stride_d, stride_tok],
+                                        block_shape=[HEAD_DIM, BLOCK_M1])
+
+    do_desc = tl.make_tensor_descriptor(DO, shape=[N_CTX, HEAD_DIM], strides=[stride_tok, stride_d],
+                                        block_shape=[BLOCK_M1, HEAD_DIM])
     # BLOCK_N1 must be a multiple of BLOCK_M1, otherwise the code wouldn't work.
     tl.static_assert(BLOCK_N1 % BLOCK_M1 == 0)
     curr_m = start_m
     step_m = BLOCK_M1
     for blk_idx in range(num_steps):
-        qT = tl.load(qT_ptrs)
+        qT = qT_desc.load([0, start_m + blk_idx * step_m])
         # Load m before computing qk to reduce pipeline stall.
         offs_m = curr_m + tl.arange(0, BLOCK_M1)
         m = tl.load(M + offs_m)
@@ -233,7 +234,7 @@ def _attn_bwd_dkdv(dk, dv,  #
         if MASK:
             mask = (offs_m[None, :] >= offs_n[:, None])
             pT = tl.where(mask, pT, 0.0)
-        do = tl.load(do_ptrs)
+        do = do_desc.load([start_m + blk_idx * step_m, 0])
         # Compute dV.
         ppT = pT
         ppT = ppT.to(tl.float16)
@@ -247,8 +248,6 @@ def _attn_bwd_dkdv(dk, dv,  #
         dk += tl.dot(dsT, tl.trans(qT))
         # Increment pointers.
         curr_m += step_m
-        qT_ptrs += step_m * stride_tok
-        do_ptrs += step_m * stride_tok
     return dk, dv
 
 
@@ -267,10 +266,11 @@ def _attn_bwd_dq(dq, q, K, V,  #
                  start_m, start_n, num_steps,  #
                  MASK: tl.constexpr):
     offs_m = start_m + tl.arange(0, BLOCK_M2)
-    offs_n = start_n + tl.arange(0, BLOCK_N2)
-    offs_k = tl.arange(0, HEAD_DIM)
-    kT_ptrs = K + offs_n[None, :] * stride_tok + offs_k[:, None] * stride_d
-    vT_ptrs = V + offs_n[None, :] * stride_tok + offs_k[:, None] * stride_d
+    kT_desc = tl.make_tensor_descriptor(K, shape=[HEAD_DIM, N_CTX], strides=[stride_d, stride_tok],
+                                        block_shape=[HEAD_DIM, BLOCK_N2])
+
+    vT_desc = tl.make_tensor_descriptor(V, shape=[HEAD_DIM, N_CTX], strides=[stride_d, stride_tok],
+                                        block_shape=[HEAD_DIM, BLOCK_N2])
     # D (= delta) is pre-divided by ds_scale.
     Di = tl.load(D + offs_m)
     # BLOCK_M2 must be a multiple of BLOCK_N2, otherwise the code wouldn't work.
@@ -278,8 +278,8 @@ def _attn_bwd_dq(dq, q, K, V,  #
     curr_n = start_n
     step_n = BLOCK_N2
     for blk_idx in range(num_steps):
-        kT = tl.load(kT_ptrs)
-        vT = tl.load(vT_ptrs)
+        kT = kT_desc.load([0, start_n + blk_idx * step_n])
+        vT = vT_desc.load([0, start_n + blk_idx * step_n])
         qk = tl.dot(q, kT)
         p = tl.math.exp2(qk - m)
         # Autoregressive masking.
@@ -296,8 +296,6 @@ def _attn_bwd_dq(dq, q, K, V,  #
         dq += tl.dot(ds, tl.trans(kT))
         # Increment pointers.
         curr_n += step_n
-        kT_ptrs += step_n * stride_tok
-        vT_ptrs += step_n * stride_tok
     return dq
 
 
@@ -508,7 +506,7 @@ class _attention(torch.autograd.Function):
             dv = torch.empty_like(v)
             BATCH, N_HEAD, N_CTX = q.shape[:3]
             PRE_BLOCK = 128
-            NUM_WARPS, NUM_STAGES = 4, 5
+            NUM_WARPS, NUM_STAGES = 16, 3
             BLOCK_M1, BLOCK_N1, BLOCK_M2, BLOCK_N2 = 32, 128, 128, 32
             BLK_SLICE_FACTOR = 2
             RCP_LN2 = 1.4426950408889634  # = 1.0 / ln(2)
