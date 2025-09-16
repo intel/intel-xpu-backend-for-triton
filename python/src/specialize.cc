@@ -471,7 +471,13 @@ std::pair<py::object, py::object> specialize_arg(PyObject *backend,
   }
 
   // separate handling of None
+
+#if PY_MAJOR_VERSION > 3 || (PY_MAJOR_VERSION == 3 && PY_MINOR_VERSION > 9)
+  // Python version is greater than 3.9
   if (Py_IsNone(arg)) {
+#else
+  if (arg == Py_None) {
+#endif
     return {from_borrowed_ref(constexpr_str), py::none()};
   }
 
