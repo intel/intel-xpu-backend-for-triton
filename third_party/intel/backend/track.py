@@ -55,7 +55,7 @@ class Track(ABC):
         ...
 
     @abstractmethod
-    def callback(self, name: str) -> Callable | None:
+    def callback(self, name: str) -> None:
         ...
 
 
