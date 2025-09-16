@@ -742,9 +742,7 @@ extern "C" EXPORT_FUNC PyObject* launch(PyObject* args) {{
   Py_DECREF(clusterDim);
   // extract launch metadata
   if (launch_enter_hook != Py_None){{
-    PyObject* args = Py_BuildValue("(O)", launch_metadata);
-    PyObject* ret = PyObject_CallObject(launch_enter_hook, args);
-    Py_DECREF(args);
+    PyObject* ret = PyObject_CallOneArg(launch_enter_hook, launch_metadata);
     if (!ret)
       return NULL;
     Py_DECREF(ret);
@@ -767,9 +765,7 @@ extern "C" EXPORT_FUNC PyObject* launch(PyObject* args) {{
   }}
 
   if(launch_exit_hook != Py_None){{
-    PyObject* args = Py_BuildValue("(O)", launch_metadata);
-    PyObject* ret = PyObject_CallObject(launch_exit_hook, args);
-    Py_DECREF(args);
+    PyObject* ret = PyObject_CallOneArg(launch_exit_hook, launch_metadata);
     if (!ret)
       return NULL;
     Py_DECREF(ret);
