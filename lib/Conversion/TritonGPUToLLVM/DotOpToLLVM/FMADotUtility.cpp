@@ -77,35 +77,64 @@ ValueTableFMA getValueTableFromStructFMA(
   return res;
 }
 
-// Create an empty loop using the given lower bound \p lb, upper bound \p ub and
-// step \p step. Return the body block of the created loop.
-Block *createEmptyLoop(Value iv, Value ub, Value step,
-                       ConversionPatternRewriter &rewriter, Location loc) {
+struct LoopInfo {
+  Block *header;
+  Block *body;
+  Block *end;
+};
+
+/// Creates an empty loop structure with a header, body, and end block. The
+/// loop is initialized with an induction variable and an initial argument.
+/// - Parameters:
+///   - `iv`: The induction variable (already initialized to the lower bound).
+///   - `ub`: The upper bound for the loop.
+///   - `step`: The step for the induction variable.
+///   - `initArg`: The initial argument passed to the loop.
+/// - Returns a `LoopInfo` structure containing the header, body, and end///
+///   blocks.
+LoopInfo createEmptyLoop(Value iv, Value ub, Value step, Value initArg,
+                         ConversionPatternRewriter &rewriter, Location loc) {
+  // Create loop harness.
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   MLIRContext *ctx = rewriter.getContext();
   Block *insertionBlock = rewriter.getInsertionBlock();
   Block *headerBlock =
       rewriter.splitBlock(insertionBlock, rewriter.getInsertionPoint());
   Block *bodyBlock = rewriter.splitBlock(headerBlock, headerBlock->begin());
   Block *endBlock = rewriter.splitBlock(bodyBlock, bodyBlock->begin());
-  rewriter.setInsertionPointToEnd(insertionBlock);
+
+  Type ivTy = iv.getType();
+  Type initArgTy = initArg.getType();
+  headerBlock->addArguments({ivTy, initArgTy}, {loc, loc});
+  bodyBlock->addArguments({ivTy, initArgTy}, {loc, loc});
+  endBlock->addArgument(initArgTy, loc);
 
   // Loop header.
-  rewriter.create<cf::BranchOp>(loc, headerBlock, SmallVector<Value>{iv});
+  rewriter.setInsertionPointToEnd(insertionBlock);
+  rewriter.create<cf::BranchOp>(loc, headerBlock,
+                                SmallVector<Value>{iv, initArg});
   rewriter.setInsertionPointToStart(headerBlock);
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  rewriter.create<cf::CondBranchOp>(loc, b.icmp_slt(iv, ub), bodyBlock,
-                                    endBlock, SmallVector<Value>{iv});
+
+  auto cond = b.icmp_slt(headerBlock->getArgument(0), ub);
+  auto headerArgs = headerBlock->getArguments();
+  rewriter.create<cf::CondBranchOp>(loc, cond, bodyBlock, headerArgs, endBlock,
+                                    headerArgs.drop_front());
   rewriter.setInsertionPointToStart(bodyBlock);
 
   // Loop body.
-  auto nextIv = b.add(iv, step);
-  rewriter.create<cf::BranchOp>(loc, headerBlock, SmallVector<Value>{nextIv});
+  auto nextIV = b.add(bodyBlock->getArgument(0), step);
+  SmallVector<Value> args1{nextIV};
+  args1.push_back(bodyBlock->getArgument(1));
+  rewriter.create<cf::BranchOp>(loc, headerBlock, args1);
   rewriter.setInsertionPointToStart(endBlock);
 
-  return bodyBlock;
+  return {headerBlock, bodyBlock, endBlock};
 }
 
-// Initialize a variable to \p init and return the loaded value.
+/// Initializes a variable to a given value and returns the loaded value.
+/// - Parameters:
+///   - `init`: The initial value to assign to the variable.
+/// - Returns: The loaded value of the initialized variable.
 Value createIV(Value init, ConversionPatternRewriter &rewriter, Location loc) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto ptr = rewriter.create<LLVM::AllocaOp>(loc, ptr_ty(rewriter.getContext()),
@@ -121,7 +150,7 @@ namespace mlir::triton::gpu {
 enum class CodeGenMode {
   Unroll,
   Loop,
-} codeGenMode = CodeGenMode::Unroll;
+} codeGenMode = CodeGenMode::Loop;
 
 LogicalResult genFMALoop(DotOp, ValueTableFMA &, ValueTableFMA &,
                          ArrayRef<Value>, ArrayRef<unsigned>,
@@ -260,8 +289,8 @@ LogicalResult genFMALoop(DotOp op, ValueTableFMA &has, ValueTableFMA &hbs,
   const unsigned len = acc.size();
   Type elemType = acc.front().getType();
   auto builder = TritonLLVMOpBuilder(loc, rewriter);
-  Value vecD = builder.undef(vec_ty(elemType, len));
 
+  Value vecD;
   Value zero = builder.i32_val(0), one = builder.i32_val(1);
   for (unsigned bRep = 0; bRep < repetitions[0]; ++bRep)
     for (unsigned mRep = 0; mRep < repetitions[1]; ++mRep)
@@ -271,10 +300,14 @@ LogicalResult genFMALoop(DotOp op, ValueTableFMA &has, ValueTableFMA &hbs,
           Value outerIV = createIV(zero, rewriter, loc);
           Value outerUB = builder.i32_val(sizePerThread[1]);
           Value outerStep = builder.i32_val(sizePerThread[2]);
-          Block *outerBody =
-              createEmptyLoop(outerIV, outerUB, outerStep, rewriter, loc);
+          LoopInfo outerLoopInfo = createEmptyLoop(outerIV, outerUB, outerStep,
+                                                   {vecC}, rewriter, loc);
+          Block *outerBody = outerLoopInfo.body;
+          Block *outerEnd = outerLoopInfo.end;
+          auto outerLatch = cast<cf::BranchOp>(outerBody->getTerminator());
+          vecD = outerEnd->getArgument(0);
           auto afterOuterLoop = rewriter.saveInsertionPoint();
-          rewriter.setInsertionPointToStart(outerBody);
+          rewriter.setInsertionPointToStart(outerLoopInfo.body);
 
           // Get the values for operand A.
           SmallVector<Value> AElems;
@@ -287,9 +320,13 @@ LogicalResult genFMALoop(DotOp op, ValueTableFMA &has, ValueTableFMA &hbs,
           Value innerIV = createIV(zero, rewriter, loc);
           Value innerUB = outerStep;
           Value innerStep = one;
-          Block *innerBody =
-              createEmptyLoop(innerIV, innerUB, innerStep, rewriter, loc);
-          rewriter.setInsertionPointToStart(innerBody);
+          Value initArg =
+              outerBody->getArgument(outerBody->getNumArguments() - 1);
+          LoopInfo innerLoopInfo = createEmptyLoop(innerIV, innerUB, innerStep,
+                                                   initArg, rewriter, loc);
+          Block *innerBody = innerLoopInfo.body;
+          Block *innerEnd = innerLoopInfo.end;
+          rewriter.setInsertionPointToStart(innerLoopInfo.body);
 
           // Get the values for operand B.
           SmallVector<Value> BElems;
@@ -300,9 +337,10 @@ LogicalResult genFMALoop(DotOp op, ValueTableFMA &has, ValueTableFMA &hbs,
           }
 
           // Get the value for operand C.
-          //  TODO: generate FMA for integer here.
           Value accIdx = builder.add(builder.mul(innerUB, outerIV), innerIV);
-          Value acc = builder.extract_element(vecC, accIdx);
+          Value innerInitArg =
+              innerBody->getArgument(innerBody->getNumArguments() - 1);
+          Value acc = builder.extract_element(innerInitArg, accIdx);
 
           // Perform the FMAs.
           for (unsigned k = 0; k < sizePerThread[2]; ++k) {
@@ -317,21 +355,34 @@ LogicalResult genFMALoop(DotOp op, ValueTableFMA &has, ValueTableFMA &hbs,
           }
 
           // Store the result.
-          vecD = builder.insert_element(vecD, acc, accIdx);
+          innerInitArg = builder.insert_element(innerInitArg, acc, accIdx);
           rewriter.restoreInsertionPoint(afterOuterLoop);
+
+          // Pass the result to the next inner loop iteration.
+          auto innerLatch = cast<cf::BranchOp>(innerBody->getTerminator());
+          innerLatch->setOperand(innerLatch->getNumOperands() - 1,
+                                 innerInitArg);
+
+          // Pass the result of the inner loop to the next outer loop iteration.
+          Value innerEndArg = innerEnd->getArgument(0);
+          outerLatch->setOperand(outerLatch->getNumOperands() - 1, innerEndArg);
         }
 
-  // Create a loop to copy vecD into a struct.
+  // Create a loop to copy the result into a struct.
   Value ub = builder.i32_val(len);
   auto structPtr =
       rewriter.create<LLVM::AllocaOp>(loc, ptr_ty(ctx), elemType, ub);
   Value iv = createIV(zero, rewriter, loc);
-  Block *body = createEmptyLoop(iv, ub, one, rewriter, loc);
+  LoopInfo loopInfo = createEmptyLoop(iv, ub, one, vecD, rewriter, loc);
+  Block *body = loopInfo.body;
   auto afterLoop = rewriter.saveInsertionPoint();
   rewriter.setInsertionPointToStart(body);
-  Value val = builder.extract_element(vecD, iv);
+  Value val = builder.extract_element(
+      body->getArgument(body->getNumArguments() - 1), iv);
   Value ptr = builder.gep(ptr_ty(ctx), val.getType(), structPtr, iv);
   rewriter.create<LLVM::StoreOp>(loc, val, ptr);
+
+  // Load the struct and replace the original op.
   rewriter.restoreInsertionPoint(afterLoop);
   auto loadVal = rewriter.create<LLVM::LoadOp>(loc, dType, structPtr);
   rewriter.replaceOp(op, loadVal);
