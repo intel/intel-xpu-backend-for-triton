@@ -234,25 +234,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   // CHECK-SAME: (%arg0: !llvm.ptr<1>, %arg1: f16, %arg2: f16, %arg3: !llvm.ptr<1>, %arg4: !llvm.ptr<1>) -> f16
   tt.func @test_atomic_cas_f16_emulated(%ptr: !tt.ptr<f16, 1>, %cmp: f16, %val: f16) -> f16 {
 
-    // CHECK: %[[F16_ZERO:.*]] = llvm.mlir.constant(0.000000e+00 : f16) : f16
-    // CHECK: llvm.cond_br %{{.*}}, ^bb1, ^bb3(%[[F16_ZERO]] : f16)
+    // CHECK: %[[I16_ZERO:.*]] = llvm.mlir.constant(0 : i16) : i16
+    // CHECK: llvm.cond_br %{{.*}}, ^bb1, ^bb4(%[[I16_ZERO]] : i16)
 
-    // CHECK: %[[CMP_CAST:.*]] = llvm.bitcast %arg1 : f16 to f16
-    // CHECK: %[[VAL_CAST:.*]] = llvm.bitcast %arg2 : f16 to f16
+    // CHECK: %[[CMP_CAST:.*]] = llvm.bitcast %arg1 : f16 to i16
+    // CHECK: %[[VAL_CAST:.*]] = llvm.bitcast %arg2 : f16 to i16
 
-    // CHECK: %{{.*}} = llvm.bitcast %{{.*}} : i32 to vector<2xf16>
-    // CHECK: %[[CURRENT_F16:.*]] = llvm.extractelement %{{.*}}[%{{.*}} : i32] : vector<2xf16>
+    // CHECK: %{{.*}} = llvm.bitcast %{{.*}} : i32 to vector<2xi16>
+    // CHECK: %[[CURRENT_I16:.*]] = llvm.extractelement %{{.*}}[%{{.*}} : i32] : vector<2xi16>
 
-    // CHECK: %[[CMP_I16:.*]] = llvm.bitcast %[[CMP_CAST]] : f16 to i16
-    // CHECK: %[[CURRENT_I16:.*]] = llvm.bitcast %[[CURRENT_F16]] : f16 to i16
-    // CHECK: %[[F16_EQ:.*]] = llvm.icmp "eq" %[[CURRENT_I16]], %[[CMP_I16]] : i16
-    // CHECK: %[[NEW_F16:.*]] = llvm.select %[[F16_EQ]], %[[VAL_CAST]], %[[CURRENT_F16]] : i1, f16
+    // CHECK: %[[I16_EQ:.*]] = llvm.icmp "eq" %[[CURRENT_I16]], %[[CMP_CAST]] : i16
+    // CHECK: llvm.cond_br %[[I16_EQ]], ^bb3, ^bb4(%[[CURRENT_I16]] : i16)
 
-    // CHECK: %{{.*}} = llvm.insertelement %[[NEW_F16]], %{{.*}}[%{{.*}} : i32] : vector<2xf16>
-    // CHECK: %{{.*}} = llvm.bitcast %{{.*}} : vector<2xf16> to i32
+    // CHECK: %[[NEW_I16:.*]] = llvm.insertelement %[[VAL_CAST]], %{{.*}}[%{{.*}} : i32] : vector<2xi16>
+    // CHECK: %{{.*}} = llvm.bitcast %[[NEW_I16]] : vector<2xi16> to i32
     // CHECK: llvm.cmpxchg %{{.*}}, %{{.*}}, %{{.*}} acq_rel monotonic : !llvm.ptr<1>, i32
 
-    // CHECK: llvm.store %{{.*}}, %{{.*}} : f16, !llvm.ptr<3>
+    // CHECK: %[[RESULT_F16:.*]] = llvm.bitcast %{{.*}} : i16 to f16
+    // CHECK: llvm.store %[[RESULT_F16]], %{{.*}} : f16, !llvm.ptr<3>
     // CHECK: %{{.*}} = llvm.load %{{.*}} : !llvm.ptr<3> -> f16
 
     %0 = tt.atomic_cas acq_rel, cta, %ptr, %cmp, %val : (!tt.ptr<f16, 1>, f16, f16) -> f16
@@ -273,25 +272,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   // CHECK-SAME: (%arg0: !llvm.ptr<1>, %arg1: bf16, %arg2: bf16, %arg3: !llvm.ptr<1>, %arg4: !llvm.ptr<1>) -> bf16
   tt.func @test_atomic_cas_bf16_emulated(%ptr: !tt.ptr<bf16, 1>, %cmp: bf16, %val: bf16) -> bf16 {
 
-    // CHECK: %[[BF16_ZERO:.*]] = llvm.mlir.constant(0.000000e+00 : bf16) : bf16
-    // CHECK: llvm.cond_br %{{.*}}, ^bb1, ^bb3(%[[BF16_ZERO]] : bf16)
+    // CHECK: %[[I16_ZERO:.*]] = llvm.mlir.constant(0 : i16) : i16
+    // CHECK: llvm.cond_br %{{.*}}, ^bb1, ^bb4(%[[I16_ZERO]] : i16)
 
-    // CHECK: %[[CMP_CAST:.*]] = llvm.bitcast %arg1 : bf16 to bf16
-    // CHECK: %[[VAL_CAST:.*]] = llvm.bitcast %arg2 : bf16 to bf16
+    // CHECK: %[[CMP_CAST:.*]] = llvm.bitcast %arg1 : bf16 to i16
+    // CHECK: %[[VAL_CAST:.*]] = llvm.bitcast %arg2 : bf16 to i16
 
-    // CHECK: %{{.*}} = llvm.bitcast %{{.*}} : i32 to vector<2xbf16>
-    // CHECK: %[[CURRENT_BF16:.*]] = llvm.extractelement %{{.*}}[%{{.*}} : i32] : vector<2xbf16>
+    // CHECK: %{{.*}} = llvm.bitcast %{{.*}} : i32 to vector<2xi16>
+    // CHECK: %[[CURRENT_I16:.*]] = llvm.extractelement %{{.*}}[%{{.*}} : i32] : vector<2xi16>
 
-    // CHECK: %[[CMP_I16:.*]] = llvm.bitcast %[[CMP_CAST]] : bf16 to i16
-    // CHECK: %[[CURRENT_I16:.*]] = llvm.bitcast %[[CURRENT_BF16]] : bf16 to i16
-    // CHECK: %[[BF16_EQ:.*]] = llvm.icmp "eq" %[[CURRENT_I16]], %[[CMP_I16]] : i16
-    // CHECK: %[[NEW_BF16:.*]] = llvm.select %[[BF16_EQ]], %[[VAL_CAST]], %[[CURRENT_BF16]] : i1, bf16
+    // CHECK: %[[I16_EQ:.*]] = llvm.icmp "eq" %[[CURRENT_I16]], %[[CMP_CAST]] : i16
+    // CHECK: llvm.cond_br %[[I16_EQ]], ^bb3, ^bb4(%[[CURRENT_I16]] : i16)
 
-    // CHECK: %{{.*}} = llvm.insertelement %[[NEW_BF16]], %{{.*}}[%{{.*}} : i32] : vector<2xbf16>
-    // CHECK: %{{.*}} = llvm.bitcast %{{.*}} : vector<2xbf16> to i32
+    // CHECK: %[[NEW_I16:.*]] = llvm.insertelement %[[VAL_CAST]], %{{.*}}[%{{.*}} : i32] : vector<2xi16>
+    // CHECK: %{{.*}} = llvm.bitcast %[[NEW_I16]] : vector<2xi16> to i32
     // CHECK: llvm.cmpxchg %{{.*}}, %{{.*}}, %{{.*}} acq_rel monotonic : !llvm.ptr<1>, i32
 
-    // CHECK: llvm.store %{{.*}}, %{{.*}} : bf16, !llvm.ptr<3>
+    // CHECK: %[[RESULT_BF16:.*]] = llvm.bitcast %{{.*}} : i16 to bf16
+    // CHECK: llvm.store %[[RESULT_BF16]], %{{.*}} : bf16, !llvm.ptr<3>
     // CHECK: %{{.*}} = llvm.load %{{.*}} : !llvm.ptr<3> -> bf16
 
     %0 = tt.atomic_cas acq_rel, cta, %ptr, %cmp, %val : (!tt.ptr<bf16, 1>, bf16, bf16) -> bf16

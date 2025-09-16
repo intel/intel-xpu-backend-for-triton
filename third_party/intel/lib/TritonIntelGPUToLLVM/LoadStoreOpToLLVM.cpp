@@ -3213,24 +3213,17 @@ struct AtomicCASOpConversion
              "Unexpected width");
 
       Value ret;
-
+      Value zero = b.int_val(valueElemNBits, 0);
       if (valueElemNBits == 16 && !support16BitAtomics) {
-        Value zero =
-            TypeSwitch<mlir::Type, Value>(valueElemTy)
-                .Case<mlir::IntegerType>(
-                    [&](auto ty) { return b.int_val(valueElemNBits, 0); })
-                .Case<mlir::Float16Type>([&](auto) { return b.f16_val(0); })
-                .Case<mlir::BFloat16Type>([&](auto) { return b.bf16_val(0); });
         op.emitWarning("'tt.atomic_cas' op fp16/bf16 datatype is not supported "
                        "in the target HW, software emulation is an "
                        "experimental feature (use at own risk)");
 
         Block *endBlock =
-            emulate16BitsCAS(rewriter, loc, valueElemTy, casPtr, casCmp, casVal,
+            emulate16BitsCAS(rewriter, loc, casPtr, casCmp, casVal,
                              mask ? mask : b.true_val(), {zero});
         ret = endBlock->getArgument(0);
       } else {
-        Value zero = b.int_val(valueElemNBits, 0);
         if (op.getResult().use_empty())
           rewriter.create<TritonGEN::BarrierOp>(loc,
                                                 TritonGEN::MemFence::GLOBAL);
@@ -3284,8 +3277,8 @@ struct AtomicCASOpConversion
   }
 
   Block *emulate16BitsCAS(ConversionPatternRewriter &rewriter, Location loc,
-                          Type valueElemTy, Value casPtr, Value casCmp,
-                          Value casVal, Value mask, ArrayRef<Value> ops) const {
+                          Value casPtr, Value casCmp, Value casVal, Value mask,
+                          ArrayRef<Value> ops) const {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     Block *insertionBlock = rewriter.getInsertionBlock();
     Block *headerBlock =
@@ -3296,8 +3289,8 @@ struct AtomicCASOpConversion
     rewriter.create<cf::CondBranchOp>(loc, mask, headerBlock, endBlock, ops);
     rewriter.setInsertionPointToStart(headerBlock);
 
-    casCmp = b.bitcast(casCmp, valueElemTy);
-    casVal = b.bitcast(casVal, valueElemTy);
+    casCmp = b.bitcast(casCmp, i16_ty);
+    casVal = b.bitcast(casVal, i16_ty);
 
     auto intPtr = b.ptrtoint(i64_ty, casPtr);
     auto lowPtrBits = b.and_(intPtr, b.i64_val(3));
@@ -3315,21 +3308,22 @@ struct AtomicCASOpConversion
     rewriter.setInsertionPointToEnd(headerBlock);
     rewriter.create<cf::BranchOp>(loc, bodyBlock,
                                   SmallVector<Value, 1>{firstValInt});
-    rewriter.setInsertionPointToEnd(bodyBlock);
+    rewriter.setInsertionPointToStart(bodyBlock);
 
-    auto origValVec = b.bitcast(origValInt, vec_ty(valueElemTy, 2));
+    auto origValVec = b.bitcast(origValInt, vec_ty(i16_ty, 2));
     auto origVal = b.extract_element(origValVec, elemIndex);
 
-    Value isEqual;
-    if (isa<mlir::IntegerType>(valueElemTy)) {
-      isEqual = b.icmp_eq(origVal, casCmp);
-    } else {
-      isEqual =
-          b.icmp_eq(b.bitcast(origVal, i16_ty), b.bitcast(casCmp, i16_ty));
-    }
+    Value isEqual = b.icmp_eq(origVal, casCmp);
 
-    Value selectedVal = b.select(isEqual, casVal, origVal);
-    Value newValVec = b.insert_element(origValVec, selectedVal, elemIndex);
+    Block *casBlock =
+        rewriter.splitBlock(bodyBlock, rewriter.getInsertionPoint());
+    rewriter.setInsertionPointToEnd(bodyBlock);
+    SmallVector<Value, 1> exitOps = {origVal};
+    rewriter.create<cf::CondBranchOp>(loc, isEqual, casBlock, ValueRange{},
+                                      endBlock, exitOps);
+    rewriter.setInsertionPointToStart(casBlock);
+
+    Value newValVec = b.insert_element(origValVec, casVal, elemIndex);
     Value newValInt = b.bitcast(newValVec, i32_ty);
 
     auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
