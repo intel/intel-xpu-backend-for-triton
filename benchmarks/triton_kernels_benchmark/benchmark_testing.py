@@ -59,7 +59,7 @@ def _summarize_statistics(times, quantiles, return_mode):
 
 
 def do_bench_elapsed_time(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quantiles=None, return_mode="mean",
-                          device="xpu", time_warmup=True):  # pylint: disable=unused-argument
+                          device="xpu", time_warmup=False):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -99,10 +99,13 @@ def do_bench_elapsed_time(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quan
     del cache
 
     # compute warmup and repeat times
-    warmup_time = n_warmup * estimate_ms
+    if time_warmup:
+        warmup_ms = n_warmup
+    else:
+        warmup_ms = n_warmup * estimate_ms
     rep_time = n_repeat * estimate_ms
 
-    times = triton_do_bench(fn, warmup=warmup_time, rep=rep_time, grad_to_none=grad_to_none, return_mode="all")
+    times = triton_do_bench(fn, warmup=warmup_ms, rep=rep_time, grad_to_none=grad_to_none, return_mode="all")
     times = torch.tensor(times, dtype=torch.float)
     return _summarize_statistics(times, quantiles, return_mode)
 
