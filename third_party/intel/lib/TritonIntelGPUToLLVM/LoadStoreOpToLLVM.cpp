@@ -932,7 +932,7 @@ struct PrefetchOpConversion
     }
 
     Value rowStrideInBytes =
-        getPitch(rewriter, op.getPtr(), elemSizeInBits, !memoryRowMajor);
+        getPitch(rewriter, op.getPtr(), elemSizeInBits, memoryRowMajor ? 0 : 1);
     if (!rowStrideInBytes)
       return failure();
 
@@ -2240,7 +2240,8 @@ struct LoadOpToBlockIOConversion
       break;
     }
 
-    Value pitch = getPitch(rewriter, ptr, elemSizeInBits, !memoryRowMajor);
+    Value pitch =
+        getPitch(rewriter, ptr, elemSizeInBits, memoryRowMajor ? 0 : 1);
     if (!pitch)
       return failure();
 
@@ -2854,7 +2855,7 @@ struct StoreOpToBlockIOConversion
       baseWidth = b.i32_val(
           std::max(64u, vBlocks * tileWidth * (packedElemSizeInBits / 8)));
       baseHeight = b.i32_val(tileHeight);
-      pitch = getPitch(rewriter, ptr, elemSizeInBits, !memoryRowMajor);
+      pitch = getPitch(rewriter, ptr, elemSizeInBits, memoryRowMajor ? 0 : 1);
       if (!pitch)
         return failure();
       offsetBaseX = b.i32_val(0);
