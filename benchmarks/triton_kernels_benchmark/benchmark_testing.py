@@ -59,7 +59,7 @@ def _summarize_statistics(times, quantiles, return_mode):
 
 
 def do_bench_elapsed_time(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quantiles=None, return_mode="mean",
-                          device="xpu"):
+                          device="xpu", time_warmup=True):  # pylint: disable=unused-argument
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.

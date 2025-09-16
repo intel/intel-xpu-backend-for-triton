@@ -575,12 +575,15 @@ def get_benchmark(
     # pylint: disable=too-many-branches
     def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
         modes = ['fwd', 'bwd']
+        # This warmup logic improves performance on BMG significantly
         # For FWD mode in triton & cutlass: Some configs increase performance with warmup as a step function, but some slowly decrease with saturation
         # Performance is best at 250-400ms range, but we want stable, not just best at ~600ms (triton/cutlass providers)
         n_warmup_fwd = 600
         # For BWD mode: Performance doesn't really improve much with warmup for triton, but xetla benefit from more warmup
         n_warmup_bwd = 400  # Maximum across xetla=400, triton=10, onednn=10
         n_warmup = n_warmup_fwd if MODE == 'fwd' else n_warmup_bwd
+        # We keep old warmup value, because new warmup makes perfomance on PVC slightly worse
+        n_warmup = 10
         if MODE not in modes:
             raise AssertionError(f'Unknown {MODE}, supported modes are {modes}')
         dtype = torch.float16
@@ -611,6 +614,7 @@ def get_benchmark(
                 n_warmup=n_warmup,
                 n_repeat=10,
                 quantiles=quantiles,
+                time_warmup=False,
             )
 
         elif provider == 'triton':
@@ -635,6 +639,7 @@ def get_benchmark(
                 n_warmup=n_warmup,
                 n_repeat=10,
                 quantiles=quantiles,
+                time_warmup=False,
             )
 
         elif provider == 'xetla':
@@ -670,6 +675,7 @@ def get_benchmark(
                     n_warmup=n_warmup,
                     n_repeat=10,
                     quantiles=quantiles,
+                    time_warmup=False,
                 )
 
             else:
@@ -695,6 +701,7 @@ def get_benchmark(
                     n_warmup=n_warmup,
                     n_repeat=10,
                     quantiles=quantiles,
+                    time_warmup=False,
                 )
 
             else:
