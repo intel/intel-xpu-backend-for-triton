@@ -59,7 +59,7 @@ def _summarize_statistics(times, quantiles, return_mode):
 
 
 def do_bench_elapsed_time(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quantiles=None, return_mode="mean",
-                          device="xpu"):
+                          device="xpu", time_warmup=False):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -99,16 +99,20 @@ def do_bench_elapsed_time(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quan
     del cache
 
     # compute warmup and repeat times
-    warmup_time = n_warmup * estimate_ms
+    if time_warmup:
+        warmup_ms = n_warmup
+    else:
+        warmup_ms = n_warmup * estimate_ms
     rep_time = n_repeat * estimate_ms
 
-    times = triton_do_bench(fn, warmup=warmup_time, rep=rep_time, grad_to_none=grad_to_none, return_mode="all")
+    times = triton_do_bench(fn, warmup=warmup_ms, rep=rep_time, grad_to_none=grad_to_none, return_mode="all")
     times = torch.tensor(times, dtype=torch.float)
     return _summarize_statistics(times, quantiles, return_mode)
 
 
 def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quantiles=None,
-                                       return_mode="mean", device="xpu", sync_submitting=True):
+                                       return_mode="mean", device="xpu", sync_submitting=True, time_warmup=True,
+                                       benchmark_label=None, max_iters=1500):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -137,8 +141,24 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
     cache = torch.empty(int(cache_size // 4), dtype=torch.int, device=device)
 
     # Warm-up
-    for _ in range(n_warmup):
-        fn()
+    if time_warmup:
+        # Stop either on max iteration number or max time
+        warmup_time_s = n_warmup / 1000
+        assert sync_submitting
+        start = time.perf_counter()
+        i = 0
+        while i < max_iters and time.perf_counter() - start < warmup_time_s:
+            fn()
+            synchronize()
+            i += 1
+        print(f"Stopped warmup after {i} iterations")
+    else:
+        for _ in range(n_warmup):
+            fn()
+            # To be consistent with the benchmark measurements
+            if sync_submitting:
+                synchronize()
+
     # Benchmark
     with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.XPU]) as prof:
         for _ in range(n_repeat):

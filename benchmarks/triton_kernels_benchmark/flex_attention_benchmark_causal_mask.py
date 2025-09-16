@@ -139,6 +139,8 @@ batch_sizes = [16, 32, 64] if throughput_test else [batch_size]
     ))
 def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provider):
     assert MODE in ['fwd']
+    # Maximum across torch=200, triton=600
+    n_warmup = 600
     dtype = torch.float16
     q = torch.randn((Z, H_q, N_CTX_q, D_HEAD_qk), device=DEVICE, dtype=dtype, requires_grad=MODE == 'bwd')
     k = torch.randn((Z, H_kv, N_CTX_kv, D_HEAD_qk), device=DEVICE, dtype=dtype, requires_grad=MODE == 'bwd')
@@ -152,8 +154,8 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
     torch_fn = lambda: flex_attention(q, k, v, block_mask=block_mask, scale=sm_scale, enable_gqa=not H_q == H_kv)
 
     if provider == 'torch':
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(torch_fn, n_warmup=10, n_repeat=10, quantiles=quantiles,
-                                                              device=DEVICE)
+        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(torch_fn, n_warmup=n_warmup, n_repeat=10,
+                                                              quantiles=quantiles, device=DEVICE)
 
     elif provider == 'triton':
         kernel_options = {'BLOCKS_ARE_CONTIGUOUS': True, 'USE_TMA': True}
@@ -165,8 +167,8 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
             triton_fn = lambda: triton_o.backward(triton_do, retain_graph=True)
 
         benchmark_suit.assert_close(triton_fn, torch_fn, atol=1e-2, rtol=1e-3, err_msg='triton to torch')
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10, quantiles=quantiles,
-                                                              device=DEVICE)
+        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=n_warmup, n_repeat=10,
+                                                              quantiles=quantiles, device=DEVICE)
 
     elif provider == 'onednn':
         # OneDNN only supports MHA.
@@ -177,7 +179,7 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
                 xformers_o = xformers_fn()
                 xformers_do = torch.randn_like(xformers_o)
                 xformers_fn = lambda: xformers_o.backward(xformers_do, retain_graph=True)
-            _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xformers_fn, n_warmup=10, n_repeat=10,
+            _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xformers_fn, n_warmup=n_warmup, n_repeat=10,
                                                                   quantiles=quantiles)
         else:
             _, min_ms, max_ms, mean, cv = float('nan'), float('nan'), float('nan'), float('nan'), float('nan')
