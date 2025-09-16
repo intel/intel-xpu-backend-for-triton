@@ -2393,8 +2393,7 @@ def test_reduce1d(op, dtype_str, shape, num_ctas, num_warps, threads_per_warp, d
     # triton result
     z_tri = to_triton(numpy_random((1, ), dtype_str=z_dtype_str), device=device, dst_type=z_tri_dtype_str)
     if is_xpu():
-        kernel[(1, )](x_tri, z_tri, BLOCK=shape, num_ctas=num_ctas, num_warps=num_warps,
-                      threads_per_warp=threads_per_warp)
+        kernel[(1, )](x_tri, z_tri, BLOCK=shape, num_ctas=num_ctas, num_warps=num_warps, warp_size=threads_per_warp)
     else:
         kernel[(1, )](x_tri, z_tri, BLOCK=shape, num_ctas=num_ctas)
     z_tri = to_numpy(z_tri)
@@ -2527,7 +2526,7 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, num_warps, thre
     kern_kwargs = {}
     if is_xpu():
         kern_kwargs['num_warps'] = num_warps
-        kern_kwargs['threads_per_warp'] = threads_per_warp
+        kern_kwargs['warp_size'] = threads_per_warp
     if axis is not None and axis >= len(shape):
         with pytest.raises(triton.TritonError):
             kernel[(1, )](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], BLOCK_K=BLOCK_K, IS_3D=IS_3D, AXIS=axis,
