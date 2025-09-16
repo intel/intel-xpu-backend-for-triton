@@ -63,7 +63,7 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
         if cc is None:
             raise RuntimeError(
                 "Failed to find C compiler. Please specify via CC environment variable or set triton.knobs.build.impl.")
-    scheme = sysconfig.get_default_scheme()
+    scheme = sysconfig._get_default_scheme()  # type: ignore[attr-defined]
     # 'posix_local' is a custom scheme on Debian. However, starting Python 3.10, the default install
     # path changes to include 'local'. This change is required to use triton with system-wide python.
     if scheme == 'posix_local':
