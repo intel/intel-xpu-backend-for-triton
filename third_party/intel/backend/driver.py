@@ -174,15 +174,17 @@ class ArchParser:
     if os.name != 'nt':
 
         def __del__(self):
-            handle = self.shared_library._handle
-            self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
-            self.shared_library.dlclose(handle)
+            if hasattr(self, "shared_library"):
+                handle = self.shared_library._handle
+                self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
+                self.shared_library.dlclose(handle)
     else:
 
         def __del__(self):
-            handle = self.shared_library._handle
-            ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
-            ctypes.windll.kernel32.FreeLibrary(handle)
+            if hasattr(self, "shared_library"):
+                handle = self.shared_library._handle
+                ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
+                ctypes.windll.kernel32.FreeLibrary(handle)
 
 
 class SpirvUtils:
@@ -215,15 +217,17 @@ class SpirvUtils:
     if os.name != 'nt':
 
         def __del__(self):
-            handle = self.shared_library._handle
-            self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
-            self.shared_library.dlclose(handle)
+            if hasattr(self, "shared_library"):
+                handle = self.shared_library._handle
+                self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
+                self.shared_library.dlclose(handle)
     else:
 
         def __del__(self):
-            handle = self.shared_library._handle
-            ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
-            ctypes.windll.kernel32.FreeLibrary(handle)
+            if hasattr(self, "shared_library"):
+                handle = self.shared_library._handle
+                ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
+                ctypes.windll.kernel32.FreeLibrary(handle)
 
 
 class TritonLauncher:
@@ -243,15 +247,17 @@ class TritonLauncher:
     if os.name != 'nt':
 
         def __del__(self):
-            handle = self.shared_library._handle
-            self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
-            self.shared_library.dlclose(handle)
+            if hasattr(self, "shared_library"):
+                handle = self.shared_library._handle
+                self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
+                self.shared_library.dlclose(handle)
     else:
 
         def __del__(self):
-            handle = self.shared_library._handle
-            ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
-            ctypes.windll.kernel32.FreeLibrary(handle)
+            if hasattr(self, "shared_library"):
+                handle = self.shared_library._handle
+                ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
+                ctypes.windll.kernel32.FreeLibrary(handle)
 
 
 def compile_module_from_src(src: str, name: str):
@@ -742,9 +748,7 @@ extern "C" EXPORT_FUNC PyObject* launch(PyObject* args) {{
   Py_DECREF(clusterDim);
   // extract launch metadata
   if (launch_enter_hook != Py_None){{
-    PyObject* args = Py_BuildValue("(O)", launch_metadata);
-    PyObject* ret = PyObject_CallObject(launch_enter_hook, args);
-    Py_DECREF(args);
+    PyObject* ret = PyObject_CallOneArg(launch_enter_hook, launch_metadata);
     if (!ret)
       return NULL;
     Py_DECREF(ret);
@@ -767,9 +771,7 @@ extern "C" EXPORT_FUNC PyObject* launch(PyObject* args) {{
   }}
 
   if(launch_exit_hook != Py_None){{
-    PyObject* args = Py_BuildValue("(O)", launch_metadata);
-    PyObject* ret = PyObject_CallObject(launch_exit_hook, args);
-    Py_DECREF(args);
+    PyObject* ret = PyObject_CallOneArg(launch_exit_hook, launch_metadata);
     if (!ret)
       return NULL;
     Py_DECREF(ret);

@@ -1,7 +1,0 @@
-python/test/unit/runtime/test_bindings.py::test_module_walk
-python/test/unit/runtime/test_autotuner.py::test_kwargs[False]
-python/test/unit/runtime/test_autotuner.py::test_restore
-python/test/unit/runtime/test_autotuner.py::test_hooks
-python/test/unit/runtime/test_autotuner.py::test_prune_configs[False]
-python/test/unit/runtime/test_autotuner.py::test_prune_configs[True]
-python/test/unit/runtime/test_cache.py::test_jit_debug

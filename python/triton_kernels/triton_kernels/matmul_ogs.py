@@ -368,7 +368,7 @@ def matmul_ogs(x, w, bias,
     can_use_tma = can_use_tma and (torch.cuda.get_device_capability()[0] > 9 or bitwidth(w.dtype) != 4)
     can_use_fused_scatter = has_scatter and (fused_activation.specs.fn is None) and (epilogue.specs.fn is None) and (routing_data.n_expts_act == 1)
     opt_flags = make_opt_flags(out_dtype, x.dtype, w.dtype, precision_config,
-        M, N, K, routing_data, can_use_tma, can_use_fused_scatter, epilogue.effective_itemsize,
+        batch_size, M, N, K, routing_data, can_use_tma, can_use_fused_scatter, epilogue.effective_itemsize,
     )
     if not can_use_fused_scatter and opt_flags.fused_scatter:
         raise InapplicableConstraint("Fused scatter is not supported")
@@ -549,7 +549,7 @@ def matmul_ogs_torch(x, w, bias,
                  betas = None,
                  gammas = None,
                  round_x = None, round_y = None,
-                 ):
+                 device: str = "cuda"):
     is_input_batched = x.ndim == 3
     assert x.dtype.itemsize > 1
     assert w.dtype.itemsize > 1
@@ -588,7 +588,7 @@ def matmul_ogs_torch(x, w, bias,
         else:
             idx = gather_indx.src_indx[lo:hi] // n_expts_act
         batch = i if is_input_batched else 0
-        out = torch.matmul(round_x(x[batch, idx, :], torch.arange(lo, hi, device="cuda")).float(),
+        out = torch.matmul(round_x(x[batch, idx, :], torch.arange(lo, hi, device=device)).float(),
                            w[i].float())
         if bias is not None:
             out += bias[i, :] if betas is None else bias[i, :] * betas[lo:hi, None]

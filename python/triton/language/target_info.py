@@ -52,3 +52,9 @@ def is_hip_cdna3():
 def is_hip_cdna4():
     target = current_target()
     return target is not None and target.arch == "gfx950"
+
+
+@constexpr_function
+def is_xpu():
+    target = current_target()
+    return target is not None and target.backend == "xpu"

@@ -1,6 +1,7 @@
 # isort: off
 # fmt: off
 from dataclasses import dataclass, fields, replace
+import itertools
 import pytest
 import torch
 from typing import Union
@@ -20,7 +21,7 @@ from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, upcast_from_m
 # testing utilities
 from triton_kernels.testing import assert_close, compute_actual_scale
 # target-specific utilities
-from triton_kernels.target_info import is_hip, is_hip_cdna3, is_cuda, is_hip_cdna4
+from triton_kernels.target_info import is_hip, is_xpu, is_hip_cdna3, is_cuda, is_hip_cdna4
 
 # ---------------
 # initialize data
@@ -73,7 +74,7 @@ def init_compute_data(m, n, k, gindx, sindx, n_expts_tot, n_expts_act, n_expt_sh
     if mode == 'batched' or (not has_y_gammas) or (has_y_gammas and (gindx is not None) and act_dtype.itemsize >= 2):
         gs0 = None
         gs1 = None
-    if "float8" in str(weight_dtype) and torch.cuda.get_device_capability()[0] < 10:
+    if is_cuda() and "float8" in str(weight_dtype) and torch.cuda.get_device_capability()[0] < 10:
         w = w.transpose(-1, -2).contiguous().transpose(-1, -2)
     return x, w, bias, gs0, gs1
 
@@ -295,10 +296,10 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
             pytest.skip("splitK hasn't been fully tested on AMD GPU.")
 
     if "float8_e4m3fnuz" in (weight_dtype_str, act_dtype_str) and not is_hip_cdna3():
-        pytest.skip("float8_e4m3fnuz only tested on AMD CDNA3 Platform")
+        pytest.xfail("float8_e4m3fnuz only tested on AMD CDNA3 Platform")
 
     if fused_scatter and split_k > 1:
-        pytest.skip("fused scatter scratchpad not supported with split_k")
+        pytest.xfail("fused scatter scratchpad not supported with split_k")
 
     if hbm_swizzling:
         if is_hip():
@@ -308,20 +309,21 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
                 pytest.skip("Non-scale swizzling not supported on CDNA4 yet")
             if n % 32 != 0 or k % (32 * 8) != 0:
                 pytest.skip(f"Shape {m}x{n}x{k} is not supported for scale swizzling on AMD GPU")
-        if torch.cuda.get_device_capability()[0] < 9:
-            pytest.skip("NYI. Ampere swizzling.")
-        if torch.cuda.get_device_capability()[0] < 10:
-            if "mxfloat4" not in weight_dtype_str:
-                pytest.skip("NYI. Hopper swizzling just implemented for mxfp4.")
-            if k % 64 != 0 or n % 64 != 0:
-                # Automatic padding not implemented for Hopper swizzle
-                pytest.skip("Hopper swizzling acts on a 64x64 tile (4x1 mma tiles).")
+        if is_cuda():
+            if torch.cuda.get_device_capability()[0] < 9:
+                pytest.skip("NYI. Ampere swizzling.")
+            if torch.cuda.get_device_capability()[0] < 10:
+                if "mxfloat4" not in weight_dtype_str:
+                    pytest.skip("NYI. Hopper swizzling just implemented for mxfp4.")
+                if k % 64 != 0 or n % 64 != 0:
+                    # Automatic padding not implemented for Hopper swizzle
+                    pytest.skip("Hopper swizzling acts on a 64x64 tile (4x1 mma tiles).")
 
     # launch metadata for batched / mx types may not work yet.
     torch.manual_seed(0)
 
     block_k = None
-    if is_persistent and weight_dtype_str.startswith("mx") and torch.cuda.get_device_capability()[0] < 10:
+    if is_cuda() and is_persistent and weight_dtype_str.startswith("mx") and torch.cuda.get_device_capability()[0] < 10:
         # Override block_k for testing correctness. The default is temporarily 128 for
         # performance reasons which doesn't work with persistent matmul.
         # TODO: revisit when Triton is better for H100 + MXFP4
@@ -425,7 +427,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
     try:
         tri_y = matmul_ogs(x_tri, w_tri, bias_tri, rdata, gindx, sindx, precision_opt, gammas=gs1_ref, epilogue=epilogue)
     except (opt_flags.InapplicableConstraint, NotImplementedError):
-        pytest.skip("inapplicable opt_flags constraint")
+        pytest.xfail("inapplicable opt_flags constraint")
     # If split_k > 1, then the intermediate tensor is fp32.
     sep_gather = mode == "ragged" and do_gather and n_expts_act > 1 and split_k == 1
     sep_scatter = mode == "ragged" and do_scatter and n_expts_act > 1 and split_k == 1
@@ -436,7 +438,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
 
     round_y = lambda y: (y / y_scale).to(act_dtype).to(torch.float32) * y_scale if sep_scatter else y
     ref_y = matmul_ogs_torch(x_ref, w_ref, bias_ref,  #
-                             rdata, gindx, sindx, round_x=round_x, round_y=round_y, gammas=gs1_ref)
+                             rdata, gindx, sindx, round_x=round_x, round_y=round_y, gammas=gs1_ref, device=device)
     scale = lambda val, scal: val if scal is None else val / scal
     if n_expt_shards > 1:
         if do_scatter:
@@ -470,6 +472,60 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
                 tri_y_scale).abs() < 1e-10, f"ref_y_scale: {ref_y_scale}, tri_y_scale: {tri_y_scale.item()}"
 
 
+# Test that we don't use unsupported block sizes.
+@pytest.mark.parametrize("m", [8, 16, 32, 64, 128])
+@pytest.mark.parametrize("n", [8, 16, 32, 64, 128])
+@pytest.mark.parametrize("k", [8, 16, 32, 64, 128])
+def test_small_batch_matmul(m, n, k):
+    if is_hip():
+        pytest.skip("Not fully tested on AMD")
+    if is_xpu():
+        pytest.xfail("Enable: https://github.com/intel/intel-xpu-backend-for-triton/issues/5092")
+
+    if m * n * k > 16384:
+        pytest.skip()
+
+    BATCH_SIZE = 10000
+
+    def _make_tensor(shape, dtype, trans):
+        if trans:
+            shape = (shape[0], shape[2], shape[1])
+        t = alloc_rand(shape, "cuda", dtype)
+        return t.transpose(1, 2) if trans else t
+
+    for x_transpose, w_transpose, bias, dtype in itertools.product(
+        (False, True),
+        (False, True),
+        (False, True),
+        (torch.float16, torch.bfloat16, torch.float8_e5m2),
+    ):
+        if (
+            torch.cuda.get_device_capability()[0] < 10
+            and dtype is torch.float8_e5m2
+            and (not w_transpose)
+        ):
+            continue  # Not supported
+
+        x = _make_tensor((BATCH_SIZE, m, k), dtype, x_transpose)
+        w = _make_tensor((BATCH_SIZE, k, n), dtype, w_transpose)
+        bias = _make_tensor((BATCH_SIZE, n), torch.float32, False) if bias else None
+        tri_y = matmul_ogs(x, w, bias)
+
+        # ref_y = matmul_ogs_torch(x.float(), w.float(), bias)
+
+        # This is faster than matmul_ogs_torch.
+        ref_y = torch.bmm(x.float(), w.float())
+        if bias is not None:
+            ref_y += bias[:, None, :]
+
+        assert_close(
+            ref_y,
+            tri_y,
+            maxtol=4e-1 if dtype is torch.float8_e5m2 else None,
+            rmstol=4e-2 if dtype is torch.float8_e5m2 else None,
+        )
+
+
 def test_set_idle_sms():
     if not is_cuda():
         pytest.skip("Only supported on CUDA")
@@ -477,7 +533,7 @@ def test_set_idle_sms():
     num_idle_sms = 24
     matmul_ogs_set_idle_sms(num_idle_sms)
     flags = make_opt_flags(torch.float32, torch.float32, torch.float32, PrecisionConfig(), \
-                           1024, 1024, 1024, None, True, False, 1)
+                           1, 1024, 1024, 1024, None, True, False, 1)
     assert flags.idle_sms == num_idle_sms
 
 
@@ -506,7 +562,7 @@ def test_set_idle_sms():
 def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, fused_scatter, is_persistent, epilogue_subtile,
                    swiglu_alpha, swiglu_limit, device, opt_flags_scope):
     if fused_scatter and split_k > 1:
-        pytest.skip("fused scatter scratchpad not supported with split_k")
+        pytest.xfail("fused scatter scratchpad not supported with split_k")
     torch.manual_seed(0)
     constraints = {
         "is_persistent": is_persistent,
@@ -539,7 +595,7 @@ def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, fused_scatter,
             fused_activation=FusedActivation(FnSpecs("swiglu", swiglu_fn, ("alpha", "limit")),
                                              (swiglu_alpha, swiglu_limit), 2))
     except opt_flags.InapplicableConstraint:
-        pytest.skip("inapplicable constraint")
+        pytest.xfail("inapplicable constraint")
 
     assert_close(a, b)
 
@@ -549,21 +605,21 @@ def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, fused_scatter,
     (4096, 4096, 0),
 ])
 @pytest.mark.parametrize("view_x_as_zero_cols", [False, True])
-def test_zero_reduction_dim(m, n, k, view_x_as_zero_cols):
+def test_zero_reduction_dim(m, n, k, view_x_as_zero_cols, device):
     torch.manual_seed(0)
 
     if view_x_as_zero_cols:
-        x = torch.randn(m, m, device="cuda", dtype=torch.bfloat16)
+        x = torch.randn(m, m, device=device, dtype=torch.bfloat16)
         x = x[:0, :].transpose(-1, -2)
     else:
-        x = torch.randn(m, k, device="cuda", dtype=torch.bfloat16)
-    w = torch.randn(k, n, device="cuda", dtype=torch.bfloat16)
-    bias = torch.randn(n, device="cuda", dtype=torch.float32)
+        x = torch.randn(m, k, device=device, dtype=torch.bfloat16)
+    w = torch.randn(k, n, device=device, dtype=torch.bfloat16)
+    bias = torch.randn(n, device=device, dtype=torch.float32)
 
     try:
         tri_y = matmul_ogs(x, w, bias)
     except opt_flags.InapplicableConstraint:
-        pytest.skip("inapplicable constraint")
-    ref_y = matmul_ogs_torch(x, w, bias, round_x=lambda x, idx: x, round_y=lambda y: y)
+        pytest.xfail("inapplicable constraint")
+    ref_y = matmul_ogs_torch(x, w, bias, round_x=lambda x, idx: x, round_y=lambda y: y, device=device)
 
     assert_close(ref_y, tri_y)

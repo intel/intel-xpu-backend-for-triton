@@ -424,6 +424,11 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     int rowDim;
     int colDim;
     std::optional<SetVector<unsigned>> regPackedBases;
+
+    bool isValid() const {
+      return tileHeight >= 0 && tileWidth >= 0 && numElemPerPackedVal >= 0 &&
+             vBlocks >= 0 && rowDim >= 0 && colDim >= 0;
+    }
   };
 
   // Return the tileHeight, tileWidth, numElemPerPackedVal, vBlocks, row Dim and
@@ -662,7 +667,7 @@ struct PrefetchOpConversion
     Value ptr = op.getPtr();
     auto ptrType = cast<PointerType>(ptr.getType());
     auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
-    Type eltTy = tensorType.getElementType();
+    Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
     const ArrayRef<int64_t> shapeRef = tensorType.getShape();
     SmallVector<int64_t> tensorShape{shapeRef.begin(), shapeRef.end()};
 
@@ -877,7 +882,7 @@ struct PrefetchOpConversion
         mlir::ceil<int64_t>(shardTensorShape[0], prefetchShape[0]),
         mlir::ceil<int64_t>(shardTensorShape[1], prefetchShape[1])};
 
-    Type eltTy = tensorType.getElementType();
+    Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
     unsigned tileWidthInElem = prefetchShape[1];
     unsigned tileHeightInElem = prefetchShape[0];
@@ -1056,7 +1061,7 @@ struct LoadOpToBlockIOConversion
            "Only row_major or column_major is allowed");
     const bool isTransposeRequired = valueRowMajor ^ memoryRowMajor;
 
-    Type eltTy = tensorType.getElementType();
+    Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
 
     auto tileParams = Subgroup2DBlockEncodingAttr::getInstrShapeForLayout(
@@ -1870,7 +1875,35 @@ struct LoadOpToBlockIOConversion
     std::optional<LinearLayout> llEncoding =
         cast<DistributedEncodingTrait>(encoding).toLinearLayout(
             tensorType.getShape());
-    assert(llEncoding.has_value() && "invalid dot layout to linear layout");
+    assert(llEncoding.has_value() &&
+           "unexpected failure when getting linear layout");
+
+    constexpr unsigned MAX_TILE_HEIGHT = 32;
+    BlockIOTileSizeInfo sizeInfo =
+        getBlockIOTileSize<MAX_TILE_HEIGHT>(llEncoding.value());
+    if (!sizeInfo.isValid())
+      return failure();
+    auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
+          regPackedBases] = std::move(sizeInfo);
+
+    Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
+    unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
+    unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
+    if (!check2DBlockAddressPayloadRestriction(packedElemSizeInBits, tileWidth))
+      return failure();
+
+    // 2D block load supports 64 bytes per row at most.
+    constexpr int MAX_WIDTH = 64;
+    unsigned totalBytesPerRowPerMatrix = tileWidth * packedElemSizeInBits / 8;
+    if (totalBytesPerRowPerMatrix > MAX_WIDTH)
+      return failure();
+
+    // Load multiple dot operands by enlarging the vBlocks.
+    vBlocks = std::min(vBlocks,
+                       static_cast<int>(MAX_WIDTH / totalBytesPerRowPerMatrix));
+    // vBlocks has HW limitation of 4.
+    vBlocks = std::min(vBlocks, 4);
+
     auto llAttr = LinearEncodingAttr::get(rewriter.getContext(), *llEncoding);
     SmallVector<unsigned> threadOrder(llAttr.getThreadOrder());
     size_t rank = threadOrder.size();
@@ -1887,8 +1920,6 @@ struct LoadOpToBlockIOConversion
 
     // Step 2: Right now we only support DPAS related layout to simplify the
     // lowering.
-    Type eltTy = tensorType.getElementType();
-    unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
     DpasEncodingAttr dpasLayout = getDpasLayout(tensorType);
     const ArrayRef<int64_t> tensorShape = tensorType.getShape();
     unsigned numElems = getTotalElemsPerThread(resultType);
@@ -2016,9 +2047,9 @@ struct LoadOpToBlockIOConversion
         std::min<unsigned>(warpsPerCTA[dimInner], innerDimRequiredWarpNum);
 
     // Step 3: Get the tile size of load.
-    unsigned tileWidth = dpasInstShape[threadOrder[rank - 2]];
-    unsigned tileHeight = dpasInstShape[threadOrder[rank - 1]];
-    unsigned vBlocks = 1;
+    tileWidth = dpasInstShape[threadOrder[rank - 2]];
+    tileHeight = dpasInstShape[threadOrder[rank - 1]];
+    vBlocks = 1;
     unsigned numOperandsOuterDimPerLoad = 1;
     unsigned numOperandsInnerDimPerLoad = 1;
     unsigned maskConstancyHor = 1, maskConstancyVer = 1;
@@ -2145,11 +2176,12 @@ struct LoadOpToBlockIOConversion
 
     // PVC 2D load supports 32 rows at most. Load multiple dot operands in by
     // enlarging the tileHeight.
-    numOperandsPer2DLoadM = std::min(numOperandsPer2DLoadM, 32 / tileHeight);
+    numOperandsPer2DLoadM =
+        std::min(numOperandsPer2DLoadM,
+                 static_cast<unsigned>(MAX_TILE_HEIGHT / tileHeight));
 
     // PVC 2D load supports 64 bytes per row at most. Load multiple dot operands
     // by enlarging the vBlocks.
-    constexpr int MAX_WIDTH = 64;
     unsigned totalBytesPerRowPerDPASOp = tileWidth * elemSizeInBits / 8;
     if (totalBytesPerRowPerDPASOp > MAX_WIDTH)
       return failure();
@@ -2209,9 +2241,6 @@ struct LoadOpToBlockIOConversion
 
     Value pitch = getPitch(rewriter, ptr, elemSizeInBits);
     if (!pitch)
-      return failure();
-
-    if (!check2DBlockAddressPayloadRestriction(elemSizeInBits, tileWidth))
       return failure();
 
     // If the stride is 0, we want to load only the first row.
@@ -2720,13 +2749,8 @@ struct StoreOpToBlockIOConversion
     if (!isBlockIOCandidate(op, enableBlockIOForAllLayout))
       return failure();
 
-    Location loc = op.getLoc();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    Type resultType = op.getValue().getType();
-    auto tensorType = cast<RankedTensorType>(resultType);
-    MLIRContext *ctx = rewriter.getContext();
-
     // Get the max tile shape supported by the layout.
+    auto tensorType = cast<RankedTensorType>(op.getValue().getType());
     Attribute encoding = tensorType.getEncoding();
     std::optional<LinearLayout> llEncoding =
         cast<DistributedEncodingTrait>(encoding).toLinearLayout(
@@ -2734,21 +2758,21 @@ struct StoreOpToBlockIOConversion
     assert(llEncoding.has_value() &&
            "unexpected failure when getting linear layout");
 
-    auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
-          regPackedBases] =
-        getBlockIOTileSize<8 /*MAX_TILE_HEIGHT*/>(*llEncoding);
-    // Limit vBlock to 1
-    vBlocks = 1;
-    // no valid tile shape for 2D block IO.
-    if (colDim < 0)
+    BlockIOTileSizeInfo sizeInfo =
+        getBlockIOTileSize<8 /*MAX_TILE_HEIGHT*/>(llEncoding.value());
+    if (!sizeInfo.isValid())
       return failure();
+    auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
+          regPackedBases] = std::move(sizeInfo);
 
     Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
     unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
-    unsigned numElems = getTotalElemsPerThread(tensorType);
     if (!check2DBlockAddressPayloadRestriction(packedElemSizeInBits, tileWidth))
       return failure();
+
+    // Limit vBlock to 1
+    vBlocks = 1;
 
     // TODO: use the axis info to general the handling for both regular pointer
     // and block pointer.
@@ -2759,6 +2783,9 @@ struct StoreOpToBlockIOConversion
       return failure();
     }
 
+    Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    MLIRContext *ctx = rewriter.getContext();
     Value warpId = rewriter.create<arith::IndexCastOp>(
         loc, i32_ty,
         rewriter.create<mlir::gpu::SubgroupIdOp>(loc,
@@ -2770,6 +2797,7 @@ struct StoreOpToBlockIOConversion
     Value baseWidth, baseHeight, pitch, offsetBaseX, offsetBaseY;
 
     Value ptr = op.getPtr();
+    unsigned numElems = getTotalElemsPerThread(tensorType);
     bool isBlockPointer = isTensorPointerType(ptr.getType());
     if (isBlockPointer) {
       auto [base, width, height, rowStride, colStride, offsetX, offsetY] =
@@ -2794,7 +2822,6 @@ struct StoreOpToBlockIOConversion
              "the number of pointer values is not matched with the number of "
              "elements");
 
-      unsigned maskConstancyHor = 1, maskConstancyVer = 1;
       Value llMask = adaptor.getMask();
       // Get the LLVM values for mask
       if (llMask) {
@@ -2806,23 +2833,22 @@ struct StoreOpToBlockIOConversion
         auto axisInfo = const_cast<triton::intel::ModuleAxisInfoAnalysis &>(
                             axisAnalysisPass)
                             .getAxisInfo(mask);
+        unsigned maskConstancyHor = 1, maskConstancyVer = 1;
         if (axisInfo) {
           maskConstancyHor = axisInfo->getConstancy(colDim);
           maskConstancyVer = axisInfo->getConstancy(rowDim);
-        } else {
-          maskConstancyHor = 1;
-          maskConstancyVer = 1;
+          // The mask constancy has to be power of 2 for block IO.
+          if (!llvm::isPowerOf2_64(maskConstancyHor) ||
+              !llvm::isPowerOf2_64(maskConstancyVer))
+            return failure();
         }
-      } else {
-        // no mask
-        maskConstancyHor = std::numeric_limits<unsigned>::max();
-        maskConstancyVer = std::numeric_limits<unsigned>::max();
-      }
 
-      // Check the constancy of the mask support to load the memory in 2D block.
-      if (!(maskConstancyHor >= (tileWidth * numPackedVals) &&
-            maskConstancyVer >= tileHeight))
-        return failure();
+        // Check the constancy of the mask support to load the memory in 2D
+        // block.
+        if (!(maskConstancyHor >= (tileWidth * numPackedVals) &&
+              maskConstancyVer >= tileHeight))
+          return failure();
+      }
 
       baseWidth = b.i32_val(
           std::max(64u, vBlocks * tileWidth * (packedElemSizeInBits / 8)));
@@ -3173,37 +3199,54 @@ struct AtomicCASOpConversion
                                                ? *getMemoryOrdering(memSem)
                                                : LLVM::AtomicOrdering::acq_rel;
     LLVM::AtomicOrdering failureOrdering = LLVM::AtomicOrdering::monotonic;
+
+    bool support16BitAtomics = moduleOp->hasAttr(
+        TritonIntelGPUDialect::getSupport16BitAtomicsAttrName());
+
     for (size_t i = 0; i < elemsPerThread; ++i) {
       Value casPtr = ptrElements[i];
       Value casCmp = cmpElements[i];
       Value casVal = valElements[i];
 
-      assert((valueElemNBits == 32 || valueElemNBits == 64) &&
+      assert((valueElemNBits == 16 || valueElemNBits == 32 ||
+              valueElemNBits == 64) &&
              "Unexpected width");
 
-      Value zero = (valueElemNBits == 32) ? b.i32_val(0) : b.i64_val(0);
-      if (op.getResult().use_empty())
-        rewriter.create<TritonGEN::BarrierOp>(loc, TritonGEN::MemFence::GLOBAL);
-
-      auto createAtomicCASInstruction = [&]() -> SmallVector<Value, 1> {
-        // casPtr = b.bitcast(casPtr, ptr_ty(ctx, 1));
-        casCmp = b.bitcast(casCmp, zero.getType());
-        casVal = b.bitcast(casVal, zero.getType());
-
-        auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
-            loc, casPtr, casCmp, casVal, successOrdering, failureOrdering);
-        Value newLoaded =
-            rewriter.create<LLVM::ExtractValueOp>(loc, cmpxchg, 0);
-        return SmallVector<Value, 1>{newLoaded};
-      };
-
       Value ret;
-      if (mask) {
-        Block &endBlock = LLVM::intel::createPredicatedBlock(
-            rewriter, loc, mask, {zero}, createAtomicCASInstruction);
-        ret = endBlock.getArgument(0);
+      Value zero = b.int_val(valueElemNBits, 0);
+      if (valueElemNBits == 16 && !support16BitAtomics) {
+        op.emitWarning("'tt.atomic_cas' op fp16/bf16 datatype is not supported "
+                       "in the target HW, software emulation is an "
+                       "experimental feature (use at own risk)");
+
+        Block *endBlock =
+            emulate16BitsCAS(rewriter, loc, casPtr, casCmp, casVal,
+                             mask ? mask : b.true_val(), {zero});
+        ret = endBlock->getArgument(0);
       } else {
-        ret = createAtomicCASInstruction()[0];
+        if (op.getResult().use_empty())
+          rewriter.create<TritonGEN::BarrierOp>(loc,
+                                                TritonGEN::MemFence::GLOBAL);
+
+        auto createAtomicCASInstruction = [&]() -> SmallVector<Value, 1> {
+          Value localCasCmp = b.bitcast(casCmp, zero.getType());
+          Value localCasVal = b.bitcast(casVal, zero.getType());
+
+          auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
+              loc, casPtr, localCasCmp, localCasVal, successOrdering,
+              failureOrdering);
+          Value newLoaded =
+              rewriter.create<LLVM::ExtractValueOp>(loc, cmpxchg, 0);
+          return SmallVector<Value, 1>{newLoaded};
+        };
+
+        if (mask) {
+          Block &endBlock = LLVM::intel::createPredicatedBlock(
+              rewriter, loc, mask, {zero}, createAtomicCASInstruction);
+          ret = endBlock.getArgument(0);
+        } else {
+          ret = createAtomicCASInstruction()[0];
+        }
       }
 
       ret = b.bitcast(ret, valueElemTy);
@@ -3231,6 +3274,74 @@ struct AtomicCASOpConversion
                                   getTypeConverter());
     }
     return success();
+  }
+
+  Block *emulate16BitsCAS(ConversionPatternRewriter &rewriter, Location loc,
+                          Value casPtr, Value casCmp, Value casVal, Value mask,
+                          ArrayRef<Value> ops) const {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    Block *insertionBlock = rewriter.getInsertionBlock();
+    Block *headerBlock =
+        rewriter.splitBlock(insertionBlock, rewriter.getInsertionPoint());
+    Block *endBlock = rewriter.splitBlock(headerBlock, headerBlock->begin());
+
+    rewriter.setInsertionPointToEnd(insertionBlock);
+    rewriter.create<cf::CondBranchOp>(loc, mask, headerBlock, endBlock, ops);
+    rewriter.setInsertionPointToStart(headerBlock);
+
+    casCmp = b.bitcast(casCmp, i16_ty);
+    casVal = b.bitcast(casVal, i16_ty);
+
+    auto intPtr = b.ptrtoint(i64_ty, casPtr);
+    auto lowPtrBits = b.and_(intPtr, b.i64_val(3));
+    auto elemIndex = b.trunc(i32_ty, b.lshr(lowPtrBits, b.i64_val(1)));
+    auto alignedPtr =
+        b.inttoptr(casPtr.getType(), b.sub(intPtr, lowPtrBits).getResult());
+
+    auto firstValInt = b.load(i32_ty, alignedPtr, 4, false, false, false, false,
+                              LLVM::AtomicOrdering::acquire);
+
+    Block *bodyBlock =
+        rewriter.splitBlock(headerBlock, rewriter.getInsertionPoint());
+    auto origValInt =
+        bodyBlock->addArgument(firstValInt.getType(), firstValInt.getLoc());
+    rewriter.setInsertionPointToEnd(headerBlock);
+    rewriter.create<cf::BranchOp>(loc, bodyBlock,
+                                  SmallVector<Value, 1>{firstValInt});
+    rewriter.setInsertionPointToStart(bodyBlock);
+
+    auto origValVec = b.bitcast(origValInt, vec_ty(i16_ty, 2));
+    auto origVal = b.extract_element(origValVec, elemIndex);
+
+    Value isEqual = b.icmp_eq(origVal, casCmp);
+
+    Block *casBlock =
+        rewriter.splitBlock(bodyBlock, rewriter.getInsertionPoint());
+    rewriter.setInsertionPointToEnd(bodyBlock);
+    SmallVector<Value, 1> exitOps = {origVal};
+    rewriter.create<cf::CondBranchOp>(loc, isEqual, casBlock, ValueRange{},
+                                      endBlock, exitOps);
+    rewriter.setInsertionPointToStart(casBlock);
+
+    Value newValVec = b.insert_element(origValVec, casVal, elemIndex);
+    Value newValInt = b.bitcast(newValVec, i32_ty);
+
+    auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
+        loc, alignedPtr, origValInt, newValInt, LLVM::AtomicOrdering::acq_rel,
+        LLVM::AtomicOrdering::monotonic);
+
+    auto newLoaded = b.extract_val(cmpxchg, 0);
+    auto done = b.extract_val(cmpxchg, 1);
+
+    SmallVector<Value, 1> endOps = {origVal};
+    rewriter.create<cf::CondBranchOp>(loc, done, endBlock, endOps, bodyBlock,
+                                      SmallVector<Value, 1>{newLoaded});
+
+    for (Value op : ops)
+      endBlock->addArgument(op.getType(), op.getLoc());
+
+    rewriter.setInsertionPointToStart(endBlock);
+    return endBlock;
   }
 };
 

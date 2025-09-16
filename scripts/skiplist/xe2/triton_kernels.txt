@@ -1,0 +1,2 @@
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/5074
+tests/test_matmul.py::test_op

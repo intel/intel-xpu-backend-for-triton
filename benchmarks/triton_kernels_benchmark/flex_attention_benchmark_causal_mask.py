@@ -3,12 +3,10 @@ from functools import lru_cache
 import os
 from torch.nn.attention.flex_attention import (
     create_block_mask,
-    create_mask,
     flex_attention,
 )
 
 import torch
-import torch.nn.functional as F
 import torch._inductor
 import torch._inductor.lowering
 import torch._inductor.kernel
@@ -74,6 +72,7 @@ def causal_mask(_, __, q_idx, kv_idx):
 throughput_test = os.getenv('THROUGHPUT_TEST', '0') == '1'
 batch_size = int(os.getenv('BATCH_SIZE', '1'))
 batch_sizes = [16, 32, 64] if throughput_test else [batch_size]
+fa_kernel_mode = os.getenv('FA_KERNEL_MODE', 'fwd')
 
 
 # Kernel profiling for Backward mode is not working as expected:
@@ -84,48 +83,48 @@ batch_sizes = [16, 32, 64] if throughput_test else [batch_size]
         x_vals=
         # Multi-head attention. H_q equals H_kv
         # Prefill shapes of Phi3-mini-3.8B
-        [[z, 32, 32, 1024, 1024, 96, 96, 'fwd'] for z in batch_sizes] +
+        [[z, 32, 32, 1024, 1024, 96, 96, fa_kernel_mode] for z in batch_sizes] +
         # Prefill shapes of Deepseek-v3
-        [[z, 128, 128, 1024, 1024, 192, 128, 'fwd'] for z in batch_sizes] +
+        [[z, 128, 128, 1024, 1024, 192, 128, fa_kernel_mode] for z in batch_sizes] +
         # Append shapes of Phi3-mini-3.8B
-        [[z, 32, 32, 512, 1024 + 128 + 512, 96, 96, 'fwd'] for z in batch_sizes] +
+        [[z, 32, 32, 512, 1024 + 128 + 512, 96, 96, fa_kernel_mode] for z in batch_sizes] +
 
         # Multi-query attention. H_kv equals 1.
         # Append shapes of Deepseek-v3 (Nope)
-        [[z, 128, 1, 512, 1024 + 128 + 512, 64, 512, 'fwd'] for z in batch_sizes] +
+        [[z, 128, 1, 512, 1024 + 128 + 512, 64, 512, fa_kernel_mode] for z in batch_sizes] +
         # Append shapes of Deepseek-v3 (Rope)
         [] +
 
         # Grouped-query attention. H_q / H_kv > 1
         # Prefill shapes of Llama-3.1-8B
-        [[z, 32, 8, 1024, 1024, 128, 128, 'fwd'] for z in batch_sizes] +
+        [[z, 32, 8, 1024, 1024, 128, 128, fa_kernel_mode] for z in batch_sizes] +
         # Prefill shapes of Qwen2-7B
-        [[z, 28, 4, 1024, 1024, 128, 128, 'fwd'] for z in batch_sizes] +
+        [[z, 28, 4, 1024, 1024, 128, 128, fa_kernel_mode] for z in batch_sizes] +
         # Append shapes of Llama-3.1-8B
-        [[z, 32, 8, 512, 1024 + 128 + 512, 128, 128, 'fwd'] for z in batch_sizes] +
+        [[z, 32, 8, 512, 1024 + 128 + 512, 128, 128, fa_kernel_mode] for z in batch_sizes] +
         # Append shapes of Qwen2-7B
-        [[z, 28, 4, 512, 1024 + 128 + 512, 128, 128, 'fwd'] for z in batch_sizes] +
+        [[z, 28, 4, 512, 1024 + 128 + 512, 128, 128, fa_kernel_mode] for z in batch_sizes] +
 
         # FlexDecoding configuration. N_CTX_q equals 1. N_CTX_kv >= 1k
         # Decode shapes of Llama-3.1-8B
-        [[z, 32, 8, 1, 1024 + 64, 128, 128, 'fwd'] for z in batch_sizes] +
+        [[z, 32, 8, 1, 1024 + 64, 128, 128, fa_kernel_mode] for z in batch_sizes] +
         # Decode shapes of Phi3-mini-3.8B
         [
             # acc = acc.reshape(G, BLOCK_M_PER_HQ, V_HEAD_DIM)
             # ValueError: Shape element 2 must be a power of 2
-            # [z, 32, 32, 1, 1024 + 64, 96, 96, 'fwd'] for z in batch_sizes
+            # [z, 32, 32, 1, 1024 + 64, 96, 96, fa_kernel_mode] for z in batch_sizes
         ] +
         # Decode shapes of Qwen2-7B
         [
             # torch._inductor.exc.InductorError: LoweringException: ValueError: Number of shared query heads sharing the same KV head must be power of 2.
-            # [z, 28, 4, 1, 1024 + 64, 128, 128, 'fwd'] for z in batch_sizes
+            # [z, 28, 4, 1, 1024 + 64, 128, 128, fa_kernel_mode] for z in batch_sizes
         ] +
         # Decode shapes of Deepseek-v3 (Nope)
         [
             # There is an known issue in IGC for kernel with extreme register pressure.
             # Enable this case later with new IGC.
             # RuntimeError: ZE_RESULT_ERROR_INVALID_KERNEL_NAME
-            # [z, 128, 1, 1, 1024, 64, 512, 'fwd'] for z in batch_sizes
+            # [z, 128, 1, 1, 1024, 64, 512, fa_kernel_mode] for z in batch_sizes
         ] +
         # Decode shapes of Deepseek-v3 (Rope)
         [],
@@ -138,52 +137,55 @@ batch_sizes = [16, 32, 64] if throughput_test else [batch_size]
         args={},
     ))
 def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provider):
-    assert MODE in ['fwd']
+    if MODE not in ('fwd', 'bwd'):
+        raise ValueError(f"Invalid MODE: {MODE}. Expected 'fwd' or 'bwd'.")
     dtype = torch.float16
     q = torch.randn((Z, H_q, N_CTX_q, D_HEAD_qk), device=DEVICE, dtype=dtype, requires_grad=MODE == 'bwd')
     k = torch.randn((Z, H_kv, N_CTX_kv, D_HEAD_qk), device=DEVICE, dtype=dtype, requires_grad=MODE == 'bwd')
     v = torch.randn((Z, H_kv, N_CTX_kv, D_HEAD_v), device=DEVICE, dtype=dtype, requires_grad=MODE == 'bwd')
     sm_scale = 0.125
-    if MODE == 'bwd':
-        sm_scale = 1.3
 
     quantiles = [0.5, 0.0, 1.0]
     block_mask = create_block_mask_cached(causal_mask, 1, 1, N_CTX_q, N_CTX_kv, device=DEVICE)
     torch_fn = lambda: flex_attention(q, k, v, block_mask=block_mask, scale=sm_scale, enable_gqa=not H_q == H_kv)
 
     if provider == 'torch':
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(torch_fn, n_warmup=10, n_repeat=10, quantiles=quantiles,
-                                                              device=DEVICE)
+        if MODE == 'bwd':
+            min_ms = float('nan')
+            max_ms = float('nan')
+            mean = float('nan')
+            cv = float('nan')
+        else:
+            _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(torch_fn, n_warmup=10, n_repeat=10,
+                                                                  quantiles=quantiles, device=DEVICE)
 
     elif provider == 'triton':
-        kernel_options = {'BLOCKS_ARE_CONTIGUOUS': True}
+        kernel_options = {'BLOCKS_ARE_CONTIGUOUS': True, 'USE_TMA': True}
         triton_fn = lambda: compiled_flex_attention(q, k, v, block_mask=block_mask, scale=sm_scale, enable_gqa=(
             not H_q == H_kv), kernel_options=kernel_options)
         if MODE == 'bwd':
+            torch_o = torch_fn()
+            backwards_grad = torch.randn_like(torch_o)
+            torch_grads = torch.autograd.grad((torch_o, ), (q, k, v), backwards_grad, retain_graph=True)
+            eager_tensors = (torch_o, *torch_grads)
             triton_o = triton_fn()
-            triton_do = torch.randn_like(triton_o)
-            triton_fn = lambda: triton_o.backward(triton_do, retain_graph=True)
+            triton_grads = torch.autograd.grad((triton_o, ), (q, k, v), backwards_grad, retain_graph=True)
+            compiled_tensors = (triton_o, *triton_grads)
 
-        benchmark_suit.assert_close(triton_fn, torch_fn, atol=1e-2, rtol=1e-3, err_msg='triton to torch')
+            tensor_names = ['out', 'grad_query', 'grad_key', 'grad_value']
+            for eager, compiled, name in zip(eager_tensors, compiled_tensors, tensor_names):
+                benchmark_suit.assert_close(lambda: eager, lambda: compiled, atol=1e-2, rtol=1e-3,  # pylint: disable=cell-var-from-loop
+                                            err_msg=f'Error comparing {name} between triton and torch')
+
+            triton_fn = lambda: torch.autograd.grad((triton_o, ), (q, k, v), backwards_grad, retain_graph=True)
+        else:
+            benchmark_suit.assert_close(triton_fn, torch_fn, atol=1e-2, rtol=1e-3, err_msg='triton to torch')
 
         # Needs more warmup on B580 for some reason
         benchmark_suit.do_prewarmup(triton_fn)
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=200, n_repeat=10, quantiles=quantiles,
-                                                              device=DEVICE)
-
-    elif provider == 'onednn':
-        # OneDNN only supports MHA.
-        if H_q == H_kv:
-            mask = create_mask(causal_mask, 1, 1, N_CTX_q, N_CTX_kv, device=q.device)
-            xformers_fn = lambda: F.scaled_dot_product_attention(q, k, v, attn_mask=mask)
-            if MODE == 'bwd':
-                xformers_o = xformers_fn()
-                xformers_do = torch.randn_like(xformers_o)
-                xformers_fn = lambda: xformers_o.backward(xformers_do, retain_graph=True)
-            _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xformers_fn, n_warmup=10, n_repeat=10,
-                                                                  quantiles=quantiles)
-        else:
-            _, min_ms, max_ms, mean, cv = float('nan'), float('nan'), float('nan'), float('nan'), float('nan')
+        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(
+            triton_fn, n_warmup=200, n_repeat=10, quantiles=quantiles, device=DEVICE, grad_to_none=(q, k, v),
+            benchmark_label=None if MODE == 'fwd' else 'CompiledFunctionBackward')
 
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
@@ -198,9 +200,9 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
     gbps = lambda mean: Z * (q_elems + k_elems + v_elems) * 2 * (1e-9) / (mean * 1e-3)  # float16 2 bytes
 
     if MODE == 'bwd':
-        tflops = lambda mean: 2.5 * 2 * 2 * Z * H_q * N_CTX_q * N_CTX_kv * D_HEAD_qk * (1e-12) / (mean * 1e-3)
-        gbps = lambda mean: 2.5 * Z * H_q * (N_CTX_q * D_HEAD_qk + N_CTX_kv * D_HEAD_qk) * 2 * 2 * (1e-9) / (mean * 1e-3
-                                                                                                             )
+        # The tflops and gbps are aligned to the one in flash_attention_benchmark.
+        tflops = lambda mean: 2.5 * Z * (qk_flops + pv_flops) * (1e-12) / (mean * 1e-3)
+        gbps = lambda mean: 2.5 * Z * (q_elems + k_elems + v_elems) * 2 * (1e-9) / (mean * 1e-3)
 
     return (gbps(mean), gbps(max_ms), gbps(min_ms)), (tflops(mean), tflops(max_ms), tflops(min_ms)), cv
 
