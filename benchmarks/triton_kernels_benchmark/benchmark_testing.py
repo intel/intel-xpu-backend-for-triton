@@ -146,15 +146,15 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
         i = 0
         while i < max_iters and time.perf_counter() - start < warmup_time_s:
             fn()
-            if sync_submitting:
-                synchronize()
+            synchronize()
             i += 1
         print(f"Stopped warmup after {i} iterations")
     else:
         for _ in range(n_warmup):
             fn()
             # To be consistent with the benchmark measurements
-            synchronize()
+            if sync_submitting:
+                synchronize()
 
     # Benchmark
     with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.XPU]) as prof:
