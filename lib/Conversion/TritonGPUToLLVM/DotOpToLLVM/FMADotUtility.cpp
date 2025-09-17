@@ -218,6 +218,7 @@ LogicalResult parametricConvertFMADot(DotOp op, DotOp::Adaptor adaptor,
                << " " << repetitions[2] << "\n";
   llvm::errs() << "sizePerThread: " << sizePerThread[0] << " "
                << sizePerThread[1] << " " << sizePerThread[2] << "\n";
+  llvm::errs() << "K = " << K << "\n";
 
   auto mod = op->getParentOfType<ModuleOp>();
   llvm::errs() << "at line: " << __LINE__ << "\n";
@@ -279,7 +280,7 @@ LogicalResult genFMALoop(DotOp op, ValueTableFMA &has, ValueTableFMA &hbs,
   Location loc = op.getLoc();
   auto builder = TritonLLVMOpBuilder(loc, rewriter);
 
-  // Copy struct into vector for operand A,B.C.
+  // Copy struct into vector for operand A,B,C.
   SmallVector<Value> aOpVector, bOpVector;
   for (unsigned bRep = 0; bRep < repetitions[0]; ++bRep)
     for (unsigned mRep = 0; mRep < repetitions[1]; ++mRep)
@@ -298,8 +299,9 @@ LogicalResult genFMALoop(DotOp op, ValueTableFMA &has, ValueTableFMA &hbs,
 
   auto getFragment = [&](Value vec, Value iv, unsigned size) {
     SmallVector<Value> elems;
+    Value idx = builder.mul(iv, builder.i32_val(size));
     for (unsigned i = 0; i < size; ++i) {
-      Value idx = (i != 0) ? builder.add(iv, builder.i32_val(i)) : iv;
+      idx = (i != 0) ? builder.add(idx, builder.i32_val(i)) : idx;
       elems.push_back(builder.extract_element(vec, idx));
     }
     return elems;
@@ -316,6 +318,7 @@ LogicalResult genFMALoop(DotOp op, ValueTableFMA &has, ValueTableFMA &hbs,
           // Generate the outer loop.
           Value outerUB = builder.i32_val(sizePerThread[1]);
           Value outerStep = builder.i32_val(sizePerThread[2]);
+
           LoopInfo outerLoopInfo =
               createEmptyLoop(createIV(zero, rewriter, loc), outerUB, outerStep,
                               {vecC}, rewriter, loc);
@@ -331,7 +334,7 @@ LogicalResult genFMALoop(DotOp op, ValueTableFMA &has, ValueTableFMA &hbs,
           SmallVector<Value> AElems = getFragment(vecA, outerIV, K);
 
           // Generate the inner loop.
-          Value innerUB = outerStep;
+          Value innerUB = builder.i32_val(sizePerThread[2]);
           Value innerStep = one;
           Value initArg =
               outerBody->getArgument(outerBody->getNumArguments() - 1);
@@ -352,21 +355,8 @@ LogicalResult genFMALoop(DotOp op, ValueTableFMA &has, ValueTableFMA &hbs,
               innerBody->getArgument(innerBody->getNumArguments() - 1);
           Value acc = builder.extract_element(innerInitArg, accIdx);
 
-#if 1
           // Perform the FMAs.
           acc = multiplier.multiplyVectors(AElems, BElems, acc);
-#else
-          for (unsigned k = 0; k < K; ++k) {
-            TypeSwitch<Type>(elemType)
-                .Case<FloatType>([&](auto) {
-                  acc = rewriter.create<LLVM::FMulAddOp>(loc, AElems[k],
-                                                         BElems[k], acc);
-                })
-                .Case<IntegerType>([&](auto) {
-                  acc = builder.fma(AElems[k], BElems[k], acc);
-                });
-          }
-#endif
 
           // Store the result.
           innerInitArg = builder.insert_element(innerInitArg, acc, accIdx);
