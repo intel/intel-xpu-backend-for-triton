@@ -386,9 +386,10 @@ LogicalResult genFMALoop(DotOp op, ValueTableFMA &has, ValueTableFMA &hbs,
   Value ub = builder.i32_val(acc.size());
   auto structPtr =
       rewriter.create<LLVM::AllocaOp>(loc, ptr_ty(ctx), elemType, ub);
-  Value iv = createIV(zero, rewriter, loc);
-  LoopInfo loopInfo = createEmptyLoop(iv, ub, one, vecD, rewriter, loc);
+  LoopInfo loopInfo = createEmptyLoop(createIV(zero, rewriter, loc), ub, one,
+                                      vecD, rewriter, loc);
   Block *body = loopInfo.body;
+  Value iv = body->getArgument(0);
   auto afterLoop = rewriter.saveInsertionPoint();
   rewriter.setInsertionPointToStart(body);
   Value val = builder.extract_element(
