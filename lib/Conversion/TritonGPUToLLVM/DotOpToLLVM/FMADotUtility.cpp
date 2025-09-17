@@ -152,7 +152,7 @@ namespace mlir::triton::gpu {
 
 LogicalResult genFMALoop(DotOp, ValueTableFMA &, ValueTableFMA &,
                          ArrayRef<Value>, ArrayRef<unsigned>,
-                         ArrayRef<unsigned>, unsigned, Type,
+                         ArrayRef<unsigned>, const unsigned, Type,
                          ConversionPatternRewriter &, FMAVectorMultiplier &);
 
 LogicalResult parametricConvertFMADot(DotOp op, DotOp::Adaptor adaptor,
@@ -272,8 +272,8 @@ LogicalResult parametricConvertFMADot(DotOp op, DotOp::Adaptor adaptor,
 
 LogicalResult genFMALoop(DotOp op, ValueTableFMA &has, ValueTableFMA &hbs,
                          ArrayRef<Value> acc, ArrayRef<unsigned> sizePerThread,
-                         ArrayRef<unsigned> repetitions, unsigned K, Type dType,
-                         ConversionPatternRewriter &rewriter,
+                         ArrayRef<unsigned> repetitions, const unsigned K,
+                         Type dType, ConversionPatternRewriter &rewriter,
                          FMAVectorMultiplier &multiplier) {
   ModuleOp mod = op->getParentOfType<ModuleOp>();
   MLIRContext *ctx = rewriter.getContext();
@@ -301,7 +301,8 @@ LogicalResult genFMALoop(DotOp op, ValueTableFMA &has, ValueTableFMA &hbs,
     SmallVector<Value> elems;
     Value idx = builder.mul(iv, builder.i32_val(size));
     for (unsigned i = 0; i < size; ++i) {
-      idx = (i != 0) ? builder.add(idx, builder.i32_val(i)) : idx;
+      // TODO: use a increment rather than an add here ?
+      idx = (i != 0) ? builder.add(idx, builder.i32_val(1)) : idx;
       elems.push_back(builder.extract_element(vec, idx));
     }
     return elems;
