@@ -1867,9 +1867,12 @@ struct LoadOpToBlockIOConversion
     Type resultType = op.getType();
     auto tensorType = cast<RankedTensorType>(resultType);
 
-    // Step 1: Right now we only support 2D rank matrix of row major or column
-    // major.
+    // Step 1: Right now we only support 2D rank matrix of row major.
     const bool memoryRowMajor = isMemoryRowMajor(op);
+    // FIXME: Add support of column major.
+    if (!memoryRowMajor)
+      return failure();
+
     DpasEncodingAttr::OpIdx opIdx = getOpIdx(tensorType);
 
     Attribute encoding = tensorType.getEncoding();
@@ -1912,12 +1915,8 @@ struct LoadOpToBlockIOConversion
       // only support rank of 2 for now.
       return failure();
     }
-    const bool valueRowMajor =
-        (threadOrder[rank - 2] == 1 && threadOrder[rank - 1] == 0);
-    assert((valueRowMajor ||
-            (threadOrder[rank - 2] == 0 && threadOrder[rank - 1] == 1)) &&
-           "Only row_major or column_major is allowed");
-    const bool isTransposeRequired = valueRowMajor ^ memoryRowMajor;
+    unsigned contiguousDim = memoryRowMajor ? 1 : 0;
+    const bool isTransposeRequired = contiguousDim != colDim;
 
     // Step 2: Right now we only support DPAS related layout to simplify the
     // lowering.
@@ -2240,13 +2239,15 @@ struct LoadOpToBlockIOConversion
       break;
     }
 
+    assert(memoryRowMajor || !getPitch(rewriter, ptr, elemSizeInBits, 0) &&
+                                 "Ensure column major was never supported");
     Value pitch =
         getPitch(rewriter, ptr, elemSizeInBits, memoryRowMajor ? 0 : 1);
     if (!pitch)
       return failure();
 
     // If the stride is 0, we want to load only the first row.
-    int stride = getStride(ptr, 0);
+    int stride = getStride(ptr, memoryRowMajor ? 0 : 1);
     unsigned baseHeightInt = (stride == 0 ? 1 : tileHeight);
     Value baseHeight = b.i32_val(baseHeightInt);
     Value baseWidth =
