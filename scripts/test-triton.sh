@@ -599,7 +599,7 @@ run_liger_tests() {
   fi
 
   if ! pip list | grep "liger_kernel" ; then
-    pip install pytest-cov transformers pandas pytest datasets -e Liger-Kernel
+    pip install pytest-xdist pytest-cov transformers pandas pytest datasets -e Liger-Kernel
   fi
 
   echo "RUNNING"
@@ -620,7 +620,7 @@ run_vllm_tests() {
   fi
 
   if ! pip list | grep "vllm" ; then
-    pip install vllm/requirements/xpu.txt
+    pip install -r vllm/requirements/xpu.txt
 
     git clone https://github.com/vllm-project/vllm-xpu-kernels
     cd vllm-xpu-kernels
