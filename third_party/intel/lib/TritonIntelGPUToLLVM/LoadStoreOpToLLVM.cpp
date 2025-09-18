@@ -1863,7 +1863,6 @@ struct LoadOpToBlockIOConversion
       return rewriteTensorPointerLoad(op, adaptor, rewriter);
 
     Value mask = op.getMask();
-    Value other = op.getOther();
     Type resultType = op.getType();
     auto tensorType = cast<RankedTensorType>(resultType);
 
@@ -2056,16 +2055,12 @@ struct LoadOpToBlockIOConversion
     unsigned instWidth = dpasInstShape[threadOrder[rank - 2]];
     unsigned instHeight = dpasInstShape[threadOrder[rank - 1]];
 
-    bool otherIsSplatConstInt = false;
-    int64_t splatVal = 0;
-
     std::map<SmallVector<unsigned>, Value> ptrs;
     std::map<SmallVector<unsigned>, Value> masks;
     std::map<SmallVector<unsigned>, Value> others;
 
     Value llPtr = adaptor.getPtr();
     Value llMask = adaptor.getMask();
-    Value llOther = adaptor.getOther();
 
     SmallVector<Value> ptrElems, maskElems, otherElems;
     // Get the LLVM values for pointers
@@ -2101,14 +2096,17 @@ struct LoadOpToBlockIOConversion
       return failure();
 
     // Get the LLVM values for `other`
+    Value other = op.getOther();
+    Value llOther = adaptor.getOther();
     DenseElementsAttr constAttr;
     if (other && isa<IntegerType>(eltTy) &&
         matchPattern(other, m_Constant(&constAttr)) && constAttr.isSplat() &&
         isa<IntegerType>(constAttr.getElementType())) {
-      otherIsSplatConstInt = true;
-      splatVal = constAttr.getSplatValue<APInt>().getSExtValue();
-    }
-    if (other) {
+      int64_t splatVal = constAttr.getSplatValue<APInt>().getSExtValue();
+      if (splatVal != 0)
+        otherElems =
+            SmallVector<Value>(numElems, b.int_val(elemSizeInBits, splatVal));
+    } else if (other) {
       otherElems = unpackLLElements(loc, llOther, rewriter);
     }
 
