@@ -599,7 +599,7 @@ run_liger_tests() {
   fi
 
   if ! pip list | grep "liger_kernel" ; then
-    pip install pytest-xdist pytest-cov transformers pandas pytest datasets -e Liger-Kernel
+    pip install pytest pytest-xdist pytest-cov transformers pandas pytest datasets -e Liger-Kernel
   fi
 
   echo "RUNNING"
@@ -634,7 +634,7 @@ run_vllm_tests() {
   fi
 
   cd vllm
-  pip install pytest cachetools cbor2 blake3 pybase64 openai_harmony tblib
+  pip install pytest pytest-cov pytest-xdist cachetools cbor2 blake3 pybase64 openai_harmony tblib
 
   local ret=0
   run_pytest_command -vvv tests/kernels/moe/test_batched_moe.py::test_batched_mm || ret=$?
