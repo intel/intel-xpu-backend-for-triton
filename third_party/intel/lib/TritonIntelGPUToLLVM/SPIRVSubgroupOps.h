@@ -47,9 +47,6 @@ template <> struct SPIRVGroupOp<arith::MinSIOp> {
 template <> struct SPIRVGroupOp<arith::MinUIOp> {
   using type = spirv::GroupNonUniformUMinOp;
 };
-template <> struct SPIRVGroupOp<arith::MaxNumFOp> {
-  using type = spirv::GroupNonUniformFMaxOp;
-};
 template <> struct SPIRVGroupOp<arith::MinNumFOp> {
   using type = spirv::GroupNonUniformFMinOp;
 };
