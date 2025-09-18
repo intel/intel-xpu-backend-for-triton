@@ -44,6 +44,7 @@ def make_default_opt_flags_intel(
     can_use_fused_scatter,
     enforce_bitwise_invariance,
     epilogue_effective_itemsize,
+    x_transpose,
     constraints,
 ):
     constraints_supported = ["block_m", "block_k", "split_k", "is_persistent", "fused_scatter", "epilogue_subtile", "num_stages"]
