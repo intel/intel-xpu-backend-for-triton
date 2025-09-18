@@ -625,6 +625,7 @@ run_vllm_tests() {
     git clone https://github.com/vllm-project/vllm-xpu-kernels
     cd vllm-xpu-kernels
     git checkout "$(<../benchmarks/third_party/vllm/vllm-kernels-pin.txt)"
+    sed -i '/pytorch\|torch/d' requirements.txt
     pip install -r requirements.txt
     VLLM_TARGET_DEVICE=xpu python3 setup.py develop
     cd ..
@@ -634,8 +635,6 @@ run_vllm_tests() {
 
   cd vllm
   pip install pytest cachetools cbor2 blake3 pybase64 openai_harmony tblib
-
-  pip list
 
   local ret=0
   run_pytest_command -vvv tests/kernels/moe/test_batched_moe.py::test_batched_mm || ret=$?

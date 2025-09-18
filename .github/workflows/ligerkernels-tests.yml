@@ -86,15 +86,15 @@ jobs:
           mkdir reports
           echo "REPORTS=$PWD/reports" >> $GITHUB_ENV
 
-      - name: Run Liger-Kernel tests
-        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
-        run: |
-          ./scripts/test-triton.sh --liger --skip-pip-install --skip-pytorch-install
-
       - name: Run VLLM tests
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
           ./scripts/test-triton.sh --vllm --skip-pip-install --skip-pytorch-install
+
+      - name: Run Liger-Kernel tests
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          ./scripts/test-triton.sh --liger --skip-pip-install --skip-pytorch-install
 
       - name: Upload test report
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
