@@ -105,7 +105,7 @@ class XPUBackend(BaseBackend):
             passes.common.add_cse(pm)
             intel.passes.ttgpuir.add_schedule_load(pm)
             passes.common.add_symbol_dce(pm)
-            pm.run(mod)
+            pm.run(mod, 'make_ttgir_adv_path')
             return mod
 
     @staticmethod
@@ -200,7 +200,7 @@ class XPUBackend(BaseBackend):
         module_opts.threads_per_warp = opt.warp_size
         module_opts.target_arch = target_arch
         intel.passes.ttgpuir.add_triton_annotate_module(pm, module_opts)
-        pm.run(mod)
+        pm.run(mod, 'annotate_module')
 
     @staticmethod
     def get_split_barrier_scope(opt):
@@ -227,7 +227,7 @@ class XPUBackend(BaseBackend):
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
         passes.ttir.add_loop_unroll(pm)
-        pm.run(mod)
+        pm.run(mod, 'make_ttir')
         return mod
 
     @staticmethod
@@ -287,7 +287,7 @@ class XPUBackend(BaseBackend):
         if knobs.intel.opt_reduction_locality:
             intel.passes.ttgpuir.add_optimize_reduction_locality(pm)
         intel.passes.arith.add_arith_emulate_unsupported_floats(pm, ["bf16"], "f32")
-        pm.run(mod)
+        pm.run(mod, 'make_ttgir')
         metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
         return mod
 
@@ -303,7 +303,7 @@ class XPUBackend(BaseBackend):
         passes.gluon.add_canonicalizer(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
 
-        pm.run(mod)
+        pm.run(mod, 'gluon_to_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
         return mod
 
@@ -338,7 +338,7 @@ class XPUBackend(BaseBackend):
             passes.llvmir.add_di_scope(pm)
         if XPUBackend.instrumentation:
             XPUBackend.instrumentation.patch("llvmir_to_llvm", pm, mod.context)
-        pm.run(mod)
+        pm.run(mod, 'make_llir')
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
         llvm.init_targets()
         context = llvm.context()
