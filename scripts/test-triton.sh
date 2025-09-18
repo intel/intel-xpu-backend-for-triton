@@ -635,6 +635,8 @@ run_vllm_tests() {
   cd vllm
   pip install pytest cachetools cbor2 blake3 pybase64 openai_harmony tblib
 
+  pip list
+
   local ret=0
   run_pytest_command -vvv tests/kernels/moe/test_batched_moe.py::test_batched_mm || ret=$?
   run_pytest_command -vvv tests/kernels/moe/test_batched_moe.py::test_fused_moe_batched_experts || [ $ret -eq 0 ] && ret=$?
