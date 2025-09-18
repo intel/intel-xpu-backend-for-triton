@@ -1,0 +1,137 @@
+name: Build and test on JGS simulator v1 (sanity)
+run-name: ${{ inputs.run_name }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_name:
+        description: Custom run name
+        type: string
+        default: "Build and test"
+      python_version:
+        description: Python version
+        type: string
+        default: "3.12"
+
+  pull_request:
+    branches:
+      - main-js
+      - main-interim
+      - release/**
+  push:
+    branches:
+      - main-js
+      - main-interim
+      - release/**
+
+permissions: read-all
+
+env:
+  PYTHON_VERSION: ${{ inputs.python_version || '3.12' }}
+  LLVM_REPO: intel-innersource/drivers.gpu.compiler.llvm-pisa
+
+jobs:
+  pre-commit:
+    name: Pre-commit checks
+    runs-on: Linux
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Load pip cache
+        id: pip-cache
+        uses: ./.github/actions/load
+        env:
+          # Increase this value to reset cache
+          CACHE_NUMBER: 2
+        with:
+          path: $HOME/.cache/pip
+          key: pip-3.10-${{ hashFiles('.pre-commit-config.yaml') }}-${{ env.CACHE_NUMBER }}
+
+      - name: Install Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Run pre-commit checks
+        run: |
+          pip install --upgrade pre-commit
+          python3 -m pre_commit run --show-diff-on-failure --color=always --all-files --verbose
+
+      - name: Run unit tests for scripts
+        run: |
+          pip install pytest pytest-xdist defusedxml
+          cd scripts
+          pytest -n 4 test_*.py
+
+      - name: Save pip cache
+        if: ${{ steps.pip-cache.outputs.status == 'miss' }}
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.pip-cache.outputs.path }}
+          dest: ${{ steps.pip-cache.outputs.dest }}
+
+  test-job:
+    name: Build and test
+    runs-on: jgs
+    steps:
+      - name: Print inputs
+        run: |
+          cat <<EOF
+          ${{ toJSON(inputs) }}
+          EOF
+
+      - name: Checkout Triton repository
+        uses: actions/checkout@v4
+
+      - name: Load pip cache
+        id: pip-cache
+        uses: ./.github/actions/load
+        env:
+          # Increase this value to reset cache
+          CACHE_NUMBER: 1
+        with:
+          path: $HOME/.cache/pip
+          key: pip-${{ inputs.python_version }}-${{ hashFiles('python/pyproject.toml', 'python/setup.py') }}-${{ env.CACHE_NUMBER }}
+
+      - name: Install Python (using actions/setup-python) ${{ inputs.python_version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Identify Python version
+        run: |
+          PYTHON_VERSION="$(python -c 'import sys; print(f"{sys.version_info[0]}.{ sys.version_info[1]}")')"
+          echo "PYTHON_VERSION=$PYTHON_VERSION" | tee -a $GITHUB_ENV
+
+      - name: Setup PyTorch
+        uses: ./.github/actions/setup-pytorch
+        with:
+          mode: "source"
+          jgs_env: "true"
+
+      - name: Setup Triton
+        uses: ./.github/actions/setup-triton
+        with:
+          build_llvm: "true"
+          llvm_repo: ${{ env.LLVM_REPO }}
+          gh_token: ${{ secrets.GLADOS_TOKEN }}
+
+      - name: Lit tests
+        run: |
+          source /opt/intel/oneapi/setvars.sh
+          set -ex -o pipefail
+          source /jgssim/jgssim-env.sh
+          export BASE=$HOME
+          export PATH="$BASE/packages/llvm/bin:$PATH"
+          bash -v -x scripts/test-triton.sh --warning-reports --skip-pytorch-install --unit
+
+      - name: Sanity tutorial test
+        run: |
+          source /opt/intel/oneapi/setvars.sh
+          set -ex -o pipefail
+          source /jgssim/jgssim-env.sh
+          export BASE=$HOME
+          export PATH="$BASE/packages/llvm/bin:$PATH"
+          python ./python/tutorials/01-vector-add.py
+          python ./python/tutorials/02-fused-softmax.py
