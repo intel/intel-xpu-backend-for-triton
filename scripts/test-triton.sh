@@ -568,7 +568,7 @@ run_inductor_tests() {
 
 run_sglang_tests() {
   echo "***************************************************"
-  echo "******    Running SGLang Triton tests       ******"
+  echo "******    Running SGLang Triton tests        ******"
   echo "***************************************************"
 
   if ! [ -d "./sglang" ]; then
@@ -591,7 +591,7 @@ run_sglang_tests() {
 
 run_liger_tests() {
   echo "************************************************"
-  echo "******    Running Liger Triton tests       ******"
+  echo "******    Running Liger Triton tests      ******"
   echo "************************************************"
 
   if ! [ -d "./Liger-Kernel" ]; then
