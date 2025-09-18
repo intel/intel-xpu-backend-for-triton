@@ -2239,8 +2239,6 @@ struct LoadOpToBlockIOConversion
       break;
     }
 
-    assert(memoryRowMajor || !getPitch(rewriter, ptr, elemSizeInBits, 0) &&
-                                 "Ensure column major was never supported");
     Value pitch =
         getPitch(rewriter, ptr, elemSizeInBits, memoryRowMajor ? 0 : 1);
     if (!pitch)
