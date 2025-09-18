@@ -1165,8 +1165,8 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
     auto split =
         LinearLayout::identity1D(encoding.getCTASplitN(), kCol, dims[1]);
     auto newEncoding = TensorMemoryEncodingAttr::get(
-        ctx, encoding.getBlockM(), encoding.getBlockN(), encoding.getUnpacked(),
-        encoding.getCTASplitM(), 1);
+        ctx, encoding.getBlockM(), encoding.getBlockN(),
+        encoding.getColStride(), encoding.getCTASplitM(), 1);
     return tensorMemoryToLinearLayout(
                {shape[0], shape[1] / encoding.getCTASplitN()}, newEncoding) *
            split;
@@ -1175,8 +1175,8 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
     auto split =
         LinearLayout::identity1D(encoding.getCTASplitM(), kCol, dims[0]);
     auto newEncoding = TensorMemoryEncodingAttr::get(
-        ctx, encoding.getBlockM(), encoding.getBlockN(), encoding.getUnpacked(),
-        1, encoding.getCTASplitN());
+        ctx, encoding.getBlockM(), encoding.getBlockN(),
+        encoding.getColStride(), 1, encoding.getCTASplitN());
     return tensorMemoryToLinearLayout(
                {shape[0] / encoding.getCTASplitM(), shape[1]}, newEncoding) *
            split;
