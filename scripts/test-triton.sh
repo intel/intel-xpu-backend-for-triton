@@ -584,7 +584,7 @@ run_triton_kernels_tests() {
   # available after `capture_runtime_env` call
   gpu_file="$TRITON_TEST_REPORTS_DIR/gpu.txt"
   if [[ -f "$gpu_file" ]] && grep -q "B580" "$gpu_file"; then
-    max_procs=${PYTEST_MAX_PROCESSES:-2}
+    max_procs=${PYTEST_MAX_PROCESSES:-1}
   else
     max_procs=${PYTEST_MAX_PROCESSES:-4}
   fi
