@@ -1,9 +1,14 @@
 # Keep in sync with extra_require.tests from setup.py
 lit
+autopep8
+isort
 numpy
 pytest
+pytest-forked
+pytest-xdist
 scipy>=1.7.1
 llnl-hatchet
+expecttest
 
 # Keep in sync with extra_require.tutorials from setup.py
 matplotlib
