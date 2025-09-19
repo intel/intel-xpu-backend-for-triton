@@ -1863,7 +1863,6 @@ struct LoadOpToBlockIOConversion
       return rewriteTensorPointerLoad(op, adaptor, rewriter);
 
     Value mask = op.getMask();
-    Value other = op.getOther();
     Type resultType = op.getType();
     auto tensorType = cast<RankedTensorType>(resultType);
 
@@ -2056,16 +2055,12 @@ struct LoadOpToBlockIOConversion
     unsigned instWidth = dpasInstShape[threadOrder[rank - 2]];
     unsigned instHeight = dpasInstShape[threadOrder[rank - 1]];
 
-    bool otherIsSplatConstInt = false;
-    int64_t splatVal = 0;
-
     std::map<SmallVector<unsigned>, Value> ptrs;
     std::map<SmallVector<unsigned>, Value> masks;
     std::map<SmallVector<unsigned>, Value> others;
 
     Value llPtr = adaptor.getPtr();
     Value llMask = adaptor.getMask();
-    Value llOther = adaptor.getOther();
 
     SmallVector<Value> ptrElems, maskElems, otherElems;
     // Get the LLVM values for pointers
@@ -2101,16 +2096,30 @@ struct LoadOpToBlockIOConversion
       return failure();
 
     // Get the LLVM values for `other`
+    Value other = op.getOther();
+    Value llOther = adaptor.getOther();
     DenseElementsAttr constAttr;
-    if (other && isa<IntegerType>(eltTy) &&
-        matchPattern(other, m_Constant(&constAttr)) && constAttr.isSplat() &&
-        isa<IntegerType>(constAttr.getElementType())) {
-      otherIsSplatConstInt = true;
-      splatVal = constAttr.getSplatValue<APInt>().getSExtValue();
-    }
-    if (other) {
-      otherElems = unpackLLElements(loc, llOther, rewriter);
-    }
+    if (other)
+      if (matchPattern(other, m_Constant(&constAttr)) && constAttr.isSplat()) {
+        Type elemTy = constAttr.getElementType();
+        auto handleSplatValue = [&](auto splatVal) {
+          if (!splatVal.isZero()) {
+            otherElems = SmallVector<Value>(
+                numElems,
+                rewriter.create<LLVM::ConstantOp>(loc, elemTy, splatVal));
+          }
+        };
+
+        TypeSwitch<mlir::Type>(elemTy)
+            .Case<FloatType>([&](FloatType) {
+              handleSplatValue(constAttr.getSplatValue<APFloat>());
+            })
+            .Case<IntegerType>([&](IntegerType) {
+              handleSplatValue(constAttr.getSplatValue<APInt>());
+            });
+      } else {
+        otherElems = unpackLLElements(loc, llOther, rewriter);
+      }
 
     // re-arrange the ptrs and masks to for large 2D block IO.
     // Layout is unrelated to the scalar type.
