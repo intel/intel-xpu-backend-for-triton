@@ -2099,16 +2099,27 @@ struct LoadOpToBlockIOConversion
     Value other = op.getOther();
     Value llOther = adaptor.getOther();
     DenseElementsAttr constAttr;
-    if (other && isa<IntegerType>(eltTy) &&
-        matchPattern(other, m_Constant(&constAttr)) && constAttr.isSplat() &&
-        isa<IntegerType>(constAttr.getElementType())) {
-      int64_t splatVal = constAttr.getSplatValue<APInt>().getSExtValue();
-      if (splatVal != 0)
-        otherElems =
-            SmallVector<Value>(numElems, b.int_val(elemSizeInBits, splatVal));
-    } else if (other) {
-      otherElems = unpackLLElements(loc, llOther, rewriter);
-    }
+    if (other)
+      if (matchPattern(other, m_Constant(&constAttr)) && constAttr.isSplat()) {
+        Type elemTy = constAttr.getElementType();
+        auto handleSplatValue = [&](auto splatVal) {
+          if (!splatVal.isZero()) {
+            otherElems = SmallVector<Value>(
+                numElems,
+                rewriter.create<LLVM::ConstantOp>(loc, elemTy, splatVal));
+          }
+        };
+
+        TypeSwitch<mlir::Type>(elemTy)
+            .Case<FloatType>([&](FloatType) {
+              handleSplatValue(constAttr.getSplatValue<APFloat>());
+            })
+            .Case<IntegerType>([&](IntegerType) {
+              handleSplatValue(constAttr.getSplatValue<APInt>());
+            });
+      } else {
+        otherElems = unpackLLElements(loc, llOther, rewriter);
+      }
 
     // re-arrange the ptrs and masks to for large 2D block IO.
     // Layout is unrelated to the scalar type.
