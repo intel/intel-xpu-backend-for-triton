@@ -14,7 +14,7 @@ from triton.runtime._allocation import set_profile_allocator, NullAllocator
 from triton.backends import backends
 
 from .hook import Hook
-from ..flags import set_instrumentation_on, set_instrumentation_off
+from ..flags import flags
 from .. import mode
 
 # TODO(fywkevin): add support for major.minor
@@ -153,7 +153,7 @@ class InstrumentationHook(Hook):
 
         InstrumentationHook.active_count += 1
 
-        set_instrumentation_on()
+        flags.instrumentation_on = True
 
         device = triton.runtime.driver.active.get_current_device()
         max_shared_mem = triton.runtime.driver.active.utils.get_device_properties(device)["max_shared_mem"]
@@ -218,7 +218,7 @@ class InstrumentationHook(Hook):
         backends[backend_name].compiler.instrumentation = {}
 
         # No runtime instrumentation hook is active anymore
-        set_instrumentation_off()
+        flags.instrumentation_on = False
 
         # Restore original JIT function run method
         if hasattr(JITFunction.run, "__wrapped__"):
