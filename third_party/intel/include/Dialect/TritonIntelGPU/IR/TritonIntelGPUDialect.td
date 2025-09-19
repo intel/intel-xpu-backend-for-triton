@@ -38,6 +38,12 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.support_dpas";
     }
 
+    /// Get the name of the attribute used to indicate whether the Block Scale DPAS
+    /// instruction is available.
+    static constexpr llvm::StringRef getSupportBlockScaleDPASAttrName() {
+      return "ttig.support_block_scale_dpas";
+    }
+
     /// Get the name of the attribute used to indicate whether the BF16 conversion
     /// instruction is available.
     static constexpr llvm::StringRef getSupportBF16ConversionAttrName() {
