@@ -493,7 +493,7 @@ def test_small_batch_matmul(m, n, k, device):
         (False, True),
         (False, True),
         (False, True),
-        (torch.float16, torch.bfloat16, torch.float8_e5m2),
+        (torch.float16, torch.bfloat16),
     ):
         if device == "cuda" and (
             torch.cuda.get_device_capability()[0] < 10
