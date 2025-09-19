@@ -41,6 +41,7 @@ DPASAnalysis::DPASAnalysis(Operation *root) {
 
 DPASAnalysis::Result
 DPASAnalysis::canUseDPAS(FunctionOpInterface funcOp) const {
+  return Result::False;
   if (funcToDotMap.empty() || dotToDPASEngineMap.empty())
     return Result::False;
 
@@ -78,6 +79,7 @@ DPASAnalysis::canUseDPAS(FunctionOpInterface funcOp) const {
                                                           : Result::False;
   }
 
+  return Result::False;
   return (threadsPerWarp == minSGSize) ? Result::True : Result::False;
 }
 
