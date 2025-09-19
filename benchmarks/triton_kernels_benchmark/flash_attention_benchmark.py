@@ -8,8 +8,8 @@ import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
-from triton_kernels_benchmark import xetla_kernel
-from triton_kernels_benchmark import cutlass_kernel
+# from triton_kernels_benchmark import xetla_kernel
+# from triton_kernels_benchmark import cutlass_kernel
 
 
 # pylint: disable=unused-argument
@@ -535,7 +535,7 @@ def get_benchmark(
         'triton': 'Triton',
         # FIXME: #5896
         #'xetla': 'XeTLA',
-        'cutlass': 'CUTLASS',
+        # 'cutlass': 'CUTLASS',
     }
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
@@ -568,6 +568,7 @@ def get_benchmark(
         ))
     # pylint: disable=too-many-branches
     def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
+        print('johnlu Z, H, N_CTX, D_HEAD, CAUSAL, MODE:', Z, H, N_CTX, D_HEAD, CAUSAL, MODE)
         modes = ['fwd', 'bwd']
         # This warmup logic improves performance on BMG significantly
         # For FWD mode in triton & cutlass: Some configs increase performance with warmup as a step function, but some slowly decrease with saturation
