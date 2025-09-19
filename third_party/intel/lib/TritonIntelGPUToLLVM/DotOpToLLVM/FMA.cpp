@@ -62,4 +62,5 @@ LogicalResult convertFMADot(DotOp op, DotOp::Adaptor adaptor,
   return intel::parametricConvertFMADot(op, adaptor, typeConverter, rewriter,
                                         multiplier);
 }
+
 } // namespace mlir::triton::gpu::intel

@@ -1,8 +1,5 @@
 #include "triton/Conversion/TritonGPUToLLVM/FMADotUtility.h"
-#include "mlir/IR/BuiltinAttributes.h"
-#include "mlir/IR/Value.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-#include <unordered_map>
 
 using namespace mlir;
 
