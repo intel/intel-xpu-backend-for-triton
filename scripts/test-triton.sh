@@ -636,11 +636,7 @@ run_vllm_tests() {
   cd vllm
   pip install pytest pytest-cov pytest-xdist cachetools cbor2 blake3 pybase64 openai_harmony tblib
 
-  local ret=0
-  run_pytest_command -vvv tests/kernels/moe/test_batched_moe.py::test_batched_mm || ret=$?
-  run_pytest_command -vvv tests/kernels/moe/test_batched_moe.py::test_fused_moe_batched_experts || [ $ret -eq 0 ] && ret=$?
-  run_pytest_command -vvv tests/kernels/attention/test_triton_unified_attention.py || [ $ret -eq 0 ] && ret=$?
-  return $ret
+  run_pytest_command -vvv tests/kernels/moe/test_batched_moe.py tests/kernels/attention/test_triton_unified_attention.py
 }
 
 run_triton_kernels_tests() {
