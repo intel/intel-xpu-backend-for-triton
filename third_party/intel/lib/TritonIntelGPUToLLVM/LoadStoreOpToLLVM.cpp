@@ -1843,6 +1843,10 @@ struct LoadOpToBlockIOConversion
     if (!isBlockIOCandidate(op))
       return failure();
 
+    // FIXME: Handle the case where padding is set to PAD_NAN (#5145).
+    if (op.getPadding() && op.getPadding() == PaddingOption::PAD_NAN)
+      return failure();
+
     // 2D block io lowering steps:
     // 1. Get the 2 dims for 2D block io: one of the dimension chosen correspond
     // to the dimension where the access pattern has stride one. The other
