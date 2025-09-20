@@ -1,4 +1,4 @@
-name: Third party Liger Kernels tests
+name: Third party tests [liger-kernels, vllm]
 
 on:
   workflow_dispatch:
@@ -29,7 +29,7 @@ env:
 
 jobs:
   build:
-    name: Triton benchmarks
+    name: Third party tests [liger-kernels, vllm]
     runs-on:
       - linux
       - ${{ inputs.runner_label || 'max1550' }}
@@ -86,15 +86,15 @@ jobs:
           mkdir reports
           echo "REPORTS=$PWD/reports" >> $GITHUB_ENV
 
+      - name: Run VLLM tests
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          ./scripts/test-triton.sh --vllm --skip-pip-install --skip-pytorch-install
+
       - name: Run Liger-Kernel tests
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
-          pip install transformers pandas pytest
-
-          git clone https://github.com/linkedin/Liger-Kernel
-          pip install transformers datasets -e Liger-Kernel
-
-          pytest Liger-Kernel/test/
+          ./scripts/test-triton.sh --liger --skip-pip-install --skip-pytorch-install
 
       - name: Upload test report
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}

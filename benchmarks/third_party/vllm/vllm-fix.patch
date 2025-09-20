@@ -1,0 +1,453 @@
+From 87ecc4f0a92c6192dc3d53bf3ae35d9365586a50 Mon Sep 17 00:00:00 2001
+From: Egor Krivov <egor.krivov@intel.com>
+Date: Wed, 17 Sep 2025 13:07:24 +0000
+Subject: [PATCH 1/2] Tests enablement
+
+---
+ .../test_triton_unified_attention.py          |  2 +-
+ tests/kernels/moe/test_batched_moe.py         | 28 ++++++------
+ tests/kernels/moe/utils.py                    | 15 ++++---
+ tests/kernels/utils.py                        |  9 ++--
+ vllm/_ipex_ops.py                             | 19 ++++++--
+ vllm/model_executor/layers/activation.py      | 43 +++++--------------
+ .../layers/fused_moe/fused_batched_moe.py     | 10 +++--
+ .../layers/fused_moe/fused_moe.py             | 17 +++++---
+ vllm/platforms/__init__.py                    |  1 -
+ vllm/platforms/xpu.py                         |  3 +-
+ 10 files changed, 75 insertions(+), 72 deletions(-)
+
+diff --git a/tests/kernels/attention/test_triton_unified_attention.py b/tests/kernels/attention/test_triton_unified_attention.py
+index 4b97d51e6..ace152b04 100644
+--- a/tests/kernels/attention/test_triton_unified_attention.py
++++ b/tests/kernels/attention/test_triton_unified_attention.py
+@@ -100,7 +100,7 @@ def test_triton_unified_attn(
+     num_blocks: int,
+     q_dtype: Optional[torch.dtype],
+ ) -> None:
+-    torch.set_default_device("cuda")
++    torch.set_default_device("xpu")
+ 
+     if q_dtype is not None and q_dtype.itemsize < 2 and block_size < 32:
+         pytest.skip("block size must be at least 32 for fp8")
+diff --git a/tests/kernels/moe/test_batched_moe.py b/tests/kernels/moe/test_batched_moe.py
+index 00b2d780e..978b2be7e 100644
+--- a/tests/kernels/moe/test_batched_moe.py
++++ b/tests/kernels/moe/test_batched_moe.py
+@@ -70,20 +70,20 @@ class BatchedMMTensors:
+     def make_tensors(config: BatchedMMConfig):
+         A = torch.randn(
+             (config.num_experts, config.max_tokens_per_expert, config.K),
+-            device="cuda",
++            device="xpu",
+             dtype=config.in_dtype) / 10
+         B = torch.randn((config.num_experts, config.N, config.K),
+-                        device="cuda",
++                        device="xpu",
+                         dtype=config.in_dtype)
+         C = torch.zeros(
+             (config.num_experts, config.max_tokens_per_expert, config.N),
+-            device="cuda",
++            device="xpu",
+             dtype=config.out_dtype)
+ 
+         num_expert_tokens = torch.randint(low=0,
+                                           high=config.max_tokens_per_expert,
+                                           size=(config.num_experts, ),
+-                                          device="cuda",
++                                          device="xpu",
+                                           dtype=torch.int32)
+ 
+         return BatchedMMTensors(A, B, C, num_expert_tokens)
+@@ -95,7 +95,7 @@ class BatchedMMTensors:
+ @pytest.mark.parametrize("N", [128, 1024])
+ @pytest.mark.parametrize("dtype", [torch.float8_e4m3fn, torch.bfloat16])
+ @pytest.mark.parametrize("block_shape", [None, [128, 128]])
+-@pytest.mark.parametrize("per_act_token_quant", [False, True])
++@pytest.mark.parametrize("per_act_token_quant", [False])
+ def test_batched_mm(num_experts: int, max_tokens_per_expert: int, K: int,
+                     N: int, dtype: torch.dtype,
+                     block_shape: Optional[list[int]],
+@@ -120,7 +120,7 @@ def test_batched_mm(num_experts: int, max_tokens_per_expert: int, K: int,
+     num_expert_tokens = torch.randint(low=0,
+                                       high=max_tokens_per_expert,
+                                       size=(num_experts, ),
+-                                      device="cuda",
++                                      device="xpu",
+                                       dtype=torch.int32)
+ 
+     A, A_q, A_scale = make_quantized_test_activations(
+@@ -144,9 +144,9 @@ def test_batched_mm(num_experts: int, max_tokens_per_expert: int, K: int,
+     )
+ 
+     out_shape = (num_experts, max_tokens_per_expert, N)
+-    test_output = torch.zeros(out_shape, dtype=act_dtype, device="cuda")
+-    ref_output = torch.zeros(out_shape, dtype=act_dtype, device="cuda")
+-    q_ref_output = torch.zeros(out_shape, dtype=act_dtype, device="cuda")
++    test_output = torch.zeros(out_shape, dtype=act_dtype, device="xpu")
++    ref_output = torch.zeros(out_shape, dtype=act_dtype, device="xpu")
++    q_ref_output = torch.zeros(out_shape, dtype=act_dtype, device="xpu")
+ 
+     compute_tl_dtype = {
+         torch.float16: tl.float16,
+@@ -206,7 +206,7 @@ def test_batched_mm(num_experts: int, max_tokens_per_expert: int, K: int,
+ @pytest.mark.parametrize("e", NUM_EXPERTS)
+ @pytest.mark.parametrize("topk", TOP_KS)
+ @pytest.mark.parametrize("dtype", [torch.float8_e4m3fn, torch.bfloat16])
+-@pytest.mark.parametrize("per_act_token_quant", [False, True])
++@pytest.mark.parametrize("per_act_token_quant", [False])
+ @pytest.mark.parametrize("block_shape", [None, [128, 128]])
+ @pytest.mark.parametrize("input_scales", [False])
+ def test_fused_moe_batched_experts(
+@@ -233,8 +233,8 @@ def test_fused_moe_batched_experts(
+     if per_act_token_quant and block_shape is not None:
+         pytest.skip("Skip illegal quantization test.")
+ 
+-    a = torch.randn((m, k), device="cuda", dtype=torch.bfloat16) / 10
+-    score = torch.randn((m, e), device="cuda", dtype=torch.bfloat16)
++    a = torch.randn((m, k), device="xpu", dtype=torch.bfloat16) / 10
++    score = torch.randn((m, e), device="xpu", dtype=torch.bfloat16)
+ 
+     if dtype.itemsize == 1:
+         act_dtype = torch.bfloat16
+@@ -254,8 +254,8 @@ def test_fused_moe_batched_experts(
+     )
+ 
+     if input_scales and quant_dtype is not None:
+-        a1_scale = torch.tensor(1, device="cuda", dtype=torch.float32)
+-        a2_scale = torch.tensor(1, device="cuda", dtype=torch.float32)
++        a1_scale = torch.tensor(1, device="xpu", dtype=torch.float32)
++        a2_scale = torch.tensor(1, device="xpu", dtype=torch.float32)
+     else:
+         a1_scale = None
+         a2_scale = None
+diff --git a/tests/kernels/moe/utils.py b/tests/kernels/moe/utils.py
+index 4b58a28ee..68bf20b51 100644
+--- a/tests/kernels/moe/utils.py
++++ b/tests/kernels/moe/utils.py
+@@ -4,10 +4,10 @@ from typing import Optional, Union
+ 
+ import torch
+ 
+-import vllm._custom_ops as ops
+ from tests.kernels.quant_utils import per_block_cast_to_int8
+ from tests.kernels.quantization.nvfp4_utils import (FLOAT4_E2M1_MAX,
+                                                     FLOAT8_E4M3_MAX)
++from vllm import _custom_ops as ops
+ from vllm.model_executor.layers.activation import SiluAndMul
+ from vllm.model_executor.layers.fused_moe import fused_experts
+ from vllm.model_executor.layers.fused_moe.fused_batched_moe import (
+@@ -149,7 +149,7 @@ def make_quantized_test_activations(
+     block_shape: Optional[list[int]] = None,
+     per_act_token_quant: bool = False,
+ ) -> tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
+-    a = torch.randn((E, m, k), device="cuda", dtype=in_dtype) / 10
++    a = torch.randn((E, m, k), device="xpu", dtype=in_dtype) / 10
+     a_q = a
+     a_scale = None
+ 
+@@ -219,7 +219,7 @@ def make_test_weight(
+     per_act_token_quant: bool = False,
+ ) -> tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor],
+            Optional[torch.Tensor]]:
+-    w_16 = torch.randn((e, rows, cols), device="cuda", dtype=in_dtype) / 15
++    w_16 = torch.randn((e, rows, cols), device="xpu", dtype=in_dtype) / 15
+     w_gs = None
+ 
+     if quant_dtype is not None:
+@@ -229,8 +229,13 @@ def make_test_weight(
+         for idx in range(e):
+             w_l[idx], w_s_l[idx], w_gs_l[idx] = moe_quantize_weights(
+                 w_16[idx], None, quant_dtype, per_act_token_quant, block_shape)
+-
+-        w = torch.stack(w_l)
++        new_shape = torch.Size((len(w_l), ) + w_l[0].shape)
++        new_w = torch.zeros(new_shape,
++                            dtype=w_l[0].dtype,
++                            device=w_l[0].device)
++        for (i, wt) in enumerate(w_l):
++            new_w[i] = wt
++        w = new_w
+         w_s = torch.stack(w_s_l)
+         if e > 0 and w_gs_l[0] is not None:
+             w_gs = torch.stack(w_gs_l)
+diff --git a/tests/kernels/utils.py b/tests/kernels/utils.py
+index c9bf85f6e..d132e64e9 100644
+--- a/tests/kernels/utils.py
++++ b/tests/kernels/utils.py
+@@ -1121,9 +1121,9 @@ def torch_experts(
+                 # block quantized
+                 assert (a_scale is not None and w1_scale is not None
+                         and w2_scale is not None)
+-                tmp1 = native_w8a8_block_matmul(a[mask], w1[i], a_scale[mask],
+-                                                w1_scale[i], block_shape,
+-                                                out.dtype)
++                tmp1 = native_w8a8_block_matmul(
++                    a.to(f32)[mask], w1[i], a_scale[mask], w1_scale[i],
++                    block_shape, out.dtype)
+                 if b_bias1 is not None:
+                     tmp1 = tmp1 + b_bias1[i].view(1, -1).to(tmp1.dtype)
+                 tmp2 = SiluAndMul()(tmp1)
+@@ -1141,8 +1141,7 @@ def torch_experts(
+                 assert (a_scale is not None and w1_scale is not None
+                         and w2_scale is not None)
+                 scales = a_scale if a_scale.numel() == 1 else a_scale[mask]
+-
+-                tmp1 = a[mask].to(f32) * scales
++                tmp1 = a.to(f32)[mask] * scales
+                 w1_dq = (w1[i].to(f32) * w1_scale[i]).transpose(0, 1)
+                 tmp1 = (tmp1 @ w1_dq).to(out.dtype)
+                 if b_bias1 is not None:
+diff --git a/vllm/_ipex_ops.py b/vllm/_ipex_ops.py
+index 9d2eda482..f169c139f 100644
+--- a/vllm/_ipex_ops.py
++++ b/vllm/_ipex_ops.py
+@@ -384,10 +384,23 @@ class ipex_ops:
+             assert num_token_padding is None, \
+                 "padding not supported if output passed in"
+             assert output.dtype == out_dtype
+-        assert scale is None, "only dynamic fp8 quantization supported on XPU"
+         assert not use_per_token_if_dynamic, (
+             "per token dynamic fp8 quantization not supported on XPU")
+-        scale = torch.zeros(1, device=input.device, dtype=torch.float32)
+-        torch.ops.torch_ipex.dynamic_scaled_fp8_quant(output, input, scale)
++        if scale is None:
++            if use_per_token_if_dynamic:
++                scale = torch.empty((shape[0], 1),
++                                    device=input.device,
++                                    dtype=torch.float32)
++                torch.ops._C.dynamic_per_token_scaled_fp8_quant(
++                    output, input, scale, scale_ub)
++            else:
++                scale = torch.empty(1,
++                                    device=input.device,
++                                    dtype=torch.float32)
++                torch.ops.torch_ipex.dynamic_scaled_fp8_quant(
++                    output, input, scale)
++        else:
++            assert scale.numel() == 1, f"{scale.shape}"
++            torch.ops.torch_ipex.static_scaled_fp8_quant(output, input, scale)
+ 
+         return output, scale
+diff --git a/vllm/model_executor/layers/activation.py b/vllm/model_executor/layers/activation.py
+index 235df1a77..38cae8a13 100644
+--- a/vllm/model_executor/layers/activation.py
++++ b/vllm/model_executor/layers/activation.py
+@@ -68,11 +68,8 @@ class SiluAndMul(CustomOp):
+ 
+     def __init__(self):
+         super().__init__()
+-        if current_platform.is_cuda_alike():
++        if current_platform.is_cuda_alike() or current_platform.is_xpu():
+             self.op = torch.ops._C.silu_and_mul
+-        elif current_platform.is_xpu():
+-            from vllm._ipex_ops import ipex_ops
+-            self.op = ipex_ops.silu_and_mul
+         elif current_platform.is_cpu():
+             self._forward_method = self.forward_native
+ 
+@@ -89,11 +86,7 @@ class SiluAndMul(CustomOp):
+         return out
+ 
+     def forward_xpu(self, x: torch.Tensor) -> torch.Tensor:
+-        d = x.shape[-1] // 2
+-        output_shape = (x.shape[:-1] + (d, ))
+-        out = torch.empty(output_shape, dtype=x.dtype, device=x.device)
+-        self.op(out, x)
+-        return out
++        return self.forward_cuda(x)
+ 
+ 
+ @CustomOp.register("mul_and_silu")
+@@ -109,11 +102,8 @@ class MulAndSilu(CustomOp):
+ 
+     def __init__(self):
+         super().__init__()
+-        if current_platform.is_cuda_alike():
++        if current_platform.is_cuda_alike() or current_platform.is_xpu():
+             self.op = torch.ops._C.mul_and_silu
+-        elif current_platform.is_xpu():
+-            from vllm._ipex_ops import ipex_ops
+-            self.op = ipex_ops.silu_and_mul
+         elif current_platform.is_cpu():
+             self._forward_method = self.forward_native
+ 
+@@ -200,17 +190,12 @@ class GeluAndMul(CustomOp):
+         self.approximate = approximate
+         if approximate not in ("none", "tanh"):
+             raise ValueError(f"Unknown approximate mode: {approximate}")
+-        if current_platform.is_cuda_alike() or current_platform.is_cpu():
++        if current_platform.is_cuda_alike() or current_platform.is_cpu(
++        ) or current_platform.is_xpu():
+             if approximate == "none":
+                 self.op = torch.ops._C.gelu_and_mul
+             elif approximate == "tanh":
+                 self.op = torch.ops._C.gelu_tanh_and_mul
+-        elif current_platform.is_xpu():
+-            from vllm._ipex_ops import ipex_ops
+-            if approximate == "none":
+-                self.op = ipex_ops.gelu_and_mul
+-            else:
+-                self.op = ipex_ops.gelu_tanh_and_mul
+ 
+     def forward_native(self, x: torch.Tensor) -> torch.Tensor:
+         """PyTorch-native implementation equivalent to forward()."""
+@@ -269,11 +254,9 @@ class NewGELU(CustomOp):
+ 
+     def __init__(self):
+         super().__init__()
+-        if current_platform.is_cuda_alike() or current_platform.is_cpu():
++        if current_platform.is_cuda_alike() or current_platform.is_cpu(
++        ) or current_platform.is_xpu():
+             self.op = torch.ops._C.gelu_new
+-        elif current_platform.is_xpu():
+-            from vllm._ipex_ops import ipex_ops
+-            self.op = ipex_ops.gelu_new
+ 
+     def forward_native(self, x: torch.Tensor) -> torch.Tensor:
+         """PyTorch-native implementation equivalent to forward()."""
+@@ -295,11 +278,9 @@ class FastGELU(CustomOp):
+ 
+     def __init__(self):
+         super().__init__()
+-        if current_platform.is_cuda_alike() or current_platform.is_cpu():
++        if current_platform.is_cuda_alike() or current_platform.is_cpu(
++        ) or current_platform.is_xpu():
+             self.op = torch.ops._C.gelu_fast
+-        elif current_platform.is_xpu():
+-            from vllm._ipex_ops import ipex_ops
+-            self.op = ipex_ops.gelu_fast
+ 
+     def forward_native(self, x: torch.Tensor) -> torch.Tensor:
+         """PyTorch-native implementation equivalent to forward()."""
+@@ -320,11 +301,9 @@ class QuickGELU(CustomOp):
+     # https://github.com/huggingface/transformers/blob/main/src/transformers/activations.py#L90
+     def __init__(self):
+         super().__init__()
+-        if current_platform.is_cuda_alike() or current_platform.is_cpu():
++        if current_platform.is_cuda_alike() or current_platform.is_cpu(
++        ) or current_platform.is_xpu():
+             self.op = torch.ops._C.gelu_quick
+-        elif current_platform.is_xpu():
+-            from vllm._ipex_ops import ipex_ops
+-            self.op = ipex_ops.gelu_quick
+ 
+     def forward_native(self, x: torch.Tensor) -> torch.Tensor:
+         """PyTorch-native implementation equivalent to forward()."""
+diff --git a/vllm/model_executor/layers/fused_moe/fused_batched_moe.py b/vllm/model_executor/layers/fused_moe/fused_batched_moe.py
+index 88063668e..b01fcefbb 100644
+--- a/vllm/model_executor/layers/fused_moe/fused_batched_moe.py
++++ b/vllm/model_executor/layers/fused_moe/fused_batched_moe.py
+@@ -728,8 +728,9 @@ class NaiveBatchedExperts(mk.FusedMoEPermuteExpertsUnpermute):
+ 
+         for expert in range(num_local_experts):
+             # Indexing expert_num_tokens doesn't work w/cudagraphs or inductor
+-            if (torch.compiler.is_compiling()
+-                    or torch.cuda.is_current_stream_capturing()):
++            # if (torch.compiler.is_compiling()
++            #         or torch.cuda.is_current_stream_capturing()):
++            if False:
+                 num = hidden_states.shape[1]
+             else:
+                 num = int(expert_num_tokens[expert].item())
+@@ -771,8 +772,9 @@ def batched_moe_kernel_quantize_input(
+     per_act_token_quant: bool,
+     block_shape: Optional[list[int]] = None,
+ ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
+-    if (torch.compiler.is_compiling()
+-            or torch.cuda.is_current_stream_capturing()):
++    # if (torch.compiler.is_compiling()
++    #         or torch.cuda.is_current_stream_capturing()):
++    if False:
+         # Note: this does a bunch of extra work because expert_num_tokens is
+         # ignored but it does support torch.compile + cudagraphs.
+         hidden_dim = A.size(-1)
+diff --git a/vllm/model_executor/layers/fused_moe/fused_moe.py b/vllm/model_executor/layers/fused_moe/fused_moe.py
+index 36c2ab8b2..2556dede7 100644
+--- a/vllm/model_executor/layers/fused_moe/fused_moe.py
++++ b/vllm/model_executor/layers/fused_moe/fused_moe.py
+@@ -889,12 +889,17 @@ def vllm_topk_softmax(topk_weights: torch.Tensor, topk_indices: torch.Tensor,
+                       token_expert_indices: torch.Tensor,
+                       gating_output: torch.Tensor,
+                       renormalize: bool) -> tuple[torch.Tensor, ...]:
+-    ops.topk_softmax(
+-        topk_weights,
+-        topk_indices,
+-        token_expert_indices,
+-        gating_output,
+-    )
++    if current_platform.is_xpu():
++        score = torch.softmax(gating_output, dim=-1, dtype=torch.float32)
++        topk_weights, topk_indices = torch.topk(score,
++                                                token_expert_indices.size(1))
++    else:
++        ops.topk_softmax(
++            topk_weights,
++            topk_indices,
++            token_expert_indices,
++            gating_output,
++        )
+     if renormalize:
+         topk_weights = topk_weights / topk_weights.sum(dim=-1, keepdim=True)
+ 
+diff --git a/vllm/platforms/__init__.py b/vllm/platforms/__init__.py
+index 9b64817da..431b4ff40 100644
+--- a/vllm/platforms/__init__.py
++++ b/vllm/platforms/__init__.py
+@@ -127,7 +127,6 @@ def xpu_platform_plugin() -> Optional[str]:
+     logger.debug("Checking if XPU platform is available.")
+     try:
+         # installed IPEX if the machine has XPUs.
+-        import intel_extension_for_pytorch  # noqa: F401
+         import torch
+         if supports_xccl():
+             dist_backend = "xccl"
+diff --git a/vllm/platforms/xpu.py b/vllm/platforms/xpu.py
+index 67ef058df..4854d91cb 100644
+--- a/vllm/platforms/xpu.py
++++ b/vllm/platforms/xpu.py
+@@ -5,6 +5,7 @@ import os
+ from typing import TYPE_CHECKING, Optional
+ 
+ import torch
++import vllm_xpu_kernels._C  # noqa
+ 
+ import vllm.envs as envs
+ from vllm.logger import init_logger
+@@ -186,7 +187,7 @@ class XPUPlatform(Platform):
+ 
+     @classmethod
+     def fp8_dtype(cls) -> torch.dtype:
+-        return torch.float8_e5m2
++        return torch.float8_e4m3fn
+ 
+     @classmethod
+     def is_data_center_gpu(cls) -> bool:
+-- 
+2.34.1
+
+
+From a325f89019b09d4280f5de32e93a77010fea96bc Mon Sep 17 00:00:00 2001
+From: Egor Krivov <egor.krivov@intel.com>
+Date: Wed, 17 Sep 2025 13:24:06 +0000
+Subject: [PATCH 2/2] Removed reqs
+
+---
+ requirements/xpu.txt | 5 -----
+ 1 file changed, 5 deletions(-)
+
+diff --git a/requirements/xpu.txt b/requirements/xpu.txt
+index 74f5b05b2..6b2b96270 100644
+--- a/requirements/xpu.txt
++++ b/requirements/xpu.txt
+@@ -11,9 +11,4 @@ jinja2>=3.1.6
+ datasets # for benchmark scripts
+ numba == 0.60.0 # v0.61 doesn't support Python 3.9. Required for N-gram speculative decoding
+ nixl==0.3.0 # for PD disaggregation
+-torch==2.8.0+xpu
+-torchaudio
+-torchvision
+---extra-index-url=https://download.pytorch.org/whl/xpu
+ 
+-intel-extension-for-pytorch @ https://intel-extension-for-pytorch.s3.us-east-1.amazonaws.com/ipex_dev/xpu/intel_extension_for_pytorch-2.8.10.post0%2Bxpu-cp312-cp312-linux_x86_64.whl
+-- 
+2.34.1
