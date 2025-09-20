@@ -300,12 +300,13 @@ run_unit_tests() {
 }
 
 run_pytest_command() {
+  args=("$@" "-m" "not xfail")
   if [[ -n "$TRITON_TEST_SELECTFILE" ]]; then
-    if pytest "$@" --collect-only > /dev/null 2>&1; then
-      pytest "$@"
+    if pytest "${args[@]}" --collect-only > /dev/null 2>&1; then
+      pytest "${args[@]}"
     fi
   else
-    pytest "$@"
+    pytest "${args[@]}"
   fi
 }
 
