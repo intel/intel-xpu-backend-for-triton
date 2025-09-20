@@ -14,7 +14,7 @@ from triton._internal_testing import is_xpu
 @pytest.mark.parametrize("transpose", [True, False])
 @pytest.mark.skipif(not is_xpu(), reason="Block load tests are specific to the XPU backend")
 @pytest.mark.xfail(not torch.xpu.get_device_capability()['has_subgroup_2d_block_io'],
-                   reason="Block loads not supported on this architecture")
+                   reason="Block loads not supported on this architecture", run=False)
 def test_block_load_dpas_layout(M, N, dtype_str, transpose, device, tmp_path: pathlib.Path):
     # modify the layouts to ensure the correct OCL/SPIRV intrinsic is called for each datatype
     if dtype_str == "int8":
@@ -92,7 +92,7 @@ def test_block_load_dpas_layout(M, N, dtype_str, transpose, device, tmp_path: pa
 @pytest.mark.xfail(
     not (torch.xpu.get_device_capability()['has_subgroup_2d_block_io']
          and torch.xpu.get_device_capability()['has_subgroup_matrix_multiply_accumulate']),
-    reason="Block loads and/or DPAS not supported on this architecture")
+    reason="Block loads and/or DPAS not supported on this architecture", run=False)
 def test_block_load_dot_product(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M, TRANSPOSE_A, TRANSPOSE_B,
                                 device):
     if GROUP_SIZE_M == 1 and (BLOCK_SIZE_M > 64 or BLOCK_SIZE_N > 64):
