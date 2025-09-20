@@ -555,7 +555,7 @@ def get_benchmark(
     """
     causal_mode = [False, True] if fa_kernel_mode == 'fwd' else [
         True
-    ]  # The 06 turtorial bwd Non-causal tests do not pass at the moment.
+    ]  # The 06 tutorial bwd Non-causal tests do not pass at the moment.
 
     supported_providers = {
         'triton': 'Triton',
