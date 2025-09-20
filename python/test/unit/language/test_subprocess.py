@@ -40,10 +40,8 @@ torch_types = ["int8", "uint8", "int16", "int32", "long", "float16", "float32", 
 def test_print(func_type: str, data_type: str, device: str):
     if device == "xpu" and data_type == "float64" and not tr.driver.active.get_current_target().arch['has_fp64']:
         pytest.xfail("float64 not supported on current xpu hardware")
-    proc = subprocess.run(
-        [sys.executable, print_path, "test_print", func_type, data_type, device],
-        capture_output=True,
-    )
+    proc = subprocess.run([sys.executable, print_path, "test_print", func_type, data_type, device], capture_output=True,
+                          env=os.environ.copy())
     assert proc.returncode == 0
 
     if is_interpreter() and func_type != "static_assert":
@@ -53,9 +51,6 @@ def test_print(func_type: str, data_type: str, device: str):
         return
 
     outs = [line for line in proc.stdout.decode("UTF-8").splitlines() if line]
-    # FIXME: workaround for DLE 2025.2, namely PTI 0.13.1
-    # https://github.com/intel/intel-xpu-backend-for-triton/issues/4998
-    outs = filter(lambda elem: "Another subscriber already subscribed to Sycl runtime events" not in elem, outs)
     # The total number of elements in the 1-D tensor to print.
     N = 128
 
