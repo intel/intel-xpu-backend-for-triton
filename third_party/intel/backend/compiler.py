@@ -122,6 +122,9 @@ class XPUBackend(BaseBackend):
         self.properties = self.parse_target(target.arch)
         self.binary_ext = "spv"
 
+    def get_target_name(self, options) -> str:
+        return f"xpu:{self.device_arch}"
+
     def parse_target(self, tgt_prop) -> dict:
         dev_prop = {}
         dev_prop['name'] = tgt_prop.get('name', 'xpu')

@@ -14,6 +14,7 @@ from triton._internal_testing import (
     is_hip_cdna4,
     is_hopper_or_newer,
     is_hopper,
+    is_xpu,
 )
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
@@ -55,8 +56,8 @@ def copy_kernel(Out, In, numel, XBLOCK: ttgl.constexpr, layout: ttgl.constexpr):
     ttgl.BlockedLayout(size_per_thread=[8], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[8], order=[0]),
 ])
 @pytest.mark.parametrize("XBLOCK", [128, 256, 512, 1024, 2048])
-def test_copy_kernel(layout, XBLOCK):
-    inp = torch.randn(XBLOCK * 4 - 7, device="cuda")
+def test_copy_kernel(layout, XBLOCK, device):
+    inp = torch.randn(XBLOCK * 4 - 7, device=device)
     out = torch.empty_like(inp)
 
     copy_kernel[(4, )](out, inp, inp.numel(), XBLOCK, layout, num_warps=layout.warps_per_cta[0])
@@ -73,7 +74,7 @@ def tma_kernel(desc):
     alloc._keep_alive()
 
 
-@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires Hopper")
 def test_tma():
     out = torch.ones((16, 16), dtype=torch.float16, device="cuda")
     layout = ttgl.NVMMASharedLayout(
@@ -112,9 +113,9 @@ def async_copy_mbarrier_kernel(out, inp, xnumel, XBLOCK: ttgl.constexpr, YBLOCK:
     ttgl.store(out + xindex * YBLOCK + yindex, val)
 
 
-@pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires Ampere")
-def test_async_copy_mbarrier():
-    tensor_opts = dict(dtype=torch.float, device="cuda")
+@pytest.mark.xfail(not is_ampere_or_newer(), reason="Requires Ampere")
+def test_async_copy_mbarrier(device):
+    tensor_opts = dict(dtype=torch.float, device=device)
     out = torch.empty((32, 32), **tensor_opts)
     inp = torch.randn((20, 32), **tensor_opts)
     async_copy_mbarrier_kernel[(1, )](out, inp, inp.shape[0], XBLOCK=32, YBLOCK=32)
@@ -153,7 +154,7 @@ def warpgroup_mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttg
     ttgl.store(out + out_offs_m * N + out_offs_n, acc)
 
 
-@pytest.mark.skipif(not is_hopper(), reason="Requires Hopper")
+@pytest.mark.xfail(not is_hopper(), reason="Requires Hopper")
 @pytest.mark.parametrize("ASYNC", [True, False])
 def test_warpgroup_mma(ASYNC):
     torch.manual_seed(0)
@@ -168,7 +169,7 @@ def test_warpgroup_mma(ASYNC):
     torch.testing.assert_close(out, ref, atol=1e-3, rtol=1e-1)
 
 
-@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
+@pytest.mark.xfail(not is_hip_cdna4(), reason="Requires CDNA4")
 @pytest.mark.parametrize("use_buffer_load", [True, False])
 def test_amd_direct_load_to_shared(use_buffer_load):
 
@@ -204,7 +205,7 @@ def test_amd_direct_load_to_shared(use_buffer_load):
     assert 'vmcnt(0)' in pgm.asm['amdgcn']
 
 
-@pytest.mark.skipif(not (is_hip_gfx11() or is_hip_gfx12()), reason="Requires RDNA3 or RDNA4")
+@pytest.mark.xfail(not (is_hip_gfx11() or is_hip_gfx12()), reason="Requires RDNA3 or RDNA4")
 @pytest.mark.parametrize("M, N, K", [(64, 64, 64)])
 @pytest.mark.parametrize("in_dtype", ['float16', 'bfloat16'])
 def test_amd_wmma(M, N, K, in_dtype):
@@ -270,6 +271,8 @@ def test_amd_wmma(M, N, K, in_dtype):
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("cdna_version", [3, 4])
 def test_amd_mfma(M, N, K, in_dtype, num_warps, cdna_version):
+    if is_xpu():
+        pytest.xfail("XPU does not support AMD MFMA")
 
     @gluon.jit
     def kernel(a_ptr, b_ptr, c_ptr, stride_am, stride_ak,  #
@@ -328,7 +331,7 @@ def test_amd_mfma(M, N, K, in_dtype, num_warps, cdna_version):
     torch.testing.assert_close(ref, triton_output)
 
 
-@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
+@pytest.mark.xfail(not is_hip_cdna4(), reason="Requires CDNA4")
 @pytest.mark.parametrize("M, N, K, rhs_scale, mxfp_type, normal_type", [(32, 32, 128, rhs_scale, mxfp_type, normal_type)
                                                                         for rhs_scale in [True, False]
                                                                         for mxfp_type in ["e2m1"]
@@ -470,7 +473,7 @@ def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type):
     torch.testing.assert_close(z, z_ref, rtol=1e-5, atol=1e-5)
 
 
-def test_math_fast_expf():
+def test_math_fast_expf(device):
 
     @gluon.jit
     def fast_expf_kernel(x_ptr, y_ptr, warp_size: ttgl.constexpr, num_warps: ttgl.constexpr):
@@ -484,13 +487,13 @@ def test_math_fast_expf():
     num_warps = 4
 
     torch.manual_seed(0)
-    x = torch.randn(THREADS_PER_WARP * num_warps, device="cuda", dtype=torch.float32)
+    x = torch.randn(THREADS_PER_WARP * num_warps, device=device, dtype=torch.float32)
     y = torch.empty_like(x)
     fast_expf_kernel[(1, )](x, y, THREADS_PER_WARP, num_warps)
     torch.testing.assert_close(y, torch.exp(x), atol=1e-5, rtol=1e-4)
 
 
-def test_math_fast_dividef():
+def test_math_fast_dividef(device):
 
     @gluon.jit
     def fast_dividef_kernel(x_ptr, y_ptr, z_ptr, warp_size: ttgl.constexpr, num_warps: ttgl.constexpr):
@@ -505,7 +508,7 @@ def test_math_fast_dividef():
     num_warps = 4
 
     torch.manual_seed(0)
-    x = torch.randn(THREADS_PER_WARP * num_warps, device="cuda", dtype=torch.float32)
+    x = torch.randn(THREADS_PER_WARP * num_warps, device=device, dtype=torch.float32)
     y = torch.randn_like(x)
     z = torch.empty_like(x)
     y[y == 0] = 1.0
@@ -514,7 +517,7 @@ def test_math_fast_dividef():
 
 
 @pytest.mark.xfail(reason="copy to tmem with scale layout is currently broken in Gluon.")
-@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell")
 def test_tmem_copy_2d():
     device = "cuda"
 
@@ -563,7 +566,7 @@ def test_tmem_copy_2d():
             assert torch.equal(x[m * 32:(m + 1) * 32], z_tri[32 * i:32 * (i + 1), col_offset:(col_offset + 4)])
 
 
-@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell")
 def test_tmem_subslice_block_m_64():
 
     @gluon.jit
@@ -643,7 +646,7 @@ def test_tmem_subslice_block_m_64():
     torch.testing.assert_close(out_ref, out_tri, atol=0, rtol=0)
 
 
-@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell")
 def test_block_m_64_mma():
 
     @gluon.jit
@@ -734,7 +737,7 @@ def test_block_m_64_mma():
     torch.testing.assert_close(d_ref, d_tri, rtol=0.08, atol=0)
 
 
-def test_slice_reinterpret():
+def test_slice_reinterpret(device):
     BLOCK = ttgl.constexpr(2048)
     SPLIT_BLOCK = ttgl.constexpr(BLOCK // 2)
     XBLOCK = ttgl.constexpr(32)
@@ -759,13 +762,13 @@ def test_slice_reinterpret():
         value = smem_slice1.load(blocked)
         ttgl.store(ttgl.set_auto_layout(out_ptr + offs, blocked), value)
 
-    input = torch.randint(0, 100, (XBLOCK, YBLOCK), dtype=torch.int32, device="cuda")
+    input = torch.randint(0, 100, (XBLOCK, YBLOCK), dtype=torch.int32, device=device)
     output = torch.empty_like(input)
     kernel[(1, )](input, output)
     torch.testing.assert_close(input, output, atol=0, rtol=0)
 
 
-@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires Hopper")
 def test_tma_slice():
     XBLOCK = YBLOCK = ttgl.constexpr(128)
 
@@ -802,7 +805,7 @@ def test_tma_slice():
 @pytest.mark.parametrize("swizzle", [32, 64, 128])
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("M, N, BLOCK_N", [(128, 128, 128), (256, 128, 64), (128, 128, 16)])
-@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell")
 def test_tmem_copy_no_scales(M, N, BLOCK_N, num_warps, swizzle):
 
     @gluon.jit
@@ -856,7 +859,7 @@ def early_return_kernel(x):
     return x
 
 
-def test_2d_tensor_early_return():
+def test_2d_tensor_early_return(device):
     warp_size = ttgl.constexpr(THREADS_PER_WARP)
 
     @gluon.jit
@@ -871,12 +874,12 @@ def test_2d_tensor_early_return():
             x += early_return_kernel(x)
         ttgl.store(out, x.sum(0).sum(0))
 
-    out = torch.empty(1, dtype=torch.int32, device="cuda")
+    out = torch.empty(1, dtype=torch.int32, device=device)
     compiled_kernel = kernel.warmup(N=100, out=out, grid=(1, ))
     assert compiled_kernel.asm["llir"].count("define") == 1
 
 
-@pytest.mark.skipif(not is_hip_cdna3() and not is_hip_cdna4(), reason="Requires CDNA3 or CDNA4")
+@pytest.mark.xfail(not is_hip_cdna3() and not is_hip_cdna4(), reason="Requires CDNA3 or CDNA4")
 def test_inline_with_amdgpu_dialect():
 
     @gluon.jit
@@ -906,7 +909,8 @@ def test_inline_with_amdgpu_dialect():
      {"offsets": [[0, 1], [0, 2], [0, 8], [0, 4], [0, 16], [0, 32], [2, 0], [1, 0], [4, 0], [8, 0], [16, 0], [32, 0]]}])
 @pytest.mark.parametrize("slice_m_offset, slice_n_offset, slice_m, slice_n", [(48, 16, 16, 16), (32, 48, 32, 16),
                                                                               (48, 32, 16, 32)])
-def test_padded_shared_layout_subslice(interval_pairs, shared_layout, slice_m_offset, slice_n_offset, slice_m, slice_n):
+def test_padded_shared_layout_subslice(interval_pairs, shared_layout, slice_m_offset, slice_n_offset, slice_m, slice_n,
+                                       device):
     m = 64
     n = 64
     num_warps = 1
@@ -945,8 +949,8 @@ def test_padded_shared_layout_subslice(interval_pairs, shared_layout, slice_m_of
         out_offs = offs_m_store[:, None] * SLICE_N + offs_n_store[None, :]
         ttgl.store(out_ptr + out_offs, out_data)
 
-    input = torch.arange(m * n, device="cuda").reshape(m, n).to(torch.int32)
-    output = torch.zeros((slice_m, slice_n), dtype=torch.int32, device="cuda")
+    input = torch.arange(m * n, device=device).reshape(m, n).to(torch.int32)
+    output = torch.zeros((slice_m, slice_n), dtype=torch.int32, device=device)
     ref_output = input[slice_m_offset:slice_m_offset + slice_m, slice_n_offset:slice_n_offset + slice_n]
 
     kernel[(1, )](input, output, m, n, slice_m_offset, slice_n_offset, slice_m, slice_n, num_warps=num_warps)
