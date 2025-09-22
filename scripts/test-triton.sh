@@ -14,6 +14,7 @@ TEST:
     --minicore        part of core
     --mxfp            part of core
     --scaled-dot      part of core
+    --gluon
     --interpreter
     --benchmarks
     --softmax
@@ -55,6 +56,7 @@ TEST_CORE=false
 TEST_MINICORE=false
 TEST_MXFP=false
 TEST_SCALED_DOT=false
+TEST_GLUON=false
 TEST_INTERPRETER=false
 TEST_TUTORIAL=false
 TEST_MICRO_BENCHMARKS=false
@@ -103,6 +105,11 @@ while (( $# != 0 )); do
       ;;
     --scaled-dot)
       TEST_SCALED_DOT=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --gluon)
+      TEST_GLUON=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -390,6 +397,16 @@ run_core_tests() {
   run_scaled_dot_tests
 }
 
+run_gluon_tests() {
+  echo "***************************************************"
+  echo "******         Running Gluon tests          ******"
+  echo "***************************************************"
+  cd $TRITON_PROJ/python/test/gluon
+
+  TRITON_TEST_SUITE=gluon \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu . -m "not xfail"
+}
+
 run_interpreter_tests() {
   echo "***************************************************"
   echo "******   Running Triton Interpreter tests    ******"
@@ -615,6 +632,9 @@ test_triton() {
     fi
   fi
 
+  if [ "$TEST_GLUON" == true ]; then
+    run_gluon_tests
+  fi
   if [ "$TEST_INTERPRETER" = true ]; then
     run_interpreter_tests
   fi
