@@ -41,15 +41,15 @@ def naive_softmax(x):
 
 @triton.autotune(
     configs=[
-        triton.Config({"threads_per_warp": 32}, num_warps=32),
-        triton.Config({"threads_per_warp": 32}, num_warps=16),
-        triton.Config({"threads_per_warp": 32}, num_warps=8),
-        triton.Config({"threads_per_warp": 32}, num_warps=4),
-        triton.Config({"threads_per_warp": 16}, num_warps=64),
-        triton.Config({"threads_per_warp": 16}, num_warps=32),
-        triton.Config({"threads_per_warp": 16}, num_warps=16),
-        triton.Config({"threads_per_warp": 16}, num_warps=8),
-        triton.Config({"threads_per_warp": 16}, num_warps=4),
+        triton.Config({"warp_size": 32}, num_warps=32),
+        triton.Config({"warp_size": 32}, num_warps=16),
+        triton.Config({"warp_size": 32}, num_warps=8),
+        triton.Config({"warp_size": 32}, num_warps=4),
+        triton.Config({"warp_size": 16}, num_warps=64),
+        triton.Config({"warp_size": 16}, num_warps=32),
+        triton.Config({"warp_size": 16}, num_warps=16),
+        triton.Config({"warp_size": 16}, num_warps=8),
+        triton.Config({"warp_size": 16}, num_warps=4),
     ],
     key=["BLOCK_SIZE_X", "BLOCK_SIZE_Y"],
 )

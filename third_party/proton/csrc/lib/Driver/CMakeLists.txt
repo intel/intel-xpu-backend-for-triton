@@ -5,6 +5,7 @@ set(SOURCE_FILES
 	GPU/HipApi.cpp
 	GPU/HsaApi.cpp
 	GPU/RoctracerApi.cpp
+	GPU/NvtxApi.cpp
 )
 
 if(TRITON_BUILD_PROTON_XPU)

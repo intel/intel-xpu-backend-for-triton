@@ -1843,6 +1843,10 @@ struct LoadOpToBlockIOConversion
     if (!isBlockIOCandidate(op))
       return failure();
 
+    // FIXME: Handle the case where padding is set to PAD_NAN (#5145).
+    if (op.getPadding() && op.getPadding() == PaddingOption::PAD_NAN)
+      return failure();
+
     // 2D block io lowering steps:
     // 1. Get the 2 dims for 2D block io: one of the dimension chosen correspond
     // to the dimension where the access pattern has stride one. The other
@@ -1863,13 +1867,15 @@ struct LoadOpToBlockIOConversion
       return rewriteTensorPointerLoad(op, adaptor, rewriter);
 
     Value mask = op.getMask();
-    Value other = op.getOther();
     Type resultType = op.getType();
     auto tensorType = cast<RankedTensorType>(resultType);
 
-    // Step 1: Right now we only support 2D rank matrix of row major or column
-    // major.
+    // Step 1: Right now we only support 2D rank matrix of row major.
     const bool memoryRowMajor = isMemoryRowMajor(op);
+    // FIXME: Add support of column major.
+    if (!memoryRowMajor)
+      return failure();
+
     DpasEncodingAttr::OpIdx opIdx = getOpIdx(tensorType);
 
     Attribute encoding = tensorType.getEncoding();
@@ -1912,12 +1918,8 @@ struct LoadOpToBlockIOConversion
       // only support rank of 2 for now.
       return failure();
     }
-    const bool valueRowMajor =
-        (threadOrder[rank - 2] == 1 && threadOrder[rank - 1] == 0);
-    assert((valueRowMajor ||
-            (threadOrder[rank - 2] == 0 && threadOrder[rank - 1] == 1)) &&
-           "Only row_major or column_major is allowed");
-    const bool isTransposeRequired = valueRowMajor ^ memoryRowMajor;
+    unsigned contiguousDim = memoryRowMajor ? 1 : 0;
+    const bool isTransposeRequired = contiguousDim != colDim;
 
     // Step 2: Right now we only support DPAS related layout to simplify the
     // lowering.
@@ -2057,16 +2059,12 @@ struct LoadOpToBlockIOConversion
     unsigned instWidth = dpasInstShape[threadOrder[rank - 2]];
     unsigned instHeight = dpasInstShape[threadOrder[rank - 1]];
 
-    bool otherIsSplatConstInt = false;
-    int64_t splatVal = 0;
-
     std::map<SmallVector<unsigned>, Value> ptrs;
     std::map<SmallVector<unsigned>, Value> masks;
     std::map<SmallVector<unsigned>, Value> others;
 
     Value llPtr = adaptor.getPtr();
     Value llMask = adaptor.getMask();
-    Value llOther = adaptor.getOther();
 
     SmallVector<Value> ptrElems, maskElems, otherElems;
     // Get the LLVM values for pointers
@@ -2102,16 +2100,30 @@ struct LoadOpToBlockIOConversion
       return failure();
 
     // Get the LLVM values for `other`
+    Value other = op.getOther();
+    Value llOther = adaptor.getOther();
     DenseElementsAttr constAttr;
-    if (other && isa<IntegerType>(eltTy) &&
-        matchPattern(other, m_Constant(&constAttr)) && constAttr.isSplat() &&
-        isa<IntegerType>(constAttr.getElementType())) {
-      otherIsSplatConstInt = true;
-      splatVal = constAttr.getSplatValue<APInt>().getSExtValue();
-    }
-    if (other) {
-      otherElems = unpackLLElements(loc, llOther, rewriter);
-    }
+    if (other)
+      if (matchPattern(other, m_Constant(&constAttr)) && constAttr.isSplat()) {
+        Type elemTy = constAttr.getElementType();
+        auto handleSplatValue = [&](auto splatVal) {
+          if (!splatVal.isZero()) {
+            otherElems = SmallVector<Value>(
+                numElems,
+                rewriter.create<LLVM::ConstantOp>(loc, elemTy, splatVal));
+          }
+        };
+
+        TypeSwitch<mlir::Type>(elemTy)
+            .Case<FloatType>([&](FloatType) {
+              handleSplatValue(constAttr.getSplatValue<APFloat>());
+            })
+            .Case<IntegerType>([&](IntegerType) {
+              handleSplatValue(constAttr.getSplatValue<APInt>());
+            });
+      } else {
+        otherElems = unpackLLElements(loc, llOther, rewriter);
+      }
 
     // re-arrange the ptrs and masks to for large 2D block IO.
     // Layout is unrelated to the scalar type.
@@ -2246,7 +2258,7 @@ struct LoadOpToBlockIOConversion
       return failure();
 
     // If the stride is 0, we want to load only the first row.
-    int stride = getStride(ptr, 0);
+    int stride = getStride(ptr, memoryRowMajor ? 0 : 1);
     unsigned baseHeightInt = (stride == 0 ? 1 : tileHeight);
     Value baseHeight = b.i32_val(baseHeightInt);
     Value baseWidth =
