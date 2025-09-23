@@ -9,10 +9,10 @@ from .benchmark_testing import (
     BenchmarkCategory,
     BenchmarkConfig,
     BENCHMARKING_METHOD,
-    get_benchmark_setup,
 )
 
 from .benchmark_shapes_parser import ShapePatternParser
+from .configs.do_bench_configs import get_benchmark_setup
 
 if BENCHMARKING_METHOD == "UPSTREAM_PYTORCH_PROFILER":
     os.environ["INJECT_PYTORCH"] = "True"
