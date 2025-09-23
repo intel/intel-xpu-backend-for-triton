@@ -592,15 +592,7 @@ def get_benchmark(
     # pylint: disable=too-many-branches
     def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
         modes = ['fwd', 'bwd']
-        # This warmup logic improves performance on BMG significantly
-        # For FWD mode in triton & cutlass: Some configs increase performance with warmup as a step function, but some slowly decrease with saturation
-        # Performance is best at 250-400ms range, but we want stable, not just best at ~600ms (triton/cutlass providers)
-        n_warmup_fwd = 600
-        # For BWD mode: Performance doesn't really improve much with warmup for triton, but xetla benefit from more warmup
-        n_warmup_bwd = 400  # Maximum across xetla=400, triton=10, onednn=10
-        n_warmup = n_warmup_fwd if MODE == 'fwd' else n_warmup_bwd
-        # We keep old warmup value, because new warmup makes perfomance on PVC slightly worse
-        n_warmup = 10
+        n_warmup, n_repeat = benchmark_suite.get_benchmark_setup('flash_attention')
         if MODE not in modes:
             raise AssertionError(f'Unknown {MODE}, supported modes are {modes}')
         dtype = torch.float16
@@ -640,7 +632,7 @@ def get_benchmark(
                                                  err_msg=f'Error comparing {name} between triton and torch')
                 triton_fn = lambda: triton_o.backward(dout, retain_graph=True)
 
-            _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(triton_fn, n_warmup=n_warmup, n_repeat=10,
+            _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(triton_fn, n_warmup=n_warmup, n_repeat=n_repeat,
                                                                    quantiles=quantiles, grad_to_none=(q, k, v),
                                                                    time_warmup=False)
 
@@ -675,7 +667,7 @@ def get_benchmark(
                 _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
                     xetla_bwd_fn,
                     n_warmup=n_warmup,
-                    n_repeat=10,
+                    n_repeat=n_repeat,
                     quantiles=quantiles,
                     time_warmup=False,
                 )
@@ -701,7 +693,7 @@ def get_benchmark(
                 _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
                     cutlass_fwd_fn,
                     n_warmup=n_warmup,
-                    n_repeat=10,
+                    n_repeat=n_repeat,
                     quantiles=quantiles,
                     time_warmup=False,
                 )

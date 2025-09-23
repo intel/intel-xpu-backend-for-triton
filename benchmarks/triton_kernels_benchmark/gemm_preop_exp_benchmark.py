@@ -255,12 +255,7 @@ X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
         args={},
     ))
 def benchmark(B, M, N, K, provider):
-    # Some configs increase performance with warmup as a step function, but some slowly decrease with saturation. Performance is best at 200-400ms range, but we want stable, not just best
-    # This warmup improves performance on BMG
-    n_warmup = 800
-    # We keep old warmup for now because longer warmup make perfomance on PVC worse
-    n_warmup = 10
-
+    n_warmup, n_repeat = benchmark_suite.get_benchmark_setup('gemm_preop_exp')
     if B == 1:
         a = torch.rand((M, K), device='xpu', dtype=torch.bfloat16)
         b = torch.rand((K, N), device='xpu', dtype=torch.bfloat16)
@@ -281,7 +276,7 @@ def benchmark(B, M, N, K, provider):
         torch_fn = lambda: torch.matmul(torch.exp(a), b).to(torch.float32)
         rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
         benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(triton_fn, n_warmup=n_warmup, n_repeat=10,
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(triton_fn, n_warmup=n_warmup, n_repeat=n_repeat,
                                                                   quantiles=quantiles, time_warmup=False)
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')

@@ -9,6 +9,7 @@ from .benchmark_testing import (
     BenchmarkCategory,
     BenchmarkConfig,
     BENCHMARKING_METHOD,
+    get_benchmark_setup,
 )
 
 from .benchmark_shapes_parser import ShapePatternParser
@@ -26,4 +27,5 @@ __all__ = [
     "BenchmarkConfig",
     "BENCHMARKING_METHOD",
     "ShapePatternParser",
+    "get_benchmark_setup",
 ]

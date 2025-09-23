@@ -82,8 +82,7 @@ def alibi_functional(score, _, h, q_idx, kv_idx):
         args={},
     ))
 def benchmark(Z, H, N_CTX, D_HEAD, MASK, MODE, provider):
-    # There is still performance variance for triton, probably caused by random choice of autotune config
-    n_warmup = 200
+    n_warmup, n_repeat = benchmark_suite.get_benchmark_setup('flex_attention_custom_masks')
     assert MODE in ['fwd', 'bwd']
     assert MASK in ['NATTEN', 'Alibi']
     dtype = torch.float16
@@ -114,7 +113,7 @@ def benchmark(Z, H, N_CTX, D_HEAD, MASK, MODE, provider):
             triton_o = triton_fn()
             triton_do = torch.randn_like(triton_o)
             triton_fn = lambda: triton_o.backward(triton_do, retain_graph=True)
-        _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(triton_fn, n_warmup=n_warmup, n_repeat=10,
+        _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(triton_fn, n_warmup=n_warmup, n_repeat=n_repeat,
                                                                quantiles=quantiles)
         # Values checking cannot be implemented for these case as :
         # "The operator 'aten::_scaled_dot_product_flash_attention_for_cpu' is not currently implemented for the XPU device"
@@ -125,7 +124,7 @@ def benchmark(Z, H, N_CTX, D_HEAD, MASK, MODE, provider):
             xformers_o = xformers_fn()
             xformers_do = torch.randn_like(xformers_o)
             xformers_fn = lambda: xformers_o.backward(xformers_do, retain_graph=True)
-        _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(xformers_fn, n_warmup=n_warmup, n_repeat=10,
+        _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(xformers_fn, n_warmup=n_warmup, n_repeat=n_repeat,
                                                                quantiles=quantiles)
 
     else:

@@ -315,9 +315,7 @@ X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
         args={},
     ))
 def benchmark(B, M, N, K, dtype, provider):
-    # Maximum across onednn=600, triton=1000
-    # For onednn and triton: Some configs increase performance with warmup as a step function, but some slowly decrease with saturation. Performance is best at 150-200ms range, but we want stable, not just best
-    n_warmup = 1000
+    n_warmup, n_repeat = benchmark_suite.get_benchmark_setup('gemm_postop_addmatrix')
     res_dtype = torch.float32 if dtype.is_floating_point else torch.int32
     if dtype.is_floating_point:
         rand = lambda shape, dtype: torch.rand(shape, device='xpu', dtype=dtype)
@@ -336,7 +334,7 @@ def benchmark(B, M, N, K, dtype, provider):
 
     if provider == 'onednn':
         _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(lambda: torch.matmul(a, b) + d, n_warmup=n_warmup,
-                                                                  n_repeat=10, quantiles=quantiles)
+                                                                  n_repeat=n_repeat, quantiles=quantiles)
     elif provider == 'triton':
         assert len(a.shape) == len(b.shape), 'Incompatible sizes'
         if len(a.shape) == 3:
@@ -356,7 +354,7 @@ def benchmark(B, M, N, K, dtype, provider):
                                                        [1, 512, 8192, 32768], [4, 32768, 4096, 128]]:
             # torch int8 matmul on GPU is not supported. only check a few int8 shapes to reduce runtime
             benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(triton_fn, n_warmup=n_warmup, n_repeat=10,
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(triton_fn, n_warmup=n_warmup, n_repeat=n_repeat,
                                                                   quantiles=quantiles)
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')

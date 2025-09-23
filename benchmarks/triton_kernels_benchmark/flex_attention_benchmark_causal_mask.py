@@ -137,8 +137,7 @@ fa_kernel_mode = os.getenv('FA_KERNEL_MODE', 'fwd')
         args={},
     ))
 def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provider):
-    # Maximum across torch=200, triton=600
-    n_warmup = 600
+    n_warmup, n_repeat = benchmark_suite.get_benchmark_setup('flash_attention_causal_mask')
     if MODE not in ('fwd', 'bwd'):
         raise ValueError(f"Invalid MODE: {MODE}. Expected 'fwd' or 'bwd'.")
     dtype = torch.float16
@@ -158,7 +157,7 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
             mean = float('nan')
             cv = float('nan')
         else:
-            _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(torch_fn, n_warmup=n_warmup, n_repeat=10,
+            _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(torch_fn, n_warmup=n_warmup, n_repeat=n_repeat,
                                                                    quantiles=quantiles, device=DEVICE)
 
     elif provider == 'triton':
@@ -184,7 +183,7 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
             benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-2, rtol=1e-3, err_msg='triton to torch')
 
         _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
-            triton_fn, n_warmup=n_warmup, n_repeat=10, quantiles=quantiles, device=DEVICE, grad_to_none=(q, k, v),
+            triton_fn, n_warmup=n_warmup, n_repeat=n_repeat, quantiles=quantiles, device=DEVICE, grad_to_none=(q, k, v),
             benchmark_label=None if MODE == 'fwd' else 'CompiledFunctionBackward')
 
     else:

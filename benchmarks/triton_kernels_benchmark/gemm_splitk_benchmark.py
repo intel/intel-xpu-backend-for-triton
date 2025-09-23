@@ -141,8 +141,7 @@ matmul = _matmul.apply
         args={},
     ))
 def benchmark(M, N, K, provider):
-    # Maximum across onednn=10, triton=100, xetla=300
-    n_warmup = 300
+    n_warmup, n_repeat, n_repeat_xtl = benchmark_suite.get_benchmark_setup('gemm_splitk')
     torch.manual_seed(0)
     a = torch.rand((M, K), device='xpu', dtype=torch.bfloat16)
     b = torch.rand((K, N), device='xpu', dtype=torch.bfloat16)
@@ -150,14 +149,14 @@ def benchmark(M, N, K, provider):
 
     if provider == 'onednn':
         _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(lambda: torch.matmul(a, b), n_warmup=n_warmup,
-                                                                  n_repeat=10, quantiles=quantiles)
+                                                                  n_repeat=n_repeat, quantiles=quantiles)
     elif provider == 'triton':
         c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
         triton_fn = lambda: matmul(a, b, c)
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
         rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
         benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(triton_fn, n_warmup=n_warmup, n_repeat=10,
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(triton_fn, n_warmup=n_warmup, n_repeat=n_repeat,
                                                                   quantiles=quantiles)
     elif provider == 'xetla':
         c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
@@ -170,7 +169,7 @@ def benchmark(M, N, K, provider):
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
 
         # benchmark_suite.assert_close(xetla_fn, torch_fn, atol=1e-4, rtol=1.0, err_msg='xetla to torch')
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(xetla_fn, n_warmup=n_warmup, n_repeat=100,
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(xetla_fn, n_warmup=n_warmup, n_repeat=n_repeat_xtl,
                                                                   quantiles=quantiles)
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')

@@ -128,9 +128,7 @@ def get_benchmark(providers_filter: Optional[list[str]] = None):
             args={"M": 4096},  # values for function arguments not in `x_names` and `y_name`
         ))
     def benchmark(M, N, provider):
-        # Maximum across torch-native=10, triton=800, torch-jit=10, xetla=100, onednn=800
-        # For onednn more warmup very slowly makes performance worse
-        n_warmup = 800
+        n_warmup, n_repeat = benchmark_suite.get_benchmark_setup("fused_softmax")
         x = torch.randn(M, N, device="xpu", dtype=torch.bfloat16)
         quantiles = [0.5, 0.0, 1.0]
         if provider == "torch-native":
@@ -138,7 +136,7 @@ def get_benchmark(providers_filter: Optional[list[str]] = None):
                 lambda: torch.softmax(x, axis=-1),
                 quantiles=quantiles,
                 n_warmup=n_warmup,
-                n_repeat=10,
+                n_repeat=n_repeat,
             )
         if provider == "triton":
             out = torch.empty_like(x, device="xpu")
@@ -149,12 +147,12 @@ def get_benchmark(providers_filter: Optional[list[str]] = None):
                 triton_fn,
                 quantiles=quantiles,
                 n_warmup=n_warmup,
-                n_repeat=10,
+                n_repeat=n_repeat,
             )
 
         elif provider == "torch-jit":
             _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(lambda: naive_softmax(x), quantiles=quantiles,
-                                                                   n_warmup=n_warmup, n_repeat=10)
+                                                                   n_warmup=n_warmup, n_repeat=n_repeat)
 
         elif provider == "xetla":
             name = f"softmax_shape_{M}_{N}"
@@ -164,7 +162,7 @@ def get_benchmark(providers_filter: Optional[list[str]] = None):
             torch_fn = lambda: torch.softmax(x, axis=-1)
             # benchmark_suite.assert_close(xetla_fn, torch_fn, err_msg="xetla to torch")
             _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(xetla_fn, quantiles=quantiles, n_warmup=n_warmup,
-                                                                   n_repeat=10)
+                                                                   n_repeat=n_repeat)
 
         elif provider == "onednn":
             name = "onednn_softmax"
@@ -174,7 +172,7 @@ def get_benchmark(providers_filter: Optional[list[str]] = None):
             torch_fn = lambda: torch.softmax(x, axis=-1)
             benchmark_suite.assert_close(onednn_fn, torch_fn, err_msg="onednn to torch")
             _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(onednn_fn, quantiles=quantiles, n_warmup=n_warmup,
-                                                                   n_repeat=10)
+                                                                   n_repeat=n_repeat)
 
         else:
             raise NotImplementedError(f"Unsupported provider {provider}")

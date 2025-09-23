@@ -340,8 +340,7 @@ def get_benchmark(
             args={},
         ))
     def benchmark(B, M, N, K, provider):
-        # Maximum across onednn=600, triton=800, xetla=10, cutlass=600
-        n_warmup = 800
+        n_warmup, n_repeat = benchmark_suite.get_benchmark_setup('gemm')
         a_shape, b_shape = get_shapes(B, M, N, K, transpose_a=transpose_a, transpose_b=transpose_b)
 
         torch.manual_seed(0)
@@ -362,7 +361,7 @@ def get_benchmark(
             _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
                 lambda: torch.matmul(torch_a, torch_b),
                 n_warmup=n_warmup,
-                n_repeat=10,
+                n_repeat=n_repeat,
                 quantiles=quantiles,
             )
 
@@ -390,7 +389,7 @@ def get_benchmark(
             _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
                 triton_fn,
                 n_warmup=n_warmup,
-                n_repeat=10,
+                n_repeat=n_repeat,
                 quantiles=quantiles,
             )
 
@@ -424,7 +423,7 @@ def get_benchmark(
             _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
                 xetla_fn,
                 n_warmup=n_warmup,
-                n_repeat=10,
+                n_repeat=n_repeat,
                 quantiles=quantiles,
             )
 
@@ -455,7 +454,7 @@ def get_benchmark(
             _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
                 cutlass_fn,
                 n_warmup=n_warmup,
-                n_repeat=10,
+                n_repeat=n_repeat,
                 quantiles=quantiles,
             )
 
