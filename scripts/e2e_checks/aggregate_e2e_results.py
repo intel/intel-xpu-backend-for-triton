@@ -98,6 +98,7 @@ def parse_mode(report_path):
 
     # Check if it follows the expected pattern
     if len(parts) < 6 or parts[0] != 'inductor' or parts[-1] != 'accuracy.csv':
+        print('Unexpected filename format:', report_path.name, 'parsed parts:', parts)
         return None
     return parts[-3]
 
@@ -113,6 +114,8 @@ def load_reports(input_path):
             for report_path in dtype_path.glob('inductor_*_xpu_accuracy.csv'):
                 print(f'Reading {report_path}')
                 mode = parse_mode(report_path)
+                if mode is None:
+                    continue
                 df = pd.read_csv(report_path)
                 df['suite'] = suite
                 df['mode'] = mode
