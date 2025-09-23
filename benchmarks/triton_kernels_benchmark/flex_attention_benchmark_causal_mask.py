@@ -81,7 +81,52 @@ fa_kernel_mode = os.getenv('FA_KERNEL_MODE', 'fwd')
     benchmark_suit.Benchmark(
         x_names=['Z', 'H_q', 'H_kv', 'N_CTX_q', 'N_CTX_kv', 'D_HEAD_qk', 'D_HEAD_v', 'MODE'],
         x_vals=
-        [[z, 28, 4, 1024, 1024, 128, 128, 'fwd'] for z in batch_sizes] +
+        # Multi-head attention. H_q equals H_kv
+        # Prefill shapes of Phi3-mini-3.8B
+        [[z, 32, 32, 1024, 1024, 96, 96, fa_kernel_mode] for z in batch_sizes] +
+        # Prefill shapes of Deepseek-v3
+        [[z, 128, 128, 1024, 1024, 192, 128, fa_kernel_mode] for z in batch_sizes] +
+        # Append shapes of Phi3-mini-3.8B
+        [[z, 32, 32, 512, 1024 + 128 + 512, 96, 96, fa_kernel_mode] for z in batch_sizes] +
+
+        # Multi-query attention. H_kv equals 1.
+        # Append shapes of Deepseek-v3 (Nope)
+        [[z, 128, 1, 512, 1024 + 128 + 512, 64, 512, fa_kernel_mode] for z in batch_sizes] +
+        # Append shapes of Deepseek-v3 (Rope)
+        [] +
+
+        # Grouped-query attention. H_q / H_kv > 1
+        # Prefill shapes of Llama-3.1-8B
+        [[z, 32, 8, 1024, 1024, 128, 128, fa_kernel_mode] for z in batch_sizes] +
+        # Prefill shapes of Qwen2-7B
+        [[z, 28, 4, 1024, 1024, 128, 128, fa_kernel_mode] for z in batch_sizes] +
+        # Append shapes of Llama-3.1-8B
+        [[z, 32, 8, 512, 1024 + 128 + 512, 128, 128, fa_kernel_mode] for z in batch_sizes] +
+        # Append shapes of Qwen2-7B
+        [[z, 28, 4, 512, 1024 + 128 + 512, 128, 128, fa_kernel_mode] for z in batch_sizes] +
+
+        # FlexDecoding configuration. N_CTX_q equals 1. N_CTX_kv >= 1k
+        # Decode shapes of Llama-3.1-8B
+        [[z, 32, 8, 1, 1024 + 64, 128, 128, fa_kernel_mode] for z in batch_sizes] +
+        # Decode shapes of Phi3-mini-3.8B
+        [
+            # acc = acc.reshape(G, BLOCK_M_PER_HQ, V_HEAD_DIM)
+            # ValueError: Shape element 2 must be a power of 2
+            # [z, 32, 32, 1, 1024 + 64, 96, 96, fa_kernel_mode] for z in batch_sizes
+        ] +
+        # Decode shapes of Qwen2-7B
+        [
+            # torch._inductor.exc.InductorError: LoweringException: ValueError: Number of shared query heads sharing the same KV head must be power of 2.
+            # [z, 28, 4, 1, 1024 + 64, 128, 128, fa_kernel_mode] for z in batch_sizes
+        ] +
+        # Decode shapes of Deepseek-v3 (Nope)
+        [
+            # There is an known issue in IGC for kernel with extreme register pressure.
+            # Enable this case later with new IGC.
+            # RuntimeError: ZE_RESULT_ERROR_INVALID_KERNEL_NAME
+            # [z, 128, 1, 1, 1024, 64, 512, fa_kernel_mode] for z in batch_sizes
+        ] +
+        # Decode shapes of Deepseek-v3 (Rope)
         [],
         line_arg='provider',
         line_vals=['triton', 'torch'],
