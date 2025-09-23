@@ -551,13 +551,11 @@ def get_benchmark(
     Returns a Mark object containing a Benchmark object constructed at runtime and parameterized by the provided option values.
     The benchmark can then be executed by calling the :code:`.run` method on the return value.
     """
-    causal_mode = [False, True] if fa_kernel_mode == 'fwd' else [
+    causal_mode = [True] if fa_kernel_mode == 'fwd' else [
         True
     ]  # The 06 tutorial bwd Non-causal tests do not pass at the moment.
 
     supported_providers = {
-        'triton': 'Triton',
-        'xetla': 'XeTLA',
         'cutlass': 'CUTLASS',
     }
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
@@ -571,11 +569,10 @@ def get_benchmark(
             # argument names to use as an x-axis for the plot
             x_names=['Z', 'H', 'N_CTX', 'D_HEAD', 'CAUSAL', 'MODE'],
             x_vals=[[z, h, 16384 // z, dhead, causal, mode]
-                    for z in [1, 2, 4, 8, 16, 32]
-                    for (h, dhead) in [(16, 128), (32, 64)]
+                    for z in [1]
+                    for (h, dhead) in [(16, 128)]
                     for causal in causal_mode
-                    for mode in [fa_kernel_mode]]  #
-            + [[4, 48, 1024, 64, causal, mode] for causal in causal_mode for mode in [fa_kernel_mode]],
+                    for mode in [fa_kernel_mode]],
             line_arg='provider',
             # argument name whose value corresponds to a different line in the plot
             # possible values for `line_arg``
@@ -591,6 +588,7 @@ def get_benchmark(
         ))
     # pylint: disable=too-many-branches
     def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
+        print(f'Running benchmark with Z={Z}, H={H}, N_CTX={N_CTX}, D_HEAD={D_HEAD}, CAUSAL={CAUSAL}, MODE={MODE}, provider={provider}')
         modes = ['fwd', 'bwd']
         # This warmup logic improves performance on BMG significantly
         # For FWD mode in triton & cutlass: Some configs increase performance with warmup as a step function, but some slowly decrease with saturation
