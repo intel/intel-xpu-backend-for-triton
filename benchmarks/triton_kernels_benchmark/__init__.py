@@ -1,5 +1,7 @@
 import os
 
+from configs.do_bench_configs import get_benchmark_setup
+
 from .benchmark_testing import (
     assert_close,
     do_bench,
@@ -12,7 +14,6 @@ from .benchmark_testing import (
 )
 
 from .benchmark_shapes_parser import ShapePatternParser
-from .configs.do_bench_configs import get_benchmark_setup
 
 if BENCHMARKING_METHOD == "UPSTREAM_PYTORCH_PROFILER":
     os.environ["INJECT_PYTORCH"] = "True"
