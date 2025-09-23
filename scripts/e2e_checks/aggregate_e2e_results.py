@@ -10,29 +10,6 @@ def parse_args():
     return parser.parse_args()
 
 
-def parse_folder_name(folder_name):
-    """
-    Parse folder name to extract suite and dtype.
-
-    Expected format: logs-{suite}-{dtype}-{mode}-accuracy, where mode can contain `-` characters
-    Examples:
-    - logs-torchbench-float32-inference-accuracy -> suite=torchbench, dtype=float32
-    - logs-huggingface-amp_bf16-training-accuracy -> suite=huggingface, dtype=amp_bf16
-    """
-    parts = folder_name.split('-')
-
-    # Check if it follows the expected pattern
-    if len(parts) < 4 or parts[0] != 'logs' or parts[-1] != 'accuracy':
-        return None, None, None
-
-    suite = parts[1]
-    dtype = parts[2]
-    # Extract mode, can include dashes
-    mode = '-'.join(parts[3:-1])
-
-    return suite, dtype, mode
-
-
 def build_suite_report(combined_df, output_path):
     print('=======================================')
     print('=           SUMMARY REPORT            =')
@@ -110,6 +87,40 @@ def build_pytorch_report(combined_df, output_path):
         pivoted_df.to_csv(torch_report_dir / f'inductor_{suite}_{mode}.csv', index=False)
 
 
+def parse_mode(report_path):
+    """
+    Parse report file path to extract `mode`.
+
+    Expected filename: 'inductor_{suite}_{dtype}_{mode}_xpu_accuracy.csv', where mode can contain `-` characters
+    and dtype can contain `_` characters (e.g., `amp_bf16`).
+    """
+    parts = report_path.name.split('_')
+
+    # Check if it follows the expected pattern
+    if len(parts) < 6 or parts[0] != 'inductor' or parts[-1] != 'accuracy.csv':
+        return None
+    return parts[-3]
+
+
+def load_reports(input_path):
+    dfs = []
+    for suite_path in filter(Path.is_dir, input_path.iterdir()):
+        suite = suite_path.name
+
+        for dtype_path in filter(Path.is_dir, suite_path.iterdir()):
+            dtype = dtype_path.name
+
+            for report_path in dtype_path.glob('inductor_*_xpu_accuracy.csv'):
+                print(f'Reading {report_path}')
+                mode = parse_mode(report_path)
+                df = pd.read_csv(report_path)
+                df['suite'] = suite
+                df['mode'] = mode
+                df['dtype'] = dtype
+                dfs.append(df)
+    return dfs
+
+
 def main(input_dir, output_dir):
     """
     Main function to aggregate end-to-end test results.
@@ -129,23 +140,7 @@ def main(input_dir, output_dir):
     print(f'Processing results from: {input_path}')
     print(f'Output will be saved to: {output_path}')
 
-    dfs = []
-    for item_path in input_path.iterdir():
-        name = item_path.name
-        if not item_path.is_dir():
-            continue
-
-        suite, dtype, mode = parse_folder_name(name)
-        if suite is None:
-            print(f'Folder name \'{name}\' does not match expected pattern, skipping')
-            continue
-        filepath = item_path / suite / dtype / f'inductor_{suite}_{dtype}_{mode}_xpu_accuracy.csv'
-        df = pd.read_csv(filepath)
-        df['suite'] = suite
-        df['mode'] = mode
-        df['dtype'] = dtype
-        dfs.append(df)
-
+    dfs = load_reports(input_path)
     combined_df = pd.concat(dfs, ignore_index=True)
     combined_df = combined_df.sort_values(['suite', 'mode', 'dtype'])
 

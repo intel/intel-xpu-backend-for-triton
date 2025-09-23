@@ -151,6 +151,7 @@ jobs:
         uses: actions/download-artifact@v5
         with:
           path: separate-reports
+          merge-multiple: true
 
       - name: Run aggregation script
         run: |
