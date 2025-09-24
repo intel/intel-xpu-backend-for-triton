@@ -630,11 +630,10 @@ void makeAllWarpGroupsIsolatedFromAbove(Operation *op);
 // Set the correct loop annotation on LLVM branch ops.
 void fixUpLoopAnnotation(ModuleOp mod);
 
-LogicalResult
-transferWithinBlockSwizzling(triton::gpu::ConvertLayoutOp op, Value src,
-                             const TargetInfoBase &targetInfo,
-                             const LLVMTypeConverter *typeConverter,
-                             RewriterBase &rewriter);
+void transferWithinBlockSwizzling(triton::gpu::ConvertLayoutOp op, Value src,
+                                  const TargetInfoBase &targetInfo,
+                                  const LLVMTypeConverter *typeConverter,
+                                  RewriterBase &rewriter);
 
 SmallVector<Value> inlineRegionImpl(RewriterBase &rewriter, Region &region,
                                     ArrayRef<Value> args,

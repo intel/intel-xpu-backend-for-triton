@@ -19,7 +19,7 @@ from triton_kernels_benchmark.benchmark_testing import (
     MarkArgs,
 )
 from triton_kernels_benchmark.benchmark_shapes_parser import ShapePatternParser
-from triton_kernels_benchmark.benchmark_config_templates import CONFIGS
+from triton_kernels_benchmark.configs.benchmark_config_templates import CONFIGS
 
 
 @dataclass

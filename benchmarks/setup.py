@@ -7,7 +7,7 @@ import sys
 #  https://github.com/pypa/setuptools/discussions/2838
 from distutils import log  # pylint: disable=[deprecated-module]
 
-from setuptools import setup, Extension
+from setuptools import setup, Extension, find_packages
 from setuptools.command.build_ext import build_ext as _build_ext
 
 import torch
@@ -112,7 +112,7 @@ def get_git_commit_hash(length=8):
 setup(
     name="triton-kernels-benchmark",
     version="3.3.0" + get_git_commit_hash(),
-    packages=["triton_kernels_benchmark"],
+    packages=find_packages(),
     install_requires=[
         "torch>=2.6",
         "pandas",
