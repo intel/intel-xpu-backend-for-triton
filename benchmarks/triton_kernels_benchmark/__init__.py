@@ -1,6 +1,6 @@
 import os
 
-from configs.do_bench_configs import get_benchmark_setup
+from .configs.do_bench_configs import get_benchmark_setup
 
 from .benchmark_testing import (
     assert_close,

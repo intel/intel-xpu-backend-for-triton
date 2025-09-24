@@ -137,7 +137,7 @@ fa_kernel_mode = os.getenv('FA_KERNEL_MODE', 'fwd')
         args={},
     ))
 def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provider):
-    n_warmup, n_repeat = benchmark_suite.get_benchmark_setup('flash_attention_causal_mask')
+    n_warmup, n_repeat = benchmark_suite.get_benchmark_setup('flex_attention_causal_mask')
     if MODE not in ('fwd', 'bwd'):
         raise ValueError(f"Invalid MODE: {MODE}. Expected 'fwd' or 'bwd'.")
     dtype = torch.float16
