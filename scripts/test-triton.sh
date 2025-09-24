@@ -27,6 +27,8 @@ TEST:
     --instrumentation
     --inductor
     --sglang
+    --liger
+    --vllm
 
 OPTION:
     --unskip
@@ -68,6 +70,8 @@ TEST_BENCHMARK_FLEX_ATTENTION=false
 TEST_INSTRUMENTATION=false
 TEST_INDUCTOR=false
 TEST_SGLANG=false
+TEST_LIGER=false
+TEST_VLLM=false
 TEST_TRITON_KERNELS=false
 VENV=false
 TRITON_TEST_REPORTS=false
@@ -186,6 +190,16 @@ while (( $# != 0 )); do
       ;;
     --sglang)
       TEST_SGLANG=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --liger)
+      TEST_LIGER=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --vllm)
+      TEST_VLLM=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -571,7 +585,7 @@ run_inductor_tests() {
 
 run_sglang_tests() {
   echo "***************************************************"
-  echo "******    Running SGLang Triton tests       ******"
+  echo "******    Running SGLang Triton tests        ******"
   echo "***************************************************"
 
   if ! [ -d "./sglang" ]; then
@@ -590,6 +604,55 @@ run_sglang_tests() {
 
   pip install pytest pytest-xdist
   run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-4} test/srt/test_triton_attention_kernels.py
+}
+
+run_liger_tests() {
+  echo "************************************************"
+  echo "******    Running Liger Triton tests      ******"
+  echo "************************************************"
+
+  if ! [ -d "./Liger-Kernel" ]; then
+    git clone https://github.com/linkedin/Liger-Kernel
+  fi
+
+  if ! pip list | grep "liger_kernel" ; then
+    pip install pytest pytest-xdist pytest-cov transformers pandas pytest datasets -e Liger-Kernel
+  fi
+
+  run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-4} Liger-Kernel/test/
+}
+
+run_vllm_tests() {
+  echo "************************************************"
+  echo "******    Running VLLM Triton tests       ******"
+  echo "************************************************"
+
+  if ! [ -d "./vllm" ]; then
+    git clone https://github.com/vllm-project/vllm.git
+    cd vllm
+    git checkout "$(<../benchmarks/third_party/vllm/vllm-pin.txt)"
+    git apply $TRITON_PROJ/benchmarks/third_party/vllm/vllm-fix.patch
+    cd ..
+  fi
+
+  if ! pip list | grep "vllm" ; then
+    pip install -r vllm/requirements/xpu.txt
+
+    git clone https://github.com/vllm-project/vllm-xpu-kernels
+    cd vllm-xpu-kernels
+    git checkout "$(<../benchmarks/third_party/vllm/vllm-kernels-pin.txt)"
+    sed -i '/pytorch\|torch/d' requirements.txt
+    pip install -r requirements.txt
+    VLLM_TARGET_DEVICE=xpu pip install -e .
+    cd ..
+
+    VLLM_TARGET_DEVICE=xpu pip install --no-deps vllm
+  fi
+
+  cd vllm
+  pip install pytest pytest-cov pytest-xdist cachetools cbor2 blake3 pybase64 openai_harmony tblib
+
+  run_pytest_command -vvv tests/kernels/moe/test_batched_moe.py tests/kernels/attention/test_triton_unified_attention.py
 }
 
 run_triton_kernels_tests() {
@@ -667,6 +730,12 @@ test_triton() {
   fi
   if [ "$TEST_SGLANG" == true ]; then
     run_sglang_tests
+  fi
+  if [ "$TEST_LIGER" == true ]; then
+    run_liger_tests
+  fi
+  if [ "$TEST_VLLM" == true ]; then
+    run_vllm_tests
   fi
   if [ "$TEST_TRITON_KERNELS" == true ]; then
     run_triton_kernels_tests
