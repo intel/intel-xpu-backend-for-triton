@@ -602,7 +602,6 @@ run_liger_tests() {
     pip install pytest pytest-xdist pytest-cov transformers pandas pytest datasets -e Liger-Kernel
   fi
 
-  echo "RUNNING"
   run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-4} Liger-Kernel/test/
 }
 
