@@ -2,19 +2,11 @@
 Gemm + PreOp (exp) benchmark (tensor descriptor)
 ============================
 
-This benchmark is modified from gemm_preop_exp_benchmark.py to use tensor 
-descriptors instead of block pointers for an exponential operation on the 
+This benchmark is modified from gemm_preop_exp_benchmark.py to use tensor
+descriptors instead of block pointers for an exponential operation on the
 input matrix A.
 
 """
-
-# put the parent directory of the current file to the head of sys.path
-import os
-import sys
-# Add the logic checking the existence of the parent directory to avoid duplicate addition
-parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
 
 import torch
 import triton
@@ -65,7 +57,6 @@ def matmul_kernel_with_tensor_descriptors(
     pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
     pid_n = (pid % num_pid_in_group) // group_size_m
 
-    # Create tensor descriptors
     a_desc = tl.make_tensor_descriptor(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
                                        block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K))
     b_desc = tl.make_tensor_descriptor(base=b_ptr, shape=(K, N), strides=(stride_bk, stride_bn),
@@ -74,19 +65,15 @@ def matmul_kernel_with_tensor_descriptors(
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     off_k = 0
     for _ in range(0, K, BLOCK_SIZE_K):
-        # Load matrix A using tensor descriptor
         a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
-        # Apply exponential operation (PreOp)
         a = a.to(tl.float32)
         a = tl.math.exp(a)
         a = a.to(tl.bfloat16)
-        # Load matrix B using tensor descriptor
         b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
         accumulator += tl.dot(a, b)
         off_k += BLOCK_SIZE_K
     c = accumulator.to(tl.float32)
 
-    # Create output tensor descriptor and store result
     c_desc = tl.make_tensor_descriptor(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
                                        block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N))
     c_desc.store([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], c)
@@ -139,11 +126,9 @@ def matmul_kernel_with_tensor_descriptors_batched(
     pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
     pid_n = (pid % num_pid_in_group) // group_size_m
 
-    # Calculate batch offsets
     offset_a = bid.to(tl.int64) * stride_az
     offset_b = bid.to(tl.int64) * stride_bz
 
-    # Create tensor descriptors with batch offsets
     a_desc = tl.make_tensor_descriptor(base=a_ptr + offset_a, shape=(M, K), strides=(stride_am, stride_ak),
                                        block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K))
     b_desc = tl.make_tensor_descriptor(base=b_ptr + offset_b, shape=(K, N), strides=(stride_bk, stride_bn),
@@ -152,19 +137,15 @@ def matmul_kernel_with_tensor_descriptors_batched(
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     off_k = 0
     for _ in range(0, K, BLOCK_SIZE_K):
-        # Load matrix A using tensor descriptor
         a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
-        # Apply exponential operation (PreOp)
         a = a.to(tl.float32)
         a = tl.math.exp(a)
         a = a.to(tl.bfloat16)
-        # Load matrix B using tensor descriptor
         b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
         accumulator += tl.dot(a, b)
         off_k += BLOCK_SIZE_K
     c = accumulator.to(tl.float32)
 
-    # Create output tensor descriptor with batch offset and store result
     offset_c = bid.to(tl.int64) * stride_cz
     c_desc = tl.make_tensor_descriptor(base=c_ptr + offset_c, shape=(M, N), strides=(stride_cm, stride_cn),
                                        block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N))
