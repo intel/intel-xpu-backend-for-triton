@@ -605,9 +605,10 @@ def get_benchmark(
             raise AssertionError(f'Unknown {MODE}, supported modes are {modes}')
         dtype = torch.float16
         torch.xpu.empty_cache()
-        q = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype, requires_grad=True)
-        k = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype, requires_grad=True)
-        v = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype, requires_grad=True)
+        torch.manual_seed(20)
+        q = (torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device='xpu').normal_(mean=0.0, std=0.5).requires_grad_())
+        k = (torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device='xpu').normal_(mean=0.0, std=0.5).requires_grad_())
+        v = (torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device='xpu').normal_(mean=0.0, std=0.5).requires_grad_())
         sm_scale = 0.125
         quantiles = [0.5, 0.0, 1.0]
         atol = 1e-1 if N_CTX == 16384 else 1e-2
