@@ -6,7 +6,7 @@ import torch
 import triton
 
 from triton_kernels_benchmark.flash_attention_benchmark import _attention, tune_attn_fwd
-import triton_kernels_benchmark as benchmark_suit
+import triton_kernels_benchmark as benchmark_suite
 
 
 def get_options():
@@ -75,7 +75,7 @@ def run(options):
         #torch.set_printoptions(profile="default") # reset
 
         atol = 1e-1 if options.N_CTX == 16384 else 1e-2
-        benchmark_suit.assert_close(lambda: triton_o, lambda: torch_o, atol=atol, rtol=1e-3, err_msg='triton to torch')
+        benchmark_suite.assert_close(lambda: triton_o, lambda: torch_o, atol=atol, rtol=1e-3, err_msg='triton to torch')
 
     if options.backward:
         triton_o.backward(torch.randn_like(triton_o), retain_graph=True)
