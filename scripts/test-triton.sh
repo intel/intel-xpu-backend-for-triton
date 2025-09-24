@@ -666,7 +666,7 @@ run_triton_kernels_tests() {
   if [[ -f "$gpu_file" ]] && grep -q "B580" "$gpu_file"; then
     # Using any other number of processes results in an error on the BMG due to insufficient resources.
     # FIXME: reconsider in the future
-    max_procs=${PYTEST_MAX_PROCESSES:-1}
+    max_procs=1
   else
     max_procs=${PYTEST_MAX_PROCESSES:-4}
   fi
