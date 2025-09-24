@@ -627,7 +627,7 @@ run_vllm_tests() {
     git checkout "$(<../benchmarks/third_party/vllm/vllm-kernels-pin.txt)"
     sed -i '/pytorch\|torch/d' requirements.txt
     pip install -r requirements.txt
-    VLLM_TARGET_DEVICE=xpu python3 setup.py develop
+    VLLM_TARGET_DEVICE=xpu pip install -e .
     cd ..
 
     VLLM_TARGET_DEVICE=xpu pip install --no-deps vllm
