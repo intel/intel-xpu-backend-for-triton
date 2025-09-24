@@ -11,7 +11,7 @@ import torch
 import triton
 import triton.language as tl
 
-import triton_kernels_benchmark as benchmark_suit
+import triton_kernels_benchmark as benchmark_suite
 
 
 @triton.autotune(
@@ -241,8 +241,8 @@ X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
 
 
 # Benchmark Performance
-@benchmark_suit.perf_report(
-    benchmark_suit.Benchmark(
+@benchmark_suite.perf_report(
+    benchmark_suite.Benchmark(
         # argument names to use as an x-axis for the plot
         x_names=['B', 'M', 'K', 'N'],
         # different possible values for `x_name`
@@ -286,9 +286,9 @@ def benchmark(B, M, N, K, provider):
         triton_fn = lambda: matmul(a, b, c)
         torch_fn = lambda: torch.matmul(torch.exp(a), b).to(torch.float32)
         rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
-        benchmark_suit.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, n_warmup=n_warmup, n_repeat=10,
-                                                                 quantiles=quantiles, time_warmup=False)
+        benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(triton_fn, n_warmup=n_warmup, n_repeat=10,
+                                                                  quantiles=quantiles, time_warmup=False)
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 

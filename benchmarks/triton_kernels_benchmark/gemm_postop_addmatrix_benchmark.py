@@ -11,7 +11,7 @@ import torch
 import triton
 import triton.language as tl
 
-import triton_kernels_benchmark as benchmark_suit
+import triton_kernels_benchmark as benchmark_suite
 import psutil
 
 INT8_ONLY_OPTION = os.getenv('INT8_ONLY', '0') == '1'
@@ -295,8 +295,8 @@ X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
 
 
 # Benchmark Performance
-@benchmark_suit.perf_report(
-    benchmark_suit.Benchmark(
+@benchmark_suite.perf_report(
+    benchmark_suite.Benchmark(
         # argument names to use as an x-axis for the plot
         x_names=['B', 'M', 'K', 'N', 'dtype'],
         # different possible values for `x_name`
@@ -335,8 +335,8 @@ def benchmark(B, M, N, K, dtype, provider):
     quantiles = [0.5, 0.0, 1.0]
 
     if provider == 'onednn':
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(lambda: torch.matmul(a, b) + d, n_warmup=n_warmup,
-                                                                 n_repeat=10, quantiles=quantiles)
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(lambda: torch.matmul(a, b) + d, n_warmup=n_warmup,
+                                                                  n_repeat=10, quantiles=quantiles)
     elif provider == 'triton':
         assert len(a.shape) == len(b.shape), 'Incompatible sizes'
         if len(a.shape) == 3:
@@ -355,9 +355,9 @@ def benchmark(B, M, N, K, dtype, provider):
         if dtype.is_floating_point or [B, M, N, K] in [[1, 1024, 1024, 1024], [1, 2048, 2048, 2048],
                                                        [1, 512, 8192, 32768], [4, 32768, 4096, 128]]:
             # torch int8 matmul on GPU is not supported. only check a few int8 shapes to reduce runtime
-            benchmark_suit.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, n_warmup=n_warmup, n_repeat=10,
-                                                                 quantiles=quantiles)
+            benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(triton_fn, n_warmup=n_warmup, n_repeat=10,
+                                                                  quantiles=quantiles)
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 

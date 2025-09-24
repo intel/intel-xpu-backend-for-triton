@@ -33,10 +33,6 @@
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Utility.h"
 #include "llvm/Support/ErrorHandling.h"
 
-#if defined(_MSC_VER) && !defined(__clang__)
-#define __builtin_unreachable() __assume(0)
-#endif
-
 using namespace mlir::triton::gpu;
 
 namespace mlir {
