@@ -6,17 +6,11 @@ using namespace mlir::triton;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::intel::DpasEncodingAttr;
 
-namespace mlir::triton::gpu::intel {
-
-LogicalResult convertFMADot(DotOp op, DotOp::Adaptor adaptor,
-                            const LLVMTypeConverter *typeConverter,
-                            ConversionPatternRewriter &rewriter);
-
+namespace fma_details {
 LogicalResult convertDPAS(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                           TritonIntelGPUToLLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter);
-
-} // namespace mlir::triton::gpu::intel
+} // namespace fma_details
 
 namespace {
 struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
@@ -39,14 +33,13 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
 
     if (!isOuter && isa<DpasEncodingAttr>(
                         cast<RankedTensorType>(D.getType()).getEncoding())) {
-      return triton::gpu::intel::convertDPAS(op, adaptor, getTypeConverter(),
-                                             rewriter);
+      return fma_details::convertDPAS(op, adaptor, getTypeConverter(),
+                                      rewriter);
     }
 
     if (isa<BlockedEncodingAttr>(
             cast<RankedTensorType>(D.getType()).getEncoding()))
-      return triton::gpu::intel::convertFMADot(op, adaptor, getTypeConverter(),
-                                               rewriter);
+      return convertFMADot(op, adaptor, getTypeConverter(), rewriter);
 
     llvm::report_fatal_error(
         "Unsupported DotOp found when converting TritonGPU to LLVM.");
