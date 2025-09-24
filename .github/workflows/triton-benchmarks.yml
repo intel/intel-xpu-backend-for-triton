@@ -236,15 +236,6 @@ jobs:
           source ../../scripts/capture-hw-details.sh
           python build_report.py $REPORTS/matmul-performance-preop-exp.csv $REPORTS/gemm-preop-exp-triton-report.csv --benchmark gemm-preop-exp --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
-      - name: Run Triton GEMM + PreOp (exp) kernel benchmark - with tensor descriptors
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm_preop_exp_tensor_desc_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_preop_exp_tensor_desc_benchmark.py') }}
-        run: |
-          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
-          cd benchmarks/triton_kernels_benchmark
-          python gemm_preop_exp_tensor_desc_benchmark.py --reports $REPORTS --n_runs $N_RUNS
-          source ../../scripts/capture-hw-details.sh
-          python build_report.py $REPORTS/matmul-performance-preop-exp-tensor-desc.csv $REPORTS/gemm-preop-exp-tensor-desc-triton-report.csv --benchmark gemm-preop-exp-tensor-desc --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
-
       - name: Run Triton GEMM + PostOp (Gelu) kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm_postop_gelu_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_postop_gelu_benchmark.py') }}
         run: |
