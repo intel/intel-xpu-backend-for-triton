@@ -216,10 +216,7 @@ LogicalResult getConvertBackwardSlice(
     queue.pop_back();
     if (!isTensorOrTensorPointerType(currentValue.getType()))
       continue;
-    // Skip propagating through for op results for now.
-    // TODO: enable this based on needs.
-    if (currentValue.getDefiningOp<scf::ForOp>())
-      return failure();
+
     if (failed(updateLayout(currentValue, encoding)))
       return failure();
 
@@ -230,6 +227,30 @@ LogicalResult getConvertBackwardSlice(
         return failure();
       currentValue = existing;
     }
+
+#if 0
+    if (auto forOp = currentValue.getDefiningOp<scf::ForOp>()) {
+      if (stopPropagation && stopPropagation(forOp))
+        continue;
+
+      //      unsigned argIdx = cast<OpResult>(currentValue).getResultNumber();
+      //    int numIndVars = forOp.getNumInductionVars();
+      //      Block &loopBody = *forOp.getBody();
+      //      auto blockArg = loopBody.getArgument(argIdx + numIndVars);
+      //      OpOperand *initOperand = forOp.getTiedLoopInit(blockArg);
+      //      OpOperand &yieldOperand =
+      //      loopBody.getTerminator()->getOpOperand(argIdx);
+      auto loopRes = cast<OpResult>(currentValue);
+      OpOperand *initOperand = forOp.getTiedLoopInit(loopRes);
+      BlockArgument blockArg = forOp.getTiedLoopRegionIterArg(loopRes);
+      OpOperand *yieldOperand = forOp.getTiedLoopYieldedValue(blockArg);
+
+      enqueue(*initOperand, encoding);
+      enqueue(*yieldOperand, encoding);
+
+      continue;
+    }
+#endif
 
     if (auto ifOp = currentValue.getDefiningOp<scf::IfOp>()) {
       if (stopPropagation && stopPropagation(ifOp))
