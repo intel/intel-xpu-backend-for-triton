@@ -193,6 +193,18 @@ create_function(ze_module_handle_t module, ze_kernel_flags_t flag,
   if (getBoolEnv("MLIR_ENABLE_DUMP")) {
     std::cout << "create kernel:" << func_name << std::endl;
   }
+
+  uint32_t count = 0;
+  [[maybe_unused]] auto ret = zeModuleGetKernelNames(module, &count, nullptr);
+  assert(ret == ZE_RESULT_SUCCESS);
+  if (count == 0) {
+    std::cerr
+        << "Module doesn't contain any kernel. Please attempt to tune the "
+           "'num_warps' parameter."
+        << std::endl;
+    return std::make_tuple(nullptr, ZE_RESULT_ERROR_INVALID_KERNEL_NAME);
+  }
+
   ZE_CHECK(zeKernelCreate(module, &kernel_description, &kernel));
   return std::make_tuple(kernel, ZE_RESULT_SUCCESS);
 }
