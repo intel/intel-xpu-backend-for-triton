@@ -13,7 +13,7 @@ import torch._inductor.kernel
 import torch._inductor.kernel.flex.flex_attention as flex_attn
 from torch._inductor.template_heuristics.triton import FlexConfig, FlexDecodeConfig
 
-import triton_kernels_benchmark as benchmark_suit
+import triton_kernels_benchmark as benchmark_suite
 import triton
 
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
@@ -77,8 +77,8 @@ fa_kernel_mode = os.getenv('FA_KERNEL_MODE', 'fwd')
 
 # Kernel profiling for Backward mode is not working as expected:
 # For details: https://github.com/pytorch/pytorch/issues/144778
-@benchmark_suit.perf_report(
-    benchmark_suit.Benchmark(
+@benchmark_suite.perf_report(
+    benchmark_suite.Benchmark(
         x_names=['Z', 'H_q', 'H_kv', 'N_CTX_q', 'N_CTX_kv', 'D_HEAD_qk', 'D_HEAD_v', 'MODE'],
         x_vals=
         # Multi-head attention. H_q equals H_kv
@@ -158,8 +158,8 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
             mean = float('nan')
             cv = float('nan')
         else:
-            _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(torch_fn, n_warmup=n_warmup, n_repeat=10,
-                                                                  quantiles=quantiles, device=DEVICE)
+            _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(torch_fn, n_warmup=n_warmup, n_repeat=10,
+                                                                   quantiles=quantiles, device=DEVICE)
 
     elif provider == 'triton':
         kernel_options = {'BLOCKS_ARE_CONTIGUOUS': True, 'USE_TMA': True}
@@ -176,14 +176,14 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
 
             tensor_names = ['out', 'grad_query', 'grad_key', 'grad_value']
             for eager, compiled, name in zip(eager_tensors, compiled_tensors, tensor_names):
-                benchmark_suit.assert_close(lambda: eager, lambda: compiled, atol=1e-2, rtol=1e-3,  # pylint: disable=cell-var-from-loop
-                                            err_msg=f'Error comparing {name} between triton and torch')
+                benchmark_suite.assert_close(lambda: eager, lambda: compiled, atol=1e-2, rtol=1e-3,  # pylint: disable=cell-var-from-loop
+                                             err_msg=f'Error comparing {name} between triton and torch')
 
             triton_fn = lambda: torch.autograd.grad((triton_o, ), (q, k, v), backwards_grad, retain_graph=True)
         else:
-            benchmark_suit.assert_close(triton_fn, torch_fn, atol=1e-2, rtol=1e-3, err_msg='triton to torch')
+            benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-2, rtol=1e-3, err_msg='triton to torch')
 
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(
+        _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
             triton_fn, n_warmup=n_warmup, n_repeat=10, quantiles=quantiles, device=DEVICE, grad_to_none=(q, k, v),
             benchmark_label=None if MODE == 'fwd' else 'CompiledFunctionBackward')
 
