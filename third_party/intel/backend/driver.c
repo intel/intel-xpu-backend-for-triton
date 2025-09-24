@@ -360,8 +360,7 @@ extern "C" EXPORT_FUNC PyObject *wait_on_sycl_queue(PyObject *cap) {
     return NULL;
   sycl::queue *sycl_queue = static_cast<sycl::queue *>(queue);
   sycl_queue->wait();
-
-  return Py_None;
+  Py_RETURN_NONE;
 }
 
 extern "C" EXPORT_FUNC PyObject *has_opencl_extension(int device_id,

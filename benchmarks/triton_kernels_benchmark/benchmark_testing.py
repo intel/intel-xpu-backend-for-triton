@@ -27,7 +27,6 @@ from triton_kernels_benchmark.benchmark_shapes_parser import ShapePatternParser
 BENCHMARKING_METHOD = os.getenv("BENCHMARKING_METHOD", "UPSTREAM_PYTORCH_PROFILER")
 BENCHMARKING_CONFIG = {
     "verify": os.getenv("VERIFY", "1") == "1",
-    "do_prewarmup": os.getenv("PREWARMUP", "1") == "1",
 }
 
 
@@ -40,19 +39,6 @@ def synchronize():
         torch.cuda.synchronize()
     elif torch.xpu.is_available():
         torch.xpu.synchronize()
-
-
-def do_prewarmup(fn, min_seconds=5):
-    """Looks like some functions require pre-warmup with minimum time to do the compilation.
-    It has to be done once."""
-    if not BENCHMARKING_CONFIG["do_prewarmup"]:
-        return
-
-    start = time.time()
-    while time.time() - start < min_seconds:
-        fn()
-        synchronize()
-    BENCHMARKING_CONFIG["do_prewarmup"] = False
 
 
 def _summarize_statistics(times, quantiles, return_mode):
@@ -73,7 +59,7 @@ def _summarize_statistics(times, quantiles, return_mode):
 
 
 def do_bench_elapsed_time(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quantiles=None, return_mode="mean",
-                          device="xpu"):
+                          device="xpu", time_warmup=False):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -113,16 +99,20 @@ def do_bench_elapsed_time(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quan
     del cache
 
     # compute warmup and repeat times
-    warmup_time = n_warmup * estimate_ms
+    if time_warmup:
+        warmup_ms = n_warmup
+    else:
+        warmup_ms = n_warmup * estimate_ms
     rep_time = n_repeat * estimate_ms
 
-    times = triton_do_bench(fn, warmup=warmup_time, rep=rep_time, grad_to_none=grad_to_none, return_mode="all")
+    times = triton_do_bench(fn, warmup=warmup_ms, rep=rep_time, grad_to_none=grad_to_none, return_mode="all")
     times = torch.tensor(times, dtype=torch.float)
     return _summarize_statistics(times, quantiles, return_mode)
 
 
 def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quantiles=None,
-                                       return_mode="mean", device="xpu", sync_submitting=True):
+                                       return_mode="mean", device="xpu", sync_submitting=True, time_warmup=True,
+                                       benchmark_label=None, max_iters=1500):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -151,11 +141,23 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
     cache = torch.empty(int(cache_size // 4), dtype=torch.int, device=device)
 
     # Warm-up
-    for _ in range(n_warmup):
-        fn()
-        # To be consistent with the benchmark measurements
-        if sync_submitting:
+    if time_warmup:
+        # Stop either on max iteration number or max time
+        warmup_time_s = n_warmup / 1000
+        assert sync_submitting
+        start = time.perf_counter()
+        i = 0
+        while i < max_iters and time.perf_counter() - start < warmup_time_s:
+            fn()
             synchronize()
+            i += 1
+        print(f"Stopped warmup after {i} iterations")
+    else:
+        for _ in range(n_warmup):
+            fn()
+            # To be consistent with the benchmark measurements
+            if sync_submitting:
+                synchronize()
 
     # Benchmark
     with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.XPU]) as prof:
@@ -176,7 +178,9 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
         # Record clocks
         synchronize()
 
-    profiling_func_filter = filter(lambda x: x.name.startswith("__profile_kernel_of_func"), prof.events())
+    profiling_func_filter = filter(
+        lambda x: x.name.startswith("__profile_kernel_of_func" if benchmark_label is None else benchmark_label),
+        prof.events())
     functions = list(profiling_func_filter)
 
     def extract_kernels(funcs):

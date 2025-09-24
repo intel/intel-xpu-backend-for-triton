@@ -160,7 +160,7 @@ def softmax(x):
 
     # pre-compile kernel to get register usage and compute thread occupancy.
     kernel = softmax_kernel.warmup(y, x, x.stride(0), y.stride(0), n_rows, n_cols, num_warps=num_warps,
-                                   threads_per_warp=WARP_SIZE, BLOCK_SIZE=BLOCK_SIZE, grid=(1, ))
+                                   warp_size=WARP_SIZE, BLOCK_SIZE=BLOCK_SIZE, grid=(1, ))
     kernel._init_handles()
     size_smem = kernel.metadata.shared
     num_programs = occupancy(num_warps, size_smem)

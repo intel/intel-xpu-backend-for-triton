@@ -6,7 +6,6 @@
 #include <iostream>
 #include <memory>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <string_view>
 
@@ -167,7 +166,12 @@ create_module(ze_context_handle_t context, ze_device_handle_t device,
     size_t szLog = 0;
     ZE_CHECK(zeModuleBuildLogGetString(buildlog, &szLog, nullptr));
     char *strLog = (char *)malloc(szLog);
-    ZE_CHECK(zeModuleBuildLogGetString(buildlog, &szLog, strLog));
+    auto error_no_build_log =
+        zeModuleBuildLogGetString(buildlog, &szLog, strLog);
+    if (error_no_build_log != ZE_RESULT_SUCCESS) {
+      free(strLog);
+      ZE_CHECK(error_no_build_log);
+    }
     std::cerr << "L0 build module failed. Log: " << strLog << std::endl;
     free(strLog);
     ZE_CHECK(zeModuleBuildLogDestroy(buildlog));
@@ -189,6 +193,18 @@ create_function(ze_module_handle_t module, ze_kernel_flags_t flag,
   if (getBoolEnv("MLIR_ENABLE_DUMP")) {
     std::cout << "create kernel:" << func_name << std::endl;
   }
+
+  uint32_t count = 0;
+  [[maybe_unused]] auto ret = zeModuleGetKernelNames(module, &count, nullptr);
+  assert(ret == ZE_RESULT_SUCCESS);
+  if (count == 0) {
+    std::cerr
+        << "Module doesn't contain any kernels. Please attempt to tune the "
+           "'num_warps' parameter."
+        << std::endl;
+    return std::make_tuple(nullptr, ZE_RESULT_ERROR_INVALID_KERNEL_NAME);
+  }
+
   ZE_CHECK(zeKernelCreate(module, &kernel_description, &kernel));
   return std::make_tuple(kernel, ZE_RESULT_SUCCESS);
 }
