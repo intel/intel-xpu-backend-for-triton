@@ -296,6 +296,8 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
     if (narg != expected_num_params) {
       // global scratch.
       cgh.set_arg(narg++, nullptr);
+    }
+    if (narg != expected_num_params) {
       // profile scratch
       cgh.set_arg(narg++, nullptr);
     }

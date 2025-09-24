@@ -2,6 +2,13 @@ add_triton_ut(
   NAME TestSwizzling
   SRCS SwizzleTest.cpp
   LIBS
+    TritonAnalysis
+    TritonGPUIR
+    TritonNvidiaGPUIR
+    TritonGPUTransforms
+    TritonNvidiaGPUTransforms
+    TritonIntelAnalysis
+    TritonIntelGPUTransforms
     TritonTools
     LLVMSupport
     MLIRSupport

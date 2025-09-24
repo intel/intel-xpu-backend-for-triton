@@ -196,6 +196,7 @@ jobs:
         suite:
           - minicore
           - scaled_dot
+          - gluon
           - rest
           - tutorial-fa-64
           - tutorial-fa-128-fwdfp8
@@ -306,10 +307,20 @@ jobs:
         run: |
           ${{ env.TRITON_TEST_CMD }} --scaled-dot
 
+      - name: Run gluon tests
+        if: matrix.suite == 'gluon' && inputs.driver_version == 'rolling'
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --gluon
+
       - name: Run interpreter tests
         if: matrix.suite == 'rest'
         run: |
           ${{ env.TRITON_TEST_CMD }} --interpreter
+
+      - name: Run triton kernels tests
+        if: matrix.suite == 'rest'
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --triton-kernels
 
       # FIXME: make sure new tutorials are added to one of the groups (scaled_dot, rest, tutorial-faX)
       - name: Select tutorials to run (scaled_dot)
