@@ -199,7 +199,7 @@ create_function(ze_module_handle_t module, ze_kernel_flags_t flag,
   assert(ret == ZE_RESULT_SUCCESS);
   if (count == 0) {
     std::cerr
-        << "Module doesn't contain any kernel. Please attempt to tune the "
+        << "Module doesn't contain any kernels. Please attempt to tune the "
            "'num_warps' parameter."
         << std::endl;
     return std::make_tuple(nullptr, ZE_RESULT_ERROR_INVALID_KERNEL_NAME);
