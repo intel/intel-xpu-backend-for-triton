@@ -93,18 +93,24 @@ def parse_mode(report_path):
 
     Expected filename: 'inductor_{suite}_{dtype}_{mode}_xpu_accuracy.csv', where mode can contain `-` characters
     and dtype can contain `_` characters (e.g., `amp_bf16`).
+
+    Returns:
+        mode (str): Extracted mode from the filename
+        error (str or None): Error message if parsing fails, otherwise None
     """
     parts = report_path.name.split('_')
 
     # Check if it follows the expected pattern
     if len(parts) < 6 or parts[0] != 'inductor' or parts[-1] != 'accuracy.csv':
-        print('Unexpected filename format:', report_path.name, 'parsed parts:', parts)
-        return None
-    return parts[-3]
+        txt = f'Unexpected filename format: {report_path.name}, parsed parts: {parts}'
+        print(txt)
+        return None, txt
+    return parts[-3], None
 
 
 def load_reports(input_path):
     dfs = []
+    problems = []
     for suite_path in filter(Path.is_dir, input_path.iterdir()):
         suite = suite_path.name
 
@@ -113,15 +119,16 @@ def load_reports(input_path):
 
             for report_path in dtype_path.glob('inductor_*_xpu_accuracy.csv'):
                 print(f'Reading {report_path}')
-                mode = parse_mode(report_path)
+                mode, problem = parse_mode(report_path)
                 if mode is None:
+                    problems.append(problem)
                     continue
                 df = pd.read_csv(report_path)
                 df['suite'] = suite
                 df['mode'] = mode
                 df['dtype'] = dtype
                 dfs.append(df)
-    return dfs
+    return dfs, problems
 
 
 def main(input_dir, output_dir):
@@ -143,7 +150,7 @@ def main(input_dir, output_dir):
     print(f'Processing results from: {input_path}')
     print(f'Output will be saved to: {output_path}')
 
-    dfs = load_reports(input_path)
+    dfs, problems = load_reports(input_path)
     combined_df = pd.concat(dfs, ignore_index=True)
     combined_df = combined_df.sort_values(['suite', 'mode', 'dtype'])
 
@@ -154,6 +161,12 @@ def main(input_dir, output_dir):
     build_pytorch_report(combined_df, output_path=output_path)
     # 3. Agg report with 45 rows (suite, mode, dtype, passed, failed_REASON, failed_REASON model list)
     build_suite_report(combined_df, output_path=output_path)
+
+    if problems:
+        print('Problems found during parsing:')
+        for problem in problems:
+            print(problem)
+        raise RuntimeError('Errors found during parsing, see above')
 
 
 if __name__ == '__main__':

@@ -165,13 +165,14 @@ jobs:
 
       - name: Upload aggregated results
         uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
         with:
           name: aggregated-results-${{ github.run_id }}
           path: aggregated-results
           include-hidden-files: true
 
       - name: Check results against reference
-        if: ${{ inputs.models == 'all' && inputs.only_one_model == '' }}
+        if: ${{ inputs.models == 'all' && inputs.only_one_model == ''  && !cancelled()}}
         run: |
           PYTORCH_XPU_OPS_REF="$(<.github/pins/e2e_reference_torch-xpu-ops.txt)"
           git clone https://github.com/intel/torch-xpu-ops.git
