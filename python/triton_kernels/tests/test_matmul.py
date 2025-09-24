@@ -21,7 +21,7 @@ from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, upcast_from_m
 # testing utilities
 from triton_kernels.testing import assert_close, compute_actual_scale
 # target-specific utilities
-from triton_kernels.target_info import is_hip, is_xpu, is_hip_cdna3, is_cuda, is_hip_cdna4
+from triton_kernels.target_info import is_hip, is_hip_cdna3, is_cuda, is_hip_cdna4
 
 # ---------------
 # initialize data
@@ -507,11 +507,9 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
 @pytest.mark.parametrize("m", [8, 16, 32, 64, 128])
 @pytest.mark.parametrize("n", [8, 16, 32, 64, 128])
 @pytest.mark.parametrize("k", [8, 16, 32, 64, 128])
-def test_small_batch_matmul(m, n, k):
+def test_small_batch_matmul(m, n, k, device):
     if is_hip():
         pytest.skip("Not fully tested on AMD")
-    if is_xpu():
-        pytest.xfail("Enable: https://github.com/intel/intel-xpu-backend-for-triton/issues/5092")
 
     if m * n * k > 16384:
         pytest.skip()
@@ -521,7 +519,7 @@ def test_small_batch_matmul(m, n, k):
     def _make_tensor(shape, dtype, trans):
         if trans:
             shape = (shape[0], shape[2], shape[1])
-        t = alloc_rand(shape, "cuda", dtype)
+        t = alloc_rand(shape, device, dtype)
         return t.transpose(1, 2) if trans else t
 
     for x_transpose, w_transpose, bias, dtype in itertools.product(
@@ -530,7 +528,7 @@ def test_small_batch_matmul(m, n, k):
         (False, True),
         (torch.float16, torch.bfloat16, torch.float8_e5m2),
     ):
-        if (
+        if is_cuda() and (
             torch.cuda.get_device_capability()[0] < 10
             and dtype is torch.float8_e5m2
             and (not w_transpose)
