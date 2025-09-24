@@ -528,7 +528,7 @@ def test_small_batch_matmul(m, n, k, device):
         (False, True),
         (torch.float16, torch.bfloat16, torch.float8_e5m2),
     ):
-        if device == "cuda" and (
+        if is_cuda() and (
             torch.cuda.get_device_capability()[0] < 10
             and dtype is torch.float8_e5m2
             and (not w_transpose)
