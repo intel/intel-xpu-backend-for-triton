@@ -1,4 +1,5 @@
-// RUN: triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm --convert-tritongen-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm --dump-input-context=20
+// RUN: triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm --convert-tritongen-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm --dump-input-context=20 --check-prefixes=CHECK,NO-PREDICATED
+// RUN: env TRITON_INTEL_PREDICATED_LOAD=1 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm --convert-tritongen-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm --dump-input-context=20 --check-prefixes=CHECK,PREDICATED
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: llvm.func spir_kernelcc @test_empty_kernel(%arg0: i64, %arg1: !llvm.ptr<1>, %arg2: !llvm.ptr<1>, %arg3: !llvm.ptr<1>)
@@ -25,21 +26,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-NEXT: [[CST_0:%.*]] = llvm.mlir.constant(0 : index) : i64
     // CHECK-NEXT: [[IE1:%.*]] = llvm.insertelement [[ARG2_0]], [[VEC]][[[CST_0]] : i64] : vector<1xf32>
     // CHECK-NEXT: [[BCAST0:%.*]] = llvm.bitcast {{.*}} : vector<1xf32> to i32
-    // CHECK:      llvm.cond_br [[ARG1_0]], ^bb1, ^bb2([[BCAST0]] : i32)
-    // CHECK-NEXT: ^bb1:
-    // CHECK-NEXT:   [[BCAST1:%.*]] = llvm.bitcast [[ARG0_0]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // CHECK-NEXT:   [[LOAD1:%.*]] = llvm.load [[BCAST1]] {alignment = 4 : i64} : !llvm.ptr<1> -> i32
-    // CHECK-NEXT:   llvm.br ^bb2([[LOAD1]] : i32)
-    // CHECK-NEXT: ^bb2([[V1:%.*]]: i32):
+    // CHECK:      [[BCAST1:%.*]] = llvm.bitcast [[ARG0_0]] : !llvm.ptr<1> to !llvm.ptr<1>
+    // PREDICATED: [[ALIGNMENT:%.*]] = llvm.mlir.constant(4 : i64) : i64
+    // PREDICATED: [[V1:%.*]] = llvm.call spir_funccc @llvm.genx.GenISA.PredicatedLoad.i32.p1i32.i32([[BCAST1]], [[ALIGNMENT]], [[ARG1_0]], [[BCAST0]]) {{.*}} : (!llvm.ptr<1>, i64, i1, i32) -> i32
+    // NO-PREDICATED:      llvm.cond_br [[ARG1_0]], ^bb1, ^bb2([[BCAST0]] : i32)
+    // NO-PREDICATED-NEXT: ^bb1:
+    // NO-PREDICATED-NEXT:   [[LOAD1:%.*]] = llvm.load [[BCAST1]] {alignment = 4 : i64} : !llvm.ptr<1> -> i32
+    // NO-PREDICATED-NEXT:   llvm.br ^bb2([[LOAD1]] : i32)
+    // NO-PREDICATED-NEXT: ^bb2([[V1:%.*]]: i32):
     // CHECK-NEXT:   [[BCAST_V1:%.*]] = llvm.bitcast [[V1]] : i32 to vector<1xf32>
     // CHECK:        [[EE1:%.*]] = llvm.extractelement [[BCAST_V1]][{{.*}} : i32] : vector<1xf32>
     // CHECK:        [[BCAST2:%.*]] = llvm.bitcast {{.*}} : vector<1xf32> to i32
-    // CHECK:        llvm.cond_br [[ARG1_1]], ^bb3, ^bb4([[BCAST2]] : i32)
-    // CHECK-NEXT: ^bb3:
-    // CHECK-NEXT:   [[BCAST3:%.*]] = llvm.bitcast [[ARG0_1]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // CHECK-NEXT:   [[LOAD2:%.*]] = llvm.load [[BCAST3]] {alignment = 4 : i64} : !llvm.ptr<1> -> i32
-    // CHECK-NEXT:   llvm.br ^bb4([[LOAD2]] : i32)
-    // CHECK-NEXT: ^bb4([[V2:%.*]]: i32):
+    // CHECK:        [[BCAST3:%.*]] = llvm.bitcast [[ARG0_1]] : !llvm.ptr<1> to !llvm.ptr<1>
+    // PREDICATED: [[ALIGNMENT:%.*]] = llvm.mlir.constant(4 : i64) : i64
+    // PREDICATED: [[V2:%.*]] = llvm.call spir_funccc @llvm.genx.GenISA.PredicatedLoad.i32.p1i32.i32([[BCAST3]], [[ALIGNMENT]], [[ARG1_1]], [[BCAST2]]) {{.*}} : (!llvm.ptr<1>, i64, i1, i32) -> i32
+    // NO-PREDICATED:        llvm.cond_br [[ARG1_1]], ^bb3, ^bb4([[BCAST2]] : i32)
+    // NO-PREDICATED-NEXT: ^bb3:
+    // NO-PREDICATED-NEXT:   [[LOAD2:%.*]] = llvm.load [[BCAST3]] {alignment = 4 : i64} : !llvm.ptr<1> -> i32
+    // NO-PREDICATED-NEXT:   llvm.br ^bb4([[LOAD2]] : i32)
+    // NO-PREDICATED-NEXT: ^bb4([[V2:%.*]]: i32):
     // CHECK-NEXT:   [[BCAST_V2:%.*]] = llvm.bitcast [[V2]] : i32 to vector<1xf32>
     // CHECK:        [[EE2:%.*]] = llvm.extractelement [[BCAST_V2]][{{.*}} : i32] : vector<1xf32>
     // CHECK-NEXT:   [[RES1:%.*]] = llvm.mlir.undef : !llvm.struct<(f32, f32)>
@@ -65,21 +70,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-NEXT: [[CST_0:%.*]] = llvm.mlir.constant(0 : index) : i64
     // CHECK-NEXT: [[IE1:%.*]] = llvm.insertelement [[ARG2_0]], [[VEC]][[[CST_0]] : i64] : vector<1xf32>
     // CHECK-NEXT: [[BCAST0:%.*]] = llvm.bitcast {{.*}} : vector<1xf32> to i32
-    // CHECK:      llvm.cond_br [[ARG1_0]], ^bb1, ^bb2([[BCAST0]] : i32)
-    // CHECK-NEXT: ^bb1:
-    // CHECK-NEXT:   [[BCAST1:%.*]] = llvm.bitcast [[ARG0_0]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // CHECK-NEXT:   [[LOAD1:%.*]] = llvm.load [[BCAST1]] {alignment = 4 : i64} : !llvm.ptr<1> -> i32
-    // CHECK-NEXT:   llvm.br ^bb2([[LOAD1]] : i32)
-    // CHECK-NEXT: ^bb2([[V1:%.*]]: i32):
+    // CHECK:      [[BCAST1:%.*]] = llvm.bitcast [[ARG0_0]] : !llvm.ptr<1> to !llvm.ptr<1>
+    // PREDICATED: [[ALIGNMENT:%.*]] = llvm.mlir.constant(4 : i64) : i64
+    // PREDICATED: [[V1:%.*]] = llvm.call spir_funccc @llvm.genx.GenISA.PredicatedLoad.i32.p1i32.i32([[BCAST1]], [[ALIGNMENT]], [[ARG1_0]], [[BCAST0]]) {{.*}} : (!llvm.ptr<1>, i64, i1, i32) -> i32
+    // NO-PREDICATED:      llvm.cond_br [[ARG1_0]], ^bb1, ^bb2([[BCAST0]] : i32)
+    // NO-PREDICATED-NEXT: ^bb1:
+    // NO-PREDICATED-NEXT:   [[LOAD1:%.*]] = llvm.load [[BCAST1]] {alignment = 4 : i64} : !llvm.ptr<1> -> i32
+    // NO-PREDICATED-NEXT:   llvm.br ^bb2([[LOAD1]] : i32)
+    // NO-PREDICATED-NEXT: ^bb2([[V1:%.*]]: i32):
     // CHECK-NEXT:   [[BCAST_V1:%.*]] = llvm.bitcast [[V1]] : i32 to vector<1xf32>
     // CHECK:        [[EE1:%.*]] = llvm.extractelement [[BCAST_V1]][{{.*}} : i32] : vector<1xf32>
     // CHECK:        [[BCAST2:%.*]] = llvm.bitcast {{.*}} : vector<1xf32> to i32
-    // CHECK:        llvm.cond_br [[ARG1_1]], ^bb3, ^bb4([[BCAST2]] : i32)
-    // CHECK-NEXT: ^bb3:
-    // CHECK-NEXT:   [[BCAST3:%.*]] = llvm.bitcast [[ARG0_1]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // CHECK-NEXT:   [[LOAD2:%.*]] = llvm.load [[BCAST3]] {alignment = 4 : i64} : !llvm.ptr<1> -> i32
-    // CHECK-NEXT:   llvm.br ^bb4([[LOAD2]] : i32)
-    // CHECK-NEXT: ^bb4([[V2:%.*]]: i32):
+    // CHECK:        [[BCAST3:%.*]] = llvm.bitcast [[ARG0_1]] : !llvm.ptr<1> to !llvm.ptr<1>
+    // PREDICATED: [[ALIGNMENT:%.*]] = llvm.mlir.constant(4 : i64) : i64
+    // PREDICATED: [[V2:%.*]] = llvm.call spir_funccc @llvm.genx.GenISA.PredicatedLoad.i32.p1i32.i32([[BCAST3]], [[ALIGNMENT]], [[ARG1_1]], [[BCAST2]]) {{.*}} : (!llvm.ptr<1>, i64, i1, i32) -> i32
+    // NO-PREDICATED:        llvm.cond_br [[ARG1_1]], ^bb3, ^bb4([[BCAST2]] : i32)
+    // NO-PREDICATED-NEXT: ^bb3:
+    // NO-PREDICATED-NEXT:   [[LOAD2:%.*]] = llvm.load [[BCAST3]] {alignment = 4 : i64} : !llvm.ptr<1> -> i32
+    // NO-PREDICATED-NEXT:   llvm.br ^bb4([[LOAD2]] : i32)
+    // NO-PREDICATED-NEXT: ^bb4([[V2:%.*]]: i32):
     // CHECK-NEXT:   [[BCAST_V2:%.*]] = llvm.bitcast [[V2]] : i32 to vector<1xf32>
     // CHECK:        [[EE2:%.*]] = llvm.extractelement [[BCAST_V2]][{{.*}} : i32] : vector<1xf32>
     // CHECK-NEXT:   [[RES1:%.*]] = llvm.mlir.undef : !llvm.struct<(f32, f32)>
@@ -117,82 +126,98 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     // CHECK-NEXT: [[CST_0:%.*]] = llvm.mlir.constant(0 : index) : i64
     // CHECK-NEXT: [[IE1:%.*]] = llvm.insertelement [[ARG2_0]], [[VEC]][[[CST_0]] : i64] : vector<1xf16>
     // CHECK-NEXT: [[BCAST0:%.*]] = llvm.bitcast [[IE1]] : vector<1xf16> to i16
-    // CHECK:      llvm.cond_br [[ARG1_0]], ^bb1, ^bb2([[BCAST0]] : i16)
-    // CHECK-NEXT: ^bb1:
-    // CHECK-NEXT:   [[BCAST1:%.*]] = llvm.bitcast [[ARG0_0]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // CHECK-NEXT:   [[LOAD1:%.*]] = llvm.load [[BCAST1]] {alignment = 2 : i64} : !llvm.ptr<1> -> i16
-    // CHECK-NEXT:   llvm.br ^bb2([[LOAD1]] : i16)
-    // CHECK-NEXT: ^bb2([[V1:%.*]]: i16):
+    // CHECK:      [[BCAST1:%.*]] = llvm.bitcast [[ARG0_0]] : !llvm.ptr<1> to !llvm.ptr<1>
+    // PREDICATED: [[ALIGNMENT:%.*]] = llvm.mlir.constant(2 : i64) : i64
+    // PREDICATED: [[V1:%.*]] = llvm.call spir_funccc @llvm.genx.GenISA.PredicatedLoad.i16.p1i16.i16([[BCAST1]], [[ALIGNMENT]], [[ARG1_0]], [[BCAST0]]) {{.*}} : (!llvm.ptr<1>, i64, i1, i16) -> i16
+    // NO-PREDICATED:      llvm.cond_br [[ARG1_0]], ^bb1, ^bb2([[BCAST0]] : i16)
+    // NO-PREDICATED-NEXT: ^bb1:
+    // NO-PREDICATED-NEXT:   [[LOAD1:%.*]] = llvm.load [[BCAST1]] {alignment = 2 : i64} : !llvm.ptr<1> -> i16
+    // NO-PREDICATED-NEXT:   llvm.br ^bb2([[LOAD1]] : i16)
+    // NO-PREDICATED-NEXT: ^bb2([[V1:%.*]]: i16):
     // CHECK-NEXT:   [[BCAST_V1:%.*]] = llvm.bitcast [[V1]] : i16 to vector<1xf16>
     // CHECK:        [[EE1:%.*]] = llvm.extractelement [[BCAST_V1]][{{.*}} : i32] : vector<1xf16>
     // CHECK:        [[BCAST2:%.*]] = llvm.bitcast {{.*}} : vector<1xf16> to i16
-    // CHECK:        llvm.cond_br [[ARG1_1]], ^bb3, ^bb4([[BCAST2]] : i16)
+    // CHECK:        [[BCAST3:%.*]] = llvm.bitcast [[ARG0_1]] : !llvm.ptr<1> to !llvm.ptr<1>
+    // PREDICATED: [[ALIGNMENT:%.*]] = llvm.mlir.constant(2 : i64) : i64
+    // PREDICATED: [[V2:%.*]] = llvm.call spir_funccc @llvm.genx.GenISA.PredicatedLoad.i16.p1i16.i16([[BCAST3]], [[ALIGNMENT]], [[ARG1_1]], [[BCAST2]]) {{.*}} : (!llvm.ptr<1>, i64, i1, i16) -> i16
+    // NO-PREDICATED:        llvm.cond_br [[ARG1_1]], ^bb3, ^bb4([[BCAST2]] : i16)
 
-    // CHECK-NEXT: ^bb3:
-    // CHECK-NEXT:   [[BCAST3:%.*]] = llvm.bitcast [[ARG0_1]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // CHECK-NEXT:   [[LOAD2:%.*]] = llvm.load [[BCAST3]] {alignment = 2 : i64} : !llvm.ptr<1> -> i16
-    // CHECK-NEXT:   llvm.br ^bb4([[LOAD2]] : i16)
-    // CHECK-NEXT: ^bb4([[V2:%.*]]: i16):
+    // NO-PREDICATED-NEXT: ^bb3:
+    // NO-PREDICATED-NEXT:   [[LOAD2:%.*]] = llvm.load [[BCAST3]] {alignment = 2 : i64} : !llvm.ptr<1> -> i16
+    // NO-PREDICATED-NEXT:   llvm.br ^bb4([[LOAD2]] : i16)
+    // NO-PREDICATED-NEXT: ^bb4([[V2:%.*]]: i16):
     // CHECK-NEXT:   [[BCAST_V2:%.*]] = llvm.bitcast [[V2]] : i16 to vector<1xf16>
     // CHECK:        [[EE2:%.*]] = llvm.extractelement [[BCAST_V2]][{{.*}} : i32] : vector<1xf16>
     // CHECK:        [[BCAST4:%.*]] = llvm.bitcast {{.*}} : vector<1xf16> to i16
-    // CHECK:        llvm.cond_br [[ARG1_2]], ^bb5, ^bb6([[BCAST4]] : i16)
+    // CHECK:        [[BCAST5:%.*]] = llvm.bitcast [[ARG0_2]] : !llvm.ptr<1> to !llvm.ptr<1>
+    // PREDICATED: [[ALIGNMENT:%.*]] = llvm.mlir.constant(2 : i64) : i64
+    // PREDICATED: [[V3:%.*]] = llvm.call spir_funccc @llvm.genx.GenISA.PredicatedLoad.i16.p1i16.i16([[BCAST5]], [[ALIGNMENT]], [[ARG1_2]], [[BCAST4]]) {{.*}} : (!llvm.ptr<1>, i64, i1, i16) -> i16
+    // NO-PREDICATED:        llvm.cond_br [[ARG1_2]], ^bb5, ^bb6([[BCAST4]] : i16)
 
-    // CHECK-NEXT: ^bb5:
-    // CHECK-NEXT:   [[BCAST5:%.*]] = llvm.bitcast [[ARG0_2]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // CHECK-NEXT:   [[LOAD3:%.*]] = llvm.load [[BCAST5]] {alignment = 2 : i64} : !llvm.ptr<1> -> i16
-    // CHECK-NEXT:   llvm.br ^bb6([[LOAD3]] : i16)
-    // CHECK-NEXT: ^bb6([[V3:%.*]]: i16):
+    // NO-PREDICATED-NEXT: ^bb5:
+    // NO-PREDICATED-NEXT:   [[LOAD3:%.*]] = llvm.load [[BCAST5]] {alignment = 2 : i64} : !llvm.ptr<1> -> i16
+    // NO-PREDICATED-NEXT:   llvm.br ^bb6([[LOAD3]] : i16)
+    // NO-PREDICATED-NEXT: ^bb6([[V3:%.*]]: i16):
     // CHECK-NEXT:   [[BCAST_V3:%.*]] = llvm.bitcast [[V3]] : i16 to vector<1xf16>
     // CHECK:        [[EE3:%.*]] = llvm.extractelement [[BCAST_V3]][{{.*}} : i32] : vector<1xf16>
     // CHECK:        [[BCAST5:%.*]] = llvm.bitcast {{.*}} : vector<1xf16> to i16
-    // CHECK:        llvm.cond_br [[ARG1_3]], ^bb7, ^bb8([[BCAST5]] : i16)
-
-    // CHECK-NEXT: ^bb7:
     // CHECK:        [[BCAST6:%.*]] = llvm.bitcast [[ARG0_3]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // CHECK-NEXT:   [[LOAD4:%.*]] = llvm.load [[BCAST6]] {alignment = 2 : i64} : !llvm.ptr<1> -> i16
-    // CHECK-NEXT:   llvm.br ^bb8([[LOAD4]] : i16)
-    // CHECK-NEXT: ^bb8([[V4:%.*]]: i16):
+    // PREDICATED: [[ALIGNMENT:%.*]] = llvm.mlir.constant(2 : i64) : i64
+    // PREDICATED: [[V4:%.*]] = llvm.call spir_funccc @llvm.genx.GenISA.PredicatedLoad.i16.p1i16.i16([[BCAST6]], [[ALIGNMENT]], [[ARG1_3]], [[BCAST5]]) {{.*}} : (!llvm.ptr<1>, i64, i1, i16) -> i16
+    // NO-PREDICATED:        llvm.cond_br [[ARG1_3]], ^bb7, ^bb8([[BCAST5]] : i16)
+
+    // NO-PREDICATED-NEXT: ^bb7:
+    // NO-PREDICATED-NEXT:   [[LOAD4:%.*]] = llvm.load [[BCAST6]] {alignment = 2 : i64} : !llvm.ptr<1> -> i16
+    // NO-PREDICATED-NEXT:   llvm.br ^bb8([[LOAD4]] : i16)
+    // NO-PREDICATED-NEXT: ^bb8([[V4:%.*]]: i16):
     // CHECK-NEXT:   [[BCAST_V4:%.*]] = llvm.bitcast [[V4]] : i16 to vector<1xf16>
     // CHECK:        [[EE4:%.*]] = llvm.extractelement [[BCAST_V4]][{{.*}} : i32] : vector<1xf16>
     // CHECK:        [[BCAST7:%.*]] = llvm.bitcast {{.*}} : vector<1xf16> to i16
-    // CHECK:        llvm.cond_br [[ARG1_4]], ^bb9, ^bb10([[BCAST7]] : i16)
-
-    // CHECK-NEXT: ^bb9:
     // CHECK:        [[BCAST8:%.*]] = llvm.bitcast [[ARG0_4]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // CHECK-NEXT:   [[LOAD5:%.*]] = llvm.load [[BCAST8]] {alignment = 2 : i64} : !llvm.ptr<1> -> i16
-    // CHECK-NEXT:   llvm.br ^bb10([[LOAD5]] : i16)
-    // CHECK-NEXT: ^bb10([[V5:%.*]]: i16):
+    // PREDICATED: [[ALIGNMENT:%.*]] = llvm.mlir.constant(2 : i64) : i64
+    // PREDICATED: [[V5:%.*]] = llvm.call spir_funccc @llvm.genx.GenISA.PredicatedLoad.i16.p1i16.i16([[BCAST8]], [[ALIGNMENT]], [[ARG1_4]], [[BCAST7]]) {{.*}} : (!llvm.ptr<1>, i64, i1, i16) -> i16
+    // NO-PREDICATED:        llvm.cond_br [[ARG1_4]], ^bb9, ^bb10([[BCAST7]] : i16)
+
+    // NO-PREDICATED-NEXT: ^bb9:
+    // NO-PREDICATED-NEXT:   [[LOAD5:%.*]] = llvm.load [[BCAST8]] {alignment = 2 : i64} : !llvm.ptr<1> -> i16
+    // NO-PREDICATED-NEXT:   llvm.br ^bb10([[LOAD5]] : i16)
+    // NO-PREDICATED-NEXT: ^bb10([[V5:%.*]]: i16):
     // CHECK-NEXT:   [[BCAST_V5:%.*]] = llvm.bitcast [[V5]] : i16 to vector<1xf16>
     // CHECK:        [[EE5:%.*]] = llvm.extractelement [[BCAST_V5]][{{.*}} : i32] : vector<1xf16>
     // CHECK:        [[BCAST8:%.*]] = llvm.bitcast {{.*}} : vector<1xf16> to i16
-    // CHECK:        llvm.cond_br [[ARG1_5]], ^bb11, ^bb12([[BCAST8]] : i16)
-
-    // CHECK-NEXT: ^bb11:
     // CHECK:        [[BCAST9:%.*]] = llvm.bitcast [[ARG0_5]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // CHECK-NEXT:   [[LOAD6:%.*]] = llvm.load [[BCAST9]] {alignment = 2 : i64} : !llvm.ptr<1> -> i16
-    // CHECK-NEXT:   llvm.br ^bb12([[LOAD6]] : i16)
-    // CHECK-NEXT: ^bb12([[V6:%.*]]: i16):
+    // PREDICATED: [[ALIGNMENT:%.*]] = llvm.mlir.constant(2 : i64) : i64
+    // PREDICATED: [[V6:%.*]] = llvm.call spir_funccc @llvm.genx.GenISA.PredicatedLoad.i16.p1i16.i16([[BCAST9]], [[ALIGNMENT]], [[ARG1_5]], [[BCAST8]]) {{.*}} : (!llvm.ptr<1>, i64, i1, i16) -> i16
+    // NO-PREDICATED:        llvm.cond_br [[ARG1_5]], ^bb11, ^bb12([[BCAST8]] : i16)
+
+    // NO-PREDICATED-NEXT: ^bb11:
+    // NO-PREDICATED-NEXT:   [[LOAD6:%.*]] = llvm.load [[BCAST9]] {alignment = 2 : i64} : !llvm.ptr<1> -> i16
+    // NO-PREDICATED-NEXT:   llvm.br ^bb12([[LOAD6]] : i16)
+    // NO-PREDICATED-NEXT: ^bb12([[V6:%.*]]: i16):
     // CHECK-NEXT:   [[BCAST_V6:%.*]] = llvm.bitcast [[V6]] : i16 to vector<1xf16>
     // CHECK:        [[EE6:%.*]] = llvm.extractelement [[BCAST_V6]][{{.*}} : i32] : vector<1xf16>
     // CHECK:        [[BCAST10:%.*]] = llvm.bitcast {{.*}} : vector<1xf16> to i16
-    // CHECK:        llvm.cond_br [[ARG1_6]], ^bb13, ^bb14([[BCAST10]] : i16)
-
-    // CHECK-NEXT: ^bb13:
     // CHECK:        [[BCAST11:%.*]] = llvm.bitcast [[ARG0_6]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // CHECK-NEXT:   [[LOAD7:%.*]] = llvm.load [[BCAST11]] {alignment = 2 : i64} : !llvm.ptr<1> -> i16
-    // CHECK-NEXT:   llvm.br ^bb14([[LOAD7]] : i16)
-    // CHECK-NEXT: ^bb14([[V7:%.*]]: i16):
+    // PREDICATED: [[ALIGNMENT:%.*]] = llvm.mlir.constant(2 : i64) : i64
+    // PREDICATED: [[V7:%.*]] = llvm.call spir_funccc @llvm.genx.GenISA.PredicatedLoad.i16.p1i16.i16([[BCAST11]], [[ALIGNMENT]], [[ARG1_6]], [[BCAST10]]) {{.*}} : (!llvm.ptr<1>, i64, i1, i16) -> i16
+    // NO-PREDICATED:        llvm.cond_br [[ARG1_6]], ^bb13, ^bb14([[BCAST10]] : i16)
+
+    // NO-PREDICATED-NEXT: ^bb13:
+    // NO-PREDICATED-NEXT:   [[LOAD7:%.*]] = llvm.load [[BCAST11]] {alignment = 2 : i64} : !llvm.ptr<1> -> i16
+    // NO-PREDICATED-NEXT:   llvm.br ^bb14([[LOAD7]] : i16)
+    // NO-PREDICATED-NEXT: ^bb14([[V7:%.*]]: i16):
     // CHECK-NEXT:   [[BCAST_V7:%.*]] = llvm.bitcast [[V7]] : i16 to vector<1xf16>
     // CHECK:        [[EE7:%.*]] = llvm.extractelement [[BCAST_V7]][{{.*}} : i32] : vector<1xf16>
     // CHECK:        [[BCAST12:%.*]] = llvm.bitcast {{.*}} : vector<1xf16> to i16
-    // CHECK:        llvm.cond_br [[ARG1_7]], ^bb15, ^bb16([[BCAST12]] : i16)
-
-    // CHECK-NEXT: ^bb15:
     // CHECK:        [[BCAST13:%.*]] = llvm.bitcast [[ARG0_7]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // CHECK-NEXT:   [[LOAD8:%.*]] = llvm.load [[BCAST13]] {alignment = 2 : i64} : !llvm.ptr<1> -> i16
-    // CHECK-NEXT:   llvm.br ^bb16([[LOAD8]] : i16)
-    // CHECK-NEXT: ^bb16([[V8:%.*]]: i16):
+    // PREDICATED: [[ALIGNMENT:%.*]] = llvm.mlir.constant(2 : i64) : i64
+    // PREDICATED: [[V8:%.*]] = llvm.call spir_funccc @llvm.genx.GenISA.PredicatedLoad.i16.p1i16.i16([[BCAST13]], [[ALIGNMENT]], [[ARG1_7]], [[BCAST12]]) {{.*}} : (!llvm.ptr<1>, i64, i1, i16) -> i16
+    // NO-PREDICATED:        llvm.cond_br [[ARG1_7]], ^bb15, ^bb16([[BCAST12]] : i16)
+
+    // NO-PREDICATED-NEXT: ^bb15:
+    // NO-PREDICATED-NEXT:   [[LOAD8:%.*]] = llvm.load [[BCAST13]] {alignment = 2 : i64} : !llvm.ptr<1> -> i16
+    // NO-PREDICATED-NEXT:   llvm.br ^bb16([[LOAD8]] : i16)
+    // NO-PREDICATED-NEXT: ^bb16([[V8:%.*]]: i16):
     // CHECK-NEXT:   [[BCAST_V8:%.*]] = llvm.bitcast [[V8]] : i16 to vector<1xf16>
     // CHECK:        [[EE8:%.*]] = llvm.extractelement [[BCAST_V8]][{{.*}} : i32] : vector<1xf16>
     // CHECK-NEXT:   [[RES1:%.*]] = llvm.mlir.undef : !llvm.struct<(f16, f16, f16, f16, f16, f16, f16, f16)>
@@ -348,7 +373,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
     %9 = tt.splat %n_elements : i32 -> tensor<64xi32, #blocked>
     %10 = arith.cmpi "slt", %4, %9 : tensor<64xi32, #blocked>
     // load op has a vector width = 1 due to the %mask's alignment
-    // CHECK: llvm.load %{{.*}} {alignment = 4 : i64} : !llvm.ptr<1> -> i32
+    // PREDICATED: llvm.call spir_funccc @llvm.genx.GenISA.PredicatedLoad.i32.p1i32.i32({{.*}}) {{.*}} : (!llvm.ptr<1>, i64, i1, i32) -> i32
+    // NO_PREDICATED: llvm.load %{{.*}} {alignment = 4 : i64} : !llvm.ptr<1> -> i32
     %11 = tt.load %6, %10 : tensor<64x!tt.ptr<f32>, #blocked>
     %12 = tt.load %8, %10 : tensor<64x!tt.ptr<f32>, #blocked>
     %13 = arith.addf %11, %12 : tensor<64xf32, #blocked>
