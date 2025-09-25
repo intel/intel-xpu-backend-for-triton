@@ -1,0 +1,41 @@
+name: Build and test interim
+
+on:
+  workflow_dispatch:
+    inputs:
+      jgs:
+        description: JGS
+        type: boolean
+        default: true
+      cri:
+        description: CRI
+        type: boolean
+        default: true
+  schedule:
+    - cron: "5 8 * * *"
+
+permissions: read-all
+
+jobs:
+  run:
+    runs-on:
+      - cpu
+    steps:
+      - name: Print inputs
+        continue-on-error: true
+        run: |
+          cat <<EOF
+          ${{ toJSON(inputs) }}
+          EOF
+
+      - name: JGS
+        if: ${{ github.event_name == 'schedule' || inputs.jgs }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.TRITON_GITHUB_TOKEN }}
+        run: |
+          cat <<EOF | gh workflow run nightly-wheels.yml --repo intel-tools/intel-xpu-backend-for-triton --ref main-jgs --json
+          {
+            "run_name": "Build and test JGS"
+          }
+          EOF
