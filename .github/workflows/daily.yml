@@ -19,7 +19,7 @@ permissions: read-all
 jobs:
   run:
     runs-on:
-      - cpu
+      - Linux
     steps:
       - name: Print inputs
         continue-on-error: true
@@ -32,10 +32,14 @@ jobs:
         if: ${{ github.event_name == 'schedule' || inputs.jgs }}
         continue-on-error: true
         env:
-          GH_TOKEN: ${{ secrets.TRITON_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GLADOS_TOKEN }}
         run: |
-          cat <<EOF | gh workflow run nightly-wheels.yml --repo intel-tools/intel-xpu-backend-for-triton --ref main-jgs --json
-          {
-            "run_name": "Build and test JGS"
-          }
-          EOF
+          gh workflow run nightly-wheels.yml --repo intel-tools/intel-xpu-backend-for-triton --ref main-js
+
+      - name: CRI
+        if: ${{ github.event_name == 'schedule' || inputs.jgs }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GLADOS_TOKEN }}
+        run: |
+          gh workflow run nightly-wheels.yml --repo intel-tools/intel-xpu-backend-for-triton --ref main-cri
