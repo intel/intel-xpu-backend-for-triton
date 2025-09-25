@@ -273,15 +273,15 @@ X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
         args={},
     ))
 def benchmark(B, M, N, K, provider):
-    n_warmup, n_repeat = benchmark_suite.get_benchmark_setup('gemm_postop_gelu')
+    # Some configs increase performance with warmup as a step function, but some slowly decrease with saturation.
+    # Performance is best at 200-400ms range, but we want stable, not just best
+    do_bench = benchmark_suite.get_do_bench(n_warmup=1000, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
     if B == 1:
         a = torch.rand((M, K), device='xpu', dtype=torch.bfloat16)
         b = torch.rand((K, N), device='xpu', dtype=torch.bfloat16)
     else:
         a = torch.rand((B, M, K), device='xpu', dtype=torch.bfloat16)
         b = torch.rand((B, K, N), device='xpu', dtype=torch.bfloat16)
-
-    quantiles = [0.5, 0.0, 1.0]
 
     if provider == 'triton':
         assert len(a.shape) == len(b.shape), 'Incompatible sizes'
@@ -294,8 +294,7 @@ def benchmark(B, M, N, K, provider):
         torch_fn = lambda: torch.nn.functional.gelu(torch.matmul(a, b).to(torch.float32))
         rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
         benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(triton_fn, n_warmup=n_warmup, n_repeat=n_repeat,
-                                                                  quantiles=quantiles)
+        _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 

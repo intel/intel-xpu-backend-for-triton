@@ -82,7 +82,8 @@ def alibi_functional(score, _, h, q_idx, kv_idx):
         args={},
     ))
 def benchmark(Z, H, N_CTX, D_HEAD, MASK, MODE, provider):
-    n_warmup, n_repeat = benchmark_suite.get_benchmark_setup('flex_attention_custom_masks')
+    # There is still performance variance for triton, probably caused by random choice of autotune config
+    do_bench = benchmark_suite.get_do_bench(n_warmup=200, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
     assert MODE in ['fwd', 'bwd']
     assert MASK in ['NATTEN', 'Alibi']
     dtype = torch.float16
@@ -104,7 +105,6 @@ def benchmark(Z, H, N_CTX, D_HEAD, MASK, MODE, provider):
     sdpa_mask_fn = mask_mod if mask_mod is not None else score_mod
     mask = create_mask(sdpa_mask_fn, 1, 1, N_CTX, N_CTX, device=q.device)
 
-    quantiles = [0.5, 0.0, 1.0]
     if provider == 'triton':
         kernel_options = {'num_stages': 2, 'num_warps': 16 if D_HEAD == 128 else 8, 'BLOCKS_ARE_CONTIGUOUS': True}
         triton_fn = lambda: flex_attention(q, k, v, score_mod=score_mod, block_mask=block_mask, kernel_options=
@@ -113,8 +113,7 @@ def benchmark(Z, H, N_CTX, D_HEAD, MASK, MODE, provider):
             triton_o = triton_fn()
             triton_do = torch.randn_like(triton_o)
             triton_fn = lambda: triton_o.backward(triton_do, retain_graph=True)
-        _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(triton_fn, n_warmup=n_warmup, n_repeat=n_repeat,
-                                                               quantiles=quantiles)
+        _, min_ms, max_ms, mean, cv = do_bench(triton_fn)
         # Values checking cannot be implemented for these case as :
         # "The operator 'aten::_scaled_dot_product_flash_attention_for_cpu' is not currently implemented for the XPU device"
 
@@ -124,8 +123,7 @@ def benchmark(Z, H, N_CTX, D_HEAD, MASK, MODE, provider):
             xformers_o = xformers_fn()
             xformers_do = torch.randn_like(xformers_o)
             xformers_fn = lambda: xformers_o.backward(xformers_do, retain_graph=True)
-        _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(xformers_fn, n_warmup=n_warmup, n_repeat=n_repeat,
-                                                               quantiles=quantiles)
+        _, min_ms, max_ms, mean, cv = do_bench(xformers_fn)
 
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')

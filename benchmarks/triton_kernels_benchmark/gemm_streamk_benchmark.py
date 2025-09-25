@@ -262,23 +262,20 @@ def matmul(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor):
         args={},
     ))
 def benchmark(M, N, K, provider):
-    n_warmup, n_repeat = benchmark_suite.get_benchmark_setup('gemm_streamk')
+    # Maximum across onednn=10, triton=1000, xetla=100
+    do_bench = benchmark_suite.get_do_bench(n_warmup=1000, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
     torch.manual_seed(0)
     a = torch.rand((M, K), device='xpu', dtype=torch.bfloat16)
     b = torch.rand((K, N), device='xpu', dtype=torch.bfloat16)
 
-    quantiles = [0.5, 0.0, 1.0]
-
     if provider == 'onednn':
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(lambda: torch.matmul(a, b), n_warmup=n_warmup,
-                                                                  n_repeat=n_repeat, quantiles=quantiles)
+        _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: torch.matmul(a, b))
     elif provider == 'triton':
         c = torch.zeros((M, N), device=a.device, dtype=torch.float32)
         triton_fn = lambda: matmul(a, b, c)
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
         benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=1e-2, err_msg='triton to torch')
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(triton_fn, n_warmup=n_warmup, n_repeat=n_repeat,
-                                                                  quantiles=quantiles)
+        _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
     elif provider == 'xetla':
         c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
         acc = torch.zeros((M, N), device='xpu', dtype=torch.float32)
@@ -290,8 +287,7 @@ def benchmark(M, N, K, provider):
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
 
         # benchmark_suite.assert_close(xetla_fn, torch_fn, atol=1e-4, rtol=1.0, err_msg='xetla to torch')
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(xetla_fn, n_warmup=n_warmup, n_repeat=n_repeat,
-                                                                  quantiles=quantiles)
+        _, min_ms, max_ms, mean_ms, cv = do_bench(xetla_fn)
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 

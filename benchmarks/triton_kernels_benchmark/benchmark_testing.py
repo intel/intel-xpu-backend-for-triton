@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from enum import Enum
 from dataclasses import dataclass, field
 import itertools
+import functools
 
 import argparse
 import datetime
@@ -59,7 +60,8 @@ def _summarize_statistics(times, quantiles, return_mode):
 
 
 def do_bench_elapsed_time(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quantiles=None, return_mode="mean",
-                          device="xpu", time_warmup=False):
+                          device="xpu", time_warmup=False, benchmark_label=None,  # pylint: disable=W0613
+                          ):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -214,6 +216,17 @@ elif BENCHMARKING_METHOD == "UPSTREAM_PYTORCH_PROFILER":
     do_bench = do_bench_upstream_pytorch_profiler
 else:
     raise NotImplementedError(f"BENCHMARKING_METHOD: {BENCHMARKING_METHOD} isn't implemented")
+
+
+def get_do_bench(n_warmup: int, n_repeat: int, quantiles: list):
+    return functools.partial(do_bench, n_warmup=n_warmup, n_repeat=n_repeat, quantiles=quantiles)
+
+
+try:
+    # The easiest way to overwrite that eliminates merge conflicts
+    from .benchmark_testing_rewrite import get_do_bench  # noqa: F401
+except ImportError:
+    pass
 
 
 def assert_close(x_fn, y_fn, atol=None, rtol=None, err_msg=""):

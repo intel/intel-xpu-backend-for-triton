@@ -1,7 +1,5 @@
 import os
 
-from .configs.do_bench_configs import get_benchmark_setup
-
 from .benchmark_testing import (
     assert_close,
     do_bench,
@@ -11,6 +9,7 @@ from .benchmark_testing import (
     BenchmarkCategory,
     BenchmarkConfig,
     BENCHMARKING_METHOD,
+    get_do_bench,
 )
 
 from .benchmark_shapes_parser import ShapePatternParser
@@ -28,5 +27,5 @@ __all__ = [
     "BenchmarkConfig",
     "BENCHMARKING_METHOD",
     "ShapePatternParser",
-    "get_benchmark_setup",
+    "get_do_bench",
 ]
