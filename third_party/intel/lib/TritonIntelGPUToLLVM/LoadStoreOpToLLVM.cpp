@@ -3305,10 +3305,9 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                                                    rewriter.getZeroAttr(retTy));
       }
 
+      Value addrElem = b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
+      uint32_t alignment = nWords * width / 8;
       auto createLoadInstruction = [&]() -> SmallVector<Value, 1> {
-        Value addrElem =
-            b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
-        uint32_t alignment = nWords * width / 8;
         Value ret = b.load(retTy, addrElem, alignment);
         return {ret};
       };
@@ -3316,10 +3315,15 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       Value ret;
       // Create a predicated load operation.
       if (pred) {
-        Block &endBlock = LLVM::intel::createPredicatedBlock(
-            rewriter, loc, pred, SmallVector<Value, 1>{other_},
-            createLoadInstruction);
-        ret = *endBlock.args_begin();
+        if (triton::tools::getBoolEnv("TRITON_INTEL_PREDICATED_LOAD"))
+          ret = rewriter.create<TritonGEN::PredicatedLoadOp>(
+              loc, retTy, addrElem, b.i64_val(alignment), pred, other_);
+        else {
+          Block &endBlock = LLVM::intel::createPredicatedBlock(
+              rewriter, loc, pred, SmallVector<Value, 1>{other_},
+              createLoadInstruction);
+          ret = *endBlock.args_begin();
+        }
       } else {
         ret = createLoadInstruction()[0];
       }
