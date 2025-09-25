@@ -1,0 +1,170 @@
+name: Build and test v3 (with JGS simulator support and sharding)
+run-name: ${{ inputs.run_name }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      device:
+        description: Device
+        type: string
+        default: jgs
+      runner_label:
+        description: Runner label, keep empty for default
+        type: string
+        default: ""
+      pytorch_ref:
+        description: PyTorch ref, keep empty for default
+        type: string
+        default: ""
+      pytorch_mode:
+        description: PyTorch mode, source or wheels
+        type: choice
+        options:
+          - source
+          - wheels
+        default: source
+      ignore_errors:
+        description: Ignore test errors
+        type: boolean
+        default: false
+      skip_list:
+        description: Skip list
+        type: string
+        default: "xe4"
+      run_name:
+        description: Custom run name
+        type: string
+        default: "Build and test"
+      enable_unskip:
+        description: Ignore pytest.skip
+        type: boolean
+        default: false
+      use_pyenv_python:
+        description: Use Python built with pyenv
+        type: boolean
+        default: false
+      jgs_env:
+        description: Activate JGS simulator environment
+        type: boolean
+        default: true
+
+  pull_request:
+    branches:
+      - main-js
+      - release/**
+  push:
+    branches:
+      - main-js
+      - release/**
+
+permissions:
+  contents: read
+  # Needed to get the called workflow reference
+  id-token: write
+
+jobs:
+  pre-commit:
+    name: Pre-commit checks
+    runs-on: Linux
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Load pip cache
+        id: pip-cache
+        uses: ./.github/actions/load
+        env:
+          # Increase this value to reset cache
+          CACHE_NUMBER: 2
+        with:
+          path: $HOME/.cache/pip
+          key: pip-3.10-${{ hashFiles('.pre-commit-config.yaml') }}-${{ env.CACHE_NUMBER }}
+
+      - name: Install Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Run pre-commit checks
+        run: |
+          pip install --upgrade pre-commit
+          python3 -m pre_commit run --show-diff-on-failure --color=always --all-files --verbose
+
+      - name: Run unit tests for scripts
+        run: |
+          pip install pytest pytest-xdist defusedxml
+          cd scripts
+          pytest -n 4 test_*.py
+
+      - name: Save pip cache
+        if: ${{ steps.pip-cache.outputs.status == 'miss' }}
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.pip-cache.outputs.path }}
+          dest: ${{ steps.pip-cache.outputs.dest }}
+
+  prepare:
+    name: Prepare
+    runs-on: Linux
+
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      TESTING_ON_JGS: ${{ steps.matrix.outputs.TESTING_ON_JGS }}
+
+    steps:
+      - name: Inputs
+        run: |
+          cat <<EOF
+          ${{ toJSON(inputs) }}
+          EOF
+
+      - name: Matrix
+        id: matrix
+        run: |
+          echo github.event_name = ${{ github.event_name }}
+          echo inputs.jgs_env = ${{ inputs.jgs_env }}
+          echo github.base_ref = ${{ github.base_ref }}
+          echo github.ref = ${{ github.ref }}
+          if [[ "${{ github.event_name }}" == 'workflow_dispatch' && "${{ inputs.jgs_env }}" == "true" ]]; then
+            TESTING_ON_JGS="true"
+          elif [[ "${{ github.event_name }}" == 'pull_request' && "${{ github.base_ref }}" == 'main-js' ]]; then
+            TESTING_ON_JGS="true"
+          elif [[ "${{ github.event_name }}" == 'push' && "${{ github.ref }}" == 'refs/heads/main-js' ]]; then
+            TESTING_ON_JGS="true"
+          else
+            TESTING_ON_JGS="false"
+          fi
+          echo "TESTING_ON_JGS=$TESTING_ON_JGS" | tee -a $GITHUB_OUTPUT
+
+          if [[ -n "${{ inputs.runner_label }}" || "${TESTING_ON_JGS}" == "true" ]]; then
+            matrix='{"python": ["3.9"], "driver": ["rolling"]}'
+          else
+            matrix='{"python": ["3.9"], "driver": ["rolling", "lts"]}'
+          fi
+          echo "matrix=$matrix" | tee -a $GITHUB_OUTPUT
+
+  integration-tests:
+    name: Integration tests matrix
+    needs: prepare
+
+    strategy:
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+
+    uses: ./.github/workflows/build-test-reusable.yml
+    secrets: inherit
+    with:
+      device: ${{ inputs.device || 'jgs' }}
+      driver_version: ${{ matrix.driver }}
+      runner_label: ${{ inputs.runner_label }}
+      pytorch_ref: ${{ inputs.pytorch_ref }}
+      pytorch_mode: ${{ inputs.pytorch_mode || 'source' }}
+      python_version: ${{ matrix.python }}
+      upload_test_reports: true
+      ignore_errors: ${{ inputs.ignore_errors || false }}
+      skip_list: ${{ inputs.skip_list || 'xe4' }}
+      run_name: ${{ inputs.run_name }}
+      enable_unskip: ${{ inputs.enable_unskip || false }}
+      use_pyenv_python: ${{ inputs.use_pyenv_python || false }}
+      jgs_env: ${{ needs.prepare.outputs.TESTING_ON_JGS == 'true' }}
+      parallel_tests_number: ${{ needs.prepare.outputs.TESTING_ON_JGS == 'true' && 64 || 8 }}
+      enable_e2e_tests: ${{ needs.prepare.outputs.TESTING_ON_JGS != 'true' }}
