@@ -2535,11 +2535,11 @@ struct LoadOpToBlockIOConversion
     // TODO: use the axis info to general the handling for both regular pointer
     // and block pointer.
     const bool memoryRowMajor = isMemoryRowMajor(op);
-    unsigned contiguousDim = memoryRowMajor ? 1 : 0;
     // FIXME: Add support of column major.
     if (!memoryRowMajor)
       return failure();
 
+    unsigned contiguousDim = memoryRowMajor ? 1 : 0;
     const bool isTransposeRequired = contiguousDim != colDim;
     if (isTransposeRequired)
       return matchAndRewriteTranspose(op, adaptor, rewriter);
@@ -2552,11 +2552,10 @@ struct LoadOpToBlockIOConversion
         rewriter.create<mlir::gpu::SubgroupIdOp>(loc, /*upperBound=*/nullptr));
 
     Value llPtr = adaptor.getPtr();
-    SmallVector<Value> ptrElems, maskElems, otherElems;
     unsigned numElems = getTotalElemsPerThread(resultType);
 
     // Get the LLVM values for pointers
-    ptrElems = unpackLLElements(loc, llPtr, rewriter);
+    SmallVector<Value> ptrElems = unpackLLElements(loc, llPtr, rewriter);
     assert(ptrElems.size() == numElems &&
            "the number of pointer values is not matched with the number of "
            "elements");
@@ -2701,6 +2700,7 @@ struct LoadOpToBlockIOConversion
     std::map<SmallVector<unsigned>, Value> ptrs;
     std::map<SmallVector<unsigned>, Value> masks;
     std::map<SmallVector<unsigned>, Value> others;
+    SmallVector<Value> maskElems;
     Value llMask = adaptor.getMask();
     // Get the LLVM values for mask
     if (llMask) {
@@ -2731,6 +2731,7 @@ struct LoadOpToBlockIOConversion
 
     // Get the LLVM values for `other`
     Value other = op.getOther();
+    SmallVector<Value> otherElems;
     Value llOther = adaptor.getOther();
     DenseElementsAttr constAttr;
     if (other)
@@ -2880,7 +2881,7 @@ struct LoadOpToBlockIOConversion
            "invalid register bases for packing elems.");
     std::vector<std::vector<int>> bases(regPackedBases->size());
     llvm::transform(*regPackedBases, bases.begin(),
-                    [&](int base) { return std::vector<int>{base}; });
+                    [](int base) { return std::vector<int>{base}; });
     LinearLayout regMapping({{kRegister, bases}},
                             {{kRegister, llEncoding->getInDimSize(kRegister)}},
                             /*requireSurjective=*/true);
@@ -3524,7 +3525,7 @@ struct StoreOpToBlockIOConversion
            "invalid register bases for packing elems.");
     std::vector<std::vector<int>> bases(regPackedBases->size());
     llvm::transform(*regPackedBases, bases.begin(),
-                    [&](int base) { return std::vector<int>{base}; });
+                    [](int base) { return std::vector<int>{base}; });
     LinearLayout regMapping({{kRegister, bases}},
                             {{kRegister, llEncoding->getInDimSize(kRegister)}},
                             /*requireSurjective=*/true);
