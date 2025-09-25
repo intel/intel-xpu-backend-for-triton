@@ -958,7 +958,7 @@ def test_padded_shared_layout_subslice(interval_pairs, shared_layout, slice_m_of
     assert (output == ref_output).all()
 
 
-@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
+@pytest.mark.xfail(not is_hip_cdna4(), reason="Requires CDNA4")
 def test_buffer_atomic_rmw_add_bf16():
     BLOCK = 128
     elem_type = torch.bfloat16
