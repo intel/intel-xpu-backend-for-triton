@@ -138,7 +138,7 @@ def parse(full_name, ext, context):
         return module
     if ext == "llir" or ext == "ptx" or ext == "amdgcn":
         return Path(full_name).read_text()
-    if ext == "cubin" or ext == "hsaco":
+    if ext == "cubin" or ext == "hsaco" or ext == "zebin":
         return Path(full_name).read_bytes()
     if ext == "spv":
         return Path(full_name).read_bytes()
@@ -332,7 +332,7 @@ def compile(src, target=None, options=None, _env_vars=None):
             print(f"\nOverriding kernel with file {full_name}")
             next_module = parse(full_name, ext, context)
         # If TRITON_STORE_BINARY_ONLY is 1, only store cubin/hsaco/json
-        if (not store_only_binary) or (ext in ("cubin", "hsaco", "json", "spv")):
+        if (not store_only_binary) or (ext in ("cubin", "hsaco", "zebin", "json", "spv")):
             metadata_group[ir_filename] = fn_cache_manager.put(next_module, ir_filename)
         if fn_dump_manager is not None:
             fn_dump_manager.put(next_module, ir_filename)
@@ -422,11 +422,15 @@ class CompiledKernel:
         self.name = self.metadata.name
         # stores the text of each level of IR that was generated during compilation
         asm_files = [Path(p) for c, p in metadata_group.items() if not c.endswith(".json")]
+
+        def read_file(path):
+            try:
+                return path.read_text()
+            except UnicodeDecodeError:
+                return path.read_bytes()
+
+        self.asm = AsmDict({file.suffix[1:]: read_file(file) for file in asm_files})
         binary_ext = backend.binary_ext
-        self.asm = AsmDict({
-            file.suffix[1:]: file.read_bytes() if file.suffix[1:] == binary_ext else file.read_text()
-            for file in asm_files
-        })
         self.metadata_group = metadata_group
         self.kernel = self.asm[binary_ext]
         # binaries are lazily initialized
@@ -466,8 +470,7 @@ class CompiledKernel:
             knobs.runtime.kernel_load_start_hook(self.module, self.function, self.name, self.metadata_group, self.hash)
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
         self.module, self.function, self.n_regs, self.n_spills, self.n_max_threads = driver.active.utils.load_binary(
-            self.name, self.kernel, self.metadata.shared, self.metadata.build_flags,
-            not self.metadata.generate_native_code, device)
+            self.name, self.kernel, self.metadata.shared, self.metadata.build_flags, False, device)
         if hasattr(self.metadata, "threads_per_warp"):
             warp_size = self.metadata.threads_per_warp
         else:
