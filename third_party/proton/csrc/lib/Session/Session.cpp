@@ -16,7 +16,8 @@ namespace proton {
 namespace {
 
 Profiler *makeProfiler(const std::string &name, const std::string &path,
-                       void *sycl_queue = nullptr, const std::string &utils_cache_path = "") {
+                       void *sycl_queue = nullptr,
+                       const std::string &utils_cache_path = "") {
   if (proton::toLower(name) == "cupti") {
     return &CuptiProfiler::instance().setLibPath(path);
   }
@@ -103,9 +104,10 @@ Profiler *SessionManager::validateAndSetProfilerMode(Profiler *profiler,
 std::unique_ptr<Session> SessionManager::makeSession(
     size_t id, const std::string &path, const std::string &profilerName,
     const std::string &profilerPath, const std::string &contextSourceName,
-    const std::string &dataName, const std::string &mode,
-    void *sycl_queue, const std::string &utils_cache_path) {
-  auto *profiler = makeProfiler(profilerName, profilerPath, sycl_queue, utils_cache_path);
+    const std::string &dataName, const std::string &mode, void *sycl_queue,
+    const std::string &utils_cache_path) {
+  auto *profiler =
+      makeProfiler(profilerName, profilerPath, sycl_queue, utils_cache_path);
   profiler = validateAndSetProfilerMode(profiler, mode);
   auto contextSource = makeContextSource(contextSourceName);
   auto data = makeData(dataName, path, contextSource.get());
@@ -190,8 +192,8 @@ size_t SessionManager::addSession(const std::string &path,
   }
   auto sessionId = nextSessionId++;
   auto newSession = makeSession(sessionId, path, profilerName, profilerPath,
-                                contextSourceName, dataName, mode,
-                                sycl_queue, utils_cache_path);
+                                contextSourceName, dataName, mode, sycl_queue,
+                                utils_cache_path);
   sessionPaths[path] = sessionId;
   sessions[sessionId] = std::move(newSession);
   return sessionId;

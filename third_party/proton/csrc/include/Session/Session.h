@@ -124,14 +124,12 @@ private:
   Profiler *validateAndSetProfilerMode(Profiler *profiler,
                                        const std::string &mode);
 
-  std::unique_ptr<Session> makeSession(size_t id, const std::string &path,
-                                       const std::string &profilerName,
-                                       const std::string &profilerPath,
-                                       const std::string &contextSourceName,
-                                       const std::string &dataName,
-                                       const std::string &mode,
-                                       void *sycl_queue,
-                                       const std::string &utils_cache_path);
+  std::unique_ptr<Session>
+  makeSession(size_t id, const std::string &path,
+              const std::string &profilerName, const std::string &profilerPath,
+              const std::string &contextSourceName, const std::string &dataName,
+              const std::string &mode, void *sycl_queue,
+              const std::string &utils_cache_path);
 
   void activateSessionImpl(size_t sessionId);
 

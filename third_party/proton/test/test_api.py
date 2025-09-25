@@ -10,7 +10,7 @@ import pathlib
 from triton.profiler.hooks.hook import HookManager
 from triton.profiler.hooks.launch import LaunchHook
 from triton.profiler.hooks.instrumentation import InstrumentationHook
-from triton._internal_testing import is_hip
+from triton._internal_testing import is_hip, is_xpu
 
 
 def test_profile_single_session(tmp_path: pathlib.Path):
@@ -68,6 +68,13 @@ def test_profile_mode(tmp_path: pathlib.Path):
             proton.start(str(temp_file0.with_suffix("")), mode="pcsampling")
         except Exception as e:
             assert "RoctracerProfiler: unsupported mode: pcsampling" in str(e)
+        finally:
+            proton.finalize()
+    elif is_xpu():
+        try:
+            proton.start(str(temp_file0.with_suffix("")), mode="pcsampling")
+        except Exception as e:
+            assert "XpuptiProfiler: unsupported mode: pcsampling" in str(e)
         finally:
             proton.finalize()
     else:
