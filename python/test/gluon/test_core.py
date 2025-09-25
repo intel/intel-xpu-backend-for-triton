@@ -959,7 +959,7 @@ def test_padded_shared_layout_subslice(interval_pairs, shared_layout, slice_m_of
     assert (output == ref_output).all()
 
 
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
 @pytest.mark.parametrize("op, tol", [("add", 0), ("sub", 0), ("mul", 0), ("fma", 1e-6)])
 def test_float2(op, tol):
     BLOCK_M = ttgl.constexpr(128)
@@ -1015,7 +1015,7 @@ def test_float2(op, tol):
     torch.testing.assert_close(ref, out, atol=tol, rtol=tol)
 
 
-@pytest.mark.xfail(not is_hip_cdna4(), reason="Requires CDNA4")
+@pytest.mark.xfail(not is_hip_cdna4(), reason="Requires CDNA4", run=False)
 def test_buffer_atomic_rmw_add_bf16():
     BLOCK = 128
     elem_type = torch.bfloat16
@@ -1042,7 +1042,7 @@ def test_buffer_atomic_rmw_add_bf16():
     assert llir.count("tail call <2 x bfloat> @llvm.amdgcn.raw.ptr.buffer.atomic.fadd.v2bf16") == SIZE_PER_THREAD // 2
 
 
-@pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires Ampere or newer")
+@pytest.mark.xfail(not is_ampere_or_newer(), reason="Requires Ampere or newer", run=False)
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
 def test_mma_v2(dtype):
     torch.manual_seed(42)
@@ -1077,7 +1077,7 @@ def test_mma_v2(dtype):
     torch.testing.assert_close(out, torch.addmm(c, a, b), atol=0.05, rtol=1e-2)
 
 
-def test_dot_fma():
+def test_dot_fma(device):
     torch.manual_seed(42)
     B = ttgl.constexpr(32)
     threads_per_warp = ttgl.constexpr(THREADS_PER_WARP)
@@ -1097,9 +1097,9 @@ def test_dot_fma():
         out = ttgl.dot_fma(a, b, c)
         ttgl.store(out_ptr + offs, out)
 
-    a = torch.rand((B, B), dtype=torch.float32, device="cuda")
-    b = torch.ones((B, B), dtype=torch.float32, device="cuda")
-    c = torch.rand((B, B), dtype=torch.float32, device="cuda")
-    out = torch.empty((B, B), dtype=torch.float32, device="cuda")
+    a = torch.rand((B, B), dtype=torch.float32, device=device)
+    b = torch.ones((B, B), dtype=torch.float32, device=device)
+    c = torch.rand((B, B), dtype=torch.float32, device=device)
+    out = torch.empty((B, B), dtype=torch.float32, device=device)
     kernel[(1, )](a, b, c, out)
     torch.testing.assert_close(out, torch.addmm(c, a, b), atol=1e-2, rtol=1e-2)
