@@ -15,7 +15,7 @@ namespace proton {
 
 namespace {
 
-Profiler *makeProfiler(const std::string &name, const std::string &path
+Profiler *makeProfiler(const std::string &name, const std::string &path,
                        void *sycl_queue = nullptr,
                        const std::string &utils_cache_path = "") {
   if (proton::toLower(name) == "cupti") {
@@ -108,6 +108,7 @@ std::unique_ptr<Session> SessionManager::makeSession(
     const std::string &utils_cache_path) {
   auto *profiler =
       makeProfiler(profilerName, profilerPath, sycl_queue, utils_cache_path);
+  profiler = validateAndSetProfilerMode(profiler, mode);
   auto contextSource = makeContextSource(contextSourceName);
   auto data = makeData(dataName, path, contextSource.get());
   auto *session = new Session(id, path, profiler, std::move(contextSource),
