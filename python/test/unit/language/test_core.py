@@ -3837,6 +3837,9 @@ def test_dot3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_
     else:
         input_precision = "tf32" if (is_cuda() or is_xpu()) and in_dtype_str == 'float32' else "ieee"
         if is_xpu():
+            if in_dtype_str == "float64" and num_warps == 1:
+                if ((B, M, N, K, BLOCK_M, BLOCK_N) in [(8, 32, 32, 32, 32, 32), (4, 64, 64, 64, 32, 32)]):
+                    pytest.xfail("XPU: problem size too large for float64")
             if (BLOCK_M < 8 or BLOCK_N < 16):
                 pytest.xfail("XPU: small dots are not supported")
         elif not is_interpreter() and (BLOCK_M < 16 or BLOCK_N < 16):
