@@ -959,7 +959,7 @@ def test_padded_shared_layout_subslice(interval_pairs, shared_layout, slice_m_of
     assert (output == ref_output).all()
 
 
-@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("op, tol", [("add", 0), ("sub", 0), ("mul", 0), ("fma", 1e-6)])
 def test_float2(op, tol):
     BLOCK_M = ttgl.constexpr(128)
