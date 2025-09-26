@@ -450,7 +450,6 @@ run_tutorial_tests() {
     "08-grouped-gemm"
     "09-persistent-matmul"
     "10-experimental-block-pointer"
-    "10i-experimental-block-pointer"
   )
   if [ "${TEST_TUTORIAL_FA:-false}" = true ]; then
     tutorials=(
