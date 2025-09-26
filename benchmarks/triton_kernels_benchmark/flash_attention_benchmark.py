@@ -440,10 +440,6 @@ class _attention(torch.autograd.Function):
         assert Lq == Lk and Lk == Lv
         assert Lk in {16, 32, 64, 128}
         o = torch.empty_like(q)
-        BLOCK_M = 128
-        BLOCK_N = 64
-        num_stages = 3
-        num_warps = 8 if Lq == 64 else 16
         stage = 3 if causal else 1
         grid = lambda args: (q.shape[0], q.shape[1], triton.cdiv(q.shape[2], args['BLOCK_M']))
         n_ctx = q.shape[2]
@@ -451,38 +447,18 @@ class _attention(torch.autograd.Function):
             grid = lambda args: (triton.cdiv(q.shape[2], args['BLOCK_M']), 1, q.shape[0] * q.shape[1])
         M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
 
-        if os.getenv('TRITON_INTEL_ADVANCED_PATH', '0') == '0':
-            # default pipeline
-            _attention.tune_attn_fwd[grid](  # pylint: disable=unsubscriptable-object
-                q, k, v, sm_scale, M, o,  #
-                q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
-                k.stride(0), k.stride(1), k.stride(2), k.stride(3),  #
-                v.stride(0), v.stride(1), v.stride(2), v.stride(3),  #
-                o.stride(0), o.stride(1), o.stride(2), o.stride(3),  #
-                q.shape[0], q.shape[1],  #
-                N_CTX=q.shape[2],  #
-                BLOCK_DMODEL=Lk,  #
-                STAGE=stage,  #
-                split_barriers_scope='None',  # possible scope value: 'Subgroup','Workgroup'
-            )
-        else:
-            _attention.attn_fwd[grid](  # pylint: disable=unsubscriptable-object
-                q, k, v, sm_scale, M, o,  #
-                q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
-                k.stride(0), k.stride(1), k.stride(2), k.stride(3),  #
-                v.stride(0), v.stride(1), v.stride(2), v.stride(3),  #
-                o.stride(0), o.stride(1), o.stride(2), o.stride(3),  #
-                q.shape[0], q.shape[1],  #
-                N_CTX=q.shape[2],  #
-                BLOCK_M=BLOCK_M,  #
-                BLOCK_N=BLOCK_N,  #
-                BLOCK_DMODEL=Lk,  #
-                STAGE=stage,  #
-                num_warps=num_warps,  #
-                num_stages=num_stages,  #
-                grf_mode='large',  #
-                advanced_path=True,  #
-            )
+        _attention.tune_attn_fwd[grid](  # pylint: disable=unsubscriptable-object
+            q, k, v, sm_scale, M, o,  #
+            q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
+            k.stride(0), k.stride(1), k.stride(2), k.stride(3),  #
+            v.stride(0), v.stride(1), v.stride(2), v.stride(3),  #
+            o.stride(0), o.stride(1), o.stride(2), o.stride(3),  #
+            q.shape[0], q.shape[1],  #
+            N_CTX=q.shape[2],  #
+            BLOCK_DMODEL=Lk,  #
+            STAGE=stage,  #
+            split_barriers_scope='None',  # possible scope value: 'Subgroup','Workgroup'
+        )
 
         ctx.save_for_backward(q, k, v, o, M)
         ctx.sm_scale = sm_scale

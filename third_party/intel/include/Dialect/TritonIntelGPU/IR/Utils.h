@@ -41,13 +41,6 @@ inline unsigned getNumElementsPerThread(
   return std::min(alignment, 128 / elemNumBits);
 }
 
-/// Check whether transposed reduction should be performed.
-///
-/// See: https://github.com/intel/intel-xpu-backend-for-triton/issues/1637
-inline bool applyTransposedReduction() {
-  return tools::getBoolEnv("TRITON_INTEL_REDUCE_TRANSPOSE");
-}
-
 // Check if module's target arch is SPIRV. If there is no target arch
 // attribute, then we assume SPIRV target by default.
 inline bool hasSpirvTargetArch(Operation *op) {

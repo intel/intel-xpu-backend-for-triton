@@ -184,14 +184,9 @@ private:
 /// block pointers or not.
 class TritonGPUToLLVMPipelineManager {
 public:
-  TritonGPUToLLVMPipelineManager(ModuleOp &mod, MLIRContext *ctx, bool advanced,
+  TritonGPUToLLVMPipelineManager(ModuleOp &mod, MLIRContext *ctx,
                                  bool useTileLoadLinearLayout)
-      : mod(mod), ctx(ctx), isAdvancedPathEnabled(advanced),
-        useTileLoadLinearLayout(useTileLoadLinearLayout) {}
-
-  /// FIXME: remove once the block ptr conversion path is capable of handling
-  ///        shared memory.
-  bool skipSharedMemoryAllocation() const { return isAdvancedPathEnabled; }
+      : mod(mod), ctx(ctx), useTileLoadLinearLayout(useTileLoadLinearLayout) {}
 
   /// Populate the conversion pipeline for function operations.
   void populateFunctionConversionPatterns(
@@ -213,47 +208,37 @@ public:
     using namespace mlir;
     using namespace mlir::triton;
 
-    if (isAdvancedPathEnabled) {
-      intel::populateArithOpsToLLVMPatterns(typeConverter, patterns, benefit);
-      intel::populateBF16CastsLLVMPatterns(typeConverter, patterns, benefit);
-      intel::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
-                                                targetInfo, benefit);
-      intel::populateTritonOpsToLLVMPatterns(typeConverter, patterns, benefit);
-    } else {
-      intel::populateConvertLayoutOpToLLVMPatterns(typeConverter, targetInfo,
-                                                   patterns, benefit);
-      intel::populateDotOpToLLVMPatterns(typeConverter, patterns, benefit);
-      intel::populateElementwiseOpToLLVMPatterns(
-          typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
-      intel::populateLoadStoreOpToLLVMPatterns(
-          typeConverter, targetInfo, patterns, axisInfoAnalysis, benefit,
-          useTileLoadLinearLayout);
-      intel::populateReduceOpToLLVMPatterns(typeConverter, patterns, targetInfo,
-                                            benefit);
-      mlir::triton::populateScanOpToLLVMPatterns(typeConverter, patterns,
-                                                 targetInfo, benefit);
-      mlir::triton::populateGatherOpToLLVMPatterns(typeConverter, patterns,
-                                                   targetInfo, benefit);
-      mlir::triton::populateViewOpToLLVMPatterns(typeConverter, patterns,
-                                                 benefit);
-
-      intel::populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns,
-                                                benefit);
-      intel::populateHistogramOpToLLVMPatterns(typeConverter, patterns,
-                                               targetInfo, benefit);
-      intel::populatePrintOpToLLVMPattern(typeConverter, patterns, targetInfo,
+    intel::populateConvertLayoutOpToLLVMPatterns(typeConverter, targetInfo,
+                                                 patterns, benefit);
+    intel::populateDotOpToLLVMPatterns(typeConverter, patterns, benefit);
+    intel::populateElementwiseOpToLLVMPatterns(
+        typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
+    intel::populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo,
+                                             patterns, axisInfoAnalysis,
+                                             benefit, useTileLoadLinearLayout);
+    intel::populateReduceOpToLLVMPatterns(typeConverter, patterns, targetInfo,
                                           benefit);
-      mlir::ub::populateUBToLLVMConversionPatterns(typeConverter, patterns);
-      populateAssertOpToLLVMPattern(typeConverter, patterns, targetInfo,
-                                    benefit);
-      mlir::triton::populateMemoryOpToLLVMPatterns(typeConverter, targetInfo,
+    mlir::triton::populateScanOpToLLVMPatterns(typeConverter, patterns,
+                                               targetInfo, benefit);
+    mlir::triton::populateGatherOpToLLVMPatterns(typeConverter, patterns,
+                                                 targetInfo, benefit);
+    mlir::triton::populateViewOpToLLVMPatterns(typeConverter, patterns,
+                                               benefit);
+
+    intel::populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns, benefit);
+    intel::populateHistogramOpToLLVMPatterns(typeConverter, patterns,
+                                             targetInfo, benefit);
+    intel::populatePrintOpToLLVMPattern(typeConverter, patterns, targetInfo,
+                                        benefit);
+    mlir::ub::populateUBToLLVMConversionPatterns(typeConverter, patterns);
+    populateAssertOpToLLVMPattern(typeConverter, patterns, targetInfo, benefit);
+    mlir::triton::populateMemoryOpToLLVMPatterns(typeConverter, targetInfo,
+                                                 patterns, benefit);
+    intel::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
+                                              targetInfo, benefit);
+    mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
                                                    patterns, benefit);
-      intel::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
-                                                targetInfo, benefit);
-      mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
-                                                     patterns, benefit);
-      intel::populateFp4ToFpToLLVMPatterns(typeConverter, patterns, benefit);
-    }
+    intel::populateFp4ToFpToLLVMPatterns(typeConverter, patterns, benefit);
 
     intel::populateSPMDOpToLLVMPattern(typeConverter, patterns, targetInfo,
                                        benefit);
@@ -275,10 +260,6 @@ private:
   ModuleOp &mod;
   MLIRContext *ctx;
 
-  /// Selects which conversion pipeline to use.
-  /// FIXME: this is temporary and should be removed once we have an analysis to
-  /// determine whether a kernel uses block pointers.
-  bool isAdvancedPathEnabled = false;
   bool useTileLoadLinearLayout = true;
 };
 

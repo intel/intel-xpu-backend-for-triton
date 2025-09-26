@@ -34,35 +34,9 @@ static Type convertTritonPointerType(triton::PointerType type) {
 
 TritonIntelGPUToLLVMTypeConverter::TritonIntelGPUToLLVMTypeConverter(
     MLIRContext *ctx, LowerToLLVMOptions &option,
-    const TargetInfoBase &targetInfo, bool isAdvancedPathEnabled,
-    const DataLayoutAnalysis *analysis)
+    const TargetInfoBase &targetInfo, const DataLayoutAnalysis *analysis)
     : TritonGPUToLLVMTypeConverter(ctx, option, targetInfo, analysis) {
   addConversion([&](triton::PointerType type) -> std::optional<Type> {
     return convertTritonPointerType(type);
   });
-  // Augment/overwrite type conversions required for the Intel conversion
-  // passes.
-  if (isAdvancedPathEnabled) {
-    // tt::pointer to v2i32.
-    addConversion([&](PointerType type) -> std::optional<Type> {
-      if (isa<RankedTensorType>(type.getPointeeType())) {
-        auto i32Type = mlir::IntegerType::get(type.getContext(), 32);
-        return mlir::VectorType::get(2, i32Type);
-      }
-      return LLVM::LLVMPointerType::get(type.getContext(),
-                                        type.getAddressSpace());
-    });
-
-    // tensor type is flattened and divided by 16 (subgroupSize).
-    addConversion([&](mlir::RankedTensorType type) -> mlir::Type {
-      unsigned num = type.getNumElements();
-      Type elmTy = type.getElementType();
-      if (!type.getEncoding() ||
-          isa<mlir::triton::gpu::DotOperandEncodingAttr>(type.getEncoding()))
-        num /= 16;
-      if (num == 1)
-        return elmTy;
-      return mlir::VectorType::get(num, elmTy);
-    });
-  }
 }

@@ -17,7 +17,6 @@ add_triton_plugin(TritonXPU
   TritonGENToLLVMIRTranslation
   TritonIntelGPUToLLVM
   TritonIntelGPUTransforms
-  TritonToTritonGPUWarp
 )
 
 target_link_libraries(TritonXPU PRIVATE Python3::Module pybind11::headers)

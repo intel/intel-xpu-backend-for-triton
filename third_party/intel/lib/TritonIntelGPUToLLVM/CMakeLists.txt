@@ -1,6 +1,5 @@
 add_triton_library(TritonIntelGPUToLLVM
     AllocateSharedMemory.cpp
-    ArithOpsToLLVM.cpp
     BF16Casts.cpp
     ControlFlowOpToLLVM.cpp
     ConvertLayoutOpToLLVM.cpp
@@ -18,7 +17,6 @@ add_triton_library(TritonIntelGPUToLLVM
     TargetInfo.cpp
     TensorPtrOpsToLLVM.cpp
     TritonGPUToLLVM.cpp
-    TritonOpsToLLVM.cpp
     TypeConverter.cpp
     Utility.cpp
     XeAsmFormat.cpp

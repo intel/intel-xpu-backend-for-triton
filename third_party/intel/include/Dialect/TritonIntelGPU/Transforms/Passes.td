@@ -56,66 +56,6 @@ def TritonIntelGPUCoalesce
                            "mlir::triton::gpu::TritonGPUDialect"];
 }
 
-def TritonIntelGPUDistributeToWarps
-    : Pass<"tritonintelgpu-distribute-to-warps", "mlir::ModuleOp"> {
-  let summary = "distribute the thread block workload to the warps";
-
-  let description = [{
-    Changes the tensor type and layout
-
-    For example, given:
-
-    ```mlir
-    #blockedC = #ttg.blocked<{sizePerThread = [64, 64], threadsPerWarp = [1, 1], warpsPerCTA = [2, 2], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
-    #blockedA = #ttg.dot_op<{opIdx = 0, parent = #blockedC}>
-    #blockedB = #ttg.dot_op<{opIdx = 1, parent = #blockedC}>
-
-    tt.func @gemm(%arg0, %arg1, %arg2) {
-      %0 = tt.get_program_id x: i32
-      ...
-      %18 = tt.make_tensor_ptr %arg0, [affine function of %0] : <tensor<128x32xf16, #blockedA>, 1>
-      %22 = tt.make_tensor_ptr %arg1, [affine function of %0] : <tensor<32x128xf16, #blockedB>, 1>
-      scf.for loop {
-        %28 = tt.load %18 : <tensor<128x32xf16, #blockedA>, 1>
-        %29 = tt.load %22 : <tensor<32x128xf16, #blockedB>, 1>
-        %30 = tt.dot %28, %29, %acc : <tensor<128x32xf16, #blockedA>, <tensor<32x128xf16, #blockedB> -> tensor<128x128xf32, #blockedC>
-        ...
-      }
-      ...
-    }
-    ```
-
-    after this pass, the workload is distributed so that each op works on warp/subgroup level
-    with smaller size:
-
-    ```mlir
-    #warpA = #ttg.warp<{sizePerThread = [64, 32], threadsPerWarp = [1, 1], order = [1, 0]}>
-    #warpB = #ttg.warp<{sizePerThread = [32, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
-    #warpC = #ttg.warp<{sizePerThread = [64, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
-
-    tt.func @gemm(%arg0, %arg1, %arg2) {
-      %0 = tt.get_program_id x: i32
-      %1 = gpu.subgroup_id : i32
-      ...
-      %18 = tt.make_tensor_ptr %arg0, [affine function of (%0, %1) ] : <tensor<64x32xf16, #warpA>, 1>
-      %22 = tt.make_tensor_ptr %arg1, [affine function of (%0, %1) ] : <tensor<32x64xf16, #warpB>, 1>
-      scf.for loop {
-        %28 = tt.load %18 : <tensor<64x32xf16, #warpA>, 1>
-        %29 = tt.load %22 : <tensor<32x64xf16, #warpB>, 1>
-        %30 = tt.dot %28, %29, %acc : <tensor<64x32xf16, #warpA>, <tensor<32x64xf16, #warpB> -> tensor<64x64xf32, #warpC>
-        ...
-      }
-      ...
-    }
-    ```
-  }];
-
-  let dependentDialects = ["mlir::triton::TritonDialect",
-                           "mlir::triton::gpu::intel::TritonIntelGPUDialect",
-                           "mlir::arith::ArithDialect",
-                           "mlir::gpu::GPUDialect"];
-}
-
 def TritonIntelGPUPipeline : Pass<"tritonintelgpu-pipeline", "mlir::ModuleOp"> {
   let summary = "Pipeline loops";
 
@@ -192,79 +132,6 @@ def TritonIntelGPURemoveLayoutConversions : Pass<"tritonintelgpu-remove-layout-c
 
 }
 
-def TritonIntelGPUPrefetchBlock : Pass<"tritonintelgpu-prefetch-block", "mlir::ModuleOp"> {
-  let summary = "Prefetch a tensor block around loop";
-
-  let description = [{
-    This pass injects prefetch operations for loads that 'feed' a `tt.dot` operation in a loop.
-    Prefetch operations are inserted in the loop preheader (the number of iterations to prefetch
-    in advance is controlable by a pass option) and in the loop body.
-    Notes:
-      - only loads that use a block pointer are considered
-      - only targets that have a dedicated prefetch instruction are supported
-  }];
-
-  let dependentDialects = ["mlir::triton::TritonDialect",
-                           "mlir::triton::TritonGEN::TritonGENDialect",
-                           "mlir::triton::gpu::intel::TritonIntelGPUDialect",
-                           "mlir::scf::SCFDialect",
-                           "mlir::spirv::SPIRVDialect",
-                           "mlir::gpu::GPUDialect"];
-  let options = [
-    Option<"numAdvancePrefetches", "num-advance-prefetches",
-           "int32_t", /*default*/"3",
-           "Number of loop iteration to prefetch in advance of the loop">,
-    Option<"injectSplitBarriers", "inject-split-barriers",
-           "bool", /*default*/"true",
-           "Whether to inject split barriers in (and around) the loop">,
-  ];
-}
-
-def TritonIntelGPUMatchTargetSize : Pass<"tritonintelgpu-match-target-size", "mlir::ModuleOp"> {
-  let summary = "Split tensor operations to match target architecture";
-
-  let description = [{
-    This pass splits certain Triton tensor operations (e.g dot, load, store) so that each
-    operation matches the native operation shape supported by the target architecture.
-
-    Notes:
-      - only block pointers are supported
-      - this pass should be run after 'tritonintelgpu-distribute-to-warps'
-
-    For example, given:
-      ```mlir
-      %A = tt.load %arg1 : !tt.ptr<tensor<32x32xf16>> -> tensor<32x32xf16>
-      %B = tt.load %arg2 : !tt.ptr<tensor<32x64xf16>> -> tensor<32x64xf16>
-      %C = tt.load %arg3 : !tt.ptr<tensor<32x64xf16>> -> tensor<32x64xf32>
-      %D = tt.dot %A, %B, %C : tensor<32x32xf16> * tensor<32x64xf16> -> tensor<32x64xf32>
-      ```
-
-    Assuming that the native 'dot' shape supported by the target architecture is <8x16x16>
-    and that the max supported load size is 512DW (<32x32xf16>), after this pass:
-      - the load of <32x64xf16> is split to 2 loads of <32x32xf16>
-      - the dot operation is split so that each resulting operation matches the native target
-        shape supported by the architecture
-
-      ```mlir
-      %A = tt.load %arg1 : !tt.ptr<tensor<32x32xf16>> -> tensor<32x32xf16>
-      %B1 = tt.load %arg21 : !tt.ptr<tensor<32x32xf16>> -> tensor<32x32xf16>
-      %B2 = tt.load %arg22 : !tt.ptr<tensor<32x32xf16>> -> tensor<32x32xf16>
-      %C1 = tt.load %arg31 : !tt.ptr<tensor<32x32xf16>> -> tensor<32x32xf16>
-      %C2 = tt.load %arg32 : !tt.ptr<tensor<32x32xf16>> -> tensor<32x32xf16>
-      ... <extract operations>
-      %dot_0 = tt.dot %tile_A, %tile_B, %tile_C : tensor<8x16xf16> * tensor<16x16xf16>
-             -> tensor<8x16xf16>
-      ... <extract operations>
-      %dot_1 = tt.dot %tile_A', %tile_B', %dot_0 : tensor<8x16xf16> * tensor<16x16xf16>
-             -> tensor<8x16xf16>
-      ...
-      ```
-  }];
-
-  let dependentDialects = ["mlir::triton::TritonDialect",
-                           "mlir::triton::gpu::intel::TritonIntelGPUDialect"];
-}
-
 def TritonIntelGPUReduceDataDuplication: Pass<"tritonintelgpu-reduce-data-duplication", "mlir::ModuleOp"> {
   let summary = "Reduce data duplication in register by decomposing convert[distributed -> dotOperand] "
                 "into convert[distributed -> shared -> dotOperand]";
@@ -277,19 +144,6 @@ def TritonIntelGPUReduceDataDuplication: Pass<"tritonintelgpu-reduce-data-duplic
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::gpu::intel::TritonIntelGPUDialect",
                            "mlir::triton::TritonDialect"];
-}
-
-def TritonIntelGPUScheduleLoad : Pass<"tritonintelgpu-schedule-load", "mlir::ModuleOp"> {
-  let summary = "naive ra-aware instr scheduler";
-
-  let description = [{
-    This pass works for FlashAttention.
-    This pass moves loads to be adjacent to their user(tt.dot) to help IGC do better RegisterAllocation.
-  }];
-
-  let dependentDialects = ["mlir::triton::TritonDialect",
-                           "mlir::triton::gpu::intel::TritonIntelGPUDialect",
-                           "mlir::triton::gpu::TritonGPUDialect"];
 }
 
 def TritonIntelGPUMaterializeBlockPointer : Pass<"tritonintelgpu-materialize-block-pointer", "mlir::ModuleOp"> {
