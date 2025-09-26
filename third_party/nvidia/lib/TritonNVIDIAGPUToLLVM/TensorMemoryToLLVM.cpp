@@ -55,20 +55,20 @@ struct TMemCopyAtom {
 // .shape     = { .128x256b, .128x128b, .64x128b, .32x128b }
 // .multicast = { .warpx2::02_13 , .warpx2::01_23, .warpx4}
 // .shape = .4x256b NYI
-constexpr TMemCopyAtom TMemCopyAtomNone128{
-    .nRow = 128, .bCol = 128, .multicast = 0};
+constexpr TMemCopyAtom TMemCopyAtomNone128{128 /*nRow*/, 128 /*bCol*/,
+                                           0 /*multicast*/};
 
-constexpr TMemCopyAtom TMemCopyAtomNone256{
-    .nRow = 128, .bCol = 256, .multicast = 0};
+constexpr TMemCopyAtom TMemCopyAtomNone256{128 /*nRow*/, 256 /*bCol*/,
+                                           0 /*multicast*/};
 
-constexpr TMemCopyAtom TMemCopyAtomWarp02_13{
-    .nRow = 64, .bCol = 128, .multicast = 1};
+constexpr TMemCopyAtom TMemCopyAtomWarp02_13{64 /*nRow*/, 128 /*bCol*/,
+                                             1 /*multicast*/};
 
-constexpr TMemCopyAtom TMemCopyAtomWarp01_23{
-    .nRow = 64, .bCol = 128, .multicast = 2};
+constexpr TMemCopyAtom TMemCopyAtomWarp01_23{64 /*nRow*/, 128 /*bCol*/,
+                                             2 /*multicast*/};
 
-constexpr TMemCopyAtom TMemCopyAtomWarp4{
-    .nRow = 32, .bCol = 128, .multicast = 3};
+constexpr TMemCopyAtom TMemCopyAtomWarp4{32 /*nRow*/, 128 /*bCol*/,
+                                         3 /*multicast*/};
 
 TMemCopyAtom getTMemCopyAtom(const LinearLayout &cvt, int bitwidth) {
   auto *ctx = cvt.getInDimNames().begin()->getContext();
