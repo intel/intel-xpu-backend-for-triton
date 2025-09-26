@@ -445,6 +445,8 @@ class XPUBackend(BaseBackend):
             stages["ttgir"] = lambda src, metadata: self.gluon_to_ttgir(src, metadata, options)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
         stages["spv"] = lambda src, metadata: self.make_spv(src, metadata, options, self.device_arch)
+        if knobs.runtime.add_stages_inspection_hook is not None:
+            knobs.runtime.add_stages_inspection_hook(self, stages, options, language, None)
 
     @functools.lru_cache()
     def hash(self):
