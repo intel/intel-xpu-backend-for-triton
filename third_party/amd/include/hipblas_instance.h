@@ -2,7 +2,13 @@
 #define TRITON_HIPBLAS_INSTANCE_H
 
 #include "hipblas_types.h"
+#ifdef WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#else
 #include <dlfcn.h>
+#endif
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -70,6 +76,9 @@ class HipblasLtInstance {
   hipblasLtMatmulPreference_t preference = NULL;
 
   void loadHipBlasDylib() {
+#ifdef WIN32
+    assert(0 && "Not implemented on Windows");
+#else
     if (dylibHandle == nullptr) {
       // First reuse the existing handle
       dylibHandle = dlopen(name, RTLD_NOLOAD);
@@ -116,9 +125,16 @@ class HipblasLtInstance {
                                std::string(name) +
                                "`: " + std::string(dlsym_error));
     }
+#endif
   }
 
-  void unloadHipBlasDylib() { dlclose(dylibHandle); }
+  void unloadHipBlasDylib() {
+#ifdef WIN32
+    assert(0 && "Not implemented on Windows");
+#else
+    dlclose(dylibHandle);
+#endif
+  }
 
   void successOrExit(hipblasStatus_t status, const std::string &context = "") {
     if (status != HIPBLAS_STATUS_SUCCESS) {
