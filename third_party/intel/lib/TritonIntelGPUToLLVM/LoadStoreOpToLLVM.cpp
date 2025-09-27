@@ -3320,7 +3320,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       Value ret;
       // Create a predicated load operation.
       if (pred) {
-        if (triton::tools::getBoolEnv("TRITON_INTEL_PREDICATED_LOAD"))
+        if (triton::tools::getBoolEnv("TRITON_INTEL_PREDICATED"))
           ret = rewriter.create<TritonGEN::PredicatedLoadOp>(
               loc, retTy, addrElem, b.i64_val(alignment), pred, other_);
         else {
@@ -3756,17 +3756,24 @@ struct StoreOpConversion
         vecWord = b.insert_element(vecTy, vecWord, llWord, b.i32_val(index));
       }
 
+      Value addrElem = b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
+      uint32_t alignment = nWords * width / 8;
       auto createStore = [&]() -> ArrayRef<Value> {
-        Value addrElem =
-            b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
-        uint32_t alignment = nWords * width / 8;
         b.store(vecWord, addrElem, alignment);
         return ArrayRef<Value>();
       };
 
       if (maskVal) {
         // Create a predicated store operation.
-        LLVM::intel::createPredicatedBlock(rewriter, loc, maskVal, createStore);
+        if (triton::tools::getBoolEnv("TRITON_INTEL_PREDICATED")) {
+          unsigned numElems = valArgTy.getIntOrFloatBitWidth() * nWords /
+                              valueElemTy.getIntOrFloatBitWidth();
+          vecWord = b.bitcast(vecWord, vec_ty(valueElemTy, numElems));
+          rewriter.create<TritonGEN::PredicatedStoreOp>(
+              loc, addrElem, vecWord, b.i64_val(alignment), maskVal);
+        } else
+          LLVM::intel::createPredicatedBlock(rewriter, loc, maskVal,
+                                             createStore);
       } else {
         auto _ = createStore();
       }
