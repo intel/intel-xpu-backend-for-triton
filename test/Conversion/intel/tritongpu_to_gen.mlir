@@ -1,5 +1,5 @@
-// RUN: triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm --convert-tritongen-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm --dump-input-context=20 --check-prefixes=CHECK,NO-PREDICATED
-// RUN: env TRITON_INTEL_PREDICATED_LOAD=1 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm --convert-tritongen-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm --dump-input-context=20 --check-prefixes=CHECK,PREDICATED
+// RUN: env TRITON_INTEL_PREDICATED=0 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm --convert-tritongen-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm --dump-input-context=20 --check-prefixes=CHECK,NO-PREDICATED
+// RUN: env TRITON_INTEL_PREDICATED=1 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm --convert-tritongen-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm --dump-input-context=20 --check-prefixes=CHECK,PREDICATED
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: llvm.func spir_kernelcc @test_empty_kernel(%arg0: i64, %arg1: !llvm.ptr<1>, %arg2: !llvm.ptr<1>, %arg3: !llvm.ptr<1>)
@@ -694,21 +694,27 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-NEXT: [[VEC2:%.*]] = llvm.mlir.undef : vector<1xi32>
     // CHECK-NEXT: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK-NEXT: [[IE2:%.*]] = llvm.insertelement [[BCAST1]], [[VEC2]][[[ZERO]] : i32] : vector<1xi32>
-    // CHECK-NEXT: llvm.cond_br [[ARG2_0]], ^bb1, ^bb2
-    // CHECK-NEXT: ^bb1:
-    // CHECK-NEXT:   [[BCAST2:%.*]] = llvm.bitcast [[ARG0_0]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // CHECK-NEXT:   llvm.store [[IE2]], [[BCAST2]] {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
-    // CHECK-NEXT:   llvm.br ^bb2
-    // CHECK-NEXT: ^bb2:
+    // CHECK-NEXT: [[BCAST2:%.*]] = llvm.bitcast [[ARG0_0]] : !llvm.ptr<1> to !llvm.ptr<1>
+    // PREDICATED-NEXT: [[BCAST3:%.*]] = llvm.bitcast [[IE2]] : vector<1xi32> to vector<1xf32>
+    // PREDICATED: [[ALIGNMENT:%.*]] = llvm.mlir.constant(4 : i64) : i64
+    // PREDICATED: llvm.call spir_funccc @llvm.genx.GenISA.PredicatedStore.p1f32.v1f32([[BCAST2]], [[BCAST3]], [[ALIGNMENT]], [[ARG2_0]]) {{.*}} : (!llvm.ptr<1>, vector<1xf32>, i64, i1) -> ()
+    // NO-PREDICATED: llvm.cond_br [[ARG2_0]], ^bb1, ^bb2
+    // NO-PREDICATED-NEXT: ^bb1:
+    // NO-PREDICATED-NEXT:   llvm.store [[IE2]], [[BCAST2]] {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
+    // NO-PREDICATED-NEXT:   llvm.br ^bb2
+    // NO-PREDICATED-NEXT: ^bb2:
     // CHECK:        [[VEC3:%.*]] = llvm.mlir.undef : vector<1xi32>
     // CHECK-NEXT:   [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK-NEXT:   [[IE3:%.*]] = llvm.insertelement {{.*}}, [[VEC3]][[[ZERO]] : i32] : vector<1xi32>
-    // CHECK:        llvm.cond_br [[ARG2_1]], ^bb3, ^bb4
-    // CHECK-NEXT: ^bb3:
     // CHECK-NEXT:   [[BCAST2:%.*]] = llvm.bitcast [[ARG0_1]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // CHECK-NEXT:   llvm.store [[IE3]], [[BCAST2]] {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
-    // CHECK-NEXT:   llvm.br ^bb4
-    // CHECK-NEXT: ^bb4:
+    // PREDICATED-NEXT: [[BCAST3:%.*]] = llvm.bitcast [[IE3]] : vector<1xi32> to vector<1xf32>
+    // PREDICATED: [[ALIGNMENT:%.*]] = llvm.mlir.constant(4 : i64) : i64
+    // PREDICATED: llvm.call spir_funccc @llvm.genx.GenISA.PredicatedStore.p1f32.v1f32([[BCAST2]], [[BCAST3]], [[ALIGNMENT]], [[ARG2_1]]) {{.*}} : (!llvm.ptr<1>, vector<1xf32>, i64, i1) -> ()
+    // NO-PREDICATED:        llvm.cond_br [[ARG2_1]], ^bb3, ^bb4
+    // NO-PREDICATED-NEXT: ^bb3:
+    // NO-PREDICATED-NEXT:   llvm.store [[IE3]], [[BCAST2]] {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
+    // NO-PREDICATED-NEXT:   llvm.br ^bb4
+    // NO-PREDICATED-NEXT: ^bb4:
     tt.store %ptrs, %vals, %mask : tensor<256x!tt.ptr<f32>, #blocked0>
     tt.return
   }
@@ -1345,10 +1351,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: store_f32_scalar
   tt.func @store_f32_scalar(%arg0 : !tt.ptr<f32>, %arg1 : f32) {
     // CHECK:      llvm.icmp "eq"
-    // CHECK:      llvm.cond_br {{.*}}, ^bb1, ^bb2
-    // CHECK-NEXT: ^bb1:
-    // CHECK-NEXT:   [[BCAST:%.*]] = llvm.bitcast %arg0 : !llvm.ptr<1> to !llvm.ptr<1>
-    // CHECK-NEXT:   llvm.store {{.*}}, [[BCAST]] {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
+    // CHECK:      [[BCAST:%.*]] = llvm.bitcast %arg0 : !llvm.ptr<1> to !llvm.ptr<1>
+    // PREDICATED: llvm.call spir_funccc @llvm.genx.GenISA.PredicatedStore.p1f32.v1f32([[BCAST]], {{.*}}) {{.*}} : (!llvm.ptr<1>, vector<1xf32>, i64, i1) -> ()
+    // NO-PREDICATED:      llvm.cond_br {{.*}}, ^bb1, ^bb2
+    // NO-PREDICATED-NEXT: ^bb1:
+    // NO-PREDICATED-NEXT:   llvm.store {{.*}}, [[BCAST]] {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
     tt.store %arg0, %arg1 : !tt.ptr<f32>
     tt.return
   }

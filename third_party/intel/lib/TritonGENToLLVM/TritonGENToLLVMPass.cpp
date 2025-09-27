@@ -960,6 +960,37 @@ struct TritonPredicatedLoadOpLowering
   }
 };
 
+struct TritonPredicatedStoreOpLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::PredicatedStoreOp> {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::PredicatedStoreOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::PredicatedStoreOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    MLIRContext *ctx = rewriter.getContext();
+    Location loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    Type valType = op.getValue().getType();
+    // Create a call to the SPIR-V builtin for predicated store.
+    std::string typeMangling = getGenISATypeMangling(valType);
+    std::string ptrTypeMangling = getGenISATypeMangling(valType);
+    if (auto vecTy = dyn_cast<VectorType>(valType))
+      ptrTypeMangling = getGenISATypeMangling(vecTy.getElementType());
+    std::string funcName = "llvm.genx.GenISA.PredicatedStore.p1" +
+                           ptrTypeMangling + "." + typeMangling;
+    SmallVector<Type> argTypes{ptr_ty(ctx, 1), valType, int_ty(64), int_ty(1)};
+    SmallVector<Value> args{op.getPtr(), op.getValue(), op.getAlignment(),
+                            op.getPredicate()};
+
+    LLVM::CallOp callOp = intel::createDeviceFunctionCall(
+        rewriter, funcName, void_ty(ctx), argTypes, args, {},
+        intel::noUnwindWillReturnAttrs);
+    rewriter.replaceOp(op, callOp);
+    return success();
+  }
+};
+
 struct TritonFToTf32OpLowering
     : public ConvertOpToLLVMPattern<TritonGEN::FToTf32Op> {
   using ConvertOpToLLVMPattern<TritonGEN::FToTf32Op>::ConvertOpToLLVMPattern;
@@ -1049,11 +1080,12 @@ struct TritonGENToLLVMDialectInterface : public ConvertToLLVMPatternInterface {
 
 void mlir::triton::populateTritonGENToLLVMConversionPatterns(
     LLVMTypeConverter &converter, RewritePatternSet &patterns) {
-  patterns.add<
-      TritonMatrixDPASLowering, TritonMatrix2DBlockLoadLowering,
-      TritonMatrix2DBlockStoreLowering, TritonMatrix2DBlockPrefetchLowering,
-      TritonSubGroupBlockReadLowering, TritonSubGroupBlockWriteLowering,
-      TritonPredicatedLoadOpLowering, TritonFToTf32OpLowering>(converter);
+  patterns
+      .add<TritonMatrixDPASLowering, TritonMatrix2DBlockLoadLowering,
+           TritonMatrix2DBlockStoreLowering,
+           TritonMatrix2DBlockPrefetchLowering, TritonSubGroupBlockReadLowering,
+           TritonSubGroupBlockWriteLowering, TritonPredicatedLoadOpLowering,
+           TritonPredicatedStoreOpLowering, TritonFToTf32OpLowering>(converter);
 }
 
 void registerConvertTritonTritonGENToLLVMInterface(DialectRegistry &registry) {
