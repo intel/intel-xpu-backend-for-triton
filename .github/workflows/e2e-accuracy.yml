@@ -64,9 +64,9 @@ on:
         description: Custom run name
         type: string
         default: "E2E accuracy"
-    schedule:
-      # twice a week, on Wednesday and Saturday
-      - cron: "0 22 * * 3,6"
+  schedule:
+    # twice a week, on Wednesday and Saturday
+    - cron: "0 22 * * 3,6"
 
 
 permissions: read-all
