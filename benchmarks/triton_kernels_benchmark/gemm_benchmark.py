@@ -340,13 +340,13 @@ def get_benchmark(
             args={},
         ))
     def benchmark(B, M, N, K, provider):
+        # Maximum across onednn=600, triton=800, xetla=10, cutlass=600
+        do_bench = benchmark_suite.get_do_bench(n_warmup=800, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
         a_shape, b_shape = get_shapes(B, M, N, K, transpose_a=transpose_a, transpose_b=transpose_b)
 
         torch.manual_seed(0)
         a = torch.rand(a_shape, device='xpu', dtype=torch.bfloat16)
         b = torch.rand(b_shape, device='xpu', dtype=torch.bfloat16)
-
-        quantiles = [0.5, 0.0, 1.0]
 
         torch_a = a
         if transpose_a:
@@ -357,12 +357,7 @@ def get_benchmark(
             torch_b = torch.transpose(torch_b, -2, -1)
 
         if provider == 'onednn':
-            _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
-                lambda: torch.matmul(torch_a, torch_b),
-                n_warmup=10,
-                n_repeat=10,
-                quantiles=quantiles,
-            )
+            _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: torch.matmul(torch_a, torch_b))
 
         elif provider == 'triton':
             if len(a.shape) != len(b.shape):
@@ -385,12 +380,7 @@ def get_benchmark(
             torch_fn = lambda: torch.matmul(torch_a, torch_b).to(torch.float32)
             rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
             benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
-            _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
-                triton_fn,
-                n_warmup=10,
-                n_repeat=10,
-                quantiles=quantiles,
-            )
+            _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
 
         elif provider == 'xetla':
             if B == 1:
@@ -419,12 +409,7 @@ def get_benchmark(
             torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
 
             # benchmark_suite.assert_close(xetla_fn, torch_fn, atol=1e-4, rtol=1.0, err_msg='xetla to torch')
-            _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
-                xetla_fn,
-                n_warmup=10,
-                n_repeat=10,
-                quantiles=quantiles,
-            )
+            _, min_ms, max_ms, mean_ms, cv = do_bench(xetla_fn)
 
         elif provider == 'cutlass':
             name = 'gemm'
@@ -450,12 +435,7 @@ def get_benchmark(
 
             rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
             benchmark_suite.assert_close(cutlass_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='cutlass to torch')
-            _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
-                cutlass_fn,
-                n_warmup=10,
-                n_repeat=10,
-                quantiles=quantiles,
-            )
+            _, min_ms, max_ms, mean_ms, cv = do_bench(cutlass_fn)
 
         else:
             raise NotImplementedError(f'Unsupported provider {provider}')

@@ -21,7 +21,7 @@ class XPUOptions:
     num_ctas: int = 1
     num_stages: int = 2
     cluster_dims: tuple = (1, 1, 1)
-    threads_per_warp: int = 32
+    warp_size: int = 32
     optimize_epilogue: bool = False
     enable_fp_fusion: bool = True
     launch_cooperative_grid: bool = False
@@ -40,8 +40,8 @@ class XPUOptions:
     backend_name: str = 'intel'
     sanitize_overflow: bool = False
     generate_native_code: bool = False
-    advanced_path: bool = False
     enable_tile_load_linear_layout: bool = True
+    arch: str = None
     # FIXME: enable for XPU: https://github.com/intel/intel-xpu-backend-for-triton/issues/4954
     instrumentation_mode: str = ""
 
@@ -85,28 +85,6 @@ class XPUBackend(BaseBackend):
     device_props: dict = {}
     instrumentation = None
 
-    # AdvancedPath pass pipeline for kernels using block pointers.
-    class AdvancedPath:
-
-        @staticmethod
-        def make_ttgir(mod, metadata, opt):
-            pm = ir.pass_manager(mod.context)
-            pm.enable_debug()
-
-            intel.passes.ttir.add_convert_to_ttgpuir_warp(pm, opt.num_warps)
-            inject_split_barriers = False
-            intel.passes.ttgpuir.add_prefetch_block(pm, opt.num_stages, inject_split_barriers)
-            intel.passes.ttgpuir.add_distribute_to_warps(pm)
-            passes.common.add_canonicalizer(pm)
-            passes.common.add_cse(pm)
-            intel.passes.ttgpuir.add_match_target_size(pm)
-            passes.common.add_canonicalizer(pm)
-            passes.common.add_cse(pm)
-            intel.passes.ttgpuir.add_schedule_load(pm)
-            passes.common.add_symbol_dce(pm)
-            pm.run(mod)
-            return mod
-
     @staticmethod
     def supports_target(target: tuple):
         return target.backend == 'xpu'
@@ -120,6 +98,9 @@ class XPUBackend(BaseBackend):
         self.device_arch = knobs.intel.device_arch or mod.parse_device_arch(target.arch.get('architecture', 0))
         self.properties = self.parse_target(target.arch)
         self.binary_ext = "spv"
+
+    def get_target_name(self, options) -> str:
+        return f"xpu:{self.device_arch}"
 
     def parse_target(self, tgt_prop) -> dict:
         dev_prop = {}
@@ -176,10 +157,10 @@ class XPUBackend(BaseBackend):
 
     @staticmethod
     def validate_options(opt, properties):
-        # Check threads_per_warp and num_threads are within limits.
-        if opt.threads_per_warp not in properties['sub_group_sizes']:
+        # Check warp_size and num_threads are within limits.
+        if opt.warp_size not in properties['sub_group_sizes']:
             raise ValueError(
-                f"threads_per_warp={opt.threads_per_warp} is unsupported for the target (supported values are {properties['sub_group_sizes']})"
+                f"warp_size={opt.warp_size} is unsupported for the target (supported values are {properties['sub_group_sizes']})"
             )
         if opt.num_warps > properties['max_num_sub_groups']:
             raise ValueError(
@@ -196,10 +177,10 @@ class XPUBackend(BaseBackend):
         module_opts.support_sg_2d_block = properties["has_subgroup_2d_block_io"]
         module_opts.support_dpas = properties["has_subgroup_matrix_multiply_accumulate"]
         module_opts.support_bf16_conversion = properties["has_bfloat16_conversions"]
-        module_opts.threads_per_warp = opt.threads_per_warp
+        module_opts.threads_per_warp = opt.warp_size
         module_opts.target_arch = target_arch
         intel.passes.ttgpuir.add_triton_annotate_module(pm, module_opts)
-        pm.run(mod)
+        pm.run(mod, 'annotate_module')
 
     @staticmethod
     def get_split_barrier_scope(opt):
@@ -226,7 +207,7 @@ class XPUBackend(BaseBackend):
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
         passes.ttir.add_loop_unroll(pm)
-        pm.run(mod)
+        pm.run(mod, 'make_ttir')
         return mod
 
     @staticmethod
@@ -240,17 +221,13 @@ class XPUBackend(BaseBackend):
         # Annotate module with information required by subsequent transformations.
         XPUBackend.annotate_module(mod, properties, opt, "spir64")
 
-        # Overwrite the threads_per_warp option with the module annotation.
-        opt.threads_per_warp = intel.get_threads_per_warp(mod)
+        # Overwrite the warp_size option with the module annotation.
+        opt.warp_size = intel.get_threads_per_warp(mod)
         XPUBackend.validate_options(opt, properties)
-
-        if (properties["has_subgroup_2d_block_io"] and properties["has_subgroup_matrix_multiply_accumulate"]
-                and (knobs.intel.advanced_path or opt.advanced_path)):
-            return XPUBackend.AdvancedPath.make_ttgir(mod, metadata, opt)
 
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        passes.ttir.add_convert_to_ttgpuir(pm, "xpu", opt.num_warps, opt.threads_per_warp, opt.num_ctas)
+        passes.ttir.add_convert_to_ttgpuir(pm, "xpu", opt.num_warps, opt.warp_size, opt.num_ctas)
         # optimize TTGIR
         intel.passes.ttgpuir.add_coalesce(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
@@ -286,7 +263,7 @@ class XPUBackend(BaseBackend):
         if knobs.intel.opt_reduction_locality:
             intel.passes.ttgpuir.add_optimize_reduction_locality(pm)
         intel.passes.arith.add_arith_emulate_unsupported_floats(pm, ["bf16"], "f32")
-        pm.run(mod)
+        pm.run(mod, 'make_ttgir')
         metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
         return mod
 
@@ -295,14 +272,14 @@ class XPUBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
 
-        passes.ttgpuir.add_inliner(pm)
+        passes.gluon.add_inliner(pm)
         passes.gluon.add_resolve_auto_encodings(pm)
         passes.common.add_sccp(pm)
         passes.ttir.add_loop_aware_cse(pm)
-        passes.ttgpuir.add_canonicalizer(pm)
+        passes.gluon.add_canonicalizer(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
 
-        pm.run(mod)
+        pm.run(mod, 'gluon_to_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
         return mod
 
@@ -315,16 +292,12 @@ class XPUBackend(BaseBackend):
 
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
-        # FIXME: Advanced path uses custom type conversion and needs hacky
-        # solutions for SLM allocation, so this will crash on some operations
-        # being used, e.g., convert_layout.
-        if not knobs.intel.reduce_transpose:
-            intel.passes.ttgpuir.add_allocate_shared_memory(pm)
+        intel.passes.ttgpuir.add_allocate_shared_memory(pm)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
         # instrumentation point here so we can override IRs above (e.g., ttir and ttgir)
         if XPUBackend.instrumentation:
             XPUBackend.instrumentation.patch("ttgpuir_to_llvmir", pm, mod.context)
-        intel.passes.ttgpuir.add_to_llvmir(pm, options.advanced_path, options.enable_tile_load_linear_layout)
+        intel.passes.ttgpuir.add_to_llvmir(pm, options.enable_tile_load_linear_layout)
         intel.passes.ttgpuir.add_gen_to_llvm(pm)
         passes.common.add_canonicalizer(pm)
         intel.passes.ttgpuir.add_rewrite_stack_ptr(pm)
@@ -337,7 +310,7 @@ class XPUBackend(BaseBackend):
             passes.llvmir.add_di_scope(pm)
         if XPUBackend.instrumentation:
             XPUBackend.instrumentation.patch("llvmir_to_llvm", pm, mod.context)
-        pm.run(mod)
+        pm.run(mod, 'make_llir')
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
         llvm.init_targets()
         context = llvm.context()
@@ -441,6 +414,8 @@ class XPUBackend(BaseBackend):
             stages["ttgir"] = lambda src, metadata: self.gluon_to_ttgir(src, metadata, options)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
         stages["spv"] = lambda src, metadata: self.make_spv(src, metadata, options, self.device_arch)
+        if knobs.runtime.add_stages_inspection_hook is not None:
+            knobs.runtime.add_stages_inspection_hook(self, stages, options, language, None)
 
     @functools.lru_cache()
     def hash(self):

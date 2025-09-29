@@ -388,6 +388,47 @@ def TritonGEN_SubGroupBlockWriteOp : TritonGEN_Op<"sub_group_block_write"> {
   }];
 }
 
+def TritonGEN_PredicatedLoadOp
+    : TritonGEN_Op<"predicated_load"> {
+  let summary = "Predicated load operation";
+  let description = [{
+    The `triton_gen.predicated_load` operation loads a value from memory
+    conditionally based on the predicate. If the predicate is true, the value
+    is loaded from the specified pointer; otherwise, a default value is used.
+  }];
+  let arguments = (ins
+      Arg<LLVM_AnyPointer, "", [MemRead]>:$ptr,
+      I64: $alignment,
+      I1:$predicate,
+      AnyType:$default_value);
+  let results = (outs
+      AnyType:$res);
+  let assemblyFormat = [{
+    $ptr `,` $alignment `,` $predicate `,` $default_value attr-dict `:` qualified(type($ptr)) `,`
+    type($alignment) `,` type($predicate) `,` type($default_value) `->` type($res)
+  }];
+}
+
+def TritonGEN_PredicatedStoreOp
+: TritonGEN_Op<"predicated_store"> {
+  let summary = "Predicated store operation";
+  let description = [{
+    The `triton_gen.predicated_store` operation stores a value to memory
+    conditionally based on the predicate. If the predicate is true, the value
+    is stored to the specified pointer; otherwise, no operation is performed.
+  }];
+  let arguments = (ins
+      Arg<LLVM_AnyPointer, "", [MemWrite]>:$ptr,
+      AnyType:$value,
+      I64: $alignment,
+      I1:$predicate);
+  let results = (outs);
+  let assemblyFormat = [{
+    $ptr `,` $value `,` $alignment `,` $predicate attr-dict `:` qualified(type($ptr)) `,`
+    type($value) `,` type($alignment) `,` type($predicate)
+  }];
+}
+
 def TritonGEN_FToTf32Op
     : TritonGEN_Op<"f_to_tf32", [SameOperandsAndResultType]> {
   let summary = "Rounding instruction from float to tensor float (TF32) data format";
