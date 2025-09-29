@@ -667,7 +667,9 @@ run_triton_kernels_tests() {
     # FIXME: reconsider in the future
     max_procs=1
   else
-    max_procs=${PYTEST_MAX_PROCESSES:-4}
+    # Using any other number of processes results in an error on the PVC due to insufficient resources.
+    # FIXME: reconsider in the future
+    max_procs=4
   fi
 
   TRITON_TEST_SUITE=triton_kernels \
