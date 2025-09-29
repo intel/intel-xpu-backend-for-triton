@@ -931,6 +931,66 @@ struct TritonSubGroupBlockWriteLowering
   }
 };
 
+struct TritonPredicatedLoadOpLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::PredicatedLoadOp> {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::PredicatedLoadOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::PredicatedLoadOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    MLIRContext *ctx = rewriter.getContext();
+    Location loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    Type resType = op.getRes().getType();
+
+    // Create a call to the SPIR-V builtin for predicated load.
+    std::string typeMangling = getGenISATypeMangling(resType);
+    std::string funcName = "llvm.genx.GenISA.PredicatedLoad." + typeMangling +
+                           ".p1" + typeMangling + "." + typeMangling;
+    SmallVector<Type> argTypes{ptr_ty(ctx, 1), int_ty(64), int_ty(1), resType};
+    SmallVector<Value> args{op.getPtr(), op.getAlignment(), op.getPredicate(),
+                            op.getDefaultValue()};
+
+    LLVM::CallOp callOp = intel::createDeviceFunctionCall(
+        rewriter, funcName, resType, argTypes, args, {},
+        intel::noUnwindWillReturnAttrs);
+    rewriter.replaceOp(op, callOp);
+    return success();
+  }
+};
+
+struct TritonPredicatedStoreOpLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::PredicatedStoreOp> {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::PredicatedStoreOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::PredicatedStoreOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    MLIRContext *ctx = rewriter.getContext();
+    Location loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    Type valType = op.getValue().getType();
+    // Create a call to the SPIR-V builtin for predicated store.
+    std::string typeMangling = getGenISATypeMangling(valType);
+    std::string ptrTypeMangling = getGenISATypeMangling(valType);
+    if (auto vecTy = dyn_cast<VectorType>(valType))
+      ptrTypeMangling = getGenISATypeMangling(vecTy.getElementType());
+    std::string funcName = "llvm.genx.GenISA.PredicatedStore.p1" +
+                           ptrTypeMangling + "." + typeMangling;
+    SmallVector<Type> argTypes{ptr_ty(ctx, 1), valType, int_ty(64), int_ty(1)};
+    SmallVector<Value> args{op.getPtr(), op.getValue(), op.getAlignment(),
+                            op.getPredicate()};
+
+    LLVM::CallOp callOp = intel::createDeviceFunctionCall(
+        rewriter, funcName, void_ty(ctx), argTypes, args, {},
+        intel::noUnwindWillReturnAttrs);
+    rewriter.replaceOp(op, callOp);
+    return success();
+  }
+};
+
 struct TritonFToTf32OpLowering
     : public ConvertOpToLLVMPattern<TritonGEN::FToTf32Op> {
   using ConvertOpToLLVMPattern<TritonGEN::FToTf32Op>::ConvertOpToLLVMPattern;
@@ -1024,8 +1084,8 @@ void mlir::triton::populateTritonGENToLLVMConversionPatterns(
       .add<TritonMatrixDPASLowering, TritonMatrix2DBlockLoadLowering,
            TritonMatrix2DBlockStoreLowering,
            TritonMatrix2DBlockPrefetchLowering, TritonSubGroupBlockReadLowering,
-           TritonSubGroupBlockWriteLowering, TritonFToTf32OpLowering>(
-          converter);
+           TritonSubGroupBlockWriteLowering, TritonPredicatedLoadOpLowering,
+           TritonPredicatedStoreOpLowering, TritonFToTf32OpLowering>(converter);
 }
 
 void registerConvertTritonTritonGENToLLVMInterface(DialectRegistry &registry) {

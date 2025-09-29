@@ -19,7 +19,6 @@
 #include "intel/include/TritonAnnotateModule/Passes.h"
 #include "intel/include/TritonGENToLLVM/Passes.h"
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h"
-#include "intel/include/TritonToTritonGPUWarp/Passes.h"
 #include "intel/lib/Target/LLVMIR/LLVMPasses.h"
 
 #include "intel/include/Target/SPIRV/SPIRVTranslation.h"
@@ -58,15 +57,11 @@ void init_triton_intel_passes_ttir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_convert_tdesc_to_block_pointer",
                      intel::createTritonIntelTensorDescToBlockPointer);
   ADD_PASS_WRAPPER_0("add_remove_masks", intel::createTritonIntelRemoveMasks);
-  ADD_PASS_OPTION_WRAPPER_1("add_convert_to_ttgpuir_warp",
-                            intel::createConvertTritonToTritonGPUWarp,
-                            unsigned);
 }
 
 void init_triton_intel_passes_ttgpuir(py::module &&m) {
-  ADD_PASS_OPTION_WRAPPER_2("add_to_llvmir",
-                            gpu::intel::createConvertTritonIntelGPUToLLVM, bool,
-                            bool);
+  ADD_PASS_OPTION_WRAPPER_1(
+      "add_to_llvmir", gpu::intel::createConvertTritonIntelGPUToLLVM, bool);
   ADD_PASS_WRAPPER_0("add_gen_to_llvm", createConvertTritonGENToLLVM);
   ADD_PASS_WRAPPER_0("add_accelerate_matmul",
                      gpu::intel::createTritonIntelGPUAccelerateMatmul);
@@ -82,15 +77,6 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_optimize_dot_operands",
                      gpu::intel::createTritonIntelGPUOptimizeDotOperands);
   ADD_PASS_WRAPPER_0("add_coalesce", gpu::intel::createTritonIntelGPUCoalesce);
-  ADD_PASS_OPTION_WRAPPER_2("add_prefetch_block",
-                            gpu::intel::createTritonIntelGPUPrefetchBlock, int,
-                            bool);
-  ADD_PASS_WRAPPER_0("add_distribute_to_warps",
-                     gpu::intel::createTritonIntelGPUDistributeToWarps);
-  ADD_PASS_WRAPPER_0("add_match_target_size",
-                     gpu::intel::createTritonIntelGPUMatchTargetSize);
-  ADD_PASS_WRAPPER_0("add_schedule_load",
-                     gpu::intel::createTritonIntelGPUScheduleLoad);
 
   py::class_<gpu::intel::TritonAnnotateModuleOptions>(m,
                                                       "AnnotateModuleOptions")

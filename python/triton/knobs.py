@@ -494,6 +494,12 @@ class JITHook(Protocol):
         ...
 
 
+class PipelineStagesHook(Protocol):
+
+    def __call__(self, stages, options, language, capability):
+        ...
+
+
 class runtime_knobs(base_knobs):
     interpret: env_bool = env_bool("TRITON_INTERPRET")
     # debug is on critical path for kernel launches
@@ -512,6 +518,9 @@ class runtime_knobs(base_knobs):
     # jit_cache_hook will always be called before compilation and jit_post_compile_hook after.
     jit_post_compile_hook: Optional[JITHook] = None
 
+    # Hook for inspecting compiler pipeline stages
+    add_stages_inspection_hook: Optional[PipelineStagesHook] = None
+
 
 class language_knobs(base_knobs):
     fp32_default: env_opt_str = env_opt_str("TRITON_F32_DEFAULT")
@@ -525,6 +534,7 @@ class nvidia_knobs(base_knobs):
 
     dump_nvptx: env_bool = env_bool("NVPTX_ENABLE_DUMP")
     disable_ptxas_opt: env_bool = env_bool("DISABLE_PTXAS_OPT")
+    ptxas_options: env_opt_str = env_opt_str("PTXAS_OPTIONS")
     mock_ptx_version: env_opt_str = env_opt_str("TRITON_MOCK_PTX_VERSION")
     dump_ptxas_log: env_bool = env_bool("TRITON_DUMP_PTXAS_LOG")
 
@@ -538,9 +548,7 @@ class intel_knobs(base_knobs):
     dump_shader_info: env_bool = env_bool("TRITON_INTEL_ENABLE_IGC_SHADER_DUMP", False)
     gen_native_code: env_bool = env_bool("TRITON_XPU_GEN_NATIVE_CODE", False)
     tile_load_ll: env_bool = env_bool("TRITON_XPU_ENABLE_TILE_LOAD_LINEAR_LAYOUT", True)
-    advanced_path: env_bool = env_bool("TRITON_INTEL_ADVANCED_PATH", False)
     opt_reduction_locality: env_bool = env_bool("TRITON_INTEL_OPTIMIZE_REDUCTION_LOCALITY", False)
-    reduce_transpose: env_bool = env_bool("TRITON_INTEL_REDUCE_TRANSPOSE", False)
     disable_igc_opt: env_bool = env_bool("TRITON_INTEL_DISABLE_IGC_OPT", False)
 
     dump_spirv_kernel_args: env_opt_str = env_opt_str("TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS")
@@ -572,7 +580,8 @@ class amd_knobs(base_knobs):
 
 
 class proton_knobs(base_knobs):
-    cupti_dir: env_opt_str = env_opt_str("TRITON_CUPTI_LIB_PATH")
+    cupti_lib_dir: env_opt_str = env_opt_str("TRITON_CUPTI_LIB_PATH")
+    enable_nvtx: env_bool = env_bool("TRITON_ENABLE_NVTX", True)
 
 
 build = build_knobs()

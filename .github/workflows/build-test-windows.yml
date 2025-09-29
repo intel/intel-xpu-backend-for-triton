@@ -148,6 +148,13 @@ jobs:
           cd ${{ env.NEW_WORKSPACE }}
           ${{ env.TRITON_TEST_CMD }} --core
 
+      - name: Run gluon tests
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          cd ${{ env.NEW_WORKSPACE }}
+          ${{ env.TRITON_TEST_CMD }} --gluon
+
       - name: Run triton kernels tests
         run: |
           .venv\Scripts\activate.ps1

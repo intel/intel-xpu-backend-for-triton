@@ -196,6 +196,7 @@ jobs:
         suite:
           - minicore
           - scaled_dot
+          - gluon
           - rest
           - tutorial-fa-64
           - tutorial-fa-128-fwdfp8
@@ -306,6 +307,11 @@ jobs:
         run: |
           ${{ env.TRITON_TEST_CMD }} --scaled-dot
 
+      - name: Run gluon tests
+        if: matrix.suite == 'gluon' && inputs.driver_version == 'rolling'
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --gluon
+
       - name: Run interpreter tests
         if: matrix.suite == 'rest'
         run: |
@@ -336,7 +342,6 @@ jobs:
           07-extern-functions
           08-grouped-gemm
           10-experimental-block-pointer
-          10i-experimental-block-pointer
           EOF
 
       - name: Run Tutorials
