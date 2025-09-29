@@ -227,7 +227,6 @@ LogicalResult getConvertBackwardSlice(
         return failure();
       currentValue = existing;
     }
-
     if (auto forOp = currentValue.getDefiningOp<scf::ForOp>()) {
       if (stopPropagation && stopPropagation(forOp))
         continue;
@@ -242,7 +241,6 @@ LogicalResult getConvertBackwardSlice(
 
       continue;
     }
-
     if (auto ifOp = currentValue.getDefiningOp<scf::IfOp>()) {
       if (stopPropagation && stopPropagation(ifOp))
         continue;
