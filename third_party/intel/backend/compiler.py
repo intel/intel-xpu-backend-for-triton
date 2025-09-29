@@ -318,6 +318,7 @@ class XPUBackend(BaseBackend):
         pm.enable_debug()
 
         passes.convert.add_scf_to_cf(pm)
+        passes.gluon.add_inliner(pm)
         passes.convert.add_index_to_llvmir(pm)
         # FIXME: Advanced path uses custom type conversion and needs hacky
         # solutions for SLM allocation, so this will crash on some operations
