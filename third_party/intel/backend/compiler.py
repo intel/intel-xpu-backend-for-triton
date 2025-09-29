@@ -141,7 +141,7 @@ class XPUBackend(BaseBackend):
                                                                            False)
         dev_prop['has_subgroup_matrix_multiply_accumulate_tensor_float32'] = tgt_prop.get(
             'has_subgroup_matrix_multiply_accumulate_tensor_float32', False)
-        dev_prop['has_subgroup_2d_block_io'] = tgt_prop.get('has_subgroup_2d_block_io', False)
+        dev_prop['has_subgroup_2d_block_io'] = False
         dev_prop['has_bfloat16_conversions'] = tgt_prop.get('has_bfloat16_conversions', True)
 
         if not self.device_arch:
