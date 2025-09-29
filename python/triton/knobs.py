@@ -7,6 +7,7 @@ import re
 import subprocess
 import sysconfig
 import shutil
+import pathlib
 
 from dataclasses import dataclass
 from contextlib import contextmanager
@@ -580,7 +581,9 @@ class amd_knobs(base_knobs):
 
 
 class proton_knobs(base_knobs):
-    cupti_lib_dir: env_opt_str = env_opt_str("TRITON_CUPTI_LIB_PATH")
+    cupti_lib_dir: env_str = env_str(
+        "TRITON_CUPTI_LIB_PATH",
+        str(pathlib.Path(__file__).parent.absolute() / "backends" / "nvidia" / "lib" / "cupti"))
     enable_nvtx: env_bool = env_bool("TRITON_ENABLE_NVTX", True)
 
 
