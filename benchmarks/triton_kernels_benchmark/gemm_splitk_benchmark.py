@@ -2,7 +2,7 @@ import torch
 import triton
 import triton.language as tl
 
-import triton_kernels_benchmark as benchmark_suit
+import triton_kernels_benchmark as benchmark_suite
 from triton_kernels_benchmark import xetla_kernel
 
 
@@ -117,8 +117,8 @@ matmul = _matmul.apply
 
 
 # Benchmark Performance
-@benchmark_suit.perf_report(
-    benchmark_suit.Benchmark(
+@benchmark_suite.perf_report(
+    benchmark_suite.Benchmark(
         # argument names to use as an x-axis for the plot
         x_names=['M', 'K', 'N'],
         x_vals=[
@@ -141,22 +141,21 @@ matmul = _matmul.apply
         args={},
     ))
 def benchmark(M, N, K, provider):
+    # Maximum across onednn=10, triton=100, xetla=300
+    do_bench = benchmark_suite.get_do_bench(n_warmup=300, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
     torch.manual_seed(0)
     a = torch.rand((M, K), device='xpu', dtype=torch.bfloat16)
     b = torch.rand((K, N), device='xpu', dtype=torch.bfloat16)
-    quantiles = [0.5, 0.0, 1.0]
 
     if provider == 'onednn':
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(lambda: torch.matmul(a, b), n_warmup=10, n_repeat=10,
-                                                                 quantiles=quantiles)
+        _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: torch.matmul(a, b))
     elif provider == 'triton':
         c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
         triton_fn = lambda: matmul(a, b, c)
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
         rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
-        benchmark_suit.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10,
-                                                                 quantiles=quantiles)
+        benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
+        _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
     elif provider == 'xetla':
         c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
         acc = torch.zeros((M, N), device='xpu', dtype=torch.float32)
@@ -167,9 +166,8 @@ def benchmark(M, N, K, provider):
         xetla_fn = lambda: func(a, b, c, acc, cnt)
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
 
-        # benchmark_suit.assert_close(xetla_fn, torch_fn, atol=1e-4, rtol=1.0, err_msg='xetla to torch')
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(xetla_fn, n_warmup=10, n_repeat=10,
-                                                                 quantiles=quantiles)
+        # benchmark_suite.assert_close(xetla_fn, torch_fn, atol=1e-4, rtol=1.0, err_msg='xetla to torch')
+        _, min_ms, max_ms, mean_ms, cv = do_bench(xetla_fn)
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 

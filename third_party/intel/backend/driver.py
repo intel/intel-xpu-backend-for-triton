@@ -933,18 +933,12 @@ class XPUDriver(DriverBase):
                 dev_property["has_bfloat16_conversions"] = "cl_intel_bfloat16_conversions" in supported_extensions
             else:
                 check = self.utils.has_opencl_extension
-                # FIXME: eventually even LTS driver will support OpenCL extensions.
-                # Please remove this after upgrading to a new version.
-                # https://github.com/intel/intel-xpu-backend-for-triton/issues/4708
-                is_lts = "1.3" in dev_property["driver_version"]
                 dev_property["has_subgroup_matrix_multiply_accumulate"] = check(
-                    device, b"cl_intel_subgroup_matrix_multiply_accumulate") if not is_lts else False
+                    device, b"cl_intel_subgroup_matrix_multiply_accumulate")
                 dev_property["has_subgroup_matrix_multiply_accumulate_tensor_float32"] = check(
-                    device, b"cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32") if not is_lts else False
-                dev_property["has_subgroup_2d_block_io"] = check(
-                    device, b"cl_intel_subgroup_2d_block_io") if not is_lts else False
-                dev_property["has_bfloat16_conversions"] = check(
-                    device, b"cl_intel_bfloat16_conversions") if not is_lts else False
+                    device, b"cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32")
+                dev_property["has_subgroup_2d_block_io"] = check(device, b"cl_intel_subgroup_2d_block_io")
+                dev_property["has_bfloat16_conversions"] = check(device, b"cl_intel_bfloat16_conversions")
 
         update_advanced_features(device, dev_property)
         return GPUTarget("xpu", dev_property, warp_size=32)

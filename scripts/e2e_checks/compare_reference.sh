@@ -80,7 +80,7 @@ for suite in "${suites[@]}"; do
         fi
 
         for dtype in "${dtypes[@]}"; do
-            CSV_FILE="$RESULT_DIR/logs-$suite-$dtype-$mode-accuracy/$suite/$dtype/inductor_${suite}_${dtype}_${mode}_xpu_accuracy.csv"
+            CSV_FILE="$RESULT_DIR/$suite/$dtype/inductor_${suite}_${dtype}_${mode}_xpu_accuracy.csv"
 
             # Check if CSV file exists
             if [ ! -f "$CSV_FILE" ]; then

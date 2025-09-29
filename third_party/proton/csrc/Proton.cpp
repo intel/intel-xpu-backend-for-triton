@@ -18,7 +18,7 @@ static void initProton(pybind11::module &&m) {
       "start",
       [](const std::string &path, const std::string &contextSourceName,
          const std::string &dataName, const std::string &profilerName,
-         const std::string &mode, const std::string &profilerPath,
+         const std::string &profilerPath, const std::string &mode,
          long sycl_queue, const std::string &utils_cache_path) {
         void *queue = reinterpret_cast<void *>(sycl_queue);
         auto sessionId = SessionManager::instance().addSession(
@@ -29,7 +29,7 @@ static void initProton(pybind11::module &&m) {
       },
       pybind11::arg("path"), pybind11::arg("contextSourceName"),
       pybind11::arg("dataName"), pybind11::arg("profilerName"),
-      pybind11::arg("mode") = "", pybind11::arg("profilerPath") = "",
+      pybind11::arg("profilerPath") = "", pybind11::arg("mode") = "",
       pybind11::arg("sycl_queue") = 0, pybind11::arg("utils_cache_path") = "");
 
   m.def("activate", [](size_t sessionId) {

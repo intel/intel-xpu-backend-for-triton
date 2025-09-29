@@ -68,7 +68,7 @@ jobs:
       - name: Matrix
         id: matrix
         run: |
-          integration_matrix='{"python": ["3.9", "3.10", "3.11", "3.12"], "driver": ["rolling", "lts"]}'
+          integration_matrix='{"python": ["3.10", "3.11", "3.12"], "driver": ["rolling", "lts"]}'
 
           echo "integration_matrix=$integration_matrix" | tee -a $GITHUB_OUTPUT
           e2e_matrix='{
@@ -97,7 +97,7 @@ jobs:
         inductor/test_max_autotune.py
         inductor/test_compile_subprocess.py
       runner_label: ${{ inputs.runner_label }}
-      python_version: "3.9"
+      python_version: "3.10"
 
   integration-tests:
     name: Integration tests

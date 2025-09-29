@@ -11,7 +11,7 @@ import torch
 import triton
 import triton.language as tl
 
-import triton_kernels_benchmark as benchmark_suit
+import triton_kernels_benchmark as benchmark_suite
 import psutil
 
 INT8_ONLY_OPTION = os.getenv('INT8_ONLY', '0') == '1'
@@ -295,8 +295,8 @@ X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
 
 
 # Benchmark Performance
-@benchmark_suit.perf_report(
-    benchmark_suit.Benchmark(
+@benchmark_suite.perf_report(
+    benchmark_suite.Benchmark(
         # argument names to use as an x-axis for the plot
         x_names=['B', 'M', 'K', 'N', 'dtype'],
         # different possible values for `x_name`
@@ -315,6 +315,10 @@ X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
         args={},
     ))
 def benchmark(B, M, N, K, dtype, provider):
+    # Maximum across onednn=600, triton=1000
+    # For onednn and triton: Some configs increase performance with warmup as a step function, but some
+    # slowly decrease with saturation. Performance is best at 150-200ms range, but we want stable, not just best
+    do_bench = benchmark_suite.get_do_bench(n_warmup=1000, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
     res_dtype = torch.float32 if dtype.is_floating_point else torch.int32
     if dtype.is_floating_point:
         rand = lambda shape, dtype: torch.rand(shape, device='xpu', dtype=dtype)
@@ -329,11 +333,8 @@ def benchmark(B, M, N, K, dtype, provider):
         b = rand((B, K, N), dtype)
         d = rand((B, M, N), res_dtype)
 
-    quantiles = [0.5, 0.0, 1.0]
-
     if provider == 'onednn':
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(lambda: torch.matmul(a, b) + d, n_warmup=10,
-                                                                 n_repeat=10, quantiles=quantiles)
+        _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: torch.matmul(a, b) + d)
     elif provider == 'triton':
         assert len(a.shape) == len(b.shape), 'Incompatible sizes'
         if len(a.shape) == 3:
@@ -352,9 +353,8 @@ def benchmark(B, M, N, K, dtype, provider):
         if dtype.is_floating_point or [B, M, N, K] in [[1, 1024, 1024, 1024], [1, 2048, 2048, 2048],
                                                        [1, 512, 8192, 32768], [4, 32768, 4096, 128]]:
             # torch int8 matmul on GPU is not supported. only check a few int8 shapes to reduce runtime
-            benchmark_suit.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10,
-                                                                 quantiles=quantiles)
+            benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
+        _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 

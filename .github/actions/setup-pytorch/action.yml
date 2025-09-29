@@ -90,7 +90,7 @@ runs:
 
     - name: Clone PyTorch repository
       if: ${{ steps.pytorch-cache.outputs.status == 'miss' }}
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
       with:
         repository: ${{ env.PYTORCH_REPO }}
         ref: ${{ env.PYTORCH_COMMIT_ID }}
