@@ -291,6 +291,7 @@ class XPUBackend(BaseBackend):
         pm.enable_debug()
 
         passes.convert.add_scf_to_cf(pm)
+        passes.gluon.add_inliner(pm)
         passes.convert.add_index_to_llvmir(pm)
         intel.passes.ttgpuir.add_allocate_shared_memory(pm)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
