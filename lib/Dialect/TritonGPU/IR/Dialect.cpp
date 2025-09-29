@@ -1426,8 +1426,6 @@ void SliceEncodingAttr::print(mlir::AsmPrinter &printer) const {
 LogicalResult
 SliceEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                           unsigned dim, DistributedEncodingTrait parent) {
-  if (mlir::triton::tools::getBoolEnv("TRITON_INTEL_ADVANCED_PATH"))
-    return success();
   unsigned rank = cast<LayoutEncodingTrait>(parent).getRank();
   if (rank <= 1)
     return emitError() << "parent layout must have at least rank >= 2";
@@ -2558,13 +2556,6 @@ LogicalResult DotOperandEncodingAttr::verify(
     return success();
   }
 
-  if (auto parentAttr = mlir::dyn_cast<intel::WarpEncodingAttr>(parent)) {
-    if (kWidth != 0)
-      return emitError() << "ttg.dot_op kWidth parameter is not supported "
-                            "when the parent is a warp layout";
-    return success();
-  }
-
   if (auto parentAttr = mlir::dyn_cast<BlockedEncodingAttr>(parent)) {
     if (kWidth != 0)
       return emitError() << "ttg.dot_op kWidth parameter is not supported "
@@ -2596,9 +2587,6 @@ public:
       return AliasResult::FinalAlias;
     } else if (auto linearAttr = mlir::dyn_cast<LinearEncodingAttr>(attr)) {
       os << "linear";
-      return AliasResult::FinalAlias;
-    } else if (auto warpAttr = mlir::dyn_cast<intel::WarpEncodingAttr>(attr)) {
-      os << "warp";
       return AliasResult::FinalAlias;
     } /* else if (auto sliceAttr = dyn_cast<SliceEncodingAttr>(attr)) {
       os << "slice";
@@ -3298,8 +3286,6 @@ struct TritonGPUVerifyTensorLayoutInterface
     if (!distr)
       return makeErr()
              << "Non-distributed layout is not allowed in tensor type.";
-    if (mlir::triton::tools::getBoolEnv("TRITON_INTEL_ADVANCED_PATH"))
-      return success();
     auto rank = distr.getRepOrder().size();
     if (rank != rankedTy.getRank())
       return makeErr() << "Layout has rank " << rank

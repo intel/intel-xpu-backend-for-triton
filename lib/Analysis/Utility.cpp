@@ -105,11 +105,6 @@ unsigned ReduceOpHelper::getIntraWarpSizeWithUniqueData() {
 }
 
 bool ReduceOpHelper::isWarpSynchronous() {
-  // FIXME: In the default path tensors will always have a layout. Tensors do
-  // not have a layout only in the advanced path. We need to find a workaround
-  // in order to remove this change.
-  if (!srcEncoding)
-    return true;
   return getWarpsPerCTA(srcEncoding, srcShape)[axis] == 1;
 }
 
