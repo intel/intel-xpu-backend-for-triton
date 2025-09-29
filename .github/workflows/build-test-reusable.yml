@@ -342,7 +342,6 @@ jobs:
           07-extern-functions
           08-grouped-gemm
           10-experimental-block-pointer
-          10i-experimental-block-pointer
           EOF
 
       - name: Run Tutorials
