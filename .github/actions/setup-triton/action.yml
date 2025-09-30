@@ -43,7 +43,7 @@ runs:
 
     - name: Clone LLVM
       if: ${{ inputs.build_llvm == 'true' && steps.llvm-cache.outputs.status == 'miss' }}
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
       with:
         repository: llvm/llvm-project
         ref: ${{ env.LLVM_COMMIT_ID }}
