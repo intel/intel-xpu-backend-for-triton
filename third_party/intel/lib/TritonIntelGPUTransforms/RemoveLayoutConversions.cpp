@@ -1208,7 +1208,8 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
       deadOps.push_back(forOp.getOperation());
       Block &loopBody = *newForOp.getBody();
       for (auto m : argMapping) {
-        mapping.map(newForOp.getResult(m.first), newForOp.getResult(m.second));
+        //        mapping.map(newForOp.getResult(m.first),
+        //        newForOp.getResult(m.second));
         mapping.map(forOp.getResult(m.first), newForOp.getResult(m.second));
         int numIndVars = newForOp.getNumInductionVars();
         mapping.map(loopBody.getArgument(m.first + numIndVars),
@@ -1320,10 +1321,10 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
   }
 
   for (Operation *op : deadOps) {
-    if (!isa<scf::ForOp>(op))
-      opToDelete.insert(op);
-    else
-      op->erase();
+    //    if (!isa<scf::ForOp>(op))
+    opToDelete.insert(op);
+    //    else
+    //      op->erase();
   }
 }
 
