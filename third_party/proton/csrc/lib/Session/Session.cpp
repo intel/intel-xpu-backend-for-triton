@@ -15,16 +15,14 @@ namespace proton {
 
 namespace {
 
-Profiler *getProfiler(const std::string &name, const std::string &path,
-                      const std::string &mode, void *sycl_queue = nullptr,
-                      const std::string &utils_cache_path = "") {
-  std::vector<std::string> modeAndOptions = proton::split(mode, ":");
+Profiler *makeProfiler(const std::string &name, void *sycl_queue = nullptr,
+                       const std::string &utils_cache_path = "") {
   if (proton::toLower(name) == "cupti") {
-    auto *profiler = &CuptiProfiler::instance();
-    profiler->setLibPath(path);
-    if (proton::toLower(modeAndOptions[0]) == "pcsampling")
-      profiler->enablePCSampling();
-    return profiler;
+    return &CuptiProfiler::instance();
+  } else if (proton::toLower(name) == "roctracer") {
+    return &RoctracerProfiler::instance();
+  } else if (proton::toLower(name) == "instrumentation") {
+    return &InstrumentationProfiler::instance();
   }
 #ifdef TRITON_BUILD_PROTON_XPU
   if (proton::toLower(name) == "xpupti") {
@@ -33,12 +31,6 @@ Profiler *getProfiler(const std::string &name, const std::string &path,
                 .setUtilsCachePath(utils_cache_path);
   }
 #endif
-  if (proton::toLower(name) == "roctracer") {
-    return &RoctracerProfiler::instance();
-  }
-  if (proton::toLower(name) == "instrumentation") {
-    return InstrumentationProfiler::instance().setMode(modeAndOptions);
-  }
   throw std::runtime_error("Unknown profiler: " + name);
 }
 
@@ -93,13 +85,26 @@ void Session::finalize(const std::string &outputFormat) {
 
 size_t Session::getContextDepth() { return contextSource->getDepth(); }
 
+Profiler *SessionManager::validateAndSetProfilerMode(Profiler *profiler,
+                                                     const std::string &mode) {
+  std::vector<std::string> modeAndOptions = proton::split(mode, ":");
+  for (auto &[id, session] : sessions) {
+    if (session->getProfiler() == profiler &&
+        session->getProfiler()->getMode() != modeAndOptions) {
+      throw std::runtime_error("Cannot add a session with the same profiler "
+                               "but a different mode than existing sessions");
+    }
+  }
+  return profiler->setMode(modeAndOptions);
+}
+
 std::unique_ptr<Session> SessionManager::makeSession(
     size_t id, const std::string &path, const std::string &profilerName,
-    const std::string &profilerPath, const std::string &contextSourceName,
-    const std::string &dataName, const std::string &mode, void *sycl_queue,
+    const std::string &contextSourceName, const std::string &dataName,
+    const std::string &mode, void *sycl_queue,
     const std::string &utils_cache_path) {
-  auto profiler = getProfiler(profilerName, profilerPath, mode, sycl_queue,
-                              utils_cache_path);
+  auto *profiler = makeProfiler(profilerName, sycl_queue, utils_cache_path);
+  profiler = validateAndSetProfilerMode(profiler, mode);
   auto contextSource = makeContextSource(contextSourceName);
   auto data = makeData(dataName, path, contextSource.get());
   auto *session = new Session(id, path, profiler, std::move(contextSource),
@@ -170,7 +175,6 @@ void SessionManager::removeSession(size_t sessionId) {
 
 size_t SessionManager::addSession(const std::string &path,
                                   const std::string &profilerName,
-                                  const std::string &profilerPath,
                                   const std::string &contextSourceName,
                                   const std::string &dataName,
                                   const std::string &mode, void *sycl_queue,
@@ -182,10 +186,11 @@ size_t SessionManager::addSession(const std::string &path,
     return sessionId;
   }
   auto sessionId = nextSessionId++;
+  auto newSession =
+      makeSession(sessionId, path, profilerName, contextSourceName, dataName,
+                  mode, sycl_queue, utils_cache_path);
   sessionPaths[path] = sessionId;
-  sessions[sessionId] = makeSession(sessionId, path, profilerName, profilerPath,
-                                    contextSourceName, dataName, mode,
-                                    sycl_queue, utils_cache_path);
+  sessions[sessionId] = std::move(newSession);
   return sessionId;
 }
 

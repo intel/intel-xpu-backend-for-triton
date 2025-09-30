@@ -61,8 +61,7 @@ struct ConvertTritonGPUToLLVM
           ConvertTritonGPUToLLVM> {
   using ConvertTritonIntelGPUToLLVMBase::ConvertTritonIntelGPUToLLVMBase;
   ConvertTritonGPUToLLVM() = default;
-  ConvertTritonGPUToLLVM(bool advancedPath, bool useTileLoadLinearLayout) {
-    this->advancedPath = advancedPath;
+  ConvertTritonGPUToLLVM(bool useTileLoadLinearLayout) {
     this->useTileLoadLinearLayout = useTileLoadLinearLayout;
   }
 
@@ -75,39 +74,28 @@ struct ConvertTritonGPUToLLVM
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
 
-    bool isAdvancedPathEnabled =
-        mlir::triton::tools::getBoolEnv("TRITON_INTEL_ADVANCED_PATH") ||
-        advancedPath;
-    if (isAdvancedPathEnabled)
-      assert(mod->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
-                              getSupportSG2DBlockAttrName()) &&
-             mod->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
-                              getSupportDPASAttrName()) &&
-             "Target do not support blocked load/mma");
     mlir::triton::intel::TritonGPUToLLVMPipelineManager pipelineManager(
-        mod, context, isAdvancedPathEnabled, useTileLoadLinearLayout);
+        mod, context, useTileLoadLinearLayout);
     mlir::LowerToLLVMOptions option(context);
     auto targetInfo = mlir::triton::intel::createTargetInfo(mod);
-    TritonIntelGPUToLLVMTypeConverter typeConverter(
-        context, option, *targetInfo, isAdvancedPathEnabled);
+    TritonIntelGPUToLLVMTypeConverter typeConverter(context, option,
+                                                    *targetInfo);
     TritonLLVMConversionTarget convTarget(*context);
     int numWarps = triton::gpu::lookupNumWarps(mod);
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
     // Allocate shared memory and set barrier
-    if (!pipelineManager.skipSharedMemoryAllocation()) {
-      ModuleAllocation allocation(
-          mod, ::mlir::triton::intel::allocationAnalysisScratchSizeFn);
-      ModuleMembarAnalysis membarPass(&allocation, ::mlir::intel::membarFilter);
-      membarPass.run();
-    }
+    ModuleAllocation allocation(
+        mod, ::mlir::triton::intel::allocationAnalysisScratchSizeFn);
+    ModuleMembarAnalysis membarPass(&allocation, ::mlir::intel::membarFilter);
+    membarPass.run();
 
     // Lower functions
     {
       mlir::LowerToLLVMOptions option(context);
-      TritonIntelGPUToLLVMTypeConverter typeConverter(
-          context, option, *targetInfo, isAdvancedPathEnabled);
+      TritonIntelGPUToLLVMTypeConverter typeConverter(context, option,
+                                                      *targetInfo);
       TritonLLVMFunctionConversionTarget funcTarget(*context);
       RewritePatternSet funcPatterns(context);
       pipelineManager.populateFunctionConversionPatterns(
@@ -126,8 +114,8 @@ struct ConvertTritonGPUToLLVM
     // Convert call and ret ops
     {
       mlir::LowerToLLVMOptions option(context);
-      TritonIntelGPUToLLVMTypeConverter typeConverter(
-          context, option, *targetInfo, isAdvancedPathEnabled);
+      TritonIntelGPUToLLVMTypeConverter typeConverter(context, option,
+                                                      *targetInfo);
       TritonLLVMFunctionConversionTarget funcTarget(*context);
       RewritePatternSet funcPatterns(context);
       if (failed(

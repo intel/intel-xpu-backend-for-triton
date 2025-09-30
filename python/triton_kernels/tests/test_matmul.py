@@ -21,7 +21,7 @@ from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, upcast_from_m
 # testing utilities
 from triton_kernels.testing import assert_close, compute_actual_scale
 # target-specific utilities
-from triton_kernels.target_info import is_hip, is_xpu, is_hip_cdna3, is_cuda, is_hip_cdna4
+from triton_kernels.target_info import is_hip, is_hip_cdna3, is_cuda, is_hip_cdna4
 
 # ---------------
 # initialize data
@@ -159,6 +159,9 @@ class Case:
     split_k: int = 1
     hbm_swizzling: bool = False
     epilogue_subtile: Union[int, None] = None
+    x_transpose: bool = False
+    w_transpose: bool = False
+    y_transpose: bool = False
 
 
 @pytest.mark.parametrize(
@@ -198,6 +201,8 @@ class Case:
             Case(1000, 400, 400, "ragged", "float16", "float16", 3, 1),
             Case(1000, 700, 700, "ragged", "float16", "float16", 8, 2),
             Case(1000, 700, 700, "ragged", "float16", "float16", 8, 2, split_k=9),
+            Case(16, 16, 1000, "batched", "float16", "float16", 5, 1, split_k=None),
+            Case(16, 16, 1000, "batched", "float8_e5m2", "float8_e5m2", 5, 1, split_k=None),
             # mx types:
             Case(16, 256, 256, "plain", "bfloat16", "mxfloat4_e2m1", 1, 1),
             Case(16, 256, 256, "plain", "bfloat16", "mxfloat4_e2m1", 1, 1, hbm_swizzling=True),
@@ -252,6 +257,13 @@ class Case:
             Case(1000, 400, 400, "ragged", "float8_e4m3fn", "float8_e4m3fn", 3, 1),
             Case(600, 400, 400, "ragged", "float8_e4m3fn", "float8_e4m3fn", 4, 2),
             Case(600, 400, 400, "ragged", "float8_e4m3fn", "float8_e4m3fn", 4, 2, n_expt_shards=2),
+        ] + [
+            Case(320, 400, 400, mode, dtype, dtype, x_transpose=x_transpose, w_transpose=w_transpose, y_transpose=y_transpose)
+            for mode in ("batched", "ragged")
+            for dtype in ("float16", "float8_e5m2")
+            for x_transpose in (False, True)
+            for w_transpose in (False, True)
+            for y_transpose in (False, True)
         ]
     ],
 )
@@ -260,6 +272,7 @@ class Case:
     (False, False, False),
     (True, False, False),
     (False, True, False),
+    (False, True, True),
     (True, True, False),
     (True, True, True),
 ])
@@ -267,6 +280,7 @@ class Case:
 @pytest.mark.parametrize("is_persistent", [False, True])
 def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas, is_persistent, n_expts_tot,
             n_expts_act, n_expt_shards, mode, act_dtype_str, weight_dtype_str, block_m, hbm_swizzling, epilogue_subtile,
+            x_transpose, w_transpose, y_transpose,
             device, opt_flags_scope, fresh_knobs):
     # TODO: remove when Triton FP8 supports proper RTNE
     if is_cuda():
@@ -277,9 +291,6 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         if weight_dtype_str.startswith("mx"):
             if "float8" in act_dtype_str and torch.cuda.get_device_capability()[0] < 10:
                 pytest.skip("float8 x mx not supported with cuda capability < 10")
-            if act_dtype_str == "mxfloat8_e4m3fn":
-                if is_persistent:
-                    pytest.skip("mx x mx not supported with persistent kernel")
         if n == 2880 and k == 2880 and torch.cuda.get_device_capability()[0] < 9:
             pytest.skip("Not enough memory on A100")
 
@@ -292,13 +303,13 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
             pytest.skip("NYI: mx x mx not tested on AMD GPU")
         if is_persistent:
             pytest.skip("NYI: Persistent kernel not supported on AMD GPU")
-        if split_k > 1:
+        if split_k is not None and split_k > 1:
             pytest.skip("splitK hasn't been fully tested on AMD GPU.")
 
     if "float8_e4m3fnuz" in (weight_dtype_str, act_dtype_str) and not is_hip_cdna3():
         pytest.xfail("float8_e4m3fnuz only tested on AMD CDNA3 Platform")
 
-    if fused_scatter and split_k > 1:
+    if fused_scatter and split_k is not None and split_k > 1:
         pytest.xfail("fused scatter scratchpad not supported with split_k")
 
     if hbm_swizzling:
@@ -375,6 +386,17 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
                                                                  has_y_gammas, requires_grad=test_bwd, device=device)
     x_ref, w_ref, bias_ref, gs0_ref, gs1_ref = apply_precision(x_tri, w_tri, bias_tri, gs0_tri, gs1_tri, precision_opt)
 
+    if x_transpose:
+        x_tri = x_tri.detach().transpose(-1, -2).contiguous().transpose(-1, -2).requires_grad_(test_bwd)
+    if w_transpose:
+        w_tri = w_tri.detach().transpose(-1, -2).contiguous().transpose(-1, -2).requires_grad_(test_bwd)
+    if y_transpose:
+        n_rows = m if gindx is None else gindx.dst_indx.shape[0]
+        yT_shape = (n_expts_tot, n, n_rows) if mode == "batched" else (n, n_rows)
+        y_tri_in = torch.empty(yT_shape, dtype=act_dtype, device=device).transpose(-1, -2)
+    else:
+        y_tri_in = None
+
     if w_tri.shape[0] == 1 and mode != "batched":
         # Test the case when weight has dim 2, i.e., shape (K, N).
         w_tri = w_tri.squeeze(0).detach().requires_grad_(test_bwd)
@@ -425,9 +447,14 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
 
     # triton
     try:
-        tri_y = matmul_ogs(x_tri, w_tri, bias_tri, rdata, gindx, sindx, precision_opt, gammas=gs1_ref, epilogue=epilogue)
+        tri_y = matmul_ogs(x_tri, w_tri, bias_tri, rdata, gindx, sindx, precision_opt,
+                           gammas=gs1_ref, epilogue=epilogue, y=y_tri_in)
     except (opt_flags.InapplicableConstraint, NotImplementedError):
         pytest.xfail("inapplicable opt_flags constraint")
+    if y_tri_in is not None:
+        assert tri_y.data_ptr() == y_tri_in.data_ptr()
+        assert tri_y.shape == y_tri_in.shape
+        assert tri_y.stride() == y_tri_in.stride()
     # If split_k > 1, then the intermediate tensor is fp32.
     sep_gather = mode == "ragged" and do_gather and n_expts_act > 1 and split_k == 1
     sep_scatter = mode == "ragged" and do_scatter and n_expts_act > 1 and split_k == 1
@@ -460,6 +487,12 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         ref_y = upcast_from_mxfp_torch(ref_y_quant, ref_y_scale, target_dtype=ref_y.dtype, axis=-1)
         maxtol = 4e-1
         rmstol = 4e-2
+    elif weight_mxfp and "float4_e2m1" in weight_dtype_str:
+        if act_is_float8:
+            maxtol = 8e-2
+        else:
+            maxtol = 3e-2
+        rmstol = None
     else:
         maxtol = None
         rmstol = None
@@ -476,11 +509,9 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
 @pytest.mark.parametrize("m", [8, 16, 32, 64, 128])
 @pytest.mark.parametrize("n", [8, 16, 32, 64, 128])
 @pytest.mark.parametrize("k", [8, 16, 32, 64, 128])
-def test_small_batch_matmul(m, n, k):
+def test_small_batch_matmul(m, n, k, device):
     if is_hip():
         pytest.skip("Not fully tested on AMD")
-    if is_xpu():
-        pytest.xfail("Enable: https://github.com/intel/intel-xpu-backend-for-triton/issues/5092")
 
     if m * n * k > 16384:
         pytest.skip()
@@ -490,7 +521,7 @@ def test_small_batch_matmul(m, n, k):
     def _make_tensor(shape, dtype, trans):
         if trans:
             shape = (shape[0], shape[2], shape[1])
-        t = alloc_rand(shape, "cuda", dtype)
+        t = alloc_rand(shape, device, dtype)
         return t.transpose(1, 2) if trans else t
 
     for x_transpose, w_transpose, bias, dtype in itertools.product(
@@ -499,7 +530,7 @@ def test_small_batch_matmul(m, n, k):
         (False, True),
         (torch.float16, torch.bfloat16, torch.float8_e5m2),
     ):
-        if (
+        if is_cuda() and (
             torch.cuda.get_device_capability()[0] < 10
             and dtype is torch.float8_e5m2
             and (not w_transpose)
@@ -533,7 +564,7 @@ def test_set_idle_sms():
     num_idle_sms = 24
     matmul_ogs_set_idle_sms(num_idle_sms)
     flags = make_opt_flags(torch.float32, torch.float32, torch.float32, PrecisionConfig(), \
-                           1, 1024, 1024, 1024, None, True, False, 1)
+                           1, 1024, 1024, 1024, None, True, False, 1, False)
     assert flags.idle_sms == num_idle_sms
 
 

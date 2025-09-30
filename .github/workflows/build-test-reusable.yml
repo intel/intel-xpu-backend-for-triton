@@ -90,7 +90,7 @@ jobs:
           ${{ toJSON(inputs) }}
           EOF
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Load pip cache
         id: pip-cache
@@ -101,7 +101,7 @@ jobs:
 
       - name: Install Python (using actions/setup-python) ${{ inputs.python_version }}
         if: ${{ !inputs.use_pyenv_python }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ inputs.python_version }}
 
@@ -196,6 +196,8 @@ jobs:
         suite:
           - minicore
           - scaled_dot
+          - gluon
+          - triton-kernels
           - rest
           - tutorial-fa-64
           - tutorial-fa-128-fwdfp8
@@ -213,7 +215,7 @@ jobs:
           EOF
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Load pip cache
         id: pip-cache
@@ -224,7 +226,7 @@ jobs:
 
       - name: Install Python (using actions/setup-python) ${{ inputs.python_version }}
         if: ${{ !inputs.use_pyenv_python }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ inputs.python_version }}
 
@@ -306,13 +308,18 @@ jobs:
         run: |
           ${{ env.TRITON_TEST_CMD }} --scaled-dot
 
+      - name: Run gluon tests
+        if: matrix.suite == 'gluon' && inputs.driver_version == 'rolling'
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --gluon
+
       - name: Run interpreter tests
         if: matrix.suite == 'rest'
         run: |
           ${{ env.TRITON_TEST_CMD }} --interpreter
 
       - name: Run triton kernels tests
-        if: matrix.suite == 'rest'
+        if: matrix.suite == 'triton-kernels'
         run: |
           ${{ env.TRITON_TEST_CMD }} --triton-kernels
 
@@ -336,7 +343,6 @@ jobs:
           07-extern-functions
           08-grouped-gemm
           10-experimental-block-pointer
-          10i-experimental-block-pointer
           EOF
 
       - name: Run Tutorials
@@ -382,7 +388,7 @@ jobs:
     needs: integration-tests
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Load pip cache
         id: pip-cache
@@ -399,7 +405,7 @@ jobs:
           merge-multiple: true
 
       - name: Install Python (using actions/setup-python) ${{ inputs.python_version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ inputs.python_version }}
 

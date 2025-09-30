@@ -174,7 +174,7 @@ def test_prune_configs(with_perf_model: bool, device: str):
 
 
 @pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9,
-                   reason="Requires compute capability >= 9 for NV")
+                   reason="Requires compute capability >= 9 for NV", run=False)
 def test_override_ttir(device):
     N = 1024
     src = torch.randn(N, device=device)
@@ -223,7 +223,7 @@ module {
 
 
 @pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9,
-                   reason="Requires compute capability >= 9 for NV")
+                   reason="Requires compute capability >= 9 for NV", run=False)
 def test_override_ttgir(device):
     N = 1024
     src = torch.randn(N, device=device)
@@ -273,7 +273,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] != 9,
-                   reason="PTX file in this unit test is only for SM90")
+                   reason="PTX file in this unit test is only for SM90", run=False)
 def test_override_ptx(device):
     N = 1024
     src = torch.randn(N, device=device)

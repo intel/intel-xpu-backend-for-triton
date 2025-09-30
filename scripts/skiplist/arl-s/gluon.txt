@@ -1,0 +1,6 @@
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/5148
+python/test/gluon/test_lowerings.py::test_histogram[2048-2-src_layout3-dst_layout3]
+python/test/gluon/test_lowerings.py::test_histogram[32-32-src_layout4-dst_layout4]
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/5149
+python/test/gluon/test_lowerings.py::test_scan_layouts[r"True-.*"]@regexp
+python/test/gluon/test_lowerings.py::test_reduce_layouts[r".*-True-.*"]@regexp
