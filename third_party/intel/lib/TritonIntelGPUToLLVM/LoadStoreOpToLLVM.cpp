@@ -3320,7 +3320,10 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       Value ret;
       // Create a predicated load operation.
       if (pred) {
-        if (triton::tools::getBoolEnv("TRITON_INTEL_PREDICATED"))
+        std::optional<bool> enablePredicated =
+            mlir::triton::tools::isEnvValueBool(
+                mlir::triton::tools::getStrEnv("TRITON_INTEL_PREDICATED"));
+        if (!enablePredicated.has_value() || enablePredicated.value())
           ret = rewriter.create<TritonGEN::PredicatedLoadOp>(
               loc, retTy, addrElem, b.i64_val(alignment), pred, other_);
         else {
@@ -3765,7 +3768,10 @@ struct StoreOpConversion
 
       if (maskVal) {
         // Create a predicated store operation.
-        if (triton::tools::getBoolEnv("TRITON_INTEL_PREDICATED")) {
+        std::optional<bool> enablePredicated =
+            mlir::triton::tools::isEnvValueBool(
+                mlir::triton::tools::getStrEnv("TRITON_INTEL_PREDICATED"));
+        if (!enablePredicated.has_value() || enablePredicated.value()) {
           unsigned numElems = valArgTy.getIntOrFloatBitWidth() * nWords /
                               valueElemTy.getIntOrFloatBitWidth();
           vecWord = b.bitcast(vecWord, vec_ty(valueElemTy, numElems));
