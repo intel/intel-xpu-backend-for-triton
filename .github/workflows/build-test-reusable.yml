@@ -197,6 +197,7 @@ jobs:
           - minicore
           - scaled_dot
           - gluon
+          - triton-kernels
           - rest
           - tutorial-fa-64
           - tutorial-fa-128-fwdfp8
@@ -318,7 +319,7 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --interpreter
 
       - name: Run triton kernels tests
-        if: matrix.suite == 'rest'
+        if: matrix.suite == 'triton-kernels'
         run: |
           ${{ env.TRITON_TEST_CMD }} --triton-kernels
 
