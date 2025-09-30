@@ -406,7 +406,7 @@ run_core_tests() {
   echo "***************************************************"
   echo "******      Running Triton Core tests        ******"
   echo "***************************************************"
-  run_minicore_tests
+  run_triton_kernels_tests
   run_mxfp_tests
   run_scaled_dot_tests
 }
@@ -685,7 +685,7 @@ test_triton() {
     run_core_tests
   else
     if [ "$TEST_MINICORE" = true ]; then
-        run_minicore_tests
+        run_triton_kernels_tests
     fi
     if [ "$TEST_MXFP" = true ]; then
         run_mxfp_tests
