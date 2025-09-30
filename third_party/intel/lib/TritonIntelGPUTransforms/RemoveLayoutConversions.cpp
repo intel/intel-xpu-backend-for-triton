@@ -158,14 +158,12 @@ public:
   getConvertBackwardSlice(OpOperand &root, Attribute rootEncoding,
                           SetVector<Value> &slice,
                           DenseMap<Value, Attribute> &layout,
-                          std::function<bool(Operation *)> stopPropagation,
-                          bool includeForOp = false);
+                          std::function<bool(Operation *)> stopPropagation);
 
   LogicalResult getRematerializableSlice(
       OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
       DenseMap<Value, Attribute> &layout,
-      std::function<bool(Operation *)> stopPropagation = nullptr,
-      bool includeForOp = false);
+      std::function<bool(Operation *)> stopPropagation = nullptr);
 
 private:
   void updateRematMapping(SmallVector<std::tuple<Value, Value>> &values);
@@ -188,11 +186,10 @@ void LayoutRematerialization::addRematValue(Value old, Attribute encoding,
                                             Value newV) {
   LDBG("addRematValue " << old << " encoding " << encoding << " " << newV);
   rematMapping[{old, encoding}] = newV;
-  if (mappedValues.contains(old)) {
+  if (mappedValues.contains(old))
     mappedValues[old].push_back(encoding);
-  } else {
+  else
     mappedValues[old] = {encoding};
-  }
 }
 
 // Remove unneeded values now that we are done with the rematMapping.
@@ -998,7 +995,7 @@ void LayoutRematerialization::updateRematMapping(
     auto it = mappedValues.find(old);
     if (it != mappedValues.end()) {
       SmallVector<Attribute> encodings = it->second;
-      for (auto encoding : encodings) {
+      for (Attribute encoding : encodings) {
         auto rematIt = rematMapping.find({old, encoding});
         assert(rematIt != rematMapping.end());
         Value replacedValue = rematIt->second;
@@ -1014,11 +1011,10 @@ void LayoutRematerialization::updateRematMapping(
         rematMapping[{newV, encoding}] = replacedValue;
       }
       mappedValues.erase(it);
-      if (mappedValues.contains(newV)) {
+      if (mappedValues.contains(newV))
         mappedValues[newV].append(encodings);
-      } else {
+      else
         mappedValues[newV] = std::move(encodings);
-      }
     }
   }
 }
@@ -1341,7 +1337,7 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
 LogicalResult LayoutRematerialization::getConvertBackwardSlice(
     OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
     DenseMap<Value, Attribute> &layout,
-    std::function<bool(Operation *)> stopPropagation, bool includeForOp) {
+    std::function<bool(Operation *)> stopPropagation) {
   // Allow re-using existing conversions for a value. Check dominance of any
   // reusable materializations against the root value. This is sufficient
   // because the conversions are processed in post-order.
@@ -1370,16 +1366,15 @@ LogicalResult LayoutRematerialization::getConvertBackwardSlice(
   };
 
   return ttgi::getConvertBackwardSlice(root, slice, rootEncoding, layout,
-                                       stopPropagation, getExistingConversion,
-                                       includeForOp);
+                                       stopPropagation, getExistingConversion);
 }
 
 LogicalResult LayoutRematerialization::getRematerializableSlice(
     OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
     DenseMap<Value, Attribute> &layout,
-    std::function<bool(Operation *)> stopPropagation, bool includeForOp) {
-  LogicalResult result = getConvertBackwardSlice(
-      root, rootEncoding, slice, layout, stopPropagation, includeForOp);
+    std::function<bool(Operation *)> stopPropagation) {
+  LogicalResult result = getConvertBackwardSlice(root, rootEncoding, slice,
+                                                 layout, stopPropagation);
   if (result.failed() || slice.empty())
     return failure();
 
@@ -1506,7 +1501,7 @@ void LayoutRematerialization::backwardRematerialization(
   DenseMap<Value, Attribute> layout;
   LogicalResult result = getRematerializableSlice(convertOp.getSrcMutable(),
                                                   targetType.getEncoding(),
-                                                  slice, layout, nullptr, true);
+                                                  slice, layout, nullptr);
   if (result.failed()) {
     LDBG("  getRematerializableSlice failed");
     return;
