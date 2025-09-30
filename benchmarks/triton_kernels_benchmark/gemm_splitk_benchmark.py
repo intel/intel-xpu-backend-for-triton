@@ -54,7 +54,7 @@ def _kernel(A, B, C,  #
         acc += tl.dot(a, b, out_dtype=acc_dtype)
         off_k += BLOCK_K * SPLIT_K
     acc = acc.to(C.dtype.element_ty)
-    
+
     # handles write-back with reduction-splitting
     if SPLIT_K == 1:
         c_desc = tl.make_tensor_descriptor(base=C, shape=(M, N), strides=(stride_cm, stride_cn),

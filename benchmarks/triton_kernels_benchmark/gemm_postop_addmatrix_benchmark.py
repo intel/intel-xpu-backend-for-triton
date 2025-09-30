@@ -1,8 +1,8 @@
 """
-Gemm + PostOp (add matrix) benchmark (tensor descriptor)
-========================================================
+Gemm + PostOp (add matrix) benchmark
+====================================
 
-This benchmark uses tensor descriptors to implement a GEMM kernel with matrix addition post-operation.
+This benchmark is modified from gemm_benchmark.py to add a matrix to the output of the gemm operation.
 
 """
 import os
@@ -221,6 +221,7 @@ def matmul(a, b, d, c):
     else:
         assert False, 'Input matrixs dimensions mismatch'
     return c
+
 
 X_VALS = [[1, 1024 * i, 1024 * i, 1024 * i, dtype]
           for i in [1, 2, 4, 8]

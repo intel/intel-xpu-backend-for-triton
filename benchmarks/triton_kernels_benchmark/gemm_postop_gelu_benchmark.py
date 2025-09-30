@@ -1,8 +1,8 @@
 """
-Gemm + PostOp (Gelu) benchmark (tensor descriptor)
-==================================================
+Gemm + PostOp (Gelu) benchmark
+==============================
 
-This benchmark uses tensor descriptors to implement a GEMM kernel with GeLU post-operation.
+This benchmark is modified from gemm_benchmark.py to include a post-operation (Gelu) on the output of the gemm operation.
 
 """
 
@@ -202,6 +202,7 @@ def matmul(a, b, c):
     else:
         assert False, 'Input matrixs dimensions mismatch'
     return c
+
 
 X_VALS = [[1, 1024 * i, 1024 * i, 1024 * i]
           for i in [1, 2, 4, 8]] + [[1, 1, 5120, 13824],  #
