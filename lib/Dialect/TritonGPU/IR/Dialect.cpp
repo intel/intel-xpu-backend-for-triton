@@ -578,7 +578,7 @@ static LogicalResult parseBool(AsmParser &parser, const NamedAttribute &attr,
 };
 
 static LogicalResult parseType(AsmParser &parser, const NamedAttribute &attr,
-                               std::optional<Type> &value, StringRef desc) {
+                               Type &value, StringRef desc) {
   auto typeAttr = mlir::dyn_cast<TypeAttr>(attr.getValue());
   if (!typeAttr) {
     parser.emitError(parser.getNameLoc(), "expected a Type in ") << desc;
@@ -1172,33 +1172,27 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
 
   unsigned version = 0;
   SmallVector<unsigned> warpsPerCTA;
-  SmallVector<unsigned> tilesPerWarp;
   SmallVector<unsigned> instrShape;
   bool isTransposed;
   std::optional<SmallVector<unsigned>> CTAsPerCGA;
   std::optional<SmallVector<unsigned>> CTASplitNum;
   std::optional<SmallVector<unsigned>> CTAOrder;
-  std::optional<Type> elementType;
+  SmallVector<unsigned> tilesPerWarp = {};
+  unsigned elementBitWidth = 32;
 
   for (const NamedAttribute &attr : dict) {
     if (attr.getName() == "version") {
-      if (parseUInt(parser, attr, version, "verison").failed())
+      if (parseUInt(parser, attr, version, "version").failed())
         return {};
     }
     if (attr.getName() == "warpsPerCTA") {
       if (parseIntArrayAttr(parser, attr, warpsPerCTA, "warpsPerCTA").failed())
         return {};
     }
-    if (attr.getName() == "tilesPerWarp") {
-      if (parseIntArrayAttr(parser, attr, tilesPerWarp, "tilesPerWarp")
-              .failed())
-        return {};
-    }
     if (attr.getName() == "instrShape") {
       if (parseIntArrayAttr(parser, attr, instrShape, "instrShape").failed())
         return {};
     }
-
     if (attr.getName() == "isTransposed") {
       if (parseBool(parser, attr, isTransposed, "isTransposed").failed())
         return {};
@@ -1218,14 +1212,15 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
               .failed())
         return {};
     }
-    if (attr.getName() == "elementType") {
-      if (parseType(parser, attr, elementType, "elementType").failed())
+    if (attr.getName() == "tilesPerWarp") {
+      if (parseIntArrayAttr(parser, attr, tilesPerWarp, "tilesPerWarp")
+              .failed())
         return {};
     }
-  }
-
-  if (tilesPerWarp.empty()) {
-    tilesPerWarp.resize(warpsPerCTA.size(), 1);
+    if (attr.getName() == "elementBitWidth") {
+      if (parseUInt(parser, attr, elementBitWidth, "elementBitWidth").failed())
+        return {};
+    }
   }
 
   std::optional<CTALayoutAttr> CTALayout = getCTALayoutOrError(
@@ -1233,57 +1228,57 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
   if (!CTALayout.has_value())
     return {};
 
+  if (tilesPerWarp.empty())
+    tilesPerWarp = SmallVector<unsigned>(instrShape.size(), 1);
+
   return parser.getChecked<AMDMfmaEncodingAttr>(
-      parser.getContext(), version, warpsPerCTA, tilesPerWarp, instrShape[0],
-      instrShape[1], isTransposed, *CTALayout, elementType);
+      parser.getContext(), version, warpsPerCTA, instrShape, isTransposed,
+      *CTALayout, tilesPerWarp, elementBitWidth);
 }
 
 void AMDMfmaEncodingAttr::print(AsmPrinter &printer) const {
   printer << "<{"
-          << "version = " << getVersion() //
-          << ", warpsPerCTA = [" << getWarpsPerCTA() << "]";
+          << "version = " << getVersion()                   //
+          << ", warpsPerCTA = [" << getWarpsPerCTA() << "]" //
+          << ", instrShape = [" << getInstrShape() << "]";
 
-  auto tilesPerWarp = getTilesPerWarp();
-  if (!hasUnitTilesPerWarp()) {
-    printer << ", tilesPerWarp = [" << getTilesPerWarp() << "]";
-  }
+  printer << ", isTransposed = " << getIsTransposed();
 
-  printer << ", instrShape = [" << ArrayRef{getMDim(), getNDim()} << "]" //
-          << ", isTransposed = " << getIsTransposed();
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/getRank());
-  if (getElementType() && !(getElementType()->isF32())) {
-    std::string typeStr;
-    llvm::raw_string_ostream rso(typeStr);
-    getElementType()->print(rso);
-    printer << ", elementType = " << rso.str();
-  }
+
+  auto tilesPerWarp = getTilesPerWarp();
+  if (!hasUnitTilesPerWarp())
+    printer << ", tilesPerWarp = [" << getTilesPerWarp() << "]";
+
+  auto elementBitWidth = getElementBitWidth();
+  if (elementBitWidth != 32)
+    printer << ", elementBitWidth = " << elementBitWidth;
+
   printer << "}>";
 }
 
 LogicalResult AMDMfmaEncodingAttr::verify(
     function_ref<mlir::InFlightDiagnostic()> emitError, unsigned version,
     llvm::ArrayRef<unsigned int> warpsPerCTA,
-    llvm::ArrayRef<unsigned int> tilesPerWarp, unsigned mDim, unsigned nDim,
-    bool isTransposed, mlir::triton::gpu::CTALayoutAttr,
-    std::optional<Type> elementType) {
+    llvm::ArrayRef<unsigned int> instrShape, bool isTransposed,
+    mlir::triton::gpu::CTALayoutAttr, llvm::ArrayRef<unsigned int> tilesPerWarp,
+    unsigned elementBitWidth) {
   if (!(version >= 0 && version <= 4)) {
     return emitError() << "version must be in the [0, 4] range";
   }
 
+  auto mDim = instrShape[0];
+  auto nDim = instrShape[1];
   const std::array<std::pair<unsigned, unsigned>, 4> validDims = {
       {{32, 32}, {16, 16}, {64, 4}, {4, 64}}};
   if (!llvm::is_contained(validDims, std::make_pair(mDim, nDim))) {
     return emitError() << "invalid (mDim, nDim) combination: (" << mDim << ", "
                        << nDim << ")";
   }
-  if (elementType && !(elementType->isF64() || elementType->isF32() ||
-                       elementType->isInteger(32))) {
-    std::string typeStr;
-    llvm::raw_string_ostream rso(typeStr);
-    elementType->print(rso);
-    return emitError() << "element type must be f64, f32, i32, or none";
-  }
+
+  if (!(elementBitWidth == 32 || elementBitWidth == 64))
+    return emitError() << "elementBitWidth must be 32 or 64";
 
   return success();
 }
@@ -1426,8 +1421,6 @@ void SliceEncodingAttr::print(mlir::AsmPrinter &printer) const {
 LogicalResult
 SliceEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                           unsigned dim, DistributedEncodingTrait parent) {
-  if (mlir::triton::tools::getBoolEnv("TRITON_INTEL_ADVANCED_PATH"))
-    return success();
   unsigned rank = cast<LayoutEncodingTrait>(parent).getRank();
   if (rank <= 1)
     return emitError() << "parent layout must have at least rank >= 2";
@@ -1670,7 +1663,7 @@ void SharedLinearEncodingAttr::print(AsmPrinter &printer) const {
         layout.sublayout({kOffset}, llvm::to_vector(layout.getOutDimNames()));
   }
   printLinearLayout(printer, layout);
-  printer << "}, alignment = " << getAlignment() << "}>";
+  printer << "}, alignment = " << getAlignment() << ">";
 }
 
 Attribute SharedLinearEncodingAttr::parse(AsmParser &parser, Type type) {
@@ -2187,8 +2180,9 @@ bool AMDMfmaEncodingAttr::hasUnitTilesPerWarp() const {
 
 SmallVector<int64_t>
 AMDMfmaEncodingAttr::getInstrShapeForOperand(int kWidth, int opIdx) const {
-  unsigned mDim = getMDim();
-  unsigned nDim = getNDim();
+  auto mnkDim = getInstrShape();
+  unsigned mDim = mnkDim[0];
+  unsigned nDim = mnkDim[1];
   assert((mDim == nDim) && (mDim == 32 || mDim == 16 || mDim == 4) ||
          (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64));
 
@@ -2285,7 +2279,7 @@ SwizzledSharedEncodingAttr AMDMfmaEncodingAttr::composeSharedLayoutForOperand(
       std::max(std::min(simdWidth / perPhase, innerDimLength / vectorSize), 1u);
 
   // TODO (zhanglx): figure out better parameters for mfma4
-  if (getMDim() == 4)
+  if (getInstrShape()[0] == 4)
     maxPhase = 4;
 
   return SwizzledSharedEncodingAttr::get(getContext(), vectorSize, perPhase,
@@ -2558,13 +2552,6 @@ LogicalResult DotOperandEncodingAttr::verify(
     return success();
   }
 
-  if (auto parentAttr = mlir::dyn_cast<intel::WarpEncodingAttr>(parent)) {
-    if (kWidth != 0)
-      return emitError() << "ttg.dot_op kWidth parameter is not supported "
-                            "when the parent is a warp layout";
-    return success();
-  }
-
   if (auto parentAttr = mlir::dyn_cast<BlockedEncodingAttr>(parent)) {
     if (kWidth != 0)
       return emitError() << "ttg.dot_op kWidth parameter is not supported "
@@ -2596,9 +2583,6 @@ public:
       return AliasResult::FinalAlias;
     } else if (auto linearAttr = mlir::dyn_cast<LinearEncodingAttr>(attr)) {
       os << "linear";
-      return AliasResult::FinalAlias;
-    } else if (auto warpAttr = mlir::dyn_cast<intel::WarpEncodingAttr>(attr)) {
-      os << "warp";
       return AliasResult::FinalAlias;
     } /* else if (auto sliceAttr = dyn_cast<SliceEncodingAttr>(attr)) {
       os << "slice";
@@ -2701,19 +2685,17 @@ struct TritonGPUInferLayoutInterface
     }
 
     if (auto enc = dyn_cast<NVMMASharedEncodingAttr>(operandEncoding)) {
-      if (failed(checkRank(enc.getRank())))
-        return failure();
-      if (order != ArrayRef<int32_t>({1, 0})) {
-        return emitOptionalError(
-            loc, "NVMMSharedEncoding can only be transposed in 2D");
-      }
+      if (order == ArrayRef<int32_t>({1, 0})) {
+        if (failed(checkRank(enc.getRank())))
+          return failure();
 
-      CTALayoutAttr ctaLayout =
-          permuteCTALayout(ctx, enc.getCTALayout(), order);
-      resultEncoding = NVMMASharedEncodingAttr::get(
-          ctx, enc.getSwizzlingByteWidth(), !enc.getTransposed(),
-          enc.getElementBitWidth(), enc.getFp4Padded(), ctaLayout);
-      return success();
+        CTALayoutAttr ctaLayout =
+            permuteCTALayout(ctx, enc.getCTALayout(), order);
+        resultEncoding = NVMMASharedEncodingAttr::get(
+            ctx, enc.getSwizzlingByteWidth(), !enc.getTransposed(),
+            enc.getElementBitWidth(), enc.getFp4Padded(), ctaLayout);
+        return success();
+      }
     }
 
     if (auto enc = dyn_cast<BlockedEncodingAttr>(operandEncoding)) {
@@ -2729,20 +2711,25 @@ struct TritonGPUInferLayoutInterface
           applyPermutation(invOrderUnsigned, enc.getOrder()), ctaLayout);
       return success();
     }
+    // Generic case
+    auto padded = dyn_cast<PaddedSharedEncodingAttr>(operandEncoding);
 
-    if (auto enc = dyn_cast<PaddedSharedEncodingAttr>(operandEncoding)) {
-      if (failed(checkRank(enc.getRank())))
-        return failure();
-      const auto &transLL =
-          transposeLinearLayout(enc.getLinearComponent(), order);
-      resultEncoding = PaddedSharedEncodingAttr::get(
-          ctx, enc.getIntervals(), enc.getPaddings(), transLL);
-      return success();
-    }
-
-    auto ll = toLinearLayout(shape, operandEncoding);
+    auto ll = padded ? padded.getLinearComponent()
+                     : toLinearLayout(shape, operandEncoding);
+    if (failed(checkRank(ll.getNumOutDims())))
+      return failure();
     auto transposedLl = transposeLinearLayout(ll, order);
-    resultEncoding = LinearEncodingAttr::get(ctx, std::move(transposedLl));
+    if (isa<DistributedEncodingTrait>(operandEncoding)) {
+      resultEncoding = LinearEncodingAttr::get(ctx, std::move(transposedLl));
+    } else if (padded) {
+      resultEncoding = PaddedSharedEncodingAttr::get(ctx, padded.getIntervals(),
+                                                     padded.getPaddings(),
+                                                     std::move(transposedLl));
+    } else {
+      auto shared = cast<SharedEncodingTrait>(operandEncoding);
+      resultEncoding = SharedLinearEncodingAttr::get(
+          ctx, std::move(transposedLl), shared.getAlignment());
+    }
     return success();
   }
 
@@ -3063,8 +3050,8 @@ struct TritonGPUInferLayoutInterface
       return failure();
 
     // Check whether the encodings are structurally the same.
-    if (!areLayoutsEquivalent(shape, cast<DistributedEncodingTrait>(expected),
-                              cast<DistributedEncodingTrait>(got))) {
+    if (!areLayoutsEquivalent(shape, cast<LayoutEncodingTrait>(expected),
+                              cast<LayoutEncodingTrait>(got))) {
       return emitOptionalError(loc, "Expected result encoding ", expected,
                                " but was ", got);
     }
@@ -3118,8 +3105,8 @@ struct TritonGPUInferLayoutInterface
       Attribute splitEnc;
       auto result = inferSplitOpEncoding(parent, splitEnc, joinedShape, loc);
       if (succeeded(result) &&
-          areLayoutsEquivalent(shape, cast<DistributedEncodingTrait>(splitEnc),
-                               cast<DistributedEncodingTrait>(srcEnc))) {
+          areLayoutsEquivalent(shape, cast<LayoutEncodingTrait>(splitEnc),
+                               cast<LayoutEncodingTrait>(srcEnc))) {
         dstEnc = parent;
         return success();
       }
@@ -3295,8 +3282,6 @@ struct TritonGPUVerifyTensorLayoutInterface
     if (!distr)
       return makeErr()
              << "Non-distributed layout is not allowed in tensor type.";
-    if (mlir::triton::tools::getBoolEnv("TRITON_INTEL_ADVANCED_PATH"))
-      return success();
     auto rank = distr.getRepOrder().size();
     if (rank != rankedTy.getRank())
       return makeErr() << "Layout has rank " << rank
@@ -3801,6 +3786,15 @@ int triton::gpu::lookupNumWarps(Operation *op) {
   return *numWarps;
 }
 
+int triton::gpu::lookupNumWarps(Region *region) {
+  if (auto partitions =
+          dyn_cast<WarpSpecializePartitionsOp>(region->getParentOp())) {
+    unsigned idx = region->getRegionNumber();
+    return partitions.getParentOp().getPartitionNumWarps()[idx];
+  }
+  return lookupNumWarps(region->getParentOp());
+}
+
 int triton::gpu::lookupThreadsPerWarp(OpBuilder &rewriter) {
   assert(rewriter.getInsertionBlock() && "expected an insertion point");
   Operation *op =
@@ -3818,8 +3812,8 @@ int triton::gpu::lookupNumCTAs(OpBuilder &rewriter) {
 }
 
 bool triton::gpu::areLayoutsEquivalent(ArrayRef<int64_t> shape,
-                                       DistributedEncodingTrait lhs,
-                                       DistributedEncodingTrait rhs) {
+                                       LayoutEncodingTrait lhs,
+                                       LayoutEncodingTrait rhs) {
   auto lhsLL = triton::gpu::toLinearLayout(shape, lhs);
   auto rhsLL = triton::gpu::toLinearLayout(shape, rhs);
   return lhsLL == rhsLL;

@@ -267,6 +267,7 @@ def test_amd_wmma(M, N, K, in_dtype):
     torch.testing.assert_close(ref, triton_output)
 
 
+@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
 @pytest.mark.parametrize("M, N, K", [(32, 32, 16), (16, 16, 32)])
 @pytest.mark.parametrize("in_dtype", ['float16', 'bfloat16'])
 @pytest.mark.parametrize("num_warps", [4, 8])
@@ -275,13 +276,21 @@ def test_amd_mfma(M, N, K, in_dtype, num_warps, cdna_version):
     if is_xpu():
         pytest.xfail("XPU does not support AMD MFMA")
 
+    if is_hip_cdna3() and cdna_version != 3:
+        pytest.skip("On CDNA3 target, skip if mfma version is not 3")
+
+    if is_hip_cdna4() and cdna_version != 4:
+        pytest.skip("On CDNA4 target, skip if mfma version is not 4")
+
     @gluon.jit
-    def kernel(a_ptr, b_ptr, c_ptr, stride_am, stride_ak,  #
+    def kernel(a_ptr, b_ptr, c_ptr,  #
+               stride_am, stride_ak,  #
                stride_bk, stride_bn,  #
-               stride_cm, stride_cn, BLOCK_SIZE_M: ttgl.constexpr, BLOCK_SIZE_N: ttgl.constexpr,
-               BLOCK_SIZE_K: ttgl.constexpr, blocked: ttgl.constexpr, mfma_layout: ttgl.constexpr):
-        dot_a_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=8)
-        dot_b_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=1, parent=mfma_layout, k_width=8)
+               stride_cm, stride_cn,  #
+               BLOCK_SIZE_M: ttgl.constexpr, BLOCK_SIZE_N: ttgl.constexpr, BLOCK_SIZE_K: ttgl.constexpr,
+               blocked: ttgl.constexpr, k_width: ttgl.constexpr, mfma_layout: ttgl.constexpr):
+        dot_a_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=k_width)
+        dot_b_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=1, parent=mfma_layout, k_width=k_width)
 
         offs_am = ttgl.arange(0, BLOCK_SIZE_M, layout=ttgl.SliceLayout(1, blocked))
         offs_bn = ttgl.arange(0, BLOCK_SIZE_N, layout=ttgl.SliceLayout(0, blocked))
@@ -305,27 +314,26 @@ def test_amd_mfma(M, N, K, in_dtype, num_warps, cdna_version):
         offs_c = offs_cm[:, None] * stride_cm + offs_cn[None, :] * stride_cn
         ttgl.amd.cdna3.buffer_store(stored_value=c, ptr=c_ptr, offsets=offs_c)
 
-    if not is_hip_cdna4() and not is_hip_cdna3():
-        pytest.skip("mfma quires target to be CDNA3 or CDNA4")
-
-    if is_hip_cdna3() and cdna_version != 3:
-        pytest.skip("On CDNA3 target, skip if mfma version is not 3")
-
-    if is_hip_cdna4() and cdna_version != 4:
-        pytest.skip("On CDNA4 target, skip if mfma version is not 4")
-
     elem_type = torch.float16 if in_dtype == 'float16' else torch.bfloat16
     a = torch.randn((M, K), device='cuda', dtype=elem_type) - 0.5
     b = torch.randn((K, N), device='cuda', dtype=elem_type) - 0.5
     c = torch.empty((M, N), device=a.device, dtype=elem_type)
     nonkdim: ttgl.constexpr = 32
+    kdim: ttgl.constexpr = 8 if cdna_version == 3 else 16
+    k_width: ttgl.constexpr = 4 if cdna_version == 3 else 8
     blocked: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[4, 4], threads_per_warp=[4, 16],
                                                  warps_per_cta=[num_warps, 1], order=[1, 0])
-    mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=cdna_version, instr_shape=[nonkdim, nonkdim],
+    mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=cdna_version, instr_shape=[nonkdim, nonkdim, kdim],
                                                          transposed=True, warps_per_cta=[num_warps, 1])
 
-    kernel[1, 1](a, b, c, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1), BLOCK_SIZE_M=M,
-                 BLOCK_SIZE_N=N, BLOCK_SIZE_K=K, blocked=blocked, mfma_layout=mfma_layout, num_warps=num_warps)
+    kernel[1, 1](
+        a, b, c,  #
+        a.stride(0), a.stride(1),  #
+        b.stride(0), b.stride(1),  #
+        c.stride(0), c.stride(1),  #
+        BLOCK_SIZE_M=M, BLOCK_SIZE_N=N, BLOCK_SIZE_K=K,  #
+        blocked=blocked, k_width=k_width, mfma_layout=mfma_layout,  #
+        num_warps=num_warps)
 
     ref = torch.matmul(a, b)
     triton_output = c
@@ -398,8 +406,8 @@ def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type):
             reg_bases=[], lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2]], warp_bases=[[16, 0], [0, 0]],
             block_bases=[], shape=[32, 4])
 
-        mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=4, warps_per_cta=[2, 2], tiles_per_warp=[1, 1],
-                                                             instr_shape=[16, 16], transposed=True)
+        mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=4, instr_shape=[16, 16, 128], transposed=True,
+                                                             warps_per_cta=[2, 2])
 
         zero = ttgl.zeros([BLOCK_M, BLOCK_N], dtype=ttgl.float32, layout=mfma_layout)
 
@@ -517,13 +525,12 @@ def test_math_fast_dividef(device):
     torch.testing.assert_close(z, torch.div(x, y), atol=1e-5, rtol=1e-4)
 
 
-@pytest.mark.xfail(reason="copy to tmem with scale layout is currently broken in Gluon.")
 @pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
 def test_tmem_copy_2d():
     device = "cuda"
 
-    smem_h = 256
-    smem_w = 4
+    smem_h = 64
+    smem_w = 16
     num_rows = 128
     num_cols = smem_h * smem_w // 32
 
@@ -533,13 +540,14 @@ def test_tmem_copy_2d():
         in_ptrs = in_ptr + ttgl.arange(0, smem_h)[:, None] * smem_w + ttgl.arange(0, smem_w)[None, :]
         out_ptrs = out_ptr + ttgl.arange(0, num_rows)[:, None] * num_cols + ttgl.arange(0, num_cols)[None, :]
 
-        blocked: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [32, 1], [4, 1], [0, 1])
+        blocked: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [32, 1], [4, 1], [1, 0])
         value = ttgl.load(ttgl.set_auto_layout(in_ptrs, blocked))
 
-        smem_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=2)
+        smem_layout: ttgl.constexpr = ttgl.SharedLinearLayout(
+            offset_bases=[[0, 1], [0, 2], [32, 0], [0, 4], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 8]])
         tmem_layout: ttgl.constexpr = TensorMemoryScalesLayout()
         smem = ttgl.allocate_shared_memory(ttgl.int8, (smem_h, smem_w), layout=smem_layout)
-        tmem = allocate_tensor_memory(ttgl.int8, (num_rows, num_cols), layout=tmem_layout)
+        tmem = allocate_tensor_memory(ttgl.int8, (smem_h, smem_w), layout=tmem_layout)
 
         barrier = ttgl.allocate_shared_memory(ttgl.int64, [1], ttgl.constexpr(mbarrier.MBarrierLayout()))
         mbarrier.init(barrier, count=1)
@@ -549,22 +557,30 @@ def test_tmem_copy_2d():
         tcgen05_copy(smem, tmem)
         tcgen05_commit(barrier)
         mbarrier.wait(barrier, phase=0)
-        tmem_alias: ttgl.constexpr = TensorMemoryLayout((128, 32), col_stride=1)
+        tmem_alias: ttgl.constexpr = TensorMemoryLayout((num_rows, num_cols), col_stride=1)
         tmem = tmem._reinterpret(ttgl.int8, (num_rows, num_cols), tmem_alias)
         value = tmem.load(blocked)
+        ttgl.static_print(ttgl.to_linear_layout(blocked, (smem_h, smem_w)))
+        ttgl.static_print(ttgl.to_linear_layout(blocked, (num_rows, num_cols)))
         ttgl.store(ttgl.set_auto_layout(out_ptrs, blocked), value)
 
+    torch.manual_seed(0)
     x = torch.randint(size=(smem_h, smem_w), low=-100, high=100, dtype=torch.int8).to(device)
+    #x = torch.arange(smem_h * smem_w, dtype=torch.int8, device=device).reshape(smem_h, smem_w)
     z_tri = torch.zeros(size=(num_rows, num_cols), dtype=torch.int8).to(device)
     kernel[(1, )](x, z_tri, smem_h, smem_w, num_rows, num_cols)
 
-    num_rep_m = smem_h // 32
+    # offset_bases=[[0, 1], [0, 2], [32, 0], [0, 4], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 8]],
+    # Split into contiguous shmem chunks
+    x_res = x.reshape(2, 32, 2, 2, 4)
+    # Put tmem cols first then rows
+    x_res = x_res.permute(1, 2, 3, 0, 4)
+    # Reshape as 32xnum_cols
+    x_res = x_res.reshape(num_rows // 4, num_cols)
 
-    for m in range(num_rep_m):
-        col_offset = m * 4
-        for i in range(4):
-            # Copied values are duplicated across warps
-            assert torch.equal(x[m * 32:(m + 1) * 32], z_tri[32 * i:32 * (i + 1), col_offset:(col_offset + 4)])
+    warps = torch.chunk(z_tri, chunks=4, dim=0)
+    for warp in warps:
+        torch.testing.assert_close(x_res, warp)
 
 
 @pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)

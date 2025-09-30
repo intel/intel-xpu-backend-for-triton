@@ -69,7 +69,7 @@ jobs:
           EOF
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Load pip cache
         id: pip-cache
@@ -80,7 +80,7 @@ jobs:
           key: pip-$PYTHON_VERSION-$GITHUB_SHA
 
       - name: Install Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -172,7 +172,7 @@ jobs:
 
       - name: Clone pytorch benchmark
         if: ${{ inputs.suite == 'torchbench' }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: ${{ env.BENCHMARK_REPO }}
           ref: ${{ env.BENCHMARK_COMMIT_ID }}

@@ -165,6 +165,12 @@ public:
             getContext(), allocOp.getLoc(), allocType, srcShape, innerTy)))
       return failure();
 
+    // For now don't apply the transformation if the new encoding is not an
+    // MMAv3/v5 encoding as it may not be compatible with the user.
+    // The heuristic can be refined once we have more flexible mma ops.
+    if (!isa<NVMMASharedEncodingAttr>(innerTy.getEncoding()))
+      return failure();
+
     auto newAlloc = rewriter.create<LocalAllocOp>(allocOp.getLoc(), innerTy,
                                                   reshapeOp.getSrc());
     rewriter.replaceOpWithNewOp<MemDescReshapeOp>(allocOp, allocOp.getType(),
@@ -257,7 +263,24 @@ private:
     if (!isTmemCopyCompatible(localLoad.getSrc().getType(), usesTMAload))
       return failure();
 
-    opOperand.assign(localLoad.getSrc());
+    PatternRewriter::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPoint(tmemAlloc);
+
+    Value shared = localLoad.getSrc();
+
+    Value reshaped5D = rewriter.create<MemDescReshapeOp>(
+        reshapeOp5D.getLoc(), shared, reshape5DShape);
+    SmallVector<int32_t> transposeOrder32(transposeOrder.begin(),
+                                          transposeOrder.end());
+    Value transposed = rewriter.create<MemDescTransOp>(
+        transOp.getLoc(), reshaped5D, transposeOrder32);
+    SmallVector<int64_t> scale2DShapeVec(scale2DShape.begin(),
+                                         scale2DShape.end());
+    Value reshaped2D = rewriter.create<MemDescReshapeOp>(
+        reshapeOp2D.getLoc(), transposed, scale2DShapeVec);
+
+    opOperand.assign(reshaped2D);
+    rewriter.eraseOp(tmemAlloc);
     return success();
   }
 

@@ -24,10 +24,10 @@ jobs:
     timeout-minutes: 75 # equal to max + 3*std over the last 600 successful runs
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 

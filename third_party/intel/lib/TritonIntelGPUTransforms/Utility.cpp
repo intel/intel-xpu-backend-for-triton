@@ -228,23 +228,20 @@ LogicalResult getConvertBackwardSlice(
         return failure();
       currentValue = existing;
     }
-
     if (auto forOp = currentValue.getDefiningOp<scf::ForOp>()) {
-      if (!includeForOp)
-        return failure();
       if (stopPropagation && stopPropagation(forOp))
         continue;
-      unsigned argIdx = mlir::cast<OpResult>(currentValue).getResultNumber();
-      int numIndVars = forOp.getNumInductionVars();
-      Block &loopBody = *forOp.getBody();
-      auto blockArg = loopBody.getArgument(argIdx + numIndVars);
-      OpOperand *initOperand = forOp.getTiedLoopInit(blockArg);
-      OpOperand &yieldOperand = loopBody.getTerminator()->getOpOperand(argIdx);
+
+      auto loopRes = cast<OpResult>(currentValue);
+      OpOperand *initOperand = forOp.getTiedLoopInit(loopRes);
+      BlockArgument blockArg = forOp.getTiedLoopRegionIterArg(loopRes);
+      OpOperand *yieldOperand = forOp.getTiedLoopYieldedValue(blockArg);
+
       enqueue(*initOperand, encoding);
-      enqueue(yieldOperand, encoding);
+      enqueue(*yieldOperand, encoding);
+
       continue;
     }
-
     if (auto ifOp = currentValue.getDefiningOp<scf::IfOp>()) {
       if (stopPropagation && stopPropagation(ifOp))
         continue;

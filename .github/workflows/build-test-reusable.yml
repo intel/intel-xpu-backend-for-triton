@@ -90,7 +90,7 @@ jobs:
           ${{ toJSON(inputs) }}
           EOF
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Load pip cache
         id: pip-cache
@@ -101,7 +101,7 @@ jobs:
 
       - name: Install Python (using actions/setup-python) ${{ inputs.python_version }}
         if: ${{ !inputs.use_pyenv_python }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ inputs.python_version }}
 
@@ -214,7 +214,7 @@ jobs:
           EOF
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Load pip cache
         id: pip-cache
@@ -225,7 +225,7 @@ jobs:
 
       - name: Install Python (using actions/setup-python) ${{ inputs.python_version }}
         if: ${{ !inputs.use_pyenv_python }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ inputs.python_version }}
 
@@ -342,7 +342,6 @@ jobs:
           07-extern-functions
           08-grouped-gemm
           10-experimental-block-pointer
-          10i-experimental-block-pointer
           EOF
 
       - name: Run Tutorials
@@ -388,7 +387,7 @@ jobs:
     needs: integration-tests
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Load pip cache
         id: pip-cache
@@ -405,7 +404,7 @@ jobs:
           merge-multiple: true
 
       - name: Install Python (using actions/setup-python) ${{ inputs.python_version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ inputs.python_version }}
 
