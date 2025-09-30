@@ -2492,25 +2492,13 @@ struct LoadOpToBlockIOConversion
     // 4. Generates the 2D block IO instructions.
     // 5. Unpacked the loaded values into expected order required by the layout.
 
-    Location loc = op.getLoc();
-    MLIRContext *ctx = rewriter.getContext();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
     Value ptr = op.getPtr();
     if (isTensorPointerType(ptr.getType()))
       return rewriteTensorPointerLoad(op, adaptor, rewriter);
 
-    Value mask = op.getMask();
+    // Get the max tile shape supported by the layout.
     Type resultType = op.getType();
     auto tensorType = cast<RankedTensorType>(resultType);
-
-    // Step 1: Right now we only support 2D rank matrix of row major.
-    const bool memoryRowMajor = isMemoryRowMajor(op);
-    // FIXME: Add support of column major.
-    if (!memoryRowMajor)
-      return failure();
-
-    DpasEncodingAttr::OpIdx opIdx = getOpIdx(tensorType);
-
     Attribute encoding = tensorType.getEncoding();
     std::optional<LinearLayout> llEncoding =
         cast<DistributedEncodingTrait>(encoding).toLinearLayout(
@@ -2544,23 +2532,39 @@ struct LoadOpToBlockIOConversion
     // vBlocks has HW limitation of 4.
     vBlocks = std::min(vBlocks, 4);
 
-    auto llAttr = LinearEncodingAttr::get(rewriter.getContext(), *llEncoding);
-    SmallVector<unsigned> threadOrder(llAttr.getThreadOrder());
-    size_t rank = threadOrder.size();
-    if (rank != 2) {
-      // only support rank of 2 for now.
+    // TODO: use the axis info to general the handling for both regular pointer
+    // and block pointer.
+    const bool memoryRowMajor = isMemoryRowMajor(op);
+    // FIXME: Add support of column major.
+    if (!memoryRowMajor)
       return failure();
-    }
+
     unsigned contiguousDim = memoryRowMajor ? 1 : 0;
     const bool isTransposeRequired = contiguousDim != colDim;
     if (isTransposeRequired)
       return matchAndRewriteTranspose(op, adaptor, rewriter);
 
+    Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    MLIRContext *ctx = rewriter.getContext();
+    Value warpId = rewriter.create<arith::IndexCastOp>(
+        loc, i32_ty,
+        rewriter.create<mlir::gpu::SubgroupIdOp>(loc, /*upperBound=*/nullptr));
+
+    Value llPtr = adaptor.getPtr();
+    unsigned numElems = getTotalElemsPerThread(resultType);
+
+    // Get the LLVM values for pointers
+    SmallVector<Value> ptrElems = unpackLLElements(loc, llPtr, rewriter);
+    assert(ptrElems.size() == numElems &&
+           "the number of pointer values is not matched with the number of "
+           "elements");
+
     // Step 2: Right now we only support DPAS related layout to simplify the
     // lowering.
+    DpasEncodingAttr::OpIdx opIdx = getOpIdx(tensorType);
     DpasEncodingAttr dpasLayout = getDpasLayout(tensorType);
     const ArrayRef<int64_t> tensorShape = tensorType.getShape();
-    unsigned numElems = getTotalElemsPerThread(resultType);
     SmallVector<int64_t> repetitons =
         dpasLayout.getDPASRepetitions(tensorShape, opIdx);
     assert(repetitons.size() == 3 &&
@@ -2572,10 +2576,6 @@ struct LoadOpToBlockIOConversion
         getMatrixOrder(warpsPerCTA.size(), /*rowMajor*/ true);
     unsigned threadsPerWarp =
         product<unsigned>(getThreadsPerWarp(dpasLayout, tensorShape));
-
-    Value warpId = rewriter.create<arith::IndexCastOp>(
-        loc, i32_ty,
-        rewriter.create<mlir::gpu::SubgroupIdOp>(loc, /*upperBound=*/nullptr));
 
     SmallVector<Value> multiDimWarpId =
         delinearize(rewriter, loc, warpId, warpsPerCTA, dpasWarpsOrder);
@@ -2606,6 +2606,9 @@ struct LoadOpToBlockIOConversion
     SmallVector<unsigned> repCluster(dpasLayout.getRepCluster());
     SmallVector<unsigned> warpShape;
     SmallVector<unsigned> dpasInstShape;
+    auto llAttr = LinearEncodingAttr::get(rewriter.getContext(), *llEncoding);
+    SmallVector<unsigned> threadOrder(llAttr.getThreadOrder());
+    size_t rank = threadOrder.size();
 
     switch (opIdx) {
     case DpasEncodingAttr::OpIdx::OperandA: {
@@ -2697,19 +2700,11 @@ struct LoadOpToBlockIOConversion
     std::map<SmallVector<unsigned>, Value> ptrs;
     std::map<SmallVector<unsigned>, Value> masks;
     std::map<SmallVector<unsigned>, Value> others;
-
-    Value llPtr = adaptor.getPtr();
+    SmallVector<Value> maskElems;
     Value llMask = adaptor.getMask();
-
-    SmallVector<Value> ptrElems, maskElems, otherElems;
-    // Get the LLVM values for pointers
-    ptrElems = unpackLLElements(loc, llPtr, rewriter);
-    assert(ptrElems.size() == numElems &&
-           "the number of pointer values is not matched with the number of "
-           "elements");
-
     // Get the LLVM values for mask
     if (llMask) {
+      Value mask = op.getMask();
       maskElems = unpackLLElements(loc, llMask, rewriter);
       assert(maskElems.size() == numElems &&
              "the number of mask values is not matched with the number of "
@@ -2736,6 +2731,7 @@ struct LoadOpToBlockIOConversion
 
     // Get the LLVM values for `other`
     Value other = op.getOther();
+    SmallVector<Value> otherElems;
     Value llOther = adaptor.getOther();
     DenseElementsAttr constAttr;
     if (other)
@@ -2880,6 +2876,15 @@ struct LoadOpToBlockIOConversion
     StringAttr kLane = str_attr("lane");
     StringAttr kWarp = str_attr("warp");
     StringAttr kBlock = str_attr("block");
+
+    assert(regPackedBases.has_value() &&
+           "invalid register bases for packing elems.");
+    std::vector<std::vector<int>> bases(regPackedBases->size());
+    llvm::transform(*regPackedBases, bases.begin(),
+                    [](int base) { return std::vector<int>{base}; });
+    LinearLayout regMapping({{kRegister, bases}},
+                            {{kRegister, llEncoding->getInDimSize(kRegister)}},
+                            /*requireSurjective=*/true);
 
     const unsigned originalElemBits = elemSizeInBits;
 
@@ -3305,10 +3310,9 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                                                    rewriter.getZeroAttr(retTy));
       }
 
+      Value addrElem = b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
+      uint32_t alignment = nWords * width / 8;
       auto createLoadInstruction = [&]() -> SmallVector<Value, 1> {
-        Value addrElem =
-            b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
-        uint32_t alignment = nWords * width / 8;
         Value ret = b.load(retTy, addrElem, alignment);
         return {ret};
       };
@@ -3316,10 +3320,15 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       Value ret;
       // Create a predicated load operation.
       if (pred) {
-        Block &endBlock = LLVM::intel::createPredicatedBlock(
-            rewriter, loc, pred, SmallVector<Value, 1>{other_},
-            createLoadInstruction);
-        ret = *endBlock.args_begin();
+        if (triton::tools::getBoolEnv("TRITON_INTEL_PREDICATED_LOAD"))
+          ret = rewriter.create<TritonGEN::PredicatedLoadOp>(
+              loc, retTy, addrElem, b.i64_val(alignment), pred, other_);
+        else {
+          Block &endBlock = LLVM::intel::createPredicatedBlock(
+              rewriter, loc, pred, SmallVector<Value, 1>{other_},
+              createLoadInstruction);
+          ret = *endBlock.args_begin();
+        }
       } else {
         ret = createLoadInstruction()[0];
       }
@@ -3384,8 +3393,9 @@ struct StoreOpToBlockIOConversion
     assert(llEncoding.has_value() &&
            "unexpected failure when getting linear layout");
 
+    constexpr unsigned MAX_TILE_HEIGHT = 8;
     BlockIOTileSizeInfo sizeInfo =
-        getBlockIOTileSize<8 /*MAX_TILE_HEIGHT*/>(llEncoding.value());
+        getBlockIOTileSize<MAX_TILE_HEIGHT>(llEncoding.value());
     if (!sizeInfo.isValid())
       return failure();
     auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
@@ -3519,7 +3529,7 @@ struct StoreOpToBlockIOConversion
            "invalid register bases for packing elems.");
     std::vector<std::vector<int>> bases(regPackedBases->size());
     llvm::transform(*regPackedBases, bases.begin(),
-                    [&](int base) { return std::vector<int>{base}; });
+                    [](int base) { return std::vector<int>{base}; });
     LinearLayout regMapping({{kRegister, bases}},
                             {{kRegister, llEncoding->getInDimSize(kRegister)}},
                             /*requireSurjective=*/true);

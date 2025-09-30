@@ -418,7 +418,7 @@ run_gluon_tests() {
   cd $TRITON_PROJ/python/test/gluon
 
   TRITON_TEST_SUITE=gluon \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu . -m "not xfail"
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu .
 }
 
 run_interpreter_tests() {

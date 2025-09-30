@@ -130,3 +130,12 @@ llvm.func @triton_gen.sub_group_block_write(%ptr: !llvm.ptr<1>, %val : i32) {
   triton_gen.sub_group_block_write %ptr, %val : !llvm.ptr<1>, i32
   llvm.return
 }
+
+// -----
+
+llvm.func @triton_gen.predicated_load(%ptr : !llvm.ptr<1>, %alignment : i64, %predicate : i1, %default_value : i32) {
+  // CHECK:     llvm.func @triton_gen.predicated_load(%arg0: !llvm.ptr<1>, %arg1: i64, %arg2: i1, %arg3: i32) {
+  // CHECK:       %0 = llvm.call spir_funccc @llvm.genx.GenISA.PredicatedLoad.i32.p1i32.i32(%arg0, %arg1, %arg2, %arg3) {{.*}} : (!llvm.ptr<1>, i64, i1, i32) -> i32
+  %0 = triton_gen.predicated_load %ptr, %alignment, %predicate, %default_value : !llvm.ptr<1>, i64, i1, i32 -> i32
+  llvm.return
+}

@@ -12,6 +12,9 @@ public:
 
 private:
   struct XpuptiProfilerPimpl;
+
+  virtual void
+  doSetMode(const std::vector<std::string> &modeAndOptions) override;
 };
 
 } // namespace proton
