@@ -154,19 +154,6 @@ def _attn_fwd_with_block_pointers(Q, K, V, sm_scale, M, Out,  #
     # epilogue
     m_i += tl.math.log2(l_i)
     acc = acc / l_i[:, None]
-    if N_CTX <= 512:
-        off_hz = off_z + off_h * H
-    else:
-        off_hz = off_z * H + off_h
-    M_block_ptr = tl.make_block_ptr(
-        base=M + off_hz * N_CTX,
-        shape=[N_CTX],
-        strides=[1],
-        offsets=[start_m * BLOCK_M],
-        block_shape=[BLOCK_M],
-        order=[0],
-    )
-    tl.store(M_block_ptr, m_i)
     tl.store(O_block_ptr, acc.to(Out.type.element_ty), boundary_check=(0, 1))
 
 
