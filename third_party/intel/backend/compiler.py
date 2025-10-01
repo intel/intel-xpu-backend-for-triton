@@ -40,7 +40,6 @@ class XPUOptions:
     backend_name: str = 'intel'
     sanitize_overflow: bool = False
     generate_native_code: bool = False
-    enable_tile_load_linear_layout: bool = True
     arch: str = None
     # FIXME: enable for XPU: https://github.com/intel/intel-xpu-backend-for-triton/issues/4954
     instrumentation_mode: str = ""
@@ -133,7 +132,6 @@ class XPUBackend(BaseBackend):
     def parse_options(self, opts) -> Any:
         args = {k: opts[k] for k in XPUOptions.__dataclass_fields__.keys() if k in opts}
         args["allow_fp8e4nv"] = True
-        args["enable_tile_load_linear_layout"] = knobs.intel.tile_load_ll
         return XPUOptions(**args)
 
     def pack_metadata(self, metadata):
@@ -298,7 +296,7 @@ class XPUBackend(BaseBackend):
         # instrumentation point here so we can override IRs above (e.g., ttir and ttgir)
         if XPUBackend.instrumentation:
             XPUBackend.instrumentation.patch("ttgpuir_to_llvmir", pm, mod.context)
-        intel.passes.ttgpuir.add_to_llvmir(pm, options.enable_tile_load_linear_layout)
+        intel.passes.ttgpuir.add_to_llvmir(pm)
         intel.passes.ttgpuir.add_gen_to_llvm(pm)
         passes.common.add_canonicalizer(pm)
         intel.passes.ttgpuir.add_rewrite_stack_ptr(pm)

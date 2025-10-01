@@ -21,11 +21,6 @@ def ConvertTritonIntelGPUToLLVM
                            "mlir::triton::TritonDialect",
                            "mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::TritonGEN::TritonGENDialect"];
-  let options = [
-    Option<"useTileLoadLinearLayout", "use_tile_load_linear_layout",
-           "bool", /*default*/"true",
-           "Use linear layouts to generate the tile load sizes and offsets">
-  ];
 }
 
 #endif // TRITONINTELGPU_CONVERSION_PASSES
