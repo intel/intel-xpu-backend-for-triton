@@ -72,6 +72,8 @@ env:
   TEST_UNSKIP: ${{ inputs.enable_unskip }}
   # Increase this value to reset cache
   PIP_CACHE_NUMBER: 1
+  IGC_VectorizerAllowWAVEALLJoint: 1
+  IGC_VectorizerAllowWAVEALL: 1
 
 jobs:
   build:
