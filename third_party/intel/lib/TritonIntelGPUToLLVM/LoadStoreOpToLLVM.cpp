@@ -2715,19 +2715,20 @@ struct LoadOpToBlockIOConversion
       if (axisInfo) {
         maskConstancyHor = axisInfo->getConstancy(rank - 1);
         maskConstancyVer = axisInfo->getConstancy(rank - 2);
-      } else {
-        maskConstancyHor = 1;
-        maskConstancyVer = 1;
+        // The mask constancy has to be power of 2 for block IO.
+        if (!llvm::isPowerOf2_64(maskConstancyHor) ||
+            !llvm::isPowerOf2_64(maskConstancyVer))
+          return failure();
       }
+
+      // Check the constancy of the mask support to load the memory in 2D block.
+      if (!(maskConstancyHor >= instWidth && maskConstancyVer >= instHeight))
+        return failure();
     } else {
       // no mask
       maskConstancyHor = std::numeric_limits<unsigned>::max();
       maskConstancyVer = std::numeric_limits<unsigned>::max();
     }
-
-    // Check the constancy of the mask support to load the memory in 2D block.
-    if (!(maskConstancyHor >= instWidth && maskConstancyVer >= instHeight))
-      return failure();
 
     // Get the LLVM values for `other`
     Value other = op.getOther();
