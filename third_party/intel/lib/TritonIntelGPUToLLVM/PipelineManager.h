@@ -184,9 +184,8 @@ private:
 /// block pointers or not.
 class TritonGPUToLLVMPipelineManager {
 public:
-  TritonGPUToLLVMPipelineManager(ModuleOp &mod, MLIRContext *ctx,
-                                 bool useTileLoadLinearLayout)
-      : mod(mod), ctx(ctx), useTileLoadLinearLayout(useTileLoadLinearLayout) {}
+  TritonGPUToLLVMPipelineManager(ModuleOp &mod, MLIRContext *ctx)
+      : mod(mod), ctx(ctx) {}
 
   /// Populate the conversion pipeline for function operations.
   void populateFunctionConversionPatterns(
@@ -213,9 +212,8 @@ public:
     intel::populateDotOpToLLVMPatterns(typeConverter, patterns, benefit);
     intel::populateElementwiseOpToLLVMPatterns(
         typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
-    intel::populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo,
-                                             patterns, axisInfoAnalysis,
-                                             benefit, useTileLoadLinearLayout);
+    intel::populateLoadStoreOpToLLVMPatterns(
+        typeConverter, targetInfo, patterns, axisInfoAnalysis, benefit);
     intel::populateReduceOpToLLVMPatterns(typeConverter, patterns, targetInfo,
                                           benefit);
     mlir::triton::populateScanOpToLLVMPatterns(typeConverter, patterns,
@@ -259,8 +257,6 @@ public:
 private:
   ModuleOp &mod;
   MLIRContext *ctx;
-
-  bool useTileLoadLinearLayout = true;
 };
 
 } // namespace mlir::triton::intel
