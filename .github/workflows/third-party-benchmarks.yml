@@ -121,7 +121,7 @@ jobs:
 
           git submodule sync
           git submodule update --init --recursive
-          python setup.py develop
+          pip install -v -e .
 
           cd ../benchmarks/third_party/e2e-flex_attention
 
