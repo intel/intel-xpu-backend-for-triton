@@ -639,7 +639,7 @@ def test_multibuffered_wgmma_loop(FAILURE, device, run_wrapper):
     kernel[(1, )](input_desc, FAILURE=FAILURE, num_warps=4)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_ws_store_wait_load(FAILURE, device, run_wrapper):
     if run_wrapper:
@@ -692,7 +692,7 @@ def test_ws_store_wait_load(FAILURE, device, run_wrapper):
     ws_kernel[(1, )](output, FAILURE=FAILURE, num_warps=4)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_ws_load_wait_store(FAILURE, device, run_wrapper):
     if run_wrapper:
@@ -745,7 +745,7 @@ def test_ws_load_wait_store(FAILURE, device, run_wrapper):
     ws_kernel[(1, )](output, FAILURE=FAILURE, num_warps=4)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
 @pytest.mark.parametrize("MISSING_BAR", ["none", "1", "2"])
 def test_ws_two_loads_two_bars(MISSING_BAR, device, run_wrapper):
     if run_wrapper:
@@ -807,7 +807,7 @@ def test_ws_two_loads_two_bars(MISSING_BAR, device, run_wrapper):
     kernel[(1, )](output, MISSING_BAR=MISSING_BAR, num_warps=4)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_ws_two_loads_one_bar(FAILURE, device, run_wrapper):
     if run_wrapper:
@@ -866,7 +866,7 @@ def test_ws_two_loads_one_bar(FAILURE, device, run_wrapper):
     kernel[(1, )](output, FAILURE=FAILURE, num_warps=4)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
 @pytest.mark.parametrize("MISSING_BAR", ["none", "0", "1", "2", "3"])
 def test_ws_two_loads_two_bars_loop(MISSING_BAR, device, run_wrapper):
     if run_wrapper:
@@ -949,7 +949,7 @@ def test_ws_two_loads_two_bars_loop(MISSING_BAR, device, run_wrapper):
     kernel[(1, )](output, MISSING_BAR=MISSING_BAR, num_warps=4)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_ws_load_ordering(FAILURE, device, run_wrapper):
     if run_wrapper:
@@ -1013,7 +1013,7 @@ def test_ws_load_ordering(FAILURE, device, run_wrapper):
     kernel[(1, )](output, FAILURE=FAILURE, num_warps=4)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
 @pytest.mark.parametrize("MISSING_BAR", ["none", "T2", "T3"])
 def test_ws_two_producers_two_consumers(MISSING_BAR, device, run_wrapper):
     if run_wrapper:
@@ -1100,7 +1100,7 @@ def test_ws_two_producers_two_consumers(MISSING_BAR, device, run_wrapper):
     kernel[(1, )](output, MISSING_BAR=MISSING_BAR, num_warps=4)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
 @pytest.mark.parametrize("MISSING_BAR", ["none", "1", "2"])
 def test_ws_different_warp_sizes(MISSING_BAR, device, run_wrapper):
     if run_wrapper:
@@ -1168,7 +1168,8 @@ def test_ws_different_warp_sizes(MISSING_BAR, device, run_wrapper):
     kernel[(1, )](output, MISSING_BAR=MISSING_BAR, num_warps=4)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
+                   run=False)
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_ws_async_copy_commits(FAILURE, device, run_wrapper):
     if run_wrapper:
@@ -1229,7 +1230,8 @@ def test_ws_async_copy_commits(FAILURE, device, run_wrapper):
     kernel[(1, )](input, FAILURE=FAILURE, num_warps=4)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
+                   run=False)
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_ws_async_copy_wait_visibility(FAILURE, device, run_wrapper):
     if run_wrapper:
@@ -1283,7 +1285,7 @@ def test_ws_async_copy_wait_visibility(FAILURE, device, run_wrapper):
     kernel[(1, )](input, FAILURE=FAILURE, num_warps=4)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] != 9, reason="Requires hopper")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] != 9, reason="Requires hopper", run=False)
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_ws_wgmma_wait_visibility(FAILURE, device, run_wrapper):
     if run_wrapper:
@@ -1337,7 +1339,7 @@ def test_ws_wgmma_wait_visibility(FAILURE, device, run_wrapper):
     kernel[(1, )](FAILURE=FAILURE, num_warps=4)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
 def test_deadlock_two_partitions(device, run_wrapper):
     if run_wrapper:
         result = run_in_process(test_deadlock_two_partitions, (device, False))
@@ -1371,7 +1373,7 @@ def test_deadlock_two_partitions(device, run_wrapper):
     kernel[(1, )](num_warps=4)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
 def test_deadlock_overarrival(device, run_wrapper):
     if run_wrapper:
         result = run_in_process(test_deadlock_overarrival, (device, False))
@@ -1400,7 +1402,7 @@ def test_deadlock_overarrival(device, run_wrapper):
     kernel[(1, )](num_warps=4)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
 def test_deadlock_underarrival(device, run_wrapper):
     if run_wrapper:
         result = run_in_process(test_deadlock_underarrival, (device, False))
@@ -1436,7 +1438,7 @@ def test_deadlock_underarrival(device, run_wrapper):
     kernel[(1, )](num_warps=4)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
 def test_deadlock_different_phases(device, run_wrapper):
     if run_wrapper:
         result = run_in_process(test_deadlock_different_phases, (device, False))
@@ -1471,7 +1473,7 @@ def test_deadlock_different_phases(device, run_wrapper):
     kernel[(1, )](num_warps=4)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
 def test_deadlock_exempt_when_tma_signals(device, run_wrapper):
     if run_wrapper:
         result = run_in_process(test_deadlock_exempt_when_tma_signals, (device, False))
@@ -1514,7 +1516,7 @@ def test_deadlock_exempt_when_tma_signals(device, run_wrapper):
     kernel[(1, )](input_desc, num_warps=4)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
 def test_barrier_underflow(device, run_wrapper):
     if run_wrapper:
         result = run_in_process(test_barrier_underflow, (device, False))
