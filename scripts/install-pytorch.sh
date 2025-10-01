@@ -276,7 +276,7 @@ install_pytorch
 # ImportError: Failed to load PyTorch C extensions:
 #     ...
 #     This error can generally be solved using the `develop` workflow
-#         $ python setup.py develop && python -c "import torch"  # This should succeed
+#         $ pip install -v -e . && python -c "import torch"  # This should succeed
 #     or by running Python from a different directory.
 cd $BASE
 python -c "import torch;print(torch.__version__)"
