@@ -340,6 +340,7 @@ def get_benchmark(
             args={},
         ))
     def benchmark(B, M, N, K, provider):
+        print(f'Running {provider} benchmark with B={B}, M={M}, N={N}, K={K}')
         # Maximum across onednn=600, triton=800, xetla=10, cutlass=600
         do_bench = benchmark_suite.get_do_bench(n_warmup=800, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
         a_shape, b_shape = get_shapes(B, M, N, K, transpose_a=transpose_a, transpose_b=transpose_b)
