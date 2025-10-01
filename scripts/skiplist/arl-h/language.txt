@@ -91,7 +91,10 @@ python/test/unit/language/test_core.py::test_strided_store[float64]
 python/test/unit/language/test_matmul.py::test_blocked_scale_mxfp[r"[^-]*-[^-]*-[^-]*-128-[^-]*-[^-]*-[^-]*-512"]@regexp
 python/test/unit/language/test_matmul.py::test_blocked_scale_mxfp[r"[^-]*-[^-]*-[^-]*-[^-]*-128-[^-]*-[^-]*-512"]@regexp
 python/test/unit/language/test_matmul.py::test_lhs_in_tmem_mxfp
-python/test/unit/language/test_matmul.py::test_lhs_in_tmem
+python/test/unit/language/test_matmul.py::test_lhs_in_tmem[r"float16-(?:True|False)-(?:128-128-64|128-256-32|128-64-128)"]@regexp
+python/test/unit/language/test_matmul.py::test_lhs_in_tmem[r"float32-(?:True|False)-(?:128-128-64|128-64-128)"]@regexp
+python/test/unit/language/test_matmul.py::test_lhs_in_tmem[r"float8e5-(?:True|False)-(?:128-128-64|128-256-32|128-64-128)"]@regexp
+python/test/unit/language/test_matmul.py::test_lhs_in_tmem[float32-True-128-256-32]
 python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_store
 python/test/unit/language/test_tensor_descriptor.py::test_make_tensor_descriptor_matmul
 python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_rank_reducing_matmul

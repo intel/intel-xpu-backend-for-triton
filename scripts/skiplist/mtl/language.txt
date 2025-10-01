@@ -67,5 +67,3 @@ python/test/unit/language/test_core.py::test_dot[1-64-128-128-4-False-False-none
 python/test/unit/language/test_core.py::test_dot[1-64-128-128-4-False-False-none-tf32-float32-float32-1-None1]
 python/test/unit/language/test_core.py::test_dot[1-128-128-64-4-False-False-chain-dot-ieee-float8e5-float32-1-None]
 python/test/unit/language/test_core.py::test_dot[1-128-128-64-4-False-False-chain-dot-ieee-float8e4nv-float32-1-None]
-# https://github.com/intel/intel-xpu-backend-for-triton/issues/4289
-python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_reduce[r".*-host-1-(int32|uint32)-(or|add|max|and|xor|min)|.*-host-1-float(32|16)-add"]@regexp

@@ -121,12 +121,13 @@ python/test/unit/language/test_core.py::test_strided_store[float64]
 python/test/unit/language/test_matmul.py::test_blocked_scale_mxfp[r"[^-]*-[^-]*-[^-]*-128-[^-]*-[^-]*-[^-]*-512"]@regexp
 python/test/unit/language/test_matmul.py::test_blocked_scale_mxfp[r"[^-]*-[^-]*-[^-]*-[^-]*-128-[^-]*-[^-]*-512"]@regexp
 python/test/unit/language/test_matmul.py::test_lhs_in_tmem_mxfp
-python/test/unit/language/test_matmul.py::test_lhs_in_tmem
+python/test/unit/language/test_matmul.py::test_lhs_in_tmem[r"float16-(?:True|False)-(?:128-128-64|128-256-32|128-64-128)"]@regexp
+python/test/unit/language/test_matmul.py::test_lhs_in_tmem[r"float32-(?:True|False)-(?:128-128-64|128-64-128)"]@regexp
+python/test/unit/language/test_matmul.py::test_lhs_in_tmem[r"float8e5-(?:True|False)-(?:128-128-64|128-256-32|128-64-128)"]@regexp
+python/test/unit/language/test_matmul.py::test_lhs_in_tmem[float32-True-128-256-32]
 python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_store
 python/test/unit/language/test_tensor_descriptor.py::test_make_tensor_descriptor_matmul
 python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_rank_reducing_matmul
-# https://github.com/intel/intel-xpu-backend-for-triton/issues/4289
-python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_reduce[r".*-host-1-(int32|uint32)-(or|add|max|and|xor|min)|.*-host-1-float(32|16)-add"]@regexp
 # test_float_annotation
 python/test/unit/language/test_annotations.py::test_float_annotation[r"dtype(12-0\.0|13-42\.0|14-inf|15-nan)"]@regexp
 # test_gather
