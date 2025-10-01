@@ -2691,8 +2691,8 @@ struct LoadOpToBlockIOConversion
           const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
               .getAxisInfo(mask);
       if (axisInfo) {
-        maskConstancyHor = axisInfo->getConstancy(rank - 1);
-        maskConstancyVer = axisInfo->getConstancy(rank - 2);
+        maskConstancyHor = axisInfo->getConstancy(colDim);
+        maskConstancyVer = axisInfo->getConstancy(rowDim);
         // The mask constancy has to be power of 2 for block IO.
         if (!llvm::isPowerOf2_64(maskConstancyHor) ||
             !llvm::isPowerOf2_64(maskConstancyVer))
@@ -2700,8 +2700,14 @@ struct LoadOpToBlockIOConversion
       }
 
       // Check the constancy of the mask support to load the memory in 2D block.
-      if (!(maskConstancyHor >= instWidth && maskConstancyVer >= instHeight))
+      if (!(maskConstancyHor >= (tileWidth * numPackedVals) &&
+            maskConstancyVer >= tileHeight))
         return failure();
+
+      // Adjust vBlock to fit the constancy of mask.
+      vBlocks = std::min(vBlocks, mlir::ceil<int>(maskConstancyHor,
+                                                  tileWidth * numPackedVals));
+      assert(llvm::isPowerOf2_64(vBlocks) && "vBlocks has to be power of 2");
     } else {
       // no mask
       maskConstancyHor = std::numeric_limits<unsigned>::max();
