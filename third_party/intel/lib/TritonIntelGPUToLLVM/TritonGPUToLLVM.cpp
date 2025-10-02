@@ -60,10 +60,6 @@ struct ConvertTritonGPUToLLVM
     : public triton::gpu::intel::impl::ConvertTritonIntelGPUToLLVMBase<
           ConvertTritonGPUToLLVM> {
   using ConvertTritonIntelGPUToLLVMBase::ConvertTritonIntelGPUToLLVMBase;
-  ConvertTritonGPUToLLVM() = default;
-  ConvertTritonGPUToLLVM(bool useTileLoadLinearLayout) {
-    this->useTileLoadLinearLayout = useTileLoadLinearLayout;
-  }
 
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<LLVM::LLVMDialect, TritonGEN::TritonGENDialect,
@@ -75,7 +71,7 @@ struct ConvertTritonGPUToLLVM
     ModuleOp mod = getOperation();
 
     mlir::triton::intel::TritonGPUToLLVMPipelineManager pipelineManager(
-        mod, context, useTileLoadLinearLayout);
+        mod, context);
     mlir::LowerToLLVMOptions option(context);
     auto targetInfo = mlir::triton::intel::createTargetInfo(mod);
     TritonIntelGPUToLLVMTypeConverter typeConverter(context, option,

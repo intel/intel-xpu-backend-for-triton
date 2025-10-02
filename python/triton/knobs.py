@@ -549,7 +549,6 @@ class intel_knobs(base_knobs):
 
     dump_shader_info: env_bool = env_bool("TRITON_INTEL_ENABLE_IGC_SHADER_DUMP", False)
     gen_native_code: env_bool = env_bool("TRITON_XPU_GEN_NATIVE_CODE", False)
-    tile_load_ll: env_bool = env_bool("TRITON_XPU_ENABLE_TILE_LOAD_LINEAR_LAYOUT", True)
     opt_reduction_locality: env_bool = env_bool("TRITON_INTEL_OPTIMIZE_REDUCTION_LOCALITY", False)
     disable_igc_opt: env_bool = env_bool("TRITON_INTEL_DISABLE_IGC_OPT", False)
 
@@ -575,8 +574,6 @@ class amd_knobs(base_knobs):
     use_block_pingpong: env_opt_bool = env_opt_bool("TRITON_HIP_USE_BLOCK_PINGPONG")
     use_in_thread_transpose: env_opt_bool = env_opt_bool("TRITON_HIP_USE_IN_THREAD_TRANSPOSE")
 
-    global_prefetch: env_int = env_int("TRITON_HIP_GLOBAL_PREFETCH")
-    local_prefetch: env_int = env_int("TRITON_HIP_LOCAL_PREFETCH")
     use_async_copy: env_bool = env_bool("TRITON_HIP_USE_ASYNC_COPY")
     scalarize_packed_fops: env_bool = env_bool("AMDGCN_SCALARIZE_PACKED_FOPS")
 
