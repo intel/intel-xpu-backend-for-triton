@@ -63,7 +63,9 @@ getWarpsPerTile(tt::DotOp dotOp, ttgi::DpasEncodingAttr::DPASCapability dpasCap,
         setAttrOnBOperand(dotOp, attrName, UnitAttr::get(ctx));
         setAttrOnBOperand(cast<tt::DotOp>(op), attrName, UnitAttr::get(ctx));
       }
-      return {numWarps, 1};
+      SmallVector<unsigned> ret(shape.size(), 1);
+      ret[0] = numWarps;
+      return ret;
     }
   }
 

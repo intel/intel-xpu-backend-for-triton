@@ -132,6 +132,14 @@ static SPIRV::TranslatorOpts getSPIRVOpts() {
   SPIRVOpts.setPreserveAuxData(false);
   SPIRVOpts.setSPIRVAllowUnknownIntrinsics({"llvm.genx.GenISA."});
 
+  int extraDIExpressions = 0;
+  if (const char *extraDIExpressionsEnvVar =
+          std::getenv("LLVM_EXTRACT_DI_LOCAL_VARIABLES")) {
+    llvm::StringRef(extraDIExpressionsEnvVar)
+        .getAsInteger(10, extraDIExpressions);
+    SPIRVOpts.setAllowExtraDIExpressionsEnabled(true);
+  }
+
   for (auto &Ext : AllowedExtensions)
     SPIRVOpts.setAllowedToUseExtension(Ext, true);
   return SPIRVOpts;
