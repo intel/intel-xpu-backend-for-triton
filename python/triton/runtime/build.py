@@ -87,9 +87,7 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
             if cxx is None:
                 raise RuntimeError("Failed to find C++ compiler. Please specify via CXX environment variable.")
         cc = cxx
-        import numpy as np
-        numpy_include_dir = np.get_include()
-        include_dirs = include_dirs + [numpy_include_dir]
+
         if cxx is icpx:
             ccflags += ["-fsycl"]
         else:
