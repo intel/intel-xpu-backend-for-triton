@@ -639,7 +639,7 @@ def test_multibuffered_wgmma_loop(FAILURE, device, run_wrapper):
     kernel[(1, )](input_desc, FAILURE=FAILURE, num_warps=4)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_ws_store_wait_load(FAILURE, device, run_wrapper):
     if run_wrapper:
@@ -692,7 +692,7 @@ def test_ws_store_wait_load(FAILURE, device, run_wrapper):
     ws_kernel[(1, )](output, FAILURE=FAILURE, num_warps=4)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_ws_load_wait_store(FAILURE, device, run_wrapper):
     if run_wrapper:
@@ -745,7 +745,7 @@ def test_ws_load_wait_store(FAILURE, device, run_wrapper):
     ws_kernel[(1, )](output, FAILURE=FAILURE, num_warps=4)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
 @pytest.mark.parametrize("MISSING_BAR", ["none", "1", "2"])
 def test_ws_two_loads_two_bars(MISSING_BAR, device, run_wrapper):
     if run_wrapper:
@@ -807,7 +807,7 @@ def test_ws_two_loads_two_bars(MISSING_BAR, device, run_wrapper):
     kernel[(1, )](output, MISSING_BAR=MISSING_BAR, num_warps=4)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_ws_two_loads_one_bar(FAILURE, device, run_wrapper):
     if run_wrapper:
@@ -866,7 +866,7 @@ def test_ws_two_loads_one_bar(FAILURE, device, run_wrapper):
     kernel[(1, )](output, FAILURE=FAILURE, num_warps=4)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
 @pytest.mark.parametrize("MISSING_BAR", ["none", "0", "1", "2", "3"])
 def test_ws_two_loads_two_bars_loop(MISSING_BAR, device, run_wrapper):
     if run_wrapper:
@@ -949,7 +949,7 @@ def test_ws_two_loads_two_bars_loop(MISSING_BAR, device, run_wrapper):
     kernel[(1, )](output, MISSING_BAR=MISSING_BAR, num_warps=4)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_ws_load_ordering(FAILURE, device, run_wrapper):
     if run_wrapper:
@@ -1013,7 +1013,7 @@ def test_ws_load_ordering(FAILURE, device, run_wrapper):
     kernel[(1, )](output, FAILURE=FAILURE, num_warps=4)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
 @pytest.mark.parametrize("MISSING_BAR", ["none", "T2", "T3"])
 def test_ws_two_producers_two_consumers(MISSING_BAR, device, run_wrapper):
     if run_wrapper:
@@ -1100,7 +1100,7 @@ def test_ws_two_producers_two_consumers(MISSING_BAR, device, run_wrapper):
     kernel[(1, )](output, MISSING_BAR=MISSING_BAR, num_warps=4)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
 @pytest.mark.parametrize("MISSING_BAR", ["none", "1", "2"])
 def test_ws_different_warp_sizes(MISSING_BAR, device, run_wrapper):
     if run_wrapper:
@@ -1168,7 +1168,8 @@ def test_ws_different_warp_sizes(MISSING_BAR, device, run_wrapper):
     kernel[(1, )](output, MISSING_BAR=MISSING_BAR, num_warps=4)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
+                   run=False)
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_ws_async_copy_commits(FAILURE, device, run_wrapper):
     if run_wrapper:
@@ -1229,7 +1230,8 @@ def test_ws_async_copy_commits(FAILURE, device, run_wrapper):
     kernel[(1, )](input, FAILURE=FAILURE, num_warps=4)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
+                   run=False)
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_ws_async_copy_wait_visibility(FAILURE, device, run_wrapper):
     if run_wrapper:
@@ -1283,7 +1285,7 @@ def test_ws_async_copy_wait_visibility(FAILURE, device, run_wrapper):
     kernel[(1, )](input, FAILURE=FAILURE, num_warps=4)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] != 9, reason="Requires hopper")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] != 9, reason="Requires hopper", run=False)
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_ws_wgmma_wait_visibility(FAILURE, device, run_wrapper):
     if run_wrapper:
@@ -1335,3 +1337,215 @@ def test_ws_wgmma_wait_visibility(FAILURE, device, run_wrapper):
                              (smem, bar, FAILURE, blocked_layout), [ws_1], [4], [32])
 
     kernel[(1, )](FAILURE=FAILURE, num_warps=4)
+
+
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+def test_deadlock_two_partitions(device, run_wrapper):
+    if run_wrapper:
+        result = run_in_process(test_deadlock_two_partitions, (device, False))
+        assert "device-side assert" in str(result.exc)
+        assert "Deadlock detected" in result.driver_stderr_output
+        return
+    knobs.compilation.enable_experimental_consan = True
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+
+    # ConSan requires a global memory allocation
+    def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+
+    @gluon.jit
+    def ws_default(bar):
+        mbarrier.wait(bar.index(0), phase=0)
+
+    @gluon.jit
+    def ws_1(bar):
+        mbarrier.wait(bar.index(1), phase=0)
+
+    @gluon.jit
+    def kernel():
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], mbarrier.MBarrierLayout())
+        mbarrier.init(bar.index(0), count=1)
+        mbarrier.init(bar.index(1), count=1)
+        ttgl.warp_specialize((bar, ), ws_default, (bar, ), [ws_1], [4], [32])
+
+    kernel[(1, )](num_warps=4)
+
+
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+def test_deadlock_overarrival(device, run_wrapper):
+    if run_wrapper:
+        result = run_in_process(test_deadlock_overarrival, (device, False))
+        assert "device-side assert" in str(result.exc)
+        assert "Deadlock detected" in result.driver_stderr_output
+        return
+    knobs.compilation.enable_experimental_consan = True
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+
+    # ConSan requires a global memory allocation
+    def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+
+    @gluon.jit
+    def kernel():
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1, 1], mbarrier.MBarrierLayout())
+        mbarrier.init(bar.index(0), count=1)
+        mbarrier.init(bar.index(1), count=1)
+
+        mbarrier.arrive(bar.index(0), count=1)
+        mbarrier.arrive(bar.index(0), count=1)
+        mbarrier.wait(bar.index(0), phase=0)
+
+    kernel[(1, )](num_warps=4)
+
+
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+def test_deadlock_underarrival(device, run_wrapper):
+    if run_wrapper:
+        result = run_in_process(test_deadlock_underarrival, (device, False))
+        assert "device-side assert" in str(result.exc)
+        assert "Deadlock detected" in result.driver_stderr_output
+        return
+    knobs.compilation.enable_experimental_consan = True
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+
+    # ConSan requires a global memory allocation
+    def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+
+    @gluon.jit
+    def ws_default(bar):
+        mbarrier.arrive(bar.index(1), count=1)
+        mbarrier.wait(bar.index(0), phase=0)
+
+    @gluon.jit
+    def ws_1(bar):
+        mbarrier.arrive(bar.index(0), count=1)
+        mbarrier.wait(bar.index(1), phase=0)
+
+    @gluon.jit
+    def kernel():
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], mbarrier.MBarrierLayout())
+        mbarrier.init(bar.index(0), count=2)
+        mbarrier.init(bar.index(1), count=2)
+        ttgl.warp_specialize((bar, ), ws_default, (bar, ), [ws_1], [4], [32])
+
+    kernel[(1, )](num_warps=4)
+
+
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+def test_deadlock_different_phases(device, run_wrapper):
+    if run_wrapper:
+        result = run_in_process(test_deadlock_different_phases, (device, False))
+        assert result.exc is None
+        assert result.driver_stderr_output == ""
+        return
+    knobs.compilation.enable_experimental_consan = True
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+
+    # ConSan requires a global memory allocation
+    def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+
+    @gluon.jit
+    def ws_default(bar):
+        mbarrier.wait(bar.index(0), phase=0)
+        mbarrier.arrive(bar.index(0), count=1)
+
+    @gluon.jit
+    def ws_1(bar):
+        mbarrier.wait(bar.index(0), phase=1)
+
+    @gluon.jit
+    def kernel():
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1, 1], mbarrier.MBarrierLayout())
+        mbarrier.init(bar.index(0), count=1)
+        mbarrier.arrive(bar.index(0), count=1)
+        ttgl.warp_specialize((bar, ), ws_default, (bar, ), [ws_1], [4], [32])
+
+    kernel[(1, )](num_warps=4)
+
+
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+def test_deadlock_exempt_when_tma_signals(device, run_wrapper):
+    if run_wrapper:
+        result = run_in_process(test_deadlock_exempt_when_tma_signals, (device, False))
+        assert result.exc is None
+        assert result.driver_stderr_output == ""
+        return
+    knobs.compilation.enable_experimental_consan = True
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+
+    # ConSan requires a global memory allocation
+    def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+
+    @gluon.jit
+    def ws_default(input_desc, smem, bar):
+        mbarrier.expect(bar.index(0), XBLOCK * XBLOCK * ttgl.float16.primitive_bitwidth // 8)
+        tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(0), smem.index(0))
+        mbarrier.wait(bar.index(0), phase=0)
+
+    @gluon.jit
+    def ws_1(input_desc, smem, bar):
+        mbarrier.expect(bar.index(1), XBLOCK * XBLOCK * ttgl.float16.primitive_bitwidth // 8)
+        tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(1), smem.index(1))
+        mbarrier.wait(bar.index(1), phase=0)
+
+    @gluon.jit
+    def kernel(input_desc):
+        shared_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
+        smem = ttgl.allocate_shared_memory(ttgl.float16, [2, XBLOCK, XBLOCK], shared_layout)
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], mbarrier.MBarrierLayout())
+        mbarrier.init(bar.index(0), count=1)
+        mbarrier.init(bar.index(1), count=1)
+        ttgl.warp_specialize((input_desc, smem, bar), ws_default, (input_desc, smem, bar), [ws_1], [4], [32])
+
+    input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
+    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
+    input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK.value, XBLOCK.value], shared_layout)
+    kernel[(1, )](input_desc, num_warps=4)
+
+
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+def test_barrier_underflow(device, run_wrapper):
+    if run_wrapper:
+        result = run_in_process(test_barrier_underflow, (device, False))
+        assert "device-side assert" in str(result.exc)
+        assert "Barrier arrive underflow: current count would become negative" in result.driver_stderr_output
+        return
+    knobs.compilation.enable_experimental_consan = True
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+
+    # ConSan requires a global memory allocation
+    def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+
+    @gluon.jit
+    def ws_default(bar):
+        mbarrier.arrive(bar.index(1), count=2)
+        mbarrier.wait(bar.index(0), phase=0)
+
+    @gluon.jit
+    def ws_1(bar):
+        mbarrier.wait(bar.index(1), phase=0)
+
+    @gluon.jit
+    def kernel():
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], mbarrier.MBarrierLayout())
+        mbarrier.init(bar.index(0), count=1)
+        mbarrier.init(bar.index(1), count=1)
+        ttgl.warp_specialize((bar, ), ws_default, (bar, ), [ws_1], [4], [32])
+
+    kernel[(1, )](num_warps=4)

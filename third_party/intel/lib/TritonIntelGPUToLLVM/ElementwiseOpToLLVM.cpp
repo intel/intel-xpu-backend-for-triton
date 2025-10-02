@@ -458,7 +458,7 @@ static SmallVector<Value> Fp_to_Fp8_RTNE(Location loc,
                 (std::is_same_v<SrcTy, BFloat16Type>));
   static_assert((std::is_same_v<DstTy, Float8E4M3Type>) ||
                 (std::is_same_v<DstTy, Float8E5M2Type>));
-  constexpr int64_t SRC_MASK = (1L << (SrcBits - 1)) - 1;
+  constexpr int64_t SRC_MASK = (1ULL << (SrcBits - 1)) - 1;
   constexpr int64_t SRC_MMASK = (1L << SrcMBits) - 1;
   constexpr int64_t DST_NAN = 0x7F;
   constexpr int64_t DST_MAX =

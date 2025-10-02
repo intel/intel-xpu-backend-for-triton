@@ -1,2 +1,1 @@
-# https://github.com/intel/intel-xpu-backend-for-triton/issues/4289
-python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_reduce[r".*-host-1-(int32|uint32)-(or|add|max|and|xor|min)|.*-host-1-float(32|16)-add"]@regexp
+

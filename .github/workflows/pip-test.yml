@@ -37,7 +37,7 @@ jobs:
       - runner-0.0.22
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Python
         uses: actions/setup-python@v6
