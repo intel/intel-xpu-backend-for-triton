@@ -1,0 +1,2 @@
+# Long running tests
+python/test/unit/intel/test_mxfp_matmul.py::test_mxfp_matmul

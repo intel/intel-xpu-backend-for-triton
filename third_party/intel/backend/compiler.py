@@ -14,6 +14,12 @@ import os
 import subprocess
 from pathlib import Path
 
+# TODO: Move this to upstream
+try:
+    from .meta import XPUBackendMeta
+except ImportError:
+    XPUBackendMeta = type(BaseBackend)
+
 
 @dataclass
 class XPUOptions:
@@ -82,7 +88,7 @@ def min_dot_size(device_props: dict):
     return lambda lhs_type, rhs_type: (repeat_count, exec_size, sdepth * get_ops_per_channel(lhs_type, rhs_type))
 
 
-class XPUBackend(BaseBackend):
+class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     device_props: dict = {}
     instrumentation = None
 
@@ -196,7 +202,7 @@ class XPUBackend(BaseBackend):
         module_opts.min_sg_size = min(properties["sub_group_sizes"])
         module_opts.support_sg_2d_block = properties["has_subgroup_2d_block_io"]
         module_opts.support_dpas = properties["has_subgroup_matrix_multiply_accumulate"]
-        module_opts.support_block_scale_dpas = True  # hard code for CRI sim.
+        module_opts.support_block_scale_dpas = properties["has_support_block_scale_dpas"]
         module_opts.support_bf16_conversion = properties["has_bfloat16_conversions"]
         module_opts.threads_per_warp = opt.threads_per_warp
         module_opts.target_arch = target_arch

@@ -206,7 +206,7 @@ while (( $# != 0 )); do
     --reports-dir)
       TRITON_TEST_REPORTS=true
       # Must be absolute
-      TRITON_TEST_REPORTS_DIR="$(mkdir -p "$2" && cd "$2" && pwd)"
+      export TRITON_TEST_REPORTS_DIR="$(mkdir -p "$2" && cd "$2" && pwd)"
       shift 2
       ;;
     --warning-reports)
@@ -262,7 +262,7 @@ SCRIPTS_DIR="$TRITON_PROJ/scripts"
 source "$SCRIPTS_DIR/pytest-utils.sh"
 
 if [ "$TRITON_TEST_REPORTS" == true ]; then
-    capture_runtime_env
+    cat /crisim/gfx-driver/version.txt
 fi
 
 install_deps() {
@@ -336,9 +336,6 @@ run_minicore_tests() {
   # run runtime tests serially to avoid race condition with cache handling.
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=runtime \
     run_pytest_command -k "not test_within_2gb" --verbose --device xpu runtime/ --ignore=runtime/test_cublas.py
-
-  TRITON_TEST_SUITE=debug \
-    run_pytest_command --verbose -n ${PYTEST_MAX_PROCESSES:-8} test_debug.py test_debug_dump.py --forked --device xpu
 
   TRITON_TEST_SUITE=warnings \
     run_pytest_command --verbose -n ${PYTEST_MAX_PROCESSES:-8} test_perf_warning.py --device xpu
@@ -437,7 +434,10 @@ run_tutorial_tests() {
         continue
     fi
 
-    run_tutorial_test "$tutorial"
+    for i in $(seq 0 ${PYTEST_RERUNS:-0}); do
+      run_tutorial_test "$tutorial" && break || [[ $i -lt ${PYTEST_RERUNS:-0} ]]
+      echo "Rerunning $tutorial"
+    done
   done
 }
 

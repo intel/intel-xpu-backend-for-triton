@@ -1,0 +1,2 @@
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/1953
+python/test/unit/instrumentation/test_gpuhello.py::test_op

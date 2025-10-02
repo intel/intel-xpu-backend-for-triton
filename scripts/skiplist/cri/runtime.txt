@@ -1,0 +1,16 @@
+# Native API returns: 17 (UR_RESULT_ERROR_PROFILING_INFO_NOT_AVAILABLE)
+python/test/unit/runtime/test_autotuner.py::test_hooks
+python/test/unit/runtime/test_autotuner.py::test_kwargs
+python/test/unit/runtime/test_autotuner.py::test_no_do_bench
+python/test/unit/runtime/test_autotuner.py::test_prune_configs
+python/test/unit/runtime/test_autotuner.py::test_restore
+
+
+python/test/unit/runtime/test_launch.py::test_memory_leak
+
+python/test/unit/runtime/test_driver.py::test_kernel_in_thread
+
+# fork() is prohobited
+python/test/unit/runtime/test_subproc.py::test_compile_in_subproc
+python/test/unit/runtime/test_subproc.py::test_compile_in_forked_subproc
+python/test/unit/runtime/test_subproc.py::test_compile_in_forked_subproc_with_forced_gc

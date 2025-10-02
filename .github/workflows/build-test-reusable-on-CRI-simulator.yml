@@ -1,0 +1,395 @@
+name: Build and test reusable workflow running on CRI simulator splitting test groups on multiple runners
+run-name: ${{ inputs.run_name }} - ${{ inputs.python_version }} - ${{ inputs.runner_label || 'default'}}
+
+on:
+  workflow_call:
+    inputs:
+      device:
+        description: Device
+        type: string
+        default: cri
+      driver_version:
+        description: Driver version
+        type: string
+        default: rolling
+      runner_label:
+        description: Runner label, keep empty for default
+        type: string
+        default: ""
+      pytorch_ref:
+        description: PyTorch ref, keep empty for default
+        type: string
+        default: ""
+      pytorch_mode:
+        description: PyTorch mode, source or wheels
+        type: string
+        default: "source"
+      python_version:
+        description: Python version
+        type: string
+        required: true
+      upload_test_reports:
+        description: Upload test reports
+        type: boolean
+        default: false
+      ignore_errors:
+        description: Ignore test errors
+        type: boolean
+        default: false
+      skip_list:
+        description: Skip list
+        type: string
+        default: "cri"
+      skip_list_extra:
+        description: Extra skip list suffixes
+        type: string
+        default: "slow,emu"
+      run_name:
+        description: Custom run name
+        type: string
+        default: Build and test
+      build_llvm:
+        description: Build LLVM
+        type: boolean
+        default: false
+      enable_unskip:
+        description: Ignore pytest.skip
+        type: boolean
+        default: false
+      use_pyenv_python:
+        description: Use Python built with pyenv
+        type: boolean
+        default: false
+      use_spirv_backend:
+        description: Use SPIR-V backend
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  # Needed to get the called workflow reference
+  id-token: write
+
+env:
+  TRITON_DISABLE_LINE_INFO: 1
+  TEST_UNSKIP: ${{ inputs.enable_unskip }}
+  # Increase this value to reset cache
+  PIP_CACHE_NUMBER: 1
+  TRITON_INTEL_DEVICE_ARCH: cri
+  PYTEST_MAX_PROCESSES: 16
+  PYTEST_TIMEOUT: 300
+  PYTEST_RERUNS: 2
+  NUM_SHARDS: 0
+  PARALLEL_SUITES: ""
+  SEQUENTIAL_SUITES: "tutorial minicore mxfp scaled_dot"
+  http_proxy: http://fmproxyslb.ice.intel.com:911
+  https_proxy: http://fmproxyslb.ice.intel.com:911
+
+jobs:
+  build:
+    name: Build
+    timeout-minutes: 120
+    runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}"]', inputs.device, inputs.driver_version)) }}
+    defaults:
+      run:
+        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+    outputs:
+      test-triton-command: ${{ steps.test-triton.outputs.command }}
+      integration-tests-matrix: ${{ steps.test-triton.outputs.matrix }}
+    steps:
+      - name: Print inputs
+        run: |
+          cat <<EOF
+          ${{ toJSON(inputs) }}
+          EOF
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Load pip cache
+        id: pip-cache
+        uses: ./.github/actions/load
+        with:
+          path: $HOME/.cache/pip
+          key: pip-${{ inputs.python_version }}-${{ hashFiles('pyproject.toml', 'setup.py') }}-${{ env.PIP_CACHE_NUMBER }}
+
+      - name: Install Python (using actions/setup-python) ${{ inputs.python_version }}
+        if: ${{ !inputs.use_pyenv_python }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Install Python (from pyenv) ${{ inputs.python_version }}
+        if: ${{ inputs.use_pyenv_python }}
+        uses: ./.github/actions/setup-pyenv-python
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      # Build PyTorch here once, integration tests jobs should load it from cache.
+      - name: Setup PyTorch
+        uses: ./.github/actions/setup-pytorch
+        with:
+          ref: ${{ inputs.pytorch_ref }}
+          mode: ${{ inputs.pytorch_mode }}
+          cri_env: ${{ inputs.device == 'cri' }}
+
+      - name: Build Proton with XPU support
+        if: inputs.driver_version == 'rolling' && inputs.device == 'max1100'
+        run: |
+          echo TRITON_BUILD_PROTON_XPU=1 | tee -a $GITHUB_ENV
+
+      - name: Build Triton
+        uses: ./.github/actions/setup-triton
+        with:
+          build_llvm: ${{ inputs.build_llvm }}
+          use_spirv_backend: ${{ inputs.use_spirv_backend }}
+          command: >
+            DEBUG=1
+            python setup.py bdist_wheel && pip install dist/*.whl
+
+      - name: Set test-triton command line
+        id: test-triton
+        run: |
+          if [[ -n "${{ inputs.skip_list }}" ]]; then
+            skiplist="$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.skip_list }}"
+            [ -d "$skiplist" ] || (echo "Skip list folder $skiplist does not exist!" >&2; exit 1)
+          elif [[ -n "${{ inputs.driver_version }}" ]]; then
+            skiplist="$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.driver_version }}"
+            [ -d "$skiplist" ] || skiplist="$GITHUB_WORKSPACE/scripts/skiplist/default"
+          fi
+
+          if [[ -n "${{ inputs.skip_list_extra }}" ]]; then
+            skiplist_extra="--extra-skip-list-suffixes ${{ inputs.skip_list_extra }}"
+          else
+            skiplist_extra=""
+          fi
+
+          TRITON_TEST_CMD="bash -x scripts/test-triton.sh --skip-pip-install --warning-reports --skip-pytorch-install --reports-dir $GITHUB_WORKSPACE/reports ${{ inputs.enable_unskip && '--unskip' || '' }} ${{ inputs.ignore_errors && '--ignore-errors' || '' }} --skip-list $skiplist $skiplist_extra"
+          echo "command=$TRITON_TEST_CMD" | tee -a $GITHUB_OUTPUT
+          echo "TRITON_TEST_CMD=$TRITON_TEST_CMD" | tee -a $GITHUB_ENV
+
+          matrix=''
+          if [ ! -z "$PARALLEL_SUITES" ] && [ "${NUM_SHARDS:-0}" -gt 0 ]; then
+            for s in $PARALLEL_SUITES; do
+              for n in $(seq 0 $((NUM_SHARDS - 1))); do
+                matrix="$matrix, {\"suite\":\"$s\",\"shard_id\":$n}"
+              done
+            done
+          fi
+          for s in $SEQUENTIAL_SUITES; do
+            matrix="$matrix, {\"suite\":\"$s\"}"
+          done
+          echo "matrix=[${matrix#,}]" | tee -a $GITHUB_OUTPUT
+
+      - name: Install test dependencies
+        run: |
+          pip install -r scripts/requirements-test.txt git+https://github.com/kwasd/pytest-capturewarnings-ng@v1.2.0
+
+      # Unit tests require `build` directory.
+      - name: Run unit tests
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --unit
+
+      # Instrumentation tests require `build` directory.
+      - name: Run instrumentation tests
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --instrumentation
+
+      - name: Save pip cache
+        if: ${{ steps.pip-cache.outputs.status == 'miss' }}
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.pip-cache.outputs.path }}
+          dest: ${{ steps.pip-cache.outputs.dest }}
+
+      - name: Upload Triton wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: triton-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          path: dist/*.whl
+
+      - name: Upload test reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-build-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          include-hidden-files: true
+          path: reports
+
+  integration-tests:
+    name: ${{ format('Integration tests {0}{1}', matrix.loop.suite, matrix.loop.shard_id && format(' - shard {0}', matrix.loop.shard_id) || '') }}
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        loop: ${{ fromJson(needs.build.outputs.integration-tests-matrix )}}
+    timeout-minutes: 720
+    runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}"]', inputs.device, inputs.driver_version)) }}
+    defaults:
+      run:
+        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+    steps:
+      - name: Print inputs
+        run: |
+          cat <<EOF
+          ${{ toJSON(inputs) }}
+          EOF
+
+      - name: Random delay to prevent massive internet access from all workers
+        run: |
+          [ "${NUM_SHARDS:-0}" = 0 ] || sleep $((RANDOM % NUM_SHARDS + 1))
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Load pip cache
+        id: pip-cache
+        uses: ./.github/actions/load
+        with:
+          path: $HOME/.cache/pip
+          key: pip-${{ inputs.python_version }}-${{ matrix.loop.suite }}-${{ hashFiles('pyproject.toml', 'setup.py') }}-${{ env.PIP_CACHE_NUMBER }}
+
+      - name: Install Python (using actions/setup-python) ${{ inputs.python_version }}
+        if: ${{ !inputs.use_pyenv_python }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Install Python (from pyenv) ${{ inputs.python_version }}
+        if: ${{ inputs.use_pyenv_python }}
+        uses: ./.github/actions/setup-pyenv-python
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Setup PyTorch
+        uses: ./.github/actions/setup-pytorch
+        with:
+          ref: ${{ inputs.pytorch_ref }}
+          mode: ${{ inputs.pytorch_mode }}
+          cri_env: ${{ inputs.device == 'cri' }}
+
+      - name: Download Triton wheels
+        uses: actions/download-artifact@v5
+        with:
+          name: triton-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+
+      - name: Install Triton
+        run: |
+          pip install triton-*.whl
+          python -c 'import triton; print(triton.__version__)'
+
+      - name: Report environment details
+        run: |
+          if [ "${{ matrix.loop.suite }}" == "minicore" ]; then
+            reports_file="reports/.env"
+          else
+            reports_file="/dev/null"
+          fi
+
+          mkdir -p reports
+          cat <<EOF | tee "$reports_file"
+          TIMESTAMP=$(date '+%Y%m%d%H%M%S')
+          GITHUB_RUN_ID=$GITHUB_RUN_ID
+          GITHUB_RUN_NUMBER=$GITHUB_RUN_NUMBER
+          GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT
+          PYTHON_VERSION=${{ inputs.python_version }}
+          PYTORCH_REPO=$PYTORCH_REPO
+          PYTORCH_COMMIT_ID=$PYTORCH_COMMIT_ID
+          PYTORCH_VERSION=$PYTORCH_VERSION
+          TRITON_REPO=$GITHUB_REPOSITORY
+          TRITON_COMMIT_ID=$GITHUB_SHA
+          TRITON_BRANCH=$GITHUB_REF_NAME
+          OS=${{ runner.os }}
+          EOF
+
+      - name: Install test dependencies
+        run: |
+          pip install -r scripts/requirements-test.txt git+https://github.com/kwasd/pytest-capturewarnings-ng@v1.2.0
+
+      - name: Set test-triton command line
+        run: |
+          echo "TRITON_TEST_CMD=${{ needs.build.outputs.test-triton-command }}" | tee -a $GITHUB_ENV
+
+      - name: Run ${{ matrix.loop.suite }} tests
+        run: |
+          export TRITON_TEST_SHARDS=${{ env.NUM_SHARDS }}
+          export TRITON_TEST_SHARD_NUMBER=${{ matrix.loop.shard_id }}
+          suite=${{ matrix.loop.suite }}
+          ${{ env.TRITON_TEST_CMD }} --${suite//_/-}
+
+      - name: Save pip cache
+        if: ${{ steps.pip-cache.outputs.status == 'miss' }}
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.pip-cache.outputs.path }}
+          dest: ${{ steps.pip-cache.outputs.dest }}
+
+      - name: Upload test reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-${{ matrix.loop.suite }}-${{ matrix.loop.shard_id }}-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          include-hidden-files: true
+          path: reports
+
+  reports:
+    name: Reports
+    runs-on:
+      - linux
+    needs: integration-tests
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Load pip cache
+        id: pip-cache
+        uses: ./.github/actions/load
+        with:
+          path: $HOME/.cache/pip
+          key: pip-${{ inputs.python_version }}-${{ hashFiles('pyproject.toml', 'setup.py') }}-${{ env.PIP_CACHE_NUMBER }}
+
+      - name: Download test reports
+        uses: actions/download-artifact@v5
+        with:
+          pattern: test-reports-*-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          path: reports
+          merge-multiple: true
+
+      - name: Install Python (using actions/setup-python) ${{ inputs.python_version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Install pass_rate dependencies
+        run: |
+          pip install defusedxml
+
+      - name: Load environment details
+        run: |
+          cat ./reports/.env | tee -a $GITHUB_ENV
+
+      - name: Pass rate
+        run: |
+          python scripts/pass_rate.py --reports reports
+          python scripts/pass_rate.py --reports reports --json > pass_rate.json
+          python scripts/pass_rate.py --reports reports --suite tutorials --json > pass_rate_tutorials.json
+
+      - name: Upload pass rate report
+        uses: actions/upload-artifact@v4
+        with:
+          name: pass_rate-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          path: pass_rate*.json
+
+      - name: Upload tutorials test report
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-tutorials-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          include-hidden-files: true
+          path: reports/tutorials.xml
+
+      - name: Upload tutorials performance report
+        uses: actions/upload-artifact@v4
+        with:
+          name: tutorials-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          if-no-files-found: warn
+          include-hidden-files: true
+          path: |
+            reports/*/*.csv
+            reports/.env

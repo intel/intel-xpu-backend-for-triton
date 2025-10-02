@@ -1,0 +1,2 @@
+# The test hangs on CRI simulator
+python/test/unit/language/test_subprocess.py::test_print

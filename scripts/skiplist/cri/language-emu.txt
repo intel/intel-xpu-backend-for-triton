@@ -1,0 +1,3 @@
+# Tests that use emulated functionality
+python/test/unit/language/test_conversions.py::test_typeconvert_downcast
+python/test/unit/language/test_core.py::test_tensor_atomic_cas[r".*float16.*"]@regexp

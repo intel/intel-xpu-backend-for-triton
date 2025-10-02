@@ -1,0 +1,2 @@
+# Long running tests
+python/test/regression/test_cast_matmul.py::test_cast_matmul

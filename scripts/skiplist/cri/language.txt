@@ -1,0 +1,28 @@
+# Mismatched elements
+python/test/unit/language/test_core.py::test_dot3d[2-1-64-64-64-32-32-float32-float32]
+python/test/unit/language/test_core.py::test_dot3d[2-1-64-64-64-32-32-float64-float64]
+python/test/unit/language/test_core.py::test_dot3d[4-1-64-64-64-32-32-float32-float32]
+python/test/unit/language/test_core.py::test_dot3d[4-1-64-64-64-32-32-float64-float64]
+
+# Mismatched elements
+python/test/unit/language/test_core.py::test_dot[1-32-128-64-2-False-False-none-tf32-float32-float32-1-None0]
+python/test/unit/language/test_core.py::test_dot[1-32-128-64-2-False-False-none-tf32-float32-float32-1-None1]
+python/test/unit/language/test_core.py::test_dot[1-64-128-128-2-True-False-none-tf32-int8-int8-1-None0]
+python/test/unit/language/test_core.py::test_dot[1-64-128-128-2-True-False-none-tf32-int8-int8-1-None1]
+
+# Expected all tensors to be on the same device, but found at least two devices, xpu:0 and cpu!
+python/test/unit/language/test_core.py::test_precise_math[1-tl.math.div_rn(x,y)-(x.to(tl.float64) / y.to(tl.float64)).to(tl.float32)]
+python/test/unit/language/test_core.py::test_precise_math[1-tl.math.sqrt_rn(x)-tl.math.sqrt(x.to(tl.float64)).to(tl.float32)]
+
+# LoadStoreOpToLLVM.cpp:3207: Assertion `(valueElemNBits == 32 || valueElemNBits == 64) && "Unexpected width"' failed
+python/test/unit/language/test_core.py::test_tensor_atomic_use_result[cas-1-float16]
+python/test/unit/language/test_core.py::test_tensor_atomic_use_result[cas-16-float16]
+python/test/unit/language/test_core.py::test_tensor_atomic_use_result[cas-4-float16]
+
+# Simulator error
+python/test/unit/language/test_core.py::test_dot_without_load[float16]
+python/test/unit/language/test_core.py::test_scan2d[cummax-int32-shape154-0-False-4]
+
+
+# Mismatched elements
+python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_reshape_matmul[float16]

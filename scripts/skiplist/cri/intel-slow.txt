@@ -1,0 +1,3 @@
+# Long running tests
+python/test/unit/intel/test_driver.py::test_auto_grf
+python/test/unit/intel/test_block_load.py::test_block_load_dot_product[False-True-1-8-32-16]

@@ -20,6 +20,9 @@ pytest() {
         "--dist=worksteal"
     )
 
+    # Use xdist with at least 1 worker
+    [[ "$@" =~ "-n " || "$@" =~ "--numprocesses " ]] || pytest_extra_args+=("-n" "1")
+
     if [[ -v TRITON_TEST_SUITE && $TRITON_TEST_REPORTS = true ]]; then
         mkdir -p "$TRITON_TEST_REPORTS_DIR"
         pytest_extra_args+=(
@@ -40,31 +43,41 @@ pytest() {
         )
     fi
 
-    if [[ ! -f $TRITON_TEST_SELECTFILE && -v TRITON_TEST_SUITE && -f $TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt ]]; then
-        if [[ $TEST_UNSKIP = false ]]; then
-            SKIPFILES="$TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt"
-            if [[ -n "$TRITON_EXTRA_SKIPLIST_SUFFIXES" ]]; then
-                IFS=',' read -ra SUFFIXES <<< "$TRITON_EXTRA_SKIPLIST_SUFFIXES"
-                for SUFFIX in "${SUFFIXES[@]}"; do
-                    SKIPFILE="$TRITON_TEST_SKIPLIST_DIR/${TRITON_TEST_SUITE}-${SUFFIX}.txt"
-                    if [[ -f "$SKIPFILE" ]]; then
-                        SKIPFILES+=";$SKIPFILE"
-                    else
-                        echo "ERROR: $SKIPFILE not found"
-                        exit 1
-                    fi
-                done
-            fi
+    if [[ ! -f $TRITON_TEST_SELECTFILE && $TEST_UNSKIP = false && -v TRITON_TEST_SUITE ]]; then
+        SKIPFILES="$TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt"
+        [[ -f $SKIPFILES ]] || SKIPFILES=""
+        if [[ -n "$TRITON_EXTRA_SKIPLIST_SUFFIXES" ]]; then
+            IFS=',' read -ra SUFFIXES <<< "$TRITON_EXTRA_SKIPLIST_SUFFIXES"
+            for SUFFIX in "${SUFFIXES[@]}"; do
+                SKIPFILE="$TRITON_TEST_SKIPLIST_DIR/${TRITON_TEST_SUITE}-${SUFFIX}.txt"
+                if [[ -f "$SKIPFILE" ]]; then
+                    SKIPFILES+=";$SKIPFILE"
+                fi
+            done
+        fi
+        if [[ ! -z "$SKIPFILES" ]]; then
             pytest_extra_args+=(
                 "--skip-from-file=$SKIPFILES"
                 "--select-fail-on-missing"
             )
-        else
-            pytest_extra_args+=(
-                "--timeout=500"
-                "--max-worker-restart=500"
-            )
         fi
+    fi
+
+    pytest_extra_args+=(
+        "--timeout=${PYTEST_TIMEOUT:-300}"
+        "--max-worker-restart=9999"
+        "--reruns=${PYTEST_RERUNS:-0}"
+        "--only-rerun=Timeout"
+        "--only-rerun='crashed while running'"
+        "--reruns-delay=1"
+    )
+
+    if [[ ${TRITON_TEST_SHARDS:-0} != 0 && -v TRITON_TEST_SHARD_NUMBER ]]; then
+        pytest_extra_args+=(
+            "--shard-id=$TRITON_TEST_SHARD_NUMBER"
+            "--num-shards=$TRITON_TEST_SHARDS"
+            "--sharding-mode=round-robin"
+        )
     fi
 
     export TEST_UNSKIP
