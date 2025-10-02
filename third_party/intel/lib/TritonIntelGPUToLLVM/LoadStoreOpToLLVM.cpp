@@ -2618,6 +2618,36 @@ struct LoadOpToBlockIOConversion
                             /*requireSurjective=*/true);
 
     bool useVNNIFormat = false;
+    Type packedDPASOperandType;
+    if (hasDotDpasEncoding(tensorType)) {
+      DpasEncodingAttr::OpIdx opIdx = getOpIdx(tensorType);
+      auto dpasLayout = getDpasLayout(tensorType);
+      if (opIdx == DpasEncodingAttr::OpIdx::OperandB) {
+        unsigned elemsPerLanePerDPASInst =
+            product<unsigned>(dpasLayout.getDPASInstShapeB()) / threadsPerWarp;
+        // Block 2D contain at least one DotOp B.
+        if (numElemsPerLoad >= elemsPerLanePerDPASInst) {
+          unsigned opsPerChannel = dpasLayout.getOpsPerChannel();
+          unsigned sysDepth = dpasLayout.getSystolicDepth();
+          if (tileHeight >= (opsPerChannel * sysDepth) &&
+              ((opsPerChannel == 4 && elemSizeInBits == 8) ||
+               (opsPerChannel == 2 && elemSizeInBits == 16))) {
+            // Use the VNNI packing format for DotOp B layout.
+            numValuesPerLoad = numElemsPerLoad / opsPerChannel;
+            packedType = i32_ty;
+            load2DGenXType = LLVM::getVectorType(packedType, numValuesPerLoad);
+            packedDPASOperandType = LLVM::getVectorType(
+                packedType, elemsPerLanePerDPASInst / opsPerChannel);
+            useVNNIFormat = true;
+          } else {
+            packedDPASOperandType =
+                LLVM::getVectorType(IntegerType::get(ctx, packedElemSizeInBits),
+                                    elemsPerLanePerDPASInst / numPackedVals);
+          }
+          unpackedType = LLVM::getVectorType(eltTy, elemsPerLanePerDPASInst);
+        }
+      }
+    }
     SmallVector<Value> unpackedLoadedVals(numElems);
     for (size_t elemIdx = 0; elemIdx < numElems; elemIdx += numElemsPerLoad) {
       unsigned registerIdx = regMapping.apply({{kRegister, elemIdx}})[0].second;
@@ -2698,32 +2728,56 @@ struct LoadOpToBlockIOConversion
 
       unsigned numElemsPerUnpackedType =
           LLVM::getVectorNumElements(unpackedType).getKnownMinValue();
-      size_t opsIdx = 0;
-      Value unpackedVal = b.bitcast(ret, unpackedType);
-      if (otherElems.size()) {
-        assert(maskElems.size() == otherElems.size() &&
-               "Invalid size of the masks");
-        Value other = b.undef(unpackedType);
-        for (size_t i = 0; i < numElemsPerUnpackedType; ++i) {
+      unsigned numValsPerDPASOperand =
+          packedDPASOperandType
+              ? LLVM::getVectorNumElements(packedDPASOperandType)
+                    .getKnownMinValue()
+              : numValuesPerLoad;
+      unsigned numOperandsPerLoad = numValuesPerLoad / numValsPerDPASOperand;
+      for (size_t opsIdx = 0; opsIdx < numOperandsPerLoad; ++opsIdx) {
+        Value unpackedVal;
+        if (numValsPerDPASOperand != numValuesPerLoad) {
+          // Decompose the return value to multiple DPAS operands.
+          SmallVector<int32_t> indices(numValsPerDPASOperand);
+          for (int i = 0; i < numValsPerDPASOperand; ++i) {
+            indices[i] = opsIdx * numValsPerDPASOperand + i;
+          }
+          DenseI32ArrayAttr attr = rewriter.getDenseI32ArrayAttr(indices);
+          Value dpasOperand = rewriter.create<LLVM::ShuffleVectorOp>(
+              loc, packedDPASOperandType, ret, ret, attr);
+
+          unpackedVal = b.bitcast(dpasOperand, unpackedType);
+
+        } else {
+          unpackedVal = b.bitcast(ret, unpackedType);
+        }
+
+        if (otherElems.size()) {
+          assert(maskElems.size() == otherElems.size() &&
+                 "Invalid size of the masks");
+          Value other = b.undef(unpackedType);
+          for (size_t i = 0; i < numElemsPerUnpackedType; ++i) {
+            unsigned registerIdx =
+                regMapping
+                    .apply(
+                        {{kRegister,
+                          elemIdx + opsIdx * numElemsPerUnpackedType + i}})[0]
+                    .second;
+            Value falseVal = otherElems[registerIdx];
+            other = b.insert_element(other, falseVal, b.i32_val(i));
+          }
+          unpackedVal = b.select(pred, unpackedVal, other);
+        }
+
+        for (int i = 0; i < numElemsPerUnpackedType; ++i) {
           unsigned registerIdx =
               regMapping
                   .apply({{kRegister,
                            elemIdx + opsIdx * numElemsPerUnpackedType + i}})[0]
                   .second;
-          Value falseVal = otherElems[registerIdx];
-          other = b.insert_element(other, falseVal, b.i32_val(i));
+          unpackedLoadedVals[registerIdx] =
+              b.extract_element(unpackedVal, b.i32_val(i));
         }
-        unpackedVal = b.select(pred, unpackedVal, other);
-      }
-
-      for (int i = 0; i < numElemsPerUnpackedType; ++i) {
-        unsigned registerIdx =
-            regMapping
-                .apply({{kRegister,
-                         elemIdx + opsIdx * numElemsPerUnpackedType + i}})[0]
-                .second;
-        unpackedLoadedVals[registerIdx] =
-            b.extract_element(unpackedVal, b.i32_val(i));
       }
     }
 
