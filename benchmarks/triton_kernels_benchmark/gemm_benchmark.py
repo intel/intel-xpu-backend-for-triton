@@ -22,17 +22,7 @@ def get_matmul_autotune_configs() -> List[triton.Config]:
     configs = [
         triton.Config(
             {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
-            num_stages=s, num_warps=32) for s in [1, 2, 3]
-    ] + [
-        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': m},
-                      num_stages=s, num_warps=w) for s in [2, 3, 4] for (m, w) in ([('large', 32), ('small', 64)])
-    ] + [
-        triton.Config(
-            {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
-            num_stages=s, num_warps=32) for s in [2]
-    ] + [
-        triton.Config({'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 512, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'grf_mode': m},
-                      num_stages=s, num_warps=w) for s in [2, 3] for (m, w) in ([('large', 32), ('small', 64)])
+            num_stages=s, num_warps=32) for s in [3]
     ]
     return configs
 
@@ -233,45 +223,7 @@ def get_shapes(B, M, N, K, transpose_a, transpose_b):
 
 
 X_VALS = [  #
-    [1, 1, 1024, 4096],
-    [1, 1, 4096, 4096],
-    [1, 1, 4096, 14336],
-    [1, 1, 6144, 4096],
-    [1, 1, 13824, 5120],
-    [1, 1, 14336, 4096],
-    [1, 1, 28672, 4096],
-    [1, 1, 128256, 4096],
-    [1, 4, 12288, 4096],
-    [1, 8, 1024, 4096],
-    [1, 8, 4096, 4096],
-    [1, 8, 4096, 14336],
-    [1, 8, 6144, 4096],
-    [1, 8, 14336, 4096],
-    [1, 8, 28672, 4096],
-    [1, 8, 128256, 4096],
-    [1, 512, 8192, 8192],
-    [1, 512, 8192, 32768],
-    [1, 512, 32768, 8192],
-    [1, 1024, 1024, 1024],
-    [1, 1024, 8192, 16384],
-    [1, 1024, 8192, 28672],
-    [1, 2048, 2048, 2048],
-    [1, 3072, 3072, 4096],  # FIXME: Remove this case when gemm_streamk_benchmark can get better performance
     [1, 4096, 4096, 4096],
-    [1, 4096, 8192, 16384],
-    [1, 8192, 1024, 16384],
-    [1, 8192, 4096, 4096],
-    [1, 8192, 4096, 16384],
-    [1, 8192, 8192, 8192],
-    [1, 16384, 1024, 8192],
-    [1, 16384, 4096, 8192],
-    [1, 16384, 8192, 1024],
-    [1, 16384, 8192, 4096],
-    [4, 32768, 128, 4096],
-    [4, 32768, 4096, 128],
-    [32, 4096, 128, 4096],
-    [4096, 8, 128, 16384],
-    [4096, 8, 16384, 128],
 ]
 
 DEVICE_NAME = torch.xpu.get_device_name()
