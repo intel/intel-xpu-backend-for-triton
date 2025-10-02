@@ -15,15 +15,14 @@ def test_triton_debuginfo_on():
     diLocalVarKey = "LLVM_EXTRACT_DI_LOCAL_VARIABLES"
 
     isEnvSet = lambda env, str: env.get(str, None) is not None
-    hasOrigLineInfo = (  # noqa: F841
-        not isEnvSet(os.environ, lineInfoKey) or os.environ[lineInfoKey].lower() not in ["on", "true", "1"])
+    hasOrigLineInfo = (not isEnvSet(os.environ, lineInfoKey)
+                       or os.environ[lineInfoKey].lower() not in ["on", "true", "1"])
     envs = [
         # expect no dbginfo if unset
         {lineInfoKey: None, diLocalVarKey: None, "hasDbgInfo": False},
         # expect dbginfo based on parent proccess' TRITON_DISABLE_LINE_INFO
-        # FIXME: enable after https://github.com/KhronosGroup/SPIRV-LLVM-Translator/issues/3372 is fixed
-        # {lineInfoKey: None, diLocalVarKey: "1", "hasDbgInfo": hasOrigLineInfo},
-        # {lineInfoKey: "0", diLocalVarKey: "1", "hasDbgInfo": True},
+        {lineInfoKey: None, diLocalVarKey: "1", "hasDbgInfo": hasOrigLineInfo},
+        {lineInfoKey: "0", diLocalVarKey: "1", "hasDbgInfo": True},
         {lineInfoKey: "1", diLocalVarKey: "1", "hasDbgInfo": False},
         {lineInfoKey: "0", diLocalVarKey: "0", "hasDbgInfo": False},
         {lineInfoKey: "1", diLocalVarKey: "0", "hasDbgInfo": False},
