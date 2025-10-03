@@ -785,11 +785,11 @@ struct TritonMatrix2DBlockPrefetchLowering
   LogicalResult
   matchAndRewrite(TritonGEN::Matrix2DBlockPrefetchOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (!isSPVBuiltinAvailable(op)) {
+    //if (!isSPVBuiltinAvailable(op)) {
       // Fallback to GenISA interface.
       rewriter.replaceOp(op, createGenISA2DBlockPrefetch(op, rewriter));
       return success();
-    }
+    //}
 
     MLIRContext *ctx = rewriter.getContext();
     Location loc = op->getLoc();
