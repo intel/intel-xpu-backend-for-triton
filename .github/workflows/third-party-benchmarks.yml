@@ -87,6 +87,29 @@ jobs:
           mkdir reports
           echo "REPORTS=$PWD/reports" >> $GITHUB_ENV
 
+      - name: Install benchmarks
+        if: install-benchmarks
+        run: |
+          cd benchmarks
+          pip install .
+          pip install intel-pti==0.12.4
+          PTI_LIBS_DIR=$(python -c "import sysconfig; print(sysconfig.get_paths()['stdlib']+'/..')")
+          # the output should contain: `libpti.so`, `libpti_metrics.so.0.12.4` and `libpti_view.so.0.12.4`
+          ls $PTI_LIBS_DIR
+          echo "PTI_LIBS_DIR=$PTI_LIBS_DIR" >> $GITHUB_ENV
+
+      - name: Run vllm benchmarks
+        if: ${{ steps.install-benchmarks.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm')) }}
+        run: |
+          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
+          source ./scripts/capture-hw-details.sh
+
+          ./scripts/test-triton.sh --install-vllm --skip-pip-install --skip-pytorch-install
+
+          cd benchmarks
+          python third_party/vllm/batched_moe_benchmark.py
+
+
       - name: Run Liger-Kernel benchmarks
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'liger-kernel')) }}
         run: |
