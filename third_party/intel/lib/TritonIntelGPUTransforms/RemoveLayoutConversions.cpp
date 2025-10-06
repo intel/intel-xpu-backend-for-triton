@@ -3,8 +3,10 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
+#include "mlir/IR/Location.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/Value.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Interfaces/InferTypeOpInterface.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
@@ -183,7 +185,9 @@ private:
 
 void LayoutRematerialization::addRematValue(Value old, Attribute encoding,
                                             Value newV) {
-  LDBG("addRematValue " << old << " encoding " << encoding << " " << newV);
+  LDBG("addRematValue for: " << old);
+  LDBG("  encoding: " << encoding);
+  LDBG("  new: " << newV);
   rematMapping[{old, encoding}] = newV;
   mappedValues[old] = encoding;
 }
@@ -1101,6 +1105,11 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
                                            DenseMap<Value, Attribute> &layout,
                                            ConvertLayoutOp convertOp,
                                            IRMapping &mapping) {
+
+  llvm::errs() << "slice:\n";
+  for (Value v : slice)
+    llvm::errs() << v << "\n";
+
   SetVector<Operation *> opsToRewrite;
   // Keep track of yield operands that need to be duplicated.
   DenseMap<Operation *, SmallVector<int>> yieldOperandsMap;
@@ -1127,8 +1136,9 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
         yieldOperandsMap[ifOp.elseYield()].push_back(operandIdx);
       }
       if (auto forOp = v.getDefiningOp<scf::ForOp>()) {
+        llvm::errs() << "at line: " << __LINE__ << "\n";
         unsigned operandIdx = cast<OpResult>(v).getResultNumber();
-        auto yieldOp = forOp.getBody()->getTerminator();
+        Operation *yieldOp = forOp.getBody()->getTerminator();
         yieldOperandsMap[yieldOp].push_back(operandIdx);
         opsToRewrite.insert(yieldOp);
       }
@@ -1147,6 +1157,11 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
   slice.set_subtract(valuesWithExistingRemat);
   opsToRewrite = multiRootTopologicalSort(opsToRewrite);
 
+  llvm::errs() << "opsToRewrite:\n";
+  for (Operation *op : opsToRewrite) {
+    llvm::errs().indent(2) << *op << "\n";
+  }
+
   // replaceAllUsesWith calls delayed until after initial rewrite.
   // This is required for slice.count(value) to work mid rewrite.
   SmallVector<std::tuple<Value, Value>> replacements;
@@ -1154,18 +1169,53 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
   SmallVector<Operation *> deadOps;
   IRRewriter builder(slice.begin()->getContext());
   for (Operation *op : opsToRewrite) {
+    llvm::errs() << "Processing:\n";
+    llvm::errs().indent(2) << *op << "\n";
+
+    llvm::errs() << "mapping:\n";
+    if (mapping.getValueMap().values().empty())
+      llvm::errs().indent(2) << "Values: empty" << "\n";
+    else {
+      llvm::errs().indent(2) << "Values:\n";
+      for (auto pair : mapping.getValueMap()) {
+        auto first = pair.first;
+        auto second = pair.second;
+        llvm::errs().indent(4);
+        first.printAsOperand(llvm::errs(), {});
+        llvm::errs() << " -> ";
+        second.printAsOperand(llvm::errs(), {});
+        llvm::errs() << "\n";
+      }
+    }
+    if (mapping.getOperationMap().values().empty())
+      llvm::errs().indent(2) << "Operations: empty" << "\n";
+    else {
+      llvm::errs().indent(2) << "Operations:\n";
+      for (auto pair : mapping.getOperationMap()) {
+        auto first = pair.first;
+        auto second = pair.second;
+        llvm::errs().indent(4) << *first << "\n";
+        llvm::errs().indent(4) << " -> " << *second << "\n";
+      }
+    }
+    //    assert(mapping.getBlockMap().values().empty());
+
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-      // Construct the new initialization argument by adding yielded operands
+      llvm::errs() << "at line: " << __LINE__ << "\n";
+      // Construct the new init argument list by adding yielded operands
       // that have been remapped.
       auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
       auto yieldOperands = llvm::to_vector(yieldOp.getOperands());
+
       SmallVector<int> operandsToRewrite = yieldOperandsMap[yieldOp];
       std::sort(operandsToRewrite.begin(), operandsToRewrite.end());
       SmallVector<Value> newOperands;
       for (int operandIdx : operandsToRewrite) {
         Value yieldOperand = yieldOp.getOperand(operandIdx);
-        if (mapping.contains(yieldOperand))
+        if (mapping.contains(yieldOperand)) {
+          llvm::errs() << "at line: " << __LINE__ << "\n";
           newOperands.push_back(mapping.lookup(yieldOperand));
+        }
       }
 
       // Keep a mapping of the operands index to the new operands index.
@@ -1179,21 +1229,41 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
           newOperands.push_back(mapping.lookup(initVal.get()));
         }
       }
+
+      if (newOperands.empty())
+        continue;
+
       // Create a new for loop with the new operands.
       scf::ForOp newForOp = replaceForOpWithNewSignature(
           builder, forOp, newOperands, replacements);
 
+      llvm::errs() << "at line: " << __LINE__ << "\n";
+      llvm::errs() << "newForOp: ";
+      newForOp->dumpPretty();
+      llvm::errs() << "\n";
+
       // Add rematerializations for loop results in the slice.
-      unsigned oldIdx = 0;
-      unsigned newIdx = forOp.getNumResults();
-      for (auto res : forOp.getResults()) {
-        if (slice.count(res)) {
-          mapping.map(forOp.getResult(oldIdx), newForOp.getResult(newIdx));
-          addRematValue(forOp.getResult(oldIdx), layout[res],
-                        newForOp.getResult(newIdx));
-          ++newIdx;
+      if (newForOp->getNumResults() > forOp.getNumResults()) {
+        unsigned oldIdx = 0;
+        unsigned newIdx = forOp.getNumResults();
+        for (auto res : forOp.getResults()) {
+          if (slice.count(res)) {
+            llvm::errs() << "oldIdx: " << oldIdx << "\n";
+            llvm::errs() << "res: " << res << "\n";
+            Value oldRes = forOp.getResult(oldIdx);
+
+            llvm::errs() << "newIdx: " << newIdx << "\n";
+            llvm::errs() << "oldRes: " << oldRes << "\n";
+            Value newRes = newForOp.getResult(newIdx);
+            llvm::errs() << "newRes: " << newRes << "\n";
+
+            mapping.map(forOp.getResult(oldIdx), newForOp.getResult(newIdx));
+            addRematValue(forOp.getResult(oldIdx), layout[res],
+                          newForOp.getResult(newIdx));
+            ++newIdx;
+          }
+          ++oldIdx;
         }
-        ++oldIdx;
       }
 
       deadOps.push_back(forOp.getOperation());
@@ -1256,15 +1326,91 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
     }
     builder.setInsertionPoint(op);
     if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
+      llvm::errs() << "at line: " << __LINE__ << "\n";
       auto yieldOperands = llvm::to_vector(yieldOp.getOperands());
       SmallVector<int> operandsToRewrite = yieldOperandsMap[op];
       // Sort so that operands are added in the same order as the new scf
       // results/arguments.
       std::sort(operandsToRewrite.begin(), operandsToRewrite.end());
       for (int operandIdx : operandsToRewrite) {
-        yieldOperands.push_back(mapping.lookup(yieldOp.getOperand(operandIdx)));
+        Value yieldOperand = yieldOp.getOperand(operandIdx);
+        yieldOperands.push_back(mapping.lookup(yieldOperand));
       }
-      builder.create<scf::YieldOp>(op->getLoc(), yieldOperands);
+      [[maybe_unused]] auto newYieldOp =
+          builder.create<scf::YieldOp>(op->getLoc(), yieldOperands);
+      llvm::errs() << "newYieldOp:" << newYieldOp << "\n";
+
+      auto parentOp = newYieldOp->getParentOp();
+      llvm::errs() << "parentOp:";
+      parentOp->dumpPretty();
+      llvm::errs() << "\n";
+
+      // Fixup the init argument list of the parent loop if necessary.
+      if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
+        unsigned numIterArgs = forOp.getRegionIterArgs().size();
+        unsigned numYieldOperands = newYieldOp->getNumOperands();
+        assert(numIterArgs <= numYieldOperands);
+
+        if (numIterArgs < numYieldOperands) {
+          // We have more yield operands that loop initialization arguments.
+          // Create new "dummy" initialization arguments for loop.
+          SmallVector<Value> newOperands;
+          for (unsigned idx = numIterArgs; idx < numYieldOperands; ++idx) {
+            Value operand = newYieldOp->getOperand(idx);
+            Type operandTy = operand.getType();
+            auto insertPt = builder.saveInsertionPoint();
+            builder.setInsertionPoint(forOp->getPrevNode());
+            auto constantOp = builder.create<arith::ConstantOp>(
+                builder.getUnknownLoc(), operandTy,
+                builder.getZeroAttr(operandTy));
+            builder.restoreInsertionPoint(insertPt);
+            llvm::errs() << "constantOp: " << *constantOp << "\n";
+            newOperands.push_back(constantOp);
+            ++idx;
+          }
+
+          scf::ForOp newForOp = replaceForOpWithNewSignature(
+              builder, forOp, newOperands, replacements);
+
+          llvm::errs() << "newForOp:\n";
+          newForOp->dumpPretty();
+          llvm::errs() << "\n";
+          deadOps.push_back(forOp.getOperation());
+
+          // Add rematerializations for loop results in the slice.
+          if (newForOp->getNumResults() > forOp.getNumResults()) {
+            unsigned oldIdx = 0;
+            unsigned newIdx = forOp.getNumResults();
+            for (auto res : forOp.getResults()) {
+              llvm::errs() << "at line: " << __LINE__ << "\n";
+              llvm::errs() << "res: " << res << "\n";
+
+              llvm::errs() << "slice:\n";
+              for (Value v : slice)
+                llvm::errs() << v << "\n";
+
+              if (slice.count(res)) {
+                llvm::errs() << "oldIdx: " << oldIdx << "\n";
+                llvm::errs() << "res: " << res << "\n";
+                Value oldRes = forOp.getResult(oldIdx);
+
+                llvm::errs() << "newIdx: " << newIdx << "\n";
+                llvm::errs() << "oldRes: " << oldRes << "\n";
+                Value newRes = newForOp.getResult(newIdx);
+                llvm::errs() << "newRes: " << newRes << "\n";
+
+                mapping.map(forOp.getResult(oldIdx),
+                            newForOp.getResult(newIdx));
+                addRematValue(forOp.getResult(oldIdx), layout[res],
+                              newForOp.getResult(newIdx));
+                ++newIdx;
+              }
+              ++oldIdx;
+            }
+          }
+        }
+      }
+
       op->erase();
       continue;
     }
@@ -1279,12 +1425,16 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
                     cvt.getResult());
       continue;
     }
+
     Operation *newOp = builder.clone(*op, mapping);
     for (auto [old, newV] : llvm::zip(op->getResults(), newOp->getResults())) {
+      llvm::errs() << "old: " << old << "\n";
+      llvm::errs() << "newV: " << newV << "\n";
       auto it = layout.find(old);
       if (it == layout.end())
         continue;
       Type oldType = old.getType();
+      llvm::errs() << "oldType: " << oldType << "\n";
       Type newType;
       if (isTensorPointerType(oldType)) {
         auto ptrType = cast<PointerType>(oldType);
@@ -1296,11 +1446,13 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
         newType =
             cast<RankedTensorType>(old.getType()).cloneWithEncoding(it->second);
       }
+      llvm::errs() << "newType: " << newType << "\n";
       newV.setType(newType);
       addRematValue(old, it->second, newV);
     }
   }
-  // Check mapping and see if there are existing convertOps on the old Argument
+  // Check mapping and see if there are existing convertOps on the old
+  // Argument
   convertOp.replaceAllUsesWith(mapping.lookup(convertOp.getSrc()));
   opToDelete.insert(convertOp);
 
@@ -1470,8 +1622,8 @@ void LayoutRematerialization::backwardRematerialization(
   Value oldV = convertOp.getSrc();
   LDBG("check backward remat with source " << oldV << " encoding "
                                            << targetType.getEncoding());
-  // Check to see if there are existing remat'ed values for the pair of oldValue
-  // and encoding. Make sure it dominates the current conversion.
+  // Check to see if there are existing remat'ed values for the pair of
+  // oldValue and encoding. Make sure it dominates the current conversion.
   Value newV = getRematValue(oldV, targetType.getEncoding());
   if (newV && domInfo.properlyDominates(newV, convertOp)) {
     // Replace it with the remat'ed value.
@@ -1583,9 +1735,10 @@ void LayoutRematerialization::backwardRematerialization(
       auto reduceOp = dyn_cast<ReduceOp>(op);
       ReduceOpHelper helper(reduceOp);
       if (!helper.isAssociative()) {
-        // We shouldn't rematerize a no associative reduce op if it has multiple
-        // use chain.
-        LDBG("  skipped rematerialization due to non-associative reduce in the "
+        // We shouldn't rematerize a no associative reduce op if it has
+        // multiple use chain.
+        LDBG("  skipped rematerialization due to non-associative reduce in "
+             "the "
              "slice");
         return;
       }
@@ -1669,14 +1822,14 @@ void LayoutRematerialization::hoistConvertDotOperand(
   if (!canBePipelined(convertOp))
     return;
 
-  // We hoist over any operation that can be done without data movement between
-  // threads We do views and elementwise pure ops for now
+  // We hoist over any operation that can be done without data movement
+  // between threads We do views and elementwise pure ops for now
   auto noDataMovement = [](Operation *op) {
     return (op->hasTrait<OpTrait::Elementwise>() && isMemoryEffectFree(op)) ||
            isa<BroadcastOp, Fp4ToFpOp, ConvertLayoutOp>(op) || isView(op);
   };
-  // Stop the slice as soon as we find an operation that cannot be done without
-  // data movement between threads
+  // Stop the slice as soon as we find an operation that cannot be done
+  // without data movement between threads
   auto stop = std::not_fn(noDataMovement);
 
   SetVector<Value> slice;
@@ -1736,8 +1889,8 @@ void LayoutRematerialization::hoistConvertDotOperand(
   rewriteSlice(innerSlice, layout, convertOp, mapping);
 }
 
-// For convert left we try to hoist them above type extension to reduce the cost
-// of the convert.
+// For convert left we try to hoist them above type extension to reduce the
+// cost of the convert.
 void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     ConvertLayoutOp convertOp) {
   // DotOperand is hoisted by hoistDotOperand
@@ -1839,7 +1992,8 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
 void LayoutRematerialization::hoistConvertIntoConditionals(
     ConvertLayoutOp convertOp) {
   // Take the backward slice of tensor dependencies rooted at the conversion,
-  // stopping at conditionals. This subslice is used to initialize the analysis.
+  // stopping at conditionals. This subslice is used to initialize the
+  // analysis.
   SetVector<Value> slice;
   DenseMap<Value, Attribute> layout;
   auto isIfOp = [](Operation *op) { return isa<scf::IfOp>(op); };
@@ -1848,17 +2002,17 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
                                       layout, isIfOp)))
     return;
 
-  // These are the conditional edges above which conversions should be hoisted.
-  // The value represents the `scf.if` op result and the operand represents the
-  // edge into one of the branches.
+  // These are the conditional edges above which conversions should be
+  // hoisted. The value represents the `scf.if` op result and the operand
+  // represents the edge into one of the branches.
   SmallVector<std::pair<Value, OpOperand *>> hoistAbove;
 
-  // The list of `scf.if` op results in the slice that are not rematerializable.
-  // Hoisting is terminated at these values.
+  // The list of `scf.if` op results in the slice that are not
+  // rematerializable. Hoisting is terminated at these values.
   SmallVector<OpResult> terminals;
 
-  // This loop recurses through the subslices of the backwards dependencies, so
-  // re-query the size of `slice`.
+  // This loop recurses through the subslices of the backwards dependencies,
+  // so re-query the size of `slice`.
   for (unsigned i = 0; i != slice.size(); ++i) {
     Value v = slice[i];
     auto ifOp = v.getDefiningOp<scf::IfOp>();
