@@ -531,7 +531,7 @@ def matmul_ogs(x, w, bias,
         out_matmul_scale = out_matmul_scale.data.view(torch.uint8)
         if has_scratchpad and "mx_out_scale" in memory["scratchpad"]:
             out_matmul_scale = memory["scratchpad"]["mx_out_scale"]
-    out_matmul_has_mx = out_matmul_scale is not None and out_matmul.element_size() == 1
+    out_matmul_has_mx = out_matmul_scale is not None and out_matmul.element_size() > 0
     # matrix multiplication
     flex = precision_config.flex_ctx
     bias_stride = None if bias is None else bias.stride(0)
@@ -700,7 +700,7 @@ def matmul_ogs_torch(x, w, bias,
             if k > 0:
                 out[expt] = matmul_ogs_torch(
                     x[:, start_x:start_x+k], w[start_w:start_w+k, :], None,
-                    None, None, None, None, betas, gammas, None, round_x, round_y
+                    None, None, None, None, betas, gammas, None, round_x, round_y, device=device
                 )
             padded_k = triton.cdiv(k, block_k) * block_k
             start_x += padded_k if inner_routing_data.x_is_padded else k
