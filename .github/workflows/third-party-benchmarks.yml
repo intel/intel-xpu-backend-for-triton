@@ -109,7 +109,7 @@ jobs:
 
           cd benchmarks/third_party/vllm
           python batched_moe_benchmark.py --reports $REPORTS
-          python transform_results.py $REPORTS/moe-gemm.csv $REPORTS/moe-gemm-report.csv --tag $TAG
+          python transform_results.py $REPORTS/moe-gemm-performance.csv $REPORTS/moe-gemm-report.csv --tag $TAG
 
 
       - name: Run Liger-Kernel benchmarks

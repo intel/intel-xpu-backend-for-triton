@@ -487,7 +487,7 @@ def get_batched_mm_benchmark(
     use_fp8_w8a8: bool = False,
     per_act_token_quant: bool = False,
     block_shape: Optional[list[int]] = None,
-    plot_name: str = 'moe-gemm',
+    plot_name: str = 'moe-gemm-performance',
 ):
     """
     Returns a Mark object containing a Benchmark object for batched matrix multiplication.
@@ -644,6 +644,5 @@ if __name__ == '__main__':
         dtype=torch.bfloat16,
         use_fp8_w8a8=(os.getenv('USE_FP8_W8A8', '0') == '1'),
         per_act_token_quant=(os.getenv('PER_ACT_TOKEN_QUANT', '0') == '1'),
-        plot_name='moe-batched-mm-performance',
     )
     _benchmark_mm.run(show_plots=False, print_data=True)
