@@ -224,7 +224,7 @@ def get_do_bench(n_warmup: int, n_repeat: int, quantiles: list):
 
 try:
     # The easiest way to overwrite that eliminates merge conflicts
-    from .benchmark_testing_rewrite import get_do_bench  # noqa: F401
+    from triton_kernels_benchmark.benchmark_testing_rewrite import get_do_bench  # noqa: F401
 except ImportError:
     pass
 
