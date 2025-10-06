@@ -487,7 +487,7 @@ def get_batched_mm_benchmark(
     use_fp8_w8a8: bool = False,
     per_act_token_quant: bool = False,
     block_shape: Optional[list[int]] = None,
-    plot_name: str = 'batched-mm-performance',
+    plot_name: str = 'moe-gemm',
 ):
     """
     Returns a Mark object containing a Benchmark object for batched matrix multiplication.
