@@ -32,7 +32,7 @@ env:
 
 jobs:
   build:
-    name: Triton benchmarks
+    name: Third party benchmarks
     runs-on:
       - linux
       - ${{ inputs.runner_label || 'max1550' }}
