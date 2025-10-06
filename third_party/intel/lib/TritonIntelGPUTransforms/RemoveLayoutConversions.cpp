@@ -1105,10 +1105,11 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
                                            DenseMap<Value, Attribute> &layout,
                                            ConvertLayoutOp convertOp,
                                            IRMapping &mapping) {
-
-  llvm::errs() << "slice:\n";
-  for (Value v : slice)
-    llvm::errs() << v << "\n";
+  LLVM_DEBUG({
+    llvm::errs() << "slice:\n";
+    for (Value v : slice)
+      llvm::errs() << v << "\n";
+  });
 
   SetVector<Operation *> opsToRewrite;
   // Keep track of yield operands that need to be duplicated.
@@ -1136,9 +1137,8 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
         yieldOperandsMap[ifOp.elseYield()].push_back(operandIdx);
       }
       if (auto forOp = v.getDefiningOp<scf::ForOp>()) {
-        llvm::errs() << "at line: " << __LINE__ << "\n";
         unsigned operandIdx = cast<OpResult>(v).getResultNumber();
-        Operation *yieldOp = forOp.getBody()->getTerminator();
+        auto yieldOp = forOp.getBody()->getTerminator();
         yieldOperandsMap[yieldOp].push_back(operandIdx);
         opsToRewrite.insert(yieldOp);
       }
@@ -1157,10 +1157,12 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
   slice.set_subtract(valuesWithExistingRemat);
   opsToRewrite = multiRootTopologicalSort(opsToRewrite);
 
-  llvm::errs() << "opsToRewrite:\n";
-  for (Operation *op : opsToRewrite) {
-    llvm::errs().indent(2) << *op << "\n";
-  }
+  LLVM_DEBUG({
+    llvm::errs() << "opsToRewrite:\n";
+    for (Operation *op : opsToRewrite) {
+      llvm::errs().indent(2) << *op << "\n";
+    }
+  });
 
   // replaceAllUsesWith calls delayed until after initial rewrite.
   // This is required for slice.count(value) to work mid rewrite.
@@ -1169,39 +1171,40 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
   SmallVector<Operation *> deadOps;
   IRRewriter builder(slice.begin()->getContext());
   for (Operation *op : opsToRewrite) {
-    llvm::errs() << "Processing:\n";
-    llvm::errs().indent(2) << *op << "\n";
+    LLVM_DEBUG({
+      llvm::errs() << "Processing:\n";
+      llvm::errs().indent(2) << *op << "\n";
 
-    llvm::errs() << "mapping:\n";
-    if (mapping.getValueMap().values().empty())
-      llvm::errs().indent(2) << "Values: empty" << "\n";
-    else {
-      llvm::errs().indent(2) << "Values:\n";
-      for (auto pair : mapping.getValueMap()) {
-        auto first = pair.first;
-        auto second = pair.second;
-        llvm::errs().indent(4);
-        first.printAsOperand(llvm::errs(), {});
-        llvm::errs() << " -> ";
-        second.printAsOperand(llvm::errs(), {});
-        llvm::errs() << "\n";
+      llvm::errs() << "mapping:\n";
+      if (mapping.getValueMap().values().empty())
+        llvm::errs().indent(2) << "Values: empty" << "\n";
+      else {
+        llvm::errs().indent(2) << "Values:\n";
+        for (auto pair : mapping.getValueMap()) {
+          auto first = pair.first;
+          auto second = pair.second;
+          llvm::errs().indent(4);
+          first.printAsOperand(llvm::errs(), {});
+          llvm::errs() << " -> ";
+          second.printAsOperand(llvm::errs(), {});
+          llvm::errs() << "\n";
+        }
       }
-    }
-    if (mapping.getOperationMap().values().empty())
-      llvm::errs().indent(2) << "Operations: empty" << "\n";
-    else {
-      llvm::errs().indent(2) << "Operations:\n";
-      for (auto pair : mapping.getOperationMap()) {
-        auto first = pair.first;
-        auto second = pair.second;
-        llvm::errs().indent(4) << *first << "\n";
-        llvm::errs().indent(4) << " -> " << *second << "\n";
+      if (mapping.getOperationMap().values().empty())
+        llvm::errs().indent(2) << "Operations: empty" << "\n";
+      else {
+        llvm::errs().indent(2) << "Operations:\n";
+        for (auto pair : mapping.getOperationMap()) {
+          auto first = pair.first;
+          auto second = pair.second;
+          llvm::errs().indent(4) << *first << "\n";
+          llvm::errs().indent(4) << " -> " << *second << "\n";
+        }
       }
-    }
-    //    assert(mapping.getBlockMap().values().empty());
+      //    assert(mapping.getBlockMap().values().empty());
+    });
 
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-      llvm::errs() << "at line: " << __LINE__ << "\n";
       // Construct the new init argument list by adding yielded operands
       // that have been remapped.
       SmallVector<Value> newOperands;
@@ -1234,10 +1237,12 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
       scf::ForOp newForOp = replaceForOpWithNewSignature(
           builder, forOp, newOperands, replacements);
 
-      llvm::errs() << "at line: " << __LINE__ << "\n";
-      llvm::errs() << "newForOp: ";
-      newForOp->dumpPretty();
-      llvm::errs() << "\n";
+      LLVM_DEBUG({
+        llvm::errs() << "at line: " << __LINE__ << "\n";
+        llvm::errs() << "newForOp: ";
+        newForOp->dumpPretty();
+        llvm::errs() << "\n";
+      });
 
       // Add rematerializations for loop results in the slice.
       if (newForOp->getNumResults() > forOp.getNumResults()) {
@@ -1245,12 +1250,16 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
         unsigned newIdx = forOp.getNumResults();
         for (auto res : forOp.getResults()) {
           if (slice.count(res)) {
-            llvm::errs() << "oldIdx: " << oldIdx << "\n";
-            llvm::errs() << "newIdx: " << newIdx << "\n";
+            LLVM_DEBUG({
+              llvm::errs() << "oldIdx: " << oldIdx << "\n";
+              llvm::errs() << "newIdx: " << newIdx << "\n";
+            });
             Value oldRes = forOp.getResult(oldIdx);
             Value newRes = newForOp.getResult(newIdx);
-            llvm::errs() << "oldRes: " << oldRes << "\n";
-            llvm::errs() << "newRes: " << newRes << "\n";
+            LLVM_DEBUG({
+              llvm::errs() << "oldRes: " << oldRes << "\n";
+              llvm::errs() << "newRes: " << newRes << "\n";
+            });
 
             mapping.map(forOp.getResult(oldIdx), newForOp.getResult(newIdx));
             addRematValue(forOp.getResult(oldIdx), layout[res],
@@ -1327,18 +1336,17 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
 
     builder.setInsertionPoint(op);
     if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
-      llvm::errs() << "at line: " << __LINE__ << "\n";
       auto yieldOperands = llvm::to_vector(yieldOp.getOperands());
       SmallVector<int> operandsToRewrite = yieldOperandsMap[op];
       // Sort so that operands are added in the same order as the new scf
       // results/arguments.
       std::sort(operandsToRewrite.begin(), operandsToRewrite.end());
       for (int operandIdx : operandsToRewrite) {
-        Value yieldOperand = yieldOp.getOperand(operandIdx);
-        yieldOperands.push_back(mapping.lookup(yieldOperand));
+        yieldOperands.push_back(mapping.lookup(yieldOp.getOperand(operandIdx)));
       }
       [[maybe_unused]] auto newYieldOp =
           builder.create<scf::YieldOp>(op->getLoc(), yieldOperands);
+#if 0
       llvm::errs() << "newYieldOp:" << newYieldOp << "\n";
 
       auto parentOp = newYieldOp->getParentOp();
@@ -1407,7 +1415,8 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
             }
           }
         }
-      }
+    }
+#endif
 
       op->erase();
       continue;
@@ -1426,13 +1435,10 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
 
     Operation *newOp = builder.clone(*op, mapping);
     for (auto [old, newV] : llvm::zip(op->getResults(), newOp->getResults())) {
-      llvm::errs() << "old: " << old << "\n";
-      llvm::errs() << "newV: " << newV << "\n";
       auto it = layout.find(old);
       if (it == layout.end())
         continue;
       Type oldType = old.getType();
-      llvm::errs() << "oldType: " << oldType << "\n";
       Type newType;
       if (isTensorPointerType(oldType)) {
         auto ptrType = cast<PointerType>(oldType);
@@ -1444,7 +1450,6 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
         newType =
             cast<RankedTensorType>(old.getType()).cloneWithEncoding(it->second);
       }
-      llvm::errs() << "newType: " << newType << "\n";
       newV.setType(newType);
       addRematValue(old, it->second, newV);
     }
