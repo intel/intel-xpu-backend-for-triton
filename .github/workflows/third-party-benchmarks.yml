@@ -88,7 +88,7 @@ jobs:
           echo "REPORTS=$PWD/reports" >> $GITHUB_ENV
 
       - name: Install benchmarks
-        if: install-benchmarks
+        id: install-benchmarks
         run: |
           cd benchmarks
           pip install .
