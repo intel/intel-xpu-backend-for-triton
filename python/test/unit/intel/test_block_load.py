@@ -1,5 +1,10 @@
 import pytest
 import torch
+
+import os
+import signal
+import subprocess
+import sys
 import pathlib
 from functools import partial
 
@@ -207,3 +212,45 @@ def test_block_load_dot_product(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_
     result_tor = fn_tor()
     result_tri = fn_tri()
     torch.testing.assert_close(result_tri, result_tor, atol=1e-2, rtol=1e-3)
+
+
+@pytest.mark.parametrize("elem_size, width, height, pitch, x",
+                         [[8, 16777216, 64, 16777216, 0],  # width <= 24 bits
+                          [8, 32, 64, 128, 0],  # width >= 64
+                          [8, 66, 64, 128, 0],  # width % max(4,elemSize) == 0
+                          [8, 128, 16777216, 128, 0],  # height <= 24 bits
+                          [8, 128, 64, 16777216, 0],  # pitch <= 24 bits
+                          [8, 128, 64, 32, 0],  # pitch >= 64
+                          [8, 128, 64, 70, 0],  # pitch % 16 == 0
+                          [8, 128, 64, 120, 0],  # pitch >= width
+                          [8, 128, 64, 128, 1],  # x*elemSize % 4 == 0 (alignment for 8-bit)
+                          [16, 128, 64, 128, 1],  # x*elemSize % 4 == 0 (alignment for 16-bit)
+                          ])
+@pytest.mark.skipif(not is_xpu(), reason="Block load tests are specific to the XPU backend")
+@pytest.mark.xfail(
+    not (torch.xpu.get_device_capability()['has_subgroup_2d_block_io']
+         and torch.xpu.get_device_capability()['has_subgroup_matrix_multiply_accumulate']),
+    reason="Block loads and/or DPAS not supported on this architecture", run=False)
+def test_block_load_asserts(elem_size, width, height, pitch, x, monkeypatch, tmp_path: pathlib.Path):
+    monkeypatch.setenv("TRITON_INTEL_2DBLOCK_ASSERT", "1")
+
+    dir_path = os.path.dirname(os.path.realpath(__file__))
+    helper_path = os.path.join(dir_path, "block_load_helper.py")
+
+    temp_file = tmp_path / "test_block_load_asserts.ttgir"
+
+    proc = subprocess.run(
+        [
+            sys.executable, helper_path, "run_load_ir",
+            str(temp_file),
+            str(elem_size),
+            str(width),
+            str(height),
+            str(pitch),
+            str(x)
+        ],
+        capture_output=True,
+    )
+
+    rc = proc.returncode
+    assert rc == -signal.SIGABRT
