@@ -9,6 +9,7 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOINTEL_H
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOINTEL_H
 
+#include "Utils/LibCallEmitter.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
@@ -87,8 +88,7 @@ private:
                                  StringRef name, StringRef value,
                                  unsigned addressSpace) const;
 
-  mutable llvm::DenseMap<std::pair<unsigned, StringAttr>, LLVM::GlobalOp>
-      globals;
+  const mlir::triton::gpu::intel::LibCallEmitter emitter;
 };
 
 std::unique_ptr<TargetInfo> createTargetInfo(ModuleOp mod);
