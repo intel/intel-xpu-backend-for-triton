@@ -106,9 +106,9 @@ jobs:
 
           ./scripts/test-triton.sh --install-vllm --skip-pip-install --skip-pytorch-install
 
-          cd benchmarks
-          python third_party/vllm/batched_moe_benchmark.py --reports $REPORTS
-          python third_party/vllm/transform_results.py $REPORTS/moe-gemm.csv $REPORTS/moe-gemm-report.csv --tag $TAG
+          cd vllm
+          python ../benchmarks/third_party/vllm/batched_moe_benchmark.py --reports $REPORTS
+          python ../benchmarks/third_party/vllm/transform_results.py $REPORTS/moe-gemm.csv $REPORTS/moe-gemm-report.csv --tag $TAG
 
 
       - name: Run Liger-Kernel benchmarks
