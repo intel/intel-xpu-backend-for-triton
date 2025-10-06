@@ -1204,18 +1204,15 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
       llvm::errs() << "at line: " << __LINE__ << "\n";
       // Construct the new init argument list by adding yielded operands
       // that have been remapped.
+      SmallVector<Value> newOperands;
       auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
       auto yieldOperands = llvm::to_vector(yieldOp.getOperands());
-
       SmallVector<int> operandsToRewrite = yieldOperandsMap[yieldOp];
       std::sort(operandsToRewrite.begin(), operandsToRewrite.end());
-      SmallVector<Value> newOperands;
       for (int operandIdx : operandsToRewrite) {
         Value yieldOperand = yieldOp.getOperand(operandIdx);
-        if (mapping.contains(yieldOperand)) {
-          llvm::errs() << "at line: " << __LINE__ << "\n";
+        if (mapping.contains(yieldOperand))
           newOperands.push_back(mapping.lookup(yieldOperand));
-        }
       }
 
       // Keep a mapping of the operands index to the new operands index.
@@ -1249,12 +1246,10 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
         for (auto res : forOp.getResults()) {
           if (slice.count(res)) {
             llvm::errs() << "oldIdx: " << oldIdx << "\n";
-            llvm::errs() << "res: " << res << "\n";
-            Value oldRes = forOp.getResult(oldIdx);
-
             llvm::errs() << "newIdx: " << newIdx << "\n";
-            llvm::errs() << "oldRes: " << oldRes << "\n";
+            Value oldRes = forOp.getResult(oldIdx);
             Value newRes = newForOp.getResult(newIdx);
+            llvm::errs() << "oldRes: " << oldRes << "\n";
             llvm::errs() << "newRes: " << newRes << "\n";
 
             mapping.map(forOp.getResult(oldIdx), newForOp.getResult(newIdx));
@@ -1274,9 +1269,13 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
         mapping.map(loopBody.getArgument(m.first + numIndVars),
                     loopBody.getArgument(m.second + numIndVars));
         LLVM_DEBUG({
-          DBGS() << "mapping forOp "
-                 << loopBody.getArgument(m.first + numIndVars) << " to "
-                 << loopBody.getArgument(m.second + numIndVars) << '\n';
+          DBGS() << "mapping forOp ";
+          loopBody.getArgument(m.first + numIndVars)
+              .printAsOperand(llvm::dbgs(), {});
+          llvm::dbgs() << " to ";
+          loopBody.getArgument(m.second + numIndVars)
+              .printAsOperand(llvm::dbgs(), {});
+          llvm::dbgs() << '\n';
         });
         // The result is not in the layout/slice, the argument is.
         Value oldArg = loopBody.getArgument(m.first + numIndVars);
@@ -1287,6 +1286,7 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
       }
       continue;
     }
+
     if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
       SmallVector<Type> newTypes;
       for (auto res : ifOp.getResults()) {
@@ -1324,6 +1324,7 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
       deadOps.push_back(ifOp.getOperation());
       continue;
     }
+
     builder.setInsertionPoint(op);
     if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
       llvm::errs() << "at line: " << __LINE__ << "\n";
@@ -1369,6 +1370,9 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
             ++idx;
           }
 
+          if (newOperands.empty())
+            continue;
+
           scf::ForOp newForOp = replaceForOpWithNewSignature(
               builder, forOp, newOperands, replacements);
 
@@ -1385,18 +1389,12 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
               llvm::errs() << "at line: " << __LINE__ << "\n";
               llvm::errs() << "res: " << res << "\n";
 
-              llvm::errs() << "slice:\n";
-              for (Value v : slice)
-                llvm::errs() << v << "\n";
-
               if (slice.count(res)) {
                 llvm::errs() << "oldIdx: " << oldIdx << "\n";
-                llvm::errs() << "res: " << res << "\n";
-                Value oldRes = forOp.getResult(oldIdx);
-
                 llvm::errs() << "newIdx: " << newIdx << "\n";
-                llvm::errs() << "oldRes: " << oldRes << "\n";
+                Value oldRes = forOp.getResult(oldIdx);
                 Value newRes = newForOp.getResult(newIdx);
+                llvm::errs() << "oldRes: " << oldRes << "\n";
                 llvm::errs() << "newRes: " << newRes << "\n";
 
                 mapping.map(forOp.getResult(oldIdx),
