@@ -1,6 +1,7 @@
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Location.h"
@@ -1106,8 +1107,9 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
                                            DenseMap<Value, Attribute> &layout,
                                            ConvertLayoutOp convertOp,
                                            IRMapping &mapping) {
+  auto mod = convertOp->getParentOfType<ModuleOp>();
   LLVM_DEBUG({
-    llvm::errs() << "slice:\n";
+    llvm::errs() << "rewriteSlice:\n";
     for (Value v : slice)
       llvm::errs() << v << "\n";
   });
@@ -1178,7 +1180,8 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
   LLVM_DEBUG({
     llvm::errs() << "opsToRewrite:\n";
     for (Operation *op : opsToRewrite) {
-      llvm::errs().indent(2) << *op << "\n";
+      llvm::errs().indent(2) << "(" << op << "): ";
+      op->dumpPretty();
     }
     llvm::errs() << "yieldOperandsMap:\n";
     for (auto entry : yieldOperandsMap) {
@@ -1197,7 +1200,9 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
   for (Operation *op : opsToRewrite) {
     LLVM_DEBUG({
       llvm::errs() << "Processing:\n";
-      llvm::errs().indent(2) << *op << "\n";
+      llvm::errs().indent(2) << "(" << op << "): ";
+      op->dumpPretty();
+      llvm::errs() << "\n";
 
       llvm::errs() << "mapping:\n";
       if (mapping.getValueMap().values().empty())
@@ -1240,8 +1245,10 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
         Value yieldOperand = yieldOp.getOperand(operandIdx);
         if (mapping.contains(yieldOperand)) {
           newOperands.push_back(mapping.lookup(yieldOperand));
-          //    llvm::errs() << "YieldOperand: " << yieldOperand
-          //               << " is mapped, adding new init to for loop\n";
+          LLVM_DEBUG({
+            llvm::errs() << "YieldOperand: " << yieldOperand
+                         << " is mapped, adding new init to for loop\n";
+          });
         }
       }
 
@@ -1254,9 +1261,10 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
               forOp.getTiedLoopResult(&initVal).getResultNumber(),
               forOp.getInitArgs().size() + newOperands.size()));
           newOperands.push_back(mapping.lookup(initVal.get()));
-          //          llvm::errs() << "initVal: " << initVal.get()
-          //                       << " is mapped, adding new init to for
-          //                       loop\n";
+          LLVM_DEBUG({
+            llvm::errs() << "initVal: " << initVal.get()
+                         << " is mapped, adding new init to for loop\n ";
+          });
         }
       }
 
@@ -1269,7 +1277,7 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
 
       LLVM_DEBUG({
         llvm::errs() << "at line: " << __LINE__ << "\n";
-        llvm::errs() << "newForOp: ";
+        llvm::errs() << "newForOp (" << &newForOp << "): ";
         newForOp->dumpPretty();
         llvm::errs() << "\n";
       });
@@ -1279,6 +1287,9 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
         unsigned oldIdx = 0;
         unsigned newIdx = forOp.getNumResults();
         for (auto res : forOp.getResults()) {
+          if (newIdx >= newForOp.getNumResults())
+            break;
+
           if (slice.count(res)) {
             LLVM_DEBUG({
               llvm::errs() << "oldIdx: " << oldIdx << "\n";
@@ -1376,16 +1387,20 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
       }
       [[maybe_unused]] auto newYieldOp =
           builder.create<scf::YieldOp>(op->getLoc(), yieldOperands);
-#if 0
 
       auto parentOp = newYieldOp->getParentOp();
       LLVM_DEBUG({
+        unsigned numYieldArgsAdded =
+            newYieldOp.getNumOperands() - yieldOp.getNumOperands();
+        llvm::errs() << "Added " << numYieldArgsAdded
+                     << " operands to the loop yield\n";
         llvm::errs() << "newYieldOp:" << newYieldOp << "\n";
         llvm::errs() << "parentOp:";
         parentOp->dumpPretty();
         llvm::errs() << "\n";
       });
 
+#if 1
       // Fixup the init argument list of the parent loop if necessary.
       if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
         unsigned numIterArgs = forOp.getRegionIterArgs().size();
@@ -1417,7 +1432,11 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
               builder, forOp, newOperands, replacements);
 
           LLVM_DEBUG({
-            llvm::errs() << "newForOp:\n";
+            unsigned numArgsAdded =
+                newForOp.getNumResults() - forOp.getNumResults();
+            llvm::errs() << "Added " << numArgsAdded
+                         << " arguments to the loop\n";
+            llvm::errs() << "newForOp (" << &newForOp << "): ";
             newForOp->dumpPretty();
             llvm::errs() << "\n";
           });
@@ -1429,6 +1448,9 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
             unsigned oldIdx = 0;
             unsigned newIdx = forOp.getNumResults();
             for (auto res : forOp.getResults()) {
+              if (newIdx >= newForOp.getNumResults())
+                break;
+
               LLVM_DEBUG({
                 llvm::errs() << "at line: " << __LINE__ << "\n";
                 llvm::errs() << "res: " << res << "\n";
@@ -1508,6 +1530,11 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
 
   for (Operation *op : deadOps)
     opToDelete.insert(op);
+
+  LLVM_DEBUG({
+    llvm::errs() << "rewriteSlice DONE:\n";
+    mod->dump();
+  });
 }
 
 void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
