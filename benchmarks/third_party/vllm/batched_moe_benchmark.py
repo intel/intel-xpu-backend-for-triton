@@ -250,10 +250,10 @@ def batched_triton_kernel(
     # moving by 1 element in a particular dimension. E.g. `stride_am` is
     # how much to increase `a_ptr` by to get the element one row down
     # (A has M rows).
-    stride_ae: tl.constexpr,
+    stride_ae: tl.int64,
     stride_am: tl.constexpr,
     stride_ak: tl.constexpr,
-    stride_be: tl.constexpr,
+    stride_be: tl.int64,
     stride_bk: tl.constexpr,
     stride_bn: tl.constexpr,
     stride_ce: tl.constexpr,
@@ -299,11 +299,8 @@ def batched_triton_kernel(
     cta_m_size = min(BLOCK_M, e_num_tokens - cta_m_start)
     cta_n_size = min(BLOCK_N, N - cta_n_start)
 
-    # M = M
     a_desc = tl.make_tensor_descriptor(base=a_ptr + expert_id * stride_ae, shape=(e_num_tokens, K),
                                        strides=(stride_am, stride_ak), block_shape=(BLOCK_M, BLOCK_K))
-    # b_desc = tl.make_tensor_descriptor(base=b_ptr + expert_id * stride_be, shape=(N, K), strides=(stride_bn, stride_bk),
-    #                                    block_shape=(BLOCK_N, BLOCK_K))
     b_desc = tl.make_tensor_descriptor(base=b_ptr + expert_id * stride_be, shape=(K, N), strides=(stride_bk, stride_bn),
                                        block_shape=(BLOCK_K, BLOCK_N))
     c_desc = tl.make_tensor_descriptor(base=c_ptr + expert_id * stride_ce, shape=(e_num_tokens, N),
@@ -453,7 +450,7 @@ def invoke_moe_batched_triton_kernel_td(A: torch.Tensor,  # [E, max_tokens, K]
 BATCHED_MM_X_VALS = [(E, M, K, N) for E in [8, 32] for M in [32, 224, 512] for K in [128, 1024] for N in [128, 1024]]
 BATCHED_MM_X_VALS = [
     # (256, 16, 7168, 2048 * 2),
-    # (256, 16, 7168, 2048),
+    (256, 256, 7168, 2048),
     # (256, 16, 7168, 2048),
     # (256, 2, 5000, 2024),
     #     (256, 16, 2048, 7168),
@@ -550,18 +547,6 @@ def get_batched_mm_benchmark(
             block_shape=block_shape,
             per_act_token_quant=per_act_token_quant,
         )
-        # A_q[:] = 0
-        # A_q[:, :, :] = 1
-
-        # B_q[:] = 0
-        # B_q[:, 0, 0] = 1
-
-        # A_q[:] = 0
-        # A_q[:, 0, 0] = 1
-
-        # B_q[:] = 0
-        # B_q[:, 0, 0] = 0
-
         quantiles = [0.5, 0.0, 1.0]
 
         C = torch.zeros(out_shape, device='xpu', dtype=act_dtype)
