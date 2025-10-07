@@ -700,7 +700,7 @@ def matmul_ogs_torch(x, w, bias,
             if k > 0:
                 out[expt] = matmul_ogs_torch(
                     x[:, start_x:start_x+k], w[start_w:start_w+k, :], None,
-                    None, None, None, None, betas, gammas, None, round_x, round_y
+                    None, None, None, None, betas, gammas, None, round_x, round_y, device
                 )
             padded_k = triton.cdiv(k, block_k) * block_k
             start_x += padded_k if inner_routing_data.x_is_padded else k

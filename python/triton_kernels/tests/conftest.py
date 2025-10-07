@@ -37,4 +37,5 @@ def pytest_configure(config):
     if worker_id is not None and worker_id.startswith("gw"):
         import torch
         gpu_id = int(worker_id[2:])  # map gw0 → 0, gw1 → 1, ...
-        os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id % torch.cuda.device_count())
+        if torch.cuda.is_available():
+            os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id % torch.cuda.device_count())
