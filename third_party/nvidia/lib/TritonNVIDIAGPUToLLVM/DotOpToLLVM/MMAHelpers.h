@@ -339,12 +339,12 @@ private:
             default:
               llvm_unreachable("Unsupported swizzling size.");
             }
-            return {.descriptor = desc,
-                    .swizzlingByteWidth = swizzling,
-                    .bitwidth = bitwidth,
-                    .twoCTAs = twoCTAs,
-                    .transposed = transposed,
-                    .fp4Padded = fp4Padded};
+            return {/* .descriptor = */ desc,
+                    /* .swizzlingByteWidth = */ swizzling,
+                    /* .bitwidth = */ bitwidth,
+                    /* .twoCTAs = */ twoCTAs,
+                    /* .transposed = */ transposed,
+                    /* .fp4Padded = */ fp4Padded};
           }
         }
       }
