@@ -96,6 +96,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::registerConvertTritonToTritonGPUPass();
   mlir::triton::intel::registerTritonIntelTensorDescToBlockPointer();
   mlir::triton::intel::registerTritonIntelRemoveMasks();
+  mlir::triton::intel::registerTritonIntelFuseReshape();
   mlir::triton::registerRelayoutTritonGPUPass();
   mlir::triton::gpu::registerAllocateSharedMemoryPass();
   mlir::triton::gpu::registerTritonGPUAllocateWarpGroups();

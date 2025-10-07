@@ -199,6 +199,7 @@ class XPUBackend(BaseBackend):
         passes.common.add_cse(pm)
         passes.common.add_licm(pm)
         intel.passes.ttir.add_remove_masks(pm)
+        intel.passes.ttir.add_fuse_Reshape(pm)
         passes.common.add_canonicalizer(pm)
         passes.ttir.add_combine(pm)
         passes.ttir.add_reorder_broadcast(pm)

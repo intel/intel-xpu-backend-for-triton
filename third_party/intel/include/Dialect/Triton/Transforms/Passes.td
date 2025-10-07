@@ -44,4 +44,28 @@ def TritonIntelRemoveMasks
   ];
 }
 
+def TritonIntelFuseReshape
+    : Pass<"triton-intel-fuse-reshape", "mlir::ModuleOp"> {
+  let summary = "Fuse a tt.reshape operation with a tt.load operation";
+
+  let description = [{
+    This pass attempts to fuse a tt.reshape operation with a tt.load operation using a block pointer.
+    For example, given:
+        %q_27 = arith.constant 1 : i64
+        %ptr = tt.make_tensor_ptr %q_view, [%q, %q_23, %q_24], [%q_25, %q_26, %q_27], [%offset_5, %offset_1_13, %q_28]
+                                  {order = array<i32: 2, 1, 0>} : <tensor<1x512x64xf16>>
+        %load = tt.load %ptr {boundaryCheck = array<i32: 1, 2>} : !tt.ptr<tensor<1x512x64xf16>>
+        %reshape = tt.reshape %load : tensor<1x512x64xf16> -> tensor<512x64xf16>
+    The transformation would drops the reshape operation and adjust the make_tensor_ptr operation as follows:
+        %q_27 = arith.constant 1 : i64
+        %ptr = tt.make_tensor_ptr %q_view, [%q_23, %q_24], [%q_26, %q_27], [%offset_1_13, %offset_5*%q_25+%q_28]
+                                  {order = array<i32: 1, 0>} : <tensor<512x64xf16>>
+        %load = tt.load %ptr {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<512x64xf16>>
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::TritonDialect"
+  ];
+}
+
 #endif // TRITON_DIALECT_TRITON_INTEL_TRANSFORMS_PASSES
