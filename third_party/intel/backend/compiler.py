@@ -46,7 +46,6 @@ class XPUOptions:
     backend_name: str = 'intel'
     sanitize_overflow: bool = False
     generate_native_code: bool = False
-    advanced_path: bool = False
     enable_tile_load_linear_layout: bool = True
     arch: str = None
     # FIXME: enable for XPU: https://github.com/intel/intel-xpu-backend-for-triton/issues/4954
@@ -91,28 +90,6 @@ def min_dot_size(device_props: dict):
 class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     device_props: dict = {}
     instrumentation = None
-
-    # AdvancedPath pass pipeline for kernels using block pointers.
-    class AdvancedPath:
-
-        @staticmethod
-        def make_ttgir(mod, metadata, opt):
-            pm = ir.pass_manager(mod.context)
-            pm.enable_debug()
-
-            intel.passes.ttir.add_convert_to_ttgpuir_warp(pm, opt.num_warps)
-            inject_split_barriers = False
-            intel.passes.ttgpuir.add_prefetch_block(pm, opt.num_stages, inject_split_barriers)
-            intel.passes.ttgpuir.add_distribute_to_warps(pm)
-            passes.common.add_canonicalizer(pm)
-            passes.common.add_cse(pm)
-            intel.passes.ttgpuir.add_match_target_size(pm)
-            passes.common.add_canonicalizer(pm)
-            passes.common.add_cse(pm)
-            intel.passes.ttgpuir.add_schedule_load(pm)
-            passes.common.add_symbol_dce(pm)
-            pm.run(mod, 'make_ttgir_adv_path')
-            return mod
 
     @staticmethod
     def supports_target(target: tuple):
@@ -255,10 +232,6 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         opt.warp_size = intel.get_threads_per_warp(mod)
         XPUBackend.validate_options(opt, properties)
 
-        if (properties["has_subgroup_2d_block_io"] and properties["has_subgroup_matrix_multiply_accumulate"]
-                and (knobs.intel.advanced_path or opt.advanced_path)):
-            return XPUBackend.AdvancedPath.make_ttgir(mod, metadata, opt)
-
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.ttir.add_convert_to_ttgpuir(pm, "xpu", opt.num_warps, opt.warp_size, opt.num_ctas)
@@ -325,17 +298,14 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         pm.enable_debug()
 
         passes.convert.add_scf_to_cf(pm)
+        passes.gluon.add_inliner(pm)
         passes.convert.add_index_to_llvmir(pm)
-        # FIXME: Advanced path uses custom type conversion and needs hacky
-        # solutions for SLM allocation, so this will crash on some operations
-        # being used, e.g., convert_layout.
-        if not knobs.intel.reduce_transpose:
-            intel.passes.ttgpuir.add_allocate_shared_memory(pm)
+        intel.passes.ttgpuir.add_allocate_shared_memory(pm)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
         # instrumentation point here so we can override IRs above (e.g., ttir and ttgir)
         if XPUBackend.instrumentation:
             XPUBackend.instrumentation.patch("ttgpuir_to_llvmir", pm, mod.context)
-        intel.passes.ttgpuir.add_to_llvmir(pm, options.advanced_path, options.enable_tile_load_linear_layout)
+        intel.passes.ttgpuir.add_to_llvmir(pm, options.enable_tile_load_linear_layout)
         intel.passes.ttgpuir.add_gen_to_llvm(pm)
         passes.common.add_canonicalizer(pm)
         intel.passes.ttgpuir.add_rewrite_stack_ptr(pm)

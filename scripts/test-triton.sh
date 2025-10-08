@@ -447,7 +447,6 @@ run_tutorial_tests() {
     "08-grouped-gemm"
     "09-persistent-matmul"
     "10-experimental-block-pointer"
-    "10i-experimental-block-pointer"
   )
   if [ "${TEST_TUTORIAL_FA:-false}" = true ]; then
     tutorials=(
@@ -668,7 +667,9 @@ run_triton_kernels_tests() {
     # FIXME: reconsider in the future
     max_procs=1
   else
-    max_procs=${PYTEST_MAX_PROCESSES:-4}
+    # Using any other number of processes results in an error on the PVC due to insufficient resources.
+    # FIXME: reconsider in the future
+    max_procs=4
   fi
 
   TRITON_TEST_SUITE=triton_kernels \

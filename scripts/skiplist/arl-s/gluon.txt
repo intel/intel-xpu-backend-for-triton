@@ -1,5 +1,3 @@
-# https://github.com/intel/intel-xpu-backend-for-triton/issues/5147
-python/test/gluon/test_core.py::test_2d_tensor_early_return
 # https://github.com/intel/intel-xpu-backend-for-triton/issues/5148
 python/test/gluon/test_lowerings.py::test_histogram[2048-2-src_layout3-dst_layout3]
 python/test/gluon/test_lowerings.py::test_histogram[32-32-src_layout4-dst_layout4]
