@@ -25,8 +25,8 @@ function libigc_version {
     fi
     if dpkg-query --show libigc2 &> /dev/null; then
         dpkg-query --show --showformat='${version}\n' libigc2 | grep -oP '.+(?=~)'
-    elif dpkg-query --show libigc1 &> /dev/null; then
-        dpkg-query --show --showformat='${version}\n' libigc1 | grep -oP '.+(?=~)'
+    elif dpkg-query --show intel-ocloc &> /dev/null; then
+        dpkg-query --show --showformat='${version}\n' intel-ocloc | grep -oP '1:\K.+'
     else
         echo "Not Installed"
     fi
@@ -39,8 +39,8 @@ function level_zero_version {
     fi
     if dpkg-query --show libze1 &> /dev/null; then
         dpkg-query --show --showformat='${version}\n' libze1 | grep -oP '.+(?=~)'
-    elif dpkg-query --show intel-level-zero-gpu &> /dev/null; then
-        dpkg-query --show --showformat='${version}\n' intel-level-zero-gpu | grep -oP '.+(?=~)'
+    elif dpkg-query --show intel-ocloc libze-intel-gpu1 &> /dev/null; then
+        dpkg-query --show --showformat='${version}\n' libze-intel-gpu1 | grep -oP '1:\K.+'
     else
         echo "Not Installed"
     fi
@@ -54,13 +54,14 @@ function agama_version {
     if dpkg-query --show libigc2 &> /dev/null; then
         dpkg-query --show --showformat='${version}\n' libigc2 | sed 's/.*-\(.*\)~.*/\1/'
     elif dpkg-query --show libigc1 &> /dev/null; then
-        dpkg-query --show --showformat='${version}\n' libigc1 | sed 's/.*-\(.*\)~.*/\1/'
+        dpkg-query --show --showformat='${version}\n' libigc1 | grep -oP '1:\K.+'
     else
         echo "Not Installed"
     fi
 }
 
 function gpu_device {
+    local PrintDebugSettings=0
     # Allow overriding GPU_DEVICE when other methods are unreliable (i.e. if reported name is too common)
     if [[ -v GPU_DEVICE ]]; then
         echo "$GPU_DEVICE"
@@ -87,6 +88,29 @@ function gpu_device {
     fi
 }
 
+function add_simulator_details {
+    if [ -d /jgssim ]; then
+        SIMULATOR_DIR="/jgssim"
+    elif [ -d /crisim ]; then
+        SIMULATOR_DIR="/crisim"
+    fi
+
+    if [ -v SetCommandStreamReceiver ]; then
+        export SIMULATION_MODE=CORAL
+    elif [ -v L0SIM_GRITS_PATH ]; then
+        export SIMULATION_MODE=GRITS
+    fi
+
+    if [ -v SIMULATOR_DIR ]; then
+        SIMULATOR_VERSION=$(${SIMULATOR_DIR}/xesim/AubLoad | grep -oP 'FCS Fulsim Version \K.*?(?= )')
+        export GPU_DEVICE=${GPU_DEVICE}-${SIMULATOR_VERSION}
+    fi
+
+    if [ -v SIMULATION_MODE ]; then
+        export GPU_DEVICE=${GPU_DEVICE}-${SIMULATION_MODE}
+    fi
+}
+
 # Use LIBIGC1_VERSION also for libigc2 for backward compatibility.
 export LIBIGC1_VERSION="$(libigc_version)"
 
@@ -96,6 +120,7 @@ export LEVEL_ZERO_VERSION="$(level_zero_version)"
 export AGAMA_VERSION="$(agama_version)"
 
 export GPU_DEVICE="$(gpu_device)"
+add_simulator_details
 
 if python -c "import torch" &> /dev/null; then
     export TORCH_VERSION=$(python -c "import torch; print(torch.__version__)")
