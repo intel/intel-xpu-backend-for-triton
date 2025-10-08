@@ -3,8 +3,10 @@
 #include "intel/include/Utils/Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Verifier.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -21,17 +23,17 @@ namespace mlir::triton::intel {
 namespace {
 
 // Transform:
-//   %q_27 = arith.constant 1 : i64
+//   %one = arith.constant 1 : i64
 //   %ptr = make_tensor_ptr %q_view, [%q, %q_23, %q_24],
-//            [%q_25, %q_26, %q_27], [%offset_5, %offset_1_13, %q_28]
+//            [%q_25, %q_26, %one], [%offset_5, %offset_1_13, %q_28]
 //            {order = array<i32: 2, 1, 0>} : <tensor<1x512x64xf16>>
 //   %load = tt.load %ptr {boundaryCheck = array<i32: 1, 2>}
 //         : !tt.ptr<tensor<1x512x64xf16>>
 //   %a = tt.reshape %load : tensor<1x512x64xf16> -> tensor<512x64xf16>
 //   tt.dot(%a, ...)
 // into:
-//   %q_27 = arith.constant 1 : i64
-//   %ptr = make_tensor_ptr %q_view, [%q_23, %q_24], [%q_26, %q_27],
+//   %one = arith.constant 1 : i64
+//   %ptr = make_tensor_ptr %q_view, [%q_23, %q_24], [%q_26, %one],
 //            [%offset_1_13, %offset_5*%q_25+%q_28]
 //            {order = array<i32: 1, 0>} : <tensor<512x64xf16>>
 //   %a = tt.load %ptr {boundaryCheck = array<i32: 0, 1>}
@@ -219,11 +221,30 @@ private:
   // Candidate is of the form:
   //   tt.dot(tt.reshape(tt.load(..., )))
   // Where:
-  //  - the reshape result is used by the dot operation, and
-  //  - the reshape operation uses the result of a 2-dim load operation on a
-  //    block pointer (transitively) defined by a `make_tensor_ptr` operation.
+  //  - the reshape operation drops the outermost dimension of the operand,
+  //    which is a 3-dim tensor with outermost dimension extent equal to one
+  //  - the reshape result is used by the dot operation
+  //  - the reshape operation uses the result of a 3-dim load operation on a
+  //    block pointer (transitively) defined by a `make_tensor_ptr` operation
+  //  - the block pointer points to a tensor that has extent equal to 1 on the
+  //    outermost dimension
   bool isCandidate(tt::ReshapeOp reshapeOp) const {
     assert(reshapeOp && "Expecting a valid reshape operation");
+
+    ArrayRef<int64_t> reshapeOperandShape =
+        reshapeOp.getSrc().getType().getShape();
+    if (reshapeOperandShape.size() != 3 || reshapeOperandShape.front() != 1)
+      return false;
+
+    ArrayRef<int64_t> reshapeResultShape = reshapeOp.getType().getShape();
+    if (reshapeResultShape.size() != reshapeOperandShape.size() - 1)
+      return false;
+
+    for (auto pair :
+         llvm::zip(reshapeOperandShape.drop_front(), reshapeResultShape)) {
+      if (std::get<0>(pair) != std::get<1>(pair))
+        return false;
+    }
 
     // Check whether \p reshapeOp is used by a `dotOp` (directly or indirectly).
     auto usedByDotOp = [](tt::ReshapeOp reshapeOp) {
@@ -257,15 +278,43 @@ private:
     if (!tt::isTensorPointerType(ptrType))
       return false;
 
-    auto tensorType =
-        cast<RankedTensorType>(cast<tt::PointerType>(ptrType).getPointeeType());
-    if (tensorType.getRank() != 3 || tensorType.getDimSize(0) != 1)
-      return false;
-
     std::optional<tt::MakeTensorPtrOp> makeTensorPtrOp =
         triton::intel::findDefiningMakeTensorPtrOp(loadOp.getPtr());
+    if (!makeTensorPtrOp)
+      return false;
 
-    return makeTensorPtrOp.has_value();
+    tt::PointerType ptrTy = makeTensorPtrOp->getResult().getType();
+    auto tensorTy = cast<RankedTensorType>(ptrTy.getPointeeType());
+    assert((tensorTy.getRank() == 3 && tensorTy.getDimSize(0) == 1) &&
+           "Unexpected tensor type");
+
+    // Ensure the outermost dimension is the one with highest order.
+    ArrayRef<int> order = makeTensorPtrOp->getOrder();
+    if (order.front() != tensorTy.getRank() - 1)
+      return false;
+
+    // Ensure that the innermost stride is one.
+    unsigned innermostDimIdx = 0;
+    for (int i : order) {
+      if (i == 0)
+        break;
+      ++innermostDimIdx;
+    }
+
+    auto strides = makeTensorPtrOp->getStrides();
+    Value innermostStride = strides[innermostDimIdx];
+    if (!innermostStride.getDefiningOp() ||
+        !isa<arith::ConstantIntOp>(innermostStride.getDefiningOp()))
+      return false;
+
+    auto integerCst =
+        cast<arith::ConstantIntOp>(innermostStride.getDefiningOp());
+    if (integerCst.value() != 1)
+      return false;
+
+    // Ensure the load boundary check doesn't check the outermost dimension.
+    return llvm::none_of(loadOp.getBoundaryCheck(),
+                         [&](int val) { return val == 0; });
   }
 
   // Prune chains that cannot be handled during fusion. For example, operations
