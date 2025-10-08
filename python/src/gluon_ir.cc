@@ -16,7 +16,6 @@
 #include "triton/Tools/GenericSwizzling.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
-#include <iostream>
 
 using namespace mlir;
 namespace py = pybind11;

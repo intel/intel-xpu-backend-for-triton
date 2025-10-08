@@ -109,7 +109,6 @@ def _reduce_linear_layouts():
 
 def _reduce_layouts():
     shapes = [(128, 16), (32, 128), (32, 32), (16, 16)]
-    print("######################################### Layouts GEN")
     layouts = _filter_layouts([
         # FIXME: Do not enable these tests until the SLPVectorizor problem with nvptx target has been resolved
         # SliceLayout(dim=1, parent=BlockedLayout([1, 4, 1], [1, 8, THREADS_PER_WARP // 8], [1, 1, 4], [2, 0, 1], [1, 1, 1], [1, 1, 1], [0, 1, 2])),
