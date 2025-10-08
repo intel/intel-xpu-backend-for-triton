@@ -7,6 +7,7 @@ import re
 import subprocess
 import sysconfig
 import shutil
+import pathlib
 
 from dataclasses import dataclass
 from contextlib import contextmanager
@@ -401,6 +402,7 @@ class cache_knobs(base_knobs):
 class compilation_knobs(base_knobs):
     override: env_bool = env_bool("TRITON_KERNEL_OVERRIDE")
     dump_ir: env_bool = env_bool("TRITON_KERNEL_DUMP")
+    dump_ir_extract_di_local_variables: env_bool = env_bool("LLVM_EXTRACT_DI_LOCAL_VARIABLES")
     store_binary_only: env_bool = env_bool("TRITON_STORE_BINARY_ONLY")
     always_compile: env_bool = env_bool("TRITON_ALWAYS_COMPILE")
     # TODO: Use enum to constrain / 'typecheck' the values
@@ -548,9 +550,7 @@ class intel_knobs(base_knobs):
     dump_shader_info: env_bool = env_bool("TRITON_INTEL_ENABLE_IGC_SHADER_DUMP", False)
     gen_native_code: env_bool = env_bool("TRITON_XPU_GEN_NATIVE_CODE", False)
     tile_load_ll: env_bool = env_bool("TRITON_XPU_ENABLE_TILE_LOAD_LINEAR_LAYOUT", True)
-    advanced_path: env_bool = env_bool("TRITON_INTEL_ADVANCED_PATH", False)
     opt_reduction_locality: env_bool = env_bool("TRITON_INTEL_OPTIMIZE_REDUCTION_LOCALITY", False)
-    reduce_transpose: env_bool = env_bool("TRITON_INTEL_REDUCE_TRANSPOSE", False)
     disable_igc_opt: env_bool = env_bool("TRITON_INTEL_DISABLE_IGC_OPT", False)
 
     dump_spirv_kernel_args: env_opt_str = env_opt_str("TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS")
@@ -582,7 +582,9 @@ class amd_knobs(base_knobs):
 
 
 class proton_knobs(base_knobs):
-    cupti_lib_dir: env_opt_str = env_opt_str("TRITON_CUPTI_LIB_PATH")
+    cupti_lib_dir: env_str = env_str(
+        "TRITON_CUPTI_LIB_PATH",
+        str(pathlib.Path(__file__).parent.absolute() / "backends" / "nvidia" / "lib" / "cupti"))
     enable_nvtx: env_bool = env_bool("TRITON_ENABLE_NVTX", True)
 
 

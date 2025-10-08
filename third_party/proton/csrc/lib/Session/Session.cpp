@@ -15,11 +15,14 @@ namespace proton {
 
 namespace {
 
-Profiler *makeProfiler(const std::string &name, const std::string &path,
-                       void *sycl_queue = nullptr,
+Profiler *makeProfiler(const std::string &name, void *sycl_queue = nullptr,
                        const std::string &utils_cache_path = "") {
   if (proton::toLower(name) == "cupti") {
-    return &CuptiProfiler::instance().setLibPath(path);
+    return &CuptiProfiler::instance();
+  } else if (proton::toLower(name) == "roctracer") {
+    return &RoctracerProfiler::instance();
+  } else if (proton::toLower(name) == "instrumentation") {
+    return &InstrumentationProfiler::instance();
   }
 #ifdef TRITON_BUILD_PROTON_XPU
   if (proton::toLower(name) == "xpupti") {
@@ -28,12 +31,6 @@ Profiler *makeProfiler(const std::string &name, const std::string &path,
                 .setUtilsCachePath(utils_cache_path);
   }
 #endif
-  if (proton::toLower(name) == "roctracer") {
-    return &RoctracerProfiler::instance();
-  }
-  if (proton::toLower(name) == "instrumentation") {
-    return &InstrumentationProfiler::instance();
-  }
   throw std::runtime_error("Unknown profiler: " + name);
 }
 
@@ -103,11 +100,10 @@ Profiler *SessionManager::validateAndSetProfilerMode(Profiler *profiler,
 
 std::unique_ptr<Session> SessionManager::makeSession(
     size_t id, const std::string &path, const std::string &profilerName,
-    const std::string &profilerPath, const std::string &contextSourceName,
-    const std::string &dataName, const std::string &mode, void *sycl_queue,
+    const std::string &contextSourceName, const std::string &dataName,
+    const std::string &mode, void *sycl_queue,
     const std::string &utils_cache_path) {
-  auto *profiler =
-      makeProfiler(profilerName, profilerPath, sycl_queue, utils_cache_path);
+  auto *profiler = makeProfiler(profilerName, sycl_queue, utils_cache_path);
   profiler = validateAndSetProfilerMode(profiler, mode);
   auto contextSource = makeContextSource(contextSourceName);
   auto data = makeData(dataName, path, contextSource.get());
@@ -179,7 +175,6 @@ void SessionManager::removeSession(size_t sessionId) {
 
 size_t SessionManager::addSession(const std::string &path,
                                   const std::string &profilerName,
-                                  const std::string &profilerPath,
                                   const std::string &contextSourceName,
                                   const std::string &dataName,
                                   const std::string &mode, void *sycl_queue,
@@ -191,9 +186,9 @@ size_t SessionManager::addSession(const std::string &path,
     return sessionId;
   }
   auto sessionId = nextSessionId++;
-  auto newSession = makeSession(sessionId, path, profilerName, profilerPath,
-                                contextSourceName, dataName, mode, sycl_queue,
-                                utils_cache_path);
+  auto newSession =
+      makeSession(sessionId, path, profilerName, contextSourceName, dataName,
+                  mode, sycl_queue, utils_cache_path);
   sessionPaths[path] = sessionId;
   sessions[sessionId] = std::move(newSession);
   return sessionId;

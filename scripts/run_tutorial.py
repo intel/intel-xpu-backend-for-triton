@@ -58,9 +58,6 @@ def run_tutorial(path: pathlib.Path) -> float:
     if not spec or not spec.loader:
         raise AssertionError(f'Failed to load module from {path}')
     module = importlib.util.module_from_spec(spec)
-    # Set __file__ to the absolute name, a workaround for 10i-experimental-block-pointer, which
-    # uses dirname of its location to find 10-experimental-block-pointer.
-    module.__file__ = path.resolve().as_posix()
     # Reset sys.argv because some tutorials, such as 09, parse their command line arguments.
     sys.argv = [str(path)]
     start_time = datetime.datetime.now()

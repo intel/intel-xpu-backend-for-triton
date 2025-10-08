@@ -90,14 +90,10 @@ Note that this feature is still experimental and may change in the future.
 # Final Result
 # ------------
 
-import os
-
 import torch
 
 import triton
 import triton.language as tl
-
-SMALL_GRF = os.getenv('TRITON_INTEL_ADVANCED_PATH', '0') == '0'
 
 
 @triton.autotune(
@@ -107,18 +103,14 @@ SMALL_GRF = os.getenv('TRITON_INTEL_ADVANCED_PATH', '0') == '0'
             num_stages=s, num_warps=32) for s in [1, 2, 3]
     ] + [
         triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': m},
-                      num_stages=s, num_warps=w)
-        for s in [2, 3, 4]
-        for (m, w) in ([('large', 32), ('small', 64)] if SMALL_GRF else [('large', 32)])
+                      num_stages=s, num_warps=w) for s in [2, 3, 4] for (m, w) in ([('large', 32), ('small', 64)])
     ] + [
         triton.Config(
             {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
             num_stages=s, num_warps=32) for s in [2]
     ] + [
         triton.Config({'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 512, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'grf_mode': m},
-                      num_stages=s, num_warps=w)
-        for s in [2, 3]
-        for (m, w) in ([('large', 32), ('small', 64)] if SMALL_GRF else [('large', 32)])
+                      num_stages=s, num_warps=w) for s in [2, 3] for (m, w) in ([('large', 32), ('small', 64)])
     ],
     key=['M', 'N', 'K'],
 )
@@ -349,9 +341,7 @@ INT8_TYPES = [(torch.int8, torch.int32, torch.int32)]
 FP8_TYPES = [(torch.float8_e4m3fn, torch.float32, torch.float16)]
 
 torch.manual_seed(0)
-for dtype, accum_dtype, res_dtype in FP16_TYPES + FP32_TYPES + INT8_TYPES + (FP8_TYPES if os.getenv(
-        'TRITON_INTEL_ADVANCED_PATH', '0') == '0' else []):
-
+for dtype, accum_dtype, res_dtype in FP16_TYPES + FP32_TYPES + INT8_TYPES + FP8_TYPES:
     for shape in [(512, 512), (4, 512, 512)]:
         assert shape[-1] == shape[-2], "Only square matrices are supported"
         if dtype.is_floating_point:
