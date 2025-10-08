@@ -27,7 +27,7 @@ class XPUOptions:
     num_ctas: int = 1
     num_stages: int = 2
     cluster_dims: tuple = (1, 1, 1)
-    threads_per_warp: int = 32
+    warp_size: int = 32
     optimize_epilogue: bool = False
     enable_fp_fusion: bool = True
     launch_cooperative_grid: bool = False
@@ -111,7 +111,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             passes.common.add_cse(pm)
             intel.passes.ttgpuir.add_schedule_load(pm)
             passes.common.add_symbol_dce(pm)
-            pm.run(mod)
+            pm.run(mod, 'make_ttgir_adv_path')
             return mod
 
     @staticmethod
@@ -183,10 +183,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
     @staticmethod
     def validate_options(opt, properties):
-        # Check threads_per_warp and num_threads are within limits.
-        if opt.threads_per_warp not in properties['sub_group_sizes']:
+        # Check warp_size and num_threads are within limits.
+        if opt.warp_size not in properties['sub_group_sizes']:
             raise ValueError(
-                f"threads_per_warp={opt.threads_per_warp} is unsupported for the target (supported values are {properties['sub_group_sizes']})"
+                f"warp_size={opt.warp_size} is unsupported for the target (supported values are {properties['sub_group_sizes']})"
             )
         if opt.num_warps > properties['max_num_sub_groups']:
             raise ValueError(
@@ -204,10 +204,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         module_opts.support_dpas = properties["has_subgroup_matrix_multiply_accumulate"]
         module_opts.support_block_scale_dpas = properties["has_support_block_scale_dpas"]
         module_opts.support_bf16_conversion = properties["has_bfloat16_conversions"]
-        module_opts.threads_per_warp = opt.threads_per_warp
+        module_opts.threads_per_warp = opt.warp_size
         module_opts.target_arch = target_arch
         intel.passes.ttgpuir.add_triton_annotate_module(pm, module_opts)
-        pm.run(mod)
+        pm.run(mod, 'annotate_module')
 
     @staticmethod
     def get_split_barrier_scope(opt):
@@ -234,7 +234,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
         passes.ttir.add_loop_unroll(pm)
-        pm.run(mod)
+        pm.run(mod, 'make_ttir')
         return mod
 
     @staticmethod
@@ -248,8 +248,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # Annotate module with information required by subsequent transformations.
         XPUBackend.annotate_module(mod, properties, opt, "spir64")
 
-        # Overwrite the threads_per_warp option with the module annotation.
-        opt.threads_per_warp = intel.get_threads_per_warp(mod)
+        # Overwrite the warp_size option with the module annotation.
+        opt.warp_size = intel.get_threads_per_warp(mod)
         XPUBackend.validate_options(opt, properties)
 
         if (properties["has_subgroup_2d_block_io"] and properties["has_subgroup_matrix_multiply_accumulate"]
@@ -258,7 +258,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        passes.ttir.add_convert_to_ttgpuir(pm, "xpu", opt.num_warps, opt.threads_per_warp, opt.num_ctas)
+        passes.ttir.add_convert_to_ttgpuir(pm, "xpu", opt.num_warps, opt.warp_size, opt.num_ctas)
         # optimize TTGIR
         intel.passes.ttgpuir.add_coalesce(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
@@ -294,7 +294,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if knobs.intel.opt_reduction_locality:
             intel.passes.ttgpuir.add_optimize_reduction_locality(pm)
         intel.passes.arith.add_arith_emulate_unsupported_floats(pm, ["bf16"], "f32")
-        pm.run(mod)
+        pm.run(mod, 'make_ttgir')
         metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
         return mod
 
@@ -303,14 +303,14 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
 
-        passes.ttgpuir.add_inliner(pm)
+        passes.gluon.add_inliner(pm)
         passes.gluon.add_resolve_auto_encodings(pm)
         passes.common.add_sccp(pm)
         passes.ttir.add_loop_aware_cse(pm)
-        passes.ttgpuir.add_canonicalizer(pm)
+        passes.gluon.add_canonicalizer(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
 
-        pm.run(mod)
+        pm.run(mod, 'gluon_to_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
         return mod
 
@@ -345,7 +345,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             passes.llvmir.add_di_scope(pm)
         if XPUBackend.instrumentation:
             XPUBackend.instrumentation.patch("llvmir_to_llvm", pm, mod.context)
-        pm.run(mod)
+        pm.run(mod, 'make_llir')
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
         llvm.init_targets()
         context = llvm.context()

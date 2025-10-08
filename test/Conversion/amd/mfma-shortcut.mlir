@@ -103,6 +103,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32}
   // GFX950-LABEL: mfma_dotop_permlane_swap
   tt.func public @mfma_dotop_permlane_swap(%arg0: tensor<128x16xf16, #mma1>) {
   // GFX950-NOT: load
+  // GFX950-COUNT-2: llvm.call_intrinsic "llvm.amdgcn.permlane16.swap"
     %1 = ttg.convert_layout %arg0: tensor<128x16xf16, #mma1> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
     tt.return
   }

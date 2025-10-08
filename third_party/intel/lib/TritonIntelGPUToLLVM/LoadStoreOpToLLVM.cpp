@@ -384,11 +384,11 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
 
   // Returns the pitch (stride in bytes) of \p ptr.
   Value getPitch(ConversionPatternRewriter &rewriter, Value ptr,
-                 unsigned elemSizeInBits) const {
+                 unsigned elemSizeInBits, unsigned dim) const {
     Location loc = ptr.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-    int stride = getStride(ptr, 0);
+    int stride = getStride(ptr, dim);
     // If the stride is 0, we assume a minimum pitch of 64 bytes.
     constexpr int MIN_PITCH = 64;
     if (stride == 0)
@@ -931,7 +931,8 @@ struct PrefetchOpConversion
         masks[offset] = maskElems[i];
     }
 
-    Value rowStrideInBytes = getPitch(rewriter, op.getPtr(), elemSizeInBits);
+    Value rowStrideInBytes =
+        getPitch(rewriter, op.getPtr(), elemSizeInBits, memoryRowMajor ? 0 : 1);
     if (!rowStrideInBytes)
       return failure();
 
@@ -1866,9 +1867,12 @@ struct LoadOpToBlockIOConversion
     Type resultType = op.getType();
     auto tensorType = cast<RankedTensorType>(resultType);
 
-    // Step 1: Right now we only support 2D rank matrix of row major or column
-    // major.
+    // Step 1: Right now we only support 2D rank matrix of row major.
     const bool memoryRowMajor = isMemoryRowMajor(op);
+    // FIXME: Add support of column major.
+    if (!memoryRowMajor)
+      return failure();
+
     DpasEncodingAttr::OpIdx opIdx = getOpIdx(tensorType);
 
     Attribute encoding = tensorType.getEncoding();
@@ -1911,12 +1915,8 @@ struct LoadOpToBlockIOConversion
       // only support rank of 2 for now.
       return failure();
     }
-    const bool valueRowMajor =
-        (threadOrder[rank - 2] == 1 && threadOrder[rank - 1] == 0);
-    assert((valueRowMajor ||
-            (threadOrder[rank - 2] == 0 && threadOrder[rank - 1] == 1)) &&
-           "Only row_major or column_major is allowed");
-    const bool isTransposeRequired = valueRowMajor ^ memoryRowMajor;
+    unsigned contiguousDim = memoryRowMajor ? 1 : 0;
+    const bool isTransposeRequired = contiguousDim != colDim;
 
     // Step 2: Right now we only support DPAS related layout to simplify the
     // lowering.
@@ -2239,12 +2239,13 @@ struct LoadOpToBlockIOConversion
       break;
     }
 
-    Value pitch = getPitch(rewriter, ptr, elemSizeInBits);
+    Value pitch =
+        getPitch(rewriter, ptr, elemSizeInBits, memoryRowMajor ? 0 : 1);
     if (!pitch)
       return failure();
 
     // If the stride is 0, we want to load only the first row.
-    int stride = getStride(ptr, 0);
+    int stride = getStride(ptr, memoryRowMajor ? 0 : 1);
     unsigned baseHeightInt = (stride == 0 ? 1 : tileHeight);
     Value baseHeight = b.i32_val(baseHeightInt);
     Value baseWidth =
@@ -2853,7 +2854,7 @@ struct StoreOpToBlockIOConversion
       baseWidth = b.i32_val(
           std::max(64u, vBlocks * tileWidth * (packedElemSizeInBits / 8)));
       baseHeight = b.i32_val(tileHeight);
-      pitch = getPitch(rewriter, ptr, elemSizeInBits);
+      pitch = getPitch(rewriter, ptr, elemSizeInBits, memoryRowMajor ? 0 : 1);
       if (!pitch)
         return failure();
       offsetBaseX = b.i32_val(0);
