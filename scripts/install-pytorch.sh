@@ -109,9 +109,13 @@ if pip show torch &>/dev/null; then
   echo "**** PyTorch is already installed. Current commit is $PYTORCH_CURRENT_COMMIT ****"
   if [ "$BUILD_LATEST" = false ]; then
     if [[ "$PYTORCH_PINNED_COMMIT" = "$PYTORCH_CURRENT_COMMIT"* ]]; then
-      echo "**** PyTorch is already installed and its current commit is equal to the pinned commit: $PYTORCH_PINNED_COMMIT. ****"
-      echo "**** There is no need to build anything, just exit. ****"
-      exit 0
+      if [ "$FORCE_REINSTALL" = true ]; then
+        echo "**** Matching pinned commit ($PYTORCH_PINNED_COMMIT) detected but --force-reinstall specified: proceeding with rebuild. ****"
+      else
+        echo "**** PyTorch is already installed and its current commit matches the pinned commit: $PYTORCH_PINNED_COMMIT. ****"
+        echo "**** There is no need to build anything, exiting. ****"
+        exit 0
+      fi
     else
       echo "**** Current PyTorch commit $PYTORCH_CURRENT_COMMIT ****"
       echo "**** Pinned PyTorch commit $PYTORCH_PINNED_COMMIT ****"

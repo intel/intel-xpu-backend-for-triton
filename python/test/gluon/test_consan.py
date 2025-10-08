@@ -85,7 +85,8 @@ def async_tma_kernel(input_desc, XBLOCK: ttgl.constexpr, FAILURE: ttgl.constexpr
     tma.store_wait(0)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
+                   run=False)
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_async_tma_kernel(FAILURE, device, run_wrapper):
     if run_wrapper:
@@ -141,7 +142,8 @@ def tma_interleave_kernel(input_desc, XBLOCK: ttgl.constexpr, FAILURE: ttgl.cons
     tma.store_wait(0)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
+                   run=False)
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_tma_interleave_kernel(FAILURE, device, run_wrapper):
     if run_wrapper:
@@ -190,7 +192,8 @@ def async_copy_kernel(input, XBLOCK: ttgl.constexpr, FAILURE: ttgl.constexpr):
     ampere.async_copy.wait_group(0)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires ampere or newer")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires ampere or newer",
+                   run=False)
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_async_copy(FAILURE, device, run_wrapper):
     if run_wrapper:
@@ -252,7 +255,8 @@ def tcgen5_mma_kernel(input_desc, XBLOCK: ttgl.constexpr, FAILURE: ttgl.constexp
     mbarrier.invalidate(bar.index(1))
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer",
+                   run=False)
 @pytest.mark.parametrize("FAILURE", [True, False])
 @pytest.mark.parametrize("MEM_ACCESS_KIND", ["tma_cp", "local_store", "tmem_load", "tmem_store"])
 def test_tcgen5_mma(FAILURE, MEM_ACCESS_KIND, device, run_wrapper):
@@ -305,7 +309,7 @@ def warpgroup_mma_kernel(input, XBLOCK: ttgl.constexpr, FAILURE: ttgl.constexpr)
     smemA.store(ttgl.full([XBLOCK, XBLOCK], 42, ttgl.float16, blocked_layout))
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] != 9, reason="Requires hopper")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] != 9, reason="Requires hopper", run=False)
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_warpgroup_mma(FAILURE, device, run_wrapper):
     if run_wrapper:
@@ -353,7 +357,7 @@ def warpgroup_mma_kernel2(input, XBLOCK: ttgl.constexpr, FAILURE: ttgl.constexpr
     smemA.store(ttgl.full([XBLOCK, XBLOCK], 42, ttgl.float16, blocked_layout))
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] != 9, reason="Requires hopper")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] != 9, reason="Requires hopper", run=False)
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_warpgroup_mma2(FAILURE, device, run_wrapper):
     if run_wrapper:
@@ -406,7 +410,8 @@ def tcgen5_mma_multibar_kernel(input_desc, XBLOCK: ttgl.constexpr, BUF_IDX: ttgl
         mbarrier.invalidate(bar.index(i))
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer",
+                   run=False)
 @pytest.mark.parametrize("BUF_IDX", [0, 1])
 @pytest.mark.parametrize("BAR_IDX", [0, 1, 2, 3])
 def test_tcgen5_mma_multibar(BUF_IDX, BAR_IDX, device, run_wrapper):
@@ -529,7 +534,8 @@ def multibuffered_loop_tma_kernel(input_desc, XBLOCK: ttgl.constexpr, FAILURE: t
         mbarrier.invalidate(barMMA.index(i))
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer",
+                   run=False)
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_multibuffered_loop(FAILURE, device, run_wrapper):
     if run_wrapper:
@@ -611,7 +617,7 @@ def multibuffered_loop_wgmma_kernel(input_desc, XBLOCK: ttgl.constexpr, FAILURE:
         mbarrier.invalidate(barLoadB.index(i))
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] != 9, reason="Requires hopper")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] != 9, reason="Requires hopper", run=False)
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_multibuffered_wgmma_loop(FAILURE, device, run_wrapper):
     if run_wrapper:

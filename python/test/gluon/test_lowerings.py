@@ -4,7 +4,7 @@ import pytest
 import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
-from triton._internal_testing import is_cuda, is_hip, is_hopper_or_newer, get_hip_lds_size
+from triton._internal_testing import is_xpu, is_cuda, is_hip, is_hopper_or_newer, get_hip_lds_size
 
 
 def _is_layout_applicable(layout) -> bool:
@@ -152,6 +152,8 @@ def _reduce_layouts():
     for (M, N) in shapes:
         for layout in layouts:
             if isinstance(layout, (ttgl.amd.AMDMFMALayout, ttgl.NVMMADistributedLayout)):
+                if is_xpu():
+                    continue
                 instr_shape = layout.instr_shape
                 if M < instr_shape[0] or N < instr_shape[1]:
                     continue
@@ -396,7 +398,7 @@ _intermediate_layouts = _filter_layouts([
 @pytest.mark.parametrize("dst_layout", _2d_layouts)
 def test_convert2d_layouts(M, N, src_layout, interm_layout, dst_layout, dtype, device):
     if str(src_layout) == str(dst_layout):
-        pytest.skip("Source and destination layouts are the same")
+        pytest.xfail("Source and destination layouts are the same")
 
     if interm_layout in ["padded_shared_layout_single_interval", "padded_shared_layout_multi_interval"]:
         int_pad_pairs = [[32, 8]] if "single" in interm_layout else [[64, 4], [128, 8]]
@@ -587,6 +589,8 @@ _mma_pairs = [
                          [pair for pair in _mma_pairs if all(_is_layout_applicable(layout) for layout in pair)])
 def test_convert_mma2mma_layouts(M, N, mma_pair, dtype, device):
     src_layout, dst_layout = mma_pair
+    if is_xpu() and isinstance(src_layout, (ttgl.amd.AMDMFMALayout, ttgl.NVMMADistributedLayout)):
+        pytest.xfail("AMD and NVIDIA MMA layouts are not supported on Intel GPUs")
 
     @gluon.jit
     def kernel(x_ptr, y_ptr, M: ttgl.constexpr, N: ttgl.constexpr, src_layout: ttgl.constexpr,
@@ -643,13 +647,13 @@ _warp_local_layouts = _filter_layouts([
 @pytest.mark.parametrize("dst_layout", _warp_local_layouts)
 def test_convert_warp_local_layouts(M, N, src_layout, dst_layout, dtype, device):
     if str(src_layout) == str(dst_layout):
-        pytest.skip("Source and destination layouts are the same")
+        pytest.xfail("Source and destination layouts are the same")
 
     # Test layout pairs that are likely to codegen warp shuffles.
     a, b = list(torch.tensor(src_layout.threads_per_warp) // torch.tensor(dst_layout.threads_per_warp))
     c = a if a != 0 else b
     if c > 2:
-        pytest.skip("Layout pair too complex for warp-local conversion")
+        pytest.xfail("Layout pair too complex for warp-local conversion")
 
     @gluon.jit
     def kernel(x_ptr, y_ptr, M: ttgl.constexpr, N: ttgl.constexpr, src_layout: ttgl.constexpr,
@@ -751,7 +755,7 @@ def test_local_load_store_2d_layouts(shape, dtype, dist_layout, shared_layout, d
     if isinstance(shared_layout, ttgl.NVMMASharedLayout):
         contig_dim = 0 if shared_layout.transposed else 1
         if shape[contig_dim] < (8 * shared_layout.swizzle_byte_width) / shared_layout.element_bitwidth:
-            pytest.skip("contig_dim too small for swizzle_byte_width in NVMMASharedLayout")
+            pytest.xfail("contig_dim too small for swizzle_byte_width in NVMMASharedLayout")
 
     # A simple blocked layout
     num_warps = int(torch.prod(torch.tensor(ttgl._layouts.warps_per_cta(dist_layout, shape))))
@@ -790,7 +794,7 @@ def test_local_load_store_2d_layouts(shape, dtype, dist_layout, shared_layout, d
     y = torch.zeros_like(x)
     obj = kernel[(1, )](x, y, shape, dist_layout, blocked_layout, shared_layout, num_warps=num_warps)
     torch.testing.assert_close(y, x)
-    if (isinstance(shared_layout, ttgl.NVMMASharedLayout) and dist_layout in _ld_st_mma_layouts
+    if (is_cuda() and isinstance(shared_layout, ttgl.NVMMASharedLayout) and dist_layout in _ld_st_mma_layouts
             and dist_layout.version[0] >= 3 and dtype == "float16"):
         assert "stmatrix" in obj.asm["ptx"]
 
@@ -1220,14 +1224,15 @@ def test_gather_layouts(axis, src_layout, index_layout, src_shape, idx_shape, de
         raise RuntimeError(f"Unsupported shape: {src_shape}")
 
     torch.testing.assert_close(out, ref, rtol=0, atol=0)
-    assert ("nvvm.shfl.sync.idx" in obj.asm["llir"]) or ("llvm.amdgcn.ds.bpermute" in obj.asm["llir"])
+    if is_cuda():
+        assert ("nvvm.shfl.sync.idx" in obj.asm["llir"]) or ("llvm.amdgcn.ds.bpermute" in obj.asm["llir"])
 
 
 @pytest.mark.parametrize("M, N, M_tile_size, N_tile_size",
                          [[128, 128, 64, 64], [128, 128, 64, 32], [128, 64, 64, 32], [256, 128, 64, 64]])
 def test_memdesc_subslice(M, N, M_tile_size, N_tile_size, device):
     if M % M_tile_size != 0 or N % N_tile_size != 0:
-        pytest.skip(f"Shape size ({M}, {N}) must be divisible by tile size ({M_tile_size}, {N_tile_size})")
+        pytest.xfail(f"Shape size ({M}, {N}) must be divisible by tile size ({M_tile_size}, {N_tile_size})")
 
     num_rows_per_warp = THREADS_PER_WARP // 4
     blocked_layout = ttgl.BlockedLayout(size_per_thread=[1, 8], threads_per_warp=[num_rows_per_warp, 4],
