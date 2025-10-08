@@ -182,8 +182,6 @@ private:
     auto tensorType = cast<RankedTensorType>(reshapeOp.getType());
     auto newPtrType =
         tt::PointerType::get(tensorType, ptrType.getAddressSpace());
-    SmallVector<Value> newShape(makeTensorPtrOp.getShape().drop_front());
-    SmallVector<Value> newStrides(makeTensorPtrOp.getStrides().drop_front());
 
     unsigned innermostDimIdx = 0;
     ArrayRef<int> order = makeTensorPtrOp.getOrder();
@@ -195,8 +193,15 @@ private:
 
     OpBuilder builder(makeTensorPtrOp);
     Location loc = makeTensorPtrOp.getLoc();
+    Value firstShape = makeTensorPtrOp.getShape().front();
     Value firstStride = makeTensorPtrOp.getStrides().front();
     Value firstOffset = makeTensorPtrOp.getOffsets().front();
+
+    SmallVector<Value> newShape(makeTensorPtrOp.getShape().drop_front());
+    newShape[innermostDimIdx - 1] = builder.create<arith::AddIOp>(
+        loc, builder.create<arith::MulIOp>(loc, firstStride, firstShape),
+        newShape[innermostDimIdx - 1]);
+    SmallVector<Value> newStrides(makeTensorPtrOp.getStrides().drop_front());
     SmallVector<Value> newOffsets(makeTensorPtrOp.getOffsets().drop_front());
     newOffsets[innermostDimIdx - 1] = builder.create<arith::AddIOp>(
         loc,
@@ -372,10 +377,8 @@ private:
       SmallVector<Operation *> users(op->getUsers());
       if (users.size() > 2 || llvm::none_of(users, [&](Operation *user) {
             return user == yieldOp;
-          })) {
-        llvm::errs() << "at line " << __LINE__ << "\n";
+          }))
         return false;
-      }
 
       auto yieldedValUsedAfterLoop = [&op, &yieldOp]() {
         auto it =
