@@ -254,7 +254,6 @@ py::object layoutToGluon(Attribute layout) {
                                       ll.getBases().lookup(kOffset),
                                       ll.getBases().lookup(kBlock), shape);
   } else if (auto intelDpas = dyn_cast<ttg::intel::DpasEncodingAttr>(layout)) {
-     std::cout << "*************************** Intel Layout to return\n";
     return layouts.IntelDPASLayout(intelDpas.getRepeatCount(),
                                     intelDpas.getSystolicDepth(),
                                     intelDpas.getExecutionSize(),
