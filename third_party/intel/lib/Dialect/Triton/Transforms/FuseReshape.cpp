@@ -185,19 +185,27 @@ private:
     SmallVector<Value> newShape(makeTensorPtrOp.getShape().drop_front());
     SmallVector<Value> newStrides(makeTensorPtrOp.getStrides().drop_front());
 
+    unsigned innermostDimIdx = 0;
+    ArrayRef<int> order = makeTensorPtrOp.getOrder();
+    for (int i : order) {
+      if (i == 0)
+        break;
+      ++innermostDimIdx;
+    }
+
     OpBuilder builder(makeTensorPtrOp);
     Location loc = makeTensorPtrOp.getLoc();
     Value firstStride = makeTensorPtrOp.getStrides().front();
     Value firstOffset = makeTensorPtrOp.getOffsets().front();
     SmallVector<Value> newOffsets(makeTensorPtrOp.getOffsets().drop_front());
-    newOffsets[newOffsets.size() - 1] = builder.create<arith::AddIOp>(
+    newOffsets[innermostDimIdx - 1] = builder.create<arith::AddIOp>(
         loc,
         builder.create<arith::MulIOp>(
             loc,
             builder.create<arith::TruncIOp>(loc, firstOffset.getType(),
                                             firstStride),
             firstOffset),
-        newOffsets[newOffsets.size() - 1]);
+        newOffsets[innermostDimIdx - 1]);
 
     Value ptr = builder.create<tt::MakeTensorPtrOp>(
         loc, newPtrType, makeTensorPtrOp.getBase(), newShape, newStrides,
@@ -364,8 +372,10 @@ private:
       SmallVector<Operation *> users(op->getUsers());
       if (users.size() > 2 || llvm::none_of(users, [&](Operation *user) {
             return user == yieldOp;
-          }))
+          })) {
+        llvm::errs() << "at line " << __LINE__ << "\n";
         return false;
+      }
 
       auto yieldedValUsedAfterLoop = [&op, &yieldOp]() {
         auto it =
@@ -413,11 +423,13 @@ private:
         for (auto [arg, init] :
              llvm::zip(loopOp.getRegionIterArgs(), loopOp.getInits())) {
           if (init == currentOp->getResult(0)) {
-            if (!arg.hasOneUse())
-              return false;
-
-            currentOp = *arg.getUsers().begin();
-            break;
+            auto argUsers = arg.getUsers();
+            for (Operation *user : argUsers) {
+              if (chain.contains(user)) {
+                currentOp = user;
+                break;
+              }
+            }
           }
         }
       }
@@ -459,7 +471,7 @@ private:
 
     LLVM_DEBUG({
       llvm::dbgs() << "In " << __func__ << "\n";
-      llvm::dbgs() << "user of:";
+      llvm::dbgs() << "user of: ";
       if (origVal.getDefiningOp()) {
         llvm::dbgs() << "\n  " << *origVal.getDefiningOp() << "\n";
       } else {
@@ -480,7 +492,7 @@ private:
     Location loc = user->getLoc();
     if (auto advanceOp = dyn_cast<tt::AdvanceOp>(user)) {
       OpBuilder rewriter(advanceOp);
-      SmallVector<Value> newOffsets(llvm::reverse(advanceOp.getOffsets()));
+      SmallVector<Value> newOffsets(advanceOp.getOffsets().drop_front());
       auto newAdvanceOp = rewriter.create<tt::AdvanceOp>(loc, newVal.getType(),
                                                          newVal, newOffsets);
       LLVM_DEBUG(llvm::dbgs().indent(2)
