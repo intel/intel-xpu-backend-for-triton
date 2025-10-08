@@ -109,6 +109,7 @@ def _reduce_linear_layouts():
 
 def _reduce_layouts():
     shapes = [(128, 16), (32, 128), (32, 32), (16, 16)]
+    print("######################################### Layouts GEN")
     layouts = _filter_layouts([
         # FIXME: Do not enable these tests until the SLPVectorizor problem with nvptx target has been resolved
         # SliceLayout(dim=1, parent=BlockedLayout([1, 4, 1], [1, 8, THREADS_PER_WARP // 8], [1, 1, 4], [2, 0, 1], [1, 1, 1], [1, 1, 1], [0, 1, 2])),
@@ -125,6 +126,8 @@ def _reduce_layouts():
         ttgl.amd.AMDMFMALayout(version=4, instr_shape=[32, 32, 16], transposed=True, warps_per_cta=[1, 4]),
         ttgl.amd.AMDWMMALayout(version=1, transposed=True, warps_per_cta=[1, 4]),
         ttgl.amd.AMDWMMALayout(version=2, transposed=True, warps_per_cta=[1, 4]),
+        ttgl.intel.IntelDPASLayout(repeatCount=8, systolicDepth=8, executionSize=16, opsPerChannel=2,
+                                   warps_per_cta=[1, 1], repCluster=[4, 2], threadsPerWarp=32),
         ttgl.DotOperandLayout(
             parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[2, 4], ctas_per_cga=[1, 1],
                                                cta_split_num=[1, 1], cta_order=[0, 1], instr_shape=[16, 8]),

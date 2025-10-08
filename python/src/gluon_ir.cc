@@ -5,6 +5,7 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Types.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
+#include "third_party/intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -15,6 +16,7 @@
 #include "triton/Tools/GenericSwizzling.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
+#include <iostream>
 
 using namespace mlir;
 namespace py = pybind11;
@@ -102,12 +104,15 @@ struct GluonLayouts {
   py::handle AMDMFMALayout;
   py::handle AMDWMMALayout;
   py::handle PaddedSharedLayout;
+  py::handle IntelDPASLayout;
 
   GluonLayouts() {
     auto layouts =
         py::module::import("triton.experimental.gluon.language._layouts");
     auto amdLayouts =
         py::module::import("triton.experimental.gluon.language.amd._layouts");
+    auto intelLayouts =
+        py::module::import("triton.experimental.gluon.language.intel._layouts");
     AutoLayout = py::object(layouts.attr("AutoLayout")).release();
     BlockedLayout = py::object(layouts.attr("BlockedLayout")).release();
     SliceLayout = py::object(layouts.attr("SliceLayout")).release();
@@ -125,6 +130,7 @@ struct GluonLayouts {
     AMDWMMALayout = py::object(amdLayouts.attr("AMDWMMALayout")).release();
     PaddedSharedLayout =
         py::object(layouts.attr("PaddedSharedLayout")).release();
+    IntelDPASLayout = py::object(intelLayouts.attr("IntelDPASLayout")).release();
 
     auto core = py::module::import("triton.language.core");
   }
@@ -247,6 +253,15 @@ py::object layoutToGluon(Attribute layout) {
     return layouts.PaddedSharedLayout(intervalPaddingPairs,
                                       ll.getBases().lookup(kOffset),
                                       ll.getBases().lookup(kBlock), shape);
+  } else if (auto intelDpas = dyn_cast<ttg::intel::DpasEncodingAttr>(layout)) {
+     std::cout << "*************************** Intel Layout to return\n";
+    return layouts.IntelDPASLayout(intelDpas.getRepeatCount(),
+                                    intelDpas.getSystolicDepth(),
+                                    intelDpas.getExecutionSize(),
+                                    intelDpas.getOpsPerChannel(),
+                                    toStdVector(intelDpas.getWarpsPerCTA()),
+                                    toStdVector(intelDpas.getRepCluster()),
+                                    intelDpas.getThreadsPerWarp());
   }
 
   throw py::value_error("Unhandled encoding encountered");
@@ -384,6 +399,18 @@ void init_gluon_ir(py::module &&m) {
                  ctx, ctasPerCga, ctaSplitNum, ctaOrder);
              return ttg::AMDWmmaEncodingAttr::get(
                  ctx, version, transposed, warpsPerCta, ctaLayout, instrShape);
+           })
+      .def("get_intel_dpas_layout",
+           [](GluonOpBuilder &self, unsigned repeatCount, unsigned systolicDepth,
+              unsigned executionSize,
+               unsigned opsPerChannel,
+              std::vector<unsigned> &warpsPerCTA,
+              std::vector<unsigned> &repCluster,
+              unsigned threadsPerWarp) -> Attribute {
+             auto ctx = self.getContext();
+             return ttg::intel::DpasEncodingAttr::get(
+                 ctx, repeatCount, systolicDepth, executionSize, opsPerChannel,
+                 warpsPerCTA, repCluster, threadsPerWarp);
            })
       .def("get_padded_shared_layout",
            [](GluonOpBuilder &self, std::vector<unsigned> &intervals,
