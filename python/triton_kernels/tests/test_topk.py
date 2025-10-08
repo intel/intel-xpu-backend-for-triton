@@ -9,8 +9,7 @@ from triton_kernels.testing import assert_equal, assert_close
 @pytest.mark.parametrize("k", [8])
 @pytest.mark.parametrize("apply_softmax", [True, False])
 @pytest.mark.parametrize("dtype", ["float16", "bfloat16", "float32"])
-def test_topk(n_rows, n_cols, k, apply_softmax, dtype):
-    device = "cuda"
+def test_topk(n_rows, n_cols, k, apply_softmax, dtype, device):
     torch.manual_seed(0)
     dtype = getattr(torch, dtype)
     x = torch.randn((n_rows, n_cols), dtype=torch.float32, device=device)

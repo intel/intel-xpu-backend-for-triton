@@ -12,9 +12,8 @@ from triton_kernels.testing import assert_equal
 
 @pytest.mark.parametrize("n_gates", [4, 16, 128, 1990])
 @pytest.mark.parametrize("n_batches", [1, 7, 33])
-def test_make_ragged_tensor_metadata(n_gates, n_batches):
+def test_make_ragged_tensor_metadata(n_gates, n_batches, device):
     torch.manual_seed(0)
-    device = "cuda"
     batch_sizes = torch.randint(0, 200, (n_batches, ), dtype=torch.int32, device=device)
     batch_sizes[torch.randint(0, n_batches, (1, ))] = 0
     meta = make_ragged_tensor_metadata(batch_sizes, n_gates)
@@ -27,10 +26,9 @@ def test_make_ragged_tensor_metadata(n_gates, n_batches):
 @pytest.mark.parametrize("n_rows", [7, 256, 17111])
 @pytest.mark.parametrize("n_cols", [13, 32, 128, 811])
 @pytest.mark.parametrize("k", [1, 4, 8])
-def test_make_bitmatrix_metadata(n_rows, n_cols, k):
+def test_make_bitmatrix_metadata(n_rows, n_cols, k, device):
     if k > n_cols:
         pytest.skip("k must be <= n_cols")
-    device = "cuda"
     torch.manual_seed(0)
     x = torch.randn((n_rows, n_cols), dtype=torch.float32, device=device)
     sparse_x = topk(x, k)
