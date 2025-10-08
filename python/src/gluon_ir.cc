@@ -395,6 +395,20 @@ void init_gluon_ir(py::module &&m) {
              return ttg::PaddedSharedEncodingAttr::get(ctx, intervals, paddings,
                                                        ll);
            })
+      .def("get_shared_linear_layout",
+           [](GluonOpBuilder &self, std::vector<std::vector<int>> &offsetBases,
+              std::vector<std::vector<int>> &blockBases,
+              std::vector<int64_t> &shape, unsigned alignment) -> Attribute {
+             auto ctx = self.getContext();
+             auto kOffset = mlir::StringAttr::get(ctx, "offset");
+             auto kBlock = mlir::StringAttr::get(ctx, "block");
+             auto ll = tt::LinearLayout(
+                 {{kOffset, offsetBases}, {kBlock, blockBases}},
+                 tt::standardOutDimPairs(ctx, shape),
+                 /*requireSurjective=*/true);
+             return self.getChecked<ttg::SharedLinearEncodingAttr>(ctx, ll,
+                                                                   alignment);
+           })
       .def("get_nvmma_shared_layout",
            [](GluonOpBuilder &self, unsigned swizzleByteWidth,
               unsigned elementBitwidth, bool transposed, bool fp4Padded,
@@ -424,13 +438,14 @@ void init_gluon_ir(py::module &&m) {
                  ctx, vec, perPhase, maxPhase, order, ctaLayout);
            })
       .def("get_tensor_memory_layout",
-           [](GluonOpBuilder &self, std::vector<unsigned> &block, bool unpacked,
+           [](GluonOpBuilder &self, std::vector<unsigned> &block,
+              unsigned colStride,
               std::vector<unsigned> &ctaSplitNum) -> Attribute {
              auto ctx = self.getContext();
              assert(block.size() == 2);
              assert(ctaSplitNum.size() == 2);
              return self.getChecked<ttng::TensorMemoryEncodingAttr>(
-                 ctx, block[0], block[1], unpacked, ctaSplitNum[0],
+                 ctx, block[0], block[1], colStride, ctaSplitNum[0],
                  ctaSplitNum[1]);
            })
       .def("get_tensor_memory_scales_layout",
