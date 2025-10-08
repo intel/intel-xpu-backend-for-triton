@@ -11,7 +11,7 @@ import torch
 import triton
 import triton.language as tl
 
-import triton_kernels_benchmark as benchmark_suit
+import triton_kernels_benchmark as benchmark_suite
 
 
 @triton.autotune(
@@ -35,7 +35,7 @@ import triton_kernels_benchmark as benchmark_suit
     key=['M', 'N', 'K'],
 )
 @triton.jit
-def matmul_kernel_with_block_pointers(
+def matmul_kernel_with_tensor_descriptors(
         # Pointers to matrices
         a_ptr, b_ptr, c_ptr,
         # Matrix dimensions
@@ -56,29 +56,26 @@ def matmul_kernel_with_block_pointers(
     pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
     pid_n = (pid % num_pid_in_group) // group_size_m
 
-    a_block_ptr = tl.make_block_ptr(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
-                                    offsets=(pid_m * BLOCK_SIZE_M, 0), block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K),
-                                    order=(1, 0))
-    b_block_ptr = tl.make_block_ptr(base=b_ptr, shape=(K, N), strides=(stride_bk, stride_bn),
-                                    offsets=(0, pid_n * BLOCK_SIZE_N), block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N),
-                                    order=(1, 0))
+    a_desc = tl.make_tensor_descriptor(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
+                                       block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K))
+    b_desc = tl.make_tensor_descriptor(base=b_ptr, shape=(K, N), strides=(stride_bk, stride_bn),
+                                       block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N))
 
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+    off_k = 0
     for _ in range(0, K, BLOCK_SIZE_K):
-        a = tl.load(a_block_ptr, boundary_check=(0, 1))
+        a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
         a = a.to(tl.float32)
         a = tl.math.exp(a)
         a = a.to(tl.bfloat16)
-        b = tl.load(b_block_ptr, boundary_check=(0, 1))
+        b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
         accumulator += tl.dot(a, b)
-        a_block_ptr = tl.advance(a_block_ptr, (0, BLOCK_SIZE_K))
-        b_block_ptr = tl.advance(b_block_ptr, (BLOCK_SIZE_K, 0))
+        off_k += BLOCK_SIZE_K
     c = accumulator.to(tl.float32)
 
-    c_block_ptr = tl.make_block_ptr(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
-                                    offsets=(pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N),
-                                    block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N), order=(1, 0))
-    tl.store(c_block_ptr, c, boundary_check=(0, 1))
+    c_desc = tl.make_tensor_descriptor(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
+                                       block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N))
+    c_desc.store([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], c)
 
 
 # pylint: disable=unused-argument
@@ -106,7 +103,7 @@ def matmul_kernel_with_block_pointers(
     key=['M', 'N', 'K'],
 )
 @triton.jit
-def matmul_kernel_with_block_pointers_batched(
+def matmul_kernel_with_tensor_descriptors_batched(
         # Pointers to matrices
         a_ptr, b_ptr, c_ptr,
         # Matrix dimensions
@@ -131,30 +128,27 @@ def matmul_kernel_with_block_pointers_batched(
     offset_a = bid.to(tl.int64) * stride_az
     offset_b = bid.to(tl.int64) * stride_bz
 
-    a_block_ptr = tl.make_block_ptr(base=a_ptr + offset_a, shape=(M, K), strides=(stride_am, stride_ak),
-                                    offsets=(pid_m * BLOCK_SIZE_M, 0), block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K),
-                                    order=(1, 0))
-    b_block_ptr = tl.make_block_ptr(base=b_ptr + offset_b, shape=(K, N), strides=(stride_bk, stride_bn),
-                                    offsets=(0, pid_n * BLOCK_SIZE_N), block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N),
-                                    order=(1, 0))
+    a_desc = tl.make_tensor_descriptor(base=a_ptr + offset_a, shape=(M, K), strides=(stride_am, stride_ak),
+                                       block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K))
+    b_desc = tl.make_tensor_descriptor(base=b_ptr + offset_b, shape=(K, N), strides=(stride_bk, stride_bn),
+                                       block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N))
 
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+    off_k = 0
     for _ in range(0, K, BLOCK_SIZE_K):
-        a = tl.load(a_block_ptr, boundary_check=(0, 1))
+        a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
         a = a.to(tl.float32)
         a = tl.math.exp(a)
         a = a.to(tl.bfloat16)
-        b = tl.load(b_block_ptr, boundary_check=(0, 1))
+        b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
         accumulator += tl.dot(a, b)
-        a_block_ptr = tl.advance(a_block_ptr, (0, BLOCK_SIZE_K))
-        b_block_ptr = tl.advance(b_block_ptr, (BLOCK_SIZE_K, 0))
+        off_k += BLOCK_SIZE_K
     c = accumulator.to(tl.float32)
 
     offset_c = bid.to(tl.int64) * stride_cz
-    c_block_ptr = tl.make_block_ptr(base=c_ptr + offset_c, shape=(M, N), strides=(stride_cm, stride_cn),
-                                    offsets=(pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N),
-                                    block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N), order=(1, 0))
-    tl.store(c_block_ptr, c, boundary_check=(0, 1))
+    c_desc = tl.make_tensor_descriptor(base=c_ptr + offset_c, shape=(M, N), strides=(stride_cm, stride_cn),
+                                       block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N))
+    c_desc.store([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], c)
 
 
 # We can now create a convenience wrapper function that only takes two input tensors,
@@ -173,7 +167,7 @@ def matmul(a, b, c):
             triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
             B,
         )
-        matmul_kernel_with_block_pointers_batched[grid](
+        matmul_kernel_with_tensor_descriptors_batched[grid](
             a, b, c,  #
             B, M, N, K,  #
             a.stride(0), a.stride(1), a.stride(2),  #
@@ -186,7 +180,7 @@ def matmul(a, b, c):
         M, K = a.shape
         K, N = b.shape
         grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
-        matmul_kernel_with_block_pointers[grid](
+        matmul_kernel_with_tensor_descriptors[grid](
             a, b, c,  #
             M, N, K,  #
             a.stride(0), a.stride(1),  #
@@ -241,8 +235,8 @@ X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
 
 
 # Benchmark Performance
-@benchmark_suit.perf_report(
-    benchmark_suit.Benchmark(
+@benchmark_suite.perf_report(
+    benchmark_suite.Benchmark(
         # argument names to use as an x-axis for the plot
         x_names=['B', 'M', 'K', 'N'],
         # different possible values for `x_name`
@@ -261,20 +255,18 @@ X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
         args={},
     ))
 def benchmark(B, M, N, K, provider):
-    # Some configs increase performance with warmup as a step function, but some slowly decrease with saturation. Performance is best at 200-400ms range, but we want stable, not just best
+    # Some configs increase performance with warmup as a step function, but some slowly decrease with saturation.
+    # Performance is best at 200-400ms range, but we want stable, not just best.
     # This warmup improves performance on BMG
-    n_warmup = 800
+    # n_warmup = 800
     # We keep old warmup for now because longer warmup make perfomance on PVC worse
-    n_warmup = 10
-
+    do_bench = benchmark_suite.get_do_bench(n_warmup=10, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
     if B == 1:
         a = torch.rand((M, K), device='xpu', dtype=torch.bfloat16)
         b = torch.rand((K, N), device='xpu', dtype=torch.bfloat16)
     else:
         a = torch.rand((B, M, K), device='xpu', dtype=torch.bfloat16)
         b = torch.rand((B, K, N), device='xpu', dtype=torch.bfloat16)
-
-    quantiles = [0.5, 0.0, 1.0]
 
     if provider == 'triton':
         assert len(a.shape) == len(b.shape), 'Incompatible sizes'
@@ -286,9 +278,8 @@ def benchmark(B, M, N, K, provider):
         triton_fn = lambda: matmul(a, b, c)
         torch_fn = lambda: torch.matmul(torch.exp(a), b).to(torch.float32)
         rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
-        benchmark_suit.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, n_warmup=n_warmup, n_repeat=10,
-                                                                 quantiles=quantiles, time_warmup=False)
+        benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
+        _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn, time_warmup=False)
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 

@@ -64,6 +64,10 @@ on:
         description: Custom run name
         type: string
         default: "E2E accuracy"
+    schedule:
+      # twice a week, on Wednesday and Saturday
+      - cron: "0 22 * * 3,6"
+
 
 permissions: read-all
 
@@ -151,6 +155,7 @@ jobs:
         uses: actions/download-artifact@v5
         with:
           path: separate-reports
+          merge-multiple: true
 
       - name: Run aggregation script
         run: |
@@ -164,13 +169,14 @@ jobs:
 
       - name: Upload aggregated results
         uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
         with:
           name: aggregated-results-${{ github.run_id }}
           path: aggregated-results
           include-hidden-files: true
 
       - name: Check results against reference
-        if: ${{ inputs.models == 'all' && inputs.only_one_model == '' }}
+        if: ${{ inputs.models == 'all' && inputs.only_one_model == ''  && !cancelled()}}
         run: |
           PYTORCH_XPU_OPS_REF="$(<.github/pins/e2e_reference_torch-xpu-ops.txt)"
           git clone https://github.com/intel/torch-xpu-ops.git

@@ -14,6 +14,7 @@ TEST:
     --minicore        part of core
     --mxfp            part of core
     --scaled-dot      part of core
+    --gluon
     --interpreter
     --benchmarks
     --softmax
@@ -26,6 +27,8 @@ TEST:
     --instrumentation
     --inductor
     --sglang
+    --liger
+    --vllm
 
 OPTION:
     --unskip
@@ -55,6 +58,7 @@ TEST_CORE=false
 TEST_MINICORE=false
 TEST_MXFP=false
 TEST_SCALED_DOT=false
+TEST_GLUON=false
 TEST_INTERPRETER=false
 TEST_TUTORIAL=false
 TEST_MICRO_BENCHMARKS=false
@@ -66,6 +70,8 @@ TEST_BENCHMARK_FLEX_ATTENTION=false
 TEST_INSTRUMENTATION=false
 TEST_INDUCTOR=false
 TEST_SGLANG=false
+TEST_LIGER=false
+TEST_VLLM=false
 TEST_TRITON_KERNELS=false
 VENV=false
 TRITON_TEST_REPORTS=false
@@ -103,6 +109,11 @@ while (( $# != 0 )); do
       ;;
     --scaled-dot)
       TEST_SCALED_DOT=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --gluon)
+      TEST_GLUON=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -179,6 +190,16 @@ while (( $# != 0 )); do
       ;;
     --sglang)
       TEST_SGLANG=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --liger)
+      TEST_LIGER=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --vllm)
+      TEST_VLLM=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -387,6 +408,16 @@ run_core_tests() {
   run_scaled_dot_tests
 }
 
+run_gluon_tests() {
+  echo "***************************************************"
+  echo "******         Running Gluon tests          ******"
+  echo "***************************************************"
+  cd $TRITON_PROJ/python/test/gluon
+
+  TRITON_TEST_SUITE=gluon \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu .
+}
+
 run_interpreter_tests() {
   echo "***************************************************"
   echo "******   Running Triton Interpreter tests    ******"
@@ -554,7 +585,7 @@ run_inductor_tests() {
 
 run_sglang_tests() {
   echo "***************************************************"
-  echo "******    Running SGLang Triton tests       ******"
+  echo "******    Running SGLang Triton tests        ******"
   echo "***************************************************"
 
   if ! [ -d "./sglang" ]; then
@@ -575,14 +606,73 @@ run_sglang_tests() {
   run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-4} test/srt/test_triton_attention_kernels.py
 }
 
+run_liger_tests() {
+  echo "************************************************"
+  echo "******    Running Liger Triton tests      ******"
+  echo "************************************************"
+
+  if ! [ -d "./Liger-Kernel" ]; then
+    git clone https://github.com/linkedin/Liger-Kernel
+  fi
+
+  if ! pip list | grep "liger_kernel" ; then
+    pip install pytest pytest-xdist pytest-cov transformers pandas pytest datasets -e Liger-Kernel
+  fi
+
+  run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-4} Liger-Kernel/test/
+}
+
+run_vllm_tests() {
+  echo "************************************************"
+  echo "******    Running VLLM Triton tests       ******"
+  echo "************************************************"
+
+  if ! [ -d "./vllm" ]; then
+    git clone https://github.com/vllm-project/vllm.git
+    cd vllm
+    git checkout "$(<../benchmarks/third_party/vllm/vllm-pin.txt)"
+    git apply $TRITON_PROJ/benchmarks/third_party/vllm/vllm-fix.patch
+    cd ..
+  fi
+
+  if ! pip list | grep "vllm" ; then
+    pip install -r vllm/requirements/xpu.txt
+
+    git clone https://github.com/vllm-project/vllm-xpu-kernels
+    cd vllm-xpu-kernels
+    git checkout "$(<../benchmarks/third_party/vllm/vllm-kernels-pin.txt)"
+    sed -i '/pytorch\|torch/d' requirements.txt
+    pip install -r requirements.txt
+    VLLM_TARGET_DEVICE=xpu pip install -e .
+    cd ..
+
+    VLLM_TARGET_DEVICE=xpu pip install --no-deps vllm
+  fi
+
+  cd vllm
+  pip install pytest pytest-cov pytest-xdist cachetools cbor2 blake3 pybase64 openai_harmony tblib
+
+  run_pytest_command -vvv tests/kernels/moe/test_batched_moe.py tests/kernels/attention/test_triton_unified_attention.py
+}
+
 run_triton_kernels_tests() {
   echo "***************************************************"
   echo "******    Running Triton Kernels tests      ******"
   echo "***************************************************"
   cd $TRITON_PROJ/python/triton_kernels/tests
 
+  # available after `capture_runtime_env` call
+  gpu_file="$TRITON_TEST_REPORTS_DIR/gpu.txt"
+  if [[ -f "$gpu_file" ]] && grep -q "B580" "$gpu_file"; then
+    # Using any other number of processes results in an error on the BMG due to insufficient resources.
+    # FIXME: reconsider in the future
+    max_procs=1
+  else
+    max_procs=${PYTEST_MAX_PROCESSES:-4}
+  fi
+
   TRITON_TEST_SUITE=triton_kernels \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-4} --device xpu .
+    run_pytest_command -vvv -n $max_procs --device xpu .
 }
 
 test_triton() {
@@ -605,6 +695,9 @@ test_triton() {
     fi
   fi
 
+  if [ "$TEST_GLUON" == true ]; then
+    run_gluon_tests
+  fi
   if [ "$TEST_INTERPRETER" = true ]; then
     run_interpreter_tests
   fi
@@ -637,6 +730,12 @@ test_triton() {
   fi
   if [ "$TEST_SGLANG" == true ]; then
     run_sglang_tests
+  fi
+  if [ "$TEST_LIGER" == true ]; then
+    run_liger_tests
+  fi
+  if [ "$TEST_VLLM" == true ]; then
+    run_vllm_tests
   fi
   if [ "$TEST_TRITON_KERNELS" == true ]; then
     run_triton_kernels_tests
