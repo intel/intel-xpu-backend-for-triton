@@ -46,21 +46,23 @@ def TritonIntelRemoveMasks
 
 def TritonIntelFuseReshape
     : Pass<"triton-intel-fuse-reshape", "mlir::ModuleOp"> {
-  let summary = "Fuse a tt.reshape operation with a tt.load operation";
+  let summary = "Fuse a tt.reshape operation with a tt.load operation (block ptrs only)";
 
   let description = [{
-    This pass attempts to fuse a tt.reshape operation with a tt.load operation using a block pointer.
+    This pass attempts to fuse a tt.reshape operation with a tt.load operation.
     For example, given:
-        %q_27 = arith.constant 1 : i64
-        %ptr = tt.make_tensor_ptr %q_view, [%q, %q_23, %q_24], [%q_25, %q_26, %q_27], [%offset_5, %offset_1_13, %q_28]
+        %ptr = tt.make_tensor_ptr %base_ptr, [%s0, %s1, %s2], [%a, %b, %c], [%x, %y, %z]
                                   {order = array<i32: 2, 1, 0>} : <tensor<1x512x64xf16>>
         %load = tt.load %ptr {boundaryCheck = array<i32: 1, 2>} : !tt.ptr<tensor<1x512x64xf16>>
-        %reshape = tt.reshape %load : tensor<1x512x64xf16> -> tensor<512x64xf16>
-    The transformation would drops the reshape operation and adjust the make_tensor_ptr operation as follows:
-        %q_27 = arith.constant 1 : i64
-        %ptr = tt.make_tensor_ptr %q_view, [%q_23, %q_24], [%q_26, %q_27], [%offset_1_13, %offset_5*%q_25+%q_28]
+        %A = tt.reshape %load : tensor<1x512x64xf16> -> tensor<512x64xf16>
+        %dot %A, ... : tensor<512x64xf16> x tensor<64x32xf16> -> tensor<512x32xf16>
+
+    The transformation drops the reshape operation, and generates:
+        %div = %a / %b
+        %ptr = tt.make_tensor_ptr %base_ptr, [%s0 * %div + %s1, %s2], [%b, %c], [%x * %div + %y, %z]
                                   {order = array<i32: 1, 0>} : <tensor<512x64xf16>>
-        %load = tt.load %ptr {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<512x64xf16>>
+        %A = tt.load %ptr {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<512x64xf16>>
+        %dot %A, ... : tensor<512x64xf16> x tensor<64x32xf16> -> tensor<512x32xf16>
   }];
 
   let dependentDialects = [

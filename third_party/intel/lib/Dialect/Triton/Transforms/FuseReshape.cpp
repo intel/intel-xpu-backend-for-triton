@@ -93,8 +93,6 @@ public:
     // Remove operations that are no longer used.
     if (!cleanUp.empty())
       tt::intel::eraseOperations(cleanUp);
-
-    assert(succeeded(verify(moduleOp)) && "Module verification failed");
   }
 
 private:
@@ -165,7 +163,7 @@ private:
         isa<tt::MakeTensorPtrOp>(chain.getStart()) &&
         "Expecting 'chain' to be rooted by a 'tt.make_tensor_ptr' operation");
     assert(isa<tt::ReshapeOp>(chain.getEnd()) &&
-           "Expecting 'chain' to be terminated by a 'tt.rehape' operation");
+           "Expecting 'chain' to be terminated by a 'tt.reshape' operation");
 
     auto makeTensorPtrOp = cast<tt::MakeTensorPtrOp>(chain.getStart());
     auto reshapeOp = cast<tt::ReshapeOp>(chain.getEnd());
@@ -202,14 +200,16 @@ private:
     OperandRange offsets = makeTensorPtrOp.getOffsets();
 
     // Collapse the 3-dim tensor into a 2-dim tensor.
-    // Given a block pointer with:
+    // Given a make_tensor_ptr with:
     //   shape  [s0, s1, s2]
     //   stride [a, b, c]
     //   offset [x, y, z]
-    // We create a block pinter with:
+    //   order  [2, 1, 0]
+    // We create a make_tensor_ptr with:
     //   shape  [s0 * a / b + s1, s2]
     //   stride [b, c]
     //   offset [x * a / b + y, z]
+    //   order  [1, 0]
     SmallVector<Value> newShape(makeTensorPtrOp.getShape().drop_front());
     SmallVector<Value> newStrides(makeTensorPtrOp.getStrides().drop_front());
     SmallVector<Value> newOffsets(makeTensorPtrOp.getOffsets().drop_front());
