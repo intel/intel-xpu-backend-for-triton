@@ -29,7 +29,7 @@ env:
 
 jobs:
   build:
-    name: Triton benchmarks
+    name: SGLang tests
     runs-on:
       - linux
       - ${{ inputs.runner_label || 'rolling' }}
@@ -45,11 +45,11 @@ jobs:
           EOF
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Python
         if: ${{ !(inputs.use_pyenv_python || false) }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 

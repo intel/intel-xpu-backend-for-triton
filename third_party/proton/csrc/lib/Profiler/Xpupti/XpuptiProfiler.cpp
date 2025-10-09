@@ -201,7 +201,6 @@ struct XpuptiProfiler::XpuptiProfilerPimpl
       : GPUProfiler<XpuptiProfiler>::GPUProfilerPimplInterface(profiler) {}
   virtual ~XpuptiProfilerPimpl() = default;
 
-  void setLibPath(const std::string &libPath) override {}
   void doStart() override;
   void doFlush() override;
   void doStop() override;
@@ -470,5 +469,13 @@ XpuptiProfiler::XpuptiProfiler() {
 }
 
 XpuptiProfiler::~XpuptiProfiler() = default;
+
+void XpuptiProfiler::doSetMode(const std::vector<std::string> &modeAndOptions) {
+  auto mode = modeAndOptions[0];
+  if (!mode.empty()) {
+    throw std::invalid_argument("[PROTON] XpuptiProfiler: unsupported mode: " +
+                                mode);
+  }
+}
 
 } // namespace proton

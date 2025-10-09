@@ -1,8 +1,14 @@
+"""
+Split-K GEMM with Tensor Descriptors
+====================================
+Split-K is a approach that parallelizes the reduction dimension K to improve GPU utilization.
+This script implements a Split-K GEMM with tensor descriptors.
+"""
 import torch
 import triton
 import triton.language as tl
 
-import triton_kernels_benchmark as benchmark_suit
+import triton_kernels_benchmark as benchmark_suite
 from triton_kernels_benchmark import xetla_kernel
 
 
@@ -34,27 +40,26 @@ def _kernel(A, B, C,  #
     pid_m = group_id * GROUP_M + (pid % group_size)
     pid_n = (pid % width) // (group_size)
 
-    a_block_ptr = tl.make_block_ptr(base=A, shape=(M, K), strides=(stride_am, stride_ak),
-                                    offsets=(pid_m * BLOCK_M, pid_z * BLOCK_K), block_shape=(BLOCK_M, BLOCK_K),
-                                    order=(1, 0))
-    b_block_ptr = tl.make_block_ptr(base=B, shape=(K, N), strides=(stride_bk, stride_bn),
-                                    offsets=(pid_z * BLOCK_K, pid_n * BLOCK_N), block_shape=(BLOCK_K, BLOCK_N),
-                                    order=(1, 0))
+    # Create tensor descriptors
+    a_desc = tl.make_tensor_descriptor(base=A, shape=(M, K), strides=(stride_am, stride_ak),
+                                       block_shape=(BLOCK_M, BLOCK_K))
+    b_desc = tl.make_tensor_descriptor(base=B, shape=(K, N), strides=(stride_bk, stride_bn),
+                                       block_shape=(BLOCK_K, BLOCK_N))
 
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=acc_dtype)
+    off_k = pid_z * BLOCK_K
     for _ in range(0, K, BLOCK_K * SPLIT_K):
-        a = tl.load(a_block_ptr)
-        b = tl.load(b_block_ptr)
+        a = a_desc.load([pid_m * BLOCK_M, off_k])
+        b = b_desc.load([off_k, pid_n * BLOCK_N])
         acc += tl.dot(a, b, out_dtype=acc_dtype)
-        a_block_ptr = tl.advance(a_block_ptr, (0, BLOCK_K * SPLIT_K))
-        b_block_ptr = tl.advance(b_block_ptr, (BLOCK_K * SPLIT_K, 0))
+        off_k += BLOCK_K * SPLIT_K
     acc = acc.to(C.dtype.element_ty)
+
     # handles write-back with reduction-splitting
     if SPLIT_K == 1:
-        c_block_ptr = tl.make_block_ptr(base=C, shape=(M, N), strides=(stride_cm, stride_cn),
-                                        offsets=(pid_m * BLOCK_M, pid_n * BLOCK_N), block_shape=(BLOCK_M, BLOCK_N),
-                                        order=(1, 0))
-        tl.store(c_block_ptr, acc, boundary_check=(0, 1))
+        c_desc = tl.make_tensor_descriptor(base=C, shape=(M, N), strides=(stride_cm, stride_cn),
+                                           block_shape=(BLOCK_M, BLOCK_N))
+        c_desc.store([pid_m * BLOCK_M, pid_n * BLOCK_N], acc)
     else:
         # rematerialize rm and rn to save registers
         rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
@@ -117,8 +122,8 @@ matmul = _matmul.apply
 
 
 # Benchmark Performance
-@benchmark_suit.perf_report(
-    benchmark_suit.Benchmark(
+@benchmark_suite.perf_report(
+    benchmark_suite.Benchmark(
         # argument names to use as an x-axis for the plot
         x_names=['M', 'K', 'N'],
         x_vals=[
@@ -141,22 +146,21 @@ matmul = _matmul.apply
         args={},
     ))
 def benchmark(M, N, K, provider):
+    # Maximum across onednn=10, triton=100, xetla=300
+    do_bench = benchmark_suite.get_do_bench(n_warmup=300, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
     torch.manual_seed(0)
     a = torch.rand((M, K), device='xpu', dtype=torch.bfloat16)
     b = torch.rand((K, N), device='xpu', dtype=torch.bfloat16)
-    quantiles = [0.5, 0.0, 1.0]
 
     if provider == 'onednn':
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(lambda: torch.matmul(a, b), n_warmup=10, n_repeat=10,
-                                                                 quantiles=quantiles)
+        _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: torch.matmul(a, b))
     elif provider == 'triton':
         c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
         triton_fn = lambda: matmul(a, b, c)
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
         rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
-        benchmark_suit.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10,
-                                                                 quantiles=quantiles)
+        benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
+        _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
     elif provider == 'xetla':
         c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
         acc = torch.zeros((M, N), device='xpu', dtype=torch.float32)
@@ -167,9 +171,8 @@ def benchmark(M, N, K, provider):
         xetla_fn = lambda: func(a, b, c, acc, cnt)
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
 
-        # benchmark_suit.assert_close(xetla_fn, torch_fn, atol=1e-4, rtol=1.0, err_msg='xetla to torch')
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(xetla_fn, n_warmup=10, n_repeat=10,
-                                                                 quantiles=quantiles)
+        # benchmark_suite.assert_close(xetla_fn, torch_fn, atol=1e-4, rtol=1.0, err_msg='xetla to torch')
+        _, min_ms, max_ms, mean_ms, cv = do_bench(xetla_fn)
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 

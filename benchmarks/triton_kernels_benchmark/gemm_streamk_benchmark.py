@@ -1,15 +1,15 @@
 """
-Stream K GEMM with Block Pointers
-=====================
+Stream K GEMM with Tensor Descriptors
+=====================================
 Stream K is a approach that aims to resovle quantization inefficiency in GPU work load for GEMM problems.
-This script implements a Stream K GEMM with block pointers to achieve better hardware utilization.
+This script implements a Stream K GEMM with tensor descriptors to achieve better hardware utilization.
 """
 
 import torch
 import triton
 import triton.language as tl
 
-import triton_kernels_benchmark as benchmark_suit
+import triton_kernels_benchmark as benchmark_suite
 from triton_kernels_benchmark import xetla_kernel
 
 
@@ -67,28 +67,24 @@ def mac_loop(
     else:
         pid_m, pid_n = linear_tile(tile_id, M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M)
 
-    a_ptr += BLOCK_SIZE_K * stride_ak * remain_iters
-    a_block_ptr = tl.make_block_ptr(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
-                                    offsets=(pid_m * BLOCK_SIZE_M, 0), block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K),
-                                    order=(1, 0))
-    b_ptr += BLOCK_SIZE_K * stride_bk * remain_iters
-    b_block_ptr = tl.make_block_ptr(base=b_ptr, shape=(K, N), strides=(stride_bk, stride_bn),
-                                    offsets=(0, pid_n * BLOCK_SIZE_N), block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N),
-                                    order=(1, 0))
+    # Create tensor descriptors
+    a_desc = tl.make_tensor_descriptor(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
+                                       block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K))
+    b_desc = tl.make_tensor_descriptor(base=b_ptr, shape=(K, N), strides=(stride_bk, stride_bn),
+                                       block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N))
 
     acc = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+    off_k = remain_iters * BLOCK_SIZE_K
     for _ in range(start_iter, end_iter):
-        a = tl.load(a_block_ptr, boundary_check=(0, 1))
-        b = tl.load(b_block_ptr, boundary_check=(0, 1))
+        a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
+        b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
         acc += tl.dot(a, b)
-        a_block_ptr = tl.advance(a_block_ptr, (0, BLOCK_SIZE_K))
-        b_block_ptr = tl.advance(b_block_ptr, (BLOCK_SIZE_K, 0))
+        off_k += BLOCK_SIZE_K
 
     if remain_iters == 0 and end_iter % iters_per_tile == 0:
-        c_block_ptr = tl.make_block_ptr(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
-                                        offsets=(pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N),
-                                        block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N), order=(1, 0))
-        tl.store(c_block_ptr, acc, boundary_check=(0, 1))
+        c_desc = tl.make_tensor_descriptor(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
+                                           block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N))
+        c_desc.store([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], acc)
     else:
         rm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
         rn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
@@ -165,26 +161,23 @@ def full_tiles(
     else:
         pid_m, pid_n = linear_tile(tile_id, M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M)
 
-    a_block_ptr = tl.make_block_ptr(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
-                                    offsets=(pid_m * BLOCK_SIZE_M, 0), block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K),
-                                    order=(1, 0))
-    b_block_ptr = tl.make_block_ptr(base=b_ptr, shape=(K, N), strides=(stride_bk, stride_bn),
-                                    offsets=(0, pid_n * BLOCK_SIZE_N), block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N),
-                                    order=(1, 0))
+    a_desc = tl.make_tensor_descriptor(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
+                                       block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K))
+    b_desc = tl.make_tensor_descriptor(base=b_ptr, shape=(K, N), strides=(stride_bk, stride_bn),
+                                       block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N))
 
     acc = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
+    off_k = 0
     for _ in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
-        a = tl.load(a_block_ptr, boundary_check=(0, 1))
-        b = tl.load(b_block_ptr, boundary_check=(0, 1))
+        a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
+        b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
         acc += tl.dot(a, b)
-        a_block_ptr = tl.advance(a_block_ptr, (0, BLOCK_SIZE_K))
-        b_block_ptr = tl.advance(b_block_ptr, (BLOCK_SIZE_K, 0))
+        off_k += BLOCK_SIZE_K
 
-    c_block_ptr = tl.make_block_ptr(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
-                                    offsets=(pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N),
-                                    block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N), order=(1, 0))
-    tl.store(c_block_ptr, acc, boundary_check=(0, 1))
+    c_desc = tl.make_tensor_descriptor(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
+                                       block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N))
+    c_desc.store([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], acc)
 
 
 # ---------------------------------------------------------------------------
@@ -243,8 +236,8 @@ def matmul(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor):
 
 
 # Benchmark Performance
-@benchmark_suit.perf_report(
-    benchmark_suit.Benchmark(
+@benchmark_suite.perf_report(
+    benchmark_suite.Benchmark(
         # argument names to use as an x-axis for the plot
         x_names=['M', 'K', 'N'],
         x_vals=[[3072, 4096, 3072]],
@@ -262,22 +255,20 @@ def matmul(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor):
         args={},
     ))
 def benchmark(M, N, K, provider):
+    # Maximum across onednn=10, triton=1000, xetla=100
+    do_bench = benchmark_suite.get_do_bench(n_warmup=1000, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
     torch.manual_seed(0)
     a = torch.rand((M, K), device='xpu', dtype=torch.bfloat16)
     b = torch.rand((K, N), device='xpu', dtype=torch.bfloat16)
 
-    quantiles = [0.5, 0.0, 1.0]
-
     if provider == 'onednn':
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(lambda: torch.matmul(a, b), n_warmup=10, n_repeat=10,
-                                                                 quantiles=quantiles)
+        _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: torch.matmul(a, b))
     elif provider == 'triton':
         c = torch.zeros((M, N), device=a.device, dtype=torch.float32)
         triton_fn = lambda: matmul(a, b, c)
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
-        benchmark_suit.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=1e-2, err_msg='triton to torch')
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10,
-                                                                 quantiles=quantiles)
+        benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=1e-2, err_msg='triton to torch')
+        _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
     elif provider == 'xetla':
         c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
         acc = torch.zeros((M, N), device='xpu', dtype=torch.float32)
@@ -288,14 +279,13 @@ def benchmark(M, N, K, provider):
         xetla_fn = lambda: func(a, b, c, acc, cnt)
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
 
-        # benchmark_suit.assert_close(xetla_fn, torch_fn, atol=1e-4, rtol=1.0, err_msg='xetla to torch')
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(xetla_fn, n_warmup=10, n_repeat=10,
-                                                                 quantiles=quantiles)
+        # benchmark_suite.assert_close(xetla_fn, torch_fn, atol=1e-4, rtol=1.0, err_msg='xetla to torch')
+        _, min_ms, max_ms, mean_ms, cv = do_bench(xetla_fn)
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 
     tflops = lambda mean: 2 * M * N * K * (1e-12) / (mean * 1e-3)
-    gbps = lambda mean: 2 * (M * K + K * N) + 4.0 * (M * N) * (1e-9) / (mean * 1e-3)
+    gbps = lambda mean: (2 * (M * K + K * N) + 4.0 * (M * N)) * (1e-9) / (mean * 1e-3)
 
     return (gbps(mean_ms), gbps(max_ms), gbps(min_ms)), (tflops(mean_ms), tflops(max_ms), tflops(min_ms)), cv
 

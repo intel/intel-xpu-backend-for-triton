@@ -174,15 +174,17 @@ class ArchParser:
     if os.name != 'nt':
 
         def __del__(self):
-            handle = self.shared_library._handle
-            self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
-            self.shared_library.dlclose(handle)
+            if hasattr(self, "shared_library"):
+                handle = self.shared_library._handle
+                self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
+                self.shared_library.dlclose(handle)
     else:
 
         def __del__(self):
-            handle = self.shared_library._handle
-            ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
-            ctypes.windll.kernel32.FreeLibrary(handle)
+            if hasattr(self, "shared_library"):
+                handle = self.shared_library._handle
+                ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
+                ctypes.windll.kernel32.FreeLibrary(handle)
 
 
 class SpirvUtils:
@@ -215,15 +217,17 @@ class SpirvUtils:
     if os.name != 'nt':
 
         def __del__(self):
-            handle = self.shared_library._handle
-            self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
-            self.shared_library.dlclose(handle)
+            if hasattr(self, "shared_library"):
+                handle = self.shared_library._handle
+                self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
+                self.shared_library.dlclose(handle)
     else:
 
         def __del__(self):
-            handle = self.shared_library._handle
-            ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
-            ctypes.windll.kernel32.FreeLibrary(handle)
+            if hasattr(self, "shared_library"):
+                handle = self.shared_library._handle
+                ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
+                ctypes.windll.kernel32.FreeLibrary(handle)
 
 
 class TritonLauncher:
@@ -243,15 +247,17 @@ class TritonLauncher:
     if os.name != 'nt':
 
         def __del__(self):
-            handle = self.shared_library._handle
-            self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
-            self.shared_library.dlclose(handle)
+            if hasattr(self, "shared_library"):
+                handle = self.shared_library._handle
+                self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
+                self.shared_library.dlclose(handle)
     else:
 
         def __del__(self):
-            handle = self.shared_library._handle
-            ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
-            ctypes.windll.kernel32.FreeLibrary(handle)
+            if hasattr(self, "shared_library"):
+                handle = self.shared_library._handle
+                ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
+                ctypes.windll.kernel32.FreeLibrary(handle)
 
 
 def compile_module_from_src(src: str, name: str):
@@ -391,6 +397,7 @@ def make_launcher(constants, signature):
                 # we have to pass the shape and strides twice.
                 for _ in range(2 * ndim):
                     output.append("i64")
+                output.append("i1")
                 for _ in range(ndim):
                     output.append("i32")
                 for _ in range(ndim):
@@ -506,10 +513,8 @@ def make_launcher(constants, signature):
 #define EXPORT_FUNC __attribute__((visibility("default")))
 #endif
 
-#define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #include <Python.h>
 #include <stdio.h>
-#include <numpy/arrayobject.h>
 
 namespace {{
 
@@ -741,9 +746,7 @@ extern "C" EXPORT_FUNC PyObject* launch(PyObject* args) {{
   Py_DECREF(clusterDim);
   // extract launch metadata
   if (launch_enter_hook != Py_None){{
-    PyObject* args = Py_BuildValue("(O)", launch_metadata);
-    PyObject* ret = PyObject_CallObject(launch_enter_hook, args);
-    Py_DECREF(args);
+    PyObject* ret = PyObject_CallOneArg(launch_enter_hook, launch_metadata);
     if (!ret)
       return NULL;
     Py_DECREF(ret);
@@ -766,9 +769,7 @@ extern "C" EXPORT_FUNC PyObject* launch(PyObject* args) {{
   }}
 
   if(launch_exit_hook != Py_None){{
-    PyObject* args = Py_BuildValue("(O)", launch_metadata);
-    PyObject* ret = PyObject_CallObject(launch_exit_hook, args);
-    Py_DECREF(args);
+    PyObject* ret = PyObject_CallOneArg(launch_exit_hook, launch_metadata);
     if (!ret)
       return NULL;
     Py_DECREF(ret);
@@ -797,7 +798,7 @@ def wrap_handle_tensor_descriptor(launcher):
                 # descriptors which is why we provide our own decomposition
                 # above. Sadly this means we have to pass the shape and strides
                 # twice.
-                final_args.extend([arg.base, *arg.shape, *arg.strides, *arg.shape, *arg.strides])
+                final_args.extend([arg.base, *arg.shape, *arg.strides, arg.padding == "nan", *arg.shape, *arg.strides])
             else:
                 final_args.append(arg)
 
@@ -930,18 +931,12 @@ class XPUDriver(DriverBase):
                 dev_property["has_bfloat16_conversions"] = "cl_intel_bfloat16_conversions" in supported_extensions
             else:
                 check = self.utils.has_opencl_extension
-                # FIXME: eventually even LTS driver will support OpenCL extensions.
-                # Please remove this after upgrading to a new version.
-                # https://github.com/intel/intel-xpu-backend-for-triton/issues/4708
-                is_lts = "1.3" in dev_property["driver_version"]
                 dev_property["has_subgroup_matrix_multiply_accumulate"] = check(
-                    device, b"cl_intel_subgroup_matrix_multiply_accumulate") if not is_lts else False
+                    device, b"cl_intel_subgroup_matrix_multiply_accumulate")
                 dev_property["has_subgroup_matrix_multiply_accumulate_tensor_float32"] = check(
-                    device, b"cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32") if not is_lts else False
-                dev_property["has_subgroup_2d_block_io"] = check(
-                    device, b"cl_intel_subgroup_2d_block_io") if not is_lts else False
-                dev_property["has_bfloat16_conversions"] = check(
-                    device, b"cl_intel_bfloat16_conversions") if not is_lts else False
+                    device, b"cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32")
+                dev_property["has_subgroup_2d_block_io"] = check(device, b"cl_intel_subgroup_2d_block_io")
+                dev_property["has_bfloat16_conversions"] = check(device, b"cl_intel_bfloat16_conversions")
 
         update_advanced_features(device, dev_property)
         return GPUTarget("xpu", dev_property, warp_size=32)

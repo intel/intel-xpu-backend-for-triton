@@ -109,9 +109,13 @@ if pip show torch &>/dev/null; then
   echo "**** PyTorch is already installed. Current commit is $PYTORCH_CURRENT_COMMIT ****"
   if [ "$BUILD_LATEST" = false ]; then
     if [[ "$PYTORCH_PINNED_COMMIT" = "$PYTORCH_CURRENT_COMMIT"* ]]; then
-      echo "**** PyTorch is already installed and its current commit is equal to the pinned commit: $PYTORCH_PINNED_COMMIT. ****"
-      echo "**** There is no need to build anything, just exit. ****"
-      exit 0
+      if [ "$FORCE_REINSTALL" = true ]; then
+        echo "**** Matching pinned commit ($PYTORCH_PINNED_COMMIT) detected but --force-reinstall specified: proceeding with rebuild. ****"
+      else
+        echo "**** PyTorch is already installed and its current commit matches the pinned commit: $PYTORCH_PINNED_COMMIT. ****"
+        echo "**** There is no need to build anything, exiting. ****"
+        exit 0
+      fi
     else
       echo "**** Current PyTorch commit $PYTORCH_CURRENT_COMMIT ****"
       echo "**** Pinned PyTorch commit $PYTORCH_PINNED_COMMIT ****"
@@ -253,7 +257,7 @@ function build_pytorch {
     export libuv_ROOT="$PYTORCH_PROJ/libuv-1.40.0"
   fi
 
-  USE_XCCL=1 USE_STATIC_MKL=1 python setup.py bdist_wheel
+  USE_XCCL=1 USE_STATIC_MKL=1 python -m build --wheel --no-isolation
 }
 
 function install_pytorch {
@@ -272,7 +276,7 @@ install_pytorch
 # ImportError: Failed to load PyTorch C extensions:
 #     ...
 #     This error can generally be solved using the `develop` workflow
-#         $ python setup.py develop && python -c "import torch"  # This should succeed
+#         $ pip install -v -e . && python -c "import torch"  # This should succeed
 #     or by running Python from a different directory.
 cd $BASE
 python -c "import torch;print(torch.__version__)"

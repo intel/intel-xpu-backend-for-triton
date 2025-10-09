@@ -377,6 +377,8 @@ public:
 
   Value getShmemOffset(Location loc, RewriterBase &rewriter,
                        triton::gpu::MemDescType srcTy) const;
+  Value getShmemAffineBase(Location loc, RewriterBase &rewriter,
+                           triton::gpu::MemDescType srcTy) const;
 
   // TODO(Keren): deprecate the method once AMD backend has cleaned up
   Value getCSwizzleOffset(int dim) const {
@@ -526,32 +528,6 @@ Value emitPadding(Location loc, RewriterBase &rewriter,
                   triton::gpu::PaddedSharedEncodingAttr layout,
                   unsigned bitwidth, Value smemOffset, bool offsetInBytes);
 
-// Emits IR to load data from shared memory into registers, or to store data
-// from registers into shared memory.
-//
-// You supply perVectorCallback, which is called once per group of register
-// elements to transfer.  You can use this callback to emit IR to load or store
-// data from or to shared memory.
-//
-// elemLlvmTy should be dstTy's element type converted to an LLVM-dialect type.
-//
-// If maxVecElems is provided, we won't vectorize more than this many elements.
-//
-// Returns true on success.
-[[nodiscard]] bool emitTransferBetweenRegistersAndShared(
-    RankedTensorType registerTy, triton::gpu::MemDescType sharedTy,
-    Type elemLlvmTy, std::optional<int32_t> maxVecElems,
-    const SharedMemoryObject &smemObj, Location loc, RewriterBase &rewriter,
-    const TargetInfoBase &target,
-    std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback);
-
-[[nodiscard]] bool emitTransferBetweenRegistersAndShared(
-    LinearLayout &regLayout, triton::gpu::MemDescType sharedTy, Type elemLlvmTy,
-    std::optional<int32_t> maxVecElems, const SharedMemoryObject &smemObj,
-    Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
-    Value laneId, Value warpId,
-    std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback);
-
 // Close cousin of lowerLdStMatrix in MemoryOpToLLVM.cpp
 // We might want to merge them at some point, but having to support
 // ldmatrix.trans makes the code in lowerLdStMatrix a bit specific
@@ -567,6 +543,7 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                 std::function<Value(Value)> calcPaddedOffset,
                 Value affineOffset, uint64_t maskSpanAffineOffset,
                 RewriterBase &rewriter, const TargetInfoBase &targetInfo,
+                std::optional<int> maybeMaxVecElems = {},
                 Operation *localLoadOp = nullptr);
 
 // Lower an ld/st-like operation given a layout and a callback that creates the
@@ -627,11 +604,10 @@ void makeAllWarpGroupsIsolatedFromAbove(Operation *op);
 // Set the correct loop annotation on LLVM branch ops.
 void fixUpLoopAnnotation(ModuleOp mod);
 
-LogicalResult
-transferWithinBlockSwizzling(triton::gpu::ConvertLayoutOp op, Value src,
-                             const TargetInfoBase &targetInfo,
-                             const LLVMTypeConverter *typeConverter,
-                             RewriterBase &rewriter);
+void transferWithinBlockSwizzling(triton::gpu::ConvertLayoutOp op, Value src,
+                                  const TargetInfoBase &targetInfo,
+                                  const LLVMTypeConverter *typeConverter,
+                                  RewriterBase &rewriter);
 
 SmallVector<Value> inlineRegionImpl(RewriterBase &rewriter, Region &region,
                                     ArrayRef<Value> args,

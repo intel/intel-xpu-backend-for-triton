@@ -19,7 +19,7 @@ public:
 
   TritonIntelGPUToLLVMTypeConverter(
       MLIRContext *ctx, LowerToLLVMOptions &option,
-      const TargetInfoBase &targetInfo, bool isAdvancedPathEnabled,
+      const TargetInfoBase &targetInfo,
       const DataLayoutAnalysis *analysis = nullptr);
 };
 

@@ -174,7 +174,7 @@ def test_prune_configs(with_perf_model: bool, device: str):
 
 
 @pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9,
-                   reason="Requires compute capability >= 9 for NV")
+                   reason="Requires compute capability >= 9 for NV", run=False)
 def test_override_ttir(device):
     N = 1024
     src = torch.randn(N, device=device)
@@ -223,7 +223,7 @@ module {
 
 
 @pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9,
-                   reason="Requires compute capability >= 9 for NV")
+                   reason="Requires compute capability >= 9 for NV", run=False)
 def test_override_ttgir(device):
     N = 1024
     src = torch.randn(N, device=device)
@@ -273,7 +273,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] != 9,
-                   reason="PTX file in this unit test is only for SM90")
+                   reason="PTX file in this unit test is only for SM90", run=False)
 def test_override_ptx(device):
     N = 1024
     src = torch.randn(N, device=device)
@@ -448,3 +448,32 @@ def test_exceed_threads(device):
     warp_size = triton.runtime.driver.active.get_current_target().warp_size
     assert exception_out_of_resource is not None and f"out of resource: threads, Required: {128 * warp_size}" in str(
         exception_out_of_resource)
+
+
+def test_prune_all_configs(device):
+    N = 1024
+    src = torch.randn(N, device=device)
+    dst = torch.empty(N, device=device)
+
+    def early_config_prune(configs, named_args, **kwargs):
+        return []
+
+    configs = [triton.Config(kwargs={'BLOCK_SIZE': 32}), triton.Config(kwargs={'BLOCK_SIZE': 128})]
+
+    prune_configs_by = {'early_config_prune': early_config_prune}
+
+    @triton.autotune(configs=configs, key=['N'], prune_configs_by=prune_configs_by)
+    @triton.jit
+    def _kernel(dst, src, N, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        x = tl.load(src + offsets, mask=offsets < N)
+        tl.store(dst + offsets, x, mask=offsets < N)
+
+    grid = lambda META: (triton.cdiv(N, META['BLOCK_SIZE']), )
+    try:
+        _kernel[grid](dst, src, N=N)
+        pytest.fail("Expected exception was not thrown.")
+    except triton.TritonError as e:
+        assert e is not None and str(
+            e
+        ) == "Autotuner error: No valid autotuner configs after pruning. `early_config_prune` should return at least one config."

@@ -103,7 +103,52 @@ Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i) {
 
 Value permute(Location loc, RewriterBase &rewriter, Value x, Value y,
               Value selector) {
-  llvm_unreachable("not implemented");
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+  x = b.bitcast(x, int_ty(32));
+  y = b.bitcast(y, int_ty(32));
+  selector = b.bitcast(selector, int_ty(32));
+
+  Value result = b.i32_val(0);
+
+  for (int i = 0; i < 4; ++i) {
+    Value shiftAmount = b.i32_val(4 * i);
+    Value nibble = b.and_(b.lshr(selector, shiftAmount), b.i32_val(0xF));
+
+    Value sourceIsY = b.and_(b.lshr(nibble, b.i32_val(2)), b.i32_val(1));
+    Value byteIdx = b.and_(nibble, b.i32_val(0x3));
+    Value replicate = b.and_(nibble, b.i32_val(0x8));
+
+    Value extractedX = b.i32_val(0);
+    Value extractedY = b.i32_val(0);
+
+    for (int j = 0; j < 4; ++j) {
+      Value isThisByte = b.icmp_eq(byteIdx, b.i32_val(j));
+
+      Value xByte = b.and_(b.lshr(x, b.i32_val(8 * j)), b.i32_val(0xFF));
+      Value yByte = b.and_(b.lshr(y, b.i32_val(8 * j)), b.i32_val(0xFF));
+
+      extractedX = b.select(isThisByte, xByte, extractedX);
+      extractedY = b.select(isThisByte, yByte, extractedY);
+    }
+
+    Value selectedByte =
+        b.select(b.icmp_ne(sourceIsY, b.i32_val(0)), extractedY, extractedX);
+
+    // Handle replication of MSB if bit 3 is set. It is not required
+    // by Triton's permute, but other backends do it this way.
+    Value msb = b.and_(b.lshr(selectedByte, b.i32_val(7)), b.i32_val(1));
+    Value replicated = b.select(b.icmp_ne(msb, b.i32_val(0)), b.i32_val(0xFF),
+                                b.i32_val(0x00));
+
+    Value finalByte =
+        b.select(b.icmp_ne(replicate, b.i32_val(0)), replicated, selectedByte);
+
+    Value shiftedByte = b.shl(finalByte, b.i32_val(8 * i));
+    result = b.or_(result, shiftedByte);
+  }
+
+  return result;
 }
 
 LLVM::RoundingMode

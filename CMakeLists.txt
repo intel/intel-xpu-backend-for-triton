@@ -89,10 +89,6 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE "Release")
 endif()
 
-if(NOT WIN32)
-  find_library(TERMINFO_LIBRARY tinfo)
-endif()
-
 if(TRITON_BUILD_UT)
   # This is an aggregate target for all unit tests.
   add_custom_target(TritonUnitTests)
@@ -307,7 +303,8 @@ if(TRITON_BUILD_PYTHON_MODULE)
                   ${PYTHON_SRC_PATH}/gluon_ir.cc
                   ${PYTHON_SRC_PATH}/passes.cc
                   ${PYTHON_SRC_PATH}/interpreter.cc
-                  ${PYTHON_SRC_PATH}/llvm.cc)
+                  ${PYTHON_SRC_PATH}/llvm.cc
+                  ${PYTHON_SRC_PATH}/specialize.cc)
 
   # Link triton with its dependencies
   target_link_libraries(triton PRIVATE ${TRITON_LIBRARIES})

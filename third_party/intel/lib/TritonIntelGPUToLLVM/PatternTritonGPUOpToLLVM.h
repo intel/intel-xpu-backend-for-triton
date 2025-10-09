@@ -9,22 +9,6 @@
 
 namespace mlir::triton::intel {
 
-/* Advanced path custom patterns start */
-
-void populateArithOpsToLLVMPatterns(
-    TritonIntelGPUToLLVMTypeConverter &typeConverter,
-    RewritePatternSet &patterns, PatternBenefit benefit);
-
-void populateBF16CastsLLVMPatterns(LLVMTypeConverter &typeConverter,
-                                   RewritePatternSet &patterns,
-                                   PatternBenefit benefit);
-
-void populateTritonOpsToLLVMPatterns(
-    TritonIntelGPUToLLVMTypeConverter &typeConverter,
-    RewritePatternSet &patterns, PatternBenefit benefit);
-
-/* Advanced path custom patterns end */
-
 /* Specialized common patterns start */
 
 void populateElementwiseOpToLLVMPatterns(
@@ -77,7 +61,7 @@ void populateFp4ToFpToLLVMPatterns(LLVMTypeConverter &typeConverter,
 void populateLoadStoreOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
     RewritePatternSet &patterns, const ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    PatternBenefit benefit, bool useTileLoadLinearLayout);
+    PatternBenefit benefit);
 
 void populateTensorPtrOpsToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                         RewritePatternSet &patterns,

@@ -1,18 +1,18 @@
 import os
 
-from .benchmark_testing import (
+from triton_kernels_benchmark.benchmark_testing import (
     assert_close,
     do_bench,
-    do_prewarmup,
     filter_providers,
     perf_report,
     Benchmark,
     BenchmarkCategory,
     BenchmarkConfig,
     BENCHMARKING_METHOD,
+    get_do_bench,
 )
 
-from .benchmark_shapes_parser import ShapePatternParser
+from triton_kernels_benchmark.benchmark_shapes_parser import ShapePatternParser
 
 if BENCHMARKING_METHOD == "UPSTREAM_PYTORCH_PROFILER":
     os.environ["INJECT_PYTORCH"] = "True"
@@ -20,7 +20,6 @@ if BENCHMARKING_METHOD == "UPSTREAM_PYTORCH_PROFILER":
 __all__ = [
     "assert_close",
     "do_bench",
-    "do_prewarmup",
     "filter_providers",
     "perf_report",
     "Benchmark",
@@ -28,4 +27,5 @@ __all__ = [
     "BenchmarkConfig",
     "BENCHMARKING_METHOD",
     "ShapePatternParser",
+    "get_do_bench",
 ]

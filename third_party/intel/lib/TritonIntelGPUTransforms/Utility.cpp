@@ -120,16 +120,16 @@ bool isExpensiveLoadOrStore(Operation *op) {
   if (isSingleValue(base))
     return false;
 
-  // Loads that use a block pointer are expensive if they cannot be lowered to
-  // 2D block read operations. Temporarily leverage the
+  // Loads or stores that use a block pointer are expensive if they cannot be
+  // lowered to 2D block read/write operations. Temporarily leverage the
   // "ttig.block_io" attribute to filter out inexpensive loads.
   Attribute blockIOAttr =
       op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
   if (blockIOAttr)
     return false;
 
-  // Loads that use more threads than elements can be presumed to have a high
-  // hit-rate that makes them cheap to load.
+  // Loads or stores that use more threads than elements can be presumed to have
+  // a high hit-rate that makes them cheap.
   if (auto ptrType = getRankedTensorType(base.getType())) {
     int numWarps = ttg::lookupNumWarps(op);
     auto mod = op->getParentOfType<ModuleOp>();
@@ -197,6 +197,11 @@ LogicalResult getConvertBackwardSlice(
 
   auto updateLayout = [&](Value value, Attribute encoding) {
     assert(isTensorOrTensorPointerType(value.getType()));
+
+    if (RankedTensorType tensorType = getRankedTensorType(value.getType()))
+      if (tensorType.getEncoding() == encoding)
+        return success();
+
     slice.insert(value);
     Attribute &existing = layout[value];
     if (existing && existing != encoding)
@@ -211,10 +216,7 @@ LogicalResult getConvertBackwardSlice(
     queue.pop_back();
     if (!isTensorOrTensorPointerType(currentValue.getType()))
       continue;
-    // Skip propagating through for op results for now.
-    // TODO: enable this based on needs.
-    if (currentValue.getDefiningOp<scf::ForOp>())
-      return failure();
+
     if (failed(updateLayout(currentValue, encoding)))
       return failure();
 
@@ -225,7 +227,20 @@ LogicalResult getConvertBackwardSlice(
         return failure();
       currentValue = existing;
     }
+    if (auto forOp = currentValue.getDefiningOp<scf::ForOp>()) {
+      if (stopPropagation && stopPropagation(forOp))
+        continue;
 
+      auto loopRes = cast<OpResult>(currentValue);
+      OpOperand *initOperand = forOp.getTiedLoopInit(loopRes);
+      BlockArgument blockArg = forOp.getTiedLoopRegionIterArg(loopRes);
+      OpOperand *yieldOperand = forOp.getTiedLoopYieldedValue(blockArg);
+
+      enqueue(*initOperand, encoding);
+      enqueue(*yieldOperand, encoding);
+
+      continue;
+    }
     if (auto ifOp = currentValue.getDefiningOp<scf::IfOp>()) {
       if (stopPropagation && stopPropagation(ifOp))
         continue;

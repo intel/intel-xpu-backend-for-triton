@@ -1,0 +1,104 @@
+name: Third party tests [liger-kernels, vllm]
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner_label:
+        description: Runner label, keep empty for default
+        type: string
+        default: ""
+      use_pyenv_python:
+        description: Use Python built with pyenv
+        type: boolean
+        default: false
+  schedule:
+    # About midnight PST Sunday (UTC-8)
+    - cron: "5 10 * * SUN"
+
+
+# Cancels in-progress PR runs when the PR is updated.  Manual runs are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions: read-all
+
+env:
+  PYTHON_VERSION: "3.10"
+  TAG: ${{ inputs.tag || (github.event_name == 'pull_request' && format('pr-{0}', github.event.number)) || (github.event_name == 'schedule' && 'ci') || 'test' }}
+
+jobs:
+  build:
+    name: Third party tests [liger-kernels, vllm]
+    runs-on:
+      - linux
+      - ${{ inputs.runner_label || 'max1550' }}
+    timeout-minutes: 720
+    defaults:
+      run:
+        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+    steps:
+      - name: Print inputs
+        run: |
+          cat <<EOF
+          ${{ toJSON(inputs) }}
+          EOF
+
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install Python
+        if: ${{ !(inputs.use_pyenv_python || false) }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Python (from pyenv) ${{ inputs.python_version }}
+        if: ${{ inputs.use_pyenv_python }}
+        uses: ./.github/actions/setup-pyenv-python
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Identify Python version
+        run: |
+          PYTHON_VERSION="$(python -c 'import sys; print(f"{sys.version_info[0]}.{ sys.version_info[1]}")')"
+          echo "PYTHON_VERSION=$PYTHON_VERSION" | tee -a $GITHUB_ENV
+
+      - name: Install Python build dependencies
+        run: |
+          pip install wheel cmake
+
+      - name: Setup PyTorch
+        uses: ./.github/actions/setup-pytorch
+
+      - name: Build Triton wheels
+        uses: ./.github/actions/setup-triton
+        with:
+          command: DEBUG=1 python setup.py bdist_wheel
+
+      - name: Install Triton
+        id: install
+        run: |
+          pip install dist/*.whl
+
+      - name: Create reports dir
+        run: |
+          mkdir reports
+          echo "REPORTS=$PWD/reports" >> $GITHUB_ENV
+
+      - name: Run VLLM tests
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          ./scripts/test-triton.sh --vllm --skip-pip-install --skip-pytorch-install
+
+      - name: Run Liger-Kernel tests
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          ./scripts/test-triton.sh --liger --skip-pip-install --skip-pytorch-install
+
+      - name: Upload test report
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: reports

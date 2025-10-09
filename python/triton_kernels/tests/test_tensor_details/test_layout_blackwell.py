@@ -1,4 +1,5 @@
 import pytest
+from triton._internal_testing import is_cuda
 import torch
 from triton_kernels.tensor_details.layout import BlackwellMXScaleLayout
 
@@ -17,6 +18,7 @@ from triton_kernels.tensor_details.layout import BlackwellMXScaleLayout
         (3, 2, 36),
     ],
 )
+@pytest.mark.xfail(condition=not is_cuda(), reason="Only supported on CUDA", run=False)
 def test_mxfp4_scale_roundtrip(shape):
     x = torch.randint(0, 256, shape, dtype=torch.uint8, device="cuda")
     layout = BlackwellMXScaleLayout(x.shape)

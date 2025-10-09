@@ -184,6 +184,9 @@ class constexpr_type(base_type):
     def __repr__(self) -> str:
         return f"constexpr_type[{self.value}]"
 
+    def __hash__(self):
+        return hash(self.value)
+
     def mangle(self) -> str:
         return repr(self)
 
@@ -207,6 +210,9 @@ class constexpr(base_value):
 
     def __repr__(self) -> str:
         return f"constexpr[{self.value}]"
+
+    def __hash__(self):
+        return hash((self.value, self.type))
 
     def _flatten_ir(self, handles: List[ir.value]) -> None:
         return
@@ -771,7 +777,7 @@ class tuple_type(base_type):
         return tuple(values, self), cursor
 
     def mangle(self):
-        return 'T' + '_'.join(ty.mangle for ty in self.types) + 'T'
+        return 'T' + '_'.join(ty.mangle() for ty in self.types) + 'T'
 
 
 class slice_type(dtype):
@@ -1309,7 +1315,7 @@ class tuple(base_value):
             v._flatten_ir(handles)
 
     def __repr__(self):
-        return f"({' ,'.join(repr(x) for x in self.values)})"
+        return f"({', '.join(repr(x) for x in self.values)})"
 
 
 class slice:
@@ -2222,6 +2228,7 @@ def make_tensor_descriptor(
     shape: List[tensor],
     strides: List[tensor],
     block_shape: List[constexpr],
+    padding_option="zero",
     _semantic=None,
 ) -> tensor_descriptor:
     """Make a tensor descriptor object
@@ -2271,7 +2278,9 @@ def make_tensor_descriptor(
         inplace_abs[grid](x, M, N, M_BLOCK, N_BLOCK)
 
     """
-    return _semantic.make_tensor_descriptor(base, shape, strides, block_shape)
+
+    padding_option = _unwrap_if_constexpr(padding_option)
+    return _semantic.make_tensor_descriptor(base, shape, strides, block_shape, padding_option)
 
 
 # -----------------------
@@ -2796,9 +2805,10 @@ def map_elementwise(
     builder = _semantic.builder
     block = builder.new_block()
     scalar_args = []
+    original_loc = builder.get_loc()
     for i, ty in enumerate(in_scalar_tys):
         for j in builtins.range(pack):
-            block.add_argument(ty.to_ir(builder))
+            block.add_argument_at(ty.to_ir(builder), original_loc)
             scalar_args.append(tensor(block.arg(i * pack + j), ty))
 
     with _insertion_guard(builder):
@@ -2810,6 +2820,7 @@ def map_elementwise(
             scalar_results = scalar_results,
 
         handles = [r.handle for r in scalar_results]
+        builder.set_loc(original_loc)
         builder.create_map_elementwise_ret(handles)
 
     fn_result_types = [x.type for x in scalar_results]
@@ -2823,6 +2834,7 @@ def map_elementwise(
         region = elementwise_op.get_region(0)
         region.push_back(block)
 
+    builder.set_loc(original_loc)
     result = _semantic.map_elementwise(args, scalar_result_types, pack, make_elementwise_region)
     return result[0] if is_single else result
 
@@ -2984,7 +2996,7 @@ def device_print(prefix, *args, hex=False, _semantic=None):
 
 
 @builtin
-def device_assert(cond, msg="", _semantic=None):
+def device_assert(cond, msg="", mask=None, _semantic=None):
     '''
     Assert the condition at runtime from the device.  Requires that the environment variable :code:`TRITON_DEBUG`
     is set to a value besides :code:`0` in order for this to have any effect.
@@ -3003,7 +3015,10 @@ def device_assert(cond, msg="", _semantic=None):
     :param msg: the message to print if the assertion fails. This is required to be a string literal.
     '''
     msg = _unwrap_if_constexpr(msg)
-    return _semantic.device_assert(_semantic.to_tensor(cond), msg)
+    mask = _unwrap_if_constexpr(mask)
+    if mask is not None:
+        mask = _semantic.to_tensor(mask)
+    return _semantic.device_assert(_semantic.to_tensor(cond), msg, mask)
 
 
 @builtin
@@ -3141,7 +3156,7 @@ def inline_asm_elementwise(asm: str, constraints: str, args: Sequence, dtype: Un
 # -----------------------
 
 
-class static_range:
+class static_range(base_value):
     """
     Iterator that counts upward forever.
 
@@ -3181,7 +3196,7 @@ class static_range:
         raise RuntimeError("static_range can only be used in @triton.jit'd functions")
 
 
-class range:
+class range(base_value):
     """
     Iterator that counts upward forever.
 
@@ -3251,7 +3266,7 @@ class range:
         raise RuntimeError("tl.range can only be used in @triton.jit'd functions")
 
 
-class condition:
+class condition(base_value):
     """
     While loop condition wrapper.
 
@@ -3357,7 +3372,7 @@ def extern_elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol
             dispatch_args[i], _ = _semantic.binary_op_type_checking_impl(dispatch_args[i], broadcast_arg,
                                                                          arithmetic_check=arithmetic_check)
         if not all_scalar:
-            ret_type = broadcast_arg.type
+            ret_type = broadcast_arg.type.with_element_ty(ret_type)
     func = _semantic.builder.create_extern_elementwise
     return dispatch(func, lib_name, lib_path, dispatch_args, arg_type_symbol_dict, ret_type, is_pure, _semantic)
 

@@ -52,7 +52,6 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
         return impl(name, src, srcdir, library_dirs, include_dirs, libraries, ccflags)
     suffix = sysconfig.get_config_var('EXT_SUFFIX')
     so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))
-    # try to avoid setuptools if possible
     cc = os.environ.get("CC")
     if cc is None:
         clang = shutil.which("clang")
@@ -64,11 +63,7 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
         if cc is None:
             raise RuntimeError(
                 "Failed to find C compiler. Please specify via CC environment variable or set triton.knobs.build.impl.")
-    # This function was renamed and made public in Python 3.10
-    if hasattr(sysconfig, 'get_default_scheme'):
-        scheme = sysconfig.get_default_scheme()
-    else:
-        scheme = sysconfig._get_default_scheme()  # type: ignore
+    scheme = sysconfig.get_default_scheme()
     # 'posix_local' is a custom scheme on Debian. However, starting Python 3.10, the default install
     # path changes to include 'local'. This change is required to use triton with system-wide python.
     if scheme == 'posix_local':
@@ -88,9 +83,7 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
             if cxx is None:
                 raise RuntimeError("Failed to find C++ compiler. Please specify via CXX environment variable.")
         cc = cxx
-        import numpy as np
-        numpy_include_dir = np.get_include()
-        include_dirs = include_dirs + [numpy_include_dir]
+
         if cxx is icpx:
             ccflags += ["-fsycl"]
         else:
