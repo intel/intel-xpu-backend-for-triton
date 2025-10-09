@@ -175,31 +175,39 @@ private:
 
     // Create a MakeTensorPtrOp yielding a 2-dim block pointer.
     auto ptrType = cast<tt::PointerType>(makeTensorPtrOp.getType());
-    ArrayRef<int64_t> origShape =
+    [[maybe_unused]] ArrayRef<int64_t> resShape =
         cast<RankedTensorType>(ptrType.getPointeeType()).getShape();
-    assert(origShape[0] && "First shape extent is not one");
+    assert(resShape[0] == 1 && "Result shape should have extent equal to 1 in "
+                               "the outermost dimension");
 
     auto tensorType = cast<RankedTensorType>(reshapeOp.getType());
     auto newPtrType =
         tt::PointerType::get(tensorType, ptrType.getAddressSpace());
 
-    unsigned innermostDimIdx = 0;
+    // Compute the index of the innermost dimension.
     ArrayRef<int> order = makeTensorPtrOp.getOrder();
-    for (int i : order) {
-      if (i == 0)
+    assert(order.size() == 3 && order[0] == 2 && "Invalid order");
+
+    unsigned innermostDimIdx = 0;
+    for (int elem : makeTensorPtrOp.getOrder()) {
+      if (elem == 0)
         break;
       ++innermostDimIdx;
     }
 
     OpBuilder builder(makeTensorPtrOp);
     Location loc = makeTensorPtrOp.getLoc();
-    Value firstShape = makeTensorPtrOp.getShape().front();
-    Value firstStride = makeTensorPtrOp.getStrides().front();
-    Value firstOffset = makeTensorPtrOp.getOffsets().front();
+    OperandRange shapes = makeTensorPtrOp.getShape();
+    OperandRange strides = makeTensorPtrOp.getStrides();
+    OperandRange offsets = makeTensorPtrOp.getOffsets();
+
+#if 0
+    // order=2,1,0  --> idx = 2 (row major) --> idx we want = 1
+    // order=2,0,1  --> idx = 1 (column major) --> idx we want == 0
 
     SmallVector<Value> newShape(makeTensorPtrOp.getShape().drop_front());
     newShape[innermostDimIdx - 1] = builder.create<arith::AddIOp>(
-        loc, builder.create<arith::MulIOp>(loc, firstStride, firstShape),
+        loc, builder.create<arith::MulIOp>(loc, strides[0], shapes[0]),
         newShape[innermostDimIdx - 1]);
     SmallVector<Value> newStrides(makeTensorPtrOp.getStrides().drop_front());
     SmallVector<Value> newOffsets(makeTensorPtrOp.getOffsets().drop_front());
@@ -207,11 +215,33 @@ private:
         loc,
         builder.create<arith::MulIOp>(
             loc,
-            builder.create<arith::TruncIOp>(loc, firstOffset.getType(),
-                                            firstStride),
-            firstOffset),
+            builder.create<arith::TruncIOp>(loc, offsets[0].getType(),
+                                            strides[0]),
+            offsets[0]),
         newOffsets[innermostDimIdx - 1]);
+#else
+    // order=2,1,0  --> idx = 2 (row major) --> idx we want = 0
+    // order=2,0,1  --> idx = 1 (column major) --> idx we want == 1
 
+    unsigned newInnermostDimIdx = (innermostDimIdx - 1);
+    unsigned newOutermostDimIdx = !newInnermostDimIdx;
+
+    SmallVector<Value> newShape(makeTensorPtrOp.getShape().drop_front());
+    SmallVector<Value> newStrides(makeTensorPtrOp.getStrides().drop_front());
+    SmallVector<Value> newOffsets(makeTensorPtrOp.getOffsets().drop_front());
+
+    auto div = builder.create<arith::DivUIOp>(loc, strides[0],
+                                              newStrides[newOutermostDimIdx]);
+    newShape[newOutermostDimIdx] = builder.create<arith::AddIOp>(
+        loc, builder.create<arith::MulIOp>(loc, shapes[0], div),
+        newShape[newOutermostDimIdx]);
+    newOffsets[newOutermostDimIdx] = builder.create<arith::AddIOp>(
+        loc,
+        builder.create<arith::MulIOp>(
+            loc, offsets[0],
+            builder.create<arith::TruncIOp>(loc, offsets[0].getType(), div)),
+        newOffsets[newOutermostDimIdx]);
+#endif
     Value ptr = builder.create<tt::MakeTensorPtrOp>(
         loc, newPtrType, makeTensorPtrOp.getBase(), newShape, newStrides,
         newOffsets,
