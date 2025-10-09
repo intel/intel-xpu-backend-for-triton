@@ -52,7 +52,7 @@ public:
     // Collect def-use chains originating at a `MakeTensorPtrOp` operation
     // and terminating at a candidate `tt::ReshapeOp` operation.
     // Note: A candidate `reshapeOp` must use the result of a `loadOp` using a
-    // ptr created the `MakeTensorPtrOp` rooting the def-use chain.
+    // ptr created by the `MakeTensorPtrOp` rooting the def-use chain.
     DefUseChainManager manager;
     moduleOp.walk([&](tt::ReshapeOp reshapeOp) {
       if (isCandidate(reshapeOp)) {
@@ -344,7 +344,7 @@ private:
 
     // Ensure the load boundary check doesn't check the outermost dimension.
     return llvm::none_of(loadOp.getBoundaryCheck(),
-                         [&](int val) { return val == 0; });
+                         [](int val) { return val == 0; });
   }
 
   // Prune chains that cannot be handled during fusion. For example, operations

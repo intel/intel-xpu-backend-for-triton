@@ -71,7 +71,7 @@ tt.func public @fuseLoadWithReshape2(%arg0: !tt.ptr<tensor<32x256xbf16>>, %arg1:
 
 // COM: tt.load -> tt.reshape -> tt.dot chain, in a loop
 // COM: Where the 'make_tensor_ptr' result is loop carried.
-tt.func public @test_matmul(%a_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %b_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %c_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %M: i32 {tt.divisibility = 16 : i32}, %N: i32 {tt.divisibility = 16 : i32}, %K: i32 {tt.divisibility = 16 : i32}, %stride_am: i32 {tt.divisibility = 16 : i32}, %stride_bk: i32 {tt.divisibility = 16 : i32}, %stride_cm: i32 {tt.divisibility = 16 : i32}) {
+tt.func public @fuseLoadWithReshape3(%a_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %b_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %c_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %M: i32 {tt.divisibility = 16 : i32}, %N: i32 {tt.divisibility = 16 : i32}, %K: i32 {tt.divisibility = 16 : i32}, %stride_am: i32 {tt.divisibility = 16 : i32}, %stride_bk: i32 {tt.divisibility = 16 : i32}, %stride_cm: i32 {tt.divisibility = 16 : i32}) {
   %c127_i32 = arith.constant 127 : i32
   %c255_i32 = arith.constant 255 : i32
   %cst = arith.constant dense<0.000000e+00> : tensor<256x128xf32>
@@ -119,7 +119,7 @@ tt.func public @test_matmul(%a_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %
   tt.store %24, %accumulator#2 {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<256x128xf32>>
   tt.return
 }
-// CHECK-LABEL: test_matmul
+// CHECK-LABEL: fuseLoadWithReshape3
 // CHECK-NOT: tt.reshape
 // CHECK: [[DIV:%.*]] = arith.divui %c1_i64, %17 : i64
 // CHECK: [[MUL1:%.*]] = arith.muli %c1_i64, [[DIV]] : i64
@@ -132,3 +132,66 @@ tt.func public @test_matmul(%a_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %
 // CHECK:   [[LOAD_A:%.*]] = tt.load [[ARG]] {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<256x32xf32>>
 // CHECK:   tt.dot [[LOAD_A]], {{.*}}, {{.*}}, inputPrecision = tf32 : tensor<256x32xf32> * tensor<32x128xf32> -> tensor<256x128xf32>
 // CHECK:   tt.advance [[ARG]], [%c0_i32, %c32_i32] : <tensor<256x32xf32>>
+
+// -----
+
+// COM: tt.load -> tt.reshape -> tt.dot chain, in 2 loops.
+// COM: Where the block ptr used by the loads in the 2 loops is created by the same make_tensor_ptr operation.
+tt.func public @fuseLoadWithTrans4(%arg0: i32, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f16>) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c2_i32 = arith.constant 2 : i32    
+  %c32_i32 = arith.constant 32 : i32
+  %c1_i64 = arith.constant 1 : i64  
+  %c64_i64 = arith.constant 64 : i64
+  %c256_i64 = arith.constant 256 : i64  
+  %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32>
+  %7 = tt.make_tensor_ptr %arg1, [%c1_i64, %c64_i64], [%c64_i64, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<64x32xf16>>
+  %9 = tt.make_tensor_ptr %arg2, [%c1_i64, %c256_i64, %c64_i64], [%c256_i64, %c64_i64, %c1_i64], [%c0_i32, %c1_i32, %c2_i32] {order = array<i32: 2, 1, 0>} : <tensor<1x32x64xf16>>
+  %10 = tt.advance %7, [%arg0, %c0_i32] : <tensor<64x32xf16>>
+  %11 = tt.load %10 {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<64x32xf16>>
+  %res1:1 = scf.for %arg3 = %c0_i32 to %arg0 step %c32_i32 iter_args(%arg4 = %arg0) -> (i32) : i32 {
+    %adv = tt.advance %9, [%arg4, %c0_i32] : <tensor<1x32x64xf16>>
+    %load = tt.load %adv {boundaryCheck = array<i32: 1, 2>} : !tt.ptr<tensor<1x32x64xf16>>
+    %reshape = tt.reshape %load : tensor<1x32x64xf16> -> tensor<32x64xf16>
+    %dot = tt.dot %11, %reshape, %cst, inputPrecision = tf32 : tensor<64x32xf16> * tensor<32x64xf16> -> tensor<64x64xf32>
+    %add = arith.addi %arg4, %c32_i32 : i32
+    scf.yield %add : i32
+  }
+  %res2:1 = scf.for %arg3 = %c0_i32 to %arg0 step %c32_i32 iter_args(%arg4 = %arg0) -> (i32) : i32 {
+    %adv = tt.advance %9, [%arg4, %c0_i32] : <tensor<1x32x64xf16>>
+    %load = tt.load %adv {boundaryCheck = array<i32: 2, 1>} : !tt.ptr<tensor<1x32x64xf16>>
+    %reshape = tt.reshape %load : tensor<1x32x64xf16> -> tensor<32x64xf16>
+    %dot = tt.dot %11, %reshape, %cst, inputPrecision = tf32 : tensor<64x32xf16> * tensor<32x64xf16> -> tensor<64x64xf32>
+    %add = arith.addi %arg4, %c32_i32 : i32
+    scf.yield %add : i32
+  }
+  tt.return
+  
+}
+// CHECK-LABEL: fuseLoadWithTrans4
+// CHECK-NOT: tt.reshape
+// CHECK: [[DIV1:%.*]] = arith.divui %c256_i64, %c64_i64 : i64
+// CHECK: [[MUL11:%.*]] = arith.muli %c1_i64, [[DIV1]] : i64
+// CHECK: [[ADD11:%.*]] = arith.addi [[MUL11]], %c256_i64 : i64
+// CHECK: [[TRUNC1:%.*]] = arith.trunci [[DIV1]] : i64 to i32
+// CHECK: [[MUL21:%.*]] = arith.muli %c0_i32, [[TRUNC1]] : i32
+// CHECK: [[ADD21:%.*]] = arith.addi [[MUL21]], %c1_i32 : i32
+// CHECK: [[PTR1:%.*]] = tt.make_tensor_ptr %arg2, [[[ADD11]], %c64_i64], [%c64_i64, %c1_i64], [[[ADD21]], %c2_i32] {order = array<i32: 1, 0>} : <tensor<32x64xf16>>
+// CHECK: [[DIV2:%.*]] = arith.divui %c256_i64, %c64_i64 : i64
+// CHECK: [[MUL12:%.*]] = arith.muli %c1_i64, [[DIV2]] : i64
+// CHECK: [[ADD12:%.*]] = arith.addi [[MUL12]], %c256_i64 : i64
+// CHECK: [[TRUNC2:%.*]] = arith.trunci [[DIV2]] : i64 to i32
+// CHECK: [[MUL22:%.*]] = arith.muli %c0_i32, [[TRUNC2]] : i32
+// CHECK: [[ADD22:%.*]] = arith.addi [[MUL22]], %c1_i32 : i32
+// CHECK: [[PTR2:%.*]] = tt.make_tensor_ptr %arg2, [[[ADD12]], %c64_i64], [%c64_i64, %c1_i64], [[[ADD22]], %c2_i32] {order = array<i32: 1, 0>} : <tensor<32x64xf16>>
+// CHECK: scf.for
+// CHECK:   [[ADV:%.*]] = tt.advance [[PTR2]], {{.*}} : <tensor<32x64xf16>>
+// CHECK:   [[LOAD_B1:%.*]] = tt.load [[ADV]] {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<32x64xf16>>
+// CHECK:   tt.dot {{.*}}, [[LOAD_B1]], {{.*}}, inputPrecision = tf32 : tensor<64x32xf16> * tensor<32x64xf16> -> tensor<64x64xf32>
+// CHECK:   scf.yield
+// CHECK: scf.for
+// CHECK:   [[ADV:%.*]] = tt.advance [[PTR1]], {{.*}} : <tensor<32x64xf16>>
+// CHECK:   [[LOAD_B1:%.*]] = tt.load [[ADV]] {boundaryCheck = array<i32: 1, 0>} : !tt.ptr<tensor<32x64xf16>>
+// CHECK:   tt.dot {{.*}}, [[LOAD_B1]], {{.*}}, inputPrecision = tf32 : tensor<64x32xf16> * tensor<32x64xf16> -> tensor<64x64xf32>
+// CHECK:   scf.yield
