@@ -10,6 +10,21 @@ def parse_args():
     return parser.parse_args()
 
 
+def clean_up_duplicates(combined_df):
+
+    def print_duplicates(df):
+        if len(df) != 1:
+            print('Group with duplicates:')
+            print(df.T)
+            print('Only the first result will be picked!')
+
+    combined_df['is_timeout'] = combined_df['accuracy'].eq('timeout')
+    # Prioritize non-timeout results
+    combined_df.sort_values(['suite', 'mode', 'dtype', 'name', 'is_timeout'], inplace=True)
+    combined_df.groupby(['suite', 'mode', 'dtype', 'name']).filter(print_duplicates)
+    return combined_df.groupby(['suite', 'mode', 'dtype', 'name'], as_index=False).first()
+
+
 def build_suite_report(combined_df, output_path):
     print('=======================================')
     print('=           SUMMARY REPORT            =')
@@ -72,8 +87,6 @@ def build_pytorch_report(combined_df, output_path):
     for suite, mode in combined_df[['suite', 'mode']].drop_duplicates().values:
         df_subset = combined_df[combined_df['suite'].eq(suite)
                                 & combined_df['mode'].eq(mode)][['dtype', 'name', 'accuracy']]
-
-        df_subset = drop_duplicates(df_subset, suite, mode)
         pivoted_df = df_subset.pivot(index='name', columns='dtype', values='accuracy')
 
         # Reset index to make 'name' a regular column
@@ -157,6 +170,10 @@ def main(input_dir, output_dir):
     # Artifacts
     # 1. Simple concat of all with added suite, mode, dtype
     combined_df.to_csv(output_path / 'combined_results.csv', index=False)
+    # Clean up duplicates, due to possible race conditions between subprocess and main process we could have duplicates
+    # when main process writes timeout result and subprocess writes it's own result later.
+    # https://github.com/pytorch/pytorch/blob/06d86e58d0309aa2c217256f88d1990a22ec6e4f/benchmarks/dynamo/common.py#L4298
+    combined_df = clean_up_duplicates(combined_df)
     # 2. torch format report, 9 items (suite, mode), dtype stored as column
     build_pytorch_report(combined_df, output_path=output_path)
     # 3. Agg report with 45 rows (suite, mode, dtype, passed, failed_REASON, failed_REASON model list)
