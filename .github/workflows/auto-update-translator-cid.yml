@@ -21,7 +21,7 @@ jobs:
         shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
           token: ${{ secrets.BOT_TOKEN }}
@@ -68,7 +68,7 @@ jobs:
 
       - name: Checkout SPIRV-LLVM-Translator
         if: ${{ env.TARGET_PRID == null }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: KhronosGroup/SPIRV-LLVM-Translator
           ref: main

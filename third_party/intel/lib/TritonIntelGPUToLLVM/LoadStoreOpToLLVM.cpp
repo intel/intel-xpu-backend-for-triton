@@ -1012,10 +1012,9 @@ struct LoadOpToBlockIOConversion
   LoadOpToBlockIOConversion(
       LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
-      PatternBenefit benefit, bool useTileLoadLinearLayout)
+      PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::LoadOp>(converter, benefit),
-        BlockIOConversionBase(targetInfo, axisAnalysisPass),
-        useTileLoadLinearLayout(useTileLoadLinearLayout) {}
+        BlockIOConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
   rewriteTensorPointerLoad(triton::LoadOp op, OpAdaptor adaptor,
@@ -1159,8 +1158,9 @@ struct LoadOpToBlockIOConversion
           for (int repM = 0; repM < repCluster[0]; ++repM) {
 
             Value offsetY =
-                b.add(warpId0Offset,
-                      b.i32_val(m * replicaStride[0] + repM * tileHeight));
+                b.umin(b.sub(baseHeight, b.i32_val(1)),
+                       b.add(warpId0Offset, b.i32_val(m * replicaStride[0] +
+                                                      repM * tileHeight)));
             for (int repN = 0; repN < repCluster[1]; ++repN) {
               Value offsetX =
                   b.add(warpId1Offset,
@@ -1192,7 +1192,9 @@ struct LoadOpToBlockIOConversion
                   b.bitcast(load2dOp, LLVM::getVectorType(eltTy, elemsPerLane));
 
               for (size_t i = 0; i < elemsPerLane; ++i) {
-                Value loaded = b.extract_element(eltTy, ret, b.i32_val(i));
+                Value loaded = b.extract_element(
+                    eltTy, ret,
+                    b.umin(b.sub(baseHeight, b.i32_val(1)), b.i32_val(i)));
                 unpackedLoadedVals.push_back(loaded);
               }
             }
@@ -1540,18 +1542,11 @@ struct LoadOpToBlockIOConversion
     // Disable building the load layout if we are not going to use it. Building
     // the layout manually can cause an error which would abort the pass
     // pipeline and block us from getting debug info.
-    if (useTileLoadLinearLayout) {
-      // add the bases to the map and replace the tile layout with the new
-      // layout
-      bases[kLoad] = newLoadBases;
-      tileLayout = LinearLayout(bases, outDims,
-                                /*requiredSurjective=*/false);
-    } else {
-      // when linear layouts are disabled generate a single load, so we can have
-      // some reference for linear layout output without generating a layout
-      // that could abort the pass pipeline
-      tileLayout *= LinearLayout::identity1D(1, kLoad, dimOuterStr);
-    }
+    // add the bases to the map and replace the tile layout with the new
+    // layout
+    bases[kLoad] = newLoadBases;
+    tileLayout = LinearLayout(bases, outDims,
+                              /*requiredSurjective=*/false);
 
     LLVM_DEBUG({
       llvm::dbgs() << "Block load tile layout after adding loads: "
@@ -1657,16 +1652,9 @@ struct LoadOpToBlockIOConversion
               llvm::dbgs() << "y offset: "
                            << outer * repOuterStride + rep * repStride << "\n";
             });
-            if (useTileLoadLinearLayout) {
-              offsetY = b.add(b.mul(outerDimWarpId, b.i32_val(warpOuterStride)),
-                              b.i32_val(layoutOffsetY));
-              offsetX = b.i32_val(layoutOffsetX);
-            } else {
-              offsetY =
-                  b.add(b.mul(outerDimWarpId, b.i32_val(warpOuterStride)),
-                        b.i32_val(outer * repOuterStride + rep * repStride));
-              offsetX = b.i32_val(k * repKStride);
-            }
+            offsetY = b.add(b.mul(outerDimWarpId, b.i32_val(warpOuterStride)),
+                            b.i32_val(layoutOffsetY));
+            offsetX = b.i32_val(layoutOffsetX);
           } break;
           case DpasEncodingAttr::OpIdx::OperandB: {
             LLVM_DEBUG({
@@ -1674,16 +1662,9 @@ struct LoadOpToBlockIOConversion
                            << outer * repOuterStride + rep * repStride << "\n";
               llvm::dbgs() << "y offset: " << k * repKStride << "\n";
             });
-            if (useTileLoadLinearLayout) {
-              offsetX = b.add(b.mul(outerDimWarpId, b.i32_val(warpOuterStride)),
-                              b.i32_val(layoutOffsetX));
-              offsetY = b.i32_val(layoutOffsetY);
-            } else {
-              offsetX =
-                  b.add(b.mul(outerDimWarpId, b.i32_val(warpOuterStride)),
-                        b.i32_val(outer * repOuterStride + rep * repStride));
-              offsetY = b.i32_val(k * repKStride);
-            }
+            offsetX = b.add(b.mul(outerDimWarpId, b.i32_val(warpOuterStride)),
+                            b.i32_val(layoutOffsetX));
+            offsetY = b.i32_val(layoutOffsetY);
           } break;
           case DpasEncodingAttr::OpIdx::OperandC: {
             llvm_unreachable("unexpected OpIdx::OperandC");
@@ -2715,19 +2696,20 @@ struct LoadOpToBlockIOConversion
       if (axisInfo) {
         maskConstancyHor = axisInfo->getConstancy(rank - 1);
         maskConstancyVer = axisInfo->getConstancy(rank - 2);
-      } else {
-        maskConstancyHor = 1;
-        maskConstancyVer = 1;
+        // The mask constancy has to be power of 2 for block IO.
+        if (!llvm::isPowerOf2_64(maskConstancyHor) ||
+            !llvm::isPowerOf2_64(maskConstancyVer))
+          return failure();
       }
+
+      // Check the constancy of the mask support to load the memory in 2D block.
+      if (!(maskConstancyHor >= instWidth && maskConstancyVer >= instHeight))
+        return failure();
     } else {
       // no mask
       maskConstancyHor = std::numeric_limits<unsigned>::max();
       maskConstancyVer = std::numeric_limits<unsigned>::max();
     }
-
-    // Check the constancy of the mask support to load the memory in 2D block.
-    if (!(maskConstancyHor >= instWidth && maskConstancyVer >= instHeight))
-      return failure();
 
     // Get the LLVM values for `other`
     Value other = op.getOther();
@@ -3163,9 +3145,6 @@ struct LoadOpToBlockIOConversion
 
     return success();
   }
-
-private:
-  bool useTileLoadLinearLayout;
 };
 
 struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
@@ -3320,7 +3299,10 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       Value ret;
       // Create a predicated load operation.
       if (pred) {
-        if (triton::tools::getBoolEnv("TRITON_INTEL_PREDICATED"))
+        std::optional<bool> enablePredicated =
+            mlir::triton::tools::isEnvValueBool(
+                mlir::triton::tools::getStrEnv("TRITON_INTEL_PREDICATED"));
+        if (!enablePredicated.has_value() || enablePredicated.value())
           ret = rewriter.create<TritonGEN::PredicatedLoadOp>(
               loc, retTy, addrElem, b.i64_val(alignment), pred, other_);
         else {
@@ -3765,7 +3747,10 @@ struct StoreOpConversion
 
       if (maskVal) {
         // Create a predicated store operation.
-        if (triton::tools::getBoolEnv("TRITON_INTEL_PREDICATED")) {
+        std::optional<bool> enablePredicated =
+            mlir::triton::tools::isEnvValueBool(
+                mlir::triton::tools::getStrEnv("TRITON_INTEL_PREDICATED"));
+        if (!enablePredicated.has_value() || enablePredicated.value()) {
           unsigned numElems = valArgTy.getIntOrFloatBitWidth() * nWords /
                               valueElemTy.getIntOrFloatBitWidth();
           vecWord = b.bitcast(vecWord, vec_ty(valueElemTy, numElems));
@@ -4251,14 +4236,11 @@ void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
     RewritePatternSet &patterns,
     const intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    PatternBenefit benefit, bool useTileLoadLinearLayout) {
+    PatternBenefit benefit) {
   patterns.add<AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
                StoreOpConversion, PrefetchOpConversion>(
       typeConverter, targetInfo, axisInfoAnalysis, benefit);
   // BlockIO is more efficient than gather load or scatter store.
-  patterns.add<LoadOpToBlockIOConversion>(
-      typeConverter, targetInfo, axisInfoAnalysis, benefit.getBenefit() + 2,
-      useTileLoadLinearLayout);
-  patterns.add<StoreOpToBlockIOConversion>(
+  patterns.add<LoadOpToBlockIOConversion, StoreOpToBlockIOConversion>(
       typeConverter, targetInfo, axisInfoAnalysis, benefit.getBenefit() + 2);
 }

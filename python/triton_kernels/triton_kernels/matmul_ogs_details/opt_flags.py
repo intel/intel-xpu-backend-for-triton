@@ -48,6 +48,7 @@ def make_default_opt_flags_intel(
     enforce_bitwise_invariance,
     epilogue_effective_itemsize,
     x_transpose,
+    has_y_acc_in,
     constraints,
 ):
     constraints_supported = ["block_m", "block_k", "split_k", "is_persistent", "fused_scatter", "epilogue_subtile", "num_stages"]
@@ -128,6 +129,7 @@ def make_default_opt_flags_amd(
     enforce_bitwise_invariance,
     epilogue_effective_itemsize,
     x_transpose,
+    has_y_acc_in,
     constraints,
 ):
     constraints_supported = ["block_m", "block_n", "block_k", "split_k", "fused_scatter", "is_persistent", "epilogue_subtile"]
@@ -169,9 +171,7 @@ def make_default_opt_flags_amd(
     )
     is_persistent = constraints.get("is_persistent", False)
     # split_k:
-    if batch_size > 1:
-        split_k = 1  # currently not supported
-    elif constraints.get("split_k", None) is not None:
+    if constraints.get("split_k", None) is not None:
         split_k = constraints["split_k"]
     elif is_persistent or enforce_bitwise_invariance:
         split_k = 1
@@ -248,6 +248,7 @@ def make_default_opt_flags_nvidia(
     enforce_bitwise_invariance,
     epilogue_effective_itemsize,
     x_transpose,
+    has_y_acc_in,
     constraints,
 ):
     constraints_supported = ["block_m", "block_k", "split_k", "is_persistent", "fused_scatter", "epilogue_subtile", "num_stages", "idle_sms"]
@@ -294,15 +295,13 @@ def make_default_opt_flags_nvidia(
     if constraints.get("block_k", None) is not None:
         block_k = constraints["block_k"]
     else:
-        block_k = opt_flags_nvidia.compute_block_k(m, k, is_persistent, lhs_dtype, rhs_dtype, precision_config)
+        block_k = opt_flags_nvidia.compute_block_k(m, k, is_persistent, lhs_dtype, rhs_dtype, precision_config, has_y_acc_in)
     if block_n == 256 and block_k == 128 and block_m <= 64 and is_persistent and rhs_dtype == FP4 and k >= 4096 and tokens_per_expt > 1:
         # Swap block_n and block_k for mxfp4 weights so that block_k is a full cacheline, so long as K is sufficiently large.
         # TODO: swizzle the HBM layout of the weights instead
         block_n, block_k = block_k, block_n
     # split_k
-    if batch_size > 1:
-        split_k = 1  # currently not supported
-    elif constraints.get("split_k", None) is not None:
+    if constraints.get("split_k", None) is not None:
         split_k = constraints["split_k"]
     elif is_persistent or enforce_bitwise_invariance or precision_config.act_scale is not None or precision_config.out_scale is not None:
         split_k = 1
@@ -323,6 +322,8 @@ def make_default_opt_flags_nvidia(
         lhs_dtype,
         rhs_dtype,
         x_transpose,
+        epilogue_effective_itemsize,
+        has_y_acc_in,
     )
 
     if constraints.get("epilogue_subtile", None) is not None:
@@ -331,12 +332,13 @@ def make_default_opt_flags_nvidia(
         subtiles_to_check = [1, 2, 4]
     num_stages = -1
     for ep in subtiles_to_check:
-        ns = opt_flags_nvidia.compute_num_stages(*compute_num_stages_args, ep, epilogue_effective_itemsize)
+        ns = opt_flags_nvidia.compute_num_stages(*compute_num_stages_args, epilogue_subtile=ep)
         if ns > num_stages:
             epilogue_subtile, num_stages = ep, ns
-    assert num_stages >= 1
+
     if constraints.get("num_stages", None):
         num_stages = constraints["num_stages"]
+    assert num_stages >= 1
     # fused scatter scratchpad
     if constraints.get("fused_scatter", None) is not None:
         fused_scatter = constraints["fused_scatter"]
@@ -403,6 +405,8 @@ def make_opt_flags(
     can_use_fused_scatter,
     epilogue_effective_itemsize,
     x_transpose,
+    has_y_acc_in,
+    block_k,
 ):
     if _opt_flags_constraints.get("is_persistent", False) and not can_use_persistent_tma:
         raise InapplicableConstraint("cannot enforce `is_persistent=True` constraint")
@@ -411,11 +415,16 @@ def make_opt_flags(
     enforce_bitwise_invariance = precision_config.enforce_bitwise_invariance
     if _opt_flags is not None:
         assert not _opt_flags_constraints
+        assert block_k is None
         return _opt_flags
+    opt_flags_constraints = _opt_flags_constraints
+    if block_k is not None:
+        opt_flags_constraints = opt_flags_constraints.copy()
+        opt_flags_constraints.update(block_k=block_k, split_k=1)
     args = [out_dtype, lhs_dtype, rhs_dtype, precision_config, batch_size, m, n, k,
             routing_data, can_use_persistent_tma, can_use_fused_scatter,
-            enforce_bitwise_invariance, epilogue_effective_itemsize, x_transpose,
-            _opt_flags_constraints]
+            enforce_bitwise_invariance, epilogue_effective_itemsize, x_transpose, has_y_acc_in,
+            opt_flags_constraints]
     backend = triton.runtime.driver.active.get_current_target().backend
     if backend == "xpu":
         return make_default_opt_flags_intel(*args)
