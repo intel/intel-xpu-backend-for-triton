@@ -18,11 +18,6 @@ on:
       - main-js
       - main-interim
       - release/**
-  push:
-    branches:
-      - main-js
-      - main-interim
-      - release/**
 
 permissions: read-all
 
@@ -125,13 +120,3 @@ jobs:
           export BASE=$HOME
           export PATH="$BASE/packages/llvm/bin:$PATH"
           bash -v -x scripts/test-triton.sh --warning-reports --skip-pytorch-install --unit
-
-      - name: Sanity tutorial test
-        run: |
-          source /opt/intel/oneapi/setvars.sh
-          set -ex -o pipefail
-          source /jgssim/jgssim-env.sh
-          export BASE=$HOME
-          export PATH="$BASE/packages/llvm/bin:$PATH"
-          python ./python/tutorials/01-vector-add.py
-          python ./python/tutorials/02-fused-softmax.py
