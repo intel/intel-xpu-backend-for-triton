@@ -7,10 +7,10 @@ tt.func public @fuseLoadWithReshape1(%arg0: !tt.ptr<tensor<256x32xbf16>>, %arg1:
   %c2_i32 = arith.constant 2 : i32
   %c1_i64 = arith.constant 1 : i64
   %c2_i64 = arith.constant 2 : i64
-  %c3_i64 = arith.constant 3 : i64
+  %c4_i64 = arith.constant 4 : i64
   %c1024_i64 = arith.constant 1024 : i64
   %cst = arith.constant dense<0.000000e+00> : tensor<256x256xf32>
-  %0 = tt.make_tensor_ptr %arg1, [%c2_i64, %c1_i64, %c1024_i64], [%c3_i64, %c1024_i64, %c1_i64], [%c2_i32, %c1_i32, %c0_i32] {order = array<i32: 2, 1, 0>} : <tensor<1x32x256xbf16>>
+  %0 = tt.make_tensor_ptr %arg1, [%c2_i64, %c1_i64, %c1024_i64], [%c1024_i64, %c4_i64, %c1_i64], [%c2_i32, %c1_i32, %c0_i32] {order = array<i32: 2, 1, 0>} : <tensor<1x32x256xbf16>>
   %1 = tt.load %arg0 {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<256x32xbf16>>
   %3 = tt.load %0 {boundaryCheck = array<i32: 1, 2>} : !tt.ptr<tensor<1x32x256xbf16>>
   %4 = tt.reshape %3 : tensor<1x32x256xbf16> -> tensor<32x256xbf16>
@@ -19,12 +19,14 @@ tt.func public @fuseLoadWithReshape1(%arg0: !tt.ptr<tensor<256x32xbf16>>, %arg1:
 }
 // CHECK-LABEL: fuseLoadWithReshape1
 // CHECK-NOT: tt.reshape
-// CHECK: [[MUL1:%.*]] = arith.muli %c3_i64, %c2_i64 : i64
-// CHECK: [[ADD1:%.*]] = arith.addi [[MUL1]], %c1024_i64 : i64
-// CHECK: [[TRUNC:%.*]] = arith.trunci %c3_i64 : i64 to i32
-// CHECK: [[MUL2:%.*]] = arith.muli [[TRUNC]], %c2_i32 : i32
-// CHECK: [[ADD2:%.*]] = arith.addi [[MUL2]], %c0_i32 : i32
-// CHECK: [[PTR:%.*]] = tt.make_tensor_ptr %arg1, [%c1_i64, [[ADD1]]], [%c1024_i64, %c1_i64], [%c1_i32, [[ADD2]]] {order = array<i32: 1, 0>} : <tensor<32x256xbf16>>
+// CHECK: [[DIV:%.*]] = arith.divui %c1024_i64, %c4_i64 : i64
+// CHECK: [[MUL1:%.*]] = arith.muli %c2_i64, [[DIV]] : i64
+// CHECK: [[ADD1:%.*]] = arith.addi [[MUL1]], %c1_i64 : i64
+// CHECK: [[TRUNC:%.*]] = arith.trunci [[DIV]] : i64 to i32
+// CHECK: [[MUL2:%.*]] = arith.muli %c2_i32, [[TRUNC]] : i32
+// CHECK: [[ADD2:%.*]] = arith.addi [[MUL2]], %c1_i32 : i32
+
+// CHECK: [[PTR:%.*]] = tt.make_tensor_ptr %arg1, [[[ADD1]], %c1024_i64], [%c4_i64, %c1_i64], [[[ADD2]], %c0_i32] {order = array<i32: 1, 0>} : <tensor<32x256xbf16>>
 // CHECK: [[LOAD_B:%.*]] = tt.load [[PTR]] {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<32x256xbf16>>
 // CHECK: tt.dot {{.*}}, [[LOAD_B]], {{.*}}, inputPrecision = tf32 : tensor<256x32xbf16> * tensor<32x256xbf16> -> tensor<256x256xf32>
 
@@ -34,14 +36,14 @@ tt.func public @fuseLoadWithReshape1(%arg0: !tt.ptr<tensor<256x32xbf16>>, %arg1:
 // COM: where the 'make_tensor_ptr' result is not loop carried.
 tt.func public @fuseLoadWithReshape2(%arg0: !tt.ptr<tensor<32x256xbf16>>, %arg1: !tt.ptr<bf16>) {
   %c0_i32 = arith.constant 0 : i32
-  %c1_i32 = arith.constant 1 : i32
-  %c1_i64 = arith.constant 1 : i64
   %c32_i32 = arith.constant 32 : i32
   %c1024_i32 = arith.constant 1024 : i32
+  %c32_i64 = arith.constant 32 : i64
+  %c1_i64 = arith.constant 1 : i64
   %c512_i64 = arith.constant 512 : i64
   %c1024_i64 = arith.constant 1024 : i64
   %cst = arith.constant dense<0.000000e+00> : tensor<256x256xf32>
-  %0 = tt.make_tensor_ptr %arg1, [%c512_i64, %c1024_i64, %c1_i64], [%c512_i64, %c1_i64, %c1024_i64], [%c1_i32, %c32_i32, %c0_i32] {order = array<i32: 2, 0, 1>} : <tensor<1x256x32xbf16>>
+  %0 = tt.make_tensor_ptr %arg1, [%c512_i64, %c1024_i64, %c32_i64], [%c1024_i64, %c1_i64, %c512_i64], [%c32_i32, %c32_i32, %c0_i32] {order = array<i32: 2, 0, 1>} : <tensor<1x256x32xbf16>>
   %res:2 = scf.for %arg3 = %c0_i32 to %c1024_i32 step %c32_i32 iter_args(%arg4 = %cst, %arg5 = %c0_i32) -> (tensor<256x256xf32>, i32) : i32 {
     %1 = tt.load %arg0 {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<32x256xbf16>>
     %3 = tt.load %0 {boundaryCheck = array<i32: 2, 1>} : !tt.ptr<tensor<1x256x32xbf16>>
@@ -54,19 +56,20 @@ tt.func public @fuseLoadWithReshape2(%arg0: !tt.ptr<tensor<32x256xbf16>>, %arg1:
 }
 // CHECK-LABEL: fuseLoadWithReshape2
 // CHECK-NOT: tt.reshape
-// CHECK: [[MUL1:%.*]] = arith.muli %c512_i64, %c512_i64 : i64
-// CHECK: [[ADD1:%.*]] = arith.addi [[MUL1]], %c1024_i64 : i64
-// CHECK: [[TRUNC:%.*]] = arith.trunci %c512_i64 : i64 to i32
-// CHECK: [[MUL2:%.*]] = arith.muli [[TRUNC]], %c1_i32 : i32
-// CHECK: [[ADD2:%.*]] = arith.addi [[MUL2]], %c32_i32 : i32
-// CHECK: [[PTR:%.*]] = tt.make_tensor_ptr %arg1, [[[ADD1]], %c1_i64], [%c1_i64, %c1024_i64], [[[ADD2]], %c0_i32] {order = array<i32: 0, 1>} : <tensor<256x32xbf16>>
+// CHECK: [[DIV:%.*]] = arith.divui %c1024_i64, %c512_i64 : i64
+// CHECK: [[MUL1:%.*]] = arith.muli %c512_i64, [[DIV]] : i64
+// CHECK: [[ADD1:%.*]] = arith.addi [[MUL1]], %c32_i64 : i64
+// CHECK: [[TRUNC:%.*]] = arith.trunci [[DIV]] : i64 to i32
+// CHECK: [[MUL2:%.*]] = arith.muli %c32_i32, [[TRUNC]] : i32
+// CHECK: [[ADD2:%.*]] = arith.addi [[MUL2]], %c0_i32 : i32
+// CHECK: [[PTR:%.*]] = tt.make_tensor_ptr %arg1, [%c1024_i64, [[ADD1]]], [%c1_i64, %c512_i64], [%c32_i32, [[ADD2]]] {order = array<i32: 0, 1>} : <tensor<256x32xbf16>>
 // CHECK: scf.for
 // CHECK:   [[LOAD_A:%.*]] = tt.load [[PTR]] {boundaryCheck = array<i32: 1, 0>} : !tt.ptr<tensor<256x32xbf16>>
 // CHECK:   tt.dot [[LOAD_A]], {{.*}}, {{.*}}, inputPrecision = tf32 : tensor<256x32xbf16> * tensor<32x256xbf16> -> tensor<256x256xf32>
 
 // -----
 
-// COM: tt.load -> tt.reshape -> tt.dot chain,  in a loop
+// COM: tt.load -> tt.reshape -> tt.dot chain, in a loop
 // COM: Where the 'make_tensor_ptr' result is loop carried.
 tt.func public @test_matmul(%a_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %b_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %c_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %M: i32 {tt.divisibility = 16 : i32}, %N: i32 {tt.divisibility = 16 : i32}, %K: i32 {tt.divisibility = 16 : i32}, %stride_am: i32 {tt.divisibility = 16 : i32}, %stride_bk: i32 {tt.divisibility = 16 : i32}, %stride_cm: i32 {tt.divisibility = 16 : i32}) {
   %c127_i32 = arith.constant 127 : i32
@@ -118,12 +121,13 @@ tt.func public @test_matmul(%a_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %
 }
 // CHECK-LABEL: test_matmul
 // CHECK-NOT: tt.reshape
-// CHECK: [[MUL1:%.*]] = arith.muli %c1_i64, %c1_i64 : i64
-// CHECK: [[ADD1:%.*]] = arith.addi [[MUL1]], %16 : i64
-// CHECK: [[TRUNC:%.*]] = arith.trunci %c1_i64 : i64 to i32
-// CHECK: [[MUL2:%.*]] = arith.muli [[TRUNC]], %c0_i32 : i32
-// CHECK: [[ADD2:%.*]] = arith.addi [[MUL2]], %c0_i32 : i32
-// CHECK: [[PTR:%.*]] = tt.make_tensor_ptr %arg0, [%15, [[ADD1]]], [%17, %c1_i64], [%14, [[ADD2]]] {order = array<i32: 1, 0>} : <tensor<256x32xf32>>
+// CHECK: [[DIV:%.*]] = arith.divui %c1_i64, %17 : i64
+// CHECK: [[MUL1:%.*]] = arith.muli %c1_i64, [[DIV]] : i64
+// CHECK: [[ADD1:%.*]] = arith.addi [[MUL1]], %15 : i64
+// CHECK: [[TRUNC:%.*]] = arith.trunci [[DIV]] : i64 to i32
+// CHECK: [[MUL2:%.*]] = arith.muli %c0_i32, [[TRUNC]] : i32
+// CHECK: [[ADD2:%.*]] = arith.addi [[MUL2]], %14 : i32
+// CHECK: [[PTR:%.*]] = tt.make_tensor_ptr %arg0, [[[ADD1]], %16], [%17, %c1_i64], [[[ADD2]], %c0_i32] {order = array<i32: 1, 0>} : <tensor<256x32xf32>>
 // CHECK: scf.for {{.*}} = %c0_i32 to {{.*}} step %c32_i32 iter_args([[ARG:%.*]] = [[PTR]]
 // CHECK:   [[LOAD_A:%.*]] = tt.load [[ARG]] {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<256x32xf32>>
 // CHECK:   tt.dot [[LOAD_A]], {{.*}}, {{.*}}, inputPrecision = tf32 : tensor<256x32xf32> * tensor<32x128xf32> -> tensor<256x128xf32>

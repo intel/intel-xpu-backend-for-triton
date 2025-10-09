@@ -201,37 +201,24 @@ private:
     OperandRange strides = makeTensorPtrOp.getStrides();
     OperandRange offsets = makeTensorPtrOp.getOffsets();
 
-#if 0
-    // order=2,1,0  --> idx = 2 (row major) --> idx we want = 1
-    // order=2,0,1  --> idx = 1 (column major) --> idx we want == 0
-
+    // Collapse the 3-dim tensor into a 2-dim tensor.
+    // Given a block pointer with:
+    //   shape  [s0, s1, s2]
+    //   stride [a, b, c]
+    //   offset [x, y, z]
+    // We create a block pinter with:
+    //   shape  [s0 * a / b + s1, s2]
+    //   stride [b, c]
+    //   offset [x * a / b + y, z]
     SmallVector<Value> newShape(makeTensorPtrOp.getShape().drop_front());
-    newShape[innermostDimIdx - 1] = builder.create<arith::AddIOp>(
-        loc, builder.create<arith::MulIOp>(loc, strides[0], shapes[0]),
-        newShape[innermostDimIdx - 1]);
     SmallVector<Value> newStrides(makeTensorPtrOp.getStrides().drop_front());
     SmallVector<Value> newOffsets(makeTensorPtrOp.getOffsets().drop_front());
-    newOffsets[innermostDimIdx - 1] = builder.create<arith::AddIOp>(
-        loc,
-        builder.create<arith::MulIOp>(
-            loc,
-            builder.create<arith::TruncIOp>(loc, offsets[0].getType(),
-                                            strides[0]),
-            offsets[0]),
-        newOffsets[innermostDimIdx - 1]);
-#else
-    // order=2,1,0  --> idx = 2 (row major) --> idx we want = 0
-    // order=2,0,1  --> idx = 1 (column major) --> idx we want == 1
 
     unsigned newInnermostDimIdx = (innermostDimIdx - 1);
     unsigned newOutermostDimIdx = !newInnermostDimIdx;
-
-    SmallVector<Value> newShape(makeTensorPtrOp.getShape().drop_front());
-    SmallVector<Value> newStrides(makeTensorPtrOp.getStrides().drop_front());
-    SmallVector<Value> newOffsets(makeTensorPtrOp.getOffsets().drop_front());
-
     auto div = builder.create<arith::DivUIOp>(loc, strides[0],
                                               newStrides[newOutermostDimIdx]);
+
     newShape[newOutermostDimIdx] = builder.create<arith::AddIOp>(
         loc, builder.create<arith::MulIOp>(loc, shapes[0], div),
         newShape[newOutermostDimIdx]);
@@ -241,7 +228,7 @@ private:
             loc, offsets[0],
             builder.create<arith::TruncIOp>(loc, offsets[0].getType(), div)),
         newOffsets[newOutermostDimIdx]);
-#endif
+
     Value ptr = builder.create<tt::MakeTensorPtrOp>(
         loc, newPtrType, makeTensorPtrOp.getBase(), newShape, newStrides,
         newOffsets,
