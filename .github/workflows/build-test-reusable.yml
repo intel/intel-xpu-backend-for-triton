@@ -90,7 +90,7 @@ jobs:
           ${{ toJSON(inputs) }}
           EOF
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Load pip cache
         id: pip-cache
@@ -197,6 +197,7 @@ jobs:
           - minicore
           - scaled_dot
           - gluon
+          - triton-kernels
           - rest
           - tutorial-fa-64
           - tutorial-fa-128-fwdfp8
@@ -214,7 +215,7 @@ jobs:
           EOF
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Load pip cache
         id: pip-cache
@@ -318,7 +319,7 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --interpreter
 
       - name: Run triton kernels tests
-        if: matrix.suite == 'rest'
+        if: matrix.suite == 'triton-kernels'
         run: |
           ${{ env.TRITON_TEST_CMD }} --triton-kernels
 
@@ -387,7 +388,7 @@ jobs:
     needs: integration-tests
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Load pip cache
         id: pip-cache

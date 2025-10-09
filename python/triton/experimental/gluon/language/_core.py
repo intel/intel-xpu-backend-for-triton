@@ -100,6 +100,7 @@ def builtin(fn: T) -> T:
 
 # Explicitly import forwarded Triton language symbols so mypy sees them.
 associative_scan = builtin(tl_core.associative_scan)
+assume = builtin(tl_core.assume)
 atomic_add = builtin(tl_core.atomic_add)
 atomic_and = builtin(tl_core.atomic_and)
 atomic_cas = builtin(tl_core.atomic_cas)
@@ -509,10 +510,6 @@ def warp_specialize(default_args, default_partition, worker_args, worker_partiti
     """
     worker_num_warps = [_unwrap_if_constexpr(w) for w in worker_num_warps]
     worker_num_regs = [_unwrap_if_constexpr(r) for r in worker_num_regs]
-    if not isinstance(default_args, tuple):
-        default_args = (default_args, )
-    if not isinstance(worker_args, tuple):
-        worker_args = (worker_args, )
     return _semantic.warp_specialize(default_args, default_partition, worker_args, worker_partitions, worker_num_warps,
                                      worker_num_regs, _generator)
 

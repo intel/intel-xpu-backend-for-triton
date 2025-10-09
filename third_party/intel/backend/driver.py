@@ -513,10 +513,8 @@ def make_launcher(constants, signature):
 #define EXPORT_FUNC __attribute__((visibility("default")))
 #endif
 
-#define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #include <Python.h>
 #include <stdio.h>
-#include <numpy/arrayobject.h>
 
 namespace {{
 

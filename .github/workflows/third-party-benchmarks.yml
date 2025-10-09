@@ -48,7 +48,7 @@ jobs:
           EOF
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Python
         if: ${{ !(inputs.use_pyenv_python || false) }}
@@ -121,7 +121,7 @@ jobs:
 
           git submodule sync
           git submodule update --init --recursive
-          python setup.py develop
+          pip install -v -e .
 
           cd ../benchmarks/third_party/e2e-flex_attention
 
