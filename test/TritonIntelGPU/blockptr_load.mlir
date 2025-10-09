@@ -1,5 +1,5 @@
-// RUN: env TRITON_INTEL_PREDICATED=1 TRITON_INTEL_ONE_MATRIX_PER_LOAD_BT=0 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm --check-prefixes=CHECK,LARGE-BLOCK-SIZE-TRANS-B
-// RUN: env TRITON_INTEL_PREDICATED=1 TRITON_INTEL_ONE_MATRIX_PER_LOAD_BT=1 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm --check-prefixes=CHECK,SMALL-BLOCK-SIZE-TRANS-B
+// RUN: env TRITON_INTEL_ONE_MATRIX_PER_LOAD_BT=0 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm --check-prefixes=CHECK,LARGE-BLOCK-SIZE-TRANS-B
+// RUN: env TRITON_INTEL_ONE_MATRIX_PER_LOAD_BT=1 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm --check-prefixes=CHECK,SMALL-BLOCK-SIZE-TRANS-B
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 4], order = [1, 0]}>
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
@@ -337,15 +337,15 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
       %45 = tt.load %21 : !tt.ptr<tensor<64x16xf16, #blocked>>
 
       // CHECK-COUNT-16: llvm.icmp "slt"
-      // CHECK-COUNT-32: triton_gen.predicated_load {{.*}} -> i16
+      // CHECK-COUNT-32: llvm.load {{.*}} -> i16
       %46 = tt.load %21 {boundaryCheck = array<i32: 0>} : !tt.ptr<tensor<64x16xf16, #blocked>>
 
       // CHECK-COUNT-16: llvm.icmp "slt"
-      // CHECK-COUNT-32: triton_gen.predicated_load {{.*}} -> i16
+      // CHECK-COUNT-32: llvm.load {{.*}} -> i16
       %47 = tt.load %21 {boundaryCheck = array<i32: 1>} : !tt.ptr<tensor<64x16xf16, #blocked>>
 
       // CHECK-COUNT-32: llvm.icmp "slt"
-      // CHECK-COUNT-32: triton_gen.predicated_load {{.*}} -> i16
+      // CHECK-COUNT-32: llvm.load {{.*}} -> i16
       %48 = tt.load %21 {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<64x16xf16, #blocked>>
       tt.return
   }
