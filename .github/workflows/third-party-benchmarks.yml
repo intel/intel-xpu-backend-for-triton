@@ -76,11 +76,25 @@ jobs:
 
       - name: Setup Triton
         uses: ./.github/actions/setup-triton
+        with:
+          command: DEBUG=1 python setup.py bdist_wheel
+
+      - name: Install Triton
+        run: |
+          pip install dist/*.whl
 
       - name: Install benchmark dependencies
         id: install
         run: |
           pip install transformers pandas pytest
+
+          cd benchmarks
+          pip install .
+          pip install intel-pti==0.12.2
+          PTI_LIBS_DIR=$(python -c "import sysconfig; print(sysconfig.get_paths()['stdlib']+'/..')")
+          # the output should contain: `libpti.so`, `libpti_metrics.so.0.12.2` and `libpti_view.so.0.12.2`
+          ls $PTI_LIBS_DIR
+          echo "PTI_LIBS_DIR=$PTI_LIBS_DIR" >> $GITHUB_ENV
 
       - name: Create reports dir
         run: |
@@ -106,6 +120,61 @@ jobs:
 
           # Return the captured return code at the end
           exit "$RET_CODE"
+
+      - name: Install SGLANG
+        run: |
+          git clone https://github.com/sgl-project/sglang.git
+          cd sglang
+          git apply ../benchmarks/third_party/sglang/sglang-fix.patch
+          pip install "./python[dev_xpu]"
+
+      # Reinstallation since SGLang installation will force overrides current PyTorch and Triton
+      - name: Reinstall PyTorch
+        uses: ./.github/actions/setup-pytorch
+
+      - name: Reinstall Triton
+        run: |
+          pip install ./dist/*.whl
+
+      - name: Run SGLANG attention prefill stage benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
+          cd benchmarks/triton_kernels_benchmark
+          python prefill_attention_benchmark.py --reports $REPORTS
+
+          source ../../../scripts/capture-hw-details.sh
+          python ../../triton_kernels_benchmark/build_report.py $REPORTS/sglang-prefill-attn-performance.csv $REPORTS/sglang-prefill-attn-triton-report.csv --benchmark sglang-prefill-attn --compiler triton --param_cols "B,SEQ_LENS,H_Q,H_KV,D,CAUSAL" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+
+      - name: Run SGLANG attention decode stage benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
+          cd benchmarks/triton_kernels_benchmark
+          python decode_attention_benchmark.py --reports $REPORTS
+
+          source ../../../scripts/capture-hw-details.sh
+          python ../../triton_kernels_benchmark/build_report.py $REPORTS/sglang-decode-attn-performance.csv $REPORTS/sglang-decode-attn-triton-report.csv --benchmark sglang-decode-attn --compiler triton --param_cols "B,SEQ_LENS,H_Q,H_KV,D" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+
+      - name: Run SGLANG attention append stage benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
+          cd benchmarks/triton_kernels_benchmark
+          python extended_attention_benchmark.py --reports $REPORTS
+
+          source ../../../scripts/capture-hw-details.sh
+          python ../../triton_kernels_benchmark/build_report.py $REPORTS/sglang-extended-attn-performance.csv $REPORTS/sglang-append-attn-triton-report.csv --benchmark sglang-extended-attn --compiler triton --param_cols "B,Q_LEN,PREFIX_LEN,KV_LEN,H_Q,H_KV,D" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+
+      - name: Run SGLANG Block FP8 GEMM benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
+          cd benchmarks/triton_kernels_benchmark
+          python block_fp8_gemm_benchmark.py --reports $REPORTS
+
+          source ../../../scripts/capture-hw-details.sh
+          python ../../triton_kernels_benchmark/build_report.py $REPORTS/sglang-fp8-gemm-performance.csv $REPORTS/sglang-fp8-gemm-triton-report.csv --benchmark sglang-block-fp8-gemm --compiler triton --param_cols "M,N,K" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
       - name: Run e2e Llama 3.1 flex attention performance benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'llama3-1')) }}
