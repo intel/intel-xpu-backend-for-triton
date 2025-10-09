@@ -42,9 +42,7 @@ class IntelDPASLayout(DistributedLayout):
         super().__setattr__("ops_per_chan", _unwrap_if_constexpr(self.ops_per_chan))
         super().__setattr__("warps_per_cta", _unwrap_if_constexpr(self.warps_per_cta))
         super().__setattr__("rep_cluster", _unwrap_if_constexpr(self.rep_cluster))
-        super().__setattr__(
-            "threads_per_warp", _unwrap_if_constexpr(self.threads_per_warp)
-        )
+        super().__setattr__("threads_per_warp", _unwrap_if_constexpr(self.threads_per_warp))
         # Compute cta_order as reversed range of warps_per_cta length, if not provided
         super().__setattr__("cta_order", list(reversed(range(len(self.warps_per_cta)))))
 
@@ -76,15 +74,13 @@ class IntelDPASLayout(DistributedLayout):
         return
 
     def __hash__(self):
-        return hash(
-            (
-                self.repeatCount,
-                self.systolic_depth,
-                self.execution_size,
-                self.ops_per_chan,
-                tuple(self.warps_per_cta),
-                tuple(self.rep_cluster),
-                self.threads_per_warp,
-                tuple(self.cta_order),
-            )
-        )
+        return hash((
+            self.repeatCount,
+            self.systolic_depth,
+            self.execution_size,
+            self.ops_per_chan,
+            tuple(self.warps_per_cta),
+            tuple(self.rep_cluster),
+            self.threads_per_warp,
+            tuple(self.cta_order),
+        ))
