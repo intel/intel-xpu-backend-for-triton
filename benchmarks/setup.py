@@ -35,7 +35,7 @@ class CMakeBuild():
         self.build_extension()
 
     def check_call(self, *popenargs, **kwargs):
-        logging.warning(" ".join(popenargs[0]))
+        logging.info(" ".join(popenargs[0]))
         if not self.dry_run:
             subprocess.check_call(*popenargs, **kwargs)
 
