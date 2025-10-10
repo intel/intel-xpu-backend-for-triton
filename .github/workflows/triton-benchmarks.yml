@@ -116,9 +116,24 @@ jobs:
           cd benchmarks
           pip install .
 
+      - name: Build PTI from source
+        id: build-pti
+        run: |
+          git clone https://github.com/intel/pti-gpu.git
+          cd pti-gpu
+          git checkout 15a201d25e5659692613b98ee33513263b689101
+          cd sdk
+          cmake --preset linux-icpx-release
+          BUILD_TESTING=1 PTI_BUILD_SAMPLES=1 cmake --build --preset linux-icpx-release
+
+          PTI_LIBS_DIR="$(pwd)/build-linux-icpx-release/lib/"
+          ls $PTI_LIBS_DIR
+          echo "PTI_LIBS_DIR=$PTI_LIBS_DIR" >> $GITHUB_ENV
+
       - name: Run Triton Softmax kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'fused_softmax.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'fused_softmax.py') }}
         run: |
+          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
           cd benchmarks/triton_kernels_benchmark
           python fused_softmax.py --reports $REPORTS --n_runs $N_RUNS
           source ../../scripts/capture-hw-details.sh

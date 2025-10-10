@@ -24,6 +24,19 @@ DEFINE_DISPATCH(ExternLibXpupti, viewDisable, ptiViewDisable, pti_view_kind)
 
 DEFINE_DISPATCH(ExternLibXpupti, viewFlushAll, ptiFlushAllViews)
 
+DEFINE_DISPATCH(ExternLibXpupti, subscribe, ptiCallbackSubscribe,
+                pti_callback_subscriber_handle *, pti_callback_function, void *)
+
+DEFINE_DISPATCH(ExternLibXpupti, unsubscribe, ptiCallbackUnsubscribe,
+                pti_callback_subscriber_handle);
+
+DEFINE_DISPATCH(ExternLibXpupti, enableDomain, ptiCallbackEnableDomain,
+                pti_callback_subscriber_handle, pti_callback_domain, uint32_t,
+                uint32_t);
+
+DEFINE_DISPATCH(ExternLibXpupti, disableDomain, ptiCallbackDisableDomain,
+                pti_callback_subscriber_handle, pti_callback_domain);
+
 DEFINE_DISPATCH(ExternLibXpupti, viewGetNextRecord, ptiViewGetNextRecord,
                 uint8_t *, size_t, pti_view_record_base **)
 
