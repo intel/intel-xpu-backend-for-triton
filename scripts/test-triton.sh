@@ -29,6 +29,7 @@ TEST:
     --sglang
     --liger
     --vllm
+    --install-vllm
 
 OPTION:
     --unskip
@@ -72,6 +73,7 @@ TEST_INDUCTOR=false
 TEST_SGLANG=false
 TEST_LIGER=false
 TEST_VLLM=false
+INSTALL_VLLM=false
 TEST_TRITON_KERNELS=false
 VENV=false
 TRITON_TEST_REPORTS=false
@@ -200,6 +202,11 @@ while (( $# != 0 )); do
       ;;
     --vllm)
       TEST_VLLM=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --install-vllm)
+      INSTALL_VLLM=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -621,9 +628,9 @@ run_liger_tests() {
   run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-4} Liger-Kernel/test/
 }
 
-run_vllm_tests() {
+run_vllm_install() {
   echo "************************************************"
-  echo "******    Running VLLM Triton tests       ******"
+  echo "******    Installing VLLM                 ******"
   echo "************************************************"
 
   if ! [ -d "./vllm" ]; then
@@ -642,15 +649,24 @@ run_vllm_tests() {
     git checkout "$(<../benchmarks/third_party/vllm/vllm-kernels-pin.txt)"
     sed -i '/pytorch\|torch/d' requirements.txt
     pip install -r requirements.txt
-    VLLM_TARGET_DEVICE=xpu pip install -e .
+    VLLM_TARGET_DEVICE=xpu pip install --no-build-isolation -e .
     cd ..
 
-    VLLM_TARGET_DEVICE=xpu pip install --no-deps vllm
+    VLLM_TARGET_DEVICE=xpu pip install --no-deps --no-build-isolation vllm
   fi
 
-  cd vllm
   pip install pytest pytest-cov pytest-xdist cachetools cbor2 blake3 pybase64 openai_harmony tblib
+}
 
+
+run_vllm_tests() {
+  echo "************************************************"
+  echo "******    Running VLLM Triton tests       ******"
+  echo "************************************************"
+
+  run_vllm_install
+
+  cd vllm
   run_pytest_command -vvv tests/kernels/moe/test_batched_moe.py tests/kernels/attention/test_triton_unified_attention.py
 }
 
@@ -737,6 +753,9 @@ test_triton() {
   fi
   if [ "$TEST_VLLM" == true ]; then
     run_vllm_tests
+  fi
+  if [ "$INSTALL_VLLM" == true ]; then
+    run_vllm_install
   fi
   if [ "$TEST_TRITON_KERNELS" == true ]; then
     run_triton_kernels_tests
