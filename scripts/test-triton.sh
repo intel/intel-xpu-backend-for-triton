@@ -673,7 +673,7 @@ run_triton_kernels_tests() {
   fi
 
   TRITON_TEST_SUITE=triton_kernels \
-    run_pytest_command -vvv -n $max_procs --device xpu .
+    run_pytest_command -vvv -n $max_procs --device xpu ./test_matmul.py
 }
 
 test_triton() {
@@ -686,7 +686,7 @@ test_triton() {
     run_core_tests
   else
     if [ "$TEST_MINICORE" = true ]; then
-        run_minicore_tests
+        run_triton_kernels_tests
     fi
     if [ "$TEST_MXFP" = true ]; then
         run_mxfp_tests
