@@ -10,8 +10,7 @@ the framework from gemm_benchmark.py to compare performance of different
 batched MoE implementations using vLLM kernels.
 
 """
-from typing import Optional
-import os
+from typing import Optional, List
 
 import torch
 import triton
@@ -199,38 +198,34 @@ def expert_triton_kernel(
     # tl.store(c_ptrs, accumulator, mask=c_mask)
 
 
-# def get_matmul_batched_autotune_configs():
-#     configs = [
-#         triton.Config(
-#             {'BLOCK_M': 256, 'BLOCK_N': 256, 'BLOCK_K': 32, 'grf_mode': 'large'},
-#             num_stages=s, num_warps=32) for s in [2, 3]
-#     ] + [
-#         triton.Config({'BLOCK_M': 256, 'BLOCK_N': 128, 'BLOCK_K': 32, 'grf_mode': m},
-#                       num_stages=s, num_warps=w) for s in [2] for (m, w) in ([('large', 32), ('small', 64)])
-#     ] + [
-#         triton.Config(
-#             {'BLOCK_M': 128, 'BLOCK_N': 1024, 'BLOCK_K': 16, 'grf_mode': 'large'},
-#             num_stages=s, num_warps=32) for s in [2, 3]
-#     ] + [
-#         triton.Config(
-#             {'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 32, 'grf_mode': 'large'},
-#             num_stages=s, num_warps=32) for s in [2]
-#     ] + [
-#         triton.Config(
-#             {'BLOCK_M': 8, 'BLOCK_N': 512, 'BLOCK_K': 64, 'grf_mode': 'large'},
-#             num_stages=s, num_warps=32) for s in [2]
-#     ] + [
-#         triton.Config(
-#             {'BLOCK_M': 8, 'BLOCK_N': 128, 'BLOCK_K': 64, 'grf_mode': 'large'},
-#             num_stages=s, num_warps=4) for s in [2]
-#     ]
-#     return configs
+def get_matmul_batched_autotune_configs() -> List[triton.Config]:
+    configs = [
+        triton.Config({'BLOCK_M': 256, 'BLOCK_N': 256, 'BLOCK_K': 32, 'grf_mode': 'large'}, num_stages=s, num_warps=32)
+        for s in [2, 3]
+    ] + [
+        triton.Config({'BLOCK_M': 256, 'BLOCK_N': 128, 'BLOCK_K': 32, 'grf_mode': m}, num_stages=s, num_warps=w)
+        for s in [2]
+        for (m, w) in ([('large', 32), ('small', 64)])
+    ] + [
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 1024, 'BLOCK_K': 16, 'grf_mode': 'large'}, num_stages=s, num_warps=32)
+        for s in [2, 3]
+    ] + [
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 32, 'grf_mode': 'large'}, num_stages=s, num_warps=32)
+        for s in [2]
+    ] + [
+        triton.Config({'BLOCK_M': 8, 'BLOCK_N': 512, 'BLOCK_K': 64, 'grf_mode': 'large'}, num_stages=s, num_warps=32)
+        for s in [2]
+    ] + [
+        triton.Config({'BLOCK_M': 8, 'BLOCK_N': 128, 'BLOCK_K': 64, 'grf_mode': 'large'}, num_stages=s, num_warps=4)
+        for s in [2]
+    ]
+    return configs
 
 
-# @triton.autotune(
-#     configs=get_matmul_batched_autotune_configs(),
-#     key=['max_num_tokens', 'K', 'N']
-# )
+@triton.autotune(
+    configs=get_matmul_batched_autotune_configs(),
+    key=['max_num_tokens', 'K', 'N'],
+)
 @triton.jit
 def batched_triton_kernel(
     a_ptr,  # [E, max_num_tokens, K]
@@ -356,15 +351,12 @@ def invoke_moe_batched_triton_kernel_td(A: torch.Tensor,  # [E, max_tokens, K]
 
     BLOCK_M = config['BLOCK_SIZE_M']
     BLOCK_N = config['BLOCK_SIZE_N']
-    BLOCK_K = config['BLOCK_SIZE_K']
-    BLOCK_M = 256
-    BLOCK_N = 128
-    BLOCK_K = 32
-    num_warps = 64
-    # BLOCK_M = 16
-    # BLOCK_N = 16
-    # BLOCK_K = 16
-    # num_warps = 4
+    # BLOCK_K = config['BLOCK_SIZE_K']
+    # Looks like generally good parameters
+    # BLOCK_M = 256
+    # BLOCK_N = 128
+    # BLOCK_K = 32
+    # num_warps = 64
 
     grid = (expert_num_tokens.size(0), triton.cdiv(max_num_tokens, BLOCK_M) * triton.cdiv(B.size(1), BLOCK_N))
 
@@ -439,31 +431,43 @@ def invoke_moe_batched_triton_kernel_td(A: torch.Tensor,  # [E, max_tokens, K]
         use_int8_w8a16,
         per_act_token_quant,
         # Kernel config
-        BLOCK_M=BLOCK_M,
-        BLOCK_N=BLOCK_N,
-        BLOCK_K=BLOCK_K,
-        num_warps=num_warps,
+        # BLOCK_M=BLOCK_M,
+        # BLOCK_N=BLOCK_N,
+        # BLOCK_K=BLOCK_K,
+        # num_warps=num_warps,
     )
 
 
-# Benchmark shapes for batched MoE (E: num_experts, M: max_tokens_per_expert, K: hidden_dim, N: intermediate_dim)
-BATCHED_MM_X_VALS = [(E, M, K, N) for E in [8, 32] for M in [32, 224, 512] for K in [128, 1024] for N in [128, 1024]]
-BATCHED_MM_X_VALS = [
-    # (256, 16, 7168, 2048 * 2),
-    (256, 256, 7168, 2048),
-    # (256, 16, 7168, 2048),
-    # (256, 2, 5000, 2024),
-    #     (256, 16, 2048, 7168),
-    *[(E, M, K, N) for E in [8, 32] for M in [32, 224, 512] for K in [128, 1024] for N in [128, 1024]]
-]
+# Benchmark shapes for batched MoE
+# (E: num_experts, M: max_tokens_per_expert, K: hidden_dim, N: intermediate_dim, fp8, block_quant)
+# BATCHED_MM_X_VALS = [(E, M, K, N, False, False) for E in [8, 32] for M in [32, 224, 512] for K in [128, 1024] for N in [128, 1024]]
+BATCHED_MM_X_VALS = sum([[(E, M, hidden_size, int_size * 2, fp8, block_quant),
+                          (E, M, int_size, hidden_size, fp8, block_quant)]
+                         for M in [1, 8, 64, 256]
+                         for E, hidden_size, int_size, fp8, block_quant in [
+                             # deepseek V3, fp8 block quant
+                             # (256, 7168, 2048, True, True),
+                             (256, 7168, 2048, False, False),
+                             # llama4 scout bf16
+                             (16, 5120, 8192, False, False),
+                             # gpt-oss 20b mxfp4
+                             (32, 2880, 2880, False, False),
+                             # gpt-oss 120b mxfp4
+                             (128, 2880, 2880, False, False),
+                             # qwen3-235b-A22B bf16/fp8
+                             (128, 4096, 1536, False, False),
+                             # qwen3-30b-A3B bf16/fp8
+                             (128, 2048, 768, False, False),
+                             # qwen3-next-80B bf16
+                             (512, 2048, 512, False, False),
+                         ]], [])
 
 DEVICE_NAME = torch.xpu.get_device_name()
 DEVICE_TOTAL_MEMORY = torch.xpu.get_device_properties().total_memory
 
 
 def is_enough_memory(x_val):
-    # x_val: (E, M, K, N)
-    E, M, K, N = x_val
+    E, M, K, N, fp8, block_quant = x_val
     # A: (E, M, K) bfloat16
     # B: (E, K, N) bfloat16
     # C: (E, M, N) float32
@@ -480,10 +484,7 @@ BATCHED_MM_X_VALS = [x_val for x_val in BATCHED_MM_X_VALS if is_enough_memory(x_
 
 def get_batched_mm_benchmark(
     providers_filter: Optional[list[str]] = None,
-    dtype: torch.dtype = torch.bfloat16,
-    use_fp8_w8a8: bool = False,
     per_act_token_quant: bool = False,
-    block_shape: Optional[list[int]] = None,
     plot_name: str = 'moe-gemm-performance',
 ):
     """
@@ -498,16 +499,10 @@ def get_batched_mm_benchmark(
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
     # Set up quantization
-    if use_fp8_w8a8:
-        act_dtype = torch.bfloat16
-        quant_dtype = torch.float8_e4m3fn
-    else:
-        act_dtype = dtype
-        quant_dtype = None
 
     @benchmark_suite.perf_report(
         benchmark_suite.Benchmark(
-            x_names=['num_experts', 'max_tokens_per_expert', 'K', 'N'],
+            x_names=['num_experts', 'max_tokens_per_expert', 'K', 'N', 'fp8', 'block_quant'],
             x_vals=BATCHED_MM_X_VALS,
             line_arg='provider',
             line_vals=list(providers.keys()),
@@ -517,9 +512,25 @@ def get_batched_mm_benchmark(
             plot_name=plot_name,
             args={},
         ))
-    def benchmark(num_experts, max_tokens_per_expert, K, N, provider):
+    def benchmark(num_experts, max_tokens_per_expert, K, N, fp8, block_quant, provider):
         current_platform.seed_everything(70)
         n_warmup = 300
+
+        # print(num_experts, max_tokens_per_expert, K, N, fp8, block_quant, provider, fp8, block_quant)
+        if fp8:
+            use_fp8_w8a8 = True
+            act_dtype = torch.bfloat16
+            quant_dtype = torch.float8_e4m3fn
+        else:
+            use_fp8_w8a8 = False
+            act_dtype = torch.bfloat16
+            quant_dtype = None
+
+        dtype = torch.bfloat16
+        if block_quant:
+            block_shape = (128, 128)
+        else:
+            block_shape = None
 
         # Create random number of expert tokens
         num_expert_tokens = torch.randint(low=0, high=max_tokens_per_expert + 1, size=(num_experts, ), device='xpu',
@@ -625,9 +636,5 @@ def get_batched_mm_benchmark(
 if __name__ == '__main__':
     # Run batched MM benchmark
     print('Running batched MM benchmark...')
-    _benchmark_mm = get_batched_mm_benchmark(
-        dtype=torch.bfloat16,
-        use_fp8_w8a8=(os.getenv('USE_FP8_W8A8', '0') == '1'),
-        per_act_token_quant=(os.getenv('PER_ACT_TOKEN_QUANT', '0') == '1'),
-    )
+    _benchmark_mm = get_batched_mm_benchmark()
     _benchmark_mm.run(show_plots=False, print_data=True)
