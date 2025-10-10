@@ -384,7 +384,7 @@ jobs:
   reports:
     name: Reports
     runs-on:
-      - linux
+      - runner-0.0.22
     needs: integration-tests
     steps:
       - name: Checkout repository
