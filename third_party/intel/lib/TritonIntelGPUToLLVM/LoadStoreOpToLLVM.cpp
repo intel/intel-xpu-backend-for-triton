@@ -1158,9 +1158,9 @@ struct LoadOpToBlockIOConversion
           for (int repM = 0; repM < repCluster[0]; ++repM) {
 
             Value offsetY =
-                b.umin(b.sub(baseHeight, b.i32_val(1)),
-                       b.add(warpId0Offset, b.i32_val(m * replicaStride[0] +
-                                                      repM * tileHeight)));
+                b.urem(b.add(warpId0Offset, b.i32_val(m * replicaStride[0] +
+                                                      repM * tileHeight)),
+                       baseHeight);
             for (int repN = 0; repN < repCluster[1]; ++repN) {
               Value offsetX =
                   b.add(warpId1Offset,
@@ -1193,8 +1193,7 @@ struct LoadOpToBlockIOConversion
 
               for (size_t i = 0; i < elemsPerLane; ++i) {
                 Value loaded = b.extract_element(
-                    eltTy, ret,
-                    b.umin(b.sub(baseHeight, b.i32_val(1)), b.i32_val(i)));
+                    eltTy, ret, b.urem(b.i32_val(i), baseHeight));
                 unpackedLoadedVals.push_back(loaded);
               }
             }
