@@ -474,7 +474,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_o
             w_tri = convert_layout(w_tri, w_layout, **w_layout_opts)
             w_scale_tri = convert_layout(w_scale_tri, w_scale_layout, **w_scale_layout_opts)
         else:
-            if torch.cuda.get_device_capability()[0] < 10:
+            if is_cuda() and torch.cuda.get_device_capability()[0] < 10:
                 pytest.skip("transposed mxfp weight not supported with cuda capability < 10")
             if block_m == 16:
                 pytest.skip("PassManager::run failed from Triton compiler")
