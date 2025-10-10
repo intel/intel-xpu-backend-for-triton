@@ -13,7 +13,7 @@ if (NOT SPIRVToLLVMTranslator_FOUND)
     # Strip the potential trailing newline from tag
     string(STRIP "${SPIRVToLLVMTranslator_TAG}" SPIRVToLLVMTranslator_TAG)
     FetchContent_Declare(spirv-llvm-translator
-            GIT_REPOSITORY    https://github.com/KhronosGroup/SPIRV-LLVM-Translator.git
+            GIT_REPOSITORY    https://github.com/whitneywhtsang/SPIRV-LLVM-Translator.git
             GIT_TAG           ${SPIRVToLLVMTranslator_TAG}
             SOURCE_DIR ${SPIRVToLLVMTranslator_SOURCE_DIR}
             )
