@@ -207,3 +207,30 @@ def test_block_load_dot_product(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_
     result_tor = fn_tor()
     result_tri = fn_tri()
     torch.testing.assert_close(result_tri, result_tor, atol=1e-2, rtol=1e-3)
+
+
+@pytest.mark.skipif(not is_xpu(), reason="Block load tests are specific to the XPU backend")
+@pytest.mark.xfail(
+    not (torch.xpu.get_device_capability()['has_subgroup_2d_block_io']
+         and torch.xpu.get_device_capability()['has_subgroup_matrix_multiply_accumulate']),
+    reason="Block loads and/or DPAS not supported on this architecture", run=False)
+def test_block_load_asserts(monkeypatch, device, tmp_path: pathlib.Path):
+    monkeypatch.setenv("TRITON_INTEL_2DBLOCK_ASSERT", "1")
+
+    import os
+    import signal
+    import subprocess
+    import sys
+
+    dir_path = os.path.dirname(os.path.realpath(__file__))
+    helper_path = os.path.join(dir_path, "block_io_helper.py")
+
+    temp_file = tmp_path / "test_block_load_asserts.ttgir"
+
+    proc = subprocess.run(
+        [sys.executable, helper_path, device, str(temp_file)],
+        capture_output=True,
+    )
+
+    rc = proc.returncode
+    assert rc == -signal.SIGABRT or rc == (128 + signal.SIGABRT)
