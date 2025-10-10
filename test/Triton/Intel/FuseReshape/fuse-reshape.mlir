@@ -140,11 +140,11 @@ tt.func public @fuseLoadWithReshape3(%a_ptr: !tt.ptr<f32> {tt.divisibility = 16 
 tt.func public @fuseLoadWithTrans4(%arg0: i32, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f16>) {
   %c0_i32 = arith.constant 0 : i32
   %c1_i32 = arith.constant 1 : i32
-  %c2_i32 = arith.constant 2 : i32    
+  %c2_i32 = arith.constant 2 : i32
   %c32_i32 = arith.constant 32 : i32
-  %c1_i64 = arith.constant 1 : i64  
+  %c1_i64 = arith.constant 1 : i64
   %c64_i64 = arith.constant 64 : i64
-  %c256_i64 = arith.constant 256 : i64  
+  %c256_i64 = arith.constant 256 : i64
   %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32>
   %7 = tt.make_tensor_ptr %arg1, [%c1_i64, %c64_i64], [%c64_i64, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<64x32xf16>>
   %9 = tt.make_tensor_ptr %arg2, [%c1_i64, %c256_i64, %c64_i64], [%c256_i64, %c64_i64, %c1_i64], [%c0_i32, %c1_i32, %c2_i32] {order = array<i32: 2, 1, 0>} : <tensor<1x32x64xf16>>
@@ -167,7 +167,7 @@ tt.func public @fuseLoadWithTrans4(%arg0: i32, %arg1: !tt.ptr<f16>, %arg2: !tt.p
     scf.yield %add : i32
   }
   tt.return
-  
+
 }
 // CHECK-LABEL: fuseLoadWithTrans4
 // CHECK-NOT: tt.reshape
