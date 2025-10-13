@@ -10,6 +10,7 @@ the framework from gemm_benchmark.py to compare performance of different
 batched MoE implementations using vLLM kernels.
 
 """
+import os
 from typing import Optional, List
 
 import torch
@@ -206,9 +207,6 @@ def get_matmul_batched_autotune_configs() -> List[triton.Config]:
         triton.Config({'BLOCK_M': 256, 'BLOCK_N': 128, 'BLOCK_K': 32, 'grf_mode': m}, num_stages=s, num_warps=w)
         for s in [2]
         for (m, w) in ([('large', 32), ('small', 64)])
-    ] + [
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 1024, 'BLOCK_K': 16, 'grf_mode': 'large'}, num_stages=s, num_warps=32)
-        for s in [2, 3]
     ] + [
         triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 32, 'grf_mode': 'large'}, num_stages=s, num_warps=32)
         for s in [2]
@@ -441,26 +439,37 @@ def invoke_moe_batched_triton_kernel_td(A: torch.Tensor,  # [E, max_tokens, K]
 # Benchmark shapes for batched MoE
 # (E: num_experts, M: max_tokens_per_expert, K: hidden_dim, N: intermediate_dim, fp8, block_quant)
 # BATCHED_MM_X_VALS = [(E, M, K, N, False, False) for E in [8, 32] for M in [32, 224, 512] for K in [128, 1024] for N in [128, 1024]]
-BATCHED_MM_X_VALS = sum([[(E, M, hidden_size, int_size * 2, fp8, block_quant),
-                          (E, M, int_size, hidden_size, fp8, block_quant)]
-                         for M in [1, 8, 64, 256]
-                         for E, hidden_size, int_size, fp8, block_quant in [
-                             # deepseek V3, fp8 block quant
-                             # (256, 7168, 2048, True, True),
-                             (256, 7168, 2048, False, False),
-                             # llama4 scout bf16
-                             (16, 5120, 8192, False, False),
-                             # gpt-oss 20b mxfp4
-                             (32, 2880, 2880, False, False),
-                             # gpt-oss 120b mxfp4
-                             (128, 2880, 2880, False, False),
-                             # qwen3-235b-A22B bf16/fp8
-                             (128, 4096, 1536, False, False),
-                             # qwen3-30b-A3B bf16/fp8
-                             (128, 2048, 768, False, False),
-                             # qwen3-next-80B bf16
-                             (512, 2048, 512, False, False),
-                         ]], [])
+# Each pair represent transformation for SwiGLU and then output transformation
+MM_CONFIGS_BF16 = sum([[(E, M, hidden_size, int_size * 2, fp8, block_quant),  # input -> swiglu input
+                        (E, M, int_size, hidden_size, fp8, block_quant)]  # swiglu output -> final output
+                       for M in [1, 8, 64, 256]
+                       for E, hidden_size, int_size, fp8, block_quant in [
+                           # llama4 scout bf16
+                           (16, 5120, 8192, False, False),
+                           # gpt-oss 20b mxfp4
+                           (32, 2880, 2880, False, False),
+                           # gpt-oss 120b mxfp4
+                           (128, 2880, 2880, False, False),
+                           # qwen3-235b-A22B bf16/fp8
+                           (128, 4096, 1536, False, False),
+                           # qwen3-30b-A3B bf16/fp8
+                           (128, 2048, 768, False, False),
+                           # qwen3-next-80B bf16
+                           (512, 2048, 512, False, False),
+                       ]], [])
+
+MM_CONFIGS_FP8 = sum([[(E, M, hidden_size, int_size * 2, fp8, block_quant),
+                       (E, M, int_size, hidden_size, fp8, block_quant)]
+                      for M in [1, 8, 64, 256]
+                      for E, hidden_size, int_size, fp8, block_quant in [
+                          # deepseek V3, fp8 block quant
+                          # 3.5 GBs of weights!
+                          (256, 7168, 2048, True, True),
+                          #  # qwen3-235b-A22B bf16/fp8
+                          (128, 4096, 1536, False, True),
+                          # qwen3-30b-A3B bf16/fp8
+                          (128, 2048, 768, False, True),
+                      ]], [])
 
 DEVICE_NAME = torch.xpu.get_device_name()
 DEVICE_TOTAL_MEMORY = torch.xpu.get_device_properties().total_memory
@@ -468,23 +477,25 @@ DEVICE_TOTAL_MEMORY = torch.xpu.get_device_properties().total_memory
 
 def is_enough_memory(x_val):
     E, M, K, N, fp8, block_quant = x_val
-    # A: (E, M, K) bfloat16
-    # B: (E, K, N) bfloat16
-    # C: (E, M, N) float32
+    # A: (E, M, K) bfloat16 or fp8
+    # B: (E, K, N) bfloat16 or fp8
+    # C: (E, M, N) bfloat16
     # num_expert_tokens: (E,) int32
-    required_memory = E * M * K * 2 + E * K * N * 2 + E * M * N * 4 + E * 4
+    n_bytes = 1 if fp8 else 2
+    required_memory = E * M * K * n_bytes + E * K * N * n_bytes + E * M * N * 2 + E * 4
     enough_memory = required_memory < DEVICE_TOTAL_MEMORY
     if not enough_memory:
         print(f"'{x_val}' combination skipped for '{DEVICE_NAME}'; {required_memory=} but {DEVICE_TOTAL_MEMORY=}")
     return enough_memory
 
 
-BATCHED_MM_X_VALS = [x_val for x_val in BATCHED_MM_X_VALS if is_enough_memory(x_val)]
+MM_CONFIGS_BF16 = [x_val for x_val in MM_CONFIGS_BF16 if is_enough_memory(x_val)]
 
 
 def get_batched_mm_benchmark(
     providers_filter: Optional[list[str]] = None,
     per_act_token_quant: bool = False,
+    fp8=False,
     plot_name: str = 'moe-gemm-performance',
 ):
     """
@@ -495,15 +506,17 @@ def get_batched_mm_benchmark(
         'triton-td': 'triton-td',
         'pytorch': 'pytorch',
     }
+    if fp8:
+        # pytorch is very slow with fp8 case, for (8, 64, 1024, 2048) case it has ~0.15 TFlops vs 1.5 for triton
+        del supported_providers['pytorch']
 
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
-
-    # Set up quantization
+    configs = MM_CONFIGS_FP8 if fp8 else MM_CONFIGS_BF16
 
     @benchmark_suite.perf_report(
         benchmark_suite.Benchmark(
             x_names=['num_experts', 'max_tokens_per_expert', 'K', 'N', 'fp8', 'block_quant'],
-            x_vals=BATCHED_MM_X_VALS,
+            x_vals=configs,
             line_arg='provider',
             line_vals=list(providers.keys()),
             line_names=list(providers.values()),
@@ -514,23 +527,13 @@ def get_batched_mm_benchmark(
         ))
     def benchmark(num_experts, max_tokens_per_expert, K, N, fp8, block_quant, provider):
         current_platform.seed_everything(70)
-        n_warmup = 300
+        n_warmup = 600
 
-        # print(num_experts, max_tokens_per_expert, K, N, fp8, block_quant, provider, fp8, block_quant)
-        if fp8:
-            use_fp8_w8a8 = True
-            act_dtype = torch.bfloat16
-            quant_dtype = torch.float8_e4m3fn
-        else:
-            use_fp8_w8a8 = False
-            act_dtype = torch.bfloat16
-            quant_dtype = None
+        act_dtype = torch.bfloat16
+        use_fp8_w8a8 = fp8
+        quant_dtype = torch.float8_e4m3fn if fp8 else None
 
-        dtype = torch.bfloat16
-        if block_quant:
-            block_shape = (128, 128)
-        else:
-            block_shape = None
+        block_shape = (128, 128) if block_quant else None
 
         # Create random number of expert tokens
         num_expert_tokens = torch.randint(low=0, high=max_tokens_per_expert + 1, size=(num_experts, ), device='xpu',
@@ -584,7 +587,6 @@ def get_batched_mm_benchmark(
             # Triton batched MoE kernel
             invoke_kernel = invoke_moe_batched_triton_kernel if provider == 'triton' else invoke_moe_batched_triton_kernel_td
 
-            # invoke_kernel = invoke_moe_batched_triton_kernel_td
             def triton_fn():
                 invoke_kernel(
                     A_q,
@@ -598,7 +600,8 @@ def get_batched_mm_benchmark(
                     use_fp8_w8a8,
                     False,
                     False,
-                    config={'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 16, 'BLOCK_SIZE_K': 16 if dtype.itemsize > 1 else 32},
+                    config={'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 16, 'BLOCK_SIZE_K': 32 if fp8 else 16},
+                    # config={'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32 if dtype.itemsize > 1 else 32},
                     per_act_token_quant=per_act_token_quant,
                     block_shape=block_shape,
                 )
@@ -621,7 +624,9 @@ def get_batched_mm_benchmark(
         # Compute: E * M * N * K * 2 FLOPs (multiply-add)
 
         def gbps(ms):
-            total_bytes = num_experts * (max_tokens_per_expert * K * 2 + K * N * 2 + max_tokens_per_expert * N * 4)
+            n_bytes = 1 if fp8 else 2
+            total_bytes = num_experts * (max_tokens_per_expert * K * n_bytes + K * N * n_bytes +
+                                         max_tokens_per_expert * N * 2)
             return total_bytes * (1e-9) / (ms * 1e-3)
 
         def tflops(ms):
@@ -636,5 +641,5 @@ def get_batched_mm_benchmark(
 if __name__ == '__main__':
     # Run batched MM benchmark
     print('Running batched MM benchmark...')
-    _benchmark_mm = get_batched_mm_benchmark()
+    _benchmark_mm = get_batched_mm_benchmark(fp8=(os.getenv('FP8', '0') == '1'), )
     _benchmark_mm.run(show_plots=False, print_data=True)

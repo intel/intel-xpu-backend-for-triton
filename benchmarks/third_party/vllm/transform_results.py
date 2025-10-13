@@ -12,14 +12,12 @@ def parse_args():
     parser.add_argument('source', help='Path to the MoE benchmark CSV file')
     parser.add_argument('target', help='Path to output CSV file')
     parser.add_argument('--tag', help='Tag for the benchmark run', default='')
-    parser.add_argument('--model', help='Model name', default='unknown-model')
-    parser.add_argument('--max-new-tokens', type=int, help='Maximum new tokens', default=128)
-    parser.add_argument('--batch-size', type=int, help='Batch size', default=1)
+    parser.add_argument('--benchmark', help='moe-benchmark', default='')
 
     return parser.parse_args()
 
 
-def parse_moe_csv(csv_file_path, tag):
+def parse_moe_csv(csv_file_path, tag, benchmark):
     """Parse the MoE benchmark CSV and extract performance metrics."""
 
     df = pd.read_csv(csv_file_path)
@@ -49,7 +47,7 @@ def parse_moe_csv(csv_file_path, tag):
                 valid_rows['run_uuid'] = run_uuid
                 valid_rows['ts'] = current_datetime
                 valid_rows['benchmark_group'] = 'moe-benchmark'
-                valid_rows['benchmark'] = 'moe-benchmark'
+                valid_rows['benchmark'] = benchmark
                 valid_rows['compiler'] = compiler_name
                 valid_rows['value_name'] = 'tflops'
                 valid_rows['value'] = valid_rows[tflops_col].astype(float)
@@ -92,7 +90,7 @@ def main():
     if not os.path.exists(args.source):
         raise ValueError(f'Error: CSV file {args.source} not found')
 
-    df_results = parse_moe_csv(args.source, args.tag)
+    df_results = parse_moe_csv(args.source, args.tag, args.benchmark)
     df_results.to_csv(args.target, index=False)
 
 
