@@ -39,10 +39,6 @@ on:
         description: JSON list of benchmarks to skip
         type: string
         default: "[]"
-      use_pyenv_python:
-        description: Use Python built with pyenv
-        type: boolean
-        default: false
 
   # This workflow is also called from workflows triton-benchmarks-*.yml.
   workflow_call:
@@ -89,14 +85,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Install Python
-        if: ${{ !(inputs.use_pyenv_python || false) }}
-        uses: actions/setup-python@v6
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
       - name: Install Python (from pyenv) ${{ inputs.python_version }}
-        if: ${{ inputs.use_pyenv_python }}
         uses: ./.github/actions/setup-pyenv-python
         with:
           python-version: ${{ env.PYTHON_VERSION }}

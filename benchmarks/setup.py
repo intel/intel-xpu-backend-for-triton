@@ -2,10 +2,7 @@ import os
 import shutil
 import subprocess
 import sys
-
-# TODO: update once there is replacement for clean:
-#  https://github.com/pypa/setuptools/discussions/2838
-from distutils import log  # pylint: disable=[deprecated-module]
+import logging
 
 from setuptools import setup, Extension, find_packages
 from setuptools.command.build_ext import build_ext as _build_ext
@@ -38,7 +35,7 @@ class CMakeBuild():
         self.build_extension()
 
     def check_call(self, *popenargs, **kwargs):
-        log.info(" ".join(popenargs[0]))
+        logging.info(" ".join(popenargs[0]))
         if not self.dry_run:
             subprocess.check_call(*popenargs, **kwargs)
 
@@ -111,7 +108,7 @@ def get_git_commit_hash(length=8):
 
 setup(
     name="triton-kernels-benchmark",
-    version="3.3.0" + get_git_commit_hash(),
+    version="3.5.0" + get_git_commit_hash(),
     packages=find_packages(),
     install_requires=[
         "torch>=2.6",
