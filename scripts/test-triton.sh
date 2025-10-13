@@ -637,7 +637,7 @@ run_vllm_install() {
     git clone https://github.com/vllm-project/vllm.git
     cd vllm
     git checkout "$(<../benchmarks/third_party/vllm/vllm-pin.txt)"
-    git apply $TRITON_PROJ/benchmarks/third_party/vllm/vllm-fix.patch
+    git apply ../benchmarks/third_party/vllm/vllm-fix.patch
     cd ..
   fi
 
@@ -652,7 +652,7 @@ run_vllm_install() {
     VLLM_TARGET_DEVICE=xpu pip install --no-build-isolation -e .
     cd ..
 
-    VLLM_TARGET_DEVICE=xpu pip install --no-deps --no-build-isolation vllm
+    VLLM_TARGET_DEVICE=xpu pip install --no-deps --no-build-isolation -e vllm
   fi
 
   pip install pytest pytest-cov pytest-xdist cachetools cbor2 blake3 pybase64 openai_harmony tblib
