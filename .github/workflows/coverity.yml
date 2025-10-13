@@ -24,8 +24,8 @@ jobs:
         run: |
           sudo apt install -y file
 
-      - name: Install Python 3.10
-        uses: actions/setup-python@v6
+      - name: Install Python (from pyenv)
+        uses: ./.github/actions/setup-pyenv-python
         with:
           python-version: '3.10'
 
