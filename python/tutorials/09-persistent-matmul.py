@@ -673,7 +673,7 @@ def bench_fn(label, reps, warmup_reps, fn, *args):
     for _ in range(warmup_reps):
         fn(*args)
     #FIXME: Enable for XPU once proton support works.
-    if True or is_cuda():
+    if is_cuda():
         with proton_context():
             for _ in range(reps):
                 fn(*args)
@@ -783,11 +783,11 @@ if __name__ == "__main__":
 
         validate(32, 32, 32, dtype)
         validate(8192, 8192, args.K_range[0], dtype)
-        if True or is_cuda():
+        if is_cuda():
             proton.start("matmul", hook="triton")
             proton.deactivate()
         for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
             bench(K, dtype)
-        if True or is_cuda():
+        if is_cuda():
             proton.finalize()
             show_profile(args.prec, "matmul")

@@ -264,8 +264,6 @@ struct XpuptiProfiler::XpuptiProfilerPimpl
 
   static void allocBuffer(uint8_t **buffer, size_t *bufferSize);
   static void completeBuffer(uint8_t *buffer, size_t size, size_t validSize);
-  // static void callbackFn(void *userData, CUpti_CallbackDomain domain,
-  //                        CUpti_CallbackId cbId, const void *cbData);
   static void callbackFn(pti_callback_domain domain,
                          pti_api_group_id driver_api_group_id,
                          uint32_t driver_api_id,
@@ -354,32 +352,6 @@ void XpuptiProfiler::XpuptiProfilerPimpl::callbackFn(
   } else {
     throw std::runtime_error("[PROTON] callbackFn failed");
   }
-
-  /*                        switch (domain) {
-    case PTI_DOMAIN_DRIVER_GPU_OPERATION_APPEND:
-      CallbackGPUOperationAppend(domain, driver_api_group_id, driver_api_id,
-                                backend_context, cb_data, user_data);
-      break;
-    case PTI_DOMAIN_GPU_OPERATION_COMPLETED:
-      CallbackGPUOperationCompletion(domain, driver_api_group_id, driver_api_id,
-                                   backend_context, cb_data, user_data);
-      break;
-    default: {
-      std::cout << "In " << __func__ << ", domain: " << domain
-                << ", driver_group_id: " << driver_api_group_id
-                << ", driver_api_id: " << driver_api_id << std::endl;
-
-      const char* name_ptr = nullptr;
-
-      if (PTI_SUCCESS == ptiViewGetApiIdName(driver_api_group_id, driver_api_id,
-  &name_ptr) ) { std::cout << ", API name: " << name_ptr << std::endl; } else {
-        std::cout << ", Unknown API name" << std::endl;
-      }
-      break;
-    }
-  }
-  std::cout << std::endl;
-  */
 }
 
 void CallbackCommon(pti_callback_domain domain,
@@ -458,7 +430,6 @@ int callWaitOnSyclQueue(const std::string &utils_cache_path, void *syclQueue) {
 }
 
 void XpuptiProfiler::XpuptiProfilerPimpl::doStart() {
-  std::cout << "doStart\n" << std::flush;
   // should be call to shared lib
   XpuptiProfiler &profiler = threadState.profiler;
   if (profiler.utils_cache_path != "") {
@@ -501,7 +472,6 @@ void XpuptiProfiler::XpuptiProfilerPimpl::doStart() {
   xpupti::viewEnable<true>(PTI_VIEW_DEVICE_GPU_KERNEL);
   xpupti::viewEnable<true>(PTI_VIEW_DEVICE_GPU_MEM_FILL);
   xpupti::viewEnable<true>(PTI_VIEW_DEVICE_GPU_MEM_COPY);
-  std::cout << "doStart2\n" << std::flush;
   xpupti::subscribe<true>(&subscriber, callbackFn, &subscriber);
   // xpupti::viewEnable<true>(PTI_VIEW_DEVICE_GPU_MEM_COPY);
   // xpupti::viewEnable<true>(PTI_VIEW_DEVICE_GPU_MEM_FILL);
@@ -511,10 +481,8 @@ void XpuptiProfiler::XpuptiProfilerPimpl::doStart() {
   // xpupti::viewEnable<true>(PTI_VIEW_LEVEL_ZERO_CALLS);
   // setGraphCallbacks(subscriber, /*enable=*/true);
   // setRuntimeCallbacks(subscriber, /*enable=*/true);
-  std::cout << "doStart::enableDomain\n" << std::flush;
   xpupti::enableDomain<true>(subscriber,
                              PTI_CB_DOMAIN_DRIVER_GPU_OPERATION_APPENDED, 1, 1);
-  std::cout << "doStart::enableDomain after\n" << std::flush;
   // setDriverCallbacks(subscriber, /*enable=*/true);
 }
 
@@ -551,10 +519,8 @@ void XpuptiProfiler::XpuptiProfilerPimpl::doStop() {
   // setGraphCallbacks(subscriber, /*enable=*/false);
   // setRuntimeCallbacks(subscriber, /*enable=*/false);
   // setDriverCallbacks(subscriber, /*enable=*/false);
-  std::cout << "doStop::disableDomain\n" << std::flush;
   xpupti::disableDomain<true>(subscriber,
                               PTI_CB_DOMAIN_DRIVER_GPU_OPERATION_APPENDED);
-  std::cout << "doStop::disableDomain after\n" << std::flush;
   xpupti::unsubscribe<true>(subscriber);
   // cupti::finalize<true>();
 }
