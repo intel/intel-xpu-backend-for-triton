@@ -125,7 +125,7 @@ jobs:
 
           git clone https://github.com/intel/pti-gpu.git
           cd pti-gpu
-          git checkout 998e192cb39994a3e4790a86250ea0c480ae416c
+          git checkout 15a201d25e5659692613b98ee33513263b689101
           cd sdk
           cmake --preset linux-icpx-release
           BUILD_TESTING=1 PTI_BUILD_SAMPLES=1 cmake --build --preset linux-icpx-release
