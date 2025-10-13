@@ -10,6 +10,7 @@ struct ExternLibXpupti : public ExternLibBase {
   using RetType = pti_result;
   static constexpr const char *name = "libpti_view.so";
   static constexpr const char *defaultDir = "";
+  static constexpr const char *pathEnv = "TRITON_XPUPTI_LIB_PATH";
   static constexpr RetType success = PTI_SUCCESS;
   static void *lib;
 };
