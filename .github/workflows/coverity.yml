@@ -11,7 +11,7 @@ jobs:
   coverity:
     name: Coverity
 
-    runs-on: Linux
+    runs-on: ubuntu-latest
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail {0}

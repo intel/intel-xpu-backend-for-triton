@@ -63,7 +63,7 @@ permissions: read-all
 jobs:
   pre-commit:
     name: Pre-commit checks
-    runs-on: Linux
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
