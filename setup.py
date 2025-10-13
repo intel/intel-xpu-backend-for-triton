@@ -367,8 +367,8 @@ def download_and_copy(name, src_func, dst_path, variable, version, url_func):
                 with zipfile.ZipFile(file_bytes, "r") as file:
                     file.extractall(path=tmp_path)
         else:
-            file = tarfile.open(fileobj=open_url(url), mode="r|*")
-            file.extractall(path=tmp_path)
+            with open_url(url) as url_file, tarfile.open(fileobj=url_file, mode="r|*") as tar_file:
+                tar_file.extractall(path=tmp_path, filter="data")
     os.makedirs(os.path.split(dst_path)[0], exist_ok=True)
     print(f'copy {src_path} to {dst_path} ...')
     if os.path.isdir(src_path):
@@ -584,14 +584,15 @@ def download_and_copy_dependencies():
         url_func=lambda system, arch, version:
         f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvdisasm/{system}-{arch}/cuda_nvdisasm-{system}-{arch}-{version}-archive.tar.xz",
     )
+    crt = "crt" if int(NVIDIA_TOOLCHAIN_VERSION["cudacrt"].split(".")[0]) >= 13 else "nvcc"
     download_and_copy(
         name="nvcc",
-        src_func=lambda system, arch, version: f"cuda_nvcc-{system}-{arch}-{version}-archive/include",
+        src_func=lambda system, arch, version: f"cuda_{crt}-{system}-{arch}-{version}-archive/include",
         dst_path="include",
         variable="TRITON_CUDACRT_PATH",
         version=NVIDIA_TOOLCHAIN_VERSION["cudacrt"],
         url_func=lambda system, arch, version:
-        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/{system}-{arch}/cuda_nvcc-{system}-{arch}-{version}-archive.tar.xz",
+        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_{crt}/{system}-{arch}/cuda_{crt}-{system}-{arch}-{version}-archive.tar.xz",
     )
     download_and_copy(
         name="cudart",

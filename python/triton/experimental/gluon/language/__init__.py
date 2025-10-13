@@ -34,6 +34,7 @@ from ._core import (
     allocate_shared_memory,
     arange,
     associative_scan,
+    assume,
     atomic_add,
     atomic_and,
     atomic_cas,
@@ -124,4 +125,5 @@ from ._standard import (
 
 from . import nvidia
 from . import amd
+from . import intel
 from . import extra
