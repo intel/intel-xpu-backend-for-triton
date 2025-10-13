@@ -83,7 +83,6 @@ jobs:
         shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
     outputs:
       test-triton-command: ${{ steps.test-triton.outputs.command }}
-      pti_libs_dir: ${{ steps.build-proton.outputs.pti_libs_dir }}
     steps:
       - name: Print inputs
         run: |
@@ -121,20 +120,8 @@ jobs:
 
       - name: Build Proton with XPU support
         if: inputs.driver_version == 'rolling' && inputs.device == 'max1100'
-        id: build-proton
         run: |
           echo TRITON_BUILD_PROTON_XPU=1 | tee -a $GITHUB_ENV
-
-          git clone https://github.com/intel/pti-gpu.git
-          cd pti-gpu
-          git checkout 15a201d25e5659692613b98ee33513263b689101
-          cd sdk
-          cmake --preset linux-icpx-release
-          BUILD_TESTING=1 PTI_BUILD_SAMPLES=1 cmake --build --preset linux-icpx-release
-
-          PTI_LIBS_DIR="$(pwd)/build-linux-icpx-release/lib/"
-          ls $PTI_LIBS_DIR
-          echo "pti_libs_dir=$PTI_LIBS_DIR" >> $GITHUB_OUTPUT
 
       - name: Build Triton
         uses: ./.github/actions/setup-triton
@@ -298,10 +285,18 @@ jobs:
         run: |
           echo "TRITON_TEST_CMD=${{ needs.build.outputs.test-triton-command }}" | tee -a $GITHUB_ENV
 
-      - name: Run Proton tests
+      - name: Build PTI && Run Proton tests
         if: matrix.suite == 'rest' && inputs.driver_version == 'rolling' && inputs.device == 'max1100'
         run: |
-          export "PTI_LIBS_DIR=${{ needs.build.outputs.pti_libs_dir }}"
+          git clone https://github.com/intel/pti-gpu.git
+          cd pti-gpu
+          git checkout 15a201d25e5659692613b98ee33513263b689101
+          cd sdk
+          cmake --preset linux-icpx-release
+          BUILD_TESTING=1 PTI_BUILD_SAMPLES=1 cmake --build --preset linux-icpx-release
+
+          PTI_LIBS_DIR="$(pwd)/build-linux-icpx-release/lib/"
+
           export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
           export TRITON_XPUPTI_LIB_PATH=$PTI_LIBS_DIR
           cd third_party/proton/test
