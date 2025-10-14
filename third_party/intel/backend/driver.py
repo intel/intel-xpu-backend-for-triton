@@ -971,18 +971,6 @@ class XPUDriver(DriverBase):
         return do_bench
 
     def get_empty_cache_for_benchmark(self):
-        # Simulation-based environment doesn't need multiple runs to get a stable result.
-        # Here we return a dummy cache object to skip the cache clearing step.
-        # It avoids an issue with `Tensor.zero_()` being very slow on simulator.
-        # TODO: remove this workaround when the `Tensor.zero_()` execution issue is fixed.
-        if os.getenv("TRITON_INTEL_ENABLE_XE4", "0") == "1":
-
-            class Dummy:
-
-                def zero_(self):
-                    pass
-
-            return Dummy()
         import torch
 
         # We maintain a buffer of 256 MB that we clear

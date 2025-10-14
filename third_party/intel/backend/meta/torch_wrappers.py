@@ -338,13 +338,25 @@ class _PathFinderWrapper(importlib.abc.MetaPathFinder):
     def wrap_driver(driver):
         orig_getattr = driver.TritonLauncher.__getattribute__
 
-        def wrapper(self, name):
+        def launch_wrapper(self, name):
             attr = orig_getattr(self, name)
             if name == "launch":
                 return lambda args: wrap_launch(attr, *args)
             return attr
 
-        driver.TritonLauncher.__getattribute__ = wrapper
+        def get_empty_cache_wrapper(self):
+            # Simulation-based environment doesn't need multiple runs to get a stable result.
+            # Here we return a dummy cache object to skip the cache clearing step.
+            # It avoids an issue with `Tensor.zero_()` being very slow on simulator.
+            class Dummy:
+
+                def zero_(self):
+                    pass
+
+            return Dummy()
+
+        driver.TritonLauncher.__getattribute__ = launch_wrapper
+        driver.XPUDriver.get_empty_cache_for_benchmark = get_empty_cache_wrapper
 
     @staticmethod
     def wrap_triton_testing(mod):
