@@ -1,5 +1,6 @@
 setuptools>=70.2.0
 wheel
+build
 cmake>=3.20,<4.0
 ninja>=1.11.1
 pybind11>=2.13.1
