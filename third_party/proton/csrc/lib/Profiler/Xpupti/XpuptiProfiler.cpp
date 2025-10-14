@@ -9,7 +9,6 @@
 #include "pti/pti_view.h"
 #include <cassert>
 #include <cstring>
-#include <level_zero/layers/zel_tracing_api.h>
 #include <level_zero/zet_api.h>
 
 #include <algorithm>
@@ -207,61 +206,6 @@ struct XpuptiProfiler::XpuptiProfilerPimpl
 
   static uint32_t get_correlation_id(xpupti::Pti_Activity *activity);
 
-  static void OnEnterCommandListAppendLaunchKernel(
-      ze_command_list_append_launch_kernel_params_t *params, ze_result_t result,
-      void *global_user_data, void **instance_user_data) {
-    std::cout << "Function zeCommandListAppendLaunchKernel is called on enter"
-              << std::endl;
-    ze_kernel_handle_t kernel = *(params->phKernel);
-
-    size_t size = 0;
-    ze_result_t status = zeKernelGetName(kernel, &size, nullptr);
-    assert(status == ZE_RESULT_SUCCESS);
-
-    std::vector<char> name(size);
-    status = zeKernelGetName(kernel, &size, name.data());
-    assert(status == ZE_RESULT_SUCCESS);
-    std::string str(name.begin(), name.end());
-    std::cout << "OnEnterCommandListAppendLaunchKernel::demangled kernel_name: "
-              << Demangle(name.data()) << "\n";
-
-    threadState.enterOp();
-
-    size_t numInstances = 1;
-    // FIXME: 4 - debug value
-    uint32_t correlationId = 4;
-    threadState.profiler.correlation.correlate(correlationId, numInstances);
-  }
-
-  static void OnEnterCommandListAppendLaunchCooperativeKernel(
-      ze_command_list_append_launch_cooperative_kernel_params_t *params,
-      ze_result_t result, void *global_user_data, void **instance_user_data) {
-    std::cout << "Function zeCommandListAppendLaunchKernel is called on enter"
-              << std::endl;
-    threadState.enterOp();
-    // FIXME: 4 - debug value
-    threadState.profiler.correlation.correlate(4, 1);
-  }
-
-  static void OnExitCommandListAppendLaunchKernel(
-      ze_command_list_append_launch_kernel_params_t *params, ze_result_t result,
-      void *global_user_data, void **instance_user_data) {
-    std::cout << "Function zeCommandListAppendLaunchKernel is called on exit"
-              << std::endl;
-    threadState.exitOp();
-    // Track outstanding op for flush
-    // FIXME: 4 - debug value
-    uint32_t correlationId = 4;
-    threadState.profiler.correlation.submit(correlationId);
-    // here works
-    // uint64_t corr_id = 0;
-    // auto res =
-    // ptiViewPopExternalCorrelationId(pti_view_external_kind::PTI_VIEW_EXTERNAL_KIND_CUSTOM_1,
-    // &corr_id); std::cout << "ptiViewPopExternalCorrelationId res: " << res <<
-    // "\n" << std::flush; std::cout << "ptiViewPopExternalCorrelationId
-    // corr_id: " << corr_id << "\n";
-  }
-
   static void allocBuffer(uint8_t **buffer, size_t *bufferSize);
   static void completeBuffer(uint8_t *buffer, size_t size, size_t validSize);
   static void callbackFn(pti_callback_domain domain,
@@ -377,8 +321,6 @@ void CallbackCommon(pti_callback_domain domain,
   std::cout << std::endl;
 }
 
-zel_tracer_handle_t tracer = nullptr;
-
 typedef void (*EnumDeviceUUIDsFunc)(std::vector<std::array<uint8_t, 16>>);
 
 int callEnumDeviceUUIDs(const std::string &utils_cache_path) {
@@ -442,30 +384,6 @@ void XpuptiProfiler::XpuptiProfilerPimpl::doStart() {
   ze_result_t status = ZE_RESULT_SUCCESS;
   // status = zeInit(ZE_INIT_FLAG_GPU_ONLY);
   // assert(status == ZE_RESULT_SUCCESS);
-
-  zel_tracer_desc_t tracer_desc = {ZEL_STRUCTURE_TYPE_TRACER_DESC, nullptr,
-                                   nullptr};
-
-  status = zelTracerCreate(&tracer_desc, &tracer);
-  std::cout << "zelTracerCreate: " << status << "\n" << std::flush;
-  assert(status == ZE_RESULT_SUCCESS);
-
-  zet_core_callbacks_t prologue_callbacks = {};
-  zet_core_callbacks_t epilogue_callbacks = {};
-  prologue_callbacks.CommandList.pfnAppendLaunchKernelCb =
-      OnEnterCommandListAppendLaunchKernel;
-  // prologue_callbacks.CommandList.pfnAppendLaunchCooperativeKernelCb =
-  // OnEnterCommandListAppendLaunchCooperativeKernel;
-  epilogue_callbacks.CommandList.pfnAppendLaunchKernelCb =
-      OnExitCommandListAppendLaunchKernel;
-
-  status = zelTracerSetPrologues(tracer, &prologue_callbacks);
-  assert(status == ZE_RESULT_SUCCESS);
-  status = zelTracerSetEpilogues(tracer, &epilogue_callbacks);
-  assert(status == ZE_RESULT_SUCCESS);
-
-  status = zelTracerSetEnabled(tracer, true);
-  assert(status == ZE_RESULT_SUCCESS);
   */
 
   xpupti::viewSetCallbacks<true>(allocBuffer, completeBuffer);
@@ -499,14 +417,6 @@ void XpuptiProfiler::XpuptiProfilerPimpl::doFlush() {
 }
 
 void XpuptiProfiler::XpuptiProfilerPimpl::doStop() {
-  /*
-  ze_result_t status = ZE_RESULT_SUCCESS;
-  status = zelTracerSetEnabled(tracer, false);
-  assert(status == ZE_RESULT_SUCCESS);
-  status = zelTracerDestroy(tracer);
-  assert(status == ZE_RESULT_SUCCESS);
-  */
-
   xpupti::viewDisable<true>(PTI_VIEW_DEVICE_GPU_KERNEL);
   xpupti::viewDisable<true>(PTI_VIEW_DEVICE_GPU_MEM_FILL);
   xpupti::viewDisable<true>(PTI_VIEW_DEVICE_GPU_MEM_COPY);
