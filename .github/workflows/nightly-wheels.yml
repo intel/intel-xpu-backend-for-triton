@@ -76,7 +76,7 @@ jobs:
         with:
           command: >
             DEBUG=1
-            python setup.py bdist_wheel && pip install dist/*.whl
+            python -m build --wheel --no-isolation && pip install dist/*.whl
 
       - name: Install torchvision package
         uses: ./.github/actions/install-dependency

@@ -91,7 +91,7 @@ jobs:
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           cd ${{ env.NEW_WORKSPACE }}
           pip install -U wheel pybind11 cmake intel-sycl-rt==2025.2.1
-          python setup.py -v bdist_wheel
+          python -m build --wheel --no-isolation
           pip install (Get-Item ${{ env.NEW_WORKSPACE }}\dist\*.whl)
 
       - name: Triton version
