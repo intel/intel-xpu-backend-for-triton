@@ -119,7 +119,7 @@ jobs:
           mode: ${{ inputs.pytorch_mode }}
 
       - name: Build Proton with XPU support
-        if: inputs.driver_version == 'rolling' && inputs.device == 'max1100'
+        if: inputs.device == 'max1100'
         run: |
           echo TRITON_BUILD_PROTON_XPU=1 | tee -a $GITHUB_ENV
 
@@ -286,7 +286,7 @@ jobs:
           echo "TRITON_TEST_CMD=${{ needs.build.outputs.test-triton-command }}" | tee -a $GITHUB_ENV
 
       - name: Build PTI && Run Proton tests
-        if: matrix.suite == 'rest' && inputs.driver_version == 'rolling' && inputs.device == 'max1100'
+        if: matrix.suite == 'rest' && inputs.device == 'max1100'
         run: |
           PTI_COMMIT_ID="$(<.github/pins/pti.txt)"
           git clone https://github.com/intel/pti-gpu.git
