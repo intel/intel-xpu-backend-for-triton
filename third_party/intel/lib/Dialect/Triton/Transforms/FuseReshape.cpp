@@ -2,8 +2,10 @@
 #include "intel/include/Utils/DefUseChain.h"
 #include "intel/include/Utils/Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Verifier.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
@@ -21,6 +23,59 @@ namespace mlir::triton::intel {
 } // namespace mlir::triton::intel
 
 namespace {
+
+scf::IfOp createIfBlock(OpBuilder &builder, Location loc, arith::CmpIOp condOp,
+                        tt::LoadOp loadOp) {
+  assert(isa<RankedTensorType>(loadOp.getType()) &&
+         "Unexpected load result type");
+
+  auto tensorType = cast<RankedTensorType>(loadOp.getType());
+  assert(tensorType.getShape().size() == 2);
+  Type elemType = tensorType.getElementType();
+
+  builder.setInsertionPointAfter(loadOp);
+  auto ifOp = builder.create<scf::IfOp>(loc, tensorType, condOp, true, true);
+  loadOp->moveBefore(ifOp.thenBlock(), ifOp.thenBlock()->end());
+  builder.setInsertionPointAfter(loadOp);
+  builder.create<scf::YieldOp>(loc, loadOp->getResult(0));
+
+  builder.setInsertionPointToStart(ifOp.elseBlock());
+  tt::PaddingOption padding = (!loadOp.getPadding())
+                                  ? tt::PaddingOption::PAD_ZERO
+                                  : *loadOp.getPadding();
+  DenseElementsAttr denseAttr = nullptr;
+  switch (padding) {
+  case tt::PaddingOption::PAD_ZERO: {
+    denseAttr = DenseElementsAttr::get(cast<ShapedType>(tensorType),
+                                       builder.getZeroAttr(elemType));
+  } break;
+  case tt::PaddingOption::PAD_NAN: {
+    assert(elemType.isF128() && "Expecting a floating point type");
+    auto NaNVal =
+        APFloat::getNaN(cast<FloatType>(elemType).getFloatSemantics());
+    denseAttr = DenseElementsAttr::get(cast<ShapedType>(tensorType),
+                                       builder.getFloatAttr(elemType, NaNVal));
+  } break;
+  default:
+    llvm_unreachable("Unhandled padding kind");
+  }
+  assert(denseAttr && "Expecting a valid attribute");
+
+  Value other = builder.create<arith::ConstantOp>(loc, tensorType, denseAttr);
+  builder.create<scf::YieldOp>(loc, other);
+  return ifOp;
+}
+
+scf::IfOp createCheckedLoad(OpBuilder &builder, arith::CmpIOp condOp,
+                            tt::LoadOp loadOp) {
+  scf::IfOp ifOp = createIfBlock(builder, loadOp.getLoc(), condOp, loadOp);
+  loadOp->replaceUsesWithIf(ifOp, [&](OpOperand &operand) {
+    if (auto yieldOp = dyn_cast<scf::YieldOp>(operand.getOwner()))
+      return yieldOp->getParentOp() != ifOp;
+    return true;
+  });
+  return ifOp;
+};
 
 // Transform:
 //   %one = arith.constant 1 : i64
@@ -87,7 +142,7 @@ public:
 
     LLVM_DEBUG(llvm::dbgs() << "[Before fusion]:\n" << manager << "\n");
 
-    // Fuse tt.LoadOp->tt.reshapeOp operations.
+    // Fuse tt.LoadOp->tt.ReshapeOp operations.
     fuse(manager.getChains());
 
     // Remove operations that are no longer used.
@@ -238,14 +293,57 @@ private:
 
     LLVM_DEBUG(llvm::dbgs() << "newMakeTensorPtrOp:\n  " << ptr << "\n");
 
-    // Adjust the boundary check on the load operation.
-    ArrayRef<int> boundaryCheck = loadOp.getBoundaryCheck();
-    assert(boundaryCheck.size() == 2 && "Expecting a 2-dim load");
-    loadOp.setBoundaryCheck({boundaryCheck[0] - 1, boundaryCheck[1] - 1});
-
     // Propagate the new ptr through the def-use chain.
-    propagateToUsers(ptr, chain);
+    IRMapping mapping;
+    propagateToUsers(ptr, chain, mapping);
     cleanUp.insert(makeTensorPtrOp);
+
+    // We have collapsed 2 dimensions into one, therefore we might have to
+    // materialize the boundary check for the new collapsed dimension. There
+    // are 2 possibilities:
+    //   a) if the load checks only the innermost dimension, we are ok because
+    //      we haven't collapsed that dimension
+    //   b) if the load check the new outermost dimension the boundary check
+    //      on the load is not sufficient and we have to materialize the
+    //      correct boundary check. Example:
+    //                 OLD PTR      NEW PTR
+    //        shape:   [20, 10, 5] -> [210, 5]
+    //        strides: [50,  5, 1] -> [  5, 1]
+    //
+    //      Consider a load offset of [1, 11, 1], this access is clearly
+    //      out-of-bound in dim 1 (11 > 10). However, the new offset is not
+    //      longer out-of-bound (5 < 210).
+    auto newLoadOp =
+        cast<tt::LoadOp>(mapping.lookup(static_cast<Operation *>(loadOp)));
+    ArrayRef<int> boundaryCheck = newLoadOp.getBoundaryCheck();
+    switch (boundaryCheck.size()) {
+    case 0:
+      break;
+    case 1:
+    // intentional fall-through
+    case 2: {
+      SmallVector<int> newBoundaryCheck{boundaryCheck[0] - 1};
+      if (boundaryCheck.size() == 2)
+        newBoundaryCheck.push_back(boundaryCheck[1] - 1);
+      newLoadOp.setBoundaryCheck({newBoundaryCheck});
+
+      if (llvm::any_of(newBoundaryCheck, [&](unsigned boundIdx) {
+            return boundIdx == newOutermostDimIdx;
+          })) {
+        Value lhs = newOffsets[newOutermostDimIdx];
+        Value rhs = shapes[newOutermostDimIdx + 1];
+        auto cmpOp = builder.create<arith::CmpIOp>(
+            loc, arith::CmpIPredicate::ult, lhs,
+            builder.create<arith::TruncIOp>(loc, lhs.getType(), rhs));
+        createCheckedLoad(builder, cmpOp, newLoadOp);
+      }
+    } break;
+    default:
+      // Note: while selecting candidates, we already ensured that the original
+      // load's boundary check doesn't check dim zero. So its max rank should
+      // be 2.
+      assert(boundaryCheck.size() != 3 && "Unexpected boundary check rank");
+    }
   }
 
   // Candidate is of the form:
@@ -276,7 +374,8 @@ private:
         return false;
     }
 
-    // Check whether \p reshapeOp is used by a `dotOp` (directly or indirectly).
+    // Check whether \p reshapeOp is used by a `dotOp` (directly or
+    // indirectly).
     auto usedByDotOp = [](tt::ReshapeOp reshapeOp) {
       if (!reshapeOp->hasOneUse())
         return false;
@@ -347,10 +446,10 @@ private:
                          [](int val) { return val == 0; });
   }
 
-  // Prune chains that cannot be handled during fusion. For example, operations
-  // in the def-use chain should have a single user, except in special
-  // circumstances (e.g. the root operation of a chain might have more than one
-  // user).
+  // Prune chains that cannot be handled during fusion. For example,
+  // operations in the def-use chain should have a single user, except in
+  // special circumstances (e.g. the root operation of a chain might have more
+  // than one user).
   void pruneInvalid(DefUseChains &chains) const {
     assert(!chains.empty() && "Expecting at least one candidate chain");
 
@@ -368,11 +467,10 @@ private:
 
   // Determine whether all operations in the given def-use chain have a single
   // user.
-  // Note: we allow an operation in the def-use chain to have an additional user
-  // if the operation is in a for loop, and the additional user is the loop
-  // yield operation, provided that the result yielded is not used after the
-  // loop.
-  // Example:
+  // Note: we allow an operation in the def-use chain to have an additional
+  // user if the operation is in a for loop, and the additional user is the
+  // loop yield operation, provided that the result yielded is not used after
+  // the loop. Example:
   //   make_tensor_ptr -> advance -> load (OK)
   //   make_tensor_ptr -> for init_arg -> advance -> load (OK)
   //                                   -> yield (OK)
@@ -461,7 +559,8 @@ private:
   }
 
   // Propagate \p newVal to operations in the given def-use chain.
-  void propagateToUsers(Value newVal, const DefUseChain &chain) {
+  void propagateToUsers(Value newVal, const DefUseChain &chain,
+                        IRMapping &mapping) {
     auto start = cast<tt::MakeTensorPtrOp>(chain.getStart());
     Operation *end = chain.getEnd();
     auto it = llvm::find_if(start->getUsers(), [&](Operation *user) {
@@ -470,22 +569,22 @@ private:
     assert(it != start->getUsers().end() && "Expecting valid iterator");
 
     Operation *nextOp = *it;
-    propagateToUser(newVal, start.getResult(), nextOp, end);
+    propagateToUser(newVal, start.getResult(), nextOp, end, mapping);
   }
 
   // Propagate \p newVal to users of \p origOp.
   void propagateToUsers(Value newVal, Value origVal, Operation *origOp,
-                        Operation *sentinel) {
+                        Operation *sentinel, IRMapping &mapping) {
     assert(origOp && sentinel && "Expecting valid operations");
     const SmallVector<Operation *> users(origOp->getUsers());
     for (Operation *user : users)
-      propagateToUser(newVal, origVal, user, sentinel);
+      propagateToUser(newVal, origVal, user, sentinel, mapping);
   }
 
   // If \p user is not \p sentinel, propagate \p newVal to \p user. Otherwise
   // terminate the propagation.
   void propagateToUser(Value newVal, Value origVal, Operation *user,
-                       Operation *sentinel) {
+                       Operation *sentinel, IRMapping &mapping) {
     assert(user && sentinel && "Expecting valid operations");
     assert(llvm::is_contained(origVal.getUsers(), user) && "Invalid usage");
 
@@ -515,11 +614,13 @@ private:
       SmallVector<Value> newOffsets(advanceOp.getOffsets().drop_front());
       auto newAdvanceOp = rewriter.create<tt::AdvanceOp>(loc, newVal.getType(),
                                                          newVal, newOffsets);
+      mapping.map(static_cast<Operation *>(advanceOp),
+                  static_cast<Operation *>(newAdvanceOp));
       LLVM_DEBUG(llvm::dbgs().indent(2)
                  << "newAdvanceOp: " << newAdvanceOp << "\n");
       cleanUp.insert(advanceOp);
       return propagateToUsers(newAdvanceOp, advanceOp.getResult(), advanceOp,
-                              sentinel);
+                              sentinel, mapping);
     }
 
     if (auto loadOp = dyn_cast<tt::LoadOp>(user)) {
@@ -529,10 +630,12 @@ private:
           loadOp.getBoundaryCheckAttr(), loadOp.getPaddingAttr(),
           loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
       newLoadOp->setAttrs(loadOp->getAttrs());
-
+      mapping.map(static_cast<Operation *>(loadOp),
+                  static_cast<Operation *>(newLoadOp));
       LLVM_DEBUG(llvm::dbgs().indent(2) << "newLoadOp: " << newLoadOp << "\n");
       cleanUp.insert(loadOp);
-      return propagateToUsers(newLoadOp, loadOp.getResult(), loadOp, sentinel);
+      return propagateToUsers(newLoadOp, loadOp.getResult(), loadOp, sentinel,
+                              mapping);
     }
 
     if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
@@ -553,13 +656,13 @@ private:
     }
 
     if (auto forOp = dyn_cast<scf::ForOp>(user))
-      return propagateToLoop(newVal, origVal, forOp, sentinel);
+      return propagateToLoop(newVal, origVal, forOp, sentinel, mapping);
 
     llvm_unreachable("Unexpected kind of user");
   }
 
   void propagateToLoop(Value newVal, Value origVal, LoopLikeOpInterface loopOp,
-                       Operation *sentinel) {
+                       Operation *sentinel, IRMapping &mapping) {
     assert(sentinel && sentinel != loopOp && "Unexpected sentinel kind");
     LLVM_DEBUG({
       llvm::dbgs() << "In " << __func__ << "\n";
@@ -573,7 +676,7 @@ private:
         rgnInitArg.setType(initArg.get().getType());
         const SmallVector<Operation *> users(rgnInitArg.getUsers());
         for (Operation *user : users)
-          propagateToUser(rgnInitArg, rgnInitArg, user, sentinel);
+          propagateToUser(rgnInitArg, rgnInitArg, user, sentinel, mapping);
       }
     }
   }
