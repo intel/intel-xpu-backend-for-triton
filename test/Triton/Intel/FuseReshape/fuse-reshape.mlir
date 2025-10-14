@@ -140,7 +140,7 @@ tt.func public @fuseLoadWithReshape3(%a_ptr: !tt.ptr<f32> {tt.divisibility = 16 
 // CHECK: [[COND:%.*]] = arith.cmpi ult, [[ADD2]], [[TRUNC]] : i32
 // CHECK: scf.for {{.*}} = %c0_i32 to {{.*}} step %c32_i32 iter_args([[ARG:%.*]] = [[PTR]]
 // CHECK: [[IF_RES:%.*]] = scf.if [[COND]] -> (tensor<256x32xf32>) {
-// CHECK:   [[LOAD_A:%.*]] = tt.load [[ARG]] {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<256x32xf32>>  
+// CHECK:   [[LOAD_A:%.*]] = tt.load [[ARG]] {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<256x32xf32>>
 // CHECK:   scf.yield [[LOAD_A]] : tensor<256x32xf32>
 // CHECK: } else {
 // CHECK:   [[ZERO:%.*]] = arith.constant dense<0.000000e+00> : tensor<256x32xf32>
