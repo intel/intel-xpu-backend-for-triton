@@ -72,6 +72,7 @@ env:
   TEST_UNSKIP: ${{ inputs.enable_unskip }}
   # Increase this value to reset cache
   PIP_CACHE_NUMBER: 1
+  IGC_ShaderDumpEnable: 1
 
 jobs:
   build:
@@ -302,6 +303,7 @@ jobs:
       - name: Run minicore tests
         if: matrix.suite == 'minicore'
         run: |
+          export IGC_DumpToCustomDir=$GITHUB_WORKSPACE/reports/mm_dumps
           ${{ env.TRITON_TEST_CMD }} --minicore
 
       - name: Run mxfp tests
