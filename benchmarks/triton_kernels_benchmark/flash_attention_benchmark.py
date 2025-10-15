@@ -575,7 +575,6 @@ def get_benchmark(
         # For BWD mode: Performance doesn't really improve much with warmup for triton, but xetla benefit from more warmup
         n_warmup_bwd = 400  # Maximum across xetla=400, triton=10, onednn=10
         n_warmup = n_warmup_fwd if MODE == 'fwd' else n_warmup_bwd
-        # We keep old warmup value, because new warmup makes perfomance on PVC slightly worse
         do_bench = benchmark_suite.get_do_bench(n_warmup=n_warmup, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
         if MODE not in modes:
             raise AssertionError(f'Unknown {MODE}, supported modes are {modes}')
