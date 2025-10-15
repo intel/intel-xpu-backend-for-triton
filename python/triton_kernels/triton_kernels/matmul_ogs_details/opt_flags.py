@@ -67,7 +67,7 @@ def make_default_opt_flags_intel(
     has_y_acc_in,
     constraints,
 ):
-    constraints_supported = ["block_m", "block_k", "split_k", "is_persistent", "fused_scatter", "epilogue_subtile", "num_stages"]
+    constraints_supported = ["block_m", "block_k", "split_k", "is_persistent", "fused_scatter", "epilogue_subtile", "num_stages", "max_allowable_mn"]
     assert not any([c not in constraints_supported for c in constraints]), constraints.keys()
     # tokens per expert
     if routing_data is None:
@@ -96,7 +96,9 @@ def make_default_opt_flags_intel(
     else:
         block_k = opt_flags_intel.compute_block_k(k, is_persistent, precision_config)
     # split_k
-    if constraints.get("split_k", None) is not None:
+    if constraints.get("max_allowable_mn", 0) > 0 and constraints.get("split_k") is not None:
+        split_k = max_allowable_mn(constraints["max_allowable_mn"], m, n, constraints.get("split_k"))
+    elif constraints.get("split_k", None) is not None:
         split_k = constraints["split_k"]
     elif is_persistent or enforce_bitwise_invariance or precision_config.act_scale is not None or precision_config.out_scale is not None:
         split_k = 1
@@ -126,7 +128,7 @@ def make_default_opt_flags_intel(
         idle_sms=0,
     )
     # check constraints
-    assert all(getattr(ret, ck) == cv for ck, cv in constraints.items() if cv is not None), f"{ret} != {constraints}"
+    all_constraints_satisfied(ret, constraints)
     return ret
 
 
