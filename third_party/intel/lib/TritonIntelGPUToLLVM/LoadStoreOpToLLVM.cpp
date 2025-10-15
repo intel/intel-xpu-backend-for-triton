@@ -2500,6 +2500,10 @@ struct LoadOpToBlockIOConversion
                        static_cast<int>(MAX_WIDTH / totalBytesPerRowPerMatrix));
     // vBlocks has HW limitation of 4.
     vBlocks = std::min(vBlocks, 4);
+    // Limit vBlocks to 1 if block size is smaller than GRF size.
+    const unsigned GRF_SIZE = 64;
+    if (tileHeight * tileWidth * packedElemSizeInBits / 8 < GRF_SIZE)
+      vBlocks = 1;
 
     // TODO: use the axis info to general the handling for both regular pointer
     // and block pointer.
