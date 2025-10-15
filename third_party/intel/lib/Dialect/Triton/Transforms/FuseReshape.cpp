@@ -24,59 +24,6 @@ namespace mlir::triton::intel {
 
 namespace {
 
-scf::IfOp createIfBlock(OpBuilder &builder, Location loc, arith::CmpIOp condOp,
-                        tt::LoadOp loadOp) {
-  assert(isa<RankedTensorType>(loadOp.getType()) &&
-         "Unexpected load result type");
-
-  auto tensorType = cast<RankedTensorType>(loadOp.getType());
-  assert(tensorType.getShape().size() == 2);
-  Type elemType = tensorType.getElementType();
-
-  builder.setInsertionPointAfter(loadOp);
-  auto ifOp = builder.create<scf::IfOp>(loc, tensorType, condOp, true, true);
-  loadOp->moveBefore(ifOp.thenBlock(), ifOp.thenBlock()->end());
-  builder.setInsertionPointAfter(loadOp);
-  builder.create<scf::YieldOp>(loc, loadOp->getResult(0));
-
-  builder.setInsertionPointToStart(ifOp.elseBlock());
-  tt::PaddingOption padding = (!loadOp.getPadding())
-                                  ? tt::PaddingOption::PAD_ZERO
-                                  : *loadOp.getPadding();
-  DenseElementsAttr denseAttr = nullptr;
-  switch (padding) {
-  case tt::PaddingOption::PAD_ZERO: {
-    denseAttr = DenseElementsAttr::get(cast<ShapedType>(tensorType),
-                                       builder.getZeroAttr(elemType));
-  } break;
-  case tt::PaddingOption::PAD_NAN: {
-    assert(elemType.isF128() && "Expecting a floating point type");
-    auto NaNVal =
-        APFloat::getNaN(cast<FloatType>(elemType).getFloatSemantics());
-    denseAttr = DenseElementsAttr::get(cast<ShapedType>(tensorType),
-                                       builder.getFloatAttr(elemType, NaNVal));
-  } break;
-  default:
-    llvm_unreachable("Unhandled padding kind");
-  }
-  assert(denseAttr && "Expecting a valid attribute");
-
-  Value other = builder.create<arith::ConstantOp>(loc, tensorType, denseAttr);
-  builder.create<scf::YieldOp>(loc, other);
-  return ifOp;
-}
-
-scf::IfOp createCheckedLoad(OpBuilder &builder, arith::CmpIOp cmpOp,
-                            tt::LoadOp loadOp) {
-  scf::IfOp ifOp = createIfBlock(builder, loadOp.getLoc(), cmpOp, loadOp);
-  loadOp->replaceUsesWithIf(ifOp, [&](OpOperand &operand) {
-    if (auto yieldOp = dyn_cast<scf::YieldOp>(operand.getOwner()))
-      return yieldOp->getParentOp() != ifOp;
-    return true;
-  });
-  return ifOp;
-};
-
 // Transform:
 //   %one = arith.constant 1 : i64
 //   %ptr = make_tensor_ptr %q_view, [%q, %q_23, %q_24],
@@ -298,24 +245,12 @@ private:
     propagateToUsers(ptr, chain, mapping);
     cleanUp.insert(makeTensorPtrOp);
 
-    // We have collapsed 2 dimensions into one, therefore we might have to
-    // materialize the boundary check for the new collapsed dimension. There
-    // are 2 possibilities:
-    //   a) if the load checks only the innermost dimension, we are ok because
-    //      we haven't collapsed that dimension
-    //   b) if the load check the new outermost dimension the boundary check
-    //      on the load is not sufficient and we have to materialize the
-    //      correct boundary check. Example:
-    //                 OLD PTR      NEW PTR
-    //        shape:   [20, 10, 5] -> [210, 5]
-    //        strides: [50,  5, 1] -> [  5, 1]
-    //
-    //      Consider a load offset of [1, 11, 1], this access is clearly
-    //      out-of-bound in dim 1 (11 > 10). However, the new offset is no
-    //      longer out-of-bound (5 < 210).
+    // We have collapsed 2 dimensions into one, therefore we need to adjust the
+    // boundary check of the new load.
     auto newLoadOp =
         cast<tt::LoadOp>(mapping.lookup(static_cast<Operation *>(loadOp)));
     ArrayRef<int> boundaryCheck = newLoadOp.getBoundaryCheck();
+
     switch (boundaryCheck.size()) {
     case 0:
       break;
@@ -327,26 +262,7 @@ private:
         newBoundaryCheck.push_back((boundaryCheck[0] - 1));
       if (boundaryCheck.size() == 2 && (boundaryCheck[1] - 1) != 0)
         newBoundaryCheck.push_back(boundaryCheck[1] - 1);
-
       newLoadOp.setBoundaryCheck(newBoundaryCheck);
-
-      if (llvm::any_of(newBoundaryCheck, [&](unsigned boundIdx) {
-            return boundIdx == newOutermostDimIdx + 1;
-          })) {
-        unsigned oldIdx = newOutermostDimIdx + 1;
-        auto tensorType = cast<RankedTensorType>(loadOp.getResult().getType());
-        Type elemType = tensorType.getElementType();
-        ArrayRef<int64_t> resShape = tensorType.getShape();
-        auto add = builder.create<arith::AddIOp>(
-            loc, offsets[oldIdx],
-            builder.create<arith::ConstantIntOp>(loc, offsets[oldIdx].getType(),
-                                                 resShape[oldIdx]));
-        auto cmpOp = builder.create<arith::CmpIOp>(
-            loc, arith::CmpIPredicate::ult, add,
-            builder.create<arith::TruncIOp>(loc, add.getResult().getType(),
-                                            shapes[oldIdx]));
-        createCheckedLoad(builder, cmpOp, newLoadOp);
-      }
     } break;
     default:
       // Note: while selecting candidates, we already ensured that the original
@@ -361,11 +277,13 @@ private:
   // Where:
   //  - the reshape operation drops the outermost dimension of the operand,
   //    which is a 3-dim tensor with outermost dimension extent equal to one
-  //  - the reshape result is used by the dot operation
+  //  - the reshape result is used by a dot operation
   //  - the reshape operation uses the result of a 3-dim load operation on a
   //    block pointer (transitively) defined by a `make_tensor_ptr` operation
   //  - the block pointer points to a tensor that has extent equal to 1 on the
   //    outermost dimension
+  //  - the load operation doesn't have boundary checks on either of the
+  //    dimensions collapsed
   bool isCandidate(tt::ReshapeOp reshapeOp) const {
     assert(reshapeOp && "Expecting a valid reshape operation");
 
@@ -384,8 +302,7 @@ private:
         return false;
     }
 
-    // Check whether \p reshapeOp is used by a `dotOp` (directly or
-    // indirectly).
+    // Check whether \p reshapeOp is used by a `dotOp`.
     auto usedByDotOp = [](tt::ReshapeOp reshapeOp) {
       if (!reshapeOp->hasOneUse())
         return false;
@@ -405,6 +322,7 @@ private:
     if (!usedByDotOp(reshapeOp))
       return false;
 
+    // The reshape operation uses the result of a load operation.
     Operation *defOp = reshapeOp.getSrc().getDefiningOp();
     if (!defOp || !isa<tt::LoadOp>(defOp))
       return false;
@@ -413,6 +331,8 @@ private:
     if (!loadOp->hasOneUse())
       return false;
 
+    // The load uses a 3-dim block pointer defined by a make_tensor_ptr
+    // operation.
     Type ptrType = loadOp.getPtr().getType();
     if (!tt::isTensorPointerType(ptrType))
       return false;
@@ -432,14 +352,14 @@ private:
     if (order.front() != tensorTy.getRank() - 1)
       return false;
 
-    // Ensure that the innermost stride is one.
     unsigned innermostDimIdx = 0;
-    for (int i : order) {
-      if (i == 0)
+    for (int idx : order) {
+      if (idx == 0)
         break;
       ++innermostDimIdx;
     }
 
+    // Ensure that the innermost stride is one.
     auto strides = makeTensorPtrOp->getStrides();
     Value innermostStride = strides[innermostDimIdx];
     if (!innermostStride.getDefiningOp() ||
@@ -451,9 +371,9 @@ private:
     if (integerCst.value() != 1)
       return false;
 
-    // Ensure the load boundary check doesn't check the outermost dimension.
-    return llvm::none_of(loadOp.getBoundaryCheck(),
-                         [](int val) { return val == 0; });
+    // Ensure the load operation checks at most the innermost dimension.
+    return llvm::all_of(loadOp.getBoundaryCheck(),
+                        [&](int idx) { return idx == innermostDimIdx; });
   }
 
   // Prune chains that cannot be handled during fusion. For example,

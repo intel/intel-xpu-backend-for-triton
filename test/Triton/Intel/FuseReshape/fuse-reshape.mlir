@@ -12,7 +12,7 @@ tt.func public @fuseLoadWithReshape1(%arg0: !tt.ptr<tensor<256x32xbf16>>, %arg1:
   %cst = arith.constant dense<0.000000e+00> : tensor<256x256xf32>
   %0 = tt.make_tensor_ptr %arg1, [%c1_i64, %c64_i64, %c1024_i64], [%c1024_i64, %c4_i64, %c1_i64], [%c2_i32, %c1_i32, %c0_i32] {order = array<i32: 2, 1, 0>} : <tensor<1x32x256xbf16>>
   %1 = tt.load %arg0 {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<256x32xbf16>>
-  %3 = tt.load %0 {boundaryCheck = array<i32: 1, 2>} : !tt.ptr<tensor<1x32x256xbf16>>
+  %3 = tt.load %0 {boundaryCheck = array<i32: 2>} : !tt.ptr<tensor<1x32x256xbf16>>
   %4 = tt.reshape %3 : tensor<1x32x256xbf16> -> tensor<32x256xbf16>
   %5 = tt.dot %1, %4, %cst, inputPrecision = tf32 : tensor<256x32xbf16> * tensor<32x256xbf16> -> tensor<256x256xf32>
   tt.return
@@ -26,17 +26,8 @@ tt.func public @fuseLoadWithReshape1(%arg0: !tt.ptr<tensor<256x32xbf16>>, %arg1:
 // CHECK: [[MUL2:%.*]] = arith.muli %c2_i32, [[TRUNC]] : i32
 // CHECK: [[ADD2:%.*]] = arith.addi [[MUL2]], %c1_i32 : i32
 // CHECK: [[PTR:%.*]] = tt.make_tensor_ptr %arg1, [[[ADD1]], %c1024_i64], [%c4_i64, %c1_i64], [[[ADD2]], %c0_i32] {order = array<i32: 1, 0>} : <tensor<32x256xbf16>>
-// CHECK: [[ADD3:%.*]] = arith.addi %c1_i32, %c32_i32 : i32
-// CHECK: [[TRUNC:%.*]] = arith.trunci %c4_i64_0 : i64 to i32
-// CHECK: [[COND:%.*]] = arith.cmpi ult, [[ADD3]], [[TRUNC]] : i32
-// CHECK: [[IF_RES:%.*]] = scf.if [[COND]] -> (tensor<32x256xbf16>) {
-// CHECK:   [[LOAD_B:%.*]] = tt.load [[PTR]] {boundaryCheck = array<i32: 1>} : !tt.ptr<tensor<32x256xbf16>>
-// CHECK:   scf.yield [[LOAD_B]] : tensor<32x256xbf16>
-// CHECK: } else {
-// CHECK:   [[ZERO:%.*]] = arith.constant dense<0.000000e+00> : tensor<32x256xbf16>
-// CHECK:   scf.yield [[ZERO]] : tensor<32x256xbf16>
-// CHECK: }
-// CHECK: tt.dot {{.*}}, [[IF_RES]], {{.*}}, inputPrecision = tf32 : tensor<256x32xbf16> * tensor<32x256xbf16> -> tensor<256x256xf32>
+// CHECK: [[LOAD_B:%.*]] = tt.load [[PTR]] {boundaryCheck = array<i32: 1>} : !tt.ptr<tensor<32x256xbf16>>
+// CHECK: tt.dot {{.*}}, [[LOAD_B]], {{.*}}, inputPrecision = tf32 : tensor<256x32xbf16> * tensor<32x256xbf16> -> tensor<256x256xf32>
 
 // -----
 
@@ -113,7 +104,7 @@ tt.func public @fuseLoadWithReshape3(%a_ptr: !tt.ptr<f32> {tt.divisibility = 16 
   %21 = arith.extsi %stride_bk : i32 to i64
   %22 = tt.make_tensor_ptr %b_ptr, [%16, %20], [%21, %c1_i64], [%c0_i32, %19] {order = array<i32: 1, 0>} : <tensor<32x128xf32>>
   %accumulator:3 = scf.for %k = %c0_i32 to %K step %c32_i32 iter_args(%a_block_ptr = %18, %b_block_ptr = %22, %accumulator_0 = %cst) -> (!tt.ptr<tensor<1x256x32xf32>>, !tt.ptr<tensor<32x128xf32>>, tensor<256x128xf32>)  : i32 {
-    %25 = tt.load %a_block_ptr {boundaryCheck = array<i32: 1, 2>} : !tt.ptr<tensor<1x256x32xf32>>
+    %25 = tt.load %a_block_ptr {boundaryCheck = array<i32: 2>} : !tt.ptr<tensor<1x256x32xf32>>
     %26 = tt.reshape %25 : tensor<1x256x32xf32> -> tensor<256x32xf32>
     %27 = tt.load %b_block_ptr {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<32x128xf32>>
     %28 = tt.dot %26, %27, %cst, inputPrecision = tf32 : tensor<256x32xf32> * tensor<32x128xf32> -> tensor<256x128xf32>
@@ -137,20 +128,10 @@ tt.func public @fuseLoadWithReshape3(%a_ptr: !tt.ptr<f32> {tt.divisibility = 16 
 // CHECK: [[MUL2:%.*]] = arith.muli %c0_i32, [[TRUNC]] : i32
 // CHECK: [[ADD2:%.*]] = arith.addi [[MUL2]], %c128_i32 : i32
 // CHECK: [[PTR:%.*]] = tt.make_tensor_ptr %arg0, [[[ADD1]], %16], [%17, %c1_i64], [[[ADD2]], %c0_i32] {order = array<i32: 1, 0>} : <tensor<256x32xf32>>
-// CHECK: [[CST_256:%.*]] = arith.constant 256 : i32
-// CHECK: [[ADD3:%.*]] = arith.addi %c128_i32, [[CST_256]] : i32
-// CHECK: [[TRUNC:%.*]] = arith.trunci [[EXT_M]] : i64 to i32
-// CHECK: [[COND:%.*]] = arith.cmpi ult, [[ADD3]], [[TRUNC]] : i32
 // CHECK: scf.for {{.*}} = %c0_i32 to {{.*}} step %c32_i32 iter_args([[ARG:%.*]] = [[PTR]]
-// CHECK: [[IF_RES:%.*]] = scf.if [[COND]] -> (tensor<256x32xf32>) {
 // CHECK:   [[LOAD_A:%.*]] = tt.load [[ARG]] {boundaryCheck = array<i32: 1>} : !tt.ptr<tensor<256x32xf32>>
-// CHECK:   scf.yield [[LOAD_A]] : tensor<256x32xf32>
-// CHECK: } else {
-// CHECK:   [[ZERO:%.*]] = arith.constant dense<0.000000e+00> : tensor<256x32xf32>
-// CHECK:   scf.yield [[ZERO]] : tensor<256x32xf32>
-// CHECK: }
-// CHECK: tt.dot [[IF_RES]], {{.*}}, {{.*}}, inputPrecision = tf32 : tensor<256x32xf32> * tensor<32x128xf32> -> tensor<256x128xf32>
-// CHECK: tt.advance [[ARG]], [%c0_i32, %c32_i32] : <tensor<256x32xf32>>
+// CHECK:   tt.dot [[LOAD_A]], {{.*}}, {{.*}}, inputPrecision = tf32 : tensor<256x32xf32> * tensor<32x128xf32> -> tensor<256x128xf32>
+// CHECK:   tt.advance [[ARG]], [%c0_i32, %c32_i32] : <tensor<256x32xf32>>
 
 // -----
 
@@ -186,7 +167,6 @@ tt.func public @fuseLoadWithReshape4(%arg0: i32, %arg1: !tt.ptr<f16>, %arg2: !tt
     scf.yield %add : i32
   }
   tt.return
-
 }
 // CHECK-LABEL: fuseLoadWithReshape4
 // CHECK-NOT: tt.reshape
