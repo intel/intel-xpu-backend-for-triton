@@ -87,15 +87,6 @@ endforeach()
 add_library(proton SHARED ${_proton_obj_sources})
 
 target_link_libraries(proton PRIVATE Python3::Module)
-find_library(ZE_TRACING_LIB NAMES ze_tracing_layer PATHS /usr/lib/x86_64-linux-gnu)
-find_library(ZE_LOADER_LIB NAMES ze_loader PATHS /usr/lib/x86_64-linux-gnu)
-
-if(ZE_TRACING_LIB)
-    target_link_libraries(proton PRIVATE ${ZE_TRACING_LIB})
-endif()
-if(ZE_LOADER_LIB)
-    target_link_libraries(proton PRIVATE ${ZE_LOADER_LIB})
-endif()
 
 # Apply any macOS linker flags or extra link options
 if(PROTON_PYTHON_LDFLAGS)

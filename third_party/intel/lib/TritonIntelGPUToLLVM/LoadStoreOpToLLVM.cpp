@@ -2028,7 +2028,7 @@ struct LoadOpToBlockIOConversion
     Value other = op.getOther();
     Value llOther = adaptor.getOther();
     DenseElementsAttr constAttr;
-    if (other)
+    if (other) {
       if (matchPattern(other, m_Constant(&constAttr)) && constAttr.isSplat()) {
         Type elemTy = constAttr.getElementType();
         auto handleSplatValue = [&](auto splatVal) {
@@ -2049,6 +2049,7 @@ struct LoadOpToBlockIOConversion
       } else {
         otherElems = unpackLLElements(loc, llOther, rewriter);
       }
+    }
 
     // re-arrange the ptrs and masks to for large 2D block IO.
     // Layout is unrelated to the scalar type.
@@ -2499,6 +2500,10 @@ struct LoadOpToBlockIOConversion
                        static_cast<int>(MAX_WIDTH / totalBytesPerRowPerMatrix));
     // vBlocks has HW limitation of 4.
     vBlocks = std::min(vBlocks, 4);
+    // Limit vBlocks to 1 if block size is smaller than GRF size.
+    const unsigned GRF_SIZE = 64;
+    if (tileHeight * tileWidth * packedElemSizeInBits / 8 < GRF_SIZE)
+      vBlocks = 1;
 
     // TODO: use the axis info to general the handling for both regular pointer
     // and block pointer.
@@ -2562,7 +2567,7 @@ struct LoadOpToBlockIOConversion
     SmallVector<Value> otherElems;
     Value llOther = adaptor.getOther();
     DenseElementsAttr constAttr;
-    if (other)
+    if (other) {
       if (matchPattern(other, m_Constant(&constAttr)) && constAttr.isSplat()) {
         Type elemTy = constAttr.getElementType();
         auto handleSplatValue = [&](auto splatVal) {
@@ -2583,6 +2588,7 @@ struct LoadOpToBlockIOConversion
       } else {
         otherElems = unpackLLElements(loc, llOther, rewriter);
       }
+    }
 
     unsigned threadsPerWarp =
         TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>());

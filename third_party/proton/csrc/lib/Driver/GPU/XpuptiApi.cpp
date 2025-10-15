@@ -10,6 +10,7 @@ struct ExternLibXpupti : public ExternLibBase {
   using RetType = pti_result;
   static constexpr const char *name = "libpti_view.so";
   static constexpr const char *defaultDir = "";
+  static constexpr const char *pathEnv = "TRITON_XPUPTI_LIB_PATH";
   static constexpr RetType success = PTI_SUCCESS;
   static void *lib;
 };
@@ -23,6 +24,19 @@ DEFINE_DISPATCH(ExternLibXpupti, viewEnable, ptiViewEnable, pti_view_kind)
 DEFINE_DISPATCH(ExternLibXpupti, viewDisable, ptiViewDisable, pti_view_kind)
 
 DEFINE_DISPATCH(ExternLibXpupti, viewFlushAll, ptiFlushAllViews)
+
+DEFINE_DISPATCH(ExternLibXpupti, subscribe, ptiCallbackSubscribe,
+                pti_callback_subscriber_handle *, pti_callback_function, void *)
+
+DEFINE_DISPATCH(ExternLibXpupti, unsubscribe, ptiCallbackUnsubscribe,
+                pti_callback_subscriber_handle);
+
+DEFINE_DISPATCH(ExternLibXpupti, enableDomain, ptiCallbackEnableDomain,
+                pti_callback_subscriber_handle, pti_callback_domain, uint32_t,
+                uint32_t);
+
+DEFINE_DISPATCH(ExternLibXpupti, disableDomain, ptiCallbackDisableDomain,
+                pti_callback_subscriber_handle, pti_callback_domain);
 
 DEFINE_DISPATCH(ExternLibXpupti, viewGetNextRecord, ptiViewGetNextRecord,
                 uint8_t *, size_t, pti_view_record_base **)

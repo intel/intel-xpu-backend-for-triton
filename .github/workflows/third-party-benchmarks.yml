@@ -32,7 +32,7 @@ env:
 
 jobs:
   build:
-    name: Triton benchmarks
+    name: Third party benchmarks
     runs-on:
       - linux
       - ${{ inputs.runner_label || 'max1550' }}
@@ -86,6 +86,33 @@ jobs:
         run: |
           mkdir reports
           echo "REPORTS=$PWD/reports" >> $GITHUB_ENV
+
+      - name: Install benchmarks
+        id: install-benchmarks
+        run: |
+          cd benchmarks
+          pip install .
+
+      - name: Run vllm benchmarks bf16
+        if: ${{ steps.install-benchmarks.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm')) }}
+        run: |
+          source ./scripts/capture-hw-details.sh
+
+          ./scripts/test-triton.sh --install-vllm --skip-pip-install --skip-pytorch-install
+          cp -r vllm/tests benchmarks/third_party/vllm/tests
+
+          cd benchmarks/third_party/vllm
+          python batched_moe_benchmark.py --reports $REPORTS
+          python transform_results.py $REPORTS/moe-gemm-performance.csv $REPORTS/moe-gemm-report.csv --tag $TAG --benchmark moe-bf16-benchmark
+
+      - name: Run vllm benchmarks fp8
+        if: ${{ steps.install-benchmarks.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm')) }}
+        run: |
+          source ./scripts/capture-hw-details.sh
+
+          cd benchmarks/third_party/vllm
+          FP8="1" python batched_moe_benchmark.py --reports $REPORTS
+          python transform_results.py $REPORTS/moe-gemm-performance.csv $REPORTS/moe-gemm-report.csv --tag $TAG --benchmark moe-fp8-benchmark
 
       - name: Run Liger-Kernel benchmarks
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'liger-kernel')) }}
