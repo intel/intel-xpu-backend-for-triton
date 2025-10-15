@@ -302,7 +302,6 @@ jobs:
           export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
           export TRITON_XPUPTI_LIB_PATH=$PTI_LIBS_DIR
           cd third_party/proton/test
-          # FIXME: enable 'test_record.py' back
           pytest test_api.py test_lib.py test_profile.py test_viewer.py -s -v
           cd ..
 
