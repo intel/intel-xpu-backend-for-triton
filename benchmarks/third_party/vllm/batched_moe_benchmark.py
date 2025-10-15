@@ -466,9 +466,9 @@ MM_CONFIGS_FP8 = sum([[(E, M, hidden_size, int_size * 2, fp8, block_quant),
                           # 3.5 GBs of weights!
                           (256, 7168, 2048, True, True),
                           #  # qwen3-235b-A22B bf16/fp8
-                          (128, 4096, 1536, False, True),
+                          (128, 4096, 1536, True, False),
                           # qwen3-30b-A3B bf16/fp8
-                          (128, 2048, 768, False, True),
+                          (128, 2048, 768, True, False),
                       ]], [])
 
 DEVICE_NAME = torch.xpu.get_device_name()
