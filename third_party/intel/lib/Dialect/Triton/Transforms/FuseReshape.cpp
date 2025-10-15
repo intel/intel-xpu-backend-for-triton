@@ -66,9 +66,9 @@ scf::IfOp createIfBlock(OpBuilder &builder, Location loc, arith::CmpIOp condOp,
   return ifOp;
 }
 
-scf::IfOp createCheckedLoad(OpBuilder &builder, arith::CmpIOp condOp,
+scf::IfOp createCheckedLoad(OpBuilder &builder, arith::CmpIOp cmpOp,
                             tt::LoadOp loadOp) {
-  scf::IfOp ifOp = createIfBlock(builder, loadOp.getLoc(), condOp, loadOp);
+  scf::IfOp ifOp = createIfBlock(builder, loadOp.getLoc(), cmpOp, loadOp);
   loadOp->replaceUsesWithIf(ifOp, [&](OpOperand &operand) {
     if (auto yieldOp = dyn_cast<scf::YieldOp>(operand.getOwner()))
       return yieldOp->getParentOp() != ifOp;
@@ -311,7 +311,7 @@ private:
     //        strides: [50,  5, 1] -> [  5, 1]
     //
     //      Consider a load offset of [1, 11, 1], this access is clearly
-    //      out-of-bound in dim 1 (11 > 10). However, the new offset is not
+    //      out-of-bound in dim 1 (11 > 10). However, the new offset is no
     //      longer out-of-bound (5 < 210).
     auto newLoadOp =
         cast<tt::LoadOp>(mapping.lookup(static_cast<Operation *>(loadOp)));
@@ -322,19 +322,29 @@ private:
     case 1:
     // intentional fall-through
     case 2: {
-      SmallVector<int> newBoundaryCheck{boundaryCheck[0] - 1};
-      if (boundaryCheck.size() == 2)
+      SmallVector<int> newBoundaryCheck;
+      if ((boundaryCheck[0] - 1) != 0)
+        newBoundaryCheck.push_back((boundaryCheck[0] - 1));
+      if (boundaryCheck.size() == 2 && (boundaryCheck[1] - 1) != 0)
         newBoundaryCheck.push_back(boundaryCheck[1] - 1);
-      newLoadOp.setBoundaryCheck({newBoundaryCheck});
+
+      newLoadOp.setBoundaryCheck(newBoundaryCheck);
 
       if (llvm::any_of(newBoundaryCheck, [&](unsigned boundIdx) {
-            return boundIdx == newOutermostDimIdx;
+            return boundIdx == newOutermostDimIdx + 1;
           })) {
-        Value lhs = newOffsets[newOutermostDimIdx];
-        Value rhs = shapes[newOutermostDimIdx + 1];
+        unsigned oldIdx = newOutermostDimIdx + 1;
+        auto tensorType = cast<RankedTensorType>(loadOp.getResult().getType());
+        Type elemType = tensorType.getElementType();
+        ArrayRef<int64_t> resShape = tensorType.getShape();
+        auto add = builder.create<arith::AddIOp>(
+            loc, offsets[oldIdx],
+            builder.create<arith::ConstantIntOp>(loc, offsets[oldIdx].getType(),
+                                                 resShape[oldIdx]));
         auto cmpOp = builder.create<arith::CmpIOp>(
-            loc, arith::CmpIPredicate::ult, lhs,
-            builder.create<arith::TruncIOp>(loc, lhs.getType(), rhs));
+            loc, arith::CmpIPredicate::ult, add,
+            builder.create<arith::TruncIOp>(loc, add.getResult().getType(),
+                                            shapes[oldIdx]));
         createCheckedLoad(builder, cmpOp, newLoadOp);
       }
     } break;
