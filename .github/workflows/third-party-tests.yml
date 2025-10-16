@@ -74,7 +74,7 @@ jobs:
       - name: Build Triton wheels
         uses: ./.github/actions/setup-triton
         with:
-          command: DEBUG=1 python setup.py bdist_wheel
+          command: DEBUG=1 python -m build --wheel --no-isolation
 
       - name: Install Triton
         id: install
