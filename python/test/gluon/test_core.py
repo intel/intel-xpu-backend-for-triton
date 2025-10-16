@@ -1346,7 +1346,7 @@ def fp8e8m0_to_float32(scale):
     return scale
 
 
-@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
 def test_tcgen05_mma_scaled_minimal():
     M = 128
     N = 128

@@ -258,9 +258,7 @@ def benchmark(B, M, N, K, provider):
     # Some configs increase performance with warmup as a step function, but some slowly decrease with saturation.
     # Performance is best at 200-400ms range, but we want stable, not just best.
     # This warmup improves performance on BMG
-    # n_warmup = 800
-    # We keep old warmup for now because longer warmup make perfomance on PVC worse
-    do_bench = benchmark_suite.get_do_bench(n_warmup=10, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
+    do_bench = benchmark_suite.get_do_bench(n_warmup=800, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
     if B == 1:
         a = torch.rand((M, K), device='xpu', dtype=torch.bfloat16)
         b = torch.rand((K, N), device='xpu', dtype=torch.bfloat16)

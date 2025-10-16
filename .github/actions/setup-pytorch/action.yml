@@ -22,6 +22,10 @@ inputs:
   cache:
     description: Cache enabled or disabled
     default: enabled
+outputs:
+  pytorch_cache_key:
+    description: "PyTorch cache key"
+    value: ${{ steps.generate-pytorch-cache-key.outputs.pytorch_cache_key }}
 runs:
   using: "composite"
   steps:
@@ -70,22 +74,24 @@ runs:
         sudo ln -sfT ${{ inputs.oneapi }} /opt/intel/oneapi
 
     - name: Generate PyTorch cache key
+      id: generate-pytorch-cache-key
       shell: bash
+      env:
+        # Increase this value to reset cache
+        CACHE_NUMBER: 18
       run: |
         ONEAPI_LINK=$(readlink /opt/intel/oneapi || true)
         ONEAPI_KEY=$(sha256sum /opt/intel/installed.txt 2> /dev/null | cut -d\  -f1 || true)
         PYTORCH_CACHE_KEY=$(echo $PYTHON_VERSION $PYTORCH_COMMIT_ID ${{ hashFiles('scripts/patch-pytorch.sh') }} ${{ inputs.mode }}${ONEAPI_KEY}${ONEAPI_LINK} | sha256sum - | cut -d\  -f1)
         echo "PYTORCH_CACHE_KEY=$PYTORCH_CACHE_KEY" | tee -a "$GITHUB_ENV"
+        echo "pytorch_cache_key=pytorch-$PYTORCH_CACHE_KEY-$CACHE_NUMBER" >> "$GITHUB_OUTPUT"
 
     - name: Load PyTorch from a cache
       id: pytorch-cache
       uses: ./.github/actions/load
-      env:
-        # Increase this value to reset cache
-        CACHE_NUMBER: 18
       with:
         path: pytorch
-        key: pytorch-$PYTORCH_CACHE_KEY-$CACHE_NUMBER
+        key: ${{ steps.generate-pytorch-cache-key.outputs.pytorch_cache_key }}
         enabled: ${{ inputs.cache == 'enabled' }}
 
     - name: Clone PyTorch repository

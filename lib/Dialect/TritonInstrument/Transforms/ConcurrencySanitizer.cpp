@@ -459,13 +459,15 @@ private:
       info->pred = copyOp.getPred();
       info->barriers.push_back({copyOp.getBarrier(), nullptr, 1});
       info->operandEffects.push_back(
-          {MemEffectsOpInfo::Effects::RW::Write, copyOp.getResult()});
+          {/*.rw =*/MemEffectsOpInfo::Effects::RW::Write,
+           /*.buf =*/copyOp.getResult()});
     }
     if (auto storeOp = dyn_cast<ttng::AsyncTMACopyLocalToGlobalOp>(op)) {
       info.emplace();
       info->trackingKind = MemEffectsOpInfo::TrackingKind::None;
       info->operandEffects.push_back(
-          {MemEffectsOpInfo::Effects::RW::Read, storeOp.getSrc()});
+          {/*.rw =*/MemEffectsOpInfo::Effects::RW::Read,
+           /*.buf =*/storeOp.getSrc()});
     }
     if (auto gatherOp = dyn_cast<ttng::AsyncTMAGatherOp>(op)) {
       info.emplace();
@@ -473,58 +475,67 @@ private:
       info->pred = gatherOp.getPred();
       info->barriers.push_back({gatherOp.getBarrier(), nullptr, 1});
       info->operandEffects.push_back(
-          {MemEffectsOpInfo::Effects::RW::Write, gatherOp.getResult()});
+          {/*.rw =*/MemEffectsOpInfo::Effects::RW::Write,
+           /*.buf =*/gatherOp.getResult()});
     }
     if (auto scatterOp = dyn_cast<ttng::AsyncTMAScatterOp>(op)) {
       info.emplace();
       info->trackingKind = MemEffectsOpInfo::TrackingKind::None;
       info->operandEffects.push_back(
-          {MemEffectsOpInfo::Effects::RW::Read, scatterOp.getSrc()});
+          {/*.rw =*/MemEffectsOpInfo::Effects::RW::Read,
+           /*.buf =*/scatterOp.getSrc()});
     }
     if (auto copyOp = dyn_cast<ttg::AsyncCopyGlobalToLocalOp>(op)) {
       info.emplace();
       info->trackingKind = MemEffectsOpInfo::TrackingKind::asyncCpCommit;
       info->operandEffects.push_back(
-          {MemEffectsOpInfo::Effects::RW::Write, copyOp.getResult()});
+          {/*.rw =*/MemEffectsOpInfo::Effects::RW::Write,
+           /*.buf =*/copyOp.getResult()});
     }
     if (auto loadOp = dyn_cast<ttg::LocalLoadOp>(op)) {
       info.emplace();
       info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
       info->operandEffects.push_back(
-          {MemEffectsOpInfo::Effects::RW::Read, loadOp.getSrc()});
+          {/*.rw =*/MemEffectsOpInfo::Effects::RW::Read,
+           /*.buf =*/loadOp.getSrc()});
     }
     if (auto storeOp = dyn_cast<ttg::LocalStoreOp>(op)) {
       info.emplace();
       info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
       info->operandEffects.push_back(
-          {MemEffectsOpInfo::Effects::RW::Write, storeOp.getDst()});
+          {/*.rw =*/MemEffectsOpInfo::Effects::RW::Write,
+           /*.buf =*/storeOp.getDst()});
     }
     if (auto allocOp = dyn_cast<ttg::LocalAllocOp>(op)) {
       if (allocOp.getSrc()) {
         info.emplace();
         info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
         info->operandEffects.push_back(
-            {MemEffectsOpInfo::Effects::RW::Write, allocOp.getResult()});
+            {/*.rw =*/MemEffectsOpInfo::Effects::RW::Write,
+             /*.buf =*/allocOp.getResult()});
       }
     }
     if (auto loadOp = dyn_cast<ttng::TMEMLoadOp>(op)) {
       info.emplace();
       info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
       info->operandEffects.push_back(
-          {MemEffectsOpInfo::Effects::RW::Read, loadOp.getSrc()});
+          {/*.rw =*/MemEffectsOpInfo::Effects::RW::Read,
+           /*.buf =*/loadOp.getSrc()});
     }
     if (auto storeOp = dyn_cast<ttng::TMEMStoreOp>(op)) {
       info.emplace();
       info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
       info->operandEffects.push_back(
-          {MemEffectsOpInfo::Effects::RW::Write, storeOp.getDst()});
+          {/*.rw =*/MemEffectsOpInfo::Effects::RW::Write,
+           /*.buf =*/storeOp.getDst()});
     }
     if (auto allocOp = dyn_cast<ttng::TMEMAllocOp>(op)) {
       if (allocOp.getSrc()) {
         info.emplace();
         info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
         info->operandEffects.push_back(
-            {MemEffectsOpInfo::Effects::RW::Write, allocOp.getResult()});
+            {/*.rw =*/MemEffectsOpInfo::Effects::RW::Write,
+             /*.buf =*/allocOp.getResult()});
       }
     }
     if (auto mmav5Op = dyn_cast<ttng::TCGen5MMAOp>(op)) {
@@ -536,11 +547,14 @@ private:
         info->barriers.push_back({barrier, barrierPred, 1});
       }
       info->operandEffects.push_back(
-          {MemEffectsOpInfo::Effects::RW::Read, mmav5Op.getA(), "A"});
+          {/*.rw =*/MemEffectsOpInfo::Effects::RW::Read,
+           /*.buf =*/mmav5Op.getA(), /*.operandName =*/"A"});
       info->operandEffects.push_back(
-          {MemEffectsOpInfo::Effects::RW::Read, mmav5Op.getB(), "B"});
-      info->operandEffects.push_back({MemEffectsOpInfo::Effects::RW::Write,
-                                      mmav5Op.getAccumulator(), "Acc"});
+          {/*.rw =*/MemEffectsOpInfo::Effects::RW::Read,
+           /*.buf =*/mmav5Op.getB(), /*.operandName =*/"B"});
+      info->operandEffects.push_back(
+          {/*.rw =*/MemEffectsOpInfo::Effects::RW::Write,
+           /*.buf =*/mmav5Op.getAccumulator(), /*.operandName =*/"Acc"});
     }
     if (auto commitOp = dyn_cast<ttng::TCGen5CommitOp>(op)) {
       info.emplace();
@@ -562,19 +576,17 @@ private:
         info->barriers = {};
         if (isa<ttg::SharedEncodingTrait>(
                 wgmmaOp.getA().getType().getEncoding())) {
-          MemEffectsOpInfo::Effects effect;
-          effect.rw = MemEffectsOpInfo::Effects::RW::Read;
-          effect.buf = wgmmaOp.getA();
-          effect.operandName = "A";
-          info->operandEffects.emplace_back(effect);
+          info->operandEffects.emplace_back(MemEffectsOpInfo::Effects{
+              /*.rw =*/MemEffectsOpInfo::Effects::RW::Read,
+              /*.buf =*/wgmmaOp.getA(),
+              /*.operandName =*/"A"});
         }
         if (isa<ttg::SharedEncodingTrait>(
                 wgmmaOp.getB().getType().getEncoding())) {
-          MemEffectsOpInfo::Effects effect;
-          effect.rw = MemEffectsOpInfo::Effects::RW::Read;
-          effect.buf = wgmmaOp.getB();
-          effect.operandName = "B";
-          info->operandEffects.emplace_back(effect);
+          info->operandEffects.emplace_back(MemEffectsOpInfo::Effects{
+              /*.rw =*/MemEffectsOpInfo::Effects::RW::Read,
+              /*.buf =*/wgmmaOp.getB(),
+              /*.operandName =*/"B"});
         }
       }
     }
