@@ -28,8 +28,7 @@ def test_make_ragged_tensor_metadata(n_slices, device):
 
 
 @pytest.mark.parametrize("n_slices", [9, 32, 911, 1025])
-def test_remap_ragged_tensor_metadata(n_slices):
-    device = "cuda"
+def test_remap_ragged_tensor_metadata(n_slices, device):
     max_slice_size = 200
     n_total_rows = max_slice_size * n_slices
     slice_sizes = torch.randint(0, max_slice_size, (n_slices, ), dtype=torch.int32, device=device)

@@ -53,7 +53,7 @@ def _distributed_worker(rank, fn, world_size, kwargs):
 def distributed_launcher(request):
     n_gpus = getattr(request, "param", None)
     if not torch.cuda.is_available():
-        pytest.skip("CUDA required for distributed GPU test")
+        pytest.xfail("CUDA required for distributed GPU test")
     if torch.cuda.device_count() < n_gpus:
         pytest.skip(f"requires up to {n_gpus} CUDA devices, found {torch.cuda.device_count()}")
 
@@ -82,8 +82,7 @@ def distributed_launcher(request):
 
 @pytest.mark.parametrize("n_expts_shard, n_expts_tot", [(8, 512), (16, 64)])
 @pytest.mark.parametrize("affinity_mode", ["uniform", "random"])
-def test_make_expt_assignment(n_expts_shard, n_expts_tot, affinity_mode):
-    device = "cuda"
+def test_make_expt_assignment(n_expts_shard, n_expts_tot, affinity_mode, device):
     expt_dict = _make_expt_dict_for_mode(n_expts_shard, n_expts_tot, affinity_mode)
     expt_assignment = make_expt_assignment(n_expts_shard, n_expts_tot, expt_dict, device)
     # mask correctness & uniqueness: each expert set exactly once, and on the right shard

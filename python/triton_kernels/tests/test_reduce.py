@@ -56,13 +56,12 @@ def plus_a(x, a):
     "broadcast_n",  # broadcast over N: [B,M,1]
 ])
 @pytest.mark.parametrize("dim", [0, 1, 2])
-def test_op(B, M, N, dtype_str, dim, mask_mode, postprocess_fn):
+def test_op(B, M, N, dtype_str, dim, mask_mode, postprocess_fn, device):
     is_hip = triton.runtime.driver.active.get_current_target().backend == "hip"
-    is_pre_h100 = torch.cuda.get_device_capability() < (9, 0)
+    is_pre_h100 = torch.cuda.is_available() and torch.cuda.get_device_capability() < (9, 0)
     if (is_hip or is_pre_h100) and "float8" in dtype_str:
         pytest.skip("float8 not supported on CUDA < 9.0")
     torch.manual_seed(0)
-    device = "cuda"
     x = torch.randn((B, M, N), device=device, dtype=torch.float32)
     x_mscale, x_flex = None, None
     y_flex_tri, y_flex_ref = None, None
