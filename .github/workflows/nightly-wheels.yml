@@ -36,7 +36,7 @@ jobs:
           - "3.11"
           - "3.12"
           - "3.13"
-          - "3.14.0-rc.1"
+          - "3.14"
       fail-fast: false
       max-parallel: 2
     defaults:
@@ -57,6 +57,7 @@ jobs:
           pip install wheel cmake
 
       - name: Setup PyTorch
+        id: setup-pytorch
         uses: ./.github/actions/setup-pytorch
 
       - name: Identify pinned versions
@@ -83,7 +84,7 @@ jobs:
           package: torchvision
           repository: pytorch/vision
           ref: ${{ env.TORCHVISION_COMMIT_ID }}
-          extra-cache-key: ${{ env.PYTORCH_VERSION }}
+          extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
 
       - name: Install torchaudio package
         uses: ./.github/actions/install-dependency
@@ -91,7 +92,7 @@ jobs:
           package: torchaudio
           repository: pytorch/audio
           ref: ${{ env.TORCHAUDIO_COMMIT_ID }}
-          extra-cache-key: ${{ env.PYTORCH_VERSION }}
+          extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
 
       - name: Install timm package
         uses: ./.github/actions/install-dependency
@@ -99,7 +100,7 @@ jobs:
           package: timm
           repository: huggingface/pytorch-image-models
           ref: ${{ env.TIMM_COMMIT_ID }}
-          extra-cache-key: ${{ env.PYTORCH_VERSION }}
+          extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
 
       - name: Install transformers package
         run: |

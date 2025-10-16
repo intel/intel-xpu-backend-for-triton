@@ -56,6 +56,7 @@ jobs:
     name: Test ${{ inputs.suite }} ${{ inputs.dtype }} ${{ inputs.mode }} ${{ inputs.test_mode }}
     runs-on:
       - linux
+      - rolling
       - ${{ inputs.runner_label || 'max1550' }}
     timeout-minutes: 720
     defaults:
@@ -91,6 +92,7 @@ jobs:
           pip install wheel 'cmake<4.0.0'
 
       - name: Setup PyTorch
+        id: setup-pytorch
         uses: ./.github/actions/setup-pytorch
         with:
           ref: ${{ inputs.pytorch_ref }}
@@ -150,7 +152,7 @@ jobs:
           package: torchvision
           repository: pytorch/vision
           ref: ${{ env.TORCHVISION_COMMIT_ID }}
-          extra-cache-key: ${{ env.PYTORCH_VERSION }}
+          extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
 
       - name: Install torchaudio package
         if: ${{ inputs.suite == 'torchbench' }}
@@ -159,7 +161,7 @@ jobs:
           package: torchaudio
           repository: pytorch/audio
           ref: ${{ env.TORCHAUDIO_COMMIT_ID }}
-          extra-cache-key: ${{ env.PYTORCH_VERSION }}
+          extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
 
       - name: Install timm package
         if: ${{ inputs.suite == 'timm_models' || inputs.suite == 'torchbench' }}
@@ -168,7 +170,7 @@ jobs:
           package: timm
           repository: huggingface/pytorch-image-models
           ref: ${{ env.TIMM_COMMIT_ID }}
-          extra-cache-key: ${{ env.PYTORCH_VERSION }}
+          extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
 
       - name: Clone pytorch benchmark
         if: ${{ inputs.suite == 'torchbench' }}

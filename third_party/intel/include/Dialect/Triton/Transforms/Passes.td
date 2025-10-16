@@ -53,7 +53,7 @@ def TritonIntelFuseReshape
     For example, given:
         %ptr = tt.make_tensor_ptr %base_ptr, [%s0, %s1, %s2], [%a, %b, %c], [%x, %y, %z]
                                   {order = array<i32: 2, 1, 0>} : <tensor<1x512x64xf16>>
-        %load = tt.load %ptr {boundaryCheck = array<i32: 1, 2>} : !tt.ptr<tensor<1x512x64xf16>>
+        %load = tt.load %ptr {boundaryCheck = array<i32: 2>} : !tt.ptr<tensor<1x512x64xf16>>
         %A = tt.reshape %load : tensor<1x512x64xf16> -> tensor<512x64xf16>
         %dot %A, ... : tensor<512x64xf16> x tensor<64x32xf16> -> tensor<512x32xf16>
 
@@ -61,7 +61,7 @@ def TritonIntelFuseReshape
         %div = %a / %b
         %ptr = tt.make_tensor_ptr %base_ptr, [%s0 * %div + %s1, %s2], [%b, %c], [%x * %div + %y, %z]
                                   {order = array<i32: 1, 0>} : <tensor<512x64xf16>>
-        %A = tt.load %ptr {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<512x64xf16>>
+        %A = tt.load %ptr {boundaryCheck = array<i32: 1>} : !tt.ptr<tensor<512x64xf16>>
         %dot %A, ... : tensor<512x64xf16> x tensor<64x32xf16> -> tensor<512x32xf16>
   }];
 

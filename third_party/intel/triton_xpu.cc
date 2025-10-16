@@ -29,6 +29,8 @@
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
 
+#include <chrono>
+
 namespace py = pybind11;
 
 namespace llvm {
@@ -149,111 +151,138 @@ void init_triton_intel(py::module &&m) {
       .value("Workgroup", gpu::intel::SplitBarrierScope::Workgroup)
       .value("Subgroup", gpu::intel::SplitBarrierScope::Subgroup);
 
-  m.def(
-      "optimize_module",
-      [](llvm::Module *mod, const llvm::OptimizationLevel &opt) {
-        if (mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT"))
-          return;
-        // Check to see if we are passing a list of flags to disable
-        // optimizations.
-        auto flagList = mlir::triton::tools::getStrEnv("DISABLE_LLVM_OPT");
-        using namespace llvm;
-        if (!flagList.empty()) {
-          auto options = llvm::cl::getRegisteredOptions();
-          llvm::SmallVector<StringRef, 3> split;
-          StringRef(flagList.c_str()).split(split, ',');
-          for (auto flag : split) {
-            auto optIt = options.find(flag);
-            if (optIt != options.end()) {
-              auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
-              *optPtr = true;
+  m.def("optimize_module", [](llvm::Module *mod,
+                              const llvm::OptimizationLevel &opt,
+                              std::optional<py::function> pyCb = std::nullopt) {
+    if (mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT"))
+      return;
+
+    py::gil_scoped_release gil_release;
+
+    // Check to see if we are passing a list of flags to disable
+    // optimizations.
+    auto flagList = mlir::triton::tools::getStrEnv("DISABLE_LLVM_OPT");
+    using namespace llvm;
+    if (!flagList.empty()) {
+      auto options = llvm::cl::getRegisteredOptions();
+      llvm::SmallVector<StringRef, 3> split;
+      StringRef(flagList.c_str()).split(split, ',');
+      for (auto flag : split) {
+        auto optIt = options.find(flag);
+        if (optIt != options.end()) {
+          auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
+          *optPtr = true;
+        }
+      }
+    }
+    LoopAnalysisManager lam;
+    FunctionAnalysisManager fam;
+    CGSCCAnalysisManager cgam;
+    ModuleAnalysisManager mam;
+
+    PassInstrumentationCallbacks *instrCbPtr = nullptr;
+    PassInstrumentationCallbacks passInstrCb;
+    StandardInstrumentations standardInstr(mod->getContext(),
+                                           /*DebugLogging*/ true);
+    llvm::DenseMap<llvm::StringRef,
+                   std::chrono::high_resolution_clock::time_point>
+        passStartTimes;
+
+    if (mlir::triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
+      auto optMap = llvm::cl::getRegisteredOptions();
+      auto optIt = optMap.find("print-after-all");
+      if (optIt != optMap.end()) {
+        auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
+        *optPtr = true;
+      }
+      standardInstr.registerCallbacks(passInstrCb, &mam);
+      instrCbPtr = &passInstrCb;
+    } else if (pyCb) {
+      instrCbPtr = &passInstrCb;
+      passInstrCb.registerBeforeNonSkippedPassCallback(
+          [&passStartTimes](llvm::StringRef id, llvm::Any) {
+            passStartTimes[id] = std::chrono::high_resolution_clock::now();
+          });
+      passInstrCb.registerAfterPassCallback(
+          [&passStartTimes, &pyCb](llvm::StringRef id, llvm::Any,
+                                   const llvm::PreservedAnalyses &) {
+            auto start = passStartTimes.find(id);
+            if (start != passStartTimes.end()) {
+              auto end = std::chrono::high_resolution_clock::now();
+              auto time =
+                  std::chrono::duration_cast<std::chrono::duration<float>>(
+                      end - start->second)
+                      .count();
+              passStartTimes.erase(start);
+              py::gil_scoped_acquire gil_acquire;
+              pyCb->operator()(id.str(), time, 0);
             }
-          }
-        }
-        LoopAnalysisManager lam;
-        FunctionAnalysisManager fam;
-        CGSCCAnalysisManager cgam;
-        ModuleAnalysisManager mam;
+          });
+    }
 
-        PassInstrumentationCallbacks *instrCbPtr = nullptr;
-        PassInstrumentationCallbacks passInstrCb;
-        StandardInstrumentations standardInstr(mod->getContext(),
-                                               /*DebugLogging*/ true);
-        if (mlir::triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
-          auto optMap = llvm::cl::getRegisteredOptions();
-          auto optIt = optMap.find("print-after-all");
-          if (optIt != optMap.end()) {
-            auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
-            *optPtr = true;
-          }
-          standardInstr.registerCallbacks(passInstrCb, &mam);
-          instrCbPtr = &passInstrCb;
-        }
+    PipelineTuningOptions tuningOptions;
+    tuningOptions.LoopUnrolling = true;
+    tuningOptions.LoopInterleaving = true;
+    tuningOptions.LoopVectorization = true;
+    // SLPVectorizer causes test_core.py::test_dot_mulbroadcasted to fail.
+    // It vectorizes @llvm.fmuladd.f32 with @llvm.fmuladd.v32f32. We can
+    // consider to reenable SLP vectorization when the failure is
+    // investigated.
+    tuningOptions.SLPVectorization = false;
 
-        PipelineTuningOptions tuningOptions;
-        tuningOptions.LoopUnrolling = true;
-        tuningOptions.LoopInterleaving = true;
-        tuningOptions.LoopVectorization = true;
-        // SLPVectorizer causes test_core.py::test_dot_mulbroadcasted to fail.
-        // It vectorizes @llvm.fmuladd.f32 with @llvm.fmuladd.v32f32. We can
-        // consider to reenable SLP vectorization when the failure is
-        // investigated.
-        tuningOptions.SLPVectorization = false;
+    PassBuilder pb(nullptr /*targetMachine*/, tuningOptions, std::nullopt,
+                   instrCbPtr);
 
-        PassBuilder pb(nullptr /*targetMachine*/, tuningOptions, std::nullopt,
-                       instrCbPtr);
+    std::string pluginFile =
+        mlir::triton::tools::getStrEnv("LLVM_PASS_PLUGIN_PATH");
 
-        std::string pluginFile =
-            mlir::triton::tools::getStrEnv("LLVM_PASS_PLUGIN_PATH");
+    if (!pluginFile.empty()) {
+      // TODO: Add some logging here that we inserted a pass into the LLVM
+      // pass pipeline
+      auto passPlugin = llvm::PassPlugin::Load(pluginFile);
+      if (!passPlugin) {
+        llvm::Error Err = passPlugin.takeError();
+        std::string ErrMsg =
+            "Pass Plugin Error: " + llvm::toString(std::move(Err));
+        throw std::runtime_error(ErrMsg);
+      }
+      passPlugin->registerPassBuilderCallbacks(pb);
+    }
 
-        if (!pluginFile.empty()) {
-          // TODO: Add some logging here that we inserted a pass into the LLVM
-          // pass pipeline
-          auto passPlugin = llvm::PassPlugin::Load(pluginFile);
-          if (!passPlugin) {
-            llvm::Error Err = passPlugin.takeError();
-            std::string ErrMsg =
-                "Pass Plugin Error: " + llvm::toString(std::move(Err));
-            throw std::runtime_error(ErrMsg);
-          }
-          passPlugin->registerPassBuilderCallbacks(pb);
-        }
+    pb.registerModuleAnalyses(mam);
+    pb.registerCGSCCAnalyses(cgam);
+    pb.registerFunctionAnalyses(fam);
+    pb.registerLoopAnalyses(lam);
+    pb.crossRegisterProxies(lam, fam, cgam, mam);
 
-        pb.registerModuleAnalyses(mam);
-        pb.registerCGSCCAnalyses(cgam);
-        pb.registerFunctionAnalyses(fam);
-        pb.registerLoopAnalyses(lam);
-        pb.crossRegisterProxies(lam, fam, cgam, mam);
-
-        ModulePassManager mpm;
-        pb.registerVectorizerStartEPCallback(
-            [&](llvm::FunctionPassManager &fpm, llvm::OptimizationLevel level) {
-              // Triton generates large structure of scalars which may pessimise
-              // optimizations, we run a pass to break up phi of struct to make
-              // sure all the struct are removed for the following passes.
-              fpm.addPass(BreakStructPhiNodesPass());
-              fpm.addPass(InstCombinePass());
-            });
-        pb.registerPeepholeEPCallback(
-            [&](llvm::FunctionPassManager &fpm, llvm::OptimizationLevel level) {
-              // The Triton masked load pattern can generate instances where the
-              // mask value causes undefined behavior in sdiv/srem instructions.
-              // The language allows this UB as the result of those arithmetic
-              // instructions is never used, and control flow to avoid
-              // computation of these instructions would negatively affect
-              // performance. But, LLVM SimplifyCFG aggressively marks code
-              // paths with undefined behavior as dead. This can result in
-              // removal of the mask path and incorrect results from legal
-              // Triton kernels due to masked elements being used in
-              // computation. Run a pass to add a freeze instruction between
-              // masked loads and sdiv/srem to signal to LLVM we consider the
-              // sdiv/srem operands to be well defined.
-              fpm.addPass(FreezeMaskedDivRemPass());
-            });
-        mpm.addPass(pb.buildPerModuleDefaultPipeline(opt));
-        mpm.run(*mod, mam);
-      },
-      py::call_guard<py::gil_scoped_release>());
+    ModulePassManager mpm;
+    pb.registerVectorizerStartEPCallback(
+        [&](llvm::FunctionPassManager &fpm, llvm::OptimizationLevel level) {
+          // Triton generates large structure of scalars which may pessimise
+          // optimizations, we run a pass to break up phi of struct to make
+          // sure all the struct are removed for the following passes.
+          fpm.addPass(BreakStructPhiNodesPass());
+          fpm.addPass(InstCombinePass());
+        });
+    pb.registerPeepholeEPCallback(
+        [&](llvm::FunctionPassManager &fpm, llvm::OptimizationLevel level) {
+          // The Triton masked load pattern can generate instances where the
+          // mask value causes undefined behavior in sdiv/srem instructions.
+          // The language allows this UB as the result of those arithmetic
+          // instructions is never used, and control flow to avoid
+          // computation of these instructions would negatively affect
+          // performance. But, LLVM SimplifyCFG aggressively marks code
+          // paths with undefined behavior as dead. This can result in
+          // removal of the mask path and incorrect results from legal
+          // Triton kernels due to masked elements being used in
+          // computation. Run a pass to add a freeze instruction between
+          // masked loads and sdiv/srem to signal to LLVM we consider the
+          // sdiv/srem operands to be well defined.
+          fpm.addPass(FreezeMaskedDivRemPass());
+        });
+    mpm.addPass(pb.buildPerModuleDefaultPipeline(opt));
+    mpm.run(*mod, mam);
+  });
 
   // load dialects
   m.def("load_dialects", [](mlir::MLIRContext &context) {

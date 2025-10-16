@@ -2,8 +2,10 @@
 #include "intel/include/Utils/DefUseChain.h"
 #include "intel/include/Utils/Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Verifier.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
@@ -87,7 +89,7 @@ public:
 
     LLVM_DEBUG(llvm::dbgs() << "[Before fusion]:\n" << manager << "\n");
 
-    // Fuse tt.LoadOp->tt.reshapeOp operations.
+    // Fuse tt.LoadOp->tt.ReshapeOp operations.
     fuse(manager.getChains());
 
     // Remove operations that are no longer used.
@@ -238,14 +240,21 @@ private:
 
     LLVM_DEBUG(llvm::dbgs() << "newMakeTensorPtrOp:\n  " << ptr << "\n");
 
-    // Adjust the boundary check on the load operation.
-    ArrayRef<int> boundaryCheck = loadOp.getBoundaryCheck();
-    assert(boundaryCheck.size() == 2 && "Expecting a 2-dim load");
-    loadOp.setBoundaryCheck({boundaryCheck[0] - 1, boundaryCheck[1] - 1});
-
     // Propagate the new ptr through the def-use chain.
-    propagateToUsers(ptr, chain);
+    IRMapping mapping;
+    propagateToUsers(ptr, chain, mapping);
     cleanUp.insert(makeTensorPtrOp);
+
+    // We have collapsed 2 dimensions into one, therefore we need to adjust the
+    // boundary check of the new load.
+    auto newLoadOp =
+        cast<tt::LoadOp>(mapping.lookup(static_cast<Operation *>(loadOp)));
+    ArrayRef<int> boundaryCheck = newLoadOp.getBoundaryCheck();
+    for (int idx : boundaryCheck) {
+      assert(idx == (newInnermostDimIdx + 1) &&
+             "Unexpected boundary check idx");
+      newLoadOp.setBoundaryCheck({static_cast<int>(newInnermostDimIdx)});
+    }
   }
 
   // Candidate is of the form:
@@ -253,11 +262,13 @@ private:
   // Where:
   //  - the reshape operation drops the outermost dimension of the operand,
   //    which is a 3-dim tensor with outermost dimension extent equal to one
-  //  - the reshape result is used by the dot operation
+  //  - the reshape result is used by a dot operation
   //  - the reshape operation uses the result of a 3-dim load operation on a
   //    block pointer (transitively) defined by a `make_tensor_ptr` operation
   //  - the block pointer points to a tensor that has extent equal to 1 on the
   //    outermost dimension
+  //  - the load operation doesn't have boundary checks on either of the
+  //    dimensions collapsed
   bool isCandidate(tt::ReshapeOp reshapeOp) const {
     assert(reshapeOp && "Expecting a valid reshape operation");
 
@@ -276,7 +287,7 @@ private:
         return false;
     }
 
-    // Check whether \p reshapeOp is used by a `dotOp` (directly or indirectly).
+    // Check whether \p reshapeOp is used by a `dotOp`.
     auto usedByDotOp = [](tt::ReshapeOp reshapeOp) {
       if (!reshapeOp->hasOneUse())
         return false;
@@ -296,6 +307,7 @@ private:
     if (!usedByDotOp(reshapeOp))
       return false;
 
+    // The reshape operation uses the result of a load operation.
     Operation *defOp = reshapeOp.getSrc().getDefiningOp();
     if (!defOp || !isa<tt::LoadOp>(defOp))
       return false;
@@ -304,6 +316,8 @@ private:
     if (!loadOp->hasOneUse())
       return false;
 
+    // The load uses a 3-dim block pointer defined by a make_tensor_ptr
+    // operation.
     Type ptrType = loadOp.getPtr().getType();
     if (!tt::isTensorPointerType(ptrType))
       return false;
@@ -323,34 +337,22 @@ private:
     if (order.front() != tensorTy.getRank() - 1)
       return false;
 
-    // Ensure that the innermost stride is one.
     unsigned innermostDimIdx = 0;
-    for (int i : order) {
-      if (i == 0)
+    for (int idx : order) {
+      if (idx == 0)
         break;
       ++innermostDimIdx;
     }
 
-    auto strides = makeTensorPtrOp->getStrides();
-    Value innermostStride = strides[innermostDimIdx];
-    if (!innermostStride.getDefiningOp() ||
-        !isa<arith::ConstantIntOp>(innermostStride.getDefiningOp()))
-      return false;
-
-    auto integerCst =
-        cast<arith::ConstantIntOp>(innermostStride.getDefiningOp());
-    if (integerCst.value() != 1)
-      return false;
-
-    // Ensure the load boundary check doesn't check the outermost dimension.
-    return llvm::none_of(loadOp.getBoundaryCheck(),
-                         [](int val) { return val == 0; });
+    // Ensure the load operation checks at most the innermost dimension.
+    return llvm::all_of(loadOp.getBoundaryCheck(),
+                        [&](int idx) { return idx == innermostDimIdx; });
   }
 
-  // Prune chains that cannot be handled during fusion. For example, operations
-  // in the def-use chain should have a single user, except in special
-  // circumstances (e.g. the root operation of a chain might have more than one
-  // user).
+  // Prune chains that cannot be handled during fusion. For example,
+  // operations in the def-use chain should have a single user, except in
+  // special circumstances (e.g. the root operation of a chain might have more
+  // than one user).
   void pruneInvalid(DefUseChains &chains) const {
     assert(!chains.empty() && "Expecting at least one candidate chain");
 
@@ -368,11 +370,10 @@ private:
 
   // Determine whether all operations in the given def-use chain have a single
   // user.
-  // Note: we allow an operation in the def-use chain to have an additional user
-  // if the operation is in a for loop, and the additional user is the loop
-  // yield operation, provided that the result yielded is not used after the
-  // loop.
-  // Example:
+  // Note: we allow an operation in the def-use chain to have an additional
+  // user if the operation is in a for loop, and the additional user is the
+  // loop yield operation, provided that the result yielded is not used after
+  // the loop. Example:
   //   make_tensor_ptr -> advance -> load (OK)
   //   make_tensor_ptr -> for init_arg -> advance -> load (OK)
   //                                   -> yield (OK)
@@ -461,7 +462,8 @@ private:
   }
 
   // Propagate \p newVal to operations in the given def-use chain.
-  void propagateToUsers(Value newVal, const DefUseChain &chain) {
+  void propagateToUsers(Value newVal, const DefUseChain &chain,
+                        IRMapping &mapping) {
     auto start = cast<tt::MakeTensorPtrOp>(chain.getStart());
     Operation *end = chain.getEnd();
     auto it = llvm::find_if(start->getUsers(), [&](Operation *user) {
@@ -470,22 +472,22 @@ private:
     assert(it != start->getUsers().end() && "Expecting valid iterator");
 
     Operation *nextOp = *it;
-    propagateToUser(newVal, start.getResult(), nextOp, end);
+    propagateToUser(newVal, start.getResult(), nextOp, end, mapping);
   }
 
   // Propagate \p newVal to users of \p origOp.
   void propagateToUsers(Value newVal, Value origVal, Operation *origOp,
-                        Operation *sentinel) {
+                        Operation *sentinel, IRMapping &mapping) {
     assert(origOp && sentinel && "Expecting valid operations");
     const SmallVector<Operation *> users(origOp->getUsers());
     for (Operation *user : users)
-      propagateToUser(newVal, origVal, user, sentinel);
+      propagateToUser(newVal, origVal, user, sentinel, mapping);
   }
 
   // If \p user is not \p sentinel, propagate \p newVal to \p user. Otherwise
   // terminate the propagation.
   void propagateToUser(Value newVal, Value origVal, Operation *user,
-                       Operation *sentinel) {
+                       Operation *sentinel, IRMapping &mapping) {
     assert(user && sentinel && "Expecting valid operations");
     assert(llvm::is_contained(origVal.getUsers(), user) && "Invalid usage");
 
@@ -515,11 +517,13 @@ private:
       SmallVector<Value> newOffsets(advanceOp.getOffsets().drop_front());
       auto newAdvanceOp = rewriter.create<tt::AdvanceOp>(loc, newVal.getType(),
                                                          newVal, newOffsets);
+      mapping.map(static_cast<Operation *>(advanceOp),
+                  static_cast<Operation *>(newAdvanceOp));
       LLVM_DEBUG(llvm::dbgs().indent(2)
                  << "newAdvanceOp: " << newAdvanceOp << "\n");
       cleanUp.insert(advanceOp);
       return propagateToUsers(newAdvanceOp, advanceOp.getResult(), advanceOp,
-                              sentinel);
+                              sentinel, mapping);
     }
 
     if (auto loadOp = dyn_cast<tt::LoadOp>(user)) {
@@ -529,10 +533,12 @@ private:
           loadOp.getBoundaryCheckAttr(), loadOp.getPaddingAttr(),
           loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
       newLoadOp->setAttrs(loadOp->getAttrs());
-
+      mapping.map(static_cast<Operation *>(loadOp),
+                  static_cast<Operation *>(newLoadOp));
       LLVM_DEBUG(llvm::dbgs().indent(2) << "newLoadOp: " << newLoadOp << "\n");
       cleanUp.insert(loadOp);
-      return propagateToUsers(newLoadOp, loadOp.getResult(), loadOp, sentinel);
+      return propagateToUsers(newLoadOp, loadOp.getResult(), loadOp, sentinel,
+                              mapping);
     }
 
     if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
@@ -553,13 +559,13 @@ private:
     }
 
     if (auto forOp = dyn_cast<scf::ForOp>(user))
-      return propagateToLoop(newVal, origVal, forOp, sentinel);
+      return propagateToLoop(newVal, origVal, forOp, sentinel, mapping);
 
     llvm_unreachable("Unexpected kind of user");
   }
 
   void propagateToLoop(Value newVal, Value origVal, LoopLikeOpInterface loopOp,
-                       Operation *sentinel) {
+                       Operation *sentinel, IRMapping &mapping) {
     assert(sentinel && sentinel != loopOp && "Unexpected sentinel kind");
     LLVM_DEBUG({
       llvm::dbgs() << "In " << __func__ << "\n";
@@ -573,7 +579,7 @@ private:
         rgnInitArg.setType(initArg.get().getType());
         const SmallVector<Operation *> users(rgnInitArg.getUsers());
         for (Operation *user : users)
-          propagateToUser(rgnInitArg, rgnInitArg, user, sentinel);
+          propagateToUser(rgnInitArg, rgnInitArg, user, sentinel, mapping);
       }
     }
   }

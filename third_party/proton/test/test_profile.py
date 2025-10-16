@@ -258,8 +258,6 @@ def test_hook_launch_context(tmp_path: pathlib.Path, context: str):
 
 
 def test_hook_with_third_party(tmp_path: pathlib.Path):
-    if is_xpu():
-        pytest.skip("FIXME: enable")
     third_party_hook_invoked = False
 
     def third_party_hook(metadata) -> None:
@@ -280,7 +278,7 @@ def test_hook_with_third_party(tmp_path: pathlib.Path):
         offs = tl.arange(0, size)
         tl.store(y + offs, tl.load(x + offs))
 
-    x = torch.tensor([2], device="cuda", dtype=torch.float32)
+    x = torch.tensor([2], device="xpu", dtype=torch.float32)
     y = torch.zeros_like(x)
     temp_file = tmp_path / "test_hook_with_third_party.hatchet"
     proton.start(str(temp_file.with_suffix("")), hook="triton")
@@ -295,8 +293,6 @@ def test_hook_with_third_party(tmp_path: pathlib.Path):
 
 
 def test_hook_multiple_threads(tmp_path: pathlib.Path):
-    if is_xpu():
-        pytest.skip("FIXME: enable")
 
     def metadata_fn_foo(grid: tuple, metadata: NamedTuple, args: dict):
         return {"name": "foo_test"}
@@ -314,9 +310,9 @@ def test_hook_multiple_threads(tmp_path: pathlib.Path):
         offs = tl.arange(0, size)
         tl.store(y + offs, tl.load(x + offs))
 
-    x_foo = torch.tensor([2], device="cuda", dtype=torch.float32)
+    x_foo = torch.tensor([2], device="xpu", dtype=torch.float32)
     y_foo = torch.zeros_like(x_foo)
-    x_bar = torch.tensor([2], device="cuda", dtype=torch.float32)
+    x_bar = torch.tensor([2], device="xpu", dtype=torch.float32)
     y_bar = torch.zeros_like(x_bar)
 
     temp_file = tmp_path / "test_hook.hatchet"
@@ -410,10 +406,6 @@ def test_deactivate(tmp_path: pathlib.Path):
 
 
 def test_multiple_sessions(tmp_path: pathlib.Path):
-    if is_xpu():
-        # FIXME: the same correlation id, that's why it's filtered,
-        # should `_kernel_id` be used instead
-        pytest.xfail('assert int(data[0]["children"][0]["metrics"]["count"]) == 2')
     temp_file0 = tmp_path / "test_multiple_sessions0.hatchet"
     temp_file1 = tmp_path / "test_multiple_sessions1.hatchet"
     session_id0 = proton.start(str(temp_file0.with_suffix("")))
@@ -439,8 +431,6 @@ def test_multiple_sessions(tmp_path: pathlib.Path):
 
 
 def test_trace(tmp_path: pathlib.Path):
-    if is_xpu():
-        pytest.skip("FIXME: enable")
     temp_file = tmp_path / "test_trace.chrome_trace"
     proton.start(str(temp_file.with_suffix("")), data="trace")
 
@@ -450,7 +440,7 @@ def test_trace(tmp_path: pathlib.Path):
         tl.store(y + offs, tl.load(x + offs))
 
     with proton.scope("init"):
-        x = torch.ones((1024, ), device="cuda", dtype=torch.float32)
+        x = torch.ones((1024, ), device="xpu", dtype=torch.float32)
         y = torch.zeros_like(x)
 
     with proton.scope("test"):
@@ -467,8 +457,6 @@ def test_trace(tmp_path: pathlib.Path):
 
 
 def test_scope_multiple_threads(tmp_path: pathlib.Path):
-    if is_xpu():
-        pytest.skip("FIXME: enable")
     temp_file = tmp_path / "test_scope_threads.hatchet"
     proton.start(str(temp_file.with_suffix("")))
 
@@ -479,7 +467,7 @@ def test_scope_multiple_threads(tmp_path: pathlib.Path):
         for i in range(N):
             name = f"{prefix}_{i}"
             proton.enter_scope(name)
-            torch.ones((1, ), device="cuda")
+            torch.ones((1, ), device="xpu")
             proton.exit_scope()
 
     threads = [threading.Thread(target=worker, args=(tname, )) for tname in thread_names]
