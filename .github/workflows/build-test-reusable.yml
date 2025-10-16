@@ -130,7 +130,7 @@ jobs:
           use_spirv_backend: ${{ inputs.use_spirv_backend }}
           command: >
             DEBUG=1
-            python setup.py bdist_wheel && pip install dist/*.whl
+            python -m build --wheel --no-isolation && pip install dist/*.whl
 
       - name: Set test-triton command line
         id: test-triton
