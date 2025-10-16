@@ -90,8 +90,10 @@ jobs:
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           cd ${{ env.NEW_WORKSPACE }}
-          pip install -U wheel pybind11 cmake intel-sycl-rt==2025.2.1
-          python -m build --wheel --no-isolation
+          pip install -U wheel pybind11 cmake>=3.20,<4.0 intel-sycl-rt==2025.2.1
+          # `build` can't determine that Ninja is already installed.
+          # similar issue: https://github.com/pypa/build/issues/506
+          python -m build --wheel --no-isolation --skip-dependency-check
           pip install (Get-Item ${{ env.NEW_WORKSPACE }}\dist\*.whl)
 
       - name: Triton version
