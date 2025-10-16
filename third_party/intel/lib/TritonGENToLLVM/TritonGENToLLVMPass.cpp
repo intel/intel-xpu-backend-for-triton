@@ -625,9 +625,9 @@ static void
 create2DBlockAsserts(OpTy op, mlir::ConversionPatternRewriter &rewriter,
                      const mlir::triton::gpu::intel::LibCallEmitter &emitter) {
 
-  if (!triton::tools::getBoolEnv("TRITON_INTEL_2DBLOCK_ASSERT")) {
-    return;
-  }
+  // if (!triton::tools::getBoolEnv("TRITON_INTEL_2DBLOCK_ASSERT")) {
+  //   return;
+  // }
 
   // put implementation in a separate function to avoid template bloat
   create2DBlockAssertsImpl(
