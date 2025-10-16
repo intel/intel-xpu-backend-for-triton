@@ -17,8 +17,8 @@ def test_main():
 
 
 def matmul():
-    a = torch.randn((32, 32), device="cuda", dtype=torch.float16)
-    b = torch.randn((32, 32), device="cuda", dtype=torch.float16)
+    a = torch.randn((32, 32), device="xpu", dtype=torch.float16)
+    b = torch.randn((32, 32), device="xpu", dtype=torch.float16)
     M, K = a.shape
     K, N = b.shape
     c = torch.empty((M, N), device=a.device, dtype=a.dtype)
