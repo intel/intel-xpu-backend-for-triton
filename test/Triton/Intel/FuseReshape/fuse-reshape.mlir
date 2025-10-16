@@ -63,7 +63,7 @@ tt.func public @fuseLoadWithReshape2(%arg0: !tt.ptr<tensor<32x256xbf16>>, %arg1:
 // CHECK: [[ADD2:%.*]] = arith.addi [[MUL2]], %c0_i32 : i32
 // CHECK: [[PTR:%.*]] = tt.make_tensor_ptr %arg1, [%c1024_i64, [[ADD1]]], [%c1_i64, %c512_i64], [%c32_i32, [[ADD2]]] {order = array<i32: 0, 1>} : <tensor<256x32xbf16>>
 // CHECK: scf.for
-// CHECK:   [[LOAD_A:%.*]] = tt.load [[PTR]] : !tt.ptr<tensor<256x32xbf16>>
+// CHECK:   [[LOAD_A:%.*]] = tt.load [[PTR]] {boundaryCheck = array<i32: 0>} : !tt.ptr<tensor<256x32xbf16>>
 // CHECK:   tt.dot [[LOAD_A]], {{.*}}, {{.*}}, inputPrecision = tf32 : tensor<256x32xbf16> * tensor<32x256xbf16> -> tensor<256x256xf32>
 
 // -----

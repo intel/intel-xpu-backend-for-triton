@@ -24,23 +24,6 @@ namespace mlir::triton::intel {
 
 namespace {
 
-// Transform:
-//   %one = arith.constant 1 : i64
-//   %ptr = make_tensor_ptr %q_view, [%q, %q_23, %q_24],
-//            [%q_25, %q_26, %one], [%offset_5, %offset_1_13, %q_28]
-//            {order = array<i32: 2, 1, 0>} : <tensor<1x512x64xf16>>
-//   %load = tt.load %ptr {boundaryCheck = array<i32: 1, 2>}
-//         : !tt.ptr<tensor<1x512x64xf16>>
-//   %a = tt.reshape %load : tensor<1x512x64xf16> -> tensor<512x64xf16>
-//   tt.dot(%a, ...)
-// into:
-//   %one = arith.constant 1 : i64
-//   %ptr = make_tensor_ptr %q_view, [%q_23, %q_24], [%q_26, %one],
-//            [%offset_1_13, %offset_5*%q_25+%q_28]
-//            {order = array<i32: 1, 0>} : <tensor<512x64xf16>>
-//   %a = tt.load %ptr {boundaryCheck = array<i32: 0, 1>}
-//      : !tt.ptr<tensor<512x64xf16>>
-//   tt.dot(%a, ...)
 class FuseReshape {
 private:
   SmallPtrSet<Operation *, 8> cleanUp;
@@ -250,25 +233,10 @@ private:
     auto newLoadOp =
         cast<tt::LoadOp>(mapping.lookup(static_cast<Operation *>(loadOp)));
     ArrayRef<int> boundaryCheck = newLoadOp.getBoundaryCheck();
-
-    switch (boundaryCheck.size()) {
-    case 0:
-      break;
-    case 1:
-    // intentional fall-through
-    case 2: {
-      SmallVector<int> newBoundaryCheck;
-      if ((boundaryCheck[0] - 1) != 0)
-        newBoundaryCheck.push_back((boundaryCheck[0] - 1));
-      if (boundaryCheck.size() == 2 && (boundaryCheck[1] - 1) != 0)
-        newBoundaryCheck.push_back(boundaryCheck[1] - 1);
-      newLoadOp.setBoundaryCheck(newBoundaryCheck);
-    } break;
-    default:
-      // Note: while selecting candidates, we already ensured that the original
-      // load's boundary check doesn't check dim zero. So its max rank should
-      // be 2.
-      assert(boundaryCheck.size() != 3 && "Unexpected boundary check rank");
+    for (int idx : boundaryCheck) {
+      assert(idx == (newInnermostDimIdx + 1) &&
+             "Unexpected boundary check idx");
+      newLoadOp.setBoundaryCheck({static_cast<int>(newInnermostDimIdx)});
     }
   }
 
@@ -358,18 +326,6 @@ private:
         break;
       ++innermostDimIdx;
     }
-
-    // Ensure that the innermost stride is one.
-    auto strides = makeTensorPtrOp->getStrides();
-    Value innermostStride = strides[innermostDimIdx];
-    if (!innermostStride.getDefiningOp() ||
-        !isa<arith::ConstantIntOp>(innermostStride.getDefiningOp()))
-      return false;
-
-    auto integerCst =
-        cast<arith::ConstantIntOp>(innermostStride.getDefiningOp());
-    if (integerCst.value() != 1)
-      return false;
 
     // Ensure the load operation checks at most the innermost dimension.
     return llvm::all_of(loadOp.getBoundaryCheck(),
