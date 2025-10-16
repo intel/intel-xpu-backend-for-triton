@@ -8,16 +8,11 @@ import sys
 def run_load_ir(temp_file, elem_size, *args):
     out_type = f"i{int(elem_size) * 4}"
     ir = f"""
-    module attributes {{
-        ttg.target = "xpu",
-        "ttg.num-warps" = 32 : i32,
-        "ttg.num-ctas" = 1 : i32,
-        "ttg.threads-per-warp" = 16 : i32
-        }} {{
+    module attributes {{ttg.target = "xpu", "ttg.num-warps" = 32 : i32,
+        "ttg.num-ctas" = 1 : i32, "ttg.threads-per-warp" = 16 : i32}} {{
         tt.func @dyn_block(
-            %iptr : i64, %base_width : i32,
-            %base_height : i32, %base_pitch : i32,
-            %x : i32, %y : i32) {{
+            %iptr: i64, %base_width: i32, %base_height: i32, %base_pitch: i32,
+            %x: i32, %y: i32) {{
             %p0 = llvm.inttoptr %iptr : i64 to !llvm.ptr
 
             %v = triton_gen.2Dblockload %p0, %base_width, %base_height,
@@ -28,7 +23,7 @@ def run_load_ir(temp_file, elem_size, *args):
                 : (!llvm.ptr, i32, i32, i32, i32, i32)
                 -> vector<1x{out_type}>
 
-            // prevent GluonInline
+            // To prevent gluon-inline from removing the unused 2Dblockload call.
             %v_cast = llvm.bitcast %v : vector<1x{out_type}> to {out_type}
             llvm.inline_asm has_side_effects asm_dialect = att
                 "", "r" %v_cast : ({out_type}) -> ()
