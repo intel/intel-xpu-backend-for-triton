@@ -32,12 +32,8 @@ def get_flex_attn_fwd_configs(*args, **kwargs):  # pylint: disable=unused-argume
 def get_flex_decode_configs(*args, **kwargs):  # pylint: disable=unused-argument
     configs = [
         FlexDecodeConfig(32, 1, 1),
-        FlexDecodeConfig(32, 2, 2),
-        FlexDecodeConfig(32, 2, 1),
-        #FlexDecodeConfig(64, 1, 2),
-        #FlexDecodeConfig(64, 1, 1),
-        #FlexDecodeConfig(64, 2, 2),
-        #FlexDecodeConfig(64, 2, 1),
+        #FlexDecodeConfig(32, 2, 2),
+        #FlexDecodeConfig(32, 2, 1),
     ]
     return configs
 
