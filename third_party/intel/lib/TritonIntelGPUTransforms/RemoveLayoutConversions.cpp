@@ -1,13 +1,10 @@
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
-#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
-#include "mlir/IR/Location.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
-#include "mlir/IR/Value.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Interfaces/InferTypeOpInterface.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
@@ -29,7 +26,6 @@
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
-#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include <deque>
 
@@ -1213,43 +1209,13 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
       llvm::errs().indent(2) << "(" << op << "): ";
       op->dumpPretty();
       llvm::errs() << "\n";
-
-#if 0
-      llvm::errs() << "mapping:\n";
-      if (mapping.getValueMap().values().empty())
-        llvm::errs().indent(2) << "Values: empty" << "\n";
-      else {
-        llvm::errs().indent(2) << "Values:\n";
-        for (auto pair : mapping.getValueMap()) {
-          auto first = pair.first;
-          auto second = pair.second;
-          llvm::errs().indent(4);
-          first.printAsOperand(llvm::errs(), {});
-          llvm::errs() << " -> ";
-          second.printAsOperand(llvm::errs(), {});
-          llvm::errs() << "\n";
-        }
-      }
-      if (mapping.getOperationMap().values().empty())
-        llvm::errs().indent(2) << "Operations: empty" << "\n";
-      else {
-        llvm::errs().indent(2) << "Operations:\n";
-        for (auto pair : mapping.getOperationMap()) {
-          auto first = pair.first;
-          auto second = pair.second;
-          llvm::errs().indent(4) << *first << "\n";
-          llvm::errs().indent(4) << " -> " << *second << "\n";
-        }
-      }
-      //    assert(mapping.getBlockMap().values().empty());
-#endif
     });
 
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
       SmallVector<Value> newOperands;
       if (enableForLoopSupport) {
-        // Construct the new initialization argument by adding yielded
-        // operands that have been remapped.
+        // Construct the new initialization argument by adding yielded operands
+        // that have been remapped.
         auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
         auto yieldOperands = llvm::to_vector(yieldOp.getOperands());
         SmallVector<int> operandsToRewrite = yieldOperandsMap[yieldOp];
@@ -1350,7 +1316,6 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
       }
       continue;
     }
-
     if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
       SmallVector<Type> newTypes;
       for (auto res : ifOp.getResults()) {
@@ -1388,7 +1353,6 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
       deadOps.push_back(ifOp.getOperation());
       continue;
     }
-
     builder.setInsertionPoint(op);
     if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
       auto yieldOperands = llvm::to_vector(yieldOp.getOperands());
@@ -1532,8 +1496,7 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
       addRematValue(old, it->second, newV);
     }
   }
-  // Check mapping and see if there are existing convertOps on the old
-  // Argument
+  // Check mapping and see if there are existing convertOps on the old Argument
   convertOp.replaceAllUsesWith(mapping.lookup(convertOp.getSrc()));
   opToDelete.insert(convertOp);
 
@@ -1626,21 +1589,6 @@ void LayoutRematerialization::backwardRematerialization() {
       addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
                     convertOp.getResult());
     }
-
-#if 0
-    for (Operation *op : llvm::reverse(opToDelete)) {
-      if (op == convertOp)
-        continue;
-      if (op->getUsers().empty())
-        op->erase();
-    }
-
-    auto mod = convertOp->getParentOfType<ModuleOp>();
-    llvm::errs() << "mod:\n";
-    mod->dumpPretty();
-    llvm::errs() << "\n";
-    assert(succeeded(verify(mod)) && "Module verification failed");
-#endif
   }
 
   reduceLoopCarriedValues();
@@ -1724,8 +1672,8 @@ void LayoutRematerialization::backwardRematerialization(
   Value oldV = convertOp.getSrc();
   LDBG("check backward remat with source " << oldV << " encoding "
                                            << targetType.getEncoding());
-  // Check to see if there are existing remat'ed values for the pair of
-  // oldValue and encoding. Make sure it dominates the current conversion.
+  // Check to see if there are existing remat'ed values for the pair of oldValue
+  // and encoding. Make sure it dominates the current conversion.
   Value newV = getRematValue(oldV, targetType.getEncoding());
   if (newV && domInfo.properlyDominates(newV, convertOp)) {
     // Replace it with the remat'ed value.
@@ -1837,8 +1785,8 @@ void LayoutRematerialization::backwardRematerialization(
       auto reduceOp = dyn_cast<ReduceOp>(op);
       ReduceOpHelper helper(reduceOp);
       if (!helper.isAssociative()) {
-        // We shouldn't rematerize a no associative reduce op if it has
-        // multiple use chain.
+        // We shouldn't rematerize a no associative reduce op if it has multiple
+        // use chain.
         LDBG("  skipped rematerialization due to non-associative reduce in "
              "the "
              "slice");
@@ -1924,14 +1872,14 @@ void LayoutRematerialization::hoistConvertDotOperand(
   if (!canBePipelined(convertOp))
     return;
 
-  // We hoist over any operation that can be done without data movement
-  // between threads We do views and elementwise pure ops for now
+  // We hoist over any operation that can be done without data movement between
+  // threads We do views and elementwise pure ops for now
   auto noDataMovement = [](Operation *op) {
     return (op->hasTrait<OpTrait::Elementwise>() && isMemoryEffectFree(op)) ||
            isa<BroadcastOp, Fp4ToFpOp, ConvertLayoutOp>(op) || isView(op);
   };
-  // Stop the slice as soon as we find an operation that cannot be done
-  // without data movement between threads
+  // Stop the slice as soon as we find an operation that cannot be done without
+  // data movement between threads
   auto stop = std::not_fn(noDataMovement);
 
   SetVector<Value> slice;
@@ -1991,8 +1939,8 @@ void LayoutRematerialization::hoistConvertDotOperand(
   rewriteSlice(innerSlice, layout, convertOp, mapping);
 }
 
-// For convert left we try to hoist them above type extension to reduce the
-// cost of the convert.
+// For convert left we try to hoist them above type extension to reduce the cost
+// of the convert.
 void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     ConvertLayoutOp convertOp) {
   // DotOperand is hoisted by hoistDotOperand
@@ -2094,8 +2042,7 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
 void LayoutRematerialization::hoistConvertIntoConditionals(
     ConvertLayoutOp convertOp) {
   // Take the backward slice of tensor dependencies rooted at the conversion,
-  // stopping at conditionals. This subslice is used to initialize the
-  // analysis.
+  // stopping at conditionals. This subslice is used to initialize the analysis.
   SetVector<Value> slice;
   DenseMap<Value, Attribute> layout;
   auto isIfOp = [](Operation *op) { return isa<scf::IfOp>(op); };
@@ -2104,17 +2051,17 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
                                       layout, isIfOp)))
     return;
 
-  // These are the conditional edges above which conversions should be
-  // hoisted. The value represents the `scf.if` op result and the operand
-  // represents the edge into one of the branches.
+  // These are the conditional edges above which conversions should be hoisted.
+  // The value represents the `scf.if` op result and the operand/ represents the
+  // edge into one of the branches.
   SmallVector<std::pair<Value, OpOperand *>> hoistAbove;
 
-  // The list of `scf.if` op results in the slice that are not
-  // rematerializable. Hoisting is terminated at these values.
+  // The list of `scf.if` op results in the slice that are not rematerializable.
+  // Hoisting is terminated at these values.
   SmallVector<OpResult> terminals;
 
-  // This loop recurses through the subslices of the backwards dependencies,
-  // so re-query the size of `slice`.
+  // This loop recurses through the subslices of the backwards dependencies, so
+  // re-query the size of `slice`.
   for (unsigned i = 0; i != slice.size(); ++i) {
     Value v = slice[i];
     auto ifOp = v.getDefiningOp<scf::IfOp>();
