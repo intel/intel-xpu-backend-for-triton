@@ -191,7 +191,7 @@ class SpirvUtils:
 
     def __init__(self, cache_path: str):
         self.shared_library = ctypes.PyDLL(cache_path)
-        methods = ("init_devices", "load_binary", "wait_on_sycl_queue", "has_opencl_extension")
+        methods = ("init_devices", "load_binary", "get_native_code", "wait_on_sycl_queue", "has_opencl_extension")
         for method in methods:
             getattr(self.shared_library, method).restype = ctypes.py_object
             getattr(self.shared_library, method).argtypes = (ctypes.py_object, )
@@ -213,6 +213,9 @@ class SpirvUtils:
         # driver.active.utils.load_binary(self.name, self.kernel, self.metadata.shared, self.metadata.build_flags, device) ->
         # driver.active.utils.load_binary((self.name, self.kernel, self.metadata.shared, self.metadata.build_flags, device))
         return self.shared_library.load_binary(args)
+
+    def get_native_code(self, *args):
+        return self.shared_library.get_native_code(args)
 
     if os.name != 'nt':
 
@@ -314,8 +317,10 @@ class XPUUtils(object):
         # and can cause `Fatal Python error: Segmentation fault`
         mod = compile_module_from_src(src=Path(os.path.join(dirname, "driver.c")).read_text(), name="spirv_utils")
         self.load_binary = mod.load_binary
+        self.get_native_code = mod.get_native_code
         self.get_device_properties = mod.get_device_properties
         self.device_count = mod.init_devices(self.get_sycl_queue())
+        # breakpoint()
         self.wait_on_sycl_queue = mod.wait_on_sycl_queue
         self.has_opencl_extension = mod.has_opencl_extension
 
