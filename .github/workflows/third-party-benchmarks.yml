@@ -112,7 +112,7 @@ jobs:
 
           cd benchmarks/third_party/vllm
           FP8="1" python batched_moe_benchmark.py --reports $REPORTS
-          python transform_results.py $REPORTS/moe-gemm-performance.csv $REPORTS/moe-gemm-report.csv --tag $TAG --benchmark moe-fp8-benchmark
+          python transform_results.py $REPORTS/moe-gemm-performance.csv $REPORTS/moe-gemm-fp8-report.csv --tag $TAG --benchmark moe-fp8-benchmark
 
       - name: Run Liger-Kernel benchmarks
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'liger-kernel')) }}
