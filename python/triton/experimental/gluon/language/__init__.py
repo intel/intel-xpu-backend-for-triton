@@ -46,6 +46,7 @@ from ._core import (
     bank_conflicts,
     convert_layout,
     device_assert,
+    device_print,
     dot_fma,
     expand_dims,
     full,
@@ -125,4 +126,5 @@ from ._standard import (
 
 from . import nvidia
 from . import amd
+from . import intel
 from . import extra

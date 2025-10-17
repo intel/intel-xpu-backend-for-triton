@@ -16,13 +16,13 @@ extern "C" {
 #endif
 
 #if !defined(PTI_VERSION)
-#define PTI_VERSION 0.13.1
+#define PTI_VERSION 0.14.0
 #endif
 
-#define PTI_VERSION_STRING "0.13.1"
+#define PTI_VERSION_STRING "0.14.0"
 #define PTI_VERSION_MAJOR 0
-#define PTI_VERSION_MINOR 13
-#define PTI_VERSION_PATCH 1
+#define PTI_VERSION_MINOR 14
+#define PTI_VERSION_PATCH 0
 
 typedef struct pti_version {
   uint32_t _major;
