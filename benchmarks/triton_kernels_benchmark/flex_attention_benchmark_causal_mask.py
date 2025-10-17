@@ -25,6 +25,7 @@ DEVICE = triton.runtime.driver.active.get_active_torch_device()
 def get_flex_attn_fwd_configs(*args, **kwargs):  # pylint: disable=unused-argument
     configs = [
         FlexConfig(32, 16, 2, 4),
+        FlexConfig(64, 32, 2, 4),
         FlexConfig(128, 64, 2, 16),
         FlexConfig(128, 64, 2, 8),
         FlexConfig(128, 32, 2, 16),
