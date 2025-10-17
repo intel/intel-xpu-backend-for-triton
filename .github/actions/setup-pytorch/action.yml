@@ -121,7 +121,6 @@ runs:
         export TORCH_XPU_ARCH_LIST="pvc,bmg,dg2,arl-h,mtl-h"
 
         cd pytorch
-        pip install wheel
         # FIXME: Compatibility with versions of CMake older than 3.5 has been removed, this brakes compilation of third_party/protobuf:
         # CMake Error at third_party/protobuf/cmake/CMakeLists.txt:2 (cmake_minimum_required)
         pip install 'cmake<4.0.0'
