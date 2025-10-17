@@ -1,0 +1,64 @@
+name: Build LLVM
+
+on:
+  workflow_dispatch:
+
+  pull_request:
+    branches:
+      - main-js
+    paths:
+      - cmake/llvm-hash.txt
+      - scripts/build-llvm.sh
+
+permissions: read-all
+
+jobs:
+  build:
+    name: Build
+    runs-on:
+      - glados
+      - docker
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get LLVM repository and commit
+        shell: bash
+        run: |
+          source ./scripts/build-llvm.sh
+          echo "LLVM_REPO=$LLVM_REPO" | tee -a $GITHUB_ENV
+          echo "LLVM_COMMIT=$LLVM_COMMIT" | tee -a $GITHUB_ENV
+
+      - name: Checkout LLVM repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.LLVM_REPO }}
+          ref: ${{ env.LLVM_COMMIT }}
+          path: llvm-project
+          submodules: recursive
+          token: ${{ secrets.GLADOS_TOKEN }}
+
+      - name: Build LLVM
+        run: |
+          source ./scripts/build-llvm.sh
+          build_ubuntu
+
+      # FIXME: install pigz in a base image
+      - name: Install pigz
+        run: |
+          sudo apt update
+          sudo apt install -y pigz
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Upload LLVM
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          pip install awscli
+          source ./scripts/build-llvm.sh
+          upload_ubuntu

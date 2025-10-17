@@ -1,0 +1,231 @@
+name: Build GTA test runner
+
+on:
+  workflow_dispatch:
+    inputs:
+      python:
+        description: Python version
+        default: "3.10"
+      dle_installer:
+        description: DLE installer file name
+        default: "de3686c4-d3e1-41da-bf3b-bf5908da075c/intel-deep-learning-essentials-2025.2.1.24_offline.sh"
+
+permissions: read-all
+
+env:
+  PYTHON_VERSION: ${{ inputs.python }}
+  BENCHMARKING_METHOD: "UPSTREAM_PYTORCH_PROFILER"
+  ONEAPI_DOWNLOAD_URL: "https://registrationcenter-download.intel.com/akdlm/IRC_NAS/"
+  DLE_INSTALLER: ${{ inputs.dle_installer }}
+
+jobs:
+
+  build-installer:
+    name: Build GTA test runner
+    runs-on:
+      - self-hosted
+      - linux
+      - cpu-generic
+    defaults:
+      run:
+        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Force conda-forge channel use only
+        run: |
+          cat > ~/.condarc <<EOF
+          channels:
+            - conda-forge
+          channel_priority: true
+          EOF
+          sudo rm -rf /home/runner/intel
+
+      - name: Create extra files preparation env
+        run: |
+          source ~/miniforge3/bin/activate
+          conda create -n wheels python=$PYTHON_VERSION
+
+      - name: Get nightly wheels
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # PYTHON_VERSION=$(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+          REPO="intel/intel-xpu-backend-for-triton"
+          RUN_ID=$(gh run list --workflow nightly-wheels.yml -R "$REPO" --json databaseId,conclusion | jq -r '[.[] | select(.conclusion=="success")][0].databaseId')
+          echo "Run id - $RUN_ID"
+          mkdir -p wheels
+          WHEEL_PATTERN="wheels-pytorch-py${PYTHON_VERSION}*"
+          echo "WHEEL_PATTERN=$WHEEL_PATTERN"
+          TEMP_DIR=$(mktemp -d)
+          gh run download $RUN_ID \
+          --repo intel/intel-xpu-backend-for-triton \
+          --pattern "$WHEEL_PATTERN" \
+          --dir "$TEMP_DIR"
+          mkdir -p wheels
+          cp $TEMP_DIR/$WHEEL_PATTERN/torch-*.whl wheels/
+          cp $TEMP_DIR/$WHEEL_PATTERN/triton-*.whl wheels/
+          ls -R wheels
+
+      - name: Checkout Triton commit from which nightly wheels were built
+        run: |
+          source ~/miniforge3/bin/activate
+          conda activate wheels
+          pip install packaging
+          pip install wheels/*
+          TRITON_COMMIT=$(python -c "import importlib.metadata; import packaging.version; print(packaging.version.Version(importlib.metadata.version('triton')).local[3:])")
+          git clone --single-branch -b main --recurse-submodules https://github.com/intel/intel-xpu-backend-for-triton.git
+          cd intel-xpu-backend-for-triton
+          git checkout "$TRITON_COMMIT"
+
+      - name: Setup Triton kernels benchmark
+        uses: ./.github/actions/setup-triton-kernels-benchmark
+        with:
+          clone_repo: false
+          conda_env: wheels
+
+      - name: Prepare all binary artifacts to be packaged in the installer
+        run: |
+          source ~/miniforge3/bin/activate
+
+          conda activate wheels
+
+          pip install -r intel-xpu-backend-for-triton/scripts/requirements-test.txt
+          pip install defusedxml
+
+          pip install build
+          cd intel-xpu-backend-for-triton/scripts/triton_utils
+          python -m build --wheel
+          pip install dist/triton_utils-*.whl
+          cd ../../..
+          cp intel-xpu-backend-for-triton/scripts/triton_utils/dist/*.whl wheels/
+
+          pip uninstall -y torch triton triton-kernels-benchmark triton_utils
+          pip freeze >requirements-offline.txt
+          pip download -r requirements-offline.txt -d wheels
+
+          # Create Triton test env wheels and repo tarballs
+          cp -L intel-xpu-backend-for-triton/benchmarks/dist/*.whl wheels/
+          tar -czvf wheels.tar.gz wheels
+          tar -czvf intel-xpu-backend-for-triton.tar.gz intel-xpu-backend-for-triton
+
+          # Download DLE and Vulkan SDK
+          wget -O intel-deep-learning-essentials_offline.sh "${ONEAPI_DOWNLOAD_URL}${DLE_INSTALLER}"
+          wget -O vulkan-sdk.tar.xz https://sdk.lunarg.com/sdk/download/latest/linux/vulkan-sdk.tar.xz
+
+          # Prepare run_triton_tests.sh script for upload
+          cp gta_integration/constructor/run_triton_tests.sh .
+          # cp scripts/pass_rate_utils.py .
+
+      - name: Build constructor installer
+        run: |
+          source ~/miniforge3/bin/activate
+          conda create -n constructor python=$PYTHON_VERSION constructor
+          conda activate constructor
+          constructor gta_integration/constructor/
+
+      - name: Upload built installer artifact and tests runner script
+        uses: actions/upload-artifact@v4
+        with:
+          name: triton-xpu-installer
+          path: |
+            TritonXPU-GTA.sh
+            run_triton_tests.sh
+
+
+  test-installer:
+    name: Test GTA installer
+    needs: [build-installer]
+    runs-on:
+      - glados
+      - pvc
+
+    strategy:
+      matrix:
+        suite:
+          - language
+          # - triton-benchmarks
+          # - tutorials
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download built installer artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: triton-xpu-installer
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python }}
+
+      - name: Run the installer in silent mode
+        continue-on-error: true
+        run: |
+          sudo rm -rf /home/runner/intel
+          # FIX for the offline installer issue - https://jira.devtools.intel.com/browse/INST-26161
+          sudo chown -R runner:runner /tmp/runner
+          export LC_ALL=C.UTF-8
+          /bin/sh -x TritonXPU-GTA.sh -b
+
+      - name: Run ${{ matrix.suite }} tests
+        continue-on-error: true
+        run: |
+          bash -x run_triton_tests.sh ${{ matrix.suite }}
+
+      - name: Upload test reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: test_reports_${{ matrix.suite }}
+          path: |
+            /home/runner/reports/*.xml
+            /home/runner/reports/**/*.csv
+
+
+  # test-installer-benchmarks:
+  #   name: Generate abn_metadata.json
+  #   needs: [test-installer]
+  #   runs-on:
+  #     - glados
+
+  #   steps:
+  #     - name: Checkout repository
+  #       uses: actions/checkout@v4
+
+  #     - name: Install Python
+  #       uses: actions/setup-python@v5
+  #       with:
+  #         python-version: ${{ inputs.python }}
+
+  #     - name: Download all matrix test reports
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         pattern: test_reports_*
+  #         path: reports
+  #         merge-multiple: true
+
+  #     # - name: Merge downloaded report files
+  #     #   run: |
+  #     #     mkdir -p reports
+  #     #     for entry in reports_raw/*; do
+  #     #       if [ -d "$entry" ]; then
+  #     #         cp "$entry"/* reports/ 2>/dev/null || true
+  #     #       elif [ -f "$entry" ]; then
+  #     #         cp "$entry" reports/ 2>/dev/null || true
+  #     #       fi
+  #     #     done
+
+  #     - name: Generate abn_metadata.json
+  #       run: |
+  #         pip install defusedxml
+  #         python scripts/pass_rate_utils.py --reports reports
+
+  #     - name: Upload generated abn_metadata.json
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: testmetadata
+  #         path: |
+  #           abn_metadata.json
