@@ -1,3 +1,5 @@
+# https://github.com/intel-tools/intel-xpu-backend-for-triton/issues/651
+python/test/unit/intel/test_core.py::test_reduce_layouts[sum-int32-True-reduce1d-1-src_layout5-32-32]
 # Simulator error
 python/test/unit/intel/test_block_io.py::test_block_io[False-False-layout0-int8-128-64]
 python/test/unit/intel/test_block_io.py::test_block_io[False-False-layout0-int8-32-64]
