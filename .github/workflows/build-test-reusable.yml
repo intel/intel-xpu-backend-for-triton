@@ -119,7 +119,6 @@ jobs:
           mode: ${{ inputs.pytorch_mode }}
 
       - name: Build Proton with XPU support
-        if: inputs.driver_version == 'rolling' && inputs.device == 'max1100'
         run: |
           echo TRITON_BUILD_PROTON_XPU=1 | tee -a $GITHUB_ENV
 
@@ -130,7 +129,7 @@ jobs:
           use_spirv_backend: ${{ inputs.use_spirv_backend }}
           command: >
             DEBUG=1
-            python setup.py bdist_wheel && pip install dist/*.whl
+            python -m build --wheel --no-isolation && pip install dist/*.whl
 
       - name: Set test-triton command line
         id: test-triton
@@ -285,12 +284,24 @@ jobs:
         run: |
           echo "TRITON_TEST_CMD=${{ needs.build.outputs.test-triton-command }}" | tee -a $GITHUB_ENV
 
-      - name: Run Proton tests
-        if: matrix.suite == 'rest' && inputs.driver_version == 'rolling' && inputs.device == 'max1100'
+      - name: Build PTI && Run Proton tests
+        if: matrix.suite == 'rest'
         run: |
+          PTI_COMMIT_ID="$(<.github/pins/pti.txt)"
+          git clone https://github.com/intel/pti-gpu.git
+          cd pti-gpu
+          git checkout $PTI_COMMIT_ID
+          cd sdk
+          cmake --preset linux-icpx-release
+          BUILD_TESTING=1 PTI_BUILD_SAMPLES=1 cmake --build --preset linux-icpx-release
+
+          PTI_LIBS_DIR="$(pwd)/build-linux-icpx-release/lib/"
+          cd ../..
+
+          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
+          export TRITON_XPUPTI_LIB_PATH=$PTI_LIBS_DIR
           cd third_party/proton/test
-          # FIXME: enable 'test_record.py' back
-          pytest test_api.py test_lib.py test_profile.py test_viewer.py -s -v
+          pytest test_api.py test_cmd.py test_lib.py test_profile.py test_viewer.py -s -v
           cd ..
 
       - name: Run minicore tests
@@ -384,7 +395,7 @@ jobs:
   reports:
     name: Reports
     runs-on:
-      - linux
+      - runner-0.0.22
     needs: integration-tests
     steps:
       - name: Checkout repository

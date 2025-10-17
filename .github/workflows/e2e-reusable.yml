@@ -56,6 +56,7 @@ jobs:
     name: Test ${{ inputs.suite }} ${{ inputs.dtype }} ${{ inputs.mode }} ${{ inputs.test_mode }}
     runs-on:
       - linux
+      - rolling
       - ${{ inputs.runner_label || 'max1550' }}
     timeout-minutes: 720
     defaults:
@@ -88,9 +89,10 @@ jobs:
         run: |
           # cmake 3.22.1 does not work with the recent torchaudio: https://github.com/intel/intel-xpu-backend-for-triton/issues/2079
           # cmake<4.0.0 is required as a workaround for CMake Error at third_party/double-conversion/CMakeLists.txt:1 (cmake_minimum_required)
-          pip install wheel 'cmake<4.0.0'
+          pip install wheel 'cmake<4.0.0' build
 
       - name: Setup PyTorch
+        id: setup-pytorch
         uses: ./.github/actions/setup-pytorch
         with:
           ref: ${{ inputs.pytorch_ref }}
@@ -120,7 +122,7 @@ jobs:
         if: ${{ steps.triton-cache.outputs.status == 'miss' }}
         uses: ./.github/actions/setup-triton
         with:
-          command: DEBUG=1 python setup.py bdist_wheel
+          command: DEBUG=1 python -m build --wheel --no-isolation
 
       - name: Install Triton
         run: |
@@ -150,7 +152,7 @@ jobs:
           package: torchvision
           repository: pytorch/vision
           ref: ${{ env.TORCHVISION_COMMIT_ID }}
-          extra-cache-key: ${{ env.PYTORCH_VERSION }}
+          extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
 
       - name: Install torchaudio package
         if: ${{ inputs.suite == 'torchbench' }}
@@ -159,7 +161,7 @@ jobs:
           package: torchaudio
           repository: pytorch/audio
           ref: ${{ env.TORCHAUDIO_COMMIT_ID }}
-          extra-cache-key: ${{ env.PYTORCH_VERSION }}
+          extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
 
       - name: Install timm package
         if: ${{ inputs.suite == 'timm_models' || inputs.suite == 'torchbench' }}
@@ -168,7 +170,7 @@ jobs:
           package: timm
           repository: huggingface/pytorch-image-models
           ref: ${{ env.TIMM_COMMIT_ID }}
-          extra-cache-key: ${{ env.PYTORCH_VERSION }}
+          extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
 
       - name: Clone pytorch benchmark
         if: ${{ inputs.suite == 'torchbench' }}

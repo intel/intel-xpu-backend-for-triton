@@ -118,5 +118,6 @@ python/test/unit/intel/test_block_io.py::test_block_io[True-False-layout8-int8-6
 python/test/unit/intel/test_block_io.py::test_block_io[True-False-layout9-int8-128-64]
 python/test/unit/intel/test_block_io.py::test_block_io[True-False-layout9-int8-32-64]
 python/test/unit/intel/test_block_io.py::test_block_io[True-False-layout9-int8-64-64]
+python/test/unit/intel/test_block_load.py::test_block_load_asserts
 python/test/unit/intel/test_core.py::test_reduce_layouts[sum-int32-True-expand_reduce2d-1-src_layout5-32-32]
 python/test/unit/intel/test_core.py::test_reduce_layouts[sum-int32-True-reduce2d-1-src_layout5-32-32]

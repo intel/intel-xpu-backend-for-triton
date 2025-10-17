@@ -1,0 +1,59 @@
+diff --git a/lib/SPIRV/SPIRVWriter.cpp b/lib/SPIRV/SPIRVWriter.cpp
+index d363f060a..28f83d661 100644
+--- a/lib/SPIRV/SPIRVWriter.cpp
++++ b/lib/SPIRV/SPIRVWriter.cpp
+@@ -4211,20 +4211,6 @@ SPIRVValue *LLVMToSPIRVBase::transIntrinsicInst(IntrinsicInst *II,
+   // -spirv-allow-unknown-intrinsics work correctly.
+   auto IID = II->getIntrinsicID();
+   switch (IID) {
+-  case Intrinsic::fabs:
+-  case Intrinsic::fma:
+-  case Intrinsic::maxnum:
+-  case Intrinsic::minnum:
+-  case Intrinsic::fmuladd: {
+-    Type *Ty = II->getType();
+-    if (Ty->isBFloatTy())
+-      BM->addCapability(internal::CapabilityBFloat16ArithmeticINTEL);
+-    break;
+-  }
+-  default:
+-    break;
+-  }
+-  switch (IID) {
+   case Intrinsic::assume: {
+     // llvm.assume translation is currently supported only within
+     // SPV_KHR_expect_assume extension, ignore it otherwise, since it's
+@@ -5508,11 +5494,6 @@ SPIRVValue *LLVMToSPIRVBase::transDirectCallInst(CallInst *CI,
+   SmallVector<std::string, 2> Dec;
+   if (isBuiltinTransToExtInst(CI->getCalledFunction(), &ExtSetKind, &ExtOp,
+                               &Dec)) {
+-    if (const auto *FirstArg = F->getArg(0)) {
+-      const auto *Type = FirstArg->getType();
+-      if (Type->isBFloatTy())
+-        BM->addCapability(internal::CapabilityBFloat16ArithmeticINTEL);
+-    }
+     if (DemangledName.find("__spirv_ocl_printf") != StringRef::npos) {
+       auto *FormatStrPtr = cast<PointerType>(CI->getArgOperand(0)->getType());
+       if (FormatStrPtr->getAddressSpace() !=
+diff --git a/lib/SPIRV/libSPIRV/SPIRVModule.cpp b/lib/SPIRV/libSPIRV/SPIRVModule.cpp
+index a680574ec..2ff1df097 100644
+--- a/lib/SPIRV/libSPIRV/SPIRVModule.cpp
++++ b/lib/SPIRV/libSPIRV/SPIRVModule.cpp
+@@ -1732,8 +1732,6 @@ SPIRVInstruction *SPIRVModuleImpl::addBinaryInst(Op TheOpCode, SPIRVType *Type,
+                                                  SPIRVValue *Op1,
+                                                  SPIRVValue *Op2,
+                                                  SPIRVBasicBlock *BB) {
+-  if (Type->isTypeFloat(16, FPEncodingBFloat16KHR) && TheOpCode != OpDot)
+-    addCapability(internal::CapabilityBFloat16ArithmeticINTEL);
+   return addInstruction(SPIRVInstTemplateBase::create(
+                             TheOpCode, Type, getId(),
+                             getVec(Op1->getId(), Op2->getId()), BB, this),
+@@ -1757,8 +1755,6 @@ SPIRVInstruction *SPIRVModuleImpl::addUnaryInst(Op TheOpCode,
+                                                 SPIRVType *TheType,
+                                                 SPIRVValue *Op,
+                                                 SPIRVBasicBlock *BB) {
+-  if (TheType->isTypeFloat(16, FPEncodingBFloat16KHR) && TheOpCode != OpDot)
+-    addCapability(internal::CapabilityBFloat16ArithmeticINTEL);
+   return addInstruction(
+       SPIRVInstTemplateBase::create(TheOpCode, TheType, getId(),
+                                     getVec(Op->getId()), BB, this),
