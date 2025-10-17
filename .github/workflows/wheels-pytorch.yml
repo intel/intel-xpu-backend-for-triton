@@ -113,6 +113,9 @@ jobs:
           $env:USE_XCCL = "1"
           $env:CIBW_BEFORE_BUILD = "pip install -r requirements.txt"
 
+
+          $env:DEBUG = "1"
+
           python -m cibuildwheel --output-dir wheelhouse
 
       - name: Artifact name
