@@ -93,6 +93,24 @@ jobs:
           cd benchmarks
           pip install .
 
+      - name: Run sglang benchmark int8
+        if: ${{ steps.install-benchmarks.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm')) }}
+        run: |
+          source ./scripts/capture-hw-details.sh
+
+          cd benchmarks/third_party/sglang
+          python scaled_mm_benchmark.py --reports $REPORTS
+          python ../vllm/transform_results.py $REPORTS/scaled_mm_benchmark.csv $REPORTS/scaled-mm-int8-report.csv --tag $TAG --benchmark scaled-mm-int8
+
+      - name: Run sglang benchmark with fp8
+        if: ${{ steps.install-benchmarks.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm')) }}
+        run: |
+          source ./scripts/capture-hw-details.sh
+
+          cd benchmarks/third_party/sglang
+          FP8="1" python scaled_mm_benchmark.py --reports $REPORTS
+          python ../vllm/transform_results.py $REPORTS/scaled_mm_benchmark.csv $REPORTS/scaled-mm-fp8-report.csv --tag $TAG --benchmark scaled-mm-fp8
+
       - name: Run vllm benchmarks bf16
         if: ${{ steps.install-benchmarks.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm')) }}
         run: |
