@@ -1,4 +1,4 @@
-from triton.backends.compiler import BaseBackend, Language
+from triton.backends.compiler import BaseBackend, GPUTarget, Language
 from triton._C.libtriton import ir, passes, llvm, intel
 from triton.backends.intel.driver import compile_module_from_src
 from triton.backends.intel.track import track
@@ -14,6 +14,11 @@ import signal
 import os
 import subprocess
 from pathlib import Path
+
+try:  # XPUBackend allows metaclasses injection
+    from .meta import XPUBackendMeta
+except ImportError:
+    XPUBackendMeta = type(BaseBackend)
 
 
 @dataclass
@@ -63,41 +68,42 @@ class XPUOptions:
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
-def min_dot_size(device_props: dict):
-    # (M, N, K)
-    # M: repeatCount. 1,2,4,8
-    # N: executionSize. 16 for PVC, 8 for ATS
-    # K: systolicDepth x opsPerChan. systolicDepth must be 8
-    repeat_count = 1
-    sdepth = 8
-    exec_size = min(device_props["sub_group_sizes"])
-
-    def get_ops_per_channel(lhs_type, rhs_type):
-        l_bitwidth = lhs_type.scalar.primitive_bitwidth
-        r_bitwidth = rhs_type.scalar.primitive_bitwidth
-        max_ops_per_chan = 32 / max(l_bitwidth, r_bitwidth)
-        return min(8, max_ops_per_chan)
-
-    return lambda lhs_type, rhs_type: (repeat_count, exec_size, sdepth * get_ops_per_channel(lhs_type, rhs_type))
-
-
-class XPUBackend(BaseBackend):
+class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
+    arch_to_impl = {}  # Architecture id to backend implementation class mapping
+    binary_ext = "spv"
+    target_arch = "spir64"
     device_props: dict = {}
     instrumentation = None
 
     @staticmethod
-    def supports_target(target: tuple):
+    def supports_target(target: GPUTarget):
         return target.backend == 'xpu'
 
-    def __init__(self, target: tuple) -> None:
-        super().__init__(target)
+    def __new__(cls, target: GPUTarget):
         if not isinstance(target.arch, dict):
             raise TypeError("target.arch is not a dict")
-        dirname = os.path.dirname(os.path.realpath(__file__))
-        mod = compile_module_from_src(src=Path(os.path.join(dirname, "arch_parser.c")).read_text(), name="arch_utils")
-        self.device_arch = knobs.intel.device_arch or mod.parse_device_arch(target.arch.get('architecture', 0))
+        if cls is not XPUBackend:
+            return super().__new__(cls)
+        arch = target.arch.get("architecture", 0)
+        if (impl := cls.arch_to_impl.get(arch, None)) is None:
+            # Try to find an arch-specific implementation in the .arch.<name> submodule.
+            if not (dev_arch := knobs.intel.device_arch):
+                dirname = os.path.dirname(os.path.realpath(__file__))
+                parser = compile_module_from_src(src=Path(os.path.join(dirname, "arch_parser.c")).read_text(),
+                                                 name="arch_utils")
+                dev_arch = parser.parse_device_arch(target.arch.get('architecture', 0))
+            mod_name = f"{__package__}.arch.{dev_arch}"
+            try:
+                impl = __import__(mod_name, fromlist=["XPUBackendImpl"]).XPUBackendImpl
+            except ImportError:
+                impl = type(f"{mod_name}.XPUBackendImpl", (cls, ), {})
+            impl.device_arch = dev_arch
+            cls.arch_to_impl[arch] = impl
+        return super().__new__(impl)
+
+    def __init__(self, target: GPUTarget) -> None:
+        super().__init__(target)
         self.properties = self.parse_target(target.arch)
-        self.binary_ext = "spv"
 
     def get_target_name(self, options) -> str:
         return f"xpu:{self.device_arch}"
@@ -131,18 +137,36 @@ class XPUBackend(BaseBackend):
         return dev_prop
 
     def parse_options(self, opts) -> Any:
-        args = {k: opts[k] for k in XPUOptions.__dataclass_fields__.keys() if k in opts}
+        args = {k: v for k, v in opts.items() if k in XPUOptions.__dataclass_fields__}
         args["allow_fp8e4nv"] = True
         return XPUOptions(**args)
 
     def pack_metadata(self, metadata):
         return metadata
 
+    @staticmethod
+    def min_dot_size(device_props: dict):
+        # (M, N, K)
+        # M: repeatCount. 1,2,4,8
+        # N: executionSize. 16 for PVC, 8 for ATS
+        # K: systolicDepth x opsPerChan. systolicDepth must be 8
+        repeat_count = 1
+        sdepth = 8
+        exec_size = min(device_props["sub_group_sizes"])
+
+        def get_ops_per_channel(lhs_type, rhs_type):
+            l_bitwidth = lhs_type.scalar.primitive_bitwidth
+            r_bitwidth = rhs_type.scalar.primitive_bitwidth
+            max_ops_per_chan = 32 / max(l_bitwidth, r_bitwidth)
+            return min(8, max_ops_per_chan)
+
+        return lambda lhs_type, rhs_type: (repeat_count, exec_size, sdepth * get_ops_per_channel(lhs_type, rhs_type))
+
     def get_codegen_implementation(self, options):
         from triton.language.extra.intel import convert_custom_float8
         codegen_fns = {}
         codegen_fns["convert_custom_types"] = convert_custom_float8
-        codegen_fns["min_dot_size"] = min_dot_size(self.properties)
+        codegen_fns["min_dot_size"] = self.min_dot_size(self.properties)
         return codegen_fns
 
     def get_module_map(self) -> Dict[str, ModuleType]:
@@ -151,8 +175,8 @@ class XPUBackend(BaseBackend):
 
     def load_dialects(self, ctx):
         intel.load_dialects(ctx)
-        if XPUBackend.instrumentation:
-            XPUBackend.instrumentation.load_dialects(ctx)
+        if self.instrumentation:
+            self.instrumentation.load_dialects(ctx)
 
     @staticmethod
     def validate_options(opt, properties):
@@ -166,20 +190,15 @@ class XPUBackend(BaseBackend):
                 f"num_warps={opt.num_warps} is unsupported for the target (limit is {properties['max_num_sub_groups']})"
             )
 
-    @staticmethod
-    def annotate_module(mod, properties, opt, target_arch):
+    @classmethod
+    def annotate_module(cls, module_opts, properties, opt):
         # Annotate module with information required by subsequent transformations.
-        pm = ir.pass_manager(mod.context)
-        pm.enable_debug()
-        module_opts = intel.passes.ttgpuir.AnnotateModuleOptions()
         module_opts.min_sg_size = min(properties["sub_group_sizes"])
         module_opts.support_sg_2d_block = properties["has_subgroup_2d_block_io"]
         module_opts.support_dpas = properties["has_subgroup_matrix_multiply_accumulate"]
         module_opts.support_bf16_conversion = properties["has_bfloat16_conversions"]
         module_opts.threads_per_warp = opt.warp_size
-        module_opts.target_arch = target_arch
-        intel.passes.ttgpuir.add_triton_annotate_module(pm, module_opts)
-        pm.run(mod, 'annotate_module')
+        module_opts.target_arch = cls.target_arch
 
     @staticmethod
     def get_split_barrier_scope(opt):
@@ -190,30 +209,88 @@ class XPUBackend(BaseBackend):
             split_barriers_scope = intel.SplitBarrierScope.Subgroup
         return split_barriers_scope
 
-    @staticmethod
-    @track
-    def make_ttir(mod, metadata, opt):
-        pm = ir.pass_manager(mod.context)
+    @classmethod
+    def create_pass_manager(cls, context, add_passes=[]):
+        pm = ir.pass_manager(context)
         pm.enable_debug()
-        passes.common.add_inliner(pm)
-        intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
-        passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
-        passes.common.add_cse(pm)
-        passes.common.add_licm(pm)
-        intel.passes.ttir.add_remove_masks(pm)
-        intel.passes.ttir.add_fuse_reshape(pm)
-        passes.common.add_canonicalizer(pm)
-        passes.ttir.add_combine(pm)
-        passes.ttir.add_reorder_broadcast(pm)
-        passes.common.add_cse(pm)
-        passes.common.add_symbol_dce(pm)
-        passes.ttir.add_loop_unroll(pm)
+        for p in add_passes:
+            if p is None:
+                continue
+            elif isinstance(p, tuple):
+                p[0](pm, *p[1:])
+            else:
+                p(pm)
+        return pm
+
+    @classmethod
+    def get_ttir_passes(cls, opt):
+        return [
+            passes.common.add_inliner,
+            intel.passes.ttir.add_convert_tdesc_to_block_pointer,
+            passes.ttir.add_rewrite_tensor_descriptor_to_pointer,
+            passes.common.add_cse,
+            passes.common.add_licm,
+            intel.passes.ttir.add_remove_masks,
+            intel.passes.ttir.add_fuse_reshape,
+            passes.common.add_canonicalizer,
+            passes.ttir.add_combine,
+            passes.ttir.add_reorder_broadcast,
+            passes.common.add_cse,
+            passes.common.add_symbol_dce,
+            passes.ttir.add_loop_unroll,
+        ]
+
+    @classmethod
+    @track
+    def make_ttir(cls, mod, metadata, opt):
+        pm = cls.create_pass_manager(mod.context, cls.get_ttir_passes(opt))
         pm.run(mod, 'make_ttir')
         return mod
 
-    @staticmethod
+    @classmethod
+    def get_ttgir_passes(cls, opt):
+        # fmt: off
+        return [
+            (passes.ttir.add_convert_to_ttgpuir, "xpu", opt.num_warps, opt.warp_size, opt.num_ctas),
+            # optimize TTGIR
+            intel.passes.ttgpuir.add_coalesce,
+            intel.passes.ttgpuir.add_remove_layout_conversions,
+
+            intel.passes.ttgpuir.add_accelerate_matmul,
+            intel.passes.ttgpuir.add_materialize_block_pointer,
+            intel.passes.ttgpuir.add_remove_layout_conversions,
+            intel.passes.ttgpuir.add_optimize_dot_operands,
+            (intel.passes.ttgpuir.add_pipeline, opt.num_stages, cls.get_split_barrier_scope(opt)),
+
+            intel.passes.ttgpuir.add_reduce_variable_liveness if opt.reduce_variable_liveness else None,
+
+            passes.ttgpuir.add_fuse_nested_loops,
+
+            passes.common.add_canonicalizer,
+            passes.ttir.add_triton_licm,
+            passes.common.add_canonicalizer,
+            passes.ttgpuir.add_combine_tensor_select_and_if,
+
+            passes.ttgpuir.add_optimize_thread_locality,
+            (passes.ttgpuir.add_optimize_dot_operands, True),
+            passes.common.add_cse,
+            passes.ttgpuir.add_prefetch,
+            (passes.ttgpuir.add_optimize_dot_operands, True),
+            intel.passes.ttgpuir.add_remove_layout_conversions,
+            intel.passes.ttgpuir.add_reduce_data_duplication,
+            passes.ttgpuir.add_reorder_instructions,
+            passes.common.add_cse,
+            passes.common.add_symbol_dce,
+            passes.common.add_sccp,
+            passes.common.add_canonicalizer,
+            intel.passes.ttgpuir.add_optimize_reduction_locality if knobs.intel.opt_reduction_locality else None,
+            (intel.passes.arith.add_arith_emulate_unsupported_floats, ["bf16"], "f32")
+        ]
+        # fmt: on
+
+    @classmethod
     @track
-    def make_ttgir(mod, metadata, opt, properties):
+    def make_ttgir(cls, mod, metadata, opt, properties):
         cluster_info = intel.ClusterInfo()
         if opt.cluster_dims is not None:
             cluster_info.clusterDimX = opt.cluster_dims[0]
@@ -221,50 +298,17 @@ class XPUBackend(BaseBackend):
             cluster_info.clusterDimZ = opt.cluster_dims[2]
 
         # Annotate module with information required by subsequent transformations.
-        XPUBackend.annotate_module(mod, properties, opt, "spir64")
+        pm = cls.create_pass_manager(mod.context)
+        module_opts = intel.passes.ttgpuir.AnnotateModuleOptions()
+        cls.annotate_module(module_opts, properties, opt)
+        intel.passes.ttgpuir.add_triton_annotate_module(pm, module_opts)
+        pm.run(mod, 'annotate_module')
 
         # Overwrite the warp_size option with the module annotation.
         opt.warp_size = intel.get_threads_per_warp(mod)
-        XPUBackend.validate_options(opt, properties)
+        cls.validate_options(opt, properties)
 
-        pm = ir.pass_manager(mod.context)
-        pm.enable_debug()
-        passes.ttir.add_convert_to_ttgpuir(pm, "xpu", opt.num_warps, opt.warp_size, opt.num_ctas)
-        # optimize TTGIR
-        intel.passes.ttgpuir.add_coalesce(pm)
-        intel.passes.ttgpuir.add_remove_layout_conversions(pm)
-
-        intel.passes.ttgpuir.add_accelerate_matmul(pm)
-        intel.passes.ttgpuir.add_materialize_block_pointer(pm)
-        intel.passes.ttgpuir.add_remove_layout_conversions(pm)
-        intel.passes.ttgpuir.add_optimize_dot_operands(pm)
-        intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, XPUBackend.get_split_barrier_scope(opt))
-
-        if (opt.reduce_variable_liveness):
-            intel.passes.ttgpuir.add_reduce_variable_liveness(pm)
-
-        passes.ttgpuir.add_fuse_nested_loops(pm)
-
-        passes.common.add_canonicalizer(pm)
-        passes.ttir.add_triton_licm(pm)
-        passes.common.add_canonicalizer(pm)
-        passes.ttgpuir.add_combine_tensor_select_and_if(pm)
-
-        passes.ttgpuir.add_optimize_thread_locality(pm)
-        passes.ttgpuir.add_optimize_dot_operands(pm, True)
-        passes.common.add_cse(pm)
-        passes.ttgpuir.add_prefetch(pm)
-        passes.ttgpuir.add_optimize_dot_operands(pm, True)
-        intel.passes.ttgpuir.add_remove_layout_conversions(pm)
-        intel.passes.ttgpuir.add_reduce_data_duplication(pm)
-        passes.ttgpuir.add_reorder_instructions(pm)
-        passes.common.add_cse(pm)
-        passes.common.add_symbol_dce(pm)
-        passes.common.add_sccp(pm)
-        passes.common.add_canonicalizer(pm)
-        if knobs.intel.opt_reduction_locality:
-            intel.passes.ttgpuir.add_optimize_reduction_locality(pm)
-        intel.passes.arith.add_arith_emulate_unsupported_floats(pm, ["bf16"], "f32")
+        pm = cls.create_pass_manager(mod.context, cls.get_ttgir_passes(opt))
         pm.run(mod, 'make_ttgir')
         metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
         return mod
@@ -285,45 +329,49 @@ class XPUBackend(BaseBackend):
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
         return mod
 
-    @staticmethod
+    @classmethod
+    def get_llir_passes(cls, opt, mod):
+        # fmt: off
+        return [
+            passes.convert.add_scf_to_cf,
+            passes.gluon.add_inliner,
+            passes.convert.add_index_to_llvmir,
+            intel.passes.ttgpuir.add_allocate_shared_memory,
+            passes.ttgpuir.add_allocate_global_scratch_memory,
+            # instrumentation point here so we can override IRs above (e.g., ttir and ttgir)
+            lambda pm: cls.instrumentation.patch("ttgpuir_to_llvmir", pm, mod.context) if cls.instrumentation else None,
+            intel.passes.ttgpuir.add_to_llvmir,
+            intel.passes.ttgpuir.add_gen_to_llvm,
+            passes.common.add_canonicalizer,
+            intel.passes.ttgpuir.add_rewrite_stack_ptr,
+            passes.common.add_cse,
+            passes.convert.add_arith_to_llvmir,
+            passes.common.add_canonicalizer,
+            passes.common.add_cse,
+            passes.common.add_symbol_dce,
+            None if knobs.compilation.disable_line_info or knobs.compilation.dump_ir_extract_di_local_variables else passes.llvmir.add_di_scope,
+            lambda pm: cls.instrumentation.patch("llvmir_to_llvm", pm, mod.context) if cls.instrumentation else None,
+        ]
+        # fmt: on
+
+    @classmethod
+    def optimize_llvm_mod(cls, llvm_mod, options):
+        intel.set_spv_target_triple(llvm_mod)
+        with track("optimize_module") as tr:
+            intel.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, tr.callback("passes"))
+
+    @classmethod
     @track
-    def make_llir(src, metadata, options):
+    def make_llir(cls, src, metadata, options):
         mod = src
         # TritonGPU -> LLVM-IR (MLIR)
-        pm = ir.pass_manager(mod.context)
-        pm.enable_debug()
-
-        passes.convert.add_scf_to_cf(pm)
-        passes.gluon.add_inliner(pm)
-        passes.convert.add_index_to_llvmir(pm)
-        intel.passes.ttgpuir.add_allocate_shared_memory(pm)
-        passes.ttgpuir.add_allocate_global_scratch_memory(pm)
-        # instrumentation point here so we can override IRs above (e.g., ttir and ttgir)
-        if XPUBackend.instrumentation:
-            XPUBackend.instrumentation.patch("ttgpuir_to_llvmir", pm, mod.context)
-        intel.passes.ttgpuir.add_to_llvmir(pm)
-        intel.passes.ttgpuir.add_gen_to_llvm(pm)
-        passes.common.add_canonicalizer(pm)
-        intel.passes.ttgpuir.add_rewrite_stack_ptr(pm)
-        passes.common.add_cse(pm)
-        passes.convert.add_arith_to_llvmir(pm)
-        passes.common.add_canonicalizer(pm)
-        passes.common.add_cse(pm)
-        passes.common.add_symbol_dce(pm)
-
-        if not knobs.compilation.disable_line_info and not knobs.compilation.dump_ir_extract_di_local_variables:
-            passes.llvmir.add_di_scope(pm)
-
-        if XPUBackend.instrumentation:
-            XPUBackend.instrumentation.patch("llvmir_to_llvm", pm, mod.context)
+        pm = cls.create_pass_manager(mod.context, cls.get_llir_passes(options, mod))
         pm.run(mod, 'make_llir')
 
         if knobs.compilation.dump_ir_extract_di_local_variables:
             # comments below on why separate it
             if not knobs.compilation.disable_line_info:
-                pm = ir.pass_manager(mod.context)
-                pm.enable_debug()
-                passes.llvmir.add_di_scope(pm)
+                pm = cls.create_pass_manager(mod.context, [passes.llvmir.add_di_scope])
                 pm.run(mod, 'make_llir.disable_line_info')
 
             # insert dbg intrinsic with several DI Attribute including source
@@ -331,24 +379,19 @@ class XPUBackend(BaseBackend):
             # pass and add_di_scope has to be run separately, otherwise if we
             # put them into previous pipline, it trigger a segmentfault without
             # any error message; could be due to a bug in mlir or pybind11
-            pm = ir.pass_manager(mod.context)
-            pm.enable_debug()
-            passes.llvmir.add_di_local_variable(pm)
+            pm = cls.create_pass_manager(mod.context, [passes.llvmir.add_di_local_variable])
             pm.run(mod, 'make_llir.dump_ir_extract_di_local_variables')
 
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
         llvm.init_targets()
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
-        intel.set_spv_target_triple(llvm_mod)
         intel.set_fast_math(llvm_mod)
         if options.extern_libs:
             paths = [path for (name, path) in options.extern_libs]
             llvm.link_extern_libs(llvm_mod, paths)
 
-        with track("optimize_module") as tr:
-            intel.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, tr.callback("passes"))
-
+        cls.optimize_llvm_mod(llvm_mod, options)
         intel.post_process_llir(llvm_mod)
 
         # Get some metadata
@@ -366,9 +409,9 @@ class XPUBackend(BaseBackend):
         del context
         return ret
 
-    @staticmethod
+    @classmethod
     @track
-    def make_spv(src, metadata, options, device_arch):
+    def make_spv(cls, src, metadata, options):
         spirv, name = intel.translate_to_spirv(src)
         metadata["name"] = name
         if options.grf_mode == 'small':
@@ -401,7 +444,7 @@ class XPUBackend(BaseBackend):
                 fbin = fsrc.name + '.o'
 
                 ocloc_cmd = [
-                    'ocloc', 'compile', '-file', fsrc.name, '-o', fbin, '-spirv_input', '-device', device_arch,
+                    'ocloc', 'compile', '-file', fsrc.name, '-o', fbin, '-spirv_input', '-device', cls.device_arch,
                     '-options', metadata["build_flags"] + shader_dump_opt
                 ]
 
@@ -441,7 +484,7 @@ class XPUBackend(BaseBackend):
         elif language == Language.GLUON:
             stages["ttgir"] = lambda src, metadata: self.gluon_to_ttgir(src, metadata, options)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
-        stages["spv"] = lambda src, metadata: self.make_spv(src, metadata, options, self.device_arch)
+        stages["spv"] = lambda src, metadata: self.make_spv(src, metadata, options)
         if knobs.runtime.add_stages_inspection_hook is not None:
             knobs.runtime.add_stages_inspection_hook(self, stages, options, language, None)
 
