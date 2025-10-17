@@ -129,6 +129,12 @@ jobs:
           name: ${{ env.WHEELS_NAME }}
           path: ${{ env.NEW_WORKSPACE }}\pytorch\wheelhouse\*.whl
 
+      - name: Upload pdbs
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.WHEELS_NAME }}
+          path: ${{ env.NEW_WORKSPACE }}\**\*.pdb
+
       - name: Clean up workspace
         if: ${{ always() }}
         run: |
