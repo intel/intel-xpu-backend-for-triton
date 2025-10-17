@@ -29,6 +29,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/TensorMemoryUtils.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUOpInterfaces.cpp.inc"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Utility.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -50,7 +51,7 @@ LogicalResult WarpGroupDotOp::inferReturnTypes(
 
   // verify encodings
   auto aEnc = cast<TensorOrMemDesc>(operands[0].getType()).getEncoding();
-  auto bEnc = cast<TensorOrMemDesc>(operands[1].getType()).getEncoding();
+  auto bEnc = cast<MemDescType>(operands[1].getType()).getEncoding();
   auto retEnc = accTy.getEncoding();
   if (aEnc) {
     assert(bEnc);
@@ -70,10 +71,11 @@ LogicalResult WarpGroupDotOp::verify() {
   if (!nvmmaEnc || !nvmmaEnc.isHopper())
     return emitOpError("WGMMA result layout must be Hopper NVMMA");
 
-  if (!isa<NVMMASharedEncodingAttr, DotOperandEncodingAttr>(
-          getA().getType().getEncoding()))
+  if (!isa<NVMMASharedEncodingAttr, DotOperandEncodingAttr,
+           SharedLinearEncodingAttr>(getA().getType().getEncoding()))
     return emitOpError("WGMMA A operand must have NVMMA shared or dot layout");
-  if (!isa<NVMMASharedEncodingAttr>(getB().getType().getEncoding()))
+  if (!isa<NVMMASharedEncodingAttr, SharedLinearEncodingAttr>(
+          getB().getType().getEncoding()))
     return emitOpError("WGMMA B operand must have NVMMA shared layout");
 
   auto numWarps = gpu::lookupNumWarps(getOperation());
@@ -590,31 +592,21 @@ static LogicalResult verifyTMEMOperand(Operation *op, RankedTensorType type,
                                        MemDescType memdesc, StringRef regName) {
   if (type.getRank() != 2)
     return op->emitOpError(regName) << " must be a 2D tensor";
-  if (type.getEncoding()) {
-    auto enc = dyn_cast<DistributedEncodingTrait>(type.getEncoding());
-    if (!enc) {
-      return op->emitOpError(regName)
-             << " does not have an distributed encoding";
-    }
-    SmallVector<DistributedEncodingTrait> layouts =
-        getTmemCompatibleLayouts(op, type, memdesc);
-    if (layouts.empty()) {
-      return op->emitOpError(regName)
-             << " does not have any TMEM compatible layouts";
-    }
-    if (llvm::none_of(layouts, [&](DistributedEncodingTrait layout) {
-          return areLayoutsEquivalent(type.getShape(),
-                                      cast<LayoutEncodingTrait>(layout),
-                                      cast<LayoutEncodingTrait>(enc));
-        })) {
-      InFlightDiagnostic diag = op->emitOpError(regName)
-                                << " layout is not TMEM compatible";
-      for (Attribute layout : layouts)
-        diag.attachNote() << "potential TMEM layout: " << layout;
-      return diag;
-    }
-  }
-  return success();
+  if (!type.getEncoding())
+    return success();
+
+  auto maxnreg = getContextualMaxNReg(op);
+  if (isDistributedLayoutTMemCompatible(op, type, memdesc))
+    return success();
+
+  // If it failed, give the user a hint
+  SmallVector<DistributedEncodingTrait> layouts =
+      getTmemCompatibleLayouts(op, type, memdesc);
+
+  InFlightDiagnostic diag = op->emitOpError(regName);
+  for (Attribute layout : layouts)
+    diag.attachNote() << "potential TMEM layout: " << layout;
+  return diag;
 }
 
 LogicalResult TMEMStoreOp::verify() {

@@ -122,7 +122,7 @@ jobs:
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           cd ${{ env.NEW_WORKSPACE }}
-          pip install -U wheel pybind11 cython cmake
+          pip install -U pybind11 cmake
           pip install -v '.[build,tests,tutorials]'
 
       - name: Triton version

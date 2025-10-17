@@ -3,7 +3,6 @@
 #include "Data/Metric.h"
 #include "Device.h"
 #include "nlohmann/json.hpp"
-#include <iostream>
 
 #include <limits>
 #include <map>
@@ -164,28 +163,17 @@ size_t TreeData::addOp(size_t scopeId, const std::vector<Context> &contexts) {
 }
 
 void TreeData::addMetric(size_t scopeId, std::shared_ptr<Metric> metric) {
-  std::cout << "\taddMetric\n";
   std::unique_lock<std::shared_mutex> lock(mutex);
   auto scopeIdIt = scopeIdToContextId.find(scopeId);
   // The profile data is deactivated, ignore the metric
-  if (scopeIdIt == scopeIdToContextId.end()) {
-    std::cout << "MARK111\n" << std::flush;
+  if (scopeIdIt == scopeIdToContextId.end())
     return;
-  }
   auto contextId = scopeIdIt->second;
-  std::cout << "\taddMetric::contextId: " << contextId << "\n";
   auto &node = tree->getNode(contextId);
-  if (node.metrics.find(metric->getKind()) == node.metrics.end()) {
-    std::cout << "MARK112\n" << std::flush;
-    std::cout << "duration: "
-              << std::get<uint64_t>(metric->getValue(KernelMetric::Duration))
-              << "\n"
-              << std::flush;
+  if (node.metrics.find(metric->getKind()) == node.metrics.end())
     node.metrics.emplace(metric->getKind(), metric);
-  } else {
-    std::cout << "MARK113\n" << std::flush;
+  else
     node.metrics[metric->getKind()]->updateMetric(*metric);
-  }
 }
 
 void TreeData::addMetrics(

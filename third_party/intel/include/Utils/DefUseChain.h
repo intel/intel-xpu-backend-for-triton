@@ -3,6 +3,7 @@
 
 #include "mlir/IR/Value.h"
 #include "llvm/ADT/SetVector.h"
+#include <unordered_set>
 
 namespace mlir::triton::intel {
 
@@ -19,12 +20,6 @@ public:
   using Operations = llvm::SmallSetVector<Operation *, 32>;
 
   DefUseChain() = delete;
-
-  bool operator<(const DefUseChain &other) const {
-    if (start == other.start)
-      return end < other.end;
-    return start < other.start;
-  }
 
   bool operator==(const DefUseChain &other) const { return ops == other.ops; }
 
@@ -61,13 +56,19 @@ private:
   Operation *end;   //< last operation in the chain
 };
 
+struct DefUseChainHash {
+  size_t operator()(const mlir::triton::intel::DefUseChain &c) const noexcept {
+    return llvm::hash_combine(c.getStart(), c.getEnd());
+  }
+};
+
 /// \class DefUseChainManager
 /// Manages collection of one or more \class DefUseChain.
 class DefUseChainManager {
   friend raw_ostream &operator<<(raw_ostream &, const DefUseChainManager &);
 
 public:
-  using DefUseChains = std::set<DefUseChain>;
+  using DefUseChains = std::unordered_set<DefUseChain, DefUseChainHash>;
   using Operations = DefUseChain::Operations;
 
   /// Create all def-use chains rooted at \p start and terminated by \p end.

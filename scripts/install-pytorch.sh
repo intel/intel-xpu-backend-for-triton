@@ -257,7 +257,7 @@ function build_pytorch {
     export libuv_ROOT="$PYTORCH_PROJ/libuv-1.40.0"
   fi
 
-  USE_XCCL=1 USE_STATIC_MKL=1 python setup.py bdist_wheel
+  USE_XCCL=1 USE_STATIC_MKL=1 python -m build --wheel --no-isolation
 }
 
 function install_pytorch {

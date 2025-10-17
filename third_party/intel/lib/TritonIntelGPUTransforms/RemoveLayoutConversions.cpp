@@ -28,6 +28,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include <deque>
@@ -1107,12 +1108,9 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
                                            DenseMap<Value, Attribute> &layout,
                                            ConvertLayoutOp convertOp,
                                            IRMapping &mapping) {
-  auto mod = convertOp->getParentOfType<ModuleOp>();
-  LLVM_DEBUG({
-    llvm::errs() << "rewriteSlice:\n";
-    for (Value v : slice)
-      llvm::errs() << v << "\n";
-  });
+  std::optional<bool> enableForLoopSupport =
+      mlir::triton::tools::isEnvValueBool(mlir::triton::tools::getStrEnv(
+          "TRITON_INTEL_REMOVELAYOUTCONVERSION_SUPPORT_FOR_LOOP"));
 
   SetVector<Operation *> opsToRewrite;
   // Keep track of yield operands that need to be duplicated.
@@ -1139,20 +1137,28 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
         opsToRewrite.insert(ifOp.elseYield().getOperation());
         yieldOperandsMap[ifOp.elseYield()].push_back(operandIdx);
       }
-      if (auto forOp = v.getDefiningOp<scf::ForOp>()) {
-        unsigned operandIdx = cast<OpResult>(v).getResultNumber();
-        auto yieldOp = forOp.getBody()->getTerminator();
-        yieldOperandsMap[yieldOp].push_back(operandIdx);
-        LLVM_DEBUG({
-          llvm::errs() << "1. pushing " << operandIdx
-                       << " in yieldOperandMap\n ";
-        });
-        opsToRewrite.insert(yieldOp);
-      }
-    }
-#if 1
-    else {
-      // These are already pushed above.
+      if (enableForLoopSupport)
+        if (auto forOp = v.getDefiningOp<scf::ForOp>()) {
+          unsigned opIdx = cast<OpResult>(v).getResultNumber();
+          auto yieldOp = forOp.getBody()->getTerminator();
+          if (!yieldOperandsMap.contains(yieldOp)) {
+            yieldOperandsMap[yieldOp].push_back(opIdx);
+            LLVM_DEBUG({
+              llvm::errs() << "1a. pushing " << opIdx
+                           << " in yieldOperandMap\n ";
+            });
+          } else if (llvm::none_of(
+                         yieldOperandsMap[yieldOp],
+                         [&](unsigned idx) { return idx == opIdx; })) {
+            yieldOperandsMap[yieldOp].push_back(opIdx);
+            LLVM_DEBUG({
+              llvm::errs() << "1b. pushing " << opIdx
+                           << " in yieldOperandMap\n ";
+            });
+          }
+          opsToRewrite.insert(yieldOp);
+        }
+    } else {
       BlockArgument blockArg = cast<BlockArgument>(v);
       Operation *parentOp = blockArg.getOwner()->getParentOp();
       if (auto loopOp = cast<LoopLikeOpInterface>(parentOp)) {
@@ -1160,19 +1166,23 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
         OpOperand *operand = loopOp.getTiedLoopYieldedValue(blockArg);
         unsigned opIdx = operand->getOperandNumber();
         auto yieldOp = blockArg.getOwner()->getTerminator();
-        if (!yieldOperandsMap.contains(yieldOp))
+        if (!yieldOperandsMap.contains(yieldOp)) {
           yieldOperandsMap[yieldOp].push_back(opIdx);
-        else if (llvm::none_of(yieldOperandsMap[yieldOp],
-                               [&](unsigned idx) { return idx == opIdx; }))
+          LLVM_DEBUG({
+            llvm::errs() << "2a. pushing " << operand->getOperandNumber()
+                         << " in yieldOperandMap\n";
+          });
+        } else if (llvm::none_of(yieldOperandsMap[yieldOp],
+                                 [&](unsigned idx) { return idx == opIdx; })) {
           yieldOperandsMap[yieldOp].push_back(opIdx);
-        LLVM_DEBUG({
-          llvm::errs() << "2. pushing " << operand->getOperandNumber()
-                       << " in yieldOperandMap\n";
-        });
+          LLVM_DEBUG({
+            llvm::errs() << "2b. pushing " << operand->getOperandNumber()
+                         << " in yieldOperandMap\n";
+          });
+        }
         opsToRewrite.insert(yieldOp);
       }
     }
-#endif
   }
   slice.set_subtract(valuesWithExistingRemat);
   opsToRewrite = multiRootTopologicalSort(opsToRewrite);
@@ -1204,6 +1214,7 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
       op->dumpPretty();
       llvm::errs() << "\n";
 
+#if 0
       llvm::errs() << "mapping:\n";
       if (mapping.getValueMap().values().empty())
         llvm::errs().indent(2) << "Values: empty" << "\n";
@@ -1231,24 +1242,27 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
         }
       }
       //    assert(mapping.getBlockMap().values().empty());
+#endif
     });
 
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-      // Construct the new init argument list by adding yielded operands
-      // that have been remapped.
       SmallVector<Value> newOperands;
-      auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
-      auto yieldOperands = llvm::to_vector(yieldOp.getOperands());
-      SmallVector<int> operandsToRewrite = yieldOperandsMap[yieldOp];
-      std::sort(operandsToRewrite.begin(), operandsToRewrite.end());
-      for (int operandIdx : operandsToRewrite) {
-        Value yieldOperand = yieldOp.getOperand(operandIdx);
-        if (mapping.contains(yieldOperand)) {
-          newOperands.push_back(mapping.lookup(yieldOperand));
-          LLVM_DEBUG({
-            llvm::errs() << "YieldOperand: " << yieldOperand
-                         << " is mapped, adding new init to for loop\n";
-          });
+      if (enableForLoopSupport) {
+        // Construct the new initialization argument by adding yielded
+        // operands that have been remapped.
+        auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+        auto yieldOperands = llvm::to_vector(yieldOp.getOperands());
+        SmallVector<int> operandsToRewrite = yieldOperandsMap[yieldOp];
+        std::sort(operandsToRewrite.begin(), operandsToRewrite.end());
+        for (int operandIdx : operandsToRewrite) {
+          Value yieldOperand = yieldOp.getOperand(operandIdx);
+          if (mapping.contains(yieldOperand)) {
+            newOperands.push_back(mapping.lookup(yieldOperand));
+            LLVM_DEBUG({
+              llvm::errs() << "YieldOperand: " << yieldOperand
+                           << " is mapped, adding new init to for loop\n";
+            });
+          }
         }
       }
 
@@ -1275,22 +1289,22 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
       scf::ForOp newForOp = replaceForOpWithNewSignature(
           builder, forOp, newOperands, replacements);
 
-      LLVM_DEBUG({
-        llvm::errs() << "at line: " << __LINE__ << "\n";
-        llvm::errs() << "newForOp (" << &newForOp << "): ";
-        newForOp->dumpPretty();
-        llvm::errs() << "\n";
-      });
+      if (enableForLoopSupport) {
+        LLVM_DEBUG({
+          llvm::errs() << "at line: " << __LINE__ << "\n";
+          llvm::errs() << "newForOp (" << &newForOp << "): ";
+          newForOp->dumpPretty();
+          llvm::errs() << "\n";
+        });
 
-      // Add rematerializations for loop results in the slice.
-      if (newForOp->getNumResults() > forOp.getNumResults()) {
+        // Add rematerializations for loop results in the slice.
         unsigned oldIdx = 0;
         unsigned newIdx = forOp.getNumResults();
         for (auto res : forOp.getResults()) {
-          if (newIdx >= newForOp.getNumResults())
-            break;
-
           if (slice.count(res)) {
+            if (newIdx >= newForOp.getNumResults())
+              break;
+
             LLVM_DEBUG({
               llvm::errs() << "oldIdx: " << oldIdx << "\n";
               llvm::errs() << "newIdx: " << newIdx << "\n";
@@ -1532,6 +1546,7 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
     opToDelete.insert(op);
 
   LLVM_DEBUG({
+    auto mod = convertOp->getParentOfType<ModuleOp>();
     llvm::errs() << "rewriteSlice DONE:\n";
     mod->dump();
   });
@@ -1611,6 +1626,21 @@ void LayoutRematerialization::backwardRematerialization() {
       addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
                     convertOp.getResult());
     }
+
+#if 0
+    for (Operation *op : llvm::reverse(opToDelete)) {
+      if (op == convertOp)
+        continue;
+      if (op->getUsers().empty())
+        op->erase();
+    }
+
+    auto mod = convertOp->getParentOfType<ModuleOp>();
+    llvm::errs() << "mod:\n";
+    mod->dumpPretty();
+    llvm::errs() << "\n";
+    assert(succeeded(verify(mod)) && "Module verification failed");
+#endif
   }
 
   reduceLoopCarriedValues();

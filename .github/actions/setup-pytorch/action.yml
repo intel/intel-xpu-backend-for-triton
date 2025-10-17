@@ -22,6 +22,10 @@ inputs:
   cache:
     description: Cache enabled or disabled
     default: enabled
+outputs:
+  pytorch_cache_key:
+    description: "PyTorch cache key"
+    value: ${{ steps.generate-pytorch-cache-key.outputs.pytorch_cache_key }}
 runs:
   using: "composite"
   steps:
@@ -70,22 +74,24 @@ runs:
         sudo ln -sfT ${{ inputs.oneapi }} /opt/intel/oneapi
 
     - name: Generate PyTorch cache key
+      id: generate-pytorch-cache-key
       shell: bash
+      env:
+        # Increase this value to reset cache
+        CACHE_NUMBER: 18
       run: |
         ONEAPI_LINK=$(readlink /opt/intel/oneapi || true)
         ONEAPI_KEY=$(sha256sum /opt/intel/installed.txt 2> /dev/null | cut -d\  -f1 || true)
         PYTORCH_CACHE_KEY=$(echo $PYTHON_VERSION $PYTORCH_COMMIT_ID ${{ hashFiles('scripts/patch-pytorch.sh') }} ${{ inputs.mode }}${ONEAPI_KEY}${ONEAPI_LINK} | sha256sum - | cut -d\  -f1)
         echo "PYTORCH_CACHE_KEY=$PYTORCH_CACHE_KEY" | tee -a "$GITHUB_ENV"
+        echo "pytorch_cache_key=pytorch-$PYTORCH_CACHE_KEY-$CACHE_NUMBER" >> "$GITHUB_OUTPUT"
 
     - name: Load PyTorch from a cache
       id: pytorch-cache
       uses: ./.github/actions/load
-      env:
-        # Increase this value to reset cache
-        CACHE_NUMBER: 18
       with:
         path: pytorch
-        key: pytorch-$PYTORCH_CACHE_KEY-$CACHE_NUMBER
+        key: ${{ steps.generate-pytorch-cache-key.outputs.pytorch_cache_key }}
         enabled: ${{ inputs.cache == 'enabled' }}
 
     - name: Clone PyTorch repository
@@ -111,22 +117,15 @@ runs:
       run: |
         source ${{ inputs.oneapi }}/setvars.sh
 
-        # Limit AOT to PVC when compiling with LTS driver
-        # See https://github.com/intel/intel-xpu-backend-for-triton/pull/3548#issuecomment-2685718019
-        source ./scripts/capture-hw-details.sh
-        if [[ $AGAMA_VERSION =~ 803 ]]; then
-          export TORCH_XPU_ARCH_LIST="pvc"
-        else
-          export TORCH_XPU_ARCH_LIST="pvc,bmg,dg2,arl-h,mtl-h"
-        fi
+        # Limit AOT
+        export TORCH_XPU_ARCH_LIST="pvc,bmg,dg2,arl-h,mtl-h"
 
         cd pytorch
-        pip install wheel
         # FIXME: Compatibility with versions of CMake older than 3.5 has been removed, this brakes compilation of third_party/protobuf:
         # CMake Error at third_party/protobuf/cmake/CMakeLists.txt:2 (cmake_minimum_required)
         pip install 'cmake<4.0.0'
         pip install -r requirements.txt
-        USE_XCCL=1 USE_STATIC_MKL=1 python setup.py bdist_wheel 2>&1 | grep -v \
+        USE_XCCL=1 USE_STATIC_MKL=1 python -m build --wheel --no-isolation 2>&1 | grep -v \
           "Double arithmetic operation is not supported on this platform with FP64 conversion emulation mode (poison FP64 kernels is enabled)." | grep -v '^$'
 
     - name: Install PyTorch (built from source)

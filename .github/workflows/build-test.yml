@@ -78,8 +78,8 @@ jobs:
           path: $HOME/.cache/pip
           key: pip-3.10-${{ hashFiles('.pre-commit-config.yaml') }}-${{ env.CACHE_NUMBER }}
 
-      - name: Install Python 3.10
-        uses: actions/setup-python@v6
+      - name: Install Python (from pyenv)
+        uses: ./.github/actions/setup-pyenv-python
         with:
           python-version: '3.10'
 

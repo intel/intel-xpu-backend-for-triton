@@ -34,6 +34,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/Support/FileSystem.h"
@@ -338,6 +339,7 @@ void init_triton_ir(py::module &&m) {
     DialectRegistry registry;
     registry.insert<TritonDialect, ::mlir::triton::gpu::TritonGPUDialect,
                     ::mlir::triton::instrument::TritonInstrumentDialect,
+                    ::mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
                     math::MathDialect, arith::ArithDialect, scf::SCFDialect,
                     ::mlir::gpu::GPUDialect, cf::ControlFlowDialect,
                     LLVM::LLVMDialect, mlir::ub::UBDialect,
@@ -455,6 +457,8 @@ void init_triton_ir(py::module &&m) {
              auto loc = UnknownLoc::get(ty.getContext());
              self.addArgument(ty, loc);
            })
+      .def("add_argument_at", [](Block &self, Type ty,
+                                 Location loc) { self.addArgument(ty, loc); })
       .def("get_num_arguments", &Block::getNumArguments)
       .def("get_argument", &Block::getArgument)
       .def("dump", &Block::dump)
@@ -1863,6 +1867,44 @@ void init_triton_ir(py::module &&m) {
              llvm::raw_string_ostream os(str);
              self.printAsTextualPipeline(os);
              return str;
+           })
+      .def("enable_timing",
+           [](PassManager &self, py::function cb) {
+             struct CallBackStrategy : OutputStrategy {
+               py::function cb;
+
+               CallBackStrategy(py::function cb)
+                   : OutputStrategy(llvm::errs()), cb(cb) {}
+
+               void printHeader(const TimeRecord &total) override {}
+
+               void printFooter() override {}
+
+               void printTime(const TimeRecord &time,
+                              const TimeRecord &total) override {}
+
+               void printListEntry(StringRef name, const TimeRecord &time,
+                                   const TimeRecord &total,
+                                   bool lastEntry = false) override {
+                 cb(std::string(name), time.wall, 0);
+               }
+
+               void printTreeEntry(unsigned indent, StringRef name,
+                                   const TimeRecord &time,
+                                   const TimeRecord &total) override {
+                 cb(std::string(name), time.wall, 1);
+               }
+
+               void printTreeEntryEnd(unsigned indent,
+                                      bool lastEntry = false) override {
+                 cb(std::string(""), 0., 2);
+               }
+             };
+
+             auto tm = std::make_unique<mlir::DefaultTimingManager>();
+             tm->setOutput(std::make_unique<CallBackStrategy>(cb));
+             tm->setEnabled(true);
+             self.enableTiming(std::move(tm));
            })
       .def(
           "run",
