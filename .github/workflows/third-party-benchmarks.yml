@@ -46,12 +46,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Install Python
-        if: ${{ !(inputs.use_pyenv_python || false) }}
-        uses: actions/setup-python@v6
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
       - name: Install Python (from pyenv) ${{ inputs.python_version }}
         uses: ./.github/actions/setup-pyenv-python
         with:
