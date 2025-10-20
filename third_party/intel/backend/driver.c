@@ -11,6 +11,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <ocloc_api.h>
 
 #if defined(_WIN32)
 #define EXPORT_FUNC __declspec(dllexport)
