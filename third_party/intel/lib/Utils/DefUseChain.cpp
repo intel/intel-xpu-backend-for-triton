@@ -199,7 +199,7 @@ void Fuser::fuse(const DefUseChains &chains) {
 }
 
 void Fuser::duplicateRoot(DefUseChains &chains) const {
-  std::map<Operation *, DefUseChains> rootToChains;
+  std::unordered_map<Operation *, DefUseChains> rootToChains;
   for (const DefUseChain &chain : chains) {
     Operation *start = chain.getStart();
     if (!rootToChains[start].empty())
