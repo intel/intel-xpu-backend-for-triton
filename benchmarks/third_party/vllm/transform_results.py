@@ -11,14 +11,19 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Parse MoE benchmark CSV')
     parser.add_argument('source', help='Path to the MoE benchmark CSV file')
     parser.add_argument('target', help='Path to output CSV file')
+    parser.add_argument(
+        '--param_cols',
+        help='Names of parameter columns, separated by commas.',
+        required=True,
+    )
     parser.add_argument('--tag', help='Tag for the benchmark run', default='')
     parser.add_argument('--benchmark', help='moe-benchmark', default='')
 
     return parser.parse_args()
 
 
-def parse_moe_csv(csv_file_path, tag, benchmark):
-    """Parse the MoE benchmark CSV and extract performance metrics."""
+def parse_csv(csv_file_path, tag, benchmark, param_cols):
+    """Parse the benchmark CSV and extract performance metrics."""
 
     df = pd.read_csv(csv_file_path)
 
@@ -26,13 +31,7 @@ def parse_moe_csv(csv_file_path, tag, benchmark):
     current_datetime = datetime.now().isoformat()
 
     # Create params for all rows vectorized
-    df['params'] = df.apply(
-        lambda row: json.dumps({
-            'num_experts': int(row['num_experts']),
-            'max_tokens_per_expert': int(row['max_tokens_per_expert']),
-            'K': int(row['K']),
-            'N': int(row['N']),
-        }), axis=1)
+    df['params'] = df.apply(lambda row: json.dumps({p: int(row[p]) for p in param_cols}), axis=1)
 
     # Define compiler columns
     compilers = [('triton', 'triton-TFlops'), ('pytorch', 'pytorch-TFlops'), ('triton-td', 'triton-td-TFlops')]
@@ -90,7 +89,8 @@ def main():
     if not os.path.exists(args.source):
         raise ValueError(f'Error: CSV file {args.source} not found')
 
-    df_results = parse_moe_csv(args.source, args.tag, args.benchmark)
+    param_cols = args.param_cols.split(',')
+    df_results = parse_csv(args.source, args.tag, args.benchmark, param_cols)
     df_results.to_csv(args.target, index=False)
 
 
