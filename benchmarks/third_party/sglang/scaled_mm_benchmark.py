@@ -10,17 +10,6 @@ import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
 
-# Import vLLM MoE functions
-# from vllm.model_executor.layers.fused_moe.fused_batched_moe import invoke_moe_batched_triton_kernel
-# from vllm.platforms import current_platform
-# from vllm.model_executor.layers.fused_moe.utils import normalize_batched_scales_shape
-
-# # Import utility functions from vLLM tests
-# from tests.kernels.moe.utils import make_quantized_test_activations, make_test_weight
-# from tests.kernels.quant_utils import native_batched_masked_quant_matmul
-
-import torch.testing
-
 
 def is_weak_contiguous(x: torch.Tensor):
     strides = x.stride()
@@ -118,7 +107,7 @@ def scaled_mm_kernel(
     scale_a_ptrs = scale_a_ptr + offsets_scale_am
     scale_b_ptrs = scale_b_ptr + offsets_scale_bn
 
-    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
+    for _ in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         masks_k = offsets_k < K
         masks_a = masks_am[:, None] & masks_k[None, :]
         a = tl.load(a_ptrs, mask=masks_a)
@@ -239,7 +228,7 @@ def scaled_mm_kernel_td(
     scale_b_ptrs = scale_b_ptr + offsets_scale_bn
 
     off_k = 0
-    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
+    for _ in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         # masks_k = offsets_k < K
         # masks_a = masks_am[:, None] & masks_k[None, :]
         # a = tl.load(a_ptrs, mask=masks_a)
@@ -302,7 +291,7 @@ def scaled_mm_kernel_td(
 # weight - [K, N]
 # Adapted from https://github.com/vllm-project/vllm/blob/main/vllm/model_executor/layers/quantization/compressed_tensors/triton_scaled_mm.py
 def triton_scaled_mm(
-    input: torch.Tensor,
+    input: torch.Tensor,  # pylint: disable=redefined-builtin
     weight: torch.Tensor,
     result: torch.Tensor,
     scale_a: torch.Tensor,
@@ -350,6 +339,8 @@ def triton_scaled_mm(
             tile_shape = (64, 128, 128)
         else:
             tile_shape = (128, 128, 128)
+    else:
+        raise NotImplementedError('Only heuristic-based tile size selection is supported currently.')
 
     block_size_m, block_size_n, block_size_k = tile_shape
 
@@ -384,7 +375,6 @@ def triton_scaled_mm(
         BLOCK_SIZE_SCALE_A=block_size_sa,
         BLOCK_SIZE_SCALE_B=block_size_sb,
     )
-
     return result
 
 
@@ -469,15 +459,15 @@ def get_scaled_mm_benchmark(
         else:
             in_dtype, out_dtype = torch.int8, torch.bfloat16
 
-        input, weight = _make_inputs(M, K, N, in_dtype)
+        x, weight = _make_inputs(M, K, N, in_dtype)
         scale_a = 0.1 + 0.05 * torch.rand((M, 1), dtype=torch.float32, device=device)
         scale_b = 0.1 + 0.05 * torch.rand((N, 1), dtype=torch.float32, device=device)
         bias = (0.01 * torch.randn((M, N), dtype=out_dtype, device=device) if with_bias else None)
 
-        ref = torch.empty((M, N), dtype=out_dtype, device=input.device)
+        ref = torch.empty((M, N), dtype=out_dtype, device=x.device)
 
         def torch_fn():
-            return torch_scaled_mm(input, weight, ref, scale_a, scale_b, out_dtype, bias)
+            return torch_scaled_mm(x, weight, ref, scale_a, scale_b, out_dtype, bias)
 
         # Use relaxed tolerances
         rtol = 0.15 if in_dtype == torch.int8 else 0.25
@@ -492,12 +482,12 @@ def get_scaled_mm_benchmark(
                 quantiles=quantiles,
             )
 
-        elif provider == 'triton' or provider == 'triton-td':
-            result = torch.empty((M, N), dtype=out_dtype, device=input.device)
+        elif provider in ('triton', 'triton-td'):
+            result = torch.empty((M, N), dtype=out_dtype, device=x.device)
 
             # invoke_kernel = invoke_moe_batched_triton_kernel if provider == 'triton' else invoke_moe_batched_triton_kernel_td
             def triton_fn():
-                return triton_scaled_mm(input, weight, result, scale_a, scale_b, out_dtype, bias,
+                return triton_scaled_mm(x, weight, result, scale_a, scale_b, out_dtype, bias,
                                         use_td_kernel=provider == 'triton-td')
 
             benchmark_suite.assert_close(triton_fn, torch_fn, atol=atol, rtol=rtol, err_msg='triton to torch')
