@@ -25,22 +25,17 @@ namespace mlir::triton::intel {
 namespace {
 
 // Transform:
-//   %one = arith.constant 1 : i64
-//   %ptr = make_tensor_ptr %q_view, [%q, %q_23, %q_24],
-//            [%q_25, %q_26, %one], [%offset_5, %offset_1_13, %q_28]
-//            {order = array<i32: 2, 1, 0>} : <tensor<1x512x64xf16>>
-//   %load = tt.load %ptr {boundaryCheck = array<i32: 1, 2>}
-//         : !tt.ptr<tensor<1x512x64xf16>>
-//   %a = tt.reshape %load : tensor<1x512x64xf16> -> tensor<512x64xf16>
-//   tt.dot(%a, ...)
+//   %ptr = tt.make_tensor_ptr %base, [%s0,%s1,%s2], [%a,%b,%c], [%x,%y,%z]
+//                       {order = array<i32: 2, 1, 0>} : <tensor<1x512x64xf16>>
+//   %load = tt.load %ptr : !tt.ptr<tensor<1x512x64xf16>>
+//   %A = tt.reshape %load : tensor<1x512x64xf16> -> tensor<512x64xf16>
+//   dot %A, ... : tensor<512x64xf16> x tensor<64x32xf16> -> tensor<512x32xf16>
 // into:
-//   %one = arith.constant 1 : i64
-//   %ptr = make_tensor_ptr %q_view, [%q_23, %q_24], [%q_26, %one],
-//            [%offset_1_13, %offset_5*%q_25+%q_28]
-//            {order = array<i32: 1, 0>} : <tensor<512x64xf16>>
-//   %a = tt.load %ptr {boundaryCheck = array<i32: 0, 1>}
-//      : !tt.ptr<tensor<512x64xf16>>
-//   tt.dot(%a, ...)
+//   %d = %a / %b
+//   %ptr = tt.make_tensor_ptr %base, [%s0*%d+%s1,%s2], [%b,%c], [%x*%div+%y,%z]
+//                       {order = array<i32: 1, 0>} : <tensor<512x64xf16>>
+//   %A = tt.load %ptr : !tt.ptr<tensor<512x64xf16>>
+//   dot %A, ... : tensor<512x64xf16> x tensor<64x32xf16> -> tensor<512x32xf16>
 class FuseReshapeWithLoad : public tt::intel::Fuser {
 public:
   void run(ModuleOp moduleOp) {
