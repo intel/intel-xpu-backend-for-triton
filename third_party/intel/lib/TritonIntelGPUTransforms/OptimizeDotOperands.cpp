@@ -4,6 +4,7 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/Verifier.h"
@@ -50,15 +51,8 @@ namespace {
 //   %load = tt.load %ptr, {blockIO=<column_major|row_major>}
 //         : tt.ptr<tensor<KxN, dotEnc>
 //   tt.dot(%a, %load)
-class FuseTransWithLoad {
-private:
-  SmallPtrSet<Operation *, 8> cleanUp;
-
+class FuseTransWithLoad : public tt::intel::Fuser {
 public:
-  using DefUseChain = tt::intel::DefUseChain;
-  using DefUseChainManager = tt::intel::DefUseChainManager;
-  using DefUseChains = DefUseChainManager::DefUseChains;
-
   void run(ModuleOp moduleOp) {
     // Collect def-use chains originating at a `MakeTensorPtrOp` operation
     // and terminating at a candidate `tt::TransOp` operation.
@@ -99,79 +93,15 @@ public:
     LLVM_DEBUG(llvm::dbgs() << "[Before fusion]:\n" << manager << "\n");
 
     // Fuse tt.LoadOp->tt.TransOp operations.
-    fuseTransOp(manager.getChains());
+    Fuser::fuse(manager.getChains());
 
     // Remove operations that are no longer used.
     if (!cleanUp.empty())
       tt::intel::eraseOperations(cleanUp);
-
-    assert(succeeded(verify(moduleOp)) && "Module verification failed");
   }
 
 private:
-  // Duplicate the root operation of the given chains.
-  void duplicateRoot(DefUseChains &chains) const {
-    std::unordered_map<Operation *, DefUseChains> rootToChains;
-    for (const DefUseChain &chain : chains) {
-      Operation *start = chain.getStart();
-      if (!rootToChains[start].empty())
-        continue;
-
-      DefUseChains sameRootChains{chain};
-      rootToChains[start] = sameRootChains;
-      for (const DefUseChain &otherChain : chains) {
-        if (otherChain == chain || otherChain.getStart() != start)
-          continue;
-
-        rootToChains[start].insert(otherChain);
-      }
-    }
-
-    for (auto &entry : rootToChains) {
-      DefUseChains &sameRootChains = entry.second;
-      duplicateRoot(sameRootChains, chains);
-    }
-  }
-
-  // Duplicate the root operation of \p sameRootChains and update \p chains.
-  void duplicateRoot(DefUseChains &sameRootChains, DefUseChains &chains) const {
-    assert(llvm::all_of(sameRootChains, [&](const DefUseChain &chain) {
-      const DefUseChain &firstChain = *sameRootChains.begin();
-      return firstChain.getStart() == chain.getStart();
-    }));
-
-    for (auto it = sameRootChains.begin(); it != sameRootChains.end(); ++it) {
-      const DefUseChain &chain = *it;
-      Operation *start = chain.getStart();
-      auto users = start->getUsers();
-      if (llvm::count_if(users, [](auto) { return true; }) == 1)
-        continue;
-
-      OpBuilder builder(start);
-      Operation *duplicate = builder.insert(start->clone());
-      assert(start->getNumResults() == 1);
-
-      Value res = start->getResult(0);
-      Value dupRes = duplicate->getResult(0);
-      res.replaceUsesWithIf(dupRes, [&](OpOperand &operand) {
-        Operation *op = operand.getOwner();
-        return chain.contains(op);
-      });
-
-      DefUseChainManager manager;
-      manager.createChains(duplicate, chain.getEnd());
-      for (DefUseChain newChain : manager.getChains())
-        chains.insert(newChain);
-      chains.erase(chain);
-    }
-  }
-
-  void fuseTransOp(const DefUseChains &chains) {
-    for (const DefUseChain &chain : chains)
-      fuseTransOp(chain);
-  }
-
-  void fuseTransOp(const DefUseChain &chain) {
+  void fuse(const DefUseChain &chain) {
     assert(
         isa<tt::MakeTensorPtrOp>(chain.getStart()) &&
         "Expecting 'chain' to be rooted by a 'tt.make_tensor_ptr' operation");
@@ -201,18 +131,23 @@ private:
     LLVM_DEBUG(llvm::dbgs() << "newMakeTensorPtrOp:\n  " << ptr << "\n");
 
     // ... and propagate it through the def-use chain.
-    propagateToUsers(ptr, chain);
+    IRMapping mapping;
+    propagateToUsers(ptr, chain, mapping);
     cleanUp.insert(makeTensorPtrOp);
   }
 
   // Candidate is of the form:
   //   tt.dot(tt.trans(tt.load(..., {blockIO=...})))
   // Where:
+  //  - the transpose is not contained in a while loop
   //  - the transpose result is used by the dot operation, and
   //  - the transpose operation uses the result of a 2-dim load operation on a
   //    block pointer (transitively) defined by a `make_tensor_ptr` operation.
   bool isCandidate(tt::TransOp transOp) const {
     assert(transOp && "Expecting a valid transpose operation");
+
+    if (transOp->getParentOfType<scf::WhileOp>())
+      return false;
 
     // Check whether \p transOp is used by a `dotOp` (directly or indirectly).
     auto usedByDotOp = [](tt::TransOp transOp) {
@@ -256,25 +191,6 @@ private:
         triton::intel::findDefiningMakeTensorPtrOp(loadOp.getPtr());
 
     return makeTensorPtrOp.has_value();
-  }
-
-  // Prune chains that cannot be handled during fusion. For example, operations
-  // in the def-use chain should have a single user, except in special
-  // circumstances (e.g. the root operation of a chain might have more than one
-  // user).
-  void pruneInvalid(DefUseChains &chains) const {
-    assert(!chains.empty() && "Expecting at least one candidate chain");
-
-    // Duplicate the root operation if necessary.
-    // Note: at this point overlap, if present, can only happen at the root.
-    duplicateRoot(chains);
-
-    for (auto it = chains.begin(); it != chains.end();) {
-      if (!validateChain(*it))
-        it = chains.erase(it);
-      else
-        ++it;
-    }
   }
 
   // Determine whether all operations in the given def-use chain have a single
@@ -369,32 +285,10 @@ private:
     return true;
   }
 
-  // Propagate \p newVal to operations in the given def-use chain.
-  void propagateToUsers(Value newVal, const DefUseChain &chain) {
-    auto start = cast<tt::MakeTensorPtrOp>(chain.getStart());
-    Operation *end = chain.getEnd();
-    auto it = llvm::find_if(start->getUsers(), [&](Operation *user) {
-      return chain.contains(user);
-    });
-    assert(it != start->getUsers().end() && "Expecting valid iterator");
-
-    Operation *nextOp = *it;
-    propagateToUser(newVal, start.getResult(), nextOp, end);
-  }
-
-  // Propagate \p newVal to users of \p origOp.
-  void propagateToUsers(Value newVal, Value origVal, Operation *origOp,
-                        Operation *sentinel) {
-    assert(origOp && sentinel && "Expecting valid operations");
-    const SmallVector<Operation *> users(origOp->getUsers());
-    for (Operation *user : users)
-      propagateToUser(newVal, origVal, user, sentinel);
-  }
-
   // If \p user is not \p sentinel, propagate \p newVal to \p user. Otherwise
   // terminate the propagation.
-  void propagateToUser(Value newVal, Value origVal, Operation *user,
-                       Operation *sentinel) {
+  virtual void propagateToUser(Value newVal, Value origVal, Operation *user,
+                               Operation *sentinel, IRMapping &mapping) final {
     assert(user && sentinel && "Expecting valid operations");
     assert(llvm::is_contained(origVal.getUsers(), user) && "Invalid usage");
 
@@ -428,7 +322,7 @@ private:
                  << "newAdvanceOp: " << newAdvanceOp << "\n");
       cleanUp.insert(advanceOp);
       return propagateToUsers(newAdvanceOp, advanceOp.getResult(), advanceOp,
-                              sentinel);
+                              sentinel, mapping);
     }
 
     if (auto loadOp = dyn_cast<tt::LoadOp>(user)) {
@@ -453,7 +347,8 @@ private:
       newLoadOp->setAttr(blockIOAttrName, newAttr);
       LLVM_DEBUG(llvm::dbgs().indent(2) << "newLoadOp: " << newLoadOp << "\n");
       cleanUp.insert(loadOp);
-      return propagateToUsers(newLoadOp, loadOp.getResult(), loadOp, sentinel);
+      return propagateToUsers(newLoadOp, loadOp.getResult(), loadOp, sentinel,
+                              mapping);
     }
 
     if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
@@ -474,29 +369,9 @@ private:
     }
 
     if (auto forOp = dyn_cast<scf::ForOp>(user))
-      return propagateToLoop(newVal, origVal, forOp, sentinel);
+      return propagateToLoop(newVal, origVal, forOp, sentinel, mapping);
 
     llvm_unreachable("Unexpected kind of user");
-  }
-
-  void propagateToLoop(Value newVal, Value origVal, LoopLikeOpInterface loopOp,
-                       Operation *sentinel) {
-    assert(sentinel && sentinel != loopOp && "Unexpected sentinel kind");
-    LLVM_DEBUG({
-      llvm::dbgs() << "In " << __func__ << "\n";
-      llvm::dbgs() << "newVal: " << newVal << "\n";
-    });
-
-    for (auto [initArg, rgnInitArg] :
-         llvm::zip(loopOp.getInitsMutable(), loopOp.getRegionIterArgs())) {
-      if (initArg.get() == origVal) {
-        initArg.set(newVal);
-        rgnInitArg.setType(initArg.get().getType());
-        const SmallVector<Operation *> users(rgnInitArg.getUsers());
-        for (Operation *user : users)
-          propagateToUser(rgnInitArg, rgnInitArg, user, sentinel);
-      }
-    }
   }
 };
 
@@ -515,5 +390,6 @@ public:
     ModuleOp moduleOp = getOperation();
     FuseTransWithLoad fuser;
     fuser.run(moduleOp);
+    assert(succeeded(verify(moduleOp)) && "Module verification failed");
   }
 };
