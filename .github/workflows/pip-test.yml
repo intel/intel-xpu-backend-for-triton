@@ -52,6 +52,10 @@ jobs:
           # transformers package is required for the inductor (e2e) test
           wheels_pattern: 'torch-*.whl'
 
+      - name: Build Proton with XPU support
+        run: |
+          echo TRITON_BUILD_PROTON_XPU=1 | tee -a $GITHUB_ENV
+
       - name: Install Triton
         uses: ./.github/actions/setup-triton
 
