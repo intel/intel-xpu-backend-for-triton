@@ -73,7 +73,7 @@ jobs:
         uses: ./.github/actions/load
         env:
           # Increase this value to reset cache
-          CACHE_NUMBER: 2
+          CACHE_NUMBER: 3
         with:
           path: $HOME/.cache/pip
           key: pip-3.10-${{ hashFiles('.pre-commit-config.yaml') }}-${{ env.CACHE_NUMBER }}

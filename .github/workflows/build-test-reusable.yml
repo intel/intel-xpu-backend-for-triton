@@ -71,7 +71,7 @@ env:
   TRITON_DISABLE_LINE_INFO: 1
   TEST_UNSKIP: ${{ inputs.enable_unskip }}
   # Increase this value to reset cache
-  PIP_CACHE_NUMBER: 1
+  PIP_CACHE_NUMBER: 2
 
 jobs:
   build:
