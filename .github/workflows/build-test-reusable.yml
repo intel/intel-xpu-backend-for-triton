@@ -55,7 +55,7 @@ on:
       runner_version:
         description: Runner label for version
         type: string
-        default: runner-0.0.22
+        default: runner-0.0.23
       use_pyenv_python:
         description: Use Python built with pyenv
         type: boolean
@@ -395,7 +395,7 @@ jobs:
   reports:
     name: Reports
     runs-on:
-      - runner-0.0.22
+      - runner-0.0.23
     needs: integration-tests
     steps:
       - name: Checkout repository
