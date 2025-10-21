@@ -919,7 +919,7 @@ class XPUDriver(DriverBase):
 
         def update_advanced_features(device, dev_property):
             if knobs.intel.device_extensions:
-                # May be useful when using the `TRITON INTEL_DEVICE_ARCH` environment variable
+                # May be useful when using the `TRITON_INTEL_DEVICE_ARCH` environment variable
                 # to be able to flexibly turn on/off the advanced feature.
                 supported_extensions = set()
                 supported_extensions.update(knobs.intel.device_extensions.split(" "))
