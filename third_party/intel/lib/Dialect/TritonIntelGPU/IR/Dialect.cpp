@@ -291,7 +291,8 @@ LogicalResult DpasEncodingAttr::verify(
     ::llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
     unsigned repeatCount, unsigned systolicDepth, unsigned executionSize,
     unsigned opsPerChan, ::llvm::ArrayRef<unsigned> warpsPerCTA,
-    ::llvm::ArrayRef<unsigned> repCluster, unsigned subGroupSize) {
+    ::llvm::ArrayRef<unsigned> repCluster, unsigned subGroupSize,
+    std::optional<unsigned> fp4KPack) {
   if (repeatCount > 8 || repeatCount < 1) {
     return emitError() << "repeatCount must be in the range [1, 8], but was:"
                        << repeatCount;
@@ -317,6 +318,14 @@ LogicalResult DpasEncodingAttr::verify(
                        << subGroupSize << ", executionSize:" << executionSize;
   }
 
+  if (fp4KPack) {
+    if (*fp4KPack != 2)
+      return emitError() << "fp4KPack must be 2 but was:" << *fp4KPack;
+    if (opsPerChan != 4)
+      return emitError() << "opsPerChannel must be 4 for fp4 type, but was:"
+                         << opsPerChan;
+  }
+
   return success();
 }
 
@@ -335,6 +344,7 @@ Attribute DpasEncodingAttr::parse(AsmParser &parser, Type type) {
   unsigned executionSize = 0;
   unsigned opsPerChan = 0;
   unsigned threadsPerWarp = 0;
+  std::optional<unsigned> fp4KPack = std::nullopt;
 
   for (const NamedAttribute &attr : dict) {
     if (attr.getName() == "repeatCount") {
@@ -365,11 +375,17 @@ Attribute DpasEncodingAttr::parse(AsmParser &parser, Type type) {
       if (parseUInt(parser, attr, threadsPerWarp, "threadsPerWarp").failed())
         return {};
     }
+    if (attr.getName() == "fp4KPack") {
+      unsigned pack;
+      if (parseUInt(parser, attr, pack, "fp4KPack").failed())
+        return {};
+      fp4KPack = pack;
+    }
   }
 
   return parser.getChecked<DpasEncodingAttr>(
       parser.getContext(), repeatCount, systolicDepth, executionSize,
-      opsPerChan, warpsPerCTA, repCluster, threadsPerWarp);
+      opsPerChan, warpsPerCTA, repCluster, threadsPerWarp, fp4KPack);
 }
 
 void DpasEncodingAttr::print(AsmPrinter &printer) const {
@@ -381,12 +397,16 @@ void DpasEncodingAttr::print(AsmPrinter &printer) const {
   ArrayRef<unsigned> rC = shapeC;
   auto warpsPerCTA = getWarpsPerCTA();
   ArrayRef<unsigned> repCluster = getRepCluster();
+  std::optional<unsigned> fp4KPack = getFp4KPack();
   printer << "<{"
           << "repeatCount = " << getRepeatCount() << ", "
           << "systolicDepth = " << getSystolicDepth() << ", "
           << "executionSize = " << getExecutionSize() << ", "
-          << "opsPerChan = " << getOpsPerChannel() << ", "
-          << "threadsPerWarp = " << getThreadsPerWarp() << ", "
+          << "opsPerChan = " << getOpsPerChannel() << ", ";
+  if (fp4KPack) {
+    printer << "fp4KPack = " << *fp4KPack << ", ";
+  }
+  printer << "threadsPerWarp = " << getThreadsPerWarp() << ", "
           << "warpsPerCTA = [" << llvm::ArrayRef<unsigned>(warpsPerCTA) << "], "
           << "repCluster = [" << repCluster << "], "
           << "A = [" << rA << "], "
