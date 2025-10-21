@@ -18,7 +18,7 @@ on:
       runner_version:
         description: Runner label for version
         type: string
-        default: runner-0.0.23
+        default: runner-24.04-old
       python_version:
         description: Python version
         type: string

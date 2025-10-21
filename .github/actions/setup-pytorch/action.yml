@@ -78,7 +78,7 @@ runs:
       shell: bash
       env:
         # Increase this value to reset cache
-        CACHE_NUMBER: 19
+        CACHE_NUMBER: 20
       run: |
         ONEAPI_LINK=$(readlink /opt/intel/oneapi || true)
         ONEAPI_KEY=$(sha256sum /opt/intel/installed.txt 2> /dev/null | cut -d\  -f1 || true)
