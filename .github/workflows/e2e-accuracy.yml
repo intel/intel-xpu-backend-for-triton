@@ -126,16 +126,16 @@ jobs:
       fail-fast: false
     uses: ./.github/workflows/e2e-reusable.yml
     with:
-      pytorch_ref: ${{ inputs.pytorch_ref }}
+      pytorch_ref: ${{ inputs.pytorch_ref || '' }}
       suite: ${{ matrix.suite }}
       mode: ${{ matrix.mode }}
       test_mode: accuracy
       dtype: ${{ matrix.dtype }}
-      models: ${{ inputs.models }}
+      models: ${{ inputs.models || 'all' }}
       check_all_subset_models: ${{ inputs.check_all_subset_models || false }}
-      only_one_model: ${{ inputs.only_one_model }}
+      only_one_model: ${{ inputs.only_one_model || '' }}
       runner_label: ${{ inputs.runner_label || 'max1100' }}
-      TORCH_COMPILE_DEBUG: ${{ inputs.TORCH_COMPILE_DEBUG }}
+      TORCH_COMPILE_DEBUG: ${{ inputs.TORCH_COMPILE_DEBUG || '' }}
 
   summary:
     name: Aggregate and check results
@@ -176,7 +176,7 @@ jobs:
           include-hidden-files: true
 
       - name: Check results against reference
-        if: ${{ inputs.models == 'all' && inputs.only_one_model == ''  && !cancelled()}}
+        if: ${{ (inputs.models || 'all') == 'all' && (inputs.only_one_model || '') == ''  && !cancelled()}}
         run: |
           PYTORCH_XPU_OPS_REF="$(<.github/pins/e2e_reference_torch-xpu-ops.txt)"
           git clone https://github.com/intel/torch-xpu-ops.git
