@@ -207,6 +207,7 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
         )
     # Make the time to the milliseconds.
     times = torch.tensor([sum((k.duration for k in ks)) * 1e-3 for ks in kernels], dtype=torch.float)
+    print("times:", times)
     return _summarize_statistics(times, quantiles, return_mode)
 
 
@@ -373,6 +374,7 @@ class Mark:
 
         if print_data:
             print(bench.plot_name + ":")
+            df = df[[c for c in df.columns if not any(map(c.endswith, ("min", "max", "CV")))]]
             print(df.to_string())
         if save_path:
             df.to_csv(os.path.join(save_path, f"{filename}.csv"), float_format=f"%.{save_precision}f", index=False)
