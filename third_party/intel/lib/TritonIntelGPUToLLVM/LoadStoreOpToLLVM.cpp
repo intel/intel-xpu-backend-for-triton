@@ -2454,16 +2454,21 @@ struct LoadOpToBlockIOConversion
   LogicalResult
   matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
-    if (!isBlockIOCandidate(op))
-      return failure();
-
     // FIXME: Handle the case where padding is set to PAD_NAN (#5145).
     if (op.getPadding() && op.getPadding() == PaddingOption::PAD_NAN)
       return failure();
 
     Value ptr = op.getPtr();
-    if (isTensorPointerType(ptr.getType()))
+    if (isTensorPointerType(ptr.getType())) {
+      if (!isBlockIOCandidate(op))
+        return failure();
       return rewriteTensorPointerLoad(op, adaptor, rewriter);
+    }
+
+    static const bool enableBlockIOForAllLayout =
+        triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS");
+    if (!isBlockIOCandidate(op, enableBlockIOForAllLayout))
+      return failure();
 
     // Get the max tile shape supported by the layout.
     Type resultType = op.getType();
