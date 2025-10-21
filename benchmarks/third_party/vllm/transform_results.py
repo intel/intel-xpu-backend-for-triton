@@ -17,12 +17,13 @@ def parse_args():
         required=True,
     )
     parser.add_argument('--tag', help='Tag for the benchmark run', default='')
-    parser.add_argument('--benchmark', help='moe-benchmark', default='')
+    parser.add_argument('--benchmark', help='moe-benchmark', required=True)
+    parser.add_argument('--bgroup', help='Benchmark group', required=True)
 
     return parser.parse_args()
 
 
-def parse_csv(csv_file_path, tag, benchmark, param_cols):
+def parse_csv(csv_file_path, tag, bench_group, benchmark, param_cols):
     """Parse the benchmark CSV and extract performance metrics."""
 
     df = pd.read_csv(csv_file_path)
@@ -45,7 +46,7 @@ def parse_csv(csv_file_path, tag, benchmark, param_cols):
             if len(valid_rows) > 0:
                 valid_rows['run_uuid'] = run_uuid
                 valid_rows['ts'] = current_datetime
-                valid_rows['benchmark_group'] = 'moe-benchmark'
+                valid_rows['benchmark_group'] = bench_group
                 valid_rows['benchmark'] = benchmark
                 valid_rows['compiler'] = compiler_name
                 valid_rows['value_name'] = 'tflops'
@@ -90,7 +91,7 @@ def main():
         raise ValueError(f'Error: CSV file {args.source} not found')
 
     param_cols = args.param_cols.split(',')
-    df_results = parse_csv(args.source, args.tag, args.benchmark, param_cols)
+    df_results = parse_csv(args.source, args.tag, args.bgroup, args.benchmark, param_cols)
     df_results.to_csv(args.target, index=False)
 
 
