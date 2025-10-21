@@ -263,9 +263,10 @@ def perf_report(benchmarks):
 class MarkArgs:
     reports: str = ""
     n_runs: int = 1
+    brief: bool = False
 
-    @classmethod
-    def _get_parser(cls) -> argparse.ArgumentParser:
+    @staticmethod
+    def load_cli_args() -> "MarkArgs":
         """Parses arguments via CLI, allows save_path overloading to `reports`."""
         parser = argparse.ArgumentParser()
         parser.add_argument(
@@ -280,12 +281,14 @@ class MarkArgs:
             default=1,
             help="Number of runs for this benchmark. The default is one.",
         )
-        return parser
-
-    @classmethod
-    def from_args(cls) -> "MarkArgs":
-        args = cls._get_parser().parse_args()
-        return MarkArgs(args.reports, args.n_runs)
+        parser.add_argument(
+            "--brief",
+            "-b",
+            action="store_true",
+            help="Print only mean values without min, max, CV.",
+        )
+        args = parser.parse_args()
+        return MarkArgs(args.reports, args.n_runs, args.brief)
 
 
 class Mark:
@@ -295,8 +298,8 @@ class Mark:
         self.benchmarks = benchmarks
 
     # pylint: disable=too-many-branches
-    def _run(self, bench: Benchmark, save_path: str, show_plots: bool, print_data: bool, diff_col=False, run_counter=0,
-             save_precision=6, **kwargs):
+    def _run(self, bench: Benchmark, save_path: str, show_plots: bool, print_data: bool, mark_args, diff_col=False,
+             run_counter=0, save_precision=6, **kwargs):
         y_vals = []
         for label in bench.ylabel:
             y_mean = [f"{x}-{label}" for x in bench.line_names]
@@ -373,13 +376,17 @@ class Mark:
 
         if print_data:
             print(bench.plot_name + ":")
-            print(df.to_string())
+            if mark_args.brief:
+                print(df[[c for c in df.columns if not any(map(c.endswith, ("min", "max", "CV")))]].to_string())
+            else:
+                print(df.to_string())
+
         if save_path:
             df.to_csv(os.path.join(save_path, f"{filename}.csv"), float_format=f"%.{save_precision}f", index=False)
         return df
 
     def run(self, show_plots=False, print_data=False, return_df=False, save_precision=6, mark_args=None, **kwargs):
-        args = MarkArgs().from_args() if mark_args is None else mark_args
+        args = mark_args or MarkArgs.load_cli_args()
 
         has_single_bench = isinstance(self.benchmarks, Benchmark)
         benchmarks = [self.benchmarks] if has_single_bench else self.benchmarks
@@ -392,7 +399,8 @@ class Mark:
         for bench in benchmarks:
             benchmark_dfs = []
             for run_counter in range(args.n_runs):
-                df = self._run(bench, args.reports, show_plots, print_data, run_counter=run_counter, **kwargs)
+                df = self._run(bench, args.reports, show_plots, print_data, mark_args=args, run_counter=run_counter,
+                               **kwargs)
                 df["datetime"] = datetime.datetime.now()
                 df["run_counter"] = run_counter + 1
                 benchmark_dfs.append(df)
