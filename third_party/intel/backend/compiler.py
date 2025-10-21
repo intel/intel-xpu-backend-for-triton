@@ -82,7 +82,6 @@ def min_dot_size(device_props: dict):
 
 
 class XPUBackend(BaseBackend):
-    device_props: dict = {}
     instrumentation = None
 
     @staticmethod
@@ -120,13 +119,6 @@ class XPUBackend(BaseBackend):
             'has_subgroup_matrix_multiply_accumulate_tensor_float32', False)
         dev_prop['has_subgroup_2d_block_io'] = tgt_prop.get('has_subgroup_2d_block_io', False)
         dev_prop['has_bfloat16_conversions'] = tgt_prop.get('has_bfloat16_conversions', True)
-
-        if not self.device_arch:
-            return dev_prop
-
-        if self.device_arch in self.device_props:
-            dev_prop.update(self.device_props[self.device_arch])
-            return dev_prop
 
         return dev_prop
 
