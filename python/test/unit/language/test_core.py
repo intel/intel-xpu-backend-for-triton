@@ -3272,6 +3272,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
             pytest.xfail(f"input_precision {input_precision} is not supported in the interpreter")
     else:
         if is_xpu():
+            if input_precision in ("bf16x3", "bf16x6"):
+                pytest.skip(f"input_precision {input_precision} is not supported")
             if (M < 8 or N < 16 or (K < 16 and in_dtype == 'float16') or (K < 8 and in_dtype == 'float32')):
                 pytest.xfail("XPU: small dots are not supported")
         elif not is_hip() and K < 16:
