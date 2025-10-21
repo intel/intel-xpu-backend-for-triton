@@ -144,6 +144,7 @@ jobs:
         run: |
           cd pytorch
           pip install -r .ci/docker/ci_commit_pins/huggingface-requirements.txt
+          pip install accelerate
 
       - name: Install torchvision package
         if: ${{ inputs.suite == 'timm_models' || inputs.suite == 'torchbench' }}
