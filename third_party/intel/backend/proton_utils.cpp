@@ -43,9 +43,8 @@ namespace xpu {
 
 void check(ze_result_t ret, const char *functionName) {
   if (ret != ZE_RESULT_SUCCESS) {
-    throw std::runtime_error("Failed to execute " +
-                              std::string(functionName) + " with error " +
-                              std::to_string(ret));
+    throw std::runtime_error("Failed to execute " + std::string(functionName) +
+                             " with error " + std::to_string(ret));
   }
 }
 
@@ -79,20 +78,22 @@ extern "C" void getDeviceProperties(uint64_t index, uint32_t *clockRate,
   // create a struct to hold device properties
   ze_device_properties_t device_properties = {};
   device_properties.stype = ZE_STRUCTURE_TYPE_DEVICE_PROPERTIES;
-  check(zeDeviceGetProperties(phDevice, &device_properties), "zeDeviceGetProperties");
+  check(zeDeviceGetProperties(phDevice, &device_properties),
+        "zeDeviceGetProperties");
   *clockRate = device_properties.coreClockRate;
   *numSms =
       device_properties.numSlices * device_properties.numSubslicesPerSlice;
   // create a struct to hold device memory properties
   uint32_t memoryCount = 0;
-  check(zeDeviceGetMemoryProperties(phDevice, &memoryCount, nullptr), "zeDeviceGetMemoryProperties");
+  check(zeDeviceGetMemoryProperties(phDevice, &memoryCount, nullptr),
+        "zeDeviceGetMemoryProperties");
   auto pMemoryProperties = new ze_device_memory_properties_t[memoryCount];
   for (uint32_t mem = 0; mem < memoryCount; ++mem) {
     pMemoryProperties[mem].stype = ZE_STRUCTURE_TYPE_DEVICE_MEMORY_PROPERTIES;
     pMemoryProperties[mem].pNext = nullptr;
   }
-  check(zeDeviceGetMemoryProperties(phDevice, &memoryCount,
-                                       pMemoryProperties), "zeDeviceGetMemoryProperties");
+  check(zeDeviceGetMemoryProperties(phDevice, &memoryCount, pMemoryProperties),
+        "zeDeviceGetMemoryProperties");
 
   *memoryClockRate = pMemoryProperties[0].maxClockRate;
   *busWidth = pMemoryProperties[0].maxBusWidth;
