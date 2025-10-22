@@ -277,7 +277,7 @@ def benchmark(B, M, N, K, provider):
         torch_fn = lambda: torch.matmul(torch.exp(a), b).to(torch.float32)
         rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
         benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
-        _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn, time_warmup=False)
+        _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 

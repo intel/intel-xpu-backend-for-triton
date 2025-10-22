@@ -127,13 +127,6 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         dev_prop['has_subgroup_2d_block_io'] = tgt_prop.get('has_subgroup_2d_block_io', False)
         dev_prop['has_bfloat16_conversions'] = tgt_prop.get('has_bfloat16_conversions', True)
 
-        if not self.device_arch:
-            return dev_prop
-
-        if self.device_arch in self.device_props:
-            dev_prop.update(self.device_props[self.device_arch])
-            return dev_prop
-
         return dev_prop
 
     def parse_options(self, opts) -> Any:

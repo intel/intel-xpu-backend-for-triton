@@ -23,12 +23,12 @@ def is_xpu():
 
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
-def test_torch(context, tmp_path: pathlib.Path):
+def test_torch(context, tmp_path: pathlib.Path, device: str):
     temp_file = tmp_path / "test_torch.hatchet"
     proton.start(str(temp_file.with_suffix("")), context=context)
     proton.enter_scope("test")
     # F841 Local variable `temp` is assigned to but never used
-    temp = torch.ones((2, 2), device="xpu")  # noqa: F841
+    temp = torch.ones((2, 2), device=device)  # noqa: F841
     proton.exit_scope()
     proton.finalize()
     with temp_file.open() as f:
@@ -55,13 +55,13 @@ def test_torch(context, tmp_path: pathlib.Path):
                 queue.append(child)
 
 
-def test_triton(tmp_path: pathlib.Path):
+def test_triton(tmp_path: pathlib.Path, device: str):
 
     @triton.jit
     def foo(x, y):
         tl.store(y, tl.load(x))
 
-    x = torch.tensor([2], device="xpu")
+    x = torch.tensor([2], device=device)
     y = torch.zeros_like(x)
     temp_file = tmp_path / "test_triton.hatchet"
     proton.start(str(temp_file.with_suffix("")))
@@ -80,7 +80,7 @@ def test_triton(tmp_path: pathlib.Path):
     assert data[0]["children"][1]["frame"]["name"] == "test2"
 
 
-def test_cudagraph(tmp_path: pathlib.Path):
+def test_cudagraph(tmp_path: pathlib.Path, device: str):
     if is_xpu():
         pytest.skip("xpu doesn't support cudagraph; FIXME: double check")
     stream = torch.cuda.Stream()
@@ -91,8 +91,8 @@ def test_cudagraph(tmp_path: pathlib.Path):
         tl.store(z, tl.load(y) + tl.load(x))
 
     def fn():
-        a = torch.ones((2, 2), device="xpu")
-        b = torch.ones((2, 2), device="xpu")
+        a = torch.ones((2, 2), device=device)
+        b = torch.ones((2, 2), device=device)
         c = a + b
         foo[(1, )](a, b, c)
 
@@ -136,13 +136,13 @@ def test_cudagraph(tmp_path: pathlib.Path):
     assert test_frame["children"][0]["metrics"]["time (ns)"] > 0
 
 
-def test_metrics(tmp_path: pathlib.Path):
+def test_metrics(tmp_path: pathlib.Path, device: str):
 
     @triton.jit
     def foo(x, y):
         tl.store(y, tl.load(x))
 
-    x = torch.tensor([2], device="xpu")
+    x = torch.tensor([2], device=device)
     y = torch.zeros_like(x)
     temp_file = tmp_path / "test_metrics.hatchet"
     proton.start(str(temp_file.with_suffix("")))
@@ -156,11 +156,11 @@ def test_metrics(tmp_path: pathlib.Path):
     assert data[0]["children"][0]["metrics"]["foo"] == 1.0
 
 
-def test_scope_backward(tmp_path: pathlib.Path):
+def test_scope_backward(tmp_path: pathlib.Path, device: str):
     temp_file = tmp_path / "test_scope_backward.hatchet"
     proton.start(str(temp_file.with_suffix("")))
     with proton.scope("ones1"):
-        a = torch.ones((100, 100), device="xpu", requires_grad=True)
+        a = torch.ones((100, 100), device=device, requires_grad=True)
     with proton.scope("plus"):
         a2 = a * a * a
     with proton.scope("ones2"):
@@ -175,12 +175,12 @@ def test_scope_backward(tmp_path: pathlib.Path):
     assert len(data[0]["children"]) == 4
 
 
-def test_cpu_timed_scope(tmp_path: pathlib.Path):
+def test_cpu_timed_scope(tmp_path: pathlib.Path, device: str):
     temp_file = tmp_path / "test_cpu_timed_scope.hatchet"
     proton.start(str(temp_file.with_suffix("")))
     with proton.cpu_timed_scope("test0"):
         with proton.cpu_timed_scope("test1"):
-            torch.ones((100, 100), device="xpu")
+            torch.ones((100, 100), device=device)
     proton.finalize()
     with temp_file.open() as f:
         data = json.load(f)
@@ -193,7 +193,7 @@ def test_cpu_timed_scope(tmp_path: pathlib.Path):
     assert kernel_frame["metrics"]["time (ns)"] > 0
 
 
-def test_hook_launch(tmp_path: pathlib.Path):
+def test_hook_launch(tmp_path: pathlib.Path, device: str):
 
     def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
         # get arg's element size
@@ -208,7 +208,7 @@ def test_hook_launch(tmp_path: pathlib.Path):
         offs = tl.arange(0, size)
         tl.store(y + offs, tl.load(x + offs))
 
-    x = torch.tensor([2], device="xpu", dtype=torch.float32)
+    x = torch.tensor([2], device=device, dtype=torch.float32)
     y = torch.zeros_like(x)
     temp_file = tmp_path / "test_hook_triton.hatchet"
     proton.start(str(temp_file.with_suffix("")), hook="triton")
@@ -225,7 +225,7 @@ def test_hook_launch(tmp_path: pathlib.Path):
 
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
-def test_hook_launch_context(tmp_path: pathlib.Path, context: str):
+def test_hook_launch_context(tmp_path: pathlib.Path, context: str, device: str):
 
     def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
         x = args["x"]
@@ -237,7 +237,7 @@ def test_hook_launch_context(tmp_path: pathlib.Path, context: str):
         offs = tl.arange(0, size)
         tl.store(y + offs, tl.load(x + offs))
 
-    x = torch.tensor([2], device="xpu", dtype=torch.float32)
+    x = torch.tensor([2], device=device, dtype=torch.float32)
     y = torch.zeros_like(x)
     temp_file = tmp_path / "test_hook.hatchet"
     proton.start(str(temp_file.with_suffix("")), hook="triton", context=context)
@@ -257,7 +257,7 @@ def test_hook_launch_context(tmp_path: pathlib.Path, context: str):
             queue.append(child)
 
 
-def test_hook_with_third_party(tmp_path: pathlib.Path):
+def test_hook_with_third_party(tmp_path: pathlib.Path, device: str):
     third_party_hook_invoked = False
 
     def third_party_hook(metadata) -> None:
@@ -278,7 +278,7 @@ def test_hook_with_third_party(tmp_path: pathlib.Path):
         offs = tl.arange(0, size)
         tl.store(y + offs, tl.load(x + offs))
 
-    x = torch.tensor([2], device="xpu", dtype=torch.float32)
+    x = torch.tensor([2], device=device, dtype=torch.float32)
     y = torch.zeros_like(x)
     temp_file = tmp_path / "test_hook_with_third_party.hatchet"
     proton.start(str(temp_file.with_suffix("")), hook="triton")
@@ -292,7 +292,7 @@ def test_hook_with_third_party(tmp_path: pathlib.Path):
     assert data[0]["children"][0]["metrics"]["time (ns)"] > 0
 
 
-def test_hook_multiple_threads(tmp_path: pathlib.Path):
+def test_hook_multiple_threads(tmp_path: pathlib.Path, device: str):
 
     def metadata_fn_foo(grid: tuple, metadata: NamedTuple, args: dict):
         return {"name": "foo_test"}
@@ -310,9 +310,9 @@ def test_hook_multiple_threads(tmp_path: pathlib.Path):
         offs = tl.arange(0, size)
         tl.store(y + offs, tl.load(x + offs))
 
-    x_foo = torch.tensor([2], device="xpu", dtype=torch.float32)
+    x_foo = torch.tensor([2], device=device, dtype=torch.float32)
     y_foo = torch.zeros_like(x_foo)
-    x_bar = torch.tensor([2], device="xpu", dtype=torch.float32)
+    x_bar = torch.tensor([2], device=device, dtype=torch.float32)
     y_bar = torch.zeros_like(x_bar)
 
     temp_file = tmp_path / "test_hook.hatchet"
@@ -350,7 +350,7 @@ def test_hook_multiple_threads(tmp_path: pathlib.Path):
     assert root[1]["metrics"]["count"] == 100
 
 
-def test_pcsampling(tmp_path: pathlib.Path):
+def test_pcsampling(tmp_path: pathlib.Path, device: str):
     if is_hip():
         pytest.skip("HIP backend does not support pc sampling")
     if is_xpu():
@@ -370,7 +370,7 @@ def test_pcsampling(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_pcsampling.hatchet"
     proton.start(str(temp_file.with_suffix("")), hook="triton", backend="cupti", mode="pcsampling")
     with proton.scope("init"):
-        x = torch.ones((1024, ), device="xpu", dtype=torch.float32)
+        x = torch.ones((1024, ), device=device, dtype=torch.float32)
         y = torch.zeros_like(x)
     with proton.scope("test"):
         foo[(1, )](x, y, x.size()[0], num_warps=4)
@@ -388,13 +388,13 @@ def test_pcsampling(tmp_path: pathlib.Path):
     assert init_frame["children"][0]["metrics"]["num_samples"] > 0
 
 
-def test_deactivate(tmp_path: pathlib.Path):
+def test_deactivate(tmp_path: pathlib.Path, device: str):
     temp_file = tmp_path / "test_deactivate.hatchet"
     session_id = proton.start(str(temp_file.with_suffix("")), hook="triton")
     proton.deactivate(session_id)
-    torch.randn((10, 10), device="xpu")
+    torch.randn((10, 10), device=device)
     proton.activate(session_id)
-    torch.zeros((10, 10), device="xpu")
+    torch.zeros((10, 10), device=device)
     proton.deactivate(session_id)
     proton.finalize()
     with temp_file.open() as f:
@@ -405,18 +405,18 @@ def test_deactivate(tmp_path: pathlib.Path):
     assert "device_id" in data[0]["children"][0]["metrics"]
 
 
-def test_multiple_sessions(tmp_path: pathlib.Path):
+def test_multiple_sessions(tmp_path: pathlib.Path, device: str):
     temp_file0 = tmp_path / "test_multiple_sessions0.hatchet"
     temp_file1 = tmp_path / "test_multiple_sessions1.hatchet"
     session_id0 = proton.start(str(temp_file0.with_suffix("")))
     session_id1 = proton.start(str(temp_file1.with_suffix("")))
     with proton.scope("scope0"):
-        torch.randn((10, 10), device="xpu")
-        torch.randn((10, 10), device="xpu")
+        torch.randn((10, 10), device=device)
+        torch.randn((10, 10), device=device)
     proton.deactivate(session_id0)
     proton.finalize(session_id0)
     with proton.scope("scope1"):
-        torch.randn((10, 10), device="xpu")
+        torch.randn((10, 10), device=device)
     proton.finalize(session_id1)
     # kernel has been invoked twice in session 0 and three times in session 1
     with temp_file0.open() as f:
@@ -430,7 +430,7 @@ def test_multiple_sessions(tmp_path: pathlib.Path):
     assert scope0_count + scope1_count == 3
 
 
-def test_trace(tmp_path: pathlib.Path):
+def test_trace(tmp_path: pathlib.Path, device: str):
     temp_file = tmp_path / "test_trace.chrome_trace"
     proton.start(str(temp_file.with_suffix("")), data="trace")
 
@@ -440,7 +440,7 @@ def test_trace(tmp_path: pathlib.Path):
         tl.store(y + offs, tl.load(x + offs))
 
     with proton.scope("init"):
-        x = torch.ones((1024, ), device="xpu", dtype=torch.float32)
+        x = torch.ones((1024, ), device=device, dtype=torch.float32)
         y = torch.zeros_like(x)
 
     with proton.scope("test"):
@@ -456,7 +456,7 @@ def test_trace(tmp_path: pathlib.Path):
         assert trace_events[-1]["args"]["call_stack"] == ["ROOT", "test", "foo"]
 
 
-def test_scope_multiple_threads(tmp_path: pathlib.Path):
+def test_scope_multiple_threads(tmp_path: pathlib.Path, device: str):
     temp_file = tmp_path / "test_scope_threads.hatchet"
     proton.start(str(temp_file.with_suffix("")))
 
@@ -467,7 +467,7 @@ def test_scope_multiple_threads(tmp_path: pathlib.Path):
         for i in range(N):
             name = f"{prefix}_{i}"
             proton.enter_scope(name)
-            torch.ones((1, ), device="xpu")
+            torch.ones((1, ), device=device)
             proton.exit_scope()
 
     threads = [threading.Thread(target=worker, args=(tname, )) for tname in thread_names]

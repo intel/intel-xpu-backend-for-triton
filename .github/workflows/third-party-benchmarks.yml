@@ -15,10 +15,6 @@ on:
         description: JSON list of benchmarks to run. Leave empty to run all benchmarks.
         type: string
         default: ""
-      use_pyenv_python:
-        description: Use Python built with pyenv
-        type: boolean
-        default: false
   schedule:
     # About midnight PST (UTC-8)
     - cron: "5 10 * * *"
@@ -50,14 +46,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Install Python
-        if: ${{ !(inputs.use_pyenv_python || false) }}
-        uses: actions/setup-python@v6
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
       - name: Install Python (from pyenv) ${{ inputs.python_version }}
-        if: ${{ inputs.use_pyenv_python }}
         uses: ./.github/actions/setup-pyenv-python
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -69,7 +58,7 @@ jobs:
 
       - name: Install Python build dependencies
         run: |
-          pip install wheel cmake
+          pip install cmake
 
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
@@ -77,15 +66,15 @@ jobs:
       - name: Setup Triton
         uses: ./.github/actions/setup-triton
 
-      - name: Install benchmark dependencies
-        id: install
-        run: |
-          pip install transformers pandas pytest
-
       - name: Create reports dir
         run: |
           mkdir reports
           echo "REPORTS=$PWD/reports" >> $GITHUB_ENV
+
+      - name: Install benchmark dependencies
+        id: install
+        run: |
+          pip install transformers pandas pytest
 
       - name: Install benchmarks
         id: install-benchmarks
@@ -112,7 +101,7 @@ jobs:
 
           cd benchmarks/third_party/vllm
           FP8="1" python batched_moe_benchmark.py --reports $REPORTS
-          python transform_results.py $REPORTS/moe-gemm-performance.csv $REPORTS/moe-gemm-report.csv --tag $TAG --benchmark moe-fp8-benchmark
+          python transform_results.py $REPORTS/moe-gemm-performance.csv $REPORTS/moe-gemm-fp8-report.csv --tag $TAG --benchmark moe-fp8-benchmark
 
       - name: Run Liger-Kernel benchmarks
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'liger-kernel')) }}
