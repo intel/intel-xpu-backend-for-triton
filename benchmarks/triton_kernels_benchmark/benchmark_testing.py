@@ -266,7 +266,7 @@ class MarkArgs:
     brief: bool = False
 
     @staticmethod
-    def load_cli_args() -> "MarkArgs":
+    def load_cli_args() -> MarkArgs:
         """Parses arguments via CLI, allows save_path overloading to `reports`."""
         parser = argparse.ArgumentParser()
         parser.add_argument(
