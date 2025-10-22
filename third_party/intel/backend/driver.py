@@ -260,7 +260,7 @@ class TritonLauncher:
                 ctypes.windll.kernel32.FreeLibrary(handle)
 
 
-def compile_module_from_src(src: str, name: str):
+def compile_module_from_src(src: str, name: str, include_dirs: list[str] | None = None):
     hasher = hashlib.sha256(__CACHE_VERSION.encode("utf-8"))
     hasher.update((src + platform_key()).encode("utf-8"))
     key = hasher.hexdigest()
@@ -279,8 +279,9 @@ def compile_module_from_src(src: str, name: str):
                 else:
                     extra_compiler_args += ["-Wl,-rpath," + dir for dir in COMPILATION_HELPER.libsycl_dir]
 
-            so = _build(name, src_path, tmpdir, COMPILATION_HELPER.library_dir, COMPILATION_HELPER.include_dir,
-                        COMPILATION_HELPER.libraries, ccflags=extra_compiler_args)
+            so = _build(name, src_path, tmpdir, COMPILATION_HELPER.library_dir,
+                        COMPILATION_HELPER.include_dir + (include_dirs or []), COMPILATION_HELPER.libraries,
+                        ccflags=extra_compiler_args)
             with open(so, "rb") as f:
                 cache_path = cache.put(f.read(), f"{name}{suffix}", binary=True)
 
@@ -290,7 +291,7 @@ def compile_module_from_src(src: str, name: str):
         return SpirvUtils(cache_path)
     if name == '__triton_launcher':
         return TritonLauncher(cache_path)
-    if name == 'proton_utils':
+    if name in ['proton_utils', 'xpu_api']:
         return cache_path
 
     return _load_module_from_path(name, cache_path)
@@ -946,6 +947,13 @@ class XPUDriver(DriverBase):
         from triton.backends.intel.driver import compile_module_from_src
 
         dirname = os.path.dirname(os.path.realpath(__file__))
+        dirname_third_party = os.path.realpath(dirname + "../../..")
+        include_dir = dirname_third_party + "/proton/csrc/include/"
+        os.environ["PROTON_XPUAPI_LIB_PATH"] = compile_module_from_src(
+            src=Path(dirname_third_party + "/proton/csrc/lib/Driver/GPU/XpuApiCompileInRuntime.cpp").read_text(),
+            name="xpu_api",
+            include_dirs=[include_dir],
+        )
         return compile_module_from_src(src=Path(dirname).joinpath("proton_utils.cpp").read_text(), name="proton_utils")
 
     def get_active_torch_device(self):
