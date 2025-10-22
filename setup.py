@@ -657,6 +657,7 @@ def get_package_dirs():
 
     if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
         yield ("triton.profiler", "third_party/proton/proton")
+        yield ("triton.proton.csrc.include", "third_party/proton/csrc/include/")
         yield ("triton.profiler.hooks", "third_party/proton/proton/hooks")
 
 
@@ -680,6 +681,7 @@ def get_packages():
 
     if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
         yield "triton.profiler"
+        yield "triton.proton.csrc.include"
 
 
 def add_link_to_backends(external_only):
@@ -713,6 +715,9 @@ def add_link_to_proton():
     proton_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "third_party", "proton", "proton"))
     proton_install_dir = os.path.join(os.path.dirname(__file__), "python", "triton", "profiler")
     update_symlink(proton_install_dir, proton_dir)
+    proton_include_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "third_party", "proton", "csrc", "include"))
+    proton_install_include_dir = os.path.join(os.path.dirname(__file__), "python", "triton", "proton", "csrc", "include")
+    update_symlink(proton_install_include_dir, proton_include_dir)
 
 
 def add_links(external_only):
