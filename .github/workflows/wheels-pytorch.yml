@@ -112,6 +112,7 @@ jobs:
           $env:CIBW_CACHE_PATH = "${{ env.NEW_WORKSPACE }}/cibw"
           $env:USE_XCCL = "1"
           $env:CIBW_BEFORE_BUILD = "pip install -r requirements.txt"
+          $env:CMAKE_ARGS='-DENABLE_SYCL_QOPTION=OFF'
 
 
           $env:REL_WITH_DEB_INFO = "1"
