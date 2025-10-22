@@ -69,7 +69,7 @@ def test_copy_kernel(layout, XBLOCK, device):
     torch.testing.assert_close(out, inp)
 
 
-@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires Hopper", run=False)
 def test_copy_kernel_multi_cta():
     XBLOCK = 2048
     layout = ttgl.BlockedLayout(size_per_thread=[8], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[8], order=[0],
