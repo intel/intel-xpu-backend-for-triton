@@ -7,6 +7,7 @@
 #include "Profiler/Instrumentation/InstrumentationProfiler.h"
 #include "Profiler/Roctracer/RoctracerProfiler.h"
 #ifdef TRITON_BUILD_PROTON_XPU
+#include "Driver/GPU/XpuApi.h"
 #include "Profiler/Xpupti/XpuptiProfiler.h"
 #endif
 #include "Utility/String.h"
@@ -26,9 +27,8 @@ Profiler *makeProfiler(const std::string &name, void *sycl_queue = nullptr,
   }
 #ifdef TRITON_BUILD_PROTON_XPU
   if (proton::toLower(name) == "xpupti") {
-    return &XpuptiProfiler::instance()
-                .setSyclQueue(sycl_queue)
-                .setUtilsCachePath(utils_cache_path);
+    xpu::XPU_API_UTILS = utils_cache_path;
+    return &XpuptiProfiler::instance().setSyclQueue(sycl_queue);
   }
 #endif
   throw std::runtime_error("Unknown profiler: " + name);

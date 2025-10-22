@@ -7,6 +7,8 @@ namespace proton {
 
 namespace xpu {
 
+extern std::string XPU_API_UTILS;
+
 Device getDevice(uint64_t index);
 
 } // namespace xpu

@@ -1,31 +1,31 @@
 #include "Driver/GPU/XpuApi.h"
 
 #include <dlfcn.h>
-#include <iostream>
+#include <stdexcept>
 #include <string>
 
 namespace proton {
 
 namespace xpu {
 
-typedef void (*GetDeviceFunc)(uint64_t, uint32_t *, uint32_t *, uint32_t *,
-                              uint32_t *, char[256]);
+std::string XPU_API_UTILS;
+
+typedef void (*GetDevicePropertiesFunc)(uint64_t, uint32_t *, uint32_t *,
+                                        uint32_t *, uint32_t *, char[256]);
 
 Device getDevice(uint64_t index) {
-  // void *handle = dlopen(utils_cache_path.data(), RTLD_LAZY);
-  void *handle = dlopen(std::getenv("PROTON_XPUAPI_LIB_PATH"), RTLD_LAZY);
+  void *handle = dlopen(XPU_API_UTILS.data(), RTLD_LAZY);
   if (!handle) {
     const char *dlopen_error = dlerror();
-    std::cerr << "Failed to load library: " << dlopen_error << std::endl;
     throw std::runtime_error(std::string("Failed to load library: ") +
                              std::string(dlopen_error));
   }
 
   dlerror();
-  GetDeviceFunc getDeviceFromLib = (GetDeviceFunc)dlsym(handle, "getDevice");
+  GetDevicePropertiesFunc getDeviceProperties =
+      (GetDevicePropertiesFunc)dlsym(handle, "getDeviceProperties");
   const char *dlsym_error = dlerror();
   if (dlsym_error) {
-    std::cerr << "Failed to load function: " << dlsym_error << std::endl;
     dlclose(handle);
     throw std::runtime_error(std::string("Failed to load function: ") +
                              std::string(dlsym_error));
@@ -36,8 +36,8 @@ Device getDevice(uint64_t index) {
   uint32_t busWidth = 0;
   uint32_t numSms = 0;
   char arch[256];
-  getDeviceFromLib(index, &clockRate, &memoryClockRate, &busWidth, &numSms,
-                   arch);
+  getDeviceProperties(index, &clockRate, &memoryClockRate, &busWidth, &numSms,
+                      arch);
   dlclose(handle);
 
   return Device(DeviceType::XPU, index, clockRate, memoryClockRate, busWidth,

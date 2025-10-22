@@ -278,7 +278,7 @@ void CallbackCommon(pti_callback_domain domain,
 typedef void (*EnumDeviceUUIDsFunc)(std::vector<std::array<uint8_t, 16>>);
 
 int callEnumDeviceUUIDs(const std::string &utils_cache_path) {
-  void *handle = dlopen(utils_cache_path.data(), RTLD_LAZY);
+  void *handle = dlopen(xpu::XPU_API_UTILS.data(), RTLD_LAZY);
   if (!handle) {
     std::cerr << "Failed to load library: " << dlerror() << std::endl;
     return 1;
@@ -302,8 +302,8 @@ int callEnumDeviceUUIDs(const std::string &utils_cache_path) {
 
 typedef void (*WaitOnSyclQueueFunc)(void *);
 
-int callWaitOnSyclQueue(const std::string &utils_cache_path, void *syclQueue) {
-  void *handle = dlopen(utils_cache_path.data(), RTLD_LAZY);
+int callWaitOnSyclQueue(void *syclQueue) {
+  void *handle = dlopen(xpu::XPU_API_UTILS.data(), RTLD_LAZY);
   if (!handle) {
     std::cerr << "Failed to load library: " << dlerror() << std::endl;
     return 1;
@@ -328,8 +328,8 @@ int callWaitOnSyclQueue(const std::string &utils_cache_path, void *syclQueue) {
 void XpuptiProfiler::XpuptiProfilerPimpl::doStart() {
   // should be call to shared lib
   XpuptiProfiler &profiler = threadState.profiler;
-  if (profiler.utils_cache_path != "") {
-    callEnumDeviceUUIDs(profiler.utils_cache_path);
+  if (xpu::XPU_API_UTILS != "") {
+    callEnumDeviceUUIDs(xpu::XPU_API_UTILS);
   }
 
   xpupti::viewSetCallbacks<true>(allocBuffer, completeBuffer);
@@ -349,7 +349,7 @@ void XpuptiProfiler::XpuptiProfilerPimpl::doStart() {
 void XpuptiProfiler::XpuptiProfilerPimpl::doFlush() {
   XpuptiProfiler &profiler = threadState.profiler;
   if (profiler.syclQueue != nullptr) {
-    callWaitOnSyclQueue(profiler.utils_cache_path, profiler.syclQueue);
+    callWaitOnSyclQueue(profiler.syclQueue);
   }
 
   profiler.correlation.flush(

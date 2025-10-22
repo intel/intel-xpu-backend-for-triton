@@ -949,12 +949,11 @@ class XPUDriver(DriverBase):
         dirname = os.path.dirname(os.path.realpath(__file__))
         dirname_third_party = os.path.realpath(dirname + "../../..")
         include_dir = dirname_third_party + "/proton/csrc/include/"
-        os.environ["PROTON_XPUAPI_LIB_PATH"] = compile_module_from_src(
+        return compile_module_from_src(
             src=Path(dirname_third_party + "/proton/csrc/lib/Driver/GPU/XpuApiCompileInRuntime.cpp").read_text(),
             name="xpu_api",
             include_dirs=[include_dir],
         )
-        return compile_module_from_src(src=Path(dirname).joinpath("proton_utils.cpp").read_text(), name="proton_utils")
 
     def get_active_torch_device(self):
         import torch
