@@ -80,7 +80,7 @@ def TritonIntelRemoveBoundaryChecks
     %lb = arith.bitcast %c0_i32 : i32 to i32
     %ub = arith.bitcast %c1024_i32 : i32 to i32
     %st = arith.bitcast %c64_i32 : i32 to i32
-    scf.for %i = %lb to %ub step %st : i32 {
+    scf.for %iv = %lb to %ub step %st : i32 {
       %s0 = arith.constant 512 : i64
       %s1 = arith.constant 64 : i64
       %s2 = arith.constant 1024 : i64
@@ -98,7 +98,7 @@ def TritonIntelRemoveBoundaryChecks
     The transformation would drop the boundary check on the load operation because:
       - `%ptr` is never advanced in the loop
       - `%iv` has values [0, 64, 128, ..., 960], max(%iv) = 960
-      - `%s2` is qual to 1014
+      - `%s2` is equal to 1014
       - the boundary check expression `%iv` < `%s2` is always true
   }];
 
