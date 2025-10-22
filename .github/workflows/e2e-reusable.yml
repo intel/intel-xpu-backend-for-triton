@@ -89,7 +89,7 @@ jobs:
         run: |
           # cmake 3.22.1 does not work with the recent torchaudio: https://github.com/intel/intel-xpu-backend-for-triton/issues/2079
           # cmake<4.0.0 is required as a workaround for CMake Error at third_party/double-conversion/CMakeLists.txt:1 (cmake_minimum_required)
-          pip install wheel 'cmake<4.0.0' build
+          pip install 'cmake<4.0.0' build
 
       - name: Setup PyTorch
         id: setup-pytorch
@@ -144,6 +144,7 @@ jobs:
         run: |
           cd pytorch
           pip install -r .ci/docker/ci_commit_pins/huggingface-requirements.txt
+          pip install accelerate
 
       - name: Install torchvision package
         if: ${{ inputs.suite == 'timm_models' || inputs.suite == 'torchbench' }}

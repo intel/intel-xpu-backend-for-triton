@@ -25,7 +25,7 @@ from vllm.platforms import current_platform
 from vllm.model_executor.layers.fused_moe.utils import normalize_batched_scales_shape
 
 # Import utility functions from vLLM tests
-from tests.kernels.moe.utils import make_quantized_test_activations, make_test_weights
+from tests.kernels.moe.utils import make_quantized_test_activations, make_test_weight
 from tests.kernels.quant_utils import native_batched_masked_quant_matmul
 
 
@@ -552,9 +552,9 @@ def get_batched_mm_benchmark(
         )
 
         # Create test weights (only need B matrix for batched MM)
-        (B, B_q, B_scale, _), _ = make_test_weights(
+        B, B_q, B_scale, _ = make_test_weight(
             num_experts,
-            N // 2,
+            N,
             K,
             in_dtype=act_dtype,
             quant_dtype=quant_dtype,

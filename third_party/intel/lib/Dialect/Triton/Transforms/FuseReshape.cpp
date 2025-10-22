@@ -24,15 +24,20 @@ namespace mlir::triton::intel {
 
 namespace {
 
-class FuseReshape {
-private:
-  SmallPtrSet<Operation *, 8> cleanUp;
-
+// Transform:
+//   %ptr = tt.make_tensor_ptr %base, [%s0,%s1,%s2], [%a,%b,%c], [%x,%y,%z]
+//                       {order = array<i32: 2, 1, 0>} : <tensor<1x512x64xf16>>
+//   %load = tt.load %ptr : !tt.ptr<tensor<1x512x64xf16>>
+//   %A = tt.reshape %load : tensor<1x512x64xf16> -> tensor<512x64xf16>
+//   dot %A, ... : tensor<512x64xf16> x tensor<64x32xf16> -> tensor<512x32xf16>
+// into:
+//   %d = %a / %b
+//   %ptr = tt.make_tensor_ptr %base, [%s0*%d+%s1,%s2], [%b,%c], [%x*%div+%y,%z]
+//                       {order = array<i32: 1, 0>} : <tensor<512x64xf16>>
+//   %A = tt.load %ptr : !tt.ptr<tensor<512x64xf16>>
+//   dot %A, ... : tensor<512x64xf16> x tensor<64x32xf16> -> tensor<512x32xf16>
+class FuseReshapeWithLoad : public tt::intel::Fuser {
 public:
-  using DefUseChain = tt::intel::DefUseChain;
-  using DefUseChainManager = tt::intel::DefUseChainManager;
-  using DefUseChains = DefUseChainManager::DefUseChains;
-
   void run(ModuleOp moduleOp) {
     // Collect def-use chains originating at a `MakeTensorPtrOp` operation
     // and terminating at a candidate `tt::ReshapeOp` operation.
@@ -73,7 +78,7 @@ public:
     LLVM_DEBUG(llvm::dbgs() << "[Before fusion]:\n" << manager << "\n");
 
     // Fuse tt.LoadOp->tt.ReshapeOp operations.
-    fuse(manager.getChains());
+    Fuser::fuse(manager.getChains());
 
     // Remove operations that are no longer used.
     if (!cleanUp.empty())
@@ -81,69 +86,7 @@ public:
   }
 
 private:
-  // Duplicate the root operation of the given chains.
-  void duplicateRoot(DefUseChains &chains) const {
-    std::map<Operation *, DefUseChains> rootToChains;
-    for (const DefUseChain &chain : chains) {
-      Operation *start = chain.getStart();
-      if (!rootToChains[start].empty())
-        continue;
-
-      DefUseChains sameRootChains{chain};
-      rootToChains[start] = sameRootChains;
-      for (const DefUseChain &otherChain : chains) {
-        if (otherChain == chain || otherChain.getStart() != start)
-          continue;
-
-        rootToChains[start].insert(otherChain);
-      }
-    }
-
-    for (auto &entry : rootToChains) {
-      DefUseChains &sameRootChains = entry.second;
-      duplicateRoot(sameRootChains, chains);
-    }
-  }
-
-  // Duplicate the root operation of \p sameRootChains and update \p chains.
-  void duplicateRoot(DefUseChains &sameRootChains, DefUseChains &chains) const {
-    assert(llvm::all_of(sameRootChains, [&](const DefUseChain &chain) {
-      const DefUseChain &firstChain = *sameRootChains.begin();
-      return firstChain.getStart() == chain.getStart();
-    }));
-
-    for (auto it = sameRootChains.begin(); it != sameRootChains.end(); ++it) {
-      const DefUseChain &chain = *it;
-      Operation *start = chain.getStart();
-      auto users = start->getUsers();
-      if (llvm::count_if(users, [](auto) { return true; }) == 1)
-        continue;
-
-      OpBuilder builder(start);
-      Operation *duplicate = builder.insert(start->clone());
-      assert(start->getNumResults() == 1);
-
-      Value res = start->getResult(0);
-      Value dupRes = duplicate->getResult(0);
-      res.replaceUsesWithIf(dupRes, [&](OpOperand &operand) {
-        Operation *op = operand.getOwner();
-        return chain.contains(op);
-      });
-
-      DefUseChainManager manager;
-      manager.createChains(duplicate, chain.getEnd());
-      for (DefUseChain newChain : manager.getChains())
-        chains.insert(newChain);
-      chains.erase(chain);
-    }
-  }
-
-  void fuse(const DefUseChains &chains) {
-    for (const DefUseChain &chain : chains)
-      fuse(chain);
-  }
-
-  void fuse(const DefUseChain &chain) {
+  void fuse(const DefUseChain &chain) final {
     assert(
         isa<tt::MakeTensorPtrOp>(chain.getStart()) &&
         "Expecting 'chain' to be rooted by a 'tt.make_tensor_ptr' operation");
@@ -332,145 +275,10 @@ private:
                         [&](int idx) { return idx == innermostDimIdx; });
   }
 
-  // Prune chains that cannot be handled during fusion. For example,
-  // operations in the def-use chain should have a single user, except in
-  // special circumstances (e.g. the root operation of a chain might have more
-  // than one user).
-  void pruneInvalid(DefUseChains &chains) const {
-    assert(!chains.empty() && "Expecting at least one candidate chain");
-
-    // Duplicate the root operation if necessary.
-    // Note: at this point overlap, if present, can only happen at the root.
-    duplicateRoot(chains);
-
-    for (auto it = chains.begin(); it != chains.end();) {
-      if (!validateChain(*it))
-        it = chains.erase(it);
-      else
-        ++it;
-    }
-  }
-
-  // Determine whether all operations in the given def-use chain have a single
-  // user.
-  // Note: we allow an operation in the def-use chain to have an additional
-  // user if the operation is in a for loop, and the additional user is the
-  // loop yield operation, provided that the result yielded is not used after
-  // the loop. Example:
-  //   make_tensor_ptr -> advance -> load (OK)
-  //   make_tensor_ptr -> for init_arg -> advance -> load (OK)
-  //                                   -> yield (OK)
-  //   make_tensor_ptr -> for init_arg -> advance -> load (OK)
-  //                                              -> yield -> load (NOT OK)
-  //
-  bool validateChain(const DefUseChain &chain) const {
-    auto validateOperation = [](Operation *op, Operation *&nextOp) {
-      assert(nextOp == nullptr);
-      if (op->hasOneUse())
-        return true;
-      if (!op->getParentOfType<LoopLikeOpInterface>())
-        return false;
-
-      auto loopOp = op->getParentOfType<LoopLikeOpInterface>();
-      auto yieldOp = cast<scf::YieldOp>(
-          loopOp.getYieldedValues()[0].getParentBlock()->getTerminator());
-
-      SmallVector<Operation *> users(op->getUsers());
-      if (users.size() > 2 || llvm::none_of(users, [&](Operation *user) {
-            return user == yieldOp;
-          }))
-        return false;
-
-      auto yieldedValUsedAfterLoop = [&op, &yieldOp]() {
-        auto it =
-            llvm::find_if(yieldOp->getOpOperands(), [&op](OpOperand &operand) {
-              return operand.get() == op->getResult(0);
-            });
-        assert(it != yieldOp->getOpOperands().end());
-        OpOperand &operand = *it;
-        auto loopOp = cast<LoopLikeOpInterface>(yieldOp->getParentOp());
-        OpResult res = loopOp->getResult(operand.getOperandNumber());
-        return !res.getUsers().empty();
-      };
-
-      if (yieldedValUsedAfterLoop())
-        return false;
-
-      nextOp = *llvm::find_if(
-          users, [](Operation *user) { return !isa<scf::YieldOp>(user); });
-      return true;
-    };
-
-    Operation *currentOp = chain.getStart();
-    while (currentOp != chain.getEnd()) {
-      Operation *user = nullptr;
-      if (!validateOperation(currentOp, user)) {
-        LLVM_DEBUG(llvm::dbgs()
-                   << "Fails safety checks: " << *currentOp << "\n");
-        return false;
-      }
-
-      user = (!user) ? user = *currentOp->getUsers().begin() : user;
-      if (user->getNumRegions() == 0) {
-        currentOp = user;
-        continue;
-      }
-
-      // Current limitation: give up if the use is a branch.
-      if (isa<scf::IfOp>(user))
-        return false;
-
-      [[maybe_unused]] Operation *oldCurrentOp = currentOp;
-
-      // Find the next operation in the def-use chain inside the loop body.
-      if (auto loopOp = dyn_cast<LoopLikeOpInterface>(user)) {
-        for (auto [arg, init] :
-             llvm::zip(loopOp.getRegionIterArgs(), loopOp.getInits())) {
-          if (init == currentOp->getResult(0)) {
-            auto argUsers = arg.getUsers();
-            for (Operation *user : argUsers) {
-              if (chain.contains(user)) {
-                currentOp = user;
-                break;
-              }
-            }
-          }
-        }
-      }
-
-      assert(currentOp != oldCurrentOp && "Infinite loop detected!");
-    }
-
-    return true;
-  }
-
-  // Propagate \p newVal to operations in the given def-use chain.
-  void propagateToUsers(Value newVal, const DefUseChain &chain,
-                        IRMapping &mapping) {
-    auto start = cast<tt::MakeTensorPtrOp>(chain.getStart());
-    Operation *end = chain.getEnd();
-    auto it = llvm::find_if(start->getUsers(), [&](Operation *user) {
-      return chain.contains(user);
-    });
-    assert(it != start->getUsers().end() && "Expecting valid iterator");
-
-    Operation *nextOp = *it;
-    propagateToUser(newVal, start.getResult(), nextOp, end, mapping);
-  }
-
-  // Propagate \p newVal to users of \p origOp.
-  void propagateToUsers(Value newVal, Value origVal, Operation *origOp,
-                        Operation *sentinel, IRMapping &mapping) {
-    assert(origOp && sentinel && "Expecting valid operations");
-    const SmallVector<Operation *> users(origOp->getUsers());
-    for (Operation *user : users)
-      propagateToUser(newVal, origVal, user, sentinel, mapping);
-  }
-
   // If \p user is not \p sentinel, propagate \p newVal to \p user. Otherwise
   // terminate the propagation.
-  void propagateToUser(Value newVal, Value origVal, Operation *user,
-                       Operation *sentinel, IRMapping &mapping) {
+  virtual void propagateToUser(Value newVal, Value origVal, Operation *user,
+                               Operation *sentinel, IRMapping &mapping) final {
     assert(user && sentinel && "Expecting valid operations");
     assert(llvm::is_contained(origVal.getUsers(), user) && "Invalid usage");
 
@@ -546,26 +354,6 @@ private:
 
     llvm_unreachable("Unexpected kind of user");
   }
-
-  void propagateToLoop(Value newVal, Value origVal, LoopLikeOpInterface loopOp,
-                       Operation *sentinel, IRMapping &mapping) {
-    assert(sentinel && sentinel != loopOp && "Unexpected sentinel kind");
-    LLVM_DEBUG({
-      llvm::dbgs() << "In " << __func__ << "\n";
-      llvm::dbgs() << "newVal: " << newVal << "\n";
-    });
-
-    for (auto [initArg, rgnInitArg] :
-         llvm::zip(loopOp.getInitsMutable(), loopOp.getRegionIterArgs())) {
-      if (initArg.get() == origVal) {
-        initArg.set(newVal);
-        rgnInitArg.setType(initArg.get().getType());
-        const SmallVector<Operation *> users(rgnInitArg.getUsers());
-        for (Operation *user : users)
-          propagateToUser(rgnInitArg, rgnInitArg, user, sentinel, mapping);
-      }
-    }
-  }
 };
 
 struct TritonIntelFuseReshape
@@ -573,7 +361,7 @@ struct TritonIntelFuseReshape
 public:
   void runOnOperation() final {
     ModuleOp moduleOp = getOperation();
-    FuseReshape fuser;
+    FuseReshapeWithLoad fuser;
     fuser.run(moduleOp);
     assert(succeeded(verify(moduleOp)) && "Module verification failed");
   }
