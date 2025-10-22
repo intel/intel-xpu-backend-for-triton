@@ -3,6 +3,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Interfaces/InferIntRangeInterface.h"
 #include "mlir/Support/WalkResult.h"
@@ -42,6 +43,8 @@ public:
         int idx = order.size() - order[boundIdx] - 1;
         Value offset = makeTensorPtrOp.getOffsets()[idx];
         Value shape = makeTensorPtrOp.getShape()[idx];
+        auto resType = cast<RankedTensorType>(loadOp.getResult().getType());
+        ArrayRef<int64_t> resShape = resType.getShape();
         std::optional<int64_t> offsetVal = getConstantIntValue(offset),
                                shapeVal = getConstantIntValue(shape);
 
@@ -55,7 +58,7 @@ public:
         }
 
         // Case 1: offset and shape are constant.
-        if (offsetVal && *offsetVal < *shapeVal) {
+        if (offsetVal && ((*offsetVal + resShape[idx]) <= *shapeVal)) {
           LLVM_DEBUG(llvm::dbgs().indent(2)
                      << "Check at index " << boundIdx << " is unnecessary\n");
           continue;
@@ -120,9 +123,8 @@ public:
             continue;
           }
 
-          // Compare the max value of the loop IV to the offset.
-          APInt max = (*optRange).smax();
-          if (max.getSExtValue() < shapeVal) {
+          APInt maxIV = (*optRange).smax();
+          if (maxIV.getSExtValue() + resShape[idx] <= shapeVal) {
             LLVM_DEBUG(llvm::dbgs().indent(2)
                        << "Check at index " << boundIdx << " is unnecessary\n");
             continue;

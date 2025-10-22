@@ -98,8 +98,8 @@ def TritonIntelRemoveBoundaryChecks
     The transformation would drop the boundary check on the load operation because:
       - `%ptr` is never advanced in the loop
       - `%iv` has values [0, 64, 128, ..., 960], max(%iv) = 960
-      - `%s2` is equal to 1014
-      - the boundary check expression `%iv` < `%s2` is always true
+      - `%s2` is equal to 1024
+      - the boundary check expression `max(%iv) + load_res.shape_in_dim -1` < `%s2` is true.
   }];
 
   let dependentDialects = [
