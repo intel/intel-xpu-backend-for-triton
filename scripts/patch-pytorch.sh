@@ -35,3 +35,4 @@ apply_patch() {
 echo "Applying PyTorch patches in $REPO_ROOT"
 
 # put your patch applies here
+apply_patch ./patch/decoding.patch

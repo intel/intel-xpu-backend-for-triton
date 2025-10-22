@@ -1,0 +1,13 @@
+diff --git a/torch/_inductor/kernel/flex/flex_decoding.py b/torch/_inductor/kernel/flex/flex_decoding.py
+index 91ba941da0..477a477c35 100644
+--- a/torch/_inductor/kernel/flex/flex_decoding.py
++++ b/torch/_inductor/kernel/flex/flex_decoding.py
+@@ -259,7 +259,7 @@ def create_flex_decoding_kernel(*args, **kwargs):
+                     )
+                     * gqa_shared_heads
+                 ),
+-                1 if torch.xpu.is_available() else 16,
++                16 if torch.xpu.is_available() else 16,
+             )
+         ),
+     )
