@@ -8,13 +8,13 @@ namespace proton {
 
 namespace xpu {
 
-std::string XPU_API_UTILS;
+std::string PROTON_UTILS;
 
 typedef void (*GetDevicePropertiesFunc)(uint64_t, uint32_t *, uint32_t *,
                                         uint32_t *, uint32_t *, char[256]);
 
 Device getDevice(uint64_t index) {
-  void *handle = dlopen(XPU_API_UTILS.data(), RTLD_LAZY);
+  void *handle = dlopen(PROTON_UTILS.data(), RTLD_LAZY);
   if (!handle) {
     const char *dlopen_error = dlerror();
     throw std::runtime_error(std::string("Failed to load library: ") +

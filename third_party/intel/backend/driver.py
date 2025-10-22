@@ -291,7 +291,7 @@ def compile_module_from_src(src: str, name: str, include_dirs: list[str] | None 
         return SpirvUtils(cache_path)
     if name == '__triton_launcher':
         return TritonLauncher(cache_path)
-    if name in ['proton_utils', 'xpu_api']:
+    if name == 'proton_utils':
         return cache_path
 
     return _load_module_from_path(name, cache_path)
@@ -950,8 +950,8 @@ class XPUDriver(DriverBase):
         dirname_third_party = os.path.realpath(dirname + "../../..")
         include_dir = dirname_third_party + "/proton/csrc/include/"
         return compile_module_from_src(
-            src=Path(dirname_third_party + "/proton/csrc/lib/Driver/GPU/XpuApiCompileInRuntime.cpp").read_text(),
-            name="xpu_api",
+            src=Path(Path(dirname).joinpath("proton_utils.cpp")).read_text(),
+            name="proton_utils",
             include_dirs=[include_dir],
         )
 

@@ -278,7 +278,7 @@ void CallbackCommon(pti_callback_domain domain,
 typedef void (*EnumDeviceUUIDsFunc)(std::vector<std::array<uint8_t, 16>>);
 
 int callEnumDeviceUUIDs(const std::string &utils_cache_path) {
-  void *handle = dlopen(xpu::XPU_API_UTILS.data(), RTLD_LAZY);
+  void *handle = dlopen(xpu::PROTON_UTILS.data(), RTLD_LAZY);
   if (!handle) {
     std::cerr << "Failed to load library: " << dlerror() << std::endl;
     return 1;
@@ -303,7 +303,7 @@ int callEnumDeviceUUIDs(const std::string &utils_cache_path) {
 typedef void (*WaitOnSyclQueueFunc)(void *);
 
 int callWaitOnSyclQueue(void *syclQueue) {
-  void *handle = dlopen(xpu::XPU_API_UTILS.data(), RTLD_LAZY);
+  void *handle = dlopen(xpu::PROTON_UTILS.data(), RTLD_LAZY);
   if (!handle) {
     std::cerr << "Failed to load library: " << dlerror() << std::endl;
     return 1;
@@ -328,8 +328,8 @@ int callWaitOnSyclQueue(void *syclQueue) {
 void XpuptiProfiler::XpuptiProfilerPimpl::doStart() {
   // should be call to shared lib
   XpuptiProfiler &profiler = threadState.profiler;
-  if (xpu::XPU_API_UTILS != "") {
-    callEnumDeviceUUIDs(xpu::XPU_API_UTILS);
+  if (xpu::PROTON_UTILS != "") {
+    callEnumDeviceUUIDs(xpu::PROTON_UTILS);
   }
 
   xpupti::viewSetCallbacks<true>(allocBuffer, completeBuffer);
