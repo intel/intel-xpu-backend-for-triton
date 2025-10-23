@@ -615,7 +615,9 @@ run_sglang_install() {
     # We should remove all torch libraries from requirements to avoid reinstalling triton & torch
     # We remove sgl kernel due to a bug in the current environment probably due to using newer torch
     sed -i '/pytorch\|torch\|sgl-kernel/d' python/pyproject.toml
-    pip install "./python[dev_xpu]"
+    echo "pyproject.toml after modification:"
+    cat python/pyproject.toml
+    pip install -e "./python"
     cd ..
   fi
 
