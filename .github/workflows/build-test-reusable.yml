@@ -118,10 +118,6 @@ jobs:
           ref: ${{ inputs.pytorch_ref }}
           mode: ${{ inputs.pytorch_mode }}
 
-      - name: Build Proton with XPU support
-        run: |
-          echo TRITON_BUILD_PROTON_XPU=1 | tee -a $GITHUB_ENV
-
       - name: Build Triton
         uses: ./.github/actions/setup-triton
         with:
