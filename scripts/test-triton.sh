@@ -628,6 +628,7 @@ run_sglang_tests() {
   echo "***************************************************"
 
   run_sglang_install
+  cd sglang
   run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-4} test/srt/test_triton_attention_kernels.py
 }
 
@@ -667,8 +668,9 @@ run_vllm_install() {
     cd vllm-xpu-kernels
     git checkout "$(<../benchmarks/third_party/vllm/vllm-kernels-pin.txt)"
     sed -i '/pytorch\|torch/d' requirements.txt
+    sed -i '/pytorch\|torch/d' pyproject.toml
     pip install -r requirements.txt
-    VLLM_TARGET_DEVICE=xpu pip install --no-build-isolation -e .
+    VLLM_TARGET_DEVICE=xpu pip install -vvv --no-build-isolation .
     cd ..
 
     VLLM_TARGET_DEVICE=xpu pip install --no-deps --no-build-isolation -e vllm
@@ -691,7 +693,7 @@ run_vllm_tests() {
 
 run_triton_kernels_tests() {
   echo "***************************************************"
-  echo "******    Running Triton Kernels tests      ******"
+  echo "******    Running Triton Kernels tests      ******"requirements.txpt
   echo "***************************************************"
   cd $TRITON_PROJ/python/triton_kernels/tests
 
