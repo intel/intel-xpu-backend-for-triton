@@ -1,0 +1,54 @@
+[project]
+name = "intel-pti"
+version = "0.14.0.dev1"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Intel Corporation", email = "scripting@intel.com" }
+]
+license = "MIT"
+
+requires-python = ">=3.9"
+dependencies = []
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+
+  # Indicate who your project is intended for
+  "Intended Audience :: Developers",
+  "Intended Audience :: Education",
+  "Intended Audience :: Science/Research",
+  "Intended Audience :: System Administrators",
+  "Intended Audience :: Other Audience",
+
+  "Topic :: Software Development :: Libraries",
+
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+
+  "Environment :: GPU",
+]
+
+[tool.scikit-build]
+build.verbose = true
+logging.level = "INFO"
+cmake.version = ">=3.20.0"
+cmake.build-type = "Release"
+cmake.args = ["-GNinja"]
+ninja.version = ">=1.13"
+minimum-version = "build-system.requires"
+sdist.exclude = ["levelzero", "level-zero", "src"]
+#experimental = true
+#wheel.install-dir = "/data"
+
+[tool.uv]
+cache-keys = [{ file = "pyproject.toml" }, { file = "CMakeLists.txt" }]
+
+[build-system]
+requires = ["scikit-build-core>=0.10"]
+build-backend = "scikit_build_core.build"
+
+[project.urls]
+Homepage = "https://github.com/intel/pti-gpu/tree/master/sdk"
+Documentation = "https://github.com/intel/pti-gpu/blob/master/sdk/README.md"
+Repository = "https://github.com/intel/pti-gpu"
+Issues = "https://github.com/intel/pti-gpu/issues"
