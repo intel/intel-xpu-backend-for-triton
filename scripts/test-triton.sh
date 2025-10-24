@@ -666,7 +666,7 @@ run_liger_tests() {
 
   run_liger_install
   run_test_deps_install
-  run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-4} Liger-Kernel/test/
+  run_pytest_command -vvv Liger-Kernel/test/
 }
 
 run_vllm_install() {
