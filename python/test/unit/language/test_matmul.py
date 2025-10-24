@@ -1221,8 +1221,10 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
             pytest.skip("None scale has not been tested on XPU backend")
         if not (A_DATA_TYPE == "float8e5" and B_DATA_TYPE == "float4"):
             pytest.skip(f"(A: {A_DATA_TYPE}, B: {B_DATA_TYPE}) has not been tested on XPU backend")
-        if (BLOCK_M, BLOCK_N, BLOCK_K) == (128, 256,
-                                           256) and CONST_SCALE and "GPU Max 1100" in torch.xpu.get_device_name():
+        if (BLOCK_M, BLOCK_N,
+                BLOCK_K) == (128, 256,
+                             256) and CONST_SCALE and triton.runtime.driver.active.utils.get_device_properties(
+                                 triton.runtime.driver.active.get_current_device())["max_shared_mem"] < 196608:
             pytest.skip("XPU Max 1100 does not fit in memory large block size for CONST_SCALE mxfp matmul")
     if not PACK_B_ALONG_K and B_DATA_TYPE != "float4":
         pytest.xfail("Pack along K can only be False for float4")
