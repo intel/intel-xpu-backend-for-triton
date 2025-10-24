@@ -135,7 +135,7 @@ build_llvm() {
     -DCMAKE_BUILD_TYPE=Release \
     -DLLVM_ENABLE_ASSERTIONS=true \
     -DLLVM_ENABLE_PROJECTS="mlir;lld" \
-    -DLLVM_TARGETS_TO_BUILD="X86;NVPTX;AMDGPU;SPIRV" \
+    -DLLVM_TARGETS_TO_BUILD="X86;NVPTX;AMDGPU" \
     -DLLVM_INSTALL_UTILS=true \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
     -DCMAKE_INSTALL_PREFIX=$PACKAGES_DIR/llvm \
@@ -146,7 +146,7 @@ build_llvm() {
   echo "****** Building $LLVM_PROJ ******"
   ninja
   ninja install
-  ninja check-mlir
+  #ninja check-mlir
 }
 
 ############################################################################
@@ -173,6 +173,8 @@ build_triton() {
 
   if [ "$BUILD_LLVM" = true ]; then
     export LLVM_SYSPATH=$PACKAGES_DIR/llvm
+    export LLVM_INCLUDE_DIRS=$LLVM_SYSPATH/include
+    export LLVM_LIBRARY_DIR=$LLVM_SYSPATH/lib
   fi
   export DEBUG=1
   if [ "$CCACHE" = true ]

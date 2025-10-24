@@ -1,0 +1,20 @@
+diff --git a/mlir/include/mlir/Dialect/LLVMIR/LLVMIntrinsicOps.td b/mlir/include/mlir/Dialect/LLVMIR/LLVMIntrinsicOps.td
+index 398388bd720b..2d78ef56f0e8 100644
+--- a/mlir/include/mlir/Dialect/LLVMIR/LLVMIntrinsicOps.td
++++ b/mlir/include/mlir/Dialect/LLVMIR/LLVMIntrinsicOps.td
+@@ -483,6 +483,15 @@ class LLVM_ConstrainedIntr<string mnem, int numArgs,
+   }];
+ }
+ 
++def LLVM_ConstrainedFDiv
++    : LLVM_ConstrainedIntr<"fdiv", /*numArgs=*/2,
++        /*overloadedResult=*/0, /*overloadedOperands=*/[0],
++        /*hasRoundingMode=*/1> {
++    let assemblyFormat = [{
++        $arg_0 $arg_1 $roundingmode $fpExceptionBehavior attr-dict `:` type($arg_0) type($arg_1) `to` type(results)
++    }];
++}
++
+ def LLVM_ConstrainedUIToFP
+     : LLVM_ConstrainedIntr<"uitofp", /*numArgs=*/1,
+         /*overloadedResult=*/1, /*overloadedOperands=*/[0],

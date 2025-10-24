@@ -1186,6 +1186,7 @@ struct OpToExternCallConversion
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
+#if 0
     Type funcType = getFunctionType(elemTy, operands[0]);
     LLVM::LLVMFuncOp funcOp =
         appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
@@ -1193,6 +1194,23 @@ struct OpToExternCallConversion
     auto callOp = LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]);
     callOp.setCConv(funcOp.getCConv());
     return {callOp.getResult()};
+#else
+    auto y = rewriter.create<LLVM::ConstrainedFDiv>(
+            loc, elemTy,
+            rewriter.create<LLVM::FPExtOp>(loc, f64_ty, operands[0][0]),
+            rewriter.create<LLVM::FPExtOp>(loc, f64_ty, operands[0][1]),
+            LLVM::RoundingMode::NearestTiesToEven,
+            LLVM::FPExceptionBehavior::Strict);
+    MLIRContext *ctx = rewriter.getContext();
+    auto funcType = LLVM::LLVMFunctionType::get(void_ty(ctx), {});
+    LLVM::LLVMFuncOp funcOp =
+        appendOrGetExternFuncOp(rewriter, op, "__builtin_IB_sub_group_barrier", funcType);
+    LLVM::createLLVMCallOp(rewriter, loc, funcOp, {});
+    auto x = rewriter.create<LLVM::FPTruncOp>(
+        loc, f32_ty, y);
+    LLVM::createLLVMCallOp(rewriter, loc, funcOp, {});
+    return {x};
+#endif
   }
 
 private:

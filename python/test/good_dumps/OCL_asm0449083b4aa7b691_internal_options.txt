@@ -1,0 +1,1 @@
+-ze-intel-has-buffer-offset-arg -cl-intel-greater-than-4GB-buffer-required -cl-store-cache-default=2 -cl-load-cache-default=4
