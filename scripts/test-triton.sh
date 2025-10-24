@@ -616,11 +616,8 @@ run_sglang_install() {
     # We remove sgl kernel due to a bug in the current environment probably due to using newer torch, we don't currently use it anyway
     # We remove timm because it depends on torchvision, which depends on torch==2.9
     sed -i '/pytorch\|torch\|sgl-kernel\|timm/d' python/pyproject.toml
-    echo "pyproject.toml after modification:"
     cat python/pyproject.toml
     pip install -e "./python"
-    pip install pipdeptree
-    pipdeptree -r -p torch
     cd ..
   fi
 
