@@ -28,7 +28,7 @@ def _select_backend() -> str:
         if files is not None:
             for f in files:
                 if f.name == 'libpti_view.so':
-                    os.environ["PTI_LIBS_DIR"] = str(pathlib.Path(f.locate()).parent.resolve())
+                    os.environ["TRITON_XPUPTI_LIB_PATH"] = str(pathlib.Path(f.locate()).parent.resolve())
                     break
         return "xpupti"
     else:
