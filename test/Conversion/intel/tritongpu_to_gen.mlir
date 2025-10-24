@@ -695,9 +695,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-NEXT: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK-NEXT: [[IE2:%.*]] = llvm.insertelement [[BCAST1]], [[VEC2]][[[ZERO]] : i32] : vector<1xi32>
     // CHECK-NEXT: [[BCAST2:%.*]] = llvm.bitcast [[ARG0_0]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // PREDICATED-NEXT: [[BCAST3:%.*]] = llvm.bitcast [[IE2]] : vector<1xi32> to vector<1xf32>
-    // PREDICATED: [[ALIGNMENT:%.*]] = llvm.mlir.constant(4 : i64) : i64
-    // PREDICATED: llvm.call spir_funccc @llvm.genx.GenISA.PredicatedStore.p1f32.v1f32([[BCAST2]], [[BCAST3]], [[ALIGNMENT]], [[ARG2_0]]) {{.*}} : (!llvm.ptr<1>, vector<1xf32>, i64, i1) -> ()
+    // PREDICATED-NEXT: [[ALIGNMENT:%.*]] = llvm.mlir.constant(4 : i64) : i64
+    // PREDICATED: llvm.call spir_funccc @llvm.genx.GenISA.PredicatedStore.p1i32.v1i32([[BCAST2]], [[IE2]], [[ALIGNMENT]], [[ARG2_0]]) {{.*}} : (!llvm.ptr<1>, vector<1xi32>, i64, i1) -> ()
     // NO-PREDICATED: llvm.cond_br [[ARG2_0]], ^bb1, ^bb2
     // NO-PREDICATED-NEXT: ^bb1:
     // NO-PREDICATED-NEXT:   llvm.store [[IE2]], [[BCAST2]] {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
@@ -707,9 +706,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-NEXT:   [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK-NEXT:   [[IE3:%.*]] = llvm.insertelement {{.*}}, [[VEC3]][[[ZERO]] : i32] : vector<1xi32>
     // CHECK-NEXT:   [[BCAST2:%.*]] = llvm.bitcast [[ARG0_1]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // PREDICATED-NEXT: [[BCAST3:%.*]] = llvm.bitcast [[IE3]] : vector<1xi32> to vector<1xf32>
     // PREDICATED: [[ALIGNMENT:%.*]] = llvm.mlir.constant(4 : i64) : i64
-    // PREDICATED: llvm.call spir_funccc @llvm.genx.GenISA.PredicatedStore.p1f32.v1f32([[BCAST2]], [[BCAST3]], [[ALIGNMENT]], [[ARG2_1]]) {{.*}} : (!llvm.ptr<1>, vector<1xf32>, i64, i1) -> ()
+    // PREDICATED: llvm.call spir_funccc @llvm.genx.GenISA.PredicatedStore.p1i32.v1i32([[BCAST2]], [[IE3]], [[ALIGNMENT]], [[ARG2_1]]) {{.*}} : (!llvm.ptr<1>, vector<1xi32>, i64, i1) -> ()
     // NO-PREDICATED:        llvm.cond_br [[ARG2_1]], ^bb3, ^bb4
     // NO-PREDICATED-NEXT: ^bb3:
     // NO-PREDICATED-NEXT:   llvm.store [[IE3]], [[BCAST2]] {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
@@ -1352,7 +1350,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @store_f32_scalar(%arg0 : !tt.ptr<f32>, %arg1 : f32) {
     // CHECK:      llvm.icmp "eq"
     // CHECK:      [[BCAST:%.*]] = llvm.bitcast %arg0 : !llvm.ptr<1> to !llvm.ptr<1>
-    // PREDICATED: llvm.call spir_funccc @llvm.genx.GenISA.PredicatedStore.p1f32.v1f32([[BCAST]], {{.*}}) {{.*}} : (!llvm.ptr<1>, vector<1xf32>, i64, i1) -> ()
+    // PREDICATED: llvm.call spir_funccc @llvm.genx.GenISA.PredicatedStore.p1i32.v1i32([[BCAST]], {{.*}}) {{.*}} : (!llvm.ptr<1>, vector<1xi32>, i64, i1) -> ()
     // NO-PREDICATED:      llvm.cond_br {{.*}}, ^bb1, ^bb2
     // NO-PREDICATED-NEXT: ^bb1:
     // NO-PREDICATED-NEXT:   llvm.store {{.*}}, [[BCAST]] {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
