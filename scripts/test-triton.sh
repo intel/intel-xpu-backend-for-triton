@@ -618,6 +618,8 @@ run_sglang_install() {
     echo "pyproject.toml after modification:"
     cat python/pyproject.toml
     pip install -vvv -e "./python"
+    pip install pipdeptree
+    pipdeptree -r -p torch
     cd ..
   fi
 
