@@ -3407,13 +3407,10 @@ struct StoreOpConversion
         std::optional<bool> enablePredicated =
             mlir::triton::tools::isEnvValueBool(
                 mlir::triton::tools::getStrEnv("TRITON_INTEL_PREDICATED"));
-        if (!enablePredicated.has_value() || enablePredicated.value()) {
-          unsigned numElems = valArgTy.getIntOrFloatBitWidth() * nWords /
-                              valueElemTy.getIntOrFloatBitWidth();
-          vecWord = b.bitcast(vecWord, vec_ty(valueElemTy, numElems));
+        if (!enablePredicated.has_value() || enablePredicated.value())
           rewriter.create<TritonGEN::PredicatedStoreOp>(
               loc, addrElem, vecWord, b.i64_val(alignment), maskVal);
-        } else
+        else
           LLVM::intel::createPredicatedBlock(rewriter, loc, maskVal,
                                              createStore);
       } else {
