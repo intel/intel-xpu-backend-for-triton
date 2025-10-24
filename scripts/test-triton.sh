@@ -651,12 +651,6 @@ run_liger_install() {
 
   if ! [ -d "./Liger-Kernel" ]; then
     git clone https://github.com/linkedin/Liger-Kernel
-
-    # There is probably an issue with cache
-    # Will try to upstream the patch here:
-    # https://github.com/linkedin/Liger-Kernel/pull/917
-    # After merging we can remove this patch application
-    git apply benchmarks/third_party/liger/liger-fix.patch
   fi
 
   if ! pip list | grep "liger_kernel" ; then
