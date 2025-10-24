@@ -108,17 +108,14 @@ jobs:
         run: |
           source ./scripts/capture-hw-details.sh
 
-          cd benchmarks/third_party/liger_kernels
-
-          git clone https://github.com/linkedin/Liger-Kernel
-          pip install -e Liger-Kernel
+          ./scripts/test-triton.sh --install-vllm --skip-pip-install --skip-pytorch-install
 
           # To remember return code, but still copy results
           RET_CODE=0
-          bash ./run_benchmarks.sh || RET_CODE=$?
+          bash benchmarks/third_party/liger/run_benchmarks.sh || RET_CODE=$?
 
           cp Liger-Kernel/benchmark/data/all_benchmark_data.csv $REPORTS/liger-raw.csv
-          python transform.py $REPORTS/liger-raw.csv $REPORTS/liger-report.csv --tag $TAG
+          python benchmarks/third_party/liger/transform.py $REPORTS/liger-raw.csv $REPORTS/liger-report.csv --tag $TAG
 
           # Return the captured return code at the end
           exit "$RET_CODE"
