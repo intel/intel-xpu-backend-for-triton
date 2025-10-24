@@ -617,7 +617,7 @@ run_sglang_install() {
     sed -i '/pytorch\|torch\|sgl-kernel/d' python/pyproject.toml
     echo "pyproject.toml after modification:"
     cat python/pyproject.toml
-    pip install -e "./python"
+    pip install -vvv -e "./python"
     cd ..
   fi
 
@@ -695,7 +695,7 @@ run_vllm_tests() {
 
 run_triton_kernels_tests() {
   echo "***************************************************"
-  echo "******    Running Triton Kernels tests      ******"requirements.txpt
+  echo "******    Running Triton Kernels tests      *******"
   echo "***************************************************"
   cd $TRITON_PROJ/python/triton_kernels/tests
 
