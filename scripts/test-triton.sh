@@ -613,11 +613,12 @@ run_sglang_install() {
     # That's how sglang assumes we'll pick out platform for now
     cp python/pyproject_xpu.toml python/pyproject.toml
     # We should remove all torch libraries from requirements to avoid reinstalling triton & torch
-    # We remove sgl kernel due to a bug in the current environment probably due to using newer torch
+    # We remove sgl kernel due to a bug in the current environment probably due to using newer torch, we don't currently use it anyway
+    # We remove timm because it depends on torchvision, which depends on torch==2.9
     sed -i '/pytorch\|torch\|sgl-kernel/d' python/pyproject.toml
     echo "pyproject.toml after modification:"
     cat python/pyproject.toml
-    pip install -vvv -e "./python"
+    pip install -e "./python"
     pip install pipdeptree
     pipdeptree -r -p torch
     cd ..
