@@ -647,7 +647,7 @@ run_liger_tests() {
     pip install pytest pytest-xdist pytest-cov transformers pandas pytest datasets -e Liger-Kernel
   fi
 
-  run_pytest_command -vv -n ${PYTEST_MAX_PROCESSES:-4} Liger-Kernel/test/
+  run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-4} Liger-Kernel/test/
 }
 
 run_vllm_install() {
@@ -672,7 +672,7 @@ run_vllm_install() {
     sed -i '/pytorch\|torch/d' requirements.txt
     sed -i '/pytorch\|torch/d' pyproject.toml
     pip install -r requirements.txt
-    VLLM_TARGET_DEVICE=xpu pip install --no-build-isolation .
+    VLLM_TARGET_DEVICE=xpu pip install --no-build-isolation -e .
     cd ..
 
     VLLM_TARGET_DEVICE=xpu pip install --no-deps --no-build-isolation -e vllm
