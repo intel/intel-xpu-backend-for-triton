@@ -26,11 +26,12 @@ TEST:
     --flex-attention
     --instrumentation
     --inductor
-    --sglang
-    --liger
     --vllm
     --install-vllm
+    --sglang
     --install-sglang
+    --liger
+    --install-liger
 
 OPTION:
     --unskip
@@ -72,10 +73,11 @@ TEST_BENCHMARK_FLEX_ATTENTION=false
 TEST_INSTRUMENTATION=false
 TEST_INDUCTOR=false
 TEST_SGLANG=false
+INSTALL_SGLANG=false
 TEST_LIGER=false
+INSTALL_LIGER=false
 TEST_VLLM=false
 INSTALL_VLLM=false
-INSTALL_SGLANG=false
 TEST_TRITON_KERNELS=false
 VENV=false
 TRITON_TEST_REPORTS=false
@@ -192,18 +194,23 @@ while (( $# != 0 )); do
       TEST_DEFAULT=false
       shift
       ;;
-    --install-sglang)
-      INSTALL_SGLANG=true
-      TEST_DEFAULT=false
-      shift
-      ;;
     --sglang)
       TEST_SGLANG=true
       TEST_DEFAULT=false
       shift
       ;;
+    --install-sglang)
+      INSTALL_SGLANG=true
+      TEST_DEFAULT=false
+      shift
+      ;;
     --liger)
       TEST_LIGER=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --install-liger)
+      INSTALL_LIGER=true
       TEST_DEFAULT=false
       shift
       ;;
