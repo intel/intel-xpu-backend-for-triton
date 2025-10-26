@@ -1225,7 +1225,7 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
                 BLOCK_K) == (128, 256,
                              256) and CONST_SCALE and triton.runtime.driver.active.utils.get_device_properties(
                                  triton.runtime.driver.active.get_current_device())["max_shared_mem"] < 196608:
-            pytest.skip("XPU Max 1100 does not fit in memory large block size for CONST_SCALE mxfp matmul")
+            pytest.skip("XPU: Not enough shared memory")
     if not PACK_B_ALONG_K and B_DATA_TYPE != "float4":
         pytest.xfail("Pack along K can only be False for float4")
 
