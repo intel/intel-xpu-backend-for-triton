@@ -30,6 +30,7 @@ TEST:
     --liger
     --vllm
     --install-vllm
+    --install-sglang
 
 OPTION:
     --unskip
@@ -74,6 +75,7 @@ TEST_SGLANG=false
 TEST_LIGER=false
 TEST_VLLM=false
 INSTALL_VLLM=false
+INSTALL_SGLANG=false
 TEST_TRITON_KERNELS=false
 VENV=false
 TRITON_TEST_REPORTS=false
@@ -187,6 +189,11 @@ while (( $# != 0 )); do
       ;;
     --inductor)
       TEST_INDUCTOR=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --install-sglang)
+      INSTALL_SGLANG=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -589,26 +596,41 @@ run_inductor_tests() {
   grep AlbertForMaskedLM inductor_log.csv | grep -q ,pass,
 }
 
+run_sglang_install() {
+  echo "************************************************"
+  echo "******    Installing SGLang                 ****"
+  echo "************************************************"
+
+  if ! [ -d "./sglang" ]; then
+    git clone https://github.com/sgl-project/sglang.git
+  fi
+
+  if ! pip list | grep "sglang" ; then
+    cd sglang
+    git checkout "$(<../benchmarks/third_party/sglang/sglang-pin.txt)"
+    git apply ../benchmarks/third_party/sglang/sglang-fix.patch
+
+    # That's how sglang assumes we'll pick out platform for now
+    cp python/pyproject_xpu.toml python/pyproject.toml
+    # We should remove all torch libraries from requirements to avoid reinstalling triton & torch
+    # We remove sgl kernel due to a bug in the current environment probably due to using newer torch, we don't currently use it anyway
+    # We remove timm because it depends on torchvision, which depends on torch==2.9
+    sed -i '/pytorch\|torch\|sgl-kernel\|timm/d' python/pyproject.toml
+    cat python/pyproject.toml
+    pip install -e "./python"
+    cd ..
+  fi
+
+  pip install pytest pytest-cov pytest-xdist
+}
+
 run_sglang_tests() {
   echo "***************************************************"
   echo "******    Running SGLang Triton tests        ******"
   echo "***************************************************"
 
-  if ! [ -d "./sglang" ]; then
-    git clone https://github.com/sgl-project/sglang.git
-  fi
+  run_sglang_install
   cd sglang
-
-  if ! pip list | grep "sglang" ; then
-    git apply $TRITON_PROJ/benchmarks/third_party/sglang/sglang-fix.patch
-    pip install "./python[dev_xpu]"
-
-    # SGLang installation breaks the default PyTorch and Triton versions, so we need to reinstall them.
-    $SCRIPTS_DIR/install-pytorch.sh --force-reinstall
-    $SCRIPTS_DIR/compile-triton.sh --triton
-  fi
-
-  pip install pytest pytest-xdist
   run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-4} test/srt/test_triton_attention_kernels.py
 }
 
@@ -648,6 +670,7 @@ run_vllm_install() {
     cd vllm-xpu-kernels
     git checkout "$(<../benchmarks/third_party/vllm/vllm-kernels-pin.txt)"
     sed -i '/pytorch\|torch/d' requirements.txt
+    sed -i '/pytorch\|torch/d' pyproject.toml
     pip install -r requirements.txt
     VLLM_TARGET_DEVICE=xpu pip install --no-build-isolation -e .
     cd ..
@@ -672,7 +695,7 @@ run_vllm_tests() {
 
 run_triton_kernels_tests() {
   echo "***************************************************"
-  echo "******    Running Triton Kernels tests      ******"
+  echo "******    Running Triton Kernels tests      *******"
   echo "***************************************************"
   cd $TRITON_PROJ/python/triton_kernels/tests
 
@@ -744,6 +767,9 @@ test_triton() {
   fi
   if [ "$TEST_INDUCTOR" == true ]; then
     run_inductor_tests
+  fi
+  if [ "$INSTALL_SGLANG" == true ]; then
+    run_sglang_install
   fi
   if [ "$TEST_SGLANG" == true ]; then
     run_sglang_tests

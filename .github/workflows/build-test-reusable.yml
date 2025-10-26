@@ -283,6 +283,8 @@ jobs:
       - name: Build PTI && Run Proton tests
         if: matrix.suite == 'rest'
         run: |
+          # `intel-pti` can be installed in "Setup PyTorch" step with `pytorch_mode==wheels`
+          pip uninstall intel-pti -y
           PTI_COMMIT_ID="$(<.github/pins/pti.txt)"
           git clone https://github.com/intel/pti-gpu.git
           cd pti-gpu
