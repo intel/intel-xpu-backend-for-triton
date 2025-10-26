@@ -263,6 +263,12 @@ def do_bench_proton(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quantiles=
     proton.start()
     # Benchmark
     for idx in range(n_repeat):
+        # we don't want `fn` to accumulate gradient values
+        # if it contains a backward pass. So we clear the
+        # provided gradients
+        if grad_to_none is not None:
+            for x in grad_to_none:
+                x.grad = None
         # we clear the L2 cache before each run
         cache.zero_()
         if sync_submitting:
@@ -273,20 +279,20 @@ def do_bench_proton(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quantiles=
     # Record clocks
     synchronize()
     proton.finalize()
-    with open("./proton.hatchet") as f:
+    with open("./proton.hatchet", encoding="utf-8") as f:
         data = json.load(f)
 
     profiling_func_filter = filter(
-        lambda x: x['frame']['name'].startswith("__profile_kernel_of_func"
+        lambda x: x["frame"]["name"].startswith("__profile_kernel_of_func"
                                                 if benchmark_label is None else benchmark_label), data[0]["children"])
     functions = list(profiling_func_filter)
 
     def extract_kernels(funcs):
-        return [x['children'][0]['metrics'] for x in funcs]
+        return [x["children"][0]["metrics"] for x in funcs]
 
     kernels = extract_kernels(functions)
     # Make the time to the milliseconds.
-    times = torch.tensor([ks['time (ns)'] * 1e-6 for ks in kernels], dtype=torch.float)
+    times = torch.tensor([ks["time (ns)"] * 1e-6 for ks in kernels], dtype=torch.float)
     return _summarize_statistics(times, quantiles, return_mode)
 
 
