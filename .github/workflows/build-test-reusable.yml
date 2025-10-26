@@ -284,8 +284,10 @@ jobs:
         if: matrix.suite == 'rest'
         run: |
           ./scripts/install-pti.sh
+          LEVEL_ZERO_LIB=$(pwd)/.scripts_cache/level_zero_for_pti/level-zero-1.24.2/build/lib/
+          ls $LEVEL_ZERO_LIB
           cd third_party/proton/test
-          LD_LIBRARY_PATH=.scripts_cache/level_zero_for_pti/level-zero-1.24.2/build/lib/:$LD_LIBRARY_PATH pytest test_api.py test_cmd.py test_lib.py test_profile.py test_viewer.py --device xpu -s -v
+          LD_LIBRARY_PATH=$LEVEL_ZERO_LIB:$LD_LIBRARY_PATH pytest test_api.py test_cmd.py test_lib.py test_profile.py test_viewer.py --device xpu -s -v
           cd ..
 
       - name: Run minicore tests
