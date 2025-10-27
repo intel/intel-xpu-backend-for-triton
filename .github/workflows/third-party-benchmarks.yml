@@ -104,11 +104,11 @@ jobs:
           python transform_results.py $REPORTS/moe-gemm-performance.csv $REPORTS/moe-gemm-fp8-report.csv --tag $TAG --benchmark moe-fp8-benchmark
 
       - name: Run Liger-Kernel benchmarks
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'liger-kernel')) }}
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'liger')) }}
         run: |
           source ./scripts/capture-hw-details.sh
 
-          ./scripts/test-triton.sh --install-vllm --skip-pip-install --skip-pytorch-install
+          ./scripts/test-triton.sh --install-liger --skip-pip-install --skip-pytorch-install
 
           # To remember return code, but still copy results
           RET_CODE=0
