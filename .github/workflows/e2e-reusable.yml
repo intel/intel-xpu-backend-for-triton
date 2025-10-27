@@ -72,6 +72,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
+      - name: Set torch-xpu-ops commit id
+        run: |
+          TORCH_XPU_OPS_COMMIT_ID="$(<.github/pins/e2e_reference_torch-xpu-ops.txt)"
+          echo "TORCH_XPU_OPS_COMMIT_ID=$TORCH_XPU_OPS_COMMIT_ID" | tee -a "$GITHUB_ENV"
+
+      - name: Clone torch-xpu-ops repository
+        uses: actions/checkout@v5
+        with:
+          repository: intel/torch-xpu-ops
+          ref: ${{ env.TORCH_XPU_OPS_COMMIT_ID }}
+          path: torch-xpu-ops
+
       - name: Load pip cache
         id: pip-cache
         uses: ./.github/actions/load
@@ -96,6 +108,10 @@ jobs:
         uses: ./.github/actions/setup-pytorch
         with:
           ref: ${{ inputs.pytorch_ref }}
+
+      - name: Update PyTorch benchmarks/dynamo configs using torch-xpu-ops custom configs
+        run: |
+          rsync -avz torch-xpu-ops/.ci/benchmarks/ pytorch/benchmarks/dynamo/
 
       - name: Identify pinned versions
         run: |
