@@ -205,7 +205,6 @@ jobs:
           cd benchmark
           sed -i 's/^ *pynvml.*//' requirements.txt
           pip install -r requirements.txt
-          echo "PYTHONPATH=${PWD}:${PYTHONPATH}" >> ${GITHUB_ENV}
           # for dlrm
           pip install pyre-extensions
           curl -fsSL https://raw.githubusercontent.com/facebookresearch/dlrm/refs/heads/torchrec-dlrm/requirements.txt |xargs pip install
