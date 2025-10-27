@@ -92,12 +92,13 @@ def start(
                               Available options are ["tree", "trace"].
                               Defaults to "tree".
         backend (str, optional): The backend to use for profiling.
-                                 Available options are [None, "cupti", "roctracer", "instrumentation"].
+                                 Available options are [None, "cupti", "xpupti", "roctracer", "instrumentation"].
                                  Defaults to None, which automatically selects the backend matching the current active runtime.
         mode (Union[str, BaseMode], optional): The "mode" to use for profiling, which is specific to the backend.
                                                Can be a string or an instance of BaseMode (or any subclass thereof).
                                                Defaults to None.
                                                For "cupti", available options are [None, "pcsampling"].
+                                               For "xpupti", available options are [None].
                                                For "roctracer", available options are [None].
                                                For "instrumentation", available options are [None].
                                                Each mode has a set of control knobs following with the mode name.
