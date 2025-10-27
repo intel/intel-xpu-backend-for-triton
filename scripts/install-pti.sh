@@ -84,5 +84,6 @@ if [ "$BUILD_ONLY_LEVEL_ZERO" = true ]; then
   exit 0
 fi
 
+build_level_zero
 build_pti
 install_pti
