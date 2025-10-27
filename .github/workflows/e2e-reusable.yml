@@ -277,7 +277,7 @@ jobs:
           fi
 
       - name: Upload test logs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: logs-${{ inputs.suite }}-${{ inputs.dtype }}-${{ inputs.mode }}-${{ inputs.test_mode }}
           path: inductor_log
