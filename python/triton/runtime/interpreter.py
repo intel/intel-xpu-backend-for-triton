@@ -606,9 +606,9 @@ class InterpreterBuilder:
 
         # By default np.histogram returns int64 dtype values
         # Docs specify that returned dtype is taken based on optional weights.dtype
-        # This is fix for interpreter cases where for example int32 tensors is being passed
+        # This is fix for interpreter cases where for example int32 tensor is being passed
         # But unexpectedly int64 values are being returned causing
-        # tl.store to write 8 bytes instead of 4 bytes which may lead to silent corruption
+        # tl.store to write 8 bytes instead of 4 bytes which lead to silent data corruption
         dummy_weights = np.ones_like(data.data, dtype=data.data.type)
 
         # force all masked elements to zero
