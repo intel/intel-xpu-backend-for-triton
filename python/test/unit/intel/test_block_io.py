@@ -199,4 +199,6 @@ def test_block_io(M, N, dtype_str, layout, load_block_ptr, store_block_ptr, devi
     assert torch.equal(a, x)
 
     if support_block_io:
+        if not load_block_ptr:
+            assert 'spirv_Subgroup2DBlockLoad' in kernel.asm['llir'] or 'GenISA.LSC2DBlockRead' in kernel.asm['llir']
         assert 'spirv_Subgroup2DBlockStoreINTEL' in kernel.asm['llir'] or 'GenISA.LSC2DBlockWrite' in kernel.asm['llir']
