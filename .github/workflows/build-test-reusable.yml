@@ -127,6 +127,10 @@ jobs:
             DEBUG=1
             python -m build --wheel --no-isolation && pip install dist/*.whl
 
+      - name: Build PTI
+        run: |
+          ./scripts/install-pti.sh
+
       - name: Set test-triton command line
         id: test-triton
         run: |
@@ -174,6 +178,12 @@ jobs:
         with:
           name: triton-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           path: dist/*.whl
+
+      - name: Upload PTI wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: pti-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          path: .scripts_cache/pti/dist/*.whl
 
       - name: Upload test reports
         uses: actions/upload-artifact@v4
@@ -242,10 +252,22 @@ jobs:
         with:
           name: triton-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
 
+      - name: Download PTI wheels
+        uses: actions/download-artifact@v5
+        with:
+          name: pti-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+
       - name: Install Triton
         run: |
           pip install triton-*.whl
           python -c 'import triton; print(triton.__version__)'
+
+      - name: Install PTI
+        run: |
+          pip install intel_pti-*.whl
+          PTI_LIBS_DIR=$(python ./scripts/pti_lib.py)
+          ls $PTI_LIBS_DIR
+          echo "PTI_LIBS_DIR=$PTI_LIBS_DIR" | tee -a $GITHUB_ENV
 
       - name: Report environment details
         run: |
@@ -283,12 +305,11 @@ jobs:
       - name: Build PTI && Run Proton tests
         if: matrix.suite == 'rest'
         run: |
-          ./scripts/install-pti.sh
-          PTI_LIBS_DIR=$(python ./scripts/pti_lib.py)
-          ls $PTI_LIBS_DIR
+          # FIXME: after switch to agama 1188, there will be no need to install level-zero
+          ./scripts/install-pti.sh --build-only-level-zero
           LEVEL_ZERO_LIB=$(pwd)/.scripts_cache/level_zero_for_pti/level-zero-1.24.2/build/lib/
           ls $LEVEL_ZERO_LIB
-          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LEVEL_ZERO_LIB:$LD_LIBRARY_PATH
+          export LD_LIBRARY_PATH=${{ env.PTI_LIBS_DIR }}:$LEVEL_ZERO_LIB:$LD_LIBRARY_PATH
           cd third_party/proton/test
           pytest test_api.py test_cmd.py test_lib.py test_profile.py test_viewer.py --device xpu -s -v
           cd ..

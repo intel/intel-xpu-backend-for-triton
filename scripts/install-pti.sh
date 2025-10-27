@@ -2,6 +2,25 @@
 
 set -euo pipefail
 
+# Select what to build.
+BUILD_ONLY_LEVEL_ZERO=false
+for arg in "$@"; do
+  case $arg in
+    --build-only-level-zero)
+      BUILD_ONLY_LEVEL_ZERO=true
+      shift
+      ;;
+    --help)
+      echo "Example usage: ./install-pti.sh [--build-only-level-zero]"
+      exit 1
+      ;;
+    *)
+      echo "Unknown argument: $arg."
+      exit 1
+      ;;
+  esac
+done
+
 
 # Configure, build and install PyTorch from source.
 
@@ -60,6 +79,10 @@ function install_pti {
   pip install dist/*.whl
 }
 
-build_level_zero
+if [ "$BUILD_ONLY_LEVEL_ZERO" = true ]; then
+  build_level_zero
+  exit 0
+fi
+
 build_pti
 install_pti
