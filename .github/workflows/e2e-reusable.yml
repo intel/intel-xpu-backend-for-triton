@@ -218,6 +218,7 @@ jobs:
             # install all models
             python install.py --continue_on_fail
           fi
+          pip install -e .
 
       - name: Run e2e ${{ inputs.test_mode }} tests
         env:
