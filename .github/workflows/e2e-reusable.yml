@@ -111,6 +111,7 @@ jobs:
 
       - name: Update PyTorch benchmarks/dynamo configs using torch-xpu-ops custom configs
         run: |
+          sudo apt install -y rsync
           rsync -avz torch-xpu-ops/.ci/benchmarks/ pytorch/benchmarks/dynamo/
 
       - name: Identify pinned versions
