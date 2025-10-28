@@ -139,7 +139,7 @@ jobs:
           EOF
 
       - name: Upload PyTorch wheels to artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: wheels-pytorch-py${{ matrix.python }}-${{ env.TIMESTAMP }}
           path: wheels
