@@ -149,7 +149,7 @@ jobs:
 
       - name: Upload test logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: logs-${{ env.PYTHON_VERSION }}
           path: ${{ env.NEW_WORKSPACE }}\pytorch\test\test-reports
