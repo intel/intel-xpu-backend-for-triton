@@ -1218,14 +1218,14 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
             pytest.skip("Float4 without scale is tested in test_block_scale_fp4")
     elif is_xpu():
         if not (WITH_A_SCALE and WITH_B_SCALE):
-            pytest.skip("None scale has not been tested on XPU backend")
+            pytest.xfail("None scale has not been tested on XPU backend")
         if not (A_DATA_TYPE == "float8e5" and B_DATA_TYPE == "float4"):
-            pytest.skip(f"(A: {A_DATA_TYPE}, B: {B_DATA_TYPE}) has not been tested on XPU backend")
+            pytest.xfail(f"(A: {A_DATA_TYPE}, B: {B_DATA_TYPE}) has not been tested on XPU backend")
         if (BLOCK_M, BLOCK_N,
                 BLOCK_K) == (128, 256,
                              256) and CONST_SCALE and triton.runtime.driver.active.utils.get_device_properties(
                                  triton.runtime.driver.active.get_current_device())["max_shared_mem"] < 196608:
-            pytest.skip("XPU: Not enough shared memory")
+            pytest.xfail("XPU: Not enough shared memory")
     if not PACK_B_ALONG_K and B_DATA_TYPE != "float4":
         pytest.xfail("Pack along K can only be False for float4")
 
