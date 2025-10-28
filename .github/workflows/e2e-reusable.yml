@@ -50,6 +50,8 @@ env:
   TRITON_DISABLE_LINE_INFO: 1
   PYTHON_VERSION: "3.10"
   BENCHMARK_REPO: pytorch/benchmark
+  HF_TOKEN: ${{ secrets.HUGGING_FACE_HUB_TOKEN }}
+  HUGGING_FACE_HUB_TOKEN: ${{ secrets.HUGGING_FACE_HUB_TOKEN }}
 
 jobs:
   run_tests:
@@ -221,9 +223,6 @@ jobs:
           pip install -e .
 
       - name: Run e2e ${{ inputs.test_mode }} tests
-        env:
-          HF_TOKEN: ${{ secrets.HUGGING_FACE_HUB_TOKEN }}
-          HUGGING_FACE_HUB_TOKEN: ${{ secrets.HUGGING_FACE_HUB_TOKEN }}
         run: |
           cd pytorch
 
