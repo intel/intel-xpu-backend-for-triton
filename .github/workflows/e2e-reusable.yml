@@ -2,6 +2,9 @@ name: E2E reusable workflow
 
 on:
   workflow_call:
+    secrets:
+      HUGGING_FACE_HUB_TOKEN:
+        required: true
     inputs:
       pytorch_ref:
         description: PyTorch ref, keep empty for default

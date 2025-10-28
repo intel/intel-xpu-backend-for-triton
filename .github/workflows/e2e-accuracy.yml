@@ -125,6 +125,8 @@ jobs:
         dtype: ${{ fromJson(needs.setup.outputs.dtype) }}
       fail-fast: false
     uses: ./.github/workflows/e2e-reusable.yml
+    secrets:
+      HUGGING_FACE_HUB_TOKEN: ${{ secrets.HUGGING_FACE_HUB_TOKEN }}
     with:
       pytorch_ref: ${{ inputs.pytorch_ref || '' }}
       suite: ${{ matrix.suite }}
