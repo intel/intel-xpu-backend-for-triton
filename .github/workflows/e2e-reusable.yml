@@ -222,6 +222,7 @@ jobs:
 
       - name: Run e2e ${{ inputs.test_mode }} tests
         env:
+          HF_TOKEN: ${{ secrets.HUGGING_FACE_HUB_TOKEN }}
           HUGGING_FACE_HUB_TOKEN: ${{ secrets.HUGGING_FACE_HUB_TOKEN }}
         run: |
           cd pytorch
