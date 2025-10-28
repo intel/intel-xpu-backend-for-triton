@@ -12,7 +12,7 @@ inputs:
     required: true
   symlink:
     description: Create a symlink instead of copying from cache
-    default: "true"
+    default: "false"
   enabled:
     description: Enable cache
     default: "true"
