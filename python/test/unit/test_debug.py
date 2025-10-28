@@ -79,14 +79,10 @@ def _test_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, tri_func, ref
     y = torch.tensor([y], dtype=getattr(torch, y_dtype), device=device)
     z = torch.empty_like(x)
     if should_overflow and debug:
-        # with pytest.raises(RuntimeError) as exc_info:
-        try:
+        with pytest.raises(RuntimeError) as exc_info:
             tri_func[(1, )](x, y, z, debug=debug)
             getattr(torch, device).synchronize()
-        except RuntimeError as e:
-            assert True
-            assert "device-side assert" in str(e)  #str(exc_info.value)
-        assert False
+        assert "device-side assert" in str(exc_info.value)
     else:
         tri_func[(1, )](x, y, z, debug=debug)
         getattr(torch, device).synchronize()
