@@ -113,6 +113,7 @@ jobs:
         run: |
           sudo apt install -y rsync
           rsync -avz torch-xpu-ops/.ci/benchmarks/ pytorch/benchmarks/dynamo/
+          ls pytorch/benchmarks/dynamo/
 
       - name: Identify pinned versions
         run: |
