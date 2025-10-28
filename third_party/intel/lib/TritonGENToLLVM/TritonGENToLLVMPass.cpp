@@ -40,7 +40,12 @@
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/TritonGENToLLVM/TritonGENToLLVMPass.h"
+
+#include <llvm/Support/FormatVariadic.h>
+
 #include "intel/include/TritonGENToSPIRV/TritonGENToSPIRVPass.h"
+
+#include "intel/include/TritonIntelGPUToLLVM/XeAsmFormat.h"
 
 namespace mlir::triton {
 #define GEN_PASS_DEF_CONVERTTRITONGENTOLLVM
@@ -826,6 +831,46 @@ struct TritonMatrixBlockScaleDPASLowering
 
     SmallVector<Type> funcTypes{cTy, cTy, aTy, bTy, scaleATy, scaleBTy};
 
+#if 0
+    TritonGEN::PrecisionType precA = op.getPa();
+    auto typeSyntax =
+        XeVISAInstr::getTypeName(precA == TritonGEN::PrecisionType::F4E2M1
+                                     ? Float4E2M1FNType::get(op.getContext())
+                                     : aOrigTy.getElementType());
+    if (!typeSyntax)
+      llvm_unreachable("Unsupported scalar type");
+
+    unsigned subgroupSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(
+        op->getParentOfType<mlir::ModuleOp>());
+
+    constexpr StringLiteral bdpasVISA = R"({
+.decl A v_type=G type=ud num_elts=64 align=wordx32 alias=<$2, 0>
+.decl B v_type=G type=ud num_elts=128 align=wordx32 alias=<$3, 0>
+.decl SCALE_A v_type=G type=ub num_elts={1} align=wordx32 alias=<$4, 0>
+.decl SCALE_B v_type=G type=ub num_elts={1} align=wordx32 alias=<$5, 0>
+.decl SCALE_A_PADDED v_type=G type=ub num_elts=40 align=wordx32
+.decl SCALE_B_PADDED v_type=G type=ub num_elts=48 align=wordx32
+mov (M1_NM, 16) SCALE_B_PADDED(0,0)<1> SCALE_B(0,0)<1;1,0>
+mov (M1_NM, 16) SCALE_B_PADDED(0,32)<1> SCALE_B(0,{2})<1;1,0>
+mov (M1_NM, 8) SCALE_A_PADDED(0,0)<1> SCALE_A(0,0)<1;1,0>
+mov (M1_NM, 8) SCALE_A_PADDED(0,32)<1> SCALE_A(0,{2})<1;1,0>
+bdpas.{0}.{0}.8.8 (M1_NM, 16) $0.0 $1.0 B.0 A.0 SCALE_B_PADDED(0,0) SCALE_A_PADDED(0,0)
+  })";
+
+    std::string simdAsm = llvm::formatv(bdpasVISA.data(), *typeSyntax, 2 * subgroupSize, subgroupSize).str();
+
+    XeBuilder xeBuilder;
+    XeInstr &bdpas = *xeBuilder.create<XeInstr>(simdAsm);
+    XeBuilder::Operand *res = xeBuilder.newOperand("=rw");
+    XeBuilder::Operand *cin = xeBuilder.newOperand(c, "rw");
+    XeBuilder::Operand *ain = xeBuilder.newOperand(a, "rw");
+    XeBuilder::Operand *bin = xeBuilder.newOperand(b, "rw");
+    XeBuilder::Operand *sain = xeBuilder.newOperand(op.getScaleA(), "rw");
+    XeBuilder::Operand *sbin = xeBuilder.newOperand(op.getScaleB(), "rw");
+    bdpas({res, cin, ain, bin, sain, sbin}, /*onlyAttachMLIRArgs=*/true);
+    Value result = xeBuilder.launch(rewriter, loc, cTy, false);
+    rewriter.replaceOp(op, result);
+#else
     std::string funcName =
         "llvm.genx.GenISA.sub.group.bdpas." + getGenISATypeMangling(funcTypes);
 
@@ -843,6 +888,8 @@ struct TritonMatrixBlockScaleDPASLowering
         rewriter, funcName, cTy, argTypes, args, {},
         intel::convergentNoUnwindWillReturnAttrs);
     rewriter.replaceOp(op, call);
+
+#endif
     return success();
   }
 };

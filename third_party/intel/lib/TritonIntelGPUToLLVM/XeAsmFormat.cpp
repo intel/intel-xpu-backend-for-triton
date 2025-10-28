@@ -237,6 +237,8 @@ std::optional<std::string> XeVISAInstr::getTypeName(Type scalarTy) {
   TypeSwitch<Type>(scalarTy)
       .Case<Float32Type>([&](auto) { typeSyntax = "f"; })
       .Case<Float16Type>([&](auto) { typeSyntax = "hf"; })
+      .Case<Float8E5M2Type>([&](auto) { typeSyntax = "bf8"; })
+      .Case<Float4E2M1FNType>([&](auto) { typeSyntax = "e2m1"; })
       .Default([&](auto) { typeSyntax = ""; });
 
   if (!typeSyntax.empty())
