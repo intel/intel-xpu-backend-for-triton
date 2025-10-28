@@ -2,6 +2,9 @@ import pytest
 import torch
 import triton.language as tl
 import triton
+import sys
+import subprocess
+import os
 
 
 @pytest.mark.parametrize('cond', [True, False])
@@ -10,29 +13,35 @@ import triton
 @pytest.mark.parametrize('env_var', [True, False])
 @pytest.mark.parametrize('jit_flag', [True, False])
 @pytest.mark.forked
-def test_device_assert(monkeypatch, cond, mask, opt_flag, env_var, jit_flag, device):
-    monkeypatch.setenv("TRITON_DEBUG", str(int(env_var)))
-    triton.knobs.refresh_knobs()
-    torch.zeros([1], dtype=torch.int32, device=device)
-
-    @triton.jit(debug=jit_flag)
-    def _kernel(COND: tl.constexpr, MASK: tl.constexpr):
-        tl.device_assert(COND, 'test', mask=MASK)
+def test_device_assert(cond, mask, opt_flag, env_var, jit_flag, device):
+    """Temporary subprocess solution due to:
+    https://github.com/pytorch/pytorch/issues/142135"""
 
     is_debug = env_var or (opt_flag if opt_flag is not None else jit_flag)
 
-    kwargs = {}
-    if opt_flag is not None:
-        kwargs["debug"] = opt_flag
+    should_fail = not cond and is_debug and mask is not False
+    kernel_file = os.path.join(os.path.dirname(__file__), "test_debug_kernels.py")
+    mask_str = "None" if mask is None else str(mask)
+    opt_flag_str = "None" if opt_flag is None else str(opt_flag)
 
-    if not cond and is_debug and mask is not False:
-        with pytest.raises(RuntimeError):
-            _kernel[(1, )](cond, mask, **kwargs)
-            getattr(torch, device).synchronize()
-        return
+    result = subprocess.run([
+        sys.executable, kernel_file, "device_assert",
+        str(cond), mask_str, opt_flag_str,
+        str(jit_flag), device,
+        str(env_var)
+    ], capture_output=True, text=True)
 
-    _kernel[(1, )](cond, mask, **kwargs)
-    getattr(torch, device).synchronize()
+    if should_fail:
+        abort_or_runtime_error = (
+            result.returncode == 1 or  # RuntimeError
+            result.returncode == -6  # SIGABRT
+        )
+        assert abort_or_runtime_error, (
+            f"Expected runtime error or abort signal but got unexpected exit code {result.returncode}. "
+            f"stdout: {result.stdout}, stderr: {result.stderr}")
+    else:
+        assert result.returncode == 0, (f"Expected success but got unexpected exit code {result.returncode}. "
+                                        f"stdout: {result.stdout}, stderr: {result.stderr}")
 
 
 def test_device_assert_barrier(monkeypatch, device):
@@ -70,10 +79,14 @@ def _test_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, tri_func, ref
     y = torch.tensor([y], dtype=getattr(torch, y_dtype), device=device)
     z = torch.empty_like(x)
     if should_overflow and debug:
-        with pytest.raises(RuntimeError) as exc_info:
+        # with pytest.raises(RuntimeError) as exc_info:
+        try:
             tri_func[(1, )](x, y, z, debug=debug)
             getattr(torch, device).synchronize()
-        assert "device-side assert" in str(exc_info.value)
+        except RuntimeError as e:
+            assert True
+            assert "device-side assert" in str(e)  #str(exc_info.value)
+        assert False
     else:
         tri_func[(1, )](x, y, z, debug=debug)
         getattr(torch, device).synchronize()
