@@ -137,7 +137,7 @@ jobs:
 
       - name: Install python test dependencies
         run: |
-          pip install pyyaml pandas scipy 'numpy==1.26.4' psutil
+          pip install pyyaml pandas scipy psutil
 
       - name: Install transformers package
         if: ${{ inputs.suite == 'huggingface' }}
@@ -207,6 +207,9 @@ jobs:
           HUGGING_FACE_HUB_TOKEN: ${{ secrets.HUGGING_FACE_HUB_TOKEN }}
         run: |
           cd pytorch
+
+          # Some models are still not compatible with numpy>2.0
+          pip install 'numpy==1.26.4'
 
           export WORKSPACE=$GITHUB_WORKSPACE
 
