@@ -32,7 +32,7 @@ jobs:
           bandit -c bandit.yaml -r ./benchmarks/ ./scripts/ ./third_party/intel/ --exit-zero -f html -o bandit_report.html
 
       - name: Upload report to artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: Bandit Report
           path: bandit_report.html

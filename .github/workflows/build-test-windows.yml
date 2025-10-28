@@ -202,13 +202,13 @@ jobs:
       - name: Upload pass rate report
         # upload reports only for the default branch
         if: github.ref_name == 'main'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: pass_rate
           path: ${{ env.NEW_WORKSPACE }}\pass_rate*.json
 
       - name: Upload tutorial performance
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: tutorials-report
           if-no-files-found: warn

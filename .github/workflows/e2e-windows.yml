@@ -339,7 +339,7 @@ jobs:
           EOF
 
       - name: Upload test logs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: logs
           path: ${{ env.NEW_WORKSPACE }}\inductor_log
