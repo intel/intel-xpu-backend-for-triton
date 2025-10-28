@@ -9,9 +9,10 @@ extern "C" void waitOnSyclQueue(void *syclQueue) {
 
 // FIXME: Should it be in DeviceInfo class?
 // Inspired by Kineto: `XpuptiActivityProfiler.cpp`
-extern "C" void
-enumDeviceUUIDs(std::vector<std::array<uint8_t, 16>> deviceUUIDs_) {
-  if (!deviceUUIDs_.empty()) {
+extern "C" void enumDeviceUUIDs(void *deviceUUIDsPtr) {
+  auto *deviceUUIDs_ =
+      reinterpret_cast<std::vector<std::array<uint8_t, 16>> *>(deviceUUIDsPtr);
+  if (!deviceUUIDs_->empty()) {
     return;
   }
   auto platform_list = sycl::platform::get_platforms();
@@ -24,13 +25,13 @@ enumDeviceUUIDs(std::vector<std::array<uint8_t, 16>> deviceUUIDs_) {
     for (const auto &device : device_list) {
       if (device.is_gpu()) {
         if (device.has(sycl::aspect::ext_intel_device_info_uuid)) {
-          deviceUUIDs_.push_back(
+          deviceUUIDs_->push_back(
               device.get_info<sycl::ext::intel::info::device::uuid>());
         } else {
           std::cerr << "Warnings: UUID is not supported for this XPU device. "
                        "The device index of records will be 0."
                     << std::endl;
-          deviceUUIDs_.push_back(std::array<uint8_t, 16>{});
+          deviceUUIDs_->push_back(std::array<uint8_t, 16>{});
         }
       }
     }
