@@ -78,7 +78,6 @@ TEST_LIGER=false
 INSTALL_LIGER=false
 TEST_VLLM=false
 INSTALL_VLLM=false
-INSTALL_SGLANG=false
 TEST_TRITON_KERNELS=false
 VENV=false
 TRITON_TEST_REPORTS=false
@@ -192,11 +191,6 @@ while (( $# != 0 )); do
       ;;
     --inductor)
       TEST_INDUCTOR=true
-      TEST_DEFAULT=false
-      shift
-      ;;
-    --install-sglang)
-      INSTALL_SGLANG=true
       TEST_DEFAULT=false
       shift
       ;;
