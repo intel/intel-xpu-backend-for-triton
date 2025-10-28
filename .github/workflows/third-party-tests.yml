@@ -64,15 +64,9 @@ jobs:
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
 
-      - name: Build Triton wheels
-        uses: ./.github/actions/setup-triton
-        with:
-          command: DEBUG=1 python -m build --wheel --no-isolation
-
-      - name: Install Triton
+      - name: Setup Triton
         id: install
-        run: |
-          pip install dist/*.whl
+        uses: ./.github/actions/setup-triton
 
       - name: Create reports dir
         run: |
@@ -132,15 +126,9 @@ jobs:
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
 
-      - name: Build Triton wheels
-        uses: ./.github/actions/setup-triton
-        with:
-          command: DEBUG=1 python -m build --wheel --no-isolation
-
-      - name: Install Triton
+      - name: Setup Triton
         id: install
-        run: |
-          pip install dist/*.whl
+        uses: ./.github/actions/setup-triton
 
       - name: Create reports dir
         run: |
