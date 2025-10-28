@@ -3,9 +3,6 @@ name = "intel-pti"
 version = "0.14.0.dev1"
 description = "Add your description here"
 readme = "README.md"
-authors = [
-    { name = "Intel Corporation", email = "scripting@intel.com" }
-]
 license = "MIT"
 
 requires-python = ">=3.9"
@@ -37,8 +34,6 @@ cmake.args = ["-GNinja"]
 ninja.version = ">=1.13"
 minimum-version = "build-system.requires"
 sdist.exclude = ["levelzero", "level-zero", "src"]
-#experimental = true
-#wheel.install-dir = "/data"
 
 [tool.uv]
 cache-keys = [{ file = "pyproject.toml" }, { file = "CMakeLists.txt" }]

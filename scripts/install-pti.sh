@@ -3,15 +3,15 @@
 set -euo pipefail
 
 # Select what to build.
-BUILD_ONLY_LEVEL_ZERO=false
+BUILD_LEVEL_ZERO=false
 for arg in "$@"; do
   case $arg in
-    --build-only-level-zero)
-      BUILD_ONLY_LEVEL_ZERO=true
+    --build-level-zero)
+      BUILD_LEVEL_ZERO=true
       shift
       ;;
     --help)
-      echo "Example usage: ./install-pti.sh [--build-only-level-zero]"
+      echo "Example usage: ./install-pti.sh [--build-level-zero]"
       exit 1
       ;;
     *)
@@ -79,11 +79,9 @@ function install_pti {
   pip install dist/*.whl
 }
 
-if [ "$BUILD_ONLY_LEVEL_ZERO" = true ]; then
+if [ "$BUILD_LEVEL_ZERO" = true ]; then
   build_level_zero
-  exit 0
 fi
 
-build_level_zero
 build_pti
 install_pti

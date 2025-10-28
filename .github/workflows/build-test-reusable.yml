@@ -129,7 +129,7 @@ jobs:
 
       - name: Build PTI
         run: |
-          ./scripts/install-pti.sh
+          ./scripts/install-pti.sh --build-level-zero
 
       - name: Set test-triton command line
         id: test-triton
