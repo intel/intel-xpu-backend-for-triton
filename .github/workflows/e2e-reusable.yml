@@ -140,7 +140,7 @@ jobs:
 
       - name: Install python test dependencies
         run: |
-          pip install pyyaml pandas scipy 'numpy==1.26.4' psutil pyre_extensions torchrec
+          pip install pyyaml pandas scipy psutil
 
       - name: Install transformers package
         if: ${{ inputs.suite == 'huggingface' }}
@@ -189,11 +189,19 @@ jobs:
         if: ${{ inputs.suite == 'torchbench' }}
         run: |
           cd benchmark
+          sed -i 's/^ *pynvml.*//' requirements.txt
+          pip install -r requirements.txt
+          # for dlrm
+          pip install pyre-extensions
+          curl -fsSL https://raw.githubusercontent.com/facebookresearch/dlrm/refs/heads/torchrec-dlrm/requirements.txt |xargs pip install
+          # for soft_actor_critic, temp fix
+          pip install git+https://github.com/nocoding03/gym@fix-np
+
           if [[ "${{ inputs.only_one_model }}" ]]; then
             python install.py "${{ inputs.only_one_model }}"
           else
             # install all models
-            python install.py
+            python install.py --continue_on_fail
           fi
           pip install -e .
 
@@ -202,6 +210,9 @@ jobs:
           HUGGING_FACE_HUB_TOKEN: ${{ secrets.HUGGING_FACE_HUB_TOKEN }}
         run: |
           cd pytorch
+
+          # Some models are still not compatible with numpy>2.0
+          pip install 'numpy==1.26.4'
 
           export WORKSPACE=$GITHUB_WORKSPACE
 
