@@ -1,3 +1,7 @@
+from typing import Optional, Union
+import importlib.metadata
+import pathlib
+import os
 import functools
 import triton
 
@@ -6,7 +10,6 @@ from triton._C.libtriton import getenv  # type: ignore
 from .flags import flags
 from .hooks import HookManager, LaunchHook, InstrumentationHook
 from .mode import BaseMode
-from typing import Optional, Union
 
 DEFAULT_PROFILE_NAME = "proton"
 UTILS_CACHE_PATH = None
@@ -21,6 +24,12 @@ def _select_backend() -> str:
     elif backend == "xpu":
         global UTILS_CACHE_PATH
         UTILS_CACHE_PATH = triton.runtime.driver.active.build_proton_help_lib()
+        files = importlib.metadata.files('intel-pti')
+        if files is not None:
+            for f in files:
+                if f.name == 'libpti_view.so':
+                    os.environ["TRITON_XPUPTI_LIB_PATH"] = str(pathlib.Path(f.locate()).parent.resolve())
+                    break
         return "xpupti"
     else:
         raise ValueError("No backend is available for the current target.")
