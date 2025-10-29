@@ -1,6 +1,12 @@
 import os
+from triton import knobs
 
-if (arch := os.getenv("TRITON_INTEL_DEVICE_ARCH", "").strip().lower()):
+os.environ["TRITON_INTEL_DEVICE_ARCH"] = "cri"  # Hardcoded in the main-cri branch
+
+if knobs.intel.device_arch:
     from importlib import import_module
 
-    XPUBackendMeta = import_module(f"{__name__}.{arch}").XPUBackendMeta
+    try:
+        XPUBackendMeta = import_module(f"{__name__}.{knobs.intel.device_arch}").XPUBackendMeta
+    except (ImportError, AttributeError):
+        ...  # Ignore

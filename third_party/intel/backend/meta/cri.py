@@ -9,7 +9,6 @@ import threading
 import torch
 
 from triton.backends.compiler import BaseBackend
-from . import torch_wrappers as wrappers
 from .utils import echo, thread_dump
 from .timeout_watchdog import timed, TimeoutWatchdog
 
@@ -27,7 +26,6 @@ class XPUBackendMeta(type(BaseBackend)):
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             dev_prop = fn(*args, **kwargs)
-            dev_prop['has_fp8_dpas'] = True
             dev_prop['has_support_block_scale_dpas'] = True
             return dev_prop
 
@@ -36,6 +34,10 @@ class XPUBackendMeta(type(BaseBackend)):
 
 class Simulator:
     _proc = None
+
+    @staticmethod
+    def can_start():
+        return os.path.exists("/crisim/crisim-env.sh")
 
     @classmethod
     def start(cls):
@@ -128,23 +130,27 @@ def on_signal(signum, _):
     os._exit(signum)
 
 
-sim_pid = Simulator.start()
-TimeoutWatchdog.start([sim_pid])
+if (os.getenv("TRITON_INTEL_FORCE_DISABLE_WRAPPERS", "").lower() not in ("true", "1", "yes", "on")
+        and Simulator.can_start()):
+    from . import torch_wrappers as wrappers
 
-atexit.register(on_exit)
-signal.signal(signal.SIGINT, on_signal)
-signal.signal(signal.SIGTERM, on_signal)
-signal.signal(signal.SIGUSR1, on_signal)
+    sim_pid = Simulator.start()
+    TimeoutWatchdog.start([sim_pid])
 
-wrappers.wrap_launch = timed(wrappers.wrap_launch)
-torch.xpu.synchronize = timed(torch.xpu.synchronize)
-torch.xpu.device_count = timed(torch.xpu.device_count, 10)
-os.fork = lambda: (_ for _ in ()).throw(Exception("os.fork is prohibited"))
+    atexit.register(on_exit)
+    signal.signal(signal.SIGINT, on_signal)
+    signal.signal(signal.SIGTERM, on_signal)
+    signal.signal(signal.SIGUSR1, on_signal)
 
-try:
-    import pytest
+    wrappers.wrap_launch = timed(wrappers.wrap_launch)
+    torch.xpu.synchronize = timed(torch.xpu.synchronize)
+    torch.xpu.device_count = timed(torch.xpu.device_count, 10)
+    os.fork = lambda: (_ for _ in ()).throw(Exception("os.fork is prohibited"))
 
-    pytest.Function.runtest = timed(pytest.Function.runtest)
-    pytest.mark.forked = lambda fn: fn  # Disable tests forking
-except ImportError:
-    pass  # Ignore if pytest is not installed
+    try:
+        import pytest
+
+        pytest.Function.runtest = timed(pytest.Function.runtest)
+        pytest.mark.forked = lambda fn: fn  # Disable tests forking
+    except ImportError:
+        pass  # Ignore if pytest is not installed
