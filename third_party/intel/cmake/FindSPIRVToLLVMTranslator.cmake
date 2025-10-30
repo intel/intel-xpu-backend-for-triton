@@ -26,6 +26,32 @@ if (NOT SPIRVToLLVMTranslator_FOUND)
 
             FetchContent_MakeAvailable(spirv-llvm-translator)
 
+            # FIXME: Don't apply patch when LTS driver is updated.
+            if(DEFINED ENV{AGAMA_VERSION} AND "$ENV{AGAMA_VERSION}" STREQUAL "1146")
+                execute_process(
+                    COMMAND git apply --check ${CMAKE_CURRENT_LIST_DIR}/3122.patch
+                    WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}
+                    ERROR_QUIET
+                    RESULT_VARIABLE PATCH_RESULT
+                )
+                if(PATCH_RESULT EQUAL 0)
+                    execute_process(
+                            COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/3122.patch
+                            WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}
+                            RESULT_VARIABLE PATCH_RESULT
+                    )
+                else()
+                    execute_process( # Check if the patch is already applied
+                            COMMAND git apply --reverse --check ${CMAKE_CURRENT_LIST_DIR}/3122.patch
+                            WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}
+                            RESULT_VARIABLE PATCH_RESULT
+                    )
+                endif()
+                if(NOT PATCH_RESULT EQUAL 0)
+                    message(FATAL_ERROR "Failed to apply 3122.patch to SPIRV-LLVM-Translator")
+                endif()
+            endif()
+
             # FIXME: Don't apply patch when Agama driver is updated to incorporate with the SPV_INTEL_bfloat16_arithmetic extension.
             execute_process(
                 COMMAND git apply --check ${CMAKE_CURRENT_LIST_DIR}/3388.patch
