@@ -107,12 +107,17 @@ compileLevelZeroObjects(uint8_t *binary_ptr, const size_t binary_size,
                         const std::string &kernel_name, L0_DEVICE l0_device,
                         L0_CONTEXT l0_context, const std::string &build_flags,
                         const bool is_spv) {
+  std::cout << "# [mdziado][compileLevelZeroObjects][1] called before create_module" << std::endl;
+
   auto l0_module =
       checkSyclErrors(create_module(l0_context, l0_device, binary_ptr,
                                     binary_size, build_flags.data(), is_spv));
+  std::cout << "# [mdziado][compileLevelZeroObjects][2] called before create_function" << std::endl;
 
   // Retrieve the kernel properties (e.g. register spills).
   auto l0_kernel = checkSyclErrors(create_function(l0_module, kernel_name));
+  std::cout << "# [mdziado][compileLevelZeroObjects][3] called before zeKernelGetProperties" << std::endl;
+
 
   ze_kernel_properties_t props;
   props.stype = ZE_STRUCTURE_TYPE_KERNEL_PROPERTIES;
@@ -121,7 +126,7 @@ compileLevelZeroObjects(uint8_t *binary_ptr, const size_t binary_size,
       std::make_tuple(NULL, zeKernelGetProperties(l0_kernel, &props)));
 
   const int32_t n_spills = props.spillMemSize;
-
+  std::cout << "# [mdziado][compileLevelZeroObjects][4] called before return" << std::endl;
   return std::make_tuple(l0_module, l0_kernel, n_spills);
 }
 
@@ -201,14 +206,16 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
 
   if (!PyArg_ParseTuple(args, "sSispi", &name, &py_bytes, &shared,
                         &build_flags_ptr, &is_spv, &devId)) {
-    std::cerr << "loadBinary arg parse failed" << std::endl;
+    std::cout << "loadBinary arg parse failed" << std::endl;
     return NULL;
   }
+  std::cout << "# [mdziado][load_binary][1] called, name=" << name << ", is_spv=" << is_spv << ", devId=" << devId << std::endl;
 
   if (devId > g_sycl_l0_device_list.size()) {
-    std::cerr << "Device is not found " << std::endl;
+    std::cout << "Device is not found " << std::endl;
     return NULL;
   }
+  std::cout << "# [mdziado][load_binary][2] device found" << std::endl;
 
   BuildFlags build_flags(build_flags_ptr);
 
@@ -231,11 +238,15 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
     zeDeviceGetComputeProperties(l0_device, &compute_properties);
     int32_t n_max_threads = compute_properties.maxTotalGroupSize;
 
+    std::cout << "# [mdziado][load_binary][3-1] before compileLevelZeroObject" << std::endl;
     auto [l0_module, l0_kernel, n_spills] =
         compileLevelZeroObjects(binary_ptr, binary_size, kernel_name, l0_device,
                                 l0_context, build_flags(), is_spv);
+    std::cout << "# [mdziado][load_binary][3-2] after compileLevelZeroObject" << std::endl;
 
     const bool debugEnabled = getBoolEnv("TRITON_DEBUG");
+
+
 
     if (is_spv) {
       constexpr int32_t max_reg_spill = 1000;
@@ -268,18 +279,18 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
           // clean up the unused module and kernel.
           auto error_no = zeKernelDestroy(l0_kernel_dgrf);
           if (error_no != ZE_RESULT_SUCCESS) {
-            std::cerr
+            std::cout
                 << "[Ignoring] Intel - Error during destroy unused L0 kernel"
                 << std::endl;
           }
           error_no = zeModuleDestroy(l0_module_dgrf);
           if (error_no != ZE_RESULT_SUCCESS) {
-            std::cerr
+            std::cout
                 << "[Ignoring] Intel - Error during destroy unused L0 module"
                 << std::endl;
           }
         } catch (const std::exception &e) {
-          std::cerr << "[Ignoring] Error during Intel loadBinary with large "
+          std::cout<< "[Ignoring] Error during Intel loadBinary with large "
                        "registers: "
                     << e.what() << std::endl;
           // construct previous working version
@@ -310,6 +321,7 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
     auto kernel_bundle_py = PyCapsule_New(reinterpret_cast<void *>(mod),
                                           "kernel_bundle", freeKernelBundle);
 
+    std::cout << "# [mdziado][load_binary][4-1] returning PyBuildValue" << std::endl;
     return Py_BuildValue("(OOiii)", kernel_bundle_py, kernel_py, n_regs,
                          n_spills, n_max_threads);
 
@@ -317,8 +329,9 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
     PyGILState_STATE gil_state;
     gil_state = PyGILState_Ensure();
     PyErr_SetString(PyExc_RuntimeError, e.what());
-    std::cerr << "Error during Intel loadBinary: " << e.what() << std::endl;
+    std::cout << "Error during Intel loadBinary: " << e.what() << std::endl;
     PyGILState_Release(gil_state);
+    std::cout << "# [mdziado][load_binary][4-2] returning NULL" << std::endl;
     return NULL;
   }
 }

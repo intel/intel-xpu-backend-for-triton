@@ -147,6 +147,7 @@ std::tuple<ze_module_handle_t, ze_result_t>
 create_module(ze_context_handle_t context, ze_device_handle_t device,
               uint8_t *binary_ptr, size_t binary_size, const char *build_flags,
               const bool is_spv = true) {
+  std::cout << "# [mdziado][create_mobule][1] called" << std::endl;
   assert(binary_ptr != nullptr && "binary_ptr should not be NULL");
   assert(build_flags != nullptr && "build_flags should not be NULL");
 
@@ -160,6 +161,8 @@ create_module(ze_context_handle_t context, ze_device_handle_t device,
   module_description.pBuildFlags = build_flags;
   ze_module_build_log_handle_t buildlog;
   ze_module_handle_t module;
+  std::cout << "# [mdziado][create_mobule][2] before zeModuleCreate" << std::endl;
+
   auto error_no =
       zeModuleCreate(context, device, &module_description, &module, &buildlog);
   if (error_no != ZE_RESULT_SUCCESS) {
@@ -172,17 +175,22 @@ create_module(ze_context_handle_t context, ze_device_handle_t device,
       free(strLog);
       ZE_CHECK(error_no_build_log);
     }
-    std::cerr << "L0 build module failed. Log: " << strLog << std::endl;
+    std::cout << "L0 build module failed. Log: " << strLog << std::endl;
     free(strLog);
     ZE_CHECK(zeModuleBuildLogDestroy(buildlog));
   }
   ZE_CHECK(error_no);
+
+  std::cout << "# [mdziado][create_mobule][1] before return" << std::endl;
+
   return std::make_tuple(module, error_no);
 }
 
 std::tuple<ze_kernel_handle_t, ze_result_t>
 create_function(ze_module_handle_t module, ze_kernel_flags_t flag,
                 std::string_view func_name) {
+  std::cout << "# [mdziado][create_function][1] called" << std::endl;
+
   ze_kernel_handle_t kernel;
   ze_kernel_desc_t kernel_description = {};
   kernel_description.stype = ZE_STRUCTURE_TYPE_KERNEL_DESC;
@@ -195,17 +203,22 @@ create_function(ze_module_handle_t module, ze_kernel_flags_t flag,
   }
 
   uint32_t count = 0;
+  std::cout << "# [mdziado][create_function][2] before zeModuleGetKernelNames" << std::endl;
+
   [[maybe_unused]] auto ret = zeModuleGetKernelNames(module, &count, nullptr);
   assert(ret == ZE_RESULT_SUCCESS);
   if (count == 0) {
-    std::cerr
+    std::cout
         << "Module doesn't contain any kernels. Please attempt to tune the "
            "'num_warps' parameter."
         << std::endl;
     return std::make_tuple(nullptr, ZE_RESULT_ERROR_INVALID_KERNEL_NAME);
   }
 
+  std::cout << "# [mdziado][create_function][3] before zeKernelCreate" << std::endl;
   ZE_CHECK(zeKernelCreate(module, &kernel_description, &kernel));
+  std::cout << "# [mdziado][create_function][4] before return" << std::endl;
+
   return std::make_tuple(kernel, ZE_RESULT_SUCCESS);
 }
 
