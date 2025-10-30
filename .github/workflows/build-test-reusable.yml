@@ -127,6 +127,10 @@ jobs:
             DEBUG=1
             python -m build --wheel --no-isolation && pip install dist/*.whl
 
+      - name: Build PTI
+        run: |
+          ./scripts/install-pti.sh --build-level-zero
+
       - name: Set test-triton command line
         id: test-triton
         run: |
@@ -170,13 +174,19 @@ jobs:
           dest: ${{ steps.pip-cache.outputs.dest }}
 
       - name: Upload Triton wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: triton-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           path: dist/*.whl
 
-      - name: Upload test reports
+      - name: Upload PTI wheels
         uses: actions/upload-artifact@v4
+        with:
+          name: pti-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          path: .scripts_cache/pti/dist/*.whl
+
+      - name: Upload test reports
+        uses: actions/upload-artifact@v5
         with:
           name: test-reports-build-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           include-hidden-files: true
@@ -238,14 +248,26 @@ jobs:
           mode: ${{ inputs.pytorch_mode }}
 
       - name: Download Triton wheels
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           name: triton-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+
+      - name: Download PTI wheels
+        uses: actions/download-artifact@v5
+        with:
+          name: pti-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
 
       - name: Install Triton
         run: |
           pip install triton-*.whl
           python -c 'import triton; print(triton.__version__)'
+
+      - name: Install PTI
+        run: |
+          pip install intel_pti-*.whl
+          PTI_LIBS_DIR=$(python ./scripts/pti_lib.py)
+          ls $PTI_LIBS_DIR
+          echo "PTI_LIBS_DIR=$PTI_LIBS_DIR" | tee -a $GITHUB_ENV
 
       - name: Report environment details
         run: |
@@ -283,19 +305,7 @@ jobs:
       - name: Build PTI && Run Proton tests
         if: matrix.suite == 'rest'
         run: |
-          PTI_COMMIT_ID="$(<.github/pins/pti.txt)"
-          git clone https://github.com/intel/pti-gpu.git
-          cd pti-gpu
-          git checkout $PTI_COMMIT_ID
-          cd sdk
-          cmake --preset linux-icpx-release
-          BUILD_TESTING=1 PTI_BUILD_SAMPLES=1 cmake --build --preset linux-icpx-release
-
-          PTI_LIBS_DIR="$(pwd)/build-linux-icpx-release/lib/"
-          cd ../..
-
-          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
-          export TRITON_XPUPTI_LIB_PATH=$PTI_LIBS_DIR
+          export LD_LIBRARY_PATH=${{ env.PTI_LIBS_DIR }}:$LD_LIBRARY_PATH
           cd third_party/proton/test
           pytest test_api.py test_cmd.py test_lib.py test_profile.py test_viewer.py --device xpu -s -v
           cd ..
@@ -382,7 +392,7 @@ jobs:
           dest: ${{ steps.pip-cache.outputs.dest }}
 
       - name: Upload test reports
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: test-reports-${{ matrix.suite }}-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           include-hidden-files: true
@@ -405,7 +415,7 @@ jobs:
           key: pip-${{ inputs.python_version }}-${{ hashFiles('pyproject.toml', 'setup.py') }}-${{ env.PIP_CACHE_NUMBER }}
 
       - name: Download test reports
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           pattern: test-reports-*-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           path: reports
@@ -431,20 +441,20 @@ jobs:
           python scripts/pass_rate.py --reports reports --suite tutorials --json > pass_rate_tutorials.json
 
       - name: Upload pass rate report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: pass_rate-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           path: pass_rate*.json
 
       - name: Upload tutorials test report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: test-reports-tutorials-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           include-hidden-files: true
           path: reports/tutorials.xml
 
       - name: Upload tutorials performance report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: tutorials-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           if-no-files-found: warn

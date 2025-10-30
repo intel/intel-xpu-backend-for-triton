@@ -275,7 +275,7 @@ void CallbackCommon(pti_callback_domain domain,
   std::cout << std::endl;
 }
 
-typedef void (*EnumDeviceUUIDsFunc)(std::vector<std::array<uint8_t, 16>>);
+typedef void (*EnumDeviceUUIDsFunc)(void *);
 
 int callEnumDeviceUUIDs(const std::string &utils_cache_path) {
   void *handle = dlopen(xpu::PROTON_UTILS.data(), RTLD_LAZY);
@@ -294,7 +294,7 @@ int callEnumDeviceUUIDs(const std::string &utils_cache_path) {
     return 1;
   }
 
-  enumDeviceUUIDs(deviceUUIDs_);
+  enumDeviceUUIDs(&deviceUUIDs_);
 
   dlclose(handle);
   return 0;
