@@ -302,7 +302,7 @@ jobs:
         run: |
           echo "TRITON_TEST_CMD=${{ needs.build.outputs.test-triton-command }}" | tee -a $GITHUB_ENV
 
-      - name: Build PTI && Run Proton tests
+      - name: Run Proton tests
         if: matrix.suite == 'rest'
         run: |
           cd third_party/proton/test
