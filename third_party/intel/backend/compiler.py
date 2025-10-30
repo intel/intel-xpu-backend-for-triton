@@ -390,9 +390,8 @@ class XPUBackend(BaseBackend):
 
         metadata["generate_native_code"] = options.generate_native_code
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            with track("generate_native_code"), tempfile.NamedTemporaryFile(mode='wb', suffix='.spv', dir=temp_dir,
-                                                                            delete=False) as fsrc:
+        with track("generate_native_code"), tempfile.TemporaryDirectory() as temp_dir:
+            with tempfile.NamedTemporaryFile(mode='wb', suffix='.spv', dir=temp_dir, delete=False) as fsrc:
                 fsrc.write(src)
             fbin = fsrc.name + '.o'
 
