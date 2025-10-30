@@ -468,6 +468,12 @@ class CompiledKernel:
         self.module, self.function, self.n_regs, self.n_spills, self.n_max_threads = driver.active.utils.load_binary(
             self.name, self.kernel, self.metadata.shared, self.metadata.build_flags,
             not self.metadata.generate_native_code, device)
+        # PyTorch could use the updated build flags in load binary.
+        if hasattr(driver.active.utils, "get_last_selected_build_flags"):
+            new_build_flags = driver.active.utils.get_last_selected_build_flags()
+            if new_build_flags != self.metadata.build_flags:
+                self.metadata = self.metadata._replace(build_flags=new_build_flags)
+
         if hasattr(self.metadata, "threads_per_warp"):
             warp_size = self.metadata.threads_per_warp
         else:

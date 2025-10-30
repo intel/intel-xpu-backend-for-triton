@@ -199,9 +199,11 @@ class SpirvUtils:
         self.shared_library.get_device_properties.argtypes = (ctypes.c_int, )
         self.shared_library.has_opencl_extension.restype = ctypes.py_object
         self.shared_library.has_opencl_extension.argtypes = (ctypes.c_int, ctypes.c_char_p)
+        self.shared_library.get_last_selected_build_flags.restype = ctypes.py_object
 
     def __getattribute__(self, name):
-        if name in ("get_device_properties", "init_devices", "wait_on_sycl_queue", "has_opencl_extension"):
+        if name in ("get_device_properties", "init_devices", "wait_on_sycl_queue", "has_opencl_extension",
+                    "get_last_selected_build_flags"):
             shared_library = super().__getattribute__("shared_library")
             return getattr(shared_library, name)
 
@@ -318,6 +320,7 @@ class XPUUtils(object):
         self.device_count = mod.init_devices(self.get_sycl_queue())
         self.wait_on_sycl_queue = mod.wait_on_sycl_queue
         self.has_opencl_extension = mod.has_opencl_extension
+        self.get_last_selected_build_flags = mod.get_last_selected_build_flags
 
     def get_current_device(self):
         import torch
