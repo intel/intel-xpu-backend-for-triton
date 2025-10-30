@@ -6,7 +6,8 @@
 #include "mlir/Dialect/Index/IR/IndexDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
-
+#include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"  // ADD THIS
+#include "mlir/Dialect/Arith/Transforms/Passes.h"     // ADD THIS
 #include "intel/include/Analysis/AxisInfo.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
@@ -69,7 +70,7 @@ struct ConvertTritonGPUToLLVM
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
-
+    deduplicateGetLocalIdCalls(mod);
     mlir::triton::intel::TritonGPUToLLVMPipelineManager pipelineManager(
         mod, context);
     mlir::LowerToLLVMOptions option(context);
@@ -101,7 +102,7 @@ struct ConvertTritonGPUToLLVM
               applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
         return signalPassFailure();
     }
-
+    deduplicateGetLocalIdCalls(mod);
     // initSharedMemory is run before the conversion of call and ret ops,
     // because the call op has to know the shared memory base address of each
     // function
@@ -118,12 +119,20 @@ struct ConvertTritonGPUToLLVM
               applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
         return signalPassFailure();
     }
-
+    deduplicateGetLocalIdCalls(mod);
     mlir::triton::intel::ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
     OpBuilder::InsertPoint indexInsertPoint;
 
     RewritePatternSet patterns(context);
     int benefit = patternBenefitPrioritizeOverLLVMConversions;
+    mlir::arith::populateCeilFloorDivExpandOpsPatterns(patterns);
+    mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
+    mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
+    mlir::ub::populateUBToLLVMConversionPatterns(typeConverter, patterns);
+    mlir::triton::populateViewOpToLLVMPatterns(typeConverter, patterns,
+                                               benefit);
+    mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, *targetInfo,
+                                                   patterns, benefit);
     pipelineManager.populateConversionPatterns(
         patterns, axisInfoAnalysis, typeConverter, *targetInfo, benefit);
 
@@ -139,6 +148,7 @@ struct ConvertTritonGPUToLLVM
         funcOp.removeArgAttr(i, "tt.contiguity");
       }
     });
+    deduplicateGetLocalIdCalls(mod);
   }
 
 private:
@@ -150,7 +160,6 @@ private:
     auto elemTy = typeConverter.convertType(b.getIntegerType(8));
     // Set array size 0 and external linkage indicates that we use dynamic
     // shared allocation to allow a larger shared memory size for each kernel.
-    //
     // Ask for 16B alignment on global_smem because that's the largest we should
     // ever need (4xi32).
     auto arrayTy = LLVM::LLVMArrayType::get(elemTy, 0);
@@ -160,6 +169,47 @@ private:
         // Add ROCm support.
         static_cast<unsigned>(TritonGEN::TritonGENMemorySpace::kWorkgroup));
   }
-};
+  private:
+  void deduplicateGetLocalIdCalls(ModuleOp mod) {
+    mod.walk([&](LLVM::LLVMFuncOp funcOp) {
+      if (funcOp.getName().contains("get_local_id"))
+        return;
 
+      // Store first occurrence of each get_local_id call
+      llvm::SmallDenseMap<unsigned, LLVM::CallOp> firstCalls;
+      
+      // Collect all get_local_id calls
+      SmallVector<LLVM::CallOp> allCalls;
+      funcOp.walk([&](LLVM::CallOp callOp) {
+        if (auto callee = callOp.getCallee()) {
+          if (callee->contains("_Z12get_local_idj")) {
+            allCalls.push_back(callOp);
+          }
+        }
+      });
+      
+      // Process calls
+      for (auto callOp : allCalls) {
+        if (callOp.getNumOperands() == 0) continue;
+        
+        // Extract dimension (should be constant i32)
+        unsigned dim = 0;
+        if (auto constOp = callOp.getOperand(0).getDefiningOp<LLVM::ConstantOp>()) {
+          if (auto intAttr = llvm::dyn_cast<IntegerAttr>(constOp.getValue())) {
+            dim = intAttr.getInt();
+          }
+        }
+        
+        // If this is the first call for this dimension, save it
+        if (firstCalls.find(dim) == firstCalls.end()) {
+          firstCalls[dim] = callOp;
+        } else {
+          // Replace with first call's result
+          callOp.replaceAllUsesWith(firstCalls[dim].getResults());
+          callOp.erase();
+        }
+      }
+    });
+  }
+};
 } // anonymous namespace
