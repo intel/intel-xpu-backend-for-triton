@@ -192,6 +192,12 @@ sycl::context get_default_context(const sycl::device &sycl_device) {
 #endif
 }
 
+static BuildFlags last_build_flag("");
+
+extern "C" EXPORT_FUNC PyObject *get_last_selected_build_flags() {
+  return Py_BuildValue("s", last_build_flag().data());
+}
+
 extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   const char *name, *build_flags_ptr;
   int shared;
@@ -309,7 +315,7 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
         PyCapsule_New(reinterpret_cast<void *>(fun), "kernel", freeKernel);
     auto kernel_bundle_py = PyCapsule_New(reinterpret_cast<void *>(mod),
                                           "kernel_bundle", freeKernelBundle);
-
+    last_build_flag = build_flags;
     return Py_BuildValue("(OOiii)", kernel_bundle_py, kernel_py, n_regs,
                          n_spills, n_max_threads);
 

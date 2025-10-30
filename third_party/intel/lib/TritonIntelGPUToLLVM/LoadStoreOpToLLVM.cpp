@@ -2956,10 +2956,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       Value ret;
       // Create a predicated load operation.
       if (pred) {
-        std::optional<bool> enablePredicated =
-            mlir::triton::tools::isEnvValueBool(
-                mlir::triton::tools::getStrEnv("TRITON_INTEL_PREDICATED"));
-        if (!enablePredicated.has_value() || enablePredicated.value())
+        if (triton::tools::getBoolEnv("TRITON_INTEL_PREDICATED"))
           ret = rewriter.create<TritonGEN::PredicatedLoadOp>(
               loc, retTy, addrElem, b.i64_val(alignment), pred, other_);
         else {
