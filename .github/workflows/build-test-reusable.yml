@@ -124,7 +124,6 @@ jobs:
           build_llvm: ${{ inputs.build_llvm }}
           use_spirv_backend: ${{ inputs.use_spirv_backend }}
           command: >
-            source ./scripts/capture-hw-details.sh &&
             DEBUG=1
             python -m build --wheel --no-isolation && pip install dist/*.whl
 

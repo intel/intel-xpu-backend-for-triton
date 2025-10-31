@@ -27,7 +27,7 @@ if (NOT SPIRVToLLVMTranslator_FOUND)
             FetchContent_MakeAvailable(spirv-llvm-translator)
 
             # FIXME: Don't apply patch when LTS driver is updated.
-            if(DEFINED ENV{AGAMA_VERSION} AND "$ENV{AGAMA_VERSION}" STREQUAL "1146")
+            if(DEFINED AGAMA_VERSION AND AGAMA_VERSION STREQUAL "1146")
                 execute_process(
                     COMMAND git apply --check ${CMAKE_CURRENT_LIST_DIR}/3122.patch
                     WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}
