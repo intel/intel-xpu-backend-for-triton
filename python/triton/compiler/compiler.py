@@ -144,6 +144,13 @@ def parse(full_name, ext, context):
         return Path(full_name).read_bytes()
 
 
+def read_file(full_name, ext):
+    if ext in ["cubin", "hsaco", "spv", "zebin"]:
+        return Path(full_name).read_bytes()
+    else:
+        return Path(full_name).read_text()
+
+
 def filter_traceback(e: BaseException):
     """
     Removes code_generator.py and related files from tracebacks.
@@ -423,13 +430,7 @@ class CompiledKernel:
         # stores the text of each level of IR that was generated during compilation
         asm_files = [Path(p) for c, p in metadata_group.items() if not c.endswith(".json")]
 
-        def read_file(path):
-            try:
-                return path.read_text()
-            except UnicodeDecodeError:
-                return path.read_bytes()
-
-        self.asm = AsmDict({file.suffix[1:]: read_file(file) for file in asm_files})
+        self.asm = AsmDict({file.suffix[1:]: read_file(file, file.suffix[1:]) for file in asm_files})
         binary_ext = metadata.get("binary_ext", backend.binary_ext)
         self.metadata_group = metadata_group
         self.kernel = self.asm[binary_ext]
