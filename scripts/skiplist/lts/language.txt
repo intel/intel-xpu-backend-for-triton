@@ -1,3 +1,10 @@
 # https://github.com/intel/intel-xpu-backend-for-triton/issues/4665
 python/test/unit/language/test_core.py::test_dot3d[8-1-32-32-32-32-32-float64-float64]
 python/test/unit/language/test_core.py::test_dot3d[4-1-64-64-64-32-32-float64-float64]
+# Below bfloat16 tests require IGC 1188 or above
+python/test/unit/language/test_core.py::test_atomic_rmw[r".*bfloat16.*"]@regexp
+python/test/unit/language/test_core.py::test_tensor_atomic_rmw[r".*bfloat16.*"]@regexp
+python/test/unit/language/test_core.py::test_tensor_atomic_add_non_exclusive_offset[r".*bfloat16.*"]@regexp
+python/test/unit/language/test_core.py::test_tensor_atomic_add_shift_1[r".*bfloat16.*"]@regexp
+python/test/unit/language/test_core.py::test_tensor_atomic_add_access_patterns[r".*bfloat16.*"]@regexp
+python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_reduce[r".*bfloat16.*"]@regexp
