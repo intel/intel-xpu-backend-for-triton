@@ -34,13 +34,14 @@ static Operation *dropMask(Operation *op, bool maskVal) {
   TypeSwitch<Operation *>(op)
       .Case<tt::LoadOp>([&](auto loadOp) {
         if (maskVal) {
-          tt::LoadOp newLoadOp = builder.create<tt::LoadOp>(
-              loc, loadOp.getPtr(), loadOp.getCache(), loadOp.getEvict(),
+          auto newLoadOp = builder.create<tt::LoadOp>(
+              loc, loadOp.getPtr(), loadOp.getBoundaryCheck(),
+              loadOp.getPadding(), loadOp.getCache(), loadOp.getEvict(),
               loadOp.getIsVolatile());
           loadOp->replaceAllUsesWith(newLoadOp);
         } else {
-          Value other = loadOp.getOther();
-          Operation *cstOp = builder.create<arith::ConstantOp>(loc, other);
+          Operation *cstOp =
+              builder.create<arith::ConstantOp>(loc, loadOp.getOther());
           loadOp->replaceAllUsesWith(cstOp);
         }
       })
@@ -48,10 +49,6 @@ static Operation *dropMask(Operation *op, bool maskVal) {
         selectOp->replaceAllUsesWith(
             (maskVal ? selectOp.getTrueValue() : selectOp.getFalseValue())
                 .getDefiningOp());
-      })
-      .Default([](auto) {
-        return nullptr;
-        llvm_unreachable("Unexpected operation");
       });
 
   return nullptr;
@@ -673,7 +670,7 @@ public:
   void runOnOperation() final {
     ModuleOp moduleOp = getOperation();
 
-    // Remove masks if the are not necessary
+    // Remove masks if they are not necessary.
     moduleOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
       if (scf::ForOp forOp = dyn_cast<scf::ForOp>(op)) {
         // Nested loop aren't currently handled.
