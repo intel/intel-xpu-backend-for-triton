@@ -302,7 +302,7 @@ jobs:
         run: |
           echo "TRITON_TEST_CMD=${{ needs.build.outputs.test-triton-command }}" | tee -a $GITHUB_ENV
 
-      - name: Build PTI && Run Proton tests
+      - name: Run Proton tests
         if: matrix.suite == 'rest'
         run: |
           export LD_LIBRARY_PATH=${{ env.PTI_LIBS_DIR }}:$LD_LIBRARY_PATH

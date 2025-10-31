@@ -3401,10 +3401,7 @@ struct StoreOpConversion
 
       if (maskVal) {
         // Create a predicated store operation.
-        std::optional<bool> enablePredicated =
-            mlir::triton::tools::isEnvValueBool(
-                mlir::triton::tools::getStrEnv("TRITON_INTEL_PREDICATED"));
-        if (!enablePredicated.has_value() || enablePredicated.value())
+        if (triton::tools::getBoolEnv("TRITON_INTEL_PREDICATED"))
           rewriter.create<TritonGEN::PredicatedStoreOp>(
               loc, addrElem, vecWord, b.i64_val(alignment), maskVal);
         else
