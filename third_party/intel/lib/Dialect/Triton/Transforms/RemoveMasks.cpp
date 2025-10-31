@@ -46,9 +46,15 @@ static Operation *dropMask(Operation *op, bool maskVal) {
         }
       })
       .Case<arith::SelectOp>([&](auto selectOp) {
-        selectOp->replaceAllUsesWith(
-            (maskVal ? selectOp.getTrueValue() : selectOp.getFalseValue())
-                .getDefiningOp());
+        Value origRes = selectOp.getResult();
+        Value selectedVal =
+            (maskVal ? selectOp.getTrueValue() : selectOp.getFalseValue());
+        Value newRes = selectedVal;
+        if (auto opResult = dyn_cast<OpResult>(selectedVal)) {
+          Operation *defOp = opResult.getDefiningOp();
+          newRes = defOp->getOpResult(opResult.getResultNumber());
+        }
+        origRes.replaceAllUsesWith(newRes);
       });
 
   return nullptr;
