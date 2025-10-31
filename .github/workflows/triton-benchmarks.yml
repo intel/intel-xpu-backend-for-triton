@@ -18,6 +18,7 @@ on:
         options:
           - ELAPSED_TIME
           - UPSTREAM_PYTORCH_PROFILER
+          - PROTON_PROFILER
         default: UPSTREAM_PYTORCH_PROFILER
       verify:
         description: Verify the benchmark results
@@ -116,17 +117,10 @@ jobs:
           cd benchmarks
           pip install .
 
-      - name: Build PTI from source
+      - name: Build PTI
         run: |
-          PTI_COMMIT_ID="$(<.github/pins/pti.txt)"
-          git clone https://github.com/intel/pti-gpu.git
-          cd pti-gpu
-          git checkout $PTI_COMMIT_ID
-          cd sdk
-          cmake --preset linux-icpx-release
-          BUILD_TESTING=1 PTI_BUILD_SAMPLES=1 cmake --build --preset linux-icpx-release
-
-          PTI_LIBS_DIR="$(pwd)/build-linux-icpx-release/lib/"
+          ./scripts/install-pti.sh --build-level-zero
+          PTI_LIBS_DIR=$(python ./scripts/pti_lib.py)
           ls $PTI_LIBS_DIR
           echo "PTI_LIBS_DIR=$PTI_LIBS_DIR" >> $GITHUB_ENV
 
@@ -140,6 +134,14 @@ jobs:
           python build_report.py $REPORTS/softmax-performance.csv $REPORTS/softmax-triton-report.csv --benchmark softmax --compiler triton --param_cols "N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
           python build_report.py $REPORTS/softmax-performance.csv $REPORTS/softmax-xetla-report.csv --benchmark softmax --compiler xetla --param_cols "N" --tflops_col XeTLA-TFlops --hbm_col "XeTLA-GB/s" --tag $TAG
           python build_report.py $REPORTS/softmax-performance.csv $REPORTS/softmax-onednn-report.csv --benchmark softmax --compiler onednn --param_cols "N" --tflops_col oneDNN-TFlops --hbm_col "oneDNN-GB/s" --tag $TAG
+
+      - name: Run Triton Softmax kernel benchmark with Proton
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'fused_softmax.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'fused_softmax.py') }}
+        run: |
+          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
+          cd benchmarks/triton_kernels_benchmark
+          BENCHMARKING_METHOD=PROTON_PROFILER python fused_softmax.py
+          source ../../scripts/capture-hw-details.sh
 
       - name: Run Triton GEMM kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_benchmark.py') }}
@@ -364,7 +366,7 @@ jobs:
 
       - name: Upload benchmark reports
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: benchmark-reports
           path: reports

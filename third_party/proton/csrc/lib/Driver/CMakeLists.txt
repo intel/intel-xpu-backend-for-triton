@@ -1,4 +1,4 @@
-set(SOURCE_FILES
+add_proton_library(ProtonDriver
 	Device.cpp
 	GPU/CudaApi.cpp
 	GPU/CuptiApi.cpp
@@ -6,11 +6,6 @@ set(SOURCE_FILES
 	GPU/HsaApi.cpp
 	GPU/RoctracerApi.cpp
 	GPU/NvtxApi.cpp
+	GPU/XpuApi.cpp
+	GPU/XpuptiApi.cpp
 )
-
-if(TRITON_BUILD_PROTON_XPU)
-    list(APPEND SOURCE_FILES GPU/XpuApi.cpp)
-	list(APPEND SOURCE_FILES GPU/XpuptiApi.cpp)
-endif()
-
-add_proton_library(ProtonDriver ${SOURCE_FILES})
