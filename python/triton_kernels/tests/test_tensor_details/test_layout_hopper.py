@@ -1,7 +1,7 @@
 import pytest
 from triton._internal_testing import is_cuda, is_xpu
 from triton_kernels.tensor import wrap_torch_tensor, convert_layout, FP4
-from triton_kernels.tensor_details.layout import HopperMXScaleLayout, HopperMXValueLayout
+from triton_kernels.tensor_details.layout import HopperAmpereMXScaleLayout, HopperAmpereMXValueLayout
 from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, upcast_from_mxfp
 from triton_kernels.tensor_details.layout_details.hopper_value import mxfp4_to_bf16_triton
 from triton_kernels.tensor_details.layout_details.hopper_scale import unswizzle_mxfp4_scale_hopper
@@ -26,7 +26,7 @@ def test_mxfp4_value_roundtrip(shape, trans, mx_axis, mma_version):
         x = x.mT
     if x.shape[1 - mx_axis] < 32:
         pytest.skip("Not enough elements along non-mx axis")
-    layout = HopperMXValueLayout(x.shape, mx_axis, mma_version)
+    layout = HopperAmpereMXValueLayout(x.shape, mx_axis, mma_version)
     res = layout.unswizzle_data(layout.swizzle_data(x))
     assert (res == x).all()
 
@@ -37,7 +37,7 @@ def test_mxfp4_value_roundtrip(shape, trans, mx_axis, mma_version):
 @pytest.mark.xfail(condition=not is_cuda(), reason="Only supported on CUDA", run=False)
 def test_mxfp4_scale_roundtrip(shape, mx_axis, num_warps):
     x = torch.randint(0, 256, shape, dtype=torch.uint8, device="cuda")
-    layout = HopperMXScaleLayout(x.shape, mx_axis=mx_axis, num_warps=num_warps)
+    layout = HopperAmpereMXScaleLayout(x.shape, mx_axis=mx_axis, num_warps=num_warps)
     res = layout.unswizzle_data(layout.swizzle_data(x))
     assert (res[:shape[0], :shape[1]] == x).all()
 
@@ -87,8 +87,8 @@ def test_upcast_mxfp4_to_bf16():
     x_bf16 = upcast_from_mxfp(x_fp4_val, x_fp4_scale, x.dtype, axis=mx_axis)
     x_fp4_val = wrap_torch_tensor(x_fp4_val, dtype=FP4)
     x_fp4_scale = wrap_torch_tensor(x_fp4_scale)
-    x_fp4_val = convert_layout(x_fp4_val, HopperMXValueLayout, mx_axis=mx_axis)
-    x_fp4_scale = convert_layout(x_fp4_scale, HopperMXScaleLayout, mx_axis=mx_axis, num_warps=num_warps)
+    x_fp4_val = convert_layout(x_fp4_val, HopperAmpereMXValueLayout, mx_axis=mx_axis)
+    x_fp4_scale = convert_layout(x_fp4_scale, HopperAmpereMXScaleLayout, mx_axis=mx_axis, num_warps=num_warps)
     y = torch.empty_like(x_bf16)
     _upcast_mxfp4_to_bf16[(1, )](
         y, x_fp4_val.storage.data, x_fp4_scale.storage.data,  #

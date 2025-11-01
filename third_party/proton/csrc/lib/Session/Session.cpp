@@ -3,12 +3,11 @@
 #include "Context/Shadow.h"
 #include "Data/TraceData.h"
 #include "Data/TreeData.h"
+#include "Driver/GPU/XpuApi.h"
 #include "Profiler/Cupti/CuptiProfiler.h"
 #include "Profiler/Instrumentation/InstrumentationProfiler.h"
 #include "Profiler/Roctracer/RoctracerProfiler.h"
-#ifdef TRITON_BUILD_PROTON_XPU
 #include "Profiler/Xpupti/XpuptiProfiler.h"
-#endif
 #include "Utility/String.h"
 
 namespace proton {
@@ -23,14 +22,10 @@ Profiler *makeProfiler(const std::string &name, void *sycl_queue = nullptr,
     return &RoctracerProfiler::instance();
   } else if (proton::toLower(name) == "instrumentation") {
     return &InstrumentationProfiler::instance();
+  } else if (proton::toLower(name) == "xpupti") {
+    xpu::PROTON_UTILS = utils_cache_path;
+    return &XpuptiProfiler::instance().setSyclQueue(sycl_queue);
   }
-#ifdef TRITON_BUILD_PROTON_XPU
-  if (proton::toLower(name) == "xpupti") {
-    return &XpuptiProfiler::instance()
-                .setSyclQueue(sycl_queue)
-                .setUtilsCachePath(utils_cache_path);
-  }
-#endif
   throw std::runtime_error("Unknown profiler: " + name);
 }
 

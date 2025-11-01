@@ -26,10 +26,12 @@ TEST:
     --flex-attention
     --instrumentation
     --inductor
-    --sglang
-    --liger
     --vllm
     --install-vllm
+    --sglang
+    --install-sglang
+    --liger
+    --install-liger
 
 OPTION:
     --unskip
@@ -71,7 +73,9 @@ TEST_BENCHMARK_FLEX_ATTENTION=false
 TEST_INSTRUMENTATION=false
 TEST_INDUCTOR=false
 TEST_SGLANG=false
+INSTALL_SGLANG=false
 TEST_LIGER=false
+INSTALL_LIGER=false
 TEST_VLLM=false
 INSTALL_VLLM=false
 TEST_TRITON_KERNELS=false
@@ -195,8 +199,18 @@ while (( $# != 0 )); do
       TEST_DEFAULT=false
       shift
       ;;
+    --install-sglang)
+      INSTALL_SGLANG=true
+      TEST_DEFAULT=false
+      shift
+      ;;
     --liger)
       TEST_LIGER=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --install-liger)
+      INSTALL_LIGER=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -392,7 +406,7 @@ run_mxfp_tests() {
   cd $TRITON_PROJ/python/test/unit
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=mxfp \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu intel/test_mxfp_matmul.py
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu intel/test_mxfp_matmul.py language/test_matmul.py::test_mxfp8_mxfp4_matmul
 }
 
 run_scaled_dot_tests() {
@@ -589,32 +603,50 @@ run_inductor_tests() {
   grep AlbertForMaskedLM inductor_log.csv | grep -q ,pass,
 }
 
+run_test_deps_install() {
+  pip install pytest pytest-cov pytest-xdist
+}
+
+run_sglang_install() {
+  echo "************************************************"
+  echo "******    Installing SGLang                 ****"
+  echo "************************************************"
+
+  if ! [ -d "./sglang" ]; then
+    git clone https://github.com/sgl-project/sglang.git
+  fi
+
+  if ! pip list | grep "sglang" ; then
+    cd sglang
+    git checkout "$(<../benchmarks/third_party/sglang/sglang-pin.txt)"
+    git apply ../benchmarks/third_party/sglang/sglang-fix.patch
+
+    # That's how sglang assumes we'll pick out platform for now
+    cp python/pyproject_xpu.toml python/pyproject.toml
+    # We should remove all torch libraries from requirements to avoid reinstalling triton & torch
+    # We remove sgl kernel due to a bug in the current environment probably due to using newer torch, we don't currently use it anyway
+    # We remove timm because it depends on torchvision, which depends on torch==2.9
+    sed -i '/pytorch\|torch\|sgl-kernel\|timm/d' python/pyproject.toml
+    cat python/pyproject.toml
+    pip install -e "./python"
+    cd ..
+  fi
+}
+
 run_sglang_tests() {
   echo "***************************************************"
   echo "******    Running SGLang Triton tests        ******"
   echo "***************************************************"
 
-  if ! [ -d "./sglang" ]; then
-    git clone https://github.com/sgl-project/sglang.git
-  fi
+  run_sglang_install
+  run_test_deps_install
   cd sglang
-
-  if ! pip list | grep "sglang" ; then
-    git apply $TRITON_PROJ/benchmarks/third_party/sglang/sglang-fix.patch
-    pip install "./python[dev_xpu]"
-
-    # SGLang installation breaks the default PyTorch and Triton versions, so we need to reinstall them.
-    $SCRIPTS_DIR/install-pytorch.sh --force-reinstall
-    $SCRIPTS_DIR/compile-triton.sh --triton
-  fi
-
-  pip install pytest pytest-xdist
   run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-4} test/srt/test_triton_attention_kernels.py
 }
 
-run_liger_tests() {
+run_liger_install() {
   echo "************************************************"
-  echo "******    Running Liger Triton tests      ******"
+  echo "******    Installing Liger-Kernel         ******"
   echo "************************************************"
 
   if ! [ -d "./Liger-Kernel" ]; then
@@ -622,10 +654,19 @@ run_liger_tests() {
   fi
 
   if ! pip list | grep "liger_kernel" ; then
-    pip install pytest pytest-xdist pytest-cov transformers pandas pytest datasets -e Liger-Kernel
+    pip install transformers pandas datasets -e Liger-Kernel
   fi
+}
 
-  run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-4} Liger-Kernel/test/
+
+run_liger_tests() {
+  echo "************************************************"
+  echo "******    Running Liger-Kernel tests      ******"
+  echo "************************************************"
+
+  run_liger_install
+  run_test_deps_install
+  run_pytest_command -vvv Liger-Kernel/test/
 }
 
 run_vllm_install() {
@@ -648,6 +689,7 @@ run_vllm_install() {
     cd vllm-xpu-kernels
     git checkout "$(<../benchmarks/third_party/vllm/vllm-kernels-pin.txt)"
     sed -i '/pytorch\|torch/d' requirements.txt
+    sed -i '/pytorch\|torch/d' pyproject.toml
     pip install -r requirements.txt
     VLLM_TARGET_DEVICE=xpu pip install --no-build-isolation -e .
     cd ..
@@ -655,7 +697,7 @@ run_vllm_install() {
     VLLM_TARGET_DEVICE=xpu pip install --no-deps --no-build-isolation -e vllm
   fi
 
-  pip install pytest pytest-cov pytest-xdist cachetools cbor2 blake3 pybase64 openai_harmony tblib
+  pip install cachetools cbor2 blake3 pybase64 openai_harmony tblib
 }
 
 
@@ -665,6 +707,7 @@ run_vllm_tests() {
   echo "************************************************"
 
   run_vllm_install
+  run_test_deps_install
 
   cd vllm
   run_pytest_command -vvv tests/kernels/moe/test_batched_moe.py tests/kernels/attention/test_triton_unified_attention.py
@@ -672,7 +715,7 @@ run_vllm_tests() {
 
 run_triton_kernels_tests() {
   echo "***************************************************"
-  echo "******    Running Triton Kernels tests      ******"
+  echo "******    Running Triton Kernels tests      *******"
   echo "***************************************************"
   cd $TRITON_PROJ/python/triton_kernels/tests
 
@@ -745,17 +788,23 @@ test_triton() {
   if [ "$TEST_INDUCTOR" == true ]; then
     run_inductor_tests
   fi
+  if [ "$INSTALL_SGLANG" == true ]; then
+    run_sglang_install
+  fi
   if [ "$TEST_SGLANG" == true ]; then
     run_sglang_tests
+  fi
+  if [ "$INSTALL_LIGER" == true ]; then
+    run_liger_install
   fi
   if [ "$TEST_LIGER" == true ]; then
     run_liger_tests
   fi
-  if [ "$TEST_VLLM" == true ]; then
-    run_vllm_tests
-  fi
   if [ "$INSTALL_VLLM" == true ]; then
     run_vllm_install
+  fi
+  if [ "$TEST_VLLM" == true ]; then
+    run_vllm_tests
   fi
   if [ "$TEST_TRITON_KERNELS" == true ]; then
     run_triton_kernels_tests
