@@ -731,9 +731,9 @@ run_triton_kernels_tests() {
     # FIXME: reconsider in the future
     max_procs=4
   fi
-
+  # skipping mxfp, they are part of mxfp_tests suite
   TRITON_TEST_SUITE=triton_kernels \
-    run_pytest_command -vvv -n $max_procs --device xpu .
+    run_pytest_command -vvv -n $max_procs --device xpu . -k 'not test_mxfp'
 }
 
 test_triton() {
