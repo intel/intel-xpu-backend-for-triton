@@ -1146,6 +1146,7 @@ struct PreciseSqrtOpConversion
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
+    // FIXME: Use precise sqrt builtin: #5419
     // Rely on `-cl-fp32-correctly-rounded-divide-sqrt` for precise sqrt.
     return {rewriter.create<LLVM::SqrtOp>(loc, elemTy, operands[0],
                                           adaptor.getAttributes().getValue())};
@@ -1226,6 +1227,7 @@ void populateElementwiseOpToLLVMPatterns(
 
   patterns.add<PreciseSqrtOpConversion>(typeConverter, axisInfoAnalysis,
                                         benefit);
+  // FIXME: Use precise divide builtin: #5419
   // Rely on `-cl-fp32-correctly-rounded-divide-sqrt` for precise divide.
   patterns.add<ElementwiseOpConversion<triton::PreciseDivFOp, LLVM::FDivOp>>(
       typeConverter, axisInfoAnalysis, benefit);
