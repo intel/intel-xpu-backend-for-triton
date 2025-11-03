@@ -5861,7 +5861,7 @@ def test_override_arch(arch, env_var_override, device, fresh_knobs):
 
 def test_num_ctas_pre_sm90(device):
     if not is_cuda() and not is_hip():
-        pytest.skip("Only supported on CUDA and HIP")
+        pytest.xfail("Only supported on CUDA and HIP")
 
     @triton.jit
     def _kernel(src):
