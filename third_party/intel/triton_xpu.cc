@@ -301,6 +301,16 @@ void init_triton_intel(py::module &&m) {
     return py::int_(ret);
   });
 
+  m.def("has_precise_divide_sqrt", [](mlir::ModuleOp &mod) -> bool {
+    using namespace mlir;
+    WalkResult result = mod.walk([&](Operation *op) {
+      if (isa<mlir::triton::PreciseDivFOp, mlir::triton::PreciseSqrtOp>(op))
+        return WalkResult::interrupt();
+      return WalkResult::advance();
+    });
+    return result.wasInterrupted();
+  });
+
   // FIXME: This is for internal experimentation. In the end we will need a
   // producer flag (e.g. PyTorch flag) to allow the Triton compiler to use the
   // fast math semantics on all arithmetic operations.
