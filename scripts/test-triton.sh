@@ -619,7 +619,8 @@ run_sglang_install() {
   if ! pip list | grep "sglang" ; then
     cd sglang
     git checkout "$(<../benchmarks/third_party/sglang/sglang-pin.txt)"
-    git apply ../benchmarks/third_party/sglang/sglang-fix.patch
+    git apply ../benchmarks/third_party/sglang/sglang-test-fix.patch
+    git apply ../benchmarks/third_party/sglang/sglang-bench-fix.patch
 
     # That's how sglang assumes we'll pick out platform for now
     cp python/pyproject_xpu.toml python/pyproject.toml
