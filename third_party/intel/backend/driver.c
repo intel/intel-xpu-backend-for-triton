@@ -11,6 +11,9 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <csignal>
+#include <execinfo.h>
+#include <unistd.h>
 
 #if defined(_WIN32)
 #define EXPORT_FUNC __declspec(dllexport)
@@ -197,12 +200,42 @@ sycl::context get_default_context(const sycl::device &sycl_device) {
 #endif
 }
 
+void segfault_handler(int sig) {
+    void *array[32];
+    size_t size = backtrace(array, 32);
+
+    std::cout<< "\n# [mdziado][segfault_handler] Caught signal " << sig << " (SIGSEGV)" << std::endl;
+    std::cout << "Stack trace (" << size << " frames):" << std::endl;
+
+    // backtrace_symbols allocates memory and returns an array of strings
+    char **symbols = backtrace_symbols(array, size);
+    if (symbols) {
+        for (size_t i = 0; i < size; ++i) {
+            std::cout << "  [" << i << "] " << symbols[i] << std::endl;
+        }
+        free(symbols);
+    } else {
+        std::cout << "  <backtrace_symbols returned null>" << std::endl;
+    }
+
+    // It's unsafe to continue after SIGSEGV — exit immediately
+    _exit(1);
+}
+
 extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   const char *name, *build_flags_ptr;
   int shared;
   PyObject *py_bytes;
   int is_spv;
   int devId;
+
+  // Register signal handler for SIGSEGV
+  struct sigaction sa{};
+  sa.sa_handler = segfault_handler;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = SA_RESTART;
+
+  sigaction(SIGSEGV, &sa, nullptr);
 
   if (!PyArg_ParseTuple(args, "sSispi", &name, &py_bytes, &shared,
                         &build_flags_ptr, &is_spv, &devId)) {
@@ -239,9 +272,17 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
     int32_t n_max_threads = compute_properties.maxTotalGroupSize;
 
     std::cout << "# [mdziado][load_binary][3-1] before compileLevelZeroObject" << std::endl;
+    try {
     auto [l0_module, l0_kernel, n_spills] =
         compileLevelZeroObjects(binary_ptr, binary_size, kernel_name, l0_device,
                                 l0_context, build_flags(), is_spv);
+    } catch (std::exception& e) {
+        std::cout << "# [mdziado][load_binary] exception catched, e=" << e.what() << std::endl;
+        [[maybe_unused]] int i = 222;
+        i += 3;
+        i += 5;
+        i += 7;
+    }
     std::cout << "# [mdziado][load_binary][3-2] after compileLevelZeroObject" << std::endl;
 
     const bool debugEnabled = getBoolEnv("TRITON_DEBUG");
