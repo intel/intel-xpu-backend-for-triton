@@ -253,7 +253,7 @@ jobs:
           name: triton-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
 
       - name: Download PTI wheels
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           name: pti-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
 
