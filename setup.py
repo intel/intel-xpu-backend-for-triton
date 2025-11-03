@@ -481,6 +481,15 @@ class CMakeBuild(build_ext):
             cmake_args.append("-DLLVM_EXTERNAL_LIT=" + lit_dir)
         cmake_args.extend(thirdparty_cmake_args)
 
+        result = subprocess.run(["bash", "./scripts/capture-hw-details.sh"], stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, check=True, text=True, env=os.environ.copy())
+        agama_version = None
+        for line in result.stdout.splitlines():
+            if line.startswith("AGAMA_VERSION="):
+                agama_version = line.split("=", 1)[1].strip()
+                break
+        cmake_args.append(f"-DAGAMA_VERSION={agama_version}")
+
         # configuration
         cfg = get_build_type()
         build_args = ["--config", cfg]
