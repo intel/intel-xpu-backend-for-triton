@@ -192,6 +192,7 @@ class XPUBackend(BaseBackend):
         passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
         passes.common.add_cse(pm)
         passes.common.add_licm(pm)
+        intel.passes.ttir.add_remove_boundary_checks(pm)
         intel.passes.ttir.add_remove_masks(pm)
         intel.passes.ttir.add_fuse_reshape(pm)
         passes.common.add_canonicalizer(pm)
@@ -201,6 +202,10 @@ class XPUBackend(BaseBackend):
         passes.common.add_symbol_dce(pm)
         passes.ttir.add_loop_unroll(pm)
         pm.run(mod, 'make_ttir')
+
+        if intel.has_precise_divide_sqrt(mod):
+            metadata["build_flags"] = "-cl-fp32-correctly-rounded-divide-sqrt"
+
         return mod
 
     @staticmethod
@@ -363,16 +368,15 @@ class XPUBackend(BaseBackend):
     def make_spv(src, metadata, options, device_arch):
         spirv, name = intel.translate_to_spirv(src)
         metadata["name"] = name
+        metadata.setdefault("build_flags", "")
         if options.grf_mode == 'small':
-            metadata["build_flags"] = "-cl-intel-128-GRF-per-thread"
+            metadata["build_flags"] += " -cl-intel-128-GRF-per-thread"
         elif options.grf_mode == 'large':
             if options.num_warps > 32:
                 raise RuntimeError("grf_mode = large cannot be used with num_warps > 32")
-            metadata["build_flags"] = "-cl-intel-256-GRF-per-thread"
+            metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
         elif options.grf_mode == 'auto':
-            metadata["build_flags"] = "-cl-intel-enable-auto-large-GRF-mode"
-        else:
-            metadata["build_flags"] = ""
+            metadata["build_flags"] += " -cl-intel-enable-auto-large-GRF-mode"
 
         if knobs.intel.disable_igc_opt:
             metadata["build_flags"] += " -cl-opt-disable"

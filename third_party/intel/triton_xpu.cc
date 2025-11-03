@@ -58,6 +58,8 @@ static uint32_t findKernels(llvm::Module &M,
 void init_triton_intel_passes_ttir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_convert_tdesc_to_block_pointer",
                      intel::createTritonIntelTensorDescToBlockPointer);
+  ADD_PASS_WRAPPER_0("add_remove_boundary_checks",
+                     intel::createTritonIntelRemoveBoundaryChecks);
   ADD_PASS_WRAPPER_0("add_remove_masks", intel::createTritonIntelRemoveMasks);
   ADD_PASS_WRAPPER_0("add_fuse_reshape", intel::createTritonIntelFuseReshape);
 }
@@ -297,6 +299,16 @@ void init_triton_intel(py::module &&m) {
   m.def("get_threads_per_warp", [](mlir::ModuleOp &mod) -> py::object {
     auto ret = mlir::triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
     return py::int_(ret);
+  });
+
+  m.def("has_precise_divide_sqrt", [](mlir::ModuleOp &mod) -> bool {
+    using namespace mlir;
+    WalkResult result = mod.walk([&](Operation *op) {
+      if (isa<mlir::triton::PreciseDivFOp, mlir::triton::PreciseSqrtOp>(op))
+        return WalkResult::interrupt();
+      return WalkResult::advance();
+    });
+    return result.wasInterrupted();
   });
 
   // FIXME: This is for internal experimentation. In the end we will need a
