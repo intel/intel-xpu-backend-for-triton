@@ -82,6 +82,25 @@ jobs:
           cd benchmarks
           pip install .
 
+      - name: Run sglang benchmark int8
+        if: ${{ steps.install-benchmarks.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'sglang')) }}
+        run: |
+          source ./scripts/capture-hw-details.sh
+
+          ./scripts/test-triton.sh --install-sglang --skip-pip-install --skip-pytorch-install
+          cd benchmarks/third_party/sglang
+          python scaled_mm_benchmark.py --reports $REPORTS
+          python ../vllm/transform_results.py $REPORTS/scaled_mm_benchmark.csv $REPORTS/scaled-mm-int8-report.csv --tag $TAG --benchmark scaled-mm-int8 --param_cols="M,N,K" --bgroup sglang
+
+      - name: Run sglang benchmark with fp8
+        if: ${{ steps.install-benchmarks.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'sglang')) }}
+        run: |
+          source ./scripts/capture-hw-details.sh
+
+          cd benchmarks/third_party/sglang
+          FP8="1" python scaled_mm_benchmark.py --reports $REPORTS
+          python ../vllm/transform_results.py $REPORTS/scaled_mm_benchmark.csv $REPORTS/scaled-mm-fp8-report.csv --tag $TAG --benchmark scaled-mm-fp8 --param_cols="M,N,K" --bgroup sglang
+
       - name: Run vllm benchmarks bf16
         if: ${{ steps.install-benchmarks.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm')) }}
         run: |
@@ -92,7 +111,8 @@ jobs:
 
           cd benchmarks/third_party/vllm
           python batched_moe_benchmark.py --reports $REPORTS
-          python transform_results.py $REPORTS/moe-gemm-performance.csv $REPORTS/moe-gemm-report.csv --tag $TAG --benchmark moe-bf16-benchmark
+          python transform_results.py $REPORTS/moe-gemm-performance.csv $REPORTS/moe-gemm-report.csv --tag $TAG --benchmark moe-bf16-benchmark --param_cols="num_experts,max_tokens_per_expert,K,N" --bgroup vllm
+
 
       - name: Run vllm benchmarks fp8
         if: ${{ steps.install-benchmarks.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm')) }}
@@ -101,7 +121,8 @@ jobs:
 
           cd benchmarks/third_party/vllm
           FP8="1" python batched_moe_benchmark.py --reports $REPORTS
-          python transform_results.py $REPORTS/moe-gemm-performance.csv $REPORTS/moe-gemm-fp8-report.csv --tag $TAG --benchmark moe-fp8-benchmark
+          python transform_results.py $REPORTS/moe-gemm-performance.csv $REPORTS/moe-gemm-fp8-report.csv --tag $TAG --benchmark moe-fp8-benchmark --param_cols="num_experts,max_tokens_per_expert,K,N" --bgroup vllm
+
 
       - name: Run Liger-Kernel benchmarks
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'liger')) }}
@@ -156,7 +177,7 @@ jobs:
 
       - name: Upload benchmark reports
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: benchmark-reports
           path: reports

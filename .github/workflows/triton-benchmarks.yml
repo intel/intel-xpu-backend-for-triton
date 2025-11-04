@@ -117,17 +117,10 @@ jobs:
           cd benchmarks
           pip install .
 
-      - name: Build PTI from source
+      - name: Build PTI
         run: |
-          PTI_COMMIT_ID="$(<.github/pins/pti.txt)"
-          git clone https://github.com/intel/pti-gpu.git
-          cd pti-gpu
-          git checkout $PTI_COMMIT_ID
-          cd sdk
-          cmake --preset linux-icpx-release
-          BUILD_TESTING=1 PTI_BUILD_SAMPLES=1 cmake --build --preset linux-icpx-release
-
-          PTI_LIBS_DIR="$(pwd)/build-linux-icpx-release/lib/"
+          ./scripts/install-pti.sh --build-level-zero
+          PTI_LIBS_DIR=$(python ./scripts/pti_lib.py)
           ls $PTI_LIBS_DIR
           echo "PTI_LIBS_DIR=$PTI_LIBS_DIR" >> $GITHUB_ENV
 
@@ -373,7 +366,7 @@ jobs:
 
       - name: Upload benchmark reports
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: benchmark-reports
           path: reports

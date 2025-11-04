@@ -25,6 +25,17 @@ using namespace mlir::triton::gpu::intel;
 
 #define S(v) StringAttr::get(ctx, (v))
 
+#if defined(_MSC_VER) && !defined(__clang__)
+// from https://gist.github.com/pps83/3210a2f980fd02bb2ba2e5a1fc4a2ef0
+#include <intrin.h>
+
+static int __builtin_ctz(unsigned x) {
+  unsigned long r;
+  _BitScanForward(&r, x);
+  return static_cast<int>(r);
+}
+#endif
+
 namespace {
 
 Value maybeAnd(RewriterBase &rewriter, Location loc, Value a, Value b) {
@@ -2526,6 +2537,19 @@ struct LoadOpToBlockIOConversion
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     MLIRContext *ctx = rewriter.getContext();
 
+    unsigned threadsPerWarp =
+        TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>());
+
+    StringAttr kRegister = S("register");
+    assert(regPackedBases.has_value() &&
+           "invalid register bases for packing elems.");
+    std::vector<std::vector<int>> bases(regPackedBases->size());
+    llvm::transform(*regPackedBases, bases.begin(),
+                    [&](int base) { return std::vector<int>{base}; });
+    LinearLayout regMapping({{kRegister, bases}},
+                            {{kRegister, llEncoding->getInDimSize(kRegister)}},
+                            /*requireSurjective=*/true);
+
     // Get the LLVM values for pointers
     Value llPtr = adaptor.getPtr();
     SmallVector<Value> ptrElems = unpackLLElements(loc, llPtr, rewriter);
@@ -2557,14 +2581,56 @@ struct LoadOpToBlockIOConversion
       }
 
       // Check the constancy of the mask support to load the memory in 2D block.
-      if (!(maskConstancyHor >= (tileWidth * numPackedVals) &&
-            maskConstancyVer >= tileHeight))
-        return failure();
+      if (!(maskConstancyHor >= (tileWidth * numPackedVals)))
+        return failure(); // The tileWidth and numPackedVals is not changeable
+                          // for now.
 
       // Adjust vBlock to fit the constancy of mask.
       vBlocks = std::min(vBlocks, mlir::ceil<int>(maskConstancyHor,
                                                   tileWidth * numPackedVals));
       assert(llvm::isPowerOf2_64(vBlocks) && "vBlocks has to be power of 2");
+
+      // Check the constancy of the mask support to load the memory in 2D block.
+      if (maskConstancyVer < tileHeight) {
+        unsigned minTileHeight =
+            mlir::ceil<unsigned>(threadsPerWarp, tileWidth);
+        if (maskConstancyVer < minTileHeight)
+          return failure();
+
+        unsigned numBasesForPackedVals = __builtin_ctz(numPackedVals);
+        unsigned numBasesForTileWidth =
+            __builtin_ctz(mlir::ceil<unsigned>(tileWidth, threadsPerWarp));
+        unsigned numBasesForNewTileHeight =
+            __builtin_ctz(maskConstancyVer / minTileHeight);
+        unsigned numBasesForOldTileHeight =
+            __builtin_ctz(tileHeight / minTileHeight);
+        unsigned numBasesForVBlocks = __builtin_ctz(vBlocks);
+
+        std::vector<std::vector<int32_t>> rearrangeMap;
+        for (int i = 0; i < __builtin_ctz(numElems); ++i) {
+          rearrangeMap.emplace_back().push_back(1 << i);
+        }
+
+        // Rotate the register bases of the adjusted part of tile height to the
+        // place after the vBlocks.
+        unsigned rotateStart = numBasesForPackedVals + numBasesForTileWidth +
+                               numBasesForNewTileHeight;
+        unsigned rotateNum =
+            numBasesForOldTileHeight - numBasesForNewTileHeight;
+        std::rotate(rearrangeMap.begin() + rotateStart,
+                    rearrangeMap.begin() + rotateStart + rotateNum,
+                    rearrangeMap.begin() + rotateStart + rotateNum +
+                        numBasesForVBlocks);
+
+        LinearLayout rearrangeMapLL(
+            {{kRegister, rearrangeMap}},
+            {{kRegister, regMapping.getInDimSize(kRegister)}},
+            /*requireSurjective=*/true);
+        tileHeight = maskConstancyVer;
+        assert(((tileHeight - 1) & tileHeight) == 0 &&
+               "the tileHeight has to be power of 2.");
+        regMapping = rearrangeMapLL.compose(regMapping);
+      }
     }
 
     // Get the LLVM values for `other`
@@ -2595,8 +2661,6 @@ struct LoadOpToBlockIOConversion
       }
     }
 
-    unsigned threadsPerWarp =
-        TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>());
     int64_t numElemsPerLoad = mlir::ceil(
         tileHeight * tileWidth * numPackedVals * vBlocks, (int)threadsPerWarp);
     unsigned numValuesPerLoad = mlir::ceil((int)numElemsPerLoad, numPackedVals);
@@ -2615,20 +2679,6 @@ struct LoadOpToBlockIOConversion
     Value baseHeight = b.i32_val(baseHeightInt);
     Value baseWidth = b.i32_val(
         std::max(64u, vBlocks * tileWidth * (packedElemSizeInBits / 8)));
-
-    StringAttr kRegister = str_attr("register");
-    StringAttr kLane = str_attr("lane");
-    StringAttr kWarp = str_attr("warp");
-    StringAttr kBlock = str_attr("block");
-
-    assert(regPackedBases.has_value() &&
-           "invalid register bases for packing elems.");
-    std::vector<std::vector<int>> bases(regPackedBases->size());
-    llvm::transform(*regPackedBases, bases.begin(),
-                    [](int base) { return std::vector<int>{base}; });
-    LinearLayout regMapping({{kRegister, bases}},
-                            {{kRegister, llEncoding->getInDimSize(kRegister)}},
-                            /*requireSurjective=*/true);
 
     bool useVNNIFormat = false;
     Type packedDPASOperandType;
@@ -2956,10 +3006,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       Value ret;
       // Create a predicated load operation.
       if (pred) {
-        std::optional<bool> enablePredicated =
-            mlir::triton::tools::isEnvValueBool(
-                mlir::triton::tools::getStrEnv("TRITON_INTEL_PREDICATED"));
-        if (!enablePredicated.has_value() || enablePredicated.value())
+        if (triton::tools::getBoolEnv("TRITON_INTEL_PREDICATED"))
           ret = rewriter.create<TritonGEN::PredicatedLoadOp>(
               loc, retTy, addrElem, b.i64_val(alignment), pred, other_);
         else {
@@ -3404,10 +3451,7 @@ struct StoreOpConversion
 
       if (maskVal) {
         // Create a predicated store operation.
-        std::optional<bool> enablePredicated =
-            mlir::triton::tools::isEnvValueBool(
-                mlir::triton::tools::getStrEnv("TRITON_INTEL_PREDICATED"));
-        if (!enablePredicated.has_value() || enablePredicated.value())
+        if (triton::tools::getBoolEnv("TRITON_INTEL_PREDICATED"))
           rewriter.create<TritonGEN::PredicatedStoreOp>(
               loc, addrElem, vecWord, b.i64_val(alignment), maskVal);
         else
