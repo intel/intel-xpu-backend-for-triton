@@ -105,6 +105,10 @@ jobs:
 
       - name: Setup Triton
         uses: ./.github/actions/setup-triton
+        with:
+          build_llvm: "true"
+          llvm_repo: "dev-tomek/llvm-project"
+          llvm_ref: "tkuczynski/check_barrier_lowering_perf"
 
       - name: Create reports dir
         run: |
