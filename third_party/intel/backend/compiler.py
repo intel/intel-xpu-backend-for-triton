@@ -192,6 +192,7 @@ class XPUBackend(BaseBackend):
         passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
         passes.common.add_cse(pm)
         passes.common.add_licm(pm)
+        intel.passes.ttir.add_remove_boundary_checks(pm)
         intel.passes.ttir.add_remove_masks(pm)
         intel.passes.ttir.add_fuse_reshape(pm)
         passes.common.add_canonicalizer(pm)
@@ -201,6 +202,10 @@ class XPUBackend(BaseBackend):
         passes.common.add_symbol_dce(pm)
         passes.ttir.add_loop_unroll(pm)
         pm.run(mod, 'make_ttir')
+
+        if intel.has_precise_divide_sqrt(mod):
+            metadata["build_flags"] = "-cl-fp32-correctly-rounded-divide-sqrt"
+
         return mod
 
     @staticmethod
@@ -363,68 +368,69 @@ class XPUBackend(BaseBackend):
     def make_spv(src, metadata, options, device_arch):
         spirv, name = intel.translate_to_spirv(src)
         metadata["name"] = name
+        metadata.setdefault("build_flags", "")
         if options.grf_mode == 'small':
-            metadata["build_flags"] = "-cl-intel-128-GRF-per-thread"
+            metadata["build_flags"] += " -cl-intel-128-GRF-per-thread"
         elif options.grf_mode == 'large':
             if options.num_warps > 32:
                 raise RuntimeError("grf_mode = large cannot be used with num_warps > 32")
-            metadata["build_flags"] = "-cl-intel-256-GRF-per-thread"
+            metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
         elif options.grf_mode == 'auto':
-            metadata["build_flags"] = "-cl-intel-enable-auto-large-GRF-mode"
-        else:
-            metadata["build_flags"] = ""
+            metadata["build_flags"] += " -cl-intel-enable-auto-large-GRF-mode"
 
         if knobs.intel.disable_igc_opt:
             metadata["build_flags"] += " -cl-opt-disable"
+        return spirv
+
+    @staticmethod
+    def make_zebin(src, metadata, options, device_arch):
+        metadata["binary_ext"] = "zebin"
 
         shader_dump_opt = ""
         if knobs.intel.dump_shader_info:
             # The IGC (Intel Graphic Compiler) only parses the options at first time in JIT-ing the binary per process.
             # Have to use the `ocloc` to generate the binary in sub-process to work around the limitation.
-            assert options.generate_native_code, "Only support native code generation with shader dump"
             shader_dump_opt = f" -igc_opts ',DumpToCustomDir={metadata['cache_dir']},ShaderDumpEnable=1'"
 
         metadata["generate_native_code"] = options.generate_native_code
 
-        if options.generate_native_code:
-            with track("generate_native_code"), tempfile.TemporaryDirectory() as temp_dir:
-                with tempfile.NamedTemporaryFile(mode='wb', suffix='.spv', dir=temp_dir, delete=False) as fsrc:
-                    fsrc.write(spirv)
-                fbin = fsrc.name + '.o'
+        with track("generate_native_code"), tempfile.TemporaryDirectory() as temp_dir:
+            with tempfile.NamedTemporaryFile(mode='wb', suffix='.spv', dir=temp_dir, delete=False) as fsrc:
+                fsrc.write(src)
+            fbin = fsrc.name + '.o'
 
-                ocloc_cmd = [
-                    'ocloc', 'compile', '-file', fsrc.name, '-o', fbin, '-spirv_input', '-device', device_arch,
-                    '-options', metadata["build_flags"] + shader_dump_opt
-                ]
+            ocloc_cmd = [
+                'ocloc', 'compile', '-file', fsrc.name, '-o', fbin, '-spirv_input', '-device', device_arch, '-options',
+                metadata["build_flags"] + shader_dump_opt
+            ]
 
-                try:
-                    output = subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
-                    if 'spilled' in output and metadata["build_flags"].find("-cl-intel-256-GRF-per-thread") == -1:
-                        """
-                        The exact message is something like:
-                            warning: kernel matmul_kernel  compiled SIMD16 allocated 128 regs and spilled around 217
-                        is "spilled" enough for now?
-                        """
-                        metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
-                        # re-run with new build flags
-                        ocloc_cmd[-1] = metadata["build_flags"] + shader_dump_opt
-                        subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
-                except subprocess.CalledProcessError as e:
-                    if e.returncode == 255:
-                        error = 'Internal Triton ZEBIN codegen error'
-                    elif e.returncode == 128 + signal.SIGSEGV:
-                        error = '`ocloc` raised SIGSEGV'
-                    else:
-                        error = f'`ocloc` failed with error code {e.returncode}'
+            try:
+                output = subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
+                if 'spilled' in output and metadata["build_flags"].find("-cl-intel-256-GRF-per-thread") == -1:
+                    """
+                    The exact message is something like:
+                        warning: kernel matmul_kernel  compiled SIMD16 allocated 128 regs and spilled around 217
+                    is "spilled" enough for now?
+                    """
+                    metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
+                    # re-run with new build flags
+                    ocloc_cmd[-1] = metadata["build_flags"] + shader_dump_opt
+                    subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
+            except subprocess.CalledProcessError as e:
+                if e.returncode == 255:
+                    error = 'Internal Triton ZEBIN codegen error'
+                elif e.returncode == 128 + signal.SIGSEGV:
+                    error = '`ocloc` raised SIGSEGV'
+                else:
+                    error = f'`ocloc` failed with error code {e.returncode}'
 
-                    raise RuntimeError(f'{error}\n'
-                                       f'`ocloc` stderr:\n{e.output}\n'
-                                       f'Repro command: {ocloc_cmd}\n') from e
+                raise RuntimeError(f'{error}\n'
+                                   f'`ocloc` stderr:\n{e.output}\n'
+                                   f'Repro command: {ocloc_cmd}\n') from e
 
-                with open(fbin, 'rb') as f:
-                    zebin = f.read()
-            return zebin
-        return spirv
+            with open(fbin, 'rb') as f:
+                zebin = f.read()
+        return zebin
 
     def add_stages(self, stages, options, language):
         if language == Language.TRITON:
@@ -434,6 +440,8 @@ class XPUBackend(BaseBackend):
             stages["ttgir"] = lambda src, metadata: self.gluon_to_ttgir(src, metadata, options)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
         stages["spv"] = lambda src, metadata: self.make_spv(src, metadata, options, self.device_arch)
+        if options.generate_native_code:
+            stages["zebin"] = lambda src, metadata: self.make_zebin(src, metadata, options, self.device_arch)
         if knobs.runtime.add_stages_inspection_hook is not None:
             knobs.runtime.add_stages_inspection_hook(self, stages, options, language, None)
 

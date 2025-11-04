@@ -970,8 +970,8 @@ struct ElementwiseOpConversion
                                     ConversionPatternRewriter &rewriter,
                                     Type elemTy, MultipleOperandsRange operands,
                                     Location loc) const {
-    assert((!getElementType(op.getLhs()).isBF16() &&
-            !getElementType(op.getRhs()).isBF16()) &&
+    assert((!getElementType(operands[0][0]).isBF16() &&
+            !getElementType(operands[0][1]).isBF16()) &&
            "unsupported conversion");
     return {
         rewriter.create<DestOp>(loc, elemTy, operands[0][0], operands[0][1])};
@@ -1146,57 +1146,11 @@ struct PreciseSqrtOpConversion
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    Value input = operands[0][0];
-    Type origTy = input.getType();
-    if (!origTy.isF64())
-      input = b.fpext(f64_ty, input);
-    Type funcType = LLVM::LLVMFunctionType::get(f64_ty, {f64_ty});
-    LLVM::LLVMFuncOp funcOp =
-        appendOrGetExternFuncOp(rewriter, op, "__imf_sqrt_rn", funcType);
-    funcOp.setCConv(triton::gpu::intel::getDefaultCConv(op));
-    LLVM::CallOp callOp =
-        LLVM::createLLVMCallOp(rewriter, loc, funcOp, {input});
-    callOp.setCConv(funcOp.getCConv());
-    Value result = callOp.getResult();
-    if (!origTy.isF64())
-      result = rewriter.create<LLVM::FPTruncOp>(loc, origTy, result);
-    return {result};
+    // FIXME: Use precise sqrt builtin: #5419
+    // Rely on `-cl-fp32-correctly-rounded-divide-sqrt` for precise sqrt.
+    return {rewriter.create<LLVM::SqrtOp>(loc, elemTy, operands[0],
+                                          adaptor.getAttributes().getValue())};
   }
-};
-
-template <typename TritonOp>
-struct OpToExternCallConversion
-    : public ElementwiseOpConversionBase<TritonOp,
-                                         OpToExternCallConversion<TritonOp>> {
-  using Base =
-      ElementwiseOpConversionBase<TritonOp, OpToExternCallConversion<TritonOp>>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
-
-  explicit OpToExternCallConversion(LLVMTypeConverter &typeConverter,
-                                    ModuleAxisInfoAnalysis &axisAnalysisPass,
-                                    StringRef externFuncName,
-                                    PatternBenefit benefit)
-      : Base::ElementwiseOpConversionBase(typeConverter, axisAnalysisPass,
-                                          benefit),
-        funcName(externFuncName) {}
-
-  SmallVector<Value> createDestOps(TritonOp op, Adaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-    Type funcType = getFunctionType(elemTy, operands[0]);
-    LLVM::LLVMFuncOp funcOp =
-        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
-    funcOp.setCConv(triton::gpu::intel::getDefaultCConv(op));
-    auto callOp = LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]);
-    callOp.setCConv(funcOp.getCConv());
-    return {callOp.getResult()};
-  }
-
-private:
-  StringRef funcName;
 };
 
 // Following two patterns are copied from the common part to fix-up calling
@@ -1273,8 +1227,10 @@ void populateElementwiseOpToLLVMPatterns(
 
   patterns.add<PreciseSqrtOpConversion>(typeConverter, axisInfoAnalysis,
                                         benefit);
-  patterns.add<OpToExternCallConversion<triton::PreciseDivFOp>>(
-      typeConverter, axisInfoAnalysis, "__imf_fdiv_rn", benefit);
+  // FIXME: Use precise divide builtin: #5419
+  // Rely on `-cl-fp32-correctly-rounded-divide-sqrt` for precise divide.
+  patterns.add<ElementwiseOpConversion<triton::PreciseDivFOp, LLVM::FDivOp>>(
+      typeConverter, axisInfoAnalysis, benefit);
   patterns.add<MulhiUIOpConversion>(typeConverter, axisInfoAnalysis, targetInfo,
                                     benefit);
   patterns.add<ExternElementwiseOpConversion>(typeConverter, axisInfoAnalysis,

@@ -183,7 +183,8 @@ def compile_kernel(args: CompileArgs):
         if hints.get((i, ), None) == 16:
             suffix += 'd'
     func_name = '_'.join([out_name, sig_hash, suffix])
-    asm = ccinfo.asm[backend.binary_ext]  # store binary data once
+    binary_ext = getattr(ccinfo.metadata, "binary_ext", backend.binary_ext)
+    asm = ccinfo.asm[binary_ext]  # store binary data once
 
     hex_ = str(binascii.hexlify(asm))[2:-1]
 
