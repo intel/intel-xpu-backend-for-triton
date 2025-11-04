@@ -722,7 +722,7 @@ run_triton_kernels_tests() {
 
   # available after `capture_runtime_env` call
   gpu_file="$TRITON_TEST_REPORTS_DIR/gpu.txt"
-  # BMG, ARLs, A770
+  # BMG, LNL, ARLs, A770
   if [[ -f "$gpu_file" ]] && grep -Eq "(B580|64a0|7d6|7d5|A770)" "$gpu_file"; then
     # Using any other number of processes results in an error on small GPUs due to insufficient resources.
     # FIXME: reconsider in the future
