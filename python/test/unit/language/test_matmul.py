@@ -174,7 +174,14 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
     else:
         atol = 0.001
         rtol = 0.001
-    torch.testing.assert_close(ref_out, output, atol=atol, rtol=rtol)
+    try:
+        torch.testing.assert_close(ref_out, output, atol=atol, rtol=rtol)
+    except AssertionError as e:
+        torch.set_printoptions(profile="full")
+        print("ref_out tensor:", ref_out)
+        print("output tensor:", output)
+        print("AssertionError:", e)
+        raise e
     # Make sure the mma is pipelined by checking if in the TTGIR we see two mmav5
     # operations. (Pipeliner will add additional mma operation by peeling the prologue.)
     # This applies only if TCv5 MMA is used (M % 64 == 0 and N % 8 == 0) and
