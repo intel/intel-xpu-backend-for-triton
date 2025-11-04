@@ -722,8 +722,8 @@ run_triton_kernels_tests() {
 
   # available after `capture_runtime_env` call
   gpu_file="$TRITON_TEST_REPORTS_DIR/gpu.txt"
-  if [[ -f "$gpu_file" ]] && grep -q "B580" "$gpu_file"; then
-    # Using any other number of processes results in an error on the BMG due to insufficient resources.
+  if [[ -f "$gpu_file" ]] && grep -Eq "(B580|64a0|A770)" "$gpu_file"; then
+    # Using any other number of processes results in an error on small GPUs due to insufficient resources.
     # FIXME: reconsider in the future
     max_procs=1
   else
