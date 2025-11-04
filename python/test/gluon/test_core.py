@@ -140,7 +140,7 @@ def test_async_copy_mbarrier(device):
     torch.testing.assert_close(out[20:], torch.zeros((12, 32), **tensor_opts))
 
 
-@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires Hopper", run=False)
 def test_device_tma_load():
 
     @gluon.jit
@@ -188,7 +188,7 @@ def test_device_tma_load():
     torch.testing.assert_close(input, output)
 
 
-@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires Hopper", run=False)
 def test_device_tma_store():
 
     @gluon.jit
