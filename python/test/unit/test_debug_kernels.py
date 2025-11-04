@@ -6,7 +6,6 @@ import torch
 import triton
 import triton.language as tl
 import sys
-import os
 
 
 def run_device_assert_kernel(cond, mask, opt_flag, jit_flag, device):
@@ -44,9 +43,6 @@ if __name__ == "__main__":
         opt_flag = parse_bool_or_none(sys.argv[4])
         jit_flag = sys.argv[5] == "True"
         device = sys.argv[6]
-        env_var = sys.argv[7] == "True"
-
-        os.environ["TRITON_DEBUG"] = str(int(env_var))
         triton.knobs.refresh_knobs()
         exit_code = run_device_assert_kernel(cond, mask, opt_flag, jit_flag, device)
         sys.exit(exit_code)

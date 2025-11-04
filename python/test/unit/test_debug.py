@@ -24,21 +24,21 @@ def test_device_assert(cond, mask, opt_flag, env_var, jit_flag, device):
     mask_str = "None" if mask is None else str(mask)
     opt_flag_str = "None" if opt_flag is None else str(opt_flag)
 
-    result = subprocess.run([
-        sys.executable, kernel_file, "device_assert",
-        str(cond), mask_str, opt_flag_str,
-        str(jit_flag), device,
-        str(env_var)
-    ], capture_output=True, text=True)
+    env = os.environ.copy()
+    env["TRITON_DEBUG"] = str(int(env_var))
+
+    result = subprocess.run(
+        [sys.executable, kernel_file, "device_assert",
+         str(cond), mask_str, opt_flag_str,
+         str(jit_flag), device], capture_output=True, text=True, env=env)
 
     if should_fail:
-        abort_or_runtime_error = (
-            result.returncode == 1 or  # RuntimeError
-            result.returncode == -6  # SIGABRT
-        )
-        assert abort_or_runtime_error, (
-            f"Expected runtime error or abort signal but got unexpected exit code {result.returncode}. "
-            f"stdout: {result.stdout}, stderr: {result.stderr}")
+        if device == 'xpu':
+            assert result.returncode == -6, (f"Expected SIGABRT but got exit code {result.returncode}. "
+                                             f"stdout: {result.stdout}, stderr: {result.stderr}")
+        else:
+            assert result.returncode == 1, (f"Expected runtime error but got unexpected exit code {result.returncode}. "
+                                            f"stdout: {result.stdout}, stderr: {result.stderr}")
     else:
         assert result.returncode == 0, (f"Expected success but got unexpected exit code {result.returncode}. "
                                         f"stdout: {result.stdout}, stderr: {result.stderr}")
