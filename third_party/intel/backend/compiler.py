@@ -202,10 +202,6 @@ class XPUBackend(BaseBackend):
         passes.common.add_symbol_dce(pm)
         passes.ttir.add_loop_unroll(pm)
         pm.run(mod, 'make_ttir')
-
-        if intel.has_precise_divide_sqrt(mod):
-            metadata["build_flags"] = "-cl-fp32-correctly-rounded-divide-sqrt"
-
         return mod
 
     @staticmethod
