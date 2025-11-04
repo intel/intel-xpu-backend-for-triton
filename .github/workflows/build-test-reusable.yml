@@ -180,7 +180,7 @@ jobs:
           path: dist/*.whl
 
       - name: Upload PTI wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: pti-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           path: .scripts_cache/pti/dist/*.whl
