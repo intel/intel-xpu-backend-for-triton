@@ -11,6 +11,12 @@ inputs:
   use_spirv_backend:
     description: Use SPIR-V backend
     default: "false"
+  llvm_repo:
+    description: LLVM repository URL
+    default: "llvm/llvm-project"
+  llvm_ref:
+    description: LLVM repository reference (branch, tag, commit)
+    default: ""
   command:
     description: Command to execute
     default: DEBUG=1 pip install -v '.[build,tests,tutorials]'
@@ -45,8 +51,8 @@ runs:
       if: ${{ inputs.build_llvm == 'true' && steps.llvm-cache.outputs.status == 'miss' }}
       uses: actions/checkout@v5
       with:
-        repository: llvm/llvm-project
-        ref: ${{ env.LLVM_COMMIT_ID }}
+        repository: ${{ inputs.llvm_repo }}
+        ref: ${{ inputs.llvm_ref != '' && inputs.llvm_ref || env.LLVM_COMMIT_ID }}
         path: llvm
         submodules: recursive
 
