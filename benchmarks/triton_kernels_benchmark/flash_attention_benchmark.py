@@ -171,7 +171,7 @@ def _attn_fwd_with_block_pointers(Q, K, V, sm_scale, M, Out,  #
 
 
 configs = [
-    triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN, 'grf_mode': 'large'}, num_stages=s, num_warps=w) \
+    triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN, 'grf_mode': '256'}, num_stages=s, num_warps=w) \
     for BM in [128, 256] \
     for BN in [32, 64] \
     for s in [2, 3, 4] \
