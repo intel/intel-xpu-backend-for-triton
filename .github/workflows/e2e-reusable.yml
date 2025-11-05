@@ -126,6 +126,9 @@ jobs:
         uses: ./.github/actions/setup-triton
         with:
           command: DEBUG=1 python -m build --wheel --no-isolation
+          build_llvm: "true"
+          llvm_repo: "dev-tomek/llvm-project"
+          llvm_ref: "tkuczynski/check_barrier_lowering_perf"
 
       - name: Install Triton
         run: |
