@@ -33,7 +33,7 @@ class XPUOptions:
     allowed_dot_input_precisions: Tuple[str] = ("tf32", "tf32x3", "ieee", 'bf16x3', 'bf16x6')
     allow_fp8e4nv: bool = False
     allow_fp8e4b15: bool = True
-    grf_mode: tuple = ('small', 'large', 'auto', 'default')
+    grf_mode: str = 'default'
     split_barriers_scope: str = 'None'
     max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
@@ -369,14 +369,16 @@ class XPUBackend(BaseBackend):
         spirv, name = intel.translate_to_spirv(src)
         metadata["name"] = name
         metadata.setdefault("build_flags", "")
-        if options.grf_mode == 'small':
+        if options.grf_mode == '128':
             metadata["build_flags"] += " -cl-intel-128-GRF-per-thread"
-        elif options.grf_mode == 'large':
+        elif options.grf_mode == '256':
             if options.num_warps > 32:
-                raise RuntimeError("grf_mode = large cannot be used with num_warps > 32")
+                raise RuntimeError("grf_mode = 256 cannot be used with num_warps > 32")
             metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
         elif options.grf_mode == 'auto':
             metadata["build_flags"] += " -cl-intel-enable-auto-large-GRF-mode"
+        elif options.grf_mode != 'default':
+            raise RuntimeError(f"Unknown grf_mode: {options.grf_mode}")
 
         if knobs.intel.disable_igc_opt:
             metadata["build_flags"] += " -cl-opt-disable"
