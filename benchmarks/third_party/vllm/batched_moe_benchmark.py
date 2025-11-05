@@ -201,20 +201,20 @@ def expert_triton_kernel(
 
 def get_matmul_batched_autotune_configs() -> List[triton.Config]:
     configs = [
-        triton.Config({'BLOCK_M': 256, 'BLOCK_N': 256, 'BLOCK_K': 32, 'grf_mode': 'large'}, num_stages=s, num_warps=32)
+        triton.Config({'BLOCK_M': 256, 'BLOCK_N': 256, 'BLOCK_K': 32, 'grf_mode': '256'}, num_stages=s, num_warps=32)
         for s in [2, 3]
     ] + [
         triton.Config({'BLOCK_M': 256, 'BLOCK_N': 128, 'BLOCK_K': 32, 'grf_mode': m}, num_stages=s, num_warps=w)
         for s in [2]
-        for (m, w) in ([('large', 32), ('small', 64)])
+        for (m, w) in ([('256', 32), ('128', 64)])
     ] + [
-        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 32, 'grf_mode': 'large'}, num_stages=s, num_warps=32)
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 32, 'grf_mode': '256'}, num_stages=s, num_warps=32)
         for s in [2]
     ] + [
-        triton.Config({'BLOCK_M': 8, 'BLOCK_N': 512, 'BLOCK_K': 64, 'grf_mode': 'large'}, num_stages=s, num_warps=32)
+        triton.Config({'BLOCK_M': 8, 'BLOCK_N': 512, 'BLOCK_K': 64, 'grf_mode': '256'}, num_stages=s, num_warps=32)
         for s in [2]
     ] + [
-        triton.Config({'BLOCK_M': 8, 'BLOCK_N': 128, 'BLOCK_K': 64, 'grf_mode': 'large'}, num_stages=s, num_warps=4)
+        triton.Config({'BLOCK_M': 8, 'BLOCK_N': 128, 'BLOCK_K': 64, 'grf_mode': '256'}, num_stages=s, num_warps=4)
         for s in [2]
     ]
     return configs
