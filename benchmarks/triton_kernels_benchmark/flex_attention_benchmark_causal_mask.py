@@ -148,7 +148,6 @@ if torch.xpu.get_device_name() == '580':
         args={},
     ))
 def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provider):
-    print(f'Running benchmark for Z={Z}, H_q={H_q}, H_kv={H_kv}, N_CTX_q={N_CTX_q}, N_CTX_kv={N_CTX_kv}, ')
     # Maximum across torch=200, triton=600
     do_bench = benchmark_suite.get_do_bench(n_warmup=600, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
     if MODE not in ('fwd', 'bwd'):
