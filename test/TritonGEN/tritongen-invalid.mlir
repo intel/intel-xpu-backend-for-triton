@@ -138,8 +138,24 @@ llvm.func @triton_gen.dpas(%c : vector<8xf32>, %a : vector<8xi16>, %b : vector<8
 // -----
 
 llvm.func @triton_gen.dpas(%c : vector<8xf32>, %a : vector<8xi16>, %b : vector<8xi32>) {
-  // expected-error @+1 {{'triton_gen.dpas' op expecting precision type to be tf32, bf16, fp16, u8, or s8}}
+  // expected-error @+1 {{'triton_gen.dpas' op expecting precision type to be tf32, bf16, fp16, bf8, hf8, u8, or s8}}
   %0 = triton_gen.dpas %c, %a, %b {pa=i4, pb=i4, rc=8} : (vector<8xf32>, vector<8xi16>, vector<8xi32>) -> vector<8xf32>
+  llvm.return
+}
+
+// -----
+
+llvm.func @triton_gen.dpas(%c : vector<8xf32>, %a : vector<16xi16>, %b : vector<8xi32>) {
+  // expected-error @+1 {{'triton_gen.dpas' op 2nd operand (A) should have the same number of elements as repeat count}}
+  %0 = triton_gen.dpas %c, %a, %b {pa=bf8, pb=bf8, rc=8} : (vector<8xf32>, vector<16xi16>, vector<8xi32>) -> vector<8xf32>
+  llvm.return
+}
+
+// -----
+
+llvm.func @triton_gen.dpas(%c : vector<8xf32>, %a : vector<8xi16>, %b : vector<16xi32>) {
+  // expected-error @+1 {{'triton_gen.dpas' op the dimension for the 3rd operand (B) should match the systolic depth of 8}}
+  %0 = triton_gen.dpas %c, %a, %b {pa=bf8, pb=bf8, rc=8} : (vector<8xf32>, vector<8xi16>, vector<16xi32>) -> vector<8xf32>
   llvm.return
 }
 

@@ -729,6 +729,8 @@ private:
       return 2;
     case TritonGEN::PrecisionType::U8:
     case TritonGEN::PrecisionType::S8:
+    case TritonGEN::PrecisionType::F8E5M2:
+    case TritonGEN::PrecisionType::F8E4M3FN:
       return 4;
     default:
       llvm_unreachable("unsupported TritonGEN::PrecisionType");
@@ -754,6 +756,10 @@ private:
       return res | 0x10 | 0x20;
     case TritonGEN::PrecisionType::S8:
       return res | 0x1 | 0x2 | 0x10 | 0x20;
+    case TritonGEN::PrecisionType::F8E5M2:
+      return res | 0x10000 | 0x20000;
+    case TritonGEN::PrecisionType::F8E4M3FN:
+      return res | 0x4000 | 0x8000;
     default:
       llvm_unreachable("unsupported TritonGEN::PrecisionType");
     }

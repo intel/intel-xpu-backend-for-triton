@@ -92,7 +92,7 @@ def get_src_element_ty_size(dtype_str):
 
 
 @pytest.mark.parametrize("dtype_src_str", ["float32", "tensorfloat32", "float16", "float8e5", "float64"])
-@pytest.mark.parametrize("dtype_dst_str", ["float32", "float16", "float64"])
+@pytest.mark.parametrize("dtype_dst_str", ["float32", "float16", "float64", "bfloat16"])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES", [(128, 128, 16, 4), (64, 128, 32, 4), (32, 32, 32, 4),
                                                                    (256, 128, 32, 4), (64, 512, 32, 2),
                                                                    (512, 64, 32, 2), (64, 16, 64, 4)])
@@ -118,6 +118,10 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
         pytest.xfail("Skipping unsupported case")
     if "float32" in dtype_src_str and dtype_dst_str == "float16":
         pytest.xfail("Skipping unsupported case")
+    if "float32" in dtype_src_str and dtype_dst_str == "bfloat16":
+        pytest.xfail("Skipping unsupported case")
+    if "float16" in dtype_src_str and dtype_dst_str == "bfloat16":
+        pytest.xfail("Skipping unsupported case")
     if "float32" == dtype_src_str and NUM_CTAS > 1:
         pytest.skip("FMA matmul not supported for multiple CTAs")
     if (BLOCK_M < 64 or (BLOCK_M == 64 and BLOCK_N == 16)) and NUM_CTAS > 1:
@@ -126,6 +130,13 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
         pytest.skip("creates convert layout too big to fit in smem")
     if LAYOUT_16x256 and (not is_cuda() or torch.cuda.get_device_capability()[0] < 10):
         pytest.xfail("skip forcing tmem layout on non blackwell targets.")
+
+    # FIXME: These case failed in CRI CI while it passed when run it manually. Need investigation.
+    if is_xpu():
+        if dtype_src_str == "float8e5" and dtype_dst_str == "bfloat16":
+            if (BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES) in [(512, 64, 32, 2), (64, 512, 32, 2)] and NUM_WARPS == 4:
+                pytest.skip("Investigate failure in CRI CI")
+
     M, N, K = 1024, 512, 256
     torch.manual_seed(42)
     precision = "tf32" if dtype_src_str == "tensorfloat32" else "ieee"
@@ -181,6 +192,13 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
             if "32x32b" not in ptx and "16x32b" not in ptx:
                 print(ptx)
             assert ("32x32b" in ptx) or ("16x32b" in ptx), "PTX does not contain 32x32b or 16x32b"
+
+    if device == "xpu" and (dtype_src_str == 'float8e5' and
+                            (dtype_dst_str == 'float32'
+                             or dtype_dst_str == 'bfloat16')):  # FIXME: Only add check for CRI
+        llir = k.asm["llir"]
+        count = llir.count("__spirv_SubgroupMatrixMultiplyAccumulateINTEL")
+        assert count > 0, "The bf8 dpas is not used."
 
 
 # persistent matmul with fused loops

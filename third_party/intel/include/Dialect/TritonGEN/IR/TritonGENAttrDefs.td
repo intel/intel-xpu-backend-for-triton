@@ -47,17 +47,18 @@ def TritonGEN_ScanKindAttr : I32EnumAttr<"ScanKind", "TritonGEN subgroup scan ki
 def TritonGEN_PrecisionTypeAttr : I32EnumAttr<"PrecisionType",
   "TritonGEN precision type",
   [
-    I32EnumAttrCase<"UNUSED", 0,  "unused">,
-    I32EnumAttrCase<"U8",     1,  "u8">,
-    I32EnumAttrCase<"U4",     2,  "u4">,
-    I32EnumAttrCase<"U2",     3,  "u2">,
-    I32EnumAttrCase<"S8",     4,  "i8">,
-    I32EnumAttrCase<"S4",     5,  "i4">,
-    I32EnumAttrCase<"S2",     6,  "i2">,
-    I32EnumAttrCase<"BF8",    7,  "bf8">,
-    I32EnumAttrCase<"TF32",   8,  "tf32">,
-    I32EnumAttrCase<"BF16",   9,  "bf16">,
-    I32EnumAttrCase<"FP16",   10, "f16">
+    I32EnumAttrCase<"UNUSED",  0,  "unused">,
+    I32EnumAttrCase<"U8",      1,  "u8">,
+    I32EnumAttrCase<"U4",      2,  "u4">,
+    I32EnumAttrCase<"U2",      3,  "u2">,
+    I32EnumAttrCase<"S8",      4,  "i8">,
+    I32EnumAttrCase<"S4",      5,  "i4">,
+    I32EnumAttrCase<"S2",      6,  "i2">,
+    I32EnumAttrCase<"F8E5M2",  7,  "bf8">,
+    I32EnumAttrCase<"F8E4M3FN",8,  "hf8">,
+    I32EnumAttrCase<"TF32",    10, "tf32">,
+    I32EnumAttrCase<"BF16",    11, "bf16">,
+    I32EnumAttrCase<"FP16",    12, "f16">,
   ]> {
   let cppNamespace = "::mlir::triton::TritonGEN";
 }

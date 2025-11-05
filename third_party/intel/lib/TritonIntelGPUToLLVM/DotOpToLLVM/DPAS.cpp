@@ -90,6 +90,18 @@ public:
       Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
       return {cTy, cTy, aTy, bTy};
     }
+    case DPASEngineType::BF16_BF16_FP8_FP8: {
+      Type cTy = vec_ty(bf16Ty, elemNumC);
+      Type aTy = vec_ty(i16Ty, elemNumA / 2);             // pack scalar to i16.
+      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
+      return {cTy, cTy, aTy, bTy};
+    }
+    case DPASEngineType::FP32_FP32_FP8_FP8: {
+      Type cTy = vec_ty(fp32Ty, elemNumC);
+      Type aTy = vec_ty(i16Ty, elemNumA / 2);             // pack scalar to i16.
+      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
+      return {cTy, cTy, aTy, bTy};
+    }
     default:
       llvm::report_fatal_error("Unsupported dpas type found");
     }
@@ -389,6 +401,11 @@ private:
         return TritonGEN::PrecisionType::BF16;
       if (isa<Float16Type>(elemType))
         return TritonGEN::PrecisionType::FP16;
+      if (isa<Float8E5M2Type>(elemType))
+        return TritonGEN::PrecisionType::F8E5M2;
+      if (isa<Float8E4M3FNType>(elemType)) {
+        return TritonGEN::PrecisionType::F8E4M3FN;
+      }
     } else if (width == 8) {
       return elemType.isUnsignedInteger() ? TritonGEN::PrecisionType::U8
                                           : TritonGEN::PrecisionType::S8;

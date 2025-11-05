@@ -124,6 +124,9 @@ DPASAnalysis::getDPASType(OpTy op) {
       return DPASEngineType::NOT_APPLICABLE;
     }
 
+    auto m = op->template getParentOfType<ModuleOp>();
+    bool isFp8Supported =
+        m->hasAttr(TritonIntelGPUDialect::getSupportBlockScaleDPASAttrName());
     if (isa<FloatType>(dElemTy)) {
       if (dElemTy.isF32()) {
         if (aElemTy.isF16())
@@ -132,17 +135,22 @@ DPASAnalysis::getDPASType(OpTy op) {
           return DPASEngineType::FP32_FP32_BF16_BF16;
         if (aElemTy.isF32() && op.getInputPrecision() == InputPrecision::TF32)
           return DPASEngineType::FP32_FP32_TF32_TF32;
-        // For FP8XFP8->FP32, upcast to FP16
-        if (isa<Float8E5M2Type>(aElemTy))
-          return DPASEngineType::FP32_FP32_FP16_FP16;
-        if (isa<Float8E4M3FNType>(aElemTy))
-          return DPASEngineType::FP32_FP32_FP16_FP16;
+
+        // For FP8XFP8->FP32, upcast to FP16 when fp8 DPAS is not supported
+        if (isa<Float8E5M2Type, Float8E4M3FNType>(aElemTy)) {
+          if (!isFp8Supported)
+            return DPASEngineType::FP32_FP32_FP16_FP16;
+          else
+            return DPASEngineType::FP32_FP32_FP8_FP8;
+        }
       } else if (dElemTy.isF16()) {
         if (aElemTy.isF16())
           return DPASEngineType::FP16_FP16_FP16_FP16;
       } else if (dElemTy.isBF16()) {
         if (aElemTy.isBF16())
           return DPASEngineType::BF16_BF16_BF16_BF16;
+        if (isFp8Supported && isa<Float8E5M2Type, Float8E4M3FNType>(aElemTy))
+          return DPASEngineType::BF16_BF16_FP8_FP8;
       }
     }
   }

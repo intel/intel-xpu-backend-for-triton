@@ -277,16 +277,6 @@ DpasEncodingAttr::getDPASCapability(ModuleOp mod) {
   return DPASCapability();
 }
 
-unsigned DpasEncodingAttr::getOpsPerChannel(Type elemType) {
-  assert(elemType.isIntOrFloat() && "unsupported type for DpasEncodingAttr");
-
-  unsigned dpasElemBitWidths = elemType.getIntOrFloatBitWidth();
-  if (llvm::isa<Float8E5M2Type, Float8E4M3FNType>(elemType))
-    dpasElemBitWidths *= 2; // We are upcasting FP8 to FP16.
-
-  return DPASCapability::opsChanBitWidths / dpasElemBitWidths;
-}
-
 LogicalResult DpasEncodingAttr::verify(
     ::llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
     unsigned repeatCount, unsigned systolicDepth, unsigned executionSize,

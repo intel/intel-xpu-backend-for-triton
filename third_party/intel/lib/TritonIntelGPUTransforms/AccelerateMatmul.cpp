@@ -45,6 +45,19 @@ static void setAttrOnBOperand(tt::DotOp dotOp, StringRef attrName,
     loadOp->setAttr(attrName, attr);
 }
 
+unsigned getOpsPerChannel(Type elemType, ModuleOp m) {
+  assert(elemType.isIntOrFloat() && "unsupported type for DpasEncodingAttr");
+
+  unsigned dpasElemBitWidths = elemType.getIntOrFloatBitWidth();
+  bool supportsFP8 = m->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
+                                    getSupportBlockScaleDPASAttrName());
+  if (!supportsFP8 && llvm::isa<Float8E5M2Type, Float8E4M3FNType>(elemType))
+    dpasElemBitWidths *= 2; // We are upcasting FP8 to FP16.
+
+  return ttg::intel::DpasEncodingAttr::DPASCapability::opsChanBitWidths /
+         dpasElemBitWidths;
+}
+
 SmallVector<unsigned>
 getWarpsPerTile(tt::DotOp dotOp, ttgi::DpasEncodingAttr::DPASCapability dpasCap,
                 const ArrayRef<int64_t> shape, unsigned numWarps) {
@@ -141,7 +154,7 @@ public:
     ModuleOp mod = funcOp->getParentOfType<ModuleOp>();
     auto dpasCap = ttgi::DpasEncodingAttr::getDPASCapability(mod);
     Type elemType = oldAType.getElementType();
-    unsigned opsPerChan = ttgi::DpasEncodingAttr::getOpsPerChannel(elemType);
+    unsigned opsPerChan = getOpsPerChannel(elemType, mod);
     SmallVector<unsigned> warpsPerTile =
         getWarpsPerTile(dotOp, dpasCap, retShape, numWarps);
     size_t rank = retShape.size();
@@ -262,9 +275,13 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
     Type promoteType;
     if (dpasLayout) {
       bool isNativeFP8 = isa<Float8E5M2Type, Float8E4M3FNType>(AElType);
-      // fp8 is not natively supported by the the DPAS instruction, promote it
-      // to fp16.
-      if (!isNativeFP8)
+      // fp8 is not always natively supported by the the DPAS instruction,
+      // promote it to fp16 when necessary
+
+      auto m = dotOp->getParentOfType<ModuleOp>();
+      bool supportsFP8 = m->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
+                                        getSupportBlockScaleDPASAttrName());
+      if (supportsFP8 || !isNativeFP8)
         return;
       promoteType = builder.getF16Type();
     } else {
