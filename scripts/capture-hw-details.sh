@@ -20,7 +20,7 @@ done
 
 function libigc_version {
     if [[ $OSTYPE = msys ]]; then
-        powershell -Command "(Get-ChildItem c:/Windows/System32/DriverStore/FileRepository/*/igc64.dll).VersionInfo.ProductVersion"
+        powershell -Command "(Get-WmiObject Win32_VideoController | where {$_.VideoProcessor -like "*Intel*" }).DriverVersion"
         return
     fi
     if dpkg-query --show libigc2 &> /dev/null; then
