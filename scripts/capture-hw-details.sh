@@ -20,7 +20,7 @@ done
 
 function libigc_version {
     if [[ $OSTYPE = msys ]]; then
-                powershell -Command "
+                pwsh -Command "
           try {
             \$intel = Get-PnpDevice -Class Display -PresentOnly | Where-Object { \$_.FriendlyName -like '*Intel*' } | Select-Object -First 1
             if (-not \$intel) { throw 'No Intel display adapter' }
