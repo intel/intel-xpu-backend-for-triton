@@ -338,6 +338,7 @@ jobs:
       - name: Run triton kernels tests
         if: matrix.suite == 'triton-kernels'
         run: |
+          export PYTEST_MAX_PROCESSES=4
           ${{ env.TRITON_TEST_CMD }} --triton-kernels
 
       # FIXME: make sure new tutorials are added to one of the groups (scaled_dot, rest, tutorial-faX)

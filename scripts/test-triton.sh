@@ -730,7 +730,7 @@ run_triton_kernels_tests() {
   else
     # Using any other number of processes results in an error on the PVC due to insufficient resources.
     # FIXME: reconsider in the future
-    max_procs=4
+    max_procs=${PYTEST_MAX_PROCESSES:-4}
   fi
   # skipping mxfp, they are part of mxfp_tests suite
   TRITON_TEST_SUITE=triton_kernels \
