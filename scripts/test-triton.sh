@@ -46,6 +46,7 @@ OPTION:
     --extra-skip-list-suffixes SEMICOLON-SEPARATED LIST OF SUFFIXES
     --select-from-file SELECTFILE
     --test-expr EXPRESSION
+    --debug-fail
 "
 
 err() {
@@ -88,6 +89,7 @@ SKIP_PIP=false
 SKIP_PYTORCH=false
 TEST_UNSKIP=false
 TEST_FILTER_EXPRESSION=""
+TEST_DEBUG_FAIL=false
 
 while (( $# != 0 )); do
   case "$1" in
@@ -279,6 +281,10 @@ while (( $# != 0 )); do
       TEST_FILTER_EXPRESSION="$2"
       shift 2
       ;;
+    --debug-fail)
+      TEST_DEBUG_FAIL=true
+      shift
+      ;;
     --help)
       echo "$HELP"
       exit 0
@@ -374,6 +380,10 @@ run_pytest_command() {
   # Apply -k expression if any
   if [[ -n "$pytest_expr" ]]; then
     pytest_args+=("-k" "$pytest_expr")
+  fi
+
+  if [[ "$TEST_DEBUG_FAIL" == true ]]; then
+    pytest_args+=("--pdb")
   fi
 
   if [[ -n "$TRITON_TEST_SELECTFILE" ]] || [[ -n "$pytest_expr" ]]; then
