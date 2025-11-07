@@ -289,6 +289,7 @@ def test_line_info_ir_source(monkeypatch, status, tmp_path):
     #loc3 = loc("/path/test.py":9:4)
     """
     monkeypatch.setenv("USE_IR_LOC", status)
+    monkeypatch.setenv("TRITON_ALWAYS_COMPILE", "1")
     temp_file = tmp_path / "test.ttir"
     temp_file.write_text(src)
     kernel_info = triton.compile(str(temp_file))
