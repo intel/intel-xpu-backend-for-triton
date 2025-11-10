@@ -151,19 +151,38 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
 
     cache = runtime.driver.active.get_empty_cache_for_benchmark()
 
+    # Simulation-based execution environments do not require multiple runs to produce stable results. For such cases we skip the estimation and warn the user if their configuration includes warmup or repetitions other than 1.
+    simulation_env = (os.getenv("TRITON_INTEL_ENABLE_XE4", "0") == "1") or (os.getenv("TRITON_INTEL_ENABLE_XE3P", "0")
+                                                                            == "1")
+    if simulation_env:
+        if warmup != 0:
+            import warnings
+            warnings.warn(
+                "Running benchmarking in the simulation mode with a non-zero warmup rounds. These will be skipped.")
+        if rep != 1:
+            import warnings
+            warnings.warn(
+                "Running benchmarking in the simulation mode with a redundant config (expecting rep=1, got {}). These iterations will slow down the execution without any benefit."
+                .format(rep))
+
     # Estimate the runtime of the function
-    start_event = di.Event(enable_timing=True)
-    end_event = di.Event(enable_timing=True)
-    start_event.record()
-    for _ in range(5):
-        runtime.driver.active.clear_cache(cache)
-        fn()
-    end_event.record()
-    di.synchronize()
-    estimate_ms = start_event.elapsed_time(end_event) / 5
+    if simulation_env:
+        estimate_ms = 1
+    else:
+        start_event = di.Event(enable_timing=True)
+        end_event = di.Event(enable_timing=True)
+        start_event.record()
+        for _ in range(5):
+            runtime.driver.active.clear_cache(cache)
+            fn()
+        end_event.record()
+        di.synchronize()
+        estimate_ms = start_event.elapsed_time(end_event) / 5
 
     # compute number of warmup and repeat
     n_warmup = max(1, int(warmup / estimate_ms))
+    if simulation_env:
+        n_warmup = 0
     n_repeat = max(1, int(rep / estimate_ms))
     start_event = [di.Event(enable_timing=True) for i in range(n_repeat)]
     end_event = [di.Event(enable_timing=True) for i in range(n_repeat)]
