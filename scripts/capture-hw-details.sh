@@ -26,7 +26,7 @@ function libigc_version {
                 Write-Host "MULTIPLE"
             }
             elseif ($igc.Count -eq 1) {
-                $igc[0].FileVersionInfo.FileVersion
+                Write-Host $igc[0].FileVersionInfo.FileVersion
             }
             else {
                 Write-Host "Not Found"
