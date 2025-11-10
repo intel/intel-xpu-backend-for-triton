@@ -153,6 +153,57 @@ def TritonGEN_MatrixDPASOp : TritonGEN_Op<"dpas">,
   let hasVerifier = 1;
 }
 
+def TritonGEN_MatrixBlockScaleDPASOp : TritonGEN_Op<"bdpas">,
+  Results<(outs FixedVectorOfNonZeroRankOf<[F32, BF16]>:$d)>,
+  Arguments<(ins
+    FixedVectorOfRankAndType<[1], [F32, BF16]>:$c,
+    FixedVectorOfRankAndType<[1], [AnyI16]>:$a,
+    FixedVectorOfRankAndType<[1], [AnyI32]>:$b,
+    AnyTypeOf<[AnyI8, FixedVectorOfRankAndType<[1], [AnyI8]>]>:$scaleA,
+    AnyTypeOf<[AnyI8, FixedVectorOfRankAndType<[1], [AnyI8]>]>:$scaleB,
+    TritonGEN_PrecisionTypeAttr:$pa,
+    TritonGEN_PrecisionTypeAttr:$pb,
+    I32Attr:$rc
+  )> {
+
+  let summary = "Block scale matrix multiply-add for MXFP";
+
+  let description = [{
+    The `triton_gen.bdpas` operation is a matrix multiplication plus accumulation for MXFP:
+
+      D = C + (A x B) * scaleA * scaleB
+
+      where the A, B, C input matrices and the result D have shapes:
+        D : MxN
+        C : MxN
+        A : MxK
+        B : KxN
+        scaleA: Mx(K/32)
+        scaleB: (K/32)xN
+
+        M : repeat count, must be 8
+        N : fixed execution size, must be 16
+        K : depth * OPS_PER_CHAN
+            OPS_PER_CHAN
+              2 : for 16-bit precision(BF, HF)
+              4 : for 8-bit precision (FP8, UB, B)
+              8 : for less-then 8 bit precision (U4/S4, U2/S2).
+
+            If depth is 8, K would be 8, 16, 32, or 64 (based on OPS_PER_CHAN).
+
+    $a, $b, $c, $d - matrix A, B, C, D, respectively
+    $scaleA, $scaleB - scale factors for matrix A and B, respectively
+    $pa, $pb - precision of matrix A and B respectively
+    $rc - repeat count
+  }];
+
+  let assemblyFormat = [{
+    operands ` ` `{` `pa` `=` $pa `,` `pb` `=` $pb `,` `rc` `=` $rc `}` attr-dict `:` functional-type(operands, results)
+  }];
+
+  let hasVerifier = 1;
+}
+
 def TritonGEN_Matrix2DBlockLoadOp : TritonGEN_Op<"2Dblockload">,
   Results<(outs FixedVectorOfNonZeroRankOf<[TritonGEN_MatrixElemType, AnyI64]>:$res)>,
   Arguments<(ins

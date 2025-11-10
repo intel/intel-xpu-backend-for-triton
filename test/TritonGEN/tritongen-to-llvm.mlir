@@ -148,3 +148,81 @@ llvm.func @triton_gen.predicated_store(%ptr : !llvm.ptr<1>, %value : i32, %align
   triton_gen.predicated_store %ptr, %value, %alignment, %predicate : !llvm.ptr<1>, i32, i64, i1
   llvm.return
 }
+
+// -----
+
+// CHECK: llvm.func spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f16.v8f16.v8i16.v8i32.v2i8.v2i8(vector<8xbf16>, vector<8xi16>, vector<8xi32>, vector<2xi8>, vector<2xi8>, i32, i32) -> vector<8xbf16> attributes {convergent, no_unwind, will_return}
+
+llvm.func @triton_gen.bdpas.bf16_accum(%c: vector<8xbf16>, %a : vector<8xi16>, %b : vector<8xi32>, %sa : vector<2xi8>, %sb : vector<2xi8>) {
+  // CHECK: llvm.func @triton_gen.bdpas.bf16_accum(%arg0: vector<8xbf16>, %arg1: vector<8xi16>, %arg2: vector<8xi32>, %arg3: vector<2xi8>, %arg4: vector<2xi8>) {
+  // CHECK: [[PREC_A:%.*]] = llvm.mlir.constant(13 : i32) : i32
+  // CHECK: [[PREC_B:%.*]] = llvm.mlir.constant(13 : i32) : i32
+  // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f16.v8f16.v8i16.v8i32.v2i8.v2i8(%arg0, %arg1, %arg2, %arg3, %arg4, [[PREC_A]], [[PREC_B]]) {{.*}} : (vector<8xbf16>, vector<8xi16>, vector<8xi32>, vector<2xi8>, vector<2xi8>, i32, i32) -> vector<8xbf16>
+  %0 = triton_gen.bdpas %c, %a, %b, %sa, %sb {pa = e2m1, pb = e2m1, rc = 8} : (vector<8xbf16>, vector<8xi16>, vector<8xi32>, vector<2xi8>, vector<2xi8>) -> vector<8xbf16>
+  llvm.return
+}
+
+// -----
+
+// CHECK: llvm.func spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8(vector<8xf32>, vector<8xi16>, vector<8xi32>, vector<2xi8>, vector<2xi8>, i32, i32) -> vector<8xf32> attributes {convergent, no_unwind, will_return}
+
+llvm.func @triton_gen.bdpas.f32_accum(%c: vector<8xf32>, %a : vector<8xi16>, %b : vector<8xi32>, %sa : vector<2xi8>, %sb : vector<2xi8>) {
+  // CHECK: llvm.func @triton_gen.bdpas.f32_accum(%arg0: vector<8xf32>, %arg1: vector<8xi16>, %arg2: vector<8xi32>, %arg3: vector<2xi8>, %arg4: vector<2xi8>) {
+  // CHECK: [[PREC_A:%.*]] = llvm.mlir.constant(13 : i32) : i32
+  // CHECK: [[PREC_B:%.*]] = llvm.mlir.constant(13 : i32) : i32
+  // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8(%arg0, %arg1, %arg2, %arg3, %arg4, [[PREC_A]], [[PREC_B]]) {{.*}} : (vector<8xf32>, vector<8xi16>, vector<8xi32>, vector<2xi8>, vector<2xi8>, i32, i32) -> vector<8xf32>
+  %0 = triton_gen.bdpas %c, %a, %b, %sa, %sb {pa = e2m1, pb = e2m1, rc = 8} : (vector<8xf32>, vector<8xi16>, vector<8xi32>, vector<2xi8>, vector<2xi8>) -> vector<8xf32>
+  llvm.return
+}
+
+// -----
+
+// CHECK: llvm.func spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.i8.i8(vector<8xf32>, vector<8xi16>, vector<8xi32>, i8, i8, i32, i32) -> vector<8xf32> attributes {convergent, no_unwind, will_return}
+
+llvm.func @triton_gen.bdpas.bf8(%c: vector<8xf32>, %a : vector<8xi16>, %b : vector<8xi32>, %sa : i8, %sb :i8) {
+  // CHECK: llvm.func @triton_gen.bdpas.bf8(%arg0: vector<8xf32>, %arg1: vector<8xi16>, %arg2: vector<8xi32>, %arg3: i8, %arg4: i8) {
+  // CHECK: [[PREC_A:%.*]] = llvm.mlir.constant(7 : i32) : i32
+  // CHECK: [[PREC_B:%.*]] = llvm.mlir.constant(7 : i32) : i32
+  // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.i8.i8(%arg0, %arg1, %arg2, %arg3, %arg4, [[PREC_A]], [[PREC_B]]) {{.*}} : (vector<8xf32>, vector<8xi16>, vector<8xi32>, i8, i8, i32, i32) -> vector<8xf32>
+  %0 = triton_gen.bdpas %c, %a, %b, %sa, %sb {pa = bf8, pb = bf8, rc = 8} : (vector<8xf32>, vector<8xi16>, vector<8xi32>, i8, i8) -> vector<8xf32>
+  llvm.return
+}
+
+// -----
+
+// CHECK: llvm.func spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.i8.i8(vector<8xf32>, vector<8xi16>, vector<8xi32>, i8, i8, i32, i32) -> vector<8xf32> attributes {convergent, no_unwind, will_return}
+
+llvm.func @triton_gen.bdpas.hf8(%c: vector<8xf32>, %a : vector<8xi16>, %b : vector<8xi32>, %sa : i8, %sb :i8) {
+  // CHECK: llvm.func @triton_gen.bdpas.hf8(%arg0: vector<8xf32>, %arg1: vector<8xi16>, %arg2: vector<8xi32>, %arg3: i8, %arg4: i8) {
+  // CHECK: [[PREC_A:%.*]] = llvm.mlir.constant(8 : i32) : i32
+  // CHECK: [[PREC_B:%.*]] = llvm.mlir.constant(8 : i32) : i32
+  // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.i8.i8(%arg0, %arg1, %arg2, %arg3, %arg4, [[PREC_A]], [[PREC_B]]) {{.*}} : (vector<8xf32>, vector<8xi16>, vector<8xi32>, i8, i8, i32, i32) -> vector<8xf32>
+  %0 = triton_gen.bdpas %c, %a, %b, %sa, %sb {pa = hf8, pb = hf8, rc = 8} : (vector<8xf32>, vector<8xi16>, vector<8xi32>, i8, i8) -> vector<8xf32>
+  llvm.return
+}
+
+// -----
+
+// CHECK: llvm.func spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.i8.i8(vector<8xf32>, vector<8xi16>, vector<8xi32>, i8, i8, i32, i32) -> vector<8xf32> attributes {convergent, no_unwind, will_return}
+
+llvm.func @triton_gen.bdpas.f16(%c: vector<8xf32>, %a : vector<8xi16>, %b : vector<8xi32>, %sa : i8, %sb :i8) {
+  // CHECK: llvm.func @triton_gen.bdpas.f16(%arg0: vector<8xf32>, %arg1: vector<8xi16>, %arg2: vector<8xi32>, %arg3: i8, %arg4: i8) {
+  // CHECK: [[PREC_A:%.*]] = llvm.mlir.constant(12 : i32) : i32
+  // CHECK: [[PREC_B:%.*]] = llvm.mlir.constant(12 : i32) : i32
+  // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.i8.i8(%arg0, %arg1, %arg2, %arg3, %arg4, [[PREC_A]], [[PREC_B]]) {{.*}} : (vector<8xf32>, vector<8xi16>, vector<8xi32>, i8, i8, i32, i32) -> vector<8xf32>
+  %0 = triton_gen.bdpas %c, %a, %b, %sa, %sb {pa = f16, pb = f16, rc = 8} : (vector<8xf32>, vector<8xi16>, vector<8xi32>, i8, i8) -> vector<8xf32>
+  llvm.return
+}
+
+// -----
+
+// CHECK: llvm.func spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.i8.i8(vector<8xf32>, vector<8xi16>, vector<8xi32>, i8, i8, i32, i32) -> vector<8xf32> attributes {convergent, no_unwind, will_return}
+
+llvm.func @triton_gen.bdpas.bf16(%c: vector<8xf32>, %a : vector<8xi16>, %b : vector<8xi32>, %sa : i8, %sb :i8) {
+  // CHECK: llvm.func @triton_gen.bdpas.bf16(%arg0: vector<8xf32>, %arg1: vector<8xi16>, %arg2: vector<8xi32>, %arg3: i8, %arg4: i8) {
+  // CHECK: [[PREC_A:%.*]] = llvm.mlir.constant(11 : i32) : i32
+  // CHECK: [[PREC_B:%.*]] = llvm.mlir.constant(11 : i32) : i32
+  // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.i8.i8(%arg0, %arg1, %arg2, %arg3, %arg4, [[PREC_A]], [[PREC_B]]) {{.*}} : (vector<8xf32>, vector<8xi16>, vector<8xi32>, i8, i8, i32, i32) -> vector<8xf32>
+  %0 = triton_gen.bdpas %c, %a, %b, %sa, %sb {pa = bf16, pb = bf16, rc = 8} : (vector<8xf32>, vector<8xi16>, vector<8xi32>, i8, i8) -> vector<8xf32>
+  llvm.return
+}

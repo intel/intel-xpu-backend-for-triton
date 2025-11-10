@@ -59,6 +59,7 @@ def TritonGEN_PrecisionTypeAttr : I32EnumAttr<"PrecisionType",
     I32EnumAttrCase<"TF32",    10, "tf32">,
     I32EnumAttrCase<"BF16",    11, "bf16">,
     I32EnumAttrCase<"FP16",    12, "f16">,
+    I32EnumAttrCase<"F4E2M1",  13, "e2m1">,
   ]> {
   let cppNamespace = "::mlir::triton::TritonGEN";
 }

@@ -136,84 +136,85 @@ template <typename Op> static LogicalResult verify2DBlockHWRestriction(Op op) {
   return success();
 }
 
-//===----------------------------------------------------------------------===//
-// gen.matrix.dpas
-//===----------------------------------------------------------------------===//
+template <typename Op> static LogicalResult verifyDPASCommonRestriction(Op op) {
+  if (op.getRc() != 1 && op.getRc() != 2 && op.getRc() != 4 && op.getRc() != 8)
+    return op->emitOpError("expecting repeat count to be 1, 2, 4, or 8");
 
-LogicalResult TritonGEN::MatrixDPASOp::verify() {
-  if (getRc() != 1 && getRc() != 2 && getRc() != 4 && getRc() != 8)
-    return this->emitOpError("expecting repeat count to be 1, 2, 4, or 8");
-
-  TritonGEN::PrecisionType precision = getPa();
-  if (getPa() != getPb())
-    return this->emitOpError(
+  TritonGEN::PrecisionType precision = op.getPa();
+  if (op.getPa() != op.getPb())
+    return op->emitOpError(
         "expecting precision of matrix A and B to be the same");
 
-  VectorType ATy = getA().getType();
-  VectorType BTy = getB().getType();
-  VectorType CTy = getC().getType();
-  VectorType DTy = getD().getType();
+  VectorType ATy = op.getA().getType();
+  VectorType BTy = op.getB().getType();
+  VectorType CTy = op.getC().getType();
+  VectorType DTy = op.getD().getType();
   if (CTy != DTy)
-    return this->emitOpError(
+    return op->emitOpError(
         "1st operand (C) and result (D) should have the same type");
 
-  if (CTy.getNumElements() != getRc() || DTy.getNumElements() != getRc())
-    return this->emitOpError("the dimension for 1st operand (C) and "
-                             "result (D) should match repeat count");
+  if (CTy.getNumElements() != op.getRc() || DTy.getNumElements() != op.getRc())
+    return op->emitOpError("the dimension for 1st operand (C) and "
+                           "result (D) should match repeat count");
 
   constexpr unsigned SD = 8;
   if (BTy.getNumElements() != SD)
-    return this->emitOpError("the dimension for the 3rd operand (B) should "
-                             "match the systolic depth of 8");
+    return op->emitOpError("the dimension for the 3rd operand (B) should "
+                           "match the systolic depth of 8");
 
   Type AElemTy = ATy.getElementType();
   Type BElemTy = BTy.getElementType();
   Type CElemTy = CTy.getElementType();
 
   switch (precision) {
-  case PrecisionType::U8:
-  case PrecisionType::S8:
+  case TritonGEN::PrecisionType::U8:
+  case TritonGEN::PrecisionType::S8:
     if (!CElemTy.isInteger(32))
-      return this->emitOpError(
+      return op->emitOpError(
           "the element type for 1st operand (C) and the result should be i32");
     break;
-  case PrecisionType::FP16:
+  case TritonGEN::PrecisionType::FP16:
     if (!(CElemTy.isF16() || CElemTy.isF32()))
-      return this->emitOpError("the element type for 1st operand (C) and the "
-                               "result should be f16 or f32");
+      return op->emitOpError("the element type for 1st operand (C) and the "
+                             "result should be f16 or f32");
     break;
-  case PrecisionType::BF16:
+  case TritonGEN::PrecisionType::BF16:
     if (!(CElemTy.isBF16() || CElemTy.isF32()))
-      return this->emitOpError("the element type for 1st operand (C) and the "
-                               "result should be bf16 or f32");
+      return op->emitOpError("the element type for 1st operand (C) and the "
+                             "result should be bf16 or f32");
     break;
-  case PrecisionType::TF32:
+  case TritonGEN::PrecisionType::TF32:
     if (!CElemTy.isF32())
-      return this->emitOpError(
+      return op->emitOpError(
           "the element type for 1st operand (C) and the result should be f32");
     break;
   case TritonGEN::PrecisionType::F8E5M2:
   case TritonGEN::PrecisionType::F8E4M3FN:
     if (!(CElemTy.isBF16() || CElemTy.isF32()))
-      return this->emitOpError("the element type for 1st operand (C) and the "
-                               "result should be bf16 or f32");
+      return op->emitOpError("the element type for 1st operand (C) and the "
+                             "result should be bf16 or f32");
+    break;
+  case TritonGEN::PrecisionType::F4E2M1:
+    if (!(CElemTy.isBF16() || CElemTy.isF32()))
+      return op->emitOpError("the element type for 1st operand (C) and the "
+                             "result should be bf16 or f32");
     break;
   default:
-    return this->emitOpError(
+    return op->emitOpError(
         "expecting precision type to be tf32, bf16, fp16, bf8, hf8, u8, or s8");
   }
 
   switch (precision) {
   case TritonGEN::PrecisionType::TF32:
-    if (ATy.getNumElements() != getRc() / 2)
-      return this->emitOpError("the dimension for the 2nd operand (A) should "
-                               "be equal to half of the repeat count");
+    if (ATy.getNumElements() != op.getRc() / 2)
+      return op->emitOpError("the dimension for the 2nd operand (A) should "
+                             "be equal to half of the repeat count");
     if (!isa<Float32Type>(AElemTy) && !AElemTy.isInteger(32))
-      return this->emitOpError("2nd operand (A) element type should be f32 or "
-                               "i32 when the precision type is tf32");
+      return op->emitOpError("2nd operand (A) element type should be f32 or "
+                             "i32 when the precision type is tf32");
     if (!isa<Float32Type>(BElemTy) && !BElemTy.isInteger(32))
-      return this->emitOpError("3rd operand (B) element type should be f32 or "
-                               "i32 when the precision type is tf32");
+      return op->emitOpError("3rd operand (B) element type should be f32 or "
+                             "i32 when the precision type is tf32");
     break;
   case TritonGEN::PrecisionType::BF16:
   case TritonGEN::PrecisionType::FP16:
@@ -221,21 +222,77 @@ LogicalResult TritonGEN::MatrixDPASOp::verify() {
   case TritonGEN::PrecisionType::S8:
   case TritonGEN::PrecisionType::F8E5M2:
   case TritonGEN::PrecisionType::F8E4M3FN:
-    if (ATy.getNumElements() != getRc())
-      return this->emitOpError("2nd operand (A) should have the same number of "
-                               "elements as repeat count");
+  case TritonGEN::PrecisionType::F4E2M1:
+    if (ATy.getNumElements() != op.getRc())
+      return op->emitOpError("2nd operand (A) should have the same number of "
+                             "elements as repeat count");
     if (!AElemTy.isInteger(16))
-      return this->emitOpError(
-          "2nd operand (A) element type should be i16 when "
-          "the precision type is not tf32");
+      return op->emitOpError("2nd operand (A) element type should be i16 when "
+                             "the precision type is not tf32");
     if (!BElemTy.isInteger(32))
-      return this->emitOpError(
-          "3rd operand (B) element type should be i32 when "
-          "the precision type is not tf32");
+      return op->emitOpError("3rd operand (B) element type should be i32 when "
+                             "the precision type is not tf32");
     break;
   default:
     llvm_unreachable("unhandled precision type");
   }
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// gen.matrix.dpas
+//===----------------------------------------------------------------------===//
+
+LogicalResult TritonGEN::MatrixDPASOp::verify() {
+  return verifyDPASCommonRestriction(*this);
+}
+
+//===----------------------------------------------------------------------===//
+// gen.matrix.bdpas
+//===----------------------------------------------------------------------===//
+
+LogicalResult TritonGEN::MatrixBlockScaleDPASOp::verify() {
+  LogicalResult res = verifyDPASCommonRestriction(*this);
+  if (res.failed())
+    return res;
+
+  // BDPAS only supports repeat count of 8.
+  if (getRc() != 8)
+    return this->emitOpError("expecting repeat count to be 8");
+
+  TritonGEN::PrecisionType precision = this->getPa();
+  Type ScaleATy = this->getScaleA().getType();
+  Type ScaleBTy = this->getScaleB().getType();
+
+  switch (precision) {
+  case TritonGEN::PrecisionType::BF16:
+  case TritonGEN::PrecisionType::FP16:
+  case TritonGEN::PrecisionType::F8E5M2:
+  case TritonGEN::PrecisionType::F8E4M3FN:
+    if (!ScaleATy.isInteger(8))
+      return this->emitOpError("4th operand (Scale A) should be i8 when "
+                               "precision is bf16, fp16, bf8, or hf8");
+    if (!ScaleBTy.isInteger(8))
+      return this->emitOpError("5th operand (Scale B) should be i8 when "
+                               "precision is bf16, fp16, bf8, or hf8");
+    break;
+  case TritonGEN::PrecisionType::F4E2M1:
+    if (!(isa<VectorType>(ScaleATy) &&
+          cast<VectorType>(ScaleATy).getElementType().isInteger(8) &&
+          cast<VectorType>(ScaleATy).getNumElements() == 2))
+      return this->emitOpError(
+          "4th operand (Scale A) should be 2xi8 when precision is e2m1");
+    if (!(isa<VectorType>(ScaleBTy) &&
+          cast<VectorType>(ScaleBTy).getElementType().isInteger(8) &&
+          cast<VectorType>(ScaleBTy).getNumElements() == 2))
+      return this->emitOpError(
+          "5th operand (Scale B) should be 2xi8 when precision is e2m1");
+    break;
+  default:
+    return this->emitOpError(
+        "expecting precision type to be bf16, fp16, bf8, hf8, or u8");
+  }
+
   return success();
 }
 

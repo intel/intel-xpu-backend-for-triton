@@ -62,6 +62,16 @@ using namespace mlir::triton::gpu;
          std::to_string(ty.getIntOrFloatBitWidth());
 }
 
+[[maybe_unused]] static std::string getGenISATypeMangling(ArrayRef<Type> tys) {
+  std::string name;
+  for (int i = 0; i < tys.size(); i++) {
+    name += getGenISATypeMangling(tys[i]);
+    if (i != tys.size() - 1)
+      name += ".";
+  }
+  return name;
+}
+
 static SmallVector<Attribute>
 loadCacheControlToDecoration(Builder &builder, uint32_t operandNum,
                              TritonGEN::LoadCacheControl orig) {
@@ -766,6 +776,72 @@ private:
   }
 };
 
+struct TritonMatrixBlockScaleDPASLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::MatrixBlockScaleDPASOp> {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::MatrixBlockScaleDPASOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::MatrixBlockScaleDPASOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+
+    IntegerType int16Ty = int_ty(16);
+    IntegerType int32Ty = int_ty(32);
+
+    Type packedAType = int16Ty;
+    Type packedBType = int32Ty;
+
+    Value a = op.getA();
+    VectorType aOrigTy = cast<VectorType>(a.getType());
+    unsigned bitWidth = aOrigTy.getNumElements() *
+                        aOrigTy.getElementType().getIntOrFloatBitWidth();
+    VectorType aTy = VectorType::get(
+        bitWidth / packedAType.getIntOrFloatBitWidth(), packedAType);
+    if (aOrigTy != aTy)
+      a = rewriter.create<LLVM::BitcastOp>(loc, aTy, a);
+
+    Value b = op.getB();
+    VectorType bOrigTy = cast<VectorType>(b.getType());
+    bitWidth = bOrigTy.getNumElements() *
+               bOrigTy.getElementType().getIntOrFloatBitWidth();
+    VectorType bTy = VectorType::get(
+        bitWidth / packedBType.getIntOrFloatBitWidth(), packedBType);
+    if (bOrigTy != bTy)
+      b = rewriter.create<LLVM::BitcastOp>(loc, bTy, b);
+
+    Value c = op.getC();
+    VectorType cOrigTy = cast<VectorType>(c.getType());
+    assert(cOrigTy == op->getResultTypes()[0] &&
+           "Accumulator and result type mismatch");
+    VectorType cTy = cOrigTy;
+
+    Type scaleATy = op.getScaleA().getType();
+    Type scaleBTy = op.getScaleB().getType();
+
+    SmallVector<Type> funcTypes{cTy, cTy, aTy, bTy, scaleATy, scaleBTy};
+
+    std::string funcName =
+        "llvm.genx.GenISA.sub.group.bdpas." + getGenISATypeMangling(funcTypes);
+
+    SmallVector<Type> argTypes{cTy,      aTy,     bTy,    scaleATy,
+                               scaleBTy, int32Ty, int32Ty};
+
+    auto precA = rewriter.create<LLVM::ConstantOp>(
+        loc, int32Ty, static_cast<int>(op.getPa()));
+    auto precB = rewriter.create<LLVM::ConstantOp>(
+        loc, int32Ty, static_cast<int>(op.getPb()));
+    SmallVector<Value> args{c,     a,    b, op.getScaleA(), op.getScaleB(),
+                            precA, precB};
+
+    LLVM::CallOp call = intel::createDeviceFunctionCall(
+        rewriter, funcName, cTy, argTypes, args, {},
+        intel::convergentNoUnwindWillReturnAttrs);
+    rewriter.replaceOp(op, call);
+    return success();
+  }
+};
+
 struct TritonMatrix2DBlockLoadLowering
     : public ConvertOpToLLVMPattern<TritonGEN::Matrix2DBlockLoadOp> {
   using ConvertOpToLLVMPattern<
@@ -1236,7 +1312,8 @@ void mlir::triton::populateTritonGENToLLVMConversionPatterns(
       .add<TritonMatrix2DBlockLoadLowering, TritonMatrix2DBlockStoreLowering,
            TritonMatrix2DBlockPrefetchLowering>(converter, emitter);
 
-  patterns.add<TritonMatrixDPASLowering, TritonSubGroupBlockReadLowering,
+  patterns.add<TritonMatrixDPASLowering, TritonMatrixBlockScaleDPASLowering,
+               TritonSubGroupBlockReadLowering,
                TritonSubGroupBlockWriteLowering, TritonPredicatedLoadOpLowering,
                TritonPredicatedStoreOpLowering, TritonFToTf32OpLowering>(
       converter);
