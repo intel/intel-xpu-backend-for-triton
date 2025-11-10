@@ -20,7 +20,7 @@ done
 
 function libigc_version {
     if [[ $OSTYPE = msys ]]; then
-        pwsh -Command "
+        pwsh -Command '
             $igc = @(Get-Process -Name dwm -Module | Where-Object ModuleName -eq 'igc64.dll')
             if ($igc.Count -gt 1) {
                 Write-Host "MULTIPLE"
@@ -30,7 +30,7 @@ function libigc_version {
             }
             else {
                 Write-Host "Not Found"
-            }"
+            }'
         return
     fi
     if dpkg-query --show libigc2 &> /dev/null; then
