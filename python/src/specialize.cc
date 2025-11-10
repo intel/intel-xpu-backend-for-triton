@@ -464,6 +464,12 @@ void init_type_handler_cache() {
   }
 }
 
+#if PY_VERSION_HEX >= 0x030A0000
+#define IS_PY_NONE(obj) Py_IsNone(obj)
+#else
+#define IS_PY_NONE(obj) ((obj) == Py_None)
+#endif
+
 // specialization logic without passing of objects from Python (to be called in
 // specialize_impl only)
 std::pair<py::object, py::object> specialize_arg(PyObject *backend,
@@ -478,7 +484,7 @@ std::pair<py::object, py::object> specialize_arg(PyObject *backend,
   }
 
   // separate handling of None
-  if (Py_IsNone(arg)) {
+  if (IS_PY_NONE(arg)) {
     return {from_borrowed_ref(constexpr_str), py::none()};
   }
 
