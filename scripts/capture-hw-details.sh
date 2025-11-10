@@ -20,41 +20,17 @@ done
 
 function libigc_version {
     if [[ $OSTYPE = msys ]]; then
-                pwsh -Command "
-          try {
-            \$intel = Get-PnpDevice -Class Display -PresentOnly | Where-Object { \$_.FriendlyName -like '*Intel*' } | Select-Object -First 1
-            if (-not \$intel) { throw 'No Intel display adapter' }
-
-            # Get the bound signed driver (gives us oemXX.inf)
-            \$drv = Get-CimInstance Win32_PnPSignedDriver | Where-Object { \$_.DeviceID -eq \$intel.InstanceId } | Select-Object -First 1
-            if (-not \$drv) { throw 'No signed driver record' }
-            \$oemInf = \$drv.InfName   # e.g. oem42.inf
-
-            # Extract the Original Name from the oem*.inf (DCH packages keep it)
-            \$origLine = Select-String -Path (Join-Path \$env:windir 'INF' \$oemInf) -Pattern 'Original Name' -ErrorAction SilentlyContinue | Select-Object -First 1
-            if (\$origLine) {
-              \$originalInf = (\$origLine.Line -replace '.*Original Name\\s*-\\s*','').Trim()
-            } else {
-              # Fallback: if missing, guess by scanning for iigd_dch.inf style directories containing igc64.dll
-              \$originalInf = 'iigd_dch.inf'
+        pwsh -Command "
+            $igc = @(Get-Process -Name dwm -Module | Where-Object ModuleName -eq 'igc64.dll')
+            if ($igc.Count -gt 1) {
+                Write-Host "MULTIPLE"
             }
-
-            # Locate matching driver store directory
-            \$dir = Get-ChildItem (Join-Path \$env:windir 'System32\\DriverStore\\FileRepository') -Directory -Filter \"\$originalInf*amd64*\" 2>\$null |
-                   Where-Object { Test-Path (Join-Path \$_.FullName 'igc64.dll') } |
-                   Sort-Object LastWriteTime -Descending |
-                   Select-Object -First 1
-
-            if (-not \$dir) { throw 'No driver store directory with igc64.dll' }
-
-            \$dll = Join-Path \$dir.FullName 'igc64.dll'
-            if (-not (Test-Path \$dll)) { throw 'igc64.dll missing in chosen directory' }
-
-            (Get-Item \$dll).VersionInfo.ProductVersion
-          } catch {
-            'Not Found'
-          }
-        "
+            elseif ($igc.Count -eq 1) {
+                $igc[0].FileVersionInfo.FileVersion
+            }
+            else {
+                Write-Host "Not Found"
+            }"
         return
     fi
     if dpkg-query --show libigc2 &> /dev/null; then
