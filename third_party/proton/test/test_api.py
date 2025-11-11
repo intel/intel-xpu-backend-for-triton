@@ -355,7 +355,7 @@ def test_state(tmp_path: pathlib.Path):
         assert child["frame"]["name"] == "state"
         assert child["metrics"]["a"] == 1.0
     except AssertionError:
-        print(f"data: {data}")
+        print(f"proton data: {data}")
         raise
 
 
