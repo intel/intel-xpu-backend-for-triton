@@ -343,16 +343,21 @@ def test_state(tmp_path: pathlib.Path):
     with temp_file.open() as f:
         data = json.load(f)
     # test0->test1->state
-    assert len(data[0]["children"]) == 1
-    child = data[0]["children"][0]
-    assert child["frame"]["name"] == "test0"
-    assert len(child["children"]) == 1
-    child = child["children"][0]
-    assert child["frame"]["name"] == "test1"
-    assert len(child["children"]) == 1
-    child = child["children"][0]
-    assert child["frame"]["name"] == "state"
-    assert child["metrics"]["a"] == 1.0
+    try:
+        assert len(data[0]["children"]) == 1
+        child = data[0]["children"][0]
+        assert child["frame"]["name"] == "test0"
+        assert len(child["children"]) == 1
+        child = child["children"][0]
+        assert child["frame"]["name"] == "test1"
+        assert len(child["children"]) == 1
+        child = child["children"][0]
+        assert child["frame"]["name"] == "state"
+        assert child["metrics"]["a"] == 1.0
+    except AssertionError:
+        # FIXME: remove this try-except block when https://github.com/intel/intel-xpu-backend-for-triton/issues/5447 will be fixed
+        print(f"proton data: {data}")
+        raise
 
 
 def test_context_depth(tmp_path: pathlib.Path):
