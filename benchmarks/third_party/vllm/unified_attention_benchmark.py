@@ -105,9 +105,11 @@ def kernel_unified_attention_2d_td(
     FP8_MIN: tl.constexpr = float8_info.min,
     FP8_MAX: tl.constexpr = float8_info.max,
 ):
+    # pdb.set_trace()
     # index of the q_block in the entire batch, have some redundancy
     q_block_global_idx = tl.program_id(0)
     kv_head_idx = tl.program_id(1)
+    num_kv_heads = num_query_heads // num_queries_per_kv
 
     # Find the q_sequence index corresponding to the selected q_block
     seq_idx = find_seq_idx(query_start_len_ptr, q_block_global_idx, num_seqs, BLOCK_Q, True)
@@ -124,34 +126,36 @@ def kernel_unified_attention_2d_td(
     cur_batch_in_all_stop_index = tl.load(query_start_len_ptr + seq_idx + 1)
 
     # Length of a current q_sequence
-    cur_batch_query_len = cur_batch_in_all_stop_index \
-        - cur_batch_in_all_start_index
+    cur_batch_query_len = cur_batch_in_all_stop_index - cur_batch_in_all_start_index
 
     # We had some redundant q_blocks that are outside of the current q_sequence
     if q_block_local_idx * BLOCK_Q >= cur_batch_query_len:
         return
+    q_block_local_len = min(BLOCK_Q, cur_batch_query_len - q_block_local_idx * BLOCK_Q)
 
+    # BLOCK_Q will describe how many queries we want to cover in this tile, it can be just one
+    # BLOCK_Q = BLOCK_M // num_queries_per_kv
+    # BLOCK_M actually shows how many q_heads will be processed, BLOCK_Q is just a derivative
     # queries_per_kv_head padded we cover all of them in one block
-    # BLOCK_M covers either 1 query or several if num_queries_per_kv <= 8
     offs_m = tl.arange(0, BLOCK_M)
     # head_size padded, head size is the same for qkv
-    offs_d = tl.arange(0, HEAD_SIZE_PADDED)
+    # offs_d = tl.arange(0, HEAD_SIZE_PADDED)
     # tensor with local query positions with repeats for each kv_head
     query_pos = q_block_local_idx * BLOCK_Q + offs_m // num_queries_per_kv
     # query_end = q_block_local_idx * BLOCK_Q + min(BLOCK_Q, cur_batch_query_len - query_pos) // num_queries_per_kv
 
     #
-    query_offset_0 = cur_batch_in_all_start_index + query_pos
+    # query_offset_0 = cur_batch_in_all_start_index + query_pos
     query_offset_1 = kv_head_idx * num_queries_per_kv + \
         offs_m % num_queries_per_kv
-    query_offset = (query_offset_0[:, None] * query_stride_0 + query_offset_1[:, None] * query_stride_1 +
-                    offs_d[None, :])
+    # query_offset = (query_offset_0[:, None] * query_stride_0 +
+    #                 query_offset_1[:, None] * query_stride_1 +
+    #                 offs_d[None, :])
+
     # So we end up with shape: (num_queries_per_kv * several q tokens, HEAD_SIZE)
     # Queries will lie like: (q_heads for token 1, q_heads for token 2, ..., HEAD_SIZE)
-    # That's
-    # ()
 
-    dim_mask = tl.where(offs_d < HEAD_SIZE, 1, 0).to(tl.int1)
+    # dim_mask = tl.where(offs_d < HEAD_SIZE, 1, 0).to(tl.int1)
     query_mask_0 = tl.where(query_pos < cur_batch_query_len, 1, 0).to(tl.int1)
     query_mask_1 = tl.where(query_offset_1 < num_query_heads, 1, 0).to(tl.int1)
 
@@ -159,15 +163,22 @@ def kernel_unified_attention_2d_td(
     # We want to load all q_heads that correspond to the current kv_head and
     # Q : (BLOCK_M, HEAD_SIZE_PADDED)
     # Block pointer
-    # start = (query_ptr + (cur_batch_in_all_start_index + q_block_local_idx * BLOCK_Q) * query_stride_0 +
-    #          (kv_head_idx * num_queries_per_kv) * query_stride_1)
-    # Shape (num_queries_per_kv, HEAD_SIZE)
-    # stride (HEAD_SIZE, 1)
-    Q = tl.load(
-        query_ptr + query_offset,
-        mask=dim_mask[None, :] & query_mask_0[:, None] & query_mask_1[:, None],
-        other=0.0,
-    )
+    # Shape (query_tokens, HEAD_SIZE * num_queries_per_kv)
+    # stride (query_stride_0, 1)
+    # Then we need to reshape it to (query_tokens * num_queries_per_kv, HEAD_SIZE)
+    # Q = tl.load(
+    #     query_ptr + query_offset,
+    #     mask=dim_mask[None, :] & query_mask_0[:, None] & query_mask_1[:, None],
+    #     other=0.0,
+    # )
+    q_base = (query_ptr + (cur_batch_in_all_start_index + q_block_local_idx * BLOCK_Q) * query_stride_0 +
+              (kv_head_idx * num_queries_per_kv) * query_stride_1)
+    # query_to
+    q_desc = tl.make_tensor_descriptor(base=q_base, shape=(q_block_local_len, num_queries_per_kv, HEAD_SIZE),
+                                       strides=(query_stride_0, query_stride_1, 1),
+                                       block_shape=(BLOCK_Q, num_queries_per_kv, HEAD_SIZE_PADDED))
+    Q_td = q_desc.load([0, 0, 0])
+    Q = Q_td.reshape(BLOCK_M, HEAD_SIZE_PADDED)
 
     block_table_offset = seq_idx * block_table_stride
 
@@ -217,14 +228,26 @@ def kernel_unified_attention_2d_td(
 
         offs_n = tl.arange(0, BLOCK_SIZE)
 
-        v_offset = (physical_block_idx * stride_v_cache_0 + kv_head_idx * stride_v_cache_2 +
-                    offs_d[None, :] * stride_v_cache_3 + offs_n[:, None] * stride_v_cache_1)
+        # v_offset = (physical_block_idx * stride_v_cache_0 + kv_head_idx * stride_v_cache_2 +
+        #             offs_d[None, :] * stride_v_cache_3 + offs_n[:, None] * stride_v_cache_1)
 
-        k_offset = (physical_block_idx * stride_k_cache_0 + kv_head_idx * stride_k_cache_2 +
-                    offs_d[:, None] * stride_k_cache_3 + offs_n[None, :] * stride_k_cache_1)
+        # K shape (N_BLOCKS, BLOCK_SIZE, kv_heads, HEAD_SIZE)
+        # k_offset = (physical_block_idx * stride_k_cache_0 + kv_head_idx * stride_k_cache_2 +
+        #             offs_d[:, None] * stride_k_cache_3 + offs_n[None, :] * stride_k_cache_1)
 
+        v_base = value_cache_ptr + physical_block_idx * stride_v_cache_0 + kv_head_idx * stride_v_cache_2
+        v_desc = tl.make_tensor_descriptor(base=v_base, shape=(BLOCK_SIZE, num_kv_heads, HEAD_SIZE),
+                                           strides=(stride_v_cache_1, stride_v_cache_2, stride_v_cache_3),
+                                           block_shape=(BLOCK_SIZE, 1, HEAD_SIZE_PADDED))
+
+        k_base = key_cache_ptr + physical_block_idx * stride_k_cache_0 + kv_head_idx * stride_k_cache_2
+        k_desc = tl.make_tensor_descriptor(base=k_base, shape=(BLOCK_SIZE, num_kv_heads, HEAD_SIZE),
+                                           strides=(stride_k_cache_1, stride_k_cache_2, stride_k_cache_3),
+                                           block_shape=(BLOCK_SIZE, 1, HEAD_SIZE_PADDED))
         # K : (HEAD_SIZE, BLOCK_SIZE)
-        K_load = tl.load(key_cache_ptr + k_offset, mask=dim_mask[:, None], other=0.0)
+        # pdb.set_trace()
+        # K_load = tl.load(key_cache_ptr + k_offset, mask=dim_mask[:, None], other=0.0)
+        K_load = k_desc.load([0, 0, 0]).reshape(BLOCK_SIZE, HEAD_SIZE_PADDED).T
 
         if K_load.dtype.is_fp8():
             if Q.dtype.is_fp8():
@@ -235,7 +258,8 @@ def kernel_unified_attention_2d_td(
             K = K_load
 
         # V : (BLOCK_SIZE, HEAD_SIZE)
-        V_load = tl.load(value_cache_ptr + v_offset, mask=dim_mask[None, :], other=0.0)
+        # V_load = tl.load(value_cache_ptr + v_offset, mask=dim_mask[None, :], other=0.0)
+        V_load = v_desc.load([0, 0, 0]).reshape(BLOCK_SIZE, HEAD_SIZE_PADDED)
 
         if V_load.dtype.is_fp8():
             if Q.dtype.is_fp8():
@@ -309,14 +333,23 @@ def kernel_unified_attention_2d_td(
         acc = acc * tl.load(out_scale)
         acc = tl.clamp(acc, FP8_MIN, FP8_MAX)
 
-    output_offset = (query_offset_0[:, None] * output_stride_0 + query_offset_1[:, None] * output_stride_1 +
-                     offs_d[None, :])
+    # output_offset = (query_offset_0[:, None] * output_stride_0 + query_offset_1[:, None] * output_stride_1 +
+    #                  offs_d[None, :])
 
-    tl.store(
-        output_ptr + output_offset,
-        acc,
-        mask=dim_mask[None, :] & query_mask_0[:, None] & query_mask_1[:, None],
-    )
+    output_offset = (cur_batch_in_all_start_index + q_block_local_idx * BLOCK_Q) * output_stride_0 + (
+        kv_head_idx * num_queries_per_kv) * output_stride_1
+    output_base = output_ptr + output_offset
+    output_desc = tl.make_tensor_descriptor(base=output_base, shape=(q_block_local_len, num_queries_per_kv, HEAD_SIZE),
+                                            strides=(output_stride_0, output_stride_1, 1),
+                                            block_shape=(BLOCK_Q, num_queries_per_kv, HEAD_SIZE_PADDED))
+    # pdb.set_trace()
+    # output_desc.store([0, 0, 0], acc.view((BLOCK_M // num_queries_per_kv, num_queries_per_kv, HEAD_SIZE_PADDED)))
+    output_desc.store([0, 0, 0], acc.reshape(BLOCK_Q, num_queries_per_kv, HEAD_SIZE_PADDED))
+    # tl.store(
+    #     output_ptr + output_offset,
+    #     acc,
+    #     mask=dim_mask[None, :] & query_mask_0[:, None] & query_mask_1[:, None],
+    # )
 
 
 @triton.jit
@@ -704,6 +737,8 @@ def unified_attention_td(
     num_query_heads = q.shape[1]
     num_kv_heads = k.shape[2]
     num_queries_per_kv = num_query_heads // num_kv_heads
+    assert num_query_heads % num_kv_heads == 0, \
+        "num_query_heads must be divisible by num_kv_heads"
     head_size = q.shape[2]
 
     BLOCK_M = 16 if num_queries_per_kv <= 16 else triton.next_power_of_2(num_queries_per_kv)
@@ -774,7 +809,7 @@ def unified_attention_td(
     else:
         # for initial version, NUM_SEGMENTS = 16 is chosen as a default
         # value that showed good performance in tests
-        print("Calling 3d")
+        # print("Calling 3d")
         NUM_SEGMENTS = 16
 
         segm_output = torch.empty(
@@ -893,9 +928,9 @@ def ref_paged_attn(
         num_kv_blocks = (kv_len + block_size - 1) // block_size
         block_indices = block_tables[i, :num_kv_blocks]
 
-        k = key_cache[block_indices].view(-1, num_kv_heads, head_size)
+        k = key_cache[block_indices].reshape(-1, num_kv_heads, head_size)
         k = k[:kv_len]
-        v = value_cache[block_indices].view(-1, num_kv_heads, head_size)
+        v = value_cache[block_indices].reshape(-1, num_kv_heads, head_size)
         v = v[:kv_len]
 
         if q.shape[1] != k.shape[1]:
@@ -922,8 +957,8 @@ def ref_paged_attn(
 
 # Benchmark configurations for unified attention
 # (seq_lens, num_heads, head_size, block_size, dtype, sliding_window, soft_cap)
-NUM_HEADS = [(4, 4), (8, 2)]
-HEAD_SIZES = [128, 256]
+# NUM_HEADS = [(4, 4), (8, 2)]
+# HEAD_SIZES = [128, 256]
 PAGED_ATTENTION_MMAP_SIZE = 16
 # Models
 MODEL_CONFIGS = [
@@ -931,7 +966,7 @@ MODEL_CONFIGS = [
     # llama3-8B
     (32, 8, 128, torch.bfloat16, None),
     # llama3-70B
-    (64, 8, 128, torch.bfloat16, None)
+    # (64, 8, 128, torch.bfloat16, None)
 ]
 
 # QDTYPES = [None, torch.float8_e4m3fn] if not current_platform.is_rocm() else [
@@ -940,10 +975,12 @@ MODEL_CONFIGS = [
 # one value large enough to test overflow in index calculation.
 # one value small enough to test the schema op check
 NUM_BLOCKS = [32768, 2048]
-SEQ_LENS = [[(1, 1328), (5, 18), (129, 463)], [(1, 523), (1, 37), (1, 2011)]]
-SOFT_CAPS = [None, 50.0]
+NUM_BLOCKS = [32768]  #, 2048]
+# SEQ_LENS = [[(1, 1328), (5, 18), (129, 463)], [(1, 523), (1, 37), (1, 2011)]]
+SEQ_LENS = [[(1, 1328), (5, 18), (129, 463)]]  #, [(1, 523), (1, 37), (1, 2011)]]
+# SOFT_CAPS = [None, 50.0]
 SOFT_CAPS = [None]
-SLIDING_WINDOWS = [None, 256]
+# SLIDING_WINDOWS = [None, 256]
 SLIDING_WINDOWS = [None]
 ATTENTION_CONFIGS_BF16 = []
 for model_config, seq_len, sliding_window, soft_cap, num_blocks in product(MODEL_CONFIGS, SEQ_LENS, SLIDING_WINDOWS,
@@ -1009,6 +1046,9 @@ def get_unified_attention_benchmark(
         'triton-td': 'triton-td',
         'pytorch': 'pytorch',
     }
+    if os.getenv("TRITON_INTERPRET", "0") == "1":
+        # Skip triton providers if interpreter is used
+        del supported_providers['triton']
 
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
     ATTENTION_CONFIGS_FP8 = []
@@ -1143,7 +1183,7 @@ def get_unified_attention_benchmark(
 
         # Calculate performance metrics
         def gbps(ms):
-            n_bytes = dtype.itemsize if hasattr(dtype, 'itemsize') else 2
+            # n_bytes = dtype.itemsize if hasattr(dtype, 'itemsize') else 2
             # Memory: Query + Key cache + Value cache + Output
             # total_bytes = (
             #     total_query_tokens * num_query_heads * head_size * n_bytes +  # Query
