@@ -229,17 +229,11 @@ jobs:
           path: $HOME/.cache/pip
           key: pip-${{ inputs.python_version }}-${{ matrix.suite }}-${{ hashFiles('pyproject.toml', 'setup.py') }}-${{ env.PIP_CACHE_NUMBER }}
 
-      - name: Install Python (using actions/setup-python) ${{ inputs.python_version }}
-        if: ${{ !inputs.use_pyenv_python }}
-        uses: actions/setup-python@v6
+      - name: Install Python
+        uses: ./.github/actions/setup-python
         with:
-          python-version: ${{ inputs.python_version }}
-
-      - name: Install Python (from pyenv) ${{ inputs.python_version }}
-        if: ${{ inputs.use_pyenv_python }}
-        uses: ./.github/actions/setup-pyenv-python
-        with:
-          python-version: ${{ inputs.python_version }}
+          python_version: ${{ inputs.python_version }}
+          use_pyenv: ${{ inputs.use_pyenv_python }}
 
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
@@ -473,6 +467,12 @@ jobs:
       - integration-tests
       - reports
     steps:
+      - name: Install Python
+        uses: ./.github/actions/setup-python
+        with:
+          python_version: ${{ inputs.python_version }}
+          use_pyenv: ${{ inputs.use_pyenv_python }}
+
       - name: Ensure job status
         uses: re-actors/alls-green@05ac9388f0aebcb5727afa17fcccfecd6f8ec5fe
         with:
