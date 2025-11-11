@@ -467,6 +467,7 @@ jobs:
 
   check-jobs:
     runs-on: runner-0.0.22
+    if: always()
     needs:
       - build
       - integration-tests
