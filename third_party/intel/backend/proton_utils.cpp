@@ -81,7 +81,8 @@ extern "C" void getDeviceProperties(uint64_t index, uint32_t *clockRate,
   device_properties.stype = ZE_STRUCTURE_TYPE_DEVICE_PROPERTIES;
   check(zeDeviceGetProperties(phDevice, &device_properties),
         "zeDeviceGetProperties");
-  *clockRate = device_properties.coreClockRate;
+  // To align with other backends - convert MHz to KHz
+  *clockRate = device_properties.coreClockRate * 1000;
   *numSms =
       device_properties.numSlices * device_properties.numSubslicesPerSlice;
   // create a struct to hold device memory properties
@@ -96,7 +97,9 @@ extern "C" void getDeviceProperties(uint64_t index, uint32_t *clockRate,
   check(zeDeviceGetMemoryProperties(phDevice, &memoryCount, pMemoryProperties),
         "zeDeviceGetMemoryProperties");
 
-  *memoryClockRate = pMemoryProperties[0].maxClockRate;
+  // To align with other backends - convert MHz to KHz
+  // https://github.com/intel/compute-runtime/blob/cfa007e5519d3a038d726b62237b86fca9a49e2c/shared/source/xe_hpc_core/linux/product_helper_pvc.cpp#L51
+  *memoryClockRate = pMemoryProperties[0].maxClockRate * 1000;
   *busWidth = pMemoryProperties[0].maxBusWidth;
 
   delete[] pMemoryProperties;
