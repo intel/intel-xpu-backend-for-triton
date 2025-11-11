@@ -247,6 +247,7 @@ jobs:
           fi
 
       - name: Report environment details
+        timeout-minutes: 1
         run: |
           mkdir -p inductor_log
           TIMESTAMP=$(date '+%Y%m%d%H%M%S')

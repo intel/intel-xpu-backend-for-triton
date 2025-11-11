@@ -301,6 +301,7 @@ jobs:
 
 
       - name: Identify GPU
+        timeout-minutes: 1
         run: |
           # Initializing oneAPI to enable sycl-ls, which is used in capture-hw-details.sh on Windows.
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
