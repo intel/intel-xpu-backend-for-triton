@@ -355,6 +355,7 @@ def test_state(tmp_path: pathlib.Path):
         assert child["frame"]["name"] == "state"
         assert child["metrics"]["a"] == 1.0
     except AssertionError:
+        # FIXME: remove this try-except block when https://github.com/intel/intel-xpu-backend-for-triton/issues/5447 will be fixed
         print(f"proton data: {data}")
         raise
 
