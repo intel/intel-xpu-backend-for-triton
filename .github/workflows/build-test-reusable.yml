@@ -99,17 +99,11 @@ jobs:
           path: $HOME/.cache/pip
           key: pip-${{ inputs.python_version }}-${{ hashFiles('pyproject.toml', 'setup.py') }}-${{ env.PIP_CACHE_NUMBER }}
 
-      - name: Install Python (using actions/setup-python) ${{ inputs.python_version }}
-        if: ${{ !inputs.use_pyenv_python }}
-        uses: actions/setup-python@v6
+      - name: Install Python
+        uses: ./.github/actions/setup-python
         with:
-          python-version: ${{ inputs.python_version }}
-
-      - name: Install Python (from pyenv) ${{ inputs.python_version }}
-        if: ${{ inputs.use_pyenv_python }}
-        uses: ./.github/actions/setup-pyenv-python
-        with:
-          python-version: ${{ inputs.python_version }}
+          python_version: ${{ inputs.python_version }}
+          use_pyenv: ${{ inputs.use_pyenv_python }}
 
       # Build PyTorch here once, integration tests jobs should load it from cache.
       - name: Setup PyTorch
@@ -417,10 +411,11 @@ jobs:
           path: reports
           merge-multiple: true
 
-      - name: Install Python (using actions/setup-python) ${{ inputs.python_version }}
-        uses: actions/setup-python@v6
+      - name: Install Python
+        uses: ./.github/actions/setup-python
         with:
-          python-version: ${{ inputs.python_version }}
+          python_version: ${{ inputs.python_version }}
+          use_pyenv: ${{ inputs.use_pyenv_python }}
 
       - name: Install pass_rate dependencies
         run: |
