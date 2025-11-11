@@ -81,7 +81,8 @@ extern "C" void getDeviceProperties(uint64_t index, uint32_t *clockRate,
   device_properties.stype = ZE_STRUCTURE_TYPE_DEVICE_PROPERTIES;
   check(zeDeviceGetProperties(phDevice, &device_properties),
         "zeDeviceGetProperties");
-  *clockRate = device_properties.coreClockRate;
+  // To align with other backends - convert MHz to KHz
+  *clockRate = device_properties.coreClockRate * 1000;
   *numSms =
       device_properties.numSlices * device_properties.numSubslicesPerSlice;
   // create a struct to hold device memory properties
