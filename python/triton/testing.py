@@ -420,7 +420,6 @@ def perf_report(benchmarks):
 
 def get_dram_gbps(device=None):
     ''' return DRAM bandwidth in GB/s '''
-    import torch
 
     from .runtime import driver
     if device is None:
