@@ -53,7 +53,8 @@ extern "C" EXPORT_FUNC PyObject *get_device_properties(int device_id) {
 
   int multiprocessor_count =
       device_properties.numSlices * device_properties.numSubslicesPerSlice;
-  int sm_clock_rate = device_properties.coreClockRate;
+  // To align with other backends - convert MHz to KHz
+  int sm_clock_rate = device_properties.coreClockRate * 1000;
 
   ze_device_compute_properties_t compute_properties = {};
   compute_properties.stype = ZE_STRUCTURE_TYPE_DEVICE_COMPUTE_PROPERTIES;
@@ -76,7 +77,9 @@ extern "C" EXPORT_FUNC PyObject *get_device_properties(int device_id) {
   }
   zeDeviceGetMemoryProperties(phDevice, &memoryCount, pMemoryProperties);
 
-  int mem_clock_rate = pMemoryProperties[0].maxClockRate;
+  // To align with other backends - convert MHz to KHz
+  // https://github.com/intel/compute-runtime/blob/cfa007e5519d3a038d726b62237b86fca9a49e2c/shared/source/xe_hpc_core/linux/product_helper_pvc.cpp#L51
+  int mem_clock_rate = pMemoryProperties[0].maxClockRate * 1000;
   int mem_bus_width = pMemoryProperties[0].maxBusWidth;
 
   delete[] pMemoryProperties;
