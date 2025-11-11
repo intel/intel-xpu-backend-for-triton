@@ -423,6 +423,8 @@ def kernel_unified_attention_3d_td(segm_output_ptr,
     if q_block_local_idx * BLOCK_Q >= cur_batch_query_len:
         return
 
+    q_block_local_len = min(BLOCK_Q, cur_batch_query_len - q_block_local_idx * BLOCK_Q)
+
     # sequence len for this particular sequence
     seq_len = tl.load(seq_lens_ptr + seq_idx)
 
@@ -434,27 +436,23 @@ def kernel_unified_attention_3d_td(segm_output_ptr,
         return
 
     offs_m = tl.arange(0, BLOCK_M)
-    offs_d = tl.arange(0, HEAD_SIZE_PADDED)
 
     query_pos = q_block_local_idx * BLOCK_Q + offs_m // num_queries_per_kv
 
-    query_offset_0 = cur_batch_in_all_start_index + query_pos
     query_offset_1 = kv_head_idx * num_queries_per_kv + \
         offs_m % num_queries_per_kv
 
-    query_offset = (query_offset_0[:, None] * query_stride_0 + query_offset_1[:, None] * query_stride_1 +
-                    offs_d[None, :])
-
-    dim_mask = tl.where(offs_d < HEAD_SIZE, 1, 0).to(tl.int1)
     query_mask_0 = tl.where(query_pos < cur_batch_query_len, 1, 0).to(tl.int1)
     query_mask_1 = tl.where(query_offset_1 < num_query_heads, 1, 0).to(tl.int1)
 
-    # Q : (BLOCK_M, HEAD_SIZE_PADDED)
-    Q = tl.load(
-        query_ptr + query_offset,
-        mask=dim_mask[None, :] & query_mask_0[:, None] & query_mask_1[:, None],
-        other=0.0,
-    )
+    # Load Q using tensor descriptor (same as 2D case)
+    q_base = (query_ptr + (cur_batch_in_all_start_index + q_block_local_idx * BLOCK_Q) * query_stride_0 +
+              (kv_head_idx * num_queries_per_kv) * query_stride_1)
+    q_desc = tl.make_tensor_descriptor(base=q_base, shape=(q_block_local_len, num_queries_per_kv, HEAD_SIZE),
+                                       strides=(query_stride_0, query_stride_1, 1),
+                                       block_shape=(BLOCK_Q, num_queries_per_kv, HEAD_SIZE_PADDED))
+    Q_td = q_desc.load([0, 0, 0])
+    Q = Q_td.reshape(BLOCK_M, HEAD_SIZE_PADDED)
 
     block_table_offset = seq_idx * block_table_stride
 
@@ -495,14 +493,18 @@ def kernel_unified_attention_3d_td(segm_output_ptr,
 
         offs_n = tl.arange(0, BLOCK_SIZE)
 
-        v_offset = (physical_block_idx * stride_v_cache_0 + kv_head_idx * stride_v_cache_2 +
-                    offs_d[None, :] * stride_v_cache_3 + offs_n[:, None] * stride_v_cache_1)
+        # Use tensor descriptors for V and K (same as 2D case)
+        v_base = value_cache_ptr + physical_block_idx * stride_v_cache_0 + kv_head_idx * stride_v_cache_2
+        v_desc = tl.make_tensor_descriptor(base=v_base, shape=(BLOCK_SIZE, HEAD_SIZE),
+                                           strides=(stride_v_cache_1, stride_v_cache_3),
+                                           block_shape=(BLOCK_SIZE, HEAD_SIZE_PADDED))
 
-        k_offset = (physical_block_idx * stride_k_cache_0 + kv_head_idx * stride_k_cache_2 +
-                    offs_d[:, None] * stride_k_cache_3 + offs_n[None, :] * stride_k_cache_1)
+        k_base = key_cache_ptr + physical_block_idx * stride_k_cache_0 + kv_head_idx * stride_k_cache_2
+        k_desc = tl.make_tensor_descriptor(base=k_base, shape=(BLOCK_SIZE, HEAD_SIZE),
+                                           strides=(stride_k_cache_1, stride_k_cache_3),
+                                           block_shape=(BLOCK_SIZE, HEAD_SIZE_PADDED))
 
-        # K : (HEAD_SIZE, BLOCK_SIZE)
-        K_load = tl.load(key_cache_ptr + k_offset, mask=dim_mask[:, None], other=0.0)
+        K_load = k_desc.load([0, 0]).T
 
         if K_load.dtype.is_fp8():
             if Q.dtype.is_fp8():
@@ -512,8 +514,7 @@ def kernel_unified_attention_3d_td(segm_output_ptr,
         else:
             K = K_load
 
-        # V : (BLOCK_SIZE, HEAD_SIZE)
-        V_load = tl.load(value_cache_ptr + v_offset, mask=dim_mask[None, :], other=0.0)
+        V_load = v_desc.load([0, 0])
 
         if V_load.dtype.is_fp8():
             if Q.dtype.is_fp8():
@@ -581,17 +582,20 @@ def kernel_unified_attention_3d_td(segm_output_ptr,
         # acc : (BLOCK_M, HEAD_SIZE_PADDED)
         acc += tl.dot(P.to(V.dtype), V)
 
-    segm_output_offset = (query_offset_0[:, None].to(tl.int64) *
-                          (num_query_heads * NUM_SEGMENTS_PER_SEQ * HEAD_SIZE_PADDED) + query_offset_1[:, None] *
-                          (NUM_SEGMENTS_PER_SEQ * HEAD_SIZE_PADDED) + segm_idx * HEAD_SIZE_PADDED +
-                          tl.arange(0, HEAD_SIZE_PADDED)[None, :])
-    tl.store(
-        segm_output_ptr + segm_output_offset,
-        acc,
-        mask=dim_mask[None, :] & query_mask_0[:, None] & query_mask_1[:, None],
-    )
-    segm_offset = (query_offset_0.to(tl.int64) * (num_query_heads * NUM_SEGMENTS_PER_SEQ) +
-                   query_offset_1 * NUM_SEGMENTS_PER_SEQ + segm_idx)
+    # Store output using tensor descriptor (similar to 2D case but for segments)
+    segm_output_offset = (cur_batch_in_all_start_index + q_block_local_idx * BLOCK_Q) * (
+        num_query_heads * NUM_SEGMENTS_PER_SEQ * HEAD_SIZE_PADDED) + (kv_head_idx * num_queries_per_kv) * (
+            NUM_SEGMENTS_PER_SEQ * HEAD_SIZE_PADDED) + segm_idx * HEAD_SIZE_PADDED
+
+    segm_output_base = segm_output_ptr + segm_output_offset
+    segm_output_desc = tl.make_tensor_descriptor(
+        base=segm_output_base, shape=(q_block_local_len, num_queries_per_kv, HEAD_SIZE),
+        strides=(num_query_heads * NUM_SEGMENTS_PER_SEQ * HEAD_SIZE_PADDED, NUM_SEGMENTS_PER_SEQ * HEAD_SIZE_PADDED, 1),
+        block_shape=(BLOCK_Q, num_queries_per_kv, HEAD_SIZE_PADDED))
+    segm_output_desc.store([0, 0, 0], acc.reshape(BLOCK_Q, num_queries_per_kv, HEAD_SIZE_PADDED))
+
+    segm_offset = (cur_batch_in_all_start_index + query_pos).to(tl.int64) * (num_query_heads * NUM_SEGMENTS_PER_SEQ) + \
+                   query_offset_1 * NUM_SEGMENTS_PER_SEQ + segm_idx
     tl.store(segm_max_ptr + segm_offset, M, mask=query_mask_0 & query_mask_1)
     tl.store(segm_expsum_ptr + segm_offset, L, mask=query_mask_0 & query_mask_1)
 
@@ -983,9 +987,11 @@ MODEL_CONFIGS = [
 # one value large enough to test overflow in index calculation.
 # one value small enough to test the schema op check
 NUM_BLOCKS = [32768, 2048]
-NUM_BLOCKS = [32768]  #, 2048]
-# SEQ_LENS = [[(1, 1328), (5, 18), (129, 463)], [(1, 523), (1, 37), (1, 2011)]]
-SEQ_LENS = [[(1, 1328), (5, 18), (129, 463)]]  #, [(1, 523), (1, 37), (1, 2011)]]
+# NUM_BLOCKS = [32768]  #, 2048]
+SEQ_LENS = [[(1, 1328), (5, 18), (129, 463)], [(1, 523), (1, 37), (1, 2011)]]
+SEQ_LENS = [[(1, 1328), (5, 18), (129, 463)], [(1, 523), (1, 37), (1, 2011)],
+            [(1, k) for k in [1513, 245, 102, 123, 3454, 434, 345, 34]]]
+# SEQ_LENS = [[(1, 1328), (5, 18), (129, 463)]]  #, [(1, 523), (1, 37), (1, 2011)]]
 # SOFT_CAPS = [None, 50.0]
 SOFT_CAPS = [None]
 # SLIDING_WINDOWS = [None, 256]
