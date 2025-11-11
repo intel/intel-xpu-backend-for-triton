@@ -105,11 +105,9 @@ def kernel_unified_attention_2d_td(
     FP8_MIN: tl.constexpr = float8_info.min,
     FP8_MAX: tl.constexpr = float8_info.max,
 ):
-    # pdb.set_trace()
     # index of the q_block in the entire batch, have some redundancy
     q_block_global_idx = tl.program_id(0)
     kv_head_idx = tl.program_id(1)
-    num_kv_heads = num_query_heads // num_queries_per_kv
 
     # Find the q_sequence index corresponding to the selected q_block
     seq_idx = find_seq_idx(query_start_len_ptr, q_block_global_idx, num_seqs, BLOCK_Q, True)
@@ -179,6 +177,15 @@ def kernel_unified_attention_2d_td(
                                        block_shape=(BLOCK_Q, num_queries_per_kv, HEAD_SIZE_PADDED))
     Q_td = q_desc.load([0, 0, 0])
     Q = Q_td.reshape(BLOCK_M, HEAD_SIZE_PADDED)
+    # q_base = (query_ptr + (cur_batch_in_all_start_index + q_block_local_idx * BLOCK_Q) * query_stride_0 +
+    #           (kv_head_idx * num_queries_per_kv) * query_stride_1)
+    # q_desc = tl.make_tensor_descriptor(
+    #     base=q_base,
+    #     shape=(q_block_local_len, num_queries_per_kv * HEAD_SIZE),
+    #     strides=(query_stride_0, 1),
+    #     block_shape=(BLOCK_Q, num_queries_per_kv * HEAD_SIZE)
+    # )
+    # Q_raw = q_desc.load([0, 0])  # Shape: (BLOCK_Q, num_queries_per_kv * HEAD_SIZE_PADDED)
 
     block_table_offset = seq_idx * block_table_stride
 
@@ -236,18 +243,20 @@ def kernel_unified_attention_2d_td(
         #             offs_d[:, None] * stride_k_cache_3 + offs_n[None, :] * stride_k_cache_1)
 
         v_base = value_cache_ptr + physical_block_idx * stride_v_cache_0 + kv_head_idx * stride_v_cache_2
-        v_desc = tl.make_tensor_descriptor(base=v_base, shape=(BLOCK_SIZE, num_kv_heads, HEAD_SIZE),
-                                           strides=(stride_v_cache_1, stride_v_cache_2, stride_v_cache_3),
-                                           block_shape=(BLOCK_SIZE, 1, HEAD_SIZE_PADDED))
+        v_desc = tl.make_tensor_descriptor(base=v_base, shape=(BLOCK_SIZE, HEAD_SIZE),
+                                           strides=(stride_v_cache_1, stride_v_cache_3),
+                                           block_shape=(BLOCK_SIZE, HEAD_SIZE_PADDED))
 
         k_base = key_cache_ptr + physical_block_idx * stride_k_cache_0 + kv_head_idx * stride_k_cache_2
-        k_desc = tl.make_tensor_descriptor(base=k_base, shape=(BLOCK_SIZE, num_kv_heads, HEAD_SIZE),
-                                           strides=(stride_k_cache_1, stride_k_cache_2, stride_k_cache_3),
-                                           block_shape=(BLOCK_SIZE, 1, HEAD_SIZE_PADDED))
+        # k_desc = tl.make_tensor_descriptor(base=k_base, shape=(HEAD_SIZE, BLOCK_SIZE),
+        #                                    strides=(stride_k_cache_3, stride_k_cache_1),
+        #                                    block_shape=(HEAD_SIZE_PADDED, BLOCK_SIZE))
+        k_desc = tl.make_tensor_descriptor(base=k_base, shape=(BLOCK_SIZE, HEAD_SIZE),
+                                           strides=(stride_k_cache_1, stride_k_cache_3),
+                                           block_shape=(BLOCK_SIZE, HEAD_SIZE_PADDED))
         # K : (HEAD_SIZE, BLOCK_SIZE)
-        # pdb.set_trace()
         # K_load = tl.load(key_cache_ptr + k_offset, mask=dim_mask[:, None], other=0.0)
-        K_load = k_desc.load([0, 0, 0]).reshape(BLOCK_SIZE, HEAD_SIZE_PADDED).T
+        K_load = k_desc.load([0, 0]).T
 
         if K_load.dtype.is_fp8():
             if Q.dtype.is_fp8():
@@ -259,7 +268,7 @@ def kernel_unified_attention_2d_td(
 
         # V : (BLOCK_SIZE, HEAD_SIZE)
         # V_load = tl.load(value_cache_ptr + v_offset, mask=dim_mask[None, :], other=0.0)
-        V_load = v_desc.load([0, 0, 0]).reshape(BLOCK_SIZE, HEAD_SIZE_PADDED)
+        V_load = v_desc.load([0, 0])
 
         if V_load.dtype.is_fp8():
             if Q.dtype.is_fp8():
@@ -342,7 +351,6 @@ def kernel_unified_attention_2d_td(
     output_desc = tl.make_tensor_descriptor(base=output_base, shape=(q_block_local_len, num_queries_per_kv, HEAD_SIZE),
                                             strides=(output_stride_0, output_stride_1, 1),
                                             block_shape=(BLOCK_Q, num_queries_per_kv, HEAD_SIZE_PADDED))
-    # pdb.set_trace()
     # output_desc.store([0, 0, 0], acc.view((BLOCK_M // num_queries_per_kv, num_queries_per_kv, HEAD_SIZE_PADDED)))
     output_desc.store([0, 0, 0], acc.reshape(BLOCK_Q, num_queries_per_kv, HEAD_SIZE_PADDED))
     # tl.store(
