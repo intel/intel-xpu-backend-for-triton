@@ -270,6 +270,7 @@ jobs:
           echo "PTI_LIBS_DIR=$PTI_LIBS_DIR" | tee -a $GITHUB_ENV
 
       - name: Report environment details
+        timeout-minutes: 1
         run: |
           if [ "${{ matrix.suite }}" == "minicore" ]; then
             reports_file="reports/.env"
