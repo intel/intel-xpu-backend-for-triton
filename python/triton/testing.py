@@ -155,19 +155,14 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
     simulation_env = (os.getenv("TRITON_INTEL_ENABLE_XE4", "0") == "1") or (os.getenv("TRITON_INTEL_ENABLE_XE3P", "0")
                                                                             == "1")
     if simulation_env:
-        if warmup != 0:
-            import warnings
-            warnings.warn(
-                "Running benchmarking in the simulation mode with a non-zero warmup rounds. These will be skipped.")
-        if rep != 1:
-            import warnings
-            warnings.warn(
-                "Running benchmarking in the simulation mode with a redundant config (expecting rep=1, got {}). These iterations will slow down the execution without any benefit."
-                .format(rep))
+        import warnings
+        warnings.warn(
+            "Running benchmarking in the simulation, warmup and rep parameters will be ignored. A single run will be performed."
+        )
 
     # Estimate the runtime of the function
     if simulation_env:
-        estimate_ms = 1
+        estimate_ms = rep  # to always have n_repeat = 1
     else:
         start_event = di.Event(enable_timing=True)
         end_event = di.Event(enable_timing=True)
