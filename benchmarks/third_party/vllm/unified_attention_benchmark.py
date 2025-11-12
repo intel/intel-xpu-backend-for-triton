@@ -769,7 +769,6 @@ def unified_attention_td(
 
     # if batch contains a prefill
     if max_seqlen_q > 1 or total_num_q_blocks * num_kv_heads > 128:
-        print("Calling 2d")
         kernel_unified_attention_2d_td[(
             total_num_q_blocks,
             num_kv_heads,
@@ -821,7 +820,6 @@ def unified_attention_td(
     else:
         # for initial version, NUM_SEGMENTS = 16 is chosen as a default
         # value that showed good performance in tests
-        print("Calling 3d")
         NUM_SEGMENTS = 16
 
         segm_output = torch.empty(
@@ -987,15 +985,12 @@ MODEL_CONFIGS = [
 # one value large enough to test overflow in index calculation.
 # one value small enough to test the schema op check
 NUM_BLOCKS = [32768, 2048]
-# NUM_BLOCKS = [32768]  #, 2048]
 SEQ_LENS = [[(1, 1328), (5, 18), (129, 463)], [(1, 523), (1, 37), (1, 2011)]]
 SEQ_LENS = [[(1, 1328), (5, 18), (129, 463)], [(1, 523), (1, 37), (1, 2011)],
             [(1, k) for k in [1513, 245, 102, 123, 3454, 434, 345, 34]]]
 # SEQ_LENS = [[(1, 1328), (5, 18), (129, 463)]]  #, [(1, 523), (1, 37), (1, 2011)]]
-# SOFT_CAPS = [None, 50.0]
-SOFT_CAPS = [None]
-# SLIDING_WINDOWS = [None, 256]
-SLIDING_WINDOWS = [None]
+SOFT_CAPS = [None, 50.0]
+SLIDING_WINDOWS = [None, 256]
 ATTENTION_CONFIGS_BF16 = []
 for model_config, seq_len, sliding_window, soft_cap, num_blocks in product(MODEL_CONFIGS, SEQ_LENS, SLIDING_WINDOWS,
                                                                            SOFT_CAPS, NUM_BLOCKS):
@@ -1018,33 +1013,45 @@ for model_config, seq_len, sliding_window, soft_cap, num_blocks in product(MODEL
 #     (8, 256, 2048, 32, 8, 256, 32, torch.float8_e4m3fn, None, None),
 # ]
 
-DEVICE_NAME = torch.xpu.get_device_name()
-# DEVICE_TOTAL_MEMORY = torch.xpu.get_device_properties().total_memory
 
-# def is_enough_memory(x_val):
-#     num_seqs, max_query_len, max_kv_len, num_query_heads, num_kv_heads, head_size, block_size, dtype, sliding_window, soft_cap = x_val
-#     # Query: (total_query_tokens, num_query_heads, head_size)
-#     # Key/Value cache: (num_blocks, block_size, num_kv_heads, head_size) each
-#     # Output: (total_query_tokens, num_query_heads, head_size)
+def is_enough_memory(x_val):
+    q_heads, k_heads, head_size, dtype, qdtype, seq_lens, sliding_window, soft_cap, num_blocks, block_size = x_val
 
-#     total_query_tokens = num_seqs * max_query_len
-#     num_blocks = (num_seqs * max_kv_len + block_size - 1) // block_size
+    # Calculate total tokens
+    num_seqs = len(seq_lens)
+    query_lens = [x[0] for x in seq_lens]
+    total_query_tokens = sum(query_lens)
 
-#     n_bytes = dtype.itemsize if hasattr(dtype, 'itemsize') else 2
+    # Determine byte size based on dtype
+    if dtype == torch.float8_e4m3fn or (hasattr(dtype, 'itemsize') and dtype.itemsize == 1):
+        n_bytes = 1
+    elif hasattr(dtype, 'itemsize'):
+        n_bytes = dtype.itemsize
+    else:
+        n_bytes = 2  # Default for bfloat16
 
-#     required_memory = (
-#         total_query_tokens * num_query_heads * head_size * n_bytes +  # Query
-#         2 * num_blocks * block_size * num_kv_heads * head_size * n_bytes +  # Key + Value cache
-#         total_query_tokens * num_query_heads * head_size * 2 +  # Output (bf16)
-#         num_seqs * 128  # Metadata overhead
-#     )
+    # Calculate required memory
+    required_memory = (
+        total_query_tokens * q_heads * head_size * n_bytes +  # Query tensor
+        num_blocks * block_size * k_heads * head_size * n_bytes +  # Key cache
+        num_blocks * block_size * k_heads * head_size * n_bytes +  # Value cache
+        total_query_tokens * q_heads * head_size * 2 +  # Output (always bf16)
+        num_seqs * 128 +  # Metadata overhead (cu_seqlens, kv_lens, block_tables)
+        total_query_tokens * q_heads * 16 * head_size * 4  # Intermediate buffers for 3D path (segm_output, etc.)
+    )
 
-#     enough_memory = required_memory < DEVICE_TOTAL_MEMORY * 0.8  # Use 80% of memory
-#     if not enough_memory:
-#         print(f"'{x_val}' combination skipped for '{DEVICE_NAME}'; {required_memory=} but {DEVICE_TOTAL_MEMORY=}")
-#     return enough_memory
+    # Get device memory
+    DEVICE_NAME = torch.xpu.get_device_name()
+    DEVICE_TOTAL_MEMORY = torch.xpu.get_device_properties(0).total_memory
 
-# ATTENTION_CONFIGS_BF16 = [x_val for x_val in ATTENTION_CONFIGS_BF16 if is_enough_memory(x_val)]
+    # Use 80% of memory as threshold
+    enough_memory = required_memory < DEVICE_TOTAL_MEMORY * 0.8
+
+    if not enough_memory:
+        print(f"Configuration skipped for '{DEVICE_NAME}': required={required_memory / 1e9:.2f}GB, "
+              f"available={DEVICE_TOTAL_MEMORY * 0.8 / 1e9:.2f}GB")
+
+    return enough_memory
 
 
 def get_unified_attention_benchmark(
@@ -1222,6 +1229,5 @@ def get_unified_attention_benchmark(
 
 if __name__ == '__main__':
     # Run unified attention benchmark
-    print('Running unified attention benchmark...')
     _benchmark_attention = get_unified_attention_benchmark(fp8=(os.getenv('FP8', '0') == '1'), )
     _benchmark_attention.run(show_plots=False, print_data=True)
