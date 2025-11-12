@@ -620,3 +620,304 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 4, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1]}>
+#dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#dpas, kWidth=2}>
+#dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#dpas, kWidth=4}>
+#linear = #ttg.linear<{register = [[16, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0]], warp = [], block = []}>
+#linear1 = #ttg.linear<{register = [[8, 0], [16, 0]], lane = [[1, 0], [2, 0], [4, 0], [0, 0]], warp = [], block = []}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_block_scale_dpas} {
+  // CHECK: llvm.func spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.i8.i8(vector<8xf32>, vector<8xi16>, vector<8xi32>, i8, i8, i32, i32) -> vector<8xf32> attributes {convergent, no_unwind, will_return}
+  // CHECK-LABEL: scale_dot_f32_f32_bf8_bf8
+  tt.func @scale_dot_f32_f32_bf8_bf8(%a: tensor<16x32xf8E5M2, #dot_operand_a>, %b: tensor<32x16xf8E5M2, #dot_operand_b>, %c: tensor<16x16xf32, #dpas>, %scale_a: tensor<16x1xi8, #linear1>, %scale_b: tensor<16x1xi8, #linear>) {
+    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.i8.i8({{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}) {{.*}} : (vector<8xf32>, vector<8xi16>, vector<8xi32>, i8, i8, i32, i32) -> vector<8xf32>
+    %accumulator = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %c lhs = e5m2 rhs = e5m2 {fastMath = false} : tensor<16x32xf8E5M2, #dot_operand_a>, tensor<16x1xi8, #linear1> * tensor<32x16xf8E5M2, #dot_operand_b>, tensor<16x1xi8, #linear> -> tensor<16x16xf32, #dpas>
+    tt.return
+  }
+}
+
+// -----
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 4, fp4KPack = 2, threadsPerWarp = 16, warpsPerCTA = [4, 4], repCluster = [4, 4]}>
+#dot_operand_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 2}>
+#dot_operand_b = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 4}>
+#linear = #ttg.linear<{register = [[0, 1], [8, 0], [16, 0], [0, 2], [0, 4]], lane = [[1, 0], [2, 0], [4, 0], [0, 0]], warp = [[0, 0], [0, 0], [32, 0], [64, 0]], block = []}>
+#linear1 = #ttg.linear<{register = [[0, 1], [16, 0], [32, 0], [0, 2], [0, 4]], lane = [[1, 0], [2, 0], [4, 0], [8, 0]], warp = [[64, 0], [128, 0], [0, 0], [0, 0]], block = []}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_block_scale_dpas} {
+  // CHECK: llvm.func spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8(vector<8xf32>, vector<8xi16>, vector<8xi32>, vector<2xi8>, vector<2xi8>, i32, i32) -> vector<8xf32> attributes {convergent, no_unwind, will_return}
+  // CHECK-LABEL:   llvm.func spir_kernelcc @scale_dot_f32_f32_e2m1(
+  // CHECK-SAME:      %[[A:.*]]: !llvm.struct<({{.*}})>, %[[B:.*]]: !llvm.struct<({{.*}})>, %[[C:.*]]: !llvm.struct<{{.*}})>, %[[SCALE_A:.*]]: !llvm.struct<{{.*}})>, %[[SCALE_B:.*]]: !llvm.struct<({{.*}})>
+  tt.func @scale_dot_f32_f32_e2m1(%a: tensor<128x128xi8, #dot_operand_a>, %b: tensor<128x256xi8, #dot_operand_b>, %c: tensor<128x256xf32, #dpas>, %scale_a: tensor<128x8xi8, #linear>, %scale_b: tensor<256x8xi8, #linear1>) {
+    // COM: Check the scale A and scale B packing order.
+    // COM: The shape of scale A and scale B replica is [4, 4]
+    // COM: The replica order are [0, 4, 8, 12]
+    // COM:                       [1, 5, 9, 13]
+    // COM:                       [2, 6, 10,14]
+    // COM:                       [3, 7, 11,15]
+    // CHECK:           %[[SCALE_A_0:.*]] = llvm.extractvalue %[[SCALE_A]][0] : {{.*}}
+    // CHECK:           %[[SCALE_A_1:.*]] = llvm.extractvalue %[[SCALE_A]][1] : {{.*}}
+    // CHECK:           %[[SCALE_A_2:.*]] = llvm.extractvalue %[[SCALE_A]][2] : {{.*}}
+    // CHECK:           %[[SCALE_A_3:.*]] = llvm.extractvalue %[[SCALE_A]][3] : {{.*}}
+    // CHECK:           %[[SCALE_A_4:.*]] = llvm.extractvalue %[[SCALE_A]][4] : {{.*}}
+    // CHECK:           %[[SCALE_A_5:.*]] = llvm.extractvalue %[[SCALE_A]][5] : {{.*}}
+    // CHECK:           %[[SCALE_A_6:.*]] = llvm.extractvalue %[[SCALE_A]][6] : {{.*}}
+    // CHECK:           %[[SCALE_A_7:.*]] = llvm.extractvalue %[[SCALE_A]][7] : {{.*}}
+    // CHECK:           %[[SCALE_A_8:.*]] = llvm.extractvalue %[[SCALE_A]][8] : {{.*}}
+    // CHECK:           %[[SCALE_A_9:.*]] = llvm.extractvalue %[[SCALE_A]][9] : {{.*}}
+    // CHECK:           %[[SCALE_A_10:.*]] = llvm.extractvalue %[[SCALE_A]][10] : {{.*}}
+    // CHECK:           %[[SCALE_A_11:.*]] = llvm.extractvalue %[[SCALE_A]][11] : {{.*}}
+    // CHECK:           %[[SCALE_A_12:.*]] = llvm.extractvalue %[[SCALE_A]][12] : {{.*}}
+    // CHECK:           %[[SCALE_A_13:.*]] = llvm.extractvalue %[[SCALE_A]][13] : {{.*}}
+    // CHECK:           %[[SCALE_A_14:.*]] = llvm.extractvalue %[[SCALE_A]][14] : {{.*}}
+    // CHECK:           %[[SCALE_A_15:.*]] = llvm.extractvalue %[[SCALE_A]][15] : {{.*}}
+    // CHECK:           %[[SCALE_A_16:.*]] = llvm.extractvalue %[[SCALE_A]][16] : {{.*}}
+    // CHECK:           %[[SCALE_A_17:.*]] = llvm.extractvalue %[[SCALE_A]][17] : {{.*}}
+    // CHECK:           %[[SCALE_A_18:.*]] = llvm.extractvalue %[[SCALE_A]][18] : {{.*}}
+    // CHECK:           %[[SCALE_A_19:.*]] = llvm.extractvalue %[[SCALE_A]][19] : {{.*}}
+    // CHECK:           %[[SCALE_A_20:.*]] = llvm.extractvalue %[[SCALE_A]][20] : {{.*}}
+    // CHECK:           %[[SCALE_A_21:.*]] = llvm.extractvalue %[[SCALE_A]][21] : {{.*}}
+    // CHECK:           %[[SCALE_A_22:.*]] = llvm.extractvalue %[[SCALE_A]][22] : {{.*}}
+    // CHECK:           %[[SCALE_A_23:.*]] = llvm.extractvalue %[[SCALE_A]][23] : {{.*}}
+    // CHECK:           %[[SCALE_A_24:.*]] = llvm.extractvalue %[[SCALE_A]][24] : {{.*}}
+    // CHECK:           %[[SCALE_A_25:.*]] = llvm.extractvalue %[[SCALE_A]][25] : {{.*}}
+    // CHECK:           %[[SCALE_A_26:.*]] = llvm.extractvalue %[[SCALE_A]][26] : {{.*}}
+    // CHECK:           %[[SCALE_A_27:.*]] = llvm.extractvalue %[[SCALE_A]][27] : {{.*}}
+    // CHECK:           %[[SCALE_A_28:.*]] = llvm.extractvalue %[[SCALE_A]][28] : {{.*}}
+    // CHECK:           %[[SCALE_A_29:.*]] = llvm.extractvalue %[[SCALE_A]][29] : {{.*}}
+    // CHECK:           %[[SCALE_A_30:.*]] = llvm.extractvalue %[[SCALE_A]][30] : {{.*}}
+    // CHECK:           %[[SCALE_A_31:.*]] = llvm.extractvalue %[[SCALE_A]][31] : {{.*}}
+    // CHECK:           %[[VAL_1860:.*]] = llvm.insertelement %[[SCALE_A_0]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[PACKED_SCALE_A_0_0:.*]] = llvm.insertelement %[[SCALE_A_1]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[VAL_1862:.*]] = llvm.insertelement %[[SCALE_A_2]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[PACKED_SCALE_A_1_0:.*]] = llvm.insertelement %[[SCALE_A_3]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[VAL_1864:.*]] = llvm.insertelement %[[SCALE_A_4]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[PACKED_SCALE_A_2_0:.*]] = llvm.insertelement %[[SCALE_A_5]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[VAL_1866:.*]] = llvm.insertelement %[[SCALE_A_6]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[PACKED_SCALE_A_3_0:.*]] = llvm.insertelement %[[SCALE_A_7]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[VAL_1868:.*]] = llvm.insertelement %[[SCALE_A_8]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[PACKED_SCALE_A_0_1:.*]] = llvm.insertelement %[[SCALE_A_9]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[VAL_1870:.*]] = llvm.insertelement %[[SCALE_A_10]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[PACKED_SCALE_A_1_1:.*]] = llvm.insertelement %[[SCALE_A_11]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[VAL_1872:.*]] = llvm.insertelement %[[SCALE_A_12]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[PACKED_SCALE_A_2_1:.*]] = llvm.insertelement %[[SCALE_A_13]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[VAL_1874:.*]] = llvm.insertelement %[[SCALE_A_14]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[PACKED_SCALE_A_3_1:.*]] = llvm.insertelement %[[SCALE_A_15]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[VAL_1876:.*]] = llvm.insertelement %[[SCALE_A_16]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[PACKED_SCALE_A_0_2:.*]] = llvm.insertelement %[[SCALE_A_17]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[VAL_1878:.*]] = llvm.insertelement %[[SCALE_A_18]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[PACKED_SCALE_A_1_2:.*]] = llvm.insertelement %[[SCALE_A_19]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[VAL_1880:.*]] = llvm.insertelement %[[SCALE_A_20]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[PACKED_SCALE_A_2_2:.*]] = llvm.insertelement %[[SCALE_A_21]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[VAL_1882:.*]] = llvm.insertelement %[[SCALE_A_22]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[PACKED_SCALE_A_3_2:.*]] = llvm.insertelement %[[SCALE_A_23]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[VAL_1884:.*]] = llvm.insertelement %[[SCALE_A_24]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[PACKED_SCALE_A_0_3:.*]] = llvm.insertelement %[[SCALE_A_25]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[VAL_1886:.*]] = llvm.insertelement %[[SCALE_A_26]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[PACKED_SCALE_A_1_3:.*]] = llvm.insertelement %[[SCALE_A_27]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[VAL_1888:.*]] = llvm.insertelement %[[SCALE_A_28]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[PACKED_SCALE_A_2_3:.*]] = llvm.insertelement %[[SCALE_A_29]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[VAL_1890:.*]] = llvm.insertelement %[[SCALE_A_30]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[PACKED_SCALE_A_3_3:.*]] = llvm.insertelement %[[SCALE_A_31]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[SCALE_B_0:.*]] = llvm.extractvalue %[[SCALE_B]][0] : {{.*}}
+    // CHECK:           %[[SCALE_B_1:.*]] = llvm.extractvalue %[[SCALE_B]][1] : {{.*}}
+    // CHECK:           %[[SCALE_B_2:.*]] = llvm.extractvalue %[[SCALE_B]][2] : {{.*}}
+    // CHECK:           %[[SCALE_B_3:.*]] = llvm.extractvalue %[[SCALE_B]][3] : {{.*}}
+    // CHECK:           %[[SCALE_B_4:.*]] = llvm.extractvalue %[[SCALE_B]][4] : {{.*}}
+    // CHECK:           %[[SCALE_B_5:.*]] = llvm.extractvalue %[[SCALE_B]][5] : {{.*}}
+    // CHECK:           %[[SCALE_B_6:.*]] = llvm.extractvalue %[[SCALE_B]][6] : {{.*}}
+    // CHECK:           %[[SCALE_B_7:.*]] = llvm.extractvalue %[[SCALE_B]][7] : {{.*}}
+    // CHECK:           %[[SCALE_B_8:.*]] = llvm.extractvalue %[[SCALE_B]][8] : {{.*}}
+    // CHECK:           %[[SCALE_B_9:.*]] = llvm.extractvalue %[[SCALE_B]][9] : {{.*}}
+    // CHECK:           %[[SCALE_B_10:.*]] = llvm.extractvalue %[[SCALE_B]][10] : {{.*}}
+    // CHECK:           %[[SCALE_B_11:.*]] = llvm.extractvalue %[[SCALE_B]][11] : {{.*}}
+    // CHECK:           %[[SCALE_B_12:.*]] = llvm.extractvalue %[[SCALE_B]][12] : {{.*}}
+    // CHECK:           %[[SCALE_B_13:.*]] = llvm.extractvalue %[[SCALE_B]][13] : {{.*}}
+    // CHECK:           %[[SCALE_B_14:.*]] = llvm.extractvalue %[[SCALE_B]][14] : {{.*}}
+    // CHECK:           %[[SCALE_B_15:.*]] = llvm.extractvalue %[[SCALE_B]][15] : {{.*}}
+    // CHECK:           %[[SCALE_B_16:.*]] = llvm.extractvalue %[[SCALE_B]][16] : {{.*}}
+    // CHECK:           %[[SCALE_B_17:.*]] = llvm.extractvalue %[[SCALE_B]][17] : {{.*}}
+    // CHECK:           %[[SCALE_B_18:.*]] = llvm.extractvalue %[[SCALE_B]][18] : {{.*}}
+    // CHECK:           %[[SCALE_B_19:.*]] = llvm.extractvalue %[[SCALE_B]][19] : {{.*}}
+    // CHECK:           %[[SCALE_B_20:.*]] = llvm.extractvalue %[[SCALE_B]][20] : {{.*}}
+    // CHECK:           %[[SCALE_B_21:.*]] = llvm.extractvalue %[[SCALE_B]][21] : {{.*}}
+    // CHECK:           %[[SCALE_B_22:.*]] = llvm.extractvalue %[[SCALE_B]][22] : {{.*}}
+    // CHECK:           %[[SCALE_B_23:.*]] = llvm.extractvalue %[[SCALE_B]][23] : {{.*}}
+    // CHECK:           %[[SCALE_B_24:.*]] = llvm.extractvalue %[[SCALE_B]][24] : {{.*}}
+    // CHECK:           %[[SCALE_B_25:.*]] = llvm.extractvalue %[[SCALE_B]][25] : {{.*}}
+    // CHECK:           %[[SCALE_B_26:.*]] = llvm.extractvalue %[[SCALE_B]][26] : {{.*}}
+    // CHECK:           %[[SCALE_B_27:.*]] = llvm.extractvalue %[[SCALE_B]][27] : {{.*}}
+    // CHECK:           %[[SCALE_B_28:.*]] = llvm.extractvalue %[[SCALE_B]][28] : {{.*}}
+    // CHECK:           %[[SCALE_B_29:.*]] = llvm.extractvalue %[[SCALE_B]][29] : {{.*}}
+    // CHECK:           %[[SCALE_B_30:.*]] = llvm.extractvalue %[[SCALE_B]][30] : {{.*}}
+    // CHECK:           %[[SCALE_B_31:.*]] = llvm.extractvalue %[[SCALE_B]][31] : {{.*}}
+    // CHECK:           %[[VAL_1924:.*]] = llvm.insertelement %[[SCALE_B_0]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[PACKED_SCALE_B_0_0:.*]] = llvm.insertelement %[[SCALE_B_1]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[VAL_1926:.*]] = llvm.insertelement %[[SCALE_B_2]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[PACKED_SCALE_B_1_0:.*]] = llvm.insertelement %[[SCALE_B_3]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[VAL_1928:.*]] = llvm.insertelement %[[SCALE_B_4]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[PACKED_SCALE_B_2_0:.*]] = llvm.insertelement %[[SCALE_B_5]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[VAL_1930:.*]] = llvm.insertelement %[[SCALE_B_6]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[PACKED_SCALE_B_3_0:.*]] = llvm.insertelement %[[SCALE_B_7]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[VAL_1932:.*]] = llvm.insertelement %[[SCALE_B_8]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[PACKED_SCALE_B_0_1:.*]] = llvm.insertelement %[[SCALE_B_9]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[VAL_1934:.*]] = llvm.insertelement %[[SCALE_B_10]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[PACKED_SCALE_B_1_1:.*]] = llvm.insertelement %[[SCALE_B_11]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[VAL_1936:.*]] = llvm.insertelement %[[SCALE_B_12]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[PACKED_SCALE_B_2_1:.*]] = llvm.insertelement %[[SCALE_B_13]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[VAL_1938:.*]] = llvm.insertelement %[[SCALE_B_14]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[PACKED_SCALE_B_3_1:.*]] = llvm.insertelement %[[SCALE_B_15]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[VAL_1940:.*]] = llvm.insertelement %[[SCALE_B_16]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[PACKED_SCALE_B_0_2:.*]] = llvm.insertelement %[[SCALE_B_17]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[VAL_1942:.*]] = llvm.insertelement %[[SCALE_B_18]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[PACKED_SCALE_B_1_2:.*]] = llvm.insertelement %[[SCALE_B_19]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[VAL_1944:.*]] = llvm.insertelement %[[SCALE_B_20]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[PACKED_SCALE_B_2_2:.*]] = llvm.insertelement %[[SCALE_B_21]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[VAL_1946:.*]] = llvm.insertelement %[[SCALE_B_22]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[PACKED_SCALE_B_3_2:.*]] = llvm.insertelement %[[SCALE_B_23]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[VAL_1948:.*]] = llvm.insertelement %[[SCALE_B_24]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[PACKED_SCALE_B_0_3:.*]] = llvm.insertelement %[[SCALE_B_25]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[VAL_1950:.*]] = llvm.insertelement %[[SCALE_B_26]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[PACKED_SCALE_B_1_3:.*]] = llvm.insertelement %[[SCALE_B_27]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[VAL_1952:.*]] = llvm.insertelement %[[SCALE_B_28]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[PACKED_SCALE_B_2_3:.*]] = llvm.insertelement %[[SCALE_B_29]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[VAL_1954:.*]] = llvm.insertelement %[[SCALE_B_30]], {{.*}} : vector<2xi8>
+    // CHECK:           %[[PACKED_SCALE_B_3_3:.*]] = llvm.insertelement %[[SCALE_B_31]], {{.*}} : vector<2xi8>
+    // COM: GEMM tile computation with packed scale A and packed scale B in M, N, K order.
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M0_N0_K0:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_0_0]], %[[PACKED_SCALE_B_0_0]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M0_N1_K0:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_0_0]], %[[PACKED_SCALE_B_1_0]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M0_N2_K0:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_0_0]], %[[PACKED_SCALE_B_2_0]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M0_N3_K0:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_0_0]], %[[PACKED_SCALE_B_3_0]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M1_N0_K0:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_1_0]], %[[PACKED_SCALE_B_0_0]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M1_N1_K0:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_1_0]], %[[PACKED_SCALE_B_1_0]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M1_N2_K0:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_1_0]], %[[PACKED_SCALE_B_2_0]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M1_N3_K0:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_1_0]], %[[PACKED_SCALE_B_3_0]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M2_N0_K0:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_2_0]], %[[PACKED_SCALE_B_0_0]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M2_N1_K0:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_2_0]], %[[PACKED_SCALE_B_1_0]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M2_N2_K0:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_2_0]], %[[PACKED_SCALE_B_2_0]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M2_N3_K0:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_2_0]], %[[PACKED_SCALE_B_3_0]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M3_N0_K0:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_3_0]], %[[PACKED_SCALE_B_0_0]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M3_N1_K0:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_3_0]], %[[PACKED_SCALE_B_1_0]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M3_N2_K0:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_3_0]], %[[PACKED_SCALE_B_2_0]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M3_N3_K0:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_3_0]], %[[PACKED_SCALE_B_3_0]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M0_N0_K1:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_0_1]], %[[PACKED_SCALE_B_0_1]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M0_N1_K1:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_0_1]], %[[PACKED_SCALE_B_1_1]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M0_N2_K1:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_0_1]], %[[PACKED_SCALE_B_2_1]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M0_N3_K1:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_0_1]], %[[PACKED_SCALE_B_3_1]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M1_N0_K1:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_1_1]], %[[PACKED_SCALE_B_0_1]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M1_N1_K1:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_1_1]], %[[PACKED_SCALE_B_1_1]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M1_N2_K1:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_1_1]], %[[PACKED_SCALE_B_2_1]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M1_N3_K1:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_1_1]], %[[PACKED_SCALE_B_3_1]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M2_N0_K1:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_2_1]], %[[PACKED_SCALE_B_0_1]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M2_N1_K1:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_2_1]], %[[PACKED_SCALE_B_1_1]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M2_N2_K1:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_2_1]], %[[PACKED_SCALE_B_2_1]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M2_N3_K1:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_2_1]], %[[PACKED_SCALE_B_3_1]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M3_N0_K1:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_3_1]], %[[PACKED_SCALE_B_0_1]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M3_N1_K1:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_3_1]], %[[PACKED_SCALE_B_1_1]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M3_N2_K1:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_3_1]], %[[PACKED_SCALE_B_2_1]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M3_N3_K1:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_3_1]], %[[PACKED_SCALE_B_3_1]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M0_N0_K2:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_0_2]], %[[PACKED_SCALE_B_0_2]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M0_N1_K2:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_0_2]], %[[PACKED_SCALE_B_1_2]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M0_N2_K2:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_0_2]], %[[PACKED_SCALE_B_2_2]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M0_N3_K2:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_0_2]], %[[PACKED_SCALE_B_3_2]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M1_N0_K2:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_1_2]], %[[PACKED_SCALE_B_0_2]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M1_N1_K2:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_1_2]], %[[PACKED_SCALE_B_1_2]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M1_N2_K2:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_1_2]], %[[PACKED_SCALE_B_2_2]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M1_N3_K2:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_1_2]], %[[PACKED_SCALE_B_3_2]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M2_N0_K2:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_2_2]], %[[PACKED_SCALE_B_0_2]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M2_N1_K2:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_2_2]], %[[PACKED_SCALE_B_1_2]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M2_N2_K2:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_2_2]], %[[PACKED_SCALE_B_2_2]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M2_N3_K2:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_2_2]], %[[PACKED_SCALE_B_3_2]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M3_N0_K2:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_3_2]], %[[PACKED_SCALE_B_0_2]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M3_N1_K2:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_3_2]], %[[PACKED_SCALE_B_1_2]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M3_N2_K2:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_3_2]], %[[PACKED_SCALE_B_2_2]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M3_N3_K2:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_3_2]], %[[PACKED_SCALE_B_3_2]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M0_N0_K3:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_0_3]], %[[PACKED_SCALE_B_0_3]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M0_N1_K3:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_0_3]], %[[PACKED_SCALE_B_1_3]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M0_N2_K3:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_0_3]], %[[PACKED_SCALE_B_2_3]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M0_N3_K3:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_0_3]], %[[PACKED_SCALE_B_3_3]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M1_N0_K3:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_1_3]], %[[PACKED_SCALE_B_0_3]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M1_N1_K3:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_1_3]], %[[PACKED_SCALE_B_1_3]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M1_N2_K3:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_1_3]], %[[PACKED_SCALE_B_2_3]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M1_N3_K3:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_1_3]], %[[PACKED_SCALE_B_3_3]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M2_N0_K3:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_2_3]], %[[PACKED_SCALE_B_0_3]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M2_N1_K3:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_2_3]], %[[PACKED_SCALE_B_1_3]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M2_N2_K3:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_2_3]], %[[PACKED_SCALE_B_2_3]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M2_N3_K3:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_2_3]], %[[PACKED_SCALE_B_3_3]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M3_N0_K3:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_3_3]], %[[PACKED_SCALE_B_0_3]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M3_N1_K3:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_3_3]], %[[PACKED_SCALE_B_1_3]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M3_N2_K3:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_3_3]], %[[PACKED_SCALE_B_2_3]], {{.*}}, {{.*}}) {{.*}}
+    // NO-AGGRESSIVE-REUSE:           %[[GEMM_TILE_M3_N3_K3:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_3_3]], %[[PACKED_SCALE_B_3_3]], {{.*}}, {{.*}}) {{.*}}
+
+    // COM: A different order for aggressive reuse weight in DPAS engine operands cache.
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M0_N0_K0:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_0_0]], %[[PACKED_SCALE_B_0_0]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M0_N1_K0:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_0_0]], %[[PACKED_SCALE_B_1_0]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M0_N2_K0:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_0_0]], %[[PACKED_SCALE_B_2_0]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M0_N3_K0:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_0_0]], %[[PACKED_SCALE_B_3_0]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M1_N3_K0:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_1_0]], %[[PACKED_SCALE_B_3_0]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M1_N2_K0:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_1_0]], %[[PACKED_SCALE_B_2_0]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M1_N1_K0:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_1_0]], %[[PACKED_SCALE_B_1_0]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M1_N0_K0:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_1_0]], %[[PACKED_SCALE_B_0_0]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M2_N0_K0:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_2_0]], %[[PACKED_SCALE_B_0_0]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M2_N1_K0:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_2_0]], %[[PACKED_SCALE_B_1_0]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M2_N2_K0:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_2_0]], %[[PACKED_SCALE_B_2_0]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M2_N3_K0:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_2_0]], %[[PACKED_SCALE_B_3_0]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M3_N3_K0:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_3_0]], %[[PACKED_SCALE_B_3_0]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M3_N2_K0:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_3_0]], %[[PACKED_SCALE_B_2_0]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M3_N1_K0:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_3_0]], %[[PACKED_SCALE_B_1_0]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M3_N0_K0:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_3_0]], %[[PACKED_SCALE_B_0_0]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M0_N0_K1:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_0_1]], %[[PACKED_SCALE_B_0_1]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M0_N1_K1:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_0_1]], %[[PACKED_SCALE_B_1_1]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M0_N2_K1:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_0_1]], %[[PACKED_SCALE_B_2_1]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M0_N3_K1:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_0_1]], %[[PACKED_SCALE_B_3_1]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M1_N3_K1:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_1_1]], %[[PACKED_SCALE_B_3_1]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M1_N2_K1:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_1_1]], %[[PACKED_SCALE_B_2_1]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M1_N1_K1:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_1_1]], %[[PACKED_SCALE_B_1_1]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M1_N0_K1:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_1_1]], %[[PACKED_SCALE_B_0_1]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M2_N0_K1:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_2_1]], %[[PACKED_SCALE_B_0_1]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M2_N1_K1:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_2_1]], %[[PACKED_SCALE_B_1_1]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M2_N2_K1:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_2_1]], %[[PACKED_SCALE_B_2_1]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M2_N3_K1:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_2_1]], %[[PACKED_SCALE_B_3_1]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M3_N3_K1:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_3_1]], %[[PACKED_SCALE_B_3_1]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M3_N2_K1:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_3_1]], %[[PACKED_SCALE_B_2_1]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M3_N1_K1:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_3_1]], %[[PACKED_SCALE_B_1_1]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M3_N0_K1:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_3_1]], %[[PACKED_SCALE_B_0_1]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M0_N0_K2:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_0_2]], %[[PACKED_SCALE_B_0_2]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M0_N1_K2:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_0_2]], %[[PACKED_SCALE_B_1_2]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M0_N2_K2:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_0_2]], %[[PACKED_SCALE_B_2_2]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M0_N3_K2:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_0_2]], %[[PACKED_SCALE_B_3_2]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M1_N3_K2:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_1_2]], %[[PACKED_SCALE_B_3_2]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M1_N2_K2:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_1_2]], %[[PACKED_SCALE_B_2_2]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M1_N1_K2:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_1_2]], %[[PACKED_SCALE_B_1_2]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M1_N0_K2:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_1_2]], %[[PACKED_SCALE_B_0_2]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M2_N0_K2:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_2_2]], %[[PACKED_SCALE_B_0_2]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M2_N1_K2:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_2_2]], %[[PACKED_SCALE_B_1_2]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M2_N2_K2:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_2_2]], %[[PACKED_SCALE_B_2_2]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M2_N3_K2:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_2_2]], %[[PACKED_SCALE_B_3_2]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M3_N3_K2:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_3_2]], %[[PACKED_SCALE_B_3_2]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M3_N2_K2:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_3_2]], %[[PACKED_SCALE_B_2_2]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M3_N1_K2:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_3_2]], %[[PACKED_SCALE_B_1_2]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M3_N0_K2:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_3_2]], %[[PACKED_SCALE_B_0_2]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M0_N0_K3:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_0_3]], %[[PACKED_SCALE_B_0_3]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M0_N1_K3:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_0_3]], %[[PACKED_SCALE_B_1_3]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M0_N2_K3:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_0_3]], %[[PACKED_SCALE_B_2_3]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M0_N3_K3:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_0_3]], %[[PACKED_SCALE_B_3_3]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M1_N3_K3:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_1_3]], %[[PACKED_SCALE_B_3_3]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M1_N2_K3:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_1_3]], %[[PACKED_SCALE_B_2_3]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M1_N1_K3:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_1_3]], %[[PACKED_SCALE_B_1_3]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M1_N0_K3:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_1_3]], %[[PACKED_SCALE_B_0_3]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M2_N0_K3:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_2_3]], %[[PACKED_SCALE_B_0_3]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M2_N1_K3:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_2_3]], %[[PACKED_SCALE_B_1_3]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M2_N2_K3:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_2_3]], %[[PACKED_SCALE_B_2_3]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M2_N3_K3:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_2_3]], %[[PACKED_SCALE_B_3_3]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M3_N3_K3:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_3_3]], %[[PACKED_SCALE_B_3_3]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M3_N2_K3:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_3_3]], %[[PACKED_SCALE_B_2_3]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M3_N1_K3:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_3_3]], %[[PACKED_SCALE_B_1_3]], {{.*}}, {{.*}}) {{.*}}
+    // AGGRESSIVE-REUSE:           %[[GEMM_TILE_M3_N0_K3:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8({{.*}}, {{.*}}, {{.*}}, %[[PACKED_SCALE_A_3_3]], %[[PACKED_SCALE_B_0_3]], {{.*}}, {{.*}}) {{.*}}
+    %accumulator = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %c lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<128x128xi8, #dot_operand_a>, tensor<128x8xi8, #linear> * tensor<128x256xi8, #dot_operand_b>, tensor<256x8xi8, #linear1> -> tensor<128x256xf32, #dpas>
+    tt.return
+  }
+}

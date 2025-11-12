@@ -102,6 +102,12 @@ public:
       Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
       return {cTy, cTy, aTy, bTy};
     }
+    case DPASEngineType::FP32_FP32_FP4_FP4: {
+      Type cTy = vec_ty(fp32Ty, elemNumC);
+      Type aTy = vec_ty(i16Ty, elemNumA / 2);             // pack scalar to i16.
+      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
+      return {cTy, cTy, aTy, bTy};
+    }
     default:
       llvm::report_fatal_error("Unsupported dpas type found");
     }
@@ -127,7 +133,8 @@ public:
   ///      gen.matrix.dpas C, A, B {pa, pb, rc=M, sd=8}
   ///        : (vector<8xf32>, vector<4xi32>, vector<4xi32>) -> vector<8xf32>
   ///
-  LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor) const {
+  template <typename OpTy>
+  LogicalResult convertDot(OpTy op, typename OpTy::Adaptor adaptor) const {
     Value A = op.getA(), B = op.getB(), C = op.getC(), D = op.getResult();
     Value loadedA = adaptor.getA(), loadedB = adaptor.getB(),
           loadedC = adaptor.getC();
@@ -172,12 +179,34 @@ public:
         typeConverter->convertType(CTensorTy.getElementType()),
         DpasEncodingAttr::OpIdx::OperandC);
 
+    ValueTable scaleA, scaleB;
+    if constexpr (std::is_same<OpTy, DotScaledOp>::value) {
+      auto scaleAVal = adaptor.getAScale();
+      if (scaleAVal) {
+        scaleA = getScaleValuesFromDotOperandLayoutStruct(
+            scaleAVal, repBatch, repM, repK, 3 /*opIdx*/);
+      }
+
+      auto scaleBVal = adaptor.getBScale();
+      if (scaleBVal) {
+        scaleB = getScaleValuesFromDotOperandLayoutStruct(
+            scaleBVal, repBatch, repN, repK, 4 /*opIdx*/);
+      }
+    }
+
     Type resElemTy = DTensorTy.getElementType();
 
-    TritonGEN::PrecisionType APrecision =
-                                 getElementPrecision(ATensorTy, resElemTy),
-                             BPrecision =
-                                 getElementPrecision(BTensorTy, resElemTy);
+    TritonGEN::PrecisionType APrecision;
+    TritonGEN::PrecisionType BPrecision;
+    if constexpr (std::is_same<OpTy, DotScaledOp>::value) {
+      auto aElemtype = adaptor.getAElemType();
+      APrecision = getElementPrecision(aElemtype);
+      auto bElemtype = adaptor.getBElemType();
+      BPrecision = getElementPrecision(bElemtype);
+    } else {
+      APrecision = getElementPrecision(ATensorTy, resElemTy),
+      BPrecision = getElementPrecision(BTensorTy, resElemTy);
+    }
 
     assert(APrecision == BPrecision &&
            "A and B precision enumerators do not match");
@@ -202,9 +231,17 @@ public:
           TritonGEN::PrecisionTypeAttr::get(B.getContext(), BPrecision);
       auto RC = IntegerAttr::get(rewriter.getIntegerType(32),
                                  dpasEncoding.getRepeatCount());
-      fc.at({b, m, n}) = rewriter.create<TritonGEN::MatrixDPASOp>(
-          loc, dTy, tb.bitcast(valc, cTy), tb.bitcast(valA, aTy),
-          tb.bitcast(valB, bTy), pA, pB, RC);
+      if constexpr (std::is_same<OpTy, DotScaledOp>::value) {
+        Value sA = scaleA.at({b, m, k});
+        Value sB = scaleB.at({b, n, k});
+        fc.at({b, m, n}) = rewriter.create<TritonGEN::MatrixBlockScaleDPASOp>(
+            loc, dTy, tb.bitcast(valc, cTy), tb.bitcast(valA, aTy),
+            tb.bitcast(valB, bTy), sA, sB, pA, pB, RC);
+      } else {
+        fc.at({b, m, n}) = rewriter.create<TritonGEN::MatrixDPASOp>(
+            loc, dTy, tb.bitcast(valc, cTy), tb.bitcast(valA, aTy),
+            tb.bitcast(valB, bTy), pA, pB, RC);
+      }
     };
 
     ArrayRef<unsigned> repCluster = dpasEncoding.getRepCluster();
@@ -383,6 +420,63 @@ private:
     return vals;
   }
 
+  ValueTable getScaleValuesFromDotOperandLayoutStruct(Value val, int64_t batch,
+                                                      int64_t outer,
+                                                      int64_t inner,
+                                                      unsigned opIdx) const {
+    SmallVector<Value> elems = unpackLLElements(loc, val, rewriter);
+
+    ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
+    size_t rank = repCluster.size();
+    unsigned repClusterOuter = 0u;
+    unsigned repClusterInner = 0u;
+    switch (opIdx) {
+    case 3:
+      // operand scale A
+      repClusterOuter = repCluster[rank - 2];
+      repClusterInner = 1;
+      break;
+    case 4:
+      // operand scale B
+      repClusterInner = 1;
+      repClusterOuter = repCluster[rank - 1];
+      break;
+    default:
+      llvm_unreachable("error");
+    }
+
+    size_t totalElems = elems.size();
+    unsigned packedElem = totalElems / (batch * outer * inner *
+                                        repClusterOuter * repClusterInner);
+    int offset = 0;
+    auto tb = TritonLLVMOpBuilder(loc, rewriter);
+    ValueTable vals;
+    for (unsigned b = 0; b < batch; ++b) {
+      for (int i = 0; i < outer; ++i) {
+        for (int j = 0; j < inner; ++j) {
+          for (int repOuter = 0; repOuter < repClusterOuter; ++repOuter) {
+            for (int repInner = 0; repInner < repClusterInner; ++repInner) {
+              Value matVal;
+              if (packedElem != 1) {
+                VectorType scaleOpTy = vec_ty(i8_ty, packedElem);
+                matVal = rewriter.create<LLVM::UndefOp>(loc, scaleOpTy);
+                for (int k = 0; k < packedElem; ++k)
+                  matVal =
+                      tb.insert_element(matVal, elems[offset++], tb.i32_val(k));
+              } else
+                matVal = elems[offset++];
+
+              vals[{b, i * repClusterOuter + repOuter,
+                    j * repClusterInner + repInner}] = matVal;
+            }
+          }
+        }
+      }
+    }
+
+    return vals;
+  }
+
   /// Return the precision for the given tensor type (the type of A or B) and
   /// result element type.
   TritonGEN::PrecisionType getElementPrecision(RankedTensorType tensorTy,
@@ -393,7 +487,6 @@ private:
     Type elemType = tensorTy.getElementType();
     unsigned width = elemType.getIntOrFloatBitWidth();
     assert(width <= 32 && "Unexpected width");
-
     if (isa<FloatType>(resElemType)) {
       if (width == 32)
         return TritonGEN::PrecisionType::TF32;
@@ -403,12 +496,32 @@ private:
         return TritonGEN::PrecisionType::FP16;
       if (isa<Float8E5M2Type>(elemType))
         return TritonGEN::PrecisionType::F8E5M2;
-      if (isa<Float8E4M3FNType>(elemType)) {
+      if (isa<Float8E4M3FNType>(elemType))
         return TritonGEN::PrecisionType::F8E4M3FN;
-      }
     } else if (width == 8) {
       return elemType.isUnsignedInteger() ? TritonGEN::PrecisionType::U8
                                           : TritonGEN::PrecisionType::S8;
+    }
+
+    return TritonGEN::PrecisionType::UNUSED;
+  }
+
+  /// Return the precision for the given tensor type (the type of A or B).
+  TritonGEN::PrecisionType
+  getElementPrecision(ScaleDotElemType elemType) const {
+    switch (elemType) {
+    case ScaleDotElemType::E2M1:
+      return TritonGEN::PrecisionType::F4E2M1;
+    case ScaleDotElemType::BF16:
+      return TritonGEN::PrecisionType::BF16;
+    case ScaleDotElemType::FP16:
+      return TritonGEN::PrecisionType::FP16;
+    case ScaleDotElemType::E4M3:
+      return TritonGEN::PrecisionType::F8E4M3FN;
+    case ScaleDotElemType::E5M2:
+      return TritonGEN::PrecisionType::F8E5M2;
+    default:
+      llvm::report_fatal_error("Unsupported ScaleDotElemType found");
     }
 
     return TritonGEN::PrecisionType::UNUSED;
@@ -424,11 +537,13 @@ private:
 } // namespace
 
 namespace fma_details {
-LogicalResult convertDPAS(triton::DotOp op, triton::DotOp::Adaptor adaptor,
+template <typename OpTy>
+LogicalResult convertDPAS(OpTy op, typename OpTy::Adaptor adaptor,
                           TritonIntelGPUToLLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter) {
   LLVM_DEBUG({
-    auto module = op->getParentOfType<ModuleOp>();
+    Operation *opPtr = op.getOperation();
+    auto module = opPtr->getParentOfType<ModuleOp>();
     llvm::dbgs() << "module before DPAS generation\n";
     module->dump();
   });
@@ -458,4 +573,15 @@ LogicalResult convertDPAS(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 
   return helper.convertDot(op, adaptor);
 }
+
+template LogicalResult
+convertDPAS<DotOp>(DotOp op, DotOp::Adaptor adaptor,
+                   TritonIntelGPUToLLVMTypeConverter *typeConverter,
+                   ConversionPatternRewriter &rewriter);
+
+template LogicalResult
+convertDPAS<DotScaledOp>(DotScaledOp op, DotScaledOp::Adaptor adaptor,
+                         TritonIntelGPUToLLVMTypeConverter *typeConverter,
+                         ConversionPatternRewriter &rewriter);
+
 } // namespace fma_details
