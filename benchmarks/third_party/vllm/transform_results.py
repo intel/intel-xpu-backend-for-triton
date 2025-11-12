@@ -32,7 +32,16 @@ def parse_csv(csv_file_path, tag, bench_group, benchmark, param_cols):
     current_datetime = datetime.now().isoformat()
 
     # Create params for all rows vectorized
-    df['params'] = df.apply(lambda row: json.dumps({p: int(row[p]) for p in param_cols}), axis=1)
+    def serialize_params(row):
+        param2val = {}
+        for p in param_cols:
+            try:
+                param2val[p] = int(row[p])
+            except ValueError:
+                param2val[p] = str(row[p])
+        return json.dumps(param2val)
+
+    df['params'] = df.apply(serialize_params, axis=1)
 
     # Define compiler columns
     compilers = [('triton', 'triton-TFlops'), ('pytorch', 'pytorch-TFlops'), ('triton-td', 'triton-td-TFlops')]
