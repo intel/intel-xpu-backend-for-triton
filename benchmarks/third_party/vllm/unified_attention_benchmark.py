@@ -821,7 +821,7 @@ def unified_attention_td(
     else:
         # for initial version, NUM_SEGMENTS = 16 is chosen as a default
         # value that showed good performance in tests
-        # print("Calling 3d")
+        print("Calling 3d")
         NUM_SEGMENTS = 16
 
         segm_output = torch.empty(
@@ -1105,8 +1105,7 @@ def get_unified_attention_benchmark(
         key_cache = torch.randn(num_blocks, block_size, k_heads, head_size, dtype=dtype)
         value_cache = torch.randn_like(key_cache)
         cu_query_lens = torch.tensor([0] + query_lens, dtype=torch.int32).cumsum(dim=0, dtype=torch.int32)
-        kv_lens_list = kv_lens  # Preserve the original list
-        kv_lens = torch.tensor(kv_lens, dtype=torch.int32)
+        kv_lens_tensor = torch.tensor(kv_lens, dtype=torch.int32)
 
         max_num_blocks_per_seq = (max_kv_len + block_size - 1) // block_size
         block_tables = torch.randint(0, num_blocks, (num_seqs, max_num_blocks_per_seq), dtype=torch.int32)
@@ -1136,7 +1135,7 @@ def get_unified_attention_benchmark(
                 key_cache=key_cache,
                 value_cache=value_cache,
                 query_lens=query_lens,
-                kv_lens=kv_lens,
+                kv_lens=kv_lens_tensor,
                 block_tables=block_tables,
                 scale=scale,
                 sliding_window=sliding_window,
@@ -1167,7 +1166,7 @@ def get_unified_attention_benchmark(
                     v=maybe_quantized_value_cache,
                     out=output,
                     cu_seqlens_q=cu_query_lens,
-                    seqused_k=kv_lens,
+                    seqused_k=kv_lens_tensor,
                     max_seqlen_q=max_query_len,
                     max_seqlen_k=max_kv_len,
                     softmax_scale=scale,
@@ -1197,20 +1196,20 @@ def get_unified_attention_benchmark(
 
         # Calculate performance metrics
         def gbps(ms):
-            # n_bytes = dtype.itemsize if hasattr(dtype, 'itemsize') else 2
+            n_bytes = dtype.itemsize if hasattr(dtype, 'itemsize') else 2
+            total_query_tokens = sum(query_lens)
             # Memory: Query + Key cache + Value cache + Output
-            # total_bytes = (
-            #     total_query_tokens * num_query_heads * head_size * n_bytes +  # Query
-            #     sum(kv_lens) * num_kv_heads * head_size * n_bytes * 2 +      # KV cache accessed
-            #     total_query_tokens * num_query_heads * head_size * 2          # Output
-            # )
-            total_bytes = 1
+            total_bytes = (
+                total_query_tokens * q_heads * head_size * n_bytes +  # Query
+                sum(kv_lens) * k_heads * head_size * n_bytes * 2 +  # KV cache accessed
+                total_query_tokens * q_heads * head_size * 2  # Output
+            )
             return total_bytes * (1e-9) / (ms * 1e-3)
 
         def tflops(ms):
             # Attention FLOPs: Q@K (2*d*seq_len*kv_len) + Softmax (~seq_len*kv_len) + Attn@V (2*d*seq_len*kv_len)
             total_flops = 0
-            for i, (q_len, kv_len) in enumerate(zip(query_lens, kv_lens_list)):
+            for i, (q_len, kv_len) in enumerate(zip(query_lens, kv_lens)):
                 # Q@K^T and Attn@V operations
                 flops_per_head = 2 * head_size * q_len * kv_len * 2  # 2 matmuls
                 total_flops += flops_per_head * q_heads
