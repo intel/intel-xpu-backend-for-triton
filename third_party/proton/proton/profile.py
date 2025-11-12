@@ -25,7 +25,7 @@ def _select_backend() -> str:
         global UTILS_CACHE_PATH
         UTILS_CACHE_PATH = triton.runtime.driver.active.build_proton_help_lib()
         try:
-            if files := importlib.metadata.files('intel-pti') is not None:
+            if (files := importlib.metadata.files('intel-pti')) is not None:
                 for f in files:
                     if f.name == 'libpti_view.so':
                         os.environ["TRITON_XPUPTI_LIB_PATH"] = str(pathlib.Path(f.locate()).parent.resolve())
