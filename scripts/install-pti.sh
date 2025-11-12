@@ -51,11 +51,12 @@ function build_level_zero {
   echo "${LEVEL_ZERO_VERSION}" | awk -F. '{print $3}' > VERSION_PATCH
   mkdir build
   cd build
-  cmake .. -DCMAKE_BUILD_TYPE=Release
+  L0_INSTALL_PATH="$LEVEL_ZERO_PROJ/level-zero-${LEVEL_ZERO_VERSION}/install"
+  cmake .. -DCMAKE_INSTALL_PREFIX="$L0_INSTALL_PATH" -DCMAKE_BUILD_TYPE=Release
   cmake --build . --config Release --parallel "$(nproc)"
-  # cmake --build . --config Release --target install
-  export LEVELZERO_INCLUDE_DIR="$LEVEL_ZERO_PROJ/level-zero-${LEVEL_ZERO_VERSION}"
-  export LEVELZERO_LIBRARY="$LEVEL_ZERO_PROJ/level-zero-${LEVEL_ZERO_VERSION}/build/lib/libze_loader.so"
+  cmake --build . --config Release --target install
+  export LEVELZERO_INCLUDE_DIR="$L0_INSTALL_PATH"
+  export LEVELZERO_LIBRARY="$L0_INSTALL_PATH/lib/libze_loader.so"
 }
 
 function build_pti {
