@@ -1,0 +1,23 @@
+name: setup-python
+description: Sets up python
+inputs:
+  python_version:
+    description: Python version
+    default: "3.10"
+  use_pyenv:
+    description: Use pyenv to install Python
+    default: "false"
+runs:
+  using: "composite"
+  steps:
+    - name: Install Python (using actions/setup-python) ${{ inputs.python_version }}
+      if: ${{ !inputs.use_pyenv }}
+      uses: actions/setup-python@v6
+      with:
+        python-version: ${{ inputs.python_version }}
+
+    - name: Install Python (from pyenv) ${{ inputs.python_version }}
+      if: ${{ inputs.use_pyenv }}
+      uses: ./.github/actions/setup-pyenv-python
+      with:
+        python-version: ${{ inputs.python_version }}
