@@ -77,7 +77,7 @@ def main():
     parser.add_argument("--out-path", "-o", type=Path, default=None, help="Out filename")
     parser.add_argument("--signature", "-s", type=str, help="Signature of the kernel", required=True)
     parser.add_argument("--grid", "-g", type=str, help="Launch grid of the kernel", required=True)
-    parser.add_argument("--grf-mode", "-gm", type=str, default="large", help="Detemine spv build flags")
+    parser.add_argument("--grf-mode", "-gm", type=str, default="256", help="Detemine spv build flags")
     parser.add_argument("--generate-native-code", "-gnc", action="store_true",
                         help="Generate native binary instead of SPV for XPU")
     cli_args = parser.parse_args()

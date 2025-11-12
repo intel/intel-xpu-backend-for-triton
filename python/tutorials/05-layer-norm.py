@@ -258,7 +258,7 @@ class LayerNorm(torch.autograd.Function):
         _layer_norm_fwd_fused[(M, )](  #
             x_arg, y, weight, bias, mean, rstd,  #
             x_arg.stride(0), N, eps,  #
-            BLOCK_SIZE=BLOCK_SIZE, num_warps=num_warps, num_ctas=1, grf_mode='large')
+            BLOCK_SIZE=BLOCK_SIZE, num_warps=num_warps, num_ctas=1, grf_mode='256')
         ctx.save_for_backward(x, weight, bias, mean, rstd)
         ctx.BLOCK_SIZE = BLOCK_SIZE
         ctx.num_warps = num_warps
@@ -290,13 +290,13 @@ class LayerNorm(torch.autograd.Function):
             x_arg.stride(0), N,  #
             BLOCK_SIZE_N=ctx.BLOCK_SIZE,  #
             GROUP_SIZE_M=GROUP_SIZE_M,  #
-            num_warps=ctx.num_warps, grf_mode='large')
+            num_warps=ctx.num_warps, grf_mode='256')
         grid = lambda meta: (triton.cdiv(N, meta['BLOCK_SIZE_N']), )
         # accumulate partial sums in separate kernel
         _layer_norm_bwd_dwdb[grid](
             _dw, _db, dw, db, min(GROUP_SIZE_M, M), N,  #
             BLOCK_SIZE_M=32,  #
-            BLOCK_SIZE_N=128, num_warps=ctx.num_warps, num_ctas=1, grf_mode='large')
+            BLOCK_SIZE_N=128, num_warps=ctx.num_warps, num_ctas=1, grf_mode='256')
         return dx, None, dw, db, None
 
 

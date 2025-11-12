@@ -1,0 +1,607 @@
+name: Build and test reusable workflow running on JGS simulator splitting test groups on multiple runners
+run-name: ${{ inputs.run_name }} - ${{ inputs.python_version }} - ${{ inputs.runner_label || 'default'}}
+
+on:
+  workflow_call:
+    inputs:
+      device:
+        description: Device
+        type: string
+        default: jgs
+      driver_version:
+        description: Driver version
+        type: string
+        default: rolling
+      runner_label:
+        description: Runner label, keep empty for default
+        type: string
+        default: ""
+      pytorch_ref:
+        description: PyTorch ref, keep empty for default
+        type: string
+        default: ""
+      pytorch_mode:
+        description: PyTorch mode, source or wheels or JGS pytorch artifactory revision
+        type: string
+        default: jgs_artifactory_revision
+      pytorch_jgs_artifactory_revision:
+        description: PyTorch JGS artifactory revision, used only if pytorch_mode is 'jgs_artifactory_revision'
+        type: string
+        default: ""
+      oneapi_mode:
+        description: oneAPI mode, DLE or DPCPP_JGS
+        type: string
+        default: DPCPP_JGS_revision
+      dpcpp_jgs_revision:
+        description: DPCPP_JGS revision, used only if oneapi_mode is 'DPCPP_JGS_revision'
+        type: string
+        default: ""
+      python_version:
+        description: Python version
+        type: string
+        required: true
+      upload_test_reports:
+        description: Upload test reports
+        type: boolean
+        default: false
+      ignore_errors:
+        description: Ignore test errors
+        type: boolean
+        default: false
+      skip_list:
+        description: Skip list
+        type: string
+        default: ""
+      run_name:
+        description: Custom run name
+        type: string
+        default: Build and test
+      build_llvm:
+        description: Build LLVM
+        type: boolean
+        default: false
+      enable_unskip:
+        description: Ignore pytest.skip
+        type: boolean
+        default: false
+      use_pyenv_python:
+        description: Use Python built with pyenv
+        type: boolean
+        default: false
+      use_spirv_backend:
+        description: Use SPIR-V backend
+        type: boolean
+        default: false
+      enable_e2e_tests:
+        description: Enable E2E tests
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  # Needed to get the called workflow reference
+  id-token: write
+
+env:
+  TRITON_DISABLE_LINE_INFO: 1
+  TEST_UNSKIP: ${{ inputs.enable_unskip }}
+  LLVM_REPO: ${{ inputs.device == 'jgs' && 'intel-innersource/drivers.gpu.compiler.llvm-pisa' || 'llvm/llvm-project' }}
+  PYTEST_MAX_PROCESSES: 1
+  # Increase this value to reset cache
+  PIP_CACHE_NUMBER: 1
+  NUM_SHARDS: 50
+  PARALLEL_SUITES: "minicore mxfp scaled_dot gluon triton-kernels"
+  SEQUENTIAL_SUITES: "rest scaled_dot_tutorial tutorial-fa-64 tutorial-fa-128-fwdfp8 tutorial-fa-128-nofwdfp8"
+
+jobs:
+  build:
+    name: Build
+    timeout-minutes: 720
+    runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}"]', inputs.device, inputs.driver_version)) }}
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      oneapi-cache-key: ${{ steps.setup-oneapi.outputs.cache-key }}
+      pytorch-jgs-cache-key: ${{ steps.setup-pytorch-jgs.outputs.cache-key }}
+      test-triton-command: ${{ steps.test-triton.outputs.command }}
+      integration-tests-matrix: ${{ steps.test-triton.outputs.matrix }}
+    steps:
+      - name: Print inputs
+        run: |
+          cat <<EOF
+          ${{ toJSON(inputs) }}
+          EOF
+
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup ONE API environment
+        id: setup-oneapi
+        uses: ./.github/actions/setup-oneapi-env
+        with:
+          oneapi_mode: ${{ inputs.oneapi_mode }}
+          dpcpp_jgs_revision: ${{ inputs.dpcpp_jgs_revision }}
+
+      - name: Debug oneapi
+        run: |
+          echo OneAPI cache key: ${{ steps.setup-oneapi.outputs.cache-key }}
+
+      - name: Load pip cache
+        id: pip-cache
+        uses: ./.github/actions/load
+        with:
+          path: $HOME/.cache/pip
+          key: pip-${{ inputs.python_version }}-${{ hashFiles('pyproject.toml', 'setup.py') }}-${{ env.PIP_CACHE_NUMBER }}
+
+      - name: Install Python (using actions/setup-python) ${{ inputs.python_version }}
+        if: ${{ !inputs.use_pyenv_python }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Install Python (from pyenv) ${{ inputs.python_version }}
+        if: ${{ inputs.use_pyenv_python }}
+        uses: ./.github/actions/setup-pyenv-python
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Start JGS simulator
+        if: inputs.device == 'jgs'
+        id: start-simulator
+        uses: ./.github/actions/start-simulator
+
+      # Build PyTorch here once, integration tests jobs should load it from cache.
+      - name: Setup upstream PyTorch from sources or wheels
+        if: inputs.pytorch_mode == 'source' || inputs.pytorch_mode == 'wheels'
+        uses: ./.github/actions/setup-pytorch
+        with:
+          ref: ${{ inputs.pytorch_ref }}
+          mode: ${{ inputs.pytorch_mode }}
+          jgs_env: ${{ inputs.device == 'jgs' }}
+
+      - name: Setup PyTorch from JGS artifactory
+        id: setup-pytorch-jgs
+        if: inputs.pytorch_mode == 'jgs_artifactory_revision' || inputs.pytorch_mode == 'jgs_artifactory_latest'
+        uses: ./.github/actions/setup-pytorch-jgs
+        with:
+          pytorch_mode: ${{ inputs.pytorch_mode }}
+          pytorch_jgs_artifactory_revision: ${{ inputs.pytorch_jgs_artifactory_revision }}
+
+      - name: Debug pytorch jgs
+        run: |
+          echo PyTorch JGS cache key: ${{ steps.setup-pytorch-jgs.outputs.cache-key }}
+
+      - name: Build Proton with XPU support
+        if: inputs.driver_version == 'rolling' && inputs.device == 'max1100'
+        run: |
+          echo TRITON_BUILD_PROTON_XPU=1 | tee -a $GITHUB_ENV
+
+      - name: Build Triton
+        uses: ./.github/actions/setup-triton
+        with:
+          build_llvm: ${{ inputs.build_llvm || inputs.device == 'jgs' }}
+          llvm_repo: ${{ env.LLVM_REPO }}
+          use_spirv_backend: ${{ inputs.use_spirv_backend }}
+          gh_token: ${{ secrets.GLADOS_TOKEN }}
+          command: >
+            DEBUG=1
+            python setup.py bdist_wheel && pip install dist/*.whl
+
+      - name: Set test-triton command line
+        id: test-triton
+        run: |
+          skiplist="$GITHUB_WORKSPACE/scripts/skiplist/default"
+
+          if [[ -n "${{ inputs.skip_list }}" ]]; then
+            skiplist="$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.skip_list }}"
+          elif [[ -n "${{ inputs.driver_version }}" ]]; then
+            skiplist="$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.driver_version }}"
+          fi
+
+          if [ -d "$skiplist" ]; then
+            skiplist="--skip-list $skiplist"
+          else
+            skiplist="--skip-list $GITHUB_WORKSPACE/scripts/skiplist/default"
+          fi
+
+          TRITON_TEST_CMD="${{ inputs.device == 'jgs' && 'export PATH="$HOME/packages/llvm/bin:$PATH" && source /simulator/simulator-env.sh && ' }}bash -x scripts/test-triton.sh --skip-pip-install --warning-reports --skip-pytorch-install --reports-dir $GITHUB_WORKSPACE/reports ${{ inputs.ignore_errors && '--ignore-errors' || '' }} $skiplist"
+          echo "command=$TRITON_TEST_CMD" | tee -a $GITHUB_OUTPUT
+          echo "TRITON_TEST_CMD=$TRITON_TEST_CMD" | tee -a $GITHUB_ENV
+
+          echo matrix="[$( (for k in ${SEQUENTIAL_SUITES}; do echo -n { \"suite\": \"$k\" }, ; done ; for i in ${PARALLEL_SUITES}; do for j in $(seq 0 $[NUM_SHARDS-1]); do echo -n { \"suite\": \"$i\", \"shard_id\": $j }, ; done; done) | sed -e 's/,$//')]" | tee -a $GITHUB_OUTPUT
+
+      - name: Install test dependencies
+        run: |
+          pip install -r scripts/requirements-test.txt git+https://github.com/kwasd/pytest-capturewarnings-ng@v1.2.0
+          pip install git+https://github.com/vlad-penkin/pytest-skip.git
+
+      # Unit tests require `build` directory.
+      - name: Run unit tests
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --unit
+
+      # Instrumentation tests require `build` directory.
+      - name: Run instrumentation tests
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --instrumentation
+
+      - name: Save pip cache
+        if: ${{ steps.pip-cache.outputs.status == 'miss' }}
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.pip-cache.outputs.path }}
+          dest: ${{ steps.pip-cache.outputs.dest }}
+
+      - name: Upload Triton wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: triton-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          path: dist/*.whl
+
+      - name: Pack llvm build
+        if: ${{ inputs.build_llvm || inputs.device == 'jgs' }}
+        run: |
+          tar zcf llvm.tar.gz -C $HOME packages
+
+      - name: Upload llvm build ${{ env.LLVM_REPO }}
+        if: ${{ inputs.build_llvm || inputs.device == 'jgs' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: llvm
+          path: llvm.tar.gz
+
+      - name: Upload test reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-build-${{ github.run_attempt }}-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          include-hidden-files: true
+          path: reports
+
+      - name: Stop JGS simulator
+        if: always() && inputs.device == 'jgs'
+        uses: ./.github/actions/stop-simulator
+        with:
+          sim-pid: ${{ steps.start-simulator.outputs.sim-pid }}
+
+  integration-tests:
+    name: Integration tests ${{ matrix.loop.suite }} - shard ${{ matrix.loop.shard_id || 0 }}
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        loop: ${{ fromJson(needs.build.outputs.integration-tests-matrix )}}
+    timeout-minutes: 720
+    runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}"]', inputs.device, inputs.driver_version)) }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Print inputs
+        run: |
+          cat <<EOF
+          ${{ toJSON(inputs) }}
+          EOF
+          echo LLVM_REPO=$LLVM_REPO
+          cat <<EOF
+          ${{ toJson(needs.build.outputs) }}
+          EOF
+
+      - name: Sleep for random time to avoid cache stampede
+        if: ${{ matrix.loop.shard_id != null }}
+        run: |
+          set -xeuo pipefail
+          sleep $(( RANDOM % 300 ))
+
+      - name: Get called workflow ref
+        id: get-ref
+        # Use action name with full repo name because repo was not checked out yet here
+        uses: intel-tools/intel-xpu-backend-for-triton/.github/actions/get-called-workflow-ref@main-js
+
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          # Repository should be specified implicitly to allow reuse from other repositories
+          repository: intel-tools/intel-xpu-backend-for-triton
+          token: ${{ secrets.GLADOS_TOKEN }}
+          ref: ${{ steps.get-ref.outputs.ref }}
+
+      - name: Setup ONE API environment
+        uses: ./.github/actions/setup-oneapi-env
+        with:
+          oneapi_mode: ${{ inputs.oneapi_mode }}
+          dpcpp_jgs_revision: ${{ inputs.dpcpp_jgs_revision }}
+          cache_key: ${{ needs.build.outputs.oneapi-cache-key }}
+
+      - name: Load pip cache
+        id: pip-cache
+        uses: ./.github/actions/load
+        with:
+          path: $HOME/.cache/pip
+          key: pip-${{ inputs.python_version }}-${{ matrix.loop.suite }}-${{ hashFiles('pyproject.toml', 'setup.py') }}-${{ env.PIP_CACHE_NUMBER }}
+
+      - name: Install Python (using actions/setup-python) ${{ inputs.python_version }}
+        if: ${{ !inputs.use_pyenv_python }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Install Python (from pyenv) ${{ inputs.python_version }}
+        if: ${{ inputs.use_pyenv_python }}
+        uses: ./.github/actions/setup-pyenv-python
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Start JGS simulator
+        if: inputs.device == 'jgs'
+        id: start-simulator
+        uses: ./.github/actions/start-simulator
+
+      - name: Setup PyTorch
+        if: inputs.pytorch_mode == 'source' || inputs.pytorch_mode == 'wheels'
+        uses: ./.github/actions/setup-pytorch
+        with:
+          ref: ${{ inputs.pytorch_ref }}
+          mode: ${{ inputs.pytorch_mode }}
+          jgs_env: ${{ inputs.device == 'jgs' }}
+
+      - name: Setup PyTorch from JGS artifactory
+        if: inputs.pytorch_mode == 'jgs_artifactory_revision' || inputs.pytorch_mode == 'jgs_artifactory_latest'
+        uses: ./.github/actions/setup-pytorch-jgs
+        with:
+          pytorch_mode: ${{ inputs.pytorch_mode }}
+          pytorch_jgs_artifactory_revision: ${{ inputs.pytorch_jgs_artifactory_revision }}
+          cache_key: ${{ needs.build.outputs.pytorch-jgs-cache-key }}
+
+      - name: Download LLVM build
+        if: ${{ inputs.build_llvm || inputs.device == 'jgs' }}
+        uses: actions/download-artifact@v5
+        with:
+          name: llvm
+
+      - name: Download Triton wheels
+        uses: actions/download-artifact@v5
+        with:
+          name: triton-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+
+      - name: Install Triton
+        run: |
+          tar zxf llvm.tar.gz -C $HOME
+          pip install triton-*.whl
+          python -c 'import triton; print(triton.__version__)'
+
+      - name: Report environment details
+        run: |
+          if [ "${{ matrix.loop.suite }}" == "minicore" ]; then
+            reports_file="reports/.env"
+          else
+            reports_file="/dev/null"
+          fi
+
+          mkdir -p reports
+          cat <<EOF | tee "$reports_file"
+          TIMESTAMP=$(date '+%Y%m%d%H%M%S')
+          GITHUB_RUN_ID=$GITHUB_RUN_ID
+          GITHUB_RUN_NUMBER=$GITHUB_RUN_NUMBER
+          GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT
+          PYTHON_VERSION=${{ inputs.python_version }}
+          PYTORCH_REPO=$PYTORCH_REPO
+          PYTORCH_COMMIT_ID=$PYTORCH_COMMIT_ID
+          PYTORCH_VERSION=$PYTORCH_VERSION
+          TRITON_REPO=$GITHUB_REPOSITORY
+          TRITON_COMMIT_ID=$GITHUB_SHA
+          TRITON_BRANCH=$GITHUB_REF_NAME
+          OS=${{ runner.os }}
+          EOF
+          ./scripts/capture-hw-details.sh | tee -a "$reports_file"
+
+      - name: Create test-triton command line
+        run: |
+          skiplist="$GITHUB_WORKSPACE/scripts/skiplist/default"
+
+          if [[ -n "${{ inputs.skip_list }}" ]]; then
+            skiplist="$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.skip_list }}"
+          elif [[ -n "${{ inputs.driver_version }}" ]]; then
+            skiplist="$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.driver_version }}"
+          fi
+
+          if [ -d "$skiplist" ]; then
+            skiplist="--skip-list $skiplist"
+          else
+            skiplist="--skip-list $GITHUB_WORKSPACE/scripts/skiplist/default"
+          fi
+
+          {
+            echo SKIPLIST="$skiplist"
+            echo TRITON_TEST_CMD="${{ inputs.device == 'jgs' && 'export PATH="$HOME/packages/llvm/bin:$PATH" && source /simulator/simulator-env.sh && ' }}bash -v -x scripts/test-triton.sh --skip-pip-install --warning-reports --skip-pytorch-install --reports-dir $GITHUB_WORKSPACE/reports ${{ inputs.ignore_errors && '--ignore-errors' || '' }} $skiplist"
+          } | tee -a $GITHUB_ENV
+
+      - name: Install test dependencies
+        run: |
+          pip install -r scripts/requirements-test.txt git+https://github.com/kwasd/pytest-capturewarnings-ng@v1.2.0
+
+      - name: Set test-triton command line
+        run: |
+          echo "TRITON_TEST_CMD=${{ needs.build.outputs.test-triton-command }}" | tee -a $GITHUB_ENV
+
+      - name: Run Proton tests
+        if: matrix.loop.suite == 'rest' && inputs.driver_version == 'rolling' && inputs.device == 'max1100'
+        run: |
+          cd third_party/proton/test
+          # FIXME: enable 'test_record.py' back
+          pytest test_api.py test_lib.py test_profile.py test_viewer.py -s -v
+          cd ..
+
+      - name: Run minicore tests
+        if: matrix.loop.suite == 'minicore'
+        run: |
+          export TRITON_TEST_SHARDS=${{ env.NUM_SHARDS }}
+          export TRITON_TEST_SHARD_NUMBER=${{ matrix.loop.shard_id }}
+          ${{ env.TRITON_TEST_CMD }} --minicore
+
+      - name: Run mxfp tests
+        if: matrix.loop.suite == 'mxfp'
+        run: |
+          export TRITON_TEST_SHARDS=${{ env.NUM_SHARDS }}
+          export TRITON_TEST_SHARD_NUMBER=${{ matrix.loop.shard_id }}
+          ${{ env.TRITON_TEST_CMD }} --mxfp
+
+      - name: Run scaled_dot tests
+        if: matrix.loop.suite == 'scaled_dot'
+        run: |
+          export TRITON_TEST_SHARDS=${{ env.NUM_SHARDS }}
+          export TRITON_TEST_SHARD_NUMBER=${{ matrix.loop.shard_id }}
+          ${{ env.TRITON_TEST_CMD }} --scaled-dot
+
+      - name: Run gluon tests
+        if: matrix.loop.suite == 'gluon' && inputs.driver_version == 'rolling'
+        run: |
+          export TRITON_TEST_SHARDS=${{ env.NUM_SHARDS }}
+          export TRITON_TEST_SHARD_NUMBER=${{ matrix.loop.shard_id }}
+          ${{ env.TRITON_TEST_CMD }} --gluon
+
+      - name: Run interpreter tests
+        if: matrix.loop.suite == 'rest'
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --interpreter
+
+      - name: Run triton kernels tests
+        if: matrix.loop.suite == 'triton-kernels'
+        run: |
+          export TRITON_TEST_SHARDS=${{ env.NUM_SHARDS }}
+          export TRITON_TEST_SHARD_NUMBER=${{ matrix.loop.shard_id }}
+          ${{ env.TRITON_TEST_CMD }} --triton-kernels
+
+      # FIXME: make sure new tutorials are added to one of the groups (scaled_dot, rest, tutorial-faX)
+      - name: Select tutorials to run (scaled_dot)
+        if: matrix.loop.suite == 'scaled_dot_tutorial'
+        run: |
+          cat <<EOF | tee tutorials.txt
+          09-persistent-matmul
+          EOF
+
+      - name: Select tutorials to run (rest)
+        if: matrix.loop.suite == 'rest'
+        run: |
+          cat <<EOF | tee tutorials.txt
+          01-vector-add
+          02-fused-softmax
+          03-matrix-multiplication
+          04-low-memory-dropout
+          05-layer-norm
+          07-extern-functions
+          08-grouped-gemm
+          10-experimental-block-pointer
+          EOF
+
+      - name: Run Tutorials
+        if: matrix.loop.suite == 'scaled_dot_tutorial' || matrix.loop.suite == 'rest'
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --select-from-file tutorials.txt --tutorial
+
+      # Run 06-fused-attention.py separately, because it is split into 3 configs
+      - name: Run Flash Attention tutorials
+        if: matrix.loop.suite == 'tutorial-fa-64' || matrix.loop.suite == 'tutorial-fa-128-fwdfp8' || matrix.loop.suite == 'tutorial-fa-128-nofwdfp8'
+        run: |
+          ${{ env.TRITON_TEST_CMD }} "--${{ matrix.loop.suite }}"
+
+      - name: Install transformers
+        if: matrix.loop.suite == 'rest'
+        run: |
+          pip install -r https://github.com/pytorch/pytorch/raw/refs/heads/main/.ci/docker/ci_commit_pins/huggingface-requirements.txt
+
+      - name: Run E2E test
+        if: matrix.loop.suite == 'rest' && inputs.enable_e2e_tests
+        run: |
+          timeout -s KILL 4900 ${{ env.TRITON_TEST_CMD }} --inductor || ${{ inputs.ignore_errors }}
+
+      - name: Save pip cache
+        if: ${{ steps.pip-cache.outputs.status == 'miss' }}
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.pip-cache.outputs.path }}
+          dest: ${{ steps.pip-cache.outputs.dest }}
+
+      - name: Upload test reports
+        if: always() && inputs.upload_test_reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-${{ github.run_attempt }}-${{ matrix.loop.suite }}-${{ matrix.loop.shard_id || 0 }}-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          include-hidden-files: true
+          path: reports
+
+      - name: Stop JGS simulator
+        if: always() && inputs.device == 'jgs'
+        uses: ./.github/actions/stop-simulator
+        with:
+          sim-pid: ${{ steps.start-simulator.outputs.sim-pid }}
+
+  reports:
+    name: Reports
+    runs-on:
+      - linux
+    needs: integration-tests
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Load pip cache
+        id: pip-cache
+        uses: ./.github/actions/load
+        with:
+          path: $HOME/.cache/pip
+          key: pip-${{ inputs.python_version }}-${{ hashFiles('pyproject.toml', 'setup.py') }}-${{ env.PIP_CACHE_NUMBER }}
+
+      - name: Install Python (using actions/setup-python) ${{ inputs.python_version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Install pass_rate dependencies
+        run: |
+          pip install defusedxml typing_extensions pandas
+
+      - name: Load environment details
+        run: |
+          cat ./reports/.env | tee -a $GITHUB_ENV
+
+      - name: Pass rate
+        env:
+          GH_TOKEN: ${{ secrets.GLADOS_TOKEN }}
+        run: |
+          set -x
+          set -o pipefail
+          cd scripts/triton_utils
+          python -m triton_utils.entry_point download_reports --download-dir reports --repo ${{ github.repository }} --gh-run-id ${{ github.run_id }}
+          python -m triton_utils.entry_point pass_rate --reports reports --merge-test-results --tests-with-multiple-testsuites | tee pass_rate.json
+          python -m triton_utils.entry_point pass_rate --reports reports --merge-test-results --tests-with-multiple-testsuites --suite tutorials | tee pass_rate_tutorials.json
+
+      - name: Upload pass rate report
+        uses: actions/upload-artifact@v4
+        with:
+          name: pass_rate-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          path: pass_rate*.json
+
+      - name: Upload tutorials test report
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-tutorials-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          include-hidden-files: true
+          path: reports/tutorials.xml
+
+      - name: Upload tutorials performance report
+        uses: actions/upload-artifact@v4
+        with:
+          name: tutorials-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          if-no-files-found: warn
+          include-hidden-files: true
+          path: |
+            reports/*/*.csv
+            reports/.env
+
+      - name: Upload test reports
+        if: inputs.upload_test_reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          path: reports

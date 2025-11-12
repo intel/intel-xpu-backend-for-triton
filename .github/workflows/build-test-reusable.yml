@@ -99,17 +99,11 @@ jobs:
           path: $HOME/.cache/pip
           key: pip-${{ inputs.python_version }}-${{ hashFiles('pyproject.toml', 'setup.py') }}-${{ env.PIP_CACHE_NUMBER }}
 
-      - name: Install Python (using actions/setup-python) ${{ inputs.python_version }}
-        if: ${{ !inputs.use_pyenv_python }}
-        uses: actions/setup-python@v6
+      - name: Install Python
+        uses: ./.github/actions/setup-python
         with:
-          python-version: ${{ inputs.python_version }}
-
-      - name: Install Python (from pyenv) ${{ inputs.python_version }}
-        if: ${{ inputs.use_pyenv_python }}
-        uses: ./.github/actions/setup-pyenv-python
-        with:
-          python-version: ${{ inputs.python_version }}
+          python_version: ${{ inputs.python_version }}
+          use_pyenv: ${{ inputs.use_pyenv_python }}
 
       # Build PyTorch here once, integration tests jobs should load it from cache.
       - name: Setup PyTorch
@@ -180,7 +174,7 @@ jobs:
           path: dist/*.whl
 
       - name: Upload PTI wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: pti-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           path: .scripts_cache/pti/dist/*.whl
@@ -229,17 +223,11 @@ jobs:
           path: $HOME/.cache/pip
           key: pip-${{ inputs.python_version }}-${{ matrix.suite }}-${{ hashFiles('pyproject.toml', 'setup.py') }}-${{ env.PIP_CACHE_NUMBER }}
 
-      - name: Install Python (using actions/setup-python) ${{ inputs.python_version }}
-        if: ${{ !inputs.use_pyenv_python }}
-        uses: actions/setup-python@v6
+      - name: Install Python
+        uses: ./.github/actions/setup-python
         with:
-          python-version: ${{ inputs.python_version }}
-
-      - name: Install Python (from pyenv) ${{ inputs.python_version }}
-        if: ${{ inputs.use_pyenv_python }}
-        uses: ./.github/actions/setup-pyenv-python
-        with:
-          python-version: ${{ inputs.python_version }}
+          python_version: ${{ inputs.python_version }}
+          use_pyenv: ${{ inputs.use_pyenv_python }}
 
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
@@ -253,7 +241,7 @@ jobs:
           name: triton-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
 
       - name: Download PTI wheels
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           name: pti-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
 
@@ -270,6 +258,7 @@ jobs:
           echo "PTI_LIBS_DIR=$PTI_LIBS_DIR" | tee -a $GITHUB_ENV
 
       - name: Report environment details
+        timeout-minutes: 1
         run: |
           if [ "${{ matrix.suite }}" == "minicore" ]; then
             reports_file="reports/.env"
@@ -338,6 +327,7 @@ jobs:
       - name: Run triton kernels tests
         if: matrix.suite == 'triton-kernels'
         run: |
+          export PYTEST_MAX_PROCESSES=4
           ${{ env.TRITON_TEST_CMD }} --triton-kernels
 
       # FIXME: make sure new tutorials are added to one of the groups (scaled_dot, rest, tutorial-faX)
@@ -421,10 +411,11 @@ jobs:
           path: reports
           merge-multiple: true
 
-      - name: Install Python (using actions/setup-python) ${{ inputs.python_version }}
-        uses: actions/setup-python@v6
+      - name: Install Python
+        uses: ./.github/actions/setup-python
         with:
-          python-version: ${{ inputs.python_version }}
+          python_version: ${{ inputs.python_version }}
+          use_pyenv: ${{ inputs.use_pyenv_python }}
 
       - name: Install pass_rate dependencies
         run: |
