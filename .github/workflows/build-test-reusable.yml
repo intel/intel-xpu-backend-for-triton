@@ -462,6 +462,9 @@ jobs:
       - integration-tests
       - reports
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
       - name: Install Python
         uses: ./.github/actions/setup-python
         with:
