@@ -26,7 +26,7 @@ function libigc_version {
                 Write-Host "MULTIPLE"
             }
             elseif ($igc.Count -eq 1) {
-                Write-Host $igc[0]
+                Write-Host $igc
             }
             else {
                 Write-Host "Not Found"
