@@ -1,4 +1,5 @@
 #include "Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -3065,8 +3066,22 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
 
       Value addrElem = b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
       uint32_t alignment = nWords * width / 8;
-      auto createLoadInstruction = [&]() -> SmallVector<Value, 1> {
-        Value ret = b.load(retTy, addrElem, alignment);
+      auto createLoadWithAttrs = [&]() -> SmallVector<Value, 1> {
+        auto getNonTemporalFlag = [](triton::LoadOp loadOp) {
+          switch (loadOp.getCache()) {
+          case triton::CacheModifier::CG:
+          case triton::CacheModifier::CS:
+          case triton::CacheModifier::CV:
+            return true;
+          case triton::CacheModifier::CA:
+          default:
+            return false;
+          }
+        };
+
+        Value ret = rewriter.create<LLVM::LoadOp>(loc, retTy, addrElem,
+                                                  alignment, op.getIsVolatile(),
+                                                  getNonTemporalFlag(op));
         return {ret};
       };
 
@@ -3079,11 +3094,11 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
         else {
           Block &endBlock = LLVM::intel::createPredicatedBlock(
               rewriter, loc, pred, SmallVector<Value, 1>{other_},
-              createLoadInstruction);
+              createLoadWithAttrs);
           ret = *endBlock.args_begin();
         }
       } else {
-        ret = createLoadInstruction()[0];
+        ret = createLoadWithAttrs()[0];
       }
 
       // Extract and store return values
