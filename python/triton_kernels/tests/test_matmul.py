@@ -21,7 +21,7 @@ from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, upcast_from_m
 # testing utilities
 from triton_kernels.testing import assert_close, compute_actual_scale
 # target-specific utilities
-from triton_kernels.target_info import is_hip, is_hip_cdna3, is_cuda, is_hip_cdna4
+from triton_kernels.target_info import is_hip, is_hip_cdna3, is_cuda, is_hip_cdna4, is_xpu
 
 # ---------------
 # initialize data
@@ -578,6 +578,8 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_o
     # If split_k > 1, then the intermediate tensor is fp32.
     sep_gather = mode == "ragged" and do_gather and n_expts_act > 1 and split_k == 1
     sep_scatter = mode == "ragged" and do_scatter and n_expts_act > 1 and split_k == 1
+    if is_xpu():
+        sep_scatter = sep_scatter or (do_scatter and not fused_scatter and n_expts_tot > 1 and split_k == 1 and act_dtype_str == "float8_e4m3fn")
     y_scale = flex.out_data.expected_scale if act_is_float8 else 1
 
     def round_x(x, idx):
