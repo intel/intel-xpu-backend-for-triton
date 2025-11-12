@@ -26,6 +26,7 @@ class XPUBackendMeta(type(BaseBackend)):
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             dev_prop = fn(*args, **kwargs)
+            dev_prop['has_shader_atomic_bfloat16'] = True
             dev_prop['has_support_block_scale_dpas'] = True
             return dev_prop
 

@@ -172,6 +172,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         pm.enable_debug()
         module_opts = intel.passes.ttgpuir.AnnotateModuleOptions()
         module_opts.min_sg_size = min(properties["sub_group_sizes"])
+        module_opts.support_16bit_atomics = properties["has_shader_atomic_bfloat16"]
         module_opts.support_sg_2d_block = properties["has_subgroup_2d_block_io"]
         module_opts.support_dpas = properties["has_subgroup_matrix_multiply_accumulate"]
         module_opts.support_block_scale_dpas = properties["has_support_block_scale_dpas"]

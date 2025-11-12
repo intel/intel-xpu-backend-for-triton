@@ -3473,6 +3473,9 @@ struct AtomicCASOpConversion
 
     bool support16BitAtomics = moduleOp->hasAttr(
         TritonIntelGPUDialect::getSupport16BitAtomicsAttrName());
+    // FIXME: https://jira.devtools.intel.com/browse/IGC-13365
+    support16BitAtomics &=
+        triton::tools::getBoolEnv("TRITON_INTEL_16BIT_ATOMIC_CAS");
 
     for (size_t i = 0; i < elemsPerThread; ++i) {
       Value casPtr = ptrElements[i];
