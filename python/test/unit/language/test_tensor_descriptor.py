@@ -384,8 +384,8 @@ def test_tensor_descriptor_store_nd(dtype_str, num_ctas, ndim, INNER_BLOCK, devi
 
 @pytest.mark.interpreter
 def test_tensor_descriptor_padding(device):
-    if not is_cuda():
-        pytest.xfail("padding is unsupported")
+    if is_xpu():
+        pytest.skip("padding is unsupported")
 
     @triton.jit
     def device_tma_load(in_ptr, out_ptr, IM, IN, YM, YN, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr,
