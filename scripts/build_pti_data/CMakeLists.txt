@@ -20,14 +20,6 @@ else()
   message(STATUS "LEVELZERO_INCLUDE_DIR env var not defined; try to use system version")
 endif()
 
-if(DEFINED ENV{LEVELZERO_INCLUDE_DIR})
-  # When defining `L0_INC_PATH` variable inside PTI, the following is not used: `PATH_SUFFIXES include`
-  set(L0_INC_PATH "$ENV{LEVELZERO_INCLUDE_DIR}/include/" CACHE PATH "Path to Level Zero includes")
-  message(STATUS "Using Level Zero from ENV to define L0_INC_PATH: ${L0_INC_PATH}")
-else()
-  message(STATUS "LEVELZERO_INCLUDE_DIR env var not defined; try to use system version")
-endif()
-
 if(DEFINED ENV{LEVELZERO_LIBRARY})
   set(LevelZero_LIBRARY "$ENV{LEVELZERO_LIBRARY}" CACHE PATH "Path to Level Zero library")
   message(STATUS "Using Level Zero from ENV: ${LevelZero_LIBRARY}")

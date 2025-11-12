@@ -55,7 +55,7 @@ function build_level_zero {
   cmake .. -DCMAKE_INSTALL_PREFIX="$L0_INSTALL_PATH" -DCMAKE_BUILD_TYPE=Release
   cmake --build . --config Release --parallel "$(nproc)"
   cmake --build . --config Release --target install
-  export LEVELZERO_INCLUDE_DIR="$L0_INSTALL_PATH"
+  export LEVELZERO_INCLUDE_DIR="$L0_INSTALL_PATH/include"
   export LEVELZERO_LIBRARY="$L0_INSTALL_PATH/lib/libze_loader.so"
 }
 
