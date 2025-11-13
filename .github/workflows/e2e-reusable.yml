@@ -41,6 +41,7 @@ on:
       runner_label:
         description: Runner label, keep empty for default
         type: string
+        default: ""
       TORCH_COMPILE_DEBUG:
         description: TORCH_COMPILE_DEBUG
         type: string
