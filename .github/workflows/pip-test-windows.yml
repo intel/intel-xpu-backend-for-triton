@@ -101,6 +101,15 @@ jobs:
           .venv\Scripts\activate.ps1
           python -c 'import triton; print(triton.__version__)'
 
+      - name: Build && Install PTI
+        shell: bash
+        run: |
+          cd ${{ env.NEW_WORKSPACE }}
+          ./scripts/install-pti.sh --build-level-zero
+          PTI_LIBS_DIR=$(python ./scripts/pti_lib.py)
+          ls $PTI_LIBS_DIR
+          echo "PATH=$PTI_LIBS_DIR:$PATH" | tee -a $GITHUB_ENV
+
       - name: Install test dependencies
         run: |
           .venv\Scripts\activate.ps1
