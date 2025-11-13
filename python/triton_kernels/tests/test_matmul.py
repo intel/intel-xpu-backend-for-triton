@@ -455,7 +455,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_
 
     padding_block_k = 32
     if hbm_swizzling:
-        if torch.cuda.get_device_capability()[0] >= 10:
+        if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 10:
             # Blackwell scale swizzling constraint
             # https://github.com/triton-lang/triton/blob/814b862166c756d9f33238844f4ac047e0243388/python/triton_kernels/triton_kernels/tensor_details/layout_details/blackwell_scale.py#L45
             padding_block_k = 128
