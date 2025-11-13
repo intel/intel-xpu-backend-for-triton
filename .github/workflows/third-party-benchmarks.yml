@@ -110,7 +110,7 @@ jobs:
 
           cd benchmarks/third_party/vllm
           python unified_attention_benchmark.py --reports $REPORTS
-          python transform_results.py $REPORTS/unified_attention_performance/unified-attention-performance.csv $REPORTS/unified-attention-report.csv --benchmark "unified-attn-bf16" --bgroup "vllm" --param_cols "q_heads,k_heads,head_size,dtype,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size"
+          python transform_results.py $REPORTS/unified-attention-performance.csv $REPORTS/unified-attention-report.csv --benchmark "unified-attn-bf16" --bgroup "vllm" --param_cols "q_heads,k_heads,head_size,dtype,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size"
 
       - name: Run vllm batched moe bf16
         if: ${{ steps.install-benchmarks.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm')) }}
