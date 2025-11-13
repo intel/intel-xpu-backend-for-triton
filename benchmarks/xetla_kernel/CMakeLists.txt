@@ -27,7 +27,7 @@ endif()
 
 Python3_add_library(xetla_kernel MODULE WITH_SOABI python_main.cpp)
 target_compile_options(xetla_kernel PRIVATE "-fPIC")
-target_compile_options(xetla_kernel PRIVATE "-fsycl" "-fpreview-breaking-changes")
+target_compile_options(xetla_kernel PRIVATE "-fsycl")
 target_compile_options(xetla_kernel PUBLIC "-DXETPP_NEW_XMAIN")
 target_link_options(xetla_kernel PRIVATE ${XETLA_KERNEL_FLAGS})
 target_link_libraries(xetla_kernel PUBLIC ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY})
