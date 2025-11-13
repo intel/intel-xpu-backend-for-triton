@@ -196,12 +196,11 @@ struct LoadStoreConversionBase {
     //    }
     // All the values are decomposed by `unpackLLElements` into a vector.
     // Defines the indices for the block pointer struct.
-    unsigned blockOffset = 0, blockShape = 1 * rank, blockStride = 2 * rank,
-             blockBase = 3 * rank;
+    const unsigned blockOffset = 0, blockShape = 1 * rank,
+                   blockStride = 2 * rank, blockBase = 3 * rank;
     const SmallVector<Value> &blockPtr =
         unpackLLElements(loc, blockPointerStruct, rewriter);
-
-    unsigned numElems = getTotalElemsPerThread(tensorType);
+    const unsigned numElems = getTotalElemsPerThread(tensorType);
 
     // Get the LLVM values for indices in block
     auto indices = emitIndices(loc, rewriter, targetInfo,
@@ -211,12 +210,11 @@ struct LoadStoreConversionBase {
         [](ArrayRef<Value> A, ArrayRef<Value> B, Value init,
            std::function<Value(const Value &, const Value &, const Value &)>
                linearizeFunc) {
-          auto rank = A.size();
+          unsigned rank = A.size();
           Value accumulate = init;
           if (rank > 0) {
-            for (auto [a, b] : llvm::zip(A, B)) {
+            for (auto [a, b] : llvm::zip(A, B))
               accumulate = linearizeFunc(a, b, accumulate);
-            }
           }
           return accumulate;
         };
@@ -226,11 +224,10 @@ struct LoadStoreConversionBase {
     SmallVector<Value> ptrElems(numElems);
     SmallVector<Value> maskElems;
     for (unsigned i = 0; i < numElems; ++i) {
-      auto index = indices[i];
+      SmallVector<Value> index = indices[i];
       SmallVector<Value> indicesInTensor(rank);
-      for (unsigned j = 0; j < rank; ++j) {
+      for (unsigned j = 0; j < rank; ++j)
         indicesInTensor[j] = b.add(index[j], blockPtr[blockOffset + j]);
-      }
 
       // Get the LLVM values for pointers
       Value offset = linearize(
@@ -272,30 +269,62 @@ struct LoadStoreConversionBase {
     SmallVector<Value> otherElems;
     if (padding) {
       Value other;
-      if (*padding == PaddingOption::PAD_ZERO) {
+      switch (*padding) {
+      case PaddingOption::PAD_ZERO:
         other = rewriter.create<LLVM::ConstantOp>(
             loc, valueElemTy, rewriter.getZeroAttr(valueElemTy));
-      } else if (*padding == PaddingOption::PAD_NAN) {
+
+        break;
+      case PaddingOption::PAD_NAN: {
         assert(!valueElemTy.isIntOrIndex() &&
                "Expect element type to be non-integer type");
         auto apNaN = llvm::APFloat::getNaN(
             cast<FloatType>(valueElemTy).getFloatSemantics());
         other = rewriter.create<LLVM::ConstantOp>(
             loc, valueElemTy, rewriter.getFloatAttr(valueElemTy, apNaN));
-      } else {
-        llvm_unreachable("Unexpected padding option");
+      } break;
       }
-      for (unsigned i = 0; i < numElems; ++i) {
+
+      for (unsigned i = 0; i < numElems; ++i)
         otherElems.push_back(other);
-      }
     }
 
     return std::make_tuple(ptrElems, maskElems, otherElems);
   }
 
+  // Ensure the operation doesn't have attributes that the IGC predicated
+  // instruction cannot handle.
+  template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
+                                 OpType, LoadOp, StoreOp>::value>>
+  bool canUsePredicatedInstructions(OpType op) const {
+    if (!usePredicatedInstructions)
+      return false;
+
+    if constexpr (std::is_same_v<OpType, LoadOp>)
+      return !op.getIsVolatile() && op.getCache() == CacheModifier::NONE;
+
+    return op.getCache() == CacheModifier::NONE;
+  }
+
+  template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
+                                 OpType, LoadOp, StoreOp>::value>>
+  bool getNonTemporalFlag(OpType op) const {
+    switch (op.getCache()) {
+    case triton::CacheModifier::CG:
+    case triton::CacheModifier::CS:
+    case triton::CacheModifier::CV:
+      return true;
+    case triton::CacheModifier::CA:
+    default:
+      return false;
+    }
+  }
+
 protected:
   const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass;
   const triton::intel::TargetInfo &targetInfo;
+  const bool usePredicatedInstructions =
+      triton::tools::getBoolEnv("TRITON_INTEL_PREDICATED");
 };
 
 struct BlockIOConversionBase : public LoadStoreConversionBase {
@@ -2940,9 +2969,16 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto typeConverter = getTypeConverter();
     MLIRContext *ctx = rewriter.getContext();
+
+    // original values
     Value ptr = op.getPtr();
     Value mask = op.getMask();
+    Value other = op.getOther();
+
+    // adaptor values
+    Value llPtr = adaptor.getPtr();
     Value llMask = adaptor.getMask();
+    Value llOther = adaptor.getOther();
 
     // Determine the vectorization size
     Type valueElemTy =
@@ -2960,13 +2996,9 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       // fallback to gather load.
       auto tensorType = cast<RankedTensorType>(op.getType());
       std::tie(ptrElems, maskElems, otherElems) = convertBlockPtrToTensorOfPtr(
-          loc, adaptor.getPtr(), tensorType, valueElemTy, rewriter,
-          op.getBoundaryCheck(), op.getPadding());
+          loc, llPtr, tensorType, valueElemTy, rewriter, op.getBoundaryCheck(),
+          op.getPadding());
     } else {
-      Value other = op.getOther();
-      Value llPtr = adaptor.getPtr();
-      Value llOther = adaptor.getOther();
-
       // Get the LLVM values for pointers
       ptrElems = unpackLLElements(loc, llPtr, rewriter);
       assert(ptrElems.size() == numElems);
@@ -2998,23 +3030,22 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     const int numVecs = numElems / vec;
 
     // Load redundantly in all dims except reg
-    auto freeVarMasks = getFreeVariableMasks(ptr.getType());
+    llvm::MapVector<StringAttr, int> freeVarMasks =
+        getFreeVariableMasks(ptr.getType());
     uint32_t regMask = freeVarMasks[str_attr("register")];
 
     SmallVector<Value> loadedVals;
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
-      if (auto canonicalVecStart = getCanonicalIndex(vecStart, regMask);
+      if (unsigned canonicalVecStart = getCanonicalIndex(vecStart, regMask);
           vecStart != canonicalVecStart) {
         // For redundant registers, refer back to the canonical load
-        for (auto iVec = 0; iVec < vec; ++iVec) {
+        for (int iVec = 0; iVec < vec; ++iVec)
           loadedVals.push_back(loadedVals[canonicalVecStart + iVec]);
-        }
+
         continue;
       }
 
       // TODO: optimization when ptr is GEP with constant offset
-      size_t in_off = 0;
-
       const size_t maxWordWidth = std::max<size_t>(32, valueElemNBits);
       const size_t totalWidth = valueElemNBits * vec;
       const size_t width = std::min(totalWidth, maxWordWidth);
@@ -3025,17 +3056,19 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
 
       Value pred = maskElems.size() ? maskElems[vecStart] : Value{};
 
-      SmallVector<Type> retTys(nWords, IntegerType::get(getContext(), width));
+      SmallVector<Type> retTys(nWords, IntegerType::get(ctx, width));
       Type retTy = retTys.size() > 1
                        ? vec_ty(IntegerType::get(ctx, width), nWords)
                        : retTys[0];
 
-      Value other_ = b.undef(retTy);
-      if (otherElems.size()) {
+      Value other_;
+      if (otherElems.empty()) {
+        other_ = rewriter.create<LLVM::ConstantOp>(loc, retTy,
+                                                   rewriter.getZeroAttr(retTy));
+      } else {
         for (size_t ii = 0; ii < nWords; ++ii) {
           size_t size = width / valueElemNBits;
-
-          auto vecTy = vec_ty(valueElemTy, size);
+          VectorType vecTy = vec_ty(valueElemTy, size);
           Value v = b.undef(vecTy);
           for (size_t s = 0; s < size; ++s) {
             Value falseVal = otherElems[vecStart + ii * size + s];
@@ -3051,69 +3084,51 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
             v = b.int_val(width, splatVal);
           }
 
-          Value iiVal = createIndexAttrConstant(
-              rewriter, loc, typeConverter->getIndexType(), ii);
-          if (nWords > 1) {
-            other_ = b.insert_element(retTy, other_, v, iiVal);
-          } else {
-            other_ = v;
-          }
+          other_ =
+              (nWords > 1)
+                  ? b.insert_element(
+                        retTy, b.undef(retTy), v,
+                        createIndexAttrConstant(
+                            rewriter, loc, typeConverter->getIndexType(), ii))
+                  : v;
         }
-      } else {
-        other_ = rewriter.create<LLVM::ConstantOp>(loc, retTy,
-                                                   rewriter.getZeroAttr(retTy));
       }
+      assert(other_ && "Expecting a valid value");
 
       Value addrElem = b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
       uint32_t alignment = nWords * width / 8;
-      auto createLoadWithAttrs = [&]() -> SmallVector<Value, 1> {
-        auto getNonTemporalFlag = [](triton::LoadOp loadOp) {
-          switch (loadOp.getCache()) {
-          case triton::CacheModifier::CG:
-          case triton::CacheModifier::CS:
-          case triton::CacheModifier::CV:
-            return true;
-          case triton::CacheModifier::CA:
-          default:
-            return false;
-          }
-        };
-
-        Value ret = b.load(retTy, addrElem, alignment, op.getIsVolatile(),
-                           getNonTemporalFlag(op));
-        return {ret};
+      auto createLoadWithAttrs = [&]() {
+        return SmallVector<Value>{b.load(retTy, addrElem, alignment,
+                                         op.getIsVolatile(),
+                                         getNonTemporalFlag(op))};
       };
 
       Value ret;
-      // Create a predicated load operation.
-      if (pred) {
-        if (triton::tools::getBoolEnv("TRITON_INTEL_PREDICATED"))
-          ret = rewriter.create<TritonGEN::PredicatedLoadOp>(
-              loc, retTy, addrElem, b.i64_val(alignment), pred, other_);
-        else {
-          Block &endBlock = LLVM::intel::createPredicatedBlock(
-              rewriter, loc, pred, SmallVector<Value, 1>{other_},
-              createLoadWithAttrs);
-          ret = *endBlock.args_begin();
-        }
-      } else {
+      if (!pred)
         ret = createLoadWithAttrs()[0];
+      else if (canUsePredicatedInstructions(op))
+        ret = rewriter.create<TritonGEN::PredicatedLoadOp>(
+            loc, retTy, addrElem, b.i64_val(alignment), pred, other_);
+      else {
+        Block &endBlock = LLVM::intel::createPredicatedBlock(
+            rewriter, loc, pred, SmallVector<Value, 1>{other_},
+            createLoadWithAttrs);
+        ret = *endBlock.args_begin();
       }
+      assert(ret && "Expecting valid value");
 
       // Extract and store return values
       SmallVector<Value> rets;
       for (unsigned int ii = 0; ii < nWords; ++ii) {
-        Value curr;
-        if (isa<VectorType>(retTy)) {
-          curr = b.extract_element(IntegerType::get(ctx, width), ret,
-                                   b.i32_val(ii));
-        } else {
-          curr = ret;
-        }
+        Value curr = isa<VectorType>(retTy)
+                         ? b.extract_element(IntegerType::get(ctx, width), ret,
+                                             b.i32_val(ii))
+                         : ret;
         curr = b.bitcast(
             curr, LLVM::getVectorType(valueElemTy, width / valueElemNBits));
         rets.push_back(curr);
       }
+
       int tmp = width / valueElemNBits;
       for (size_t ii = 0; ii < vec; ++ii) {
         Value loaded =
@@ -3525,24 +3540,23 @@ struct StoreOpConversion
 
       Value addrElem = b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
       uint32_t alignment = nWords * width / 8;
-      auto createStore = [&]() -> ArrayRef<Value> {
-        b.store(vecWord, addrElem, alignment);
+      auto createStoreWithAttrs = [&]() {
+        bool isVolatile = false;
+        b.store(vecWord, addrElem, alignment, isVolatile,
+                getNonTemporalFlag(op));
         return ArrayRef<Value>();
       };
 
-      if (maskVal) {
-        // Create a predicated store operation.
-        if (triton::tools::getBoolEnv("TRITON_INTEL_PREDICATED"))
-          rewriter.create<TritonGEN::PredicatedStoreOp>(
-              loc, addrElem, vecWord, b.i64_val(alignment), maskVal);
-        else
-          LLVM::intel::createPredicatedBlock(rewriter, loc, maskVal,
-                                             createStore);
-      } else {
-        auto _ = createStore();
-      }
+      if (!maskVal)
+        auto _ = createStoreWithAttrs();
+      else if (canUsePredicatedInstructions(op))
+        rewriter.create<TritonGEN::PredicatedStoreOp>(
+            loc, addrElem, vecWord, b.i64_val(alignment), maskVal);
+      else
+        LLVM::intel::createPredicatedBlock(rewriter, loc, maskVal,
+                                           createStoreWithAttrs);
+    }
 
-    } // for
     rewriter.eraseOp(op);
     return success();
   }
