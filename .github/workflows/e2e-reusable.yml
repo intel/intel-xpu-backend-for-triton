@@ -60,7 +60,7 @@ jobs:
     runs-on:
       - linux
       - rolling
-      - ${{ inputs.runner_label || 'max1550' }}
+      - ${{ inputs.runner_label || 'b580' }}
     timeout-minutes: 720
     defaults:
       run:
