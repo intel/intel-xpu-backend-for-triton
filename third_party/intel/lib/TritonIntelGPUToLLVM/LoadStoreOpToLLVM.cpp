@@ -3079,9 +3079,8 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
           }
         };
 
-        Value ret = rewriter.create<LLVM::LoadOp>(loc, retTy, addrElem,
-                                                  alignment, op.getIsVolatile(),
-                                                  getNonTemporalFlag(op));
+        Value ret = b.load(retTy, addrElem, alignment, op.getIsVolatile(),
+                           getNonTemporalFlag(op));
         return {ret};
       };
 
