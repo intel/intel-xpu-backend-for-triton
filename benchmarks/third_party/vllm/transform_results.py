@@ -32,7 +32,6 @@ def parse_csv(csv_file_path, tag, bench_group, benchmark, param_cols, gbps=False
     run_uuid = uuid.uuid4().hex
     current_datetime = datetime.now().isoformat()
 
-    # Create params for all rows vectorized
     def serialize_params(row):
         param2val = {}
         for p in param_cols:
@@ -44,11 +43,8 @@ def parse_csv(csv_file_path, tag, bench_group, benchmark, param_cols, gbps=False
 
     df['params'] = df.apply(serialize_params, axis=1)
 
-    # Define compiler columns
-    # parse "GB/s", parse "TFLOPS"
     compilers = ['pytorch', 'triton', 'triton-td']
 
-    # Create list of dataframes for each compiler
     dfs = []
     for compiler_name in compilers:
         col = f'{compiler_name}-{"GB/s" if gbps else "TFlops"}'
@@ -66,7 +62,6 @@ def parse_csv(csv_file_path, tag, bench_group, benchmark, param_cols, gbps=False
             valid_rows['value'] = valid_rows[col].astype(float)
             valid_rows['tag'] = tag
 
-            # Select only needed columns
             result_df = valid_rows[[
                 'run_uuid', 'ts', 'benchmark_group', 'benchmark', 'compiler', 'value_name', 'value', 'params', 'tag'
             ]]
