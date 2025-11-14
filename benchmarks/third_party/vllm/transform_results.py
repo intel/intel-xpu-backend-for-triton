@@ -31,29 +31,38 @@ def parse_csv(csv_file_path, tag, bench_group, benchmark, param_cols):
     run_uuid = uuid.uuid4().hex
     current_datetime = datetime.now().isoformat()
 
-    # Create params for all rows vectorized
-    df['params'] = df.apply(lambda row: json.dumps({p: int(row[p]) for p in param_cols}), axis=1)
+    def serialize_params(row):
+        param2val = {}
+        for p in param_cols:
+            try:
+                param2val[p] = int(row[p])
+            except ValueError:
+                param2val[p] = str(row[p])
+        return json.dumps(param2val)
 
-    # Define compiler columns
-    compilers = [('triton', 'triton-TFlops'), ('pytorch', 'pytorch-TFlops'), ('triton-td', 'triton-td-TFlops')]
+    df['params'] = df.apply(serialize_params, axis=1)
 
-    # Create list of dataframes for each compiler
+    compilers = ['pytorch', 'triton', 'triton-td']
+
     dfs = []
-    for compiler_name, tflops_col in compilers:
-        if tflops_col in df.columns:
+    for compiler_name in compilers:
+        for value_name in ['TFlops', 'GB/s']:
+            col = f'{compiler_name}-{value_name}'
+            if col not in df.columns:
+                continue
             # Filter out NaN values
-            valid_rows = df[df[tflops_col].notna()].copy()
+            valid_rows = df[df[col].notna()].copy()
             if len(valid_rows) > 0:
                 valid_rows['run_uuid'] = run_uuid
                 valid_rows['ts'] = current_datetime
                 valid_rows['benchmark_group'] = bench_group
                 valid_rows['benchmark'] = benchmark
                 valid_rows['compiler'] = compiler_name
-                valid_rows['value_name'] = 'tflops'
-                valid_rows['value'] = valid_rows[tflops_col].astype(float)
+                # GB/s -> gbps
+                valid_rows['value_name'] = value_name.lower().replace('/', 'p')
+                valid_rows['value'] = valid_rows[col].astype(float)
                 valid_rows['tag'] = tag
 
-                # Select only needed columns
                 result_df = valid_rows[[
                     'run_uuid', 'ts', 'benchmark_group', 'benchmark', 'compiler', 'value_name', 'value', 'params', 'tag'
                 ]]

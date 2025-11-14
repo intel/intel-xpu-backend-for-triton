@@ -3087,10 +3087,12 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
           other_ =
               (nWords > 1)
                   ? b.insert_element(
-                        retTy, b.undef(retTy), v,
+                        retTy, other_, v,
                         createIndexAttrConstant(
                             rewriter, loc, typeConverter->getIndexType(), ii))
-                  : v;
+                  :
+
+                  v;
         }
       }
       assert(other_ && "Expecting a valid value");
@@ -3115,7 +3117,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
             createLoadWithAttrs);
         ret = *endBlock.args_begin();
       }
-      assert(ret && "Expecting valid value");
+      assert(ret && "Expecting a valid value");
 
       // Extract and store return values
       SmallVector<Value> rets;
@@ -3357,7 +3359,8 @@ struct StoreOpToBlockIOConversion
           assert(numPackedVals > 0 &&
                  "numPackedVals should be greater than zero.");
           // The offsetX of linear layout is in original elements.
-          // The 2d block io requires the offsetX in number of packed elements.
+          // The 2d block io requires the offsetX in number of packed
+          // elements.
           offsetX = b.udiv(offsetX, b.i32_val(numPackedVals));
         }
         if (!boundaryCheck.contains(rowDim)) {
