@@ -976,7 +976,7 @@ MODEL_CONFIGS = [
     # llama3-8B
     (32, 8, 128, torch.bfloat16, None),
     # llama3-70B
-    # (64, 8, 128, torch.bfloat16, None)
+    (64, 8, 128, torch.bfloat16, None)
 ]
 
 # QDTYPES = [None, torch.float8_e4m3fn] if not current_platform.is_rocm() else [
