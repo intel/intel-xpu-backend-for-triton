@@ -113,12 +113,17 @@ jobs:
             --benchmark scaled-mm-fp8 \
             --param_cols="M,N,K"
 
-      - name: Run vllm unified attention bf16
+      - name: Install vllm
+        id: install-vllm
         if: ${{ steps.install-benchmarks.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm')) }}
         run: |
           source ./scripts/capture-hw-details.sh
-
           ./scripts/test-triton.sh --install-vllm --skip-pip-install --skip-pytorch-install
+
+      - name: Run vllm unified attention bf16
+        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm')) }}
+        run: |
+          source ./scripts/capture-hw-details.sh
 
           cd benchmarks/third_party/vllm
           python unified_attention_benchmark.py --reports $REPORTS
@@ -131,11 +136,10 @@ jobs:
             --param_cols "q_heads,k_heads,head_size,dtype,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size"
 
       - name: Run vllm batched moe bf16
-        if: ${{ steps.install-benchmarks.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm')) }}
+        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm')) }}
         run: |
           source ./scripts/capture-hw-details.sh
 
-          ./scripts/test-triton.sh --install-vllm --skip-pip-install --skip-pytorch-install
           cp -r vllm/tests benchmarks/third_party/vllm/tests
 
           cd benchmarks/third_party/vllm
@@ -151,7 +155,7 @@ jobs:
 
 
       - name: Run vllm batched moe fp8
-        if: ${{ steps.install-benchmarks.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm')) }}
+        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm')) }}
         run: |
           source ./scripts/capture-hw-details.sh
 
