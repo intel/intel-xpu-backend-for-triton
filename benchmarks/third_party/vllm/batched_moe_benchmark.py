@@ -633,9 +633,9 @@ def get_batched_mm_benchmark(
                 # B matrix, we only have to load activated experts
                 num_activated_experts * (K * N * n_bytes) +
                 # A matrix - activations, we only load part of tokens
-                num_tokens * (K * n_bytes) +
+                num_tokens * K * n_bytes +
                 # C matrix - outputs, we only load/store part of tokens
-                num_tokens * (N * 2))
+                num_tokens * N * 2)
             return total_bytes * (1e-9) / (ms * 1e-3)
 
         def tflops(ms):
