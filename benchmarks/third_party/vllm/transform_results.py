@@ -19,12 +19,11 @@ def parse_args():
     parser.add_argument('--tag', help='Tag for the benchmark run', default='')
     parser.add_argument('--benchmark', help='moe-benchmark', required=True)
     parser.add_argument('--bgroup', help='Benchmark group', required=True)
-    parser.add_argument('--gbps', help='Parse "GB/s" values instead of TFlops', action='store_true')
 
     return parser.parse_args()
 
 
-def parse_csv(csv_file_path, tag, bench_group, benchmark, param_cols, gbps=False):
+def parse_csv(csv_file_path, tag, bench_group, benchmark, param_cols):
     """Parse the benchmark CSV and extract performance metrics."""
 
     df = pd.read_csv(csv_file_path)
@@ -47,25 +46,27 @@ def parse_csv(csv_file_path, tag, bench_group, benchmark, param_cols, gbps=False
 
     dfs = []
     for compiler_name in compilers:
-        col = f'{compiler_name}-{"GB/s" if gbps else "TFlops"}'
-        if col not in df.columns:
-            continue
-        # Filter out NaN values
-        valid_rows = df[df[col].notna()].copy()
-        if len(valid_rows) > 0:
-            valid_rows['run_uuid'] = run_uuid
-            valid_rows['ts'] = current_datetime
-            valid_rows['benchmark_group'] = bench_group
-            valid_rows['benchmark'] = benchmark
-            valid_rows['compiler'] = compiler_name
-            valid_rows['value_name'] = 'tflops' if not gbps else 'gbps'
-            valid_rows['value'] = valid_rows[col].astype(float)
-            valid_rows['tag'] = tag
+        for value_name in ['TFlops', 'GB/s']:
+            col = f'{compiler_name}-{value_name}'
+            if col not in df.columns:
+                continue
+            # Filter out NaN values
+            valid_rows = df[df[col].notna()].copy()
+            if len(valid_rows) > 0:
+                valid_rows['run_uuid'] = run_uuid
+                valid_rows['ts'] = current_datetime
+                valid_rows['benchmark_group'] = bench_group
+                valid_rows['benchmark'] = benchmark
+                valid_rows['compiler'] = compiler_name
+                # GB/s -> gbps
+                valid_rows['value_name'] = value_name.lower().replace('/', 'p')
+                valid_rows['value'] = valid_rows[col].astype(float)
+                valid_rows['tag'] = tag
 
-            result_df = valid_rows[[
-                'run_uuid', 'ts', 'benchmark_group', 'benchmark', 'compiler', 'value_name', 'value', 'params', 'tag'
-            ]]
-            dfs.append(result_df)
+                result_df = valid_rows[[
+                    'run_uuid', 'ts', 'benchmark_group', 'benchmark', 'compiler', 'value_name', 'value', 'params', 'tag'
+                ]]
+                dfs.append(result_df)
 
     # Concatenate all compiler results
     df_results = pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
@@ -99,7 +100,7 @@ def main():
         raise ValueError(f'Error: CSV file {args.source} not found')
 
     param_cols = args.param_cols.split(',')
-    df_results = parse_csv(args.source, args.tag, args.bgroup, args.benchmark, param_cols, gbps=args.gbps)
+    df_results = parse_csv(args.source, args.tag, args.bgroup, args.benchmark, param_cols)
     df_results.to_csv(args.target, index=False)
 
 

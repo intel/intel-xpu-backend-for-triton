@@ -150,7 +150,6 @@ jobs:
             --tag $TAG \
             --bgroup vllm \
             --benchmark moe-bf16-benchmark \
-            --gbps \
             --param_cols="num_experts,max_tokens_per_expert,K,N"
 
 
