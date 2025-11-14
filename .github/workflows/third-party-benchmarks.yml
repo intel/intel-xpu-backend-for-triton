@@ -90,7 +90,13 @@ jobs:
           ./scripts/test-triton.sh --install-sglang --skip-pip-install --skip-pytorch-install
           cd benchmarks/third_party/sglang
           python scaled_mm_benchmark.py --reports $REPORTS
-          python ../vllm/transform_results.py $REPORTS/scaled_mm_benchmark.csv $REPORTS/scaled-mm-int8-report.csv --tag $TAG --benchmark scaled-mm-int8 --param_cols="M,N,K" --bgroup sglang
+          python ../vllm/transform_results.py \
+            $REPORTS/scaled_mm_benchmark.csv \
+            $REPORTS/scaled-mm-int8-report.csv \
+            --tag $TAG \
+            --bgroup sglang \
+            --benchmark scaled-mm-int8 \
+            --param_cols="M,N,K"
 
       - name: Run sglang benchmark with fp8
         if: ${{ steps.install-benchmarks.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'sglang')) }}
@@ -99,7 +105,13 @@ jobs:
 
           cd benchmarks/third_party/sglang
           FP8="1" python scaled_mm_benchmark.py --reports $REPORTS
-          python ../vllm/transform_results.py $REPORTS/scaled_mm_benchmark.csv $REPORTS/scaled-mm-fp8-report.csv --tag $TAG --benchmark scaled-mm-fp8 --param_cols="M,N,K" --bgroup sglang
+          python ../vllm/transform_results.py \
+            $REPORTS/scaled_mm_benchmark.csv \
+            $REPORTS/scaled-mm-fp8-report.csv \
+            --tag $TAG \
+            --bgroup sglang \
+            --benchmark scaled-mm-fp8 \
+            --param_cols="M,N,K"
 
       - name: Run vllm unified attention bf16
         if: ${{ steps.install-benchmarks.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm')) }}
@@ -110,7 +122,13 @@ jobs:
 
           cd benchmarks/third_party/vllm
           python unified_attention_benchmark.py --reports $REPORTS
-          python transform_results.py $REPORTS/unified-attention-performance.csv $REPORTS/unified-attention-report.csv --benchmark "unified-attn-bf16" --bgroup "vllm" --param_cols "q_heads,k_heads,head_size,dtype,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size"
+          python transform_results.py \
+            $REPORTS/unified-attention-performance.csv \
+            $REPORTS/unified-attention-report.csv \
+            --tag $TAG \
+            --bgroup "vllm" \
+            --benchmark "unified-attn-bf16" \
+            --param_cols "q_heads,k_heads,head_size,dtype,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size"
 
       - name: Run vllm batched moe bf16
         if: ${{ steps.install-benchmarks.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm')) }}
@@ -122,7 +140,14 @@ jobs:
 
           cd benchmarks/third_party/vllm
           python batched_moe_benchmark.py --reports $REPORTS
-          python transform_results.py $REPORTS/moe-gemm-performance.csv $REPORTS/moe-gemm-report.csv --tag $TAG --benchmark moe-bf16-benchmark --param_cols="num_experts,max_tokens_per_expert,K,N" --bgroup vllm
+          python transform_results.py \
+            $REPORTS/moe-gemm-performance.csv \
+            $REPORTS/moe-gemm-report.csv \
+            --tag $TAG \
+            --bgroup vllm \
+            --benchmark moe-bf16-benchmark \
+            --gbps \\
+            --param_cols="num_experts,max_tokens_per_expert,K,N"
 
 
       - name: Run vllm batched moe fp8
@@ -132,7 +157,13 @@ jobs:
 
           cd benchmarks/third_party/vllm
           FP8="1" python batched_moe_benchmark.py --reports $REPORTS
-          python transform_results.py $REPORTS/moe-gemm-performance.csv $REPORTS/moe-gemm-fp8-report.csv --tag $TAG --benchmark moe-fp8-benchmark --param_cols="num_experts,max_tokens_per_expert,K,N" --bgroup vllm
+          python transform_results.py \
+            $REPORTS/moe-gemm-performance.csv \
+            $REPORTS/moe-gemm-fp8-report.csv \
+            --tag $TAG \
+            --bgroup vllm \
+            --benchmark moe-fp8-benchmark \
+            --param_cols="num_experts,max_tokens_per_expert,K,N"
 
 
       - name: Run Liger-Kernel benchmarks
@@ -147,7 +178,10 @@ jobs:
           bash benchmarks/third_party/liger/run_benchmarks.sh || RET_CODE=$?
 
           cp Liger-Kernel/benchmark/data/all_benchmark_data.csv $REPORTS/liger-raw.csv
-          python benchmarks/third_party/liger/transform.py $REPORTS/liger-raw.csv $REPORTS/liger-report.csv --tag $TAG
+          python benchmarks/third_party/liger/transform.py \
+            $REPORTS/liger-raw.csv \
+            $REPORTS/liger-report.csv \
+            --tag $TAG
 
           # Return the captured return code at the end
           exit "$RET_CODE"
