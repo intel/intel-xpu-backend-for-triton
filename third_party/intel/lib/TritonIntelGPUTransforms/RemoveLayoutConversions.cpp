@@ -1560,7 +1560,9 @@ void LayoutRematerialization::backwardRematerialization(
   // We measure costs in standardised milli-SM-cycles. The smem load
   // and store each cost 8 * convertLayoutBytes, and then we double
   // it to account for extra cost due to synchronisation.
-  int64_t convertLayoutCost = 32 * convertLayoutBytes;
+  // FIXME: measure cost of smem load/store and synchronisation on Intel GPUs,
+  // and refine this model further. (#5476)
+  int64_t convertLayoutCost = 32 * convertLayoutBytes * 2;
   int64_t rematerialisationCost = 0;
 
   // Evaluate single-use status for every operation in slice
