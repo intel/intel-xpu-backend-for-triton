@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -allow-unregistered-dialect -tritonintelgpu-remove-layout-conversions 2>&1 | FileCheck %s
+// RUN: triton-opt %s -tritonintelgpu-remove-layout-conversions 2>&1 | FileCheck %s
 
 // CHECK-NOT: ttg.convert_layout
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
