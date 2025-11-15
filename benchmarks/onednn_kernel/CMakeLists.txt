@@ -5,7 +5,7 @@ set(oneDNN_KERNEL_FLAGS ${oneDNN_KERNEL_FLAGS}
 
 Python3_add_library(onednn_kernel MODULE WITH_SOABI python_main.cpp)
 
-target_compile_options(onednn_kernel PRIVATE "-fsycl" "-fpreview-breaking-changes")
+target_compile_options(onednn_kernel PRIVATE "-fsycl")
 target_compile_options(onednn_kernel PRIVATE "-DDNNL_CPU_RUNTIME=SYCL")
 target_compile_options(onednn_kernel PRIVATE "-DDNNL_GPU_RUNTIME=SYCL")
 
