@@ -1,4 +1,5 @@
 #include "mlir/Analysis/SliceAnalysis.h"
+#include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Dominance.h"
@@ -1151,7 +1152,7 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
     }
   }
   slice.set_subtract(valuesWithExistingRemat);
-  opsToRewrite = multiRootTopologicalSort(opsToRewrite);
+  opsToRewrite = mlir::topologicalSort(opsToRewrite);
 
   // replaceAllUsesWith calls delayed until after initial rewrite.
   // This is required for slice.count(value) to work mid rewrite.
