@@ -128,7 +128,7 @@ jobs:
           command: DEBUG=1 python -m build --wheel --no-isolation
           build_llvm: "true"
           llvm_repo: "dev-tomek/llvm-project"
-          llvm_ref: "tkuczynski/check_barrier_lowering_perf"
+          llvm_ref: "tkuczynski/check_barrier_lowering_perf_1"
 
       - name: Install Triton
         run: |

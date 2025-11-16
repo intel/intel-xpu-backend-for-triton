@@ -108,7 +108,7 @@ jobs:
         with:
           build_llvm: "true"
           llvm_repo: "dev-tomek/llvm-project"
-          llvm_ref: "tkuczynski/check_barrier_lowering_perf"
+          llvm_ref: "tkuczynski/check_barrier_lowering_perf_1"
 
       - name: Create reports dir
         run: |
