@@ -59,7 +59,7 @@ jobs:
     name: Test ${{ inputs.suite }} ${{ inputs.dtype }} ${{ inputs.mode }} ${{ inputs.test_mode }}
     runs-on:
       - linux
-      - ${{ inputs.runner_label || 'b580' }}
+      - ${{ inputs.runner_label || 'max1550' }}
     timeout-minutes: 720
     defaults:
       run:
