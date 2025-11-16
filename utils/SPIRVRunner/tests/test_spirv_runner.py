@@ -67,9 +67,19 @@ def test_spirv_execution(spirv_test_dir):
         print(f"Skipping test: Directory {spirv_test_dir} not found")
         pytest.skip(f"Test SPIR-V directory {spirv_test_dir} not found")
     cli_args = SPIRV_CLI_ARGS.get(spirv_test_dir, [])
-    result = subprocess.run([SPIRV_RUNNER_PATH] + cli_args, capture_output=True, text=True, check=True,
-                            cwd=spirv_test_dir)
-    print("SPIRVRunner output:", result.stdout)
+
+    try:
+        result = subprocess.run([SPIRV_RUNNER_PATH] + cli_args, capture_output=True, text=True, check=True,
+                                cwd=spirv_test_dir)
+        print("SPIRVRunner output:", result.stdout)
+    except subprocess.CalledProcessError as e:
+        print(f"SPIRVRunner failed with return code: {e.returncode}")
+        print(f"STDOUT:\n{e.stdout}")
+        print(f"STDERR:\n{e.stderr}")
+        print(f"Command: {e.cmd}")
+        print(f"Working directory: {spirv_test_dir}")
+        print(f"Files in directory: {os.listdir(spirv_test_dir)}")
+        raise
 
 
 def main():
