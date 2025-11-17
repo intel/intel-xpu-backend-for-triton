@@ -210,8 +210,7 @@ def test_block_io(M, N, dtype_str, layout, load_block_ptr, store_block_ptr, tran
     assert torch.equal(a, x)
 
     if support_block_io:
-        if not load_block_ptr:
-            if not ((transpose and type(layout) in [SliceLayout]) or
-                    (transpose and dtype_str in ["float16", "int8"])):  # TODO: add support for these cases
-                assert 'spirv_Subgroup2DBlockLoad' in kernel.asm['llir'] or 'GenISA.LSC2DBlockRead' in kernel.asm['llir']
+        if not ((transpose and type(layout) in [SliceLayout]) or
+                (transpose and dtype_str in ["float16", "int8"])):  # TODO: add support for these cases
+            assert 'spirv_Subgroup2DBlockLoad' in kernel.asm['llir'] or 'GenISA.LSC2DBlockRead' in kernel.asm['llir']
         assert 'spirv_Subgroup2DBlockStoreINTEL' in kernel.asm['llir'] or 'GenISA.LSC2DBlockWrite' in kernel.asm['llir']
