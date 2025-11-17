@@ -3194,8 +3194,8 @@ struct StoreOpToBlockIOConversion
     // Limit vBlock to 1
     vBlocks = 1;
 
-    // TODO: use the axis info to general the handling for both regular pointer
-    // and block pointer.
+    // TODO: use the axis info to general the handling for both regular
+    // pointer and block pointer.
     const bool memoryRowMajor = isMemoryRowMajor(op);
     unsigned contiguousDim = memoryRowMajor ? 1 : 0;
     if (contiguousDim != colDim) {
@@ -3329,17 +3329,17 @@ struct StoreOpToBlockIOConversion
       Value addrElem = ptrElems[registerIdx];
       Value offsetX, offsetY;
       if (isBlockPointer) {
-        // Need to apply the linear layout to get the offsets to the base of the
-        // block pointer.
-        // TODO: add annotation uniform to the offsets. Make sure the IGC detect
-        // the offsets as uniform.
+        // Need to apply the linear layout to get the offsets to the base of
+        // the block pointer.
+        // TODO: add annotation uniform to the offsets. Make sure the IGC
+        // detect the offsets as uniform.
         auto offsets = applyLinearLayout(loc, rewriter, *llEncoding,
                                          {{kRegister, b.i32_val(registerIdx)},
                                           {kLane, b.i32_val(0)},
                                           {kWarp, warpId},
                                           {kBlock, b.i32_val(0)}});
-        // TODO: To support rank > 2 tensor, we need to add the offsets of other
-        // dim to the base.
+        // TODO: To support rank > 2 tensor, we need to add the offsets of
+        // other dim to the base.
         assert(offsets.size() == 2 && "only support 2D tensor for now.");
         offsetX = b.add(offsetBaseX, offsets[colDim].second);
         offsetY = b.add(offsetBaseY, offsets[rowDim].second);
