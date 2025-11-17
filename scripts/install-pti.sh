@@ -44,7 +44,7 @@ function build_level_zero {
   LEVEL_ZERO_SHA256=b77e6e28623134ee4e99e2321c127b554bdd5bfa3e80064922eba293041c6c52
 
   if [[ $OSTYPE = msys ]]; then
-    curl "https://github.com/oneapi-src/level-zero/archive/refs/tags/v${LEVEL_ZERO_VERSION}.tar.gz"
+    curl "https://github.com/oneapi-src/level-zero/archive/refs/tags/v${LEVEL_ZERO_VERSION}.tar.gz" -o "v${LEVEL_ZERO_VERSION}.tar.gz"
   else
     wget "https://github.com/oneapi-src/level-zero/archive/refs/tags/v${LEVEL_ZERO_VERSION}.tar.gz"
   fi
