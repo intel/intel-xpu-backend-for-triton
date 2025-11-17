@@ -352,6 +352,8 @@ class MarkArgs:
     reports: str = ""
     n_runs: int = 1
     brief: bool = False
+    hw_gbps: float = None
+    hw_tflops: float = None
 
     @staticmethod
     def load_cli_args() -> MarkArgs:
@@ -375,8 +377,32 @@ class MarkArgs:
             action="store_true",
             help="Print only mean values without min, max, CV.",
         )
+        parser.add_argument(
+            "--hw_gbps",
+            type=float,
+            help="Hardware bandwidth in GB/s to calculate efficiency.",
+        )
+        parser.add_argument(
+            "--hw_tflops",
+            type=float,
+            help="Hardware peak performance in TFLOPS to calculate efficiency.",
+        )
         args = parser.parse_args()
-        return MarkArgs(args.reports, args.n_runs, args.brief)
+        return MarkArgs(args.reports, args.n_runs, args.brief, args.hw_gbps, args.hw_tflops)
+
+
+def enhance_df(df, mark_args: MarkArgs):
+    df = df.copy()
+    if mark_args.brief:
+        df = df[[c for c in df.columns if not any(map(c.endswith, ("min", "max", "CV")))]]
+
+    for col in df.columns:
+        if col.lower().replace("/", "p").endswith("gbps") and mark_args.hw_gbps:
+            df[col + "-eff"] = (df[col] / mark_args.hw_gbps).apply(lambda x: f"{x:.1%}")
+        elif col.lower().endswith("tflops") and mark_args.hw_tflops:
+            df[col + "-eff"] = (df[col] / mark_args.hw_tflops).apply(lambda x: f"{x:.1%}")
+
+    return df
 
 
 class Mark:
@@ -462,12 +488,10 @@ class Mark:
             col0, col1 = df.columns.tolist()
             df["Diff"] = df[col1] - df[col0]
 
+        df = enhance_df(df, mark_args)
         if print_data:
             print(bench.plot_name + ":")
-            if mark_args.brief:
-                print(df[[c for c in df.columns if not any(map(c.endswith, ("min", "max", "CV")))]].to_string())
-            else:
-                print(df.to_string())
+            print(df.to_string())
 
         if save_path:
             df.to_csv(os.path.join(save_path, f"{filename}.csv"), float_format=f"%.{save_precision}f", index=False)
