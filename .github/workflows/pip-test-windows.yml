@@ -104,6 +104,7 @@ jobs:
       - name: Build && Install PTI
         shell: bash
         run: |
+          Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           cd ${{ env.NEW_WORKSPACE }}
           ./scripts/install-pti.sh --build-level-zero
           PTI_LIBS_DIR=$(python ./scripts/pti_lib.py)
