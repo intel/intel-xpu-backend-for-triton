@@ -70,6 +70,15 @@ runs:
         ln -s $PWD/llvm $BASE/llvm
         ./scripts/compile-triton.sh --llvm
 
+    - name: Verify built LLVM
+      if: ${{ inputs.build_llvm == 'true' }}
+      shell: bash
+      run: |
+        cd llvm
+        git log -1 --format="%H %s" > /tmp/llvm-commit.txt
+        cat /tmp/llvm-commit.txt
+        echo "This LLVM was built from commit: $(cat /tmp/llvm-commit.txt)"
+
     - name: Set LLVM_SYSPATH
       if: ${{ inputs.build_llvm == 'true' }}
       shell: bash
