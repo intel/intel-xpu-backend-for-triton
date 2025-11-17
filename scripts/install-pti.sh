@@ -45,11 +45,16 @@ function build_level_zero {
 
   if [[ $OSTYPE = msys ]]; then
     curl "https://github.com/oneapi-src/level-zero/archive/refs/tags/v${LEVEL_ZERO_VERSION}.tar.gz" -o "v${LEVEL_ZERO_VERSION}.tar.gz"
+    FILE_HASH=$(pwsh -Command "Get-FileHash -Algorithm SHA256 v${LEVEL_ZERO_VERSION}.tar.gz | Select-Object -ExpandProperty Hash")
+    if [[ "$FILE_HASH" != "${LEVEL_ZERO_SHA256}" ]]; then
+      echo "ERROR: Checksum does not match!"
+      exit 1
+    fi
   else
     wget "https://github.com/oneapi-src/level-zero/archive/refs/tags/v${LEVEL_ZERO_VERSION}.tar.gz"
+    echo "${LEVEL_ZERO_SHA256}  v${LEVEL_ZERO_VERSION}.tar.gz" > "v${LEVEL_ZERO_VERSION}.tar.gz.sha256"
+    sha256sum -c "v${LEVEL_ZERO_VERSION}.tar.gz.sha256"
   fi
-  echo "${LEVEL_ZERO_SHA256}  v${LEVEL_ZERO_VERSION}.tar.gz" > "v${LEVEL_ZERO_VERSION}.tar.gz.sha256"
-  sha256sum -c "v${LEVEL_ZERO_VERSION}.tar.gz.sha256"
   tar -xf "v${LEVEL_ZERO_VERSION}.tar.gz"
   cd "level-zero-${LEVEL_ZERO_VERSION}"
   echo "${LEVEL_ZERO_VERSION}" | awk -F. '{print $3}' > VERSION_PATCH
