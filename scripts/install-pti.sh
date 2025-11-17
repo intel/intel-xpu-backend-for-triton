@@ -44,8 +44,9 @@ function build_level_zero {
   LEVEL_ZERO_SHA256=b77e6e28623134ee4e99e2321c127b554bdd5bfa3e80064922eba293041c6c52
 
   if [[ $OSTYPE = msys ]]; then
-    curl "https://github.com/oneapi-src/level-zero/archive/refs/tags/v${LEVEL_ZERO_VERSION}.tar.gz" -o "v${LEVEL_ZERO_VERSION}.tar.gz"
-    ls .
+    pwsh -Command \
+      "Invoke-WebRequest -Uri 'https://github.com/oneapi-src/level-zero/archive/refs/tags/v${LEVEL_ZERO_VERSION}.tar.gz' -OutFile 'v${LEVEL_ZERO_VERSION}.tar.gz'"
+    ls . -alh
     FILE_HASH=$(pwsh -Command "Get-FileHash -Algorithm SHA256 v${LEVEL_ZERO_VERSION}.tar.gz | Select-Object -ExpandProperty Hash")
     echo $FILE_HASH
     if [[ "$FILE_HASH" != "${LEVEL_ZERO_SHA256}" ]]; then
