@@ -155,7 +155,6 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
             fn()
             synchronize()
             i += 1
-        print(f"Stopped warmup after {i} iterations")
     else:
         for _ in range(n_warmup):
             fn()
