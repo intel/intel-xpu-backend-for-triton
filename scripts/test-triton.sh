@@ -45,6 +45,8 @@ OPTION:
     --skip-list SKIPLIST
     --extra-skip-list-suffixes SEMICOLON-SEPARATED LIST OF SUFFIXES
     --select-from-file SELECTFILE
+    --test-expr EXPRESSION
+    --debug-fail
 "
 
 err() {
@@ -86,6 +88,8 @@ TRITON_TEST_IGNORE_ERRORS=false
 SKIP_PIP=false
 SKIP_PYTORCH=false
 TEST_UNSKIP=false
+TEST_FILTER_EXPRESSION=""
+TEST_DEBUG_FAIL=false
 
 while (( $# != 0 )); do
   case "$1" in
@@ -273,6 +277,14 @@ while (( $# != 0 )); do
       TRITON_TEST_SELECTFILE="$(realpath "$2")"
       shift 2
       ;;
+    --test-expr)
+      TEST_FILTER_EXPRESSION="$2"
+      shift 2
+      ;;
+    --debug-fail)
+      TEST_DEBUG_FAIL=true
+      shift
+      ;;
     --help)
       echo "$HELP"
       exit 0
@@ -342,12 +354,44 @@ run_unit_tests() {
 }
 
 run_pytest_command() {
-  if [[ -n "$TRITON_TEST_SELECTFILE" ]]; then
-    if pytest "$@" --collect-only > /dev/null 2>&1; then
-      pytest "$@"
+  local pytest_args=()
+  local pytest_expr=""
+
+  # Parse args to separate -k expression
+  local args=("$@")
+  for ((i=0; i<${#args[@]}; i++)); do
+    if [[ "${args[i]}" == "-k" ]]; then
+      pytest_expr="${args[i+1]}"
+      i=$((i + 1))
+      continue
+    fi
+    pytest_args+=("${args[i]}")
+  done
+
+  # Combine with TEST_FILTER_EXPRESSION
+  if [[ -n "$TEST_FILTER_EXPRESSION" ]]; then
+    if [[ -n "$pytest_expr" ]]; then
+      pytest_expr="($pytest_expr) and ($TEST_FILTER_EXPRESSION)"
+    else
+      pytest_expr="$TEST_FILTER_EXPRESSION"
+    fi
+  fi
+
+  # Apply -k expression if any
+  if [[ -n "$pytest_expr" ]]; then
+    pytest_args+=("-k" "$pytest_expr")
+  fi
+
+  if [[ "$TEST_DEBUG_FAIL" == true ]]; then
+    pytest_args+=("--pdb")
+  fi
+
+  if [[ -n "$TRITON_TEST_SELECTFILE" ]] || [[ -n "$pytest_expr" ]]; then
+    if pytest "${pytest_args[@]}" --collect-only > /dev/null 2>&1; then
+      pytest "${pytest_args[@]}"
     fi
   else
-    pytest "$@"
+    pytest "${pytest_args[@]}"
   fi
 }
 
@@ -619,7 +663,8 @@ run_sglang_install() {
   if ! pip list | grep "sglang" ; then
     cd sglang
     git checkout "$(<../benchmarks/third_party/sglang/sglang-pin.txt)"
-    git apply ../benchmarks/third_party/sglang/sglang-fix.patch
+    git apply ../benchmarks/third_party/sglang/sglang-test-fix.patch
+    git apply ../benchmarks/third_party/sglang/sglang-bench-fix.patch
 
     # That's how sglang assumes we'll pick out platform for now
     cp python/pyproject_xpu.toml python/pyproject.toml
@@ -721,18 +766,19 @@ run_triton_kernels_tests() {
 
   # available after `capture_runtime_env` call
   gpu_file="$TRITON_TEST_REPORTS_DIR/gpu.txt"
-  if [[ -f "$gpu_file" ]] && grep -q "B580" "$gpu_file"; then
-    # Using any other number of processes results in an error on the BMG due to insufficient resources.
+  # BMG, LNL, ARLs, A770
+  if [[ -f "$gpu_file" ]] && grep -Eq "(B580|64a0|7d6|7d5|770)" "$gpu_file"; then
+    # Using any other number of processes results in an error on small GPUs due to insufficient resources.
     # FIXME: reconsider in the future
     max_procs=1
   else
     # Using any other number of processes results in an error on the PVC due to insufficient resources.
     # FIXME: reconsider in the future
-    max_procs=4
+    max_procs=${PYTEST_MAX_PROCESSES:-4}
   fi
-
+  # skipping mxfp, they are part of mxfp_tests suite
   TRITON_TEST_SUITE=triton_kernels \
-    run_pytest_command -vvv -n $max_procs --device xpu .
+    run_pytest_command -vvv -n $max_procs --device xpu . -k 'not test_mxfp'
 }
 
 test_triton() {

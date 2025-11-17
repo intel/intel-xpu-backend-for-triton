@@ -24,12 +24,14 @@ def _select_backend() -> str:
     elif backend == "xpu":
         global UTILS_CACHE_PATH
         UTILS_CACHE_PATH = triton.runtime.driver.active.build_proton_help_lib()
-        files = importlib.metadata.files('intel-pti')
-        if files is not None:
-            for f in files:
-                if f.name == 'libpti_view.so':
-                    os.environ["TRITON_XPUPTI_LIB_PATH"] = str(pathlib.Path(f.locate()).parent.resolve())
-                    break
+        try:
+            if (files := importlib.metadata.files('intel-pti')) is not None:
+                for f in files:
+                    if f.name == 'libpti_view.so':
+                        os.environ["TRITON_XPUPTI_LIB_PATH"] = str(pathlib.Path(f.locate()).parent.resolve())
+                        break
+        except importlib.metadata.PackageNotFoundError:
+            pass
         return "xpupti"
     else:
         raise ValueError("No backend is available for the current target.")

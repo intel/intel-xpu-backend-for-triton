@@ -1,4 +1,5 @@
 #include "Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -24,6 +25,17 @@ using namespace mlir::triton::gpu;
 using namespace mlir::triton::gpu::intel;
 
 #define S(v) StringAttr::get(ctx, (v))
+
+#if defined(_MSC_VER) && !defined(__clang__)
+// from https://gist.github.com/pps83/3210a2f980fd02bb2ba2e5a1fc4a2ef0
+#include <intrin.h>
+
+static int __builtin_ctz(unsigned x) {
+  unsigned long r;
+  _BitScanForward(&r, x);
+  return static_cast<int>(r);
+}
+#endif
 
 namespace {
 
@@ -2526,6 +2538,19 @@ struct LoadOpToBlockIOConversion
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     MLIRContext *ctx = rewriter.getContext();
 
+    unsigned threadsPerWarp =
+        TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>());
+
+    StringAttr kRegister = S("register");
+    assert(regPackedBases.has_value() &&
+           "invalid register bases for packing elems.");
+    std::vector<std::vector<int>> bases(regPackedBases->size());
+    llvm::transform(*regPackedBases, bases.begin(),
+                    [&](int base) { return std::vector<int>{base}; });
+    LinearLayout regMapping({{kRegister, bases}},
+                            {{kRegister, llEncoding->getInDimSize(kRegister)}},
+                            /*requireSurjective=*/true);
+
     // Get the LLVM values for pointers
     Value llPtr = adaptor.getPtr();
     SmallVector<Value> ptrElems = unpackLLElements(loc, llPtr, rewriter);
@@ -2557,14 +2582,56 @@ struct LoadOpToBlockIOConversion
       }
 
       // Check the constancy of the mask support to load the memory in 2D block.
-      if (!(maskConstancyHor >= (tileWidth * numPackedVals) &&
-            maskConstancyVer >= tileHeight))
-        return failure();
+      if (!(maskConstancyHor >= (tileWidth * numPackedVals)))
+        return failure(); // The tileWidth and numPackedVals is not changeable
+                          // for now.
 
       // Adjust vBlock to fit the constancy of mask.
       vBlocks = std::min(vBlocks, mlir::ceil<int>(maskConstancyHor,
                                                   tileWidth * numPackedVals));
       assert(llvm::isPowerOf2_64(vBlocks) && "vBlocks has to be power of 2");
+
+      // Check the constancy of the mask support to load the memory in 2D block.
+      if (maskConstancyVer < tileHeight) {
+        unsigned minTileHeight =
+            mlir::ceil<unsigned>(threadsPerWarp, tileWidth);
+        if (maskConstancyVer < minTileHeight)
+          return failure();
+
+        unsigned numBasesForPackedVals = __builtin_ctz(numPackedVals);
+        unsigned numBasesForTileWidth =
+            __builtin_ctz(mlir::ceil<unsigned>(tileWidth, threadsPerWarp));
+        unsigned numBasesForNewTileHeight =
+            __builtin_ctz(maskConstancyVer / minTileHeight);
+        unsigned numBasesForOldTileHeight =
+            __builtin_ctz(tileHeight / minTileHeight);
+        unsigned numBasesForVBlocks = __builtin_ctz(vBlocks);
+
+        std::vector<std::vector<int32_t>> rearrangeMap;
+        for (int i = 0; i < __builtin_ctz(numElems); ++i) {
+          rearrangeMap.emplace_back().push_back(1 << i);
+        }
+
+        // Rotate the register bases of the adjusted part of tile height to the
+        // place after the vBlocks.
+        unsigned rotateStart = numBasesForPackedVals + numBasesForTileWidth +
+                               numBasesForNewTileHeight;
+        unsigned rotateNum =
+            numBasesForOldTileHeight - numBasesForNewTileHeight;
+        std::rotate(rearrangeMap.begin() + rotateStart,
+                    rearrangeMap.begin() + rotateStart + rotateNum,
+                    rearrangeMap.begin() + rotateStart + rotateNum +
+                        numBasesForVBlocks);
+
+        LinearLayout rearrangeMapLL(
+            {{kRegister, rearrangeMap}},
+            {{kRegister, regMapping.getInDimSize(kRegister)}},
+            /*requireSurjective=*/true);
+        tileHeight = maskConstancyVer;
+        assert(((tileHeight - 1) & tileHeight) == 0 &&
+               "the tileHeight has to be power of 2.");
+        regMapping = rearrangeMapLL.compose(regMapping);
+      }
     }
 
     // Get the LLVM values for `other`
@@ -2595,8 +2662,6 @@ struct LoadOpToBlockIOConversion
       }
     }
 
-    unsigned threadsPerWarp =
-        TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>());
     int64_t numElemsPerLoad = mlir::ceil(
         tileHeight * tileWidth * numPackedVals * vBlocks, (int)threadsPerWarp);
     unsigned numValuesPerLoad = mlir::ceil((int)numElemsPerLoad, numPackedVals);
@@ -2616,26 +2681,68 @@ struct LoadOpToBlockIOConversion
     Value baseWidth = b.i32_val(
         std::max(64u, vBlocks * tileWidth * (packedElemSizeInBits / 8)));
 
-    StringAttr kRegister = str_attr("register");
-    StringAttr kLane = str_attr("lane");
-    StringAttr kWarp = str_attr("warp");
-    StringAttr kBlock = str_attr("block");
-
-    assert(regPackedBases.has_value() &&
-           "invalid register bases for packing elems.");
-    std::vector<std::vector<int>> bases(regPackedBases->size());
-    llvm::transform(*regPackedBases, bases.begin(),
-                    [](int base) { return std::vector<int>{base}; });
-    LinearLayout regMapping({{kRegister, bases}},
-                            {{kRegister, llEncoding->getInDimSize(kRegister)}},
-                            /*requireSurjective=*/true);
-
     bool useVNNIFormat = false;
     Type packedDPASOperandType;
-    if (hasDotDpasEncoding(tensorType)) {
+    if (hasDpasEncoding(tensorType) || hasDotDpasEncoding(tensorType)) {
+
+      // For the DPAS layout, there are three types of block loads used.
+      // (For non-DPAS layouts, only two types are involved.)
+      //   1. load2DGenXType –
+      //   2. packedDPASOperandType – (This is null for non-DPAS layouts.)
+      //   3. unpackedType –
+      //
+      // clang-format off
+      // The `tt.load` operation generates the following block load sequence:
+      //   %0 = load_2d %ptr : <load2DGenXType>
+      //   %1 = shufflevector <load2DGenXType> %0, <load2DGenXType> %0,
+      //         <8 x i32> <i32 0, i32 1, i32 2, i32 3, i32 4, i32 5, i32 6, i32 7>
+      //   %2 = shufflevector <load2DGenXType> %0, <load2DGenXType> %0,
+      //         <8 x i32> <i32 8, i32 9, i32 10, i32 11, i32 12, i32 13, i32 14, i32 15>
+      //   %3 = bitcast %1 : <packedDPASOperandType> -> <unpackedType>
+      //   %4 = bitcast %2 : <packedDPASOperandType> -> <unpackedType>
+      //   <operations for packLLElements>
+      // clang-format on
+      //
+      // The `tt.dot` operation generates the DPAS instruction sequence:
+      // clang-format off
+      //   <operations for unpackLLElements>
+      //   %5 = bitcast %3 : <unpackedType> -> <packedDPASOperandType>
+      //   %6 = bitcast %4 : <unpackedType> -> <packedDPASOperandType>
+      //   %7 = dpas %5, %6, %other : <packedDPASOperandType>, <packedDPASOperandType>, <packedDPASOperandType>
+      // clang-format on
+      //
+      // The LLVM optimizer eliminates redundant pack/unpack element pairs
+      // and corresponding bitcast operations. The final optimized IR for
+      // the dot product becomes:
+      //
+      // clang-format off
+      //   %0 = load_2d %ptr : <load2DGenXType>
+      //   %1 = shufflevector <load2DGenXType> %0, <load2DGenXType> %0,
+      //         <8 x i32> <i32 0, i32 1, i32 2, i32 3, i32 4, i32 5, i32 6, i32 7>
+      //   %2 = shufflevector <load2DGenXType> %0, <load2DGenXType> %0,
+      //         <8 x i32> <i32 8, i32 9, i32 10, i32 11, i32 12, i32 13, i32 14, i32 15>
+      //   %3 = dpas %1, %2, %other : <packedDPASOperandType>, <packedDPASOperandType>, <packedDPASOperandType>
+      // clang-format on
+      //
+      // The `packedDPASOperandType` together with the `shufflevector`
+      // operations defines the computation flow for the dot product.
+
       DpasEncodingAttr::OpIdx opIdx = getOpIdx(tensorType);
       auto dpasLayout = getDpasLayout(tensorType);
-      if (opIdx == DpasEncodingAttr::OpIdx::OperandB) {
+      switch (opIdx) {
+      case DpasEncodingAttr::OpIdx::OperandA: {
+        unsigned elemsPerLanePerDPASInst =
+            product<unsigned>(dpasLayout.getDPASInstShapeA()) / threadsPerWarp;
+        // Block 2D contain at least one DotOp A.
+        if (numElemsPerLoad >= elemsPerLanePerDPASInst) {
+          packedDPASOperandType = LLVM::getVectorType(
+              packedType, elemsPerLanePerDPASInst / numPackedVals);
+          unpackedType = LLVM::getVectorType(eltTy, elemsPerLanePerDPASInst);
+        }
+      } break;
+      case DpasEncodingAttr::OpIdx::OperandB: {
+        assert(numPackedVals == 1 &&
+               "invalid number of packed values for DPAS operand B.");
         unsigned elemsPerLanePerDPASInst =
             product<unsigned>(dpasLayout.getDPASInstShapeB()) / threadsPerWarp;
         // Block 2D contain at least one DotOp B.
@@ -2659,6 +2766,17 @@ struct LoadOpToBlockIOConversion
           }
           unpackedType = LLVM::getVectorType(eltTy, elemsPerLanePerDPASInst);
         }
+      } break;
+      case DpasEncodingAttr::OpIdx::OperandC: {
+        unsigned elemsPerLanePerDPASInst =
+            product<unsigned>(dpasLayout.getDPASInstShapeC()) / threadsPerWarp;
+        // Block 2D contain at least one DotOp C.
+        if (numElemsPerLoad >= elemsPerLanePerDPASInst) {
+          packedDPASOperandType = LLVM::getVectorType(
+              packedType, elemsPerLanePerDPASInst / numPackedVals);
+          unpackedType = LLVM::getVectorType(eltTy, elemsPerLanePerDPASInst);
+        }
+      } break;
       }
     }
     SmallVector<Value> unpackedLoadedVals(numElems);
@@ -2948,8 +3066,21 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
 
       Value addrElem = b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
       uint32_t alignment = nWords * width / 8;
-      auto createLoadInstruction = [&]() -> SmallVector<Value, 1> {
-        Value ret = b.load(retTy, addrElem, alignment);
+      auto createLoadWithAttrs = [&]() -> SmallVector<Value, 1> {
+        auto getNonTemporalFlag = [](triton::LoadOp loadOp) {
+          switch (loadOp.getCache()) {
+          case triton::CacheModifier::CG:
+          case triton::CacheModifier::CS:
+          case triton::CacheModifier::CV:
+            return true;
+          case triton::CacheModifier::CA:
+          default:
+            return false;
+          }
+        };
+
+        Value ret = b.load(retTy, addrElem, alignment, op.getIsVolatile(),
+                           getNonTemporalFlag(op));
         return {ret};
       };
 
@@ -2962,11 +3093,11 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
         else {
           Block &endBlock = LLVM::intel::createPredicatedBlock(
               rewriter, loc, pred, SmallVector<Value, 1>{other_},
-              createLoadInstruction);
+              createLoadWithAttrs);
           ret = *endBlock.args_begin();
         }
       } else {
-        ret = createLoadInstruction()[0];
+        ret = createLoadWithAttrs()[0];
       }
 
       // Extract and store return values
@@ -3401,10 +3532,7 @@ struct StoreOpConversion
 
       if (maskVal) {
         // Create a predicated store operation.
-        std::optional<bool> enablePredicated =
-            mlir::triton::tools::isEnvValueBool(
-                mlir::triton::tools::getStrEnv("TRITON_INTEL_PREDICATED"));
-        if (!enablePredicated.has_value() || enablePredicated.value())
+        if (triton::tools::getBoolEnv("TRITON_INTEL_PREDICATED"))
           rewriter.create<TritonGEN::PredicatedStoreOp>(
               loc, addrElem, vecWord, b.i64_val(alignment), maskVal);
         else

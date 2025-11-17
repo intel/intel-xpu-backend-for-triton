@@ -84,9 +84,9 @@ jobs:
           key: pip-$PYTHON_VERSION-$GITHUB_SHA
 
       - name: Install Python
-        uses: actions/setup-python@v6
+        uses: ./.github/actions/setup-python
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          python_version: ${{ env.PYTHON_VERSION }}
 
       - name: Install Python build dependencies
         run: |
@@ -247,6 +247,7 @@ jobs:
           fi
 
       - name: Report environment details
+        timeout-minutes: 1
         run: |
           mkdir -p inductor_log
           TIMESTAMP=$(date '+%Y%m%d%H%M%S')
