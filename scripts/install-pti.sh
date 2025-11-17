@@ -48,6 +48,8 @@ function build_level_zero {
       "Invoke-WebRequest -Uri 'https://github.com/oneapi-src/level-zero/archive/refs/tags/v${LEVEL_ZERO_VERSION}.tar.gz' -OutFile 'v${LEVEL_ZERO_VERSION}.tar.gz'"
     ls . -alh
     FILE_HASH=$(pwsh -Command "Get-FileHash -Algorithm SHA256 v${LEVEL_ZERO_VERSION}.tar.gz | Select-Object -ExpandProperty Hash")
+    # convert to lowercase
+    FILE_HASH=${FILE_HASH,,}
     echo $FILE_HASH
     if [[ "$FILE_HASH" != "${LEVEL_ZERO_SHA256}" ]]; then
       echo "ERROR: Checksum does not match!"
