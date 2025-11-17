@@ -63,7 +63,7 @@ runs:
         echo "TRITON_USE_SPIRV_BACKEND=1" | tee -a $GITHUB_ENV
 
     - name: Build LLVM
-      if: ${{ inputs.build_llvm == 'true' && }}
+      if: ${{ inputs.build_llvm == 'true'}}
       shell: bash
       run: |
         export BASE=$HOME
@@ -84,13 +84,6 @@ runs:
       shell: bash
       run: |
         echo "LLVM_SYSPATH=$HOME/packages/llvm" | tee -a $GITHUB_ENV
-
-    - name: Save LLVM cache
-      if: ${{ inputs.build_llvm == 'true' && }}
-      uses: ./.github/actions/save
-      with:
-        path: ${{ steps.llvm-cache.outputs.path }}
-        dest: ${{ steps.llvm-cache.outputs.dest }}
 
     - name: Prepare Triton cache
       shell: bash
