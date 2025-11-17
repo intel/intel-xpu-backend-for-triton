@@ -45,7 +45,9 @@ function build_level_zero {
 
   if [[ $OSTYPE = msys ]]; then
     curl "https://github.com/oneapi-src/level-zero/archive/refs/tags/v${LEVEL_ZERO_VERSION}.tar.gz" -o "v${LEVEL_ZERO_VERSION}.tar.gz"
+    ls .
     FILE_HASH=$(pwsh -Command "Get-FileHash -Algorithm SHA256 v${LEVEL_ZERO_VERSION}.tar.gz | Select-Object -ExpandProperty Hash")
+    echo $FILE_HASH
     if [[ "$FILE_HASH" != "${LEVEL_ZERO_SHA256}" ]]; then
       echo "ERROR: Checksum does not match!"
       exit 1
