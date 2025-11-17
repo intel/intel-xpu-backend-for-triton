@@ -43,7 +43,11 @@ function build_level_zero {
   LEVEL_ZERO_VERSION=1.24.2
   LEVEL_ZERO_SHA256=b77e6e28623134ee4e99e2321c127b554bdd5bfa3e80064922eba293041c6c52
 
-  wget --progress=dot:giga -e use_proxy=yes "https://github.com/oneapi-src/level-zero/archive/refs/tags/v${LEVEL_ZERO_VERSION}.tar.gz"
+  if [[ $OSTYPE = msys ]]; then
+    curl "https://github.com/oneapi-src/level-zero/archive/refs/tags/v${LEVEL_ZERO_VERSION}.tar.gz"
+  else
+    wget "https://github.com/oneapi-src/level-zero/archive/refs/tags/v${LEVEL_ZERO_VERSION}.tar.gz"
+  fi
   echo "${LEVEL_ZERO_SHA256}  v${LEVEL_ZERO_VERSION}.tar.gz" > "v${LEVEL_ZERO_VERSION}.tar.gz.sha256"
   sha256sum -c "v${LEVEL_ZERO_VERSION}.tar.gz.sha256"
   tar -xf "v${LEVEL_ZERO_VERSION}.tar.gz"
