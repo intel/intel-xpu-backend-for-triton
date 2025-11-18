@@ -69,6 +69,7 @@ jobs:
       - name: Install python test dependencies
         run: |
           pip install pandas scipy tqdm
+          pip uninstall pytest-skip
 
       - name: Run inductor tests
         run: |

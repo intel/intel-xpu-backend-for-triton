@@ -1,4 +1,5 @@
 #include "mlir/Analysis/SliceAnalysis.h"
+#include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Dominance.h"
@@ -1151,7 +1152,7 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
     }
   }
   slice.set_subtract(valuesWithExistingRemat);
-  opsToRewrite = multiRootTopologicalSort(opsToRewrite);
+  opsToRewrite = mlir::topologicalSort(opsToRewrite);
 
   // replaceAllUsesWith calls delayed until after initial rewrite.
   // This is required for slice.count(value) to work mid rewrite.
@@ -1560,7 +1561,9 @@ void LayoutRematerialization::backwardRematerialization(
   // We measure costs in standardised milli-SM-cycles. The smem load
   // and store each cost 8 * convertLayoutBytes, and then we double
   // it to account for extra cost due to synchronisation.
-  int64_t convertLayoutCost = 32 * convertLayoutBytes;
+  // FIXME: measure cost of smem load/store and synchronisation on Intel GPUs,
+  // and refine this model further. (#5476)
+  int64_t convertLayoutCost = 32 * convertLayoutBytes * 2;
   int64_t rematerialisationCost = 0;
 
   // Evaluate single-use status for every operation in slice
