@@ -89,7 +89,7 @@ def test_sycl_ls_with_trace():
         print("Running sycl-ls with SYCL_PI_TRACE=1...")
 
         env = os.environ.copy()
-        env['SYCL_PI_TRACE'] = '1'
+        env['SYCL_UR_TRACE'] = '1'
 
         result = subprocess.run(['sycl-ls'], capture_output=True, text=True, env=env, timeout=30)
 
