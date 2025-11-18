@@ -45,6 +45,8 @@ OPTION:
     --skip-list SKIPLIST
     --extra-skip-list-suffixes SEMICOLON-SEPARATED LIST OF SUFFIXES
     --select-from-file SELECTFILE
+    --select NAME
+    --debug-fail
 "
 
 err() {
@@ -86,6 +88,8 @@ TRITON_TEST_IGNORE_ERRORS=false
 SKIP_PIP=false
 SKIP_PYTORCH=false
 TEST_UNSKIP=false
+TRITON_TEST_SELECT=""
+TRITON_TEST_DEBUG_FAIL=false
 
 while (( $# != 0 )); do
   case "$1" in
@@ -273,6 +277,14 @@ while (( $# != 0 )); do
       TRITON_TEST_SELECTFILE="$(realpath "$2")"
       shift 2
       ;;
+    --select)
+      TRITON_TEST_SELECT="$2"
+      shift 2
+      ;;
+    --debug-fail)
+      TRITON_TEST_DEBUG_FAIL=true
+      shift
+      ;;
     --help)
       echo "$HELP"
       exit 0
@@ -342,7 +354,7 @@ run_unit_tests() {
 }
 
 run_pytest_command() {
-  if [[ -n "$TRITON_TEST_SELECTFILE" ]]; then
+  if [[ -n "$TRITON_TEST_SELECTFILE" ]] || [[ -n "$TRITON_TEST_SELECT" ]]; then
     if pytest "$@" --collect-only > /dev/null 2>&1; then
       pytest "$@"
     fi
