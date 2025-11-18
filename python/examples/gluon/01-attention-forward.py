@@ -48,10 +48,11 @@ class BarrierCounter:
     phase: gl.tensor
     num_barriers: gl.constexpr
 
+    @gluon.constexpr_function
     def __init__(self, index, phase, num_barriers):
         self.index = index
         self.phase = phase
-        self.num_barriers = num_barriers
+        self.num_barriers = gl.constexpr(num_barriers)
 
     @gluon.must_use_result
     @gluon.jit
@@ -75,6 +76,7 @@ def Channel(T, alloc_fn):
         num_buffers: gl.constexpr
         num_consumers: gl.constexpr
 
+        @gluon.constexpr_function
         def __init__(self, mem, ready_bars, empty_bars, num_buffers, num_consumers):
             self.mem = mem
             self.ready_bars = ready_bars
@@ -139,6 +141,7 @@ def Channel(T, alloc_fn):
         channel: ChannelType
         counter: BarrierCounter
 
+        @gluon.constexpr_function
         def __init__(self, channel, counter):
             self.channel = channel
             self.counter = counter
@@ -154,6 +157,7 @@ def Channel(T, alloc_fn):
         channel: ChannelType
         counter: BarrierCounter
 
+        @gluon.constexpr_function
         def __init__(self, channel, counter):
             self.channel = channel
             self.counter = counter
@@ -229,8 +233,9 @@ class AttentionConfig:
     num_kv_buffers: gl.constexpr
     use_exp2_turnstile: gl.constexpr
 
+    @gluon.constexpr_function
     def __init__(self, qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, GROUP_SIZE_N, NUM_SMS, STAGE, dtype,
-                 num_warps, _semantic=None):
+                 num_warps):
         self.qk_scale = qk_scale
         self.Z = Z
         self.H = H
@@ -245,7 +250,7 @@ class AttentionConfig:
         self.num_warps = gl.constexpr(num_warps)
 
         self.SPLIT_D_FACTOR = gl.constexpr(2)
-        self.SPLIT_EXP_FACTOR = 256 // HEAD_DIM
+        self.SPLIT_EXP_FACTOR = gl.constexpr(256 // HEAD_DIM)
         self.SPLIT_QK_LOAD_FACTOR = gl.constexpr(2 if STAGE == 1 else 1)
         self.SPLIT_M = gl.constexpr(self.BLOCK_M // 2)
         self.SPLIT_D = gl.constexpr(self.HEAD_DIM // self.SPLIT_D_FACTOR)
@@ -264,15 +269,12 @@ class AttentionConfig:
         o_splitn_tmem_layout: gl.constexpr = TensorMemoryLayout(
             (o_instr_shape[0], o_instr_shape[1] // self.SPLIT_D_FACTOR), col_stride=1)
 
-        self.qk_layout = get_tmem_reg_layout(gl.float32, self.qk_shape, self.qk_tmem_layout, self.num_warps,
-                                             instr_variant="32x32b_splitn", _semantic=_semantic)
-        self.o_splitn_layout = get_tmem_reg_layout(
-            gl.float32,
-            (self.o_shape[0], self.o_shape[1] // self.SPLIT_D_FACTOR),
-            o_splitn_tmem_layout,
-            self.num_warps,
-            _semantic=_semantic,
-        )
+        self.qk_layout = gl.constexpr(
+            get_tmem_reg_layout(gl.float32, self.qk_shape, self.qk_tmem_layout, self.num_warps,
+                                instr_variant="32x32b_splitn"))
+        self.o_splitn_layout = gl.constexpr(
+            get_tmem_reg_layout(gl.float32, (self.o_shape[0], self.o_shape[1] // self.SPLIT_D_FACTOR),
+                                o_splitn_tmem_layout, self.num_warps))
         self.alpha_2d_layout = gl.constexpr(gl.BlockedLayout([1, 1], [32, 1], [self.num_warps, 1], [0, 1]))
 
         is_fp16 = self.dtype.value in [gl.float16, gl.bfloat16]
@@ -304,6 +306,7 @@ class ProgramScheduler:
     num_pid_in_group: gl.tensor
     num_tiles: gl.tensor
 
+    @gluon.constexpr_function
     def __init__(self, config, start_pid, num_pid_n, num_pid_in_group, num_tiles):
         self.config = config
         self.start_pid = start_pid
@@ -338,6 +341,7 @@ class AttentionProgram:
     offset_y: gl.tensor
     qo_offset_y: gl.tensor
 
+    @gluon.constexpr_function
     def __init__(self, config, start_m, off_hz, offset_y, qo_offset_y):
         self.config = config
         self.start_m = start_m
@@ -867,12 +871,13 @@ def attention_kernel(  #
 
     chnls = (q_chnl, kv_chnl, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl, exp_turnstile)
     descs = (desc_q, desc_k, desc_v, desc_o)
-    gl.warp_specialize((config, chnls, descs, M, STAGE), _attn_fwd_correction, (config, chnls, descs, M, STAGE), [
-        _attn_fwd_softmax0,
-        _attn_fwd_softmax1,
-        _attn_fwd_mma,
-        _attn_fwd_load,
-        _attn_fwd_epilogue,
+    gl.warp_specialize([
+        (_attn_fwd_correction, (config, chnls, descs, M, STAGE)),
+        (_attn_fwd_softmax0, (config, chnls, descs, M, STAGE)),
+        (_attn_fwd_softmax1, (config, chnls, descs, M, STAGE)),
+        (_attn_fwd_mma, (config, chnls, descs, M, STAGE)),
+        (_attn_fwd_load, (config, chnls, descs, M, STAGE)),
+        (_attn_fwd_epilogue, (config, chnls, descs, M, STAGE)),
     ], [4, 4, 1, 1, 1], [192, 192, 24, 24, 24])
 
     q_chnl.release()

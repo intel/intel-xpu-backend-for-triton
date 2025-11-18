@@ -779,8 +779,11 @@ def test_preshuffle_scale_mxfp_cdna4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, DTYPE_A
     triton_out = triton_out.to(torch.float32)
     torch.testing.assert_close(torch_out, triton_out, atol=2e-5, rtol=1e-4)
     if is_hip() and preshuffle:
-        assert "tilesPerWarp = [2, 2]" in k.asm["ttgir"]
         assert "ds_read_u8" not in k.asm["amdgcn"]
+        if mfma_nonkdim == 16:
+            assert "tilesPerWarp = [2, 2]" in k.asm["ttgir"]
+        elif mfma_nonkdim == 32:  # default tilesPerWarp = [1, 1]
+            assert "tilesPerWarp" not in k.asm["ttgir"]
 
 
 @pytest.mark.parametrize("M, N, K", [(1024, 512, 512), (998, 111, 512), (63, 128, 512)])
@@ -1047,8 +1050,10 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
     if is_cuda():
         if scale_type == "float8_e4m3fn" and not pack_along_k:
             pytest.skip("Packing along K is required for float8_e4m3fn")
-        if torch.cuda.get_device_capability()[0] != 10:
-            pytest.skip("Requires compute capability == 10")
+        if torch.cuda.get_device_capability()[0] != 10 and torch.cuda.get_device_capability()[0] != 12:
+            pytest.skip("Requires compute capability == 10 or 12")
+        if torch.cuda.get_device_capability()[0] == 12 and pack_along_k is False:
+            pytest.skip("Packing along M, N is not supported on SM120")
         if not (with_a_scale and with_b_scale):
             pytest.skip("None aScale/bScale is only tested on AMD backend for now")
     elif is_hip():
@@ -1215,7 +1220,15 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
         if (A_DATA_TYPE == 'float4' and not WITH_A_SCALE) or (B_DATA_TYPE == 'float4' and not WITH_B_SCALE):
             pytest.skip("Float4 without scale is tested in test_block_scale_fp4")
     elif is_xpu():
-        pytest.xfail("XPU does not natively support scaled mxfp8 & mxfp4 matmul")
+        if not (WITH_A_SCALE and WITH_B_SCALE):
+            pytest.xfail("None scale has not been tested on XPU backend")
+        if not (A_DATA_TYPE == "float8e5" and B_DATA_TYPE == "float4"):
+            pytest.xfail(f"(A: {A_DATA_TYPE}, B: {B_DATA_TYPE}) has not been tested on XPU backend")
+        if (BLOCK_M, BLOCK_N,
+                BLOCK_K) == (128, 256,
+                             256) and CONST_SCALE and triton.runtime.driver.active.utils.get_device_properties(
+                                 triton.runtime.driver.active.get_current_device())["max_shared_mem"] < 196608:
+            pytest.xfail("XPU: Not enough shared memory")
     if not PACK_B_ALONG_K and B_DATA_TYPE != "float4":
         pytest.xfail("Pack along K can only be False for float4")
 
@@ -1286,6 +1299,10 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
     kernel_kwargs = {}
     if is_hip():
         kernel_kwargs["matrix_instr_nonkdim"] = nonKDim
+    if is_xpu() and (128, 256, 256) == (BLOCK_M, BLOCK_N, BLOCK_K) and not CONST_SCALE and not PACK_B_ALONG_K:
+        kernel_kwargs["num_warps"] = 8
+    if is_xpu():
+        kernel_kwargs["grf_mode"] = "256"
     out = mxfp8_mxfp4_matmul[grid](a, b, output, a_scale, b_scale, M, N, K, stride_scale, a.stride(0), a.stride(1),
                                    b.stride(0), b.stride(1), output.stride(0), output.stride(1), not CONST_SCALE,
                                    dtype_converter[A_DATA_TYPE], dtype_converter[B_DATA_TYPE], BLOCK_M, BLOCK_N,

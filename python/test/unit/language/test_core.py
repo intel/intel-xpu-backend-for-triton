@@ -1352,8 +1352,6 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
             pytest.xfail("Only test atomic bfloat16/float16 ops on GPU")
     if "uint" in dtype_x_str and mode in ["min_neg", "all_neg"]:
         pytest.xfail("uint cannot be negative")
-    if is_xpu() and dtype_x_str == 'bfloat16':
-        pytest.skip("bfloat16 not yet supported for xpu")
 
     n_programs = 5
 
@@ -1442,8 +1440,6 @@ def test_atomic_rmw_predicate(num_ctas, device):
                           for check_return_val in ([True, False] if is_hip() else [True])])
 def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, check_return_val, device):
     check_type_supported(dtype_x_str, device)
-    if is_xpu() and dtype_x_str == 'bfloat16':
-        pytest.skip("bfloat16 not yet supported for xpu")
     shape0, shape1 = shape
     # triton kernel
 
@@ -1523,8 +1519,6 @@ def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, check_return_val,
                                                          for dtype_x_str in ['bfloat16', 'float16', 'float32']])
 def test_tensor_atomic_add_non_exclusive_offset(size, num_ctas, dtype_x_str, device):
     check_type_supported(dtype_x_str, device)
-    if is_xpu() and dtype_x_str == 'bfloat16':
-        pytest.skip("bfloat16 not yet supported for xpu")
 
     @triton.jit
     def kernel(X, val, NUM: tl.constexpr):
@@ -1549,8 +1543,6 @@ def test_tensor_atomic_add_non_exclusive_offset(size, num_ctas, dtype_x_str, dev
                                                          for dtype_x_str in ['bfloat16', 'float16', 'float32']])
 def test_tensor_atomic_add_shift_1(size, num_ctas, dtype_x_str, device):
     check_type_supported(dtype_x_str, device)
-    if is_xpu() and dtype_x_str == 'bfloat16':
-        pytest.skip("bfloat16 not yet supported for xpu")
 
     @triton.jit
     def kernel(X, val, NUM: tl.constexpr):
@@ -1586,9 +1578,6 @@ def test_tensor_atomic_add_access_patterns(shape, idx_order, mask_step, num_ctas
     check_type_supported(dtype_x_str, device)
     if is_interpreter():
         pytest.xfail("not supported in the interpreter")
-
-    if is_xpu() and dtype_x_str == 'bfloat16':
-        pytest.skip("bfloat16 not yet supported for xpu")
 
     @triton.jit
     def kernel(in_ptr, idx_ptr, out_ptr, shape0, shape1, mask_step, XBLOCK: tl.constexpr):
@@ -2803,6 +2792,23 @@ def test_histogram(M, N, device):
     assert (z_torch == z).all()
 
 
+@pytest.mark.interpreter
+def test_histogram_silent_data_corruption(device):
+
+    @triton.jit
+    def histogram_kernel(x_ptr, z_ptr):
+        offset = tl.arange(0, 1)
+        x = tl.load(x_ptr + offset)
+        z = tl.histogram(x, 1)
+        tl.store(z_ptr + offset, z)
+
+    x = torch.ones(1, device=device, dtype=torch.int32)
+    z = torch.ones(2, device=device, dtype=torch.int32)
+
+    histogram_kernel[(1, )](x, z)
+    assert z[1] == 1, f"Second element shouldn't be affected, expected_buffer=[1, 1], actual_buffer={z}"
+
+
 # ------------------------
 # test histogram with mask
 # ------------------------
@@ -3143,7 +3149,7 @@ def get_test_dot_base_cases():
     return [(*shape, 4, False, False, epilogue, input_precision, in_dtype, out_dtype, 1, None)
             for shape in [(64, 64, 64), (32, 32, 32), (16, 16, 16)]
             for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols', 'softmax', 'chain-dot']
-            for input_precision in ['tf32', 'tf32x3', 'ieee']
+            for input_precision in ['tf32', 'tf32x3', 'ieee', 'bf16x3', 'bf16x6']
             for in_dtype, out_dtype in [('float16', 'float16'), ('float16',
                                                                  'float32'), ('float32',
                                                                               'float32'), ('float64', 'float64')]
@@ -3268,6 +3274,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     if is_interpreter():
         if in_dtype == 'bfloat16':
             pytest.xfail("bfloat16 is not supported in the interpreter")
+        if input_precision == "bf16x3" or input_precision == "bf16x6":
+            pytest.xfail(f"input_precision {input_precision} is not supported in the interpreter")
     else:
         if is_xpu():
             if (M < 8 or N < 16 or (K < 16 and in_dtype == 'float16') or (K < 8 and in_dtype == 'float32')):
@@ -3300,7 +3308,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                 pytest.skip(f"{in_dtype} only supported on CDNA4 and gfx12")
             if in_dtype in ("float8e5b16", "float8e4b8") and not is_hip_cdna3():
                 pytest.skip(f"{in_dtype} only supported on CDNA3")
-            if not ((input_precision == "ieee") or (input_precision == "tf32" and is_hip_cdna3())):
+            if not ((input_precision in ("bf16x3", "bf16x6")) or (input_precision == "ieee") or
+                    (input_precision == "tf32" and is_hip_cdna3())):
                 pytest.skip(f"{input_precision} not supported on HIP")
             if kpack == 2 and in_dtype == 'int8' and K < 64:
                 pytest.skip("kpack too large for K")
@@ -3489,7 +3498,12 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
 
     if in_dtype == 'float32' and input_precision != "ieee":
         if is_tcgen5:
-            assert re.search(r'tcgen05.mma.cta_group::1.kind::tf32', ptx)
+            if input_precision in ("bf16x3", "bf16x6"):
+                assert re.search(r'tcgen05.mma.cta_group::1.kind::f16', ptx)
+            else:
+                assert re.search(r'tcgen05.mma.cta_group::1.kind::tf32', ptx)
+        elif input_precision in ("bf16x3", "bf16x6"):
+            assert re.search(r'[mma|wgmma.mma_async].sync.aligned.m\d+n\d+k16(?:.row.col)?.f32.bf16.bf16', ptx)
         else:
             assert re.search(r'[mma|wgmma.mma_async].sync.aligned.m\d+n\d+k8(?:.row.col)?.f32.tf32.tf32', ptx)
     elif in_dtype == 'float16' and out_dtype == tl.float32:
@@ -5847,7 +5861,7 @@ def test_override_arch(arch, env_var_override, device, fresh_knobs):
 
 def test_num_ctas_pre_sm90(device):
     if not is_cuda() and not is_hip():
-        pytest.skip("Only supported on CUDA and HIP")
+        pytest.xfail("Only supported on CUDA and HIP")
 
     @triton.jit
     def _kernel(src):
@@ -6689,3 +6703,40 @@ def test_tensor_member(device):
         tl.device_assert(tl.sum(x) == x.sum())
 
     kernel[(1, )]()
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("rank", [2, 3, 4, 5, 6])
+@pytest.mark.parametrize("trans_a", [False, True])
+@pytest.mark.parametrize("trans_b", [False, True])
+def test_dot_multidim(rank, trans_a, trans_b, device):
+
+    if is_interpreter():
+        pytest.xfail("bfloat16 is not supported in the interpreter")
+
+    @triton.jit
+    def kernel(X, Y, Z, RANK: tl.constexpr, TRANS_A: tl.constexpr, TRANS_B: tl.constexpr):
+        x = tl.load(X + tl.arange(0, 256 << RANK)).reshape([2] * (RANK - 2) + [32, 32])
+        y = tl.load(Y + tl.arange(0, 256 << RANK)).reshape([2] * (RANK - 2) + [32, 32])
+        if TRANS_A:
+            x = tl.trans(x)
+        if TRANS_B:
+            y = tl.trans(y)
+        z = tl.dot(x, y)
+        tl.store(Z + tl.arange(0, 256 << RANK), z.reshape([256 << RANK]))
+
+    shape = (2, ) * (rank - 2) + (32, 32)
+
+    a = torch.randint(-4, 5, shape, dtype=torch.bfloat16, device=device)
+    b = torch.randint(-4, 5, shape, dtype=torch.bfloat16, device=device)
+    c = torch.empty(shape, dtype=torch.float32, device=device)
+    kernel[(1, )](a, b, c, rank, trans_a, trans_b)
+
+    if trans_a:
+        a = torch.transpose(a, -1, -2)
+    if trans_b:
+        b = torch.transpose(b, -1, -2)
+
+    d = a.to(torch.float32) @ b.to(torch.float32)
+
+    assert torch.equal(c, d)

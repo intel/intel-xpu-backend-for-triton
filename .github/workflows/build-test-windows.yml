@@ -76,6 +76,7 @@ jobs:
           echo "PYTORCH_VERSION=$PYTORCH_VERSION" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Identify GPU
+        timeout-minutes: 1
         run: |
           # Initializing oneAPI to enable sycl-ls, which is used in capture-hw-details.sh on Windows.
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
@@ -202,13 +203,13 @@ jobs:
       - name: Upload pass rate report
         # upload reports only for the default branch
         if: github.ref_name == 'main'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: pass_rate
           path: ${{ env.NEW_WORKSPACE }}\pass_rate*.json
 
       - name: Upload tutorial performance
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: tutorials-report
           if-no-files-found: warn

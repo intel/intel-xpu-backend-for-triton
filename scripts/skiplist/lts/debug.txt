@@ -1,5 +1,4 @@
 # https://github.com/intel/intel-xpu-backend-for-triton/issues/2755
-python/test/unit/test_debug.py::test_device_assert[r"^(False|True)-(False|True)-True-(True|None)-False$|^(False|True)-True-None-(True|None)-False$|^(False|True)-True-False-(True|None)-False$|^True-False-None-(True|None)-False$"]@regexp
 python/test/unit/test_debug.py::test_sanitize_int_add_overflow[r".*True-True$"]@regexp
 python/test/unit/test_debug.py::test_sanitize_int_mul_overflow[r".*True-True$"]@regexp
 python/test/unit/test_debug.py::test_sanitize_int_sub_overflow[2147483647--1-int32-int32-True-True]

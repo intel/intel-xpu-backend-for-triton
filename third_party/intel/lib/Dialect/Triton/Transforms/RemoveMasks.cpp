@@ -2,10 +2,17 @@
 #include "intel/include/Utils/Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/Utils/StaticValueUtils.h"
+#include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/Verifier.h"
+#include "mlir/Interfaces/InferIntRangeInterface.h"
+#include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "llvm/ADT/TypeSwitch.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include <optional>
 
 #define DEBUG_TYPE "triton-intel-remove-masks"
 
@@ -19,12 +26,44 @@ namespace mlir::triton::intel {
 
 namespace {
 
+static Operation *dropMask(Operation *op, bool maskVal) {
+  assert(op && "Expecting a valid operation");
+
+  OpBuilder builder(op);
+  Location loc = op->getLoc();
+  TypeSwitch<Operation *>(op)
+      .Case<tt::LoadOp>([&](auto loadOp) {
+        if (maskVal) {
+          auto newLoadOp = builder.create<tt::LoadOp>(
+              loc, loadOp.getPtr(), loadOp.getBoundaryCheck(),
+              loadOp.getPadding(), loadOp.getCache(), loadOp.getEvict(),
+              loadOp.getIsVolatile());
+          loadOp->replaceAllUsesWith(newLoadOp);
+        } else {
+          Operation *cstOp =
+              builder.create<arith::ConstantOp>(loc, loadOp.getOther());
+          loadOp->replaceAllUsesWith(cstOp);
+        }
+      })
+      .Case<arith::SelectOp>([&](auto selectOp) {
+        Value origRes = selectOp.getResult();
+        Value selectedVal =
+            (maskVal ? selectOp.getTrueValue() : selectOp.getFalseValue());
+        Value newRes = selectedVal;
+        if (auto opResult = dyn_cast<OpResult>(selectedVal)) {
+          Operation *defOp = opResult.getDefiningOp();
+          newRes = defOp->getOpResult(opResult.getResultNumber());
+        }
+        origRes.replaceAllUsesWith(newRes);
+      });
+
+  return nullptr;
+}
+
 // Abstract base class for mask validators.
 // Mask validators are used to check whether a given mask has an expected form.
 // Concrete subclasses provide a member function used to select masked
 // operations that have a mask in a particular (e.g. desired) form.
-// Furthermore concrete mask validators classes might also provide a member
-// function
 class MaskValidatorBase {
 public:
   virtual ~MaskValidatorBase() = default;
@@ -36,6 +75,112 @@ public:
   virtual Value getVersioningCond(scf::ForOp &forOp, Value mask) const = 0;
 
   virtual std::string getName() const = 0;
+};
+
+// A mask validator which ensures the mask is not necessary.
+class RemovableMaskValidator final : public MaskValidatorBase {
+public:
+  virtual bool isValidMask(scf::ForOp &forOp, Value mask) const {
+    Value finalVal = tt::intel::getFinalValue(mask);
+    assert(finalVal && "Expecting a valid mask");
+
+    // Ensure the loop range is known.
+    std::optional<ConstantIntRanges> optRange = computeLoopIVRange(forOp);
+    if (!optRange)
+      return false;
+
+    if (!finalVal.getDefiningOp() ||
+        !isa<arith::CmpIOp>(finalVal.getDefiningOp()))
+      return false;
+
+    auto cmpOp = cast<arith::CmpIOp>(finalVal.getDefiningOp());
+    arith::CmpIPredicate pred = cmpOp.getPredicate();
+    if (pred != arith::CmpIPredicate::slt)
+      return false;
+
+    Value lhs = tt::intel::getFinalValue(cmpOp.getLhs());
+    Value rhs = tt::intel::getFinalValue(cmpOp.getRhs());
+    Operation *lhsOp = tt::intel::getFinalValue(lhs).getDefiningOp();
+    Operation *rhsOp = tt::intel::getFinalValue(rhs).getDefiningOp();
+    if (!lhsOp || !rhsOp)
+      return false;
+
+    auto getIntConstantValue = [](Operation *op) -> std::optional<APInt> {
+      DenseElementsAttr constAttr;
+      if (matchPattern(op, m_Constant(&constAttr))) {
+        auto attr = constAttr.getSplatValue<Attribute>();
+        if (auto intAttr = dyn_cast_or_null<IntegerAttr>(attr))
+          return intAttr.getValue();
+      }
+      return std::nullopt;
+    };
+
+    // TODO: consider the case where the constant is lhs.
+    std::optional<APInt> constIntVal = getIntConstantValue(rhsOp);
+    if (!constIntVal)
+      return false;
+
+    if (auto addOp = dyn_cast<arith::AddIOp>(lhsOp)) {
+      Value lhs = tt::intel::getFinalValue(addOp.getLhs());
+      Value rhs = tt::intel::getFinalValue(addOp.getRhs());
+      if (lhs != forOp.getSingleInductionVar())
+        return false;
+      if (auto makeRangeOp = dyn_cast<tt::MakeRangeOp>(rhs.getDefiningOp())) {
+        APInt maxIV = (*optRange).smax();
+        int64_t maxVal = maxIV.getSExtValue() + makeRangeOp.getEnd();
+
+        auto registerMaskValue = [this](Value mask, bool maskVal) {
+          for (Operation *user : mask.getUsers())
+            opToMaskValue.insert({user, maskVal});
+        };
+
+        if (maxVal <= constIntVal->getSExtValue()) {
+          registerMaskValue(mask, true);
+          return true;
+        }
+        APInt minIV = (*optRange).smin();
+        int64_t minVal = minIV.getSExtValue() + makeRangeOp.getStart();
+        if (minVal >= constIntVal->getSExtValue()) {
+          registerMaskValue(mask, false);
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  virtual Value getVersioningCond(scf::ForOp &forOp, Value mask) const {
+    return {};
+  }
+
+  virtual std::string getName() const { return "RemovableMaskValidator"; }
+
+  bool getMaskValue(Operation *op) const {
+    assert(opToMaskValue.find(op) != opToMaskValue.end() && "mask not present");
+    return opToMaskValue[op];
+  }
+
+private:
+  mutable std::map<Operation *, bool> opToMaskValue;
+
+  std::optional<ConstantIntRanges> computeLoopIVRange(scf::ForOp forOp) const {
+    if (!forOp.getSingleInductionVar())
+      return std::nullopt;
+
+    if (std::optional<APInt> tripCount = forOp.getStaticTripCount()) {
+      OpFoldResult lb = *forOp.getSingleLowerBound();
+      OpFoldResult step = *forOp.getSingleStep();
+      int64_t lbVal = *getConstantIntValue(lb);
+      int64_t stepVal = *getConstantIntValue(step);
+      int64_t lastIVVal = stepVal * (tripCount->getSExtValue() - 1);
+      llvm::APInt start(64, lbVal, true);
+      llvm::APInt end(64, lastIVVal, true);
+      return ConstantIntRanges::range(start, end, true);
+    }
+
+    return std::nullopt;
+  }
 };
 
 // A mask validator which ensures that the mask can be reduced to the form:
@@ -51,12 +196,14 @@ public:
 
   // Check whether the mask is equivalent to the form: `END-1 < N-i*END`.
   virtual bool isValidMask(scf::ForOp &forOp, Value mask) const {
-    assert(mask && "Expecting a valid mask");
+    Value finalVal = tt::intel::getFinalValue(mask);
+    assert(finalVal && "Expecting a valid mask");
 
-    if (!mask.getDefiningOp() || !isa<arith::CmpIOp>(mask.getDefiningOp()))
+    if (!finalVal.getDefiningOp() ||
+        !isa<arith::CmpIOp>(finalVal.getDefiningOp()))
       return false;
 
-    auto cmpOp = cast<arith::CmpIOp>(mask.getDefiningOp());
+    auto cmpOp = cast<arith::CmpIOp>(finalVal.getDefiningOp());
     arith::CmpIPredicate pred = cmpOp.getPredicate();
     if (pred != arith::CmpIPredicate::slt)
       return false;
@@ -103,7 +250,10 @@ public:
   // `(N+END-1)/END` (possibly folded), the versioning condition will be:
   // `(N+END-1)%END > 0 && N > END`.
   virtual Value getVersioningCond(scf::ForOp &forOp, Value mask) const {
-    MaskInfo maskInfo = getMaskInfo(forOp, mask);
+    Value finalVal = tt::intel::getFinalValue(mask);
+    assert(finalVal && "Expecting a valid mask");
+
+    MaskInfo maskInfo = getMaskInfo(forOp, finalVal);
     if (!hasCanonicalUpperBound(forOp, maskInfo))
       return nullptr;
 
@@ -203,11 +353,14 @@ public:
   //   - [0..END] < splat(N)
   //   - splat(N) < [0..END]
   virtual bool isValidMask(scf::ForOp &forOp, Value mask) const {
-    assert(mask && "Expecting a valid mask");
-    if (!mask.getDefiningOp() || !isa<arith::CmpIOp>(mask.getDefiningOp()))
+    Value finalVal = tt::intel::getFinalValue(mask);
+    assert(finalVal && "Expecting a valid mask");
+
+    if (!finalVal.getDefiningOp() ||
+        !isa<arith::CmpIOp>(finalVal.getDefiningOp()))
       return false;
 
-    auto cmpOp = cast<arith::CmpIOp>(mask.getDefiningOp());
+    auto cmpOp = cast<arith::CmpIOp>(finalVal.getDefiningOp());
     arith::CmpIPredicate pred = cmpOp.getPredicate();
     if (pred != arith::CmpIPredicate::slt)
       return false;
@@ -242,7 +395,7 @@ public:
     }
 
     return false;
-  }
+  } // namespace
 
   virtual Value getVersioningCond(scf::ForOp &forOp, Value mask) const {
     assert(isValidMask(forOp, mask) && "Invalid mask");
@@ -301,11 +454,8 @@ public:
   bool collectMaskedOps() {
     auto collectMaskedOps = [&](auto ops, MaskedOperations &maskedOps) {
       for (Operation *op : ops) {
-        Value mask = isa<tt::LoadOp>(op)    ? cast<tt::LoadOp>(op).getMask()
-                     : isa<tt::StoreOp>(op) ? cast<tt::StoreOp>(op).getMask()
-                                            : nullptr;
-        if (mask &&
-            maskValidator.isValidMask(forOp, tt::intel::getFinalValue(mask))) {
+        Value mask = getMask(op);
+        if (mask && maskValidator.isValidMask(forOp, mask)) {
           maskedOps.insert(op);
           LLVM_DEBUG(llvm::dbgs()
                      << maskValidator.getName()
@@ -316,11 +466,22 @@ public:
 
     collectMaskedOps(forOp.getOps<tt::LoadOp>(), maskedOps);
     collectMaskedOps(forOp.getOps<tt::StoreOp>(), maskedOps);
+    collectMaskedOps(forOp.getOps<arith::SelectOp>(), maskedOps);
     return maskedOps.size();
   }
 
   const MaskedOperations &getMaskedOps() const { return maskedOps; };
   const MaskValidator &getMaskValidator() const { return maskValidator; }
+
+  Value getMask(Operation *op) const {
+    assert(op && "Expecting a valid operation");
+    return TypeSwitch<Operation *, Value>(op)
+        .Case<tt::LoadOp, tt::StoreOp>(
+            [](auto maskedOp) { return maskedOp.getMask(); })
+        .template Case<arith::SelectOp>(
+            [](auto selectOp) { return selectOp.getCondition(); })
+        .Default([](auto) { return nullptr; });
+  }
 
 private:
   scf::ForOp &forOp;
@@ -514,6 +675,28 @@ public:
 
   void runOnOperation() final {
     ModuleOp moduleOp = getOperation();
+
+    // Remove masks if they are not necessary.
+    moduleOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
+      if (scf::ForOp forOp = dyn_cast<scf::ForOp>(op)) {
+        // Nested loop aren't currently handled.
+        if (forOp->template getParentOfType<scf::ForOp>())
+          return WalkResult::advance();
+
+        if (!forOp.getSingleInductionVar())
+          return WalkResult::advance();
+
+        RemovableMaskValidator maskValidator;
+        MaskedOpsCollector collector(forOp, maskValidator);
+        if (collector.collectMaskedOps()) {
+          for (Operation *op : collector.getMaskedOps()) {
+            bool maskVal = maskValidator.getMaskValue(op);
+            dropMask(op, maskVal);
+          }
+        }
+      }
+      return WalkResult::advance();
+    });
 
     // Version loops containing masked operation in canonical form.
     moduleOp->walk<WalkOrder::PreOrder>([&](Operation *op) {

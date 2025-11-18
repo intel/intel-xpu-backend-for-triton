@@ -122,7 +122,11 @@ class IRSource:
         if self.ext == "ttgir":
             num_warps = self.module.get_int_attr("ttg.num-warps")
             assert num_warps is not None, "Unable to parse ttg.num-warps attribute"
-            return {'num_warps': num_warps}
+            options = {'num_warps': num_warps}
+            num_ctas = self.module.get_int_attr("ttg.num-ctas")
+            if num_ctas is not None:
+                options['num_ctas'] = num_ctas
+            return options
         return dict()
 
 
@@ -138,10 +142,17 @@ def parse(full_name, ext, context):
         return module
     if ext == "llir" or ext == "ptx" or ext == "amdgcn":
         return Path(full_name).read_text()
-    if ext == "cubin" or ext == "hsaco":
+    if ext == "cubin" or ext == "hsaco" or ext == "zebin":
         return Path(full_name).read_bytes()
     if ext == "spv":
         return Path(full_name).read_bytes()
+
+
+def read_file(full_name, ext):
+    if ext in ["cubin", "hsaco", "spv", "zebin"]:
+        return Path(full_name).read_bytes()
+    else:
+        return Path(full_name).read_text()
 
 
 def filter_traceback(e: BaseException):
@@ -283,6 +294,18 @@ def compile(src, target=None, options=None, _env_vars=None):
 
     metadata["cache_dir"] = fn_cache_manager.cache_dir
     metadata["triton_version"] = __version__
+    cluster_dims = getattr(options, "cluster_dims", None)
+    if cluster_dims is None:
+        num_ctas = getattr(options, "num_ctas", None)
+        if num_ctas is None:
+            num_ctas = 1
+        cluster_dims = (num_ctas, 1, 1)
+    if not isinstance(cluster_dims, (list, tuple)):
+        cluster_dims = (cluster_dims, )
+    cluster_dims = tuple(cluster_dims)
+    if len(cluster_dims) < 3:
+        cluster_dims = cluster_dims + (1, ) * (3 - len(cluster_dims))
+    metadata["cluster_dims"] = cluster_dims
     # run compilation pipeline  and populate metadata
     stages = dict()
     backend.add_stages(stages, options, src.language)
@@ -332,7 +355,7 @@ def compile(src, target=None, options=None, _env_vars=None):
             print(f"\nOverriding kernel with file {full_name}")
             next_module = parse(full_name, ext, context)
         # If TRITON_STORE_BINARY_ONLY is 1, only store cubin/hsaco/json
-        if (not store_only_binary) or (ext in ("cubin", "hsaco", "json", "spv")):
+        if (not store_only_binary) or (ext in ("cubin", "hsaco", "zebin", "json", "spv")):
             metadata_group[ir_filename] = fn_cache_manager.put(next_module, ir_filename)
         if fn_dump_manager is not None:
             fn_dump_manager.put(next_module, ir_filename)
@@ -422,11 +445,9 @@ class CompiledKernel:
         self.name = self.metadata.name
         # stores the text of each level of IR that was generated during compilation
         asm_files = [Path(p) for c, p in metadata_group.items() if not c.endswith(".json")]
-        binary_ext = backend.binary_ext
-        self.asm = AsmDict({
-            file.suffix[1:]: file.read_bytes() if file.suffix[1:] == binary_ext else file.read_text()
-            for file in asm_files
-        })
+
+        self.asm = AsmDict({file.suffix[1:]: read_file(file, file.suffix[1:]) for file in asm_files})
+        binary_ext = metadata.get("binary_ext", backend.binary_ext)
         self.metadata_group = metadata_group
         self.kernel = self.asm[binary_ext]
         # binaries are lazily initialized
@@ -468,6 +489,12 @@ class CompiledKernel:
         self.module, self.function, self.n_regs, self.n_spills, self.n_max_threads = driver.active.utils.load_binary(
             self.name, self.kernel, self.metadata.shared, self.metadata.build_flags,
             not self.metadata.generate_native_code, device)
+        # PyTorch could use the updated build flags in load binary.
+        if hasattr(driver.active.utils, "get_last_selected_build_flags"):
+            new_build_flags = driver.active.utils.get_last_selected_build_flags()
+            if new_build_flags != self.metadata.build_flags:
+                self.metadata = self.metadata._replace(build_flags=new_build_flags)
+
         if hasattr(self.metadata, "threads_per_warp"):
             warp_size = self.metadata.threads_per_warp
         else:

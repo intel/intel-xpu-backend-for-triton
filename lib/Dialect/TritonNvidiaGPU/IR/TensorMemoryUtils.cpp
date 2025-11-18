@@ -239,8 +239,13 @@ lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth, bool isScales,
         // Workaround for ptxas bug, we cannot use secondHalfOffset = 0 to write
         // only 16 elements. We use secondHalfOffset = 1 instead and we pad the
         // allocation.
-        assert(isScales &&
-               "Only supported for scales as we pad the allocation.");
+        if (!isScales) {
+          if (emitError) {
+            emitError()
+                << "Only supported for scales as we pad the allocation.";
+          }
+          return failure();
+        }
         secondHalfOffset = 1;
       }
       // We "quotient it out", meaning we remove the last basis from reps
@@ -294,19 +299,9 @@ computeTMemLdStEncodingInfo(RankedTensorType regTy, MemDescType memTy,
   cvt = LinearLayout(bases, cvt.getOutDims(),
                      /*isSurjective=*/cvt.isSurjective());
 
-  // tmemBase already encodes CTA/block offsets so we just remove them from the
-  // cvt
-  auto kBlock = StringAttr::get(ctx, "block");
-  auto kCol = StringAttr::get(ctx, "col");
-  auto nCTAs = cvt.getInDimSize(kBlock);
-  auto maybeQuot =
-      divideRight(cvt, LinearLayout::identity1D(nCTAs, kBlock, kCol));
-  assert(maybeQuot.has_value());
-  auto quot = maybeQuot->unsqueezeIn(kBlock);
-
   bool isScales = isa<TensorMemoryScalesEncodingAttr>(memTy.getEncoding());
   int bitwidth = memTy.getElementTypeBitWidth();
-  return lowerTMemLdSt(quot, maxnreg, bitwidth, isScales, emitError);
+  return lowerTMemLdSt(cvt, maxnreg, bitwidth, isScales, emitError);
 }
 
 } // namespace mlir::triton::nvidia_gpu

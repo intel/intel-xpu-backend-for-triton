@@ -20,7 +20,7 @@ jobs:
     name: Tests
     runs-on:
       - rolling
-      - runner-0.0.22
+      - dle-2025.2
     timeout-minutes: 75 # equal to max + 3*std over the last 600 successful runs
     steps:
       - name: Checkout repository

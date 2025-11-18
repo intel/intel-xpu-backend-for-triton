@@ -144,8 +144,8 @@ static std::optional<LinearLayout> getDistributedLayoutForTmemLdSt(
     // Get CTALayout without broadcasting to divide the ll
     // as the TMEM layout does not reflect CTA broadcasting
     auto splitNum = ctaLayout->getCTASplitNum();
-    auto ctaBlockSplit =
-        CTALayoutAttr::get(ctx, splitNum, splitNum, ctaLayout->getCTAOrder());
+    // The cta order in TMEM is always [0, 1]
+    auto ctaBlockSplit = CTALayoutAttr::get(ctx, splitNum, splitNum, {0, 1});
     auto ctaBlockSplitLL = gpu::makeCgaLayout(ctaBlockSplit);
     assert(ctaBlockSplitLL.getNumOutDims() == ll.getNumOutDims());
     // rename block into col
@@ -213,6 +213,7 @@ static std::optional<LinearLayout> getDistributedLayoutForTmemLdSt(
   // getTileLayout returns the layout for a bitwidth of 32
   assert(bitwidth == 32);
   auto tile = getTileLayout(ctx, atom, false);
+  // Plan:
   // tile: register, lane, warp -> row, cols
   // ll: row, cols -> dim0, dim1
   // We extend the tile to have the right vectorisation and the result is given
@@ -225,16 +226,33 @@ static std::optional<LinearLayout> getDistributedLayoutForTmemLdSt(
   if (nColsMissing == 0) {
     return std::nullopt;
   }
-
-  // Fit the warp bases either tiling on the RHS or in row=16
-  StringAttr row16;
   auto kReg = StringAttr::get(ctx, "register");
   auto kLane = StringAttr::get(ctx, "lane");
   auto kWarp = StringAttr::get(ctx, "warp");
   bool instr32Rows = atom == TMemAccessAtom::I32x32b;
   bool layout16Rows =
       ll.getBasis(rowColDims[0], llvm::Log2_32(16)) == ArrayRef{0, 0};
-  // If we need to fit something (the instruciton does not cover it
+
+  // We are choosing the distributed layout (ll o tile). In the lowering
+  // we will do ll^{-1} o (ll o tile) and we expect to get tile back.
+  // For this to be possible, ll should accept a left-inverse, that is, it
+  // should be injective
+  // In less fancy words, we look for the `comp` layout not to have any zero
+  // basis as that would disallow the resulting layout to be left-divisible by
+  // the tile
+  auto comp =
+      tile.compose(ll).sublayout({kReg, kLane}, to_vector(ll.getOutDimNames()));
+  if (instr32Rows) {
+    // We will use 16x32bx2 instruction for lane=16 so we remove the last lane
+    // basis
+    comp = comp.resizeInDim(kLane, comp.getInDimSize(kLane) / 2);
+  }
+  if (!comp.isInjective())
+    return std::nullopt;
+
+  // Fit the warp bases either tiling on the RHS or in row=16
+  StringAttr row16;
+  // If we need to fit something (the instruction does not cover it
   // and the layout has 32 rows) we first try to fit a warp, and if we
   // can't we fit a register
   if (!instr32Rows && !layout16Rows) {

@@ -171,7 +171,7 @@ def _attn_fwd_with_block_pointers(Q, K, V, sm_scale, M, Out,  #
 
 
 configs = [
-    triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN, 'grf_mode': 'large'}, num_stages=s, num_warps=w) \
+    triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN, 'grf_mode': '256'}, num_stages=s, num_warps=w) \
     for BM in [128, 256] \
     for BN in [32, 64] \
     for s in [2, 3, 4] \
@@ -614,7 +614,7 @@ def get_benchmark(
                                                  err_msg=f'Error comparing {name} between triton and torch')
                 triton_fn = lambda: triton_o.backward(dout, retain_graph=True)
 
-            _, min_ms, max_ms, mean, cv = do_bench(triton_fn, grad_to_none=(q, k, v), time_warmup=False)
+            _, min_ms, max_ms, mean, cv = do_bench(triton_fn, grad_to_none=(q, k, v))
 
         elif provider == 'xetla':
             if MODE == 'bwd':
@@ -644,7 +644,7 @@ def get_benchmark(
                          bias_strideN, bias_strideF, attn_mask_padding)
                     return out
 
-                _, min_ms, max_ms, mean, cv = do_bench(xetla_bwd_fn, time_warmup=False)
+                _, min_ms, max_ms, mean, cv = do_bench(xetla_bwd_fn)
 
             else:
                 min_ms = float('nan')
@@ -664,7 +664,7 @@ def get_benchmark(
 
                 benchmark_suite.assert_close(cutlass_fwd_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='cutlass to torch')
 
-                _, min_ms, max_ms, mean, cv = do_bench(cutlass_fwd_fn, time_warmup=False)
+                _, min_ms, max_ms, mean, cv = do_bench(cutlass_fwd_fn)
 
             else:
                 min_ms = float('nan')

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from triton.runtime.jit import constexpr_function
 from triton.experimental.gluon.language import _core as ttgl
 from triton.experimental.gluon.language._core import builtin, base_type, base_value, _unwrap_if_constexpr
-from triton.experimental.gluon.language._semantic import _check
+from triton.experimental.gluon.language._semantic import _check, _compute_tmem_reg_layout
 
 from . import tma
 from ..hopper import fence_async_shared, mbarrier
@@ -46,6 +46,9 @@ class TensorMemoryLayout:
     cta_split_num: Optional[Tuple[int, int]] = None
 
     def __post_init__(self):
+        super().__setattr__("block", _unwrap_if_constexpr(self.block))
+        super().__setattr__("col_stride", _unwrap_if_constexpr(self.col_stride))
+        super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
         assert len(self.block) == 2
         assert self.cta_split_num is None or len(self.cta_split_num) == 2
         assert self.col_stride >= 1 and (self.col_stride &
@@ -77,6 +80,7 @@ class TensorMemoryScalesLayout:
     cta_split_num: Optional[Tuple[int, int]] = None
 
     def __post_init__(self):
+        super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
         assert self.cta_split_num is None or len(self.cta_split_num) == 2
 
     def _to_ir(self, builder):
@@ -88,7 +92,7 @@ class TensorMemoryScalesLayout:
         return f"TLS{cta_split_str}TLS"
 
 
-@builtin
+@constexpr_function
 def get_tmem_reg_layout(
         element_ty,
         shape,
@@ -98,7 +102,6 @@ def get_tmem_reg_layout(
         ctas_per_cga=(1, 1),
         cta_split_num=(1, 1),
         cta_order=(1, 0),
-        _semantic=None,
 ):
     """
     Returns a DistributedLinearLayout compatible with TMEM load/store instructions.
@@ -113,24 +116,25 @@ def get_tmem_reg_layout(
         cta_split_num (tuple[int, int]): CTA split factors along each dimension.
         cta_order (tuple[int, int]): CTA order.
     """
-    element_ty = _unwrap_if_constexpr(element_ty)
-    num_warps = _unwrap_if_constexpr(num_warps)
-    layout = _unwrap_if_constexpr(layout)
-    instr_variant = _unwrap_if_constexpr(instr_variant)
-    shape = [_unwrap_if_constexpr(s) for s in shape]
-    ctas_per_cga = [_unwrap_if_constexpr(x) for x in ctas_per_cga]
-    cta_split_num = [_unwrap_if_constexpr(x) for x in cta_split_num]
-    cta_order = [_unwrap_if_constexpr(x) for x in cta_order]
 
-    return _semantic.get_tmem_reg_layout(
-        element_ty,
-        shape,
-        layout,
-        num_warps,
-        instr_variant,
-        ctas_per_cga,
-        cta_split_num,
-        cta_order,
+    def _unwrap(x):
+        if isinstance(x, ttgl.constexpr):
+            return _unwrap(x.value)
+        if isinstance(x, list):
+            return [_unwrap(i) for i in x]
+        if isinstance(x, tuple):
+            return tuple(_unwrap(i) for i in x)
+        return x
+
+    return _compute_tmem_reg_layout(
+        _unwrap(element_ty),
+        _unwrap(shape),
+        _unwrap(layout),
+        _unwrap(num_warps),
+        _unwrap(instr_variant),
+        _unwrap(ctas_per_cga),
+        _unwrap(cta_split_num),
+        _unwrap(cta_order),
     )
 
 
@@ -279,7 +283,7 @@ class tensor_memory_descriptor(base_value):
         builder = _semantic.builder
         shape = self.shape[1:]
         layout = self.layout
-        ret = tensor_memory_descriptor(None, self.dtype, shape, layout, self.type.alloc_shape)
+        ret = tensor_memory_descriptor(None, self.dtype, shape, layout, shape)
         ret.handle = builder.create_memdesc_index(ret.type.to_ir(builder), self.handle, index.handle)
         return ret
 

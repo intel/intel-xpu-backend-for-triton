@@ -558,6 +558,13 @@ public:
     return reshapeOuts({{*getOutDimNames().begin(), getTotalOutDimSize()}});
   }
 
+  // Resizes the dimension to one that is smallre or equal to the given size.
+  // These operations are similar to `sublayout` but at a dimension level.
+  [[nodiscard]] LinearLayout resizeInDim(StringAttr inDim,
+                                         int32_t newSize) const;
+  [[nodiscard]] LinearLayout resizeOutDim(StringAttr outDim,
+                                          int32_t newSize) const;
+
   [[nodiscard]] LinearLayout renameInDim(StringAttr oldDim,
                                          StringAttr newDim) const {
     auto bases = getBases();
@@ -880,6 +887,8 @@ inline std::ostream &operator<<(std::ostream &os, const ColumnAction &action) {
   os << action.toString();
   return os;
 }
+
+std::unique_ptr<uint64_t[]> getMatrix(const LinearLayout &layout);
 
 } // namespace mlir::triton
 
