@@ -171,7 +171,7 @@ def _attn_fwd_with_block_pointers(Q, K, V, sm_scale, M, Out,  #
 
 
 configs = [
-    triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN, 'grf_mode': 'large'}, num_stages=s, num_warps=w) \
+    triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN, 'grf_mode': '256'}, num_stages=s, num_warps=w) \
     for BM in [128, 256] \
     for BN in [32, 64] \
     for s in [2, 3, 4] \
@@ -571,12 +571,11 @@ def get_benchmark(
         # This warmup logic improves performance on BMG significantly
         # For FWD mode in triton & cutlass: Some configs increase performance with warmup as a step function, but some slowly decrease with saturation
         # Performance is best at 250-400ms range, but we want stable, not just best at ~600ms (triton/cutlass providers)
-        # n_warmup_fwd = 600
+        n_warmup_fwd = 600
         # For BWD mode: Performance doesn't really improve much with warmup for triton, but xetla benefit from more warmup
-        # n_warmup_bwd = 400  # Maximum across xetla=400, triton=10, onednn=10
-        # n_warmup = n_warmup_fwd if MODE == 'fwd' else n_warmup_bwd
-        # We keep old warmup value, because new warmup makes perfomance on PVC slightly worse
-        do_bench = benchmark_suite.get_do_bench(n_warmup=10, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
+        n_warmup_bwd = 400  # Maximum across xetla=400, triton=10, onednn=10
+        n_warmup = n_warmup_fwd if MODE == 'fwd' else n_warmup_bwd
+        do_bench = benchmark_suite.get_do_bench(n_warmup=n_warmup, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
         if MODE not in modes:
             raise AssertionError(f'Unknown {MODE}, supported modes are {modes}')
         dtype = torch.float16
@@ -615,7 +614,7 @@ def get_benchmark(
                                                  err_msg=f'Error comparing {name} between triton and torch')
                 triton_fn = lambda: triton_o.backward(dout, retain_graph=True)
 
-            _, min_ms, max_ms, mean, cv = do_bench(triton_fn, grad_to_none=(q, k, v), time_warmup=False)
+            _, min_ms, max_ms, mean, cv = do_bench(triton_fn, grad_to_none=(q, k, v))
 
         elif provider == 'xetla':
             if MODE == 'bwd':
@@ -645,7 +644,7 @@ def get_benchmark(
                          bias_strideN, bias_strideF, attn_mask_padding)
                     return out
 
-                _, min_ms, max_ms, mean, cv = do_bench(xetla_bwd_fn, time_warmup=False)
+                _, min_ms, max_ms, mean, cv = do_bench(xetla_bwd_fn)
 
             else:
                 min_ms = float('nan')
@@ -665,7 +664,7 @@ def get_benchmark(
 
                 benchmark_suite.assert_close(cutlass_fwd_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='cutlass to torch')
 
-                _, min_ms, max_ms, mean, cv = do_bench(cutlass_fwd_fn, time_warmup=False)
+                _, min_ms, max_ms, mean, cv = do_bench(cutlass_fwd_fn)
 
             else:
                 min_ms = float('nan')

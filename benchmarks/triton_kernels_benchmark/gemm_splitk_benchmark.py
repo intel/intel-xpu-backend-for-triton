@@ -1,3 +1,9 @@
+"""
+Split-K GEMM with Tensor Descriptors
+====================================
+Split-K is a approach that parallelizes the reduction dimension K to improve GPU utilization.
+This script implements a Split-K GEMM with tensor descriptors.
+"""
 import torch
 import triton
 import triton.language as tl
@@ -8,7 +14,7 @@ from triton_kernels_benchmark import xetla_kernel
 
 @triton.autotune(
     configs=[
-        triton.Config({'BLOCK_M': 256, 'BLOCK_N': 256, 'BLOCK_K': 32, 'GROUP_M': 4, 'SPLIT_K': 4, 'grf_mode': 'large'},
+        triton.Config({'BLOCK_M': 256, 'BLOCK_N': 256, 'BLOCK_K': 32, 'GROUP_M': 4, 'SPLIT_K': 4, 'grf_mode': '256'},
                       num_stages=4, num_warps=32),
     ],
     key=['M', 'N', 'K'],
@@ -34,27 +40,26 @@ def _kernel(A, B, C,  #
     pid_m = group_id * GROUP_M + (pid % group_size)
     pid_n = (pid % width) // (group_size)
 
-    a_block_ptr = tl.make_block_ptr(base=A, shape=(M, K), strides=(stride_am, stride_ak),
-                                    offsets=(pid_m * BLOCK_M, pid_z * BLOCK_K), block_shape=(BLOCK_M, BLOCK_K),
-                                    order=(1, 0))
-    b_block_ptr = tl.make_block_ptr(base=B, shape=(K, N), strides=(stride_bk, stride_bn),
-                                    offsets=(pid_z * BLOCK_K, pid_n * BLOCK_N), block_shape=(BLOCK_K, BLOCK_N),
-                                    order=(1, 0))
+    # Create tensor descriptors
+    a_desc = tl.make_tensor_descriptor(base=A, shape=(M, K), strides=(stride_am, stride_ak),
+                                       block_shape=(BLOCK_M, BLOCK_K))
+    b_desc = tl.make_tensor_descriptor(base=B, shape=(K, N), strides=(stride_bk, stride_bn),
+                                       block_shape=(BLOCK_K, BLOCK_N))
 
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=acc_dtype)
+    off_k = pid_z * BLOCK_K
     for _ in range(0, K, BLOCK_K * SPLIT_K):
-        a = tl.load(a_block_ptr)
-        b = tl.load(b_block_ptr)
+        a = a_desc.load([pid_m * BLOCK_M, off_k])
+        b = b_desc.load([off_k, pid_n * BLOCK_N])
         acc += tl.dot(a, b, out_dtype=acc_dtype)
-        a_block_ptr = tl.advance(a_block_ptr, (0, BLOCK_K * SPLIT_K))
-        b_block_ptr = tl.advance(b_block_ptr, (BLOCK_K * SPLIT_K, 0))
+        off_k += BLOCK_K * SPLIT_K
     acc = acc.to(C.dtype.element_ty)
+
     # handles write-back with reduction-splitting
     if SPLIT_K == 1:
-        c_block_ptr = tl.make_block_ptr(base=C, shape=(M, N), strides=(stride_cm, stride_cn),
-                                        offsets=(pid_m * BLOCK_M, pid_n * BLOCK_N), block_shape=(BLOCK_M, BLOCK_N),
-                                        order=(1, 0))
-        tl.store(c_block_ptr, acc, boundary_check=(0, 1))
+        c_desc = tl.make_tensor_descriptor(base=C, shape=(M, N), strides=(stride_cm, stride_cn),
+                                           block_shape=(BLOCK_M, BLOCK_N))
+        c_desc.store([pid_m * BLOCK_M, pid_n * BLOCK_N], acc)
     else:
         # rematerialize rm and rn to save registers
         rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)

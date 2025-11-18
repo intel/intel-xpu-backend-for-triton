@@ -1,4 +1,5 @@
-// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritonintelgpu-remove-layout-conversions 2>&1 | FileCheck %s
+// RUN: env TRITON_INTEL_REMOVELAYOUTCONVERSION_SUPPORT_FOR_LOOP=0 triton-opt %s -split-input-file -allow-unregistered-dialect -tritonintelgpu-remove-layout-conversions 2>&1 | FileCheck --check-prefixes=CHECK %s
+// RUN: env TRITON_INTEL_REMOVELAYOUTCONVERSION_SUPPORT_FOR_LOOP=1 triton-opt %s -split-input-file -allow-unregistered-dialect -tritonintelgpu-remove-layout-conversions 2>&1 | FileCheck --check-prefixes=CHECK,FOR-SUPPORT %s
 
 #layout0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #layout1 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
@@ -351,7 +352,7 @@ tt.func @loop(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: !tt.ptr<f32>, %arg3: i32, 
 //     CHECK: scf.for
 // CHECK-NOT:   ttg.convert_layout
 //     CHECK:   scf.if
-//     CHECK:     ttg.convert_layout
+//     FOR-SUPPORT: ttg.convert_layout
 //     CHECK:     scf.yield
 // CHECK-NEXT:  else
 // CHECK-NEXT:    scf.yield
@@ -3468,7 +3469,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %0 = tt.make_range {end = 4 : i32, start = 0 : i32} : tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked1}>>
     %1 = arith.extsi %0 : tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked1}>> to tensor<4xi64, #ttg.slice<{dim = 1, parent = #blocked1}>>
     %2 = tt.splat %arg0 : !tt.ptr<i32> -> tensor<4x!tt.ptr<i32>, #ttg.slice<{dim = 1, parent = #blocked1}>>
-    // CHECK:ttg.convert_layout
+    // CHECK: ttg.convert_layout
     %3 = tt.expand_dims %1 {axis = 1 : i32} : tensor<4xi64, #ttg.slice<{dim = 1, parent = #blocked1}>> -> tensor<4x1xi64, #blocked1>
     %4 = tt.addptr %2, %1 : tensor<4x!tt.ptr<i32>, #ttg.slice<{dim = 1, parent = #blocked1}>>, tensor<4xi64, #ttg.slice<{dim = 1, parent = #blocked1}>>
     %5 = tt.load %4 : tensor<4x!tt.ptr<i32>, #ttg.slice<{dim = 1, parent = #blocked1}>>

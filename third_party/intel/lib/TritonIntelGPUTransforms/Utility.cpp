@@ -15,6 +15,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 
 #include <optional>
 
@@ -186,6 +187,10 @@ LogicalResult getConvertBackwardSlice(
   DenseSet<std::pair<OpOperand *, Attribute>> seen;
   SmallVector<std::pair<OpOperand *, Attribute>> queue;
 
+  std::optional<bool> enableForLoopSupport =
+      mlir::triton::tools::isEnvValueBool(mlir::triton::tools::getStrEnv(
+          "TRITON_INTEL_REMOVELAYOUTCONVERSION_SUPPORT_FOR_LOOP"));
+
   auto enqueue = [&](OpOperand &operand, Attribute encoding) {
     auto x = std::make_pair(&operand, encoding);
     if (!seen.insert(x).second) {
@@ -216,6 +221,11 @@ LogicalResult getConvertBackwardSlice(
     queue.pop_back();
     if (!isTensorOrTensorPointerType(currentValue.getType()))
       continue;
+
+    // Skip propagating through for op results for now.
+    // TODO: enable this based on needs.
+    if (!enableForLoopSupport && currentValue.getDefiningOp<scf::ForOp>())
+      return failure();
 
     if (failed(updateLayout(currentValue, encoding)))
       return failure();

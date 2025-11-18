@@ -17,19 +17,19 @@ import triton_kernels_benchmark as benchmark_suite
 @triton.autotune(
     configs=[
         triton.Config(
-            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
+            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '256'},
             num_stages=2, num_warps=32),
         triton.Config(
-            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
+            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '256'},
             num_stages=3, num_warps=32),
         triton.Config(
-            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
+            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '256'},
             num_stages=2, num_warps=32),
         triton.Config(
-            {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
+            {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '256'},
             num_stages=2, num_warps=32),
         triton.Config(
-            {'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 512, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'grf_mode': 'large'},
+            {'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 512, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'grf_mode': '256'},
             num_stages=2, num_warps=32),
     ],
     key=['M', 'N', 'K'],
@@ -82,22 +82,22 @@ def matmul_kernel_with_tensor_descriptors(
 @triton.autotune(
     configs=[
         triton.Config(
-            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
+            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '256'},
             num_stages=2, num_warps=32),
         triton.Config(
-            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
+            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '256'},
             num_stages=3, num_warps=32),
         triton.Config(
-            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
+            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '256'},
             num_stages=2, num_warps=32),
         triton.Config(
-            {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
+            {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '256'},
             num_stages=2, num_warps=32),
         triton.Config(
-            {'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 512, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'grf_mode': 'large'},
+            {'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 512, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'grf_mode': '256'},
             num_stages=2, num_warps=32),
         triton.Config(
-            {'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'grf_mode': 'large'},
+            {'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'grf_mode': '256'},
             num_stages=2, num_warps=4),
     ],
     key=['M', 'N', 'K'],
@@ -258,9 +258,7 @@ def benchmark(B, M, N, K, provider):
     # Some configs increase performance with warmup as a step function, but some slowly decrease with saturation.
     # Performance is best at 200-400ms range, but we want stable, not just best.
     # This warmup improves performance on BMG
-    # n_warmup = 800
-    # We keep old warmup for now because longer warmup make perfomance on PVC worse
-    do_bench = benchmark_suite.get_do_bench(n_warmup=10, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
+    do_bench = benchmark_suite.get_do_bench(n_warmup=800, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
     if B == 1:
         a = torch.rand((M, K), device='xpu', dtype=torch.bfloat16)
         b = torch.rand((K, N), device='xpu', dtype=torch.bfloat16)
@@ -279,7 +277,7 @@ def benchmark(B, M, N, K, provider):
         torch_fn = lambda: torch.matmul(torch.exp(a), b).to(torch.float32)
         rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
         benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
-        _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn, time_warmup=False)
+        _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 

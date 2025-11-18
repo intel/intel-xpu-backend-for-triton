@@ -1,6 +1,6 @@
 import os
 
-from .benchmark_testing import (
+from triton_kernels_benchmark.benchmark_testing import (
     assert_close,
     do_bench,
     filter_providers,
@@ -12,7 +12,7 @@ from .benchmark_testing import (
     get_do_bench,
 )
 
-from .benchmark_shapes_parser import ShapePatternParser
+from triton_kernels_benchmark.benchmark_shapes_parser import ShapePatternParser
 
 if BENCHMARKING_METHOD == "UPSTREAM_PYTORCH_PROFILER":
     os.environ["INJECT_PYTORCH"] = "True"

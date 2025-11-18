@@ -69,6 +69,7 @@ jobs:
       - name: Install python test dependencies
         run: |
           pip install pandas scipy tqdm
+          pip uninstall pytest-skip
 
       - name: Run inductor tests
         run: |
@@ -78,6 +79,7 @@ jobs:
 
       - name: Report environment details
         if: always()
+        timeout-minutes: 1
         run: |
           source ./scripts/capture-hw-details.sh --quiet
           TIMESTAMP=$(date '+%Y%m%d%H%M%S')
@@ -102,7 +104,7 @@ jobs:
 
       - name: Upload test logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: logs-${{ env.PYTHON_VERSION }}
           path: pytorch/test/test-reports

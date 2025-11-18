@@ -15,10 +15,6 @@ on:
         description: JSON list of benchmarks to run. Leave empty to run all benchmarks.
         type: string
         default: ""
-      use_pyenv_python:
-        description: Use Python built with pyenv
-        type: boolean
-        default: false
   schedule:
     # About midnight PST (UTC-8)
     - cron: "5 10 * * *"
@@ -32,7 +28,7 @@ env:
 
 jobs:
   build:
-    name: Triton benchmarks
+    name: Third party benchmarks
     runs-on:
       - linux
       - ${{ inputs.runner_label || 'max1550' }}
@@ -50,14 +46,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Install Python
-        if: ${{ !(inputs.use_pyenv_python || false) }}
-        uses: actions/setup-python@v6
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
       - name: Install Python (from pyenv) ${{ inputs.python_version }}
-        if: ${{ inputs.use_pyenv_python }}
         uses: ./.github/actions/setup-pyenv-python
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -69,7 +58,7 @@ jobs:
 
       - name: Install Python build dependencies
         run: |
-          pip install wheel cmake
+          pip install cmake
 
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
@@ -77,32 +66,125 @@ jobs:
       - name: Setup Triton
         uses: ./.github/actions/setup-triton
 
-      - name: Install benchmark dependencies
-        id: install
-        run: |
-          pip install transformers pandas pytest
-
       - name: Create reports dir
         run: |
           mkdir reports
           echo "REPORTS=$PWD/reports" >> $GITHUB_ENV
 
-      - name: Run Liger-Kernel benchmarks
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'liger-kernel')) }}
+      - name: Install benchmark dependencies
+        id: install
+        run: |
+          pip install transformers pandas pytest
+
+      - name: Install benchmarks
+        id: install-benchmarks
+        run: |
+          cd benchmarks
+          pip install .
+
+      - name: Run sglang benchmark int8
+        if: ${{ steps.install-benchmarks.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'sglang')) }}
         run: |
           source ./scripts/capture-hw-details.sh
 
-          cd benchmarks/third_party/liger_kernels
+          ./scripts/test-triton.sh --install-sglang --skip-pip-install --skip-pytorch-install
+          cd benchmarks/third_party/sglang
+          python scaled_mm_benchmark.py --reports $REPORTS
+          python ../vllm/transform_results.py \
+            $REPORTS/scaled_mm_benchmark.csv \
+            $REPORTS/scaled-mm-int8-report.csv \
+            --tag $TAG \
+            --bgroup sglang \
+            --benchmark scaled-mm-int8 \
+            --param_cols="M,N,K"
 
-          git clone https://github.com/linkedin/Liger-Kernel
-          pip install -e Liger-Kernel
+      - name: Run sglang benchmark with fp8
+        if: ${{ steps.install-benchmarks.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'sglang')) }}
+        run: |
+          source ./scripts/capture-hw-details.sh
+
+          cd benchmarks/third_party/sglang
+          FP8="1" python scaled_mm_benchmark.py --reports $REPORTS
+          python ../vllm/transform_results.py \
+            $REPORTS/scaled_mm_benchmark.csv \
+            $REPORTS/scaled-mm-fp8-report.csv \
+            --tag $TAG \
+            --bgroup sglang \
+            --benchmark scaled-mm-fp8 \
+            --param_cols="M,N,K"
+
+      - name: Install vllm
+        id: install-vllm
+        if: ${{ steps.install-benchmarks.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm')) }}
+        run: |
+          source ./scripts/capture-hw-details.sh
+          ./scripts/test-triton.sh --install-vllm --skip-pip-install --skip-pytorch-install
+
+      - name: Run vllm unified attention bf16
+        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm')) }}
+        run: |
+          source ./scripts/capture-hw-details.sh
+
+          cd benchmarks/third_party/vllm
+          python unified_attention_benchmark.py --reports $REPORTS
+          python transform_results.py \
+            $REPORTS/unified-attention-performance.csv \
+            $REPORTS/unified-attention-report.csv \
+            --tag $TAG \
+            --bgroup "vllm" \
+            --benchmark "unified-attn-bf16" \
+            --param_cols "q_heads,k_heads,head_size,dtype,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size"
+
+      - name: Run vllm batched moe bf16
+        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm')) }}
+        run: |
+          source ./scripts/capture-hw-details.sh
+
+          cp -r vllm/tests benchmarks/third_party/vllm/tests
+
+          cd benchmarks/third_party/vllm
+          python batched_moe_benchmark.py --reports $REPORTS
+          python transform_results.py \
+            $REPORTS/moe-gemm-performance.csv \
+            $REPORTS/moe-gemm-report.csv \
+            --tag $TAG \
+            --bgroup vllm \
+            --benchmark moe-bf16-benchmark \
+            --param_cols="num_experts,max_tokens_per_expert,K,N"
+
+
+      - name: Run vllm batched moe fp8
+        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm')) }}
+        run: |
+          source ./scripts/capture-hw-details.sh
+
+          cd benchmarks/third_party/vllm
+          FP8="1" python batched_moe_benchmark.py --reports $REPORTS
+          python transform_results.py \
+            $REPORTS/moe-gemm-performance.csv \
+            $REPORTS/moe-gemm-fp8-report.csv \
+            --tag $TAG \
+            --bgroup vllm \
+            --benchmark moe-fp8-benchmark \
+            --param_cols="num_experts,max_tokens_per_expert,K,N"
+
+
+      - name: Run Liger-Kernel benchmarks
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'liger')) }}
+        run: |
+          source ./scripts/capture-hw-details.sh
+
+          ./scripts/test-triton.sh --install-liger --skip-pip-install --skip-pytorch-install
 
           # To remember return code, but still copy results
           RET_CODE=0
-          bash ./run_benchmarks.sh || RET_CODE=$?
+          bash benchmarks/third_party/liger/run_benchmarks.sh || RET_CODE=$?
 
           cp Liger-Kernel/benchmark/data/all_benchmark_data.csv $REPORTS/liger-raw.csv
-          python transform.py $REPORTS/liger-raw.csv $REPORTS/liger-report.csv --tag $TAG
+          python benchmarks/third_party/liger/transform.py \
+            $REPORTS/liger-raw.csv \
+            $REPORTS/liger-report.csv \
+            --tag $TAG
 
           # Return the captured return code at the end
           exit "$RET_CODE"
@@ -121,7 +203,7 @@ jobs:
 
           git submodule sync
           git submodule update --init --recursive
-          python setup.py develop
+          pip install -v -e .
 
           cd ../benchmarks/third_party/e2e-flex_attention
 
@@ -143,7 +225,7 @@ jobs:
 
       - name: Upload benchmark reports
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: benchmark-reports
           path: reports

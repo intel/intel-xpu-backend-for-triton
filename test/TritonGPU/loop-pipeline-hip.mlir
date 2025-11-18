@@ -1,5 +1,5 @@
-// RUN: triton-opt %s -split-input-file -tritonamdgpu-stream-pipeline=num_stages=2 -canonicalize | FileCheck %s --check-prefixes=COMMON,SYNC
-// RUN: triton-opt %s -split-input-file -tritonamdgpu-stream-pipeline="num_stages=2 use_async_copy=1" -canonicalize | FileCheck %s --check-prefixes=COMMON,ASYNC
+// RUN: triton-opt %s -split-input-file -tritonamdgpu-schedule-loops=num_stages=2 -tritonamdgpu-pipeline -canonicalize | FileCheck %s --check-prefixes=COMMON,SYNC
+// RUN: triton-opt %s -split-input-file -tritonamdgpu-schedule-loops="num_stages=2" -tritonamdgpu-pipeline="use_async_copy=1" -canonicalize | FileCheck %s --check-prefixes=COMMON,ASYNC
 
 #blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 4], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -250,7 +250,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // Check that the stream pipeliner updates the resulting memory layout of transpose ops to mutable if immutable local buffers are replaced
 // COMMON-LABEL: loop_with_dot_and_transpose
 // COMMON: ttg.local_alloc {{.*}}, mutable>
-// COMMON: ttg.memdesc_trans {{.*}}, mutable, {{.*}} -> {{.*}}, mutable
+// COMMON: ttg.memdesc_trans {{.*}}, mutable> -> {{.*}}, mutable>
 
 #blocked = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
@@ -752,7 +752,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // COMMON-LABEL: @reject_fp64_pipelining_with_async_copy_gfx942
 // ASYNC-NOT: ttg.async_copy_global_to_local
 tt.func @reject_fp64_pipelining_with_async_copy_gfx942(
-                  %a_ptr : tensor<128x32x!tt.ptr<f64>, #AL> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32},
+                  %a_ptr : tensor<128x32x!tt.ptr<f64>, #AL> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 16]> : tensor<2xi32>},
                   %B : tensor<32x128xf64, #B>, %lb: i32, %ub: i32, %step: i32) -> tensor<128x128xf64, #C> {
   %c_init = arith.constant dense<0.00e+00> : tensor<128x128xf64, #C>
   %loop = scf.for %iv = %lb to %ub step %step iter_args(%prev_c = %c_init) -> (tensor<128x128xf64, #C>) : i32 {
@@ -782,8 +782,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // ASYNC: ttg.async_copy_global_to_local
 // ASYNC: tt.load
 tt.func @pipeline_fp64_with_async_copy_gfx950(
-                  %a_ptr : tensor<128x32x!tt.ptr<f64>, #AL> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32},
-                  %b_ptr : tensor<32x128x!tt.ptr<f64>, #BL> {tt.divisibility = 16 : i32, tt.contiguity = 2 : i32},
+                  %a_ptr : tensor<128x32x!tt.ptr<f64>, #AL> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 16]> : tensor<2xi32>},
+                  %b_ptr : tensor<32x128x!tt.ptr<f64>, #BL> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 2]> : tensor<2xi32>},
                   %lb: i32, %ub: i32, %step: i32) -> tensor<128x128xf64, #C> {
   %c_init = arith.constant dense<0.00e+00> : tensor<128x128xf64, #C>
   %loop = scf.for %iv = %lb to %ub step %step iter_args(%prev_c = %c_init) -> (tensor<128x128xf64, #C>) : i32 {
@@ -1022,3 +1022,165 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], instrShape = [32, 32, 16], isTransposed = true}>
+
+// ASYNC-NOT: ttg.swizzled_shared
+// ASYNC: [[PADDED_ENC:#.*]] = #ttg.padded_shared
+// ASYNC-SAME{LITERAL}: {offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [32, 0], [16, 0], [1, 0], [2, 0], [4, 0], [8, 0], [64, 0]], block = []}
+// ASYNC-NOT: ttg.padded_shared
+// ASYNC-NOT: ttg.swizzled_shared
+
+// SYNC-NOT: ttg.padded_shared
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  // COMMON-LABEL: loop_expect_padded_layouts
+  tt.func public @loop_expect_padded_layouts(%arg0: i32, %arg1: tensor<128x128x!tt.ptr<f16>, #blocked> {tt.constancy = dense<1> : tensor<2xi32>, tt.contiguity = dense<[1, 8]> : tensor<2xi32>, tt.divisibility = dense<[1, 16]> : tensor<2xi32>}, %arg2: tensor<128x128x!tt.ptr<f16>, #mma>) {
+    %c1_i32 = arith.constant 1 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf16, #mma>
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
+    %0 = scf.for %arg3 = %c0_i32 to %arg0 step %c1_i32 iter_args(%arg4 = %cst) -> (tensor<128x128xf16, #mma>)  : i32 {
+      %1 = tt.load %arg1 : tensor<128x128x!tt.ptr<f16>, #blocked>
+      %2 = ttg.convert_layout %1 : tensor<128x128xf16, #blocked> -> tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
+      %3 = tt.dot %2, %cst_0, %arg4 : tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<128x128xf16, #mma>
+      scf.yield %3 : tensor<128x128xf16, #mma>
+    }
+    tt.store %arg2, %0 : tensor<128x128x!tt.ptr<f16>, #mma>
+    tt.return
+  }
+}
+
+// -----
+// Negative tests for padded encodings on gfx950
+
+// Unsupported kWidth
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], instrShape = [32, 32, 16], isTransposed = true}>
+
+// COMMON-NOT: ttg.padded_shared
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  // COMMON-LABEL: loop_padding_too_small_vector
+  tt.func public @loop_padding_too_small_vector(%arg0: i32, %arg1: tensor<128x128x!tt.ptr<f16>, #blocked> {tt.constancy = dense<1> : tensor<2xi32>, tt.contiguity = dense<[1, 8]> : tensor<2xi32>, tt.divisibility = dense<[1, 16]> : tensor<2xi32>}, %arg2: tensor<128x128x!tt.ptr<f16>, #mma>) {
+    %c1_i32 = arith.constant 1 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf16, #mma>
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
+    %0 = scf.for %arg3 = %c0_i32 to %arg0 step %c1_i32 iter_args(%arg4 = %cst) -> (tensor<128x128xf16, #mma>)  : i32 {
+      %1 = tt.load %arg1 : tensor<128x128x!tt.ptr<f16>, #blocked>
+      %2 = ttg.convert_layout %1 : tensor<128x128xf16, #blocked> -> tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+      %3 = tt.dot %2, %cst_0, %arg4 : tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<128x128xf16, #mma>
+      scf.yield %3 : tensor<128x128xf16, #mma>
+    }
+    tt.store %arg2, %0 : tensor<128x128x!tt.ptr<f16>, #mma>
+    tt.return
+  }
+}
+
+// -----
+
+// Unsupported instrShape
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], instrShape = [64, 4, 16], isTransposed = true}>
+
+// COMMON-NOT: ttg.padded_shared
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  // COMMON-LABEL: loop_padding_invalid_instr_shape
+  tt.func public @loop_padding_invalid_instr_shape(%arg0: i32, %arg1: tensor<128x128x!tt.ptr<f16>, #blocked> {tt.constancy = dense<1> : tensor<2xi32>, tt.contiguity = dense<[1, 8]> : tensor<2xi32>, tt.divisibility = dense<[1, 16]> : tensor<2xi32>}, %arg2: tensor<128x128x!tt.ptr<f16>, #mma>) {
+    %c1_i32 = arith.constant 1 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf16, #mma>
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
+    %0 = scf.for %arg3 = %c0_i32 to %arg0 step %c1_i32 iter_args(%arg4 = %cst) -> (tensor<128x128xf16, #mma>)  : i32 {
+      %1 = tt.load %arg1 : tensor<128x128x!tt.ptr<f16>, #blocked>
+      %2 = ttg.convert_layout %1 : tensor<128x128xf16, #blocked> -> tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+      %3 = tt.dot %2, %cst_0, %arg4 : tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<128x128xf16, #mma>
+      scf.yield %3 : tensor<128x128xf16, #mma>
+    }
+    tt.store %arg2, %0 : tensor<128x128x!tt.ptr<f16>, #mma>
+    tt.return
+  }
+}
+
+// -----
+
+// Block size too small
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], instrShape = [16, 16, 32], isTransposed = true}>
+
+// COMMON-NOT: ttg.padded_shared
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  // COMMON-LABEL: loop_padding_block_size_too_small
+  tt.func public @loop_padding_block_size_too_small(%arg0: i32, %arg1: tensor<16x128x!tt.ptr<f16>, #blocked> {tt.constancy = dense<1> : tensor<2xi32>, tt.contiguity = dense<[1, 8]> : tensor<2xi32>, tt.divisibility = dense<[1, 16]> : tensor<2xi32>}, %arg2: tensor<16x16x!tt.ptr<f16>, #mma>) {
+    %c1_i32 = arith.constant 1 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #mma>
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
+    %0 = scf.for %arg3 = %c0_i32 to %arg0 step %c1_i32 iter_args(%arg4 = %cst) -> (tensor<16x16xf16, #mma>)  : i32 {
+      %1 = tt.load %arg1 : tensor<16x128x!tt.ptr<f16>, #blocked>
+      %2 = ttg.convert_layout %1 : tensor<16x128xf16, #blocked> -> tensor<16x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+      %3 = tt.dot %2, %cst_0, %arg4 : tensor<16x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<128x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<16x16xf16, #mma>
+      scf.yield %3 : tensor<16x16xf16, #mma>
+    }
+    tt.store %arg2, %0 : tensor<16x16x!tt.ptr<f16>, #mma>
+    tt.return
+  }
+}
+
+// -----
+
+// dtype > 2 bytes
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], instrShape = [16, 16, 32], isTransposed = true}>
+// COMMON-NOT: ttg.padded_shared
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  // COMMON-LABEL: loop_padding_block_size_too_small
+  tt.func public @loop_padding_block_size_too_small(%arg0: i32, %arg1: tensor<16x128x!tt.ptr<f32>, #blocked> {tt.constancy = dense<1> : tensor<2xi32>, tt.contiguity = dense<[1, 8]> : tensor<2xi32>, tt.divisibility = dense<[1, 16]> : tensor<2xi32>}, %arg2: tensor<16x16x!tt.ptr<f32>, #mma>) {
+    %c1_i32 = arith.constant 1 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #mma>
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x16xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
+    %0 = scf.for %arg3 = %c0_i32 to %arg0 step %c1_i32 iter_args(%arg4 = %cst) -> (tensor<16x16xf32, #mma>)  : i32 {
+      %1 = tt.load %arg1 : tensor<16x128x!tt.ptr<f32>, #blocked>
+      %2 = ttg.convert_layout %1 : tensor<16x128xf32, #blocked> -> tensor<16x128xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+      %3 = tt.dot %2, %cst_0, %arg4 : tensor<16x128xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<128x16xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<16x16xf32, #mma>
+      scf.yield %3 : tensor<16x16xf32, #mma>
+    }
+    tt.store %arg2, %0 : tensor<16x16x!tt.ptr<f32>, #mma>
+    tt.return
+  }
+}
+
+// -----
+
+// dtype < 2 bytes
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], instrShape = [16, 16, 32], isTransposed = true}>
+// COMMON-NOT: ttg.padded_shared
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  // COMMON-LABEL: loop_padding_block_size_too_small
+  tt.func public @loop_padding_block_size_too_small(%arg0: i32, %arg1: tensor<16x128x!tt.ptr<f8E5M2>, #blocked> {tt.constancy = dense<1> : tensor<2xi32>, tt.contiguity = dense<[1, 8]> : tensor<2xi32>, tt.divisibility = dense<[1, 16]> : tensor<2xi32>}, %arg2: tensor<16x16x!tt.ptr<f8E5M2>, #mma>) {
+    %c1_i32 = arith.constant 1 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf8E5M2, #mma>
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x16xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
+    %0 = scf.for %arg3 = %c0_i32 to %arg0 step %c1_i32 iter_args(%arg4 = %cst) -> (tensor<16x16xf8E5M2, #mma>)  : i32 {
+      %1 = tt.load %arg1 : tensor<16x128x!tt.ptr<f8E5M2>, #blocked>
+      %2 = ttg.convert_layout %1 : tensor<16x128xf8E5M2, #blocked> -> tensor<16x128xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+      %3 = tt.dot %2, %cst_0, %arg4 : tensor<16x128xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<128x16xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<16x16xf8E5M2, #mma>
+      scf.yield %3 : tensor<16x16xf8E5M2, #mma>
+    }
+    tt.store %arg2, %0 : tensor<16x16x!tt.ptr<f8E5M2>, #mma>
+    tt.return
+  }
+}
+
+// End of negative tests for padding on gfx950

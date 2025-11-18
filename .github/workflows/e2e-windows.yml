@@ -144,7 +144,7 @@ jobs:
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           cd ${{ env.NEW_WORKSPACE }}
-          pip install -U wheel pybind11 cython cmake
+          pip install -U pybind11 cmake
           pip install -v '.[build,tests,tutorials]'
 
       - name: Triton version
@@ -301,6 +301,7 @@ jobs:
 
 
       - name: Identify GPU
+        timeout-minutes: 1
         run: |
           # Initializing oneAPI to enable sycl-ls, which is used in capture-hw-details.sh on Windows.
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
@@ -339,7 +340,7 @@ jobs:
           EOF
 
       - name: Upload test logs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: logs
           path: ${{ env.NEW_WORKSPACE }}\inductor_log

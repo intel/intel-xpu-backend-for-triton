@@ -1,4 +1,5 @@
 #include "mlir/Analysis/SliceAnalysis.h"
+#include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Dominance.h"
@@ -25,6 +26,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/TypeSwitch.h"
 #include <deque>
 
@@ -1110,6 +1112,10 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
                                            DenseMap<Value, Attribute> &layout,
                                            ConvertLayoutOp convertOp,
                                            IRMapping &mapping) {
+  std::optional<bool> enableForLoopSupport =
+      mlir::triton::tools::isEnvValueBool(mlir::triton::tools::getStrEnv(
+          "TRITON_INTEL_REMOVELAYOUTCONVERSION_SUPPORT_FOR_LOOP"));
+
   SetVector<Operation *> opsToRewrite;
   // Keep track of yield operands that need to be duplicated.
   DenseMap<Operation *, SmallVector<int>> yieldOperandsMap;
@@ -1135,12 +1141,13 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
         opsToRewrite.insert(ifOp.elseYield().getOperation());
         yieldOperandsMap[ifOp.elseYield()].push_back(operandIdx);
       }
-      if (auto forOp = v.getDefiningOp<scf::ForOp>()) {
-        unsigned operandIdx = cast<OpResult>(v).getResultNumber();
-        auto yieldOp = forOp.getBody()->getTerminator();
-        yieldOperandsMap[yieldOp].push_back(operandIdx);
-        opsToRewrite.insert(yieldOp);
-      }
+      if (enableForLoopSupport)
+        if (auto forOp = v.getDefiningOp<scf::ForOp>()) {
+          unsigned operandIdx = cast<OpResult>(v).getResultNumber();
+          auto yieldOp = forOp.getBody()->getTerminator();
+          yieldOperandsMap[yieldOp].push_back(operandIdx);
+          opsToRewrite.insert(yieldOp);
+        }
     } else {
       BlockArgument blockArg = cast<BlockArgument>(v);
       Operation *parentOp = blockArg.getOwner()->getParentOp();
@@ -1154,7 +1161,7 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
     }
   }
   slice.set_subtract(valuesWithExistingRemat);
-  opsToRewrite = multiRootTopologicalSort(opsToRewrite);
+  opsToRewrite = mlir::topologicalSort(opsToRewrite);
 
   // replaceAllUsesWith calls delayed until after initial rewrite.
   // This is required for slice.count(value) to work mid rewrite.
@@ -1164,17 +1171,19 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
   IRRewriter builder(slice.begin()->getContext());
   for (Operation *op : opsToRewrite) {
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-      // Construct the new initialization argument by adding yielded operands
-      // that have been remapped.
-      auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
-      auto yieldOperands = llvm::to_vector(yieldOp.getOperands());
-      SmallVector<int> operandsToRewrite = yieldOperandsMap[yieldOp];
-      std::sort(operandsToRewrite.begin(), operandsToRewrite.end());
       SmallVector<Value> newOperands;
-      for (int operandIdx : operandsToRewrite) {
-        Value yieldOperand = yieldOp.getOperand(operandIdx);
-        if (mapping.contains(yieldOperand))
-          newOperands.push_back(mapping.lookup(yieldOperand));
+      if (enableForLoopSupport) {
+        // Construct the new initialization argument by adding yielded operands
+        // that have been remapped.
+        auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+        auto yieldOperands = llvm::to_vector(yieldOp.getOperands());
+        SmallVector<int> operandsToRewrite = yieldOperandsMap[yieldOp];
+        std::sort(operandsToRewrite.begin(), operandsToRewrite.end());
+        for (int operandIdx : operandsToRewrite) {
+          Value yieldOperand = yieldOp.getOperand(operandIdx);
+          if (mapping.contains(yieldOperand))
+            newOperands.push_back(mapping.lookup(yieldOperand));
+        }
       }
 
       // Keep a mapping of the operands index to the new operands index.
@@ -1192,17 +1201,19 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
       scf::ForOp newForOp = replaceForOpWithNewSignature(
           builder, forOp, newOperands, replacements);
 
-      // Add rematerializations for loop results in the slice.
-      unsigned oldIdx = 0;
-      unsigned newIdx = forOp.getNumResults();
-      for (auto res : forOp.getResults()) {
-        if (slice.count(res)) {
-          mapping.map(forOp.getResult(oldIdx), newForOp.getResult(newIdx));
-          addRematValue(forOp.getResult(oldIdx), layout[res],
-                        newForOp.getResult(newIdx));
-          ++newIdx;
+      if (enableForLoopSupport) {
+        // Add rematerializations for loop results in the slice.
+        unsigned oldIdx = 0;
+        unsigned newIdx = forOp.getNumResults();
+        for (auto res : forOp.getResults()) {
+          if (slice.count(res)) {
+            mapping.map(forOp.getResult(oldIdx), newForOp.getResult(newIdx));
+            addRematValue(forOp.getResult(oldIdx), layout[res],
+                          newForOp.getResult(newIdx));
+            ++newIdx;
+          }
+          ++oldIdx;
         }
-        ++oldIdx;
       }
 
       deadOps.push_back(forOp.getOperation());
@@ -1560,7 +1571,9 @@ void LayoutRematerialization::backwardRematerialization(
   // We measure costs in standardised milli-SM-cycles. The smem load
   // and store each cost 8 * convertLayoutBytes, and then we double
   // it to account for extra cost due to synchronisation.
-  int64_t convertLayoutCost = 32 * convertLayoutBytes;
+  // FIXME: measure cost of smem load/store and synchronisation on Intel GPUs,
+  // and refine this model further. (#5476)
+  int64_t convertLayoutCost = 32 * convertLayoutBytes * 2;
   int64_t rematerialisationCost = 0;
 
   // Evaluate single-use status for every operation in slice

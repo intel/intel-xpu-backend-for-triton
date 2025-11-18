@@ -73,6 +73,31 @@ bool isConvertTrivial(ConvertLayoutOp op) {
 // Canonicalizer
 //===----------------------------------------------------------------------===//
 
+// tmem_store(cvt) -> tmem_store
+struct CanonicalizeConvertFromTMEMStore
+    : public mlir::OpRewritePattern<nvidia_gpu::TMEMStoreOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(nvidia_gpu::TMEMStoreOp op,
+                  PatternRewriter &rewriter) const override {
+    auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
+    if (!convert)
+      return failure();
+
+    // bail for incompatible layouts
+    auto cvtSrcType = convert.getSrc().getType();
+    if (!nvidia_gpu::isDistributedLayoutTMemCompatible(
+            op.getOperation(), cvtSrcType, op.getDst().getType())) {
+      return failure();
+    }
+
+    rewriter.modifyOpInPlace(
+        op, [&]() { op.getSrcMutable().assign(convert.getSrc()); });
+    return mlir::success();
+  }
+};
+
 // reshape(cvt) -> reshape
 struct CanonicalizeConvertFromReshape
     : public mlir::OpRewritePattern<triton::ReshapeOp> {
@@ -155,7 +180,7 @@ struct CanonicalizeConvertFromHistogram
     if (mask) {
       auto sharedType = getI1SameShape(src.getType());
       rewriter.setInsertionPoint(op);
-      mask = rewriter.create<ConvertLayoutOp>(op.getLoc(), sharedType, mask);
+      mask = ConvertLayoutOp::create(rewriter, op.getLoc(), sharedType, mask);
     }
 
     rewriter.replaceOpWithNewOp<triton::HistogramOp>(
@@ -373,6 +398,7 @@ void ConvertLayoutOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
   patterns.add<CanonicalizeConvertFromAlloc>(context);
   patterns.add<CanonicalizeConvertFromLocalStore>(context);
   patterns.add<CanonicalizeConvertFromSplit>(context);
+  patterns.add<CanonicalizeConvertFromTMEMStore>(context);
 }
 
 LogicalResult Fp4ToFpOp::verify() {
@@ -418,6 +444,37 @@ LogicalResult Fp4ToFpOp::verifyFp4ToFp(mlir::Operation *op,
                << ", dst=" << resShape[i] << ", axis=" << axis << ")";
     }
   }
+  if (bool(resTy.getEncoding()) != bool(srcTy.getEncoding()))
+    return op->emitError()
+           << "source and result must both have an encoding, or neither";
+  if (!resTy.getEncoding()) {
+    return success();
+  }
+  auto srcLl = toLinearLayout(srcTy);
+  auto resLl = toLinearLayout(resTy);
+  auto *ctx = srcTy.getContext();
+  auto regDim = StringAttr::get(ctx, "register");
+  auto outDims = standardOutDimNames(ctx, rank);
+
+  // We use backward inference here as it is striclty more general
+  Attribute inferSrc;
+  auto dialect =
+      resTy.getEncoding()
+          .getDialect()
+          .getRegisteredInterface<triton::DialectInferLayoutInterface>();
+  assert(dialect);
+  if (failed(dialect->inferFp4ToFpOpEncoding(
+          resTy.getShape(), axis, resTy.getEncoding(), inferSrc,
+          /*fwdInference*/ false, std::nullopt))) {
+    return op->emitError() << "failed to infer encoding";
+  }
+  if (!areLayoutsEquivalent(srcTy.getShape(),
+                            cast<LayoutEncodingTrait>(inferSrc),
+                            cast<LayoutEncodingTrait>(srcTy.getEncoding())))
+    return op->emitError()
+           << "Src and Dst encodings are not compatible:\n"
+           << toLinearLayout(srcTy.getShape(), inferSrc).toString() << "\n"
+           << srcLl.toString();
   return success();
 }
 
@@ -752,6 +809,11 @@ LogicalResult MemDescIndexOp::verify() {
     return emitError("src and dst must have the same type of encoding");
   }
 
+  if (dstTy.getAllocShape() != dstTy.getShape() ||
+      srcTy.getAllocShape() != srcTy.getShape()) {
+    return emitError("alloc shape must match shape for both result and src");
+  }
+
   if (isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(srcEnc)) {
     // We support only 3D -> 2D subviews with only first offset being non-zero.
     if (srcTy.getRank() != 3 || dstTy.getRank() != 2) {
@@ -1009,8 +1071,8 @@ void WarpSpecializeOp::build(OpBuilder &builder, OperationState &state,
         partitionNumWarps, {}, {}, {});
   OpBuilder::InsertionGuard guard(builder);
   Block *container = builder.createBlock(state.regions.back().get());
-  builder.create<WarpSpecializePartitionsOp>(state.location,
-                                             partitionNumRegions);
+  WarpSpecializePartitionsOp::create(builder, state.location,
+                                     partitionNumRegions);
 }
 
 void WarpSpecializeOp::build(OpBuilder &builder, OperationState &state,

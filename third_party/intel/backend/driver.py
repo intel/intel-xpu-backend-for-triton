@@ -199,9 +199,11 @@ class SpirvUtils:
         self.shared_library.get_device_properties.argtypes = (ctypes.c_int, )
         self.shared_library.has_opencl_extension.restype = ctypes.py_object
         self.shared_library.has_opencl_extension.argtypes = (ctypes.c_int, ctypes.c_char_p)
+        self.shared_library.get_last_selected_build_flags.restype = ctypes.py_object
 
     def __getattribute__(self, name):
-        if name in ("get_device_properties", "init_devices", "wait_on_sycl_queue", "has_opencl_extension"):
+        if name in ("get_device_properties", "init_devices", "wait_on_sycl_queue", "has_opencl_extension",
+                    "get_last_selected_build_flags"):
             shared_library = super().__getattribute__("shared_library")
             return getattr(shared_library, name)
 
@@ -318,6 +320,7 @@ class XPUUtils(object):
         self.device_count = mod.init_devices(self.get_sycl_queue())
         self.wait_on_sycl_queue = mod.wait_on_sycl_queue
         self.has_opencl_extension = mod.has_opencl_extension
+        self.get_last_selected_build_flags = mod.get_last_selected_build_flags
 
     def get_current_device(self):
         import torch
@@ -513,10 +516,8 @@ def make_launcher(constants, signature):
 #define EXPORT_FUNC __attribute__((visibility("default")))
 #endif
 
-#define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #include <Python.h>
 #include <stdio.h>
-#include <numpy/arrayobject.h>
 
 namespace {{
 
@@ -664,6 +665,7 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
   // Submit the imported kernel.
   auto cgf = [&](sycl::handler &cgh) {{
     {" ".join(f'set_scalar_arg<{ty_to_cpp(item)}>(cgh, {idx}, params[{idx}]);' for idx, item in enumerate([signature[i] for i in signature if signature[i] != "constexpr"]))}
+    {" ".join(f'set_scalar_arg<{ty_to_cpp(item)}>(cgh, {idx}, params[{idx}]);' for idx, item in enumerate(["*global_scratch", "*profile_scratch"], start=num_params-2))}
     if (shared_memory) {{
       using share_mem_t = sycl::local_accessor<int8_t, 1>;
       share_mem_t local_buffer = share_mem_t(shared_memory, cgh);

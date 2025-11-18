@@ -1,8 +1,8 @@
 """
-Stream K GEMM with Block Pointers
-=====================
+Stream K GEMM with Tensor Descriptors
+=====================================
 Stream K is a approach that aims to resovle quantization inefficiency in GPU work load for GEMM problems.
-This script implements a Stream K GEMM with block pointers to achieve better hardware utilization.
+This script implements a Stream K GEMM with tensor descriptors to achieve better hardware utilization.
 """
 
 import torch
@@ -67,28 +67,24 @@ def mac_loop(
     else:
         pid_m, pid_n = linear_tile(tile_id, M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M)
 
-    a_ptr += BLOCK_SIZE_K * stride_ak * remain_iters
-    a_block_ptr = tl.make_block_ptr(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
-                                    offsets=(pid_m * BLOCK_SIZE_M, 0), block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K),
-                                    order=(1, 0))
-    b_ptr += BLOCK_SIZE_K * stride_bk * remain_iters
-    b_block_ptr = tl.make_block_ptr(base=b_ptr, shape=(K, N), strides=(stride_bk, stride_bn),
-                                    offsets=(0, pid_n * BLOCK_SIZE_N), block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N),
-                                    order=(1, 0))
+    # Create tensor descriptors
+    a_desc = tl.make_tensor_descriptor(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
+                                       block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K))
+    b_desc = tl.make_tensor_descriptor(base=b_ptr, shape=(K, N), strides=(stride_bk, stride_bn),
+                                       block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N))
 
     acc = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+    off_k = remain_iters * BLOCK_SIZE_K
     for _ in range(start_iter, end_iter):
-        a = tl.load(a_block_ptr, boundary_check=(0, 1))
-        b = tl.load(b_block_ptr, boundary_check=(0, 1))
+        a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
+        b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
         acc += tl.dot(a, b)
-        a_block_ptr = tl.advance(a_block_ptr, (0, BLOCK_SIZE_K))
-        b_block_ptr = tl.advance(b_block_ptr, (BLOCK_SIZE_K, 0))
+        off_k += BLOCK_SIZE_K
 
     if remain_iters == 0 and end_iter % iters_per_tile == 0:
-        c_block_ptr = tl.make_block_ptr(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
-                                        offsets=(pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N),
-                                        block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N), order=(1, 0))
-        tl.store(c_block_ptr, acc, boundary_check=(0, 1))
+        c_desc = tl.make_tensor_descriptor(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
+                                           block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N))
+        c_desc.store([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], acc)
     else:
         rm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
         rn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
@@ -100,7 +96,7 @@ def mac_loop(
 @triton.autotune(
     configs=[
         triton.Config(
-            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
+            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '256'},
             num_stages=2, num_warps=32),
     ],
     key=['M', 'N', 'K'],
@@ -136,7 +132,7 @@ def first_wave(
 @triton.autotune(
     configs=[
         triton.Config(
-            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
+            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '256'},
             num_stages=2, num_warps=32),
     ],
     key=['M', 'N', 'K'],
@@ -165,26 +161,23 @@ def full_tiles(
     else:
         pid_m, pid_n = linear_tile(tile_id, M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M)
 
-    a_block_ptr = tl.make_block_ptr(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
-                                    offsets=(pid_m * BLOCK_SIZE_M, 0), block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K),
-                                    order=(1, 0))
-    b_block_ptr = tl.make_block_ptr(base=b_ptr, shape=(K, N), strides=(stride_bk, stride_bn),
-                                    offsets=(0, pid_n * BLOCK_SIZE_N), block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N),
-                                    order=(1, 0))
+    a_desc = tl.make_tensor_descriptor(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
+                                       block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K))
+    b_desc = tl.make_tensor_descriptor(base=b_ptr, shape=(K, N), strides=(stride_bk, stride_bn),
+                                       block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N))
 
     acc = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
+    off_k = 0
     for _ in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
-        a = tl.load(a_block_ptr, boundary_check=(0, 1))
-        b = tl.load(b_block_ptr, boundary_check=(0, 1))
+        a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
+        b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
         acc += tl.dot(a, b)
-        a_block_ptr = tl.advance(a_block_ptr, (0, BLOCK_SIZE_K))
-        b_block_ptr = tl.advance(b_block_ptr, (BLOCK_SIZE_K, 0))
+        off_k += BLOCK_SIZE_K
 
-    c_block_ptr = tl.make_block_ptr(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
-                                    offsets=(pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N),
-                                    block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N), order=(1, 0))
-    tl.store(c_block_ptr, acc, boundary_check=(0, 1))
+    c_desc = tl.make_tensor_descriptor(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
+                                       block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N))
+    c_desc.store([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], acc)
 
 
 # ---------------------------------------------------------------------------

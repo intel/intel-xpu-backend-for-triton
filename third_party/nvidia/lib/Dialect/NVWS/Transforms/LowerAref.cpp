@@ -199,14 +199,14 @@ Value createBarriers(ImplicitLocOpBuilder &b1, ImplicitLocOpBuilder &b2,
   Value barrierAlloc = createScalarAlloc(b1, b1.getI64Type(), numBarriers);
   for (unsigned i = 0; i < numBarriers; i++) {
     Value barrierView = createSingleBufferView(b1, barrierAlloc, i);
-    b1.create<InitBarrierOp>(barrierView, arrivalCount);
+    InitBarrierOp::create(b1, barrierView, arrivalCount);
   }
   // Invalidate and deallocate the barriers.
   for (unsigned i = 0; i < numBarriers; i++) {
     Value barrierView = createSingleBufferView(b2, barrierAlloc, i);
-    b2.create<InvalBarrierOp>(barrierView);
+    InvalBarrierOp::create(b2, barrierView);
   }
-  b2.create<LocalDeallocOp>(barrierAlloc);
+  LocalDeallocOp::create(b2, barrierAlloc);
   return barrierAlloc;
 }
 
@@ -252,7 +252,7 @@ SmallVector<Value> getSubViews(ArefValue arefVal, Value stage, Location loc,
           tensorShape, memDescType.getElementType(), memDescType.getEncoding(),
           memDescType.getMemorySpace(), true);
       auto singleBuffer =
-          rewriter.create<MemDescIndexOp>(loc, memDescTypeNew, buffer, stage);
+          MemDescIndexOp::create(rewriter, loc, memDescTypeNew, buffer, stage);
       assignStageCluster(singleBuffer, partitionIds, stageCluster, rewriter);
       views.push_back(singleBuffer);
     }
@@ -266,6 +266,12 @@ void createTMALoad(triton::nvws::DescriptorLoadOp op, PatternRewriter &rewriter,
   auto indices = translateTMAIndices(
       rewriter, op.getLoc(),
       op.getDesc().getType().getBlockType().getEncoding(), op.getIndices());
+  for (auto [newIdx, oldIdx] : llvm::zip(indices, op.getIndices())) {
+    if (newIdx != oldIdx) {
+      assignStageCluster(newIdx.getDefiningOp(), getPartitionIds(op),
+                         getStageCluster(op), rewriter);
+    }
+  }
   auto newLoadOp =
       rewriter.create<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp>(
           op.getLoc(), op.getDesc(), indices, barrierAlloc, op.getResult(),
@@ -277,8 +283,8 @@ void createTMALoad(triton::nvws::DescriptorLoadOp op, PatternRewriter &rewriter,
 void createTMAGather(triton::nvws::DescriptorGatherOp op,
                      PatternRewriter &rewriter, Value barrierAlloc,
                      Value pred) {
-  auto newGatherOp = rewriter.create<triton::nvidia_gpu::AsyncTMAGatherOp>(
-      op.getLoc(), op.getDesc(), op.getXOffsets(), op.getYOffset(),
+  auto newGatherOp = triton::nvidia_gpu::AsyncTMAGatherOp::create(
+      rewriter, op.getLoc(), op.getDesc(), op.getXOffsets(), op.getYOffset(),
       barrierAlloc, op.getResult(), pred);
   assignStageCluster(newGatherOp, getPartitionIds(op), getStageCluster(op),
                      rewriter);
@@ -303,9 +309,9 @@ void lowerTMALoad(ArefPutEnterOp op, Value fullBarrier,
   if (loadOps.empty())
     return;
 
-  Value pred = rewriter.create<arith::ConstantIntOp>(loc, 1, 1);
-  auto expectOp = rewriter.create<triton::nvidia_gpu::BarrierExpectOp>(
-      loc, fullBarrier, txCount, pred);
+  Value pred = arith::ConstantIntOp::create(rewriter, loc, 1, 1);
+  auto expectOp = triton::nvidia_gpu::BarrierExpectOp::create(
+      rewriter, loc, fullBarrier, txCount, pred);
   assignStageCluster(expectOp, getPartitionIds(op), getStageCluster(op),
                      rewriter);
 
@@ -325,7 +331,7 @@ void lowerTMALoad(ArefPutEnterOp op, Value fullBarrier,
 
 void insertWaitOp(PatternRewriter &rewriter, Operation *op, Value barrier,
                   Value phase, Value stage) {
-  auto waitOp = rewriter.create<WaitBarrierOp>(op->getLoc(), barrier, phase);
+  auto waitOp = WaitBarrierOp::create(rewriter, op->getLoc(), barrier, phase);
   assignStageCluster(waitOp, getPartitionIds(op), getStageCluster(op),
                      rewriter);
 }
@@ -444,11 +450,11 @@ void insertArriveBarrier(Location loc, ArrayRef<AsyncOp> asyncOps,
     switch (asyncOpEnum) {
     case AsyncOp::NONE:
     case AsyncOp::WGMMA:
-      arriveOp = rewriter.create<nvidia_gpu::ArriveBarrierOp>(loc, mbar, 1);
+      arriveOp = nvidia_gpu::ArriveBarrierOp::create(rewriter, loc, mbar, 1);
       break;
     case AsyncOp::TC5MMA:
     case AsyncOp::TMEMCopy:
-      arriveOp = rewriter.create<nvidia_gpu::TCGen5CommitOp>(loc, mbar);
+      arriveOp = nvidia_gpu::TCGen5CommitOp::create(rewriter, loc, mbar);
       break;
     case AsyncOp::TMALoad:
       // nothing to do, the arrive is done by HW
@@ -465,7 +471,42 @@ void insertArriveBarrier(Location loc, ArrayRef<AsyncOp> asyncOps,
 void rewritePutExitOp(ArefPutExitOp op, PatternRewriter &rewriter,
                       ArefValue arefVal) {
   auto loc = op->getLoc();
+  auto stageCluster = getStageCluster(op);
+  auto asyncKinds = castAsyncOpAttrs(op.getAsyncOps());
   rewriter.setInsertionPointAfter(op);
+
+  bool needFence = [&]() {
+    bool isGenericProxy = llvm::any_of(
+        asyncKinds, [](AsyncOp kind) { return kind == AsyncOp::NONE; });
+    if (!isGenericProxy) {
+      return false;
+    }
+    auto tmem = TensorMemorySpaceAttr::get(op.getContext());
+    auto arefType = cast<ArefType>(op.getAref().getType());
+    // Currently we assume that an aref does not contain both SMEM and TMEM.
+    // So checking only the first buffer is fine.
+    auto arefBufType = cast<MemDescType>(arefType.getBaseType()[0]);
+    if (arefBufType.getMemorySpace() == tmem) {
+      return false;
+    }
+    for (auto arefUser : op.getAref().getUsers()) {
+      if (auto getExit = dyn_cast<ArefGetExitOp>(arefUser)) {
+        bool isConsumerMMAv5 =
+            llvm::any_of(castAsyncOpAttrs(getExit.getAsyncOps()),
+                         [](AsyncOp kind) { return kind == AsyncOp::TC5MMA; });
+        if (isConsumerMMAv5) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }();
+
+  if (needFence) {
+    auto fence = FenceAsyncSharedOp::create(rewriter, loc, /*bCluster=*/false);
+    assignStageCluster(fence, getPartitionIds(op), stageCluster, rewriter);
+  }
+
   Value fullBarrier = getFullBarrier(rewriter, loc, arefVal, op.getStage(),
                                      getPartitionIds(op), getStageCluster(op));
   insertArriveBarrier(loc, castAsyncOpAttrs(op.getAsyncOps()), rewriter,
@@ -499,7 +540,7 @@ void rewriteGetExitOp(ArefGetExitOp op, PatternRewriter &rewriter,
   }();
 
   if (needFence) {
-    auto fence = rewriter.create<FenceAsyncSharedOp>(loc, /*bCluster=*/false);
+    auto fence = FenceAsyncSharedOp::create(rewriter, loc, /*bCluster=*/false);
     assignStageCluster(fence, getPartitionIds(op), stageCluster, rewriter);
   }
 
@@ -575,7 +616,7 @@ public:
     auto sorted = topologicalSort(opToDelete);
     OpBuilder b(op);
     auto replToken =
-        b.create<ub::PoisonOp>(op.getLoc(), b.getType<AsyncTokenType>());
+        ub::PoisonOp::create(b, op.getLoc(), b.getType<AsyncTokenType>());
     for (auto op : sorted) {
       if (auto enterOp = dyn_cast<ArefPutEnterOp>(op))
         enterOp.getToken().replaceAllUsesWith(replToken);
@@ -671,7 +712,7 @@ ExitOp createCombinedArefOps(SmallVector<EnterOp> &enterOps,
   }
 
   builder.setInsertionPointAfter(aref);
-  auto zero = builder.create<arith::ConstantIntOp>(aref.getLoc(), 0, 32);
+  auto zero = arith::ConstantIntOp::create(builder, aref.getLoc(), 0, 32);
 
   if (combinedEnterInsertPoint) {
     // Combined get enter must be placed after combined put enter
@@ -679,18 +720,18 @@ ExitOp createCombinedArefOps(SmallVector<EnterOp> &enterOps,
   } else {
     builder.setInsertionPoint(firstEnter);
   }
-  auto combinedEnter = builder.create<EnterOp>(
-      firstEnter.getLoc(), arefEnterBuffers, builder.getType<AsyncTokenType>(),
-      aref, zero, zero);
+  auto combinedEnter =
+      EnterOp::create(builder, firstEnter.getLoc(), arefEnterBuffers,
+                      builder.getType<AsyncTokenType>(), aref, zero, zero);
   assignStageCluster(combinedEnter, getPartitionIds(firstEnter),
                      getStageCluster(firstEnter), builder);
 
   builder.setInsertionPoint(lastExit);
   llvm::SmallVector<Attribute> AsyncOpAttrs(opAttrsSet.begin(),
                                             opAttrsSet.end());
-  auto combinedExit = builder.create<ExitOp>(
-      firstEnter.getLoc(), aref, combinedEnter.getToken(), zero,
-      builder.getArrayAttr(AsyncOpAttrs));
+  auto combinedExit = ExitOp::create(builder, firstEnter.getLoc(), aref,
+                                     combinedEnter.getToken(), zero,
+                                     builder.getArrayAttr(AsyncOpAttrs));
   assignStageCluster(combinedExit, getPartitionIds(lastExit),
                      getStageCluster(lastExit), builder);
 
@@ -747,11 +788,15 @@ void combineArefs(scf::ForOp loop) {
 
   // Arefs whose get-enter ops share the same dominant consumer can be combined
   DominanceInfo domInfo(loop);
-  llvm::DenseMap<Operation *, SmallVector<ArefGetEnterOp>> liveBeforeGroups;
+  llvm::DenseMap<std::pair<Operation *, int>, SmallVector<ArefGetEnterOp>>
+      liveBeforeGroups;
   for (auto getEnterOp : getEnterOps) {
     if (auto liveBeforeOp =
             getDominantConsumer(getEnterOp, *loop.getBody(), domInfo)) {
-      liveBeforeGroups[liveBeforeOp].push_back(getEnterOp);
+      auto partitionIds = getPartitionIds(getEnterOp);
+      assert(partitionIds && partitionIds->size() == 1);
+      liveBeforeGroups[{liveBeforeOp, partitionIds->front()}].push_back(
+          getEnterOp);
     }
   }
 

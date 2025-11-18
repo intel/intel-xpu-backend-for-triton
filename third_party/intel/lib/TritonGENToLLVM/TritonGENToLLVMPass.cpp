@@ -8,6 +8,7 @@
 
 #include "Attributes.h"
 #include "Utils/LLVMIntr.h"
+#include "Utils/LibCallEmitter.h"
 #include "Utils/Mangling.h"
 #include "mlir/Conversion/ConvertToLLVM/ToLLVMInterface.h"
 #include "mlir/Conversion/LLVMCommon/ConversionTarget.h"
@@ -35,6 +36,7 @@
 #include "llvm/Support/ErrorHandling.h"
 
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/TritonGENToLLVM/TritonGENToLLVMPass.h"
@@ -114,6 +116,11 @@ loadCacheControlToCacheControls(Builder &builder,
 
 static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
   // FIXME: The following signatures are not valid in SPV interface.
+
+  // intel_sub_group_2d_block_read_8b_1r16x4c
+  if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 1 &&
+      op.getTileWidth() == 16 && op.getVBlocks() == 1 && !op.getVnniTransform())
+    return false;
 
   // intel_sub_group_2d_block_read_8b_8r8x1c
   if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 8 &&
@@ -503,6 +510,131 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
                                          intel::noUnwindWillReturnAttrs);
 }
 
+static void
+createAssertNot(ConversionPatternRewriter &rewriter,
+                const mlir::triton::gpu::intel::LibCallEmitter &emitter,
+                Value condition, StringRef message) {
+
+  auto *ctx = rewriter.getContext();
+  auto loc = rewriter.getInsertionPoint() != rewriter.getBlock()->end()
+                 ? rewriter.getInsertionPoint()->getLoc()
+                 : UnknownLoc::get(ctx);
+
+  StringRef file = "unknown";
+  StringRef func = "unknown";
+  int line = 0;
+
+  while (auto callLoc = dyn_cast<CallSiteLoc>(loc))
+    loc = callLoc.getCallee();
+
+  while (auto nameLoc = dyn_cast<NameLoc>(loc))
+    loc = nameLoc.getChildLoc();
+
+  if (auto fileLineColLoc = dyn_cast<FileLineColLoc>(loc)) {
+    file = fileLineColLoc.getFilename();
+    line = fileLineColLoc.getLine();
+  }
+
+  Block *prevBlock = rewriter.getBlock();
+  auto insertPt = rewriter.getInsertionPoint();
+
+  Block *thenBlock = rewriter.splitBlock(prevBlock, insertPt);
+
+  Block *ifBlock = rewriter.createBlock(prevBlock->getParent());
+  rewriter.setInsertionPointToStart(ifBlock);
+  emitter.assertFail(rewriter, loc, message, file, func, line);
+  rewriter.create<LLVM::BrOp>(loc, thenBlock);
+
+  rewriter.setInsertionPointToEnd(prevBlock);
+  rewriter.create<LLVM::CondBrOp>(loc, condition, ifBlock, thenBlock);
+
+  rewriter.setInsertionPointToStart(thenBlock);
+}
+
+static void create2DBlockAssertsImpl(
+    const mlir::Value &baseWidth, const mlir::Value &baseHeight,
+    const mlir::Value &basePitch, const mlir::Value &x, unsigned int elemSize,
+    const mlir::Location &loc, mlir::ConversionPatternRewriter &rewriter,
+    const mlir::triton::gpu::intel::LibCallEmitter &emitter) {
+  using namespace mlir;
+  using namespace mlir::LLVM;
+
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+  Value c0 = b.i32_val(0);
+  Value c4 = b.i32_val(4);
+  Value c64 = b.i32_val(64);
+  Value c16 = b.i32_val(16);
+  Value c24m1 = b.i32_val((1u << 24) - 1);
+  Value cElemSize = b.i32_val(elemSize);
+  Value cMaxAlign = b.i32_val(std::max(4u, elemSize));
+
+  Value wTooLarge =
+      rewriter.create<ICmpOp>(loc, ICmpPredicate::ugt, baseWidth, c24m1);
+  createAssertNot(rewriter, emitter, wTooLarge,
+                  "2nd operand (base width) should be <= 24 bits");
+
+  Value wTooSmall =
+      rewriter.create<ICmpOp>(loc, ICmpPredicate::ult, baseWidth, c64);
+  createAssertNot(rewriter, emitter, wTooSmall,
+                  "2nd operand (base width) should be >= 64");
+
+  Value wRem = rewriter.create<URemOp>(loc, baseWidth, cMaxAlign);
+  Value wNotAligned = rewriter.create<ICmpOp>(loc, ICmpPredicate::ne, wRem, c0);
+  createAssertNot(
+      rewriter, emitter, wNotAligned,
+      "2nd operand (base width) should be aligned to MAX(4, element_size)");
+
+  Value hTooLarge =
+      rewriter.create<ICmpOp>(loc, ICmpPredicate::ugt, baseHeight, c24m1);
+  createAssertNot(rewriter, emitter, hTooLarge,
+                  "3rd operand (base height) should be <= 24 bits");
+
+  Value pTooLarge =
+      rewriter.create<ICmpOp>(loc, ICmpPredicate::ugt, basePitch, c24m1);
+  createAssertNot(rewriter, emitter, pTooLarge,
+                  "4th operand (base pitch) should be <= 24 bits");
+
+  Value pTooSmall =
+      rewriter.create<ICmpOp>(loc, ICmpPredicate::ult, basePitch, c64);
+  createAssertNot(rewriter, emitter, pTooSmall,
+                  "4th operand (base pitch) should be >= 64");
+
+  Value pRem = rewriter.create<URemOp>(loc, basePitch, c16);
+  Value pNotAligned = rewriter.create<ICmpOp>(loc, ICmpPredicate::ne, pRem, c0);
+  createAssertNot(rewriter, emitter, pNotAligned,
+                  "4th operand (base pitch) should be a multiple of 16 bytes");
+
+  Value pLessThanWidth =
+      rewriter.create<ICmpOp>(loc, ICmpPredicate::ult, basePitch, baseWidth);
+  createAssertNot(
+      rewriter, emitter, pLessThanWidth,
+      "4th operand (base pitch) should be >= 2nd operand (base width)");
+
+  Value offsetBytes = rewriter.create<MulOp>(loc, x, cElemSize);
+  Value offsetRem = rewriter.create<URemOp>(loc, offsetBytes, c4);
+  Value badOffset =
+      rewriter.create<ICmpOp>(loc, ICmpPredicate::ne, offsetRem, c0);
+  createAssertNot(
+      rewriter, emitter, badOffset,
+      "5th operand (x) should be properly aligned for the element size");
+}
+
+template <typename OpTy>
+static void
+create2DBlockAsserts(OpTy op, mlir::ConversionPatternRewriter &rewriter,
+                     const mlir::triton::gpu::intel::LibCallEmitter &emitter) {
+
+  if (!triton::tools::getBoolEnv("TRITON_INTEL_2DBLOCK_ASSERT")) {
+    return;
+  }
+
+  // put implementation in a separate function to avoid template bloat
+  create2DBlockAssertsImpl(
+      op.getBaseWidth(), op.getBaseHeight(), op.getBasePitch(), op.getX(),
+      op.getElemSizeInBits() / 8, op->getLoc(), rewriter, emitter);
+}
+
 namespace {
 
 //===----------------------------------------------------------------------===//
@@ -633,9 +765,17 @@ struct TritonMatrix2DBlockLoadLowering
   using ConvertOpToLLVMPattern<
       TritonGEN::Matrix2DBlockLoadOp>::ConvertOpToLLVMPattern;
 
+  explicit TritonMatrix2DBlockLoadLowering(
+      LLVMTypeConverter &typeConverter,
+      const mlir::triton::gpu::intel::LibCallEmitter &emitter)
+      : ConvertOpToLLVMPattern<TritonGEN::Matrix2DBlockLoadOp>(typeConverter),
+        emitter(emitter) {}
+
   LogicalResult
   matchAndRewrite(TritonGEN::Matrix2DBlockLoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    create2DBlockAsserts(op, rewriter, emitter);
+
     if (!isSPVBuiltinAvailable(op)) {
       // Fallback to GenISA interface.
       rewriter.replaceOp(op, createGenISA2DBlockRead(op, rewriter));
@@ -701,6 +841,9 @@ struct TritonMatrix2DBlockLoadLowering
     rewriter.replaceOp(op, rewriter.create<LLVM::LoadOp>(loc, resType, dest));
     return success();
   }
+
+private:
+  const mlir::triton::gpu::intel::LibCallEmitter &emitter;
 };
 
 struct TritonMatrix2DBlockStoreLowering
@@ -708,9 +851,17 @@ struct TritonMatrix2DBlockStoreLowering
   using ConvertOpToLLVMPattern<
       TritonGEN::Matrix2DBlockStoreOp>::ConvertOpToLLVMPattern;
 
+  explicit TritonMatrix2DBlockStoreLowering(
+      LLVMTypeConverter &typeConverter,
+      const mlir::triton::gpu::intel::LibCallEmitter &emitter)
+      : ConvertOpToLLVMPattern<TritonGEN::Matrix2DBlockStoreOp>(typeConverter),
+        emitter(emitter) {}
+
   LogicalResult
   matchAndRewrite(TritonGEN::Matrix2DBlockStoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    create2DBlockAsserts(op, rewriter, emitter);
+
     if (!isSPVBuiltinAvailable(op)) {
       // Fallback to GenISA interface.
       rewriter.replaceOp(op, createGenISA2DBlockWrite(op, rewriter));
@@ -775,6 +926,9 @@ struct TritonMatrix2DBlockStoreLowering
     rewriter.replaceOp(op, call);
     return success();
   }
+
+protected:
+  const mlir::triton::gpu::intel::LibCallEmitter &emitter;
 };
 
 struct TritonMatrix2DBlockPrefetchLowering
@@ -782,9 +936,18 @@ struct TritonMatrix2DBlockPrefetchLowering
   using ConvertOpToLLVMPattern<
       TritonGEN::Matrix2DBlockPrefetchOp>::ConvertOpToLLVMPattern;
 
+  explicit TritonMatrix2DBlockPrefetchLowering(
+      LLVMTypeConverter &typeConverter,
+      const mlir::triton::gpu::intel::LibCallEmitter &emitter)
+      : ConvertOpToLLVMPattern<TritonGEN::Matrix2DBlockPrefetchOp>(
+            typeConverter),
+        emitter(emitter) {}
+
   LogicalResult
   matchAndRewrite(TritonGEN::Matrix2DBlockPrefetchOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    create2DBlockAsserts(op, rewriter, emitter);
+
     if (!isSPVBuiltinAvailable(op)) {
       // Fallback to GenISA interface.
       rewriter.replaceOp(op, createGenISA2DBlockPrefetch(op, rewriter));
@@ -841,6 +1004,9 @@ struct TritonMatrix2DBlockPrefetchLowering
     rewriter.replaceOp(op, call);
     return success();
   }
+
+private:
+  const mlir::triton::gpu::intel::LibCallEmitter &emitter;
 };
 
 template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
@@ -1037,7 +1203,9 @@ struct ConvertTritonGENToLLVM
     LLVMTypeConverter typeConverter(ctx, options);
     LLVMConversionTarget target(*ctx);
 
-    populateTritonGENToLLVMConversionPatterns(typeConverter, patterns);
+    mlir::triton::gpu::intel::LibCallEmitter emitter;
+
+    populateTritonGENToLLVMConversionPatterns(typeConverter, patterns, emitter);
 
     populateTritonGENToSPIRVConversionPatterns(patterns);
     populateSPIRVToLLVMConversionPatterns(typeConverter, patterns,
@@ -1052,45 +1220,18 @@ struct ConvertTritonGENToLLVM
 } // namespace
 
 //===----------------------------------------------------------------------===//
-// ConvertToLLVMPatternInterface implementation
-//===----------------------------------------------------------------------===//
-
-namespace {
-/// Implement the interface to convert TritonGEN to LLVM.
-struct TritonGENToLLVMDialectInterface : public ConvertToLLVMPatternInterface {
-  using ConvertToLLVMPatternInterface::ConvertToLLVMPatternInterface;
-  void loadDependentDialects(MLIRContext *ctx) const final {
-    ctx->loadDialect<LLVM::LLVMDialect>();
-  }
-
-  /// Hook for derived dialect interface to provide conversion patterns
-  /// and mark dialect legal for the conversion target.
-  void populateConvertToLLVMConversionPatterns(
-      ConversionTarget &target, LLVMTypeConverter &typeConverter,
-      RewritePatternSet &patterns) const final {
-    populateTritonGENToLLVMConversionPatterns(typeConverter, patterns);
-  }
-};
-
-} // namespace
-
-//===----------------------------------------------------------------------===//
 // Pattern Population and Registration
 //===----------------------------------------------------------------------===//
 
 void mlir::triton::populateTritonGENToLLVMConversionPatterns(
-    LLVMTypeConverter &converter, RewritePatternSet &patterns) {
+    LLVMTypeConverter &converter, RewritePatternSet &patterns,
+    const mlir::triton::gpu::intel::LibCallEmitter &emitter) {
   patterns
-      .add<TritonMatrixDPASLowering, TritonMatrix2DBlockLoadLowering,
-           TritonMatrix2DBlockStoreLowering,
-           TritonMatrix2DBlockPrefetchLowering, TritonSubGroupBlockReadLowering,
-           TritonSubGroupBlockWriteLowering, TritonPredicatedLoadOpLowering,
-           TritonPredicatedStoreOpLowering, TritonFToTf32OpLowering>(converter);
-}
+      .add<TritonMatrix2DBlockLoadLowering, TritonMatrix2DBlockStoreLowering,
+           TritonMatrix2DBlockPrefetchLowering>(converter, emitter);
 
-void registerConvertTritonTritonGENToLLVMInterface(DialectRegistry &registry) {
-  registry.addExtension(
-      +[](MLIRContext *ctx, TritonGEN::TritonGENDialect *dialect) {
-        dialect->addInterfaces<TritonGENToLLVMDialectInterface>();
-      });
+  patterns.add<TritonMatrixDPASLowering, TritonSubGroupBlockReadLowering,
+               TritonSubGroupBlockWriteLowering, TritonPredicatedLoadOpLowering,
+               TritonPredicatedStoreOpLowering, TritonFToTf32OpLowering>(
+      converter);
 }

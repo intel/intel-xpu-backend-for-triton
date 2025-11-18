@@ -125,17 +125,19 @@ jobs:
         dtype: ${{ fromJson(needs.setup.outputs.dtype) }}
       fail-fast: false
     uses: ./.github/workflows/e2e-reusable.yml
+    secrets:
+      HUGGING_FACE_HUB_TOKEN: ${{ secrets.HUGGING_FACE_HUB_TOKEN }}
     with:
-      pytorch_ref: ${{ inputs.pytorch_ref }}
+      pytorch_ref: ${{ inputs.pytorch_ref || '' }}
       suite: ${{ matrix.suite }}
       mode: ${{ matrix.mode }}
       test_mode: accuracy
       dtype: ${{ matrix.dtype }}
-      models: ${{ inputs.models }}
+      models: ${{ inputs.models || 'all' }}
       check_all_subset_models: ${{ inputs.check_all_subset_models || false }}
-      only_one_model: ${{ inputs.only_one_model }}
+      only_one_model: ${{ inputs.only_one_model || '' }}
       runner_label: ${{ inputs.runner_label || 'max1100' }}
-      TORCH_COMPILE_DEBUG: ${{ inputs.TORCH_COMPILE_DEBUG }}
+      TORCH_COMPILE_DEBUG: ${{ inputs.TORCH_COMPILE_DEBUG || '' }}
 
   summary:
     name: Aggregate and check results
@@ -146,13 +148,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Setup Python
-        uses: actions/setup-python@v6
+      - name: Install Python
+        uses: ./.github/actions/setup-python
         with:
-          python-version: "3.10"
+          python_version: "3.10"
+          use_pyenv: true
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           path: separate-reports
           merge-multiple: true
@@ -168,7 +171,7 @@ jobs:
              --output-dir aggregated-results
 
       - name: Upload aggregated results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         if: ${{ !cancelled() }}
         with:
           name: aggregated-results-${{ github.run_id }}
@@ -176,7 +179,7 @@ jobs:
           include-hidden-files: true
 
       - name: Check results against reference
-        if: ${{ inputs.models == 'all' && inputs.only_one_model == ''  && !cancelled()}}
+        if: ${{ (inputs.models || 'all') == 'all' && (inputs.only_one_model || '') == ''  && !cancelled()}}
         run: |
           PYTORCH_XPU_OPS_REF="$(<.github/pins/e2e_reference_torch-xpu-ops.txt)"
           git clone https://github.com/intel/torch-xpu-ops.git

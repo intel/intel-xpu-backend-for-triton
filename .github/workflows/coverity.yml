@@ -24,10 +24,11 @@ jobs:
         run: |
           sudo apt install -y file
 
-      - name: Install Python 3.10
-        uses: actions/setup-python@v6
+      - name: Install Python
+        uses: ./.github/actions/setup-python
         with:
-          python-version: '3.10'
+          python_version: "3.10"
+          use_pyenv: true
 
       - name: Load coverity from cache
         id: coverity-cache

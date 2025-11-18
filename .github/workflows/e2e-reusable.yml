@@ -2,6 +2,9 @@ name: E2E reusable workflow
 
 on:
   workflow_call:
+    secrets:
+      HUGGING_FACE_HUB_TOKEN:
+        required: true
     inputs:
       pytorch_ref:
         description: PyTorch ref, keep empty for default
@@ -56,6 +59,7 @@ jobs:
     name: Test ${{ inputs.suite }} ${{ inputs.dtype }} ${{ inputs.mode }} ${{ inputs.test_mode }}
     runs-on:
       - linux
+      - rolling
       - ${{ inputs.runner_label || 'max1550' }}
     timeout-minutes: 720
     defaults:
@@ -80,17 +84,18 @@ jobs:
           key: pip-$PYTHON_VERSION-$GITHUB_SHA
 
       - name: Install Python
-        uses: actions/setup-python@v6
+        uses: ./.github/actions/setup-python
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          python_version: ${{ env.PYTHON_VERSION }}
 
       - name: Install Python build dependencies
         run: |
           # cmake 3.22.1 does not work with the recent torchaudio: https://github.com/intel/intel-xpu-backend-for-triton/issues/2079
           # cmake<4.0.0 is required as a workaround for CMake Error at third_party/double-conversion/CMakeLists.txt:1 (cmake_minimum_required)
-          pip install wheel 'cmake<4.0.0'
+          pip install 'cmake<4.0.0' build
 
       - name: Setup PyTorch
+        id: setup-pytorch
         uses: ./.github/actions/setup-pytorch
         with:
           ref: ${{ inputs.pytorch_ref }}
@@ -120,7 +125,7 @@ jobs:
         if: ${{ steps.triton-cache.outputs.status == 'miss' }}
         uses: ./.github/actions/setup-triton
         with:
-          command: DEBUG=1 python setup.py bdist_wheel
+          command: DEBUG=1 python -m build --wheel --no-isolation
 
       - name: Install Triton
         run: |
@@ -135,13 +140,14 @@ jobs:
 
       - name: Install python test dependencies
         run: |
-          pip install pyyaml pandas scipy 'numpy==1.26.4' psutil pyre_extensions torchrec
+          pip install pyyaml pandas scipy psutil
 
       - name: Install transformers package
         if: ${{ inputs.suite == 'huggingface' }}
         run: |
           cd pytorch
           pip install -r .ci/docker/ci_commit_pins/huggingface-requirements.txt
+          pip install accelerate
 
       - name: Install torchvision package
         if: ${{ inputs.suite == 'timm_models' || inputs.suite == 'torchbench' }}
@@ -150,7 +156,7 @@ jobs:
           package: torchvision
           repository: pytorch/vision
           ref: ${{ env.TORCHVISION_COMMIT_ID }}
-          extra-cache-key: ${{ env.PYTORCH_VERSION }}
+          extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
 
       - name: Install torchaudio package
         if: ${{ inputs.suite == 'torchbench' }}
@@ -159,7 +165,7 @@ jobs:
           package: torchaudio
           repository: pytorch/audio
           ref: ${{ env.TORCHAUDIO_COMMIT_ID }}
-          extra-cache-key: ${{ env.PYTORCH_VERSION }}
+          extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
 
       - name: Install timm package
         if: ${{ inputs.suite == 'timm_models' || inputs.suite == 'torchbench' }}
@@ -168,7 +174,7 @@ jobs:
           package: timm
           repository: huggingface/pytorch-image-models
           ref: ${{ env.TIMM_COMMIT_ID }}
-          extra-cache-key: ${{ env.PYTORCH_VERSION }}
+          extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
 
       - name: Clone pytorch benchmark
         if: ${{ inputs.suite == 'torchbench' }}
@@ -183,11 +189,19 @@ jobs:
         if: ${{ inputs.suite == 'torchbench' }}
         run: |
           cd benchmark
+          sed -i 's/^ *pynvml.*//' requirements.txt
+          pip install -r requirements.txt
+          # for dlrm
+          pip install pyre-extensions
+          curl -fsSL https://raw.githubusercontent.com/facebookresearch/dlrm/refs/heads/torchrec-dlrm/requirements.txt |xargs pip install
+          # for soft_actor_critic, temp fix
+          pip install git+https://github.com/nocoding03/gym@fix-np
+
           if [[ "${{ inputs.only_one_model }}" ]]; then
             python install.py "${{ inputs.only_one_model }}"
           else
             # install all models
-            python install.py
+            python install.py --continue_on_fail
           fi
           pip install -e .
 
@@ -196,6 +210,9 @@ jobs:
           HUGGING_FACE_HUB_TOKEN: ${{ secrets.HUGGING_FACE_HUB_TOKEN }}
         run: |
           cd pytorch
+
+          # Some models are still not compatible with numpy>2.0
+          pip install 'numpy==1.26.4'
 
           export WORKSPACE=$GITHUB_WORKSPACE
 
@@ -230,6 +247,7 @@ jobs:
           fi
 
       - name: Report environment details
+        timeout-minutes: 1
         run: |
           mkdir -p inductor_log
           TIMESTAMP=$(date '+%Y%m%d%H%M%S')
@@ -274,7 +292,7 @@ jobs:
           fi
 
       - name: Upload test logs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: logs-${{ inputs.suite }}-${{ inputs.dtype }}-${{ inputs.mode }}-${{ inputs.test_mode }}
           path: inductor_log

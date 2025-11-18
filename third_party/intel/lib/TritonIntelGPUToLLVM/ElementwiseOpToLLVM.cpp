@@ -4,6 +4,7 @@
 #include "mlir/IR/MLIRContext.h"
 #include "third_party/intel/include/Dialect/TritonIntelGPU/IR/Utils.h"
 #include "third_party/intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+#include "third_party/intel/lib/Utils/Mangling.h"
 #include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVMBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
@@ -458,7 +459,7 @@ static SmallVector<Value> Fp_to_Fp8_RTNE(Location loc,
                 (std::is_same_v<SrcTy, BFloat16Type>));
   static_assert((std::is_same_v<DstTy, Float8E4M3Type>) ||
                 (std::is_same_v<DstTy, Float8E5M2Type>));
-  constexpr int64_t SRC_MASK = (1L << (SrcBits - 1)) - 1;
+  constexpr int64_t SRC_MASK = (1ULL << (SrcBits - 1)) - 1;
   constexpr int64_t SRC_MMASK = (1L << SrcMBits) - 1;
   constexpr int64_t DST_NAN = 0x7F;
   constexpr int64_t DST_MAX =
@@ -970,8 +971,8 @@ struct ElementwiseOpConversion
                                     ConversionPatternRewriter &rewriter,
                                     Type elemTy, MultipleOperandsRange operands,
                                     Location loc) const {
-    assert((!getElementType(op.getLhs()).isBF16() &&
-            !getElementType(op.getRhs()).isBF16()) &&
+    assert((!getElementType(operands[0][0]).isBF16() &&
+            !getElementType(operands[0][1]).isBF16()) &&
            "unsupported conversion");
     return {
         rewriter.create<DestOp>(loc, elemTy, operands[0][0], operands[0][1])};
@@ -1135,36 +1136,6 @@ struct AbsFOpConversion
   }
 };
 
-struct PreciseSqrtOpConversion
-    : ElementwiseOpConversionBase<PreciseSqrtOp, PreciseSqrtOpConversion> {
-  using Base =
-      ElementwiseOpConversionBase<PreciseSqrtOp, PreciseSqrtOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
-
-  SmallVector<Value> createDestOps(PreciseSqrtOp op, Adaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    Value input = operands[0][0];
-    Type origTy = input.getType();
-    if (!origTy.isF64())
-      input = b.fpext(f64_ty, input);
-    Type funcType = LLVM::LLVMFunctionType::get(f64_ty, {f64_ty});
-    LLVM::LLVMFuncOp funcOp =
-        appendOrGetExternFuncOp(rewriter, op, "__imf_sqrt_rn", funcType);
-    funcOp.setCConv(triton::gpu::intel::getDefaultCConv(op));
-    LLVM::CallOp callOp =
-        LLVM::createLLVMCallOp(rewriter, loc, funcOp, {input});
-    callOp.setCConv(funcOp.getCConv());
-    Value result = callOp.getResult();
-    if (!origTy.isF64())
-      result = rewriter.create<LLVM::FPTruncOp>(loc, origTy, result);
-    return {result};
-  }
-};
-
 template <typename TritonOp>
 struct OpToExternCallConversion
     : public ElementwiseOpConversionBase<TritonOp,
@@ -1187,8 +1158,11 @@ struct OpToExternCallConversion
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
     Type funcType = getFunctionType(elemTy, operands[0]);
+    SmallVector<Type> operandTypes(ValueRange(operands[0]).getTypes());
+    std::string fnName =
+        mlir::triton::gpu::intel::mangle(funcName, operandTypes);
     LLVM::LLVMFuncOp funcOp =
-        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
+        appendOrGetExternFuncOp(rewriter, op, fnName, funcType);
     funcOp.setCConv(triton::gpu::intel::getDefaultCConv(op));
     auto callOp = LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]);
     callOp.setCConv(funcOp.getCConv());
@@ -1271,10 +1245,10 @@ void populateElementwiseOpToLLVMPatterns(
     ModuleAxisInfoAnalysis &axisInfoAnalysis, const TargetInfoBase &targetInfo,
     PatternBenefit benefit) {
 
-  patterns.add<PreciseSqrtOpConversion>(typeConverter, axisInfoAnalysis,
-                                        benefit);
+  patterns.add<OpToExternCallConversion<triton::PreciseSqrtOp>>(
+      typeConverter, axisInfoAnalysis, "sqrt_cr", benefit);
   patterns.add<OpToExternCallConversion<triton::PreciseDivFOp>>(
-      typeConverter, axisInfoAnalysis, "__imf_fdiv_rn", benefit);
+      typeConverter, axisInfoAnalysis, "divide_cr", benefit);
   patterns.add<MulhiUIOpConversion>(typeConverter, axisInfoAnalysis, targetInfo,
                                     benefit);
   patterns.add<ExternElementwiseOpConversion>(typeConverter, axisInfoAnalysis,

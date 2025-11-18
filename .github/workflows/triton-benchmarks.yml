@@ -18,6 +18,7 @@ on:
         options:
           - ELAPSED_TIME
           - UPSTREAM_PYTORCH_PROFILER
+          - PROTON_PROFILER
         default: UPSTREAM_PYTORCH_PROFILER
       verify:
         description: Verify the benchmark results
@@ -39,10 +40,6 @@ on:
         description: JSON list of benchmarks to skip
         type: string
         default: "[]"
-      use_pyenv_python:
-        description: Use Python built with pyenv
-        type: boolean
-        default: false
 
   # This workflow is also called from workflows triton-benchmarks-*.yml.
   workflow_call:
@@ -89,14 +86,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Install Python
-        if: ${{ !(inputs.use_pyenv_python || false) }}
-        uses: actions/setup-python@v6
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
       - name: Install Python (from pyenv) ${{ inputs.python_version }}
-        if: ${{ inputs.use_pyenv_python }}
         uses: ./.github/actions/setup-pyenv-python
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -108,7 +98,7 @@ jobs:
 
       - name: Install Python build dependencies
         run: |
-          pip install wheel cmake
+          pip install cmake
 
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
@@ -126,9 +116,11 @@ jobs:
         run: |
           cd benchmarks
           pip install .
-          pip install intel-pti==0.12.4
-          PTI_LIBS_DIR=$(python -c "import sysconfig; print(sysconfig.get_paths()['stdlib']+'/..')")
-          # the output should contain: `libpti.so`, `libpti_metrics.so.0.12.4` and `libpti_view.so.0.12.4`
+
+      - name: Build PTI
+        run: |
+          ./scripts/install-pti.sh --build-level-zero
+          PTI_LIBS_DIR=$(python ./scripts/pti_lib.py)
           ls $PTI_LIBS_DIR
           echo "PTI_LIBS_DIR=$PTI_LIBS_DIR" >> $GITHUB_ENV
 
@@ -142,6 +134,14 @@ jobs:
           python build_report.py $REPORTS/softmax-performance.csv $REPORTS/softmax-triton-report.csv --benchmark softmax --compiler triton --param_cols "N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
           python build_report.py $REPORTS/softmax-performance.csv $REPORTS/softmax-xetla-report.csv --benchmark softmax --compiler xetla --param_cols "N" --tflops_col XeTLA-TFlops --hbm_col "XeTLA-GB/s" --tag $TAG
           python build_report.py $REPORTS/softmax-performance.csv $REPORTS/softmax-onednn-report.csv --benchmark softmax --compiler onednn --param_cols "N" --tflops_col oneDNN-TFlops --hbm_col "oneDNN-GB/s" --tag $TAG
+
+      - name: Run Triton Softmax kernel benchmark with Proton
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'fused_softmax.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'fused_softmax.py') }}
+        run: |
+          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
+          cd benchmarks/triton_kernels_benchmark
+          BENCHMARKING_METHOD=PROTON_PROFILER python fused_softmax.py
+          source ../../scripts/capture-hw-details.sh
 
       - name: Run Triton GEMM kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_benchmark.py') }}
@@ -334,6 +334,18 @@ jobs:
           python build_report.py $REPORTS/flexAttnCausal-performance.csv $REPORTS/flexAttnCausal-batch16-triton-report.csv --benchmark flex-attn-causal-batch16 --compiler triton --param_cols "Z,H_q,H_kv,N_CTX_q,N_CTX_kv,D_HEAD_qk,D_HEAD_v" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
           python build_report.py $REPORTS/flexAttnCausal-performance.csv $REPORTS/flexAttnCausal-batch16-torch-report.csv --benchmark flex-attn-causal-batch16 --compiler torch --param_cols "Z,H_q,H_kv,N_CTX_q,N_CTX_kv,D_HEAD_qk,D_HEAD_v" --tflops_col Torch-TFlops --hbm_col "Torch-GB/s" --tag $TAG
 
+      - name: Run Triton FlexAttention Causal Mask bwd kernel benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flex_attention_bwd_benchmark_causal_mask.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flex_attention_bwd_benchmark_causal_mask.py') }}
+        run: |
+          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
+          cd benchmarks/triton_kernels_benchmark
+          FA_KERNEL_MODE='bwd' \
+            python flex_attention_benchmark_causal_mask.py --reports $REPORTS --n_runs $N_RUNS
+
+          source ../../scripts/capture-hw-details.sh
+          python build_report.py $REPORTS/flexAttnCausal-performance.csv $REPORTS/flexAttnCausal-bwd-triton-report.csv --benchmark flex-attn-causal-bwd --compiler triton --param_cols "Z,H_q,H_kv,N_CTX_q,N_CTX_kv,D_HEAD_qk,D_HEAD_v" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+          python build_report.py $REPORTS/flexAttnCausal-performance.csv $REPORTS/flexAttnCausal-bwd-torch-report.csv --benchmark flex-attn-causal-bwd --compiler torch --param_cols "Z,H_q,H_kv,N_CTX_q,N_CTX_kv,D_HEAD_qk,D_HEAD_v" --tflops_col Torch-TFlops --hbm_col "Torch-GB/s" --tag $TAG
+
       - name: Run Triton FlexAttention Custom Masks fwd kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flex_attention_benchmark_custom_masks.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flex_attention_benchmark_custom_masks.py') }}
         run: |
@@ -366,7 +378,7 @@ jobs:
 
       - name: Upload benchmark reports
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: benchmark-reports
           path: reports

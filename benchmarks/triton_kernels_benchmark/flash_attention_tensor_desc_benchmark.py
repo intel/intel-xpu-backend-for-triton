@@ -6,15 +6,13 @@ import triton.language as tl
 
 from triton_kernels_benchmark import flash_attention_benchmark
 
-# FIXME: Revert temporary source code modification done in last commit of PR #4399.
-
 
 # pylint: disable=unused-argument
 @triton.jit
 def _attn_fwd_inner(acc, l_i, m_i, q,  #
                     desc_k, desc_v,  #
                     offset_y, dtype: tl.constexpr, start_m, qk_scale,  #
-                    BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr, BLOCK_N: tl.constexpr,  #
+                    BLOCK_M: tl.constexpr, HEAD_DIM: tl.constexpr, BLOCK_N: tl.constexpr,  #
                     STAGE: tl.constexpr, offs_m: tl.constexpr, offs_n: tl.constexpr,  #
                     N_CTX: tl.constexpr):
     # range of values handled by this stage
@@ -32,7 +30,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
     for start_n in tl.range(lo, hi, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
         # -- compute qk ----
-        k = desc_k.load([0, offsetk_y])
+        k = desc_k.load([offsetk_y, 0]).T
         qk = tl.dot(q, k)
         if STAGE == 2:
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])
@@ -95,8 +93,8 @@ def _attn_fwd_with_tensor_desc(Q, K, V, sm_scale, M, Out,  #
                                        block_shape=[BLOCK_M, BLOCK_DMODEL])
     desc_v = tl.make_tensor_descriptor(V, shape=[y_dim, BLOCK_DMODEL], strides=[BLOCK_DMODEL, 1],
                                        block_shape=[BLOCK_N, BLOCK_DMODEL])
-    desc_k = tl.make_tensor_descriptor(K, shape=[BLOCK_DMODEL, y_dim], strides=[1, BLOCK_DMODEL],
-                                       block_shape=[BLOCK_DMODEL, BLOCK_N])
+    desc_k = tl.make_tensor_descriptor(K, shape=[y_dim, BLOCK_DMODEL], strides=[BLOCK_DMODEL, 1],
+                                       block_shape=[BLOCK_N, BLOCK_DMODEL])
     desc_o = tl.make_tensor_descriptor(Out, shape=[y_dim, BLOCK_DMODEL], strides=[BLOCK_DMODEL, 1],
                                        block_shape=[BLOCK_M, BLOCK_DMODEL])
 

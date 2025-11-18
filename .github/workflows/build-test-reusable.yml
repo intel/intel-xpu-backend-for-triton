@@ -99,17 +99,11 @@ jobs:
           path: $HOME/.cache/pip
           key: pip-${{ inputs.python_version }}-${{ hashFiles('pyproject.toml', 'setup.py') }}-${{ env.PIP_CACHE_NUMBER }}
 
-      - name: Install Python (using actions/setup-python) ${{ inputs.python_version }}
-        if: ${{ !inputs.use_pyenv_python }}
-        uses: actions/setup-python@v6
+      - name: Install Python
+        uses: ./.github/actions/setup-python
         with:
-          python-version: ${{ inputs.python_version }}
-
-      - name: Install Python (from pyenv) ${{ inputs.python_version }}
-        if: ${{ inputs.use_pyenv_python }}
-        uses: ./.github/actions/setup-pyenv-python
-        with:
-          python-version: ${{ inputs.python_version }}
+          python_version: ${{ inputs.python_version }}
+          use_pyenv: ${{ inputs.use_pyenv_python }}
 
       # Build PyTorch here once, integration tests jobs should load it from cache.
       - name: Setup PyTorch
@@ -118,11 +112,6 @@ jobs:
           ref: ${{ inputs.pytorch_ref }}
           mode: ${{ inputs.pytorch_mode }}
 
-      - name: Build Proton with XPU support
-        if: inputs.driver_version == 'rolling' && inputs.device == 'max1100'
-        run: |
-          echo TRITON_BUILD_PROTON_XPU=1 | tee -a $GITHUB_ENV
-
       - name: Build Triton
         uses: ./.github/actions/setup-triton
         with:
@@ -130,7 +119,11 @@ jobs:
           use_spirv_backend: ${{ inputs.use_spirv_backend }}
           command: >
             DEBUG=1
-            python setup.py bdist_wheel && pip install dist/*.whl
+            python -m build --wheel --no-isolation && pip install dist/*.whl
+
+      - name: Build PTI
+        run: |
+          ./scripts/install-pti.sh --build-level-zero
 
       - name: Set test-triton command line
         id: test-triton
@@ -175,13 +168,19 @@ jobs:
           dest: ${{ steps.pip-cache.outputs.dest }}
 
       - name: Upload Triton wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: triton-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           path: dist/*.whl
 
+      - name: Upload PTI wheels
+        uses: actions/upload-artifact@v5
+        with:
+          name: pti-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          path: .scripts_cache/pti/dist/*.whl
+
       - name: Upload test reports
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: test-reports-build-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           include-hidden-files: true
@@ -197,6 +196,7 @@ jobs:
           - minicore
           - scaled_dot
           - gluon
+          - triton-kernels
           - rest
           - tutorial-fa-64
           - tutorial-fa-128-fwdfp8
@@ -223,17 +223,11 @@ jobs:
           path: $HOME/.cache/pip
           key: pip-${{ inputs.python_version }}-${{ matrix.suite }}-${{ hashFiles('pyproject.toml', 'setup.py') }}-${{ env.PIP_CACHE_NUMBER }}
 
-      - name: Install Python (using actions/setup-python) ${{ inputs.python_version }}
-        if: ${{ !inputs.use_pyenv_python }}
-        uses: actions/setup-python@v6
+      - name: Install Python
+        uses: ./.github/actions/setup-python
         with:
-          python-version: ${{ inputs.python_version }}
-
-      - name: Install Python (from pyenv) ${{ inputs.python_version }}
-        if: ${{ inputs.use_pyenv_python }}
-        uses: ./.github/actions/setup-pyenv-python
-        with:
-          python-version: ${{ inputs.python_version }}
+          python_version: ${{ inputs.python_version }}
+          use_pyenv: ${{ inputs.use_pyenv_python }}
 
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
@@ -242,16 +236,29 @@ jobs:
           mode: ${{ inputs.pytorch_mode }}
 
       - name: Download Triton wheels
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           name: triton-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+
+      - name: Download PTI wheels
+        uses: actions/download-artifact@v6
+        with:
+          name: pti-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
 
       - name: Install Triton
         run: |
           pip install triton-*.whl
           python -c 'import triton; print(triton.__version__)'
 
+      - name: Install PTI
+        run: |
+          pip install intel_pti-*.whl
+          PTI_LIBS_DIR=$(python ./scripts/pti_lib.py)
+          ls $PTI_LIBS_DIR
+          echo "PTI_LIBS_DIR=$PTI_LIBS_DIR" | tee -a $GITHUB_ENV
+
       - name: Report environment details
+        timeout-minutes: 1
         run: |
           if [ "${{ matrix.suite }}" == "minicore" ]; then
             reports_file="reports/.env"
@@ -285,11 +292,11 @@ jobs:
           echo "TRITON_TEST_CMD=${{ needs.build.outputs.test-triton-command }}" | tee -a $GITHUB_ENV
 
       - name: Run Proton tests
-        if: matrix.suite == 'rest' && inputs.driver_version == 'rolling' && inputs.device == 'max1100'
+        if: matrix.suite == 'rest'
         run: |
+          export LD_LIBRARY_PATH=${{ env.PTI_LIBS_DIR }}:$LD_LIBRARY_PATH
           cd third_party/proton/test
-          # FIXME: enable 'test_record.py' back
-          pytest test_api.py test_lib.py test_profile.py test_viewer.py -s -v
+          pytest test_api.py test_cmd.py test_lib.py test_profile.py test_viewer.py --device xpu -s -v
           cd ..
 
       - name: Run minicore tests
@@ -318,8 +325,9 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --interpreter
 
       - name: Run triton kernels tests
-        if: matrix.suite == 'rest'
+        if: matrix.suite == 'triton-kernels'
         run: |
+          export PYTEST_MAX_PROCESSES=4
           ${{ env.TRITON_TEST_CMD }} --triton-kernels
 
       # FIXME: make sure new tutorials are added to one of the groups (scaled_dot, rest, tutorial-faX)
@@ -374,7 +382,7 @@ jobs:
           dest: ${{ steps.pip-cache.outputs.dest }}
 
       - name: Upload test reports
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: test-reports-${{ matrix.suite }}-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           include-hidden-files: true
@@ -383,7 +391,7 @@ jobs:
   reports:
     name: Reports
     runs-on:
-      - linux
+      - runner-0.0.22
     needs: integration-tests
     steps:
       - name: Checkout repository
@@ -397,16 +405,17 @@ jobs:
           key: pip-${{ inputs.python_version }}-${{ hashFiles('pyproject.toml', 'setup.py') }}-${{ env.PIP_CACHE_NUMBER }}
 
       - name: Download test reports
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           pattern: test-reports-*-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           path: reports
           merge-multiple: true
 
-      - name: Install Python (using actions/setup-python) ${{ inputs.python_version }}
-        uses: actions/setup-python@v6
+      - name: Install Python
+        uses: ./.github/actions/setup-python
         with:
-          python-version: ${{ inputs.python_version }}
+          python_version: ${{ inputs.python_version }}
+          use_pyenv: ${{ inputs.use_pyenv_python }}
 
       - name: Install pass_rate dependencies
         run: |
@@ -423,20 +432,20 @@ jobs:
           python scripts/pass_rate.py --reports reports --suite tutorials --json > pass_rate_tutorials.json
 
       - name: Upload pass rate report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: pass_rate-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           path: pass_rate*.json
 
       - name: Upload tutorials test report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: test-reports-tutorials-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           include-hidden-files: true
           path: reports/tutorials.xml
 
       - name: Upload tutorials performance report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: tutorials-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           if-no-files-found: warn
@@ -444,3 +453,25 @@ jobs:
           path: |
             reports/*/*.csv
             reports/.env
+
+  check-jobs:
+    runs-on: runner-0.0.22
+    if: always()
+    needs:
+      - build
+      - integration-tests
+      - reports
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install Python
+        uses: ./.github/actions/setup-python
+        with:
+          python_version: ${{ inputs.python_version }}
+          use_pyenv: ${{ inputs.use_pyenv_python }}
+
+      - name: Ensure job status
+        uses: re-actors/alls-green@05ac9388f0aebcb5727afa17fcccfecd6f8ec5fe
+        with:
+          jobs: ${{ toJSON(needs) }}

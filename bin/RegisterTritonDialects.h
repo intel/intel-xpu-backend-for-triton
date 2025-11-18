@@ -94,8 +94,10 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::test::registerTestAMDGPUMembarPass();
   mlir::test::registerTestTritonAMDGPURangeAnalysis();
   mlir::triton::registerConvertTritonToTritonGPUPass();
-  mlir::triton::intel::registerTritonIntelTensorDescToBlockPointer();
+  mlir::triton::intel::registerTritonIntelFuseReshape();
+  mlir::triton::intel::registerTritonIntelRemoveBoundaryChecks();
   mlir::triton::intel::registerTritonIntelRemoveMasks();
+  mlir::triton::intel::registerTritonIntelTensorDescToBlockPointer();
   mlir::triton::registerRelayoutTritonGPUPass();
   mlir::triton::gpu::registerAllocateSharedMemoryPass();
   mlir::triton::gpu::registerTritonGPUAllocateWarpGroups();
@@ -134,7 +136,8 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::registerTritonAMDGPUHoistLayoutConversions();
   mlir::registerTritonAMDGPUReorderInstructions();
   mlir::registerTritonAMDGPUBlockPingpong();
-  mlir::registerTritonAMDGPUStreamPipeline();
+  mlir::registerTritonAMDGPUPipeline();
+  mlir::registerTritonAMDGPUScheduleLoops();
   mlir::registerTritonAMDGPUCanonicalizePointers();
   mlir::registerTritonAMDGPUConvertToBufferOps();
   mlir::registerTritonAMDGPUInThreadTranspose();

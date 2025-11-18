@@ -21,8 +21,13 @@ namespace triton {
 #define GEN_PASS_DECL
 #include "intel/include/TritonGENToLLVM/Passes.h.inc"
 
-void populateTritonGENToLLVMConversionPatterns(LLVMTypeConverter &converter,
-                                               RewritePatternSet &patterns);
+namespace gpu::intel {
+class LibCallEmitter;
+} // namespace gpu::intel
+
+void populateTritonGENToLLVMConversionPatterns(
+    LLVMTypeConverter &converter, RewritePatternSet &patterns,
+    const mlir::triton::gpu::intel::LibCallEmitter &emitter);
 
 void registerConvertTritonGENToLLVMInterface(DialectRegistry &registry);
 

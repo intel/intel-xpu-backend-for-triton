@@ -74,7 +74,7 @@ if [ "$VENV" = true ]; then
   echo "**** Creating Python virtualenv ****"
   python3 -m venv .venv --prompt triton
   source .venv/bin/activate
-  pip install ninja cmake wheel pybind11
+  pip install ninja cmake pybind11
 fi
 
 if [ ! -d "$PACKAGES_DIR" ]; then
@@ -134,7 +134,7 @@ build_llvm() {
     -DLLVM_ENABLE_DUMP=1 \
     -DCMAKE_BUILD_TYPE=Release \
     -DLLVM_ENABLE_ASSERTIONS=true \
-    -DLLVM_ENABLE_PROJECTS="mlir" \
+    -DLLVM_ENABLE_PROJECTS="mlir;lld" \
     -DLLVM_TARGETS_TO_BUILD="X86;NVPTX;AMDGPU;SPIRV" \
     -DLLVM_INSTALL_UTILS=true \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \

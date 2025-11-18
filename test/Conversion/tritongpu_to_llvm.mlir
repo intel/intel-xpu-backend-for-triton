@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv --convert-triton-gpu-to-llvm 2>/dev/null | FileCheck %s --dump-input-context 20
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv --convert-triton-gpu-to-llvm -reconcile-unrealized-casts 2>/dev/null | FileCheck %s --dump-input-context 20
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: llvm.func @test_empty_kernel(%arg0: i32, %arg1: !llvm.ptr<1>, %arg2: !llvm.ptr<1>, %arg3: !llvm.ptr<1>)
@@ -2627,6 +2627,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
   tt.func public @fp16_to_fp32(%arg0 : tensor<256xf16, #blocked>) {
     // CHECK: llvm.fpext %{{.*}} : f16 to f32
     %0 = tt.fp_to_fp %arg0 : tensor<256xf16, #blocked> -> tensor<256xf32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [8], order = [0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:75", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: precise_math
+  tt.func public @precise_math(%arg0 : tensor<256xf32, #blocked>, %arg1 : tensor<256xf32, #blocked>) {
+    // CHECK: llvm.call_intrinsic "llvm.nvvm.div.rn.f"
+    %0 = tt.precise_divf %arg0, %arg1 : tensor<256xf32, #blocked>
+    // CHECK: llvm.call_intrinsic "llvm.nvvm.sqrt.rn.f"
+    %1 = tt.precise_sqrt %arg0 : tensor<256xf32, #blocked>
     tt.return
   }
 }

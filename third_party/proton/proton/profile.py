@@ -1,3 +1,7 @@
+from typing import Optional, Union
+import importlib.metadata
+import pathlib
+import os
 import functools
 import triton
 
@@ -6,7 +10,6 @@ from triton._C.libtriton import getenv  # type: ignore
 from .flags import flags
 from .hooks import HookManager, LaunchHook, InstrumentationHook
 from .mode import BaseMode
-from typing import Optional, Union
 
 DEFAULT_PROFILE_NAME = "proton"
 UTILS_CACHE_PATH = None
@@ -21,6 +24,14 @@ def _select_backend() -> str:
     elif backend == "xpu":
         global UTILS_CACHE_PATH
         UTILS_CACHE_PATH = triton.runtime.driver.active.build_proton_help_lib()
+        try:
+            if (files := importlib.metadata.files('intel-pti')) is not None:
+                for f in files:
+                    if f.name == 'libpti_view.so':
+                        os.environ["TRITON_XPUPTI_LIB_PATH"] = str(pathlib.Path(f.locate()).parent.resolve())
+                        break
+        except importlib.metadata.PackageNotFoundError:
+            pass
         return "xpupti"
     else:
         raise ValueError("No backend is available for the current target.")
@@ -83,12 +94,13 @@ def start(
                               Available options are ["tree", "trace"].
                               Defaults to "tree".
         backend (str, optional): The backend to use for profiling.
-                                 Available options are [None, "cupti", "roctracer", "instrumentation"].
+                                 Available options are [None, "cupti", "xpupti", "roctracer", "instrumentation"].
                                  Defaults to None, which automatically selects the backend matching the current active runtime.
         mode (Union[str, BaseMode], optional): The "mode" to use for profiling, which is specific to the backend.
                                                Can be a string or an instance of BaseMode (or any subclass thereof).
                                                Defaults to None.
                                                For "cupti", available options are [None, "pcsampling"].
+                                               For "xpupti", available options are [None].
                                                For "roctracer", available options are [None].
                                                For "instrumentation", available options are [None].
                                                Each mode has a set of control knobs following with the mode name.
@@ -99,8 +111,8 @@ def start(
     Returns:
         session (int): The session ID of the profiling session.
     """
-    if flags.command_line:
-        # Ignore the start() call if the script is run from the command line.
+    if flags.command_line or triton.knobs.proton.disable:
+        # Ignore the start() call if the script is run from the command line or profiling is disabled.
         return
 
     flags.profiling_on = True
