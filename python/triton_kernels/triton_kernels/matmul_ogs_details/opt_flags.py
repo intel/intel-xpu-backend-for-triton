@@ -55,14 +55,14 @@ def make_default_opt_flags_intel(
     k,
     routing_data,
     can_use_persistent_tma,
-    can_use_fused_scatter,
+    can_use_split_k,
     enforce_bitwise_invariance,
     epilogue_effective_itemsize,
     x_transpose,
     has_y_acc_in,
     constraints,
 ):
-    constraints_supported = ["block_m", "block_k", "split_k", "is_persistent", "fused_scatter", "epilogue_subtile", "num_stages", "max_allowable_mn"]
+    constraints_supported = ["block_m", "block_k", "split_k", "is_persistent", "epilogue_subtile", "num_stages", "max_allowable_mn"]
     assert not any([c not in constraints_supported for c in constraints]), constraints.keys()
     # tokens per expert
     if routing_data is None:
@@ -111,7 +111,6 @@ def make_default_opt_flags_intel(
         block_k=block_k,
         num_warps=opt_flags_intel.compute_num_warps(block_m, block_n),
         num_stages=constraints.get("num_stages", 2),
-        fused_scatter=constraints.get('fused_scatter', False),
         group_m=group_m,
         xcd_swizzle=xcd_swizzle,
         w_cache_modifier=None,
