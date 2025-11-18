@@ -82,6 +82,32 @@ def test_spirv_execution(spirv_test_dir):
         raise
 
 
+@pytest.mark.skipif(not os.path.exists(SPIRV_RUNNER_PATH), reason="SPIRVRunner executable not found")
+def test_sycl_ls_with_trace():
+    """Test sycl-ls command with SYCL_PI_TRACE enabled."""
+    try:
+        print("Running sycl-ls with SYCL_PI_TRACE=1...")
+
+        env = os.environ.copy()
+        env['SYCL_PI_TRACE'] = '1'
+
+        result = subprocess.run(['sycl-ls'], capture_output=True, text=True, env=env, timeout=30)
+
+        print("STDOUT:", result.stdout)
+        print("STDERR:", result.stderr)
+        print("Return code:", result.returncode)
+
+        assert result.returncode == 0, f"sycl-ls failed with return code {result.returncode}"
+
+    except subprocess.TimeoutExpired:
+        pytest.fail("sycl-ls command timed out")
+    except FileNotFoundError:
+        pytest.skip("sycl-ls command not found in PATH")
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+        pytest.fail(f"sycl-ls test failed: {e}")
+
+
 def main():
     # Check if SPIRV_RUNNER_TESTS is set
     if not SPIRV_RUNNER_TESTS:
