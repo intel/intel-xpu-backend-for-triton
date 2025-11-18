@@ -70,7 +70,11 @@ function build_level_zero {
   cmake --build . --config Release --parallel "$(nproc)"
   cmake --build . --config Release --target install
   export LEVELZERO_INCLUDE_DIR="$L0_INSTALL_PATH/include"
-  export LEVELZERO_LIBRARY="$L0_INSTALL_PATH/lib/libze_loader.so"
+  if [[ $OSTYPE = msys ]]; then
+    export LEVELZERO_LIBRARY="$L0_INSTALL_PATH/bin/ze_loader.dll"
+  else
+    export LEVELZERO_LIBRARY="$L0_INSTALL_PATH/lib/libze_loader.so"
+  fi
 }
 
 function build_pti {
