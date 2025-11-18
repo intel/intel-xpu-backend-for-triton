@@ -71,7 +71,7 @@ function build_level_zero {
   cmake --build . --config Release --target install
   export LEVELZERO_INCLUDE_DIR="$L0_INSTALL_PATH/include"
   if [[ $OSTYPE = msys ]]; then
-    export LEVELZERO_LIBRARY="$L0_INSTALL_PATH/bin/ze_loader.dll"
+    export LEVELZERO_LIBRARY="$L0_INSTALL_PATH/lib/ze_loader.lib"
   else
     export LEVELZERO_LIBRARY="$L0_INSTALL_PATH/lib/libze_loader.so"
   fi
