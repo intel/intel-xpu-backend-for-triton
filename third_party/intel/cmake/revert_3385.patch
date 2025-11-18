@@ -1,0 +1,15 @@
+diff --git a/lib/SPIRV/LLVMToSPIRVDbgTran.cpp b/lib/SPIRV/LLVMToSPIRVDbgTran.cpp
+index d0648000..e6cc346d 100644
+--- a/lib/SPIRV/LLVMToSPIRVDbgTran.cpp
++++ b/lib/SPIRV/LLVMToSPIRVDbgTran.cpp
+@@ -587,8 +587,8 @@ SPIRVEntry *LLVMToSPIRVDbgTran::transDbgCompileUnit(const DICompileUnit *CU) {
+   if (isNonSemanticDebugInfo())
+     generateBuildIdentifierAndStoragePath(CU);
+ 
+-  auto DwarfLang = static_cast<llvm::dwarf::SourceLanguage>(
+-      CU->getSourceLanguage().getUnversionedName());
++  auto DwarfLang =
++      static_cast<llvm::dwarf::SourceLanguage>(CU->getSourceLanguage());
+   Ops[LanguageIdx] =
+       BM->getDebugInfoEIS() == SPIRVEIS_NonSemantic_Shader_DebugInfo_200
+           ? convertDWARFSourceLangToSPIRVNonSemanticDbgInfo(DwarfLang)
