@@ -75,6 +75,54 @@ if (NOT SPIRVToLLVMTranslator_FOUND)
             if(NOT PATCH_RESULT EQUAL 0)
                 message(FATAL_ERROR "Failed to apply 3388.patch to SPIRV-LLVM-Translator")
             endif()
+
+            # FIXME: Don't apply patch when LLVM commit update to 6cba572.
+            execute_process(
+                COMMAND git apply --check ${CMAKE_CURRENT_LIST_DIR}/revert_3385.patch
+                WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}
+                ERROR_QUIET
+                RESULT_VARIABLE PATCH_RESULT
+            )
+            if(PATCH_RESULT EQUAL 0)
+                execute_process(
+                        COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/revert_3385.patch
+                        WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}
+                        RESULT_VARIABLE PATCH_RESULT
+                )
+            else()
+                execute_process( # Check if the patch is already applied
+                        COMMAND git apply --reverse --check ${CMAKE_CURRENT_LIST_DIR}/revert_3385.patch
+                        WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}
+                        RESULT_VARIABLE PATCH_RESULT
+                )
+            endif()
+            if(NOT PATCH_RESULT EQUAL 0)
+                message(FATAL_ERROR "Failed to apply revert_3385.patch to SPIRV-LLVM-Translator")
+            endif()
+
+            # FIXME: Don't apply patch when LLVM commit update to 573ca36.
+            execute_process(
+                COMMAND git apply --check ${CMAKE_CURRENT_LIST_DIR}/revert_3406.patch
+                WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}
+                ERROR_QUIET
+                RESULT_VARIABLE PATCH_RESULT
+            )
+            if(PATCH_RESULT EQUAL 0)
+                execute_process(
+                        COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/revert_3406.patch
+                        WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}
+                        RESULT_VARIABLE PATCH_RESULT
+                )
+            else()
+                execute_process( # Check if the patch is already applied
+                        COMMAND git apply --reverse --check ${CMAKE_CURRENT_LIST_DIR}/revert_3406.patch
+                        WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}
+                        RESULT_VARIABLE PATCH_RESULT
+                )
+            endif()
+            if(NOT PATCH_RESULT EQUAL 0)
+                message(FATAL_ERROR "Failed to apply revert_3406.patch to SPIRV-LLVM-Translator")
+            endif()
     endif()
 
     set(SPIRVToLLVMTranslator_INCLUDE_DIR "${SPIRVToLLVMTranslator_SOURCE_DIR}/include"
