@@ -108,6 +108,28 @@ def test_sycl_ls_with_trace():
         pytest.fail(f"sycl-ls test failed: {e}")
 
 
+@pytest.mark.skipif(not os.path.exists(SPIRV_RUNNER_PATH), reason="SPIRVRunner executable not found")
+def test_clinfo():
+    try:
+        print("Running clinfo")
+
+        result = subprocess.run(['clinfo'], capture_output=True, text=True, timeout=30)
+
+        print("STDOUT:", result.stdout)
+        print("STDERR:", result.stderr)
+        print("Return code:", result.returncode)
+
+        assert result.returncode == 0, f"clinfo failed with return code {result.returncode}"
+
+    except subprocess.TimeoutExpired:
+        pytest.fail("clinfo command timed out")
+    except FileNotFoundError:
+        pytest.skip("clinfo command not found in PATH")
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+        pytest.fail(f"clinfo test failed: {e}")
+
+
 def main():
     # Check if SPIRV_RUNNER_TESTS is set
     if not SPIRV_RUNNER_TESTS:
