@@ -86,7 +86,7 @@ static auto gemm_run(const at::Tensor &A, const at::Tensor &B, at::Tensor &C,
     CUTLASS_CHECK(gemm_op.initialize(arguments, workspace.get()));
     CUTLASS_CHECK(gemm_op.run());
 
-    syclcompat::wait();
+    compat::wait();
 
   } catch (std::exception &e) {
     std::cerr << "Runtime error: " << e.what() << std::endl;

@@ -20,11 +20,11 @@ template <typename FMHA> static auto run(typename FMHA::Params params) -> void {
 
   int smem_size = FMHA::SharedStorageSize;
 
-  const auto sycl_block = syclcompat::dim3(block.x, block.y, block.z);
-  const auto sycl_grid = syclcompat::dim3(grid.x, grid.y, grid.z);
+  const auto sycl_block = compat::dim3(block.x, block.y, block.z);
+  const auto sycl_grid = compat::dim3(grid.x, grid.y, grid.z);
 
 #if !defined(SYCL_EXT_ONEAPI_WORK_GROUP_SCRATCH_MEMORY)
-  using namespace syclcompat::experimental;
+  using namespace compat::experimental;
   auto event = launch<cutlass::device_kernel<FMHA>>(
       launch_policy{
           sycl_grid, sycl_block,
@@ -33,15 +33,15 @@ template <typename FMHA> static auto run(typename FMHA::Params params) -> void {
               sycl_exp::sub_group_size<FMHA::DispatchPolicy::SubgroupSize>}},
       params);
 #else
-  syclcompat::experimental::launch_properties launch_props{
+  compat::experimental::launch_properties launch_props{
       sycl::ext::oneapi::experimental::work_group_scratch_size(smem_size),
   };
-  syclcompat::experimental::kernel_properties kernel_props{
+  compat::experimental::kernel_properties kernel_props{
       sycl::ext::oneapi::experimental::sub_group_size<
           FMHA::DispatchPolicy::SubgroupSize>};
-  syclcompat::experimental::launch_policy policy{sycl_grid, sycl_block,
-                                                 launch_props, kernel_props};
-  auto event = syclcompat::experimental::launch<cutlass::device_kernel<FMHA>>(
+  compat::experimental::launch_policy policy{sycl_grid, sycl_block,
+                                             launch_props, kernel_props};
+  auto event = compat::experimental::launch<cutlass::device_kernel<FMHA>>(
       policy, params);
 #endif
 
@@ -102,8 +102,9 @@ static auto attention_run(const at::Tensor &Q, const at::Tensor &K,
   using CollectiveEpilogue =
       cutlass::flash_attention::collective::FlashPrefillEpilogue<
           EpilogueDispatchPolicy, MMAOperation, TileShapeOutput, SubgroupLayout,
-          ElementAccumulator, cutlass::gemm::TagToStrideC_t<LayoutO>,
-          ElementOutput, GmemTiledCopyStore>;
+          ElementAccumulator, ElementOutput,
+          cutlass::gemm::TagToStrideC_t<LayoutO>, ElementOutput,
+          GmemTiledCopyStore>;
 
   /// FA ///
 
@@ -181,7 +182,7 @@ static auto attention_run(const at::Tensor &Q, const at::Tensor &K,
         FMHAPrefillKernel::to_underlying_arguments(arguments, workspace_ptr);
     run<FMHAPrefillKernel>(params);
 
-    syclcompat::wait();
+    compat::wait();
 
   } catch (std::exception &e) {
     std::cerr << "Runtime error: " << e.what() << std::endl;
