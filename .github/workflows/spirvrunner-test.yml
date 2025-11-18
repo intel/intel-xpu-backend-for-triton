@@ -21,6 +21,7 @@ jobs:
     runs-on:
       - rolling
       - runner-0.0.22
+      - max1550
     timeout-minutes: 75 # equal to max + 3*std over the last 600 successful runs
     steps:
       - name: Checkout repository
@@ -56,4 +57,4 @@ jobs:
           export SPIRV_RUNNER_PATH="$GITHUB_WORKSPACE/utils/SPIRVRunner/build/SPIRVRunner"
           export SPIRV_RUNNER_TESTS="$GITHUB_WORKSPACE/utils/SPIRVRunner/tests"
           cd utils/SPIRVRunner
-          pytest tests/test_spirv_runner.py
+          pytest tests/test_spirv_runner.py -v -s
