@@ -104,7 +104,7 @@ jobs:
       - name: Build && Install PTI
         run: |
           .venv\Scripts\activate.ps1
-          Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           cd ${{ env.NEW_WORKSPACE }}
           bash -c './scripts/install-pti.sh --build-level-zero'
           $PTI_LIBS_DIR = python ./scripts/pti_lib.py
