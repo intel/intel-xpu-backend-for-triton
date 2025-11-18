@@ -1329,9 +1329,8 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
     builder.replaceAllUsesWith(std::get<0>(kv), std::get<1>(kv));
   }
 
-  for (Operation *op : deadOps) {
+  for (Operation *op : deadOps)
     opToDelete.insert(op);
-  }
 }
 
 void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
