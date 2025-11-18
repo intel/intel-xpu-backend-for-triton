@@ -452,3 +452,25 @@ jobs:
           path: |
             reports/*/*.csv
             reports/.env
+
+  check-jobs:
+    runs-on: runner-0.0.22
+    if: always()
+    needs:
+      - build
+      - integration-tests
+      - reports
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install Python
+        uses: ./.github/actions/setup-python
+        with:
+          python_version: ${{ inputs.python_version }}
+          use_pyenv: ${{ inputs.use_pyenv_python }}
+
+      - name: Ensure job status
+        uses: re-actors/alls-green@05ac9388f0aebcb5727afa17fcccfecd6f8ec5fe
+        with:
+          jobs: ${{ toJSON(needs) }}
