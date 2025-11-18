@@ -3061,7 +3061,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                        ? vec_ty(IntegerType::get(ctx, width), nWords)
                        : retTys[0];
 
-      Value other_;
+      Value other_ = b.undef(retTy);
       if (otherElems.empty()) {
         other_ = rewriter.create<LLVM::ConstantOp>(loc, retTy,
                                                    rewriter.getZeroAttr(retTy));
