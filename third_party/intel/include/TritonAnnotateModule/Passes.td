@@ -35,6 +35,8 @@ def TritonAnnotateModule: Pass<"triton-annotate-module", "mlir::ModuleOp"> {
            "whether Block Scale DPAS instruction is available">,
     Option<"supportBF16Conversion", "support-bf16-conversion", "bool", /*default*/"false",
            "whether BF16 conversion instruction is available">,
+    Option<"supportF4Conversion", "support-f4-conversion", "bool", /*default*/"false",
+           "whether F4 conversion instruction is available">,
     Option<"support16BitAtomics", "support-16bit-atomics", "bool", /*default*/"false",
            "whether 16bit atomic operations are available">,
     Option<"threadsPerWarp", "threads-per-warp",

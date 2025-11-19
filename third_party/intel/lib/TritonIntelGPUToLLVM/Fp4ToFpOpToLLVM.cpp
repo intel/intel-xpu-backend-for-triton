@@ -1,4 +1,5 @@
 #include "PatternTritonGPUOpToLLVM.h"
+#include "Utility.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/IR/ValueRange.h"
@@ -8,8 +9,11 @@
 #include "llvm/ADT/SmallVector.h"
 
 using namespace mlir;
+using namespace mlir::LLVM::intel;
 using namespace mlir::triton;
+using namespace mlir::triton::intel;
 using namespace mlir::triton::gpu;
+using namespace mlir::triton::gpu::intel;
 
 namespace {
 
@@ -54,14 +58,41 @@ public:
   LogicalResult
   matchAndRewrite(Fp4ToFpOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto elemTy = dyn_cast<FloatType>(op.getType().getElementType());
+    assert(elemTy == f16_ty || elemTy == bf16_ty);
     Location loc = op.getLoc();
-    CachingBuilder b(loc, rewriter);
+    Value src = adaptor.getSrc();
+    auto i8Ty = rewriter.getI8Type();
 
+    if (hasModuleAttr(
+            op.getOperation(),
+            TritonIntelGPUDialect::getSupportF4ConversionAttrName())) {
+      auto convertFn = [&](TritonLLVMIRRewriter &rw, Value v) {
+        int64_t numEls = 2;
+        if (auto vecTy = dyn_cast<VectorType>(v.getType())) {
+          numEls *= vecTy.getNumElements();
+        }
+        auto baseName = elemTy == f16_ty
+                            ? "__builtin_spirv_ConvertE2M1ToFP16INTEL"
+                            : "__builtin_spirv_ConvertE2M1ToBF16INTEL";
+        auto i4Ty = rw.builder->getI4Type();
+        v = rw.bitcast(v, VectorType::get({numEls}, i4Ty));
+        return convertWithFunctionCall(rw, v, baseName, i4Ty, elemTy);
+      };
+
+      auto res = vectorize(convertFn, loc, rewriter,
+                           unpackLLElements(loc, src, rewriter), 8);
+      if (!res.empty()) {
+        rewriter.replaceOp(op, packLLElements(loc, getTypeConverter(), res,
+                                              rewriter, op.getType()));
+        return success();
+      }
+    }
+
+    CachingBuilder b(loc, rewriter);
     // Create a constant vector containing all the possible values.
     Value table;
     {
-      auto elemTy = dyn_cast<FloatType>(op.getType().getElementType());
-      assert(elemTy == f16_ty || elemTy == bf16_ty);
       SmallVector<Attribute, 16> values;
       for (double v : {0., 0.5, 1., 1.5, 2., 3., 4., 6., -0., -0.5, -1., -1.5,
                        -2., -3., -4., -6.})
@@ -70,8 +101,6 @@ public:
     }
 
     SmallVector<Value> values;
-    Value src = adaptor.getSrc();
-    auto i8Ty = b.builder->getI8Type();
     collectValues(b, src, values);
 
     SmallVector<Value> results;

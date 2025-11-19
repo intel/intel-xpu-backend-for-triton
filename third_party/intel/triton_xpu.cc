@@ -99,6 +99,9 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
           "support_bf16_conversion",
           &gpu::intel::TritonAnnotateModuleOptions::supportBF16Conversion)
       .def_readwrite(
+          "support_f4_conversion",
+          &gpu::intel::TritonAnnotateModuleOptions::supportF4Conversion)
+      .def_readwrite(
           "support_16bit_atomics",
           &gpu::intel::TritonAnnotateModuleOptions::support16BitAtomics)
       .def_readwrite("threads_per_warp",

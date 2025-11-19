@@ -28,6 +28,8 @@ class XPUBackendMeta(type(BaseBackend)):
             dev_prop = fn(*args, **kwargs)
             dev_prop['has_shader_atomic_bfloat16'] = True
             dev_prop['has_support_block_scale_dpas'] = True
+            # TODO: Change to True when supported by the driver
+            dev_prop['has_f4_conversions'] = False
             return dev_prop
 
         return wrapper

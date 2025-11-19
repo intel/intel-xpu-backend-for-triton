@@ -2,7 +2,6 @@
 
 #include "Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "Utils/LLVMIntr.h"
-#include "Utils/Mangling.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Support/LLVM.h"
@@ -13,6 +12,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Utils.h"
 
 using namespace mlir;
+using namespace triton::gpu::intel;
 
 namespace {
 static bool isBF16OrTensorOf(Type type) {
@@ -79,38 +79,15 @@ struct TruncBF16 : ConvertOpToLLVMPattern<arith::TruncFOp> {
 namespace mlir::triton::intel {
 Value convertBf16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
                         Value v) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  if (auto definingOp = v.getDefiningOp()) {
-    auto moduleOp = definingOp->getParentWithTrait<OpTrait::SymbolTable>();
-    if (moduleOp->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
-                              getSupportBF16ConversionAttrName())) {
-      // For SPIRV target, use specialized intrinsic call for conversion.
-      // Otherwise, use fpext operation.
-      if (gpu::intel::hasSpirvTargetArch(moduleOp)) {
-        constexpr StringLiteral baseName = "__spirv_ConvertBF16ToFINTEL";
-        Type inTy = getTypeWithSameShape(v.getType(), i16_ty);
-        Type outTy = getTypeWithSameShape(inTy, f32_ty);
-        std::string funcName = mlir::triton::gpu::intel::mangle(baseName, inTy);
-
-        auto bitcastValue = b.bitcast(v, inTy).getResult();
-
-        auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
-            /*other=*/LLVM::ModRefInfo::NoModRef,
-            /*argMem=*/LLVM::ModRefInfo::NoModRef,
-            /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef);
-        auto funcAttrs = gpu::intel::noUnwindWillReturnAttrs;
-        funcAttrs.memEffectsAttr = memAttr;
-
-        auto call = gpu::intel::createDeviceFunctionCall(
-            rewriter, funcName, outTy, {inTy}, {bitcastValue}, {}, funcAttrs);
-        return call.getResult();
-      }
-
-      return rewriter.create<LLVM::FPExtOp>(loc, f32_ty, v);
-    }
+  TritonLLVMIRRewriter b(loc, rewriter);
+  auto as_int16 = b.bitcast(v, i16_ty).getResult();
+  auto result = convertWithFunctionCall(
+      b, as_int16, "__spirv_ConvertBF16ToFINTEL", i16_ty, f32_ty,
+      TritonIntelGPUDialect::getSupportBF16ConversionAttrName());
+  if (result) {
+    return result;
   }
 
-  auto as_int16 = b.bitcast(v, i16_ty);
   auto as_int32 = b.zext(i32_ty, as_int16);
   auto shifted = b.shl(i32_ty, as_int32, b.i32_val(16));
   return (b.bitcast(shifted, f32_ty));
@@ -118,35 +95,12 @@ Value convertBf16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
 
 Value convertFp32ToBf16(Location loc, ConversionPatternRewriter &rewriter,
                         Value v, RoundingMode rounding) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  if (auto definingOp = v.getDefiningOp()) {
-    auto moduleOp = definingOp->getParentWithTrait<OpTrait::SymbolTable>();
-    if (moduleOp->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
-                              getSupportBF16ConversionAttrName()) &&
-        rounding == RoundingMode::RTNE) {
-      // Intel SPIR-V extension only supports round-to-nearest-even
-      // LLVM fptrunc operation also assumes round-to-nearest mode
-      if (gpu::intel::hasSpirvTargetArch(moduleOp)) {
-        constexpr StringLiteral baseName = "__spirv_ConvertFToBF16INTEL";
-        Type inTy = v.getType();
-        Type funcOutTy = getTypeWithSameShape(inTy, i16_ty);
-        Type outTy = getTypeWithSameShape(inTy, bf16_ty);
-        std::string funcName = mlir::triton::gpu::intel::mangle(baseName, inTy);
-
-        auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
-            /*other=*/LLVM::ModRefInfo::NoModRef,
-            /*argMem=*/LLVM::ModRefInfo::NoModRef,
-            /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef);
-        auto funcAttrs = gpu::intel::noUnwindWillReturnAttrs;
-        funcAttrs.memEffectsAttr = memAttr;
-
-        auto call = gpu::intel::createDeviceFunctionCall(
-            rewriter, funcName, funcOutTy, {inTy}, {v}, {}, funcAttrs);
-        return b.bitcast(call.getResult(), outTy);
-      }
-
-      return rewriter.create<LLVM::FPTruncOp>(loc, bf16_ty, v);
-    }
+  TritonLLVMIRRewriter b(loc, rewriter);
+  auto result = convertWithFunctionCall(
+      b, v, "__spirv_ConvertFToBF16INTEL", f32_ty, i16_ty,
+      TritonIntelGPUDialect::getSupportBF16ConversionAttrName());
+  if (result) {
+    return b.bitcast(result, bf16_ty);
   }
 
   assert(!isa<VectorType>(v.getType()) && "Not yet supported");

@@ -79,6 +79,18 @@ Block &createPredicatedBlock(RewriterBase &rewriter, Location loc, Value cond,
 LLVM::RoundingMode
 convertTritonRoundingModeToLLVM(const triton::RoundingMode rounding);
 
+Type getTypeWithSameShape(Type type, Type elementType);
+
+bool hasModuleAttr(Operation *op, StringRef attrName);
+
+// Pack the values in vectors, call func on each vector and unpack the returned
+// vectors. The vector sizes are powers of 2 <= maxVecSize. If the input
+// contains a single value, it's not packed. If func returns a null value, empty
+// vector is returned.
+SmallVector<Value>
+vectorize(std::function<Value(TritonLLVMIRRewriter &, Value)> func,
+          Location loc, ConversionPatternRewriter &rewriter,
+          const SmallVector<Value> &values, size_t maxVecSize = 16);
 } // namespace mlir::LLVM::intel
 
 namespace mlir::triton::intel {
@@ -87,7 +99,9 @@ Value convertBf16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
                         Value v);
 Value convertFp32ToBf16(Location loc, ConversionPatternRewriter &rewriter,
                         Value v, RoundingMode rounding);
-
+Value convertWithFunctionCall(TritonLLVMIRRewriter &rewriter, Value value,
+                              StringRef baseName, Type inType, Type outType,
+                              StringRef hasAttrName = {});
 } // namespace mlir::triton::intel
 
 #endif // TRITON_CONVERSION_TRITONINTELGPU_TO_LLVM_UTILITY_H
