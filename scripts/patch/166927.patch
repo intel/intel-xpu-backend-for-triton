@@ -44,7 +44,7 @@ index 1a72e279aab79..5a4ed7190ef46 100644
                  "num_buffers_warp_spec", num_buffers_warp_spec
              )
  
-+        USE_TMA_DEFAULT = bool(torch.xpu.is_available())
++        USE_TMA_DEFAULT = False
 +        # The shape dtype of tensor desc is i32
 +        if V.graph.sizevars.statically_known_true(
 +            seq_len_q > 2**31 - 1
