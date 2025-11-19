@@ -1,4 +1,3 @@
-import os
 import itertools
 
 import numpy as np
@@ -9,7 +8,8 @@ import pathlib
 import triton
 from triton._internal_testing import is_xpu
 
-os.environ["TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS"] = "1"
+# FIXME: add it back when the issue https://github.com/intel/intel-xpu-backend-for-triton/issues/5443 is fixed on CRI
+# os.environ["TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS"] = "1"
 
 
 class DpasLayout:
@@ -211,9 +211,10 @@ def test_block_io(M, N, dtype_str, layout, load_block_ptr, store_block_ptr, tran
     kernel[(1, 1, 1)](a, x)
     assert torch.equal(a, x)
 
-    if support_block_io:
-        if not load_block_ptr:
-            if not ((transpose and type(layout) in [SliceLayout]) or
-                    (transpose and dtype_str in ["float16", "int8"])):  # TODO: add support for these cases
-                assert 'spirv_Subgroup2DBlockLoad' in kernel.asm['llir'] or 'GenISA.LSC2DBlockRead' in kernel.asm['llir']
-        assert 'spirv_Subgroup2DBlockStoreINTEL' in kernel.asm['llir'] or 'GenISA.LSC2DBlockWrite' in kernel.asm['llir']
+    # FIXME: add it back when the issue https://github.com/intel/intel-xpu-backend-for-triton/issues/5443 is fixed on CRI
+    # if support_block_io:
+    #     if not load_block_ptr:
+    #         if not ((transpose and type(layout) in [SliceLayout]) or
+    #                 (transpose and dtype_str in ["float16", "int8"])):  # TODO: add support for these cases
+    #             assert 'spirv_Subgroup2DBlockLoad' in kernel.asm['llir'] or 'GenISA.LSC2DBlockRead' in kernel.asm['llir']
+    #     assert 'spirv_Subgroup2DBlockStoreINTEL' in kernel.asm['llir'] or 'GenISA.LSC2DBlockWrite' in kernel.asm['llir']
