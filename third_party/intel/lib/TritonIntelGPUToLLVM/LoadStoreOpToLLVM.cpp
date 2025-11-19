@@ -1739,7 +1739,7 @@ struct LoadOpToBlockIOConversion
       if (numPackedVals > 1 && (widthToTranspose) != threadsPerWarp)
         return failure();
     }
-
+    // auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
     Value warpId = arith::IndexCastOp::create(
         rewriter, loc, i32_ty,
         mlir::gpu::SubgroupIdOp::create(rewriter, loc,
@@ -1879,6 +1879,17 @@ struct LoadOpToBlockIOConversion
           /*v_blocks*/ vBlocks,
           /*transpose*/ isTransposeRequired,
           /*vnni_transform*/ !isTransposeRequired && useVNNIFormat);
+
+      // targetInfo.printf(
+      //     rewriter,
+      //     "johnlu load: warp id: %d, lane id: %d addr %p baseWidth %d "
+      //     "baseHeight %d pitch %d offsetX %d offsetY %d packedElemSizeInBits
+      //     "
+      //     "%d tileWidth %d tileHeight %d vBlocks %d ret %f",
+      //     {warpId, laneId, addrElem, baseWidth, baseHeight, pitch, offsetX,
+      //      offsetY, b.i32_val(packedElemSizeInBits), b.i32_val(tileWidth),
+      //      b.i32_val(tileHeight), b.i32_val(vBlocks),
+      //      b.bitcast(ret, unpackedType)});
 
       if (!isTensorPointerType(ptr.getType())) {
         // When strides[0] is 0, we only want to load the first row, so we
