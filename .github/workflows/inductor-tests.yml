@@ -52,6 +52,8 @@ env:
     inductor/test_select_algorithm.py
     inductor/test_max_autotune.py
     inductor/test_compile_subprocess.py
+    inductor/test_analysis.py
+    inductor/test_torchinductor_opinfo.py
 
 jobs:
   compute-params:
