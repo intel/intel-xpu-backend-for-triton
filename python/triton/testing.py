@@ -155,19 +155,14 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
     simulation_env = (os.getenv("TRITON_INTEL_ENABLE_XE4", "0") == "1") or (os.getenv("TRITON_INTEL_ENABLE_XE3P", "0")
                                                                             == "1")
     if simulation_env:
-        if warmup != 0:
-            import warnings
-            warnings.warn(
-                "Running benchmarking in the simulation mode with a non-zero warmup rounds. These will be skipped.")
-        if rep != 1:
-            import warnings
-            warnings.warn(
-                "Running benchmarking in the simulation mode with a redundant config (expecting rep=1, got {}). These iterations will slow down the execution without any benefit."
-                .format(rep))
+        import warnings
+        warnings.warn(
+            "Running benchmarking in the simulation, warmup and rep parameters will be ignored. A single run will be performed."
+        )
 
     # Estimate the runtime of the function
     if simulation_env:
-        estimate_ms = 1
+        estimate_ms = rep  # to always have n_repeat = 1
     else:
         start_event = di.Event(enable_timing=True)
         end_event = di.Event(enable_timing=True)
@@ -439,11 +434,10 @@ def perf_report(benchmarks):
 
 def get_dram_gbps(device=None):
     ''' return DRAM bandwidth in GB/s '''
-    import torch
 
     from .runtime import driver
-    if not device:
-        device = torch.cuda.current_device()
+    if device is None:
+        device = driver.active.get_device_interface().current_device()
     mem_clock_khz = driver.active.utils.get_device_properties(device)["mem_clock_rate"]  # in kHz
     bus_width = driver.active.utils.get_device_properties(device)["mem_bus_width"]
     bw_gbps = mem_clock_khz * bus_width * 2 / 1e6 / 8  # In GB/s

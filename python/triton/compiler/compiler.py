@@ -122,7 +122,11 @@ class IRSource:
         if self.ext == "ttgir":
             num_warps = self.module.get_int_attr("ttg.num-warps")
             assert num_warps is not None, "Unable to parse ttg.num-warps attribute"
-            return {'num_warps': num_warps}
+            options = {'num_warps': num_warps}
+            num_ctas = self.module.get_int_attr("ttg.num-ctas")
+            if num_ctas is not None:
+                options['num_ctas'] = num_ctas
+            return options
         return dict()
 
 
@@ -290,6 +294,18 @@ def compile(src, target=None, options=None, _env_vars=None):
 
     metadata["cache_dir"] = fn_cache_manager.cache_dir
     metadata["triton_version"] = __version__
+    cluster_dims = getattr(options, "cluster_dims", None)
+    if cluster_dims is None:
+        num_ctas = getattr(options, "num_ctas", None)
+        if num_ctas is None:
+            num_ctas = 1
+        cluster_dims = (num_ctas, 1, 1)
+    if not isinstance(cluster_dims, (list, tuple)):
+        cluster_dims = (cluster_dims, )
+    cluster_dims = tuple(cluster_dims)
+    if len(cluster_dims) < 3:
+        cluster_dims = cluster_dims + (1, ) * (3 - len(cluster_dims))
+    metadata["cluster_dims"] = cluster_dims
     # run compilation pipeline  and populate metadata
     stages = dict()
     backend.add_stages(stages, options, src.language)

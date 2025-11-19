@@ -622,11 +622,20 @@ def get_batched_mm_benchmark(
         # Calculate performance metrics
         # Memory bandwidth: A (E*M*K*2) + B (E*K*N*2) + C (E*M*N*4) bytes
         # Compute: E * M * N * K * 2 FLOPs (multiply-add)
+        num_activated_experts = num_expert_tokens.ne(0).sum().item()
+        num_tokens = num_expert_tokens.sum().item()
 
         def gbps(ms):
             n_bytes = 1 if fp8 else 2
-            total_bytes = num_experts * (max_tokens_per_expert * K * n_bytes + K * N * n_bytes +
-                                         max_tokens_per_expert * N * 2)
+            # In practice due to the uniform distribution of lengths, on average half of the tokens are used,
+            # let's take that into account
+            total_bytes = (
+                # B matrix, we only have to load activated experts
+                num_activated_experts * (K * N * n_bytes) +
+                # A matrix - activations, we only load part of tokens
+                num_tokens * K * n_bytes +
+                # C matrix - outputs, we only load/store part of tokens
+                num_tokens * N * 2)
             return total_bytes * (1e-9) / (ms * 1e-3)
 
         def tflops(ms):

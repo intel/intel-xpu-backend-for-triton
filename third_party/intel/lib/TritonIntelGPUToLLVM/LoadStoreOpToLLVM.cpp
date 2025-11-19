@@ -1,4 +1,5 @@
 #include "Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -210,12 +211,11 @@ struct LoadStoreConversionBase {
         [](ArrayRef<Value> A, ArrayRef<Value> B, Value init,
            std::function<Value(const Value &, const Value &, const Value &)>
                linearizeFunc) {
-          auto rank = A.size();
+          unsigned rank = A.size();
           Value accumulate = init;
           if (rank > 0) {
-            for (auto [a, b] : llvm::zip(A, B)) {
+            for (auto [a, b] : llvm::zip(A, B))
               accumulate = linearizeFunc(a, b, accumulate);
-            }
           }
           return accumulate;
         };
@@ -225,11 +225,10 @@ struct LoadStoreConversionBase {
     SmallVector<Value> ptrElems(numElems);
     SmallVector<Value> maskElems;
     for (unsigned i = 0; i < numElems; ++i) {
-      auto index = indices[i];
+      SmallVector<Value> index = indices[i];
       SmallVector<Value> indicesInTensor(rank);
-      for (unsigned j = 0; j < rank; ++j) {
+      for (unsigned j = 0; j < rank; ++j)
         indicesInTensor[j] = b.add(index[j], blockPtr[blockOffset + j]);
-      }
 
       // Get the LLVM values for pointers
       Value offset = linearize(
@@ -271,22 +270,24 @@ struct LoadStoreConversionBase {
     SmallVector<Value> otherElems;
     if (padding) {
       Value other;
-      if (*padding == PaddingOption::PAD_ZERO) {
+      switch (*padding) {
+      case PaddingOption::PAD_ZERO:
         other = rewriter.create<LLVM::ConstantOp>(
             loc, valueElemTy, rewriter.getZeroAttr(valueElemTy));
-      } else if (*padding == PaddingOption::PAD_NAN) {
+
+        break;
+      case PaddingOption::PAD_NAN: {
         assert(!valueElemTy.isIntOrIndex() &&
                "Expect element type to be non-integer type");
         auto apNaN = llvm::APFloat::getNaN(
             cast<FloatType>(valueElemTy).getFloatSemantics());
         other = rewriter.create<LLVM::ConstantOp>(
             loc, valueElemTy, rewriter.getFloatAttr(valueElemTy, apNaN));
-      } else {
-        llvm_unreachable("Unexpected padding option");
+      } break;
       }
-      for (unsigned i = 0; i < numElems; ++i) {
+
+      for (unsigned i = 0; i < numElems; ++i)
         otherElems.push_back(other);
-      }
     }
 
     return std::make_tuple(ptrElems, maskElems, otherElems);
@@ -295,6 +296,8 @@ struct LoadStoreConversionBase {
 protected:
   const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass;
   const triton::intel::TargetInfo &targetInfo;
+  const bool usePredicatedInstructions =
+      triton::tools::getBoolEnv("TRITON_INTEL_PREDICATED");
 };
 
 struct BlockIOConversionBase : public LoadStoreConversionBase {
@@ -2934,9 +2937,16 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto typeConverter = getTypeConverter();
     MLIRContext *ctx = rewriter.getContext();
+
+    // original values
     Value ptr = op.getPtr();
     Value mask = op.getMask();
+    Value other = op.getOther();
+
+    // adaptor values
+    Value llPtr = adaptor.getPtr();
     Value llMask = adaptor.getMask();
+    Value llOther = adaptor.getOther();
 
     // Determine the vectorization size
     Type valueElemTy =
@@ -2954,13 +2964,9 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       // fallback to gather load.
       auto tensorType = cast<RankedTensorType>(op.getType());
       std::tie(ptrElems, maskElems, otherElems) = convertBlockPtrToTensorOfPtr(
-          loc, adaptor.getPtr(), tensorType, valueElemTy, rewriter,
-          op.getBoundaryCheck(), op.getPadding());
+          loc, llPtr, tensorType, valueElemTy, rewriter, op.getBoundaryCheck(),
+          op.getPadding());
     } else {
-      Value other = op.getOther();
-      Value llPtr = adaptor.getPtr();
-      Value llOther = adaptor.getOther();
-
       // Get the LLVM values for pointers
       ptrElems = unpackLLElements(loc, llPtr, rewriter);
       assert(ptrElems.size() == numElems);
@@ -2992,23 +2998,22 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     const int numVecs = numElems / vec;
 
     // Load redundantly in all dims except reg
-    auto freeVarMasks = getFreeVariableMasks(ptr.getType());
+    llvm::MapVector<StringAttr, int> freeVarMasks =
+        getFreeVariableMasks(ptr.getType());
     uint32_t regMask = freeVarMasks[str_attr("register")];
 
     SmallVector<Value> loadedVals;
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
-      if (auto canonicalVecStart = getCanonicalIndex(vecStart, regMask);
+      if (unsigned canonicalVecStart = getCanonicalIndex(vecStart, regMask);
           vecStart != canonicalVecStart) {
         // For redundant registers, refer back to the canonical load
-        for (auto iVec = 0; iVec < vec; ++iVec) {
+        for (int iVec = 0; iVec < vec; ++iVec)
           loadedVals.push_back(loadedVals[canonicalVecStart + iVec]);
-        }
+
         continue;
       }
 
       // TODO: optimization when ptr is GEP with constant offset
-      size_t in_off = 0;
-
       const size_t maxWordWidth = std::max<size_t>(32, valueElemNBits);
       const size_t totalWidth = valueElemNBits * vec;
       const size_t width = std::min(totalWidth, maxWordWidth);
@@ -3019,7 +3024,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
 
       Value pred = maskElems.size() ? maskElems[vecStart] : Value{};
 
-      SmallVector<Type> retTys(nWords, IntegerType::get(getContext(), width));
+      SmallVector<Type> retTys(nWords, IntegerType::get(ctx, width));
       Type retTy = retTys.size() > 1
                        ? vec_ty(IntegerType::get(ctx, width), nWords)
                        : retTys[0];
@@ -3045,13 +3050,15 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
             v = b.int_val(width, splatVal);
           }
 
-          Value iiVal = createIndexAttrConstant(
-              rewriter, loc, typeConverter->getIndexType(), ii);
-          if (nWords > 1) {
-            other_ = b.insert_element(retTy, other_, v, iiVal);
-          } else {
-            other_ = v;
-          }
+          other_ =
+              (nWords > 1)
+                  ? b.insert_element(
+                        retTy, other_, v,
+                        createIndexAttrConstant(
+                            rewriter, loc, typeConverter->getIndexType(), ii))
+                  :
+
+                  v;
         }
       } else {
         other_ = rewriter.create<LLVM::ConstantOp>(loc, retTy,
@@ -3060,37 +3067,46 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
 
       Value addrElem = b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
       uint32_t alignment = nWords * width / 8;
-      auto createLoadInstruction = [&]() -> SmallVector<Value, 1> {
-        Value ret = b.load(retTy, addrElem, alignment);
+      auto createLoadWithAttrs = [&]() -> SmallVector<Value, 1> {
+        auto getNonTemporalFlag = [](triton::LoadOp loadOp) {
+          switch (loadOp.getCache()) {
+          case triton::CacheModifier::CG:
+          case triton::CacheModifier::CS:
+          case triton::CacheModifier::CV:
+            return true;
+          case triton::CacheModifier::CA:
+          default:
+            return false;
+          }
+        };
+
+        Value ret = b.load(retTy, addrElem, alignment, op.getIsVolatile(),
+                           getNonTemporalFlag(op));
         return {ret};
       };
 
       Value ret;
-      // Create a predicated load operation.
-      if (pred) {
-        if (triton::tools::getBoolEnv("TRITON_INTEL_PREDICATED"))
-          ret = rewriter.create<TritonGEN::PredicatedLoadOp>(
-              loc, retTy, addrElem, b.i64_val(alignment), pred, other_);
-        else {
-          Block &endBlock = LLVM::intel::createPredicatedBlock(
-              rewriter, loc, pred, SmallVector<Value, 1>{other_},
-              createLoadInstruction);
-          ret = *endBlock.args_begin();
-        }
-      } else {
-        ret = createLoadInstruction()[0];
+
+      if (!pred)
+        ret = createLoadWithAttrs()[0];
+      else if (usePredicatedInstructions)
+        ret = rewriter.create<TritonGEN::PredicatedLoadOp>(
+            loc, retTy, addrElem, b.i64_val(alignment), pred, other_);
+      else {
+        Block &endBlock = LLVM::intel::createPredicatedBlock(
+            rewriter, loc, pred, SmallVector<Value, 1>{other_},
+            createLoadWithAttrs);
+        ret = *endBlock.args_begin();
       }
+      assert(ret && "Expecting a valid value");
 
       // Extract and store return values
       SmallVector<Value> rets;
       for (unsigned int ii = 0; ii < nWords; ++ii) {
-        Value curr;
-        if (isa<VectorType>(retTy)) {
-          curr = b.extract_element(IntegerType::get(ctx, width), ret,
-                                   b.i32_val(ii));
-        } else {
-          curr = ret;
-        }
+        Value curr = isa<VectorType>(retTy)
+                         ? b.extract_element(IntegerType::get(ctx, width), ret,
+                                             b.i32_val(ii))
+                         : ret;
         curr = b.bitcast(
             curr, LLVM::getVectorType(valueElemTy, width / valueElemNBits));
         rets.push_back(curr);
@@ -3158,8 +3174,8 @@ struct StoreOpToBlockIOConversion
     // Limit vBlock to 1
     vBlocks = 1;
 
-    // TODO: use the axis info to general the handling for both regular pointer
-    // and block pointer.
+    // TODO: use the axis info to general the handling for both regular
+    // pointer and block pointer.
     const bool memoryRowMajor = isMemoryRowMajor(op);
     unsigned contiguousDim = memoryRowMajor ? 1 : 0;
     if (contiguousDim != colDim) {
@@ -3293,17 +3309,17 @@ struct StoreOpToBlockIOConversion
       Value addrElem = ptrElems[registerIdx];
       Value offsetX, offsetY;
       if (isBlockPointer) {
-        // Need to apply the linear layout to get the offsets to the base of the
-        // block pointer.
-        // TODO: add annotation uniform to the offsets. Make sure the IGC detect
-        // the offsets as uniform.
+        // Need to apply the linear layout to get the offsets to the base of
+        // the block pointer.
+        // TODO: add annotation uniform to the offsets. Make sure the IGC
+        // detect the offsets as uniform.
         auto offsets = applyLinearLayout(loc, rewriter, *llEncoding,
                                          {{kRegister, b.i32_val(registerIdx)},
                                           {kLane, b.i32_val(0)},
                                           {kWarp, warpId},
                                           {kBlock, b.i32_val(0)}});
-        // TODO: To support rank > 2 tensor, we need to add the offsets of other
-        // dim to the base.
+        // TODO: To support rank > 2 tensor, we need to add the offsets of
+        // other dim to the base.
         assert(offsets.size() == 2 && "only support 2D tensor for now.");
         offsetX = b.add(offsetBaseX, offsets[colDim].second);
         offsetY = b.add(offsetBaseY, offsets[rowDim].second);
@@ -3323,7 +3339,8 @@ struct StoreOpToBlockIOConversion
           assert(numPackedVals > 0 &&
                  "numPackedVals should be greater than zero.");
           // The offsetX of linear layout is in original elements.
-          // The 2d block io requires the offsetX in number of packed elements.
+          // The 2d block io requires the offsetX in number of packed
+          // elements.
           offsetX = b.udiv(offsetX, b.i32_val(numPackedVals));
         }
         if (!boundaryCheck.contains(rowDim)) {
@@ -3511,19 +3528,15 @@ struct StoreOpConversion
         return ArrayRef<Value>();
       };
 
-      if (maskVal) {
-        // Create a predicated store operation.
-        if (triton::tools::getBoolEnv("TRITON_INTEL_PREDICATED"))
-          rewriter.create<TritonGEN::PredicatedStoreOp>(
-              loc, addrElem, vecWord, b.i64_val(alignment), maskVal);
-        else
-          LLVM::intel::createPredicatedBlock(rewriter, loc, maskVal,
-                                             createStore);
-      } else {
+      if (!maskVal)
         auto _ = createStore();
-      }
+      else if (usePredicatedInstructions)
+        rewriter.create<TritonGEN::PredicatedStoreOp>(
+            loc, addrElem, vecWord, b.i64_val(alignment), maskVal);
+      else
+        LLVM::intel::createPredicatedBlock(rewriter, loc, maskVal, createStore);
+    }
 
-    } // for
     rewriter.eraseOp(op);
     return success();
   }

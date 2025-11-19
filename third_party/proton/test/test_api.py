@@ -330,6 +330,8 @@ def test_scope_exclusive(tmp_path: pathlib.Path):
 
 
 def test_state(tmp_path: pathlib.Path):
+    if is_xpu():
+        pytest.skip("https://github.com/intel/intel-xpu-backend-for-triton/issues/5447")
     temp_file = tmp_path / "test_state.hatchet"
     proton.start(str(temp_file.with_suffix("")))
     proton.enter_scope("test0")
