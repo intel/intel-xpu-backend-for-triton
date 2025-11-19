@@ -26,9 +26,9 @@ jobs:
       - self-hosted
       - linux
       - cpu-generic
-    defaults:
-      run:
-        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+    # defaults:
+    #   run:
+    #     shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -53,8 +53,9 @@ jobs:
         run: |
           # PYTHON_VERSION=$(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
           REPO="intel/intel-xpu-backend-for-triton"
-          RUN_ID=$(gh run list --workflow nightly-wheels.yml -R "$REPO" --json databaseId,conclusion | jq -r '[.[] | select(.conclusion=="success")][0].databaseId')
+          RUN_ID=$(gh run list --workflow nightly-wheels.yml -R "$REPO" --branch main --json databaseId,conclusion | jq -r '[.[] | select(.conclusion=="success")][0].databaseId')
           echo "Run id - $RUN_ID"
+          echo "RUN_ID=$RUN_ID" >> $GITHUB_ENV
           mkdir -p wheels
           WHEEL_PATTERN="wheels-pytorch-py${PYTHON_VERSION}*"
           echo "WHEEL_PATTERN=$WHEEL_PATTERN"
@@ -75,55 +76,79 @@ jobs:
           pip install packaging
           pip install wheels/*
           TRITON_COMMIT=$(python -c "import importlib.metadata; import packaging.version; print(packaging.version.Version(importlib.metadata.version('triton')).local[3:])")
-          git clone --single-branch -b main --recurse-submodules https://github.com/intel/intel-xpu-backend-for-triton.git
-          cd intel-xpu-backend-for-triton
+          git clone --single-branch -b main --recurse-submodules https://github.com/intel/intel-xpu-backend-for-triton.git snapshot
+          cd snapshot
+          echo "Checking out Triton commit $TRITON_COMMIT"
           git checkout "$TRITON_COMMIT"
 
-      - name: Setup Triton kernels benchmark
-        uses: ./.github/actions/setup-triton-kernels-benchmark
-        with:
-          clone_repo: false
-          conda_env: wheels
+      # TODO: https://github.com/intel-tools/intel-xpu-backend-for-triton/issues/501
+      # - name: Setup Triton kernels benchmark
+      #   uses: ./.github/actions/setup-triton-kernels-benchmark
+      #   with:
+      #     clone_repo: false
+      #     conda_env: wheels
 
       - name: Prepare all binary artifacts to be packaged in the installer
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           source ~/miniforge3/bin/activate
 
           conda activate wheels
 
-          pip install -r intel-xpu-backend-for-triton/scripts/requirements-test.txt
+          gh auth status
+
+          pip install -r scripts/requirements-test.txt
           pip install defusedxml
 
           pip install build
-          cd intel-xpu-backend-for-triton/scripts/triton_utils
+          cd scripts/triton_utils
           python -m build --wheel
           pip install dist/triton_utils-*.whl
-          cd ../../..
-          cp intel-xpu-backend-for-triton/scripts/triton_utils/dist/*.whl wheels/
+          cd ../..
+          cp scripts/triton_utils/dist/*.whl wheels/
 
-          pip uninstall -y torch triton triton-kernels-benchmark triton_utils
+          # TODO: use pinned nightly gh run id from step "Get nightly wheels" instead of latest
+          python scripts/gta_integration/constructor/abn_metadata.py
+
+          # TODO: https://github.com/intel-tools/intel-xpu-backend-for-triton/issues/501
+          # pip uninstall -y torch triton triton-kernels-benchmark triton_utils
+          pip uninstall -y torch triton triton_utils
           pip freeze >requirements-offline.txt
           pip download -r requirements-offline.txt -d wheels
 
           # Create Triton test env wheels and repo tarballs
-          cp -L intel-xpu-backend-for-triton/benchmarks/dist/*.whl wheels/
+          # TODO: https://github.com/intel-tools/intel-xpu-backend-for-triton/issues/501
+          # cp -L intel-xpu-backend-for-triton/benchmarks/dist/*.whl wheels/
+          cp scripts/gta_integration/constructor/test_triton.py snapshot/scripts/test_triton.py
+          cp scripts/gta_integration/constructor/test_triton_config.json snapshot/scripts/test_triton_config.json
           tar -czvf wheels.tar.gz wheels
-          tar -czvf intel-xpu-backend-for-triton.tar.gz intel-xpu-backend-for-triton
+          tar -czvf intel-xpu-backend-for-triton.tar.gz snapshot
 
           # Download DLE and Vulkan SDK
           wget -O intel-deep-learning-essentials_offline.sh "${ONEAPI_DOWNLOAD_URL}${DLE_INSTALLER}"
           wget -O vulkan-sdk.tar.xz https://sdk.lunarg.com/sdk/download/latest/linux/vulkan-sdk.tar.xz
 
-          # Prepare run_triton_tests.sh script for upload
-          cp gta_integration/constructor/run_triton_tests.sh .
-          # cp scripts/pass_rate_utils.py .
+      - name: Upload test reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: test_reports
+          path: |
+            reports-nightly/**
+
+      - name: Upload abn_metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: abn_metadata
+          path: |
+            abn_metadata.json
 
       - name: Build constructor installer
         run: |
           source ~/miniforge3/bin/activate
           conda create -n constructor python=$PYTHON_VERSION constructor
           conda activate constructor
-          constructor gta_integration/constructor/
+          constructor scripts/gta_integration/constructor/
 
       - name: Upload built installer artifact and tests runner script
         uses: actions/upload-artifact@v4
@@ -133,99 +158,14 @@ jobs:
             TritonXPU-GTA.sh
             run_triton_tests.sh
 
-
-  test-installer:
-    name: Test GTA installer
-    needs: [build-installer]
-    runs-on:
-      - glados
-      - pvc
-
-    strategy:
-      matrix:
-        suite:
-          - language
-          # - triton-benchmarks
-          # - tutorials
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Download built installer artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: triton-xpu-installer
-
-      - name: Install Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ inputs.python }}
-
-      - name: Run the installer in silent mode
-        continue-on-error: true
-        run: |
-          sudo rm -rf /home/runner/intel
-          # FIX for the offline installer issue - https://jira.devtools.intel.com/browse/INST-26161
-          sudo chown -R runner:runner /tmp/runner
-          export LC_ALL=C.UTF-8
-          /bin/sh -x TritonXPU-GTA.sh -b
-
-      - name: Run ${{ matrix.suite }} tests
-        continue-on-error: true
-        run: |
-          bash -x run_triton_tests.sh ${{ matrix.suite }}
-
-      - name: Upload test reports
-        uses: actions/upload-artifact@v4
-        with:
-          name: test_reports_${{ matrix.suite }}
-          path: |
-            /home/runner/reports/*.xml
-            /home/runner/reports/**/*.csv
-
-
-  # test-installer-benchmarks:
-  #   name: Generate abn_metadata.json
-  #   needs: [test-installer]
-  #   runs-on:
-  #     - glados
-
-  #   steps:
-  #     - name: Checkout repository
-  #       uses: actions/checkout@v4
-
-  #     - name: Install Python
-  #       uses: actions/setup-python@v5
-  #       with:
-  #         python-version: ${{ inputs.python }}
-
-  #     - name: Download all matrix test reports
-  #       uses: actions/download-artifact@v4
-  #       with:
-  #         pattern: test_reports_*
-  #         path: reports
-  #         merge-multiple: true
-
-  #     # - name: Merge downloaded report files
-  #     #   run: |
-  #     #     mkdir -p reports
-  #     #     for entry in reports_raw/*; do
-  #     #       if [ -d "$entry" ]; then
-  #     #         cp "$entry"/* reports/ 2>/dev/null || true
-  #     #       elif [ -f "$entry" ]; then
-  #     #         cp "$entry" reports/ 2>/dev/null || true
-  #     #       fi
-  #     #     done
-
-  #     - name: Generate abn_metadata.json
-  #       run: |
-  #         pip install defusedxml
-  #         python scripts/pass_rate_utils.py --reports reports
-
-  #     - name: Upload generated abn_metadata.json
-  #       uses: actions/upload-artifact@v4
-  #       with:
-  #         name: testmetadata
-  #         path: |
-  #           abn_metadata.json
+      # - name: Upload asset to GTA artifactory
+      #   run: |
+      #     TIMESTAMP=$(date '+%Y%m%d_%H-%M-%S')
+      #     echo "TIMESTAMP=$TIMESTAMP" >> "${GITHUB_ENV}"
+      #     mkdir triton-xpu-installer
+      #     mv TritonXPU-GTA.sh triton-xpu-installer/
+      #     mv run_triton_tests.sh triton-xpu-installer/
+      #     mv abn_metadata.json triton-xpu-installer/
+      #     /gta/gta-asset push gfx-ocl-abn-assets-igk/oneAPI/linux triton-xpu ${{ env.TIMESTAMP }} triton-xpu-installer \
+      #         --root-url=https://gfx-assets.igk.intel.com/ \
+      #         -u glados --password ${{ secrets.GLADOS_DEVTOOLS_ARTIFACTORY_TOKEN }}

@@ -1,0 +1,25 @@
+{
+  "include": {
+    "benchmarks": "benchmarks",
+    "debug": "minicore",
+    "gluon": "gluon",
+    "instrumentation": "instrumentation",
+    "intel": "minicore",
+    "language": "minicore",
+    "line_info": "minicore",
+    "runtime": "minicore",
+    "regression": "minicore",
+    "subprocess": "minicore",
+    "third_party": "minicore",
+    "tools": "minicore",
+    "triton-kernels": "triton-kernels",
+    "warnings": "minicore"
+  },
+  "exclude": {
+    "mxfp": "mxfp",
+    "scaled-dot": "scaled-dot",
+    "tutorial": "tutorial",
+    "tutorial-fa-64": "tutorial-fa-64",
+    "tutorial-fa-128-fwdfp8": "tutorial-fa-128-fwdfp8"
+  }
+}
