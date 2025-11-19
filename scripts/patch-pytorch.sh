@@ -36,3 +36,4 @@ echo "Applying PyTorch patches in $REPO_ROOT"
 
 # put your patch applies here
 apply_patch ./patch/166927.patch
+apply_patch ./patch/temp_skip_tests.patch
