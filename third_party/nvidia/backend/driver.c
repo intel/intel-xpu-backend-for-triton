@@ -231,11 +231,13 @@ defineGetFunctionHandle(getCuTensorMapEncodeTiledHandle,
                         cuTensorMapEncodeTiled);
 
 static PyObject *occupancyMaxActiveClusters(PyObject *self, PyObject *args) {
-  int clusterDim = -1, maxActiveClusters = -1;
+  int clusterDimX = -1, clusterDimY = -1, clusterDimZ = -1,
+      maxActiveClusters = -1;
   int shared = 0;
   CUfunction func;
 
-  if (!PyArg_ParseTuple(args, "Kii", &func, &shared, &clusterDim)) {
+  if (!PyArg_ParseTuple(args, "Kiiii", &func, &shared, &clusterDimX,
+                        &clusterDimY, &clusterDimZ)) {
     return NULL;
   }
 
@@ -248,13 +250,13 @@ static PyObject *occupancyMaxActiveClusters(PyObject *self, PyObject *args) {
 
   CUlaunchAttribute launchAttr[1];
   launchAttr[0].id = CU_LAUNCH_ATTRIBUTE_CLUSTER_DIMENSION;
-  launchAttr[0].value.clusterDim.x = clusterDim;
-  launchAttr[0].value.clusterDim.y = 1;
-  launchAttr[0].value.clusterDim.z = 1;
+  launchAttr[0].value.clusterDim.x = clusterDimX;
+  launchAttr[0].value.clusterDim.y = clusterDimY;
+  launchAttr[0].value.clusterDim.z = clusterDimZ;
   CUlaunchConfig config;
-  config.gridDimX = clusterDim * maxActiveBlocks;
-  config.gridDimY = 1;
-  config.gridDimZ = 1;
+  config.gridDimX = clusterDimX;
+  config.gridDimY = maxActiveBlocks * clusterDimY;
+  config.gridDimZ = clusterDimZ;
   config.blockDimX = 128;
   config.blockDimY = 1;
   config.blockDimZ = 1;
