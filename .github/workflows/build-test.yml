@@ -48,10 +48,16 @@ on:
     branches:
       - main
       - release/**
+    paths-ignore:
+      - '**/*.md'
+      - '.github/ISSUE_TEMPLATE/**'
   push:
     branches:
       - main
       - release/**
+    paths-ignore:
+      - '**/*.md'
+      - '.github/ISSUE_TEMPLATE/**'
 
 # Cancels in-progress PR runs when the PR is updated. Manual runs are never cancelled.
 concurrency:
