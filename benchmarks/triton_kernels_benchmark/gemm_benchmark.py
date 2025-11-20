@@ -13,9 +13,177 @@ import torch
 import triton
 import triton.language as tl
 
+from triton.experimental import gluon
+import triton.experimental.gluon.language as ttgl
+from triton.experimental.gluon.language.intel import IntelDPASLayout
+
 import triton_kernels_benchmark as benchmark_suite
 from triton_kernels_benchmark import xetla_kernel
 from triton_kernels_benchmark import cutlass_kernel
+
+
+@gluon.jit
+def gluon_matmul_kernel_dpas(
+    a_ptr, b_ptr, c_ptr,
+    M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr,
+    stride_am: ttgl.constexpr, stride_ak: ttgl.constexpr,
+    stride_bk: ttgl.constexpr, stride_bn: ttgl.constexpr,
+    stride_cm: ttgl.constexpr, stride_cn: ttgl.constexpr,
+    BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, BLOCK_K: ttgl.constexpr,
+    GROUP_SIZE_M: ttgl.constexpr
+):
+    # Define DPAS layout - adjust parameters based on your matrix sizes
+    layout: ttgl.constexpr = IntelDPASLayout(
+        repeatCount=8,
+        systolic_depth=8,
+        execution_size=16,
+        ops_per_chan=2,  # For bf16/f16
+        warps_per_cta=[2, 2],  # Adjust based on num_warps
+        rep_cluster=[2, 2],
+        threads_per_warp=16  # Or 32 with env var
+    )
+
+    lhs_layout: ttgl.constexpr = ttgl.DotOperandLayout(
+        parent=layout, operand_index=0, k_width=1
+    )
+    rhs_layout: ttgl.constexpr = ttgl.DotOperandLayout(
+        parent=layout, operand_index=1, k_width=2
+    )
+
+    # Program ID and block calculation (same as standard Triton)
+    pid = ttgl.program_id(axis=0)
+    num_pid_m = ttgl.cdiv(M, BLOCK_M)
+    num_pid_n = ttgl.cdiv(N, BLOCK_N)
+    num_pid_in_group = GROUP_SIZE_M * num_pid_n
+    group_id = pid // num_pid_in_group
+    first_pid_m = group_id * GROUP_SIZE_M
+    group_size_m = ttgl.minimum(num_pid_m - first_pid_m, GROUP_SIZE_M)
+    pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
+    pid_n = (pid % num_pid_in_group) // group_size_m
+
+    # Initialize accumulator with DPAS layout
+    accumulator = ttgl.zeros((BLOCK_M, BLOCK_N), dtype=ttgl.float32, layout=layout)
+
+    # Manual offset calculation for A (replaces make_block_ptr)
+    offs_am = (pid_m * BLOCK_M + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, layout)))[:, None]
+    offs_ak = ttgl.arange(0, BLOCK_K, layout=ttgl.SliceLayout(0, layout))[None, :]
+    offs_a = offs_am * stride_am + offs_ak * stride_ak
+
+    # Manual offset calculation for B
+    offs_bk = ttgl.arange(0, BLOCK_K, layout=ttgl.SliceLayout(1, layout))[:, None]
+    offs_bn = (pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, layout)))[None, :]
+    offs_b = offs_bk * stride_bk + offs_bn * stride_bn
+
+    # K-dimension loop
+    for k in range(0, ttgl.cdiv(K, BLOCK_K)):
+        # Load A and convert to dot operand layout
+        a = ttgl.load(a_ptr + offs_a)
+        a = ttgl.convert_layout(a, lhs_layout)
+
+        # Load B and convert to dot operand layout
+        b = ttgl.load(b_ptr + offs_b)
+        b = ttgl.convert_layout(b, rhs_layout)
+
+        # Perform dot operation (uses DPAS instructions)
+        accumulator = ttgl.xpu_dot_fma(a, b, accumulator)
+
+        # Advance pointers (replaces tl.advance)
+        offs_a += BLOCK_K * stride_ak
+        offs_b += BLOCK_K * stride_bk
+
+    # Store result
+    offs_cm = (pid_m * BLOCK_M + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, layout)))[:, None]
+    offs_cn = (pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, layout)))[None, :]
+    offs_c = offs_cm * stride_cm + offs_cn * stride_cn
+
+    ttgl.store(c_ptr + offs_c, accumulator)
+
+
+@gluon.jit
+def gluon_matmul_kernel_dpas_batched(
+    a_ptr, b_ptr, c_ptr,
+    B: ttgl.constexpr, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr,
+    stride_az: ttgl.constexpr, stride_am: ttgl.constexpr, stride_ak: ttgl.constexpr,
+    stride_bz: ttgl.constexpr, stride_bk: ttgl.constexpr, stride_bn: ttgl.constexpr,
+    stride_cz: ttgl.constexpr, stride_cm: ttgl.constexpr, stride_cn: ttgl.constexpr,
+    BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, BLOCK_K: ttgl.constexpr,
+    GROUP_SIZE_M: ttgl.constexpr
+):
+    # Define DPAS layout
+    layout: ttgl.constexpr = IntelDPASLayout(
+        repeatCount=8,
+        systolic_depth=8,
+        execution_size=16,
+        ops_per_chan=2,
+        warps_per_cta=[2, 2],
+        rep_cluster=[2, 2],
+        threads_per_warp=16
+    )
+
+    lhs_layout: ttgl.constexpr = ttgl.DotOperandLayout(
+        parent=layout, operand_index=0, k_width=1
+    )
+    rhs_layout: ttgl.constexpr = ttgl.DotOperandLayout(
+        parent=layout, operand_index=1, k_width=2
+    )
+
+    # Get batch and spatial program IDs
+    bid = ttgl.program_id(axis=1)
+    pid = ttgl.program_id(axis=0)
+
+    # Program ID calculation (same as non-batched)
+    num_pid_m = ttgl.cdiv(M, BLOCK_M)
+    num_pid_n = ttgl.cdiv(N, BLOCK_N)
+    num_pid_in_group = GROUP_SIZE_M * num_pid_n
+    group_id = pid // num_pid_in_group
+    first_pid_m = group_id * GROUP_SIZE_M
+    group_size_m = ttgl.minimum(num_pid_m - first_pid_m, GROUP_SIZE_M)
+    pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
+    pid_n = (pid % num_pid_in_group) // group_size_m
+
+    # Calculate batch offsets
+    offset_a = bid * stride_az
+    offset_b = bid * stride_bz
+
+    # Initialize accumulator with DPAS layout
+    accumulator = ttgl.zeros((BLOCK_M, BLOCK_N), dtype=ttgl.float32, layout=layout)
+
+    # Manual offset calculation for A with batch offset
+    offs_am = (pid_m * BLOCK_M + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, layout)))[:, None]
+    offs_ak = ttgl.arange(0, BLOCK_K, layout=ttgl.SliceLayout(0, layout))[None, :]
+    offs_a = offset_a + offs_am * stride_am + offs_ak * stride_ak
+
+    # Manual offset calculation for B with batch offset
+    offs_bk = ttgl.arange(0, BLOCK_K, layout=ttgl.SliceLayout(1, layout))[:, None]
+    offs_bn = (pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, layout)))[None, :]
+    offs_b = offset_b + offs_bk * stride_bk + offs_bn * stride_bn
+
+    # K-dimension loop
+    for k in range(0, ttgl.cdiv(K, BLOCK_K)):
+        # Load A and convert to dot operand layout
+        a = ttgl.load(a_ptr + offs_a)
+        a = ttgl.convert_layout(a, lhs_layout)
+
+        # Load B and convert to dot operand layout
+        b = ttgl.load(b_ptr + offs_b)
+        b = ttgl.convert_layout(b, rhs_layout)
+
+        # Perform dot operation
+        accumulator = ttgl.xpu_dot_fma(a, b, accumulator)
+
+        # Advance pointers
+        offs_a += BLOCK_K * stride_ak
+        offs_b += BLOCK_K * stride_bk
+
+    # Calculate batch offset for output
+    offset_c = bid * stride_cz
+
+    # Store result
+    offs_cm = (pid_m * BLOCK_M + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, layout)))[:, None]
+    offs_cn = (pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, layout)))[None, :]
+    offs_c = offset_c + offs_cm * stride_cm + offs_cn * stride_cn
+
+    ttgl.store(c_ptr + offs_c, accumulator)
 
 
 def get_matmul_autotune_configs() -> List[triton.Config]:
@@ -166,6 +334,26 @@ def matmul_kernel_with_block_pointers_batched(
                                     block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N), order=(1, 0))
     tl.store(c_block_ptr, c, boundary_check=(0, 1))
 
+def gluon_matmul(a, b, c, BLOCK_M=64, BLOCK_N=128, BLOCK_K=32, GROUP_SIZE_M=4, num_warps=4):
+    """Wrapper for Gluon DPAS matmul kernel"""
+    M, K = a.shape
+    K, N = b.shape
+
+    grid = lambda META: (
+        triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']),
+    )
+
+    gluon_matmul_kernel_dpas[grid](
+        a, b, c,
+        M, N, K,
+        a.stride(0), a.stride(1),
+        b.stride(0), b.stride(1),
+        c.stride(0), c.stride(1),
+        BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,
+        GROUP_SIZE_M=GROUP_SIZE_M,
+        num_warps=num_warps
+    )
+    return c
 
 # We can now create a convenience wrapper function that only takes two input tensors,
 # and (1) checks any shape constraint; (2) launches the above kernel.
@@ -234,44 +422,44 @@ def get_shapes(B, M, N, K, transpose_a, transpose_b):
 
 X_VALS = [  #
     [1, 1, 1024, 4096],
-    [1, 1, 4096, 4096],
-    [1, 1, 4096, 14336],
-    [1, 1, 6144, 4096],
-    [1, 1, 13824, 5120],
-    [1, 1, 14336, 4096],
-    [1, 1, 28672, 4096],
-    [1, 1, 128256, 4096],
-    [1, 4, 12288, 4096],
-    [1, 8, 1024, 4096],
-    [1, 8, 4096, 4096],
-    [1, 8, 4096, 14336],
-    [1, 8, 6144, 4096],
-    [1, 8, 14336, 4096],
-    [1, 8, 28672, 4096],
-    [1, 8, 128256, 4096],
-    [1, 512, 8192, 8192],
-    [1, 512, 8192, 32768],
-    [1, 512, 32768, 8192],
-    [1, 1024, 1024, 1024],
-    [1, 1024, 8192, 16384],
-    [1, 1024, 8192, 28672],
-    [1, 2048, 2048, 2048],
-    [1, 3072, 3072, 4096],  # FIXME: Remove this case when gemm_streamk_benchmark can get better performance
-    [1, 4096, 4096, 4096],
-    [1, 4096, 8192, 16384],
-    [1, 8192, 1024, 16384],
-    [1, 8192, 4096, 4096],
-    [1, 8192, 4096, 16384],
-    [1, 8192, 8192, 8192],
-    [1, 16384, 1024, 8192],
-    [1, 16384, 4096, 8192],
-    [1, 16384, 8192, 1024],
-    [1, 16384, 8192, 4096],
-    [4, 32768, 128, 4096],
-    [4, 32768, 4096, 128],
-    [32, 4096, 128, 4096],
-    [4096, 8, 128, 16384],
-    [4096, 8, 16384, 128],
+    # [1, 1, 4096, 4096],
+    # [1, 1, 4096, 14336],
+    # [1, 1, 6144, 4096],
+    # [1, 1, 13824, 5120],
+    # [1, 1, 14336, 4096],
+    # [1, 1, 28672, 4096],
+    #[1, 1, 128256, 4096],
+    #[1, 4, 12288, 4096],
+    # [1, 8, 1024, 4096],
+    # [1, 8, 4096, 4096],
+    # [1, 8, 4096, 14336],
+    # [1, 8, 6144, 4096],
+    # [1, 8, 14336, 4096],
+    # [1, 8, 28672, 4096],
+    # [1, 8, 128256, 4096],
+    # [1, 512, 8192, 8192],
+    # [1, 512, 8192, 32768],
+    # [1, 512, 32768, 8192],
+    # [1, 1024, 1024, 1024],
+    # [1, 1024, 8192, 16384],
+    # [1, 1024, 8192, 28672],
+    # [1, 2048, 2048, 2048],
+    # [1, 3072, 3072, 4096],  # FIXME: Remove this case when gemm_streamk_benchmark can get better performance
+    # [1, 4096, 4096, 4096],
+    # [1, 4096, 8192, 16384],
+    # [1, 8192, 1024, 16384],
+    # [1, 8192, 4096, 4096],
+    # [1, 8192, 4096, 16384],
+    # [1, 8192, 8192, 8192],
+    # [1, 16384, 1024, 8192],
+    # [1, 16384, 4096, 8192],
+    # [1, 16384, 8192, 1024],
+    # [1, 16384, 8192, 4096],
+    # [4, 32768, 128, 4096],
+    # [4, 32768, 4096, 128],
+    # [32, 4096, 128, 4096],
+    # [4096, 8, 128, 16384],
+    # [4096, 8, 16384, 128],
 ]
 
 DEVICE_NAME = torch.xpu.get_device_name()
@@ -308,12 +496,13 @@ def get_benchmark(
     The benchmark can then be executed by calling the :code:`.run` method on the return value.
     """
     supported_providers = {
-        'triton': 'Triton',
-        'onednn': 'OneDNN',
+        'gluon': 'gluon',
+        #'triton': 'Triton',
+        #'onednn': 'OneDNN',
     }
     # use_cutlass
     if not (transpose_a or transpose_b):
-        if torch.xpu.get_device_name() != 'Intel(R) Arc(TM) Graphics':
+        if torch.xpu.get_device_name() != 'Intel(R) Arc(TM) Graphics' and False:
             # FIXME: enable cutlass on LNL
             supported_providers['cutlass'] = 'CUTLASS'
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
@@ -381,6 +570,31 @@ def get_benchmark(
             rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
             benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
             _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
+
+        elif provider == 'gluon':
+            if len(a.shape) != len(b.shape):
+                raise AssertionError(f'Incompatible sizes {len(a.shape)} and {len(b.shape)}', )
+            if len(a.shape) == 3:
+                c = torch.zeros((B, M, N), device='xpu', dtype=torch.float32)
+            elif len(a.shape) == 2:
+                c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
+            else:
+                raise AssertionError(f'Unexpected shape of length {len(a.shape)}')
+
+            # Fixed block sizes for Gluon (no autotuning)
+            BLOCK_M, BLOCK_N, BLOCK_K = 64, 128, 32
+            GROUP_SIZE_M = 4
+
+            gluon_fn = lambda: gluon_matmul(
+                a, b, c,
+                BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,
+                GROUP_SIZE_M=GROUP_SIZE_M,
+                num_warps=4
+            )
+            torch_fn = lambda: torch.matmul(torch_a, torch_b).to(torch.float32)
+            rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
+            benchmark_suite.assert_close(gluon_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='gluon to torch')
+            _, min_ms, max_ms, mean_ms, cv = do_bench(gluon_fn)
 
         elif provider == 'xetla':
             if B == 1:

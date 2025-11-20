@@ -27,7 +27,7 @@ class XPUOptions:
     num_ctas: int = 1
     num_stages: int = 2
     cluster_dims: tuple = (1, 1, 1)
-    warp_size: int = 32
+    warp_size: int = 16 #32
     optimize_epilogue: bool = False
     enable_fp_fusion: bool = True
     launch_cooperative_grid: bool = False

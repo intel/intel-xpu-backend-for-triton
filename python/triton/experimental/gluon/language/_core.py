@@ -9,6 +9,7 @@ if TYPE_CHECKING:
     from ._semantic import GluonSemantic
 
 from ._layouts import SharedLayout, DistributedLayout, BlockedLayout, DotOperandLayout, AutoLayout
+from .intel import IntelDPASLayout
 from triton._C.libtriton import ir
 import triton.language.core as tl_core
 from triton.language.core import (
@@ -571,6 +572,29 @@ def dot_fma(a, b, acc, _semantic=None):
 
     mma_layout = acc.type.layout
     assert isinstance(mma_layout, BlockedLayout), "acc must have a BlockedLayout"
+    assert isinstance(a.type.layout, DotOperandLayout), "a must have a DotOperandLayout"
+    assert isinstance(b.type.layout, DotOperandLayout), "b must have a DotOperandLayout"
+    assert a.type.layout.parent == mma_layout, "a's parent layout must be the same as acc's layout"
+    assert b.type.layout.parent == mma_layout, "b's parent layout must be the same as acc's layout"
+    assert a.type.layout.operand_index == 0, "a's operand index must be 0"
+    assert b.type.layout.operand_index == 1, "b's operand index must be 1"
+
+    M, N = acc.shape
+    K = a.shape[1]
+    if M * N * K > 2**19:
+        warnings.warn(f"Large dot FMA instruction size {M}x{N}x{K} may have slow compile times")
+
+    handle = _semantic.dot(a, b, acc, input_precision=None, max_num_imprecise_acc=None, out_dtype=acc.dtype).handle
+    return tensor(handle, acc.type)
+
+@builtin
+def xpu_dot_fma(a, b, acc, _semantic=None):
+    assert isinstance(a, tensor), "a must be a tensor"
+    assert isinstance(b, tensor), "b must be a tensor"
+    assert isinstance(acc, tensor), "acc must be a tensor"
+
+    mma_layout = acc.type.layout
+    assert isinstance(mma_layout, IntelDPASLayout), "acc must have a BlockedLayout"
     assert isinstance(a.type.layout, DotOperandLayout), "a must have a DotOperandLayout"
     assert isinstance(b.type.layout, DotOperandLayout), "b must have a DotOperandLayout"
     assert a.type.layout.parent == mma_layout, "a's parent layout must be the same as acc's layout"
