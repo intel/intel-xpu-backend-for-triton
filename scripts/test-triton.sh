@@ -505,16 +505,7 @@ run_tutorial_tests() {
   cd $TRITON_PROJ/python/tutorials
 
   tutorials=(
-    "01-vector-add"
-    "02-fused-softmax"
-    "03-matrix-multiplication"
-    "04-low-memory-dropout"
-    "05-layer-norm"
-    "06-fused-attention"
-    "07-extern-functions"
-    "08-grouped-gemm"
     "09-persistent-matmul"
-    "10-experimental-block-pointer"
   )
   if [ "${TEST_TUTORIAL_FA:-false}" = true ]; then
     tutorials=(

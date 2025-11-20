@@ -276,8 +276,13 @@ public:
   getAxisInfo(ub::PoisonOp op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
     unsigned rank = 1;
-    if (auto shape = dyn_cast<RankedTensorType>(op.getType()))
-      rank = shape.getRank();
+    
+    // Use the same logic as getPessimisticValueState
+    if (TensorType ty = dyn_cast<TensorType>(op.getType()))
+      rank = ty.getRank();
+    else if (triton::PointerType ty = dyn_cast<triton::PointerType>(op.getType()))
+      if (TensorType elemTy = dyn_cast<TensorType>(ty.getPointeeType()))
+        rank = elemTy.getRank();
 
     // Poison values are never accessed, thus assume optimistic values.
     return AxisInfo(AxisInfo::DimVectorT(rank, kMaxDivisor),

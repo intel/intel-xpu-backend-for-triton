@@ -197,6 +197,8 @@ private:
       unsigned firstIndex) override {
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
       visitForOpInductionVar(forOp, argLattices);
+    } else if (auto ws = dyn_cast<gpu::WarpSpecializePartitionsOp>(op)) {
+      visitWarpSpecializeExplicitCaptures(ws, successor, argLattices);
     } else {
       setAllToEntryStates(argLattices.take_front(firstIndex));
       setAllToEntryStates(argLattices.drop_front(
@@ -217,6 +219,9 @@ public:
   void
   visitForOpInductionVar(scf::ForOp op,
                          ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices);
+  void visitWarpSpecializeExplicitCaptures(
+      gpu::WarpSpecializePartitionsOp ws, const RegionSuccessor &successor,
+      ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices);
 };
 
 template <typename OpTy>
@@ -293,21 +298,21 @@ public:
   AxisInfo
   getAxisInfo(ub::PoisonOp op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
-    constexpr int64_t largePowerOf2 = int64_t(1) << 32;
-    // Poison values are never accessed, thus assume optimistic values.
-    if (auto shape = dyn_cast<mlir::ShapedType>(op.getType())) {
-      unsigned rank = shape.getRank();
-      return AxisInfo(
-          /*contiguity=*/AxisInfo::DimVectorT(rank, largePowerOf2),
-          /*divisibility=*/AxisInfo::DimVectorT(rank, largePowerOf2),
-          /*constancy=*/AxisInfo::DimVectorT(shape.getShape()));
-    }
+    unsigned rank = 1;
+    
+    // Use the same logic as getPessimisticValueState
+    if (TensorType ty = dyn_cast<TensorType>(op.getType()))
+      rank = ty.getRank();
+    else if (triton::PointerType ty = dyn_cast<triton::PointerType>(op.getType()))
+      if (TensorType elemTy = dyn_cast<TensorType>(ty.getPointeeType()))
+        rank = elemTy.getRank();
 
-    return AxisInfo(/*contiguity=*/{1}, /*divisibility=*/{largePowerOf2},
-                    /*constancy=*/{1});
+    // Poison values are never accessed, thus assume optimistic values.
+    return AxisInfo(AxisInfo::DimVectorT(rank, kMaxDivisor),
+                    AxisInfo::DimVectorT(rank, kMaxDivisor),
+                    AxisInfo::DimVectorT(rank, kMaxDivisor));
   }
 };
-
 template <typename OpTy>
 class AddSubOpAxisInfoVisitor final : public BinaryOpVisitorImpl<OpTy> {
 public:
@@ -1263,6 +1268,20 @@ void AxisInfoAnalysis::visitForOpInductionVar(
       AxisInfo(std::move(knownContiguity), std::move(knownDivisibility),
                std::move(knownConstancy));
   (void)argLattices[0]->join(inductionVar);
+}
+
+void AxisInfoAnalysis::visitWarpSpecializeExplicitCaptures(
+    gpu::WarpSpecializePartitionsOp ws, const RegionSuccessor &successor,
+    ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices) {
+  assert(!successor.isParent());
+  ProgramPoint *point = getProgramPointAfter(ws);
+
+  for (auto [capture, argLattice] :
+       llvm::zip(ws.getParentOp().getExplicitCaptures(), argLattices)) {
+    propagateIfChanged(
+        argLattice,
+        argLattice->join(getLatticeElementFor(point, capture)->getValue()));
+  }
 }
 
 } // anonymous namespace
