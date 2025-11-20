@@ -18,7 +18,7 @@ Alternatively, you can find `TorchConfig.cmake` with the following Python script
 import importlib.metadata
 
 for f in importlib.metadata.files('torch'):
-  if f.name == 'TorchConfig.cmake':
+  if 'TorchConfig.cmake' in f.name:
     print(f.locate().resolve())
 ```
 
