@@ -440,17 +440,17 @@ X_VALS = [  #
     # [1, 512, 8192, 8192],
     # [1, 512, 8192, 32768],
     # [1, 512, 32768, 8192],
-    # [1, 1024, 1024, 1024],
+    [1, 1024, 1024, 1024],
     # [1, 1024, 8192, 16384],
     # [1, 1024, 8192, 28672],
     # [1, 2048, 2048, 2048],
     # [1, 3072, 3072, 4096],  # FIXME: Remove this case when gemm_streamk_benchmark can get better performance
-    # [1, 4096, 4096, 4096],
+    [1, 4096, 4096, 4096],
     # [1, 4096, 8192, 16384],
     # [1, 8192, 1024, 16384],
     # [1, 8192, 4096, 4096],
     # [1, 8192, 4096, 16384],
-    # [1, 8192, 8192, 8192],
+    [1, 8192, 8192, 8192],
     # [1, 16384, 1024, 8192],
     # [1, 16384, 4096, 8192],
     # [1, 16384, 8192, 1024],
@@ -502,7 +502,7 @@ def get_benchmark(
     }
     # use_cutlass
     if not (transpose_a or transpose_b):
-        if torch.xpu.get_device_name() != 'Intel(R) Arc(TM) Graphics' and False:
+        if torch.xpu.get_device_name() != 'Intel(R) Arc(TM) Graphics':
             # FIXME: enable cutlass on LNL
             supported_providers['cutlass'] = 'CUTLASS'
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
@@ -582,7 +582,7 @@ def get_benchmark(
                 raise AssertionError(f'Unexpected shape of length {len(a.shape)}')
 
             # Fixed block sizes for Gluon (no autotuning)
-            BLOCK_M, BLOCK_N, BLOCK_K = 64, 128, 32
+            BLOCK_M, BLOCK_N, BLOCK_K = 256, 256, 32 # Autotuned for triton.jit & B580
             GROUP_SIZE_M = 4
 
             gluon_fn = lambda: gluon_matmul(
