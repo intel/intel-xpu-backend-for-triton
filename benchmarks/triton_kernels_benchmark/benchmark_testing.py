@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import re
 from typing import Callable, ClassVar, Dict, Optional, List, Tuple, Union, Set
 from collections.abc import Iterable
 from enum import Enum
@@ -13,8 +14,10 @@ import argparse
 import datetime
 import os
 import time
+from pathlib import Path
 
 import scipy.stats
+import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
@@ -155,7 +158,6 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
             fn()
             synchronize()
             i += 1
-        print(f"Stopped warmup after {i} iterations")
     else:
         for _ in range(n_warmup):
             fn()
@@ -336,6 +338,30 @@ def filter_providers(
     return supported_providers
 
 
+def get_gpu_info():
+    device_name = torch.xpu.is_available() and torch.xpu.get_device_name()
+    if device_name is None:
+        print("Couldn't read device name.")
+        return None, None
+
+    # benchmarks/triton_kernels_benchmark/benchmark_testing.py -> benchmarks/gpu_info.json
+    current_dir = Path(__file__).parent.resolve()
+    gpu_info_path = current_dir.parent / "gpu_info.json"
+
+    if not gpu_info_path.exists():
+        print(f"Warning: '{gpu_info_path}' not found.")
+        return None, None
+
+    with open(gpu_info_path, "r", encoding="utf-8") as f:
+        gpu_info = json.load(f)
+
+    if device_name not in gpu_info:
+        print(f"Warning: Device '{device_name}' not found in {gpu_info_path}")
+        return None, None
+
+    return gpu_info[device_name]
+
+
 def perf_report(benchmarks):
     """
     Mark a function for benchmarking. The benchmark can then be executed by using the :code:`.run` method on the return value.
@@ -352,6 +378,7 @@ class MarkArgs:
     reports: str = ""
     n_runs: int = 1
     brief: bool = False
+    eff: bool = False
 
     @staticmethod
     def load_cli_args() -> MarkArgs:
@@ -375,8 +402,47 @@ class MarkArgs:
             action="store_true",
             help="Print only mean values without min, max, CV.",
         )
+        parser.add_argument(
+            "--eff",
+            "-e",
+            action="store_true",
+            help="Print HW utilization, will use internal database from 'gpu_info.json'.",
+        )
         args = parser.parse_args()
-        return MarkArgs(args.reports, args.n_runs, args.brief)
+        return MarkArgs(args.reports, args.n_runs, args.brief, args.eff)
+
+
+def enhance_df(df, bench, mark_args: MarkArgs):
+    hw_tflops, hw_gbps = None, None
+    if mark_args.eff:
+        hw_tflops, hw_gbps = get_gpu_info()
+
+    df = df.copy()
+    if mark_args.brief:
+        df = df[[c for c in df.columns if not any(map(c.endswith, ("min", "max", "CV")))]]
+
+    # Find and write down HW efficiency columns
+    tflops_labels = [l for l in bench.ylabel if l.lower().endswith("tflops")]
+    tflops_pattern = "-(" + "|".join(tflops_labels) + ")(-min|-max)?$"
+
+    gbps_labels = [l for l in bench.ylabel if l.lower().replace("/", "p").endswith("gbps")]
+    gbps_pattern = "-(" + "|".join(gbps_labels) + ")(-min|-max)?$"
+
+    for col in df.columns:
+        if re.search(tflops_pattern, col) and hw_tflops:
+            df[re.sub(tflops_pattern, "-ceff", col)] = df[col] / hw_tflops
+        if re.search(gbps_pattern, col) and hw_gbps:
+            df[re.sub(gbps_pattern, "-meff", col)] = df[col] / hw_gbps
+            # df[re.sub(gbps_pattern, "-meff", col)] = (df[col] / mark_args.hw_gbps).apply(lambda x: f"{x:.1%}")
+    # We will only keep resulting efficiency column, we are either compute or memory bound.
+    for provider in bench.line_names:
+        if f"{provider}-ceff" in df.columns and f"{provider}-meff" in df.columns:
+            df[f"{provider}-eff"] = np.maximum(df[f"{provider}-ceff"],
+                                               df[f"{provider}-meff"]).apply(lambda x: f"{x:.2%}")
+            del df[f"{provider}-ceff"]
+            del df[f"{provider}-meff"]
+
+    return df
 
 
 class Mark:
@@ -462,12 +528,10 @@ class Mark:
             col0, col1 = df.columns.tolist()
             df["Diff"] = df[col1] - df[col0]
 
+        df = enhance_df(df, bench, mark_args)
         if print_data:
             print(bench.plot_name + ":")
-            if mark_args.brief:
-                print(df[[c for c in df.columns if not any(map(c.endswith, ("min", "max", "CV")))]].to_string())
-            else:
-                print(df.to_string())
+            print(df.to_string())
 
         if save_path:
             df.to_csv(os.path.join(save_path, f"{filename}.csv"), float_format=f"%.{save_precision}f", index=False)
