@@ -97,6 +97,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::intel::registerTritonIntelFuseReshape();
   mlir::triton::intel::registerTritonIntelRemoveBoundaryChecks();
   mlir::triton::intel::registerTritonIntelRemoveMasks();
+  mlir::triton::intel::registerTritonIntelStrideVersioning();
   mlir::triton::intel::registerTritonIntelTensorDescToBlockPointer();
   mlir::triton::registerRelayoutTritonGPUPass();
   mlir::triton::gpu::registerAllocateSharedMemoryPass();

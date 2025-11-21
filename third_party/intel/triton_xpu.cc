@@ -61,6 +61,8 @@ void init_triton_intel_passes_ttir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_remove_boundary_checks",
                      intel::createTritonIntelRemoveBoundaryChecks);
   ADD_PASS_WRAPPER_0("add_remove_masks", intel::createTritonIntelRemoveMasks);
+  ADD_PASS_WRAPPER_0("add_stride_versioning",
+                     intel::createTritonIntelStrideVersioning);
   ADD_PASS_WRAPPER_0("add_fuse_reshape", intel::createTritonIntelFuseReshape);
 }
 
