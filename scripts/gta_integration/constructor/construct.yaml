@@ -1,0 +1,30 @@
+name: TritonXPU-GTA
+version: 3.4.0-20250820
+initialize_by_default: false
+batch_mode: true
+
+installer_type: sh
+installer_filename: TritonXPU-GTA.sh
+
+channels:
+  - conda-forge
+
+condarc:
+  channels:
+  - conda-forge
+  solver: libmamba
+
+specs:
+  - python=3.10
+  - conda
+  - pip
+
+default_prefix: ${HOME}/triton-xpu
+
+extra_files:
+  - ../../../wheels.tar.gz
+  - ../../../intel-deep-learning-essentials_offline.sh
+  - ../../../intel-xpu-backend-for-triton.tar.gz
+  - ../../../vulkan-sdk.tar.xz
+
+post_install: install_wheels.sh # [unix]

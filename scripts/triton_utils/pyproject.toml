@@ -1,0 +1,14 @@
+[project]
+name = "triton_utils"
+version = "0.2.7"
+dependencies = ["packaging", "typing_extensions", "defusedxml", "pandas"]
+
+[project.scripts]
+triton-utils = "triton_utils.entry_point:main"
+
+[tool.setuptools]
+packages = ["triton_utils"]
+
+[build-system]
+requires = ["setuptools>=75.0", "wheel"]
+build-backend = "setuptools.build_meta"
