@@ -286,10 +286,16 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
         return mod
 
-    def gluon_to_ttgir(self, src, metadata, options):
+    def gluon_to_ttgir(self, src, metadata, options, properties):
         mod = src
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
+
+        # Test - to match triton ttgir conversion
+        module_opts = intel.passes.ttgpuir.AnnotateModuleOptions()
+        self.annotate_module(module_opts, properties, options)
+        intel.passes.ttgpuir.add_triton_annotate_module(pm, module_opts)
+        #pm.run(mod, 'annotate_module')
 
         passes.gluon.add_inliner(pm)
         passes.gluon.add_resolve_auto_encodings(pm)
@@ -463,7 +469,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
             stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, self.properties)
         elif language == Language.GLUON:
-            stages["ttgir"] = lambda src, metadata: self.gluon_to_ttgir(src, metadata, options)
+            stages["ttgir"] = lambda src, metadata: self.gluon_to_ttgir(src, metadata, options, self.properties)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
         stages["spv"] = lambda src, metadata: self.make_spv(src, metadata, options)
         if options.generate_native_code:

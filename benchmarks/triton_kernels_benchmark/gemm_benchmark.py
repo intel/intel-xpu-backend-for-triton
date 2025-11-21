@@ -421,15 +421,15 @@ def get_shapes(B, M, N, K, transpose_a, transpose_b):
 
 
 X_VALS = [  #
-    [1, 1, 1024, 4096],
-    # [1, 1, 4096, 4096],
+    # [1, 1, 1024, 4096], # works
+    [1, 1, 4096, 4096], # hangs at synchronize after performing gluon kernel
     # [1, 1, 4096, 14336],
     # [1, 1, 6144, 4096],
     # [1, 1, 13824, 5120],
     # [1, 1, 14336, 4096],
     # [1, 1, 28672, 4096],
-    #[1, 1, 128256, 4096],
-    #[1, 4, 12288, 4096],
+    # [1, 1, 128256, 4096],
+    # [1, 4, 12288, 4096],
     # [1, 8, 1024, 4096],
     # [1, 8, 4096, 4096],
     # [1, 8, 4096, 14336],
@@ -440,17 +440,17 @@ X_VALS = [  #
     # [1, 512, 8192, 8192],
     # [1, 512, 8192, 32768],
     # [1, 512, 32768, 8192],
-    [1, 1024, 1024, 1024],
+    # [1, 1024, 1024, 1024], # works
     # [1, 1024, 8192, 16384],
     # [1, 1024, 8192, 28672],
     # [1, 2048, 2048, 2048],
     # [1, 3072, 3072, 4096],  # FIXME: Remove this case when gemm_streamk_benchmark can get better performance
-    [1, 4096, 4096, 4096],
+    # [1, 4096, 4096, 4096], # works
     # [1, 4096, 8192, 16384],
     # [1, 8192, 1024, 16384],
     # [1, 8192, 4096, 4096],
     # [1, 8192, 4096, 16384],
-    [1, 8192, 8192, 8192],
+    # [1, 8192, 8192, 8192], # works
     # [1, 16384, 1024, 8192],
     # [1, 16384, 4096, 8192],
     # [1, 16384, 8192, 1024],
@@ -529,9 +529,13 @@ def get_benchmark(
             args={},
         ))
     def benchmark(B, M, N, K, provider):
+        print(f'# {provider} - {B}-{M}-{N}-{K} | {transpose_a=}, {transpose_b=}')
         # Maximum across onednn=600, triton=800, xetla=10, cutlass=600
-        do_bench = benchmark_suite.get_do_bench(n_warmup=800, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
+        #do_bench = benchmark_suite.get_do_bench(n_warmup=800, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
+        do_bench = benchmark_suite.get_do_bench(n_warmup=1, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
+
         a_shape, b_shape = get_shapes(B, M, N, K, transpose_a=transpose_a, transpose_b=transpose_b)
+        print(f'{a_shape=}, {b_shape=}')
 
         torch.manual_seed(0)
         a = torch.rand(a_shape, device='xpu', dtype=torch.bfloat16)
@@ -589,12 +593,16 @@ def get_benchmark(
                 a, b, c,
                 BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,
                 GROUP_SIZE_M=GROUP_SIZE_M,
-                num_warps=4
+                num_warps=4#64
             )
-            torch_fn = lambda: torch.matmul(torch_a, torch_b).to(torch.float32)
-            rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
-            benchmark_suite.assert_close(gluon_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='gluon to torch')
+            # torch_fn = lambda: torch.matmul(torch_a, torch_b).to(torch.float32)
+            # rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
+            # benchmark_suite.assert_close(gluon_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='gluon to torch')
+            from pudb import set_trace
+            set_trace()
+            print('calling do_bench')
             _, min_ms, max_ms, mean_ms, cv = do_bench(gluon_fn)
+            print('do_bench done')
 
         elif provider == 'xetla':
             if B == 1:
