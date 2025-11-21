@@ -1,6 +1,6 @@
 [project]
 name = "triton_utils"
-version = "0.2.7"
+version = "0.3.0"
 dependencies = ["packaging", "typing_extensions", "defusedxml", "pandas"]
 
 [project.scripts]
