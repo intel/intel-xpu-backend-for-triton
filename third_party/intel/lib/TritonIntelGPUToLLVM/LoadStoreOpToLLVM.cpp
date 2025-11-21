@@ -206,12 +206,11 @@ struct LoadStoreConversionBase {
     //    }
     // All the values are decomposed by `unpackLLElements` into a vector.
     // Defines the indices for the block pointer struct.
-    unsigned blockOffset = 0, blockShape = 1 * rank, blockStride = 2 * rank,
-             blockBase = 3 * rank;
+    const unsigned blockOffset = 0, blockShape = 1 * rank,
+                   blockStride = 2 * rank, blockBase = 3 * rank;
     const SmallVector<Value> &blockPtr =
         unpackLLElements(loc, blockPointerStruct, rewriter);
-
-    unsigned numElems = getTotalElemsPerThread(tensorType);
+    const unsigned numElems = getTotalElemsPerThread(tensorType);
 
     // Get the LLVM values for indices in block
     auto indices = emitIndices(loc, rewriter, targetInfo,
@@ -301,6 +300,34 @@ struct LoadStoreConversionBase {
     }
 
     return std::make_tuple(ptrElems, maskElems, otherElems);
+  }
+
+  // Ensure the operation doesn't have attributes that the IGC predicated
+  // instruction cannot handle.
+  template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
+                                 OpType, LoadOp, StoreOp>::value>>
+  bool canUsePredicatedInstructions(OpType op) const {
+    if (!usePredicatedInstructions)
+      return false;
+
+    if constexpr (std::is_same_v<OpType, LoadOp>)
+      return !op.getIsVolatile() && op.getCache() == CacheModifier::NONE;
+
+    return op.getCache() == CacheModifier::NONE;
+  }
+
+  template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
+                                 OpType, LoadOp, StoreOp>::value>>
+  bool getNonTemporalFlag(OpType op) const {
+    switch (op.getCache()) {
+    case triton::CacheModifier::CG:
+    case triton::CacheModifier::CS:
+    case triton::CacheModifier::CV:
+      return true;
+    case triton::CacheModifier::CA:
+    default:
+      return false;
+    }
   }
 
 protected:
@@ -2438,11 +2465,13 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                        : retTys[0];
 
       Value other_ = b.undef(retTy);
-      if (otherElems.size()) {
+      if (otherElems.empty()) {
+        other_ = rewriter.create<LLVM::ConstantOp>(loc, retTy,
+                                                   rewriter.getZeroAttr(retTy));
+      } else {
         for (size_t ii = 0; ii < nWords; ++ii) {
           size_t size = width / valueElemNBits;
-
-          auto vecTy = vec_ty(valueElemTy, size);
+          VectorType vecTy = vec_ty(valueElemTy, size);
           Value v = b.undef(vecTy);
           for (size_t s = 0; s < size; ++s) {
             Value falseVal = otherElems[vecStart + ii * size + s];
@@ -2468,36 +2497,21 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
 
                   v;
         }
-      } else {
-        other_ = rewriter.create<LLVM::ConstantOp>(loc, retTy,
-                                                   rewriter.getZeroAttr(retTy));
       }
+      assert(other_ && "Expecting a valid value");
 
       Value addrElem = b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
       uint32_t alignment = nWords * width / 8;
-      auto createLoadWithAttrs = [&]() -> SmallVector<Value, 1> {
-        auto getNonTemporalFlag = [](triton::LoadOp loadOp) {
-          switch (loadOp.getCache()) {
-          case triton::CacheModifier::CG:
-          case triton::CacheModifier::CS:
-          case triton::CacheModifier::CV:
-            return true;
-          case triton::CacheModifier::CA:
-          default:
-            return false;
-          }
-        };
-
-        Value ret = b.load(retTy, addrElem, alignment, op.getIsVolatile(),
-                           getNonTemporalFlag(op));
-        return {ret};
+      auto createLoadWithAttrs = [&]() {
+        return SmallVector<Value>{b.load(retTy, addrElem, alignment,
+                                         op.getIsVolatile(),
+                                         getNonTemporalFlag(op))};
       };
 
       Value ret;
-
       if (!pred)
         ret = createLoadWithAttrs()[0];
-      else if (usePredicatedInstructions)
+      else if (canUsePredicatedInstructions(op))
         ret = rewriter.create<TritonGEN::PredicatedLoadOp>(
             loc, retTy, addrElem, b.i64_val(alignment), pred, other_);
       else {
@@ -2519,6 +2533,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
             curr, LLVM::getVectorType(valueElemTy, width / valueElemNBits));
         rets.push_back(curr);
       }
+
       int tmp = width / valueElemNBits;
       for (size_t ii = 0; ii < vec; ++ii) {
         Value loaded =
@@ -2931,18 +2946,21 @@ struct StoreOpConversion
 
       Value addrElem = b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
       uint32_t alignment = nWords * width / 8;
-      auto createStore = [&]() -> ArrayRef<Value> {
-        b.store(vecWord, addrElem, alignment);
+      auto createStoreWithAttrs = [&]() {
+        bool isVolatile = false;
+        b.store(vecWord, addrElem, alignment, isVolatile,
+                getNonTemporalFlag(op));
         return ArrayRef<Value>();
       };
 
       if (!maskVal)
-        auto _ = createStore();
-      else if (usePredicatedInstructions)
+        auto _ = createStoreWithAttrs();
+      else if (canUsePredicatedInstructions(op))
         rewriter.create<TritonGEN::PredicatedStoreOp>(
             loc, addrElem, vecWord, b.i64_val(alignment), maskVal);
       else
-        LLVM::intel::createPredicatedBlock(rewriter, loc, maskVal, createStore);
+        LLVM::intel::createPredicatedBlock(rewriter, loc, maskVal,
+                                           createStoreWithAttrs);
     }
 
     rewriter.eraseOp(op);

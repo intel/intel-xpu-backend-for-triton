@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+    <testsuite name="pytest" errors="40" failures="346" skipped="836" tests="9886" time="339.753" timestamp="2024-04-05T11:03:23.033702" hostname="r02openai">
+        <testcase classname="test.unit.language.test_core" name="test_reduce_layouts[sum-int32-reduce2d-1-src_layout8-32-128]" time="0.114" />
+        <testcase classname="test.unit.language.test_core" name="test_reduce_layouts[sum-float16-reduce1d-1-src_layout0-64-64]" time="0.001">
+            <skipped type="pytest.xfail" message="Skipping sum reduction on float16 due to accuracy issues" />
+        </testcase>
+        <testcase classname="test.unit.language.test_core" name="test_reduce_layouts[sum-float16-reduce1d-1-src_layout3-128-128]" time="0.001">
+            <skipped type="pytest.xfail" message="Skipping sum reduction on float16 due to accuracy issues" />
+        </testcase>
+        <testcase classname="python.test.unit.test_debug" name="test_device_assert[False-True-True-False]" time="0.003">
+            <skipped type="pytest.skip" message="Deselected by pytest-skip">/home/vpenkin/triton-xpu/intel-xpu-backend-for-triton/python/test/unit/test_debug.py:7: Deselected by pytest-skip</skipped>
+        </testcase>
+        <testcase classname="test.unit.language.test_core" name="test_reduce_layouts[max-float16-reduce1d-0-src_layout7-16-16]" time="0.073" />
+        <testcase classname="test.unit.language.test_subprocess" name="test_print[device_print_hex-int64]" time="4.143">
+            <failure message="assert False&#10; +  where False = all(&lt;generator object test_print.&lt;locals&gt;.&lt;genexpr&gt; at 0x7f541c67cdd0&gt;)">func_type = 'device_print_hex', data_type = 'int64'
+
+    @pytest.mark.parametrize("func_type, data_type", [("device_print", data_type) for data_type in torch_types] + [
+        ("print", "int32"),
+        ...
+        ("device_print_hex", "int64"),
+    ])
+    def test_print(func_type: str, data_type: str):
+        ...
+        outs = [line for line in outs.decode("UTF-8").split("\n") if line]
+
+        # Format is
+        #   pid (&lt;x&gt;, &lt;y&gt;, &lt;z&gt;) idx (&lt;i1&gt;, &lt;i2&gt;, ...) &lt;prefix&gt; (operand &lt;n&gt;) &lt;elem&gt;
+        expected_lines = Counter()
+        ...
+            print(f'Expected line "{line}" {expected_lines[line]} time(s), but saw {actual_lines[line]} time(s)')
+&gt;       assert all(delta == 0 for delta in diff.values())
+E       assert False
+E        +  where False = all(&lt;generator object test_print.&lt;locals&gt;.&lt;genexpr&gt; at 0x7f541c67cdd0&gt;)
+
+language/test_subprocess.py:80: AssertionError</failure>
+        </testcase>
+        <testcase classname="test.unit.language.test_core" name="test_dot[1-64-128-128-2-False-False-none-tf32-float32-float32]" time="0.001">
+            <error message="failed on setup with &quot;worker 'gw14' crashed while running 'test/unit/language/test_core.py::test_dot[1-64-128-128-2-False-False-none-tf32-float32-float32]'&quot;">worker 'gw14' crashed while running 'test/unit/language/test_core.py::test_dot[1-64-128-128-2-False-False-none-tf32-float32-float32]'</error>
+        </testcase>
+    </testsuite>
+</testsuites>

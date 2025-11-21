@@ -123,6 +123,16 @@ jobs:
           pip install -U pybind11 cmake
           pip install -v '.[build,tests,tutorials]'
 
+      - name: Build && Install PTI
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          cd ${{ env.NEW_WORKSPACE }}
+          bash -c './scripts/install-pti.sh --build-level-zero'
+          $PTI_LIBS_DIR = python ./scripts/pti_lib.py
+          ls $PTI_LIBS_DIR
+          echo "PATH=$PTI_LIBS_DIR;$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Triton version
         run: |
           .venv\Scripts\activate.ps1

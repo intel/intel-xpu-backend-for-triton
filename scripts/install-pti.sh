@@ -43,9 +43,23 @@ function build_level_zero {
   LEVEL_ZERO_VERSION=1.24.2
   LEVEL_ZERO_SHA256=b77e6e28623134ee4e99e2321c127b554bdd5bfa3e80064922eba293041c6c52
 
-  wget --progress=dot:giga -e use_proxy=yes "https://github.com/oneapi-src/level-zero/archive/refs/tags/v${LEVEL_ZERO_VERSION}.tar.gz"
-  echo "${LEVEL_ZERO_SHA256}  v${LEVEL_ZERO_VERSION}.tar.gz" > "v${LEVEL_ZERO_VERSION}.tar.gz.sha256"
-  sha256sum -c "v${LEVEL_ZERO_VERSION}.tar.gz.sha256"
+  if [[ $OSTYPE = msys ]]; then
+    pwsh -Command \
+      "Invoke-WebRequest -Uri 'https://github.com/oneapi-src/level-zero/archive/refs/tags/v${LEVEL_ZERO_VERSION}.tar.gz' -OutFile 'v${LEVEL_ZERO_VERSION}.tar.gz'"
+    ls . -alh
+    FILE_HASH=$(pwsh -Command "Get-FileHash -Algorithm SHA256 v${LEVEL_ZERO_VERSION}.tar.gz | Select-Object -ExpandProperty Hash")
+    # convert to lowercase
+    FILE_HASH=${FILE_HASH,,}
+    echo $FILE_HASH
+    if [[ "$FILE_HASH" != "${LEVEL_ZERO_SHA256}" ]]; then
+      echo "ERROR: Checksum does not match!"
+      exit 1
+    fi
+  else
+    wget "https://github.com/oneapi-src/level-zero/archive/refs/tags/v${LEVEL_ZERO_VERSION}.tar.gz"
+    echo "${LEVEL_ZERO_SHA256}  v${LEVEL_ZERO_VERSION}.tar.gz" > "v${LEVEL_ZERO_VERSION}.tar.gz.sha256"
+    sha256sum -c "v${LEVEL_ZERO_VERSION}.tar.gz.sha256"
+  fi
   tar -xf "v${LEVEL_ZERO_VERSION}.tar.gz"
   cd "level-zero-${LEVEL_ZERO_VERSION}"
   echo "${LEVEL_ZERO_VERSION}" | awk -F. '{print $3}' > VERSION_PATCH
@@ -56,7 +70,11 @@ function build_level_zero {
   cmake --build . --config Release --parallel "$(nproc)"
   cmake --build . --config Release --target install
   export LEVELZERO_INCLUDE_DIR="$L0_INSTALL_PATH/include"
-  export LEVELZERO_LIBRARY="$L0_INSTALL_PATH/lib/libze_loader.so"
+  if [[ $OSTYPE = msys ]]; then
+    export LEVELZERO_LIBRARY="$L0_INSTALL_PATH/lib/ze_loader.lib"
+  else
+    export LEVELZERO_LIBRARY="$L0_INSTALL_PATH/lib/libze_loader.so"
+  fi
 }
 
 function build_pti {

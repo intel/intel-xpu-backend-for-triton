@@ -55,6 +55,13 @@ jobs:
       - name: Install Triton
         uses: ./.github/actions/setup-triton
 
+      - name: Build && Install PTI
+        run: |
+          ./scripts/install-pti.sh --build-level-zero
+          PTI_LIBS_DIR=$(python ./scripts/pti_lib.py)
+          ls $PTI_LIBS_DIR
+          echo "LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH" | tee -a $GITHUB_ENV
+
       - name: Install runtime dependencies
         run: |
           curl -sSLO --retry 10 https://raw.githubusercontent.com/pytorch/pytorch/$(<.github/pins/pytorch.txt)/.github/scripts/generate_binary_build_matrix.py
