@@ -424,6 +424,10 @@ def test_mxfp(BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS, device)
     if is_cuda() and torch.cuda.get_device_capability()[0] == 12:
         ptx = out.asm["ptx"]
         assert "mma.sync.aligned.m16n8k32.row.col.kind::mxf8f6f4.block_scale.scale_vec::1X" in ptx
+    if device == "xpu":  # FIXME: Only add check for CRI
+        llir = out.asm["llir"]
+        count = llir.count("llvm.genx.GenISA.sub.group.bdpas")
+        assert count > 0, "The bdpas is not used."
 
 
 def _knob_promote_lhs_to_tmem(monkeypatch):
@@ -1082,7 +1086,12 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
         if (nonKDim == 16 and BLOCK_K < 128) or (nonKDim == 32 and BLOCK_K < 64):
             pytest.skip(f"CDNA4 does not support {BLOCK_K=} for scaled mfma {nonKDim=} variants")
     elif is_xpu():
-        pytest.xfail("XPU does not natively support scaled fp4 matmul")
+        if scale_type != 'float8_e8m0fnu':
+            pytest.xfail("XPU only supports E8M0 scale")
+        if not pack_along_k:
+            pytest.xfail("XPU only supports pack along k")
+        if not (with_a_scale and with_b_scale):
+            pytest.xfail("None aScale/bScale is only tested on AMD backend for now")
 
     NUM_STAGES = 1
     torch.manual_seed(42)
@@ -1126,6 +1135,9 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
     kernel_kwargs = {}
     if is_hip():
         kernel_kwargs["matrix_instr_nonkdim"] = nonKDim
+    # To reduce the spilling size which cause a significant slow down on simulator.
+    if is_xpu():
+        kernel_kwargs["num_warps"] = 16
     k = block_scale_fp4_matmul[grid](a, b, output, a_scale, b_scale, M, N, K, stride_scale, a.stride(0), a.stride(1),
                                      b.stride(0), b.stride(1), output.stride(0), output.stride(1), VEC_SIZE, BLOCK_M,
                                      BLOCK_N, BLOCK_K, NUM_STAGES=NUM_STAGES, PACK_ALONG_K=pack_along_k,
@@ -1329,5 +1341,9 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
     if is_cuda():
         ttgir = out.asm["ttgir"]
         assert "fp4Padded = true" in ttgir
+    if device == "xpu":  # FIXME: Only add check for CRI
+        llir = out.asm["llir"]
+        count = llir.count("llvm.genx.GenISA.sub.group.bdpas")
+        assert count > 0, "The bdpas is not used."
 
     torch.testing.assert_close(ref_out, output, atol=1e-3, rtol=1e-3)
