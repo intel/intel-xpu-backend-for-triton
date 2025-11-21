@@ -39,6 +39,42 @@ static int __builtin_ctz(unsigned x) {
 
 namespace {
 
+static Value skipCasts(Value v) {
+  Operation *def = v.getDefiningOp();
+  if (def &&
+      isa<LLVM::TruncOp, LLVM::SExtOp, LLVM::ZExtOp, LLVM::BitcastOp>(def))
+    return def->getOperand(0);
+  return v;
+}
+
+static Value tryFoldOp(Value v) {
+  if (Operation *def = v.getDefiningOp()) {
+    SmallVector<OpFoldResult> results;
+    if (succeeded(def->fold(results)) && results.size() == 1) {
+      if (auto val = dyn_cast_or_null<Value>(results[0]))
+        return val;
+    }
+  }
+  return v;
+}
+
+static std::optional<int64_t> tryConstEval(Value v, int depth = 16) {
+  for (int i = 0; i < depth; ++i) {
+    if (auto res = getConstantIntValue(v))
+      return res;
+
+    Value newV = skipCasts(v);
+    newV = tryFoldOp(newV);
+
+    if (newV == v)
+      break;
+
+    v = newV;
+  }
+
+  return std::nullopt;
+}
+
 Value maybeAnd(RewriterBase &rewriter, Location loc, Value a, Value b) {
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
   if (a && b) {
@@ -1629,22 +1665,18 @@ struct LoadOpToBlockIOConversion
       std::swap(baseWidth, baseHeight);
     }
     // HW requires the pitch to be at least 64 bytes.
-    std::function<Value(Value)> skipTrunc = [&](Value v) {
-      if (dyn_cast_or_null<LLVM::TruncOp>(v.getDefiningOp()))
-        return skipTrunc(v.getDefiningOp()->getOperand(0));
-      return v;
-    };
-    if (Operation *op = skipTrunc(pitch).getDefiningOp()) {
-      std::optional<int64_t> pitchConst =
-          mlir::triton::intel::getFoldedConstantValue(op);
-      if (pitchConst.has_value()) {
-        if ((*pitchConst * elemSizeInBits / 8) < 64)
-          return failure();
-      }
+    if (auto pitchConst = tryConstEval(pitch)) {
+      if ((*pitchConst * elemSizeInBits / 8) < 64)
+        return failure();
     }
 
     baseWidth = b.trunc(i32_ty, baseWidth);
     baseHeight = b.trunc(i32_ty, baseHeight);
+
+    if (auto widthConst = tryConstEval(baseWidth)) {
+      if ((*widthConst * elemSizeInBits / 8) < 64)
+        return failure();
+    }
 
     const unsigned originalElemBits = elemSizeInBits;
     if (isTransposeRequired) {
