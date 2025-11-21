@@ -107,4 +107,39 @@ def TritonIntelRemoveBoundaryChecks
   ];
 }
 
+def TritonIntelStrideVersioning
+    : Pass<"triton-intel-stride-versioning", "mlir::ModuleOp"> {
+  let summary = "Version loops containing block pointers loads if none of the is 1";
+
+  let description = [{
+    This pass versions loops that contain tt.load on a block pointer, if none of the block pointer strides is 1.
+    For example, given:
+
+    %cst = arith.constant ...
+    %ptr = tt.make_tensor_ptr %base, [%s0, %s1], [%cst, %b], [%x, %y] : <tensor<512x64xf16>>
+    scf.for ... {
+      %load = tt.load %ptr : !tt.ptr<tensor<512x64xf16>>
+      ...
+    }
+
+    The transformation creates:
+
+    %ptr = tt.make_tensor_ptr %base, [%s0, %s1], [%a, %b], [%x, %y] : <tensor<512x64xf16>>
+    if (%b == 1)
+      scf.for ... {
+        %load = tt.load %ptr : !tt.ptr<tensor<512x64xf16>>
+        ...
+      }
+    else
+      scf.for ... {
+        %load = tt.load %ptr : !tt.ptr<tensor<512x64xf16>>
+        ...
+      }
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::TritonDialect"
+  ];
+}
+
 #endif // TRITON_DIALECT_TRITON_INTEL_TRANSFORMS_PASSES
