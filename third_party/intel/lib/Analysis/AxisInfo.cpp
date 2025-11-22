@@ -293,18 +293,19 @@ public:
   AxisInfo
   getAxisInfo(ub::PoisonOp op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
-    constexpr int64_t largePowerOf2 = int64_t(1) << 32;
-    // Poison values are never accessed, thus assume optimistic values.
-    if (auto shape = dyn_cast<mlir::ShapedType>(op.getType())) {
-      unsigned rank = shape.getRank();
-      return AxisInfo(
-          /*contiguity=*/AxisInfo::DimVectorT(rank, largePowerOf2),
-          /*divisibility=*/AxisInfo::DimVectorT(rank, largePowerOf2),
-          /*constancy=*/AxisInfo::DimVectorT(shape.getShape()));
+    unsigned rank = 1;
+    constexpr int64_t kMaxDivisor = highestPowOf2Divisor<int64_t>(0);
+    if (auto shape = dyn_cast<RankedTensorType>(op.getType()))
+      rank = shape.getRank();
+    else if (auto ptrTy = dyn_cast<PointerType>(op.getType())) {
+      if (auto tensorType = dyn_cast<RankedTensorType>(ptrTy.getPointeeType()))
+        rank = tensorType.getRank();
     }
 
-    return AxisInfo(/*contiguity=*/{1}, /*divisibility=*/{largePowerOf2},
-                    /*constancy=*/{1});
+    // Poison values are never accessed, thus assume optimistic values.
+    return AxisInfo(AxisInfo::DimVectorT(rank, kMaxDivisor),
+                    AxisInfo::DimVectorT(rank, kMaxDivisor),
+                    AxisInfo::DimVectorT(rank, kMaxDivisor));
   }
 };
 
@@ -1270,7 +1271,6 @@ void AxisInfoAnalysis::visitForOpInductionVar(
 ModuleAxisInfoAnalysis::ModuleAxisInfoAnalysis(ModuleOp moduleOp)
     : triton::ModuleAxisInfoAnalysis(moduleOp) {
   funcMap.clear();
-
   SmallVector<FunctionOpInterface> funcs;
   for (auto root : getRoots()) {
     walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
