@@ -66,22 +66,22 @@ public:
   Dispatch() = delete;
 
 #ifdef WIN32
-  static void init(const char *name, HMODULE *lib) {
+  static void init(const char *name, void **lib) {
     if (*lib == nullptr) {
       // If not found, try to load it from the default path
       auto dir =
           ExternLib::pathEnv == nullptr ? "" : getStrEnv(ExternLib::pathEnv);
       if (!dir.empty()) {
         auto fullPath = dir + "/" + name;
-        *lib = LoadLibrary(fullPath.c_str());
+        *lib = (void *)LoadLibrary(fullPath.c_str());
       } else {
         // Only if the default path is not set, we try to load it from the
         // system.
         // First reuse the existing handle
-        *lib = GetModuleHandle(name);
+        *lib = (void *)GetModuleHandle(name);
         if (*lib == nullptr) {
           // If not found, try to load it from LD_LIBRARY_PATH
-          *lib = LoadLibrary(name);
+          *lib = (void *)LoadLibrary(name);
         }
       }
     }
