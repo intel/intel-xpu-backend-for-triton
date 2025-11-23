@@ -25,7 +25,7 @@ Device getDevice(uint64_t index) {
   if (!handle) {
     long err = GetLastError();
     throw std::runtime_error(std::string("Failed to load library code:") +
-                             std::string(err));
+                             std::to_string(err));
   }
 
   GetLastError();
@@ -35,7 +35,7 @@ Device getDevice(uint64_t index) {
   if (err) {
     FreeLibrary(handle);
     throw std::runtime_error(std::string("Failed to load function code:") +
-                             std::string(err));
+                             std::to_string(err));
   }
 
   uint32_t clockRate = 0;

@@ -26,8 +26,13 @@ hsa_status_t iterateAgents(hsa_status_t (*callback)(hsa_agent_t agent,
   static hsa_iterate_agents_t func = nullptr;
   Dispatch<ExternLibHsa>::init(ExternLibHsa::name, &ExternLibHsa::lib);
   if (func == nullptr)
+#ifdef WIN32
+    func = reinterpret_cast<hsa_iterate_agents_t>(
+        GetProcAddress((HMODULE)ExternLibHsa::lib, "hsa_iterate_agents"));
+#else
     func = reinterpret_cast<hsa_iterate_agents_t>(
         dlsym(ExternLibHsa::lib, "hsa_iterate_agents"));
+#endif
   return (func ? func(callback, data) : HSA_STATUS_ERROR_FATAL);
 }
 
