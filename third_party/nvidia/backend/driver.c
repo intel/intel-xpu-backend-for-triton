@@ -196,6 +196,7 @@ typedef CUresult (*cuTensorMapEncodeTiled_t)(
     if (err) {                                                                 \
       PyErr_SetString(PyExc_RuntimeError,                                      \
                       "Failed to retrieve " #symbolName " from nvcuda.dll");   \
+      FreeLibrary(handle);                                                     \
       return NULL;                                                             \
     }                                                                          \
     return funcHandle;                                                         \

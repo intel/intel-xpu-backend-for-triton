@@ -12,7 +12,13 @@
 
 #include <algorithm>
 #include <array>
+#ifdef WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#else
 #include <dlfcn.h>
+#endif
 
 #include <cstdlib>
 #include <iostream>
@@ -277,6 +283,30 @@ void CallbackCommon(pti_callback_domain domain,
 
 typedef void (*EnumDeviceUUIDsFunc)(void *);
 
+#ifdef WIN32
+int callEnumDeviceUUIDs(const std::string &utils_cache_path) {
+  HMODULE handle = LoadLibrary(xpu::PROTON_UTILS.data());
+  if (!handle) {
+    std::cerr << "Failed to load library: " << GetLastError() << std::endl;
+    return 1;
+  }
+
+  GetLastError();
+  EnumDeviceUUIDsFunc enumDeviceUUIDs =
+      (EnumDeviceUUIDsFunc)GetProcAddress(handle, "enumDeviceUUIDs");
+  long dlsym_error = GetLastError();
+  if (dlsym_error) {
+    std::cerr << "Failed to load function: " << dlsym_error << std::endl;
+    FreeLibrary(handle);
+    return 1;
+  }
+
+  enumDeviceUUIDs(&deviceUUIDs_);
+
+  FreeLibrary(handle);
+  return 0;
+}
+#else
 int callEnumDeviceUUIDs(const std::string &utils_cache_path) {
   void *handle = dlopen(xpu::PROTON_UTILS.data(), RTLD_LAZY);
   if (!handle) {
@@ -299,9 +329,34 @@ int callEnumDeviceUUIDs(const std::string &utils_cache_path) {
   dlclose(handle);
   return 0;
 }
+#endif
 
 typedef void (*WaitOnSyclQueueFunc)(void *);
 
+#ifdef WIN32
+int callWaitOnSyclQueue(void *syclQueue) {
+  HMODULE handle = LoadLibrary(xpu::PROTON_UTILS.data());
+  if (!handle) {
+    std::cerr << "Failed to load library: " << GetLastError() << std::endl;
+    return 1;
+  }
+
+  GetLastError();
+  WaitOnSyclQueueFunc waitOnSyclQueue =
+      (WaitOnSyclQueueFunc)GetProcAddress(handle, "waitOnSyclQueue");
+  long dlsym_error = GetLastError();
+  if (dlsym_error) {
+    std::cerr << "Failed to load function: " << dlsym_error << std::endl;
+    FreeLibrary(handle);
+    return 1;
+  }
+
+  waitOnSyclQueue(syclQueue);
+
+  FreeLibrary(handle);
+  return 0;
+}
+#else
 int callWaitOnSyclQueue(void *syclQueue) {
   void *handle = dlopen(xpu::PROTON_UTILS.data(), RTLD_LAZY);
   if (!handle) {
@@ -324,6 +379,7 @@ int callWaitOnSyclQueue(void *syclQueue) {
   dlclose(handle);
   return 0;
 }
+#endif
 
 void XpuptiProfiler::XpuptiProfilerPimpl::doStart() {
   // should be call to shared lib
