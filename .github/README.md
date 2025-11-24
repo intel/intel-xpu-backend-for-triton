@@ -221,7 +221,7 @@ for k in range(0, tl.cdiv(K, BLOCK_K)):
 
 
 Tensor Descriptors support shapes up to 5 dimensions, but for performance, it is best to use 2 dimensions whenever possible.
-Consider this example based on the unified attention kernel from [vllm](https://github.com/vllm-project/vllm/blob/9a161307f5f096c63ae4134c5055d87a36d224a8/vllm/attention/ops/triton_unified_attention.py#L52). This code loads a block of K values from a cache of shape [NUM_BLOCKS, BLOCK_SIZE, KV_HEADS, HEAD_SIZE]:
+Consider this example based on the unified attention kernel from [vllm](https://github.com/vllm-project/vllm/blob/9a161307f5f096c63ae4134c5055d87a36d224a8/vllm/attention/ops/triton_unified_attention.py#L52). This code loads a block of K values from a cache of shape `[NUM_BLOCKS, BLOCK_SIZE, KV_HEADS, HEAD_SIZE]`:
 
 
 ```
@@ -247,7 +247,7 @@ for j in range(0, num_blocks):
 
 ```
 
-The code above loads 2D block of `K[physical_block_idx, :BLOCK_SIZE, kv_head_idx, :HEAD_SIZE]`.T.
+The code above loads 2D block of `K[physical_block_idx, :BLOCK_SIZE, kv_head_idx, :HEAD_SIZE].T`.
 
 A 3D Tensor Descriptor implementation following the tensor shape might look like this:
 
