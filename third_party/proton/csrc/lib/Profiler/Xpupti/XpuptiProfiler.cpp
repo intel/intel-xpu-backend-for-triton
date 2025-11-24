@@ -138,28 +138,6 @@ uint32_t processActivity(XpuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
 
 } // namespace
 
-#include <cxxabi.h>
-
-static inline std::string Demangle(const char *name) {
-
-  int status = 0;
-  char *demangled = abi::__cxa_demangle(name, nullptr, 0, &status);
-  if (status != 0) {
-    return name;
-  }
-
-  constexpr const char *const prefix_to_skip = "typeinfo name for ";
-  const size_t prefix_to_skip_len = strlen(prefix_to_skip);
-  const size_t shift =
-      (std::strncmp(demangled, prefix_to_skip, prefix_to_skip_len) == 0)
-          ? prefix_to_skip_len
-          : 0;
-
-  std::string result(demangled + shift);
-  free(demangled);
-  return result;
-}
-
 struct XpuptiProfiler::XpuptiProfilerPimpl
     : public GPUProfiler<XpuptiProfiler>::GPUProfilerPimplInterface {
   XpuptiProfilerPimpl(XpuptiProfiler &profiler)
@@ -197,7 +175,11 @@ struct XpuptiProfiler::XpuptiProfilerPimpl
 
 void XpuptiProfiler::XpuptiProfilerPimpl::allocBuffer(uint8_t **buffer,
                                                       size_t *bufferSize) {
+#if defined(_MSC_VER)
+  *buffer = static_cast<uint8_t *>(_aligned_malloc(BufferSize, AlignSize));
+#else
   *buffer = static_cast<uint8_t *>(aligned_alloc(AlignSize, BufferSize));
+#endif
   if (*buffer == nullptr) {
     throw std::runtime_error("aligned_alloc failed");
   }
@@ -230,7 +212,11 @@ void XpuptiProfiler::XpuptiProfilerPimpl::completeBuffer(uint8_t *buffer,
     }
   } while (true);
 
+#if defined(_MSC_VER)
+  _aligned_free(buffer);
+#else
   std::free(buffer);
+#endif
 
   profiler.correlation.complete(maxCorrelationId);
 }

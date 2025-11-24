@@ -18,7 +18,6 @@
 #include <mutex>
 #include <tuple>
 
-#include <cxxabi.h>
 #include <unistd.h>
 
 namespace proton {
