@@ -83,6 +83,17 @@ add_library(proton SHARED ${_proton_obj_sources})
 
 target_link_libraries(proton PRIVATE Python3::Module)
 
+if(WIN32)
+  set_target_properties(proton PROPERTIES SUFFIX ".pyd")
+  set_target_properties(proton PROPERTIES PREFIX "lib")
+  if(DEFINED TRITON_PYD_PATH)
+    string(TOUPPER "${CMAKE_BUILD_TYPE}" UPPER_CMAKE_BUILD_TYPE)
+    set_target_properties(proton PROPERTIES
+      RUNTIME_OUTPUT_DIRECTORY_${UPPER_CMAKE_BUILD_TYPE}
+    "${TRITON_PYD_PATH}")
+  endif(DEFINED TRITON_PYD_PATH)
+endif()
+
 # Apply any macOS linker flags or extra link options
 if(PROTON_PYTHON_LDFLAGS)
   target_link_options(proton PRIVATE ${PROTON_PYTHON_LDFLAGS})
