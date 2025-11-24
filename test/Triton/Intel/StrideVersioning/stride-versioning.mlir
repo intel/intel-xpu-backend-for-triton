@@ -48,17 +48,17 @@ module {
   // CHECK:   [[NEW_TDESC1:%.+]] = tt.make_tensor_ptr %arg0, {{.*}}, [%arg3, %c1_i64], {{.*}} {order = array<i32: 1, 0>} : <tensor<256x32xbf16>>
   // CHECK:   [[ORIG_TDESC1:%.+]] = tt.make_tensor_ptr %arg0, {{.*}}, [%arg3, %arg4], {{.*}} {order = array<i32: 1, 0>} : <tensor<256x32xbf16>>
   // CHECK:   [[NEW_TDESC2:%.+]] = tt.make_tensor_ptr %arg1, {{.*}}, [%arg5, %c1_i64], {{.*}} {order = array<i32: 1, 0>} : <tensor<32x256xbf16>>
-  // CHECK:   [[ORIG_TDESC2:%.+]] = tt.make_tensor_ptr %arg1, {{.*}}, [%arg5, %arg6], {{.*}} {order = array<i32: 1, 0>} : <tensor<32x256xbf16>>  
+  // CHECK:   [[ORIG_TDESC2:%.+]] = tt.make_tensor_ptr %arg1, {{.*}}, [%arg5, %arg6], {{.*}} {order = array<i32: 1, 0>} : <tensor<32x256xbf16>>
   // CHECK:   [[CMP1:%.+]] = arith.cmpi eq, %arg4, [[CST_1_i64]] : i64
   // CHECK:   [[CMP2:%.+]] = arith.cmpi eq, %arg6, [[CST_1_i64]] : i64
   // CHECK:   [[VER_COND:%.+]] = arith.andi [[CMP1]], [[CMP2]] : i1
-  // CHECK:   [[LOOP_VER:%.+]]:2 = scf.if [[VER_COND]] 
-  // CHECK:     [[THEN_LOOP_RES:%.+]]:2 = scf.for {{.*}} 
+  // CHECK:   [[LOOP_VER:%.+]]:2 = scf.if [[VER_COND]]
+  // CHECK:     [[THEN_LOOP_RES:%.+]]:2 = scf.for {{.*}}
   // CHECK:       [[ADV_1:%.+]] = tt.advance [[NEW_TDESC1]]
   // CHECK:       [[ADV_2:%.+]] = tt.advance [[NEW_TDESC2]]
   // CHECK:   } else {
-  // CHECK:     [[ELSE_LOOP_RES:%.+]]:2 = scf.for {{.*}} 
+  // CHECK:     [[ELSE_LOOP_RES:%.+]]:2 = scf.for {{.*}}
   // CHECK:       [[ADV_1:%.+]] = tt.advance [[ORIG_TDESC1]]
   // CHECK:       [[ADV_2:%.+]] = tt.advance [[ORIG_TDESC2]]
-  // CHECK:   }  
+  // CHECK:   }
 }
