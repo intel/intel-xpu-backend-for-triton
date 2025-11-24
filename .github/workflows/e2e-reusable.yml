@@ -73,7 +73,7 @@ jobs:
           EOF
 
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Load pip cache
         id: pip-cache
@@ -178,7 +178,7 @@ jobs:
 
       - name: Clone pytorch benchmark
         if: ${{ inputs.suite == 'torchbench' }}
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           repository: ${{ env.BENCHMARK_REPO }}
           ref: ${{ env.BENCHMARK_COMMIT_ID }}
