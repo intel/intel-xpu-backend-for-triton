@@ -10,7 +10,7 @@
 
 #include <sycl/sycl.hpp>
 
-#if defined(_WIN32)
+#ifdef WIN32
 #define EXPORT_FUNC __declspec(dllexport)
 #else
 #define EXPORT_FUNC __attribute__((visibility("default")))

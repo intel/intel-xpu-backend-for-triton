@@ -6,23 +6,46 @@
 #  define PTI_EXPORT
 #  define PTI_NO_EXPORT
 #else
-#  ifndef PTI_EXPORT
-#    ifdef pti_EXPORTS
-        /* We are building this library */
-#      define PTI_EXPORT __attribute__((visibility("default")))
-#    else
-        /* We are using this library */
-#      define PTI_EXPORT __attribute__((visibility("default")))
-#    endif
-#  endif
 
-#  ifndef PTI_NO_EXPORT
-#    define PTI_NO_EXPORT __attribute__((visibility("hidden")))
-#  endif
-#endif
+#  ifdef WIN32
+     /* Windows (MSVC/MinGW) */
+#    ifndef PTI_EXPORT
+#      ifdef pti_EXPORTS
+         /* We are building this library */
+#        define PTI_EXPORT __declspec(dllexport)
+#      else
+         /* We are using this library */
+#        define PTI_EXPORT __declspec(dllimport)
+#      endif
+#    endif
+
+#    ifndef PTI_NO_EXPORT
+#      define PTI_NO_EXPORT
+#    endif
+
+#  else
+
+     /* Linux / Unix — GCC/Clang visibility */
+#    ifndef PTI_EXPORT
+#      ifdef pti_EXPORTS
+         /* We are building this library */
+#        define PTI_EXPORT __attribute__((visibility("default")))
+#      else
+         /* We are using this library */
+#        define PTI_EXPORT __attribute__((visibility("default")))
+#      endif
+#    endif
+
+#    ifndef PTI_NO_EXPORT
+#      define PTI_NO_EXPORT __attribute__((visibility("hidden")))
+#    endif
+
+#  endif /* WIN32 */
+
+#endif /* PTI_STATIC_DEFINE */
 
 #ifndef PTI_DEPRECATED
-#  define PTI_DEPRECATED 
+#  define PTI_DEPRECATED
 #endif
 
 #ifndef PTI_DEPRECATED_EXPORT
