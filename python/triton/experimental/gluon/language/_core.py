@@ -75,6 +75,7 @@ __all__ = [
     "static_range",
     "tuple",
     "tuple_type",
+    "num_ctas",
 ]
 
 T = TypeVar("T")
@@ -524,6 +525,14 @@ def num_warps(_semantic=None, _generator=None):
     Returns the number of warps that execute the current context, including in warp-specialized regions.
     """
     return _semantic.num_warps(_generator)
+
+
+@builtin
+def num_ctas(_semantic=None):
+    """
+    Returns the number of CTAs in the current kernel
+    """
+    return _semantic.num_ctas()
 
 
 @builtin

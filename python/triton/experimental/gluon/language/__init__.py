@@ -53,6 +53,7 @@ from ._core import (
     full,
     gather,
     num_warps,
+    num_ctas,
     histogram,
     inline_asm_elementwise,
     join,
