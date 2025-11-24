@@ -61,7 +61,7 @@
 #define HSA_AMD_INTERFACE_VERSION_MAJOR 1
 #define HSA_AMD_INTERFACE_VERSION_MINOR 6
 
-#ifdef WIN32
+#if defined(_WIN32)
 #define ALWAYS_INLINE __forceinline
 #else
 #define ALWAYS_INLINE __attribute__((always_inline)) inline

@@ -12,7 +12,7 @@
 
 #include <algorithm>
 #include <array>
-#ifdef WIN32
+#if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
@@ -269,7 +269,7 @@ void CallbackCommon(pti_callback_domain domain,
 
 typedef void (*EnumDeviceUUIDsFunc)(void *);
 
-#ifdef WIN32
+#if defined(_WIN32)
 int callEnumDeviceUUIDs(const std::string &utils_cache_path) {
   HMODULE handle = LoadLibrary(xpu::PROTON_UTILS.data());
   if (!handle) {
@@ -319,7 +319,7 @@ int callEnumDeviceUUIDs(const std::string &utils_cache_path) {
 
 typedef void (*WaitOnSyclQueueFunc)(void *);
 
-#ifdef WIN32
+#if defined(_WIN32)
 int callWaitOnSyclQueue(void *syclQueue) {
   HMODULE handle = LoadLibrary(xpu::PROTON_UTILS.data());
   if (!handle) {

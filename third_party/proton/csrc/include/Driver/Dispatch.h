@@ -1,7 +1,7 @@
 #ifndef PROTON_DRIVER_DISPATCH_H_
 #define PROTON_DRIVER_DISPATCH_H_
 
-#ifdef WIN32
+#if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
@@ -65,7 +65,7 @@ template <typename ExternLib> class Dispatch {
 public:
   Dispatch() = delete;
 
-#ifdef WIN32
+#if defined(_WIN32)
   static void init(const char *name, void **lib) {
     if (*lib == nullptr) {
       // If not found, try to load it from the default path
@@ -128,7 +128,7 @@ public:
   exec(FnT &handler, const char *functionName, Args... args) {
     init(ExternLib::name, &ExternLib::lib);
     if (handler == nullptr) {
-#ifdef WIN32
+#if defined(_WIN32)
       handler = reinterpret_cast<FnT>(
           GetProcAddress((HMODULE)ExternLib::lib, functionName));
 #else
@@ -155,7 +155,7 @@ public:
       }
     }
     if (ExternLib::lib != nullptr) {
-#ifdef WIN32
+#if defined(_WIN32)
       void *sym =
           GetProcAddress((HMODULE)ExternLib::lib,
                          ExternLib::symbolName); // pick any known symbol

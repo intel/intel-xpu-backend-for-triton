@@ -22,7 +22,7 @@ void enable() {
   const std::string cuptiLibPath =
       Dispatch<cupti::ExternLibCupti>::getLibPath();
   if (!cuptiLibPath.empty()) {
-#ifdef WIN32
+#if defined(_WIN32)
     _putenv_s("NVTX_INJECTION64_PATH", cuptiLibPath.c_str());
 #else
     setenv("NVTX_INJECTION64_PATH", cuptiLibPath.c_str(), 1);
@@ -31,7 +31,7 @@ void enable() {
 }
 
 void disable() {
-#ifdef WIN32
+#if defined(_WIN32)
   _putenv_s("NVTX_INJECTION64_PATH", "");
 #else
   unsetenv("NVTX_INJECTION64_PATH");

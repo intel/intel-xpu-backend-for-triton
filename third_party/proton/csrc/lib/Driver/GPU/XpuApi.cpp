@@ -1,6 +1,6 @@
 #include "Driver/GPU/XpuApi.h"
 
-#ifdef WIN32
+#if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
@@ -19,7 +19,7 @@ std::string PROTON_UTILS;
 typedef void (*GetDevicePropertiesFunc)(uint64_t, uint32_t *, uint32_t *,
                                         uint32_t *, uint32_t *, char[256]);
 
-#ifdef WIN32
+#if defined(_WIN32)
 Device getDevice(uint64_t index) {
   HMODULE handle = LoadLibrary(PROTON_UTILS.data());
   if (!handle) {

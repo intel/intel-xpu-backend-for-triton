@@ -510,7 +510,7 @@ def make_launcher(constants, signature):
 #include <sycl/sycl.hpp>
 { "#include <ATen/record_function.h>" if COMPILATION_HELPER.inject_pytorch_dep else "" }
 
-#ifdef WIN32
+#if defined(_WIN32)
 #define EXPORT_FUNC __declspec(dllexport)
 #else
 #define EXPORT_FUNC __attribute__((visibility("default")))

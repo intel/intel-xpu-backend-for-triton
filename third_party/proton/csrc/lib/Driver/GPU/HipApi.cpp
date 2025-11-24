@@ -88,7 +88,7 @@ const char *getKernelNameRef(const hipFunction_t f) {
   static hipKernelNameRef_t func = nullptr;
   Dispatch<ExternLibHip>::init(ExternLibHip::name, &ExternLibHip::lib);
   if (func == nullptr)
-#ifdef WIN32
+#if defined(_WIN32)
     func = reinterpret_cast<hipKernelNameRef_t>(
         GetProcAddress((HMODULE)ExternLibHip::lib, "hipKernelNameRef"));
 #else
@@ -104,7 +104,7 @@ const char *getKernelNameRefByPtr(const void *hostFunction,
   static hipKernelNameRefByPtr_t func = nullptr;
   Dispatch<ExternLibHip>::init(ExternLibHip::name, &ExternLibHip::lib);
   if (func == nullptr)
-#ifdef WIN32
+#if defined(_WIN32)
     func = reinterpret_cast<hipKernelNameRefByPtr_t>(
         GetProcAddress((HMODULE)ExternLibHip::lib, "hipKernelNameRefByPtr"));
 #else
