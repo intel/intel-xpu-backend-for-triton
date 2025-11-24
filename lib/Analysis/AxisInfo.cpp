@@ -543,7 +543,7 @@ private:
     return {};
   }
 };
-
+//test-2
 class SplatOpAxisInfoVisitor final
     : public AxisInfoVisitorImpl<triton::SplatOp> {
 public:
