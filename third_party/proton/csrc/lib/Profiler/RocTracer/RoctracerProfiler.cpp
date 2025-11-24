@@ -18,8 +18,6 @@
 #include <mutex>
 #include <tuple>
 
-#include <unistd.h>
-
 namespace proton {
 
 template <>
