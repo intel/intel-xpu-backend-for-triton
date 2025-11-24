@@ -2,6 +2,7 @@
 #include "intel/include/Utils/Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Location.h"
 #include "mlir/IR/OpDefinition.h"
@@ -52,16 +53,17 @@ public:
             auto constantOp = v.getDefiningOp<arith::ConstantOp>();
             if (!constantOp)
               return false;
-            if (auto denseAttr =
-                    dyn_cast<DenseIntElementsAttr>(constantOp.getValueAttr()))
-              return denseAttr.isSplat() &&
-                     denseAttr.getSplatValue<APInt>().isOne();
+
+            if (auto intAttr = dyn_cast<IntegerAttr>(constantOp.getValueAttr()))
+              return intAttr.getInt() == 1;
             return false;
           };
 
           // If no stride has value equal to one we have found a candidate
           // operation.
-          OperandRange strides = tt::getMakeTensorPtrOp(ptr).getStrides();
+          auto makeTensorPtrOp = tt::getMakeTensorPtrOp(ptr);
+          OperandRange strides = makeTensorPtrOp.getStrides();
+
           bool isCandidate = true;
           for (Value stride : strides) {
             Value finalVal = tt::intel::getFinalValue(stride);
