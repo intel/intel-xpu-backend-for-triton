@@ -16,6 +16,7 @@ namespace mlir::triton::gpu::intel {
 class LibCallEmitter {
 public:
   LibCallEmitter() = default;
+  LibCallEmitter(std::string suffix) : suffix(suffix) {};
 
   void printf(RewriterBase &rewriter, Value formatStrStart,
               int formatStrByteCount, ValueRange args,
@@ -38,6 +39,7 @@ private:
 
   mutable llvm::DenseMap<std::pair<unsigned, StringAttr>, LLVM::GlobalOp>
       globals;
+  const std::string suffix;
 };
 
 } // namespace mlir::triton::gpu::intel
