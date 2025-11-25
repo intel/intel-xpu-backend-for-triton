@@ -1065,7 +1065,6 @@ def get_unified_attention_benchmark(
     supported_providers = {
         'triton': 'triton',
         'triton-td': 'triton-td',
-        'pytorch': 'pytorch',
     }
     if os.getenv("TRITON_INTERPRET", "0") == "1":
         # Skip triton providers if interpreter is used
