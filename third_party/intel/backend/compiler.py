@@ -207,7 +207,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
-        intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
+        #intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
         passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
         passes.common.add_cse(pm)
         passes.common.add_licm(pm)

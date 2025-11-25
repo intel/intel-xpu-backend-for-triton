@@ -25,11 +25,11 @@ def matmul_kernel(
         # Pointers to matrices
         a_ptr, b_ptr, c_ptr,
         # Matrix dimensions
-        M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,
+        M, N, K,
         # Stride variables
-        stride_am: tl.constexpr, stride_ak: tl.constexpr,  #
-        stride_bk: tl.constexpr, stride_bn: tl.constexpr,  #
-        stride_cm: tl.constexpr, stride_cn: tl.constexpr,
+        stride_am, stride_ak,  #
+        stride_bk, stride_bn,  #
+        stride_cm, stride_cn,
         # Meta-parameters
         BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr):
     pid = tl.program_id(axis=0)
@@ -76,11 +76,11 @@ def matmul_kernel_batched(
         # Pointers to matrices
         a_ptr, b_ptr, c_ptr,
         # Matrix dimensions
-        B: tl.constexpr, M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,
+        B, M, N, K,
         # Stride variables
-        stride_az: tl.constexpr, stride_am: tl.constexpr, stride_ak: tl.constexpr,  #
-        stride_bz: tl.constexpr, stride_bk: tl.constexpr, stride_bn: tl.constexpr,  #
-        stride_cz: tl.constexpr, stride_cm: tl.constexpr, stride_cn: tl.constexpr,
+        stride_az, stride_am, stride_ak,  #
+        stride_bz, stride_bk, stride_bn,  #
+        stride_cz, stride_cm, stride_cn,
         # Meta-parameters
         BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr):
     bid = tl.program_id(axis=1)
