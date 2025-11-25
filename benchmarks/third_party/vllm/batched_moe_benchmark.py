@@ -31,8 +31,8 @@ from tests.kernels.quant_utils import native_batched_masked_quant_matmul
 
 @triton.jit
 def moe_mmk(
-    a_ptrs,
-    b_ptrs,
+    a_desc,
+    b_desc,
     K,
     expert_id,
     a_scale_ptr,
@@ -41,9 +41,6 @@ def moe_mmk(
     # moving by 1 element in a particular dimension. E.g. `stride_am` is
     # how much to increase `a_ptr` by to get the element one row down
     # (A has M rows).
-    stride_ak: tl.int64,
-    stride_bk: tl.int64,
-    stride_ase: tl.int64,
     stride_asm: tl.int64,
     stride_ask: tl.int64,
     stride_bse: tl.int64,
@@ -68,7 +65,6 @@ def moe_mmk(
     use_w8a16: tl.constexpr,
     per_act_token_quant: tl.constexpr,
 ):
-    offs_k = tl.arange(0, BLOCK_K)
 
     if use_w8a16:
         b_scale_ptrs = b_scale_ptr + expert_id * stride_bse + offs_n[None, :] * stride_bsn
@@ -103,12 +99,8 @@ def moe_mmk(
     accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
     for k in range(0, tl.cdiv(K, BLOCK_K)):
         # Load the next block of A and B using tensor descriptors
-        a = tl.load(
-            a_ptrs,
-            mask=mask_m[:, None] & (offs_k[None, :] < K - k * BLOCK_K),
-            other=0.0,
-        )
-        b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_K, other=0.0)
+        a = a_desc.load([pid_m * BLOCK_M, k * BLOCK_K])
+        b = b_desc.load([k * BLOCK_K, pid_n * BLOCK_N])
 
         # We accumulate along the K dimension.
         if use_w8a16:
@@ -127,9 +119,6 @@ def moe_mmk(
         else:
             accumulator += tl.dot(a, b)
 
-        a_ptrs += BLOCK_K * stride_ak
-        b_ptrs += BLOCK_K * stride_bk
-
     if use_w8a16:
         accumulator = (accumulator * b_scale).to(compute_type)
     elif use_w8a8:
@@ -145,9 +134,9 @@ def moe_mmk(
 
 @triton.jit
 def expert_triton_kernel(
-    a_ptr,
-    b_ptr,
-    c_ptr,
+    a_desc,  #[max_tokens, K]
+    b_desc,  #[K, N]
+    c_desc,  #[max_tokens, N]
     expert_id,
     compute_type: tl.constexpr,
     # Dimensions
@@ -158,12 +147,8 @@ def expert_triton_kernel(
     a_scale_ptr,
     b_scale_ptr,
     # strides
-    stride_am: tl.int64,
     stride_ak: tl.int64,
     stride_bk: tl.int64,
-    stride_bn: tl.int64,
-    stride_cm: tl.int64,
-    stride_cn: tl.int64,
     stride_ase: tl.int64,
     stride_asm: tl.int64,
     stride_ask: tl.int64,
@@ -189,19 +174,15 @@ def expert_triton_kernel(
 
     offs_m = tl.arange(0, BLOCK_M)
     offs_n = tl.arange(0, BLOCK_N) % N
-    offs_k = tl.arange(0, BLOCK_K)
+    # offs_k = tl.arange(0, BLOCK_K)
     mask_m = offs_m < M
 
-    a_ptrs = a_ptr + offs_m[:, None] * stride_am + offs_k[None, :] * stride_ak
-    b_ptrs = b_ptr + offs_k[:, None] * stride_bk + offs_n[None, :] * stride_bn
-
     accumulator = moe_mmk(
-        a_ptrs, b_ptrs, K, expert_id, a_scale_ptr, b_scale_ptr,
+        a_desc, b_desc, K, expert_id, a_scale_ptr, b_scale_ptr,
         # The stride variables represent how much to increase the ptr by when
         # moving by 1 element in a particular dimension. E.g. `stride_am` is
         # how much to increase `a_ptr` by to get the element one row down
         # (A has M rows).
-        stride_ak, stride_bk, stride_ase,
         stride_asm, stride_ask, stride_bse, stride_bsk, stride_bsn,
         # Offsets and masks
         offs_m, offs_n, offs_bn, mask_m,
@@ -211,10 +192,11 @@ def expert_triton_kernel(
         BLOCK_M, BLOCK_N, BLOCK_K, compute_type, use_fp8_w8a8, use_int8_w8a16, per_act_token_quant)
 
     # store in C
-    offs_cn = tl.arange(0, BLOCK_N)
-    c_ptrs = c_ptr + offs_m[:, None] * stride_cm + offs_cn[None, :] * stride_cn
-    c_mask = mask_m[:, None] & (offs_cn[None, :] < N)
-    tl.store(c_ptrs, accumulator, mask=c_mask)
+    # offs_cn = tl.arange(0, BLOCK_N)
+    # c_ptrs = c_ptr + offs_m[:, None] * stride_cm + offs_cn[None, :] * stride_cn
+    # c_mask = mask_m[:, None] & (offs_cn[None, :] < N)
+    c_desc.store([pid_m * BLOCK_M, pid_n * BLOCK_N], accumulator)
+    # tl.store(c_ptrs, accumulator, mask=c_mask)
 
 
 def get_matmul_batched_autotune_configs() -> List[triton.Config]:
@@ -310,10 +292,17 @@ def batched_triton_kernel(
     cta_m_size = min(BLOCK_M, e_num_tokens - cta_m_start)
     cta_n_size = min(BLOCK_N, N - cta_n_start)
 
-    a_ptr = a_ptr + expert_id * stride_ae + cta_m_start * stride_am
-    b_ptr = b_ptr + expert_id * stride_be + cta_n_start * stride_bn
-    c_ptr = (c_ptr + expert_id * stride_ce + cta_m_start * stride_cm +
-             cta_n_start * stride_cn)
+    a_desc = tl.make_tensor_descriptor(base=a_ptr + expert_id * stride_ae, shape=(e_num_tokens, K),
+                                       strides=(stride_am, stride_ak), block_shape=(BLOCK_M, BLOCK_K))
+    b_desc = tl.make_tensor_descriptor(base=b_ptr + expert_id * stride_be, shape=(K, N), strides=(stride_bk, stride_bn),
+                                       block_shape=(BLOCK_K, BLOCK_N))
+    c_desc = tl.make_tensor_descriptor(base=c_ptr + expert_id * stride_ce, shape=(e_num_tokens, N),
+                                       strides=(stride_cm, stride_cn), block_shape=(BLOCK_M, BLOCK_N))
+
+    # a_ptr = a_ptr + expert_id * stride_ae + cta_m_start * stride_am
+    # b_ptr = b_ptr + expert_id * stride_be + cta_n_start * stride_bn
+    # c_ptr = (c_ptr + expert_id * stride_ce + cta_m_start * stride_cm +
+    #          cta_n_start * stride_cn)
 
     offs_bn = (pid_n * BLOCK_N + tl.arange(0, BLOCK_N).to(tl.int64)) % N
 
@@ -325,12 +314,12 @@ def batched_triton_kernel(
         if group_k > 0 and group_n > 0 or per_act_token_quant:
             a_scale_ptr = a_scale_ptr + cta_m_start * stride_asm
 
-    expert_triton_kernel(a_ptr, b_ptr, c_ptr, expert_id, compute_type, cta_m_size,  # M
+    expert_triton_kernel(a_desc, b_desc, c_desc, expert_id, compute_type, cta_m_size,  # M
                          cta_n_size,  # N
                          K,  # K
                          a_scale_ptr, b_scale_ptr,
                          # Strides
-                         stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn, stride_ase, stride_asm, stride_ask, stride_bse, stride_bsk, stride_bsn,
+                         stride_ak, stride_bk, stride_ase, stride_asm, stride_ask, stride_bse, stride_bsk, stride_bsn,
                          # offsets
                          offs_bn,
                          # Blockwise quantization data
@@ -513,8 +502,13 @@ def get_batched_mm_benchmark(
     Returns a Mark object containing a Benchmark object for batched matrix multiplication.
     """
     supported_providers = {
+        'triton': 'triton',
         'triton-td': 'triton-td',
+        'pytorch': 'pytorch',
     }
+    if fp8:
+        # pytorch is very slow with fp8 case, for (8, 64, 1024, 2048) case it has ~0.15 TFlops vs 1.5 for triton
+        del supported_providers['pytorch']
 
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
     configs = MM_CONFIGS_FP8 if fp8 else MM_CONFIGS_BF16

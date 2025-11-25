@@ -81,15 +81,15 @@ def scaled_mm_kernel_td(
     # eventually occur.
 
     # Offsets and masks.
-    offsets_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M).to(tl.int64)
-    masks_am = offsets_am < M
+    # offsets_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M).to(tl.int64)
+    # masks_am = offsets_am < M
 
     offsets_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N).to(tl.int64)
-    masks_bn = offsets_bn < N
+    # masks_bn = offsets_bn < N
 
-    offsets_k = tl.arange(0, BLOCK_SIZE_K).to(tl.int64)
-    offsets_a = stride_am * offsets_am[:, None] + stride_ak * offsets_k[None, :]
-    offsets_b = stride_bk * offsets_k[:, None] + stride_bn * offsets_bn[None, :]
+    # offsets_k = tl.arange(0, BLOCK_SIZE_K).to(tl.int64)
+    # offsets_a = stride_am * offsets_am[:, None] + stride_ak * offsets_k[None, :]
+    # offsets_b = stride_bk * offsets_k[:, None] + stride_bn * offsets_bn[None, :]
 
     # NOTE: BLOCK_SIZE_SCALE_A could be 1 or BLOCK_SIZE_M, so need to create
     # appropriate offsets and masks for each case. Same goes for
@@ -100,26 +100,37 @@ def scaled_mm_kernel_td(
     offsets_scale_bn = tl.arange(0, BLOCK_SIZE_SCALE_B) + (BLOCK_SIZE_SCALE_B > 1) * pid_n * BLOCK_SIZE_N
     masks_scale_bn = offsets_scale_bn < N
 
-    a_ptrs = a_ptr + offsets_a
-    b_ptrs = b_ptr + offsets_b
+    a_desc = tl.make_tensor_descriptor(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
+                                       block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K))
+    b_desc = tl.make_tensor_descriptor(base=b_ptr, shape=(K, N), strides=(stride_bk, stride_bn),
+                                       block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N))
+
+    # a_ptrs = a_ptr + offsets_a
+    # b_ptrs = b_ptr + offsets_b
 
     scale_a_ptrs = scale_a_ptr + offsets_scale_am
     scale_b_ptrs = scale_b_ptr + offsets_scale_bn
 
+    off_k = 0
     for _ in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
-        masks_k = offsets_k < K
-        masks_a = masks_am[:, None] & masks_k[None, :]
-        a = tl.load(a_ptrs, mask=masks_a)
+        # masks_k = offsets_k < K
+        # masks_a = masks_am[:, None] & masks_k[None, :]
+        # a = tl.load(a_ptrs, mask=masks_a)
 
-        masks_b = masks_k[:, None] & masks_bn[None, :]
-        b = tl.load(b_ptrs, mask=masks_b)
+        # masks_b = masks_k[:, None] & masks_bn[None, :]
+        # b = tl.load(b_ptrs, mask=masks_b)
+
+        a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
+        b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
+        # accumulator += tl.dot(a, b)
 
         # Accumulate results.
         accumulator = tl.dot(a, b, accumulator, out_dtype=accumulator_dtype)
+        off_k += BLOCK_SIZE_K
 
-        offsets_k += BLOCK_SIZE_K
-        a_ptrs += BLOCK_SIZE_K * stride_ak
-        b_ptrs += BLOCK_SIZE_K * stride_bk
+        # offsets_k += BLOCK_SIZE_K
+        # a_ptrs += BLOCK_SIZE_K * stride_ak
+        # b_ptrs += BLOCK_SIZE_K * stride_bk
 
     # Apply scale at end.
     masks_scale_a = masks_scale_am[:, None] & (tl.arange(0, 1) < 1)[:, None]
@@ -151,10 +162,13 @@ def scaled_mm_kernel_td(
     offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N).to(tl.int64)
     offs_cm = offs_cm.to(tl.int64)
     offs_cn = offs_cn.to(tl.int64)
-    c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
-    c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
+    # c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
+    # c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
 
-    tl.store(c_ptrs, c, mask=c_mask)
+    # tl.store(c_ptrs, c, mask=c_mask)
+    c_desc = tl.make_tensor_descriptor(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
+                                       block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N))
+    c_desc.store([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], c)
 
 
 # input  - [M, K]
