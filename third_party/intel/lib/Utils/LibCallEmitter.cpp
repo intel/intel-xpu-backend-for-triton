@@ -124,7 +124,8 @@ LLVM::GlobalOp LibCallEmitter::getGlobalString(Location loc,
 
   LLVM::GlobalOp global =
       moduleOp.lookupSymbol(name)
-          ? createGlobal(Twine{name}.concat(Twine{globals.size()}).str())
+          ? createGlobal(
+                Twine{name + suffix}.concat(Twine{globals.size()}).str())
           : createGlobal(name);
 
   globals.try_emplace(cacheKey, global);
