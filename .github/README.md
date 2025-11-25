@@ -11,6 +11,7 @@ Intel® XPU Backend for Triton\* is a out of tree backend module for [Triton](ht
 * Operating systems:
   * [Ubuntu 22.04](http://releases.ubuntu.com/22.04)
   * [Ubuntu 24.04](http://releases.ubuntu.com/24.04)
+  * [Ubuntu 25.04](http://releases.ubuntu.com/25.04)
 * GPU Cards:
   * [Intel® Data Center GPU Max Series](https://www.intel.com/content/www/us/en/products/details/discrete-gpus/data-center-gpu/max-series.html)
   * [Intel® Data Center Flex Series](https://www.intel.com/content/www/us/en/products/details/discrete-gpus/data-center-gpu/flex-series.html)
