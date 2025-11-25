@@ -17,7 +17,7 @@ Intel® XPU Backend for Triton\* is a out of tree backend module for [Triton](ht
   * [Intel® Arc A770](https://www.intel.com/content/www/us/en/products/sku/229151/intel-arc-a770-graphics-16gb/specifications.html)
   * [Intel® Arc B580](https://www.intel.com/content/www/us/en/products/sku/241598/intel-arc-b580-graphics/specifications.html)
 * GPU Drivers:
-  * Latest [Long Term Support (LTS) Release](https://dgpu-docs.intel.com/driver/installation.html)
+  * Latest [Long Term Support (LTS) Release](https://dgpu-docs.intel.com/driver/installation-lts2.html)
   * Latest [The Kobuk team Intel® Graphics PPA](https://launchpad.net/~kobuk-team/+archive/ubuntu/intel-graphics)
 * Toolchain:
   * [Intel® Deep Learning Essentials 2025.3.1](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html?packages=dl-essentials&dl-lin=offline&dl-essentials-os=linux)
@@ -36,7 +36,7 @@ You can check existing installation by running one of the [tutorials](/python/tu
 
 ## Prerequisites
 
-1. Latest [Rolling Release](https://dgpu-docs.intel.com/driver/installation-rolling.html) or [Long Term Support Release](https://dgpu-docs.intel.com/driver/installation.html) of GPU driver
+1. Latest [Rolling Release](https://dgpu-docs.intel.com/driver/installation-rolling.html) or [Long Term Support Release](https://dgpu-docs.intel.com/driver/installation-lts2.html) of GPU driver
 2. [Intel® Deep Learning Essentials 2025.3.1](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html?packages=dl-essentials&dl-lin=offline&dl-essentials-os=linux)
 
 ## Install PyTorch and Triton from nightly wheels
@@ -62,7 +62,7 @@ source /opt/intel/oneapi/setvars.sh
 
 ## Prerequisites
 
-1. Latest [Rolling Release](https://dgpu-docs.intel.com/driver/installation-rolling.html) or [Long Term Support Release](https://dgpu-docs.intel.com/driver/installation.html) of GPU driver
+1. Latest [Rolling Release](https://dgpu-docs.intel.com/driver/installation-rolling.html) or [Long Term Support Release](https://dgpu-docs.intel.com/driver/installation-lts2.html) of GPU driver
 2. Latest release of [Intel® Deep Learning Essentials](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html?packages=dl-essentials&dl-lin=offline&dl-essentials-os=linux)
 
 ## Compile PyTorch and Triton from source
