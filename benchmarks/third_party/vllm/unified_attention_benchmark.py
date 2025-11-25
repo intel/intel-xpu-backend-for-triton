@@ -169,23 +169,21 @@ def kernel_unified_attention_2d_td(
     #     mask=dim_mask[None, :] & query_mask_0[:, None] & query_mask_1[:, None],
     #     other=0.0,
     # )
-    q_base = (query_ptr + (cur_batch_in_all_start_index + q_block_local_idx * BLOCK_Q) * query_stride_0 +
-              (kv_head_idx * num_queries_per_kv) * query_stride_1)
-    # query_to
-    q_desc = tl.make_tensor_descriptor(base=q_base, shape=(q_block_local_len, num_queries_per_kv, HEAD_SIZE),
-                                       strides=(query_stride_0, query_stride_1, 1),
-                                       block_shape=(BLOCK_Q, num_queries_per_kv, HEAD_SIZE_PADDED))
-    Q_td = q_desc.load([0, 0, 0])
-    Q = Q_td.reshape(BLOCK_M, HEAD_SIZE_PADDED)
     # q_base = (query_ptr + (cur_batch_in_all_start_index + q_block_local_idx * BLOCK_Q) * query_stride_0 +
     #           (kv_head_idx * num_queries_per_kv) * query_stride_1)
-    # q_desc = tl.make_tensor_descriptor(
-    #     base=q_base,
-    #     shape=(q_block_local_len, num_queries_per_kv * HEAD_SIZE),
-    #     strides=(query_stride_0, 1),
-    #     block_shape=(BLOCK_Q, num_queries_per_kv * HEAD_SIZE)
-    # )
-    # Q_raw = q_desc.load([0, 0])  # Shape: (BLOCK_Q, num_queries_per_kv * HEAD_SIZE_PADDED)
+    # # query_to
+    # q_desc = tl.make_tensor_descriptor(base=q_base, shape=(q_block_local_len, num_queries_per_kv, HEAD_SIZE),
+    #                                    strides=(query_stride_0, query_stride_1, 1),
+    #                                    block_shape=(BLOCK_Q, num_queries_per_kv, HEAD_SIZE_PADDED))
+    # Q_td = q_desc.load([0, 0, 0])
+    # Q = Q_td.reshape(BLOCK_M, HEAD_SIZE_PADDED)
+    q_base = (query_ptr + (cur_batch_in_all_start_index + q_block_local_idx * BLOCK_Q) * query_stride_0 +
+              (kv_head_idx * num_queries_per_kv) * query_stride_1)
+    q_desc = tl.make_tensor_descriptor(base=q_base, shape=(q_block_local_len, num_queries_per_kv * HEAD_SIZE),
+                                       strides=(query_stride_0, 1),
+                                       block_shape=(BLOCK_Q, num_queries_per_kv * HEAD_SIZE))
+    Q_raw = q_desc.load([0, 0])  # Shape: (BLOCK_Q, num_queries_per_kv * HEAD_SIZE_PADDED)
+    Q = Q_raw.reshape(BLOCK_M, HEAD_SIZE_PADDED)
 
     block_table_offset = seq_idx * block_table_stride
 
@@ -446,13 +444,21 @@ def kernel_unified_attention_3d_td(segm_output_ptr,
     query_mask_1 = tl.where(query_offset_1 < num_query_heads, 1, 0).to(tl.int1)
 
     # Load Q using tensor descriptor (same as 2D case)
+    # q_base = (query_ptr + (cur_batch_in_all_start_index + q_block_local_idx * BLOCK_Q) * query_stride_0 +
+    #           (kv_head_idx * num_queries_per_kv) * query_stride_1)
+    # q_desc = tl.make_tensor_descriptor(base=q_base, shape=(q_block_local_len, num_queries_per_kv, HEAD_SIZE),
+    #                                    strides=(query_stride_0, query_stride_1, 1),
+    #                                    block_shape=(BLOCK_Q, num_queries_per_kv, HEAD_SIZE_PADDED))
+    # Q_td = q_desc.load([0, 0, 0])
+    # Q = Q_td.reshape(BLOCK_M, HEAD_SIZE_PADDED)
+
     q_base = (query_ptr + (cur_batch_in_all_start_index + q_block_local_idx * BLOCK_Q) * query_stride_0 +
               (kv_head_idx * num_queries_per_kv) * query_stride_1)
-    q_desc = tl.make_tensor_descriptor(base=q_base, shape=(q_block_local_len, num_queries_per_kv, HEAD_SIZE),
-                                       strides=(query_stride_0, query_stride_1, 1),
-                                       block_shape=(BLOCK_Q, num_queries_per_kv, HEAD_SIZE_PADDED))
-    Q_td = q_desc.load([0, 0, 0])
-    Q = Q_td.reshape(BLOCK_M, HEAD_SIZE_PADDED)
+    q_desc = tl.make_tensor_descriptor(base=q_base, shape=(q_block_local_len, num_queries_per_kv * HEAD_SIZE),
+                                       strides=(query_stride_0, 1),
+                                       block_shape=(BLOCK_Q, num_queries_per_kv * HEAD_SIZE))
+    Q_raw = q_desc.load([0, 0])  # Shape: (BLOCK_Q, num_queries_per_kv * HEAD_SIZE_PADDED)
+    Q = Q_raw.reshape(BLOCK_M, HEAD_SIZE_PADDED)
 
     block_table_offset = seq_idx * block_table_stride
 
