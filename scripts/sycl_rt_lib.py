@@ -13,7 +13,7 @@ def get_sycl_rt_lib_path() -> pathlib.Path:
     """
     files = importlib.metadata.files('intel-sycl-rt') or []
     for f in files:
-        if f.name == 'libsycl.so':
+        if 'libsycl.so' in f.name:
             return pathlib.Path(f.locate()).parent.resolve()
     raise AssertionError('libsycl.so not found')
 

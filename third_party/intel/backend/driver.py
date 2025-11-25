@@ -69,9 +69,9 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str]]:
     for f in importlib.metadata.files("intel-sycl-rt"):
         # sycl/sycl.hpp and sycl/CL/sycl.hpp results in both folders
         # being add: include and include/sycl.
-        if f.name == "sycl.hpp":
+        if "sycl.hpp" in f.name:
             include_dir += [str(f.locate().parent.parent.resolve())]
-        if f.name in ["libsycl.so", "sycl8.dll", "sycl8.lib"]:
+        if any(map(lambda el: el in f.name, ("libsycl.so", "sycl8.dll", "sycl8.lib"))):
             sycl_dir = str(f.locate().parent.resolve())
             # should we handle `_` somehow?
             if os.name == "nt":
