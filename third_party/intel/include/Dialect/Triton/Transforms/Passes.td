@@ -109,7 +109,7 @@ def TritonIntelRemoveBoundaryChecks
 
 def TritonIntelStrideVersioning
     : Pass<"triton-intel-stride-versioning", "mlir::ModuleOp"> {
-  let summary = "Version loops containing block pointers loads if none of the is 1";
+  let summary = "Version loops containing block pointers loads if none of them is 1";
 
   let description = [{
     This pass versions loops that contain tt.load on a block pointer, if none of the block pointer strides is 1.
@@ -125,9 +125,10 @@ def TritonIntelStrideVersioning
     The transformation creates:
 
     %ptr = tt.make_tensor_ptr %base, [%s0, %s1], [%a, %b], [%x, %y] : <tensor<512x64xf16>>
+    %ptr' = tt.make_tensor_ptr %base, [%s0, %s1], [%a, 1], [%x, %y] : <tensor<512x64xf16>>
     if (%b == 1)
       scf.for ... {
-        %load = tt.load %ptr : !tt.ptr<tensor<512x64xf16>>
+        %load = tt.load %ptr' : !tt.ptr<tensor<512x64xf16>>
         ...
       }
     else

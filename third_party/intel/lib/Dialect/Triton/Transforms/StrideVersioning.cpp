@@ -49,7 +49,7 @@ public:
           if (tensorType.getRank() > 2)
             return false;
 
-          auto isOneConst = [](Value v) {
+          auto isOne = [](Value v) {
             auto constantOp = v.getDefiningOp<arith::ConstantOp>();
             if (!constantOp)
               return false;
@@ -62,20 +62,12 @@ public:
           // If no stride has value equal to one we have found a candidate
           // operation.
           auto makeTensorPtrOp = tt::getMakeTensorPtrOp(ptr);
-          OperandRange strides = makeTensorPtrOp.getStrides();
-
-          bool isCandidate = true;
-          for (Value stride : strides) {
-            Value finalVal = tt::intel::getFinalValue(stride);
-            assert(finalVal && "Expecting a valid mask");
-            if (!finalVal.getDefiningOp())
-              continue;
-            if (isOneConst(finalVal)) {
-              isCandidate = false;
-              break;
-            }
-          }
-
+          bool isCandidate =
+              llvm::none_of(makeTensorPtrOp.getStrides(), [&](Value stride) {
+                Value finalVal = tt::intel::getFinalValue(stride);
+                assert(finalVal && "Expecting a valid value");
+                return finalVal.getDefiningOp() && isOne(finalVal);
+              });
           return isCandidate;
         })
         .Default([](auto) { return false; });
@@ -197,7 +189,6 @@ public:
   void runOnOperation() final {
     ModuleOp moduleOp = getOperation();
 
-    // Version loops containing masked operation in canonical form.
     moduleOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
       if (auto forOp = dyn_cast<scf::ForOp>(op)) {
         // Nested loop aren't currently handled.
@@ -228,10 +219,13 @@ public:
                   auto makeTensorPtrOp = tt::getMakeTensorPtrOp(ptr);
                   makeTensorPtrOps.push_back(makeTensorPtrOp);
                   OperandRange strides = makeTensorPtrOp.getStrides();
+                  ArrayRef<int> order = makeTensorPtrOp.getOrder();
 
-                  for (Value stride : strides) {
+                  for (size_t idx = 0; idx < order.size(); ++idx) {
+                    unsigned strideIdx = order[idx];
+                    Value stride = strides[strideIdx];
                     Value finalVal = tt::intel::getFinalValue(stride);
-                    assert(finalVal && "Expecting a valid mask");
+                    assert(finalVal && "Expecting a valid value");
 
                     Operation *defOp = finalVal.getDefiningOp();
                     if (defOp)
@@ -239,15 +233,21 @@ public:
 
                     auto blockArg = cast<BlockArgument>(finalVal);
                     Operation *parentOp = blockArg.getOwner()->getParentOp();
-                    // TODO: handle block args for things that aren't a
-                    // function.
-                    auto funcOp = cast<tt::FuncOp>(parentOp);
+                    auto funcOp = dyn_cast<tt::FuncOp>(parentOp);
+                    if (!funcOp)
+                      continue;
+
+                    // arguments that have a divisibility attribute (e.g. by 16)
+                    // cannot have value equal to one (the divisibility
+                    // attribute should not be one).
                     auto divisibilityAttr =
                         funcOp.getArgAttrOfType<IntegerAttr>(
                             blockArg.getArgNumber(), "tt.divisibility");
                     if (divisibilityAttr) {
-                      assert(divisibilityAttr.getValue().isStrictlyPositive() &&
-                             "Unexpected divisibility value");
+                      assert(
+                          !divisibilityAttr.getValue().isStrictlyPositive() &&
+                          !divisibilityAttr.getValue().isOne() &&
+                          "Unexpected divisibility value");
                       continue;
                     }
 
