@@ -36,9 +36,9 @@ You can check if triton is currently available by running one of the [tutorials]
 
 Basic rules:
 
-1. **Use Tensor Descriptors:** For inputs and outputs of matmul operations (`tl.dot`), use Tensor Descriptors. This utilizes the hardware-optimized DPAS operation and asynchronous loading. You can often expect more than a 2x performance improvement compared to the basic tensor of pointers approach.
+1. **Use Tensor Descriptors:** For inputs and outputs of matmul operations (`tl.dot`), use Tensor Descriptors. This utilizes the hardware-optimized DPAS operation and 2D block IO HW operations. You can often expect more than a 2x performance improvement compared to the basic tensor of pointers approach. You need to use specifically device side tensor descriptors (defined inside of a kernel), not host side (defined in CPU code, and then passed to the kernel). We'll have examples below.
 2. **Benchmark:** Experiment with the performance of your kernel. You can use `triton.testing.do_bench` for basic benchmarking, as demonstrated in the [tutorials](../python/tutorials/02-fused-softmax.py).
-3. **Type Annotations:** Use proper type annotations for your kernels. Good type annotations allow for better optimization, but be careful to avoid excessive recompilation.
+3. **Type Annotations:** Use proper type annotations for your kernels. Good type annotations allow for better optimization, but be careful to avoid excessive recompilation. Example will be below.
 4. **Tiling and Autotuning:** Pick appropriate tiling for your machine and tensor shapes. Use `triton.autotune` to try various combinations and find the best one. Key parameters to tune include block sizes, `num_warps`, `num_stages`, and `grf_mode`. The Intel-specific option `grf_mode` determines the number of registers allocated to a kernel. See existing [benchmarks](../benchmarks/triton_kernels_benchmark/gemm_tensor_desc_benchmark.py) for reasonable configuration grids for GEMM and Flash Attention kernels.
 
 ## Use Tensor Descriptors to load tl.dot arguments and save results
@@ -220,7 +220,7 @@ for k in range(0, tl.cdiv(K, BLOCK_K)):
 ---
 
 
-Tensor Descriptors support shapes up to 5 dimensions, but for performance, it is best to use 2 dimensions whenever possible.
+Tensor Descriptors support shapes up to 5 dimensions, however the Intel XPU backend currently optimizes well only the 2D case, so avoid using higher dimensionality Tensor Descriptors whenever possible
 Consider this example based on the unified attention kernel from [vllm](https://github.com/vllm-project/vllm/blob/9a161307f5f096c63ae4134c5055d87a36d224a8/vllm/attention/ops/triton_unified_attention.py#L52). This code loads a block of K values from a cache of shape `[NUM_BLOCKS, BLOCK_SIZE, KV_HEADS, HEAD_SIZE]`:
 
 
@@ -278,13 +278,14 @@ for j in range(0, num_blocks):
 ---
 Summary:
 1. Use Tensor Desciptors to load memory reqired for `tl.dot` and to save results.
-2. Strive to use 2D tensor desctiptors for better performance.
-3. Last tensor stride should be `tl.constexpr` or have no type annotation. Annotating with `tl.int64` will result in poor perfomance.
+2. Strive to only use 2D Tensor Descriptors.
+3. Ideally, annotate strides with `tl.constexpr`. Basic preference is `tl.constexpr` > no annotation > `tl.int64`/ `tl.int32` (for non-last strides) >> `tl.int64` / `tl.int32` for the last stride. Avoid annotating the last strides with `tl.int64` or `tl.int32`!
 
 ## Use proper type annotations
 1. Set `tl.constexpr` type annotation for block sizes and boolean flags to let the compiler optimize. Each combination of arguments with this annotation is compiled separately. Avoid setting it for values that vary widely at runtime (like the number of tokens) to prevent excessive recompilation.
 2. No Annotation: You can keep type annotations empty and let the compiler guess. This is good for parameters that change often (like strides) to avoid recompilation.
-3. Avoid writing `tl.int64` type annotation for the last stride of a tensor. It is often important for the compiler to know that the tensor is contiguous.
+3. Avoid annotating with `tl.int64` or `tl.int32`. It can prevent many optimizations.
+4. Never annotate the last tensor stride with `tl.int32` or `tl.int64`.
 
 Example of a good type annotation for a GEMM kernel:
 ```
@@ -311,6 +312,7 @@ def matmul_kernel(
 
 ### GRF Mode
 Setting it higher can be good for kernel that uses many registers, but will decrease hardware utilizaion.
+You can set it with `grf_mode = "256"`.
 
 # Quick Installation
 
@@ -585,8 +587,6 @@ optimized_mod = torch.compile(xpu_model)
 graph_result = optimized_mod(x)
 ```
 
-### Example 3 : GEMM operations
-Intel backend for triton requires
 
 ## Performance Analysis Guide
 
