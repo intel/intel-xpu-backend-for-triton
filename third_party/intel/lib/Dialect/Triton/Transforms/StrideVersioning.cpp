@@ -60,7 +60,7 @@ public:
 
           // If no stride has value equal to one we have found a candidate
           // operation.
-          auto makeTensorPtrOp = tt::getMakeTensorPtrOp(ptr);
+          tt::MakeTensorPtrOp makeTensorPtrOp = tt::getMakeTensorPtrOp(ptr);
           bool isCandidate =
               llvm::none_of(makeTensorPtrOp.getStrides(), [&](Value stride) {
                 Value finalVal = tt::intel::getFinalValue(stride);
@@ -113,7 +113,8 @@ public:
   void
   version(scf::ForOp &forOp, ArrayRef<Operation *> makeTensorPtrOps,
           std::unordered_map<Operation *, Value> makeTensorPtrToStride) const {
-    assert(makeTensorPtrOps.size() == makeTensorPtrToStride.size() &&
+    assert(!makeTensorPtrOps.empty() &&
+           makeTensorPtrOps.size() == makeTensorPtrToStride.size() &&
            "Sizes should match");
 
     Location loc = forOp.getLoc();
@@ -130,6 +131,8 @@ public:
       versioningConds.emplace_back(builder.create<arith::CmpIOp>(
           loc, arith::CmpIPredicate::eq, stride, oneVal));
     }
+    assert(!versioningConds.empty() &&
+           "Expecting at least one versioning condition");
 
     Value verCond = versioningConds.front();
     for (unsigned i = 1; i < versioningConds.size(); ++i)
@@ -215,8 +218,8 @@ public:
                   assert(tt::isTensorPointerType(ptr.getType()) &&
                          "Expecting a block ptr");
 
-                  auto makeTensorPtrOp = tt::getMakeTensorPtrOp(ptr);
-                  makeTensorPtrOps.push_back(makeTensorPtrOp);
+                  tt::MakeTensorPtrOp makeTensorPtrOp =
+                      tt::getMakeTensorPtrOp(ptr);
                   OperandRange strides = makeTensorPtrOp.getStrides();
                   ArrayRef<int> order = makeTensorPtrOp.getOrder();
 
@@ -252,12 +255,18 @@ public:
                     makeTensorPtrToStride[makeTensorPtrOp] = blockArg;
                     break;
                   }
+
+                  if (makeTensorPtrToStride.count(makeTensorPtrOp) != 0)
+                    makeTensorPtrOps.push_back(makeTensorPtrOp);
                 })
                 .Default([](auto) { return false; });
           }
 
-          LoopVersioner loopVersioner;
-          loopVersioner.version(forOp, makeTensorPtrOps, makeTensorPtrToStride);
+          if (!makeTensorPtrToStride.empty()) {
+            LoopVersioner loopVersioner;
+            loopVersioner.version(forOp, makeTensorPtrOps,
+                                  makeTensorPtrToStride);
+          }
         }
       }
 
