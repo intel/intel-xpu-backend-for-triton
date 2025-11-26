@@ -857,8 +857,7 @@ void init_gluon_ir(py::module &&m) {
         ValueRange tokens;
         self.create<ttag::AsyncTDMWait>(tokens, num);
       });
-
-  m.def(
+    m.def(
       "compute_tmem_reg_layout",
       [](py::object elementTyObj, std::vector<int64_t> shape,
          py::object layoutObj, unsigned numWarps, const std::string &atomName,

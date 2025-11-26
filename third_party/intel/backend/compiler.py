@@ -287,15 +287,86 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         return mod
 
     def gluon_to_ttgir(self, src, metadata, options, properties):
+        #mod = self.make_ttgir(src, metadata, options, properties)
         mod = src
+
+        # cluster_info = intel.ClusterInfo()
+        # if options.cluster_dims is not None:
+        #     cluster_info.clusterDimX = options.cluster_dims[0]
+        #     cluster_info.clusterDimY = options.cluster_dims[1]
+        #     cluster_info.clusterDimZ = options.cluster_dims[2]
+        #
+        #mod = src
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
+        intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
+        passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
+        # intel.passes.ttgpuir.add_materialize_block_pointer(pm)
 
+        # options.warp_size = intel.get_threads_per_warp(mod)
+        # self.validate_options(options, properties)
+
+        # pm.enable_debug()
+        #passes.ttir.add_convert_to_ttgpuir(pm, "xpu", options.num_warps, options.warp_size, options.num_ctas)
+
+        #
         # Test - to match triton ttgir conversion
+        # Also needed for ~60% perf
         module_opts = intel.passes.ttgpuir.AnnotateModuleOptions()
         self.annotate_module(module_opts, properties, options)
         intel.passes.ttgpuir.add_triton_annotate_module(pm, module_opts)
-        #pm.run(mod, 'annotate_module')
+        pm.run(mod, 'annotate_module')
+        #
+        #
+        #
+        pm = ir.pass_manager(mod.context)
+        pm.enable_debug()
+        #
+        #
+        # intel.passes.ttgpuir.add_coalesce(pm)
+        # intel.passes.ttgpuir.add_remove_layout_conversions(pm)
+        #
+        intel.passes.ttgpuir.add_accelerate_matmul(pm)
+        intel.passes.ttgpuir.add_optimize_dot_operands(pm)
+        #
+        # # These 3 passes + annonate
+        intel.passes.ttgpuir.add_materialize_block_pointer(pm) #
+        intel.passes.ttgpuir.add_remove_layout_conversions(pm) #
+        intel.passes.ttgpuir.add_pipeline(pm, options.num_stages, XPUBackend.get_split_barrier_scope(options)) #
+        #
+        #
+        #
+        # if (options.reduce_variable_liveness):
+        #     intel.passes.ttgpuir.add_reduce_variable_liveness(pm)
+        #
+        # passes.ttgpuir.add_fuse_nested_loops(pm)
+        #
+        # passes.common.add_canonicalizer(pm)
+        # passes.ttir.add_triton_licm(pm)
+        # passes.common.add_canonicalizer(pm)
+        # passes.ttgpuir.add_combine_tensor_select_and_if(pm)
+        #
+        #
+        #
+        # passes.ttgpuir.add_optimize_thread_locality(pm)
+        # passes.ttgpuir.add_optimize_dot_operands(pm, True)
+        # passes.common.add_cse(pm)
+        # passes.ttgpuir.add_prefetch(pm)
+        # passes.ttgpuir.add_optimize_dot_operands(pm, True)
+        # intel.passes.ttgpuir.add_remove_layout_conversions(pm)
+        # intel.passes.ttgpuir.add_reduce_data_duplication(pm)
+        # passes.ttgpuir.add_reorder_instructions(pm)
+        # passes.common.add_cse(pm)
+        # passes.common.add_symbol_dce(pm)
+        # passes.common.add_sccp(pm)
+        # passes.common.add_canonicalizer(pm)
+        #
+        # if knobs.intel.opt_reduction_locality:
+        #     intel.passes.ttgpuir.add_optimize_reduction_locality(pm)
+        # intel.passes.arith.add_arith_emulate_unsupported_floats(pm, ["bf16"], "f32")
+
+
+
 
         passes.gluon.add_inliner(pm)
         passes.gluon.add_resolve_auto_encodings(pm)
@@ -306,6 +377,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
         pm.run(mod, 'gluon_to_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
+        # metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
+
         return mod
 
     @classmethod

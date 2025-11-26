@@ -9,7 +9,6 @@ if TYPE_CHECKING:
     from ._semantic import GluonSemantic
 
 from ._layouts import SharedLayout, DistributedLayout, BlockedLayout, DotOperandLayout, AutoLayout
-from .intel import IntelDPASLayout
 from triton._C.libtriton import ir
 import triton.language.core as tl_core
 from triton.language.core import (
@@ -118,6 +117,9 @@ expand_dims = builtin(tl_core.expand_dims)
 inline_asm_elementwise = builtin(tl_core.inline_asm_elementwise)
 join = builtin(tl_core.join)
 load = builtin(tl_core.load)
+load_tensor_descriptor = builtin(tl_core.load_tensor_descriptor)
+store_tensor_descriptor = builtin(tl_core.store_tensor_descriptor)
+make_tensor_descriptor = builtin(tl_core.make_tensor_descriptor)
 map_elementwise = builtin(tl_core.map_elementwise)
 max_constancy = builtin(tl_core.max_constancy)
 max_contiguous = builtin(tl_core.max_contiguous)
@@ -596,6 +598,8 @@ def dot_fma(a, b, acc, _semantic=None):
     handle = _semantic.dot(a, b, acc, input_precision=None, max_num_imprecise_acc=None, out_dtype=acc.dtype).handle
     return tensor(handle, acc.type)
 
+from .intel import IntelDPASLayout
+
 @builtin
 def xpu_dot_fma(a, b, acc, _semantic=None):
     assert isinstance(a, tensor), "a must be a tensor"
@@ -618,3 +622,17 @@ def xpu_dot_fma(a, b, acc, _semantic=None):
 
     handle = _semantic.dot(a, b, acc, input_precision=None, max_num_imprecise_acc=None, out_dtype=acc.dtype).handle
     return tensor(handle, acc.type)
+
+@builtin
+def make_block_ptr(base: tensor, shape, strides, offsets, block_shape, order, _semantic=None):
+    """
+    Returns a pointer to a block in a parent tensor (Gluon version)
+
+    :param base: The base pointer to the parent tensor
+    :param shape: The shape of the parent tensor
+    :param strides: The strides of the parent tensor
+    :param offsets: The offsets to the block
+    :param block_shape: The shape of the block
+    :param order: The order of the original data format
+    """
+    return _semantic.make_block_ptr(base, shape, strides, offsets, block_shape, order)
