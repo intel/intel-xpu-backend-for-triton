@@ -12,7 +12,13 @@
 
 #include <algorithm>
 #include <array>
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#else
 #include <dlfcn.h>
+#endif
 
 #include <cstdlib>
 #include <iostream>
@@ -132,28 +138,6 @@ uint32_t processActivity(XpuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
 
 } // namespace
 
-#include <cxxabi.h>
-
-static inline std::string Demangle(const char *name) {
-
-  int status = 0;
-  char *demangled = abi::__cxa_demangle(name, nullptr, 0, &status);
-  if (status != 0) {
-    return name;
-  }
-
-  constexpr const char *const prefix_to_skip = "typeinfo name for ";
-  const size_t prefix_to_skip_len = strlen(prefix_to_skip);
-  const size_t shift =
-      (std::strncmp(demangled, prefix_to_skip, prefix_to_skip_len) == 0)
-          ? prefix_to_skip_len
-          : 0;
-
-  std::string result(demangled + shift);
-  free(demangled);
-  return result;
-}
-
 struct XpuptiProfiler::XpuptiProfilerPimpl
     : public GPUProfiler<XpuptiProfiler>::GPUProfilerPimplInterface {
   XpuptiProfilerPimpl(XpuptiProfiler &profiler)
@@ -191,7 +175,11 @@ struct XpuptiProfiler::XpuptiProfilerPimpl
 
 void XpuptiProfiler::XpuptiProfilerPimpl::allocBuffer(uint8_t **buffer,
                                                       size_t *bufferSize) {
+#if defined(_MSC_VER)
+  *buffer = static_cast<uint8_t *>(_aligned_malloc(BufferSize, AlignSize));
+#else
   *buffer = static_cast<uint8_t *>(aligned_alloc(AlignSize, BufferSize));
+#endif
   if (*buffer == nullptr) {
     throw std::runtime_error("aligned_alloc failed");
   }
@@ -224,7 +212,11 @@ void XpuptiProfiler::XpuptiProfilerPimpl::completeBuffer(uint8_t *buffer,
     }
   } while (true);
 
+#if defined(_MSC_VER)
+  _aligned_free(buffer);
+#else
   std::free(buffer);
+#endif
 
   profiler.correlation.complete(maxCorrelationId);
 }
@@ -277,6 +269,30 @@ void CallbackCommon(pti_callback_domain domain,
 
 typedef void (*EnumDeviceUUIDsFunc)(void *);
 
+#if defined(_WIN32)
+int callEnumDeviceUUIDs(const std::string &utils_cache_path) {
+  HMODULE handle = LoadLibrary(xpu::PROTON_UTILS.data());
+  if (!handle) {
+    std::cerr << "Failed to load library: " << GetLastError() << std::endl;
+    return 1;
+  }
+
+  GetLastError();
+  EnumDeviceUUIDsFunc enumDeviceUUIDs =
+      (EnumDeviceUUIDsFunc)GetProcAddress(handle, "enumDeviceUUIDs");
+  long dlsym_error = GetLastError();
+  if (dlsym_error) {
+    std::cerr << "Failed to load function: " << dlsym_error << std::endl;
+    FreeLibrary(handle);
+    return 1;
+  }
+
+  enumDeviceUUIDs(&deviceUUIDs_);
+
+  FreeLibrary(handle);
+  return 0;
+}
+#else
 int callEnumDeviceUUIDs(const std::string &utils_cache_path) {
   void *handle = dlopen(xpu::PROTON_UTILS.data(), RTLD_LAZY);
   if (!handle) {
@@ -299,9 +315,34 @@ int callEnumDeviceUUIDs(const std::string &utils_cache_path) {
   dlclose(handle);
   return 0;
 }
+#endif
 
 typedef void (*WaitOnSyclQueueFunc)(void *);
 
+#if defined(_WIN32)
+int callWaitOnSyclQueue(void *syclQueue) {
+  HMODULE handle = LoadLibrary(xpu::PROTON_UTILS.data());
+  if (!handle) {
+    std::cerr << "Failed to load library: " << GetLastError() << std::endl;
+    return 1;
+  }
+
+  GetLastError();
+  WaitOnSyclQueueFunc waitOnSyclQueue =
+      (WaitOnSyclQueueFunc)GetProcAddress(handle, "waitOnSyclQueue");
+  long dlsym_error = GetLastError();
+  if (dlsym_error) {
+    std::cerr << "Failed to load function: " << dlsym_error << std::endl;
+    FreeLibrary(handle);
+    return 1;
+  }
+
+  waitOnSyclQueue(syclQueue);
+
+  FreeLibrary(handle);
+  return 0;
+}
+#else
 int callWaitOnSyclQueue(void *syclQueue) {
   void *handle = dlopen(xpu::PROTON_UTILS.data(), RTLD_LAZY);
   if (!handle) {
@@ -324,6 +365,7 @@ int callWaitOnSyclQueue(void *syclQueue) {
   dlclose(handle);
   return 0;
 }
+#endif
 
 void XpuptiProfiler::XpuptiProfilerPimpl::doStart() {
   // should be call to shared lib
