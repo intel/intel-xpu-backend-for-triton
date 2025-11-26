@@ -53,7 +53,6 @@ public:
             auto constantOp = v.getDefiningOp<arith::ConstantOp>();
             if (!constantOp)
               return false;
-
             if (auto intAttr = dyn_cast<IntegerAttr>(constantOp.getValueAttr()))
               return intAttr.getInt() == 1;
             return false;
@@ -244,10 +243,9 @@ public:
                         funcOp.getArgAttrOfType<IntegerAttr>(
                             blockArg.getArgNumber(), "tt.divisibility");
                     if (divisibilityAttr) {
-                      assert(
-                          !divisibilityAttr.getValue().isStrictlyPositive() &&
-                          !divisibilityAttr.getValue().isOne() &&
-                          "Unexpected divisibility value");
+                      assert(divisibilityAttr.getValue().isStrictlyPositive() &&
+                             !divisibilityAttr.getValue().isOne() &&
+                             "Unexpected divisibility value");
                       continue;
                     }
 
