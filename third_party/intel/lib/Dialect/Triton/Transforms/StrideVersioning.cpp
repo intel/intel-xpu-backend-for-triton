@@ -250,6 +250,7 @@ public:
                     }
 
                     makeTensorPtrToStride[makeTensorPtrOp] = blockArg;
+                    break;
                   }
                 })
                 .Default([](auto) { return false; });

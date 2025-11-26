@@ -1,7 +1,7 @@
 // RUN: triton-opt %s -triton-intel-stride-versioning | FileCheck %s
 
 module {
-  tt.func public @matmul_kernel_with_tensor_descriptors(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i64 {tt.divisibility = 16 : i32}, %arg4: i64, %arg5: i64 {tt.divisibility = 16 : i32}, %arg6: i64, %arg7: i64 {tt.divisibility = 16 : i32}, %arg8: i64) attributes {noinline = false} {
+  tt.func public @matmul_kernel_with_tensor_descriptors(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i64, %arg4: i64, %arg5: i64 {tt.divisibility = 16 : i32}, %arg6: i64, %arg7: i64 {tt.divisibility = 16 : i32}, %arg8: i64) attributes {noinline = false} {
     %c64_i32 = arith.constant 64 : i32
     %cst = arith.constant dense<0.000000e+00> : tensor<256x256xf32>
     %c256_i32 = arith.constant 256 : i32
