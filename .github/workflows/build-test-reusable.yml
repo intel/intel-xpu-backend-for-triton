@@ -373,6 +373,11 @@ jobs:
         run: |
           timeout -s KILL 4900 ${{ env.TRITON_TEST_CMD }} --inductor || ${{ inputs.ignore_errors }}
 
+      - name: Run microbenchmark tests
+        if: matrix.suite == 'rest'
+        run: |
+          python3 python/test/microbenchmark/launch_overhead.py
+
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}
         uses: ./.github/actions/save
