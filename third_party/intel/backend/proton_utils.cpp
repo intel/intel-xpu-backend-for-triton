@@ -2,14 +2,20 @@
 #include <level_zero/ze_api.h>
 #include <sycl/sycl.hpp>
 
-extern "C" void waitOnSyclQueue(void *syclQueue) {
+#if defined(_WIN32)
+#define EXPORT_FUNC __declspec(dllexport)
+#else
+#define EXPORT_FUNC __attribute__((visibility("default")))
+#endif
+
+extern "C" EXPORT_FUNC void waitOnSyclQueue(void *syclQueue) {
   sycl::queue *queue = static_cast<sycl::queue *>(syclQueue);
   queue->wait();
 }
 
 // FIXME: Should it be in DeviceInfo class?
 // Inspired by Kineto: `XpuptiActivityProfiler.cpp`
-extern "C" void enumDeviceUUIDs(void *deviceUUIDsPtr) {
+extern "C" EXPORT_FUNC void enumDeviceUUIDs(void *deviceUUIDsPtr) {
   auto *deviceUUIDs_ =
       reinterpret_cast<std::vector<std::array<uint8_t, 16>> *>(deviceUUIDsPtr);
   if (!deviceUUIDs_->empty()) {
@@ -57,10 +63,10 @@ void check(ze_result_t ret, const char *functionName) {
 // FIXME: rewrite with
 // sycl::device.get_info<sycl::ext::intel::info::device::architecture>; cache
 // the result
-extern "C" void getDeviceProperties(uint64_t index, uint32_t *clockRate,
-                                    uint32_t *memoryClockRate,
-                                    uint32_t *busWidth, uint32_t *numSms,
-                                    char arch[256]) {
+extern "C" EXPORT_FUNC void
+getDeviceProperties(uint64_t index, uint32_t *clockRate,
+                    uint32_t *memoryClockRate, uint32_t *busWidth,
+                    uint32_t *numSms, char arch[256]) {
   // ref: getDeviceProperties
 
   // FIXME: double check that initialization is needed

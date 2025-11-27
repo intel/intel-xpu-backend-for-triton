@@ -18,7 +18,7 @@ static void initProton(pybind11::module &&m) {
       "start",
       [](const std::string &path, const std::string &contextSourceName,
          const std::string &dataName, const std::string &profilerName,
-         const std::string &mode, long sycl_queue,
+         const std::string &mode, uint64_t sycl_queue,
          const std::string &utils_cache_path) {
         void *queue = reinterpret_cast<void *>(sycl_queue);
         auto sessionId = SessionManager::instance().addSession(

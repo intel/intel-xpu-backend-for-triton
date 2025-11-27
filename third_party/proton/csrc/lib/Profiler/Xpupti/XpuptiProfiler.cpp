@@ -273,7 +273,8 @@ typedef void (*EnumDeviceUUIDsFunc)(void *);
 int callEnumDeviceUUIDs(const std::string &utils_cache_path) {
   HMODULE handle = LoadLibrary(xpu::PROTON_UTILS.data());
   if (!handle) {
-    std::cerr << "Failed to load library: " << GetLastError() << std::endl;
+    std::cerr << "Failed to load 'PROTON_UTILS' library: " << GetLastError()
+              << std::endl;
     return 1;
   }
 
@@ -282,7 +283,8 @@ int callEnumDeviceUUIDs(const std::string &utils_cache_path) {
       (EnumDeviceUUIDsFunc)GetProcAddress(handle, "enumDeviceUUIDs");
   long dlsym_error = GetLastError();
   if (dlsym_error) {
-    std::cerr << "Failed to load function: " << dlsym_error << std::endl;
+    std::cerr << "Failed to load 'enumDeviceUUIDs' function: " << dlsym_error
+              << std::endl;
     FreeLibrary(handle);
     return 1;
   }
@@ -296,7 +298,8 @@ int callEnumDeviceUUIDs(const std::string &utils_cache_path) {
 int callEnumDeviceUUIDs(const std::string &utils_cache_path) {
   void *handle = dlopen(xpu::PROTON_UTILS.data(), RTLD_LAZY);
   if (!handle) {
-    std::cerr << "Failed to load library: " << dlerror() << std::endl;
+    std::cerr << "Failed to load 'PROTON_UTILS' library: " << dlerror()
+              << std::endl;
     return 1;
   }
 
@@ -305,7 +308,8 @@ int callEnumDeviceUUIDs(const std::string &utils_cache_path) {
       (EnumDeviceUUIDsFunc)dlsym(handle, "enumDeviceUUIDs");
   const char *dlsym_error = dlerror();
   if (dlsym_error) {
-    std::cerr << "Failed to load function: " << dlsym_error << std::endl;
+    std::cerr << "Failed to load 'enumDeviceUUIDs' function: " << dlsym_error
+              << std::endl;
     dlclose(handle);
     return 1;
   }
@@ -323,7 +327,8 @@ typedef void (*WaitOnSyclQueueFunc)(void *);
 int callWaitOnSyclQueue(void *syclQueue) {
   HMODULE handle = LoadLibrary(xpu::PROTON_UTILS.data());
   if (!handle) {
-    std::cerr << "Failed to load library: " << GetLastError() << std::endl;
+    std::cerr << "Failed to load 'PROTON_UTILS' library: " << GetLastError()
+              << std::endl;
     return 1;
   }
 
@@ -332,7 +337,8 @@ int callWaitOnSyclQueue(void *syclQueue) {
       (WaitOnSyclQueueFunc)GetProcAddress(handle, "waitOnSyclQueue");
   long dlsym_error = GetLastError();
   if (dlsym_error) {
-    std::cerr << "Failed to load function: " << dlsym_error << std::endl;
+    std::cerr << "Failed to load 'waitOnSyclQueue' function: " << dlsym_error
+              << std::endl;
     FreeLibrary(handle);
     return 1;
   }
@@ -346,7 +352,8 @@ int callWaitOnSyclQueue(void *syclQueue) {
 int callWaitOnSyclQueue(void *syclQueue) {
   void *handle = dlopen(xpu::PROTON_UTILS.data(), RTLD_LAZY);
   if (!handle) {
-    std::cerr << "Failed to load library: " << dlerror() << std::endl;
+    std::cerr << "Failed to load 'PROTON_UTILS' library: " << dlerror()
+              << std::endl;
     return 1;
   }
 
@@ -355,7 +362,8 @@ int callWaitOnSyclQueue(void *syclQueue) {
       (WaitOnSyclQueueFunc)dlsym(handle, "waitOnSyclQueue");
   const char *dlsym_error = dlerror();
   if (dlsym_error) {
-    std::cerr << "Failed to load function: " << dlsym_error << std::endl;
+    std::cerr << "Failed to load 'waitOnSyclQueue' function: " << dlsym_error
+              << std::endl;
     dlclose(handle);
     return 1;
   }
