@@ -182,6 +182,11 @@ Value getFinalValue(Value value) {
     return divOp.getResult();
   }
 
+  if (auto extOp = dyn_cast<arith::ExtSIOp>(defOp))
+    return getFinalValue(extOp.getIn());
+  if (auto extOp = dyn_cast<arith::ExtUIOp>(defOp))
+    return getFinalValue(extOp.getIn());
+
   return value;
 }
 
