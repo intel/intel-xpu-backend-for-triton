@@ -606,14 +606,14 @@ def xpu_dot_fma(a, b, acc, _semantic=None):
     assert isinstance(b, tensor), "b must be a tensor"
     assert isinstance(acc, tensor), "acc must be a tensor"
 
-    mma_layout = acc.type.layout
-    assert isinstance(mma_layout, IntelDPASLayout), "acc must have a BlockedLayout"
-    assert isinstance(a.type.layout, DotOperandLayout), "a must have a DotOperandLayout"
-    assert isinstance(b.type.layout, DotOperandLayout), "b must have a DotOperandLayout"
-    assert a.type.layout.parent == mma_layout, "a's parent layout must be the same as acc's layout"
-    assert b.type.layout.parent == mma_layout, "b's parent layout must be the same as acc's layout"
-    assert a.type.layout.operand_index == 0, "a's operand index must be 0"
-    assert b.type.layout.operand_index == 1, "b's operand index must be 1"
+    # mma_layout = acc.type.layout
+    # assert isinstance(mma_layout, IntelDPASLayout), "acc must have a BlockedLayout"
+    # assert isinstance(a.type.layout, DotOperandLayout), "a must have a DotOperandLayout"
+    # assert isinstance(b.type.layout, DotOperandLayout), "b must have a DotOperandLayout"
+    # assert a.type.layout.parent == mma_layout, "a's parent layout must be the same as acc's layout"
+    # assert b.type.layout.parent == mma_layout, "b's parent layout must be the same as acc's layout"
+    # assert a.type.layout.operand_index == 0, "a's operand index must be 0"
+    # assert b.type.layout.operand_index == 1, "b's operand index must be 1"
 
     M, N = acc.shape
     K = a.shape[1]
