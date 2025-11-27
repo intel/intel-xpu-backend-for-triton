@@ -21,43 +21,25 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:     %[[VAL_12:.*]] = llvm.insertvalue %[[ROW_STRIDE]], %[[VAL_11]][4] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
     // CHECK:     %[[VAL_13:.*]] = llvm.insertvalue %[[VAL_6]], %[[VAL_12]][5] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
     // CHECK:     %[[BLOCK_POINTER:.*]] = llvm.insertvalue %[[BASE]], %[[VAL_13]][6] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
-    // CHECK:     %[[SUB_GROUP_ID_RAW:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id() {no_unwind, will_return} : () -> i32
-    // CHECK:     %[[SUB_GROUP_ID_EXT:.*]] = llvm.zext %[[SUB_GROUP_ID_RAW]] : i32 to i64
-    // CHECK:     %[[SUB_GROUP_ID:.*]] = llvm.trunc %[[SUB_GROUP_ID_EXT]] : i64 to i32
-    // CHECK:     %[[VAL_18:.*]] = llvm.mlir.constant(1 : i32) : i32
-    // CHECK:     %[[VAL_19:.*]] = llvm.urem %[[SUB_GROUP_ID]], %[[VAL_18]] : i32
-    // CHECK:     %[[VAL_20:.*]] = llvm.udiv %[[SUB_GROUP_ID]], %[[VAL_18]] : i32
-    // CHECK:     %[[CST_8:.*]] = llvm.mlir.constant(8 : i32) : i32
-    // CHECK:     %[[VAL_22:.*]] = llvm.urem %[[VAL_20]], %[[CST_8]] : i32
-    // CHECK:     %[[VAL_23:.*]] = llvm.udiv %[[VAL_20]], %[[CST_8]] : i32
     // CHECK:     %[[OFFSET_0:.*]] = llvm.extractvalue %[[BLOCK_POINTER]][0] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
     // CHECK:     %[[OFFSET_1:.*]] = llvm.extractvalue %[[BLOCK_POINTER]][1] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
-    // CHECK:     %[[WIDTH_i64:.*]] = llvm.extractvalue %[[BLOCK_POINTER]][2] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
-    // CHECK:     %[[HEIGHT_i64:.*]] = llvm.extractvalue %[[BLOCK_POINTER]][3] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+    // CHECK:     %[[HEIGHT_i64:.*]] = llvm.extractvalue %[[BLOCK_POINTER]][2] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+    // CHECK:     %[[WIDTH_i64:.*]] = llvm.extractvalue %[[BLOCK_POINTER]][3] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
     // CHECK:     %[[ROW_STRIDE_i64:.*]] = llvm.extractvalue %[[BLOCK_POINTER]][4] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
     // CHECK:     %[[COL_STRIDE_i64:.*]] = llvm.extractvalue %[[BLOCK_POINTER]][5] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
     // CHECK:     %[[BASE_:.*]] = llvm.extractvalue %[[BLOCK_POINTER]][6] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
     // CHECK:     %[[CST_2:.*]] = llvm.mlir.constant(2 : i64) : i64
-    // CHECK:     %[[VAL_21:.*]] = llvm.mul %[[HEIGHT_i64]], %[[CST_2]] : i64
+    // CHECK:     %[[VAL_21:.*]] = llvm.mul %[[WIDTH_i64]], %[[CST_2]] : i64
     // CHECK:     %[[ROW_MAJOR_BASE_WIDTH:.*]] = llvm.trunc %[[VAL_21]] : i64 to i32
-    // CHECK:     %[[ROW_MAJOR_BASE_HEIGHT:.*]] = llvm.trunc %[[WIDTH_i64]] : i64 to i32
+    // CHECK:     %[[ROW_MAJOR_BASE_HEIGHT:.*]] = llvm.trunc %[[HEIGHT_i64]] : i64 to i32
     // CHECK:     %[[CST_2:.*]] = llvm.mlir.constant(2 : i64) : i64
     // CHECK:     %[[VAL_24:.*]] = llvm.mul %[[ROW_STRIDE_i64]], %[[CST_2]] : i64
     // CHECK:     %[[ROW_MAJOR_PITCH:.*]] = llvm.trunc %[[VAL_24]] : i64 to i32
-    // CHECK:     %[[CST_0:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:     %[[CST_32:.*]] = llvm.mlir.constant(32 : i32) : i32
-    // CHECK:     %[[VAL_26:.*]] = llvm.mul %[[VAL_19]], %[[CST_32]] : i32
-    // CHECK:     %[[VAL_27:.*]] = llvm.add %[[VAL_26]], %[[CST_0]] : i32
-    // CHECK:     %[[CST_32:.*]] = llvm.mlir.constant(32 : i32) : i32
-    // CHECK:     %[[VAL_28:.*]] = llvm.urem %[[VAL_27]], %[[CST_32]] : i32
-    // CHECK:     %[[ROW_MAJOR_OFFSET_X:.*]] = llvm.add %[[VAL_28]], %[[OFFSET_1]] : i32
-    // CHECK:     %[[CST_0:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:     %[[CST_2:.*]] = llvm.mlir.constant(2 : i32) : i32
-    // CHECK:     %[[VAL_30:.*]] = llvm.mul %[[VAL_22]], %[[CST_2]] : i32
-    // CHECK:     %[[VAL_31:.*]] = llvm.add %[[VAL_30]], %[[CST_0]] : i32
-    // CHECK:     %[[CST_16:.*]] = llvm.mlir.constant(16 : i32) : i32
-    // CHECK:     %[[VAL_32:.*]] = llvm.urem %[[VAL_31]], %[[CST_16]] : i32
-    // CHECK:     %[[ROW_MAJOR_OFFSET_Y:.*]] = llvm.add %[[VAL_32]], %[[OFFSET_0]] : i32
+    // CHECK:     %[[SUB_GROUP_ID_RAW:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id() {no_unwind, will_return} : () -> i32
+    // CHECK:     %[[SUB_GROUP_ID_EXT:.*]] = llvm.zext %[[SUB_GROUP_ID_RAW]] : i32 to i64
+    // CHECK:     %[[SUB_GROUP_ID:.*]] = llvm.trunc %[[SUB_GROUP_ID_EXT]] : i64 to i32
+    // CHECK:     %[[ROW_MAJOR_OFFSET_X:.*]] = llvm.add {{.*}}, %[[OFFSET_1]] : i32
+    // CHECK:     %[[ROW_MAJOR_OFFSET_Y:.*]] = llvm.add {{.*}}, %[[OFFSET_0]] : i32
     // CHECK:     triton_gen.2Dblockprefetch %[[BASE_]], %[[ROW_MAJOR_BASE_WIDTH]], %[[ROW_MAJOR_BASE_HEIGHT]], %[[ROW_MAJOR_PITCH]], %[[ROW_MAJOR_OFFSET_X]], %[[ROW_MAJOR_OFFSET_Y]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 2, v_blocks = 2, cache_control = L1C_L3C}
     %rowMajorPtr = tt.make_tensor_ptr %arg0, [%arg2, %arg4], [%arg5, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<16x32xf16>>
     ttig.prefetch %rowMajorPtr {cache = 1 : i32, evict = 1 : i32, isVolatile = false, ttig.block_io = "row_major"} : !tt.ptr<tensor<16x32xf16>>
@@ -70,15 +52,6 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:     %[[VAL_12:.*]] = llvm.insertvalue %[[VAL_6]], %[[VAL_11]][4] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
     // CHECK:     %[[VAL_13:.*]] = llvm.insertvalue %[[ROW_STRIDE]], %[[VAL_12]][5] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
     // CHECK:     %[[BLOCK_POINTER:.*]] = llvm.insertvalue %[[BASE]], %[[VAL_13]][6] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
-    // CHECK:     %[[SUB_GROUP_ID_RAW:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id() {no_unwind, will_return} : () -> i32
-    // CHECK:     %[[SUB_GROUP_ID_EXT:.*]] = llvm.zext %[[SUB_GROUP_ID_RAW]] : i32 to i64
-    // CHECK:     %[[SUB_GROUP_ID:.*]] = llvm.trunc %[[SUB_GROUP_ID_EXT]] : i64 to i32
-    // CHECK:     %[[VAL_18:.*]] = llvm.mlir.constant(1 : i32) : i32
-    // CHECK:     %[[VAL_19:.*]] = llvm.urem %[[SUB_GROUP_ID]], %[[VAL_18]] : i32
-    // CHECK:     %[[VAL_20:.*]] = llvm.udiv %[[SUB_GROUP_ID]], %[[VAL_18]] : i32
-    // CHECK:     %[[CST_8:.*]] = llvm.mlir.constant(8 : i32) : i32
-    // CHECK:     %[[VAL_22:.*]] = llvm.urem %[[VAL_20]], %[[CST_8]] : i32
-    // CHECK:     %[[VAL_23:.*]] = llvm.udiv %[[VAL_20]], %[[CST_8]] : i32
     // CHECK:     %[[OFFSET_0:.*]] = llvm.extractvalue %[[BLOCK_POINTER]][0] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
     // CHECK:     %[[OFFSET_1:.*]] = llvm.extractvalue %[[BLOCK_POINTER]][1] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
     // CHECK:     %[[WIDTH_i64:.*]] = llvm.extractvalue %[[BLOCK_POINTER]][2] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
@@ -93,20 +66,11 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:     %[[CST_2:.*]] = llvm.mlir.constant(2 : i64) : i64
     // CHECK:     %[[VAL_24:.*]] = llvm.mul %[[COL_STRIDE_i64]], %[[CST_2]] : i64
     // CHECK:     %[[COL_MAJOR_PITCH:.*]] = llvm.trunc %[[VAL_24]] : i64 to i32
-    // CHECK:     %[[CST_0:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:     %[[CST_32:.*]] = llvm.mlir.constant(32 : i32) : i32
-    // CHECK:     %[[VAL_26:.*]] = llvm.mul %[[VAL_19]], %[[CST_32]] : i32
-    // CHECK:     %[[VAL_27:.*]] = llvm.add %[[VAL_26]], %[[CST_0]] : i32
-    // CHECK:     %[[CST_32:.*]] = llvm.mlir.constant(32 : i32) : i32
-    // CHECK:     %[[VAL_28:.*]] = llvm.urem %[[VAL_27]], %[[CST_32]] : i32
-    // CHECK:     %[[COL_MAJOR_OFFSET_X:.*]] = llvm.add %[[VAL_28]], %[[OFFSET_1]] : i32
-    // CHECK:     %[[CST_0:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:     %[[CST_2:.*]] = llvm.mlir.constant(2 : i32) : i32
-    // CHECK:     %[[VAL_30:.*]] = llvm.mul %[[VAL_22]], %[[CST_2]] : i32
-    // CHECK:     %[[VAL_31:.*]] = llvm.add %[[VAL_30]], %[[CST_0]] : i32
-    // CHECK:     %[[CST_16:.*]] = llvm.mlir.constant(16 : i32) : i32
-    // CHECK:     %[[VAL_32:.*]] = llvm.urem %[[VAL_31]], %[[CST_16]] : i32
-    // CHECK:     %[[COL_MAJOR_OFFSET_Y:.*]] = llvm.add %[[VAL_32]], %[[OFFSET_0]] : i32
+    // CHECK:     %[[SUB_GROUP_ID_RAW:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id() {no_unwind, will_return} : () -> i32
+    // CHECK:     %[[SUB_GROUP_ID_EXT:.*]] = llvm.zext %[[SUB_GROUP_ID_RAW]] : i32 to i64
+    // CHECK:     %[[SUB_GROUP_ID:.*]] = llvm.trunc %[[SUB_GROUP_ID_EXT]] : i64 to i32
+    // CHECK:     %[[COL_MAJOR_OFFSET_X:.*]] = llvm.add {{.*}}, %[[OFFSET_0]] : i32
+    // CHECK:     %[[COL_MAJOR_OFFSET_Y:.*]] = llvm.add {{.*}}, %[[OFFSET_1]] : i32
     // CHECK:     triton_gen.2Dblockprefetch %[[BASE_]], %[[COL_MAJOR_BASE_WIDTH]], %[[COL_MAJOR_BASE_HEIGHT]], %[[COL_MAJOR_PITCH]], %[[COL_MAJOR_OFFSET_X]], %[[COL_MAJOR_OFFSET_Y]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 2, v_blocks = 2, cache_control = L1C_L3C}
     %columnMajorPtr = tt.make_tensor_ptr %arg0, [%arg4, %arg2], [%c1_i64, %arg5], [%c0_i32, %c0_i32] {order = array<i32: 0, 1>} : <tensor<32x16xf16>>
     ttig.prefetch %columnMajorPtr {cache = 1 : i32, evict = 1 : i32, isVolatile = false, ttig.block_io = "column_major"} : !tt.ptr<tensor<32x16xf16>>

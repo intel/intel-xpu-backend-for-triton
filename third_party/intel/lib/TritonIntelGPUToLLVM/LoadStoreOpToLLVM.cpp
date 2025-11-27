@@ -706,8 +706,6 @@ struct PrefetchOpConversion
     Attribute blockIOAttr =
         op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
     if (!blockIOAttr) {
-      // TODO: Fallback to gather semantic prefetching. Simply erase the
-      // prefetching op which is not supported for now.
       rewriter.eraseOp(op);
       return success();
     }
@@ -727,33 +725,20 @@ struct PrefetchOpConversion
       // Swap the shape to make it row major and then get the tiling
       // size base on row major shape.
       std::swap(tensorShape[0], tensorShape[1]);
-
-      // Create the new tensor type with swapped row and col.
-      tensorType = RankedTensorType::get(
-          tensorShape, tensorType.getElementType(), tensorType.getEncoding());
     }
-
     unsigned numWarps = triton::gpu::lookupNumWarps(op);
 
-    SmallVector<unsigned, 2> shapePerWarp =
-        get2DPrefetchShapePerWarp(tensorType);
+    auto [tileHeightInElem, tileWidthInElem, warpsM, warpsN] =
+        get2DPrefetchWarpsPerCTA(tensorShape, eltTy, numWarps);
 
-    SmallVector<unsigned, 2> warpsPerCTA =
-        getWarpsPerCTA(tensorShape, shapePerWarp, numWarps);
+    auto llEncoding = getLinearLayout(
+        tensorShape, {tileHeightInElem, tileWidthInElem}, {warpsM, warpsN});
 
-    // To adjust the row shape per warp to fit the tensor shape and avoid
-    // duplication in prefetching.
-    unsigned factor =
-        mlir::ceil(shapePerWarp[0] * warpsPerCTA[0], (unsigned)tensorShape[0]);
-    shapePerWarp[0] = mlir::ceil(shapePerWarp[0], factor);
-
-    SmallVector<int64_t> numReps = {
-        mlir::ceil<int64_t>(tensorShape[0], shapePerWarp[0] * warpsPerCTA[0]),
-        mlir::ceil<int64_t>(tensorShape[1], shapePerWarp[1] * warpsPerCTA[1])};
+    unsigned tileSizeInElem = tileHeightInElem * tileWidthInElem;
+    unsigned numTilesPerWarp =
+        (tensorShape[0] * tensorShape[1]) / (tileSizeInElem * numWarps);
 
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
-    unsigned tileWidthInElem = shapePerWarp[1];
-    unsigned tileHeightInElem = shapePerWarp[0];
     unsigned vBlocks = 1;
     switch (elemSizeInBits) {
     case 8:
@@ -774,12 +759,6 @@ struct PrefetchOpConversion
       break;
     }
 
-    Value warpId = rewriter.create<arith::IndexCastOp>(
-        loc, i32_ty,
-        rewriter.create<mlir::gpu::SubgroupIdOp>(loc, /*upperBound=*/nullptr));
-    SmallVector<Value> multiDimWarpId =
-        mlir::LLVM::delinearize(rewriter, loc, warpId, warpsPerCTA, {1, 0});
-
     auto [base, baseWidth, baseHeight, rowStride, colStride, offsetBaseX,
           offsetBaseY] =
         getValuesFromBlockPointerStruct(adaptor.getPtr(), rewriter);
@@ -788,6 +767,7 @@ struct PrefetchOpConversion
       // Swap the width/height and strides to the row major.
       std::swap(baseWidth, baseHeight);
       std::swap(colStride, rowStride);
+      std::swap(offsetBaseX, offsetBaseY);
     }
 
     baseWidth = b.mul(baseWidth, b.i64_val(eltTy.getIntOrFloatBitWidth() / 8));
@@ -799,46 +779,43 @@ struct PrefetchOpConversion
         b.mul(rowStride, b.i64_val(eltTy.getIntOrFloatBitWidth() / 8));
     rowStrideInBytes = b.trunc(i32_ty, rowStrideInBytes);
 
-    for (int row = 0; row < numReps[0]; ++row) {
-      for (int col = 0; col < numReps[1]; ++col) {
-        Value offsetX, offsetY;
-        offsetX = b.add(
-            // the offset of this warp.
-            b.mul(multiDimWarpId[1], b.i32_val(shapePerWarp[1])),
-            // add the replica offset with a warp stride.
-            b.i32_val(col * warpsPerCTA[1] * shapePerWarp[1]));
-        // Round the offset into to the tensor shape
-        offsetX = b.urem(offsetX, b.i32_val(tensorShape[1]));
-        offsetX = b.add(offsetX, offsetBaseX);
-        offsetY = b.add(
-            // the offset of this warp.
-            b.mul(multiDimWarpId[0], b.i32_val(shapePerWarp[0])),
-            // add the replica offset with a warp stride.
-            b.i32_val(row * warpsPerCTA[0] * shapePerWarp[0]));
-        // Round the offset into to the tensor shape
-        offsetY = b.urem(offsetY, b.i32_val(tensorShape[0]));
-        offsetY = b.add(offsetY, offsetBaseY);
+    MLIRContext *ctx = getContext();
+    StringAttr kOffset = S("offset");
+    StringAttr kWarp = S("warp");
+    StringAttr kBlock = S("block");
 
-        auto newOp = rewriter.create<TritonGEN::Matrix2DBlockPrefetchOp>(
-            loc,
-            /*ptr*/ base,
-            /*base_width*/ baseWidth,
-            /*base_height*/ baseHeight,
-            /*base_pitch*/ rowStrideInBytes,
-            /*x*/ offsetX,
-            /*y*/ offsetY,
-            /*elem_size_in_bits*/ elemSizeInBits,
-            /*tile_width*/ tileWidthInElem,
-            /*tile_height*/ tileHeightInElem,
-            /*v_blocks*/ vBlocks,
-            /*cache_opt*/ TritonGEN::LoadCacheControl::L1C_L3C);
-        if (failed(newOp.verify())) {
-          // delete the op so that the verifier will not abort the pass
-          // pipeline later, as we can fail this path and try a different
-          // approach.
-          rewriter.eraseOp(newOp);
-          return failure();
-        }
+    Value warpId = rewriter.create<arith::IndexCastOp>(
+        loc, i32_ty,
+        rewriter.create<mlir::gpu::SubgroupIdOp>(loc,
+                                                 /*upperBound=*/nullptr));
+
+    for (unsigned tile = 0; tile < numTilesPerWarp; ++tile) {
+      unsigned off = tile * tileSizeInElem;
+      auto offsets = applyLinearLayout(
+          loc, rewriter, llEncoding,
+          {{kOffset, b.i32_val(off)}, {kWarp, warpId}, {kBlock, b.i32_val(0)}});
+      Value offsetX = b.add(offsets[1].second, offsetBaseX);
+      Value offsetY = b.add(offsets[0].second, offsetBaseY);
+
+      auto newOp = rewriter.create<TritonGEN::Matrix2DBlockPrefetchOp>(
+          loc,
+          /*ptr*/ base,
+          /*base_width*/ baseWidth,
+          /*base_height*/ baseHeight,
+          /*base_pitch*/ rowStrideInBytes,
+          /*x*/ offsetX,
+          /*y*/ offsetY,
+          /*elem_size_in_bits*/ elemSizeInBits,
+          /*tile_width*/ tileWidthInElem,
+          /*tile_height*/ tileHeightInElem,
+          /*v_blocks*/ vBlocks,
+          /*cache_opt*/ TritonGEN::LoadCacheControl::L1C_L3C);
+      if (failed(newOp.verify())) {
+        // delete the op so that the verifier will not abort the pass
+        // pipeline later, as we can fail this path and try a different
+        // approach.
+        rewriter.eraseOp(newOp);
+        return failure();
       }
     }
 
@@ -1049,6 +1026,58 @@ struct PrefetchOpConversion
 
     rewriter.eraseOp(op);
     return success();
+  }
+
+private:
+  // tensor shape has to be in row major.
+  // Returns:
+  // Prefetch Op Shape in {M, N}
+  // Warps per CTA in {M, N}
+  std::tuple<unsigned, unsigned, unsigned, unsigned>
+  get2DPrefetchWarpsPerCTA(const ArrayRef<int64_t> tensorShape, Type eltTy,
+                           unsigned numWarps) const {
+    unsigned rank = tensorShape.size();
+    assert(rank >= 2 && "Only rank >= 2 tensor is supported for now");
+    unsigned dimM = rank - 2, dimN = rank - 1;
+    unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
+    unsigned elemSizeInBytes = elemSizeInBits / 8;
+    constexpr unsigned maxBytesPerRow = 64;
+    unsigned numColsPerPrefOps =
+        std::min<unsigned>(tensorShape[dimN], maxBytesPerRow / elemSizeInBytes);
+
+    unsigned repNumN =
+        mlir::ceil((unsigned)tensorShape[dimN], numColsPerPrefOps);
+    unsigned warpsNumN = std::min(numWarps, repNumN);
+    unsigned warpsNumM = mlir::ceil(numWarps, warpsNumN);
+
+    // Get the number of rows per warp to fit the shape to the tensor shape to
+    // avoid duplication in prefetching.
+    unsigned rowNumPerWarp = mlir::ceil<unsigned>(tensorShape[dimM], warpsNumM);
+    unsigned numRowsPerPrefOps = std::min<unsigned>(rowNumPerWarp, 32);
+    SmallVector<unsigned, 2> tilePerPrefOps{numRowsPerPrefOps,
+                                            numColsPerPrefOps};
+
+    return {numRowsPerPrefOps, numColsPerPrefOps, warpsNumM, warpsNumN};
+  }
+
+  // Get the linear layout for the cooperative prefetching.
+  LinearLayout getLinearLayout(const ArrayRef<int64_t> tensorShape,
+                               const ArrayRef<unsigned> tileShape,
+                               const ArrayRef<unsigned> warpsPerCTA) const {
+    MLIRContext *ctx = getContext();
+    unsigned rank = warpsPerCTA.size();
+    assert(rank >= 2 && "Only rank >= 2 tensor is supported for now");
+    SmallVector<unsigned> order(rank);
+    for (size_t i = 0; i < warpsPerCTA.size(); ++i) {
+      // The fastest change dim is the first.
+      order[i] = rank - i - 1;
+    }
+    LinearLayout ctaLayout = identityStandardND(S("offset"), tileShape, order) *
+                             identityStandardND(S("warp"), warpsPerCTA, order);
+
+    return combineCtaCgaWithShape(std::move(ctaLayout),
+                                  CTALayoutAttr::getDefault(ctx, rank),
+                                  tensorShape);
   }
 };
 
