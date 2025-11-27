@@ -1646,7 +1646,11 @@ void LayoutRematerialization::hoistConvertDotOperand() {
 void LayoutRematerialization::hoistConvertDotOperand(
     ConvertLayoutOp convertOp) {
   auto targetType = convertOp.getType();
-  // The pass is targeted to MMA dot operands
+
+  // The pass is targeted to NVidia.
+  auto dotEnc = dyn_cast<DotOperandEncodingAttr>(targetType.getEncoding());
+  if (!(dotEnc && isa<NvidiaMmaEncodingAttr>(dotEnc.getParent())))
+    return;
 
   auto canBePipelined = [&](ConvertLayoutOp convertOp) {
     // FIXME: Check that the parent is a for loop
