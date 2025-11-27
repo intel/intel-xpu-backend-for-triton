@@ -376,6 +376,11 @@ jobs:
           cd benchmarks/micro_benchmarks
           python run_benchmarks.py --reports $REPORTS
 
+      - name: Run launch microbenchmark tests
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'launch_overhead.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'launch_micro_benchmarks') }}
+        run: |
+          python3 python/test/microbenchmark/launch_overhead.py
+
       - name: Upload benchmark reports
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         uses: actions/upload-artifact@v5
