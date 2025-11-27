@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sysconfig
 import tempfile
+import re
 
 from types import ModuleType
 
@@ -107,6 +108,13 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
 
     subprocess.check_call(cc_cmd, stdout=subprocess.DEVNULL)
     return so
+
+
+def _library_flag(lib: str) -> str:
+    # Match .so files with optional version numbers (e.g., .so, .so.1, .so.513.50.1)
+    if re.search(r'\.so(\.\d+)*$', lib) or lib.endswith(".a"):
+        return f"-l:{lib}"
+    return f"-l{lib}"
 
 
 @functools.lru_cache
