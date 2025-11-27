@@ -738,16 +738,6 @@ extern "C" EXPORT_FUNC PyObject* launch(PyObject* args) {{
   int threads_per_warp = PyLong_AsLong(threads_per_warp_attr);
   Py_DECREF(threads_per_warp_attr);
 
-  // extract cluster dims
-  PyObject *clusterDim =  PyObject_GetAttrString(kernel_metadata, "cluster_dims");
-  if (!PyTuple_Check(kernel_metadata)) {{
-    PyErr_SetString(PyExc_TypeError, "kernel_metadata.cluster_dims must be a tuple");
-    return NULL;
-  }}
-  int clusterDimX   = PyLong_AsLong(PyTuple_GetItem(clusterDim, 0));
-  int clusterDimY   = PyLong_AsLong(PyTuple_GetItem(clusterDim, 1));
-  int clusterDimZ   = PyLong_AsLong(PyTuple_GetItem(clusterDim, 2));
-  Py_DECREF(clusterDim);
   // extract launch metadata
   if (launch_enter_hook != Py_None){{
     PyObject* ret = PyObject_CallOneArg(launch_enter_hook, launch_metadata);
