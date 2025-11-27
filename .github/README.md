@@ -32,16 +32,18 @@ If you have PyTorch on XPU installed from [binaries](https://docs.pytorch.org/do
 
 You can check if triton is currently available by running one of the [tutorials](/python/tutorials/01-vector-add.py).
 
-# Improving performance
+# Improving performance of your Triton source code
 
 Basic rules:
 
-1. **Use Tensor Descriptors:** For inputs and outputs of matmul operations (`tl.dot`), use Tensor Descriptors. This utilizes the hardware-optimized DPAS operation and 2D block IO HW operations. You can often expect more than a 2x performance improvement compared to the basic tensor of pointers approach. You need to use specifically device side tensor descriptors (defined inside of a kernel), not host side (defined in CPU code, and then passed to the kernel). We'll have examples below.
-2. **Benchmark:** Experiment with the performance of your kernel. You can use `triton.testing.do_bench` for basic benchmarking, as demonstrated in the [tutorials](../python/tutorials/02-fused-softmax.py).
-3. **Type Annotations:** Use proper type annotations for your kernels. Good type annotations allow for better optimization, but be careful to avoid excessive recompilation. Example will be below.
-4. **Tiling and Autotuning:** Pick appropriate tiling for your machine and tensor shapes. Use `triton.autotune` to try various combinations and find the best one. Key parameters to tune include block sizes, `num_warps`, `num_stages`, and `grf_mode`. The Intel-specific option `grf_mode` determines the number of registers allocated to a kernel. See existing [benchmarks](../benchmarks/triton_kernels_benchmark/gemm_tensor_desc_benchmark.py) for reasonable configuration grids for GEMM and Flash Attention kernels.
+1. **Use Tensor Descriptors:** For inputs and outputs of matmul operations (`tl.dot`), use Tensor Descriptors. This utilizes the hardware-optimized DPAS operation and 2D block IO HW operations. You can often expect more than a 2x performance improvement compared to the basic tensor of pointers approach. You need to use specifically device side tensor descriptors (defined inside of a kernel), not host side (defined in CPU code, and then passed to the kernel).
+2. **Type Annotations:** Use proper type annotations for your kernels. Good type annotations allow for better optimization, but be careful to avoid excessive recompilation.
+3. **Benchmark:** Experiment with the performance of your kernel. You can use `triton.testing.do_bench` for basic benchmarking, as demonstrated in the [tutorials](../python/tutorials/02-fused-softmax.py).
+4. **Tiling and Autotuning:** Pick appropriate tiling for your machine and tensor shapes.
 
-## Use Tensor Descriptors to load tl.dot arguments and save results
+More details below.
+
+### Use Tensor Descriptors to load tl.dot arguments and save results
 
 For the Intel backend, use Tensor Descriptors to load matrices used in GEMM operations. A Tensor Descriptor can be created inside the kernel and used for loading as follows:
 
@@ -276,12 +278,18 @@ for j in range(0, num_blocks):
 ```
 
 ---
-Summary:
-1. Use Tensor Desciptors to load memory reqired for `tl.dot` and to save results.
-2. Strive to only use 2D Tensor Descriptors.
-3. Ideally, annotate strides with `tl.constexpr`. Basic preference is `tl.constexpr` > no annotation > `tl.int64`/ `tl.int32` (for non-last strides) >> `tl.int64` / `tl.int32` for the last stride. Avoid annotating the last strides with `tl.int64` or `tl.int32`!
+Tensor Desciptors can be defined inside of a kernel (called **device side Tensor Desciptors** (like in all the examples above) or outside of a triton kernel, in the launching utility (called **host side Tensor Desciptors**), like it is done in the upstream Triton ([example](https://triton-lang.org/main/getting-started/tutorials/09-persistent-matmul.html)).
+You should only use device side Tensor Desciptors on XPU for now.
 
-## Use proper type annotations
+---
+**Summary:**
+1. **Use Tensor Desciptors to load memory reqired for `tl.dot` and to save results.**
+2. **Use kernel side Tensor Desciptors, not host side.**
+3. **Strive to only use 2D Tensor Descriptors.**
+4. **Ideally, annotate strides with `tl.constexpr`.** Basic preference is `tl.constexpr` > no annotation > `tl.int64`/ `tl.int32` (for non-last strides) >> `tl.int64` / `tl.int32` for the last stride. Avoid annotating the last strides with `tl.int64` or `tl.int32`!
+
+
+### Use proper type annotations
 1. Set `tl.constexpr` type annotation for block sizes and boolean flags to let the compiler optimize. Each combination of arguments with this annotation is compiled separately. Avoid setting it for values that vary widely at runtime (like the number of tokens) to prevent excessive recompilation.
 2. No Annotation: You can keep type annotations empty and let the compiler guess. This is good for parameters that change often (like strides) to avoid recompilation.
 3. Avoid annotating with `tl.int64` or `tl.int32`. It can prevent many optimizations.
@@ -308,11 +316,16 @@ def matmul_kernel(
 ):
 ```
 
-## Tune kernel configuration
+### Benchmark, Tune Kernel Configuration
 
-### GRF Mode
-Setting it higher can be good for kernel that uses many registers, but will decrease hardware utilizaion.
-You can set it with `grf_mode = "256"`.
+Just like with any other Triton kernels, you want to pick appropriate block sizes to your hardware and tensor shapes. Use `triton.autotune` to try various combinations and find the best one. Key parameters to tune include block sizes, `num_warps`, `num_stages`, and `grf_mode`. 
+
+See existing [benchmarks](../benchmarks/triton_kernels_benchmark/) for reasonable configuration grids for [GEMM](../benchmarks/triton_kernels_benchmark/gemm_tensor_desc_benchmark.py) and [Flash Attention](../benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py) kernels.
+
+**GRF Mode**:
+The Intel-specific option `grf_mode` determines the number of registers allocated to a kernel.
+Setting it higher can be good for a kernel that uses many registers, but it will decrease hardware utilizaion.
+You can set high value with `grf_mode = "256"` if you have to.
 
 # Quick Installation
 
