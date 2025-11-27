@@ -7,7 +7,7 @@ import triton.language as tl
 
 def test_disam_cubin():
     if not triton.runtime.driver.active.get_current_target().backend == "cuda":
-        pytest.skip("Test requires CUDA.")
+        pytest.xfail("Test requires CUDA.")
 
     @triton.jit
     def kernel(X, i: tl.constexpr):
