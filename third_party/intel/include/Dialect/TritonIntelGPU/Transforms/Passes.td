@@ -27,6 +27,22 @@ def TritonIntelGPUAccelerateMatmul
   ];
 }
 
+
+def TritonIntelGPUHelloWorld
+    : Pass<"tritonintelgpu-hello-world", "mlir::ModuleOp"> {
+  let summary = "Intel hello world";
+
+  let description = [{
+    Hello world pass
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::TritonDialect",
+    "mlir::triton::gpu::intel::TritonIntelGPUDialect",
+  ];
+}
+
+
 def TritonIntelGPUOptimizeDotOperands
     : Pass<"tritonintelgpu-optimize-dot-operands", "mlir::ModuleOp"> {
   let summary = "Intel optimize dot operands";

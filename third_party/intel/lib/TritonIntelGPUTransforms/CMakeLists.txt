@@ -1,5 +1,6 @@
 add_triton_library(TritonIntelGPUTransforms
   AccelerateMatmul.cpp
+  HelloWorld.cpp
   Coalesce.cpp
   DecomposeScaledBlocked.cpp
   MaterializeBlockPointer.cpp
