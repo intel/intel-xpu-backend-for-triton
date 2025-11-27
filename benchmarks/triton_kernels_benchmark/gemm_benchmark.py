@@ -174,6 +174,87 @@ def gluon_matmul_kernel_dpas_tensor_desc(
     c_desc.store([pid_m * BLOCK_M, pid_n * BLOCK_N], accumulator)
 
 
+@gluon.jit
+def gluon_matmul_kernel_dpas_tensor_desc_batched(
+    a_ptr, b_ptr, c_ptr,
+    B: ttgl.constexpr, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr,
+    stride_az: ttgl.constexpr, stride_am: ttgl.constexpr, stride_ak: ttgl.constexpr,
+    stride_bz: ttgl.constexpr, stride_bk: ttgl.constexpr, stride_bn: ttgl.constexpr,
+    stride_cz: ttgl.constexpr, stride_cm: ttgl.constexpr, stride_cn: ttgl.constexpr,
+    BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, BLOCK_K: ttgl.constexpr,
+    GROUP_SIZE_M: ttgl.constexpr
+):
+    layout: ttgl.constexpr = IntelDPASLayout(
+        repeatCount=8,
+        systolic_depth=8,
+        execution_size=16,
+        ops_per_chan=2,
+        warps_per_cta=[8, 4],
+        rep_cluster=[4, 2],
+        threads_per_warp=16
+    )
+
+    lhs_layout: ttgl.constexpr = ttgl.DotOperandLayout(
+        parent=layout, operand_index=0, k_width=1
+    )
+    rhs_layout: ttgl.constexpr = ttgl.DotOperandLayout(
+        parent=layout, operand_index=1, k_width=2
+    )
+
+    bid = ttgl.program_id(axis=1)
+    pid = ttgl.program_id(axis=0)
+    num_pid_m = ttgl.cdiv(M, BLOCK_M)
+    num_pid_n = ttgl.cdiv(N, BLOCK_N)
+    num_pid_in_group = GROUP_SIZE_M * num_pid_n
+    group_id = pid // num_pid_in_group
+    first_pid_m = group_id * GROUP_SIZE_M
+    group_size_m = ttgl.minimum(num_pid_m - first_pid_m, GROUP_SIZE_M)
+    pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
+    pid_n = (pid % num_pid_in_group) // group_size_m
+
+    # Calculate batch offsets
+    offset_a = bid.to(ttgl.int64) * stride_az
+    offset_b = bid.to(ttgl.int64) * stride_bz
+    offset_c = bid.to(ttgl.int64) * stride_cz
+
+    a_desc = ttgl.intel.xpu.td.make_tensor_descriptor(
+        a_ptr + offset_a,
+        (M, K),
+        (stride_am, stride_ak),
+        (BLOCK_M, BLOCK_K),
+        lhs_layout
+    )
+    b_desc = ttgl.intel.xpu.td.make_tensor_descriptor(
+        b_ptr + offset_b,
+        (K, N),
+        (stride_bk, stride_bn),
+        (BLOCK_K, BLOCK_N),
+        rhs_layout
+    )
+    c_desc = ttgl.intel.xpu.td.make_tensor_descriptor(
+        c_ptr + offset_c,
+        (M, N),
+        (stride_cm, stride_cn),
+        (BLOCK_M, BLOCK_N),
+        layout
+    )
+
+    accumulator = ttgl.load_tensor_descriptor(c_desc, [pid_m * BLOCK_M, pid_n * BLOCK_N])
+
+    for k in range(0, ttgl.cdiv(K, BLOCK_K)):
+        a = ttgl.load_tensor_descriptor(a_desc, [pid_m * BLOCK_M, k * BLOCK_K])
+        b = ttgl.load_tensor_descriptor(b_desc, [k * BLOCK_K, pid_n * BLOCK_N])
+
+        accumulator = ttgl.xpu_dot_fma(a, b, accumulator)
+
+    ttgl.store_tensor_descriptor(c_desc, [pid_m * BLOCK_M, pid_n * BLOCK_N], accumulator)
+
+
+
+
+
+
+
 def get_matmul_autotune_configs() -> List[triton.Config]:
     configs = [
         triton.Config(
@@ -332,19 +413,38 @@ def gluon_matmul(a, b, c, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_SIZE_M, grf_mode, num
     )
 
     #gluon_matmul_kernel_dpas[grid](
-    gluon_matmul_kernel_dpas_tensor_desc[grid](
-        a, b, c,
-        M, N, K,
-        a.stride(0), a.stride(1),
-        b.stride(0), b.stride(1),
-        c.stride(0), c.stride(1),
-        BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,
-        GROUP_SIZE_M=GROUP_SIZE_M,
-        grf_mode=grf_mode,
-        num_warps=num_warps,
-        num_ctas=num_ctas,
-        num_stages=num_stages,
-    )
+    if len(a.shape) == 3 and len(b.shape) == 3:
+        assert a.shape[0] == b.shape[0], 'Incompatible Batch dimension'
+        B = a.shape[0]
+        gluon_matmul_kernel_dpas_tensor_desc_batched[grid](
+            a, b, c,
+            B, M, N, K,
+            a.stride(0), a.stride(1),
+            b.stride(0), b.stride(1),
+            c.stride(0), c.stride(1),
+            BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,
+            GROUP_SIZE_M=GROUP_SIZE_M,
+            grf_mode=grf_mode,
+            num_warps=num_warps,
+            num_ctas=num_ctas,
+            num_stages=num_stages,
+        )
+
+
+    else:
+        gluon_matmul_kernel_dpas_tensor_desc[grid](
+            a, b, c,
+            M, N, K,
+            a.stride(0), a.stride(1),
+            b.stride(0), b.stride(1),
+            c.stride(0), c.stride(1),
+            BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,
+            GROUP_SIZE_M=GROUP_SIZE_M,
+            grf_mode=grf_mode,
+            num_warps=num_warps,
+            num_ctas=num_ctas,
+            num_stages=num_stages,
+        )
     return c
 
 # We can now create a convenience wrapper function that only takes two input tensors,
@@ -413,45 +513,45 @@ def get_shapes(B, M, N, K, transpose_a, transpose_b):
 
 
 X_VALS = [  #
-    [1, 1, 1024, 4096], # works
-    # [1, 1, 4096, 4096], # hangs at synchronize after performing gluon kernel
-    # [1, 1, 4096, 14336],
-    # [1, 1, 6144, 4096],
-    # [1, 1, 13824, 5120],
-    # [1, 1, 14336, 4096],
-    # [1, 1, 28672, 4096],
-    # [1, 1, 128256, 4096],
-    # [1, 4, 12288, 4096],
-    # [1, 8, 1024, 4096],
-    # [1, 8, 4096, 4096],
-    # [1, 8, 4096, 14336],
-    # [1, 8, 6144, 4096],
-    # [1, 8, 14336, 4096],
-    # [1, 8, 28672, 4096],
-    # [1, 8, 128256, 4096],
-    # [1, 512, 8192, 8192],
-    # [1, 512, 8192, 32768],
-    # [1, 512, 32768, 8192],
-    # [1, 1024, 1024, 1024], # works
-    # [1, 1024, 8192, 16384],
-    # [1, 1024, 8192, 28672],
-    # [1, 2048, 2048, 2048],
-    # [1, 3072, 3072, 4096],  # FIXME: Remove this case when gemm_streamk_benchmark can get better performance
-    # [1, 4096, 4096, 4096], # works
-    # [1, 4096, 8192, 16384],
-    # [1, 8192, 1024, 16384],
-    # [1, 8192, 4096, 4096],
-    # [1, 8192, 4096, 16384],
-    # [1, 8192, 8192, 8192], # works
-    # [1, 16384, 1024, 8192],
-    # [1, 16384, 4096, 8192],
-    # [1, 16384, 8192, 1024],
-    # [1, 16384, 8192, 4096],
-    # [4, 32768, 128, 4096],
-    # [4, 32768, 4096, 128],
-    # [32, 4096, 128, 4096],
-    # [4096, 8, 128, 16384],
-    # [4096, 8, 16384, 128],
+    [1, 1, 1024, 4096],
+    [1, 1, 4096, 4096],
+    [1, 1, 4096, 14336],
+    [1, 1, 6144, 4096],
+    [1, 1, 13824, 5120],
+    [1, 1, 14336, 4096],
+    [1, 1, 28672, 4096],
+    [1, 1, 128256, 4096],
+    [1, 4, 12288, 4096],
+    [1, 8, 1024, 4096],
+    [1, 8, 4096, 4096],
+    [1, 8, 4096, 14336],
+    [1, 8, 6144, 4096],
+    [1, 8, 14336, 4096],
+    [1, 8, 28672, 4096],
+    [1, 8, 128256, 4096],
+    [1, 512, 8192, 8192],
+    [1, 512, 8192, 32768],
+    [1, 512, 32768, 8192],
+    [1, 1024, 1024, 1024],
+    [1, 1024, 8192, 16384],
+    [1, 1024, 8192, 28672],
+    [1, 2048, 2048, 2048],
+    [1, 3072, 3072, 4096],  # FIXME: Remove this case when gemm_streamk_benchmark can get better performance
+    [1, 4096, 4096, 4096],
+    [1, 4096, 8192, 16384],
+    [1, 8192, 1024, 16384],
+    [1, 8192, 4096, 4096],
+    [1, 8192, 4096, 16384],
+    [1, 8192, 8192, 8192],
+    [1, 16384, 1024, 8192],
+    [1, 16384, 4096, 8192],
+    [1, 16384, 8192, 1024],
+    [1, 16384, 8192, 4096],
+    [4, 32768, 128, 4096],
+    [4, 32768, 4096, 128],
+    [32, 4096, 128, 4096],
+    [4096, 8, 128, 16384],
+    [4096, 8, 16384, 128],
 ]
 
 DEVICE_NAME = torch.xpu.get_device_name()
@@ -601,9 +701,9 @@ def get_benchmark(
                 num_stages=NUM_STAGES,
                 maxnreg=MAXNREG
             )
-            # torch_fn = lambda: torch.matmul(torch_a, torch_b).to(torch.float32)
-            # rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
-            # benchmark_suite.assert_close(gluon_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='gluon to torch')
+            torch_fn = lambda: torch.matmul(torch_a, torch_b).to(torch.float32)
+            rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
+            benchmark_suite.assert_close(gluon_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='gluon to torch')
             # from pudb import set_trace
             # set_trace()
             print('calling do_bench')

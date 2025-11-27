@@ -299,7 +299,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         #mod = src
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        intel.passes.ttgpuir.add_hello_pass(pm)
+        #intel.passes.ttgpuir.add_hello_pass(pm)
         intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
         passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
         # intel.passes.ttgpuir.add_materialize_block_pointer(pm)
