@@ -75,8 +75,11 @@ static LogicalResult verify2DBlockAddressPayloadRestriction(Op op) {
       !isPowerOfTwo(vBlocks))
     return op->emitOpError("expecting tile shape to be power of two");
 
-  if (tileWidth > 64)
-    return op->emitOpError("expecting tile_width to be between 1 and 64");
+  constexpr unsigned maxTileWidth =
+      std::is_same_v<Op, TritonGEN::Matrix2DBlockPrefetchOp> ? 256 : 64;
+  if (tileWidth > maxTileWidth)
+    return op->emitOpError("expecting tile_width to be between 1 and " +
+                           std::to_string(maxTileWidth));
   if (tileHeight > 32)
     return op->emitOpError("expecting tile_height to be between 1 and 32");
   if (vBlocks > 4)
@@ -102,32 +105,47 @@ template <typename Op> static LogicalResult verify2DBlockHWRestriction(Op op) {
 
   uint32_t tileWidth = op.getTileWidth();
   uint32_t vBlocks = op.getVBlocks();
-  if (elemSizeInBits * tileWidth * vBlocks > 1024)
-    return op->emitOpError(
-        "expecting elem_size_in_bits * tile_width * v_blocks <= 1024");
 
-  assert(tileWidth >= 1 && tileWidth <= 64 &&
-         "tile_width should be between 1 and 64");
+  // The maximum bytes per operation per row supported by hardware:
+  // load/store: 64 bytes.
+  // prefetch: 256 bytes.
+  constexpr unsigned maxBitsPerOpPerRow =
+      std::is_same_v<Op, TritonGEN::Matrix2DBlockPrefetchOp> ? (256 * 8)
+                                                             : (64 * 8);
+  if (elemSizeInBits * tileWidth * vBlocks > maxBitsPerOpPerRow)
+    return op->emitOpError(
+        "expecting elem_size_in_bits * tile_width * v_blocks <= " +
+        std::to_string(maxBitsPerOpPerRow));
+
+  assert(tileWidth >= 1 && tileWidth <= 256 &&
+         "tile_width should be between 1 and 256");
+  unsigned maxTileWidth = maxBitsPerOpPerRow / elemSizeInBits;
   switch (elemSizeInBits) {
   case 8:
-    if (tileWidth < 4)
-      return op->emitOpError("expecting tile_width to be between 4 and 64");
+    if (tileWidth < 4 || tileWidth > maxTileWidth)
+      return op->emitOpError("expecting tile_width to be between 4 and " +
+                             std::to_string(maxTileWidth));
     break;
   case 16:
-    if (tileWidth < 2 || tileWidth > 32)
-      return op->emitOpError("expecting tile_width to be between 2 and 32");
+    if (tileWidth < 2 || tileWidth > maxTileWidth)
+      return op->emitOpError("expecting tile_width to be between 2 and " +
+                             std::to_string(maxTileWidth));
     break;
   case 32:
-    if (tileWidth > 16)
-      return op->emitOpError("expecting tile_width to be between 1 and 16");
-    if (vBlocks == 4)
-      return op->emitOpError("v_blocks for 32 bit elements should be 1 or 2");
+    if (tileWidth > maxTileWidth)
+      return op->emitOpError("expecting tile_width to be between 1 and " +
+                             std::to_string(maxTileWidth));
+    if constexpr (!std::is_same_v<Op, TritonGEN::Matrix2DBlockPrefetchOp>)
+      if (vBlocks == 4)
+        return op->emitOpError("v_blocks for 32 bit elements should be 1 or 2");
     break;
   case 64:
-    if (tileWidth > 8)
-      return op->emitOpError("expecting tile_width to be between 1 and 8");
-    if (vBlocks != 1)
-      return op->emitOpError("v_blocks for 64 bit elements should be 1");
+    if (tileWidth > maxTileWidth)
+      return op->emitOpError("expecting tile_width to be between 1 and " +
+                             std::to_string(maxTileWidth));
+    if constexpr (!std::is_same_v<Op, TritonGEN::Matrix2DBlockPrefetchOp>)
+      if (vBlocks != 1)
+        return op->emitOpError("v_blocks for 64 bit elements should be 1");
     break;
   default:
     llvm_unreachable("unexpected element size");
@@ -423,5 +441,17 @@ LogicalResult TritonGEN::Matrix2DBlockStoreOp::verify() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult TritonGEN::Matrix2DBlockPrefetchOp::verify() {
-  return verify2DBlockHWRestriction(*this);
+  if (verify2DBlockHWRestriction(*this).failed())
+    return failure();
+
+  uint32_t tileWidth = getTileWidth();
+  uint32_t vBlocks = getVBlocks();
+  uint32_t elemSizeInBits = getElemSizeInBits();
+  uint32_t bitsPerRow = elemSizeInBits * tileWidth * vBlocks;
+
+  if (!(bitsPerRow <= (64 * 8) || bitsPerRow == (256 * 8)))
+    return emitOpError(
+        "expecting bytes per row either <= 64 bytes or 256 bytes");
+
+  return success();
 }

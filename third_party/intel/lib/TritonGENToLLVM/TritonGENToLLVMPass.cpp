@@ -286,6 +286,11 @@ static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockPrefetchOp op) {
       op.getTileWidth() == 8 && op.getVBlocks() == 1)
     return false;
 
+  unsigned prefetchBytes =
+      (op.getElemSizeInBits() * op.getTileWidth() * op.getVBlocks()) / 8;
+  if (prefetchBytes == 256)
+    return false;
+
   return true;
 }
 
