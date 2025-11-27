@@ -27,7 +27,7 @@ def _select_backend() -> str:
         try:
             if (files := importlib.metadata.files('intel-pti')) is not None:
                 for f in files:
-                    if any(map(lambda el: el in f.name, ('libpti_view.so', 'pti_view.lib'))):  # pylint: disable=W0640
+                    if any(map(lambda el: el in f.name, ('libpti_view.so', 'pti_view-0.dll'))):  # pylint: disable=W0640
                         os.environ["TRITON_XPUPTI_LIB_PATH"] = str(pathlib.Path(f.locate()).parent.resolve())
                         break
         except importlib.metadata.PackageNotFoundError:

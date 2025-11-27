@@ -9,7 +9,7 @@ namespace xpupti {
 struct ExternLibXpupti : public ExternLibBase {
   using RetType = pti_result;
 #if defined(_WIN32)
-  static constexpr const char *name = "pti_view.lib";
+  static constexpr const char *name = "pti_view-0.dll";
 #else
   static constexpr const char *name = "libpti_view.so";
 #endif
