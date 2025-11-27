@@ -376,7 +376,7 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
     # This is fixed in PTXAS 13.0.88. Remove once we upgrade
     if bitwidth == 16 and ((transpose_a and swizzling_a == 0 and shape_m > 1) or
                            (not transpose_b and swizzling_b == 0 and shape_n > 1)):
-        pytest.skip("Skipped due to a bug in PTXAS when the shared layout is transposed and the swizzling is 0")
+        pytest.xfail("Skipped due to a bug in PTXAS when the shared layout is transposed and the swizzling is 0")
     use_tcgen05 = is_blackwell()
     if two_ctas and ctas_per_cga != [2, 1]:
         pytest.skip("twoCTA MMA is only supported for [2, 1] CTAs per CGA for now")
@@ -536,7 +536,7 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
         )
     except OutOfResources:
         # FIXME: Compute a priori
-        pytest.skip("Not enough shared memory")
+        pytest.xfail("Not enough shared memory")
 
     if two_ctas:
         assert "two_ctas" in compiled.asm["ttgir"]
