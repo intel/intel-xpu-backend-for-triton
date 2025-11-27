@@ -1935,6 +1935,9 @@ struct LoadOpToBlockIOConversion
         TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>());
 
     StringAttr kRegister = S("register");
+    StringAttr kLane = S("lane");
+    StringAttr kWarp = S("warp");
+    StringAttr kBlock = S("block");
     assert(regPackedBases.has_value() &&
            "invalid register bases for packing elems.");
     std::vector<std::vector<int>> bases(regPackedBases->size());
@@ -2073,7 +2076,7 @@ struct LoadOpToBlockIOConversion
 
       // use the d32 for transpose 2d load.
       packedElemSizeInBits = 32;
-      numPackedVals = packedElemSizeInBits / elemSizeInBits;
+      numPackedVals = mlir::ceil(packedElemSizeInBits, elemSizeInBits);
 
       // Improve this. The current 2D block load only transposes the matrix at
       // i32 granularity. We still need to perform an additional in-register
@@ -2109,8 +2112,8 @@ struct LoadOpToBlockIOConversion
     int stride = getStride(ptr, memoryRowMajor ? 0 : 1);
     unsigned baseHeightInt = (stride == 0 ? 1 : tileHeight);
     Value baseHeight = b.i32_val(baseHeightInt);
-    Value baseWidth = b.i32_val(
-        std::max(64u, vBlocks * tileWidth * (packedElemSizeInBits / 8)));
+    Value baseWidth =
+        b.i32_val(vBlocks * tileWidth * (packedElemSizeInBits / 8));
 
     bool useVNNIFormat = false;
     Type packedDPASOperandType;
@@ -2211,16 +2214,43 @@ struct LoadOpToBlockIOConversion
       } break;
       }
     }
+    Value warpId = rewriter.create<arith::IndexCastOp>(
+        loc, i32_ty,
+        rewriter.create<mlir::gpu::SubgroupIdOp>(loc,
+                                                 /*upperBound=*/nullptr));
+
     SmallVector<Value> unpackedLoadedVals(numElems);
     for (size_t elemIdx = 0; elemIdx < numElems; elemIdx += numElemsPerLoad) {
       unsigned registerIdx = regMapping.apply({{kRegister, elemIdx}})[0].second;
+
+      // Need to apply the linear layout to get the offsets to the base of the
+      // block pointer.
+      // TODO: add annotation uniform to the offsets. Make sure the IGC detect
+      // the offsets as uniform.
+      auto offsets = applyLinearLayout(loc, rewriter, *llEncoding,
+                                       {{kRegister, b.i32_val(registerIdx)},
+                                        {kLane, b.i32_val(0)},
+                                        {kWarp, warpId},
+                                        {kBlock, b.i32_val(0)}});
+      // TODO: To support rank > 2 tensor, we need to add the offsets of other
+      // dim to the base.
+      assert(offsets.size() == 2 && "only support 2D tensor for now.");
 
       // Use the top-left address of the block to load the data.
       Value addrElem = ptrElems[registerIdx];
       addrElem = targetInfo.shuffleIdx(rewriter, loc, addrElem, 0);
 
-      Value offsetX = b.i32_val(0);
+      // Adjust the baseWidth, offsetX and base address use the original base
+      // of the BLOCK.
+      Value offsetX = offsets[isTransposeRequired ? rowDim : colDim].second;
       Value offsetY = b.i32_val(0);
+      Value negOffsetX = b.sub(b.i32_val(0), offsetX);
+      addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, negOffsetX);
+      // The offset is in number of original elements. So we need to scale it
+      // by element bytes size.
+      Value adjustedBaseWidth =
+          b.add(baseWidth, b.mul(offsetX, b.i32_val(elemSizeInBits / 8)));
+      adjustedBaseWidth = b.umax(adjustedBaseWidth, b.i32_val(64));
       Value pred;
       if (maskElems.size()) {
         pred = targetInfo.shuffleIdx(rewriter, loc, maskElems[registerIdx], 0);
@@ -2233,13 +2263,16 @@ struct LoadOpToBlockIOConversion
         offsetY = b.select(pred, offsetY, baseHeight);
       }
 
+      assert(numPackedVals > 0 && "numPackedVals should be greater than zero.");
       Value ret = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
           loc, load2DGenXType,
           /*ptr*/ addrElem,
-          /*base_width*/ baseWidth,
+          /*base_width*/ adjustedBaseWidth,
           /*base_height*/ baseHeight,
           /*base_pitch*/ pitch,
-          /*x*/ offsetX,
+          // offsetX was in terms of original elements. The 2d block io requires
+          // offsetX to be in terms of packed elements.
+          /*x*/ b.udiv(offsetX, b.i32_val(numPackedVals)),
           /*y*/ offsetY,
           /*elem_size_in_bits*/ packedElemSizeInBits,
           /*tile_width*/ tileWidth,
@@ -2673,8 +2706,7 @@ struct StoreOpToBlockIOConversion
           return failure();
       }
 
-      baseWidth = b.i32_val(
-          std::max(64u, vBlocks * tileWidth * (packedElemSizeInBits / 8)));
+      baseWidth = b.i32_val(vBlocks * tileWidth * (packedElemSizeInBits / 8));
       baseHeight = b.i32_val(tileHeight);
       pitch = getPitch(rewriter, ptr, elemSizeInBits, memoryRowMajor ? 0 : 1);
       if (!pitch)
@@ -2726,24 +2758,26 @@ struct StoreOpToBlockIOConversion
     for (size_t valIdx = 0; valIdx < numElems; valIdx += numElemsPerStore) {
       unsigned registerIdx = regMapping.apply({{kRegister, valIdx}})[0].second;
 
+      // Need to apply the linear layout to get the offsets to the base of
+      // the block pointer.
+      // TODO: add annotation uniform to the offsets. Make sure the IGC
+      // detect the offsets as uniform.
+      auto offsets = applyLinearLayout(loc, rewriter, *llEncoding,
+                                       {{kRegister, b.i32_val(registerIdx)},
+                                        {kLane, b.i32_val(0)},
+                                        {kWarp, warpId},
+                                        {kBlock, b.i32_val(0)}});
+      // TODO: To support rank > 2 tensor, we need to add the offsets of
+      // other dim to the base.
+      assert(offsets.size() == 2 && "only support 2D tensor for now.");
+
       // TODO: the threadPred has to be the uniform value. Maybe just add an
       // attribute to notify IGC about this information.
       Value pred = threadPred;
       Value addrElem = ptrElems[registerIdx];
       Value offsetX, offsetY;
+      Value adjustedBaseWidth = baseWidth, adjustedBaseHeight = baseHeight;
       if (isBlockPointer) {
-        // Need to apply the linear layout to get the offsets to the base of
-        // the block pointer.
-        // TODO: add annotation uniform to the offsets. Make sure the IGC
-        // detect the offsets as uniform.
-        auto offsets = applyLinearLayout(loc, rewriter, *llEncoding,
-                                         {{kRegister, b.i32_val(registerIdx)},
-                                          {kLane, b.i32_val(0)},
-                                          {kWarp, warpId},
-                                          {kBlock, b.i32_val(0)}});
-        // TODO: To support rank > 2 tensor, we need to add the offsets of
-        // other dim to the base.
-        assert(offsets.size() == 2 && "only support 2D tensor for now.");
         offsetX = b.add(offsetBaseX, offsets[colDim].second);
         offsetY = b.add(offsetBaseY, offsets[rowDim].second);
 
@@ -2753,21 +2787,14 @@ struct StoreOpToBlockIOConversion
                                           op.getBoundaryCheck().end());
 
         if (!boundaryCheck.contains(colDim)) {
-          baseWidth = b.i32_val(
+          adjustedBaseWidth = b.i32_val(
               std::max(64u, vBlocks * tileWidth * (packedElemSizeInBits / 8)));
           // The offsetX is number of elements instead of packed elements.
           addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, offsetX);
           offsetX = b.i32_val(0);
-        } else {
-          assert(numPackedVals > 0 &&
-                 "numPackedVals should be greater than zero.");
-          // The offsetX of linear layout is in original elements.
-          // The 2d block io requires the offsetX in number of packed
-          // elements.
-          offsetX = b.udiv(offsetX, b.i32_val(numPackedVals));
         }
         if (!boundaryCheck.contains(rowDim)) {
-          baseHeight = b.i32_val(tileHeight);
+          adjustedBaseHeight = b.i32_val(tileHeight);
           // Use i8_ty as pitch is in number of bytes.
           Value off = b.mul(offsetY, pitch);
           addrElem = b.gep(ptr_ty(ctx, 1), i8_ty, addrElem, off);
@@ -2776,8 +2803,18 @@ struct StoreOpToBlockIOConversion
       } else {
         addrElem = targetInfo.shuffleIdx(rewriter, loc, addrElem, 0);
 
-        offsetX = offsetBaseX;
-        offsetY = offsetBaseY;
+        // Adjust the baseWidth, offsetX and base address use the original base
+        // of the BLOCK.
+        offsetX = offsets[colDim].second;
+        offsetY = b.i32_val(0);
+        Value negOffsetX = b.sub(b.i32_val(0), offsetX);
+        addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, negOffsetX);
+        // The offset is in number of original elements. So we need to scale it
+        // by element bytes size.
+        adjustedBaseWidth =
+            b.add(baseWidth, b.mul(offsetX, b.i32_val(elemSizeInBits / 8)));
+        adjustedBaseWidth = b.umax(adjustedBaseWidth, b.i32_val(64));
+
         // Use the top-left address and mask of the block to store the data.
         // (The first value refer by the registerIdx.)
         if (maskElems.size()) {
@@ -2793,8 +2830,9 @@ struct StoreOpToBlockIOConversion
         // We leverage the GPU block I/O hardware out-of-bound protection
         // feature by setting the offset to an invalid value when 'pred'
         // is false (the HW will not read out-of-bounds values).
-        offsetY = b.select(pred, offsetY, baseHeight);
+        offsetY = b.select(pred, offsetY, adjustedBaseHeight);
       }
+      assert(numPackedVals > 0 && "numPackedVals should be greater than zero.");
 
       // Compose the matrix by stacking the scalar into vector.
       Value storeVal = rewriter.create<LLVM::UndefOp>(loc, store2DComposeType);
@@ -2808,7 +2846,10 @@ struct StoreOpToBlockIOConversion
         storeVal = b.bitcast(storeVal, store2DGenXType);
 
       auto newOp = rewriter.create<TritonGEN::Matrix2DBlockStoreOp>(
-          loc, addrElem, baseWidth, baseHeight, pitch, offsetX, offsetY,
+          loc, addrElem, adjustedBaseWidth, adjustedBaseHeight, pitch,
+          // offsetX was in terms of original elements. The 2d block io requires
+          // offsetX to be in terms of packed elements.
+          b.udiv(offsetX, b.i32_val(numPackedVals)), offsetY,
           packedElemSizeInBits, tileWidth, tileHeight,
           /*v_blocks, only 1 supported*/ 1, storeVal);
 
