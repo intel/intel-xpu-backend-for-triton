@@ -54,7 +54,7 @@ def make_default_opt_flags_intel(
     m,
     n,
     k,
-    routing_data,
+    ragged_metadata,
     can_use_persistent_tma,
     can_use_split_k,
     enforce_bitwise_invariance,
@@ -65,13 +65,13 @@ def make_default_opt_flags_intel(
 ):
     constraints_supported = ["block_m", "block_k", "split_k", "is_persistent", "epilogue_subtile", "num_stages", "max_allowable_mn"]
     assert not any([c not in constraints_supported for c in constraints]), constraints.keys()
-    # tokens per expert
-    if routing_data is None:
-        tokens_per_expt = m
-    elif routing_data.expected_tokens_per_expt is None:
-        tokens_per_expt = max(1, m // routing_data.n_expts_tot)
+    # tokens per slice
+    if ragged_metadata is None:
+        slice_size = m
+    elif ragged_metadata.expected_slice_size is None:
+        slice_size = max(1, m // ragged_metadata.n_slices)
     else:
-        tokens_per_expt = routing_data.expected_tokens_per_expt
+        slice_size = ragged_metadata.expected_slice_size
     # pid swizzling
     group_m = 8
     xcd_swizzle = 1
@@ -81,7 +81,7 @@ def make_default_opt_flags_intel(
     elif enforce_bitwise_invariance:
         block_m = 128
     else:
-        block_m = max(16, min(triton.next_power_of_2(tokens_per_expt), 128))
+        block_m = max(16, min(triton.next_power_of_2(slice_size), 128))
     # block n
     block_n = opt_flags_intel.compute_block_n(n)
     # is_persistent
