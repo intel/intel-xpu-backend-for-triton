@@ -11,9 +11,12 @@ from types import ModuleType
 import hashlib
 import tempfile
 import signal
+import io
+import re
 import os
 import subprocess
 from pathlib import Path
+from elftools.elf.elffile import ELFFile
 
 try:  # XPUBackend allows metaclasses injection
     from .meta import XPUBackendMeta
@@ -421,42 +424,57 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
         metadata["generate_native_code"] = options.generate_native_code
 
-        with track("generate_native_code"), tempfile.TemporaryDirectory() as temp_dir:
-            with tempfile.NamedTemporaryFile(mode='wb', suffix='.spv', dir=temp_dir, delete=False) as fsrc:
-                fsrc.write(src)
-            fbin = fsrc.name + '.o'
+        def build_zebin(build_flags, extract_spill_size=False):
+            with track("generate_native_code"), tempfile.TemporaryDirectory() as temp_dir:
+                with tempfile.NamedTemporaryFile(mode='wb', suffix='.spv', dir=temp_dir, delete=False) as fsrc:
+                    fsrc.write(src)
+                fbin = fsrc.name + '.o'
 
-            ocloc_cmd = [
-                'ocloc', 'compile', '-file', fsrc.name, '-o', fbin, '-spirv_input', '-device', cls.device_arch,
-                '-options', metadata["build_flags"] + shader_dump_opt
-            ]
+                ocloc_cmd = [
+                    'ocloc', 'compile', '-file', fsrc.name, '-o', fbin, '-spirv_input', '-device', cls.device_arch,
+                    '-options', build_flags + shader_dump_opt
+                ]
 
-            try:
-                output = subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
-                if 'spilled' in output and metadata["build_flags"].find("-cl-intel-256-GRF-per-thread") == -1:
-                    """
-                    The exact message is something like:
-                        warning: kernel matmul_kernel  compiled SIMD16 allocated 128 regs and spilled around 217
-                    is "spilled" enough for now?
-                    """
-                    metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
-                    # re-run with new build flags
-                    ocloc_cmd[-1] = metadata["build_flags"] + shader_dump_opt
+                try:
                     subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
-            except subprocess.CalledProcessError as e:
-                if e.returncode == 255:
-                    error = 'Internal Triton ZEBIN codegen error'
-                elif e.returncode == 128 + signal.SIGSEGV:
-                    error = '`ocloc` raised SIGSEGV'
-                else:
-                    error = f'`ocloc` failed with error code {e.returncode}'
+                except subprocess.CalledProcessError as e:
+                    if e.returncode == 255:
+                        error = 'Internal Triton ZEBIN codegen error'
+                    elif e.returncode == 128 + signal.SIGSEGV:
+                        error = '`ocloc` raised SIGSEGV'
+                    else:
+                        error = f'`ocloc` failed with error code {e.returncode}'
 
-                raise RuntimeError(f'{error}\n'
-                                   f'`ocloc` stderr:\n{e.output}\n'
-                                   f'Repro command: {ocloc_cmd}\n') from e
+                    raise RuntimeError(f'{error}\n'
+                                       f'`ocloc` stderr:\n{e.output}\n'
+                                       f'Repro command: {ocloc_cmd}\n') from e
 
-            with open(fbin, 'rb') as f:
-                zebin = f.read()
+                with open(fbin, 'rb') as f:
+                    zebin = f.read()
+                    spill_size = 0
+                    if extract_spill_size:
+                        elf = ELFFile(io.BytesIO(zebin))
+                        zeinfo = elf.get_section_by_name(".ze_info")
+                        if zeinfo is None:
+                            raise RuntimeError('Internal Triton ZEBIN codegen error:'
+                                               'Section .ze_info not found in zebin')
+                        data = zeinfo.data()
+                        text = data.decode('utf-8')
+                        match = re.search(r'spill_size\s*[:=]\s*(\d+)', text)
+                        if match:
+                            spill_size = int(match.group(1))
+            return zebin, spill_size
+
+        auto_grf = options.grf_mode == 'default'
+        zebin, spill_size = build_zebin(metadata["build_flags"], extract_spill_size=auto_grf)
+
+        # The threshold of 1000 for spill_size is chosen based on empirical observations
+        # and aligned with triton/backends/intel/driver.c
+        if auto_grf and spill_size > 1000:
+            metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
+            # re-run with double GRF mode
+            zebin, _ = build_zebin(metadata["build_flags"], extract_spill_size=False)
+
         return zebin
 
     def add_stages(self, stages, options, language):
