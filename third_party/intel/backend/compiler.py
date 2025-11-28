@@ -458,8 +458,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                         if zeinfo is None:
                             raise RuntimeError('Internal Triton ZEBIN codegen error:'
                                                'Section .ze_info not found in zebin')
-                        data = zeinfo.data()
-                        text = data.decode('utf-8')
+                        text = zeinfo.data().decode('utf-8')
                         match = re.search(r'spill_size\s*[:=]\s*(\d+)', text)
                         if match:
                             spill_size = int(match.group(1))
