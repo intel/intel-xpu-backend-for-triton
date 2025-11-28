@@ -11,9 +11,11 @@ from types import ModuleType
 import hashlib
 import tempfile
 import signal
+import re
 import os
 import subprocess
 from pathlib import Path
+from elftools.elf.elffile import ELFFile
 
 try:  # XPUBackend allows metaclasses injection
     from .meta import XPUBackendMeta
@@ -66,6 +68,23 @@ class XPUOptions:
     def hash(self):
         key = '_'.join([f'{name}-{val}' for name, val in self.__dict__.items()])
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
+
+
+SPILL_SIZE_RE = re.compile(r'spill_size\s*[:=]\s*(\d+)')
+
+
+def extract_spill_size_from_zebin(file):
+    with open(file, 'rb') as f:
+        elf = ELFFile(f)
+        zeinfo = elf.get_section_by_name(".ze_info")
+        if zeinfo is None:
+            raise RuntimeError('Internal Triton ZEBIN codegen error:'
+                               'Section .ze_info not found in zebin')
+        text = zeinfo.data().decode('utf-8')
+        match = SPILL_SIZE_RE.search(text)
+        if match:
+            return int(match.group(1))
+    return 0
 
 
 class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
@@ -428,21 +447,20 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
             ocloc_cmd = [
                 'ocloc', 'compile', '-file', fsrc.name, '-o', fbin, '-spirv_input', '-device', cls.device_arch,
-                '-options', metadata["build_flags"] + shader_dump_opt
+                '-options', metadata['build_flags'] + shader_dump_opt
             ]
 
             try:
-                output = subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
-                if 'spilled' in output and metadata["build_flags"].find("-cl-intel-256-GRF-per-thread") == -1:
-                    """
-                    The exact message is something like:
-                        warning: kernel matmul_kernel  compiled SIMD16 allocated 128 regs and spilled around 217
-                    is "spilled" enough for now?
-                    """
-                    metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
-                    # re-run with new build flags
-                    ocloc_cmd[-1] = metadata["build_flags"] + shader_dump_opt
-                    subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
+                subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
+                if options.grf_mode == 'default':
+                    spill_size = extract_spill_size_from_zebin(fbin)
+                    # The threshold of 1000 for spill_size is chosen based on empirical observations
+                    # and aligned with triton/backends/intel/driver.c
+                    if spill_size > 1000:
+                        metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
+                        # re-run with double GRF mode
+                        ocloc_cmd[-1] = metadata["build_flags"] + shader_dump_opt
+                        subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
             except subprocess.CalledProcessError as e:
                 if e.returncode == 255:
                     error = 'Internal Triton ZEBIN codegen error'
