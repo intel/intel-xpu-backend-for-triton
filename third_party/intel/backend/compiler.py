@@ -465,12 +465,12 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                             spill_size = int(match.group(1))
             return zebin, spill_size
 
-        auto_grf = options.grf_mode == 'default'
-        zebin, spill_size = build_zebin(metadata["build_flags"], extract_spill_size=auto_grf)
+        default_grf = options.grf_mode == 'default'
+        zebin, spill_size = build_zebin(metadata["build_flags"], extract_spill_size=default_grf)
 
         # The threshold of 1000 for spill_size is chosen based on empirical observations
         # and aligned with triton/backends/intel/driver.c
-        if auto_grf and spill_size > 1000:
+        if default_grf and spill_size > 1000:
             metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
             # re-run with double GRF mode
             zebin, _ = build_zebin(metadata["build_flags"], extract_spill_size=False)
