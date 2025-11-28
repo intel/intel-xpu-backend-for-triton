@@ -73,7 +73,10 @@ protected:
       splitStorage.assign(spt.size(), 1);
     if (cOrder.empty())
       cOrderStorage.assign(order.begin(), order.end());
-
+    auto test = mlir::triton::gpu::CTAEncodingAttr::fromSplitParams(
+        &ctx, {1, 1}, {1, 1}, {0, 1});
+    llvm::errs() << "HERE\n";
+    llvm::errs() << test.getLinearLayout().toString();
     auto cta = mlir::triton::gpu::CTAEncodingAttr::fromSplitParams(
         &ctx, cpgStorage.empty() ? cpg : ArrayRef<unsigned>(cpgStorage),
         splitStorage.empty() ? split : ArrayRef<unsigned>(splitStorage),

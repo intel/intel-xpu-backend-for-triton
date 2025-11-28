@@ -62,33 +62,26 @@ class SliceLayout:
 
 class BlockedLayout:
 
-    def __init__(self, size_per_thread, threads_per_warp, warps_per_cta, order, ctas_per_cga=[1, 1],
-                 cta_split_num=[1, 1], cta_order=[0, 1]):
+    def __init__(self, size_per_thread, threads_per_warp, warps_per_cta, order):
         self.sz_per_thread = size_per_thread
         self.threads_per_warp = threads_per_warp
         self.warps_per_cta = warps_per_cta
         self.order = order
-        self.ctas_per_cga = ctas_per_cga
-        self.cta_split_num = cta_split_num
-        self.cta_order = cta_order
 
     def __str__(self):
-        return f"#{GPU_DIALECT}.blocked<{{sizePerThread={self.sz_per_thread}, threadsPerWarp={self.threads_per_warp}, warpsPerCTA={self.warps_per_cta}, order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
+        return f"#{GPU_DIALECT}.blocked<{{sizePerThread={self.sz_per_thread}, threadsPerWarp={self.threads_per_warp}, warpsPerCTA={self.warps_per_cta}, order={self.order}}}>"
 
 
 class SwizzledSharedLayout:
 
-    def __init__(self, vec, per_phase, max_phase, order, ctas_per_cga, cta_split_num, cta_order):
+    def __init__(self, vec, per_phase, max_phase, order):
         self.vec = vec
         self.per_phase = per_phase
         self.max_phase = max_phase
         self.order = order
-        self.ctas_per_cga = ctas_per_cga
-        self.cta_split_num = cta_split_num
-        self.cta_order = cta_order
 
     def __str__(self):
-        return f"#{GPU_DIALECT}.swizzled_shared<{{vec={self.vec}, perPhase={self.per_phase}, maxPhase={self.max_phase}, order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
+        return f"#{GPU_DIALECT}.swizzled_shared<{{vec={self.vec}, perPhase={self.per_phase}, maxPhase={self.max_phase}, order={self.order}}}>"
 
 
 class PaddedSharedLayout:
@@ -172,17 +165,17 @@ def get_reduce_input(dtype_str, shape):
 
 
 scan_layouts = [
-    BlockedLayout([1, 4], [4, THREADS_PER_WARP // 4], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([4, 1], [4, THREADS_PER_WARP // 4], [1, 4], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([2, 2], [4, THREADS_PER_WARP // 4], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([2, 2], [8, THREADS_PER_WARP // 8], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [4, THREADS_PER_WARP // 4], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([4, 1], [4, THREADS_PER_WARP // 4], [1, 4], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([2, 2], [4, THREADS_PER_WARP // 4], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([2, 2], [8, THREADS_PER_WARP // 8], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 2], [1, THREADS_PER_WARP // 1], [1, 4], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 4], [4, THREADS_PER_WARP // 4], [4, 1], [0, 1]),
+    BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [4, 1], [0, 1]),
+    BlockedLayout([4, 1], [4, THREADS_PER_WARP // 4], [1, 4], [0, 1]),
+    BlockedLayout([2, 2], [4, THREADS_PER_WARP // 4], [2, 2], [0, 1]),
+    BlockedLayout([2, 2], [8, THREADS_PER_WARP // 8], [2, 2], [0, 1]),
+    BlockedLayout([1, 4], [4, THREADS_PER_WARP // 4], [4, 1], [1, 0]),
+    BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [4, 1], [1, 0]),
+    BlockedLayout([4, 1], [4, THREADS_PER_WARP // 4], [1, 4], [1, 0]),
+    BlockedLayout([2, 2], [4, THREADS_PER_WARP // 4], [2, 2], [1, 0]),
+    BlockedLayout([2, 2], [8, THREADS_PER_WARP // 8], [2, 2], [1, 0]),
+    BlockedLayout([1, 2], [1, THREADS_PER_WARP // 1], [1, 4], [1, 0]),
 ]
 
 
@@ -254,8 +247,8 @@ def test_scan_layouts(M, N, src_layout, axis, add_overflow_check, device, tmp_pa
 
 
 layouts = [
-    BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [4, 1], [1, 0]),
+    BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [4, 1], [0, 1]),
     DpasLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=1, threads_per_warp=32,
                warps_per_cta=[4, 1], rep_cluster=[1, 1]),
     DpasLayout(repeatCount=8, systolic_depth=8, execution_size=16, ops_per_chan=2, threads_per_warp=32,
@@ -305,7 +298,7 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, add_ov
     store_range = "%7" if axis == 0 else "%1"
     warps = warps_per_cta(src_layout, [M, N])
     num_warps = int(np.prod(warps))
-    blocked = BlockedLayout([1, 1], [32, THREADS_PER_WARP // 32], [4, num_warps // 4], [0, 1], [1, 1], [1, 1], [0, 1])
+    blocked = BlockedLayout([1, 1], [32, THREADS_PER_WARP // 32], [4, num_warps // 4], [0, 1])
     one_d_layout = BlockedLayout([1], [THREADS_PER_WARP], [num_warps], [0], [1], [1], [0])
 
     expanded_shape = f"1x{N}" if axis == 0 else f"{M}x1"
@@ -397,8 +390,8 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, add_ov
 
 
 layouts = [
-    BlockedLayout([1, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [1, THREADS_PER_WARP], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0]),
+    BlockedLayout([1, 4], [1, THREADS_PER_WARP], [2, 2], [1, 0]),
     DpasLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=1, threads_per_warp=32,
                warps_per_cta=[4, 1], rep_cluster=[1, 1]),
 ]
@@ -443,8 +436,8 @@ def test_store_op(M, src_layout, device, tmp_path: pathlib.Path):
 
 
 layouts = [
-    BlockedLayout([1, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [1, THREADS_PER_WARP], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0]),
+    BlockedLayout([1, 4], [1, THREADS_PER_WARP], [2, 2], [1, 0]),
     DpasLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=1, threads_per_warp=32,
                warps_per_cta=[4, 1], rep_cluster=[1, 1])
 ]
@@ -532,10 +525,10 @@ def test_convert1d_bool(M, src_layout, dst_layout, src_dim, dst_dim, device, tmp
 
 
 layouts = [
-    BlockedLayout([1, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [1, THREADS_PER_WARP], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [THREADS_PER_WARP // 32, 32], [1, 4], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1])
+    BlockedLayout([1, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0]),
+    BlockedLayout([1, 4], [1, THREADS_PER_WARP], [2, 2], [1, 0]),
+    BlockedLayout([1, 4], [THREADS_PER_WARP // 32, 32], [1, 4], [1, 0]),
+    BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [2, 2], [0, 1])
 ]
 
 
@@ -611,8 +604,8 @@ def test_chain_reduce(M, N, src_layout, op, device, first_axis, tmp_path: pathli
 # TODO: backend should be tested separately
 
 layouts = [
-    BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 16], [8, THREADS_PER_WARP // 8], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [2, 2], [0, 1]),
+    BlockedLayout([1, 16], [8, THREADS_PER_WARP // 8], [4, 1], [1, 0]),
     DpasLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=1, threads_per_warp=32,
                warps_per_cta=[4, 1], rep_cluster=[1, 1]),
     DpasLayout(repeatCount=2, systolic_depth=8, execution_size=8, ops_per_chan=1, threads_per_warp=32,
@@ -621,10 +614,10 @@ layouts = [
 
 intermediate_layouts = [
     None,
-    SwizzledSharedLayout(1, 1, 1, [0, 1], [1, 1], [1, 1], [0, 1]),
-    SwizzledSharedLayout(1, 1, 1, [1, 0], [1, 1], [1, 1], [0, 1]),
-    SwizzledSharedLayout(4, 2, 4, [1, 0], [1, 1], [1, 1], [0, 1]),
-    SwizzledSharedLayout(2, 2, 4, [1, 0], [1, 1], [1, 1], [0, 1]),
+    SwizzledSharedLayout(1, 1, 1, [0, 1]),
+    SwizzledSharedLayout(1, 1, 1, [1, 0]),
+    SwizzledSharedLayout(4, 2, 4, [1, 0]),
+    SwizzledSharedLayout(2, 2, 4, [1, 0]),
 ]
 
 
@@ -736,15 +729,15 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device, t
 
 
 layouts_3d = [
-    BlockedLayout([4, 4, 1], [1, 8, THREADS_PER_WARP // 8], [2, 2, 1], [2, 1, 0], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
-    BlockedLayout([1, 1, 4], [8, THREADS_PER_WARP // 8, 1], [2, 1, 2], [1, 2, 0], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
+    BlockedLayout([4, 4, 1], [1, 8, THREADS_PER_WARP // 8], [2, 2, 1], [2, 1, 0]),
+    BlockedLayout([1, 1, 4], [8, THREADS_PER_WARP // 8, 1], [2, 1, 2], [1, 2, 0]),
 ]
 
 shared_layouts_3d = [
-    SwizzledSharedLayout(1, 1, 1, [2, 1, 0], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
-    SwizzledSharedLayout(4, 2, 4, [1, 2, 0], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
-    SwizzledSharedLayout(8, 2, 4, [0, 2, 1], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
-    SwizzledSharedLayout(4, 2, 1, [2, 0, 1], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
+    SwizzledSharedLayout(1, 1, 1, [2, 1, 0]),
+    SwizzledSharedLayout(4, 2, 4, [1, 2, 0]),
+    SwizzledSharedLayout(8, 2, 4, [0, 2, 1]),
+    SwizzledSharedLayout(4, 2, 1, [2, 0, 1]),
 ]
 
 
@@ -841,9 +834,9 @@ dot_layouts = [
 ]
 
 shared_layouts = [
-    SwizzledSharedLayout(4, 2, 4, [0, 1], [1, 1], [1, 1], [0, 1]),
-    SwizzledSharedLayout(8, 1, 8, [1, 0], [1, 1], [1, 1], [0, 1]),
-    SwizzledSharedLayout(16, 1, 16, [1, 0], [1, 1], [1, 1], [0, 1]),
+    SwizzledSharedLayout(4, 2, 4, [0, 1]),
+    SwizzledSharedLayout(8, 1, 8, [1, 0]),
+    SwizzledSharedLayout(16, 1, 16, [1, 0]),
 ]
 
 
@@ -855,7 +848,7 @@ def test_split_subview(M, N, M_tile_size, N_tile_size, device, tmp_path: pathlib
     num_repeats_N = triton.cdiv(N, N_tile_size)
 
     ir = f"""
-    #blocked = #ttg.blocked<{{sizePerThread=[1, 8], threadsPerWarp=[{num_rows_per_warp}, 4], warpsPerCTA=[4, 1], order=[1, 0], CTAsPerCGA=[1, 1], CTASplitNum=[1, 1], CTAOrder=[0, 1]}}>
+    #blocked = #ttg.blocked<{{sizePerThread=[1, 8], threadsPerWarp=[{num_rows_per_warp}, 4], warpsPerCTA=[4, 1], order=[1, 0]}}>
     #shared = #ttg.swizzled_shared<{{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0]}}>
     #smem = #ttg.shared_memory
 
@@ -989,7 +982,7 @@ mma_layouts = [
 ]
 
 shared_layouts = [
-    SwizzledSharedLayout(8, 1, 1, [1, 0], [1, 1], [1, 1], [0, 1]),
+    SwizzledSharedLayout(8, 1, 1, [1, 0]),
 ]
 
 
