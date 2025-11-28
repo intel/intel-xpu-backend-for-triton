@@ -223,7 +223,8 @@ for k in range(0, tl.cdiv(K, BLOCK_K)):
 ---
 
 
-Tensor Descriptors support shapes up to 5 dimensions, however the Intel XPU backend currently optimizes well only the 2D case, so avoid using higher dimensionality Tensor Descriptors whenever possible
+Tensor Descriptors support shapes up to 5 dimensions, however the Intel XPU backend currently optimizes well only the 2D case, so avoid using higher dimensionality Tensor Descriptors whenever possible.
+
 Consider this example based on the unified attention kernel from [vllm](https://github.com/vllm-project/vllm/blob/9a161307f5f096c63ae4134c5055d87a36d224a8/vllm/attention/ops/triton_unified_attention.py#L52). This code loads a block of K values from a cache of shape `[NUM_BLOCKS, BLOCK_SIZE, KV_HEADS, HEAD_SIZE]`:
 
 
@@ -289,14 +290,13 @@ You should only use device side Tensor Desciptors on XPU for now.
 3. **Strive to only use 2D Tensor Descriptors.**
 4. **Ideally, annotate strides with `tl.constexpr`.** Basic preference is `tl.constexpr` > no annotation > `tl.int64`/ `tl.int32` (for non-last strides) >> `tl.int64` / `tl.int32` for the last stride. Avoid annotating the last strides with `tl.int64` or `tl.int32`!
 
-
-### Use proper type annotations
-1. Set `tl.constexpr` type annotation for block sizes and boolean flags to let the compiler optimize. Each combination of arguments with this annotation is compiled separately. Avoid setting it for values that vary widely at runtime (like the number of tokens) to prevent excessive recompilation.
-2. No Annotation: You can keep type annotations empty and let the compiler guess. This is good for parameters that change often (like strides) to avoid recompilation.
+## Use proper type annotations
+1. Set `tl.constexpr` type annotation for block sizes and boolean flags to let the compiler optimize. Ideally, also use `tl.constexpr` for strides and tensor shapes that will cover limited number of values (up to 10). Each combination of arguments with this annotation is compiled separately, so avoid setting it for values that vary widely at runtime (like the number of tokens) to prevent excessive recompilation. For GEMM kernels of modern LLMs, for example, number of input and output features will likely be the same or cover just 2-4 unique values, but number of tokens can have more than 100 unique values. So you should use `tl.constexpr` for number of features, but not for the number of tokens.
+2. No Annotation: You can keep type annotations empty and let the compiler guess. This is good for parameters that change often, like number of tokens or total number of elements, to avoid excessive recompilation.
 3. Avoid annotating with `tl.int64` or `tl.int32`. It can prevent many optimizations.
-4. Never annotate the last tensor stride with `tl.int32` or `tl.int64`.
+4. Never annotate the last tensor stride with `tl.int32` or `tl.int64`!
 
-Example of a good type annotation for a GEMM kernel:
+Example of a reasonable type annotation for a GEMM kernel:
 ```
 @triton.jit
 def matmul_kernel(
@@ -311,21 +311,78 @@ def matmul_kernel(
         stride_bk, stride_bn,  #
         stride_cm, stride_cn,
         # Meta-parameters
-        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,  #
-        GROUP_SIZE_M: tl.constexpr,  #
-        ACTIVATION: tl.constexpr  #
+        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
+        GROUP_SIZE_M: tl.constexpr,
+        ACTIVATION: tl.constexpr
 ):
+```
+
+It's even better to use more `tl.constexpr` declarations if we know that the kernel will be called for the same input shapes. That is often the case for DL models including LLMs. Usually only the batch size, and the number of tokens varies.
+
+This is especially important for cases when you have `tl.dot` operations without Tensor Desciptors (which is discouraged) as compiler will try to guess if it can perform Tensor Descriptor conversion internally and will need shapes and strides
+fixed during compilation.
+```
+...
+        # M will correspond to the number of tokens and will vary during prefill
+        # setting it to tl.constexpr would mean recompiling
+        # the kernel every time the input size changes
+        M,
+        # GEMM will transform K features -> N features and these are constant
+        N: tl.constexpr,
+        K: tl.constexpr,
+        # Strides depend on remaining shapes, stride_am = K and also will not change
+        stride_am: tl.constexpr, stride_ak: tl.constexpr,
+        stride_bk: tl.constexpr, stride_bn: tl.constexpr,
+        stride_cm: tl.constexpr, stride_cn: tl.constexpr,
+```
+
+---
+
+**Avoid overflowing int32**
+
+If you replace `tl.int64` with `tl.constexpr` you will now get int32 value for your strides (instead of int64) and you might end up with an overflow in your offset calculation. That can happed for MOE deepseek R1 model for example.
+
+Original source code:
+```
+# stride_ae: tl.int64
+# For deepseek R1 stride_ae = 7168 * 2048 * 2 = 2.9e7, which fits in the maximum int32 value 2.1e9
+
+# this will be tl.int32
+expert_id = tl.program_id(axis=0)
+# this will be calculated as tl.int64
+# expert_id goes up to 256, so we get at maximum 7.5e9, which fits int64 type, no error here
+expert_offset = expert_id * stride_ae
+```
+
+Now, if we use tl.constexpr:
+
+```
+# stride_ae: tl.constexpr, will be treated as int32 under the hood, because the initial value fits within int32
+# For deepseek R1 stride_ae = 7168 * 2048 * 2 = 2.9e7
+
+# this will be tl.int32
+expert_id = tl.program_id(axis=0)
+# this will be calculated as tl.int32 now
+# expert_id goes up to 256, so we get at maximum 7.5e9, which doesn't fit int32 type,
+# there WILL BE AN OVERFLOW.
+expert_offset = expert_id * stride_ae
+```
+
+If values are too large it's best to cast them manually to `tl.int64`:
+```
+# This will not overflow even if stride_ae is int32
+expert_offset = expert_id.to(tl.int64) * stride_ae
 ```
 
 ### Benchmark, Tune Kernel Configuration
 
-Just like with any other Triton kernels, you want to pick appropriate block sizes to your hardware and tensor shapes. Use `triton.autotune` to try various combinations and find the best one. Key parameters to tune include block sizes, `num_warps`, `num_stages`, and `grf_mode`. 
+Just like with any other Triton kernels, you want to pick appropriate block sizes to your hardware and tensor shapes. Use `triton.autotune` to try various combinations and find the best one. Key parameters to tune include block sizes, `num_warps`, `num_stages`, and `grf_mode`.
 
 See existing [benchmarks](../benchmarks/triton_kernels_benchmark/) for reasonable configuration grids for [GEMM](../benchmarks/triton_kernels_benchmark/gemm_tensor_desc_benchmark.py) and [Flash Attention](../benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py) kernels.
 
 **GRF Mode**:
 The Intel-specific option `grf_mode` determines the number of registers allocated to a kernel.
-Setting it higher can be good for a kernel that uses many registers, but it will decrease hardware utilizaion.
+Setting it higher can be good for a kernel that uses many registers, but it will decrease hardware utilization.
 You can set high value with `grf_mode = "256"` if you have to.
 
 # Quick Installation
@@ -600,7 +657,6 @@ optimized_mod = torch.compile(xpu_model)
 
 graph_result = optimized_mod(x)
 ```
-
 
 ## Performance Analysis Guide
 
