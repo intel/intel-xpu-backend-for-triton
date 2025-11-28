@@ -1,6 +1,7 @@
 #include "triton/Analysis/AxisInfo.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
+#include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -1041,7 +1042,8 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver,
                   CastOpAxisInfoVisitor<arith::ExtUIOp>,
                   CastOpAxisInfoVisitor<arith::TruncIOp>,
                   CastOpAxisInfoVisitor<triton::gpu::ConvertLayoutOp>,
-                  CastOpAxisInfoVisitor<triton::BitcastOp>>();
+                  CastOpAxisInfoVisitor<triton::BitcastOp>,
+                  CastOpAxisInfoVisitor<triton::gluon::SetAutoLayoutOp>>();
   visitors.append<MakeRangeOpAxisInfoVisitor>();
   visitors.append<PoisonOpAxisInfoVisitor>();
   visitors.append<ConstantOpAxisInfoVisitor>();
@@ -1077,11 +1079,10 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver,
 LogicalResult AxisInfoAnalysis::visitOperation(
     Operation *op, ArrayRef<const dataflow::Lattice<AxisInfo> *> operands,
     ArrayRef<dataflow::Lattice<AxisInfo> *> results) {
-  // TODO: For sure not the right way to do this
-  // but why is scf.if not initialized otherwise?
+  // If any operands are not yet ready, skip this operation for now.
   for (auto op : operands)
     if (op->getValue().getRank() == 0)
-      setToEntryState((dataflow::Lattice<AxisInfo> *)op);
+      return success();
   AxisInfo curr = visitors.apply(op, operands);
   if (curr.getRank() == 0) {
     setAllToEntryStates(results);
@@ -1110,9 +1111,11 @@ void AxisInfoAnalysis::visitForOpInductionVar(
   ProgramPoint *programPoint = getProgramPointAfter(op);
   auto *lbLattice = getLatticeElementFor(programPoint, op.getLowerBound());
   auto *stepLattice = getLatticeElementFor(programPoint, op.getStep());
-  for (auto op_iter : {lbLattice, stepLattice})
-    if (op_iter->getValue().getRank() == 0)
-      setToEntryState((dataflow::Lattice<AxisInfo> *)op_iter);
+  // If lb or step is not yet ready, skip this operation for now.
+  if (lbLattice->getValue().getRank() == 0 ||
+      stepLattice->getValue().getRank() == 0) {
+    return;
+  }
 
   AxisInfo::DimVectorT knownContiguity(1, 1);
   AxisInfo::DimVectorT knownDivisibility(1, 1);
@@ -1186,24 +1189,15 @@ void AxisInfo::initDimVectorFromHint(Attribute attr, DimVectorT *vec) {
       initPessimisticStateFromFunc(blockArg.getArgNumber(), fun,
                                    &knownContiguity, &knownDivisibility,
                                    &knownConstancy);
-    } else if (isa<RegionBranchOpInterface, gpu::WarpSpecializePartitionsOp>(
-                   op)) {
-      // scf::ForOp, scf::IfOp, scf::WhileOp, gpu::WarpSpecializePartitionsOp
-      // Control flow operations are initialized with "unknown" state:
-      // the maximum possible divisibility, contiguity, and constancy.
+    } else if (isa<gpu::WarpSpecializePartitionsOp>(op)) {
+      // Initialize the arguments to gpu::WarpSpecializePartitionsOp with
+      // "unknown" state: the maximum possible divisibility, contiguity, and
+      // constancy.
       knownDivisibility = DimVectorT(rank, kMaxDivisor);
       knownConstancy = DimVectorT(rank, kMaxDivisor);
       knownContiguity = DimVectorT(rank, kMaxDivisor);
     }
   } else if (Operation *op = value.getDefiningOp()) {
-    if (isa<RegionBranchOpInterface>(op)) {
-      // scf::ForOp, scf::IfOp, scf::WhileOp
-      // Control flow operations are initialized with "unknown" state:
-      // the maximum possible divisibility, contiguity, and constancy.
-      knownDivisibility = DimVectorT(rank, kMaxDivisor);
-      knownConstancy = DimVectorT(rank, kMaxDivisor);
-      knownContiguity = DimVectorT(rank, kMaxDivisor);
-    }
     // Other operations are conservatively initialized with the lowest possible
     // divisibility, contiguity, and constancy unless they have specified.
     AxisInfo::initDimVectorFromHint(op->getDiscardableAttr("tt.divisibility"),
