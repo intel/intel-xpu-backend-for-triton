@@ -1076,7 +1076,7 @@ private:
                              identityStandardND(S("warp"), warpsPerCTA, order);
 
     return combineCtaCgaWithShape(std::move(ctaLayout),
-                                  CTALayoutAttr::getDefault(ctx, rank),
+                                  CTAEncodingAttr::getDefault(ctx, rank),
                                   tensorShape);
   }
 };
