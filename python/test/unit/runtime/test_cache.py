@@ -825,7 +825,10 @@ def test_higher_order_kernel(device, fresh_triton_cache, capsys):
     kernel[(1, )](output, fn_a)
     assert output.item() == 0
 
-    expecttest.assert_expected_inline(capsys.readouterr().out, """\
+    expecttest.assert_expected_inline(
+        capsys.readouterr().out, """\
 Compiling with fn_a
 Compiling with fn_a after modification
+Compiling with fn_a after modification
+Compiling with fn_a
 """)
