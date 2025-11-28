@@ -90,7 +90,7 @@ jobs:
           ${{ toJSON(inputs) }}
           EOF
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Load pip cache
         id: pip-cache
@@ -214,7 +214,7 @@ jobs:
           EOF
 
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Load pip cache
         id: pip-cache
@@ -255,7 +255,7 @@ jobs:
           pip install intel_pti-*.whl
           PTI_LIBS_DIR=$(python ./scripts/pti_lib.py)
           ls $PTI_LIBS_DIR
-          echo "PTI_LIBS_DIR=$PTI_LIBS_DIR" | tee -a $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH" | tee -a $GITHUB_ENV
 
       - name: Report environment details
         timeout-minutes: 1
@@ -294,7 +294,6 @@ jobs:
       - name: Run Proton tests
         if: matrix.suite == 'rest'
         run: |
-          export LD_LIBRARY_PATH=${{ env.PTI_LIBS_DIR }}:$LD_LIBRARY_PATH
           cd third_party/proton/test
           pytest test_api.py test_cmd.py test_lib.py test_profile.py test_viewer.py --device xpu -s -v
           cd ..
@@ -395,7 +394,7 @@ jobs:
     needs: integration-tests
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Load pip cache
         id: pip-cache
@@ -453,3 +452,25 @@ jobs:
           path: |
             reports/*/*.csv
             reports/.env
+
+  check-jobs:
+    runs-on: runner-0.0.22
+    if: always()
+    needs:
+      - build
+      - integration-tests
+      - reports
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install Python
+        uses: ./.github/actions/setup-python
+        with:
+          python_version: ${{ inputs.python_version }}
+          use_pyenv: ${{ inputs.use_pyenv_python }}
+
+      - name: Ensure job status
+        uses: re-actors/alls-green@05ac9388f0aebcb5727afa17fcccfecd6f8ec5fe
+        with:
+          jobs: ${{ toJSON(needs) }}

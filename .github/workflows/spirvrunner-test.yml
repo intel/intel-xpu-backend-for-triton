@@ -20,11 +20,11 @@ jobs:
     name: Tests
     runs-on:
       - rolling
-      - dle-2025.2
+      - runner-0.0.22
     timeout-minutes: 75 # equal to max + 3*std over the last 600 successful runs
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Install Python
         uses: actions/setup-python@v6

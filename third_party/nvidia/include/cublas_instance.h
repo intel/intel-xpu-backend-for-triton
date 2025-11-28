@@ -2,7 +2,7 @@
 #define TRITON_CUBLAS_INSTANCE_H
 
 #include "cublas_types.h"
-#ifdef WIN32
+#if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
@@ -70,7 +70,7 @@ class CublasLtInstance {
   cublasLtMatmulPreference_t preference = NULL;
 
   void loadCublasDylib() {
-#ifdef WIN32
+#if defined(_WIN32)
     assert(0 && "Not implemented on Windows");
 #else
     if (dylibHandle == nullptr) {
@@ -121,7 +121,7 @@ class CublasLtInstance {
   }
 
   void unloadCublasDylib() {
-#ifdef WIN32
+#if defined(_WIN32)
     assert(0 && "Not implemented on Windows");
 #else
     dlclose(dylibHandle);

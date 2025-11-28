@@ -1,8 +1,8 @@
 diff --git a/lib/SPIRV/SPIRVWriter.cpp b/lib/SPIRV/SPIRVWriter.cpp
-index d363f060a..28f83d661 100644
+index ec4ec41f5..4f6d80dd1 100644
 --- a/lib/SPIRV/SPIRVWriter.cpp
 +++ b/lib/SPIRV/SPIRVWriter.cpp
-@@ -4211,20 +4211,6 @@ SPIRVValue *LLVMToSPIRVBase::transIntrinsicInst(IntrinsicInst *II,
+@@ -4276,20 +4276,6 @@ SPIRVValue *LLVMToSPIRVBase::transIntrinsicInst(IntrinsicInst *II,
    // -spirv-allow-unknown-intrinsics work correctly.
    auto IID = II->getIntrinsicID();
    switch (IID) {
@@ -23,7 +23,7 @@ index d363f060a..28f83d661 100644
    case Intrinsic::assume: {
      // llvm.assume translation is currently supported only within
      // SPV_KHR_expect_assume extension, ignore it otherwise, since it's
-@@ -5508,11 +5494,6 @@ SPIRVValue *LLVMToSPIRVBase::transDirectCallInst(CallInst *CI,
+@@ -5721,11 +5707,6 @@ SPIRVValue *LLVMToSPIRVBase::transDirectCallInst(CallInst *CI,
    SmallVector<std::string, 2> Dec;
    if (isBuiltinTransToExtInst(CI->getCalledFunction(), &ExtSetKind, &ExtOp,
                                &Dec)) {
@@ -36,10 +36,10 @@ index d363f060a..28f83d661 100644
        auto *FormatStrPtr = cast<PointerType>(CI->getArgOperand(0)->getType());
        if (FormatStrPtr->getAddressSpace() !=
 diff --git a/lib/SPIRV/libSPIRV/SPIRVModule.cpp b/lib/SPIRV/libSPIRV/SPIRVModule.cpp
-index a680574ec..2ff1df097 100644
+index b76987e93..8d06ee792 100644
 --- a/lib/SPIRV/libSPIRV/SPIRVModule.cpp
 +++ b/lib/SPIRV/libSPIRV/SPIRVModule.cpp
-@@ -1732,8 +1732,6 @@ SPIRVInstruction *SPIRVModuleImpl::addBinaryInst(Op TheOpCode, SPIRVType *Type,
+@@ -1739,8 +1739,6 @@ SPIRVInstruction *SPIRVModuleImpl::addBinaryInst(Op TheOpCode, SPIRVType *Type,
                                                   SPIRVValue *Op1,
                                                   SPIRVValue *Op2,
                                                   SPIRVBasicBlock *BB) {
@@ -48,10 +48,10 @@ index a680574ec..2ff1df097 100644
    return addInstruction(SPIRVInstTemplateBase::create(
                              TheOpCode, Type, getId(),
                              getVec(Op1->getId(), Op2->getId()), BB, this),
-@@ -1757,8 +1755,6 @@ SPIRVInstruction *SPIRVModuleImpl::addUnaryInst(Op TheOpCode,
-                                                 SPIRVType *TheType,
-                                                 SPIRVValue *Op,
-                                                 SPIRVBasicBlock *BB) {
+@@ -1764,8 +1762,6 @@ SPIRVInstruction *
+ SPIRVModuleImpl::addUnaryInst(Op TheOpCode, SPIRVType *TheType, SPIRVValue *Op,
+                               SPIRVBasicBlock *BB,
+                               SPIRVInstruction *InsertBefore) {
 -  if (TheType->isTypeFloat(16, FPEncodingBFloat16KHR) && TheOpCode != OpDot)
 -    addCapability(internal::CapabilityBFloat16ArithmeticINTEL);
    return addInstruction(

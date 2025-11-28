@@ -37,7 +37,7 @@ jobs:
       - runner-0.0.22
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Install Python
         uses: actions/setup-python@v6
@@ -54,6 +54,13 @@ jobs:
 
       - name: Install Triton
         uses: ./.github/actions/setup-triton
+
+      - name: Build && Install PTI
+        run: |
+          ./scripts/install-pti.sh --build-level-zero
+          PTI_LIBS_DIR=$(python ./scripts/pti_lib.py)
+          ls $PTI_LIBS_DIR
+          echo "LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH" | tee -a $GITHUB_ENV
 
       - name: Install runtime dependencies
         run: |

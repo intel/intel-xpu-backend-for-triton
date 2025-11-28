@@ -2,7 +2,7 @@
 #define TRITON_HIPBLAS_INSTANCE_H
 
 #include "hipblas_types.h"
-#ifdef WIN32
+#if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
@@ -84,7 +84,7 @@ class HipblasLtInstance {
   hipblasLtMatmulPreference_t preference = NULL;
 
   void loadHipBlasDylib() {
-#ifdef WIN32
+#if defined(_WIN32)
     assert(0 && "Not implemented on Windows");
 #else
     if (dylibHandle == nullptr) {
@@ -137,7 +137,7 @@ class HipblasLtInstance {
   }
 
   void unloadHipBlasDylib() {
-#ifdef WIN32
+#if defined(_WIN32)
     assert(0 && "Not implemented on Windows");
 #else
     dlclose(dylibHandle);

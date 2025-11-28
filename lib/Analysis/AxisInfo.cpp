@@ -276,8 +276,12 @@ public:
   getAxisInfo(ub::PoisonOp op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
     unsigned rank = 1;
-    if (auto shape = dyn_cast<mlir::ShapedType>(op.getType()))
+    if (auto shape = dyn_cast<RankedTensorType>(op.getType())) {
       rank = shape.getRank();
+    } else if (auto ptrTy = dyn_cast<PointerType>(op.getType())) {
+      if (auto tensorType = dyn_cast<RankedTensorType>(ptrTy.getPointeeType()))
+        rank = tensorType.getRank();
+    }
 
     // Poison values are never accessed, thus assume optimistic values.
     return AxisInfo(AxisInfo::DimVectorT(rank, kMaxDivisor),
@@ -1114,15 +1118,17 @@ LogicalResult AxisInfoAnalysis::visitOperation(
 void AxisInfoAnalysis::visitForOpInductionVar(
     scf::ForOp op, ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices) {
   ProgramPoint *programPoint = getProgramPointAfter(op);
-  const auto &lb =
-      getLatticeElementFor(programPoint, op.getLowerBound())->getValue();
-  const auto &step =
-      getLatticeElementFor(programPoint, op.getStep())->getValue();
+  auto *lbLattice = getLatticeElementFor(programPoint, op.getLowerBound());
+  auto *stepLattice = getLatticeElementFor(programPoint, op.getStep());
+  for (auto op_iter : {lbLattice, stepLattice})
+    if (op_iter->getValue().getRank() == 0)
+      setToEntryState((dataflow::Lattice<AxisInfo> *)op_iter);
 
   AxisInfo::DimVectorT knownContiguity(1, 1);
   AxisInfo::DimVectorT knownDivisibility(1, 1);
   AxisInfo::DimVectorT knownConstancy(1, 1);
-  knownDivisibility[0] = gcd(lb.getDivisibility(0), step.getDivisibility(0));
+  knownDivisibility[0] = gcd(lbLattice->getValue().getDivisibility(0),
+                             stepLattice->getValue().getDivisibility(0));
   auto inductionVar =
       AxisInfo(knownContiguity, knownDivisibility, knownConstancy);
   (void)argLattices[0]->join(inductionVar);
@@ -1227,6 +1233,7 @@ void AxisInfo::initDimVectorFromHint(Attribute attr, DimVectorT *vec) {
     return rhs;
   if (rhs.getRank() == 0)
     return lhs;
+  assert(lhs.getRank() == rhs.getRank() && "Mismatched ranks");
   DimVectorT contiguity;
   DimVectorT divisibility;
   DimVectorT constancy;

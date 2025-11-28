@@ -52,7 +52,7 @@ getWarpsPerTile(tt::DotOp dotOp, ttgi::DpasEncodingAttr::DPASCapability dpasCap,
     return op->getParentRegion() == dotOp->getParentRegion();
   };
 
-  SetVector<Operation *> slices = multiRootGetSlice(dotOp, {filter});
+  SetVector<Operation *> slices = getSlice(dotOp, {filter});
   for (Operation *op : slices) {
     if (isa<tt::DotOp>(op) && (op != dotOp)) {
       if (auto forOp = op->getParentOfType<scf::ForOp>()) {

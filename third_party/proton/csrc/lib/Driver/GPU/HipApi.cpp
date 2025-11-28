@@ -88,8 +88,13 @@ const char *getKernelNameRef(const hipFunction_t f) {
   static hipKernelNameRef_t func = nullptr;
   Dispatch<ExternLibHip>::init(ExternLibHip::name, &ExternLibHip::lib);
   if (func == nullptr)
+#if defined(_WIN32)
+    func = reinterpret_cast<hipKernelNameRef_t>(
+        GetProcAddress((HMODULE)ExternLibHip::lib, "hipKernelNameRef"));
+#else
     func = reinterpret_cast<hipKernelNameRef_t>(
         dlsym(ExternLibHip::lib, "hipKernelNameRef"));
+#endif
   return (func ? func(f) : NULL);
 }
 
@@ -99,8 +104,13 @@ const char *getKernelNameRefByPtr(const void *hostFunction,
   static hipKernelNameRefByPtr_t func = nullptr;
   Dispatch<ExternLibHip>::init(ExternLibHip::name, &ExternLibHip::lib);
   if (func == nullptr)
+#if defined(_WIN32)
+    func = reinterpret_cast<hipKernelNameRefByPtr_t>(
+        GetProcAddress((HMODULE)ExternLibHip::lib, "hipKernelNameRefByPtr"));
+#else
     func = reinterpret_cast<hipKernelNameRefByPtr_t>(
         dlsym(ExternLibHip::lib, "hipKernelNameRefByPtr"));
+#endif
   return (func ? func(hostFunction, stream) : NULL);
 }
 

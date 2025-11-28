@@ -169,7 +169,7 @@ struct BuildFlags {
 
 sycl::context get_default_context(const sycl::device &sycl_device) {
   const auto &platform = sycl_device.get_platform();
-#ifdef WIN32
+#if defined(_WIN32)
   sycl::context ctx;
   try {
 #if __SYCL_COMPILER_VERSION >= 20250604

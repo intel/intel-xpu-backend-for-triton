@@ -74,6 +74,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
 
 // -----
 
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [16, 2], instrShape = [16, 256, 16]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @warp_group_dot_bf16_32_warps
+  tt.func @warp_group_dot_bf16_32_warps(
+      %a: !ttg.memdesc<256x128xbf16, #shared, #smem>,
+      %b: !ttg.memdesc<128x512xbf16, #shared, #smem>,
+      %acc: tensor<256x512xf32, #mma>) {
+    %res = ttng.warp_group_dot %a, %b, %acc {inputPrecision = 0 : i32, isAsync = true} :
+      !ttg.memdesc<256x128xbf16, #shared, #smem> * !ttg.memdesc<128x512xbf16, #shared, #smem> -> tensor<256x512xf32, #mma>
+    // CHECK: nvgpu.wgmma {{.*}} k = 16 : i32, layoutA = 1 : i32, layoutB = 1 : i32, m = 64 : i32, n = 256 : i32}
+    tt.return
+  }
+}
+
+// -----
+
 #mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0], instrShape = [16, 64, 16]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 16}>
@@ -212,6 +230,34 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
     //          CHECK: nvvm.barrier0
     // CHECK-COUNT-8: nvvm.ldmatrix
     %c = ttg.convert_layout %a : tensor<128x256xf16, #mma> -> tensor<128x256xf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>
+#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 32]], warp = [[32, 0], [64, 0], [16, 0]], block = []}>
+module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @convert_mma_to_blocked(%a: tensor<128x64xbf16, #linear>) {
+    // CHECK: llvm.store {{.*}} : vector<4xi32>
+    // CHECK: nvvm.barrier0
+    // CHECK: llvm.load {{.*}} -> vector<4xi32>
+    // CHECK: nvvm.barrier0
+    // CHECK: llvm.store {{.*}} : vector<4xi32>
+    // CHECK: nvvm.barrier0
+    // CHECK: llvm.load {{.*}} -> vector<4xi32>
+    // CHECK: nvvm.barrier0
+    // CHECK: llvm.store {{.*}} : vector<4xi32>
+    // CHECK: nvvm.barrier0
+    // CHECK: llvm.load {{.*}} -> vector<4xi32>
+    // CHECK: nvvm.barrier0
+    // CHECK: llvm.store {{.*}} : vector<4xi32>
+    // CHECK: nvvm.barrier0
+    // CHECK: llvm.load {{.*}} -> vector<4xi32>
+    // CHECK-NOT: llvm.store
+    // CHECK-NOT: llvm.load
+    %b = ttg.convert_layout %a: tensor<128x64xbf16, #linear> -> tensor<128x64xbf16, #blocked>
     tt.return
   }
 }

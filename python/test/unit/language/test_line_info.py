@@ -289,6 +289,7 @@ def test_line_info_ir_source(monkeypatch, status, tmp_path):
     #loc3 = loc("/path/test.py":9:4)
     """
     monkeypatch.setenv("USE_IR_LOC", status)
+    monkeypatch.setenv("TRITON_ALWAYS_COMPILE", "1")
     temp_file = tmp_path / "test.ttir"
     temp_file.write_text(src)
     kernel_info = triton.compile(str(temp_file))
@@ -314,7 +315,7 @@ def test_use_name_loc_as_prefix(fresh_triton_cache):
 
     @triton.jit
     def kernel_basic(src, N, BLOCK_SIZE: tl.constexpr):
-        # CHECK: #loc = loc("{{.*}}":316:0)
+        # CHECK: #loc = loc("{{.*}}":317:0)
         # CHECK-LABEL:  tt.func public @kernel_basic(
         # CHECK-SAME:                                %src: !tt.ptr<f32> loc("src"(#loc)), %N: i32 loc("N"(#loc)))
         # CHECK:          %x_plus_1 = arith.constant dense<1.000000e+00> : tensor<16xf32> loc(#loc14)
