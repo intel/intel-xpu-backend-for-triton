@@ -696,7 +696,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32,
 
 def test_gluon_kernel():
     if not is_hip():
-        pytest.skip("Gluon kernel is only supported on HIP")
+        pytest.xfail("Gluon kernel is only supported on HIP")
     with tempfile.TemporaryDirectory() as tmp_dir:
         dtype = "fp16"
         BM, BN, BK = 16, 16, 16

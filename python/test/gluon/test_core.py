@@ -1583,7 +1583,7 @@ def test_tcgen05_mma_scaled_minimal():
     assert "ttng.tc_gen5_mma_scaled" in ttgir
 
 
-@pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires Ampere or newer")
+@pytest.mark.xfail(not is_ampere_or_newer(), reason="Requires Ampere or newer", run=False)
 def test_coalesced_layout():
 
     @gluon.jit
@@ -1628,7 +1628,7 @@ def test_coalesced_layout():
     torch.testing.assert_close(output, ref)
 
 
-@pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires Ampere or newer")
+@pytest.mark.xfail(not is_ampere_or_newer(), reason="Requires Ampere or newer", run=False)
 def test_convert_auto_layout_to_coalesced_layout():
 
     @gluon.jit
