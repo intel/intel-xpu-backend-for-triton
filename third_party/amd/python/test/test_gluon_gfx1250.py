@@ -1928,7 +1928,7 @@ def test_runtime_tensor_copy_mbarrier(M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS, NUM_W
     assert torch.equal(b_triton, a)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.xfail(not is_hip_gfx1250(), reason="Requires GFX1250", run=False)
 def test_tdm_load_pred():
 
     @gluon.jit

@@ -13,7 +13,7 @@ def is_hip():
 
 
 # This applies to ALL tests in this file
-pytestmark = pytest.mark.skipif(not is_hip(), reason="MIR tests require AMD/HIP backend")
+pytestmark = pytest.mark.xfail(not is_hip(), reason="MIR tests require AMD/HIP backend", run=False)
 
 
 def verify_mir_content(mir_content, kernel_name):
