@@ -326,7 +326,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
         # Annotate load/store opeartions with arg to convert further into 2D block HW instructions
         # Whole module must be annotated with "ttig.support_sg_2d_block" attribute
-        intel.passes.ttgpuir.add_materialize_block_pointer(pm)
+        ####intel.passes.ttgpuir.add_materialize_block_pointer(pm)
         # ^^^^^^^^^^^^^^^^^^ TritonIntelGPUMaterializeBlockPointer
 
 
@@ -340,7 +340,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # Apply prefetch to loops with tt.dot operations
         # num-stages -> controls number of iterations to prefetch in advance
         # Whole module must be annotated with "ttig.support_sg_2d_block" attribute
-        intel.passes.ttgpuir.add_pipeline(pm, options.num_stages, XPUBackend.get_split_barrier_scope(options))
+        ####intel.passes.ttgpuir.add_pipeline(pm, options.num_stages, XPUBackend.get_split_barrier_scope(options))
         # ^^^^^^^^^^^^^^^^^^ TritonIntelGPUPipeline
 
         ######

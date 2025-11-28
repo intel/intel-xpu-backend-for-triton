@@ -606,6 +606,8 @@ def xpu_dot_fma(a, b, acc, _semantic=None):
     assert isinstance(b, tensor), "b must be a tensor"
     assert isinstance(acc, tensor), "acc must be a tensor"
 
+    # from pudb import set_trace
+    # set_trace()
     # mma_layout = acc.type.layout
     # assert isinstance(mma_layout, IntelDPASLayout), "acc must have a BlockedLayout"
     # assert isinstance(a.type.layout, DotOperandLayout), "a must have a DotOperandLayout"

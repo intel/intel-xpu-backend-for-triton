@@ -31,6 +31,8 @@ namespace ttg = triton::gpu;
 namespace ttng = triton::nvidia_gpu;
 namespace gluon = mlir::triton::gluon;
 namespace ttag = mlir::triton::amdgpu;
+namespace ttgi = mlir::triton::gpu::intel;
+
 
 // Helper to check if an MLIR type or attribute has a verifier method.
 template <typename AttrOrType>
@@ -856,7 +858,43 @@ void init_gluon_ir(py::module &&m) {
       .def("create_async_tdm_wait", [](GluonOpBuilder &self, int num) {
         ValueRange tokens;
         self.create<ttag::AsyncTDMWait>(tokens, num);
-      });
+      })
+      // .def("create_load_with_block_io",
+      //  [](GluonOpBuilder &self, Type resultTy, Value ptr, Value mask,
+      //     Value other, ArrayRef<int32_t> boundaryCheck,
+      //     triton::CacheModifier cache, triton::EvictionPolicy evict,
+      //     bool block_io) {
+      //    auto op = self.create<tt::LoadOp>(resultTy, ptr, mask, other,
+      //                                     boundaryCheck, cache, evict);
+      //    if (block_io) {
+      //      op->setAttr("block_io", self.builder.getBoolAttr(true));
+      //    }
+      //    return op.getResult();
+      //  })
+      //
+      // .def("create_store_with_block_io",
+      //      [](GluonOpBuilder &self, Value ptr, Value value, Value mask,
+      //         ArrayRef<int32_t> boundaryCheck, triton::CacheModifier cache,
+      //         triton::EvictionPolicy evict, bool block_io) {
+      //        auto op = self.create<tt::StoreOp>(ptr, value, mask,
+      //                                          boundaryCheck, cache, evict);
+      //        if (block_io) {
+      //          op->setAttr("block_io", self.builder.getBoolAttr(true));
+      //        }
+      //        return op;
+      //      })
+      .def("create_prefetch",
+           [](GluonOpBuilder &self, Value ptr, //, py::object mask,
+              //triton::CacheModifier cache, triton::EvictionPolicy evict,
+              bool isVolatile) {
+             //auto c = triton::CacheModifier();
+             //Value maskVal = mask.is_none() ? Value() : mask.cast<Value>();
+             Value maskVal = Value();
+
+             self.create<ttgi::PrefetchOp>(
+                 ptr, maskVal, tt::CacheModifier::NONE, tt::EvictionPolicy::NORMAL, isVolatile);
+           })
+  ;
     m.def(
       "compute_tmem_reg_layout",
       [](py::object elementTyObj, std::vector<int64_t> shape,

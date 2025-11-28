@@ -206,6 +206,7 @@ def gluon_matmul_kernel_dpas_tensor_desc(
         (BLOCK_M, BLOCK_N),
         layout
     )
+    ttgl.intel.xpu.td.prefetch(c_ptr) #, cache=tl.CacheModifier.CACHED, evict=tl.EvictionPolicy.NORMAL)
 
     accumulator = ttgl.load_tensor_descriptor(c_desc, [pid_m * BLOCK_M, pid_n * BLOCK_N])
 

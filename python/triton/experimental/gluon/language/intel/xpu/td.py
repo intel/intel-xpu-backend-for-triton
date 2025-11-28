@@ -1,11 +1,14 @@
 from __future__ import annotations
-from typing import List, Tuple, TYPE_CHECKING
+from typing import List, Tuple, TYPE_CHECKING, Optional, Sequence
 from dataclasses import dataclass
 
 import triton.experimental.gluon.language._core as ttgl
+import triton.language as tl
 from triton.experimental.gluon.language.intel._layouts import IntelDPASLayout
 from triton.experimental.gluon.language._core import builtin, _unwrap_if_constexpr
-from triton.language.core import tensor_descriptor
+#from triton.language.core import tensor_descriptor, tensor
+from triton.language.core import tensor, block_type, tensor_descriptor_base, constexpr, tuple #, tensor_descriptor
+
 
 
 
@@ -13,6 +16,44 @@ if TYPE_CHECKING:
     from triton._C import ir
 
 __all__ = ["make_tensor_descriptor"]
+
+
+class tensor_descriptor(tensor_descriptor_base):
+    """A descriptor representing a tensor in global memory.
+    """
+
+    def __init__(self, handle, shape: List[tensor], strides: List[tensor], block_type: block_type, layout):
+        """Not called by user code."""
+        # IR handle
+        super().__init__(handle, block_type)
+        # Global shape
+        self.shape = tuple(shape)
+        self.strides = tuple(strides)
+        self.layout = layout
+        self.type = tensor_descriptor_type(
+            block_type,
+            shape_type=self.shape.type,
+            strides_type=self.strides.type,
+            layout=self.layout
+        )
+
+    def _flatten_ir(self, handles: List[ir.value]) -> None:
+        handles.append(self.handle)
+        self.shape._flatten_ir(handles)
+        self.strides._flatten_ir(handles)
+
+    @builtin
+    def load(self, offsets: Sequence[constexpr | tensor], _semantic=None) -> tensor:
+        """Load a block from the descriptor starting at the given element offsets.
+
+        Values outside of the tensor bounds will be filled with zeros.
+
+        :note: Offset must be a multiple of 16-bytes
+        """
+        # from pudb import set_trace
+        # set_trace()
+        return _semantic.descriptor_load(self, offsets, "", "")
+
 
 
 @dataclass(eq=True)
@@ -32,7 +73,7 @@ class tensor_descriptor_type(ttgl.base_type):
         cursor += 1
         shape, cursor = self.shape_type._unflatten_ir(handles, cursor)
         strides, cursor = self.strides_type._unflatten_ir(handles, cursor)
-        value = tensor_descriptor(handle, shape, strides, self)
+        value = tensor_descriptor(handle, shape, strides, self, self.layout)
         return value, cursor
 
     def _to_ir(self, builder: ir.builder) -> ir.type:
@@ -92,4 +133,34 @@ def make_tensor_descriptor(ptr: ttgl.tensor, shape: List[int], strides: List[int
     shape_tuple = ttgl.tuple(shape_tensors, shape_type)
     strides_tuple = ttgl.tuple(stride_tensors, strides_type)
 
-    return tensor_descriptor(desc_handle, shape_tuple, strides_tuple, block_type) #desc_type)
+
+    from pudb import set_trace
+    set_trace()
+    return tensor_descriptor(desc_handle, shape_tuple, strides_tuple, block_type, layout)
+
+
+# TODO: add intel xpu specific tensor descriptor load to have block_io argument
+# probably also some validation needed if given load can be used ad 2D blocked + if it's supported?
+@builtin
+def load(pointer, mask=None, other=None, boundary_check=(), cache_modifier="", eviction_policy="", block_io=False, _semantic=None):
+    # ... existing code ...
+    block_io = _unwrap_if_constexpr(block_io)
+    return _semantic.builder.create_load_with_block_io(pointer, mask, other, boundary_check, cache_modifier, eviction_policy, block_io)
+
+@builtin
+def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", eviction_policy="", block_io=False, _semantic=None):
+    # ... existing code ...
+    block_io = _unwrap_if_constexpr(block_io)
+    return _semantic.builder.create_store_with_block_io(pointer, value, mask, boundary_check, cache_modifier, eviction_policy, block_io)
+
+@builtin
+def prefetch(ptr, mask=None, cache=None, evict=None, is_volatile=False, _semantic=None):
+    """
+    Prefetch data to cache for Intel XPU.
+    """
+    # ptr = _unwrap_if_constexpr(ptr)
+    # mask = _unwrap_if_constexpr(mask)
+
+    # Pass mask as-is (None will be handled in C++ layer)
+    # TODO: handle other ttig.prefetch params
+    return _semantic.builder.create_prefetch(ptr.handle, is_volatile)
