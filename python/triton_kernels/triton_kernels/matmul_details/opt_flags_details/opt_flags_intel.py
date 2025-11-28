@@ -4,7 +4,7 @@ import triton
 
 def compute_grid_size(routing_data, m, n, block_m, block_n):
     if routing_data is not None:
-        grid_m = routing_data.n_blocks(m, block_m)
+        grid_m = routing_data.n_blocks(routing_data.n_slices, m, block_m)
     else:
         grid_m = triton.cdiv(m, block_m)
     grid_n = (n + block_n - 1) // block_n
@@ -19,7 +19,7 @@ def compute_block_n(n: int):
 def compute_block_k(k: int | None, is_persistent: bool, precision_config):
     if k is not None:
         block_k = max(32, min(128, triton.next_power_of_2(k)))
-    has_mx_weight_scale = precision_config is not None and precision_config.weight_scale is not None
+    has_mx_weight_scale = precision_config is not None and precision_config.b_mx_scale is not None
     if is_persistent and has_mx_weight_scale:
         block_k = min(block_k, 128)
     return block_k
