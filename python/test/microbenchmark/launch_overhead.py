@@ -108,7 +108,7 @@ def main(use_tensor_desc: bool, reports_dir: str = None):
                 writer.writerow(["input_type", "median_usecs"])
 
             input_type = "TensorDescriptor" if use_tensor_desc else "Tensor"
-            writer.writerow([input_type, sorted(usecs)[len(usecs) >> 1]])
+            writer.writerow([input_type, round(sorted(usecs)[len(usecs) >> 1], 2)])
 
 
 if __name__ == "__main__":
