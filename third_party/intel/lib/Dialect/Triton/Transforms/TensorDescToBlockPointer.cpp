@@ -109,7 +109,8 @@ private:
   tt::MakeTensorPtrOp
   findOrCreateMakeTensorPtr(Location loc, Value base, ValueRange shape,
                             ValueRange strides, ValueRange offsets,
-                            ArrayRef<int32_t> sizes, OpBuilder &builder) {
+                            ArrayRef<int32_t> sizes, Attribute encoding,
+                            OpBuilder &builder) {
     Block *block = builder.getInsertionBlock();
     const Block::iterator insertPoint = builder.getInsertionPoint();
     auto it = std::find_if(block->begin(), insertPoint, [&](Operation &op) {
@@ -134,8 +135,15 @@ private:
     });
 
     auto makeTensorPtrOp = [&]() {
+      // Create the tensor type with encoding
+      auto pointerType = cast<mlir::triton::PointerType>(base.getType());
+      auto tensorType = RankedTensorType::get(
+          SmallVector<int64_t>(sizes.begin(), sizes.end()),
+          pointerType.getPointeeType(), encoding);
+      auto resultType = mlir::triton::PointerType::get(tensorType, pointerType.getAddressSpace());
+
       auto makeTensorPtr = builder.create<tt::MakeTensorPtrOp>(
-          loc, base, shape, strides, offsets, sizes,
+          loc, resultType, base, shape, strides, offsets,
           builder.getDenseI32ArrayAttr({1, 0}));
       return makeTensorPtr;
     };
@@ -190,6 +198,8 @@ private:
     Location loc = op.getLoc();
     tt::TensorDescType tDescType = op.getType();
 
+    // Extract encoding from the tensor descriptor's block type
+    Attribute encoding = tDescType.getBlockType().getEncoding();
     // Create a new block pointer if a suitable one doesn't already exist.
     SmallVector<Value> shapes, strides, offsets;
     SmallVector<int32_t> sizes;
@@ -209,7 +219,7 @@ private:
     }
 
     auto tensorPtr = findOrCreateMakeTensorPtr(
-        loc, op.getBase(), shapes, strides, offsets, sizes, builder);
+        loc, op.getBase(), shapes, strides, offsets, sizes, encoding, builder);
     LLVM_DEBUG({
       llvm::dbgs() << "With:\n";
       llvm::dbgs().indent(2) << tensorPtr << "\n";
