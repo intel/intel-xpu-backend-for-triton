@@ -1,6 +1,5 @@
 #include <triton/Dialect/TritonNvidiaGPU/IR/Dialect.h>
 #include <triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h>
-#include <triton/Tools/LayoutUtils.h>
 
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
@@ -17,41 +16,36 @@ SmallVector<Value> translateTMAIndices(OpBuilder &builder, Location loc,
   return indices;
 }
 
-ttg::CTAEncodingAttr updateCTALayoutForShape(ttg::CTAEncodingAttr ctaLayout,
-                                             ArrayRef<int64_t> shape) {
+ttg::CTALayoutAttr updateCTALayoutForShape(ttg::CTALayoutAttr ctaLayout,
+                                           ArrayRef<int64_t> shape) {
   auto rank = shape.size();
   if (ctaLayout.getRank() == rank)
     return ctaLayout;
 
   auto ctx = ctaLayout.getContext();
   if (ctaLayout.getRank() > rank) {
-    auto ll = ctaLayout.getLinearLayout();
-    // Broadcast over the first rankDiff dims
     unsigned rankDiff = ctaLayout.getRank() - rank;
-    for (int i = 0; i < rankDiff; ++i) {
-      ll = removeStandardDim(ll, 0);
-    }
-    return ttg::CTAEncodingAttr::get(ctx, ll);
+    return ttg::CTALayoutAttr::get(
+        ctx, ctaLayout.getCTAsPerCGA().drop_front(rankDiff),
+        ctaLayout.getCTASplitNum().drop_front(rankDiff),
+        ctaLayout.getCTAOrder().drop_front(rankDiff));
   }
   // For rank-reducing loads, we need to rank-increase the CTA Layout
   auto rankDiff = rank - ctaLayout.getRank();
   for (unsigned i = 0; i < rankDiff; ++i) {
     assert(shape[i] == 1 && "Should only happen for rank-reducing loads");
   }
-  auto ll = ctaLayout.getLinearLayout();
-  auto kBlock = *ll.getInDimNames().begin();
-  auto standardOuts = standardOutDimNames(ctx, rank);
-  // Append to front
-  for (int i = ctaLayout.getRank(); i < rank; ++i) {
-    ll = LinearLayout::identity1D(1, kBlock, standardOuts[i]) * ll;
+  SmallVector<unsigned> CTAsPerCGA(rank, 1);
+  SmallVector<unsigned> CTASplitNum(rank, 1);
+  SmallVector<unsigned> CTAOrder(rank, 1);
+
+  llvm::copy(ctaLayout.getCTAsPerCGA(), CTAsPerCGA.begin() + rankDiff);
+  llvm::copy(ctaLayout.getCTASplitNum(), CTASplitNum.begin() + rankDiff);
+  for (unsigned i = 0; i < rankDiff; ++i) {
+    CTAOrder[i] = rank - i;
   }
-  // Rename out dims to dim0..dimn-1
-  auto dimSizes = ll.getOutDims();
-  for (auto [i, dim] : llvm::enumerate(standardOuts)) {
-    dimSizes[i].first = dim;
-  }
-  ll = LinearLayout(ll.getBases(), dimSizes, false);
-  return ttg::CTAEncodingAttr::get(ctx, ll);
+  llvm::copy(ctaLayout.getCTAOrder(), CTAOrder.begin() + rankDiff);
+  return ttg::CTALayoutAttr::get(ctx, CTAsPerCGA, CTASplitNum, CTAOrder);
 }
 
 ttg::SharedEncodingTrait

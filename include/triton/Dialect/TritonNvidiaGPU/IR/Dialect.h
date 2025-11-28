@@ -130,12 +130,12 @@ bool isDistributedLayoutTMemCompatible(Operation *op,
 
 gpu::DistributedEncodingTrait
 getDefaultLayoutForTmemLdSt(gpu::MemDescType memType, unsigned numWarps,
-                            gpu::CTAEncodingAttr ctaLayout);
+                            gpu::CTALayoutAttr ctaLayout);
 
 std::optional<LinearLayout>
 getDistributedLayoutForTmemLdSt(gpu::MemDescType memType, TMemAccessAtom atom,
                                 unsigned numWarps,
-                                gpu::CTAEncodingAttr ctaLayout);
+                                gpu::CTALayoutAttr ctaLayout);
 
 } // namespace mlir::triton::nvidia_gpu
 

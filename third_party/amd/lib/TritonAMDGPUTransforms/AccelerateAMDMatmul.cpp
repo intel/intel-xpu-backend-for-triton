@@ -806,8 +806,7 @@ public:
     auto moduleOp = dotOp->getParentOfType<ModuleOp>();
     int numWarps = ttg::lookupNumWarps(dotOp);
 
-    ttg::CTAEncodingAttr ctaLayout =
-        ttg::getCTALayout(oldRetType.getEncoding());
+    ttg::CTALayoutAttr ctaLayout = ttg::getCTALayout(oldRetType.getEncoding());
     int numThreads = ttg::TritonGPUDialect::getThreadsPerWarp(moduleOp);
 
     // Choose a suitable MFMA instruction for this scaled dot op.
@@ -1064,8 +1063,7 @@ public:
 
     MLIRContext *ctx = dotOp.getContext();
 
-    ttg::CTAEncodingAttr ctaLayout =
-        ttg::getCTALayout(oldRetType.getEncoding());
+    ttg::CTALayoutAttr ctaLayout = ttg::getCTALayout(oldRetType.getEncoding());
     unsigned numWarps = ttg::lookupNumWarps(dotOp);
     if (numWarps == 1)
       return rewriter.notifyMatchFailure(dotOp,
@@ -1281,8 +1279,7 @@ public:
 
     MLIRContext *ctx = dotOp.getContext();
 
-    ttg::CTAEncodingAttr ctaLayout =
-        ttg::getCTALayout(oldRetType.getEncoding());
+    ttg::CTALayoutAttr ctaLayout = ttg::getCTALayout(oldRetType.getEncoding());
     unsigned numWarps = ttg::lookupNumWarps(dotOp);
 
     constexpr unsigned mDim = 16;

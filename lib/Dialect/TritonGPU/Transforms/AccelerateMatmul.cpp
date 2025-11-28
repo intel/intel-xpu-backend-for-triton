@@ -467,7 +467,7 @@ static bool canUseTwoCTAs(triton::DotOp dotOp) {
 
 static DistributedEncodingTrait
 replaceCTALayout(DistributedEncodingTrait layout,
-                 const triton::gpu::CTAEncodingAttr &newCTALayout) {
+                 const triton::gpu::CTALayoutAttr &newCTALayout) {
   if (auto blockedLayout = mlir::dyn_cast<BlockedEncodingAttr>(layout)) {
     return BlockedEncodingAttr::get(
         layout.getContext(), blockedLayout.getSizePerThread(),
@@ -494,10 +494,8 @@ static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter) {
          "expected LoadOp");
   RankedTensorType bType = cast<RankedTensorType>(b.getType());
   auto currentLayout = cast<DistributedEncodingTrait>(bType.getEncoding());
-  auto kBlock = StringAttr::get(ctx, "block");
-  auto dims = standardOutDimNames(ctx, 2);
   auto newCTALayout =
-      CTAEncodingAttr::get(ctx, LinearLayout({{kBlock, {{0, 1}}}}, dims));
+      CTALayoutAttr::get(ctx, {1, 2}, {1, 2}, getCTAOrder(currentLayout));
   Attribute newLayout = replaceCTALayout(currentLayout, newCTALayout);
   rewriter.setInsertionPoint(loadOp);
   for (OpOperand &operand : loadOp->getOpOperands()) {
@@ -563,7 +561,7 @@ public:
     MLIRContext *context = dotOp->getContext();
     auto instrShape = mmaVersionToInstrShape(
         versionMajor, retShapePerCTA, oldAType.getElementType(), numWarps);
-    auto CTASplitNum = CTALayout.getCTASplitNum();
+    ArrayRef<unsigned> CTASplitNum = CTALayout.getCTASplitNum();
     auto bitwidth = oldRetType.getElementType().getIntOrFloatBitWidth();
     unsigned colStride = 32 / bitwidth;
     Attribute accEncoding = triton::nvidia_gpu::TensorMemoryEncodingAttr::get(
@@ -818,7 +816,7 @@ public:
     unsigned m = 128;
     unsigned n = retShapePerCTA[1] >= 256 ? 256 : retShapePerCTA[1];
 
-    auto CTASplitNum = CTALayout.getCTASplitNum();
+    ArrayRef<unsigned> CTASplitNum = CTALayout.getCTASplitNum();
     auto bitwidth = oldRetType.getElementType().getIntOrFloatBitWidth();
     unsigned colStride = 32 / bitwidth;
     Attribute accEncoding = triton::nvidia_gpu::TensorMemoryEncodingAttr::get(

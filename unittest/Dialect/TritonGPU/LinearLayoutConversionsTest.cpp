@@ -33,8 +33,7 @@ public:
                               ArrayRef<unsigned> cSplit, ArrayRef<unsigned> ord,
                               ArrayRef<unsigned> cOrd) {
     return BlockedEncodingAttr::get(
-        &ctx, spt, tpw, wpb, ord,
-        CTAEncodingAttr::fromSplitParams(&ctx, cpg, cSplit, cOrd));
+        &ctx, spt, tpw, wpb, ord, CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd));
   }
 
   NvidiaMmaEncodingAttr mma(unsigned versionMaj, unsigned versionMin,
@@ -44,13 +43,13 @@ public:
                             ArrayRef<unsigned> cOrd) {
     return NvidiaMmaEncodingAttr::get(
         &ctx, versionMaj, versionMin, wbp,
-        CTAEncodingAttr::fromSplitParams(&ctx, cpg, cSplit, cOrd), instrShape);
+        CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd), instrShape);
   }
 
   NvidiaMmaEncodingAttr mma(unsigned versionMaj, unsigned versionMin,
                             ArrayRef<unsigned> instrShape,
                             ArrayRef<unsigned> numWarps) {
-    auto ctaLayout = CTAEncodingAttr::getDefault(&ctx, numWarps.size());
+    auto ctaLayout = CTALayoutAttr::getDefault(&ctx, numWarps.size());
     return NvidiaMmaEncodingAttr::get(&ctx, versionMaj, versionMin, numWarps,
                                       std::move(ctaLayout), instrShape);
   }
@@ -68,7 +67,7 @@ public:
     SmallVector<unsigned> cOrd(warps.size());
     std::iota(cOrd.begin(), cOrd.end(), 0);
 
-    auto ctaLayout = CTAEncodingAttr::fromSplitParams(&ctx, cpg, cSplit, cOrd);
+    auto ctaLayout = CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd);
     return AMDMfmaEncodingAttr::get(&ctx, version, warps, instrShape,
                                     isTransposed, ctaLayout, tilesPerWarp,
                                     elementBitWidth);
@@ -87,9 +86,9 @@ public:
     SmallVector<unsigned> cSplit(warps.size(), 1u);
     SmallVector<unsigned> cOrd(warps.size());
     std::iota(cOrd.begin(), cOrd.end(), 0);
-    return AMDWmmaEncodingAttr::get(
-        &ctx, version, transposed, warps,
-        CTAEncodingAttr::fromSplitParams(&ctx, cpg, cSplit, cOrd), instrShape);
+    return AMDWmmaEncodingAttr::get(&ctx, version, transposed, warps,
+                                    CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd),
+                                    instrShape);
   }
 
   DotOperandEncodingAttr wmmaDotOp(AMDWmmaEncodingAttr wmma, unsigned opIdx,
@@ -108,7 +107,7 @@ public:
                                     ArrayRef<unsigned> cOrd) {
     return SwizzledSharedEncodingAttr::get(
         &ctx, vec, perPhase, maxPhase, ord,
-        CTAEncodingAttr::fromSplitParams(&ctx, cpg, cSplit, cOrd));
+        CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd));
   }
 
   NVMMASharedEncodingAttr
@@ -118,7 +117,7 @@ public:
               ArrayRef<unsigned> cOrd, bool fp4Padded = false) {
     return NVMMASharedEncodingAttr::get(
         &ctx, swizzleSizeInBytes, transposed, elementBitWidth, fp4Padded,
-        CTAEncodingAttr::fromSplitParams(&ctx, cpg, cSplit, cOrd));
+        CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd));
   }
 
   AMDRotatingSharedEncodingAttr
@@ -127,7 +126,7 @@ public:
                     ArrayRef<unsigned> ord, ArrayRef<unsigned> cOrd) {
     return AMDRotatingSharedEncodingAttr::get(
         &ctx, vec, perPhase, maxPhase, ord,
-        CTAEncodingAttr::fromSplitParams(&ctx, cpg, cSplit, cOrd));
+        CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd));
   }
 
   TensorMemoryEncodingAttr tmem(unsigned blockM, unsigned blockN,
@@ -3329,8 +3328,7 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout) {
 
   layout = getSM120DotScaledScaleLayout(
       &ctx, /*shape=*/{128, 2}, /*opIdx=*/0, /*warpsPerCTA=*/{1, 1},
-      /*ctaLayout=*/
-      CTAEncodingAttr::fromSplitParams(&ctx, {1, 1}, {1, 1}, {1, 0}));
+      /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
   ll = LinearLayout({{S("register"), {{0, 1}, {16, 0}, {32, 0}, {64, 0}}},
                      {S("lane"), {{8, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}}},
                      {S("warp"), {}},
@@ -3341,8 +3339,7 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout) {
 
   layout = getSM120DotScaledScaleLayout(
       &ctx, /*shape=*/{128, 2}, /*opIdx=*/1, /*warpsPerCTA=*/{1, 1},
-      /*ctaLayout=*/
-      CTAEncodingAttr::fromSplitParams(&ctx, {1, 1}, {1, 1}, {1, 0}));
+      /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
   ll = LinearLayout(
       {{S("register"), {{0, 1}, {8, 0}, {16, 0}, {32, 0}, {64, 0}}},
        {S("lane"), {{0, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}}},
@@ -3354,8 +3351,7 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout) {
 
   layout = getSM120DotScaledScaleLayout(
       &ctx, /*shape=*/{128, 4}, /*opIdx=*/0, /*warpsPerCTA=*/{2, 2},
-      /*ctaLayout=*/
-      CTAEncodingAttr::fromSplitParams(&ctx, {1, 1}, {1, 1}, {1, 0}));
+      /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
   ll = LinearLayout({{S("register"), {{0, 1}, {0, 2}, {32, 0}, {64, 0}}},
                      {S("lane"), {{8, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}}},
                      {S("warp"), {{0, 0}, {16, 0}}},
@@ -3366,8 +3362,7 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout) {
 
   layout = getSM120DotScaledScaleLayout(
       &ctx, /*shape=*/{256, 4}, /*opIdx=*/1, /*warpsPerCTA=*/{1, 2},
-      /*ctaLayout=*/
-      CTAEncodingAttr::fromSplitParams(&ctx, {1, 1}, {1, 1}, {1, 0}));
+      /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
   ll = LinearLayout(
       {{S("register"), {{0, 1}, {0, 2}, {16, 0}, {32, 0}, {64, 0}, {128, 0}}},
        {S("lane"), {{0, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}}},
@@ -3379,8 +3374,7 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout) {
 
   layout = getSM120DotScaledScaleLayout(
       &ctx, /*shape=*/{128, 8}, /*opIdx=*/0, /*warpsPerCTA=*/{2, 2},
-      /*ctaLayout=*/
-      CTAEncodingAttr::fromSplitParams(&ctx, {1, 1}, {1, 1}, {1, 0}));
+      /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
   ll =
       LinearLayout({{S("register"), {{0, 1}, {0, 2}, {0, 4}, {32, 0}, {64, 0}}},
                     {S("lane"), {{8, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}}},
@@ -3392,8 +3386,7 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout) {
 
   layout = getSM120DotScaledScaleLayout(
       &ctx, /*shape=*/{128, 8}, /*opIdx=*/1, /*warpsPerCTA=*/{2, 2},
-      /*ctaLayout=*/
-      CTAEncodingAttr::fromSplitParams(&ctx, {1, 1}, {1, 1}, {1, 0}));
+      /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
   ll = LinearLayout(
       {{S("register"), {{0, 1}, {0, 2}, {0, 4}, {16, 0}, {32, 0}, {64, 0}}},
        {S("lane"), {{0, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}}},
@@ -3405,8 +3398,7 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout) {
 
   layout = getSM120DotScaledScaleLayout(
       &ctx, /*shape=*/{256, 2}, /*opIdx=*/0, /*warpsPerCTA=*/{1, 1},
-      /*ctaLayout=*/
-      CTAEncodingAttr::fromSplitParams(&ctx, {1, 1}, {1, 1}, {1, 0}));
+      /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
   ll = LinearLayout(
       {{S("register"), {{0, 1}, {16, 0}, {32, 0}, {64, 0}, {128, 0}}},
        {S("lane"), {{8, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}}},
@@ -3418,8 +3410,7 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout) {
 
   layout = getSM120DotScaledScaleLayout(
       &ctx, /*shape=*/{256, 2}, /*opIdx=*/1, /*warpsPerCTA=*/{1, 1},
-      /*ctaLayout=*/
-      CTAEncodingAttr::fromSplitParams(&ctx, {1, 1}, {1, 1}, {1, 0}));
+      /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
   ll = LinearLayout(
       {{S("register"), {{0, 1}, {8, 0}, {16, 0}, {32, 0}, {64, 0}, {128, 0}}},
        {S("lane"), {{0, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}}},
@@ -3431,8 +3422,7 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout) {
 
   layout = getSM120DotScaledScaleLayout(
       &ctx, /*shape=*/{256, 4}, /*opIdx=*/0, /*warpsPerCTA=*/{2, 2},
-      /*ctaLayout=*/
-      CTAEncodingAttr::fromSplitParams(&ctx, {1, 1}, {1, 1}, {1, 0}));
+      /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
   ll = LinearLayout(
       {{S("register"), {{0, 1}, {0, 2}, {32, 0}, {64, 0}, {128, 0}}},
        {S("lane"), {{8, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}}},
@@ -3444,8 +3434,7 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout) {
 
   layout = getSM120DotScaledScaleLayout(
       &ctx, /*shape=*/{256, 4}, /*opIdx=*/1, /*warpsPerCTA=*/{1, 2},
-      /*ctaLayout=*/
-      CTAEncodingAttr::fromSplitParams(&ctx, {1, 1}, {1, 1}, {1, 0}));
+      /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
   ll = LinearLayout(
       {{S("register"), {{0, 1}, {0, 2}, {16, 0}, {32, 0}, {64, 0}, {128, 0}}},
        {S("lane"), {{0, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}}},
@@ -3457,8 +3446,7 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout) {
 
   layout = getSM120DotScaledScaleLayout(
       &ctx, /*shape=*/{256, 8}, /*opIdx=*/0, /*warpsPerCTA=*/{2, 2},
-      /*ctaLayout=*/
-      CTAEncodingAttr::fromSplitParams(&ctx, {1, 1}, {1, 1}, {1, 0}));
+      /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
   ll = LinearLayout(
       {{S("register"), {{0, 1}, {0, 2}, {0, 4}, {32, 0}, {64, 0}, {128, 0}}},
        {S("lane"), {{8, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}}},
@@ -3470,8 +3458,7 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout) {
 
   layout = getSM120DotScaledScaleLayout(
       &ctx, /*shape=*/{256, 8}, /*opIdx=*/1, /*warpsPerCTA=*/{2, 2},
-      /*ctaLayout=*/
-      CTAEncodingAttr::fromSplitParams(&ctx, {1, 1}, {1, 1}, {1, 0}));
+      /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
   ll = LinearLayout(
       {{S("register"),
         {{0, 1}, {0, 2}, {0, 4}, {16, 0}, {32, 0}, {64, 0}, {128, 0}}},

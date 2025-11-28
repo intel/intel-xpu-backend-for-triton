@@ -7,6 +7,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LayoutUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -55,9 +56,7 @@ public:
     // swizzling code.
     auto ctx = getContext();
     auto oldCTALayout = triton::gpu::getCTALayout(srcTy.getEncoding());
-    auto newLl =
-        transposeLinearLayout(oldCTALayout.getLinearLayout(), trans.getOrder());
-    auto newCTALayout = CTAEncodingAttr::get(ctx, std::move(newLl));
+    auto newCTALayout = permuteCTALayout(ctx, oldCTALayout, trans.getOrder());
     auto newInnerCvtEnc =
         SwizzledSharedEncodingAttr::get(ctx, cvtEncoding, srcTy.getShape(),
                                         /*order=*/getOrderForMemory(srcTy),
