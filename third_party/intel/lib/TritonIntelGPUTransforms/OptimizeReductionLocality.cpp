@@ -349,7 +349,7 @@ private:
                                            1,
                                            dpasEncoding.getWarpsPerCTA()[0]};
     constexpr std::array<unsigned, rank> order{0, 1, 2, 3, 4, 5, 6};
-    CTALayoutAttr ctaLayout = CTALayoutAttr::getDefault(getContext(), rank);
+    CTAEncodingAttr ctaLayout = CTAEncodingAttr::getDefault(getContext(), rank);
 
     auto encoding = rewriter.getAttr<BlockedEncodingAttr>(
         sizePerThread, threadsPerWarp, warpsPerCTA, order, ctaLayout);
@@ -407,7 +407,7 @@ private:
                                            dpasEncoding.getWarpsPerCTA()[1],
                                            dpasEncoding.getWarpsPerCTA()[0]};
     constexpr std::array<unsigned, rank> order{0, 1, 2, 3, 4};
-    CTALayoutAttr ctaLayout = CTALayoutAttr::getDefault(getContext(), rank);
+    CTAEncodingAttr ctaLayout = CTAEncodingAttr::getDefault(getContext(), rank);
 
     auto encoding = rewriter.getAttr<BlockedEncodingAttr>(
         sizePerThread, threadsPerWarp, warpsPerCTA, order, ctaLayout);
@@ -440,7 +440,7 @@ private:
                                            dpasEncoding.getWarpsPerCTA()[1],
                                            dpasEncoding.getWarpsPerCTA()[0]};
     constexpr std::array<unsigned, rank> order{0, 1, 2, 3};
-    CTALayoutAttr ctaLayout = CTALayoutAttr::getDefault(getContext(), rank);
+    CTAEncodingAttr ctaLayout = CTAEncodingAttr::getDefault(getContext(), rank);
 
     auto encoding = rewriter.getAttr<BlockedEncodingAttr>(
         sizePerThread, threadsPerWarp, warpsPerCTA, order, ctaLayout);
@@ -483,7 +483,7 @@ private:
     std::array<unsigned, rank> warpsPerCTA{dpasEncoding.getWarpsPerCTA()[1],
                                            dpasEncoding.getWarpsPerCTA()[0]};
     constexpr std::array<unsigned, rank> order{0, 1};
-    CTALayoutAttr ctaLayout = CTALayoutAttr::getDefault(getContext(), rank);
+    CTAEncodingAttr ctaLayout = CTAEncodingAttr::getDefault(getContext(), rank);
 
     auto parentEncoding = rewriter.getAttr<BlockedEncodingAttr>(
         sizePerThread, threadsPerWarp, warpsPerCTA, order, ctaLayout);

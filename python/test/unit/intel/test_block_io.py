@@ -53,18 +53,14 @@ class SliceLayout:
 
 class BlockedLayout:
 
-    def __init__(self, size_per_thread, threads_per_warp, warps_per_cta, order, ctas_per_cga=[1, 1],
-                 cta_split_num=[1, 1], cta_order=[0, 1]):
+    def __init__(self, size_per_thread, threads_per_warp, warps_per_cta, order):
         self.sz_per_thread = size_per_thread
         self.threads_per_warp = threads_per_warp
         self.warps_per_cta = warps_per_cta
         self.order = order
-        self.ctas_per_cga = ctas_per_cga
-        self.cta_split_num = cta_split_num
-        self.cta_order = cta_order
 
     def __str__(self):
-        return f"#ttg.blocked<{{sizePerThread={self.sz_per_thread}, threadsPerWarp={self.threads_per_warp}, warpsPerCTA={self.warps_per_cta}, order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
+        return f"#ttg.blocked<{{sizePerThread={self.sz_per_thread}, threadsPerWarp={self.threads_per_warp}, warpsPerCTA={self.warps_per_cta}, order={self.order}}}>"
 
 
 def warps_per_cta(layout):
@@ -75,7 +71,7 @@ def warps_per_cta(layout):
 
 
 layouts = [
-    BlockedLayout([1, 1], [2, 16], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 1], [2, 16], [4, 1], [1, 0]),
     # DPAS layout
     DpasLayout(repeatCount=8, systolic_depth=8, execution_size=16, ops_per_chan=4, threads_per_warp=16,
                warps_per_cta=[1, 4], rep_cluster=[1, 2]),
@@ -110,8 +106,7 @@ layouts = [
         parent=DpasLayout(repeatCount=8, systolic_depth=8, execution_size=16, ops_per_chan=1, threads_per_warp=32,
                           warps_per_cta=[2, 2], rep_cluster=[1, 1]), op_idx=1, k_width=1),
     # Slice layout
-    SliceLayout(dim=1, parent=BlockedLayout([1, 4, 1], [2, 1, 16], [2, 1, 2], [2, 1, 0], [1, 1, 1], [1, 1, 1],
-                                            [0, 1, 2])),
+    SliceLayout(dim=1, parent=BlockedLayout([1, 4, 1], [2, 1, 16], [2, 1, 2], [2, 1, 0])),
 ]
 
 
@@ -136,7 +131,8 @@ def test_block_io(M, N, dtype_str, layout, load_block_ptr, store_block_ptr, tran
     block_io = "\"column_major\"" if transpose else "\"row_major\""
 
     strides = "[%c1_i64, %M_i64]" if transpose else "[%N_i64, %c1_i64]"
-
+    #breakpoint()
+    print(layout)
     if load_block_ptr:
         load_ops = f"""
             %src_ptr = tt.make_tensor_ptr %src, [%M_i64, %N_i64], {strides}, [%c0_i32, %c0_i32] {{order = array<i32: 1, 0>}} : <tensor<{M}x{N}x{ty}, #layout>>

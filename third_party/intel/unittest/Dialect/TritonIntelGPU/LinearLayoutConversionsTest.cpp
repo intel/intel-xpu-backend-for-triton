@@ -31,11 +31,7 @@ public:
 
     // TODO: could put the getOrderForDotOperand in the builder?
     auto layout = Subgroup2DBlockEncodingAttr::get(
-        &ctx, warpsPerCTA,
-        CTALayoutAttr::get(
-            &ctx, dpasLayout.getCTAsPerCGA(), // TODO: add to DpasLayout?
-            dpasLayout.getCTASplitNum(), dpasLayout.getCTAOrder()),
-        instrShape, numBlocks,
+        &ctx, warpsPerCTA, dpasLayout.getCTALayout(), instrShape, numBlocks,
         getOrderForDotOperand(opIdx, /*rank*/ 2, /*kContig*/ true), kWidth,
         dpasLayout.getThreadsPerWarp());
     return layout;
