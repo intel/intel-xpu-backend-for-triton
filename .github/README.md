@@ -4,7 +4,7 @@
 # Intel® XPU Backend for Triton\*
 
 This is the development repository of Intel® XPU Backend for Triton\*, a new [Triton](https://github.com/triton-lang/triton) backend for Intel GPUs.
-Intel® XPU Backend for Triton\* is a out of tree backend module for [Triton](https://github.com/triton-lang/triton) used to provide best-in-class performance and productivity on any Intel GPUs for [PyTorch](https://github.com/pytorch/pytorch) and standalone usage.
+Intel® XPU Backend for Triton\* is an out of tree backend module for [Triton](https://github.com/triton-lang/triton) used to provide best-in-class performance and productivity on any Intel GPUs for [PyTorch](https://github.com/pytorch/pytorch) and standalone usage.
 
 # Compatibility
 
@@ -37,7 +37,7 @@ You can check if triton is currently available by running one of the [tutorials]
 
 Basic rules:
 
-1. **Use Tensor Descriptors:** For inputs and outputs of matmul operations (`tl.dot`), use Tensor Descriptors. This utilizes the hardware-optimized DPAS operation and 2D block IO HW operations. You can often expect more than a 2x performance improvement compared to the basic tensor of pointers approach. You need to use specifically device side tensor descriptors (defined inside of a kernel), not host side (defined in CPU code, and then passed to the kernel).
+1. **Use Tensor Descriptors:** For inputs and outputs of matmul operations (`tl.dot`), use Tensor Descriptors. This utilizes hardware-optimized DPAS operations and 2D block IO HW operations. You can often expect more than 2x performance improvement compared to the basic tensor of pointers approach. Use device side Tensor Descriptors (defined inside a kernel), not host side (defined in CPU code and passed to the kernel).
 2. **Type Annotations:** Use proper type annotations for your kernels. Good type annotations allow for better optimization, but be careful to avoid excessive recompilation.
 3. **Benchmark:** Experiment with the performance of your kernel. You can use `triton.testing.do_bench` for basic benchmarking, as demonstrated in the [tutorials](../python/tutorials/02-fused-softmax.py).
 4. **Tiling and Autotuning:** Pick appropriate tiling for your machine and tensor shapes.
@@ -171,7 +171,7 @@ for k in range(0, tl.cdiv(K, BLOCK_K)):
 ```
 
 
-We can migrate to Tensor Descriptors to simplify the source code. Let's investigate what Tensor Desciptor we will need here.
+We can migrate to Tensor Descriptors to simplify the source code. Let's investigate what Tensor Descriptors we will need here.
 
 From `a_ptrs` shape we can infer block shapes and strides of a possible Tensor Descriptor:
 ```
@@ -179,7 +179,7 @@ block_size=(BLOCK_M, BLOCK_K)
 strides=(stride_am, stride_ak)
 ```
 
-Using Tensor Desciptor we can directly describe a slice that we want to process:
+Using Tensor Descriptors we can directly describe a slice that we want to process:
 
 `A[expert_id, :e_num_tokens, :]`
 
@@ -196,7 +196,7 @@ Base of a tensor descriptor can be inferred from `a_ptrs` as well:
 
 Note that we don't add `cta_m_start * stride_am` to the base, because we can pass that offset directly during loading.
 
-So we can rewrite that code with Tensor Desciptors, which will look much cleaner and will work faster on XPU:
+So we can rewrite that code with Tensor Descriptors, which will look much cleaner and will work faster on XPU:
 
 ```
 expert_id = tl.program_id(axis=0)
@@ -280,17 +280,17 @@ for j in range(0, num_blocks):
 ```
 
 ---
-Tensor Desciptors can be defined inside of a kernel (called **device side Tensor Desciptors** (like in all the examples above) or outside of a triton kernel, in the launching utility (called **host side Tensor Desciptors**), like it is done in the upstream Triton ([example](https://triton-lang.org/main/getting-started/tutorials/09-persistent-matmul.html)).
-You should only use device side Tensor Desciptors on XPU for now.
+Tensor Descriptors can be defined inside of a kernel (called **device side Tensor Descriptors** (like in all the examples above) or outside of a triton kernel, in the launching utility (called **host side Tensor Descriptors**), like it is done in the upstream Triton ([example](https://triton-lang.org/main/getting-started/tutorials/09-persistent-matmul.html)).
+You should only use device side Tensor Descriptors on XPU for now.
 
 ---
 **Summary:**
-1. **Use Tensor Desciptors to load memory reqired for `tl.dot` and to save results.**
-2. **Use kernel side Tensor Desciptors, not host side.**
+1. **Use Tensor Descriptors to load memory required for `tl.dot` and to save results.**
+2. **Use kernel side Tensor Descriptors, not host side.**
 3. **Strive to only use 2D Tensor Descriptors.**
 4. **Ideally, annotate strides with `tl.constexpr`.** Basic preference is `tl.constexpr` > no annotation > `tl.int64`/ `tl.int32` (for non-last strides) >> `tl.int64` / `tl.int32` for the last stride. Avoid annotating the last strides with `tl.int64` or `tl.int32`!
 
-## Use proper type annotations
+## Use Proper Type Annotations
 1. Set `tl.constexpr` type annotation for block sizes and boolean flags to let the compiler optimize. Ideally, also use `tl.constexpr` for strides and tensor shapes that will cover limited number of values (up to 10). Each combination of arguments with this annotation is compiled separately, so avoid setting it for values that vary widely at runtime (like the number of tokens) to prevent excessive recompilation. For GEMM kernels of modern LLMs, for example, number of input and output features will likely be the same or cover just 2-4 unique values, but number of tokens can have more than 100 unique values. So you should use `tl.constexpr` for number of features, but not for the number of tokens.
 2. No Annotation: You can keep type annotations empty and let the compiler guess. This is good for parameters that change often, like number of tokens or total number of elements, to avoid excessive recompilation.
 3. Avoid annotating with `tl.int64` or `tl.int32`. It can prevent many optimizations.
@@ -319,7 +319,7 @@ def matmul_kernel(
 
 It's even better to use more `tl.constexpr` declarations if we know that the kernel will be called for the same input shapes. That is often the case for DL models including LLMs. Usually only the batch size, and the number of tokens varies.
 
-This is especially important for cases when you have `tl.dot` operations without Tensor Desciptors (which is discouraged) as compiler will try to guess if it can perform Tensor Descriptor conversion internally and will need shapes and strides
+This is especially important for cases when you have `tl.dot` operations without Tensor Descriptors (which is discouraged) as compiler will try to guess if it can perform Tensor Descriptor conversion internally and will need shapes and strides
 fixed during compilation.
 ```
 ...
@@ -338,9 +338,9 @@ fixed during compilation.
 
 ---
 
-**Avoid overflowing int32**
+**Avoid int32 Overflow**
 
-If you replace `tl.int64` with `tl.constexpr` you will now get int32 value for your strides (instead of int64) and you might end up with an overflow in your offset calculation. That can happed for MOE deepseek R1 model for example.
+If you replace `tl.int64` with `tl.constexpr` you will now get int32 value for your strides (instead of int64) and you might end up with an overflow in your offset calculation. That can happen for MOE deepseek R1 model for example.
 
 Original source code:
 ```
@@ -368,13 +368,13 @@ expert_id = tl.program_id(axis=0)
 expert_offset = expert_id * stride_ae
 ```
 
-If values are too large it's best to cast them manually to `tl.int64`:
+For large values, cast manually into `tl.int64`:
 ```
 # This will not overflow even if stride_ae is int32
 expert_offset = expert_id.to(tl.int64) * stride_ae
 ```
 
-### Benchmark, Tune Kernel Configuration
+### Benchmark and Tune Kernel Configuration
 
 Just like with any other Triton kernels, you want to pick appropriate block sizes to your hardware and tensor shapes. Use `triton.autotune` to try various combinations and find the best one. Key parameters to tune include block sizes, `num_warps`, `num_stages`, and `grf_mode`.
 
