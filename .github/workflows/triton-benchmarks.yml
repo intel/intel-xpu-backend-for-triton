@@ -380,7 +380,7 @@ jobs:
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'launch_micro_benchmarks')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'launch_micro_benchmarks') }}
         run: |
           source scripts/capture-hw-details.sh
-          python3 python/test/microbenchmark/launch_overhead.py
+          python python/test/microbenchmark/launch_overhead.py
 
       - name: Upload benchmark reports
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
