@@ -99,13 +99,13 @@ def main(use_tensor_desc: bool, reports_dir: str = None):
 
     if reports_dir:
         os.makedirs(reports_dir, exist_ok=True)
-        csv_path = os.path.join(reports_dir, "launch_overhead_report.csv")
+        csv_path = os.path.join(reports_dir, "launch_overhead_results.csv")
         file_exists = os.path.exists(csv_path)
 
         with open(csv_path, "a", newline="") as csvfile:
             writer = csv.writer(csvfile)
             if not file_exists:
-                writer.writerow(["input_type", "median_usecs"])
+                writer.writerow(["input_type", "triton-time_us"])
 
             input_type = "TensorDescriptor" if use_tensor_desc else "Tensor"
             writer.writerow([input_type, round(sorted(usecs)[len(usecs) >> 1], 2)])
