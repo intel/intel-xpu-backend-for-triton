@@ -2,7 +2,10 @@
 Original code by @bertmaher; profiling added by @apgoucher
 """
 
+import argparse
 import cProfile
+import csv
+import os
 import pstats
 import time
 
@@ -79,7 +82,7 @@ def do_bench_walltime(fn):
     return mses
 
 
-def main(use_tensor_desc: bool):
+def main(use_tensor_desc: bool, reports_dir: str = None):
     if use_tensor_desc:
         targs = [TensorDescriptor.from_tensor(torch.zeros(1, 16, device="xpu"), block_shape=[1, 16]) for _ in range(5)]
     else:
@@ -94,9 +97,26 @@ def main(use_tensor_desc: bool):
     print(usecs)
     print(sorted(usecs)[len(usecs) >> 1])
 
+    if reports_dir:
+        os.makedirs(reports_dir, exist_ok=True)
+        csv_path = os.path.join(reports_dir, "launch_overhead_report.csv")
+        file_exists = os.path.exists(csv_path)
+
+        with open(csv_path, "a", newline="") as csvfile:
+            writer = csv.writer(csvfile)
+            if not file_exists:
+                writer.writerow(["input_type", "median_usecs"])
+
+            input_type = "TensorDescriptor" if use_tensor_desc else "Tensor"
+            writer.writerow([input_type, sorted(usecs)[len(usecs) >> 1]])
+
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Benchmark launch overhead for Triton kernels")
+    parser.add_argument("--reports", type=str, default=None, help="Path to directory for CSV reports")
+    args = parser.parse_args()
+
     print("launch overhead of kernel with Tensor inputs")
-    main(use_tensor_desc=False)
+    main(use_tensor_desc=False, reports_dir=args.reports)
     print("launch overhead of kernel with TensorDescriptor inputs")
-    main(use_tensor_desc=True)
+    main(use_tensor_desc=True, reports_dir=args.reports)
