@@ -1,6 +1,6 @@
 // RUN: triton-opt %s -split-input-file --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefixes=CHECK,CHECK-SCALAR
 
-#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 
 // CHECK-SCALAR-DAG:   llvm.func spir_funccc @_Z27__spirv_ConvertBF16ToFINTELs(i16) -> f32 attributes {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none>, no_unwind, will_return}
 // CHECK-SCALAR-DAG:   llvm.func spir_funccc @_Z27__spirv_ConvertFToBF16INTELf(f32) -> i16 attributes {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none>, no_unwind, will_return}
