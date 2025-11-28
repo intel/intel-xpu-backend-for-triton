@@ -11,7 +11,6 @@ from types import ModuleType
 import hashlib
 import tempfile
 import signal
-import io
 import re
 import os
 import subprocess
@@ -69,6 +68,23 @@ class XPUOptions:
     def hash(self):
         key = '_'.join([f'{name}-{val}' for name, val in self.__dict__.items()])
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
+
+
+SPILL_SIZE_RE = re.compile(r'spill_size\s*[:=]\s*(\d+)')
+
+
+def extract_spill_size_from_zebin(file):
+    with open(file, 'rb') as f:
+        elf = ELFFile(f)
+        zeinfo = elf.get_section_by_name(".ze_info")
+        if zeinfo is None:
+            raise RuntimeError('Internal Triton ZEBIN codegen error:'
+                               'Section .ze_info not found in zebin')
+        text = zeinfo.data().decode('utf-8')
+        match = SPILL_SIZE_RE.search(text)
+        if match:
+            return int(match.group(1))
+    return 0
 
 
 class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
@@ -424,56 +440,41 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
         metadata["generate_native_code"] = options.generate_native_code
 
-        def build_zebin(build_flags, extract_spill_size=False):
-            with track("generate_native_code"), tempfile.TemporaryDirectory() as temp_dir:
-                with tempfile.NamedTemporaryFile(mode='wb', suffix='.spv', dir=temp_dir, delete=False) as fsrc:
-                    fsrc.write(src)
-                fbin = fsrc.name + '.o'
+        with track("generate_native_code"), tempfile.TemporaryDirectory() as temp_dir:
+            with tempfile.NamedTemporaryFile(mode='wb', suffix='.spv', dir=temp_dir, delete=False) as fsrc:
+                fsrc.write(src)
+            fbin = fsrc.name + '.o'
 
-                ocloc_cmd = [
-                    'ocloc', 'compile', '-file', fsrc.name, '-o', fbin, '-spirv_input', '-device', cls.device_arch,
-                    '-options', build_flags + shader_dump_opt
-                ]
+            ocloc_cmd = [
+                'ocloc', 'compile', '-file', fsrc.name, '-o', fbin, '-spirv_input', '-device', cls.device_arch,
+                '-options', metadata['build_flags'] + shader_dump_opt
+            ]
 
-                try:
-                    subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
-                except subprocess.CalledProcessError as e:
-                    if e.returncode == 255:
-                        error = 'Internal Triton ZEBIN codegen error'
-                    elif e.returncode == 128 + signal.SIGSEGV:
-                        error = '`ocloc` raised SIGSEGV'
-                    else:
-                        error = f'`ocloc` failed with error code {e.returncode}'
+            try:
+                subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
+                if options.grf_mode == 'default':
+                    spill_size = extract_spill_size_from_zebin(fbin)
+                    # The threshold of 1000 for spill_size is chosen based on empirical observations
+                    # and aligned with triton/backends/intel/driver.c
+                    if spill_size > 1000:
+                        metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
+                        # re-run with double GRF mode
+                        ocloc_cmd[-1] = metadata["build_flags"] + shader_dump_opt
+                        subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
+            except subprocess.CalledProcessError as e:
+                if e.returncode == 255:
+                    error = 'Internal Triton ZEBIN codegen error'
+                elif e.returncode == 128 + signal.SIGSEGV:
+                    error = '`ocloc` raised SIGSEGV'
+                else:
+                    error = f'`ocloc` failed with error code {e.returncode}'
 
-                    raise RuntimeError(f'{error}\n'
-                                       f'`ocloc` stderr:\n{e.output}\n'
-                                       f'Repro command: {ocloc_cmd}\n') from e
+                raise RuntimeError(f'{error}\n'
+                                   f'`ocloc` stderr:\n{e.output}\n'
+                                   f'Repro command: {ocloc_cmd}\n') from e
 
-                with open(fbin, 'rb') as f:
-                    zebin = f.read()
-                    spill_size = 0
-                    if extract_spill_size:
-                        elf = ELFFile(io.BytesIO(zebin))
-                        zeinfo = elf.get_section_by_name(".ze_info")
-                        if zeinfo is None:
-                            raise RuntimeError('Internal Triton ZEBIN codegen error:'
-                                               'Section .ze_info not found in zebin')
-                        text = zeinfo.data().decode('utf-8')
-                        match = re.search(r'spill_size\s*[:=]\s*(\d+)', text)
-                        if match:
-                            spill_size = int(match.group(1))
-            return zebin, spill_size
-
-        default_grf = options.grf_mode == 'default'
-        zebin, spill_size = build_zebin(metadata["build_flags"], extract_spill_size=default_grf)
-
-        # The threshold of 1000 for spill_size is chosen based on empirical observations
-        # and aligned with triton/backends/intel/driver.c
-        if default_grf and spill_size > 1000:
-            metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
-            # re-run with double GRF mode
-            zebin, _ = build_zebin(metadata["build_flags"], extract_spill_size=False)
-
+            with open(fbin, 'rb') as f:
+                zebin = f.read()
         return zebin
 
     def add_stages(self, stages, options, language):
