@@ -38,6 +38,16 @@ pytest() {
         pytest_extra_args+=(
             "--select-from-file=$TRITON_TEST_SELECTFILE"
         )
+    elif [[ -n $TRITON_TEST_SELECT ]]; then
+        pytest_extra_args+=(
+            "--select-test=$TRITON_TEST_SELECT"
+        )
+    fi
+
+    if [[ $TRITON_TEST_DEBUG_FAIL = true ]]; then
+        pytest_extra_args+=(
+            "--pdb"
+        )
     fi
 
     if [[ ! -f $TRITON_TEST_SELECTFILE && -v TRITON_TEST_SUITE && -f $TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt ]]; then
