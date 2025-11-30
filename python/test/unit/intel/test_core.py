@@ -299,7 +299,7 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, add_ov
     warps = warps_per_cta(src_layout, [M, N])
     num_warps = int(np.prod(warps))
     blocked = BlockedLayout([1, 1], [32, THREADS_PER_WARP // 32], [4, num_warps // 4], [0, 1])
-    one_d_layout = BlockedLayout([1], [THREADS_PER_WARP], [num_warps], [0], [1], [1], [0])
+    one_d_layout = BlockedLayout([1], [THREADS_PER_WARP], [num_warps], [0])
 
     expanded_shape = f"1x{N}" if axis == 0 else f"{M}x1"
     other_axis = 1 - axis
