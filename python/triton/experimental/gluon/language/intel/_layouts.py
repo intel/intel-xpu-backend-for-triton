@@ -84,3 +84,7 @@ class IntelDPASLayout(DistributedLayout):
             self.threads_per_warp,
             tuple(self.cta_order),
         ))
+
+    @property
+    def rank(self):
+        return len(self.warps_per_cta)

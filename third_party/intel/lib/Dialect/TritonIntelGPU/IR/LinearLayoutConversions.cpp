@@ -24,10 +24,10 @@ namespace {
 //    for register layouts, and input dims [offset] for shared layouts.
 //  - cgaLayout: Arrangement of multiple blocks, i.e. input dims [block].
 //
-// Note that this is inconsistent with the type name CTALayoutAttr.  That type
+// Note that this is inconsistent with the type name CTAEncodingAttr.  That type
 // is equivalent to our cgaLayout.
 //
-// IMO the name CTALayoutAttr is wrong.  If we tried to be consistent anyway,
+// IMO the name CTAEncodingAttr is wrong.  If we tried to be consistent anyway,
 // then we'd have to rename ctaLayout to "warpLayout".  I think that's more
 // confusing than being inconsistent about "cgaLayout", especially when we have
 // to consider the size of the warpLayout (surely that's not the "warpSize").
@@ -57,8 +57,8 @@ LinearLayout identityND(StringAttr inDimName, ArrayRef<unsigned> shape,
 // the CTAsPerCGA CTAs (i.e. blocks) in the CGA (i.e. groups).
 //
 // See the nomenclature note at the top of the file for an explanation of why
-// this is called makeCgaLayout when it accepts a CTALayoutAttr.
-LinearLayout makeCgaLayout(CTALayoutAttr layout) {
+// this is called makeCgaLayout when it accepts a CTAEncodingAttr.
+LinearLayout makeCgaLayout(CTAEncodingAttr layout) {
   MLIRContext *ctx = layout.getContext();
   StringAttr kBlock = S("block");
 
@@ -464,7 +464,7 @@ LinearLayout DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
         LinearLayout::identity1D(numReps[0], kRegister, outDimNames[0]);
 
   return combineCtaCgaWithShape(std::move(tileLayout),
-                                CTALayoutAttr::getDefault(ctx, rank), shape);
+                                CTAEncodingAttr::getDefault(ctx, rank), shape);
 }
 
 LinearLayout dotOperandDpasToLinearLayout(DotOperandEncodingAttr dotDpasLayout,
