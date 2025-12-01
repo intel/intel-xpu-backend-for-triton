@@ -44,7 +44,7 @@ public:
                                                   vType.getElementType());
       auto retTy = RankedTensorType::get(vType.getShape(),
                                          vType.getElementType(), encoding);
-      return rewriter.create<ConvertLayoutOp>(loc, retTy, v);
+      return ConvertLayoutOp::create(rewriter, loc, retTy, v);
     };
 
     auto scaledA = scaleArg(rewriter, scaledDotOp, 0, computeType);
@@ -52,8 +52,8 @@ public:
     auto scaledB = scaleArg(rewriter, scaledDotOp, 1, computeType);
     scaledB = cvtDotOperand(scaledB, 1);
     auto newDot =
-        rewriter.create<DotOp>(scaledDotOp.getLoc(), scaledA, scaledB,
-                               scaledDotOp.getC(), InputPrecision::TF32, 0);
+        DotOp::create(rewriter, scaledDotOp.getLoc(), scaledA, scaledB,
+                      scaledDotOp.getC(), InputPrecision::TF32, 0);
 
     rewriter.replaceOpWithNewOp<ConvertLayoutOp>(scaledDotOp,
                                                  scaledDotOp.getType(), newDot);
@@ -84,20 +84,20 @@ private:
     auto intType = rewriter.getIntegerType(intWidth);
 
     auto zexted =
-        rewriter.create<arith::ExtUIOp>(loc, scaleTy.clone(intType), scale);
+        arith::ExtUIOp::create(rewriter, loc, scaleTy.clone(intType), scale);
     // getFpMantissaWidth() returns the number of bits in the mantissa plus the
     // sign bit!
     int shiftValue = largeFpType.getFPMantissaWidth() - 1;
     auto shiftConst =
-        rewriter.create<arith::ConstantIntOp>(loc, shiftValue, intWidth);
+        arith::ConstantIntOp::create(rewriter, loc, shiftValue, intWidth);
     auto shift =
-        rewriter.create<SplatOp>(loc, scaleTy.clone(intType), shiftConst);
-    auto shlRes = rewriter.create<arith::ShLIOp>(loc, zexted, shift);
+        SplatOp::create(rewriter, loc, scaleTy.clone(intType), shiftConst);
+    auto shlRes = arith::ShLIOp::create(rewriter, loc, zexted, shift);
     Value scaleFP =
-        rewriter.create<BitcastOp>(loc, scaleTy.clone(largeFpType), shlRes);
+        BitcastOp::create(rewriter, loc, scaleTy.clone(largeFpType), shlRes);
     if (largeFpType != computeType) {
-      scaleFP = rewriter.create<arith::TruncFOp>(
-          loc, scaleTy.clone(computeType), scaleFP);
+      scaleFP = arith::TruncFOp::create(rewriter, loc,
+                                        scaleTy.clone(computeType), scaleFP);
     }
     return cast<TypedValue<RankedTensorType>>(scaleFP);
   }
@@ -124,24 +124,24 @@ private:
       auto sliceEnc = SliceEncodingAttr::get(ctx, rank, blockedEnc);
       auto sliceType = RankedTensorType::get(
           scaleTy.getShape(), scaleTy.getElementType(), sliceEnc);
-      scale = rewriter.create<ConvertLayoutOp>(loc, sliceType, scale);
+      scale = ConvertLayoutOp::create(rewriter, loc, sliceType, scale);
     }
-    auto expandScale = rewriter.create<ExpandDimsOp>(loc, scale, rank);
+    auto expandScale = ExpandDimsOp::create(rewriter, loc, scale, rank);
     // 2.2) Broadcast the dimension to size 32
     auto scaleShape = to_vector(scaleTy.getShape());
     scaleShape.push_back(32);
-    auto broadcastScale = rewriter.create<BroadcastOp>(
-        loc, expandScale.getType().clone(scaleShape), expandScale);
+    auto broadcastScale = BroadcastOp::create(
+        rewriter, loc, expandScale.getType().clone(scaleShape), expandScale);
     // 2.3) Transpose the dimension to the scaled dimension
     auto transposeOrder = llvm::to_vector(llvm::seq<int32_t>(rank));
     transposeOrder.insert(transposeOrder.begin() + dim + 1, rank);
     auto transposedScale =
-        rewriter.create<TransOp>(loc, broadcastScale, transposeOrder);
+        TransOp::create(rewriter, loc, broadcastScale, transposeOrder);
     // 2.4) Reshape to the shape of v
     scaleShape.pop_back();
     scaleShape[dim] *= 32;
     auto reshapeScale =
-        rewriter.create<ReshapeOp>(loc, scaleShape, transposedScale);
+        ReshapeOp::create(rewriter, loc, scaleShape, transposedScale);
     return reshapeScale;
   }
 
@@ -155,30 +155,29 @@ private:
 
     // Scale is NaN
     auto scaleTy = scale.getType();
-    auto constFF = rewriter.create<arith::ConstantOp>(
-        loc, scaleTy,
+    auto constFF = arith::ConstantOp::create(
+        rewriter, loc, scaleTy,
         DenseElementsAttr::get(scaleTy,
                                APInt(scaleTy.getElementTypeBitWidth(), 0xff)));
     auto scaleIsNan = cast<TypedValue<RankedTensorType>>(
-        rewriter
-            .create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq, scale,
-                                   constFF)
+        arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::eq, scale,
+                              constFF)
             .getResult());
     auto cond = broadcastScale(rewriter, scaledDotOp, mod, scaleIsNan, dim);
     // Make scale is NaN compatible with mxfp
     auto condTy = cond.getType();
     condTy = RankedTensorType::get(condTy.getShape(), condTy.getElementType(),
                                    mxfp.getType().getEncoding());
-    cond = rewriter.create<ConvertLayoutOp>(loc, condTy, cond);
+    cond = ConvertLayoutOp::create(rewriter, loc, condTy, cond);
 
     // Create NaN
     auto mxfpTy = mxfp.getType();
     auto nan = APFloat::getNaN(
         cast<FloatType>(mxfpTy.getElementType()).getFloatSemantics());
-    auto constNan = rewriter.create<arith::ConstantOp>(
-        loc, mxfpTy, DenseElementsAttr::get(mxfpTy, nan));
+    auto constNan = arith::ConstantOp::create(
+        rewriter, loc, mxfpTy, DenseElementsAttr::get(mxfpTy, nan));
 
-    auto result = rewriter.create<arith::SelectOp>(loc, cond, constNan, mxfp);
+    auto result = arith::SelectOp::create(rewriter, loc, cond, constNan, mxfp);
     return cast<TypedValue<RankedTensorType>>(result.getResult());
   }
 
@@ -208,11 +207,11 @@ private:
           (opIdx == 1 && resShape[rank - 1] != vShape[rank - 1])) {
         packDim = (packDim + 1) % 2;
       }
-      v = rewriter.create<Fp4ToFpOp>(loc, v, computeType, packDim);
+      v = Fp4ToFpOp::create(rewriter, loc, v, computeType, packDim);
     } else {
       auto vType16 = v.getType().clone(computeType);
       v = cast<TypedValue<RankedTensorType>>(
-          rewriter.create<FpToFpOp>(loc, vType16, v).getResult());
+          FpToFpOp::create(rewriter, loc, vType16, v).getResult());
     }
     if (!scale)
       return v;
@@ -222,7 +221,7 @@ private:
     // this parametre transposed, as we do with the mxfp.
     if (opIdx == 1) {
       auto order = getTransposeOrder(rank);
-      scale = rewriter.create<TransOp>(loc, scale, order);
+      scale = TransOp::create(rewriter, loc, scale, order);
     }
 
     // 1) Cast scale to compute type (fp16/bf16)
@@ -232,11 +231,11 @@ private:
     auto reshapeScale =
         broadcastScale(rewriter, scaledDotOp, mod, scale16, kDim);
     reshapeScale =
-        rewriter.create<ConvertLayoutOp>(loc, v.getType(), reshapeScale);
+        ConvertLayoutOp::create(rewriter, loc, v.getType(), reshapeScale);
 
     // 3) Multiply
     auto mxfp = cast<TypedValue<RankedTensorType>>(
-        rewriter.create<arith::MulFOp>(loc, v, reshapeScale).getResult());
+        arith::MulFOp::create(rewriter, loc, v, reshapeScale).getResult());
 
     // Skip NaN checks if fastMath
     if (fastMath)

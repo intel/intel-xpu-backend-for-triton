@@ -106,7 +106,7 @@ Value convertBf16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
         return call.getResult();
       }
 
-      return rewriter.create<LLVM::FPExtOp>(loc, f32_ty, v);
+      return LLVM::FPExtOp::create(rewriter, loc, f32_ty, v);
     }
   }
 
@@ -145,7 +145,7 @@ Value convertFp32ToBf16(Location loc, ConversionPatternRewriter &rewriter,
         return b.bitcast(call.getResult(), outTy);
       }
 
-      return rewriter.create<LLVM::FPTruncOp>(loc, bf16_ty, v);
+      return LLVM::FPTruncOp::create(rewriter, loc, bf16_ty, v);
     }
   }
 

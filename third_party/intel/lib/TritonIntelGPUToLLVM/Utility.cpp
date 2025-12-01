@@ -52,7 +52,7 @@ static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter, Value val,
       i.getDefiningOp()->getParentOfType<ModuleOp>());
   Value widthConstant = b.i32_val(width);
   Value result =
-      rewriter.create<mlir::gpu::ShuffleOp>(loc, val, i, widthConstant, mode)
+      mlir::gpu::ShuffleOp::create(rewriter, loc, val, i, widthConstant, mode)
           .getShuffleResult();
 
   if (shuffleType != valType) {

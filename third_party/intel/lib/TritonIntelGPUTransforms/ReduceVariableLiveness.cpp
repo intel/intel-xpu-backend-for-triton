@@ -143,9 +143,9 @@ void createPrefetchOp(tt::LoadOp loadOp) {
   // TODO: Add prefetchOp after last dependency between ptr and mask,
   // if this support is extended to support masks.
   builder.setInsertionPointAfter(op);
-  auto prefetchOp = builder.create<ttgi::PrefetchOp>(
-      loadOp->getLoc(), loadOp.getPtr(), loadOp.getCache(), loadOp.getEvict(),
-      loadOp.getIsVolatile());
+  auto prefetchOp = ttgi::PrefetchOp::create(
+      builder, loadOp->getLoc(), loadOp.getPtr(), loadOp.getCache(),
+      loadOp.getEvict(), loadOp.getIsVolatile());
 
   // inherit attributes from the load operation
   auto attrs = loadOp->getAttrDictionary();
@@ -205,8 +205,8 @@ bool optimizeDotOperands(scf::ForOp forOp, SmallVector<Value> &prefetchedValue,
     }
     b.setInsertionPoint(insertBeforeOp);
     auto newLoad = cast<tt::LoadOp>(b.clone(*loadOp.getOperation()));
-    auto newCvt = b.create<ttg::ConvertLayoutOp>(tensorV.getLoc(), tensorType,
-                                                 newLoad.getResult());
+    auto newCvt = ttg::ConvertLayoutOp::create(b, tensorV.getLoc(), tensorType,
+                                               newLoad.getResult());
     dotOp.setOperand(opId, newCvt.getResult());
 
     // Update other user in the same loop if any

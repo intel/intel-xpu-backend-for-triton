@@ -40,7 +40,7 @@ private:
     auto it = cache.find(key);
     if (it != cache.end())
       return it->second;
-    auto cst = builder->create<LLVM::ConstantOp>(loc, type, attr);
+    auto cst = LLVM::ConstantOp::create(*builder, loc, type, attr);
     cache[key] = cst;
     return cst;
   }
