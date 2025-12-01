@@ -19,7 +19,7 @@ struct GetNumProgramsOpConversion
     Location loc = op->getLoc();
     assert(op.getAxisAsInt() < 3);
     Value blockId =
-        rewriter.create<::mlir::gpu::GridDimOp>(loc, dims[op.getAxisAsInt()]);
+        ::mlir::gpu::GridDimOp::create(rewriter, loc, dims[op.getAxisAsInt()]);
     rewriter.replaceOpWithNewOp<arith::IndexCastOp>(op, i32_ty, blockId);
     return success();
   }

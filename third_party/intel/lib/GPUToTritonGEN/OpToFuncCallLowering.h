@@ -72,8 +72,8 @@ public:
       return success();
     }
 
-    Value truncated = rewriter.create<LLVM::FPTruncOp>(
-        op->getLoc(), adaptor.getOperands().front().getType(),
+    Value truncated = LLVM::FPTruncOp::create(
+        rewriter, op->getLoc(), adaptor.getOperands().front().getType(),
         callOp.getResult());
     rewriter.replaceOp(op, {truncated});
     return success();
@@ -85,8 +85,9 @@ private:
     if (!isa<Float16Type>(type))
       return operand;
 
-    return rewriter.create<LLVM::FPExtOp>(
-        operand.getLoc(), Float32Type::get(rewriter.getContext()), operand);
+    return LLVM::FPExtOp::create(rewriter, operand.getLoc(),
+                                 Float32Type::get(rewriter.getContext()),
+                                 operand);
   }
 
   StringRef getFunctionName(Type type) const {

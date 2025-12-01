@@ -44,7 +44,7 @@ static void appendToYield(scf::ForOp forOp, ArrayRef<Value> newOperands) {
   operands.append(newOperands.begin(), newOperands.end());
 
   OpBuilder builder(yieldOp);
-  builder.create<scf::YieldOp>(yieldOp->getLoc(), operands);
+  scf::YieldOp::create(builder, yieldOp->getLoc(), operands);
   yieldOp->erase();
 }
 
@@ -89,9 +89,9 @@ static ttg::DotOperandEncodingAttr allTransitiveUsesHaveDotEncoding(Value val) {
 static void createPrefetchOp(scf::ForOp &forOp, tt::LoadOp loadOp) {
   OpBuilder builder(forOp);
   builder.setInsertionPoint(loadOp);
-  auto prefetchOp = builder.create<ttgi::PrefetchOp>(
-      loadOp->getLoc(), loadOp.getPtr(), loadOp.getMask(), loadOp.getCache(),
-      loadOp.getEvict(), loadOp.getIsVolatile());
+  auto prefetchOp = ttgi::PrefetchOp::create(
+      builder, loadOp->getLoc(), loadOp.getPtr(), loadOp.getMask(),
+      loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
 
   // inherit attributes from the load operation
   auto attrs = loadOp->getAttrDictionary();

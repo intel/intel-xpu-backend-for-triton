@@ -31,7 +31,7 @@ LLVM::CallOp createDeviceFunctionCall(
   if (!passthroughAttrs.getFnAttributes().empty())
     funcOp->setAttrs(passthroughAttrs.getFnAttributes().getDictionary(ctx));
 
-  auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+  auto callOp = LLVM::CallOp::create(rewriter, loc, funcOp, args);
   callOp->setAttrs(funcOp->getAttrs());
 
   return callOp;
