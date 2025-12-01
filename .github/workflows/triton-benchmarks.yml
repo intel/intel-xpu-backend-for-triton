@@ -66,6 +66,7 @@ env:
   TAG: ${{ inputs.tag || (github.event_name == 'pull_request' && format('pr-{0}', github.event.number)) || (github.event_name == 'schedule' && 'ci') || 'test' }}
   N_RUNS: ${{ inputs.n_runs || '1' }}
   PTI_FORCE_BRIDGE_COMMANDS: "1"
+  UR_LOADER_USE_LEVEL_ZERO_V2: "0"
 
 jobs:
   build:
