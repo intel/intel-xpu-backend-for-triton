@@ -25,13 +25,13 @@ Value createSPIRVGroupOp(RewriterBase &rewriter, Location loc, Type resultTy,
   Value clusterSize;
   if (numLanesToReduce != warpSize) {
     spvGroupOp = spirv::GroupOperation::ClusteredReduce;
-    clusterSize = rewriter.create<arith::ConstantOp>(
-        loc, rewriter.getI32Type(),
-        rewriter.getI32IntegerAttr(numLanesToReduce));
+    clusterSize =
+        arith::ConstantOp::create(rewriter, loc, rewriter.getI32Type(),
+                                  rewriter.getI32IntegerAttr(numLanesToReduce));
   }
 
-  return rewriter.create<GroupOp>(loc, resultTy, spirv::Scope::Subgroup,
-                                  spvGroupOp, acc, clusterSize);
+  return GroupOp::create(rewriter, loc, resultTy, spirv::Scope::Subgroup,
+                         spvGroupOp, acc, clusterSize);
 }
 
 } // namespace
