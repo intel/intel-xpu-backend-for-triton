@@ -64,7 +64,7 @@ public:
       builder.setInsertionPoint(addressOp);
       Value newValue;
       if (usePoison) {
-        newValue = builder.create<LLVM::PoisonOp>(addressOp.getLoc(), ptrTy);
+        newValue = LLVM::PoisonOp::create(builder, addressOp.getLoc(), ptrTy);
       } else {
         auto funcOp = addressOp->getParentOfType<FunctionOpInterface>();
         assert(funcOp && "AddressOfOp must be inside a function");

@@ -64,8 +64,8 @@ static SmallVector<Value> computeWarpLevelHistogram(
       }
       // at this point, 'bin_mask' tells you which elements are in the kth bin
       // owned by this thread.
-      Value bitCount = rewriter.create<LLVM::CtPopOp>(
-          loc, int_ty(numThreadPerWarp), binMask);
+      Value bitCount = LLVM::CtPopOp::create(rewriter, loc,
+                                             int_ty(numThreadPerWarp), binMask);
       if (numThreadPerWarp > 32)
         bitCount = b.trunc(i32_ty, bitCount);
       else if (numThreadPerWarp < 32)
@@ -78,8 +78,8 @@ static SmallVector<Value> computeWarpLevelHistogram(
 
 static void atomicAdd(Value ptr, Value val, Location loc,
                       ConversionPatternRewriter &rewriter) {
-  rewriter.create<LLVM::AtomicRMWOp>(loc, LLVM::AtomicBinOp::add, ptr, val,
-                                     LLVM::AtomicOrdering::monotonic);
+  LLVM::AtomicRMWOp::create(rewriter, loc, LLVM::AtomicBinOp::add, ptr, val,
+                            LLVM::AtomicOrdering::monotonic);
 }
 
 static SmallVector<Value> computeCrossWarpHistogram(
@@ -113,7 +113,7 @@ static SmallVector<Value> computeCrossWarpHistogram(
     atomicAdd(sharedMemPtr, warpLevelHistogramValue, loc, rewriter);
   }
   if (afterAtomics) {
-    rewriter.create<LLVM::BrOp>(loc, afterAtomics);
+    LLVM::BrOp::create(rewriter, loc, afterAtomics);
     rewriter.setInsertionPointToStart(afterAtomics);
   }
   b.barrier();

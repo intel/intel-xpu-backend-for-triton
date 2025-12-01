@@ -34,14 +34,14 @@ static Operation *dropMask(Operation *op, bool maskVal) {
   TypeSwitch<Operation *>(op)
       .Case<tt::LoadOp>([&](auto loadOp) {
         if (maskVal) {
-          auto newLoadOp = builder.create<tt::LoadOp>(
-              loc, loadOp.getPtr(), loadOp.getBoundaryCheck(),
+          auto newLoadOp = tt::LoadOp::create(
+              builder, loc, loadOp.getPtr(), loadOp.getBoundaryCheck(),
               loadOp.getPadding(), loadOp.getCache(), loadOp.getEvict(),
               loadOp.getIsVolatile());
           loadOp->replaceAllUsesWith(newLoadOp);
         } else {
           Operation *cstOp =
-              builder.create<arith::ConstantOp>(loc, loadOp.getOther());
+              arith::ConstantOp::create(builder, loc, loadOp.getOther());
           loadOp->replaceAllUsesWith(cstOp);
         }
       })
@@ -270,8 +270,8 @@ public:
           cast<arith::ConstantIntOp>(maskInfo.N.getDefiningOp()).value();
       unsigned END = maskInfo.END;
       bool cond = UB == ((N - END) / END) + 1;
-      return builder.create<arith::ConstantIntOp>(forOp.getLoc(),
-                                                  builder.getI1Type(), cond);
+      return arith::ConstantIntOp::create(builder, forOp.getLoc(),
+                                          builder.getI1Type(), cond);
     }
 
     auto divOp = cast<arith::DivSIOp>(defOp);
@@ -282,12 +282,12 @@ public:
 
     Value zero = tt::intel::findOrCreateIntConstant(
         loc, 0, lhs.getType().getIntOrFloatBitWidth(), builder);
-    Value cmp1 = builder.create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::eq,
-        builder.create<arith::RemSIOp>(loc, lhs, rhs), zero);
-    Value cmp2 =
-        builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sgt, lhs, rhs);
-    return builder.create<arith::AndIOp>(loc, cmp1, cmp2);
+    Value cmp1 = arith::CmpIOp::create(
+        builder, loc, arith::CmpIPredicate::eq,
+        arith::RemSIOp::create(builder, loc, lhs, rhs), zero);
+    Value cmp2 = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::sgt,
+                                       lhs, rhs);
+    return arith::AndIOp::create(builder, loc, cmp1, cmp2);
   }
 
   virtual std::string getName() const { return "CanonicalMaskValidator"; }
@@ -548,8 +548,8 @@ public:
     // Create the versioning branch.
     OpBuilder builder(forOp);
     Location loc = forOp.getLoc();
-    auto ifOp = builder.create<scf::IfOp>(loc, getUsedResults(forOp), verCond,
-                                          /*withThenRegion=*/true);
+    auto ifOp = scf::IfOp::create(builder, loc, getUsedResults(forOp), verCond,
+                                  /*withThenRegion=*/true);
 
     // Clone the original loop into the 2 if branches.
     IRMapping map;
@@ -571,16 +571,16 @@ public:
     };
 
     // Create the yield operations for the two if branches.
-    thenB.create<scf::YieldOp>(loc, pruneUnusedResults(forOp, thenForLoop));
-    elseB.create<scf::YieldOp>(loc, pruneUnusedResults(forOp, elseForLoop));
+    scf::YieldOp::create(thenB, loc, pruneUnusedResults(forOp, thenForLoop));
+    scf::YieldOp::create(elseB, loc, pruneUnusedResults(forOp, elseForLoop));
 
     // Drop the mask from candidate masked operations in the "then" region.
     for (Operation *maskedOp : collector.getMaskedOps()) {
       Operation *mappedOp = map.lookup(maskedOp);
       if (auto loadOp = dyn_cast<tt::LoadOp>(mappedOp)) {
         OpBuilder builder(mappedOp);
-        auto newLoad = builder.create<tt::LoadOp>(
-            loadOp.getLoc(), loadOp.getPtr(), loadOp.getCache(),
+        auto newLoad = tt::LoadOp::create(
+            builder, loadOp.getLoc(), loadOp.getPtr(), loadOp.getCache(),
             loadOp.getEvict(), loadOp.getIsVolatile());
         mappedOp->replaceAllUsesWith(newLoad);
         mappedOp->erase();
@@ -623,11 +623,11 @@ public:
     for (; it != maskConds.end(); ++it) {
       Value nextCond = (*it)->getResult(0);
       Value cond = maskValidator.getVersioningCond(forOp, nextCond);
-      verCond = builder.create<arith::AndIOp>(loc, verCond, cond);
+      verCond = arith::AndIOp::create(builder, loc, verCond, cond);
     }
 
-    auto ifOp = builder.create<scf::IfOp>(loc, forOp.getResultTypes(), verCond,
-                                          /*withThenRegion=*/true);
+    auto ifOp = scf::IfOp::create(builder, loc, forOp.getResultTypes(), verCond,
+                                  /*withThenRegion=*/true);
 
     // Clone the original loop into the 2 if branches.
     IRMapping map;
@@ -638,8 +638,8 @@ public:
 
     // Create the yield operations for the two if branches.
     if (!thenForLoop->getResults().empty()) {
-      thenB.create<scf::YieldOp>(loc, thenForLoop->getResults());
-      elseB.create<scf::YieldOp>(loc, elseForLoop->getResults());
+      scf::YieldOp::create(thenB, loc, thenForLoop->getResults());
+      scf::YieldOp::create(elseB, loc, elseForLoop->getResults());
     }
 
     // Drop the mask from candidate masked operations in the "then" region's
@@ -648,8 +648,8 @@ public:
       Operation *mappedOp = map.lookup(maskedOp);
       if (auto loadOp = dyn_cast<tt::LoadOp>(mappedOp)) {
         OpBuilder builder(mappedOp);
-        auto newLoad = builder.create<tt::LoadOp>(
-            loadOp.getLoc(), loadOp.getPtr(), loadOp.getCache(),
+        auto newLoad = tt::LoadOp::create(
+            builder, loadOp.getLoc(), loadOp.getPtr(), loadOp.getCache(),
             loadOp.getEvict(), loadOp.getIsVolatile());
         mappedOp->replaceAllUsesWith(newLoad);
         mappedOp->erase();
