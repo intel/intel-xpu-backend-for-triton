@@ -83,6 +83,10 @@ jobs:
           ${{ toJSON(inputs) }}
           EOF
 
+      - name: Print GPU driver information
+        run: |
+          clinfo | grep -C 10 "Driver Version"
+
       - name: Checkout repository
         uses: actions/checkout@v6
 
