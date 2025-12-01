@@ -648,7 +648,11 @@ void init_triton_ir(py::module &&m) {
              if (!ret)
                return py::none();
              return py::str(ret.getValue().str());
-           });
+           })
+      .def("set_attr",
+         [](Operation &self, const std::string &name, Attribute &attr) {
+           self.setAttr(name, attr);
+         });
 
   // dynamic_attr is used to transfer ownership of the MLIR context to the
   // module
@@ -1530,8 +1534,9 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_descriptor_store",
            [](TritonOpBuilder &self, Value desc, Value value,
-              std::vector<Value> &indices) -> void {
-             self.create<DescriptorStoreOp>(desc, value, indices);
+              std::vector<Value> &indices) -> Operation* {//void {
+             auto op = self.create<DescriptorStoreOp>(desc, value, indices);
+             return op.getOperation();
            })
       .def("create_descriptor_reduce",
            [](TritonOpBuilder &self, DescriptorReduceKind kind, Value desc,

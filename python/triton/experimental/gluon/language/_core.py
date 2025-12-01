@@ -590,9 +590,3 @@ def dot_fma(a, b, acc, _semantic=None):
 
     handle = _semantic.dot(a, b, acc, input_precision=None, max_num_imprecise_acc=None, out_dtype=acc.dtype).handle
     return tensor(handle, acc.type)
-
-
-@builtin
-def xpu_dot_fma(a, b, acc, _semantic=None):
-    handle = _semantic.dot(a, b, acc, input_precision=None, max_num_imprecise_acc=None, out_dtype=acc.dtype).handle
-    return tensor(handle, acc.type)

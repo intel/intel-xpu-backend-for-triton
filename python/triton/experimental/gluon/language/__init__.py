@@ -50,7 +50,6 @@ from ._core import (
     device_assert,
     device_print,
     dot_fma,
-    xpu_dot_fma,
     expand_dims,
     full,
     fp4_to_fp,

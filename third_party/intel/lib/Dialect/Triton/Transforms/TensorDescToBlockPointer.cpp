@@ -5,6 +5,8 @@
 #include "mlir/IR/Verifier.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -15,6 +17,7 @@
 
 using namespace mlir;
 namespace tt = mlir::triton;
+namespace ttgi = mlir::triton::gpu::intel;
 
 namespace mlir::triton::intel {
 #define GEN_PASS_DEF_TRITONINTELTENSORDESCTOBLOCKPOINTER
@@ -265,18 +268,28 @@ private:
     for (size_t i = 0; i < tensorType.getRank(); ++i)
       boundaryCheck.push_back(i);
 
+    Attribute blockIOAttr =
+        op->getAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName());
+
     constexpr bool isLoad = std::is_same_v<OpTy, tt::DescriptorLoadOp>;
     if constexpr (isLoad) {
       auto loadOp = builder.createOrFold<tt::LoadOp>(
           loc, ptr, boundaryCheck,
           /*padding*/ std::nullopt, op.getCache(), op.getEvict(),
           /*volatile*/ false);
+      if (blockIOAttr) {
+          auto* loadOpInst = loadOp.getDefiningOp();
+          loadOpInst->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(), blockIOAttr);
+      }
       LLVM_DEBUG(llvm::dbgs().indent(2) << loadOp << "\n");
       op.replaceAllUsesWith(loadOp);
     } else {
       [[maybe_unused]] auto storeOp = builder.createOrFold<tt::StoreOp>(
           loc, ptr, op.getSrc(), boundaryCheck, tt::CacheModifier::NONE,
           tt::EvictionPolicy::NORMAL);
+      if (blockIOAttr) {
+          storeOp->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(), blockIOAttr);
+      }
       LLVM_DEBUG(llvm::dbgs().indent(2) << storeOp << "\n");
     }
 
