@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import List, Tuple, Sequence
 from dataclasses import dataclass
-import triton.language.core as tl_core
 
 import triton.experimental.gluon.language._core as ttgl
 from triton.experimental.gluon.language._layouts import DotOperandLayout
@@ -10,13 +9,10 @@ from triton.experimental.gluon.language.intel._layouts import IntelDPASLayout
 from triton.experimental.gluon.language._core import builtin, _unwrap_if_constexpr
 from triton.language.core import ir, constexpr, tensor_descriptor_base, block_type, tensor, tuple
 
-
 # load_tensor_descriptor = builtin(tl_core.load_tensor_descriptor)
 # store_tensor_descriptor = builtin(tl_core.store_tensor_descriptor)
 
-
 __all__ = ["make_tensor_descriptor", "dot_fma"]
-
 
 
 class tensor_descriptor(tensor_descriptor_base):
@@ -31,12 +27,9 @@ class tensor_descriptor(tensor_descriptor_base):
         self.strides = tuple(strides)
         self.layout = layout
 
-        self.type = tensor_descriptor_type(
-            block_type,
-            shape_type=self.shape.type,
-            strides_type=self.strides.type,
-            layout=self.layout, # comment
-        )
+        self.type = tensor_descriptor_type(block_type, shape_type=self.shape.type, strides_type=self.strides.type,
+                                           layout=self.layout,  # comment
+                                           )
 
     def _flatten_ir(self, handles: List[ir.value]) -> None:
         handles.append(self.handle)
@@ -72,14 +65,14 @@ class tensor_descriptor(tensor_descriptor_base):
         return op
 
     @builtin
-    def prefetch(self, offsets: Sequence[constexpr | tensor], mask=None, cache=None, evict=None, is_volatile=False, is_2d_block=False, _semantic=None):
+    def prefetch(self, offsets: Sequence[constexpr | tensor], mask=None, cache=None, evict=None, is_volatile=False,
+                 is_2d_block=False, _semantic=None):
         # TODO: handle other ttig.prefetch params
         # ptr is just temporary, support for tensor descriptor is needed
         # calculate offsets like tt.advance
         # maybe add support for mask, seems optional
         # also 2d block attr and others
         #return _semantic.builder.create_prefetch(ptr.handle, False)
-
         """
         pyton/triton/language/semantic.py @ load:1077 (TritonSemantic)
         cache_modifier: str, eviction_policy: str
@@ -96,7 +89,6 @@ class tensor_descriptor(tensor_descriptor_base):
             op.set_attr("ttig.block_io", attr)
 
         return op
-
 
 
 @dataclass(eq=True)
@@ -137,9 +129,8 @@ class tensor_descriptor_type(ttgl.base_type):
 
 
 @builtin
-def make_tensor_descriptor(ptr: ttgl.tensor, shape: List[int], strides: List[int],
-                          block_shape: List[int], layout: IntelDPASLayout,
-                          _semantic=None) -> tensor_descriptor:
+def make_tensor_descriptor(ptr: ttgl.tensor, shape: List[int], strides: List[int], block_shape: List[int],
+                           layout: IntelDPASLayout, _semantic=None) -> tensor_descriptor:
     # Unwrap constexpr if needed
     layout = _unwrap_if_constexpr(layout)
 
@@ -168,19 +159,15 @@ def make_tensor_descriptor(ptr: ttgl.tensor, shape: List[int], strides: List[int
     shape_tuple = ttgl.tuple(shape_tensors, shape_type)
     strides_tuple = ttgl.tuple(stride_tensors, strides_type)
 
-    desc_type = tensor_descriptor_type(block_type, shape_type, strides_type, layout) #, shape_handles)
+    desc_type = tensor_descriptor_type(block_type, shape_type, strides_type, layout)  #, shape_handles)
 
     # Create the descriptor
     padding = _semantic._str_to_padding_option("zero")
-    desc_handle = _semantic.builder.create_make_tensor_descriptor(
-        desc_type._to_ir(_semantic.builder),
-        ptr_handle,
-        shape_handles,
-        stride_handles,
-        padding
-    )
+    desc_handle = _semantic.builder.create_make_tensor_descriptor(desc_type._to_ir(_semantic.builder), ptr_handle,
+                                                                  shape_handles, stride_handles, padding)
 
     return tensor_descriptor(desc_handle, shape_tuple, strides_tuple, block_type, layout)
+
 
 @builtin
 def dot_fma(a, b, acc, _semantic=None):
@@ -199,4 +186,3 @@ def dot_fma(a, b, acc, _semantic=None):
 
     handle = _semantic.dot(a, b, acc, input_precision=None, max_num_imprecise_acc=None, out_dtype=acc.dtype).handle
     return tensor(handle, acc.type)
-

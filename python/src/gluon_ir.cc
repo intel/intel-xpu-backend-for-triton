@@ -900,12 +900,14 @@ void init_gluon_ir(py::module &&m) {
              return self.create<ttag::ArriveBarrierOp>(memDesc, count);
            })
       .def("create_prefetch",
-           [](GluonOpBuilder &self, Value tensorDesc, std::vector<Value> &offsets,
-              bool isVolatile) {
+           [](GluonOpBuilder &self, Value tensorDesc,
+              std::vector<Value> &offsets, bool isVolatile) {
              // Get the base pointer from tensor descriptor
-             auto makeTensorDescOp = tensorDesc.getDefiningOp<triton::MakeTensorDescOp>();
+             auto makeTensorDescOp =
+                 tensorDesc.getDefiningOp<triton::MakeTensorDescOp>();
              if (!makeTensorDescOp) {
-               throw std::runtime_error("Expected tensor descriptor from MakeTensorDescOp");
+               throw std::runtime_error(
+                   "Expected tensor descriptor from MakeTensorDescOp");
              }
 
              Value base = makeTensorDescOp.getBase();
@@ -918,7 +920,8 @@ void init_gluon_ir(py::module &&m) {
              // variadic of 64-bit signless integer, but got 'i32'
              SmallVector<Value> i64Shape;
              for (auto shapeVal : shape) {
-               auto i64Val = self.create<arith::ExtSIOp>(self.getBuilder().getI64Type(), shapeVal);
+               auto i64Val = self.create<arith::ExtSIOp>(
+                   self.getBuilder().getI64Type(), shapeVal);
                i64Shape.push_back(i64Val);
              }
 
@@ -944,11 +947,14 @@ void init_gluon_ir(py::module &&m) {
              // Empty mask
              Value maskVal = Value();
 
-             auto tensorPtrOp = self.create<mlir::triton::MakeTensorPtrOp>(base, /*shape*/i64Shape, strides, offsets,
-                                                 /*tensor_shape*/blockShape, order);
+             auto tensorPtrOp = self.create<mlir::triton::MakeTensorPtrOp>(
+                 base, /*shape*/ i64Shape, strides, offsets,
+                 /*tensor_shape*/ blockShape, order);
 
              auto op = self.create<ttgi::PrefetchOp>(
-                  /*base*/tensorPtrOp.getResult(), maskVal, tt::CacheModifier::NONE, tt::EvictionPolicy::NORMAL, isVolatile);
+                 /*base*/ tensorPtrOp.getResult(), maskVal,
+                 tt::CacheModifier::NONE, tt::EvictionPolicy::NORMAL,
+                 isVolatile);
              return op.getOperation();
            })
       // Example for passing block_ptr
@@ -961,7 +967,8 @@ void init_gluon_ir(py::module &&m) {
       //        Value maskVal = Value();
       //
       //        self.create<ttgi::PrefetchOp>(
-      //            ptr, maskVal, tt::CacheModifier::NONE, tt::EvictionPolicy::NORMAL, isVolatile);
+      //            ptr, maskVal, tt::CacheModifier::NONE,
+      //            tt::EvictionPolicy::NORMAL, isVolatile);
       //      })
       ;
 

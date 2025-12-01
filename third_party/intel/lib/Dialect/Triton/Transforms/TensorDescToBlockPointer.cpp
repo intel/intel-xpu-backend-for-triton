@@ -1,13 +1,13 @@
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Utils/Utility.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
@@ -143,7 +143,8 @@ private:
       auto tensorType = RankedTensorType::get(
           SmallVector<int64_t>(sizes.begin(), sizes.end()),
           pointerType.getPointeeType(), encoding);
-      auto resultType = mlir::triton::PointerType::get(tensorType, pointerType.getAddressSpace());
+      auto resultType = mlir::triton::PointerType::get(
+          tensorType, pointerType.getAddressSpace());
 
       auto makeTensorPtr = builder.create<tt::MakeTensorPtrOp>(
           loc, resultType, base, shape, strides, offsets,
@@ -278,8 +279,9 @@ private:
           /*padding*/ std::nullopt, op.getCache(), op.getEvict(),
           /*volatile*/ false);
       if (blockIOAttr) {
-          auto* loadOpInst = loadOp.getDefiningOp();
-          loadOpInst->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(), blockIOAttr);
+        auto *loadOpInst = loadOp.getDefiningOp();
+        loadOpInst->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
+                            blockIOAttr);
       }
       LLVM_DEBUG(llvm::dbgs().indent(2) << loadOp << "\n");
       op.replaceAllUsesWith(loadOp);
@@ -288,7 +290,8 @@ private:
           loc, ptr, op.getSrc(), boundaryCheck, tt::CacheModifier::NONE,
           tt::EvictionPolicy::NORMAL);
       if (blockIOAttr) {
-          storeOp->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(), blockIOAttr);
+        storeOp->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
+                         blockIOAttr);
       }
       LLVM_DEBUG(llvm::dbgs().indent(2) << storeOp << "\n");
     }
