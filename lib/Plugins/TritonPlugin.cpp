@@ -6,8 +6,13 @@
 #include "triton/Tools/PluginUtils.h"
 #include <unordered_map>
 
-#define TRITON_PLUGIN_API                                                      \
-  extern "C" __attribute__((visibility("default"))) TritonPluginResult
+#if defined(_WIN32)
+#define EXPORT_FUNC __declspec(dllexport)
+#else
+#define EXPORT_FUNC __attribute__((visibility("default")))
+#endif
+
+#define TRITON_PLUGIN_API extern "C" EXPORT_FUNC TritonPluginResult
 
 namespace mlir {
 namespace triton {
