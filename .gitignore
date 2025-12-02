@@ -51,6 +51,9 @@ pytest.ini
 # Instrumentation
 python/triton/instrumentation
 
+# MLIR Plugin
+python/triton/plugins
+
 # Python caches
 __pycache__/
 *.py[cod]
