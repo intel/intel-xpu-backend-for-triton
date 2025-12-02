@@ -65,6 +65,9 @@ env:
   VERIFY: ${{ (github.event_name == 'pull_request' || github.event_name == 'schedule' || inputs.verify) && '1' || '0' }}
   TAG: ${{ inputs.tag || (github.event_name == 'pull_request' && format('pr-{0}', github.event.number)) || (github.event_name == 'schedule' && 'ci') || 'test' }}
   N_RUNS: ${{ inputs.n_runs || '1' }}
+  # FIXME: Enable Level Zero v2 loader once it's stable.
+  # https://github.com/intel/intel-xpu-backend-for-triton/issues/5572
+  UR_LOADER_USE_LEVEL_ZERO_V2: "0"
 
 jobs:
   build:
