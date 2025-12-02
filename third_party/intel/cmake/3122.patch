@@ -1,8 +1,8 @@
 diff --git a/lib/SPIRV/SPIRVWriter.cpp b/lib/SPIRV/SPIRVWriter.cpp
-index ec4ec41f..9cad08d8 100644
+index ec4ec41f..6d89e29c 100644
 --- a/lib/SPIRV/SPIRVWriter.cpp
 +++ b/lib/SPIRV/SPIRVWriter.cpp
-@@ -401,13 +401,15 @@ SPIRVType *LLVMToSPIRVBase::transType(Type *T) {
+@@ -401,13 +401,17 @@ SPIRVType *LLVMToSPIRVBase::transType(Type *T) {
    }
  
    if (T->isBFloatTy()) {
@@ -13,7 +13,9 @@ index ec4ec41f..9cad08d8 100644
 -        "NOTE: LLVM module contains bfloat type, translation of which "
 -        "requires this extension");
 -    return mapType(T, BM->addFloatType(16, FPEncodingBFloat16KHR));
-+    if (BM->isAllowedToUseExtension(ExtensionID::SPV_KHR_bfloat16)) {
++    // Workaround for LTS2 driver.
++    const char *driverVersion = std::getenv("INTEL_XPU_BACKEND_DRIVER_VERSION");
++    if (driverVersion && std::string(driverVersion) != "1.6.33578+38") {
 +      BM->getErrorLog().checkError(
 +          BM->isAllowedToUseExtension(ExtensionID::SPV_KHR_bfloat16),
 +          SPIRVEC_RequiresExtension,
