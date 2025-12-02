@@ -311,6 +311,7 @@ def benchmark(B, M, N, K, dtype, provider):
     # Maximum across onednn=600, triton=1000
     # For onednn and triton: Some configs increase performance with warmup as a step function, but some
     # slowly decrease with saturation. Performance is best at 150-200ms range, but we want stable, not just best
+    torch.xpu.empty_cache()
     do_bench = benchmark_suite.get_do_bench(n_warmup=1000, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
     res_dtype = torch.float32 if dtype.is_floating_point else torch.int32
     if dtype.is_floating_point:
