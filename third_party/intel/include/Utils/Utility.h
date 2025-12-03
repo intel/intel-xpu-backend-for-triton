@@ -19,9 +19,9 @@ Value findOrCreateIntConstant(Location loc, int val, unsigned bitWidth,
 std::optional<mlir::triton::MakeTensorPtrOp>
 findDefiningMakeTensorPtrOp(Value val);
 
-// This function folds the `op` operation and returns the constant value if it
+// This function folds the `v` value and returns the constant value if it
 // has successfully folded to a constant. Otherwise, it returns `std::nullopt`.
-std::optional<int64_t> getFoldedConstantValue(Operation *op);
+std::optional<int64_t> getFoldedConstantValue(Value v, int depth = 8);
 
 // Return true if the `val` value is a constant containing a value equal to
 // expected.

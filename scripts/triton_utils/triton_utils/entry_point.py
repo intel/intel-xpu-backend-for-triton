@@ -73,6 +73,8 @@ class Config:  # pylint: disable=R0902
     export_format: str = "csv"
     file_name: str = "test_report.csv"
 
+    save_to_json: str | None = None
+
     @property
     def report_grouping_level(self) -> TestGroupingLevel:
         return TestGroupingLevel(self._report_grouping_level)
@@ -211,11 +213,17 @@ class Config:  # pylint: disable=R0902
             action="store_true",
             help="Allow tests to be present im multiple testsuites",
         )
-
         pass_rate_parser.add_argument(
             "--error-on-failures",
             action="store_true",
             help="Fail with error code if there are any test failures",
+        )
+        pass_rate_parser.add_argument(
+            "--save-to-json",
+            "--json",
+            type=str,
+            required=False,
+            help="Json file to save pass rate summary.",
         )
 
         test_stats_parser = cls._add_parser(
@@ -293,7 +301,7 @@ class Config:  # pylint: disable=R0902
         )
         convert_to_parser.add_argument(
             "--format",
-            choices=["csv", "abn_metadata"],
+            choices=["csv"],
             dest="export_format",
             required=True,
             help="Export format",
@@ -447,6 +455,8 @@ class PassRateActionRunner(ReportActionRunner):
         return 0
 
     def __call__(self, *args: Any, **kwds: Any) -> tuple[str, int]:
+        if self.config.save_to_json:
+            self.base_report.to_pass_rate_json(self.config.save_to_json)
         return self.base_report.get_pass_rate_summary(), self._exit_code()
 
 

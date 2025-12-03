@@ -181,6 +181,21 @@ def test_export_to_csv(tmp_path):
         assert e.code == 0
 
 
+def test_save_to_pass_rate_json(tmp_path):
+    rep1 = tmp_path / 'language.xml'
+    rep1.write_text(TESTS_WITH_DIFFERENT_STATUSES['language.xml'], encoding='utf-8')
+    config = dataclasses.replace(
+        triton_utils.Config(),
+        action='pass_rate',
+        reports=str(tmp_path),
+        save_to_json=str(tmp_path / 'pass_rate.json'),
+    )
+    try:
+        triton_utils.run(config)
+    except SystemExit as e:
+        assert e.code == 0
+
+
 def test_multiple_test_suites(tmp_path):
     rep_language = tmp_path / 'language.xml'
     rep_language.write_text(TESTS_WITH_DIFFERENT_STATUSES['language.xml'], encoding='utf-8')
@@ -312,7 +327,7 @@ def test_report_directory_layout(  # pylint: disable=R0913, R0914, R0917
         )
 
     out, _ = triton_utils.PassRateActionRunner(config)()
-    std_out, _ = capsys.readouterr()
+    _, std_err = capsys.readouterr()
     pass_rate_dict = extract_pass_rate_dict(out)
     assert pass_rate_dict['passed'] == passed
     assert pass_rate_dict['skipped'] == skipped
@@ -320,7 +335,7 @@ def test_report_directory_layout(  # pylint: disable=R0913, R0914, R0917
     assert pass_rate_dict['failed'] == failed
 
     if empty_subdirs:
-        assert 'WARNING: No junit xml files' in std_out
+        assert 'WARNING: No junit xml files' in std_err
 
 
 @pytest.mark.parametrize(

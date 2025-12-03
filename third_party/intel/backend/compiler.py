@@ -216,6 +216,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.common.add_licm(pm)
         intel.passes.ttir.add_remove_boundary_checks(pm)
         intel.passes.ttir.add_remove_masks(pm)
+        intel.passes.ttir.add_stride_versioning(pm)
         intel.passes.ttir.add_fuse_reshape(pm)
         passes.common.add_canonicalizer(pm)
         passes.ttir.add_combine(pm)

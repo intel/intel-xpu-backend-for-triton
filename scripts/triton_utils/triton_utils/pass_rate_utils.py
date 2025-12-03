@@ -6,8 +6,12 @@ from collections import defaultdict
 from dataclasses import field, fields, dataclass
 
 import os
+import sys
 import pathlib
 import glob
+
+import platform
+import datetime
 
 import re
 
@@ -362,7 +366,8 @@ class TestReport:
             folder for folder in search_folder_path.iterdir() if folder.is_dir() and not any(folder.glob("*.xml"))
         ]
         if len(empty_subfolders) > 0:
-            print("\n".join("WARNING: No junit xml files - " + str(folder) for folder in empty_subfolders))
+            print("\n".join("WARNING: No junit xml files - " + str(folder) for folder in empty_subfolders),
+                  file=sys.stderr)
 
         tests: dict[str, Test] = {}
         for file_path in all_paths:
@@ -534,6 +539,33 @@ class TestReport:
             writer = csv.DictWriter(csvfile, fieldnames=list(tests_dict[0].keys()))
             writer.writeheader()
             writer.writerows(tests_dict)
+
+    def to_pass_rate_json(self, json_file: str):  # pylint: disable=R0801
+        """Print JSON stats."""
+        stats = self.get_summary_stats()
+        data = {
+            "ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+            "os": platform.system(),
+            "git_ref": os.getenv("GITHUB_REF_NAME", ""),
+            "git_sha": os.getenv("GITHUB_SHA", ""),
+            "libigc1_version": os.getenv("LIBIGC1_VERSION", ""),
+            "level_zero_version": os.getenv("LEVEL_ZERO_VERSION", ""),
+            "agama_version": os.getenv("AGAMA_VERSION", ""),
+            "gpu_device": os.getenv("GPU_DEVICE", ""),
+            "python_version": platform.python_version(),
+            "pytorch_version": os.getenv("PYTORCH_VERSION", ""),
+            "testsuite": "all",
+            "passed": stats.passed,
+            "failed": stats.failed,
+            "skipped": stats.skipped,
+            "xfailed": stats.xfailed,
+            "total": stats.total,
+            "fixme": stats.fixme,
+            "pass_rate_1": stats.pass_rate,
+            "pass_rate_2": stats.pass_rate_without_xfailed,
+        }  # yapf: disable
+        with open(json_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
 
     @classmethod
     def compare(  # pylint: disable=R0914

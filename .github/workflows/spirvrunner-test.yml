@@ -6,9 +6,15 @@ on:
   pull_request:
     branches:
       - main
+    paths-ignore:
+      - '**/*.md'
+      - '.github/ISSUE_TEMPLATE/**'
   push:
     branches:
       - main
+    paths-ignore:
+      - '**/*.md'
+      - '.github/ISSUE_TEMPLATE/**'
 
 permissions: read-all
 
@@ -24,7 +30,7 @@ jobs:
     timeout-minutes: 75 # equal to max + 3*std over the last 600 successful runs
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Install Python
         uses: actions/setup-python@v6

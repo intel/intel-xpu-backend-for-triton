@@ -1,5 +1,6 @@
 #include "intel/include/Utils/Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
@@ -104,28 +105,55 @@ std::optional<tt::MakeTensorPtrOp> findDefiningMakeTensorPtrOp(Value val) {
   return std::nullopt;
 }
 
-std::optional<int64_t> getFoldedConstantValue(Operation *op) {
-  SmallVector<OpFoldResult> results;
-  if (failed(op->fold(results)))
-    return std::nullopt;
+static Value skipCasts(Value v) {
+  Operation *def = v.getDefiningOp();
+  if (def &&
+      isa<LLVM::TruncOp, LLVM::SExtOp, LLVM::ZExtOp, LLVM::BitcastOp>(def))
+    return def->getOperand(0);
+  return v;
+}
 
-  // If fold succeeded but `results` is empty, we give a second try, after the
-  // operands have been switched during the first call to `fold()`.
-  if (results.empty()) {
-    if (failed(op->fold(results)))
-      return std::nullopt;
+static Value foldValue(Value v) {
+  if (Operation *def = v.getDefiningOp()) {
+    SmallVector<OpFoldResult> results;
+
+    if (failed(def->fold(results)))
+      return v;
+
+    // If fold succeeded but `results` is empty, we give a second try, after the
+    // operands have been switched during the first call to `fold()`.
+    if (results.empty()) {
+      if (failed(def->fold(results)))
+        return v;
+    }
+
+    if (results.size() == 1) {
+      if (auto val = dyn_cast_or_null<Value>(results[0]))
+        return val;
+    }
+  }
+  return v;
+}
+
+std::optional<int64_t> getFoldedConstantValue(Value v, int depth) {
+  for (int i = 0; i < depth; ++i) {
+    if (auto res = getConstantIntValue(v))
+      return res;
+
+    Value newV = skipCasts(v);
+    newV = foldValue(newV);
+
+    if (newV == v)
+      break;
+
+    v = newV;
   }
 
-  if (results.size() != 1)
-    return std::nullopt;
-
-  return getConstantIntValue(results[0]);
+  return std::nullopt;
 }
 
 bool isConstant(Value val, int64_t expected) {
-  if (auto defOp = val.getDefiningOp())
-    return (getFoldedConstantValue(defOp) == expected);
-  return false;
+  return (getFoldedConstantValue(val) == expected);
 }
 
 Value getFinalValue(Value value) {
@@ -181,6 +209,11 @@ Value getFinalValue(Value value) {
       return getFinalValue(divOp.getLhs());
     return divOp.getResult();
   }
+
+  if (auto extOp = dyn_cast<arith::ExtSIOp>(defOp))
+    return getFinalValue(extOp.getIn());
+  if (auto extOp = dyn_cast<arith::ExtUIOp>(defOp))
+    return getFinalValue(extOp.getIn());
 
   return value;
 }
