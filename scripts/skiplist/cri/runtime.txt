@@ -5,10 +5,9 @@ python/test/unit/runtime/test_autotuner.py::test_no_do_bench
 python/test/unit/runtime/test_autotuner.py::test_prune_configs
 python/test/unit/runtime/test_autotuner.py::test_restore
 
-
-python/test/unit/runtime/test_launch.py::test_memory_leak
-
+python/test/unit/runtime/test_cache.py::test_higher_order_kernel
 python/test/unit/runtime/test_driver.py::test_kernel_in_thread
+python/test/unit/runtime/test_launch.py::test_memory_leak
 
 # fork() is prohobited
 python/test/unit/runtime/test_subproc.py::test_compile_in_subproc
