@@ -1,7 +1,13 @@
 #ifndef PROTON_DRIVER_DISPATCH_H_
 #define PROTON_DRIVER_DISPATCH_H_
 
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#else
 #include <dlfcn.h>
+#endif
 
 #include "Utility/Env.h"
 #include <stdexcept>
@@ -59,6 +65,31 @@ template <typename ExternLib> class Dispatch {
 public:
   Dispatch() = delete;
 
+#if defined(_WIN32)
+  static void init(const char *name, void **lib) {
+    if (*lib == nullptr) {
+      // If not found, try to load it from the default path
+      auto dir =
+          ExternLib::pathEnv == nullptr ? "" : getStrEnv(ExternLib::pathEnv);
+      if (!dir.empty()) {
+        auto fullPath = dir + "/" + name;
+        *lib = (void *)LoadLibrary(fullPath.c_str());
+      } else {
+        // Only if the default path is not set, we try to load it from the
+        // system.
+        // First reuse the existing handle
+        *lib = (void *)GetModuleHandle(name);
+        if (*lib == nullptr) {
+          // If not found, try to load it from LD_LIBRARY_PATH
+          *lib = (void *)LoadLibrary(name);
+        }
+      }
+    }
+    if (*lib == nullptr) {
+      throw std::runtime_error("Could not load `" + std::string(name) + "`");
+    }
+  }
+#else
   static void init(const char *name, void **lib) {
     if (*lib == nullptr) {
       // If not found, try to load it from the default path
@@ -82,6 +113,7 @@ public:
       throw std::runtime_error("Could not load `" + std::string(name) + "`");
     }
   }
+#endif
 
   static void check(typename ExternLib::RetType ret, const char *functionName) {
     if (ret != ExternLib::success) {
@@ -96,7 +128,12 @@ public:
   exec(FnT &handler, const char *functionName, Args... args) {
     init(ExternLib::name, &ExternLib::lib);
     if (handler == nullptr) {
+#if defined(_WIN32)
+      handler = reinterpret_cast<FnT>(
+          GetProcAddress((HMODULE)ExternLib::lib, functionName));
+#else
       handler = reinterpret_cast<FnT>(dlsym(ExternLib::lib, functionName));
+#endif
       if (handler == nullptr) {
         throw std::runtime_error("Failed to load " +
                                  std::string(ExternLib::name));
@@ -118,12 +155,30 @@ public:
       }
     }
     if (ExternLib::lib != nullptr) {
+#if defined(_WIN32)
+      void *sym =
+          GetProcAddress((HMODULE)ExternLib::lib,
+                         ExternLib::symbolName); // pick any known symbol
+      HMODULE mod = nullptr;
+
+      if (GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            (LPCSTR)sym, &mod)) {
+        static char path[MAX_PATH];
+        DWORD len = GetModuleFileName(mod, path, MAX_PATH);
+        if (len > 0)
+          return path;
+      }
+
+      return nullptr;
+#else
       void *sym = dlsym(ExternLib::lib,
                         ExternLib::symbolName); // pick any known symbol
       Dl_info info;
       if (dladdr(sym, &info)) {
         return info.dli_fname;
       }
+#endif
     }
     return "";
   }

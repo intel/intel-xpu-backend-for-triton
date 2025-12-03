@@ -64,6 +64,10 @@ def max_bps(device_type, arch, bus_width, memory_clock_rate):
     """
     if device_type == "CUDA":
         return 2 * bus_width * memory_clock_rate * 1e3 / 8
-    else:
-        assert device_type == "HIP"
+    elif device_type == "HIP":
         return amd_bps_by_arch[arch]
+    else:
+        assert device_type == "XPU"
+        # FIXME: how to get correctly numbers on XPU?
+        # https://github.com/intel/intel-xpu-backend-for-triton/issues/5550
+        return 2 * bus_width * memory_clock_rate * 1e3 / 8

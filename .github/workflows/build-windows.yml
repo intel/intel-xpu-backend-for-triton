@@ -7,10 +7,16 @@ on:
     branches:
       - main
       - release/**
+    paths-ignore:
+      - '**/*.md'
+      - '.github/ISSUE_TEMPLATE/**'
   push:
     branches:
       - main
       - release/**
+    paths-ignore:
+      - '**/*.md'
+      - '.github/ISSUE_TEMPLATE/**'
 
 permissions: read-all
 
@@ -24,7 +30,7 @@ jobs:
       - windows
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Install Python
         uses: actions/setup-python@v6
