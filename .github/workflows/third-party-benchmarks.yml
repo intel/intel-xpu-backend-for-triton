@@ -223,6 +223,18 @@ jobs:
             --max-new-tokens $MAX_NEW_TOKENS \
             --batch-size $BATCH_SIZE
 
+      - name: Run launch microbenchmark tests
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'launch_micro_benchmarks')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'launch_micro_benchmarks') }}
+        run: |
+          source scripts/capture-hw-details.sh
+          python python/test/microbenchmark/launch_overhead.py --reports $REPORTS
+
+          python benchmarks/third_party/vllm/transform_results.py $REPORTS/launch_overhead_results.csv $REPORTS/launch_overhead-report.csv \
+            --tag $TAG \
+            --bgroup overhead \
+            --benchmark launch-overhead \
+            --param_cols="input_type"
+
       - name: Upload benchmark reports
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         uses: actions/upload-artifact@v5

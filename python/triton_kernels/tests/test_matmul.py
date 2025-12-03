@@ -662,7 +662,7 @@ def test_small_batch_matmul(m, n, k, device):
         pytest.skip("Not fully tested on AMD")
 
     if m * n * k > 16384:
-        pytest.skip()
+        pytest.xfail()
 
     BATCH_SIZE = 10000
 

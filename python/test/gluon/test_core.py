@@ -249,13 +249,6 @@ def is_two_ctas(layout_a: ttgl.constexpr, layout_b: ttgl.constexpr) -> ttgl.cons
     return has_cta_split(layout_a, [2, 1]) and has_cta_split(layout_b, [1, 2])
 
 
-@gluon.constexpr_function
-def constexpr_min(a, b):
-    if a < b:
-        return a
-    return b
-
-
 @gluon.jit
 def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr, block_layout_a: ttgl.constexpr,
                block_layout_b: ttgl.constexpr, block_layout_c: ttgl.constexpr, mma_layout: ttgl.constexpr,
@@ -280,8 +273,7 @@ def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexp
     fence_async_shared(cluster=two_ctas)
 
     if USE_TCGEN05:
-        tmem_shape: ttgl.constexpr = (constexpr_min(M // mma_layout.cta_split_num[0],
-                                                    128), N // mma_layout.cta_split_num[1])
+        tmem_shape: ttgl.constexpr = (min(M // mma_layout.cta_split_num[0], 128), N // mma_layout.cta_split_num[1])
         tmem_layout: ttgl.constexpr = TensorMemoryLayout(tmem_shape, col_stride=32 // acc_dtype.primitive_bitwidth,
                                                          cta_split_num=mma_layout.cta_split_num, two_ctas=two_ctas)
 
@@ -376,7 +368,7 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
     # This is fixed in PTXAS 13.0.88. Remove once we upgrade
     if bitwidth == 16 and ((transpose_a and swizzling_a == 0 and shape_m > 1) or
                            (not transpose_b and swizzling_b == 0 and shape_n > 1)):
-        pytest.skip("Skipped due to a bug in PTXAS when the shared layout is transposed and the swizzling is 0")
+        pytest.xfail("Skipped due to a bug in PTXAS when the shared layout is transposed and the swizzling is 0")
     use_tcgen05 = is_blackwell()
     if two_ctas and ctas_per_cga != [2, 1]:
         pytest.skip("twoCTA MMA is only supported for [2, 1] CTAs per CGA for now")
@@ -536,7 +528,7 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
         )
     except OutOfResources:
         # FIXME: Compute a priori
-        pytest.skip("Not enough shared memory")
+        pytest.xfail("Not enough shared memory")
 
     if two_ctas:
         assert "two_ctas" in compiled.asm["ttgir"]
@@ -589,7 +581,7 @@ def test_amd_direct_load_to_shared(use_buffer_load):
     pgm = kernel[(1, )](a, b, use_buffer_load)
 
     torch.testing.assert_close(a, b)
-    assert re.search(r'ttg\.local_load .* \{ttg\.amdgpu\.syncedViaAsyncWait = true\}', pgm.asm['ttgir'], re.MULTILINE)
+    assert re.search(r'ttg\.local_load .* \{ttg\.amdg\.syncedViaAsyncWait = true\}', pgm.asm['ttgir'], re.MULTILINE)
     if use_buffer_load:
         assert re.search(r"buffer_load.*lds$", pgm.asm['amdgcn'], re.MULTILINE)
     else:
@@ -1405,7 +1397,7 @@ def test_buffer_atomic_rmw_add_bf16():
     torch.testing.assert_close(a, torch_ref)
 
     ttgir = compiled.asm["ttgir"]
-    assert ttgir.count("amdgpu.buffer_atomic_rmw fadd, relaxed, cta") == 1
+    assert ttgir.count("amdg.buffer_atomic_rmw fadd, relaxed, cta") == 1
 
     llir = compiled.asm["llir"]
     assert llir.count("tail call <2 x bfloat> @llvm.amdgcn.raw.ptr.buffer.atomic.fadd.v2bf16") == SIZE_PER_THREAD // 2
@@ -1589,3 +1581,92 @@ def test_tcgen05_mma_scaled_minimal():
     torch.testing.assert_close(out, ref, atol=1e-6, rtol=1e-6)
     ttgir = compiled.asm["ttgir"]
     assert "ttng.tc_gen5_mma_scaled" in ttgir
+
+
+@pytest.mark.xfail(not is_ampere_or_newer(), reason="Requires Ampere or newer", run=False)
+def test_coalesced_layout():
+
+    @gluon.jit
+    def kernel(in_ptr, out_ptr,  #
+               xnumel, ynumel, xstride_in, ystride_in, xstride_out, ystride_out,  #
+               XBLOCK: ttgl.constexpr, YBLOCK: ttgl.constexpr):
+        pid_x = ttgl.program_id(0)
+        pid_y = ttgl.program_id(1)
+        indices_x = pid_x * XBLOCK + ttgl.arange(0, XBLOCK, ttgl.CoalescedLayout())
+        indices_y = pid_y * YBLOCK + ttgl.arange(0, YBLOCK, ttgl.CoalescedLayout())
+
+        in_offsets = xstride_in * indices_x[:, None] + ystride_in * indices_y[None, :]
+        out_offsets = xstride_out * indices_x[:, None] + ystride_out * indices_y[None, :]
+
+        # MASK
+        mask = (indices_x[:, None] < xnumel) & (indices_y[None, :] < ynumel)
+
+        # IN PTR
+        in_ptrs = in_ptr + in_offsets
+        value = ttgl.load(in_ptrs, mask=mask)
+        value = ttgl.sin(value)
+        value = ttgl.maximum(value, 0.0)
+
+        # OUT PTR
+        out_ptrs = out_ptr + out_offsets
+        ttgl.store(out_ptrs, value, mask=mask)
+
+    XBLOCK = 128
+    YBLOCK = 256
+    xnumel = 1000
+    ynumel = 2000
+    input = torch.randn((xnumel, ynumel), device="cuda")
+    output = torch.zeros_like(input)
+    ref = torch.maximum(torch.sin(input), torch.tensor(0.0, device="cuda"))
+
+    grid = (triton.cdiv(xnumel, XBLOCK), triton.cdiv(ynumel, YBLOCK))
+    kernel[grid](  #
+        input, output, xnumel, ynumel,  #
+        *input.stride(), *output.stride(),  #
+        XBLOCK, YBLOCK, num_warps=4)
+
+    torch.testing.assert_close(output, ref)
+
+
+@pytest.mark.xfail(not is_ampere_or_newer(), reason="Requires Ampere or newer", run=False)
+def test_convert_auto_layout_to_coalesced_layout():
+
+    @gluon.jit
+    def kernel(in_ptr, out_ptr,  #
+               xnumel, ynumel, xstride_in, ystride_in, xstride_out, ystride_out,  #
+               XBLOCK: ttgl.constexpr, YBLOCK: ttgl.constexpr):
+        pid_x = ttgl.program_id(0)
+        pid_y = ttgl.program_id(1)
+        indices_x = pid_x * XBLOCK + ttgl.arange(0, XBLOCK, ttgl.AutoLayout())
+        indices_y = pid_y * YBLOCK + ttgl.arange(0, YBLOCK, ttgl.AutoLayout())
+
+        in_offsets = xstride_in * indices_x[:, None] + ystride_in * indices_y[None, :]
+        out_offsets = xstride_out * indices_x[:, None] + ystride_out * indices_y[None, :]
+
+        # MASK
+        mask = (indices_x[:, None] < xnumel) & (indices_y[None, :] < ynumel)  # auto layout
+
+        # IN PTR
+        in_ptrs = ttgl.set_auto_layout(in_ptr + in_offsets, ttgl.CoalescedLayout())
+        value = ttgl.load(in_ptrs, mask=mask)
+
+        # OUT PTR
+        out_ptrs = ttgl.set_auto_layout(out_ptr + out_offsets, ttgl.CoalescedLayout())
+        out_mask_layouted = ttgl.set_auto_layout(mask, ttgl.CoalescedLayout())
+        ttgl.store(out_ptrs, value, mask=out_mask_layouted)
+
+    XBLOCK = 128
+    YBLOCK = 256
+    xnumel = 1000
+    ynumel = 2000
+    input = torch.ones((xnumel, ynumel), device="cuda")
+    output = torch.zeros_like(input)
+    ref = torch.ones_like(input)
+
+    grid = (triton.cdiv(xnumel, XBLOCK), triton.cdiv(ynumel, YBLOCK))
+    kernel[grid](  #
+        input, output, xnumel, ynumel,  #
+        *input.stride(), *output.stride(),  #
+        XBLOCK, YBLOCK, num_warps=4)
+
+    torch.testing.assert_close(output, ref)
