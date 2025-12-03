@@ -21,6 +21,7 @@ from .. import knobs
 _IS_WINDOWS = sys.platform == "win32"
 SUBPROCESS_DECODE_ARGS = (locale.getpreferredencoding(), ) if _IS_WINDOWS else ()
 
+
 def is_xpu():
     import torch
     return torch.xpu.is_available()
@@ -112,7 +113,7 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
 
     try:
         subprocess.run(cc_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    except Exception as e:
+    except subprocess.CalledProcessError as e:
         output = e.stdout.decode(*SUBPROCESS_DECODE_ARGS)
         raise RuntimeError(output)
     return so
