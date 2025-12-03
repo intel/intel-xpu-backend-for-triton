@@ -641,6 +641,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // -----
 
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 4, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1]}>
+#dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#dpas, kWidth=2}>
+#dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#dpas, kWidth=4}>
+#linear = #ttg.linear<{register = [[16, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0]], warp = [], block = []}>
+#linear1 = #ttg.linear<{register = [[8, 0], [16, 0]], lane = [[1, 0], [2, 0], [4, 0], [0, 0]], warp = [], block = []}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_block_scale_dpas} {
+  // CHECK: llvm.func spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.i8.i8(vector<8xf32>, vector<8xi16>, vector<8xi32>, i8, i8, i32, i32) -> vector<8xf32> attributes {convergent, no_unwind, will_return}
+  // CHECK-LABEL: scale_dot_f32_f32_bf8_hf8
+  tt.func @scale_dot_f32_f32_bf8_hf8(%a: tensor<16x32xf8E5M2, #dot_operand_a>, %b: tensor<32x16xf8E4M3FN, #dot_operand_b>, %c: tensor<16x16xf32, #dpas>, %scale_a: tensor<16x1xi8, #linear1>, %scale_b: tensor<16x1xi8, #linear>) {
+    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.i8.i8({{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}) {{.*}} : (vector<8xf32>, vector<8xi16>, vector<8xi32>, i8, i8, i32, i32) -> vector<8xf32>
+    %accumulator = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %c lhs = e5m2 rhs = e4m3 {fastMath = false} : tensor<16x32xf8E5M2, #dot_operand_a>, tensor<16x1xi8, #linear1> * tensor<32x16xf8E4M3FN, #dot_operand_b>, tensor<16x1xi8, #linear> -> tensor<16x16xf32, #dpas>
+    tt.return
+  }
+}
+
+// -----
+
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 4, fp4KPack = 2, threadsPerWarp = 16, warpsPerCTA = [4, 4], repCluster = [4, 4]}>
 #dot_operand_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 2}>
 #dot_operand_b = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 4}>

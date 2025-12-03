@@ -164,6 +164,29 @@ public:
       default:
         return failure();
       }
+
+      auto aElemType = dotOp.getAElemType();
+      auto bElemType = dotOp.getBElemType();
+      bool isBothFP8 = (aElemType == triton::ScaleDotElemType::E4M3 ||
+                        aElemType == triton::ScaleDotElemType::E5M2) &&
+                       (bElemType == triton::ScaleDotElemType::E4M3 ||
+                        bElemType == triton::ScaleDotElemType::E5M2);
+      if (!isBothFP8) {
+        // Doesn't support these mixed precision in bdpas natively.
+        // Need to decompose to simpler tt.dot with software scale for now.
+        // TODO: improve this by decompose to simpler tt.dot_scale with hardware
+        // scaling.
+        // https:
+        // //github.com/intel-tools/intel-xpu-backend-for-triton/issues/755
+        if (aElemType != bElemType) {
+          return failure();
+        }
+      }
+      // TODO: improve this by composing a scale of hex value 0x7f for scale
+      // of 1.0.
+      // https://github.com/intel-tools/intel-xpu-backend-for-triton/issues/716
+      if (!dotOp.getAScale() || !dotOp.getBScale())
+        return failure();
     }
 
     // Create DPAS encoding for the given number of warps

@@ -141,7 +141,12 @@ template <typename Op> static LogicalResult verifyDPASCommonRestriction(Op op) {
     return op->emitOpError("expecting repeat count to be 1, 2, 4, or 8");
 
   TritonGEN::PrecisionType precision = op.getPa();
-  if (op.getPa() != op.getPb())
+  TritonGEN::PrecisionType bPrecision = op.getPb();
+  bool isBothFP8 = (precision == TritonGEN::PrecisionType::F8E5M2 ||
+                    precision == TritonGEN::PrecisionType::F8E4M3FN) &&
+                   (op.getPb() == TritonGEN::PrecisionType::F8E5M2 ||
+                    op.getPb() == TritonGEN::PrecisionType::F8E4M3FN);
+  if (!isBothFP8 && op.getPa() != op.getPb())
     return op->emitOpError(
         "expecting precision of matrix A and B to be the same");
 

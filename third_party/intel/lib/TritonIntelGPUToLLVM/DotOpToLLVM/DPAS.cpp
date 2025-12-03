@@ -199,17 +199,23 @@ public:
     TritonGEN::PrecisionType APrecision;
     TritonGEN::PrecisionType BPrecision;
     if constexpr (std::is_same<OpTy, DotScaledOp>::value) {
-      auto aElemtype = adaptor.getAElemType();
-      APrecision = getElementPrecision(aElemtype);
-      auto bElemtype = adaptor.getBElemType();
-      BPrecision = getElementPrecision(bElemtype);
+      auto aElemType = adaptor.getAElemType();
+      APrecision = getElementPrecision(aElemType);
+      auto bElemType = adaptor.getBElemType();
+      BPrecision = getElementPrecision(bElemType);
+      bool isBothFP8 = (aElemType == triton::ScaleDotElemType::E4M3 ||
+                        aElemType == triton::ScaleDotElemType::E5M2) &&
+                       (bElemType == triton::ScaleDotElemType::E4M3 ||
+                        bElemType == triton::ScaleDotElemType::E5M2);
+      assert((isBothFP8 || APrecision == BPrecision) &&
+             "A and B precision enumerators do not match");
     } else {
       APrecision = getElementPrecision(ATensorTy, resElemTy),
       BPrecision = getElementPrecision(BTensorTy, resElemTy);
-    }
 
-    assert(APrecision == BPrecision &&
-           "A and B precision enumerators do not match");
+      assert(APrecision == BPrecision &&
+             "A and B precision enumerators do not match");
+    }
 
     LLVM_DEBUG({
       llvm::dbgs() << "repBatch = " << repBatch << "\n";
