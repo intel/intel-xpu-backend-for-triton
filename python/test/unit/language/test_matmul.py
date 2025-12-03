@@ -424,7 +424,7 @@ def test_mxfp(BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS, device)
     if is_cuda() and torch.cuda.get_device_capability()[0] == 12:
         ptx = out.asm["ptx"]
         assert "mma.sync.aligned.m16n8k32.row.col.kind::mxf8f6f4.block_scale.scale_vec::1X" in ptx
-    if device == "xpu":  # FIXME: Only add check for CRI
+    if is_xpu():  # FIXME: Only add check for CRI
         llir = out.asm["llir"]
         count = llir.count("llvm.genx.GenISA.sub.group.bdpas")
         assert count > 0, "The bdpas is not used."
@@ -1157,9 +1157,9 @@ def mxfp8_mxfp4_matmul(  #
         a_scale, b_scale,  #
         M, N, K,  #
         stride_scale,  #
-        stride_am, stride_ak,  #
-        stride_bk, stride_bn,  #
-        stride_cm, stride_cn,  #
+        stride_am: tl.constexpr, stride_ak: tl.constexpr,  #
+        stride_bk: tl.constexpr, stride_bn: tl.constexpr,  #
+        stride_cm: tl.constexpr, stride_cn: tl.constexpr,  #
         tensor_scale: tl.constexpr,  #
         DTYPE_A: tl.constexpr,  #
         DTYPE_B: tl.constexpr,  #
@@ -1251,13 +1251,13 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
             pytest.skip("Float4 without scale is tested in test_block_scale_fp4")
     elif is_xpu():
         if not (WITH_A_SCALE and WITH_B_SCALE):
-            pytest.xfail("None scale has not been tested on XPU backend")
-        if not (A_DATA_TYPE == "float8e5" and B_DATA_TYPE == "float4"):
-            pytest.xfail(f"(A: {A_DATA_TYPE}, B: {B_DATA_TYPE}) has not been tested on XPU backend")
+            pytest.skip("None scale has not been tested on bdpas. issue #716")
         if ((BLOCK_M, BLOCK_N, BLOCK_K) == (128, 256, 256) and triton.runtime.driver.active.utils.get_device_properties(
                 triton.runtime.driver.active.get_current_device())["max_shared_mem"] < 196608):
             pytest.xfail("XPU: Not enough shared memory")
-        pytest.skip("FIXME: issue 678")
+        is_both_fp8 = (A_DATA_TYPE in ['float8e5', 'float8e4nv']) and (B_DATA_TYPE in ['float8e5', 'float8e4nv'])
+        if not is_both_fp8 or not (A_DATA_TYPE == B_DATA_TYPE):
+            pytest.skip("Skip mixed precision because it is emulated by dpas for now. issue #678")
     if not PACK_B_ALONG_K and B_DATA_TYPE != "float4":
         pytest.xfail("Pack along K can only be False for float4")
 
