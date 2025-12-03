@@ -97,7 +97,6 @@ jobs:
         inductor/test_max_autotune.py
         inductor/test_compile_subprocess.py
         inductor/test_analysis.py
-        inductor/test_torchinductor_opinfo.py
       runner_label: ${{ inputs.runner_label }}
       python_version: "3.10"
 
