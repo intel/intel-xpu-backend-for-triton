@@ -19,7 +19,7 @@ from .cache import get_cache_manager
 from .. import knobs
 
 _IS_WINDOWS = sys.platform == "win32"
-SUBPROCESS_DECODE_ARGS = (locale.getpreferredencoding(),) if _IS_WINDOWS else ()
+SUBPROCESS_DECODE_ARGS = (locale.getpreferredencoding(), ) if _IS_WINDOWS else ()
 
 def is_xpu():
     import torch
@@ -111,9 +111,7 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
         print(" ".join(cc_cmd))
 
     try:
-        subprocess.run(
-            cc_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
-        )
+        subprocess.run(cc_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     except Exception as e:
         output = e.stdout.decode(*SUBPROCESS_DECODE_ARGS)
         raise RuntimeError(output)
