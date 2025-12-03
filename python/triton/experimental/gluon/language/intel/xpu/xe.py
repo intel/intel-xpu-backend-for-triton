@@ -36,37 +36,48 @@ class tensor_descriptor(tensor_descriptor_base):
         self.shape._flatten_ir(handles)
         self.strides._flatten_ir(handles)
 
-    # TODO: MaterializeBlockPointers.cpp
-    # Add 2d_block_io parameter + validation to set proper attribute
-    # Validation: (?)
-    #   > 2 dims
-    #   > stride 16 bytes aligned
-    #   and others
     @builtin
-    def load(self, offsets: Sequence[constexpr | tensor], is_2d_block=False, _semantic=None) -> tensor:
+    def load(self, offsets: Sequence[constexpr | tensor], _semantic=None) -> tensor:
+        return _semantic.descriptor_load(self, offsets, "", "")
+
+    def load_2d(self, offsets: Sequence[constexpr | tensor], is_2d_block=False, _semantic=None) -> tensor:
+        # TODO: MaterializeBlockPointers.cpp
+        # Add 2d_block_io parameter + validation to set proper attribute
+        # Validation: (?)
+        #   > 2 dims
+        #   > stride 16 bytes aligned
+        #   and others
+
         op = _semantic.descriptor_load(self, offsets, "", "")
 
-        if is_2d_block:
-            # TODO: proper handling like below test example
-            # Option to set row/column major and other params
-            attr = _semantic.builder.get_string_attr("row_major")
-            op.handle.set_attr("ttig.block_io", attr)
+        # TODO: proper handling like below test example
+        # Option to set row/column major and other params
+        attr = _semantic.builder.get_string_attr("row_major")
+        op.handle.set_attr("ttig.block_io", attr)
 
         return op
 
     @builtin
-    def store(self, offsets: Sequence[constexpr | tensor], value: tensor, is_2d_block=False, _semantic=None) -> tensor:
+    def store(self, offsets: Sequence[constexpr | tensor], value: tensor, _semantic=None) -> tensor:
+        return _semantic.descriptor_store(self, value, offsets)
+
+    @builtin
+    def store_2d(self, offsets: Sequence[constexpr | tensor], value: tensor, _semantic=None) -> tensor:
         op = _semantic.descriptor_store(self, value, offsets)
 
-        if is_2d_block:
-            attr = _semantic.builder.get_string_attr("row_major")
-            op.handle.set_attr("ttig.block_io", attr)
+        attr = _semantic.builder.get_string_attr("row_major")
+        op.handle.set_attr("ttig.block_io", attr)
 
         return op
 
     @builtin
-    def prefetch(self, offsets: Sequence[constexpr | tensor], mask=None, cache=None, evict=None, is_volatile=False,
-                 is_2d_block=False, _semantic=None):
+    def prefetch(self, offsets: Sequence[constexpr | tensor], mask=None, cache=None, evict=None, is_volatile=False, _semantic=None):
+        ptr_handle = self.handle
+        offsets_handles = [offset.handle if hasattr(offset, 'handle') else offset for offset in offsets]
+        return _semantic.builder.create_prefetch(ptr_handle, offsets_handles, False)
+
+    @builtin
+    def prefetch_2d(self, offsets: Sequence[constexpr | tensor], mask=None, cache=None, evict=None, is_volatile=False, _semantic=None):
         # TODO: handle other ttig.prefetch params
         # ptr is just temporary, support for tensor descriptor is needed
         # calculate offsets like tt.advance
@@ -84,9 +95,8 @@ class tensor_descriptor(tensor_descriptor_base):
         offsets_handles = [offset.handle if hasattr(offset, 'handle') else offset for offset in offsets]
         op = _semantic.builder.create_prefetch(ptr_handle, offsets_handles, False)
 
-        if is_2d_block:
-            attr = _semantic.builder.get_string_attr("row_major")
-            op.set_attr("ttig.block_io", attr)
+        attr = _semantic.builder.get_string_attr("row_major")
+        op.set_attr("ttig.block_io", attr)
 
         return op
 

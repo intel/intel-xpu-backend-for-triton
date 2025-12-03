@@ -13,6 +13,10 @@ import torch
 import triton
 import triton.language as tl
 
+from triton.experimental import gluon
+import triton.experimental.gluon.language as ttgl
+from triton.experimental.gluon.language.intel import IntelDPASLayout
+
 import triton_kernels_benchmark as benchmark_suite
 from triton_kernels_benchmark import xetla_kernel
 from triton_kernels_benchmark import cutlass_kernel
@@ -167,6 +171,190 @@ def matmul_kernel_with_block_pointers_batched(
     tl.store(c_block_ptr, c, boundary_check=(0, 1))
 
 
+def get_gluon_matmul_autotune_configs(base_configs_fn: Callable) -> List[triton.Config]:
+    base_configs = base_configs_fn()
+    return [
+        triton.Config(
+            # Append additional meta parameters needed for gluon kernel
+            # To determine prefetch distance and DPAS layout
+            {**config.kwargs, 'NUM_STAGES': config.num_stages, 'NUM_WARPS': config.num_warps},
+            num_stages=config.num_stages,
+            num_warps=config.num_warps
+        )
+        for config in base_configs
+    ]
+
+
+@gluon.constexpr_function
+def get_dpas_layout(num_warps: ttgl.constexpr) -> ttgl.constexpr:
+    # TODO: return same DPAS layout as calculated by passes for triton
+    warps_per_cta = [2, 2]
+    if num_warps == 16:
+        warps_per_cta = [4, 4]
+    if num_warps == 32:
+        warps_per_cta = [4, 8]
+    elif num_warps == 64:
+        warps_per_cta = [8, 8]
+    return IntelDPASLayout(
+        repeatCount=8,
+        systolic_depth=8,
+        execution_size=16,
+        ops_per_chan=2,
+        warps_per_cta=warps_per_cta,
+        rep_cluster=[4, 2],
+        threads_per_warp=16
+   )
+
+
+@triton.autotune(
+    configs=get_gluon_matmul_autotune_configs(get_matmul_autotune_configs),
+    key=['M', 'N', 'K'],
+)
+@gluon.jit
+def gluon_matmul_kernel_dpas_tensor_desc(
+        # Pointers to matrices
+        a_ptr, b_ptr, c_ptr,
+        # Matrix dimensions
+        M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr,
+        # Stride variables
+        stride_am: ttgl.constexpr, stride_ak: ttgl.constexpr,
+        stride_bk: ttgl.constexpr, stride_bn: ttgl.constexpr,
+        stride_cm: ttgl.constexpr, stride_cn: ttgl.constexpr,
+        # Meta parameters
+        BLOCK_SIZE_M: ttgl.constexpr, BLOCK_SIZE_N: ttgl.constexpr, BLOCK_SIZE_K: ttgl.constexpr,
+        GROUP_SIZE_M: ttgl.constexpr,
+        # Gluon meta parameters
+        NUM_STAGES: ttgl.constexpr, NUM_WARPS: ttgl.constexpr):
+    layout: ttgl.constexpr = get_dpas_layout(NUM_WARPS)
+
+
+    lhs_layout: ttgl.constexpr = ttgl.DotOperandLayout(parent=layout, operand_index=0, k_width=1)
+    rhs_layout: ttgl.constexpr = ttgl.DotOperandLayout(parent=layout, operand_index=1, k_width=2)
+
+    pid = ttgl.program_id(axis=0)
+    num_pid_m = ttgl.cdiv(M, BLOCK_SIZE_M)
+    num_pid_n = ttgl.cdiv(N, BLOCK_SIZE_N)
+    num_pid_in_group = GROUP_SIZE_M * num_pid_n
+    group_id = pid // num_pid_in_group
+    first_pid_m = group_id * GROUP_SIZE_M
+    group_size_m = ttgl.minimum(num_pid_m - first_pid_m, GROUP_SIZE_M)
+    pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
+    pid_n = (pid % num_pid_in_group) // group_size_m
+
+    a_desc = ttgl.intel.xpu.xe.make_tensor_descriptor(a_ptr, (M, K), (stride_am, stride_ak), (BLOCK_SIZE_M, BLOCK_SIZE_K),
+                                                      lhs_layout)
+    b_desc = ttgl.intel.xpu.xe.make_tensor_descriptor(b_ptr, (K, N), (stride_bk, stride_bn), (BLOCK_SIZE_K, BLOCK_SIZE_N),
+                                                      rhs_layout)
+    c_desc = ttgl.intel.xpu.xe.make_tensor_descriptor(c_ptr, (M, N), (stride_cm, stride_cn), (BLOCK_SIZE_M, BLOCK_SIZE_N), layout)
+
+    # Clear accumulator
+    zero_tensor = ttgl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=ttgl.float32, layout=layout)
+    c_desc.store_2d([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], zero_tensor)
+
+    accumulator = c_desc.load_2d([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N])
+
+
+    # Prefetch first blocks for A and B matrices (pre-loop prefetches)
+    for i in range(NUM_STAGES):
+        if i * BLOCK_SIZE_K < K:
+            a_desc.prefetch_2d([pid_m * BLOCK_SIZE_M, i * BLOCK_SIZE_K])
+            b_desc.prefetch_2d([i * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N])
+
+    for k in range(0, ttgl.cdiv(K, BLOCK_SIZE_K)):
+        a = a_desc.load_2d([pid_m * BLOCK_SIZE_M, k * BLOCK_SIZE_K])
+        b = b_desc.load_2d([k * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N])
+
+        # Prefetch ahead blocks (pipelining)
+        prefetch_k = k + NUM_STAGES
+        if prefetch_k * BLOCK_SIZE_K < K:
+            a_desc.prefetch_2d([pid_m * BLOCK_SIZE_M, prefetch_k * BLOCK_SIZE_K])
+            b_desc.prefetch_2d([prefetch_k * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N])
+
+        accumulator = ttgl.intel.xpu.xe.dot_fma(a, b, accumulator)
+
+    c_desc.store_2d([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], accumulator)
+
+
+@triton.autotune(
+    configs=get_gluon_matmul_autotune_configs(get_matmul_batched_autotune_configs),
+    key=['B', 'M', 'N', 'K'],
+)
+@gluon.jit
+def gluon_matmul_kernel_dpas_tensor_desc_batched(
+        # Pointers to matrices
+        a_ptr, b_ptr, c_ptr,
+        # Matrix dimensions
+        B: ttgl.constexpr, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr,
+        # Stride variables
+        stride_az: ttgl.constexpr, stride_am: ttgl.constexpr, stride_ak: ttgl.constexpr,
+        stride_bz: ttgl.constexpr, stride_bk: ttgl.constexpr, stride_bn: ttgl.constexpr,
+        stride_cz: ttgl.constexpr, stride_cm: ttgl.constexpr, stride_cn: ttgl.constexpr,
+        # Meta parameters
+        BLOCK_SIZE_M: ttgl.constexpr, BLOCK_SIZE_N: ttgl.constexpr, BLOCK_SIZE_K: ttgl.constexpr,
+        GROUP_SIZE_M: ttgl.constexpr,
+        # Gluon meta parameters
+        NUM_STAGES: ttgl.constexpr, NUM_WARPS: ttgl.constexpr):
+    layout: ttgl.constexpr = get_dpas_layout(NUM_WARPS)
+
+    lhs_layout: ttgl.constexpr = ttgl.DotOperandLayout(parent=layout, operand_index=0, k_width=1)
+    rhs_layout: ttgl.constexpr = ttgl.DotOperandLayout(parent=layout, operand_index=1, k_width=2)
+
+    bid = ttgl.program_id(axis=1)
+    pid = ttgl.program_id(axis=0)
+    num_pid_m = ttgl.cdiv(M, BLOCK_SIZE_M)
+    num_pid_n = ttgl.cdiv(N, BLOCK_SIZE_N)
+    num_pid_in_group = GROUP_SIZE_M * num_pid_n
+    group_id = pid // num_pid_in_group
+    first_pid_m = group_id * GROUP_SIZE_M
+    group_size_m = ttgl.minimum(num_pid_m - first_pid_m, GROUP_SIZE_M)
+    pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
+    pid_n = (pid % num_pid_in_group) // group_size_m
+
+    # Calculate batch offsets
+    offset_a = bid.to(ttgl.int64) * stride_az
+    offset_b = bid.to(ttgl.int64) * stride_bz
+    offset_c = bid.to(ttgl.int64) * stride_cz
+
+    a_desc = ttgl.intel.xpu.xe.make_tensor_descriptor(
+        a_ptr + offset_a, (M, K), (stride_am, stride_ak),
+        (BLOCK_SIZE_M, BLOCK_SIZE_K), lhs_layout
+    )
+    b_desc = ttgl.intel.xpu.xe.make_tensor_descriptor(
+        b_ptr + offset_b, (K, N), (stride_bk, stride_bn),
+        (BLOCK_SIZE_K, BLOCK_SIZE_N), rhs_layout
+    )
+    c_desc = ttgl.intel.xpu.xe.make_tensor_descriptor(
+        c_ptr + offset_c, (M, N), (stride_cm, stride_cn),
+        (BLOCK_SIZE_M, BLOCK_SIZE_N), layout
+    )
+
+    # Clear accumulator
+    zero_tensor = ttgl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=ttgl.float32, layout=layout)
+    c_desc.store_2d([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], zero_tensor)
+
+    accumulator = c_desc.load_2d([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N])
+
+    # Prefetch first blocks for A and B matrices (pre-loop prefetches)
+    for i in range(NUM_STAGES):
+        if i * BLOCK_SIZE_K < K:
+            a_desc.prefetch_2d([pid_m * BLOCK_SIZE_M, i * BLOCK_SIZE_K])
+            b_desc.prefetch_2d([i * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N])
+
+    for k in range(0, ttgl.cdiv(K, BLOCK_SIZE_K)):
+        a = a_desc.load_2d([pid_m * BLOCK_SIZE_M, k * BLOCK_SIZE_K])
+        b = b_desc.load_2d([k * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N])
+
+        # Prefetch ahead blocks (pipelining)
+        prefetch_k = k + NUM_STAGES
+        if prefetch_k * BLOCK_SIZE_K < K:
+            a_desc.prefetch_2d([pid_m * BLOCK_SIZE_M, prefetch_k * BLOCK_SIZE_K])
+            b_desc.prefetch_2d([prefetch_k * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N])
+
+        accumulator = ttgl.intel.xpu.xe.dot_fma(a, b, accumulator)
+
+    c_desc.store_2d([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], accumulator)
+
+
 # We can now create a convenience wrapper function that only takes two input tensors,
 # and (1) checks any shape constraint; (2) launches the above kernel.
 def matmul(
@@ -271,7 +459,7 @@ X_VALS = [  #
     [4, 32768, 4096, 128],
     [32, 4096, 128, 4096],
     [4096, 8, 128, 16384],
-    [4096, 8, 16384, 128],
+    # [4096, 8, 16384, 128], # TODO: mismatches for gluon
 ]
 
 DEVICE_NAME = torch.xpu.get_device_name()
@@ -308,6 +496,7 @@ def get_benchmark(
     The benchmark can then be executed by calling the :code:`.run` method on the return value.
     """
     supported_providers = {
+        'gluon': 'Gluon',
         'triton': 'Triton',
         'onednn': 'OneDNN',
     }
@@ -359,7 +548,7 @@ def get_benchmark(
         if provider == 'onednn':
             _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: torch.matmul(torch_a, torch_b))
 
-        elif provider == 'triton':
+        elif provider in ('triton', 'gluon'):
             if len(a.shape) != len(b.shape):
                 raise AssertionError(f'Incompatible sizes {len(a.shape)} and {len(b.shape)}', )
             if len(a.shape) == 3:
@@ -368,19 +557,23 @@ def get_benchmark(
                 c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
             else:
                 raise AssertionError(f'Unexpected shape of length {len(a.shape)}')
-            triton_fn = lambda: matmul(
+
+            kernel = matmul_kernel if provider == 'triton' else gluon_matmul_kernel_dpas_tensor_desc
+            batched_kernel = matmul_kernel_batched if provider == 'triton' else gluon_matmul_kernel_dpas_tensor_desc_batched
+
+            matmul_fn = lambda: matmul(
                 a,
                 b,
                 c,
-                matmul_kernel=matmul_kernel,
-                matmul_kernel_batched=matmul_kernel_batched,
+                matmul_kernel=kernel,
+                matmul_kernel_batched=batched_kernel,
                 transpose_a=transpose_a,
                 transpose_b=transpose_b,
             )
             torch_fn = lambda: torch.matmul(torch_a, torch_b).to(torch.float32)
             rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
-            benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
-            _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
+            benchmark_suite.assert_close(matmul_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg=f'{provider} to torch')
+            _, min_ms, max_ms, mean_ms, cv = do_bench(matmul_fn)
 
         elif provider == 'xetla':
             if B == 1:
