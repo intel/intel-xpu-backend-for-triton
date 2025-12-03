@@ -1,3 +1,4 @@
+import pytest
 import triton
 import triton.language as tl
 
@@ -15,6 +16,7 @@ def test_empty_kernel(device):
     kernel[(1, )](x, SIZE=SIZE, num_warps=4, generate_native_code=True)
 
 
+@pytest.mark.xfail(reason="unable to get spill_size from simulator")
 def test_auto_large_grf(device):
     SIZE = 1024
 
