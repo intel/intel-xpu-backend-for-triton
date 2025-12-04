@@ -104,6 +104,9 @@ class ReportStats:  # pylint: disable=R0801
         return json.dumps(res_dict, separators=(",", ":"))
 
 
+# pylint: disable=R0801
+
+
 class RunResult(Enum):
     PASSED = "passed"
     FAILED = "failed"
@@ -117,6 +120,9 @@ class FailureReason(Enum):
     ERROR = "error"
     SKIPPED = "pytest.skip"
     XFAILED = "pytest.xfail"
+
+
+# pylint: enable=R0801
 
 
 class TestGroupingLevel(Enum):

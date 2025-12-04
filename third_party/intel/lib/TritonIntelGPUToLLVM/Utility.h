@@ -39,7 +39,7 @@ Block &createPredicatedBlock(RewriterBase &rewriter, Location loc, Value cond,
   Block *endBlock = rewriter.splitBlock(thenBlock, thenBlock->begin());
 
   rewriter.setInsertionPointToEnd(insertionBlock);
-  rewriter.create<cf::CondBranchOp>(loc, cond, thenBlock, endBlock, ops);
+  cf::CondBranchOp::create(rewriter, loc, cond, thenBlock, endBlock, ops);
 
   rewriter.setInsertionPointToStart(thenBlock);
   auto thenOps = thenOpsFn();
@@ -52,9 +52,9 @@ Block &createPredicatedBlock(RewriterBase &rewriter, Location loc, Value cond,
          "type mismatch found");
 
   if (thenOps.empty())
-    rewriter.create<cf::BranchOp>(loc, endBlock);
+    cf::BranchOp::create(rewriter, loc, endBlock);
   else
-    rewriter.create<cf::BranchOp>(loc, endBlock, thenOps);
+    cf::BranchOp::create(rewriter, loc, endBlock, thenOps);
 
   for (Value op : thenOps)
     endBlock->addArgument(op.getType(), op.getLoc());
