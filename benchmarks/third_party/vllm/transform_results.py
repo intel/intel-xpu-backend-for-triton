@@ -46,7 +46,7 @@ def parse_csv(csv_file_path, tag, bench_group, benchmark, param_cols):
 
     dfs = []
     for compiler_name in compilers:
-        for value_name in ['TFlops', 'GB/s']:
+        for value_name in ['TFlops', 'GB/s', 'time_us']:
             col = f'{compiler_name}-{value_name}'
             if col not in df.columns:
                 continue

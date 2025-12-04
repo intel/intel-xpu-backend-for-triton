@@ -25,7 +25,7 @@ def test_blaslt(m, n, k, dtype_str, device):
         c_dtype = torch.float16 if dtype_str in ("float8_e4m3fnuz", "float8_e4m3fn") else dtype
         make_handle = lambda workspace: vendor.hipblas.HipblasLt(workspace)
     else:
-        pytest.skip("test_blaslt is only supported on CUDA or HIP")
+        pytest.xfail("test_blaslt is only supported on CUDA or HIP")
 
     torch.manual_seed(123)
     workspace_size = 32 * 1024 * 1024
