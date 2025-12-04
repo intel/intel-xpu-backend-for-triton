@@ -81,7 +81,7 @@ env:
   PYTEST_RERUNS: 2
   NUM_SHARDS: 0
   PARALLEL_SUITES: ""
-  SEQUENTIAL_SUITES: "tutorial minicore mxfp scaled_dot"
+  SEQUENTIAL_SUITES: "tutorial minicore mxfp scaled_dot gluon"
   http_proxy: http://fmproxyslb.ice.intel.com:911
   https_proxy: http://fmproxyslb.ice.intel.com:911
 
