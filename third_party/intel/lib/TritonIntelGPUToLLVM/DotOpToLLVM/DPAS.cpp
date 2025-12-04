@@ -465,7 +465,7 @@ private:
               Value matVal;
               if (packedElem != 1) {
                 VectorType scaleOpTy = vec_ty(i8_ty, packedElem);
-                matVal = rewriter.create<LLVM::UndefOp>(loc, scaleOpTy);
+                matVal = LLVM::UndefOp::create(rewriter, loc, scaleOpTy);
                 for (int k = 0; k < packedElem; ++k)
                   matVal =
                       tb.insert_element(matVal, elems[offset++], tb.i32_val(k));

@@ -800,7 +800,7 @@ struct TritonMatrixBlockScaleDPASLowering
     VectorType aTy = VectorType::get(
         bitWidth / packedAType.getIntOrFloatBitWidth(), packedAType);
     if (aOrigTy != aTy)
-      a = rewriter.create<LLVM::BitcastOp>(loc, aTy, a);
+      a = LLVM::BitcastOp::create(rewriter, loc, aTy, a);
 
     Value b = op.getB();
     VectorType bOrigTy = cast<VectorType>(b.getType());
@@ -809,7 +809,7 @@ struct TritonMatrixBlockScaleDPASLowering
     VectorType bTy = VectorType::get(
         bitWidth / packedBType.getIntOrFloatBitWidth(), packedBType);
     if (bOrigTy != bTy)
-      b = rewriter.create<LLVM::BitcastOp>(loc, bTy, b);
+      b = LLVM::BitcastOp::create(rewriter, loc, bTy, b);
 
     Value c = op.getC();
     VectorType cOrigTy = cast<VectorType>(c.getType());
@@ -828,10 +828,10 @@ struct TritonMatrixBlockScaleDPASLowering
     SmallVector<Type> argTypes{cTy,      aTy,     bTy,    scaleATy,
                                scaleBTy, int32Ty, int32Ty};
 
-    auto precA = rewriter.create<LLVM::ConstantOp>(
-        loc, int32Ty, static_cast<int>(op.getPa()));
-    auto precB = rewriter.create<LLVM::ConstantOp>(
-        loc, int32Ty, static_cast<int>(op.getPb()));
+    auto precA = LLVM::ConstantOp::create(rewriter, loc, int32Ty,
+                                          static_cast<int>(op.getPa()));
+    auto precB = LLVM::ConstantOp::create(rewriter, loc, int32Ty,
+                                          static_cast<int>(op.getPb()));
     SmallVector<Value> args{c,     a,    b, op.getScaleA(), op.getScaleB(),
                             precA, precB};
 
