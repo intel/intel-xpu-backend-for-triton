@@ -36,9 +36,9 @@ def mxfp_matmul(  #
         a_scale, b_scale,  #
         M, N, K,  #
         stride_scale,  #
-        stride_am, stride_ak,  #
-        stride_bk, stride_bn,  #
-        stride_cm, stride_cn,  #
+        stride_am: tl.constexpr, stride_ak: tl.constexpr,  #
+        stride_bk: tl.constexpr, stride_bn: tl.constexpr,  #
+        stride_cm: tl.constexpr, stride_cn: tl.constexpr,  #
         DTYPE_A: tl.constexpr,  #
         DTYPE_B: tl.constexpr,  #
         BLOCK_M: tl.constexpr,  #
