@@ -684,7 +684,7 @@ LinearLayout BlockScaledDPAStoLinearLayout(ArrayRef<int64_t> shape,
         LinearLayout::identity1D(numReps[0], kRegister, outDimNames[0]);
 
   tileLayout = combineCtaCgaWithShape(
-      std::move(tileLayout), CTALayoutAttr::getDefault(ctx, rank), shape);
+      std::move(tileLayout), CTAEncodingAttr::getDefault(ctx, rank), shape);
   return tileLayout;
 }
 
