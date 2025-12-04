@@ -736,6 +736,10 @@ SmallVector<Value> unpackLLVector(Location loc, Value llvmVec,
 
 Value packLLVector(Location loc, ValueRange vals, RewriterBase &rewriter) {
   assert(vals.size() > 0);
+  // Return scalar directly instead of creating a 1-element vector
+  if (vals.size() == 1) {
+    return vals[0];
+  }
   auto vecType = vec_ty(vals[0].getType(), vals.size());
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value vec = b.undef(vecType);
