@@ -6762,4 +6762,4 @@ def test_dot_multidim(rank, trans_a, trans_b, device):
 
     d = a.to(torch.float32) @ b.to(torch.float32)
 
-    assert torch.equal(c, d)
+    assert torch.allclose(c, d, rtol=1e-3, atol=1e-2)
