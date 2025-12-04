@@ -360,17 +360,17 @@ private:
 
     // Although this is a NOP, we have to pass allow_reorder=true as static
     // analysis will fail to infer it.
-    return rewriter.create<ReshapeOp>(op.getLoc(),
-                                      static_cast<RankedTensorType>(type), val,
-                                      /*allow_reorder=*/true,
-                                      /*efficient_layout=*/true);
+    return ReshapeOp::create(rewriter, op.getLoc(),
+                             static_cast<RankedTensorType>(type), val,
+                             /*allow_reorder=*/true,
+                             /*efficient_layout=*/true);
   }
 
   Value performReduction(ReduceOp op, PatternRewriter &rewriter, Value val,
                          int axis) const {
     assert(axis >= 0 && "Expecting positive axis");
 
-    auto newOp = rewriter.create<ReduceOp>(op.getLoc(), val, /*axis=*/axis);
+    auto newOp = ReduceOp::create(rewriter, op.getLoc(), val, /*axis=*/axis);
     auto &newCombineOp = newOp.getCombineOp();
     rewriter.cloneRegionBefore(op.getCombineOp(), newCombineOp,
                                newCombineOp.end());
@@ -414,8 +414,8 @@ private:
 
     type.setEncoding(encoding);
 
-    return rewriter.create<ConvertLayoutOp>(
-        op.getLoc(), static_cast<RankedTensorType>(type), val);
+    return ConvertLayoutOp::create(rewriter, op.getLoc(),
+                                   static_cast<RankedTensorType>(type), val);
   }
 
   Value reshapeForFinalReduction(ReduceOp op, PatternRewriter &rewriter,
@@ -451,10 +451,10 @@ private:
 
     // Although this is a NOP, we have to pass allow_reorder=true as static
     // analysis will fail to infer it.
-    return rewriter.create<ReshapeOp>(op.getLoc(),
-                                      static_cast<RankedTensorType>(type), val,
-                                      /*allow_reorder=*/true,
-                                      /*efficient_layout=*/true);
+    return ReshapeOp::create(rewriter, op.getLoc(),
+                             static_cast<RankedTensorType>(type), val,
+                             /*allow_reorder=*/true,
+                             /*efficient_layout=*/true);
   }
 
   Value performFinalElementwiseReduction(ReduceOp op, PatternRewriter &rewriter,
@@ -490,16 +490,16 @@ private:
 
     type.setEncoding(SliceEncodingAttr::get(getContext(), 0, parentEncoding));
 
-    return rewriter.create<ReshapeOp>(op.getLoc(),
-                                      static_cast<RankedTensorType>(type), val,
-                                      /*allow_reorder=*/true,
-                                      /*efficient_layout=*/true);
+    return ReshapeOp::create(rewriter, op.getLoc(),
+                             static_cast<RankedTensorType>(type), val,
+                             /*allow_reorder=*/true,
+                             /*efficient_layout=*/true);
   }
 
   Value convertLayoutToOriginalType(ReduceOp op, PatternRewriter &rewriter,
                                     Value val) const {
-    return rewriter.create<ConvertLayoutOp>(
-        op.getLoc(), op.getResult().front().getType(), val);
+    return ConvertLayoutOp::create(rewriter, op.getLoc(),
+                                   op.getResult().front().getType(), val);
   }
 };
 

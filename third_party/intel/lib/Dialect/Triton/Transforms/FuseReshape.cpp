@@ -144,22 +144,22 @@ private:
 
     unsigned newInnermostDimIdx = (innermostDimIdx - 1);
     unsigned newOutermostDimIdx = !newInnermostDimIdx;
-    auto div = builder.create<arith::DivUIOp>(loc, strides[0],
-                                              newStrides[newOutermostDimIdx]);
+    auto div = arith::DivUIOp::create(builder, loc, strides[0],
+                                      newStrides[newOutermostDimIdx]);
 
-    newShape[newOutermostDimIdx] = builder.create<arith::AddIOp>(
-        loc, builder.create<arith::MulIOp>(loc, shapes[0], div),
+    newShape[newOutermostDimIdx] = arith::AddIOp::create(
+        builder, loc, arith::MulIOp::create(builder, loc, shapes[0], div),
         newShape[newOutermostDimIdx]);
-    newOffsets[newOutermostDimIdx] = builder.create<arith::AddIOp>(
-        loc,
-        builder.create<arith::MulIOp>(
-            loc, offsets[0],
-            builder.create<arith::TruncIOp>(loc, offsets[0].getType(), div)),
+    newOffsets[newOutermostDimIdx] = arith::AddIOp::create(
+        builder, loc,
+        arith::MulIOp::create(
+            builder, loc, offsets[0],
+            arith::TruncIOp::create(builder, loc, offsets[0].getType(), div)),
         newOffsets[newOutermostDimIdx]);
 
-    Value ptr = builder.create<tt::MakeTensorPtrOp>(
-        loc, newPtrType, makeTensorPtrOp.getBase(), newShape, newStrides,
-        newOffsets,
+    Value ptr = tt::MakeTensorPtrOp::create(
+        builder, loc, newPtrType, makeTensorPtrOp.getBase(), newShape,
+        newStrides, newOffsets,
         DenseI32ArrayAttr::get(
             builder.getContext(),
             makeTensorPtrOp.getOrderAttr().asArrayRef().drop_front()));
@@ -306,8 +306,8 @@ private:
     if (auto advanceOp = dyn_cast<tt::AdvanceOp>(user)) {
       OpBuilder rewriter(advanceOp);
       SmallVector<Value> newOffsets(advanceOp.getOffsets().drop_front());
-      auto newAdvanceOp = rewriter.create<tt::AdvanceOp>(loc, newVal.getType(),
-                                                         newVal, newOffsets);
+      auto newAdvanceOp = tt::AdvanceOp::create(rewriter, loc, newVal.getType(),
+                                                newVal, newOffsets);
       mapping.map(static_cast<Operation *>(advanceOp),
                   static_cast<Operation *>(newAdvanceOp));
       LLVM_DEBUG(llvm::dbgs().indent(2)
@@ -319,10 +319,11 @@ private:
 
     if (auto loadOp = dyn_cast<tt::LoadOp>(user)) {
       OpBuilder rewriter(loadOp);
-      auto newLoadOp = rewriter.create<tt::LoadOp>(
-          loadOp.getLoc(), newVal, loadOp.getMask(), loadOp.getOther(),
-          loadOp.getBoundaryCheckAttr(), loadOp.getPaddingAttr(),
-          loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
+      auto newLoadOp = tt::LoadOp::create(
+          rewriter, loadOp.getLoc(), newVal, loadOp.getMask(),
+          loadOp.getOther(), loadOp.getBoundaryCheckAttr(),
+          loadOp.getPaddingAttr(), loadOp.getCache(), loadOp.getEvict(),
+          loadOp.getIsVolatile());
       newLoadOp->setAttrs(loadOp->getAttrs());
       mapping.map(static_cast<Operation *>(loadOp),
                   static_cast<Operation *>(newLoadOp));

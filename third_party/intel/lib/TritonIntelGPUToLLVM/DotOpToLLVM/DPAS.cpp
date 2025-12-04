@@ -240,12 +240,12 @@ public:
       if constexpr (std::is_same<OpTy, DotScaledOp>::value) {
         Value sA = scaleA.at({b, m, k});
         Value sB = scaleB.at({b, n, k});
-        fc.at({b, m, n}) = rewriter.create<TritonGEN::MatrixBlockScaleDPASOp>(
-            loc, dTy, tb.bitcast(valc, cTy), tb.bitcast(valA, aTy),
+        fc.at({b, m, n}) = TritonGEN::MatrixBlockScaleDPASOp::create(
+            rewriter, loc, dTy, tb.bitcast(valc, cTy), tb.bitcast(valA, aTy),
             tb.bitcast(valB, bTy), sA, sB, pA, pB, RC);
       } else {
-        fc.at({b, m, n}) = rewriter.create<TritonGEN::MatrixDPASOp>(
-            loc, dTy, tb.bitcast(valc, cTy), tb.bitcast(valA, aTy),
+        fc.at({b, m, n}) = TritonGEN::MatrixDPASOp::create(
+            rewriter, loc, dTy, tb.bitcast(valc, cTy), tb.bitcast(valA, aTy),
             tb.bitcast(valB, bTy), pA, pB, RC);
       }
     };
@@ -405,7 +405,7 @@ private:
         for (int j = 0; j < inner; ++j) {
           for (int repOuter = 0; repOuter < repClusterOuter; ++repOuter) {
             for (int repInner = 0; repInner < repClusterInner; ++repInner) {
-              Value matVal = rewriter.create<LLVM::UndefOp>(loc, dotOpTy);
+              Value matVal = LLVM::UndefOp::create(rewriter, loc, dotOpTy);
               if (numElemsPerOperand != 1)
                 for (int k = 0; k < numElemsPerOperand; ++k)
                   matVal = tb.insert_element(dotOpTy, matVal, elems[offset++],
@@ -413,7 +413,7 @@ private:
               else
                 matVal = elems[offset++];
               if (isFToTF32Enabled)
-                matVal = rewriter.create<TritonGEN::FToTf32Op>(loc, matVal)
+                matVal = TritonGEN::FToTf32Op::create(rewriter, loc, matVal)
                              .getResult();
               vals[{b, i * repClusterOuter + repOuter,
                     j * repClusterInner + repInner}] = matVal;
