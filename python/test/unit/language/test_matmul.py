@@ -1212,7 +1212,9 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
         if ((BLOCK_M, BLOCK_N, BLOCK_K) == (128, 256, 256) and triton.runtime.driver.active.utils.get_device_properties(
                 triton.runtime.driver.active.get_current_device())["max_shared_mem"] < 196608):
             pytest.xfail("XPU: Not enough shared memory")
-        pytest.skip("FIXME: issue 678")
+        is_both_fp8 = (A_DATA_TYPE in ['float8e5', 'float8e4nv']) and (B_DATA_TYPE in ['float8e5', 'float8e4nv'])
+        if not is_both_fp8 or not (A_DATA_TYPE == B_DATA_TYPE):
+            pytest.skip("Skip mixed precision because it is emulated by dpas for now. issue #678")
     if not PACK_B_ALONG_K and B_DATA_TYPE != "float4":
         pytest.xfail("Pack along K can only be False for float4")
 
