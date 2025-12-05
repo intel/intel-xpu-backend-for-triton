@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import List, Tuple, Sequence
 from dataclasses import dataclass
+from functools import cache
 
 import triton.experimental.gluon.language._core as ttgl
 from triton.experimental.gluon.language._layouts import DotOperandLayout
@@ -9,10 +10,32 @@ from triton.experimental.gluon.language.intel._layouts import IntelDPASLayout
 from triton.experimental.gluon.language._core import builtin, _unwrap_if_constexpr
 from triton.language.core import ir, constexpr, tensor_descriptor_base, block_type, tensor, tuple
 
-# load_tensor_descriptor = builtin(tl_core.load_tensor_descriptor)
-# store_tensor_descriptor = builtin(tl_core.store_tensor_descriptor)
-
 __all__ = ["make_tensor_descriptor", "dot_fma"]
+
+
+@cache
+def get_dpas_capabilities():
+    from triton.backends.intel.driver import XPUDriver
+
+    driver = XPUDriver()
+    target = driver.get_current_target()
+    properties = target.arch
+
+    # like annotate_module in passes
+    dpas_cap = {
+        "systolicDepth": 8,
+        "repeatCount": 8,
+        "executionSize": min(properties.get("sub_group_sizes", [16])),
+        "opsChanBitWidths": 32,
+        "has_subgroup_2d_block_io": properties.get("has_subgroup_2d_block_io", False),
+    }
+
+    return dpas_cap
+
+
+def is_2d_block_supported():
+    capabilities = get_dpas_capabilities()
+    return capabilities["has_subgroup_2d_block_io"]
 
 
 class tensor_descriptor(tensor_descriptor_base):
@@ -36,25 +59,24 @@ class tensor_descriptor(tensor_descriptor_base):
         self.shape._flatten_ir(handles)
         self.strides._flatten_ir(handles)
 
+    def mark_2d_block_attribute(self, op, order, _semantic):
+        if order not in ('row_major', 'column_major'):
+            raise ValueError("Only row_major/column_major order is supported for 2d block")
+
+        attr = _semantic.builder.get_string_attr(order)
+        op.set_attr("ttig.block_io", attr)
+
     @builtin
     def load(self, offsets: Sequence[constexpr | tensor], _semantic=None) -> tensor:
         return _semantic.descriptor_load(self, offsets, "", "")
 
-    def load_2d(self, offsets: Sequence[constexpr | tensor], is_2d_block=False, _semantic=None) -> tensor:
-        # TODO: MaterializeBlockPointers.cpp
-        # Add 2d_block_io parameter + validation to set proper attribute
-        # Validation: (?)
-        #   > 2 dims
-        #   > stride 16 bytes aligned
-        #   and others
+    @builtin
+    def load_2d(self, offsets: Sequence[constexpr | tensor], order: str = "row_major", _semantic=None) -> tensor:
+        if not is_2d_block_supported():
+            raise ValueError("2d block functionality is not supported for this hardware")
 
         op = _semantic.descriptor_load(self, offsets, "", "")
-
-        # TODO: proper handling like below test example
-        # Option to set row/column major and other params
-        attr = _semantic.builder.get_string_attr("row_major")
-        op.handle.set_attr("ttig.block_io", attr)
-
+        self.mark_2d_block_attribute(op.handle, order, _semantic)
         return op
 
     @builtin
@@ -62,42 +84,30 @@ class tensor_descriptor(tensor_descriptor_base):
         return _semantic.descriptor_store(self, value, offsets)
 
     @builtin
-    def store_2d(self, offsets: Sequence[constexpr | tensor], value: tensor, _semantic=None) -> tensor:
+    def store_2d(self, offsets: Sequence[constexpr | tensor], value: tensor, order: str = "row_major",
+                 _semantic=None) -> tensor:
+        if not is_2d_block_supported():
+            raise ValueError("2d block functionality is not supported for this hardware")
+
         op = _semantic.descriptor_store(self, value, offsets)
-
-        attr = _semantic.builder.get_string_attr("row_major")
-        op.handle.set_attr("ttig.block_io", attr)
-
+        self.mark_2d_block_attribute(op.handle, order, _semantic)
         return op
 
     @builtin
-    def prefetch(self, offsets: Sequence[constexpr | tensor], mask=None, cache=None, evict=None, is_volatile=False, _semantic=None):
+    def prefetch(self, offsets: Sequence[constexpr | tensor], _semantic=None):
         ptr_handle = self.handle
         offsets_handles = [offset.handle if hasattr(offset, 'handle') else offset for offset in offsets]
         return _semantic.builder.create_prefetch(ptr_handle, offsets_handles, False)
 
     @builtin
-    def prefetch_2d(self, offsets: Sequence[constexpr | tensor], mask=None, cache=None, evict=None, is_volatile=False, _semantic=None):
-        # TODO: handle other ttig.prefetch params
-        # ptr is just temporary, support for tensor descriptor is needed
-        # calculate offsets like tt.advance
-        # maybe add support for mask, seems optional
-        # also 2d block attr and others
-        #return _semantic.builder.create_prefetch(ptr.handle, False)
-        """
-        pyton/triton/language/semantic.py @ load:1077 (TritonSemantic)
-        cache_modifier: str, eviction_policy: str
-        cache = self._str_to_load_cache_modifier(cache_modifier)
-        eviction = self._str_to_eviction_policy(eviction_policy)
-        """
+    def prefetch_2d(self, offsets: Sequence[constexpr | tensor], order: str = "row_major", _semantic=None):
+        if not is_2d_block_supported():
+            raise ValueError("2d block functionality is not supported for this hardware")
 
         ptr_handle = self.handle
         offsets_handles = [offset.handle if hasattr(offset, 'handle') else offset for offset in offsets]
         op = _semantic.builder.create_prefetch(ptr_handle, offsets_handles, False)
-
-        attr = _semantic.builder.get_string_attr("row_major")
-        op.set_attr("ttig.block_io", attr)
-
+        self.mark_2d_block_attribute(op, order, _semantic)
         return op
 
 

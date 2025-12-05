@@ -21,6 +21,8 @@ import triton_kernels_benchmark as benchmark_suite
 from triton_kernels_benchmark import xetla_kernel
 from triton_kernels_benchmark import cutlass_kernel
 
+from utils.dpas_layout_analyzer import calculate_optimal_warps_per_cta, calculate_optimal_rep_clusters
+
 
 def get_matmul_autotune_configs() -> List[triton.Config]:
     configs = [
@@ -178,32 +180,20 @@ def get_gluon_matmul_autotune_configs(base_configs_fn: Callable) -> List[triton.
             # Append additional meta parameters needed for gluon kernel
             # To determine prefetch distance and DPAS layout
             {**config.kwargs, 'NUM_STAGES': config.num_stages, 'NUM_WARPS': config.num_warps},
-            num_stages=config.num_stages,
-            num_warps=config.num_warps
-        )
-        for config in base_configs
+            num_stages=config.num_stages, num_warps=config.num_warps) for config in base_configs
     ]
 
 
 @gluon.constexpr_function
-def get_dpas_layout(num_warps: ttgl.constexpr) -> ttgl.constexpr:
-    # TODO: return same DPAS layout as calculated by passes for triton
-    warps_per_cta = [2, 2]
-    if num_warps == 16:
-        warps_per_cta = [4, 4]
-    if num_warps == 32:
-        warps_per_cta = [4, 8]
-    elif num_warps == 64:
-        warps_per_cta = [8, 8]
+def get_dpas_layout(num_warps: ttgl.constexpr, m_shape: ttgl.constexpr, n_shape: ttgl.constexpr,
+                    k_shape: ttgl.constexpr) -> ttgl.constexpr:
+    threads_per_warp = 16
+    warps_per_cta = calculate_optimal_warps_per_cta(num_warps, m_shape, n_shape)
+
     return IntelDPASLayout(
-        repeatCount=8,
-        systolic_depth=8,
-        execution_size=16,
-        ops_per_chan=2,
-        warps_per_cta=warps_per_cta,
-        rep_cluster=[4, 2],
-        threads_per_warp=16
-   )
+        repeatCount=8, systolic_depth=8, execution_size=16, ops_per_chan=2, warps_per_cta=warps_per_cta,
+        rep_cluster=calculate_optimal_rep_clusters(m_shape, n_shape, k_shape, threads_per_warp,
+                                                   warps_per_cta), threads_per_warp=threads_per_warp)
 
 
 @triton.autotune(
@@ -217,16 +207,14 @@ def gluon_matmul_kernel_dpas_tensor_desc(
         # Matrix dimensions
         M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr,
         # Stride variables
-        stride_am: ttgl.constexpr, stride_ak: ttgl.constexpr,
-        stride_bk: ttgl.constexpr, stride_bn: ttgl.constexpr,
+        stride_am: ttgl.constexpr, stride_ak: ttgl.constexpr, stride_bk: ttgl.constexpr, stride_bn: ttgl.constexpr,
         stride_cm: ttgl.constexpr, stride_cn: ttgl.constexpr,
         # Meta parameters
         BLOCK_SIZE_M: ttgl.constexpr, BLOCK_SIZE_N: ttgl.constexpr, BLOCK_SIZE_K: ttgl.constexpr,
         GROUP_SIZE_M: ttgl.constexpr,
         # Gluon meta parameters
         NUM_STAGES: ttgl.constexpr, NUM_WARPS: ttgl.constexpr):
-    layout: ttgl.constexpr = get_dpas_layout(NUM_WARPS)
-
+    layout: ttgl.constexpr = get_dpas_layout(NUM_WARPS, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K)
 
     lhs_layout: ttgl.constexpr = ttgl.DotOperandLayout(parent=layout, operand_index=0, k_width=1)
     rhs_layout: ttgl.constexpr = ttgl.DotOperandLayout(parent=layout, operand_index=1, k_width=2)
@@ -241,18 +229,18 @@ def gluon_matmul_kernel_dpas_tensor_desc(
     pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
     pid_n = (pid % num_pid_in_group) // group_size_m
 
-    a_desc = ttgl.intel.xpu.xe.make_tensor_descriptor(a_ptr, (M, K), (stride_am, stride_ak), (BLOCK_SIZE_M, BLOCK_SIZE_K),
-                                                      lhs_layout)
-    b_desc = ttgl.intel.xpu.xe.make_tensor_descriptor(b_ptr, (K, N), (stride_bk, stride_bn), (BLOCK_SIZE_K, BLOCK_SIZE_N),
-                                                      rhs_layout)
-    c_desc = ttgl.intel.xpu.xe.make_tensor_descriptor(c_ptr, (M, N), (stride_cm, stride_cn), (BLOCK_SIZE_M, BLOCK_SIZE_N), layout)
+    a_desc = ttgl.intel.xpu.xe.make_tensor_descriptor(a_ptr, (M, K), (stride_am, stride_ak),
+                                                      (BLOCK_SIZE_M, BLOCK_SIZE_K), lhs_layout)
+    b_desc = ttgl.intel.xpu.xe.make_tensor_descriptor(b_ptr, (K, N), (stride_bk, stride_bn),
+                                                      (BLOCK_SIZE_K, BLOCK_SIZE_N), rhs_layout)
+    c_desc = ttgl.intel.xpu.xe.make_tensor_descriptor(c_ptr, (M, N), (stride_cm, stride_cn),
+                                                      (BLOCK_SIZE_M, BLOCK_SIZE_N), layout)
 
     # Clear accumulator
     zero_tensor = ttgl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=ttgl.float32, layout=layout)
     c_desc.store_2d([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], zero_tensor)
 
     accumulator = c_desc.load_2d([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N])
-
 
     # Prefetch first blocks for A and B matrices (pre-loop prefetches)
     for i in range(NUM_STAGES):
@@ -286,15 +274,15 @@ def gluon_matmul_kernel_dpas_tensor_desc_batched(
         # Matrix dimensions
         B: ttgl.constexpr, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr,
         # Stride variables
-        stride_az: ttgl.constexpr, stride_am: ttgl.constexpr, stride_ak: ttgl.constexpr,
-        stride_bz: ttgl.constexpr, stride_bk: ttgl.constexpr, stride_bn: ttgl.constexpr,
-        stride_cz: ttgl.constexpr, stride_cm: ttgl.constexpr, stride_cn: ttgl.constexpr,
+        stride_az: ttgl.constexpr, stride_am: ttgl.constexpr, stride_ak: ttgl.constexpr, stride_bz: ttgl.constexpr,
+        stride_bk: ttgl.constexpr, stride_bn: ttgl.constexpr, stride_cz: ttgl.constexpr, stride_cm: ttgl.constexpr,
+        stride_cn: ttgl.constexpr,
         # Meta parameters
         BLOCK_SIZE_M: ttgl.constexpr, BLOCK_SIZE_N: ttgl.constexpr, BLOCK_SIZE_K: ttgl.constexpr,
         GROUP_SIZE_M: ttgl.constexpr,
         # Gluon meta parameters
         NUM_STAGES: ttgl.constexpr, NUM_WARPS: ttgl.constexpr):
-    layout: ttgl.constexpr = get_dpas_layout(NUM_WARPS)
+    layout: ttgl.constexpr = get_dpas_layout(NUM_WARPS, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K)
 
     lhs_layout: ttgl.constexpr = ttgl.DotOperandLayout(parent=layout, operand_index=0, k_width=1)
     rhs_layout: ttgl.constexpr = ttgl.DotOperandLayout(parent=layout, operand_index=1, k_width=2)
@@ -315,18 +303,12 @@ def gluon_matmul_kernel_dpas_tensor_desc_batched(
     offset_b = bid.to(ttgl.int64) * stride_bz
     offset_c = bid.to(ttgl.int64) * stride_cz
 
-    a_desc = ttgl.intel.xpu.xe.make_tensor_descriptor(
-        a_ptr + offset_a, (M, K), (stride_am, stride_ak),
-        (BLOCK_SIZE_M, BLOCK_SIZE_K), lhs_layout
-    )
-    b_desc = ttgl.intel.xpu.xe.make_tensor_descriptor(
-        b_ptr + offset_b, (K, N), (stride_bk, stride_bn),
-        (BLOCK_SIZE_K, BLOCK_SIZE_N), rhs_layout
-    )
-    c_desc = ttgl.intel.xpu.xe.make_tensor_descriptor(
-        c_ptr + offset_c, (M, N), (stride_cm, stride_cn),
-        (BLOCK_SIZE_M, BLOCK_SIZE_N), layout
-    )
+    a_desc = ttgl.intel.xpu.xe.make_tensor_descriptor(a_ptr + offset_a, (M, K), (stride_am, stride_ak),
+                                                      (BLOCK_SIZE_M, BLOCK_SIZE_K), lhs_layout)
+    b_desc = ttgl.intel.xpu.xe.make_tensor_descriptor(b_ptr + offset_b, (K, N), (stride_bk, stride_bn),
+                                                      (BLOCK_SIZE_K, BLOCK_SIZE_N), rhs_layout)
+    c_desc = ttgl.intel.xpu.xe.make_tensor_descriptor(c_ptr + offset_c, (M, N), (stride_cm, stride_cn),
+                                                      (BLOCK_SIZE_M, BLOCK_SIZE_N), layout)
 
     # Clear accumulator
     zero_tensor = ttgl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=ttgl.float32, layout=layout)
@@ -386,20 +368,12 @@ def matmul(
             triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
             B,
         )
-        matmul_kernel_batched[grid](
-            a, b, c,  #
-            B, M, N, K,  #
-            a.stride(0), a.stride(a_major), a.stride(a_minor),  #
-            b.stride(0), b.stride(b_minor), b.stride(b_major),  #
-            c.stride(0), c.stride(1), c.stride(2))
+        matmul_kernel_batched[grid](a, b, c, B, M, N, K, a.stride(0), a.stride(a_major), a.stride(a_minor), b.stride(0),
+                                    b.stride(b_minor), b.stride(b_major), c.stride(0), c.stride(1), c.stride(2))
     elif len(a.shape) == 2 and len(b.shape) == 2:
         grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
-        matmul_kernel[grid](
-            a, b, c,  #
-            M, N, K,  #
-            a.stride(a_major), a.stride(a_minor),  #
-            b.stride(b_minor), b.stride(b_major),  #
-            c.stride(0), c.stride(1))
+        matmul_kernel[grid](a, b, c, M, N, K, a.stride(a_major), a.stride(a_minor), b.stride(b_minor),
+                            b.stride(b_major), c.stride(0), c.stride(1))
     else:
         assert False, 'Input matrixs dimensions mismatch'
     return c
@@ -459,7 +433,7 @@ X_VALS = [  #
     [4, 32768, 4096, 128],
     [32, 4096, 128, 4096],
     [4096, 8, 128, 16384],
-    # [4096, 8, 16384, 128], # TODO: mismatches for gluon
+    [4096, 8, 16384, 128],
 ]
 
 DEVICE_NAME = torch.xpu.get_device_name()
@@ -498,13 +472,13 @@ def get_benchmark(
     supported_providers = {
         'gluon': 'Gluon',
         'triton': 'Triton',
-        'onednn': 'OneDNN',
+        #'onednn': 'OneDNN',
     }
     # use_cutlass
-    if not (transpose_a or transpose_b):
-        if torch.xpu.get_device_name() != 'Intel(R) Arc(TM) Graphics':
-            # FIXME: enable cutlass on LNL
-            supported_providers['cutlass'] = 'CUTLASS'
+    # if not (transpose_a or transpose_b):
+    #     if torch.xpu.get_device_name() != 'Intel(R) Arc(TM) Graphics':
+    #         # FIXME: enable cutlass on LNL
+    #         supported_providers['cutlass'] = 'CUTLASS'
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
     # Benchmark Performance
