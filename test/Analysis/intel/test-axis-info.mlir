@@ -516,14 +516,14 @@ tt.func @for_if(%i1: i1, %arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
   %1 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x64x!tt.ptr<f16>>
   %2 = scf.for %arg9 = %c0_i32 to %c10_i32 step %c1_i32 iter_args(%arg1 = %1) -> (tensor<128x64x!tt.ptr<f16>>): i32 {
     // CHECK: scf.if
-    // CHECK: contiguity = [1, 1], divisibility = [16, 16], constancy = [128, 64], constant_value = <none>
+    // CHECK: contiguity = [1, 1], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
     %3 = scf.if %i1 -> (tensor<128x64x!tt.ptr<f16>>) {
       scf.yield %arg1 : tensor<128x64x!tt.ptr<f16>>
     } else {
       scf.yield %arg1 : tensor<128x64x!tt.ptr<f16>>
     }
     // CHECK: tt.addptr
-    // CHECK-SAME: contiguity = [1, 1], divisibility = [1, 1], constancy = [128, 64], constant_value = <none>
+    // CHECK-SAME: contiguity = [1, 1], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
     %4 = tt.addptr %3, %cst : tensor<128x64x!tt.ptr<f16>>, tensor<128x64xi32>
     // CHECK: scf.for
     // CHECK: contiguity = [1, 1], divisibility = [16, 16], constancy = [128, 64], constant_value = <none>
@@ -551,9 +551,9 @@ tt.func @for_if_for(%i1: i1, %arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %
   // CHECK: scf.for
   // CHECK: contiguity = [1, 1], divisibility = [8, 8], constancy = [128, 64], constant_value = <none>
   // CHECK: scf.if
-  // CHECK: contiguity = [1, 1], divisibility = [8, 8], constancy = [128, 64], constant_value = <none>
+  // CHECK: contiguity = [1, 1], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
   // CHECK: tt.addptr
-  // CHECK-SAME: contiguity = [1, 1], divisibility = [1, 1], constancy = [128, 64], constant_value = <none>
+  // CHECK-SAME: contiguity = [1, 1], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
   // CHECK: scf.for
   // CHECK: contiguity = [1, 1], divisibility = [16, 16], constancy = [128, 64], constant_value = <none>
   %3 = scf.for %arg9 = %c0_i32 to %c10_i32 step %c1_i32 iter_args(%arg2 = %1) -> (tensor<128x64x!tt.ptr<f16>>) : i32 {
