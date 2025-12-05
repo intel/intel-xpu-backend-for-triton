@@ -29,7 +29,7 @@ class XPUOptions:
     num_ctas: int = 1
     num_stages: int = 2
     cluster_dims: tuple = (1, 1, 1)
-    warp_size: int = 32
+    warp_size: int = 16  #32 # TODO:[mdziado]
     optimize_epilogue: bool = False
     enable_fp_fusion: bool = True
     launch_cooperative_grid: bool = False
@@ -306,10 +306,22 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
         return mod
 
-    def gluon_to_ttgir(self, src, metadata, options):
-        mod = src
+    def gluon_to_ttgir(self, mod, metadata, options):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
+
+        module_opts = intel.passes.ttgpuir.AnnotateModuleOptions()
+        self.annotate_module(module_opts, self.properties, options)
+        intel.passes.ttgpuir.add_triton_annotate_module(pm, module_opts)
+        pm.run(mod, 'annotate_module')
+
+        pm = ir.pass_manager(mod.context)
+        pm.enable_debug()
+
+        # TODO: support tensor descriptors
+        # This is W/A to convert them into block_pointers
+        intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
+        passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
 
         passes.gluon.add_inliner(pm)
         passes.gluon.add_resolve_auto_encodings(pm)
