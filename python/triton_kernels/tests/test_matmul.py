@@ -266,14 +266,14 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     expt_is_inner = (inner_expt_opt is not None)
     if expt_is_inner:
         if mode != "ragged":
-            pytest.skip("inner_expt_opt only meaningful with ragged")
+            pytest.xfail("inner_expt_opt only meaningful with ragged")
         if "mx" in act_dtype_str and inner_expt_opt != "pad_a":
-            pytest.skip("inner_expt_opt and act mx only supported with pad_a")
+            pytest.xfail("inner_expt_opt and act mx only supported with pad_a")
         if "mx" in weight_dtype_str:
             if inner_expt_opt != "pad_b":
-                pytest.skip("inner_expt_opt and weight mx only supported with pad_b")
+                pytest.xfail("inner_expt_opt and weight mx only supported with pad_b")
             if is_persistent and not hbm_swizzling:
-                pytest.skip("FIXME: Fatal Python error: Aborted")
+                pytest.xfail("FIXME: Fatal Python error: Aborted")
             if is_hip():
                 if act_dtype_str == "bfloat16":
                     pytest.skip("FIXME: failed to translate module to LLVM IR")
@@ -283,7 +283,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         if is_cuda() and torch.cuda.get_device_capability()[0] < 10:
             pytest.skip("transposed mxfp weight not supported with cuda capability < 10")
         if block_m == 16:
-            pytest.skip("PassManager::run failed from Triton compiler")
+            pytest.xfail("PassManager::run failed from Triton compiler")
     # TODO: should construct the test case differently rather than overriding here
     if "float8" in weight_dtype_str and is_cuda() and torch.cuda.get_device_capability()[0] < 10:
         b_transpose = True
