@@ -976,8 +976,7 @@ void init_gluon_ir(py::module &&m) {
         Value maskVal = Value();
 
         auto tensorPtrOp = self.create<mlir::triton::MakeTensorPtrOp>(
-            base, i64Shape, strides, offsets, tensor_shape * / blockShape,
-            order);
+            base, i64Shape, strides, offsets, blockShape, order);
 
         auto op = self.create<ttgi::PrefetchOp>(
             tensorPtrOp.getResult(), maskVal, tt::CacheModifier::NONE,
