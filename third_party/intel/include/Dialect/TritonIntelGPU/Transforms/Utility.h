@@ -71,7 +71,6 @@ calculateRepCluster(unsigned capRepeatCount, unsigned capSystolicDepth,
                     ArrayRef<int64_t> retShape, unsigned threadsPerWarp,
                     unsigned int a_bitwidth, bool is_a_FP8,
                     ArrayRef<int64_t> a_shape, ArrayRef<int64_t> b_shape,
-                    // RankedTensorType oldRetType,
                     SmallVector<unsigned> warpsPerTile);
 
 } // namespace mlir::triton::gpu::intel

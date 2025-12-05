@@ -147,7 +147,7 @@ private:
           tensorType, pointerType.getAddressSpace());
 
       auto makeTensorPtr = builder.create<tt::MakeTensorPtrOp>(
-          loc, resultType, base, shape, strides, offsets,
+          builder, loc, resultType, base, shape, strides, offsets,
           builder.getDenseI32ArrayAttr({1, 0}));
       return makeTensorPtr;
     };

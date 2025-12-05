@@ -211,7 +211,7 @@ SmallVector<int64_t> DpasEncodingAttr::calculateDPASRepetitions(
     ArrayRef<unsigned> repCluster, unsigned repeatCount, unsigned systolicDepth,
     unsigned executionSize, unsigned opsPerChannel) {
   // Always return a 3D shape repetitions for the ease of value handling, same
-  // to mma
+  // to mma.
   size_t rank = shape.size();
   SmallVector<int64_t> rep(3, 1);
 

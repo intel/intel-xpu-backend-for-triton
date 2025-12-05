@@ -201,7 +201,7 @@ def get_dpas_layout(num_warps: ttgl.constexpr, m_shape: ttgl.constexpr, n_shape:
     key=['M', 'N', 'K'],
 )
 @gluon.jit
-def gluon_matmul_kernel_dpas_tensor_desc(
+def gluon_matmul_kernel_with_tensor_descriptors(
         # Pointers to matrices
         a_ptr, b_ptr, c_ptr,
         # Matrix dimensions
@@ -268,7 +268,7 @@ def gluon_matmul_kernel_dpas_tensor_desc(
     key=['B', 'M', 'N', 'K'],
 )
 @gluon.jit
-def gluon_matmul_kernel_dpas_tensor_desc_batched(
+def gluon_matmul_kernel_with_tensor_descriptors_batched(
         # Pointers to matrices
         a_ptr, b_ptr, c_ptr,
         # Matrix dimensions
@@ -461,8 +461,10 @@ def get_benchmark(
     providers_filter: Optional[list[str]] = None,
     transpose_a=False,
     transpose_b=False,
-    matmul_kernel=matmul_kernel_with_block_pointers,
-    matmul_kernel_batched=matmul_kernel_with_block_pointers_batched,
+    triton_matmul_kernel=matmul_kernel_with_block_pointers,
+    triton_matmul_kernel_batched=matmul_kernel_with_block_pointers_batched,
+    gluon_matmul_kernel=gluon_matmul_kernel_with_tensor_descriptors,
+    gluon_matmul_kernel_batched=gluon_matmul_kernel_with_tensor_descriptors_batched,
     plot_name='matmul-performance',
 ):
     """
@@ -472,13 +474,13 @@ def get_benchmark(
     supported_providers = {
         'gluon': 'Gluon',
         'triton': 'Triton',
-        #'onednn': 'OneDNN',
+        'onednn': 'OneDNN',
     }
     # use_cutlass
-    # if not (transpose_a or transpose_b):
-    #     if torch.xpu.get_device_name() != 'Intel(R) Arc(TM) Graphics':
-    #         # FIXME: enable cutlass on LNL
-    #         supported_providers['cutlass'] = 'CUTLASS'
+    if not (transpose_a or transpose_b):
+        if torch.xpu.get_device_name() != 'Intel(R) Arc(TM) Graphics':
+            # FIXME: enable cutlass on LNL
+            supported_providers['cutlass'] = 'CUTLASS'
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
     # Benchmark Performance
@@ -532,8 +534,8 @@ def get_benchmark(
             else:
                 raise AssertionError(f'Unexpected shape of length {len(a.shape)}')
 
-            kernel = matmul_kernel if provider == 'triton' else gluon_matmul_kernel_dpas_tensor_desc
-            batched_kernel = matmul_kernel_batched if provider == 'triton' else gluon_matmul_kernel_dpas_tensor_desc_batched
+            kernel = triton_matmul_kernel if provider == 'triton' else gluon_matmul_kernel
+            batched_kernel = triton_matmul_kernel_batched if provider == 'triton' else gluon_matmul_kernel_batched
 
             matmul_fn = lambda: matmul(
                 a,

@@ -212,17 +212,11 @@ public:
     size_t rank = retShape.size();
 
     SmallVector<unsigned> repCluster = ttgi::calculateRepCluster(
-        // dpasCap,
         dpasCap.repeatCount, dpasCap.systolicDepth, dpasCap.executionSize,
-        opsPerChan,
-        // rank,
-        retShape,
-        // mod,
-        threadsPerWarp, oldAType.getElementType().getIntOrFloatBitWidth(),
+        opsPerChan, retShape, threadsPerWarp,
+        oldAType.getElementType().getIntOrFloatBitWidth(),
         isa<Float8E5M2Type, Float8E4M3FNType>(oldAType.getElementType()),
-        oldAType.getShape(), oldBType.getShape(),
-        // oldRetType,
-        warpsPerTile);
+        oldAType.getShape(), oldBType.getShape(), warpsPerTile);
 
     unsigned repeatCount =
         std::min(dpasCap.repeatCount, (unsigned)retShape[rank - 2] /*M*/);
@@ -236,39 +230,6 @@ public:
         oldRetType.getContext(), repeatCount, dpasCap.systolicDepth,
         dpasCap.executionSize, opsPerChan, warpsPerTile, repCluster,
         threadsPerWarp);
-
-    // if (dpasCap.isPVC() || dpasCap.isFalconShore()) {
-    //   unsigned dpasElemBitWidths =
-    //       oldAType.getElementType().getIntOrFloatBitWidth();
-    //
-    //   // We are upcasting FP8 to FP16
-    //   if (isa<Float8E5M2Type, Float8E4M3FNType>(oldAType.getElementType()))
-    //     dpasElemBitWidths = 2 * dpasElemBitWidths;
-    //
-    //   // Enlarge the repCluster size to use the large 2D load for A and B
-    //   // operands.
-    //   unsigned maxRepClusterM =
-    //       PVC_2D_LOAD_MAXIMUM_NUMBER_OF_ROWS / dpasCap.repeatCount;
-    //   SmallVector<int64_t> repA =
-    //       dpasEnc.getDPASRepetitions(oldAType.getShape(), 0);
-    //   unsigned repClusterDimM =
-    //       std::min(maxRepClusterM, static_cast<unsigned>(repA[1]));
-    //
-    //   unsigned maxRepClusterN =
-    //       PVC_2D_LOAD_MAXIMUM_BYTES_OF_COLS /
-    //       ((dpasElemBitWidths / 8) * dpasCap.executionSize);
-    //   SmallVector<int64_t> repB =
-    //       dpasEnc.getDPASRepetitions(oldBType.getShape(), 1);
-    //   unsigned repClusterDimN =
-    //       std::min(maxRepClusterN, static_cast<unsigned>(repB[2]));
-    //   repCluster[rank - 2] = repClusterDimM;
-    //   repCluster[rank - 1] = repClusterDimN;
-    //
-    //   dpasEnc = ttgi::DpasEncodingAttr::get(
-    //       oldRetType.getContext(), repeatCount, dpasCap.systolicDepth,
-    //       dpasCap.executionSize, opsPerChan, warpsPerTile, repCluster,
-    //       threadsPerWarp);
-    // }
 
     RankedTensorType newRetType =
         RankedTensorType::get(retShape, oldRetType.getElementType(), dpasEnc);
