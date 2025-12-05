@@ -147,7 +147,6 @@ if (os.getenv("TRITON_INTEL_FORCE_DISABLE_WRAPPERS", "").lower() not in ("true",
     wrappers.wrap_launch = timed(wrappers.wrap_launch)
     torch.xpu.synchronize = timed(torch.xpu.synchronize)
     torch.xpu.device_count = timed(torch.xpu.device_count, 10)
-    os.fork = lambda: (_ for _ in ()).throw(Exception("os.fork is prohibited"))
 
     try:
         import pytest
