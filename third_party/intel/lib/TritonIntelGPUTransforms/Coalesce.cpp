@@ -339,8 +339,8 @@ private:
       if (tensorType &&
           !isa<ttg::SharedEncodingTrait>(tensorType.getEncoding())) {
         RankedTensorType newType = getNewType(tensorType, encoding);
-        newArgs.push_back(builder.create<ttg::ConvertLayoutOp>(
-            op->getLoc(), newType, operand));
+        newArgs.push_back(ttg::ConvertLayoutOp::create(builder, op->getLoc(),
+                                                       newType, operand));
       } else {
         assert(tt::isTensorPointerType(operand.getType()) &&
                "Expecting operand to have blocked pointer type");
@@ -378,8 +378,8 @@ private:
     for (size_t i = 0; i < op->getNumResults(); i++) {
       Value newResult = newOp->getResult(i);
       if (newTypes[i] != op->getResultTypes()[i]) {
-        newResult = builder.create<ttg::ConvertLayoutOp>(
-            op->getLoc(), op->getResult(i).getType(), newResult);
+        newResult = ttg::ConvertLayoutOp::create(
+            builder, op->getLoc(), op->getResult(i).getType(), newResult);
       }
       op->getResult(i).replaceAllUsesWith(newResult);
     }
