@@ -409,6 +409,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     @classmethod
     @track
     def make_spv(cls, src, metadata, options):
+        driver_version = metadata["target"].arch.get("driver_version")
+        os.environ["INTEL_XPU_BACKEND_DRIVER_VERSION"] = driver_version
         spirv, name = intel.translate_to_spirv(src)
         metadata["name"] = name
         metadata.setdefault("build_flags", "")
