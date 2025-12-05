@@ -32,7 +32,6 @@
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/TypeSwitch.h"
-#include "llvm/ADT/identity.h"
 #include "llvm/Support/ErrorHandling.h"
 
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -332,7 +331,7 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
   auto [ptr, baseWidth, x] = computeAlignedBasePtrWidthAndOffset(op, rewriter);
 
   // The IGC intrinsic requires the first argument be int64
-  ptr = rewriter.create<LLVM::PtrToIntOp>(loc, int64Ty, ptr);
+  ptr = LLVM::PtrToIntOp::create(rewriter, loc, int64Ty, ptr);
 
   SmallVector<Type> argTypes{int64Ty,
                              baseWidth.getType(),
@@ -439,7 +438,7 @@ createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
   auto [ptr, baseWidth, x] = computeAlignedBasePtrWidthAndOffset(op, rewriter);
 
   // The IGC intrinsic requires the first argument be int64
-  ptr = rewriter.create<LLVM::PtrToIntOp>(loc, int_ty(64), ptr);
+  ptr = LLVM::PtrToIntOp::create(rewriter, loc, int_ty(64), ptr);
 
   SmallVector<Type> argTypes{
       int_ty(64),          baseWidth.getType(), baseHeight.getType(),
@@ -482,7 +481,7 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
   auto [ptr, baseWidth, x] = computeAlignedBasePtrWidthAndOffset(op, rewriter);
 
   // The IGC intrinsic requires the first argument be int64
-  ptr = rewriter.create<LLVM::PtrToIntOp>(loc, int_ty(64), ptr);
+  ptr = LLVM::PtrToIntOp::create(rewriter, loc, int_ty(64), ptr);
 
   SmallVector<Type> argTypes{
       int_ty(64),          baseWidth.getType(), baseHeight.getType(),
@@ -543,10 +542,10 @@ createAssertNot(ConversionPatternRewriter &rewriter,
   Block *ifBlock = rewriter.createBlock(prevBlock->getParent());
   rewriter.setInsertionPointToStart(ifBlock);
   emitter.assertFail(rewriter, loc, message, file, func, line);
-  rewriter.create<LLVM::BrOp>(loc, thenBlock);
+  LLVM::BrOp::create(rewriter, loc, thenBlock);
 
   rewriter.setInsertionPointToEnd(prevBlock);
-  rewriter.create<LLVM::CondBrOp>(loc, condition, ifBlock, thenBlock);
+  LLVM::CondBrOp::create(rewriter, loc, condition, ifBlock, thenBlock);
 
   rewriter.setInsertionPointToStart(thenBlock);
 }
@@ -570,51 +569,53 @@ static void create2DBlockAssertsImpl(
   Value cMaxAlign = b.i32_val(std::max(4u, elemSize));
 
   Value wTooLarge =
-      rewriter.create<ICmpOp>(loc, ICmpPredicate::ugt, baseWidth, c24m1);
+      ICmpOp::create(rewriter, loc, ICmpPredicate::ugt, baseWidth, c24m1);
   createAssertNot(rewriter, emitter, wTooLarge,
                   "2nd operand (base width) should be <= 24 bits");
 
   Value wTooSmall =
-      rewriter.create<ICmpOp>(loc, ICmpPredicate::ult, baseWidth, c64);
+      ICmpOp::create(rewriter, loc, ICmpPredicate::ult, baseWidth, c64);
   createAssertNot(rewriter, emitter, wTooSmall,
                   "2nd operand (base width) should be >= 64");
 
-  Value wRem = rewriter.create<URemOp>(loc, baseWidth, cMaxAlign);
-  Value wNotAligned = rewriter.create<ICmpOp>(loc, ICmpPredicate::ne, wRem, c0);
+  Value wRem = URemOp::create(rewriter, loc, baseWidth, cMaxAlign);
+  Value wNotAligned =
+      ICmpOp::create(rewriter, loc, ICmpPredicate::ne, wRem, c0);
   createAssertNot(
       rewriter, emitter, wNotAligned,
       "2nd operand (base width) should be aligned to MAX(4, element_size)");
 
   Value hTooLarge =
-      rewriter.create<ICmpOp>(loc, ICmpPredicate::ugt, baseHeight, c24m1);
+      ICmpOp::create(rewriter, loc, ICmpPredicate::ugt, baseHeight, c24m1);
   createAssertNot(rewriter, emitter, hTooLarge,
                   "3rd operand (base height) should be <= 24 bits");
 
   Value pTooLarge =
-      rewriter.create<ICmpOp>(loc, ICmpPredicate::ugt, basePitch, c24m1);
+      ICmpOp::create(rewriter, loc, ICmpPredicate::ugt, basePitch, c24m1);
   createAssertNot(rewriter, emitter, pTooLarge,
                   "4th operand (base pitch) should be <= 24 bits");
 
   Value pTooSmall =
-      rewriter.create<ICmpOp>(loc, ICmpPredicate::ult, basePitch, c64);
+      ICmpOp::create(rewriter, loc, ICmpPredicate::ult, basePitch, c64);
   createAssertNot(rewriter, emitter, pTooSmall,
                   "4th operand (base pitch) should be >= 64");
 
-  Value pRem = rewriter.create<URemOp>(loc, basePitch, c16);
-  Value pNotAligned = rewriter.create<ICmpOp>(loc, ICmpPredicate::ne, pRem, c0);
+  Value pRem = URemOp::create(rewriter, loc, basePitch, c16);
+  Value pNotAligned =
+      ICmpOp::create(rewriter, loc, ICmpPredicate::ne, pRem, c0);
   createAssertNot(rewriter, emitter, pNotAligned,
                   "4th operand (base pitch) should be a multiple of 16 bytes");
 
   Value pLessThanWidth =
-      rewriter.create<ICmpOp>(loc, ICmpPredicate::ult, basePitch, baseWidth);
+      ICmpOp::create(rewriter, loc, ICmpPredicate::ult, basePitch, baseWidth);
   createAssertNot(
       rewriter, emitter, pLessThanWidth,
       "4th operand (base pitch) should be >= 2nd operand (base width)");
 
-  Value offsetBytes = rewriter.create<MulOp>(loc, x, cElemSize);
-  Value offsetRem = rewriter.create<URemOp>(loc, offsetBytes, c4);
+  Value offsetBytes = MulOp::create(rewriter, loc, x, cElemSize);
+  Value offsetRem = URemOp::create(rewriter, loc, offsetBytes, c4);
   Value badOffset =
-      rewriter.create<ICmpOp>(loc, ICmpPredicate::ne, offsetRem, c0);
+      ICmpOp::create(rewriter, loc, ICmpPredicate::ne, offsetRem, c0);
   createAssertNot(
       rewriter, emitter, badOffset,
       "5th operand (x) should be properly aligned for the element size");
@@ -669,7 +670,7 @@ struct TritonMatrixDPASLowering
     VectorType aTy = VectorType::get(
         bitWidth / packedAType.getIntOrFloatBitWidth(), packedAType);
     if (aOrigTy != aTy)
-      a = rewriter.create<LLVM::BitcastOp>(loc, aTy, a);
+      a = LLVM::BitcastOp::create(rewriter, loc, aTy, a);
 
     Value b = op.getB();
     VectorType bOrigTy = cast<VectorType>(b.getType());
@@ -678,7 +679,7 @@ struct TritonMatrixDPASLowering
     VectorType bTy = VectorType::get(
         bitWidth / packedBType.getIntOrFloatBitWidth(), packedBType);
     if (bOrigTy != bTy)
-      b = rewriter.create<LLVM::BitcastOp>(loc, bTy, b);
+      b = LLVM::BitcastOp::create(rewriter, loc, bTy, b);
 
     Value c = op.getC();
     VectorType cOrigTy = cast<VectorType>(c.getType());
@@ -689,7 +690,7 @@ struct TritonMatrixDPASLowering
                          ? VectorType::get(cOrigTy.getShape(), int16Ty)
                          : cOrigTy;
     if (cOrigTy != cTy)
-      c = rewriter.create<LLVM::BitcastOp>(loc, cTy, c);
+      c = LLVM::BitcastOp::create(rewriter, loc, cTy, c);
 
     std::string fnName = "__spirv_SubgroupMatrixMultiplyAccumulateINTEL";
     SmallVector<Type> argTypes{int32Ty, aTy, bTy, cTy, int32Ty};
@@ -713,7 +714,7 @@ struct TritonMatrixDPASLowering
                        rewriter, fnName, cTy, argTypes, args, {}, funcAttrs)
                        ->getResult(0);
     if (cOrigTy != cTy)
-      result = rewriter.create<LLVM::BitcastOp>(loc, cOrigTy, result);
+      result = LLVM::BitcastOp::create(rewriter, loc, cOrigTy, result);
 
     rewriter.replaceOp(op, result);
     return success();
@@ -787,9 +788,9 @@ struct TritonMatrix2DBlockLoadLowering
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     VectorType resType = op.getRes().getType();
 
-    auto dest = rewriter.create<LLVM::AllocaOp>(
-        loc, ptr_ty(ctx), resType.getElementType(),
-        b.i32_val(resType.getNumElements()));
+    auto dest = LLVM::AllocaOp::create(rewriter, loc, ptr_ty(ctx),
+                                       resType.getElementType(),
+                                       b.i32_val(resType.getNumElements()));
     std::string fnName = "__spirv_Subgroup2DBlockLoad";
     if (op.getVnniTransform())
       fnName += "Transform";
@@ -838,7 +839,7 @@ struct TritonMatrix2DBlockLoadLowering
                     *optCacheControls);
     }
 
-    rewriter.replaceOp(op, rewriter.create<LLVM::LoadOp>(loc, resType, dest));
+    rewriter.replaceOp(op, LLVM::LoadOp::create(rewriter, loc, resType, dest));
     return success();
   }
 
@@ -873,10 +874,10 @@ struct TritonMatrix2DBlockStoreLowering
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
     VectorType storeValType = op.getStoredVal().getType();
-    auto storeValPtr = rewriter.create<LLVM::AllocaOp>(
-        loc, ptr_ty(ctx), storeValType.getElementType(),
+    auto storeValPtr = LLVM::AllocaOp::create(
+        rewriter, loc, ptr_ty(ctx), storeValType.getElementType(),
         b.i32_val(storeValType.getNumElements()));
-    rewriter.create<LLVM::StoreOp>(loc, op.getStoredVal(), storeValPtr);
+    LLVM::StoreOp::create(rewriter, loc, op.getStoredVal(), storeValPtr);
 
     std::string fnName = "__spirv_Subgroup2DBlockStoreINTEL";
 
@@ -1026,7 +1027,7 @@ static std::string getSubGroupBlockManglingName(OpType op, Type type) {
       TypeSwitch<Type, Type>(type)
           .Case([](VectorType vecType) { return vecType.getElementType(); })
           // Scalar case
-          .Default(llvm::identity<Type>());
+          .Default([](Type t) { return t; });
   const unsigned numElems =
       TypeSwitch<Type, unsigned>(type)
           .Case([](VectorType vecType) { return vecType.getNumElements(); })

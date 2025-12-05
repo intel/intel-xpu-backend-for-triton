@@ -146,7 +146,7 @@ private:
       auto resultType = mlir::triton::PointerType::get(
           tensorType, pointerType.getAddressSpace());
 
-      auto makeTensorPtr = builder.create<tt::MakeTensorPtrOp>(
+      auto makeTensorPtr = tt::MakeTensorPtrOp::create(
           builder, loc, resultType, base, shape, strides, offsets,
           builder.getDenseI32ArrayAttr({1, 0}));
       return makeTensorPtr;
@@ -263,7 +263,7 @@ private:
     auto ptrType = cast<tt::PointerType>(operand.getType());
     auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
     Value ptr =
-        builder.create<tt::AdvanceOp>(loc, ptrType, operand, op.getIndices());
+        tt::AdvanceOp::create(builder, loc, ptrType, operand, op.getIndices());
 
     SmallVector<int32_t> boundaryCheck;
     for (size_t i = 0; i < tensorType.getRank(); ++i)

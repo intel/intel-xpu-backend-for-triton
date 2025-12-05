@@ -236,8 +236,8 @@ public:
 
     // convert accumulator
     TensorValue oldAcc = dotOp.getC();
-    auto newAcc = rewriter.create<ttg::ConvertLayoutOp>(oldAcc.getLoc(),
-                                                        newRetType, oldAcc);
+    auto newAcc = ttg::ConvertLayoutOp::create(rewriter, oldAcc.getLoc(),
+                                               newRetType, oldAcc);
     // opA are packed to i16 for scalar type < 16 bits. opB are packed to i32.
     auto newAEncoding = ttg::DotOperandEncodingAttr::get(
         oldAType.getContext(), 0, newRetType.getEncoding(),
@@ -250,11 +250,11 @@ public:
     auto newBType = RankedTensorType::get(
         oldBType.getShape(), oldBType.getElementType(), newBEncoding);
 
-    a = rewriter.create<ttg::ConvertLayoutOp>(a.getLoc(), newAType, a);
-    b = rewriter.create<ttg::ConvertLayoutOp>(b.getLoc(), newBType, b);
-    auto newDot = rewriter.create<tt::DotOp>(dotOp.getLoc(), newRetType, a, b,
-                                             newAcc, dotOp.getInputPrecision(),
-                                             dotOp.getMaxNumImpreciseAcc());
+    a = ttg::ConvertLayoutOp::create(rewriter, a.getLoc(), newAType, a);
+    b = ttg::ConvertLayoutOp::create(rewriter, b.getLoc(), newBType, b);
+    auto newDot = tt::DotOp::create(rewriter, dotOp.getLoc(), newRetType, a, b,
+                                    newAcc, dotOp.getInputPrecision(),
+                                    dotOp.getMaxNumImpreciseAcc());
 
     rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(dotOp, oldRetType,
                                                       newDot.getResult());
@@ -271,17 +271,18 @@ static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
 
   return llvm::TypeSwitch<Type, Value>(elemType)
       .Case<FloatType>([&](auto) {
-        return builder.create<tt::FpToFpOp>(loc, tensorPromotedType, operand);
+        return tt::FpToFpOp::create(builder, loc, tensorPromotedType, operand);
       })
       .Case<IntegerType>([&](auto) {
         unsigned tgtBitWidth = elemType.getIntOrFloatBitWidth(),
                  valBitWidth = cast<RankedTensorType>(operand.getType())
                                    .getElementTypeBitWidth();
-        Operation *castOp = (valBitWidth <= tgtBitWidth)
-                                ? builder.create<arith::ExtSIOp>(
-                                      loc, tensorPromotedType, operand)
-                                : builder.create<arith::TruncIOp>(
-                                      loc, tensorPromotedType, operand);
+        Operation *castOp =
+            (valBitWidth <= tgtBitWidth)
+                ? arith::ExtSIOp::create(builder, loc, tensorPromotedType,
+                                         operand)
+                : arith::TruncIOp::create(builder, loc, tensorPromotedType,
+                                          operand);
         return castOp->getResult(0);
       });
 }
@@ -335,7 +336,7 @@ updateUsers(Value result, const SetVector<Operation *> &slice) {
     OpBuilder builder(result.getContext());
     builder.setInsertionPointAfterValue(result);
     auto transOp =
-        builder.create<tt::TransOp>(result.getLoc(), result, ArrayRef({1, 0}));
+        tt::TransOp::create(builder, result.getLoc(), result, ArrayRef({1, 0}));
     result.replaceUsesWithIf(transOp.getResult(), [&](OpOperand &operand) {
       return operand.getOwner() != transOp.getOperation() &&
              slice.count(operand.getOwner()) == 0;
@@ -413,8 +414,8 @@ static void sinkTransposeOp(tt::TransOp input) {
             queue.push_back(argTrans.value());
           OpBuilder builder(forOp);
           OpOperand &init = forOp.getInitsMutable()[operand.getOperandNumber()];
-          auto initTranspose = builder.create<tt::TransOp>(
-              forOp.getLoc(), init.get(), ArrayRef({1, 0}));
+          auto initTranspose = tt::TransOp::create(
+              builder, forOp.getLoc(), init.get(), ArrayRef({1, 0}));
           init.set(initTranspose);
         }
       }
@@ -429,18 +430,18 @@ static tt::TransOp transposeDotOp(tt::DotScaledOp dotOp) {
   Value lhs = dotOp.getA();
   std::array<int, 2> transOrder = {1, 0};
   auto lhsTransposed =
-      builder.create<tt::TransOp>(lhs.getLoc(), lhs, transOrder);
+      tt::TransOp::create(builder, lhs.getLoc(), lhs, transOrder);
   Value rhs = dotOp.getB();
   auto rhsTransposed =
-      builder.create<tt::TransOp>(rhs.getLoc(), rhs, transOrder);
+      tt::TransOp::create(builder, rhs.getLoc(), rhs, transOrder);
   Value c = dotOp.getC();
-  auto cTransposed = builder.create<tt::TransOp>(c.getLoc(), c, transOrder);
-  auto result = builder.create<tt::DotScaledOp>(
-      dotOp.getLoc(), cTransposed.getType(), rhsTransposed, lhsTransposed,
-      cTransposed, dotOp.getBScale(), dotOp.getAScale(), dotOp.getBElemType(),
-      dotOp.getAElemType(), dotOp.getFastMath());
+  auto cTransposed = tt::TransOp::create(builder, c.getLoc(), c, transOrder);
+  auto result = tt::DotScaledOp::create(
+      builder, dotOp.getLoc(), cTransposed.getType(), rhsTransposed,
+      lhsTransposed, cTransposed, dotOp.getBScale(), dotOp.getAScale(),
+      dotOp.getBElemType(), dotOp.getAElemType(), dotOp.getFastMath());
   auto transOp =
-      builder.create<tt::TransOp>(result.getLoc(), result, transOrder);
+      tt::TransOp::create(builder, result.getLoc(), result, transOrder);
   dotOp.replaceAllUsesWith(transOp.getOperation());
   dotOp.erase();
   return transOp;

@@ -16,7 +16,6 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
-#include "triton/Dialect/TritonGPU/IR/LayoutUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
@@ -125,9 +124,10 @@ private:
     SmallVector<Value> newOffsets(llvm::reverse(makeTensorPtrOp.getOffsets()));
 
     OpBuilder builder(makeTensorPtrOp);
-    Value ptr = builder.create<tt::MakeTensorPtrOp>(
-        makeTensorPtrOp.getLoc(), newPtrType, makeTensorPtrOp.getBase(),
-        newShape, newStrides, newOffsets, makeTensorPtrOp.getOrderAttr());
+    Value ptr = tt::MakeTensorPtrOp::create(
+        builder, makeTensorPtrOp.getLoc(), newPtrType,
+        makeTensorPtrOp.getBase(), newShape, newStrides, newOffsets,
+        makeTensorPtrOp.getOrderAttr());
     LLVM_DEBUG(llvm::dbgs() << "newMakeTensorPtrOp:\n  " << ptr << "\n");
 
     // ... and propagate it through the def-use chain.
@@ -316,8 +316,8 @@ private:
     if (auto advanceOp = dyn_cast<tt::AdvanceOp>(user)) {
       OpBuilder rewriter(advanceOp);
       SmallVector<Value> newOffsets(llvm::reverse(advanceOp.getOffsets()));
-      auto newAdvanceOp = rewriter.create<tt::AdvanceOp>(loc, newVal.getType(),
-                                                         newVal, newOffsets);
+      auto newAdvanceOp = tt::AdvanceOp::create(rewriter, loc, newVal.getType(),
+                                                newVal, newOffsets);
       LLVM_DEBUG(llvm::dbgs().indent(2)
                  << "newAdvanceOp: " << newAdvanceOp << "\n");
       cleanUp.insert(advanceOp);
@@ -327,10 +327,11 @@ private:
 
     if (auto loadOp = dyn_cast<tt::LoadOp>(user)) {
       OpBuilder rewriter(loadOp);
-      auto newLoadOp = rewriter.create<tt::LoadOp>(
-          loadOp.getLoc(), newVal, loadOp.getMask(), loadOp.getOther(),
-          loadOp.getBoundaryCheckAttr(), loadOp.getPaddingAttr(),
-          loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
+      auto newLoadOp = tt::LoadOp::create(
+          rewriter, loadOp.getLoc(), newVal, loadOp.getMask(),
+          loadOp.getOther(), loadOp.getBoundaryCheckAttr(),
+          loadOp.getPaddingAttr(), loadOp.getCache(), loadOp.getEvict(),
+          loadOp.getIsVolatile());
 
       StringRef blockIOAttrName =
           ttgi::TritonIntelGPUDialect::getBlockIOAttrName();

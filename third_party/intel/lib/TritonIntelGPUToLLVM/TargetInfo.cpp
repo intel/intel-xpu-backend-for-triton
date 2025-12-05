@@ -99,8 +99,8 @@ Value TargetInfo::permute(RewriterBase &rewriter, Location loc, Value a,
 Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
                             ModuleOp moduleOp, ProgramIDDim axis) const {
   Value blockId =
-      rewriter.create<::mlir::gpu::BlockIdOp>(loc, mlir::gpu::Dimension(axis));
-  return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
+      ::mlir::gpu::BlockIdOp::create(rewriter, loc, mlir::gpu::Dimension(axis));
+  return arith::IndexCastOp::create(rewriter, loc, i32_ty, blockId);
 }
 
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,

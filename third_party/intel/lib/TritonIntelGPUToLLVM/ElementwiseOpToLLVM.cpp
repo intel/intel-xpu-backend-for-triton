@@ -490,7 +490,7 @@ static SmallVector<Value> Fp_to_Fp8_RTNE(Location loc,
   // if (dstExp) dstMan = srcMan * 2^(DstMBits - SrcMBits)
   // else dstMan = src * 2^(DstMBits + DstBias - 1)
   Value scale = fval(1.0 / static_cast<float>(1 << (SrcMBits - DstMBits)));
-  man = b.create<LLVM::UIToFPOp>(srcTy, man);
+  man = LLVM::UIToFPOp::create(b, b.getLoc(), srcTy, man);
   if constexpr (SrcBias != DstBias) {
     exp = b.smax(b.sub(exp, ival(SrcBias - DstBias)), zero);
     Value isSubnorm = b.icmp_eq(exp, zero);
@@ -500,7 +500,8 @@ static SmallVector<Value> Fp_to_Fp8_RTNE(Location loc,
                      scale);
   }
   man = b.fmul(man, scale, LLVM::FastmathFlags::fast);
-  man = b.create<LLVM::FPToUIOp>(srcITy, b.create<LLVM::NearbyintOp>(man));
+  man = LLVM::FPToUIOp::create(b, b.getLoc(), srcITy,
+                               LLVM::NearbyintOp::create(b, b.getLoc(), man));
 
   val = b.add(b.shl(exp, ival(DstMBits)), man);
   val = b.umin(ival(DST_MAX), val);
@@ -751,7 +752,7 @@ appendOrGetExternFuncOp(ConversionPatternRewriter &rewriter, Operation *op,
 
   auto parent = op->getParentOfType<LLVM::LLVMFuncOp>();
   OpBuilder b(parent);
-  auto ret = b.create<LLVMFuncOp>(op->getLoc(), funcName, funcType);
+  auto ret = LLVMFuncOp::create(b, op->getLoc(), funcName, funcType);
   ret.getOperation()->setAttr("libname",
                               StringAttr::get(op->getContext(), libname));
   ret.getOperation()->setAttr("libpath",
@@ -784,7 +785,7 @@ struct FpToFpOpConversion
   static Value convertFp16ToFp32(Location loc,
                                  ConversionPatternRewriter &rewriter,
                                  const Value &v) {
-    return rewriter.create<LLVM::FPExtOp>(loc, f32_ty, v);
+    return LLVM::FPExtOp::create(rewriter, loc, f32_ty, v);
   }
 
   static Value convertFp32ToFp16(Location loc,
@@ -792,8 +793,8 @@ struct FpToFpOpConversion
                                  const Value &v,
                                  const triton::RoundingMode rounding) {
     MLIRContext *ctx = rewriter.getContext();
-    return rewriter.create<LLVM::ConstrainedFPTruncIntr>(
-        loc, f16_ty, v,
+    return LLVM::ConstrainedFPTruncIntr::create(
+        rewriter, loc, f16_ty, v,
         LLVM::RoundingModeAttr::get(
             ctx, LLVM::intel::convertTritonRoundingModeToLLVM(rounding)),
         arith::getLLVMDefaultFPExceptionBehavior(*ctx));
@@ -975,7 +976,7 @@ struct ElementwiseOpConversion
             !getElementType(operands[0][1]).isBF16()) &&
            "unsupported conversion");
     return {
-        rewriter.create<DestOp>(loc, elemTy, operands[0][0], operands[0][1])};
+        DestOp::create(rewriter, loc, elemTy, operands[0][0], operands[0][1])};
   }
 };
 
@@ -992,16 +993,18 @@ struct SIToFPOpConversion
     Type inElemTy = getElementType(op.getIn());
     Type outElemTy = getElementType(op.getOut());
     if (outElemTy.isBF16() && inElemTy.isInteger(8) && operands.size() >= 4) {
-      auto value = rewriter.create<LLVM::SIToFPOp>(loc, f32_ty, operands[0][0]);
+      auto value =
+          LLVM::SIToFPOp::create(rewriter, loc, f32_ty, operands[0][0]);
       return {
           intel::convertFp32ToBf16(loc, rewriter, value, RoundingMode::RTNE)};
     } else if (outElemTy.isBF16()) {
-      auto value = rewriter.create<LLVM::SIToFPOp>(loc, f32_ty, operands[0][0]);
+      auto value =
+          LLVM::SIToFPOp::create(rewriter, loc, f32_ty, operands[0][0]);
       return {
           intel::convertFp32ToBf16(loc, rewriter, value, RoundingMode::RTNE)};
     }
 
-    return {rewriter.create<LLVM::SIToFPOp>(loc, elemTy, operands[0][0])};
+    return {LLVM::SIToFPOp::create(rewriter, loc, elemTy, operands[0][0])};
   }
 };
 
@@ -1018,10 +1021,10 @@ struct FPToSIOpConversion
     auto inElemTy = getElementType(op.getIn());
     if (inElemTy.isBF16()) {
       auto value = intel::convertBf16ToFp32(loc, rewriter, operands[0][0]);
-      return {rewriter.create<LLVM::FPToSIOp>(loc, elemTy, value)};
+      return {LLVM::FPToSIOp::create(rewriter, loc, elemTy, value)};
     }
 
-    return {rewriter.create<LLVM::FPToSIOp>(loc, elemTy, operands[0][0])};
+    return {LLVM::FPToSIOp::create(rewriter, loc, elemTy, operands[0][0])};
   }
 };
 
@@ -1042,7 +1045,7 @@ struct ExtFOpConversion
       return {intel::convertBf16ToFp32(loc, rewriter, operands[0][0])};
     }
 
-    return {rewriter.create<LLVM::FPExtOp>(loc, elemTy, operands[0][0])};
+    return {LLVM::FPExtOp::create(rewriter, loc, elemTy, operands[0][0])};
   }
 };
 
@@ -1064,7 +1067,7 @@ struct TruncFOpConversion
               intel::convertFp32ToBf16(loc, rewriter, operands[0][0],
                                        RoundingMode::RTNE)};
     }
-    return {rewriter.create<LLVM::FPTruncOp>(loc, elemTy, operands[0][0])};
+    return {LLVM::FPTruncOp::create(rewriter, loc, elemTy, operands[0][0])};
   }
 };
 
@@ -1125,14 +1128,14 @@ struct AbsFOpConversion
       assert(num_bits <= 16);
       auto mask = (1u << (num_bits - 1u)) - 1u;
       auto maskAttr = rewriter.getIntegerAttr(elemTy, mask);
-      auto maskConst = rewriter.create<LLVM::ConstantOp>(loc, maskAttr);
+      auto maskConst = LLVM::ConstantOp::create(rewriter, loc, maskAttr);
       Value res = b.and_(v, maskConst);
       if (llvm::isa<BFloat16Type>(origTy))
         res = b.bitcast(res, origTy);
       return {res};
     }
 
-    return {rewriter.create<LLVM::FAbsOp>(loc, elemTy, v)};
+    return {LLVM::FAbsOp::create(rewriter, loc, elemTy, v)};
   }
 };
 

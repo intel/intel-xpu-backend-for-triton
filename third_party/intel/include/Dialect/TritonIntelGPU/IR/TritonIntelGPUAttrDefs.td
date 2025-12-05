@@ -328,7 +328,7 @@ def Subgroup2DBlockEncodingAttr : DistributedEncoding<"Subgroup2DBlockEncoding",
   let parameters = (
     ins
     ArrayRefParameter<"unsigned">:$warpsPerCTA,
-    "CTALayoutAttr":$CTALayout,
+    "CTAEncodingAttr":$CTALayout,
     ArrayRefParameter<"unsigned">:$instrShape,
     "unsigned":$numBlocks,
     ArrayRefParameter<"unsigned">:$order,

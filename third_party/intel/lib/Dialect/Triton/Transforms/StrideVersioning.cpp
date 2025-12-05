@@ -128,19 +128,20 @@ public:
     SmallVector<Value> versioningConds;
     for (Operation *makeTensorPtrOp : makeTensorPtrOps) {
       Value stride = makeTensorPtrToStride[makeTensorPtrOp];
-      versioningConds.emplace_back(builder.create<arith::CmpIOp>(
-          loc, arith::CmpIPredicate::eq, stride, oneVal));
+      versioningConds.emplace_back(arith::CmpIOp::create(
+          builder, loc, arith::CmpIPredicate::eq, stride, oneVal));
     }
     assert(!versioningConds.empty() &&
            "Expecting at least one versioning condition");
 
     Value verCond = versioningConds.front();
     for (unsigned i = 1; i < versioningConds.size(); ++i)
-      verCond = builder.create<arith::AndIOp>(loc, verCond, versioningConds[i]);
+      verCond =
+          arith::AndIOp::create(builder, loc, verCond, versioningConds[i]);
 
     // Version the loop.
-    auto ifOp = builder.create<scf::IfOp>(loc, forOp.getResultTypes(), verCond,
-                                          /*withThenRegion=*/true);
+    auto ifOp = scf::IfOp::create(builder, loc, forOp.getResultTypes(), verCond,
+                                  /*withThenRegion=*/true);
     IRMapping map;
     OpBuilder thenB = ifOp.getThenBodyBuilder();
     Operation *thenForLoop = thenB.clone(*forOp.getOperation(), map);
@@ -149,8 +150,8 @@ public:
 
     // Create the yield operations for the two if branches.
     if (!thenForLoop->getResults().empty()) {
-      thenB.create<scf::YieldOp>(loc, thenForLoop->getResults());
-      elseB.create<scf::YieldOp>(loc, elseForLoop->getResults());
+      scf::YieldOp::create(thenB, loc, thenForLoop->getResults());
+      scf::YieldOp::create(elseB, loc, elseForLoop->getResults());
     }
 
     // Now that the loop has been versioned, replace the uses of the original
