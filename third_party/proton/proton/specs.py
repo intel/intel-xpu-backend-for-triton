@@ -68,6 +68,15 @@ def max_bps(device_type, arch, bus_width, memory_clock_rate):
         return amd_bps_by_arch[arch]
     else:
         assert device_type == "XPU"
-        # FIXME: how to get correctly numbers on XPU?
-        # https://github.com/intel/intel-xpu-backend-for-triton/issues/5550
-        return 2 * bus_width * memory_clock_rate * 1e3 / 8
+        if arch == "Xe-HPC":
+            multiplier = 2
+        elif arch == "Xe2" or arch == "Xe-HPG":
+            multiplier = 8
+        else:
+            raise ValueError(f"Unsupported architecture: {arch}")
+        return multiplier * bus_width * memory_clock_rate * 1e3 / 8
+
+
+2 * 8192 * 1.6 * 1e3 / 8 / 1e6  #max1550
+
+8 * 192 * 2.375 * 1e3 / 8 / 1e6  #b580
