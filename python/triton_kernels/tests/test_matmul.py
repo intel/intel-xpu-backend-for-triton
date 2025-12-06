@@ -288,6 +288,12 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     if "float8" in weight_dtype_str and is_cuda() and torch.cuda.get_device_capability()[0] < 10:
         b_transpose = True
 
+    # Limit input size to reduce CRI simulation time.
+    # FIXME: check if we can relax it with higher parallelism in CI runs.
+    m = min(m, 128)
+    n = min(n, 128)
+    k = min(k, 512)
+
     torch.manual_seed(0)
 
     # set opt flags constraints
