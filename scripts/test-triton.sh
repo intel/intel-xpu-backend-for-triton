@@ -6,11 +6,12 @@ HELP="\
 Example usage: ./test-triton.sh [TEST]... [OPTION]...
 
 TEST:
-    --unit            default
-    --core            default
-    --tutorial        default
-    --microbench      default
-    --triton-kernels  default
+    --unit                   default
+    --core                   default
+    --tutorial               default
+    --microbench             default
+    --triton-kernels         default
+    --triton-kernels-matmul  default
     --minicore        part of core
     --mxfp            part of core
     --scaled-dot      part of core
@@ -79,6 +80,7 @@ INSTALL_LIGER=false
 TEST_VLLM=false
 INSTALL_VLLM=false
 TEST_TRITON_KERNELS=false
+TEST_TRITON_KERNELS_MATMUL=false
 VENV=false
 TRITON_TEST_REPORTS=false
 TRITON_TEST_WARNING_REPORTS=false
@@ -229,6 +231,11 @@ while (( $# != 0 )); do
       TEST_DEFAULT=false
       shift
       ;;
+    --triton-kernels-matmul)
+      TEST_TRITON_KERNELS_MATMUL=true
+      TEST_DEFAULT=false
+      shift
+      ;;
     --venv)
       VENV=true
       shift
@@ -289,6 +296,7 @@ if [ "$TEST_DEFAULT" = true ]; then
   TEST_TUTORIAL=true
   TEST_MICRO_BENCHMARKS=true
   TEST_TRITON_KERNELS=true
+  TEST_TRITON_KERNELS_MATMUL=true
 fi
 
 if [ "$VENV" = true ]; then
@@ -734,7 +742,29 @@ run_triton_kernels_tests() {
   fi
   # skipping mxfp, they are part of mxfp_tests suite
   TRITON_TEST_SUITE=triton_kernels \
-    run_pytest_command -vvv -n $max_procs --device xpu . -k 'not test_mxfp'
+    run_pytest_command -vvv -n $max_procs --device xpu . -k 'not test_mxfp' --ignore=test_matmul.py
+}
+
+run_triton_kernels_matmul_tests() {
+  echo "***************************************************"
+  echo "****   Running Triton Kernels matmul tests     ****"
+  echo "***************************************************"
+  cd $TRITON_PROJ/python/triton_kernels/tests
+
+  # available after `capture_runtime_env` call
+  gpu_file="$TRITON_TEST_REPORTS_DIR/gpu.txt"
+  # BMG, LNL, ARLs, A770
+  if [[ -f "$gpu_file" ]] && grep -Eq "(B580|64a0|7d6|7d5|770)" "$gpu_file"; then
+    # Using any other number of processes results in an error on small GPUs due to insufficient resources.
+    # FIXME: reconsider in the future
+    max_procs=1
+  else
+    # Using any other number of processes results in an error on the PVC due to insufficient resources.
+    # FIXME: reconsider in the future
+    max_procs=${PYTEST_MAX_PROCESSES:-4}
+  fi
+  TRITON_TEST_SUITE=triton_kernels_matmul \
+    run_pytest_command -vvv -n $max_procs --device xpu test_matmul.py
 }
 
 test_triton() {
@@ -810,6 +840,9 @@ test_triton() {
   fi
   if [ "$TEST_TRITON_KERNELS" == true ]; then
     run_triton_kernels_tests
+  fi
+  if [ "$TEST_TRITON_KERNELS_MATMUL" == true ]; then
+    run_triton_kernels_matmul_tests
   fi
 }
 

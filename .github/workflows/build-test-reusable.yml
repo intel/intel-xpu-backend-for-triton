@@ -329,6 +329,12 @@ jobs:
           export PYTEST_MAX_PROCESSES=4
           ${{ env.TRITON_TEST_CMD }} --triton-kernels
 
+      - name: Run triton kernels matmul tests
+        if: matrix.suite == 'triton-kernels'
+        run: |
+          export PYTEST_MAX_PROCESSES=4
+          ${{ env.TRITON_TEST_CMD }} --triton-kernels-matmul
+
       # FIXME: make sure new tutorials are added to one of the groups (scaled_dot, rest, tutorial-faX)
       - name: Select tutorials to run (scaled_dot)
         if: matrix.suite == 'scaled_dot'
