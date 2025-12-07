@@ -6,3 +6,4 @@ tests/test_matmul.py::test_zero_reduction_dim
 tests/test_topk.py::test_topk[float16-True-8-13-256]
 tests/test_topk.py::test_topk[float16-True-8-13-300]
 tests/test_topk.py::test_topk[float16-True-8-32-256]
+tests/test_topk.py::test_topk[float16-True-8-32-300]
