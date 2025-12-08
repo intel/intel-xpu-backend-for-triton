@@ -947,7 +947,7 @@ class XPUDriver(DriverBase):
                 dirname = os.path.dirname(os.path.realpath(__file__))
                 parser = compile_module_from_src(src=Path(os.path.join(dirname, "arch_parser.c")).read_text(),
                                                  name="arch_utils")
-                arch_name = parser.parse_device_arch(dev_property["architecture"])
+                arch = parser.parse_device_arch(dev_property["architecture"])
             dev_property["arch"] = arch
 
         update_advanced_features(device, dev_property)

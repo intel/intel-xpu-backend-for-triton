@@ -105,6 +105,7 @@ def is_xpu():
     target = get_current_target()
     return False if target is None else target.backend == "xpu"
 
+
 def is_xpu_arl_h():
     target = get_current_target()
     return target is not None and target.backend == 'xpu' and 'arl_h' in target.arch
