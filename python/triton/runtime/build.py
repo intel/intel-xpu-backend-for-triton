@@ -3,17 +3,23 @@ from __future__ import annotations
 import functools
 import hashlib
 import importlib.util
+import locale
 import logging
 import os
 import shutil
 import subprocess
+import sys
 import sysconfig
 import tempfile
+import re
 
 from types import ModuleType
 
 from .cache import get_cache_manager
 from .. import knobs
+
+_IS_WINDOWS = sys.platform == "win32"
+SUBPROCESS_DECODE_ARGS = (locale.getpreferredencoding(), ) if _IS_WINDOWS else ()
 
 
 def is_xpu():
@@ -105,8 +111,19 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
     if os.getenv("VERBOSE"):
         print(" ".join(cc_cmd))
 
-    subprocess.check_call(cc_cmd, stdout=subprocess.DEVNULL)
+    try:
+        subprocess.run(cc_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    except subprocess.CalledProcessError as e:
+        output = e.stdout.decode(*SUBPROCESS_DECODE_ARGS)
+        raise RuntimeError(output)
     return so
+
+
+def _library_flag(lib: str) -> str:
+    # Match .so files with optional version numbers (e.g., .so, .so.1, .so.513.50.1)
+    if re.search(r'\.so(\.\d+)*$', lib) or lib.endswith(".a"):
+        return f"-l:{lib}"
+    return f"-l{lib}"
 
 
 @functools.lru_cache

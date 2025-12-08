@@ -50,8 +50,9 @@ static LLVM::LLVMFuncOp getSpirvPrintfDeclaration(RewriterBase &rewriter) {
   ConversionPatternRewriter::InsertionGuard guard(rewriter);
   rewriter.setInsertionPointToStart(moduleOp.getBody());
 
-  auto printFunc = rewriter.create<LLVM::LLVMFuncOp>(
-      UnknownLoc::get(context), funcName, funcType, LLVM::Linkage::External,
+  auto printFunc = LLVM::LLVMFuncOp::create(
+      rewriter, UnknownLoc::get(context), funcName, funcType,
+      LLVM::Linkage::External,
       /*dsoLocal*/ false, LLVM::CConv::SPIR_FUNC, /*comdat=*/SymbolRefAttr{});
   printFunc->setAttr("nounwind", rewriter.getUnitAttr());
 
@@ -77,8 +78,8 @@ static LLVM::LLVMFuncOp getAssertfailDeclaration(RewriterBase &rewriter) {
   RewriterBase::InsertionGuard guard(rewriter);
   rewriter.setInsertionPointToStart(moduleOp.getBody());
 
-  auto func = rewriter.create<LLVM::LLVMFuncOp>(UnknownLoc::get(ctx), funcName,
-                                                funcType);
+  auto func = LLVM::LLVMFuncOp::create(rewriter, UnknownLoc::get(ctx), funcName,
+                                       funcType);
   func.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
   return func;
 }
@@ -91,7 +92,7 @@ Value LibCallEmitter::getGlobalStringStart(Location loc, RewriterBase &rewriter,
       getGlobalString(loc, rewriter, name, value, addressSpace);
   MLIRContext *ctx = rewriter.getContext();
   Type globalPtrType = ptr_ty(ctx, addressSpace);
-  Value globalPtr = rewriter.create<LLVM::AddressOfOp>(loc, global);
+  Value globalPtr = LLVM::AddressOfOp::create(rewriter, loc, global);
   return b.gep(globalPtrType, i8_ty, globalPtr, LLVM::GEPArg{0});
 }
 
@@ -115,8 +116,8 @@ LLVM::GlobalOp LibCallEmitter::getGlobalString(Location loc,
   auto createGlobal = [&](StringRef name) {
     RewriterBase::InsertionGuard guard(rewriter);
     rewriter.setInsertionPointToStart(moduleOp.getBody());
-    return rewriter.create<LLVM::GlobalOp>(
-        rewriter.getUnknownLoc(), globalType,
+    return LLVM::GlobalOp::create(
+        rewriter, rewriter.getUnknownLoc(), globalType,
         /*isConstant=*/true, LLVM::Linkage::Internal, name, valueAttr,
         /*alignment=*/0, addressSpace);
   };

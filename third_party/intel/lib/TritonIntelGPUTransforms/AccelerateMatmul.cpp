@@ -34,9 +34,10 @@ namespace mlir::triton::gpu::intel {
 namespace {
 
 // FIXME: Remove once IGC can split large 2D block loads.
-static void setAttrOnBOperand(tt::DotOp dotOp, StringRef attrName,
+static void setAttrOnBOperand(Operation *op, StringRef attrName,
                               Attribute attr) {
-  Operation *defOp = dotOp.getB().getDefiningOp();
+  assert(isa<tt::DotOp>(op) && "Unexpected operation type");
+  Operation *defOp = cast<tt::DotOp>(op).getB().getDefiningOp();
   while (auto convOp = dyn_cast_or_null<ttg::ConvertLayoutOp>(defOp))
     defOp = convOp.getSrc().getDefiningOp();
   if (auto transOp = dyn_cast_or_null<tt::TransOp>(defOp))
@@ -46,7 +47,8 @@ static void setAttrOnBOperand(tt::DotOp dotOp, StringRef attrName,
 }
 
 SmallVector<unsigned>
-getWarpsPerTile(tt::DotOp dotOp, ttgi::DpasEncodingAttr::DPASCapability dpasCap,
+getWarpsPerTile(Operation *dotOp,
+                ttgi::DpasEncodingAttr::DPASCapability dpasCap,
                 const ArrayRef<int64_t> shape, unsigned numWarps) {
   auto filter = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion();
@@ -60,8 +62,8 @@ getWarpsPerTile(tt::DotOp dotOp, ttgi::DpasEncodingAttr::DPASCapability dpasCap,
         MLIRContext *ctx = forOp->getContext();
         StringRef attrName =
             ttgi::TritonIntelGPUDialect::getOneMatrixPerLoadAttrName();
-        setAttrOnBOperand(dotOp, attrName, UnitAttr::get(ctx));
-        setAttrOnBOperand(cast<tt::DotOp>(op), attrName, UnitAttr::get(ctx));
+        setAttrOnBOperand(op, attrName, UnitAttr::get(ctx));
+        setAttrOnBOperand(op, attrName, UnitAttr::get(ctx));
       }
       SmallVector<unsigned> ret(shape.size(), 1);
       ret[0] = numWarps;
@@ -108,42 +110,44 @@ getWarpsPerTile(tt::DotOp dotOp, ttgi::DpasEncodingAttr::DPASCapability dpasCap,
   return ret;
 }
 
-class BlockedToDPAS : public OpRewritePattern<tt::DotOp> {
-  const ttg::intel::DPASAnalysis &dpasAnalysis;
+template <class OpTy,
+          typename = std::enable_if_t<llvm::is_one_of<OpTy, tt::DotOp>::value>>
+class BlockedToDPAS : public OpRewritePattern<OpTy> {
+  const ttgi::DPASAnalysis &dpasAnalysis;
   using TensorValue = TypedValue<RankedTensorType>;
 
 public:
-  BlockedToDPAS(MLIRContext *context,
-                const ttg::intel::DPASAnalysis &dpasAnalysis)
-      : OpRewritePattern<tt::DotOp>(context), dpasAnalysis(dpasAnalysis) {}
+  BlockedToDPAS(MLIRContext *context, const ttgi::DPASAnalysis &dpasAnalysis,
+                int benefit)
+      : OpRewritePattern<OpTy>(context, benefit), dpasAnalysis(dpasAnalysis) {}
 
-  LogicalResult matchAndRewrite(tt::DotOp dotOp,
+  LogicalResult matchAndRewrite(OpTy op,
                                 PatternRewriter &rewriter) const override {
-    RankedTensorType oldRetType = dotOp.getType();
+    RankedTensorType oldRetType = op.getType();
     if (!oldRetType.getEncoding() ||
         isa<ttgi::DpasEncodingAttr>(oldRetType.getEncoding()))
       return failure();
 
-    auto funcOp = dotOp->getParentOfType<FunctionOpInterface>();
-    if (dpasAnalysis.canUseDPAS(funcOp) !=
-        ttg::intel::DPASAnalysis::Result::True)
+    auto funcOp = op->template getParentOfType<FunctionOpInterface>();
+    if (dpasAnalysis.canUseDPAS(funcOp) != ttgi::DPASAnalysis::Result::True)
       return failure();
 
     // Create DPAS encoding for the given number of warps
     ArrayRef<int64_t> retShape = oldRetType.getShape();
     unsigned numWarps = ttg::lookupNumWarps(funcOp);
 
-    TensorValue a = dotOp.getA();
-    TensorValue b = dotOp.getB();
+    TensorValue a = op.getA();
+    TensorValue b = op.getB();
     auto oldAType = cast<RankedTensorType>(a.getType());
     auto oldBType = cast<RankedTensorType>(b.getType());
 
-    ModuleOp mod = funcOp->getParentOfType<ModuleOp>();
-    auto dpasCap = ttgi::DpasEncodingAttr::getDPASCapability(mod);
+    ModuleOp mod = funcOp->template getParentOfType<ModuleOp>();
+    ttgi::DpasEncodingAttr::DPASCapability dpasCap =
+        ttgi::DpasEncodingAttr::getDPASCapability(mod);
     Type elemType = oldAType.getElementType();
     unsigned opsPerChan = ttgi::DpasEncodingAttr::getOpsPerChannel(elemType);
     SmallVector<unsigned> warpsPerTile =
-        getWarpsPerTile(dotOp, dpasCap, retShape, numWarps);
+        getWarpsPerTile(op, dpasCap, retShape, numWarps);
     size_t rank = retShape.size();
     SmallVector<unsigned> repCluster(rank, 1);
 
@@ -156,6 +160,7 @@ public:
             : dpasCap.systolicDepth * 2; // A is packed to i16 or i32.
     unsigned minM = mlir::ceil<unsigned>(threadsPerWarp, numElemsPerRowForA);
     repeatCount = std::max(repeatCount, minM);
+
     auto dpasEnc = ttgi::DpasEncodingAttr::get(
         oldRetType.getContext(), repeatCount, dpasCap.systolicDepth,
         dpasCap.executionSize, opsPerChan, warpsPerTile, repCluster,
@@ -194,13 +199,13 @@ public:
           threadsPerWarp);
     }
 
-    RankedTensorType newRetType =
+    auto newRetType =
         RankedTensorType::get(retShape, oldRetType.getElementType(), dpasEnc);
 
     // convert accumulator
-    TensorValue oldAcc = dotOp.getC();
-    auto newAcc = rewriter.create<ttg::ConvertLayoutOp>(oldAcc.getLoc(),
-                                                        newRetType, oldAcc);
+    TensorValue oldAcc = op.getC();
+    auto newAcc = ttg::ConvertLayoutOp::create(rewriter, oldAcc.getLoc(),
+                                               newRetType, oldAcc);
     // opA are packed to i16 for scalar type < 16 bits. opB are packed to i32.
     auto newAEncoding = ttg::DotOperandEncodingAttr::get(
         oldAType.getContext(), 0, newRetType.getEncoding(),
@@ -213,17 +218,19 @@ public:
     auto newBType = RankedTensorType::get(
         oldBType.getShape(), oldBType.getElementType(), newBEncoding);
 
-    a = rewriter.create<ttg::ConvertLayoutOp>(a.getLoc(), newAType, a);
-    b = rewriter.create<ttg::ConvertLayoutOp>(b.getLoc(), newBType, b);
-    auto newDot = rewriter.create<tt::DotOp>(dotOp.getLoc(), newRetType, a, b,
-                                             newAcc, dotOp.getInputPrecision(),
-                                             dotOp.getMaxNumImpreciseAcc());
+    a = ttg::ConvertLayoutOp::create(rewriter, a.getLoc(), newAType, a);
+    b = ttg::ConvertLayoutOp::create(rewriter, b.getLoc(), newBType, b);
 
-    rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(dotOp, oldRetType,
+    auto newDot =
+        tt::DotOp::create(rewriter, op.getLoc(), newRetType, a, b, newAcc,
+                          op.getInputPrecision(), op.getMaxNumImpreciseAcc());
+
+    rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(op, oldRetType,
                                                       newDot.getResult());
     return success();
   }
 };
+
 } // namespace
 
 static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
@@ -234,17 +241,18 @@ static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
 
   return llvm::TypeSwitch<Type, Value>(elemType)
       .Case<FloatType>([&](auto) {
-        return builder.create<tt::FpToFpOp>(loc, tensorPromotedType, operand);
+        return tt::FpToFpOp::create(builder, loc, tensorPromotedType, operand);
       })
       .Case<IntegerType>([&](auto) {
         unsigned tgtBitWidth = elemType.getIntOrFloatBitWidth(),
                  valBitWidth = cast<RankedTensorType>(operand.getType())
                                    .getElementTypeBitWidth();
-        Operation *castOp = (valBitWidth <= tgtBitWidth)
-                                ? builder.create<arith::ExtSIOp>(
-                                      loc, tensorPromotedType, operand)
-                                : builder.create<arith::TruncIOp>(
-                                      loc, tensorPromotedType, operand);
+        Operation *castOp =
+            (valBitWidth <= tgtBitWidth)
+                ? arith::ExtSIOp::create(builder, loc, tensorPromotedType,
+                                         operand)
+                : arith::TruncIOp::create(builder, loc, tensorPromotedType,
+                                          operand);
         return castOp->getResult(0);
       });
 }
@@ -257,13 +265,13 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
     OpBuilder builder(dotOp);
     Type AElType = dotOp.getA().getType().getElementType();
     auto dpasLayout =
-        dyn_cast<ttg::intel::DpasEncodingAttr>(D.getType().getEncoding());
+        dyn_cast<ttgi::DpasEncodingAttr>(D.getType().getEncoding());
 
     Type promoteType;
     if (dpasLayout) {
       bool isNativeFP8 = isa<Float8E5M2Type, Float8E4M3FNType>(AElType);
-      // fp8 is not natively supported by the the DPAS instruction, promote it
-      // to fp16.
+      // fp8 is not always natively supported by the the DPAS instruction,
+      // promote it to fp16 when necessary.
       if (!isNativeFP8)
         return;
       promoteType = builder.getF16Type();
@@ -298,7 +306,7 @@ updateUsers(Value result, const SetVector<Operation *> &slice) {
     OpBuilder builder(result.getContext());
     builder.setInsertionPointAfterValue(result);
     auto transOp =
-        builder.create<tt::TransOp>(result.getLoc(), result, ArrayRef({1, 0}));
+        tt::TransOp::create(builder, result.getLoc(), result, ArrayRef({1, 0}));
     result.replaceUsesWithIf(transOp.getResult(), [&](OpOperand &operand) {
       return operand.getOwner() != transOp.getOperation() &&
              slice.count(operand.getOwner()) == 0;
@@ -376,8 +384,8 @@ static void sinkTransposeOp(tt::TransOp input) {
             queue.push_back(argTrans.value());
           OpBuilder builder(forOp);
           OpOperand &init = forOp.getInitsMutable()[operand.getOperandNumber()];
-          auto initTranspose = builder.create<tt::TransOp>(
-              forOp.getLoc(), init.get(), ArrayRef({1, 0}));
+          auto initTranspose = tt::TransOp::create(
+              builder, forOp.getLoc(), init.get(), ArrayRef({1, 0}));
           init.set(initTranspose);
         }
       }
@@ -392,18 +400,18 @@ static tt::TransOp transposeDotOp(tt::DotScaledOp dotOp) {
   Value lhs = dotOp.getA();
   std::array<int, 2> transOrder = {1, 0};
   auto lhsTransposed =
-      builder.create<tt::TransOp>(lhs.getLoc(), lhs, transOrder);
+      tt::TransOp::create(builder, lhs.getLoc(), lhs, transOrder);
   Value rhs = dotOp.getB();
   auto rhsTransposed =
-      builder.create<tt::TransOp>(rhs.getLoc(), rhs, transOrder);
+      tt::TransOp::create(builder, rhs.getLoc(), rhs, transOrder);
   Value c = dotOp.getC();
-  auto cTransposed = builder.create<tt::TransOp>(c.getLoc(), c, transOrder);
-  auto result = builder.create<tt::DotScaledOp>(
-      dotOp.getLoc(), cTransposed.getType(), rhsTransposed, lhsTransposed,
-      cTransposed, dotOp.getBScale(), dotOp.getAScale(), dotOp.getBElemType(),
-      dotOp.getAElemType(), dotOp.getFastMath());
+  auto cTransposed = tt::TransOp::create(builder, c.getLoc(), c, transOrder);
+  auto result = tt::DotScaledOp::create(
+      builder, dotOp.getLoc(), cTransposed.getType(), rhsTransposed,
+      lhsTransposed, cTransposed, dotOp.getBScale(), dotOp.getAScale(),
+      dotOp.getBElemType(), dotOp.getAElemType(), dotOp.getFastMath());
   auto transOp =
-      builder.create<tt::TransOp>(result.getLoc(), result, transOrder);
+      tt::TransOp::create(builder, result.getLoc(), result, transOrder);
   dotOp.replaceAllUsesWith(transOp.getOperation());
   dotOp.erase();
   return transOp;
@@ -427,23 +435,24 @@ static void transposeDots(ModuleOp m) {
 }
 
 class TritonIntelGPUAccelerateMatmulPass
-    : public triton::gpu::intel::impl::TritonIntelGPUAccelerateMatmulBase<
+    : public ttgi::impl::TritonIntelGPUAccelerateMatmulBase<
           TritonIntelGPUAccelerateMatmulPass> {
 public:
-  using triton::gpu::intel::impl::TritonIntelGPUAccelerateMatmulBase<
+  using ttgi::impl::TritonIntelGPUAccelerateMatmulBase<
       TritonIntelGPUAccelerateMatmulPass>::TritonIntelGPUAccelerateMatmulBase;
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
-    auto &dpasAnalysis = getAnalysis<ttg::intel::DPASAnalysis>();
+    auto &dpasAnalysis = getAnalysis<ttgi::DPASAnalysis>();
 
     // Transpose dotOp operations that have a scale on the RHS.
     transposeDots(m);
 
     RewritePatternSet patterns(context);
     constexpr int benefitDefault = 1;
-    patterns.add<BlockedToDPAS>(context, dpasAnalysis);
+    patterns.add<BlockedToDPAS<tt::DotOp>>(context, dpasAnalysis,
+                                           benefitDefault + 1);
     ttgi::populateDecomposeScaledBlockedPatterns(patterns, benefitDefault);
     if (applyPatternsGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
