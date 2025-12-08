@@ -54,9 +54,10 @@ a_desc = tl.make_tensor_descriptor(
     base=a_ptr,
     # Shape of a tensor that starts from that base, will be used for masking.
     shape=(M, K),
-    # Tensor strides, last dimension needs to be contiguous (=1).
+    # Tensor strides
     # It's important that the last stride (stride_ak) is known at compile time,
     # so it must have either `tl.constexpr` type annotation or no annotation at all.
+    # We recommend the last dimension to be 1, more details below.
     strides=(stride_am, stride_ak),
     # Block size that will be actually loaded.
     block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K)
@@ -280,6 +281,19 @@ for j in range(0, num_blocks):
 ```
 
 ---
+
+**Set last stride to 1**
+
+Intel backend for Triton can work with non-contiguous tensors, but to maximize performance we recommend
+using Tensor Descriptors on contiguous blocks of memory. So for best performance one of the strides has to be 1.
+At the same time to maximize performance you only want to use 2d Tensor Descriptors. Nvidia backend requires the last
+stride of a Tensor Descriptor to be 1, same is true for triton interpreter (enabled with `TRITON_INTERPRET=1`).
+Combining all these requirements and recommendations, the best practice is to set the last stride of a Tensor Descriptor to 1
+for performance and compatibility reasons. If you want the transpose version of the same 2D block, use transposition (`a.T`).
+
+---
+**Use kernel side Tensor Descriptors, not device side**
+
 Tensor Descriptors can be defined inside of a kernel (called **device side Tensor Descriptors** (like in all the examples above) or outside of a triton kernel, in the launching utility (called **host side Tensor Descriptors**), like it is done in the upstream Triton ([example](https://triton-lang.org/main/getting-started/tutorials/09-persistent-matmul.html)).
 You should only use device side Tensor Descriptors on XPU for now.
 
@@ -287,7 +301,7 @@ You should only use device side Tensor Descriptors on XPU for now.
 **Summary:**
 1. **Use Tensor Descriptors to load memory required for `tl.dot` and to save results.**
 2. **Use kernel side Tensor Descriptors, not host side.**
-3. **Strive to only use 2D Tensor Descriptors.**
+3. **Strive to only use 2D Tensor Descriptors with last stride set to 1.**
 4. **Ideally, annotate strides with `tl.constexpr`.** Basic preference is `tl.constexpr` > no annotation > `tl.int64`/ `tl.int32` (for non-last strides) >> `tl.int64` / `tl.int32` for the last stride. Avoid annotating the last strides with `tl.int64` or `tl.int32`!
 
 ## Use Proper Type Annotations
