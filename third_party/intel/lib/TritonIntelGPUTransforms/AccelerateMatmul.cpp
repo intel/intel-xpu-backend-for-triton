@@ -157,7 +157,12 @@ public:
       case ttgi::DPASAnalysis::DPASEngineType::FP16_FP16_FP16_FP16:
       case ttgi::DPASAnalysis::DPASEngineType::FP32_FP32_FP8_FP8:
       case ttgi::DPASAnalysis::DPASEngineType::BF16_BF16_FP8_FP8:
+        break;
       case ttgi::DPASAnalysis::DPASEngineType::FP32_FP32_FP4_FP4:
+        // BDPAS only support to pack along K for A and B matrix.
+        if (!(op.getRhsKPack() && op.getLhsKPack())) {
+          return failure();
+        }
         break;
       default:
         return failure();

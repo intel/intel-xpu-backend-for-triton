@@ -1215,6 +1215,8 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
         is_both_fp8 = (A_DATA_TYPE in ['float8e5', 'float8e4nv']) and (B_DATA_TYPE in ['float8e5', 'float8e4nv'])
         if not is_both_fp8 or not (A_DATA_TYPE == B_DATA_TYPE):
             pytest.skip("Skip mixed precision because it is emulated by dpas for now. issue #678")
+        if B_DATA_TYPE == "float4" and not PACK_B_ALONG_K:
+            pytest.skip("Skip pack along non-K because it is emulated by dpas for now. issue #678")
     if not PACK_B_ALONG_K and B_DATA_TYPE != "float4":
         pytest.xfail("Pack along K can only be False for float4")
 
