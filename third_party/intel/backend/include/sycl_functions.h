@@ -143,6 +143,8 @@ inline std::optional<bool> isEnvValueBool(std::string str) {
   return std::nullopt;
 }
 
+static constexpr int kBlockIOPitchSpecId = 123;
+
 std::tuple<ze_module_handle_t, ze_result_t>
 create_module(ze_context_handle_t context, ze_device_handle_t device,
               uint8_t *binary_ptr, size_t binary_size, const char *build_flags,
@@ -152,12 +154,25 @@ create_module(ze_context_handle_t context, ze_device_handle_t device,
 
   const ze_module_format_t format =
       is_spv ? ZE_MODULE_FORMAT_IL_SPIRV : ZE_MODULE_FORMAT_NATIVE;
+
+  uint64_t pitchBytesMode = 0u; // TODO just for test, remove
+
+  ze_module_constants_t specConsts{};
+  uint32_t ids[] = {kBlockIOPitchSpecId};
+  const void *values[] = {&pitchBytesMode};
+
+  specConsts.numConstants = 1;
+  specConsts.pConstantIds = ids;
+  specConsts.pConstantValues = values;
+
   ze_module_desc_t module_description = {};
   module_description.stype = ZE_STRUCTURE_TYPE_MODULE_DESC;
   module_description.format = format;
   module_description.inputSize = static_cast<uint32_t>(binary_size);
   module_description.pInputModule = binary_ptr;
   module_description.pBuildFlags = build_flags;
+  module_description.pConstants = &specConsts;
+
   ze_module_build_log_handle_t buildlog;
   ze_module_handle_t module;
   auto error_no =
