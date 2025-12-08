@@ -194,6 +194,7 @@ jobs:
       matrix:
         suite:
           - minicore
+          - language
           - scaled_dot
           - gluon
           - triton-kernels
@@ -302,6 +303,11 @@ jobs:
         if: matrix.suite == 'minicore'
         run: |
           ${{ env.TRITON_TEST_CMD }} --minicore
+
+      - name: Run language tests
+        if: matrix.suite == 'language'
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --language
 
       - name: Run mxfp tests
         if: matrix.suite == 'rest'
