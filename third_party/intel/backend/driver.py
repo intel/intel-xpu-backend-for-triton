@@ -187,11 +187,45 @@ class ArchParser:
                 ctypes.windll.kernel32.FreeLibrary(handle)
 
 
+class DeferredKernelLoader:
+
+    def __init__(self, load_binary, saved_args, *, spec_lru_maxsize=128):
+        from functools import lru_cache
+
+        @lru_cache(maxsize=spec_lru_maxsize)
+        def _load_for_spec(spec_values):
+            module, kernel, *_ = load_binary(saved_args + (spec_values, ))
+            return module, kernel  # module kept alive by cache
+
+        self._load_for_spec = _load_for_spec
+
+        self.spec_const_args = saved_args[6]
+
+    def get_kernel_for_args(self, args):
+        base = len(_BASE_ARGS_FORMAT)
+        spec_values = tuple(args[base + idx] for idx in self.spec_const_args)
+        r = self._load_for_spec(spec_values)
+        return r[1]
+
+
+def wrap_handle_spec_const_args(launcher):
+
+    def inner(args):
+        loader = args[4]  # function arg is DeferredKernelLoader here
+        kernel = loader.get_kernel_for_args(args)
+
+        new_args = list(args)
+        new_args[4] = kernel
+        return launcher(tuple(new_args))
+
+    return inner
+
+
 class SpirvUtils:
 
     def __init__(self, cache_path: str):
         self.shared_library = ctypes.PyDLL(cache_path)
-        methods = ("init_devices", "load_binary", "wait_on_sycl_queue", "has_opencl_extension")
+        methods = ("init_devices", "load_binary", "mock_binary", "wait_on_sycl_queue", "has_opencl_extension")
         for method in methods:
             getattr(self.shared_library, method).restype = ctypes.py_object
             getattr(self.shared_library, method).argtypes = (ctypes.py_object, )
@@ -210,11 +244,18 @@ class SpirvUtils:
         return super().__getattribute__(name)
 
     def load_binary(self, *args):
+        spec = args[6] if len(args) >= 7 else None
+        if spec:
+            n_regs, n_max_threads = self.shared_library.mock_binary((args[3], args[5]))
+            loader = DeferredKernelLoader(self.shared_library.load_binary, args)
+
+            return (0, ), loader, n_regs, 0, n_max_threads
+
         # if we don't use parameter passing in this way,
         # we will need to rewrite the line in the general part of the code:
         # driver.active.utils.load_binary(self.name, self.kernel, self.metadata.shared, self.metadata.build_flags, device) ->
         # driver.active.utils.load_binary((self.name, self.kernel, self.metadata.shared, self.metadata.build_flags, device))
-        return self.shared_library.load_binary(args)
+        return self.shared_library.load_binary(args + (None, ))
 
     if os.name != 'nt':
 
@@ -882,6 +923,10 @@ class XPULauncher(object):
         has_tensor_desc_arg = any(isinstance(sig, str) and sig.startswith("tensordesc") for sig in signature.values())
 
         self.launch = wrap_handle_tensor_descriptor(self.mod.launch) if has_tensor_desc_arg else self.mod.launch
+
+        spec_const_args = getattr(metadata, "spec_const_args", None)
+        if spec_const_args:
+            self.launch = wrap_handle_spec_const_args(self.launch)
 
         # Serialize KernelArguments for SPIR-V Runner
         self.serialize_kernel_args = knobs.intel.dump_spirv_kernel_args

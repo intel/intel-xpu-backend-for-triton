@@ -143,21 +143,39 @@ inline std::optional<bool> isEnvValueBool(std::string str) {
   return std::nullopt;
 }
 
-std::tuple<ze_module_handle_t, ze_result_t>
-create_module(ze_context_handle_t context, ze_device_handle_t device,
-              uint8_t *binary_ptr, size_t binary_size, const char *build_flags,
-              const bool is_spv = true) {
+std::tuple<ze_module_handle_t, ze_result_t> create_module(
+    ze_context_handle_t context, ze_device_handle_t device, uint8_t *binary_ptr,
+    size_t binary_size, const char *build_flags, const bool is_spv = true,
+    const std::vector<std::pair<uint32_t, int32_t>> &spec_pairs = {}) {
   assert(binary_ptr != nullptr && "binary_ptr should not be NULL");
   assert(build_flags != nullptr && "build_flags should not be NULL");
 
   const ze_module_format_t format =
       is_spv ? ZE_MODULE_FORMAT_IL_SPIRV : ZE_MODULE_FORMAT_NATIVE;
+
+  ze_module_constants_t spec_consts{};
+  std::vector<uint32_t> ids;
+  std::vector<const void *> value_ptrs;
+
+  if (!spec_pairs.empty()) {
+    for (const auto &p : spec_pairs) {
+      ids.push_back(p.first);
+      value_ptrs.push_back(static_cast<const void *>(&p.second));
+    }
+
+    spec_consts.numConstants = static_cast<uint32_t>(spec_pairs.size());
+    spec_consts.pConstantIds = ids.data();
+    spec_consts.pConstantValues = value_ptrs.data();
+  }
+
   ze_module_desc_t module_description = {};
   module_description.stype = ZE_STRUCTURE_TYPE_MODULE_DESC;
   module_description.format = format;
   module_description.inputSize = static_cast<uint32_t>(binary_size);
   module_description.pInputModule = binary_ptr;
   module_description.pBuildFlags = build_flags;
+  module_description.pConstants = spec_pairs.empty() ? nullptr : &spec_consts;
+
   ze_module_build_log_handle_t buildlog;
   ze_module_handle_t module;
   auto error_no =

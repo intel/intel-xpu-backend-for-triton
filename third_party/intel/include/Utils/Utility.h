@@ -2,6 +2,7 @@
 #define TRITON_INTEL_UTILS_UTILITY_H
 
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/PatternMatch.h" // ?
 #include "mlir/IR/Value.h"
 
 namespace mlir::triton {

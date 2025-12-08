@@ -3,6 +3,7 @@ add_triton_library(TritonIntelUtils
   LibCallEmitter.cpp
   LLVMIntr.cpp
   Mangling.cpp
+  SpecConst.cpp
   Utility.cpp
 
   LINK_LIBS PUBLIC

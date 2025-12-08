@@ -491,7 +491,7 @@ class CompiledKernel:
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
         self.module, self.function, self.n_regs, self.n_spills, self.n_max_threads = driver.active.utils.load_binary(
             self.name, self.kernel, self.metadata.shared, self.metadata.build_flags,
-            not self.metadata.generate_native_code, device)
+            not self.metadata.generate_native_code, device, getattr(self.metadata, "spec_const_args", None))
         # PyTorch could use the updated build flags in load binary.
         if hasattr(driver.active.utils, "get_last_selected_build_flags"):
             new_build_flags = driver.active.utils.get_last_selected_build_flags()
