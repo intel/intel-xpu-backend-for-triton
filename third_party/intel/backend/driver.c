@@ -106,13 +106,14 @@ using Spills = int32_t;
 
 template <typename L0_DEVICE, typename L0_CONTEXT>
 std::tuple<ze_module_handle_t, ze_kernel_handle_t, Spills>
-compileLevelZeroObjects(uint8_t *binary_ptr, const size_t binary_size,
-                        const std::string &kernel_name, L0_DEVICE l0_device,
-                        L0_CONTEXT l0_context, const std::string &build_flags,
-                        const bool is_spv) {
-  auto l0_module =
-      checkSyclErrors(create_module(l0_context, l0_device, binary_ptr,
-                                    binary_size, build_flags.data(), is_spv));
+compileLevelZeroObjects(
+    uint8_t *binary_ptr, const size_t binary_size,
+    const std::string &kernel_name, L0_DEVICE l0_device, L0_CONTEXT l0_context,
+    const std::string &build_flags, const bool is_spv,
+    const std::vector<std::pair<uint32_t, int32_t>> &spec_pairs) {
+  auto l0_module = checkSyclErrors(
+      create_module(l0_context, l0_device, binary_ptr, binary_size,
+                    build_flags.data(), is_spv, spec_pairs));
 
   // Retrieve the kernel properties (e.g. register spills).
   auto l0_kernel = checkSyclErrors(create_function(l0_module, kernel_name));
@@ -201,17 +202,104 @@ extern "C" EXPORT_FUNC PyObject *get_last_selected_build_flags() {
   return Py_BuildValue("s", last_build_flag().data());
 }
 
+static bool pySequenceToIntVector(PyObject *obj, std::vector<int> &out,
+                                  const char *argName) {
+  PyObject *seq = PySequence_Fast(obj, "expected a sequence");
+  if (!seq) {
+    PyErr_Format(PyExc_TypeError, "%s must be a list/tuple of ints", argName);
+    return false;
+  }
+
+  Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
+  PyObject **items = PySequence_Fast_ITEMS(seq);
+
+  out.reserve((size_t)n);
+  for (Py_ssize_t i = 0; i < n; ++i) {
+    PyObject *it = items[i];
+    if (!PyLong_Check(it)) {
+      Py_DECREF(seq);
+      PyErr_Format(PyExc_TypeError, "%s[%zd] is not an int", argName, i);
+      return false;
+    }
+    long v = PyLong_AsLong(it);
+    if (PyErr_Occurred()) {
+      Py_DECREF(seq);
+      return false;
+    }
+    out.push_back((int)v);
+  }
+
+  Py_DECREF(seq);
+  return true;
+}
+
+extern "C" EXPORT_FUNC PyObject *mock_binary(PyObject *args) {
+  int devId = 0;
+  const char *build_flags_ptr = nullptr;
+
+  if (!PyArg_ParseTuple(args, "si", &build_flags_ptr, &devId)) {
+    std::cerr << "mock_binary args parse failed" << std::endl;
+    return NULL;
+  }
+
+  if (devId < 0 || devId >= static_cast<int>(g_sycl_l0_device_list.size())) {
+    std::cerr << "Device not found " << std::endl;
+    return NULL;
+  }
+
+  BuildFlags build_flags(build_flags_ptr);
+  auto n_regs = build_flags.n_regs();
+
+  const auto &sycl_l0_device_pair = g_sycl_l0_device_list[devId];
+  const auto l0_device = sycl_l0_device_pair.second;
+
+  ze_device_compute_properties_t compute_properties = {};
+  compute_properties.stype = ZE_STRUCTURE_TYPE_DEVICE_COMPUTE_PROPERTIES;
+  zeDeviceGetComputeProperties(l0_device, &compute_properties);
+  int32_t n_max_threads = compute_properties.maxTotalGroupSize;
+
+  last_build_flag = build_flags;
+  return Py_BuildValue("(ii)", n_regs, n_max_threads);
+}
+
 extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   const char *name, *build_flags_ptr;
   int shared;
   PyObject *py_bytes;
   int is_spv;
   int devId;
+  PyObject *py_spec_const_args, *py_spec_const_values;
 
-  if (!PyArg_ParseTuple(args, "sSispi", &name, &py_bytes, &shared,
-                        &build_flags_ptr, &is_spv, &devId)) {
-    std::cerr << "loadBinary arg parse failed" << std::endl;
+  if (!PyArg_ParseTuple(args, "sSispiOO", &name, &py_bytes, &shared,
+                        &build_flags_ptr, &is_spv, &devId, &py_spec_const_args,
+                        &py_spec_const_values)) {
+    std::cerr << "load_binary arg parse failed" << std::endl;
     return NULL;
+  }
+
+  std::vector<std::pair<uint32_t, int32_t>> spec_pairs;
+  if (py_spec_const_args != Py_None && py_spec_const_values != Py_None) {
+    std::vector<int> spec_const_args;
+    if (!pySequenceToIntVector(py_spec_const_args, spec_const_args,
+                               "spec_const_args"))
+      return NULL;
+
+    std::vector<int> spec_const_values;
+    if (!pySequenceToIntVector(py_spec_const_values, spec_const_values,
+                               "spec_const_values"))
+      return NULL;
+
+    if (spec_const_args.size() != spec_const_values.size()) {
+      PyErr_SetString(
+          PyExc_RuntimeError,
+          "spec_const_args and spec_const_values must have the same length");
+      return NULL;
+    }
+
+    for (size_t i = 0; i < spec_const_args.size(); ++i) {
+      spec_pairs.emplace_back(static_cast<uint32_t>(spec_const_args[i]),
+                              static_cast<int32_t>(spec_const_values[i]));
+    }
   }
 
   if (devId > g_sycl_l0_device_list.size()) {
@@ -242,7 +330,7 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
 
     auto [l0_module, l0_kernel, n_spills] =
         compileLevelZeroObjects(binary_ptr, binary_size, kernel_name, l0_device,
-                                l0_context, build_flags(), is_spv);
+                                l0_context, build_flags(), is_spv, spec_pairs);
 
     const bool debugEnabled = getBoolEnv("TRITON_DEBUG");
 
@@ -264,7 +352,7 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
           auto [l0_module_dgrf, l0_kernel_dgrf, n_spills_dgrf] =
               compileLevelZeroObjects(binary_ptr, binary_size, kernel_name,
                                       l0_device, l0_context, build_flags(),
-                                      is_spv);
+                                      is_spv, spec_pairs);
 
           if (debugEnabled)
             std::cout << "(I): Kernel has now " << n_spills_dgrf << " spills"

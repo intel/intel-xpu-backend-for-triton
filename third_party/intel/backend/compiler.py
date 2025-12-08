@@ -401,6 +401,11 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment")
         metadata["profile_scratch_size"] = src.get_int_attr("ttg.profile_scratch_memory_size") or 0
         metadata["profile_scratch_align"] = src.get_int_attr("ttg.profile_scratch_memory_alignment") or 1
+
+        spec_args = get_ttig_spec_const_args_from_module(mod)
+        if spec_args:
+            metadata["spec_const_args"] = spec_args
+
         ret = str(llvm_mod)
         del llvm_mod
         del context
@@ -493,3 +498,29 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     @functools.lru_cache()
     def hash(self):
         return f'SPIR-V 1.5-{self.properties}'
+
+
+def get_ttig_spec_const_args_from_module(mod):
+    """
+    Reads module attrs:
+      - ttig.spec_const_count
+      - ttig.spec_const_{i}
+
+    Returns: List[int] (arg indices).
+    Raises if count is present but any indexed key is missing.
+    """
+    n = mod.get_int_attr("ttig.spec_const_count")
+    n = int(n) if n is not None else 0
+
+    spec_args = []
+
+    for i in range(n):
+        key = f"ttig.spec_const_{i}"
+        v = mod.get_int_attr(key)
+        if v is None:
+            raise RuntimeError(f"MLIR module is missing expected int attr '{key}' "
+                               f"while ttig.spec_const_count={n}")
+
+        spec_args.append(v)
+
+    return spec_args

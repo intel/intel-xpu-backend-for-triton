@@ -2,6 +2,7 @@
 #define TRITON_INTEL_UTILS_UTILITY_H
 
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
 
 namespace mlir::triton {
@@ -31,6 +32,11 @@ Value getFinalValue(Value value);
 
 // Erase the operations in \p operations.
 void eraseOperations(SmallPtrSetImpl<Operation *> &operations);
+
+Value cloneWithBackwardSlice(Value pitchVal, BlockArgument leaf, Value specArg,
+                             Location loc, PatternRewriter &rewriter);
+
+std::pair<BlockArgument, int32_t> markRootArgAsSpecConst(Value resultVal);
 
 } // namespace mlir::triton::intel
 
