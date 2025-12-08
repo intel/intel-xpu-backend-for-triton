@@ -153,14 +153,14 @@ def TritonGEN_MatrixDPASOp : TritonGEN_Op<"dpas">,
   let hasVerifier = 1;
 }
 
-def TritonGEN_MatrixBlockScaleDPASOp : TritonGEN_Op<"bdpas">,
+def TritonGEN_MatrixBlockScaleDPASOp : TritonGEN_Op<"bdpas", [AttrSizedOperandSegments]>,
   Results<(outs FixedVectorOfNonZeroRankOf<[F32, BF16]>:$d)>,
   Arguments<(ins
     FixedVectorOfRankAndType<[1], [F32, BF16]>:$c,
     FixedVectorOfRankAndType<[1], [AnyI16]>:$a,
     FixedVectorOfRankAndType<[1], [AnyI32]>:$b,
-    AnyTypeOf<[AnyI8, FixedVectorOfRankAndType<[1], [AnyI8]>]>:$scaleA,
-    AnyTypeOf<[AnyI8, FixedVectorOfRankAndType<[1], [AnyI8]>]>:$scaleB,
+    Optional<AnyTypeOf<[AnyI8, FixedVectorOfRankAndType<[1], [AnyI8]>]>>:$scaleA,
+    Optional<AnyTypeOf<[AnyI8, FixedVectorOfRankAndType<[1], [AnyI8]>]>>:$scaleB,
     TritonGEN_PrecisionTypeAttr:$pa,
     TritonGEN_PrecisionTypeAttr:$pb,
     I32Attr:$rc

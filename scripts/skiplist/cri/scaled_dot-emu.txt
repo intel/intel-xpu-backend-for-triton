@@ -1,2 +1,0 @@
-# Tests that use emulated functionality
-python/test/unit/language/test_core.py::test_scaled_dot

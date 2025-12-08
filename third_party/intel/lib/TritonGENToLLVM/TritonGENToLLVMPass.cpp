@@ -817,29 +817,75 @@ struct TritonMatrixBlockScaleDPASLowering
            "Accumulator and result type mismatch");
     VectorType cTy = cOrigTy;
 
-    Type scaleATy = op.getScaleA().getType();
-    Type scaleBTy = op.getScaleB().getType();
+    TritonGEN::PrecisionType precision = op.getPa();
+    Type scaleTy = getScaleType(rewriter, precision);
 
-    SmallVector<Type> funcTypes{cTy, cTy, aTy, bTy, scaleATy, scaleBTy};
+    Value scaleA = op.getScaleA();
+    Value scaleB = op.getScaleB();
 
+    SmallVector<Type> funcTypes{cTy, cTy, aTy, bTy, scaleTy, scaleTy};
     std::string funcName =
         "llvm.genx.GenISA.sub.group.bdpas." + getGenISATypeMangling(funcTypes);
 
-    SmallVector<Type> argTypes{cTy,      aTy,     bTy,    scaleATy,
-                               scaleBTy, int32Ty, int32Ty};
+    SmallVector<Type> argTypes{cTy,     aTy,     bTy,    scaleTy,
+                               scaleTy, int32Ty, int32Ty};
 
     auto precA = LLVM::ConstantOp::create(rewriter, loc, int32Ty,
                                           static_cast<int>(op.getPa()));
     auto precB = LLVM::ConstantOp::create(rewriter, loc, int32Ty,
                                           static_cast<int>(op.getPb()));
-    SmallVector<Value> args{c,     a,    b, op.getScaleA(), op.getScaleB(),
-                            precA, precB};
+
+    // When either scale operand is missing, set it to the value 1.0 in E8M0
+    // format (encoded as 0x7f).
+    if (!scaleA)
+      scaleA = defineScale(rewriter, loc, 0x7f, scaleTy);
+    if (!scaleB)
+      scaleB = defineScale(rewriter, loc, 0x7f, scaleTy);
+
+    SmallVector<Value> args{c, a, b, scaleA, scaleB, precA, precB};
 
     LLVM::CallOp call = intel::createDeviceFunctionCall(
         rewriter, funcName, cTy, argTypes, args, {},
         intel::convergentNoUnwindWillReturnAttrs);
     rewriter.replaceOp(op, call);
     return success();
+  }
+
+private:
+  Value defineScale(ConversionPatternRewriter &rewriter, Location loc,
+                    unsigned val, Type scaleTy) const {
+    Value scale;
+    if (auto vecTy = dyn_cast<VectorType>(scaleTy)) {
+      scale = LLVM::ConstantOp::create(
+          rewriter, loc, vecTy,
+          DenseElementsAttr::get(vecTy, rewriter.getI8IntegerAttr(val)));
+    } else {
+      assert(isa<IntegerType>(scaleTy) &&
+             (scaleTy.getIntOrFloatBitWidth() == 8) && "unexpected scaleTy");
+      scale = LLVM::ConstantOp::create(rewriter, loc, scaleTy,
+                                       rewriter.getI8IntegerAttr(val));
+    }
+    return scale;
+  };
+
+  Type getScaleType(ConversionPatternRewriter &rewriter,
+                    TritonGEN::PrecisionType precision) const {
+    Type scaleTy;
+
+    switch (precision) {
+    case TritonGEN::PrecisionType::BF16:
+    case TritonGEN::PrecisionType::FP16:
+    case TritonGEN::PrecisionType::F8E5M2:
+    case TritonGEN::PrecisionType::F8E4M3FN:
+      scaleTy = int_ty(8);
+      break;
+    case TritonGEN::PrecisionType::F4E2M1:
+      scaleTy = vec_ty(int_ty(8), 2);
+      break;
+    default:
+      assert(false && "unsupported precision type");
+    }
+    return scaleTy;
   }
 };
 

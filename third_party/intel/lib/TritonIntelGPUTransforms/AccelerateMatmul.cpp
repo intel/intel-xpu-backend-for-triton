@@ -183,10 +183,6 @@ public:
           return failure();
         }
       }
-      // TODO: improve this by composing a scale of hex value 0x7f for scale
-      // of 1.0. (intel-tools/intel-xpu-backend-for-triton#716)
-      if (!op.getAScale() || !op.getBScale())
-        return failure();
     }
 
     // Create DPAS encoding for the given number of warps

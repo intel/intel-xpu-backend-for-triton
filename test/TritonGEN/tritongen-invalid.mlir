@@ -163,7 +163,7 @@ llvm.func @triton_gen.dpas(%c : vector<8xf32>, %a : vector<8xi16>, %b : vector<1
 
 llvm.func @triton_gen.dpas(%c : vector<4xf32>, %a : vector<4xi16>, %b : vector<8xi32>, %sa : i8, %sb : i8) {
   // expected-error @+1 {{'triton_gen.bdpas' op expecting repeat count to be 8}}
-  %0 = triton_gen.bdpas %c, %a, %b, %sa, %sb {pa=hf8, pb=hf8, rc=4} : (vector<4xf32>, vector<4xi16>, vector<8xi32>, i8, i8) -> vector<4xf32>
+  %0 = triton_gen.bdpas %c, %a, %b, %sa, %sb {pa=hf8, pb=hf8, rc=4} {operandSegmentSizes = array<i32: 1, 1, 1, 1, 1>} : (vector<4xf32>, vector<4xi16>, vector<8xi32>, i8, i8) -> vector<4xf32>
   llvm.return
 }
 
@@ -171,7 +171,7 @@ llvm.func @triton_gen.dpas(%c : vector<4xf32>, %a : vector<4xi16>, %b : vector<8
 
 llvm.func @triton_gen.dpas(%c : vector<8xf32>, %a : vector<8xi16>, %b : vector<8xi32>, %sa : vector<2xi8>, %sb : vector<2xi8>) {
   // expected-error @+1 {{'triton_gen.bdpas' op 4th operand (Scale A) should be i8 when precision is bf16, fp16, bf8, or hf8}}
-  %0 = triton_gen.bdpas %c, %a, %b, %sa, %sb {pa=hf8, pb=hf8, rc=8} : (vector<8xf32>, vector<8xi16>, vector<8xi32>, vector<2xi8>, vector<2xi8>) -> vector<8xf32>
+  %0 = triton_gen.bdpas %c, %a, %b, %sa, %sb {pa=hf8, pb=hf8, rc=8} {operandSegmentSizes = array<i32: 1, 1, 1, 1, 1>} : (vector<8xf32>, vector<8xi16>, vector<8xi32>, vector<2xi8>, vector<2xi8>) -> vector<8xf32>
   llvm.return
 }
 
@@ -179,7 +179,7 @@ llvm.func @triton_gen.dpas(%c : vector<8xf32>, %a : vector<8xi16>, %b : vector<8
 
 llvm.func @triton_gen.dpas(%c : vector<8xf32>, %a : vector<8xi16>, %b : vector<8xi32>, %sa : vector<2xi8>, %sb : i8) {
   // expected-error @+1 {{'triton_gen.bdpas' op 5th operand (Scale B) should be 2xi8 when precision is e2m1}}
-  %0 = triton_gen.bdpas %c, %a, %b, %sa, %sb {pa=e2m1, pb=e2m1, rc=8} : (vector<8xf32>, vector<8xi16>, vector<8xi32>, vector<2xi8>, i8) -> vector<8xf32>
+  %0 = triton_gen.bdpas %c, %a, %b, %sa, %sb {pa=e2m1, pb=e2m1, rc=8} {operandSegmentSizes = array<i32: 1, 1, 1, 1, 1>} : (vector<8xf32>, vector<8xi16>, vector<8xi32>, vector<2xi8>, i8) -> vector<8xf32>
   llvm.return
 }
 

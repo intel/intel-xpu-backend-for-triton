@@ -266,28 +266,30 @@ LogicalResult TritonGEN::MatrixBlockScaleDPASOp::verify() {
     return this->emitOpError("expecting repeat count to be 8");
 
   TritonGEN::PrecisionType precision = this->getPa();
-  Type ScaleATy = this->getScaleA().getType();
-  Type ScaleBTy = this->getScaleB().getType();
+  Type ScaleATy = getScaleA() ? getScaleA().getType() : nullptr;
+  Type ScaleBTy = getScaleB() ? getScaleB().getType() : nullptr;
 
   switch (precision) {
   case TritonGEN::PrecisionType::BF16:
   case TritonGEN::PrecisionType::FP16:
   case TritonGEN::PrecisionType::F8E5M2:
   case TritonGEN::PrecisionType::F8E4M3FN:
-    if (!ScaleATy.isInteger(8))
+    if (ScaleATy && !ScaleATy.isInteger(8))
       return this->emitOpError("4th operand (Scale A) should be i8 when "
                                "precision is bf16, fp16, bf8, or hf8");
-    if (!ScaleBTy.isInteger(8))
+    if (ScaleBTy && !ScaleBTy.isInteger(8))
       return this->emitOpError("5th operand (Scale B) should be i8 when "
                                "precision is bf16, fp16, bf8, or hf8");
     break;
   case TritonGEN::PrecisionType::F4E2M1:
-    if (!(isa<VectorType>(ScaleATy) &&
+    if (ScaleATy &&
+        !(isa<VectorType>(ScaleATy) &&
           cast<VectorType>(ScaleATy).getElementType().isInteger(8) &&
           cast<VectorType>(ScaleATy).getNumElements() == 2))
       return this->emitOpError(
           "4th operand (Scale A) should be 2xi8 when precision is e2m1");
-    if (!(isa<VectorType>(ScaleBTy) &&
+    if (ScaleBTy &&
+        !(isa<VectorType>(ScaleBTy) &&
           cast<VectorType>(ScaleBTy).getElementType().isInteger(8) &&
           cast<VectorType>(ScaleBTy).getNumElements() == 2))
       return this->emitOpError(

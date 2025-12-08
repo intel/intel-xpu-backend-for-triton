@@ -238,8 +238,14 @@ public:
       auto RC = IntegerAttr::get(rewriter.getIntegerType(32),
                                  dpasEncoding.getRepeatCount());
       if constexpr (std::is_same<OpTy, DotScaledOp>::value) {
-        Value sA = scaleA.at({b, m, k});
-        Value sB = scaleB.at({b, n, k});
+        Value sA;
+        if (!scaleA.empty()) {
+          sA = scaleA.at({b, m, k});
+        }
+        Value sB;
+        if (!scaleB.empty()) {
+          sB = scaleB.at({b, n, k});
+        }
         fc.at({b, m, n}) = TritonGEN::MatrixBlockScaleDPASOp::create(
             rewriter, loc, dTy, tb.bitcast(valc, cTy), tb.bitcast(valA, aTy),
             tb.bitcast(valB, bTy), sA, sB, pA, pB, RC);
