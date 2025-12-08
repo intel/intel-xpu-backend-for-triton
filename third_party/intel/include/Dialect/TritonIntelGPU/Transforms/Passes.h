@@ -13,14 +13,6 @@
 
 namespace mlir::triton::gpu::intel {
 
-// Used by Triton runtime
-struct ClusterInfo {
-  ClusterInfo() = default;
-  unsigned clusterDimX = 1u;
-  unsigned clusterDimY = 1u;
-  unsigned clusterDimZ = 1u;
-};
-
 /// Split barrier scope
 enum SplitBarrierScope { None = 0, Workgroup = 1, Subgroup = 2 };
 
