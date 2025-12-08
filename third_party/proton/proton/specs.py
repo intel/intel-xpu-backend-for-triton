@@ -73,5 +73,5 @@ def max_bps(device_type, arch, bus_width, memory_clock_rate):
     elif device_type == "HIP":
         return amd_bps_by_arch[arch]
     else:
-        assert device_type == "XPU" 
+        assert device_type == "XPU"
         return xpu_arch_to_mem_type_multiplier[arch] * bus_width * memory_clock_rate * 1e3 / 8
