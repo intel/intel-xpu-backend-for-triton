@@ -223,7 +223,7 @@ def test_line_info(func: str):
 @pytest.mark.parametrize("func", func_types)
 def test_line_info_interpreter(func: str):
     if not is_interpreter():
-        pytest.skip("interpreter is not enabled")
+        pytest.xfail("interpreter is not enabled")
 
     kernel = None
     expected_def_lineno = 0

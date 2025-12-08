@@ -28,10 +28,10 @@ namespace {
 //    for register layouts, and input dims [offset] for shared layouts.
 //  - cgaLayout: Arrangement of multiple blocks, i.e. input dims [block].
 //
-// Note that this is inconsistent with the type name CTALayoutAttr.  That type
+// Note that this is inconsistent with the type name CTAEncodingAttr. That type
 // is equivalent to our cgaLayout.
 //
-// IMO the name CTALayoutAttr is wrong.  If we tried to be consistent anyway,
+// IMO the name CTAEncodingAttr is wrong.  If we tried to be consistent anyway,
 // then we'd have to rename ctaLayout to "warpLayout".  I think that's more
 // confusing than being inconsistent about "cgaLayout", especially when we have
 // to consider the size of the warpLayout (surely that's not the "warpSize").
@@ -156,28 +156,6 @@ sharedToLinearLayoutAMDRotating(ArrayRef<int64_t> shape,
 }
 
 } // namespace
-
-LinearLayout makeCgaLayout(CTALayoutAttr layout) {
-  MLIRContext *ctx = layout.getContext();
-  StringAttr kBlock = S("block");
-
-  int rank = layout.getCTAOrder().size();
-  SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
-
-  LinearLayout ret = LinearLayout::empty();
-  for (int i = 0; i < rank; i++) {
-    // Start with the most minor dimension, which is order[0].
-    int dim = layout.getCTAOrder()[i];
-    int split = layout.getCTASplitNum()[dim];
-    int ctas = layout.getCTAsPerCGA()[dim];
-    assert(ctas % split == 0);
-    ret *= LinearLayout::identity1D(split, kBlock, outDimNames[dim]) *
-           LinearLayout::zeros1D(ctas / split, kBlock, outDimNames[dim]);
-  }
-
-  // Transpose to standard order (dim0, dim1, ...).
-  return ret.transposeOuts(outDimNames);
-}
 
 // Returns the layout of a single core matrix which tiles the nvmma layout
 LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
@@ -468,93 +446,6 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   }
 
   return combineCtaCgaWithShape(tileLayout, getCTALayout(), shape);
-}
-
-std::optional<LinearLayout>
-chooseLLDsReadTrLayout(Attribute enc, ArrayRef<int64_t> shape,
-                       int32_t elemBitWidth, unsigned instBitWidth,
-                       unsigned numLanesInShuffleGroup) {
-  using BaseTy = std::vector<std::vector<int32_t>>;
-  // This function will derive the layout for the ds_read_tr instruction
-  // based on the input layout (LL/DotLayout/...)
-  // The ds_read_tr instruction works on instBitWidth per lane and in groups of
-  // numLanesInShuffleGroup lanes.
-
-  // In this example we look at ds_read_b64_tr (instBitWidth = 64) and
-  // numLanesInShuffleGroup = 16 with 64 lanes per warp. Using M-continuous
-  // 16-bit input tensor A as an example. Each lane will load 4 consecutive
-  // elements (64-bit in total) along M. There are 4 consecutive lanes in total
-  // along M. Then the loaded elements are exchanged within the MxK=16x4 "base
-  // unit".
-  //        K0  K1  K2  K3
-  //      +---+---+---+---+
-  //  M0  |   |   |   |   |       M0, K[0-3]:  T0
-  //  M1  | T | T | T | T |       M1, K[0-3]:  T1
-  //  M2  | 0 | 4 | 8 |12 |       M2, K[0-3]:  T2
-  //  M3  |   |   |   |   |       M3, K[0-3]:  T3
-  //      +---+---+---+---+
-  //  M4  |   |   |   |   |       M4, K[0-3]:  T4
-  //  M5  | T | T | T | T |       M5, K[0-3]:  T5
-  //  M6  | 1 | 5 | 9 |13 |       M6, K[0-3]:  T6
-  //  M7  |   |   |   |   |       M7, K[0-3]:  T7
-  //      +---+---+---+---+  ==>
-  //  M8  |   |   |   |   |       M8, K[0-3]:  T8
-  //  M9  | T | T | T | T |       M9, K[0-3]:  T9
-  // M10  | 2 | 6 |10 |14 |      M10, K[0-3]: T10
-  // M11  |   |   |   |   |      M11, K[0-3]: T11
-  //      +---+---+---+---+
-  // M12  |   |   |   |   |      M12, K[0-3]: T12
-  // M13  | T | T | T | T |      M13, K[0-3]: T13
-  // M14  | 3 | 7 |11 |15 |      M14, K[0-3]: T14
-  // M15  |   |   |   |   |      M15, K[0-3]: T15
-  //      +---+---+---+---+
-
-  // Given the layout represented by `enc` and shape, we can derive the layout
-  // that ds_read_b64_tr need to have in order to perform a vectorized load of
-  // the elements. This can be done by rearranging the inner 4x16 element base
-  // unit in the LL by rearranging the first numReg register bases and the
-  // first numLane lane bases.
-  auto rotatePrefixes = [](BaseTy &regBase, std::size_t numReg,
-                           BaseTy &laneBase, std::size_t numLane) {
-    // Concatenate prefixes of the two vectors. Lane first and then regs.
-    // C D E F | A B
-    // Then copy over numReg to the regBase and numLane to laneBase
-    // C D | E F A B
-    BaseTy baseUnit(laneBase.begin(), laneBase.begin() + numLane);
-    llvm::append_range(
-        baseUnit, llvm::make_range(regBase.begin(), regBase.begin() + numReg));
-
-    std::copy(baseUnit.begin(), baseUnit.begin() + numReg, regBase.begin());
-    std::copy(baseUnit.begin() + numReg, baseUnit.end(), laneBase.begin());
-  };
-
-  auto ctx = enc.getContext();
-  assert(elemBitWidth == 8 || elemBitWidth == 16);
-  // Get how many reg bases and tile bases the ds_read_tr tile spans
-  unsigned numRegBases = llvm::Log2_32(instBitWidth / elemBitWidth);
-  unsigned numLaneBases = llvm::Log2_32(numLanesInShuffleGroup);
-
-  auto ldsTransLayout = triton::gpu::toLinearLayout(shape, enc);
-  auto bases = ldsTransLayout.getBases();
-  auto kRegister = S("register");
-  auto kLane = S("lane");
-
-  // Make sure that we have enough register bases to rotate, otherwise we
-  // can't return a valid ds_read_tr layout
-  if (ldsTransLayout.getInDimSizeLog2(kRegister) < numRegBases) {
-    return std::nullopt;
-  }
-  // We should always have enough lanes
-  assert(ldsTransLayout.getInDimSizeLog2(kLane) >= numLaneBases);
-  rotatePrefixes(bases[kRegister], numRegBases, bases[kLane], numLaneBases);
-  // Scale types double the elements for a total of 16 vgpr (still only 16
-  // elements contiguous). Need to adjust the lane basis to reflect that
-  if (elemBitWidth == 8 && numLanesInShuffleGroup == 8) {
-    assert(ldsTransLayout.getInDimSizeLog2(kLane) >= (numLaneBases + 1));
-    std::swap(bases[kLane][numLaneBases - 1], bases[kLane][numLaneBases]);
-  }
-
-  return LinearLayout(bases, ldsTransLayout.getOutDims(), false);
 }
 
 std::optional<LinearLayout>
@@ -1132,28 +1023,7 @@ LinearLayout SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   parentShape.insert(parentShape.begin() + getDim(), 1);
   LinearLayout parentLL = triton::gpu::toLinearLayout(parentShape, getParent());
 
-  // Remove dimension getDim() from the parent layout.
-  //
-  //  1. Construct a layout `transform` from parent-out-dims to slice-out-dims
-  //     that removes the relevant out-dim.
-  //  2. Compute linearSlice = parent.compose(transform).  Now linearSlice maps
-  //     from parent in-dims to slice out-dims.
-  //  3. Fix up duplicate registers introduced by slicing.
-  auto outDimNames = standardOutDimNames(ctx, shape.size() + 1);
-  LinearLayout transform = LinearLayout::empty();
-  for (auto [idx, outDim] : llvm::enumerate(parentLL.getOutDimNames())) {
-    if (idx == getDim()) {
-      // Because we're multiplying by all zeros, we could replace outDimNames[0]
-      // with any other valid out-dim; the layout will be the same.
-      transform *= LinearLayout::zeros1D(parentLL.getOutDimSize(outDim), outDim,
-                                         outDimNames[0]);
-    } else {
-      transform *=
-          LinearLayout::identity1D(parentLL.getOutDimSize(outDim), outDim,
-                                   outDimNames[idx - (idx < getDim() ? 0 : 1)]);
-    }
-  }
-  LinearLayout sliceLL = parentLL.compose(transform);
+  auto sliceLL = removeStandardDim(parentLL, getDim());
 
   // Step 3: Along the "register" dim, remove any all-zero bases.
   auto bases = sliceLL.getBases();
@@ -1192,20 +1062,39 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
         LinearLayout::identity1D(encoding.getCTASplitN(), kCol, dims[1]);
     auto newEncoding = TensorMemoryEncodingAttr::get(
         ctx, encoding.getBlockM(), encoding.getBlockN(),
-        encoding.getColStride(), encoding.getCTASplitM(), 1);
+        encoding.getColStride(), encoding.getCTASplitM(), 1,
+        encoding.getTwoCTAs());
     return tensorMemoryToLinearLayout(
                {shape[0], shape[1] / encoding.getCTASplitN()}, newEncoding) *
            split;
   }
   if (encoding.getCTASplitM() > 1) {
-    auto split =
-        LinearLayout::identity1D(encoding.getCTASplitM(), kCol, dims[0]);
+    auto splitM = encoding.getCTASplitM();
+    auto blockM = encoding.getBlockM();
+    bool isM64TwoCTA = blockM == 64 && encoding.getTwoCTAs();
+    if (isM64TwoCTA) {
+      // blockM == 64 and twoCTAs is laid out as the transpose of 128xblockN
+      // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-data-path-layout-b
+      blockM *= 2;
+      splitM /= 2;
+    }
+    auto split = LinearLayout::identity1D(splitM, kCol, dims[0]);
     auto newEncoding = TensorMemoryEncodingAttr::get(
-        ctx, encoding.getBlockM(), encoding.getBlockN(),
-        encoding.getColStride(), 1, encoding.getCTASplitN());
-    return tensorMemoryToLinearLayout(
-               {shape[0] / encoding.getCTASplitM(), shape[1]}, newEncoding) *
-           split;
+        ctx, blockM, encoding.getBlockN(), encoding.getColStride(), 1,
+        encoding.getCTASplitN(), encoding.getTwoCTAs());
+    auto ret =
+        tensorMemoryToLinearLayout({shape[0] / splitM, shape[1]}, newEncoding) *
+        split;
+    // In this case, we swap the basis of the last row and last column as per
+    // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-data-path-layout-bny
+    if (isM64TwoCTA) {
+      auto bases = ret.getBases();
+      auto &rowBases = bases[kRow];
+      auto &colBases = bases[kCol];
+      std::swap(rowBases[rowBases.size() - 1], colBases[colBases.size() - 1]);
+      ret = LinearLayout(bases, ret.getOutDims(), ret.isSurjective());
+    }
+    return ret;
   }
   assert(encoding.getCTASplitM() == 1 && encoding.getCTASplitN() == 1);
 
@@ -1380,7 +1269,7 @@ LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {
 }
 
 LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
-                                    CTALayoutAttr cgaLayoutAttr,
+                                    CTAEncodingAttr cgaLayoutAttr,
                                     ArrayRef<int64_t> shape) {
   int rank = shape.size();
   assert(ctaLayout.getNumOutDims() == rank);
@@ -1395,7 +1284,7 @@ LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
   }
 
   LinearLayout cgaLayout =
-      ensureLayoutNotLargerThan(makeCgaLayout(cgaLayoutAttr), labeledShape)
+      ensureLayoutNotLargerThan(cgaLayoutAttr.getLinearLayout(), labeledShape)
           .transposeOuts(llvm::to_vector(ctaLayout.getOutDimNames()));
 
   // Calculate the shape of the ctaLayout, which is `shape` divided by the
@@ -1461,14 +1350,10 @@ std::optional<LinearLayout>
 chooseDsReadTrLayout(Attribute enc, ArrayRef<int64_t> shape,
                      int32_t elemBitWidth, unsigned instBitWidth,
                      unsigned numLanesInShuffleGroup) {
-  if (elemBitWidth == 4) {
-    auto dot = cast<DotOperandEncodingAttr>(enc);
-    return chooseDotDsReadTrLayout(dot, shape, elemBitWidth, instBitWidth,
-                                   numLanesInShuffleGroup);
-  } else {
-    return chooseLLDsReadTrLayout(enc, shape, elemBitWidth, instBitWidth,
-                                  numLanesInShuffleGroup);
-  }
+  assert(elemBitWidth == 4);
+  auto dot = cast<DotOperandEncodingAttr>(enc);
+  return chooseDotDsReadTrLayout(dot, shape, elemBitWidth, instBitWidth,
+                                 numLanesInShuffleGroup);
 }
 
 LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
@@ -1532,7 +1417,7 @@ LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
                            warpLayout.transposeOuts(outDimNames);
 
   return combineCtaCgaWithShape(
-      ctaLayout, CTALayoutAttr::getDefault(ctx, /*rank=*/2), dotOperandShape);
+      ctaLayout, CTAEncodingAttr::getDefault(ctx, /*rank=*/2), dotOperandShape);
 }
 
 // PTX ISA - Warp-level MMA Block Scaling
@@ -1548,7 +1433,7 @@ LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
 LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx,
                                           ArrayRef<int64_t> shape, int opIdx,
                                           ArrayRef<unsigned> warpsPerCTA,
-                                          CTALayoutAttr ctaLayout) {
+                                          CTAEncodingAttr ctaLayout) {
   unsigned rank = shape.size();
   auto outDims = standardOutDimNames(ctx, rank);
   StringAttr kRegister = StringAttr::get(ctx, "register");
@@ -1662,8 +1547,7 @@ LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
   LinearLayout ctaLayout = tileLayout.transposeOuts(outDimNames) *
                            warpLayout.transposeOuts(outDimNames);
 
-  auto ctaLay = CTALayoutAttr::get(/*context=*/ctx, /*CTAsPerCGA=*/{1, 1},
-                                   /*CTASplitNum=*/{1, 1}, /*CTAOrder=*/{1, 0});
+  auto ctaLay = CTAEncodingAttr::getDefault(ctx, 2);
   auto finalLay = combineCtaCgaWithShape(ctaLayout, ctaLay, dotOperandShape);
   return finalLay;
 }

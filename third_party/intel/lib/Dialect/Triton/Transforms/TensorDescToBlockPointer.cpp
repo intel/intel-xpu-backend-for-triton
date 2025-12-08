@@ -134,8 +134,8 @@ private:
     });
 
     auto makeTensorPtrOp = [&]() {
-      auto makeTensorPtr = builder.create<tt::MakeTensorPtrOp>(
-          loc, base, shape, strides, offsets, sizes,
+      auto makeTensorPtr = tt::MakeTensorPtrOp::create(
+          builder, loc, base, shape, strides, offsets, sizes,
           builder.getDenseI32ArrayAttr({1, 0}));
       return makeTensorPtr;
     };
@@ -249,7 +249,7 @@ private:
     auto ptrType = cast<tt::PointerType>(operand.getType());
     auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
     Value ptr =
-        builder.create<tt::AdvanceOp>(loc, ptrType, operand, op.getIndices());
+        tt::AdvanceOp::create(builder, loc, ptrType, operand, op.getIndices());
 
     SmallVector<int32_t> boundaryCheck;
     for (size_t i = 0; i < tensorType.getRank(); ++i)
