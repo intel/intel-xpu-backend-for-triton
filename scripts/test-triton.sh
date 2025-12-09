@@ -59,6 +59,7 @@ TEST_DEFAULT=true
 TEST_UNIT=false
 TEST_CORE=false
 TEST_MINICORE=false
+TEST_LANGUAGE=false
 TEST_MXFP=false
 TEST_SCALED_DOT=false
 TEST_GLUON=false
@@ -105,6 +106,11 @@ while (( $# != 0 )); do
       ;;
     --minicore)
       TEST_MINICORE=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --language)
+      TEST_LANGUAGE=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -351,6 +357,24 @@ run_pytest_command() {
   fi
 }
 
+run_language_tests() {
+  echo "***************************************************"
+  echo "******     Running Triton Language tests     ******"
+  echo "***************************************************"
+  cd $TRITON_PROJ/python/test/unit
+
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=language \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py \
+    -k "not test_mxfp and not test_preshuffle_scale_mxfp_cdna4 and not test_scaled_dot"
+
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=subprocess \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/test_subprocess.py
+
+  # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
+  TRITON_DISABLE_LINE_INFO=0 TRITON_TEST_SUITE=line_info \
+    run_pytest_command -k "not test_line_info_interpreter" --verbose --device xpu language/test_line_info.py
+}
+
 run_regression_tests() {
   echo "***************************************************"
   echo "******   Running Triton Regression tests     ******"
@@ -368,13 +392,6 @@ run_minicore_tests() {
   cd $TRITON_PROJ/python/test/unit
   ensure_spirv_dis
 
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=language \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py \
-    -k "not test_mxfp and not test_preshuffle_scale_mxfp_cdna4 and not test_scaled_dot"
-
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=subprocess \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/test_subprocess.py
-
   # run runtime tests serially to avoid race condition with cache handling.
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=runtime \
     run_pytest_command -k "not test_within_2gb" --verbose --device xpu runtime/ --ignore=runtime/test_cublas.py
@@ -384,10 +401,6 @@ run_minicore_tests() {
 
   TRITON_TEST_SUITE=warnings \
     run_pytest_command --verbose -n ${PYTEST_MAX_PROCESSES:-8} test_perf_warning.py --device xpu
-
-  # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-  TRITON_DISABLE_LINE_INFO=0 TRITON_TEST_SUITE=line_info \
-    run_pytest_command -k "not test_line_info_interpreter" --verbose --device xpu language/test_line_info.py
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=tools \
     run_pytest_command -n ${PYTEST_MAX_PROCESSES:-8} -k "not test_disam_cubin" --verbose tools
@@ -428,6 +441,7 @@ run_core_tests() {
   echo "******      Running Triton Core tests        ******"
   echo "***************************************************"
   run_minicore_tests
+  run_language_tests
   run_mxfp_tests
   run_scaled_dot_tests
 }
@@ -748,6 +762,9 @@ test_triton() {
   else
     if [ "$TEST_MINICORE" = true ]; then
         run_minicore_tests
+    fi
+    if [ "$TEST_LANGUAGE" = true ]; then
+        run_language_tests
     fi
     if [ "$TEST_MXFP" = true ]; then
         run_mxfp_tests
