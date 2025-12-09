@@ -52,10 +52,10 @@ extern "C" EXPORT_FUNC const char *parse_device_arch(uint64_t dev_arch) {
     break;
 #endif
   case sycl::ext::oneapi::experimental::architecture::unknown:
-    std::cerr << "unknown sycl_arch" << std::endl;
+    arch = "unknown";
     break;
   default:
-    std::cerr << "sycl_arch not recognized: " << (uint64_t)sycl_arch
+    std::cerr << "device architecture not recognized: " << (uint64_t)sycl_arch
               << std::endl;
   }
 
