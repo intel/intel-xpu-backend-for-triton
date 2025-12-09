@@ -292,7 +292,7 @@ Combining all these requirements and recommendations, the best practice is to se
 for performance and compatibility reasons. If you want the transpose version of the same 2D block, use transposition (`a.T`).
 
 ---
-**Use kernel side Tensor Descriptors, not device side**
+**Use kernel side Tensor Descriptors, not host side**
 
 Tensor Descriptors can be defined inside of a kernel (called **device side Tensor Descriptors** (like in all the examples above) or outside of a triton kernel, in the launching utility (called **host side Tensor Descriptors**), like it is done in the upstream Triton ([example](https://triton-lang.org/main/getting-started/tutorials/09-persistent-matmul.html)).
 You should only use device side Tensor Descriptors on XPU for now.
