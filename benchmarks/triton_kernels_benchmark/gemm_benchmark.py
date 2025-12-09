@@ -472,7 +472,7 @@ def get_benchmark(
     The benchmark can then be executed by calling the :code:`.run` method on the return value.
     """
     supported_providers = {
-        'gluon': 'Gluon',
+        #'gluon': 'Gluon',
         'triton': 'Triton',
         'onednn': 'OneDNN',
     }
