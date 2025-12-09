@@ -304,7 +304,7 @@ You should only use device side Tensor Descriptors on XPU for now.
 3. **Strive to only use 2D Tensor Descriptors with last stride set to 1.**
 4. **Ideally, annotate strides with `tl.constexpr`.** Basic preference is `tl.constexpr` > no annotation > `tl.int64`/ `tl.int32` (for non-last strides) >> `tl.int64` / `tl.int32` for the last stride. Avoid annotating the last strides with `tl.int64` or `tl.int32`!
 
-## Use Proper Type Annotations
+### Use Proper Type Annotations
 1. Set `tl.constexpr` type annotation for block sizes and boolean flags to let the compiler optimize. Ideally, also use `tl.constexpr` for strides and tensor shapes that will cover limited number of values (up to 10). Each combination of arguments with this annotation is compiled separately, so avoid setting it for values that vary widely at runtime (like the number of tokens) to prevent excessive recompilation. For GEMM kernels of modern LLMs, for example, number of input and output features will likely be the same or cover just 2-4 unique values, but number of tokens can have more than 100 unique values. So you should use `tl.constexpr` for number of features, but not for the number of tokens.
 2. No Annotation: You can keep type annotations empty and let the compiler guess. This is good for parameters that change often, like number of tokens or total number of elements, to avoid excessive recompilation.
 3. Avoid annotating with `tl.int64` or `tl.int32`. It can prevent many optimizations.
