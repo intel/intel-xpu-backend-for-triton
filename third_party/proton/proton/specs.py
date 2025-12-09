@@ -18,6 +18,12 @@ amd_bps_by_arch = {
     'gfx950': 8.0 * 1e12,
 }
 
+xpu_arch_to_mem_type_multiplier = {
+    "pvc": 2,
+    "dg2": 8,
+    "bmg": 8,
+}
+
 # FP8 Matrix Performance(FLOPS/clock/CU)
 # For gfx90a we use the performance of INT8 since it doesn't support FP8 matrix operations.
 amd_fp8_flops_by_arch = {'gfx90a': 1024, 'gfx942': 4096, 'gfx950': 8192}
@@ -68,6 +74,4 @@ def max_bps(device_type, arch, bus_width, memory_clock_rate):
         return amd_bps_by_arch[arch]
     else:
         assert device_type == "XPU"
-        # FIXME: how to get correctly numbers on XPU?
-        # https://github.com/intel/intel-xpu-backend-for-triton/issues/5550
-        return 2 * bus_width * memory_clock_rate * 1e3 / 8
+        return xpu_arch_to_mem_type_multiplier[arch] * bus_width * memory_clock_rate * 1e3 / 8
