@@ -84,9 +84,8 @@ Value convertBf16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
   auto result = convertWithFunctionCall(
       b, as_int16, "__spirv_ConvertBF16ToFINTEL", i16_ty, f32_ty,
       TritonIntelGPUDialect::getSupportBF16ConversionAttrName());
-  if (result) {
+  if (result)
     return result;
-  }
 
   auto as_int32 = b.zext(i32_ty, as_int16);
   auto shifted = b.shl(i32_ty, as_int32, b.i32_val(16));
@@ -96,11 +95,19 @@ Value convertBf16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
 Value convertFp32ToBf16(Location loc, ConversionPatternRewriter &rewriter,
                         Value v, RoundingMode rounding) {
   TritonLLVMIRRewriter b(loc, rewriter);
-  auto result = convertWithFunctionCall(
-      b, v, "__spirv_ConvertFToBF16INTEL", f32_ty, i16_ty,
-      TritonIntelGPUDialect::getSupportBF16ConversionAttrName());
-  if (result) {
-    return b.bitcast(result, bf16_ty);
+  // Intel SPIR-V extension only supports round-to-nearest-even
+  // LLVM fptrunc operation also assumes round-to-nearest mode
+  if (rounding == RoundingMode::RTNE) {
+    std::string attrName = "__spirv_ConvertFToBF16INTEL";
+    auto result = convertWithFunctionCall(
+        b, v, attrName, f32_ty, i16_ty,
+        TritonIntelGPUDialect::getSupportBF16ConversionAttrName());
+    if (result)
+      return b.bitcast(result, bf16_ty);
+
+    auto op = v.getDefiningOp();
+    if (mlir::LLVM::intel::hasModuleAttr(op, attrName))
+      return LLVM::FPTruncOp::create(rewriter, loc, bf16_ty, v);
   }
 
   assert(!isa<VectorType>(v.getType()) && "Not yet supported");
