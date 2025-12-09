@@ -1,2 +1,3 @@
 # Tests that use emulated functionality
-python/test/unit/language/test_conversions.py::test_typeconvert_downcast
+python/test/unit/language/test_conversions.py::test_typeconvert_downcast[r".*float8e5-.*"]@regexp
+python/test/unit/language/test_conversions.py::test_typeconvert_downcast[r".*float8e4nv-.*"]@regexp
