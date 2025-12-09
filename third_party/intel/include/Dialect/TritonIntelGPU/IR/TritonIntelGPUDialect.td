@@ -26,6 +26,13 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.min_sg_size";
     }
 
+    /// Get the name of the attribute used to indicate the supported
+    /// subgroup sizes supported by the target device.
+    static constexpr llvm::StringRef getSupportedSGSizesAttrName() {
+      return "ttig.supported_sg_sizes";
+    }
+
+
     /// Get the name of the attribute used to indicate whether subgroup 2D block
     /// operations (e.g., 2D block read/write) are available.
     static constexpr llvm::StringRef getSupportSG2DBlockAttrName() {

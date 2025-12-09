@@ -238,29 +238,29 @@ def gluon_matmul_kernel_with_tensor_descriptors(
 
     # Clear accumulator
     zero_tensor = ttgl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=ttgl.float32, layout=layout)
-    c_desc.store_2d([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], zero_tensor)
+    ttgl.intel.xpu.xe.store_2d(c_desc, [pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], zero_tensor)
 
-    accumulator = c_desc.load_2d([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N])
+    accumulator = ttgl.intel.xpu.xe.load_2d(c_desc, [pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N])
 
     # Prefetch first blocks for A and B matrices (pre-loop prefetches)
     for i in range(NUM_STAGES):
         if i * BLOCK_SIZE_K < K:
-            a_desc.prefetch_2d([pid_m * BLOCK_SIZE_M, i * BLOCK_SIZE_K])
-            b_desc.prefetch_2d([i * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N])
+            ttgl.intel.xpu.xe.prefetch_2d(a_desc, [pid_m * BLOCK_SIZE_M, i * BLOCK_SIZE_K])
+            ttgl.intel.xpu.xe.prefetch_2d(b_desc, [i * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N])
 
     for k in range(0, ttgl.cdiv(K, BLOCK_SIZE_K)):
-        a = a_desc.load_2d([pid_m * BLOCK_SIZE_M, k * BLOCK_SIZE_K])
-        b = b_desc.load_2d([k * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N])
+        a = ttgl.intel.xpu.xe.load_2d(a_desc, [pid_m * BLOCK_SIZE_M, k * BLOCK_SIZE_K])
+        b = ttgl.intel.xpu.xe.load_2d(b_desc, [k * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N])
 
         # Prefetch ahead blocks (pipelining)
         prefetch_k = k + NUM_STAGES
         if prefetch_k * BLOCK_SIZE_K < K:
-            a_desc.prefetch_2d([pid_m * BLOCK_SIZE_M, prefetch_k * BLOCK_SIZE_K])
-            b_desc.prefetch_2d([prefetch_k * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N])
+            ttgl.intel.xpu.xe.prefetch_2d(a_desc, [pid_m * BLOCK_SIZE_M, prefetch_k * BLOCK_SIZE_K])
+            ttgl.intel.xpu.xe.prefetch_2d(b_desc, [prefetch_k * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N])
 
         accumulator = ttgl.intel.xpu.xe.dot_fma(a, b, accumulator)
 
-    c_desc.store_2d([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], accumulator)
+    ttgl.intel.xpu.xe.store_2d(c_desc, [pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], accumulator)
 
 
 @triton.autotune(
@@ -312,29 +312,29 @@ def gluon_matmul_kernel_with_tensor_descriptors_batched(
 
     # Clear accumulator
     zero_tensor = ttgl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=ttgl.float32, layout=layout)
-    c_desc.store_2d([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], zero_tensor)
+    ttgl.intel.xpu.xe.store_2d(c_desc, [pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], zero_tensor)
 
-    accumulator = c_desc.load_2d([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N])
+    accumulator = ttgl.intel.xpu.xe.load_2d(c_desc, [pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N])
 
     # Prefetch first blocks for A and B matrices (pre-loop prefetches)
     for i in range(NUM_STAGES):
         if i * BLOCK_SIZE_K < K:
-            a_desc.prefetch_2d([pid_m * BLOCK_SIZE_M, i * BLOCK_SIZE_K])
-            b_desc.prefetch_2d([i * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N])
+            ttgl.intel.xpu.xe.prefetch_2d(a_desc, [pid_m * BLOCK_SIZE_M, i * BLOCK_SIZE_K])
+            ttgl.intel.xpu.xe.prefetch_2d(b_desc, [i * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N])
 
     for k in range(0, ttgl.cdiv(K, BLOCK_SIZE_K)):
-        a = a_desc.load_2d([pid_m * BLOCK_SIZE_M, k * BLOCK_SIZE_K])
-        b = b_desc.load_2d([k * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N])
+        a = ttgl.intel.xpu.xe.load_2d(a_desc, [pid_m * BLOCK_SIZE_M, k * BLOCK_SIZE_K])
+        b = ttgl.intel.xpu.xe.load_2d(b_desc, [k * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N])
 
         # Prefetch ahead blocks (pipelining)
         prefetch_k = k + NUM_STAGES
         if prefetch_k * BLOCK_SIZE_K < K:
-            a_desc.prefetch_2d([pid_m * BLOCK_SIZE_M, prefetch_k * BLOCK_SIZE_K])
-            b_desc.prefetch_2d([prefetch_k * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N])
+            ttgl.intel.xpu.xe.prefetch_2d(a_desc, [pid_m * BLOCK_SIZE_M, prefetch_k * BLOCK_SIZE_K])
+            ttgl.intel.xpu.xe.prefetch_2d(b_desc, [prefetch_k * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N])
 
         accumulator = ttgl.intel.xpu.xe.dot_fma(a, b, accumulator)
 
-    c_desc.store_2d([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], accumulator)
+    ttgl.intel.xpu.xe.store_2d(c_desc, [pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], accumulator)
 
 
 # We can now create a convenience wrapper function that only takes two input tensors,
@@ -472,7 +472,7 @@ def get_benchmark(
     The benchmark can then be executed by calling the :code:`.run` method on the return value.
     """
     supported_providers = {
-        #'gluon': 'Gluon',
+        'gluon': 'Gluon',
         'triton': 'Triton',
         'onednn': 'OneDNN',
     }

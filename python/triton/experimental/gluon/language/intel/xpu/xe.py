@@ -33,11 +33,6 @@ def get_dpas_capabilities():
     return dpas_cap
 
 
-def is_2d_block_supported():
-    capabilities = get_dpas_capabilities()
-    return capabilities["has_subgroup_2d_block_io"]
-
-
 class tensor_descriptor(tensor_descriptor_base):
     """A descriptor representing a tensor in global memory."""
 
@@ -58,57 +53,6 @@ class tensor_descriptor(tensor_descriptor_base):
         handles.append(self.handle)
         self.shape._flatten_ir(handles)
         self.strides._flatten_ir(handles)
-
-    def mark_2d_block_attribute(self, op, order, _semantic):
-        if order not in ('row_major', 'column_major'):
-            raise ValueError("Only row_major/column_major order is supported for 2d block")
-
-        attr = _semantic.builder.get_string_attr(order)
-        op.set_attr("ttig.block_io", attr)
-
-    @builtin
-    def load(self, offsets: Sequence[constexpr | tensor], _semantic=None) -> tensor:
-        return _semantic.descriptor_load(self, offsets, "", "")
-
-    @builtin
-    def load_2d(self, offsets: Sequence[constexpr | tensor], order: str = "row_major", _semantic=None) -> tensor:
-        if not is_2d_block_supported():
-            raise ValueError("2d block functionality is not supported for this hardware")
-
-        op = _semantic.descriptor_load(self, offsets, "", "")
-        self.mark_2d_block_attribute(op.handle, order, _semantic)
-        return op
-
-    @builtin
-    def store(self, offsets: Sequence[constexpr | tensor], value: tensor, _semantic=None) -> tensor:
-        return _semantic.descriptor_store(self, value, offsets)
-
-    @builtin
-    def store_2d(self, offsets: Sequence[constexpr | tensor], value: tensor, order: str = "row_major",
-                 _semantic=None) -> tensor:
-        if not is_2d_block_supported():
-            raise ValueError("2d block functionality is not supported for this hardware")
-
-        op = _semantic.descriptor_store(self, value, offsets)
-        self.mark_2d_block_attribute(op.handle, order, _semantic)
-        return op
-
-    @builtin
-    def prefetch(self, offsets: Sequence[constexpr | tensor], _semantic=None):
-        ptr_handle = self.handle
-        offsets_handles = [offset.handle if hasattr(offset, 'handle') else offset for offset in offsets]
-        return _semantic.builder.create_prefetch(ptr_handle, offsets_handles, False)
-
-    @builtin
-    def prefetch_2d(self, offsets: Sequence[constexpr | tensor], order: str = "row_major", _semantic=None):
-        if not is_2d_block_supported():
-            raise ValueError("2d block functionality is not supported for this hardware")
-
-        ptr_handle = self.handle
-        offsets_handles = [offset.handle if hasattr(offset, 'handle') else offset for offset in offsets]
-        op = _semantic.builder.create_prefetch(ptr_handle, offsets_handles, False)
-        self.mark_2d_block_attribute(op, order, _semantic)
-        return op
 
 
 @dataclass(eq=True)
@@ -206,3 +150,66 @@ def dot_fma(a, b, acc, _semantic=None):
 
     handle = _semantic.dot(a, b, acc, input_precision=None, max_num_imprecise_acc=None, out_dtype=acc.dtype).handle
     return tensor(handle, acc.type)
+
+
+def is_2d_block_supported():
+    capabilities = get_dpas_capabilities()
+    return capabilities["has_subgroup_2d_block_io"]
+
+
+def mark_2d_block_attribute(op, order, _semantic):
+    if order not in ('row_major', 'column_major'):
+        raise ValueError("Only row_major/column_major order is supported for 2d block")
+
+    attr = _semantic.builder.get_string_attr(order)
+    op.set_attr("ttig.block_io", attr)
+
+
+@builtin
+def load(desc, offsets: Sequence[constexpr | tensor], _semantic=None) -> tensor:
+    return _semantic.descriptor_load(desc, offsets, "", "")
+
+
+@builtin
+def load_2d(desc, offsets: Sequence[constexpr | tensor], order: str = "row_major", _semantic=None) -> tensor:
+    if not is_2d_block_supported():
+        raise ValueError("2d block functionality is not supported for this hardware")
+
+    op = _semantic.descriptor_load(desc, offsets, "", "")
+    mark_2d_block_attribute(op.handle, order, _semantic)
+    return op
+
+
+@builtin
+def store(desc, offsets: Sequence[constexpr | tensor], value: tensor, _semantic=None) -> tensor:
+    return _semantic.descriptor_store(desc, value, offsets)
+
+
+@builtin
+def store_2d(desc, offsets: Sequence[constexpr | tensor], value: tensor, order: str = "row_major",
+             _semantic=None) -> tensor:
+    if not is_2d_block_supported():
+        raise ValueError("2d block functionality is not supported for this hardware")
+
+    op = _semantic.descriptor_store(desc, value, offsets)
+    mark_2d_block_attribute(op.handle, order, _semantic)
+    return op
+
+
+@builtin
+def prefetch(desc, offsets: Sequence[constexpr | tensor], _semantic=None):
+    ptr_handle = desc.handle
+    offsets_handles = [offset.handle if hasattr(offset, 'handle') else offset for offset in offsets]
+    return _semantic.builder.create_prefetch(ptr_handle, offsets_handles, False)
+
+
+@builtin
+def prefetch_2d(desc, offsets: Sequence[constexpr | tensor], order: str = "row_major", _semantic=None):
+    if not is_2d_block_supported():
+        raise ValueError("2d block functionality is not supported for this hardware")
+
+    ptr_handle = desc.handle
+    offsets_handles = [offset.handle if hasattr(offset, 'handle') else offset for offset in offsets]
+    op = _semantic.builder.create_prefetch(ptr_handle, offsets_handles, False)
+    mark_2d_block_attribute(op, order, _semantic)
+    return op
