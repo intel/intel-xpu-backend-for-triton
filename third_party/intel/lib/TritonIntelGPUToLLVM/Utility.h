@@ -79,6 +79,10 @@ Block &createPredicatedBlock(RewriterBase &rewriter, Location loc, Value cond,
 LLVM::RoundingMode
 convertTritonRoundingModeToLLVM(const triton::RoundingMode rounding);
 
+Type getTypeWithSameShape(Type type, Type elementType);
+
+bool hasModuleAttr(Operation *op, StringRef attrName);
+
 } // namespace mlir::LLVM::intel
 
 namespace mlir::triton::intel {
@@ -87,6 +91,10 @@ Value convertBf16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
                         Value v);
 Value convertFp32ToBf16(Location loc, ConversionPatternRewriter &rewriter,
                         Value v, RoundingMode rounding);
+
+Value convertWithFunctionCall(TritonLLVMIRRewriter &rewriter, Value value,
+                              StringRef baseName, Type inType, Type outType,
+                              StringRef hasAttrName = {});
 
 } // namespace mlir::triton::intel
 
