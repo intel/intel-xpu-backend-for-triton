@@ -32,7 +32,6 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.supported_sg_sizes";
     }
 
-
     /// Get the name of the attribute used to indicate whether subgroup 2D block
     /// operations (e.g., 2D block read/write) are available.
     static constexpr llvm::StringRef getSupportSG2DBlockAttrName() {

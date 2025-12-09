@@ -69,7 +69,7 @@ SmallVector<unsigned>
 calculateRepCluster(unsigned capRepeatCount, unsigned capSystolicDepth,
                     unsigned capExecutionSize, unsigned opsPerChan,
                     ArrayRef<int64_t> retShape, unsigned threadsPerWarp,
-                    unsigned int a_bitwidth, bool is_a_FP8,
+                    unsigned int a_bitwidth, bool is_FP8,
                     ArrayRef<int64_t> a_shape, ArrayRef<int64_t> b_shape,
                     SmallVector<unsigned> warpsPerTile);
 

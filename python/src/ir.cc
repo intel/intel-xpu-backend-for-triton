@@ -1532,7 +1532,7 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_descriptor_store",
            [](TritonOpBuilder &self, Value desc, Value value,
-              std::vector<Value> &indices) -> Operation * { // void {
+              std::vector<Value> &indices) -> Operation * {
              auto op = self.create<DescriptorStoreOp>(desc, value, indices);
              return op.getOperation();
            })

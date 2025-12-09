@@ -46,8 +46,7 @@ class tensor_descriptor(tensor_descriptor_base):
         self.layout = layout
 
         self.type = tensor_descriptor_type(block_type, shape_type=self.shape.type, strides_type=self.strides.type,
-                                           layout=self.layout,  # comment
-                                           )
+                                           layout=self.layout)
 
     def _flatten_ir(self, handles: List[ir.value]) -> None:
         handles.append(self.handle)
@@ -123,7 +122,7 @@ def make_tensor_descriptor(ptr: ttgl.tensor, shape: List[int], strides: List[int
     shape_tuple = ttgl.tuple(shape_tensors, shape_type)
     strides_tuple = ttgl.tuple(stride_tensors, strides_type)
 
-    desc_type = tensor_descriptor_type(block_type, shape_type, strides_type, layout)  #, shape_handles)
+    desc_type = tensor_descriptor_type(block_type, shape_type, strides_type, layout)
 
     # Create the descriptor
     padding = _semantic._str_to_padding_option("zero")
