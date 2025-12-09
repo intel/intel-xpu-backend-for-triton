@@ -99,9 +99,11 @@ Value convertBf16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
                         Value v);
 Value convertFp32ToBf16(Location loc, ConversionPatternRewriter &rewriter,
                         Value v, RoundingMode rounding);
+
 Value convertWithFunctionCall(TritonLLVMIRRewriter &rewriter, Value value,
                               StringRef baseName, Type inType, Type outType,
                               StringRef hasAttrName = {});
+
 } // namespace mlir::triton::intel
 
 #endif // TRITON_CONVERSION_TRITONINTELGPU_TO_LLVM_UTILITY_H
