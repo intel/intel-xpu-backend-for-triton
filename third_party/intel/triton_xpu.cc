@@ -136,19 +136,6 @@ void init_triton_intel(py::module &&m) {
   init_triton_intel_passes_ttgpuir(passes.def_submodule("ttgpuir"));
   init_triton_intel_passes_arith(passes.def_submodule("arith"));
 
-  // cluster info
-  py::class_<gpu::intel::ClusterInfo>(m, "ClusterInfo")
-      .def(py::init<>())
-      .def_readwrite("clusterDimX", &gpu::intel::ClusterInfo::clusterDimX)
-      .def_readwrite("clusterDimY", &gpu::intel::ClusterInfo::clusterDimY)
-      .def_readwrite("clusterDimZ", &gpu::intel::ClusterInfo::clusterDimZ)
-      .def("__repr__", [](gpu::intel::ClusterInfo &self) {
-        std::ostringstream oss;
-        oss << "(" << self.clusterDimX << ", " << self.clusterDimY << ", "
-            << self.clusterDimZ << ")";
-        return oss.str();
-      });
-
   // Split barrier scope enum
   py::enum_<gpu::intel::SplitBarrierScope>(m, "SplitBarrierScope")
       .value("none", gpu::intel::SplitBarrierScope::None)
