@@ -158,7 +158,7 @@ def is_2d_block_supported():
 
 def mark_2d_block_attribute(op, order, _semantic):
     if order not in ('row_major', 'column_major'):
-        raise ValueError("Only row_major/column_major order is supported for 2d block")
+        raise ValueError("Only row_major/column_major order is supported for 2D block")
 
     attr = _semantic.builder.get_string_attr(order)
     op.set_attr("ttig.block_io", attr)
