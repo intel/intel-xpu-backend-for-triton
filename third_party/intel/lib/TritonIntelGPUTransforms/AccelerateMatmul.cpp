@@ -11,12 +11,12 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 
 #include "Dialect/TritonIntelGPU/IR/LinearLayoutConversions.h"
-#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/ErrorHandling.h"
 #include <optional>
 
 #define PVC_2D_LOAD_MAXIMUM_NUMBER_OF_ROWS 32
@@ -52,12 +52,12 @@ unsigned getOpsPerChannel(Type elemType, ModuleOp m) {
   assert(elemType.isIntOrFloat() && "unsupported type for DpasEncodingAttr");
 
   unsigned dpasElemBitWidths = elemType.getIntOrFloatBitWidth();
-  bool supportsFP8 = m->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
-                                    getSupportBlockScaleDPASAttrName());
+  bool supportsFP8 = m->hasAttr(
+      ttgi::TritonIntelGPUDialect::getSupportBlockScaleDPASAttrName());
   if (!supportsFP8 && llvm::isa<Float8E5M2Type, Float8E4M3FNType>(elemType))
     dpasElemBitWidths *= 2; // We are upcasting FP8 to FP16.
 
-  return ttg::intel::DpasEncodingAttr::DPASCapability::opsChanBitWidths /
+  return ttgi::DpasEncodingAttr::DPASCapability::opsChanBitWidths /
          dpasElemBitWidths;
 }
 
@@ -170,18 +170,17 @@ public:
 
       auto aElemType = op.getAElemType();
       auto bElemType = op.getBElemType();
-      bool isBothFP8 = (aElemType == triton::ScaleDotElemType::E4M3 ||
-                        aElemType == triton::ScaleDotElemType::E5M2) &&
-                       (bElemType == triton::ScaleDotElemType::E4M3 ||
-                        bElemType == triton::ScaleDotElemType::E5M2);
+      bool isBothFP8 = (aElemType == tt::ScaleDotElemType::E4M3 ||
+                        aElemType == tt::ScaleDotElemType::E5M2) &&
+                       (bElemType == tt::ScaleDotElemType::E4M3 ||
+                        bElemType == tt::ScaleDotElemType::E5M2);
       if (!isBothFP8) {
         // Doesn't support these mixed precision in bdpas natively.
         // Need to decompose to simpler tt.dot with software scale for now.
         // TODO: improve this by decompose to simpler tt.dot_scale with hardware
         // scaling. (intel-tools/intel-xpu-backend-for-triton#755)
-        if (aElemType != bElemType) {
+        if (aElemType != bElemType)
           return failure();
-        }
       }
     }
 
@@ -218,8 +217,7 @@ public:
         oldRetType.getContext(), repeatCount, dpasCap.systolicDepth,
         dpasCap.executionSize, opsPerChan, warpsPerTile, repCluster,
         threadsPerWarp,
-        dpasType == triton::gpu::intel::DPASAnalysis::DPASEngineType::
-                        FP32_FP32_FP4_FP4
+        dpasType == ttgi::DPASAnalysis::DPASEngineType::FP32_FP32_FP4_FP4
             ? std::make_optional(2)
             : std::nullopt);
 
@@ -252,8 +250,7 @@ public:
           oldRetType.getContext(), repeatCount, dpasCap.systolicDepth,
           dpasCap.executionSize, opsPerChan, warpsPerTile, repCluster,
           threadsPerWarp,
-          dpasType == triton::gpu::intel::DPASAnalysis::DPASEngineType::
-                          FP32_FP32_FP4_FP4
+          dpasType == ttgi::DPASAnalysis::DPASEngineType::FP32_FP32_FP4_FP4
               ? std::make_optional(2)
               : std::nullopt);
     }
@@ -280,12 +277,12 @@ public:
     a = ttg::ConvertLayoutOp::create(rewriter, a.getLoc(), newAType, a);
     b = ttg::ConvertLayoutOp::create(rewriter, b.getLoc(), newBType, b);
 
-    Value newDot;
+    Value res = nullptr;
     if constexpr (std::is_same<OpTy, tt::DotScaledOp>::value) {
       MLIRContext *ctx = rewriter.getContext();
       TensorValue scaleA = op.getAScale();
       if (scaleA) {
-        auto scaleALayout = BlockScaledDPAStoLinearLayout(
+        tt::LinearLayout scaleALayout = BlockScaledDPAStoLinearLayout(
             scaleA.getType().getShape(), dpasEnc, 3);
         auto newScaleAType = RankedTensorType::get(
             scaleA.getType().getShape(), scaleA.getType().getElementType(),
@@ -295,7 +292,7 @@ public:
       }
       TensorValue scaleB = op.getBScale();
       if (scaleB) {
-        auto scaleBLayout = BlockScaledDPAStoLinearLayout(
+        tt::LinearLayout scaleBLayout = BlockScaledDPAStoLinearLayout(
             scaleB.getType().getShape(), dpasEnc, 4);
         auto newScaleBType = RankedTensorType::get(
             scaleB.getType().getShape(), scaleB.getType().getElementType(),
@@ -303,16 +300,19 @@ public:
         scaleB = ttg::ConvertLayoutOp::create(rewriter, scaleB.getLoc(),
                                               newScaleBType, scaleB);
       }
-      newDot = tt::DotScaledOp::create(
+      auto newOp = tt::DotScaledOp::create(
           rewriter, op.getLoc(), newRetType, a, b, newAcc, scaleA, scaleB,
           op.getAElemType(), op.getBElemType(), op.getFastMath());
-    } else {
-      newDot =
+      res = newOp.getResult();
+    } else if constexpr (std::is_same<OpTy, tt::DotOp>::value) {
+      auto newOp =
           tt::DotOp::create(rewriter, op.getLoc(), newRetType, a, b, newAcc,
                             op.getInputPrecision(), op.getMaxNumImpreciseAcc());
+      res = newOp.getResult();
     }
+    assert(res && "Expecting a valid value");
 
-    rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(op, oldRetType, newDot);
+    rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(op, oldRetType, res);
     return success();
   }
 };
@@ -357,11 +357,11 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
     if (dpasLayout) {
       bool isNativeFP8 = isa<Float8E5M2Type, Float8E4M3FNType>(AElType);
       // fp8 is not always natively supported by the the DPAS instruction,
-      // promote it to fp16 when necessary
+      // promote it to fp16 when necessary.
 
       auto m = dotOp->getParentOfType<ModuleOp>();
-      bool supportsFP8 = m->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
-                                        getSupportBlockScaleDPASAttrName());
+      bool supportsFP8 = m->hasAttr(
+          ttgi::TritonIntelGPUDialect::getSupportBlockScaleDPASAttrName());
       if (supportsFP8 || !isNativeFP8)
         return;
       promoteType = builder.getF16Type();
@@ -538,7 +538,7 @@ public:
 
     // Transpose dot scale operations that have a scale on the RHS.
     bool supportBlockScaleDPAS = m->hasAttr(
-        ttg::intel::TritonIntelGPUDialect::getSupportBlockScaleDPASAttrName());
+        ttgi::TritonIntelGPUDialect::getSupportBlockScaleDPASAttrName());
     if (!supportBlockScaleDPAS)
       transposeDotScale(m);
 
