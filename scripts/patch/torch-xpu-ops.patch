@@ -1,0 +1,7 @@
+diff --git a/third_party/xpu.txt b/third_party/xpu.txt
+index 423b13180d..9bd3994ce9 100644
+--- a/third_party/xpu.txt
++++ b/third_party/xpu.txt
+@@ -1 +1 @@
+-549347d24e9b509b653a350053d56992fc8436ad
++c70f40d0723dffab9fc3a364d54b22e31723aee7
