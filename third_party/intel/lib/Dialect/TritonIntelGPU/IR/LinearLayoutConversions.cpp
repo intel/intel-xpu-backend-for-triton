@@ -604,7 +604,7 @@ LinearLayout BlockScaledDPAStoLinearLayout(ArrayRef<int64_t> shape,
   auto tileLayout = LinearLayout::empty();
   int repeatCount = dpas.getRepeatCount();
   int executionSize = dpas.getExecutionSize();
-  std::optional<unsigned> fp4Kpack = dpas.getFp4KPackgetFP4();
+  std::optional<unsigned> fp4Kpack = dpas.getFp4KPack();
   int opsPerChannel = fp4Kpack ? dpas.getOpsPerChannel() * (*fp4Kpack)
                                : dpas.getOpsPerChannel();
   assert(((opsPerChannel == 4) || (opsPerChannel == 8)) &&
