@@ -196,7 +196,7 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
                 print(ptx)
             assert ("32x32b" in ptx) or ("16x32b" in ptx), "PTX does not contain 32x32b or 16x32b"
 
-    if is_xpu_cri() and (dtype_src_str == 'float8e5' and (dtype_dst_str == 'float32' or dtype_dst_str == 'bfloat16')):
+    if is_xpu_cri() and (dtype_src_str == 'float8e5' and dtype_dst_str in ('float32', 'bfloat16')):
         llir = k.asm["llir"]
         count = llir.count("__spirv_SubgroupMatrixMultiplyAccumulateINTEL")
         assert count > 0, "The bf8 dpas is not used."
