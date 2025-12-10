@@ -1045,7 +1045,7 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
         if scale_type != 'float8_e8m0fnu':
             pytest.xfail("XPU only supports E8M0 scale")
         if not pack_along_k:
-            pytest.xfail("XPU only supports pack along k")
+            pytest.xfail("Packing along M, N is not supported on XPU")
         if not (with_a_scale and with_b_scale):
             pytest.xfail("None aScale/bScale is only tested on AMD backend for now")
     elif is_xpu():
