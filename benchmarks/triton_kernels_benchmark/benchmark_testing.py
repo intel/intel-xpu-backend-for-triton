@@ -463,7 +463,8 @@ class Mark:
         y_vals += [f"{x}-CV" for x in bench.line_names]
         x_names = list(bench.x_names)
         df = pd.DataFrame(columns=x_names + y_vals)
-        for x in bench.x_vals:
+        for x in [[4096, 8, 128, 16384]]:
+            print(x)
             # x can be a single value or a sequence of values.
             if not isinstance(x, (list, tuple)):
                 x = [x for _ in x_names]
