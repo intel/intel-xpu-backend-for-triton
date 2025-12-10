@@ -134,7 +134,6 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
     if LAYOUT_16x256 and (not is_cuda() or torch.cuda.get_device_capability()[0] < 10):
         pytest.xfail("skip forcing tmem layout on non blackwell targets.")
 
-    # FIXME: Need investigation.
     if is_xpu_cri():
         if dtype_src_str == "float8e5" and dtype_dst_str == "bfloat16":
             if (BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES) in [(512, 64, 32, 2), (64, 512, 32, 2)] and NUM_WARPS == 4:
