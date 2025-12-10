@@ -31,7 +31,7 @@ The encoding is characterized by parameters:
         - `repCluster` indicates the cluster size of the repetitions of the DPAS tile.
         - `threadsPerWarp__` AKA threadsPerWarp, use the name threadsPerWarp__ to avoid conflicting
                             with the `getThreadsPerWarp` in interface DistributedLayout. Currently only 16 is supported.
-        - 'fp4KPack' How many fp4 values are packed into an i8 type along the k dimension. Valid only when opsPerChannel=4.
+        - `fp4KPack` How many fp4 values are packed into an i8 type along the k dimension. Valid only when opsPerChannel=4.
 
 The values of the matrix is distributed across the threads in the subgroup as row-major order.
   - If the column size of the matrix is equal to the number of threads in the subgroup, one scalar represents one row of the matrix in register.
