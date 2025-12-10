@@ -476,6 +476,12 @@ class Mark:
             for label in itertools.chain(bench.ylabel, ["CV"]):
                 row_vals[label] = ([], [], [])
             for y in bench.line_vals:
+                try:
+                    print("Emptying cache before running benchmark...")
+                    synchronize()
+                    torch.xpu.empty_cache()
+                except RuntimeError:
+                    pass
                 ret = self.fn(**x_args, **{bench.line_arg: y}, **bench.args, **kwargs)
                 for i, label in enumerate(itertools.chain(bench.ylabel, ["CV"])):
                     try:
