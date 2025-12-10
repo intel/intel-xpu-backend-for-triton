@@ -1048,7 +1048,7 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
             pytest.xfail("XPU only supports pack along k")
         if not (with_a_scale and with_b_scale):
             pytest.xfail("None aScale/bScale is only tested on AMD backend for now")
-    elif is_xpu and not is_xpu_cri():
+    elif is_xpu() and not is_xpu_cri():
         pytest.xfail("XPU does not natively support scaled fp4 matmul")
 
     NUM_STAGES = 1
