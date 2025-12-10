@@ -29,6 +29,7 @@ class XPUBackendMeta(type(BaseBackend)):
             dev_prop['has_shader_atomic_bfloat16'] = True
             dev_prop['has_support_block_scale_dpas'] = True
             dev_prop['has_f4_conversions'] = True
+            dev_prop['support_256b_prefetch'] = True
             return dev_prop
 
         return wrapper

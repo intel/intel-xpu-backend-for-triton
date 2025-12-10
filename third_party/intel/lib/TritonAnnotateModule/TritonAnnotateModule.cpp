@@ -56,6 +56,11 @@ struct TritonAnnotateModule
           intel::TritonIntelGPUDialect::getSupport16BitAtomicsAttrName(),
           builder.getUnitAttr());
 
+    if (supportPrefetch256Bytes)
+      mod->setAttr(
+          intel::TritonIntelGPUDialect::getSupportPrefetch256BAttrName(),
+          builder.getUnitAttr());
+
     DPASAnalysis &dpasAnalysis = getAnalysis<DPASAnalysis>();
     setThreadsPerWarp(mod, dpasAnalysis);
   }

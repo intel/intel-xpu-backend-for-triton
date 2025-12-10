@@ -43,7 +43,9 @@ def TritonAnnotateModule: Pass<"triton-annotate-module", "mlir::ModuleOp"> {
            "unsigned", /*default*/"32",
            "number of threads per warp (aka subgroup size)">,
     Option<"targetArch", "target-arch", "std::string", /*default*/"\"spir64\"",
-           "target architecture name">
+           "target architecture name">,
+    Option<"supportPrefetch256Bytes", "support-prefetch-256b", "bool", /*default*/"false",
+           "whether prefetch 256 bytes is supported">
   ];
 }
 

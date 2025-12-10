@@ -76,6 +76,12 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.support_16bit_atomics";
     }
 
+    /// Get the name of the attribute used to indicate whether the native 16bit
+    /// atomic operations are available.
+    static constexpr llvm::StringRef getSupportPrefetch256BAttrName() {
+      return "ttig.support_prefetch_256b";
+    }
+
     /// FIXME: Remove once IGC can split large 2D block loads.
     /// Get the name of the attribute used to indicate that a load operation
     /// should use 'one matrix per load'.
