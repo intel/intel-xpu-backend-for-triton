@@ -1,7 +1,8 @@
+import pytest
 import triton
 import triton.language as tl
 
-from triton._internal_testing import numpy_random, to_triton
+from triton._internal_testing import numpy_random, to_triton, is_xpu_cri
 
 
 def test_empty_kernel(device):
@@ -16,6 +17,9 @@ def test_empty_kernel(device):
 
 
 def test_auto_large_grf(device):
+    if is_xpu_cri():
+        pytest.xfail("unable to get spill_size")
+
     SIZE = 1024
 
     @triton.jit
