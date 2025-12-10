@@ -16,9 +16,8 @@ def test_empty_kernel(device):
     kernel[(1, )](x, SIZE=SIZE, num_warps=4, generate_native_code=True)
 
 
+@pytest.mark.xfail(is_xpu_cri(), reason="unable to get spill_size")
 def test_auto_large_grf(device):
-    if is_xpu_cri():
-        pytest.xfail("unable to get spill_size")
 
     SIZE = 1024
 
