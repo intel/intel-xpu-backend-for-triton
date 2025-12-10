@@ -3,7 +3,7 @@ import triton
 import triton.language as tl
 
 from triton.language.target_info import (cuda_capability_geq, is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_xpu,
-                                         is_xpu_cri)
+                                         is_xpu_cri,)
 
 __all__ = [
     "cuda_capability_geq",
