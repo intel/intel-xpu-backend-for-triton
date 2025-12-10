@@ -118,7 +118,7 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
         pytest.xfail("Skipping unsupported case")
     if "float32" in dtype_src_str and dtype_dst_str == "float16":
         pytest.xfail("Skipping unsupported case")
-    if dtype_dst_str == "bfloaf16" and not is_xpu_cri():
+    if dtype_dst_str == "bfloat16" and not is_xpu_cri():
         pytest.xfail("Skipping unsupported case")
     if is_xpu_cri():
         if "float32" in dtype_src_str and dtype_dst_str == "bfloat16":
