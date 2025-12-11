@@ -189,7 +189,7 @@ The semantic of this `tt.dot` includes GEMM tiling configuration as:
     ArrayRefParameter<"unsigned">:$warpsPerCTA,
     ArrayRefParameter<"unsigned">:$repCluster,
     "unsigned":$threadsPerWarp,
-    "std::optional<unsigned>":$fp4KPack // Optional parameter for FP4K packing
+    "std::optional<unsigned>":$fp4KPack // Optional parameter for indicating FP4 are packed to i8 along K dim.
   );
 
   let builders = [
