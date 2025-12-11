@@ -5,7 +5,7 @@ import triton
 import triton.language as tl
 from test_mxfp import MXFP4Tensor, MXScaleTensor
 import re
-from triton._internal_testing import is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_cdna, is_xpu
+from triton._internal_testing import is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_cdna, is_xpu, is_xpu_cri
 
 
 def f8_to_f16(x, dtype):
@@ -92,7 +92,7 @@ def get_src_element_ty_size(dtype_str):
 
 
 @pytest.mark.parametrize("dtype_src_str", ["float32", "tensorfloat32", "float16", "float8e5", "float64"])
-@pytest.mark.parametrize("dtype_dst_str", ["float32", "float16", "float64"])
+@pytest.mark.parametrize("dtype_dst_str", ["float32", "float16", "float64", "bfloat16"])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES", [(128, 128, 16, 4), (64, 128, 32, 4), (32, 32, 32, 4),
                                                                    (256, 128, 32, 4), (64, 512, 32, 2),
                                                                    (512, 64, 32, 2), (64, 16, 64, 4)])
@@ -118,6 +118,13 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
         pytest.xfail("Skipping unsupported case")
     if "float32" in dtype_src_str and dtype_dst_str == "float16":
         pytest.xfail("Skipping unsupported case")
+    if is_xpu():
+        if dtype_dst_str == "bfloat16":
+            if not is_xpu_cri():
+                pytest.xfail("Skipping unsupported case")
+            else:
+                if dtype_src_str in ("float32", "float16"):
+                    pytest.xfail("Skipping unsupported case")
     if "float32" == dtype_src_str and NUM_CTAS > 1:
         pytest.skip("FMA matmul not supported for multiple CTAs")
     if (BLOCK_M < 64 or (BLOCK_M == 64 and BLOCK_N == 16)) and NUM_CTAS > 1:
@@ -126,6 +133,12 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
         pytest.skip("creates convert layout too big to fit in smem")
     if LAYOUT_16x256 and (not is_cuda() or torch.cuda.get_device_capability()[0] < 10):
         pytest.xfail("skip forcing tmem layout on non blackwell targets.")
+
+    if is_xpu_cri():
+        if dtype_src_str == "float8e5" and dtype_dst_str == "bfloat16":
+            if (BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES) in [(512, 64, 32, 2), (64, 512, 32, 2)] and NUM_WARPS == 4:
+                pytest.skip("Investigate failure in CRI CI")
+
     M, N, K = 1024, 512, 256
     torch.manual_seed(42)
     precision = "tf32" if dtype_src_str == "tensorfloat32" else "ieee"
@@ -181,6 +194,11 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
             if "32x32b" not in ptx and "16x32b" not in ptx:
                 print(ptx)
             assert ("32x32b" in ptx) or ("16x32b" in ptx), "PTX does not contain 32x32b or 16x32b"
+
+    if is_xpu_cri() and (dtype_src_str == 'float8e5' and dtype_dst_str in ('float32', 'bfloat16')):
+        llir = k.asm["llir"]
+        count = llir.count("__spirv_SubgroupMatrixMultiplyAccumulateINTEL")
+        assert count > 0, "The bf8 dpas is not used."
 
 
 # persistent matmul with fused loops
@@ -406,6 +424,10 @@ def test_mxfp(BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS, device)
     if is_cuda() and torch.cuda.get_device_capability()[0] == 12:
         ptx = out.asm["ptx"]
         assert "mma.sync.aligned.m16n8k32.row.col.kind::mxf8f6f4.block_scale.scale_vec::1X" in ptx
+    if is_xpu_cri():
+        llir = out.asm["llir"]
+        count = llir.count("llvm.genx.GenISA.sub.group.bdpas")
+        assert count > 0, "Unexpected LLVM IR generated."
 
 
 def _knob_promote_lhs_to_tmem(monkeypatch):
@@ -1018,6 +1040,13 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
             pytest.skip("CDNA4 only supports E8M0 scale")
         if (nonKDim == 16 and BLOCK_K < 128) or (nonKDim == 32 and BLOCK_K < 64):
             pytest.skip(f"CDNA4 does not support {BLOCK_K=} for scaled mfma {nonKDim=} variants")
+    elif is_xpu_cri():
+        if scale_type != 'float8_e8m0fnu':
+            pytest.xfail("XPU only supports E8M0 scale")
+        if not pack_along_k:
+            pytest.xfail("Packing along M, N is not supported on XPU")
+        if not (with_a_scale and with_b_scale):
+            pytest.xfail("None aScale/bScale is only tested on AMD backend for now")
     elif is_xpu():
         pytest.xfail("XPU does not natively support scaled fp4 matmul")
 
@@ -1063,6 +1092,9 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
     kernel_kwargs = {}
     if is_hip():
         kernel_kwargs["matrix_instr_nonkdim"] = nonKDim
+    if is_xpu_cri():
+        # Reduce spill size to speedup the test.
+        kernel_kwargs["num_warps"] = 16
     k = block_scale_fp4_matmul[grid](a, b, output, a_scale, b_scale, M, N, K, stride_scale, a.stride(0), a.stride(1),
                                      b.stride(0), b.stride(1), output.stride(0), output.stride(1), VEC_SIZE, BLOCK_M,
                                      BLOCK_N, BLOCK_K, NUM_STAGES=NUM_STAGES, PACK_ALONG_K=pack_along_k,
@@ -1175,13 +1207,21 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
         if (A_DATA_TYPE == 'float4' and not WITH_A_SCALE) or (B_DATA_TYPE == 'float4' and not WITH_B_SCALE):
             pytest.skip("Float4 without scale is tested in test_block_scale_fp4")
     elif is_xpu():
-        if not (WITH_A_SCALE and WITH_B_SCALE):
+        if not is_xpu_cri() and not (WITH_A_SCALE and WITH_B_SCALE):
             pytest.xfail("None scale has not been tested on XPU backend")
-        if not (A_DATA_TYPE == "float8e5" and B_DATA_TYPE == "float4"):
+        if not is_xpu_cri() and not (A_DATA_TYPE == "float8e5" and B_DATA_TYPE == "float4"):
             pytest.xfail(f"(A: {A_DATA_TYPE}, B: {B_DATA_TYPE}) has not been tested on XPU backend")
         if ((BLOCK_M, BLOCK_N, BLOCK_K) == (128, 256, 256) and triton.runtime.driver.active.utils.get_device_properties(
                 triton.runtime.driver.active.get_current_device())["max_shared_mem"] < 196608):
             pytest.xfail("XPU: Not enough shared memory")
+        if is_xpu_cri():
+            is_both_fp8 = (A_DATA_TYPE in ['float8e5', 'float8e4nv']) and (B_DATA_TYPE in ['float8e5', 'float8e4nv'])
+            if not is_both_fp8 and A_DATA_TYPE != B_DATA_TYPE:
+                pytest.skip("Skip mixed precision because it is emulated by dpas for now. issue #678")
+            if is_both_fp8 and (BLOCK_M, BLOCK_N, BLOCK_K) == (128, 256, 256):
+                pytest.skip("Skip the test on simulator because too many register spilling occurs on XPU for now.")
+            if B_DATA_TYPE == "float4" and not PACK_B_ALONG_K:
+                pytest.skip("Skip pack along non-K because it is emulated by dpas for now. issue #678")
     if not PACK_B_ALONG_K and B_DATA_TYPE != "float4":
         pytest.xfail("Pack along K can only be False for float4")
 
@@ -1263,5 +1303,9 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
     if is_cuda():
         ttgir = out.asm["ttgir"]
         assert "fp4Padded = true" in ttgir
+    if is_xpu_cri():
+        llir = out.asm["llir"]
+        count = llir.count("llvm.genx.GenISA.sub.group.bdpas")
+        assert count > 0, "Unexpected LLVM IR generated."
 
     torch.testing.assert_close(ref_out, output, atol=1e-3, rtol=1e-3)
