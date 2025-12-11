@@ -16,7 +16,7 @@ from triton_kernels.numerics_details.mxfp import upcast_from_mxfp, quantize_mxfp
 # testing utilities
 from triton_kernels.testing import assert_close, make_random_tensor
 # target-specific utilities
-from triton_kernels.target_info import is_hip, is_hip_cdna3, is_cuda, is_hip_cdna4, is_xpu
+from triton_kernels.target_info import is_hip, is_hip_cdna3, is_cuda, is_hip_cdna4, is_xpu, is_xpu_cri
 from triton_kernels.swiglu import swiglu, swiglu_fn
 from triton_kernels.swiglu import PrecisionConfig as SwiGLUPrecisionConfig
 
@@ -288,11 +288,12 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     if "float8" in weight_dtype_str and is_cuda() and torch.cuda.get_device_capability()[0] < 10:
         b_transpose = True
 
-    # Limit input size to reduce CRI simulation time.
-    # FIXME: check if we can relax it with higher parallelism in CI runs.
-    m = min(m, 128)
-    n = min(n, 128)
-    k = min(k, 512)
+    if is_xpu_cri():
+        # Limit input size to reduce test time.
+        # FIXME: check if we can relax it with higher parallelism in CI runs.
+        m = min(m, 128)
+        n = min(n, 128)
+        k = min(k, 512)
 
     torch.manual_seed(0)
 
