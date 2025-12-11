@@ -18,7 +18,6 @@ def test_empty_kernel(device):
 
 @pytest.mark.xfail(is_xpu_cri(), reason="unable to get spill_size")
 def test_auto_large_grf(device):
-
     SIZE = 1024
 
     @triton.jit
