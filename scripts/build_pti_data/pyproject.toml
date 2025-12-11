@@ -1,6 +1,6 @@
 [project]
 name = "intel-pti"
-version = "0.14.0.dev1"
+version = "0.16.0.dev1"
 description = "Add your description here"
 readme = "README.md"
 license = "MIT"
