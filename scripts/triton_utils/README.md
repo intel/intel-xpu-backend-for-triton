@@ -1,7 +1,7 @@
 
 # Design and implementation goals
 
-CLI utility to aid regular Intel Triton backend developer needs in test results analysis.
+CLI utility to aid regular Intel Triton backend developer needs in test results analysis. Built in support for sharded runs.
 
 Non goals:
 - TBD
@@ -151,6 +151,12 @@ triton-utils export_to --format csv --file-name <csv_file_name> --reports <repor
 ```
 
 
-## 4. Test definitions export to the external CI systmes
+## 5. Test reports comparision
 
-Test definitions exports to the external CI systems based on the actual tesing data
+Compare test results between two test runs
+
+### Basic usage
+
+'''
+ triton-utils compare --r <reports folder name 1> --r2 <reports folder name 2> --multiple --level testsuite
+'''

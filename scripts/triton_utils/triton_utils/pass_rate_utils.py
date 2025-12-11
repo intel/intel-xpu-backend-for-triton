@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 from enum import Enum
 from collections import defaultdict
 from dataclasses import field, fields, dataclass
@@ -38,6 +38,10 @@ class ReportStats:  # pylint: disable=R0801
     skipped: int = 0
     xfailed: int = 0
     fixme: int = 0
+    time: float = 0.0
+
+    RESULT_FIELDS: ClassVar[list[str]] = ["passed", "failed", "skipped", "xfailed"]
+    METRIC_FIELDS: ClassVar[list[str]] = ["time", "pass_rate_without_xfailed"]
 
     @property
     def total(self):
@@ -85,17 +89,14 @@ class ReportStats:  # pylint: disable=R0801
                 result[name] = getattr(self, name)
         return result
 
-    def to_named_dict(self, raw_data_only: bool = False) -> dict[str, dict[str, int | float]]:
-        if raw_data_only:
-            return {
-                self.name: {
-                    "passed": self.passed,
-                    "failed": self.failed,
-                    "skipped": self.skipped,
-                    "xfailed": self.xfailed,
-                }
-            }
-        return {self.name: self.to_metrics_dict()}
+    def to_named_dict(self, fields_filter: list[str] | None = None) -> dict[str, dict[str, int | float]]:
+        if fields_filter is None:
+            return {self.name: self.to_metrics_dict()}
+        res_fields = {}
+        for res_field in self.to_metrics_dict():
+            if res_field in fields_filter:
+                res_fields[res_field] = getattr(self, res_field)
+        return {self.name: res_fields}
 
     def to_json(self, pretty_print: bool = False, named_dict: bool = True) -> str:
         res_dict = self.to_named_dict() if named_dict else self.to_metrics_dict()
@@ -299,6 +300,7 @@ class Test:
                 stats.skipped += 1
             if test_case.result == RunResult.XFAILED:
                 stats.xfailed += 1
+            stats.time += test_case.time
         return stats
 
     def add_test_case(self, test_case: TestCaseWithResult):
@@ -313,6 +315,9 @@ class Test:
         if self.testname and test_case.path_without_variant != self.testname:
             raise ValueError(
                 f"Test contains test cases from multiple tests:{self.testname} - {test_case.path_without_variant}")
+        if test_case.classname == "" and test_case.name == "":
+            print(f"[WARNING] Skipping test case with no classname and name in {self.testsuite}", file=sys.stderr)
+            return
         self.testname = test_case.path_without_variant
         self.test_cases.append(test_case)
 
@@ -495,25 +500,109 @@ class TestReport:
     def get_pass_rate_summary(self) -> str:
         return self.get_summary_stats().to_json(pretty_print=True, named_dict=False)
 
-    def get_summary(
+    @classmethod
+    def _df_w_total_row(cls, raw_df: pd.DataFrame) -> pd.DataFrame:
+        summary = raw_df.apply(pd.to_numeric, errors="coerce").sum(numeric_only=True)
+        summary.name = "Σ"
+
+        return pd.concat([raw_df, summary.to_frame().T])
+
+    @classmethod
+    def _get_report_dfs(  # pylint: disable=dangerous-default-value, too-many-locals
+        cls,
+        reports: list[TestReport],
+        grouping_level: TestGroupingLevel = TestGroupingLevel.TESTSUITE,
+        fields_filter: list[str] = ReportStats.RESULT_FIELDS,
+        sort_by: str = "name",
+    ) -> tuple[list[pd.DataFrame], list[str]]:
+        reports_stats: list[dict[str, dict[str, int | float]]] = []
+        for report in reports:
+            report_stats: dict[str, dict[str, int | float]] = {}
+            match grouping_level:
+                case TestGroupingLevel.REPORT:
+                    raise ValueError(f"Unsupported grouping level {grouping_level}")
+                case TestGroupingLevel.TESTSUITE:
+                    testsuites: dict[str, dict[str, Test]] = defaultdict(dict)
+                    for test_key, test in report.tests.items():
+                        testsuites[test.testsuite][test_key] = test
+                    for testsuite, tests in testsuites.items():
+                        report_stats = report_stats | TestReport(
+                            tests=tests, name=testsuite).get_summary_stats().to_named_dict(fields_filter=fields_filter)
+                    reports_stats.append(report_stats)
+                case TestGroupingLevel.TEST:
+                    for test_key, test in report.tests.items():
+                        report_stats = report_stats | TestReport(tests={
+                            test.short_name: test
+                        }, name=test.short_name).get_summary_stats().to_named_dict(fields_filter=fields_filter)
+                    reports_stats.append(report_stats)
+                case _:
+                    raise ValueError(f"Unsupported grouping level {grouping_level}")
+        columns = list(next(iter(reports_stats[0].values())).keys())
+        report_dfs = [pd.DataFrame.from_dict(report_stats, orient="index") for report_stats in reports_stats]
+        for report_df in report_dfs:
+            if sort_by == "name":
+                report_df.sort_index(inplace=True)
+            else:
+                report_df.sort_values(by=sort_by, inplace=True, ascending=False)
+        return report_dfs, columns
+
+    def _get_summary_df(
+        self,
+        grouping_level: TestGroupingLevel,
+        sort_by: str = "name",
+    ) -> pd.DataFrame:
+        if sort_by not in ReportStats.RESULT_FIELDS + ReportStats.METRIC_FIELDS + ["name"]:
+            raise ValueError(f"Unsupported sort_by field: {sort_by}")
+        summary_df = self._df_w_total_row(
+            self._get_report_dfs(
+                [self],
+                grouping_level=grouping_level,
+                fields_filter=ReportStats.RESULT_FIELDS + ReportStats.METRIC_FIELDS,
+                sort_by=sort_by,
+            )[0][0], )
+        summary_df = summary_df.rename(columns={"pass_rate_without_xfailed": "pass_rate"})
+
+        passed = summary_df.loc["Σ", "passed"]
+        failed = summary_df.loc["Σ", "failed"]
+        skipped = summary_df.loc["Σ", "skipped"]
+        xfailed = summary_df.loc["Σ", "xfailed"]
+        total = passed + failed + skipped + xfailed
+        denom = total - xfailed
+        summary_df.loc["Σ", "pass_rate"] = round(100 * passed / denom, 2)
+
+        for columns in ReportStats.RESULT_FIELDS:
+            summary_df[columns] = summary_df[columns].astype(int)
+        summary_df["pass_rate"] = summary_df["pass_rate"].round(2).astype(str) + "%"
+        return summary_df
+
+    def get_summary(  # pylint: disable=too-many-positional-arguments, too-many-arguments
         self,
         list_test_instances: bool = False,
         list_failure_reasons: bool = False,
         grouping_level: TestGroupingLevel = TestGroupingLevel.TEST,
-    ) -> str:
+        pretty_print: bool = False,
+        sort_by: str = "name",
+    ) -> str | pd.DataFrame:
         match grouping_level:
             case TestGroupingLevel.REPORT:
                 return self.get_pass_rate_summary()
             case TestGroupingLevel.TESTSUITE:
+                if pretty_print:
+                    return self._get_summary_df(
+                        grouping_level=grouping_level,
+                        sort_by=sort_by,
+                    )
                 testsuites: dict[str, dict[str, Test]] = defaultdict(dict)
                 for test_key, test in self.tests.items():
                     testsuites[test.testsuite][test_key] = test
-                testsuite_stats = [
-                    TestReport(tests=tests, name=testsuite).get_summary_stats().to_json()
-                    for testsuite, tests in testsuites.items()
-                ]
-                return "\n".join(testsuite_stats)
+                test_reports = [TestReport(tests=tests, name=testsuite) for testsuite, tests in testsuites.items()]
+                return "\n".join([test_report.get_summary_stats().to_json() for test_report in test_reports])
             case TestGroupingLevel.TEST:
+                if pretty_print:
+                    return self._get_summary_df(
+                        grouping_level=grouping_level,
+                        sort_by=sort_by,
+                    )
                 test_stats = ""
                 for test_key, test in self.tests.items():
                     test_stats += test.get_stats().to_json() + "\n"
@@ -579,37 +668,11 @@ class TestReport:
         reports: list[TestReport],
         grouping_level: TestGroupingLevel = TestGroupingLevel.TESTSUITE,
     ) -> pd.DataFrame:
-        reports_stats: list[dict[str, dict[str, int | float]]] = []
-        for report in reports:
-            report_stats: dict[str, dict[str, int | float]] = {}
-            match grouping_level:
-                case TestGroupingLevel.REPORT:
-                    raise ValueError(f"Unsupported grouping level {grouping_level}")
-                case TestGroupingLevel.TESTSUITE:
-                    testsuites: dict[str, dict[str, Test]] = defaultdict(dict)
-                    for test_key, test in report.tests.items():
-                        testsuites[test.testsuite][test_key] = test
-                    for testsuite, tests in testsuites.items():
-                        report_stats = report_stats | TestReport(
-                            tests=tests, name=testsuite).get_summary_stats().to_named_dict(raw_data_only=True)
-                    reports_stats.append(report_stats)
-                case TestGroupingLevel.TEST:
-                    for test_key, test in report.tests.items():
-                        report_stats = report_stats | TestReport(tests={
-                            test.short_name: test
-                        }, name=test.short_name).get_summary_stats().to_named_dict(raw_data_only=True)
-                    reports_stats.append(report_stats)
-                case _:
-                    raise ValueError(f"Unsupported grouping level {grouping_level}")
-
-        columns = list(next(iter(reports_stats[0].values())).keys())
-
-        left_r = pd.DataFrame.from_dict(reports_stats[0], orient="index")
-        right_r = pd.DataFrame.from_dict(reports_stats[1], orient="index")
-
+        reports_stats, columns = cls._get_report_dfs(reports, grouping_level)
+        left_r = reports_stats[0]
+        right_r = reports_stats[1]
         left_r, right_r = left_r.align(right_r, join="outer")
-
-        diff_abs = right_r - left_r
+        diff_abs = right_r.fillna(0) - left_r.fillna(0)
 
         comparison = pd.concat(
             {
@@ -619,19 +682,37 @@ class TestReport:
             },
             axis=1,
         ).swaplevel(axis=1).sort_index(axis=1, level=0).round(0)
-
         comparison = comparison.reindex(columns=columns, level=0)
+        comparison_with_total = cls._df_w_total_row(comparison)
 
-        summary = comparison.apply(pd.to_numeric, errors="coerce").sum(numeric_only=True)
-        summary.name = "Σ"
-        comparison_with_total = pd.concat([comparison, summary.to_frame().T])
-
-        def to_int_or_na(val):
+        def _to_int_or_na(val):
             if pd.isna(val):
                 return "NA"
             return int(round(val))
 
-        return comparison_with_total.map(to_int_or_na)
+        def _insert_group_headers(df: pd.DataFrame) -> pd.DataFrame:
+            mask = df.index != "Σ"
+            df_no_total = df[mask]
+            df_total = df[~mask]
+            idx = df_no_total.index.to_series().str.split("::", n=1, expand=True)
+            groups = idx[0]
+            tests = idx[1]
+            frames = []
+            for group, subdf in df_no_total.groupby(groups):
+                header = pd.DataFrame([[""] * df.shape[1]], columns=df.columns, index=[group])
+
+                subdf2 = subdf.copy()
+                subdf2.index = tests.loc[subdf.index]
+                frames.append(header)
+                frames.append(subdf2)
+            if not df_total.empty:
+                frames.append(df_total)
+            return pd.concat(frames)
+
+        comparison_result = comparison_with_total.map(_to_int_or_na)
+        if grouping_level == TestGroupingLevel.TEST:
+            return _insert_group_headers(comparison_result)
+        return comparison_result
 
     @classmethod
     def from_reports_folder(
