@@ -1,5 +1,4 @@
 // RUN: triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm
-// RUN: env TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=1 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm  --check-prefixes=ALL-LAYOUT
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4, 2], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 8, 2], order = [2, 1, 0]}>
 #slice = #ttg.slice<{dim = 1, parent = #blocked}>
@@ -18,7 +17,7 @@ module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 16 : i32} {
     %9 = tt.splat %arg0 : !tt.ptr<i8> -> tensor<256x64x!tt.ptr<i8>, #slice>
     %addr = tt.addptr %9, %8 : tensor<256x64x!tt.ptr<i8>, #slice>, tensor<256x64xi32, #slice>
     %cst = arith.constant dense<0> : tensor<256x64xi8, #slice>
-    // ALL-LAYOUT-COUNT-32: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 16, tile_width = 32, tile_height = 8, v_blocks = 1, cache_control = Default}
+    // CHECK-COUNT-32: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 16, tile_width = 32, tile_height = 8, v_blocks = 1, cache_control = Default}
     tt.store %addr, %cst {ttig.block_io = "row_major"} : tensor<256x64x!tt.ptr<i8>, #slice>
 
     tt.return
@@ -43,7 +42,7 @@ module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 16 : i32} {
     %9 = tt.splat %arg0 : !tt.ptr<i8> -> tensor<256x64x!tt.ptr<i8>, #blocked>
     %addr = tt.addptr %9, %8 : tensor<256x64x!tt.ptr<i8>, #blocked>, tensor<256x64xi32, #blocked>
     %cst = arith.constant dense<0> : tensor<256x64xi8, #blocked>
-    // ALL-LAYOUT-COUNT-8: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 16, tile_width = 32, tile_height = 4, v_blocks = 1, cache_control = Default}
+    // CHECK-COUNT-8: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 16, tile_width = 32, tile_height = 4, v_blocks = 1, cache_control = Default}
     tt.store %addr, %cst {ttig.block_io = "row_major"} : tensor<256x64x!tt.ptr<i8>, #blocked>
 
     tt.return

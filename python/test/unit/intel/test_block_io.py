@@ -9,12 +9,6 @@ import triton
 from triton._internal_testing import is_xpu
 
 
-@pytest.fixture(autouse=True)
-def triton_block_io(monkeypatch):
-    monkeypatch.setenv("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS", "1")
-    yield
-
-
 class DpasLayout:
 
     def __init__(self, repeatCount, systolic_depth, execution_size, ops_per_chan, threads_per_warp, warps_per_cta,
