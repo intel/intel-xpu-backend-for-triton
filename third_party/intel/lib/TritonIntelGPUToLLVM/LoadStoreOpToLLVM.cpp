@@ -1237,9 +1237,7 @@ struct LoadOpToBlockIOConversion
     if (op.getPadding() && op.getPadding() == PaddingOption::PAD_NAN)
       return failure();
 
-    static const bool enableBlockIOForAllLayout =
-        triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS");
-    if (!isBlockIOCandidate(op, enableBlockIOForAllLayout))
+    if (!isBlockIOCandidate(op))
       return failure();
 
     // Get the max tile shape supported by the layout.
@@ -2074,9 +2072,7 @@ struct StoreOpToBlockIOConversion
   LogicalResult
   matchAndRewrite(triton::StoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
-    static const bool enableBlockIOForAllLayout =
-        triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS");
-    if (!isBlockIOCandidate(op, enableBlockIOForAllLayout))
+    if (!isBlockIOCandidate(op))
       return failure();
 
     // Get the max tile shape supported by the layout.
