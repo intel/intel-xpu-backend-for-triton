@@ -131,12 +131,6 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
     if LAYOUT_16x256 and (not is_cuda() or torch.cuda.get_device_capability()[0] < 10):
         pytest.xfail("skip forcing tmem layout on non blackwell targets.")
 
-    # FIXME: These case failed in CRI CI while it passed when run it manually. Need investigation.
-    if is_xpu():
-        if dtype_src_str == "float8e5" and dtype_dst_str == "bfloat16":
-            if (BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES) in [(512, 64, 32, 2), (64, 512, 32, 2)] and NUM_WARPS == 4:
-                pytest.skip("Investigate failure in CRI CI")
-
     M, N, K = 1024, 512, 256
     torch.manual_seed(42)
     precision = "tf32" if dtype_src_str == "tensorfloat32" else "ieee"
