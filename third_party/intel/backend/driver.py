@@ -219,7 +219,7 @@ class SpirvUtils:
         except Exception as e:
             if str(e).startswith("ZE_"):
                 from triton.runtime.errors import IntelGPUError
-                raise IntelGPUError("Error during Intel load_binary: " + str(e))
+                raise IntelGPUError("Error during Intel load_binary: " + str(e)) from e
             else:
                 raise e
 
