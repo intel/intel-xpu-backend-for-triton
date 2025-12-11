@@ -464,6 +464,7 @@ class Mark:
         x_names = list(bench.x_names)
         df = pd.DataFrame(columns=x_names + y_vals)
         for x in bench.x_vals:
+            print(x)
             # x can be a single value or a sequence of values.
             if not isinstance(x, (list, tuple)):
                 x = [x for _ in x_names]
@@ -495,6 +496,7 @@ class Mark:
                     rows += row_vals[label][2]
             rows += row_vals["CV"][0]
             df.loc[len(df)] = list(x) + rows
+            print("finish")
 
         filename = f"{bench.plot_name}_{run_counter}"
         if bench.plot_name:
