@@ -157,7 +157,7 @@ def is_xpu_cri():
 
 
 def is_xpu_xe2():
-    return is_xpu_pvc() or is_xpu_bmg()
+    return is_xpu_bmg()
 
 
 def is_xpu_xe3():
