@@ -108,79 +108,63 @@ def is_xpu():
 
 def is_xpu_arl_h():
     target = get_current_target()
-    return target is not None and target.backend == 'xpu' and 'arl_h' in target.arch
+    return target is not None and target.backend == 'xpu' and target.arch["arch"] == 'arl_h'
 
 
 def is_xpu_arl_s():
     target = get_current_target()
-    return target is not None and target.backend == 'xpu' and 'arl_s' in target.arch
+    return target is not None and target.backend == 'xpu' and target.arch["arch"] == 'arl_s'
 
 
 def is_xpu_bmg():
     target = get_current_target()
-    return target is not None and target.backend == 'xpu' and 'bmg' in target.arch
+    return target is not None and target.backend == 'xpu' and target.arch["arch"] == 'bmg'
 
 
 def is_xpu_dg2():
     target = get_current_target()
-    return target is not None and target.backend == 'xpu' and 'dg2' in target.arch
+    return target is not None and target.backend == 'xpu' and target.arch["arch"] == 'dg2'
 
 
 def is_xpu_lnl():
     target = get_current_target()
-    return target is not None and target.backend == 'xpu' and 'lnl' in target.arch
+    return target is not None and target.backend == 'xpu' and target.arch["arch"] == 'lnl'
 
 
 def is_xpu_mtl():
     target = get_current_target()
-    return target is not None and target.backend == 'xpu' and 'mtl' in target.arch
+    return target is not None and target.backend == 'xpu' and target.arch["arch"] == 'mtl'
 
 
 def is_xpu_pvc():
     target = get_current_target()
-    return target is not None and target.backend == 'xpu' and 'pvc' in target.arch
+    return target is not None and target.backend == 'xpu' and target.arch["arch"] == 'pvc'
 
 
 def is_xpu_ptl_h():
     target = get_current_target()
-    return target is not None and target.backend == 'xpu' and 'ptl_h' in target.arch
+    return target is not None and target.backend == 'xpu' and target.arch["arch"] == 'ptl_h'
 
 
 def is_xpu_ptl_u():
     target = get_current_target()
-    return target is not None and target.backend == 'xpu' and 'ptl_u' in target.arch
+    return target is not None and target.backend == 'xpu' and target.arch["arch"] == 'ptl_u'
 
 
 def is_xpu_cri():
     target = get_current_target()
-    return target is not None and target.backend == 'xpu' and 'cri' in target.arch
-
-
-def is_xpu_lpg():
-    return is_xpu_arl_s()
-
-
-def is_xpu_lpgP():
-    return is_xpu_arl_h()
-
-
-def is_xpu_hpg():
-    return is_xpu_dg2()
-
-
-def is_xpu_hpc():
-    return is_xpu_pvc()
+    return target is not None and target.backend == 'xpu' and target.arch["arch"] == 'cri'
 
 
 def is_xpu_xe2():
-    return is_xpu_bmg()
+    return is_xpu_pvc() or is_xpu_bmg()
 
 
 def is_xpu_xe3():
     return is_xpu_ptl_h() or is_xpu_ptl_u()
 
 
-def is_xpu_xe3P():
+def is_xpu_xe3p():
     return is_xpu_cri()
 
 
