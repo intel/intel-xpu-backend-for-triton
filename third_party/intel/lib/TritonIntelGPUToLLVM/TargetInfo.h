@@ -76,6 +76,8 @@ public:
                              StringRef name, StringRef value,
                              unsigned addressSpace) const;
 
+  int64_t getConvertLayoutCostScale() const override { return 2; }
+
 protected:
   virtual bool isSupportedWarpReduceOp(Operation *op, unsigned numLanesToReduce,
                                        unsigned warpSize) const = 0;

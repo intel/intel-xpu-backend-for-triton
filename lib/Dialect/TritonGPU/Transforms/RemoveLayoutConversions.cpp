@@ -1648,7 +1648,8 @@ public:
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
-
+    // Difficult to choose the correct TargetInfo because in this abstract context
+    // we can only access the TargetInfoBase virtual class.
     // 1. Propagate layout forward starting from "anchor" ops.
     m.walk([](FuncOp funcOp) {
       LayoutPropagation layoutPropagation(funcOp);
