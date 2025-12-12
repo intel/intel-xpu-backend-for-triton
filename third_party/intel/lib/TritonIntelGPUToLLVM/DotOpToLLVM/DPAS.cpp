@@ -11,8 +11,8 @@
 #include <optional>
 
 using namespace mlir;
-using namespace mlir::triton;
-using namespace mlir::triton::gpu::intel;
+
+namespace ttgi = mlir::triton::gpu::intel;
 
 namespace {
 
@@ -27,9 +27,12 @@ public:
       : dpasLayout(dpasLayout), rewriter(rewriter),
         typeConverter(typeConverter), loc(loc), ctx(dpasLayout.getContext()) {}
 
+  template <typename DPASEngineType,
+            typename = std::enable_if_t<
+                llvm::is_one_of<DPASEngineType, ttgi::DPASEngineTypeV1,
+                                ttgi::DPASEngineTypeV2>::value>>
   std::tuple<Type, Type, Type, Type> static getDPASOperandsType(
-      DPASAnalysis::DPASEngineType dpasType, MLIRContext *ctx,
-      DpasEncodingAttr layout) {
+      DPASEngineType dpasType, MLIRContext *ctx, DpasEncodingAttr layout) {
     Type fp32Ty = type::f32Ty(ctx);
     Type fp16Ty = type::f16Ty(ctx);
     Type bf16Ty = type::bf16Ty(ctx);
@@ -46,7 +49,6 @@ public:
     SmallVector<unsigned> shapeB = layout.getDPASInstShapeB();
     unsigned elemNumB = product<unsigned>(shapeB) / threadsPerWarp;
 
-    using DPASEngineType = DPASAnalysis::DPASEngineType;
     switch (dpasType) {
     case DPASEngineType::FP32_FP32_FP16_FP16: {
       Type cTy = vec_ty(fp32Ty, elemNumC);
@@ -115,6 +117,10 @@ public:
   ///      gen.matrix.dpas C, A, B {pa, pb, rc=M, sd=8}
   ///        : (vector<8xf32>, vector<4xi32>, vector<4xi32>) -> vector<8xf32>
   ///
+  template <typename DPASEngineType,
+            typename = std::enable_if_t<
+                llvm::is_one_of<DPASEngineType, ttgi::DPASEngineTypeV1,
+                                ttgi::DPASEngineTypeV2>::value>>
   LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor) const {
     Value A = op.getA(), B = op.getB(), C = op.getC(), D = op.getResult();
     Value loadedA = adaptor.getA(), loadedB = adaptor.getB(),
@@ -142,11 +148,11 @@ public:
     unsigned repBatch = repA[0];
     unsigned repM = repA[1], repN = repB[2], repK = repA[2];
 
-    auto dpasType = DPASAnalysis::getDPASType(op);
+    auto dpasType = ttgi::DPASAnalysis<DPASEngineType>::getDPASType(op);
     auto dpasEncoding = cast<DpasEncodingAttr>(DTensorTy.getEncoding());
     Type aTy, bTy, cTy, dTy;
-    std::tie(dTy, cTy, aTy, bTy) =
-        getDPASOperandsType(dpasType, op.getContext(), dpasEncoding);
+    std::tie(dTy, cTy, aTy, bTy) = getDPASOperandsType<DPASEngineType>(
+        dpasType, op.getContext(), dpasEncoding);
     ValueTable ha = getValuesFromDotOperandLayoutStruct(
         loadedA, repBatch, repM, repK,
         typeConverter->convertType(ATensorTy.getElementType()),
@@ -410,10 +416,11 @@ namespace fma_details {
 LogicalResult convertDPAS(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                           TritonIntelGPUToLLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter) {
+  auto mod = op->getParentOfType<ModuleOp>();
+
   LLVM_DEBUG({
-    auto module = op->getParentOfType<ModuleOp>();
     llvm::dbgs() << "module before DPAS generation\n";
-    module->dump();
+    mod->dump();
   });
 
   Value A = op.getA(), B = op.getB(), C = op.getC(), D = op.getResult();
@@ -439,6 +446,12 @@ LogicalResult convertDPAS(triton::DotOp op, triton::DotOp::Adaptor adaptor,
   DotOpDPASConversionHelper helper(dpasLayout, rewriter, typeConverter,
                                    op.getLoc());
 
-  return helper.convertDot(op, adaptor);
+  bool supportDPASWithBF8 = mod->hasAttr(
+      ttgi::TritonIntelGPUDialect::getSupportDPASWithBF8AttrName());
+
+  if (!supportDPASWithBF8)
+    return helper.convertDot<ttgi::DPASEngineTypeV1>(op, adaptor);
+
+  return helper.convertDot<ttgi::DPASEngineTypeV2>(op, adaptor);
 }
 } // namespace fma_details
