@@ -246,9 +246,6 @@ struct ConvertTritonAMDGPUToLLVM
     mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
     mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
 
-    mlir::triton::AMD::populateWarpIdOpToLLVMPattern(typeConverter, targetInfo,
-                                                     patterns, commonBenefit);
-
     FailureOr<mlir::amdgpu::Chipset> maybeChipset =
         mlir::amdgpu::Chipset::parse(this->arch);
     if (failed(maybeChipset)) {

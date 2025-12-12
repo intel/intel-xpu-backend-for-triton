@@ -55,11 +55,7 @@ public:
     addLegalDialect<cf::ControlFlowDialect>();
     addLegalDialect<mlir::triton::nvgpu::NVGPUDialect>();
     addIllegalDialect<triton::TritonDialect>();
-    addDynamicallyLegalDialect<triton::gpu::TritonGPUDialect>(
-        [](mlir::Operation *op) {
-          // We handle the warp ID op during NVGPUToLLVM.
-          return isa<triton::gpu::WarpIdOp>(op);
-        });
+    addIllegalDialect<triton::gpu::TritonGPUDialect>();
     addIllegalDialect<triton::nvidia_gpu::TritonNvidiaGPUDialect>();
     addIllegalDialect<mlir::gpu::GPUDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();

@@ -195,11 +195,11 @@ private:
   Constraints inputConstraints;
 };
 
-class WarpIdOpPattern : public OpRewritePattern<mlir::triton::gpu::WarpIdOp> {
+class WarpIdOpPattern : public OpRewritePattern<ttn::WarpIdOp> {
 public:
-  using OpRewritePattern<mlir::triton::gpu::WarpIdOp>::OpRewritePattern;
+  using OpRewritePattern<ttn::WarpIdOp>::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(mlir::triton::gpu::WarpIdOp op,
+  LogicalResult matchAndRewrite(ttn::WarpIdOp op,
                                 PatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
