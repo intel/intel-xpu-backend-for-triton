@@ -33,9 +33,19 @@ struct TritonAnnotateModule
       mod->setAttr(intel::TritonIntelGPUDialect::getSupportDPASAttrName(),
                    builder.getUnitAttr());
 
+    if (supportBlockScaleDPAS)
+      mod->setAttr(
+          intel::TritonIntelGPUDialect::getSupportBlockScaleDPASAttrName(),
+          builder.getUnitAttr());
+
     if (supportBF16Conversion)
       mod->setAttr(
           intel::TritonIntelGPUDialect::getSupportBF16ConversionAttrName(),
+          builder.getUnitAttr());
+
+    if (supportF4Conversion)
+      mod->setAttr(
+          intel::TritonIntelGPUDialect::getSupportF4ConversionAttrName(),
           builder.getUnitAttr());
 
     mod->setAttr(intel::TritonIntelGPUDialect::getTargetArchAttrName(),
@@ -44,6 +54,11 @@ struct TritonAnnotateModule
     if (support16BitAtomics)
       mod->setAttr(
           intel::TritonIntelGPUDialect::getSupport16BitAtomicsAttrName(),
+          builder.getUnitAttr());
+
+    if (supportPrefetch256Bytes)
+      mod->setAttr(
+          intel::TritonIntelGPUDialect::getSupportPrefetch256BAttrName(),
           builder.getUnitAttr());
 
     DPASAnalysis &dpasAnalysis = getAnalysis<DPASAnalysis>();
