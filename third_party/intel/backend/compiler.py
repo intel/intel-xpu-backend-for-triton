@@ -205,9 +205,13 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     def annotate_module(cls, module_opts, properties, opt):
         # Annotate module with information required by subsequent transformations.
         module_opts.min_sg_size = min(properties["sub_group_sizes"])
+        module_opts.support_16bit_atomics = properties["has_shader_atomic_bfloat16"]
         module_opts.support_sg_2d_block = properties["has_subgroup_2d_block_io"]
         module_opts.support_dpas = properties["has_subgroup_matrix_multiply_accumulate"]
+        module_opts.support_block_scale_dpas = properties["has_support_block_scale_dpas"]
         module_opts.support_bf16_conversion = properties["has_bfloat16_conversions"]
+        module_opts.support_f4_conversion = properties["has_f4_conversions"]
+        module_opts.support_256b_prefetch = properties["support_256b_prefetch"]
         module_opts.threads_per_warp = opt.warp_size
         module_opts.target_arch = cls.target_arch
 
