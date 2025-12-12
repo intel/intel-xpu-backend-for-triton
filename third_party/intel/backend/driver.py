@@ -932,7 +932,17 @@ class XPUDriver(DriverBase):
                 dev_property["has_subgroup_2d_block_io"] = check(device, b"cl_intel_subgroup_2d_block_io")
                 dev_property["has_bfloat16_conversions"] = check(device, b"cl_intel_bfloat16_conversions")
 
+        def update_device_arch(dev_property):
+            if not (arch := knobs.intel.device_arch):
+                dirname = os.path.dirname(os.path.realpath(__file__))
+                parser = compile_module_from_src(src=Path(os.path.join(dirname, "arch_parser.c")).read_text(),
+                                                 name="arch_utils")
+                arch = parser.parse_device_arch(dev_property["architecture"])
+            dev_property["arch"] = arch
+
         update_advanced_features(device, dev_property)
+        update_device_arch(dev_property)
+
         return GPUTarget("xpu", dev_property, warp_size=32)
 
     def build_proton_help_lib(self):
