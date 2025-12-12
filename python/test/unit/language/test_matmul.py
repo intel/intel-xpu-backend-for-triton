@@ -118,13 +118,13 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
         pytest.xfail("Skipping unsupported case")
     if "float32" in dtype_src_str and dtype_dst_str == "float16":
         pytest.xfail("Skipping unsupported case")
-    if dtype_dst_str == "bfloat16" and not is_xpu_cri():
-        pytest.xfail("Skipping unsupported case")
-    if is_xpu_cri():
-        if "float32" in dtype_src_str and dtype_dst_str == "bfloat16":
-            pytest.xfail("Skipping unsupported case")
-        if "float16" in dtype_src_str and dtype_dst_str == "bfloat16":
-            pytest.xfail("Skipping unsupported case")
+    if is_xpu():
+        if dtype_dst_str == "bfloat16":
+            if not is_xpu_cri():
+                pytest.xfail("Skipping unsupported case")
+            else:
+                if dtype_src_str in ("float32", "float16"):
+                    pytest.xfail("Skipping unsupported case")
     if "float32" == dtype_src_str and NUM_CTAS > 1:
         pytest.skip("FMA matmul not supported for multiple CTAs")
     if (BLOCK_M < 64 or (BLOCK_M == 64 and BLOCK_N == 16)) and NUM_CTAS > 1:
@@ -134,7 +134,6 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
     if LAYOUT_16x256 and (not is_cuda() or torch.cuda.get_device_capability()[0] < 10):
         pytest.xfail("skip forcing tmem layout on non blackwell targets.")
 
-    # FIXME: Need investigation.
     if is_xpu_cri():
         if dtype_src_str == "float8e5" and dtype_dst_str == "bfloat16":
             if (BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES) in [(512, 64, 32, 2), (64, 512, 32, 2)] and NUM_WARPS == 4:
@@ -196,7 +195,7 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
                 print(ptx)
             assert ("32x32b" in ptx) or ("16x32b" in ptx), "PTX does not contain 32x32b or 16x32b"
 
-    if is_xpu_cri() and (dtype_src_str == 'float8e5' and (dtype_dst_str == 'float32' or dtype_dst_str == 'bfloat16')):
+    if is_xpu_cri() and (dtype_src_str == 'float8e5' and dtype_dst_str in ('float32', 'bfloat16')):
         llir = k.asm["llir"]
         count = llir.count("__spirv_SubgroupMatrixMultiplyAccumulateINTEL")
         assert count > 0, "The bf8 dpas is not used."
@@ -1045,10 +1044,10 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
         if scale_type != 'float8_e8m0fnu':
             pytest.xfail("XPU only supports E8M0 scale")
         if not pack_along_k:
-            pytest.xfail("XPU only supports pack along k")
+            pytest.xfail("Packing along M, N is not supported on XPU")
         if not (with_a_scale and with_b_scale):
             pytest.xfail("None aScale/bScale is only tested on AMD backend for now")
-    elif is_xpu() and not is_xpu_cri():
+    elif is_xpu():
         pytest.xfail("XPU does not natively support scaled fp4 matmul")
 
     NUM_STAGES = 1
