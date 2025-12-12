@@ -354,27 +354,24 @@ index 7038d0868..1990654f7 100644
      def forward_native(self, x: torch.Tensor) -> torch.Tensor:
          """PyTorch-native implementation equivalent to forward()."""
 diff --git a/vllm/model_executor/layers/fused_moe/fused_batched_moe.py b/vllm/model_executor/layers/fused_moe/fused_batched_moe.py
-index 7fd8511e2..7deb8898f 100644
+index 7fd8511e2..e99f4fb2d 100644
 --- a/vllm/model_executor/layers/fused_moe/fused_batched_moe.py
 +++ b/vllm/model_executor/layers/fused_moe/fused_batched_moe.py
-@@ -718,10 +718,16 @@ class NaiveBatchedExperts(mk.FusedMoEPermuteExpertsUnpermute):
+@@ -718,10 +718,9 @@ class NaiveBatchedExperts(mk.FusedMoEPermuteExpertsUnpermute):
  
          for expert in range(num_local_experts):
              # Indexing expert_num_tokens doesn't work w/cudagraphs or inductor
-+<<<<<<< Updated upstream
-             if (
-                 torch.compiler.is_compiling()
-                 or torch.cuda.is_current_stream_capturing()
-             ):
-+=======
+-            if (
+-                torch.compiler.is_compiling()
+-                or torch.cuda.is_current_stream_capturing()
+-            ):
 +            # if (torch.compiler.is_compiling()
 +            #         or torch.cuda.is_current_stream_capturing()):
 +            if False:
-+>>>>>>> Stashed changes
                  num = hidden_states.shape[1]
              else:
                  num = int(expert_num_tokens[expert].item())
-@@ -761,7 +767,7 @@ def batched_moe_kernel_quantize_input(
+@@ -761,7 +760,7 @@ def batched_moe_kernel_quantize_input(
      per_act_token_quant: bool,
      block_shape: list[int] | None = None,
  ) -> tuple[torch.Tensor, torch.Tensor | None]:
