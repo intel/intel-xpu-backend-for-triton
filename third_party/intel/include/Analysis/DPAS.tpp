@@ -59,8 +59,10 @@ DPASAnalysisResult DPASAnalysis<DPASEngineType, Enable>::canUseDPAS(
   // instructions.
   for (Operation *op : it->second) {
     auto it = dotToDPASEngineMap.find(op);
-    if (it == dotToDPASEngineMap.end())
+    if (it == dotToDPASEngineMap.end()) {
       llvm::errs() << "DPASAnalysis: Operation not found in map.\n";
+      return DPASAnalysisResult::False;
+    }
 
     DPASEngineType dpasEngineType = dotToDPASEngineMap.at(op);
     if (dpasEngineType == DPASEngineType::NOT_APPLICABLE)
