@@ -33,18 +33,30 @@ def TritonIntelGPU_Dialect : Dialect {
     }
 
     /// Get the name of the attribute used to indicate whether the DPAS
-    /// instruction is available.
+    /// operation is available.
     static constexpr llvm::StringRef getSupportDPASAttrName() {
       return "ttig.support_dpas";
     }
 
+    /// Get the name of the attribute used to indicate whether the DPAS
+    /// operation supports BF8/HF8.
+    static constexpr llvm::StringRef getSupportDPASWithBF8AttrName() {
+      return "ttig.support_dpas_bf8";
+    }
+
+    /// Get the name of the attribute used to indicate whether the Block Scale DPAS
+    /// operation is available.
+    static constexpr llvm::StringRef getSupportBlockScaleDPASAttrName() {
+      return "ttig.support_block_scale_dpas";
+    }
+
     /// Get the name of the attribute used to indicate whether the BF16 conversion
-    /// instruction is available.
+    /// operation is available.
     static constexpr llvm::StringRef getSupportBF16ConversionAttrName() {
       return "ttig.support_bf16_conversion";
     }
 
-    /// Get the name of the attribute used to convay information required for lowering
+    /// Get the name of the attribute used to convey information required for lowering
     /// memory operations (e.g. load, prefetches) to 2D block HW instructions.
     static constexpr llvm::StringRef getBlockIOAttrName() {
       return "ttig.block_io";
