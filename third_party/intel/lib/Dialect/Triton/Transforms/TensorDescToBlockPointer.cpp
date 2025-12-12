@@ -109,7 +109,8 @@ private:
   tt::MakeTensorPtrOp
   findOrCreateMakeTensorPtr(Location loc, Value base, ValueRange shape,
                             ValueRange strides, ValueRange offsets,
-                            ArrayRef<int32_t> sizes, OpBuilder &builder) {
+                            ArrayRef<int32_t> sizes,
+                            triton::PaddingOption padding, OpBuilder &builder) {
     Block *block = builder.getInsertionBlock();
     const Block::iterator insertPoint = builder.getInsertionPoint();
     auto it = std::find_if(block->begin(), insertPoint, [&](Operation &op) {
@@ -137,6 +138,7 @@ private:
       auto makeTensorPtr = tt::MakeTensorPtrOp::create(
           builder, loc, base, shape, strides, offsets, sizes,
           builder.getDenseI32ArrayAttr({1, 0}));
+      paddingInfo[makeTensorPtr] = padding;
       return makeTensorPtr;
     };
 
@@ -208,8 +210,9 @@ private:
       sizes.push_back(static_cast<int32_t>(size));
     }
 
-    auto tensorPtr = findOrCreateMakeTensorPtr(
-        loc, op.getBase(), shapes, strides, offsets, sizes, builder);
+    auto tensorPtr =
+        findOrCreateMakeTensorPtr(loc, op.getBase(), shapes, strides, offsets,
+                                  sizes, op.getPadding(), builder);
     LLVM_DEBUG({
       llvm::dbgs() << "With:\n";
       llvm::dbgs().indent(2) << tensorPtr << "\n";
@@ -257,9 +260,10 @@ private:
 
     constexpr bool isLoad = std::is_same_v<OpTy, tt::DescriptorLoadOp>;
     if constexpr (isLoad) {
+      triton::PaddingOption padding = paddingInfo[operand.getDefiningOp()];
       auto loadOp = builder.createOrFold<tt::LoadOp>(
           loc, ptr, boundaryCheck,
-          /*padding*/ std::nullopt, op.getCache(), op.getEvict(),
+          /*padding*/ padding, op.getCache(), op.getEvict(),
           /*volatile*/ false);
       LLVM_DEBUG(llvm::dbgs().indent(2) << loadOp << "\n");
       op.replaceAllUsesWith(loadOp);
@@ -277,6 +281,7 @@ private:
 
 private:
   SmallPtrSet<Operation *, 8> cleanUp;
+  llvm::SmallMapVector<Operation *, triton::PaddingOption, 8> paddingInfo;
 };
 
 } // namespace
