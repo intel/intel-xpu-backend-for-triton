@@ -229,38 +229,38 @@ def gluon_matmul_kernel_with_tensor_descriptors(
     pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
     pid_n = (pid % num_pid_in_group) // group_size_m
 
-    a_desc = ttgl.intel.xpu.xe.make_tensor_descriptor(a_ptr, (M, K), (stride_am, stride_ak),
-                                                      (BLOCK_SIZE_M, BLOCK_SIZE_K), lhs_layout)
-    b_desc = ttgl.intel.xpu.xe.make_tensor_descriptor(b_ptr, (K, N), (stride_bk, stride_bn),
-                                                      (BLOCK_SIZE_K, BLOCK_SIZE_N), rhs_layout)
-    c_desc = ttgl.intel.xpu.xe.make_tensor_descriptor(c_ptr, (M, N), (stride_cm, stride_cn),
-                                                      (BLOCK_SIZE_M, BLOCK_SIZE_N), layout)
+    a_desc = ttgl.intel.make_tensor_descriptor(a_ptr, (M, K), (stride_am, stride_ak), (BLOCK_SIZE_M, BLOCK_SIZE_K),
+                                               lhs_layout)
+    b_desc = ttgl.intel.make_tensor_descriptor(b_ptr, (K, N), (stride_bk, stride_bn), (BLOCK_SIZE_K, BLOCK_SIZE_N),
+                                               rhs_layout)
+    c_desc = ttgl.intel.make_tensor_descriptor(c_ptr, (M, N), (stride_cm, stride_cn), (BLOCK_SIZE_M, BLOCK_SIZE_N),
+                                               layout)
 
     # Clear accumulator
     zero_tensor = ttgl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=ttgl.float32, layout=layout)
-    ttgl.intel.xpu.xe.store_2d(c_desc, [pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], zero_tensor)
+    ttgl.intel.xe.store_2d(c_desc, [pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], zero_tensor)
 
-    accumulator = ttgl.intel.xpu.xe.load_2d(c_desc, [pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N])
+    accumulator = ttgl.intel.xe.load_2d(c_desc, [pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N])
 
     # Prefetch first blocks for A and B matrices (pre-loop prefetches)
     for i in range(NUM_STAGES):
         if i * BLOCK_SIZE_K < K:
-            ttgl.intel.xpu.xe.prefetch_2d(a_desc, [pid_m * BLOCK_SIZE_M, i * BLOCK_SIZE_K])
-            ttgl.intel.xpu.xe.prefetch_2d(b_desc, [i * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N])
+            ttgl.intel.xe.prefetch_2d(a_desc, [pid_m * BLOCK_SIZE_M, i * BLOCK_SIZE_K])
+            ttgl.intel.xe.prefetch_2d(b_desc, [i * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N])
 
     for k in range(0, ttgl.cdiv(K, BLOCK_SIZE_K)):
-        a = ttgl.intel.xpu.xe.load_2d(a_desc, [pid_m * BLOCK_SIZE_M, k * BLOCK_SIZE_K])
-        b = ttgl.intel.xpu.xe.load_2d(b_desc, [k * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N])
+        a = ttgl.intel.xe.load_2d(a_desc, [pid_m * BLOCK_SIZE_M, k * BLOCK_SIZE_K])
+        b = ttgl.intel.xe.load_2d(b_desc, [k * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N])
 
         # Prefetch ahead blocks (pipelining)
         prefetch_k = k + NUM_STAGES
         if prefetch_k * BLOCK_SIZE_K < K:
-            ttgl.intel.xpu.xe.prefetch_2d(a_desc, [pid_m * BLOCK_SIZE_M, prefetch_k * BLOCK_SIZE_K])
-            ttgl.intel.xpu.xe.prefetch_2d(b_desc, [prefetch_k * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N])
+            ttgl.intel.xe.prefetch_2d(a_desc, [pid_m * BLOCK_SIZE_M, prefetch_k * BLOCK_SIZE_K])
+            ttgl.intel.xe.prefetch_2d(b_desc, [prefetch_k * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N])
 
-        accumulator = ttgl.intel.xpu.xe.dot_fma(a, b, accumulator)
+        accumulator = ttgl.intel.xe.dot(a, b, accumulator)
 
-    ttgl.intel.xpu.xe.store_2d(c_desc, [pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], accumulator)
+    ttgl.intel.xe.store_2d(c_desc, [pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], accumulator)
 
 
 @triton.autotune(
@@ -303,38 +303,38 @@ def gluon_matmul_kernel_with_tensor_descriptors_batched(
     offset_b = bid.to(ttgl.int64) * stride_bz
     offset_c = bid.to(ttgl.int64) * stride_cz
 
-    a_desc = ttgl.intel.xpu.xe.make_tensor_descriptor(a_ptr + offset_a, (M, K), (stride_am, stride_ak),
-                                                      (BLOCK_SIZE_M, BLOCK_SIZE_K), lhs_layout)
-    b_desc = ttgl.intel.xpu.xe.make_tensor_descriptor(b_ptr + offset_b, (K, N), (stride_bk, stride_bn),
-                                                      (BLOCK_SIZE_K, BLOCK_SIZE_N), rhs_layout)
-    c_desc = ttgl.intel.xpu.xe.make_tensor_descriptor(c_ptr + offset_c, (M, N), (stride_cm, stride_cn),
-                                                      (BLOCK_SIZE_M, BLOCK_SIZE_N), layout)
+    a_desc = ttgl.intel.make_tensor_descriptor(a_ptr + offset_a, (M, K), (stride_am, stride_ak),
+                                               (BLOCK_SIZE_M, BLOCK_SIZE_K), lhs_layout)
+    b_desc = ttgl.intel.make_tensor_descriptor(b_ptr + offset_b, (K, N), (stride_bk, stride_bn),
+                                               (BLOCK_SIZE_K, BLOCK_SIZE_N), rhs_layout)
+    c_desc = ttgl.intel.make_tensor_descriptor(c_ptr + offset_c, (M, N), (stride_cm, stride_cn),
+                                               (BLOCK_SIZE_M, BLOCK_SIZE_N), layout)
 
     # Clear accumulator
     zero_tensor = ttgl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=ttgl.float32, layout=layout)
-    ttgl.intel.xpu.xe.store_2d(c_desc, [pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], zero_tensor)
+    ttgl.intel.xe.store_2d(c_desc, [pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], zero_tensor)
 
-    accumulator = ttgl.intel.xpu.xe.load_2d(c_desc, [pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N])
+    accumulator = ttgl.intel.xe.load_2d(c_desc, [pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N])
 
     # Prefetch first blocks for A and B matrices (pre-loop prefetches)
     for i in range(NUM_STAGES):
         if i * BLOCK_SIZE_K < K:
-            ttgl.intel.xpu.xe.prefetch_2d(a_desc, [pid_m * BLOCK_SIZE_M, i * BLOCK_SIZE_K])
-            ttgl.intel.xpu.xe.prefetch_2d(b_desc, [i * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N])
+            ttgl.intel.xe.prefetch_2d(a_desc, [pid_m * BLOCK_SIZE_M, i * BLOCK_SIZE_K])
+            ttgl.intel.xe.prefetch_2d(b_desc, [i * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N])
 
     for k in range(0, ttgl.cdiv(K, BLOCK_SIZE_K)):
-        a = ttgl.intel.xpu.xe.load_2d(a_desc, [pid_m * BLOCK_SIZE_M, k * BLOCK_SIZE_K])
-        b = ttgl.intel.xpu.xe.load_2d(b_desc, [k * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N])
+        a = ttgl.intel.xe.load_2d(a_desc, [pid_m * BLOCK_SIZE_M, k * BLOCK_SIZE_K])
+        b = ttgl.intel.xe.load_2d(b_desc, [k * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N])
 
         # Prefetch ahead blocks (pipelining)
         prefetch_k = k + NUM_STAGES
         if prefetch_k * BLOCK_SIZE_K < K:
-            ttgl.intel.xpu.xe.prefetch_2d(a_desc, [pid_m * BLOCK_SIZE_M, prefetch_k * BLOCK_SIZE_K])
-            ttgl.intel.xpu.xe.prefetch_2d(b_desc, [prefetch_k * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N])
+            ttgl.intel.xe.prefetch_2d(a_desc, [pid_m * BLOCK_SIZE_M, prefetch_k * BLOCK_SIZE_K])
+            ttgl.intel.xe.prefetch_2d(b_desc, [prefetch_k * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N])
 
-        accumulator = ttgl.intel.xpu.xe.dot_fma(a, b, accumulator)
+        accumulator = ttgl.intel.xe.dot(a, b, accumulator)
 
-    ttgl.intel.xpu.xe.store_2d(c_desc, [pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], accumulator)
+    ttgl.intel.xe.store_2d(c_desc, [pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], accumulator)
 
 
 # We can now create a convenience wrapper function that only takes two input tensors,

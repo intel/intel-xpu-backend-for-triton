@@ -1,7 +1,7 @@
 from functools import wraps
 from triton._C.libtriton import intel
 
-from triton.experimental.gluon.language.intel.xpu.xe import get_dpas_capabilities
+from triton.experimental.gluon.language.intel.xe import get_dpas_capabilities
 from triton.language.core import TRITON_BUILTIN
 
 
