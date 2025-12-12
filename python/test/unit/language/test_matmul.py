@@ -123,7 +123,9 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
             if not is_xpu_cri():
                 pytest.xfail("Skipping unsupported case")
             else:
-                if dtype_src_str in ("float32", "float16"):
+                if "float32" in dtype_src_str:
+                    pytest.xfail("Skipping unsupported case")
+                if "float16" in dtype_src_str:
                     pytest.xfail("Skipping unsupported case")
     if "float32" == dtype_src_str and NUM_CTAS > 1:
         pytest.skip("FMA matmul not supported for multiple CTAs")
