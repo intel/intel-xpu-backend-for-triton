@@ -1,7 +1,7 @@
 # Merge Status: Commit 1819e09 from upstream triton
 
 ## Summary
-Commit `1819e0952c` from https://github.com/triton-lang/triton (titled "Bump actions/checkout from 5 to 6 (#8826)") has been successfully integrated into this repository.
+Commit `1819e0952c5464a091cef9ef05d630ca08edf491` from https://github.com/triton-lang/triton (titled "Bump actions/checkout from 5 to 6 (#8826)") has been successfully integrated into this repository.
 
 ## Upstream Commit Details
 - **Commit Hash**: 1819e0952c5464a091cef9ef05d630ca08edf491
