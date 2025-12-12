@@ -31,6 +31,7 @@ The encoding is characterized by parameters:
         - `repCluster` indicates the cluster size of the repetitions of the DPAS tile.
         - `threadsPerWarp__` AKA threadsPerWarp, use the name threadsPerWarp__ to avoid conflicting
                             with the `getThreadsPerWarp` in interface DistributedLayout. Currently only 16 is supported.
+        - `fp4KPack` How many fp4 values are packed into an i8 type along the k dimension. Valid only when opsPerChannel=4.
 
 The values of the matrix is distributed across the threads in the subgroup as row-major order.
   - If the column size of the matrix is equal to the number of threads in the subgroup, one scalar represents one row of the matrix in register.
@@ -187,8 +188,21 @@ The semantic of this `tt.dot` includes GEMM tiling configuration as:
     "unsigned":$opsPerChannel,
     ArrayRefParameter<"unsigned">:$warpsPerCTA,
     ArrayRefParameter<"unsigned">:$repCluster,
-    "unsigned":$threadsPerWarp
+    "unsigned":$threadsPerWarp,
+    "std::optional<unsigned>":$fp4KPack // Optional parameter for indicating FP4 are packed to i8 along K dim.
   );
+
+  let builders = [
+      AttrBuilder<(ins "unsigned":$repeatCount,
+                        "unsigned":$systolicDepth,
+                        "unsigned":$executionSize,
+                        "unsigned":$opsPerChannel,
+                        "ArrayRef<unsigned>":$warpsPerCTA,
+                        "ArrayRef<unsigned>":$repCluster,
+                        "unsigned":$threadsPerWarp), [{
+        return $_get(context, repeatCount, systolicDepth, executionSize, opsPerChannel, warpsPerCTA, repCluster, threadsPerWarp, std::nullopt);
+      }]>
+    ];
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
     enum class OpIdx : unsigned {
@@ -243,7 +257,6 @@ The semantic of this `tt.dot` includes GEMM tiling configuration as:
     };
 
     static DPASCapability getDPASCapability(mlir::ModuleOp mod);
-    static unsigned getOpsPerChannel(Type elemType);
   }];
 
   let hasCustomAssemblyFormat = 1;
