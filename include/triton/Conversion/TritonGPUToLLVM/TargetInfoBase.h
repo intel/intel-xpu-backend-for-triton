@@ -106,6 +106,8 @@ public:
   virtual void localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
                                      Operation *llLoadOp) const {}
 
+  virtual int64_t getConvertLayoutCostScale() const { return 1; }
+  
   virtual ~TargetInfoBase() {}
 };
 } // namespace mlir::triton

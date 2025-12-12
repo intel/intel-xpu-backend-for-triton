@@ -30,6 +30,9 @@
 #include "llvm/ADT/TypeSwitch.h"
 #include <deque>
 
+#include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
+#include "intel/lib/TritonIntelGPUToLLVM/TargetInfo.h"
+
 namespace mlir::triton::gpu::intel {
 #define GEN_PASS_DEF_TRITONINTELGPUREMOVELAYOUTCONVERSIONS
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
@@ -142,8 +145,8 @@ public:
   }
 
   void cleanup();
-  void backwardRematerialization();
-  void backwardRematerialization(ConvertLayoutOp convertOp);
+  void backwardRematerialization(const TargetInfoBase &targetInfo);
+  void backwardRematerialization(ConvertLayoutOp convertOp, const TargetInfoBase &targetInfo);
   // TODO: Merge the three hoistConvert*(); functions as they are duplicate code
   void hoistConvertDotOperand();
   void hoistConvertDotOperand(ConvertLayoutOp convertOp);
@@ -1395,13 +1398,13 @@ LogicalResult LayoutRematerialization::getRematerializableSlice(
   return success();
 }
 
-void LayoutRematerialization::backwardRematerialization() {
+void LayoutRematerialization::backwardRematerialization(const TargetInfoBase &targetInfo) {
   // Go through each ConvertLayoutOp.
   SmallVector<ConvertLayoutOp> convertOps;
   funcOp.walk(
       [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
   for (ConvertLayoutOp convertOp : convertOps) {
-    backwardRematerialization(convertOp);
+    backwardRematerialization(convertOp, targetInfo);
     if (!opToDelete.contains(convertOp)) {
       // If the conversion didn't get removed, consider it for reuse in future
       // backward slices.
@@ -1480,7 +1483,7 @@ static int64_t getByteCount(Value result, int64_t minElementCount = 0,
 }
 
 void LayoutRematerialization::backwardRematerialization(
-    ConvertLayoutOp convertOp) {
+    ConvertLayoutOp convertOp, const TargetInfoBase &targetInfo) {
   RankedTensorType targetType = convertOp.getType();
   // We don't backward propagate the dot layout with blocked layout as parent.
   // It introduces a lot of duplicated values in multiple-threads.
@@ -1573,7 +1576,7 @@ void LayoutRematerialization::backwardRematerialization(
   // it to account for extra cost due to synchronisation.
   // FIXME: measure cost of smem load/store and synchronisation on Intel GPUs,
   // and refine this model further. (#5476)
-  int64_t convertLayoutCost = 32 * convertLayoutBytes * 2;
+  int64_t convertLayoutCost = 32 * convertLayoutBytes * targetInfo.getConvertLayoutCostScale();
   int64_t rematerialisationCost = 0;
 
   // Evaluate single-use status for every operation in slice
@@ -1978,10 +1981,10 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
   rewriteSlice(slice, layout, convertOp, mapping);
 }
 
-void backwardRematerialization(ModuleOp module) {
-  module.walk([](FuncOp funcOp) {
+void backwardRematerialization(ModuleOp module, const TargetInfoBase &targetInfo) {
+  module.walk([&targetInfo](FuncOp funcOp) {
     LayoutRematerialization layoutRemat(funcOp);
-    layoutRemat.backwardRematerialization();
+    layoutRemat.backwardRematerialization(targetInfo);
     layoutRemat.cleanup();
   });
 }
@@ -2028,7 +2031,7 @@ public:
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
-
+    auto targetInfo = mlir::triton::intel::TargetInfo();
     // 1. Propagate layout forward starting from "anchor" ops.
     m.walk([](FuncOp funcOp) {
       LayoutPropagation layoutPropagation(funcOp);
@@ -2048,7 +2051,7 @@ public:
 
     // 2. For remaining convert ops, try to rematerialize the slice of producer
     // operation to avoid having to convert.
-    backwardRematerialization(m);
+    backwardRematerialization(m, targetInfo);
     LLVM_DEBUG({
       DBGS() << "Module after backward remat:\n";
       m.dump();
