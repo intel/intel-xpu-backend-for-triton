@@ -153,7 +153,7 @@ def is_xpu_ptl_u():
 
 def is_xpu_cri():
     target = get_current_target()
-    return target is not None and target.backend == 'xpu' and 'cri' in target.arch
+    return target is not None and target.backend == 'xpu' and target.arch["arch"] == 'cri'
 
 
 def is_xpu_lpg():
