@@ -18,7 +18,7 @@
 #include "triton/Tools/LinearLayout.h"
 #include <optional>
 #include <triton/Tools/Sys/GetEnv.hpp>
-
+#include <iostream>
 using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
@@ -1906,7 +1906,9 @@ struct LoadOpToBlockIOConversion
     Value ptr = op.getPtr();
     if (isTensorPointerType(ptr.getType())) {
       if (!isBlockIOCandidate(op))
+        std::cout << "Load io block fail!!!!!!!!!!!!!!!!!" <<std::endl;
         return failure();
+      std::cout << "Test Load io block fail!!!!!!!!!!!!!!!!!" <<std::endl;
       return rewriteTensorPointerLoad(op, adaptor, rewriter);
     }
 
@@ -2458,6 +2460,8 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
 
     if (isTensorPointerType(ptr.getType())) {
       // fallback to gather load.
+
+      std::cout << "Load op fail!!!!!!!!!!!!!!!!!" <<std::endl;
       auto tensorType = cast<RankedTensorType>(op.getType());
       std::tie(ptrElems, maskElems, otherElems) = convertBlockPtrToTensorOfPtr(
           loc, llPtr, tensorType, valueElemTy, rewriter, op.getBoundaryCheck(),
@@ -2572,10 +2576,13 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       Value ret;
       if (!pred)
         ret = createLoadWithAttrs()[0];
-      else if (canUsePredicatedInstructions(op))
+      else if (canUsePredicatedInstructions(op)){
+        std::cout << "ret = TritonGEN::PredicatedLoadOp::create" <<std::endl;
         ret = TritonGEN::PredicatedLoadOp::create(
             rewriter, loc, retTy, addrElem, b.i64_val(alignment), pred, other_);
+      }
       else {
+        std::cout << "1Block &endBlock = LLVM::intel::createPredicatedBlock" <<std::endl;
         Block &endBlock = LLVM::intel::createPredicatedBlock(
             rewriter, loc, pred, SmallVector<Value, 1>{other_},
             createLoadWithAttrs);
@@ -2928,6 +2935,7 @@ struct StoreOpConversion
       vec = std::min<size_t>(vec, getMaskAlignment(op.getMask()));
 
     if (isTensorPointerType(ptr.getType())) {
+      std::cout << "Store fail!!!!!!!!!!!!!!!!!" <<std::endl;
       // fallback to scatter store.
       auto tensorType = cast<RankedTensorType>(valueTy);
       SmallVector<Value> dummyOther;
@@ -3024,12 +3032,16 @@ struct StoreOpConversion
 
       if (!maskVal)
         auto _ = createStoreWithAttrs();
-      else if (canUsePredicatedInstructions(op))
+      else if (canUsePredicatedInstructions(op)){
+        std::cout << "TritonGEN::PredicatedStoreOp::create!!!!!!!!!!!!!!!!!" <<std::endl;
         TritonGEN::PredicatedStoreOp::create(rewriter, loc, addrElem, vecWord,
                                              b.i64_val(alignment), maskVal);
-      else
+      }
+      else {
         LLVM::intel::createPredicatedBlock(rewriter, loc, maskVal,
                                            createStoreWithAttrs);
+        std::cout << "2)LLVM::intel::createPredicatedBlock(" <<std::endl;
+      }
     }
 
     rewriter.eraseOp(op);
@@ -3137,6 +3149,7 @@ struct AtomicCASOpConversion
         };
 
         if (mask) {
+          std::cout << "2Block &endBlock = LLVM::intel::createPredicatedBlock" <<std::endl;
           Block &endBlock = LLVM::intel::createPredicatedBlock(
               rewriter, loc, mask, {zero}, createAtomicCASInstruction);
           ret = endBlock.getArgument(0);
@@ -3368,6 +3381,7 @@ struct AtomicRMWOpConversion
         };
 
         if (rmwMask) {
+          std::cout << "Block *endBlock = &LLVM::intel::createPredicatedBlock" <<std::endl;
           Block *endBlock = &LLVM::intel::createPredicatedBlock(
               rewriter, loc, rmwMask, {zero}, createAtomicBinOpInstruction);
           ret = endBlock->getArgument(0);
