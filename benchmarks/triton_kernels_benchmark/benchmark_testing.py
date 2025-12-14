@@ -308,9 +308,7 @@ else:
     raise NotImplementedError(f"BENCHMARKING_METHOD: {BENCHMARKING_METHOD} isn't implemented")
 
 
-def get_do_bench(n_warmup: int, n_repeat: int, quantiles: list, clear_cache: bool = True):
-    if clear_cache:
-        torch.xpu.empty_cache()
+def get_do_bench(n_warmup: int, n_repeat: int, quantiles: list):
     return functools.partial(do_bench, n_warmup=n_warmup, n_repeat=n_repeat, quantiles=quantiles)
 
 
