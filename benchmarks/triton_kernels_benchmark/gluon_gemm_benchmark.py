@@ -150,7 +150,7 @@ def gluon_matmul_kernel_with_tensor_descriptors(
             ttgl.intel.xe.prefetch_2d(a_desc, [pid_m * BLOCK_SIZE_M, prefetch_k * BLOCK_SIZE_K])
             ttgl.intel.xe.prefetch_2d(b_desc, [prefetch_k * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N])
 
-        accumulator = ttgl.intel.xe.dot(a, b, accumulator)
+        accumulator = ttgl.intel.xe.dpas(a, b, accumulator)
 
     ttgl.intel.xe.store_2d(c_desc, [pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], accumulator)
 
@@ -224,6 +224,6 @@ def gluon_matmul_kernel_with_tensor_descriptors_batched(
             ttgl.intel.xe.prefetch_2d(a_desc, [pid_m * BLOCK_SIZE_M, prefetch_k * BLOCK_SIZE_K])
             ttgl.intel.xe.prefetch_2d(b_desc, [prefetch_k * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N])
 
-        accumulator = ttgl.intel.xe.dot(a, b, accumulator)
+        accumulator = ttgl.intel.xe.dpas(a, b, accumulator)
 
     ttgl.intel.xe.store_2d(c_desc, [pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], accumulator)

@@ -32,7 +32,7 @@ def get_dpas_capabilities():
 
 
 @builtin
-def dot(a, b, acc, _semantic=None):
+def dpas(a, b, acc, _semantic=None):
     assert isinstance(a, tensor), "a must be a tensor"
     assert isinstance(b, tensor), "b must be a tensor"
     assert isinstance(acc, tensor), "acc must be a tensor"
