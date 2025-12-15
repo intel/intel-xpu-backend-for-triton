@@ -30,6 +30,10 @@ The foundations of this project are described in the following MAPL2019 publicat
 
 The [official documentation](https://triton-lang.org) contains installation instructions and tutorials.  See also these third-party [Triton puzzles](https://github.com/srush/Triton-Puzzles), which can all be run using the Triton interpreter -- no GPU required.
 
+# Experimental Gluon support
+
+This feature is under active development, may be incomplete or unstable, and is not guaranteed to be production-ready.
+
 # Quick Installation
 
 You can install the latest stable release of Triton from pip:
