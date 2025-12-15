@@ -680,6 +680,11 @@ run_vllm_install() {
     cd vllm
     git checkout "$(<../benchmarks/third_party/vllm/vllm-pin.txt)"
     git apply ../benchmarks/third_party/vllm/vllm-fix.patch
+    sed -i 's/device="cuda"/device="xpu"/g' \
+      tests/kernels/moe/utils.py \
+      tests/kernels/moe/test_batched_moe.py \
+      tests/kernels/attention/test_triton_unified_attention.py \
+
     cd ..
   fi
 

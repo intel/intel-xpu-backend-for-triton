@@ -12,64 +12,10 @@ index c1dc4195b..3a154f704 100644
 -torchvision
 -
 -intel-extension-for-pytorch @ https://intel-extension-for-pytorch.s3.us-east-1.amazonaws.com/ipex_dev/xpu/intel_extension_for_pytorch-2.9.10.post0%2Bxpu-cp312-cp312-linux_x86_64.whl
-diff --git a/tests/kernels/attention/test_triton_unified_attention.py b/tests/kernels/attention/test_triton_unified_attention.py
-index bf4d2179a..bc8a645fd 100644
---- a/tests/kernels/attention/test_triton_unified_attention.py
-+++ b/tests/kernels/attention/test_triton_unified_attention.py
-@@ -104,7 +104,7 @@ def test_triton_unified_attn(
-     num_blocks: int,
-     q_dtype: torch.dtype | None,
- ) -> None:
--    torch.set_default_device("cuda")
-+    torch.set_default_device("xpu")
- 
-     current_platform.seed_everything(0)
-     num_seqs = len(seq_lens)
 diff --git a/tests/kernels/moe/test_batched_moe.py b/tests/kernels/moe/test_batched_moe.py
 index dab1207d7..31e85cb6b 100644
 --- a/tests/kernels/moe/test_batched_moe.py
 +++ b/tests/kernels/moe/test_batched_moe.py
-@@ -70,19 +70,19 @@ class BatchedMMTensors:
-         A = (
-             torch.randn(
-                 (config.num_experts, config.max_tokens_per_expert, config.K),
--                device="cuda",
-+                device="xpu",
-                 dtype=config.in_dtype,
-             )
-             / 10
-         )
-         B = torch.randn(
-             (config.num_experts, config.N, config.K),
--            device="cuda",
-+            device="xpu",
-             dtype=config.in_dtype,
-         )
-         C = torch.zeros(
-             (config.num_experts, config.max_tokens_per_expert, config.N),
--            device="cuda",
-+            device="xpu",
-             dtype=config.out_dtype,
-         )
- 
-@@ -90,7 +90,7 @@ class BatchedMMTensors:
-             low=0,
-             high=config.max_tokens_per_expert,
-             size=(config.num_experts,),
--            device="cuda",
-+            device="xpu",
-             dtype=torch.int32,
-         )
- 
-@@ -143,7 +143,7 @@ def test_batched_mm(
-         low=0,
-         high=max_tokens_per_expert,
-         size=(num_experts,),
--        device="cuda",
-+        device="xpu",
-         dtype=torch.int32,
-     )
- 
 @@ -168,9 +168,9 @@ def test_batched_mm(
      )
  
@@ -94,30 +40,8 @@ index dab1207d7..31e85cb6b 100644
  @pytest.mark.parametrize("block_shape", [None, [128, 128]])
  @pytest.mark.parametrize("input_scales", [False])
  def test_fused_moe_batched_experts(
-@@ -271,8 +271,8 @@ def test_fused_moe_batched_experts(
-     if per_act_token_quant and block_shape is not None:
-         pytest.skip("Skip illegal quantization test.")
- 
--    a = torch.randn((m, k), device="cuda", dtype=torch.bfloat16) / 10
--    score = torch.randn((m, e), device="cuda", dtype=torch.bfloat16)
-+    a = torch.randn((m, k), device="xpu", dtype=torch.bfloat16) / 10
-+    score = torch.randn((m, e), device="xpu", dtype=torch.bfloat16)
- 
-     if dtype.itemsize == 1:
-         act_dtype = torch.bfloat16
-@@ -292,8 +292,8 @@ def test_fused_moe_batched_experts(
-     )
- 
-     if input_scales and quant_dtype is not None:
--        a1_scale = torch.tensor(1, device="cuda", dtype=torch.float32)
--        a2_scale = torch.tensor(1, device="cuda", dtype=torch.float32)
-+        a1_scale = torch.tensor(1, device="xpu", dtype=torch.float32)
-+        a2_scale = torch.tensor(1, device="xpu", dtype=torch.float32)
-     else:
-         a1_scale = None
-         a2_scale = None
 diff --git a/tests/kernels/moe/utils.py b/tests/kernels/moe/utils.py
-index f0c8c8033..a58cd9929 100644
+index f0c8c8033..784c000b7 100644
 --- a/tests/kernels/moe/utils.py
 +++ b/tests/kernels/moe/utils.py
 @@ -3,9 +3,10 @@
@@ -133,25 +57,25 @@ index f0c8c8033..a58cd9929 100644
  from vllm.model_executor.layers.activation import SiluAndMul
  from vllm.model_executor.layers.fused_moe import fused_experts, fused_topk
  from vllm.model_executor.layers.fused_moe.config import FusedMoEQuantConfig
-@@ -219,11 +220,12 @@ def make_test_weight(
-     rows: int,
-     cols: int,
-     in_dtype: torch.dtype = torch.bfloat16,
--    quant_dtype: torch.dtype | str | None = None,
--    block_shape: list[int] | None = None,
--    per_out_ch_quant: bool = False,
--) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+@@ -147,7 +148,7 @@ def make_quantized_test_activations(
+     block_shape: list[int] | None = None,
+     per_act_token_quant: bool = False,
+ ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+-    a = torch.randn((E, m, k), device="cuda", dtype=in_dtype) / 10
++    a = torch.randn((E, m, k), device="xpu", dtype=in_dtype) / 10
+     a_q = a
+     a_scale = None
+ 
+@@ -223,7 +224,7 @@ def make_test_weight(
+     block_shape: list[int] | None = None,
+     per_out_ch_quant: bool = False,
+ ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
 -    w_16 = torch.randn((e, rows, cols), device="cuda", dtype=in_dtype) / 15
-+    quant_dtype: Union[torch.dtype, str, None] = None,
-+    block_shape: Optional[list[int]] = None,
-+    per_act_token_quant: bool = False,
-+) -> tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor],
-+           Optional[torch.Tensor]]:
 +    w_16 = torch.randn((e, rows, cols), device="xpu", dtype=in_dtype) / 15
      w_gs = None
  
      if quant_dtype is not None:
-@@ -232,10 +234,14 @@ def make_test_weight(
+@@ -232,10 +233,14 @@ def make_test_weight(
          w_gs_l = [None] * e
          for idx in range(e):
              w_l[idx], w_s_l[idx], w_gs_l[idx] = moe_quantize_weights(
@@ -380,6 +304,35 @@ index 7fd8511e2..e99f4fb2d 100644
          # Note: this does a bunch of extra work because expert_num_tokens is
          # ignored but it does support torch.compile + cudagraphs.
          hidden_dim = A.size(-1)
+diff --git a/vllm/model_executor/layers/fused_moe/fused_moe.py b/vllm/model_executor/layers/fused_moe/fused_moe.py
+index 0b83a3f5c..e99ad6f3a 100644
+--- a/vllm/model_executor/layers/fused_moe/fused_moe.py
++++ b/vllm/model_executor/layers/fused_moe/fused_moe.py
+@@ -1124,13 +1124,17 @@ def vllm_topk_softmax(
+     gating_output: torch.Tensor,
+     renormalize: bool,
+ ) -> tuple[torch.Tensor, ...]:
+-    ops.topk_softmax(
+-        topk_weights,
+-        topk_indices,
+-        token_expert_indices,
+-        gating_output,
+-        renormalize,
+-    )
++    if current_platform.is_xpu():
++       score = torch.softmax(gating_output, dim=-1, dtype=torch.float32)
++       topk_weights, topk_indices = torch.topk(score,
++                                               token_expert_indices.size(1))
++    else:
++       ops.topk_softmax(
++           topk_weights,
++           topk_indices,
++           token_expert_indices,
++           gating_output,
++       )
+ 
+     return topk_weights, topk_indices
+ 
 diff --git a/vllm/platforms/__init__.py b/vllm/platforms/__init__.py
 index a45ca9882..0bc76c784 100644
 --- a/vllm/platforms/__init__.py
