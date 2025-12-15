@@ -8,7 +8,7 @@ from triton.experimental.gluon.language.intel._layouts import IntelDPASLayout
 from triton.experimental.gluon.language._core import builtin
 from triton.language.core import constexpr, tensor
 
-__all__ = ["dot"]
+__all__ = ["dpas"]
 
 
 @cache
