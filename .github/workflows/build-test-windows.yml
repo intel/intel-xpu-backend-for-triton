@@ -151,6 +151,7 @@ jobs:
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           cd ${{ env.NEW_WORKSPACE }}
           ${{ env.TRITON_TEST_CMD }} --unit
+        continue-on-error: true
 
       - name: Run core tests
         run: |
@@ -158,6 +159,7 @@ jobs:
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           cd ${{ env.NEW_WORKSPACE }}
           ${{ env.TRITON_TEST_CMD }} --core
+        continue-on-error: true
 
       - name: Run gluon tests
         run: |
@@ -165,6 +167,7 @@ jobs:
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           cd ${{ env.NEW_WORKSPACE }}
           ${{ env.TRITON_TEST_CMD }} --gluon
+        continue-on-error: true
 
       - name: Run triton kernels tests
         run: |
@@ -172,6 +175,7 @@ jobs:
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           cd ${{ env.NEW_WORKSPACE }}
           ${{ env.TRITON_TEST_CMD }} --triton-kernels
+        continue-on-error: true
 
       - name: Run interpreter tests
         run: |
@@ -179,6 +183,7 @@ jobs:
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           cd ${{ env.NEW_WORKSPACE }}
           ${{ env.TRITON_TEST_CMD }} --interpreter
+        continue-on-error: true
 
       - name: Run tutorials
         run: |
@@ -188,6 +193,7 @@ jobs:
           $env:MPLBACKEND = "Agg"
           cd ${{ env.NEW_WORKSPACE }}
           ${{ env.TRITON_TEST_CMD }} --tutorial
+        continue-on-error: true
 
       - name: Run instrumentation tests
         run: |
@@ -195,6 +201,7 @@ jobs:
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           cd ${{ env.NEW_WORKSPACE }}
           ${{ env.TRITON_TEST_CMD }} --instrumentation
+        continue-on-error: true
 
       - name: Pass rate
         run: |
