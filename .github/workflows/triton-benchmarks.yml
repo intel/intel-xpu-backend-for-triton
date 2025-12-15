@@ -155,6 +155,7 @@ jobs:
           mv $REPORTS/matmul-performance.csv $REPORTS/matmul-performance-base.csv
           source ../../scripts/capture-hw-details.sh
           python build_report.py $REPORTS/matmul-performance-base.csv $REPORTS/gemm-newshapes-triton-report.csv --benchmark gemm --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+          python build_report.py $REPORTS/matmul-performance-base.csv $REPORTS/gemm-newshapes-gluon-report.csv --benchmark gemm --compiler gluon--param_cols "B,M,K,N" --tflops_col Gluon-TFlops --hbm_col "Gluon-GB/s" --tag $TAG
           python build_report.py $REPORTS/matmul-performance-base.csv $REPORTS/gemm-newshapes-onednn-report.csv --benchmark gemm --compiler onednn --param_cols "B,M,K,N" --tflops_col OneDNN-TFlops --hbm_col "OneDNN-GB/s" --tag $TAG
           if [[ "${{ inputs.runner_label || 'max1550' }}" != "lnl" ]]; then
             python build_report.py $REPORTS/matmul-performance-base.csv $REPORTS/gemm-newshapes-cutlass-report.csv --benchmark gemm --compiler cutlass --param_cols "B,M,K,N" --tflops_col CUTLASS-TFlops --hbm_col "CUTLASS-GB/s" --tag $TAG
