@@ -1,15 +1,39 @@
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Utils/Utility.h"
+#include "mlir/Dialect/SCF/Transforms/Patterns.h"
+#include "mlir/IR/Attributes.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Operation.h"
+#include "mlir/IR/ValueRange.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
+#include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
+#include "triton/Dialect/Triton/Transforms/ArithTypeConversion.h"
+#include "triton/Dialect/Triton/Transforms/FunctionTypeConversion.h"
+#include "triton/Dialect/Triton/Transforms/Passes.h"
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/SmallVectorExtras.h"
+#include "llvm/Support/LogicalResult.h"
+#include "llvm/Support/raw_ostream.h"
+#include <mlir/Dialect/Arith/IR/Arith.h>
+#include <mlir/Dialect/Func/Transforms/FuncConversions.h>
+#include <mlir/IR/Builders.h>
+#include <mlir/IR/Value.h>
+#include <mlir/Pass/Pass.h>
+#include <mlir/Transforms/DialectConversion.h>
+
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+
+#include <iterator>
 
 #define DEBUG_TYPE "triton-intel-tdesc-to-block-pointer"
 
@@ -22,6 +46,70 @@ namespace mlir::triton::intel {
 } // namespace mlir::triton::intel
 
 namespace {
+
+bool hasATensorDescriptorType(mlir::TypeRange types) {
+  return llvm::any_of(types, [](mlir::Type t) {
+    return llvm::isa<mlir::triton::TensorDescType>(t);
+  });
+}
+
+/**
+ * @brief Filter out operand segment sizes from the list of attributes since
+ * this attribute is operation specific and shouldn't be set arbitrarily.
+ */
+mlir::SmallVector<NamedAttribute>
+filterSegmentSizes(mlir::ArrayRef<NamedAttribute> attrs) {
+  mlir::SmallVector<NamedAttribute> ret;
+  llvm::copy_if(attrs, std::back_inserter(ret), [](const NamedAttribute &attr) {
+    auto attrName = attr.getName().getValue();
+    return attrName != "operandSegmentSizes";
+  });
+  return ret;
+}
+
+struct Descriptor {
+  Value blockPointer;
+  Value paddingOption;
+};
+
+Descriptor unpackDescriptor(tt::TensorDescType type, ValueRange pack) {
+  assert(pack.size() == 2 &&
+         "Expected tensor descriptors to consist of a block pointer followed "
+         "by a padding option value.");
+
+  Descriptor res;
+  res.blockPointer = pack[0];
+  res.paddingOption = pack[1];
+  return res;
+}
+
+Value generateOther(OpBuilder &builder, Location loc, Type scalarTy,
+                    ArrayRef<int64_t> blockShape,
+                    Value paddingOption = nullptr) {
+  auto blockTy = RankedTensorType::get(blockShape, scalarTy);
+  if (paddingOption && mlir::isa<FloatType>(scalarTy)) {
+    auto floatTy = mlir::cast<FloatType>(scalarTy);
+    auto nan = llvm::APFloat::getNaN(floatTy.getFloatSemantics());
+    auto nanValue = arith::ConstantOp::create(
+        builder, loc,
+        SplatElementsAttr::get(blockTy, builder.getFloatAttr(floatTy, nan)));
+    auto zeroValue = arith::ConstantOp::create(
+        builder, loc,
+        SplatElementsAttr::get(blockTy, builder.getZeroAttr(floatTy)));
+    return mlir::arith::SelectOp::create(builder, loc, paddingOption, nanValue,
+                                         zeroValue);
+  } else {
+    auto attr = builder.getZeroAttr(blockTy);
+    return arith::ConstantOp::create(builder, loc, attr);
+  }
+}
+
+Value generateOther(OpBuilder &builder, Location loc, tt::TensorDescType descTy,
+                    Value paddingOption = nullptr) {
+  auto blockTy = descTy.getSignlessBlockType();
+  return generateOther(builder, loc, blockTy.getElementType(),
+                       blockTy.getShape(), paddingOption);
+}
 
 constexpr unsigned offsetBitwidth = 32u;
 constexpr unsigned shapeAndStridesBitwidth = 64u;
@@ -51,6 +139,103 @@ Value findOrCreateCast(Location loc, Value val, Type tgtType,
              : getValueOrCreateCastToIndexLike(builder, loc, tgtType, val);
 }
 
+struct RewriteMakeTensorDesc : OpConversionPattern<triton::MakeTensorDescOp> {
+  using OpConversionPattern<triton::MakeTensorDescOp>::OpConversionPattern;
+
+  llvm::LogicalResult
+  matchAndRewrite(triton::MakeTensorDescOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    tt::TensorDescType tDescType = op.getType();
+    Location loc = op.getLoc();
+
+    SmallVector<Value> shapes, strides, offsets;
+    SmallVector<int32_t> sizes, orders;
+    unsigned rank = tDescType.getBlockType().getRank();
+    for (const auto [dim, shape, stride, size] :
+         llvm::enumerate(op.getShape(), op.getStrides(),
+                         tDescType.getBlockType().getShape())) {
+      shapes.push_back(findOrCreateCast(
+          loc, shape, rewriter.getIntegerType(shapeAndStridesBitwidth),
+          rewriter));
+      strides.push_back(findOrCreateCast(
+          loc, stride, rewriter.getIntegerType(shapeAndStridesBitwidth),
+          rewriter));
+      Value zero =
+          tt::intel::findOrCreateIntConstant(loc, 0, offsetBitwidth, rewriter);
+      offsets.push_back(zero);
+      sizes.push_back(static_cast<int32_t>(size));
+      orders.push_back(rank - (1 + dim)); // the fastest change dim first.
+    }
+
+    tt::MakeTensorPtrOp makeTensorPtr = tt::MakeTensorPtrOp::create(
+        rewriter, op.getLoc(), adaptor.getBase(), shapes, strides, offsets,
+        sizes, rewriter.getDenseI32ArrayAttr(orders));
+
+    SmallVector<mlir::Value> blockPopinterAndPaddingOption;
+    llvm::append_values(blockPopinterAndPaddingOption, makeTensorPtr);
+    auto paddingOption = mlir::arith::ConstantOp::create(
+        rewriter, op.getLoc(), rewriter.getI1Type(),
+        rewriter.getBoolAttr(adaptor.getPadding() ==
+                             triton::PaddingOption::PAD_NAN));
+    llvm::append_values(blockPopinterAndPaddingOption, paddingOption);
+    rewriter.replaceOpWithMultiple(op, {blockPopinterAndPaddingOption});
+
+    return mlir::success();
+  }
+};
+
+struct RewriteLoadPattern : OpConversionPattern<triton::DescriptorLoadOp> {
+  using OpConversionPattern<triton::DescriptorLoadOp>::OpConversionPattern;
+
+  llvm::LogicalResult
+  matchAndRewrite(triton::DescriptorLoadOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    const auto blockShape = op.getDesc().getType().getBlockType().getShape();
+    auto descTy = op.getDesc().getType();
+    auto desc = unpackDescriptor(descTy, adaptor.getDesc());
+    auto blockType = descTy.getSignlessBlockType();
+    auto ptrType = cast<tt::PointerType>(descTy.getSignlessBlockType());
+    Value ptr = tt::AdvanceOp::create(rewriter, loc, ptrType, desc.blockPointer,
+                                      op.getIndices());
+
+    SmallVector<int32_t> boundaryCheck;
+    for (size_t i = 0; i < blockType.getRank(); ++i)
+      boundaryCheck.push_back(i);
+
+    auto other = generateOther(rewriter, loc, descTy, desc.paddingOption);
+
+    auto newLoad = rewriter.replaceOpWithNewOp<triton::LoadOp>(
+        op, ptr, boundaryCheck, other, triton::CacheModifier::NONE,
+        triton::EvictionPolicy::NORMAL, /*volatile*/ false);
+    newLoad->setAttrs(filterSegmentSizes(op->getAttrs()));
+
+    return llvm::success();
+  }
+};
+
+struct RewriteStorePattern : OpConversionPattern<triton::DescriptorStoreOp> {
+  using OpConversionPattern<triton::DescriptorStoreOp>::OpConversionPattern;
+
+  llvm::LogicalResult
+  matchAndRewrite(triton::DescriptorStoreOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // auto loc = op.getLoc();
+    // auto descTy = op.getDesc().getType();
+    // const auto blockShape = descTy.getBlockType().getShape();
+    // auto desc = unpackDescriptor(descTy, adaptor.getDesc());
+    // auto offsets = castToI64(rewriter, op.getIndices());
+    //
+    // auto newStore = rewriter.replaceOpWithNewOp<triton::StoreOp>(
+    //     op, generatePtr(rewriter, loc, blockShape, desc, offsets),
+    //     op.getSrc(), generateMask(rewriter, loc, blockShape, desc, offsets),
+    //     triton::CacheModifier::NONE, triton::EvictionPolicy::NORMAL);
+    // newStore->setAttrs(filterSegmentSizes(op->getAttrs()));
+
+    return llvm::success();
+  }
+};
+
 struct TritonIntelTensorDescToBlockPointer
     : tt::intel::impl::TritonIntelTensorDescToBlockPointerBase<
           TritonIntelTensorDescToBlockPointer> {
@@ -68,19 +253,6 @@ public:
             "TritonIntelTensorDescToBlockPointer: Failed to rewrite");
         return WalkResult::interrupt();
       }
-      if (auto loadOp = dyn_cast_or_null<tt::DescriptorLoadOp>(op)) {
-        // Retrieve the padding option from the MakeTensorDescOp.
-        std::optional<tt::MakeTensorDescOp> makeTensorDescOp =
-            triton::intel::findDefiningMakeTensorPtrOp<tt::MakeTensorDescOp>(
-                loadOp.getDesc());
-        if (!makeTensorDescOp) {
-          op->emitRemark("TritonIntelTensorDescToBlockPointer: Failed to "
-                         "retrieve the padding option.");
-          return WalkResult::interrupt();
-        }
-
-        this->paddingInfo[loadOp] = makeTensorDescOp->getPadding();
-      }
       return WalkResult::advance();
     });
     if (res.wasInterrupted()) {
@@ -90,28 +262,53 @@ public:
       return;
     }
 
-    moduleOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
-      return TypeSwitch<Operation *, WalkResult>(op)
-          .Case<tt::MakeTensorDescOp>([&](auto makeTensorDescOp) {
-            if (failed(rewriteMakeTensorDescriptorOp(makeTensorDescOp)))
-              makeTensorDescOp->emitRemark(
-                  "TritonIntelTensorDescToBlockPointer: Failed to rewrite");
-            return WalkResult::advance();
-          })
-          .Case<tt::DescriptorLoadOp, tt::DescriptorStoreOp>(
-              [&](auto loadOrStoreOp) {
-                if (failed(rewriteDescriptorLoadOrStoreOp(loadOrStoreOp)))
-                  loadOrStoreOp->emitRemark(
-                      "TritonIntelTensorDescToBlockPointer: Failed to rewrite");
-                return WalkResult::advance();
-              })
-          .Default([&](auto) { return WalkResult::advance(); });
+    mlir::ConversionTarget target(getContext());
+    target.addDynamicallyLegalDialect<mlir::arith::ArithDialect,
+                                      mlir::scf::SCFDialect,
+                                      mlir::triton::TritonDialect>(
+        [](mlir::Operation *op) {
+          return !hasATensorDescriptorType(op->getOperandTypes()) &&
+                 !hasATensorDescriptorType(op->getResultTypes());
+        });
+    target.addDynamicallyLegalOp<triton::FuncOp>([](triton::FuncOp funcOp) {
+      return !hasATensorDescriptorType(funcOp.getFunctionType().getInputs()) &&
+             !hasATensorDescriptorType(funcOp.getFunctionType().getResults());
     });
 
-    if (!cleanUp.empty())
-      tt::intel::eraseOperations(cleanUp);
+    mlir::TypeConverter converter;
 
-    assert(succeeded(verify(moduleOp)) && "Module verification failed");
+    converter.addConversion([](mlir::Type t) {
+      // Most types don't require any conversion
+      return t;
+    });
+    converter.addConversion([](mlir::triton::TensorDescType t,
+                               llvm::SmallVectorImpl<mlir::Type> &out) {
+      // We convert a tensor descriptor into a block pointer and padding option.
+      auto tensorType = t.getSignlessBlockType();
+      out.push_back(triton::getPointerType(tensorType));
+      out.push_back(mlir::IntegerType::get(t.getContext(), 1));
+      return mlir::success();
+    });
+
+    mlir::RewritePatternSet patterns(moduleOp->getContext());
+
+    // Populate conversion patterns to handle loops, function calls, and arith
+    // ops.
+    triton::populateFunctionTypeConversions(converter, patterns);
+    mlir::scf::populateSCFStructuralTypeConversions(converter, patterns);
+    triton::populateArithTypeConversions(converter, patterns);
+
+    patterns
+        .add<RewriteMakeTensorDesc, RewriteLoadPattern, RewriteStorePattern>(
+            converter, &getContext());
+
+    ConversionConfig config;
+    config.buildMaterializations = false;
+
+    if (mlir::failed(mlir::applyPartialConversion(
+            moduleOp, target, std::move(patterns), config))) {
+      signalPassFailure();
+    }
   }
 
 private:
