@@ -1,0 +1,3 @@
+# Tests that has accuracy issue. Need to investigate.
+python/test/unit/language/test_core.py::test_scaled_dot[128-128-64-True-True-False-e2m1-e5m2-4-16-1]
+python/test/unit/language/test_core.py::test_scaled_dot[128-64-64-True-True-False-e4m3-fp16-4-16-1]

@@ -495,7 +495,7 @@ BlockScaledDPASRegBasesScaleA(int opsPerChannel, int scaleOpKDim) {
   std::vector<std::vector<int32_t>> regBases;
 
   assert((scaleOpKDim == 1) && "Does not support scaleOpKDim != 1 for now");
-  assert((opsPerChannel == 4 || opsPerChannel == 8) &&
+  assert((opsPerChannel == 2 || opsPerChannel == 4 || opsPerChannel == 8) &&
          "invalid opsPerChannel number for bdpas.");
   if (opsPerChannel == 8) {
     regBases.push_back({0, 1});
@@ -548,7 +548,7 @@ std::vector<std::vector<int32_t>>
 BlockScaledDPASRegBasesScaleB(int opsPerChannel, int scaleOpKDim) {
   std::vector<std::vector<int32_t>> regBases;
   assert((scaleOpKDim == 1) && "Does not support scaleOpKDim != 1 for now");
-  assert((opsPerChannel == 4 || opsPerChannel == 8) &&
+  assert((opsPerChannel == 2 || opsPerChannel == 4 || opsPerChannel == 8) &&
          "invalid opsPerChannel number for bdpas.");
   if (opsPerChannel == 8) {
     regBases.push_back({0, 1});
@@ -606,8 +606,9 @@ LinearLayout BlockScaledDPAStoLinearLayout(ArrayRef<int64_t> shape,
   std::optional<unsigned> fp4Kpack = dpas.getFp4KPack();
   int opsPerChannel = fp4Kpack ? dpas.getOpsPerChannel() * (*fp4Kpack)
                                : dpas.getOpsPerChannel();
-  assert(((opsPerChannel == 4) || (opsPerChannel == 8)) &&
-         "block scaled dpas only supports opsPerChannel=4 or 8");
+  assert(
+      ((opsPerChannel == 2) || (opsPerChannel == 4) || (opsPerChannel == 8)) &&
+      "block scaled dpas only supports opsPerChannel of 2, 4 or 8");
   unsigned dpasKDim, dpasNonKDim;
   auto getUnsignedKDim = [&](int scaleKIdx, unsigned rank) -> unsigned {
     if (scaleKIdx < 0)

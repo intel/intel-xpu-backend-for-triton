@@ -184,13 +184,15 @@ public:
       auto scaleAVal = adaptor.getAScale();
       if (scaleAVal) {
         scaleA = getScaleValuesFromDotOperandLayoutStruct(
-            scaleAVal, repBatch, repM, repK, 3 /*opIdx*/);
+            scaleAVal, repBatch, repM, repK, 3 /*opIdx*/,
+            ATensorTy.getElementType().getIntOrFloatBitWidth() == 16);
       }
 
       auto scaleBVal = adaptor.getBScale();
       if (scaleBVal) {
         scaleB = getScaleValuesFromDotOperandLayoutStruct(
-            scaleBVal, repBatch, repN, repK, 4 /*opIdx*/);
+            scaleBVal, repBatch, repN, repK, 4 /*opIdx*/,
+            BTensorTy.getElementType().getIntOrFloatBitWidth() == 16);
       }
     }
 
@@ -435,22 +437,21 @@ private:
   ValueTable getScaleValuesFromDotOperandLayoutStruct(Value val, int64_t batch,
                                                       int64_t outer,
                                                       int64_t inner,
-                                                      unsigned opIdx) const {
+                                                      unsigned opIdx,
+                                                      bool isFp16) const {
     SmallVector<Value> elems = unpackLLElements(loc, val, rewriter);
 
     ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
     size_t rank = repCluster.size();
     unsigned repClusterOuter = 0u;
-    unsigned repClusterInner = 0u;
+    unsigned repClusterInner = 1u;
     switch (opIdx) {
     case 3:
       // operand scale A
       repClusterOuter = repCluster[rank - 2];
-      repClusterInner = 1;
       break;
     case 4:
       // operand scale B
-      repClusterInner = 1;
       repClusterOuter = repCluster[rank - 1];
       break;
     default:
@@ -458,14 +459,16 @@ private:
     }
 
     size_t totalElems = elems.size();
-    unsigned packedElem = totalElems / (batch * outer * inner *
-                                        repClusterOuter * repClusterInner);
+    unsigned packedElem = mlir::ceil<unsigned>(
+        totalElems, batch * outer * inner * repClusterOuter * repClusterInner);
+    unsigned innerStepping = isFp16 ? 2 : 1;
+
     int offset = 0;
     auto tb = TritonLLVMOpBuilder(loc, rewriter);
     ValueTable vals;
     for (unsigned b = 0; b < batch; ++b) {
       for (int i = 0; i < outer; ++i) {
-        for (int j = 0; j < inner; ++j) {
+        for (int j = 0; j < inner; j += innerStepping) {
           for (int repOuter = 0; repOuter < repClusterOuter; ++repOuter) {
             for (int repInner = 0; repInner < repClusterInner; ++repInner) {
               Value matVal;
@@ -478,8 +481,17 @@ private:
               } else
                 matVal = elems[offset++];
 
-              vals[{b, i * repClusterOuter + repOuter,
-                    j * repClusterInner + repInner}] = matVal;
+              unsigned offsetOuter = i * repClusterOuter + repOuter;
+              unsigned offsetInner = j * repClusterInner + repInner;
+              vals[{b, offsetOuter, offsetInner}] = matVal;
+
+              if (isFp16) {
+                // For fp16 bdpas, the size of k dimension is 16.
+                // The triton ops share the scale for every 32 elements.
+                // So we need to reuse the scale operands for two continuous
+                // bdpas ops on the K dim.
+                vals[{b, offsetOuter, offsetInner + 1}] = matVal;
+              }
             }
           }
         }

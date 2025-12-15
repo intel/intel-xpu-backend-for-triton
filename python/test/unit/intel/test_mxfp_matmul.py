@@ -3,6 +3,7 @@ import torch
 import triton
 import triton.language as tl
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
+from triton._internal_testing import is_xpu_cri
 
 
 def f8_to_f16(x, dtype):
@@ -110,10 +111,7 @@ def test_mxfp_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TRANS, PA
     if not PACK_B_ALONG_K and B_DATA_TYPE != "float4":
         pytest.xfail("Pack along K can only be False for float4")
     if B_DATA_TYPE == "float4" and not PACK_B_ALONG_K:
-        pytest.skip("Skip pack along non-K because it is emulated by dpas for now. issue #678")
-    is_both_fp8 = (A_DATA_TYPE in ['float8e5', 'float8e4nv']) and (B_DATA_TYPE in ['float8e5', 'float8e4nv'])
-    if not is_both_fp8 and A_DATA_TYPE != B_DATA_TYPE:
-        pytest.skip("Skip mixed precision because it is emulated by dpas for now. issue #678")
+        pytest.skip("Skip pack along non-K because it is emulated by dpas for now.")
 
     if BLOCK_N == 256 and BLOCK_K == 256:
         NUM_STAGES = 2
@@ -189,7 +187,7 @@ def test_mxfp_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TRANS, PA
         atol = 3e-3
     torch.testing.assert_close(ref_out, output, atol=atol, rtol=1e-3)
 
-    if device == "xpu":  # FIXME: Only add check for CRI
+    if is_xpu_cri():
         llir = out.asm["llir"]
         count = llir.count("llvm.genx.GenISA.sub.group.bdpas")
         assert count > 0, "The bdpas is not used."
