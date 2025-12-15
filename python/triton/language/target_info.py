@@ -63,4 +63,4 @@ def is_xpu():
 @constexpr_function
 def is_xpu_cri():
     target = current_target()
-    return target is not None and target.backend == "xpu" and 'cri' in target.arch
+    return target is not None and target.backend == 'xpu' and target.arch["arch"] == 'cri'
