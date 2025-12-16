@@ -100,6 +100,9 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
       .def_readwrite(
           "support_16bit_atomics",
           &gpu::intel::TritonAnnotateModuleOptions::support16BitAtomics)
+      .def_readwrite(
+          "support_bfloat16_arithmetic",
+          &gpu::intel::TritonAnnotateModuleOptions::supportBfloat16Arithmetic)
       .def_readwrite("threads_per_warp",
                      &gpu::intel::TritonAnnotateModuleOptions::threadsPerWarp)
       .def_readwrite("target_arch",

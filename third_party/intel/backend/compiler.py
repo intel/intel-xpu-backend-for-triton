@@ -144,6 +144,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             'has_subgroup_matrix_multiply_accumulate_tensor_float32', False)
         dev_prop['has_subgroup_2d_block_io'] = tgt_prop.get('has_subgroup_2d_block_io', False)
         dev_prop['has_bfloat16_conversions'] = tgt_prop.get('has_bfloat16_conversions', True)
+        dev_prop['SPV_INTEL_bfloat16_arithmetic'] = tgt_prop.get('SPV_INTEL_bfloat16_arithmetic', False)
 
         return dev_prop
 
@@ -208,6 +209,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         module_opts.support_sg_2d_block = properties["has_subgroup_2d_block_io"]
         module_opts.support_dpas = properties["has_subgroup_matrix_multiply_accumulate"]
         module_opts.support_bf16_conversion = properties["has_bfloat16_conversions"]
+        module_opts.support_bfloat16_arithmetic = properties["SPV_INTEL_bfloat16_arithmetic"]
         module_opts.threads_per_warp = opt.warp_size
         module_opts.target_arch = cls.target_arch
 
