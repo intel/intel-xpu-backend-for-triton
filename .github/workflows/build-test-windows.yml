@@ -204,6 +204,7 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --instrumentation
 
       - name: Pass rate
+        if: ${{ !cancelled() }}
         run: |
           .venv\Scripts\activate.ps1
           # oneAPI is required for sycl-ls, which is used by scripts/capture-hw-details.sh
@@ -219,13 +220,14 @@ jobs:
 
       - name: Upload pass rate report
         # upload reports only for the default branch
-        if: github.ref_name == 'main'
+        if: ${{ !cancelled() && github.ref_name == 'main' }}
         uses: actions/upload-artifact@v5
         with:
           name: pass_rate
           path: ${{ env.NEW_WORKSPACE }}\pass_rate*.json
 
       - name: Upload tutorial performance
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v5
         with:
           name: tutorials-report
