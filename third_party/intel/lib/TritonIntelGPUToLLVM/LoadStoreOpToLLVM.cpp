@@ -16,6 +16,8 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "intel/include/Utils/Utility.h"
 #include "triton/Tools/LinearLayout.h"
+#include <TritonIntelGPUToLLVM/XeAsmFormat.h>
+#include <llvm/Support/FormatVariadic.h>
 #include <optional>
 #include <triton/Tools/Sys/GetEnv.hpp>
 
@@ -350,7 +352,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
             std::enable_if_t<
                 llvm::is_one_of<OpTy, triton::LoadOp, triton::StoreOp>::value,
                 bool> = true>
-  static bool isBlockIOCandidate(OpTy op, bool allLayout = false) {
+  static bool isBlockIOCandidate(OpTy op) {
     ModuleOp mod = op->template getParentOfType<ModuleOp>();
     if (!mod->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
                           getSupportSG2DBlockAttrName()))
@@ -362,10 +364,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
       return false;
 
     // Only lower operation with dpas layout encoding.
-    auto tensorTy =
-        cast<RankedTensorType>(getPointeeType(op.getPtr().getType()));
-    return allLayout || hasDpasEncoding(tensorTy) ||
-           hasDotDpasEncoding(tensorTy);
+    return true;
   }
 
   static bool
@@ -1413,15 +1412,8 @@ struct LoadOpToBlockIOConversion
       packedElemSizeInBits = 32;
       numPackedVals = mlir::ceil(packedElemSizeInBits, elemSizeInBits);
 
-      // Improve this. The current 2D block load only transposes the matrix at
-      // i32 granularity. We still need to perform an additional in-register
-      // transpose from i32 -> (N × ElemSizeInBits) tiles, using the tile width.
-      // At the moment, we can only achieve this using a bitcast operation,
-      // which implicitly uses the sub-group size as the transpose width. To
-      // optimize further, we should implement this with inline VISA
-      // instructions.
-      if (numPackedVals > 1 && tileWidth != threadsPerWarp)
-        return failure();
+      // For the transpose load, the allowed block width is 1-8 elements for
+      // d32.
       tileHeight = std::min(tileHeight / numPackedVals, 8);
 
       if (tileHeight * tileWidth < threadsPerWarp)
@@ -1495,57 +1487,73 @@ struct LoadOpToBlockIOConversion
       // The `packedDPASOperandType` together with the `shufflevector`
       // operations defines the computation flow for the dot product.
 
-      DpasEncodingAttr::OpIdx opIdx = getOpIdx(tensorType);
       auto dpasLayout = getDpasLayout(tensorType);
-      switch (opIdx) {
-      case DpasEncodingAttr::OpIdx::OperandA: {
-        unsigned elemsPerLanePerDPASInst =
-            product<unsigned>(dpasLayout.getDPASInstShapeA()) / threadsPerWarp;
-        // Block 2D contain at least one DotOp A.
-        if (numElemsPerLoad >= elemsPerLanePerDPASInst) {
-          packedDPASOperandType = LLVM::getVectorType(
-              packedType, elemsPerLanePerDPASInst / numPackedVals);
-          unpackedType = LLVM::getVectorType(eltTy, elemsPerLanePerDPASInst);
-        }
-      } break;
-      case DpasEncodingAttr::OpIdx::OperandB: {
-        unsigned elemsPerLanePerDPASInst =
-            product<unsigned>(dpasLayout.getDPASInstShapeB()) / threadsPerWarp;
-        // Block 2D contain at least one DotOp B.
-        if (numElemsPerLoad >= elemsPerLanePerDPASInst) {
-          unsigned opsPerChannel = dpasLayout.getOpsPerChannel();
-          unsigned sysDepth = dpasLayout.getSystolicDepth();
-          if (tileHeight >= (opsPerChannel * sysDepth) &&
-              ((opsPerChannel == 4 && elemSizeInBits == 8) ||
-               (opsPerChannel == 2 && elemSizeInBits == 16))) {
-            assert(!isTransposeRequired ||
-                   opsPerChannel == numPackedVals &&
-                       "invalid opsPerChannel for transposed DotOp B");
-            // Use the VNNI packing format for DotOp B layout.
-            numValuesPerLoad = numElemsPerLoad / opsPerChannel;
-            packedType = i32_ty;
-            load2DGenXType = LLVM::getVectorType(packedType, numValuesPerLoad);
+      unsigned opsPerChannel = dpasLayout.getOpsPerChannel();
+
+      if ((opsPerChannel == 4 && elemSizeInBits == 8) ||
+          (opsPerChannel == 2 && elemSizeInBits == 16) ||
+          (opsPerChannel == 1 && elemSizeInBits == 32)) {
+        DpasEncodingAttr::OpIdx opIdx = getOpIdx(tensorType);
+        switch (opIdx) {
+        case DpasEncodingAttr::OpIdx::OperandA: {
+          unsigned elemsPerLanePerDPASInst =
+              product<unsigned>(dpasLayout.getDPASInstShapeA()) /
+              threadsPerWarp;
+          // Block 2D loads multiple As.
+          if (numElemsPerLoad > elemsPerLanePerDPASInst) {
+            // The column major A matrix cannot be used as DPAS input if not d32
+            // type. We have to do in-reg transpose. So no need to add shuffle
+            // ops.
+            assert(!isTransposeRequired && "the transpose load only fetch one "
+                                           "DPAS operand per load for now.");
+            // Add the packedDPASOperandType to add the shuffle and bitcast ops.
             packedDPASOperandType = LLVM::getVectorType(
-                packedType, elemsPerLanePerDPASInst / opsPerChannel);
-            useVNNIFormat = true;
-          } else {
-            packedDPASOperandType =
-                LLVM::getVectorType(IntegerType::get(ctx, packedElemSizeInBits),
-                                    elemsPerLanePerDPASInst / numPackedVals);
+                packedType, elemsPerLanePerDPASInst / numPackedVals);
+            unpackedType = LLVM::getVectorType(eltTy, elemsPerLanePerDPASInst);
           }
-          unpackedType = LLVM::getVectorType(eltTy, elemsPerLanePerDPASInst);
+        } break;
+        case DpasEncodingAttr::OpIdx::OperandB: {
+          if (isTransposeRequired)
+            break;
+          unsigned elemsPerLanePerDPASInst =
+              product<unsigned>(dpasLayout.getDPASInstShapeB()) /
+              threadsPerWarp;
+          // Block 2D loads multiple Bs.
+          if (numElemsPerLoad >= elemsPerLanePerDPASInst) {
+            unsigned sysDepth = dpasLayout.getSystolicDepth();
+            if (((opsPerChannel == 4 && elemSizeInBits == 8) ||
+                 (opsPerChannel == 2 && elemSizeInBits == 16))) {
+              // Use the VNNI packing format for DotOp B layout.
+              numValuesPerLoad = numElemsPerLoad / opsPerChannel;
+              packedType = i32_ty;
+              load2DGenXType =
+                  LLVM::getVectorType(packedType, numValuesPerLoad);
+              packedDPASOperandType = LLVM::getVectorType(
+                  packedType, elemsPerLanePerDPASInst / opsPerChannel);
+              useVNNIFormat = true;
+            } else {
+              packedDPASOperandType = LLVM::getVectorType(
+                  IntegerType::get(ctx, packedElemSizeInBits),
+                  elemsPerLanePerDPASInst / numPackedVals);
+            }
+            unpackedType = LLVM::getVectorType(eltTy, elemsPerLanePerDPASInst);
+          }
+        } break;
+        case DpasEncodingAttr::OpIdx::OperandC: {
+          unsigned elemsPerLanePerDPASInst =
+              product<unsigned>(dpasLayout.getDPASInstShapeC()) /
+              threadsPerWarp;
+          // Block 2D loads multiple Cs.
+          if (numElemsPerLoad > elemsPerLanePerDPASInst) {
+            assert(!isTransposeRequired && "the transpose load only fetch one "
+                                           "DPAS operand per load for now.");
+            // Add the packedDPASOperandType to add the shuffle and bitcast ops.
+            packedDPASOperandType = LLVM::getVectorType(
+                packedType, elemsPerLanePerDPASInst / numPackedVals);
+            unpackedType = LLVM::getVectorType(eltTy, elemsPerLanePerDPASInst);
+          }
+        } break;
         }
-      } break;
-      case DpasEncodingAttr::OpIdx::OperandC: {
-        unsigned elemsPerLanePerDPASInst =
-            product<unsigned>(dpasLayout.getDPASInstShapeC()) / threadsPerWarp;
-        // Block 2D contain at least one DotOp C.
-        if (numElemsPerLoad >= elemsPerLanePerDPASInst) {
-          packedDPASOperandType = LLVM::getVectorType(
-              packedType, elemsPerLanePerDPASInst / numPackedVals);
-          unpackedType = LLVM::getVectorType(eltTy, elemsPerLanePerDPASInst);
-        }
-      } break;
       }
     }
     Value warpId = arith::IndexCastOp::create(
@@ -1718,7 +1726,26 @@ struct LoadOpToBlockIOConversion
           unpackedVal = b.bitcast(dpasOperand, unpackedType);
 
         } else {
-          unpackedVal = b.bitcast(ret, unpackedType);
+          if (isTransposeRequired) {
+            if (numPackedVals > 1 && tileHeight != threadsPerWarp) {
+              std::string simdAsm = TransposeAsm(
+                  threadsPerWarp, tileHeight, numPackedVals,
+                  threadsPerWarp * numValuesPerLoad * numPackedVals, eltTy,
+                  XeArch::Xe2);
+
+              XeBuilder xeBuilder;
+              XeInstr &transpose = *xeBuilder.create<XeInstr>(simdAsm);
+              XeBuilder::Operand *res = xeBuilder.newOperand("=rw");
+              XeBuilder::Operand *unpackIn = xeBuilder.newOperand(ret, "rw");
+              transpose({res, unpackIn}, /*onlyAttachMLIRArgs=*/true);
+              unpackedVal =
+                  xeBuilder.launch(rewriter, loc, unpackedType, false);
+            } else {
+              // we can use the bitcast to do the transpose
+              unpackedVal = b.bitcast(ret, unpackedType);
+            }
+          } else
+            unpackedVal = b.bitcast(ret, unpackedType);
         }
 
         if (otherElems.size()) {
