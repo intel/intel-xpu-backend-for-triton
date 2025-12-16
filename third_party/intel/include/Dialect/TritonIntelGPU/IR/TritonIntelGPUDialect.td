@@ -63,8 +63,8 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.support_16bit_atomics";
     }
 
-    /// Get the name of the attribute used to indicate whether
-    /// SPV_INTEL_bfloat16_arithmetic is supported.
+    /// Get the name of the attribute used to indicate whether bfloat16
+    /// arithmetic is supported.
     static constexpr llvm::StringRef getSupportBfloat16ArithmeticAttrName() {
       return "ttig.support_bfloat16_arithmetic";
     }
