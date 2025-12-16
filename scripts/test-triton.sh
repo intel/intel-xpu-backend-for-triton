@@ -685,7 +685,7 @@ run_vllm_install() {
       tests/kernels/moe/test_batched_moe.py \
       tests/kernels/attention/test_triton_unified_attention.py
 
-    sed -i 's/set_default_device("cuda")/set_default_device("cuda")/g' \
+    sed -i 's/set_default_device("cuda")/set_default_device("xpu")/g' \
       tests/kernels/attention/test_triton_unified_attention.py
 
     cd ..
