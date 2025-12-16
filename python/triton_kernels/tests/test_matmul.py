@@ -270,16 +270,16 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         # current x scale swizzling requires B200, batched input, mxfloat8 act and is persistent case
         if is_hip():
             pytest.skip("NYI. X swizzling not tested on AMD GPU yet.")
-        if torch.cuda.get_device_capability()[0] < 10:
+        if is_cuda() and torch.cuda.get_device_capability()[0] < 10:
             pytest.skip("NYI. X swizzling only implemented for B200 for now.")
         if mode != "batched":
-            pytest.skip("NYI. X swizzling only implemented for batched input for now.")
+            pytest.xfail("NYI. X swizzling only implemented for batched input for now.")
         if not act_dtype_str.startswith("mxfloat8"):
-            pytest.skip(f"NYI. X swizzling only implemented for mxfloat8 act for now. Got {act_dtype_str}")
+            pytest.xfail(f"NYI. X swizzling only implemented for mxfloat8 act for now. Got {act_dtype_str}")
         if not is_persistent:
-            pytest.skip("NYI. X swizzling only implemented for persistent case for now.")
+            pytest.xfail("NYI. X swizzling only implemented for persistent case for now.")
         if block_m < 128:
-            pytest.skip("NYI. X swizzling only implemented for block_m = 128 for now.")
+            pytest.xfail("NYI. X swizzling only implemented for block_m = 128 for now.")
 
     expt_is_inner = (inner_expt_opt is not None)
     if expt_is_inner:
