@@ -142,7 +142,6 @@ void SessionManager::activateSessionImpl(size_t sessionId) {
   registerInterface<InstrumentationInterface>(sessionId,
                                               instrumentationInterfaceCounts);
   registerInterface<ContextSource>(sessionId, contextSourceCounts);
-  registerInterface<MetricInterface>(sessionId, metricInterfaceCounts);
 }
 
 void SessionManager::deActivateSessionImpl(size_t sessionId) {
@@ -157,7 +156,6 @@ void SessionManager::deActivateSessionImpl(size_t sessionId) {
   unregisterInterface<InstrumentationInterface>(sessionId,
                                                 instrumentationInterfaceCounts);
   unregisterInterface<ContextSource>(sessionId, contextSourceCounts);
-  unregisterInterface<MetricInterface>(sessionId, metricInterfaceCounts);
 }
 
 void SessionManager::removeSession(size_t sessionId) {
@@ -280,21 +278,13 @@ void SessionManager::exitInstrumentedOp(uint64_t streamId, uint64_t functionId,
 }
 
 void SessionManager::addMetrics(
-    size_t scopeId, const std::map<std::string, MetricValueType> &scalarMetrics,
-    const std::map<std::string, TensorMetric> &tensorMetrics) {
+    size_t scopeId, const std::map<std::string, MetricValueType> &metrics) {
   std::lock_guard<std::mutex> lock(mutex);
-  executeInterface(metricInterfaceCounts, [&](auto *metricInterface) {
-    metricInterface->addMetrics(scopeId, scalarMetrics, tensorMetrics);
-  });
-}
-
-void SessionManager::setMetricKernels(void *tensorMetricKernel,
-                                      void *scalarMetricKernel, void *stream) {
-  std::lock_guard<std::mutex> lock(mutex);
-  executeInterface(metricInterfaceCounts, [&](auto *metricInterface) {
-    metricInterface->setMetricKernels(tensorMetricKernel, scalarMetricKernel,
-                                      stream);
-  });
+  for (auto [sessionId, active] : sessionActive) {
+    if (active) {
+      sessions[sessionId]->data->addMetrics(scopeId, metrics);
+    }
+  }
 }
 
 void SessionManager::setState(std::optional<Context> context) {

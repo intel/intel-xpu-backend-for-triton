@@ -115,11 +115,7 @@ public:
                           uint8_t *buffer, size_t size);
 
   void addMetrics(size_t scopeId,
-                  const std::map<std::string, MetricValueType> &scalarMetrics,
-                  const std::map<std::string, TensorMetric> &tensorMetrics);
-
-  void setMetricKernels(void *tensorMetricKernel, void *scalarMetricKernel,
-                        void *stream);
+                  const std::map<std::string, MetricValueType> &metrics);
 
   void setState(std::optional<Context> context);
 
@@ -222,8 +218,6 @@ private:
   std::vector<std::pair<InstrumentationInterface *, size_t>>
       instrumentationInterfaceCounts;
   // {context source, active count}
-  std::vector<std::pair<MetricInterface *, size_t>> metricInterfaceCounts;
-  // {metric, active count}
   std::vector<std::pair<ContextSource *, size_t>> contextSourceCounts;
 };
 

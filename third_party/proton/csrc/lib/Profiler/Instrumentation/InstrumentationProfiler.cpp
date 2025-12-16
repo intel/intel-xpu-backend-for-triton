@@ -2,12 +2,11 @@
 #include "TraceDataIO/CircularLayoutParser.h"
 
 #include "Driver/GPU/CudaApi.h"
-#include "Runtime/CudaRuntime.h"
-#include "Runtime/HipRuntime.h"
+#include "Profiler/Instrumentation/CudaRuntime.h"
+#include "Profiler/Instrumentation/HipRuntime.h"
 #include "Utility/Numeric.h"
 #include "Utility/String.h"
 #include <algorithm>
-#include <cstdint>
 #include <limits>
 #include <map>
 #include <numeric>
@@ -41,9 +40,8 @@ void InstrumentationProfiler::doStop() {
     runtime->freeHostBuffer(hostBuffer);
     hostBuffer = nullptr;
   }
-  for (auto &[device, deviceStream] : deviceStreams) {
-    runtime->destroyStream(deviceStream);
-  }
+  // Release runtime resources
+  runtime.release();
   deviceStreams.clear();
   // Reset mode options
   modeOptions.clear();
@@ -58,10 +56,10 @@ void InstrumentationProfiler::doSetMode(
   }
   if (proton::toLower(modeAndOptions[0]) ==
       proton::toLower(DeviceTraits<DeviceType::CUDA>::name)) {
-    runtime = &CudaRuntime::instance();
+    runtime = std::make_unique<CudaRuntime>();
   } else if (proton::toLower(modeAndOptions[0]) ==
              proton::toLower(DeviceTraits<DeviceType::HIP>::name)) {
-    runtime = &HipRuntime::instance();
+    runtime = std::make_unique<HipRuntime>();
   } else {
     throw std::runtime_error("Unknown device type: " + modeAndOptions[0]);
   }
@@ -191,8 +189,8 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
   if (!buffer || !hostBuffer)
     return;
 
-  void *device = runtime->getDevice();
-  void *&priorityStream = deviceStreams[device];
+  uint64_t device = runtime->getDevice();
+  void *&priorityStream = deviceStreams[reinterpret_cast<void *>(device)];
   if (!priorityStream) {
     priorityStream = runtime->getPriorityStream();
   }
@@ -258,9 +256,7 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
                         event.first->cycle, event.second->cycle, duration,
                         normalizedDuration, kernelId, functionName,
                         blockTrace.blockId, blockTrace.procId, trace.uid,
-                        static_cast<uint64_t>(
-                            reinterpret_cast<uintptr_t>(device)),
-                        static_cast<uint64_t>(runtime->getDeviceType()),
+                        device, static_cast<uint64_t>(runtime->getDeviceType()),
                         timeShiftCost, blockTrace.initTime,
                         blockTrace.preFinalTime, blockTrace.postFinalTime));
               }
@@ -270,17 +266,6 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
       });
 
   dataScopeIdMap.clear();
-}
-
-void InstrumentationProfiler::doAddMetrics(
-    size_t scopeId, const std::map<std::string, MetricValueType> &scalarMetrics,
-    const std::map<std::string, TensorMetric> &tensorMetrics) {
-  // Currently no-op
-  for (auto *data : getDataSet()) {
-    data->addMetrics(scopeId, scalarMetrics);
-  }
-  // TODO(Keren): handle tensor metrics by making metricBuffer a member of the
-  // parent Profiler
 }
 
 } // namespace proton

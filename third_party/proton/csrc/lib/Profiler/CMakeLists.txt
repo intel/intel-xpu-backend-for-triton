@@ -1,9 +1,10 @@
 add_proton_library(ProtonProfiler
-  Profiler.cpp
-  Cupti/CuptiPCSampling.cpp
-  Cupti/CuptiProfiler.cpp
-  RocTracer/RoctracerProfiler.cpp
+	Cupti/CuptiPCSampling.cpp
+	Cupti/CuptiProfiler.cpp
+	RocTracer/RoctracerProfiler.cpp
 	Xpupti/XpuptiProfiler.cpp
-  Instrumentation/InstrumentationProfiler.cpp
-  Instrumentation/Metadata.cpp
+	Instrumentation/InstrumentationProfiler.cpp
+	Instrumentation/CudaRuntime.cpp
+	Instrumentation/HipRuntime.cpp
+	Instrumentation/Metadata.cpp
 )

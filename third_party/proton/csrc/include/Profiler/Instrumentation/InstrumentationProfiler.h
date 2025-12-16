@@ -5,7 +5,7 @@
 #include "Device.h"
 #include "Metadata.h"
 #include "Profiler/Profiler.h"
-#include "Runtime/Runtime.h"
+#include "Runtime.h"
 #include "TraceDataIO/Parser.h"
 #include "Utility/Singleton.h"
 
@@ -26,10 +26,6 @@ protected:
   virtual void doStop() override;
   virtual void
   doSetMode(const std::vector<std::string> &modeAndOptions) override;
-  virtual void doAddMetrics(
-      size_t scopeId,
-      const std::map<std::string, MetricValueType> &scalarMetrics,
-      const std::map<std::string, TensorMetric> &tensorMetrics) override;
 
   // InstrumentationInterface
   void initFunctionMetadata(
@@ -55,7 +51,7 @@ private:
   std::shared_ptr<ParserConfig> getParserConfig(uint64_t functionId,
                                                 size_t bufferSize) const;
 
-  Runtime *runtime;
+  std::unique_ptr<Runtime> runtime;
   // device -> deviceStream
   std::map<void *, void *> deviceStreams;
   std::map<std::string, std::string> modeOptions;
