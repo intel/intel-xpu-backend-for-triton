@@ -7,7 +7,7 @@ import pytest
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_cuda, is_xpu, is_hip, is_hip_cdna2, is_hip_cdna3, is_hip_cdna4, is_hip_gfx12
+from triton._internal_testing import is_cuda, is_xpu, is_xpu_cri, is_hip, is_hip_cdna2, is_hip_cdna3, is_hip_cdna4, is_hip_gfx12
 
 
 def matching_int(dtype):
@@ -231,8 +231,11 @@ def launch_upcast_emulated(src, exponent_bits, mantissa_bits, exponent_bias, dev
 
 
 def downcast_test(src_dtype, dst_dtype, rounding, exponent_bits, mantissa_bits, exponent_bias, max_repr, offset, device):
+    numel = 2**24
+    if is_xpu_cri():
+        numel = 2**12 # Limit input size to reduce test time.
 
-    src = launch_exhaustive_populate(src_dtype, offset << 24, 2**24, False, src_dtype.primitive_bitwidth, max_repr, device)
+    src = launch_exhaustive_populate(src_dtype, offset << 24, numel, False, src_dtype.primitive_bitwidth, max_repr, device)
     dst = launch_type_convert_triton(src, src_dtype, dst_dtype, device=device, rounding=rounding)
     src = launch_type_convert_triton(src, src_dtype, tl.float32, device=device)
 
