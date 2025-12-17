@@ -56,6 +56,11 @@ struct TritonAnnotateModule
           intel::TritonIntelGPUDialect::getSupport16BitAtomicsAttrName(),
           builder.getUnitAttr());
 
+    if (supportBfloat16Arithmetic)
+      mod->setAttr(
+          intel::TritonIntelGPUDialect::getSupportBfloat16ArithmeticAttrName(),
+          builder.getUnitAttr());
+
     if (supportPrefetch256Bytes)
       mod->setAttr(
           intel::TritonIntelGPUDialect::getSupportPrefetch256BAttrName(),

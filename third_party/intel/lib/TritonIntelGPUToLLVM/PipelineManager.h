@@ -248,6 +248,7 @@ public:
     // to help convert scalar expression to LLVM.
     arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
     populateMathToLLVMConversionPatterns(typeConverter, patterns);
+    intel::populateWarpIdOpToLLVMPattern(typeConverter, patterns, benefit);
     triton::populateGPUToTritonGENConversionPatterns(typeConverter, patterns);
     cf::populateControlFlowToLLVMConversionPatterns(typeConverter, patterns);
     populateGpuToLLVMSPVConversionPatterns(typeConverter, patterns);

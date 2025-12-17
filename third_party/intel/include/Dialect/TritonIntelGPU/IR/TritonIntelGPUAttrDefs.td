@@ -31,7 +31,7 @@ The encoding is characterized by parameters:
         - `repCluster` indicates the cluster size of the repetitions of the DPAS tile.
         - `threadsPerWarp__` AKA threadsPerWarp, use the name threadsPerWarp__ to avoid conflicting
                             with the `getThreadsPerWarp` in interface DistributedLayout. Currently only 16 is supported.
-        - 'fp4KPack' The number of the packing fp4 per i8 type along the k dimension for bdpas. It is only valid when opsPerChannel=4.
+        - `fp4KPack` How many fp4 values are packed into an i8 type along the k dimension. Valid only when opsPerChannel=4.
 
 The values of the matrix is distributed across the threads in the subgroup as row-major order.
   - If the column size of the matrix is equal to the number of threads in the subgroup, one scalar represents one row of the matrix in register.
@@ -189,7 +189,7 @@ The semantic of this `tt.dot` includes GEMM tiling configuration as:
     ArrayRefParameter<"unsigned">:$warpsPerCTA,
     ArrayRefParameter<"unsigned">:$repCluster,
     "unsigned":$threadsPerWarp,
-    "std::optional<unsigned>":$fp4KPack // Optional parameter for FP4K packing
+    "std::optional<unsigned>":$fp4KPack // Optional parameter for indicating FP4 are packed to i8 along K dim.
   );
 
   let builders = [
@@ -317,13 +317,13 @@ def Subgroup2DBlockEncodingAttr : DistributedEncoding<"Subgroup2DBlockEncoding",
     - `warpsPerCTA` : the number of warps per block / subgroups per workgroup and their distribution
     - `order` : The order within the block, used to determine along which dimension to broadcast.
     - `kWidth` : Currently unused, but keeping because we will likely need it for layout conversions.
-    - `CTALayout` : Describes how blocks are distributed among work-groups/thread blocks.
+    - `CGALayout` : Describes how blocks are distributed among work-groups/thread blocks.
   }];
 
   let parameters = (
     ins
     ArrayRefParameter<"unsigned">:$warpsPerCTA,
-    "CTAEncodingAttr":$CTALayout,
+    "CGAEncodingAttr":$CGALayout,
     ArrayRefParameter<"unsigned">:$instrShape,
     "unsigned":$numBlocks,
     ArrayRefParameter<"unsigned">:$order,

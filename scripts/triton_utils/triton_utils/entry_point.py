@@ -58,7 +58,8 @@ class Config:  # pylint: disable=R0902
     _report_grouping_level: str = TestGroupingLevel.TEST.value
     list_test_instances: bool = False
     list_failure_reasons: bool = False
-    sort_by: str | None = None
+    pretty_print: bool = False
+    sort_by: str = "name"
 
     repo: str = "intel/intel-xpu-backend-for-triton"
     branch: str = "main"
@@ -239,7 +240,12 @@ class Config:  # pylint: disable=R0902
             action="store_true",
             help="List test instances",
         )
-        test_stats_parser.add_argument("--sort-by", help="Enable verbose output")
+        test_stats_parser.add_argument(
+            "--sort-by",
+            default=cls().sort_by,
+            type=str,
+            help="Sort by column name",
+        )
         test_stats_parser.add_argument(
             "--tests-with-multiple-testsuites",
             "--multiple-suites",
@@ -260,6 +266,13 @@ class Config:  # pylint: disable=R0902
             "--failures",
             action="store_true",
             help="List failure reasons for failed tests",
+        )
+        test_stats_parser.add_argument(
+            "--pretty-print",
+            "--pretty",
+            action="store_true",
+            required=False,
+            help="Pretty print stats",
         )
 
         compare_stats_parser = cls._add_parser(
@@ -440,6 +453,8 @@ class ReportActionRunner(ActionRunner):
             grouping_level=config.report_grouping_level,
             list_test_instances=config.list_test_instances,
             list_failure_reasons=config.list_failure_reasons,
+            pretty_print=config.pretty_print,
+            sort_by=config.sort_by,
         )
 
     @abstractmethod
@@ -511,13 +526,13 @@ class DownloadReportsActionRunner(ActionRunner):
 
 
 def run(config: Config) -> Any:  # pylint: disable=R0912
-    print(config)
     if config.action == "download_reports":
         return DownloadReportsActionRunner(config=config)()
     if config.action == "compare_reports":
         comparison = CompareReportsActionRunner(config=config)()
         pd.set_option("display.max_rows", None)
-        print(CompareReportsActionRunner(config=config)())
+        compare_df = CompareReportsActionRunner(config=config)()
+        print(compare_df)
         return comparison
     if config.action == "export_to":
         if config.export_format == "csv":
@@ -528,6 +543,7 @@ def run(config: Config) -> Any:  # pylint: disable=R0912
         print(summary)
         sys.exit(ex_code)
     elif config.action == "tests_stats":
+        pd.set_option("display.max_rows", None)
         print(TestsStatsActionRunner(config=config)())
     else:
         raise ValueError(f"Unknown action: {config.action}")

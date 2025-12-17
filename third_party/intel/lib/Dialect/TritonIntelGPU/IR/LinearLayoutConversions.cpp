@@ -24,10 +24,10 @@ namespace {
 //    for register layouts, and input dims [offset] for shared layouts.
 //  - cgaLayout: Arrangement of multiple blocks, i.e. input dims [block].
 //
-// Note that this is inconsistent with the type name CTAEncodingAttr.  That type
+// Note that this is inconsistent with the type name CGAEncodingAttr.  That type
 // is equivalent to our cgaLayout.
 //
-// IMO the name CTAEncodingAttr is wrong.  If we tried to be consistent anyway,
+// IMO the name CGAEncodingAttr is wrong.  If we tried to be consistent anyway,
 // then we'd have to rename ctaLayout to "warpLayout".  I think that's more
 // confusing than being inconsistent about "cgaLayout", especially when we have
 // to consider the size of the warpLayout (surely that's not the "warpSize").
@@ -57,8 +57,8 @@ LinearLayout identityND(StringAttr inDimName, ArrayRef<unsigned> shape,
 // the CTAsPerCGA CTAs (i.e. blocks) in the CGA (i.e. groups).
 //
 // See the nomenclature note at the top of the file for an explanation of why
-// this is called makeCgaLayout when it accepts a CTAEncodingAttr.
-LinearLayout makeCgaLayout(CTAEncodingAttr layout) {
+// this is called makeCgaLayout when it accepts a CGAEncodingAttr.
+LinearLayout makeCgaLayout(CGAEncodingAttr layout) {
   MLIRContext *ctx = layout.getContext();
   StringAttr kBlock = S("block");
 
@@ -464,7 +464,7 @@ LinearLayout DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
         LinearLayout::identity1D(numReps[0], kRegister, outDimNames[0]);
 
   return combineCtaCgaWithShape(std::move(tileLayout),
-                                CTAEncodingAttr::getDefault(ctx, rank), shape);
+                                CGAEncodingAttr::getDefault(ctx, rank), shape);
 }
 
 // clang-format off
@@ -492,31 +492,32 @@ LinearLayout DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
 // clang-format on
 std::vector<std::vector<int32_t>>
 BlockScaledDPASRegBasesScaleA(int opsPerChannel, int scaleOpKDim) {
-  std::vector<std::vector<int32_t>> regBases;
-
   assert((scaleOpKDim == 1) && "Does not support scaleOpKDim != 1 for now");
   assert((opsPerChannel == 2 || opsPerChannel == 4 || opsPerChannel == 8) &&
          "invalid opsPerChannel number for bdpas.");
-  if (opsPerChannel == 8) {
+
+  std::vector<std::vector<int32_t>> regBases;
+  if (opsPerChannel == 8)
     regBases.push_back({0, 1});
-  }
+
   return regBases;
 }
 
 std::vector<std::vector<int32_t>>
 BlockScaledDPASLaneBasesScaleA(int repeatCount, int threadsPerWarp,
                                int scaleOpKDim) {
-  std::vector<std::vector<int32_t>> laneBases;
-
   assert((scaleOpKDim == 1) && "Does not support scaleOpKDim != 1 for now");
   assert((repeatCount == 8) && "invalid repeatCount number for bdpas.");
 
-  int tid;
-  for (tid = 1; tid < repeatCount; tid *= 2) {
+  std::vector<std::vector<int32_t>> laneBases;
+  int tid = 1;
+  while (tid < repeatCount) {
     laneBases.push_back({tid, 0});
+    tid *= 2;
   }
-  for (; tid < threadsPerWarp; tid *= 2) {
+  while (tid < threadsPerWarp) {
     laneBases.push_back({0, 0});
+    tid *= 2;
   }
   return laneBases;
 }
@@ -546,30 +547,32 @@ BlockScaledDPASLaneBasesScaleA(int repeatCount, int threadsPerWarp,
 // clang-format on
 std::vector<std::vector<int32_t>>
 BlockScaledDPASRegBasesScaleB(int opsPerChannel, int scaleOpKDim) {
-  std::vector<std::vector<int32_t>> regBases;
   assert((scaleOpKDim == 1) && "Does not support scaleOpKDim != 1 for now");
   assert((opsPerChannel == 2 || opsPerChannel == 4 || opsPerChannel == 8) &&
          "invalid opsPerChannel number for bdpas.");
-  if (opsPerChannel == 8) {
+
+  std::vector<std::vector<int32_t>> regBases;
+  if (opsPerChannel == 8)
     regBases.push_back({0, 1});
-  }
+
   return regBases;
 }
 
 std::vector<std::vector<int32_t>>
 BlockScaledDPASLaneBasesScaleB(int execSize, int threadsPerWarp,
                                int scaleOpKDim) {
-  std::vector<std::vector<int32_t>> laneBases;
-
   assert((scaleOpKDim == 1) && "Does not support scaleOpKDim != 1 for now");
   assert((execSize == 16) && "invalid execSize number for bdpas.");
 
-  int tid;
-  for (tid = 1; tid < execSize; tid *= 2) {
+  std::vector<std::vector<int32_t>> laneBases;
+  int tid = 1;
+  while (tid < execSize) {
     laneBases.push_back({tid, 0});
+    tid *= 2;
   }
-  for (; tid < threadsPerWarp; tid *= 2) {
+  while (tid < threadsPerWarp) {
     laneBases.push_back({0, 0});
+    tid *= 2;
   }
   return laneBases;
 }
@@ -578,13 +581,11 @@ LinearLayout BlockScaledDPAStoLinearLayout(ArrayRef<int64_t> shape,
                                            Attribute layout, unsigned opIdx,
                                            int scaleKIndex) {
   assert(opIdx < 5 && "opIdx must be 0, 1, 2, 3, or 4");
-  auto dpas = dyn_cast<DpasEncodingAttr>(layout);
-  assert(dpas && "Must be DPAS layout");
-  unsigned rc = dpas.getRepeatCount();
+  auto dpas = cast<DpasEncodingAttr>(layout);
+  [[maybe_unused]] unsigned rc = dpas.getRepeatCount();
   assert(rc == 8 && "block scaled dpas only supports repeatCount=8");
-  if (opIdx < 3) {
+  if (opIdx < 3)
     return DPAStoLinearLayout(shape, layout, opIdx);
-  }
 
   int rank = shape.size();
   assert(rank == dpas.getWarpsPerCTA().size() && (rank == 2 || rank == 3) &&
@@ -616,6 +617,7 @@ LinearLayout BlockScaledDPAStoLinearLayout(ArrayRef<int64_t> shape,
     else
       return scaleKIdx;
   };
+
   unsigned scaleOpKDim = getUnsignedKDim(scaleKIndex, rank);
   unsigned scaleOpNonKDim = getUnsignedKDim(scaleKIndex ^ 1, rank);
   if (opIdx == 3) { // Operand Scale A
@@ -685,7 +687,7 @@ LinearLayout BlockScaledDPAStoLinearLayout(ArrayRef<int64_t> shape,
         LinearLayout::identity1D(numReps[0], kRegister, outDimNames[0]);
 
   tileLayout = combineCtaCgaWithShape(
-      std::move(tileLayout), CTAEncodingAttr::getDefault(ctx, rank), shape);
+      std::move(tileLayout), CGAEncodingAttr::getDefault(ctx, rank), shape);
   return tileLayout;
 }
 
@@ -799,7 +801,7 @@ subgroup2DBlockToLinearLayout(ArrayRef<int64_t> blockShape,
       LinearLayout::identity1D(layout.getNumBlocks(), kRegister, dimNames[1]);
 
   // Broadcast the layout according to warpsPerCTA, then combine with the
-  // overall CTALayout and reshape according to the provided blockShape.
+  // overall CGALayout and reshape according to the provided blockShape.
   auto warpOrder = getMatrixOrder(rank, /*rowMajor*/ true);
   auto order = layout.getOrder();
   assert(order.size() == 2 && "only rank 2 order supported");
@@ -808,7 +810,7 @@ subgroup2DBlockToLinearLayout(ArrayRef<int64_t> blockShape,
   ctaLayout *= broadcastedDotOperandLayout(ctx, layout.getWarpsPerCTA(),
                                            warpOrder, inner, kWarp)
                    .transposeOuts(llvm::to_vector(ctaLayout.getOutDimNames()));
-  return combineCtaCgaWithShape(ctaLayout, layout.getCTALayout(), blockShape);
+  return combineCtaCgaWithShape(ctaLayout, layout.getCGALayout(), blockShape);
 }
 
 } // namespace mlir::triton::gpu

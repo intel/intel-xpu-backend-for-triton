@@ -10,7 +10,9 @@ import triton_utils
 
 # TODO:  # pylint: disable=fixme
 # test list failure reasons skips should not be taken into the account
+# tst pretty prints
 # test sort by
+# test_test_filter with the partial test name matches
 
 
 def extract_json_substrings(s: str) -> list[dict[str, Any] | list[Any]]:
@@ -131,7 +133,7 @@ TESTS_WITH_DIFFERENT_STATUSES = {
 ''', 'scaled_dot.xml':
     '''<?xml version="1.0" encoding="utf-8"?>
 <testsuites name="pytest tests">
-    <testsuite name="pytest" errors="0" failures="0" skipped="2" tests="3" time="12.498" timestamp="2025-10-22T16:53:55.914818+00:00" hostname="intel-tools.intel-xpu-backend-for-triton-jgs-testing-w2mstzhg7m">
+    <testsuite name="pytest" errors="0" failures="0" skipped="2" tests="3" time="12.498" timestamp="2025-10-22T16:53:55.914818+00:00" hostname="intel-xpu-backend-for-triton">
         <testcase classname="python.test.unit.language.test_matmul" name="test_mxfp8_mxfp4_matmul[0-False-False-float4-float4-False-False-False-3-128-64-128-1024-512-512]" time="0.000">
             <skipped type="pytest.skip" message="Skipped by pytest-skip">
                 /runner/_work/.../test_matmul.py:1204: Skipped by pytest-skip
@@ -559,7 +561,7 @@ def test_args(args: str, config: triton_utils.Config):
         ),
         (
             {'exclude_subdir_patterns': [re.compile(r'subdir2')], 'include_subdir_patterns': [re.compile(r'^.*$')]},
-            'language::test_core.test_reduce_layouts',
+            'test_core.test_reduce_layouts',
             {'passed': [1, 0, -1]},
             'test'
         ),
@@ -660,5 +662,42 @@ def test_flaky_tests_detection(  # pylint: disable=R0913, R0914, R0917
     assert pass_rate_dict['failed'] == failed
 
     assert is_flaky and '[WARNING] Flaky test detected:' in warnings_out or not is_flaky
+
+
+TESTS_WITH_NO_CLASSNAME_AND_NAME = {
+    'test-report1/regression.xml':
+    '''<?xml version="1.0" encoding="utf-8"?>
+<testsuites name="pytest tests">
+    <testsuite name="pytest" errors="0" failures="0" skipped="325" tests="334" time="74.027" timestamp="2025-12-03T17:18:38.148662+00:00" hostname="intel-xpu-backend-for-triton">
+        <testcase classname="python.test.regression.test_cast_matmul" name="test_cast_matmul[768-768-1024-32-16-128-bfloat16-bfloat16-float16]" time="0.000">
+            <skipped type="pytest.skip" message="Skipped by pytest-skip">/runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/python/test/regression/test_cast_matmul.py:80: Skipped by pytest-skip</skipped>
+        </testcase>
+        <testcase classname="python.test.regression.test_functional_regressions" name="test_inductor_cummax_bool" time="1.788" />
+        <testcase time="0.000" />
+    </testsuite>
+</testsuites>
+'''
+}
+
+def test_test_with_no_classname_and_name(tmp_path, capsys):
+    for report_name, doc_str in TESTS_WITH_NO_CLASSNAME_AND_NAME.items():
+        report_name_parts = report_name.split('/')
+        subdir_path = tmp_path / report_name_parts[0]
+        subdir_path.mkdir(parents=True, exist_ok=True)
+        report_file = subdir_path / report_name_parts[1]
+        report_file.write_text(doc_str, encoding='utf-8')
+    config = triton_utils.Config(
+        action='pass_rate',
+        reports=str(tmp_path),
+        merge_test_results=True,
+    )
+    out, _ = triton_utils.PassRateActionRunner(config)()
+    _, warnings_out = capsys.readouterr()
+    pass_rate_dict = extract_pass_rate_dict(out)
+    assert pass_rate_dict['passed'] == 1
+    assert pass_rate_dict['skipped'] == 1
+    assert pass_rate_dict['xfailed'] == 0
+    assert pass_rate_dict['failed'] == 0
+    assert '[WARNING] Skipping test case with no classname and name' in warnings_out
 
 # yapf: enable
