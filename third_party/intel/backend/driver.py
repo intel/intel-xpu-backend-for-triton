@@ -214,7 +214,14 @@ class SpirvUtils:
         # we will need to rewrite the line in the general part of the code:
         # driver.active.utils.load_binary(self.name, self.kernel, self.metadata.shared, self.metadata.build_flags, device) ->
         # driver.active.utils.load_binary((self.name, self.kernel, self.metadata.shared, self.metadata.build_flags, device))
-        return self.shared_library.load_binary(args)
+        try:
+            return self.shared_library.load_binary(args)
+        except Exception as e:
+            if str(e).startswith("ZE_"):
+                from triton.runtime.errors import IntelGPUError
+                raise IntelGPUError("Error during Intel load_binary: " + str(e)) from e
+            else:
+                raise e
 
     if os.name != 'nt':
 

@@ -469,13 +469,6 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         handle = self.builder.create_histogram(input.handle, num_bins, mask, layout_attr)
         return self.wrap_tensor(handle, ttgl.int32, [num_bins], layout)
 
-    def cat(self, lhs: TensorTy, rhs: TensorTy, can_reorder: bool, layout) -> TensorTy:
-        _check(layout is not None, lambda: "cat requires a destination layout")
-        _check(can_reorder, lambda: "current implementation of `cat` always may reorder elements")
-        _check(len(lhs.shape) == 1, lambda: "cat requires a rank-1 input")
-        ret_type = ttgl.distributed_type(lhs.type.scalar, [lhs.shape[0] + rhs.shape[0]], layout)
-        return self.tensor(self.builder.create_cat(lhs.handle, rhs.handle, ret_type.to_ir(self.builder)), ret_type)
-
     def gather(self, src: TensorTy, index: TensorTy, axis: int) -> TensorTy:
         _check(isinstance(src.type, ttgl.distributed_type), lambda: f"expected distributed_type but got: {src.type!r}")
         _check(isinstance(index.type, ttgl.distributed_type),
@@ -528,10 +521,8 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         # Emit the default partition to get the result types.
         default_block = builder.new_block()
         builder.set_insertion_point_to_start(default_block)
-        default_results = generator.call_JitFunction(default_partition, default_args, kwargs={})
-        mlir_results = []
-        if default_results is not None:
-            mlir_results = flatten_values_to_ir(default_results)
+        default_result = generator.call_JitFunction(default_partition, default_args, kwargs={})
+        mlir_results = flatten_values_to_ir([default_result])
         builder.create_warp_yield(mlir_results)
         result_types = [r.get_type() for r in mlir_results]
 
@@ -560,9 +551,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
 
         builder.set_insertion_point_after(ws_op.get_operation())
         mlir_results = [ws_op.get_result(i) for i in range(len(result_types))]
-        if default_results is None:
-            return
-        return tuple(unflatten_ir_values(mlir_results, [r.type for r in default_results]))
+        return next(unflatten_ir_values(mlir_results, [default_result.type]))
 
     def num_ctas(self):
         return ttgl.constexpr(self.builder.options.num_ctas)
