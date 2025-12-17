@@ -90,7 +90,7 @@ def gluon_matmul_kernel_with_tensor_descriptors(
     accumulator = ttgl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=ttgl.float32, layout=layout)
 
     # Prefetch first blocks for A and B matrices (pre-loop prefetches)
-    for i in range(NUM_STAGES):
+    for i in range(NUM_STAGES - 1):
         if i * BLOCK_SIZE_K < K:
             ttgl.intel.xe.prefetch_2d(a_desc, [pid_m * BLOCK_SIZE_M, i * BLOCK_SIZE_K])
             ttgl.intel.xe.prefetch_2d(b_desc, [i * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N])
@@ -100,7 +100,7 @@ def gluon_matmul_kernel_with_tensor_descriptors(
         b = ttgl.intel.xe.load_2d(b_desc, [k * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N])
 
         # Prefetch ahead blocks (pipelining)
-        prefetch_k = k + NUM_STAGES
+        prefetch_k = k + NUM_STAGES - 1
         if prefetch_k * BLOCK_SIZE_K < K:
             ttgl.intel.xe.prefetch_2d(a_desc, [pid_m * BLOCK_SIZE_M, prefetch_k * BLOCK_SIZE_K])
             ttgl.intel.xe.prefetch_2d(b_desc, [prefetch_k * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N])
@@ -201,7 +201,7 @@ def gluon_matmul_kernel_with_tensor_descriptors_batched(
     accumulator = ttgl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=ttgl.float32, layout=layout)
 
     # Prefetch first blocks for A and B matrices (pre-loop prefetches)
-    for i in range(NUM_STAGES):
+    for i in range(NUM_STAGES - 1):
         if i * BLOCK_SIZE_K < K:
             ttgl.intel.xe.prefetch_2d(a_desc, [pid_m * BLOCK_SIZE_M, i * BLOCK_SIZE_K])
             ttgl.intel.xe.prefetch_2d(b_desc, [i * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N])
@@ -211,7 +211,7 @@ def gluon_matmul_kernel_with_tensor_descriptors_batched(
         b = ttgl.intel.xe.load_2d(b_desc, [k * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N])
 
         # Prefetch ahead blocks (pipelining)
-        prefetch_k = k + NUM_STAGES
+        prefetch_k = k + NUM_STAGES - 1
         if prefetch_k * BLOCK_SIZE_K < K:
             ttgl.intel.xe.prefetch_2d(a_desc, [pid_m * BLOCK_SIZE_M, prefetch_k * BLOCK_SIZE_K])
             ttgl.intel.xe.prefetch_2d(b_desc, [prefetch_k * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N])

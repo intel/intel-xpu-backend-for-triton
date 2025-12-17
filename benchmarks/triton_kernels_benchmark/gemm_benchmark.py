@@ -16,7 +16,7 @@ import triton.language as tl
 import triton_kernels_benchmark as benchmark_suite
 from triton_kernels_benchmark import xetla_kernel
 from triton_kernels_benchmark import cutlass_kernel
-from gluon_gemm_benchmark import gluon_matmul_kernel_with_tensor_descriptors, gluon_matmul_kernel_with_tensor_descriptors_batched
+from gluon_gemm_kernels import gluon_matmul_kernel_with_tensor_descriptors, gluon_matmul_kernel_with_tensor_descriptors_batched
 
 
 def get_matmul_autotune_configs() -> List[triton.Config]:
