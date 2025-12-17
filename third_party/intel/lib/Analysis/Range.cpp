@@ -358,7 +358,7 @@ LogicalResult IntegerRangeAnalysis::visitOperationHelper(
   LDBG("Inferring ranges for " << *op);
 
   // This callback is almost exactly like the callback in
-  // IntegerRangeAnalysis::visitOperation except we do not "short-cicruit" the
+  // IntegerRangeAnalysis::visitOperation except we do not "short-circuit" the
   // analysis by inferring a maximum range for loop results (instead we
   // perform a check based on visit counts in visitRegionSuccessors).
   auto joinCallback = [&op, &operands, &resultsLattices,
@@ -478,7 +478,7 @@ void IntegerRangeAnalysis::visitRegionSuccessors(
     RegionSuccessor successor,
     ArrayRef<dataflow::AbstractSparseLattice *> abstractLattices) {
   LLVM_DEBUG({
-    DBGS() << "Visit Region Succesors of ";
+    DBGS() << "Visit Region Successors of ";
     OpPrintingFlags flags;
     flags.skipRegions(true);
     branch.print(llvm::dbgs(), flags);
@@ -545,7 +545,7 @@ void IntegerRangeAnalysis::visitRegionSuccessors(
 
   // Note: It does not seems to be quite obvious; this loop could update SCF
   // operations' LHS. e.g. If the given "branch" argument is scf.if, and the
-  // scf.if construct looks like following:
+  // scf.if construct looks like the following:
   //   x = scf.if cond
   //    m = ... // op_m
   //    yield m
@@ -658,7 +658,7 @@ void IntegerRangeAnalysis::initializeModule(ModuleOp &mod) {
               getAssumedRange(argument, entryBlock, assumptions, domInfo))
         range = *assumedRange;
 
-      // The lattice must in "bottom" state, The join() operation is to set
+      // The lattice must be in the "bottom" state, the join() operation is to set
       // the state to the given "range".
       assert(argLattice->getValue().isUninitialized() &&
              "lattice must be in bottom state");
