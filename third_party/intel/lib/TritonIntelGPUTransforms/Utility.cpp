@@ -281,6 +281,8 @@ LogicalResult getConvertBackwardSlice(
         continue;
       if (stopPropagation && stopPropagation(definingOp))
         continue;
+      if (isa<triton::CatOp>(definingOp))
+        return failure();
       if (auto gather = dyn_cast<GatherOp>(definingOp)) {
         // Specially handle gather since its transfer function only applies
         // between its index operand and result.
