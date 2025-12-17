@@ -28,20 +28,26 @@ def TritonIntelGPU_Dialect : Dialect {
 
     /// Get the name of the attribute used to indicate whether subgroup 2D block
     /// operations (e.g., 2D block read/write) are available.
-    static constexpr llvm::StringRef getSupportSG2DBlockAttrName() {
-      return "ttig.support_sg_2d_block";
+    static constexpr llvm::StringRef getSupport2DBlockIOAttrName() {
+      return "ttig.support_2d_block_io";
     }
 
     /// Get the name of the attribute used to indicate whether the DPAS
     /// instruction is available.
     static constexpr llvm::StringRef getSupportDPASAttrName() {
-      return "ttig.support_dpas";
+      return "ttig.support_subgroup_matrix_multiply_accumulate";
+    }
+
+    /// Get the name of the attribute used to indicate whether bfloat16
+    /// arithmetic is supported.
+    static constexpr llvm::StringRef getSupportBfloat16ArithmeticAttrName() {
+      return "ttig.support_bfloat16_arithmetic";
     }
 
     /// Get the name of the attribute used to indicate whether the BF16 conversion
     /// instruction is available.
-    static constexpr llvm::StringRef getSupportBF16ConversionAttrName() {
-      return "ttig.support_bf16_conversion";
+    static constexpr llvm::StringRef getSupportBfloat16ConversionAttrName() {
+      return "ttig.support_bfloat16_conversion";
     }
 
     /// Get the name of the attribute used to convay information required for lowering
@@ -61,12 +67,6 @@ def TritonIntelGPU_Dialect : Dialect {
     /// atomic operations are available.
     static constexpr llvm::StringRef getSupport16BitAtomicsAttrName() {
       return "ttig.support_16bit_atomics";
-    }
-
-    /// Get the name of the attribute used to indicate whether bfloat16
-    /// arithmetic is supported.
-    static constexpr llvm::StringRef getSupportBfloat16ArithmeticAttrName() {
-      return "ttig.support_bfloat16_arithmetic";
     }
 
     /// FIXME: Remove once IGC can split large 2D block loads.

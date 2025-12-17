@@ -26,7 +26,7 @@ struct TritonAnnotateModule
                  builder.getI32IntegerAttr(minSGSize));
 
     if (supportSG2DBlock)
-      mod->setAttr(intel::TritonIntelGPUDialect::getSupportSG2DBlockAttrName(),
+      mod->setAttr(intel::TritonIntelGPUDialect::getSupport2DBlockIOAttrName(),
                    builder.getUnitAttr());
 
     if (supportDPAS)
@@ -35,7 +35,7 @@ struct TritonAnnotateModule
 
     if (supportBF16Conversion)
       mod->setAttr(
-          intel::TritonIntelGPUDialect::getSupportBF16ConversionAttrName(),
+          intel::TritonIntelGPUDialect::getSupportBfloat16ConversionAttrName(),
           builder.getUnitAttr());
 
     mod->setAttr(intel::TritonIntelGPUDialect::getTargetArchAttrName(),

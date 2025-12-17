@@ -88,28 +88,28 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
   py::class_<gpu::intel::TritonAnnotateModuleOptions>(m,
                                                       "AnnotateModuleOptions")
       .def(py::init<>())
-      .def_readwrite("min_sg_size",
-                     &gpu::intel::TritonAnnotateModuleOptions::minSGSize)
-      .def_readwrite("support_sg_2d_block",
+      .def_readwrite("target_arch",
+                     &gpu::intel::TritonAnnotateModuleOptions::targetArch);
+  .def_readwrite("min_sg_size",
+                 &gpu::intel::TritonAnnotateModuleOptions::minSGSize)
+      .def_readwrite("threads_per_warp",
+                     &gpu::intel::TritonAnnotateModuleOptions::threadsPerWarp)
+      .def_readwrite("support_2d_block_io",
                      &gpu::intel::TritonAnnotateModuleOptions::supportSG2DBlock)
-      .def_readwrite("support_dpas",
-                     &gpu::intel::TritonAnnotateModuleOptions::supportDPAS)
-      .def_readwrite(
-          "support_bf16_conversion",
-          &gpu::intel::TritonAnnotateModuleOptions::supportBF16Conversion)
-      .def_readwrite(
-          "support_16bit_atomics",
-          &gpu::intel::TritonAnnotateModuleOptions::support16BitAtomics)
       .def_readwrite(
           "support_bfloat16_arithmetic",
           &gpu::intel::TritonAnnotateModuleOptions::supportBfloat16Arithmetic)
-      .def_readwrite("threads_per_warp",
-                     &gpu::intel::TritonAnnotateModuleOptions::threadsPerWarp)
-      .def_readwrite("target_arch",
-                     &gpu::intel::TritonAnnotateModuleOptions::targetArch);
-  ADD_PASS_OPTION_WRAPPER_1("add_triton_annotate_module",
-                            gpu::intel::createTritonAnnotateModule,
-                            gpu::intel::TritonAnnotateModuleOptions);
+      .def_readwrite(
+          "support_bfloat16_conversion",
+          &gpu::intel::TritonAnnotateModuleOptions::supportBF16Conversion)
+      .def_readwrite("support_subgroup_matrix_multiply_accumulate",
+                     &gpu::intel::TritonAnnotateModuleOptions::supportDPAS)
+      .def_readwrite(
+          "support_16bit_atomics",
+          &gpu::intel::TritonAnnotateModuleOptions::support16BitAtomics)
+          ADD_PASS_OPTION_WRAPPER_1("add_triton_annotate_module",
+                                    gpu::intel::createTritonAnnotateModule,
+                                    gpu::intel::TritonAnnotateModuleOptions);
 
   ADD_PASS_WRAPPER_0("add_reduce_data_duplication",
                      gpu::intel::createTritonIntelGPUReduceDataDuplication);

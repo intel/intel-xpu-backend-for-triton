@@ -3,7 +3,7 @@
 
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [4, 4], repCluster = [2, 2]}>
 #dot_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
-module attributes {ttig.support_sg_2d_block,  "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_2d_block_io,  "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @dot_a_layout
   tt.func public @dot_a_layout(%arg0: !tt.ptr<i8>, %col_stride: i64) {
       %cst = arith.constant dense<0> : tensor<256x64xi8, #dot_a>
@@ -41,7 +41,7 @@ module attributes {ttig.support_sg_2d_block,  "ttg.num-warps" = 16 : i32, "ttg.t
 
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [4, 4], repCluster = [2, 2]}>
 #dot_b = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 1}>
-module attributes {ttig.support_sg_2d_block,  "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_2d_block_io,  "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @dot_b_layout
   tt.func public @dot_b_layout(%arg0: !tt.ptr<i8>, %col_stride: i64) {
       %cst = arith.constant dense<0> : tensor<256x64xi8, #dot_b>
@@ -79,7 +79,7 @@ module attributes {ttig.support_sg_2d_block,  "ttg.num-warps" = 16 : i32, "ttg.t
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4, 2], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 8, 2], order = [2, 1, 0]}>
 #slice = #ttg.slice<{dim = 1, parent = #blocked}>
-module attributes {ttig.support_sg_2d_block,  "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 32 : i32} {
+module attributes {ttig.support_2d_block_io,  "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @slice_layout
   tt.func public @slice_layout(%arg0: !tt.ptr<i8>, %col_stride: i64) {
       %cst = arith.constant dense<0> : tensor<256x64xi8, #slice>
@@ -116,7 +116,7 @@ module attributes {ttig.support_sg_2d_block,  "ttg.num-warps" = 16 : i32, "ttg.t
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [4, 2], threadsPerWarp = [1, 32], warpsPerCTA = [8, 2], order = [1, 0]}>
-module attributes {ttig.support_sg_2d_block,  "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 32 : i32} {
+module attributes {ttig.support_2d_block_io,  "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @block_layout
   tt.func public @block_layout(%arg0: !tt.ptr<i8>, %col_stride: i64) {
       %cst = arith.constant dense<0> : tensor<256x64xi8, #blocked>
@@ -153,7 +153,7 @@ module attributes {ttig.support_sg_2d_block,  "ttg.num-warps" = 16 : i32, "ttg.t
 // -----
 
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
-module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_sg_2d_block"} {
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
   tt.func public @matmul_no_scf_with_advance_kernel(%base: !tt.ptr<f16>, %width: i64, %height: i64, %rowStride: i64) {
     %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf16, #dpas>
     %c0_i32 = arith.constant 0 : i32
@@ -196,7 +196,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 // -----
 
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
-module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_sg_2d_block"} {
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
   tt.func public @no_boundary_check(%base: !tt.ptr<f16>, %width: i64, %height: i64, %rowStride: i64) {
     %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf16, #dpas>
     %c0_i32 = arith.constant 0 : i32
@@ -248,7 +248,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 // -----
 
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
-module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_sg_2d_block"} {
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
 // CHECK-LABEL:   llvm.func spir_kernelcc @dpas_layout_2d_store_rep_cluster_4_2(
 // CHECK-SAME:      %[[base:.*]]: !llvm.ptr<1>, %[[width:.*]]: i64, %[[height:.*]]: i64, %[[rowStride:.*]]: i64, %[[PTR_1:.*]]: !llvm.ptr<1>,
 // CHECK-SAME:      %[[PTR_2:.*]]: !llvm.ptr<1>) attributes {intel_reqd_sub_group_size = 16 : i32, reqd_work_group_size = array<i32: 16, 1, 1>} {
