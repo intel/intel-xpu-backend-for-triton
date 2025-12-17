@@ -1573,7 +1573,7 @@ void LayoutRematerialization::backwardRematerialization(
   // it to account for extra cost due to synchronisation.
   // FIXME: measure cost of smem load/store and synchronisation on Intel GPUs,
   // and refine this model further. (#5476)
-  int64_t convertLayoutCost = 32 * convertLayoutBytes * 2;
+  int64_t convertLayoutCost = 32 * convertLayoutBytes * 8;
   int64_t rematerialisationCost = 0;
 
   // Evaluate single-use status for every operation in slice
