@@ -118,10 +118,10 @@ private:
     SmallVector<unsigned> sizePerThread(refTensorType.getRank(), 1);
     sizePerThread[order[0]] = perThread;
 
-    auto CTALayout = ttg::getCTALayout(refTensorType.getEncoding());
+    auto CGALayout = ttg::getCGALayout(refTensorType.getEncoding());
     layoutMap[op] = ttg::BlockedEncodingAttr::get(
         &getContext(), refTensorType.getShape(), sizePerThread, order, numWarps,
-        threadsPerWarp, CTALayout);
+        threadsPerWarp, CGALayout);
   }
 
   static RankedTensorType getNewType(RankedTensorType tensorType,
