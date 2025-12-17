@@ -75,7 +75,7 @@ def test_err_in_unary_op():
     # ok, but the error message needs to point to the correct spot.
     @triton.jit
     def kernel():
-        not (0, 0)
+        -(0, 0)
 
     with pytest.raises(CompilationError) as e:
         triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constexprs={}))
@@ -234,11 +234,8 @@ def test_returns_branched_on_non_constexpr():
     with pytest.raises(CompilationError) as e:
         triton.compile(triton.compiler.ASTSource(fn=kernel, signature={'N': 'i32'}, constexprs={}))
 
-    try:
-        assert "at 2:4:" in str(e.value), "error should point to the function call"
-        assert "at 5:8:" in str(e.value.__cause__), "error should point to the second `return`"
-    except AssertionError as assertion_err:
-        raise assertion_err from e.value
+    assert "at 2:4:" in str(e.value), "error should point to the function call"
+    assert "at 1:0:" in str(e.value.__cause__), "error should point to function definition"
 
 
 def test_power_of_two_shapes():

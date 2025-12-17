@@ -46,6 +46,18 @@ static void setAttrOnBOperand(Operation *op, StringRef attrName,
     loadOp->setAttr(attrName, attr);
 }
 
+unsigned getOpsPerChannel(Type elemType, ModuleOp m) {
+  assert(elemType.isIntOrFloat() && "unsupported type for DpasEncodingAttr");
+
+  unsigned dpasElemBitWidths = elemType.getIntOrFloatBitWidth();
+  bool supportsFP8 = false; // TODO: query a module attribute.
+  if (!supportsFP8 && llvm::isa<Float8E5M2Type, Float8E4M3FNType>(elemType))
+    dpasElemBitWidths *= 2; // We are upcasting FP8 to FP16.
+
+  return ttgi::DpasEncodingAttr::DPASCapability::opsChanBitWidths /
+         dpasElemBitWidths;
+}
+
 SmallVector<unsigned>
 getWarpsPerTile(Operation *dotOp,
                 ttgi::DpasEncodingAttr::DPASCapability dpasCap,
@@ -148,7 +160,7 @@ public:
     ttgi::DpasEncodingAttr::DPASCapability dpasCap =
         ttgi::DpasEncodingAttr::getDPASCapability(mod);
     Type elemType = oldAType.getElementType();
-    unsigned opsPerChan = ttgi::DpasEncodingAttr::getOpsPerChannel(elemType);
+    unsigned opsPerChan = getOpsPerChannel(elemType, mod);
     SmallVector<unsigned> warpsPerTile =
         getWarpsPerTile(op, dpasCap, retShape, numWarps);
     size_t rank = retShape.size();

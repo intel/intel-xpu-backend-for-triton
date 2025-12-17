@@ -75,6 +75,12 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.support_16bit_atomics";
     }
 
+    /// Get the name of the attribute used to indicate whether bfloat16
+    /// arithmetic is supported.
+    static constexpr llvm::StringRef getSupportBfloat16ArithmeticAttrName() {
+      return "ttig.support_bfloat16_arithmetic";
+    }
+
     /// FIXME: Remove once IGC can split large 2D block loads.
     /// Get the name of the attribute used to indicate that a load operation
     /// should use 'one matrix per load'.
