@@ -107,10 +107,18 @@ if torch.xpu.get_device_name() == '580':
             (40, 8, 1, 1024 + 64, 128, 128),  # Decode shapes of Deepseek-R1-Distill-Qwen-14B
             # OutOfResources: shared memory, Required: 262144, Hardware limit: 131072.
             # (128, 1, 1, 1024 + 64, 576, 512),  # Decode shapes of Deepseek-v3
-        ] + (  # Multi-query attention. H_kv equals 1
-            [(128, 1, 512, 1024 + 128 + 512, 576, 512),  # Append shapes of Deepseek-v3
-             # AssertionError: Not equal to tolerance rtol=0.001, atol=0.01
-             ] if fa_kernel_mode != 'bwd' else [])],
+        ] + ([  #
+            # Multi-query attention. H_kv equals 1
+            (128, 1, 512, 1024 + 128 + 512, 576, 512),  # Append shapes of Deepseek-v3
+            # AssertionError: Not equal to tolerance rtol=0.001, atol=0.01
+        ] if fa_kernel_mode != 'bwd' else []) + ([  #
+            # Shapes only for bwd
+            [h, h, seq_len, seq_len, 128, 128]
+            for h in [1, 2, 4, 16, 24, 32]
+            for seq_len in [4096, 8192]
+            # OutOfMemoryError: XPU out of memory.
+            if not (h in [24, 32] and seq_len == 8192)
+        ] if fa_kernel_mode == 'bwd' else [])],
         line_arg='provider',
         line_vals=['triton', 'torch'],
         line_names=['Triton', 'Torch'],
