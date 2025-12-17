@@ -110,8 +110,6 @@ def test_mxfp_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TRANS, PA
                      WITH_A_SCALE, WITH_B_SCALE, device):
     if not PACK_B_ALONG_K and B_DATA_TYPE != "float4":
         pytest.xfail("Pack along K can only be False for float4")
-    if B_DATA_TYPE == "float4" and not PACK_B_ALONG_K:
-        pytest.skip("Skip pack along non-K because it is emulated by dpas for now.")
 
     if BLOCK_N == 256 and BLOCK_K == 256:
         NUM_STAGES = 2

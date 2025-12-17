@@ -329,13 +329,27 @@ public:
         isa<ttgi::DpasEncodingAttr>(oldRetType.getEncoding()))
       return failure();
 
-    std::optional<std::tuple<tt::ScaleDotElemType, tt::ScaleDotElemType>>
-        computeType = getComputeType(scaledDotOp.getAElemType(),
-                                     scaledDotOp.getBElemType(), rewriter);
-    if (!computeType)
-      return failure();
-    tt::ScaleDotElemType precA = std::get<0>(*computeType);
-    tt::ScaleDotElemType precB = std::get<1>(*computeType);
+    tt::ScaleDotElemType precA;
+    tt::ScaleDotElemType precB;
+    if (!(scaledDotOp.getRhsKPack() && scaledDotOp.getLhsKPack())) {
+      // BDPAS only supports the fp4 which is packed along K for the A and B
+      // matrices. Upcast A and B to unpack the FP4 which is packed on non-k
+      // dim. FP16 is chosen here because:
+      // 1. It can represent all FP4 values exactly (without rounding)
+      // 2. Sufficient range for the FP4.
+      // 3. The Fp4ToFp only supports upcast to fp16/bf16 for now.
+      precA = precB = tt::ScaleDotElemType::FP16;
+    } else {
+      // Upcast A and B for mixed types.
+      std::optional<std::tuple<tt::ScaleDotElemType, tt::ScaleDotElemType>>
+          computeType = getComputeType(scaledDotOp.getAElemType(),
+                                       scaledDotOp.getBElemType(), rewriter);
+      if (!computeType)
+        return failure();
+      precA = std::get<0>(*computeType);
+      precB = std::get<1>(*computeType);
+    }
+
     TypedValue<RankedTensorType> A =
         upcastMatrix(rewriter, scaledDotOp, 0, precA);
     TypedValue<RankedTensorType> B =
