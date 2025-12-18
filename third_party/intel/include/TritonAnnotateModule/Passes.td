@@ -27,7 +27,7 @@ def TritonAnnotateModule: Pass<"triton-annotate-module", "mlir::ModuleOp"> {
   let options = [
     Option<"minSGSize", "min-sg-size", "unsigned", /*default*/"32",
            "minimum subgroup size supported by the target device">,
-    Option<"supportSG2DBlock", "support-sg-2d-block", "bool", /*default*/"false",
+    Option<"support2DBlockIO", "support-2d-block-io", "bool", /*default*/"false",
            "whether subgroup 2D block operations (e.g., 2D block read/write) are available">,
     Option<"supportDPAS", "support-dpas", "bool", /*default*/"false",
            "whether DPAS instruction is available">,

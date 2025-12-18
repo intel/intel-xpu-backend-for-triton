@@ -126,7 +126,7 @@ def test_block_io(M, N, dtype_str, layout, load_block_ptr, store_block_ptr, tran
 
     ty = {"float32": "f32", "float16": "f16", "bfloat16": "i16", "int8": "i8"}[dtype_str]
 
-    support_block_io = torch.xpu.get_device_capability()['has_subgroup_2d_block_io']
+    support_block_io = triton.runtime.driver.active.get_current_target().arch['has_2d_block_io']
 
     block_io = "\"column_major\"" if transpose else "\"row_major\""
 
@@ -157,7 +157,7 @@ def test_block_io(M, N, dtype_str, layout, load_block_ptr, store_block_ptr, tran
 
     ir = f"""
     #layout = {layout}
-    module attributes {{{"ttig.support_sg_2d_block," if support_block_io else ""} "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = {num_warps} : i32, ttg.target = "xpu", "ttg.threads-per-warp" = {threads_per_warp} : i32}} {{
+    module attributes {{{"ttig.support_2d_block_io," if support_block_io else ""} "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = {num_warps} : i32, ttg.target = "xpu", "ttg.threads-per-warp" = {threads_per_warp} : i32}} {{
         tt.func public @block_store(%src: !tt.ptr<{ty}> {{tt.divisibility = 16 : i32}}, %dst: !tt.ptr<{ty}> {{tt.divisibility = 16 : i32}}) {{
 
             %M_i64 = arith.constant {M} : i64

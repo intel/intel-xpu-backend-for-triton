@@ -90,8 +90,8 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
       .def(py::init<>())
       .def_readwrite("min_sg_size",
                      &gpu::intel::TritonAnnotateModuleOptions::minSGSize)
-      .def_readwrite("support_sg_2d_block",
-                     &gpu::intel::TritonAnnotateModuleOptions::supportSG2DBlock)
+      .def_readwrite("support_2d_block_io",
+                     &gpu::intel::TritonAnnotateModuleOptions::support2DBlockIO)
       .def_readwrite("support_dpas",
                      &gpu::intel::TritonAnnotateModuleOptions::supportDPAS)
       .def_readwrite(

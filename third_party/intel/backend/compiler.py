@@ -146,7 +146,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         dev_prop['has_block_scale_dpas'] = tgt_prop.get('has_block_scale_dpas', False)
         dev_prop['has_f4_conversions'] = tgt_prop.get('has_f4_conversions', False)
         dev_prop['has_256b_prefetch'] = tgt_prop.get('has_256b_prefetch', False)
-        dev_prop['has_subgroup_2d_block_io'] = tgt_prop.get('has_subgroup_2d_block_io', False)
+        dev_prop['has_2d_block_io'] = tgt_prop.get('has_2d_block_io', False)
         dev_prop['has_bfloat16_conversions'] = tgt_prop.get('has_bfloat16_conversions', True)
         dev_prop['has_bfloat16_arithmetic'] = tgt_prop.get('has_bfloat16_arithmetic', False)
 
@@ -211,7 +211,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # Annotate module with information required by subsequent transformations.
         module_opts.min_sg_size = min(properties["sub_group_sizes"])
         module_opts.support_16bit_atomics = properties["has_shader_atomic_bfloat16"]
-        module_opts.support_sg_2d_block = properties["has_subgroup_2d_block_io"]
+        module_opts.support_2d_block_io = properties["has_2d_block_io"]
         module_opts.support_dpas = properties["has_subgroup_matrix_multiply_accumulate"]
         module_opts.support_block_scale_dpas = properties["has_block_scale_dpas"]
         module_opts.support_bf16_conversion = properties["has_bfloat16_conversions"]
