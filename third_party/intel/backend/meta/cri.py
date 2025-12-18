@@ -41,13 +41,13 @@ class Simulator:
 
     @staticmethod
     def can_start():
-        return os.path.exists("/crisim/crisim-env.sh")
+        return os.path.exists("/simulator/simulator-env.sh")
 
     @classmethod
     def start(cls):
         msg = ["Starting simulator ...\n"]
         export_pattern = re.compile(r"^\s*export\s+(\w+)=\s*(.*)\s*$")
-        with open("/crisim/crisim-env.sh", "r") as f:
+        with open("/simulator/simulator-env.sh", "r") as f:
             for line in f:
                 if (m := export_pattern.match(line)):
                     if (name := m.group(1)) == "TbxPort":
@@ -75,23 +75,23 @@ class Simulator:
         if (proc := cls._proc) is not None:
             cls._proc = None
             try:
-                echo("Terminating the simulator ...\n", sys.stdout)
-                proc.terminate()
-                proc.wait(5)
-            except Exception as err:
-                echo(f"Failed to terminate the simulator due to {err}. Killing ...\n")
-                proc.kill()
-                proc.wait(1)
+                echo("Interruprting the simulator ...\n", sys.stderr)
+                proc.send_signal(signal.SIGINT)
+                proc.wait(10)
+            except Exception:
+                try:
+                    echo("Terminating the simulator ...\n", sys.stderr)
+                    proc.terminate()
+                    proc.wait(5)
+                except Exception as err:
+                    echo(f"Failed to terminate the simulator due to {err}. Killing ...\n")
+                    proc.kill()
+                    proc.wait(1)
 
     @staticmethod
     def _start_sim():
-        cmd = [
-            "/crisim/xesim/AubLoad", "-device",
-            ":config/fleur_de_lis/devices/cri.1tx1x4x8x8.a0.fused_2x8.gt.noAts.map.xml", "-sim_mode", "perf_mpu",
-            "-enableFeature", "criBootromUpdate", "-attr", "MEM_IGNORE_UNINITIALIZED_PTE", "true", "-pageFaultDebug",
-            "tile.m_gt_core.mempipe_module.fabric.m_nodex_loopback", "1", "-cb_cfg", "multithread_mode", "disabled",
-            "-enableDcGpgpuPrintMessage", "-socket", "tcp:0", "keep_alive"
-        ]
+        cmd = ["/simulator/run-simulator.sh", "keep_alive"]
+        cmd.extend(["-w", f"fulsim_logs-{os.getpid()}", "-logfile", "-logprefix", "2"])
         return subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,

@@ -1,4 +1,3 @@
-import cmd
 import fcntl
 import functools
 import os
@@ -16,7 +15,7 @@ except ImportError:
         pass
 
 
-def timed(fn, timeout=float(os.environ.get("PYTEST_TIMEOUT", "600")) + 2.):
+def timed(fn, timeout=float(os.environ.get("PYTEST_TIMEOUT", "900")) + 2.):
 
     @functools.wraps(fn)
     def timed_wrapper(*args, **kwargs):
@@ -30,7 +29,7 @@ def timed(fn, timeout=float(os.environ.get("PYTEST_TIMEOUT", "600")) + 2.):
 
 
 class TimeoutWatchdog:
-    _lock = threading.Lock()
+    _lock = threading.RLock()
     _counter = 0
     _proc = None
 
@@ -87,6 +86,7 @@ class TimeoutWatchdog:
     @staticmethod
     def _worker():
         ppid = os.getppid()
+        parent_command_line = ""
 
         def parent_watchdog():
             while True:
@@ -101,10 +101,10 @@ class TimeoutWatchdog:
         def report_timeout(timeout, what, report_file=os.environ.get("TRITON_TEST_REPORTS_DIR", ".") + "/timeout.txt"):
             try:
                 with open(f"/proc/{ppid}/cmdline", "r") as f:
-                    cmd = f.read()[:-1]
+                    parent_command_line = f.read().replace("\0", " ")[:-1]
                 with open(report_file, "a") as f:
                     fcntl.flock(f, fcntl.LOCK_EX)
-                    f.write(f"pid={ppid}: {cmd}\n")
+                    f.write(f"pid={ppid}: {parent_command_line}\n")
                     fcntl.flock(f, fcntl.LOCK_UN)
                 print(f"{what} has not been completed in {timeout} seconds!", file=sys.stderr)
             except Exception:
@@ -112,7 +112,7 @@ class TimeoutWatchdog:
 
         def kill_parent():
             try:
-                print(f"Killing {ppid}: {cmd} ... ", file=sys.stderr)
+                print(f"Killing {ppid}: {parent_command_line} ... ", file=sys.stderr)
                 os.kill(ppid, signal.SIGUSR1)  # Dump threads
                 time.sleep(2)
             except Exception:
