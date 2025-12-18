@@ -122,11 +122,8 @@ getWarpsPerTile(Operation *dotOp,
   return ret;
 }
 
-template <
-    typename DPASEngineType, typename OpTy,
-    typename = std::enable_if_t<llvm::is_one_of<
-        DPASEngineType, ttgi::DPASEngineTypeV1, ttgi::DPASEngineTypeV2>::value>,
-    typename = std::enable_if_t<llvm::is_one_of<OpTy, tt::DotOp>::value>>
+template <typename OpTy,
+          typename = std::enable_if_t<llvm::is_one_of<OpTy, tt::DotOp>::value>>
 class BlockedToDPAS : public OpRewritePattern<OpTy> {
   using TensorValue = TypedValue<RankedTensorType>;
 
@@ -457,23 +454,15 @@ public:
       TritonIntelGPUAccelerateMatmulPass>::TritonIntelGPUAccelerateMatmulBase;
 
   void runOnOperation() override {
-    MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
 
     // Transpose dotOp operations that have a scale on the RHS.
     transposeDots(mod);
 
+    MLIRContext *context = &getContext();
     RewritePatternSet patterns(context);
     constexpr int benefitDefault = 1;
-    bool supportDPASWithBF8 = mod->hasAttr(
-        ttgi::TritonIntelGPUDialect::getSupportDPASWithBF8AttrName());
-
-    if (!supportDPASWithBF8)
-      patterns.add<BlockedToDPAS<ttgi::DPASEngineTypeV1, tt::DotOp>>(
-          context, benefitDefault + 1);
-    else
-      patterns.add<BlockedToDPAS<ttgi::DPASEngineTypeV2, tt::DotOp>>(
-          context, benefitDefault + 1);
+    patterns.add<BlockedToDPAS<tt::DotOp>>(context, benefitDefault + 1);
 
     ttgi::populateDecomposeScaledBlockedPatterns(patterns, benefitDefault);
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())

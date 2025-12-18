@@ -56,6 +56,12 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.support_bf16_conversion";
     }
 
+    /// Get the name of the attribute used to indicate whether the F4 conversion
+    /// operation is available.
+    static constexpr llvm::StringRef getSupportF4ConversionAttrName() {
+      return "ttig.support_f4_conversion";
+    }
+
     /// Get the name of the attribute used to convey information required for lowering
     /// memory operations (e.g. load, prefetches) to 2D block HW instructions.
     static constexpr llvm::StringRef getBlockIOAttrName() {
@@ -73,6 +79,12 @@ def TritonIntelGPU_Dialect : Dialect {
     /// atomic operations are available.
     static constexpr llvm::StringRef getSupport16BitAtomicsAttrName() {
       return "ttig.support_16bit_atomics";
+    }
+
+    /// Get the name of the attribute used to indicate whether prefetching 256
+    /// bytes is supported.
+    static constexpr llvm::StringRef getSupportPrefetch256BAttrName() {
+      return "ttig.support_prefetch_256b";
     }
 
     /// Get the name of the attribute used to indicate whether bfloat16

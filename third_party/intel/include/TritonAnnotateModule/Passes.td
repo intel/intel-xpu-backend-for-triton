@@ -33,8 +33,12 @@ def TritonAnnotateModule: Pass<"triton-annotate-module", "mlir::ModuleOp"> {
            "whether DPAS instruction is available">,
     Option<"supportDPASWithBF8", "support-dpas-bf8", "bool", /*default*/"false",
            "whether DPAS instruction with BF8 support is available">,
+    Option<"supportBlockScaleDPAS", "support-block-scale-dpas", "bool", /*default*/"false",
+           "whether Block Scale DPAS instruction is available">,
     Option<"supportBF16Conversion", "support-bf16-conversion", "bool", /*default*/"false",
            "whether BF16 conversion instruction is available">,
+    Option<"supportF4Conversion", "support-f4-conversion", "bool", /*default*/"false",
+           "whether F4 conversion instruction is available">,
     Option<"support16BitAtomics", "support-16bit-atomics", "bool", /*default*/"false",
            "whether 16bit atomic operations are available">,
     Option<"supportBfloat16Arithmetic", "support-bfloat16-arithmetic", "bool", /*default*/"false",
@@ -43,7 +47,9 @@ def TritonAnnotateModule: Pass<"triton-annotate-module", "mlir::ModuleOp"> {
            "unsigned", /*default*/"32",
            "number of threads per warp (aka subgroup size)">,
     Option<"targetArch", "target-arch", "std::string", /*default*/"\"spir64\"",
-           "target architecture name">
+           "target architecture name">,
+    Option<"supportPrefetch256Bytes", "support-prefetch-256b", "bool", /*default*/"false",
+           "whether prefetch 256 bytes is supported">
   ];
 }
 

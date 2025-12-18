@@ -29,8 +29,8 @@ public:
 
   template <typename DPASEngineType,
             typename = std::enable_if_t<
-                llvm::is_one_of<DPASEngineType, ttgi::DPASEngineTypeV1,
-                                ttgi::DPASEngineTypeV2>::value>>
+                llvm::is_one_of<DPASEngineType, ttgi::DPASEngineTypeXe2,
+                                ttgi::DPASEngineTypeXe3P>::value>>
   std::tuple<Type, Type, Type, Type> static getDPASOperandsType(
       DPASEngineType dpasType, MLIRContext *ctx, DpasEncodingAttr layout) {
     Type fp32Ty = type::f32Ty(ctx);
@@ -119,8 +119,8 @@ public:
   ///
   template <typename DPASEngineType,
             typename = std::enable_if_t<
-                llvm::is_one_of<DPASEngineType, ttgi::DPASEngineTypeV1,
-                                ttgi::DPASEngineTypeV2>::value>>
+                llvm::is_one_of<DPASEngineType, ttgi::DPASEngineTypeXe2,
+                                ttgi::DPASEngineTypeXe3P>::value>>
   LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor) const {
     Value A = op.getA(), B = op.getB(), C = op.getC(), D = op.getResult();
     Value loadedA = adaptor.getA(), loadedB = adaptor.getB(),
@@ -450,8 +450,8 @@ LogicalResult convertDPAS(triton::DotOp op, triton::DotOp::Adaptor adaptor,
       ttgi::TritonIntelGPUDialect::getSupportDPASWithBF8AttrName());
 
   if (!supportDPASWithBF8)
-    return helper.convertDot<ttgi::DPASEngineTypeV1>(op, adaptor);
+    return helper.convertDot<ttgi::DPASEngineTypeXe2>(op, adaptor);
 
-  return helper.convertDot<ttgi::DPASEngineTypeV2>(op, adaptor);
+  return helper.convertDot<ttgi::DPASEngineTypeXe3P>(op, adaptor);
 }
 } // namespace fma_details

@@ -38,9 +38,19 @@ struct TritonAnnotateModule
       mod->setAttr(ttgi::TritonIntelGPUDialect::getSupportDPASWithBF8AttrName(),
                    builder.getUnitAttr());
 
+    if (supportBlockScaleDPAS)
+      mod->setAttr(
+          ttgi::TritonIntelGPUDialect::getSupportBlockScaleDPASAttrName(),
+          builder.getUnitAttr());
+
     if (supportBF16Conversion)
       mod->setAttr(
           ttgi::TritonIntelGPUDialect::getSupportBF16ConversionAttrName(),
+          builder.getUnitAttr());
+
+    if (supportF4Conversion)
+      mod->setAttr(
+          ttgi::TritonIntelGPUDialect::getSupportF4ConversionAttrName(),
           builder.getUnitAttr());
 
     mod->setAttr(ttgi::TritonIntelGPUDialect::getTargetArchAttrName(),
@@ -49,6 +59,11 @@ struct TritonAnnotateModule
     if (support16BitAtomics)
       mod->setAttr(
           ttgi::TritonIntelGPUDialect::getSupport16BitAtomicsAttrName(),
+          builder.getUnitAttr());
+
+    if (supportPrefetch256Bytes)
+      mod->setAttr(
+          ttgi::TritonIntelGPUDialect::getSupportPrefetch256BAttrName(),
           builder.getUnitAttr());
 
     if (supportBfloat16Arithmetic)
@@ -71,7 +86,7 @@ private:
       mod.walk([&](FunctionOpInterface funcOp) {
         // DPAS lowering only implemented for 16 threads per warp, i.e., DPAS is
         // not used for devices like ATS.
-        constexpr unsigned supportedThreadsPerWarp = 16;
+        constexpr unsigned supportedThreadsPerWarp = 16u;
         if (minSGSize != supportedThreadsPerWarp)
           return WalkResult::interrupt();
 

@@ -14,7 +14,7 @@ namespace mlir::triton::gpu::intel {
 //===----------------------------------------------------------------------===//
 
 // Encode operands as D,C,A,B.
-enum class DPASEngineTypeV1 : uint8_t {
+enum class DPASEngineTypeXe2 : uint8_t {
   // data types for dot.
   FP32_FP32_FP16_FP16 = 0, // default
   FP32_FP32_BF16_BF16,
@@ -40,7 +40,7 @@ enum class DPASEngineTypeV1 : uint8_t {
 };
 
 // Encode operands as D,C,A,B.
-enum class DPASEngineTypeV2 : uint8_t {
+enum class DPASEngineTypeXe3P : uint8_t {
   // data types for dot.
   FP32_FP32_FP16_FP16 = 0, // default
   FP32_FP32_BF16_BF16,
@@ -71,7 +71,7 @@ enum class DPASAnalysisResult { True, False, Maybe };
 // Analysis class for DPAS support.
 template <typename DPASEngineType,
           typename = std::enable_if_t<llvm::is_one_of<
-              DPASEngineType, DPASEngineTypeV1, DPASEngineTypeV2>::value>>
+              DPASEngineType, DPASEngineTypeXe2, DPASEngineTypeXe3P>::value>>
 class DPASAnalysis {
   friend class DPASAnalysisFactory;
 
@@ -109,8 +109,8 @@ private:
   std::map<FunctionOpInterface, SmallVector<Operation *>> funcToDotMap;
 };
 
-using DPASAnalysisV1 = DPASAnalysis<DPASEngineTypeV1>;
-using DPASAnalysisV2 = DPASAnalysis<DPASEngineTypeV2>;
+using DPASAnalysisV1 = DPASAnalysis<DPASEngineTypeXe2>;
+using DPASAnalysisV2 = DPASAnalysis<DPASEngineTypeXe3P>;
 using DPASAnalysisVariant = std::variant<DPASAnalysisV1, DPASAnalysisV2>;
 
 // Wrapper class for DPAS analysis.
