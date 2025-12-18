@@ -96,16 +96,14 @@ if torch.xpu.get_device_name() == '580':
             (32, 8, 1024, 1024, 128, 128),  # Prefill shapes of Llama-3.1-8B
             (24, 8, 1024, 1024, 128, 128),  # Prefill shapes of meta-llama-Llama-3.2-3B
             (40, 8, 1024, 1024, 128, 128),  # Prefill shapes of Deepseek-R1-Distill-Qwen-14B
-            (32, 8, 512, 1024 + 128 + 512, 128, 128),  # Append shapes of Llama-3.1-8B
+            (32, 8, 512, 1024 + 128 + 512, 128, 128),  # Append shapes of Llama-3.1-8B and Qwen3-4B
             (24, 8, 512, 1024 + 128 + 512, 128, 128),  # Append shapes of meta-llama-Llama-3.2-3B
-            (32, 8, 512, 1024 + 128 + 512, 128, 128),  # Append shapes of Qwen3-4B
             # FlexDecoding configuration. N_CTX_q equals 1. N_CTX_kv < 1k
-            (32, 8, 1, 1024 + 64, 128, 128),  # Decode shapes of Llama-3.1-8B
+            (32, 8, 1, 1024 + 64, 128, 128),  # Decode shapes of Llama-3.1-8B amd Qwen3-4B
             (24, 8, 1, 1024 + 64, 128, 128),  # Decode shapes of meta-llama-Llama-3.2-3B
             # acc = acc.reshape(G, BLOCK_M_PER_HQ, V_HEAD_DIM)
             # ValueError: Shape element 2 must be a power of 2
             # (32, 32, 1, 1024 + 64, 96, 96),  # Decode shapes of Phi3-mini-4k-instruct
-            (32, 8, 1, 1024 + 64, 128, 128),  # Decode shapes of Qwen3-4B
             (40, 8, 1, 1024 + 64, 128, 128),  # Decode shapes of Deepseek-R1-Distill-Qwen-14B
             # OutOfResources: shared memory, Required: 262144, Hardware limit: 131072.
             # (128, 1, 1, 1024 + 64, 576, 512),  # Decode shapes of Deepseek-v3
