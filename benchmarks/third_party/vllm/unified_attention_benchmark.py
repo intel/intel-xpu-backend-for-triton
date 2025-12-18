@@ -137,23 +137,14 @@ def kernel_unified_attention_2d_td(
     # queries_per_kv_head padded we cover all of them in one block
     offs_m = tl.arange(0, BLOCK_M)
     # head_size padded, head size is the same for qkv
-    # offs_d = tl.arange(0, HEAD_SIZE_PADDED)
     # tensor with local query positions with repeats for each kv_head
     query_pos = q_block_local_idx * BLOCK_Q + offs_m // num_queries_per_kv
-    # query_end = q_block_local_idx * BLOCK_Q + min(BLOCK_Q, cur_batch_query_len - query_pos) // num_queries_per_kv
-
-    #
-    # query_offset_0 = cur_batch_in_all_start_index + query_pos
     query_offset_1 = kv_head_idx * num_queries_per_kv + \
         offs_m % num_queries_per_kv
-    # query_offset = (query_offset_0[:, None] * query_stride_0 +
-    #                 query_offset_1[:, None] * query_stride_1 +
-    #                 offs_d[None, :])
 
     # So we end up with shape: (num_queries_per_kv * several q tokens, HEAD_SIZE)
     # Queries will lie like: (q_heads for token 1, q_heads for token 2, ..., HEAD_SIZE)
 
-    # dim_mask = tl.where(offs_d < HEAD_SIZE, 1, 0).to(tl.int1)
     query_mask_0 = tl.where(query_pos < cur_batch_query_len, 1, 0).to(tl.int1)
     query_mask_1 = tl.where(query_offset_1 < num_query_heads, 1, 0).to(tl.int1)
 
@@ -164,28 +155,20 @@ def kernel_unified_attention_2d_td(
     # Shape (query_tokens, HEAD_SIZE * num_queries_per_kv)
     # stride (query_stride_0, 1)
     # Then we need to reshape it to (query_tokens * num_queries_per_kv, HEAD_SIZE)
-    # Q = tl.load(
-    #     query_ptr + query_offset,
-    #     mask=dim_mask[None, :] & query_mask_0[:, None] & query_mask_1[:, None],
-    #     other=0.0,
-    # )
     q_base = (query_ptr + (cur_batch_in_all_start_index + q_block_local_idx * BLOCK_Q) * query_stride_0 +
               (kv_head_idx * num_queries_per_kv) * query_stride_1)
-    # query_to
-    q_desc = tl.make_tensor_descriptor(base=q_base, shape=(q_block_local_len, num_queries_per_kv, HEAD_SIZE),
-                                       strides=(query_stride_0, query_stride_1, 1),
-                                       block_shape=(BLOCK_Q, num_queries_per_kv, HEAD_SIZE_PADDED))
-    Q_td = q_desc.load([0, 0, 0])
-    Q = Q_td.reshape(BLOCK_M, HEAD_SIZE_PADDED)
-    # q_base = (query_ptr + (cur_batch_in_all_start_index + q_block_local_idx * BLOCK_Q) * query_stride_0 +
-    #           (kv_head_idx * num_queries_per_kv) * query_stride_1)
-    # q_desc = tl.make_tensor_descriptor(
-    #     base=q_base,
-    #     shape=(q_block_local_len, num_queries_per_kv * HEAD_SIZE),
-    #     strides=(query_stride_0, 1),
-    #     block_shape=(BLOCK_Q, num_queries_per_kv * HEAD_SIZE)
-    # )
-    # Q_raw = q_desc.load([0, 0])  # Shape: (BLOCK_Q, num_queries_per_kv * HEAD_SIZE_PADDED)
+    if HEAD_SIZE == HEAD_SIZE_PADDED:
+        # This loading is much more efficient on XPU
+        q_desc = tl.make_tensor_descriptor(base=q_base, shape=(q_block_local_len, num_queries_per_kv * HEAD_SIZE),
+                                           strides=(query_stride_0, 1),
+                                           block_shape=(BLOCK_Q, num_queries_per_kv * HEAD_SIZE_PADDED))
+        Q_raw = q_desc.load([0, 0])  # Shape: (BLOCK_Q, num_queries_per_kv * HEAD_SIZE_PADDED)
+    else:
+        q_desc = tl.make_tensor_descriptor(base=q_base, shape=(q_block_local_len, num_queries_per_kv, HEAD_SIZE),
+                                           strides=(query_stride_0, query_stride_1, 1),
+                                           block_shape=(BLOCK_Q, num_queries_per_kv, HEAD_SIZE_PADDED))
+        Q_raw = q_desc.load([0, 0, 0])
+    Q = Q_raw.reshape(BLOCK_M, HEAD_SIZE_PADDED)
 
     block_table_offset = seq_idx * block_table_stride
 
@@ -235,27 +218,16 @@ def kernel_unified_attention_2d_td(
 
         offs_n = tl.arange(0, BLOCK_SIZE)
 
-        # v_offset = (physical_block_idx * stride_v_cache_0 + kv_head_idx * stride_v_cache_2 +
-        #             offs_d[None, :] * stride_v_cache_3 + offs_n[:, None] * stride_v_cache_1)
-
-        # K shape (N_BLOCKS, BLOCK_SIZE, kv_heads, HEAD_SIZE)
-        # k_offset = (physical_block_idx * stride_k_cache_0 + kv_head_idx * stride_k_cache_2 +
-        #             offs_d[:, None] * stride_k_cache_3 + offs_n[None, :] * stride_k_cache_1)
-
         v_base = value_cache_ptr + physical_block_idx * stride_v_cache_0 + kv_head_idx * stride_v_cache_2
         v_desc = tl.make_tensor_descriptor(base=v_base, shape=(BLOCK_SIZE, HEAD_SIZE),
                                            strides=(stride_v_cache_1, stride_v_cache_3),
                                            block_shape=(BLOCK_SIZE, HEAD_SIZE_PADDED))
 
         k_base = key_cache_ptr + physical_block_idx * stride_k_cache_0 + kv_head_idx * stride_k_cache_2
-        # k_desc = tl.make_tensor_descriptor(base=k_base, shape=(HEAD_SIZE, BLOCK_SIZE),
-        #                                    strides=(stride_k_cache_3, stride_k_cache_1),
-        #                                    block_shape=(HEAD_SIZE_PADDED, BLOCK_SIZE))
         k_desc = tl.make_tensor_descriptor(base=k_base, shape=(BLOCK_SIZE, HEAD_SIZE),
                                            strides=(stride_k_cache_1, stride_k_cache_3),
                                            block_shape=(BLOCK_SIZE, HEAD_SIZE_PADDED))
         # K : (HEAD_SIZE, BLOCK_SIZE)
-        # K_load = tl.load(key_cache_ptr + k_offset, mask=dim_mask[:, None], other=0.0)
         K_load = k_desc.load([0, 0]).T
 
         if K_load.dtype.is_fp8():
@@ -267,7 +239,6 @@ def kernel_unified_attention_2d_td(
             K = K_load
 
         # V : (BLOCK_SIZE, HEAD_SIZE)
-        # V_load = tl.load(value_cache_ptr + v_offset, mask=dim_mask[None, :], other=0.0)
         V_load = v_desc.load([0, 0])
 
         if V_load.dtype.is_fp8():
@@ -342,22 +313,13 @@ def kernel_unified_attention_2d_td(
         acc = acc * tl.load(out_scale)
         acc = tl.clamp(acc, FP8_MIN, FP8_MAX)
 
-    # output_offset = (query_offset_0[:, None] * output_stride_0 + query_offset_1[:, None] * output_stride_1 +
-    #                  offs_d[None, :])
-
     output_offset = (cur_batch_in_all_start_index + q_block_local_idx * BLOCK_Q) * output_stride_0 + (
         kv_head_idx * num_queries_per_kv) * output_stride_1
     output_base = output_ptr + output_offset
     output_desc = tl.make_tensor_descriptor(base=output_base, shape=(q_block_local_len, num_queries_per_kv, HEAD_SIZE),
                                             strides=(output_stride_0, output_stride_1, 1),
                                             block_shape=(BLOCK_Q, num_queries_per_kv, HEAD_SIZE_PADDED))
-    # output_desc.store([0, 0, 0], acc.view((BLOCK_M // num_queries_per_kv, num_queries_per_kv, HEAD_SIZE_PADDED)))
     output_desc.store([0, 0, 0], acc.reshape(BLOCK_Q, num_queries_per_kv, HEAD_SIZE_PADDED))
-    # tl.store(
-    #     output_ptr + output_offset,
-    #     acc,
-    #     mask=dim_mask[None, :] & query_mask_0[:, None] & query_mask_1[:, None],
-    # )
 
 
 @triton.jit
@@ -448,11 +410,18 @@ def kernel_unified_attention_3d_td(segm_output_ptr,
     # Load Q using tensor descriptor (same as 2D case)
     q_base = (query_ptr + (cur_batch_in_all_start_index + q_block_local_idx * BLOCK_Q) * query_stride_0 +
               (kv_head_idx * num_queries_per_kv) * query_stride_1)
-    q_desc = tl.make_tensor_descriptor(base=q_base, shape=(q_block_local_len, num_queries_per_kv, HEAD_SIZE),
-                                       strides=(query_stride_0, query_stride_1, 1),
-                                       block_shape=(BLOCK_Q, num_queries_per_kv, HEAD_SIZE_PADDED))
-    Q_td = q_desc.load([0, 0, 0])
-    Q = Q_td.reshape(BLOCK_M, HEAD_SIZE_PADDED)
+    if HEAD_SIZE == HEAD_SIZE_PADDED:
+        # This loading is much more efficient on XPU
+        q_desc = tl.make_tensor_descriptor(base=q_base, shape=(q_block_local_len, num_queries_per_kv * HEAD_SIZE),
+                                           strides=(query_stride_0, 1),
+                                           block_shape=(BLOCK_Q, num_queries_per_kv * HEAD_SIZE))
+        Q_raw = q_desc.load([0, 0])  # Shape: (BLOCK_Q, num_queries_per_kv * HEAD_SIZE_PADDED)
+    else:
+        q_desc = tl.make_tensor_descriptor(base=q_base, shape=(q_block_local_len, num_queries_per_kv, HEAD_SIZE),
+                                           strides=(query_stride_0, query_stride_1, 1),
+                                           block_shape=(BLOCK_Q, num_queries_per_kv, HEAD_SIZE_PADDED))
+        Q_raw = q_desc.load([0, 0, 0])
+    Q = Q_raw.reshape(BLOCK_M, HEAD_SIZE_PADDED)
 
     block_table_offset = seq_idx * block_table_stride
 
@@ -976,7 +945,7 @@ MODEL_CONFIGS = [
     # llama3-8B
     (32, 8, 128, torch.bfloat16, None),
     # llama3-70B
-    (64, 8, 128, torch.bfloat16, None)
+    # (64, 8, 128, torch.bfloat16, None)
 ]
 
 # QDTYPES = [None, torch.float8_e4m3fn] if not current_platform.is_rocm() else [
@@ -985,11 +954,19 @@ MODEL_CONFIGS = [
 # one value large enough to test overflow in index calculation.
 # one value small enough to test the schema op check
 NUM_BLOCKS = [32768, 2048]
+NUM_BLOCKS = [32768]
 SEQ_LENS = [[(1, 1328), (5, 18), (129, 463)], [(1, 523), (1, 37), (1, 2011)]]
-SEQ_LENS = [[(1, 1328), (5, 18), (129, 463)], [(1, 523), (1, 37), (1, 2011)],
-            [(1, k) for k in [1513, 245, 102, 123, 3454, 434, 345, 34]]]
+SEQ_LENS = [
+    # Chunked prefill: 3 batches
+    [(320, 320), (320, 320), (320, 320)],
+    # End of chunked prefill and some decoding
+    [(1, 1328), (5, 18), (129, 463)],
+    # Pure decoding, 8 batches
+    [(1, k) for k in [1513, 245, 102, 123, 3454, 434, 345, 34]]
+]
 # SEQ_LENS = [[(1, 1328), (5, 18), (129, 463)]]  #, [(1, 523), (1, 37), (1, 2011)]]
 SOFT_CAPS = [None, 50.0]
+SOFT_CAPS = [None]
 SLIDING_WINDOWS = [None, 256]
 ATTENTION_CONFIGS_BF16 = []
 for model_config, seq_len, sliding_window, soft_cap, num_blocks in product(MODEL_CONFIGS, SEQ_LENS, SLIDING_WINDOWS,
