@@ -37,7 +37,11 @@ Value findOrCreateIntConstant(Location loc, int val, unsigned bitWidth,
              : builder.createOrFold<arith::ConstantIntOp>(loc, val, bitWidth);
 }
 
-std::optional<tt::MakeTensorPtrOp> findDefiningMakeTensorPtrOp(Value val) {
+template <class OpTy>
+std::optional<OpTy> findDefiningMakeTensorPtrOp(Value val) {
+  static_assert(
+      llvm::is_one_of<OpTy, tt::MakeTensorPtrOp, tt::MakeTensorDescOp>::value &&
+      "not supported op type.");
   if (auto arg = dyn_cast<BlockArgument>(val)) {
     Operation *parentOp = arg.getParentBlock()->getParentOp();
 
@@ -46,10 +50,12 @@ std::optional<tt::MakeTensorPtrOp> findDefiningMakeTensorPtrOp(Value val) {
       loopArg = forOp.getInitArgs()[arg.getArgNumber() - 1];
     else if (auto whileOp = dyn_cast<scf::WhileOp>(parentOp))
       loopArg = whileOp.getInits()[arg.getArgNumber()];
+    else if (isa<FunctionOpInterface>(parentOp))
+      return std::nullopt;
     else
       llvm_unreachable("Unexpected parent operator");
 
-    return findDefiningMakeTensorPtrOp(loopArg);
+    return findDefiningMakeTensorPtrOp<OpTy>(loopArg);
   }
 
   if (auto poisonOp = val.getDefiningOp<ub::PoisonOp>())
@@ -57,13 +63,13 @@ std::optional<tt::MakeTensorPtrOp> findDefiningMakeTensorPtrOp(Value val) {
   if (auto callOp = val.getDefiningOp<tt::CallOp>())
     return std::nullopt;
   if (auto advanceOp = val.getDefiningOp<tt::AdvanceOp>())
-    return findDefiningMakeTensorPtrOp(advanceOp.getPtr());
-  if (auto makePtrOp = val.getDefiningOp<tt::MakeTensorPtrOp>())
+    return findDefiningMakeTensorPtrOp<OpTy>(advanceOp.getPtr());
+  if (auto makePtrOp = val.getDefiningOp<OpTy>())
     return makePtrOp;
   if (auto opRes = dyn_cast<OpResult>(val)) {
     Operation *defOp = opRes.getOwner();
     if (auto loopOp = dyn_cast<LoopLikeOpInterface>(defOp))
-      return findDefiningMakeTensorPtrOp(
+      return findDefiningMakeTensorPtrOp<OpTy>(
           loopOp.getYieldedValues()[opRes.getResultNumber()]);
     if (auto ifOp = dyn_cast<scf::IfOp>(defOp)) {
       // Give up if the 2 possible definitions aren't the same.
@@ -77,10 +83,8 @@ std::optional<tt::MakeTensorPtrOp> findDefiningMakeTensorPtrOp(Value val) {
                cast<scf::YieldOp>(elseRgn.getBlocks().front().getTerminator());
       Value thenVal = thenYieldOp->getOperand(opRes.getResultNumber()),
             elseVal = elseYieldOp->getOperand(opRes.getResultNumber());
-      std::optional<tt::MakeTensorPtrOp> thenDef = findDefiningMakeTensorPtrOp(
-                                             thenVal),
-                                         elseDef = findDefiningMakeTensorPtrOp(
-                                             elseVal);
+      std::optional<OpTy> thenDef = findDefiningMakeTensorPtrOp<OpTy>(thenVal),
+                          elseDef = findDefiningMakeTensorPtrOp<OpTy>(elseVal);
       if (!thenDef || !elseDef || *thenDef != *elseDef)
         return std::nullopt;
       return thenDef;
@@ -89,10 +93,9 @@ std::optional<tt::MakeTensorPtrOp> findDefiningMakeTensorPtrOp(Value val) {
       // Give up if the 2 possible definitions aren't the same.
       Value trueVal = selectOp.getTrueValue(),
             falseVal = selectOp.getFalseValue();
-      std::optional<tt::MakeTensorPtrOp> trueDef = findDefiningMakeTensorPtrOp(
-                                             trueVal),
-                                         falseDef = findDefiningMakeTensorPtrOp(
-                                             falseVal);
+      std::optional<OpTy> trueDef = findDefiningMakeTensorPtrOp<OpTy>(trueVal),
+                          falseDef =
+                              findDefiningMakeTensorPtrOp<OpTy>(falseVal);
       if (!trueDef || !falseDef || *trueDef != *falseDef)
         return std::nullopt;
       return trueDef;
@@ -104,6 +107,11 @@ std::optional<tt::MakeTensorPtrOp> findDefiningMakeTensorPtrOp(Value val) {
 
   return std::nullopt;
 }
+
+template std::optional<tt::MakeTensorPtrOp>
+findDefiningMakeTensorPtrOp(Value val);
+template std::optional<tt::MakeTensorDescOp>
+findDefiningMakeTensorPtrOp(Value val);
 
 static Value skipCasts(Value v) {
   Operation *def = v.getDefiningOp();

@@ -62,7 +62,8 @@ public:
       if (isCandidate(transOp)) {
         auto loadOp = cast<tt::LoadOp>(transOp.getSrc().getDefiningOp());
         tt::MakeTensorPtrOp makeTensorPtrOp =
-            *triton::intel::findDefiningMakeTensorPtrOp(loadOp.getPtr());
+            *triton::intel::findDefiningMakeTensorPtrOp<tt::MakeTensorPtrOp>(
+                loadOp.getPtr());
         manager.createChains(makeTensorPtrOp, transOp);
       }
     });
@@ -188,7 +189,8 @@ private:
       return false;
 
     std::optional<tt::MakeTensorPtrOp> makeTensorPtrOp =
-        triton::intel::findDefiningMakeTensorPtrOp(loadOp.getPtr());
+        triton::intel::findDefiningMakeTensorPtrOp<tt::MakeTensorPtrOp>(
+            loadOp.getPtr());
 
     return makeTensorPtrOp.has_value();
   }
