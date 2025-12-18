@@ -33,7 +33,8 @@ public:
         return WalkResult::skip();
 
       tt::MakeTensorPtrOp makeTensorPtrOp =
-          *tt::intel::findDefiningMakeTensorPtrOp(loadOp.getPtr());
+          *tt::intel::findDefiningMakeTensorPtrOp<tt::MakeTensorPtrOp>(
+              loadOp.getPtr());
       LLVM_DEBUG(llvm::dbgs()
                  << "Analyzing boundaryCheck for: " << loadOp << "\n");
 
@@ -163,7 +164,8 @@ private:
       return false;
 
     std::optional<tt::MakeTensorPtrOp> makeTensorPtrOp =
-        tt::intel::findDefiningMakeTensorPtrOp(loadOp.getPtr());
+        tt::intel::findDefiningMakeTensorPtrOp<tt::MakeTensorPtrOp>(
+            loadOp.getPtr());
     if (!makeTensorPtrOp)
       return false;
 
