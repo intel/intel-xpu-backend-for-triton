@@ -126,7 +126,7 @@ def test_block_io(M, N, dtype_str, layout, load_block_ptr, store_block_ptr, tran
 
     ty = {"float32": "f32", "float16": "f16", "bfloat16": "i16", "int8": "i8"}[dtype_str]
 
-    support_block_io = torch.xpu.get_device_capability()['has_2d_block_io']
+    support_block_io = triton.runtime.driver.active.get_current_target().arch['has_2d_block_io']
 
     block_io = "\"column_major\"" if transpose else "\"row_major\""
 
