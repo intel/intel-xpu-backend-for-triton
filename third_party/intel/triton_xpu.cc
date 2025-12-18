@@ -95,6 +95,15 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
       .def_readwrite("support_dpas",
                      &gpu::intel::TritonAnnotateModuleOptions::supportDPAS)
       .def_readwrite(
+          "support_block_scale_dpas",
+          &gpu::intel::TritonAnnotateModuleOptions::supportBlockScaleDPAS)
+      .def_readwrite(
+          "support_f4_conversion",
+          &gpu::intel::TritonAnnotateModuleOptions::supportF4Conversion)
+      .def_readwrite(
+          "support_256b_prefetch",
+          &gpu::intel::TritonAnnotateModuleOptions::supportPrefetch256Bytes)
+      .def_readwrite(
           "support_bf16_conversion",
           &gpu::intel::TritonAnnotateModuleOptions::supportBF16Conversion)
       .def_readwrite(
