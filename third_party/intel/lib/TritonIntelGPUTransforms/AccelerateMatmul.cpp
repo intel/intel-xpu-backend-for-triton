@@ -122,16 +122,14 @@ getWarpsPerTile(Operation *dotOp,
   return ret;
 }
 
-template <class OpTy,
+template <typename OpTy,
           typename = std::enable_if_t<llvm::is_one_of<OpTy, tt::DotOp>::value>>
 class BlockedToDPAS : public OpRewritePattern<OpTy> {
-  const ttgi::DPASAnalysis &dpasAnalysis;
   using TensorValue = TypedValue<RankedTensorType>;
 
 public:
-  BlockedToDPAS(MLIRContext *context, const ttgi::DPASAnalysis &dpasAnalysis,
-                int benefit)
-      : OpRewritePattern<OpTy>(context, benefit), dpasAnalysis(dpasAnalysis) {}
+  BlockedToDPAS(MLIRContext *context, int benefit)
+      : OpRewritePattern<OpTy>(context, benefit) {}
 
   LogicalResult matchAndRewrite(OpTy op,
                                 PatternRewriter &rewriter) const override {
@@ -141,7 +139,10 @@ public:
       return failure();
 
     auto funcOp = op->template getParentOfType<FunctionOpInterface>();
-    if (dpasAnalysis.canUseDPAS(funcOp) != ttgi::DPASAnalysis::Result::True)
+    ModuleOp mod = funcOp->template getParentOfType<ModuleOp>();
+    auto dpasAnalysis = ttgi::DPASAnalysisFactory::createDPASAnalysis(mod);
+    if (ttgi::DPASAnalysisFactory::canUseDPAS(funcOp, dpasAnalysis) !=
+        ttgi::DPASAnalysisResult::True)
       return failure();
 
     // Create DPAS encoding for the given number of warps
@@ -153,7 +154,6 @@ public:
     auto oldAType = cast<RankedTensorType>(a.getType());
     auto oldBType = cast<RankedTensorType>(b.getType());
 
-    ModuleOp mod = funcOp->template getParentOfType<ModuleOp>();
     ttgi::DpasEncodingAttr::DPASCapability dpasCap =
         ttgi::DpasEncodingAttr::getDPASCapability(mod);
     Type elemType = oldAType.getElementType();
@@ -454,21 +454,20 @@ public:
       TritonIntelGPUAccelerateMatmulPass>::TritonIntelGPUAccelerateMatmulBase;
 
   void runOnOperation() override {
-    MLIRContext *context = &getContext();
-    ModuleOp m = getOperation();
-    auto &dpasAnalysis = getAnalysis<ttgi::DPASAnalysis>();
+    ModuleOp mod = getOperation();
 
     // Transpose dotOp operations that have a scale on the RHS.
-    transposeDots(m);
+    transposeDots(mod);
 
+    MLIRContext *context = &getContext();
     RewritePatternSet patterns(context);
     constexpr int benefitDefault = 1;
-    patterns.add<BlockedToDPAS<tt::DotOp>>(context, dpasAnalysis,
-                                           benefitDefault + 1);
+    patterns.add<BlockedToDPAS<tt::DotOp>>(context, benefitDefault + 1);
+
     ttgi::populateDecomposeScaledBlockedPatterns(patterns, benefitDefault);
-    if (applyPatternsGreedily(m, std::move(patterns)).failed())
+    if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
 
-    decomposeMixedModeDotOp(m);
+    decomposeMixedModeDotOp(mod);
   }
 };

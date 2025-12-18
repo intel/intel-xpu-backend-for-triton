@@ -1,13 +1,16 @@
-#include "intel/include/Analysis/DPAS.h"
+#ifndef TRITON_INTEL_ANALYSIS_DPAS_TPP
+#define TRITON_INTEL_ANALYSIS_DPAS_TPP
+
+#include "Analysis/DPAS.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include <triton/Tools/Sys/GetEnv.hpp>
-#include <type_traits>
 
 namespace mlir::triton::gpu::intel {
 
-DPASAnalysis::DPASAnalysis(Operation *root) {
+template <typename DPASEngineType, typename Enable>
+DPASAnalysis<DPASEngineType, Enable>::DPASAnalysis(Operation *root) {
   if (auto m = dyn_cast<ModuleOp>(root))
     mod = m;
   else
@@ -20,6 +23,7 @@ DPASAnalysis::DPASAnalysis(Operation *root) {
   mod.walk([&](FunctionOpInterface funcOp) {
     if (funcToDotMap.find(funcOp) == funcToDotMap.end())
       funcToDotMap[funcOp] = {};
+
     auto it = funcToDotMap.find(funcOp);
 
     funcOp.walk([&](Operation *op) {
@@ -31,29 +35,38 @@ DPASAnalysis::DPASAnalysis(Operation *root) {
       DPASEngineType dpasEngineType = supportDPAS
                                           ? DPASAnalysis::getDPASType(op)
                                           : DPASEngineType::NOT_APPLICABLE;
+
       if (dpasEngineType == DPASEngineType::FP32_FP32_TF32_TF32 &&
           cast<DotOp>(op).getInputPrecision() != InputPrecision::TF32)
         dpasEngineType = DPASEngineType::NOT_APPLICABLE;
+
       dotToDPASEngineMap[op] = dpasEngineType;
     });
   });
 }
 
-DPASAnalysis::Result
-DPASAnalysis::canUseDPAS(FunctionOpInterface funcOp) const {
+template <typename DPASEngineType, typename Enable>
+DPASAnalysisResult DPASAnalysis<DPASEngineType, Enable>::canUseDPAS(
+    FunctionOpInterface funcOp) const {
   if (funcToDotMap.empty() || dotToDPASEngineMap.empty())
-    return Result::False;
+    return DPASAnalysisResult::False;
 
   auto it = funcToDotMap.find(funcOp);
   if (it == funcToDotMap.end())
-    return Result::False;
+    return DPASAnalysisResult::False;
 
   // Ensure all dot operations in the function can be lowered to DPAS
   // instructions.
-  for (Operation *dotOp : it->second) {
-    DPASEngineType dpasEngineType = dotToDPASEngineMap.at(dotOp);
+  for (Operation *op : it->second) {
+    auto it = dotToDPASEngineMap.find(op);
+    if (it == dotToDPASEngineMap.end()) {
+      llvm::errs() << "DPASAnalysis: Operation not found in map.\n";
+      return DPASAnalysisResult::False;
+    }
+
+    DPASEngineType dpasEngineType = dotToDPASEngineMap.at(op);
     if (dpasEngineType == DPASEngineType::NOT_APPLICABLE)
-      return Result::False;
+      return DPASAnalysisResult::False;
   }
 
   // Verify whether the module has the correct number of threads per warp.
@@ -61,7 +74,7 @@ DPASAnalysis::canUseDPAS(FunctionOpInterface funcOp) const {
   // to set warp size.
   Attribute threadsPerWarpAttr = mod->getDiscardableAttr(AttrNumThreadsPerWarp);
   if (!threadsPerWarpAttr)
-    return Result::Maybe;
+    return DPASAnalysisResult::Maybe;
 
   unsigned threadsPerWarp = cast<IntegerAttr>(threadsPerWarpAttr).getInt();
   unsigned minSGSize = mod->getAttrOfType<IntegerAttr>(
@@ -74,14 +87,18 @@ DPASAnalysis::canUseDPAS(FunctionOpInterface funcOp) const {
 
   if (enableWarp32 && minSGSize != 8) {
     // We can support threads_per_warp=16 or 32 on Xe+ and later architectures.
-    return (threadsPerWarp == 16 || threadsPerWarp == 32) ? Result::True
-                                                          : Result::False;
+    return (threadsPerWarp == 16 || threadsPerWarp == 32)
+               ? DPASAnalysisResult::True
+               : DPASAnalysisResult::False;
   }
 
-  return (threadsPerWarp == minSGSize) ? Result::True : Result::False;
+  return (threadsPerWarp == minSGSize) ? DPASAnalysisResult::True
+                                       : DPASAnalysisResult::False;
 }
 
-DPASAnalysis::DPASEngineType DPASAnalysis::getDPASType(Operation *op) {
+template <typename DPASEngineType, typename Enable>
+DPASEngineType
+DPASAnalysis<DPASEngineType, Enable>::getDPASType(Operation *op) {
   if (auto dotOp = dyn_cast<DotOp>(op))
     return DPASAnalysis::getDPASType(dotOp);
   if (auto dotScaledOp = dyn_cast<DotScaledOp>(op))
@@ -92,10 +109,11 @@ DPASAnalysis::DPASEngineType DPASAnalysis::getDPASType(Operation *op) {
 // This function determines the DPAS engine type for the given operation.
 // It checks the element types of the tensors involved in the operation
 // and returns the appropriate DPAS engine type based on the type combinations.
+template <typename DPASEngineType, typename Enable>
 template <typename OpTy>
 typename std::enable_if<llvm::is_one_of<OpTy, DotOp, DotScaledOp>::value,
-                        DPASAnalysis::DPASEngineType>::type
-DPASAnalysis::getDPASType(OpTy op) {
+                        DPASEngineType>::type
+DPASAnalysis<DPASEngineType, Enable>::getDPASType(OpTy op) {
   auto cTy = cast<RankedTensorType>(op.getC().getType());
   auto dTy = cast<RankedTensorType>(op.getD().getType());
   Type cElemTy = cTy.getElementType();
@@ -188,10 +206,6 @@ DPASAnalysis::getDPASType(OpTy op) {
   return DPASEngineType::NOT_APPLICABLE;
 }
 
-// Explicit instantiations.
-template DPASAnalysis::DPASEngineType
-DPASAnalysis::getDPASType<DotOp>(DotOp op);
-template DPASAnalysis::DPASEngineType
-DPASAnalysis::getDPASType<DotScaledOp>(DotScaledOp op);
-
 } // namespace mlir::triton::gpu::intel
+
+#endif // TRITON_INTEL_ANALYSIS_DPAS_TPP
