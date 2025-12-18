@@ -28,8 +28,8 @@ def TritonIntelGPU_Dialect : Dialect {
 
     /// Get the name of the attribute used to indicate whether subgroup 2D block
     /// operations (e.g., 2D block read/write) are available.
-    static constexpr llvm::StringRef getSupportSG2DBlockAttrName() {
-      return "ttig.support_sg_2d_block";
+    static constexpr llvm::StringRef getSupport2DBlockIOAttrName() {
+      return "ttig.support_2d_block_io";
     }
 
     /// Get the name of the attribute used to indicate whether the DPAS
