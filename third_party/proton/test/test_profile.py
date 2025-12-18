@@ -544,15 +544,17 @@ def test_nvtx_range_push_pop(enable_nvtx, fresh_knobs, tmp_path: pathlib.Path):
     assert kernel["metrics"]["count"] == 1
 
 
-def test_tensor_metrics_scope(tmp_path: pathlib.Path):
+def test_tensor_metrics_scope(tmp_path: pathlib.Path, device: str):
+    if is_xpu():
+        pytest.skip("FIXME: enable metrics")
     temp_file = tmp_path / "test_tensor_metrics_scope.hatchet"
     proton.start(str(temp_file.with_suffix("")))
 
-    x = torch.ones((10, 10), device="cuda", dtype=torch.float32)
+    x = torch.ones((10, 10), device=device, dtype=torch.float32)
     x_mean = x.mean()
     x_std = x.std()
     with proton.scope("test", metrics={"x_mean": x_mean, "x_std": x_std}):
-        torch.randn((10, 10), device="cuda")
+        torch.randn((10, 10), device=device)
         torch.zeros_like(x)
 
     proton.finalize()
@@ -573,11 +575,13 @@ def test_tensor_metrics_scope(tmp_path: pathlib.Path):
     assert test_frame["metrics"]["x_std"] == 0.0
 
 
-def test_tensor_metrics_hook(tmp_path: pathlib.Path):
+def test_tensor_metrics_hook(tmp_path: pathlib.Path, device: str):
+    if is_xpu():
+        pytest.skip("FIXME: enable metrics")
     temp_file = tmp_path / "test_tensor_metrics_hook.hatchet"
 
     def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
-        metric_value = torch.tensor(8.0, device="cuda")
+        metric_value = torch.tensor(8.0, device=device)
         return {"name": "foo_test", "flops": metric_value}
 
     @triton.jit(launch_metadata=metadata_fn)
@@ -585,7 +589,7 @@ def test_tensor_metrics_hook(tmp_path: pathlib.Path):
         offs = tl.arange(0, size)
         tl.store(y + offs, tl.load(x + offs))
 
-    x = torch.ones((8, ), device="cuda", dtype=torch.float32)
+    x = torch.ones((8, ), device=device, dtype=torch.float32)
     y = torch.zeros_like(x)
 
     proton.start(str(temp_file.with_suffix("")), hook="triton")
@@ -609,6 +613,8 @@ def test_tensor_metrics_hook(tmp_path: pathlib.Path):
 
 @pytest.mark.skipif(is_hip(), reason="HIP backend does not support metrics profiling in cudagraphs")
 def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path):
+    if is_xpu():
+        pytest.skip("xpu doesn't support cudagraph; FIXME: double check")
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
 
