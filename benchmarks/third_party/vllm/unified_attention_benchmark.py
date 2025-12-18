@@ -945,7 +945,7 @@ MODEL_CONFIGS = [
     # llama3-8B
     (32, 8, 128, torch.bfloat16, None),
     # llama3-70B
-    # (64, 8, 128, torch.bfloat16, None)
+    (64, 8, 128, torch.bfloat16, None)
 ]
 
 # QDTYPES = [None, torch.float8_e4m3fn] if not current_platform.is_rocm() else [
@@ -954,19 +954,18 @@ MODEL_CONFIGS = [
 # one value large enough to test overflow in index calculation.
 # one value small enough to test the schema op check
 NUM_BLOCKS = [32768, 2048]
-NUM_BLOCKS = [32768]
-SEQ_LENS = [[(1, 1328), (5, 18), (129, 463)], [(1, 523), (1, 37), (1, 2011)]]
-SEQ_LENS = [
-    # Chunked prefill: 3 batches
-    [(320, 320), (320, 320), (320, 320)],
-    # End of chunked prefill and some decoding
-    [(1, 1328), (5, 18), (129, 463)],
-    # Pure decoding, 8 batches
-    [(1, k) for k in [1513, 245, 102, 123, 3454, 434, 345, 34]]
-]
-# SEQ_LENS = [[(1, 1328), (5, 18), (129, 463)]]  #, [(1, 523), (1, 37), (1, 2011)]]
+# New grid for the future
+# SEQ_LENS = [
+#     # Chunked prefill: 3 batches
+#     [(320, 320), (320, 320), (320, 320)],
+#     # End of chunked prefill and some decoding
+#     [(1, 1328), (5, 18), (129, 463)],
+#     # Pure decoding, 8 batches
+#     [(1, k) for k in [1513, 245, 102, 123, 3454, 434, 345, 34]]
+# ]
+SEQ_LENS = [[(1, 1328), (5, 18), (129, 463)], [(1, 523), (1, 37), (1, 2011)],
+            [(1, k) for k in [1513, 245, 102, 123, 3454, 434, 345, 34]]]
 SOFT_CAPS = [None, 50.0]
-SOFT_CAPS = [None]
 SLIDING_WINDOWS = [None, 256]
 ATTENTION_CONFIGS_BF16 = []
 for model_config, seq_len, sliding_window, soft_cap, num_blocks in product(MODEL_CONFIGS, SEQ_LENS, SLIDING_WINDOWS,
