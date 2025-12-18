@@ -215,4 +215,16 @@ LogicalResult SubGroupTransposeOp::verify() {
   return success();
 }
 
+void LoadTdescOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Read::get());
+}
+
+void StoreTdescOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Write::get());
+}
+
 } // namespace mlir::triton::gpu::intel

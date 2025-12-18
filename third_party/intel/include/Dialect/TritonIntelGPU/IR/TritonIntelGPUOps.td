@@ -137,6 +137,106 @@ def TTIG_PrefetchOp : TTIG_Op<"prefetch", [
   }];
 }
 
+def TTIG_PrefetchTdescOp : TTIG_Op<"prefetch_tdesc", []> {
+  let summary = "Tensor descriptor prefetch operation";
+  let description = [{
+    The `prefetch_tdesc` operation prefetches data described by a tensor descriptor.
+    This is similar to ttig.prefetch but operates on tensor descriptors instead of
+    tensor pointers. It's designed for testing 2D block prefetch with descriptors.
+
+    Example:
+      ```mlir
+      ttig.prefetch_tdesc %desc, %offset_x, %offset_y
+          {cache=none, evict=normal, isVolatile=false}
+          : !tt.tensordesc<tensor<32x64xf16>>
+      ```
+  }];
+
+  let arguments = (
+    ins TT_TensorDescType:$desc,
+    Variadic<I32>:$offsets,
+    TT_CacheModifierAttr:$cache,
+    TT_EvictionPolicyAttr:$evict,
+    BoolAttr:$isVolatile
+  );
+
+  let results = (outs);
+
+  let assemblyFormat = [{
+    $desc `,` $offsets attr-dict `:` type($desc)
+  }];
+}
+
+def TTIG_LoadTdescOp : TTIG_Op<"load_tdesc", [
+  DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+  AttrSizedOperandSegments
+]> {
+  let summary = "Tensor descriptor load operation";
+  let description = [{
+    The `load_tdesc` operation loads data described by a tensor descriptor.
+    This is similar to tt.load but operates on tensor descriptors instead of
+    tensor pointers. It's designed for testing 2D block load with descriptors.
+
+    Example:
+      ```mlir
+      %result = ttig.load_tdesc %desc, %offset_x, %offset_y
+          {cache=none, evict=normal}
+          : !tt.tensordesc<tensor<32x64xf16>> -> tensor<32x64xf16>
+      ```
+  }];
+
+  let arguments = (
+    ins TT_TensorDescType:$desc,
+    Variadic<I32>:$offsets,
+    Optional<TT_BoolLike>:$mask,
+    Optional<TT_Type>:$other,
+    TT_CacheModifierAttr:$cache,
+    TT_EvictionPolicyAttr:$evict
+  );
+
+  let results = (outs TT_Type:$result);
+
+  let assemblyFormat = [{
+    $desc `,` $offsets (`mask` $mask^ `:` type($mask))? (`other` $other^ `:` type($other))?
+    attr-dict `:` type($desc) `->` type($result)
+  }];
+}
+
+def TTIG_StoreTdescOp : TTIG_Op<"store_tdesc", [
+  DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+  AttrSizedOperandSegments
+]> {
+  let summary = "Tensor descriptor store operation";
+  let description = [{
+    The `store_tdesc` operation stores data described by a tensor descriptor.
+    This is similar to tt.store but operates on tensor descriptors instead of
+    tensor pointers. It's designed for testing 2D block store with descriptors.
+
+    Example:
+      ```mlir
+      ttig.store_tdesc %desc, %offset_x, %offset_y, %value
+          {cache=none, evict=normal}
+          : !tt.tensordesc<tensor<32x64xf16>>, tensor<32x64xf16>
+      ```
+  }];
+
+  let arguments = (
+    ins TT_TensorDescType:$desc,
+    Variadic<I32>:$offsets,
+    TT_Type:$value,
+    Optional<TT_BoolLike>:$mask,
+    TT_CacheModifierAttr:$cache,
+    TT_EvictionPolicyAttr:$evict
+  );
+
+  let results = (outs);
+
+  let assemblyFormat = [{
+    $desc `,` $offsets `,` $value (`mask` $mask^ `:` type($mask))?
+    attr-dict `:` type($desc) `,` type($value)
+  }];
+}
+
 // same as tt.broadcast except that we don't require SameOperandsAndResultEncoding
 def TTIG_BroadcastOp : TTIG_Op<"broadcast", [Pure, SameOperandsAndResultElementType]> {
   let summary = "broadcast a tensor";

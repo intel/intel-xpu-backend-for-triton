@@ -315,8 +315,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
         # TODO: support tensor descriptors
         # This is W/A to convert them into block_pointers
-        intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
-        passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
+        # intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
+        # passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
 
         passes.gluon.add_inliner(pm)
         passes.gluon.add_resolve_auto_encodings(pm)

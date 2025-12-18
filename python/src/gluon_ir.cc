@@ -928,59 +928,102 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self, Value memDesc, int count) -> Value {
              return self.create<ttag::ArriveBarrierOp>(memDesc, count);
            })
-      .def("create_prefetch", [](GluonOpBuilder &self, Value tensorDesc,
-                                 std::vector<Value> &offsets, bool isVolatile) {
-        // Get the base pointer from tensor descriptor
-        auto makeTensorDescOp =
-            tensorDesc.getDefiningOp<triton::MakeTensorDescOp>();
-        if (!makeTensorDescOp) {
-          throw std::runtime_error(
-              "Expected tensor descriptor from MakeTensorDescOp");
-        }
+      .def("create_prefetch",
+           [](GluonOpBuilder &self, Value tensorDesc,
+              std::vector<Value> &offsets, bool isVolatile) {
+             // Get the base pointer from tensor descriptor
+             auto makeTensorDescOp =
+                 tensorDesc.getDefiningOp<triton::MakeTensorDescOp>();
+             if (!makeTensorDescOp) {
+               throw std::runtime_error(
+                   "Expected tensor descriptor from MakeTensorDescOp");
+             }
 
-        Value base = makeTensorDescOp.getBase();
-        auto shape = makeTensorDescOp.getShape();
-        auto strides = makeTensorDescOp.getStrides();
+             Value base = makeTensorDescOp.getBase();
+             auto shape = makeTensorDescOp.getShape();
+             auto strides = makeTensorDescOp.getStrides();
 
-        // Convert shape from i32 to i64 for MakeTensorPtrOp
-        // Needed because:
-        // error: 'tt.make_tensor_ptr' op operand #1 must be
-        // variadic of 64-bit signless integer, but got 'i32'
-        SmallVector<Value> i64Shape;
-        for (auto shapeVal : shape) {
-          auto i64Val = self.create<arith::ExtSIOp>(
-              self.getBuilder().getI64Type(), shapeVal);
-          i64Shape.push_back(i64Val);
-        }
+             // Convert shape from i32 to i64 for MakeTensorPtrOp
+             // Needed because:
+             // error: 'tt.make_tensor_ptr' op operand #1 must be
+             // variadic of 64-bit signless integer, but got 'i32'
+             SmallVector<Value> i64Shape;
+             for (auto shapeVal : shape) {
+               auto i64Val = self.create<arith::ExtSIOp>(
+                   self.getBuilder().getI64Type(), shapeVal);
+               i64Shape.push_back(i64Val);
+             }
 
-        // Get block shape from tensor descriptor type
-        auto descType = cast<triton::TensorDescType>(tensorDesc.getType());
-        auto blockType = cast<RankedTensorType>(descType.getBlockType());
-        auto tensorShape = blockType.getShape();
+             // Get block shape from tensor descriptor type
+             auto descType = cast<triton::TensorDescType>(tensorDesc.getType());
+             auto blockType = cast<RankedTensorType>(descType.getBlockType());
+             auto tensorShape = blockType.getShape();
 
-        // Convert to int32 vector for MakeTensorPtrOp
-        std::vector<int32_t> blockShape;
-        for (int64_t dim : tensorShape) {
-          blockShape.push_back(static_cast<int32_t>(dim));
-        }
+             // Convert to int32 vector for MakeTensorPtrOp
+             std::vector<int32_t> blockShape;
+             for (int64_t dim : tensorShape) {
+               blockShape.push_back(static_cast<int32_t>(dim));
+             }
 
-        // Default order for 2D tensors (row-major)
-        std::vector<int32_t> order = {1, 0};
-        if (blockShape.size() != 2) {
-          // For non-2D tensors, use sequential order
-          order.resize(blockShape.size());
-          std::iota(order.begin(), order.end(), 0);
-        }
+             // Default order for 2D tensors (row-major)
+             std::vector<int32_t> order = {1, 0};
+             if (blockShape.size() != 2) {
+               // For non-2D tensors, use sequential order
+               order.resize(blockShape.size());
+               std::iota(order.begin(), order.end(), 0);
+             }
 
-        // Empty mask
-        Value maskVal = Value();
+             // Empty mask
+             Value maskVal = Value();
 
-        auto tensorPtrOp = self.create<mlir::triton::MakeTensorPtrOp>(
-            base, i64Shape, strides, offsets, blockShape, order);
+             auto tensorPtrOp = self.create<mlir::triton::MakeTensorPtrOp>(
+                 base, i64Shape, strides, offsets, blockShape, order);
 
-        auto op = self.create<ttgi::PrefetchOp>(
-            tensorPtrOp.getResult(), maskVal, tt::CacheModifier::NONE,
-            tt::EvictionPolicy::NORMAL, isVolatile);
+             auto op = self.create<ttgi::PrefetchOp>(
+                 tensorPtrOp.getResult(), maskVal, tt::CacheModifier::NONE,
+                 tt::EvictionPolicy::NORMAL, isVolatile);
+             return op.getOperation();
+           })
+      .def("create_prefetch_tdesc",
+           [](GluonOpBuilder &self, Value tensorDesc,
+              std::vector<Value> &offsets, bool isVolatile) {
+             auto cache = triton::CacheModifier::NONE;
+             auto evict = triton::EvictionPolicy::NORMAL;
+
+             auto op = self.create<ttgi::PrefetchTdescOp>(
+                 tensorDesc, offsets, cache, evict, isVolatile);
+
+             return op.getOperation();
+           })
+      .def("create_load_tdesc",
+           [](GluonOpBuilder &self, Value tensorDesc,
+              std::vector<Value> &offsets) {
+             auto cache = triton::CacheModifier::NONE;
+             auto evict = triton::EvictionPolicy::NORMAL;
+
+             // Extract the result type from the tensor descriptor
+             auto descType =
+                 mlir::dyn_cast<triton::TensorDescType>(tensorDesc.getType());
+             if (!descType) {
+               throw std::runtime_error(
+                   "Expected TensorDescType for create_load_tdesc");
+             }
+             Type resultType = descType.getBlockType();
+
+             auto op = self.create<ttgi::LoadTdescOp>(
+                 resultType, tensorDesc, offsets, /*mask=*/Value(),
+                 /*other=*/Value(), cache, evict);
+
+             return op.getOperation();
+           })
+      .def("create_store_tdesc", [](GluonOpBuilder &self, Value tensorDesc,
+                                    std::vector<Value> &offsets, Value value) {
+        auto cache = triton::CacheModifier::NONE;
+        auto evict = triton::EvictionPolicy::NORMAL;
+
+        auto op = self.create<ttgi::StoreTdescOp>(
+            tensorDesc, offsets, value, /*mask=*/Value(), cache, evict);
+
         return op.getOperation();
       });
 
