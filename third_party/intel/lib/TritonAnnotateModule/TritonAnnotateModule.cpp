@@ -82,34 +82,6 @@ struct TritonAnnotateModule
 private:
   void setThreadsPerWarp(ModuleOp &mod) const {
     Builder builder(mod);
-    bool enableWarp32 =
-        tt::tools::getBoolEnv("TRITON_INTEL_ENABLE_DPAS_FOR_WARP_SIZE_32");
-
-    if (!enableWarp32) {
-      auto dpasAnalysis = ttgi::DPASAnalysisFactory::createDPASAnalysis(mod);
-
-      mod.walk([&](FunctionOpInterface funcOp) {
-        // DPAS lowering only implemented for 16 threads per warp, i.e., DPAS is
-        // not used for devices like ATS.
-        constexpr unsigned supportedThreadsPerWarp = 16u;
-        if (minSGSize != supportedThreadsPerWarp)
-          return WalkResult::interrupt();
-
-        if (ttgi::DPASAnalysisFactory::canUseDPAS(funcOp, dpasAnalysis) ==
-            ttgi::DPASAnalysisResult::Maybe) {
-          // Set the threads per warp attribute to allow dot operation to be
-          // lowered to DPAS instructions.
-          mod->setAttr(ttg::AttrNumThreadsPerWarp,
-                       builder.getI32IntegerAttr(minSGSize));
-          assert(ttgi::DPASAnalysisFactory::canUseDPAS(funcOp, dpasAnalysis) ==
-                     ttgi::DPASAnalysisResult::True &&
-                 "DPASAnalysis should report that dot operations can be "
-                 "lowered to DPAS instructions");
-          return WalkResult::interrupt();
-        }
-        return WalkResult::advance();
-      });
-    }
 
     // If the threads per warp attribute was not set, use the option value.
     if (!mod->hasAttr(ttg::AttrNumThreadsPerWarp))
