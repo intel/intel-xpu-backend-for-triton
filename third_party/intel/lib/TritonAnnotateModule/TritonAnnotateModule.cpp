@@ -9,74 +9,90 @@ namespace mlir::triton::gpu::intel {
 } // namespace mlir::triton::gpu::intel
 
 using namespace mlir;
-using namespace mlir::triton::gpu;
-using DPASAnalysis = intel::DPASAnalysis;
+namespace ttg = mlir::triton::gpu;
+namespace ttgi = mlir::triton::gpu::intel;
 
 namespace {
 
 struct TritonAnnotateModule
-    : intel::impl::TritonAnnotateModuleBase<TritonAnnotateModule> {
+    : ttgi::impl::TritonAnnotateModuleBase<TritonAnnotateModule> {
   using Base::Base;
 
   void runOnOperation() final {
     ModuleOp mod = getOperation();
     Builder builder(mod);
 
-    mod->setAttr(intel::TritonIntelGPUDialect::getMinSGSizeAttrName(),
+    mod->setAttr(ttgi::TritonIntelGPUDialect::getMinSGSizeAttrName(),
                  builder.getI32IntegerAttr(minSGSize));
 
     if (supportSG2DBlock)
-      mod->setAttr(intel::TritonIntelGPUDialect::getSupportSG2DBlockAttrName(),
+      mod->setAttr(ttgi::TritonIntelGPUDialect::getSupportSG2DBlockAttrName(),
                    builder.getUnitAttr());
 
     if (supportDPAS)
-      mod->setAttr(intel::TritonIntelGPUDialect::getSupportDPASAttrName(),
+      mod->setAttr(ttgi::TritonIntelGPUDialect::getSupportDPASAttrName(),
                    builder.getUnitAttr());
+
+    if (supportBlockScaleDPAS)
+      mod->setAttr(
+          ttgi::TritonIntelGPUDialect::getSupportBlockScaleDPASAttrName(),
+          builder.getUnitAttr());
 
     if (supportBF16Conversion)
       mod->setAttr(
-          intel::TritonIntelGPUDialect::getSupportBF16ConversionAttrName(),
+          ttgi::TritonIntelGPUDialect::getSupportBF16ConversionAttrName(),
           builder.getUnitAttr());
 
-    mod->setAttr(intel::TritonIntelGPUDialect::getTargetArchAttrName(),
+    if (supportF4Conversion)
+      mod->setAttr(
+          ttgi::TritonIntelGPUDialect::getSupportF4ConversionAttrName(),
+          builder.getUnitAttr());
+
+    mod->setAttr(ttgi::TritonIntelGPUDialect::getTargetArchAttrName(),
                  builder.getStringAttr(targetArch));
 
     if (support16BitAtomics)
       mod->setAttr(
-          intel::TritonIntelGPUDialect::getSupport16BitAtomicsAttrName(),
+          ttgi::TritonIntelGPUDialect::getSupport16BitAtomicsAttrName(),
+          builder.getUnitAttr());
+
+    if (supportPrefetch256Bytes)
+      mod->setAttr(
+          ttgi::TritonIntelGPUDialect::getSupportPrefetch256BAttrName(),
           builder.getUnitAttr());
 
     if (supportBfloat16Arithmetic)
       mod->setAttr(
-          intel::TritonIntelGPUDialect::getSupportBfloat16ArithmeticAttrName(),
+          ttgi::TritonIntelGPUDialect::getSupportBfloat16ArithmeticAttrName(),
           builder.getUnitAttr());
 
-    DPASAnalysis &dpasAnalysis = getAnalysis<DPASAnalysis>();
+    ttgi::DPASAnalysis &dpasAnalysis = getAnalysis<ttgi::DPASAnalysis>();
     setThreadsPerWarp(mod, dpasAnalysis);
   }
 
 private:
   void setThreadsPerWarp(ModuleOp &mod,
-                         const DPASAnalysis &dpasAnalysis) const {
+                         const ttgi::DPASAnalysis &dpasAnalysis) const {
     Builder builder(mod);
 
-    bool enableWarp32 = mlir::triton::tools::getBoolEnv(
-        "TRITON_INTEL_ENABLE_DPAS_FOR_WARP_SIZE_32");
+    bool enableWarp32 =
+        triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_DPAS_FOR_WARP_SIZE_32");
     if (!enableWarp32) {
       mod.walk([&](FunctionOpInterface funcOp) {
         // DPAS lowering only implemented for 16 threads per warp, i.e., DPAS is
         // not used for devices like ATS.
-        constexpr unsigned supportedThreadsPerWarp = 16;
+        constexpr unsigned supportedThreadsPerWarp = 16u;
         if (minSGSize != supportedThreadsPerWarp)
           return WalkResult::interrupt();
 
-        if (dpasAnalysis.canUseDPAS(funcOp) == DPASAnalysis::Result::Maybe) {
+        if (dpasAnalysis.canUseDPAS(funcOp) ==
+            ttgi::DPASAnalysis::Result::Maybe) {
           // Set the threads per warp attribute to allow dot operation to be
           // lowered to DPAS instructions.
-          mod->setAttr(AttrNumThreadsPerWarp,
+          mod->setAttr(ttg::AttrNumThreadsPerWarp,
                        builder.getI32IntegerAttr(minSGSize));
           assert(dpasAnalysis.canUseDPAS(funcOp) ==
-                     DPASAnalysis::Result::True &&
+                     ttgi::DPASAnalysis::Result::True &&
                  "DPASAnalysis should report that dot operations can be "
                  "lowered to DPAS instructions");
           return WalkResult::interrupt();
@@ -86,8 +102,8 @@ private:
     }
 
     // If the threads per warp attribute was not set, use the option value.
-    if (!mod->hasAttr(AttrNumThreadsPerWarp))
-      mod->setAttr(AttrNumThreadsPerWarp,
+    if (!mod->hasAttr(ttg::AttrNumThreadsPerWarp))
+      mod->setAttr(ttg::AttrNumThreadsPerWarp,
                    builder.getI32IntegerAttr(threadsPerWarp));
   }
 };
