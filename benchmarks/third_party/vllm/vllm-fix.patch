@@ -16,19 +16,6 @@ diff --git a/tests/kernels/moe/test_batched_moe.py b/tests/kernels/moe/test_batc
 index dab1207d7..31e85cb6b 100644
 --- a/tests/kernels/moe/test_batched_moe.py
 +++ b/tests/kernels/moe/test_batched_moe.py
-@@ -168,9 +168,9 @@ def test_batched_mm(
-     )
- 
-     out_shape = (num_experts, max_tokens_per_expert, N)
--    test_output = torch.zeros(out_shape, dtype=act_dtype, device="cuda")
--    ref_output = torch.zeros(out_shape, dtype=act_dtype, device="cuda")
--    q_ref_output = torch.zeros(out_shape, dtype=act_dtype, device="cuda")
-+    test_output = torch.zeros(out_shape, dtype=act_dtype, device="xpu")
-+    ref_output = torch.zeros(out_shape, dtype=act_dtype, device="xpu")
-+    q_ref_output = torch.zeros(out_shape, dtype=act_dtype, device="xpu")
- 
-     compute_tl_dtype = {
-         torch.float16: tl.float16,
 @@ -234,8 +234,8 @@ def test_batched_mm(
  @pytest.mark.parametrize(("m", "n", "k"), MNK_FACTORS)
  @pytest.mark.parametrize("e", NUM_EXPERTS)
@@ -44,46 +31,25 @@ diff --git a/tests/kernels/moe/utils.py b/tests/kernels/moe/utils.py
 index f0c8c8033..784c000b7 100644
 --- a/tests/kernels/moe/utils.py
 +++ b/tests/kernels/moe/utils.py
-@@ -3,9 +3,10 @@
+@@ -3,9 +3,9 @@
  
  import torch
  
 -import vllm._custom_ops as ops
  from tests.kernels.quant_utils import per_block_cast_to_int8
--from tests.kernels.quantization.nvfp4_utils import FLOAT4_E2M1_MAX, FLOAT8_E4M3_MAX
-+from tests.kernels.quantization.nvfp4_utils import (FLOAT4_E2M1_MAX,
-+                                                    FLOAT8_E4M3_MAX)
+ from tests.kernels.quantization.nvfp4_utils import FLOAT4_E2M1_MAX, FLOAT8_E4M3_MAX
 +from vllm import _custom_ops as ops
  from vllm.model_executor.layers.activation import SiluAndMul
  from vllm.model_executor.layers.fused_moe import fused_experts, fused_topk
  from vllm.model_executor.layers.fused_moe.config import FusedMoEQuantConfig
-@@ -147,7 +148,7 @@ def make_quantized_test_activations(
-     block_shape: list[int] | None = None,
-     per_act_token_quant: bool = False,
- ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
--    a = torch.randn((E, m, k), device="cuda", dtype=in_dtype) / 10
-+    a = torch.randn((E, m, k), device="xpu", dtype=in_dtype) / 10
-     a_q = a
-     a_scale = None
- 
-@@ -223,7 +224,7 @@ def make_test_weight(
-     block_shape: list[int] | None = None,
-     per_out_ch_quant: bool = False,
- ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
--    w_16 = torch.randn((e, rows, cols), device="cuda", dtype=in_dtype) / 15
-+    w_16 = torch.randn((e, rows, cols), device="xpu", dtype=in_dtype) / 15
-     w_gs = None
- 
-     if quant_dtype is not None:
-@@ -232,10 +233,14 @@ def make_test_weight(
+@@ -232,9 +233,14 @@ def make_test_weight(
          w_gs_l = [None] * e
          for idx in range(e):
              w_l[idx], w_s_l[idx], w_gs_l[idx] = moe_quantize_weights(
--                w_16[idx], None, quant_dtype, per_out_ch_quant, block_shape
--            )
+                 w_16[idx], None, quant_dtype, per_out_ch_quant, block_shape
+             )
 -
 -        w = torch.stack(w_l)
-+                w_16[idx], None, quant_dtype, per_act_token_quant, block_shape)
 +        new_shape = torch.Size((len(w_l), ) + w_l[0].shape)
 +        new_w = torch.zeros(new_shape,
 +                            dtype=w_l[0].dtype,
@@ -98,22 +64,20 @@ diff --git a/tests/kernels/utils.py b/tests/kernels/utils.py
 index 72c79370d..031ef542e 100644
 --- a/tests/kernels/utils.py
 +++ b/tests/kernels/utils.py
-@@ -906,14 +906,11 @@ def torch_experts(
+@@ -906,14 +906,14 @@ def torch_experts(
                  out[mask] = tmp2 @ w2[i].transpose(0, 1)
              elif block_shape is not None:
                  # block quantized
--                assert (
--                    a_scale is not None
--                    and w1_scale is not None
--                    and w2_scale is not None
--                )
-+                assert (a_scale is not None and w1_scale is not None
-+                        and w2_scale is not None)
-                 tmp1 = native_w8a8_block_matmul(
+                 assert (
+                     a_scale is not None
+                     and w1_scale is not None
+                     and w2_scale is not None
+                 )
+-                tmp1 = native_w8a8_block_matmul(
 -                    a[mask], w1[i], a_scale[mask], w1_scale[i], block_shape, out.dtype
--                )
-+                    a.to(f32)[mask], w1[i], a_scale[mask], w1_scale[i],
-+                    block_shape, out.dtype)
++                tmp1 = native_w8a8_block_matmul(
++                    a.to(f32)[mask], w1[i], a_scale[mask], w1_scale[i], block_shape, out.dtype
+                 )
                  if b_bias1 is not None:
                      tmp1 = tmp1 + b_bias1[i].view(1, -1).to(tmp1.dtype)
                  tmp2 = SiluAndMul()(tmp1)
@@ -308,7 +272,7 @@ diff --git a/vllm/model_executor/layers/fused_moe/fused_moe.py b/vllm/model_exec
 index 0b83a3f5c..e99ad6f3a 100644
 --- a/vllm/model_executor/layers/fused_moe/fused_moe.py
 +++ b/vllm/model_executor/layers/fused_moe/fused_moe.py
-@@ -1124,13 +1124,17 @@ def vllm_topk_softmax(
+@@ -1124,13 +1124,18 @@ def vllm_topk_softmax(
      gating_output: torch.Tensor,
      renormalize: bool,
  ) -> tuple[torch.Tensor, ...]:
@@ -329,6 +293,7 @@ index 0b83a3f5c..e99ad6f3a 100644
 +           topk_indices,
 +           token_expert_indices,
 +           gating_output,
++           renormalize,
 +       )
  
      return topk_weights, topk_indices

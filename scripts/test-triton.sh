@@ -689,6 +689,7 @@ run_vllm_install() {
       tests/kernels/attention/test_triton_unified_attention.py
 
     cd ..
+    cp -r vllm/tests benchmarks/third_party/vllm/tests
   fi
 
   if ! pip list | grep "vllm" ; then
