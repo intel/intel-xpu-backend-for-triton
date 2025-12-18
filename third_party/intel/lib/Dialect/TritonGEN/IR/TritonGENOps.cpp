@@ -140,6 +140,8 @@ template <typename Op> static LogicalResult verify2DBlockHWRestriction(Op op) {
 // gen.matrix.dpas
 //===----------------------------------------------------------------------===//
 
+#define CEIL(A, B) (((A) + (B) - 1) / (B))
+
 LogicalResult TritonGEN::MatrixDPASOp::verify() {
   if (getRc() != 1 && getRc() != 2 && getRc() != 4 && getRc() != 8)
     return this->emitOpError("expecting repeat count to be 1, 2, 4, or 8");
@@ -157,14 +159,17 @@ LogicalResult TritonGEN::MatrixDPASOp::verify() {
     return this->emitOpError(
         "1st operand (C) and result (D) should have the same type");
 
-  if (CTy.getNumElements() != getRc() || DTy.getNumElements() != getRc())
+  if ((CTy.getNumElements() != getRc() &&
+       CTy.getNumElements() != CEIL(getRc(), 2)) ||
+      (DTy.getNumElements() != getRc() &&
+       DTy.getNumElements() != CEIL(getRc(), 2)))
     return this->emitOpError("the dimension for 1st operand (C) and "
                              "result (D) should match repeat count");
 
   constexpr unsigned SD = 8;
-  if (BTy.getNumElements() != SD)
+  if (BTy.getNumElements() != SD && BTy.getNumElements() != CEIL(SD, 2))
     return this->emitOpError("the dimension for the 3rd operand (B) should "
-                             "match the systolic depth of 8");
+                             "match the systolic depth");
 
   Type AElemTy = ATy.getElementType();
   Type BElemTy = BTy.getElementType();
@@ -199,9 +204,10 @@ LogicalResult TritonGEN::MatrixDPASOp::verify() {
 
   switch (precision) {
   case TritonGEN::PrecisionType::TF32:
-    if (ATy.getNumElements() != getRc() / 2)
+    if (ATy.getNumElements() != CEIL(getRc(), 2) &&
+        ATy.getNumElements() != CEIL(getRc(), 4))
       return this->emitOpError("the dimension for the 2nd operand (A) should "
-                               "be equal to half of the repeat count");
+                               "match the repeat count");
     if (!isa<Float32Type>(AElemTy) && !AElemTy.isInteger(32))
       return this->emitOpError("2nd operand (A) element type should be f32 or "
                                "i32 when the precision type is tf32");
@@ -213,9 +219,10 @@ LogicalResult TritonGEN::MatrixDPASOp::verify() {
   case TritonGEN::PrecisionType::FP16:
   case TritonGEN::PrecisionType::U8:
   case TritonGEN::PrecisionType::S8:
-    if (ATy.getNumElements() != getRc())
-      return this->emitOpError("2nd operand (A) should have the same number of "
-                               "elements as repeat count");
+    if (ATy.getNumElements() != getRc() &&
+        ATy.getNumElements() != CEIL(getRc(), 2))
+      return this->emitOpError("the dimension for the 2nd operand (A) should "
+                               "match the repeat count");
     if (!AElemTy.isInteger(16))
       return this->emitOpError(
           "2nd operand (A) element type should be i16 when "
