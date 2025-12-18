@@ -25,8 +25,8 @@ struct TritonAnnotateModule
     mod->setAttr(ttgi::TritonIntelGPUDialect::getMinSGSizeAttrName(),
                  builder.getI32IntegerAttr(minSGSize));
 
-    if (supportSG2DBlock)
-      mod->setAttr(ttgi::TritonIntelGPUDialect::getSupportSG2DBlockAttrName(),
+    if (support2DBlockIO)
+      mod->setAttr(ttgi::TritonIntelGPUDialect::getSupport2DBlockIOAttrName(),
                    builder.getUnitAttr());
 
     if (supportDPAS)
