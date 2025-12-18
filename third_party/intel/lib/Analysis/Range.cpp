@@ -6,6 +6,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Interfaces/InferIntRangeInterface.h"
+#include "mlir/Interfaces/Utils/InferIntRangeCommon.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -90,20 +91,6 @@ static void inferResultRange(HistogramOp op, SetIntRangeFn setResultRange) {
   }
 }
 
-static DenseMap<Value, SetVector<Operation *>>
-collectAssumptions(Operation *rootOp, bool filterConstants = true) {
-  DenseMap<Value, SetVector<Operation *>> assumptions;
-  rootOp->walk([&](LLVM::AssumeOp op) {
-    Operation *defOp = op.getCond().getDefiningOp();
-    for (auto operand : defOp->getOperands()) {
-      if (filterConstants && getConstantIntValue(operand))
-        continue;
-      assumptions[operand].insert(defOp);
-    }
-  });
-  return assumptions;
-}
-
 static std::optional<ConstantIntRanges>
 getAssumedRange(const SetVector<Operation *> &assumptions, Value val,
                 Block *useBlock, const DominanceInfo &domInfo) {
@@ -166,12 +153,12 @@ static std::optional<ConstantIntRanges> getAssumedRange(
   return getAssumedRange(assumptions.lookup(val), val, useBlock, domInfo);
 }
 
-IntegerRangeAnalysis::IntegerRangeAnalysis(Operation *top,
-                                           DataFlowSolver &solver,
+IntegerRangeAnalysis::IntegerRangeAnalysis(DataFlowSolver &solver,
+                                           ModuleOp &mod,
                                            DominanceInfo &domInfo)
     : dataflow::IntegerRangeAnalysis(solver), integerValues(), assumptions(),
       domInfo(domInfo) {
-  assumptions = collectAssumptions(top);
+  assumptions = collectAssumptions(mod);
 }
 
 void IntegerRangeAnalysis::setToEntryState(
@@ -288,7 +275,21 @@ LogicalResult IntegerRangeAnalysis::visitOperation(
   return visitResult;
 }
 
-std::optional<int64_t>
+DenseMap<Value, SetVector<Operation *>>
+IntegerRangeAnalysis::collectAssumptions(Operation *top, bool filterConstants) {
+  DenseMap<Value, SetVector<Operation *>> assumptions;
+  top->walk([&](LLVM::AssumeOp op) {
+    Operation *defOp = op.getCond().getDefiningOp();
+    for (auto operand : defOp->getOperands()) {
+      if (filterConstants && getConstantIntValue(operand))
+        continue;
+      assumptions[operand].insert(defOp);
+    }
+  });
+  return assumptions;
+}
+
+std::optional<uint64_t>
 IntegerRangeAnalysis::getTripCount(LoopLikeOpInterface loop) {
   std::optional<OpFoldResult> lowerBound = loop.getSingleLowerBound();
   std::optional<OpFoldResult> upperBound = loop.getSingleUpperBound();
@@ -490,24 +491,6 @@ void IntegerRangeAnalysis::visitRegionSuccessors(
     lattices.push_back(
         static_cast<dataflow::IntegerValueRangeLattice *>(lattice));
 
-  auto getTotalLoopTripCount = [this](LoopLikeOpInterface loop) {
-    SmallVector<LoopLikeOpInterface> loops{loop};
-    {
-      Operation *parentOp = loop->getParentOp();
-      while (parentOp) {
-        if (isa<LoopLikeOpInterface>(parentOp))
-          loops.push_back(cast<LoopLikeOpInterface>(parentOp));
-        parentOp = parentOp->getParentOp();
-      }
-    }
-
-    return std::accumulate(loops.begin(), loops.end(), 1ll,
-                           [this](int64_t accum, LoopLikeOpInterface loop) {
-                             return accum * getTripCount(loop).value_or(
-                                                kDefaultMaxTripCount + 1);
-                           });
-  };
-
   // Initialize loop trip counts.
   llvm::SmallDenseMap<LoopLikeOpInterface, int64_t> loopTripCounts;
   llvm::SmallDenseMap<
@@ -523,7 +506,7 @@ void IntegerRangeAnalysis::visitRegionSuccessors(
         loopVisits[{loop, lattice}] = 0ll;
     }
 
-    int64_t loopTripCount = getTotalLoopTripCount(loop);
+    int64_t loopTripCount = getTotalTripCount(loop, *this);
 
     LLVM_DEBUG({
       DBGS() << "Trip count for ";
@@ -665,6 +648,58 @@ void IntegerRangeAnalysis::initializeModule(ModuleOp &mod) {
       (void)argLattice->join(range);
     }
   });
+}
+
+std::optional<SmallVector<std::optional<ConstantIntRanges>>>
+collectRanges(const DataFlowSolver &solver, ValueRange values) {
+  SmallVector<std::optional<ConstantIntRanges>> ranges;
+  for (Value val : values) {
+    auto *maybeInferredRange =
+        solver.lookupState<dataflow::IntegerValueRangeLattice>(val);
+    if (!maybeInferredRange ||
+        maybeInferredRange->getValue().isUninitialized()) {
+      ranges.push_back(std::nullopt);
+      continue;
+    }
+    const ConstantIntRanges &inferredRange =
+        maybeInferredRange->getValue().getValue();
+    if (isEmpty(inferredRange)) {
+      ranges.push_back(std::nullopt);
+      continue;
+    }
+    ranges.push_back(inferredRange);
+  }
+  return ranges;
+}
+
+uint64_t getTotalTripCount(LoopLikeOpInterface loop,
+                           IntegerRangeAnalysis &analysis) {
+  SmallVector<LoopLikeOpInterface> loops{loop};
+  Operation *parentOp = loop->getParentOp();
+  while (parentOp) {
+    if (isa<LoopLikeOpInterface>(parentOp))
+      loops.push_back(cast<LoopLikeOpInterface>(parentOp));
+    parentOp = parentOp->getParentOp();
+  }
+
+  return std::accumulate(loops.begin(), loops.end(), 1ll,
+                         [&analysis](int64_t accum, LoopLikeOpInterface loop) {
+                           return accum * analysis.getTripCount(loop).value_or(
+                                              kDefaultMaxTripCount + 1);
+                         });
+}
+
+bool evaluatesToTrue(arith::CmpIOp cmpOp, const DataFlowSolver &solver) {
+  if (auto inputRanges =
+          collectRanges(solver, ValueRange{cmpOp.getOperands()})) {
+    intrange::CmpPredicate pred =
+        static_cast<intrange::CmpPredicate>(cmpOp.getPredicate());
+    if (!(*inputRanges)[0] || !(*inputRanges)[1])
+      return false;
+    return intrange::evaluatePred(pred, *(*inputRanges)[0], *(*inputRanges)[1])
+        .value_or(false);
+  }
+  return false;
 }
 
 } // namespace mlir::triton::intel

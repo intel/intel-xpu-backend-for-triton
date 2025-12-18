@@ -2,13 +2,10 @@
 #define TRITON_INTEL_ANALYSIS_RANGE_H
 
 #include "mlir/Analysis/DataFlow/IntegerRangeAnalysis.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
-
-namespace mlir::triton {
-class FuncOp;
-}
 
 namespace mlir::triton::intel {
 
@@ -19,7 +16,7 @@ class IntegerRangeAnalysis : public dataflow::IntegerRangeAnalysis {
 public:
   using Base = dataflow::IntegerRangeAnalysis;
 
-  IntegerRangeAnalysis(Operation *top, DataFlowSolver &solver,
+  IntegerRangeAnalysis(DataFlowSolver &solver, ModuleOp &mod,
                        DominanceInfo &domInfo);
   virtual ~IntegerRangeAnalysis() = default;
 
@@ -28,14 +25,13 @@ public:
     return Base::initialize(top);
   }
 
-  void setToEntryState(dataflow::IntegerValueRangeLattice *lattice) final;
+  virtual void
+  setToEntryState(dataflow::IntegerValueRangeLattice *lattice) final;
 
-  LogicalResult visitOperation(
+  virtual LogicalResult visitOperation(
       Operation *op,
       ArrayRef<const dataflow::IntegerValueRangeLattice *> operands,
       ArrayRef<dataflow::IntegerValueRangeLattice *> resultsLattices) final;
-
-  std::optional<int64_t> getTripCount(LoopLikeOpInterface loop);
 
   /// This method implements "abstract interpretation" of loops with statically
   /// known bounds in order to infer tight ranges for loop carried values.
@@ -59,13 +55,20 @@ public:
   /// to upstream's conservative inference (i.e., we infer [min_int,
   /// max_int]) for the loop operands and all users and all users of the
   /// results of the loop.
-  void visitRegionSuccessors(
+  virtual void visitRegionSuccessors(
       ProgramPoint *point, RegionBranchOpInterface branch,
       RegionSuccessor successor,
       ArrayRef<dataflow::AbstractSparseLattice *> abstractLattices) final;
 
   // TODO: Can we place this into constructor and make it private ?
   void initializeModule(ModuleOp &mod);
+
+  /// Collects assumptions in the given operation.
+  static DenseMap<Value, SetVector<Operation *>>
+  collectAssumptions(Operation *top, bool filterConstants = true);
+
+  /// Returns the trip count of the given loop if it can be inferred.
+  std::optional<uint64_t> getTripCount(LoopLikeOpInterface loop);
 
 private:
   //  void visitYieldHelper(Operation *yieldOp, Value value);
@@ -80,11 +83,18 @@ private:
   DominanceInfo &domInfo;
 };
 
-#if 0
+/// Collects the inferred integer ranges for the given values. If a value's
+/// range cannot be inferred, std::nullopt is returned for that value.
 std::optional<SmallVector<std::optional<ConstantIntRanges>>>
 collectRanges(const DataFlowSolver &solver, ValueRange values);
 
-#endif
+/// Returns the total trip count of the given loop by multiplying the trip
+/// counts of all enclosing loops.
+uint64_t getTotalTripCount(LoopLikeOpInterface loop,
+                           IntegerRangeAnalysis &analysis);
+
+/// Determine whether the given comparison operation always evaluates to true.
+bool evaluatesToTrue(arith::CmpIOp cmpOp, const DataFlowSolver &solver);
 
 } // namespace mlir::triton::intel
 
