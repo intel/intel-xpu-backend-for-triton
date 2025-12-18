@@ -806,6 +806,6 @@ if __name__ == "__main__":
             proton.finalize()
             show_profile(args.prec, "matmul")
 
-        # FIXME: https://jira.devtools.intel.com/browse/NEO-17074
+        # FIXME: https://github.com/intel/intel-xpu-backend-for-triton/issues/5605
         if is_xpu():
             torch.xpu.synchronize()
