@@ -805,3 +805,7 @@ if __name__ == "__main__":
         if is_cuda():
             proton.finalize()
             show_profile(args.prec, "matmul")
+
+        # FIXME: https://jira.devtools.intel.com/browse/NEO-17074
+        if is_xpu():
+            torch.xpu.synchronize()
