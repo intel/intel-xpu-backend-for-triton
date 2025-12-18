@@ -106,6 +106,68 @@ def is_xpu():
     return False if target is None else target.backend == "xpu"
 
 
+def is_xpu_arl_h():
+    target = get_current_target()
+    return target is not None and target.backend == 'xpu' and target.arch["arch"] == 'arl_h'
+
+
+def is_xpu_arl_s():
+    target = get_current_target()
+    return target is not None and target.backend == 'xpu' and target.arch["arch"] == 'arl_s'
+
+
+def is_xpu_bmg():
+    target = get_current_target()
+    return target is not None and target.backend == 'xpu' and target.arch["arch"] == 'bmg'
+
+
+def is_xpu_dg2():
+    target = get_current_target()
+    return target is not None and target.backend == 'xpu' and target.arch["arch"] == 'dg2'
+
+
+def is_xpu_lnl():
+    target = get_current_target()
+    return target is not None and target.backend == 'xpu' and target.arch["arch"] == 'lnl'
+
+
+def is_xpu_mtl():
+    target = get_current_target()
+    return target is not None and target.backend == 'xpu' and target.arch["arch"] == 'mtl'
+
+
+def is_xpu_pvc():
+    target = get_current_target()
+    return target is not None and target.backend == 'xpu' and target.arch["arch"] == 'pvc'
+
+
+def is_xpu_ptl_h():
+    target = get_current_target()
+    return target is not None and target.backend == 'xpu' and target.arch["arch"] == 'ptl_h'
+
+
+def is_xpu_ptl_u():
+    target = get_current_target()
+    return target is not None and target.backend == 'xpu' and target.arch["arch"] == 'ptl_u'
+
+
+def is_xpu_cri():
+    target = get_current_target()
+    return target is not None and target.backend == 'xpu' and target.arch["arch"] == 'cri'
+
+
+def is_xpu_xe2():
+    return is_xpu_bmg()
+
+
+def is_xpu_xe3():
+    return is_xpu_ptl_h() or is_xpu_ptl_u()
+
+
+def is_xpu_xe3p():
+    return is_xpu_cri()
+
+
 def get_arch():
     target = get_current_target()
     return "" if target is None else str(target.arch)

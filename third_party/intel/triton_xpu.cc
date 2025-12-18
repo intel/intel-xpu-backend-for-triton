@@ -95,11 +95,23 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
       .def_readwrite("support_dpas",
                      &gpu::intel::TritonAnnotateModuleOptions::supportDPAS)
       .def_readwrite(
+          "support_block_scale_dpas",
+          &gpu::intel::TritonAnnotateModuleOptions::supportBlockScaleDPAS)
+      .def_readwrite(
+          "support_f4_conversion",
+          &gpu::intel::TritonAnnotateModuleOptions::supportF4Conversion)
+      .def_readwrite(
+          "support_256b_prefetch",
+          &gpu::intel::TritonAnnotateModuleOptions::supportPrefetch256Bytes)
+      .def_readwrite(
           "support_bf16_conversion",
           &gpu::intel::TritonAnnotateModuleOptions::supportBF16Conversion)
       .def_readwrite(
           "support_16bit_atomics",
           &gpu::intel::TritonAnnotateModuleOptions::support16BitAtomics)
+      .def_readwrite(
+          "support_bfloat16_arithmetic",
+          &gpu::intel::TritonAnnotateModuleOptions::supportBfloat16Arithmetic)
       .def_readwrite("threads_per_warp",
                      &gpu::intel::TritonAnnotateModuleOptions::threadsPerWarp)
       .def_readwrite("target_arch",
@@ -135,19 +147,6 @@ void init_triton_intel(py::module &&m) {
   init_triton_intel_passes_ttir(passes.def_submodule("ttir"));
   init_triton_intel_passes_ttgpuir(passes.def_submodule("ttgpuir"));
   init_triton_intel_passes_arith(passes.def_submodule("arith"));
-
-  // cluster info
-  py::class_<gpu::intel::ClusterInfo>(m, "ClusterInfo")
-      .def(py::init<>())
-      .def_readwrite("clusterDimX", &gpu::intel::ClusterInfo::clusterDimX)
-      .def_readwrite("clusterDimY", &gpu::intel::ClusterInfo::clusterDimY)
-      .def_readwrite("clusterDimZ", &gpu::intel::ClusterInfo::clusterDimZ)
-      .def("__repr__", [](gpu::intel::ClusterInfo &self) {
-        std::ostringstream oss;
-        oss << "(" << self.clusterDimX << ", " << self.clusterDimY << ", "
-            << self.clusterDimZ << ")";
-        return oss.str();
-      });
 
   // Split barrier scope enum
   py::enum_<gpu::intel::SplitBarrierScope>(m, "SplitBarrierScope")

@@ -69,7 +69,7 @@ public:
           dstType.getShape(), dstType.getElementType(),
           triton::gpu::SwizzledSharedEncodingAttr::get(
               mod.getContext(), dstDotOp, srcType.getShape(), sharedOrder,
-              triton::gpu::getCTALayout(srcEncoding), srcType.getElementType()),
+              triton::gpu::getCGALayout(srcEncoding), srcType.getElementType()),
           sharedMemorySpace);
       auto tmp = triton::gpu::LocalAllocOp::create(builder, cvtOp.getLoc(),
                                                    tmpType, cvtOp.getSrc());
