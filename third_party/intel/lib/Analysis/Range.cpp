@@ -658,8 +658,8 @@ void IntegerRangeAnalysis::initializeModule(ModuleOp &mod) {
               getAssumedRange(argument, entryBlock, assumptions, domInfo))
         range = *assumedRange;
 
-      // The lattice must be in the "bottom" state, the join() operation is to set
-      // the state to the given "range".
+      // The lattice must be in the "bottom" state, the join() operation is to
+      // set the state to the given "range".
       assert(argLattice->getValue().isUninitialized() &&
              "lattice must be in bottom state");
       (void)argLattice->join(range);
