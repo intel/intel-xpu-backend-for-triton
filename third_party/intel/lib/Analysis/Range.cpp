@@ -26,8 +26,8 @@ namespace ttg = mlir::triton::gpu;
 
 namespace mlir::triton::intel {
 
-constexpr int64_t kDefaultMaxTripCount = 1024;
-constexpr uint64_t kDefaultMaxPrograms = INT_MAX;
+constexpr unsigned kDefaultMaxTripCount = 1024u;
+constexpr unsigned kDefaultMaxPrograms = INT_MAX;
 
 template <typename OpType,
           typename = std::enable_if_t<llvm::is_one_of<
@@ -92,8 +92,8 @@ static void inferResultRange(HistogramOp op, SetIntRangeFn setResultRange) {
 }
 
 static std::optional<ConstantIntRanges>
-getAssumedRange(const SetVector<Operation *> &assumptions, Value val,
-                Block *useBlock, const DominanceInfo &domInfo) {
+getAssumedRange(const IntegerRangeAnalysis::AssumptionsOps &assumptions,
+                Value val, Block *useBlock, const DominanceInfo &domInfo) {
   std::optional<ConstantIntRanges> result;
   for (Operation *assumption : assumptions) {
     arith::CmpIOp cmpOp = dyn_cast<arith::CmpIOp>(assumption);
@@ -146,12 +146,17 @@ static bool isEmpty(ConstantIntRanges range) {
 ///   [0, INT_MAX] ∩ [INT_MIN, 128] = [0, 128]
 static std::optional<ConstantIntRanges> getAssumedRange(
     Value val, Block *useBlock,
-    const llvm::DenseMap<Value, SetVector<Operation *>> &assumptions,
+    const llvm::DenseMap<Value, IntegerRangeAnalysis::AssumptionsOps>
+        &assumptions,
     const DominanceInfo &domInfo) {
   if (!assumptions.contains(val))
     return std::nullopt;
   return getAssumedRange(assumptions.lookup(val), val, useBlock, domInfo);
 }
+
+///*****************************************************************************/
+/// IntegerRangeAnalysis
+///*****************************************************************************/
 
 IntegerRangeAnalysis::IntegerRangeAnalysis(DataFlowSolver &solver,
                                            ModuleOp &mod,
@@ -159,6 +164,7 @@ IntegerRangeAnalysis::IntegerRangeAnalysis(DataFlowSolver &solver,
     : dataflow::IntegerRangeAnalysis(solver), integerValues(), assumptions(),
       domInfo(domInfo) {
   assumptions = collectAssumptions(mod);
+  initializeModule(mod);
 }
 
 void IntegerRangeAnalysis::setToEntryState(
@@ -174,13 +180,13 @@ void IntegerRangeAnalysis::setToEntryState(
       if (Block *block = val.getParentBlock())
         definingOp = block->getParentOp();
 
-    if (definingOp) {
-      if (auto funcOp = dyn_cast<tt::FuncOp>(definingOp))
-        return funcOp;
-      return definingOp->getParentOfType<tt::FuncOp>();
-    }
+    if (!definingOp)
+      return std::nullopt;
 
-    return std::nullopt;
+    if (auto funcOp = dyn_cast<tt::FuncOp>(definingOp))
+      return funcOp;
+
+    return definingOp->getParentOfType<tt::FuncOp>();
   };
 
   std::optional<tt::FuncOp> funcOp = getParentFunction(anchor);
@@ -275,9 +281,9 @@ LogicalResult IntegerRangeAnalysis::visitOperation(
   return visitResult;
 }
 
-DenseMap<Value, SetVector<Operation *>>
+DenseMap<Value, IntegerRangeAnalysis::AssumptionsOps>
 IntegerRangeAnalysis::collectAssumptions(Operation *top, bool filterConstants) {
-  DenseMap<Value, SetVector<Operation *>> assumptions;
+  DenseMap<Value, AssumptionsOps> assumptions;
   top->walk([&](LLVM::AssumeOp op) {
     Operation *defOp = op.getCond().getDefiningOp();
     for (auto operand : defOp->getOperands()) {
@@ -290,27 +296,27 @@ IntegerRangeAnalysis::collectAssumptions(Operation *top, bool filterConstants) {
 }
 
 std::optional<uint64_t>
-IntegerRangeAnalysis::getTripCount(LoopLikeOpInterface loop) {
-  std::optional<OpFoldResult> lowerBound = loop.getSingleLowerBound();
-  std::optional<OpFoldResult> upperBound = loop.getSingleUpperBound();
-  std::optional<OpFoldResult> step = loop.getSingleStep();
+IntegerRangeAnalysis::getTripCount(LoopLikeOpInterface loop) const {
   std::optional<Value> iv = loop.getSingleInductionVar();
   if (!iv)
     return std::nullopt;
 
-  unsigned int width = ConstantIntRanges::getStorageBitwidth(iv->getType());
+  const unsigned width = ConstantIntRanges::getStorageBitwidth(iv->getType());
 
   auto getLoopRangeInfo = [&](std::optional<OpFoldResult> loopBound,
                               Block *block,
                               std::optional<bool> getUpper = std::nullopt,
                               std::optional<APInt> defaultVal = std::nullopt) {
-    if (loopBound.has_value()) {
+    if (loopBound) {
       if (auto attr = dyn_cast<Attribute>(*loopBound)) {
         if (auto bound = dyn_cast_or_null<IntegerAttr>(attr))
           return bound.getValue();
       } else if (auto value = dyn_cast_if_present<Value>(*loopBound)) {
         const dataflow::IntegerValueRangeLattice *lattice =
-            getLatticeElementFor(getProgramPointBefore(block), value);
+            const_cast<IntegerRangeAnalysis *>(this)->getLatticeElementFor(
+                const_cast<IntegerRangeAnalysis *>(this)->getProgramPointBefore(
+                    block),
+                value);
         if (lattice && !lattice->getValue().isUninitialized())
           return getUpper ? lattice->getValue().getValue().smax()
                           : lattice->getValue().getValue().smin();
@@ -325,6 +331,10 @@ IntegerRangeAnalysis::getTripCount(LoopLikeOpInterface loop) {
   };
 
   Block *block = iv->getParentBlock();
+  std::optional<OpFoldResult> lowerBound = loop.getSingleLowerBound();
+  std::optional<OpFoldResult> upperBound = loop.getSingleUpperBound();
+  std::optional<OpFoldResult> step = loop.getSingleStep();
+
   APInt min = getLoopRangeInfo(lowerBound, block,
                                /*getUpper=*/false);
   APInt max = getLoopRangeInfo(upperBound, block,
@@ -332,11 +342,11 @@ IntegerRangeAnalysis::getTripCount(LoopLikeOpInterface loop) {
   // We can assume step is 1 if no range information as that gives us the upper
   // bound of the number of iterations.
   APInt stepValDefault = {width, 1, /*isSigned=*/true};
-  APInt stepVal =
-      getLoopRangeInfo(step, block, /*getUpper=*/{}, stepValDefault);
+  APInt stepVal = getLoopRangeInfo(step, block, std::nullopt, stepValDefault);
 
   if (stepVal.isNegative())
     std::swap(min, max);
+
   // This is necessary to catch a case like this:
   //  # range = [0 1024]
   //  K = ....
@@ -346,6 +356,7 @@ IntegerRangeAnalysis::getTripCount(LoopLikeOpInterface loop) {
   //  step = ceildiv(K, k)
   if (stepVal.isZero())
     stepVal = stepValDefault;
+
   if (max.sge(min))
     return llvm::divideCeilSigned(max.getSExtValue() - min.getSExtValue(),
                                   stepVal.getSExtValue());
@@ -405,8 +416,8 @@ LogicalResult IntegerRangeAnalysis::visitOperationHelper(
                    << ", in value-range: " << newRange << "\n";
     });
 
-    // step 4: Add those ops that depends on this op to the worklist. The
-    // resolver will iterate all items in the worklist until it become empty.
+    // Add those ops that depends on this op to the worklist. The resolver will
+    // iterate all items in the worklist until it become empty.
     propagateIfChanged(lattice, changed);
   };
 
@@ -500,7 +511,7 @@ void IntegerRangeAnalysis::visitRegionSuccessors(
         loopVisits[{loop, lattice}] = 0ll;
     }
 
-    int64_t loopTripCount = getTotalTripCount(loop, *this);
+    uint64_t loopTripCount = getTotalTripCount(loop, *this);
 
     LLVM_DEBUG({
       DBGS() << "Trip count for ";
@@ -534,7 +545,7 @@ void IntegerRangeAnalysis::visitRegionSuccessors(
   // provided lattice(m) and lattice(n) are initialized.
   //
   // Note that the state of lattice(m) and lattice(n) was updated in the
-  // "previous" round. In this "round", the scf.if is visitied right now, and
+  // "previous" round. In this "round", the scf.if is visited right now, and
   // it takes this moment to update its LHS.
   //
   // Alternatively, when we visit, say op_m, we notice its result is used by
@@ -648,15 +659,12 @@ std::optional<SmallVector<std::optional<ConstantIntRanges>>>
 collectRanges(const DataFlowSolver &solver, ValueRange values) {
   SmallVector<std::optional<ConstantIntRanges>> ranges;
   for (Value val : values) {
-    auto *maybeInferredRange =
-        solver.lookupState<dataflow::IntegerValueRangeLattice>(val);
-    if (!maybeInferredRange ||
-        maybeInferredRange->getValue().isUninitialized()) {
+    auto *range = solver.lookupState<dataflow::IntegerValueRangeLattice>(val);
+    if (!range || range->getValue().isUninitialized()) {
       ranges.push_back(std::nullopt);
       continue;
     }
-    const ConstantIntRanges &inferredRange =
-        maybeInferredRange->getValue().getValue();
+    const ConstantIntRanges &inferredRange = range->getValue().getValue();
     if (isEmpty(inferredRange)) {
       ranges.push_back(std::nullopt);
       continue;
@@ -677,7 +685,7 @@ uint64_t getTotalTripCount(LoopLikeOpInterface loop,
   }
 
   return std::accumulate(loops.begin(), loops.end(), 1ll,
-                         [&analysis](int64_t accum, LoopLikeOpInterface loop) {
+                         [&analysis](uint64_t accum, LoopLikeOpInterface loop) {
                            return accum * analysis.getTripCount(loop).value_or(
                                               kDefaultMaxTripCount + 1);
                          });

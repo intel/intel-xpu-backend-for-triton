@@ -27,8 +27,6 @@ struct TestRangeAnalysisPass
     auto *rangeAnalysis =
         solver->load<IntegerRangeAnalysis>(mod, getAnalysis<DominanceInfo>());
 
-    rangeAnalysis->initializeModule(mod);
-
     if (failed(solver->initializeAndRun(getOperation())))
       return signalPassFailure();
 
