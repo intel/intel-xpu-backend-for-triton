@@ -48,6 +48,11 @@ struct TritonAnnotateModule
           intel::TritonIntelGPUDialect::getSupportF4ConversionAttrName(),
           builder.getUnitAttr());
 
+    if (supportF8Conversion)
+      mod->setAttr(
+          intel::TritonIntelGPUDialect::getSupportF8ConversionAttrName(),
+          builder.getUnitAttr());
+
     mod->setAttr(intel::TritonIntelGPUDialect::getTargetArchAttrName(),
                  builder.getStringAttr(targetArch));
 
