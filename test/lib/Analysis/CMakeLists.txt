@@ -3,6 +3,7 @@ add_mlir_library(TritonTestAnalysis
   TestAlias.cpp
   TestAxisInfo.cpp
   TestAllocation.cpp
+  TestBufferRegion.cpp
   TestLivenessAnalysis.cpp
   TestMembar.cpp
 
