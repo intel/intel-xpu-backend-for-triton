@@ -270,14 +270,14 @@ def batched_triton_kernel(
     BLOCK_N: tl.constexpr,
     BLOCK_K: tl.constexpr,
 ):
-    expert_id = tl.program_id(axis=0)
+    expert_id = tl.program_id(axis=1)
     e_num_tokens = tl.load(expert_num_tokens + expert_id)
     if e_num_tokens == 0:
         # Early exit
         return
 
-    # axis 1 is M_blocks * N_blocks
-    pid_mn = tl.program_id(axis=1)
+    # axis 0 is M_blocks * N_blocks
+    pid_mn = tl.program_id(axis=0)
     #num_pid_m = tl.cdiv(max_num_tokens, BLOCK_M)
     num_pid_n = tl.cdiv(N, BLOCK_N)
     pid_m = pid_mn // num_pid_n
@@ -356,7 +356,10 @@ def invoke_moe_batched_triton_kernel_td(A: torch.Tensor,  # [E, max_tokens, K]
     # BLOCK_K = 32
     # num_warps = 64
 
-    grid = (expert_num_tokens.size(0), triton.cdiv(max_num_tokens, BLOCK_M) * triton.cdiv(B.size(1), BLOCK_N))
+    grid = (
+        triton.cdiv(max_num_tokens, BLOCK_M) * triton.cdiv(B.size(1), BLOCK_N),
+        expert_num_tokens.size(0),
+    )
 
     A_scale = normalize_batched_scales_shape(A_scale, expert_num_tokens.shape[0])
 
