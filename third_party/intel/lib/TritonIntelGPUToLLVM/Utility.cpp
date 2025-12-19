@@ -208,7 +208,10 @@ Value convertWithFunctionCall(TritonLLVMIRRewriter &rewriter, Value value,
   auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
       /*other=*/LLVM::ModRefInfo::NoModRef,
       /*argMem=*/LLVM::ModRefInfo::NoModRef,
-      /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef);
+      /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef,
+      /*errnoMem=*/LLVM::ModRefInfo::NoModRef,
+      /*targetMem0=*/LLVM::ModRefInfo::NoModRef,
+      /*targetMem1=*/LLVM::ModRefInfo::NoModRef);
   auto funcAttrs = gpu::intel::noUnwindWillReturnAttrs;
   funcAttrs.memEffectsAttr = memAttr;
   return gpu::intel::createDeviceFunctionCall(rewriter, funcName, outTy, {inTy},
