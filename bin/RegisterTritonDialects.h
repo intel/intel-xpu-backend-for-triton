@@ -68,6 +68,7 @@ void registerTestAliasPass();
 void registerTestAlignmentPass();
 void registerAMDTestAlignmentPass();
 void registerTestAllocationPass();
+void registerTestBufferRegionPass();
 void registerTestLivenessPass();
 void registerTestMembarPass();
 void registerTestAMDGPUMembarPass();
@@ -91,6 +92,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::test::registerTestAlignmentPass();
   mlir::test::registerAMDTestAlignmentPass();
   mlir::test::registerTestAllocationPass();
+  mlir::test::registerTestBufferRegionPass();
   mlir::test::registerTestLivenessPass();
   mlir::test::registerTestMembarPass();
   mlir::test::registerTestLoopPeelingPass();
