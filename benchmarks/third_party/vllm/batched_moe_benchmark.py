@@ -559,7 +559,7 @@ def get_batched_mm_benchmark(
             in_dtype=act_dtype,
             quant_dtype=quant_dtype,
             block_shape=block_shape,
-            per_act_token_quant=per_act_token_quant,
+            per_out_ch_quant=per_act_token_quant,
         )
         quantiles = [0.5, 0.0, 1.0]
 
