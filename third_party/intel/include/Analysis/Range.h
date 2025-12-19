@@ -82,7 +82,18 @@ private:
   llvm::SmallMapVector<Value, ConstantIntRanges, 2> opResultAssumption;
   DominanceInfo &domInfo;
 
+  /// Trip counts of all loops with static loop bounds contained under the root
+  /// operation being analyzed. Note, nested loops have trip counts computed as
+  /// a product of enclosing loops; i.e. for
+  ///   scf.for i = 1 to 10
+  ///     scf.for j = 1 to 10
+  /// the trip count of the outer loop (on i) is 10 but the trip count of the
+  /// inner loop (on j) is 100.
   llvm::SmallDenseMap<LoopLikeOpInterface, int64_t> loopTripCounts;
+
+  /// Visit counts tabulating how many times each lattice has been propagated
+  /// through each loop. This is used in visitRegionSuccessors to end
+  /// propagation when loopVisits[loop, lattice] reaches loopTripCounts[loop].
   llvm::SmallDenseMap<
       std::pair<LoopLikeOpInterface, dataflow::IntegerValueRangeLattice *>,
       int64_t>
