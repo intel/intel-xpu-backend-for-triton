@@ -4,20 +4,18 @@
 #include "triton/Analysis/Utility.h"
 
 using namespace mlir;
-namespace tt = mlir::triton;
+using namespace mlir::triton::intel;
 
-namespace mlir::triton::test::intel {
+namespace {
 
 struct TestRangeAnalysisPass
-    : PassWrapper<TestRangeAnalysisPass, OperationPass<ModuleOp>> {
+    : public PassWrapper<TestRangeAnalysisPass, OperationPass<ModuleOp>> {
 
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestRangeAnalysisPass)
 
-  StringRef getArgument() const final {
-    return "test-triton-intel-range-analysis";
-  }
+  StringRef getArgument() const final { return "test-intel-range-analysis"; }
   StringRef getDescription() const final {
-    return "print the result of the triton-intel-range-analysis pass";
+    return "print the result of the range analysis pass";
   }
 
   void runOnOperation() override {
@@ -26,8 +24,8 @@ struct TestRangeAnalysisPass
     ModuleOp mod = getOperation();
 
     std::shared_ptr<DataFlowSolver> solver = createDataFlowSolver();
-    auto *rangeAnalysis = solver->load<tt::intel::IntegerRangeAnalysis>(
-        mod, getAnalysis<DominanceInfo>());
+    auto *rangeAnalysis =
+        solver->load<IntegerRangeAnalysis>(mod, getAnalysis<DominanceInfo>());
 
     rangeAnalysis->initializeModule(mod);
 
@@ -51,9 +49,9 @@ struct TestRangeAnalysisPass
       return succeeded(dataflow::staticallyNonNegative(*solver, v));
     };
 
-    mod.walk<WalkOrder::PreOrder>([&solver](FuncOp funcOp) {
+    mod.walk<WalkOrder::PreOrder>([&solver](triton::FuncOp funcOp) {
       auto args = funcOp.getArguments();
-      if (auto argRanges = tt::intel::collectRanges(*solver, args)) {
+      if (auto argRanges = collectRanges(*solver, args)) {
         int i = -1;
         for (const auto &[arg, argR] : llvm::zip(args, *argRanges)) {
           i++;
@@ -73,7 +71,7 @@ struct TestRangeAnalysisPass
     mod->walk<WalkOrder::PreOrder>([&solver, nonNegativePred,
                                     rangeAnalysis](Operation *op) {
       auto results = op->getResults();
-      if (auto outputRanges = tt::intel::collectRanges(*solver, results)) {
+      if (auto outputRanges = collectRanges(*solver, results)) {
         int i = -1;
         for (const auto &[res, outR] : llvm::zip(results, *outputRanges)) {
           i++;
@@ -89,7 +87,7 @@ struct TestRangeAnalysisPass
         }
 
         if (auto cmpOp = llvm::dyn_cast<arith::CmpIOp>(op)) {
-          if (tt::intel::evaluatesToTrue(cmpOp, *solver))
+          if (evaluatesToTrue(cmpOp, *solver))
             emitRemark(op->getLoc(), "result is true");
         }
       }
@@ -117,10 +115,10 @@ struct TestRangeAnalysisPass
   }
 };
 
-} // namespace mlir::triton::test::intel
+} // namespace
 
-namespace mlir::triton::test::intel {
-void registerTestIntelRangeAnalysis() {
+namespace mlir::test::intel {
+void registerTestRangeAnalysisPass() {
   PassRegistration<TestRangeAnalysisPass>();
 }
-} // namespace mlir::triton::test::intel
+} // namespace mlir::test::intel

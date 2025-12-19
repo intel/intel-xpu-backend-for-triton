@@ -81,6 +81,12 @@ private:
   DenseMap<Value, SetVector<Operation *>> assumptions;
   llvm::SmallMapVector<Value, ConstantIntRanges, 2> opResultAssumption;
   DominanceInfo &domInfo;
+
+  llvm::SmallDenseMap<LoopLikeOpInterface, int64_t> loopTripCounts;
+  llvm::SmallDenseMap<
+      std::pair<LoopLikeOpInterface, dataflow::IntegerValueRangeLattice *>,
+      int64_t>
+      loopVisits;
 };
 
 /// Collects the inferred integer ranges for the given values. If a value's

@@ -492,12 +492,6 @@ void IntegerRangeAnalysis::visitRegionSuccessors(
         static_cast<dataflow::IntegerValueRangeLattice *>(lattice));
 
   // Initialize loop trip counts.
-  llvm::SmallDenseMap<LoopLikeOpInterface, int64_t> loopTripCounts;
-  llvm::SmallDenseMap<
-      std::pair<LoopLikeOpInterface, dataflow::IntegerValueRangeLattice *>,
-      int64_t>
-      loopVisits;
-
   auto loop = dyn_cast<LoopLikeOpInterface>(branch.getOperation());
   if (loop) {
     if (!loopTripCounts.contains(loop)) {
