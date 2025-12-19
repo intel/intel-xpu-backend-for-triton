@@ -64,12 +64,25 @@ public:
   void runOnOperation() final {
     ModuleOp moduleOp = getOperation();
 
-    WalkResult res = moduleOp->walk<WalkOrder::PreOrder>([](Operation *op) {
+    WalkResult res = moduleOp->walk<WalkOrder::PreOrder>([=](Operation *op) {
       if (isa<tt::DescriptorGatherOp>(op) || isa<tt::DescriptorScatterOp>(op) ||
           isa<tt::DescriptorReduceOp>(op)) {
         op->emitRemark(
             "TritonIntelTensorDescToBlockPointer: Failed to rewrite");
         return WalkResult::interrupt();
+      }
+      if (auto loadOp = dyn_cast_or_null<tt::DescriptorLoadOp>(op)) {
+        // Retrieve the padding option from the MakeTensorDescOp.
+        std::optional<tt::MakeTensorDescOp> makeTensorDescOp =
+            triton::intel::findDefiningMakeTensorPtrOp<tt::MakeTensorDescOp>(
+                loadOp.getDesc());
+        if (!makeTensorDescOp) {
+          op->emitRemark("TritonIntelTensorDescToBlockPointer: Failed to "
+                         "retrieve the padding option.");
+          return WalkResult::interrupt();
+        }
+
+        this->paddingInfo[loadOp] = makeTensorDescOp->getPadding();
       }
       return WalkResult::advance();
     });
@@ -274,9 +287,16 @@ private:
 
     constexpr bool isLoad = std::is_same_v<OpTy, tt::DescriptorLoadOp>;
     if constexpr (isLoad) {
+      // Default to PAD_ZERO as this is the expected padding behavior for
+      // descriptor loads. It should be specified in the tt.make_tensor_desc if
+      // it is retrieved.
+      triton::PaddingOption padding = triton::PaddingOption::PAD_ZERO;
+      if (paddingInfo.contains(op)) {
+        padding = paddingInfo[op];
+      }
       auto loadOp = builder.createOrFold<tt::LoadOp>(
           loc, ptr, boundaryCheck,
-          /*padding*/ std::nullopt, op.getCache(), op.getEvict(),
+          /*padding*/ padding, op.getCache(), op.getEvict(),
           /*volatile*/ false);
       if (blockIOAttr) {
         auto *loadOpInst = loadOp.getDefiningOp();
@@ -303,6 +323,7 @@ private:
 
 private:
   SmallPtrSet<Operation *, 8> cleanUp;
+  llvm::SmallDenseMap<Operation *, triton::PaddingOption, 8> paddingInfo;
 };
 
 } // namespace

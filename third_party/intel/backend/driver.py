@@ -214,7 +214,14 @@ class SpirvUtils:
         # we will need to rewrite the line in the general part of the code:
         # driver.active.utils.load_binary(self.name, self.kernel, self.metadata.shared, self.metadata.build_flags, device) ->
         # driver.active.utils.load_binary((self.name, self.kernel, self.metadata.shared, self.metadata.build_flags, device))
-        return self.shared_library.load_binary(args)
+        try:
+            return self.shared_library.load_binary(args)
+        except Exception as e:
+            if str(e).startswith("ZE_"):
+                from triton.runtime.errors import IntelGPUError
+                raise IntelGPUError("Error during Intel load_binary: " + str(e)) from e
+            else:
+                raise e
 
     if os.name != 'nt':
 
@@ -921,7 +928,7 @@ class XPUDriver(DriverBase):
                     "has_subgroup_matrix_multiply_accumulate"] = "cl_intel_subgroup_matrix_multiply_accumulate" in supported_extensions
                 dev_property[
                     "has_subgroup_matrix_multiply_accumulate_tensor_float32"] = "cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32" in supported_extensions
-                dev_property["has_subgroup_2d_block_io"] = "cl_intel_subgroup_2d_block_io" in supported_extensions
+                dev_property["has_2d_block_io"] = "cl_intel_subgroup_2d_block_io" in supported_extensions
                 dev_property["has_bfloat16_conversions"] = "cl_intel_bfloat16_conversions" in supported_extensions
             else:
                 check = self.utils.has_opencl_extension
@@ -929,7 +936,7 @@ class XPUDriver(DriverBase):
                     device, b"cl_intel_subgroup_matrix_multiply_accumulate")
                 dev_property["has_subgroup_matrix_multiply_accumulate_tensor_float32"] = check(
                     device, b"cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32")
-                dev_property["has_subgroup_2d_block_io"] = check(device, b"cl_intel_subgroup_2d_block_io")
+                dev_property["has_2d_block_io"] = check(device, b"cl_intel_subgroup_2d_block_io")
                 dev_property["has_bfloat16_conversions"] = check(device, b"cl_intel_bfloat16_conversions")
 
         def update_device_arch(dev_property):

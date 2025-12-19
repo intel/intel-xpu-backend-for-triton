@@ -335,13 +335,13 @@ def Subgroup2DBlockEncodingAttr : DistributedEncoding<"Subgroup2DBlockEncoding",
     - `warpsPerCTA` : the number of warps per block / subgroups per workgroup and their distribution
     - `order` : The order within the block, used to determine along which dimension to broadcast.
     - `kWidth` : Currently unused, but keeping because we will likely need it for layout conversions.
-    - `CTALayout` : Describes how blocks are distributed among work-groups/thread blocks.
+    - `CGALayout` : Describes how blocks are distributed among work-groups/thread blocks.
   }];
 
   let parameters = (
     ins
     ArrayRefParameter<"unsigned">:$warpsPerCTA,
-    "CTAEncodingAttr":$CTALayout,
+    "CGAEncodingAttr":$CGALayout,
     ArrayRefParameter<"unsigned">:$instrShape,
     "unsigned":$numBlocks,
     ArrayRefParameter<"unsigned">:$order,

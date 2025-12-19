@@ -86,7 +86,7 @@ struct IntelGPUPipelinePass
   void runOnOperation() override {
     ModuleOp m = getOperation();
 
-    if (!m->hasAttr(ttgi::TritonIntelGPUDialect::getSupportSG2DBlockAttrName()))
+    if (!m->hasAttr(ttgi::TritonIntelGPUDialect::getSupport2DBlockIOAttrName()))
       return;
 
     if (numStages <= 1)

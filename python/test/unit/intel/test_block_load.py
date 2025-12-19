@@ -18,7 +18,7 @@ from triton._internal_testing import is_xpu
 @pytest.mark.parametrize("dtype_str", ["float32", "float16", "int8"])
 @pytest.mark.parametrize("transpose", [True, False])
 @pytest.mark.skipif(not is_xpu(), reason="Block load tests are specific to the XPU backend")
-@pytest.mark.xfail(not torch.xpu.get_device_capability()['has_subgroup_2d_block_io'],
+@pytest.mark.xfail(not triton.runtime.driver.active.get_current_target().arch['has_2d_block_io'],
                    reason="Block loads not supported on this architecture", run=False)
 def test_block_load_dpas_layout(M, N, dtype_str, transpose, device, tmp_path: pathlib.Path):
     # modify the layouts to ensure the correct OCL/SPIRV intrinsic is called for each datatype
@@ -43,7 +43,7 @@ def test_block_load_dpas_layout(M, N, dtype_str, transpose, device, tmp_path: pa
     ty = {"float32": "f32", "float16": "f16", "int8": "i8"}[dtype_str]
 
     ir = layouts + f"""
-    module attributes {{ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, ttig.support_dpas, ttig.support_sg_2d_block, ttig.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = {num_warps} : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32}} {{
+    module attributes {{ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, ttig.support_dpas, ttig.support_2d_block_io, ttig.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = {num_warps} : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32}} {{
         tt.func public @block_load_dpas_layout(%arg0: !tt.ptr<{ty}> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<{ty}> {{tt.divisibility = 16 : i32}}, %arg2: !tt.ptr<{ty}> {{tt.divisibility = 16: i32}}, %arg3: !tt.ptr<{ty}> {{tt.divisibility = 16: i32}}) attributes {{noinline = false}} {{
             %0 = tt.get_program_id x : i32
             %M_i64 = arith.constant {M} : i64
@@ -95,7 +95,7 @@ def test_block_load_dpas_layout(M, N, dtype_str, transpose, device, tmp_path: pa
 @pytest.mark.parametrize("TRANSPOSE_B", [True, False])
 @pytest.mark.skipif(not is_xpu(), reason="Block load tests are specific to the XPU backend")
 @pytest.mark.xfail(
-    not (torch.xpu.get_device_capability()['has_subgroup_2d_block_io']
+    not (triton.runtime.driver.active.get_current_target().arch['has_2d_block_io']
          and torch.xpu.get_device_capability()['has_subgroup_matrix_multiply_accumulate']),
     reason="Block loads and/or DPAS not supported on this architecture", run=False)
 def test_block_load_dot_product(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M, TRANSPOSE_A, TRANSPOSE_B,
@@ -228,7 +228,7 @@ def test_block_load_dot_product(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_
                           ])
 @pytest.mark.skipif(not is_xpu(), reason="Block load tests are specific to the XPU backend")
 @pytest.mark.xfail(
-    not (torch.xpu.get_device_capability()['has_subgroup_2d_block_io']
+    not (triton.runtime.driver.active.get_current_target().arch['has_2d_block_io']
          and torch.xpu.get_device_capability()['has_subgroup_matrix_multiply_accumulate']),
     reason="Block loads and/or DPAS not supported on this architecture", run=False)
 def test_block_load_asserts(elem_size, width, height, pitch, x, monkeypatch, tmp_path: pathlib.Path):
