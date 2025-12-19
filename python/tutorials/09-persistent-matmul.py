@@ -805,3 +805,7 @@ if __name__ == "__main__":
         if is_cuda():
             proton.finalize()
             show_profile(args.prec, "matmul")
+
+        # FIXME: https://github.com/intel/intel-xpu-backend-for-triton/issues/5605
+        if is_xpu():
+            torch.xpu.synchronize()
