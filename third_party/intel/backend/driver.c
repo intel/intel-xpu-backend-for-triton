@@ -37,7 +37,8 @@ static inline T checkSyclErrors(const std::tuple<T, ze_result_t> tuple) {
 }
 
 // Raises a Python exception and returns false if code is not CUDA_SUCCESS.
-static bool zeAssert(ze_result_t code, ze_driver_handle_t ze_driver, const char *file, int line) {
+static bool zeAssert(ze_result_t code, ze_driver_handle_t ze_driver,
+                     const char *file, int line) {
   if (code == ZE_RESULT_SUCCESS)
     return true;
 
@@ -64,7 +65,6 @@ static void zeConstructError(const char *file, int line, const char *message) {
   PyErr_SetString(PyExc_RuntimeError, err);
   PyGILState_Release(gil_state);
 }
-
 
 extern "C" EXPORT_FUNC PyObject *get_device_properties(int device_id) {
   if (device_id >= g_sycl_l0_device_list.size()) {
@@ -307,15 +307,20 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
           // clean up the unused module and kernel.
           auto error_no = zeKernelDestroy(l0_kernel_dgrf);
           if (error_no != ZE_RESULT_SUCCESS) {
-            PyErr_WarnEx(PyExc_RuntimeWarning, "[Ignoring] Intel - Error during destroy unused L0 kernel", 1);
+            PyErr_WarnEx(
+                PyExc_RuntimeWarning,
+                "[Ignoring] Intel - Error during destroy unused L0 kernel", 1);
           }
           error_no = zeModuleDestroy(l0_module_dgrf);
           if (error_no != ZE_RESULT_SUCCESS) {
-            PyErr_WarnEx(PyExc_RuntimeWarning, "[Ignoring] Intel - Error during destroy unused L0 module", 1);
+            PyErr_WarnEx(
+                PyExc_RuntimeWarning,
+                "[Ignoring] Intel - Error during destroy unused L0 module", 1);
           }
         } catch (const std::exception &e) {
           char buf[1024];
-          strcat(buf, "[Ignoring] Intel - Error during Intel loadBinary with large registers: ");
+          strcat(buf, "[Ignoring] Intel - Error during Intel loadBinary with "
+                      "large registers: ");
           strcat(buf, e.what());
           PyErr_WarnEx(PyExc_RuntimeWarning, buf, 1);
           // construct previous working version
@@ -357,9 +362,9 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
 
 extern "C" EXPORT_FUNC PyObject *init_devices(PyObject *cap) {
   void *queue = NULL;
-  if (!(queue = PyLong_AsVoidPtr(cap)))
-  {
-    zeConstructError(__FILE__, __LINE__, "Failed to convert PyObject to void* for queue");
+  if (!(queue = PyLong_AsVoidPtr(cap))) {
+    zeConstructError(__FILE__, __LINE__,
+                     "Failed to convert PyObject to void* for queue");
     return NULL;
   }
   sycl::queue *sycl_queue = static_cast<sycl::queue *>(queue);
@@ -391,9 +396,9 @@ extern "C" EXPORT_FUNC PyObject *init_devices(PyObject *cap) {
 
 extern "C" EXPORT_FUNC PyObject *wait_on_sycl_queue(PyObject *cap) {
   void *queue = NULL;
-  if (!(queue = PyLong_AsVoidPtr(cap)))
-  {
-    zeConstructError(__FILE__, __LINE__, "Failed to convert PyObject to void* for queue");
+  if (!(queue = PyLong_AsVoidPtr(cap))) {
+    zeConstructError(__FILE__, __LINE__,
+                     "Failed to convert PyObject to void* for queue");
     return NULL;
   }
   sycl::queue *sycl_queue = static_cast<sycl::queue *>(queue);

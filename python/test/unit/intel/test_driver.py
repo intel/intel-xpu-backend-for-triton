@@ -41,6 +41,7 @@ def test_get_properties_error(device, tmp_path: pathlib.Path):
     except RuntimeError as e:
         assert "Device is not found" in str(e)
 
+
 def test_load_binary_error_device_error(device, tmp_path: pathlib.Path):
     ir = """
     module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32, ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, ttig.support_dpas, ttig.support_sg_2d_block, ttig.target_arch = "spir64"} {
@@ -59,10 +60,13 @@ def test_load_binary_error_device_error(device, tmp_path: pathlib.Path):
     device_count, = driver.active.utils.device_count
 
     try:
-        _ = driver.active.utils.load_binary(kernel.name, kernel.kernel, kernel.metadata.shared, kernel.metadata.build_flags, not kernel.metadata.generate_native_code, device_count)
+        _ = driver.active.utils.load_binary(kernel.name, kernel.kernel, kernel.metadata.shared,
+                                            kernel.metadata.build_flags, not kernel.metadata.generate_native_code,
+                                            device_count)
         assert False, "Expected an exception when loading binary on an invalid device index"
     except RuntimeError as e:
         assert "Device is not found" in str(e)
+
 
 def test_load_binary_error_kernel_error(device, tmp_path: pathlib.Path):
     ir = """
@@ -81,13 +85,16 @@ def test_load_binary_error_kernel_error(device, tmp_path: pathlib.Path):
     device = driver.active.get_current_device()
 
     try:
-        _ = driver.active.utils.load_binary("invalid name", kernel.kernel, kernel.metadata.shared, kernel.metadata.build_flags, not kernel.metadata.generate_native_code, device)
+        _ = driver.active.utils.load_binary("invalid name", kernel.kernel, kernel.metadata.shared,
+                                            kernel.metadata.build_flags, not kernel.metadata.generate_native_code,
+                                            device)
     except RuntimeError as e:
         assert "ZE_RESULT_ERROR_INVALID_KERNEL_NAME" in str(e)
 
+
 def test_wait_on_sycl_queue_error(device):
     from triton.runtime.driver import driver
-    
+
     # Pass an invalid (non-pointer) value to trigger conversion error
     try:
         driver.active.utils.wait_on_sycl_queue("invalid_queue_pointer")
@@ -95,10 +102,11 @@ def test_wait_on_sycl_queue_error(device):
     except RuntimeError as e:
         assert "Failed to convert PyObject to void* for queue" in str(e)
 
+
 def test_has_opencl_extension_error(device):
     from triton.runtime.driver import driver
     device_count, = driver.active.utils.device_count
-    
+
     # Pass an invalid device_id (out of range) to trigger error
     try:
         driver.active.utils.has_opencl_extension(device_count, b"cl_khr_fp16")
