@@ -807,7 +807,7 @@ bool LayoutPropagation::rewriteTensorPtrStoreOp(StoreOp storeOp) {
 
   // Locate the operation that created the block pointer.
   std::optional<triton::MakeTensorPtrOp> defOp =
-      triton::intel::findDefiningMakeTensorPtrOp(ptr);
+      triton::intel::findDefiningMakeTensorPtrOp<triton::MakeTensorPtrOp>(ptr);
   if (!defOp)
     return false;
 

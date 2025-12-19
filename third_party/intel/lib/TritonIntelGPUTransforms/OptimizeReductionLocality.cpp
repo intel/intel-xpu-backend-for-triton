@@ -349,7 +349,7 @@ private:
                                            1,
                                            dpasEncoding.getWarpsPerCTA()[0]};
     constexpr std::array<unsigned, rank> order{0, 1, 2, 3, 4, 5, 6};
-    CTAEncodingAttr ctaLayout = CTAEncodingAttr::getDefault(getContext(), rank);
+    CGAEncodingAttr ctaLayout = CGAEncodingAttr::getDefault(getContext(), rank);
 
     auto encoding = rewriter.getAttr<BlockedEncodingAttr>(
         sizePerThread, threadsPerWarp, warpsPerCTA, order, ctaLayout);
@@ -407,7 +407,7 @@ private:
                                            dpasEncoding.getWarpsPerCTA()[1],
                                            dpasEncoding.getWarpsPerCTA()[0]};
     constexpr std::array<unsigned, rank> order{0, 1, 2, 3, 4};
-    CTAEncodingAttr ctaLayout = CTAEncodingAttr::getDefault(getContext(), rank);
+    CGAEncodingAttr ctaLayout = CGAEncodingAttr::getDefault(getContext(), rank);
 
     auto encoding = rewriter.getAttr<BlockedEncodingAttr>(
         sizePerThread, threadsPerWarp, warpsPerCTA, order, ctaLayout);
@@ -440,7 +440,7 @@ private:
                                            dpasEncoding.getWarpsPerCTA()[1],
                                            dpasEncoding.getWarpsPerCTA()[0]};
     constexpr std::array<unsigned, rank> order{0, 1, 2, 3};
-    CTAEncodingAttr ctaLayout = CTAEncodingAttr::getDefault(getContext(), rank);
+    CGAEncodingAttr ctaLayout = CGAEncodingAttr::getDefault(getContext(), rank);
 
     auto encoding = rewriter.getAttr<BlockedEncodingAttr>(
         sizePerThread, threadsPerWarp, warpsPerCTA, order, ctaLayout);
@@ -483,7 +483,7 @@ private:
     std::array<unsigned, rank> warpsPerCTA{dpasEncoding.getWarpsPerCTA()[1],
                                            dpasEncoding.getWarpsPerCTA()[0]};
     constexpr std::array<unsigned, rank> order{0, 1};
-    CTAEncodingAttr ctaLayout = CTAEncodingAttr::getDefault(getContext(), rank);
+    CGAEncodingAttr ctaLayout = CGAEncodingAttr::getDefault(getContext(), rank);
 
     auto parentEncoding = rewriter.getAttr<BlockedEncodingAttr>(
         sizePerThread, threadsPerWarp, warpsPerCTA, order, ctaLayout);
