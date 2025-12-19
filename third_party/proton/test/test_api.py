@@ -252,6 +252,8 @@ def test_scope_metrics(tmp_path: pathlib.Path):
 
 
 def test_scope_metrics_invalid(tmp_path: pathlib.Path):
+    if is_xpu():
+        pytest.skip("FIXME: #5731")
     temp_file = tmp_path / "test_scope_metrics.hatchet"
     proton.start(str(temp_file.with_suffix("")))
 
