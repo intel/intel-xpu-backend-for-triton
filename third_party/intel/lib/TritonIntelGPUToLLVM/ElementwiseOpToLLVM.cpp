@@ -1117,7 +1117,7 @@ struct AbsFOpConversion
     Type origTy = elemTy;
     if (!mlir::LLVM::intel::hasModuleAttr(
             op, triton::gpu::intel::TritonIntelGPUDialect::
-                    getSupportBfloat16ArithmeticAttrName()) &&
+                    getSupportBFloat16ArithmeticAttrName()) &&
         llvm::isa<BFloat16Type>(origTy)) {
       v = b.bitcast(v, i16_ty);
       elemTy = i16_ty;

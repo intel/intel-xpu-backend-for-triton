@@ -45,7 +45,7 @@ struct TritonAnnotateModule
 
     if (supportBF16Conversion)
       mod->setAttr(
-          ttgi::TritonIntelGPUDialect::getSupportBF16ConversionAttrName(),
+          ttgi::TritonIntelGPUDialect::getSupportBFloat16ConversionAttrName(),
           builder.getUnitAttr());
 
     if (supportF4Conversion)
@@ -68,7 +68,7 @@ struct TritonAnnotateModule
 
     if (supportBfloat16Arithmetic)
       mod->setAttr(
-          ttgi::TritonIntelGPUDialect::getSupportBfloat16ArithmeticAttrName(),
+          ttgi::TritonIntelGPUDialect::getSupportBFloat16ArithmeticAttrName(),
           builder.getUnitAttr());
 
     setThreadsPerWarp(mod);
