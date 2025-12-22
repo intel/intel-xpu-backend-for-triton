@@ -554,6 +554,14 @@ static inline void gpuAssert(ze_result_t code, const char *file, int line)
 
 #define ZE_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
 
+// Structure to hold L0 kernel bundle for direct L0 API usage
+struct L0KernelBundle {{
+  ze_module_handle_t module;
+  ze_kernel_handle_t kernel;
+  ze_context_handle_t context;
+  ze_device_handle_t device;
+}};
+
 typedef struct _DevicePtrInfo {{
   void* dev_ptr;
   bool valid;
@@ -618,73 +626,108 @@ static inline DevicePtrInfo getPointer(PyObject *obj, int idx, const sycl::queue
   return ptr_info;
 }}
 
-// start sycl
-template <class T>
-static inline void set_scalar_arg(sycl::handler &cgh, int index, const void *value) {{
-  cgh.set_arg(index, *static_cast<const T *>(value));
-}}
+// start L0 API
+static void l0_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
+                              int num_warps, int threads_per_warp, int shared_memory,
+                              sycl::queue& stream, L0KernelBundle* bundle,
+                              void* global_scratch, void* profile_scratch{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
 
-static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
-                               int num_warps, int threads_per_warp, int shared_memory,
-                               sycl::queue& stream, sycl::kernel& kernel_ptr,
-                               void* global_scratch, void* profile_scratch{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
-
-  std::string kernel_name = kernel_ptr.get_info<sycl::info::kernel::function_name>();
-  { 'RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {});' if COMPILATION_HELPER.inject_pytorch_dep else "" }
+  { 'RECORD_FUNCTION("XPU Triton kernel (L0)", {});' if COMPILATION_HELPER.inject_pytorch_dep else "" }
 
   {params_decl};
   uint32_t num_params = {num_params};
-  uint32_t expected_num_params = kernel_ptr.get_info<sycl::info::kernel::num_args>();
-  size_t global_range_x = gridX*threads_per_warp*num_warps;
-  size_t global_range_y = gridY;
-  size_t global_range_z = gridZ;
-  size_t local_range_x = num_warps*threads_per_warp;
+  
+  // Calculate launch dimensions
+  size_t local_range_x = num_warps * threads_per_warp;
   size_t local_range_y = 1;
   size_t local_range_z = 1;
-  sycl::range<3> global_range(global_range_z, global_range_y, global_range_x);
-  sycl::range<3> local_range(local_range_z, local_range_y, local_range_x);
-  sycl::nd_range<3> parallel_work_size(global_range, local_range);
-  if (shared_memory) {{
-    expected_num_params -= 1;
-  }}
-
+  
   static bool launchDebug = getBoolEnv("TRITON_INTEL_LAUNCH_DEBUG");
   if (launchDebug){{
-    std::cout << "kernel info name:" << kernel_name << " @" << &kernel_ptr << std::endl;
-    std::cout << "kernel info attributes:" << kernel_ptr.get_info<sycl::info::kernel::attributes>() << std::endl;
-    std::cout << "kernel info reference_count:" << kernel_ptr.get_info<sycl::info::kernel::reference_count>() << std::endl;
-    std::cout << "kernel info num_args:" << kernel_ptr.get_info<sycl::info::kernel::num_args>() << std::endl;
-
-    std::cout << "launch num param:" << num_params << std::endl;
-    std::cout << "  gridx: " << gridX << std::endl;
-    std::cout << "  gridY: " << gridY << std::endl;
-    std::cout << "  gridZ: " << gridZ << std::endl;
-    std::cout << "  num_warps: " << num_warps << std::endl;
-    std::cout << "  threads_per_warp: " << threads_per_warp << std::endl;
-    std::cout << "  global range:[" << "x:"<< global_range_x << ", y:" << global_range_y << ", z:" << global_range_z << "]" << std::endl;
-    std::cout << "  local range:[" << "x:"<< local_range_x << ", y:" << local_range_y << ", z:" << local_range_z << "]" << std::endl;
-    std::cout << "  shared_memory: " << shared_memory << std::endl;
-
-    // param
-    {" ".join(f'std::cout << "  param {idx}:" << *({ty_to_cpp(item)}*)params[{idx}] << std::endl;' for idx, item in enumerate([signature[i] for i in signature if signature[i] != "constexpr"]))}
+    std::cout << "[L0 Launch] Grid: [" << gridX << ", " << gridY << ", " << gridZ << "]" << std::endl;
+    std::cout << "[L0 Launch] Local: [" << local_range_x << ", " << local_range_y << ", " << local_range_z << "]" << std::endl;
+    std::cout << "[L0 Launch] num_warps: " << num_warps << std::endl;
+    std::cout << "[L0 Launch] threads_per_warp: " << threads_per_warp << std::endl;
+    std::cout << "[L0 Launch] shared_memory: " << shared_memory << std::endl;
+    std::cout << "[L0 Launch] num_params: " << num_params << std::endl;
   }}
-  assert(num_params == expected_num_params && "number of kernel param not matched");
-  // Submit the imported kernel.
-  auto cgf = [&](sycl::handler &cgh) {{
-    {" ".join(f'set_scalar_arg<{ty_to_cpp(item)}>(cgh, {idx}, params[{idx}]);' for idx, item in enumerate([signature[i] for i in signature if signature[i] != "constexpr"]))}
-    {" ".join(f'set_scalar_arg<{ty_to_cpp(item)}>(cgh, {idx}, params[{idx}]);' for idx, item in enumerate(["*global_scratch", "*profile_scratch"], start=num_params-2))}
-    if (shared_memory) {{
-      using share_mem_t = sycl::local_accessor<int8_t, 1>;
-      share_mem_t local_buffer = share_mem_t(shared_memory, cgh);
-      cgh.set_arg(num_params, local_buffer);
-      cgh.parallel_for(parallel_work_size, kernel_ptr);
-    }} else {{
-      cgh.parallel_for(parallel_work_size, kernel_ptr);
+
+  ze_kernel_handle_t kernel = bundle->kernel;
+  ze_context_handle_t context = bundle->context;
+  ze_device_handle_t device = bundle->device;
+  
+  // Set group size
+  ZE_CHECK(zeKernelSetGroupSize(kernel, local_range_x, local_range_y, local_range_z));
+  
+  // Set kernel arguments
+  {newline.join(f'ZE_CHECK(zeKernelSetArgumentValue(kernel, {idx}, sizeof({ty_to_cpp(item)}), params[{idx}]));' for idx, item in enumerate([signature[i] for i in signature if signature[i] != "constexpr"]))}
+  {newline.join(f'ZE_CHECK(zeKernelSetArgumentValue(kernel, {idx}, sizeof({ty_to_cpp(item)}), params[{idx}]));' for idx, item in enumerate(["*global_scratch", "*profile_scratch"], start=num_params-2))}
+  
+  // Set shared memory argument if needed
+  if (shared_memory) {{
+    ZE_CHECK(zeKernelSetArgumentValue(kernel, num_params, shared_memory, nullptr));
+  }}
+  
+  // Get L0 queue or command list from SYCL queue - handle variant
+  auto queue_or_list = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(stream);
+  ze_command_queue_handle_t l0_queue = nullptr;
+  ze_command_list_handle_t native_list = nullptr;
+  bool use_queue = false;
+  
+  // Try to extract from variant - could be either queue or command list
+  try {{
+    l0_queue = std::get<ze_command_queue_handle_t>(queue_or_list);
+    use_queue = true;
+  }} catch (const std::bad_variant_access&) {{
+    try {{
+      native_list = std::get<ze_command_list_handle_t>(queue_or_list);
+      use_queue = false;
+    }} catch (const std::bad_variant_access&) {{
+      PyErr_SetString(PyExc_RuntimeError, "Failed to get L0 queue or command list from SYCL queue");
+      return;
     }}
-  }};
-  auto event = stream.submit(cgf);
+  }}
+  
+  stream.wait();
+  
+  if (use_queue) {{
+    // Path 1: Using command queue - create our own command list
+    ze_command_list_desc_t cmdListDesc = {{}};
+    cmdListDesc.stype = ZE_STRUCTURE_TYPE_COMMAND_LIST_DESC;
+    cmdListDesc.commandQueueGroupOrdinal = 0;
+    
+    ze_command_list_handle_t cmdList;
+    ZE_CHECK(zeCommandListCreate(context, device, &cmdListDesc, &cmdList));
+    
+    // Launch kernel
+    ze_group_count_t launchArgs = {{ gridX, gridY, gridZ }};
+    ZE_CHECK(zeCommandListAppendLaunchKernel(cmdList, kernel, &launchArgs, nullptr, 0, nullptr));
+    
+    // Close and execute
+    ZE_CHECK(zeCommandListClose(cmdList));
+    ZE_CHECK(zeCommandQueueExecuteCommandLists(l0_queue, 1, &cmdList, nullptr));
+    ZE_CHECK(zeCommandQueueSynchronize(l0_queue, UINT64_MAX));
+    
+    // Cleanup
+    ZE_CHECK(zeCommandListDestroy(cmdList));
+  }} else {{
+    // Path 2: Using in-order command list directly (SYCL in-order queue)
+    // Launch kernel directly on the native command list
+    ze_group_count_t launchArgs = {{ gridX, gridY, gridZ }};
+    ZE_CHECK(zeCommandListAppendLaunchKernel(native_list, kernel, &launchArgs, nullptr, 0, nullptr));
+    
+    stream.submit([&](sycl::handler& cgh) {{
+        cgh.ext_oneapi_barrier();
+    }});
+    
+    stream.wait();
+  }}
+  
+  if (launchDebug){{
+    std::cout << "[L0 Launch] Kernel execution completed" << std::endl;
+  }}
 }}
-// end sycl
+// end L0 API
 
 static uint16_t pack_fp16(double f) {{
     uint16_t result;
@@ -758,13 +801,13 @@ extern "C" EXPORT_FUNC PyObject* launch(PyObject* args) {{
   if(pStream == nullptr || py_kernel == nullptr) return NULL;
 
   sycl::queue stream = *(static_cast<sycl::queue*>(pStream));
-  sycl::kernel* kernel_ptr = reinterpret_cast<sycl::kernel*>(PyCapsule_GetPointer(py_kernel, "kernel"));
-  if(kernel_ptr == nullptr) return NULL;
-  sycl::kernel kernel = *kernel_ptr;
+  L0KernelBundle* l0_bundle = reinterpret_cast<L0KernelBundle*>(
+      PyCapsule_GetPointer(py_kernel, "l0_kernel_bundle"));
+  if(l0_bundle == nullptr) return NULL;
 
   {newline.join(ptr_decls)}
   {newline.join(float_storage_decls)}
-  sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp, shared_memory, stream, kernel, global_scratch, profile_scratch{',' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
+  l0_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp, shared_memory, stream, l0_bundle, global_scratch, profile_scratch{',' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
   if (PyErr_Occurred()) {{
     return NULL;
   }}

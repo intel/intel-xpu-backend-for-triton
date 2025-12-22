@@ -30,6 +30,14 @@ static std::vector<sycl::device> sycl_opencl_device_list;
 
 static bool has_opencl = false;
 
+// Structure to hold L0 kernel bundle for direct L0 API usage
+struct L0KernelBundle {
+  ze_module_handle_t module;
+  ze_kernel_handle_t kernel;
+  ze_context_handle_t context;
+  ze_device_handle_t device;
+};
+
 template <typename T>
 static inline T checkSyclErrors(const std::tuple<T, ze_result_t> tuple) {
   const auto code = std::get<1>(tuple);
@@ -103,6 +111,20 @@ void freeKernelBundle(PyObject *p) {
   delete reinterpret_cast<
       sycl::kernel_bundle<sycl::bundle_state::executable> *>(
       PyCapsule_GetPointer(p, "kernel_bundle"));
+}
+
+void freeL0KernelBundle(PyObject *p) {
+  L0KernelBundle *bundle = reinterpret_cast<L0KernelBundle*>(
+      PyCapsule_GetPointer(p, "l0_kernel_bundle"));
+  if (bundle) {
+    if (bundle->kernel) {
+      zeKernelDestroy(bundle->kernel);
+    }
+    if (bundle->module) {
+      zeModuleDestroy(bundle->module);
+    }
+    delete bundle;
+  }
 }
 
 using Spills = int32_t;
@@ -306,23 +328,19 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
     }
 
     auto n_regs = build_flags.n_regs();
-
-    auto mod = new sycl::kernel_bundle<sycl::bundle_state::executable>(
-        sycl::make_kernel_bundle<sycl::backend::ext_oneapi_level_zero,
-                                 sycl::bundle_state::executable>(
-            {l0_module, sycl::ext::oneapi::level_zero::ownership::transfer},
-            ctx));
-    sycl::kernel *fun = new sycl::kernel(
-        sycl::make_kernel<sycl::backend::ext_oneapi_level_zero>(
-            {*mod, l0_kernel,
-             sycl::ext::oneapi::level_zero::ownership::transfer},
-            ctx));
-    auto kernel_py =
-        PyCapsule_New(reinterpret_cast<void *>(fun), "kernel", freeKernel);
-    auto kernel_bundle_py = PyCapsule_New(reinterpret_cast<void *>(mod),
-                                          "kernel_bundle", freeKernelBundle);
+    
+    L0KernelBundle *bundle = new L0KernelBundle();
+    bundle->module = l0_module;
+    bundle->kernel = l0_kernel;
+    bundle->context = l0_context;
+    bundle->device = l0_device;
+    
+    auto l0_kernel_bundle_py = PyCapsule_New(
+        reinterpret_cast<void *>(bundle), "l0_kernel_bundle", freeL0KernelBundle);
+    
     last_build_flag = build_flags;
-    return Py_BuildValue("(OOiii)", kernel_bundle_py, kernel_py, n_regs,
+
+    return Py_BuildValue("(OOiii)", l0_kernel_bundle_py, l0_kernel_bundle_py, n_regs,
                          n_spills, n_max_threads);
 
   } catch (const std::exception &e) {
