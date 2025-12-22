@@ -35,11 +35,9 @@ def test_get_properties_error(device, tmp_path: pathlib.Path):
     from triton.runtime.driver import driver
     device_count, = driver.active.utils.device_count
 
-    try:
+    with pytest.raises(RuntimeError, match="Device is not found"):
+        # Expected an exception when querying an invalid device index
         driver.active.utils.get_device_properties(device_count)
-        assert False, "Expected an exception when querying an invalid device index"
-    except RuntimeError as e:
-        assert "Device is not found" in str(e)
 
 
 def test_load_binary_error_device_error(device, tmp_path: pathlib.Path):
