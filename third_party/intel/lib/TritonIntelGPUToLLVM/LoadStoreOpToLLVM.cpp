@@ -11,6 +11,8 @@
 #include "TargetInfo.h"
 #include "Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include <cstdlib>
+#include <iostream>
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
@@ -2655,6 +2657,7 @@ struct StoreOpToBlockIOConversion
     if (!check2DBlockAddressPayloadRestriction(packedElemSizeInBits, tileWidth))
       return failure();
 
+    unsigned originalVBlocks = vBlocks;
     // Limit vBlock to 1
     vBlocks = 1;
 
@@ -2781,10 +2784,35 @@ struct StoreOpToBlockIOConversion
                             {{kRegister, llEncoding->getInDimSize(kRegister)}},
                             /*requireSurjective=*/true);
 
+    unsigned numStoresTotal = numElems / numElemsPerStore;
+    unsigned redundancyFactor =
+        (originalVBlocks > 1) ? (originalVBlocks * 2) : 1;
+    unsigned minStoresNeeded =
+        (numStoresTotal + redundancyFactor - 1) / redundancyFactor;
+
+    int testOverride = -1;
+    if (const char *envVal = std::getenv("MDZIADO_TEST_TRITON")) {
+      testOverride = std::atoi(envVal);
+    }
+    unsigned maxStoresToExecute =
+        (testOverride != -1) ? testOverride : minStoresNeeded;
+
+    unsigned storeIdx = 0;
+
+    std::cout << "Store redundancy optimization: executing "
+              << maxStoresToExecute << " out of " << numStoresTotal
+              << " stores (originalVBlocks=" << originalVBlocks
+              << ", vBlocks=" << vBlocks
+              << ", redundancyFactory=" << redundancyFactor << ")" << std::endl;
+
     // Right now only support to stack the values into a vector in sequential
     // order.
     for (size_t valIdx = 0; valIdx < numElems; valIdx += numElemsPerStore) {
       unsigned registerIdx = regMapping.apply({{kRegister, valIdx}})[0].second;
+
+      if (storeIdx >= maxStoresToExecute) {
+        break;
+      }
 
       // Need to apply the linear layout to get the offsets to the base of
       // the block pointer.
@@ -2873,6 +2901,7 @@ struct StoreOpToBlockIOConversion
       if (store2DComposeType != store2DGenXType)
         storeVal = b.bitcast(storeVal, store2DGenXType);
 
+      storeIdx++;
       auto newOp = TritonGEN::Matrix2DBlockStoreOp::create(
           rewriter, loc, addrElem, adjustedBaseWidth, adjustedBaseHeight, pitch,
           // offsetX was in terms of original elements. The 2d block io requires
