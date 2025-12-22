@@ -57,13 +57,11 @@ def test_load_binary_error_device_error(device, tmp_path: pathlib.Path):
 
     device_count, = driver.active.utils.device_count
 
-    try:
+    with pytest.raises(RuntimeError, match="Device is not found"):
+        # Expected an exception when loading binary on an invalid device index
         _ = driver.active.utils.load_binary(kernel.name, kernel.kernel, kernel.metadata.shared,
                                             kernel.metadata.build_flags, not kernel.metadata.generate_native_code,
                                             device_count)
-        assert False, "Expected an exception when loading binary on an invalid device index"
-    except RuntimeError as e:
-        assert "Device is not found" in str(e)
 
 
 def test_load_binary_error_kernel_error(device, tmp_path: pathlib.Path):
