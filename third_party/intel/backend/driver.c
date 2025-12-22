@@ -39,7 +39,7 @@ static inline T checkSyclErrors(const std::tuple<T, ze_result_t> tuple) {
   return std::get<0>(tuple);
 }
 
-// Raises a Python exception and returns false if code is not CUDA_SUCCESS.
+// Raises a Python exception and returns false if code is not ZE_RESULT_SUCCESS.
 static bool zeAssert(ze_result_t code, ze_driver_handle_t ze_driver,
                      const char *file, int line) {
   if (code == ZE_RESULT_SUCCESS)
