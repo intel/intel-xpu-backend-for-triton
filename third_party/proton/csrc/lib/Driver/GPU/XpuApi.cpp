@@ -24,8 +24,9 @@ Device getDevice(uint64_t index) {
   HMODULE handle = LoadLibrary(PROTON_UTILS.data());
   if (!handle) {
     long err = GetLastError();
-    throw std::runtime_error(std::string("Failed to load library code:") +
-                             std::to_string(err));
+    throw std::runtime_error(
+        std::string("Failed to load 'PROTON_UTILS' library:") +
+        std::to_string(err));
   }
 
   GetLastError();
@@ -34,8 +35,9 @@ Device getDevice(uint64_t index) {
   long err = GetLastError();
   if (err) {
     FreeLibrary(handle);
-    throw std::runtime_error(std::string("Failed to load function code:") +
-                             std::to_string(err));
+    throw std::runtime_error(
+        std::string("Failed to load 'getDeviceProperties' function") +
+        std::to_string(err));
   }
 
   uint32_t clockRate = 0;
@@ -55,8 +57,9 @@ Device getDevice(uint64_t index) {
   void *handle = dlopen(PROTON_UTILS.data(), RTLD_LAZY);
   if (!handle) {
     const char *dlopen_error = dlerror();
-    throw std::runtime_error(std::string("Failed to load library: ") +
-                             std::string(dlopen_error));
+    throw std::runtime_error(
+        std::string("Failed to load 'PROTON_UTILS' library: ") +
+        std::string(dlopen_error));
   }
 
   dlerror();
@@ -65,8 +68,9 @@ Device getDevice(uint64_t index) {
   const char *dlsym_error = dlerror();
   if (dlsym_error) {
     dlclose(handle);
-    throw std::runtime_error(std::string("Failed to load function: ") +
-                             std::string(dlsym_error));
+    throw std::runtime_error(
+        std::string("Failed to load 'getDeviceProperties' function: ") +
+        std::string(dlsym_error));
   }
 
   uint32_t clockRate = 0;
