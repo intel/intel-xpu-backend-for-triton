@@ -99,8 +99,5 @@ def test_has_opencl_extension_error(device):
     device_count, = driver.active.utils.device_count
 
     # Pass an invalid device_id (out of range) to trigger error
-    try:
+    with pytest.raises(RuntimeError, match="Device is not found"):
         driver.active.utils.has_opencl_extension(device_count, b"cl_khr_fp16")
-        assert False, "Expected an exception when querying an invalid device index"
-    except RuntimeError as e:
-        assert "Device is not found" in str(e)
