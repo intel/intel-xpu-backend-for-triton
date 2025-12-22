@@ -463,7 +463,7 @@ extern "C" EXPORT_FUNC PyObject *has_opencl_extension(int device_id,
 
   if (device_id >= g_sycl_l0_device_list.size()) {
     zeConstructError(__FILE__, __LINE__, "Device is not found");
-    Py_RETURN_FALSE;
+    return NULL;
   }
 
   const sycl::device &device = g_sycl_l0_device_list[device_id].first;
