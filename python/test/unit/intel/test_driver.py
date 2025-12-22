@@ -5,6 +5,7 @@ import triton
 import triton.language as tl
 
 import pathlib
+import pytest
 
 
 def test_auto_grf(device, monkeypatch, capfd):
