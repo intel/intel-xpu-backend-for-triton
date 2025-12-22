@@ -321,7 +321,7 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
                 "[Ignoring] Intel - Error during destroy unused L0 module", 1);
           }
         } catch (const std::exception &e) {
-          char buf[1024];
+          char buf[1024] = {0};
           strcat(buf, "[Ignoring] Intel - Error during Intel loadBinary with "
                       "large registers: ");
           strcat(buf, e.what());
