@@ -27,6 +27,7 @@ def test_mxfp4_scale_roundtrip(shape):
     assert (res == x).all()
 
 
+@pytest.mark.xfail(condition=not is_cuda(), reason="Only supported on CUDA", run=False)
 @pytest.mark.parametrize("shape", [(2, 256, 192), (1, 128, 64)])
 def test_act_scale_roundtrip_batched(shape):
     x = torch.randn(shape, device="cuda", dtype=torch.float32)
@@ -35,6 +36,7 @@ def test_act_scale_roundtrip_batched(shape):
     torch.testing.assert_close(res, x)
 
 
+@pytest.mark.xfail(condition=not is_cuda(), reason="Only supported on CUDA", run=False)
 @pytest.mark.parametrize(
     "slice_sizes, m, k, align_m",
     [
