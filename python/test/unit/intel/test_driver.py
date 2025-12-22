@@ -7,6 +7,8 @@ import triton.language as tl
 import pathlib
 import pytest
 
+from triton.runtime.driver import driver
+
 
 def test_auto_grf(device, monkeypatch, capfd):
     monkeypatch.setenv("TRITON_DEBUG", "1")
@@ -33,7 +35,6 @@ def test_auto_grf(device, monkeypatch, capfd):
 
 
 def test_get_properties_error(device):
-    from triton.runtime.driver import driver
     device_count, = driver.active.utils.device_count
 
     with pytest.raises(RuntimeError, match="Device is not found"):
@@ -53,8 +54,6 @@ def test_load_binary_error_device_error(device, tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_regression_load_binary_error.ttgir"
     temp_file.write_text(ir)
     kernel = triton.compile(str(temp_file))
-
-    from triton.runtime.driver import driver
 
     device_count, = driver.active.utils.device_count
 
@@ -78,7 +77,6 @@ def test_load_binary_error_kernel_error(device, tmp_path: pathlib.Path):
     temp_file.write_text(ir)
     kernel = triton.compile(str(temp_file))
 
-    from triton.runtime.driver import driver
     device = driver.active.get_current_device()
 
     with pytest.raises(RuntimeError, match=r".*ZE_RESULT_ERROR_INVALID_KERNEL_NAME.*"):
@@ -88,15 +86,12 @@ def test_load_binary_error_kernel_error(device, tmp_path: pathlib.Path):
 
 
 def test_wait_on_sycl_queue_error(device):
-    from triton.runtime.driver import driver
-
     # Pass an invalid (non-pointer) value to trigger conversion error
     with pytest.raises(RuntimeError, match=r"Failed to convert PyObject to void\* for queue.*"):
         driver.active.utils.wait_on_sycl_queue("invalid_queue_pointer")
 
 
 def test_has_opencl_extension_error(device):
-    from triton.runtime.driver import driver
     device_count, = driver.active.utils.device_count
 
     # Pass an invalid device_id (out of range) to trigger error
