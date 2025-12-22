@@ -80,12 +80,10 @@ def test_load_binary_error_kernel_error(device, tmp_path: pathlib.Path):
     from triton.runtime.driver import driver
     device = driver.active.get_current_device()
 
-    try:
+    with pytest.raises(RuntimeError, match=r".*ZE_RESULT_ERROR_INVALID_KERNEL_NAME.*"):
         _ = driver.active.utils.load_binary("invalid name", kernel.kernel, kernel.metadata.shared,
                                             kernel.metadata.build_flags, not kernel.metadata.generate_native_code,
                                             device)
-    except RuntimeError as e:
-        assert "ZE_RESULT_ERROR_INVALID_KERNEL_NAME" in str(e)
 
 
 def test_wait_on_sycl_queue_error(device):
