@@ -31,7 +31,7 @@ def test_auto_grf(device, monkeypatch, capfd):
     assert re.findall(r"\d+\.?\d*", outs[1])[0] == re.findall(r"\d+\.?\d*", outs[2])[0]
 
 
-def test_get_properties_error(device, tmp_path: pathlib.Path):
+def test_get_properties_error(device):
     from triton.runtime.driver import driver
     device_count, = driver.active.utils.device_count
 
