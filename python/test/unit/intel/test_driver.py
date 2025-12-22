@@ -90,11 +90,8 @@ def test_wait_on_sycl_queue_error(device):
     from triton.runtime.driver import driver
 
     # Pass an invalid (non-pointer) value to trigger conversion error
-    try:
+    with pytest.raises(RuntimeError, match=r"Failed to convert PyObject to void\* for queue.*"):
         driver.active.utils.wait_on_sycl_queue("invalid_queue_pointer")
-        assert False, "Expected an exception when passing invalid queue pointer"
-    except RuntimeError as e:
-        assert "Failed to convert PyObject to void* for queue" in str(e)
 
 
 def test_has_opencl_extension_error(device):
