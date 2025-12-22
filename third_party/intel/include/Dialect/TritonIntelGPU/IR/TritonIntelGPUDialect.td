@@ -74,6 +74,12 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.support_f4_conversion";
     }
 
+    /// Get the name of the attribute used to indicate whether the
+    /// H/BF8 to/from HF conversion instruction is available.
+    static constexpr llvm::StringRef getSupportF8ConversionAttrName() {
+      return "ttig.support_f8_conversion";
+    }
+
     /// Get the name of the attribute used to convey information required for lowering
     /// memory operations (e.g. load, prefetches) to 2D block HW instructions.
     static constexpr llvm::StringRef getBlockIOAttrName() {
