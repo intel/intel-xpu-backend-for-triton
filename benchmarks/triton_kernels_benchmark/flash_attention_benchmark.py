@@ -35,7 +35,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
     for start_n in range(lo, hi, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
         # -- compute qk ----
-        k = tl.load(K_block_ptr)
+        k = tl.load(K_block_ptr, boundary_check=(0, 1))
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
         if STAGE == 2:
@@ -54,7 +54,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
         # -- update output accumulator --
         acc = acc * alpha[:, None]
         # update acc
-        v = tl.load(V_block_ptr)
+        v = tl.load(V_block_ptr, boundary_check=(0, 1))
         acc += tl.dot(p.to(tl.float16), v)
         # update m_i and l_i
         m_i = m_ij
@@ -134,7 +134,7 @@ def _attn_fwd_with_block_pointers(Q, K, V, sm_scale, M, Out,  #
     qk_scale = sm_scale
     qk_scale *= 1.44269504  # 1/log(2)
     # load q: it will stay in SRAM throughout
-    q = tl.load(Q_block_ptr)
+    q = tl.load(Q_block_ptr, boundary_check=(0, 1))
     # stage 1: off-band
     # For causal = True, STAGE = 3 the kernel gets 1 as its STAGE
     # For causal = False, STAGE = 1, the kernel gets 3 as its STAGE
