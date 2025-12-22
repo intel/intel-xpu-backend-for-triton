@@ -38,7 +38,7 @@ public:
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     if (!mod->hasAttr(
-            ttgi::TritonIntelGPUDialect::getSupportSG2DBlockAttrName()))
+            ttgi::TritonIntelGPUDialect::getSupport2DBlockIOAttrName()))
       return;
 
     tt::intel::ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
@@ -62,7 +62,7 @@ private:
 
     // Find the make tensor ptr operation that created the base ptr.
     std::optional<tt::MakeTensorPtrOp> defOp =
-        tt::intel::findDefiningMakeTensorPtrOp(ptr);
+        tt::intel::findDefiningMakeTensorPtrOp<tt::MakeTensorPtrOp>(ptr);
     if (!defOp) {
       LDBG("Could not find make tensor ptr op for: " << *op);
       return;
@@ -301,7 +301,7 @@ private:
     // Find the make tensor ptr operation that created the base ptr for the load
     // operation.
     std::optional<tt::MakeTensorPtrOp> defOp =
-        tt::intel::findDefiningMakeTensorPtrOp(ptr);
+        tt::intel::findDefiningMakeTensorPtrOp<tt::MakeTensorPtrOp>(ptr);
     assert(defOp && "Expected a make tensor ptr op.");
     tt::MakeTensorPtrOp makeTensorPtrOp = *defOp;
     Operation::operand_range shape = makeTensorPtrOp.getShape();

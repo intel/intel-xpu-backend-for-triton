@@ -3,10 +3,12 @@ from __future__ import annotations
 import functools
 import hashlib
 import importlib.util
+import locale
 import logging
 import os
 import shutil
 import subprocess
+import sys
 import sysconfig
 import tempfile
 import re
@@ -15,6 +17,9 @@ from types import ModuleType
 
 from .cache import get_cache_manager
 from .. import knobs
+
+_IS_WINDOWS = sys.platform == "win32"
+SUBPROCESS_DECODE_ARGS = (locale.getpreferredencoding(), ) if _IS_WINDOWS else ()
 
 
 def is_xpu():
@@ -92,6 +97,8 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
                 ccflags += ["--std=c++17"]
             if os.environ.get("TRITON_SUPPRESS_GCC_HOST_CODE_DEPRECATION_WARNINGS", "1") == "1":
                 ccflags += ["-Wno-deprecated-declarations"]
+            if os.environ.get("TRITON_SUPPRESS_SYCL_DISABLE_FSYCL_SYCLHPP_WARNING", "1") == "1":
+                ccflags += ["-DSYCL_DISABLE_FSYCL_SYCLHPP_WARNING"]
         if os.name == "nt":
             library_dirs = library_dirs + [
                 os.path.abspath(os.path.join(sysconfig.get_paths(scheme=scheme)["stdlib"], "..", "libs"))
@@ -106,7 +113,11 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
     if os.getenv("VERBOSE"):
         print(" ".join(cc_cmd))
 
-    subprocess.check_call(cc_cmd, stdout=subprocess.DEVNULL)
+    try:
+        subprocess.run(cc_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    except subprocess.CalledProcessError as e:
+        output = e.stdout.decode(*SUBPROCESS_DECODE_ARGS)
+        raise RuntimeError(output)
     return so
 
 

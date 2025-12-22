@@ -7,8 +7,14 @@
 //===----------------------------------------------------------------------===//
 
 #include "Utility.h"
+#include "Utils/LLVMIntr.h"
+#include "Utils/Mangling.h"
+
+#include "llvm/ADT/TypeSwitch.h"
 
 #include "mlir/Conversion/ArithCommon/AttrToLLVMConverter.h"
+
+#include "intel/include/Dialect/TritonIntelGPU/IR/Utils.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -168,4 +174,48 @@ convertTritonRoundingModeToLLVM(const triton::RoundingMode rounding) {
   }
 }
 
+Type getTypeWithSameShape(Type type, Type elementType) {
+  return TypeSwitch<Type, Type>(type)
+      .Case([elementType](VectorType type) {
+        return VectorType::get(type.getShape(), elementType,
+                               type.getScalableDims());
+      })
+      .Default(elementType);
+}
+
+bool hasModuleAttr(Operation *op, StringRef attrName) {
+  auto mod = op->getParentOfType<ModuleOp>();
+  return mod && mod->hasAttr(attrName);
+}
+
 } // namespace mlir::LLVM::intel
+
+namespace mlir::triton::intel {
+Value convertWithFunctionCall(TritonLLVMIRRewriter &rewriter, Value value,
+                              StringRef baseName, Type inType, Type outType,
+                              StringRef hasAttrName) {
+  auto op = value.getDefiningOp();
+  if (!gpu::intel::hasSpirvTargetArch(op))
+    return {};
+  if (!hasAttrName.empty() &&
+      !mlir::LLVM::intel::hasModuleAttr(op, hasAttrName))
+    return {};
+
+  auto valueType = value.getType();
+  Type inTy = mlir::LLVM::intel::getTypeWithSameShape(valueType, inType);
+  Type outTy = mlir::LLVM::intel::getTypeWithSameShape(valueType, outType);
+  std::string funcName = mlir::triton::gpu::intel::mangle(baseName, inTy);
+  auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
+      /*other=*/LLVM::ModRefInfo::NoModRef,
+      /*argMem=*/LLVM::ModRefInfo::NoModRef,
+      /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef,
+      /*errnoMem=*/LLVM::ModRefInfo::NoModRef,
+      /*targetMem0=*/LLVM::ModRefInfo::NoModRef,
+      /*targetMem1=*/LLVM::ModRefInfo::NoModRef);
+  auto funcAttrs = gpu::intel::noUnwindWillReturnAttrs;
+  funcAttrs.memEffectsAttr = memAttr;
+  return gpu::intel::createDeviceFunctionCall(rewriter, funcName, outTy, {inTy},
+                                              {value}, {}, funcAttrs)
+      .getResult();
+}
+} // namespace mlir::triton::intel

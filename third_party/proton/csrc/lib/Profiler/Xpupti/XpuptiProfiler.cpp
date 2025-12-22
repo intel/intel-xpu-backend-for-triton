@@ -4,6 +4,7 @@
 #include "Device.h"
 #include "Driver/GPU/XpuApi.h"
 #include "Driver/GPU/XpuptiApi.h"
+#include "Runtime/XpuRuntime.h"
 #include "Utility/Map.h"
 
 #include "pti/pti_view.h"
@@ -141,7 +142,11 @@ uint32_t processActivity(XpuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
 struct XpuptiProfiler::XpuptiProfilerPimpl
     : public GPUProfiler<XpuptiProfiler>::GPUProfilerPimplInterface {
   XpuptiProfilerPimpl(XpuptiProfiler &profiler)
-      : GPUProfiler<XpuptiProfiler>::GPUProfilerPimplInterface(profiler) {}
+      : GPUProfiler<XpuptiProfiler>::GPUProfilerPimplInterface(profiler) {
+    // FIXME: enable metrics
+    // runtime = &XpuRuntime::instance();
+    // metricBuffer = std::make_unique<MetricBuffer>(1024 * 1024 * 64, runtime);
+  }
   virtual ~XpuptiProfilerPimpl() = default;
 
   void doStart() override;

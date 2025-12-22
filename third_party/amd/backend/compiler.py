@@ -34,7 +34,6 @@ class HIPOptions:
     num_stages: int = 2
     num_ctas: int = 1
     extern_libs: dict = None
-    cluster_dims: tuple = (1, 1, 1)
     debug: bool = False
     sanitize_overflow: bool = True
     arch: str = None
@@ -146,9 +145,6 @@ class HIPBackend(BaseBackend):
             metadata.num_warps,
             metadata.num_ctas,
             metadata.shared,
-            metadata.cluster_dims[0],
-            metadata.cluster_dims[1],
-            metadata.cluster_dims[2],
         )
 
     def get_codegen_implementation(self, options):
@@ -293,13 +289,6 @@ class HIPBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         amd.passes.ttgpuir.add_update_async_wait_count(pm, options.arch)
-        # custom_lds_size is an experimental parameter that defines amount of LDS available
-        # for one thread block. Measured in bytes.
-        #
-        # If custom_lds_size = 0, pass will consider all LDS is available for one threads block,
-        # LDS size is determined by provided arch name.
-        custom_lds_size = 0
-        amd.passes.ttgpuir.add_optimize_lds_usage(pm, options.arch, custom_lds_size)
         passes.convert.add_scf_to_cf(pm)
         passes.gluon.add_inliner(pm)
         passes.convert.add_index_to_llvmir(pm)
@@ -462,6 +451,11 @@ class HIPBackend(BaseBackend):
                             dump_file_id)
         amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
                                        False)
+        # TODO: Remove the following workaround once LLVM is bumped to include: https://github.com/llvm/llvm-project/pull/169851
+        # Workaround for LLVM ERROR: cannot evaluate equated symbol 'amdgcn.device.init.num_named_barrier'
+        if knobs.compilation.enable_asan and 'gfx1250' not in options.arch:
+            amdgcn = amdgcn.replace('.amdgpu_metadata',
+                                    '\t.set\tamdgcn.device.init.num_named_barrier, 0\n.amdgpu_metadata')
         if knobs.amd.dump_amdgcn:
             print("// -----// AMDGCN Dump //----- //")
             print(amdgcn)

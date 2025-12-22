@@ -35,6 +35,7 @@ from triton._internal_testing import (
     is_hip_gfx11,
     is_hip_gfx12,
     is_xpu,
+    is_xpu_cri,
     get_arch,
     torch_float8_dtypes,
     torch_dtypes,
@@ -1698,7 +1699,7 @@ def test_atomic_cas(sem, num_ctas, dtype_str, device):
 @pytest.mark.interpreter
 @pytest.mark.parametrize("sem", [None, "acquire", "release", "acq_rel", "relaxed"])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
-@pytest.mark.parametrize("size", [4, 128, 512])
+@pytest.mark.parametrize("size", [4, 128, 512, 1024])
 @pytest.mark.parametrize("dtype_str", ['bfloat16', 'float16', 'float32', 'uint64', 'int64', 'float64'])
 def test_tensor_atomic_cas(sem, size, dtype_str, num_ctas, device):
     check_type_supported(dtype_str, device)
@@ -3377,7 +3378,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     if 'int' not in in_dtype and 'float8' not in in_dtype:
         x *= .1
         y *= .1
-    if in_dtype == 'float32' and input_precision == "tf32":
+    if in_dtype == 'float32' and input_precision in ["tf32", "bf16x3", "bf16x6"]:
         x = (x.view('uint32') & np.uint32(0xffffe000)).view('float32')
         y = (y.view('uint32') & np.uint32(0xffffe000)).view('float32')
         w = (w.view('uint32') & np.uint32(0xffffe000)).view('float32')
@@ -3568,6 +3569,10 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
                 pytest.skip(f"scaled_dot({mxfp_type}, {normal_type}) only implemented for CDNA3, CDNA4, gfx11, gfx12")
         if mma == 16 and K == 64 and not (is_hip_gfx12() or is_hip_gfx11()):
             pytest.skip(f"K == {K} too small for mfma {mma} in scaled_dot")
+    if is_xpu_cri():
+        is_both_fp8 = (mxfp_type in ['float8e5', 'float8e4nv']) and (normal_type in ['float8e5', 'float8e4nv'])
+        if not is_both_fp8 and mxfp_type != normal_type:
+            pytest.skip("Skip mixed precision because it is emulated by dpas (issue #678)")
 
     @triton.jit
     def dot_scale_kernel(a_base, stride_a0, stride_a1, a_scale, b_base, stride_b0, stride_b1, b_scale, out,
@@ -3818,6 +3823,10 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
     if is_hip_cdna4() and normal_type in ["bf16", "fp16"]:
         amdgcn = pgm.asm['amdgcn']
         assert (re.search(r"v_cvt_scalef32_pk_.*?(fp4|fp8|bf8).*?op_sel", amdgcn))
+    if is_xpu_cri():
+        llir = pgm.asm["llir"]
+        count = llir.count("llvm.genx.GenISA.sub.group.bdpas")
+        assert count > 0, "Unexpected LLVM IR generated."
 
 
 @pytest.mark.interpreter
@@ -4127,7 +4136,7 @@ def test_const(device, choose_const, constexpr, mode):
             error = "Cannot store to a constant pointer"
         else:
             if mode == "call":
-                error = "Inconsistent return types"
+                error = "Return type mismatch: "
             elif mode == "if":
                 error = "Mismatched type for final_out"
             elif mode == "ternary":
@@ -5550,7 +5559,8 @@ def test_poison_return(device):
 
     @triton.jit
     def kernel(Out):
-        tl.store(Out, return_poison(0))
+        zero = 0
+        tl.store(Out, return_poison(zero))
 
     a = torch.empty((), device=device, dtype=torch.int32)
     h = kernel.warmup(a, grid=(1, ))
@@ -5882,7 +5892,7 @@ def test_override_arch(arch, env_var_override, device, fresh_knobs):
         assert amdgcn_gfx.group(1) == arch
 
 
-def test_num_ctas_pre_sm90(device):
+def test_num_ctas_pre_sm90(device, fresh_knobs):
     if not is_cuda() and not is_hip():
         pytest.xfail("Only supported on CUDA and HIP")
 
@@ -5898,8 +5908,9 @@ def test_num_ctas_pre_sm90(device):
         arch = "gfx942"
         msg = r"num_ctas > 1 not supported"
 
+    fresh_knobs.runtime.override_arch = str(arch)
     with pytest.raises(ValueError, match=msg):
-        _kernel.warmup(src, grid=(1, ), num_ctas=2, arch=arch)
+        _kernel.warmup(src, grid=(1, ), num_ctas=2)
 
 
 # -----------------------
@@ -6450,6 +6461,10 @@ def gather_test_kernel_1d(src_ptr, idx_ptr, out_ptr, axis: tl.constexpr, src_dim
     ([128, 64], [128, 128], 1),
 ])
 def test_gather(src_shape, indices_shape, axis, device):
+    if (is_hip_cdna2() or is_hip_cdna3()) and src_shape == [128, 64] and indices_shape == [256, 64]:
+        # This could be solved by reducing vectorization in general swizzling algorithm.
+        # We will do this if any relevant workload suffers from large LDS consumption of the algorithm.
+        pytest.skip('Not enough LDS.')
 
     def triton_gather(src: torch.Tensor, axis: int, indices: torch.Tensor):
         output = torch.empty(indices.shape, dtype=src.dtype, device=src.device)

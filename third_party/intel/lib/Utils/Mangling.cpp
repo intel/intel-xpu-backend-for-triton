@@ -21,10 +21,13 @@ std::string getTypeMangling(Type ty, bool isUnsigned) {
         return "PU3AS" + std::to_string(ty.getAddressSpace()) + "v";
       })
       .Case([](Float16Type) -> std::string { return "Dh"; })
+      .Case([](BFloat16Type) -> std::string { return "DF16b"; })
       .Case([](Float32Type) -> std::string { return "f"; })
       .Case([](Float64Type) -> std::string { return "d"; })
       .Case([isUnsigned](IntegerType ty) -> std::string {
         switch (ty.getWidth()) {
+        case 4:
+          return "i";
         case 8:
           return isUnsigned ? "h" : "c";
         case 16:

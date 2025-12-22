@@ -214,7 +214,14 @@ class SpirvUtils:
         # we will need to rewrite the line in the general part of the code:
         # driver.active.utils.load_binary(self.name, self.kernel, self.metadata.shared, self.metadata.build_flags, device) ->
         # driver.active.utils.load_binary((self.name, self.kernel, self.metadata.shared, self.metadata.build_flags, device))
-        return self.shared_library.load_binary(args)
+        try:
+            return self.shared_library.load_binary(args)
+        except Exception as e:
+            if str(e).startswith("ZE_"):
+                from triton.runtime.errors import IntelGPUError
+                raise IntelGPUError("Error during Intel load_binary: " + str(e)) from e
+            else:
+                raise e
 
     if os.name != 'nt':
 
@@ -738,16 +745,6 @@ extern "C" EXPORT_FUNC PyObject* launch(PyObject* args) {{
   int threads_per_warp = PyLong_AsLong(threads_per_warp_attr);
   Py_DECREF(threads_per_warp_attr);
 
-  // extract cluster dims
-  PyObject *clusterDim =  PyObject_GetAttrString(kernel_metadata, "cluster_dims");
-  if (!PyTuple_Check(kernel_metadata)) {{
-    PyErr_SetString(PyExc_TypeError, "kernel_metadata.cluster_dims must be a tuple");
-    return NULL;
-  }}
-  int clusterDimX   = PyLong_AsLong(PyTuple_GetItem(clusterDim, 0));
-  int clusterDimY   = PyLong_AsLong(PyTuple_GetItem(clusterDim, 1));
-  int clusterDimZ   = PyLong_AsLong(PyTuple_GetItem(clusterDim, 2));
-  Py_DECREF(clusterDim);
   // extract launch metadata
   if (launch_enter_hook != Py_None){{
     PyObject* ret = PyObject_CallOneArg(launch_enter_hook, launch_metadata);
@@ -932,7 +929,7 @@ class XPUDriver(DriverBase):
                 dev_property[
                     "has_subgroup_matrix_multiply_accumulate_tensor_float32"] = "cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32" in supported_extensions
                 dev_property["has_subgroup_2d_block_io"] = "cl_intel_subgroup_2d_block_io" in supported_extensions
-                dev_property["has_bfloat16_conversions"] = "cl_intel_bfloat16_conversions" in supported_extensions
+                dev_property["has_bfloat16_conversion"] = "cl_intel_bfloat16_conversions" in supported_extensions
             else:
                 check = self.utils.has_opencl_extension
                 dev_property["has_subgroup_matrix_multiply_accumulate"] = check(
@@ -940,9 +937,19 @@ class XPUDriver(DriverBase):
                 dev_property["has_subgroup_matrix_multiply_accumulate_tensor_float32"] = check(
                     device, b"cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32")
                 dev_property["has_subgroup_2d_block_io"] = check(device, b"cl_intel_subgroup_2d_block_io")
-                dev_property["has_bfloat16_conversions"] = check(device, b"cl_intel_bfloat16_conversions")
+                dev_property["has_bfloat16_conversion"] = check(device, b"cl_intel_bfloat16_conversions")
+
+        def update_device_arch(dev_property):
+            if not (arch := knobs.intel.device_arch):
+                dirname = os.path.dirname(os.path.realpath(__file__))
+                parser = compile_module_from_src(src=Path(os.path.join(dirname, "arch_parser.c")).read_text(),
+                                                 name="arch_utils")
+                arch = parser.parse_device_arch(dev_property["architecture"])
+            dev_property["arch"] = arch
 
         update_advanced_features(device, dev_property)
+        update_device_arch(dev_property)
+
         return GPUTarget("xpu", dev_property, warp_size=32)
 
     def build_proton_help_lib(self):
