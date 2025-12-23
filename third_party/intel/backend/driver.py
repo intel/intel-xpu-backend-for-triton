@@ -191,8 +191,8 @@ class SpirvUtils:
 
     def __init__(self, cache_path: str):
         self.shared_library = ctypes.PyDLL(cache_path)
-        methods = ("init_devices", "load_binary", "wait_on_sycl_queue", "has_opencl_extension",
-                   "is_opencl_enabled", "has_spirv_extension", "has_ze_extension")
+        methods = ("init_devices", "load_binary", "wait_on_sycl_queue", "has_opencl_extension", "is_opencl_enabled",
+                   "has_spirv_extension", "has_ze_extension")
         for method in methods:
             getattr(self.shared_library, method).restype = ctypes.py_object
             getattr(self.shared_library, method).argtypes = (ctypes.py_object, )

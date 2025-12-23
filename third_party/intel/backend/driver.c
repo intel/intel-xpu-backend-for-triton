@@ -40,7 +40,6 @@ static inline T checkSyclErrors(const std::tuple<T, ze_result_t> tuple) {
   return std::get<0>(tuple);
 }
 
-
 static void append_packed_string(std::vector<uint32_t> &words,
                                  const std::string &s) {
   // SPIR-V strings are null-terminated and packed little-endian into 32-bit
@@ -149,8 +148,8 @@ static bool probe_spirv_extension_by_module_create(ze_context_handle_t ctx,
       zeModuleBuildLogGetString(log, &sz, nullptr);
       std::string s(sz ? sz : 1, '\0');
       zeModuleBuildLogGetString(log, &sz, s.data());
-      std::cerr << "(I): L0 SPIR-V probe log for \"" << ext_name
-                << "\": " << s << std::endl;
+      std::cerr << "(I): L0 SPIR-V probe log for \"" << ext_name << "\": " << s
+                << std::endl;
     }
     zeModuleBuildLogDestroy(log);
   }
@@ -515,11 +514,11 @@ extern "C" EXPORT_FUNC PyObject *init_devices(PyObject *cap) {
     // Try to find a matching OpenCL SYCL device (same name). If not found,
     // OpenCL extension checks will be disabled for this device.
     const auto &name = sycl_devices[i].get_info<sycl::info::device::name>();
-    auto it = std::find_if(
-        opencl_devices.begin(), opencl_devices.end(),
-        [&](const sycl::device &dev) {
-          return dev.get_info<sycl::info::device::name>() == name;
-        });
+    auto it =
+        std::find_if(opencl_devices.begin(), opencl_devices.end(),
+                     [&](const sycl::device &dev) {
+                       return dev.get_info<sycl::info::device::name>() == name;
+                     });
 
     if (it != opencl_devices.end()) {
       sycl_opencl_device_list.push_back(*it);
