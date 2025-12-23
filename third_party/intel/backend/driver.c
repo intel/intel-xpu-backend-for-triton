@@ -435,7 +435,7 @@ extern "C" EXPORT_FUNC PyObject *has_opencl_extension(int device_id,
               << std::flush;
     Py_RETURN_FALSE;
   }
-  const sycl::device &device = g_sycl_l0_device_list[0].first;
+  const sycl::device &device = g_sycl_l0_device_list[device_id].first;
 
   if (device.ext_oneapi_supports_cl_extension(extension))
     Py_RETURN_TRUE;
