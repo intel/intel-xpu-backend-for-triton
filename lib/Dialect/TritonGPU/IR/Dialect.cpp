@@ -3343,18 +3343,18 @@ struct TritonGPUVerifyTensorLayoutInterface
               dyn_cast<intel::DpasEncodingAttr>(dotOperandLayout.getParent()))
         layoutThreadsPerWarp = dpasLayout.getThreadsPerWarp();
     if (layoutThreadsPerWarp != moduleThreadsPerWarp) {
-      SmallVector<unsigned> supported_sg_sizes;
+      SmallVector<unsigned> supportedSgSizes;
       auto threadsPerWarpAttr = module->getAttrOfType<DenseIntElementsAttr>(
           triton::gpu::intel::TritonIntelGPUDialect::
               getSupportedSGSizesAttrName());
       if (threadsPerWarpAttr) {
         for (auto value : threadsPerWarpAttr) {
-          supported_sg_sizes.push_back(value.getSExtValue());
+          supportedSgSizes.push_back(value.getSExtValue());
         }
       }
 
       bool isSupported = std::any_of(
-          supported_sg_sizes.begin(), supported_sg_sizes.end(),
+          supportedSgSizes.begin(), supportedSgSizes.end(),
           [&](unsigned size) { return size == layoutThreadsPerWarp; });
       if (!isSupported) {
         return makeErr() << layout << ".\nLayout has " << ll.getInDimSize(kLane)
