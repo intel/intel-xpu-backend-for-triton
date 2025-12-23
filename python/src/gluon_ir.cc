@@ -942,10 +942,7 @@ void init_gluon_ir(py::module &&m) {
         auto shape = makeTensorDescOp.getShape();
         auto strides = makeTensorDescOp.getStrides();
 
-        // Convert shape from i32 to i64 for MakeTensorPtrOp
-        // Needed because:
-        // error: 'tt.make_tensor_ptr' op operand #1 must be
-        // variadic of 64-bit signless integer, but got 'i32'
+        // Convert shape from i32 to i64 as required by MakeTensorPtrOp.
         SmallVector<Value> i64Shape;
         for (auto shapeVal : shape) {
           auto i64Val = self.create<arith::ExtSIOp>(
