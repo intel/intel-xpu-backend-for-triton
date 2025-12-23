@@ -148,6 +148,10 @@ static bool probe_spirv_extension_by_module_create(ze_context_handle_t ctx,
       zeModuleBuildLogGetString(log, &sz, nullptr);
       std::string s(sz ? sz : 1, '\0');
       zeModuleBuildLogGetString(log, &sz, s.data());
+      if (sz > 0 && sz <= s.size()) {
+        // sz includes the null terminator; resize to exclude it from the string.
+        s.resize(sz - 1);
+      }
       std::cerr << "(I): L0 SPIR-V probe log for \"" << ext_name << "\": " << s
                 << std::endl;
     }
