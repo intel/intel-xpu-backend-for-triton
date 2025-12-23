@@ -418,7 +418,7 @@ CGAEncodingAttr CGAEncodingAttr::getDefault(MLIRContext *ctx, int rank) {
   LinearLayout::BasesT bases;
   bases[kBlock] = {};
   auto dims = standardOutDimNames(ctx, rank);
-  return get(ctx, LinearLayout(bases, dims));
+  return get(ctx, LinearLayout(std::move(bases), dims));
 }
 
 CGAEncodingAttr CGAEncodingAttr::fromSplitParams(MLIRContext *ctx,
@@ -443,18 +443,18 @@ CGAEncodingAttr CGAEncodingAttr::fromSplitParams(MLIRContext *ctx,
   }
 
   layout = layout.transposeOuts(outDimNames);
-  return CGAEncodingAttr::get(ctx, layout);
+  return CGAEncodingAttr::get(ctx, std::move(layout));
 }
 
 SmallVector<unsigned> CGAEncodingAttr::getCTAsPerCGA() const {
-  auto ll = getLinearLayout();
+  const auto &ll = getLinearLayout();
   auto rank = ll.getNumOutDims();
   return basesPerDimImpl(ll.getBases(), StringAttr::get(getContext(), "block"),
                          rank, /*skipBroadcast=*/false);
 }
 
 SmallVector<unsigned> CGAEncodingAttr::getCTASplitNum() const {
-  auto ll = getLinearLayout();
+  const auto &ll = getLinearLayout();
   auto rank = ll.getNumOutDims();
   return basesPerDimImpl(ll.getBases(), StringAttr::get(getContext(), "block"),
                          rank);
@@ -1001,7 +1001,7 @@ basesPerDimImpl(const LinearLayout::BasesT &namedBases, StringAttr dimName,
 
 SmallVector<unsigned>
 LinearEncodingAttr::basesPerDim(StringAttr dimName, bool skipBroadcast) const {
-  auto ll = getLinearLayout();
+  const auto &ll = getLinearLayout();
   auto rank = ll.getNumOutDims();
   return basesPerDimImpl(ll.getBases(), dimName, rank, skipBroadcast);
 }
@@ -1071,7 +1071,7 @@ SmallVector<unsigned> LinearEncodingAttr::getThreadOrder() const {
 
 SmallVector<unsigned> LinearEncodingAttr::getSizePerThread() const {
   auto rank = getOrder().size();
-  auto ll = getLinearLayout();
+  const auto &ll = getLinearLayout();
   auto ctx = getContext();
   auto kRegister = StringAttr::get(ctx, "register");
   auto splitNum = getCGALayout().getCTASplitNum();
@@ -1149,7 +1149,7 @@ LinearEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
 SmallVector<unsigned>
 LinearEncodingAttr::getContig(const char *inDim,
                               SmallVector<unsigned int> lowerContig) const {
-  auto ll = getLinearLayout();
+  const auto &ll = getLinearLayout();
   const auto &bases =
       ll.getBases().find(StringAttr::get(getContext(), inDim))->second;
   auto order = getOrder();
@@ -1522,7 +1522,7 @@ SmallVector<unsigned> SliceEncodingAttr::getRepOrder() const {
 CGAEncodingAttr SliceEncodingAttr::getCGALayout() const {
   auto layout = ::getCGALayout(getParent()).getLinearLayout();
   layout = removeStandardDim(layout, getDim());
-  return CGAEncodingAttr::get(getContext(), layout);
+  return CGAEncodingAttr::get(getContext(), std::move(layout));
 }
 
 template <class T>
@@ -1754,7 +1754,7 @@ Attribute SharedLinearEncodingAttr::parse(AsmParser &parser, Type type) {
 SmallVector<unsigned>
 SharedLinearEncodingAttr::basesPerDim(StringAttr dimName,
                                       bool skipBroadcast) const {
-  auto ll = getLinearLayout();
+  const auto &ll = getLinearLayout();
   auto rank = ll.getNumOutDims();
   return basesPerDimImpl(ll.getBases(), dimName, rank, skipBroadcast);
 }
@@ -1766,7 +1766,7 @@ SharedLinearEncodingAttr::orderPerDim(StringAttr dimName,
 }
 
 SmallVector<unsigned> SharedLinearEncodingAttr::getOrder() const {
-  auto ll = getLinearLayout();
+  const auto &ll = getLinearLayout();
   auto rank = ll.getNumOutDims();
   SmallVector<unsigned> defaultOrder(rank);
   std::iota(defaultOrder.rbegin(), defaultOrder.rend(), 0);
@@ -1779,7 +1779,7 @@ CGAEncodingAttr SharedLinearEncodingAttr::getCGALayout() const {
 }
 LinearLayout
 SharedLinearEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
-  auto ll = getLinearLayout();
+  const auto &ll = getLinearLayout();
   auto outDimNames = llvm::to_vector(ll.getOutDimNames());
   assert(shape.size() == outDimNames.size());
   // We don't support automatic broadcasting for shared linear layouts
@@ -2002,7 +2002,7 @@ PaddedSharedEncodingAttr PaddedSharedEncodingAttr::get(
       identityStandardND(kOffset, SmallVector<unsigned>(shape), order);
   linearComponent = combineCtaCgaWithShape(linearComponent, cgaLayout, shape);
 
-  return get(context, intervalPads, linearComponent);
+  return get(context, intervalPads, std::move(linearComponent));
 }
 
 PaddedSharedEncodingAttr PaddedSharedEncodingAttr::get(
@@ -2015,7 +2015,7 @@ PaddedSharedEncodingAttr PaddedSharedEncodingAttr::get(
     intervals.push_back(interval);
     paddings.push_back(padding);
   }
-  return get(context, intervals, paddings, linearComponent);
+  return get(context, intervals, paddings, std::move(linearComponent));
 }
 
 SmallVector<unsigned>
@@ -2459,7 +2459,7 @@ SmallVector<unsigned> DotOperandEncodingAttr::getRepOrder() const {
 }
 
 CGAEncodingAttr DotOperandEncodingAttr::getCGALayout() const {
-  auto layout = ::getCGALayout(getParent()).getLinearLayout();
+  const auto &layout = ::getCGALayout(getParent()).getLinearLayout();
   auto bases = layout.getBases();
   auto kBlock = StringAttr::get(getContext(), "block");
   auto &blockBases = bases[kBlock];
@@ -2470,7 +2470,8 @@ CGAEncodingAttr DotOperandEncodingAttr::getCGALayout() const {
   }
   auto dims = layout.getOutDims();
   dims[kDim].second = 1;
-  return CGAEncodingAttr::get(getContext(), LinearLayout(bases, dims, true));
+  return CGAEncodingAttr::get(getContext(),
+                              LinearLayout(std::move(bases), dims, true));
 }
 LogicalResult DotOperandEncodingAttr::verify(
     ::llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
@@ -3117,7 +3118,7 @@ struct TritonGPUInferLayoutInterface
     LinearLayout ll =
         inferReshapeLinearLayout(cast<TensorOrMemDesc>(srcTy), dstShape);
 
-    dstEnc = LinearEncodingAttr::get(srcEnc.getContext(), ll);
+    dstEnc = LinearEncodingAttr::get(srcEnc.getContext(), std::move(ll));
     return success();
   }
 
@@ -3165,7 +3166,7 @@ struct TritonGPUInferLayoutInterface
           enc.getContext(), append(enc.getSizePerThread(), 2),
           append(enc.getThreadsPerWarp(), 1), append(enc.getWarpsPerCTA(), 1),
           appendMajorDim(enc.getOrder()),
-          CGAEncodingAttr::get(enc.getContext(), ctall));
+          CGAEncodingAttr::get(enc.getContext(), std::move(ctall)));
       return success();
     }
 
@@ -3182,7 +3183,7 @@ struct TritonGPUInferLayoutInterface
         tryJoinOnAxis(ctx, ll, newLl, /*fwdInference=*/true, axis, loc);
 
     assert(result.succeeded());
-    dstEnc = LinearEncodingAttr::get(ctx, newLl);
+    dstEnc = LinearEncodingAttr::get(ctx, std::move(newLl));
     return success();
   }
 
@@ -3213,7 +3214,7 @@ struct TritonGPUInferLayoutInterface
           ArrayRef(enc.getSizePerThread()).drop_back(1),
           ArrayRef(enc.getThreadsPerWarp()).drop_back(1),
           ArrayRef(enc.getWarpsPerCTA()).drop_back(1), ArrayRef(newOrder),
-          CGAEncodingAttr::get(enc.getContext(), ctall));
+          CGAEncodingAttr::get(enc.getContext(), std::move(ctall)));
       return success();
     }
 
@@ -3237,7 +3238,7 @@ struct TritonGPUInferLayoutInterface
     SmallVector<int64_t> dstShape(shape.begin(), shape.end());
     dstShape.pop_back();
     newLl = newLl.reshapeOuts(standardOutDimPairs(ctx, dstShape));
-    dstEnc = LinearEncodingAttr::get(ctx, newLl);
+    dstEnc = LinearEncodingAttr::get(ctx, std::move(newLl));
     return success();
   }
 
@@ -3300,7 +3301,7 @@ struct TritonGPUInferLayoutInterface
     auto result = tryJoinOnAxis(ctx, ll, newLl, fwdInference, axis, loc);
     if (!result.succeeded())
       return result;
-    outEnc = LinearEncodingAttr::get(ctx, newLl);
+    outEnc = LinearEncodingAttr::get(ctx, std::move(newLl));
     return success();
   }
 };

@@ -31,6 +31,12 @@ def TritonIntelGPU_Dialect : Dialect {
     static constexpr llvm::StringRef getSupportedSGSizesAttrName() {
       return "ttig.supported_sg_sizes";
     }
+    
+    /// Get the name of the attribute used to indicate whether the native 16bit
+    /// atomic operations are available.
+    static constexpr llvm::StringRef getSupport16BitAtomicsAttrName() {
+      return "ttig.support_16bit_atomics";
+    }
 
     /// Get the name of the attribute used to indicate whether subgroup 2D block
     /// operations (e.g., 2D block read/write) are available.
@@ -38,34 +44,46 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.support_2d_block_io";
     }
 
+    /// Get the name of the attribute used to indicate whether bfloat16
+    /// arithmetic is available.
+    static constexpr llvm::StringRef getSupportBFloat16ArithmeticAttrName() {
+      return "ttig.support_bfloat16_arithmetic";
+    }
+
+    /// Get the name of the attribute used to indicate whether bfloat16
+    /// conversion is available.
+    static constexpr llvm::StringRef getSupportBFloat16ConversionAttrName() {
+      return "ttig.support_bfloat16_conversion";
+    }
+
     /// Get the name of the attribute used to indicate whether the DPAS
     /// operation is available.
     static constexpr llvm::StringRef getSupportDPASAttrName() {
-      return "ttig.support_dpas";
+      return "ttig.support_subgroup_matrix_multiply_accumulate";
     }
 
     /// Get the name of the attribute used to indicate whether the DPAS
     /// operation supports BF8/HF8.
     static constexpr llvm::StringRef getSupportDPASWithBF8AttrName() {
-      return "ttig.support_dpas_bf8";
+      return "ttig.support_subgroup_matrix_multiply_accumulate_bf8";
     }
 
     /// Get the name of the attribute used to indicate whether the Block Scale DPAS
     /// operation is available.
     static constexpr llvm::StringRef getSupportBlockScaleDPASAttrName() {
-      return "ttig.support_block_scale_dpas";
-    }
-
-    /// Get the name of the attribute used to indicate whether the BF16 conversion
-    /// operation is available.
-    static constexpr llvm::StringRef getSupportBF16ConversionAttrName() {
-      return "ttig.support_bf16_conversion";
+      return "ttig.support_subgroup_scaled_matrix_multiply_accumulate";
     }
 
     /// Get the name of the attribute used to indicate whether the F4 conversion
     /// operation is available.
     static constexpr llvm::StringRef getSupportF4ConversionAttrName() {
       return "ttig.support_f4_conversion";
+    }
+
+    /// Get the name of the attribute used to indicate whether the
+    /// H/BF8 to/from HF conversion instruction is available.
+    static constexpr llvm::StringRef getSupportF8ConversionAttrName() {
+      return "ttig.support_f8_conversion";
     }
 
     /// Get the name of the attribute used to convey information required for lowering
@@ -81,22 +99,10 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.target_arch";
     }
 
-    /// Get the name of the attribute used to indicate whether the native 16bit
-    /// atomic operations are available.
-    static constexpr llvm::StringRef getSupport16BitAtomicsAttrName() {
-      return "ttig.support_16bit_atomics";
-    }
-
     /// Get the name of the attribute used to indicate whether prefetching 256
     /// bytes is supported.
     static constexpr llvm::StringRef getSupportPrefetch256BAttrName() {
       return "ttig.support_prefetch_256b";
-    }
-
-    /// Get the name of the attribute used to indicate whether bfloat16
-    /// arithmetic is supported.
-    static constexpr llvm::StringRef getSupportBfloat16ArithmeticAttrName() {
-      return "ttig.support_bfloat16_arithmetic";
     }
 
     /// FIXME: Remove once IGC can split large 2D block loads.

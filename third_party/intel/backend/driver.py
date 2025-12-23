@@ -928,16 +928,16 @@ class XPUDriver(DriverBase):
                     "has_subgroup_matrix_multiply_accumulate"] = "cl_intel_subgroup_matrix_multiply_accumulate" in supported_extensions
                 dev_property[
                     "has_subgroup_matrix_multiply_accumulate_tensor_float32"] = "cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32" in supported_extensions
-                dev_property["has_2d_block_io"] = "cl_intel_subgroup_2d_block_io" in supported_extensions
-                dev_property["has_bfloat16_conversions"] = "cl_intel_bfloat16_conversions" in supported_extensions
+                dev_property["has_subgroup_2d_block_io"] = "cl_intel_subgroup_2d_block_io" in supported_extensions
+                dev_property["has_bfloat16_conversion"] = "cl_intel_bfloat16_conversions" in supported_extensions
             else:
                 check = self.utils.has_opencl_extension
                 dev_property["has_subgroup_matrix_multiply_accumulate"] = check(
                     device, b"cl_intel_subgroup_matrix_multiply_accumulate")
                 dev_property["has_subgroup_matrix_multiply_accumulate_tensor_float32"] = check(
                     device, b"cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32")
-                dev_property["has_2d_block_io"] = check(device, b"cl_intel_subgroup_2d_block_io")
-                dev_property["has_bfloat16_conversions"] = check(device, b"cl_intel_bfloat16_conversions")
+                dev_property["has_subgroup_2d_block_io"] = check(device, b"cl_intel_subgroup_2d_block_io")
+                dev_property["has_bfloat16_conversion"] = check(device, b"cl_intel_bfloat16_conversions")
 
         def update_device_arch(dev_property):
             if not (arch := knobs.intel.device_arch):
