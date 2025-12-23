@@ -22,6 +22,8 @@
 #include <optional>
 #include <triton/Tools/Sys/GetEnv.hpp>
 
+#include "intel/lib/TritonGENToLLVM/GenIntrinsicHelper.h"
+
 using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
@@ -2256,6 +2258,35 @@ public:
         mlir::gpu::SubgroupIdOp::create(rewriter, loc,
                                         /*upperBound=*/nullptr));
 
+    static const bool useAddrPayload = mlir::triton::tools::getBoolEnv(
+        "TRITON_XPU_USE_2D_BLOCK_LOAD_ADDRESS_PAYLOAD");
+    Intrinsic createAddrPayload, read2DBlock, setBaseAddr,
+        setWidthHeightAndOffsets;
+    Value addrPayload;
+    if (useAddrPayload) {
+      createAddrPayload =
+          GenISA<llvm::GenISAIntrinsic::ID::GenISA_LSC2DBlockCreateAddrPayload>(
+              rewriter, mlir::LLVM::LLVMPointerType::get(ctx));
+      read2DBlock =
+          GenISA<llvm::GenISAIntrinsic::ID::GenISA_LSC2DBlockReadAddrPayload>(
+              rewriter, load2DGenXType, mlir::LLVM::LLVMPointerType::get(ctx));
+      setBaseAddr = GenISA<
+          llvm::GenISAIntrinsic::ID::GenISA_LSC2DBlockSetAddrPayloadField>(
+          rewriter, mlir::LLVM::LLVMPointerType::get(ctx), i64_ty);
+      setWidthHeightAndOffsets = GenISA<
+          llvm::GenISAIntrinsic::ID::GenISA_LSC2DBlockSetAddrPayloadField>(
+          rewriter, mlir::LLVM::LLVMPointerType::get(ctx), i32_ty);
+      addrPayload = createAddrPayload(
+          rewriter, loc,
+          {/*base*/ b.i64_val(0),
+           /*base width*/ b.i32_val(0),
+           /*base height*/ b.i32_val(0), /*pitch*/ pitch,
+           /*offset x*/ b.i32_val(0), /*offset y*/ b.i32_val(0),
+           /*tile width*/ b.i32_val(tileWidth),
+           /*tile height*/ b.i32_val(tileHeight),
+           /*V*/ b.i32_val(vBlocks)});
+    }
+
     SmallVector<Value> unpackedLoadedVals(numElems);
     for (size_t elemIdx = 0; elemIdx < numElems; elemIdx += numElemsPerLoad) {
       unsigned registerIdx = regMapping.apply({{kRegister, elemIdx}})[0].second;
@@ -2305,22 +2336,57 @@ public:
       }
 
       assert(numPackedVals > 0 && "numPackedVals should be greater than zero.");
-      Value ret = TritonGEN::Matrix2DBlockLoadOp::create(
-          rewriter, loc, load2DGenXType,
-          /*ptr*/ addrElem,
-          /*base_width*/ adjustedBaseWidth,
-          /*base_height*/ adjustedBaseHeight,
-          /*base_pitch*/ pitch,
-          // offsetX was in terms of original elements. The 2d block io requires
-          // offsetX to be in terms of packed elements.
-          /*x*/ b.udiv(offsetX, b.i32_val(numPackedVals)),
-          /*y*/ offsetY,
-          /*elem_size_in_bits*/ packedElemSizeInBits,
-          /*tile_width*/ tileWidth,
-          /*tile_height*/ tileHeight,
-          /*v_blocks*/ vBlocks,
-          /*transpose*/ isTransposeRequired,
-          /*vnni_transform*/ !isTransposeRequired && useVNNIFormat);
+
+      Value ret;
+      if (useAddrPayload) {
+        // enum LSC2DBlockField { BASE = 1, WIDTH = 2, HEIGHT = 3, PITCH = 4,
+        // BLOCKX = 5, BLOCKY = 6 };
+        setBaseAddr(rewriter, loc,
+                    {addrPayload, b.i32_val(1),
+                     LLVM::PtrToIntOp::create(rewriter, loc, i64_ty, addrElem),
+                     b.i1_val(0)});
+        setWidthHeightAndOffsets(
+            rewriter, loc,
+            {addrPayload, b.i32_val(2), adjustedBaseWidth, b.i1_val(0)});
+        setWidthHeightAndOffsets(
+            rewriter, loc,
+            {addrPayload, b.i32_val(3), adjustedBaseHeight, b.i1_val(0)});
+        // offsetX was in terms of original elements. The 2d block io requires
+        // offsetX to be in terms of packed elements.
+        setWidthHeightAndOffsets(rewriter, loc,
+                                 {addrPayload, b.i32_val(5),
+                                  b.udiv(offsetX, b.i32_val(numPackedVals)),
+                                  b.i1_val(0)});
+        setWidthHeightAndOffsets(
+            rewriter, loc, {addrPayload, b.i32_val(6), offsetY, b.i1_val(0)});
+
+        ret = read2DBlock(
+            rewriter, loc,
+            {addrPayload, b.i32_val(0), b.i32_val(0),
+             b.i32_val(packedElemSizeInBits), b.i32_val(tileWidth),
+             b.i32_val(tileHeight), b.i32_val(vBlocks),
+             b.i1_val(isTransposeRequired),
+             b.i1_val(!isTransposeRequired && useVNNIFormat),
+             b.i32_val(static_cast<int>(
+                 mlir::triton::TritonGEN::LoadCacheControl::DEFAULT))});
+      } else {
+        ret = TritonGEN::Matrix2DBlockLoadOp::create(
+            rewriter, loc, load2DGenXType,
+            /*ptr*/ addrElem,
+            /*base_width*/ adjustedBaseWidth,
+            /*base_height*/ adjustedBaseHeight,
+            /*base_pitch*/ pitch,
+            // offsetX was in terms of original elements. The 2d block io
+            // requires offsetX to be in terms of packed elements.
+            /*x*/ b.udiv(offsetX, b.i32_val(numPackedVals)),
+            /*y*/ offsetY,
+            /*elem_size_in_bits*/ packedElemSizeInBits,
+            /*tile_width*/ tileWidth,
+            /*tile_height*/ tileHeight,
+            /*v_blocks*/ vBlocks,
+            /*transpose*/ isTransposeRequired,
+            /*vnni_transform*/ !isTransposeRequired && useVNNIFormat);
+      }
 
       {
         // When strides[0] is 0, we only want to load the first row, so we

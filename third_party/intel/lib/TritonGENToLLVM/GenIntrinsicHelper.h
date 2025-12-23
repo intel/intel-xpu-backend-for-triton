@@ -33,6 +33,8 @@ public:
     funCall.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
     return funCall.getResult();
   }
+
+  void print(llvm::raw_ostream &os) const { os << intrinsicDecl; }
 };
 
 template <llvm::GenISAIntrinsic::ID INST_ID> class GenISA : public Intrinsic {
@@ -41,6 +43,11 @@ public:
   explicit GenISA(OpBuilder &builder, OverrideTypes... retTy) {
     // get GenISA intrinsic declaration.
     intrinsicDecl = appendOrGetGenISADeclaration(builder, INST_ID, {&retTy...});
+  }
+
+  explicit GenISA(OpBuilder &builder) {
+    // get GenISA intrinsic declaration.
+    intrinsicDecl = appendOrGetGenISADeclaration(builder, INST_ID, {});
   }
 
   template <typename... Args>
@@ -53,6 +60,13 @@ public:
     return funCall;
   }
 };
+
+template <llvm::GenISAIntrinsic::ID INST_ID>
+llvm::raw_ostream &operator<<(llvm::raw_ostream &os,
+                              const GenISA<INST_ID> &intr) {
+  intr.print(os);
+  return os;
+}
 
 class GenISA_Prefetching_2D
     : public GenISA<llvm::GenISAIntrinsic::ID::GenISA_LSC2DBlockPrefetch> {
