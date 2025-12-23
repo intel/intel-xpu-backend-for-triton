@@ -199,12 +199,20 @@ def matmul(
             triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
             B,
         )
-        matmul_kernel_batched[grid](a, b, c, B, M, N, K, a.stride(0), a.stride(a_major), a.stride(a_minor), b.stride(0),
-                                    b.stride(b_minor), b.stride(b_major), c.stride(0), c.stride(1), c.stride(2))
+        matmul_kernel_batched[grid](
+            a, b, c,  #
+            B, M, N, K,  #
+            a.stride(0), a.stride(a_major), a.stride(a_minor),  #
+            b.stride(0), b.stride(b_minor), b.stride(b_major),  #
+            c.stride(0), c.stride(1), c.stride(2))
     elif len(a.shape) == 2 and len(b.shape) == 2:
         grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
-        matmul_kernel[grid](a, b, c, M, N, K, a.stride(a_major), a.stride(a_minor), b.stride(b_minor),
-                            b.stride(b_major), c.stride(0), c.stride(1))
+        matmul_kernel[grid](
+            a, b, c,  #
+            M, N, K,  #
+            a.stride(a_major), a.stride(a_minor),  #
+            b.stride(b_minor), b.stride(b_major),  #
+            c.stride(0), c.stride(1))
     else:
         assert False, 'Input matrixs dimensions mismatch'
     return c

@@ -65,10 +65,10 @@ def gluon_matmul_kernel_with_tensor_descriptors(
         GROUP_SIZE_M: ttgl.constexpr,
         # Gluon meta parameters
         NUM_STAGES: ttgl.constexpr, NUM_WARPS: ttgl.constexpr):
-    layout: ttgl.constexpr = get_dpas_layout(NUM_WARPS, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K)
+    DPAS_LAYOUT: ttgl.constexpr = get_dpas_layout(NUM_WARPS, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K)
 
-    lhs_layout: ttgl.constexpr = ttgl.DotOperandLayout(parent=layout, operand_index=0, k_width=1)
-    rhs_layout: ttgl.constexpr = ttgl.DotOperandLayout(parent=layout, operand_index=1, k_width=2)
+    A_DOT_LAYOUT: ttgl.constexpr = ttgl.DotOperandLayout(parent=DPAS_LAYOUT, operand_index=0, k_width=1)
+    B_DOT_LAYOUT: ttgl.constexpr = ttgl.DotOperandLayout(parent=DPAS_LAYOUT, operand_index=1, k_width=2)
 
     pid = ttgl.program_id(axis=0)
     num_pid_m = ttgl.cdiv(M, BLOCK_SIZE_M)
@@ -81,13 +81,13 @@ def gluon_matmul_kernel_with_tensor_descriptors(
     pid_n = (pid % num_pid_in_group) // group_size_m
 
     a_desc = ttgl.intel.make_tensor_descriptor(a_ptr, (M, K), (stride_am, stride_ak), (BLOCK_SIZE_M, BLOCK_SIZE_K),
-                                               lhs_layout)
+                                               A_DOT_LAYOUT)
     b_desc = ttgl.intel.make_tensor_descriptor(b_ptr, (K, N), (stride_bk, stride_bn), (BLOCK_SIZE_K, BLOCK_SIZE_N),
-                                               rhs_layout)
+                                               B_DOT_LAYOUT)
     c_desc = ttgl.intel.make_tensor_descriptor(c_ptr, (M, N), (stride_cm, stride_cn), (BLOCK_SIZE_M, BLOCK_SIZE_N),
-                                               layout)
+                                               DPAS_LAYOUT)
 
-    accumulator = ttgl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=ttgl.float32, layout=layout)
+    accumulator = ttgl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=ttgl.float32, layout=DPAS_LAYOUT)
 
     # Prefetch first blocks for A and B matrices (pre-loop prefetches)
     for i in range(NUM_STAGES - 1):
@@ -170,10 +170,10 @@ def gluon_matmul_kernel_with_tensor_descriptors_batched(
         GROUP_SIZE_M: ttgl.constexpr,
         # Gluon meta parameters
         NUM_STAGES: ttgl.constexpr, NUM_WARPS: ttgl.constexpr):
-    layout: ttgl.constexpr = get_dpas_layout(NUM_WARPS, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K)
+    DPAS_LAYOUT: ttgl.constexpr = get_dpas_layout(NUM_WARPS, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K)
 
-    lhs_layout: ttgl.constexpr = ttgl.DotOperandLayout(parent=layout, operand_index=0, k_width=1)
-    rhs_layout: ttgl.constexpr = ttgl.DotOperandLayout(parent=layout, operand_index=1, k_width=2)
+    A_DOT_LAYOUT: ttgl.constexpr = ttgl.DotOperandLayout(parent=DPAS_LAYOUT, operand_index=0, k_width=1)
+    B_DOT_LAYOUT: ttgl.constexpr = ttgl.DotOperandLayout(parent=DPAS_LAYOUT, operand_index=1, k_width=2)
 
     bid = ttgl.program_id(axis=1)
     pid = ttgl.program_id(axis=0)
@@ -192,13 +192,13 @@ def gluon_matmul_kernel_with_tensor_descriptors_batched(
     offset_c = bid.to(ttgl.int64) * stride_cz
 
     a_desc = ttgl.intel.make_tensor_descriptor(a_ptr + offset_a, (M, K), (stride_am, stride_ak),
-                                               (BLOCK_SIZE_M, BLOCK_SIZE_K), lhs_layout)
+                                               (BLOCK_SIZE_M, BLOCK_SIZE_K), A_DOT_LAYOUT)
     b_desc = ttgl.intel.make_tensor_descriptor(b_ptr + offset_b, (K, N), (stride_bk, stride_bn),
-                                               (BLOCK_SIZE_K, BLOCK_SIZE_N), rhs_layout)
+                                               (BLOCK_SIZE_K, BLOCK_SIZE_N), B_DOT_LAYOUT)
     c_desc = ttgl.intel.make_tensor_descriptor(c_ptr + offset_c, (M, N), (stride_cm, stride_cn),
-                                               (BLOCK_SIZE_M, BLOCK_SIZE_N), layout)
+                                               (BLOCK_SIZE_M, BLOCK_SIZE_N), DPAS_LAYOUT)
 
-    accumulator = ttgl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=ttgl.float32, layout=layout)
+    accumulator = ttgl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=ttgl.float32, layout=DPAS_LAYOUT)
 
     # Prefetch first blocks for A and B matrices (pre-loop prefetches)
     for i in range(NUM_STAGES - 1):

@@ -71,7 +71,7 @@ def load(desc, offsets: Sequence[constexpr | tensor], _semantic=None) -> tensor:
 @builtin
 def load_2d(desc, offsets: Sequence[constexpr | tensor], order: str = "row_major", _semantic=None) -> tensor:
     if not is_2d_block_supported():
-        raise ValueError("2d block functionality is not supported for this hardware")
+        raise ValueError("2d block functionality is not supported on target hardware")
 
     op = _semantic.descriptor_load(desc, offsets, "", "")
     mark_2d_block_attribute(op.handle, order, _semantic)
@@ -87,7 +87,7 @@ def store(desc, offsets: Sequence[constexpr | tensor], value: tensor, _semantic=
 def store_2d(desc, offsets: Sequence[constexpr | tensor], value: tensor, order: str = "row_major",
              _semantic=None) -> tensor:
     if not is_2d_block_supported():
-        raise ValueError("2d block functionality is not supported for this hardware")
+        raise ValueError("2d block functionality is not supported on target hardware")
 
     op = _semantic.descriptor_store(desc, value, offsets)
     mark_2d_block_attribute(op.handle, order, _semantic)
@@ -104,7 +104,7 @@ def prefetch(desc, offsets: Sequence[constexpr | tensor], _semantic=None):
 @builtin
 def prefetch_2d(desc, offsets: Sequence[constexpr | tensor], order: str = "row_major", _semantic=None):
     if not is_2d_block_supported():
-        raise ValueError("2d block functionality is not supported for this hardware")
+        raise ValueError("2d block functionality is not supported on target hardware")
 
     ptr_handle = desc.handle
     offsets_handles = [offset.handle if hasattr(offset, 'handle') else offset for offset in offsets]
