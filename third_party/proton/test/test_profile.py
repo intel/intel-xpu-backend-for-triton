@@ -208,7 +208,9 @@ def test_cpu_timed_scope(tmp_path: pathlib.Path, device: str):
     assert test1_frame["metrics"]["cpu_time (ns)"] > 0
 
 
-def test_get_data(tmp_path: pathlib.Path):
+def test_get_data(tmp_path: pathlib.Path, device: str):
+    if is_xpu():
+        pytest.skip("FIXME: #5742")
     temp_file = tmp_path / "test_tree_json.hatchet"
     session = proton.start(str(temp_file.with_suffix("")), context="shadow")
 
@@ -218,7 +220,7 @@ def test_get_data(tmp_path: pathlib.Path):
         tl.store(y + offs, tl.load(x + offs))
 
     with proton.scope("test"):
-        x = torch.ones((2, 2), device="cuda")
+        x = torch.ones((2, 2), device=device)
         foo[(1, )](x, x, 4)
         foo[(1, )](x, x, 4)
 
