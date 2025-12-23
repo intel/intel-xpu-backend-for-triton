@@ -31,7 +31,7 @@ def TritonIntelGPU_Dialect : Dialect {
     static constexpr llvm::StringRef getSupportedSGSizesAttrName() {
       return "ttig.supported_sg_sizes";
     }
-    
+
     /// Get the name of the attribute used to indicate whether the native 16bit
     /// atomic operations are available.
     static constexpr llvm::StringRef getSupport16BitAtomicsAttrName() {
