@@ -13,7 +13,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/LogicalResult.h"
+#include "llvm/Support/ErrorHandling.h"
 #include <optional>
 
 #define DEBUG_TYPE "triton-intel-range-analysis"
@@ -89,6 +89,17 @@ static void inferResultRange(HistogramOp op, SetIntRangeFn setResultRange) {
                                APInt::getZero(bitWidth).sext(bitWidth),
                                APInt::getMaxValue(bitWidth).sext(bitWidth)));
   }
+}
+
+static void inferResultRange(arith::BitcastOp op,
+                             ArrayRef<ConstantIntRanges> argRanges,
+                             SetIntRangeFn setResultRange) {
+  Type inputType = op.getIn().getType();
+  Type resultType = op.getResult().getType();
+  assert(isa<IntegerType>(inputType) ||
+         isa<IndexType>(inputType) && "Unexpected input type");
+  assert(inputType == resultType && "bitcast between different types");
+  setResultRange(op.getResult(), argRanges[0]);
 }
 
 static std::optional<ConstantIntRanges>
@@ -436,7 +447,8 @@ LogicalResult IntegerRangeAnalysis::visitOperationHelper(
         })
         .Case<tt::HistogramOp>([&](auto histogramOp) {
           inferResultRange(histogramOp, joinCallback);
-        });
+        })
+        .Default([](auto) { llvm_unreachable("Unexpected operation"); });
     return success();
   }
 
@@ -468,16 +480,39 @@ LogicalResult IntegerRangeAnalysis::visitOperationHelper(
         })
         .Case<tt::GatherOp>([&](auto op) {
           inferResultRange(op, argConstIntRanges, joinCallback);
-        });
+        })
+        .Default([](auto) { llvm_unreachable("Unexpected operation"); });
     return success();
   }
 
-  // TODO: It looks like inferResultRangesFromOptional does not handle several
-  // operations well:
-  //   - arith.shrui, e.g. arith.shrui %arg3, %c5_i32
-  //
   if (auto inferrable = dyn_cast<InferIntRangeInterface>(op)) {
     inferrable.inferResultRangesFromOptional(argIntValueRanges, joinCallback);
+    return success();
+  }
+
+  // Additional arith ops.
+  if (isa<arith::BitcastOp>(op)) {
+    Value input = cast<arith::BitcastOp>(op).getIn();
+    if (!isa<IntegerType>(input.getType()) &&
+        !isa<IndexType>(input.getType())) {
+      setAllToEntryStates(resultsLattices);
+      return success();
+    }
+
+    SmallVector<ConstantIntRanges> argConstIntRanges;
+    for (const auto &r : argIntValueRanges) {
+      if (r.isUninitialized()) {
+        setAllToEntryStates(resultsLattices);
+        return success();
+      }
+      argConstIntRanges.push_back(r.getValue());
+    }
+
+    llvm::TypeSwitch<Operation *>(op)
+        .Case<arith::BitcastOp>([&](auto bitcastOp) {
+          inferResultRange(bitcastOp, argConstIntRanges, joinCallback);
+        })
+        .Default([](auto) { llvm_unreachable("Unexpected operation"); });
     return success();
   }
 
@@ -655,22 +690,24 @@ void IntegerRangeAnalysis::initializeModule(ModuleOp &mod) {
   });
 }
 
+std::optional<ConstantIntRanges> collectRange(const DataFlowSolver &solver,
+                                              Value value) {
+  auto *range = solver.lookupState<dataflow::IntegerValueRangeLattice>(value);
+  if (!range || range->getValue().isUninitialized())
+    return std::nullopt;
+
+  ConstantIntRanges inferredRange = range->getValue().getValue();
+  if (isEmpty(inferredRange))
+    return std::nullopt;
+
+  return inferredRange;
+}
+
 std::optional<SmallVector<std::optional<ConstantIntRanges>>>
 collectRanges(const DataFlowSolver &solver, ValueRange values) {
   SmallVector<std::optional<ConstantIntRanges>> ranges;
-  for (Value val : values) {
-    auto *range = solver.lookupState<dataflow::IntegerValueRangeLattice>(val);
-    if (!range || range->getValue().isUninitialized()) {
-      ranges.push_back(std::nullopt);
-      continue;
-    }
-    const ConstantIntRanges &inferredRange = range->getValue().getValue();
-    if (isEmpty(inferredRange)) {
-      ranges.push_back(std::nullopt);
-      continue;
-    }
-    ranges.push_back(inferredRange);
-  }
+  for (Value val : values)
+    ranges.push_back(collectRange(solver, val));
   return ranges;
 }
 

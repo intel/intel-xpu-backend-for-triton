@@ -98,6 +98,11 @@ private:
       loopVisits;
 };
 
+/// Collects the inferred integer ranges for the given value. If the value's
+/// range cannot be inferred, std::nullopt is returned for that value.
+std::optional<ConstantIntRanges> collectRange(const DataFlowSolver &solver,
+                                              Value value);
+
 /// Collects the inferred integer ranges for the given values. If a value's
 /// range cannot be inferred, std::nullopt is returned for that value.
 std::optional<SmallVector<std::optional<ConstantIntRanges>>>

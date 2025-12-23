@@ -1,17 +1,21 @@
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
 #include "intel/include/Utils/Utility.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Interfaces/InferIntRangeInterface.h"
 #include "mlir/Support/WalkResult.h"
+#include "third_party/intel/include/Analysis/Range.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cmath>
+#include <cstdint>
 #include <optional>
 
 #define DEBUG_TYPE "triton-intel-remove-boundary-checks"
@@ -27,7 +31,7 @@ namespace mlir::triton::intel {
 namespace {
 class BoundaryChecksRemover {
 public:
-  void run(ModuleOp moduleOp) {
+  void run(ModuleOp moduleOp, DataFlowSolver *solver) {
     moduleOp.walk([&](tt::LoadOp loadOp) {
       if (!isCandidate(loadOp))
         return WalkResult::skip();
@@ -83,32 +87,35 @@ public:
           auto computeLoopIVRange =
               [&](OpFoldResult lb, OpFoldResult ub,
                   OpFoldResult step) -> std::optional<ConstantIntRanges> {
-            auto getBoundValue =
-                [](OpFoldResult bound) -> std::optional<int64_t> {
-              if (std::optional<int64_t> opVal = getConstantIntValue(bound))
-                return *opVal;
-
-              Value val = tt::intel::getFinalValue(cast<Value>(bound));
-              if (auto cst = dyn_cast<arith::BitcastOp>(val.getDefiningOp()))
-                val = cst.getIn();
-
-              return getConstantIntValue(getAsOpFoldResult(val));
+            auto getRange = [&](OpFoldResult loopBound)
+                -> std::optional<ConstantIntRanges> {
+              if (auto attr = dyn_cast<Attribute>(loopBound)) {
+                if (auto bound = dyn_cast_or_null<IntegerAttr>(attr)) {
+                  APInt boundVal = bound.getValue();
+                  return ConstantIntRanges::range(boundVal, boundVal,
+                                                  true /*signed*/);
+                }
+                return std::nullopt;
+              }
+              return tt::intel::collectRange(*solver, cast<Value>(loopBound));
             };
 
-            auto areLoopBoundKnown = [&](OpFoldResult lb, OpFoldResult ub,
-                                         OpFoldResult step) {
-              return (getBoundValue(lb) && getBoundValue(ub) &&
-                      getBoundValue(step));
-            };
-
-            if (!areLoopBoundKnown(lb, ub, step))
+            std::optional<ConstantIntRanges> lbRange = getRange(lb);
+            std::optional<ConstantIntRanges> ubRange = getRange(ub);
+            std::optional<ConstantIntRanges> stepRange = getRange(step);
+            if (!lbRange || !ubRange || !stepRange)
               return std::nullopt;
 
-            int64_t lbVal = *getBoundValue(lb);
-            int64_t ubVal = *getBoundValue(ub);
-            int64_t stepVal = *getBoundValue(step);
+            if (!lbRange->getConstantValue() || !ubRange->getConstantValue() ||
+                !stepRange->getConstantValue())
+              return std::nullopt;
+
+            int64_t lbVal = lbRange->getConstantValue()->getSExtValue();
+            int64_t ubVal = ubRange->getConstantValue()->getSExtValue();
+            int64_t stepVal = stepRange->getConstantValue()->getSExtValue();
             int64_t lastIVVal =
                 lbVal + ((ubVal - lbVal - 1) / stepVal) * stepVal;
+
             llvm::APInt start(64, lbVal, true);
             llvm::APInt end(64, lastIVVal, true);
 
@@ -184,9 +191,17 @@ struct TritonIntelRemoveBoundaryChecks
           TritonIntelRemoveBoundaryChecks> {
 public:
   void runOnOperation() final {
-    ModuleOp moduleOp = getOperation();
+    ModuleOp mod = getOperation();
+
+    std::shared_ptr<DataFlowSolver> solver = createDataFlowSolver();
+    auto *rangeAnalysis = solver->load<tt::intel::IntegerRangeAnalysis>(
+        mod, getAnalysis<DominanceInfo>());
+
+    if (failed(solver->initializeAndRun(getOperation())))
+      return signalPassFailure();
+
     BoundaryChecksRemover remover;
-    remover.run(moduleOp);
-    assert(succeeded(verify(moduleOp)) && "Module verification failed");
+    remover.run(mod, solver.get());
+    assert(succeeded(verify(mod)) && "Module verification failed");
   }
 };

@@ -1,7 +1,7 @@
 // RUN: triton-opt %s -split-input-file -triton-intel-remove-boundary-checks | FileCheck %s
 
 module {
-tt.func public @simple_load(%load_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %store_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+tt.func public @simple_load(%load_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
   %c1_i64 = arith.constant 1 : i64
   %c64_i64 = arith.constant 64 : i64
   %c512_i64 = arith.constant 512 : i64
@@ -21,7 +21,7 @@ tt.func public @simple_load(%load_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}
 // -----
 
 module {
-tt.func public @load_in_for_loop(%load_ptr0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %load_ptr1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %store_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+tt.func public @load_in_for_loop1(%load_ptr0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %load_ptr1: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
   %c0_i32 = arith.constant 0 : i32
   %c1_i32 = arith.constant 1 : i32
   %c20_i32 = arith.constant 20 : i32
@@ -51,8 +51,39 @@ tt.func public @load_in_for_loop(%load_ptr0: !tt.ptr<f16> {tt.divisibility = 16 
   }
   tt.return
 }
-// CHECK-LABEL: load_in_for_loop
+// CHECK-LABEL: load_in_for_loop1
 // CHECK-COUNT-2: scf.for
 // CHECK: [[PTR:%.*]] = tt.make_tensor_ptr
 // CHECK: tt.load [[PTR]] : !tt.ptr<tensor<1x64x64xf16>>
+}
+
+// -----
+
+module {
+tt.func public @load_in_for_loop2(%load_ptr0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c20_i32 = arith.constant 20 : i32
+  %c64_i32 = arith.constant 64 : i32
+  scf.for %x = %c0_i32 to %c20_i32 step %c1_i32 : i32 {
+    %c1_i64 = arith.constant 1 : i64
+    %c512_i64 = arith.constant 512 : i64
+    %c1024_i64 = arith.constant 1024 : i64
+    %c64_i64 = arith.constant 64 : i64
+    %c65536_i64 = arith.constant 65536 : i64
+    scf.for %z = %c0_i32 to %x step %c64_i32 iter_args() -> ()  : i32 {
+      %ptr1 = tt.make_tensor_ptr %load_ptr0, [%c512_i64, %c64_i64, %c1024_i64], [%c65536_i64, %c1_i64, %c64_i64], [%x, %c0_i32, %z] {order = array<i32: 2, 0, 1>} : <tensor<1x64x64xf16>>
+      //   a. boundaryCheck = 1 checks the block ptr offset at index 2 (%z)
+      //   b. boundaryCheck = 2 checks the block ptr offset at index 1 (%y)
+      // Check (a) is unnecessary because max(%z) + loadResType.shape[2] - 1 = 960 + 64 - 1 = 1023, which is less than 1024.
+      // Check (b) is unnecessary because max(0) + loadResType.shape[1] - 1 = 0 + 64 -1 = 63, which is less than 64.
+      %load1 = tt.load %ptr1 {boundaryCheck = array<i32: 1, 2>} : !tt.ptr<tensor<1x64x64xf16>>
+    }
+  }
+  tt.return
+}
+// CHECK-LABEL: load_in_for_loop2
+// CHECK-COUNT-2: scf.for
+// CHECK: [[PTR:%.*]] = tt.make_tensor_ptr
+// CHECK: tt.load [[PTR]] {boundaryCheck = array<i32: 1>} : !tt.ptr<tensor<1x64x64xf16>>
 }
