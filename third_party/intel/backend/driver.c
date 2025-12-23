@@ -372,7 +372,7 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   try {
 
     const auto &sycl_l0_device_pair = g_sycl_l0_device_list[devId];
-    const sycl::device sycl_device = sycl_l0_device_pair.first;
+    const auto &sycl_device = sycl_l0_device_pair.first;
     const auto l0_device = sycl_l0_device_pair.second;
 
     const std::string kernel_name = name;
@@ -585,7 +585,7 @@ extern "C" EXPORT_FUNC PyObject *has_spirv_extension(int device_id,
   }
 
   const auto &sycl_l0_device_pair = g_sycl_l0_device_list[device_id];
-  const sycl::device sycl_device = sycl_l0_device_pair.first;
+  const auto &sycl_device = sycl_l0_device_pair.first;
   const auto l0_device = sycl_l0_device_pair.second;
 
   // zeInit is typically performed under SYCL/PyTorch, but it's safe to call.
@@ -610,7 +610,7 @@ extern "C" EXPORT_FUNC PyObject *has_ze_extension(int device_id,
   }
 
   const auto &sycl_l0_device_pair = g_sycl_l0_device_list[device_id];
-  const sycl::device sycl_device = sycl_l0_device_pair.first;
+  const auto &sycl_device = sycl_l0_device_pair.first;
 
   zeInit(0);
 
