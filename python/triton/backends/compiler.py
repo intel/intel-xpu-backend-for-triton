@@ -13,6 +13,13 @@ class GPUTarget(object):
     arch: Union[int, str, dict]
     warp_size: int
 
+    def __post_init__(self):
+        if False and 'arch' not in self.arch:
+            from triton.runtime.driver import driver
+            # breakpoint()
+            driver.active.update_advanced_features(self.arch)
+            driver.active.update_device_arch(self.arch)
+
 
 class Language(Enum):
     """The input language being compiled by the backend."""

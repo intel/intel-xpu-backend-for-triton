@@ -913,42 +913,46 @@ class XPUDriver(DriverBase):
         import torch
         return torch.xpu.current_stream().sycl_queue
 
+    def update_advanced_features(self, dev_property):
+        device = self.get_current_device()
+        if knobs.intel.device_extensions:
+            # May be useful when using the `TRITON INTEL_DEVICE_ARCH` environment variable
+            # to be able to flexibly turn on/off the advanced feature.
+            supported_extensions = set()
+            supported_extensions.update(knobs.intel.device_extensions.split(" "))
+            dev_property[
+                "has_subgroup_matrix_multiply_accumulate"] = "cl_intel_subgroup_matrix_multiply_accumulate" in supported_extensions
+            dev_property[
+                "has_subgroup_matrix_multiply_accumulate_tensor_float32"] = "cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32" in supported_extensions
+            dev_property["has_2d_block_io"] = "cl_intel_subgroup_2d_block_io" in supported_extensions
+            dev_property["has_bfloat16_conversion"] = "cl_intel_bfloat16_conversions" in supported_extensions
+        else:
+            check = self.utils.has_opencl_extension
+            dev_property["has_subgroup_matrix_multiply_accumulate"] = check(
+                device, b"cl_intel_subgroup_matrix_multiply_accumulate")
+            dev_property["has_subgroup_matrix_multiply_accumulate_tensor_float32"] = check(
+                device, b"cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32")
+            dev_property["has_2d_block_io"] = check(device, b"cl_intel_subgroup_2d_block_io")
+            print("get_current_target")
+            print("has_2d_block_io", dev_property["has_2d_block_io"])
+            dev_property["has_bfloat16_conversion"] = check(device, b"cl_intel_bfloat16_conversions")
+
+    def update_device_arch(self, dev_property):
+        if not (arch := knobs.intel.device_arch):
+            dirname = os.path.dirname(os.path.realpath(__file__))
+            parser = compile_module_from_src(src=Path(os.path.join(dirname, "arch_parser.c")).read_text(),
+                                             name="arch_utils")
+            arch = parser.parse_device_arch(dev_property["architecture"])
+        dev_property["arch"] = arch
+
     def get_current_target(self):
         import torch
         device = self.get_current_device()
         dev_property = torch.xpu.get_device_capability(device)
 
-        def update_advanced_features(device, dev_property):
-            if knobs.intel.device_extensions:
-                # May be useful when using the `TRITON INTEL_DEVICE_ARCH` environment variable
-                # to be able to flexibly turn on/off the advanced feature.
-                supported_extensions = set()
-                supported_extensions.update(knobs.intel.device_extensions.split(" "))
-                dev_property[
-                    "has_subgroup_matrix_multiply_accumulate"] = "cl_intel_subgroup_matrix_multiply_accumulate" in supported_extensions
-                dev_property[
-                    "has_subgroup_matrix_multiply_accumulate_tensor_float32"] = "cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32" in supported_extensions
-                dev_property["has_subgroup_2d_block_io"] = "cl_intel_subgroup_2d_block_io" in supported_extensions
-                dev_property["has_bfloat16_conversion"] = "cl_intel_bfloat16_conversions" in supported_extensions
-            else:
-                check = self.utils.has_opencl_extension
-                dev_property["has_subgroup_matrix_multiply_accumulate"] = check(
-                    device, b"cl_intel_subgroup_matrix_multiply_accumulate")
-                dev_property["has_subgroup_matrix_multiply_accumulate_tensor_float32"] = check(
-                    device, b"cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32")
-                dev_property["has_subgroup_2d_block_io"] = check(device, b"cl_intel_subgroup_2d_block_io")
-                dev_property["has_bfloat16_conversion"] = check(device, b"cl_intel_bfloat16_conversions")
-
-        def update_device_arch(dev_property):
-            if not (arch := knobs.intel.device_arch):
-                dirname = os.path.dirname(os.path.realpath(__file__))
-                parser = compile_module_from_src(src=Path(os.path.join(dirname, "arch_parser.c")).read_text(),
-                                                 name="arch_utils")
-                arch = parser.parse_device_arch(dev_property["architecture"])
-            dev_property["arch"] = arch
-
-        update_advanced_features(device, dev_property)
-        update_device_arch(dev_property)
+        # breakpoint()
+        self.update_advanced_features(dev_property)
+        self.update_device_arch(dev_property)
 
         return GPUTarget("xpu", dev_property, warp_size=32)
 
