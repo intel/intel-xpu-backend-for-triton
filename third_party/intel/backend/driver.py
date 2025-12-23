@@ -933,8 +933,6 @@ class XPUDriver(DriverBase):
             dev_property["has_subgroup_matrix_multiply_accumulate_tensor_float32"] = check(
                 device, b"cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32")
             dev_property["has_2d_block_io"] = check(device, b"cl_intel_subgroup_2d_block_io")
-            print("get_current_target")
-            print("has_2d_block_io", dev_property["has_2d_block_io"])
             dev_property["has_bfloat16_conversion"] = check(device, b"cl_intel_bfloat16_conversions")
 
     def update_device_arch(self, dev_property):
@@ -950,7 +948,6 @@ class XPUDriver(DriverBase):
         device = self.get_current_device()
         dev_property = torch.xpu.get_device_capability(device)
 
-        # breakpoint()
         self.update_advanced_features(dev_property)
         self.update_device_arch(dev_property)
 
