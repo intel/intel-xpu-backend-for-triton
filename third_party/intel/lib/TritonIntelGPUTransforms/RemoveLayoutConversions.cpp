@@ -1094,6 +1094,12 @@ void LayoutRematerialization::reduceLoopCarriedValues() {
             for (Operation *user : advanceOp->getUsers())
               processUser(user, newAdvanceOp.getResult());
           })
+          .Case<scf::ForOp>([&](auto forOp) {
+            LLVM_DEBUG({
+              DBGS() << "Skipping rematerialization for scf.for users:"
+                     << *forOp << "\n";
+            });
+          })
           .Default([](auto op) {
             llvm::report_fatal_error(llvm::Twine(
                 "Unsupported operation in backward rematerialization: '" +
