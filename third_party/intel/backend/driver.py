@@ -191,7 +191,8 @@ class SpirvUtils:
 
     def __init__(self, cache_path: str):
         self.shared_library = ctypes.PyDLL(cache_path)
-        methods = ("init_devices", "load_binary", "wait_on_sycl_queue", "has_opencl_extension")
+        methods = ("init_devices", "load_binary", "wait_on_sycl_queue", "has_opencl_extension",
+                   "is_opencl_enabled", "has_spirv_extension", "has_ze_extension")
         for method in methods:
             getattr(self.shared_library, method).restype = ctypes.py_object
             getattr(self.shared_library, method).argtypes = (ctypes.py_object, )
@@ -199,11 +200,17 @@ class SpirvUtils:
         self.shared_library.get_device_properties.argtypes = (ctypes.c_int, )
         self.shared_library.has_opencl_extension.restype = ctypes.py_object
         self.shared_library.has_opencl_extension.argtypes = (ctypes.c_int, ctypes.c_char_p)
+        self.shared_library.is_opencl_enabled.restype = ctypes.py_object
+        self.shared_library.is_opencl_enabled.argtypes = (ctypes.c_int, )
+        self.shared_library.has_spirv_extension.restype = ctypes.py_object
+        self.shared_library.has_spirv_extension.argtypes = (ctypes.c_int, ctypes.c_char_p)
+        self.shared_library.has_ze_extension.restype = ctypes.py_object
+        self.shared_library.has_ze_extension.argtypes = (ctypes.c_int, ctypes.c_char_p)
         self.shared_library.get_last_selected_build_flags.restype = ctypes.py_object
 
     def __getattribute__(self, name):
         if name in ("get_device_properties", "init_devices", "wait_on_sycl_queue", "has_opencl_extension",
-                    "get_last_selected_build_flags"):
+                    "is_opencl_enabled", "has_spirv_extension", "has_ze_extension", "get_last_selected_build_flags"):
             shared_library = super().__getattribute__("shared_library")
             return getattr(shared_library, name)
 
@@ -327,6 +334,9 @@ class XPUUtils(object):
         self.device_count = mod.init_devices(self.get_sycl_queue())
         self.wait_on_sycl_queue = mod.wait_on_sycl_queue
         self.has_opencl_extension = mod.has_opencl_extension
+        self.is_opencl_enabled = mod.is_opencl_enabled
+        self.has_spirv_extension = mod.has_spirv_extension
+        self.has_ze_extension = mod.has_ze_extension
         self.get_last_selected_build_flags = mod.get_last_selected_build_flags
 
     def get_current_device(self):
@@ -931,13 +941,26 @@ class XPUDriver(DriverBase):
                 dev_property["has_subgroup_2d_block_io"] = "cl_intel_subgroup_2d_block_io" in supported_extensions
                 dev_property["has_bfloat16_conversion"] = "cl_intel_bfloat16_conversions" in supported_extensions
             else:
-                check = self.utils.has_opencl_extension
-                dev_property["has_subgroup_matrix_multiply_accumulate"] = check(
-                    device, b"cl_intel_subgroup_matrix_multiply_accumulate")
-                dev_property["has_subgroup_matrix_multiply_accumulate_tensor_float32"] = check(
-                    device, b"cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32")
-                dev_property["has_subgroup_2d_block_io"] = check(device, b"cl_intel_subgroup_2d_block_io")
-                dev_property["has_bfloat16_conversion"] = check(device, b"cl_intel_bfloat16_conversions")
+                if self.utils.is_opencl_enabled(device):
+                    check = self.utils.has_opencl_extension
+                    dev_property["has_subgroup_matrix_multiply_accumulate"] = check(
+                        device, b"cl_intel_subgroup_matrix_multiply_accumulate")
+                    dev_property["has_subgroup_matrix_multiply_accumulate_tensor_float32"] = check(
+                        device, b"cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32")
+                    dev_property["has_subgroup_2d_block_io"] = check(device, b"cl_intel_subgroup_2d_block_io")
+                    dev_property["has_bfloat16_conversion"] = check(device, b"cl_intel_bfloat16_conversions")
+                else:
+                    check = self.utils.has_spirv_extension
+                    has_mma = check(device, b"SPV_INTEL_subgroup_matrix_multiply_accumulate")
+                    has_tf32 = check(device, b"SPV_INTEL_tensor_float32_conversion")
+                    has_2d_block_io = check(device, b"SPV_INTEL_2d_block_io")
+                    has_bf16_spv = check(device, b"SPV_INTEL_bfloat16_conversion")
+                    has_bf16_ze = self.utils.has_ze_extension(device, b"ZE_extension_bfloat16_conversions")
+
+                    dev_property["has_subgroup_matrix_multiply_accumulate"] = has_mma
+                    dev_property["has_subgroup_matrix_multiply_accumulate_tensor_float32"] = has_mma and has_tf32
+                    dev_property["has_subgroup_2d_block_io"] = has_2d_block_io
+                    dev_property["has_bfloat16_conversion"] = has_bf16_ze or has_bf16_spv
 
         def update_device_arch(dev_property):
             if not (arch := knobs.intel.device_arch):
