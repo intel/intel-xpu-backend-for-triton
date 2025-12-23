@@ -2801,6 +2801,28 @@ struct LoadOpToBlockIOConversion
         rewriter, loc, i32_ty,
         mlir::gpu::SubgroupIdOp::create(rewriter, loc,
                                         /*upperBound=*/nullptr));
+    auto createAddrPayload =
+        GenISA<llvm::GenISAIntrinsic::ID::GenISA_LSC2DBlockCreateAddrPayload>(
+            rewriter, mlir::LLVM::LLVMPointerType::get(ctx));
+    auto read2DBlock =
+        GenISA<llvm::GenISAIntrinsic::ID::GenISA_LSC2DBlockReadAddrPayload>(
+            rewriter, load2DGenXType, mlir::LLVM::LLVMPointerType::get(ctx));
+    auto setBaseAddr =
+        GenISA<llvm::GenISAIntrinsic::ID::GenISA_LSC2DBlockSetAddrPayloadField>(
+            rewriter, mlir::LLVM::LLVMPointerType::get(ctx), i64_ty);
+    auto setWidthHeightAndOffsets =
+        GenISA<llvm::GenISAIntrinsic::ID::GenISA_LSC2DBlockSetAddrPayloadField>(
+            rewriter, mlir::LLVM::LLVMPointerType::get(ctx), i32_ty);
+
+    Value addrPayload =
+        createAddrPayload(rewriter, loc, /*base*/ b.i64_val(0),
+                          /*base width*/ b.i32_val(0),
+                          /*base height*/ b.i32_val(0), /*pitch*/ pitch,
+                          /*offset x*/ b.i32_val(0), /*offset y*/ b.i32_val(0),
+                          /*tile width*/ b.i32_val(tileWidth),
+                          /*tile height*/ b.i32_val(tileHeight),
+                          /*V*/ b.i32_val(vBlocks))
+            .getResult();
 
     SmallVector<Value> unpackedLoadedVals(numElems);
 
@@ -2841,6 +2863,34 @@ struct LoadOpToBlockIOConversion
       }
 
       assert(numPackedVals > 0 && "numPackedVals should be greater than zero.");
+#if 0
+      // enum LSC2DBlockField { BASE = 1, WIDTH = 2, HEIGHT = 3, PITCH = 4,
+      // BLOCKX = 5, BLOCKY = 6 };
+      setBaseAddr(rewriter, loc, addrPayload, b.i32_val(1),
+                  LLVM::PtrToIntOp::create(rewriter, loc, i64_ty, addrElem),
+                  b.i1_val(0));
+      setWidthHeightAndOffsets(rewriter, loc, addrPayload, b.i32_val(2),
+                               adjustedBaseWidth, b.i1_val(0));
+      setWidthHeightAndOffsets(rewriter, loc, addrPayload, b.i32_val(3),
+                               adjustedBaseHeight, b.i1_val(0));
+      // offsetX was in terms of original elements. The 2d block io requires
+      // offsetX to be in terms of packed elements.
+      setWidthHeightAndOffsets(rewriter, loc, addrPayload, b.i32_val(5),
+                               b.udiv(offsetX, b.i32_val(numPackedVals)),
+                               b.i1_val(0));
+      setWidthHeightAndOffsets(rewriter, loc, addrPayload, b.i32_val(6),
+                               offsetY, b.i1_val(0));
+
+      Value ret =
+          read2DBlock(rewriter, loc, addrPayload, b.i32_val(0), b.i32_val(0),
+                      b.i32_val(packedElemSizeInBits), b.i32_val(tileWidth),
+                      b.i32_val(tileHeight), b.i32_val(vBlocks),
+                      b.i1_val(isTransposeRequired),
+                      b.i1_val(!isTransposeRequired && useVNNIFormat),
+                      b.i32_val(static_cast<int>(
+                          mlir::triton::TritonGEN::LoadCacheControl::DEFAULT)))
+              .getResult();
+#else
       Value ret;
       if (use1DBlockIO) {
         auto create1dLoad = [&]() {
@@ -2896,7 +2946,17 @@ struct LoadOpToBlockIOConversion
             /*transpose*/ isTransposeRequired,
             /*vnni_transform*/ !isTransposeRequired && useVNNIFormat);
       }
-
+#endif
+      // targetInfo.printf(
+      //     rewriter,
+      //     "johnlu load: warp id: %d, lane id: %d addr %p baseWidth %d "
+      //     "baseHeight %d pitch %d offsetX %d offsetY %d packedElemSizeInBits
+      //     "
+      //     "%d tileWidth %d tileHeight %d vBlocks %d ret %f",
+      //     {warpId, laneId, addrElem, baseWidth, baseHeight, pitch, offsetX,
+      //      offsetY, b.i32_val(packedElemSizeInBits), b.i32_val(tileWidth),
+      //      b.i32_val(tileHeight), b.i32_val(vBlocks),
+      //      b.bitcast(ret, unpackedType)});
       {
         // When strides[0] is 0, we only want to load the first row, so we
         // set the base height to be 1. If tile height is bigger than 1,
