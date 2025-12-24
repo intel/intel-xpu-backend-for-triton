@@ -1,3 +1,4 @@
+#include "intel/include/Analysis/Range.h"
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
 #include "intel/include/Utils/Utility.h"
 #include "mlir/Analysis/DataFlowFramework.h"
@@ -8,7 +9,6 @@
 #include "mlir/IR/Verifier.h"
 #include "mlir/Interfaces/InferIntRangeInterface.h"
 #include "mlir/Support/WalkResult.h"
-#include "third_party/intel/include/Analysis/Range.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/APInt.h"
@@ -80,50 +80,8 @@ public:
             continue;
           }
 
-          OpFoldResult lb = *forOp.getSingleLowerBound();
-          OpFoldResult ub = *forOp.getSingleUpperBound();
-          OpFoldResult step = *forOp.getSingleStep();
-
-          auto computeLoopIVRange =
-              [&](OpFoldResult lb, OpFoldResult ub,
-                  OpFoldResult step) -> std::optional<ConstantIntRanges> {
-            auto getRange = [&](OpFoldResult loopBound)
-                -> std::optional<ConstantIntRanges> {
-              if (auto attr = dyn_cast<Attribute>(loopBound)) {
-                if (auto bound = dyn_cast_or_null<IntegerAttr>(attr)) {
-                  APInt boundVal = bound.getValue();
-                  return ConstantIntRanges::range(boundVal, boundVal,
-                                                  true /*signed*/);
-                }
-                return std::nullopt;
-              }
-              return tt::intel::collectRange(*solver, cast<Value>(loopBound));
-            };
-
-            std::optional<ConstantIntRanges> lbRange = getRange(lb);
-            std::optional<ConstantIntRanges> ubRange = getRange(ub);
-            std::optional<ConstantIntRanges> stepRange = getRange(step);
-            if (!lbRange || !ubRange || !stepRange)
-              return std::nullopt;
-
-            if (!lbRange->getConstantValue() || !ubRange->getConstantValue() ||
-                !stepRange->getConstantValue())
-              return std::nullopt;
-
-            int64_t lbVal = lbRange->getConstantValue()->getSExtValue();
-            int64_t ubVal = ubRange->getConstantValue()->getSExtValue();
-            int64_t stepVal = stepRange->getConstantValue()->getSExtValue();
-            int64_t lastIVVal =
-                lbVal + ((ubVal - lbVal - 1) / stepVal) * stepVal;
-
-            llvm::APInt start(64, lbVal, true);
-            llvm::APInt end(64, lastIVVal, true);
-
-            return ConstantIntRanges::range(start, end, true);
-          };
-
           std::optional<ConstantIntRanges> optRange =
-              computeLoopIVRange(lb, ub, step);
+              tt::intel::collectLoopIVRange(forOp, *solver);
           if (!optRange) {
             LLVM_DEBUG(llvm::dbgs().indent(2)
                        << "Check at index " << boundIdx << " is necessary\n");
