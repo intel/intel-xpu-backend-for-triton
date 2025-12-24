@@ -3,6 +3,7 @@
 
 #include "mlir/Analysis/DataFlow/IntegerRangeAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
@@ -98,10 +99,21 @@ private:
       loopVisits;
 };
 
+/// Collects the inferred integer ranges for the given value. If the value's
+/// range cannot be inferred, std::nullopt is returned for that value.
+std::optional<ConstantIntRanges> collectRange(const DataFlowSolver &solver,
+                                              Value value);
+
 /// Collects the inferred integer ranges for the given values. If a value's
 /// range cannot be inferred, std::nullopt is returned for that value.
 std::optional<SmallVector<std::optional<ConstantIntRanges>>>
 collectRanges(const DataFlowSolver &solver, ValueRange values);
+
+/// Collects the inferred integer range for the induction variable of the
+/// given scf.for operation. If the range cannot be inferred, std::nullopt is
+/// returned.
+std::optional<ConstantIntRanges>
+collectLoopIVRange(scf::ForOp forOp, const DataFlowSolver &solver);
 
 /// Returns the total trip count of the given loop by multiplying the trip
 /// counts of all enclosing loops.

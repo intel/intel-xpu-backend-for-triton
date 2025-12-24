@@ -13,7 +13,6 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/LogicalResult.h"
 #include <optional>
 
 #define DEBUG_TYPE "triton-intel-range-analysis"
@@ -89,6 +88,17 @@ static void inferResultRange(HistogramOp op, SetIntRangeFn setResultRange) {
                                APInt::getZero(bitWidth).sext(bitWidth),
                                APInt::getMaxValue(bitWidth).sext(bitWidth)));
   }
+}
+
+static void inferResultRange(arith::BitcastOp op,
+                             ArrayRef<ConstantIntRanges> argRanges,
+                             SetIntRangeFn setResultRange) {
+  Type inputType = op.getIn().getType();
+  Type resultType = op.getResult().getType();
+  assert(isa<IntegerType>(inputType) ||
+         isa<IndexType>(inputType) && "Unexpected input type");
+  assert(inputType == resultType && "bitcast between different types");
+  setResultRange(op.getResult(), argRanges[0]);
 }
 
 static std::optional<ConstantIntRanges>
@@ -412,7 +422,7 @@ LogicalResult IntegerRangeAnalysis::visitOperationHelper(
       DBGS() << ((changed == ChangeResult::Change) ? ">Inferred range for: "
                                                    : ">Remain unchanged: ");
       resultVal.printAsOperand(llvm::dbgs(), flags);
-      llvm::dbgs() << ", resulting state:" << lattice->getValue()
+      llvm::dbgs() << ", resulting state: " << lattice->getValue()
                    << ", in value-range: " << newRange << "\n";
     });
 
@@ -426,7 +436,8 @@ LogicalResult IntegerRangeAnalysis::visitOperationHelper(
           tt::HistogramOp>(op)) {
     TypeSwitch<Operation *>(op)
         .Case<tt::GetProgramIdOp>([&](auto getProgramIdOp) {
-          inferResultRange(getProgramIdOp, kDefaultMaxPrograms, joinCallback);
+          inferResultRange(getProgramIdOp, kDefaultMaxPrograms - 1,
+                           joinCallback);
         })
         .Case<tt::GetNumProgramsOp>([&](auto getNumProgramsOp) {
           inferResultRange(getNumProgramsOp, kDefaultMaxPrograms, joinCallback);
@@ -436,7 +447,8 @@ LogicalResult IntegerRangeAnalysis::visitOperationHelper(
         })
         .Case<tt::HistogramOp>([&](auto histogramOp) {
           inferResultRange(histogramOp, joinCallback);
-        });
+        })
+        .Default([&](auto) { llvm::report_fatal_error("unsupported op"); });
     return success();
   }
 
@@ -468,7 +480,8 @@ LogicalResult IntegerRangeAnalysis::visitOperationHelper(
         })
         .Case<tt::GatherOp>([&](auto op) {
           inferResultRange(op, argConstIntRanges, joinCallback);
-        });
+        })
+        .Default([&](auto) { llvm::report_fatal_error("unsupported op"); });
     return success();
   }
 
@@ -478,6 +491,32 @@ LogicalResult IntegerRangeAnalysis::visitOperationHelper(
   //
   if (auto inferrable = dyn_cast<InferIntRangeInterface>(op)) {
     inferrable.inferResultRangesFromOptional(argIntValueRanges, joinCallback);
+    return success();
+  }
+
+  // Additional arith ops.
+  if (isa<arith::BitcastOp>(op)) {
+    Value input = cast<arith::BitcastOp>(op).getIn();
+    if (!isa<IntegerType>(input.getType()) &&
+        !isa<IndexType>(input.getType())) {
+      setAllToEntryStates(resultsLattices);
+      return success();
+    }
+
+    SmallVector<ConstantIntRanges> argConstIntRanges;
+    for (const auto &r : argIntValueRanges) {
+      if (r.isUninitialized()) {
+        setAllToEntryStates(resultsLattices);
+        return success();
+      }
+      argConstIntRanges.push_back(r.getValue());
+    }
+
+    llvm::TypeSwitch<Operation *>(op)
+        .Case<arith::BitcastOp>([&](auto bitcastOp) {
+          inferResultRange(bitcastOp, argConstIntRanges, joinCallback);
+        })
+        .Default([](auto) { llvm_unreachable("Unexpected operation"); });
     return success();
   }
 
@@ -514,7 +553,7 @@ void IntegerRangeAnalysis::visitRegionSuccessors(
     uint64_t loopTripCount = getTotalTripCount(loop, *this);
 
     LLVM_DEBUG({
-      DBGS() << "Trip count for ";
+      DBGS() << "Total trip count for ";
       OpPrintingFlags flags;
       flags.skipRegions(true);
       loop->print(llvm::dbgs(), flags);
@@ -655,23 +694,79 @@ void IntegerRangeAnalysis::initializeModule(ModuleOp &mod) {
   });
 }
 
+std::optional<ConstantIntRanges> collectRange(const DataFlowSolver &solver,
+                                              Value value) {
+  auto *range = solver.lookupState<dataflow::IntegerValueRangeLattice>(value);
+  if (!range || range->getValue().isUninitialized())
+    return std::nullopt;
+
+  ConstantIntRanges inferredRange = range->getValue().getValue();
+  if (isEmpty(inferredRange))
+    return std::nullopt;
+
+  return inferredRange;
+}
+
 std::optional<SmallVector<std::optional<ConstantIntRanges>>>
 collectRanges(const DataFlowSolver &solver, ValueRange values) {
   SmallVector<std::optional<ConstantIntRanges>> ranges;
-  for (Value val : values) {
-    auto *range = solver.lookupState<dataflow::IntegerValueRangeLattice>(val);
-    if (!range || range->getValue().isUninitialized()) {
-      ranges.push_back(std::nullopt);
-      continue;
-    }
-    const ConstantIntRanges &inferredRange = range->getValue().getValue();
-    if (isEmpty(inferredRange)) {
-      ranges.push_back(std::nullopt);
-      continue;
-    }
-    ranges.push_back(inferredRange);
-  }
+  for (Value val : values)
+    ranges.push_back(collectRange(solver, val));
   return ranges;
+}
+
+std::optional<ConstantIntRanges>
+collectLoopIVRange(scf::ForOp forOp, const DataFlowSolver &solver) {
+  // Note: Upstream range analysis contains a bug that causes the loop IV range
+  // to be computed incorrectly. The code in
+  // `IntegerRangeAnalysis.cpp:visitNpnControlFlowArguments` assumes the loop
+  // step to be 1 (instead of the actual step value).
+  // TODO: Fix the upstream analysis and enable the code below.
+#if 0
+  if (std::optional<Value> iv = forOp.getSingleInductionVar())
+    return collectRange(solver, *iv);
+  return std::nullopt;
+#endif
+
+  // Temporary workaround implementation.
+  std::optional<Value> iv = forOp.getSingleInductionVar();
+  if (!iv)
+    return std::nullopt;
+
+  auto getRange =
+      [&](OpFoldResult loopBound) -> std::optional<ConstantIntRanges> {
+    if (auto attr = dyn_cast<Attribute>(loopBound)) {
+      if (auto bound = dyn_cast_or_null<IntegerAttr>(attr)) {
+        APInt boundVal = bound.getValue();
+        return ConstantIntRanges::range(boundVal, boundVal, true /*signed*/);
+      }
+      return std::nullopt;
+    }
+    return collectRange(solver, cast<Value>(loopBound));
+  };
+
+  OpFoldResult lb = *forOp.getSingleLowerBound();
+  OpFoldResult ub = *forOp.getSingleUpperBound();
+  OpFoldResult step = *forOp.getSingleStep();
+  std::optional<ConstantIntRanges> lbRange = getRange(lb);
+  std::optional<ConstantIntRanges> ubRange = getRange(ub);
+  std::optional<ConstantIntRanges> stepRange = getRange(step);
+  if (!lbRange || !ubRange || !stepRange)
+    return std::nullopt;
+
+  if (!lbRange->getConstantValue() || !ubRange->getConstantValue() ||
+      !stepRange->getConstantValue())
+    return std::nullopt;
+
+  int64_t lbVal = lbRange->getConstantValue()->getSExtValue();
+  int64_t ubVal = ubRange->getConstantValue()->getSExtValue();
+  int64_t stepVal = stepRange->getConstantValue()->getSExtValue();
+  int64_t lastIVVal = lbVal + ((ubVal - lbVal - 1) / stepVal) * stepVal;
+
+  llvm::APInt start(64, lbVal, true);
+  llvm::APInt end(64, lastIVVal, true);
+
+  return ConstantIntRanges::range(start, end, true);
 }
 
 uint64_t getTotalTripCount(LoopLikeOpInterface loop,

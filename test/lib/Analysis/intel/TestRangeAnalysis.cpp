@@ -1,4 +1,5 @@
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/Interfaces/InferIntRangeInterface.h"
 #include "mlir/Pass/Pass.h"
 #include "third_party/intel/include/Analysis/Range.h"
 #include "triton/Analysis/Utility.h"
@@ -30,25 +31,8 @@ struct TestRangeAnalysisPass
     if (failed(solver->initializeAndRun(getOperation())))
       return signalPassFailure();
 
-    auto isEmpty = [](ConstantIntRanges range) {
-      return range.umin().getBitWidth() == 0 ||
-             range.umax().getBitWidth() == 0 ||
-             range.smin().getBitWidth() == 0 || range.smax().getBitWidth() == 0;
-    };
-
-    auto nonNegativePred = [&](Value v) {
-      if (const auto *r =
-              solver->lookupState<dataflow::IntegerValueRangeLattice>(v)) {
-        if (r->getValue().isUninitialized())
-          return false;
-        if (isEmpty(r->getValue().getValue()))
-          return false;
-      }
-      return succeeded(dataflow::staticallyNonNegative(*solver, v));
-    };
-
     mod.walk<WalkOrder::PreOrder>([&solver](triton::FuncOp funcOp) {
-      auto args = funcOp.getArguments();
+      ValueRange args = funcOp.getArguments();
       if (auto argRanges = collectRanges(*solver, args)) {
         int i = -1;
         for (const auto &[arg, argR] : llvm::zip(args, *argRanges)) {
@@ -66,9 +50,8 @@ struct TestRangeAnalysisPass
       }
     });
 
-    mod->walk<WalkOrder::PreOrder>([&solver, nonNegativePred,
-                                    rangeAnalysis](Operation *op) {
-      auto results = op->getResults();
+    mod->walk<WalkOrder::PreOrder>([&solver, rangeAnalysis](Operation *op) {
+      ResultRange results = op->getResults();
       if (auto outputRanges = collectRanges(*solver, results)) {
         int i = -1;
         for (const auto &[res, outR] : llvm::zip(results, *outputRanges)) {
@@ -88,20 +71,6 @@ struct TestRangeAnalysisPass
           if (evaluatesToTrue(cmpOp, *solver))
             emitRemark(op->getLoc(), "result is true");
         }
-      }
-
-      int i = 0;
-      for (auto result : results) {
-        if (nonNegativePred(result)) {
-          std::string nonNegs;
-          llvm::raw_string_ostream nonNegSt(nonNegs);
-          if (results.size() > 1)
-            nonNegSt << "result " << i << ": non-neg";
-          else
-            nonNegSt << "non-neg";
-          emitRemark(result.getLoc(), nonNegs);
-        }
-        i++;
       }
 
       if (LoopLikeOpInterface loop = llvm::dyn_cast<LoopLikeOpInterface>(op)) {
