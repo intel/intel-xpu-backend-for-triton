@@ -1722,7 +1722,7 @@ def test_barrier_underflow(device, run_wrapper, monkeypatch):
     kernel[(1, )](num_warps=4)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
 @pytest.mark.parametrize("MISSING_BAR", [True, False])
 @pytest.mark.parametrize("OVERLAP", [True, False])
 def test_aliasing_shared_visibility_outstanding_write(MISSING_BAR, OVERLAP, device, run_wrapper, monkeypatch):
@@ -1779,7 +1779,8 @@ def test_aliasing_shared_visibility_outstanding_write(MISSING_BAR, OVERLAP, devi
     kernel[(1, )](MISSING_BAR=MISSING_BAR, OVERLAP=OVERLAP, num_warps=4)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer",
+                   run=False)
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_aliasing_tensor_visibility_outstanding_read(FAILURE, device, run_wrapper, monkeypatch):
     if run_wrapper:
@@ -1833,7 +1834,7 @@ def test_aliasing_tensor_visibility_outstanding_read(FAILURE, device, run_wrappe
     kernel[(1, )](FAILURE=FAILURE, num_warps=4)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
 @pytest.mark.parametrize("MISSING_WAIT", [True, False])
 @pytest.mark.parametrize("OVERLAP", [True, False])
 def test_aliasing_commit_tracking(MISSING_WAIT, OVERLAP, device, run_wrapper, monkeypatch):
