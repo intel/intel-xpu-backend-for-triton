@@ -31,6 +31,8 @@ def TritonAnnotateModule: Pass<"triton-annotate-module", "mlir::ModuleOp"> {
            "whether subgroup 2D block operations (e.g., 2D block read/write) are available">,
     Option<"supportDPAS", "support-dpas", "bool", /*default*/"false",
            "whether DPAS instruction is available">,
+    Option<"supportDPASWithBF8", "support-dpas-bf8", "bool", /*default*/"false",
+           "whether DPAS instruction with BF8 support is available">,
     Option<"supportBlockScaleDPAS", "support-block-scale-dpas", "bool", /*default*/"false",
            "whether Block Scale DPAS instruction is available">,
     Option<"supportBF16Conversion", "support-bf16-conversion", "bool", /*default*/"false",

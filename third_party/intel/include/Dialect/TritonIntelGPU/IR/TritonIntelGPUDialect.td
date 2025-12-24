@@ -38,9 +38,14 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.support_dpas";
     }
 
+    /// Get the name of the attribute used to indicate whether the DPAS
+    /// operation supports BF8/HF8.
+    static constexpr llvm::StringRef getSupportDPASWithBF8AttrName() {
+      return "ttig.support_dpas_bf8";
+    }
+
     /// Get the name of the attribute used to indicate whether the Block Scale DPAS
     /// operation is available.
-    /// This also indicate the BF8/HF8 dpas operation availability (TODO: create separate flag).
     static constexpr llvm::StringRef getSupportBlockScaleDPASAttrName() {
       return "ttig.support_block_scale_dpas";
     }
