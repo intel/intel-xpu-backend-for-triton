@@ -243,12 +243,14 @@ def test_get_data(tmp_path: pathlib.Path, device: str):
     assert int(ones_frame["count"].values[0]) == 1
 
 
-def test_clear_data(tmp_path: pathlib.Path):
+def test_clear_data(tmp_path: pathlib.Path, device: str):
+    if is_xpu():
+        pytest.skip("FIXME: #5754")
     temp_file = tmp_path / "test_clear_data.hatchet"
     session = proton.start(str(temp_file.with_suffix("")), context="shadow")
 
     with proton.scope("test0"):
-        x = torch.ones((2, 2), device="cuda")
+        x = torch.ones((2, 2), device=device)
         x + x  # type: ignore
 
     proton.deactivate(session)
