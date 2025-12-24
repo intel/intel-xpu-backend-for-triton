@@ -148,18 +148,20 @@ public:
         ttgi::DPASAnalysisResult::True)
       return failure();
 
-    auto dpasType = dpasAnalysis.getDPASType(op);
+    // FIXME: intel-tools/intel-xpu-backend-for-triton#850
+    auto dpasType =
+        ttgi::DPASAnalysis<ttgi::DPASEngineTypeXe3P>::getDPASType(op);
 
     if constexpr (std::is_same<OpTy, tt::DotScaledOp>::value) {
       switch (dpasType) {
-      case ttgi::DPASAnalysis::DPASEngineType::FP32_FP32_FP16_FP16:
-      case ttgi::DPASAnalysis::DPASEngineType::FP32_FP32_BF16_BF16:
-      case ttgi::DPASAnalysis::DPASEngineType::BF16_BF16_BF16_BF16:
-      case ttgi::DPASAnalysis::DPASEngineType::FP16_FP16_FP16_FP16:
-      case ttgi::DPASAnalysis::DPASEngineType::FP32_FP32_FP8_FP8:
-      case ttgi::DPASAnalysis::DPASEngineType::BF16_BF16_FP8_FP8:
+      case ttgi::DPASEngineTypeXe3P::FP32_FP32_FP16_FP16:
+      case ttgi::DPASEngineTypeXe3P::FP32_FP32_BF16_BF16:
+      case ttgi::DPASEngineTypeXe3P::BF16_BF16_BF16_BF16:
+      case ttgi::DPASEngineTypeXe3P::FP16_FP16_FP16_FP16:
+      case ttgi::DPASEngineTypeXe3P::FP32_FP32_FP8_FP8:
+      case ttgi::DPASEngineTypeXe3P::BF16_BF16_FP8_FP8:
         break;
-      case ttgi::DPASAnalysis::DPASEngineType::FP32_FP32_FP4_FP4:
+      case ttgi::DPASEngineTypeXe3P::FP32_FP32_FP4_FP4:
         // BDPAS only support to pack along K for A and B matrix.
         if (!(op.getRhsKPack() && op.getLhsKPack())) {
           return failure();
@@ -217,7 +219,7 @@ public:
         oldRetType.getContext(), repeatCount, dpasCap.systolicDepth,
         dpasCap.executionSize, opsPerChan, warpsPerTile, repCluster,
         threadsPerWarp,
-        dpasType == ttgi::DPASAnalysis::DPASEngineType::FP32_FP32_FP4_FP4
+        dpasType == ttgi::DPASEngineTypeXe3P::FP32_FP32_FP4_FP4
             ? std::make_optional(2)
             : std::nullopt);
 
@@ -250,7 +252,7 @@ public:
           oldRetType.getContext(), repeatCount, dpasCap.systolicDepth,
           dpasCap.executionSize, opsPerChan, warpsPerTile, repCluster,
           threadsPerWarp,
-          dpasType == ttgi::DPASAnalysis::DPASEngineType::FP32_FP32_FP4_FP4
+          dpasType == ttgi::DPASEngineTypeXe3P::FP32_FP32_FP4_FP4
               ? std::make_optional(2)
               : std::nullopt);
     }
