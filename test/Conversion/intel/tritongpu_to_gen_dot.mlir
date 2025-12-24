@@ -112,7 +112,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 #dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#dpas, kWidth=2}>
 #dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#dpas, kWidth=4}>
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_block_scale_dpas} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_block_scale_dpas, ttig.support_dpas_bf8} {
   // CHECK: llvm.func spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi(i32, vector<8xi16>, vector<8xi32>, vector<8xf32>, i32) -> vector<8xf32> attributes {convergent, memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none>, no_unwind, will_return}
   // CHECK-LABEL: dot_f32_f32_f8_f8_1
   tt.func @dot_f32_f32_f8_f8_1(%a: tensor<16x16xf8E5M2, #dot_operand_a>, %b: tensor<16x16xf8E5M2, #dot_operand_b>, %c: tensor<16x16xf32, #dpas>) {
@@ -129,7 +129,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 #dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#dpas, kWidth=2}>
 #dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#dpas, kWidth=4}>
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_block_scale_dpas} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_block_scale_dpas, ttig.support_dpas_bf8} {
   // CHECK: llvm.func spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iS_i(i32, vector<8xi16>, vector<8xi32>, vector<8xi16>, i32) -> vector<8xi16> attributes {convergent, memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none>, no_unwind, will_return}
   // CHECK-LABEL: dot_bf16_bf16_f8_f8_1
   tt.func @dot_bf16_bf16_f8_f8_1(%a: tensor<16x16xf8E5M2, #dot_operand_a>, %b: tensor<16x16xf8E5M2, #dot_operand_b>, %c: tensor<16x16xbf16, #dpas>) {
@@ -629,7 +629,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 #linear = #ttg.linear<{register = [[16, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0]], warp = [], block = []}>
 #linear1 = #ttg.linear<{register = [[8, 0], [16, 0]], lane = [[1, 0], [2, 0], [4, 0], [0, 0]], warp = [], block = []}>
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_block_scale_dpas} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_block_scale_dpas, ttig.support_dpas_bf8} {
   // CHECK: llvm.func spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.i8.i8(vector<8xf32>, vector<8xi16>, vector<8xi32>, i8, i8, i32, i32) -> vector<8xf32> attributes {convergent, no_unwind, will_return}
   // CHECK-LABEL: scale_dot_f32_f32_bf8_bf8
   tt.func @scale_dot_f32_f32_bf8_bf8(%a: tensor<16x32xf8E5M2, #dot_operand_a>, %b: tensor<32x16xf8E5M2, #dot_operand_b>, %c: tensor<16x16xf32, #dpas>, %scale_a: tensor<16x1xi8, #linear1>, %scale_b: tensor<16x1xi8, #linear>) {
@@ -647,7 +647,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 #linear = #ttg.linear<{register = [[16, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0]], warp = [], block = []}>
 #linear1 = #ttg.linear<{register = [[8, 0], [16, 0]], lane = [[1, 0], [2, 0], [4, 0], [0, 0]], warp = [], block = []}>
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_block_scale_dpas} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_block_scale_dpas, ttig.support_dpas_bf8} {
   // CHECK: llvm.func spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.i8.i8(vector<8xf32>, vector<8xi16>, vector<8xi32>, i8, i8, i32, i32) -> vector<8xf32> attributes {convergent, no_unwind, will_return}
   // CHECK-LABEL: scale_dot_f32_f32_bf8_hf8
   tt.func @scale_dot_f32_f32_bf8_hf8(%a: tensor<16x32xf8E5M2, #dot_operand_a>, %b: tensor<32x16xf8E4M3FN, #dot_operand_b>, %c: tensor<16x16xf32, #dpas>, %scale_a: tensor<16x1xi8, #linear1>, %scale_b: tensor<16x1xi8, #linear>) {
@@ -665,7 +665,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 #linear = #ttg.linear<{register = [[0, 1], [8, 0], [16, 0], [0, 2], [0, 4]], lane = [[1, 0], [2, 0], [4, 0], [0, 0]], warp = [[0, 0], [0, 0], [32, 0], [64, 0]], block = []}>
 #linear1 = #ttg.linear<{register = [[0, 1], [16, 0], [32, 0], [0, 2], [0, 4]], lane = [[1, 0], [2, 0], [4, 0], [8, 0]], warp = [[64, 0], [128, 0], [0, 0], [0, 0]], block = []}>
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_block_scale_dpas} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_block_scale_dpas, ttig.support_dpas_bf8} {
   // CHECK: llvm.func spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8(vector<8xf32>, vector<8xi16>, vector<8xi32>, vector<2xi8>, vector<2xi8>, i32, i32) -> vector<8xf32> attributes {convergent, no_unwind, will_return}
   // CHECK-LABEL:   llvm.func spir_kernelcc @scale_dot_f32_f32_e2m1(
   // CHECK-SAME:      %[[A:.*]]: !llvm.struct<({{.*}})>, %[[B:.*]]: !llvm.struct<({{.*}})>, %[[C:.*]]: !llvm.struct<{{.*}})>, %[[SCALE_A:.*]]: !llvm.struct<{{.*}})>, %[[SCALE_B:.*]]: !llvm.struct<({{.*}})>
