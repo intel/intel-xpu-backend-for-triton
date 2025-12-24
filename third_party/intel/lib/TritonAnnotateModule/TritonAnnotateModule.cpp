@@ -1,7 +1,7 @@
 #include "intel/include/Analysis/DPAS.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/TritonAnnotateModule/Passes.h"
-#include <triton/Tools/Sys/GetEnv.hpp>
+#include "triton/Tools/Sys/GetEnv.hpp"
 
 namespace mlir::triton::gpu::intel {
 #define GEN_PASS_DEF_TRITONANNOTATEMODULE
@@ -9,6 +9,7 @@ namespace mlir::triton::gpu::intel {
 } // namespace mlir::triton::gpu::intel
 
 using namespace mlir;
+namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttgi = mlir::triton::gpu::intel;
 
@@ -25,12 +26,16 @@ struct TritonAnnotateModule
     mod->setAttr(ttgi::TritonIntelGPUDialect::getMinSGSizeAttrName(),
                  builder.getI32IntegerAttr(minSGSize));
 
-    if (supportSG2DBlock)
-      mod->setAttr(ttgi::TritonIntelGPUDialect::getSupportSG2DBlockAttrName(),
+    if (support2DBlockIO)
+      mod->setAttr(ttgi::TritonIntelGPUDialect::getSupport2DBlockIOAttrName(),
                    builder.getUnitAttr());
 
     if (supportDPAS)
       mod->setAttr(ttgi::TritonIntelGPUDialect::getSupportDPASAttrName(),
+                   builder.getUnitAttr());
+
+    if (supportDPASWithBF8)
+      mod->setAttr(ttgi::TritonIntelGPUDialect::getSupportDPASWithBF8AttrName(),
                    builder.getUnitAttr());
 
     if (supportBlockScaleDPAS)
@@ -40,12 +45,17 @@ struct TritonAnnotateModule
 
     if (supportBF16Conversion)
       mod->setAttr(
-          ttgi::TritonIntelGPUDialect::getSupportBF16ConversionAttrName(),
+          ttgi::TritonIntelGPUDialect::getSupportBFloat16ConversionAttrName(),
           builder.getUnitAttr());
 
     if (supportF4Conversion)
       mod->setAttr(
           ttgi::TritonIntelGPUDialect::getSupportF4ConversionAttrName(),
+          builder.getUnitAttr());
+
+    if (supportF8Conversion)
+      mod->setAttr(
+          ttgi::TritonIntelGPUDialect::getSupportF8ConversionAttrName(),
           builder.getUnitAttr());
 
     mod->setAttr(ttgi::TritonIntelGPUDialect::getTargetArchAttrName(),
@@ -63,21 +73,21 @@ struct TritonAnnotateModule
 
     if (supportBfloat16Arithmetic)
       mod->setAttr(
-          ttgi::TritonIntelGPUDialect::getSupportBfloat16ArithmeticAttrName(),
+          ttgi::TritonIntelGPUDialect::getSupportBFloat16ArithmeticAttrName(),
           builder.getUnitAttr());
 
-    ttgi::DPASAnalysis &dpasAnalysis = getAnalysis<ttgi::DPASAnalysis>();
-    setThreadsPerWarp(mod, dpasAnalysis);
+    setThreadsPerWarp(mod);
   }
 
 private:
-  void setThreadsPerWarp(ModuleOp &mod,
-                         const ttgi::DPASAnalysis &dpasAnalysis) const {
+  void setThreadsPerWarp(ModuleOp &mod) const {
     Builder builder(mod);
-
     bool enableWarp32 =
-        triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_DPAS_FOR_WARP_SIZE_32");
+        tt::tools::getBoolEnv("TRITON_INTEL_ENABLE_DPAS_FOR_WARP_SIZE_32");
+
     if (!enableWarp32) {
+      auto dpasAnalysis = ttgi::DPASAnalysisFactory::createDPASAnalysis(mod);
+
       mod.walk([&](FunctionOpInterface funcOp) {
         // DPAS lowering only implemented for 16 threads per warp, i.e., DPAS is
         // not used for devices like ATS.
@@ -85,14 +95,14 @@ private:
         if (minSGSize != supportedThreadsPerWarp)
           return WalkResult::interrupt();
 
-        if (dpasAnalysis.canUseDPAS(funcOp) ==
-            ttgi::DPASAnalysis::Result::Maybe) {
+        if (ttgi::DPASAnalysisFactory::canUseDPAS(funcOp, dpasAnalysis) ==
+            ttgi::DPASAnalysisResult::Maybe) {
           // Set the threads per warp attribute to allow dot operation to be
           // lowered to DPAS instructions.
           mod->setAttr(ttg::AttrNumThreadsPerWarp,
                        builder.getI32IntegerAttr(minSGSize));
-          assert(dpasAnalysis.canUseDPAS(funcOp) ==
-                     ttgi::DPASAnalysis::Result::True &&
+          assert(ttgi::DPASAnalysisFactory::canUseDPAS(funcOp, dpasAnalysis) ==
+                     ttgi::DPASAnalysisResult::True &&
                  "DPASAnalysis should report that dot operations can be "
                  "lowered to DPAS instructions");
           return WalkResult::interrupt();
