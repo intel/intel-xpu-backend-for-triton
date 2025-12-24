@@ -216,12 +216,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         module_opts.support_dpas = properties["has_subgroup_matrix_multiply_accumulate"]
         module_opts.support_block_scale_dpas = properties["has_block_scale_dpas"]
         module_opts.support_bf16_conversion = properties["has_bfloat16_conversions"]
-        module_opts.support_f4_conversion = properties["has_f4_conversions"]
-        module_opts.support_256b_prefetch = properties["has_256b_prefetch"]
         module_opts.support_bfloat16_arithmetic = properties["has_bfloat16_arithmetic"]
         module_opts.support_f4_conversion = properties["has_f4_conversions"]
         module_opts.support_f8_conversion = properties["has_f8_conversions"]
-        module_opts.support_256b_prefetch = properties["support_256b_prefetch"]
+        module_opts.support_256b_prefetch = properties["has_256b_prefetch"]
         module_opts.threads_per_warp = opt.warp_size
         module_opts.target_arch = cls.target_arch
 
