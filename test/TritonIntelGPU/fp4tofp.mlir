@@ -2,7 +2,7 @@
 
 #blocked = #ttg.blocked<{sizePerThread = [16], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [32], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-module attributes {triton_intel_gpu.support_bf16_conversion, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block, triton_intel_gpu.target_arch = "spir16", ttg.global_scratch_memory_alignment = 1 : i32, ttg.global_scratch_memory_size = 0 : i32, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 16384 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32} {
+module attributes {triton_intel_gpu.support_bfloat16_conversion, triton_intel_gpu.support_subgroup_matrix_multiply_accumulate, triton_intel_gpu.support_2d_block_io, triton_intel_gpu.target_arch = "spir16", ttg.global_scratch_memory_alignment = 1 : i32, ttg.global_scratch_memory_size = 0 : i32, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 16384 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @fp4_to_bf16_kernel(%arg0: !tt.ptr<i8>, %arg1: !tt.ptr<bf16>) {
     %c1_i64 = arith.constant 1 : i64
     %c16_i32 = arith.constant 16 : i32
@@ -41,7 +41,7 @@ module attributes {triton_intel_gpu.support_bf16_conversion, triton_intel_gpu.su
 
 #blocked = #ttg.blocked<{sizePerThread = [16], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [32], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-module attributes {triton_intel_gpu.support_bf16_conversion, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block, triton_intel_gpu.target_arch = "spir16", ttg.global_scratch_memory_alignment = 1 : i32, ttg.global_scratch_memory_size = 0 : i32, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 16384 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32} {
+module attributes {triton_intel_gpu.support_bfloat16_conversion, triton_intel_gpu.support_subgroup_matrix_multiply_accumulate, triton_intel_gpu.support_2d_block_io, triton_intel_gpu.target_arch = "spir16", ttg.global_scratch_memory_alignment = 1 : i32, ttg.global_scratch_memory_size = 0 : i32, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 16384 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @fp4_to_bf16_kernel(%arg0: !tt.ptr<i8>, %arg1: !tt.ptr<bf16>) {
     %c1_i64 = arith.constant 1 : i64
     %c16_i32 = arith.constant 16 : i32
@@ -76,7 +76,7 @@ module attributes {triton_intel_gpu.support_bf16_conversion, triton_intel_gpu.su
 
 #blocked = #ttg.blocked<{sizePerThread = [16], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [32], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-module attributes {triton_intel_gpu.support_bf16_conversion, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block, triton_intel_gpu.target_arch = "spir16", ttg.global_scratch_memory_alignment = 1 : i32, ttg.global_scratch_memory_size = 0 : i32, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 16384 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32} {
+module attributes {triton_intel_gpu.support_bfloat16_conversion, triton_intel_gpu.support_subgroup_matrix_multiply_accumulate, triton_intel_gpu.support_2d_block_io, triton_intel_gpu.target_arch = "spir16", ttg.global_scratch_memory_alignment = 1 : i32, ttg.global_scratch_memory_size = 0 : i32, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 16384 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @fp4_to_bf16_kernel(%arg0: !tt.ptr<i8>, %arg1: !tt.ptr<bf16>) {
     %c1_i64 = arith.constant 1 : i64
     %c16_i32 = arith.constant 16 : i32

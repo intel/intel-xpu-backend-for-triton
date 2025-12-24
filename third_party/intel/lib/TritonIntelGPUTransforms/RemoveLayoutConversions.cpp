@@ -795,7 +795,7 @@ static void updateAdvanceOpChain(AdvanceOp advanceOp, StoreOp storeOp,
 bool LayoutPropagation::rewriteTensorPtrStoreOp(StoreOp storeOp) {
   // Disable 2D block store on LTS.
   if (!storeOp->getParentOfType<ModuleOp>()->hasAttr(
-          ttgi::TritonIntelGPUDialect::getSupportSG2DBlockAttrName()))
+          ttgi::TritonIntelGPUDialect::getSupport2DBlockIOAttrName()))
     return false;
 
   // If storeOp is a pointer to a tensor, we try to find out if the

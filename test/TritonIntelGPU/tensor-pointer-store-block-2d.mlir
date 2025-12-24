@@ -3,7 +3,7 @@
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4, 2], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 8, 2], order = [2, 1, 0]}>
 #slice = #ttg.slice<{dim = 1, parent = #blocked}>
-module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 16 : i32} {
+module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 16 : i32} {
   // CHECK-LABEL: @regular_pointer_block_io
   tt.func public @regular_pointer_block_io(%arg0: !tt.ptr<i8>) {
     %0 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #slice}>>
@@ -28,7 +28,7 @@ module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 16 : i32} {
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [4, 2], threadsPerWarp = [1, 32], warpsPerCTA = [8, 2], order = [1, 0]}>
-module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 16 : i32} {
+module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 16 : i32} {
   // CHECK-LABEL: @regular_pointer_block_io
   tt.func public @regular_pointer_block_io(%arg0: !tt.ptr<i8>) {
     %0 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
@@ -54,7 +54,7 @@ module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 16 : i32} {
 
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 4, threadsPerWarp = 16, warpsPerCTA = [4, 4], repCluster = [2, 2]}>
 #dot_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 2}>
-module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: @regular_pointer_block_io
   tt.func public @regular_pointer_block_io(%arg0: !tt.ptr<i8>) {
     %0 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #dot_a}>>
@@ -80,7 +80,7 @@ module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 16 : i32, "ttg.th
 
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [4, 4], repCluster = [2, 2]}>
 #dot_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
-module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: @regular_pointer_block_io
   tt.func public @regular_pointer_block_io(%arg0: !tt.ptr<f32>) {
     %0 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #dot_a}>>
@@ -106,7 +106,7 @@ module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 16 : i32, "ttg.th
 
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [4, 4], repCluster = [2, 2]}>
 #dot_b = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 1}>
-module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: @regular_pointer_block_io
   tt.func public @regular_pointer_block_io(%arg0: !tt.ptr<f32>) {
     %0 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #dot_b}>>
@@ -131,7 +131,7 @@ module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 16 : i32, "ttg.th
 // -----
 
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [4, 4], repCluster = [2, 2]}>
-module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: @regular_pointer_block_io
   tt.func public @regular_pointer_block_io(%arg0: !tt.ptr<f32>) {
     %0 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #dpas}>>

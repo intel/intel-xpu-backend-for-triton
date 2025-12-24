@@ -83,7 +83,7 @@ Value convertBf16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
   auto as_int16 = b.bitcast(v, i16_ty).getResult();
   auto result = convertWithFunctionCall(
       b, as_int16, "__spirv_ConvertBF16ToFINTEL", i16_ty, f32_ty,
-      TritonIntelGPUDialect::getSupportBF16ConversionAttrName());
+      TritonIntelGPUDialect::getSupportBFloat16ConversionAttrName());
   if (result)
     return result;
 
@@ -101,7 +101,7 @@ Value convertFp32ToBf16(Location loc, ConversionPatternRewriter &rewriter,
     std::string attrName = "__spirv_ConvertFToBF16INTEL";
     auto result = convertWithFunctionCall(
         b, v, attrName, f32_ty, i16_ty,
-        TritonIntelGPUDialect::getSupportBF16ConversionAttrName());
+        TritonIntelGPUDialect::getSupportBFloat16ConversionAttrName());
     if (result)
       return b.bitcast(result, bf16_ty);
 
