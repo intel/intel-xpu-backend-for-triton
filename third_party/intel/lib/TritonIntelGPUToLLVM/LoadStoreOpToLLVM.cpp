@@ -353,7 +353,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
   static bool isBlockIOCandidate(OpTy op, bool allLayout = false) {
     ModuleOp mod = op->template getParentOfType<ModuleOp>();
     if (!mod->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
-                          getSupportSG2DBlockAttrName()))
+                          getSupport2DBlockIOAttrName()))
       return false;
 
     Attribute blockIOAttr =

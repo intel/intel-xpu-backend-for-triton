@@ -26,8 +26,8 @@ struct TritonAnnotateModule
     mod->setAttr(ttgi::TritonIntelGPUDialect::getMinSGSizeAttrName(),
                  builder.getI32IntegerAttr(minSGSize));
 
-    if (supportSG2DBlock)
-      mod->setAttr(ttgi::TritonIntelGPUDialect::getSupportSG2DBlockAttrName(),
+    if (support2DBlockIO)
+      mod->setAttr(ttgi::TritonIntelGPUDialect::getSupport2DBlockIOAttrName(),
                    builder.getUnitAttr());
 
     if (supportDPAS)
@@ -45,7 +45,7 @@ struct TritonAnnotateModule
 
     if (supportBF16Conversion)
       mod->setAttr(
-          ttgi::TritonIntelGPUDialect::getSupportBF16ConversionAttrName(),
+          ttgi::TritonIntelGPUDialect::getSupportBFloat16ConversionAttrName(),
           builder.getUnitAttr());
 
     if (supportF8Conversion)
@@ -73,7 +73,7 @@ struct TritonAnnotateModule
 
     if (supportBfloat16Arithmetic)
       mod->setAttr(
-          ttgi::TritonIntelGPUDialect::getSupportBfloat16ArithmeticAttrName(),
+          ttgi::TritonIntelGPUDialect::getSupportBFloat16ArithmeticAttrName(),
           builder.getUnitAttr());
 
     setThreadsPerWarp(mod);
