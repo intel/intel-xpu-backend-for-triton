@@ -110,14 +110,14 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
           "support_subgroup_scaled_matrix_multiply_accumulate",
           &gpu::intel::TritonAnnotateModuleOptions::supportBlockScaleDPAS)
       .def_readwrite(
-          "support_256b_prefetch",
-          &gpu::intel::TritonAnnotateModuleOptions::supportPrefetch256Bytes)
-      .def_readwrite(
           "support_f4_conversion",
           &gpu::intel::TritonAnnotateModuleOptions::supportF4Conversion)
       .def_readwrite(
           "support_f8_conversion",
           &gpu::intel::TritonAnnotateModuleOptions::supportF8Conversion)
+      .def_readwrite(
+          "support_256b_prefetch",
+          &gpu::intel::TritonAnnotateModuleOptions::supportPrefetch256Bytes)
       .def_readwrite("threads_per_warp",
                      &gpu::intel::TritonAnnotateModuleOptions::threadsPerWarp)
       .def_readwrite("target_arch",

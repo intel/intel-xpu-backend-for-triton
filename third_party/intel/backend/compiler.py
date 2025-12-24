@@ -151,7 +151,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         dev_prop['has_subgroup_scaled_matrix_multiply_accumulate'] = tgt_prop.get(
             'has_subgroup_scaled_matrix_multiply_accumulate', False)
         dev_prop['has_f4_conversions'] = tgt_prop.get('has_f4_conversions', False)
-        dev_prop['has_f8_conversions'] = tgt_prop.get('has_f8_conversions', True)
+        dev_prop['has_f8_conversions'] = tgt_prop.get('has_f8_conversions', False)
         dev_prop['has_256b_prefetch'] = tgt_prop.get('has_256b_prefetch', False)
 
         return dev_prop

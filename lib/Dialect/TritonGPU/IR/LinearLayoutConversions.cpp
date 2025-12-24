@@ -1081,7 +1081,8 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
     if (isM64TwoCTA) {
       auto bases = ret.getBases();
       std::swap(bases[kRow].back(), bases[kCol].back());
-      ret = LinearLayout(bases, ret.getOutDims(), ret.isSurjective());
+      ret =
+          LinearLayout(std::move(bases), ret.getOutDims(), ret.isSurjective());
     }
     auto split = LinearLayout::identity1D(splitM, kCol, dims[0]);
     return ret * split;
@@ -1107,7 +1108,7 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
     }
     bases[kRow].push_back({16, 0});
     bases[kRow].push_back({32, 0});
-    tile = LinearLayout(bases, dims);
+    tile = LinearLayout(std::move(bases), dims);
   } else {
     tile *= LinearLayout::identity1D(blockM, kRow, dims[0]) *
             LinearLayout::identity1D(blockN, kCol, dims[1]);
@@ -1255,7 +1256,8 @@ LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {
   assert(layout.hasInDim(kBlock));
   auto bases = layout.getBases();
   bases[kBlock] = {};
-  return LinearLayout(bases, llvm::to_vector<4>(layout.getOutDimNames()));
+  return LinearLayout(std::move(bases),
+                      llvm::to_vector<4>(layout.getOutDimNames()));
 }
 
 LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
