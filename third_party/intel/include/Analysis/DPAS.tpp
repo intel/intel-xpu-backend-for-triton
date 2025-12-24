@@ -167,8 +167,9 @@ DPASAnalysis<DPASEngineType, Enable>::getDPASType(OpTy op) {
       } else if (dElemTy.isBF16()) {
         if (aElemTy.isBF16())
           return DPASEngineType::BF16_BF16_BF16_BF16;
-        if (isFp8Supported && isa<Float8E5M2Type, Float8E4M3FNType>(aElemTy))
-          return DPASEngineType::BF16_BF16_FP8_FP8;
+        if constexpr (std::is_same<DPASEngineType, DPASEngineTypeXe3P>::value)
+          if (isFp8Supported && isa<Float8E5M2Type, Float8E4M3FNType>(aElemTy))
+            return DPASEngineType::BF16_BF16_FP8_FP8;
       }
     }
   }

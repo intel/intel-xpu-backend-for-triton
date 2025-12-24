@@ -92,12 +92,6 @@ public:
       Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
       return {cTy, cTy, aTy, bTy};
     }
-    case DPASEngineType::BF16_BF16_FP8_FP8: {
-      Type cTy = vec_ty(bf16Ty, elemNumC);
-      Type aTy = vec_ty(i16Ty, elemNumA / 2);             // pack scalar to i16.
-      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
-      return {cTy, cTy, aTy, bTy};
-    }
     case DPASEngineType::FP32_FP32_FP8_FP8: {
       Type cTy = vec_ty(fp32Ty, elemNumC);
       Type aTy = vec_ty(i16Ty, elemNumA / 2);             // pack scalar to i16.
@@ -111,6 +105,18 @@ public:
       return {cTy, cTy, aTy, bTy};
     }
     default:
+      if constexpr (std::is_same<DPASEngineType,
+                                 ttgi::DPASEngineTypeXe3P>::value) {
+        switch (dpasType) {
+        case DPASEngineType::BF16_BF16_FP8_FP8: {
+          Type cTy = vec_ty(bf16Ty, elemNumC);
+          Type aTy = vec_ty(i16Ty, elemNumA / 2); // pack scalar to i16.
+          Type bTy =
+              vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
+          return {cTy, cTy, aTy, bTy};
+        }
+        }
+      }
       llvm::report_fatal_error("Unsupported dpas type found");
     }
 
