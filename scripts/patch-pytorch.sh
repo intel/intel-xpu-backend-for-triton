@@ -36,3 +36,4 @@ echo "Applying PyTorch patches in $REPO_ROOT"
 
 # put your patch applies here
 apply_patch ./patch/torch-xpu-ops.patch
+apply_patch ./patch/170010.patch

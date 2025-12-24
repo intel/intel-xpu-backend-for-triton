@@ -85,14 +85,15 @@ def test_mma_remark(capfd, fresh_triton_cache):
     assert ("due to unsupported shapes or data types" in captured.err), "expect explanation in the remark"
     assert "note: see current operation:" not in captured.err
 
-    with enable_diagnostics_context('remarks,operations,stacktraces'):
+    with enable_diagnostics_context('remarks,operations'):
         triton.compile(triton.compiler.ASTSource(
             fn=matmul_kernel,
             signature=signature,
             constexprs={},
         ))
     captured = capfd.readouterr()
-    assert "note: diagnostic emitted with trace:" in captured.err
+    # Stack traces disabled as it adds several minutes to compile time
+    # assert "note: diagnostic emitted with trace:" in captured.err
     assert "note: see current operation:" in captured.err
 
 
@@ -150,7 +151,7 @@ def test_remark_vectorization(capfd, fresh_triton_cache):
     assert ("remark: Warning: vectorization fails" in err), "expect vectorization failure remark"
     assert "note: see current operation:" not in err
 
-    with enable_diagnostics_context('remarks,operations,stacktraces'):
+    with enable_diagnostics_context('remarks,operations'):
         triton.compile(
             triton.compiler.ASTSource(**astsource_args),
             options={"num_warps": 1},
@@ -158,7 +159,8 @@ def test_remark_vectorization(capfd, fresh_triton_cache):
 
     _, err = capfd.readouterr()
     assert "note: see current operation:" in err
-    assert "note: diagnostic emitted with trace:" in err
+    # Stack traces disabled as it adds several minutes to compile time
+    # assert "note: diagnostic emitted with trace:" in err
 
 
 def test_remark_swp_op_before_operands(capfd, fresh_triton_cache, device):

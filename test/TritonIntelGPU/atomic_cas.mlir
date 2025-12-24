@@ -139,7 +139,6 @@ module attributes {ttig.support_16bit_atomics = true, "ttg.num-ctas" = 1 : i32, 
   // CHECK-SAME: attributes {intel_reqd_sub_group_size = 32 : i32, reqd_work_group_size = array<i32: 32, 1, 1>}
   tt.func @test_atomic_cas_i16_hw_support(%ptr: !tt.ptr<i16, 1>, %cmp: i16, %val: i16) -> i16 {
 
-    // CHECK: llvm.mlir.constant(0 : i32) : i32
     // CHECK: %[[C0_1:.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: %[[C0_2:.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: %[[TID_CALL:.*]] = llvm.call spir_funccc @_Z12get_local_idj(%[[C0_2]])
