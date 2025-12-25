@@ -3,7 +3,7 @@ import torch
 import triton
 import triton.language as tl
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
-from triton._internal_testing import is_xpu_cri
+from triton.language.target_info import is_xpu_cri
 
 
 def f8_to_f16(x, dtype):
@@ -188,4 +188,4 @@ def test_mxfp_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TRANS, PA
     if is_xpu_cri():
         llir = out.asm["llir"]
         count = llir.count("llvm.genx.GenISA.sub.group.bdpas")
-        assert count > 0, "The bdpas is not used."
+        assert count > 0, "Unexpected LLVM IR generated."

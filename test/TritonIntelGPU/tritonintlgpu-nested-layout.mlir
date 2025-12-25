@@ -22,11 +22,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK-DAG:       %[[THREAD_ID:.*]] = llvm.call spir_funccc @_Z12get_local_idj(%[[CST_0]])
     // CHECK-DAG:       %[[THREAD_ID_32:.*]] = llvm.trunc %[[THREAD_ID]] : i64 to i32
     // CHECK-DAG:       %[[RTID:.*]] = llvm.and %[[THREAD_ID_32:.*]], %[[CST_63]] : i32
-    // CHECK-DAG:       %[[WARP_ID:.*]] = llvm.udiv %[[RTID]], %[[CST_16]] : i32
-    // CHECK-DAG:       %[[THREAD_ID:.*]] = llvm.call spir_funccc @_Z12get_local_idj(%[[CST_0]])
-    // CHECK-DAG:       %[[THREAD_ID_32:.*]] = llvm.trunc %[[THREAD_ID]] : i64 to i32
-    // CHECK-DAG:       %[[RTID:.*]] = llvm.and %[[THREAD_ID_32:.*]], %[[CST_63]] : i32
     // CHECK-DAG:       %[[LANE_ID:.*]] = llvm.urem %[[RTID]], %[[CST_16]] : i32
+    // CHECK-DAG:       %[[WARP_ID:.*]] = llvm.udiv %[[RTID]], %[[CST_16]] : i32
     // CHECK:           %[[VAL_25:.*]] = llvm.shl %[[LANE_ID]], %[[CST_0]]  : i32
     // CHECK:           %[[VAL_26:.*]] = llvm.or  %[[CST_0]],  %[[VAL_25]]  : i32
     // CHECK:           %[[VAL_27:.*]] = llvm.shl %[[WARP_ID]], %[[CST_4]]  : i32
@@ -110,11 +107,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK:           %[[THREAD_ID:.*]] = llvm.call spir_funccc @_Z12get_local_idj(%[[CST_0]])
     // CHECK:           %[[THREAD_ID_32:.*]] = llvm.trunc %[[THREAD_ID]] : i64 to i32
     // CHECK:           %[[RTID:.*]] = llvm.and %[[THREAD_ID_32:.*]], %[[CST_63]] : i32
-    // CHECK:           %[[WARP_ID:.*]] = llvm.udiv %[[RTID]], %[[CST_16]]  : i32
-    // CHECK:           %[[THREAD_ID:.*]] = llvm.call spir_funccc @_Z12get_local_idj(%[[CST_0]])
-    // CHECK:           %[[THREAD_ID_32:.*]] = llvm.trunc %[[THREAD_ID]] : i64 to i32
-    // CHECK:           %[[RTID:.*]] = llvm.and %[[THREAD_ID_32:.*]], %[[CST_63]] : i32
     // CHECK:           %[[LANE_ID:.*]] = llvm.urem %[[RTID]], %[[CST_16]]  : i32
+    // CHECK:           %[[WARP_ID:.*]] = llvm.udiv %[[RTID]], %[[CST_16]]  : i32
     // CHECK:           %[[VAL_32:.*]] = llvm.shl %[[LANE_ID]], %[[CST_0]] : i32
     // CHECK:           %[[VAL_33:.*]] = llvm.or  %[[CST_0]],  %[[VAL_32]] : i32
     // CHECK:           %[[VAL_34:.*]] = llvm.shl %[[WARP_ID]], %[[CST_4]] : i32

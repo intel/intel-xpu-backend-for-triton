@@ -26,12 +26,13 @@ class XPUBackendMeta(type(BaseBackend)):
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             dev_prop = fn(*args, **kwargs)
-            dev_prop['has_shader_atomic_bfloat16'] = True
-            dev_prop['has_support_block_scale_dpas'] = True
-            dev_prop['has_f4_conversions'] = True
-            dev_prop['has_f8_conversions'] = True
-            dev_prop['support_256b_prefetch'] = True
+            dev_prop['has_16bit_atomics'] = True
+            dev_prop['has_subgroup_scaled_matrix_multiply_accumulate'] = True
+            dev_prop['has_f4_conversion'] = True
+            dev_prop['has_f8_conversion'] = True
+            dev_prop['has_256b_prefetch'] = True
             dev_prop['has_bfloat16_arithmetic'] = True
+            dev_prop['has_subgroup_matrix_multiply_accumulate_bfloat8'] = True
             return dev_prop
 
         return wrapper
