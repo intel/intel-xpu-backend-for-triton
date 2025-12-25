@@ -1105,31 +1105,26 @@ public:
     ArrayRef<int64_t> blkShape = tensorType.getShape();
     unsigned rank = op.getShape().size();
 
-    // TODO: Support higher rank tensors.
-    if (rank > 2)
-      return AxisInfo();
-
+    // The make tensor pointer op has the following operands:
+    // tt.make_tensor_ptr %in_ptr0, [sizes], [strides], [offsets]
     SmallVector<AxisInfo, 2> strideInfo;
     for (int i = rank + 1; i <= rank * 2; ++i)
       strideInfo.emplace_back(operands[i]->getValue());
 
     AxisInfo ptrInfo = operands[0]->getValue();
     int64_t ptrDivisibility = ptrInfo.getDivisibility(0);
+    // Follow the regular pointer divisibility definition:
+    // On each dim, tt is "strided contiguous" with a divisilibity of
+    // ptrDivisibility
+    AxisInfo::DimVectorT divisibility(rank, ptrDivisibility);
 
-    AxisInfo::DimVectorT stride, contiguity, constancy, divisibility;
+    AxisInfo::DimVectorT stride, contiguity, constancy;
     for (int dim = 0; dim < rank; ++dim) {
       stride.push_back(strideInfo[dim].getConstantValue().has_value()
                            ? strideInfo[dim].getConstantValue().value()
                            : -1);
       contiguity.push_back(
           strideInfo[dim].getConstantValue() == 1 ? blkShape[dim] : 1);
-      divisibility.push_back(
-          contiguity[dim] > 1
-              ? std::min(
-                    ptrDivisibility,
-                    (rank == 2 ? strideInfo[dim == 0 ? 1 : 0] : strideInfo[dim])
-                        .getDivisibility()[0])
-              : 1);
       constancy.push_back(1);
     }
 
