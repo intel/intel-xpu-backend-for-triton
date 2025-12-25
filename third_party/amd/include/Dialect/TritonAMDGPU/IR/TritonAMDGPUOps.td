@@ -756,7 +756,7 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
 // AsyncTDMCopyLocalToGlobalOp
 //===----------------------------------------------------------------------===//
 
-def AsyncTDMCopyLocalToGlobalOp : TT_AMDGPU_Op<"async_tdm_copy_local_to_global"> {
+def AsyncTDMCopyLocalToGlobalOp : TT_AMDGPU_Op<"async_tdm_copy_local_to_global", [AttrSizedOperandSegments]> {
   let summary = "Copy data based on descriptor from local memory to global memory asynchronously";
 
   let description = [{
@@ -765,17 +765,20 @@ def AsyncTDMCopyLocalToGlobalOp : TT_AMDGPU_Op<"async_tdm_copy_local_to_global">
     local memory pointed by `src` instead of a distributed tensor. The copy
     destination depends on the global memory pointed to by `desc`. This
     operation does not support shared memory padding or swizzling.
+    The operation can also take an optional 64bit LDS barrier address, in which case
+    it sends an "LDS atomic arrive" to signal its completion.
   }];
 
   let arguments = (ins
     Arg<TT_TensorDescType, "", [MemWrite<GlobalMemory>]>:$desc,
     Variadic<I32>:$indices,
-    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src
+    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
+    Optional<TTG_MemDescType>:$barrier
   );
 
   let assemblyFormat = [{
-    $desc `[` $indices `]` `from` $src
-    attr-dict `:` qualified(type($src)) `->` qualified(type($desc))
+    $desc `[` $indices `]` `from` $src (`,` `barrier` `=` $barrier^)?
+    attr-dict `:` qualified(type($src)) (`,` qualified(type($barrier))^)? `->` qualified(type($desc))
   }];
 
   let hasVerifier = 1;
@@ -893,7 +896,7 @@ def ArriveBarrierOp : TT_AMDGPU_Op<"arrive_barrier"> {
     Performs the "arrive" operation on an mbarrier object in shared memory. The operation requires a `count` attribute
     of at least 1, and decreases the pending arrival count of the mbarrier by the specific count. If the pending count reaches
     zero, the phase changes (is decremented in a wraparound manner) and the pending count is reloaded with the init count value. Returns the phase
-    of the mbarrier object prior to the "arrive" operation.
+    parity (0 for even, 1 for odd) of the mbarrier object prior to the "arrive" operation.
 
     Example:
 
