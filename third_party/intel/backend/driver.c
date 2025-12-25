@@ -28,7 +28,7 @@ static std::vector<std::pair<sycl::device, ze_device_handle_t>>
 
 static std::vector<sycl::device> sycl_opencl_device_list;
 
-static bool has_opencl;
+static bool has_opencl = false;
 
 template <typename T>
 static inline T checkSyclErrors(const std::tuple<T, ze_result_t> tuple) {
