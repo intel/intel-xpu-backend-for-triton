@@ -99,3 +99,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+// COM: 3D tensor descriptor
+#dpas_3d = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4, 2], repCluster = [1, 1, 1]}>
+#dot_a_3d = #ttg.dot_op<{opIdx = 0, parent = #dpas_3d, kWidth = 1}>
+#dot_b_3d = #ttg.dot_op<{opIdx = 1, parent = #dpas_3d, kWidth = 2}>
+module attributes {"ttg.num-ctas" = 1 : i32, ttg.target = "xpu", "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func public @materialize_tensor_descriptor(
+  tt.func public @materialize_tensor_descriptor(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %pitch: i64 {tt.divisibility = 16 : i32}) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+
+    // CHECK: tt.descriptor_load {{.*}} {ttig.block_io = "row_major"}
+    %31 = tt.make_tensor_descriptor %arg0, [%c0_i32, %c0_i32, %c0_i32], [%pitch, %pitch, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<tensor<4x64x32xf16>>
+    %34 = tt.descriptor_load %31[%c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<tensor<4x64x32xf16>> -> tensor<4x64x32xf16, #dot_a_3d>
+    // CHECK: tt.descriptor_store {{.*}} {ttig.block_io = "row_major"}
+    tt.descriptor_store %31[%c0_i32, %c0_i32, %c0_i32], %34 : !tt.tensordesc<tensor<4x64x32xf16>> , tensor<4x64x32xf16, #dot_a_3d>
+    tt.return
+  }
+}
