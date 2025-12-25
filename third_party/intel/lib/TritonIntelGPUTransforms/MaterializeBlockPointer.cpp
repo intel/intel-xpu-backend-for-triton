@@ -172,17 +172,17 @@ private:
     // contiguity: [1, 16], divisibility: [1, 16], constancy: [1, 1].
     const tt::AxisInfo *axisInfo = axisInfoAnalysis.getAxisInfo(ptr);
     unsigned rank = axisInfo->getRank();
-    if (rank != 2) {
-      LDBG("Rank is not 2, skip block IO attribute");
+    if (rank < 2) {
+      LDBG("Rank is < 2, skip block IO attribute");
       return;
     }
 
     // Determine if LoadOp is row-major or column-major.
-    auto isMajor = [](RankedTensorType tensorTy, unsigned fastChangeDim,
-                      const tt::AxisInfo &axisInfo) {
-      assert((fastChangeDim == 0 || fastChangeDim == 1) &&
-             "fastChangeDim is expected to be 0 or 1");
-      const unsigned otherDim = !fastChangeDim;
+    auto isMajor = [=](RankedTensorType tensorTy, unsigned fastChangeDim,
+                       const tt::AxisInfo &axisInfo) {
+      assert((fastChangeDim < rank) && "fastChangeDim must be less than rank");
+      const unsigned otherDim =
+          (fastChangeDim == rank - 1) ? rank - 2 : rank - 1;
       // Limit to full row being contiguous.
       if (axisInfo.getContiguity(fastChangeDim) !=
           tensorTy.getDimSize(fastChangeDim)) {
@@ -219,12 +219,14 @@ private:
 
     const StringRef blockIOAttrName =
         ttgi::TritonIntelGPUDialect::getBlockIOAttrName();
-    const bool isRowMajor = isMajor(tensorTy, 1 /*fastChangeDim*/, *axisInfo);
+    const bool isRowMajor =
+        isMajor(tensorTy, rank - 1 /*fastChangeDim*/, *axisInfo);
     if (isRowMajor)
       op->setAttr(blockIOAttrName,
                   StringAttr::get(op.getContext(), "row_major"));
 
-    const bool isColMajor = isMajor(tensorTy, 0 /*fastChangeDim*/, *axisInfo);
+    const bool isColMajor =
+        isMajor(tensorTy, rank - 2 /*fastChangeDim*/, *axisInfo);
     if (isColMajor)
       op->setAttr(blockIOAttrName,
                   StringAttr::get(op.getContext(), "column_major"));
