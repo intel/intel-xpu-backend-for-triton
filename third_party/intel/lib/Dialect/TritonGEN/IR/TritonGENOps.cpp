@@ -22,6 +22,8 @@ using namespace mlir::triton;
 // Utility functions
 //===----------------------------------------------------------------------===//
 
+#define CEIL(A, B) (((A) + (B) - 1) / (B))
+
 template <typename Op>
 static LogicalResult verify2DBlockAddressPayloadRestriction(Op op) {
   static_assert(llvm::is_one_of<Op, TritonGEN::Matrix2DBlockLoadOp,
@@ -172,14 +174,17 @@ template <typename Op> static LogicalResult verifyDPASCommonRestriction(Op op) {
     return op->emitOpError(
         "1st operand (C) and result (D) should have the same type");
 
-  if (CTy.getNumElements() != op.getRc() || DTy.getNumElements() != op.getRc())
+  if ((CTy.getNumElements() != op.getRc() &&
+       CTy.getNumElements() != CEIL(op.getRc(), 2)) ||
+      (DTy.getNumElements() != op.getRc() &&
+       DTy.getNumElements() != CEIL(op.getRc(), 2)))
     return op->emitOpError("the dimension for 1st operand (C) and "
                            "result (D) should match repeat count");
 
   constexpr unsigned SD = 8;
-  if (BTy.getNumElements() != SD)
+  if (BTy.getNumElements() != SD && BTy.getNumElements() != CEIL(SD, 2))
     return op->emitOpError("the dimension for the 3rd operand (B) should "
-                           "match the systolic depth of 8");
+                           "match the systolic depth");
 
   Type AElemTy = ATy.getElementType();
   Type BElemTy = BTy.getElementType();
@@ -225,9 +230,10 @@ template <typename Op> static LogicalResult verifyDPASCommonRestriction(Op op) {
 
   switch (precision) {
   case TritonGEN::PrecisionType::TF32:
-    if (ATy.getNumElements() != op.getRc() / 2)
+    if (ATy.getNumElements() != CEIL(op.getRc(), 2) &&
+        ATy.getNumElements() != CEIL(op.getRc(), 4))
       return op->emitOpError("the dimension for the 2nd operand (A) should "
-                             "be equal to half of the repeat count");
+                             "match the repeat count");
     if (!isa<Float32Type>(AElemTy) && !AElemTy.isInteger(32))
       return op->emitOpError("2nd operand (A) element type should be f32 or "
                              "i32 when the precision type is tf32");
@@ -242,9 +248,10 @@ template <typename Op> static LogicalResult verifyDPASCommonRestriction(Op op) {
   case TritonGEN::PrecisionType::F8E5M2:
   case TritonGEN::PrecisionType::F8E4M3FN:
   case TritonGEN::PrecisionType::F4E2M1:
-    if (ATy.getNumElements() != op.getRc())
-      return op->emitOpError("2nd operand (A) should have the same number of "
-                             "elements as repeat count");
+    if (ATy.getNumElements() != op.getRc() &&
+        ATy.getNumElements() != CEIL(op.getRc(), 2))
+      return op->emitOpError("the dimension for the 2nd operand (A) should "
+                             "match the repeat count");
     if (!AElemTy.isInteger(16))
       return op->emitOpError("2nd operand (A) element type should be i16 when "
                              "the precision type is not tf32");
