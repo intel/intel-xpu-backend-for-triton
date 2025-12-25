@@ -1122,8 +1122,11 @@ makeTensorPtrAxisInfo(ArrayRef<int64_t> blkShape, unsigned rank,
     strideInfo.emplace_back(operands[i]->getValue());
 
   int64_t ptrDivisibility = operands[0]->getValue().getDivisibility(0);
-
-  AxisInfo::DimVectorT contiguity, constancy, divisibility;
+  // Follow the regular pointer divisibility definition:
+  // On each dim, tt is "strided contiguous" with a divisilibity of
+  // ptrDivisibility
+  AxisInfo::DimVectorT divisibility(rank, ptrDivisibility);
+  AxisInfo::DimVectorT contiguity, constancy;
   for (unsigned dim = 0; dim < rank; ++dim) {
     contiguity.push_back(strideInfo[dim].getConstantValue() == 1 ? blkShape[dim]
                                                                  : 1);
@@ -1131,10 +1134,6 @@ makeTensorPtrAxisInfo(ArrayRef<int64_t> blkShape, unsigned rank,
     // the *other* dimension; for 1-D tensors the single stride suffices.
     const AxisInfo &relevantStride =
         (rank == 2) ? strideInfo[dim == 0 ? 1 : 0] : strideInfo[dim];
-    divisibility.push_back(
-        contiguity[dim] > 1
-            ? std::min(ptrDivisibility, relevantStride.getDivisibility()[0])
-            : 1);
     constancy.push_back(1);
   }
 
@@ -1155,10 +1154,6 @@ public:
     auto tensorType = cast<RankedTensorType>(
         cast<PointerType>(op.getResult().getType()).getPointeeType());
     unsigned rank = op.getShape().size();
-
-    // TODO: Support higher rank tensors.
-    if (rank > 2)
-      return AxisInfo();
 
     auto axisInfo =
         makeTensorPtrAxisInfo(tensorType.getShape(), rank, operands);
