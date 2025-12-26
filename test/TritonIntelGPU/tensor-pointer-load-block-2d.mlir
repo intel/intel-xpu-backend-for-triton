@@ -595,8 +595,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %21 = tt.addptr %20, %19 : tensor<1x32x!tt.ptr<f32>, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>, tensor<1x32xi32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
     %22 = tt.broadcast %21 : tensor<1x32x!tt.ptr<f32>, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> -> tensor<64x32x!tt.ptr<f32>, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
     %50 = tt.load %22 {ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f32>, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+    // CHECK: [[VAL:%.*]] = llvm.mlir.constant(1 : i32) : i32
     // CHECK: [[C1:%.*]] = llvm.mlir.constant(1 : i32) : i32
-    // CHECK: [[LOAD:%.*]] = triton_gen.2Dblockload %{{.*}}, %{{.*}}, [[C1]], %{{.*}}, %{{.*}}, %{{.*}} {elem_size_in_bits = 32, tile_width = 8, tile_height = 16, v_blocks = 2
+    // CHECK: [[LOAD:%.*]] = triton_gen.2Dblockload %{{.*}}, %{{.*}}, [[C1]], %{{.*}}, %{{.*}}, %{{.*}} {elem_size_in_bits = 32, tile_width = 8, tile_height = 16, v_blocks = 2, transpose = false, vnni_transform = false, cache_control = Default}
 
     // CHECK: [[VEC:%.*]] = llvm.mlir.undef : vector<2xi32>
 
