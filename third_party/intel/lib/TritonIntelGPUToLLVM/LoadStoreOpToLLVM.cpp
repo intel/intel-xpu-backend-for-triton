@@ -536,6 +536,41 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     return nullptr;
   }
 
+  // Returns the strides in elements from regular pointer or block pointer.
+  SmallVector<Value> getStrides(ConversionPatternRewriter &rewriter, Value ptr,
+                                const SmallVector<Value> &unpackedPtrs) const {
+    Location loc = ptr.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    if (isTensorPointerType(ptr.getType())) {
+      // The block pointer struct is expected to have the following layout:
+      //    Struct {
+      //      Value offset[rank];
+      //      Value shape[rank];
+      //      Value stride[rank];
+      //      Value base;
+      //    }
+      assert((unpackedPtrs.size() - 1) % 3 == 0 &&
+             "unexpected number of values unpacked from a block pointer");
+      unsigned rank = (unpackedPtrs.size() - 1) / 3;
+      unsigned blockStride = 2 * rank, blockBase = 3 * rank;
+      ;
+      return SmallVector<Value>(unpackedPtrs.begin() + blockStride,
+                                unpackedPtrs.begin() + blockBase);
+    } else {
+      // Regular pointer.
+      Type resultType = ptr.getType();
+      RankedTensorType tensorType = cast<RankedTensorType>(resultType);
+      unsigned rank = tensorType.getRank();
+      SmallVector<Value> strides(rank);
+      for (unsigned dim = 0; dim < rank; ++dim) {
+        int stride = getStride(ptr, dim);
+        strides.push_back(b.i32_val(stride));
+      }
+      return strides;
+    }
+  }
+
   // Returns the offsets of the block from regular pointer or block pointer..
   SmallVector<Value> getOffsets(ConversionPatternRewriter &rewriter, Value ptr,
                                 const SmallVector<Value> &unpackedPtrs) const {
@@ -1362,7 +1397,8 @@ struct LoadOpToBlockIOConversion
     // TODO: use the axis info to general the handling for both regular pointer
     // and block pointer.
     const bool memoryRowMajor = isMemoryRowMajor(op);
-    unsigned contiguousDim = memoryRowMajor ? 1 : 0;
+    const unsigned rank = tensorType.getRank();
+    unsigned contiguousDim = memoryRowMajor ? rank - 1 : rank - 2;
     Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
 
@@ -1494,6 +1530,8 @@ struct LoadOpToBlockIOConversion
       return failure();
 
     SmallVector<Value> baseOffsets = getOffsets(rewriter, ptr, unpackedPtr);
+
+    SmallVector<Value> strides = getStrides(rewriter, ptr, unpackedPtr);
 
     bool useVNNIFormat = false;
     Type packedDPASOperandType;
@@ -1720,9 +1758,6 @@ struct LoadOpToBlockIOConversion
                                         {kLane, b.i32_val(0)},
                                         {kWarp, warpId},
                                         {kBlock, b.i32_val(0)}});
-      // TODO: To support rank > 2 tensor, we need to add the offsets of other
-      // dim to the base.
-      assert(offsets.size() == 2 && "only support 2D tensor for now.");
 
       // Use the top-left address of the block to load the data.
       Value addrElem = ptrElems[registerIdx];
@@ -1732,13 +1767,46 @@ struct LoadOpToBlockIOConversion
       if (isTensorPointerType(ptr.getType())) {
         unsigned c = isTransposeRequired ? rowDim : colDim;
         unsigned r = isTransposeRequired ? colDim : rowDim;
-        offsetX = b.add(baseOffsets[c], offsets[c].second);
-        offsetY = b.add(baseOffsets[r], offsets[r].second);
 
         // To prevent triggering hardware boundary protection, expand the base
         // shape sufficiently when boundary check is absent.
         SetVector<unsigned> boundaryCheck(op.getBoundaryCheck().begin(),
                                           op.getBoundaryCheck().end());
+
+        for (auto [dim, offset] : llvm::enumerate(offsets)) {
+          Value off = b.add(baseOffsets[dim], offset.second);
+          if (dim == r) {
+            if (boundaryCheck.contains(r)) {
+              offsetY = off;
+            } else {
+              adjustedBaseHeight = b.i32_val(tileHeight);
+              // Use i8_ty as pitch is in number of bytes.
+              off = b.mul(off, pitch);
+              addrElem = b.gep(ptr_ty(ctx, 1), i8_ty, addrElem, off);
+              offsetY = b.i32_val(0);
+            }
+          } else if (dim == c) {
+            if (boundaryCheck.contains(dim)) {
+              offsetX = off;
+            } else {
+              adjustedBaseWidth = b.i32_val(std::max(
+                  64u, vBlocks * tileWidth * (packedElemSizeInBits / 8)));
+              // The offsetX is number of elements instead of packed elements.
+              addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, off);
+              offsetX = b.i32_val(0);
+            }
+          } else {
+            // Add the offsets of other dim to the base.
+            Value p = b.mul(off, strides[dim]);
+            addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, p);
+            if (boundaryCheck.contains(dim)) {
+              // Add boundary checking for other dims with predication.
+              pred = maybeAnd(rewriter, loc, pred,
+                              b.icmp_ult(b.zext(i64_ty, off), shapes[dim]));
+            }
+          }
+        }
+#if 0
         // FIXME: IGC currently cannot optimize 2D block IO when tt.load is used
         // without boundary checks. Temporarily skipping logic for ignoring
         // boundary checks which matches previous behavior by default. Restore
@@ -1761,6 +1829,7 @@ struct LoadOpToBlockIOConversion
             offsetY = b.i32_val(0);
           }
         }
+#endif
       } else {
         addrElem = targetInfo.shuffleIdx(rewriter, loc, addrElem, 0);
 
@@ -1780,14 +1849,17 @@ struct LoadOpToBlockIOConversion
         if (maskElems.size()) {
           pred =
               targetInfo.shuffleIdx(rewriter, loc, maskElems[registerIdx], 0);
-          // We leverage the GPU block I/O hardware out-of-bound protection
-          // feature by setting the offset to an invalid value when 'pred'
-          // is false (the HW will not read out-of-bounds values). Later on,
-          // after issuing the 2d block read operation, we will select the
-          // result of the load only if the mask evaluate to true, otherwise
-          // we will use 'other'.
-          offsetY = b.select(pred, offsetY, baseHeight);
         }
+      }
+
+      if (pred) {
+        // We leverage the GPU block I/O hardware out-of-bound protection
+        // feature by setting the offset to an invalid value when 'pred'
+        // is false (the HW will not read out-of-bounds values). Later on,
+        // after issuing the 2d block read operation, we will select the
+        // result of the load only if the mask evaluate to true, otherwise
+        // we will use 'other'.
+        offsetY = b.select(pred, offsetY, adjustedBaseHeight);
       }
 
       assert(numPackedVals > 0 && "numPackedVals should be greater than zero.");
