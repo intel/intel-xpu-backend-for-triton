@@ -219,3 +219,72 @@ def test_block_io(M, N, dtype_str, layout, load_block_ptr, store_block_ptr, tran
         assert 'spirv_Subgroup2DBlockStoreINTEL' in llir or 'GenISA.LSC2DBlockWrite' in llir
         load_count = llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead')
         assert load_count > 0 or transpose
+
+
+layouts_3d = [
+    BlockedLayout([1, 1, 1], [1, 2, 16], [8, 4, 1], [2, 1, 0]),
+]
+
+
+@pytest.mark.parametrize("M, N, K", [[64, 64, 32], [128, 128, 16]])
+@pytest.mark.parametrize("dtype_str", ["float32", "float16", "int8"])
+@pytest.mark.parametrize("layout", layouts_3d)
+@pytest.mark.parametrize("transpose", [True, False])
+@pytest.mark.skipif(not is_xpu(), reason="Block store tests are specific to the XPU backend")
+def test_block_io_3d(M, N, K, dtype_str, layout, transpose, device, tmp_path: pathlib.Path):
+    warps = warps_per_cta(layout)
+    num_warps = int(np.prod(warps))
+    threads_per_warp = layout.threads_per_warp
+    threads_per_warp = int(np.prod(threads_per_warp))
+
+    ty = {"float32": "f32", "float16": "f16", "bfloat16": "i16", "int8": "i8"}[dtype_str]
+    support_block_io = triton.runtime.driver.active.get_current_target().arch['has_subgroup_2d_block_io']
+
+    block_io = "\"column_major\"" if transpose else "\"row_major\""
+    strides = "[%NK_i64, %c1_i64, %N_i64]" if transpose else "[%NK_i64, %K_i64, %c1_i64]"
+
+    ir = f"""
+    #layout = {layout}
+    module attributes {{{"ttig.support_2d_block_io," if support_block_io else ""} "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = {num_warps} : i32, ttg.target = "xpu", "ttg.threads-per-warp" = {threads_per_warp} : i32}} {{
+        tt.func public @block_store(%src: !tt.ptr<{ty}> {{tt.divisibility = 16 : i32}}, %dst: !tt.ptr<{ty}> {{tt.divisibility = 16 : i32}}) {{
+
+            %M_i64 = arith.constant {M} : i64
+            %N_i64 = arith.constant {N} : i64
+            %K_i64 = arith.constant {K} : i64
+            %NK_i64 = arith.constant {N*K} : i64
+            %c1_i64 = arith.constant 1 : i64
+            %c0_i32 = arith.constant 0 : i32
+
+            %src_ptr = tt.make_tensor_ptr %src, [%M_i64, %N_i64, %K_i64], {strides}, [%c0_i32, %c0_i32, %c0_i32] {{order = array<i32: 2, 1, 0>}} : <tensor<{M}x{N}x{K}x{ty}, #layout>>
+            %store_val = tt.load %src_ptr {{ttig.block_io = {block_io}, boundaryCheck = array<i32: 0, 1, 2>, padding = 1 : i32}} : !tt.ptr<tensor<{M}x{N}x{K}x{ty}, #layout>>
+
+            %dst_ptr = tt.make_tensor_ptr %dst, [%M_i64, %N_i64, %K_i64], [%NK_i64, %K_i64, %c1_i64], [%c0_i32, %c0_i32, %c0_i32] {{order = array<i32: 2, 1, 0>}} : <tensor<{M}x{N}x{K}x{ty}, #layout>>
+            tt.store %dst_ptr, %store_val {{ttig.block_io = "row_major", boundaryCheck = array<i32: 0, 1, 2>}} : !tt.ptr<tensor<{M}x{N}x{K}x{ty}, #layout>>
+
+            tt.return
+        }}
+    }}
+    """
+
+    torch_dtype = getattr(torch, dtype_str)
+    if torch_dtype.is_floating_point:
+        a = torch.randn((M, N, K), dtype=torch_dtype, device=device)
+    else:
+        a = torch.randint(low=-127, high=128, size=(M, N, K), dtype=torch_dtype, device=device)
+
+    x = torch.empty_like(a)
+
+    temp_file = tmp_path / "test_block_io_3d.ttgir"
+    temp_file.write_text(ir)
+    kernel = triton.compile(str(temp_file))
+
+    if transpose:
+        a = a.permute(0, 2, 1).contiguous().permute(0, 2, 1)
+
+    kernel[(1, 1, 1)](a, x)
+    assert torch.equal(a, x)
+
+    if support_block_io:
+        llir = kernel.asm["llir"]
+        load_count = llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead')
+        assert load_count > 0 or transpose
