@@ -139,8 +139,8 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK:           %[[SUB_GROUP_ID_RAW:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id() {no_unwind, will_return} : () -> i32
     // CHECK:           %[[SUB_GROUP_ID_EXT:.*]] = llvm.zext %[[SUB_GROUP_ID_RAW]] : i32 to i64
     // CHECK:           %[[SUB_GROUP_ID:.*]] = llvm.trunc %[[SUB_GROUP_ID_EXT]] : i64 to i32
-    // CHECK:           %[[OFFSET_COL:.*]] = llvm.add %[[OFFSET_1]], {{.*}} : i32
     // CHECK:           %[[OFFSET_Y:.*]] = llvm.add %[[OFFSET_0]], {{.*}} : i32
+    // CHECK:           %[[OFFSET_COL:.*]] = llvm.add %[[OFFSET_1]], {{.*}} : i32
     // CHECK:           %[[NUM_VALUES_PER_PACK:.*]] = llvm.mlir.constant(1 : i32) : i32
     // CHECK:           %[[OFFSET_X:.*]] = llvm.udiv %[[OFFSET_COL]], %[[NUM_VALUES_PER_PACK]] : i32
     // CHECK:           triton_gen.2Dblockload %[[BASE]], %[[WIDTH]], %[[HEIGHT_i32]], %[[ROW_STRIDE_IN_BYTES]], %[[OFFSET_X]], %[[OFFSET_Y]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 2, transpose = false, vnni_transform = false, cache_control = Default}
@@ -192,8 +192,8 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK:           %[[SUB_GROUP_ID_RAW:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id() {no_unwind, will_return} : () -> i32
     // CHECK:           %[[SUB_GROUP_ID_EXT:.*]] = llvm.zext %[[SUB_GROUP_ID_RAW]] : i32 to i64
     // CHECK:           %[[SUB_GROUP_ID:.*]] = llvm.trunc %[[SUB_GROUP_ID_EXT]] : i64 to i32
-    // CHECK:           %[[OFFSET_COL:.*]] = llvm.add %[[OFFSET_1]], {{.*}} : i32
     // CHECK:           %[[VAL_47:.*]] = llvm.add %[[OFFSET_0]], {{.*}} : i32
+    // CHECK:           %[[OFFSET_COL:.*]] = llvm.add %[[OFFSET_1]], {{.*}} : i32
     // CHECK:           %[[NUM_VALUES_PACKED:.*]] = llvm.mlir.constant(1 : i32) : i32
     // CHECK:           %[[OFFSET_X:.*]] = llvm.udiv %[[OFFSET_COL]], %[[NUM_VALUES_PACKED]] : i32
     // CHECK:           triton_gen.2Dblockload %[[BASE]], %[[WIDTH]], %[[HEIGHT_i32]], %[[ROW_STRIDE_IN_BYTES]], %[[OFFSET_X]], {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 2, transpose = false, vnni_transform = true, cache_control = Default}
