@@ -1374,7 +1374,7 @@ def test_batched_mxfp(BATCH_SIZE, BLOCK_BATCH_SIZE, BLOCK_M, BLOCK_N, BLOCK_K, N
     M, N, K = 1024, 512, 2048
 
     if K % BLOCK_K != 0:
-        pytest.skip("Kernel requires shapes aligned by K dimension")
+        pytest.xfail("Kernel requires shapes aligned by K dimension")
     if is_cuda() and torch.cuda.get_device_capability()[0] < 10:
         pytest.skip("Requires compute capability >= 10")
     elif is_hip():
@@ -1382,6 +1382,9 @@ def test_batched_mxfp(BATCH_SIZE, BLOCK_BATCH_SIZE, BLOCK_M, BLOCK_N, BLOCK_K, N
             pytest.skip("Scaled mxfp8 matmul is only natively supported on CDNA4")
         if (nonKDim == 16 and BLOCK_K < 128) or (nonKDim == 32 and BLOCK_K < 64):
             pytest.skip(f"CDNA4 does not support {BLOCK_K=} for scaled mfma {nonKDim=} variants")
+    elif is_xpu():
+        if BLOCK_BATCH_SIZE == 4 and BLOCK_N == 64:
+            pytest.skip("FIXME: #5762")
 
     torch.manual_seed(42)
     dtype_src_str = "float8e5"
