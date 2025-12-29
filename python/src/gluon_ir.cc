@@ -5,6 +5,7 @@
 #include <optional>
 #include <stdexcept>
 
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/IR/Types.h"
@@ -622,6 +623,13 @@ void init_gluon_ir(py::module &&m) {
                  pointer, smem, mask, other, cacheModifier, evictionPolicy,
                  isVolatile);
            })
+      .def("create_async_copy_local_to_global",
+           [](GluonOpBuilder &self, Value smem, Value pointer, Value mask,
+              tt::CacheModifier cacheModifier,
+              tt::EvictionPolicy evictionPolicy) {
+             self.create<ttag::AsyncCopyLocalToGlobalOp>(
+                 smem, pointer, mask, cacheModifier, evictionPolicy);
+           })
       .def("create_async_copy_mbarrier_arrive",
            [](GluonOpBuilder &self, Value mbarrier, bool incrementCount) {
              self.create<ttng::AsyncCopyMbarrierArriveOp>(mbarrier,
@@ -903,9 +911,9 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("create_async_tdm_copy_local_to_global",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &indices,
-              Value src) {
+              Value src, Value barrier) {
              self.create<ttag::AsyncTDMCopyLocalToGlobalOp>(descPtr, indices,
-                                                            src);
+                                                            src, barrier);
            })
       .def("create_async_tdm_wait",
            [](GluonOpBuilder &self, int num) {
@@ -979,7 +987,14 @@ void init_gluon_ir(py::module &&m) {
             tensorPtrOp.getResult(), maskVal, tt::CacheModifier::NONE,
             tt::EvictionPolicy::NORMAL, isVolatile);
         return op.getOperation();
-      });
+      })
+      .def("create_warp_pipeline_border",
+           [](GluonOpBuilder &self, const std::string &marker) {
+             auto border = self.create<ROCDL::SchedBarrier>(0);
+             auto ctx = self.getContext();
+             border->setAttr("triton.warp_pipeline.border",
+                             StringAttr::get(ctx, marker));
+           });
 
   m.def(
       "compute_tmem_reg_layout",
