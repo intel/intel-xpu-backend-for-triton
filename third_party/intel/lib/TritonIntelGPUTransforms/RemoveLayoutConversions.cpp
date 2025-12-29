@@ -1096,7 +1096,7 @@ void LayoutRematerialization::reduceLoopCarriedValues() {
           })
           .Case<scf::ForOp>([&](auto forOp) {
             LLVM_DEBUG({
-              DBGS() << "Skipping rematerialization for scf.for users:"
+              DBGS() << "Skipping rematerialization for scf.for users: "
                      << *forOp << "\n";
             });
           })
