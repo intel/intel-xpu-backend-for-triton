@@ -31,37 +31,29 @@ static std::vector<sycl::device> sycl_opencl_device_list;
 static bool has_opencl = false;
 
 template <typename T>
-static inline T checkSyclErrors(const std::tuple<T, ze_result_t> tuple) {
-  const auto code = std::get<1>(tuple);
-  if (code != ZE_RESULT_SUCCESS) {
-    throw std::runtime_error(parseZeResultCode(code));
-  }
-  return std::get<0>(tuple);
-}
-
-// Raises a Python exception and returns false if code is not ZE_RESULT_SUCCESS.
-static bool zeAssert(ze_result_t code, ze_driver_handle_t ze_driver,
-                     const char *file, int line) {
+static inline T zeSyclCheckError(const std::tuple<T, ze_result_t> syclTuple,
+                                 const char *file, int line) {
+  const auto code = std::get<1>(syclTuple);
   if (code == ZE_RESULT_SUCCESS)
-    return true;
+    return std::get<0>(syclTuple);
 
   const char *prefix = "Triton Error [ZE]: ";
   const char *str;
-  zeDriverGetLastErrorDescription(ze_driver, &str);
   char err[1024] = {0};
-  strcat(err, prefix);
-  strcat(err, str);
+  snprintf(err, sizeof(err), "Triton Error [ZE] %s:%d - Code: %s", file, line,
+           parseZeResultCode(code).data());
   PyGILState_STATE gil_state;
   gil_state = PyGILState_Ensure();
   PyErr_SetString(PyExc_RuntimeError, err);
   PyGILState_Release(gil_state);
-  return false;
+
+  return std::get<0>(syclTuple);
 }
 
 static void zeConstructError(const char *file, int line, const char *message) {
-  const char *prefix = "Triton Error [ZE]: ";
+  const char *prefix = "Triton Error [ZE] %s:%d: ";
   char err[1024] = {0};
-  strcat(err, prefix);
+  snprintf(err, sizeof(err), prefix, file, line);
   strcat(err, message);
   PyGILState_STATE gil_state;
   gil_state = PyGILState_Ensure();
@@ -144,17 +136,30 @@ compileLevelZeroObjects(uint8_t *binary_ptr, const size_t binary_size,
                         L0_CONTEXT l0_context, const std::string &build_flags,
                         const bool is_spv) {
   auto l0_module =
-      checkSyclErrors(create_module(l0_context, l0_device, binary_ptr,
-                                    binary_size, build_flags.data(), is_spv));
+      zeSyclCheckError(create_module(l0_context, l0_device, binary_ptr,
+                                     binary_size, build_flags.data(), is_spv),
+                       __FILE__, __LINE__);
+  if (PyErr_Occurred()) {
+    return std::make_tuple(nullptr, nullptr, -1);
+  }
 
   // Retrieve the kernel properties (e.g. register spills).
-  auto l0_kernel = checkSyclErrors(create_function(l0_module, kernel_name));
+  auto l0_kernel = zeSyclCheckError(create_function(l0_module, kernel_name),
+                                    __FILE__, __LINE__);
+  if (PyErr_Occurred()) {
+    return std::make_tuple(nullptr, nullptr, -1);
+  }
 
   ze_kernel_properties_t props;
   props.stype = ZE_STRUCTURE_TYPE_KERNEL_PROPERTIES;
   props.pNext = nullptr;
-  checkSyclErrors(
-      std::make_tuple(NULL, zeKernelGetProperties(l0_kernel, &props)));
+
+  zeSyclCheckError(
+      std::make_tuple(NULL, zeKernelGetProperties(l0_kernel, &props)), __FILE__,
+      __LINE__);
+  if (PyErr_Occurred()) {
+    return std::make_tuple(nullptr, nullptr, -1);
+  }
 
   const int32_t n_spills = props.spillMemSize;
 
@@ -254,113 +259,108 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
 
   BuildFlags build_flags(build_flags_ptr);
 
-  try {
+  const auto &sycl_l0_device_pair = g_sycl_l0_device_list[devId];
+  const sycl::device sycl_device = sycl_l0_device_pair.first;
+  const auto l0_device = sycl_l0_device_pair.second;
 
-    const auto &sycl_l0_device_pair = g_sycl_l0_device_list[devId];
-    const sycl::device sycl_device = sycl_l0_device_pair.first;
-    const auto l0_device = sycl_l0_device_pair.second;
+  const std::string kernel_name = name;
+  const size_t binary_size = PyBytes_Size(py_bytes);
 
-    const std::string kernel_name = name;
-    const size_t binary_size = PyBytes_Size(py_bytes);
+  uint8_t *binary_ptr = (uint8_t *)PyBytes_AsString(py_bytes);
+  const auto &ctx = get_default_context(sycl_device);
+  const auto l0_context =
+      sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
 
-    uint8_t *binary_ptr = (uint8_t *)PyBytes_AsString(py_bytes);
-    const auto &ctx = get_default_context(sycl_device);
-    const auto l0_context =
-        sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
+  ze_device_compute_properties_t compute_properties = {};
+  compute_properties.stype = ZE_STRUCTURE_TYPE_DEVICE_COMPUTE_PROPERTIES;
+  zeDeviceGetComputeProperties(l0_device, &compute_properties);
+  int32_t n_max_threads = compute_properties.maxTotalGroupSize;
 
-    ze_device_compute_properties_t compute_properties = {};
-    compute_properties.stype = ZE_STRUCTURE_TYPE_DEVICE_COMPUTE_PROPERTIES;
-    zeDeviceGetComputeProperties(l0_device, &compute_properties);
-    int32_t n_max_threads = compute_properties.maxTotalGroupSize;
-
-    auto [l0_module, l0_kernel, n_spills] =
-        compileLevelZeroObjects(binary_ptr, binary_size, kernel_name, l0_device,
-                                l0_context, build_flags(), is_spv);
-
-    const bool debugEnabled = getBoolEnv("TRITON_DEBUG");
-
-    if (is_spv) {
-      constexpr int32_t max_reg_spill = 1000;
-      const bool is_GRF_mode_specified = build_flags.hasGRFSizeFlag();
-
-      // If the register mode isn't set, and the number of spills is greater
-      // than the threshold, recompile the kernel using large GRF mode.
-      if (!is_GRF_mode_specified && n_spills > max_reg_spill) {
-        if (debugEnabled)
-          std::cout << "(I): Detected " << n_spills
-                    << " spills, recompiling the kernel using large GRF mode"
-                    << std::endl;
-
-        build_flags.addLargeGRFSizeFlag();
-
-        try {
-          auto [l0_module_dgrf, l0_kernel_dgrf, n_spills_dgrf] =
-              compileLevelZeroObjects(binary_ptr, binary_size, kernel_name,
-                                      l0_device, l0_context, build_flags(),
-                                      is_spv);
-
-          if (debugEnabled)
-            std::cout << "(I): Kernel has now " << n_spills_dgrf << " spills"
-                      << std::endl;
-
-          std::swap(l0_module, l0_module_dgrf);
-          std::swap(l0_kernel, l0_kernel_dgrf);
-          std::swap(n_spills, n_spills_dgrf);
-
-          // clean up the unused module and kernel.
-          auto error_no = zeKernelDestroy(l0_kernel_dgrf);
-          if (error_no != ZE_RESULT_SUCCESS) {
-            PyErr_WarnEx(
-                PyExc_RuntimeWarning,
-                "[Ignoring] Intel - Error during destroy unused L0 kernel", 1);
-          }
-          error_no = zeModuleDestroy(l0_module_dgrf);
-          if (error_no != ZE_RESULT_SUCCESS) {
-            PyErr_WarnEx(
-                PyExc_RuntimeWarning,
-                "[Ignoring] Intel - Error during destroy unused L0 module", 1);
-          }
-        } catch (const std::exception &e) {
-          char buf[1024] = {0};
-          strcat(buf, "[Ignoring] Intel - Error during Intel loadBinary with "
-                      "large registers: ");
-          strcat(buf, e.what());
-          PyErr_WarnEx(PyExc_RuntimeWarning, buf, 1);
-          // construct previous working version
-          build_flags = BuildFlags(build_flags_ptr);
-        }
-      }
-    }
-
-    if (debugEnabled && n_spills) {
-      std::cout << "(I): Detected " << n_spills << " spills for  \""
-                << kernel_name << "\"" << std::endl;
-    }
-
-    auto n_regs = build_flags.n_regs();
-
-    auto mod = new sycl::kernel_bundle<sycl::bundle_state::executable>(
-        sycl::make_kernel_bundle<sycl::backend::ext_oneapi_level_zero,
-                                 sycl::bundle_state::executable>(
-            {l0_module, sycl::ext::oneapi::level_zero::ownership::transfer},
-            ctx));
-    sycl::kernel *fun = new sycl::kernel(
-        sycl::make_kernel<sycl::backend::ext_oneapi_level_zero>(
-            {*mod, l0_kernel,
-             sycl::ext::oneapi::level_zero::ownership::transfer},
-            ctx));
-    auto kernel_py =
-        PyCapsule_New(reinterpret_cast<void *>(fun), "kernel", freeKernel);
-    auto kernel_bundle_py = PyCapsule_New(reinterpret_cast<void *>(mod),
-                                          "kernel_bundle", freeKernelBundle);
-    last_build_flag = build_flags;
-    return Py_BuildValue("(OOiii)", kernel_bundle_py, kernel_py, n_regs,
-                         n_spills, n_max_threads);
-
-  } catch (const std::exception &e) {
-    zeConstructError(__FILE__, __LINE__, e.what());
+  auto [l0_module, l0_kernel, n_spills] =
+      compileLevelZeroObjects(binary_ptr, binary_size, kernel_name, l0_device,
+                              l0_context, build_flags(), is_spv);
+  if (PyErr_Occurred()) {
     return NULL;
   }
+
+  const bool debugEnabled = getBoolEnv("TRITON_DEBUG");
+
+  if (is_spv) {
+    constexpr int32_t max_reg_spill = 1000;
+    const bool is_GRF_mode_specified = build_flags.hasGRFSizeFlag();
+
+    // If the register mode isn't set, and the number of spills is greater
+    // than the threshold, recompile the kernel using large GRF mode.
+    if (!is_GRF_mode_specified && n_spills > max_reg_spill) {
+      if (debugEnabled)
+        std::cout << "(I): Detected " << n_spills
+                  << " spills, recompiling the kernel using large GRF mode"
+                  << std::endl;
+
+      build_flags.addLargeGRFSizeFlag();
+
+      try {
+        auto [l0_module_dgrf, l0_kernel_dgrf, n_spills_dgrf] =
+            compileLevelZeroObjects(binary_ptr, binary_size, kernel_name,
+                                    l0_device, l0_context, build_flags(),
+                                    is_spv);
+
+        if (debugEnabled)
+          std::cout << "(I): Kernel has now " << n_spills_dgrf << " spills"
+                    << std::endl;
+
+        std::swap(l0_module, l0_module_dgrf);
+        std::swap(l0_kernel, l0_kernel_dgrf);
+        std::swap(n_spills, n_spills_dgrf);
+
+        // clean up the unused module and kernel.
+        auto error_no = zeKernelDestroy(l0_kernel_dgrf);
+        if (error_no != ZE_RESULT_SUCCESS) {
+          PyErr_WarnEx(
+              PyExc_RuntimeWarning,
+              "[Ignoring] Intel - Error during destroy unused L0 kernel", 1);
+        }
+        error_no = zeModuleDestroy(l0_module_dgrf);
+        if (error_no != ZE_RESULT_SUCCESS) {
+          PyErr_WarnEx(
+              PyExc_RuntimeWarning,
+              "[Ignoring] Intel - Error during destroy unused L0 module", 1);
+        }
+      } catch (const std::exception &e) {
+        char buf[1024] = {0};
+        strcat(buf, "[Ignoring] Intel - Error during Intel loadBinary with "
+                    "large registers: ");
+        strcat(buf, e.what());
+        PyErr_WarnEx(PyExc_RuntimeWarning, buf, 1);
+        // construct previous working version
+        build_flags = BuildFlags(build_flags_ptr);
+      }
+    }
+  }
+
+  if (debugEnabled && n_spills) {
+    std::cout << "(I): Detected " << n_spills << " spills for  \""
+              << kernel_name << "\"" << std::endl;
+  }
+
+  auto n_regs = build_flags.n_regs();
+
+  auto mod = new sycl::kernel_bundle<sycl::bundle_state::executable>(
+      sycl::make_kernel_bundle<sycl::backend::ext_oneapi_level_zero,
+                               sycl::bundle_state::executable>(
+          {l0_module, sycl::ext::oneapi::level_zero::ownership::transfer},
+          ctx));
+  sycl::kernel *fun =
+      new sycl::kernel(sycl::make_kernel<sycl::backend::ext_oneapi_level_zero>(
+          {*mod, l0_kernel, sycl::ext::oneapi::level_zero::ownership::transfer},
+          ctx));
+  auto kernel_py =
+      PyCapsule_New(reinterpret_cast<void *>(fun), "kernel", freeKernel);
+  auto kernel_bundle_py = PyCapsule_New(reinterpret_cast<void *>(mod),
+                                        "kernel_bundle", freeKernelBundle);
+  last_build_flag = build_flags;
+  return Py_BuildValue("(OOiii)", kernel_bundle_py, kernel_py, n_regs, n_spills,
+                       n_max_threads);
 }
 
 bool has_ocloc_in_path() {
