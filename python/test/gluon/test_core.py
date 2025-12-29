@@ -10,8 +10,8 @@ import triton.language as tl
 from triton._internal_testing import (
     is_ampere_or_newer,
     is_blackwell,
-    is_hip_gfx11,
-    is_hip_gfx12,
+    is_hip_rdna3,
+    is_hip_rdna4,
     is_hip_cdna3,
     is_hip_cdna4,
     is_hopper_or_newer,
@@ -37,6 +37,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     tcgen05_copy,
     float2,
 )
+from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 
 THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
 
@@ -789,7 +790,7 @@ def test_amd_direct_load_to_shared(use_buffer_load):
     assert 'vmcnt(0)' in pgm.asm['amdgcn']
 
 
-@pytest.mark.xfail(not (is_hip_gfx11() or is_hip_gfx12()), reason="Requires RDNA3 or RDNA4", run=False)
+@pytest.mark.xfail(not (is_hip_rdna3() or is_hip_rdna4()), reason="Requires RDNA3 or RDNA4", run=False)
 @pytest.mark.parametrize("M, N, K", [(64, 64, 64)])
 @pytest.mark.parametrize("in_dtype", ['float16', 'bfloat16'])
 def test_amd_wmma(M, N, K, in_dtype):
@@ -839,8 +840,8 @@ def test_amd_wmma(M, N, K, in_dtype):
     c = torch.empty((M, N), device=a.device, dtype=elem_type)
 
     blocked = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
-    wmma_version = 1 if is_hip_gfx11() else 2
-    k_width = 16 if is_hip_gfx11() else 8
+    wmma_version = 1 if is_hip_rdna3() else 2
+    k_width = 16 if is_hip_rdna3() else 8
     wmma = ttgl.amd.AMDWMMALayout(wmma_version, True, [2, 2])
     kernel[1, 1](a, b, c, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1), BLOCK_SIZE_M=M,
                  BLOCK_SIZE_N=N, BLOCK_SIZE_K=K, BLOCKED_LAYOUT=blocked, WMMA_LAYOUT=wmma, K_WIDTH=k_width, num_warps=4)
@@ -1870,3 +1871,20 @@ def test_convert_auto_layout_to_coalesced_layout():
         XBLOCK, YBLOCK, num_warps=4)
 
     torch.testing.assert_close(output, ref)
+
+
+@gluon.jit
+def descriptor_shape_kernel(desc, expect_shape):
+    for i in ttgl.static_range(len(expect_shape)):
+        ttgl.device_assert(desc.shape[i] == expect_shape[i])
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_descriptor_shape():
+    t = torch.randint(0, 256, (512, 512), dtype=torch.uint8)
+
+    for fp4_padded in [True]:
+        layout = ttgl.NVMMASharedLayout.get_default_for([128, 64], ttgl.uint8, fp4_padded=fp4_padded)
+        desc = TensorDescriptor.from_tensor(t, [128, 64], layout)
+        descriptor_shape_kernel[(1, )](desc, t.shape, num_warps=1, debug=True)
+        torch.cuda.synchronize()
