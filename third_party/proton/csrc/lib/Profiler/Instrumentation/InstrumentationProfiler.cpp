@@ -8,6 +8,7 @@
 #include "Utility/String.h"
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <numeric>
 #include <queue>

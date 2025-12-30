@@ -65,17 +65,17 @@ public:
 
   virtual ~Metric() = default;
 
-  virtual const std::string &getName() const = 0;
+  virtual const std::string getName() const = 0;
 
-  virtual const std::string &getValueName(int valueId) const = 0;
+  virtual const std::string getValueName(int valueId) const = 0;
 
   virtual bool isProperty(int valueId) const = 0;
 
   virtual bool isExclusive(int valueId) const = 0;
 
-  const std::vector<MetricValueType> &getValues() const { return values; }
+  std::vector<MetricValueType> getValues() const { return values; }
 
-  const MetricValueType &getValue(int valueId) const { return values[valueId]; }
+  MetricValueType getValue(int valueId) { return values[valueId]; }
 
   /// Update a specific value id with the new value.
   void updateValue(int valueId, MetricValueType value) {
@@ -115,7 +115,7 @@ public:
   }
 
   /// Update all values with another metric.
-  void updateMetric(const Metric &other) {
+  void updateMetric(Metric &other) {
     for (int i = 0; i < values.size(); ++i) {
       updateValue(i, other.values[i]);
     }
@@ -125,6 +125,7 @@ public:
 
 private:
   const MetricKind kind;
+  const std::string name;
 
 protected:
   std::vector<MetricValueType> values;
@@ -152,9 +153,9 @@ public:
     std::visit([&](auto &&v) { this->values[0] = v; }, value);
   }
 
-  const std::string &getName() const override { return name; }
+  const std::string getName() const override { return "FlexibleMetric"; }
 
-  const std::string &getValueName(int valueId) const override {
+  const std::string getValueName(int valueId) const override {
     return valueName;
   }
 
@@ -165,7 +166,6 @@ public:
 private:
   bool property{};
   bool exclusive{};
-  const static inline std::string name = "FlexibleMetric";
   std::string valueName;
 };
 
@@ -196,15 +196,15 @@ public:
     this->values[StreamId] = streamId;
   }
 
-  const std::string &getName() const override { return name; }
+  virtual const std::string getName() const { return "KernelMetric"; }
 
-  const std::string &getValueName(int valueId) const override {
+  virtual const std::string getValueName(int valueId) const {
     return VALUE_NAMES[valueId];
   }
 
-  bool isProperty(int valueId) const override { return PROPERTY[valueId]; }
+  virtual bool isProperty(int valueId) const { return PROPERTY[valueId]; }
 
-  bool isExclusive(int valueId) const override { return EXCLUSIVE[valueId]; }
+  virtual bool isExclusive(int valueId) const { return EXCLUSIVE[valueId]; }
 
 private:
   const static inline bool PROPERTY[kernelMetricKind::Count] = {
@@ -215,7 +215,6 @@ private:
       "start_time (ns)", "end_time (ns)", "count",     "time (ns)",
       "device_id",       "device_type",   "stream_id",
   };
-  const static inline std::string name = "KernelMetric";
 };
 
 class PCSamplingMetric : public Metric {
@@ -255,15 +254,17 @@ public:
     this->values[PCSamplingMetricKind::NumStalledSamples] = stalledSamples;
   }
 
-  const std::string &getName() const override { return name; }
+  virtual const std::string getName() const { return "PCSamplingMetric"; }
 
-  const std::string &getValueName(int valueId) const override {
+  virtual const std::string getValueName(int valueId) const {
     return VALUE_NAMES[valueId];
   }
 
-  bool isProperty(int valueId) const override { return false; }
-  bool isExclusive(int valueId) const override { return false; }
+  virtual bool isProperty(int valueId) const { return false; }
 
+  virtual bool isExclusive(int valueId) const { return false; }
+
+private:
   const static inline std::string VALUE_NAMES[PCSamplingMetricKind::Count] = {
       "num_samples",
       "num_stalled_samples",
@@ -286,7 +287,6 @@ public:
       "stalled_sleeping",
       "stalled_selected",
   };
-  const static inline std::string name = "PCSamplingMetric";
 };
 
 class CycleMetric : public Metric {
@@ -336,15 +336,15 @@ public:
     this->values[PostFinalTime] = postFinalTime;
   }
 
-  const std::string &getName() const override { return name; }
+  virtual const std::string getName() const { return "CycleMetric"; }
 
-  const std::string &getValueName(int valueId) const override {
+  virtual const std::string getValueName(int valueId) const {
     return VALUE_NAMES[valueId];
   }
 
-  bool isProperty(int valueId) const override { return PROPERTY[valueId]; }
+  virtual bool isProperty(int valueId) const { return PROPERTY[valueId]; }
 
-  bool isExclusive(int valueId) const override { return EXCLUSIVE[valueId]; }
+  virtual bool isExclusive(int valueId) const { return EXCLUSIVE[valueId]; }
 
 private:
   const static inline bool PROPERTY[CycleMetricKind::Count] = {
@@ -358,7 +358,6 @@ private:
       "kernel_id",   "kernel_name",    "block_id",       "processor_id",
       "unit_id",     "device_id",      "device_type",    "time_shift_cost",
       "init_time",   "pre_final_time", "post_final_time"};
-  const static inline std::string name = "CycleMetric";
 };
 
 /// Each TensorMetric represents a scalar metric stored in a device buffer.
