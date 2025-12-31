@@ -463,8 +463,8 @@ LinearLayout DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
     tileLayout *=
         LinearLayout::identity1D(numReps[0], kRegister, outDimNames[0]);
 
-  return combineCtaCgaWithShape(std::move(tileLayout),
-                                CGAEncodingAttr::getDefault(ctx, rank), shape);
+  return combineCtaCgaWithShape(
+      std::move(tileLayout), CGAEncodingAttr::get1CTALayout(ctx, rank), shape);
 }
 
 // clang-format off
@@ -686,7 +686,7 @@ LinearLayout BlockScaledDPAStoLinearLayout(ArrayRef<int64_t> shape,
         LinearLayout::identity1D(numReps[0], kRegister, outDimNames[0]);
 
   tileLayout = combineCtaCgaWithShape(
-      std::move(tileLayout), CGAEncodingAttr::getDefault(ctx, rank), shape);
+      std::move(tileLayout), CGAEncodingAttr::get1CTALayout(ctx, rank), shape);
   return tileLayout;
 }
 
