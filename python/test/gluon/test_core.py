@@ -129,7 +129,7 @@ def tma_multicast_copy_kernel(in_desc, out_desc):
     smem._keep_alive()
 
 
-@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires Hopper", run=False)
 @pytest.mark.parametrize("ctas_per_cga", [[2, 1], [1, 4], [4, 4]])
 def test_tma_multicast_copy(ctas_per_cga):
     from triton._C.libtriton.gluon_ir import make_cga_layout
@@ -1939,7 +1939,7 @@ def descriptor_shape_kernel(desc, expect_shape):
         ttgl.device_assert(desc.shape[i] == expect_shape[i])
 
 
-@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
 def test_descriptor_shape():
     t = torch.randint(0, 256, (512, 512), dtype=torch.uint8)
 

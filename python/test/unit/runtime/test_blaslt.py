@@ -62,7 +62,7 @@ def test_blaslt(m, n, k, dtype_str, device):
 def test_block_scaled_matmul_mxfp8(m, n, k, device):
     """Test block-scaled matmul with MXFP8 format (FP8 E4M3 inputs, E8M0 scales)."""
     if not is_cuda():
-        pytest.skip("block_scaled_matmul is only supported on CUDA")
+        pytest.xfail("block_scaled_matmul is only supported on CUDA")
     if not supports_block_scaling():
         pytest.skip("block_scaled_matmul requires compute capability 10.0 (Blackwell)")
 
@@ -133,7 +133,7 @@ def test_block_scaled_matmul_mxfp8(m, n, k, device):
 def test_block_scaled_matmul_nvfp4(m, n, k, device):
     """Test block-scaled matmul with NVFP4 format (packed FP4 inputs, FP8 E4M3 scales)."""
     if not is_cuda():
-        pytest.skip("block_scaled_matmul is only supported on CUDA")
+        pytest.xfail("block_scaled_matmul is only supported on CUDA")
     if not supports_block_scaling():
         pytest.skip("block_scaled_matmul requires compute capability 10.0 (Blackwell)")
 
