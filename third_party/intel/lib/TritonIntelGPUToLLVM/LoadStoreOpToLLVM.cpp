@@ -308,11 +308,15 @@ struct LoadStoreConversionBase {
   template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
                                  OpType, LoadOp, StoreOp>::value>>
   bool canUsePredicatedInstructions(OpType op) const {
-    if (!usePredicatedInstructions)
-      return false;
-
-    if constexpr (std::is_same_v<OpType, LoadOp>)
+    if constexpr (std::is_same_v<OpType, LoadOp>) {
+      if (!triton::tools::getBoolEnv("TRITON_INTEL_PREDICATED_LOAD"))
+        return false;
       return !op.getIsVolatile() && op.getCache() == CacheModifier::NONE;
+    }
+
+    if constexpr (std::is_same_v<OpType, StoreOp>)
+      if (!triton::tools::getBoolEnv("TRITON_INTEL_PREDICATED_STORE"))
+        return false;
 
     return op.getCache() == CacheModifier::NONE;
   }
@@ -334,8 +338,6 @@ struct LoadStoreConversionBase {
 protected:
   const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass;
   const triton::intel::TargetInfo &targetInfo;
-  const bool usePredicatedInstructions =
-      triton::tools::getBoolEnv("TRITON_INTEL_PREDICATED");
 };
 
 struct BlockIOConversionBase : public LoadStoreConversionBase {
