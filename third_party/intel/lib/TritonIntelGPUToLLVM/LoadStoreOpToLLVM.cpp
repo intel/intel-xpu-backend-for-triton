@@ -2590,15 +2590,19 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                          ? b.extract_element(IntegerType::get(ctx, width), ret,
                                              b.i32_val(ii))
                          : ret;
-        curr = b.bitcast(
-            curr, LLVM::getVectorType(valueElemTy, width / valueElemNBits));
+        unsigned numElem = width / valueElemNBits;
+        if (numElem == 1)
+          curr = b.bitcast(curr, valueElemTy);
+        else
+          curr = b.bitcast(curr, LLVM::getVectorType(valueElemTy, numElem));
         rets.push_back(curr);
       }
 
       int tmp = width / valueElemNBits;
       for (size_t ii = 0; ii < vec; ++ii) {
-        Value loaded =
-            b.extract_element(valueElemTy, rets[ii / tmp], b.i32_val(ii % tmp));
+        Value loaded = rets[ii / tmp];
+        if (isa<VectorType>(loaded.getType()))
+          loaded = b.extract_element(valueElemTy, loaded, b.i32_val(ii % tmp));
         loadedVals.push_back(loaded);
       }
     } // end vec
