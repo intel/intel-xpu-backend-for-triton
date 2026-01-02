@@ -2523,9 +2523,16 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       Value pred = maskElems.size() ? maskElems[vecStart] : Value{};
 
       SmallVector<Type> retTys(nWords, IntegerType::get(ctx, width));
-      Type retTy = retTys.size() > 1
-                       ? vec_ty(IntegerType::get(ctx, width), nWords)
-                       : retTys[0];
+      Type retTy;
+      if (retTys.size() == 1)
+        retTy = retTys[0];
+      else {
+        Type elemTy = IntegerType::get(ctx, width);
+        if (nWords == 1)
+          retTy = elemTy;
+        else
+          retTy = vec_ty(elemTy, nWords);
+      }
 
       Value other_ = b.undef(retTy);
       if (otherElems.empty()) {
@@ -2983,7 +2990,9 @@ struct StoreOpConversion
       // TODO(Superjomn) Deal with cache policy here.
 
       Type valArgTy = IntegerType::get(ctx, width);
-      auto wordTy = vec_ty(valueElemTy, wordNElems);
+      Type wordTy = vec_ty(valueElemTy, wordNElems);
+      if (wordNElems == 1)
+        wordTy = valueElemTy;
 
       SmallVector<std::pair<Value, std::string>> asmArgs;
       for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
@@ -2998,7 +3007,10 @@ struct StoreOpConversion
             elem = b.sext(i8_ty, elem);
           elem = b.bitcast(elem, valueElemTy);
 
-          llWord = b.insert_element(wordTy, llWord, elem, b.i32_val(elemIdx));
+          if (wordNElems == 1)
+            llWord = elem;
+          else
+            llWord = b.insert_element(wordTy, llWord, elem, b.i32_val(elemIdx));
         }
         llWord = b.bitcast(llWord, valArgTy);
         std::string constraint =
@@ -3012,11 +3024,16 @@ struct StoreOpConversion
         maskVal = maybeAnd(rewriter, loc, threadPred, mask);
       }
 
-      auto vecTy = vec_ty(valArgTy, nWords);
+      Type vecTy = vec_ty(valArgTy, nWords);
+      if (nWords == 1)
+        vecTy = valArgTy;
       Value vecWord = b.undef(vecTy);
       for (int index = 0; index < asmArgs.size(); ++index) {
         auto llWord = asmArgs[index].first;
-        vecWord = b.insert_element(vecTy, vecWord, llWord, b.i32_val(index));
+        if (nWords == 1)
+          vecWord = llWord;
+        else
+          vecWord = b.insert_element(vecTy, vecWord, llWord, b.i32_val(index));
       }
 
       Value addrElem = b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
