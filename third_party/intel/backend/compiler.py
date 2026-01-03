@@ -333,7 +333,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     def optimize_llvm_mod(cls, llvm_mod, options):
         intel.set_spv_target_triple(llvm_mod)
         with track("optimize_module") as tr:
-            intel.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, tr.callback("passes"))
+            intel.optimize_module(llvm_mod, llvm.OPTIMIZE_O0, tr.callback("passes"))
 
     @classmethod
     @track
@@ -432,8 +432,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         elif options.grf_mode != 'default':
             raise RuntimeError(f"Unknown grf_mode: {options.grf_mode}")
 
-        if knobs.intel.disable_igc_opt:
-            metadata["build_flags"] += " -cl-opt-disable"
+        #if knobs.intel.disable_igc_opt:
+        metadata["build_flags"] += " -cl-opt-disable"
         return spirv
 
     @classmethod
