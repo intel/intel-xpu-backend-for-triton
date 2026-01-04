@@ -27,8 +27,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttig.su
     // CHECK-NEXT: [[IE1:%.*]] = llvm.insertelement [[ARG2_0]], [[VEC]][[[CST_0]] : i64] : vector<1xf32>
     // CHECK-NEXT: [[BCAST0:%.*]] = llvm.bitcast {{.*}} : vector<1xf32> to i32
     // CHECK:      [[BCAST1:%.*]] = llvm.bitcast [[ARG0_0]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // PREDICATED: [[ALIGNMENT:%.*]] = llvm.mlir.constant(4 : i64) : i64
-    // PREDICATED: [[V1:%.*]] = llvm.call spir_funccc @llvm.genx.GenISA.PredicatedLoad.i32.p1i32.i32([[BCAST1]], [[ALIGNMENT]], [[ARG1_0]], [[BCAST0]]) {{.*}} : (!llvm.ptr<1>, i64, i1, i32) -> i32
+    // PREDICATED: [[V1:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi([[BCAST1]], [[ARG1_0]], [[BCAST0]]) {{.*}} : (!llvm.ptr<1>, i1, i32) -> i32
     // NO-PREDICATED:      llvm.cond_br [[ARG1_0]], ^bb1, ^bb2([[BCAST0]] : i32)
     // NO-PREDICATED-NEXT: ^bb1:
     // NO-PREDICATED-NEXT:   [[LOAD1:%.*]] = llvm.load [[BCAST1]] {alignment = 4 : i64} : !llvm.ptr<1> -> i32
@@ -37,8 +36,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttig.su
     // CHECK-NEXT:   [[EE1:%.*]] = llvm.bitcast [[V1]] : i32 to f32
     // CHECK:        [[BCAST2:%.*]] = llvm.bitcast {{.*}} : vector<1xf32> to i32
     // CHECK:        [[BCAST3:%.*]] = llvm.bitcast [[ARG0_1]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // PREDICATED: [[ALIGNMENT:%.*]] = llvm.mlir.constant(4 : i64) : i64
-    // PREDICATED: [[V2:%.*]] = llvm.call spir_funccc @llvm.genx.GenISA.PredicatedLoad.i32.p1i32.i32([[BCAST3]], [[ALIGNMENT]], [[ARG1_1]], [[BCAST2]]) {{.*}} : (!llvm.ptr<1>, i64, i1, i32) -> i32
+    // PREDICATED: [[V2:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi([[BCAST3]], [[ARG1_1]], [[BCAST2]]) {{.*}} : (!llvm.ptr<1>, i1, i32) -> i32
     // NO-PREDICATED:        llvm.cond_br [[ARG1_1]], ^bb3, ^bb4([[BCAST2]] : i32)
     // NO-PREDICATED-NEXT: ^bb3:
     // NO-PREDICATED-NEXT:   [[LOAD2:%.*]] = llvm.load [[BCAST3]] {alignment = 4 : i64} : !llvm.ptr<1> -> i32
@@ -69,8 +67,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttig.su
     // CHECK-NEXT: [[IE1:%.*]] = llvm.insertelement [[ARG2_0]], [[VEC]][[[CST_0]] : i64] : vector<1xf32>
     // CHECK-NEXT: [[BCAST0:%.*]] = llvm.bitcast {{.*}} : vector<1xf32> to i32
     // CHECK:      [[BCAST1:%.*]] = llvm.bitcast [[ARG0_0]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // PREDICATED: [[ALIGNMENT:%.*]] = llvm.mlir.constant(4 : i64) : i64
-    // PREDICATED: [[V1:%.*]] = llvm.call spir_funccc @llvm.genx.GenISA.PredicatedLoad.i32.p1i32.i32([[BCAST1]], [[ALIGNMENT]], [[ARG1_0]], [[BCAST0]]) {{.*}} : (!llvm.ptr<1>, i64, i1, i32) -> i32
+    // PREDICATED: [[V1:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi([[BCAST1]], [[ARG1_0]], [[BCAST0]]) {{.*}} : (!llvm.ptr<1>, i1, i32) -> i32
     // NO-PREDICATED:      llvm.cond_br [[ARG1_0]], ^bb1, ^bb2([[BCAST0]] : i32)
     // NO-PREDICATED-NEXT: ^bb1:
     // NO-PREDICATED-NEXT:   [[LOAD1:%.*]] = llvm.load [[BCAST1]] {alignment = 4 : i64} : !llvm.ptr<1> -> i32
@@ -79,8 +76,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttig.su
     // CHECK-NEXT:   [[EE1:%.*]] = llvm.bitcast [[V1]] : i32 to f32
     // CHECK:        [[BCAST2:%.*]] = llvm.bitcast {{.*}} : vector<1xf32> to i32
     // CHECK:        [[BCAST3:%.*]] = llvm.bitcast [[ARG0_1]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // PREDICATED: [[ALIGNMENT:%.*]] = llvm.mlir.constant(4 : i64) : i64
-    // PREDICATED: [[V2:%.*]] = llvm.call spir_funccc @llvm.genx.GenISA.PredicatedLoad.i32.p1i32.i32([[BCAST3]], [[ALIGNMENT]], [[ARG1_1]], [[BCAST2]]) {{.*}} : (!llvm.ptr<1>, i64, i1, i32) -> i32
+    // PREDICATED: [[V2:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi([[BCAST3]], [[ARG1_1]], [[BCAST2]]) {{.*}} : (!llvm.ptr<1>, i1, i32) -> i32
     // NO-PREDICATED:        llvm.cond_br [[ARG1_1]], ^bb3, ^bb4([[BCAST2]] : i32)
     // NO-PREDICATED-NEXT: ^bb3:
     // NO-PREDICATED-NEXT:   [[LOAD2:%.*]] = llvm.load [[BCAST3]] {alignment = 4 : i64} : !llvm.ptr<1> -> i32
@@ -123,8 +119,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttig.su
     // CHECK-NEXT: [[IE1:%.*]] = llvm.insertelement [[ARG2_0]], [[VEC]][[[CST_0]] : i64] : vector<1xf16>
     // CHECK-NEXT: [[BCAST0:%.*]] = llvm.bitcast [[IE1]] : vector<1xf16> to i16
     // CHECK:      [[BCAST1:%.*]] = llvm.bitcast [[ARG0_0]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // PREDICATED: [[ALIGNMENT:%.*]] = llvm.mlir.constant(2 : i64) : i64
-    // PREDICATED: [[V1:%.*]] = llvm.call spir_funccc @llvm.genx.GenISA.PredicatedLoad.i16.p1i16.i16([[BCAST1]], [[ALIGNMENT]], [[ARG1_0]], [[BCAST0]]) {{.*}} : (!llvm.ptr<1>, i64, i1, i16) -> i16
+    // PREDICATED: [[V1:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbs([[BCAST1]], [[ARG1_0]], [[BCAST0]]) {{.*}} : (!llvm.ptr<1>, i1, i16) -> i16
     // NO-PREDICATED:      llvm.cond_br [[ARG1_0]], ^bb1, ^bb2([[BCAST0]] : i16)
     // NO-PREDICATED-NEXT: ^bb1:
     // NO-PREDICATED-NEXT:   [[LOAD1:%.*]] = llvm.load [[BCAST1]] {alignment = 2 : i64} : !llvm.ptr<1> -> i16
@@ -133,8 +128,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttig.su
     // CHECK-NEXT:   [[EE1:%.*]] = llvm.bitcast [[V1]] : i16 to f16
     // CHECK:        [[BCAST2:%.*]] = llvm.bitcast {{.*}} : vector<1xf16> to i16
     // CHECK:        [[BCAST3:%.*]] = llvm.bitcast [[ARG0_1]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // PREDICATED: [[ALIGNMENT:%.*]] = llvm.mlir.constant(2 : i64) : i64
-    // PREDICATED: [[V2:%.*]] = llvm.call spir_funccc @llvm.genx.GenISA.PredicatedLoad.i16.p1i16.i16([[BCAST3]], [[ALIGNMENT]], [[ARG1_1]], [[BCAST2]]) {{.*}} : (!llvm.ptr<1>, i64, i1, i16) -> i16
+    // PREDICATED: [[V2:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbs([[BCAST3]], [[ARG1_1]], [[BCAST2]]) {{.*}} : (!llvm.ptr<1>, i1, i16) -> i16
     // NO-PREDICATED:        llvm.cond_br [[ARG1_1]], ^bb3, ^bb4([[BCAST2]] : i16)
 
     // NO-PREDICATED-NEXT: ^bb3:
@@ -144,8 +138,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttig.su
     // CHECK-NEXT:   [[EE2:%.*]] = llvm.bitcast [[V2]] : i16 to f16
     // CHECK:        [[BCAST4:%.*]] = llvm.bitcast {{.*}} : vector<1xf16> to i16
     // CHECK:        [[BCAST5:%.*]] = llvm.bitcast [[ARG0_2]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // PREDICATED: [[ALIGNMENT:%.*]] = llvm.mlir.constant(2 : i64) : i64
-    // PREDICATED: [[V3:%.*]] = llvm.call spir_funccc @llvm.genx.GenISA.PredicatedLoad.i16.p1i16.i16([[BCAST5]], [[ALIGNMENT]], [[ARG1_2]], [[BCAST4]]) {{.*}} : (!llvm.ptr<1>, i64, i1, i16) -> i16
+    // PREDICATED: [[V3:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbs([[BCAST5]], [[ARG1_2]], [[BCAST4]]) {{.*}} : (!llvm.ptr<1>, i1, i16) -> i16
     // NO-PREDICATED:        llvm.cond_br [[ARG1_2]], ^bb5, ^bb6([[BCAST4]] : i16)
 
     // NO-PREDICATED-NEXT: ^bb5:
@@ -155,8 +148,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttig.su
     // CHECK-NEXT:   [[EE3:%.*]] = llvm.bitcast [[V3]] : i16 to f16
     // CHECK:        [[BCAST5:%.*]] = llvm.bitcast {{.*}} : vector<1xf16> to i16
     // CHECK:        [[BCAST6:%.*]] = llvm.bitcast [[ARG0_3]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // PREDICATED: [[ALIGNMENT:%.*]] = llvm.mlir.constant(2 : i64) : i64
-    // PREDICATED: [[V4:%.*]] = llvm.call spir_funccc @llvm.genx.GenISA.PredicatedLoad.i16.p1i16.i16([[BCAST6]], [[ALIGNMENT]], [[ARG1_3]], [[BCAST5]]) {{.*}} : (!llvm.ptr<1>, i64, i1, i16) -> i16
+    // PREDICATED: [[V4:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbs([[BCAST6]], [[ARG1_3]], [[BCAST5]]) {{.*}} : (!llvm.ptr<1>, i1, i16) -> i16
     // NO-PREDICATED:        llvm.cond_br [[ARG1_3]], ^bb7, ^bb8([[BCAST5]] : i16)
 
     // NO-PREDICATED-NEXT: ^bb7:
@@ -166,8 +158,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttig.su
     // CHECK-NEXT:   [[EE4:%.*]] = llvm.bitcast [[V4]] : i16 to f16
     // CHECK:        [[BCAST7:%.*]] = llvm.bitcast {{.*}} : vector<1xf16> to i16
     // CHECK:        [[BCAST8:%.*]] = llvm.bitcast [[ARG0_4]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // PREDICATED: [[ALIGNMENT:%.*]] = llvm.mlir.constant(2 : i64) : i64
-    // PREDICATED: [[V5:%.*]] = llvm.call spir_funccc @llvm.genx.GenISA.PredicatedLoad.i16.p1i16.i16([[BCAST8]], [[ALIGNMENT]], [[ARG1_4]], [[BCAST7]]) {{.*}} : (!llvm.ptr<1>, i64, i1, i16) -> i16
+    // PREDICATED: [[V5:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbs([[BCAST8]], [[ARG1_4]], [[BCAST7]]) {{.*}} : (!llvm.ptr<1>, i1, i16) -> i16
     // NO-PREDICATED:        llvm.cond_br [[ARG1_4]], ^bb9, ^bb10([[BCAST7]] : i16)
 
     // NO-PREDICATED-NEXT: ^bb9:
@@ -177,8 +168,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttig.su
     // CHECK-NEXT:   [[EE5:%.*]] = llvm.bitcast [[V5]] : i16 to f16
     // CHECK:        [[BCAST8:%.*]] = llvm.bitcast {{.*}} : vector<1xf16> to i16
     // CHECK:        [[BCAST9:%.*]] = llvm.bitcast [[ARG0_5]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // PREDICATED: [[ALIGNMENT:%.*]] = llvm.mlir.constant(2 : i64) : i64
-    // PREDICATED: [[V6:%.*]] = llvm.call spir_funccc @llvm.genx.GenISA.PredicatedLoad.i16.p1i16.i16([[BCAST9]], [[ALIGNMENT]], [[ARG1_5]], [[BCAST8]]) {{.*}} : (!llvm.ptr<1>, i64, i1, i16) -> i16
+    // PREDICATED: [[V6:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbs([[BCAST9]], [[ARG1_5]], [[BCAST8]]) {{.*}} : (!llvm.ptr<1>, i1, i16) -> i16
     // NO-PREDICATED:        llvm.cond_br [[ARG1_5]], ^bb11, ^bb12([[BCAST8]] : i16)
 
     // NO-PREDICATED-NEXT: ^bb11:
@@ -188,8 +178,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttig.su
     // CHECK-NEXT:   [[EE6:%.*]] = llvm.bitcast [[V6]] : i16 to f16
     // CHECK:        [[BCAST10:%.*]] = llvm.bitcast {{.*}} : vector<1xf16> to i16
     // CHECK:        [[BCAST11:%.*]] = llvm.bitcast [[ARG0_6]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // PREDICATED: [[ALIGNMENT:%.*]] = llvm.mlir.constant(2 : i64) : i64
-    // PREDICATED: [[V7:%.*]] = llvm.call spir_funccc @llvm.genx.GenISA.PredicatedLoad.i16.p1i16.i16([[BCAST11]], [[ALIGNMENT]], [[ARG1_6]], [[BCAST10]]) {{.*}} : (!llvm.ptr<1>, i64, i1, i16) -> i16
+    // PREDICATED: [[V7:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbs([[BCAST11]], [[ARG1_6]], [[BCAST10]]) {{.*}} : (!llvm.ptr<1>, i1, i16) -> i16
     // NO-PREDICATED:        llvm.cond_br [[ARG1_6]], ^bb13, ^bb14([[BCAST10]] : i16)
 
     // NO-PREDICATED-NEXT: ^bb13:
@@ -199,8 +188,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttig.su
     // CHECK-NEXT:   [[EE7:%.*]] = llvm.bitcast [[V7]] : i16 to f16
     // CHECK:        [[BCAST12:%.*]] = llvm.bitcast {{.*}} : vector<1xf16> to i16
     // CHECK:        [[BCAST13:%.*]] = llvm.bitcast [[ARG0_7]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // PREDICATED: [[ALIGNMENT:%.*]] = llvm.mlir.constant(2 : i64) : i64
-    // PREDICATED: [[V8:%.*]] = llvm.call spir_funccc @llvm.genx.GenISA.PredicatedLoad.i16.p1i16.i16([[BCAST13]], [[ALIGNMENT]], [[ARG1_7]], [[BCAST12]]) {{.*}} : (!llvm.ptr<1>, i64, i1, i16) -> i16
+    // PREDICATED: [[V8:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbs([[BCAST13]], [[ARG1_7]], [[BCAST12]]) {{.*}} : (!llvm.ptr<1>, i1, i16) -> i16
     // NO-PREDICATED:        llvm.cond_br [[ARG1_7]], ^bb15, ^bb16([[BCAST12]] : i16)
 
     // NO-PREDICATED-NEXT: ^bb15:
@@ -361,7 +349,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttig.su
     %9 = tt.splat %n_elements : i32 -> tensor<64xi32, #blocked>
     %10 = arith.cmpi "slt", %4, %9 : tensor<64xi32, #blocked>
     // load op has a vector width = 1 due to the %mask's alignment
-    // PREDICATED: llvm.call spir_funccc @llvm.genx.GenISA.PredicatedLoad.i32.p1i32.i32({{.*}}) {{.*}} : (!llvm.ptr<1>, i64, i1, i32) -> i32
+    // PREDICATED: llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi({{.*}}) {{.*}} : (!llvm.ptr<1>, i1, i32) -> i32
     // NO_PREDICATED: llvm.load %{{.*}} {alignment = 4 : i64} : !llvm.ptr<1> -> i32
     %11 = tt.load %6, %10 : tensor<64x!tt.ptr<f32>, #blocked>
     %12 = tt.load %8, %10 : tensor<64x!tt.ptr<f32>, #blocked>
@@ -681,8 +669,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttig.su
     // CHECK-NEXT: [[BCAST1:%.*]] = llvm.bitcast [[IE1]] : vector<1xf32> to i32
     // CHECK-NEXT: [[VEC2:%.*]] = llvm.mlir.undef : vector<1xi32>
     // CHECK-NEXT: [[BCAST2:%.*]] = llvm.bitcast [[ARG0_0]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // PREDICATED-NEXT: [[ALIGNMENT:%.*]] = llvm.mlir.constant(4 : i64) : i64
-    // PREDICATED: llvm.call spir_funccc @llvm.genx.GenISA.PredicatedStore.p1i32.i32([[BCAST2]], [[BCAST1]], [[ALIGNMENT]], [[ARG2_0]]) {{.*}} : (!llvm.ptr<1>, i32, i64, i1) -> ()
+    // PREDICATED: llvm.call spir_funccc @_Z28__spirv_PredicatedStoreINTELPU3AS1vib([[BCAST2]], [[BCAST1]], [[ARG2_0]]) {{.*}} : (!llvm.ptr<1>, i32, i1) -> ()
     // NO-PREDICATED: llvm.cond_br [[ARG2_0]], ^bb1, ^bb2
     // NO-PREDICATED-NEXT: ^bb1:
     // NO-PREDICATED-NEXT:   llvm.store [[BCAST1]], [[BCAST2]] {alignment = 4 : i64} : i32, !llvm.ptr<1>
@@ -690,8 +677,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttig.su
     // NO-PREDICATED-NEXT: ^bb2:
     // CHECK:        [[VEC3:%.*]] = llvm.mlir.undef : vector<1xi32>
     // CHECK-NEXT:   [[BCAST2:%.*]] = llvm.bitcast [[ARG0_1]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // PREDICATED: [[ALIGNMENT:%.*]] = llvm.mlir.constant(4 : i64) : i64
-    // PREDICATED: llvm.call spir_funccc @llvm.genx.GenISA.PredicatedStore.p1i32.i32([[BCAST2]], {{.*}}, [[ALIGNMENT]], [[ARG2_1]]) {{.*}} : (!llvm.ptr<1>, i32, i64, i1) -> ()
+    // PREDICATED: llvm.call spir_funccc @_Z28__spirv_PredicatedStoreINTELPU3AS1vib([[BCAST2]], {{.*}}, [[ARG2_1]]) {{.*}} : (!llvm.ptr<1>, i32, i1) -> ()
     // NO-PREDICATED:        llvm.cond_br [[ARG2_1]], ^bb3, ^bb4
     // NO-PREDICATED-NEXT: ^bb3:
     // NO-PREDICATED-NEXT:   llvm.store {{.*}}, [[BCAST2]] {alignment = 4 : i64} : i32, !llvm.ptr<1>
@@ -1333,7 +1319,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttig.su
   tt.func @store_f32_scalar(%arg0 : !tt.ptr<f32>, %arg1 : f32) {
     // CHECK:      llvm.icmp "eq"
     // CHECK:      [[BCAST:%.*]] = llvm.bitcast %arg0 : !llvm.ptr<1> to !llvm.ptr<1>
-    // PREDICATED: llvm.call spir_funccc @llvm.genx.GenISA.PredicatedStore.p1i32.i32([[BCAST]], {{.*}}) {{.*}} : (!llvm.ptr<1>, i32, i64, i1) -> ()
+    // PREDICATED: llvm.call spir_funccc @_Z28__spirv_PredicatedStoreINTELPU3AS1vib([[BCAST]], {{.*}}) {{.*}} : (!llvm.ptr<1>, i32, i1) -> ()
     // NO-PREDICATED:      llvm.cond_br {{.*}}, ^bb1, ^bb2
     // NO-PREDICATED-NEXT: ^bb1:
     // NO-PREDICATED-NEXT:   llvm.store {{.*}}, [[BCAST]] {alignment = 4 : i64} : i32, !llvm.ptr<1>

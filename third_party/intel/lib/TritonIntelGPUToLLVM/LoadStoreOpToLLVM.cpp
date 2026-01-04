@@ -2080,8 +2080,8 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       if (!pred)
         ret = createLoadWithAttrs()[0];
       else if (canUsePredicatedInstructions(op))
-        ret = TritonGEN::PredicatedLoadOp::create(
-            rewriter, loc, retTy, addrElem, b.i64_val(alignment), pred, other_);
+        ret = TritonGEN::PredicatedLoadOp::create(rewriter, loc, retTy,
+                                                  addrElem, pred, other_);
       else {
         Block &endBlock = LLVM::intel::createPredicatedBlock(
             rewriter, loc, pred, SmallVector<Value, 1>{other_},
@@ -2529,7 +2529,7 @@ struct StoreOpConversion
         auto _ = createStoreWithAttrs();
       else if (canUsePredicatedInstructions(op))
         TritonGEN::PredicatedStoreOp::create(rewriter, loc, addrElem, vecWord,
-                                             b.i64_val(alignment), maskVal);
+                                             maskVal);
       else
         LLVM::intel::createPredicatedBlock(rewriter, loc, maskVal,
                                            createStoreWithAttrs);

@@ -26,6 +26,8 @@ std::string getTypeMangling(Type ty, bool isUnsigned) {
       .Case([](Float64Type) -> std::string { return "d"; })
       .Case([isUnsigned](IntegerType ty) -> std::string {
         switch (ty.getWidth()) {
+        case 1:
+          return "b";
         case 4:
           return "i";
         case 8:
