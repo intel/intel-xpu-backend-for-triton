@@ -2850,9 +2850,9 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
         ret = createLoadWithAttrs()[0];
       else if (canUsePredicatedInstructions(op)) {
         auto cacheModifier = tritonToIntelCacheModifier(op);
-        ret = TritonGEN::PredicatedLoadOp::create(
-            rewriter, loc, retTy, addrElem, b.i64_val(alignment), pred, other_,
-            cacheModifier);
+        ret = TritonGEN::PredicatedLoadOp::create(rewriter, loc, retTy,
+                                                  addrElem, pred, other_,
+                                                  cacheModifier);
       } else {
         Block &endBlock = LLVM::intel::createPredicatedBlock(
             rewriter, loc, pred, SmallVector<Value, 1>{other_},
@@ -3072,9 +3072,9 @@ struct DescriptorLoadOpConversion
       // perform boundary checking for the gather fallback.
       if (canUsePredicatedInstructions(op)) {
         auto cacheModifier = tritonToIntelCacheModifier(op);
-        ret = TritonGEN::PredicatedLoadOp::create(
-            rewriter, loc, retTy, addrElem, b.i64_val(alignment), pred, other_,
-            cacheModifier);
+        ret = TritonGEN::PredicatedLoadOp::create(rewriter, loc, retTy,
+                                                  addrElem, pred, other_,
+                                                  cacheModifier);
       } else {
         Block &endBlock = LLVM::intel::createPredicatedBlock(
             rewriter, loc, pred, SmallVector<Value, 1>{other_},
@@ -3268,8 +3268,7 @@ struct DescriptorStoreOpConversion
         // DescriptorStoreOp does not have a cache attribute, so use DEFAULT.
         auto cacheModifier = TritonGEN::StoreCacheControl::DEFAULT;
         TritonGEN::PredicatedStoreOp::create(rewriter, loc, addrElem, vecWord,
-                                             b.i64_val(alignment), maskVal,
-                                             cacheModifier);
+                                             maskVal, cacheModifier);
       } else {
         LLVM::intel::createPredicatedBlock(rewriter, loc, maskVal,
                                            createStoreWithAttrs);
@@ -3918,8 +3917,7 @@ struct StoreOpConversion
       else if (canUsePredicatedInstructions(op)) {
         auto cacheModifier = tritonToIntelCacheModifier(op);
         TritonGEN::PredicatedStoreOp::create(rewriter, loc, addrElem, vecWord,
-                                             b.i64_val(alignment), maskVal,
-                                             cacheModifier);
+                                             maskVal, cacheModifier);
       } else
         LLVM::intel::createPredicatedBlock(rewriter, loc, maskVal,
                                            createStoreWithAttrs);

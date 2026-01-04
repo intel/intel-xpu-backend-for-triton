@@ -112,7 +112,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // with bounds predicate instead of branching.
     // The GEP-computed pointer is bitcast and passed to the predicated load.
     // CHECK: %[[LOAD_PTR:.*]] = llvm.bitcast %[[GEP]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // CHECK: triton_gen.predicated_load %[[LOAD_PTR]], %{{.*}}, %[[PRED]], %{{.*}} {cache_control = Default} : (!llvm.ptr<1>, i64, i1, i32) -> i32
+    // CHECK: triton_gen.predicated_load %[[LOAD_PTR]], %[[PRED]], %{{.*}} {cache_control = Default} : (!llvm.ptr<1>, i1, i32) -> i32
 
     // CHECK: llvm.return
     %3 = tt.descriptor_load %0[%arg1, %arg2] : !tt.tensordesc<tensor<4x4xf32>> -> tensor<4x4xf32, #blocked>
@@ -238,7 +238,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // with combined predicate (thread redundancy AND boundary mask).
     // The GEP-computed pointer is bitcast and passed to the predicated store.
     // CHECK: %[[STORE_PTR:.*]] = llvm.bitcast %[[S_GEP]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // CHECK: triton_gen.predicated_store %[[STORE_PTR]], %{{.*}}, %{{.*}}, %[[STORE_PRED]] {cache_control = Default} : (!llvm.ptr<1>, i32, i64, i1)
+    // CHECK: triton_gen.predicated_store %[[STORE_PTR]], %{{.*}}, %[[STORE_PRED]] {cache_control = Default} : (!llvm.ptr<1>, i32, i1)
 
     // CHECK: llvm.return
     tt.descriptor_store %0[%arg1, %arg2], %arg3 : !tt.tensordesc<tensor<4x4xf32>>, tensor<4x4xf32, #blocked>
@@ -285,11 +285,11 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
 
     // With vec=4 and f16: totalWidth=64, maxWordWidth=32, width=32, nWords=2.
     // Return type is vector<2xi32>. Verify wider-than-scalar predicated loads.
-    // CHECK: triton_gen.predicated_load {{.*}} : (!llvm.ptr<1>, i64, i1, vector<2xi32>) -> vector<2xi32>
+    // CHECK: triton_gen.predicated_load {{.*}} : (!llvm.ptr<1>, i1, vector<2xi32>) -> vector<2xi32>
     %load = tt.descriptor_load %desc[%arg1, %arg2] : !tt.tensordesc<tensor<4x16xf16>> -> tensor<4x16xf16, #blocked>
 
     // Verify wider-than-scalar predicated stores with the same descriptor.
-    // CHECK: triton_gen.predicated_store {{.*}}, %{{.*}}, %{{.*}}, %{{.*}} {cache_control = Default} : (!llvm.ptr<1>, vector<2xi32>, i64, i1)
+    // CHECK: triton_gen.predicated_store {{.*}}, %{{.*}}, %{{.*}} {cache_control = Default} : (!llvm.ptr<1>, vector<2xi32>, i1)
     tt.descriptor_store %desc[%arg1, %arg2], %load : !tt.tensordesc<tensor<4x16xf16>>, tensor<4x16xf16, #blocked>
     tt.return %load : tensor<4x16xf16, #blocked>
   }
@@ -312,11 +312,11 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     %desc = tt.make_tensor_descriptor %arg0, [%c4_i32, %c16_i32], [%c16_i64, %arg3] : <f16>, <tensor<4x16xf16>>
 
     // With unknown stride on the fast dimension, vec=1. Loads should be 16-bit (scalar f16).
-    // CHECK: triton_gen.predicated_load {{.*}} : (!llvm.ptr<1>, i64, i1, i16) -> i16
+    // CHECK: triton_gen.predicated_load {{.*}} : (!llvm.ptr<1>, i1, i16) -> i16
     %load = tt.descriptor_load %desc[%arg1, %arg2] : !tt.tensordesc<tensor<4x16xf16>> -> tensor<4x16xf16, #blocked>
 
     // Stores should also be 16-bit (scalar f16).
-    // CHECK: triton_gen.predicated_store {{.*}}, %{{.*}}, %{{.*}}, %{{.*}} {cache_control = Default} : (!llvm.ptr<1>, i16, i64, i1)
+    // CHECK: triton_gen.predicated_store {{.*}}, %{{.*}}, %{{.*}} {cache_control = Default} : (!llvm.ptr<1>, i16, i1)
     tt.descriptor_store %desc[%arg1, %arg2], %load : !tt.tensordesc<tensor<4x16xf16>>, tensor<4x16xf16, #blocked>
     tt.return %load : tensor<4x16xf16, #blocked>
   }
