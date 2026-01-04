@@ -100,8 +100,6 @@ module attributes {triton_intel_gpu.support_bfloat16_conversion, triton_intel_gp
 // CHECK-DAG: [[C3:%.+]] = llvm.mlir.constant(3 : i32) : i32
 // CHECK-DAG: [[C0:%.+]] = llvm.mlir.constant(0 : i32) : i32
 // CHECK-COUNT-16: [[I8:%.+]] = llvm.load {{.+}} {alignment = 1 : i64} : !llvm.ptr<1> -> i8
-// CHECK: [[I8V:%.+]] = llvm.bitcast [[I8]] : i8 to vector<1xi8>
-// CHECK: [[I8:%.+]] = llvm.extractelement [[I8V]][[[C0]] : i32] : vector<1xi8>
 // CHECK: [[IDX0I8:%.+]] = llvm.and [[I8]], [[C15]] : i8
 // CHECK: [[IDX1I8:%.+]] = llvm.lshr [[I8]], [[C4]] : i8
 // CHECK: [[V0:%.+]] = llvm.extractelement [[TABLE]][[[IDX0I8]] : i8] : vector<16xbf16>
