@@ -353,7 +353,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
   static bool isBlockIOCandidate(OpTy op, bool allLayout = false) {
     ModuleOp mod = op->template getParentOfType<ModuleOp>();
     if (!mod->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
-                          getSupportSG2DBlockAttrName()))
+                          getSupport2DBlockIOAttrName()))
       return false;
 
     Attribute blockIOAttr =
@@ -1077,7 +1077,7 @@ private:
                              identityStandardND(S("warp"), warpsPerCTA, order);
 
     return combineCtaCgaWithShape(std::move(ctaLayout),
-                                  CTAEncodingAttr::getDefault(ctx, rank),
+                                  CGAEncodingAttr::get1CTALayout(ctx, rank),
                                   tensorShape);
   }
 };

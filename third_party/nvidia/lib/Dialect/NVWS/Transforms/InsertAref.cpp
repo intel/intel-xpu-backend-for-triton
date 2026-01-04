@@ -63,7 +63,7 @@ SmallVector<ProducedValueInfo> getProducedValues(Operation *op,
 template <typename AllocOp, typename LoadOp>
 std::optional<std::pair<AllocOp, LoadOp>> isLoadAndAlloc(Value result) {
   auto alloc = result.getDefiningOp<AllocOp>();
-  if (!alloc)
+  if (!alloc || !alloc.getSrc())
     return std::nullopt;
   if (auto load = alloc.getSrc().template getDefiningOp<LoadOp>();
       load && getPartitionIds(alloc) == getPartitionIds(load)) {
@@ -172,6 +172,19 @@ void createNVWSDescriptorLoadOp(OpBuilder &builder, Operation *ttDescLoadOp,
 }
 
 StageCluster getStageClusterForProducer(Value producedValue) {
+  if (auto arg = dyn_cast<BlockArgument>(producedValue)) {
+    Value prevProducedValue;
+    do {
+      prevProducedValue = producedValue;
+      auto terminator = arg.getOwner()->getTerminator();
+      if (!isa<scf::YieldOp>(terminator)) {
+        return {};
+      }
+      producedValue = terminator->getOperand(arg.getArgNumber() - 1);
+      arg = dyn_cast<BlockArgument>(producedValue);
+    } while (arg && prevProducedValue != producedValue);
+  }
+
   if (auto opt = isDescLoadAndAlloc<LocalAllocOp>(producedValue)) {
     return getStageCluster(opt->second);
   } else if (auto opt = isGlobalLoadAndAlloc<LocalAllocOp>(producedValue)) {
@@ -267,6 +280,12 @@ getTransitiveConsumers(Operation *op,
     } else {
       if (getPartitionIds(&use) == consumerPartitions) {
         opConsumers.insert(use.getOwner());
+        // If an op is defined before an inner loop and used inside, the loop
+        // itself should be considered as an additional consumer. This is
+        // necessary for persistent attention, where the load of Q is done
+        // before the inner loop.
+        opConsumers.insert(
+            op->getBlock()->findAncestorOpInBlock(*use.getOwner()));
       }
     }
   }
@@ -297,6 +316,12 @@ SmallVector<Attribute> getConsumerAsyncOpKinds(ArrayRef<Operation *> consumers,
                                                MLIRContext *ctx) {
   SetVector<AsyncOp> kindSet;
   for (auto consumer : consumers) {
+    if (isa<scf::ForOp>(consumer) && consumers.size() > 1) {
+      // In this case, a getExit is placed after the consumer loop. The
+      // corresponding async kind attributes should be determined from other
+      // consumer ops in the loop.
+      continue;
+    }
     if (isa<WarpGroupDotOp>(consumer)) {
       kindSet.insert(AsyncOp::WGMMA);
     } else if (isa<MMAv5OpInterface>(consumer)) {
@@ -319,7 +344,7 @@ getEnterAndExitStageClustersOfUses(const SetVector<Value> &producedResults,
                                    std::function<bool(Operation *)> filterUse,
                                    scf::ForOp forOp) {
   CoarseSchedule coarseSchedule;
-  if (failed(coarseSchedule.deSerialize(forOp))) {
+  if (!forOp || failed(coarseSchedule.deSerialize(forOp))) {
     return std::make_pair(std::nullopt, std::nullopt);
   }
 
@@ -363,6 +388,13 @@ void createArefGet(OpBuilder &builder, scf::ForOp loop, ArefCreateOp aref,
   assert(results.size() == 1 || results.size() == 2);
   auto loc = results[0].getLoc();
 
+  scf::ForOp scheduledLoop;
+  loop->walk([&](scf::ForOp op) {
+    if (op->hasAttr(mlir::triton::kScheduledMaxStageAttrName)) {
+      scheduledLoop = op;
+    }
+  });
+
   auto filterUse = [&](Operation *user) {
     if (hasPartition(user)) {
       return llvm::is_contained(getPartitionIds(user), consumerPartition);
@@ -371,7 +403,7 @@ void createArefGet(OpBuilder &builder, scf::ForOp loop, ArefCreateOp aref,
     }
   };
   auto [stageClusterEnter, stageClusterExit] =
-      getEnterAndExitStageClustersOfUses(results, filterUse, loop);
+      getEnterAndExitStageClustersOfUses(results, filterUse, scheduledLoop);
 
   SetVector<int> consumerPartitions;
   consumerPartitions.insert(consumerPartition);
@@ -469,10 +501,7 @@ bool insertArefs(OpBuilder &builder, scf::ForOp loop, Block *block,
       // if use is outside ttg.ws, it may not have partition ids, skip it
       if (!hasPartition(user))
         continue;
-      auto userPartitions = getPartitionIds(user);
-      if (isa<scf::YieldOp>(user)) {
-        userPartitions = getPartitionIds(&use);
-      }
+      auto userPartitions = getPartitionIds(&use);
       for (auto id : producedValue.partitions) {
         userPartitions.remove(id);
       }
@@ -498,7 +527,8 @@ bool insertArefs(OpBuilder &builder, scf::ForOp loop, Block *block,
   ArefCreateOp aref;
   {
     OpBuilder::InsertionGuard g(builder);
-    builder.setInsertionPoint(loop);
+    auto wsLoop = getOuterWSLoop(loop);
+    builder.setInsertionPoint(wsLoop);
     aref = createAref(builder, producedValue);
   }
 
@@ -529,7 +559,7 @@ public:
     SmallVector<scf::ForOp> loops;
     func.walk([&](scf::ForOp loop) {
       auto func = loop->getParentOfType<triton::FuncOp>();
-      if (loop->hasAttr(triton::kWarpSpecializeAttrName))
+      if (loop->hasAttr(triton::kWarpSpecializeAttrName) && hasPartition(loop))
         loops.push_back(loop);
     });
 

@@ -32,8 +32,8 @@ from triton._internal_testing import (
     is_hip_cdna2,
     is_hip_cdna3,
     is_hip_cdna4,
-    is_hip_gfx11,
-    is_hip_gfx12,
+    is_hip_rdna3,
+    is_hip_rdna4,
     is_xpu,
     is_xpu_cri,
     get_arch,
@@ -83,7 +83,7 @@ elif is_hip():
     # 0 is a special value for automatic heuristic
     if is_hip_cdna():
         mma_nonk_sizes = [0, 16, 32]
-    elif is_hip_gfx11() or is_hip_gfx12():
+    elif is_hip_rdna3() or is_hip_rdna4():
         mma_nonk_sizes = [16]
 else:
     THREADS_PER_WARP = 32
@@ -1699,7 +1699,7 @@ def test_atomic_cas(sem, num_ctas, dtype_str, device):
 @pytest.mark.interpreter
 @pytest.mark.parametrize("sem", [None, "acquire", "release", "acq_rel", "relaxed"])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
-@pytest.mark.parametrize("size", [4, 128, 512])
+@pytest.mark.parametrize("size", [4, 128, 512, 1024])
 @pytest.mark.parametrize("dtype_str", ['bfloat16', 'float16', 'float32', 'uint64', 'int64', 'float64'])
 def test_tensor_atomic_cas(sem, size, dtype_str, num_ctas, device):
     check_type_supported(dtype_str, device)
@@ -3307,8 +3307,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                 pytest.skip("Only IEEE precision is supported for float64 dot")
 
         if is_hip():
-            if in_dtype in ("float8e5", "float8e4nv") and not (is_hip_cdna4() or is_hip_gfx12()):
-                pytest.skip(f"{in_dtype} only supported on CDNA4 and gfx12")
+            if in_dtype in ("float8e5", "float8e4nv") and not (is_hip_cdna4() or is_hip_rdna4()):
+                pytest.skip(f"{in_dtype} only supported on CDNA4 and RDNA4")
             if in_dtype in ("float8e5b16", "float8e4b8") and not is_hip_cdna3():
                 pytest.skip(f"{in_dtype} only supported on CDNA3")
             if not ((input_precision in ("bf16x3", "bf16x6")) or (input_precision == "ieee") or
@@ -3378,7 +3378,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     if 'int' not in in_dtype and 'float8' not in in_dtype:
         x *= .1
         y *= .1
-    if in_dtype == 'float32' and input_precision == "tf32":
+    if in_dtype == 'float32' and input_precision in ["tf32", "bf16x3", "bf16x6"]:
         x = (x.view('uint32') & np.uint32(0xffffe000)).view('float32')
         y = (y.view('uint32') & np.uint32(0xffffe000)).view('float32')
         w = (w.view('uint32') & np.uint32(0xffffe000)).view('float32')
@@ -3562,12 +3562,12 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
             pytest.skip("float8e4nv not supported on CUDA < 8.9")
         is_SM120 = cc >= (12, 0)
     if is_hip():
-        if not (is_hip_cdna() or is_hip_gfx11() or is_hip_gfx12()):
-            pytest.skip("scaled_dot only implemented for HIP CDNA, gfx11, gfx12")
+        if not (is_hip_cdna() or is_hip_rdna3() or is_hip_rdna4()):
+            pytest.skip("scaled_dot only implemented for HIP CDNA, RDNA3, RDNA4")
         if "e4m3" in (mxfp_type, normal_type):
-            if not (is_hip_cdna3() or is_hip_cdna4() or is_hip_gfx11() or is_hip_gfx12()):
-                pytest.skip(f"scaled_dot({mxfp_type}, {normal_type}) only implemented for CDNA3, CDNA4, gfx11, gfx12")
-        if mma == 16 and K == 64 and not (is_hip_gfx12() or is_hip_gfx11()):
+            if not (is_hip_cdna3() or is_hip_cdna4() or is_hip_rdna3() or is_hip_rdna4()):
+                pytest.skip(f"scaled_dot({mxfp_type}, {normal_type}) only implemented for CDNA3, CDNA4, RDNA3, RDNA4")
+        if mma == 16 and K == 64 and not (is_hip_rdna4() or is_hip_rdna3()):
             pytest.skip(f"K == {K} too small for mfma {mma} in scaled_dot")
     if is_xpu_cri():
         is_both_fp8 = (mxfp_type in ['float8e5', 'float8e4nv']) and (normal_type in ['float8e5', 'float8e4nv'])
@@ -3802,8 +3802,8 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
     # to zero. Detailed info is at:
     # https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices
     large_tolerance = is_hip_cdna2()
-    # For e4m3, gfx11 can slightly exceed the default tolerances in isolated cases
-    if is_hip_gfx11() and mxfp_type == "e4m3" and normal_type == "fp16":
+    # For e4m3, RDNA3 can slightly exceed the default tolerances in isolated cases
+    if is_hip_rdna3() and mxfp_type == "e4m3" and normal_type == "fp16":
         large_tolerance = True
     if is_SM120:
         large_tolerance = True
@@ -4136,7 +4136,7 @@ def test_const(device, choose_const, constexpr, mode):
             error = "Cannot store to a constant pointer"
         else:
             if mode == "call":
-                error = "Inconsistent return types"
+                error = "Return type mismatch: "
             elif mode == "if":
                 error = "Mismatched type for final_out"
             elif mode == "ternary":
@@ -5559,7 +5559,8 @@ def test_poison_return(device):
 
     @triton.jit
     def kernel(Out):
-        tl.store(Out, return_poison(0))
+        zero = 0
+        tl.store(Out, return_poison(zero))
 
     a = torch.empty((), device=device, dtype=torch.int32)
     h = kernel.warmup(a, grid=(1, ))
@@ -5768,8 +5769,8 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
         num_stages = 2
         if in_type_str in ("float8e5b16", "float8e4b8") and not is_hip_cdna3():
             pytest.skip(f"{in_type_str} only supported on CDNA3")
-        if in_type_str in ("float8e5", "float8e4nv") and not (is_hip_cdna4() or is_hip_gfx12()):
-            pytest.skip(f"{in_type_str} only supported on CDNA4 or gfx12")
+        if in_type_str in ("float8e5", "float8e4nv") and not (is_hip_cdna4() or is_hip_rdna4()):
+            pytest.skip(f"{in_type_str} only supported on CDNA4 or RDNA4")
 
     check_type_supported(in_type_str, device)
     A = numpy_random((M, K), dtype_str=in_type_str)
@@ -5804,7 +5805,7 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
 
 @pytest.mark.parametrize("enable_fp_fusion", [False, True])
 @pytest.mark.parametrize("default_override", [False, True])
-def test_enable_fp_fusion(enable_fp_fusion, default_override, device, fresh_knobs):
+def test_enable_fp_fusion(enable_fp_fusion, default_override, device, fresh_knobs_except_libraries):
     # Sequential multiply add can be fused by backend
     @triton.jit
     def mul_add(data):
@@ -5813,7 +5814,7 @@ def test_enable_fp_fusion(enable_fp_fusion, default_override, device, fresh_knob
 
     data = torch.randn((128, ), device=device, dtype=torch.float32)
     if default_override:
-        fresh_knobs.language.default_fp_fusion = enable_fp_fusion
+        fresh_knobs_except_libraries.language.default_fp_fusion = enable_fp_fusion
         h = mul_add.warmup(data, grid=(1, ))
     else:
         h = mul_add.warmup(data, grid=(1, ), enable_fp_fusion=enable_fp_fusion)
@@ -5831,7 +5832,7 @@ def test_enable_fp_fusion(enable_fp_fusion, default_override, device, fresh_knob
 
 @pytest.mark.xfail(not is_cuda(), reason="Requires CUDA", run=False)
 @pytest.mark.parametrize("enable_reflect_ftz", [False, True])
-def test_enable_reflect_ftz(enable_reflect_ftz, device, fresh_knobs):
+def test_enable_reflect_ftz(enable_reflect_ftz, device, fresh_knobs_except_libraries):
 
     @triton.jit
     def exp2(data):
@@ -5852,7 +5853,7 @@ def test_enable_reflect_ftz(enable_reflect_ftz, device, fresh_knobs):
 
 @pytest.mark.parametrize("arch", ["sm70", "sm80", "sm90", "gfx942", "gfx950", "gfx1200"])
 @pytest.mark.parametrize("env_var_override", [False, True])
-def test_override_arch(arch, env_var_override, device, fresh_knobs):
+def test_override_arch(arch, env_var_override, device, fresh_knobs_except_libraries):
     if arch.startswith("sm") and not is_cuda():
         pytest.xfail(f"{arch} arch only for CUDA")
     elif arch.startswith("gfx") and not is_hip():
@@ -5869,7 +5870,7 @@ def test_override_arch(arch, env_var_override, device, fresh_knobs):
 
     if is_cuda():
         if env_var_override:
-            fresh_knobs.runtime.override_arch = str(arch)
+            fresh_knobs_except_libraries.runtime.override_arch = str(arch)
             h = simple.warmup(data, out, grid=(1, ))
         else:
             h = simple.warmup(data, out, arch=arch, grid=(1, ))
@@ -5879,7 +5880,7 @@ def test_override_arch(arch, env_var_override, device, fresh_knobs):
         # For HIP, the generated kernel is a binary containing the final ISA. So we cannot run
         # them like CUDA side if the chip doesn't match. Here we just check generated ISA.
         if env_var_override:
-            fresh_knobs.runtime.override_arch = str(arch)
+            fresh_knobs_except_libraries.runtime.override_arch = str(arch)
             h = simple.warmup(data, out, grid=(1, ))
         else:
             h = simple.warmup(data, out, arch=arch, grid=(1, ))
@@ -5891,7 +5892,7 @@ def test_override_arch(arch, env_var_override, device, fresh_knobs):
         assert amdgcn_gfx.group(1) == arch
 
 
-def test_num_ctas_pre_sm90(device):
+def test_num_ctas_pre_sm90(device, fresh_knobs):
     if not is_cuda() and not is_hip():
         pytest.xfail("Only supported on CUDA and HIP")
 
@@ -5907,8 +5908,9 @@ def test_num_ctas_pre_sm90(device):
         arch = "gfx942"
         msg = r"num_ctas > 1 not supported"
 
+    fresh_knobs.runtime.override_arch = str(arch)
     with pytest.raises(ValueError, match=msg):
-        _kernel.warmup(src, grid=(1, ), num_ctas=2, arch=arch)
+        _kernel.warmup(src, grid=(1, ), num_ctas=2)
 
 
 # -----------------------
@@ -6459,6 +6461,10 @@ def gather_test_kernel_1d(src_ptr, idx_ptr, out_ptr, axis: tl.constexpr, src_dim
     ([128, 64], [128, 128], 1),
 ])
 def test_gather(src_shape, indices_shape, axis, device):
+    if (is_hip_cdna2() or is_hip_cdna3()) and src_shape == [128, 64] and indices_shape == [256, 64]:
+        # This could be solved by reducing vectorization in general swizzling algorithm.
+        # We will do this if any relevant workload suffers from large LDS consumption of the algorithm.
+        pytest.skip('Not enough LDS.')
 
     def triton_gather(src: torch.Tensor, axis: int, indices: torch.Tensor):
         output = torch.empty(indices.shape, dtype=src.dtype, device=src.device)

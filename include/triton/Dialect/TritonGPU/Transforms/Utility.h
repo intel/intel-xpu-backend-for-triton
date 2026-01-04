@@ -52,7 +52,7 @@ unsigned getElementBitWidth(RankedTensorType type);
 unsigned
 getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
                         triton::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                        SmallVector<int64_t> &shapePerCTA);
+                        ArrayRef<int64_t> shape);
 
 // Returns whether the op is a "view op", i.e. doesn't move any data
 bool isView(Operation *op);
@@ -285,6 +285,9 @@ SmallVector<Value> getTiedArgs(Operation *op, int resultIdx);
 // Verifies the provided memory descriptor type used for barrier allocation
 LogicalResult verifyBarrierType(Operation *op,
                                 mlir::triton::gpu::MemDescType barrierType);
+
+// Get a boolean if the Value is an arith::ConstantOp
+std::optional<bool> getBoolFromConstant(Value cst);
 
 } // namespace mlir::triton
 
