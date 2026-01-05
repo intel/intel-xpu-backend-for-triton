@@ -308,11 +308,15 @@ struct LoadStoreConversionBase {
   template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
                                  OpType, LoadOp, StoreOp>::value>>
   bool canUsePredicatedInstructions(OpType op) const {
-    if (!usePredicatedInstructions)
-      return false;
-
-    if constexpr (std::is_same_v<OpType, LoadOp>)
+    if constexpr (std::is_same_v<OpType, LoadOp>) {
+      if (!triton::tools::getBoolEnv("TRITON_INTEL_PREDICATED_LOAD"))
+        return false;
       return !op.getIsVolatile() && op.getCache() == CacheModifier::NONE;
+    }
+
+    if constexpr (std::is_same_v<OpType, StoreOp>)
+      if (!triton::tools::getBoolEnv("TRITON_INTEL_PREDICATED_STORE"))
+        return false;
 
     return op.getCache() == CacheModifier::NONE;
   }
@@ -334,8 +338,6 @@ struct LoadStoreConversionBase {
 protected:
   const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass;
   const triton::intel::TargetInfo &targetInfo;
-  const bool usePredicatedInstructions =
-      triton::tools::getBoolEnv("TRITON_INTEL_PREDICATED");
 };
 
 struct BlockIOConversionBase : public LoadStoreConversionBase {
@@ -2590,15 +2592,19 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                          ? b.extract_element(IntegerType::get(ctx, width), ret,
                                              b.i32_val(ii))
                          : ret;
-        curr = b.bitcast(
-            curr, LLVM::getVectorType(valueElemTy, width / valueElemNBits));
+        unsigned numElem = width / valueElemNBits;
+        if (numElem == 1)
+          curr = b.bitcast(curr, valueElemTy);
+        else
+          curr = b.bitcast(curr, LLVM::getVectorType(valueElemTy, numElem));
         rets.push_back(curr);
       }
 
       int tmp = width / valueElemNBits;
       for (size_t ii = 0; ii < vec; ++ii) {
-        Value loaded =
-            b.extract_element(valueElemTy, rets[ii / tmp], b.i32_val(ii % tmp));
+        Value loaded = rets[ii / tmp];
+        if (isa<VectorType>(loaded.getType()))
+          loaded = b.extract_element(valueElemTy, loaded, b.i32_val(ii % tmp));
         loadedVals.push_back(loaded);
       }
     } // end vec
