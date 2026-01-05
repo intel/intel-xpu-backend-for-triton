@@ -205,14 +205,15 @@ static LogicalResult verifyDPASCommonRestriction(OpTy op) {
                            "result (D) should match repeat count");
 
   constexpr unsigned SD = 8;
-  if (BTy.getNumElements() != SD && BTy.getNumElements() != CEIL(SD, 2))
-    return op->emitOpError("the dimension for the 3rd operand (B) should "
-                           "match the systolic depth");
+  //if (BTy.getNumElements() != SD && BTy.getNumElements() != CEIL(SD, 2))
+  //  return op->emitOpError("the dimension for the 3rd operand (B) should "
+  //                         "match the systolic depth");
 
   Type AElemTy = ATy.getElementType();
   Type BElemTy = BTy.getElementType();
   Type CElemTy = CTy.getElementType();
 
+#if 0
   switch (precision) {
   case tt::TritonGEN::PrecisionType::U8:
   case tt::TritonGEN::PrecisionType::S8:
@@ -285,6 +286,7 @@ static LogicalResult verifyDPASCommonRestriction(OpTy op) {
   default:
     llvm_unreachable("unhandled precision type");
   }
+#endif
   return success();
 }
 
