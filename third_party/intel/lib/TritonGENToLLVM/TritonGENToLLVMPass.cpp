@@ -647,8 +647,8 @@ struct TritonMatrixDPASLowering
                         aOrigTy.getElementType().getIntOrFloatBitWidth();
     VectorType aTy = VectorType::get(
         bitWidth / packedAType.getIntOrFloatBitWidth(), packedAType);
-    if (aOrigTy != aTy)
-      a = LLVM::BitcastOp::create(rewriter, loc, aTy, a);
+    // if (aOrigTy != aTy)
+    //   a = LLVM::BitcastOp::create(rewriter, loc, aTy, a);
 
     Value b = op.getB();
     VectorType bOrigTy = cast<VectorType>(b.getType());
@@ -656,8 +656,8 @@ struct TritonMatrixDPASLowering
                bOrigTy.getElementType().getIntOrFloatBitWidth();
     VectorType bTy = VectorType::get(
         bitWidth / packedBType.getIntOrFloatBitWidth(), packedBType);
-    if (bOrigTy != bTy)
-      b = LLVM::BitcastOp::create(rewriter, loc, bTy, b);
+    // if (bOrigTy != bTy)
+    //   b = LLVM::BitcastOp::create(rewriter, loc, bTy, b);
 
     Value c = op.getC();
     VectorType cOrigTy = cast<VectorType>(c.getType());
@@ -667,8 +667,8 @@ struct TritonMatrixDPASLowering
     VectorType cTy = cOrigTy.getElementType().isBF16()
                          ? VectorType::get(cOrigTy.getShape(), int16Ty)
                          : cOrigTy;
-    if (cOrigTy != cTy)
-      c = LLVM::BitcastOp::create(rewriter, loc, cTy, c);
+    // if (cOrigTy != cTy)
+    //   c = LLVM::BitcastOp::create(rewriter, loc, cTy, c);
 
     Value result;
     if (tools::getBoolEnv("TRITONGEN_FORCE_GENISA")) {
@@ -676,8 +676,8 @@ struct TritonMatrixDPASLowering
       constexpr int sysDepth = 8;
       MLIRContext *ctx = rewriter.getContext();
       auto builder = TritonLLVMOpBuilder(loc, rewriter);
-      mlir::triton::gpu::intel::GenISA_Dpas dpasOp(rewriter, cTy, cTy, aTy,
-                                                   bTy);
+      mlir::triton::gpu::intel::GenISA_Dpas dpasOp(rewriter, cOrigTy, cOrigTy,
+                                                   aOrigTy, bOrigTy);
       int subGroupSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(
           op->getParentOfType<mlir::ModuleOp>());
       int numElems = cOrigTy.getNumElements();
