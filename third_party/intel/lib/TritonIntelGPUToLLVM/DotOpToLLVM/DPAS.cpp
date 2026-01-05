@@ -171,6 +171,9 @@ public:
       auto RC = IntegerAttr::get(rewriter.getIntegerType(32),
                                  dpasEncoding.getRepeatCount());
 
+      // fc.at({b, m, n}) = TritonGEN::MatrixDPASOp::create(
+      //     rewriter, loc, dTy, tb.bitcast(valc, cTy), tb.bitcast(valA, aTy),
+      //     tb.bitcast(valB, bTy), pA, pB, RC);
       if constexpr (std::is_same<OpTy, DotOp>::value) {
         fc.at({b, m, n}) = TritonGEN::MatrixDPASOp::create(
             rewriter, loc, dTy, tb.bitcast(valc, cTy), tb.bitcast(valA, aTy),
