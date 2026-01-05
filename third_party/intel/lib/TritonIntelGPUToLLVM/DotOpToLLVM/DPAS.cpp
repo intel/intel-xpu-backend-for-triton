@@ -196,9 +196,11 @@ public:
           TritonGEN::PrecisionTypeAttr::get(B.getContext(), BPrecision);
       auto RC = IntegerAttr::get(rewriter.getIntegerType(32),
                                  dpasEncoding.getRepeatCount());
+      // fc.at({b, m, n}) = TritonGEN::MatrixDPASOp::create(
+      //     rewriter, loc, dTy, tb.bitcast(valc, cTy), tb.bitcast(valA, aTy),
+      //     tb.bitcast(valB, bTy), pA, pB, RC);
       fc.at({b, m, n}) = TritonGEN::MatrixDPASOp::create(
-          rewriter, loc, dTy, tb.bitcast(valc, cTy), tb.bitcast(valA, aTy),
-          tb.bitcast(valB, bTy), pA, pB, RC);
+          rewriter, loc, dTy, valc, valA, valB, pA, pB, RC);
     };
 
     ArrayRef<unsigned> repCluster = dpasEncoding.getRepCluster();

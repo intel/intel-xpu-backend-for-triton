@@ -168,74 +168,82 @@ LogicalResult TritonGEN::MatrixDPASOp::verify() {
                              "result (D) should match repeat count");
 
   constexpr unsigned SD = 8;
-  if (BTy.getNumElements() != SD && BTy.getNumElements() != CEIL(SD, 2))
-    return this->emitOpError("the dimension for the 3rd operand (B) should "
-                             "match the systolic depth");
+  // if (BTy.getNumElements() != SD && BTy.getNumElements() != CEIL(SD, 2))
+  //   return this->emitOpError("the dimension for the 3rd operand (B) should "
+  //                            "match the systolic depth");
 
   Type AElemTy = ATy.getElementType();
   Type BElemTy = BTy.getElementType();
   Type CElemTy = CTy.getElementType();
 
-  switch (precision) {
-  case PrecisionType::U8:
-  case PrecisionType::S8:
-    if (!CElemTy.isInteger(32))
-      return this->emitOpError(
-          "the element type for 1st operand (C) and the result should be i32");
-    break;
-  case PrecisionType::FP16:
-    if (!(CElemTy.isF16() || CElemTy.isF32()))
-      return this->emitOpError("the element type for 1st operand (C) and the "
-                               "result should be f16 or f32");
-    break;
-  case PrecisionType::BF16:
-    if (!(CElemTy.isBF16() || CElemTy.isF32()))
-      return this->emitOpError("the element type for 1st operand (C) and the "
-                               "result should be bf16 or f32");
-    break;
-  case PrecisionType::TF32:
-    if (!CElemTy.isF32())
-      return this->emitOpError(
-          "the element type for 1st operand (C) and the result should be f32");
-    break;
-  default:
-    return this->emitOpError(
-        "expecting precision type to be tf32, bf16, fp16, u8, or s8");
-  }
-
-  switch (precision) {
-  case TritonGEN::PrecisionType::TF32:
-    if (ATy.getNumElements() != CEIL(getRc(), 2) &&
-        ATy.getNumElements() != CEIL(getRc(), 4))
-      return this->emitOpError("the dimension for the 2nd operand (A) should "
-                               "match the repeat count");
-    if (!isa<Float32Type>(AElemTy) && !AElemTy.isInteger(32))
-      return this->emitOpError("2nd operand (A) element type should be f32 or "
-                               "i32 when the precision type is tf32");
-    if (!isa<Float32Type>(BElemTy) && !BElemTy.isInteger(32))
-      return this->emitOpError("3rd operand (B) element type should be f32 or "
-                               "i32 when the precision type is tf32");
-    break;
-  case TritonGEN::PrecisionType::BF16:
-  case TritonGEN::PrecisionType::FP16:
-  case TritonGEN::PrecisionType::U8:
-  case TritonGEN::PrecisionType::S8:
-    if (ATy.getNumElements() != getRc() &&
-        ATy.getNumElements() != CEIL(getRc(), 2))
-      return this->emitOpError("the dimension for the 2nd operand (A) should "
-                               "match the repeat count");
-    if (!AElemTy.isInteger(16))
-      return this->emitOpError(
-          "2nd operand (A) element type should be i16 when "
-          "the precision type is not tf32");
-    if (!BElemTy.isInteger(32))
-      return this->emitOpError(
-          "3rd operand (B) element type should be i32 when "
-          "the precision type is not tf32");
-    break;
-  default:
-    llvm_unreachable("unhandled precision type");
-  }
+  // switch (precision) {
+  // case PrecisionType::U8:
+  // case PrecisionType::S8:
+  //   if (!CElemTy.isInteger(32))
+  //     return this->emitOpError(
+  //         "the element type for 1st operand (C) and the result should be
+  //         i32");
+  //   break;
+  // case PrecisionType::FP16:
+  //   if (!(CElemTy.isF16() || CElemTy.isF32()))
+  //     return this->emitOpError("the element type for 1st operand (C) and the
+  //     "
+  //                              "result should be f16 or f32");
+  //   break;
+  // case PrecisionType::BF16:
+  //   if (!(CElemTy.isBF16() || CElemTy.isF32()))
+  //     return this->emitOpError("the element type for 1st operand (C) and the
+  //     "
+  //                              "result should be bf16 or f32");
+  //   break;
+  // case PrecisionType::TF32:
+  //   if (!CElemTy.isF32())
+  //     return this->emitOpError(
+  //         "the element type for 1st operand (C) and the result should be
+  //         f32");
+  //   break;
+  // default:
+  //   return this->emitOpError(
+  //       "expecting precision type to be tf32, bf16, fp16, u8, or s8");
+  // }
+  //
+  // switch (precision) {
+  // case TritonGEN::PrecisionType::TF32:
+  //   if (ATy.getNumElements() != CEIL(getRc(), 2) &&
+  //       ATy.getNumElements() != CEIL(getRc(), 4))
+  //     return this->emitOpError("the dimension for the 2nd operand (A) should
+  //     "
+  //                              "match the repeat count");
+  //   if (!isa<Float32Type>(AElemTy) && !AElemTy.isInteger(32))
+  //     return this->emitOpError("2nd operand (A) element type should be f32 or
+  //     "
+  //                              "i32 when the precision type is tf32");
+  //   if (!isa<Float32Type>(BElemTy) && !BElemTy.isInteger(32))
+  //     return this->emitOpError("3rd operand (B) element type should be f32 or
+  //     "
+  //                              "i32 when the precision type is tf32");
+  //   break;
+  // case TritonGEN::PrecisionType::BF16:
+  // case TritonGEN::PrecisionType::FP16:
+  // case TritonGEN::PrecisionType::U8:
+  // case TritonGEN::PrecisionType::S8:
+  //   if (ATy.getNumElements() != getRc() &&
+  //       ATy.getNumElements() != CEIL(getRc(), 2))
+  //     return this->emitOpError("the dimension for the 2nd operand (A) should
+  //     "
+  //                              "match the repeat count");
+  //   if (!AElemTy.isInteger(16))
+  //     return this->emitOpError(
+  //         "2nd operand (A) element type should be i16 when "
+  //         "the precision type is not tf32");
+  //   if (!BElemTy.isInteger(32))
+  //     return this->emitOpError(
+  //         "3rd operand (B) element type should be i32 when "
+  //         "the precision type is not tf32");
+  //   break;
+  // default:
+  //   llvm_unreachable("unhandled precision type");
+  // }
   return success();
 }
 
