@@ -39,9 +39,39 @@ static inline T checkSyclErrors(const std::tuple<T, ze_result_t> tuple) {
   return std::get<0>(tuple);
 }
 
+// Raises a Python exception and returns false if code is not CUDA_SUCCESS.
+static bool zeAssert(ze_result_t code, ze_driver_handle_t ze_driver,
+                     const char *file, int line) {
+  if (code == ZE_RESULT_SUCCESS)
+    return true;
+
+  const char *prefix = "Triton Error [ZE]: ";
+  const char *str;
+  zeDriverGetLastErrorDescription(ze_driver, &str);
+  char err[1024] = {0};
+  strcat(err, prefix);
+  strcat(err, str);
+  PyGILState_STATE gil_state;
+  gil_state = PyGILState_Ensure();
+  PyErr_SetString(PyExc_RuntimeError, err);
+  PyGILState_Release(gil_state);
+  return false;
+}
+
+static void zeConstructError(const char *file, int line, const char *message) {
+  const char *prefix = "Triton Error [ZE]: ";
+  char err[1024] = {0};
+  strcat(err, prefix);
+  strcat(err, message);
+  PyGILState_STATE gil_state;
+  gil_state = PyGILState_Ensure();
+  PyErr_SetString(PyExc_RuntimeError, err);
+  PyGILState_Release(gil_state);
+}
+
 extern "C" EXPORT_FUNC PyObject *get_device_properties(int device_id) {
-  if (device_id > g_sycl_l0_device_list.size()) {
-    std::cerr << "Device is not found " << std::endl;
+  if (device_id >= g_sycl_l0_device_list.size()) {
+    zeConstructError(__FILE__, __LINE__, "Device is not found");
     return NULL;
   }
   const auto device = g_sycl_l0_device_list[device_id];
@@ -213,12 +243,12 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
 
   if (!PyArg_ParseTuple(args, "sSispi", &name, &py_bytes, &shared,
                         &build_flags_ptr, &is_spv, &devId)) {
-    std::cerr << "loadBinary arg parse failed" << std::endl;
+    // PyArg_ParseTuple will set a PyErr
     return NULL;
   }
 
-  if (devId > g_sycl_l0_device_list.size()) {
-    std::cerr << "Device is not found " << std::endl;
+  if (devId >= g_sycl_l0_device_list.size()) {
+    zeConstructError(__FILE__, __LINE__, "Device is not found");
     return NULL;
   }
 
@@ -280,20 +310,22 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
           // clean up the unused module and kernel.
           auto error_no = zeKernelDestroy(l0_kernel_dgrf);
           if (error_no != ZE_RESULT_SUCCESS) {
-            std::cerr
-                << "[Ignoring] Intel - Error during destroy unused L0 kernel"
-                << std::endl;
+            PyErr_WarnEx(
+                PyExc_RuntimeWarning,
+                "[Ignoring] Intel - Error during destroy unused L0 kernel", 1);
           }
           error_no = zeModuleDestroy(l0_module_dgrf);
           if (error_no != ZE_RESULT_SUCCESS) {
-            std::cerr
-                << "[Ignoring] Intel - Error during destroy unused L0 module"
-                << std::endl;
+            PyErr_WarnEx(
+                PyExc_RuntimeWarning,
+                "[Ignoring] Intel - Error during destroy unused L0 module", 1);
           }
         } catch (const std::exception &e) {
-          std::cerr << "[Ignoring] Error during Intel loadBinary with large "
-                       "registers: "
-                    << e.what() << std::endl;
+          char buf[1024];
+          strcat(buf, "[Ignoring] Intel - Error during Intel loadBinary with "
+                      "large registers: ");
+          strcat(buf, e.what());
+          PyErr_WarnEx(PyExc_RuntimeWarning, buf, 1);
           // construct previous working version
           build_flags = BuildFlags(build_flags_ptr);
         }
@@ -326,11 +358,7 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
                          n_spills, n_max_threads);
 
   } catch (const std::exception &e) {
-    PyGILState_STATE gil_state;
-    gil_state = PyGILState_Ensure();
-    PyErr_SetString(PyExc_RuntimeError, e.what());
-    std::cerr << "Error during Intel loadBinary: " << e.what() << std::endl;
-    PyGILState_Release(gil_state);
+    zeConstructError(__FILE__, __LINE__, e.what());
     return NULL;
   }
 }
@@ -361,8 +389,11 @@ bool has_ocloc_in_path() {
 
 extern "C" EXPORT_FUNC PyObject *init_devices(PyObject *cap) {
   void *queue = NULL;
-  if (!(queue = PyLong_AsVoidPtr(cap)))
+  if (!(queue = PyLong_AsVoidPtr(cap))) {
+    zeConstructError(__FILE__, __LINE__,
+                     "Failed to convert PyObject to void* for queue");
     return NULL;
+  }
   sycl::queue *sycl_queue = static_cast<sycl::queue *>(queue);
 
   auto sycl_context = sycl_queue->get_context();
@@ -406,8 +437,11 @@ extern "C" EXPORT_FUNC PyObject *init_devices(PyObject *cap) {
 
 extern "C" EXPORT_FUNC PyObject *wait_on_sycl_queue(PyObject *cap) {
   void *queue = NULL;
-  if (!(queue = PyLong_AsVoidPtr(cap)))
+  if (!(queue = PyLong_AsVoidPtr(cap))) {
+    zeConstructError(__FILE__, __LINE__,
+                     "Failed to convert PyObject to void* for queue");
     return NULL;
+  }
   sycl::queue *sycl_queue = static_cast<sycl::queue *>(queue);
   sycl_queue->wait();
   Py_RETURN_NONE;
@@ -417,8 +451,7 @@ extern "C" EXPORT_FUNC PyObject *has_opencl_extension(int device_id,
                                                       const char *extension) {
   if (has_opencl) {
     if (device_id >= sycl_opencl_device_list.size()) {
-      std::cerr << "Device is not found, extension " << extension << std::endl
-                << std::flush;
+      zeConstructError(__FILE__, __LINE__, "Device is not found");
       Py_RETURN_FALSE;
     }
     const sycl::device &device = sycl_opencl_device_list[device_id];
@@ -429,10 +462,10 @@ extern "C" EXPORT_FUNC PyObject *has_opencl_extension(int device_id,
   }
 
   if (device_id >= g_sycl_l0_device_list.size()) {
-    std::cerr << "Device is not found, extension " << extension << std::endl
-              << std::flush;
+    zeConstructError(__FILE__, __LINE__, "Device is not found");
     Py_RETURN_FALSE;
   }
+
   const sycl::device &device = g_sycl_l0_device_list[device_id].first;
 
   // `ocloc` should be in `PATH` for proper work
