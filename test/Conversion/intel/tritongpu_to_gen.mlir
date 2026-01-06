@@ -296,10 +296,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
     %13 = tt.addptr %12, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
 
     // Store 4 elements to global
-    // CHECK: llvm.store %{{.*}}, %{{.*}} {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
-    // CHECK: llvm.store %{{.*}}, %{{.*}} {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
-    // CHECK: llvm.store %{{.*}}, %{{.*}} {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
-    // CHECK: llvm.store %{{.*}}, %{{.*}} {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
+    // CHECK: llvm.store %{{.*}}, %{{.*}} {alignment = 4 : i64} : i32, !llvm.ptr<1>
+    // CHECK: llvm.store %{{.*}}, %{{.*}} {alignment = 4 : i64} : i32, !llvm.ptr<1>
+    // CHECK: llvm.store %{{.*}}, %{{.*}} {alignment = 4 : i64} : i32, !llvm.ptr<1>
+    // CHECK: llvm.store %{{.*}}, %{{.*}} {alignment = 4 : i64} : i32, !llvm.ptr<1>
     tt.store %13, %11 : tensor<256x!tt.ptr<f32>, #blocked0>
     tt.return
   }
@@ -680,25 +680,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-NEXT: [[IE1:%.*]] = llvm.insertelement [[BCAST0]], [[VEC1]][[[CST_0]] : i32] : vector<1xf32>
     // CHECK-NEXT: [[BCAST1:%.*]] = llvm.bitcast [[IE1]] : vector<1xf32> to i32
     // CHECK-NEXT: [[VEC2:%.*]] = llvm.mlir.undef : vector<1xi32>
-    // CHECK-NEXT: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK-NEXT: [[IE2:%.*]] = llvm.insertelement [[BCAST1]], [[VEC2]][[[ZERO]] : i32] : vector<1xi32>
     // CHECK-NEXT: [[BCAST2:%.*]] = llvm.bitcast [[ARG0_0]] : !llvm.ptr<1> to !llvm.ptr<1>
     // PREDICATED-NEXT: [[ALIGNMENT:%.*]] = llvm.mlir.constant(4 : i64) : i64
-    // PREDICATED: llvm.call spir_funccc @llvm.genx.GenISA.PredicatedStore.p1i32.v1i32([[BCAST2]], [[IE2]], [[ALIGNMENT]], [[ARG2_0]]) {{.*}} : (!llvm.ptr<1>, vector<1xi32>, i64, i1) -> ()
+    // PREDICATED: llvm.call spir_funccc @llvm.genx.GenISA.PredicatedStore.p1i32.i32([[BCAST2]], [[BCAST1]], [[ALIGNMENT]], [[ARG2_0]]) {{.*}} : (!llvm.ptr<1>, i32, i64, i1) -> ()
     // NO-PREDICATED: llvm.cond_br [[ARG2_0]], ^bb1, ^bb2
     // NO-PREDICATED-NEXT: ^bb1:
-    // NO-PREDICATED-NEXT:   llvm.store [[IE2]], [[BCAST2]] {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
+    // NO-PREDICATED-NEXT:   llvm.store [[BCAST1]], [[BCAST2]] {alignment = 4 : i64} : i32, !llvm.ptr<1>
     // NO-PREDICATED-NEXT:   llvm.br ^bb2
     // NO-PREDICATED-NEXT: ^bb2:
     // CHECK:        [[VEC3:%.*]] = llvm.mlir.undef : vector<1xi32>
-    // CHECK-NEXT:   [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK-NEXT:   [[IE3:%.*]] = llvm.insertelement {{.*}}, [[VEC3]][[[ZERO]] : i32] : vector<1xi32>
     // CHECK-NEXT:   [[BCAST2:%.*]] = llvm.bitcast [[ARG0_1]] : !llvm.ptr<1> to !llvm.ptr<1>
     // PREDICATED: [[ALIGNMENT:%.*]] = llvm.mlir.constant(4 : i64) : i64
-    // PREDICATED: llvm.call spir_funccc @llvm.genx.GenISA.PredicatedStore.p1i32.v1i32([[BCAST2]], [[IE3]], [[ALIGNMENT]], [[ARG2_1]]) {{.*}} : (!llvm.ptr<1>, vector<1xi32>, i64, i1) -> ()
+    // PREDICATED: llvm.call spir_funccc @llvm.genx.GenISA.PredicatedStore.p1i32.i32([[BCAST2]], {{.*}}, [[ALIGNMENT]], [[ARG2_1]]) {{.*}} : (!llvm.ptr<1>, i32, i64, i1) -> ()
     // NO-PREDICATED:        llvm.cond_br [[ARG2_1]], ^bb3, ^bb4
     // NO-PREDICATED-NEXT: ^bb3:
-    // NO-PREDICATED-NEXT:   llvm.store [[IE3]], [[BCAST2]] {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
+    // NO-PREDICATED-NEXT:   llvm.store {{.*}}, [[BCAST2]] {alignment = 4 : i64} : i32, !llvm.ptr<1>
     // NO-PREDICATED-NEXT:   llvm.br ^bb4
     // NO-PREDICATED-NEXT: ^bb4:
     tt.store %ptrs, %vals, %mask : tensor<256x!tt.ptr<f32>, #blocked0>
@@ -1317,14 +1313,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-NEXT: [[STORE_VEC:%.*]] = llvm.insertelement [[BCAST_STORE]], [[UNDEF]][[[ZERO1]] : i32] : vector<1xf32>
     // CHECK-NEXT: [[BCAST_STORE_VEC:%.*]] = llvm.bitcast [[STORE_VEC]] : vector<1xf32> to i32
     // CHECK-NEXT: [[UNDEF1:%.*]] = llvm.mlir.undef : vector<1xi32>
-    // CHECK-NEXT: [[ZERO2:%.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:      [[STORE_VEC_IE:%.*]] = llvm.insertelement [[BCAST_STORE_VEC]], [[UNDEF1]][[[ZERO2]] : i32] : vector<1xi32>
     // CHECK-NEXT: [[BCAST:%.*]] = llvm.bitcast [[ARG0_0]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // CHECK-NEXT: llvm.store [[STORE_VEC_IE]], [[BCAST]] {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
-    // CHECK-NOT: llvm.cond_br
-    // CHECK:     [[IE1:%.*]] = llvm.insertelement {{.*}}, {{.*}}[{{.*}} : i32] : vector<1xi32>
-    // CHECK-NEXT:   [[BCAST1:%.*]] = llvm.bitcast [[ARG0_1]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // CHECK-NEXT:   llvm.store [[IE1]], [[BCAST1]] {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
+    // CHECK-NEXT: llvm.store [[BCAST_STORE_VEC]], [[BCAST]] {alignment = 4 : i64} : i32, !llvm.ptr<1>
+    // CHECK-NOT:  llvm.cond_br
+    // CHECK:      [[BCAST1:%.*]] = llvm.bitcast [[ARG0_1]] : !llvm.ptr<1> to !llvm.ptr<1>
+    // CHECK-NEXT: llvm.store {{.*}}, [[BCAST1]] {alignment = 4 : i64} : i32, !llvm.ptr<1>
 
     tt.store %arg0, %arg1 : tensor<256x!tt.ptr<f32>, #blocked0>
     tt.return
@@ -1338,10 +1331,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @store_f32_scalar(%arg0 : !tt.ptr<f32>, %arg1 : f32) {
     // CHECK:      llvm.icmp "eq"
     // CHECK:      [[BCAST:%.*]] = llvm.bitcast %arg0 : !llvm.ptr<1> to !llvm.ptr<1>
-    // PREDICATED: llvm.call spir_funccc @llvm.genx.GenISA.PredicatedStore.p1i32.v1i32([[BCAST]], {{.*}}) {{.*}} : (!llvm.ptr<1>, vector<1xi32>, i64, i1) -> ()
+    // PREDICATED: llvm.call spir_funccc @llvm.genx.GenISA.PredicatedStore.p1i32.i32([[BCAST]], {{.*}}) {{.*}} : (!llvm.ptr<1>, i32, i64, i1) -> ()
     // NO-PREDICATED:      llvm.cond_br {{.*}}, ^bb1, ^bb2
     // NO-PREDICATED-NEXT: ^bb1:
-    // NO-PREDICATED-NEXT:   llvm.store {{.*}}, [[BCAST]] {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
+    // NO-PREDICATED-NEXT:   llvm.store {{.*}}, [[BCAST]] {alignment = 4 : i64} : i32, !llvm.ptr<1>
     tt.store %arg0, %arg1 : !tt.ptr<f32>
     tt.return
   }
