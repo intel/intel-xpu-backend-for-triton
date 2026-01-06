@@ -215,4 +215,8 @@ def TritonGEN_CacheControlsDecoration
   let genVerifyDecl = 1;
 }
 
+def TritonGEN_FPMaxErrorDecoration : TritonGEN_Attr<"DecorationFPMaxError", "decoration_fp_max_error"> {
+  let summary = "An attribute specifiying the maximum acceptable relative error in the result of that instruction";
+}
+
 #endif // TRITONGEN_ATTRDEFS

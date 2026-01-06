@@ -1251,8 +1251,8 @@ void populateElementwiseOpToLLVMPatterns(
 
   patterns.add<OpToExternCallConversion<triton::PreciseSqrtOp>>(
       typeConverter, axisInfoAnalysis, "sqrt_cr", benefit);
-  patterns.add<OpToExternCallConversion<triton::PreciseDivFOp>>(
-      typeConverter, axisInfoAnalysis, "divide_cr", benefit);
+  patterns.add<ElementwiseOpConversion<triton::PreciseDivFOp, LLVM::FDivOp>>(
+      typeConverter, axisInfoAnalysis, benefit);
   patterns.add<MulhiUIOpConversion>(typeConverter, axisInfoAnalysis, targetInfo,
                                     benefit);
   patterns.add<ExternElementwiseOpConversion>(typeConverter, axisInfoAnalysis,

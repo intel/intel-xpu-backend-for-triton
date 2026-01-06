@@ -342,6 +342,22 @@ void init_triton_intel(py::module &&m) {
                          "256-v256:256-v512:512-v1024:1024-n8:16:32:64";
     mod->setTargetTriple(llvm::Triple(triple));
     mod->setDataLayout(layout);
+
+    using namespace llvm;
+    llvm::LLVMContext &ctx = mod->getContext();
+    auto *fpVal = ConstantFP::get(Type::getFloatTy(ctx), 1.5f);
+    Metadata *valMD = ConstantAsMetadata::get(fpVal);
+    MDNode *maxErrorMD = MDNode::get(ctx, valMD);
+
+    for (auto &func : *mod) {
+      for (auto &bb : func) {
+        for (auto &inst : bb) {
+          if (inst.getOpcode() == Instruction::FDiv) {
+            inst.setMetadata("fpmath", maxErrorMD);
+          }
+        }
+      }
+    }
   });
 
   m.def("post_process_llir",
