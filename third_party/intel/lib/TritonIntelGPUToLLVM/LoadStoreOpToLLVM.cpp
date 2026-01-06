@@ -3016,7 +3016,10 @@ struct StoreOpConversion
       Value vecWord = b.undef(vecTy);
       for (int index = 0; index < asmArgs.size(); ++index) {
         auto llWord = asmArgs[index].first;
-        vecWord = b.insert_element(vecTy, vecWord, llWord, b.i32_val(index));
+        if (nWords == 1)
+          vecWord = llWord;
+        else
+          vecWord = b.insert_element(vecTy, vecWord, llWord, b.i32_val(index));
       }
 
       Value addrElem = b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
