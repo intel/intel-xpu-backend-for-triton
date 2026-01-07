@@ -196,7 +196,7 @@ CGAEncodingAttr DpasEncodingAttr::getCGALayout() const {
 }
 
 SmallVector<int64_t> calculateDPASRepetitions(
-    ArrayRef<int64_t> shape, OpIdx opIdx, ArrayRef<unsigned> warpsPerCTA,
+    ArrayRef<int64_t> shape, DpasEncodingAttr::OpIdx opIdx, ArrayRef<unsigned> warpsPerCTA,
     ArrayRef<unsigned> repCluster, unsigned repeatCount, unsigned systolicDepth,
     unsigned executionSize, unsigned opsPerChannel) {
   // Always return a 3D shape repetitions for the ease of value handling, same
@@ -205,7 +205,7 @@ SmallVector<int64_t> calculateDPASRepetitions(
   SmallVector<int64_t> rep(3, 1);
 
   switch (opIdx) {
-  case OpIdx::OperandA: {
+  case DpasEncodingAttr::OpIdx::OperandA: {
     SmallVector<unsigned> shapePerWarp =
         calculateShapeA(repeatCount, systolicDepth, opsPerChannel, repCluster);
 
@@ -218,7 +218,7 @@ SmallVector<int64_t> calculateDPASRepetitions(
                                                     warpsPerCTA[rank - 2])),
             std::max<int64_t>(1, shape[rank - 1] / shapePerWarp[rank - 1])};
   } break;
-  case OpIdx::OperandB: {
+  case DpasEncodingAttr::OpIdx::OperandB: {
     SmallVector<unsigned> shapePerWarp = calculateShapeB(
         systolicDepth, opsPerChannel, executionSize, repCluster);
 
@@ -231,7 +231,7 @@ SmallVector<int64_t> calculateDPASRepetitions(
             std::max<int64_t>(1, shape[rank - 1] / (shapePerWarp[rank - 1] *
                                                     warpsPerCTA[rank - 1]))};
   } break;
-  case OpIdx::OperandC: {
+  case DpasEncodingAttr::OpIdx::OperandC: {
     SmallVector<unsigned> shapePerWarp =
         calculateShapeC(repeatCount, executionSize, repCluster);
 
