@@ -38,7 +38,7 @@ public:
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     if (!mod->hasAttr(
-            ttgi::TritonIntelGPUDialect::getSupportSG2DBlockAttrName()))
+            ttgi::TritonIntelGPUDialect::getSupport2DBlockIOAttrName()))
       return;
 
     tt::intel::ModuleAxisInfoAnalysis axisInfoAnalysis(mod);

@@ -140,8 +140,6 @@ jobs:
         run: |
           source ./scripts/capture-hw-details.sh
 
-          cp -r vllm/tests benchmarks/third_party/vllm/tests
-
           cd benchmarks/third_party/vllm
           python batched_moe_benchmark.py --reports $REPORTS
           python transform_results.py \
