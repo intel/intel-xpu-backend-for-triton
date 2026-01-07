@@ -4,6 +4,7 @@ add_triton_library(TritonIntelAnalysis
     Liveness.cpp
     Membar.cpp
     Utility.cpp
+    Range.cpp
 
     DEPENDS
     TritonTableGen
