@@ -6,7 +6,7 @@ from triton import knobs
 
 from dataclasses import dataclass
 import functools
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Tuple, Union
 from types import ModuleType
 import hashlib
 import tempfile
@@ -93,7 +93,6 @@ def min_dot_size(device_props: Union[Dict, GPUTarget]):
         device_props = backend.properties
     else:
         from triton.runtime import driver
-
         backend = XPUBackend(driver.active.get_current_target())
     return backend.min_dot_size(device_props)
 
