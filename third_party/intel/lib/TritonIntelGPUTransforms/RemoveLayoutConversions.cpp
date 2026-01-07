@@ -104,6 +104,7 @@ public:
   void rewriteConditionOp(scf::ConditionOp conditionOp);
   void rewriteReduceToScalar(Operation *reduceOp);
   void rewriteAssertOp(AssertOp assertOp);
+  void rewritePrintOp(PrintOp printOp);
   // Rewrite a StoreOp with the forwarded DPAS layout if applicable.
   // return true if the StoreOp has been rewritten.
   bool rewriteTensorPtrStoreOp(StoreOp storeOp);
@@ -358,18 +359,18 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
         }
         return isMMAorMMADerived;
       };
-      if (llvm::all_of(info.encodings, checkMMAorMMADerived)) {
-        SmallVector<Value> valuesToChange{storeOp.getPtr(), storeOp.getValue()};
-        if (storeOp.getMask())
-          valuesToChange.emplace_back(storeOp.getMask());
-        setEncoding(valuesToChange, info, changed, user);
-      }
+      // if (llvm::all_of(info.encodings, checkMMAorMMADerived)) {
+      SmallVector<Value> valuesToChange{storeOp.getPtr(), storeOp.getValue()};
+      if (storeOp.getMask())
+        valuesToChange.emplace_back(storeOp.getMask());
+      setEncoding(valuesToChange, info, changed, user);
+      // }
       continue;
     }
     if (user->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
         user->hasTrait<OpTrait::Elementwise>() ||
         isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
-            ConvertLayoutOp>(user)) {
+            ConvertLayoutOp, LoadOp>(user)) {
       setEncoding(user->getResults(), info, changed, user);
       continue;
     }
@@ -401,6 +402,17 @@ void LayoutPropagation::propagateLayout() {
 }
 
 void LayoutPropagation::resolveConflicts() {
+
+  llvm::DenseMap<Attribute, int> freq;
+  LLVM_DEBUG({ DBGS() << "Resolving conflicts:\n"; });
+  for (auto &it : layouts) {
+    Operation *op = it.first.getDefiningOp();
+    LayoutInfo &info = it.second;
+    for (Attribute e : info.encodings) {
+      unsigned seen = ++freq[e];
+      LLVM_DEBUG({ DBGS() << "   " << e << " seen:" << seen << "\n"; });
+    }
+  }
   for (auto &it : layouts) {
     Operation *op = it.first.getDefiningOp();
     LayoutInfo &info = it.second;
@@ -411,11 +423,19 @@ void LayoutPropagation::resolveConflicts() {
     Attribute encoding = *info.encodings.begin();
     bool isLoadOrStore =
         op && isa<LoadOp, StoreOp, AtomicRMWOp, AtomicCASOp>(op);
+    int maxCount = std::numeric_limits<int>::min();
     for (Attribute e : info.encodings) {
-      if ((isLoadOrStore && isa<BlockedEncodingAttr>(e)) ||
-          (!isLoadOrStore && isa<MmaEncodingTrait>(e))) {
+      // Prefer MmaEncodingTrait if available
+      if (!isLoadOrStore && isa<MmaEncodingTrait>(e)) {
         encoding = e;
         break;
+      }
+      // Chose a most common blocked layout.
+      if (auto blocked = dyn_cast<BlockedEncodingAttr>(e)) {
+        if (freq[e] > maxCount) {
+          maxCount = freq[e];
+          encoding = e;
+        }
       }
     }
     info.encodings.clear();
@@ -480,6 +500,8 @@ void LayoutPropagation::rewriteRegion(Region &region) {
         rewriteReduceToScalar(&op);
       } else if (auto assertOp = dyn_cast<AssertOp>(&op)) {
         rewriteAssertOp(assertOp);
+      } else if (auto printOp = dyn_cast<PrintOp>(&op)) {
+        rewritePrintOp(printOp);
       } else {
         if (auto storeOp = dyn_cast<StoreOp>(&op)) {
           if (rewriteStoreOp(storeOp))
@@ -770,6 +792,19 @@ void LayoutPropagation::rewriteAssertOp(AssertOp assertOp) {
   assertOp->setOperand(0, newOperand);
 }
 
+void LayoutPropagation::rewritePrintOp(PrintOp printOp) {
+  Attribute srcEncoding;
+  for (size_t i = 0; i < printOp.getNumOperands(); i++) {
+    Value operand = printOp->getOperand(i);
+    auto it = layouts.find(operand);
+    if (it == layouts.end())
+      continue;
+    srcEncoding = it->second.encodings[0];
+    Value newOperand = getValueAs(operand, srcEncoding);
+    printOp->setOperand(i, newOperand);
+  }
+}
+
 // Recursively update the operands in a chain of AdvanceOps, after setting the
 // pointer operand of the first one.
 static void updateAdvanceOpChain(AdvanceOp advanceOp, StoreOp storeOp,
@@ -964,7 +999,7 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
   if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<OpTrait::Elementwise>() ||
       isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp, GatherOp,
-          ConvertLayoutOp>(op)) {
+          ConvertLayoutOp, LoadOp>(op)) {
     Operation *newOp = cloneElementwise(rewriter, op, encoding);
     for (auto [oldResult, newResult] :
          llvm::zip(op->getResults(), newOp->getResults())) {
