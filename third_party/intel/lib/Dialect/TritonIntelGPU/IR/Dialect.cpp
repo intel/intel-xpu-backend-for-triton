@@ -509,7 +509,7 @@ std::optional<CGAEncodingAttr> getCGALayoutOrError(
                                             *CTASplitNum, *CTAOrder);
   }
   if (!CTAsPerCGA && !CTASplitNum && !CTAOrder) {
-    return CGAEncodingAttr::getDefault(parser.getContext(), rank);
+    return CGAEncodingAttr::get1CTALayout(parser.getContext(), rank);
   }
   parser.emitError(parser.getNameLoc(), "CTAsPerCGA, CTASplitNum, and CTAOrder "
                                         "must all be present or all be absent");
@@ -519,7 +519,7 @@ std::optional<CGAEncodingAttr> getCGALayoutOrError(
 // Print the CGALayout if it's not equal to the default.
 void maybePrintCGALayout(mlir::MLIRContext *context, mlir::AsmPrinter &printer,
                          CGAEncodingAttr layout, unsigned rank) {
-  if (layout != CGAEncodingAttr::getDefault(context, rank)) {
+  if (layout != CGAEncodingAttr::get1CTALayout(context, rank)) {
     printer << ", CTAsPerCGA = [" << ArrayRef(layout.getCTAsPerCGA()) << "]"
             << ", CTASplitNum = [" << ArrayRef(layout.getCTASplitNum()) << "]"
             << ", CTAOrder = [" << ArrayRef(layout.getCTAOrder()) << "]";
@@ -1240,6 +1240,34 @@ struct TritonIntelGPUVerifyTensorLayoutInterface
       }
     }
 
+    return success();
+  }
+
+  LogicalResult verifyMemDescLayout(
+      Attribute layout, Type type, Operation *op,
+      function_ref<InFlightDiagnostic()> makeErr) const override {
+    auto memDescTy = dyn_cast<triton::gpu::MemDescType>(type);
+    if (!memDescTy)
+      return makeErr() << "Non-memdesc layout is not allowed in memdesc type.";
+
+    // It'd be nice to be able to do toLinearLayout, but the multibuffering
+    // dimension breaks this left right and centre
+    auto kBlock = StringAttr::get(op->getContext(), "block");
+    int nCTAsLayout;
+    if (auto sharedLinearEnc = dyn_cast<SharedLinearEncodingAttr>(layout)) {
+      nCTAsLayout = sharedLinearEnc.getLinearLayout().getInDimSize(kBlock);
+    } else {
+      nCTAsLayout = getCGALayout(layout).getLinearLayout().getInDimSize(kBlock);
+    }
+
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    // Number of CTAs per CGA.
+    int moduleCTAsPerCGA = TritonGPUDialect::getNumCTAs(module);
+    if (nCTAsLayout != moduleCTAsPerCGA) {
+      return makeErr() << layout << ".\nLayout has " << nCTAsLayout
+                       << " CTAs per CGA, but the context requires "
+                       << moduleCTAsPerCGA << " CTAs per CGA.";
+    }
     return success();
   }
 };
