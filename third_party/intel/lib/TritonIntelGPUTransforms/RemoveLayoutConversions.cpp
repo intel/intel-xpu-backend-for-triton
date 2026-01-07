@@ -177,6 +177,7 @@ public:
   void rewriteConditionOp(scf::ConditionOp conditionOp);
   void rewriteReduceToScalar(Operation *reduceOp);
   void rewriteAssertOp(tt::AssertOp assertOp);
+  void rewritePrintOp(tt::PrintOp printOp);
   bool rewriteStoreOp(tt::StoreOp storeOp);
   bool rewriteDescriptorStoreOp(tt::DescriptorStoreOp storeOp);
   Attribute getEncodingBeforeRewrite(Value value) const;
@@ -608,7 +609,7 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
     if (user->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
         user->hasTrait<OpTrait::Elementwise>() ||
         isa<tt::ReduceOp, tt::ExpandDimsOp, tt::ReshapeOp, tt::TransOp,
-            tt::JoinOp, tt::SplitOp, ttg::ConvertLayoutOp>(user)) {
+            tt::JoinOp, tt::SplitOp, ttg::ConvertLayoutOp, tt::LoadOp>(user)) {
       setEncoding(user->getResults(), info, changed, user);
       continue;
     }
@@ -640,6 +641,17 @@ void LayoutPropagation::propagateLayout() {
 }
 
 void LayoutPropagation::resolveConflicts() {
+
+  llvm::DenseMap<Attribute, int> freq;
+  LLVM_DEBUG({ DBGS() << "Resolving conflicts:\n"; });
+  for (auto &it : layouts) {
+    Operation *op = it.first.getDefiningOp();
+    LayoutInfo &info = it.second;
+    for (Attribute e : info.encodings) {
+      unsigned seen = ++freq[e];
+      LLVM_DEBUG({ DBGS() << "   " << e << " seen:" << seen << "\n"; });
+    }
+  }
   for (auto &it : layouts) {
     Operation *op = it.first.getDefiningOp();
     LayoutInfo &info = it.second;
@@ -651,11 +663,19 @@ void LayoutPropagation::resolveConflicts() {
     bool isLoadOrStore =
         op && isa<tt::LoadOp, tt::StoreOp, tt::DescriptorLoadOp,
                   tt::DescriptorStoreOp, tt::AtomicRMWOp, tt::AtomicCASOp>(op);
+    int maxCount = std::numeric_limits<int>::min();
     for (Attribute e : info.encodings) {
-      if ((isLoadOrStore && isa<ttg::BlockedEncodingAttr>(e)) ||
-          (!isLoadOrStore && isa<ttg::MmaEncodingTrait>(e))) {
+      // Prefer MmaEncodingTrait if available
+      if (!isLoadOrStore && isa<ttg::MmaEncodingTrait>(e)) {
         encoding = e;
         break;
+      }
+      // Chose a most common blocked layout.
+      if (auto blocked = dyn_cast<ttg::BlockedEncodingAttr>(e)) {
+        if (freq[e] > maxCount) {
+          maxCount = freq[e];
+          encoding = e;
+        }
       }
     }
     info.encodings.clear();
@@ -721,6 +741,8 @@ void LayoutPropagation::rewriteRegion(Region &region) {
         rewriteReduceToScalar(&op);
       } else if (auto assertOp = dyn_cast<tt::AssertOp>(&op)) {
         rewriteAssertOp(assertOp);
+      } else if (auto printOp = dyn_cast<tt::PrintOp>(&op)) {
+        rewritePrintOp(printOp);
       } else {
         if (auto storeOp = dyn_cast<tt::StoreOp>(&op)) {
           if (rewriteStoreOp(storeOp))
@@ -914,6 +936,19 @@ void LayoutPropagation::rewriteAssertOp(tt::AssertOp assertOp) {
   srcEncoding = it->second.encodings[0];
   Value newOperand = getValueAs(operand, srcEncoding);
   assertOp->setOperand(0, newOperand);
+}
+
+void LayoutPropagation::rewritePrintOp(tt::PrintOp printOp) {
+  Attribute srcEncoding;
+  for (size_t i = 0; i < printOp.getNumOperands(); i++) {
+    Value operand = printOp->getOperand(i);
+    auto it = layouts.find(operand);
+    if (it == layouts.end())
+      continue;
+    srcEncoding = it->second.encodings[0];
+    Value newOperand = getValueAs(operand, srcEncoding);
+    printOp->setOperand(i, newOperand);
+  }
 }
 
 bool LayoutPropagation::rewriteStoreOp(tt::StoreOp storeOp) {
