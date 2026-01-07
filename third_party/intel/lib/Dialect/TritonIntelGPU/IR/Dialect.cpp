@@ -93,41 +93,41 @@ static LogicalResult parseUInt(AsmParser &parser, const NamedAttribute &attr,
 // DpasEncodingAttr
 //===----------------------------------------------------------------------===//
 
-SmallVector<unsigned> calculateDPASInstShapeA(
-    unsigned repeatCount, unsigned systolicDepth, unsigned opsPerChannel) {
+SmallVector<unsigned> calculateDPASInstShapeA(unsigned repeatCount,
+                                              unsigned systolicDepth,
+                                              unsigned opsPerChannel) {
   return {repeatCount, systolicDepth * opsPerChannel};
 }
 
 SmallVector<unsigned> DpasEncodingAttr::getDPASInstShapeA() const {
-  return calculateDPASInstShapeA(
-      getRepeatCount(), getSystolicDepth(), getOpsPerChannel());
+  return calculateDPASInstShapeA(getRepeatCount(), getSystolicDepth(),
+                                 getOpsPerChannel());
 };
 
-SmallVector<unsigned> calculateDPASInstShapeB(
-    unsigned systolicDepth, unsigned opsPerChannel, unsigned executionSize) {
+SmallVector<unsigned> calculateDPASInstShapeB(unsigned systolicDepth,
+                                              unsigned opsPerChannel,
+                                              unsigned executionSize) {
   return {systolicDepth * opsPerChannel, executionSize};
 }
 
 SmallVector<unsigned> DpasEncodingAttr::getDPASInstShapeB() const {
-  return calculateDPASInstShapeB(
-      getSystolicDepth(), getOpsPerChannel(), getExecutionSize());
+  return calculateDPASInstShapeB(getSystolicDepth(), getOpsPerChannel(),
+                                 getExecutionSize());
 };
 
-SmallVector<unsigned>
-calculateDPASInstShapeC(unsigned repeatCount,
-                                          unsigned executionSize) {
+SmallVector<unsigned> calculateDPASInstShapeC(unsigned repeatCount,
+                                              unsigned executionSize) {
   return {repeatCount, executionSize};
 }
 
 SmallVector<unsigned> DpasEncodingAttr::getDPASInstShapeC() const {
-  return calculateDPASInstShapeC(getRepeatCount(),
-                                                   getExecutionSize());
+  return calculateDPASInstShapeC(getRepeatCount(), getExecutionSize());
 };
 
-SmallVector<unsigned>
-calculateShapeA(unsigned repeatCount, unsigned systolicDepth,
-                                  unsigned opsPerChannel,
-                                  ArrayRef<unsigned> repCluster) {
+SmallVector<unsigned> calculateShapeA(unsigned repeatCount,
+                                      unsigned systolicDepth,
+                                      unsigned opsPerChannel,
+                                      ArrayRef<unsigned> repCluster) {
   SmallVector<unsigned> instShapeA =
       calculateDPASInstShapeA(repeatCount, systolicDepth, opsPerChannel);
   size_t rank = repCluster.size();
@@ -137,9 +137,10 @@ calculateShapeA(unsigned repeatCount, unsigned systolicDepth,
   return resShape;
 }
 
-SmallVector<unsigned> calculateShapeB(
-    unsigned systolicDepth, unsigned opsPerChannel, unsigned executionSize,
-    ArrayRef<unsigned> repCluster) {
+SmallVector<unsigned> calculateShapeB(unsigned systolicDepth,
+                                      unsigned opsPerChannel,
+                                      unsigned executionSize,
+                                      ArrayRef<unsigned> repCluster) {
   SmallVector<unsigned> instShapeB =
       calculateDPASInstShapeB(systolicDepth, opsPerChannel, executionSize);
   size_t rank = repCluster.size();
@@ -149,9 +150,9 @@ SmallVector<unsigned> calculateShapeB(
   return resShape;
 }
 
-SmallVector<unsigned>
-calculateShapeC(unsigned repeatCount, unsigned executionSize,
-                                  ArrayRef<unsigned> repCluster) {
+SmallVector<unsigned> calculateShapeC(unsigned repeatCount,
+                                      unsigned executionSize,
+                                      ArrayRef<unsigned> repCluster) {
   SmallVector<unsigned> instShapeC =
       calculateDPASInstShapeC(repeatCount, executionSize);
   size_t rank = repCluster.size();
@@ -163,18 +164,16 @@ calculateShapeC(unsigned repeatCount, unsigned executionSize,
 
 SmallVector<unsigned> DpasEncodingAttr::getShapeA() const {
   return calculateShapeA(getRepeatCount(), getSystolicDepth(),
-                                           getOpsPerChannel(), getRepCluster());
+                         getOpsPerChannel(), getRepCluster());
 }
 
 SmallVector<unsigned> DpasEncodingAttr::getShapeB() const {
-  return calculateShapeB(getSystolicDepth(),
-                                           getOpsPerChannel(),
-                                           getExecutionSize(), getRepCluster());
+  return calculateShapeB(getSystolicDepth(), getOpsPerChannel(),
+                         getExecutionSize(), getRepCluster());
 }
 
 SmallVector<unsigned> DpasEncodingAttr::getShapeC() const {
-  return calculateShapeC(getRepeatCount(), getExecutionSize(),
-                                           getRepCluster());
+  return calculateShapeC(getRepeatCount(), getExecutionSize(), getRepCluster());
 }
 
 SmallVector<unsigned> DpasEncodingAttr::getRepOrder() const {
@@ -207,8 +206,8 @@ SmallVector<int64_t> DpasEncodingAttr::calculateDPASRepetitions(
 
   switch (opIdx) {
   case OpIdx::OperandA: {
-    SmallVector<unsigned> shapePerWarp = calculateShapeA(
-        repeatCount, systolicDepth, opsPerChannel, repCluster);
+    SmallVector<unsigned> shapePerWarp =
+        calculateShapeA(repeatCount, systolicDepth, opsPerChannel, repCluster);
 
     int64_t numRepBatch =
         rank == 3 ? std::max<int64_t>(1, shape[0] /
@@ -233,8 +232,8 @@ SmallVector<int64_t> DpasEncodingAttr::calculateDPASRepetitions(
                                                     warpsPerCTA[rank - 1]))};
   } break;
   case OpIdx::OperandC: {
-    SmallVector<unsigned> shapePerWarp = calculateShapeC(
-        repeatCount, executionSize, repCluster);
+    SmallVector<unsigned> shapePerWarp =
+        calculateShapeC(repeatCount, executionSize, repCluster);
 
     int64_t numRepBatch =
         rank == 3 ? std::max<int64_t>(1, shape[0] /
