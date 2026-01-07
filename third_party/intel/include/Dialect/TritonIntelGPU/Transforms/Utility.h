@@ -13,6 +13,8 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 
+#include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
+
 namespace mlir {
 class ConversionPatternRewriter;
 }
@@ -72,6 +74,13 @@ calculateRepCluster(unsigned capRepeatCount, unsigned capSystolicDepth,
                     unsigned int a_bitwidth, bool is_FP8,
                     ArrayRef<int64_t> a_shape, ArrayRef<int64_t> b_shape,
                     SmallVector<unsigned> warpsPerTile);
+
+SmallVector<int64_t>
+calculateDPASRepetitions(ArrayRef<int64_t> shape, DpasEncodingAttr::OpIdx opIdx,
+                         ArrayRef<unsigned> warpsPerCTA,
+                         ArrayRef<unsigned> repCluster, unsigned repeatCount,
+                         unsigned systolicDepth, unsigned executionSize,
+                         unsigned opsPerChannel);
 
 } // namespace mlir::triton::gpu::intel
 

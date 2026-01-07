@@ -18,9 +18,6 @@
 #include "llvm/Support/Casting.h"
 #include <optional>
 
-#define PVC_2D_LOAD_MAXIMUM_NUMBER_OF_ROWS 32
-#define PVC_2D_LOAD_MAXIMUM_BYTES_OF_COLS 64
-
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
@@ -29,100 +26,6 @@ namespace ttgi = mlir::triton::gpu::intel;
 namespace mlir::triton::gpu::intel {
 #define GEN_PASS_DEF_TRITONINTELGPUACCELERATEMATMUL
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
-
-SmallVector<unsigned> calculateWarpsPerTile(unsigned capRepeatCount,
-                                            unsigned capExecutionSize,
-                                            const ArrayRef<int64_t> shape,
-                                            unsigned numWarps) {
-  size_t rank = shape.size();
-  SmallVector<unsigned> ret(rank, 1);
-
-  if (rank == 3) {
-    int batchWarp = numWarps;
-    while (batchWarp > shape[0])
-      batchWarp /= 2;
-    ret[0] = batchWarp;
-    numWarps /= batchWarp;
-  }
-
-  // Try to find a proper tiling shape for the dot operation.
-  // It doubles the warp number in col or row in each time based on column to
-  // width ratio.
-  // By this, we can minimize the duplication of the dot operands A and B.
-  SmallVector<int64_t> shapePerWarp{capRepeatCount, capExecutionSize};
-  uint32_t rowColRatio = ceil<uint32_t>(capRepeatCount, capExecutionSize);
-  uint32_t colRowRatio = ceil<uint32_t>(capExecutionSize, capRepeatCount);
-
-  int rowDim = rank - 2, colDim = rank - 1;
-  do {
-    if (ret[rowDim] * ret[colDim] >= numWarps)
-      break;
-    if (shape[rowDim] / (shapePerWarp[0] * colRowRatio) / ret[rowDim] >=
-        shape[colDim] / (shapePerWarp[1] * rowColRatio) / ret[colDim]) {
-      if (ret[rowDim] < shape[rowDim] / shapePerWarp[0])
-        ret[rowDim] *= 2;
-      else
-        ret[colDim] *= 2;
-    } else {
-      ret[colDim] *= 2;
-    }
-  } while (true);
-
-  return ret;
-}
-
-SmallVector<unsigned>
-calculateRepCluster(unsigned capRepeatCount, unsigned capSystolicDepth,
-                    unsigned capExecutionSize, unsigned opsPerChan,
-                    ArrayRef<int64_t> retShape, unsigned threadsPerWarp,
-                    unsigned int a_bitwidth, bool is_FP8,
-                    ArrayRef<int64_t> a_shape, ArrayRef<int64_t> b_shape,
-                    SmallVector<unsigned> warpsPerTile) {
-  size_t rank = retShape.size();
-  SmallVector<unsigned> repCluster(rank, 1);
-
-  unsigned repeatCount =
-      std::min(capRepeatCount, (unsigned)retShape[rank - 2] /*M*/);
-  unsigned numElemsPerRowForA =
-      opsPerChan == 1 ? capSystolicDepth
-                      : capSystolicDepth * 2; // A is packed to i16 or i32.
-  unsigned minM = mlir::ceil<unsigned>(threadsPerWarp, numElemsPerRowForA);
-  repeatCount = std::max(repeatCount, minM);
-
-  if (capExecutionSize == 16) {
-    unsigned dpasElemBitWidths = a_bitwidth;
-
-    // We are upcasting FP8 to FP16
-    if (is_FP8)
-      dpasElemBitWidths = 2 * dpasElemBitWidths;
-
-    // Enlarge the repCluster size to use the large 2D load for A and B
-    // operands.
-    unsigned maxRepClusterM =
-        PVC_2D_LOAD_MAXIMUM_NUMBER_OF_ROWS / capRepeatCount;
-    SmallVector<int64_t> repA = ttgi::calculateDPASRepetitions(
-        a_shape, static_cast<ttgi::DpasEncodingAttr::OpIdx>(0), warpsPerTile,
-        repCluster, repeatCount, capSystolicDepth, capExecutionSize,
-        opsPerChan);
-
-    unsigned repClusterDimM =
-        std::min(maxRepClusterM, static_cast<unsigned>(repA[1]));
-
-    unsigned maxRepClusterN = PVC_2D_LOAD_MAXIMUM_BYTES_OF_COLS /
-                              ((dpasElemBitWidths / 8) * capExecutionSize);
-    SmallVector<int64_t> repB = ttgi::calculateDPASRepetitions(
-        b_shape, static_cast<ttgi::DpasEncodingAttr::OpIdx>(1), warpsPerTile,
-        repCluster, repeatCount, capSystolicDepth, capExecutionSize,
-        opsPerChan);
-
-    unsigned repClusterDimN =
-        std::min(maxRepClusterN, static_cast<unsigned>(repB[2]));
-    repCluster[rank - 2] = repClusterDimM;
-    repCluster[rank - 1] = repClusterDimN;
-  }
-
-  return repCluster;
-}
 
 } // namespace mlir::triton::gpu::intel
 

@@ -2,6 +2,7 @@
 
 #include "Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/LinearLayoutConversions.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
 #include "triton/Analysis/Utility.h"
@@ -193,61 +194,6 @@ CGAEncodingAttr DpasEncodingAttr::getCGALayout() const {
   auto CTAOrder = llvm::to_vector(llvm::reverse(llvm::seq<unsigned>(rank)));
   return CGAEncodingAttr::fromSplitParams(getContext(), CTAsPerCGA, CTAsPerCGA,
                                           CTAOrder);
-}
-
-SmallVector<int64_t> calculateDPASRepetitions(
-    ArrayRef<int64_t> shape, DpasEncodingAttr::OpIdx opIdx, ArrayRef<unsigned> warpsPerCTA,
-    ArrayRef<unsigned> repCluster, unsigned repeatCount, unsigned systolicDepth,
-    unsigned executionSize, unsigned opsPerChannel) {
-  // Always return a 3D shape repetitions for the ease of value handling, same
-  // to mma.
-  size_t rank = shape.size();
-  SmallVector<int64_t> rep(3, 1);
-
-  switch (opIdx) {
-  case DpasEncodingAttr::OpIdx::OperandA: {
-    SmallVector<unsigned> shapePerWarp =
-        calculateShapeA(repeatCount, systolicDepth, opsPerChannel, repCluster);
-
-    int64_t numRepBatch =
-        rank == 3 ? std::max<int64_t>(1, shape[0] /
-                                             (shapePerWarp[0] * warpsPerCTA[0]))
-                  : 1;
-    return {numRepBatch,
-            std::max<int64_t>(1, shape[rank - 2] / (shapePerWarp[rank - 2] *
-                                                    warpsPerCTA[rank - 2])),
-            std::max<int64_t>(1, shape[rank - 1] / shapePerWarp[rank - 1])};
-  } break;
-  case DpasEncodingAttr::OpIdx::OperandB: {
-    SmallVector<unsigned> shapePerWarp = calculateShapeB(
-        systolicDepth, opsPerChannel, executionSize, repCluster);
-
-    int64_t numRepBatch =
-        rank == 3 ? std::max<int64_t>(1, shape[0] /
-                                             (shapePerWarp[0] * warpsPerCTA[0]))
-                  : 1;
-    return {numRepBatch,
-            std::max<int64_t>(1, shape[rank - 2] / shapePerWarp[rank - 2]),
-            std::max<int64_t>(1, shape[rank - 1] / (shapePerWarp[rank - 1] *
-                                                    warpsPerCTA[rank - 1]))};
-  } break;
-  case DpasEncodingAttr::OpIdx::OperandC: {
-    SmallVector<unsigned> shapePerWarp =
-        calculateShapeC(repeatCount, executionSize, repCluster);
-
-    int64_t numRepBatch =
-        rank == 3 ? std::max<int64_t>(1, shape[0] /
-                                             (shapePerWarp[0] * warpsPerCTA[0]))
-                  : 1;
-    return {numRepBatch,
-            std::max<int64_t>(1, shape[rank - 2] / (shapePerWarp[rank - 2] *
-                                                    warpsPerCTA[rank - 2])),
-            std::max<int64_t>(1, shape[rank - 1] / (shapePerWarp[rank - 1] *
-                                                    warpsPerCTA[rank - 1]))};
-  } break;
-  }
-
-  llvm_unreachable("unexpected opIdx");
 }
 
 SmallVector<int64_t>
