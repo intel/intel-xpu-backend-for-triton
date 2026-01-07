@@ -195,7 +195,7 @@ CGAEncodingAttr DpasEncodingAttr::getCGALayout() const {
                                           CTAOrder);
 }
 
-SmallVector<int64_t> DpasEncodingAttr::calculateDPASRepetitions(
+SmallVector<int64_t> calculateDPASRepetitions(
     ArrayRef<int64_t> shape, OpIdx opIdx, ArrayRef<unsigned> warpsPerCTA,
     ArrayRef<unsigned> repCluster, unsigned repeatCount, unsigned systolicDepth,
     unsigned executionSize, unsigned opsPerChannel) {
@@ -253,7 +253,7 @@ SmallVector<int64_t> DpasEncodingAttr::calculateDPASRepetitions(
 SmallVector<int64_t>
 DpasEncodingAttr::getDPASRepetitions(ArrayRef<int64_t> shape,
                                      OpIdx opIdx) const {
-  return DpasEncodingAttr::calculateDPASRepetitions(
+  return calculateDPASRepetitions(
       shape, opIdx, getWarpsPerCTA(), getRepCluster(), getRepeatCount(),
       getSystolicDepth(), getExecutionSize(), getOpsPerChannel());
 }

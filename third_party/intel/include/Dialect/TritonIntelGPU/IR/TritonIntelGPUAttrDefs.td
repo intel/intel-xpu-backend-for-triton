@@ -220,15 +220,15 @@ The semantic of this `tt.dot` includes GEMM tiling configuration as:
 
     SmallVector<int64_t> getDPASRepetitions(ArrayRef<int64_t> shape, OpIdx opIdx) const;
 
-    static SmallVector<int64_t> calculateDPASRepetitions(
-      ArrayRef<int64_t> shape,
-      OpIdx opIdx,
-      ArrayRef<unsigned> warpsPerCTA,
-      ArrayRef<unsigned> repCluster,
-      unsigned repeatCount,
-      unsigned systolicDepth,
-      unsigned executionSize,
-      unsigned opsPerChannel);
+    // static SmallVector<int64_t> calculateDPASRepetitions(
+    //   ArrayRef<int64_t> shape,
+    //   OpIdx opIdx,
+    //   ArrayRef<unsigned> warpsPerCTA,
+    //   ArrayRef<unsigned> repCluster,
+    //   unsigned repeatCount,
+    //   unsigned systolicDepth,
+    //   unsigned executionSize,
+    //   unsigned opsPerChannel);
 
     SmallVector<unsigned> getElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, OpIdx opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(OpIdx opIdx) const;

@@ -100,22 +100,20 @@ calculateRepCluster(unsigned capRepeatCount, unsigned capSystolicDepth,
     // operands.
     unsigned maxRepClusterM =
         PVC_2D_LOAD_MAXIMUM_NUMBER_OF_ROWS / capRepeatCount;
-    SmallVector<int64_t> repA =
-        ttgi::DpasEncodingAttr::calculateDPASRepetitions(
-            a_shape, static_cast<ttgi::DpasEncodingAttr::OpIdx>(0),
-            warpsPerTile, repCluster, repeatCount, capSystolicDepth,
-            capExecutionSize, opsPerChan);
+    SmallVector<int64_t> repA = ttgi::calculateDPASRepetitions(
+        a_shape, static_cast<ttgi::DpasEncodingAttr::OpIdx>(0), warpsPerTile,
+        repCluster, repeatCount, capSystolicDepth, capExecutionSize,
+        opsPerChan);
 
     unsigned repClusterDimM =
         std::min(maxRepClusterM, static_cast<unsigned>(repA[1]));
 
     unsigned maxRepClusterN = PVC_2D_LOAD_MAXIMUM_BYTES_OF_COLS /
                               ((dpasElemBitWidths / 8) * capExecutionSize);
-    SmallVector<int64_t> repB =
-        ttgi::DpasEncodingAttr::calculateDPASRepetitions(
-            b_shape, static_cast<ttgi::DpasEncodingAttr::OpIdx>(1),
-            warpsPerTile, repCluster, repeatCount, capSystolicDepth,
-            capExecutionSize, opsPerChan);
+    SmallVector<int64_t> repB = ttgi::calculateDPASRepetitions(
+        b_shape, static_cast<ttgi::DpasEncodingAttr::OpIdx>(1), warpsPerTile,
+        repCluster, repeatCount, capSystolicDepth, capExecutionSize,
+        opsPerChan);
 
     unsigned repClusterDimN =
         std::min(maxRepClusterN, static_cast<unsigned>(repB[2]));
