@@ -88,21 +88,9 @@ def extract_spill_size_from_zebin(file):
 
 
 def min_dot_size(device_props: dict):
-    # (M, N, K)
-    # M: repeatCount. 1,2,4,8
-    # N: executionSize. 16 for PVC, 8 for ATS
-    # K: systolicDepth x opsPerChan. systolicDepth must be 8
-    repeat_count = 1
-    sdepth = 8
-    exec_size = min(device_props["sub_group_sizes"])
-
-    def get_ops_per_channel(lhs_type, rhs_type):
-        l_bitwidth = lhs_type.scalar.primitive_bitwidth
-        r_bitwidth = rhs_type.scalar.primitive_bitwidth
-        max_ops_per_chan = 32 / max(l_bitwidth, r_bitwidth)
-        return min(8, max_ops_per_chan)
-
-    return lambda lhs_type, rhs_type: (repeat_count, exec_size, sdepth * get_ops_per_channel(lhs_type, rhs_type))
+    import triton
+    backend = XPUBackend(triton.runtime.driver.active.get_current_target())
+    return backend.min_dot_size(device_props)
 
 
 class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
@@ -180,11 +168,29 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     def pack_metadata(self, metadata):
         return metadata
 
+    @staticmethod
+    def min_dot_size(device_props: dict):
+        # (M, N, K)
+        # M: repeatCount. 1,2,4,8
+        # N: executionSize. 16 for PVC, 8 for ATS
+        # K: systolicDepth x opsPerChan. systolicDepth must be 8
+        repeat_count = 1
+        sdepth = 8
+        exec_size = min(device_props["sub_group_sizes"])
+
+        def get_ops_per_channel(lhs_type, rhs_type):
+            l_bitwidth = lhs_type.scalar.primitive_bitwidth
+            r_bitwidth = rhs_type.scalar.primitive_bitwidth
+            max_ops_per_chan = 32 / max(l_bitwidth, r_bitwidth)
+            return min(8, max_ops_per_chan)
+
+        return lambda lhs_type, rhs_type: (repeat_count, exec_size, sdepth * get_ops_per_channel(lhs_type, rhs_type))
+
     def get_codegen_implementation(self, options):
         from triton.language.extra.intel import convert_custom_float8
         codegen_fns = {}
         codegen_fns["convert_custom_types"] = convert_custom_float8
-        codegen_fns["min_dot_size"] = min_dot_size(self.properties)
+        codegen_fns["min_dot_size"] = self.min_dot_size(self.properties)
         return codegen_fns
 
     def get_module_map(self) -> Dict[str, ModuleType]:
