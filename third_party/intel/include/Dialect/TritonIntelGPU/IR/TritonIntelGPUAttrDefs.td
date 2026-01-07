@@ -219,7 +219,6 @@ The semantic of this `tt.dot` includes GEMM tiling configuration as:
     SmallVector<unsigned> getShapeC() const;
 
     SmallVector<int64_t> getDPASRepetitions(ArrayRef<int64_t> shape, OpIdx opIdx) const;
-
     SmallVector<unsigned> getElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, OpIdx opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(OpIdx opIdx) const;
     unsigned getTotalElemsPerThreadForOperand(ArrayRef<int64_t> shape, Type eltTy, int kWidth, OpIdx opIdx) const;
