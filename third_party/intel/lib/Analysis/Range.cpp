@@ -261,7 +261,7 @@ LogicalResult IntegerRangeAnalysis::visitOperation(
   LogicalResult visitResult =
       visitOperationHelper(op, opndRanges, resultsLattices);
 
-  // If previous the step failed to infer the range, apply the assumed range if
+  // If previous steps failed to infer the range, apply the assumed range if
   // present.
   for (auto [index, lattice] : llvm::enumerate(resultsLattices)) {
     Value result = op->getResult(index);
@@ -442,12 +442,8 @@ LogicalResult IntegerRangeAnalysis::visitOperationHelper(
         .Case<tt::GetNumProgramsOp>([&](auto getNumProgramsOp) {
           inferResultRange(getNumProgramsOp, kDefaultMaxPrograms, joinCallback);
         })
-        .Case<tt::MakeRangeOp>([&](auto makeRangeOp) {
-          inferResultRange(makeRangeOp, joinCallback);
-        })
-        .Case<tt::HistogramOp>([&](auto histogramOp) {
-          inferResultRange(histogramOp, joinCallback);
-        })
+        .Case<tt::MakeRangeOp, tt::HistogramOp>(
+            [&](auto op) { inferResultRange(op, joinCallback); })
         .Default([&](auto) { llvm::report_fatal_error("unsupported op"); });
     return success();
   }
@@ -472,10 +468,8 @@ LogicalResult IntegerRangeAnalysis::visitOperationHelper(
 
     llvm::TypeSwitch<Operation *>(op)
         .Case<tt::TransOp, tt::SplitOp, tt::BroadcastOp, tt::ExpandDimsOp,
-              tt::SplatOp, tt::ReshapeOp, ttg::ConvertLayoutOp>([&](auto op) {
-          inferResultRange(op, argConstIntRanges, joinCallback);
-        })
-        .Case<tt::JoinOp, tt::CatOp>([&](auto op) {
+              tt::SplatOp, tt::ReshapeOp, ttg::ConvertLayoutOp, tt::JoinOp,
+              tt::CatOp>([&](auto op) {
           inferResultRange(op, argConstIntRanges, joinCallback);
         })
         .Case<tt::GatherOp>([&](auto op) {
