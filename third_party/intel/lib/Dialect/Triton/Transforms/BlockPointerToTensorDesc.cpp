@@ -31,6 +31,7 @@ public:
         candidates.push_back(op);
       return WalkResult::advance();
     });
+
     for (Operation *op : candidates) {
       if (auto loadOp = dyn_cast<tt::LoadOp>(op))
         rewriteBlockPointer<tt::LoadOp, tt::DescriptorLoadOp>(loadOp);
@@ -47,23 +48,28 @@ public:
   }
 
 private:
-  bool isCandidate(Operation *op) {
-    auto loadOp = dyn_cast<tt::LoadOp>(op);
-    auto storeOp = dyn_cast<tt::StoreOp>(op);
-    if (!loadOp && !storeOp)
-      return false;
+  bool isCandidate(Operation *op) const {
+    if (auto loadOp = dyn_cast<tt::LoadOp>(op))
+      return isCandidate(loadOp);
+    else if (auto storeOp = dyn_cast<tt::StoreOp>(op))
+      return isCandidate(storeOp);
+    return false;
+  }
 
-    Value ptr = loadOp ? loadOp.getPtr() : storeOp.getPtr();
+  template <
+      typename OpTy,
+      std::enable_if_t<llvm::is_one_of<OpTy, tt::LoadOp, tt::StoreOp>::value,
+                       bool> = true>
+  bool isCandidate(OpTy op) const {
+    Value ptr = op.getPtr();
     if (!tt::isTensorPointerType(ptr.getType()))
       return false;
 
-    if (storeOp) {
-      ArrayRef<int32_t> boundaryCheck = storeOp.getBoundaryCheck();
-      auto tensorTy = cast<RankedTensorType>(storeOp.getValue().getType());
-      if (!llvm::equal(boundaryCheck,
-                       llvm::seq<int32_t>(0, tensorTy.getRank())))
-        return false;
-    }
+    ArrayRef<int32_t> boundaryCheck = op.getBoundaryCheck();
+    auto tensorTy = cast<RankedTensorType>(
+        cast<tt::PointerType>(ptr.getType()).getPointeeType());
+    if (!llvm::equal(boundaryCheck, llvm::seq<int32_t>(0, tensorTy.getRank())))
+      return false;
 
     auto skipAdvance = [](Value ptr) {
       while (auto advanceOp =
@@ -74,6 +80,7 @@ private:
 
     if (auto arg = dyn_cast<BlockArgument>(ptr)) {
       Operation *parentOp = arg.getParentBlock()->getParentOp();
+      // FIXME: Add support of other loop ops if needed.
       auto forOp = dyn_cast<scf::ForOp>(parentOp);
       if (!forOp)
         return false;
@@ -87,13 +94,14 @@ private:
       if (skipAdvance(yieldVal) != arg)
         return false;
     } else if (!isa_and_nonnull<tt::MakeTensorPtrOp>(
-                   skipAdvance(ptr).getDefiningOp()))
+                   skipAdvance(ptr).getDefiningOp())) {
       return false;
+    }
 
     return true;
   }
 
-  arith::TruncIOp getOrCreateTruncI32Op(Value v) {
+  arith::TruncIOp getOrCreateTruncI32Op(Value v) const {
     assert(v.getType().isInteger(64) && "Expecting i64 value");
     Location loc = v.getLoc();
     OpBuilder builder(v.getContext());
@@ -130,7 +138,8 @@ private:
                                         strides, padding);
   }
 
-  void updateYieldVals(scf::ForOp forOp, SmallVectorImpl<Value> &newYieldVals) {
+  void updateYieldVals(scf::ForOp forOp,
+                       SmallVectorImpl<Value> &newYieldVals) const {
     auto yieldOp = dyn_cast<scf::YieldOp>(forOp.getBody()->back());
     OpBuilder builder(yieldOp);
     scf::YieldOp::create(builder, yieldOp.getLoc(), newYieldVals);
@@ -261,7 +270,7 @@ private:
   void identifyForLoopsToClean(
       const SmallPtrSetImpl<Operation *> &ops,
       llvm::MapVector<scf::ForOp, llvm::SmallSetVector<unsigned, 4>>
-          &forOpsToClean) {
+          &forOpsToClean) const {
     for (auto op : ops) {
       auto makeTensorPtrOp = dyn_cast<tt::MakeTensorPtrOp>(op);
       if (!makeTensorPtrOp || !makeTensorPtrOp->hasOneUse())
@@ -290,8 +299,9 @@ private:
     }
   }
 
-  void cleanForLoop(scf::ForOp forOp,
-                    const llvm::SmallSetVector<unsigned, 4> &indicesToRemove) {
+  void
+  cleanForLoop(scf::ForOp forOp,
+               const llvm::SmallSetVector<unsigned, 4> &indicesToRemove) const {
     SmallVector<Value> newInitArgs;
     for (auto [i, initArg] : llvm::enumerate(forOp.getInitArgs())) {
       if (!indicesToRemove.contains(i)) {
