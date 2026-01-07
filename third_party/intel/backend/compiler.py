@@ -87,9 +87,14 @@ def extract_spill_size_from_zebin(file):
     return 0
 
 
-def min_dot_size(device_props: dict):
-    import triton
-    backend = XPUBackend(triton.runtime.driver.active.get_current_target())
+def min_dot_size(device_props: Union[Dict, GPUTarget]):
+    if isinstance(device_props, GPUTarget):
+        backend = XPUBackend(device_props)
+        device_props = backend.properties
+    else:
+        from triton.runtime import driver
+
+        backend = XPUBackend(driver.active.get_current_target())
     return backend.min_dot_size(device_props)
 
 
