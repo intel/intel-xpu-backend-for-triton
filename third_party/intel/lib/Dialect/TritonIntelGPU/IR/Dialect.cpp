@@ -94,74 +94,19 @@ static LogicalResult parseUInt(AsmParser &parser, const NamedAttribute &attr,
 // DpasEncodingAttr
 //===----------------------------------------------------------------------===//
 
-SmallVector<unsigned> calculateDPASInstShapeA(unsigned repeatCount,
-                                              unsigned systolicDepth,
-                                              unsigned opsPerChannel) {
-  return {repeatCount, systolicDepth * opsPerChannel};
-}
-
 SmallVector<unsigned> DpasEncodingAttr::getDPASInstShapeA() const {
   return calculateDPASInstShapeA(getRepeatCount(), getSystolicDepth(),
                                  getOpsPerChannel());
 };
-
-SmallVector<unsigned> calculateDPASInstShapeB(unsigned systolicDepth,
-                                              unsigned opsPerChannel,
-                                              unsigned executionSize) {
-  return {systolicDepth * opsPerChannel, executionSize};
-}
 
 SmallVector<unsigned> DpasEncodingAttr::getDPASInstShapeB() const {
   return calculateDPASInstShapeB(getSystolicDepth(), getOpsPerChannel(),
                                  getExecutionSize());
 };
 
-SmallVector<unsigned> calculateDPASInstShapeC(unsigned repeatCount,
-                                              unsigned executionSize) {
-  return {repeatCount, executionSize};
-}
-
 SmallVector<unsigned> DpasEncodingAttr::getDPASInstShapeC() const {
   return calculateDPASInstShapeC(getRepeatCount(), getExecutionSize());
 };
-
-SmallVector<unsigned> calculateShapeA(unsigned repeatCount,
-                                      unsigned systolicDepth,
-                                      unsigned opsPerChannel,
-                                      ArrayRef<unsigned> repCluster) {
-  SmallVector<unsigned> instShapeA =
-      calculateDPASInstShapeA(repeatCount, systolicDepth, opsPerChannel);
-  size_t rank = repCluster.size();
-  SmallVector<unsigned> resShape(rank, 1);
-  resShape[rank - 2] = instShapeA[0] * repCluster[rank - 2];
-  resShape[rank - 1] = instShapeA[1];
-  return resShape;
-}
-
-SmallVector<unsigned> calculateShapeB(unsigned systolicDepth,
-                                      unsigned opsPerChannel,
-                                      unsigned executionSize,
-                                      ArrayRef<unsigned> repCluster) {
-  SmallVector<unsigned> instShapeB =
-      calculateDPASInstShapeB(systolicDepth, opsPerChannel, executionSize);
-  size_t rank = repCluster.size();
-  SmallVector<unsigned> resShape(rank, 1);
-  resShape[rank - 2] = instShapeB[0];
-  resShape[rank - 1] = instShapeB[1] * repCluster[rank - 1];
-  return resShape;
-}
-
-SmallVector<unsigned> calculateShapeC(unsigned repeatCount,
-                                      unsigned executionSize,
-                                      ArrayRef<unsigned> repCluster) {
-  SmallVector<unsigned> instShapeC =
-      calculateDPASInstShapeC(repeatCount, executionSize);
-  size_t rank = repCluster.size();
-  SmallVector<unsigned> resShape(rank, 1);
-  resShape[rank - 2] = instShapeC[0] * repCluster[rank - 2];
-  resShape[rank - 1] = instShapeC[1] * repCluster[rank - 1];
-  return resShape;
-}
 
 SmallVector<unsigned> DpasEncodingAttr::getShapeA() const {
   return calculateShapeA(getRepeatCount(), getSystolicDepth(),

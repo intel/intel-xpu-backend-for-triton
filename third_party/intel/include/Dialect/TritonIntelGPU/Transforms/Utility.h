@@ -62,6 +62,31 @@ LLVM::CallOp createSPIRVBuiltinCall(Location loc,
                                     ConversionPatternRewriter &rewriter,
                                     LLVM::LLVMFuncOp func, ValueRange args);
 
+SmallVector<unsigned> calculateDPASInstShapeA(unsigned repeatCount,
+                                              unsigned systolicDepth,
+                                              unsigned opsPerChannel);
+
+SmallVector<unsigned> calculateDPASInstShapeB(unsigned systolicDepth,
+                                              unsigned opsPerChannel,
+                                              unsigned executionSize);
+
+SmallVector<unsigned> calculateDPASInstShapeC(unsigned repeatCount,
+                                              unsigned executionSize);
+
+SmallVector<unsigned> calculateShapeA(unsigned repeatCount,
+                                      unsigned systolicDepth,
+                                      unsigned opsPerChannel,
+                                      ArrayRef<unsigned> repCluster);
+
+SmallVector<unsigned> calculateShapeB(unsigned systolicDepth,
+                                      unsigned opsPerChannel,
+                                      unsigned executionSize,
+                                      ArrayRef<unsigned> repCluster);
+
+SmallVector<unsigned> calculateShapeC(unsigned repeatCount,
+                                      unsigned executionSize,
+                                      ArrayRef<unsigned> repCluster);
+
 SmallVector<unsigned> calculateWarpsPerTile(unsigned capRepeatCount,
                                             unsigned capExecutionSize,
                                             const ArrayRef<int64_t> shape,
