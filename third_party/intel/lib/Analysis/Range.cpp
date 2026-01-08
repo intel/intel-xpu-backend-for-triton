@@ -479,6 +479,10 @@ LogicalResult IntegerRangeAnalysis::visitOperationHelper(
     return success();
   }
 
+  // TODO: It looks like inferResultRangesFromOptional does not handle several
+  // operations well:
+  //   - arith.shrui, e.g. arith.shrui %arg3, %c5_i32
+  //
   if (auto inferrable = dyn_cast<InferIntRangeInterface>(op)) {
     inferrable.inferResultRangesFromOptional(argIntValueRanges, joinCallback);
     return success();
