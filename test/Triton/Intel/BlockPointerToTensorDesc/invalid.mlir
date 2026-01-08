@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -triton-intel-block-pointer-to-tdesc | FileCheck %s
+// RUN: triton-opt %s -triton-intel-block-pointer-to-tdesc | FileCheck %s
 
 // CHECK-NOT: tt.make_tensor_descriptor
 // CHECK-NOT: tt.descriptor_load
