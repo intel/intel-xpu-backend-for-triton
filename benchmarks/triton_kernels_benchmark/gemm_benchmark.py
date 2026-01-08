@@ -40,6 +40,7 @@ def get_matmul_autotune_configs() -> List[triton.Config]:
 @triton.autotune(
     configs=get_matmul_autotune_configs(),
     key=['M', 'N', 'K'],
+    restore_value=['c_ptr']
 )
 @triton.jit
 def matmul_kernel_with_block_pointers(
@@ -117,6 +118,7 @@ def get_matmul_batched_autotune_configs() -> List[triton.Config]:
 @triton.autotune(
     configs=get_matmul_batched_autotune_configs(),
     key=['M', 'N', 'K'],
+    restore_value=['c_ptr']
 )
 @triton.jit
 def matmul_kernel_with_block_pointers_batched(
