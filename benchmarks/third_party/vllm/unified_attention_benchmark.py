@@ -515,6 +515,8 @@ def kernel_unified_attention_3d_td_v2(
     query_mask_0 = tl.where(query_pos < cur_batch_query_len, 1, 0).to(tl.int1)
     query_mask_1 = tl.where(query_offset_1 < num_query_heads, 1, 0).to(tl.int1)
 
+    #############
+    # TD version
     q_block_local_len = tl.minimum(BLOCK_Q, cur_batch_query_len - q_block_local_idx * BLOCK_Q)
 
     # Q : (BLOCK_M, HEAD_SIZE_PADDED)
@@ -532,6 +534,9 @@ def kernel_unified_attention_3d_td_v2(
                                            block_shape=(BLOCK_Q, num_queries_per_kv, HEAD_SIZE_PADDED))
         Q_raw = q_desc.load([0, 0, 0])
     Q = Q_raw.reshape(BLOCK_M, HEAD_SIZE_PADDED)
+    ##############
+    # End
+    ##############
 
     block_table_offset = seq_idx * block_table_stride
 
@@ -594,6 +599,8 @@ def kernel_unified_attention_3d_td_v2(
             block_tables_ptr + block_table_offset + j
         ).to(tl.int64)
 
+        #############
+        # TD version
         v_base = value_cache_ptr + physical_block_idx * stride_v_cache_0 + kv_head_idx * stride_v_cache_2
         v_desc = tl.make_tensor_descriptor(base=v_base, shape=(BLOCK_SIZE, HEAD_SIZE),
                                            strides=(stride_v_cache_1, stride_v_cache_3),
@@ -605,6 +612,11 @@ def kernel_unified_attention_3d_td_v2(
                                            block_shape=(BLOCK_SIZE, HEAD_SIZE_PADDED))
         # K : (HEAD_SIZE, BLOCK_SIZE)
         K_load = k_desc.load([0, 0]).T
+        # V : (BLOCK_SIZE, HEAD_SIZE)
+        V_load = v_desc.load([0, 0])
+        #############
+        # End
+        #############
 
         if K_load.dtype.is_fp8():
             if Q.dtype.is_fp8():
@@ -614,8 +626,6 @@ def kernel_unified_attention_3d_td_v2(
         else:
             K = K_load
 
-        # V : (BLOCK_SIZE, HEAD_SIZE)
-        V_load = v_desc.load([0, 0])
 
         if V_load.dtype.is_fp8():
             if Q.dtype.is_fp8():
@@ -711,18 +721,35 @@ def kernel_unified_attention_3d_td_v2(
         # acc : (BLOCK_M, HEAD_SIZE_PADDED)
         acc += tl.dot(P.to(V.dtype), V)
 
-    segm_output_offset = (
-        query_offset_0[:, None].to(tl.int64)
-        * (num_query_heads * NUM_SEGMENTS_PER_SEQ * HEAD_SIZE_PADDED)
-        + query_offset_1[:, None] * (NUM_SEGMENTS_PER_SEQ * HEAD_SIZE_PADDED)
-        + segm_idx * HEAD_SIZE_PADDED
-        + tl.arange(0, HEAD_SIZE_PADDED)[None, :]
-    )
-    tl.store(
-        segm_output_ptr + segm_output_offset,
-        acc,
-        mask=dim_mask[None, :] & query_mask_0[:, None] & query_mask_1[:, None],
-    )
+    #############
+    # TD version 
+    #############
+    # Original segm output store
+    # segm_output_offset = (
+    #     query_offset_0[:, None].to(tl.int64)
+    #     * (num_query_heads * NUM_SEGMENTS_PER_SEQ * HEAD_SIZE_PADDED)
+    #     + query_offset_1[:, None] * (NUM_SEGMENTS_PER_SEQ * HEAD_SIZE_PADDED)
+    #     + segm_idx * HEAD_SIZE_PADDED
+    #     + tl.arange(0, HEAD_SIZE_PADDED)[None, :]
+    # )
+    # tl.store(
+    #     segm_output_ptr + segm_output_offset,
+    #     acc,
+    #     mask=dim_mask[None, :] & query_mask_0[:, None] & query_mask_1[:, None],
+    # )
+    # TD segm output store
+    segm_output_offset = (cur_batch_in_all_start_index + q_block_local_idx * BLOCK_Q) * (
+        num_query_heads * NUM_SEGMENTS_PER_SEQ * HEAD_SIZE_PADDED) + (kv_head_idx * num_queries_per_kv) * (
+            NUM_SEGMENTS_PER_SEQ * HEAD_SIZE_PADDED) + segm_idx * HEAD_SIZE_PADDED
+    segm_output_desc = tl.make_tensor_descriptor(
+        base=segm_output_ptr + segm_output_offset,
+        shape=(q_block_local_len, num_queries_per_kv, HEAD_SIZE),
+        strides=(num_query_heads * NUM_SEGMENTS_PER_SEQ * HEAD_SIZE_PADDED, NUM_SEGMENTS_PER_SEQ * HEAD_SIZE_PADDED, 1),
+        block_shape=(BLOCK_Q, num_queries_per_kv, HEAD_SIZE_PADDED))
+    segm_output_desc.store([0, 0, 0], acc.reshape(BLOCK_Q, num_queries_per_kv, HEAD_SIZE_PADDED))
+    # End
+    ######################
+
     segm_offset = (
         query_offset_0.to(tl.int64) * (num_query_heads * NUM_SEGMENTS_PER_SEQ)
         + query_offset_1 * NUM_SEGMENTS_PER_SEQ
@@ -854,7 +881,7 @@ def _get_tile_size(
     return 16 if element_size >= 2 else 32
 
 
-def unified_attention_v2(
+def unified_attention_td_v2(
     q,
     k,
     v,
@@ -944,18 +971,26 @@ def unified_attention_v2(
     )
     TILE_SIZE_PREFILL = TILE_SIZE_DECODE = block_size
 
+    # Original
     # Launch the 2D kernel if
     # 1. No intermediate tiled softmax buffers for the 3D kernel have been allocated, or
     # 2. The batch includes at least one prefill request, or
     # 3. The number of sequences exceeds the configured threshold
+    # if (
+    #     seq_threshold_3D is None
+    #     or num_par_softmax_segments is None
+    #     or softmax_segm_output is None
+    #     or softmax_segm_max is None
+    #     or softmax_segm_expsum is None
+    #     or max_seqlen_q > 1
+    #     or num_seqs > seq_threshold_3D
+    # ):
+    seq_threshold_3D = 32
     if (
-        seq_threshold_3D is None
-        or num_par_softmax_segments is None
-        or softmax_segm_output is None
-        or softmax_segm_max is None
-        or softmax_segm_expsum is None
-        or max_seqlen_q > 1
+        max_seqlen_q > 1
         or num_seqs > seq_threshold_3D
+        # 
+        or 0 < sliding_window_val <= 1024
     ):
         print("2d")
         kernel_unified_attention_2d_td_v2[
@@ -1013,7 +1048,30 @@ def unified_attention_v2(
             USE_FP8=output_scale is not None,
         )
     else:
-        print("3d")
+        num_par_softmax_segments = 16
+
+        softmax_segm_output = torch.empty(
+            q.shape[0],
+            num_query_heads,
+            num_par_softmax_segments,
+            triton.next_power_of_2(head_size),
+            dtype=torch.float32,
+            device=q.device,
+        )
+        softmax_segm_max = torch.empty(
+            q.shape[0],
+            num_query_heads,
+            num_par_softmax_segments,
+            dtype=torch.float32,
+            device=q.device,
+        )
+        softmax_segm_expsum = torch.empty(
+            q.shape[0],
+            num_query_heads,
+            num_par_softmax_segments,
+            dtype=torch.float32,
+            device=q.device,
+        )
         kernel_unified_attention_3d_td_v2[
             (total_num_q_blocks, num_kv_heads, num_par_softmax_segments)
         ](
@@ -2195,7 +2253,7 @@ def get_unified_attention_benchmark(
             if provider == 'triton':
                 fn = unified_attention
             elif provider == 'triton-td':
-                fn = unified_attention_v2
+                fn = unified_attention_td_v2
             else:
                 raise ValueError(f'Unsupported provider {provider}')
 
