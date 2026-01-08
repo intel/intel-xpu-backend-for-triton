@@ -2,7 +2,7 @@
 lit
 autopep8
 isort
-numpy==2.2.6
+numpy
 pytest
 pytest-forked
 pytest-xdist
