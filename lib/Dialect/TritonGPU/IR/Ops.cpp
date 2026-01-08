@@ -591,7 +591,7 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
       // preserved. Otherwise fall back to the generic shared-linear encoding
       // logic below.
       if (innerDimDst == innerDimSrc) {
-        auto CGALayout = CGAEncodingAttr::getDefault(ctx, dstShape.size());
+        auto CGALayout = CGAEncodingAttr::get1CTALayout(ctx, dstShape.size());
         auto candidateEncoding = NVMMASharedEncodingAttr::get(
             ctx, mmaEncoding.getSwizzlingByteWidth(),
             mmaEncoding.getTransposed(), mmaEncoding.getElementBitWidth(),
@@ -832,6 +832,28 @@ LogicalResult MemDescIndexOp::verify() {
   return success();
 }
 
+OpFoldResult MemDescSubsliceOp::fold(FoldAdaptor adaptor) {
+  // Fold subslice(subslice(x, off1), off2) -> subslice(x, off1 + off2)
+  if (auto srcSubslice = getSrc().getDefiningOp<MemDescSubsliceOp>()) {
+    auto srcOffsets = srcSubslice.getOffsets();
+    auto currOffsets = getOffsets();
+
+    // Compute combined offsets
+    SmallVector<int32_t> combinedOffsets;
+    for (size_t i = 0; i < currOffsets.size(); ++i) {
+      combinedOffsets.push_back(srcOffsets[i] + currOffsets[i]);
+    }
+
+    // Update this operation to point directly to the original source with
+    // combined offsets
+    setOperand(srcSubslice.getSrc());
+    setOffsetsAttr(DenseI32ArrayAttr::get(getContext(), combinedOffsets));
+    return getResult();
+  }
+
+  return {};
+}
+
 LogicalResult MemDescSubsliceOp::verify() {
   auto srcTy = getSrc().getType();
   auto dstTy = getType();
@@ -926,15 +948,25 @@ RegionRange WarpSpecializeOp::getPartitionRegions() {
 
 void WarpSpecializeOp::getSuccessorRegions(
     RegionBranchPoint src, SmallVectorImpl<RegionSuccessor> &successors) {
-  // The parent branches transparently into the default region.
+  // The parent branches into the default region and the partition regions.
   if (src.isParent()) {
     successors.emplace_back(&getDefaultRegion());
+    successors.emplace_back(&getPartitionOpHolder());
     return;
   }
   // And the default region branches transparently back to the parent.
-  assert(src.getTerminatorPredecessorOrNull()->getParentRegion() ==
-         &getDefaultRegion());
-  successors.push_back(RegionSuccessor(getOperation(), getResults()));
+  if (src.getTerminatorPredecessorOrNull()->getParentRegion() ==
+      &getDefaultRegion())
+    successors.push_back(RegionSuccessor(getOperation(), getResults()));
+}
+
+void WarpSpecializePartitionsOp::getSuccessorRegions(
+    RegionBranchPoint src, SmallVectorImpl<RegionSuccessor> &successors) {
+  // The parent branches to each of the partition regions, but nothing flows out
+  // of the partition regions.
+  if (src.isParent())
+    for (Region &region : getPartitionRegions())
+      successors.emplace_back(&region);
 }
 
 LogicalResult WarpSpecializeOp::verify() {

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import triton
 from triton_kernels import target_info
-from triton_kernels.target_info import get_cdna_version
+from triton_kernels.target_info import get_cdna_version, get_rdna_version
 from triton_kernels.tensor import FP4
 import torch
 from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXScaleLayout
@@ -165,6 +165,8 @@ def make_default_opt_flags_amd(
         block_m = 256 if is_cdna4 else 128
     elif is_cdna4 and m >= 512:
         block_m = 128
+    elif get_rdna_version() in (3, 4) and m >= 512:
+        block_m = 64
     else:
         block_m = max(32, min(triton.next_power_of_2(slice_size), 64))
 
@@ -310,7 +312,12 @@ def make_default_opt_flags_nvidia(
     n_sms = torch.cuda.get_device_properties(0).multi_processor_count
     tiles_per_sm = grid_size_tma / n_sms
     supports_persistent = can_use_persistent_tma and (arch is None or int(arch[2:-1]) >= 9)
-    requires_persistent = (get_layout(precision_config.a_mx_scale) is not None or get_layout(precision_config.b_mx_scale) is not None) and target_info.has_native_mxfp()
+
+    def _layout_name(tensor):
+        layout = get_layout(tensor)
+        return layout.name if layout is not None else None
+
+    requires_persistent = (_layout_name(precision_config.a_mx_scale) is not None or _layout_name(precision_config.b_mx_scale) is not None) and target_info.has_native_mxfp()
     if constraints.get("is_persistent", None) is not None:
         is_persistent = constraints["is_persistent"]
     elif requires_persistent:
