@@ -591,7 +591,7 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
       // preserved. Otherwise fall back to the generic shared-linear encoding
       // logic below.
       if (innerDimDst == innerDimSrc) {
-        auto CGALayout = CGAEncodingAttr::getDefault(ctx, dstShape.size());
+        auto CGALayout = CGAEncodingAttr::get1CTALayout(ctx, dstShape.size());
         auto candidateEncoding = NVMMASharedEncodingAttr::get(
             ctx, mmaEncoding.getSwizzlingByteWidth(),
             mmaEncoding.getTransposed(), mmaEncoding.getElementBitWidth(),

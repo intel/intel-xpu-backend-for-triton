@@ -62,7 +62,8 @@ namespace mlir {
 namespace test {
 namespace intel {
 void registerTestAxisInfoPass();
-}
+void registerTestRangeAnalysisPass();
+} // namespace intel
 
 void registerTestAliasPass();
 void registerTestAlignmentPass();
@@ -86,6 +87,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::gpu::registerTritonGPUPasses();
   mlir::triton::nvidia_gpu::registerTritonNvidiaGPUPasses();
   mlir::test::intel::registerTestAxisInfoPass();
+  mlir::test::intel::registerTestRangeAnalysisPass();
   mlir::triton::instrument::registerTritonInstrumentPasses();
   mlir::triton::gluon::registerGluonPasses();
   mlir::test::registerTestAliasPass();

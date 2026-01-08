@@ -5,6 +5,13 @@ import pytest
 import triton
 import triton.language as tl
 
+
+@pytest.fixture(autouse=True)
+def triton_predicated_load(monkeypatch):
+    monkeypatch.setenv("TRITON_INTEL_PREDICATED_LOAD", "1")
+    yield
+
+
 aten = torch.ops.aten
 
 
