@@ -131,7 +131,7 @@ private:
         cast<RankedTensorType>(makeTensorPtrOp.getType().getPointeeType()));
     Value base = makeTensorPtrOp.getBase();
     SmallVector<Value> shape;
-    for (auto s : makeTensorPtrOp.getShape())
+    for (Value s : makeTensorPtrOp.getShape())
       shape.push_back(getOrCreateTruncI32Op(s));
     SmallVector<Value> strides = makeTensorPtrOp.getStrides();
     return tt::MakeTensorDescOp::create(builder, loc, descTy, base, shape,
@@ -140,22 +140,25 @@ private:
 
   void updateYieldVals(scf::ForOp forOp,
                        SmallVectorImpl<Value> &newYieldVals) const {
-    auto yieldOp = dyn_cast<scf::YieldOp>(forOp.getBody()->back());
+    auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->back());
     OpBuilder builder(yieldOp);
     scf::YieldOp::create(builder, yieldOp.getLoc(), newYieldVals);
     yieldOp.erase();
   }
 
   SmallVector<Value> calculateIndices(Value ptr) {
+    // Add each dimension offsets to its corresponding dimension of indices.
     auto addIndices = [](OpBuilder &builder, Location loc,
                          Operation::operand_range offsets,
                          SmallVector<Value> &indices) {
-      if (indices.empty())
+      if (indices.empty()) {
         indices = offsets;
-      else
-        for (unsigned i = 0; i < indices.size(); ++i)
-          indices[i] =
-              builder.createOrFold<arith::AddIOp>(loc, indices[i], offsets[i]);
+        return;
+      }
+
+      for (unsigned i = 0; i < indices.size(); ++i)
+        indices[i] =
+            builder.createOrFold<arith::AddIOp>(loc, indices[i], offsets[i]);
     };
 
     auto accumulateIndices = [&](Value v, SmallVector<Value> &indices) {
@@ -186,16 +189,17 @@ private:
       Block *oldBody = forOp.getBody();
       Block *newBody = newForOp.getBody();
 
-      auto oldArgs = oldBody->getArguments();
-      auto newArgs = newBody->getArguments();
+      Block::BlockArgListType oldArgs = oldBody->getArguments();
+      Block::BlockArgListType newArgs = newBody->getArguments();
       newBody->getOperations().splice(newBody->getOperations().begin(),
                                       oldBody->getOperations());
       for (auto [oldArg, newArg] :
            llvm::zip(oldArgs, newArgs.take_front(oldArgs.size())))
         oldArg.replaceAllUsesWith(newArg);
 
-      auto oldResults = forOp.getResults();
-      auto newResults = newForOp.getResults().take_front(oldResults.size());
+      SmallVector<Value> oldResults = forOp.getResults();
+      SmallVector<Value> newResults =
+          newForOp.getResults().take_front(oldResults.size());
       for (auto [oldResult, newResult] : llvm::zip(oldResults, newResults))
         oldResult.replaceAllUsesWith(newResult);
 
@@ -250,7 +254,8 @@ private:
     if constexpr (std::is_same_v<OpTy, tt::LoadOp>)
       if (op.getPadding().has_value())
         padding = op.getPadding().value();
-    auto desc = createMakeTensorDescOp(makeTensorPtrOp, padding);
+    tt::MakeTensorDescOp desc =
+        createMakeTensorDescOp(makeTensorPtrOp, padding);
     SmallVector<Value> indices = calculateIndices(op.getPtr());
 
     OpBuilder builder(op);
@@ -271,7 +276,7 @@ private:
       const SmallPtrSetImpl<Operation *> &ops,
       llvm::MapVector<scf::ForOp, llvm::SmallSetVector<unsigned, 4>>
           &forOpsToClean) const {
-    for (auto op : ops) {
+    for (Operation *op : ops) {
       auto makeTensorPtrOp = dyn_cast<tt::MakeTensorPtrOp>(op);
       if (!makeTensorPtrOp || !makeTensorPtrOp->hasOneUse())
         continue;
@@ -322,7 +327,7 @@ private:
       if (i == 0 || !indicesToRemove.contains(i - 1))
         oldArgs.push_back(oldArg);
     }
-    auto newArgs = newBody->getArguments();
+    Block::BlockArgListType newArgs = newBody->getArguments();
     newBody->getOperations().splice(newBody->getOperations().begin(),
                                     oldBody->getOperations());
     for (auto [oldArg, newArg] : llvm::zip(oldArgs, newArgs))
@@ -333,7 +338,7 @@ private:
       if (!indicesToRemove.contains(i))
         oldResults.push_back(oldResult);
     }
-    auto newResults = newForOp.getResults();
+    SmallVector<Value> newResults = newForOp.getResults();
     for (auto [oldResult, newResult] : llvm::zip(oldResults, newResults))
       oldResult.replaceAllUsesWith(newResult);
 

@@ -24,6 +24,7 @@ tt.func public @only_boundary_check_1(%ptr: !tt.ptr<bf16>, %shape0: i64, %shape1
   tt.return
 }
 
+// COM: Current limitation: it can be extended to return offsets in addition to the descriptors from scf.if in the future.
 tt.func public @if(%ptr: !tt.ptr<bf16>, %shape0: i64, %shape1: i64, %stride0: i64, %stride1: i64, %offset0: i32, %offset1: i32, %cond: i1) {
   // CHECK-LABEL: tt.func public @if
   %0 = scf.if %cond -> (!tt.ptr<tensor<256x32xbf16>>) {
