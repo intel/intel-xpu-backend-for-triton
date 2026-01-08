@@ -1,0 +1,18 @@
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [8, 4], repCluster = [4, 2]}>
+
+module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bfloat16_conversion, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_2d_block_io, ttig.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
+    tt.func public @forced_padding_dpas(%arg0: !tt.ptr<f32>) {
+        %0 = tt.get_program_id x : i32
+
+        %M_i64 = arith.constant 250 : i64
+        %N_i64 = arith.constant 64 : i64
+        %c1_i64 = arith.constant 1 : i64
+        %c0_i32 = arith.constant 0 : i32
+
+        // A matrix
+        %1 = tt.make_tensor_ptr %arg0, [%M_i64, %N_i64], [%N_i64, %c1_i64], [%0, %c0_i32] {order = array<i32: 1, 0>} : <tensor<256x64xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
+        %2 = tt.load %1 {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "row_major", padding = 1 : i32} : !tt.ptr<tensor<256x64xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
+
+        tt.return
+    }
+}
