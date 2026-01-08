@@ -218,25 +218,7 @@ The semantic of this `tt.dot` includes GEMM tiling configuration as:
     SmallVector<unsigned> getShapeB() const;
     SmallVector<unsigned> getShapeC() const;
 
-    static SmallVector<unsigned> calculateDPASInstShapeA(unsigned repeatCount, unsigned systolicDepth, unsigned opsPerChannel);
-    static SmallVector<unsigned> calculateShapeA(unsigned repeatCount, unsigned systolicDepth, unsigned opsPerChannel, ArrayRef<unsigned> repCluster);
-    static SmallVector<unsigned> calculateDPASInstShapeB(unsigned systolicDepth, unsigned opsPerChannel, unsigned executionSize);
-    static SmallVector<unsigned> calculateShapeB(unsigned systolicDepth, unsigned opsPerChannel, unsigned executionSize, ArrayRef<unsigned> repCluster);
-    static SmallVector<unsigned> calculateDPASInstShapeC(unsigned repeatCount, unsigned executionSize);
-    static SmallVector<unsigned> calculateShapeC(unsigned repeatCount, unsigned executionSize, ArrayRef<unsigned> repCluster);
-
     SmallVector<int64_t> getDPASRepetitions(ArrayRef<int64_t> shape, OpIdx opIdx) const;
-
-    static SmallVector<int64_t> calculateDPASRepetitions(
-      ArrayRef<int64_t> shape,
-      OpIdx opIdx,
-      ArrayRef<unsigned> warpsPerCTA,
-      ArrayRef<unsigned> repCluster,
-      unsigned repeatCount,
-      unsigned systolicDepth,
-      unsigned executionSize,
-      unsigned opsPerChannel);
-
     SmallVector<unsigned> getElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, OpIdx opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(OpIdx opIdx) const;
     unsigned getTotalElemsPerThreadForOperand(ArrayRef<int64_t> shape, Type eltTy, int kWidth, OpIdx opIdx) const;
