@@ -31,9 +31,7 @@ import triton_kernels_benchmark as benchmark_suite
         triton.Config(
             {'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 512, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'grf_mode': '256'},
             num_stages=2, num_warps=32),
-    ],
-    key=['M', 'N', 'K'],
-)
+    ], key=['M', 'N', 'K'], restore_value=['c_ptr'])
 @triton.jit
 def matmul_kernel_with_tensor_descriptors(
         # Pointers to matrices
@@ -99,9 +97,7 @@ def matmul_kernel_with_tensor_descriptors(
         triton.Config(
             {'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'grf_mode': '256'},
             num_stages=2, num_warps=4),
-    ],
-    key=['M', 'N', 'K'],
-)
+    ], key=['M', 'N', 'K'], restore_value=['c_ptr'])
 @triton.jit
 def matmul_kernel_with_tensor_descriptors_batched(
         # Pointers to matrices
