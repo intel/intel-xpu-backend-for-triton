@@ -30,26 +30,6 @@ static std::vector<sycl::device> sycl_opencl_device_list;
 
 static bool has_opencl = false;
 
-template <typename T>
-static inline T zeSyclCheckError(const std::tuple<T, ze_result_t> syclTuple,
-                                 const char *file, int line) {
-  const auto code = std::get<1>(syclTuple);
-  if (code == ZE_RESULT_SUCCESS)
-    return std::get<0>(syclTuple);
-
-  const char *prefix = "Triton Error [ZE]: ";
-  const char *str;
-  char err[1024] = {0};
-  snprintf(err, sizeof(err), "Triton Error [ZE] %s:%d - Code: %s", file, line,
-           parseZeResultCode(code).data());
-  PyGILState_STATE gil_state;
-  gil_state = PyGILState_Ensure();
-  PyErr_SetString(PyExc_RuntimeError, err);
-  PyGILState_Release(gil_state);
-
-  return std::get<0>(syclTuple);
-}
-
 static void zeConstructError(const char *file, int line, const char *message) {
   const char *prefix = "Triton Error [ZE] %s:%d: ";
   char err[1024] = {0};
@@ -59,6 +39,18 @@ static void zeConstructError(const char *file, int line, const char *message) {
   gil_state = PyGILState_Ensure();
   PyErr_SetString(PyExc_RuntimeError, err);
   PyGILState_Release(gil_state);
+}
+
+template <typename T>
+static inline T
+checkZeCodeAndSetPrErr(const std::tuple<T, ze_result_t> syclTuple,
+                       const char *file, int line) {
+  const auto code = std::get<1>(syclTuple);
+  if (code == ZE_RESULT_SUCCESS)
+    return std::get<0>(syclTuple);
+
+  zeConstructError(file, line, parseZeResultCode(code).data());
+  return std::get<0>(syclTuple);
 }
 
 extern "C" EXPORT_FUNC PyObject *get_device_properties(int device_id) {
@@ -135,17 +127,17 @@ compileLevelZeroObjects(uint8_t *binary_ptr, const size_t binary_size,
                         const std::string &kernel_name, L0_DEVICE l0_device,
                         L0_CONTEXT l0_context, const std::string &build_flags,
                         const bool is_spv) {
-  auto l0_module =
-      zeSyclCheckError(create_module(l0_context, l0_device, binary_ptr,
-                                     binary_size, build_flags.data(), is_spv),
-                       __FILE__, __LINE__);
+  auto l0_module = checkZeCodeAndSetPrErr(
+      create_module(l0_context, l0_device, binary_ptr, binary_size,
+                    build_flags.data(), is_spv),
+      __FILE__, __LINE__);
   if (PyErr_Occurred()) {
     return std::make_tuple(nullptr, nullptr, -1);
   }
 
   // Retrieve the kernel properties (e.g. register spills).
-  auto l0_kernel = zeSyclCheckError(create_function(l0_module, kernel_name),
-                                    __FILE__, __LINE__);
+  auto l0_kernel = checkZeCodeAndSetPrErr(
+      create_function(l0_module, kernel_name), __FILE__, __LINE__);
   if (PyErr_Occurred()) {
     return std::make_tuple(nullptr, nullptr, -1);
   }
@@ -154,7 +146,7 @@ compileLevelZeroObjects(uint8_t *binary_ptr, const size_t binary_size,
   props.stype = ZE_STRUCTURE_TYPE_KERNEL_PROPERTIES;
   props.pNext = nullptr;
 
-  zeSyclCheckError(
+  checkZeCodeAndSetPrErr(
       std::make_tuple(NULL, zeKernelGetProperties(l0_kernel, &props)), __FILE__,
       __LINE__);
   if (PyErr_Occurred()) {
@@ -452,7 +444,7 @@ extern "C" EXPORT_FUNC PyObject *has_opencl_extension(int device_id,
   if (has_opencl) {
     if (device_id >= sycl_opencl_device_list.size()) {
       zeConstructError(__FILE__, __LINE__, "Device is not found");
-      Py_RETURN_FALSE;
+      return NULL;
     }
     const sycl::device &device = sycl_opencl_device_list[device_id];
 
