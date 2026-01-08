@@ -17,6 +17,8 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 
+#include "llvm/Support/MathExtras.h"
+
 #include <optional>
 
 using namespace mlir;
@@ -338,6 +340,215 @@ LLVM::CallOp createSPIRVBuiltinCall(Location loc,
   auto call = LLVM::CallOp::create(rewriter, loc, func, args);
   call.setCConv(func.getCConv());
   return call;
+}
+
+SmallVector<unsigned> calculateDPASInstShapeA(unsigned repeatCount,
+                                              unsigned systolicDepth,
+                                              unsigned opsPerChannel) {
+  return {repeatCount, systolicDepth * opsPerChannel};
+}
+
+SmallVector<unsigned> calculateDPASInstShapeB(unsigned systolicDepth,
+                                              unsigned opsPerChannel,
+                                              unsigned executionSize) {
+  return {systolicDepth * opsPerChannel, executionSize};
+}
+
+SmallVector<unsigned> calculateDPASInstShapeC(unsigned repeatCount,
+                                              unsigned executionSize) {
+  return {repeatCount, executionSize};
+}
+
+SmallVector<unsigned> calculateShapeA(unsigned repeatCount,
+                                      unsigned systolicDepth,
+                                      unsigned opsPerChannel,
+                                      ArrayRef<unsigned> repCluster) {
+  SmallVector<unsigned> instShapeA =
+      calculateDPASInstShapeA(repeatCount, systolicDepth, opsPerChannel);
+  size_t rank = repCluster.size();
+  SmallVector<unsigned> resShape(rank, 1);
+  resShape[rank - 2] = instShapeA[0] * repCluster[rank - 2];
+  resShape[rank - 1] = instShapeA[1];
+  return resShape;
+}
+
+SmallVector<unsigned> calculateShapeB(unsigned systolicDepth,
+                                      unsigned opsPerChannel,
+                                      unsigned executionSize,
+                                      ArrayRef<unsigned> repCluster) {
+  SmallVector<unsigned> instShapeB =
+      calculateDPASInstShapeB(systolicDepth, opsPerChannel, executionSize);
+  size_t rank = repCluster.size();
+  SmallVector<unsigned> resShape(rank, 1);
+  resShape[rank - 2] = instShapeB[0];
+  resShape[rank - 1] = instShapeB[1] * repCluster[rank - 1];
+  return resShape;
+}
+
+SmallVector<unsigned> calculateShapeC(unsigned repeatCount,
+                                      unsigned executionSize,
+                                      ArrayRef<unsigned> repCluster) {
+  SmallVector<unsigned> instShapeC =
+      calculateDPASInstShapeC(repeatCount, executionSize);
+  size_t rank = repCluster.size();
+  SmallVector<unsigned> resShape(rank, 1);
+  resShape[rank - 2] = instShapeC[0] * repCluster[rank - 2];
+  resShape[rank - 1] = instShapeC[1] * repCluster[rank - 1];
+  return resShape;
+}
+
+SmallVector<unsigned> calculateWarpsPerTile(unsigned capRepeatCount,
+                                            unsigned capExecutionSize,
+                                            const ArrayRef<int64_t> shape,
+                                            unsigned numWarps) {
+  size_t rank = shape.size();
+  SmallVector<unsigned> ret(rank, 1);
+
+  if (rank == 3) {
+    int batchWarp = numWarps;
+    while (batchWarp > shape[0])
+      batchWarp /= 2;
+    ret[0] = batchWarp;
+    numWarps /= batchWarp;
+  }
+
+  // Try to find a proper tiling shape for the dot operation.
+  // It doubles the warp number in col or row in each time based on column to
+  // width ratio.
+  // By this, we can minimize the duplication of the dot operands A and B.
+  SmallVector<int64_t> shapePerWarp{capRepeatCount, capExecutionSize};
+  uint32_t rowColRatio = llvm::divideCeil(capRepeatCount, capExecutionSize);
+  uint32_t colRowRatio = llvm::divideCeil(capExecutionSize, capRepeatCount);
+
+  int rowDim = rank - 2, colDim = rank - 1;
+  do {
+    if (ret[rowDim] * ret[colDim] >= numWarps)
+      break;
+    if (shape[rowDim] / (shapePerWarp[0] * colRowRatio) / ret[rowDim] >=
+        shape[colDim] / (shapePerWarp[1] * rowColRatio) / ret[colDim]) {
+      if (ret[rowDim] < shape[rowDim] / shapePerWarp[0])
+        ret[rowDim] *= 2;
+      else
+        ret[colDim] *= 2;
+    } else {
+      ret[colDim] *= 2;
+    }
+  } while (true);
+
+  return ret;
+}
+
+SmallVector<unsigned>
+calculateRepCluster(unsigned capRepeatCount, unsigned capSystolicDepth,
+                    unsigned capExecutionSize, unsigned opsPerChan,
+                    ArrayRef<int64_t> retShape, unsigned threadsPerWarp,
+                    unsigned int a_bitwidth, bool is_FP8,
+                    ArrayRef<int64_t> a_shape, ArrayRef<int64_t> b_shape,
+                    SmallVector<unsigned> warpsPerTile) {
+  size_t rank = retShape.size();
+  SmallVector<unsigned> repCluster(rank, 1);
+
+  unsigned repeatCount =
+      std::min(capRepeatCount, (unsigned)retShape[rank - 2] /*M*/);
+  unsigned numElemsPerRowForA =
+      opsPerChan == 1 ? capSystolicDepth
+                      : capSystolicDepth * 2; // A is packed to i16 or i32.
+  unsigned minM = llvm::divideCeil(threadsPerWarp, numElemsPerRowForA);
+  repeatCount = std::max(repeatCount, minM);
+
+  if (capExecutionSize == 16) {
+    unsigned dpasElemBitWidths = a_bitwidth;
+
+    // We are upcasting FP8 to FP16
+    if (is_FP8)
+      dpasElemBitWidths = 2 * dpasElemBitWidths;
+
+    // Enlarge the repCluster size to use the large 2D load for A and B
+    // operands.
+    constexpr unsigned PVC_2D_LOAD_MAXIMUM_NUMBER_OF_ROWS = 32;
+    constexpr unsigned PVC_2D_LOAD_MAXIMUM_BYTES_OF_COLS = 64;
+
+    unsigned maxRepClusterM =
+        PVC_2D_LOAD_MAXIMUM_NUMBER_OF_ROWS / capRepeatCount;
+    SmallVector<int64_t> repA = calculateDPASRepetitions(
+        a_shape, static_cast<ttgi::DpasEncodingAttr::OpIdx>(0), warpsPerTile,
+        repCluster, repeatCount, capSystolicDepth, capExecutionSize,
+        opsPerChan);
+
+    unsigned repClusterDimM =
+        std::min(maxRepClusterM, static_cast<unsigned>(repA[1]));
+
+    unsigned maxRepClusterN = PVC_2D_LOAD_MAXIMUM_BYTES_OF_COLS /
+                              ((dpasElemBitWidths / 8) * capExecutionSize);
+    SmallVector<int64_t> repB = calculateDPASRepetitions(
+        b_shape, static_cast<ttgi::DpasEncodingAttr::OpIdx>(1), warpsPerTile,
+        repCluster, repeatCount, capSystolicDepth, capExecutionSize,
+        opsPerChan);
+
+    unsigned repClusterDimN =
+        std::min(maxRepClusterN, static_cast<unsigned>(repB[2]));
+    repCluster[rank - 2] = repClusterDimM;
+    repCluster[rank - 1] = repClusterDimN;
+  }
+
+  return repCluster;
+}
+
+SmallVector<int64_t>
+calculateDPASRepetitions(ArrayRef<int64_t> shape, DpasEncodingAttr::OpIdx opIdx,
+                         ArrayRef<unsigned> warpsPerCTA,
+                         ArrayRef<unsigned> repCluster, unsigned repeatCount,
+                         unsigned systolicDepth, unsigned executionSize,
+                         unsigned opsPerChannel) {
+  // Always return a 3D shape repetitions for the ease of value handling, same
+  // to mma.
+  size_t rank = shape.size();
+  SmallVector<int64_t> rep(3, 1);
+
+  switch (opIdx) {
+  case DpasEncodingAttr::OpIdx::OperandA: {
+    SmallVector<unsigned> shapePerWarp =
+        calculateShapeA(repeatCount, systolicDepth, opsPerChannel, repCluster);
+
+    int64_t numRepBatch =
+        rank == 3 ? std::max<int64_t>(1, shape[0] /
+                                             (shapePerWarp[0] * warpsPerCTA[0]))
+                  : 1;
+    return {numRepBatch,
+            std::max<int64_t>(1, shape[rank - 2] / (shapePerWarp[rank - 2] *
+                                                    warpsPerCTA[rank - 2])),
+            std::max<int64_t>(1, shape[rank - 1] / shapePerWarp[rank - 1])};
+  } break;
+  case DpasEncodingAttr::OpIdx::OperandB: {
+    SmallVector<unsigned> shapePerWarp = calculateShapeB(
+        systolicDepth, opsPerChannel, executionSize, repCluster);
+
+    int64_t numRepBatch =
+        rank == 3 ? std::max<int64_t>(1, shape[0] /
+                                             (shapePerWarp[0] * warpsPerCTA[0]))
+                  : 1;
+    return {numRepBatch,
+            std::max<int64_t>(1, shape[rank - 2] / shapePerWarp[rank - 2]),
+            std::max<int64_t>(1, shape[rank - 1] / (shapePerWarp[rank - 1] *
+                                                    warpsPerCTA[rank - 1]))};
+  } break;
+  case DpasEncodingAttr::OpIdx::OperandC: {
+    SmallVector<unsigned> shapePerWarp =
+        calculateShapeC(repeatCount, executionSize, repCluster);
+
+    int64_t numRepBatch =
+        rank == 3 ? std::max<int64_t>(1, shape[0] /
+                                             (shapePerWarp[0] * warpsPerCTA[0]))
+                  : 1;
+    return {numRepBatch,
+            std::max<int64_t>(1, shape[rank - 2] / (shapePerWarp[rank - 2] *
+                                                    warpsPerCTA[rank - 2])),
+            std::max<int64_t>(1, shape[rank - 1] / (shapePerWarp[rank - 1] *
+                                                    warpsPerCTA[rank - 1]))};
+  } break;
+  }
+
+  llvm_unreachable("unexpected opIdx");
 }
 
 } // namespace mlir::triton::gpu::intel
