@@ -50,7 +50,10 @@ def naive_softmax(x):
         triton.Config({"warp_size": 16}, num_warps=16),
         triton.Config({"warp_size": 16}, num_warps=8),
         triton.Config({"warp_size": 16}, num_warps=4),
-    ], key=["BLOCK_SIZE_X", "BLOCK_SIZE_Y"], restore_value=["output_ptr"])
+    ],  #
+    key=["BLOCK_SIZE_X", "BLOCK_SIZE_Y"],  #
+    restore_value=["output_ptr"]  #
+)
 @triton.jit
 def softmax_kernel(output_ptr, input_ptr, input_row_stride, output_row_stride, n_cols, BLOCK_SIZE_X: tl.constexpr,
                    BLOCK_SIZE_Y: tl.constexpr):

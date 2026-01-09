@@ -16,7 +16,11 @@ import triton.language as tl
 from triton_kernels_benchmark import gemm_benchmark
 
 
-@triton.autotune(configs=gemm_benchmark.get_matmul_autotune_configs(), key=['M', 'N', 'K'], restore_value=['c_ptr'])
+@triton.autotune(  #
+    configs=gemm_benchmark.get_matmul_autotune_configs(),  #
+    key=['M', 'N', 'K'],  #
+    restore_value=['c_ptr']  #
+)
 @triton.jit
 def matmul_kernel(
         # Pointers to matrices
@@ -64,8 +68,11 @@ def matmul_kernel(
 
 
 # pylint: disable=unused-argument
-@triton.autotune(configs=gemm_benchmark.get_matmul_batched_autotune_configs(), key=['M', 'N', 'K'],
-                 restore_value=['c_ptr'])
+@triton.autotune(  #
+    configs=gemm_benchmark.get_matmul_batched_autotune_configs(),  #
+    key=['M', 'N', 'K'],  #
+    restore_value=['c_ptr']  #
+)
 @triton.jit
 def matmul_kernel_batched(
         # Pointers to matrices
