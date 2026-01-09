@@ -392,6 +392,7 @@ def kernel_unified_attention_2d_td(
     output_desc = tl.make_tensor_descriptor(base=output_base, shape=(q_block_local_len, num_queries_per_kv, HEAD_SIZE),
                                             strides=(output_stride_0, output_stride_1, 1),
                                             block_shape=(BLOCK_Q, num_queries_per_kv, HEAD_SIZE_PADDED))
+    acc = acc.to(output_ptr.dtype.element_ty)
     output_desc.store([0, 0, 0], acc.reshape(BLOCK_Q, num_queries_per_kv, HEAD_SIZE_PADDED))
 
 
@@ -678,6 +679,7 @@ def kernel_unified_attention_3d_td(segm_output_ptr,
     #     mask=dim_mask[None, :] & query_mask_0[:, None] & query_mask_1[:, None],
     # )
     # TD segm output store
+    acc = acc.to(segm_output_ptr.dtype.element_ty)
     segm_output_offset = (cur_batch_in_all_start_index + q_block_local_idx * BLOCK_Q) * (
         num_query_heads * NUM_SEGMENTS_PER_SEQ * HEAD_SIZE_PADDED) + (kv_head_idx * num_queries_per_kv) * (
             NUM_SEGMENTS_PER_SEQ * HEAD_SIZE_PADDED) + segm_idx * HEAD_SIZE_PADDED
