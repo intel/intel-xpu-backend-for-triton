@@ -6,14 +6,12 @@ import subprocess
 import sys
 import tempfile
 import shutil
-import sysconfig
 
 import numpy as np
 
 import triton
 from triton._internal_testing import is_cuda, is_hip, is_xpu
 from triton.backends.compiler import GPUTarget
-from triton._internal_testing import is_cuda, is_hip, is_xpu
 
 if is_cuda():
     from triton.backends.nvidia.driver import include_dirs, library_dirs
@@ -31,6 +29,8 @@ elif is_hip():
     def library_names():
         return ["amdhip64"]
 
+elif is_xpu():
+    from triton.backends.intel.driver import COMPILATION_HELPER
 
 kernel_utils_src = """
 import triton
@@ -116,6 +116,10 @@ elif is_hip():
     test_utils_src = """
 #define __HIP_PLATFORM_AMD__
 #include <hip/hip_runtime.h>
+"""
+elif is_xpu():
+    test_utils_src = """
+#include <sycl/sycl.hpp>
 """
 
 test_utils_src += """
@@ -349,9 +353,8 @@ int main(int argc, char **argv) {{
   // hipCtxDestroy(ctx);
 }}
 """
-    src = test_utils_src + test_src
-    if is_xpu():
-        src = f"""
+    elif is_xpu():
+        test_src = f"""
 #include "kernel.h"
 #include <assert.h>
 #include <cmath>
@@ -362,33 +365,6 @@ int main(int argc, char **argv) {{
 #include <string.h>
 #include <sycl/sycl.hpp>
 
-static void write_buffer_to_csv(char *filename, int32_t *buffer, int size) {{
-    FILE *file = fopen(filename, "w");
-    if (file == NULL) {{
-        printf("Could not open file %s\\n", filename);
-        return;
-    }}
-    for (int i = 0; i < size; i++) {{
-        fprintf(file, "%d", buffer[i]);
-        if (i < size - 1) {{
-            fprintf(file, ",");
-        }}
-    }}
-    fclose(file);
-}}
-
-static void read_csv_to_buffer(char *filename, int16_t *buffer, int size) {{
-    FILE *file = fopen(filename, "r");
-    if (file == NULL) {{
-        printf("Could not open file %s\\n", filename);
-        return;
-    }}
-    int index = 0;
-    while (fscanf(file, "%hd,", &buffer[index]) != EOF && index < size) {{
-        index++;
-    }}
-    fclose(file);
-}}
 int main(int argc, char ** argv) {{
     constexpr int M = {M}, N = {N}, K = {K};
 
@@ -438,6 +414,7 @@ int main(int argc, char ** argv) {{
     sycl::free(C, q);
 }}
 """
+    src = test_utils_src + test_src
     src_name = "test.c"
     if is_xpu():
         src_name = "test.cpp"
@@ -606,7 +583,6 @@ def test_compile_link_matmul(generate_native_code):
         compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, generate_native_code, ha_hb_hints=[(":16", ":16")])
         if is_hip():
             check_hasco_binary_str(tmp_dir, dtype)
-            return
         link_aot_kernels(tmp_dir)
 
         # compile test case
@@ -631,39 +607,6 @@ def test_compile_link_matmul(generate_native_code):
 
 @pytest.mark.parametrize("generate_native_code", [True, False])
 def test_launcher_has_no_available_kernel(generate_native_code):
-    np.random.seed(3)
-
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        dtype = "fp16"
-        BM, BN, BK = 16, 16, 16
-
-        kernel_path = write_triton_kernels(tmp_dir, kernel_src, kernel_utils_src)
-        compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, generate_native_code, ha_hb_hints=[(":16", ":16")])
-        if is_hip():
-            check_hasco_binary_str(tmp_dir, dtype)
-        link_aot_kernels(tmp_dir)
-
-        # compile test case
-        M, N, K = 16, 16, 16
-        gen_kernel_library(tmp_dir, "libkernel.so")
-        gen_test_bin(tmp_dir, M, N, K)
-
-        # initialize test data
-        a, b, a_path, b_path, c_path = generate_matmul_test_data(tmp_dir, M, N, K)
-
-        # run test case
-        env = os.environ.copy()
-        env["LD_LIBRARY_PATH"] = tmp_dir
-        subprocess.run(["./test", a_path, b_path, c_path], env=env, check=True, cwd=tmp_dir)
-
-        # read data and compare against reference
-        c = np.genfromtxt(c_path, delimiter=",", dtype=np.int32)
-        c_tri = c.reshape((M, N)).view(np.float32)
-        c_ref = np.matmul(a.astype(np.float32), b.astype(np.float32))
-        np.testing.assert_allclose(c_tri, c_ref * c_ref, atol=1e-4, rtol=0.0)
-
-
-def test_launcher_has_no_available_kernel():
     np.random.seed(3)
 
     with tempfile.TemporaryDirectory() as tmp_dir:

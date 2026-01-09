@@ -152,20 +152,14 @@ TT_ResultTy {name}(TT_StreamTy stream, {gen_signature_with_full_args(metas[-1])}
 void load_{name}();
 void unload_{name}();
         """
-    if is_xpu():
-        return f"""
-int32_t {name}(sycl::queue &stream, {gen_signature_with_full_args(metas[-1])});
-void load_{name}();
-void unload_{name}();
-        """
 
 
 # generate declarations of kernels with meta-parameter and constant values
 def make_global_decl(meta: KernelLinkerMeta) -> str:
     if is_xpu():
         return f"""
-EXPORT_FUNC int32_t {meta.orig_kernel_name}_default(sycl::queue &stream, {gen_signature_with_full_args(meta)});
-EXPORT_FUNC int32_t {meta.orig_kernel_name}(sycl::queue &stream, {gen_signature_with_full_args(meta)}, int algo_id);
+EXPORT_FUNC TT_ResultTy {meta.orig_kernel_name}_default(TT_StreamTy stream, {gen_signature_with_full_args(meta)});
+EXPORT_FUNC TT_ResultTy {meta.orig_kernel_name}(TT_StreamTy stream, {gen_signature_with_full_args(meta)}, int algo_id);
 EXPORT_FUNC void load_{meta.orig_kernel_name}();
 EXPORT_FUNC void unload_{meta.orig_kernel_name}();
         """
@@ -180,7 +174,7 @@ void unload_{meta.orig_kernel_name}();
 # generate dispatcher function for kernels with different meta-parameter and constant values
 def make_default_algo_kernel(meta: KernelLinkerMeta) -> str:
     if is_xpu():
-        src = f"EXPORT_FUNC int32_t {meta.orig_kernel_name}_default(sycl::queue &stream, {gen_signature_with_full_args(meta)}){{\n"
+        src = f"EXPORT_FUNC TT_ResultTy {meta.orig_kernel_name}_default(TT_StreamTy &stream, {gen_signature_with_full_args(meta)}){{\n"
     else:
         src = f"TT_ResultTy {meta.orig_kernel_name}_default(TT_StreamTy stream, {gen_signature_with_full_args(meta)}){{\n"
     src += (f"  return {meta.orig_kernel_name}(stream, {', '.join(meta.arg_names)}, 0);\n")
@@ -245,7 +239,7 @@ def make_kernel_hints_dispatcher(name: str, metas: Sequence[KernelLinkerMeta]) -
 # generate dispatcher function for kernels with different meta-parameter and constant values
 def make_kernel_meta_const_dispatcher(meta: KernelLinkerMeta) -> str:
     if is_xpu():
-        src = f"EXPORT_FUNC int32_t {meta.orig_kernel_name}(sycl::queue &stream, {gen_signature_with_full_args(meta)}, int algo_id){{\n"
+        src = f"EXPORT_FUNC TT_ResultTy {meta.orig_kernel_name}(TT_StreamTy stream, {gen_signature_with_full_args(meta)}, int algo_id){{\n"
     else:
         src = f"TT_ResultTy {meta.orig_kernel_name}(TT_StreamTy stream, {gen_signature_with_full_args(meta)}, int algo_id){{\n"
     src += f"  assert (algo_id < (int)sizeof({meta.orig_kernel_name}_kernels));\n"
