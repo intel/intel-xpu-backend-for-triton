@@ -1130,17 +1130,14 @@ MODEL_CONFIGS = [
 # one value large enough to test overflow in index calculation.
 # one value small enough to test the schema op check
 NUM_BLOCKS = [32768, 2048]
-# New grid for the future
-# SEQ_LENS = [
-#     # Chunked prefill: 3 batches
-#     [(320, 320), (320, 320), (320, 320)],
-#     # End of chunked prefill and some decoding
-#     [(1, 1328), (5, 18), (129, 463)],
-#     # Pure decoding, 8 batches
-#     [(1, k) for k in [1513, 245, 102, 123, 3454, 434, 345, 34]]
-# ]
-SEQ_LENS = [[(1, 1328), (5, 18), (129, 463)], [(1, 523), (1, 37), (1, 2011)],
-            [(1, k) for k in [1513, 245, 102, 123, 3454, 434, 345, 34]]]
+SEQ_LENS = [
+    # Chunked prefill: 3 batches
+    [(320, 320), (320, 320), (320, 320)],
+    # End of chunked prefill and some decoding
+    [(1, 1328), (5, 18), (129, 463)],
+    # Pure decoding, 8 batches
+    [(1, k) for k in [1513, 245, 102, 123, 3454, 434, 345, 34]]
+]
 SOFT_CAPS = [None, 50.0]
 SLIDING_WINDOWS = [None, 256]
 ATTENTION_CONFIGS_BF16 = []
@@ -1360,7 +1357,8 @@ def get_unified_attention_benchmark(
             # Memory: Query + Key cache + Value cache + Output
             total_bytes = (
                 total_query_tokens * q_heads * head_size * n_bytes +  # Query
-                sum(kv_lens) * k_heads * head_size * n_bytes * 2 +  # KV cache accessed
+                sum([min(l, sliding_window) if sliding_window is not None else l
+                     for l in kv_lens]) * k_heads * head_size * n_bytes * 2 +  # KV cache accessed
                 total_query_tokens * q_heads * head_size * 2  # Output
             )
             return total_bytes * (1e-9) / (ms * 1e-3)
@@ -1369,6 +1367,8 @@ def get_unified_attention_benchmark(
             # Attention FLOPs: Q@K (2*d*seq_len*kv_len) + Softmax (~seq_len*kv_len) + Attn@V (2*d*seq_len*kv_len)
             total_flops = 0
             for i, (q_len, kv_len) in enumerate(zip(query_lens, kv_lens)):
+                if sliding_window is not None:
+                    kv_len = min(kv_len, sliding_window)
                 # Q@K^T and Attn@V operations
                 flops_per_head = 2 * head_size * q_len * kv_len * 2  # 2 matmuls
                 total_flops += flops_per_head * q_heads
