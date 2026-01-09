@@ -68,6 +68,7 @@ env:
   # FIXME: Enable Level Zero v2 loader once it's stable.
   # https://github.com/intel/intel-xpu-backend-for-triton/issues/5572
   UR_LOADER_USE_LEVEL_ZERO_V2: "0"
+  IGC_VectorizerAllowWAVEALLJoint: "0"
 
 jobs:
   build:
