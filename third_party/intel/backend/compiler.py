@@ -6,7 +6,7 @@ from triton import knobs
 
 from dataclasses import dataclass
 import functools
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Tuple, Union
 from types import ModuleType
 import hashlib
 import tempfile
@@ -86,6 +86,16 @@ def extract_spill_size_from_zebin(file):
         if match:
             return int(match.group(1))
     return 0
+
+
+def min_dot_size(device_props: Union[Dict, GPUTarget]):
+    if isinstance(device_props, GPUTarget):
+        backend = XPUBackend(device_props)
+        device_props = backend.properties
+    else:
+        from triton.runtime import driver
+        backend = XPUBackend(driver.active.get_current_target())
+    return backend.min_dot_size(device_props)
 
 
 class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
@@ -242,6 +252,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
+        intel.passes.ttir.add_convert_block_pointer_to_tdesc(pm)
         intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
         passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
         passes.common.add_cse(pm)
