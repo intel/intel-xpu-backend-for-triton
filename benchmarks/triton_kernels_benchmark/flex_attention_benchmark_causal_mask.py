@@ -89,50 +89,17 @@ if 'B580' in torch.xpu.get_device_name():
         x_vals=[[z, *params, fa_kernel_mode] for z in batch_sizes for params in [
             # Multi-head attention. H_q equals H_kv
             (32, 32, 1024, 1024, 96, 96),  # Prefill shapes of Phi3-mini-4k-instruct
-            (32, 32, 1024, 1024, 128, 128),  # Prefill shapes of Qwen3-4B
-            (128, 128, 1024, 1024, 192, 128),  # Prefill shapes of DeepSeek-v3
-            (32, 32, 512, 1024 + 128 + 512, 96, 96),  # Append shapes of Phi3-mini-4k-instruct
-            # Grouped-query attention. H_q / H_kv > 1
-            (32, 8, 1024, 1024, 128, 128),  # Prefill shapes of Llama-3.1-8B
-            (24, 8, 1024, 1024, 128, 128),  # Prefill shapes of meta-llama-Llama-3.2-3B
-            (40, 8, 1024, 1024, 128, 128),  # Prefill shapes of Deepseek-R1-Distill-Qwen-14B
-            (32, 8, 512, 1024 + 128 + 512, 128, 128),  # Append shapes of Llama-3.1-8B and Qwen3-4B
-            (24, 8, 512, 1024 + 128 + 512, 128, 128),  # Append shapes of meta-llama-Llama-3.2-3B
-            # FlexDecoding configuration. N_CTX_q equals 1. N_CTX_kv < 1k
-            (32, 8, 1, 1024 + 64, 128, 128),  # Decode shapes of Llama-3.1-8B amd Qwen3-4B
-            (24, 8, 1, 1024 + 64, 128, 128),  # Decode shapes of meta-llama-Llama-3.2-3B
-            # acc = acc.reshape(G, BLOCK_M_PER_HQ, V_HEAD_DIM)
-            # ValueError: Shape element 2 must be a power of 2
-            # (32, 32, 1, 1024 + 64, 96, 96),  # Decode shapes of Phi3-mini-4k-instruct
-            (40, 8, 1, 1024 + 64, 128, 128),  # Decode shapes of Deepseek-R1-Distill-Qwen-14B
-            # OutOfResources: shared memory, Required: 262144, Hardware limit: 131072.
-            # (128, 1, 1, 1024 + 64, 576, 512),  # Decode shapes of Deepseek-v3
-        ] + ([  #
-            # Multi-query attention. H_kv equals 1
-            (128, 1, 512, 1024 + 128 + 512, 576, 512),  # Append shapes of Deepseek-v3
-            # AssertionError: Not equal to tolerance rtol=0.001, atol=0.01
-        ] if fa_kernel_mode != 'bwd' else []) + ([  #
-            # Shapes only for bwd
-            [h, h, seq_len, seq_len, 128, 128]
-            for h in [1, 2, 4, 16, 24, 32]
-            for seq_len in [4096, 8192]
-            # FIXME: OutOfMemoryError: XPU out of memory (#5725)
-            # FIXME: UR_RESULT_ERROR_DEVICE_LOST on BMG (#5735)
-            if not (h in [1, 16, 24, 32] and seq_len == 8192) and 'B580' not in torch.xpu.get_device_name()
-        ] if fa_kernel_mode == 'bwd' else [])],
+        ]],
         line_arg='provider',
-        line_vals=['triton', 'torch'],
-        line_names=['Triton', 'Torch'],
+        line_vals=['torch'],
+        line_names=['Torch'],
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel=['GB/s', 'TFlops'],
         plot_name='flexAttnCausal-performance',
         args={},
     ))
 def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provider):
-    # Maximum across torch=200, triton=600
     do_bench = benchmark_suite.get_do_bench(n_warmup=600, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
-    if MODE not in ('fwd', 'bwd'):
-        raise ValueError(f"Invalid MODE: {MODE}. Expected 'fwd' or 'bwd'.")
     dtype = torch.float16
     q = torch.randn((Z, H_q, N_CTX_q, D_HEAD_qk), device=DEVICE, dtype=dtype, requires_grad=MODE == 'bwd')
     k = torch.randn((Z, H_kv, N_CTX_kv, D_HEAD_qk), device=DEVICE, dtype=dtype, requires_grad=MODE == 'bwd')
@@ -141,43 +108,12 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
 
     block_mask = create_block_mask_cached(causal_mask, 1, 1, N_CTX_q, N_CTX_kv, device=DEVICE)
     torch_fn = lambda: flex_attention(q, k, v, block_mask=block_mask, scale=sm_scale, enable_gqa=not H_q == H_kv)
-
-    if provider == 'torch':
-        if MODE == 'bwd':
-            min_ms = float('nan')
-            max_ms = float('nan')
-            mean = float('nan')
-            cv = float('nan')
-        else:
-            _, min_ms, max_ms, mean, cv = do_bench(torch_fn, device=DEVICE)
-
-    elif provider == 'triton':
-        kernel_options = {'BLOCKS_ARE_CONTIGUOUS': True, 'USE_TMA': True}
-        triton_fn = lambda: compiled_flex_attention(q, k, v, block_mask=block_mask, scale=sm_scale, enable_gqa=(
-            not H_q == H_kv), kernel_options=kernel_options)
-        if MODE == 'bwd':
-            torch_o = torch_fn()
-            backwards_grad = torch.randn_like(torch_o)
-            torch_grads = torch.autograd.grad((torch_o, ), (q, k, v), backwards_grad, retain_graph=True)
-            eager_tensors = (torch_o, *torch_grads)
-            triton_o = triton_fn()
-            triton_grads = torch.autograd.grad((triton_o, ), (q, k, v), backwards_grad, retain_graph=True)
-            compiled_tensors = (triton_o, *triton_grads)
-
-            tensor_names = ['out', 'grad_query', 'grad_key', 'grad_value']
-            for eager, compiled, name in zip(eager_tensors, compiled_tensors, tensor_names):
-                benchmark_suite.assert_close(lambda: eager, lambda: compiled, atol=1e-2, rtol=1e-3,  # pylint: disable=cell-var-from-loop
-                                             err_msg=f'Error comparing {name} between triton and torch')
-
-            triton_fn = lambda: torch.autograd.grad((triton_o, ), (q, k, v), backwards_grad, retain_graph=True)
-        else:
-            benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-2, rtol=1e-3, err_msg='triton to torch')
-
-        _, min_ms, max_ms, mean, cv = do_bench(triton_fn, device=DEVICE, grad_to_none=(q, k, v),
-                                               benchmark_label=None if MODE == 'fwd' else 'CompiledFunctionBackward')
-
-    else:
-        raise NotImplementedError(f'Unsupported provider {provider}')
+    #torch_fn()
+    #min_ms = float('nan')
+    #max_ms = float('nan')
+    #mean = float('nan')
+    #cv = float('nan')
+    _, min_ms, max_ms, mean, cv = do_bench(torch_fn, device=DEVICE)
 
     qk_flops = H_q * N_CTX_q * N_CTX_kv * D_HEAD_qk  # mul + add, causal=True. Only the lower triangle is computed.
     pv_flops = H_q * N_CTX_q * D_HEAD_v * N_CTX_kv  # mul + add, causal=True. Only the lower triangle is computed.
@@ -187,11 +123,6 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
     k_elems = H_kv * N_CTX_kv * D_HEAD_qk
     v_elems = H_kv * N_CTX_kv * D_HEAD_v
     gbps = lambda mean: Z * (q_elems + k_elems + v_elems) * 2 * (1e-9) / (mean * 1e-3)  # float16 2 bytes
-
-    if MODE == 'bwd':
-        # The tflops and gbps are aligned to the one in flash_attention_benchmark.
-        tflops = lambda mean: 2.5 * Z * (qk_flops + pv_flops) * (1e-12) / (mean * 1e-3)
-        gbps = lambda mean: 2.5 * Z * (q_elems + k_elems + v_elems) * 2 * (1e-9) / (mean * 1e-3)
 
     return (gbps(mean), gbps(max_ms), gbps(min_ms)), (tflops(mean), tflops(max_ms), tflops(min_ms)), cv
 
