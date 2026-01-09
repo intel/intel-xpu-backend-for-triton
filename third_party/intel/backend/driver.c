@@ -43,7 +43,7 @@ static void zeConstructError(const char *file, int line, const char *message) {
 
 template <typename T>
 static inline T
-checkZeCodeAndSetPrErr(const std::tuple<T, ze_result_t> syclTuple,
+checkZeCodeAndSetPyErr(const std::tuple<T, ze_result_t> syclTuple,
                        const char *file, int line) {
   const auto code = std::get<1>(syclTuple);
   if (code == ZE_RESULT_SUCCESS)
@@ -127,7 +127,7 @@ compileLevelZeroObjects(uint8_t *binary_ptr, const size_t binary_size,
                         const std::string &kernel_name, L0_DEVICE l0_device,
                         L0_CONTEXT l0_context, const std::string &build_flags,
                         const bool is_spv) {
-  auto l0_module = checkZeCodeAndSetPrErr(
+  auto l0_module = checkZeCodeAndSetPyErr(
       create_module(l0_context, l0_device, binary_ptr, binary_size,
                     build_flags.data(), is_spv),
       __FILE__, __LINE__);
@@ -136,7 +136,7 @@ compileLevelZeroObjects(uint8_t *binary_ptr, const size_t binary_size,
   }
 
   // Retrieve the kernel properties (e.g. register spills).
-  auto l0_kernel = checkZeCodeAndSetPrErr(
+  auto l0_kernel = checkZeCodeAndSetPyErr(
       create_function(l0_module, kernel_name), __FILE__, __LINE__);
   if (PyErr_Occurred()) {
     return std::make_tuple(nullptr, nullptr, -1);
@@ -146,7 +146,7 @@ compileLevelZeroObjects(uint8_t *binary_ptr, const size_t binary_size,
   props.stype = ZE_STRUCTURE_TYPE_KERNEL_PROPERTIES;
   props.pNext = nullptr;
 
-  checkZeCodeAndSetPrErr(
+  checkZeCodeAndSetPyErr(
       std::make_tuple(NULL, zeKernelGetProperties(l0_kernel, &props)), __FILE__,
       __LINE__);
   if (PyErr_Occurred()) {
