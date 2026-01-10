@@ -943,7 +943,7 @@ def test_threaded_kernel_call(tmp_path: pathlib.Path):
 @pytest.mark.parametrize("num_ctas", [1, 2])
 def test_tensor_descriptor(num_ctas, tmp_path: pathlib.Path):
     if num_ctas == 2 and (not is_cuda() or torch.cuda.get_device_capability(0)[0] not in (9, 10)):
-        pytest.skip("CTAs is unsupported for these cards")
+        pytest.xfail("CTAs is unsupported for these cards")
 
     @triton.jit
     def kernel(out_ptr, a_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
