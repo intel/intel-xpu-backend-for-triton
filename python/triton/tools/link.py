@@ -41,8 +41,11 @@ class HeaderParser:
         self.c_sig = re.compile("[\\s]*(\\w+\\*?)\\s(\\w+)[,]?")
         # [d|c]
         self.arg_suffix = re.compile("[c,d]")
+        # [backend_name]
+        self.backend_name_re = re.compile("//[\\s]*tt-linker-backend:[\\s]*([\\w]+)")
 
         self.kernels = defaultdict(list)
+        self.backend_name = None
 
     def extract_linker_meta(self, header: str):
         for ln in header.splitlines():
@@ -66,6 +69,14 @@ class HeaderParser:
                             num_specs=num_specs,
                         ),
                     )
+                else:
+                    m = self.backend_name_re.match(ln)
+                    if _exists(m):
+                        backend_name = m.group(1)
+                        if self.backend_name is None:
+                            self.backend_name = backend_name
+                        elif self.backend_name != backend_name:
+                            raise RuntimeError(f"differing backend {self.backend_name} vs. {backend_name}")
 
     def _match_name(self, ker_name: str):
         m = self.kernel_name.match(ker_name)
@@ -136,15 +147,8 @@ def gen_signature(m):
 
 # generate declarations of kernels with meta-parameter and constant values
 def make_algo_decls(name: str, metas: Sequence[KernelLinkerMeta]) -> str:
-    if is_cuda():
-        return f"""
-CUresult {name}(CUstream stream, {gen_signature_with_full_args(metas[-1])});
-void load_{name}();
-void unload_{name}();
-        """
-    if is_xpu():
-        return f"""
-int32_t {name}(sycl::queue &stream, {gen_signature_with_full_args(metas[-1])});
+    return f"""
+TT_ResultTy {name}(TT_StreamTy stream, {gen_signature_with_full_args(metas[-1])});
 void load_{name}();
 void unload_{name}();
         """
@@ -152,30 +156,28 @@ void unload_{name}();
 
 # generate declarations of kernels with meta-parameter and constant values
 def make_global_decl(meta: KernelLinkerMeta) -> str:
-    if is_cuda():
-        return f"""
-CUresult {meta.orig_kernel_name}_default(CUstream stream, {gen_signature_with_full_args(meta)});
-CUresult {meta.orig_kernel_name}(CUstream stream, {gen_signature_with_full_args(meta)}, int algo_id);
-void load_{meta.orig_kernel_name}();
-void unload_{meta.orig_kernel_name}();
-        """
     if is_xpu():
         return f"""
-EXPORT_FUNC int32_t {meta.orig_kernel_name}_default(sycl::queue &stream, {gen_signature_with_full_args(meta)});
-EXPORT_FUNC int32_t {meta.orig_kernel_name}(sycl::queue &stream, {gen_signature_with_full_args(meta)}, int algo_id);
+EXPORT_FUNC TT_ResultTy {meta.orig_kernel_name}_default(TT_StreamTy stream, {gen_signature_with_full_args(meta)});
+EXPORT_FUNC TT_ResultTy {meta.orig_kernel_name}(TT_StreamTy stream, {gen_signature_with_full_args(meta)}, int algo_id);
 EXPORT_FUNC void load_{meta.orig_kernel_name}();
 EXPORT_FUNC void unload_{meta.orig_kernel_name}();
+        """
+    return f"""
+TT_ResultTy {meta.orig_kernel_name}_default(TT_StreamTy stream, {gen_signature_with_full_args(meta)});
+TT_ResultTy {meta.orig_kernel_name}(TT_StreamTy stream, {gen_signature_with_full_args(meta)}, int algo_id);
+void load_{meta.orig_kernel_name}();
+void unload_{meta.orig_kernel_name}();
         """
 
 
 # generate dispatcher function for kernels with different meta-parameter and constant values
 def make_default_algo_kernel(meta: KernelLinkerMeta) -> str:
-    if is_cuda():
-        src = f"CUresult {meta.orig_kernel_name}_default(CUstream stream, {gen_signature_with_full_args(meta)}){{\n"
-        src += f"  return {meta.orig_kernel_name}(stream, {', '.join(meta.arg_names)}, 0);\n"
     if is_xpu():
-        src = f"EXPORT_FUNC int32_t {meta.orig_kernel_name}_default(sycl::queue &stream, {gen_signature_with_full_args(meta)}){{\n"
-        src += f"  return {meta.orig_kernel_name}(stream, {', '.join(meta.arg_names)}, 0);\n"
+        src = f"EXPORT_FUNC TT_ResultTy {meta.orig_kernel_name}_default(TT_StreamTy &stream, {gen_signature_with_full_args(meta)}){{\n"
+    else:
+        src = f"TT_ResultTy {meta.orig_kernel_name}_default(TT_StreamTy stream, {gen_signature_with_full_args(meta)}){{\n"
+    src += (f"  return {meta.orig_kernel_name}(stream, {', '.join(meta.arg_names)}, 0);\n")
     src += "}\n"
     return src
 
@@ -184,29 +186,24 @@ def make_default_algo_kernel(meta: KernelLinkerMeta) -> str:
 def make_kernel_hints_dispatcher(name: str, metas: Sequence[KernelLinkerMeta]) -> str:
     src = f"// launcher for: {name}\n"
     for meta in sorted(metas, key=lambda m: -m.num_specs):
-        if is_cuda():
-            src += f"CUresult {meta.orig_kernel_name}_{meta.sig_hash}_{meta.suffix}(CUstream stream, {gen_signature(meta)});\n"
-        if is_xpu():
-            src += f"int32_t {meta.orig_kernel_name}_{meta.sig_hash}_{meta.suffix}(sycl::queue &stream, {gen_signature(meta)});\n"
+        src += f"TT_ResultTy {meta.orig_kernel_name}_{meta.sig_hash}_{meta.suffix}(TT_StreamTy stream, {gen_signature(meta)});\n"
     src += "\n"
-    if is_cuda():
-        src += f"CUresult {name}(CUstream stream, {gen_signature_with_full_args(metas[-1])}){{"
-    if is_xpu():
-        src += f"int32_t {name}(sycl::queue &stream, {gen_signature_with_full_args(metas[-1])}){{"
+
+    src += (f"TT_ResultTy {name}(TT_StreamTy stream, {gen_signature_with_full_args(metas[-1])}){{")
     src += "\n"
     for meta in sorted(metas, key=lambda m: -m.num_specs):
-        if is_cuda():
-            cond_fn = (  #
-                lambda val, hint: f"({val} % {hint} == 0)"  #
-                if hint == 16  #
-                else f"({val} == {hint})"  #
-                if hint == 1  #
-                else None)
         if is_xpu():
             cond_fn = (  #
                 lambda val, hint: f"(reinterpret_cast<uintptr_t>({val}) % {hint} == 0)"  #
                 if val in ('A', 'B', 'C')  #
                 else f"({val} % {hint} == 0)"  #
+                if hint == 16  #
+                else f"({val} == {hint})"  #
+                if hint == 1  #
+                else None)
+        else:
+            cond_fn = (  #
+                lambda val, hint: f"((uintptr_t){val} % {hint} == 0)"  #
                 if hint == 16  #
                 else f"({val} == {hint})"  #
                 if hint == 1  #
@@ -224,10 +221,7 @@ def make_kernel_hints_dispatcher(name: str, metas: Sequence[KernelLinkerMeta]) -
         if is_xpu():
             src += f"    return {meta.orig_kernel_name}_{meta.sig_hash}_{meta.suffix}(stream, {', '.join(arg_names)});\n"
     src += "\n"
-    if is_cuda():
-        src += "  return CUDA_ERROR_INVALID_VALUE;\n"
-    if is_xpu():
-        src += "  return ZE_RESULT_ERROR_INVALID_ARGUMENT;\n"
+    src += "  return TT_ERROR_INVALID_VALUE;\n"
     src += "}\n"
 
     for mode in ["load", "unload"]:
@@ -244,10 +238,10 @@ def make_kernel_hints_dispatcher(name: str, metas: Sequence[KernelLinkerMeta]) -
 
 # generate dispatcher function for kernels with different meta-parameter and constant values
 def make_kernel_meta_const_dispatcher(meta: KernelLinkerMeta) -> str:
-    if is_cuda():
-        src = f"CUresult {meta.orig_kernel_name}(CUstream stream, {gen_signature_with_full_args(meta)}, int algo_id){{\n"
     if is_xpu():
-        src = f"EXPORT_FUNC int32_t {meta.orig_kernel_name}(sycl::queue &stream, {gen_signature_with_full_args(meta)}, int algo_id){{\n"
+        src = f"EXPORT_FUNC TT_ResultTy {meta.orig_kernel_name}(TT_StreamTy stream, {gen_signature_with_full_args(meta)}, int algo_id){{\n"
+    else:
+        src = f"TT_ResultTy {meta.orig_kernel_name}(TT_StreamTy stream, {gen_signature_with_full_args(meta)}, int algo_id){{\n"
     src += f"  assert (algo_id < (int)sizeof({meta.orig_kernel_name}_kernels));\n"
     if is_cuda():
         src += f"  return {meta.orig_kernel_name}_kernels[algo_id](stream, {', '.join(meta.arg_names)});\n"
@@ -260,10 +254,7 @@ def make_kernel_meta_const_dispatcher(meta: KernelLinkerMeta) -> str:
 # generate definition of function pointers of kernel dispatchers based on meta-parameter and constant values
 def make_func_pointers(names: str, meta: KernelLinkerMeta) -> str:
     # the table of hint dispatchers
-    if is_cuda():
-        src = f"typedef CUresult (*kernel_func_t)(CUstream stream, {gen_signature_with_full_args(meta)});\n"
-    if is_xpu():
-        src = f"typedef int32_t (*kernel_func_t)(sycl::queue &stream, {gen_signature_with_full_args(meta)});\n"
+    src = f"typedef TT_ResultTy (*kernel_func_t)(TT_StreamTy stream, {gen_signature_with_full_args(meta)});\n"
     src += f"kernel_func_t {meta.orig_kernel_name}_kernels[] = {{\n"
     for name in names:
         src += f"  {name},\n"
@@ -338,19 +329,9 @@ if __name__ == "__main__":
     meta = meta_lists[0][0]
     get_num_algos_decl = make_get_num_algos_decl(meta)
     global_decl = make_global_decl(meta)
+    backend_prelude = (Path(__file__).parent / "extra" / parser.backend_name / "link.h").read_text()
     with args.out.with_suffix(".h").open("w") as fp:
-        if is_cuda():
-            out = "#include <cuda.h>\n"
-        if is_xpu():
-            out = "#include <level_zero/ze_api.h>\n"
-            out += "#include <sycl/sycl.hpp>\n"
-            out += "#include <stdint.h>\n"
-            out += "#include <stdio.h>\n"
-            out += "#if defined(_WIN32)\n"
-            out += "#define EXPORT_FUNC __declspec(dllexport)\n"
-            out += "#else\n"
-            out += "#define EXPORT_FUNC\n"
-            out += "#endif\n"
+        out = backend_prelude
         out += "\n".join(algo_decls)
         out += "\n"
         out += get_num_algos_decl
@@ -366,48 +347,21 @@ if __name__ == "__main__":
     load_unload_def = make_kernel_load_def(names, meta)
     get_num_algos_def = make_get_num_algos_def(meta)
     default_algo_kernel = make_default_algo_kernel(meta)
-    if is_cuda():
-        with args.out.with_suffix(".c").open("w") as fp:
-            out = ""
-            out += "#include <cuda.h>\n"
-            out += "#include <stdint.h>\n"
-            out += "#include <assert.h>\n"
-            out += "\n"
-            out += "\n".join(defs)
-            out += "\n"
-            out += func_pointers_def
-            out += "\n"
-            out += get_num_algos_def
-            out += "\n"
-            out += meta_const_def
-            out += "\n"
-            out += load_unload_def
-            out += "\n"
-            out += default_algo_kernel
-            fp.write(out)
-    if is_xpu():
-        with args.out.with_suffix(".cpp").open("w") as fp:
-            out = ""
-            out += "#include <level_zero/ze_api.h>\n"
-            out += "#include <sycl/sycl.hpp>\n"
-            out += "#include <stdint.h>\n"
-            out += "#include <assert.h>\n"
-            out += "#include <cstdint>\n"
-            out += "#if defined(_WIN32)\n"
-            out += "#define EXPORT_FUNC __declspec(dllexport)\n"
-            out += "#else\n"
-            out += "#define EXPORT_FUNC\n"
-            out += "#endif\n"
-            out += "\n"
-            out += "\n".join(defs)
-            out += "\n"
-            out += func_pointers_def
-            out += "\n"
-            out += get_num_algos_def
-            out += "\n"
-            out += meta_const_def
-            out += "\n"
-            out += load_unload_def
-            out += "\n"
-            out += default_algo_kernel
-            fp.write(out)
+    ext = ".cpp" if is_xpu() else ".c"
+    with args.out.with_suffix(ext).open("w") as fp:
+        out = backend_prelude
+        out += "#include <stdint.h>\n"
+        out += "#include <assert.h>\n"
+        out += "\n"
+        out += "\n".join(defs)
+        out += "\n"
+        out += func_pointers_def
+        out += "\n"
+        out += get_num_algos_def
+        out += "\n"
+        out += meta_const_def
+        out += "\n"
+        out += load_unload_def
+        out += "\n"
+        out += default_algo_kernel
+        fp.write(out)
