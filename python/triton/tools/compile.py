@@ -188,6 +188,10 @@ def compile_kernel(args: CompileArgs):
     hex_ = str(binascii.hexlify(asm))[2:-1]
 
     ty_to_cpp = triton.runtime.driver.active.map_python_to_cpp_type
+    backend_name = target.backend
+    if is_xpu():
+        # instead of "xpu"
+        backend_name = "intel"
 
     params = {
         "kernel_name": func_name,
@@ -207,6 +211,7 @@ def compile_kernel(args: CompileArgs):
         "gridZ": grid[2],
         "_placeholder": "",
         "warp_size": target.warp_size,
+        "backend_name": backend_name,
     }
     if is_xpu():
         if args.generate_native_code:
@@ -221,10 +226,6 @@ def compile_kernel(args: CompileArgs):
             "format_name": format_name,
         }
     output_files = []
-    backend_name = target.backend
-    if is_xpu():
-        # instead of "xpu"
-        backend_name = "intel"
     template_dir = Path(__file__).parent / "extra" / backend_name
     for template_path in template_dir.glob('compile.*'):
         ext = template_path.suffix
