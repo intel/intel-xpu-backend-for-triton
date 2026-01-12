@@ -574,9 +574,11 @@ static inline void checkDevicePointer(DevicePtrInfo *ptr_info, int idx, const sy
     PyErr_Format(PyExc_ValueError,
                  "Cannot get memory properties for pointer argument (at %d, err=%d)", idx, res);
     ptr_info->valid = false;
-  }} else if (prop.type != ZE_MEMORY_TYPE_DEVICE) {{
+  }} else if (prop.type == ZE_MEMORY_TYPE_UNKNOWN) {{
+    // We can work with any memory, known to the driver:
+    // ZE_MEMORY_TYPE_DEVICE, ZE_MEMORY_TYPE_SHARED, ZE_MEMORY_TYPE_HOST
     PyErr_Format(PyExc_ValueError,
-                 "Pointer argument (at %d) doesn't reference XPU device memory (cpu tensor?)", idx);
+                 "Pointer argument (at %d) doesn't reference accessible memory.", idx);
     ptr_info->valid = false;
   }}
 }}
