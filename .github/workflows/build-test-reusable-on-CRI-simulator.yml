@@ -308,9 +308,22 @@ jobs:
         run: |
           echo "TRITON_TEST_CMD=${{ needs.build.outputs.test-triton-command }}" | tee -a $GITHUB_ENV
 
+      - name: Determine number of shards for current suite
+        run: |
+          SUITE="${{ matrix.loop.suite }}"
+          PARALLEL_SUITES="${{ env.PARALLEL_SUITES }}"
+
+          if echo "$PARALLEL_SUITES" | grep -qw "$SUITE"; then
+            NUM_SHARDS_FOR_SUITE="${{ env.NUM_SHARDS }}"
+          else
+            NUM_SHARDS_FOR_SUITE=0
+          fi
+
+          echo "NUM_SHARDS_FOR_SUITE=$NUM_SHARDS_FOR_SUITE" | tee -a $GITHUB_ENV
+
       - name: Run ${{ matrix.loop.suite }} tests
         run: |
-          export TRITON_TEST_SHARDS=${{ env.NUM_SHARDS }}
+          export TRITON_TEST_SHARDS=${{ env.NUM_SHARDS_FOR_SUITE }}
           export TRITON_TEST_SHARD_NUMBER=${{ matrix.loop.shard_id }}
           suite=${{ matrix.loop.suite }}
           ${{ env.TRITON_TEST_CMD }} --${suite//_/-}
