@@ -63,8 +63,9 @@ def make_default_opt_flags_intel(
     has_y_acc_in,
     constraints,
 ):
-    constraints_supported = ["block_m", "block_k", "split_k", "is_persistent", "epilogue_subtile", "num_stages", "max_allowable_mn"]
-    assert not any([c not in constraints_supported for c in constraints]), constraints.keys()
+    constraints_supported = {"block_m", "block_k", "split_k", "is_persistent", "epilogue_subtile", "num_stages", "max_allowable_mn", "num_warps"}
+    unsupported = set(constraints.keys()) - constraints_supported
+    assert not unsupported, f"Given unsupported constraint: {unsupported}"
     # tokens per slice
     if ragged_metadata is None:
         slice_size = m
