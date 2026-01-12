@@ -254,7 +254,9 @@ function build_pytorch {
     curl -k https://s3.amazonaws.com/ossci-windows/libuv-1.40.0-h8ffe710_0.tar.bz2 -o libuv-1.40.0-h8ffe710_0.tar.bz2
     mkdir libuv-1.40.0
     tar -xvjf libuv-1.40.0-h8ffe710_0.tar.bz2 -C libuv-1.40.0
-    export libuv_ROOT="$PYTORCH_PROJ/libuv-1.40.0"
+    export libuv_ROOT="$PYTORCH_PROJ/libuv-1.40.0/Library"
+    echo $libuv_ROOT
+    ls $libuv_ROOT
   fi
 
   USE_XCCL=1 USE_STATIC_MKL=1 python -m build --wheel --no-isolation
