@@ -255,6 +255,8 @@ function build_pytorch {
     mkdir libuv-1.40.0
     tar -xvjf libuv-1.40.0-h8ffe710_0.tar.bz2 -C libuv-1.40.0
     export libuv_ROOT="$PYTORCH_PROJ/libuv-1.40.0/Library"
+    # inspired by https://github.com/pytorch/pytorch/blob/main/.ci/pytorch/windows/internal/copy_cpu.bat
+    cp "$libuv_ROOT/bin/uv.dll" torch/lib/uv.dll
   fi
 
   USE_XCCL=1 USE_STATIC_MKL=1 python -m build --wheel --no-isolation
