@@ -160,6 +160,17 @@ jobs:
             python build_report.py $REPORTS/matmul-performance-base.csv $REPORTS/gemm-newshapes-cutlass-report.csv --benchmark gemm --compiler cutlass --param_cols "B,M,K,N" --tflops_col CUTLASS-TFlops --hbm_col "CUTLASS-GB/s" --tag $TAG
           fi
 
+      - name: Run Gluon GEMM kernel benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_benchmark.py') }}
+        run: |
+          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
+          cd benchmarks/triton_kernels_benchmark
+          python gemm_benchmark.py --reports $REPORTS --n_runs $N_RUNS
+          mv $REPORTS/matmul-performance.csv $REPORTS/matmul-performance-base.csv
+          source ../../scripts/capture-hw-details.sh
+          python build_report.py $REPORTS/matmul-performance-base.csv $REPORTS/gemm-newshapes-gluon-report.csv --benchmark gemm --compiler gluon --param_cols "B,M,K,N" --tflops_col Gluon-TFlops --hbm_col "Gluon-GB/s" --tag $TAG
+
+
       - name: Run Triton GEMM kernel benchmark - with tensor of pointer
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm_tensor_of_ptr_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_tensor_of_ptr_benchmark.py') }}
         run: |
