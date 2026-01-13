@@ -1291,3 +1291,33 @@ def test_gather_warp_shuffle(src_shape, indices_shape, axis, src_layout, indices
     kernel[(1, 1, 1)](src, indices, output)
 
     torch.testing.assert_close(output, ref, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("pinned", [True, False])
+def test_host_memory_access(device, pinned):
+    # This test verifies that Triton kernels can correctly access CPU pinned memory.
+    N = 1024
+    cpu_tensor = torch.arange(N, dtype=torch.float32)
+    if pinned:
+        cpu_tensor = cpu_tensor.pin_memory()
+
+    @triton.jit
+    def add_one_kernel(X, Y, N, BLOCK: tl.constexpr):
+        pid = tl.program_id(0)
+        offs = pid * BLOCK + tl.arange(0, BLOCK)
+        mask = offs < N
+        x = tl.load(X + offs, mask=mask)
+        y = x + 1.0
+        tl.store(Y + offs, y, mask=mask)
+
+    # Output tensor on device
+    out_tensor = torch.empty_like(cpu_tensor, device=device)
+
+    # Passing cpu_tensor directly - driver should handle the pinned memory pointer
+    BLOCK = 1024
+    if pinned:
+        add_one_kernel[(1, )](cpu_tensor, out_tensor, N, BLOCK=BLOCK)
+        assert torch.allclose(cpu_tensor + 1, out_tensor.cpu())
+    else:
+        with pytest.raises(ValueError, match="Pointer argument"):
+            add_one_kernel[(1, )](cpu_tensor, out_tensor, N, BLOCK=BLOCK)
