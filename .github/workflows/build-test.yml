@@ -110,7 +110,19 @@ jobs:
       matrix:
         python:
           - "3.10"
-        driver: ${{ fromJson((inputs.runner_label || '') == '' && '["rolling", "lts"]' || '["rolling"]') }}
+        driver: >-
+          ${{
+            fromJson(
+              (inputs.runner_label || '') == '' &&
+              (
+                github.event_name == 'push' ||
+                github.event_name == 'workflow_dispatch' ||
+                contains(github.event.pull_request.labels.*.name, 'lts')
+              ) &&
+              '["rolling", "lts"]' ||
+              '["rolling"]'
+            )
+          }}
 
     uses: ./.github/workflows/build-test-reusable.yml
     with:
