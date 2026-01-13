@@ -83,7 +83,7 @@ def extract_spill_size_from_zebin(file):
                                'Section .ze_info not found in zebin')
         text = zeinfo.data().decode('utf-8')
         match = SPILL_SIZE_RE.search(text)
-        if match:
+        if match is not None:
             return int(match.group(1))
     return 0
 
