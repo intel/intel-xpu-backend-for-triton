@@ -16,7 +16,6 @@ import triton.language as tl
 import triton_kernels_benchmark as benchmark_suite
 from triton_kernels_benchmark import xetla_kernel
 from triton_kernels_benchmark import cutlass_kernel
-from gluon_gemm_kernels import gluon_matmul_kernel_with_tensor_descriptors, gluon_matmul_kernel_with_tensor_descriptors_batched
 
 
 def get_matmul_autotune_configs() -> List[triton.Config]:
@@ -300,10 +299,8 @@ def get_benchmark(
     providers_filter: Optional[list[str]] = None,
     transpose_a=False,
     transpose_b=False,
-    triton_matmul_kernel=matmul_kernel_with_block_pointers,
-    triton_matmul_kernel_batched=matmul_kernel_with_block_pointers_batched,
-    gluon_matmul_kernel=gluon_matmul_kernel_with_tensor_descriptors,
-    gluon_matmul_kernel_batched=gluon_matmul_kernel_with_tensor_descriptors_batched,
+    matmul_kernel=matmul_kernel_with_block_pointers,
+    matmul_kernel_batched=matmul_kernel_with_block_pointers_batched,
     plot_name='matmul-performance',
 ):
     """
@@ -311,7 +308,6 @@ def get_benchmark(
     The benchmark can then be executed by calling the :code:`.run` method on the return value.
     """
     supported_providers = {
-        'gluon': 'Gluon',
         'triton': 'Triton',
         'onednn': 'OneDNN',
     }
@@ -363,7 +359,7 @@ def get_benchmark(
         if provider == 'onednn':
             _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: torch.matmul(torch_a, torch_b))
 
-        elif provider in ('triton', 'gluon'):
+        elif provider == 'triton':
             if len(a.shape) != len(b.shape):
                 raise AssertionError(f'Incompatible sizes {len(a.shape)} and {len(b.shape)}', )
             if len(a.shape) == 3:
@@ -372,23 +368,19 @@ def get_benchmark(
                 c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
             else:
                 raise AssertionError(f'Unexpected shape of length {len(a.shape)}')
-
-            kernel = triton_matmul_kernel if provider == 'triton' else gluon_matmul_kernel
-            batched_kernel = triton_matmul_kernel_batched if provider == 'triton' else gluon_matmul_kernel_batched
-
-            matmul_fn = lambda: matmul(
+            triton_fn = lambda: matmul(
                 a,
                 b,
                 c,
-                matmul_kernel=kernel,
-                matmul_kernel_batched=batched_kernel,
+                matmul_kernel=matmul_kernel,
+                matmul_kernel_batched=matmul_kernel_batched,
                 transpose_a=transpose_a,
                 transpose_b=transpose_b,
             )
             torch_fn = lambda: torch.matmul(torch_a, torch_b).to(torch.float32)
             rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
-            benchmark_suite.assert_close(matmul_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg=f'{provider} to torch')
-            _, min_ms, max_ms, mean_ms, cv = do_bench(matmul_fn)
+            benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
+            _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
 
         elif provider == 'xetla':
             if B == 1:

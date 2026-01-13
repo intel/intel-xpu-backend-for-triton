@@ -127,8 +127,8 @@ def get_benchmark(
 ):
     return gemm_benchmark.get_benchmark(
         providers_filter=providers_filter,
-        triton_matmul_kernel=matmul_kernel,
-        triton_matmul_kernel_batched=matmul_kernel_batched,
+        matmul_kernel=matmul_kernel,
+        matmul_kernel_batched=matmul_kernel_batched,
         plot_name='matmul-tensor-of-ptr-performance',
         transpose_a=transpose_a,
         transpose_b=transpose_b,

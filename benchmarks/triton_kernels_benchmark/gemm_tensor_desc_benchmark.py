@@ -120,8 +120,8 @@ def get_benchmark(
 ):
     return gemm_benchmark.get_benchmark(
         providers_filter=providers_filter,
-        triton_matmul_kernel=matmul_kernel_with_tensor_descriptors,
-        triton_matmul_kernel_batched=matmul_kernel_with_tensor_descriptors_batched,
+        matmul_kernel=matmul_kernel_with_tensor_descriptors,
+        matmul_kernel_batched=matmul_kernel_with_tensor_descriptors_batched,
         plot_name='matmul-tensor-desc-performance',
         transpose_a=transpose_a,
         transpose_b=transpose_b,
