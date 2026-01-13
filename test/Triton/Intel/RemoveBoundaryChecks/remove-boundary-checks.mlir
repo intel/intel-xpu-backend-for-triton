@@ -74,9 +74,9 @@ tt.func public @load_in_for_loop2(%load_ptr0: !tt.ptr<f16> {tt.divisibility = 16
     scf.for %z = %c0_i32 to %x step %c64_i32 iter_args() -> ()  : i32 {
       %ptr1 = tt.make_tensor_ptr %load_ptr0, [%c512_i64, %c64_i64, %c1024_i64], [%c65536_i64, %c1_i64, %c64_i64], [%x, %c0_i32, %z] {order = array<i32: 2, 0, 1>} : <tensor<1x64x64xf16>>
       //   a. boundaryCheck = 1 checks the block ptr offset at index 2 (%z)
-      //   b. boundaryCheck = 2 checks the block ptr offset at index 1 (%y)
-      // Check (a) is unnecessary because max(%z) + loadResType.shape[2] - 1 = 960 + 64 - 1 = 1023, which is less than 1024.
-      // Check (b) is unnecessary because max(0) + loadResType.shape[1] - 1 = 0 + 64 -1 = 63, which is less than 64.
+      //   b. boundaryCheck = 2 checks the block ptr offset at index 1 (%c0_i32)
+      // Check (a) is unnecessary because max(%z) + loadResType.shape[2] - 1 = 20 + 64 - 1 = 83, which is less than 1024.
+      // Check (b) is unnecessary because max(0) + loadResType.shape[1] - 1 = 0 + 64 - 1 = 63, which is less than 64.
       %load1 = tt.load %ptr1 {boundaryCheck = array<i32: 1, 2>} : !tt.ptr<tensor<1x64x64xf16>>
     }
   }
