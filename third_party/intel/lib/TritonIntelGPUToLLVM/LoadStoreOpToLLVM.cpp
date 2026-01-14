@@ -1547,7 +1547,7 @@ struct LoadOpToBlockIOConversion
               "TRITON_INTEL_2DBLOCK_MULTIPLE_C_MATRICES_PER_LOAD");
           if (!isTransposeRequired && !multipleCPerLoad) {
             assert(numPackedVals == 1 &&
-                   "invalud numPackedVals for DPAS C operand.");
+                   "invalid numPackedVals for DPAS C operand");
             tileHeight = dpasLayout.getDPASInstShapeC()[0];
             tileWidth = dpasLayout.getDPASInstShapeC()[1];
             vBlocks = 1;
