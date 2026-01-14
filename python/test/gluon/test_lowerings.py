@@ -121,8 +121,8 @@ def _reduce_layouts():
         ttgl.amd.AMDMFMALayout(version=2, instr_shape=[32, 32, 8], transposed=True, warps_per_cta=[1, 4]),
         ttgl.amd.AMDMFMALayout(version=3, instr_shape=[32, 32, 8], transposed=True, warps_per_cta=[1, 4]),
         ttgl.amd.AMDMFMALayout(version=4, instr_shape=[32, 32, 16], transposed=True, warps_per_cta=[1, 4]),
-        ttgl.amd.AMDWMMALayout(version=1, transposed=True, warps_per_cta=[1, 4]),
-        ttgl.amd.AMDWMMALayout(version=2, transposed=True, warps_per_cta=[1, 4]),
+        ttgl.amd.AMDWMMALayout(version=1, transposed=True, warp_bases=[[0, 1], [0, 2]]),
+        ttgl.amd.AMDWMMALayout(version=2, transposed=True, warp_bases=[[0, 1], [0, 2]]),
         ttgl.intel.IntelDPASLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=1,
                                    warps_per_cta=[4, 1], rep_cluster=[1, 1], threads_per_warp=32),
         ttgl.DotOperandLayout(
@@ -513,13 +513,13 @@ _mma_pairs = [
     ],
     # AMD WMMA v1 layouts
     [
-        ttgl.amd.AMDWMMALayout(version=1, transposed=True, warps_per_cta=[4, 4]),
-        ttgl.amd.AMDWMMALayout(version=1, transposed=True, warps_per_cta=[16, 1]),
+        ttgl.amd.AMDWMMALayout(version=1, transposed=True, warp_bases=[[0, 1], [0, 2], [1, 0], [2, 0]]),
+        ttgl.amd.AMDWMMALayout(version=1, transposed=True, warp_bases=[[1, 0], [2, 0], [4, 0], [8, 0]]),
     ],
     # AMD WMMA v2 layouts
     [
-        ttgl.amd.AMDWMMALayout(version=2, transposed=True, warps_per_cta=[4, 4]),
-        ttgl.amd.AMDWMMALayout(version=2, transposed=True, warps_per_cta=[16, 1]),
+        ttgl.amd.AMDWMMALayout(version=2, transposed=True, warp_bases=[[0, 1], [0, 2], [1, 0], [2, 0]]),
+        ttgl.amd.AMDWMMALayout(version=2, transposed=True, warp_bases=[[1, 0], [2, 0], [4, 0], [8, 0]]),
     ],
 ]
 
