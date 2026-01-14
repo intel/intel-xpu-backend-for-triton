@@ -166,6 +166,9 @@ def _reduce_cases():
                                                           ("float16", False)])
 @pytest.mark.parametrize("reduce_op", ["sum", "max"])
 def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, sanitize_overflow, reduce_op, device):
+    if is_xpu() and isinstance(src_layout,
+                               (ttgl.amd.AMDMFMALayout, ttgl.amd.AMDWMMALayout, ttgl.NVMMADistributedLayout)):
+        pytest.xfail("AMD and NVIDIA MMA layouts are not supported on Intel GPUs")
 
     @gluon.jit
     def _add(a, b):
@@ -530,7 +533,8 @@ _mma_pairs = [
                          [pair for pair in _mma_pairs if all(_is_layout_applicable(layout) for layout in pair)])
 def test_convert_mma2mma_layouts(M, N, mma_pair, dtype, device):
     src_layout, dst_layout = mma_pair
-    if is_xpu() and isinstance(src_layout, (ttgl.amd.AMDMFMALayout, ttgl.NVMMADistributedLayout)):
+    if is_xpu() and isinstance(src_layout,
+                               (ttgl.amd.AMDMFMALayout, ttgl.amd.AMDWMMALayout, ttgl.NVMMADistributedLayout)):
         pytest.xfail("AMD and NVIDIA MMA layouts are not supported on Intel GPUs")
 
     @gluon.jit
