@@ -121,8 +121,8 @@ def _reduce_layouts():
         ttgl.amd.AMDMFMALayout(version=2, instr_shape=[32, 32, 8], transposed=True, warps_per_cta=[1, 4]),
         ttgl.amd.AMDMFMALayout(version=3, instr_shape=[32, 32, 8], transposed=True, warps_per_cta=[1, 4]),
         ttgl.amd.AMDMFMALayout(version=4, instr_shape=[32, 32, 16], transposed=True, warps_per_cta=[1, 4]),
-        ttgl.amd.AMDWMMALayout(version=1, transposed=True, warps_per_cta=[1, 4]),
-        ttgl.amd.AMDWMMALayout(version=2, transposed=True, warps_per_cta=[1, 4]),
+        ttgl.amd.AMDWMMALayout(version=1, transposed=True, warp_bases=[[0, 1], [0, 2]]),
+        ttgl.amd.AMDWMMALayout(version=2, transposed=True, warp_bases=[[0, 1], [0, 2]]),
         ttgl.intel.IntelDPASLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=1,
                                    warps_per_cta=[4, 1], rep_cluster=[1, 1], threads_per_warp=32),
         ttgl.DotOperandLayout(
@@ -166,6 +166,9 @@ def _reduce_cases():
                                                           ("float16", False)])
 @pytest.mark.parametrize("reduce_op", ["sum", "max"])
 def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, sanitize_overflow, reduce_op, device):
+    if is_xpu() and isinstance(src_layout,
+                               (ttgl.amd.AMDMFMALayout, ttgl.amd.AMDWMMALayout, ttgl.NVMMADistributedLayout)):
+        pytest.xfail("AMD and NVIDIA MMA layouts are not supported on Intel GPUs")
 
     @gluon.jit
     def _add(a, b):
@@ -513,13 +516,13 @@ _mma_pairs = [
     ],
     # AMD WMMA v1 layouts
     [
-        ttgl.amd.AMDWMMALayout(version=1, transposed=True, warps_per_cta=[4, 4]),
-        ttgl.amd.AMDWMMALayout(version=1, transposed=True, warps_per_cta=[16, 1]),
+        ttgl.amd.AMDWMMALayout(version=1, transposed=True, warp_bases=[[0, 1], [0, 2], [1, 0], [2, 0]]),
+        ttgl.amd.AMDWMMALayout(version=1, transposed=True, warp_bases=[[1, 0], [2, 0], [4, 0], [8, 0]]),
     ],
     # AMD WMMA v2 layouts
     [
-        ttgl.amd.AMDWMMALayout(version=2, transposed=True, warps_per_cta=[4, 4]),
-        ttgl.amd.AMDWMMALayout(version=2, transposed=True, warps_per_cta=[16, 1]),
+        ttgl.amd.AMDWMMALayout(version=2, transposed=True, warp_bases=[[0, 1], [0, 2], [1, 0], [2, 0]]),
+        ttgl.amd.AMDWMMALayout(version=2, transposed=True, warp_bases=[[1, 0], [2, 0], [4, 0], [8, 0]]),
     ],
 ]
 
@@ -530,7 +533,8 @@ _mma_pairs = [
                          [pair for pair in _mma_pairs if all(_is_layout_applicable(layout) for layout in pair)])
 def test_convert_mma2mma_layouts(M, N, mma_pair, dtype, device):
     src_layout, dst_layout = mma_pair
-    if is_xpu() and isinstance(src_layout, (ttgl.amd.AMDMFMALayout, ttgl.NVMMADistributedLayout)):
+    if is_xpu() and isinstance(src_layout,
+                               (ttgl.amd.AMDMFMALayout, ttgl.amd.AMDWMMALayout, ttgl.NVMMADistributedLayout)):
         pytest.xfail("AMD and NVIDIA MMA layouts are not supported on Intel GPUs")
 
     @gluon.jit
