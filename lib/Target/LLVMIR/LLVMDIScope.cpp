@@ -1,4 +1,3 @@
-#include "lib/Target/LLVMIR/LLVMDIUtils.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/Pass/Pass.h"
@@ -20,7 +19,26 @@ namespace mlir {
 #define GEN_PASS_DEF_LLVMDISCOPE
 #include "triton/Target/LLVMIR/Passes.h.inc"
 
-using namespace LLVMDIUtils;
+namespace {
+
+/// Attempt to extract a filename for the given loc.
+FileLineColLoc extractFileLoc(Location loc) {
+  if (auto fileLoc = dyn_cast<FileLineColLoc>(loc))
+    return fileLoc;
+  if (auto nameLoc = dyn_cast<NameLoc>(loc))
+    return extractFileLoc(nameLoc.getChildLoc());
+  if (auto opaqueLoc = dyn_cast<OpaqueLoc>(loc))
+    return extractFileLoc(opaqueLoc.getFallbackLocation());
+  if (auto fusedLoc = dyn_cast<FusedLoc>(loc))
+    return extractFileLoc(fusedLoc.getLocations().front());
+  // Prefer the innermost callee for callsite locations.
+  if (auto csLoc = dyn_cast<CallSiteLoc>(loc))
+    return extractFileLoc(csLoc.getCallee());
+  StringAttr unknownFile = mlir::StringAttr::get(loc.getContext(), "<unknown>");
+  return mlir::FileLineColLoc::get(unknownFile, 0, 0);
+}
+
+} // anonymous namespace
 
 /// Add a debug info scope to LLVMFuncOp that are missing it.
 struct LLVMDIScopePass : public impl::LLVMDIScopeBase<LLVMDIScopePass> {
@@ -58,31 +76,28 @@ struct LLVMDIScopePass : public impl::LLVMDIScopeBase<LLVMDIScopePass> {
           context, llvm::sys::path::filename(inputFilePath),
           llvm::sys::path::parent_path(inputFilePath));
     }
+    auto subroutineTypeAttr =
+        LLVM::DISubroutineTypeAttr::get(context, llvm::dwarf::DW_CC_normal, {});
 
     // Figure out debug information (`subprogramFlags` and `compileUnitAttr`) to
     // attach to the function definition / declaration. External functions are
     // declarations only, and are defined in a different compile unit, so mark
     // them appropriately in `subprogramFlags`, and set an empty
     // `compileUnitAttr`.
-    bool extractDILocalVar =
-        triton::tools::getBoolEnv("LLVM_EXTRACT_DI_LOCAL_VARIABLES");
-    bool disableLineInfo =
-        triton::tools::getBoolEnv("TRITON_DISABLE_LINE_INFO");
-    DistinctAttr recId; // Recursive ID to mark the DICompileUnitAttr and
-                        // DISubprogramAttr that are recursively defined
+    DistinctAttr distinctId;
     auto subprogramFlags = LLVM::DISubprogramFlags::Optimized;
     if (!funcOp.isExternal()) {
-      recId = mlir::DistinctAttr::create(mlir::UnitAttr::get(context));
+      distinctId = mlir::DistinctAttr::create(mlir::UnitAttr::get(context));
       if (!compileUnitAttr) {
         compileUnitAttr = LLVM::DICompileUnitAttr::get(
-            recId, llvm::dwarf::DW_LANG_C, fileAttr,
+            distinctId, llvm::dwarf::DW_LANG_C, fileAttr,
             StringAttr::get(context, "triton"),
             /*isOptimized=*/true,
-            extractDILocalVar
+            triton::tools::getBoolEnv("LLVM_EXTRACT_DI_LOCAL_VARIABLES")
                 ? LLVM::DIEmissionKind::Full
                 : LLVM::DIEmissionKind::
                       LineTablesOnly); // DIEmissionKind::Full is required by
-                                       // emitting ptx with dbg-metadata
+                                       // emiting ptx with dbg-metadata
                                        // (otherwise assertion fail)
       }
       subprogramFlags = subprogramFlags | LLVM::DISubprogramFlags::Definition;
@@ -90,52 +105,15 @@ struct LLVMDIScopePass : public impl::LLVMDIScopeBase<LLVMDIScopePass> {
       compileUnitAttr = {};
     }
 
-    llvm::SmallVector<mlir::LLVM::DITypeAttr> types;
-    mlir::DataLayout dl(
-        funcOp.getOperation()->getParentOfType<mlir::ModuleOp>());
-    for (auto resTy : funcOp.getResultTypes()) {
-      LLVM::DITypeAttr tyAttr = convertType(context, resTy);
-      types.push_back(tyAttr);
-    }
-    // If no return type then add a null type as a place holder for that.
-    if (types.empty())
-      types.push_back(mlir::LLVM::DINullTypeAttr::get(context));
-
-    // Only pointer type and scalar types are supported for now
-    OpBuilder builder(context);
-    for (auto [idx, inTy] : llvm::enumerate(funcOp.getArgumentTypes())) {
-      if (auto ptrTy = dyn_cast<LLVM::LLVMPointerType>(inTy)) {
-        auto pointeeTy =
-            funcOp.getArgAttrOfType<TypeAttr>(idx, "tt.pointee_type");
-        auto sizeInBits = dl.getTypeSizeInBits(ptrTy);
-        // If no valid pointee type for this function argument, use null type as
-        // unknown type.
-        mlir::Type elTy =
-            pointeeTy ? pointeeTy.getValue() : builder.getNoneType();
-        LLVM::DITypeAttr tyAttr =
-            convertPtrType(context, ptrTy, elTy, sizeInBits);
-        types.push_back(tyAttr);
-      } else {
-        // Here assume remaining inTys are only scalar types
-        assert(inTy.isIntOrFloat() && "Expected scalar types");
-        LLVM::DITypeAttr tyAttr = convertType(context, inTy);
-        types.push_back(tyAttr);
-      }
-    }
-
-    auto subroutineTypeAttr = LLVM::DISubroutineTypeAttr::get(
-        context, llvm::dwarf::DW_CC_normal, types);
-
     StringAttr funcNameAttr = funcOp.getNameAttr();
-
-    bool isRecSelf = !disableLineInfo && extractDILocalVar;
-    auto id = mlir::DistinctAttr::create(mlir::UnitAttr::get(context));
+    // Note that scopeline is set differently from LLVM's
+    // DIScopeForLLVMFuncOpPass. I don't find reasons why scopeline should be
+    // the column offset
     auto subprogramAttr = LLVM::DISubprogramAttr::get(
-        context, recId, isRecSelf, id, compileUnitAttr, fileAttr, funcNameAttr,
-        funcNameAttr, fileAttr,
-        /*line=*/line, /*scopeline=*/line, subprogramFlags, subroutineTypeAttr,
-        /*retainNodes=*/{}, /*annotations=*/{});
-
+        context, distinctId, compileUnitAttr, fileAttr, funcNameAttr,
+        funcNameAttr, fileAttr, /*line=*/line, /*scopeline=*/line,
+        subprogramFlags, subroutineTypeAttr, /*retainNodes=*/{},
+        /*annotations=*/{});
     funcOp->setLoc(FusedLoc::get(context, {loc}, subprogramAttr));
   }
 
@@ -159,7 +137,7 @@ struct LLVMDIScopePass : public impl::LLVMDIScopeBase<LLVMDIScopePass> {
       }
 
       // Build a DIFile for this leaf location
-      FileLineColLoc fileLine = extractFileLoc(loc, /*getCaller=*/false);
+      FileLineColLoc fileLine = extractFileLoc(loc);
       StringRef inputFilePath = fileLine.getFilename().getValue();
       LLVM::DIFileAttr fileAttr =
           LLVM::DIFileAttr::get(ctx, llvm::sys::path::filename(inputFilePath),
