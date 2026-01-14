@@ -6,7 +6,7 @@ import torch
 import csv
 from dataclasses import dataclass
 import inspect
-from .target_info import is_hip, is_cuda, get_cdna_version
+from .target_info import is_hip, is_xpu, is_cuda, get_cdna_version
 
 
 @dataclass
@@ -84,9 +84,9 @@ def compute_roofline(*args, \
 # -- plot roofline --
 
 
-def get_memset_tbps():
+def get_memset_tbps(device="cuda"):
     n_bytes = 1 << 32
-    buf = torch.empty(n_bytes, device="cuda", dtype=torch.uint8)
+    buf = torch.empty(n_bytes, device=device, dtype=torch.uint8)
     stream0 = ctypes.c_void_p(0)
 
     if is_cuda():
@@ -103,24 +103,76 @@ def get_memset_tbps():
         memset_argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_size_t, ctypes.c_void_p]
         dptr = ctypes.c_void_p(buf.data_ptr())
         value = ctypes.c_int(0)
+    elif is_xpu():
+        import sys
+        if sys.platform.startswith("win32"):
+            libname = "ze_loader.dll"
+        else:
+            libname = "libze_loader.so"
+        init_name = "zeInit"
+        memset_name = "zeCommandListAppendMemoryFill"
+        memset_argtypes = None
+
+        lib = ctypes.CDLL(libname)
+        lib.zeInit(0)
+        driver_count = ctypes.c_uint32(1)
+        driver = ctypes.c_void_p()
+        lib.zeDriverGet(ctypes.byref(driver_count), ctypes.byref(driver))
+
+        device_count = ctypes.c_uint32(1)
+        ze_device = ctypes.c_void_p()
+        lib.zeDeviceGet(driver, ctypes.byref(device_count), ctypes.byref(ze_device))
+
+        class ze_context_desc_t(ctypes.Structure):
+            _fields_ = [("stype", ctypes.c_int), ("pNext", ctypes.c_void_p), ("flags", ctypes.c_uint32)]
+
+        ctx_desc = ze_context_desc_t(stype=0x1, pNext=None, flags=0)
+        context = ctypes.c_void_p()
+        lib.zeContextCreate(driver, ctypes.byref(ctx_desc), ctypes.byref(context))
+
+        class ze_command_queue_desc_t(ctypes.Structure):
+            _fields_ = [("stype", ctypes.c_int), ("pNext", ctypes.c_void_p), ("ordinal", ctypes.c_uint32),
+                        ("index", ctypes.c_uint32), ("flags", ctypes.c_uint32), ("mode", ctypes.c_int),
+                        ("priority", ctypes.c_int)]
+
+        queue_desc = ze_command_queue_desc_t(stype=0xf, pNext=None, ordinal=0, index=0, flags=0, mode=0, priority=0)
+        cmd_list = ctypes.c_void_p()
+        lib.zeCommandListCreateImmediate(context, ze_device, ctypes.byref(queue_desc), ctypes.byref(cmd_list))
+
+        ze_memfill = lib.zeCommandListAppendMemoryFill
+        ze_memfill.argtypes = [
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_void_p,
+            ctypes.c_uint32, ctypes.c_void_p
+        ]
+        ze_memfill.restype = ctypes.c_int
+
+        dptr = ctypes.c_void_p(buf.data_ptr())
+        pattern = ctypes.c_ubyte(0)
+        pattern_ptr = ctypes.pointer(pattern)
+        value = ctypes.c_ubyte(0)
+
+        def memset_fn(dptr, value, size, stream):
+            return ze_memfill(cmd_list, dptr, pattern_ptr, ctypes.c_size_t(1), size, None, 0, None)
+
     else:
-        raise RuntimeError("Unsupported platform: neither CUDA nor ROCm detected")
+        raise RuntimeError("Unsupported platform: neither CUDA, ROCm, nor XPU detected")
 
-    lib = ctypes.CDLL(libname)
+    if not is_xpu():
+        lib = ctypes.CDLL(libname)
 
-    # optional init
-    if hasattr(lib, init_name):
-        init_fn = getattr(lib, init_name)
-        init_fn.argtypes = [ctypes.c_uint]
-        init_fn.restype = ctypes.c_int
-        init_fn(0)
+        # optional init
+        if hasattr(lib, init_name):
+            init_fn = getattr(lib, init_name)
+            init_fn.argtypes = [ctypes.c_uint]
+            init_fn.restype = ctypes.c_int
+            init_fn(0)
 
-    if not hasattr(lib, memset_name):
-        raise RuntimeError(f"{memset_name} not found in {libname}")
+        if not hasattr(lib, memset_name):
+            raise RuntimeError(f"{memset_name} not found in {libname}")
 
-    memset_fn = getattr(lib, memset_name)
-    memset_fn.argtypes = memset_argtypes
-    memset_fn.restype = ctypes.c_int
+        memset_fn = getattr(lib, memset_name)
+        memset_fn.argtypes = memset_argtypes
+        memset_fn.restype = ctypes.c_int
 
     def fn():
         err = memset_fn(dptr, value, ctypes.c_size_t(n_bytes), stream0)
