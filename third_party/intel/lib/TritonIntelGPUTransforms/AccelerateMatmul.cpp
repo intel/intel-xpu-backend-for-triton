@@ -193,41 +193,7 @@ public:
             ? std::make_optional(2)
             : std::nullopt);
 
-    if (!dpasCap.isATSM()) {
-      // Adjust repCluster size for arch after ATSM which has 2d block IO
-      // capability.
-      unsigned dpasElemBitWidths =
-          oldAType.getElementType().getIntOrFloatBitWidth();
-
-      // Enlarge the repCluster size to use the large 2D load for A and B
-      // operands.
-      unsigned maxRepClusterM =
-          PVC_2D_LOAD_MAXIMUM_NUMBER_OF_ROWS / dpasCap.repeatCount;
-      SmallVector<int64_t> repA =
-          dpasEnc.getDPASRepetitions(oldAType.getShape(), 0);
-      unsigned repClusterDimM =
-          std::min(maxRepClusterM, static_cast<unsigned>(repA[1]));
-
-      unsigned maxRepClusterN =
-          PVC_2D_LOAD_MAXIMUM_BYTES_OF_COLS /
-          ((dpasElemBitWidths / 8) * dpasCap.executionSize);
-      SmallVector<int64_t> repB =
-          dpasEnc.getDPASRepetitions(oldBType.getShape(), 1);
-      unsigned repClusterDimN =
-          std::min(maxRepClusterN, static_cast<unsigned>(repB[2]));
-      repCluster[rank - 2] = repClusterDimM;
-      repCluster[rank - 1] = repClusterDimN;
-
-      dpasEnc = ttgi::DpasEncodingAttr::get(
-          oldRetType.getContext(), repeatCount, dpasCap.systolicDepth,
-          dpasCap.executionSize, opsPerChan, warpsPerTile, repCluster,
-          threadsPerWarp,
-          dpasType == ttgi::DPASEngineTypeXe3P::FP32_FP32_FP4_FP4
-              ? std::make_optional(2)
-              : std::nullopt);
-    }
-
-    auto newRetType =
+    RankedTensorType newRetType =
         RankedTensorType::get(retShape, oldRetType.getElementType(), dpasEnc);
 
     // convert accumulator

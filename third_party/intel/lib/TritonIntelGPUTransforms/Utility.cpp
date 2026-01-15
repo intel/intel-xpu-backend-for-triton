@@ -459,9 +459,17 @@ calculateRepCluster(unsigned capRepeatCount, unsigned capSystolicDepth,
   if (capExecutionSize == 16) {
     unsigned dpasElemBitWidths = a_bitwidth;
 
-    // We are upcasting FP8 to FP16
+#if 0
+    // FIXME: On Xe3P we don't need to upcast fp8 to fp16 because there is
+    // native support in DPAS for tensor that have fp8 data types as their element type.
+    // We should avoid passing is_FP8 to this function, just pass the element type of
+    // the A operand instead, and in this function determine whether the target architecture
+    // has the DPAS with fp8 support flag (on the module).
+
+    // We are upcasting FP8 to FP16.
     if (is_FP8)
       dpasElemBitWidths = 2 * dpasElemBitWidths;
+#endif
 
     // Enlarge the repCluster size to use the large 2D load for A and B
     // operands.
