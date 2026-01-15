@@ -11,7 +11,6 @@ add_triton_library(TritonIntelGPUToLLVM
     LoadStoreOpToLLVM.cpp
     PrintOpToLLVM.cpp
     ReduceOpToLLVM.cpp
-    TritonGPUToLLVM.cpp
     SPMDOpToLLVM.cpp
     SPIRVTargetInfo.cpp
     TargetInfo.cpp
@@ -19,6 +18,7 @@ add_triton_library(TritonIntelGPUToLLVM
     TritonGPUToLLVM.cpp
     TypeConverter.cpp
     Utility.cpp
+    WarpIdOpToLLVM.cpp
     XeAsmFormat.cpp
 
     DEPENDS
