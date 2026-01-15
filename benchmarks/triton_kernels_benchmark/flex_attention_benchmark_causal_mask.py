@@ -111,6 +111,7 @@ if 'B580' in torch.xpu.get_device_name():
             # Multi-query attention. H_kv equals 1
             (128, 1, 512, 1024 + 128 + 512, 576, 512),  # Append shapes of Deepseek-v3
             # AssertionError: Not equal to tolerance rtol=0.001, atol=0.01
+
         ] if fa_kernel_mode != 'bwd' else []) + ([  #
             # Shapes only for bwd
             [h, h, seq_len, seq_len, 128, 128]
