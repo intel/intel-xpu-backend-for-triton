@@ -75,60 +75,69 @@ convertActivityToMetric(xpupti::Pti_Activity *activity) {
   return metric;
 }
 
-uint32_t
-processActivityKernel(XpuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
-                      XpuptiProfiler::ApiExternIdSet &apiExternIds,
-                      std::set<Data *> &dataSet,
-                      xpupti::Pti_Activity *activity) {
+uint32_t processActivityKernel(
+    XpuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
+    XpuptiProfiler::ExternIdToStateMap &externIdToState,
+    std::map<uint64_t, std::reference_wrapper<XpuptiProfiler::ExternIdState>>
+        &externIdToStateCache,
+    std::set<Data *> &dataSet, xpupti::Pti_Activity *activity) {
   auto *kernel = reinterpret_cast<pti_view_record_kernel *>(activity);
   auto correlationId = kernel->_correlation_id;
-  if (/*Not a valid context*/ !corrIdToExternId.contain(correlationId)) {
+  size_t parentId = 0;
+  if (!/*not valid*/ corrIdToExternId.withRead(
+          correlationId, [&](const size_t &value) { parentId = value; })) {
+    corrIdToExternId.erase(correlationId);
     return correlationId;
   }
-  auto [parentId, numInstances] = corrIdToExternId.at(correlationId);
   if (true) {
     // Non-graph kernels
+    bool isApiExternId = false;
+    externIdToState.withRead(parentId,
+                             [&](const XpuptiProfiler::ExternIdState &state) {
+                               isApiExternId = state.isApiExternId;
+                             });
+    // Do not share the same Metric instance across multiple Data objects.
+    // Otherwise, updating one Data will mutate the Metric observed by others
+    // (counts will incorrectly compound with the number of active sessions).
     for (auto *data : dataSet) {
-      auto scopeId = parentId;
-      if (apiExternIds.contain(scopeId)) {
-        // It's triggered by a CUDA op but not triton op
-        scopeId = data->addOp(parentId, kernel->_name);
+      if (auto metric = convertActivityToMetric(activity)) {
+        if (isApiExternId) {
+          data->addOpAndMetric(parentId, kernel->_name, metric);
+        } else {
+          data->addMetric(parentId, metric);
+        }
       }
-      data->addMetric(scopeId, convertActivityToMetric(activity));
     }
+    externIdToState.erase(parentId);
+    corrIdToExternId.erase(correlationId);
   } else {
     // Graph kernels
     // A single graph launch can trigger multiple kernels.
     // Our solution is to construct the following maps:
     // --- Application threads ---
-    // 1. graphId -> numKernels
-    // 2. graphExecId -> graphId
+    // If graph creation has been captured:
+    // - parentId, nodeId -> launch context + capture context
+    // Otherwise:
+    // - parentId -> launch context
     // --- CUPTI thread ---
-    // 3. corrId -> numKernels
-    for (auto *data : dataSet) {
-      auto externId = data->addOp(parentId, kernel->_name);
-      data->addMetric(externId, convertActivityToMetric(activity));
-    }
-  }
-  apiExternIds.erase(parentId);
-  --numInstances;
-  if (numInstances == 0) {
-    corrIdToExternId.erase(correlationId);
-  } else {
-    corrIdToExternId[correlationId].second = numInstances;
+    // - corrId -> numNodes
+    // FIXME: enable it for XPU
   }
   return correlationId;
 }
 
-uint32_t processActivity(XpuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
-                         XpuptiProfiler::ApiExternIdSet &apiExternIds,
-                         std::set<Data *> &dataSet,
-                         xpupti::Pti_Activity *activity) {
+uint32_t processActivity(
+    XpuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
+    XpuptiProfiler::ExternIdToStateMap &externIdToState,
+    std::map<uint64_t, std::reference_wrapper<XpuptiProfiler::ExternIdState>>
+        &externIdToStateCache,
+    std::set<Data *> &dataSet, xpupti::Pti_Activity *activity) {
   auto correlationId = 0;
   switch (activity->_view_kind) {
   case PTI_VIEW_DEVICE_GPU_KERNEL: {
-    correlationId = processActivityKernel(corrIdToExternId, apiExternIds,
-                                          dataSet, activity);
+    correlationId =
+        processActivityKernel(corrIdToExternId, externIdToState,
+                              externIdToStateCache, dataSet, activity);
     break;
   }
   default:
@@ -200,12 +209,15 @@ void XpuptiProfiler::XpuptiProfilerPimpl::completeBuffer(uint8_t *buffer,
   uint32_t maxCorrelationId = 0;
   pti_result status;
   xpupti::Pti_Activity *activity = nullptr;
+  std::map<uint64_t, std::reference_wrapper<XpuptiProfiler::ExternIdState>>
+      externIdToStateCache;
   do {
     status = xpupti::viewGetNextRecord<true>(buffer, validSize, &activity);
     if (status == pti_result::PTI_SUCCESS) {
       auto correlationId =
           processActivity(profiler.correlation.corrIdToExternId,
-                          profiler.correlation.apiExternIds, dataSet, activity);
+                          profiler.correlation.externIdToState,
+                          externIdToStateCache, dataSet, activity);
       // Log latest completed correlation id.  Used to ensure we have flushed
       // all data on stop
       maxCorrelationId = std::max<uint64_t>(maxCorrelationId, correlationId);
@@ -400,7 +412,7 @@ void XpuptiProfiler::XpuptiProfilerPimpl::doFlush() {
   }
 
   profiler.correlation.flush(
-      /*maxRetries=*/100, /*sleepMs=*/10,
+      /*maxRetries=*/100, /*sleepUs=*/10,
       /*flush=*/[]() { xpupti::viewFlushAll<true>(); });
 }
 

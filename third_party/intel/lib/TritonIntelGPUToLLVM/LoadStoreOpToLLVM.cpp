@@ -314,9 +314,13 @@ struct LoadStoreConversionBase {
       return !op.getIsVolatile() && op.getCache() == CacheModifier::NONE;
     }
 
-    if constexpr (std::is_same_v<OpType, StoreOp>)
-      if (!triton::tools::getBoolEnv("TRITON_INTEL_PREDICATED_STORE"))
+    if constexpr (std::is_same_v<OpType, StoreOp>) {
+      std::optional<bool> usePredicatedStore =
+          mlir::triton::tools::isEnvValueBool(
+              mlir::triton::tools::getStrEnv("TRITON_INTEL_PREDICATED_STORE"));
+      if (usePredicatedStore.has_value() && !usePredicatedStore.value())
         return false;
+    }
 
     return op.getCache() == CacheModifier::NONE;
   }
