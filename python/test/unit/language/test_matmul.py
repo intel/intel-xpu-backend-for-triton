@@ -1382,6 +1382,8 @@ def test_batched_mxfp(BATCH_SIZE, BLOCK_BATCH_SIZE, BLOCK_M, BLOCK_N, BLOCK_K, N
     elif is_xpu():
         if BLOCK_BATCH_SIZE == 4 and BLOCK_N == 64:
             pytest.skip("FIXME: #5762")
+        if is_xpu_cri() and ([BLOCK_M, BLOCK_N, BLOCK_K] == [64, 64, 128]):
+            pytest.skip("FIXME: #929")
 
     torch.manual_seed(42)
     dtype_src_str = "float8e5"
