@@ -666,6 +666,9 @@ run_liger_install() {
 
   if ! [ -d "./Liger-Kernel" ]; then
     git clone https://github.com/linkedin/Liger-Kernel
+    cd Liger-Kernel
+    git apply ../benchmarks/third_party/liger/liger-fix.patch
+    cd ..
   fi
 
   if ! pip list | grep "liger_kernel" ; then
