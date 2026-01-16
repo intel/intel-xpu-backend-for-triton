@@ -70,6 +70,7 @@ void Session::activate() {
 void Session::deactivate() {
   profiler->flush();
   profiler->unregisterData(data.get());
+  data->clearCache();
 }
 
 void Session::finalize(const std::string &outputFormat) {

@@ -7,16 +7,12 @@
 #include "Session/Session.h"
 #include "Utility/Atomic.h"
 #include "Utility/Map.h"
-#include "Utility/Table.h"
 
 #include <atomic>
 #include <chrono>
-#include <cstdint>
 #include <deque>
-#include <map>
 #include <thread>
 #include <unordered_map>
-#include <vector>
 
 namespace proton {
 
@@ -36,44 +32,60 @@ public:
 
   struct ExternIdState {
     // ----non-graph launch fields----
-    DataToEntryMap dataToEntry;
-    // Sometimes the kernel name cannot be retrieved in application threads
-    // for reasons like uninitialize CUDA context.
-    bool isMissingName{true};
+    // If graphNodeIdToScopes is empty, this externId is non-graph launch.
+    // For non-graph launches, we only need to track whether the externId
+    // itself is API-originated.
+    bool isApiExternId{false};
     // ----graph launch fields----
     // For graph launches, the launch correlation id fans out into multiple
     // kernel activity records. We track the expected fanout here and keep
     // updating it when we have processed each kernel activity record.
     size_t numNodes{1};
 
-    struct GraphNodeState {
+    struct GraphNodeScopes {
       // If the node is launched as a metric kernel, ignore it's timing data.
       bool isMetricNode{false};
-      bool isMissingName{true};
+      bool isApiNode{false};
 
-      void setEntry(Data *data, const DataEntry &entry) {
-        dataToEntry.insert_or_assign(data, entry);
+      void setScopeId(Data *data, size_t scopeId) {
+        if (singleData == nullptr || singleData == data) {
+          singleData = data;
+          singleScopeId = scopeId;
+          return;
+        }
+        if (multiDataToScopeId.empty())
+          multiDataToScopeId.reserve(2);
+        multiDataToScopeId[data] = scopeId;
       }
 
-      const DataEntry *findEntry(Data *data) const {
-        auto it = dataToEntry.find(data);
-        if (it == dataToEntry.end())
+      const size_t *findScopeId(Data *data) const {
+        if (singleData == data)
+          return &singleScopeId;
+        if (multiDataToScopeId.empty())
+          return nullptr;
+        auto it = multiDataToScopeId.find(data);
+        if (it == multiDataToScopeId.end())
           return nullptr;
         return &it->second;
       }
 
-      template <typename FnT> void forEachEntry(FnT &&fn) {
-        for (auto &[data, entry] : dataToEntry)
-          fn(data, entry);
+      template <typename FnT> void forEachScopeId(FnT &&fn) const {
+        if (singleData != nullptr)
+          fn(singleData, singleScopeId);
+        for (const auto &[data, scopeId] : multiDataToScopeId)
+          fn(data, scopeId);
       }
 
-      DataToEntryMap dataToEntry;
+    private:
+      // In most cases, a graph node is only associated with one Data object.
+      // So we optimize the hot path here.
+      Data *singleData{nullptr};
+      size_t singleScopeId{0};
+      std::unordered_map<Data *, size_t> multiDataToScopeId;
     };
 
-    using GraphNodeStateTable = RangeTable<GraphNodeState>;
-
-    // graphNodeId -> (per-Data entry)
-    GraphNodeStateTable graphNodeIdToState;
+    // graphNodeId -> (per-Data scopeId + API-originated flag)
+    std::unordered_map<uint64_t, GraphNodeScopes> graphNodeIdToScopes;
   };
 
   // TODO(Keren): replace `Data *` with `dataId` to avoid pointer recycling
@@ -90,16 +102,14 @@ public:
 protected:
   // OpInterface
   void startOp(const Scope &scope) override {
+    this->correlation.pushExternId(scope.scopeId);
     this->threadState.scopeStack.push_back(scope);
-    for (auto *data : dataSet) {
-      auto entry = data->addOp(scope.name);
-      threadState.dataToEntry.insert_or_assign(data, entry);
-    }
+    for (auto data : getDataSet())
+      data->addOp(scope.scopeId, scope.name);
   }
-
   void stopOp(const Scope &scope) override {
     this->threadState.scopeStack.pop_back();
-    threadState.dataToEntry.clear();
+    this->correlation.popExternId();
   }
 
   // Profiler
@@ -116,27 +126,29 @@ protected:
   struct ThreadState {
     ConcreteProfilerT &profiler;
     SessionManager &sessionManager = SessionManager::instance();
+    size_t opId{Scope::DummyScopeId};
     std::vector<Scope> scopeStack; // Used for nvtx range or triton op tracking
-    DataToEntryMap dataToEntry;
-    bool isApiExternOp{false};
+    bool isApiExternId{false};
     bool isStreamCapturing{false};
     bool isMetricKernelLaunching{false};
 
     ThreadState(ConcreteProfilerT &profiler) : profiler(profiler) {}
 
-    void enterOp(const Scope &scope) {
+    void enterOp() {
       if (profiler.isOpInProgress()) // Already in a triton op
         return;
       // Enter a new GPU API op
-      isApiExternOp = true;
-      profiler.enterOp(scope);
+      isApiExternId = true;
+      opId = Scope::getNewScopeId();
+      profiler.enterOp(Scope(opId));
+      profiler.correlation.setApiExternId(opId);
     }
 
     void exitOp() {
-      if (!profiler.isOpInProgress() || !isApiExternOp)
+      if (!profiler.isOpInProgress() || !isApiExternId)
         return;
-      profiler.exitOp(scopeStack.back());
-      isApiExternOp = false;
+      profiler.exitOp(Scope(opId));
+      isApiExternId = false;
     }
 
     void enterScope(const std::string &name) {
@@ -156,28 +168,45 @@ protected:
     std::atomic<uint64_t> maxCompletedCorrelationId{0};
     // Mapping from a native profiler correlation id to an external id.
     CorrIdToExternIdMap corrIdToExternId;
-    // Mapping from an external id to graph-node states
+    // Mapping from an external id to graph-node scopes + API-extern-id flags.
     ExternIdToStateMap externIdToState;
+    static thread_local std::deque<size_t> externIdQueue;
 
     Correlation() = default;
 
-    void submit(uint64_t correlationId) {
+    void submit(const uint64_t correlationId) {
       atomicMax(maxSubmittedCorrelationId, correlationId);
     }
 
-    void complete(uint64_t correlationId) {
+    void complete(const uint64_t correlationId) {
       atomicMax(maxCompletedCorrelationId, correlationId);
     }
 
+    void pushExternId(size_t externId) { externIdQueue.push_back(externId); }
+
+    void popExternId() { externIdQueue.pop_front(); }
+
     // Correlate the correlationId with the last externId
-    void correlate(uint64_t correlationId, size_t externId, size_t numNodes,
-                   bool isMissingName, const DataToEntryMap &dataToEntry) {
+    void correlate(uint64_t correlationId, size_t numNodes) {
+      if (externIdQueue.empty())
+        return;
+      const auto externId = externIdQueue.back();
       corrIdToExternId.insert(correlationId, externId);
-      externIdToState.upsert(externId, [&](ExternIdState &state) {
-        state.numNodes = numNodes;
-        state.dataToEntry = dataToEntry;
-        state.isMissingName = isMissingName;
+      externIdToState.upsert(
+          externId, [&](ExternIdState &state) { state.numNodes = numNodes; });
+    }
+
+    bool isApiExternId(size_t externId) const {
+      bool isApi = false;
+      externIdToState.withRead(externId, [&](const ExternIdState &state) {
+        isApi = state.isApiExternId;
       });
+      return isApi;
+    }
+
+    void setApiExternId(size_t externId) {
+      externIdToState.upsert(
+          externId, [&](ExternIdState &state) { state.isApiExternId = true; });
     }
 
     template <typename FlushFnT>
@@ -228,19 +257,9 @@ protected:
         // Populate tensor metrics
         auto tensorMetricsHost = metricBuffer->collectTensorMetrics(
             tensorMetrics, profiler.metricKernelStream);
-        auto &dataToEntry = threadState.dataToEntry;
-        if (dataToEntry.empty()) {
-          // Add metrics to a specific scope
-          for (auto *data : profiler.dataSet) {
-            data->addScopeMetrics(scopeId, scalarMetrics);
-            data->addScopeMetrics(scopeId, tensorMetricsHost);
-          }
-        } else {
-          // Add metrics to the current op
-          for (auto [data, entry] : dataToEntry) {
-            data->addEntryMetrics(entry.id, scalarMetrics);
-            data->addEntryMetrics(entry.id, tensorMetricsHost);
-          }
+        for (auto *data : profiler.getDataSet()) {
+          data->addMetrics(scopeId, scalarMetrics);
+          data->addMetrics(scopeId, tensorMetricsHost);
         }
       }
     }
