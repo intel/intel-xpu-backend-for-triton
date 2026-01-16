@@ -1987,9 +1987,8 @@ def shared_gather_kernel(
 
 
 @pytest.mark.parametrize("N,M", [(32, 32), (64, 64), (128, 128)])
-def test_shared_gather(N, M):
+def test_shared_gather(N, M, device):
     """Test gathering from 1D reshaped shared memory (diagonal of 2D matrix)."""
-    device = torch.device("cuda")
 
     # Create a test matrix with known values
     matrix = torch.arange(N * M, dtype=torch.float32, device=device).reshape(N, M)
@@ -2066,9 +2065,8 @@ def shared_scatter_kernel(
 
 
 @pytest.mark.parametrize("N,M", [(32, 32), (64, 64), (128, 128)])
-def test_shared_scatter(N, M):
+def test_shared_scatter(N, M, device):
     """Test scattering to 1D reshaped shared memory (diagonal of 2D matrix)."""
-    device = torch.device("cuda")
 
     # Create scatter indices for diagonal elements: 0, M+1, 2*(M+1), ...
     indices = torch.arange(N, dtype=torch.int32, device=device) * (M + 1)
@@ -2112,9 +2110,8 @@ def test_shared_scatter(N, M):
 
 
 @pytest.mark.parametrize("N,M,num_warps", [(64, 64, 2), (128, 128, 4)])
-def test_scatter_gather_multiwarp(N, M, num_warps):
+def test_scatter_gather_multiwarp(N, M, num_warps, device):
     """Test scatter and gather with multiple warps."""
-    device = torch.device("cuda")
 
     # Create layouts with multiple warps (shared across both tests)
     layout_2d = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[THREADS_PER_WARP // 4, 4],
@@ -2204,9 +2201,8 @@ def gather_2d_kernel(
 
 
 @pytest.mark.parametrize("N,M,axis", [(32, 32, 0), (32, 32, 1), (64, 64, 0), (64, 64, 1)])
-def test_gather_2d_native(N, M, axis):
+def test_gather_2d_native(N, M, axis, device):
     """Test 2D gather along different axes."""
-    device = torch.device("cuda")
 
     # Create a test matrix [N, M]
     matrix = torch.arange(N * M, dtype=torch.float32, device=device).reshape(N, M)
@@ -2281,9 +2277,8 @@ def scatter_2d_kernel(
 
 
 @pytest.mark.parametrize("N,M,axis", [(32, 32, 0), (32, 32, 1)])
-def test_scatter_2d_native(N, M, axis):
+def test_scatter_2d_native(N, M, axis, device):
     """Test 2D scatter along different axes."""
-    device = torch.device("cuda")
 
     # Create indices [N, M] - reverse pattern for scatter
     if axis == 0:
@@ -2365,9 +2360,8 @@ def gather_3d_kernel(
 
 
 @pytest.mark.parametrize("N,M,P,axis", [(16, 8, 4, 0), (16, 8, 4, 1), (16, 8, 4, 2)])
-def test_gather_3d_native(N, M, P, axis):
+def test_gather_3d_native(N, M, P, axis, device):
     """Test 3D gather along different axes."""
-    device = torch.device("cuda")
 
     # Create a test tensor [N, M, P]
     tensor = torch.arange(N * M * P, dtype=torch.float32, device=device).reshape(N, M, P)
@@ -2455,9 +2449,8 @@ def scatter_3d_kernel(
 
 
 @pytest.mark.parametrize("N,M,P,axis", [(16, 8, 4, 0), (16, 8, 4, 1), (16, 8, 4, 2)])
-def test_scatter_3d_native(N, M, P, axis):
+def test_scatter_3d_native(N, M, P, axis, device):
     """Test 3D scatter along different axes."""
-    device = torch.device("cuda")
 
     # Create indices [N, M, P] that form a permutation along the scatter axis
     if axis == 0:
@@ -2564,9 +2557,8 @@ def gather_subslice_2d_kernel(
     (64, 64, 32, 48, 32, 16),  # offset 32 % 32 == 0, offset 48 % 16 == 0
     (64, 64, 48, 32, 16, 32),  # offset 48 % 16 == 0, offset 32 % 32 == 0
 ])
-def test_gather_subslice_2d(M, N, slice_m_offset, slice_n_offset, slice_m, slice_n):
+def test_gather_subslice_2d(M, N, slice_m_offset, slice_n_offset, slice_m, slice_n, device):
     """Test gathering from a 2D subsliced shared memory descriptor."""
-    device = torch.device("cuda")
 
     # Create input matrix
     matrix = torch.arange(M * N, dtype=torch.float32, device=device).reshape(M, N)
@@ -2665,9 +2657,8 @@ def scatter_subslice_2d_kernel(
     (64, 64, 48, 16, 16, 16),  # offset 48 % 16 == 0, offset 16 % 16 == 0
     (64, 64, 32, 48, 32, 16),  # offset 32 % 32 == 0, offset 48 % 16 == 0
 ])
-def test_scatter_subslice_2d(M, N, slice_m_offset, slice_n_offset, slice_m, slice_n):
+def test_scatter_subslice_2d(M, N, slice_m_offset, slice_n_offset, slice_m, slice_n, device):
     """Test scattering to a 2D subsliced shared memory descriptor."""
-    device = torch.device("cuda")
 
     # Create indices (reverse pattern for scatter)
     indices = torch.arange(slice_n, dtype=torch.int32, device=device)[None, :].expand(slice_m, slice_n)
@@ -2755,9 +2746,8 @@ def gather_padded_kernel(
 @pytest.mark.parametrize("M,N", [(64, 64)])
 @pytest.mark.parametrize("interval_pairs", [[[32, 4]], [[16, 4]], [[16, 4], [64, 8]]])
 @pytest.mark.parametrize("order", [[0, 1], [1, 0]])
-def test_gather_padded(M, N, interval_pairs, order):
+def test_gather_padded(M, N, interval_pairs, order, device):
     """Test gathering from shared memory with a padded layout."""
-    device = torch.device("cuda")
 
     # Create input matrix
     matrix = torch.arange(M * N, dtype=torch.float32, device=device).reshape(M, N)
@@ -2829,9 +2819,8 @@ def scatter_padded_kernel(
 @pytest.mark.parametrize("M,N", [(64, 64)])
 @pytest.mark.parametrize("interval_pairs", [[[32, 4]], [[16, 4]]])
 @pytest.mark.parametrize("order", [[0, 1], [1, 0]])
-def test_scatter_padded(M, N, interval_pairs, order):
+def test_scatter_padded(M, N, interval_pairs, order, device):
     """Test scattering to shared memory with a padded layout."""
-    device = torch.device("cuda")
 
     # Create indices (reverse pattern)
     indices = torch.arange(N, dtype=torch.int32, device=device)[None, :].expand(M, N)
@@ -2921,10 +2910,9 @@ def gather_padded_subslice_kernel(
     (32, 48, 32, 16),
     (48, 32, 16, 32),
 ])
-def test_gather_padded_subslice(interval_pairs, order, slice_m_offset, slice_n_offset, slice_m, slice_n):
+def test_gather_padded_subslice(interval_pairs, order, slice_m_offset, slice_n_offset, slice_m, slice_n, device):
     """Test gathering from a subsliced padded shared memory descriptor."""
     M, N = 64, 64
-    device = torch.device("cuda")
 
     # Create input matrix
     matrix = torch.arange(M * N, dtype=torch.float32, device=device).reshape(M, N)
@@ -3022,10 +3010,9 @@ def scatter_padded_subslice_kernel(
     (48, 16, 16, 16),
     (32, 48, 32, 16),
 ])
-def test_scatter_padded_subslice(interval_pairs, order, slice_m_offset, slice_n_offset, slice_m, slice_n):
+def test_scatter_padded_subslice(interval_pairs, order, slice_m_offset, slice_n_offset, slice_m, slice_n, device):
     """Test scattering to a subsliced padded shared memory descriptor."""
     M, N = 64, 64
-    device = torch.device("cuda")
 
     # Create indices (reverse pattern)
     indices = torch.arange(slice_n, dtype=torch.int32, device=device)[None, :].expand(slice_m, slice_n)
