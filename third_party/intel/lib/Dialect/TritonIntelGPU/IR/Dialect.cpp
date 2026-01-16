@@ -2,6 +2,7 @@
 
 #include "Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/LinearLayoutConversions.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
 #include "triton/Analysis/Utility.h"
@@ -94,45 +95,31 @@ static LogicalResult parseUInt(AsmParser &parser, const NamedAttribute &attr,
 //===----------------------------------------------------------------------===//
 
 SmallVector<unsigned> DpasEncodingAttr::getDPASInstShapeA() const {
-  return {getRepeatCount(), getSystolicDepth() * getOpsPerChannel()};
+  return calculateDPASInstShapeA(getRepeatCount(), getSystolicDepth(),
+                                 getOpsPerChannel());
 };
 
 SmallVector<unsigned> DpasEncodingAttr::getDPASInstShapeB() const {
-  return {getSystolicDepth() * getOpsPerChannel(), getExecutionSize()};
+  return calculateDPASInstShapeB(getSystolicDepth(), getOpsPerChannel(),
+                                 getExecutionSize());
 };
 
 SmallVector<unsigned> DpasEncodingAttr::getDPASInstShapeC() const {
-  return {getRepeatCount(), getExecutionSize()};
+  return calculateDPASInstShapeC(getRepeatCount(), getExecutionSize());
 };
 
 SmallVector<unsigned> DpasEncodingAttr::getShapeA() const {
-  SmallVector<unsigned> instShapeA = getDPASInstShapeA();
-  ArrayRef<unsigned> repCluster = getRepCluster();
-  size_t rank = repCluster.size();
-  SmallVector<unsigned> resShape(rank, 1);
-  resShape[rank - 2] = instShapeA[0] * repCluster[rank - 2];
-  resShape[rank - 1] = instShapeA[1];
-  return resShape;
+  return calculateShapeA(getRepeatCount(), getSystolicDepth(),
+                         getOpsPerChannel(), getRepCluster());
 }
 
 SmallVector<unsigned> DpasEncodingAttr::getShapeB() const {
-  SmallVector<unsigned> instShapeB = getDPASInstShapeB();
-  ArrayRef<unsigned> repCluster = getRepCluster();
-  size_t rank = repCluster.size();
-  SmallVector<unsigned> resShape(rank, 1);
-  resShape[rank - 2] = instShapeB[0];
-  resShape[rank - 1] = instShapeB[1] * repCluster[rank - 1];
-  return resShape;
+  return calculateShapeB(getSystolicDepth(), getOpsPerChannel(),
+                         getExecutionSize(), getRepCluster());
 }
 
 SmallVector<unsigned> DpasEncodingAttr::getShapeC() const {
-  SmallVector<unsigned> instShapeC = getDPASInstShapeC();
-  ArrayRef<unsigned> repCluster = getRepCluster();
-  size_t rank = repCluster.size();
-  SmallVector<unsigned> resShape(rank, 1);
-  resShape[rank - 2] = instShapeC[0] * repCluster[rank - 2];
-  resShape[rank - 1] = instShapeC[1] * repCluster[rank - 1];
-  return resShape;
+  return calculateShapeC(getRepeatCount(), getExecutionSize(), getRepCluster());
 }
 
 SmallVector<unsigned> DpasEncodingAttr::getRepOrder() const {
@@ -157,49 +144,9 @@ CGAEncodingAttr DpasEncodingAttr::getCGALayout() const {
 SmallVector<int64_t>
 DpasEncodingAttr::getDPASRepetitions(ArrayRef<int64_t> shape,
                                      OpIdx opIdx) const {
-  // Always return a 3D shape repetitions for the ease of value handling, same
-  // to mma.
-  auto warpsPerCTA = getWarpsPerCTA();
-  size_t rank = shape.size();
-  SmallVector<int64_t> rep(3, 1);
-  switch (opIdx) {
-  case OpIdx::OperandA: {
-    SmallVector<unsigned> shapePerWarp = getShapeA();
-    int64_t numRepBatch =
-        rank == 3 ? std::max<int64_t>(1, shape[0] /
-                                             (shapePerWarp[0] * warpsPerCTA[0]))
-                  : 1;
-    return {numRepBatch,
-            std::max<int64_t>(1, shape[rank - 2] / (shapePerWarp[rank - 2] *
-                                                    warpsPerCTA[rank - 2])),
-            std::max<int64_t>(1, shape[rank - 1] / shapePerWarp[rank - 1])};
-  } break;
-  case OpIdx::OperandB: {
-    SmallVector<unsigned> shapePerWarp = getShapeB();
-    int64_t numRepBatch =
-        rank == 3 ? std::max<int64_t>(1, shape[0] /
-                                             (shapePerWarp[0] * warpsPerCTA[0]))
-                  : 1;
-    return {numRepBatch,
-            std::max<int64_t>(1, shape[rank - 2] / shapePerWarp[rank - 2]),
-            std::max<int64_t>(1, shape[rank - 1] / (shapePerWarp[rank - 1] *
-                                                    warpsPerCTA[rank - 1]))};
-  } break;
-  case OpIdx::OperandC: {
-    auto shapePerWarp = getShapeC();
-    int64_t numRepBatch =
-        rank == 3 ? std::max<int64_t>(1, shape[0] /
-                                             (shapePerWarp[0] * warpsPerCTA[0]))
-                  : 1;
-    return {numRepBatch,
-            std::max<int64_t>(1, shape[rank - 2] / (shapePerWarp[rank - 2] *
-                                                    warpsPerCTA[rank - 2])),
-            std::max<int64_t>(1, shape[rank - 1] / (shapePerWarp[rank - 1] *
-                                                    warpsPerCTA[rank - 1]))};
-  } break;
-  }
-
-  llvm_unreachable("unexpected opIdx");
+  return calculateDPASRepetitions(
+      shape, opIdx, getWarpsPerCTA(), getRepCluster(), getRepeatCount(),
+      getSystolicDepth(), getExecutionSize(), getOpsPerChannel());
 }
 
 unsigned DpasEncodingAttr::getTotalElemsPerThreadForOperand(

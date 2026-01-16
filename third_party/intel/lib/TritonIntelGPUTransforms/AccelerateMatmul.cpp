@@ -19,9 +19,6 @@
 #include "llvm/Support/ErrorHandling.h"
 #include <optional>
 
-#define PVC_2D_LOAD_MAXIMUM_NUMBER_OF_ROWS 32
-#define PVC_2D_LOAD_MAXIMUM_BYTES_OF_COLS 64
-
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
@@ -30,6 +27,7 @@ namespace ttgi = mlir::triton::gpu::intel;
 namespace mlir::triton::gpu::intel {
 #define GEN_PASS_DEF_TRITONINTELGPUACCELERATEMATMUL
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
+
 } // namespace mlir::triton::gpu::intel
 
 namespace {
@@ -86,43 +84,8 @@ getWarpsPerTile(Operation *dotOp,
     }
   }
 
-  size_t rank = shape.size();
-  SmallVector<unsigned> ret(rank, 1);
-
-  if (rank == 3) {
-    int batchWarp = numWarps;
-    while (batchWarp > shape[0])
-      batchWarp /= 2;
-    ret[0] = batchWarp;
-    numWarps /= batchWarp;
-  }
-
-  // Try to find a proper tiling shape for the dot operation.
-  // It doubles the warp number in col or row in each time based on column to
-  // width ratio.
-  // By this, we can minimize the duplication of the dot operands A and B.
-  SmallVector<int64_t> shapePerWarp{dpasCap.repeatCount, dpasCap.executionSize};
-  uint32_t rowColRatio =
-      ceil<uint32_t>(dpasCap.repeatCount, dpasCap.executionSize);
-  uint32_t colRowRatio =
-      ceil<uint32_t>(dpasCap.executionSize, dpasCap.repeatCount);
-
-  int rowDim = rank - 2, colDim = rank - 1;
-  do {
-    if (ret[rowDim] * ret[colDim] >= numWarps)
-      break;
-    if (shape[rowDim] / (shapePerWarp[0] * colRowRatio) / ret[rowDim] >=
-        shape[colDim] / (shapePerWarp[1] * rowColRatio) / ret[colDim]) {
-      if (ret[rowDim] < shape[rowDim] / shapePerWarp[0])
-        ret[rowDim] *= 2;
-      else
-        ret[colDim] *= 2;
-    } else {
-      ret[colDim] *= 2;
-    }
-  } while (true);
-
-  return ret;
+  return ttgi::calculateWarpsPerTile(dpasCap.repeatCount, dpasCap.executionSize,
+                                     shape, numWarps);
 }
 
 template <typename OpTy, typename = std::enable_if_t<llvm::is_one_of<
@@ -202,12 +165,19 @@ public:
     unsigned opsPerChan = getOpsPerChannel(elemType, mod);
     SmallVector<unsigned> warpsPerTile =
         getWarpsPerTile(op, dpasCap, retShape, numWarps);
+    unsigned threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
+
     size_t rank = retShape.size();
-    SmallVector<unsigned> repCluster(rank, 1);
+
+    SmallVector<unsigned> repCluster = ttgi::calculateRepCluster(
+        dpasCap.repeatCount, dpasCap.systolicDepth, dpasCap.executionSize,
+        opsPerChan, retShape, threadsPerWarp,
+        oldAType.getElementType().getIntOrFloatBitWidth(),
+        isa<Float8E5M2Type, Float8E4M3FNType>(oldAType.getElementType()),
+        oldAType.getShape(), oldBType.getShape(), warpsPerTile);
 
     unsigned repeatCount =
         std::min(dpasCap.repeatCount, (unsigned)retShape[rank - 2] /*M*/);
-    unsigned threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
     unsigned numElemsPerRowForA =
         opsPerChan == 1
             ? dpasCap.systolicDepth
@@ -223,41 +193,7 @@ public:
             ? std::make_optional(2)
             : std::nullopt);
 
-    if (!dpasCap.isATSM()) {
-      // Adjust repCluster size for arch after ATSM which has 2d block IO
-      // capability.
-      unsigned dpasElemBitWidths =
-          oldAType.getElementType().getIntOrFloatBitWidth();
-
-      // Enlarge the repCluster size to use the large 2D load for A and B
-      // operands.
-      unsigned maxRepClusterM =
-          PVC_2D_LOAD_MAXIMUM_NUMBER_OF_ROWS / dpasCap.repeatCount;
-      SmallVector<int64_t> repA =
-          dpasEnc.getDPASRepetitions(oldAType.getShape(), 0);
-      unsigned repClusterDimM =
-          std::min(maxRepClusterM, static_cast<unsigned>(repA[1]));
-
-      unsigned maxRepClusterN =
-          PVC_2D_LOAD_MAXIMUM_BYTES_OF_COLS /
-          ((dpasElemBitWidths / 8) * dpasCap.executionSize);
-      SmallVector<int64_t> repB =
-          dpasEnc.getDPASRepetitions(oldBType.getShape(), 1);
-      unsigned repClusterDimN =
-          std::min(maxRepClusterN, static_cast<unsigned>(repB[2]));
-      repCluster[rank - 2] = repClusterDimM;
-      repCluster[rank - 1] = repClusterDimN;
-
-      dpasEnc = ttgi::DpasEncodingAttr::get(
-          oldRetType.getContext(), repeatCount, dpasCap.systolicDepth,
-          dpasCap.executionSize, opsPerChan, warpsPerTile, repCluster,
-          threadsPerWarp,
-          dpasType == ttgi::DPASEngineTypeXe3P::FP32_FP32_FP4_FP4
-              ? std::make_optional(2)
-              : std::nullopt);
-    }
-
-    auto newRetType =
+    RankedTensorType newRetType =
         RankedTensorType::get(retShape, oldRetType.getElementType(), dpasEnc);
 
     // convert accumulator
