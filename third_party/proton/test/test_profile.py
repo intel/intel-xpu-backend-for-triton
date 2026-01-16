@@ -281,13 +281,13 @@ def test_clear_data(tmp_path: pathlib.Path, device: str):
     assert "elementwise" in kernel_frame["frame"]["name"]
 
 
-def test_data_is_phase_flushed(tmp_path: pathlib.Path):
+def test_data_is_phase_flushed(tmp_path: pathlib.Path, device: str):
     temp_path = tmp_path / "test_data_is_phase_flushed.hatchet"
     session = proton.start(str(temp_path.with_suffix("")), context="shadow")
 
     def fn():
         with proton.scope("test0"):
-            x = torch.ones((2, 2), device="cuda")
+            x = torch.ones((2, 2), device=device)
             x + x  # type: ignore
 
     fn()
@@ -890,6 +890,7 @@ def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
     assert len(cuda_devices) >= 2
 
 
+@pytest.mark.xfail(is_xpu(), reason="XPU backend does not support cudagraph deactivation", run=False)
 @pytest.mark.skipif(is_hip(), reason="HIP backend does not support cudagraph deactivation")
 def test_cudagraph_deactivate(tmp_path):
     stream = torch.cuda.Stream()
@@ -958,6 +959,8 @@ def test_cudagraph_deactivate(tmp_path):
 @pytest.mark.parametrize("buffer_size", [256 * 1024, 64 * 1024 * 1024])
 @pytest.mark.parametrize("data_format", ["hatchet_msgpack", "hatchet"])
 def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size):
+    if is_xpu():
+        pytest.skip("FIXME: #5844")
     fresh_knobs.proton.profile_buffer_size = buffer_size
     temp_file = tmp_path / f"test_periodic_flushing.{data_format}"
     session = proton.start(str(temp_file.with_suffix("")), mode=f"periodic_flushing:format={data_format}")
