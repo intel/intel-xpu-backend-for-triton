@@ -356,7 +356,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
             std::enable_if_t<
                 llvm::is_one_of<OpTy, triton::LoadOp, triton::StoreOp>::value,
                 bool> = true>
-  static bool isBlockIOCandidate(OpTy op, bool allLayout = false) {
+  static bool isBlockIOCandidate(OpTy op) {
     ModuleOp mod = op->template getParentOfType<ModuleOp>();
     if (!mod->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
                           getSupport2DBlockIOAttrName()))
@@ -367,11 +367,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     if (!blockIOAttr)
       return false;
 
-    // Only lower operation with dpas layout encoding.
-    auto tensorTy =
-        cast<RankedTensorType>(getPointeeType(op.getPtr().getType()));
-    return allLayout || hasDpasEncoding(tensorTy) ||
-           hasDotDpasEncoding(tensorTy);
+    return true;
   }
 
   static bool
@@ -1206,9 +1202,7 @@ struct LoadOpToBlockIOConversion
     if (op.getPadding() && op.getPadding() == PaddingOption::PAD_NAN)
       return failure();
 
-    static const bool enableBlockIOForAllLayout =
-        triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS");
-    if (!isBlockIOCandidate(op, enableBlockIOForAllLayout))
+    if (!isBlockIOCandidate(op))
       return failure();
 
     // Get the max tile shape supported by the layout.
@@ -1999,9 +1993,7 @@ struct StoreOpToBlockIOConversion
   LogicalResult
   matchAndRewrite(triton::StoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
-    static const bool enableBlockIOForAllLayout =
-        triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS");
-    if (!isBlockIOCandidate(op, enableBlockIOForAllLayout))
+    if (!isBlockIOCandidate(op))
       return failure();
 
     // Get the max tile shape supported by the layout.
