@@ -5,6 +5,7 @@ from torch.nn.attention.flex_attention import (
     create_block_mask,
     create_mask,
     flex_attention,
+    noop_mask,
 )
 
 import torch
@@ -12,7 +13,7 @@ import torch.nn.functional as F
 
 import triton_kernels_benchmark as benchmark_suite
 
-torch._dynamo.config.recompile_limit = 100  # pylint: disable=protected-access
+torch._dynamo.config.recompile_limit = 120  # pylint: disable=protected-access
 
 # Compile the flex_attention function
 flex_attention = torch.compile(flex_attention, dynamic=False)
@@ -55,6 +56,13 @@ def alibi_functional(score, _, h, q_idx, kv_idx):
     return score + bias
 
 
+SOFT_CAP = 50
+
+
+def tanh_softcap_functional(score, _, __, ___, ____):
+    return SOFT_CAP * torch.tanh(score / SOFT_CAP)
+
+
 # Kernel profiling for Backward mode is not working as expected:
 # For details: https://github.com/pytorch/pytorch/issues/144778
 @benchmark_suite.perf_report(
@@ -63,15 +71,15 @@ def alibi_functional(score, _, h, q_idx, kv_idx):
         x_vals=[[z, h, 16384 // z, dhead, mask, mode]
                 for z in [4, 8, 16, 32]
                 for (h, dhead) in [(16, 128), (32, 64)]
-                for mask in ['NATTEN', 'Alibi']
+                for mask in ['NATTEN', 'Alibi', 'Noop', 'Softcap']
                 for mode in [os.getenv('FA_KERNEL_MODE', 'fwd')]]  #
         + [[4, 48, 1024, 64, mask, mode]
-           for mask in ['NATTEN', 'Alibi']
+           for mask in ['NATTEN', 'Alibi', 'Noop', 'Softcap']
            for mode in [os.getenv('FA_KERNEL_MODE', 'fwd')]]  #
         + [[z, h, 1024, dhead, mask, mode]
            for z in [1, 2, 4, 8, 16, 32, 64]
            for (h, dhead) in [(8, 128), (32, 96), (4, 128)]
-           for mask in ['NATTEN', 'Alibi']
+           for mask in ['NATTEN', 'Alibi', 'Noop', 'Softcap']
            for mode in [os.getenv('FA_KERNEL_MODE', 'fwd')]],
         line_arg='provider',
         line_vals=['triton'] + (['onednn'] if '580' not in torch.xpu.get_device_name() else []),
@@ -85,7 +93,7 @@ def benchmark(Z, H, N_CTX, D_HEAD, MASK, MODE, provider):
     # There is still performance variance for triton, probably caused by random choice of autotune config
     do_bench = benchmark_suite.get_do_bench(n_warmup=200, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
     assert MODE in ['fwd', 'bwd']
-    assert MASK in ['NATTEN', 'Alibi']
+    assert MASK in ['NATTEN', 'Alibi', 'Noop', 'Softcap']
     dtype = torch.float16
     q = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype, requires_grad=True)
     k = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype, requires_grad=True)
@@ -97,6 +105,10 @@ def benchmark(Z, H, N_CTX, D_HEAD, MASK, MODE, provider):
         mask_mod = natten_mask
     elif MASK == 'Alibi':
         score_mod = alibi_functional
+    elif MASK == 'Noop':
+        mask_mod = noop_mask
+    elif MASK == 'Softcap':
+        score_mod = tanh_softcap_functional
 
     if mask_mod is not None:
         block_mask = create_block_mask_cached(mask_mod, 1, 1, N_CTX, N_CTX, device=q.device)
