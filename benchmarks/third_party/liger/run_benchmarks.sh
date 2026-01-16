@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-
 set -euo pipefail
 
 
@@ -8,13 +7,11 @@ FAILED_BENCHMARKS=()
 
 for file in Liger-Kernel/benchmark/scripts/benchmark_*; do
     # TODO: unskip when https://github.com/intel/intel-xpu-backend-for-triton/issues/3873 is resolved
-    if [ $file = "Liger-Kernel/benchmark/scripts/benchmark_tvd.py" ]; then
-        continue
+    if [ $file = "Liger-Kernel/benchmark/scripts/benchmark_orpo_loss.py" ] || [ $file = "Liger-Kernel/benchmark/scripts/benchmark_grpo_loss.py" ]; then
+      continue
     fi
-    if [ $file = "Liger-Kernel/benchmark/scripts/benchmark_orpo_loss.py" ]; then
-        continue
-    fi
-    if [ $file = "Liger-Kernel/benchmark/scripts/benchmark_qwen2vl_mrope.py" ]; then
+    # TODO: unskip when https://github.com/intel/intel-xpu-backend-for-triton/issues/5825 is resolved
+    if [ $file = "Liger-Kernel/benchmark/scripts/benchmark_fused_linear_jsd.py" ]; then
         continue
     fi
     if python "$file"; then
