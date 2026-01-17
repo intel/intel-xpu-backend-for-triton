@@ -101,6 +101,8 @@ if 'B580' in torch.xpu.get_device_name():
             # FlexDecoding configuration. N_CTX_q equals 1. N_CTX_kv < 1k
             (32, 8, 1, 1024 + 64, 128, 128),  # Decode shapes of Llama-3.1-8B amd Qwen3-4B
             (24, 8, 1, 1024 + 64, 128, 128),  # Decode shapes of meta-llama-Llama-3.2-3B
+            (16, 16, 1, 1024, 128, 128),  # Additional Hq=Hkv=16 PyTorch benchmark case
+            (16, 2, 1, 1024, 128, 128),  # Additional Hq=16, Hkv=2 PyTorch benchmark case
             # acc = acc.reshape(G, BLOCK_M_PER_HQ, V_HEAD_DIM)
             # ValueError: Shape element 2 must be a power of 2
             # (32, 32, 1, 1024 + 64, 96, 96),  # Decode shapes of Phi3-mini-4k-instruct
