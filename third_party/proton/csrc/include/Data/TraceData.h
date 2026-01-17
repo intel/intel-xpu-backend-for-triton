@@ -48,7 +48,7 @@ private:
 
   void dumpChromeTrace(std::ostream &os, size_t phase) const;
 
-  PhaseStore<Trace> tracePhases;
+  PhaseStore<Trace> *tracePhases;
   // ScopeId -> EventId
   std::unordered_map<size_t, size_t> scopeIdToEventId;
 };

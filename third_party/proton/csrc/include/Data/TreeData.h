@@ -62,7 +62,7 @@ private:
   void dumpHatchet(std::ostream &os, size_t phase) const;
   void dumpHatchetMsgPack(std::ostream &os, size_t phase) const;
 
-  PhaseStore<Tree> treePhases;
+  PhaseStore<Tree> *treePhases;
   // ScopeId -> ContextId
   std::unordered_map<size_t, size_t> scopeIdToContextId;
 };

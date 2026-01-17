@@ -667,7 +667,7 @@ DataEntry TreeData::addOp(size_t phase, size_t contextId,
   std::unique_lock<std::shared_mutex> lock(mutex);
   auto *tree = (phase == currentPhase)
                    ? currentPhasePtrAs<Tree>()
-                   : static_cast<Tree *>(treePhases.getOrCreatePtr(phase));
+                   : static_cast<Tree *>(treePhases->getOrCreatePtr(phase));
   auto newContextId = tree->addNode(contexts, contextId);
   auto &node = tree->getNode(newContextId);
   return DataEntry(newContextId, phase, node.metrics);
@@ -690,7 +690,7 @@ void TreeData::addEntryMetrics(
   std::unique_lock<std::shared_mutex> lock(mutex);
   auto *tree = (phase == currentPhase)
                    ? currentPhasePtrAs<Tree>()
-                   : static_cast<Tree *>(treePhases.getOrCreatePtr(phase));
+                   : static_cast<Tree *>(treePhases->getOrCreatePtr(phase));
   for (auto [metricName, metricValue] : metrics) {
     tree->upsertFlexibleMetric(contextId,
                                FlexibleMetric(metricName, metricValue));
@@ -698,14 +698,14 @@ void TreeData::addEntryMetrics(
 }
 
 void TreeData::dumpHatchet(std::ostream &os, size_t phase) const {
-  treePhases.withPtr(phase, [&](Tree *tree) {
+  treePhases->withPtr(phase, [&](Tree *tree) {
     auto output = buildHatchetJson(tree);
     os << std::endl << output.dump(4) << std::endl;
   });
 }
 
 void TreeData::dumpHatchetMsgPack(std::ostream &os, size_t phase) const {
-  treePhases.withPtr(phase, [&](Tree *tree) {
+  treePhases->withPtr(phase, [&](Tree *tree) {
     auto msgPack = buildHatchetMsgPack(tree);
     os.write(reinterpret_cast<const char *>(msgPack.data()),
              static_cast<std::streamsize>(msgPack.size()));
@@ -713,12 +713,12 @@ void TreeData::dumpHatchetMsgPack(std::ostream &os, size_t phase) const {
 }
 
 std::string TreeData::toJsonString(size_t phase) const {
-  return treePhases.withPtr(
+  return treePhases->withPtr(
       phase, [&](Tree *tree) { return buildHatchetJson(tree).dump(); });
 }
 
 std::vector<uint8_t> TreeData::toMsgPack(size_t phase) const {
-  return treePhases.withPtr(
+  return treePhases->withPtr(
       phase, [&](Tree *tree) { return buildHatchetMsgPack(tree); });
 }
 
@@ -734,10 +734,10 @@ void TreeData::doDump(std::ostream &os, OutputFormat outputFormat,
 }
 
 TreeData::TreeData(const std::string &path, ContextSource *contextSource)
-    : Data(path, contextSource) {
-  initPhaseStore(treePhases);
+    : Data(path, contextSource), treePhases(new PhaseStore<Tree>()) {
+  initPhaseStore(*treePhases);
 }
 
-TreeData::~TreeData() {}
+TreeData::~TreeData() { delete treePhases; }
 
 } // namespace proton

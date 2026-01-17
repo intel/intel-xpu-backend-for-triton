@@ -165,7 +165,7 @@ DataEntry TraceData::addOp(size_t phase, size_t eventId,
   std::unique_lock<std::shared_mutex> lock(mutex);
   auto *trace = (phase == currentPhase)
                     ? currentPhasePtrAs<Trace>()
-                    : static_cast<Trace *>(tracePhases.getOrCreatePtr(phase));
+                    : static_cast<Trace *>(tracePhases->getOrCreatePtr(phase));
   // Add a new context under it and update the context
   auto &event = trace->getEvent(eventId);
   auto contextId = trace->addContexts(contexts, event.contextId);
@@ -180,7 +180,7 @@ void TraceData::addEntryMetrics(
   std::unique_lock<std::shared_mutex> lock(mutex);
   auto *trace = (phase == currentPhase)
                     ? currentPhasePtrAs<Trace>()
-                    : static_cast<Trace *>(tracePhases.getOrCreatePtr(phase));
+                    : static_cast<Trace *>(tracePhases->getOrCreatePtr(phase));
   auto &event = trace->getEvent(eventId);
   for (auto [metricName, metricValue] : metrics) {
     if (event.flexibleMetrics.find(metricName) == event.flexibleMetrics.end()) {
@@ -453,7 +453,7 @@ void dumpKernelMetricTrace(
 } // namespace
 
 void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
-  tracePhases.withPtr(phase, [&](Trace *trace) {
+  tracePhases->withPtr(phase, [&](Trace *trace) {
     auto &events = trace->getEvents();
     // stream id -> trace event
     std::map<size_t, std::vector<const Trace::TraceEvent *>> streamTraceEvents;
@@ -509,10 +509,10 @@ void TraceData::doDump(std::ostream &os, OutputFormat outputFormat,
 }
 
 TraceData::TraceData(const std::string &path, ContextSource *contextSource)
-    : Data(path, contextSource) {
-  initPhaseStore(tracePhases);
+    : Data(path, contextSource), tracePhases(new PhaseStore<Trace>()) {
+  initPhaseStore(*tracePhases);
 }
 
-TraceData::~TraceData() {}
+TraceData::~TraceData() { delete tracePhases; }
 
 } // namespace proton
