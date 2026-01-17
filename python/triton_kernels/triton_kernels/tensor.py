@@ -50,6 +50,7 @@ class Storage:
     def make_dense_tma(self, block_shape, is_scale):
         strides = list(self.data.stride())
         shape = list(self.data.shape)
+        block_shape = self.layout.swizzle_block_shape(block_shape)
         transpose = strides[-1] != 1
         if transpose:
             # Need to transpose since tensor descriptor expects strides except for the last dimension 16-byte aligned
@@ -63,7 +64,6 @@ class Storage:
             if isinstance(self.layout, BlackwellMXValueLayout) and shape[-1] % 128 != 0:
                 raise ValueError(
                     "inner shape need to be multiple of 128 for mxfp4 (CU_TENSOR_MAP_DATA_TYPE_16U4_ALIGN16B) TMAs.")
-        block_shape = self.layout.swizzle_block_shape(block_shape)
         return TensorDescriptor(self.data, shape, strides, block_shape)
 
     def make_tma(self, block_shape, mode, is_scale=False):
@@ -72,6 +72,9 @@ class Storage:
         assert mode == "ragged"
         ragged_dim = len(self.data.shape) - 2
         return create_ragged_descriptor(self.data, block_shape, ragged_dim=ragged_dim)
+
+    def clone(self, *, memory_format=torch.preserve_format):
+        return Storage(self.data.clone(memory_format=memory_format), layout=self.layout)
 
 
 # data types
@@ -172,6 +175,12 @@ class Tensor:
         if i is None:
             return self.shape
         return self.shape[i]
+
+    def clone(self, *, memory_format=torch.preserve_format):
+        shape = None if self.shape is None else list(self.shape)
+        shape_max = None if self.shape_max is None else list(self.shape_max)
+        return Tensor(self.storage.clone(memory_format=memory_format), dtype=self.dtype, shape=shape,
+                      shape_max=shape_max)
 
 
 # ---------------------------------------------------------------------------- #
