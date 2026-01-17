@@ -6,7 +6,7 @@ import torch
 import csv
 from dataclasses import dataclass
 import inspect
-from .target_info import is_hip, is_cuda, get_cdna_version
+from .target_info import is_hip, is_xpu, is_cuda, get_cdna_version
 
 
 @dataclass
@@ -84,9 +84,9 @@ def compute_roofline(*args, \
 # -- plot roofline --
 
 
-def get_memset_tbps():
+def get_memset_tbps(device="cuda"):
     n_bytes = 1 << 32
-    buf = torch.empty(n_bytes, device="cuda", dtype=torch.uint8)
+    buf = torch.empty(n_bytes, device=device, dtype=torch.uint8)
     stream0 = ctypes.c_void_p(0)
 
     if is_cuda():
@@ -103,10 +103,48 @@ def get_memset_tbps():
         memset_argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_size_t, ctypes.c_void_p]
         dptr = ctypes.c_void_p(buf.data_ptr())
         value = ctypes.c_int(0)
-    else:
-        raise RuntimeError("Unsupported platform: neither CUDA nor ROCm detected")
+    elif is_xpu():
+        from triton.backends.intel.driver import XPUDriver
 
-    lib = ctypes.CDLL(libname)
+        # Create a mock library object that wraps SYCL memset
+        class XPUSyclMemsetLib:
+
+            def __init__(self, buffer, driver):
+                self.buffer = buffer
+                self.driver = driver
+                self.utils = driver.utils
+
+            class MockMemsetFn:
+
+                def __init__(self, buffer, utils):
+                    self.buffer = buffer
+                    self.utils = utils
+                    self.argtypes = None  # Mock attribute
+                    self.restype = None  # Mock attribute
+
+                def __call__(self, dptr, value, size, stream):
+                    size_val = size.value if hasattr(size, 'value') else size
+                    driver.utils.memset(buf.data_ptr(), value, size_val)
+                    return 0
+
+            def __getattr__(self, name):
+                if name == "memset":
+                    return self.MockMemsetFn(self.buffer, self.utils)
+                raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+
+        driver = XPUDriver()
+
+        libname = "xpu_sycl_wrapper"
+        init_name = ""
+        memset_name = "memset"
+        memset_argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_size_t, ctypes.c_void_p]
+
+        lib = XPUSyclMemsetLib(buf, driver)
+        dptr = None
+        value = 0
+
+    if not is_xpu():
+        lib = ctypes.CDLL(libname)
 
     # optional init
     if hasattr(lib, init_name):
