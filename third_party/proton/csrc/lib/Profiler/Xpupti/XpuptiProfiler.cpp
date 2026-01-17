@@ -103,7 +103,8 @@ uint32_t processActivityKernel(
     } else {
       for (auto &[data, entry] : dataToEntry) {
         if (auto kernelMetric = convertActivityToMetric(activity)) {
-          auto childEntry = data->addOp(entry.id, {Context(kernel->_name)});
+          auto childEntry =
+              data->addOp(entry.phase, entry.id, {Context(kernel->_name)});
           childEntry.upsertMetric(std::move(kernelMetric));
         }
       }
