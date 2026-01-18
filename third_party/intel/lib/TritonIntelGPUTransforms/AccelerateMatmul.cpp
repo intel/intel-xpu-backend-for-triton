@@ -16,8 +16,8 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/ErrorHandling.h"
 #include <optional>
+#include <variant>
 
 using namespace mlir;
 namespace tt = mlir::triton;
@@ -107,48 +107,16 @@ public:
     auto funcOp = op->template getParentOfType<FunctionOpInterface>();
     ModuleOp mod = funcOp->template getParentOfType<ModuleOp>();
     auto dpasAnalysis = ttgi::DPASAnalysisFactory::createDPASAnalysis(mod);
+
+    // Ensure function wide DPAS applicability.
     if (ttgi::DPASAnalysisFactory::canUseDPAS(funcOp, dpasAnalysis) !=
         ttgi::DPASAnalysisResult::True)
       return failure();
 
-    // FIXME: intel-tools/intel-xpu-backend-for-triton#850
-    auto dpasType =
-        ttgi::DPASAnalysis<ttgi::DPASEngineTypeXe3P>::getDPASType(op);
-
-    if constexpr (std::is_same<OpTy, tt::DotScaledOp>::value) {
-      switch (dpasType) {
-      case ttgi::DPASEngineTypeXe3P::FP32_FP32_FP16_FP16:
-      case ttgi::DPASEngineTypeXe3P::FP32_FP32_BF16_BF16:
-      case ttgi::DPASEngineTypeXe3P::BF16_BF16_BF16_BF16:
-      case ttgi::DPASEngineTypeXe3P::FP16_FP16_FP16_FP16:
-      case ttgi::DPASEngineTypeXe3P::FP32_FP32_FP8_FP8:
-      case ttgi::DPASEngineTypeXe3P::BF16_BF16_FP8_FP8:
-        break;
-      case ttgi::DPASEngineTypeXe3P::FP32_FP32_FP4_FP4:
-        // BDPAS only support to pack along K for A and B matrix.
-        if (!(op.getRhsKPack() && op.getLhsKPack())) {
-          return failure();
-        }
-        break;
-      default:
-        return failure();
-      }
-
-      auto aElemType = op.getAElemType();
-      auto bElemType = op.getBElemType();
-      bool isBothFP8 = (aElemType == tt::ScaleDotElemType::E4M3 ||
-                        aElemType == tt::ScaleDotElemType::E5M2) &&
-                       (bElemType == tt::ScaleDotElemType::E4M3 ||
-                        bElemType == tt::ScaleDotElemType::E5M2);
-      if (!isBothFP8) {
-        // Doesn't support these mixed precision in bdpas natively.
-        // Need to decompose to simpler tt.dot with software scale for now.
-        // TODO: improve this by decompose to simpler tt.dot_scale with hardware
-        // scaling. (intel-tools/intel-xpu-backend-for-triton#755)
-        if (aElemType != bElemType)
-          return failure();
-      }
-    }
+    // Ensure operation DPAS applicability.
+    if (ttgi::DPASAnalysisFactory::canUseDPAS(op, dpasAnalysis) !=
+        ttgi::DPASAnalysisResult::True)
+      return failure();
 
     // Create DPAS encoding for the given number of warps
     ArrayRef<int64_t> retShape = oldRetType.getShape();
@@ -185,11 +153,16 @@ public:
     unsigned minM = mlir::ceil<unsigned>(threadsPerWarp, numElemsPerRowForA);
     repeatCount = std::max(repeatCount, minM);
 
+    ttgi::DPASEngineTypeVariant dpasType =
+        ttgi::DPASAnalysisFactory::getDPASType(op, dpasAnalysis);
+
     auto dpasEnc = ttgi::DpasEncodingAttr::get(
         oldRetType.getContext(), repeatCount, dpasCap.systolicDepth,
         dpasCap.executionSize, opsPerChan, warpsPerTile, repCluster,
         threadsPerWarp,
-        dpasType == ttgi::DPASEngineTypeXe3P::FP32_FP32_FP4_FP4
+        std::holds_alternative<ttgi::DPASEngineTypeXe3P>(dpasType) &&
+                std::get<ttgi::DPASEngineTypeXe3P>(dpasType) ==
+                    ttgi::DPASEngineTypeXe3P::FP32_FP32_FP4_FP4
             ? std::make_optional(2)
             : std::nullopt);
 
