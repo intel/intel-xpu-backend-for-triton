@@ -351,7 +351,7 @@ def test_hook_launch(tmp_path: pathlib.Path, device: str):
     assert data[0]["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
 
 
-def test_hook_launch_filter(tmp_path: pathlib.Path):
+def test_hook_launch_filter(tmp_path: pathlib.Path, device: str):
 
     foo_metadata_invoked = False
     bar_metadata_invoked = False
@@ -376,7 +376,7 @@ def test_hook_launch_filter(tmp_path: pathlib.Path):
         offs = tl.arange(0, size)
         tl.store(y + offs, tl.load(x + offs))
 
-    x = torch.tensor([2], device="cuda", dtype=torch.float32)
+    x = torch.tensor([2], device=device, dtype=torch.float32)
     y = torch.zeros_like(x)
     temp_file = tmp_path / "test_hook_triton_filter.hatchet"
 
