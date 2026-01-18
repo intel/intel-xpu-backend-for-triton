@@ -38,3 +38,4 @@ echo "Applying PyTorch patches in $REPO_ROOT"
 apply_patch ./patch/torch-xpu-ops.patch
 apply_patch ./patch/170010.patch
 apply_patch ./patch/revert_170842.patch
+apply_patch ./patch/skip_page_attention_ut.patch
