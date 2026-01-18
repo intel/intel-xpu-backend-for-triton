@@ -110,6 +110,7 @@ public:
 
 private:
   const TargetInfoBase &targetInfo;
+
   void accumulate(Location loc, ConversionPatternRewriter &rewriter,
                   Region &combineOp, SmallVector<Value> &acc, ValueRange cur,
                   Value pred = {}) const {

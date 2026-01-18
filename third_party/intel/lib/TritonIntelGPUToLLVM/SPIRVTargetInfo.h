@@ -14,10 +14,10 @@
 namespace mlir::triton::intel {
 class SPIRVTargetInfo : public TargetInfo {
 protected:
-  bool isSupportedWarpReduceOp(Operation *op, unsigned numLanesToReduce,
+  bool isSupportedWarpReduceOp(Operation *op,
                                unsigned warpSize) const final;
   Value genWarpReduce(RewriterBase &rewriter, Location loc, Value acc,
-                      Operation *reduceOp, unsigned numLanesToReduce,
+                      Operation *reduceOp, unsigned activeLanes,
                       unsigned warpSize) const final;
 };
 } // namespace mlir::triton::intel

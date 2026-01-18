@@ -105,13 +105,9 @@ Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
 
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
-                            unsigned numLaneToReduce,
-                            unsigned interleave) const {
+                            unsigned activeLanes) const {
   // No horizontal reduce required.
-  if (numLaneToReduce == 1)
-    return false;
-  // Horizontal reduce with interleave stride not supported.
-  if (interleave > 1)
+  if (activeLanes == 1)
     return false;
   // Check if it is a simple reduce operation supported by
   // TritonGEN::SubGroupReduceOp.
@@ -133,11 +129,11 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
   auto mod = op->getParentOfType<ModuleOp>();
   unsigned warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
-  if (!isSupportedWarpReduceOp(reduceOp, numLaneToReduce, warpSize))
+  if (!isSupportedWarpReduceOp(reduceOp, warpSize))
     return false;
 
   for (unsigned i = 0; i < acc.size(); ++i) {
-    acc[i] = genWarpReduce(rewriter, loc, acc[i], reduceOp, numLaneToReduce,
+    acc[i] = genWarpReduce(rewriter, loc, acc[i], reduceOp, activeLanes,
                            warpSize);
   }
 

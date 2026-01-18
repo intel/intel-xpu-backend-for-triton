@@ -19,15 +19,15 @@ namespace {
 
 template <typename GroupOp>
 Value createSPIRVGroupOp(RewriterBase &rewriter, Location loc, Type resultTy,
-                         Value acc, unsigned numLanesToReduce,
+                         Value acc, unsigned activeLanes,
                          unsigned warpSize) {
   auto spvGroupOp = spirv::GroupOperation::Reduce;
   Value clusterSize;
-  if (numLanesToReduce != warpSize) {
+  if (activeLanes != (warpSize - 1)) {
     spvGroupOp = spirv::GroupOperation::ClusteredReduce;
     clusterSize =
         arith::ConstantOp::create(rewriter, loc, rewriter.getI32Type(),
-                                  rewriter.getI32IntegerAttr(numLanesToReduce));
+                                  rewriter.getI32IntegerAttr(activeLanes));
   }
 
   return GroupOp::create(rewriter, loc, resultTy, spirv::Scope::Subgroup,
@@ -37,7 +37,6 @@ Value createSPIRVGroupOp(RewriterBase &rewriter, Location loc, Type resultTy,
 } // namespace
 
 bool SPIRVTargetInfo::isSupportedWarpReduceOp(Operation *op,
-                                              unsigned numLanesToReduce,
                                               unsigned warpSize) const {
   return isa<arith::AddFOp, arith::AddIOp, arith::MulFOp, arith::MulIOp,
              arith::MaxSIOp, arith::MaxUIOp, arith::MinSIOp, arith::MinUIOp,
@@ -47,7 +46,7 @@ bool SPIRVTargetInfo::isSupportedWarpReduceOp(Operation *op,
 
 Value SPIRVTargetInfo::genWarpReduce(RewriterBase &rewriter, Location loc,
                                      Value acc, Operation *reduceOp,
-                                     unsigned numLanesToReduce,
+                                     unsigned activeLanes,
                                      unsigned warpSize) const {
   Type resultType = reduceOp->getResult(0).getType();
   // Use bit-equivalent logical operation for Boolean values.
@@ -57,7 +56,7 @@ Value SPIRVTargetInfo::genWarpReduce(RewriterBase &rewriter, Location loc,
               arith::MinSIOp, arith::MinUIOp, arith::AndIOp, arith::OrIOp,
               arith::XOrIOp>([&](auto groupOp) {
           return createSPIRVGroupOp<SPIRVLogicalGroupOpTy<decltype(groupOp)>>(
-              rewriter, loc, resultType, acc, numLanesToReduce, warpSize);
+              rewriter, loc, resultType, acc, activeLanes, warpSize);
         });
   return TypeSwitch<mlir::Operation *, Value>(reduceOp)
       .Case<arith::AddFOp, arith::AddIOp, arith::MulFOp, arith::MulIOp,
@@ -65,7 +64,7 @@ Value SPIRVTargetInfo::genWarpReduce(RewriterBase &rewriter, Location loc,
             arith::MaxNumFOp, arith::MinNumFOp, arith::AndIOp, arith::OrIOp,
             arith::XOrIOp>([&](auto groupOp) {
         return createSPIRVGroupOp<SPIRVGroupOpTy<decltype(groupOp)>>(
-            rewriter, loc, resultType, acc, numLanesToReduce, warpSize);
+            rewriter, loc, resultType, acc, activeLanes, warpSize);
       });
 }
 
