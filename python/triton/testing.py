@@ -6,6 +6,8 @@ import subprocess
 import sys
 from contextlib import contextmanager
 from typing import Any, Dict, List
+
+from . import knobs
 from . import language as tl
 from . import runtime
 
@@ -152,8 +154,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
     cache = runtime.driver.active.get_empty_cache_for_benchmark()
 
     # Simulation-based execution environments do not require multiple runs to produce stable results. For such cases we skip the estimation and warn the user if their configuration includes warmup or repetitions other than 1.
-    simulation_env = (os.getenv("TRITON_INTEL_ENABLE_XE4", "0") == "1") or (os.getenv("TRITON_INTEL_ENABLE_XE3P", "0")
-                                                                            == "1")
+    simulation_env = knobs.intel.device_arch in ("jgs", "cri")
     if simulation_env:
         import warnings
         warnings.warn(
@@ -249,7 +250,7 @@ def assert_close(x, y, atol=None, rtol=None, err_msg=''):
     # we handle size==1 case separately as we can
     # provide better error message there
     if x.size > 1 or y.size > 1:
-        np.testing.assert_allclose(x, y, atol=atol, rtol=rtol, equal_nan=True)
+        np.testing.assert_allclose(x, y, atol=atol, rtol=rtol, equal_nan=True, err_msg=err_msg)
         return
     if not np.allclose(x, y, atol=atol, rtol=rtol):
         raise AssertionError(f'{err_msg} {x} is not close to {y} (atol={atol}, rtol={rtol})')
