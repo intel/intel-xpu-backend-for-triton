@@ -176,30 +176,36 @@ LogicalResult TritonGEN::MatrixDPASOp::verify() {
   Type CElemTy = CTy.getElementType();
 
   switch (precision) {
-  case PrecisionType::U8:
-  case PrecisionType::S8:
+  case TritonGEN::PrecisionType::U8:
+  case TritonGEN::PrecisionType::S8:
     if (!CElemTy.isInteger(32))
       return this->emitOpError(
           "the element type for 1st operand (C) and the result should be i32");
     break;
-  case PrecisionType::FP16:
+  case TritonGEN::PrecisionType::FP16:
     if (!(CElemTy.isF16() || CElemTy.isF32()))
       return this->emitOpError("the element type for 1st operand (C) and the "
                                "result should be f16 or f32");
     break;
-  case PrecisionType::BF16:
+  case TritonGEN::PrecisionType::BF16:
     if (!(CElemTy.isBF16() || CElemTy.isF32()))
       return this->emitOpError("the element type for 1st operand (C) and the "
                                "result should be bf16 or f32");
     break;
-  case PrecisionType::TF32:
+  case TritonGEN::PrecisionType::TF32:
     if (!CElemTy.isF32())
       return this->emitOpError(
           "the element type for 1st operand (C) and the result should be f32");
     break;
+  case TritonGEN::PrecisionType::F8E5M2:
+  case TritonGEN::PrecisionType::F8E4M3FN:
+    if (!(CElemTy.isBF16() || CElemTy.isF32()))
+      return this->emitOpError("the element type for 1st operand (C) and the "
+                               "result should be bf16 or f32");
+    break;
   default:
     return this->emitOpError(
-        "expecting precision type to be tf32, bf16, fp16, u8, or s8");
+        "expecting precision type to be tf32, bf16, fp16, bf8, hf8, u8, or s8");
   }
 
   switch (precision) {
@@ -219,6 +225,8 @@ LogicalResult TritonGEN::MatrixDPASOp::verify() {
   case TritonGEN::PrecisionType::FP16:
   case TritonGEN::PrecisionType::U8:
   case TritonGEN::PrecisionType::S8:
+  case TritonGEN::PrecisionType::F8E5M2:
+  case TritonGEN::PrecisionType::F8E4M3FN:
     if (ATy.getNumElements() != getRc() &&
         ATy.getNumElements() != CEIL(getRc(), 2))
       return this->emitOpError("the dimension for the 2nd operand (A) should "
