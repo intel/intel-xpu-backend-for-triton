@@ -70,14 +70,14 @@ def main():
         help="The target to compile towards, in format of '<backend>:<arch>:<warp-size>'; "
         "e.g., 'cuda:80:32', 'hip:gfx942:64'. Default to None, which means using current machine's GPU target")
     parser.add_argument("--num-warps", "-w", type=int, default=1, help="Number of warps to launch the kernel")
-    parser.add_argument("--threads-per-warp", "-tpw", type=int, default=32, help="Number of theads per warp")
+    parser.add_argument("--threads-per-warp", "-tpw", type=int, default=32, help="Number of threads per warp")
     parser.add_argument("--num-stages", "-ns", type=int, default=3,
                         help="Number of stages (meta-parameter of the kernel)")
     parser.add_argument("--out-name", "-on", type=str, default=None, help="Out name for the compiled kernel")
     parser.add_argument("--out-path", "-o", type=Path, default=None, help="Out filename")
     parser.add_argument("--signature", "-s", type=str, help="Signature of the kernel", required=True)
     parser.add_argument("--grid", "-g", type=str, help="Launch grid of the kernel", required=True)
-    parser.add_argument("--grf-mode", "-gm", type=str, default="256", help="Detemine spv build flags")
+    parser.add_argument("--grf-mode", "-gm", type=str, default="256", help="Determine spv build flags")
     parser.add_argument("--generate-native-code", "-gnc", action="store_true",
                         help="Generate native binary instead of SPV for XPU")
     cli_args = parser.parse_args()
