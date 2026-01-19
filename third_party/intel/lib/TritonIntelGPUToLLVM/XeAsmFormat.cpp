@@ -237,6 +237,23 @@ std::optional<std::string> XeVISAInstr::getTypeName(Type scalarTy) {
   TypeSwitch<Type>(scalarTy)
       .Case<Float32Type>([&](auto) { typeSyntax = "f"; })
       .Case<Float16Type>([&](auto) { typeSyntax = "hf"; })
+      .Case<IntegerType>([&](auto type) {
+        unsigned bitWidth = type.getIntOrFloatBitWidth();
+        switch (bitWidth) {
+        case 8:
+          typeSyntax = "ub";
+          break;
+        case 16:
+          typeSyntax = "uw";
+          break;
+        case 32:
+          typeSyntax = "ud";
+          break;
+        case 64:
+          typeSyntax = "uq";
+          break;
+        }
+      })
       .Default([&](auto) { typeSyntax = ""; });
 
   if (!typeSyntax.empty())
@@ -313,6 +330,58 @@ std::string simdReduceAsm(std::string binOp, unsigned warpSize,
               /*srcB*/ colNum == numLaneToReduce / 2 ? "$1" : "temp_result",
               srcBOffM, srcBOffN, rowStride, colNum)
               .str();
+      simdAsm += simdOps;
+    }
+  }
+  simdAsm += "}";
+  return simdAsm;
+}
+
+std::string TransposeAsm(unsigned warpSize, unsigned transWidth,
+                         unsigned transHeight, unsigned numElems, Type elemTy,
+                         XeArch arch) {
+
+  assert(arch != Xe ||
+         warpSize == 16 && "only support warpSize=16 for on Xe arch fow now");
+  unsigned elemSizeInBits = elemTy.getIntOrFloatBitWidth();
+  auto typeName = XeVISAInstr::getTypeName(
+      IntegerType::get(elemTy.getContext(), elemSizeInBits));
+  if (!typeName)
+    llvm_unreachable("Unsupported scalar type");
+
+  unsigned grfSizeInBytes = XeVISAInstr::getGRFSizeInBytes(arch);
+  unsigned grfElemsPerRow =
+      grfSizeInBytes / (elemTy.getIntOrFloatBitWidth() / 8);
+
+  constexpr StringLiteral decl = R"({
+                .decl OUTPUT v_type=G type={0} num_elts={1} alias=<$0, 0>
+                .decl INPUT v_type=G type={0} num_elts={1} alias=<$1, 0>
+  )";
+
+  std::string simdAsm = llvm::formatv(decl.data(), /* type name*/ typeName,
+                                      /* number elements */ numElems)
+                            .str();
+
+  constexpr StringLiteral movOp =
+      R"(mov (M1_NM, {0}) OUTPUT({1},{2})<1> INPUT({3},{4})<{5};1,0>
+  )";
+
+  for (unsigned n = 0; n < numElems; n += transWidth * transHeight) {
+    for (unsigned m = 0; m < transHeight; ++m) {
+      unsigned srcOffset = n + m;
+      unsigned srcOffM = srcOffset / grfElemsPerRow;
+      unsigned srcOffN = srcOffset % grfElemsPerRow;
+      unsigned dstOffset = n + m * transWidth;
+      unsigned dstOffM = dstOffset / grfElemsPerRow;
+      unsigned dstOffN = dstOffset % grfElemsPerRow;
+      std::string simdOps = llvm::formatv(movOp.data(),
+                                          /*simd size*/ transWidth,
+                                          /*out region*/ dstOffM,
+                                          /*out sub-region*/ dstOffN,
+                                          /*in region*/ srcOffM,
+                                          /*in sub-region*/ srcOffN,
+                                          /*stride*/ transHeight)
+                                .str();
       simdAsm += simdOps;
     }
   }
