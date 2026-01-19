@@ -109,8 +109,12 @@ def fresh_triton_cache_scope():
 
 @pytest.fixture
 def fresh_knobs():
+    """
+    Resets all knobs except ``build``, ``nvidia``, and ``amd`` (preserves
+    library paths needed to compile kernels).
+    """
     from triton._internal_testing import _fresh_knobs_impl
-    fresh_function, reset_function = _fresh_knobs_impl()
+    fresh_function, reset_function = _fresh_knobs_impl(skipped_attr={"build", "nvidia", "amd"})
     try:
         yield fresh_function()
     finally:
@@ -118,14 +122,13 @@ def fresh_knobs():
 
 
 @pytest.fixture
-def fresh_knobs_except_libraries():
+def fresh_knobs_including_libraries():
     """
-    A variant of `fresh_knobs` that keeps library path
-    information from the environment as these may be
-    needed to successfully compile kernels.
+    Resets ALL knobs including ``build``, ``nvidia``, and ``amd``.
+    Use for tests that verify initial values of these knobs.
     """
     from triton._internal_testing import _fresh_knobs_impl
-    fresh_function, reset_function = _fresh_knobs_impl(skipped_attr={"build", "nvidia", "amd"})
+    fresh_function, reset_function = _fresh_knobs_impl()
     try:
         yield fresh_function()
     finally:
