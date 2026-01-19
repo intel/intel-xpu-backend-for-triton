@@ -457,7 +457,7 @@ class _attention(torch.autograd.Function):
             N_CTX=q.shape[2],  #
             BLOCK_DMODEL=Lk,  #
             STAGE=stage,  #
-            split_barriers_scope='None',  # possible scope value: 'Subgroup','Workgroup'
+            use_barrier=False,  #
         )
 
         ctx.save_for_backward(q, k, v, o, M)
