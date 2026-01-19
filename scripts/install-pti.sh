@@ -88,7 +88,7 @@ function build_pti {
 
   export PTI_PINNED_COMMIT="$(<$ROOT/.github/pins/pti.txt)"
 
-  uv version 0.14.0.dev1
+  uv version 0.16.0.dev1
   uv build
 }
 
