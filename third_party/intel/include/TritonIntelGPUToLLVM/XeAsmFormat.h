@@ -333,6 +333,10 @@ std::string simdReduceAsm(std::string binOp, unsigned warpSize,
                           unsigned numLaneToReduce, unsigned accSize,
                           Type elemTy, XeArch arch);
 
+std::string TransposeAsm(unsigned warpSize, unsigned transWidth,
+                         unsigned transHeight, unsigned numElems, Type elemTy,
+                         XeArch arch);
+
 } // namespace triton
 } // namespace mlir
 
