@@ -3064,7 +3064,7 @@ void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
                    int numCTAs) {
   assert(numCTAs == 1 && "Expecting numCTA to be 1");
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  b.barrier();
+  b.barrier(triton::gpu::AddrSpace::Local);
 }
 
 struct AtomicCASOpConversion
