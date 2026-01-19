@@ -92,6 +92,7 @@ if 'B580' in torch.xpu.get_device_name():
             (32, 32, 1024, 1024, 128, 128),  # Prefill shapes of Qwen3-4B
             (128, 128, 1024, 1024, 192, 128),  # Prefill shapes of DeepSeek-v3
             (32, 32, 512, 1024 + 128 + 512, 96, 96),  # Append shapes of Phi3-mini-4k-instruct
+
             # Grouped-query attention. H_q / H_kv > 1
             (32, 8, 1024, 1024, 128, 128),  # Prefill shapes of Llama-3.1-8B
             (24, 8, 1024, 1024, 128, 128),  # Prefill shapes of meta-llama-Llama-3.2-3B
@@ -105,9 +106,10 @@ if 'B580' in torch.xpu.get_device_name():
             # ValueError: Shape element 2 must be a power of 2
             # (32, 32, 1, 1024 + 64, 96, 96),  # Decode shapes of Phi3-mini-4k-instruct
             (40, 8, 1, 1024 + 64, 128, 128),  # Decode shapes of Deepseek-R1-Distill-Qwen-14B
+
+            # Multi-query attention. H_kv equals 1
             # OutOfResources: shared memory, Required: 262144, Hardware limit: 131072.
             # (128, 1, 1, 1024 + 64, 576, 512),  # Decode shapes of Deepseek-v3
-            # Multi-query attention. H_kv equals 1
             (128, 1, 512, 1024 + 128 + 512, 576, 512),  # Append shapes of Deepseek-v3
         ] + ([
             # Shapes only for bwd
