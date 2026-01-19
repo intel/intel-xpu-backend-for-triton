@@ -24,7 +24,7 @@ env:
   PYTHON_VERSION: "3.10"
   NEW_WORKSPACE: C:\gh${{ github.run_id }}
   SKIPLIST: --skip-list scripts/skiplist/${{ inputs.skip_list }}
-  TRITON_TEST_CMD: bash -x scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --skip-list scripts/skiplist/${{ inputs.skip_list }} --reports-dir reports --ignore-errors
+  TRITON_TEST_CMD: bash -x scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --skip-list scripts/skiplist/${{ inputs.skip_list }} --reports-dir reports
 
 jobs:
   build:
@@ -146,6 +146,7 @@ jobs:
           pip uninstall pytest_forked -y
 
       - name: Run unit tests
+        if: ${{ !cancelled() }}
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
@@ -153,6 +154,7 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --unit
 
       - name: Run core tests
+        if: ${{ !cancelled() }}
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
@@ -160,6 +162,7 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --core
 
       - name: Run gluon tests
+        if: ${{ !cancelled() }}
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
@@ -167,6 +170,7 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --gluon
 
       - name: Run triton kernels tests
+        if: ${{ !cancelled() }}
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
@@ -174,6 +178,7 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --triton-kernels
 
       - name: Run interpreter tests
+        if: ${{ !cancelled() }}
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
@@ -181,6 +186,7 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --interpreter
 
       - name: Run tutorials
+        if: ${{ !cancelled() }}
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
@@ -190,6 +196,7 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --tutorial
 
       - name: Run instrumentation tests
+        if: ${{ !cancelled() }}
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
@@ -197,6 +204,7 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --instrumentation
 
       - name: Pass rate
+        if: ${{ !cancelled() }}
         run: |
           .venv\Scripts\activate.ps1
           # oneAPI is required for sycl-ls, which is used by scripts/capture-hw-details.sh
@@ -212,13 +220,14 @@ jobs:
 
       - name: Upload pass rate report
         # upload reports only for the default branch
-        if: github.ref_name == 'main'
+        if: ${{ !cancelled() && github.ref_name == 'main' }}
         uses: actions/upload-artifact@v5
         with:
           name: pass_rate
           path: ${{ env.NEW_WORKSPACE }}\pass_rate*.json
 
       - name: Upload tutorial performance
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v5
         with:
           name: tutorials-report
