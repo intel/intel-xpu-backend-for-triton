@@ -16,6 +16,9 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "intel/include/Utils/Utility.h"
 #include "triton/Tools/LinearLayout.h"
+#include <TritonIntelGPUToLLVM/XeAsmFormat.h>
+#include <llvm/IR/InlineAsm.h>
+#include <llvm/Support/FormatVariadic.h>
 #include <optional>
 #include <triton/Tools/Sys/GetEnv.hpp>
 
@@ -1957,7 +1960,26 @@ struct LoadOpToBlockIOConversion
 
           unpackedVal = b.bitcast(dpasOperand, unpackedType);
         } else {
-          unpackedVal = b.bitcast(ret, unpackedType);
+          if (isTransposeRequired) {
+            if (numPackedVals > 1 && tileHeight != threadsPerWarp) {
+              std::string simdAsm = TransposeAsm(
+                  threadsPerWarp, tileHeight, numPackedVals,
+                  threadsPerWarp * numValuesPerLoad * numPackedVals, eltTy,
+                  XeArch::Xe2);
+
+              XeBuilder xeBuilder;
+              XeInstr &transpose = *xeBuilder.create<XeInstr>(simdAsm);
+              XeBuilder::Operand *res = xeBuilder.newOperand("=rw");
+              XeBuilder::Operand *unpackIn = xeBuilder.newOperand(ret, "rw");
+              transpose({res, unpackIn}, /*onlyAttachMLIRArgs=*/true);
+              unpackedVal =
+                  xeBuilder.launch(rewriter, loc, unpackedType, false);
+            } else {
+              // we can use the bitcast to do the transpose
+              unpackedVal = b.bitcast(ret, unpackedType);
+            }
+          } else
+            unpackedVal = b.bitcast(ret, unpackedType);
         }
 
         SmallVector<int32_t> unpackIndices(numElemsPerUnpackedType);
