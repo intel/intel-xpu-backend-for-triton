@@ -177,7 +177,7 @@ class BenchmarkConfigs(MarkArgs):
             reporting_group.add_argument(
                 "--reports", type=str, default="", help=
                 ("Path to the folder to save the reports,"
-                 "if provided csv perfromance report for each bencmark ('<benchmark_config>.xml') will be generated and saved."
+                 "if provided csv performance report for each benchmark ('<benchmark_config>.xml') will be generated and saved."
                  ))
             reporting_group.add_argument(
                 "--junit-report",
@@ -189,7 +189,7 @@ class BenchmarkConfigs(MarkArgs):
                 type=str,
                 default="",
                 required=False,
-                help="How to tag results in the perfromance reports.",
+                help="How to tag results in the performance reports.",
             )
 
         def _add_run_opts(cmd_with_run_opts_parser: argparse.ArgumentParser):
@@ -233,7 +233,7 @@ class BenchmarkConfigs(MarkArgs):
                 help=("Show detailed outputs.\n"
                       "For config summary - info on providers, categories, shape fields. "
                       "Default shows only config[<shape>]\n"
-                      "For the detailed run results - memory throughtput and coefficient of variation between runs."
+                      "For the detailed run results - memory throughput and coefficient of variation between runs."
                       "Default shows only compute performance\n"),
             )
             output_group.add_argument(
