@@ -84,6 +84,7 @@ uint32_t processActivityKernel(
   if (!/*not valid*/ corrIdToExternId.withRead(
           correlationId, [&externId](size_t value) { externId = value; })) {
     corrIdToExternId.erase(correlationId);
+    return correlationId;
   }
   if (true) {
     // Non-graph kernels
@@ -153,8 +154,12 @@ struct XpuptiProfiler::XpuptiProfilerPimpl
   XpuptiProfilerPimpl(XpuptiProfiler &profiler)
       : GPUProfiler<XpuptiProfiler>::GPUProfilerPimplInterface(profiler) {
     // FIXME: enable metrics
-    // runtime = &XpuRuntime::instance();
-    // metricBuffer = std::make_unique<MetricBuffer>(1024 * 1024 * 64, runtime);
+    auto runtime = &XpuRuntime::instance();
+    profiler.metricBuffer =
+        std::make_unique<MetricBuffer>(1024 * 1024 * 64, runtime,
+                                       /*mapped=*/true);
+    // profiler.pendingGraphPool =
+    //    std::make_unique<PendingGraphPool>(profiler.metricBuffer.get());
   }
   virtual ~XpuptiProfilerPimpl() = default;
 
