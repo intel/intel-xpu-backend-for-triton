@@ -45,8 +45,7 @@ public:
   ///  - M = RC = 1,2,4,8 (we use 8)
   ///  - N = exec_size = SIMD_width = 16
   ///  - Size of A, B element type = {32,16,8}, for {tf32,bf16/f16,u8/i8}
-  ///  - K=SD * num_packed_elems_in_Dword = {8,16,32}, for
-  ///  {tf32,bf16/f16,u8/i8}
+  ///  - K=SD * num_packed_elems_in_Dword = {8,16,32}, for {tf32,bf16/f16,u8/i8}
   ///
   /// The per-lane intrinsic function generated is defined to perform the
   /// following operation:
@@ -294,7 +293,9 @@ private:
       return {cTy, cTy, aTy, bTy};
     }
     default:
-      llvm::report_fatal_error("Unsupported dpas type found");
+      llvm::report_fatal_error(
+          "Unsupported dpas type found: " +
+          StringRef(std::to_string(static_cast<int>(dpasType))));
     }
 
     return std::make_tuple<Type, Type, Type, Type>({}, {}, {}, {});
@@ -363,15 +364,17 @@ private:
       Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
       return {cTy, cTy, aTy, bTy};
     }
-    case ttgi::DPASEngineTypeXe3P::FP32_FP32_FP8_FP8: {
+    case ttgi::DPASEngineTypeXe3P::FP32_FP32_FP8_FP8:
+    case ttgi::DPASEngineTypeXe3P::FP32_FP32_FP4_FP4: {
       Type cTy = vec_ty(fp32Ty, elemNumC);
       Type aTy = vec_ty(i16Ty, elemNumA / 2);             // pack scalar to i16.
       Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
       return {cTy, cTy, aTy, bTy};
     }
     default:
-      llvm::errs() << "dpasType: " << static_cast<int>(dpasType) << "\n";
-      llvm::report_fatal_error("1111 Unsupported dpas type found");
+      llvm::report_fatal_error(
+          "Unsupported dpas type found: " +
+          StringRef(std::to_string(static_cast<int>(dpasType))));
     }
 
     return std::make_tuple<Type, Type, Type, Type>({}, {}, {}, {});
