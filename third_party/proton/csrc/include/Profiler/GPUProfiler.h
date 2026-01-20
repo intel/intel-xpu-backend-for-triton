@@ -4,6 +4,7 @@
 #include "Context/Context.h"
 #include "Data/Metric.h"
 #include "Profiler.h"
+#include "Profiler/Graph.h"
 #include "Session/Session.h"
 #include "Utility/Atomic.h"
 #include "Utility/Env.h"
@@ -28,7 +29,8 @@ void flushDataPhasesImpl(
     std::map<Data *, size_t> &dataFlushedPhases,
     const std::map<Data *,
                    std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
-        &dataPhases);
+        &dataPhases,
+    PendingGraphPool *pendingGraphPool);
 
 void updateDataPhases(
     std::map<Data *, std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
@@ -125,9 +127,11 @@ protected:
       std::map<Data *, size_t> &dataFlushedPhases,
       const std::map<Data *,
                      std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
-          &dataPhases) {
+          &dataPhases,
+      PendingGraphPool *pendingGraphPool) {
     detail::flushDataPhasesImpl(periodicFlushingEnabled, periodicFlushingFormat,
-                                dataFlushedPhases, dataPhases);
+                                dataFlushedPhases, dataPhases,
+                                pendingGraphPool);
   }
 
   // Profiler
@@ -224,6 +228,10 @@ protected:
   };
 
   static thread_local ThreadState threadState;
+
+  std::unique_ptr<MetricBuffer> metricBuffer;
+  std::unique_ptr<PendingGraphPool> pendingGraphPool;
+
   Correlation correlation;
   void *syclQueue;
 
@@ -248,14 +256,15 @@ protected:
       if (threadState.isStreamCapturing) { // Graph capture mode
         threadState.isMetricKernelLaunching = true;
         // Launch metric kernels
-        metricBuffer->receive(
+        profiler.metricBuffer->receive(
             scalarMetrics, tensorMetrics, profiler.tensorMetricKernel,
             profiler.scalarMetricKernel, profiler.metricKernelStream);
         threadState.isMetricKernelLaunching = false;
       } else { // Eager mode, directly copy
         // Populate tensor metrics
-        auto tensorMetricsHost = metricBuffer->collectTensorMetrics(
-            tensorMetrics, profiler.metricKernelStream);
+        auto tensorMetricsHost =
+            collectTensorMetrics(profiler.metricBuffer->getRuntime(),
+                                 tensorMetrics, profiler.metricKernelStream);
         auto &dataToEntry = threadState.dataToEntry;
         if (dataToEntry.empty()) {
           // Add metrics to a specific scope
@@ -275,8 +284,6 @@ protected:
 
   protected:
     ConcreteProfilerT &profiler;
-    std::unique_ptr<MetricBuffer> metricBuffer;
-    Runtime *runtime{nullptr};
   };
 
   std::unique_ptr<GPUProfilerPimplInterface> pImpl;
