@@ -1,7 +1,5 @@
 # Native API returns: 17 (UR_RESULT_ERROR_PROFILING_INFO_NOT_AVAILABLE)
 03-matrix-multiplication
-04-low-memory-dropout
-05-layer-norm
 06-fused-attention
 08-grouped-gemm
 09-persistent-matmul
