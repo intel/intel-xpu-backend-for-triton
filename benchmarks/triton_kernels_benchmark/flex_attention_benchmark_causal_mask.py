@@ -127,7 +127,11 @@ if 'B580' in torch.xpu.get_device_name():
         plot_name='flexAttnCausal-performance',
         args={},
     ))
+# pylint: disable=too-many-branches
 def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provider):
+    print(
+        f'Running case: {Z=}, {H_q=}, {H_kv=}, {N_CTX_q=}, {N_CTX_kv=}, {D_HEAD_qk=}, {D_HEAD_v=}, {MODE=}, {provider=}'
+    )
     torch.xpu.empty_cache()
     # Maximum across torch=200, triton=600
     do_bench = benchmark_suite.get_do_bench(n_warmup=600, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
@@ -156,18 +160,35 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
         triton_fn = lambda: compiled_flex_attention(q, k, v, block_mask=block_mask, scale=sm_scale, enable_gqa=(
             not H_q == H_kv), kernel_options=kernel_options)
         if MODE == 'bwd':
+            backwards_grad = torch.randn(Z, H_q, N_CTX_q, D_HEAD_v, dtype=dtype, device=DEVICE)
+
             torch_o = torch_fn()
-            backwards_grad = torch.randn_like(torch_o)
-            torch_grads = torch.autograd.grad((torch_o, ), (q, k, v), backwards_grad, retain_graph=True)
-            eager_tensors = (torch_o, *torch_grads)
+            perform_correctness_check = True
+            try:
+                torch_grads = torch.autograd.grad((torch_o, ), (q, k, v), backwards_grad, retain_graph=True)
+                eager_tensors = (torch_o, *torch_grads)
+            except (torch.OutOfMemoryError, RuntimeError) as e:
+                if any(keyword in str(e) for keyword in ('UR_RESULT_ERROR_OUT_OF_RESOURCES',
+                                                         'UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY', 'OutOfMemoryError')):
+                    print(f'Exception during torch bwd: {e}')
+                    print(
+                        'Skipping correctness check because reference torch eager backward call failed due to out of memory error'
+                    )
+                    torch.xpu.empty_cache()
+                    perform_correctness_check = False
+                else:
+                    raise
+
             triton_o = triton_fn()
             triton_grads = torch.autograd.grad((triton_o, ), (q, k, v), backwards_grad, retain_graph=True)
             compiled_tensors = (triton_o, *triton_grads)
 
-            tensor_names = ['out', 'grad_query', 'grad_key', 'grad_value']
-            for eager, compiled, name in zip(eager_tensors, compiled_tensors, tensor_names):
-                benchmark_suite.assert_close(lambda: eager, lambda: compiled, atol=1e-2, rtol=1e-3,  # pylint: disable=cell-var-from-loop
-                                             err_msg=f'Error comparing {name} between triton and torch')
+            if perform_correctness_check:
+                tensor_names = ['out', 'grad_query', 'grad_key', 'grad_value']
+                for eager, compiled, name in zip(eager_tensors, compiled_tensors, tensor_names):
+                    print(f'{name} -> {eager.shape}')
+                    benchmark_suite.assert_close(lambda: eager, lambda: compiled, atol=1e-2, rtol=1e-3,  # pylint: disable=cell-var-from-loop
+                                                 err_msg=f'Error comparing {name} between triton and torch')
 
             triton_fn = lambda: torch.autograd.grad((triton_o, ), (q, k, v), backwards_grad, retain_graph=True)
         else:
