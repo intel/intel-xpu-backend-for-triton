@@ -164,9 +164,9 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
         if MODE == 'bwd':
             backwards_grad = torch.randn(Z, H_q, N_CTX_q, D_HEAD_v, dtype=dtype, device=DEVICE)
 
-            torch_o = torch_fn()
             perform_correctness_check = True
             try:
+                torch_o = torch_fn()
                 torch_grads = torch.autograd.grad((torch_o, ), (q, k, v), backwards_grad, retain_graph=True)
                 eager_tensors = (torch_o, *torch_grads)
             except (torch.OutOfMemoryError, RuntimeError) as e:
@@ -175,7 +175,7 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
                                        'UR_RESULT_ERROR_DEVICE_LOST', 'OutOfMemoryError')):
                     print(f'Exception during torch bwd: {e}')
                     print(
-                        'Skipping correctness check because reference torch eager backward call failed due to out of memory error'
+                        'Skipping correctness check because reference torch eager call failed due to out of memory error'
                     )
                     torch.xpu.empty_cache()
                     perform_correctness_check = False
