@@ -144,7 +144,8 @@ DPASAnalysis<DPASEngineType, Enable>::getDPASType(OpTy op) {
 
     auto m = op->template getParentOfType<ModuleOp>();
     bool isFp8Supported =
-        m->hasAttr(TritonIntelGPUDialect::getSupportBlockScaleDPASAttrName());
+        m->hasAttr(TritonIntelGPUDialect::getSupportDPASWithBF8AttrName());
+
     if (isa<FloatType>(dElemTy)) {
       if (dElemTy.isF32()) {
         if (aElemTy.isF16())
@@ -158,8 +159,7 @@ DPASAnalysis<DPASEngineType, Enable>::getDPASType(OpTy op) {
         if (isa<Float8E5M2Type, Float8E4M3FNType>(aElemTy)) {
           if (!isFp8Supported)
             return DPASEngineType::FP32_FP32_FP16_FP16;
-          else
-            return DPASEngineType::FP32_FP32_FP8_FP8;
+          return DPASEngineType::FP32_FP32_FP8_FP8;
         }
       } else if (dElemTy.isF16()) {
         if (aElemTy.isF16())

@@ -8,7 +8,7 @@ for arg in "$@"; do
       shift
       ;;
     --help)
-      echo "Example usage: ./capture-hw-detauls.sh [-q | --quiet]"
+      echo "Example usage: ./capture-hw-details.sh [-q | --quiet]"
       exit 1
       ;;
     *)
