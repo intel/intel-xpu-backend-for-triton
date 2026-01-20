@@ -613,7 +613,7 @@ LinearLayout BlockScaledDPAStoLinearLayout(ArrayRef<int64_t> shape,
 
   unsigned scaleOpKDim = getUnsignedKDim(scaleKIndex, rank);
   assert((scaleOpKDim == rank - 1) &&
-         "Only support scaleOpKDim is the last dim of blocked scale");
+         "scaleOpKDim must be the last dim of blocked scale");
   unsigned scaleOpNonKDim = getUnsignedKDim(scaleKIndex ^ 1, rank);
   if (opIdx == 3) { // Operand Scale A
     auto regBasesA = BlockScaledDPASRegBasesScaleA(opsPerChannel);
