@@ -162,7 +162,7 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
         triton_fn = lambda: compiled_flex_attention(q, k, v, block_mask=block_mask, scale=sm_scale, enable_gqa=(
             not H_q == H_kv), kernel_options=kernel_options)
         if MODE == 'bwd':
-            backwards_grad = torch.randn(Z, H_q, N_CTX_q, D_HEAD_v, dtype=dtype, device=DEVICE)
+            backwards_grad = torch.randn(Z, H_q, N_CTX_q, D_HEAD_v, dtype=dtype, device=DEVICE, requires_grad=True)
 
             perform_correctness_check = True
             try:
