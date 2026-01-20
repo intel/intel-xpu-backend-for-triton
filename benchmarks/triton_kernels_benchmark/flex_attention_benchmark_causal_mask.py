@@ -115,11 +115,11 @@ if 'B580' in torch.xpu.get_device_name():
             (128, 1, 512, 1024 + 128 + 512, 576, 512),  # Append shapes of Deepseek-v3
         ] + ([
             # Shapes only for bwd
-            [h, h, seq_len, seq_len, 128, 128]
-            for h in [1, 2, 4, 16, 24, 32]
-            for seq_len in [4096, 8192]
+            [h, h, seq_len, seq_len, 128, 128]  #
+            for h in [1, 2, 4, 16, 24, 32]  #
+            for seq_len in [4096, 8192]  #
             # FIXME: OutOfMemoryError: XPU out of memory (#5725)
-            if not (h in [1, 16, 24, 32] and seq_len == 8192)
+            #if not (h in [1, 16, 24, 32] and seq_len == 8192)
         ] if fa_kernel_mode == 'bwd' else [])],
         line_arg='provider',
         line_vals=['triton', 'torch'],
