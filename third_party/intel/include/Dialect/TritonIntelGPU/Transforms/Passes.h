@@ -13,9 +13,6 @@
 
 namespace mlir::triton::gpu::intel {
 
-/// Split barrier scope
-enum SplitBarrierScope { None = 0, Workgroup = 1, Subgroup = 2 };
-
 #define GEN_PASS_DECL
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
 

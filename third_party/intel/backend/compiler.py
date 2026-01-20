@@ -41,7 +41,7 @@ class XPUOptions:
     allow_fp8e4nv: bool = False
     allow_fp8e4b15: bool = True
     grf_mode: str = 'default'
-    split_barriers_scope: str = 'None'
+    use_barrier: bool = False
     max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
     debug: bool = False
@@ -235,15 +235,6 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         module_opts.threads_per_warp = opt.warp_size
         module_opts.target_arch = cls.target_arch
 
-    @staticmethod
-    def get_split_barrier_scope(opt):
-        split_barriers_scope = intel.SplitBarrierScope.none
-        if opt.split_barriers_scope == 'Workgroup':
-            split_barriers_scope = intel.SplitBarrierScope.Workgroup
-        elif opt.split_barriers_scope == 'Subgroup':
-            split_barriers_scope = intel.SplitBarrierScope.Subgroup
-        return split_barriers_scope
-
     @classmethod
     @track
     def make_ttir(cls, mod, metadata, opt):
@@ -294,7 +285,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.ttgpuir.add_materialize_block_pointer(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_optimize_dot_operands(pm)
-        intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, XPUBackend.get_split_barrier_scope(opt))
+        intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.use_barrier)
 
         if (opt.reduce_variable_liveness):
             intel.passes.ttgpuir.add_reduce_variable_liveness(pm)

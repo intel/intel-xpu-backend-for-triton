@@ -75,13 +75,8 @@ def TritonIntelGPUPipeline : Pass<"tritonintelgpu-pipeline", "mlir::ModuleOp"> {
     Option<"numStages", "num-stages",
            "int32_t", /*default*/"3",
            "number of pipeline stages">,
-    Option<"splitBarrierScope", "split-barriers-scope",
-           "enum SplitBarrierScope", "SplitBarrierScope::None",
-           "insert split barriers in a loop",
-           "llvm::cl::values("
-           "clEnumValN(SplitBarrierScope::None, \"none\", \"No scope\"), "
-           "clEnumValN(SplitBarrierScope::Workgroup, \"workgroup\", \"Workgroup scope\"), "
-           "clEnumValN(SplitBarrierScope::Subgroup, \"subgroup\", \"Subgroup scope\"))">,
+    Option<"useBarrier", "use-barrier", "bool", /*default*/"false",
+           "generate barriers">,
   ];
 }
 
