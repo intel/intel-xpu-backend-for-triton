@@ -1223,8 +1223,6 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
             pytest.xfail("XPU: Not enough shared memory")
         if is_xpu_cri():
             is_both_fp8 = (A_DATA_TYPE in ['float8e5', 'float8e4nv']) and (B_DATA_TYPE in ['float8e5', 'float8e4nv'])
-            if not is_both_fp8 and A_DATA_TYPE != B_DATA_TYPE:
-                pytest.skip("Skip mixed precision because it is emulated by dpas for now. issue #678")
             if is_both_fp8 and (BLOCK_M, BLOCK_N, BLOCK_K) == (128, 256, 256):
                 pytest.skip("Skip the test on simulator because too many register spilling occurs on XPU for now.")
             if B_DATA_TYPE == "float4" and not PACK_B_ALONG_K:
