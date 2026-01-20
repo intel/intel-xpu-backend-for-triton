@@ -1438,19 +1438,6 @@ struct LoadOpToBlockIOConversion
 
     SmallVector<Value> baseOffsets = getOffsets(rewriter, ptr, unpackedPtr);
 
-    SmallVector<Value> shapes = getShapes(rewriter, ptr, unpackedPtr);
-    Value baseWidth, baseHeight;
-    if (isTensorPointerType(ptr.getType())) {
-      baseWidth = b.trunc(i32_ty, shapes[memoryRowMajor ? colDim : rowDim]);
-      baseHeight = b.trunc(i32_ty, shapes[memoryRowMajor ? rowDim : colDim]);
-      baseWidth = b.mul(baseWidth, b.i32_val(elemSizeInBits / 8));
-    } else {
-      // If the stride is 0, we want to load only the first row.
-      int stride = getStride(ptr, memoryRowMajor ? rowDim : colDim);
-      baseHeight = b.i32_val((stride == 0 ? 1 : tileHeight));
-      baseWidth = b.i32_val(vBlocks * tileWidth * (packedElemSizeInBits / 8));
-    }
-
     bool useVNNIFormat = false;
     Type packedDPASOperandType;
     if (hasDpasEncoding(tensorType) || hasDotDpasEncoding(tensorType)) {
@@ -1564,6 +1551,20 @@ struct LoadOpToBlockIOConversion
       } break;
       }
     }
+
+    SmallVector<Value> shapes = getShapes(rewriter, ptr, unpackedPtr);
+    Value baseWidth, baseHeight;
+    if (isTensorPointerType(ptr.getType())) {
+      baseWidth = b.trunc(i32_ty, shapes[memoryRowMajor ? colDim : rowDim]);
+      baseHeight = b.trunc(i32_ty, shapes[memoryRowMajor ? rowDim : colDim]);
+      baseWidth = b.mul(baseWidth, b.i32_val(elemSizeInBits / 8));
+    } else {
+      // If the stride is 0, we want to load only the first row.
+      int stride = getStride(ptr, memoryRowMajor ? rowDim : colDim);
+      baseHeight = b.i32_val((stride == 0 ? 1 : tileHeight));
+      baseWidth = b.i32_val(vBlocks * tileWidth * (packedElemSizeInBits / 8));
+    }
+
     Value warpId = arith::IndexCastOp::create(
         rewriter, loc, i32_ty,
         mlir::gpu::SubgroupIdOp::create(rewriter, loc,
@@ -2417,7 +2418,7 @@ void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
                    int numCTAs) {
   assert(numCTAs == 1 && "Expecting numCTA to be 1");
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  b.barrier();
+  b.barrier(triton::gpu::AddrSpace::Local);
 }
 
 struct AtomicCASOpConversion

@@ -48,7 +48,8 @@ unsigned getOpsPerChannel(Type elemType, ModuleOp m) {
   assert(elemType.isIntOrFloat() && "unsupported type for DpasEncodingAttr");
 
   unsigned dpasElemBitWidths = elemType.getIntOrFloatBitWidth();
-  bool supportsFP8 = false; // TODO: query a module attribute.
+  bool supportsFP8 =
+      m->hasAttr(ttgi::TritonIntelGPUDialect::getSupportDPASWithBF8AttrName());
   if (!supportsFP8 && llvm::isa<Float8E5M2Type, Float8E4M3FNType>(elemType))
     dpasElemBitWidths *= 2; // We are upcasting FP8 to FP16.
 
@@ -104,7 +105,14 @@ public:
     auto funcOp = op->template getParentOfType<FunctionOpInterface>();
     ModuleOp mod = funcOp->template getParentOfType<ModuleOp>();
     auto dpasAnalysis = ttgi::DPASAnalysisFactory::createDPASAnalysis(mod);
+
+    // Ensure function wide DPAS applicability.
     if (ttgi::DPASAnalysisFactory::canUseDPAS(funcOp, dpasAnalysis) !=
+        ttgi::DPASAnalysisResult::True)
+      return failure();
+
+    // Ensure operation DPAS applicability.
+    if (ttgi::DPASAnalysisFactory::canUseDPAS(op, dpasAnalysis) !=
         ttgi::DPASAnalysisResult::True)
       return failure();
 
@@ -142,6 +150,9 @@ public:
             : dpasCap.systolicDepth * 2; // A is packed to i16 or i32.
     unsigned minM = mlir::ceil<unsigned>(threadsPerWarp, numElemsPerRowForA);
     repeatCount = std::max(repeatCount, minM);
+
+    ttgi::DPASEngineTypeVariant dpasType =
+        ttgi::DPASAnalysisFactory::getDPASType(op, dpasAnalysis);
 
     auto dpasEnc = ttgi::DpasEncodingAttr::get(
         oldRetType.getContext(), repeatCount, dpasCap.systolicDepth,
@@ -218,10 +229,13 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
 
     Type promoteType;
     if (dpasLayout) {
-      bool isNativeFP8 = isa<Float8E5M2Type, Float8E4M3FNType>(AElType);
       // fp8 is not always natively supported by the the DPAS instruction,
       // promote it to fp16 when necessary.
-      if (!isNativeFP8)
+      bool isNativeFP8 = isa<Float8E5M2Type, Float8E4M3FNType>(AElType);
+      auto mod = dotOp->getParentOfType<ModuleOp>();
+      bool supportsFP8 = mod->hasAttr(
+          ttgi::TritonIntelGPUDialect::getSupportDPASWithBF8AttrName());
+      if (supportsFP8 || !isNativeFP8)
         return;
       promoteType = builder.getF16Type();
     } else {

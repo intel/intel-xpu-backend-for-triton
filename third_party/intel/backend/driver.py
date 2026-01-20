@@ -191,7 +191,7 @@ class SpirvUtils:
 
     def __init__(self, cache_path: str):
         self.shared_library = ctypes.PyDLL(cache_path)
-        methods = ("init_devices", "load_binary", "wait_on_sycl_queue", "has_opencl_extension")
+        methods = ("init_devices", "load_binary", "wait_on_sycl_queue", "has_opencl_extension", "sycl_queue_memset")
         for method in methods:
             getattr(self.shared_library, method).restype = ctypes.py_object
             getattr(self.shared_library, method).argtypes = (ctypes.py_object, )
@@ -203,7 +203,7 @@ class SpirvUtils:
 
     def __getattribute__(self, name):
         if name in ("get_device_properties", "init_devices", "wait_on_sycl_queue", "has_opencl_extension",
-                    "get_last_selected_build_flags"):
+                    "get_last_selected_build_flags", "sycl_queue_memset"):
             shared_library = super().__getattribute__("shared_library")
             return getattr(shared_library, name)
 
@@ -328,6 +328,7 @@ class XPUUtils(object):
         self.wait_on_sycl_queue = mod.wait_on_sycl_queue
         self.has_opencl_extension = mod.has_opencl_extension
         self.get_last_selected_build_flags = mod.get_last_selected_build_flags
+        self.sycl_queue_memset = mod.sycl_queue_memset
 
     def get_current_device(self):
         import torch
@@ -339,6 +340,10 @@ class XPUUtils(object):
 
     def wait(self):
         self.wait_on_sycl_queue(self.get_sycl_queue())
+
+    def memset(self, ptr, value, count):
+        """Wrapper for SYCL queue memset"""
+        return self.sycl_queue_memset((self.get_sycl_queue(), ptr, value, count))
 
 
 # ------------------------

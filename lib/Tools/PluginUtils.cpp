@@ -91,7 +91,7 @@ llvm::Expected<TritonPluginResult> TritonPlugin::enumeratePyBindHandles(
     return TP_SUCCESS;
   std::string msg;
   llvm::raw_string_ostream os(msg);
-  os << "Failed to retrive plugin pass handles, error code: " << result;
+  os << "Failed to retrieve plugin pass handles, error code: " << result;
   return llvm::createStringError(msg);
 }
 

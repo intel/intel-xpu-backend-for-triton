@@ -405,7 +405,8 @@ module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 8 : i32, "ttg.thr
     // CHECK: %[[TOP_LEFT_MASK_BOOL_112:.*]] = llvm.extractvalue {{.*}}[112] : !llvm.struct<(i1, i1, {{.*}}
     // CHECK: %[[TOP_LEFT_MASK_BOOL_120:.*]] = llvm.extractvalue {{.*}}[120] : !llvm.struct<(i1, i1, {{.*}}
 
-    // CHECK: %[[BLOCK_SHAPE_Y:.*]] = llvm.mlir.constant(16 : i32) : i32
+    // SMALL-BLOCK-SIZE-C: %[[BLOCK_SHAPE_Y:.*]] = llvm.mlir.constant(8 : i32) : i32
+    // LARGE-BLOCK-SIZE-C: %[[BLOCK_SHAPE_Y:.*]] = llvm.mlir.constant(16 : i32) : i32
     // CHECK: %[[TOP_LEFT_PTR:.*]] = llvm.ptrtoint {{.*}} : !llvm.ptr<1> to i64
     // CHECK: %[[VAL_2886:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflelj(%[[TOP_LEFT_PTR]], {{.*}}) {convergent, no_unwind, will_return} : (i64, i32) -> i64
     // CHECK: %[[UNIFORM_PTR:.*]] = llvm.inttoptr %[[VAL_2886]] : i64 to !llvm.ptr<1>
