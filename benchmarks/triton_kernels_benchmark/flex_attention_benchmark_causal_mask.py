@@ -170,8 +170,9 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
                 torch_grads = torch.autograd.grad((torch_o, ), (q, k, v), backwards_grad, retain_graph=True)
                 eager_tensors = (torch_o, *torch_grads)
             except (torch.OutOfMemoryError, RuntimeError) as e:
-                if any(keyword in str(e) for keyword in ('UR_RESULT_ERROR_OUT_OF_RESOURCES',
-                                                         'UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY', 'OutOfMemoryError')):
+                if any(keyword in str(e)
+                       for keyword in ('UR_RESULT_ERROR_OUT_OF_RESOURCES', 'UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY',
+                                       'UR_RESULT_ERROR_DEVICE_LOST', 'OutOfMemoryError')):
                     print(f'Exception during torch bwd: {e}')
                     print(
                         'Skipping correctness check because reference torch eager backward call failed due to out of memory error'
