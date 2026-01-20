@@ -33,7 +33,7 @@ public:
 
   size_t getContextDepth();
 
-  Profiler *getProfiler() { return profiler; }
+  Profiler *getProfiler() const { return profiler; }
 
 private:
   Session(size_t id, const std::string &path, Profiler *profiler,
@@ -98,11 +98,11 @@ public:
 
   std::string getData(size_t sessionId, size_t phase);
 
-  void clearData(size_t sessionId, size_t phase);
+  void clearData(size_t sessionId, size_t phase, bool clearUpToPhase = false);
 
   size_t advanceDataPhase(size_t sessionId);
 
-  bool isDataPhaseFlushed(size_t sessionId, size_t phase);
+  bool isDataPhaseComplete(size_t sessionId, size_t phase);
 
   void enterScope(const Scope &scope);
 
@@ -144,6 +144,8 @@ private:
                                        const std::string &mode,
                                        void *sycl_queue,
                                        const std::string &utils_cache_path);
+
+  Session *getSessionOrThrow(size_t sessionId);
 
   void activateSessionImpl(size_t sessionId);
 
