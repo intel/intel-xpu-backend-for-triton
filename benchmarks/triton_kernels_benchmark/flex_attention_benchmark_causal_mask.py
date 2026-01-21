@@ -7,6 +7,8 @@ from torch.nn.attention.flex_attention import (
 )
 
 import torch
+import torch.xpu
+from torch.xpu import get_device_capability as old_get_device_capability
 import torch._inductor
 import torch._inductor.lowering
 import torch._inductor.kernel
@@ -14,6 +16,7 @@ import torch._inductor.kernel.flex.flex_attention as flex_attn
 from torch._inductor.template_heuristics.triton import FlexConfig, FlexDecodeConfig
 
 import triton_kernels_benchmark as benchmark_suite
+from triton.runtime.driver import driver
 import triton
 
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
@@ -46,6 +49,18 @@ def get_flex_decode_configs(*args, **kwargs):  # pylint: disable=unused-argument
     ]
     return configs
 
+
+@lru_cache(None)
+def get_device_capability(*args, **kwargs):
+    props = old_get_device_capability(*args, **kwargs)
+
+    driver.active.update_advanced_features(props)
+    driver.active.update_device_arch(props)
+
+    return props
+
+
+torch.xpu.get_device_capability = get_device_capability
 
 # There is a auto-tuning requirement to get the best configuration for the flex attention.
 # The pytorch flex attention doesn't support auto-tuning by user by default.
