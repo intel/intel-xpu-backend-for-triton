@@ -71,12 +71,13 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str]]:
         # being add: include and include/sycl.
         if "sycl.hpp" in f.name:
             include_dir += [str(f.locate().parent.parent.resolve())]
-        if any(map(lambda el: el in f.name, ("libsycl.so", "sycl8.dll", "sycl8.lib"))):
-            sycl_dir = str(f.locate().parent.resolve())
-            # should we handle `_` somehow?
+        if any(map(lambda el: el in f.name, ("libsycl.so", "sycl8.dll", "sycl.lib"))):
+            sycl_dir = f.locate().parent.resolve()
             if os.name == "nt":
-                _ = os.add_dll_directory(sycl_dir)
-            sycl_dirs.append(sycl_dir)
+                # for sycl8.dll loading on Windows
+                dll_path = sycl_dir.parent.joinpath("bin")
+                _ = os.add_dll_directory(str(dll_path))
+            sycl_dirs.append(str(sycl_dir))
 
     assert len(sycl_dirs) != 0
     return include_dir, sycl_dirs
@@ -91,11 +92,7 @@ class CompilationHelper:
         self._library_dir = None
         self._include_dir = None
         self._libsycl_dir = None
-        self.libraries = ['ze_loader']
-        if os.name != "nt":
-            self.libraries += ["sycl"]
-        else:
-            self.libraries += ['sycl8']
+        self.libraries = ['sycl', 'ze_loader']
 
     @property
     def inject_pytorch_dep(self):

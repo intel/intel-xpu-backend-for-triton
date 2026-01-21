@@ -193,11 +193,11 @@ def _cxx_link_cmd(cxx: str, o_files: list, out: str, extra_library_dirs: list = 
     if "cl.EXE" in cxx or "clang-cl" in cxx:
         command = [cxx] + [*o_files, *(["/LD"] if shared_lib else []), "/link", f"/OUT:{out}"] + [
             "/LIBPATH:" + library_dir for library_dir in library_dirs
-        ] + ["sycl8.lib", "ze_loader.lib"] + [f"{lib}.lib" for lib in extra_libraries] + extra_link_args
+        ] + ["sycl.lib", "ze_loader.lib"] + [f"{lib}.lib" for lib in extra_libraries] + extra_link_args
     else:
         command = [cxx] + [*o_files, *(["-shared"] if shared_lib else []), "-o", out] + [
             "-L" + library_dir for library_dir in library_dirs
-        ] + ["-lsycl8" if os.name == "nt" else "-lsycl", "-lze_loader"] + [f"-l{lib}"
+        ] + ["-lsycl" if os.name == "nt" else "-lsycl", "-lze_loader"] + [f"-l{lib}"
                                                                            for lib in extra_libraries] + extra_link_args
 
     return command
