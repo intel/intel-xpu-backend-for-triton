@@ -189,12 +189,16 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
     def flops_rectangle(m, n, k):
         return m * n * k * 2  # mul + add
 
-    if N_CTX_q > N_CTX_kv:
-        qk_flops = H_q * (flops_triangle(N_CTX_kv) + flops_rectangle(N_CTX_q - N_CTX_kv, N_CTX_kv, D_HEAD_qk))
-        pv_flops = H_q * (flops_triangle(N_CTX_kv) + flops_rectangle(N_CTX_q - N_CTX_kv, D_HEAD_v, N_CTX_kv))
+    if N_CTX_q == 1:
+        # decoding ignore the causal mask since only one query is involved.
+        qk_flops = H_q * N_CTX_q * N_CTX_kv * D_HEAD_qk * 2  # mul + add.
+        pv_flops = H_q * N_CTX_q * D_HEAD_v * N_CTX_kv * 2  # mul + add.
     else:
-        qk_flops = H_q * flops_triangle(N_CTX_q)
-        pv_flops = H_q * flops_triangle(N_CTX_q)
+        qk_flops = H_q * (flops_triangle(min(N_CTX_q, N_CTX_kv)) * D_HEAD_qk +
+                          flops_rectangle(max(N_CTX_q, N_CTX_kv) - N_CTX_kv, N_CTX_kv, D_HEAD_qk))
+        pv_flops = H_q * (flops_triangle(min(N_CTX_q, N_CTX_kv)) * D_HEAD_v +
+                          flops_rectangle(max(N_CTX_q, N_CTX_kv) - N_CTX_kv, D_HEAD_v, N_CTX_kv))
+
     tflops = lambda mean: Z * (qk_flops + pv_flops) * (1e-12) / (mean * 1e-3)
 
     q_elems = H_q * N_CTX_q * D_HEAD_qk
