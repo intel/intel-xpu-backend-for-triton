@@ -60,11 +60,11 @@ public:
   ///      gen.matrix.dpas C, A, B {pa, pb, rc=M, sd=8}
   ///        : (vector<8xf32>, vector<4xi32>, vector<4xi32>) -> vector<8xf32>
   ///
-  template <typename DPASEngineType,
+  template <typename OpTy, typename DPASEngineType,
             typename = std::enable_if_t<
                 llvm::is_one_of<DPASEngineType, ttgi::DPASEngineTypeXe2,
                                 ttgi::DPASEngineTypeXe3P>::value>>
-  LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor) const {
+  LogicalResult convertDot(OpTy op, typename OpTy::Adaptor adaptor) const {
     Value A = op.getA(), B = op.getB(), C = op.getC(), D = op.getResult();
     Value loadedA = adaptor.getA(), loadedB = adaptor.getB(),
           loadedC = adaptor.getC();
@@ -108,6 +108,23 @@ public:
         loadedC, repBatch, repM, repN,
         typeConverter->convertType(CTensorTy.getElementType()),
         DpasEncodingAttr::OpIdx::OperandC);
+
+    ValueTable scaleA, scaleB;
+    if constexpr (std::is_same<OpTy, DotScaledOp>::value) {
+      auto scaleAVal = adaptor.getAScale();
+      if (scaleAVal) {
+        scaleA = getScaleValuesFromDotOperandLayoutStruct(
+            scaleAVal, repBatch, repM, repK, 3 /*opIdx*/,
+            ATensorTy.getElementType().getIntOrFloatBitWidth() == 16);
+      }
+
+      auto scaleBVal = adaptor.getBScale();
+      if (scaleBVal) {
+        scaleB = getScaleValuesFromDotOperandLayoutStruct(
+            scaleBVal, repBatch, repN, repK, 4 /*opIdx*/,
+            BTensorTy.getElementType().getIntOrFloatBitWidth() == 16);
+      }
+    }
 
     Type resElemTy = DTensorTy.getElementType();
 
@@ -461,6 +478,73 @@ private:
     return vals;
   }
 
+  ValueTable getScaleValuesFromDotOperandLayoutStruct(Value val, int64_t batch,
+                                                      int64_t outer,
+                                                      int64_t inner,
+                                                      unsigned opIdx,
+                                                      bool isFp16) const {
+    SmallVector<Value> elems = unpackLLElements(loc, val, rewriter);
+
+    ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
+    size_t rank = repCluster.size();
+    unsigned repClusterOuter = 0u;
+    unsigned repClusterInner = 1u;
+    switch (opIdx) {
+    case 3:
+      // operand scale A
+      repClusterOuter = repCluster[rank - 2];
+      break;
+    case 4:
+      // operand scale B
+      repClusterOuter = repCluster[rank - 1];
+      break;
+    default:
+      llvm_unreachable("error");
+    }
+
+    size_t totalElems = elems.size();
+    unsigned packedElem = mlir::ceil<unsigned>(
+        totalElems, batch * outer * inner * repClusterOuter * repClusterInner);
+    unsigned innerStepping = isFp16 ? 2 : 1;
+
+    int offset = 0;
+    auto tb = TritonLLVMOpBuilder(loc, rewriter);
+    ValueTable vals;
+    for (unsigned b = 0; b < batch; ++b) {
+      for (int i = 0; i < outer; ++i) {
+        for (int j = 0; j < inner; j += innerStepping) {
+          for (int repOuter = 0; repOuter < repClusterOuter; ++repOuter) {
+            for (int repInner = 0; repInner < repClusterInner; ++repInner) {
+              Value matVal;
+              if (packedElem != 1) {
+                VectorType scaleOpTy = vec_ty(i8_ty, packedElem);
+                matVal = LLVM::UndefOp::create(rewriter, loc, scaleOpTy);
+                for (int k = 0; k < packedElem; ++k)
+                  matVal =
+                      tb.insert_element(matVal, elems[offset++], tb.i32_val(k));
+              } else
+                matVal = elems[offset++];
+
+              unsigned offsetOuter = i * repClusterOuter + repOuter;
+              unsigned offsetInner = j * repClusterInner + repInner;
+              vals[{b, offsetOuter, offsetInner}] = matVal;
+
+              if (isFp16) {
+                // For fp16 bdpas, the size of k dimension is 16.
+                // The triton ops share the scale for every 32 elements.
+                // So we need to reuse the scale operands for two continuous
+                // bdpas ops on the K dim.
+                vals[{b, offsetOuter, offsetInner + 1}] = matVal;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return vals;
+  }
+
   /// Return the precision for the given tensor type (the type of A or B) and
   /// result element type.
   TritonGEN::PrecisionType getElementPrecision(RankedTensorType tensorTy,
@@ -501,10 +585,11 @@ private:
 } // namespace
 
 namespace fma_details {
-LogicalResult convertDPAS(triton::DotOp op, triton::DotOp::Adaptor adaptor,
+template <typename OpTy>
+LogicalResult convertDPAS(OpTy op, typename OpTy::Adaptor adaptor,
                           TritonIntelGPUToLLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter) {
-  auto mod = op->getParentOfType<ModuleOp>();
+  auto mod = op->template getParentOfType<ModuleOp>();
 
   LLVM_DEBUG({
     llvm::dbgs() << "module before DPAS generation\n";
@@ -538,8 +623,19 @@ LogicalResult convertDPAS(triton::DotOp op, triton::DotOp::Adaptor adaptor,
       ttgi::TritonIntelGPUDialect::getSupportDPASWithBF8AttrName());
 
   if (!supportDPASWithBF8)
-    return helper.convertDot<ttgi::DPASEngineTypeXe2>(op, adaptor);
+    return helper.convertDot<OpTy, ttgi::DPASEngineTypeXe2>(op, adaptor);
 
-  return helper.convertDot<ttgi::DPASEngineTypeXe3P>(op, adaptor);
+  return helper.convertDot<OpTy, ttgi::DPASEngineTypeXe3P>(op, adaptor);
 }
+
+template LogicalResult
+convertDPAS<DotOp>(DotOp op, DotOp::Adaptor adaptor,
+                   TritonIntelGPUToLLVMTypeConverter *typeConverter,
+                   ConversionPatternRewriter &rewriter);
+
+template LogicalResult
+convertDPAS<DotScaledOp>(DotScaledOp op, DotScaledOp::Adaptor adaptor,
+                         TritonIntelGPUToLLVMTypeConverter *typeConverter,
+                         ConversionPatternRewriter &rewriter);
+
 } // namespace fma_details
