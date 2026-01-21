@@ -54,16 +54,14 @@ def TritonGEN_SplitBarrierArriveOp : TritonGEN_Op<"split_barrier_arrive"> {
     may allow other invocations waiting on the split control barrier to continue
     executing.
 
-    When `Execution` is `Workgroup` or larger, behavior is undefined unless all
-    invocations within `Execution` execute the same dynamic instance of this
-    instruction. When `Execution` is `Subgroup` or `Invocation`, the behavior of
-    this instruction in non-uniform control flow is defined by the client API.
+    The scope of these barrier is only Workgroup and the Subgroups are the
+    objects which barriers control. `Count` defines the count of the Subgroups
+    (in Workgroup) which will invoke the arrival-type instructions to decrease
+    the count of needed arrvial of the producers. When all the producers will
+    invoke the arrival-type instructions, then all of the consumers Subgroups
+    waiting on the specified manageable barrier are released.
 
-    If `Semantics` is not `None`, this instruction also serves as the start of a
-    memory barrier similar to an `OpMemoryBarrier` instruction with the same
-    `Memory` and `Semantics` operands. This allows atomically specifying both a
-    control barrier and a memory barrier (that is, without needing two
-    instructions). If `Semantics` is `None`, `Memory` is ignored.
+    The barrier implicitly perform the acq-rel memory semantic.
   }];
   let arguments = (ins I32Attr:$count);
   let results = (outs LLVM_PointerInAddressSpace<3>:$bData);
@@ -77,21 +75,6 @@ def TritonGEN_SplitBarrierWaitOp : TritonGEN_Op<"split_barrier_wait"> {
   let description = [{
     Waits for other invocations of this module to arrive at a split control
     barrier.
-
-    When `Execution` is `Workgroup` or larger, behavior is undefined unless all
-    invocations within `Execution` execute the same dynamic instance of this
-    instruction. When `Execution` is `Subgroup` or `Invocation`, the behavior of
-    this instruction in non-uniform control flow is defined by the client API.
-
-    If `Semantics` is not `None`, this instruction also serves as the end of a
-    memory barrier similar to an `OpMemoryBarrier` instruction with the same
-    `Memory` and `Semantics` operands. This ensures that memory accesses issued
-    before arriving at the split barrier are observed before memory accesses
-    issued after this instruction. This control is ensured only for memory
-    accesses issued by this invocation and observed by another invocation
-    executing within `Memory` scope. This allows atomically specifying both a
-    control barrier and a memory barrier (that is, without needing two
-    instructions). If `Semantics` is `None`, `Memory` is ignored.
   }];
   let arguments = (ins LLVM_PointerInAddressSpace<3>:$bData);
   let results = (outs);

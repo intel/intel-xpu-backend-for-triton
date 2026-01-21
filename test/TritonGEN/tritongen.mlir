@@ -1,6 +1,6 @@
 // RUN: triton-opt %s -split-input-file -verify-diagnostics | FileCheck %s
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.barrier() {
   // CHECK-LABEL: triton_gen.barrier
   // CHECK: triton_gen.barrier {mem_fence = Local}
