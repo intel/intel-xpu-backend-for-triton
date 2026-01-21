@@ -567,6 +567,7 @@ def get_benchmark(
         ))
     # pylint: disable=too-many-branches
     def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
+        print(f'Benchmarking Flash Attention: Z={Z}, H={H}, N_CTX={N_CTX}, D_HEAD={D_HEAD}, CAUSAL={CAUSAL}, MODE={MODE}, provider={provider}')
         modes = ['fwd', 'bwd']
         # This warmup logic improves performance on BMG significantly
         # For FWD mode in triton & cutlass: Some configs increase performance with warmup as a step function, but some slowly decrease with saturation
@@ -575,6 +576,7 @@ def get_benchmark(
         # For BWD mode: Performance doesn't really improve much with warmup for triton, but xetla benefit from more warmup
         n_warmup_bwd = 400  # Maximum across xetla=400, triton=10, onednn=10
         n_warmup = n_warmup_fwd if MODE == 'fwd' else n_warmup_bwd
+        torch.xpu.empty_cache()
         do_bench = benchmark_suite.get_do_bench(n_warmup=n_warmup, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
         if MODE not in modes:
             raise AssertionError(f'Unknown {MODE}, supported modes are {modes}')
@@ -596,14 +598,17 @@ def get_benchmark(
             if MODE == 'fwd':
                 benchmark_suite.assert_close(triton_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='triton to torch')
             else:
+                print("torch begin")
                 dout = torch.randn_like(q)
                 torch_o = torch_fn()
                 torch_grads = torch.autograd.grad((torch_o, ), (q, k, v), dout.cpu(), retain_graph=True)
                 eager_tensors = torch_grads
+                print("triton begin")
                 triton_o = triton_fn()
                 triton_grads = torch.autograd.grad((triton_o, ), (q, k, v), dout, retain_graph=True)
                 compiled_tensors = triton_grads
 
+                print("compare results")
                 benchmark_suite.assert_close(lambda: torch_o, lambda: triton_o, atol=atol, rtol=1e-3,
                                              err_msg='Error comparing out between triton and torch')
 
@@ -614,6 +619,7 @@ def get_benchmark(
                                                  err_msg=f'Error comparing {name} between triton and torch')
                 triton_fn = lambda: triton_o.backward(dout, retain_graph=True)
 
+            print("benchmarking")
             _, min_ms, max_ms, mean, cv = do_bench(triton_fn, grad_to_none=(q, k, v))
 
         elif provider == 'xetla':
