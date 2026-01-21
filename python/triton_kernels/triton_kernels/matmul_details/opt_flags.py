@@ -124,6 +124,7 @@ def make_default_opt_flags_intel(
         arch=None,
         target_kernel_kwargs=dict(),
         idle_sms=0,
+        occupancy_target=1,
     )
     # check constraints
     all_constraints_satisfied(ret, constraints)
