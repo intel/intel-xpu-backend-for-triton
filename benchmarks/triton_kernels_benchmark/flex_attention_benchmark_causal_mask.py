@@ -131,6 +131,7 @@ if 'B580' in torch.xpu.get_device_name():
         args={},
     ))
 def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provider):
+    print(f'Running case: {Z=}, {H_q=}, {H_kv=}, {N_CTX_q=}, {N_CTX_kv=}, {D_HEAD_qk=}, {D_HEAD_v=}, {MODE=}, {provider=}')
     torch.xpu.empty_cache()
     # Maximum across torch=200, triton=600
     do_bench = benchmark_suite.get_do_bench(n_warmup=600, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
