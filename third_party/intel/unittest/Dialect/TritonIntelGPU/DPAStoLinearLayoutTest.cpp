@@ -265,6 +265,39 @@ TEST_F(DPAStoLinearLayoutTest, DPAS_OperandScaleA) {
                     {S("block"), {}},
                 },
                 {S("dim0"), S("dim1")}));
+
+  EXPECT_EQ(BlockScaledDPAStoLinearLayout(
+                {1, 128, 4}, dpas({1, 2, 2}, 8, 8, 16, 4, {1, 4, 2}, 16), 3),
+            LinearLayout(
+                {
+                    {S("register"),
+                     {{0, 8, 0}, {0, 16, 0}, {0, 0, 1}, {0, 0, 2}, {0, 64, 0}}},
+                    {S("lane"), {{0, 1, 0}, {0, 2, 0}, {0, 4, 0}, {0, 0, 0}}},
+                    {S("warp"), {{0, 0, 0}, {0, 32, 0}}},
+                    {S("block"), {}},
+                },
+                {S("dim0"), S("dim1"), S("dim2")}));
+
+  EXPECT_EQ(
+      BlockScaledDPAStoLinearLayout(
+          {16, 128, 4},
+          dpas({2, 1, 2}, 8, 8, 16, 4, {1, 4, 2}, 16, std::make_optional(2)),
+          4),
+      LinearLayout(
+          {
+              {S("register"),
+               {{0, 0, 1},
+                {0, 16, 0},
+                {0, 0, 2},
+                {0, 64, 0},
+                {2, 0, 0},
+                {4, 0, 0},
+                {8, 0, 0}}},
+              {S("lane"), {{0, 1, 0}, {0, 2, 0}, {0, 4, 0}, {0, 8, 0}}},
+              {S("warp"), {{0, 32, 0}, {1, 0, 0}}},
+              {S("block"), {}},
+          },
+          {S("dim0"), S("dim1"), S("dim2")}));
 }
 
 TEST_F(DPAStoLinearLayoutTest, DPAS_OperandScaleB) {
