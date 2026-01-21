@@ -198,7 +198,7 @@ def _cxx_link_cmd(cxx: str, o_files: list, out: str, extra_library_dirs: list = 
         command = [cxx] + [*o_files, *(["-shared"] if shared_lib else []), "-o", out] + [
             "-L" + library_dir for library_dir in library_dirs
         ] + ["-lsycl" if os.name == "nt" else "-lsycl", "-lze_loader"] + [f"-l{lib}"
-                                                                           for lib in extra_libraries] + extra_link_args
+                                                                          for lib in extra_libraries] + extra_link_args
 
     return command
 
