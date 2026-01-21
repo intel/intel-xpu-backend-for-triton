@@ -191,6 +191,177 @@ public:
   }
 };
 
+class UpcastScaledBlocked : public OpRewritePattern<tt::DotScaledOp> {
+
+public:
+  using OpRewritePattern<tt::DotScaledOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(tt::DotScaledOp scaledDotOp,
+                                PatternRewriter &rewriter) const override {
+    RankedTensorType oldRetType = scaledDotOp.getType();
+    if (!oldRetType.getEncoding() ||
+        isa<ttgi::DpasEncodingAttr>(oldRetType.getEncoding()))
+      return failure();
+
+    tt::ScaleDotElemType precA;
+    tt::ScaleDotElemType precB;
+    if (!(scaledDotOp.getRhsKPack() && scaledDotOp.getLhsKPack())) {
+      // BDPAS only supports the fp4 which is packed along K for the A and B
+      // matrices. Upcast A and B to unpack the FP4 which is packed on non-k
+      // dim. FP16 is chosen here because:
+      // 1. It can represent all FP4 values exactly (without rounding)
+      // 2. Sufficient range for the FP4.
+      // 3. The Fp4ToFp only supports upcast to fp16/bf16 for now.
+      precA = precB = tt::ScaleDotElemType::FP16;
+    } else {
+      // Upcast A and B for mixed types.
+      std::optional<std::tuple<tt::ScaleDotElemType, tt::ScaleDotElemType>>
+          computeType = getComputeType(scaledDotOp.getAElemType(),
+                                       scaledDotOp.getBElemType(), rewriter);
+      if (!computeType)
+        return failure();
+      precA = std::get<0>(*computeType);
+      precB = std::get<1>(*computeType);
+    }
+
+    TypedValue<RankedTensorType> A =
+        upcastMatrix(rewriter, scaledDotOp, 0, precA);
+    TypedValue<RankedTensorType> B =
+        upcastMatrix(rewriter, scaledDotOp, 1, precB);
+    auto newDot = tt::DotScaledOp::create(
+        rewriter, scaledDotOp.getLoc(), scaledDotOp->getResultTypes(), A, B,
+        scaledDotOp.getC(), scaledDotOp.getAScale(), scaledDotOp.getBScale(),
+        precA, precB, scaledDotOp.getFastMath(), scaledDotOp.getLhsKPack(),
+        scaledDotOp.getRhsKPack());
+
+    rewriter.replaceOp(scaledDotOp, newDot);
+    return success();
+  }
+
+private:
+  static std::optional<unsigned>
+  getScaleDotElemTypeBitWidth(tt::ScaleDotElemType type) {
+    switch (type) {
+    case tt::ScaleDotElemType::E2M1:
+      return 4;
+    case tt::ScaleDotElemType::E4M3:
+    case tt::ScaleDotElemType::E5M2:
+      return 8;
+    case tt::ScaleDotElemType::BF16:
+    case tt::ScaleDotElemType::FP16:
+      return 16;
+    default:
+      // For other unsupported float types.
+      return std::nullopt;
+    }
+  };
+
+  // Retrieve the precision type of matrix A and B supported by bdpas for mixed
+  // tt.dot_scaled operations.
+  std::optional<std::tuple<tt::ScaleDotElemType, tt::ScaleDotElemType>>
+  getComputeType(tt::ScaleDotElemType aType, tt::ScaleDotElemType bType,
+                 PatternRewriter &rewriter) const {
+    if (aType == bType) // Skip the dot_scaled which is not mixed precision.
+      return std::nullopt;
+    std::optional<unsigned> aBitWidth = getScaleDotElemTypeBitWidth(aType);
+    std::optional<unsigned> bBitWidth = getScaleDotElemTypeBitWidth(bType);
+    if (!aBitWidth || !bBitWidth) // unsupported type.
+      return std::nullopt;
+    unsigned minBitWidth = std::min(*aBitWidth, *bBitWidth);
+    unsigned maxBitWidth = std::max(*aBitWidth, *bBitWidth);
+    if (minBitWidth < maxBitWidth) {
+      // align to the larger bit width type.
+      if (minBitWidth == 4) {
+        // There is limitation in Fp4ToFpOp that it only supports to upcast to
+        // fp16/bf16.
+        if (aType == tt::ScaleDotElemType::FP16 ||
+            bType == tt::ScaleDotElemType::FP16)
+          return std::make_tuple(tt::ScaleDotElemType::FP16,
+                                 tt::ScaleDotElemType::FP16);
+        else
+          return std::make_tuple(tt::ScaleDotElemType::BF16,
+                                 tt::ScaleDotElemType::BF16);
+      }
+
+      if (aBitWidth > bBitWidth) {
+        return std::make_tuple(aType, aType);
+      } else {
+        return std::make_tuple(bType, bType);
+      }
+    } else {
+      // align to the type with larger range.
+      assert(minBitWidth != 4 &&
+             "invalid packed dot_scaled with different fp4");
+
+      if (minBitWidth == 8) {
+        // BDPAS support mixed fp8 natively.
+        return std::nullopt;
+      }
+
+      if (minBitWidth == 16) {
+        return std::make_tuple(tt::ScaleDotElemType::BF16,
+                               tt::ScaleDotElemType::BF16);
+      }
+    }
+    return std::nullopt;
+  }
+
+  // Upcast the matrix A or B of the tt.dot_scaled.
+  TypedValue<RankedTensorType>
+  upcastMatrix(PatternRewriter &rewriter, tt::DotScaledOp scaledDotOp,
+               int opIdx, tt::ScaleDotElemType computeType) const {
+    TypedValue<RankedTensorType> v =
+        opIdx == 0 ? scaledDotOp.getA() : scaledDotOp.getB();
+    TypedValue<RankedTensorType> res = scaledDotOp.getD();
+    bool isFp4 =
+        tt::ScaleDotElemType::E2M1 ==
+        (opIdx == 0 ? scaledDotOp.getAElemType() : scaledDotOp.getBElemType());
+
+    Location loc = v.getLoc();
+    int64_t rank = v.getType().getRank();
+    int64_t kDim = opIdx == 0 ? rank - 1 : rank - 2;
+
+    // Upcast value to computeType (fp16/bf16)
+    if (isFp4) {
+      ArrayRef<int64_t> resShape = res.getType().getShape();
+      ArrayRef<int64_t> vShape = v.getType().getShape();
+      int64_t packDim = kDim;
+      if ((opIdx == 0 && resShape[rank - 2] != vShape[rank - 2]) ||
+          (opIdx == 1 && resShape[rank - 1] != vShape[rank - 1])) {
+        packDim = (packDim + 1) % 2;
+      }
+      v = ttg::Fp4ToFpOp::create(rewriter, loc, v,
+                                 getScalarType(rewriter, computeType), packDim);
+    } else {
+      RankedTensorType vType =
+          v.getType().clone(getScalarType(rewriter, computeType));
+      tt::FpToFpOp op = tt::FpToFpOp::create(rewriter, loc, vType, v);
+      v = cast<TypedValue<RankedTensorType>>(op.getResult());
+    }
+    return v;
+  }
+
+  FloatType getScalarType(PatternRewriter &rewriter,
+                          tt::ScaleDotElemType computeType) const {
+    mlir::MLIRContext *ctx = rewriter.getContext();
+    switch (computeType) {
+    case tt::ScaleDotElemType::BF16:
+      return rewriter.getBF16Type();
+    case tt::ScaleDotElemType::FP16:
+      return rewriter.getF16Type();
+    case tt::ScaleDotElemType::E5M2:
+      return mlir::Float8E5M2Type::get(ctx);
+    case tt::ScaleDotElemType::E4M3:
+      return mlir::Float8E4M3FNType::get(ctx);
+    case tt::ScaleDotElemType::E2M1:
+      return mlir::Float4E2M1FNType::get(ctx);
+    default:
+      assert(false && "unsupported precision type");
+    }
+    return {};
+  }
+};
+
 } // namespace
 
 static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
@@ -380,7 +551,7 @@ static tt::TransOp transposeDotOp(tt::DotScaledOp dotOp) {
   return transOp;
 }
 
-static void transposeDots(ModuleOp m) {
+static void transposeDot(ModuleOp m) {
   SmallVector<tt::DotScaledOp> toTranspose;
   m.walk([&](tt::DotScaledOp dotOp) -> void {
     if (dotOp.getAScale() == nullptr && dotOp.getBScale() != nullptr)
@@ -407,14 +578,19 @@ public:
   void runOnOperation() override {
     ModuleOp mod = getOperation();
 
-    // Transpose dotOp operations that have a scale on the RHS.
-    transposeDots(mod);
+    // Transpose dot scale operations that have a scale on the RHS.
+    bool supportBlockScaleDPAS = mod->hasAttr(
+        ttgi::TritonIntelGPUDialect::getSupportBlockScaleDPASAttrName());
+    if (!supportBlockScaleDPAS)
+      transposeDot(mod);
 
     MLIRContext *context = &getContext();
     RewritePatternSet patterns(context);
     constexpr int benefitDefault = 1;
     patterns.add<BlockedToDPAS<tt::DotOp>>(context, benefitDefault + 1);
-
+    if (supportBlockScaleDPAS) {
+      patterns.add<UpcastScaledBlocked>(context, benefitDefault + 1);
+    }
     ttgi::populateDecomposeScaledBlockedPatterns(patterns, benefitDefault);
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
