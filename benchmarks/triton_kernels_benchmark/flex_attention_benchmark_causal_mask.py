@@ -1,5 +1,6 @@
 # This benchmark requires a Pytorch version with FlexAttention support for XPU available
 from functools import lru_cache
+import gc
 import os
 from torch.nn.attention.flex_attention import (
     create_block_mask,
@@ -177,6 +178,11 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
                     print(
                         'Skipping correctness check because reference torch eager call failed due to out of memory error'
                     )
+                    if 'torch_o' in locals():
+                        del torch_o
+                    if 'torch_grads' in locals():
+                        del torch_grads
+                    gc.collect()
                     torch.xpu.empty_cache()
                     perform_correctness_check = False
                 else:
