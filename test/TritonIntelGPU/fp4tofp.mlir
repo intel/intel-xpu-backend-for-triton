@@ -23,7 +23,6 @@ module attributes {triton_intel_gpu.support_bfloat16_conversion, triton_intel_gp
 }
 
 // CHECK-SPIRV-COUNT-2: llvm.call spir_funccc @_Z38__builtin_spirv_ConvertE2M1ToBF16INTELDv16_i
-
 // CHECK-DAG: [[C4V:%.+]] = llvm.mlir.constant(dense<4> : vector<4xi32>) : vector<4xi32>
 // CHECK-DAG: [[C15V:%.+]] = llvm.mlir.constant(dense<252645135> : vector<4xi32>) : vector<4xi32>
 // CHECK-DAG: [[TABLE:%.+]] = llvm.mlir.constant(dense<[0.000000e+00, 5.000000e-01, 1.000000e+00, 1.500000e+00, 2.000000e+00, 3.000000e+00, 4.000000e+00, 6.000000e+00, -0.000000e+00, -5.000000e-01, -1.000000e+00, -1.500000e+00, -2.000000e+00, -3.000000e+00, -4.000000e+00, -6.000000e+00]> : vector<16xbf16>) : vector<16xbf16>
@@ -65,7 +64,6 @@ module attributes {triton_intel_gpu.support_bfloat16_conversion, triton_intel_gp
 }
 
 // CHECK-SPIRV-COUNT-2: llvm.call spir_funccc @_Z38__builtin_spirv_ConvertE2M1ToBF16INTELDv16_i
-
 // CHECK-DAG: [[C4V:%.+]] = llvm.mlir.constant(dense<4> : vector<4xi8>) : vector<4xi8>
 // CHECK-DAG: [[C15V:%.+]] = llvm.mlir.constant(dense<15> : vector<4xi8>) : vector<4xi8>
 // CHECK-DAG: [[TABLE:%.+]] = llvm.mlir.constant(dense<[0.000000e+00, 5.000000e-01, 1.000000e+00, 1.500000e+00, 2.000000e+00, 3.000000e+00, 4.000000e+00, 6.000000e+00, -0.000000e+00, -5.000000e-01, -1.000000e+00, -1.500000e+00, -2.000000e+00, -3.000000e+00, -4.000000e+00, -6.000000e+00]> : vector<16xbf16>) : vector<16xbf16>
@@ -103,7 +101,6 @@ module attributes {triton_intel_gpu.support_bfloat16_conversion, triton_intel_gp
 }
 
 // CHECK-SPIRV-COUNT-2: llvm.call spir_funccc @_Z38__builtin_spirv_ConvertE2M1ToBF16INTELDv16_i
-
 // CHECK-DAG: [[C4:%.+]] = llvm.mlir.constant(4 : i8) : i8
 // CHECK-DAG: [[C15:%.+]] = llvm.mlir.constant(15 : i8) : i8
 // CHECK-DAG: [[TABLE:%.+]] = llvm.mlir.constant(dense<[0.000000e+00, 5.000000e-01, 1.000000e+00, 1.500000e+00, 2.000000e+00, 3.000000e+00, 4.000000e+00, 6.000000e+00, -0.000000e+00, -5.000000e-01, -1.000000e+00, -1.500000e+00, -2.000000e+00, -3.000000e+00, -4.000000e+00, -6.000000e+00]> : vector<16xbf16>) : vector<16xbf16>
