@@ -51,6 +51,10 @@ if [ ! -f "$PYTHON_SCRIPT" ]; then
     exit 1
 fi
 
+# ISSUE_FILE should contain list of known failures to ignore
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+ISSUE_FILE="$SCRIPT_DIR/issue_file.json"
+
 # Convert JSON arrays to space-separated strings if needed
 SUITES=$(convert_json_array "$SUITES")
 MODES=$(convert_json_array "$MODES")
@@ -97,7 +101,8 @@ for suite in "${suites[@]}"; do
                 --suite "$suite" \
                 --mode "$mode" \
                 --dtype "$dtype" \
-                --csv_file "$CSV_FILE")
+                --csv_file "$CSV_FILE" \
+                --issue_file "$ISSUE_FILE")
 
             # Print the output
             echo "$output"
