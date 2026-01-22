@@ -61,6 +61,16 @@ using namespace mlir::triton::gpu;
          std::to_string(ty.getIntOrFloatBitWidth());
 }
 
+[[maybe_unused]] static std::string getGenISATypeMangling(ArrayRef<Type> tys) {
+  std::string name;
+  for (int i = 0; i < tys.size(); i++) {
+    name += getGenISATypeMangling(tys[i]);
+    if (i != tys.size() - 1)
+      name += ".";
+  }
+  return name;
+}
+
 static SmallVector<Attribute>
 loadCacheControlToDecoration(Builder &builder, uint32_t operandNum,
                              TritonGEN::LoadCacheControl orig) {
@@ -770,6 +780,118 @@ private:
   }
 };
 
+struct TritonMatrixBlockScaleDPASLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::MatrixBlockScaleDPASOp> {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::MatrixBlockScaleDPASOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::MatrixBlockScaleDPASOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+
+    IntegerType int16Ty = int_ty(16);
+    IntegerType int32Ty = int_ty(32);
+
+    Type packedAType = int16Ty;
+    Type packedBType = int32Ty;
+
+    Value a = op.getA();
+    VectorType aOrigTy = cast<VectorType>(a.getType());
+    unsigned bitWidth = aOrigTy.getNumElements() *
+                        aOrigTy.getElementType().getIntOrFloatBitWidth();
+    VectorType aTy = VectorType::get(
+        bitWidth / packedAType.getIntOrFloatBitWidth(), packedAType);
+    if (aOrigTy != aTy)
+      a = LLVM::BitcastOp::create(rewriter, loc, aTy, a);
+
+    Value b = op.getB();
+    VectorType bOrigTy = cast<VectorType>(b.getType());
+    bitWidth = bOrigTy.getNumElements() *
+               bOrigTy.getElementType().getIntOrFloatBitWidth();
+    VectorType bTy = VectorType::get(
+        bitWidth / packedBType.getIntOrFloatBitWidth(), packedBType);
+    if (bOrigTy != bTy)
+      b = LLVM::BitcastOp::create(rewriter, loc, bTy, b);
+
+    Value c = op.getC();
+    VectorType cOrigTy = cast<VectorType>(c.getType());
+    assert(cOrigTy == op->getResultTypes()[0] &&
+           "Accumulator and result type mismatch");
+    VectorType cTy = cOrigTy;
+
+    TritonGEN::PrecisionType precision = op.getPa();
+    Type scaleTy = getScaleType(rewriter, precision);
+
+    Value scaleA = op.getScaleA();
+    Value scaleB = op.getScaleB();
+
+    SmallVector<Type> funcTypes{cTy, cTy, aTy, bTy, scaleTy, scaleTy};
+    std::string funcName =
+        "llvm.genx.GenISA.sub.group.bdpas." + getGenISATypeMangling(funcTypes);
+
+    SmallVector<Type> argTypes{cTy,     aTy,     bTy,    scaleTy,
+                               scaleTy, int32Ty, int32Ty};
+
+    auto precA = LLVM::ConstantOp::create(rewriter, loc, int32Ty,
+                                          static_cast<int>(op.getPa()));
+    auto precB = LLVM::ConstantOp::create(rewriter, loc, int32Ty,
+                                          static_cast<int>(op.getPb()));
+
+    // When either scale operand is missing, set it to the value 1.0 in E8M0
+    // format (encoded as 0x7f).
+    if (!scaleA)
+      scaleA = defineScale(rewriter, loc, 0x7f, scaleTy);
+    if (!scaleB)
+      scaleB = defineScale(rewriter, loc, 0x7f, scaleTy);
+
+    SmallVector<Value> args{c, a, b, scaleA, scaleB, precA, precB};
+
+    LLVM::CallOp call = intel::createDeviceFunctionCall(
+        rewriter, funcName, cTy, argTypes, args, {},
+        intel::convergentNoUnwindWillReturnAttrs);
+    rewriter.replaceOp(op, call);
+    return success();
+  }
+
+private:
+  Value defineScale(ConversionPatternRewriter &rewriter, Location loc,
+                    unsigned val, Type scaleTy) const {
+    Value scale;
+    if (auto vecTy = dyn_cast<VectorType>(scaleTy)) {
+      scale = LLVM::ConstantOp::create(
+          rewriter, loc, vecTy,
+          DenseElementsAttr::get(vecTy, rewriter.getI8IntegerAttr(val)));
+    } else {
+      assert(isa<IntegerType>(scaleTy) &&
+             (scaleTy.getIntOrFloatBitWidth() == 8) && "unexpected scaleTy");
+      scale = LLVM::ConstantOp::create(rewriter, loc, scaleTy,
+                                       rewriter.getI8IntegerAttr(val));
+    }
+    return scale;
+  }
+
+  Type getScaleType(ConversionPatternRewriter &rewriter,
+                    TritonGEN::PrecisionType precision) const {
+    Type scaleTy;
+
+    switch (precision) {
+    case TritonGEN::PrecisionType::BF16:
+    case TritonGEN::PrecisionType::FP16:
+    case TritonGEN::PrecisionType::F8E5M2:
+    case TritonGEN::PrecisionType::F8E4M3FN:
+      scaleTy = int_ty(8);
+      break;
+    case TritonGEN::PrecisionType::F4E2M1:
+      scaleTy = vec_ty(int_ty(8), 2);
+      break;
+    default:
+      assert(false && "unsupported precision type");
+    }
+    return scaleTy;
+  }
+};
+
 struct TritonMatrix2DBlockLoadLowering
     : public ConvertOpToLLVMPattern<TritonGEN::Matrix2DBlockLoadOp> {
   using ConvertOpToLLVMPattern<
@@ -1249,7 +1371,8 @@ void mlir::triton::populateTritonGENToLLVMConversionPatterns(
       .add<TritonMatrix2DBlockLoadLowering, TritonMatrix2DBlockStoreLowering,
            TritonMatrix2DBlockPrefetchLowering>(converter, emitter);
 
-  patterns.add<TritonMatrixDPASLowering, TritonSubGroupBlockReadLowering,
+  patterns.add<TritonMatrixDPASLowering, TritonMatrixBlockScaleDPASLowering,
+               TritonSubGroupBlockReadLowering,
                TritonSubGroupBlockWriteLowering, TritonPredicatedLoadOpLowering,
                TritonPredicatedStoreOpLowering, TritonFToTf32OpLowering>(
       converter);

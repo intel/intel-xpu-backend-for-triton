@@ -62,7 +62,7 @@ def TritonGEN_PrecisionTypeAttr : I32EnumAttr<"PrecisionType",
     // New in Xe3P
     I32EnumAttrCase<"F8E5M2",   7,  "bf8">,
     I32EnumAttrCase<"F8E4M3FN", 8,  "hf8">,
-
+    I32EnumAttrCase<"F4E2M1",  13, "e2m1">,
   ]> {
   let cppNamespace = "::mlir::triton::TritonGEN";
 }
