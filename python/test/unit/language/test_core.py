@@ -3573,10 +3573,6 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
                 )
         if mma == 16 and K == 64 and not (is_hip_rdna4() or is_hip_rdna3() or is_hip_gfx1250()):
             pytest.skip(f"K == {K} too small for mfma {mma} in scaled_dot")
-    if is_xpu_cri():
-        is_both_fp8 = (mxfp_type in ['float8e5', 'float8e4nv']) and (normal_type in ['float8e5', 'float8e4nv'])
-        if not is_both_fp8 and mxfp_type != normal_type:
-            pytest.skip("Skip mixed precision because it is emulated by dpas (issue #678)")
 
     @triton.jit
     def dot_scale_kernel(a_base, stride_a0, stride_a1, a_scale, b_base, stride_b0, stride_b1, b_scale, out,
