@@ -875,7 +875,7 @@ private:
                                        rewriter.getI8IntegerAttr(val));
     }
     return scale;
-  };
+  }
 
   Type getScaleType(ConversionPatternRewriter &rewriter,
                     TritonGEN::PrecisionType precision) const {

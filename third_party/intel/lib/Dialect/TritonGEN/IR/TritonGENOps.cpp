@@ -151,7 +151,6 @@ template <typename Op> static LogicalResult verify2DBlockHWRestriction(Op op) {
 
   return success();
 }
-
 template <typename Op> static LogicalResult verifyDPASCommonRestriction(Op op) {
   if (op.getRc() != 1 && op.getRc() != 2 && op.getRc() != 4 && op.getRc() != 8)
     return op->emitOpError("expecting repeat count to be 1, 2, 4, or 8");
