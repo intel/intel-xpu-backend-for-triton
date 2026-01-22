@@ -364,7 +364,7 @@ size_t SessionManager::advanceDataPhase(size_t sessionId) {
 
 bool SessionManager::isDataPhaseComplete(size_t sessionId, size_t phase) {
   std::lock_guard<std::mutex> lock(mutex);
-  return getSessionOrThrow(sessionId)->data->isPhaseComplete(phase);
+  return getSessionOrThrow(sessionId)->data->getPhaseInfo().isComplete(phase);
 }
 
 } // namespace proton
