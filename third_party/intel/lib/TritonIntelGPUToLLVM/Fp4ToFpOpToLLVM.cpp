@@ -60,6 +60,7 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     auto elemTy = dyn_cast<FloatType>(op.getType().getElementType());
     assert(elemTy == f16_ty || elemTy == bf16_ty);
+
     Location loc = op.getLoc();
     Value src = adaptor.getSrc();
     auto i8Ty = rewriter.getI8Type();

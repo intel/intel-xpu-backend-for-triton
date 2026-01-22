@@ -132,8 +132,6 @@ python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_rank
 python/test/unit/language/test_annotations.py::test_float_annotation[r"dtype(12-0\.0|13-42\.0|14-inf|15-nan)"]@regexp
 # test_gather
 python/test/unit/language/test_core.py::test_gather[src_shape2-indices_shape2-0]
-# test_gather_warp_shuffle
-python/test/unit/language/test_core.py::test_gather_warp_shuffle[src_shape1-indices_shape1-0-linear<{register = [[0, 2], [32, 0], [2, 0], [0, 16], [0, 32], [64, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]], warp = [[0, 1], [0, 4]], block = []}>-linear<{register = [[0, 2], [32, 0], [0, 32], [2, 0], [0, 16], [64, 0], [128, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]], warp = [[0, 1], [0, 4]], block = []}>]
 # test_tensor_descriptor_batched_gemm_2d_tma
 python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_batched_gemm_2d_tma
 # test_tensor_descriptor_batched_gemm_3d_tma
