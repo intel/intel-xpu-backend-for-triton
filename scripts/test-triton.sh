@@ -62,6 +62,7 @@ TEST_MINICORE=false
 TEST_LANGUAGE=false
 TEST_MXFP=false
 TEST_SCALED_DOT=false
+TEST_DEBUG=false
 TEST_GLUON=false
 TEST_INTERPRETER=false
 TEST_TUTORIAL=false
@@ -121,6 +122,11 @@ while (( $# != 0 )); do
       ;;
     --scaled-dot)
       TEST_SCALED_DOT=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --debug)
+      TEST_DEBUG=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -375,6 +381,17 @@ run_language_tests() {
     run_pytest_command -k "not test_line_info_interpreter" --verbose --device xpu language/test_line_info.py
 }
 
+run_debug_tests() {
+  echo "***************************************************"
+  echo "******   Running Triton Debug tests     ******"
+  echo "***************************************************"
+
+  cd $TRITON_PROJ/python/test/unit
+
+  TRITON_TEST_SUITE=debug \
+    run_pytest_command --verbose -n ${PYTEST_MAX_PROCESSES:-8} test_debug.py test_debuginfo.py test_debug_dump.py --forked --device xpu
+}
+
 run_regression_tests() {
   echo "***************************************************"
   echo "******   Running Triton Regression tests     ******"
@@ -395,9 +412,6 @@ run_minicore_tests() {
   # run runtime tests serially to avoid race condition with cache handling.
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=runtime \
     run_pytest_command -k "not test_within_2gb" --verbose --device xpu runtime/ --ignore=runtime/test_cublas.py
-
-  TRITON_TEST_SUITE=debug \
-    run_pytest_command --verbose -n ${PYTEST_MAX_PROCESSES:-8} test_debug.py test_debuginfo.py test_debug_dump.py --forked --device xpu
 
   TRITON_TEST_SUITE=warnings \
     run_pytest_command --verbose -n ${PYTEST_MAX_PROCESSES:-8} test_perf_warning.py --device xpu
@@ -444,6 +458,7 @@ run_core_tests() {
   run_language_tests
   run_mxfp_tests
   run_scaled_dot_tests
+  run_debug_tests
 }
 
 run_gluon_tests() {
@@ -780,6 +795,9 @@ test_triton() {
     fi
     if [ "$TEST_SCALED_DOT" = true ]; then
         run_scaled_dot_tests
+    fi
+    if [ "$TEST_DEBUG" = true ]; then
+        run_debug_tests
     fi
   fi
 
