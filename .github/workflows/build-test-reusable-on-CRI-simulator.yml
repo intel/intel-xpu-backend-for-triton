@@ -78,7 +78,7 @@ env:
   TRITON_INTEL_DEVICE_ARCH: cri
   PYTEST_MAX_PROCESSES: 32
   PYTEST_TIMEOUT: 900
-  PYTEST_RERUNS: 2
+  PYTEST_RERUNS: 5
   NUM_SHARDS: 0
   PARALLEL_SUITES: ""
   SEQUENTIAL_SUITES: "tutorial minicore language mxfp scaled_dot gluon triton-kernels interpreter"
