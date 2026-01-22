@@ -368,6 +368,7 @@ run_language_tests() {
   echo "******     Running Triton Language tests     ******"
   echo "***************************************************"
   cd $TRITON_PROJ/python/test/unit
+  ensure_spirv_dis
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=language \
     run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py \
@@ -379,6 +380,33 @@ run_language_tests() {
   # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
   TRITON_DISABLE_LINE_INFO=0 TRITON_TEST_SUITE=line_info \
     run_pytest_command -k "not test_line_info_interpreter" --verbose --device xpu language/test_line_info.py
+}
+
+run_intel_tests() {
+  echo "***************************************************"
+  echo "******   Running Triton Intel tests     ******"
+  echo "***************************************************"
+
+  cd $TRITON_PROJ/python/test/unit
+
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=intel \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu intel/
+
+  cd $TRITON_PROJ/third_party/intel/python/test
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=third_party \
+    run_pytest_command --device xpu .
+}
+
+run_runtime_tests() {
+  echo "***************************************************"
+  echo "******   Running Triton Runtime tests     ******"
+  echo "***************************************************"
+
+  cd $TRITON_PROJ/python/test/unit
+
+  # run runtime tests serially to avoid race condition with cache handling.
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=runtime \
+    run_pytest_command -k "not test_within_2gb" --verbose --device xpu runtime/ --ignore=runtime/test_cublas.py
 }
 
 run_debug_tests() {
@@ -409,9 +437,7 @@ run_minicore_tests() {
   cd $TRITON_PROJ/python/test/unit
   ensure_spirv_dis
 
-  # run runtime tests serially to avoid race condition with cache handling.
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=runtime \
-    run_pytest_command -k "not test_within_2gb" --verbose --device xpu runtime/ --ignore=runtime/test_cublas.py
+  run_runtime_tests
 
   TRITON_TEST_SUITE=warnings \
     run_pytest_command --verbose -n ${PYTEST_MAX_PROCESSES:-8} test_perf_warning.py --device xpu
@@ -419,12 +445,7 @@ run_minicore_tests() {
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=tools \
     run_pytest_command -n ${PYTEST_MAX_PROCESSES:-8} -k "not test_disam_cubin" --verbose tools
 
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=intel \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu intel/
-
-  cd $TRITON_PROJ/third_party/intel/python/test
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=third_party \
-    run_pytest_command --device xpu .
+  run_intel_tests
 
   run_regression_tests
 }
