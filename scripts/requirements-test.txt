@@ -12,7 +12,7 @@ expecttest
 
 # Keep in sync with extra_require.tutorials from setup.py
 matplotlib
-pandas
+pandas<3.0
 tabulate
 
 # Used by test-triton.sh

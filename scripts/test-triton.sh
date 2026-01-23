@@ -507,7 +507,7 @@ run_tutorial_tests() {
   echo "***************************************************"
   echo "**** Running Triton Tutorial tests           ******"
   echo "***************************************************"
-  python -m pip install matplotlib pandas tabulate -q
+  python -m pip install matplotlib 'pandas<3.0' tabulate -q
   cd $TRITON_PROJ/python/tutorials
 
   tutorials=(
@@ -644,7 +644,7 @@ run_inductor_tests() {
     git checkout $rev
   )
 
-  pip install pyyaml pandas scipy 'numpy==1.26.4' psutil pyre_extensions torchrec
+  pip install pyyaml 'pandas<3.0' scipy 'numpy==1.26.4' psutil pyre_extensions torchrec
 
   # TODO: Find the fastest Hugging Face model
   ZE_AFFINITY_MASK=0 python pytorch/benchmarks/dynamo/huggingface.py --accuracy --float32 -dxpu -n10 --no-skip --dashboard --inference --freezing --total-partitions 1 --partition-id 0 --only AlbertForMaskedLM --backend=inductor --timeout=4800 --output=$(pwd -P)/inductor_log.csv
@@ -705,7 +705,7 @@ run_liger_install() {
   fi
 
   if ! pip list | grep "liger_kernel" ; then
-    pip install transformers pandas datasets -e Liger-Kernel
+    pip install transformers 'pandas<3.0' datasets -e Liger-Kernel
   fi
 }
 
