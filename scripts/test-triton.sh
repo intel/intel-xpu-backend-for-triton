@@ -667,6 +667,7 @@ run_liger_install() {
   if ! [ -d "./Liger-Kernel" ]; then
     git clone https://github.com/linkedin/Liger-Kernel
     cd Liger-Kernel
+    echo "Liger-Kernels commit: '$(git rev-parse HEAD)'"
     git apply ../benchmarks/third_party/liger/liger-fix.patch --allow-empty
     cd ..
   fi
