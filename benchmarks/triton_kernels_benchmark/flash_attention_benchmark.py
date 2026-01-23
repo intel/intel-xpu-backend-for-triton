@@ -63,21 +63,21 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
 
 @triton.jit
 def _attn_fwd_with_tensor_descriptors(Q, K, V, sm_scale, M, Out,  #
-                                  stride_qz: tl.constexpr, stride_qh: tl.constexpr, stride_qm: tl.constexpr,
-                                  stride_qk: tl.constexpr,  #
-                                  stride_kz: tl.constexpr, stride_kh: tl.constexpr, stride_kn: tl.constexpr,
-                                  stride_kk: tl.constexpr,  #
-                                  stride_vz: tl.constexpr, stride_vh: tl.constexpr, stride_vk: tl.constexpr,
-                                  stride_vn: tl.constexpr,  #
-                                  stride_oz: tl.constexpr, stride_oh: tl.constexpr, stride_om: tl.constexpr,
-                                  stride_on: tl.constexpr,  #
-                                  Z: tl.constexpr, H: tl.constexpr,  #
-                                  N_CTX: tl.constexpr,  #
-                                  BLOCK_M: tl.constexpr,  #
-                                  BLOCK_DMODEL: tl.constexpr,  #
-                                  BLOCK_N: tl.constexpr,  #
-                                  STAGE: tl.constexpr  #
-                                  ):  # pylint: disable=unused-argument
+                                      stride_qz: tl.constexpr, stride_qh: tl.constexpr, stride_qm: tl.constexpr,
+                                      stride_qk: tl.constexpr,  #
+                                      stride_kz: tl.constexpr, stride_kh: tl.constexpr, stride_kn: tl.constexpr,
+                                      stride_kk: tl.constexpr,  #
+                                      stride_vz: tl.constexpr, stride_vh: tl.constexpr, stride_vk: tl.constexpr,
+                                      stride_vn: tl.constexpr,  #
+                                      stride_oz: tl.constexpr, stride_oh: tl.constexpr, stride_om: tl.constexpr,
+                                      stride_on: tl.constexpr,  #
+                                      Z: tl.constexpr, H: tl.constexpr,  #
+                                      N_CTX: tl.constexpr,  #
+                                      BLOCK_M: tl.constexpr,  #
+                                      BLOCK_DMODEL: tl.constexpr,  #
+                                      BLOCK_N: tl.constexpr,  #
+                                      STAGE: tl.constexpr  #
+                                      ):  # pylint: disable=unused-argument
 
     start_m = tl.program_id(2)
     off_z = tl.program_id(0)
