@@ -168,6 +168,8 @@ public:
       std::function<bool(Operation *)> stopPropagation = nullptr);
 
 private:
+  // Forward remat to clean the value,
+  void forwardRematClean(DenseMap<Value, Attribute> &values);
   void updateRematMapping(SmallVector<std::tuple<Value, Value>> &values);
   void reduceLoopCarriedValues();
   // Existing tuples of (value, layout) that needs to be updated when recreating
@@ -197,7 +199,8 @@ void LayoutRematerialization::addRematValue(Value old, Attribute encoding,
 // Remove unneeded values now that we are done with the rematMapping.
 void LayoutRematerialization::cleanup() {
   for (Operation *op : llvm::reverse(opToDelete))
-    op->erase();
+    if (op->getUsers().empty())
+      op->erase();
 }
 
 // Return true if the op is an op with a layout we don't want to change. We will
@@ -1353,6 +1356,168 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
   rewriteSlice(slice, layout, convertOp, mapping);
 }
 
+void LayoutRematerialization::forwardRematClean(
+    DenseMap<Value, Attribute> &values) {
+
+  if (values.empty())
+    return;
+
+  auto setEncoding = [&](ValueRange vs, Attribute &layout,
+                         SmallVector<Value> &changed, Operation *op) {
+    for (Value value : vs) {
+      if (!isa<RankedTensorType>(value.getType()))
+        continue;
+      bool hasChanged = false;
+      Attribute dstEncoding;
+      if (isa<StoreOp, ConvertLayoutOp>(op)) {
+        // Try to remove the convert by making the dst encoding match the source
+        // encoding.
+        dstEncoding = layout;
+      } else {
+        dstEncoding = inferDstEncoding(op, layout);
+      }
+      if (!values.contains(value)) {
+        values[value] = dstEncoding;
+        changed.push_back(value);
+      }
+    }
+  };
+
+  auto propagateToUsers = [&](Value value, Attribute &layout) {
+    SmallVector<Value> changed;
+    for (OpOperand &use : value.getUses()) {
+      Operation *user = use.getOwner();
+      if (user->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
+          user->hasTrait<OpTrait::Elementwise>()) {
+        setEncoding(user->getResults(), layout, changed, user);
+      }
+    }
+    return changed;
+  };
+
+  SmallVector<Value> queue;
+  auto propagateLayout = [&]() {
+    for (auto it : values) {
+      queue.push_back(it.first);
+    }
+    while (!queue.empty()) {
+      Value currentValue = queue.back();
+      Attribute layout = values[currentValue];
+      queue.pop_back();
+
+      SmallVector<Value> changed = propagateToUsers(currentValue, layout);
+
+      LLVM_DEBUG({
+        DBGS() << "propagateLayout considering " << currentValue
+               << ", which has layout:\n";
+        DBGS() << "  " << layout << "\n";
+        DBGS() << "changed: " << changed.size() << "\n";
+      });
+
+      queue.insert(queue.end(), changed.begin(), changed.end());
+    }
+  };
+
+  propagateLayout();
+
+  auto getValueAs = [&](Value value, Attribute encoding) {
+    if (auto tensorType = dyn_cast<RankedTensorType>(value.getType())) {
+      Value rewrittenValue = getRematValue(value, encoding);
+      if (rewrittenValue)
+        return rewrittenValue;
+      OpBuilder rewriter(value.getContext());
+      rewriter.setInsertionPointAfterValue(value);
+      auto tmpType = tensorType.cloneWithEncoding(encoding);
+      Value converted =
+          ConvertLayoutOp::create(rewriter, value.getLoc(), tmpType, value);
+      // TODO: we could cache the conversion.
+      return converted;
+    }
+    return value;
+  };
+
+  auto cloneElementwise = [&](OpBuilder &rewriter, Operation *op,
+                              Attribute encoding) {
+    Operation *newOp = rewriter.clone(*op);
+
+    Attribute operandEnc = ttgi::inferSrcEncoding(op, encoding);
+    assert(operandEnc);
+
+    for (OpOperand &operand : op->getOpOperands()) {
+      newOp->setOperand(operand.getOperandNumber(),
+                        getValueAs(operand.get(), operandEnc));
+    }
+
+    for (unsigned i = 0, e = op->getNumResults(); i < e; ++i) {
+      auto origType = dyn_cast<RankedTensorType>(op->getResult(i).getType());
+      if (!origType)
+        continue;
+      auto newType = origType.cloneWithEncoding(encoding);
+      newOp->getResult(i).setType(newType);
+    }
+    return newOp;
+  };
+
+  auto rewriteOp = [&](Operation *op) {
+    opToDelete.insert(op);
+    OpBuilder rewriter(op);
+    Attribute encoding = values[op->getResult(0)];
+    if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
+        op->hasTrait<OpTrait::Elementwise>() ||
+        isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
+            GatherOp, ConvertLayoutOp, LoadOp>(op)) {
+      Operation *newOp = cloneElementwise(rewriter, op, encoding);
+      for (auto [oldResult, newResult] :
+           llvm::zip(op->getResults(), newOp->getResults())) {
+        if (oldResult.getType() == newResult.getType()) {
+          oldResult.replaceAllUsesWith(newResult);
+          continue;
+        }
+        addRematValue(oldResult, encoding, newResult);
+      }
+      return newOp;
+    }
+    llvm::report_fatal_error("unexpected op in rewrite");
+    return (mlir::Operation *)nullptr;
+  };
+
+  std::deque<Region *> regQueue = {&funcOp->getRegion(0)};
+  while (!regQueue.empty()) {
+    Region *currentRegion = regQueue.front();
+    regQueue.pop_front();
+    for (Operation &op : currentRegion->getOps()) {
+      bool needRewrite = false;
+      SmallVector<Value> results = op.getResults();
+      for (Value result : results) {
+        // Only care about values in the given set.
+        if (!values.contains(result))
+          continue;
+        auto layout = values[result];
+        auto remtValue = getRematValue(result, layout);
+        // If we haven't mapped this value skip.
+        if (remtValue)
+          continue;
+        auto encoding = cast<RankedTensorType>(result.getType()).getEncoding();
+        // If the encoding is already what we want skip.
+        if (encoding == layout)
+          continue;
+        needRewrite = true;
+      }
+      if (needRewrite) {
+        Operation *newOp = rewriteOp(&op);
+      } else if (auto assertOp = dyn_cast<AssertOp>(&op)) {
+        // Only need to deal with the first operand which is the condition
+        // tensor.
+        Value operand = assertOp->getOperand(0);
+        if (!values.contains(operand))
+          continue;
+        Value newOperand = getRematValue(operand, values[operand]);
+        assertOp->setOperand(0, newOperand);
+      }
+    }
+  }
+}
+
 LogicalResult LayoutRematerialization::getConvertBackwardSlice(
     OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
     DenseMap<Value, Attribute> &layout,
@@ -1588,9 +1753,21 @@ void LayoutRematerialization::backwardRematerialization(
   int64_t convertLayoutCost = 32 * convertLayoutBytes * 3;
   int64_t rematerialisationCost = 0;
 
+  DenseMap<Value, Attribute> forwardCleanOps;
   // Evaluate single-use status for every operation in slice
   for (Operation *op : sliceOps) {
     auto dialect = op->getDialect();
+    if (!isOpSingleUse(op)) {
+      for (Value result : op->getResults()) {
+        for (Operation *user : result.getUsers()) {
+          if (user == convertOp) {
+            continue;
+          }
+          forwardCleanOps[result] = layout[result];
+          break;
+        }
+      }
+    }
     if (isOpSingleUse(op)) {
       // when we rematerialise, this operation does not get duplicated
       // so it does not contribute to our cost model:
@@ -1647,6 +1824,10 @@ void LayoutRematerialization::backwardRematerialization(
 
   // 3. Rewrite the slice.
   rewriteSlice(slice, layout, convertOp);
+
+  // 4. Clean up the duplicated expressions added by the backward remet.
+  // There is the information about the duplicated values in rematMapping
+  forwardRematClean(forwardCleanOps);
 }
 
 void LayoutRematerialization::hoistConvertDotOperand() {
