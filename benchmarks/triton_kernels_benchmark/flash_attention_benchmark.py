@@ -15,7 +15,7 @@ from triton_kernels_benchmark import cutlass_kernel
 # pylint: disable=unused-argument
 @triton.jit
 def _attn_fwd_inner(acc, l_i, m_i, q,  #
-                    K_block_ptr, V_block_ptr,  #
+                    K_desc, V_desc,  #
                     start_m, qk_scale,  #
                     BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr, BLOCK_N: tl.constexpr,  #
                     STAGE: tl.constexpr, offs_m: tl.constexpr, offs_n: tl.constexpr,  #
@@ -29,13 +29,12 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
     # causal = False
     else:
         lo, hi = 0, N_CTX
-    K_block_ptr = tl.advance(K_block_ptr, (0, lo))
-    V_block_ptr = tl.advance(V_block_ptr, (lo, 0))
     # loop over k, v and update accumulator
+    off_n = lo
     for start_n in range(lo, hi, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
         # -- compute qk ----
-        k = tl.load(K_block_ptr)
+        k = K_desc.load([0, off_n])
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
         if STAGE == 2:
@@ -54,17 +53,16 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
         # -- update output accumulator --
         acc = acc * alpha[:, None]
         # update acc
-        v = tl.load(V_block_ptr)
+        v = V_desc.load([off_n, 0])
         acc += tl.dot(p.to(tl.float16), v)
         # update m_i and l_i
         m_i = m_ij
-        V_block_ptr = tl.advance(V_block_ptr, (BLOCK_N, 0))
-        K_block_ptr = tl.advance(K_block_ptr, (0, BLOCK_N))
+        off_n += BLOCK_N
     return acc, l_i, m_i
 
 
 @triton.jit
-def _attn_fwd_with_block_pointers(Q, K, V, sm_scale, M, Out,  #
+def _attn_fwd_with_tensor_descriptors(Q, K, V, sm_scale, M, Out,  #
                                   stride_qz: tl.constexpr, stride_qh: tl.constexpr, stride_qm: tl.constexpr,
                                   stride_qk: tl.constexpr,  #
                                   stride_kz: tl.constexpr, stride_kh: tl.constexpr, stride_kn: tl.constexpr,
@@ -90,38 +88,30 @@ def _attn_fwd_with_block_pointers(Q, K, V, sm_scale, M, Out,  #
         off_z = tl.program_id(2)
         qvk_offset = off_z.to(tl.int64) * stride_qh
 
-    # block pointers
-    Q_block_ptr = tl.make_block_ptr(
+    # tensor descriptors
+    Q_desc = tl.make_tensor_descriptor(
         base=Q + qvk_offset,
         shape=(N_CTX, BLOCK_DMODEL),
         strides=(stride_qm, stride_qk),
-        offsets=(start_m * BLOCK_M, 0),
         block_shape=(BLOCK_M, BLOCK_DMODEL),
-        order=(1, 0),
     )
-    V_block_ptr = tl.make_block_ptr(
+    V_desc = tl.make_tensor_descriptor(
         base=V + qvk_offset,
         shape=(N_CTX, BLOCK_DMODEL),
         strides=(stride_vk, stride_vn),
-        offsets=(0, 0),
         block_shape=(BLOCK_N, BLOCK_DMODEL),
-        order=(1, 0),
     )
-    K_block_ptr = tl.make_block_ptr(
+    K_desc = tl.make_tensor_descriptor(
         base=K + qvk_offset,
         shape=(BLOCK_DMODEL, N_CTX),
         strides=(stride_kk, stride_kn),
-        offsets=(0, 0),
         block_shape=(BLOCK_DMODEL, BLOCK_N),
-        order=(0, 1),
     )
-    O_block_ptr = tl.make_block_ptr(
+    O_desc = tl.make_tensor_descriptor(
         base=Out + qvk_offset,
         shape=(N_CTX, BLOCK_DMODEL),
         strides=(stride_om, stride_on),
-        offsets=(start_m * BLOCK_M, 0),
         block_shape=(BLOCK_M, BLOCK_DMODEL),
-        order=(1, 0),
     )
     # initialize offsets
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
@@ -134,19 +124,19 @@ def _attn_fwd_with_block_pointers(Q, K, V, sm_scale, M, Out,  #
     qk_scale = sm_scale
     qk_scale *= 1.44269504  # 1/log(2)
     # load q: it will stay in SRAM throughout
-    q = tl.load(Q_block_ptr)
+    q = Q_desc.load([start_m * BLOCK_M, 0])
     # stage 1: off-band
     # For causal = True, STAGE = 3 the kernel gets 1 as its STAGE
     # For causal = False, STAGE = 1, the kernel gets 3 as its STAGE
     if STAGE & 1:
-        acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_block_ptr, V_block_ptr,  #
+        acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_desc, V_desc,  #
                                         start_m, qk_scale,  #
                                         BLOCK_M, BLOCK_DMODEL, BLOCK_N,  #
                                         4 - STAGE, offs_m, offs_n, N_CTX  #
                                         )
     # stage 2: on-band
     if STAGE & 2:
-        acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_block_ptr, V_block_ptr,  #
+        acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_desc, V_desc,  #
                                         start_m, qk_scale,  #
                                         BLOCK_M, BLOCK_DMODEL, BLOCK_N,  #
                                         2, offs_m, offs_n, N_CTX  #
@@ -158,16 +148,14 @@ def _attn_fwd_with_block_pointers(Q, K, V, sm_scale, M, Out,  #
         off_hz = off_z + off_h * H
     else:
         off_hz = off_z * H + off_h
-    M_block_ptr = tl.make_block_ptr(
+    M_desc = tl.make_tensor_descriptor(
         base=M + off_hz * N_CTX,
         shape=[N_CTX],
         strides=[1],
-        offsets=[start_m * BLOCK_M],
         block_shape=[BLOCK_M],
-        order=[0],
     )
-    tl.store(M_block_ptr, m_i)
-    tl.store(O_block_ptr, acc.to(Out.type.element_ty), boundary_check=(0, 1))
+    M_desc.store([start_m * BLOCK_M], m_i)
+    O_desc.store([start_m * BLOCK_M, 0], acc.to(Out.type.element_ty))
 
 
 configs = [
@@ -521,7 +509,7 @@ attention = _attention.apply
 def get_benchmark(
     providers_filter: Optional[list[str]] = None,
     fa_kernel_mode='fwd',
-    attn_fwd=_attn_fwd_with_block_pointers,
+    attn_fwd=_attn_fwd_with_tensor_descriptors,
 ):
     """
     Returns a Mark object containing a Benchmark object constructed at runtime and parameterized by the provided option values.
