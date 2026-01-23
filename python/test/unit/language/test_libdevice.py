@@ -64,8 +64,6 @@ def test_libdevice_rename(device):
 
 @pytest.mark.parametrize("dtype_str", ["float32", "float64"])
 def test_isinf(device, dtype_str):
-    if is_xpu():
-        pytest.skip("FIXME: #5808")
 
     @triton.jit
     def triton_isinf(in_ptr, out_ptr, numel, BLOCK_SIZE: tl.constexpr):
