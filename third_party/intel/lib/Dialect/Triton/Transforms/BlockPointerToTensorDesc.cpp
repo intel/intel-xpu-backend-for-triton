@@ -163,11 +163,10 @@ private:
 
     auto accumulateIndices = [&](Value v, SmallVector<Value> &indices) {
       Value curr = v;
+      SmallVector<tt::AdvanceOp> advanceOps;
       while (auto advanceOp =
                  dyn_cast_or_null<tt::AdvanceOp>(curr.getDefiningOp())) {
-        OpBuilder builder(advanceOp);
-        addIndices(builder, advanceOp.getLoc(), advanceOp.getOffsets(),
-                   indices);
+        advanceOps.push_back(advanceOp);
         curr = advanceOp.getPtr();
         cleanUp.insert(advanceOp);
       }
@@ -176,6 +175,11 @@ private:
         OpBuilder builder(makeTensorPtrOp);
         addIndices(builder, makeTensorPtrOp.getLoc(),
                    makeTensorPtrOp.getOffsets(), indices);
+      }
+      for (tt::AdvanceOp advanceOp : llvm::reverse(advanceOps)) {
+        OpBuilder builder(advanceOp);
+        addIndices(builder, advanceOp.getLoc(), advanceOp.getOffsets(),
+                   indices);
       }
     };
 
@@ -293,11 +297,16 @@ private:
       if (!arg.hasOneUse())
         continue;
 
-      auto advanceOp = dyn_cast<tt::AdvanceOp>(arg.use_begin()->getOwner());
-      if (!advanceOp || !advanceOp->hasOneUse())
+      Operation *nextOp = arg.use_begin()->getOwner();
+      while (auto advanceOp = dyn_cast<tt::AdvanceOp>(nextOp)) {
+        if (!advanceOp || !advanceOp->hasOneUse() || !ops.contains(advanceOp))
+          break;
+        nextOp = advanceOp->use_begin()->getOwner();
+      }
+      if (!isa_and_nonnull<scf::YieldOp>(nextOp))
         continue;
 
-      if (!ops.contains(advanceOp))
+      if (!forOp.getResult(argIdx).use_empty())
         continue;
 
       forOpsToClean[forOp].insert(argIdx);
@@ -328,6 +337,8 @@ private:
         oldArgs.push_back(oldArg);
     }
     Block::BlockArgListType newArgs = newBody->getArguments();
+    while (!newBody->empty())
+      newBody->front().erase();
     newBody->getOperations().splice(newBody->getOperations().begin(),
                                     oldBody->getOperations());
     for (auto [oldArg, newArg] : llvm::zip(oldArgs, newArgs))
