@@ -299,7 +299,7 @@ private:
 
       Operation *nextOp = arg.use_begin()->getOwner();
       while (auto advanceOp = dyn_cast<tt::AdvanceOp>(nextOp)) {
-        if (!advanceOp || !advanceOp->hasOneUse() || !ops.contains(advanceOp))
+        if (!advanceOp->hasOneUse() || !ops.contains(advanceOp))
           break;
         nextOp = advanceOp->use_begin()->getOwner();
       }
