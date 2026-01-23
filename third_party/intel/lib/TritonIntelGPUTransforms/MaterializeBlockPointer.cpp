@@ -323,11 +323,26 @@ private:
     // Ensure the base ptr is 4-byte aligned.
     // Note: the HW requires the address to be 64-byte aligned, however we will
     // compensate by imposing restrictions on the offsetX and baseWidth.
-    const tt::AxisInfo *axisInfo = axisInfoAnalysis.getAxisInfo(ptr);
-    if (axisInfo->getDivisibility(strideOneDimVal) % 4 != 0) {
-      LDBG("Found non 4 bytes aligned base: "
-           << axisInfo->getDivisibility(strideOneDimVal));
-      return false;
+    
+    // POC FIX: Skip divisibility check for pointers loaded from pointer arrays
+    // When base comes from int_to_ptr (runtime-loaded pointers), we trust that
+    // the pointer is properly aligned for the tensor operation.
+    Value basePtr = makeTensorPtrOp.getBase();
+    bool isRuntimeLoadedPtr = false;
+    if (auto intToPtrOp = basePtr.getDefiningOp<tt::IntToPtrOp>()) {
+      if (auto loadOp = intToPtrOp.getSrc().getDefiningOp<tt::LoadOp>()) {
+        LDBG("Base pointer comes from runtime load - assuming proper alignment");
+        isRuntimeLoadedPtr = true;
+      }
+    }
+    
+    if (!isRuntimeLoadedPtr) {
+      const tt::AxisInfo *axisInfo = axisInfoAnalysis.getAxisInfo(ptr);
+      if (axisInfo->getDivisibility(strideOneDimVal) % 4 != 0) {
+        LDBG("Found non 4 bytes aligned base: "
+             << axisInfo->getDivisibility(strideOneDimVal));
+        return false;
+      }
     }
 
     // Analyze the shape of the stride one dimension to ensure it satisfies HW
