@@ -355,18 +355,18 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
         }
         return isMMAorMMADerived;
       };
-      if (llvm::all_of(info.encodings, checkMMAorMMADerived)) {
-        SmallVector<Value> valuesToChange{storeOp.getPtr(), storeOp.getValue()};
-        if (storeOp.getMask())
-          valuesToChange.emplace_back(storeOp.getMask());
-        setEncoding(valuesToChange, info, changed, user);
-      }
+      // if (llvm::all_of(info.encodings, checkMMAorMMADerived)) {
+      SmallVector<Value> valuesToChange{storeOp.getPtr(), storeOp.getValue()};
+      if (storeOp.getMask())
+        valuesToChange.emplace_back(storeOp.getMask());
+      setEncoding(valuesToChange, info, changed, user);
+      // }
       continue;
     }
     if (user->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
         user->hasTrait<OpTrait::Elementwise>() ||
         isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
-            ConvertLayoutOp>(user)) {
+            ConvertLayoutOp, LoadOp>(user)) {
       setEncoding(user->getResults(), info, changed, user);
       continue;
     }
@@ -398,6 +398,17 @@ void LayoutPropagation::propagateLayout() {
 }
 
 void LayoutPropagation::resolveConflicts() {
+
+  llvm::DenseMap<Attribute, int> freq;
+  LLVM_DEBUG({ DBGS() << "Resolving conflicts:\n"; });
+  for (auto &it : layouts) {
+    Operation *op = it.first.getDefiningOp();
+    LayoutInfo &info = it.second;
+    for (Attribute e : info.encodings) {
+      unsigned seen = ++freq[e];
+      LLVM_DEBUG({ DBGS() << "   " << e << " seen:" << seen << "\n"; });
+    }
+  }
   for (auto &it : layouts) {
     Operation *op = it.first.getDefiningOp();
     LayoutInfo &info = it.second;
@@ -408,11 +419,19 @@ void LayoutPropagation::resolveConflicts() {
     Attribute encoding = *info.encodings.begin();
     bool isLoadOrStore =
         op && isa<LoadOp, StoreOp, AtomicRMWOp, AtomicCASOp>(op);
+    int maxCount = std::numeric_limits<int>::min();
     for (Attribute e : info.encodings) {
-      if ((isLoadOrStore && isa<BlockedEncodingAttr>(e)) ||
-          (!isLoadOrStore && isa<MmaEncodingTrait>(e))) {
+      // Prefer MmaEncodingTrait if available
+      if (!isLoadOrStore && isa<MmaEncodingTrait>(e)) {
         encoding = e;
         break;
+      }
+      // Chose a most common blocked layout.
+      if (auto blocked = dyn_cast<BlockedEncodingAttr>(e)) {
+        if (freq[e] > maxCount) {
+          maxCount = freq[e];
+          encoding = e;
+        }
       }
     }
     info.encodings.clear();
@@ -961,7 +980,7 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
   if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<OpTrait::Elementwise>() ||
       isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp, GatherOp,
-          ConvertLayoutOp>(op)) {
+          ConvertLayoutOp, LoadOp>(op)) {
     Operation *newOp = cloneElementwise(rewriter, op, encoding);
     for (auto [oldResult, newResult] :
          llvm::zip(op->getResults(), newOp->getResults())) {
