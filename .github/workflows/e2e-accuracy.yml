@@ -162,7 +162,7 @@ jobs:
 
       - name: Run aggregation script
         run: |
-          pip install pandas numpy
+          pip install 'pandas<3.0' numpy
           ls -la separate-reports
           echo "Local dir"
           ls -la ./
