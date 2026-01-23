@@ -46,6 +46,62 @@ namespace ttgi = mlir::triton::gpu::intel;
 
 namespace {
 
+// Utility function for cloning elementwise operations
+Operation *cloneElementwiseImpl(
+    OpBuilder &rewriter, Operation *op, Attribute encoding,
+    std::function<Attribute(Operation *, Attribute)> inferSrcEncoding,
+    std::function<Value(Value, Attribute)> getValueAs) {
+  Operation *newOp = rewriter.clone(*op);
+
+  Attribute operandEnc = inferSrcEncoding(op, encoding);
+  assert(operandEnc ||
+         op->getNumOperands() == 0 && "invalid new operand encoding");
+
+  for (OpOperand &operand : op->getOpOperands()) {
+    newOp->setOperand(operand.getOperandNumber(),
+                      getValueAs(operand.get(), operandEnc));
+  }
+
+  for (unsigned i = 0, e = op->getNumResults(); i < e; ++i) {
+    auto origType = dyn_cast<RankedTensorType>(op->getResult(i).getType());
+    if (!origType)
+      continue;
+    auto newType = origType.cloneWithEncoding(encoding);
+    newOp->getResult(i).setType(newType);
+  }
+  return newOp;
+}
+
+Value getValueAsImpl(
+    Value value, Attribute encoding,
+    std::function<Value(Value)> getRewrittenValue,
+    std::function<void(Value, Attribute, Value)> cacheRewrittenValue) {
+  if (auto tensorType = dyn_cast<RankedTensorType>(value.getType())) {
+    Value rewrittenValue = getRewrittenValue(value);
+    if (rewrittenValue &&
+        cast<RankedTensorType>(rewrittenValue.getType()).getEncoding() ==
+            encoding)
+      return rewrittenValue;
+    OpBuilder rewriter(value.getContext());
+    rewriter.setInsertionPointAfterValue(value);
+    auto tmpType =
+        cast<RankedTensorType>(value.getType()).cloneWithEncoding(encoding);
+    Value converted =
+        ttg::ConvertLayoutOp::create(rewriter, value.getLoc(), tmpType, value);
+    cacheRewrittenValue(value, encoding, converted);
+    return converted;
+  }
+  return value;
+}
+
+void eraseUnusedOps(SetVector<Operation *> &opsToDelete) {
+  for (Operation *op : llvm::reverse(opsToDelete)) {
+    if (op->getUsers().empty()) {
+      op->erase();
+    }
+  }
+}
+
 // -----------------------------------------------------------------------------
 //
 // -----------------------------------------------------------------------------
@@ -167,6 +223,75 @@ public:
       std::function<bool(Operation *)> stopPropagation = nullptr);
 
 private:
+  // Forward propagate the remat value to simplify the IR.
+
+  /*
+  If the value is used by multiple users and one of its users is the convert
+  layout op.
+  1. Original IR
+   ┌─┐
+   └┬┘
+    │
+   ┌┴┐
+   └┬┘
+    │
+    ├───────┐
+    │       │
+    │      ┌┴┐ // cvt_layout
+    │      └┬┘
+    │       │
+   ┌┴┐     ┌┴┐
+   └─┘     └─┘
+
+  After the backward propagate convert layout op, there are going to be
+  duplicated expression with different layout.
+  2. After backward propagate convert layout op.
+
+  ┌─┐         ┌─┐  // duplicate expression with different layout.
+  └┬┘         └┬┘
+   │           │
+  ┌┴┐         ┌┴┐
+  └┬┘         └┬┘
+   │           │
+   ├───────┐   │
+   │       │   │
+   │      ┌┴┐  │
+   │      └─┘  │
+   │       ┌───┘
+  ┌┴┐     ┌┴┐
+  └─┘     └─┘
+
+  Need to forward propagate the remat value to clean up the IR as what we did in
+  forward layout propagation.
+  3. After forward propagate remat values while the mapping information is still
+  valid in rematMapping.
+
+  ┌─┐         ┌─┐ // The expression with old layout could be removed later.
+  └┬┘         └┬┘
+   │           │
+  ┌┴┐         ┌┴┐
+  └┬┘         └┬┘
+   │           │
+   └───────┐   │
+           │   │
+          ┌┴┐  │
+          └─┘  │
+   ┌───────┬───┘
+  ┌┴┐     ┌┴┐
+  └─┘     └─┘
+  */
+  void setEncoding(DenseMap<Value, Attribute> &values, ValueRange ops,
+                   Attribute &layout, SmallVector<Value> &changed,
+                   Operation *op);
+  SmallVector<Value> propagateToUsers(DenseMap<Value, Attribute> &values,
+                                      Value value, Attribute &layout);
+  void propagateLayout(DenseMap<Value, Attribute> &values);
+  Value getValueAs(Value value, Attribute encoding);
+  Operation *cloneElementwise(OpBuilder &rewriter, Operation *op,
+                              Attribute encoding);
+  Operation *rewriteOp(Operation *op, Attribute encoding);
+  void forwardPropagateRemat(DenseMap<Value, Attribute> &values);
+
   void updateRematMapping(SmallVector<std::tuple<Value, Value>> &values);
   void reduceLoopCarriedValues();
   // Existing tuples of (value, layout) that needs to be updated when recreating
@@ -194,10 +319,7 @@ void LayoutRematerialization::addRematValue(Value old, Attribute encoding,
 }
 
 // Remove unneeded values now that we are done with the rematMapping.
-void LayoutRematerialization::cleanup() {
-  for (Operation *op : llvm::reverse(opToDelete))
-    op->erase();
-}
+void LayoutRematerialization::cleanup() { eraseUnusedOps(opToDelete); }
 
 // Return true if the op is an op with a layout we don't want to change. We will
 // propagate the layout starting from anchor ops.
@@ -501,10 +623,7 @@ void LayoutPropagation::rewriteRegion(Region &region) {
     }
   }
 
-  for (Operation *op : llvm::reverse(opToDelete)) {
-    if (op->getUsers().empty())
-      op->erase();
-  }
+  eraseUnusedOps(opToDelete);
 }
 
 void LayoutPropagation::map(Value old, Value newV) {
@@ -529,58 +648,41 @@ Value LayoutPropagation::getRewrittenValue(Value value) {
 }
 
 Value LayoutPropagation::getValueAs(Value value, Attribute encoding) {
-  if (auto tensorType = dyn_cast<RankedTensorType>(value.getType())) {
-    Value rewrittenValue = getRewrittenValue(value);
-    if (cast<RankedTensorType>(rewrittenValue.getType()).getEncoding() ==
-        encoding)
-      return rewrittenValue;
-    OpBuilder rewriter(value.getContext());
-    rewriter.setInsertionPointAfterValue(rewrittenValue);
-    auto tmpType = tensorType.cloneWithEncoding(encoding);
-    Value converted = ttg::ConvertLayoutOp::create(rewriter, value.getLoc(),
-                                                   tmpType, rewrittenValue);
-    // TODO: we could cache the conversion.
-    return converted;
-  }
-  return value;
+  return getValueAsImpl(
+      value, encoding, [this](Value v) { return getRewrittenValue(v); },
+      [](Value v, Attribute enc, Value converted) {
+        // TODO: we could cache the conversion.
+      });
 }
 
 Operation *LayoutPropagation::cloneElementwise(OpBuilder &rewriter,
                                                Operation *op,
                                                Attribute encoding) {
-  Operation *newOp = rewriter.clone(*op);
-
-  Attribute operandEnc;
-  if (op->getNumOperands() > 0) {
-    for (auto operand : op->getOperands()) {
-      auto ty =
-          dyn_cast<RankedTensorType>(getRewrittenValue(operand).getType());
-      if (!ty)
-        continue;
-      auto enc = ty.getEncoding();
-      if (inferDstEncoding(op, enc) == encoding) {
-        operandEnc = enc;
-        break;
-      }
-    }
-    if (!operandEnc)
-      operandEnc = ttgi::inferSrcEncoding(op, encoding);
-    assert(operandEnc);
-  }
-
-  for (OpOperand &operand : op->getOpOperands()) {
-    newOp->setOperand(operand.getOperandNumber(),
-                      getValueAs(operand.get(), operandEnc));
-  }
-
-  for (unsigned i = 0, e = op->getNumResults(); i < e; ++i) {
-    auto origType = dyn_cast<RankedTensorType>(op->getResult(i).getType());
-    if (!origType)
-      continue;
-    auto newType = origType.cloneWithEncoding(encoding);
-    newOp->getResult(i).setType(newType);
-  }
-  return newOp;
+  return cloneElementwiseImpl(
+      rewriter, op, encoding,
+      [this](Operation *op, Attribute encoding) {
+        Attribute operandEnc;
+        if (op->getNumOperands() > 0) {
+          for (auto operand : op->getOperands()) {
+            auto ty = dyn_cast<RankedTensorType>(
+                getRewrittenValue(operand).getType());
+            if (!ty)
+              continue;
+            auto enc = ty.getEncoding();
+            if (inferDstEncoding(op, enc) == encoding) {
+              operandEnc = enc;
+              break;
+            }
+          }
+          if (!operandEnc)
+            operandEnc = ttgi::inferSrcEncoding(op, encoding);
+          assert(operandEnc);
+        }
+        return operandEnc;
+      },
+      [this](Value value, Attribute encoding) {
+        return getValueAs(value, encoding);
+      });
 }
 
 Operation *LayoutPropagation::rewriteForOp(scf::ForOp forOp) {
@@ -1356,6 +1458,169 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
   rewriteSlice(slice, layout, convertOp, mapping);
 }
 
+void LayoutRematerialization::setEncoding(DenseMap<Value, Attribute> &values,
+                                          ValueRange ops, Attribute &layout,
+                                          SmallVector<Value> &changed,
+                                          Operation *op) {
+  for (Value value : ops) {
+    if (!isa<RankedTensorType>(value.getType()))
+      continue;
+    Attribute dstEncoding;
+    if (isa<ttg::ConvertLayoutOp>(op)) {
+      // Try to remove the convert by making the dst encoding match the source
+      // encoding.
+      dstEncoding = layout;
+    } else {
+      dstEncoding = inferDstEncoding(op, layout);
+    }
+    if (!values.contains(value)) {
+      values[value] = dstEncoding;
+      changed.push_back(value);
+    }
+  }
+}
+
+SmallVector<Value>
+LayoutRematerialization::propagateToUsers(DenseMap<Value, Attribute> &values,
+                                          Value value, Attribute &layout) {
+  SmallVector<Value> changed;
+  for (OpOperand &use : value.getUses()) {
+    Operation *user = use.getOwner();
+    if (user->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
+        user->hasTrait<OpTrait::Elementwise>()) {
+      setEncoding(values, user->getResults(), layout, changed, user);
+    }
+  }
+  return changed;
+}
+
+void LayoutRematerialization::propagateLayout(
+    DenseMap<Value, Attribute> &values) {
+  SmallVector<Value> queue;
+  for (auto it : values) {
+    queue.push_back(it.first);
+  }
+  while (!queue.empty()) {
+    Value currentValue = queue.back();
+    Attribute layout = values[currentValue];
+    queue.pop_back();
+    SmallVector<Value> changed = propagateToUsers(values, currentValue, layout);
+
+    LLVM_DEBUG({
+      DBGS() << "propagateLayout considering " << currentValue
+             << ", which has layout:\n";
+      DBGS() << "  " << layout << "\n";
+      DBGS() << "changed: " << changed.size() << "\n";
+    });
+
+    queue.insert(queue.end(), changed.begin(), changed.end());
+  }
+}
+
+Value LayoutRematerialization::getValueAs(Value value, Attribute encoding) {
+  return getValueAsImpl(
+      value, encoding,
+      [this, encoding](Value v) { return getRematValue(v, encoding); },
+      [this](Value v, Attribute enc, Value converted) {
+        addRematValue(v, enc, converted);
+      });
+}
+
+Operation *LayoutRematerialization::cloneElementwise(OpBuilder &rewriter,
+                                                     Operation *op,
+                                                     Attribute encoding) {
+  return cloneElementwiseImpl(
+      rewriter, op, encoding,
+      [](Operation *op, Attribute encoding) {
+        return ttgi::inferSrcEncoding(op, encoding);
+      },
+      [this](Value value, Attribute encoding) {
+        return getValueAs(value, encoding);
+      });
+}
+
+Operation *LayoutRematerialization::rewriteOp(Operation *op,
+                                              Attribute encoding) {
+  opToDelete.insert(op);
+  OpBuilder rewriter(op);
+  if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
+      op->hasTrait<OpTrait::Elementwise>()) {
+    Operation *newOp = cloneElementwise(rewriter, op, encoding);
+    for (auto [oldResult, newResult] :
+         llvm::zip(op->getResults(), newOp->getResults())) {
+      if (oldResult.getType() == newResult.getType()) {
+        oldResult.replaceAllUsesWith(newResult);
+        continue;
+      }
+      addRematValue(oldResult, encoding, newResult);
+    }
+    return newOp;
+  }
+  llvm::report_fatal_error("unexpected op in rewrite");
+  return (mlir::Operation *)nullptr;
+};
+
+void LayoutRematerialization::forwardPropagateRemat(
+    DenseMap<Value, Attribute> &valuesToPropagate) {
+
+  if (valuesToPropagate.empty())
+    return;
+
+  propagateLayout(valuesToPropagate);
+
+  LLVM_DEBUG({
+    DBGS() << "forwardPropagateRemat remat the value with new layout:\n";
+    for (auto &kv : valuesToPropagate) {
+      DBGS().indent(2) << "value: " << kv.first << "\n";
+      DBGS().indent(2) << "to layout:" << kv.second << "\n";
+    }
+  });
+
+  std::deque<Region *> regQueue = {&funcOp->getRegion(0)};
+  while (!regQueue.empty()) {
+    Region *currentRegion = regQueue.front();
+    regQueue.pop_front();
+    for (Operation &op : currentRegion->getOps()) {
+      bool needRewrite = false;
+      SmallVector<Value> results = op.getResults();
+      for (Value result : results) {
+        if (isa<scf::ForOp, scf::IfOp>(op)) {
+          // The scf::ForOp and scf::IfOp are handled separately in
+          // rewriteSlice. Just skip those two ops here.
+          break;
+        }
+        // Only care about value in the given set.
+        if (!valuesToPropagate.contains(result))
+          continue;
+        auto layout = valuesToPropagate[result];
+        auto rematValue = getRematValue(result, layout);
+        // If the value is already rematerialized, skip.
+        if (rematValue)
+          continue;
+        auto encoding = cast<RankedTensorType>(result.getType()).getEncoding();
+        // If the encoding is already what we want skip.
+        if (encoding == layout)
+          continue;
+        needRewrite = true;
+      }
+      if (needRewrite) {
+        // Create the op with the new layout.
+        rewriteOp(&op, valuesToPropagate[op.getResult(0)]);
+      } else if (auto assertOp = dyn_cast<tt::AssertOp>(&op)) {
+        // Only need to deal with the first operand which is the condition
+        // tensor.
+        Value operand = assertOp->getOperand(0);
+        if (!valuesToPropagate.contains(operand))
+          continue;
+        Value newOperand = getRematValue(operand, valuesToPropagate[operand]);
+        assertOp->setOperand(0, newOperand);
+      }
+      for (Region &R : op.getRegions())
+        regQueue.push_back(&R);
+    }
+  }
+}
+
 LogicalResult LayoutRematerialization::getConvertBackwardSlice(
     OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
     DenseMap<Value, Attribute> &layout,
@@ -1591,9 +1856,23 @@ void LayoutRematerialization::backwardRematerialization(
   int64_t convertLayoutCost = 32 * convertLayoutBytes * 3;
   int64_t rematerialisationCost = 0;
 
+  DenseMap<Value, Attribute> forwardPropagateCandidates;
   // Evaluate single-use status for every operation in slice
   for (Operation *op : sliceOps) {
     auto dialect = op->getDialect();
+    if (!isOpSingleUse(op)) {
+      for (Value result : op->getResults()) {
+        for (Operation *user : result.getUsers()) {
+          if (user == convertOp) {
+            continue;
+          }
+          Attribute encoding = layout[result];
+          if (encoding)
+            forwardPropagateCandidates[result] = encoding;
+          break;
+        }
+      }
+    }
     if (isOpSingleUse(op)) {
       // when we rematerialise, this operation does not get duplicated
       // so it does not contribute to our cost model:
@@ -1650,6 +1929,9 @@ void LayoutRematerialization::backwardRematerialization(
 
   // 3. Rewrite the slice.
   rewriteSlice(slice, layout, convertOp);
+
+  // 4. Forward propagate rematerial values created during backward slice.
+  forwardPropagateRemat(forwardPropagateCandidates);
 }
 
 void LayoutRematerialization::hoistConvertDotOperand() {
