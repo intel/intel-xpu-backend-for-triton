@@ -46,8 +46,7 @@ public:
   ///  - M = RC = 1,2,4,8 (we use 8)
   ///  - N = exec_size = SIMD_width = 16
   ///  - Size of A, B element type = {32,16,8}, for {tf32,bf16/f16,u8/i8}
-  ///  - K=SD * num_packed_elems_in_Dword = {8,16,32}, for
-  ///  {tf32,bf16/f16,u8/i8}
+  ///  - K=SD * num_packed_elems_in_Dword = {8,16,32}, for {tf32,bf16/f16,u8/i8}
   ///
   /// The per-lane intrinsic function generated is defined to perform the
   /// following operation:
@@ -128,13 +127,28 @@ public:
 
     Type resElemTy = DTensorTy.getElementType();
 
-    TritonGEN::PrecisionType APrecision =
-                                 getElementPrecision(ATensorTy, resElemTy),
-                             BPrecision =
-                                 getElementPrecision(BTensorTy, resElemTy);
+    TritonGEN::PrecisionType APrecision;
+    TritonGEN::PrecisionType BPrecision;
 
-    assert(APrecision == BPrecision &&
-           "A and B precision enumerators do not match");
+    if constexpr (std::is_same<OpTy, DotOp>::value) {
+      APrecision = getElementPrecision(ATensorTy, resElemTy),
+      BPrecision = getElementPrecision(BTensorTy, resElemTy);
+
+      assert(APrecision == BPrecision &&
+             "A and B precision enumerators do not match");
+    } else if constexpr (std::is_same<OpTy, DotScaledOp>::value) {
+      auto aElemType = adaptor.getAElemType();
+      APrecision = getElementPrecision(aElemType);
+      auto bElemType = adaptor.getBElemType();
+      BPrecision = getElementPrecision(bElemType);
+      [[maybe_unused]] bool isBothFP8 =
+          (aElemType == triton::ScaleDotElemType::E4M3 ||
+           aElemType == triton::ScaleDotElemType::E5M2) &&
+          (bElemType == triton::ScaleDotElemType::E4M3 ||
+           bElemType == triton::ScaleDotElemType::E5M2);
+      assert((isBothFP8 || APrecision == BPrecision) &&
+             "A and B precision enumerators do not match");
+    }
 
     LLVM_DEBUG({
       llvm::dbgs() << "repBatch = " << repBatch << "\n";
@@ -156,9 +170,22 @@ public:
           TritonGEN::PrecisionTypeAttr::get(B.getContext(), BPrecision);
       auto RC = IntegerAttr::get(rewriter.getIntegerType(32),
                                  dpasEncoding.getRepeatCount());
-      fc.at({b, m, n}) = TritonGEN::MatrixDPASOp::create(
-          rewriter, loc, dTy, tb.bitcast(valc, cTy), tb.bitcast(valA, aTy),
-          tb.bitcast(valB, bTy), pA, pB, RC);
+
+      if constexpr (std::is_same<OpTy, DotOp>::value) {
+        fc.at({b, m, n}) = TritonGEN::MatrixDPASOp::create(
+            rewriter, loc, dTy, tb.bitcast(valc, cTy), tb.bitcast(valA, aTy),
+            tb.bitcast(valB, bTy), pA, pB, RC);
+      } else if constexpr (std::is_same<OpTy, DotScaledOp>::value) {
+        Value sA;
+        if (!scaleA.empty())
+          sA = scaleA.at({b, m, k});
+        Value sB;
+        if (!scaleB.empty())
+          sB = scaleB.at({b, n, k});
+        fc.at({b, m, n}) = TritonGEN::MatrixBlockScaleDPASOp::create(
+            rewriter, loc, dTy, tb.bitcast(valc, cTy), tb.bitcast(valA, aTy),
+            tb.bitcast(valB, bTy), sA, sB, pA, pB, RC);
+      }
     };
 
     ArrayRef<unsigned> repCluster = dpasEncoding.getRepCluster();
@@ -268,7 +295,9 @@ private:
       return {cTy, cTy, aTy, bTy};
     }
     default:
-      llvm::report_fatal_error("Unsupported dpas type found");
+      llvm::report_fatal_error(
+          "Unsupported dpas type found: " +
+          StringRef(std::to_string(static_cast<int>(dpasType))));
     }
 
     return std::make_tuple<Type, Type, Type, Type>({}, {}, {}, {});
@@ -337,15 +366,17 @@ private:
       Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
       return {cTy, cTy, aTy, bTy};
     }
-    case ttgi::DPASEngineTypeXe3P::FP32_FP32_FP8_FP8: {
+    case ttgi::DPASEngineTypeXe3P::FP32_FP32_FP8_FP8:
+    case ttgi::DPASEngineTypeXe3P::FP32_FP32_FP4_FP4: {
       Type cTy = vec_ty(fp32Ty, elemNumC);
       Type aTy = vec_ty(i16Ty, elemNumA / 2);             // pack scalar to i16.
       Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
       return {cTy, cTy, aTy, bTy};
     }
     default:
-      llvm::errs() << "dpasType: " << static_cast<int>(dpasType) << "\n";
-      llvm::report_fatal_error("1111 Unsupported dpas type found");
+      llvm::report_fatal_error(
+          "Unsupported dpas type found: " +
+          StringRef(std::to_string(static_cast<int>(dpasType))));
     }
 
     return std::make_tuple<Type, Type, Type, Type>({}, {}, {}, {});
@@ -570,6 +601,27 @@ private:
     } else if (width == 8) {
       return elemType.isUnsignedInteger() ? TritonGEN::PrecisionType::U8
                                           : TritonGEN::PrecisionType::S8;
+    }
+
+    return TritonGEN::PrecisionType::UNUSED;
+  }
+
+  /// Return the precision for the given tensor type (the type of A or B).
+  TritonGEN::PrecisionType
+  getElementPrecision(ScaleDotElemType elemType) const {
+    switch (elemType) {
+    case ScaleDotElemType::E2M1:
+      return TritonGEN::PrecisionType::F4E2M1;
+    case ScaleDotElemType::BF16:
+      return TritonGEN::PrecisionType::BF16;
+    case ScaleDotElemType::FP16:
+      return TritonGEN::PrecisionType::FP16;
+    case ScaleDotElemType::E4M3:
+      return TritonGEN::PrecisionType::F8E4M3FN;
+    case ScaleDotElemType::E5M2:
+      return TritonGEN::PrecisionType::F8E5M2;
+    default:
+      llvm::report_fatal_error("Unsupported ScaleDotElemType found");
     }
 
     return TritonGEN::PrecisionType::UNUSED;
