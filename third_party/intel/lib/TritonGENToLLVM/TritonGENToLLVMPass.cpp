@@ -285,6 +285,12 @@ static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockPrefetchOp op) {
       op.getTileWidth() == 8 && op.getVBlocks() == 1)
     return false;
 
+  // TODO: Change the interface to SPV once it is supported. (GSD-12074)
+  unsigned prefetchBytes =
+      (op.getElemSizeInBits() * op.getTileWidth() * op.getVBlocks()) / 8;
+  if (prefetchBytes == 256)
+    return false;
+
   return true;
 }
 
