@@ -35,6 +35,6 @@ apply_patch() {
 echo "Applying PyTorch patches in $REPO_ROOT"
 
 # put your patch applies here
-apply_patch ./patch/170010.patch
-apply_patch ./patch/revert_170842.patch
 apply_patch ./patch/skip_page_attention_ut.patch
+apply_patch ./patch/revert_170842.patch
+apply_patch ./patch/166927.patch
