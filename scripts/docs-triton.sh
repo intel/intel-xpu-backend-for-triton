@@ -52,7 +52,7 @@ run_build_docs() {
   echo "***************************************************"
   echo "************   Building Triton Docs    ************"
   echo "***************************************************"
-  python3 -m pip install matplotlib pandas tabulate sphinx sphinx_rtd_theme sphinx_gallery sphinx_multiversion myst_parser -q
+  python3 -m pip install matplotlib 'pandas<3.0' tabulate sphinx sphinx_rtd_theme sphinx_gallery sphinx_multiversion myst_parser -q
   cd $TRITON_PROJ/docs
   python3 -m sphinx . _build/html/mai
 }

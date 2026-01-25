@@ -830,13 +830,13 @@ struct PrefetchOpConversion
       std::swap(tensorShape[0], tensorShape[1]);
     }
     unsigned numWarps = triton::gpu::lookupNumWarps(op);
+
     auto m = op->getParentOfType<ModuleOp>();
-    // Only the Xe3p and later supports bdpas.
-    bool pref256B =
+    bool isPrefetch256BSupported =
         m->hasAttr(TritonIntelGPUDialect::getSupportPrefetch256BAttrName());
     auto [tileHeightInElem, tileWidthInElem, warpsM, warpsN] =
-        get2DPrefetchWarpsPerCTA(tensorShape, eltTy, numWarps, pref256B);
-
+        get2DPrefetchWarpsPerCTA(tensorShape, eltTy, numWarps,
+                                 isPrefetch256BSupported);
     auto llEncoding = getLinearLayout(
         tensorShape, {tileHeightInElem, tileWidthInElem}, {warpsM, warpsN});
 
@@ -1141,18 +1141,19 @@ private:
   // Warps per CTA in {M, N}
   std::tuple<unsigned, unsigned, unsigned, unsigned>
   get2DPrefetchWarpsPerCTA(const ArrayRef<int64_t> tensorShape, Type eltTy,
-                           unsigned numWarps, bool pref256B) const {
+                           unsigned numWarps,
+                           bool isPrefetch256BSupported) const {
     unsigned rank = tensorShape.size();
     assert(rank >= 2 && "Only rank >= 2 tensor is supported for now");
     unsigned dimM = rank - 2, dimN = rank - 1;
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
     unsigned elemSizeInBytes = elemSizeInBits / 8;
-
-    // On Xe3p and later, we can use 256 bytes per row to prefetch data at most.
     unsigned numColsPerPrefOps = std::min<unsigned>(
-        tensorShape[dimN], (pref256B ? 256 : 64) / elemSizeInBytes);
-    if (pref256B && (numColsPerPrefOps * elemSizeInBytes) != 256) {
-      // Fallback to 64 bytes per row at most.
+        tensorShape[dimN],
+        (isPrefetch256BSupported ? 256 : 64) / elemSizeInBytes);
+    if (isPrefetch256BSupported &&
+        (numColsPerPrefOps * elemSizeInBytes) != 256) {
+      // Fallback to 64 bytes per row.
       numColsPerPrefOps =
           std::min<unsigned>(numColsPerPrefOps, 64 / elemSizeInBytes);
     }
@@ -1165,8 +1166,8 @@ private:
     // Get the number of rows per warp to fit the shape to the tensor shape to
     // avoid duplication in prefetching.
     unsigned rowNumPerWarp = mlir::ceil<unsigned>(tensorShape[dimM], warpsNumM);
-    // 32 rows at most.
-    unsigned numRowsPerPrefOps = std::min<unsigned>(rowNumPerWarp, 32);
+    constexpr unsigned maxNumRows = 32u;
+    unsigned numRowsPerPrefOps = std::min<unsigned>(rowNumPerWarp, maxNumRows);
     SmallVector<unsigned, 2> tilePerPrefOps{numRowsPerPrefOps,
                                             numColsPerPrefOps};
 

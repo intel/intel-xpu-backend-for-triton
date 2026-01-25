@@ -70,6 +70,5 @@ struct DotScaledOpConversion
 void mlir::triton::intel::populateDotOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
-  patterns.add<DotOpConversion>(typeConverter, benefit);
-  patterns.add<DotScaledOpConversion>(typeConverter, benefit);
+  patterns.add<DotOpConversion, DotScaledOpConversion>(typeConverter, benefit);
 }
