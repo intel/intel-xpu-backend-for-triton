@@ -6,7 +6,6 @@ import triton.language as tl
 
 from triton.language.extra import libdevice
 from triton.language.extra.libdevice import fast_dividef as my_fast_dividef
-from triton._internal_testing import is_xpu
 
 
 @pytest.mark.parametrize("dtype_str", ["float32", "float64"])
