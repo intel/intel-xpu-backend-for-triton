@@ -10,7 +10,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 
-#include "triton/Analysis/Utility.h"
+#include "Dialect/TritonIntelGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -34,8 +34,9 @@ namespace {
 // FIXME: Remove once IGC can split large 2D block loads.
 static void setAttrOnBOperand(Operation *op, StringRef attrName,
                               Attribute attr) {
-  assert(isa<tt::DotOp>(op) && "Unexpected operation type");
-  Operation *defOp = cast<tt::DotOp>(op).getB().getDefiningOp();
+  Operation *defOp;
+  llvm::TypeSwitch<Operation *>(op).Case<tt::DotOp, tt::DotScaledOp>(
+      [&](auto op) { defOp = op.getB().getDefiningOp(); });
   while (auto convOp = dyn_cast_or_null<ttg::ConvertLayoutOp>(defOp))
     defOp = convOp.getSrc().getDefiningOp();
   if (auto transOp = dyn_cast_or_null<tt::TransOp>(defOp))
@@ -67,13 +68,13 @@ getWarpsPerTile(Operation *dotOp,
 
   SetVector<Operation *> slices = getSlice(dotOp, {filter});
   for (Operation *op : slices) {
-    if (isa<tt::DotOp>(op) && (op != dotOp)) {
+    if (isa<tt::DotOp, tt::DotScaledOp>(op) && (op != dotOp)) {
       if (auto forOp = op->getParentOfType<scf::ForOp>()) {
         // FIXME: Remove once IGC can split large 2D block loads.
         MLIRContext *ctx = forOp->getContext();
         StringRef attrName =
             ttgi::TritonIntelGPUDialect::getOneMatrixPerLoadAttrName();
-        setAttrOnBOperand(op, attrName, UnitAttr::get(ctx));
+        setAttrOnBOperand(dotOp, attrName, UnitAttr::get(ctx));
         setAttrOnBOperand(op, attrName, UnitAttr::get(ctx));
       }
       SmallVector<unsigned> ret(shape.size(), 1);
@@ -86,8 +87,8 @@ getWarpsPerTile(Operation *dotOp,
                                      shape, numWarps);
 }
 
-template <typename OpTy,
-          typename = std::enable_if_t<llvm::is_one_of<OpTy, tt::DotOp>::value>>
+template <typename OpTy, typename = std::enable_if_t<llvm::is_one_of<
+                             OpTy, tt::DotOp, tt::DotScaledOp>::value>>
 class BlockedToDPAS : public OpRewritePattern<OpTy> {
   using TensorValue = TypedValue<RankedTensorType>;
 
@@ -157,7 +158,12 @@ public:
     auto dpasEnc = ttgi::DpasEncodingAttr::get(
         oldRetType.getContext(), repeatCount, dpasCap.systolicDepth,
         dpasCap.executionSize, opsPerChan, warpsPerTile, repCluster,
-        threadsPerWarp);
+        threadsPerWarp,
+        std::holds_alternative<ttgi::DPASEngineTypeXe3P>(dpasType) &&
+                std::get<ttgi::DPASEngineTypeXe3P>(dpasType) ==
+                    ttgi::DPASEngineTypeXe3P::FP32_FP32_FP4_FP4
+            ? std::make_optional(2)
+            : std::nullopt);
 
     RankedTensorType newRetType =
         RankedTensorType::get(retShape, oldRetType.getElementType(), dpasEnc);
@@ -181,12 +187,43 @@ public:
     a = ttg::ConvertLayoutOp::create(rewriter, a.getLoc(), newAType, a);
     b = ttg::ConvertLayoutOp::create(rewriter, b.getLoc(), newBType, b);
 
-    auto newDot =
-        tt::DotOp::create(rewriter, op.getLoc(), newRetType, a, b, newAcc,
-                          op.getInputPrecision(), op.getMaxNumImpreciseAcc());
+    Value res = nullptr;
+    if constexpr (std::is_same<OpTy, tt::DotScaledOp>::value) {
+      MLIRContext *ctx = rewriter.getContext();
+      TensorValue scaleA = op.getAScale();
+      if (scaleA) {
+        tt::LinearLayout scaleALayout = BlockScaledDPAStoLinearLayout(
+            scaleA.getType().getShape(), dpasEnc, 3);
+        auto newScaleAType = RankedTensorType::get(
+            scaleA.getType().getShape(), scaleA.getType().getElementType(),
+            ttg::LinearEncodingAttr::get(ctx, scaleALayout));
+        scaleA = ttg::ConvertLayoutOp::create(rewriter, scaleA.getLoc(),
+                                              newScaleAType, scaleA);
+      }
+      TensorValue scaleB = op.getBScale();
+      if (scaleB) {
+        tt::LinearLayout scaleBLayout = BlockScaledDPAStoLinearLayout(
+            scaleB.getType().getShape(), dpasEnc, 4);
+        auto newScaleBType = RankedTensorType::get(
+            scaleB.getType().getShape(), scaleB.getType().getElementType(),
+            ttg::LinearEncodingAttr::get(ctx, scaleBLayout));
+        scaleB = ttg::ConvertLayoutOp::create(rewriter, scaleB.getLoc(),
+                                              newScaleBType, scaleB);
+      }
+      auto newOp = tt::DotScaledOp::create(
+          rewriter, op.getLoc(), newRetType, a, b, newAcc, scaleA, scaleB,
+          op.getAElemType(), op.getBElemType(), op.getFastMath());
+      res = newOp.getResult();
+    } else if constexpr (std::is_same<OpTy, tt::DotOp>::value) {
+      auto newOp =
+          tt::DotOp::create(rewriter, op.getLoc(), newRetType, a, b, newAcc,
+                            op.getInputPrecision(), op.getMaxNumImpreciseAcc());
+      res = newOp.getResult();
+    }
+    assert(res && "Expecting a valid value");
 
-    rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(op, oldRetType,
-                                                      newDot.getResult());
+    rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(op, oldRetType, res);
+
     return success();
   }
 };
@@ -527,7 +564,7 @@ static void sinkTransposeOp(tt::TransOp input) {
   }
 }
 
-static tt::TransOp transposeDotOp(tt::DotScaledOp dotOp) {
+static tt::TransOp transposeDotScaledOp(tt::DotScaledOp dotOp) {
   assert(dotOp.getAScale() == nullptr && dotOp.getBScale() != nullptr &&
          "Transpose DotOp expects scale on RHS");
   OpBuilder builder(dotOp);
@@ -551,7 +588,7 @@ static tt::TransOp transposeDotOp(tt::DotScaledOp dotOp) {
   return transOp;
 }
 
-static void transposeDot(ModuleOp m) {
+static void transposeDotScaledOp(ModuleOp m) {
   SmallVector<tt::DotScaledOp> toTranspose;
   m.walk([&](tt::DotScaledOp dotOp) -> void {
     if (dotOp.getAScale() == nullptr && dotOp.getBScale() != nullptr)
@@ -559,7 +596,7 @@ static void transposeDot(ModuleOp m) {
   });
   SmallVector<tt::TransOp> transposes;
   for (tt::DotScaledOp &dotOp : toTranspose) {
-    tt::TransOp transpose = transposeDotOp(dotOp);
+    tt::TransOp transpose = transposeDotScaledOp(dotOp);
     transposes.push_back(transpose);
   }
 
@@ -582,13 +619,14 @@ public:
     bool supportBlockScaleDPAS = mod->hasAttr(
         ttgi::TritonIntelGPUDialect::getSupportBlockScaleDPASAttrName());
     if (!supportBlockScaleDPAS)
-      transposeDot(mod);
+      transposeDotScaledOp(mod);
 
     MLIRContext *context = &getContext();
     RewritePatternSet patterns(context);
     constexpr int benefitDefault = 1;
     patterns.add<BlockedToDPAS<tt::DotOp>>(context, benefitDefault + 1);
     if (supportBlockScaleDPAS) {
+      patterns.add<BlockedToDPAS<tt::DotScaledOp>>(context, benefitDefault + 1);
       patterns.add<UpcastScaledBlocked>(context, benefitDefault + 1);
     }
     ttgi::populateDecomposeScaledBlockedPatterns(patterns, benefitDefault);
