@@ -2399,11 +2399,19 @@ struct StoreOpConversion
         return ArrayRef<Value>();
       };
 
+      auto funcName = cast<LLVM::LLVMFuncOp>(op->getParentOp()).getName();
       if (!maskVal)
         auto _ = createStoreWithAttrs();
-      else if (canUsePredicatedInstructions(op))
-        TritonGEN::PredicatedStoreOp::create(rewriter, loc, addrElem, vecWord,
-                                             b.i64_val(alignment), maskVal);
+      else if (canUsePredicatedInstructions(op)) {
+        if (false && vecTy.getNumElements() == 1 && wordNElems != 1 && funcName == "triton_poi_fused_add_addmm_constant_pad_nd_native_layer_norm_view_14") {
+          LLVM::intel::createPredicatedBlock(rewriter, loc, maskVal,
+                                            createStoreWithAttrs);
+        }
+        else {
+          TritonGEN::PredicatedStoreOp::create(rewriter, loc, addrElem, vecWord,
+                                               b.i64_val(alignment), maskVal);
+        }
+      }
       else
         LLVM::intel::createPredicatedBlock(rewriter, loc, maskVal,
                                            createStoreWithAttrs);
