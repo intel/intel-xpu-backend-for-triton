@@ -218,6 +218,4 @@ def test_block_io(M, N, dtype_str, layout, load_block_ptr, store_block_ptr, tran
         llir = kernel.asm["llir"]
         assert 'spirv_Subgroup2DBlockStoreINTEL' in llir or 'GenISA.LSC2DBlockWrite' in llir
         load_count = llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead')
-        if load_count == 0 and transpose:
-            pytest.xfail("no block 2d is used.")
-        assert load_count > 0
+        assert load_count > 0 or transpose
