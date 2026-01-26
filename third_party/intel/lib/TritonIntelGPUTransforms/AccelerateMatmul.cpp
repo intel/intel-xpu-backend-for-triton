@@ -224,6 +224,7 @@ public:
     assert(res && "Expecting a valid value");
 
     rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(op, oldRetType, res);
+
     return success();
   }
 };
@@ -563,7 +564,7 @@ static void sinkTransposeOp(tt::TransOp input) {
   }
 }
 
-static tt::TransOp transposeDotScaleOp(tt::DotScaledOp dotOp) {
+static tt::TransOp transposeDotScaledOp(tt::DotScaledOp dotOp) {
   assert(dotOp.getAScale() == nullptr && dotOp.getBScale() != nullptr &&
          "Transpose DotOp expects scale on RHS");
   OpBuilder builder(dotOp);
@@ -587,7 +588,7 @@ static tt::TransOp transposeDotScaleOp(tt::DotScaledOp dotOp) {
   return transOp;
 }
 
-static void transposeDotScale(ModuleOp m) {
+static void transposeDotScaledOp(ModuleOp m) {
   SmallVector<tt::DotScaledOp> toTranspose;
   m.walk([&](tt::DotScaledOp dotOp) -> void {
     if (dotOp.getAScale() == nullptr && dotOp.getBScale() != nullptr)
@@ -595,7 +596,7 @@ static void transposeDotScale(ModuleOp m) {
   });
   SmallVector<tt::TransOp> transposes;
   for (tt::DotScaledOp &dotOp : toTranspose) {
-    tt::TransOp transpose = transposeDotScaleOp(dotOp);
+    tt::TransOp transpose = transposeDotScaledOp(dotOp);
     transposes.push_back(transpose);
   }
 
@@ -618,7 +619,7 @@ public:
     bool supportBlockScaleDPAS = mod->hasAttr(
         ttgi::TritonIntelGPUDialect::getSupportBlockScaleDPASAttrName());
     if (!supportBlockScaleDPAS)
-      transposeDotScale(mod);
+      transposeDotScaledOp(mod);
 
     MLIRContext *context = &getContext();
     RewritePatternSet patterns(context);
