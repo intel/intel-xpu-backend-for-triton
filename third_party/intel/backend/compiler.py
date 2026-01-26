@@ -148,6 +148,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         dev_prop['max_num_sub_groups'] = tgt_prop.get('max_num_sub_groups', None)
         dev_prop['sub_group_sizes'] = tgt_prop.get('sub_group_sizes', None)
         dev_prop['has_fp64'] = tgt_prop.get('has_fp64', None)
+        dev_prop['has_subgroup_matrix_multiply_accumulate_bfloat8'] = tgt_prop.get(
+            'has_subgroup_matrix_multiply_accumulate_bfloat8', False)
         dev_prop['has_subgroup_matrix_multiply_accumulate_tensor_float32'] = tgt_prop.get(
             'has_subgroup_matrix_multiply_accumulate_tensor_float32', False)
         dev_prop['has_16bit_atomics'] = tgt_prop.get('has_16bit_atomics', False)
@@ -232,6 +234,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         module_opts.support_f4_conversion = properties["has_f4_conversions"]
         module_opts.support_f8_conversion = properties["has_f8_conversions"]
         module_opts.support_256b_prefetch = properties["has_256b_prefetch"]
+        module_opts.support_subgroup_matrix_multiply_accumulate_bf8 = properties[
+            "has_subgroup_matrix_multiply_accumulate_bfloat8"]
         module_opts.threads_per_warp = opt.warp_size
         module_opts.target_arch = cls.target_arch
 
