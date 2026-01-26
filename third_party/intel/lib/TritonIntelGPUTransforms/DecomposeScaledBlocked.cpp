@@ -1,4 +1,5 @@
 #include "Dialect/TritonIntelGPU/Transforms/DecomposeScaledBlocked.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 
 #include "mlir/IR/Types.h"
 #include "mlir/IR/Value.h"
@@ -30,6 +31,11 @@ public:
 
   LogicalResult matchAndRewrite(DotScaledOp scaledDotOp,
                                 PatternRewriter &rewriter) const override {
+    RankedTensorType oldRetType = scaledDotOp.getType();
+    if (!oldRetType.getEncoding() ||
+        isa<intel::DpasEncodingAttr>(oldRetType.getEncoding()))
+      return failure();
+
     // Types
     auto computeType = getComputeType(scaledDotOp.getAElemType(),
                                       scaledDotOp.getBElemType(), rewriter);
