@@ -117,6 +117,9 @@ static LogicalResult verify2DBlockHWRestriction(OpTy op) {
   unsigned tileWidth = op.getTileWidth();
   unsigned vBlocks = op.getVBlocks();
 
+  assert(tileWidth >= 1 && tileWidth <= 256 &&
+         "tile_width should be between 1 and 256");
+
   // The maximum bytes per operation per row supported by hardware:
   //  - load/store: 64 bytes.
   //  - prefetch: 64-256 bytes (depending on module attribute).
@@ -128,6 +131,7 @@ static LogicalResult verify2DBlockHWRestriction(OpTy op) {
        isPrefetch256BSupported)
           ? (256 * 8)
           : (64 * 8);
+
   if (elemSizeInBits * tileWidth * vBlocks > maxBitsPerOpPerRow)
     return op->emitOpError(
         "expecting elem_size_in_bits * tile_width * v_blocks <= " +
@@ -138,38 +142,19 @@ static LogicalResult verify2DBlockHWRestriction(OpTy op) {
   switch (elemSizeInBits) {
   case 8:
     minTileWidth = 4;
-    //    if (tileWidth < 4)
-    //      return op->emitOpError("expecting tile_width to be between 4 and
-    //      64");
     break;
   case 16:
-    minTileWidth = 4;
-    //    if (tileWidth < 2 || tileWidth > 32)
-    //      return op->emitOpError("expecting tile_width to be between 2 and
-    //      32");
+    minTileWidth = 2;
     break;
   case 32:
     if constexpr (!std::is_same_v<OpTy, tt::TritonGEN::Matrix2DBlockPrefetchOp>)
       if (vBlocks == 4)
         return op->emitOpError("v_blocks for 32 bit elements should be 1 or 2");
-
-    //    if (tileWidth > 16)
-    //      return op->emitOpError("expecting tile_width to be between 1 and
-    //      16");
-    //    if (vBlocks == 4)
-    //      return op->emitOpError("v_blocks for 32 bit elements should be 1 or
-    //      2");
     break;
   case 64:
     if constexpr (!std::is_same_v<OpTy, tt::TritonGEN::Matrix2DBlockPrefetchOp>)
       if (vBlocks != 1)
         return op->emitOpError("v_blocks for 64 bit elements should be 1");
-
-    //    if (tileWidth > 8)
-    //      return op->emitOpError("expecting tile_width to be between 1 and
-    //      8");
-    //    if (vBlocks != 1)
-    //      return op->emitOpError("v_blocks for 64 bit elements should be 1");
     break;
   default:
     llvm_unreachable("unexpected element size");
