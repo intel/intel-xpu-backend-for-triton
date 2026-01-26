@@ -673,7 +673,9 @@ run_liger_install() {
   fi
 
   if ! pip list | grep "liger_kernel" ; then
-    pip install transformers pandas datasets -e Liger-Kernel
+    # Liger requires transformers<5.0
+    # https://github.com/linkedin/Liger-Kernel/issues/978
+    pip install 'transformers<5.0' 'pandas<3.0' datasets -e Liger-Kernel
   fi
 }
 
