@@ -55,7 +55,11 @@ public:
     addLegalDialect<cf::ControlFlowDialect>();
     addLegalDialect<mlir::triton::nvgpu::NVGPUDialect>();
     addIllegalDialect<triton::TritonDialect>();
-    addIllegalDialect<triton::gpu::TritonGPUDialect>();
+    addDynamicallyLegalDialect<triton::gpu::TritonGPUDialect>(
+        [](mlir::Operation *op) {
+          // We handle the warp ID op during NVGPUToLLVM.
+          return isa<triton::gpu::WarpIdOp>(op);
+        });
     addIllegalDialect<triton::nvidia_gpu::TritonNvidiaGPUDialect>();
     addIllegalDialect<mlir::gpu::GPUDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
@@ -65,6 +69,10 @@ public:
     addLegalOp<triton::gpu::WarpYieldOp>();
     addLegalOp<triton::gpu::WarpSpecializePartitionsOp>();
     addLegalOp<triton::gpu::WarpReturnOp>();
+    addDynamicallyLegalOp<triton::gpu::GlobalScratchAllocOp>(
+        [](triton::gpu::GlobalScratchAllocOp op) {
+          return op.getBackend() != "default";
+        });
   }
 };
 
@@ -242,7 +250,8 @@ createConvertTritonGPUToLLVMPass(int32_t computeCapability,
                                                   ptxVersion);
 }
 
-bool NVIDIA::canSkipBarSync(Operation *before, Operation *after) {
+bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
+                            Allocation *allocation) {
   // Multiple init barriers on the same allocation would usually not happen but
   // that allows us to avoid barriers between multiple subslice of an array of
   // mbarriers. This is still correct even if the inits happen on the same

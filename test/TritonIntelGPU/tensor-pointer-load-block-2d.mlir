@@ -1,7 +1,8 @@
-// RUN: env TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=1 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm
+// RUN: env TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=1 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm --check-prefixes=CHECK,SMALL-BLOCK-SIZE-C
+// RUN: env TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=1 TRITON_INTEL_2DBLOCK_MULTIPLE_C_MATRICES_PER_LOAD=1 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm --check-prefixes=CHECK,LARGE-BLOCK-SIZE-C
 
 #mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 4], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
-module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, ttig.support_dpas, ttig.support_sg_2d_block, ttig.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.shared = 33280 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bfloat16_conversion, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_2d_block_io, ttig.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.shared = 33280 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
   tt.func public @matmul_tensor_pointer_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}, %arg6: i32 {tt.divisibility = 16 : i32}, %arg7: i32 {tt.divisibility = 16 : i32}, %arg8: i32 {tt.divisibility = 16 : i32}, %arg9: !llvm.ptr<3>) attributes {noinline = false} {
     %c63_i32 = arith.constant 63 : i32
     %c255_i32 = arith.constant 255 : i32
@@ -70,7 +71,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, tt
 // -----
 
 #mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 4], repCluster = [4, 2]}>
-module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, ttig.support_dpas, ttig.support_sg_2d_block, ttig.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.shared = 33280 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bfloat16_conversion, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_2d_block_io, ttig.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.shared = 33280 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
   tt.func public @matmul_tensor_pointer_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 4 : i32}, %arg6: i32 {tt.divisibility = 16 : i32}, %arg7: i32 {tt.divisibility = 16 : i32}, %arg8: i32 {tt.divisibility = 16 : i32}, %arg9: !llvm.ptr<3>) attributes {noinline = false} {
     %c63_i32 = arith.constant 63 : i32
     %c255_i32 = arith.constant 255 : i32
@@ -136,7 +137,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, tt
 // -----
 
 #mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 4], repCluster = [4, 1]}>
-module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, ttig.support_dpas, ttig.support_sg_2d_block, ttig.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.shared = 33280 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bfloat16_conversion, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_2d_block_io, ttig.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.shared = 33280 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
   tt.func public @matmul_tensor_pointer_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}, %arg6: i32 {tt.divisibility = 16 : i32}, %arg7: i32 {tt.divisibility = 16 : i32}, %arg8: i32 {tt.divisibility = 16 : i32}, %arg9: !llvm.ptr<3>) attributes {noinline = false} {
     %c63_i32 = arith.constant 63 : i32
     %c255_i32 = arith.constant 255 : i32
@@ -202,7 +203,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, tt
 // -----
 
 #mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 4], repCluster = [4, 2]}>
-module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, ttig.support_dpas, ttig.support_sg_2d_block, ttig.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.shared = 33280 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bfloat16_conversion, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_2d_block_io, ttig.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.shared = 33280 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
   tt.func public @matmul_tensor_pointer_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}, %arg6: i32 {tt.divisibility = 16 : i32}, %arg7: i32 {tt.divisibility = 16 : i32}, %arg8: i32 {tt.divisibility = 16 : i32}, %arg9: !llvm.ptr<3>) attributes {noinline = false} {
     %c63_i32 = arith.constant 63 : i32
     %c255_i32 = arith.constant 255 : i32
@@ -270,7 +271,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, tt
 #mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [2, 2]}>
 #mma_1 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1]}>
 #mma_2 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [4, 2]}>
-module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: @regular_pointer_block_io
   tt.func public @regular_pointer_block_io(%arg0: !tt.ptr<f16>,
                                            %arg1: !tt.ptr<f16>,
@@ -288,7 +289,8 @@ module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 8 : i32, "ttg.thr
     %8 = arith.addi %6, %7 : tensor<256x64xi32, #mma>
     %9 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<256x64x!tt.ptr<f16>, #mma>
     %10 = tt.addptr %9, %8 : tensor<256x64x!tt.ptr<f16>, #mma>, tensor<256x64xi32, #mma>
-    // CHECK-COUNT-4: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 16, v_blocks = 2
+    // LARGE-BLOCK-SIZE-C-4: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 16, v_blocks = 2
+    // SMALL-BLOCK-SIZE-C-16: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1
     %11 = tt.load %10 {ttig.block_io = "row_major"} : tensor<256x64x!tt.ptr<f16>, #mma>
 
     %20 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #mma_1}>>
@@ -316,7 +318,8 @@ module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 8 : i32, "ttg.thr
     %48 = arith.addi %46, %47 : tensor<256x64xi32, #mma_2>
     %49 = tt.splat %arg2 : !tt.ptr<f16> -> tensor<256x64x!tt.ptr<f16>, #mma_2>
     %50 = tt.addptr %49, %48 : tensor<256x64x!tt.ptr<f16>, #mma_2>, tensor<256x64xi32, #mma_2>
-    // CHECK-COUNT-2: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 2
+    // LARGE-BLOCK-SIZE-C-COUNT-2: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 2
+    // SMALL-BLOCK-SIZE-C-COUNT-16: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1
     %51 = tt.load %50 {ttig.block_io = "row_major"} : tensor<256x64x!tt.ptr<f16>, #mma_2>
 
     %60 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #mma_2}>>
@@ -329,7 +332,8 @@ module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 8 : i32, "ttg.thr
     %69 = tt.splat %arg3 : !tt.ptr<f16> -> tensor<128x64x!tt.ptr<f16>, #mma_2>
     %70 = tt.addptr %69, %68 : tensor<128x64x!tt.ptr<f16>, #mma_2>, tensor<128x64xi32, #mma_2>
     // COM: The data is duplicated in the warps because the warp shape is 32*8=256 larger than the tensor shape 128
-    // CHECK-COUNT-2: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 2
+    // LARGE-BLOCK-SIZE-C-COUNT-2: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 2
+    // SMALL-BLOCK-SIZE-C-COUNT-16: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1
     %71 = tt.load %70 {ttig.block_io = "row_major"} : tensor<128x64x!tt.ptr<f16>, #mma_2>
     tt.return
   }
@@ -340,7 +344,7 @@ module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 8 : i32, "ttg.thr
 #mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [2, 2]}>
 #mma_1 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 8, 1], repCluster = [1, 2, 2]}>
 #mma_32 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 32, warpsPerCTA = [8, 1], repCluster = [2, 2]}>
-module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: @regular_pointer_gather_io
   tt.func public @regular_pointer_gather_io(%arg0: tensor<128x64x!tt.ptr<f16>, #mma>,
                                             %arg1: tensor<128x64x!tt.ptr<f16>, #mma_32>,
@@ -364,7 +368,7 @@ module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 8 : i32, "ttg.thr
 // -----
 
 #mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [2, 2]}>
-module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: @regular_pointer_block_io
   tt.func public @regular_pointer_block_io(%arg0: !tt.ptr<f16>) {
 
@@ -385,11 +389,24 @@ module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 8 : i32, "ttg.thr
     %10 = tt.addptr %9, %8 : tensor<256x64x!tt.ptr<f16>, #mma>, tensor<256x64xi32, #mma>
 
     // CHECK: %[[TOP_LEFT_MASK_BOOL_0:.*]] = llvm.extractvalue {{.*}}[0] : !llvm.struct<(i1, i1, {{.*}}
+    // CHECK: %[[TOP_LEFT_MASK_BOOL_8:.*]] = llvm.extractvalue {{.*}}[8] : !llvm.struct<(i1, i1, {{.*}}
+    // CHECK: %[[TOP_LEFT_MASK_BOOL_16:.*]] = llvm.extractvalue {{.*}}[16] : !llvm.struct<(i1, i1, {{.*}}
+    // CHECK: %[[TOP_LEFT_MASK_BOOL_24:.*]] = llvm.extractvalue {{.*}}[24] : !llvm.struct<(i1, i1, {{.*}}
     // CHECK: %[[TOP_LEFT_MASK_BOOL_32:.*]] = llvm.extractvalue {{.*}}[32] : !llvm.struct<(i1, i1, {{.*}}
+    // CHECK: %[[TOP_LEFT_MASK_BOOL_40:.*]] = llvm.extractvalue {{.*}}[40] : !llvm.struct<(i1, i1, {{.*}}
+    // CHECK: %[[TOP_LEFT_MASK_BOOL_48:.*]] = llvm.extractvalue {{.*}}[48] : !llvm.struct<(i1, i1, {{.*}}
+    // CHECK: %[[TOP_LEFT_MASK_BOOL_56:.*]] = llvm.extractvalue {{.*}}[56] : !llvm.struct<(i1, i1, {{.*}}
     // CHECK: %[[TOP_LEFT_MASK_BOOL_64:.*]] = llvm.extractvalue {{.*}}[64] : !llvm.struct<(i1, i1, {{.*}}
+    // CHECK: %[[TOP_LEFT_MASK_BOOL_72:.*]] = llvm.extractvalue {{.*}}[72] : !llvm.struct<(i1, i1, {{.*}}
+    // CHECK: %[[TOP_LEFT_MASK_BOOL_80:.*]] = llvm.extractvalue {{.*}}[80] : !llvm.struct<(i1, i1, {{.*}}
+    // CHECK: %[[TOP_LEFT_MASK_BOOL_88:.*]] = llvm.extractvalue {{.*}}[88] : !llvm.struct<(i1, i1, {{.*}}
     // CHECK: %[[TOP_LEFT_MASK_BOOL_96:.*]] = llvm.extractvalue {{.*}}[96] : !llvm.struct<(i1, i1, {{.*}}
+    // CHECK: %[[TOP_LEFT_MASK_BOOL_104:.*]] = llvm.extractvalue {{.*}}[104] : !llvm.struct<(i1, i1, {{.*}}
+    // CHECK: %[[TOP_LEFT_MASK_BOOL_112:.*]] = llvm.extractvalue {{.*}}[112] : !llvm.struct<(i1, i1, {{.*}}
+    // CHECK: %[[TOP_LEFT_MASK_BOOL_120:.*]] = llvm.extractvalue {{.*}}[120] : !llvm.struct<(i1, i1, {{.*}}
 
-    // CHECK: %[[BLOCK_SHAPE_Y:.*]] = llvm.mlir.constant(16 : i32) : i32
+    // SMALL-BLOCK-SIZE-C: %[[BLOCK_SHAPE_Y:.*]] = llvm.mlir.constant(8 : i32) : i32
+    // LARGE-BLOCK-SIZE-C: %[[BLOCK_SHAPE_Y:.*]] = llvm.mlir.constant(16 : i32) : i32
     // CHECK: %[[TOP_LEFT_PTR:.*]] = llvm.ptrtoint {{.*}} : !llvm.ptr<1> to i64
     // CHECK: %[[VAL_2886:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflelj(%[[TOP_LEFT_PTR]], {{.*}}) {convergent, no_unwind, will_return} : (i64, i32) -> i64
     // CHECK: %[[UNIFORM_PTR:.*]] = llvm.inttoptr %[[VAL_2886]] : i64 to !llvm.ptr<1>
@@ -400,91 +417,165 @@ module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 8 : i32, "ttg.thr
     // CHECK: %[[PRED:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflecj(%[[TOP_LEFT_MASK]], %[[CST0_2]])
     // CHECK: %[[PRED_BOOL:.*]] =  llvm.trunc %[[PRED]] : i8 to i1
     // CHECK: %[[BASE_Y_0:.*]] = llvm.select %[[PRED_BOOL]], %[[CST0_0]], %[[BLOCK_SHAPE_Y]] : i1, i32
-    // CHECK: %[[LOAD_0:.*]] = triton_gen.2Dblockload {{.*}}, %[[BASE_Y_0]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 16, v_blocks = 2
-    // CHECK: %[[DECOMPOSED_DATA:.*]] = llvm.shufflevector %[[LOAD_0]], %[[LOAD_0]] [0, 1, 2, 3, 4, 5, 6, 7] : vector<32xi16>
-    // CHECK-NEXT: %[[UNPACKED_TYPE:.*]] = llvm.bitcast %[[DECOMPOSED_DATA]] : vector<8xi16> to vector<8xf16>
-    // CHECK: llvm.select %[[PRED_BOOL]], %[[UNPACKED_TYPE]], {{.*}} : i1, vector<8xf16>
-    // CHECK: %[[DECOMPOSED_DATA:.*]] = llvm.shufflevector %[[LOAD_0]], %[[LOAD_0]] [8, 9, 10, 11, 12, 13, 14, 15] : vector<32xi16>
-    // CHECK-NEXT: %[[UNPACKED_TYPE:.*]] = llvm.bitcast %[[DECOMPOSED_DATA]] : vector<8xi16> to vector<8xf16>
-    // CHECK: llvm.select %[[PRED_BOOL]], %[[UNPACKED_TYPE]], {{.*}} : i1, vector<8xf16>
-    // CHECK: %[[DECOMPOSED_DATA:.*]] = llvm.shufflevector %[[LOAD_0]], %[[LOAD_0]] [16, 17, 18, 19, 20, 21, 22, 23] : vector<32xi16>
-    // CHECK-NEXT: %[[UNPACKED_TYPE:.*]] = llvm.bitcast %[[DECOMPOSED_DATA]] : vector<8xi16> to vector<8xf16>
-    // CHECK: llvm.select %[[PRED_BOOL]], %[[UNPACKED_TYPE]], {{.*}} : i1, vector<8xf16>
-    // CHECK: %[[DECOMPOSED_DATA:.*]] = llvm.shufflevector %[[LOAD_0]], %[[LOAD_0]] [24, 25, 26, 27, 28, 29, 30, 31] : vector<32xi16>
-    // CHECK-NEXT: %[[UNPACKED_TYPE:.*]] = llvm.bitcast %[[DECOMPOSED_DATA]] : vector<8xi16> to vector<8xf16>
-    // CHECK: llvm.select %[[PRED_BOOL]], %[[UNPACKED_TYPE]], {{.*}} : i1, vector<8xf16>
 
-    // CHECK: %[[TOP_LEFT_PTR:.*]] = llvm.ptrtoint {{.*}} : !llvm.ptr<1> to i64
-    // CHECK: %[[VAL_3046:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflelj(%[[TOP_LEFT_PTR]], {{.*}}) {convergent, no_unwind, will_return} : (i64, i32) -> i64
-    // CHECK: %[[UNIFORM_PTR:.*]] = llvm.inttoptr %[[VAL_3046]] : i64 to !llvm.ptr<1>
-    // CHECK: %[[CST0_0:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK: %[[CST0_1:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK: %[[CST0_2:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK: %[[TOP_LEFT_MASK:.*]] = llvm.zext %[[TOP_LEFT_MASK_BOOL_32]] : i1 to i8
-    // CHECK: %[[PRED:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflecj(%[[TOP_LEFT_MASK]], %[[CST0_2]])
-    // CHECK: %[[PRED_BOOL:.*]] =  llvm.trunc %[[PRED]] : i8 to i1
-    // CHECK: %[[BASE_Y_0:.*]] = llvm.select %[[PRED_BOOL]], %[[CST0_0]], %[[BLOCK_SHAPE_Y]] : i1, i32
-    // CHECK: %[[LOAD_0:.*]] = triton_gen.2Dblockload {{.*}}, %[[BASE_Y_0]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 16, v_blocks = 2
-    // CHECK: %[[DECOMPOSED_DATA:.*]] = llvm.shufflevector %[[LOAD_0]], %[[LOAD_0]] [0, 1, 2, 3, 4, 5, 6, 7] : vector<32xi16>
-    // CHECK-NEXT: %[[UNPACKED_TYPE:.*]] = llvm.bitcast %[[DECOMPOSED_DATA]] : vector<8xi16> to vector<8xf16>
-    // CHECK: llvm.select %[[PRED_BOOL]], %[[UNPACKED_TYPE]], {{.*}} : i1, vector<8xf16>
-    // CHECK: %[[DECOMPOSED_DATA:.*]] = llvm.shufflevector %[[LOAD_0]], %[[LOAD_0]] [8, 9, 10, 11, 12, 13, 14, 15] : vector<32xi16>
-    // CHECK-NEXT: %[[UNPACKED_TYPE:.*]] = llvm.bitcast %[[DECOMPOSED_DATA]] : vector<8xi16> to vector<8xf16>
-    // CHECK: llvm.select %[[PRED_BOOL]], %[[UNPACKED_TYPE]], {{.*}} : i1, vector<8xf16>
-    // CHECK: %[[DECOMPOSED_DATA:.*]] = llvm.shufflevector %[[LOAD_0]], %[[LOAD_0]] [16, 17, 18, 19, 20, 21, 22, 23] : vector<32xi16>
-    // CHECK-NEXT: %[[UNPACKED_TYPE:.*]] = llvm.bitcast %[[DECOMPOSED_DATA]] : vector<8xi16> to vector<8xf16>
-    // CHECK: llvm.select %[[PRED_BOOL]], %[[UNPACKED_TYPE]], {{.*}} : i1, vector<8xf16>
-    // CHECK: %[[DECOMPOSED_DATA:.*]] = llvm.shufflevector %[[LOAD_0]], %[[LOAD_0]] [24, 25, 26, 27, 28, 29, 30, 31] : vector<32xi16>
-    // CHECK-NEXT: %[[UNPACKED_TYPE:.*]] = llvm.bitcast %[[DECOMPOSED_DATA]] : vector<8xi16> to vector<8xf16>
-    // CHECK: llvm.select %[[PRED_BOOL]], %[[UNPACKED_TYPE]], {{.*}} : i1, vector<8xf16>
+    // COM: Order of the small C matrix is: 0, 16, 8, 24, 32, 48, 40, 56, 64, 80, 72, 88, 96, 112, 104, 120
 
-    // CHECK: %[[TOP_LEFT_PTR:.*]] = llvm.ptrtoint {{.*}} : !llvm.ptr<1> to i64
-    // CHECK: %[[VAL_3046:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflelj(%[[TOP_LEFT_PTR]], {{.*}}) {convergent, no_unwind, will_return} : (i64, i32) -> i64
-    // CHECK: %[[UNIFORM_PTR:.*]] = llvm.inttoptr %[[VAL_3046]] : i64 to !llvm.ptr<1>
-    // CHECK: %[[CST0_0:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK: %[[CST0_1:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK: %[[CST0_2:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK: %[[TOP_LEFT_MASK:.*]] = llvm.zext %[[TOP_LEFT_MASK_BOOL_64]] : i1 to i8
-    // CHECK: %[[PRED:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflecj(%[[TOP_LEFT_MASK]], %[[CST0_2]])
-    // CHECK: %[[PRED_BOOL:.*]] =  llvm.trunc %[[PRED]] : i8 to i1
-    // CHECK: %[[BASE_Y_0:.*]] = llvm.select %[[PRED_BOOL]], %[[CST0_0]], %[[BLOCK_SHAPE_Y]] : i1, i32
-    // CHECK: %[[LOAD_0:.*]] = triton_gen.2Dblockload {{.*}}, %[[BASE_Y_0]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 16, v_blocks = 2
-    // CHECK: %[[DECOMPOSED_DATA:.*]] = llvm.shufflevector %[[LOAD_0]], %[[LOAD_0]] [0, 1, 2, 3, 4, 5, 6, 7] : vector<32xi16>
-    // CHECK-NEXT: %[[UNPACKED_TYPE:.*]] = llvm.bitcast %[[DECOMPOSED_DATA]] : vector<8xi16> to vector<8xf16>
-    // CHECK: llvm.select %[[PRED_BOOL]], %[[UNPACKED_TYPE]], {{.*}} : i1, vector<8xf16>
-    // CHECK: %[[DECOMPOSED_DATA:.*]] = llvm.shufflevector %[[LOAD_0]], %[[LOAD_0]] [8, 9, 10, 11, 12, 13, 14, 15] : vector<32xi16>
-    // CHECK-NEXT: %[[UNPACKED_TYPE:.*]] = llvm.bitcast %[[DECOMPOSED_DATA]] : vector<8xi16> to vector<8xf16>
-    // CHECK: llvm.select %[[PRED_BOOL]], %[[UNPACKED_TYPE]], {{.*}} : i1, vector<8xf16>
-    // CHECK: %[[DECOMPOSED_DATA:.*]] = llvm.shufflevector %[[LOAD_0]], %[[LOAD_0]] [16, 17, 18, 19, 20, 21, 22, 23] : vector<32xi16>
-    // CHECK-NEXT: %[[UNPACKED_TYPE:.*]] = llvm.bitcast %[[DECOMPOSED_DATA]] : vector<8xi16> to vector<8xf16>
-    // CHECK: llvm.select %[[PRED_BOOL]], %[[UNPACKED_TYPE]], {{.*}} : i1, vector<8xf16>
-    // CHECK: %[[DECOMPOSED_DATA:.*]] = llvm.shufflevector %[[LOAD_0]], %[[LOAD_0]] [24, 25, 26, 27, 28, 29, 30, 31] : vector<32xi16>
-    // CHECK-NEXT: %[[UNPACKED_TYPE:.*]] = llvm.bitcast %[[DECOMPOSED_DATA]] : vector<8xi16> to vector<8xf16>
-    // CHECK: llvm.select %[[PRED_BOOL]], %[[UNPACKED_TYPE]], {{.*}} : i1, vector<8xf16>
+    // SMALL-BLOCK-SIZE-C: %[[LOAD_0:.*]] = triton_gen.2Dblockload {{.*}}, %[[BASE_Y_0]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1,
+    // SMALL-BLOCK-SIZE-C-NEXT: llvm.bitcast %[[LOAD_0]] : vector<8xi16> to vector<8xf16>
+    // SMALL-BLOCK-SIZE-C: %[[TOP_LEFT_MASK:.*]] = llvm.zext %[[TOP_LEFT_MASK_BOOL_16]] : i1 to i8
+    // SMALL-BLOCK-SIZE-C: %[[PRED:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflecj(%[[TOP_LEFT_MASK]], {{.*}})
+    // SMALL-BLOCK-SIZE-C: %[[PRED_BOOL:.*]] = llvm.trunc %[[PRED]] : i8 to i1
+    // SMALL-BLOCK-SIZE-C: %[[BASE_Y_1:.*]] = llvm.select %[[PRED_BOOL]], {{.*}}, %[[BLOCK_SHAPE_Y]] : i1, i32
+    // SMALL-BLOCK-SIZE-C: %[[LOAD_0:.*]] = triton_gen.2Dblockload {{.*}}, %[[BASE_Y_1]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1,
+    // SMALL-BLOCK-SIZE-C-NEXT: llvm.bitcast %[[LOAD_0]] : vector<8xi16> to vector<8xf16>
+    // SMALL-BLOCK-SIZE-C: %[[TOP_LEFT_MASK:.*]] = llvm.zext %[[TOP_LEFT_MASK_BOOL_8]] : i1 to i8
+    // SMALL-BLOCK-SIZE-C: %[[PRED:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflecj(%[[TOP_LEFT_MASK]], {{.*}})
+    // SMALL-BLOCK-SIZE-C: %[[PRED_BOOL:.*]] = llvm.trunc %[[PRED]] : i8 to i1
+    // SMALL-BLOCK-SIZE-C: %[[BASE_Y_1:.*]] = llvm.select %[[PRED_BOOL]], {{.*}}, %[[BLOCK_SHAPE_Y]] : i1, i32
+    // SMALL-BLOCK-SIZE-C: %[[LOAD_0:.*]] = triton_gen.2Dblockload {{.*}}, %[[BASE_Y_1]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1,
+    // SMALL-BLOCK-SIZE-C-NEXT: llvm.bitcast %[[LOAD_0]] : vector<8xi16> to vector<8xf16>
+    // SMALL-BLOCK-SIZE-C: %[[TOP_LEFT_MASK:.*]] = llvm.zext %[[TOP_LEFT_MASK_BOOL_24]] : i1 to i8
+    // SMALL-BLOCK-SIZE-C: %[[PRED:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflecj(%[[TOP_LEFT_MASK]], {{.*}})
+    // SMALL-BLOCK-SIZE-C: %[[PRED_BOOL:.*]] = llvm.trunc %[[PRED]] : i8 to i1
+    // SMALL-BLOCK-SIZE-C: %[[BASE_Y_1:.*]] = llvm.select %[[PRED_BOOL]], {{.*}}, %[[BLOCK_SHAPE_Y]] : i1, i32
+    // SMALL-BLOCK-SIZE-C: %[[LOAD_0:.*]] = triton_gen.2Dblockload {{.*}}, %[[BASE_Y_1]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1,
+    // SMALL-BLOCK-SIZE-C-NEXT: llvm.bitcast %[[LOAD_0]] : vector<8xi16> to vector<8xf16>
+    // SMALL-BLOCK-SIZE-C: %[[TOP_LEFT_MASK:.*]] = llvm.zext %[[TOP_LEFT_MASK_BOOL_32]] : i1 to i8
+    // SMALL-BLOCK-SIZE-C: %[[PRED:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflecj(%[[TOP_LEFT_MASK]], {{.*}})
+    // SMALL-BLOCK-SIZE-C: %[[PRED_BOOL:.*]] = llvm.trunc %[[PRED]] : i8 to i1
+    // SMALL-BLOCK-SIZE-C: %[[BASE_Y_1:.*]] = llvm.select %[[PRED_BOOL]], {{.*}}, %[[BLOCK_SHAPE_Y]] : i1, i32
+    // SMALL-BLOCK-SIZE-C: %[[LOAD_0:.*]] = triton_gen.2Dblockload {{.*}}, %[[BASE_Y_1]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1,
+    // SMALL-BLOCK-SIZE-C-NEXT: llvm.bitcast %[[LOAD_0]] : vector<8xi16> to vector<8xf16>
+    // SMALL-BLOCK-SIZE-C: %[[TOP_LEFT_MASK:.*]] = llvm.zext %[[TOP_LEFT_MASK_BOOL_48]] : i1 to i8
+    // SMALL-BLOCK-SIZE-C: %[[PRED:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflecj(%[[TOP_LEFT_MASK]], {{.*}})
+    // SMALL-BLOCK-SIZE-C: %[[PRED_BOOL:.*]] = llvm.trunc %[[PRED]] : i8 to i1
+    // SMALL-BLOCK-SIZE-C: %[[BASE_Y_1:.*]] = llvm.select %[[PRED_BOOL]], {{.*}}, %[[BLOCK_SHAPE_Y]] : i1, i32
+    // SMALL-BLOCK-SIZE-C: %[[LOAD_0:.*]] = triton_gen.2Dblockload {{.*}}, %[[BASE_Y_1]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1,
+    // SMALL-BLOCK-SIZE-C-NEXT: llvm.bitcast %[[LOAD_0]] : vector<8xi16> to vector<8xf16>
+    // SMALL-BLOCK-SIZE-C: %[[TOP_LEFT_MASK:.*]] = llvm.zext %[[TOP_LEFT_MASK_BOOL_40]] : i1 to i8
+    // SMALL-BLOCK-SIZE-C: %[[PRED:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflecj(%[[TOP_LEFT_MASK]], {{.*}})
+    // SMALL-BLOCK-SIZE-C: %[[PRED_BOOL:.*]] = llvm.trunc %[[PRED]] : i8 to i1
+    // SMALL-BLOCK-SIZE-C: %[[BASE_Y_1:.*]] = llvm.select %[[PRED_BOOL]], {{.*}}, %[[BLOCK_SHAPE_Y]] : i1, i32
+    // SMALL-BLOCK-SIZE-C: %[[LOAD_0:.*]] = triton_gen.2Dblockload {{.*}}, %[[BASE_Y_1]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1,
+    // SMALL-BLOCK-SIZE-C-NEXT: llvm.bitcast %[[LOAD_0]] : vector<8xi16> to vector<8xf16>
+    // SMALL-BLOCK-SIZE-C: %[[TOP_LEFT_MASK:.*]] = llvm.zext %[[TOP_LEFT_MASK_BOOL_56]] : i1 to i8
+    // SMALL-BLOCK-SIZE-C: %[[PRED:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflecj(%[[TOP_LEFT_MASK]], {{.*}})
+    // SMALL-BLOCK-SIZE-C: %[[PRED_BOOL:.*]] = llvm.trunc %[[PRED]] : i8 to i1
+    // SMALL-BLOCK-SIZE-C: %[[BASE_Y_1:.*]] = llvm.select %[[PRED_BOOL]], {{.*}}, %[[BLOCK_SHAPE_Y]] : i1, i32
+    // SMALL-BLOCK-SIZE-C: %[[LOAD_0:.*]] = triton_gen.2Dblockload {{.*}}, %[[BASE_Y_1]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1,
+    // SMALL-BLOCK-SIZE-C-NEXT: llvm.bitcast %[[LOAD_0]] : vector<8xi16> to vector<8xf16>
+    // SMALL-BLOCK-SIZE-C: %[[TOP_LEFT_MASK:.*]] = llvm.zext %[[TOP_LEFT_MASK_BOOL_96]] : i1 to i8
+    // SMALL-BLOCK-SIZE-C: %[[PRED:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflecj(%[[TOP_LEFT_MASK]], {{.*}})
+    // SMALL-BLOCK-SIZE-C: %[[PRED_BOOL:.*]] = llvm.trunc %[[PRED]] : i8 to i1
+    // SMALL-BLOCK-SIZE-C: %[[BASE_Y_1:.*]] = llvm.select %[[PRED_BOOL]], {{.*}}, %[[BLOCK_SHAPE_Y]] : i1, i32
+    // SMALL-BLOCK-SIZE-C: %[[LOAD_0:.*]] = triton_gen.2Dblockload {{.*}}, %[[BASE_Y_1]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1,
+    // SMALL-BLOCK-SIZE-C-NEXT: llvm.bitcast %[[LOAD_0]] : vector<8xi16> to vector<8xf16>
+    // SMALL-BLOCK-SIZE-C: %[[TOP_LEFT_MASK:.*]] = llvm.zext %[[TOP_LEFT_MASK_BOOL_112]] : i1 to i8
+    // SMALL-BLOCK-SIZE-C: %[[PRED:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflecj(%[[TOP_LEFT_MASK]], {{.*}})
+    // SMALL-BLOCK-SIZE-C: %[[PRED_BOOL:.*]] = llvm.trunc %[[PRED]] : i8 to i1
+    // SMALL-BLOCK-SIZE-C: %[[BASE_Y_1:.*]] = llvm.select %[[PRED_BOOL]], {{.*}}, %[[BLOCK_SHAPE_Y]] : i1, i32
+    // SMALL-BLOCK-SIZE-C: %[[LOAD_0:.*]] = triton_gen.2Dblockload {{.*}}, %[[BASE_Y_1]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1,
+    // SMALL-BLOCK-SIZE-C-NEXT: llvm.bitcast %[[LOAD_0]] : vector<8xi16> to vector<8xf16>
+    // SMALL-BLOCK-SIZE-C: %[[TOP_LEFT_MASK:.*]] = llvm.zext %[[TOP_LEFT_MASK_BOOL_104]] : i1 to i8
+    // SMALL-BLOCK-SIZE-C: %[[PRED:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflecj(%[[TOP_LEFT_MASK]], {{.*}})
+    // SMALL-BLOCK-SIZE-C: %[[PRED_BOOL:.*]] = llvm.trunc %[[PRED]] : i8 to i1
+    // SMALL-BLOCK-SIZE-C: %[[BASE_Y_1:.*]] = llvm.select %[[PRED_BOOL]], {{.*}}, %[[BLOCK_SHAPE_Y]] : i1, i32
+    // SMALL-BLOCK-SIZE-C: %[[LOAD_0:.*]] = triton_gen.2Dblockload {{.*}}, %[[BASE_Y_1]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1,
+    // SMALL-BLOCK-SIZE-C-NEXT: llvm.bitcast %[[LOAD_0]] : vector<8xi16> to vector<8xf16>
+    // SMALL-BLOCK-SIZE-C: %[[TOP_LEFT_MASK:.*]] = llvm.zext %[[TOP_LEFT_MASK_BOOL_120]] : i1 to i8
+    // SMALL-BLOCK-SIZE-C: %[[PRED:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflecj(%[[TOP_LEFT_MASK]], {{.*}})
+    // SMALL-BLOCK-SIZE-C: %[[PRED_BOOL:.*]] = llvm.trunc %[[PRED]] : i8 to i1
+    // SMALL-BLOCK-SIZE-C: %[[BASE_Y_1:.*]] = llvm.select %[[PRED_BOOL]], {{.*}}, %[[BLOCK_SHAPE_Y]] : i1, i32
+    // SMALL-BLOCK-SIZE-C: %[[LOAD_0:.*]] = triton_gen.2Dblockload {{.*}}, %[[BASE_Y_1]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1,
+    // SMALL-BLOCK-SIZE-C-NEXT: llvm.bitcast %[[LOAD_0]] : vector<8xi16> to vector<8xf16>
 
-    // CHECK: %[[TOP_LEFT_PTR:.*]] = llvm.ptrtoint {{.*}} : !llvm.ptr<1> to i64
-    // CHECK: %[[VAL_3046:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflelj(%[[TOP_LEFT_PTR]], {{.*}}) {convergent, no_unwind, will_return} : (i64, i32) -> i64
-    // CHECK: %[[UNIFORM_PTR:.*]] = llvm.inttoptr %[[VAL_3046]] : i64 to !llvm.ptr<1>
-    // CHECK: %[[CST0_0:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK: %[[CST0_1:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK: %[[CST0_2:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK: %[[TOP_LEFT_MASK:.*]] = llvm.zext %[[TOP_LEFT_MASK_BOOL_96]] : i1 to i8
-    // CHECK: %[[PRED:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflecj(%[[TOP_LEFT_MASK]], %[[CST0_2]])
-    // CHECK: %[[PRED_BOOL:.*]] =  llvm.trunc %[[PRED]] : i8 to i1
-    // CHECK: %[[BASE_Y_0:.*]] = llvm.select %[[PRED_BOOL]], %[[CST0_0]], %[[BLOCK_SHAPE_Y]] : i1, i32
-    // CHECK: %[[LOAD_0:.*]] = triton_gen.2Dblockload {{.*}}, %[[BASE_Y_0]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 16, v_blocks = 2
-    // CHECK: %[[DECOMPOSED_DATA:.*]] = llvm.shufflevector %[[LOAD_0]], %[[LOAD_0]] [0, 1, 2, 3, 4, 5, 6, 7] : vector<32xi16>
-    // CHECK-NEXT: %[[UNPACKED_TYPE:.*]] = llvm.bitcast %[[DECOMPOSED_DATA]] : vector<8xi16> to vector<8xf16>
-    // CHECK: llvm.select %[[PRED_BOOL]], %[[UNPACKED_TYPE]], {{.*}} : i1, vector<8xf16>
-    // CHECK: %[[DECOMPOSED_DATA:.*]] = llvm.shufflevector %[[LOAD_0]], %[[LOAD_0]] [8, 9, 10, 11, 12, 13, 14, 15] : vector<32xi16>
-    // CHECK-NEXT: %[[UNPACKED_TYPE:.*]] = llvm.bitcast %[[DECOMPOSED_DATA]] : vector<8xi16> to vector<8xf16>
-    // CHECK: llvm.select %[[PRED_BOOL]], %[[UNPACKED_TYPE]], {{.*}} : i1, vector<8xf16>
-    // CHECK: %[[DECOMPOSED_DATA:.*]] = llvm.shufflevector %[[LOAD_0]], %[[LOAD_0]] [16, 17, 18, 19, 20, 21, 22, 23] : vector<32xi16>
-    // CHECK-NEXT: %[[UNPACKED_TYPE:.*]] = llvm.bitcast %[[DECOMPOSED_DATA]] : vector<8xi16> to vector<8xf16>
-    // CHECK: llvm.select %[[PRED_BOOL]], %[[UNPACKED_TYPE]], {{.*}} : i1, vector<8xf16>
-    // CHECK: %[[DECOMPOSED_DATA:.*]] = llvm.shufflevector %[[LOAD_0]], %[[LOAD_0]] [24, 25, 26, 27, 28, 29, 30, 31] : vector<32xi16>
-    // CHECK-NEXT: %[[UNPACKED_TYPE:.*]] = llvm.bitcast %[[DECOMPOSED_DATA]] : vector<8xi16> to vector<8xf16>
-    // CHECK: llvm.select %[[PRED_BOOL]], %[[UNPACKED_TYPE]], {{.*}} : i1, vector<8xf16>
+    // COM: Order of the small C matrix is: (0, 16, 8, 24), (32, 48, 40, 56), (64, 80, 72, 88), (96, 112, 104, 120)
+
+    // LARGE-BLOCK-SIZE-C: %[[LOAD_0:.*]] = triton_gen.2Dblockload {{.*}}, %[[BASE_Y_0]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 16, v_blocks = 2
+    // LARGE-BLOCK-SIZE-C: %[[DECOMPOSED_DATA:.*]] = llvm.shufflevector %[[LOAD_0]], %[[LOAD_0]] [0, 1, 2, 3, 4, 5, 6, 7] : vector<32xi16>
+    // LARGE-BLOCK-SIZE-C-NEXT: %[[UNPACKED_TYPE:.*]] = llvm.bitcast %[[DECOMPOSED_DATA]] : vector<8xi16> to vector<8xf16>
+    // LARGE-BLOCK-SIZE-C: llvm.select %[[PRED_BOOL]], %[[UNPACKED_TYPE]], {{.*}} : i1, vector<8xf16>
+    // LARGE-BLOCK-SIZE-C: %[[DECOMPOSED_DATA:.*]] = llvm.shufflevector %[[LOAD_0]], %[[LOAD_0]] [8, 9, 10, 11, 12, 13, 14, 15] : vector<32xi16>
+    // LARGE-BLOCK-SIZE-C-NEXT: %[[UNPACKED_TYPE:.*]] = llvm.bitcast %[[DECOMPOSED_DATA]] : vector<8xi16> to vector<8xf16>
+    // LARGE-BLOCK-SIZE-C: llvm.select %[[PRED_BOOL]], %[[UNPACKED_TYPE]], {{.*}} : i1, vector<8xf16>
+    // LARGE-BLOCK-SIZE-C: %[[DECOMPOSED_DATA:.*]] = llvm.shufflevector %[[LOAD_0]], %[[LOAD_0]] [16, 17, 18, 19, 20, 21, 22, 23] : vector<32xi16>
+    // LARGE-BLOCK-SIZE-C-NEXT: %[[UNPACKED_TYPE:.*]] = llvm.bitcast %[[DECOMPOSED_DATA]] : vector<8xi16> to vector<8xf16>
+    // LARGE-BLOCK-SIZE-C: llvm.select %[[PRED_BOOL]], %[[UNPACKED_TYPE]], {{.*}} : i1, vector<8xf16>
+    // LARGE-BLOCK-SIZE-C: %[[DECOMPOSED_DATA:.*]] = llvm.shufflevector %[[LOAD_0]], %[[LOAD_0]] [24, 25, 26, 27, 28, 29, 30, 31] : vector<32xi16>
+    // LARGE-BLOCK-SIZE-C-NEXT: %[[UNPACKED_TYPE:.*]] = llvm.bitcast %[[DECOMPOSED_DATA]] : vector<8xi16> to vector<8xf16>
+    // LARGE-BLOCK-SIZE-C: llvm.select %[[PRED_BOOL]], %[[UNPACKED_TYPE]], {{.*}} : i1, vector<8xf16>
+
+    // LARGE-BLOCK-SIZE-C: %[[TOP_LEFT_PTR:.*]] = llvm.ptrtoint {{.*}} : !llvm.ptr<1> to i64
+    // LARGE-BLOCK-SIZE-C: %[[VAL_3046:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflelj(%[[TOP_LEFT_PTR]], {{.*}}) {convergent, no_unwind, will_return} : (i64, i32) -> i64
+    // LARGE-BLOCK-SIZE-C: %[[UNIFORM_PTR:.*]] = llvm.inttoptr %[[VAL_3046]] : i64 to !llvm.ptr<1>
+    // LARGE-BLOCK-SIZE-C: %[[CST0_0:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // LARGE-BLOCK-SIZE-C: %[[CST0_1:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // LARGE-BLOCK-SIZE-C: %[[CST0_2:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // LARGE-BLOCK-SIZE-C: %[[TOP_LEFT_MASK:.*]] = llvm.zext %[[TOP_LEFT_MASK_BOOL_32]] : i1 to i8
+    // LARGE-BLOCK-SIZE-C: %[[PRED:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflecj(%[[TOP_LEFT_MASK]], %[[CST0_2]])
+    // LARGE-BLOCK-SIZE-C: %[[PRED_BOOL:.*]] =  llvm.trunc %[[PRED]] : i8 to i1
+    // LARGE-BLOCK-SIZE-C: %[[BASE_Y_0:.*]] = llvm.select %[[PRED_BOOL]], %[[CST0_0]], %[[BLOCK_SHAPE_Y]] : i1, i32
+    // LARGE-BLOCK-SIZE-C: %[[LOAD_0:.*]] = triton_gen.2Dblockload {{.*}}, %[[BASE_Y_0]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 16, v_blocks = 2
+    // LARGE-BLOCK-SIZE-C: %[[DECOMPOSED_DATA:.*]] = llvm.shufflevector %[[LOAD_0]], %[[LOAD_0]] [0, 1, 2, 3, 4, 5, 6, 7] : vector<32xi16>
+    // LARGE-BLOCK-SIZE-C-NEXT: %[[UNPACKED_TYPE:.*]] = llvm.bitcast %[[DECOMPOSED_DATA]] : vector<8xi16> to vector<8xf16>
+    // LARGE-BLOCK-SIZE-C: llvm.select %[[PRED_BOOL]], %[[UNPACKED_TYPE]], {{.*}} : i1, vector<8xf16>
+    // LARGE-BLOCK-SIZE-C: %[[DECOMPOSED_DATA:.*]] = llvm.shufflevector %[[LOAD_0]], %[[LOAD_0]] [8, 9, 10, 11, 12, 13, 14, 15] : vector<32xi16>
+    // LARGE-BLOCK-SIZE-C-NEXT: %[[UNPACKED_TYPE:.*]] = llvm.bitcast %[[DECOMPOSED_DATA]] : vector<8xi16> to vector<8xf16>
+    // LARGE-BLOCK-SIZE-C: llvm.select %[[PRED_BOOL]], %[[UNPACKED_TYPE]], {{.*}} : i1, vector<8xf16>
+    // LARGE-BLOCK-SIZE-C: %[[DECOMPOSED_DATA:.*]] = llvm.shufflevector %[[LOAD_0]], %[[LOAD_0]] [16, 17, 18, 19, 20, 21, 22, 23] : vector<32xi16>
+    // LARGE-BLOCK-SIZE-C-NEXT: %[[UNPACKED_TYPE:.*]] = llvm.bitcast %[[DECOMPOSED_DATA]] : vector<8xi16> to vector<8xf16>
+    // LARGE-BLOCK-SIZE-C: llvm.select %[[PRED_BOOL]], %[[UNPACKED_TYPE]], {{.*}} : i1, vector<8xf16>
+    // LARGE-BLOCK-SIZE-C: %[[DECOMPOSED_DATA:.*]] = llvm.shufflevector %[[LOAD_0]], %[[LOAD_0]] [24, 25, 26, 27, 28, 29, 30, 31] : vector<32xi16>
+    // LARGE-BLOCK-SIZE-C-NEXT: %[[UNPACKED_TYPE:.*]] = llvm.bitcast %[[DECOMPOSED_DATA]] : vector<8xi16> to vector<8xf16>
+    // LARGE-BLOCK-SIZE-C: llvm.select %[[PRED_BOOL]], %[[UNPACKED_TYPE]], {{.*}} : i1, vector<8xf16>
+
+    // LARGE-BLOCK-SIZE-C: %[[TOP_LEFT_PTR:.*]] = llvm.ptrtoint {{.*}} : !llvm.ptr<1> to i64
+    // LARGE-BLOCK-SIZE-C: %[[VAL_3046:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflelj(%[[TOP_LEFT_PTR]], {{.*}}) {convergent, no_unwind, will_return} : (i64, i32) -> i64
+    // LARGE-BLOCK-SIZE-C: %[[UNIFORM_PTR:.*]] = llvm.inttoptr %[[VAL_3046]] : i64 to !llvm.ptr<1>
+    // LARGE-BLOCK-SIZE-C: %[[CST0_0:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // LARGE-BLOCK-SIZE-C: %[[CST0_1:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // LARGE-BLOCK-SIZE-C: %[[CST0_2:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // LARGE-BLOCK-SIZE-C: %[[TOP_LEFT_MASK:.*]] = llvm.zext %[[TOP_LEFT_MASK_BOOL_64]] : i1 to i8
+    // LARGE-BLOCK-SIZE-C: %[[PRED:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflecj(%[[TOP_LEFT_MASK]], %[[CST0_2]])
+    // LARGE-BLOCK-SIZE-C: %[[PRED_BOOL:.*]] =  llvm.trunc %[[PRED]] : i8 to i1
+    // LARGE-BLOCK-SIZE-C: %[[BASE_Y_0:.*]] = llvm.select %[[PRED_BOOL]], %[[CST0_0]], %[[BLOCK_SHAPE_Y]] : i1, i32
+    // LARGE-BLOCK-SIZE-C: %[[LOAD_0:.*]] = triton_gen.2Dblockload {{.*}}, %[[BASE_Y_0]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 16, v_blocks = 2
+    // LARGE-BLOCK-SIZE-C: %[[DECOMPOSED_DATA:.*]] = llvm.shufflevector %[[LOAD_0]], %[[LOAD_0]] [0, 1, 2, 3, 4, 5, 6, 7] : vector<32xi16>
+    // LARGE-BLOCK-SIZE-C-NEXT: %[[UNPACKED_TYPE:.*]] = llvm.bitcast %[[DECOMPOSED_DATA]] : vector<8xi16> to vector<8xf16>
+    // LARGE-BLOCK-SIZE-C: llvm.select %[[PRED_BOOL]], %[[UNPACKED_TYPE]], {{.*}} : i1, vector<8xf16>
+    // LARGE-BLOCK-SIZE-C: %[[DECOMPOSED_DATA:.*]] = llvm.shufflevector %[[LOAD_0]], %[[LOAD_0]] [8, 9, 10, 11, 12, 13, 14, 15] : vector<32xi16>
+    // LARGE-BLOCK-SIZE-C-NEXT: %[[UNPACKED_TYPE:.*]] = llvm.bitcast %[[DECOMPOSED_DATA]] : vector<8xi16> to vector<8xf16>
+    // LARGE-BLOCK-SIZE-C: llvm.select %[[PRED_BOOL]], %[[UNPACKED_TYPE]], {{.*}} : i1, vector<8xf16>
+    // LARGE-BLOCK-SIZE-C: %[[DECOMPOSED_DATA:.*]] = llvm.shufflevector %[[LOAD_0]], %[[LOAD_0]] [16, 17, 18, 19, 20, 21, 22, 23] : vector<32xi16>
+    // LARGE-BLOCK-SIZE-C-NEXT: %[[UNPACKED_TYPE:.*]] = llvm.bitcast %[[DECOMPOSED_DATA]] : vector<8xi16> to vector<8xf16>
+    // LARGE-BLOCK-SIZE-C: llvm.select %[[PRED_BOOL]], %[[UNPACKED_TYPE]], {{.*}} : i1, vector<8xf16>
+    // LARGE-BLOCK-SIZE-C: %[[DECOMPOSED_DATA:.*]] = llvm.shufflevector %[[LOAD_0]], %[[LOAD_0]] [24, 25, 26, 27, 28, 29, 30, 31] : vector<32xi16>
+    // LARGE-BLOCK-SIZE-C-NEXT: %[[UNPACKED_TYPE:.*]] = llvm.bitcast %[[DECOMPOSED_DATA]] : vector<8xi16> to vector<8xf16>
+    // LARGE-BLOCK-SIZE-C: llvm.select %[[PRED_BOOL]], %[[UNPACKED_TYPE]], {{.*}} : i1, vector<8xf16>
+
+    // LARGE-BLOCK-SIZE-C: %[[TOP_LEFT_PTR:.*]] = llvm.ptrtoint {{.*}} : !llvm.ptr<1> to i64
+    // LARGE-BLOCK-SIZE-C: %[[VAL_3046:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflelj(%[[TOP_LEFT_PTR]], {{.*}}) {convergent, no_unwind, will_return} : (i64, i32) -> i64
+    // LARGE-BLOCK-SIZE-C: %[[UNIFORM_PTR:.*]] = llvm.inttoptr %[[VAL_3046]] : i64 to !llvm.ptr<1>
+    // LARGE-BLOCK-SIZE-C: %[[CST0_0:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // LARGE-BLOCK-SIZE-C: %[[CST0_1:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // LARGE-BLOCK-SIZE-C: %[[CST0_2:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // LARGE-BLOCK-SIZE-C: %[[TOP_LEFT_MASK:.*]] = llvm.zext %[[TOP_LEFT_MASK_BOOL_96]] : i1 to i8
+    // LARGE-BLOCK-SIZE-C: %[[PRED:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflecj(%[[TOP_LEFT_MASK]], %[[CST0_2]])
+    // LARGE-BLOCK-SIZE-C: %[[PRED_BOOL:.*]] =  llvm.trunc %[[PRED]] : i8 to i1
+    // LARGE-BLOCK-SIZE-C: %[[BASE_Y_0:.*]] = llvm.select %[[PRED_BOOL]], %[[CST0_0]], %[[BLOCK_SHAPE_Y]] : i1, i32
+    // LARGE-BLOCK-SIZE-C: %[[LOAD_0:.*]] = triton_gen.2Dblockload {{.*}}, %[[BASE_Y_0]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 16, v_blocks = 2
+    // LARGE-BLOCK-SIZE-C: %[[DECOMPOSED_DATA:.*]] = llvm.shufflevector %[[LOAD_0]], %[[LOAD_0]] [0, 1, 2, 3, 4, 5, 6, 7] : vector<32xi16>
+    // LARGE-BLOCK-SIZE-C-NEXT: %[[UNPACKED_TYPE:.*]] = llvm.bitcast %[[DECOMPOSED_DATA]] : vector<8xi16> to vector<8xf16>
+    // LARGE-BLOCK-SIZE-C: llvm.select %[[PRED_BOOL]], %[[UNPACKED_TYPE]], {{.*}} : i1, vector<8xf16>
+    // LARGE-BLOCK-SIZE-C: %[[DECOMPOSED_DATA:.*]] = llvm.shufflevector %[[LOAD_0]], %[[LOAD_0]] [8, 9, 10, 11, 12, 13, 14, 15] : vector<32xi16>
+    // LARGE-BLOCK-SIZE-C-NEXT: %[[UNPACKED_TYPE:.*]] = llvm.bitcast %[[DECOMPOSED_DATA]] : vector<8xi16> to vector<8xf16>
+    // LARGE-BLOCK-SIZE-C: llvm.select %[[PRED_BOOL]], %[[UNPACKED_TYPE]], {{.*}} : i1, vector<8xf16>
+    // LARGE-BLOCK-SIZE-C: %[[DECOMPOSED_DATA:.*]] = llvm.shufflevector %[[LOAD_0]], %[[LOAD_0]] [16, 17, 18, 19, 20, 21, 22, 23] : vector<32xi16>
+    // LARGE-BLOCK-SIZE-C-NEXT: %[[UNPACKED_TYPE:.*]] = llvm.bitcast %[[DECOMPOSED_DATA]] : vector<8xi16> to vector<8xf16>
+    // LARGE-BLOCK-SIZE-C: llvm.select %[[PRED_BOOL]], %[[UNPACKED_TYPE]], {{.*}} : i1, vector<8xf16>
+    // LARGE-BLOCK-SIZE-C: %[[DECOMPOSED_DATA:.*]] = llvm.shufflevector %[[LOAD_0]], %[[LOAD_0]] [24, 25, 26, 27, 28, 29, 30, 31] : vector<32xi16>
+    // LARGE-BLOCK-SIZE-C-NEXT: %[[UNPACKED_TYPE:.*]] = llvm.bitcast %[[DECOMPOSED_DATA]] : vector<8xi16> to vector<8xf16>
+    // LARGE-BLOCK-SIZE-C: llvm.select %[[PRED_BOOL]], %[[UNPACKED_TYPE]], {{.*}} : i1, vector<8xf16>
     %11 = tt.load %10, %a_mask, %a_other {ttig.block_io = "row_major"} : tensor<256x64x!tt.ptr<f16>, #mma>
 
     tt.return
@@ -495,7 +586,7 @@ module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // COM: Check codegen when base height is 1 and tile height is > 1.
 #mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [2, 1], A = [16, 8], B = [8, 16], C = [16, 16]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_sg_2d_block} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
   // CHECK-LABEL: @baseheight1
   tt.func public @baseheight1(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
     %18 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>}>>
@@ -545,7 +636,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 4, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [2, 2]}>
 #dot_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 2}>
-module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: @regular_pointer_block_io
   tt.func public @regular_pointer_block_io(%arg0: !tt.ptr<f32>) {
     %0 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #dot_a}>>
@@ -570,7 +661,7 @@ module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 8 : i32, "ttg.thr
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
-module attributes {ttg.global_scratch_memory_alignment = 1 : i32, ttg.global_scratch_memory_size = 0 : i32, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 0 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32, ttig.support_sg_2d_block} {
+module attributes {ttg.global_scratch_memory_alignment = 1 : i32, ttg.global_scratch_memory_size = 0 : i32, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 0 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
   tt.func public @trans_block_load_i32(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {ttg.global_scratch_memory_alignment = 1 : i32, ttg.global_scratch_memory_size = 0 : i32} {
     %cst = arith.constant dense<64> : tensor<32x1xi32, #blocked>
     %0 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
@@ -594,7 +685,7 @@ module attributes {ttg.global_scratch_memory_alignment = 1 : i32, ttg.global_scr
 // -----
 
 #mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 4, threadsPerWarp = 16, warpsPerCTA = [1, 4], repCluster = [1, 2], A = [8, 32], B = [32, 32], C = [8, 32]}>
-module attributes {ttg.global_scratch_memory_alignment = 1 : i32, ttg.global_scratch_memory_size = 0 : i32, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 0 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, ttig.support_sg_2d_block} {
+module attributes {ttg.global_scratch_memory_alignment = 1 : i32, ttg.global_scratch_memory_size = 0 : i32, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 0 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
   tt.func public @trans_block_load_i16(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}) attributes {ttg.global_scratch_memory_alignment = 1 : i32, ttg.global_scratch_memory_size = 0 : i32} {
     %cst = arith.constant dense<64> : tensor<32x1xi32, #mma>
     %0 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 1, parent = #mma}>>
@@ -621,7 +712,7 @@ module attributes {ttg.global_scratch_memory_alignment = 1 : i32, ttg.global_scr
 // -----
 
 #mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 4, threadsPerWarp = 16, warpsPerCTA = [1, 4], repCluster = [1, 2], A = [8, 32], B = [32, 32], C = [8, 32]}>
-module attributes {ttg.global_scratch_memory_alignment = 1 : i32, ttg.global_scratch_memory_size = 0 : i32, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 0 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, ttig.support_sg_2d_block} {
+module attributes {ttg.global_scratch_memory_alignment = 1 : i32, ttg.global_scratch_memory_size = 0 : i32, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 0 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
   tt.func public @trans_block_load_i8(%arg0: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i8> {tt.divisibility = 16 : i32}) attributes {ttg.global_scratch_memory_alignment = 1 : i32, ttg.global_scratch_memory_size = 0 : i32} {
     %cst = arith.constant dense<128> : tensor<128x1xi32, #mma>
     %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #mma}>>

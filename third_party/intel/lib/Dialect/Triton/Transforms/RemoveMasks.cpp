@@ -1,12 +1,14 @@
+#include "intel/include/Analysis/Range.h"
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
 #include "intel/include/Utils/Utility.h"
+#include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Interfaces/InferIntRangeInterface.h"
 #include "mlir/Support/LLVM.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/IR/Instructions.h"
@@ -80,12 +82,16 @@ public:
 // A mask validator which ensures the mask is not necessary.
 class RemovableMaskValidator final : public MaskValidatorBase {
 public:
+  RemovableMaskValidator(DataFlowSolver *solver)
+      : MaskValidatorBase(), solver(solver) {}
+
   virtual bool isValidMask(scf::ForOp &forOp, Value mask) const {
     Value finalVal = tt::intel::getFinalValue(mask);
     assert(finalVal && "Expecting a valid mask");
 
     // Ensure the loop range is known.
-    std::optional<ConstantIntRanges> optRange = computeLoopIVRange(forOp);
+    std::optional<ConstantIntRanges> optRange =
+        tt::intel::collectLoopIVRange(forOp, *solver);
     if (!optRange)
       return false;
 
@@ -162,25 +168,8 @@ public:
   }
 
 private:
+  DataFlowSolver *solver;
   mutable std::map<Operation *, bool> opToMaskValue;
-
-  std::optional<ConstantIntRanges> computeLoopIVRange(scf::ForOp forOp) const {
-    if (!forOp.getSingleInductionVar())
-      return std::nullopt;
-
-    if (std::optional<APInt> tripCount = forOp.getStaticTripCount()) {
-      OpFoldResult lb = *forOp.getSingleLowerBound();
-      OpFoldResult step = *forOp.getSingleStep();
-      int64_t lbVal = *getConstantIntValue(lb);
-      int64_t stepVal = *getConstantIntValue(step);
-      int64_t lastIVVal = stepVal * (tripCount->getSExtValue() - 1);
-      llvm::APInt start(64, lbVal, true);
-      llvm::APInt end(64, lastIVVal, true);
-      return ConstantIntRanges::range(start, end, true);
-    }
-
-    return std::nullopt;
-  }
 };
 
 // A mask validator which ensures that the mask can be reduced to the form:
@@ -676,6 +665,13 @@ public:
   void runOnOperation() final {
     ModuleOp moduleOp = getOperation();
 
+    std::shared_ptr<DataFlowSolver> solver = createDataFlowSolver();
+    auto *rangeAnalysis = solver->load<tt::intel::IntegerRangeAnalysis>(
+        moduleOp, getAnalysis<DominanceInfo>());
+
+    if (failed(solver->initializeAndRun(getOperation())))
+      return signalPassFailure();
+
     // Remove masks if they are not necessary.
     moduleOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
       if (scf::ForOp forOp = dyn_cast<scf::ForOp>(op)) {
@@ -686,7 +682,7 @@ public:
         if (!forOp.getSingleInductionVar())
           return WalkResult::advance();
 
-        RemovableMaskValidator maskValidator;
+        RemovableMaskValidator maskValidator(solver.get());
         MaskedOpsCollector collector(forOp, maskValidator);
         if (collector.collectMaskedOps()) {
           for (Operation *op : collector.getMaskedOps()) {

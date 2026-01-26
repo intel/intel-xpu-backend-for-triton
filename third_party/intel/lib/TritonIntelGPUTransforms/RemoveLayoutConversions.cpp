@@ -795,7 +795,7 @@ static void updateAdvanceOpChain(AdvanceOp advanceOp, StoreOp storeOp,
 bool LayoutPropagation::rewriteTensorPtrStoreOp(StoreOp storeOp) {
   // Disable 2D block store on LTS.
   if (!storeOp->getParentOfType<ModuleOp>()->hasAttr(
-          ttgi::TritonIntelGPUDialect::getSupportSG2DBlockAttrName()))
+          ttgi::TritonIntelGPUDialect::getSupport2DBlockIOAttrName()))
     return false;
 
   // If storeOp is a pointer to a tensor, we try to find out if the
@@ -807,7 +807,7 @@ bool LayoutPropagation::rewriteTensorPtrStoreOp(StoreOp storeOp) {
 
   // Locate the operation that created the block pointer.
   std::optional<triton::MakeTensorPtrOp> defOp =
-      triton::intel::findDefiningMakeTensorPtrOp(ptr);
+      triton::intel::findDefiningMakeTensorPtrOp<triton::MakeTensorPtrOp>(ptr);
   if (!defOp)
     return false;
 
@@ -1093,6 +1093,12 @@ void LayoutRematerialization::reduceLoopCarriedValues() {
 
             for (Operation *user : advanceOp->getUsers())
               processUser(user, newAdvanceOp.getResult());
+          })
+          .Case<scf::ForOp>([&](auto forOp) {
+            LLVM_DEBUG({
+              DBGS() << "Skipping rematerialization for scf.for users: "
+                     << *forOp << "\n";
+            });
           })
           .Default([](auto op) {
             llvm::report_fatal_error(llvm::Twine(
@@ -1573,7 +1579,7 @@ void LayoutRematerialization::backwardRematerialization(
   // it to account for extra cost due to synchronisation.
   // FIXME: measure cost of smem load/store and synchronisation on Intel GPUs,
   // and refine this model further. (#5476)
-  int64_t convertLayoutCost = 32 * convertLayoutBytes * 2;
+  int64_t convertLayoutCost = 32 * convertLayoutBytes * 3;
   int64_t rematerialisationCost = 0;
 
   // Evaluate single-use status for every operation in slice

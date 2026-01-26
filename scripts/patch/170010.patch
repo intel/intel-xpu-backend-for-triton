@@ -1,0 +1,13 @@
+diff --git a/torch/_inductor/template_heuristics/triton.py b/torch/_inductor/template_heuristics/triton.py
+index 21deda557346b..6e5d3c3ab32d6 100644
+--- a/torch/_inductor/template_heuristics/triton.py
++++ b/torch/_inductor/template_heuristics/triton.py
+@@ -1535,7 +1535,7 @@ def get_flex_attn_bwd_configs(
+             if head_dim == 64:
+                 default_config = FlexBwDConfig(64, 64, 64, 64, 1, 8)
+             elif head_dim == 128:
+-                default_config = FlexBwDConfig(64, 128, 64, 128, 1, 8)
++                default_config = FlexBwDConfig(64, 64, 64, 64, 1, 8)
+             else:
+                 default_config = FlexBwDConfig(64, 64, 64, 64, 1, 8)
+         else:  # modest hardware or extremely large head_dim
