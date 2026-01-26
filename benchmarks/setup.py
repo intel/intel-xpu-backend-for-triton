@@ -112,7 +112,7 @@ setup(
     packages=find_packages(),
     install_requires=[
         "torch>=2.6",
-        "pandas",
+        "pandas<3.0",
         "scipy",
         "psutil",
         "tabulate",

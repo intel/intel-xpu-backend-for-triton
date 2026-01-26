@@ -128,22 +128,24 @@ public:
 
     TritonGEN::PrecisionType APrecision;
     TritonGEN::PrecisionType BPrecision;
-    if constexpr (std::is_same<OpTy, DotScaledOp>::value) {
-      auto aElemType = adaptor.getAElemType();
-      APrecision = getElementPrecision(aElemType);
-      auto bElemType = adaptor.getBElemType();
-      BPrecision = getElementPrecision(bElemType);
-      bool isBothFP8 = (aElemType == triton::ScaleDotElemType::E4M3 ||
-                        aElemType == triton::ScaleDotElemType::E5M2) &&
-                       (bElemType == triton::ScaleDotElemType::E4M3 ||
-                        bElemType == triton::ScaleDotElemType::E5M2);
-      assert((isBothFP8 || APrecision == BPrecision) &&
-             "A and B precision enumerators do not match");
-    } else {
+
+    if constexpr (std::is_same<OpTy, DotOp>::value) {
       APrecision = getElementPrecision(ATensorTy, resElemTy),
       BPrecision = getElementPrecision(BTensorTy, resElemTy);
 
       assert(APrecision == BPrecision &&
+             "A and B precision enumerators do not match");
+    } else if constexpr (std::is_same<OpTy, DotScaledOp>::value) {
+      auto aElemType = adaptor.getAElemType();
+      APrecision = getElementPrecision(aElemType);
+      auto bElemType = adaptor.getBElemType();
+      BPrecision = getElementPrecision(bElemType);
+      [[maybe_unused]] bool isBothFP8 =
+          (aElemType == triton::ScaleDotElemType::E4M3 ||
+           aElemType == triton::ScaleDotElemType::E5M2) &&
+          (bElemType == triton::ScaleDotElemType::E4M3 ||
+           bElemType == triton::ScaleDotElemType::E5M2);
+      assert((isBothFP8 || APrecision == BPrecision) &&
              "A and B precision enumerators do not match");
     }
 
@@ -167,22 +169,21 @@ public:
           TritonGEN::PrecisionTypeAttr::get(B.getContext(), BPrecision);
       auto RC = IntegerAttr::get(rewriter.getIntegerType(32),
                                  dpasEncoding.getRepeatCount());
-      if constexpr (std::is_same<OpTy, DotScaledOp>::value) {
-        Value sA;
-        if (!scaleA.empty()) {
-          sA = scaleA.at({b, m, k});
-        }
-        Value sB;
-        if (!scaleB.empty()) {
-          sB = scaleB.at({b, n, k});
-        }
-        fc.at({b, m, n}) = TritonGEN::MatrixBlockScaleDPASOp::create(
-            rewriter, loc, dTy, tb.bitcast(valc, cTy), tb.bitcast(valA, aTy),
-            tb.bitcast(valB, bTy), sA, sB, pA, pB, RC);
-      } else {
+
+      if constexpr (std::is_same<OpTy, DotOp>::value) {
         fc.at({b, m, n}) = TritonGEN::MatrixDPASOp::create(
             rewriter, loc, dTy, tb.bitcast(valc, cTy), tb.bitcast(valA, aTy),
             tb.bitcast(valB, bTy), pA, pB, RC);
+      } else if constexpr (std::is_same<OpTy, DotScaledOp>::value) {
+        Value sA;
+        if (!scaleA.empty())
+          sA = scaleA.at({b, m, k});
+        Value sB;
+        if (!scaleB.empty())
+          sB = scaleB.at({b, n, k});
+        fc.at({b, m, n}) = TritonGEN::MatrixBlockScaleDPASOp::create(
+            rewriter, loc, dTy, tb.bitcast(valc, cTy), tb.bitcast(valA, aTy),
+            tb.bitcast(valB, bTy), sA, sB, pA, pB, RC);
       }
     };
 

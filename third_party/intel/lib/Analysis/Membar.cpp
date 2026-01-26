@@ -48,7 +48,7 @@ bool areSafeToOverlapSubGroupTransposeOps(Operation *lhsOp, Operation *rhsOp) {
          rhsTranspose->getAttr("allocation.offset");
 }
 } // namespace
-bool membarFilter(Operation *lhsOp, Operation *rhsOp) {
+bool membarFilter(Operation *lhsOp, Operation *rhsOp, Allocation *allocation) {
   // For now, we only check these aren't layout conversions implemented as the
   // same sub-group transposition.
   assert(lhsOp && rhsOp && "Expecting valid operations");

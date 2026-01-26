@@ -140,7 +140,7 @@ jobs:
 
       - name: Install python test dependencies
         run: |
-          pip install pyyaml pandas scipy psutil
+          pip install pyyaml 'pandas<3.0' scipy psutil
 
       - name: Install transformers package
         if: ${{ inputs.suite == 'huggingface' }}
