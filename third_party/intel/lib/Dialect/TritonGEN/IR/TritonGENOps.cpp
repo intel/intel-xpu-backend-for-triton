@@ -117,6 +117,9 @@ static LogicalResult verify2DBlockHWRestriction(OpTy op) {
   unsigned tileWidth = op.getTileWidth();
   unsigned vBlocks = op.getVBlocks();
 
+  assert(tileWidth >= 1 && tileWidth <= 256 &&
+         "tile_width should be between 1 and 256");
+
   // The maximum bytes per operation per row supported by hardware:
   //  - load/store: 64 bytes.
   //  - prefetch: 64-256 bytes (depending on module attribute).
@@ -128,6 +131,7 @@ static LogicalResult verify2DBlockHWRestriction(OpTy op) {
        isPrefetch256BSupported)
           ? (256 * 8)
           : (64 * 8);
+
   if (elemSizeInBits * tileWidth * vBlocks > maxBitsPerOpPerRow)
     return op->emitOpError(
         "expecting elem_size_in_bits * tile_width * v_blocks <= " +
