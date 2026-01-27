@@ -106,6 +106,9 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
       .def_readwrite(
           "support_bfloat16_conversion",
           &gpu::intel::TritonAnnotateModuleOptions::supportBF16Conversion)
+      .def_readwrite(
+          "support_predicated_io",
+          &gpu::intel::TritonAnnotateModuleOptions::supportPredicatedIO)
       .def_readwrite("support_subgroup_matrix_multiply_accumulate",
                      &gpu::intel::TritonAnnotateModuleOptions::supportDPAS)
       .def_readwrite(

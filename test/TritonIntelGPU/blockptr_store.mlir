@@ -516,7 +516,7 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 4], order = [1, 0]}>
-module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_predicated_io"} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @boundary_check
   tt.func public @boundary_check(%arg0: !tt.ptr<f16>, %col_stride: i64) {
       %cst = arith.constant dense<0.000000e+00> : tensor<64x16xf16, #blocked>

@@ -308,6 +308,10 @@ struct LoadStoreConversionBase {
   template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
                                  OpType, LoadOp, StoreOp>::value>>
   bool canUsePredicatedInstructions(OpType op) const {
+    if (!mlir::LLVM::intel::hasModuleAttr(
+            op, TritonIntelGPUDialect::getSupportPredicatedIOAttrName()))
+      return false;
+
     if constexpr (std::is_same_v<OpType, LoadOp>) {
       if (!triton::tools::getBoolEnv("TRITON_INTEL_PREDICATED_LOAD"))
         return false;
