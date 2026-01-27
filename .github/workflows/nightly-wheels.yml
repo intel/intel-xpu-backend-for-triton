@@ -2,8 +2,6 @@ name: Triton wheels
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "5 23 * * *"
   push:
     branches:
       - main
