@@ -22,6 +22,8 @@ try:  # XPUBackend allows metaclasses injection
 except ImportError:
     XPUBackendMeta = type(BaseBackend)
 
+_VERSION_PATTERN = re.compile(r'(\d+)\.(\d+)\.(\d+)\+(\d+)')
+
 
 @dataclass
 class XPUOptions:
@@ -156,6 +158,16 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         dev_prop['has_subgroup_2d_block_io'] = tgt_prop.get('has_subgroup_2d_block_io', False)
         dev_prop['has_bfloat16_arithmetic'] = tgt_prop.get('has_bfloat16_arithmetic', False)
         dev_prop['has_bfloat16_conversion'] = tgt_prop.get('has_bfloat16_conversion', True)
+
+        def is_lts(ver):
+            if not ver:
+                return True
+            m = _VERSION_PATTERN.match(ver)
+            if not m:
+                return True
+            return tuple(map(int, m.groups())) < (1, 6, 35096, 9)
+
+        dev_prop['has_predicated_io'] = tgt_prop.get('has_predicated_io', not is_lts(tgt_prop.get('driver_version')))
         dev_prop['has_subgroup_matrix_multiply_accumulate'] = tgt_prop.get('has_subgroup_matrix_multiply_accumulate',
                                                                            False)
         dev_prop['has_subgroup_scaled_matrix_multiply_accumulate'] = tgt_prop.get(
@@ -228,6 +240,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         module_opts.support_2d_block_io = properties["has_subgroup_2d_block_io"]
         module_opts.support_bfloat16_arithmetic = properties["has_bfloat16_arithmetic"]
         module_opts.support_bfloat16_conversion = properties["has_bfloat16_conversion"]
+        module_opts.support_predicated_io = properties["has_predicated_io"]
         module_opts.support_subgroup_matrix_multiply_accumulate = properties["has_subgroup_matrix_multiply_accumulate"]
         module_opts.support_subgroup_scaled_matrix_multiply_accumulate = properties[
             "has_subgroup_scaled_matrix_multiply_accumulate"]

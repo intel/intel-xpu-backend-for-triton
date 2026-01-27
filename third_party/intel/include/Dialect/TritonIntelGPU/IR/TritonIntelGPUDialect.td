@@ -50,6 +50,12 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.support_bfloat16_conversion";
     }
 
+    /// Get the name of the attribute used to indicate whether predicated io
+    /// is available.
+    static constexpr llvm::StringRef getSupportPredicatedIOAttrName() {
+      return "ttig.support_predicated_io";
+    }
+
     /// Get the name of the attribute used to indicate whether the DPAS
     /// operation is available.
     static constexpr llvm::StringRef getSupportDPASAttrName() {
