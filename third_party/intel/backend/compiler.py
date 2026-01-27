@@ -154,6 +154,15 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         dev_prop['has_subgroup_2d_block_io'] = tgt_prop.get('has_subgroup_2d_block_io', False)
         dev_prop['has_bfloat16_arithmetic'] = tgt_prop.get('has_bfloat16_arithmetic', False)
         dev_prop['has_bfloat16_conversion'] = tgt_prop.get('has_bfloat16_conversion', True)
+
+        def is_lts(ver):
+            m = re.match(r'(\d+)\.(\d+)\.(\d+)\+(\d+)', ver)
+            v0, v1, v2, v3 = m.groups()
+            ver = (int(v0), int(v1), int(v2), int(v3))
+            min_ver = (1, 6, 35096, 9)
+            return ver < min_ver
+
+        dev_prop['has_predicated_io'] = tgt_prop.get('has_predicated_io', not is_lts(tgt_prop.get('driver_version')))
         dev_prop['has_subgroup_matrix_multiply_accumulate'] = tgt_prop.get('has_subgroup_matrix_multiply_accumulate',
                                                                            False)
         dev_prop['has_subgroup_scaled_matrix_multiply_accumulate'] = tgt_prop.get(
@@ -226,6 +235,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         module_opts.support_2d_block_io = properties["has_subgroup_2d_block_io"]
         module_opts.support_bfloat16_arithmetic = properties["has_bfloat16_arithmetic"]
         module_opts.support_bfloat16_conversion = properties["has_bfloat16_conversion"]
+        module_opts.support_predicated_io = properties["has_predicated_io"]
         module_opts.support_subgroup_matrix_multiply_accumulate = properties["has_subgroup_matrix_multiply_accumulate"]
         module_opts.support_subgroup_scaled_matrix_multiply_accumulate = properties[
             "has_subgroup_scaled_matrix_multiply_accumulate"]
