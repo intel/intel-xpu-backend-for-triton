@@ -735,6 +735,38 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     assert(stride == -1 && "invalid stride < 0");
     return nullptr;
   }
+#if 0
+struct BlockIOTileSizeInfo {
+  BlockIOTileSizeInfo() = delete;
+  BlockIOTileSizeInfo(int tileHeight, int tileWidth, int numElemPerPackedVal,
+                      int vBlocks, int rowDim, int colDim, bool transpose,
+                      bool vnni,
+                      std::optional<SetVector<unsigned>> regPackedBases)
+      : tileHeight(tileHeight), tileWidth(tileWidth),
+        numElemPerPackedVal(numElemPerPackedVal), vBlocks(vBlocks),
+        rowDim(rowDim), colDim(colDim), transpose(transpose), vnni(vnni),
+        regPackedBases(regPackedBases) {}
+  static BlockIOTileSizeInfo unknown() {
+    return {-1, -1, -1, -1, -1, -1, false, false, std::nullopt};
+  }
+
+  int tileHeight;
+  int tileWidth;
+  int numElemPerPackedVal;
+  int vBlocks;
+  int rowDim;
+  int colDim;
+  bool transpose;
+  bool vnni;
+  std::optional<SetVector<unsigned>> regPackedBases;
+
+  bool isValid() const {
+    return tileHeight >= 0 && tileWidth >= 0 && numElemPerPackedVal >= 0 &&
+           vBlocks >= 0 && rowDim >= 0 && colDim >= 0;
+  }
+};
+#endif
+
 
   // Recover a runtime pitch when the constant stride is unknown: build
   // pitch = runtime_stride * elemSizeInBytes, like the 2D block load does.
@@ -2109,7 +2141,7 @@ public:
       sizeInfo = BlockIOTileSizeInfo(height, width, /*numElemPerPackedVal=*/1,
                                      /*vBlocks=*/1, /*rowDim=*/0,
                                      /*colDim=*/rank - 1, /*transpose=*/false,
-                                     std::move(regPackBases));
+                                     /*vnni=*/false, std::move(regPackBases));
     } else {
       AxisInfo *ptrAxisInfo =
           const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
@@ -2129,6 +2161,7 @@ public:
     int rowDim = sizeInfo.rowDim;
     int colDim = sizeInfo.colDim;
     bool isTransposeRequired = sizeInfo.transpose;
+    bool useVNNIFormat = sizeInfo.vnni;
     std::optional<SetVector<unsigned>> regPackedBases =
         std::move(sizeInfo.regPackedBases);
 
@@ -2214,8 +2247,11 @@ public:
 
     int64_t numElemsPerLoad = mlir::ceil(
         tileHeight * tileWidth * numPackedVals * vBlocks, (int)threadsPerWarp);
-    unsigned numValuesPerLoad = mlir::ceil((int)numElemsPerLoad, numPackedVals);
-    Type packedType = IntegerType::get(ctx, packedElemSizeInBits);
+    unsigned numValuesPerLoad =
+        mlir::ceil((unsigned)numElemsPerLoad,
+                   useVNNIFormat ? (32 / elemSizeInBits) : numPackedVals);
+    Type packedType =
+        useVNNIFormat ? i32_ty : IntegerType::get(ctx, packedElemSizeInBits);
     Type load2DGenXType = LLVM::getVectorType(packedType, numValuesPerLoad);
     Type unpackedType = LLVM::getVectorType(eltTy, numElemsPerLoad);
 
@@ -2239,7 +2275,7 @@ public:
     unpackedType = dpasCfg.unpackedType;
     load2DGenXType = dpasCfg.load2DGenXType;
     packedType = dpasCfg.packedType;
-    bool useVNNIFormat = dpasCfg.useVNNIFormat;
+    useVNNIFormat |= dpasCfg.useVNNIFormat;
     tileHeight = dpasCfg.tileHeight;
     tileWidth = dpasCfg.tileWidth;
     vBlocks = dpasCfg.vBlocks;
@@ -3465,7 +3501,7 @@ struct DescriptorStoreOpToBlockIOConversion
       return failure();
 
     auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
-          isTransposeRequired, regPackedBases] = std::move(sizeInfo);
+          isTransposeRequired, useVNNIFormat, regPackedBases] = std::move(sizeInfo);
     unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
 
     Location loc = op.getLoc();
@@ -3711,7 +3747,7 @@ struct StoreOpToBlockIOConversion
       sizeInfo = BlockIOTileSizeInfo(height, width, /*numElemPerPackedVal=*/1,
                                      /*vBlocks=*/1, /*rowDim=*/0,
                                      /*colDim=*/rank - 1, /*transpose=*/false,
-                                     std::move(regPackBases));
+                                     false, std::move(regPackBases));
       // The reshape path bypasses getBlockIOTileSize (and thus
       // validate2DBlockStoreTile), so apply the HW address payload restriction
       // here; vBlocks and transpose are already fixed (1 / false) above.
@@ -3732,7 +3768,7 @@ struct StoreOpToBlockIOConversion
     }
 
     auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
-          isTransposeRequired, regPackedBases] = std::move(sizeInfo);
+          isTransposeRequired, useVNNIFormat, regPackedBases] = std::move(sizeInfo);
     unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
 
     Location loc = op.getLoc();
@@ -4923,10 +4959,11 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
       SetVector<unsigned> regPackBases;
       for (unsigned i = 1; i < regDimSize; i <<= 1)
         regPackBases.insert(i);
-      sizeInfo = BlockIOTileSizeInfo(height, width, /*numElemPerPackedVal=*/1,
-                                     /*vBlocks=*/1, /*rowDim=*/0,
-                                     /*colDim=*/rank - 1, /*transpose=*/false,
-                                     std::move(regPackBases));
+      sizeInfo =
+          BlockIOTileSizeInfo(height, width, /*numElemPerPackedVal=*/1,
+                              /*vBlocks=*/1, /*rowDim=*/0,
+                              /*colDim=*/rank - 1, false, /*transpose=*/false,
+                              std::move(regPackBases));
     } else {
       sizeInfo =
           getBlockIOTileSize<true>(*llEncoding, contiguousDim, elemSizeInBits,
