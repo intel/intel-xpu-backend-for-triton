@@ -149,7 +149,6 @@ llvm.func @triton_gen.predicated_store(%ptr : !llvm.ptr<1>, %value : i32, %align
   llvm.return
 }
 
-
 // -----
 
 // CHECK: llvm.func spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f16.v8f16.v8i16.v8i32.v2i8.v2i8(vector<8xbf16>, vector<8xi16>, vector<8xi32>, vector<2xi8>, vector<2xi8>, i32, i32) -> vector<8xbf16> attributes {convergent, no_unwind, will_return}

@@ -700,10 +700,16 @@ module attributes {ttg.global_scratch_memory_alignment = 1 : i32, ttg.global_scr
     %12 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<32x64x!tt.ptr<f16>, #mma>
     %13 = tt.addptr %12, %11 : tensor<32x64x!tt.ptr<f16>, #mma>, tensor<32x64xi32, #mma>
     // COM: Transpose 2D block load with f16 type. Pack the loaded vector to the i32 type. Then transpose the loaded i32 vector with bitcast op.
-    // CHECK: %[[LOADED:.*]] = triton_gen.2Dblockload {{.*}},  {{.*}},  {{.*}},  {{.*}},  {{.*}},  {{.*}} {elem_size_in_bits = 32, tile_width = 8, tile_height = 16, v_blocks = 1, transpose = true, vnni_transform = false, cache_control = Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32) -> vector<8xi32>
-    // CHECK: %[[PACKED_I32:.*]] = llvm.shufflevector %[[LOADED]], %[[LOADED]] [0, 1, 2, 3] : vector<8xi32>
+    // CHECK: %[[LOADED:.*]] = triton_gen.2Dblockload {{.*}},  {{.*}},  {{.*}},  {{.*}},  {{.*}},  {{.*}} {elem_size_in_bits = 32, tile_width = 8, tile_height = 32, v_blocks = 1, transpose = true, vnni_transform = false, cache_control = Default}
+    // CHECK: %[[PACKED_I32:.*]] = llvm.shufflevector %[[LOADED]], %[[LOADED]] [0, 2, 4, 6] : vector<16xi32>
     // CHECK: llvm.bitcast %[[PACKED_I32]] : vector<4xi32> to vector<8xf16>
-    // CHECK-COUNT-3: triton_gen.2Dblockload {{.*}},  {{.*}},  {{.*}},  {{.*}},  {{.*}},  {{.*}} {elem_size_in_bits = 32, tile_width = 8, tile_height = 16, v_blocks = 1, transpose = true, vnni_transform = false, cache_control = Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32) -> vector<8xi32>
+    // CHECK: %[[PACKED_I32:.*]] = llvm.shufflevector %[[LOADED]], %[[LOADED]] [1, 3, 5, 7] : vector<16xi32>
+    // CHECK: llvm.bitcast %[[PACKED_I32]] : vector<4xi32> to vector<8xf16>
+    // CHECK: %[[PACKED_I32:.*]] = llvm.shufflevector %[[LOADED]], %[[LOADED]] [8, 10, 12, 14] : vector<16xi32>
+    // CHECK: llvm.bitcast %[[PACKED_I32]] : vector<4xi32> to vector<8xf16>
+    // CHECK: %[[PACKED_I32:.*]] = llvm.shufflevector %[[LOADED]], %[[LOADED]] [9, 11, 13, 15] : vector<16xi32>
+    // CHECK: llvm.bitcast %[[PACKED_I32]] : vector<4xi32> to vector<8xf16>
+    // CHECK-COUNT-1: triton_gen.2Dblockload {{.*}},  {{.*}},  {{.*}},  {{.*}},  {{.*}},  {{.*}} {elem_size_in_bits = 32, tile_width = 8, tile_height = 32, v_blocks = 1, transpose = true, vnni_transform = false, cache_control = Default}
     %14 = tt.load %13 {ttig.block_io = "column_major"} : tensor<32x64x!tt.ptr<f16>, #mma>
     tt.return
   }
@@ -731,14 +737,59 @@ module attributes {ttg.global_scratch_memory_alignment = 1 : i32, ttg.global_scr
     %12 = tt.splat %arg0 : !tt.ptr<i8> -> tensor<128x128x!tt.ptr<i8>, #mma>
     %13 = tt.addptr %12, %11 : tensor<128x128x!tt.ptr<i8>, #mma>, tensor<128x128xi32, #mma>
     // COM: Transpose 2D block load with i8 type. Pack the loaded vector to the i32 type. Then transpose the loaded i32 vector with bitcast op.
-    // CHECK: %[[LOADED:.*]] = triton_gen.2Dblockload {{.*}},  {{.*}},  {{.*}},  {{.*}},  {{.*}},  {{.*}} {elem_size_in_bits = 32, tile_width = 8, tile_height = 16, v_blocks = 1, transpose = true, vnni_transform = false, cache_control = Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32) -> vector<8xi32>
-    // COM: We do the shuffle and then the bitcast. Maybe it is efficient to do bitcast first then shuffle?
-    // CHECK: %[[PACKED_1ST_HALF:.*]] = llvm.shufflevector %[[LOADED]], %[[LOADED]] [0, 1] : vector<8xi32>
-    // CHECK: llvm.bitcast %[[PACKED_1ST_HALF]] : vector<2xi32> to vector<8xi8>
-    // CHECK: %[[PACKED_2ND_HALF:.*]] = llvm.shufflevector %[[LOADED]], %[[LOADED]] [2, 3] : vector<8xi32>
-    // CHECK: llvm.bitcast %[[PACKED_2ND_HALF]] : vector<2xi32> to vector<8xi8>
-    // CHECK-COUNT-7: triton_gen.2Dblockload {{.*}},  {{.*}},  {{.*}},  {{.*}},  {{.*}},  {{.*}} {elem_size_in_bits = 32, tile_width = 8, tile_height = 16, v_blocks = 1, transpose = true, vnni_transform = false, cache_control = Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32) -> vector<8xi32>
+    // CHECK: %[[LOADED:.*]] = triton_gen.2Dblockload {{.*}},  {{.*}},  {{.*}},  {{.*}},  {{.*}},  {{.*}} {elem_size_in_bits = 32, tile_width = 8, tile_height = 32, v_blocks = 1, transpose = true, vnni_transform = false, cache_control = Default}
+    // CHECK: %[[PACKED_I32:.*]] = llvm.shufflevector %[[LOADED]], %[[LOADED]] [0, 2] : vector<16xi32>
+    // CHECK: llvm.bitcast %[[PACKED_I32]] : vector<2xi32> to vector<8xi8>
+    // CHECK: %[[PACKED_I32:.*]] = llvm.shufflevector %[[LOADED]], %[[LOADED]] [1, 3] : vector<16xi32>
+    // CHECK: llvm.bitcast %[[PACKED_I32]] : vector<2xi32> to vector<8xi8>
+    // CHECK: %[[PACKED_I32:.*]] = llvm.shufflevector %[[LOADED]], %[[LOADED]] [4, 6] : vector<16xi32>
+    // CHECK: llvm.bitcast %[[PACKED_I32]] : vector<2xi32> to vector<8xi8>
+    // CHECK: %[[PACKED_I32:.*]] = llvm.shufflevector %[[LOADED]], %[[LOADED]] [5, 7] : vector<16xi32>
+    // CHECK: llvm.bitcast %[[PACKED_I32]] : vector<2xi32> to vector<8xi8>
+    // CHECK: %[[PACKED_I32:.*]] = llvm.shufflevector %[[LOADED]], %[[LOADED]] [8, 10] : vector<16xi32>
+    // CHECK: llvm.bitcast %[[PACKED_I32]] : vector<2xi32> to vector<8xi8>
+    // CHECK: %[[PACKED_I32:.*]] = llvm.shufflevector %[[LOADED]], %[[LOADED]] [9, 11] : vector<16xi32>
+    // CHECK: llvm.bitcast %[[PACKED_I32]] : vector<2xi32> to vector<8xi8>
+    // CHECK: %[[PACKED_I32:.*]] = llvm.shufflevector %[[LOADED]], %[[LOADED]] [12, 14] : vector<16xi32>
+    // CHECK: llvm.bitcast %[[PACKED_I32]] : vector<2xi32> to vector<8xi8>
+    // CHECK: %[[PACKED_I32:.*]] = llvm.shufflevector %[[LOADED]], %[[LOADED]] [13, 15] : vector<16xi32>
+    // CHECK: llvm.bitcast %[[PACKED_I32]] : vector<2xi32> to vector<8xi8>
+    // CHECK-COUNT-3: triton_gen.2Dblockload {{.*}},  {{.*}},  {{.*}},  {{.*}},  {{.*}},  {{.*}} {elem_size_in_bits = 32, tile_width = 8, tile_height = 32, v_blocks = 1, transpose = true, vnni_transform = false, cache_control = Default}
     %14 = tt.load %13 {ttig.block_io = "column_major"} : tensor<128x128x!tt.ptr<i8>, #mma>
+    tt.return
+  }
+}
+
+// -----
+
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4], repCluster = [1, 2]}>
+#dot_a = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>
+module attributes {ttg.global_scratch_memory_alignment = 1 : i32, ttg.global_scratch_memory_size = 0 : i32, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 0 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  tt.func public @trans_block_load_i16(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}) attributes {ttg.global_scratch_memory_alignment = 1 : i32, ttg.global_scratch_memory_size = 0 : i32} {
+    %cst = arith.constant dense<64> : tensor<32x1xi32, #dot_a>
+    %0 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 1, parent = #dot_a}>>
+    %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<32xi32, #ttg.slice<{dim = 1, parent = #dot_a}>> -> tensor<32x1xi32, #dot_a>
+    %3 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #dot_a}>>
+    %4 = tt.expand_dims %3 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #dot_a}>> -> tensor<1x64xi32, #dot_a>
+    %cst_0 = arith.constant dense<32> : tensor<1x64xi32, #dot_a>
+    %8 = arith.muli %4, %cst_0 : tensor<1x64xi32, #dot_a>
+    %9 = tt.broadcast %1 : tensor<32x1xi32, #dot_a> -> tensor<32x64xi32, #dot_a>
+    %10 = tt.broadcast %8 : tensor<1x64xi32, #dot_a> -> tensor<32x64xi32, #dot_a>
+    %11 = arith.addi %9, %10 : tensor<32x64xi32, #dot_a>
+    %12 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<32x64x!tt.ptr<f16>, #dot_a>
+    %13 = tt.addptr %12, %11 : tensor<32x64x!tt.ptr<f16>, #dot_a>, tensor<32x64xi32, #dot_a>
+    // COM: Transpose 2D block load with f16 type. Pack the loaded vector to the i32 type. Then transpose the loaded i32 vector with bitcast op.
+    // CHECK: %[[LOADED:.*]] = triton_gen.2Dblockload {{.*}},  {{.*}},  {{.*}},  {{.*}},  {{.*}},  {{.*}} {elem_size_in_bits = 32, tile_width = 8, tile_height = 32, v_blocks = 1, transpose = true, vnni_transform = false, cache_control = Default}
+    // CHECK: %[[PACKED_I32:.*]] = llvm.shufflevector %[[LOADED]], %[[LOADED]] [0, 2, 4, 6] : vector<16xi32>
+    // CHECK: llvm.bitcast %[[PACKED_I32]] : vector<4xi32> to vector<8xf16>
+    // CHECK: %[[PACKED_I32:.*]] = llvm.shufflevector %[[LOADED]], %[[LOADED]] [1, 3, 5, 7] : vector<16xi32>
+    // CHECK: llvm.bitcast %[[PACKED_I32]] : vector<4xi32> to vector<8xf16>
+    // CHECK: %[[PACKED_I32:.*]] = llvm.shufflevector %[[LOADED]], %[[LOADED]] [8, 10, 12, 14] : vector<16xi32>
+    // CHECK: llvm.bitcast %[[PACKED_I32]] : vector<4xi32> to vector<8xf16>
+    // CHECK: %[[PACKED_I32:.*]] = llvm.shufflevector %[[LOADED]], %[[LOADED]] [9, 11, 13, 15] : vector<16xi32>
+    // CHECK: llvm.bitcast %[[PACKED_I32]] : vector<4xi32> to vector<8xf16>
+    // CHECK-COUNT-3: triton_gen.2Dblockload {{.*}},  {{.*}},  {{.*}},  {{.*}},  {{.*}},  {{.*}} {elem_size_in_bits = 32, tile_width = 8, tile_height = 32, v_blocks = 1, transpose = true, vnni_transform = false, cache_control = Default}
+    %14 = tt.load %13 {ttig.block_io = "column_major"} : tensor<32x64x!tt.ptr<f16>, #dot_a>
     tt.return
   }
 }
