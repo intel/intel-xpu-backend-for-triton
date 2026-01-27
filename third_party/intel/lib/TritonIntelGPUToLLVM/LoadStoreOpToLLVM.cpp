@@ -597,13 +597,14 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     BlockIOTileSizeInfo() = delete;
     BlockIOTileSizeInfo(int tileHeight, int tileWidth, int numElemPerPackedVal,
                         int vBlocks, int rowDim, int colDim, bool transpose,
+                        bool vnni,
                         std::optional<SetVector<unsigned>> regPackedBases)
         : tileHeight(tileHeight), tileWidth(tileWidth),
           numElemPerPackedVal(numElemPerPackedVal), vBlocks(vBlocks),
-          rowDim(rowDim), colDim(colDim), transpose(transpose),
+          rowDim(rowDim), colDim(colDim), transpose(transpose), vnni(vnni),
           regPackedBases(regPackedBases) {}
     static BlockIOTileSizeInfo unknown() {
-      return {-1, -1, -1, -1, -1, -1, false, std::nullopt};
+      return {-1, -1, -1, -1, -1, -1, false, false, std::nullopt};
     }
 
     int tileHeight;
@@ -613,6 +614,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     int rowDim;
     int colDim;
     bool transpose;
+    bool vnni;
     std::optional<SetVector<unsigned>> regPackedBases;
 
     bool isValid() const {
@@ -689,6 +691,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     // transpose, we'd prefer smaller d32 type cause hardware could
     // transpose more to reduce the number of mov operation in register.
     constexpr unsigned MAX_BITS_TRANSPOSE = 32;
+    constexpr unsigned MAX_BITS_VNNI = 32;
     constexpr unsigned MAX_BITS_WIDTH_NORMAL = 64 * 8; // 64 bytes.
     constexpr unsigned MAX_BITS_WIDTH_TRANSPOSE =
         8 * 4 * 8; // 8xd32. (and 4xd64)
@@ -706,42 +709,62 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     unsigned MAX_BITS_WIDTH =
         transpose ? MAX_BITS_WIDTH_TRANSPOSE : MAX_BITS_WIDTH_NORMAL;
 
-    unsigned maxElemPackedVal = mlir::ceil<unsigned>(
-        transpose ? MAX_BITS_TRANSPOSE : MAX_BITS_NORMAL, elemSizeInBits);
     SetVector<unsigned> regPackBases;
-    for (unsigned regBaseIter = 0; regBaseIter < basesOfRegister.size();
-         ++regBaseIter) {
-      if (numElemPerPackedVal >= maxElemPackedVal) {
-        // Reached the maximum number of elements per packed value.
-        break;
+    auto packRegister = [&](unsigned dim, unsigned maxPackNum) {
+      for (unsigned regBaseIter = 0; regBaseIter < basesOfRegister.size();
+           ++regBaseIter) {
+        if (numElemPerPackedVal >= maxPackNum) {
+          // Reached the maximum number of elements per packed value.
+          break;
+        }
+        const std::vector<int> &base = basesOfRegister[regBaseIter];
+        if (!validateBase(base))
+          continue; // Skip as the register can not be trivial packed.
+        int baseDim = getFirstNonZeroDim(base);
+        if (dim == baseDim) {
+          if (tileShape[dim] != base[dim])
+            continue; // Skip the register not in dense tile.
+          // The value can be loaded as packed value.
+          tileShape[dim] <<= 1;
+          numElemPerPackedVal <<= 1;
+          regPackBases.insert(1 << regBaseIter);
+        }
       }
-      const std::vector<int> &base = basesOfRegister[regBaseIter];
-      if (!validateBase(base))
-        continue; // Skip as the register can not be trivial packed.
-      int dim = getFirstNonZeroDim(base);
-      if (memContiguousDim == dim) {
-        if (tileShape[dim] != base[dim])
-          continue; // Skip the register not in dense tile.
-        // The value can be loaded as packed value.
-        tileShape[dim] <<= 1;
-        numElemPerPackedVal <<= 1;
-        regPackBases.insert(1 << regBaseIter);
-      }
-    }
+    };
+
+    packRegister(
+        memContiguousDim,
+        mlir::ceil<unsigned>(transpose ? MAX_BITS_TRANSPOSE : MAX_BITS_NORMAL,
+                             elemSizeInBits));
 
     // For the transpose case, we have to pack the elements to d32.
-    if (transpose && numElemPerPackedVal != maxElemPackedVal)
+    if (transpose &&
+        (numElemPerPackedVal * elemSizeInBits) != MAX_BITS_TRANSPOSE)
       return BlockIOTileSizeInfo::unknown();
 
     // We already get the basic tile shape in packing values.
     // To increase the tile shape along each lane dimension.
+    bool vnni = false;
     for (const std::vector<int> &base : basesOfLane) {
       if (!validateBase(base))
         break; // break if the lane bases are not trivial.
       int dim = getFirstNonZeroDim(base);
       if (tileShape[dim] != base[dim]) {
-        // TODO: Check whether we can add an VNNI pack to make a larger tile.
-        break;
+        if (numElemPerPackedVal == 1) {
+          // There are no register packing. Try to pack here.
+          if (dim != fastChangeDim) {
+            // VNNI pack:
+            packRegister(dim,
+                         mlir::ceil<unsigned>(MAX_BITS_VNNI, elemSizeInBits));
+            if ((numElemPerPackedVal * elemSizeInBits) == MAX_BITS_VNNI)
+              vnni = true;
+          }
+        }
+        if (tileShape[dim] != base[dim]) {
+          // break if we can not increase the tile shape along this dim after
+          // packing.
+          break;
+        }
       }
       tileShape[dim] <<= 1;
     }
@@ -911,10 +934,14 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
       // insert the remaining register base.
       regPackBases.insert(1 << regBaseIter);
     }
+
+    unsigned packedValueNumber =
+    vnni ? 1 : numElemPerPackedVal; // VNNI doesn't really pack elements in
+
     return BlockIOTileSizeInfo(
         tileShape[transpose ? fastChangeDim : rowDim],
-        tileShape[transpose ? rowDim : fastChangeDim] / numElemPerPackedVal,
-        numElemPerPackedVal, vBlocks, rowDim, fastChangeDim, transpose,
+        tileShape[transpose ? rowDim : fastChangeDim] / packedValueNumber,
+        packedValueNumber, vBlocks, rowDim, fastChangeDim, transpose, vnni,
         std::move(regPackBases));
   }
 };
@@ -1411,7 +1438,8 @@ struct LoadOpToBlockIOConversion
     if (!sizeInfo.isValid())
       return failure();
     auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
-          isTransposeRequired, regPackedBases] = std::move(sizeInfo);
+          isTransposeRequired, useVNNIFormat, regPackedBases] =
+        std::move(sizeInfo);
 
     unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
     if (!check2DBlockAddressPayloadRestriction(packedElemSizeInBits, tileWidth))
@@ -1506,8 +1534,11 @@ struct LoadOpToBlockIOConversion
 
     int64_t numElemsPerLoad = mlir::ceil(
         tileHeight * tileWidth * numPackedVals * vBlocks, (int)threadsPerWarp);
-    unsigned numValuesPerLoad = mlir::ceil((int)numElemsPerLoad, numPackedVals);
-    Type packedType = IntegerType::get(ctx, packedElemSizeInBits);
+    unsigned numValuesPerLoad =
+        mlir::ceil((unsigned)numElemsPerLoad,
+                   useVNNIFormat ? (32 / elemSizeInBits) : numPackedVals);
+    Type packedType =
+        useVNNIFormat ? i32_ty : IntegerType::get(ctx, packedElemSizeInBits);
     Type load2DGenXType = LLVM::getVectorType(packedType, numValuesPerLoad);
     Type unpackedType = LLVM::getVectorType(eltTy, numElemsPerLoad);
 
@@ -1520,7 +1551,6 @@ struct LoadOpToBlockIOConversion
 
     SmallVector<Value> strides = getStrides(rewriter, ptr, unpackedPtr);
 
-    bool useVNNIFormat = false;
     Type packedDPASOperandType;
 
     if (hasDpasEncoding(tensorType) || hasDotDpasEncoding(tensorType)) {
@@ -2260,7 +2290,8 @@ struct StoreOpToBlockIOConversion
     if (!sizeInfo.isValid())
       return failure();
     auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
-          isTransposeRequired, regPackedBases] = std::move(sizeInfo);
+          isTransposeRequired, useVNNIFormat, regPackedBases] =
+        std::move(sizeInfo);
 
     unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
     if (!check2DBlockAddressPayloadRestriction(packedElemSizeInBits, tileWidth))
@@ -2269,8 +2300,8 @@ struct StoreOpToBlockIOConversion
     // Limit vBlock to 1
     vBlocks = 1;
 
-    if (isTransposeRequired) {
-      // 2D Block store doesn't support transpose.
+    if (isTransposeRequired || useVNNIFormat) {
+      // 2D Block store doesn't support transpose or vnni.
       return failure();
     }
 
