@@ -81,7 +81,7 @@ env:
   PYTEST_RERUNS: 5
   NUM_SHARDS: 0
   PARALLEL_SUITES: ""
-  SEQUENTIAL_SUITES: "tutorial minicore language mxfp scaled_dot debug gluon triton-kernels interpreter"
+  SEQUENTIAL_SUITES: "tutorial intel language mxfp scaled_dot runtime debug warnings tools regression gluon triton-kernels interpreter"
   TRITON_INTEL_ENABLE_SIMULATOR_WRAPPER: 1
 
 jobs:
@@ -277,7 +277,7 @@ jobs:
 
       - name: Report environment details
         run: |
-          if [ "${{ matrix.loop.suite }}" == "minicore" ]; then
+          if [ "${{ matrix.loop.suite }}" == "intel" ]; then
             reports_file="reports/.env"
           else
             reports_file="/dev/null"
