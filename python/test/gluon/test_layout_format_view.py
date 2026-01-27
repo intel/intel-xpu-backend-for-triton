@@ -202,7 +202,7 @@ def test_format_view_coalesced_layout():
         layout.format_tensor_view([16, 64])
 
 
-def test_format_view_kernel():
+def test_format_view_kernel(device):
 
     @gluon.jit
     def kernel(ptr, BLOCK: ttgl.constexpr, layout: ttgl.constexpr):
@@ -211,5 +211,5 @@ def test_format_view_kernel():
         ttgl.static_print("tensor view:\n", tensor.type.layout.format_tensor_view(tensor.shape))
 
     layout = ttgl.BlockedLayout([2], [THREADS_PER_WARP], [4], [0])
-    x = torch.randn(512, device="cuda")
+    x = torch.randn(512, device=device)
     kernel[(1, )](x, 512, layout)
