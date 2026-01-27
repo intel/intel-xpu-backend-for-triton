@@ -1,9 +1,10 @@
-#include "intel/include/Analysis/DPAS.h"
 #include "../TritonGPUToLLVMBase.h"
 #include "Dialect/TritonIntelGPU/IR/Attributes.h"
+#include "mlir/IR/BuiltinTypes.h"
+
+#include "intel/include/Analysis/DPAS.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
-#include "mlir/IR/BuiltinTypes.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -585,6 +586,7 @@ private:
     Type elemType = tensorTy.getElementType();
     unsigned width = elemType.getIntOrFloatBitWidth();
     assert(width <= 32 && "Unexpected width");
+
     if (isa<FloatType>(resElemType)) {
       if (width == 32)
         return TritonGEN::PrecisionType::TF32;

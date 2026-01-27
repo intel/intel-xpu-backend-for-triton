@@ -137,8 +137,6 @@ static LogicalResult verify2DBlockHWRestriction(OpTy op) {
         "expecting elem_size_in_bits * tile_width * v_blocks <= " +
         std::to_string(maxBitsPerOpPerRow));
 
-  assert(tileWidth >= 1 && tileWidth <= 256 &&
-         "tile_width should be between 1 and 256");
   unsigned maxTileWidth = maxBitsPerOpPerRow / elemSizeInBits;
   unsigned minTileWidth = 1;
   switch (elemSizeInBits) {

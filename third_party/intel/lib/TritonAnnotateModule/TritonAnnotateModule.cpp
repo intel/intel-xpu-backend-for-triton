@@ -48,11 +48,6 @@ struct TritonAnnotateModule
           ttgi::TritonIntelGPUDialect::getSupportBFloat16ConversionAttrName(),
           builder.getUnitAttr());
 
-    if (supportF8Conversion)
-      mod->setAttr(
-          ttgi::TritonIntelGPUDialect::getSupportF8ConversionAttrName(),
-          builder.getUnitAttr());
-
     if (supportF4Conversion)
       mod->setAttr(
           ttgi::TritonIntelGPUDialect::getSupportF4ConversionAttrName(),

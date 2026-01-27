@@ -17,7 +17,6 @@
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Casting.h"
 #include <optional>
-#include <variant>
 
 using namespace mlir;
 namespace tt = mlir::triton;
@@ -399,6 +398,7 @@ private:
     return {};
   }
 };
+
 } // namespace
 
 static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,

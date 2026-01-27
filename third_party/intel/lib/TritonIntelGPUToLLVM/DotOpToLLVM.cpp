@@ -26,6 +26,7 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
     Value A = op.getA();
     Value D = op.getResult();
 
+    // Here we assume the DotOp's operands always comes from shared memory.
     auto AShapePerCTA = getShapePerCTA(A.getType());
     size_t reduceAxis = 1;
     unsigned K = AShapePerCTA[reduceAxis];
