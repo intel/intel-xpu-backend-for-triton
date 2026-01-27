@@ -1,0 +1,13 @@
+diff --git a/lib/SPIRV/PassPlugin.cpp b/lib/SPIRV/PassPlugin.cpp
+index 03fa8d11..df9758ce 100644
+--- a/lib/SPIRV/PassPlugin.cpp
++++ b/lib/SPIRV/PassPlugin.cpp
+@@ -49,7 +49,7 @@
+ #include "SPIRVWriter.h"
+ 
+ #include "llvm/Passes/PassBuilder.h"
+-#include "llvm/Plugins/PassPlugin.h"
++#include "llvm/Passes/PassPlugin.h"
+ 
+ using namespace llvm;
+ 

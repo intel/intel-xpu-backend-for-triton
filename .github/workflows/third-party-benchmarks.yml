@@ -74,7 +74,7 @@ jobs:
       - name: Install benchmark dependencies
         id: install
         run: |
-          pip install transformers pandas pytest
+          pip install transformers 'pandas<3.0' pytest
 
       - name: Install benchmarks
         id: install-benchmarks

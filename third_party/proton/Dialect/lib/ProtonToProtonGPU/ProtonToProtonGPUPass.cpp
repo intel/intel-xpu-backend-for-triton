@@ -61,7 +61,8 @@ void instrumentWarpSpecializeOps(FuncOp func, Value buffer, Value profileMem) {
   for (auto wsOp : func.getOps<triton::gpu::WarpSpecializeOp>()) {
     auto loc = wsOp.getLoc();
     if (hasOperator<Operation, proton::RecordOp>(wsOp.getOperation())) {
-      wsOp->insertOperands(wsOp->getNumOperands(), {buffer, profileMem});
+      auto partOp = wsOp.getPartitionOp();
+      partOp->insertOperands(partOp->getNumOperands(), {buffer, profileMem});
       for (Region *region : wsOp.getPartitionRegions()) {
         region->addArgument(buffer.getType(), loc);
         region->addArgument(profileMem.getType(), loc);
@@ -277,9 +278,9 @@ public:
            llvm::Twine(allocProfileScratchSize) + " bytes.");
     }
 
-    Value profileMem = gpu::GlobalScratchAllocOp::create(
+    Value profileMem = triton::gpu::GlobalScratchAllocOp::create(
         builder, loc, triton::getPointerType(builder.getI32Type()),
-        allocProfileScratchSize, profileScratchAlignment);
+        allocProfileScratchSize, profileScratchAlignment, "proton");
     gpu::InitializeOp::create(builder, loc, profileMem);
 
     Value segment;
@@ -333,7 +334,11 @@ public:
 
     func.walk([&](triton::ReturnOp ret) {
       builder.setInsertionPoint(ret);
-      mlir::gpu::BarrierOp::create(builder, loc);
+      mlir::triton::gpu::BarrierOp::create(
+          builder, loc,
+          triton::gpu::AddrSpace::Local | triton::gpu::AddrSpace::GlobalRead |
+              triton::gpu::AddrSpace::GlobalWrite);
+
       gpu::FinalizeOp::create(builder, loc, segment, profileMem);
     });
 

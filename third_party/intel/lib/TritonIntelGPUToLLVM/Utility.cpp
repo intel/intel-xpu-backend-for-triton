@@ -188,6 +188,47 @@ bool hasModuleAttr(Operation *op, StringRef attrName) {
   return mod && mod->hasAttr(attrName);
 }
 
+SmallVector<Value>
+vectorize(std::function<Value(TritonLLVMIRRewriter &, Value)> func,
+          Location loc, ConversionPatternRewriter &rewriter,
+          const SmallVector<Value> &values, size_t maxVecSize) {
+  assert(llvm::isPowerOf2_64(maxVecSize) && "maxVecSize must be power of 2");
+  size_t size = values.size();
+  TritonLLVMIRRewriter b(loc, rewriter);
+  SmallVector<Value> result;
+  result.reserve(size);
+
+  for (size_t i = 0; i < size;) {
+    size_t vecSize = std::min(maxVecSize, size - i);
+    vecSize = (vecSize > 1) ? 1ULL << llvm::Log2_64(vecSize) : 1;
+    Value res;
+
+    if (vecSize == 1) {
+      res = func(b, values[i]);
+    } else {
+      auto vecTy = vec_ty(values[i].getType(), vecSize);
+      Value vec = b.undef(vecTy);
+      for (size_t j = 0; j < vecSize; ++j)
+        vec = b.insert_element(vecTy, vec, values[i + j], b.i32_val(j));
+      res = func(b, vec);
+    }
+
+    if (!res) // Null value returned
+      return {};
+
+    if (auto vecTy = dyn_cast<mlir::VectorType>(res.getType())) {
+      Type elType = vecTy.getElementType();
+      for (size_t j = 0, n = vecTy.getNumElements(); j < n; ++j)
+        result.push_back(b.extract_element(elType, res, b.i32_val(j)));
+    } else {
+      result.push_back(res);
+    }
+
+    i += vecSize;
+  }
+
+  return result;
+}
 } // namespace mlir::LLVM::intel
 
 namespace mlir::triton::intel {

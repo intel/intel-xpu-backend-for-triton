@@ -996,7 +996,7 @@ def copysign(arg0, arg1, _semantic=None):
 @core.extern
 def finitef(arg0, _semantic=None):
     return core.extern_elementwise("", "", [arg0], {
-        (core.dtype("fp32"), ): ("__imf_finitef", core.dtype("int32")),
+        (core.dtype("fp32"), ): ("__imf_isfinitef", core.dtype("int32")),
     }, is_pure=True, _semantic=_semantic)
 
 
@@ -1554,6 +1554,6 @@ def logb(arg0, _semantic=None):
 def isfinited(arg0, _semantic=None):
     return core.extern_elementwise(
         "", "", [arg0], {
-            (core.dtype("fp32"), ): ("__imf_isfinitef", core.dtype("fp32")),
-            (core.dtype("fp64"), ): ("__imf_isfinite", core.dtype("fp64")),
+            (core.dtype("fp32"), ): ("__imf_isfinitef", core.dtype("int32")),
+            (core.dtype("fp64"), ): ("__imf_isfinite", core.dtype("int32")),
         }, is_pure=True, _semantic=_semantic).to(core.int1, _semantic=_semantic)

@@ -1,11 +1,11 @@
 import pytest
 from triton_kernels.roofline import get_memset_tbps, get_blas_tflops
-from triton_kernels.target_info import cuda_capability_geq, is_cuda, is_xpu
+from triton_kernels.target_info import cuda_capability_geq, is_cuda, is_xpu, is_xpu_cri
 
 
-@pytest.mark.skipif(is_xpu(), reason="FIXME: #5724")
-def test_get_memset_tbps():
-    tbps = get_memset_tbps()
+@pytest.mark.skipif(is_xpu_cri(), reason="FIXME: #936")
+def test_get_memset_tbps(device):
+    tbps = get_memset_tbps(device=device)
     assert tbps > 0
 
 

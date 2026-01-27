@@ -138,8 +138,48 @@ llvm.func @triton_gen.dpas(%c : vector<8xf32>, %a : vector<8xi16>, %b : vector<8
 // -----
 
 llvm.func @triton_gen.dpas(%c : vector<8xf32>, %a : vector<8xi16>, %b : vector<8xi32>) {
-  // expected-error @+1 {{'triton_gen.dpas' op expecting precision type to be tf32, bf16, fp16, u8, or s8}}
+  // expected-error @+1 {{'triton_gen.dpas' op expecting precision type to be tf32, bf16, fp16, bf8, hf8, u8, or s8}}
   %0 = triton_gen.dpas %c, %a, %b {pa=i4, pb=i4, rc=8} : (vector<8xf32>, vector<8xi16>, vector<8xi32>) -> vector<8xf32>
+  llvm.return
+}
+
+// -----
+
+llvm.func @triton_gen.dpas(%c : vector<8xf32>, %a : vector<16xi16>, %b : vector<8xi32>) {
+  // expected-error @+1 {{'triton_gen.dpas' op the dimension for the 2nd operand (A) should match the repeat count}}
+  %0 = triton_gen.dpas %c, %a, %b {pa=bf8, pb=bf8, rc=8} : (vector<8xf32>, vector<16xi16>, vector<8xi32>) -> vector<8xf32>
+  llvm.return
+}
+
+// -----
+
+llvm.func @triton_gen.dpas(%c : vector<8xf32>, %a : vector<8xi16>, %b : vector<16xi32>) {
+  // expected-error @+1 {{'triton_gen.dpas' op the dimension for the 3rd operand (B) should match the systolic depth}}
+  %0 = triton_gen.dpas %c, %a, %b {pa=bf8, pb=bf8, rc=8} : (vector<8xf32>, vector<8xi16>, vector<16xi32>) -> vector<8xf32>
+  llvm.return
+}
+
+// -----
+
+llvm.func @triton_gen.dpas(%c : vector<4xf32>, %a : vector<4xi16>, %b : vector<8xi32>, %sa : i8, %sb : i8) {
+  // expected-error @+1 {{'triton_gen.bdpas' op expecting repeat count to be 8}}
+  %0 = triton_gen.bdpas %c, %a, %b, %sa, %sb {pa=hf8, pb=hf8, rc=4} {operandSegmentSizes = array<i32: 1, 1, 1, 1, 1>} : (vector<4xf32>, vector<4xi16>, vector<8xi32>, i8, i8) -> vector<4xf32>
+  llvm.return
+}
+
+// -----
+
+llvm.func @triton_gen.dpas(%c : vector<8xf32>, %a : vector<8xi16>, %b : vector<8xi32>, %sa : vector<2xi8>, %sb : vector<2xi8>) {
+  // expected-error @+1 {{'triton_gen.bdpas' op 4th operand (Scale A) should be i8 when precision is bf16, fp16, bf8, or hf8}}
+  %0 = triton_gen.bdpas %c, %a, %b, %sa, %sb {pa=hf8, pb=hf8, rc=8} {operandSegmentSizes = array<i32: 1, 1, 1, 1, 1>} : (vector<8xf32>, vector<8xi16>, vector<8xi32>, vector<2xi8>, vector<2xi8>) -> vector<8xf32>
+  llvm.return
+}
+
+// -----
+
+llvm.func @triton_gen.dpas(%c : vector<8xf32>, %a : vector<8xi16>, %b : vector<8xi32>, %sa : vector<2xi8>, %sb : i8) {
+  // expected-error @+1 {{'triton_gen.bdpas' op 5th operand (Scale B) should be 2xi8 when precision is e2m1}}
+  %0 = triton_gen.bdpas %c, %a, %b, %sa, %sb {pa=e2m1, pb=e2m1, rc=8} {operandSegmentSizes = array<i32: 1, 1, 1, 1, 1>} : (vector<8xf32>, vector<8xi16>, vector<8xi32>, vector<2xi8>, i8) -> vector<8xf32>
   llvm.return
 }
 
@@ -174,7 +214,7 @@ llvm.func @matrix_2Dblockload(%ptr : !llvm.ptr, %base_width : i32, %base_height 
 // -----
 
 llvm.func @matrix_2Dblockload(%ptr : !llvm.ptr, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
-  // expected-error @+1 {{'triton_gen.2Dblockload' op expecting elem_size_in_bits * tile_width * v_blocks <= 1024}}
+  // expected-error @+1 {{'triton_gen.2Dblockload' op expecting elem_size_in_bits * tile_width * v_blocks <= 512}}
   %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=16, tile_width=32, tile_height=8, v_blocks=4, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32) -> vector<32xi16>
   llvm.return
 }
@@ -501,7 +541,7 @@ llvm.func @matrix_2Dblockprefetch(%ptr : !llvm.ptr, %base_width : i32, %base_hei
 // -----
 
 llvm.func @matrix_2Dblockprefetch(%ptr : !llvm.ptr, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
-  // expected-error @+1 {{'triton_gen.2Dblockprefetch' op expecting elem_size_in_bits * tile_width * v_blocks <= 1024}}
+  // expected-error @+1 {{'triton_gen.2Dblockprefetch' op expecting elem_size_in_bits * tile_width * v_blocks <= 512}}
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=64, tile_width=32, tile_height=8, v_blocks=1, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32)
   llvm.return
 }

@@ -457,7 +457,7 @@ class _attention(torch.autograd.Function):
             N_CTX=q.shape[2],  #
             BLOCK_DMODEL=Lk,  #
             STAGE=stage,  #
-            split_barriers_scope='None',  # possible scope value: 'Subgroup','Workgroup'
+            use_barrier=False,  #
         )
 
         ctx.save_for_backward(q, k, v, o, M)
@@ -533,7 +533,8 @@ def get_benchmark(
 
     supported_providers = {
         'triton': 'Triton',
-        'xetla': 'XeTLA',
+        # FIXME: #5896
+        #'xetla': 'XeTLA',
         'cutlass': 'CUTLASS',
     }
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
