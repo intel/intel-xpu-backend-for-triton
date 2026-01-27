@@ -14,6 +14,9 @@ TEST:
     --minicore        part of core
     --mxfp            part of core
     --scaled-dot      part of core
+    --runtime         part of core
+    --intel           part of core
+    --regression      part of core
     --gluon
     --interpreter
     --benchmarks
@@ -63,6 +66,9 @@ TEST_LANGUAGE=false
 TEST_MXFP=false
 TEST_SCALED_DOT=false
 TEST_DEBUG=false
+TEST_RUNTIME=false
+TEST_INTEL=false
+TEST_REGRESSION=false
 TEST_GLUON=false
 TEST_INTERPRETER=false
 TEST_TUTORIAL=false
@@ -127,6 +133,21 @@ while (( $# != 0 )); do
       ;;
     --debug)
       TEST_DEBUG=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --runtime)
+      TEST_RUNTIME=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --intel)
+      TEST_INTEL=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --regression)
+      TEST_REGRESSION=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -800,28 +821,33 @@ test_triton() {
   if [ "$TEST_UNIT" = true ]; then
     run_unit_tests
   fi
-
-  # core suite consists of minicore, mxfp, scaled_dot
   if [ "$TEST_CORE" = true ]; then
     run_core_tests
-  else
-    if [ "$TEST_MINICORE" = true ]; then
-        run_minicore_tests
-    fi
-    if [ "$TEST_LANGUAGE" = true ]; then
-        run_language_tests
-    fi
-    if [ "$TEST_MXFP" = true ]; then
-        run_mxfp_tests
-    fi
-    if [ "$TEST_SCALED_DOT" = true ]; then
-        run_scaled_dot_tests
-    fi
-    if [ "$TEST_DEBUG" = true ]; then
-        run_debug_tests
-    fi
   fi
-
+  if [ "$TEST_MINICORE" = true ]; then
+    run_minicore_tests
+  fi
+  if [ "$TEST_LANGUAGE" = true ]; then
+    run_language_tests
+  fi
+  if [ "$TEST_MXFP" = true ]; then
+    run_mxfp_tests
+  fi
+  if [ "$TEST_SCALED_DOT" = true ]; then
+    run_scaled_dot_tests
+  fi
+  if [ "$TEST_DEBUG" = true ]; then
+    run_debug_tests
+  fi
+  if [ "$TEST_RUNTIME" = true ]; then
+    run_runtime_tests
+  fi
+  if [ "$TEST_INTEL" = true ]; then
+    run_intel_tests
+  fi
+  if [ "$TEST_REGRESSION" = true ]; then
+    run_regression_tests
+  fi
   if [ "$TEST_GLUON" == true ]; then
     run_gluon_tests
   fi
