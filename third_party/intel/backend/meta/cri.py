@@ -136,13 +136,17 @@ def on_signal(signum, _):
     os._exit(signum)
 
 
-if (os.getenv("TRITON_INTEL_FORCE_DISABLE_WRAPPERS", "").lower() not in ("true", "1", "yes", "on")
-        and Simulator.can_start()):
+USE_WRAPPERS = os.getenv("TRITON_INTEL_FORCE_DISABLE_WRAPPERS", "").lower() not in ("true", "1", "yes", "on")
+
+if USE_WRAPPERS:
     from . import torch_wrappers as wrappers
 
+if (os.getenv("TRITON_INTEL_ENABLE_SIMULATOR_WRAPPER", "False").lower() in ("true", "1", "yes", "on")
+        and Simulator.can_start()):
     sim_pid = Simulator.start()
     TimeoutWatchdog.start([sim_pid])
 
+if USE_WRAPPERS:
     atexit.register(on_exit)
     signal.signal(signal.SIGINT, on_signal)
     signal.signal(signal.SIGTERM, on_signal)
@@ -150,7 +154,7 @@ if (os.getenv("TRITON_INTEL_FORCE_DISABLE_WRAPPERS", "").lower() not in ("true",
 
     wrappers.wrap_launch = timed(wrappers.wrap_launch)
     torch.xpu.synchronize = timed(torch.xpu.synchronize)
-    torch.xpu.device_count = timed(torch.xpu.device_count, 10)
+    torch.xpu.device_count = timed(torch.xpu.device_count, 120)
 
     try:
         import pytest

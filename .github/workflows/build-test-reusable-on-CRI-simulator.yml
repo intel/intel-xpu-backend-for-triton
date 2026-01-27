@@ -82,8 +82,7 @@ env:
   NUM_SHARDS: 0
   PARALLEL_SUITES: ""
   SEQUENTIAL_SUITES: "tutorial minicore language mxfp scaled_dot debug gluon triton-kernels interpreter"
-  http_proxy: http://fmproxyslb.ice.intel.com:911
-  https_proxy: http://fmproxyslb.ice.intel.com:911
+  TRITON_INTEL_ENABLE_SIMULATOR_WRAPPER: 1
 
 jobs:
   build:
