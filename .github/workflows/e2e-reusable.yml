@@ -57,10 +57,7 @@ env:
 jobs:
   run_tests:
     name: Test ${{ inputs.suite }} ${{ inputs.dtype }} ${{ inputs.mode }} ${{ inputs.test_mode }}
-    runs-on:
-      - linux
-      - rolling
-      - ${{ inputs.runner_label || 'max1550' }}
+    runs-on: ${{ fromJSON((inputs.runner_label == '' || startsWith(inputs.runner_label, 'max')) && format('["linux", "rolling", "{0}"]', inputs.runner_label || 'max1550') || format('["linux", "{0}"]', inputs.runner_label)) }}
     timeout-minutes: 720
     defaults:
       run:
@@ -140,7 +137,7 @@ jobs:
 
       - name: Install python test dependencies
         run: |
-          pip install pyyaml pandas scipy psutil
+          pip install pyyaml 'pandas<3.0' scipy psutil
 
       - name: Install transformers package
         if: ${{ inputs.suite == 'huggingface' }}

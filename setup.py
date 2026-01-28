@@ -895,7 +895,7 @@ setup(
         ],
         "tutorials": [
             "matplotlib",
-            "pandas",
+            "pandas<3.0",
             "tabulate",
         ],
     },
