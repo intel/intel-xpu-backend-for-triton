@@ -76,6 +76,11 @@ struct TritonAnnotateModule
           ttgi::TritonIntelGPUDialect::getSupportBFloat16ArithmeticAttrName(),
           builder.getUnitAttr());
 
+    if (supportPredicatedIO)
+      mod->setAttr(
+          ttgi::TritonIntelGPUDialect::getSupportPredicatedIOAttrName(),
+          builder.getUnitAttr());
+
     setThreadsPerWarp(mod);
   }
 
