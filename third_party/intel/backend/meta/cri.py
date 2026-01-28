@@ -32,6 +32,7 @@ class XPUBackendMeta(type(BaseBackend)):
             dev_prop['has_f8_conversion'] = True
             dev_prop['has_256b_prefetch'] = True
             dev_prop['has_bfloat16_arithmetic'] = True
+            dev_prop['has_predicated_io'] = True
             dev_prop['has_subgroup_matrix_multiply_accumulate_bfloat8'] = True
             return dev_prop
 
