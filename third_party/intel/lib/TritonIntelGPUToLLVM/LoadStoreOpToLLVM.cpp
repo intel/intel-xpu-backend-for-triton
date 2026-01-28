@@ -1381,8 +1381,17 @@ struct LoadOpToBlockIOConversion
         oneMatrixPerLoadForBT.has_value() ? *oneMatrixPerLoadForBT : false);
     if (!sizeInfo.isValid())
       return failure();
-    auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
-          isTransposeRequired, regPackedBases] = std::move(sizeInfo);
+    // Extract members to regular variables for C++17 compatibility
+    // (capturing structured bindings in lambdas requires C++20)
+    int tileHeight = sizeInfo.tileHeight;
+    int tileWidth = sizeInfo.tileWidth;
+    int numPackedVals = sizeInfo.numElemPerPackedVal;
+    int vBlocks = sizeInfo.vBlocks;
+    int rowDim = sizeInfo.rowDim;
+    int colDim = sizeInfo.colDim;
+    bool isTransposeRequired = sizeInfo.transpose;
+    std::optional<SetVector<unsigned>> regPackedBases =
+        std::move(sizeInfo.regPackedBases);
 
     unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
     if (!check2DBlockAddressPayloadRestriction(packedElemSizeInBits, tileWidth))
