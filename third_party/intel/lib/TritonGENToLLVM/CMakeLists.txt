@@ -4,6 +4,8 @@ add_triton_library(TritonGENToLLVM
 
   DEPENDS
   TritonGENToLLVMConversionPassIncGen
+  TritonGENTableGen
+  TritonGENAttrDefsIncGen
 
   LINK_LIBS PUBLIC
   MLIRLLVMDialect
