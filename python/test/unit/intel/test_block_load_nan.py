@@ -16,12 +16,7 @@ from triton._internal_testing import is_xpu
                    reason="Block loads not supported on this architecture", run=False)
 def test_block_load_dpas_layout(M, N, dtype_str, transpose, device, tmp_path: pathlib.Path):
     # modify the layouts to ensure the correct OCL/SPIRV intrinsic is called for each datatype
-    if dtype_str == "int8":
-        A_width = 2
-        B_width = 4
-        layouts = "#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 4, threadsPerWarp = 16, warpsPerCTA = [1, 4], repCluster = [1, 2]}>"
-        num_warps = 4
-    elif dtype_str == "float32":
+    if dtype_str == "float32":
         A_width = 1
         B_width = 1
         layouts = "#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [8, 4], repCluster = [4, 2]}>"
@@ -124,8 +119,6 @@ def test_block_load_dpas_layout(M, N, dtype_str, transpose, device, tmp_path: pa
     kernel[(1, 1, 1)](a, x, b, y)
 
     torch.set_printoptions(profile="full", precision=2, sci_mode=0, linewidth=200)
-    print(y_ref.T if transpose else y_ref)
-    print(y.T if transpose else y)
 
     assert torch.allclose(x_ref, x, equal_nan=True) and torch.allclose(y_ref.T if transpose else y_ref,
                                                                        y.T if transpose else y, equal_nan=True)
