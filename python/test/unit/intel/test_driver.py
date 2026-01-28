@@ -1,15 +1,17 @@
 import re
 
+import pytest
 import torch
 import triton
 import triton.language as tl
 
 import pathlib
-import pytest
 
 from triton.runtime.driver import driver
+from triton._internal_testing import is_xpu_cri
 
 
+@pytest.mark.xfail(is_xpu_cri(), reason="unable to get spill_size")
 def test_auto_grf(device, monkeypatch, capfd):
     monkeypatch.setenv("TRITON_DEBUG", "1")
     BLOCK = 1024 * 8
