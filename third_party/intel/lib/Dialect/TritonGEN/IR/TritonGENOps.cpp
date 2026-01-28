@@ -7,16 +7,18 @@
 //===----------------------------------------------------------------------===//
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "mlir/Dialect/SPIRV/IR/TargetAndABI.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
 #include <cstdint>
-
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include <type_traits>
 
 using namespace mlir;
-using namespace mlir::triton;
+
+namespace tt = mlir::triton;
+namespace ttgi = mlir::triton::gpu::intel;
 
 //===----------------------------------------------------------------------===//
 // Utility functions
@@ -24,13 +26,11 @@ using namespace mlir::triton;
 
 #define CEIL(A, B) (((A) + (B) - 1) / (B))
 
-template <typename Op>
-static LogicalResult verify2DBlockAddressPayloadRestriction(Op op) {
-  static_assert(llvm::is_one_of<Op, TritonGEN::Matrix2DBlockLoadOp,
-                                TritonGEN::Matrix2DBlockStoreOp,
-                                TritonGEN::Matrix2DBlockPrefetchOp>::value,
-                "Unexpected template parameter");
-
+template <typename OpTy, typename = std::enable_if_t<llvm::is_one_of<
+                             OpTy, tt::TritonGEN::Matrix2DBlockLoadOp,
+                             tt::TritonGEN::Matrix2DBlockStoreOp,
+                             tt::TritonGEN::Matrix2DBlockPrefetchOp>::value>>
+static LogicalResult verify2DBlockAddressPayloadRestriction(OpTy op) {
   unsigned elemSize = op.getElemSizeInBits() / 8;
   std::optional<int64_t> width = getConstantIntValue(op.getBaseWidth());
   if (width) {
@@ -42,10 +42,12 @@ static LogicalResult verify2DBlockAddressPayloadRestriction(Op op) {
       return op->emitOpError(
           "2nd operand (base width) should be aligned to MAX(4, element_size)");
   }
+
   std::optional<int64_t> height = getConstantIntValue(op.getBaseHeight());
   if (height)
     if (*height > (1 << 24))
       return op->emitOpError("3rd operand (base height) should be <= 24 bits");
+
   std::optional<int64_t> pitch = getConstantIntValue(op.getBasePitch());
   if (pitch) {
     if (*pitch > (1 << 24))
@@ -56,9 +58,11 @@ static LogicalResult verify2DBlockAddressPayloadRestriction(Op op) {
       return op->emitOpError(
           "4th operand (base pitch) should be a multiple of 16 bytes");
   }
+
   if (pitch && width && *pitch < *width)
     return op->emitOpError(
         "4th operand (base pitch) should be >= 2nd operand (base width)");
+
   std::optional<int64_t> x = getConstantIntValue(op.getX());
   if (x) {
     if (elemSize == 1 && (*x % 4 != 0))
@@ -69,16 +73,25 @@ static LogicalResult verify2DBlockAddressPayloadRestriction(Op op) {
           "5th operand (x) should be a multiple of 2 for 16 bit elements");
   }
 
-  uint32_t tileWidth = op.getTileWidth();
-  uint32_t tileHeight = op.getTileHeight();
-  uint32_t vBlocks = op.getVBlocks();
-  auto isPowerOfTwo = [](uint32_t x) { return x && !(x & (x - 1)); };
+  unsigned tileWidth = op.getTileWidth();
+  unsigned tileHeight = op.getTileHeight();
+  unsigned vBlocks = op.getVBlocks();
+  auto isPowerOfTwo = [](unsigned x) { return x && !(x & (x - 1)); };
   if (!isPowerOfTwo(tileWidth) || !isPowerOfTwo(tileHeight) ||
       !isPowerOfTwo(vBlocks))
     return op->emitOpError("expecting tile shape to be power of two");
 
-  if (tileWidth > 64)
-    return op->emitOpError("expecting tile_width to be between 1 and 64");
+  auto m = op->template getParentOfType<mlir::ModuleOp>();
+  bool isPrefetch256BSupported =
+      m->hasAttr(ttgi::TritonIntelGPUDialect::getSupportPrefetch256BAttrName());
+  unsigned maxTileWidth =
+      (std::is_same_v<OpTy, tt::TritonGEN::Matrix2DBlockPrefetchOp> &&
+       isPrefetch256BSupported)
+          ? 256
+          : 64;
+  if (tileWidth > maxTileWidth)
+    return op->emitOpError("expecting tile_width to be between 1 and " +
+                           std::to_string(maxTileWidth));
   if (tileHeight > 32)
     return op->emitOpError("expecting tile_height to be between 1 and 32");
   if (vBlocks > 4)
@@ -87,12 +100,11 @@ static LogicalResult verify2DBlockAddressPayloadRestriction(Op op) {
   return success();
 }
 
-template <typename Op> static LogicalResult verify2DBlockHWRestriction(Op op) {
-  static_assert(llvm::is_one_of<Op, TritonGEN::Matrix2DBlockLoadOp,
-                                TritonGEN::Matrix2DBlockStoreOp,
-                                TritonGEN::Matrix2DBlockPrefetchOp>::value,
-                "Unexpected template parameter");
-
+template <typename OpTy, typename = std::enable_if_t<llvm::is_one_of<
+                             OpTy, tt::TritonGEN::Matrix2DBlockLoadOp,
+                             tt::TritonGEN::Matrix2DBlockStoreOp,
+                             tt::TritonGEN::Matrix2DBlockPrefetchOp>::value>>
+static LogicalResult verify2DBlockHWRestriction(OpTy op) {
   if (verify2DBlockAddressPayloadRestriction(op).failed())
     return failure();
 
@@ -102,51 +114,73 @@ template <typename Op> static LogicalResult verify2DBlockHWRestriction(Op op) {
     return op->emitOpError(
         "expecting 'elem_size_in_bits' to be 8, 16, 32, or 64");
 
-  uint32_t tileWidth = op.getTileWidth();
-  uint32_t vBlocks = op.getVBlocks();
-  if (elemSizeInBits * tileWidth * vBlocks > 1024)
-    return op->emitOpError(
-        "expecting elem_size_in_bits * tile_width * v_blocks <= 1024");
+  unsigned tileWidth = op.getTileWidth();
+  unsigned vBlocks = op.getVBlocks();
 
-  assert(tileWidth >= 1 && tileWidth <= 64 &&
-         "tile_width should be between 1 and 64");
+  assert(tileWidth >= 1 && tileWidth <= 256 &&
+         "tile_width should be between 1 and 256");
+
+  // The maximum bytes per operation per row supported by hardware:
+  //  - load/store: 64 bytes.
+  //  - prefetch: 64-256 bytes (depending on module attribute).
+  auto m = op->template getParentOfType<mlir::ModuleOp>();
+  bool isPrefetch256BSupported =
+      m->hasAttr(ttgi::TritonIntelGPUDialect::getSupportPrefetch256BAttrName());
+  unsigned maxBitsPerOpPerRow =
+      (std::is_same_v<OpTy, tt::TritonGEN::Matrix2DBlockPrefetchOp> &&
+       isPrefetch256BSupported)
+          ? (256 * 8)
+          : (64 * 8);
+
+  if (elemSizeInBits * tileWidth * vBlocks > maxBitsPerOpPerRow)
+    return op->emitOpError(
+        "expecting elem_size_in_bits * tile_width * v_blocks <= " +
+        std::to_string(maxBitsPerOpPerRow));
+
+  unsigned maxTileWidth = maxBitsPerOpPerRow / elemSizeInBits;
+  unsigned minTileWidth = 1;
   switch (elemSizeInBits) {
   case 8:
-    if (tileWidth < 4)
-      return op->emitOpError("expecting tile_width to be between 4 and 64");
+    minTileWidth = 4;
     break;
   case 16:
-    if (tileWidth < 2 || tileWidth > 32)
-      return op->emitOpError("expecting tile_width to be between 2 and 32");
+    minTileWidth = 2;
     break;
   case 32:
-    if (tileWidth > 16)
-      return op->emitOpError("expecting tile_width to be between 1 and 16");
-    if (vBlocks == 4)
-      return op->emitOpError("v_blocks for 32 bit elements should be 1 or 2");
+    if constexpr (!std::is_same_v<OpTy, tt::TritonGEN::Matrix2DBlockPrefetchOp>)
+      if (vBlocks == 4)
+        return op->emitOpError("v_blocks for 32 bit elements should be 1 or 2");
     break;
   case 64:
-    if (tileWidth > 8)
-      return op->emitOpError("expecting tile_width to be between 1 and 8");
-    if (vBlocks != 1)
-      return op->emitOpError("v_blocks for 64 bit elements should be 1");
+    if constexpr (!std::is_same_v<OpTy, tt::TritonGEN::Matrix2DBlockPrefetchOp>)
+      if (vBlocks != 1)
+        return op->emitOpError("v_blocks for 64 bit elements should be 1");
     break;
   default:
     llvm_unreachable("unexpected element size");
   }
 
+  if (!(tileWidth >= minTileWidth && tileWidth <= maxTileWidth))
+    return op->emitOpError("expecting tile_width to be between " +
+                           std::to_string(minTileWidth) + " and " +
+                           std::to_string(maxTileWidth));
+
   return success();
 }
-template <typename Op> static LogicalResult verifyDPASCommonRestriction(Op op) {
+
+template <typename OpTy, typename = std::enable_if<llvm::is_one_of<
+                             OpTy, tt::TritonGEN::MatrixDPASOp,
+                             tt::TritonGEN::MatrixBlockScaleDPASOp>::value>>
+static LogicalResult verifyDPASCommonRestriction(OpTy op) {
   if (op.getRc() != 1 && op.getRc() != 2 && op.getRc() != 4 && op.getRc() != 8)
     return op->emitOpError("expecting repeat count to be 1, 2, 4, or 8");
 
-  TritonGEN::PrecisionType precision = op.getPa();
-  TritonGEN::PrecisionType bPrecision = op.getPb();
-  bool isBothFP8 = (precision == TritonGEN::PrecisionType::F8E5M2 ||
-                    precision == TritonGEN::PrecisionType::F8E4M3FN) &&
-                   (op.getPb() == TritonGEN::PrecisionType::F8E5M2 ||
-                    op.getPb() == TritonGEN::PrecisionType::F8E4M3FN);
+  tt::TritonGEN::PrecisionType precision = op.getPa();
+  tt::TritonGEN::PrecisionType bPrecision = op.getPb();
+  bool isBothFP8 = (precision == tt::TritonGEN::PrecisionType::F8E5M2 ||
+                    precision == tt::TritonGEN::PrecisionType::F8E4M3FN) &&
+                   (op.getPb() == tt::TritonGEN::PrecisionType::F8E5M2 ||
+                    op.getPb() == tt::TritonGEN::PrecisionType::F8E4M3FN);
   if (!isBothFP8 && op.getPa() != op.getPb())
     return op->emitOpError(
         "expecting precision of matrix A and B to be the same");
@@ -176,34 +210,34 @@ template <typename Op> static LogicalResult verifyDPASCommonRestriction(Op op) {
   Type CElemTy = CTy.getElementType();
 
   switch (precision) {
-  case TritonGEN::PrecisionType::U8:
-  case TritonGEN::PrecisionType::S8:
+  case tt::TritonGEN::PrecisionType::U8:
+  case tt::TritonGEN::PrecisionType::S8:
     if (!CElemTy.isInteger(32))
       return op->emitOpError(
           "the element type for 1st operand (C) and the result should be i32");
     break;
-  case TritonGEN::PrecisionType::FP16:
+  case tt::TritonGEN::PrecisionType::FP16:
     if (!(CElemTy.isF16() || CElemTy.isF32()))
       return op->emitOpError("the element type for 1st operand (C) and the "
                              "result should be f16 or f32");
     break;
-  case TritonGEN::PrecisionType::BF16:
+  case tt::TritonGEN::PrecisionType::BF16:
     if (!(CElemTy.isBF16() || CElemTy.isF32()))
       return op->emitOpError("the element type for 1st operand (C) and the "
                              "result should be bf16 or f32");
     break;
-  case TritonGEN::PrecisionType::TF32:
+  case tt::TritonGEN::PrecisionType::TF32:
     if (!CElemTy.isF32())
       return op->emitOpError(
           "the element type for 1st operand (C) and the result should be f32");
     break;
-  case TritonGEN::PrecisionType::F8E5M2:
-  case TritonGEN::PrecisionType::F8E4M3FN:
+  case tt::TritonGEN::PrecisionType::F8E5M2:
+  case tt::TritonGEN::PrecisionType::F8E4M3FN:
     if (!(CElemTy.isBF16() || CElemTy.isF32()))
       return op->emitOpError("the element type for 1st operand (C) and the "
                              "result should be bf16 or f32");
     break;
-  case TritonGEN::PrecisionType::F4E2M1:
+  case tt::TritonGEN::PrecisionType::F4E2M1:
     if (!(CElemTy.isBF16() || CElemTy.isF32()))
       return op->emitOpError("the element type for 1st operand (C) and the "
                              "result should be bf16 or f32");
@@ -214,7 +248,7 @@ template <typename Op> static LogicalResult verifyDPASCommonRestriction(Op op) {
   }
 
   switch (precision) {
-  case TritonGEN::PrecisionType::TF32:
+  case tt::TritonGEN::PrecisionType::TF32:
     if (ATy.getNumElements() != CEIL(op.getRc(), 2) &&
         ATy.getNumElements() != CEIL(op.getRc(), 4))
       return op->emitOpError("the dimension for the 2nd operand (A) should "
@@ -226,13 +260,13 @@ template <typename Op> static LogicalResult verifyDPASCommonRestriction(Op op) {
       return op->emitOpError("3rd operand (B) element type should be f32 or "
                              "i32 when the precision type is tf32");
     break;
-  case TritonGEN::PrecisionType::BF16:
-  case TritonGEN::PrecisionType::FP16:
-  case TritonGEN::PrecisionType::U8:
-  case TritonGEN::PrecisionType::S8:
-  case TritonGEN::PrecisionType::F8E5M2:
-  case TritonGEN::PrecisionType::F8E4M3FN:
-  case TritonGEN::PrecisionType::F4E2M1:
+  case tt::TritonGEN::PrecisionType::BF16:
+  case tt::TritonGEN::PrecisionType::FP16:
+  case tt::TritonGEN::PrecisionType::U8:
+  case tt::TritonGEN::PrecisionType::S8:
+  case tt::TritonGEN::PrecisionType::F8E5M2:
+  case tt::TritonGEN::PrecisionType::F8E4M3FN:
+  case tt::TritonGEN::PrecisionType::F4E2M1:
     if (ATy.getNumElements() != op.getRc() &&
         ATy.getNumElements() != CEIL(op.getRc(), 2))
       return op->emitOpError("the dimension for the 2nd operand (A) should "
@@ -253,7 +287,8 @@ template <typename Op> static LogicalResult verifyDPASCommonRestriction(Op op) {
 //===----------------------------------------------------------------------===//
 // gen.matrix.dpas
 //===----------------------------------------------------------------------===//
-LogicalResult TritonGEN::MatrixDPASOp::verify() {
+
+LogicalResult tt::TritonGEN::MatrixDPASOp::verify() {
   return verifyDPASCommonRestriction(*this);
 }
 
@@ -261,7 +296,7 @@ LogicalResult TritonGEN::MatrixDPASOp::verify() {
 // gen.matrix.bdpas
 //===----------------------------------------------------------------------===//
 
-LogicalResult TritonGEN::MatrixBlockScaleDPASOp::verify() {
+LogicalResult tt::TritonGEN::MatrixBlockScaleDPASOp::verify() {
   LogicalResult res = verifyDPASCommonRestriction(*this);
   if (res.failed())
     return res;
@@ -313,7 +348,7 @@ LogicalResult TritonGEN::MatrixBlockScaleDPASOp::verify() {
 //===----------------------------------------------------------------------===//
 
 static LogicalResult
-verify2DBlockLoadHWRestriction(TritonGEN::Matrix2DBlockLoadOp op) {
+verify2DBlockLoadHWRestriction(tt::TritonGEN::Matrix2DBlockLoadOp op) {
   VectorType resTy = op.getRes().getType();
   unsigned resElemTySize = resTy.getElementType().getIntOrFloatBitWidth();
   unsigned resSize = resTy.getNumElements() * resElemTySize;
@@ -334,12 +369,12 @@ verify2DBlockLoadHWRestriction(TritonGEN::Matrix2DBlockLoadOp op) {
     assert(!op.getVnniTransform() &&
            "Expecting vnni_transform should be false");
 
-    uint32_t vBlocks = op.getVBlocks();
+    unsigned vBlocks = op.getVBlocks();
     if (vBlocks != 1)
       return op->emitOpError("expecting v_blocks to be 1");
 
-    uint32_t tileHeight = op.getTileHeight();
-    uint32_t tileWidth = op.getTileWidth();
+    unsigned tileHeight = op.getTileHeight();
+    unsigned tileWidth = op.getTileWidth();
     switch (op.getElemSizeInBits()) {
     case 32:
       assert(tileWidth >= 1 &&
@@ -365,7 +400,7 @@ verify2DBlockLoadHWRestriction(TritonGEN::Matrix2DBlockLoadOp op) {
   if (op.getVnniTransform()) {
     assert(!op.getTranspose() && "Expecting transpose should be false");
 
-    uint32_t tileHeight = op.getTileHeight();
+    unsigned tileHeight = op.getTileHeight();
     assert(tileHeight <= 32 &&
            "tile_height should be less than or equal to 32");
     switch (op.getElemSizeInBits()) {
@@ -388,7 +423,7 @@ verify2DBlockLoadHWRestriction(TritonGEN::Matrix2DBlockLoadOp op) {
   return success();
 }
 
-LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
+LogicalResult tt::TritonGEN::Matrix2DBlockLoadOp::verify() {
   if (verify2DBlockHWRestriction(*this).failed())
     return failure();
 
@@ -409,16 +444,16 @@ LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
 // gen.2Dblockstore
 //===----------------------------------------------------------------------===//
 
-LogicalResult TritonGEN::Matrix2DBlockStoreOp::verify() {
+LogicalResult tt::TritonGEN::Matrix2DBlockStoreOp::verify() {
   if (verify2DBlockHWRestriction(*this).failed())
     return failure();
 
-  uint32_t tileHeight = getTileHeight();
+  unsigned tileHeight = getTileHeight();
   assert(tileHeight >= 1 && "tile_height should be greater than or equal to 1");
   if (tileHeight > 8)
     return emitOpError("expecting tile_height to be between 1 and 8");
 
-  uint32_t vBlocks = getVBlocks();
+  unsigned vBlocks = getVBlocks();
   if (vBlocks != 1)
     return emitOpError("expecting v_blocks to be 1");
 
@@ -429,6 +464,23 @@ LogicalResult TritonGEN::Matrix2DBlockStoreOp::verify() {
 // gen.2Dblockprefetch
 //===----------------------------------------------------------------------===//
 
-LogicalResult TritonGEN::Matrix2DBlockPrefetchOp::verify() {
-  return verify2DBlockHWRestriction(*this);
+LogicalResult tt::TritonGEN::Matrix2DBlockPrefetchOp::verify() {
+  if (verify2DBlockHWRestriction(*this).failed())
+    return failure();
+
+  auto m = this->getOperation()->getParentOfType<ModuleOp>();
+  bool isPrefetch256BSupported =
+      m->hasAttr(ttgi::TritonIntelGPUDialect::getSupportPrefetch256BAttrName());
+  unsigned maxBitsPerOpPerRow = isPrefetch256BSupported ? (256 * 8) : (64 * 8);
+
+  unsigned tileWidth = getTileWidth();
+  unsigned vBlocks = getVBlocks();
+  unsigned elemSizeInBits = getElemSizeInBits();
+  unsigned bitsPerRow = elemSizeInBits * tileWidth * vBlocks;
+
+  if (bitsPerRow > maxBitsPerOpPerRow)
+    return emitOpError("expecting bytes per row <= " +
+                       std::to_string(maxBitsPerOpPerRow / 8));
+
+  return success();
 }

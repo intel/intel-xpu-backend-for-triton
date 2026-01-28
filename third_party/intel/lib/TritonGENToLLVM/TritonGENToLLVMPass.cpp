@@ -146,6 +146,11 @@ static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
       op.getTileWidth() == 8 && op.getVBlocks() == 4 && !op.getVnniTransform())
     return false;
 
+  // intel_sub_group_2d_block_read_8b_32r8x4c
+  if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 32 &&
+      op.getTileWidth() == 8 && op.getVBlocks() == 4 && !op.getVnniTransform())
+    return false;
+
   // intel_sub_group_2d_block_read_8b_8r16x1c
   if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 8 &&
       op.getTileWidth() == 16 && op.getVBlocks() == 1 && !op.getVnniTransform())
@@ -203,6 +208,11 @@ static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
 
   // intel_sub_group_2d_block_read_transpose_32b_8r4x1c
   if (op.getElemSizeInBits() == 32 && op.getTileHeight() == 8 &&
+      op.getTileWidth() == 4 && op.getVBlocks() == 1 && op.getTranspose())
+    return false;
+
+  // intel_sub_group_2d_block_read_transpose_32b_32r4x1c
+  if (op.getElemSizeInBits() == 32 && op.getTileHeight() == 32 &&
       op.getTileWidth() == 4 && op.getVBlocks() == 1 && op.getTranspose())
     return false;
 
@@ -283,6 +293,12 @@ static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockPrefetchOp op) {
   // intel_sub_group_2d_block_prefetch_16b_16r8x1c
   if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 16 &&
       op.getTileWidth() == 8 && op.getVBlocks() == 1)
+    return false;
+
+  // TODO: Change the interface to SPV once it is supported. (GSD-12074)
+  unsigned prefetchBytes =
+      (op.getElemSizeInBits() * op.getTileWidth() * op.getVBlocks()) / 8;
+  if (prefetchBytes == 256)
     return false;
 
   return true;

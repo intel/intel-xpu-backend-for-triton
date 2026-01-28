@@ -1,4 +1,5 @@
-// RUN: env TRITON_INTEL_PREDICATED_LOAD=1 TRITON_INTEL_PREDICATED_STORE=1 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm
+// RUN: env TRITON_INTEL_PREDICATED_LOAD=1 TRITON_INTEL_PREDICATED_STORE=1 TRITON_INTEL_ONE_MATRIX_PER_LOAD_BT=0 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm --check-prefixes=CHECK,LARGE-BLOCK-SIZE-TRANS-B
+// RUN: env TRITON_INTEL_PREDICATED_LOAD=1 TRITON_INTEL_PREDICATED_STORE=1 TRITON_INTEL_ONE_MATRIX_PER_LOAD_BT=1 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm --check-prefixes=CHECK,SMALL-BLOCK-SIZE-TRANS-B
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 4], order = [1, 0]}>
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
@@ -219,7 +220,20 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
       %c32_i64 = arith.constant 32 : i64
       %21 = tt.make_tensor_ptr %arg0, [%c64_i64, %c64_i64], [%c1_i64, %col_stride], [%c0_i32, %c0_i32] {order = array<i32: 0, 1>} : <tensor<64x32xf16, #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>>>
       // COM: One DPAS operand B per load instruction.
-      // CHECK-8:    triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 32, tile_width = 8, tile_height = 16, v_blocks = 1, transpose = true, vnni_transform = false, cache_control = Default}
+        // SMALL-BLOCK-SIZE-TRANS-B-COUNT-8:    triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 32, tile_width = 8, tile_height = 16, v_blocks = 1, transpose = true, vnni_transform = false, cache_control = Default}
+      // COM: Two interleaved DPAS operand B per load instruction. Need to shuffle the loaded value to decompose the VNNI format DPAS operand B.
+        // LARGE-BLOCK-SIZE-TRANS-B:    %[[VAL_68:.*]] = triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 32, tile_width = 8, tile_height = 32, v_blocks = 1, transpose = true, vnni_transform = false, cache_control = Default}
+        // LARGE-BLOCK-SIZE-TRANS-B:    %[[VAL_69:.*]] = llvm.shufflevector %[[VAL_68]], %[[VAL_68]] [0, 2, 4, 6, 8, 10, 12, 14] : vector<16xi32>
+        // LARGE-BLOCK-SIZE-TRANS-B:    %[[VAL_71:.*]] = llvm.shufflevector %[[VAL_68]], %[[VAL_68]] [1, 3, 5, 7, 9, 11, 13, 15] : vector<16xi32>
+        // LARGE-BLOCK-SIZE-TRANS-B:    %[[VAL_103:.*]] = triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 32, tile_width = 8, tile_height = 32, v_blocks = 1, transpose = true, vnni_transform = false, cache_control = Default}
+        // LARGE-BLOCK-SIZE-TRANS-B:    %[[VAL_104:.*]] = llvm.shufflevector %[[VAL_103]], %[[VAL_103]] [0, 2, 4, 6, 8, 10, 12, 14] : vector<16xi32>
+        // LARGE-BLOCK-SIZE-TRANS-B:    %[[VAL_106:.*]] = llvm.shufflevector %[[VAL_103]], %[[VAL_103]] [1, 3, 5, 7, 9, 11, 13, 15] : vector<16xi32>
+        // LARGE-BLOCK-SIZE-TRANS-B:    %[[VAL_138:.*]] = triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 32, tile_width = 8, tile_height = 32, v_blocks = 1, transpose = true, vnni_transform = false, cache_control = Default}
+        // LARGE-BLOCK-SIZE-TRANS-B:    %[[VAL_139:.*]] = llvm.shufflevector %[[VAL_138]], %[[VAL_138]] [0, 2, 4, 6, 8, 10, 12, 14] : vector<16xi32>
+        // LARGE-BLOCK-SIZE-TRANS-B:    %[[VAL_141:.*]] = llvm.shufflevector %[[VAL_138]], %[[VAL_138]] [1, 3, 5, 7, 9, 11, 13, 15] : vector<16xi32>
+        // LARGE-BLOCK-SIZE-TRANS-B:    %[[VAL_173:.*]] = triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 32, tile_width = 8, tile_height = 32, v_blocks = 1, transpose = true, vnni_transform = false, cache_control = Default}
+        // LARGE-BLOCK-SIZE-TRANS-B:    %[[VAL_174:.*]] = llvm.shufflevector %[[VAL_173]], %[[VAL_173]] [0, 2, 4, 6, 8, 10, 12, 14] : vector<16xi32>
+        // LARGE-BLOCK-SIZE-TRANS-B:    %[[VAL_176:.*]] = llvm.shufflevector %[[VAL_173]], %[[VAL_173]] [1, 3, 5, 7, 9, 11, 13, 15] : vector<16xi32>
       %45 = tt.load %21 {ttig.block_io = "column_major"} : !tt.ptr<tensor<64x32xf16, #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>>>
       tt.return
   }
@@ -287,7 +301,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 4], order = [1, 0]}>
-module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_predicated_io"} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @boundary_check
   tt.func public @boundary_check(%arg0: !tt.ptr<f16>, %col_stride: i64) {
       %c64_i64 = arith.constant 64 : i64
@@ -327,6 +341,31 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
       // COM: 32 x 4 = 128 bytes, which is >64 bytes
       // CHECK-NOT:    triton_gen.2Dblockload
       %45 = tt.load %21 {ttig.block_io = "row_major"} : !tt.ptr<tensor<64x16xf32, #dot_a>>
+      tt.return
+  }
+}
+
+// -----
+
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 4, threadsPerWarp = 16, warpsPerCTA = [8, 4], repCluster = [4, 4]}>
+#dot_b = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>
+module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL:   llvm.func spir_kernelcc @dot_op_b_2d_load
+  tt.func public @dot_op_b_2d_load(%arg0: !tt.ptr<i8>, %col_stride: i64) {
+      %c64_i64 = arith.constant 64 : i64
+      %c1_i64 = arith.constant 1 : i64
+      %c0_i32 = arith.constant 0 : i32
+      %21 = tt.make_tensor_ptr %arg0, [%c64_i64, %c64_i64], [%c1_i64, %col_stride], [%c0_i32, %c0_i32] {order = array<i32: 0, 1>} : <tensor<32x256xi8, #dot_b>>
+      // CHECK: %[[LOAD:.*]] = triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 8, tile_width = 16, tile_height = 32, v_blocks = 4, transpose = false, vnni_transform = true, cache_control = Default}
+      // CHECK:    %[[VAL_0:.*]] = llvm.shufflevector %[[LOAD]], %[[LOAD]] [0, 1, 2, 3, 4, 5, 6, 7] : vector<32xi32>
+      // CHECK:    llvm.bitcast %[[VAL_0]] : vector<8xi32> to vector<32xi8>
+      // CHECK:    %[[VAL_0:.*]] = llvm.shufflevector %[[LOAD]], %[[LOAD]] [8, 9, 10, 11, 12, 13, 14, 15] : vector<32xi32>
+      // CHECK:    llvm.bitcast %[[VAL_0]] : vector<8xi32> to vector<32xi8>
+      // CHECK:    %[[VAL_0:.*]] = llvm.shufflevector %[[LOAD]], %[[LOAD]] [16, 17, 18, 19, 20, 21, 22, 23] : vector<32xi32>
+      // CHECK:    llvm.bitcast %[[VAL_0]] : vector<8xi32> to vector<32xi8>
+      // CHECK:    %[[VAL_0:.*]] = llvm.shufflevector %[[LOAD]], %[[LOAD]] [24, 25, 26, 27, 28, 29, 30, 31] : vector<32xi32>
+      // CHECK:    llvm.bitcast %[[VAL_0]] : vector<8xi32> to vector<32xi8>
+      %45 = tt.load %21 {ttig.block_io = "row_major"} : !tt.ptr<tensor<32x256xi8, #dot_b>>
       tt.return
   }
 }
