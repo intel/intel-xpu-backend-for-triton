@@ -60,7 +60,7 @@ unsigned getOpsPerChannel(Type elemType, ModuleOp m) {
 
 SmallVector<unsigned>
 getWarpsPerTile(Operation *dotOp,
-                ttgi::DpasEncodingAttr::DPASCapability dpasCap,
+                const ttgi::DpasEncodingAttr::DPASCapability &dpasCap,
                 const ArrayRef<int64_t> shape, unsigned numWarps) {
   auto filter = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion();
@@ -117,6 +117,12 @@ public:
         ttgi::DPASAnalysisResult::True)
       return failure();
 
+    // Get DPAS capability from module.
+    std::optional<ttgi::DpasEncodingAttr::DPASCapability> dpasCap =
+        ttgi::DpasEncodingAttr::getDPASCapability(mod);
+    if (!dpasCap.has_value())
+      return failure();
+
     // Create DPAS encoding for the given number of warps
     ArrayRef<int64_t> retShape = oldRetType.getShape();
     unsigned numWarps = ttg::lookupNumWarps(funcOp);
@@ -126,29 +132,25 @@ public:
     auto oldAType = cast<RankedTensorType>(a.getType());
     auto oldBType = cast<RankedTensorType>(b.getType());
 
-    ttgi::DpasEncodingAttr::DPASCapability dpasCap =
-        ttgi::DpasEncodingAttr::getDPASCapability(mod);
     Type elemType = oldAType.getElementType();
     unsigned opsPerChan = getOpsPerChannel(elemType, mod);
     SmallVector<unsigned> warpsPerTile =
-        getWarpsPerTile(op, dpasCap, retShape, numWarps);
+        getWarpsPerTile(op, *dpasCap, retShape, numWarps);
     unsigned threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
 
     size_t rank = retShape.size();
-
     SmallVector<unsigned> repCluster = ttgi::calculateRepCluster(
-        dpasCap.repeatCount, dpasCap.systolicDepth, dpasCap.executionSize,
-        opsPerChan, retShape, threadsPerWarp,
+        *dpasCap, opsPerChan, retShape, threadsPerWarp,
         oldAType.getElementType().getIntOrFloatBitWidth(),
         isa<Float8E5M2Type, Float8E4M3FNType>(oldAType.getElementType()),
         oldAType.getShape(), oldBType.getShape(), warpsPerTile);
 
-    unsigned repeatCount =
-        std::min(dpasCap.repeatCount, (unsigned)retShape[rank - 2] /*M*/);
+    unsigned repeatCount = std::min(
+        dpasCap->repeatCount, static_cast<unsigned>(retShape[rank - 2] /*M*/));
     unsigned numElemsPerRowForA =
         opsPerChan == 1
-            ? dpasCap.systolicDepth
-            : dpasCap.systolicDepth * 2; // A is packed to i16 or i32.
+            ? dpasCap->systolicDepth
+            : dpasCap->systolicDepth * 2; // A is packed to i16 or i32.
     unsigned minM = mlir::ceil<unsigned>(threadsPerWarp, numElemsPerRowForA);
     repeatCount = std::max(repeatCount, minM);
 
@@ -156,8 +158,8 @@ public:
         ttgi::DPASAnalysisFactory::getDPASType(op, dpasAnalysis);
 
     auto dpasEnc = ttgi::DpasEncodingAttr::get(
-        oldRetType.getContext(), repeatCount, dpasCap.systolicDepth,
-        dpasCap.executionSize, opsPerChan, warpsPerTile, repCluster,
+        oldRetType.getContext(), repeatCount, dpasCap->systolicDepth,
+        dpasCap->executionSize, opsPerChan, warpsPerTile, repCluster,
         threadsPerWarp,
         std::holds_alternative<ttgi::DPASEngineTypeXe3P>(dpasType) &&
                 std::get<ttgi::DPASEngineTypeXe3P>(dpasType) ==

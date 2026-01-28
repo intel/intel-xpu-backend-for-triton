@@ -237,26 +237,19 @@ The semantic of this `tt.dot` includes GEMM tiling configuration as:
     SmallVector<unsigned> getContigPerThread() const;
 
     struct DPASCapability {
-      explicit DPASCapability(unsigned minSGSize) : executionSize(minSGSize) {}
-      DPASCapability() = default;
-
-      bool isPVC() const {
-        return executionSize == 16;
-      }
-      bool isFalconShore() const {
-        return executionSize == 16;
-      }
-      bool isATSM() const {
-        return executionSize == 8;
+      DPASCapability(unsigned executionSize, bool dpasSupportsFP8 = false)
+        : executionSize(executionSize), supportsFP8(dpasSupportsFP8) {
+        assert(executionSize == 8 || executionSize == 16 && "Invalid execution size");
       }
 
       static constexpr unsigned systolicDepth = 8u;
       static constexpr unsigned repeatCount = 8u;
       static constexpr unsigned opsChanBitWidths = 32u;
-      unsigned executionSize = 0u;
+      const unsigned executionSize = 0u;
+      const bool supportsFP8 = false;
     };
 
-    static DPASCapability getDPASCapability(mlir::ModuleOp mod);
+    static std::optional<DPASCapability> getDPASCapability(mlir::ModuleOp);
   }];
 
   let hasCustomAssemblyFormat = 1;
