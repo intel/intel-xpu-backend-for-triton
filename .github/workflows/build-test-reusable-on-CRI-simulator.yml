@@ -21,9 +21,29 @@ on:
         type: string
         default: ""
       pytorch_mode:
-        description: PyTorch mode, source or wheels
+        description: PyTorch mode, source or wheels or JGS pytorch artifactory revision
         type: string
-        default: "source"
+        default: jgs_artifactory_revision
+      pytorch_jgs_artifactory_revision:
+        description: PyTorch JGS artifactory revision, used only if pytorch_mode is 'jgs_artifactory_revision'
+        type: string
+        default: ""
+      oneapi_mode:
+        description: oneAPI mode, DLE or DPCPP_JGS
+        type: string
+        default: DPCPP_JGS_revision
+      dpcpp_jgs_revision:
+        description: DPCPP_JGS revision, used only if oneapi_mode is 'DPCPP_JGS_revision'
+        type: string
+        default: ""
+      pti_mode:
+        description: PTI mode, latest or revision
+        type: string
+        default: PTI_JGS_revision
+      pti_jgs_revision:
+        description: PTI JGS revision, used only if pti_mode is 'PTI_JGS_revision'
+        type: string
+        default: ""
       python_version:
         description: Python version
         type: string
@@ -91,8 +111,11 @@ jobs:
     runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}"]', inputs.device, inputs.driver_version)) }}
     defaults:
       run:
-        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+        shell: bash
     outputs:
+      oneapi-cache-key: ${{ steps.setup-oneapi.outputs.oneapi-cache-key }}
+      pti-cache-key: ${{ steps.setup-oneapi.outputs.pti-cache-key }}
+      pytorch-jgs-cache-key: ${{ steps.setup-pytorch-jgs.outputs.cache-key }}
       test-triton-command: ${{ steps.test-triton.outputs.command }}
       integration-tests-matrix: ${{ steps.test-triton.outputs.matrix }}
     steps:
@@ -103,6 +126,15 @@ jobs:
           EOF
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Setup ONE API environment
+        id: setup-oneapi
+        uses: ./.github/actions/setup-oneapi-env
+        with:
+          oneapi_mode: ${{ inputs.oneapi_mode }}
+          dpcpp_jgs_revision: ${{ inputs.dpcpp_jgs_revision }}
+          pti_mode: ${{ inputs.pti_mode }}
+          pti_jgs_revision: ${{ inputs.pti_jgs_revision }}
 
       - name: Load pip cache
         id: pip-cache
@@ -125,11 +157,20 @@ jobs:
 
       # Build PyTorch here once, integration tests jobs should load it from cache.
       - name: Setup PyTorch
+        if: inputs.pytorch_mode == 'source' || inputs.pytorch_mode == 'wheels'
         uses: ./.github/actions/setup-pytorch
         with:
           ref: ${{ inputs.pytorch_ref }}
           mode: ${{ inputs.pytorch_mode }}
           cri_env: ${{ inputs.device == 'cri' }}
+
+      - name: Setup PyTorch from JGS artifactory
+        id: setup-pytorch-jgs
+        if: inputs.pytorch_mode == 'jgs_artifactory_revision' || inputs.pytorch_mode == 'jgs_artifactory_latest'
+        uses: ./.github/actions/setup-pytorch-jgs
+        with:
+          pytorch_mode: ${{ inputs.pytorch_mode }}
+          pytorch_jgs_artifactory_revision: ${{ inputs.pytorch_jgs_artifactory_revision }}
 
       - name: Build Proton with XPU support
         if: inputs.driver_version == 'rolling' && inputs.device == 'max1100'
@@ -224,7 +265,7 @@ jobs:
     runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}"]', inputs.device, inputs.driver_version)) }}
     defaults:
       run:
-        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+        shell: bash
     steps:
       - name: Print inputs
         run: |
@@ -238,6 +279,16 @@ jobs:
 
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Setup ONE API environment
+        uses: ./.github/actions/setup-oneapi-env
+        with:
+          oneapi_mode: ${{ inputs.oneapi_mode }}
+          dpcpp_jgs_revision: ${{ inputs.dpcpp_jgs_revision }}
+          pti_mode: ${{ inputs.pti_mode }}
+          pti_jgs_revision: ${{ inputs.pti_jgs_revision }}
+          oneapi_cache_key: ${{ needs.build.outputs.oneapi-cache-key }}
+          pti_cache_key: ${{ needs.build.outputs.pti-cache-key }}
 
       - name: Load pip cache
         id: pip-cache
@@ -259,11 +310,20 @@ jobs:
           python-version: ${{ inputs.python_version }}
 
       - name: Setup PyTorch
+        if: inputs.pytorch_mode == 'source' || inputs.pytorch_mode == 'wheels'
         uses: ./.github/actions/setup-pytorch
         with:
           ref: ${{ inputs.pytorch_ref }}
           mode: ${{ inputs.pytorch_mode }}
           cri_env: ${{ inputs.device == 'cri' }}
+
+      - name: Setup PyTorch from JGS artifactory
+        if: inputs.pytorch_mode == 'jgs_artifactory_revision' || inputs.pytorch_mode == 'jgs_artifactory_latest'
+        uses: ./.github/actions/setup-pytorch-jgs
+        with:
+          pytorch_mode: ${{ inputs.pytorch_mode }}
+          pytorch_jgs_artifactory_revision: ${{ inputs.pytorch_jgs_artifactory_revision }}
+          cache_key: ${{ needs.build.outputs.pytorch-jgs-cache-key }}
 
       - name: Download Triton wheels
         uses: actions/download-artifact@v5

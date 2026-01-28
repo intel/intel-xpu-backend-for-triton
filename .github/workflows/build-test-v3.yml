@@ -12,17 +12,35 @@ on:
         description: Runner label, keep empty for default
         type: string
         default: ""
-      pytorch_ref:
-        description: PyTorch ref, keep empty for default
-        type: string
-        default: ""
+#      pytorch_ref:
+#        description: PyTorch ref, keep empty for default
+#        type: string
+#        default: ""
       pytorch_mode:
-        description: PyTorch mode, source or wheels
+        description: PyTorch mode, source or wheels or JGS pytorch artifactory revision
         type: choice
         options:
+          - jgs_artifactory_revision
+          - jgs_artifactory_latest
           - source
           - wheels
         default: source
+      pytorch_jgs_artifactory_revision:
+        description: PyTorch JGS artifactory revision, used only if pytorch_mode is 'jgs_artifactory_revision'
+        type: string
+        default: "2026-01-08-0626"
+      oneapi_mode:
+        description: oneAPI mode, DLE or DPCPP_JGS
+        type: choice
+        options:
+          - DPCPP_JGS_revision
+          - DPCPP_JGS_latest
+          - DLE
+        default: DPCPP_JGS_revision
+      dpcpp_jgs_revision:
+        description: DPCPP_JGS revision, used only if oneapi_mode is 'DPCPP_JGS_revision'
+        type: string
+        default: "2026-01-06-0105"
       ignore_errors:
         description: Ignore test errors
         type: boolean
@@ -31,10 +49,10 @@ on:
         description: Skip list
         type: string
         default: "cri"
-      skip_list_extra:
-        description: Extra skip list suffixes
-        type: string
-        default: "slow,emu"
+#      skip_list_extra:
+#        description: Extra skip list suffixes
+#       type: string
+#        default: "slow,emu"
       run_name:
         description: Custom run name
         type: string
@@ -43,10 +61,10 @@ on:
         description: Ignore pytest.skip
         type: boolean
         default: false
-      use_pyenv_python:
-        description: Use Python built with pyenv
-        type: boolean
-        default: false
+#      use_pyenv_python:
+#        description: Use Python built with pyenv
+#        type: boolean
+#        default: false
 
   pull_request:
     branches:
@@ -155,8 +173,13 @@ jobs:
       device: ${{ inputs.device || 'cri' }}
       driver_version: ${{ matrix.driver }}
       runner_label: ${{ inputs.runner_label }}
-      pytorch_ref: ${{ inputs.pytorch_ref }}
-      pytorch_mode: ${{ inputs.pytorch_mode || 'source' }}
+      pytorch_ref: ${{ inputs.pytorch_ref || '' }}
+      pytorch_mode: ${{ inputs.pytorch_mode || 'jgs_artifactory_revision' }}
+      pytorch_jgs_artifactory_revision: ${{ inputs.pytorch_jgs_artifactory_revision || '2026-01-08-0626' }}
+      oneapi_mode: ${{ inputs.oneapi_mode || 'DPCPP_JGS_revision' }}
+      dpcpp_jgs_revision: ${{ inputs.dpcpp_jgs_revision || '2026-01-06-0105' }}
+      pti_mode: 'PTI_JGS_revision'
+      pti_jgs_revision: '2026-01-22-0046'
       python_version: ${{ matrix.python }}
       upload_test_reports: true
       ignore_errors: ${{ inputs.ignore_errors || false }}
