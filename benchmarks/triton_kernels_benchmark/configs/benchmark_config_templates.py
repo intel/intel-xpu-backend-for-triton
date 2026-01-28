@@ -6,7 +6,6 @@ from triton_kernels_benchmark import (
     gemm_block_ptr_benchmark,
     gemm_tensor_of_ptr_benchmark,
     flash_attention_benchmark,
-    flash_attention_tensor_desc_benchmark,
     prefix_sums,
 )
 
@@ -59,12 +58,6 @@ CONFIGS = [
         run_opts={"fa_kernel_mode": "fwd"},
         categories={BenchmarkCategory.CORE, BenchmarkCategory.FLASH_ATTENTION},
         description="FlashAttention forward kernel benchmark",
-    ),
-    BenchmarkConfig(
-        key="flash_attention_tensor_desc",
-        get_benchmark=flash_attention_tensor_desc_benchmark.get_benchmark,
-        run_opts={"fa_kernel_mode": "fwd"},
-        categories={BenchmarkCategory.EXPERIMENTAL, BenchmarkCategory.FLASH_ATTENTION},
     ),
     BenchmarkConfig(
         key="flash_attention_bwd",
