@@ -31,10 +31,10 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
         lo, hi = 0, N_CTX
     # loop over k, v and update accumulator
     off_n = lo
-    for start_n in range(lo, hi, BLOCK_N):
+    for start_n in tl.range(lo, hi, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
         # -- compute qk ----
-        k = K_desc.load([0, off_n])
+        k = K_desc.load([off_n, 0]).T
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
         if STAGE == 2:
@@ -78,37 +78,37 @@ def _attn_fwd_with_tensor_descriptors(Q, K, V, sm_scale, M, Out,  #
                                       BLOCK_N: tl.constexpr,  #
                                       STAGE: tl.constexpr  #
                                       ):  # pylint: disable=unused-argument
-
+    tl.static_assert(BLOCK_N <= BLOCK_DMODEL)
     start_m = tl.program_id(2)
     off_z = tl.program_id(0)
     off_h = tl.program_id(1)
-    qvk_offset = off_z.to(tl.int64) * stride_qz + off_h.to(tl.int64) * stride_qh
+    qkv_offset = off_z.to(tl.int64) * stride_qz + off_h.to(tl.int64) * stride_qh
     if N_CTX <= 512:
         start_m = tl.program_id(0)
         off_z = tl.program_id(2)
-        qvk_offset = off_z.to(tl.int64) * stride_qh
+        qkv_offset = off_z.to(tl.int64) * stride_qh
 
     # tensor descriptors
     Q_desc = tl.make_tensor_descriptor(
-        base=Q + qvk_offset,
+        base=Q + qkv_offset,
         shape=(N_CTX, BLOCK_DMODEL),
         strides=(stride_qm, stride_qk),
         block_shape=(BLOCK_M, BLOCK_DMODEL),
     )
     V_desc = tl.make_tensor_descriptor(
-        base=V + qvk_offset,
+        base=V + qkv_offset,
         shape=(N_CTX, BLOCK_DMODEL),
         strides=(stride_vk, stride_vn),
         block_shape=(BLOCK_N, BLOCK_DMODEL),
     )
     K_desc = tl.make_tensor_descriptor(
-        base=K + qvk_offset,
-        shape=(BLOCK_DMODEL, N_CTX),
-        strides=(stride_kk, stride_kn),
-        block_shape=(BLOCK_DMODEL, BLOCK_N),
+        base=K + qkv_offset,
+        shape=(N_CTX, BLOCK_DMODEL),
+        strides=(stride_kn, stride_kk),
+        block_shape=(BLOCK_N, BLOCK_DMODEL),
     )
     O_desc = tl.make_tensor_descriptor(
-        base=Out + qvk_offset,
+        base=Out + qkv_offset,
         shape=(N_CTX, BLOCK_DMODEL),
         strides=(stride_om, stride_on),
         block_shape=(BLOCK_M, BLOCK_DMODEL),
