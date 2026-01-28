@@ -34,4 +34,5 @@ def test_disam_spvbin():
     assert x[0] == 12
     dis = h.asm["spvdis"]
     # check that the spvdis has a store instruction.
-    assert "PredicatedStore" in dis
+    # "OpStore" for LTS driver
+    assert "PredicatedStore" in dis or "OpStore" in dis
