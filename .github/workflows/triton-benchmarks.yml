@@ -292,18 +292,6 @@ jobs:
           # FIXME: #5896
           # python build_report.py $REPORTS/attn-bwd-performance.csv $REPORTS/attn-bwd-xetla-report.csv --benchmark flash-attn-bwd --compiler xetla --param_cols "Z,H,N_CTX,D_HEAD,CAUSAL" --tflops_col XeTLA-TFlops --hbm_col "XeTLA-GB/s" --tag $TAG
 
-      - name: Run Triton FA fwd kernel benchmark - with tensor descriptors
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flash_attention_tensor_desc_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flash_attention_tensor_desc_benchmark.py') }}
-        run: |
-          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
-          cd benchmarks/triton_kernels_benchmark
-          python flash_attention_tensor_desc_benchmark.py --reports $REPORTS --n_runs $N_RUNS
-          mv $REPORTS/attn-performance.csv $REPORTS/attn-tensor-desc-performance.csv
-
-          source ../../scripts/capture-hw-details.sh
-          python build_report.py $REPORTS/attn-tensor-desc-performance.csv $REPORTS/attn-tensor-desc-triton-report.csv --benchmark flash-attn-tensor-desc --compiler triton --param_cols "Z,H,N_CTX,D_HEAD,CAUSAL" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
-          python build_report.py $REPORTS/attn-tensor-desc-performance.csv $REPORTS/attn-tensor-desc-cutlass-report.csv --benchmark flash-attn-tensor-desc --compiler cutlass --param_cols "Z,H,N_CTX,D_HEAD,CAUSAL" --tflops_col CUTLASS-TFlops --hbm_col "CUTLASS-GB/s" --tag $TAG
-
       - name: Run Triton FlexAttention Causal Mask fwd kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flex_attention_benchmark_causal_mask.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flex_attention_benchmark_causal_mask.py') }}
         run: |
