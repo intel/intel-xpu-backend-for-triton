@@ -451,8 +451,8 @@ struct LoadStoreConversionBase {
 
     SmallVector<Value> shapeCons(rank);
     for (auto k = 0; k < rank; ++k) {
-      auto shape_cons = (k == 0) ? blockPtr.begin() + blockShape
-                                 : blockPtr.begin() + blockStride;
+      auto shape_cons = blockPtr.begin() + blockShape + k;
+
       auto undefOp = b.undef(vec_ty(i64_ty, numElems));
       shapeCons[k] = undefOp;
       shapeCons[k] = b.insert_element(shapeCons[k], *shape_cons, b.i32_val(0));
