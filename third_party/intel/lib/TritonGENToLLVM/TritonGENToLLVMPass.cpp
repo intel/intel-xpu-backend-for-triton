@@ -38,6 +38,7 @@
 #include "triton/Tools/Sys/GetEnv.hpp"
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/TritonGENToLLVM/TritonGENToLLVMPass.h"
 #include "intel/include/TritonGENToSPIRV/TritonGENToSPIRVPass.h"
 
@@ -123,7 +124,7 @@ loadCacheControlToCacheControls(Builder &builder,
   return builder.getAttr<TritonGEN::DecorationCacheControlAttr>(decorations);
 }
 
-static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
+static bool isSPVBuiltinAvailableImpl(TritonGEN::Matrix2DBlockLoadOp op) {
   // FIXME: The following signatures are not valid in SPV interface.
 
   // intel_sub_group_2d_block_read_8b_1r16x4c
@@ -230,7 +231,7 @@ static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
   return true;
 }
 
-static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockStoreOp op) {
+static bool isSPVBuiltinAvailableImpl(TritonGEN::Matrix2DBlockStoreOp op) {
   // FIXME: The following signatures are not valid in SPV interface.
 
   // intel_sub_group_2d_block_write_8b_8r8x1c
@@ -272,7 +273,7 @@ static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockStoreOp op) {
   return true;
 }
 
-static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockPrefetchOp op) {
+static bool isSPVBuiltinAvailableImpl(TritonGEN::Matrix2DBlockPrefetchOp op) {
   // FIXME: The following signatures are not valid in SPV interface.
 
   // intel_sub_group_2d_block_prefetch_16b_1r8x1c
@@ -302,6 +303,20 @@ static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockPrefetchOp op) {
     return false;
 
   return true;
+}
+
+template <
+    typename OpTy,
+    typename = std::enable_if<llvm::is_one_of<
+        OpTy, TritonGEN::Matrix2DBlockLoadOp, TritonGEN::Matrix2DBlockStoreOp,
+        TritonGEN::Matrix2DBlockPrefetchOp>::value>>
+static bool isSPVBuiltinAvailable(OpTy op) {
+  // Use GenISA for LTS driver.
+  auto m = op->template getParentOfType<mlir::ModuleOp>();
+  if (m->hasAttr(intel::TritonIntelGPUDialect::getIsLTSAttrName()))
+    return false;
+
+  return isSPVBuiltinAvailableImpl(op);
 }
 
 // HW requires base address to be 64-byte aligned. Compensate the non-64-byte

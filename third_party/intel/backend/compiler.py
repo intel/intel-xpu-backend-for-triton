@@ -138,6 +138,15 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     def get_target_name(self, options) -> str:
         return f"xpu:{self.device_arch}"
 
+    @classmethod
+    def is_lts(cls, ver) -> bool:
+        if not ver:
+            return True
+        m = _VERSION_PATTERN.match(ver)
+        if not m:
+            return True
+        return tuple(map(int, m.groups())) < (1, 6, 35096, 9)
+
     def parse_target(self, tgt_prop) -> dict:
         dev_prop = {}
         dev_prop['name'] = tgt_prop.get('name', 'xpu')
@@ -158,16 +167,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         dev_prop['has_subgroup_2d_block_io'] = tgt_prop.get('has_subgroup_2d_block_io', False)
         dev_prop['has_bfloat16_arithmetic'] = tgt_prop.get('has_bfloat16_arithmetic', False)
         dev_prop['has_bfloat16_conversion'] = tgt_prop.get('has_bfloat16_conversion', True)
-
-        def is_lts(ver):
-            if not ver:
-                return True
-            m = _VERSION_PATTERN.match(ver)
-            if not m:
-                return True
-            return tuple(map(int, m.groups())) < (1, 6, 35096, 9)
-
-        dev_prop['has_predicated_io'] = tgt_prop.get('has_predicated_io', not is_lts(tgt_prop.get('driver_version')))
+        dev_prop['has_predicated_io'] = tgt_prop.get('has_predicated_io',
+                                                     not self.is_lts(tgt_prop.get('driver_version')))
         dev_prop['has_subgroup_matrix_multiply_accumulate'] = tgt_prop.get('has_subgroup_matrix_multiply_accumulate',
                                                                            False)
         dev_prop['has_subgroup_scaled_matrix_multiply_accumulate'] = tgt_prop.get(
@@ -284,6 +285,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         pm.enable_debug()
         module_opts = intel.passes.ttgpuir.AnnotateModuleOptions()
         cls.annotate_module(module_opts, properties, opt)
+        module_opts.is_lts = cls.is_lts(metadata["target"].arch.get("driver_version"))
         intel.passes.ttgpuir.add_triton_annotate_module(pm, module_opts)
         pm.run(mod, 'annotate_module')
 
