@@ -24,7 +24,7 @@ on:
           - jgs_artifactory_latest
           - source
           - wheels
-        default: source
+        default: jgs_artifactory_revision
       pytorch_jgs_artifactory_revision:
         description: PyTorch JGS artifactory revision, used only if pytorch_mode is 'jgs_artifactory_revision'
         type: string
