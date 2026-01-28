@@ -93,6 +93,9 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
       .def_readwrite("min_sg_size",
                      &gpu::intel::TritonAnnotateModuleOptions::minSGSize)
       .def_readwrite(
+          "support_subgroup_matrix_multiply_accumulate_bf8",
+          &gpu::intel::TritonAnnotateModuleOptions::supportDPASWithBF8)
+      .def_readwrite(
           "support_16bit_atomics",
           &gpu::intel::TritonAnnotateModuleOptions::support16BitAtomics)
       .def_readwrite("support_2d_block_io",
@@ -103,6 +106,9 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
       .def_readwrite(
           "support_bfloat16_conversion",
           &gpu::intel::TritonAnnotateModuleOptions::supportBF16Conversion)
+      .def_readwrite(
+          "support_predicated_io",
+          &gpu::intel::TritonAnnotateModuleOptions::supportPredicatedIO)
       .def_readwrite("support_subgroup_matrix_multiply_accumulate",
                      &gpu::intel::TritonAnnotateModuleOptions::supportDPAS)
       .def_readwrite(

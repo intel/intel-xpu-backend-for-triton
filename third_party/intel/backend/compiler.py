@@ -22,6 +22,8 @@ try:  # XPUBackend allows metaclasses injection
 except ImportError:
     XPUBackendMeta = type(BaseBackend)
 
+_VERSION_PATTERN = re.compile(r'(\d+)\.(\d+)\.(\d+)\+(\d+)')
+
 
 @dataclass
 class XPUOptions:
@@ -148,12 +150,24 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         dev_prop['max_num_sub_groups'] = tgt_prop.get('max_num_sub_groups', None)
         dev_prop['sub_group_sizes'] = tgt_prop.get('sub_group_sizes', None)
         dev_prop['has_fp64'] = tgt_prop.get('has_fp64', None)
+        dev_prop['has_subgroup_matrix_multiply_accumulate_bfloat8'] = tgt_prop.get(
+            'has_subgroup_matrix_multiply_accumulate_bfloat8', False)
         dev_prop['has_subgroup_matrix_multiply_accumulate_tensor_float32'] = tgt_prop.get(
             'has_subgroup_matrix_multiply_accumulate_tensor_float32', False)
         dev_prop['has_16bit_atomics'] = tgt_prop.get('has_16bit_atomics', False)
         dev_prop['has_subgroup_2d_block_io'] = tgt_prop.get('has_subgroup_2d_block_io', False)
         dev_prop['has_bfloat16_arithmetic'] = tgt_prop.get('has_bfloat16_arithmetic', False)
         dev_prop['has_bfloat16_conversion'] = tgt_prop.get('has_bfloat16_conversion', True)
+
+        def is_lts(ver):
+            if not ver:
+                return True
+            m = _VERSION_PATTERN.match(ver)
+            if not m:
+                return True
+            return tuple(map(int, m.groups())) < (1, 6, 35096, 9)
+
+        dev_prop['has_predicated_io'] = tgt_prop.get('has_predicated_io', not is_lts(tgt_prop.get('driver_version')))
         dev_prop['has_subgroup_matrix_multiply_accumulate'] = tgt_prop.get('has_subgroup_matrix_multiply_accumulate',
                                                                            False)
         dev_prop['has_subgroup_scaled_matrix_multiply_accumulate'] = tgt_prop.get(
@@ -226,12 +240,15 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         module_opts.support_2d_block_io = properties["has_subgroup_2d_block_io"]
         module_opts.support_bfloat16_arithmetic = properties["has_bfloat16_arithmetic"]
         module_opts.support_bfloat16_conversion = properties["has_bfloat16_conversion"]
+        module_opts.support_predicated_io = properties["has_predicated_io"]
         module_opts.support_subgroup_matrix_multiply_accumulate = properties["has_subgroup_matrix_multiply_accumulate"]
         module_opts.support_subgroup_scaled_matrix_multiply_accumulate = properties[
             "has_subgroup_scaled_matrix_multiply_accumulate"]
         module_opts.support_f4_conversion = properties["has_f4_conversions"]
         module_opts.support_f8_conversion = properties["has_f8_conversions"]
         module_opts.support_256b_prefetch = properties["has_256b_prefetch"]
+        module_opts.support_subgroup_matrix_multiply_accumulate_bf8 = properties[
+            "has_subgroup_matrix_multiply_accumulate_bfloat8"]
         module_opts.threads_per_warp = opt.warp_size
         module_opts.target_arch = cls.target_arch
 
