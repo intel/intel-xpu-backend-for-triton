@@ -99,6 +99,12 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.target_arch";
     }
 
+    /// Get the name of the attribute used to indicate whether is driver is LTS.
+    /// Please use this attribute with caution, this is intended for temporary use.
+    static constexpr llvm::StringRef getIsLTSAttrName() {
+      return "ttig.is_lts";
+    }
+
     /// Get the name of the attribute used to indicate whether prefetching 256
     /// bytes is supported.
     static constexpr llvm::StringRef getSupportPrefetch256BAttrName() {
