@@ -81,6 +81,10 @@ struct TritonAnnotateModule
           ttgi::TritonIntelGPUDialect::getSupportPredicatedIOAttrName(),
           builder.getUnitAttr());
 
+    if (isLTS)
+      mod->setAttr(ttgi::TritonIntelGPUDialect::getIsLTSAttrName(),
+                   builder.getUnitAttr());
+
     setThreadsPerWarp(mod);
   }
 
