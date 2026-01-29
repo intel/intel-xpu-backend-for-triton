@@ -2,13 +2,11 @@
 from functools import lru_cache
 import os
 import traceback
-import torch.multiprocessing as mp
-mp.set_sharing_strategy("file_system")
 from torch.nn.attention.flex_attention import (
     create_block_mask,
     flex_attention,
 )
-
+import torch.multiprocessing as mp
 import torch
 import torch._inductor
 import torch._inductor.lowering
@@ -18,6 +16,8 @@ from torch._inductor.template_heuristics.triton import FlexConfig, FlexDecodeCon
 
 import triton_kernels_benchmark as benchmark_suite
 import triton
+
+mp.set_sharing_strategy('file_system')
 
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
