@@ -1,6 +1,5 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
-#include "Utils/LLVMIntr.h"
 #include "mlir/Conversion/ArithCommon/AttrToLLVMConverter.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/MLIRContext.h"
@@ -885,6 +884,7 @@ template <auto GetAttrName> bool HasAttr(Operation *op) {
 typedef std::function<SmallVector<Value>(Location, ConversionPatternRewriter &,
                                          const SmallVector<Value> &)>
     ConverterFunc;
+
 struct Converter {
   const ConverterFunc func;
   // Minimum number of elements that can be converted by this function. If there
@@ -941,6 +941,7 @@ struct FpToFpOpConversion
     if (srcTy.getTypeID() == dstTy.getTypeID()) {
       constexpr auto identityFn = [](Location, ConversionPatternRewriter &,
                                      const SmallVector<Value> &v) { return v; };
+
       if ((srcTy.getTypeID() == F8E4M3TyID ||
            dstTy.getTypeID() == F8E4M3TyID)) {
         static Converter c{identityFn, 2, 2};
@@ -1114,27 +1115,32 @@ struct FpToFpOpConversion
     bool isDstFP32 = dstElementType.isF32();
     Type srcType = useFP16IntermediateSrc ? f16_ty : srcElementType;
     Type dstType = isDstFP32 ? f16_ty : dstElementType;
-    auto &conv =
+    Converter &converter =
         getConverter(op.getOperation(), srcType, dstType, roundingMode);
-    auto numProduce =
-        std::max(conv.minElements, std::min(conv.maxElements, operands.size()));
-    auto numConsume = std::min(numProduce, operands.size());
+    uint64_t numProduce =
+        std::max(converter.minElements,
+                 std::min(converter.maxElements, operands.size()));
+    uint64_t numConsume = std::min(numProduce, operands.size());
+
     SmallVector<Value> inVals;
     inVals.reserve(numConsume);
-    for (unsigned i = 0; i < numConsume; i++) {
+    for (unsigned i = 0; i < numConsume; i++)
       inVals.push_back(operands[i][0]);
-    }
+
     if (useFP16IntermediateSrc)
       for (Value &v : inVals)
         v = convertFp32ToFp16(loc, rewriter, v, roundingMode.value());
+
     if (numConsume != numProduce) // Pad with undef
       inVals.resize(numProduce, b.undef(typeConverter->convertType(srcType)));
-    SmallVector<Value> outVals = conv.func(loc, rewriter, inVals);
+
+    SmallVector<Value> outVals = converter.func(loc, rewriter, inVals);
     assert(outVals.size() == inVals.size());
     outVals.resize(numConsume);
     if (isDstFP32)
       for (Value &v : outVals)
         v = convertFp16ToFp32(loc, rewriter, v);
+
     // Pack values
     return outVals;
   }

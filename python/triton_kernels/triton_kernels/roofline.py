@@ -6,7 +6,7 @@ import torch
 import csv
 from dataclasses import dataclass
 import inspect
-from .target_info import is_hip, is_xpu, is_cuda, get_cdna_version
+from .target_info import is_hip, is_xpu, is_cuda, get_cdna_version, is_xpu_cri
 
 
 @dataclass
@@ -86,6 +86,12 @@ def compute_roofline(*args, \
 
 def get_memset_tbps(device="cuda"):
     n_bytes = 1 << 32
+    # FIXME: XPU CRI requires explicit device index, otherwise tensor memory
+    # is not recognized as USM device memory and memset fails. Also use smaller
+    # buffer size (1<<16 vs 1<<32) to avoid hangs/segfaults on CRI simulator
+    if is_xpu_cri():
+        n_bytes = 1 << 16
+        device = f'xpu:{torch.xpu.current_device()}'
     buf = torch.empty(n_bytes, device=device, dtype=torch.uint8)
     stream0 = ctypes.c_void_p(0)
 

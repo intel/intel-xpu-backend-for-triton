@@ -439,58 +439,48 @@ SmallVector<unsigned> calculateWarpsPerTile(unsigned capRepeatCount,
 }
 
 SmallVector<unsigned>
-calculateRepCluster(unsigned capRepeatCount, unsigned capSystolicDepth,
-                    unsigned capExecutionSize, unsigned opsPerChan,
-                    ArrayRef<int64_t> retShape, unsigned threadsPerWarp,
-                    unsigned int a_bitwidth, bool is_FP8,
+calculateRepCluster(const DpasEncodingAttr::DPASCapability &dpasCap,
+                    unsigned opsPerChan, ArrayRef<int64_t> retShape,
+                    unsigned threadsPerWarp, unsigned a_bitwidth, bool is_FP8,
                     ArrayRef<int64_t> a_shape, ArrayRef<int64_t> b_shape,
-                    SmallVector<unsigned> warpsPerTile) {
+                    ArrayRef<unsigned> warpsPerTile) {
   size_t rank = retShape.size();
   SmallVector<unsigned> repCluster(rank, 1);
 
-  unsigned repeatCount =
-      std::min(capRepeatCount, (unsigned)retShape[rank - 2] /*M*/);
+  unsigned repeatCount = std::min(
+      dpasCap.repeatCount, static_cast<unsigned>(retShape[rank - 2]) /*M*/);
   unsigned numElemsPerRowForA =
-      opsPerChan == 1 ? capSystolicDepth
-                      : capSystolicDepth * 2; // A is packed to i16 or i32.
+      opsPerChan == 1 ? dpasCap.systolicDepth
+                      : dpasCap.systolicDepth * 2; // A is packed to i16 or i32.
   unsigned minM = llvm::divideCeil(threadsPerWarp, numElemsPerRowForA);
   repeatCount = std::max(repeatCount, minM);
 
-  if (capExecutionSize == 16) {
+  if (dpasCap.executionSize == 16) {
     unsigned dpasElemBitWidths = a_bitwidth;
 
-#if 0
-    // FIXME: On Xe3P we don't need to upcast fp8 to fp16 because there is
-    // native support in DPAS for tensor that have fp8 data types as their element type.
-    // We should avoid passing is_FP8 to this function, just pass the element type of
-    // the A operand instead, and in this function determine whether the target architecture
-    // has the DPAS with fp8 support flag (on the module).
-
-    // We are upcasting FP8 to FP16.
-    if (is_FP8)
+    // Upcast FP8 to FP16 is the DPAS engine doesn't support FP8 natively.
+    if (!dpasCap.supportsFP8 && is_FP8)
       dpasElemBitWidths = 2 * dpasElemBitWidths;
-#endif
 
     // Enlarge the repCluster size to use the large 2D load for A and B
     // operands.
     constexpr unsigned PVC_2D_LOAD_MAXIMUM_NUMBER_OF_ROWS = 32;
     constexpr unsigned PVC_2D_LOAD_MAXIMUM_BYTES_OF_COLS = 64;
 
-    unsigned maxRepClusterM =
-        PVC_2D_LOAD_MAXIMUM_NUMBER_OF_ROWS / capRepeatCount;
+    unsigned maxRepClusterM = PVC_2D_LOAD_MAXIMUM_NUMBER_OF_ROWS / repeatCount;
     SmallVector<int64_t> repA = calculateDPASRepetitions(
         a_shape, static_cast<ttgi::DpasEncodingAttr::OpIdx>(0), warpsPerTile,
-        repCluster, repeatCount, capSystolicDepth, capExecutionSize,
+        repCluster, repeatCount, dpasCap.systolicDepth, dpasCap.executionSize,
         opsPerChan);
 
     unsigned repClusterDimM =
         std::min(maxRepClusterM, static_cast<unsigned>(repA[1]));
 
     unsigned maxRepClusterN = PVC_2D_LOAD_MAXIMUM_BYTES_OF_COLS /
-                              ((dpasElemBitWidths / 8) * capExecutionSize);
+                              ((dpasElemBitWidths / 8) * dpasCap.executionSize);
     SmallVector<int64_t> repB = calculateDPASRepetitions(
         b_shape, static_cast<ttgi::DpasEncodingAttr::OpIdx>(1), warpsPerTile,
-        repCluster, repeatCount, capSystolicDepth, capExecutionSize,
+        repCluster, repeatCount, dpasCap.systolicDepth, dpasCap.executionSize,
         opsPerChan);
 
     unsigned repClusterDimN =
