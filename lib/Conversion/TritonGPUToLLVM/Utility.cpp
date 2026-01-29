@@ -373,8 +373,7 @@ std::pair<Value, Value> getLaneAndWarpId(OpBuilder &rewriter, Location loc) {
     warpId = b.i32_val(0);
   } else {
     laneId = b.urem(tid, warpSizeVal);
-    warpId = mlir::triton::gpu::WarpIdOp::create(rewriter, loc,
-                                                 /*omitUniformHint=*/true);
+    warpId = b.udiv(tid, warpSizeVal);
   }
 
   return {laneId, warpId};
