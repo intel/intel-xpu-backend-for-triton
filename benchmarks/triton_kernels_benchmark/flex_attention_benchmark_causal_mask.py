@@ -3,10 +3,14 @@ from functools import lru_cache
 import os
 from torch.nn.attention.flex_attention import (
     create_block_mask,
+    create_mask,
     flex_attention,
 )
 
 import torch
+import torch.nn.functional as F
+from torch.nn.attention import SDPBackend, sdpa_kernel
+from torch.nn.attention.bias import causal_lower_right
 import torch._inductor
 import torch._inductor.lowering
 import torch._inductor.kernel
@@ -63,6 +67,12 @@ compiled_flex_attention = torch.compile(flex_attention, dynamic=False)
 def create_block_mask_cached(score_mod, B, H, M, N, device=DEVICE):
     block_mask = create_block_mask(score_mod, B, H, M, N, device=device)
     return block_mask
+
+
+@lru_cache
+def create_mask_cached(score_mod, B, H, M, N, device=DEVICE):
+    mask = create_mask(score_mod, B, H, M, N, device=device)
+    return mask
 
 
 def causal_mask(_, __, q_idx, kv_idx):
@@ -123,8 +133,8 @@ if 'B580' in torch.xpu.get_device_name():
             if not (h in [1, 16, 24, 32] and seq_len == 8192) and 'B580' not in torch.xpu.get_device_name()
         ] if fa_kernel_mode == 'bwd' else [])],
         line_arg='provider',
-        line_vals=['triton', 'torch'],
-        line_names=['Triton', 'Torch'],
+        line_vals=['triton', 'torch'] + (['cutlass', 'onednn'] if 'B580' not in torch.xpu.get_device_name() else []),
+        line_names=['Triton', 'Torch'] + (['CUTLASS', 'OneDNN'] if 'B580' not in torch.xpu.get_device_name() else []),
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel=['GB/s', 'TFlops'],
         plot_name='flexAttnCausal-performance',
@@ -136,6 +146,19 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
     do_bench = benchmark_suite.get_do_bench(n_warmup=600, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
     if MODE not in ('fwd', 'bwd'):
         raise ValueError(f"Invalid MODE: {MODE}. Expected 'fwd' or 'bwd'.")
+
+    # SDPA backends have limitations:
+    # - Require D_HEAD_qk == D_HEAD_v (no support for different head dimensions)
+    if provider in ('cutlass', 'onednn'):
+        if D_HEAD_qk != D_HEAD_v:
+            return (0, 0, 0), (0, 0, 0), 0.0
+
+    use_causal = (N_CTX_q == N_CTX_kv)
+    attn_bias = None
+    if provider == 'cutlass' and not use_causal:
+        attn_bias = causal_lower_right(N_CTX_q, N_CTX_kv)
+    elif not use_causal:
+        attn_bias = create_mask_cached(causal_mask, 1, 1, N_CTX_q, N_CTX_kv, device=DEVICE)
     dtype = torch.float16
     q = torch.randn((Z, H_q, N_CTX_q, D_HEAD_qk), device=DEVICE, dtype=dtype, requires_grad=MODE == 'bwd')
     k = torch.randn((Z, H_kv, N_CTX_kv, D_HEAD_qk), device=DEVICE, dtype=dtype, requires_grad=MODE == 'bwd')
@@ -153,6 +176,28 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
             cv = float('nan')
         else:
             _, min_ms, max_ms, mean, cv = do_bench(torch_fn, device=DEVICE)
+
+    elif provider in ("cutlass", "onednn"):
+        backend = SDPBackend.FLASH_ATTENTION if (provider == "cutlass") else SDPBackend.OVERRIDEABLE
+
+        def sdpa_fn():
+            with sdpa_kernel(backends=[backend]):
+                return F.scaled_dot_product_attention(
+                    q,
+                    k,
+                    v,
+                    attn_mask=attn_bias,
+                    is_causal=use_causal,
+                    scale=sm_scale,
+                    enable_gqa=(H_q != H_kv),
+                )
+
+        fn = sdpa_fn
+        if MODE == "bwd":
+            o = fn()
+            do = torch.randn_like(o)
+            fn = lambda: o.backward(do, retain_graph=True)
+        _, min_ms, max_ms, mean, cv = do_bench(fn, device=DEVICE)
 
     elif provider == 'triton':
         kernel_options = {'BLOCKS_ARE_CONTIGUOUS': True, 'USE_TMA': True}
