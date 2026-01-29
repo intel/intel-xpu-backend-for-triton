@@ -1,6 +1,8 @@
 # This benchmark requires a Pytorch version with FlexAttention support for XPU available
 from functools import lru_cache
 import os
+import traceback
+import torch.multiprocessing as mp
 from torch.nn.attention.flex_attention import (
     create_block_mask,
     flex_attention,
@@ -69,6 +71,77 @@ def causal_mask(_, __, q_idx, kv_idx):
     return q_idx >= kv_idx
 
 
+def _worker_wrapper(fn, args, queue, done_event):
+    """Worker function that executes fn in subprocess and returns results via queue"""
+    try:
+        result = fn(*args)
+
+        # Convert tensors to CPU for safe transfer
+        if isinstance(result, tuple):
+            result = tuple(t.detach().cpu().clone() if isinstance(t, torch.Tensor) else t for t in result)
+        elif isinstance(result, torch.Tensor):
+            result = result.detach().cpu().clone()
+
+        queue.put(('success', result))
+
+        # [Critical] Wait for parent to finish retrieving file descriptors before exiting
+        done_event.wait(timeout=60)
+
+    # pylint: disable=broad-exception-caught
+    except Exception as e:
+        queue.put(('error', str(e), traceback.format_exc()))
+
+
+def call_eager_fwd_and_bwd(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, backwards_grad_cpu):
+    torch.xpu.empty_cache()
+    torch.manual_seed(42)
+    backwards_grad = backwards_grad_cpu.to(DEVICE)
+
+    dtype = torch.float16
+    q = torch.randn((Z, H_q, N_CTX_q, D_HEAD_qk), device=DEVICE, dtype=dtype, requires_grad=True)
+    k = torch.randn((Z, H_kv, N_CTX_kv, D_HEAD_qk), device=DEVICE, dtype=dtype, requires_grad=True)
+    v = torch.randn((Z, H_kv, N_CTX_kv, D_HEAD_v), device=DEVICE, dtype=dtype, requires_grad=True)
+
+    block_mask = create_block_mask_cached(causal_mask, 1, 1, N_CTX_q, N_CTX_kv, device=DEVICE)
+
+    output = flex_attention(q, k, v, block_mask=block_mask, scale=0.125, enable_gqa=not H_q == H_kv)
+    grads = torch.autograd.grad((output, ), (q, k, v), backwards_grad, retain_graph=True)
+
+    return (output.detach().cpu().clone(), grads[0].detach().cpu().clone(), grads[1].detach().cpu().clone(),
+            grads[2].detach().cpu().clone())
+
+
+def call_in_process(fn, args=()):
+    """Call a module-level function in a separate process"""
+    ctx = mp.get_context('spawn')
+    queue = ctx.Queue()
+    done_event = ctx.Event()
+    process = ctx.Process(target=_worker_wrapper, args=(fn, args, queue, done_event))
+    process.start()
+
+    result = queue.get(timeout=300)
+
+    status, *data = result
+    if status == 'error':
+        error_msg, traceback_str = data
+        done_event.set()
+        process.join()
+        raise RuntimeError(f'Subprocess failed: {error_msg}\n{traceback_str}')
+
+    # Move tensors back to device
+    output = data[0]
+    if isinstance(output, tuple):
+        output = tuple(t.to(DEVICE) if isinstance(t, torch.Tensor) else t for t in output)
+    else:
+        output = output.to(DEVICE) if isinstance(output, torch.Tensor) else output
+
+    # Signal subprocess it can exit now
+    done_event.set()
+    process.join()
+
+    return output
+
+
 throughput_test = os.getenv('THROUGHPUT_TEST', '0') == '1'
 batch_size = int(os.getenv('BATCH_SIZE', '1'))
 batch_sizes = [16, 32, 64] if throughput_test else [batch_size]
@@ -115,12 +188,9 @@ if 'B580' in torch.xpu.get_device_name():
             (128, 1, 512, 1024 + 128 + 512, 576, 512),  # Append shapes of Deepseek-v3
         ] + ([
             # Shapes only for bwd
-            [h, h, seq_len, seq_len, 128, 128]
-            for h in [1, 2, 4, 16, 24, 32]
-            for seq_len in [4096, 8192]
-            # FIXME: OutOfMemoryError: XPU out of memory (#5725)
-            # FIXME: UR_RESULT_ERROR_DEVICE_LOST on BMG (#5735)
-            if not (h in [1, 16, 24, 32] and seq_len == 8192) and 'B580' not in torch.xpu.get_device_name()
+            [h, h, seq_len, seq_len, 128, 128]  #
+            for h in [1, 2, 4, 16, 24, 32]  #
+            for seq_len in [4096, 8192]  #
         ] if fa_kernel_mode == 'bwd' else [])],
         line_arg='provider',
         line_vals=['triton', 'torch'],
@@ -130,8 +200,14 @@ if 'B580' in torch.xpu.get_device_name():
         plot_name='flexAttnCausal-performance',
         args={},
     ))
+# pylint: disable=too-many-branches
 def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provider):
+    print(
+        f'Running case: {Z=}, {H_q=}, {H_kv=}, {N_CTX_q=}, {N_CTX_kv=}, {D_HEAD_qk=}, {D_HEAD_v=}, {MODE=}, {provider=}'
+    )
     torch.xpu.empty_cache()
+    torch.manual_seed(42)
+
     # Maximum across torch=200, triton=600
     do_bench = benchmark_suite.get_do_bench(n_warmup=600, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
     if MODE not in ('fwd', 'bwd'):
@@ -159,18 +235,39 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
         triton_fn = lambda: compiled_flex_attention(q, k, v, block_mask=block_mask, scale=sm_scale, enable_gqa=(
             not H_q == H_kv), kernel_options=kernel_options)
         if MODE == 'bwd':
-            torch_o = torch_fn()
-            backwards_grad = torch.randn_like(torch_o)
-            torch_grads = torch.autograd.grad((torch_o, ), (q, k, v), backwards_grad, retain_graph=True)
-            eager_tensors = (torch_o, *torch_grads)
+            backwards_grad = torch.randn(Z, H_q, N_CTX_q, D_HEAD_v, dtype=dtype, device=DEVICE,
+                                         requires_grad=MODE == 'bwd')
+
+            perform_correctness_check = True
+            try:
+                # Run forward+backward in subprocess, get output and gradients
+                backwards_grad_cpu = backwards_grad.detach().cpu()
+                eager_tensors = call_in_process(
+                    call_eager_fwd_and_bwd,
+                    args=(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, backwards_grad_cpu))
+            except (torch.OutOfMemoryError, RuntimeError) as e:
+                if any(keyword in str(e)
+                       for keyword in ('UR_RESULT_ERROR_OUT_OF_RESOURCES', 'UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY',
+                                       'UR_RESULT_ERROR_DEVICE_LOST', 'OutOfMemoryError')):
+                    error = e.args[0].split('\n')[0]
+                    print(f'Exception during torch eager call: {error}')
+                    print(
+                        'Skipping correctness check because reference torch eager call failed due to out of memory error'
+                    )
+                    torch.xpu.empty_cache()
+                    perform_correctness_check = False
+                else:
+                    raise
+
             triton_o = triton_fn()
             triton_grads = torch.autograd.grad((triton_o, ), (q, k, v), backwards_grad, retain_graph=True)
             compiled_tensors = (triton_o, *triton_grads)
 
-            tensor_names = ['out', 'grad_query', 'grad_key', 'grad_value']
-            for eager, compiled, name in zip(eager_tensors, compiled_tensors, tensor_names):
-                benchmark_suite.assert_close(lambda: eager, lambda: compiled, atol=6e-2, rtol=1e-3,  # pylint: disable=cell-var-from-loop
-                                             err_msg=f'Error comparing {name} between triton and torch')
+            if perform_correctness_check:
+                tensor_names = ['out', 'grad_query', 'grad_key', 'grad_value']
+                for eager, compiled, name in zip(eager_tensors, compiled_tensors, tensor_names):
+                    benchmark_suite.assert_close(lambda: eager, lambda: compiled, atol=6e-2, rtol=1e-3,  # pylint: disable=cell-var-from-loop
+                                                 err_msg=f'Error comparing {name} between triton and torch')
 
             triton_fn = lambda: torch.autograd.grad((triton_o, ), (q, k, v), backwards_grad, retain_graph=True)
         else:
