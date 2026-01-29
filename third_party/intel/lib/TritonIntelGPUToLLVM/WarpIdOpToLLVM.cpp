@@ -13,12 +13,6 @@ public:
   LogicalResult
   matchAndRewrite(triton::gpu::WarpIdOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // These are runtime constant values so insert ops at the beginning of the
-    // function to help LLVM uniformity analysis.
-    auto funcOp = op->getParentOfType<FunctionOpInterface>();
-    rewriter.setInsertionPoint(
-        &funcOp.getFunctionBody().getBlocks().front().front());
-
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     int threadsPerWarp = triton::gpu::lookupThreadsPerWarp(rewriter);
