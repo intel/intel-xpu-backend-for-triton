@@ -1,6 +1,10 @@
 add_mlir_translation_library(TritonGENToLLVMIRTranslation
   TritonGENToLLVMIRTranslation.cpp
 
+  DEPENDS
+  TritonGENTableGen
+  TritonGENAttrDefsIncGen
+
   LINK_COMPONENTS
   Core
 

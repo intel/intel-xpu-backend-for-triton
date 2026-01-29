@@ -71,6 +71,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_mul
   }
 }
 
+
 // -----
 
 // CHECK: #[[$BLOCKED:.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [4, 4], order = [1, 0]}>
