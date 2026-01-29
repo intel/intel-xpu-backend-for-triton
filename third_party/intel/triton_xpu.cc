@@ -385,10 +385,8 @@ void init_triton_intel(py::module &&m) {
       [](unsigned capRepeatCount, unsigned capExecutionSize,
          const std::vector<int64_t> &shape,
          unsigned numWarps) -> std::vector<unsigned> {
-        auto result = mlir::triton::gpu::intel::calculateWarpsPerTile(
+        auto result = gpu::intel::calculateWarpsPerTile(
             capRepeatCount, capExecutionSize, shape, numWarps);
-
-        // Explicitly convert SmallVector to std::vector for python
         return std::vector<unsigned>(result.begin(), result.end());
       },
       py::arg("capRepeatCount"), py::arg("capExecutionSize"), py::arg("shape"),
@@ -396,30 +394,18 @@ void init_triton_intel(py::module &&m) {
 
   m.def(
       "calculate_rep_cluster",
-      [](unsigned capRepeatCount, unsigned capSystolicDepth,
-         unsigned capExecutionSize, unsigned opsPerChan,
-         const std::vector<int64_t> &retShape, unsigned threadsPerWarp,
-         unsigned a_bitwidth, bool is_FP8, const std::vector<int64_t> &a_shape,
+      [](const gpu::intel::DpasEncodingAttr::DPASCapability &dpasCap,
+         unsigned opsPerChan, const std::vector<int64_t> &retShape,
+         unsigned threadsPerWarp, unsigned a_bitwidth, bool is_FP8,
+         const std::vector<int64_t> &a_shape,
          const std::vector<int64_t> &b_shape,
          const std::vector<unsigned> &warpsPerTile) -> std::vector<unsigned> {
-        // Convert std::vector to ArrayRef/SmallVector
-        llvm::ArrayRef<int64_t> retShapeRef(retShape);
-        llvm::ArrayRef<int64_t> aShapeRef(a_shape);
-        llvm::ArrayRef<int64_t> bShapeRef(b_shape);
-        llvm::SmallVector<unsigned> warpsPerTileVec(warpsPerTile.begin(),
-                                                    warpsPerTile.end());
-
-        auto result = mlir::triton::gpu::intel::calculateRepCluster(
-            capRepeatCount, capSystolicDepth, capExecutionSize, opsPerChan,
-            retShapeRef, threadsPerWarp, a_bitwidth, is_FP8, aShapeRef,
-            bShapeRef, warpsPerTileVec);
-
-        // Convert SmallVector to std::vector for Python
+        auto result = gpu::intel::calculateRepCluster(
+            dpasCap, opsPerChan, retShape, threadsPerWarp, a_bitwidth, is_FP8,
+            {a_shape}, {b_shape}, {warpsPerTile});
         return std::vector<unsigned>(result.begin(), result.end());
       },
-      py::arg("cap_repeat_count"), py::arg("cap_systolic_depth"),
-      py::arg("cap_execution_size"), py::arg("ops_per_chan"),
-      py::arg("ret_shape"), py::arg("threads_per_warp"), py::arg("a_bitwidth"),
-      py::arg("is_fp8"), py::arg("a_shape"), py::arg("b_shape"),
-      py::arg("warps_per_tile"));
+      py::arg("dpasCap"), py::arg("ops_per_chan"), py::arg("ret_shape"),
+      py::arg("threads_per_warp"), py::arg("a_bitwidth"), py::arg("is_fp8"),
+      py::arg("a_shape"), py::arg("b_shape"), py::arg("warps_per_tile"));
 }
