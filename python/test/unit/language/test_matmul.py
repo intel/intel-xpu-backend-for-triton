@@ -1050,6 +1050,8 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
             pytest.xfail("Packing along M, N is not supported on XPU")
         if not (with_a_scale and with_b_scale):
             pytest.xfail("None aScale/bScale is only tested on AMD backend for now")
+    elif is_xpu():
+        pytest.xfail("XPU does not natively support scaled fp4 matmul")
 
     NUM_STAGES = 1
     torch.manual_seed(42)
