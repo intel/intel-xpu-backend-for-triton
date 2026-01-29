@@ -3,6 +3,7 @@ from functools import lru_cache
 import os
 import traceback
 import torch.multiprocessing as mp
+mp.set_sharing_strategy("file_system")
 from torch.nn.attention.flex_attention import (
     create_block_mask,
     flex_attention,
