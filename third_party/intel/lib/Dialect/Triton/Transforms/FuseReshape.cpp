@@ -47,8 +47,8 @@ public:
     moduleOp.walk([&](tt::ReshapeOp reshapeOp) {
       if (isCandidate(reshapeOp)) {
         auto loadOp = cast<tt::LoadOp>(reshapeOp.getSrc().getDefiningOp());
-        tt::MakeTensorPtrOp makeTensorPtrOp =
-            *triton::intel::findDefiningMakeTensorPtrOp<tt::MakeTensorPtrOp>(
+        auto makeTensorPtrOp =
+            *tt::intel::findDefiningOpOfType<tt::MakeTensorPtrOp>(
                 loadOp.getPtr());
         manager.createChains(makeTensorPtrOp, reshapeOp);
       }
@@ -250,8 +250,7 @@ private:
       return false;
 
     std::optional<tt::MakeTensorPtrOp> makeTensorPtrOp =
-        triton::intel::findDefiningMakeTensorPtrOp<tt::MakeTensorPtrOp>(
-            loadOp.getPtr());
+        tt::intel::findDefiningOpOfType<tt::MakeTensorPtrOp>(loadOp.getPtr());
     if (!makeTensorPtrOp)
       return false;
 
