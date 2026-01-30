@@ -6,8 +6,8 @@
 #include "llvm/IR/Operator.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Passes/PassBuilder.h"
-#include "llvm/Passes/PassPlugin.h"
 #include "llvm/Passes/StandardInstrumentations.h"
+#include "llvm/Plugins/PassPlugin.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"

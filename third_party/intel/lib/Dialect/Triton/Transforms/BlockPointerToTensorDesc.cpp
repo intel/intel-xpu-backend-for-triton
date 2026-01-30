@@ -252,8 +252,7 @@ private:
                 bool> = true>
   DescOpTy rewriteBlockPointer(OpTy op) {
     auto makeTensorPtrOp =
-        tt::intel::findDefiningMakeTensorPtrOp<tt::MakeTensorPtrOp>(op.getPtr())
-            .value();
+        *tt::intel::findDefiningOpOfType<tt::MakeTensorPtrOp>(op.getPtr());
     auto padding = tt::PaddingOption::PAD_ZERO;
     if constexpr (std::is_same_v<OpTy, tt::LoadOp>)
       if (op.getPadding().has_value())

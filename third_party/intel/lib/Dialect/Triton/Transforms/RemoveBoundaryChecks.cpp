@@ -36,11 +36,12 @@ public:
       if (!isCandidate(loadOp))
         return WalkResult::skip();
 
-      tt::MakeTensorPtrOp makeTensorPtrOp =
-          *tt::intel::findDefiningMakeTensorPtrOp<tt::MakeTensorPtrOp>(
-              loadOp.getPtr());
       LLVM_DEBUG(llvm::dbgs()
                  << "Analyzing boundaryCheck for: " << loadOp << "\n");
+
+      auto makeTensorPtrOp =
+          *tt::intel::findDefiningOpOfType<tt::MakeTensorPtrOp>(
+              loadOp.getPtr());
 
       SmallVector<int> newBoundaryCheck;
       for (int boundIdx : loadOp.getBoundaryCheck()) {
@@ -129,8 +130,7 @@ private:
       return false;
 
     std::optional<tt::MakeTensorPtrOp> makeTensorPtrOp =
-        tt::intel::findDefiningMakeTensorPtrOp<tt::MakeTensorPtrOp>(
-            loadOp.getPtr());
+        tt::intel::findDefiningOpOfType<tt::MakeTensorPtrOp>(loadOp.getPtr());
     if (!makeTensorPtrOp)
       return false;
 
