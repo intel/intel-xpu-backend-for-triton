@@ -187,7 +187,7 @@ module attributes {ttig.support_16bit_atomics = true, "ttg.num-ctas" = 1 : i32, 
     // CHECK: llvm.br ^bb4
 
     // CHECK: ^bb4:
-    // CHECK: %[[BARRIER_FLAG:.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK: %[[BARRIER_FLAG:.*]] = llvm.mlir.constant(3 : i32) : i32
     // CHECK: llvm.call spir_funccc @_Z7barrierj(%[[BARRIER_FLAG]]) {convergent, no_unwind, will_return} : (i32) -> ()
     // CHECK: %[[FINAL_RESULT:.*]] = llvm.load %[[SMEM_PTR]] : !llvm.ptr<3> -> i16
     // CHECK: llvm.return %[[FINAL_RESULT]] : i16
