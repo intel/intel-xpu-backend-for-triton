@@ -2976,9 +2976,9 @@ struct AtomicRMWOpConversion
             maybeAnd(rewriter, loc, b.true_val(), rmwMask), {zero});
         ret = endBlock->getArgument(0);
       } else {
-        if (op.getResult().use_empty())
-          TritonGEN::BarrierOp::create(rewriter, loc,
-                                       TritonGEN::MemFence::GLOBAL);
+        // if (op.getResult().use_empty())
+        //   TritonGEN::BarrierOp::create(rewriter, loc,
+        //                                TritonGEN::MemFence::GLOBAL);
 
         auto createAtomicBinOpInstruction = [&]() -> SmallVector<Value, 1> {
           std::optional<mlir::LLVM::AtomicBinOp> rmwKind =
