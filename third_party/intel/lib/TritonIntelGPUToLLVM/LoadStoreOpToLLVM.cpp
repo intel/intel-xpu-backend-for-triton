@@ -347,6 +347,7 @@ struct LoadStoreConversionBase {
 
     SetVector<unsigned> boundaryProtect(boundaryCheck.begin(),
                                         boundaryCheck.end());
+
     SmallVector<Value> maskElems;
     for (unsigned i = 0; i < numElems; ++i) {
       SmallVector<Value> index = indices[i];
@@ -2104,6 +2105,22 @@ struct LoadOpToBlockIOConversion
                 op.getBoundaryCheck(), PaddingOption::PAD_NAN);
           }
         }
+      }
+
+      Type f32Type = b.f16_val(0).getType();
+      Type i32Type = b.i32_val(0).getType();
+      Type i16Type = b.i16_val(0).getType();
+
+      Value loadConstant = b.i32_val(100 * (elemIdx / numElemsPerLoad));
+      Value threadId = getThreadId(rewriter, loc);
+      threadId = b.add(threadId, loadConstant);
+      threadId = LLVM::SIToFPOp::create(rewriter, loc, f32Type, threadId);
+      threadId = b.bitcast(threadId, i16Type);
+      threadId = b.zext(i32Type, threadId);
+
+      for (auto i = 0; i < numOperandsPerLoad * numValsPerDPASOperand; ++i) {
+        Value idx = b.i32_val(i);
+        ret = b.insert_element(ret, threadId, idx);
       }
 
       for (size_t opsIdx = 0; opsIdx < numOperandsPerLoad; ++opsIdx) {
