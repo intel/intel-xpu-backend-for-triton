@@ -15,9 +15,9 @@ from triton_kernels_benchmark import cutlass_kernel
 # pylint: disable=unused-argument
 @triton.jit
 def _attn_fwd_inner(acc, l_i, m_i, q,  #
-                    K_desc, V_desc,  #
-                    start_m, qk_scale,  #
-                    BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr, BLOCK_N: tl.constexpr,  #
+                    desc_k, desc_v,  #
+                    offset_y, dtype: tl.constexpr, start_m, qk_scale,  #
+                    BLOCK_M: tl.constexpr, HEAD_DIM: tl.constexpr, BLOCK_N: tl.constexpr,  #
                     STAGE: tl.constexpr, offs_m: tl.constexpr, offs_n: tl.constexpr,  #
                     N_CTX: tl.constexpr):
     # range of values handled by this stage
@@ -29,14 +29,14 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
     # causal = False
     else:
         lo, hi = 0, N_CTX
+    offsetk_y = offset_y + lo
+    offsetv_y = offset_y + lo
     # loop over k, v and update accumulator
-    off_n = lo
     for start_n in tl.range(lo, hi, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
         # -- compute qk ----
-        k = K_desc.load([off_n, 0]).T
-        qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
-        qk += tl.dot(q, k)
+        k = desc_k.load([offsetk_y, 0]).T
+        qk = tl.dot(q, k)
         if STAGE == 2:
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])
             qk = qk * qk_scale + tl.where(mask, 0, -1.0e6)
@@ -46,116 +46,102 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
             m_ij = tl.maximum(m_i, tl.max(qk, 1) * qk_scale)
             qk = qk * qk_scale - m_ij[:, None]
         p = tl.math.exp2(qk)
-        l_ij = tl.sum(p, 1)
-        # -- update m_i and l_i
+        # -- compute correction factor
         alpha = tl.math.exp2(m_i - m_ij)
-        l_i = l_i * alpha + l_ij
+        l_ij = tl.sum(p, 1)
         # -- update output accumulator --
         acc = acc * alpha[:, None]
-        # update acc
-        v = V_desc.load([off_n, 0])
-        acc += tl.dot(p.to(tl.float16), v)
+        # prepare p and v for the dot
+        v = desc_v.load([offsetv_y, 0])
+        p = p.to(dtype)
+        acc = tl.dot(p, v, acc)
         # update m_i and l_i
+        # place this at the end of the loop to reduce register pressure
+        l_i = l_i * alpha + l_ij
         m_i = m_ij
-        off_n += BLOCK_N
+        offsetk_y += BLOCK_N
+        offsetv_y += BLOCK_N
     return acc, l_i, m_i
 
 
 @triton.jit
-def _attn_fwd_with_tensor_descriptors(Q, K, V, sm_scale, M, Out,  #
-                                      stride_qz: tl.constexpr, stride_qh: tl.constexpr, stride_qm: tl.constexpr,
-                                      stride_qk: tl.constexpr,  #
-                                      stride_kz: tl.constexpr, stride_kh: tl.constexpr, stride_kn: tl.constexpr,
-                                      stride_kk: tl.constexpr,  #
-                                      stride_vz: tl.constexpr, stride_vh: tl.constexpr, stride_vk: tl.constexpr,
-                                      stride_vn: tl.constexpr,  #
-                                      stride_oz: tl.constexpr, stride_oh: tl.constexpr, stride_om: tl.constexpr,
-                                      stride_on: tl.constexpr,  #
-                                      Z: tl.constexpr, H: tl.constexpr,  #
-                                      N_CTX: tl.constexpr,  #
-                                      BLOCK_M: tl.constexpr,  #
-                                      BLOCK_DMODEL: tl.constexpr,  #
-                                      BLOCK_N: tl.constexpr,  #
-                                      STAGE: tl.constexpr  #
-                                      ):  # pylint: disable=unused-argument
-    tl.static_assert(BLOCK_N <= BLOCK_DMODEL)
-    start_m = tl.program_id(2)
-    off_z = tl.program_id(0)
-    off_h = tl.program_id(1)
-    qkv_offset = off_z.to(tl.int64) * stride_qz + off_h.to(tl.int64) * stride_qh
+def _attn_fwd(sm_scale, M,  #
+              Z, H, Q, K, V, O,  #
+              N_CTX: tl.constexpr,  #
+              HEAD_DIM: tl.constexpr,  #
+              BLOCK_M: tl.constexpr,  #
+              BLOCK_N: tl.constexpr,  #
+              STAGE: tl.constexpr,  #
+              ):  # pylint: disable=unused-argument
+    dtype = tl.float16
+    tl.static_assert(BLOCK_N <= HEAD_DIM)
+    # Grid: (Z, H, num_blocks_m) for N_CTX > 512, (num_blocks_m, 1, Z*H) for N_CTX <= 512
     if N_CTX <= 512:
         start_m = tl.program_id(0)
-        off_z = tl.program_id(2)
-        qkv_offset = off_z.to(tl.int64) * stride_qh
+        off_hz = tl.program_id(2)
+        off_z = off_hz // H
+        off_h = off_hz % H
+    else:
+        off_z = tl.program_id(0)
+        off_h = tl.program_id(1)
+        start_m = tl.program_id(2)
 
-    # tensor descriptors
-    Q_desc = tl.make_tensor_descriptor(
-        base=Q + qkv_offset,
-        shape=(N_CTX, BLOCK_DMODEL),
-        strides=(stride_qm, stride_qk),
-        block_shape=(BLOCK_M, BLOCK_DMODEL),
-    )
-    V_desc = tl.make_tensor_descriptor(
-        base=V + qkv_offset,
-        shape=(N_CTX, BLOCK_DMODEL),
-        strides=(stride_vk, stride_vn),
-        block_shape=(BLOCK_N, BLOCK_DMODEL),
-    )
-    K_desc = tl.make_tensor_descriptor(
-        base=K + qkv_offset,
-        shape=(N_CTX, BLOCK_DMODEL),
-        strides=(stride_kn, stride_kk),
-        block_shape=(BLOCK_N, BLOCK_DMODEL),
-    )
-    O_desc = tl.make_tensor_descriptor(
-        base=Out + qkv_offset,
-        shape=(N_CTX, BLOCK_DMODEL),
-        strides=(stride_om, stride_on),
-        block_shape=(BLOCK_M, BLOCK_DMODEL),
-    )
+    y_dim = Z * H * N_CTX
+    desc_q = tl.make_tensor_descriptor(Q, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
+                                       block_shape=[BLOCK_M, HEAD_DIM])
+    desc_v = tl.make_tensor_descriptor(V, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
+                                       block_shape=[BLOCK_N, HEAD_DIM])
+    desc_k = tl.make_tensor_descriptor(K, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
+                                       block_shape=[BLOCK_N, HEAD_DIM])
+    desc_o = tl.make_tensor_descriptor(O, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
+                                       block_shape=[BLOCK_M, HEAD_DIM])
+
+    offset_y = off_z * (N_CTX * H) + off_h * N_CTX
+    qo_offset_y = offset_y + start_m * BLOCK_M
     # initialize offsets
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
     offs_n = tl.arange(0, BLOCK_N)
     # initialize pointer to m and l
     m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float('inf')
     l_i = tl.zeros([BLOCK_M], dtype=tl.float32) + 1.0
-    acc = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=tl.float32)
+    acc = tl.zeros([BLOCK_M, HEAD_DIM], dtype=tl.float32)
     # load scales
     qk_scale = sm_scale
     qk_scale *= 1.44269504  # 1/log(2)
     # load q: it will stay in SRAM throughout
-    q = Q_desc.load([start_m * BLOCK_M, 0])
+    q = desc_q.load([qo_offset_y, 0])
     # stage 1: off-band
-    # For causal = True, STAGE = 3 the kernel gets 1 as its STAGE
-    # For causal = False, STAGE = 1, the kernel gets 3 as its STAGE
+    # For causal = True, STAGE = 3 and _attn_fwd_inner gets 1 as its STAGE
+    # For causal = False, STAGE = 1, and _attn_fwd_inner gets 3 as its STAGE
     if STAGE & 1:
-        acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_desc, V_desc,  #
-                                        start_m, qk_scale,  #
-                                        BLOCK_M, BLOCK_DMODEL, BLOCK_N,  #
-                                        4 - STAGE, offs_m, offs_n, N_CTX  #
-                                        )
+        acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q,  #
+                                        desc_k, desc_v,  #
+                                        offset_y, dtype, start_m, qk_scale,  #
+                                        BLOCK_M, HEAD_DIM, BLOCK_N,  #
+                                        4 - STAGE, offs_m, offs_n, N_CTX)
     # stage 2: on-band
     if STAGE & 2:
-        acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_desc, V_desc,  #
-                                        start_m, qk_scale,  #
-                                        BLOCK_M, BLOCK_DMODEL, BLOCK_N,  #
-                                        2, offs_m, offs_n, N_CTX  #
-                                        )
+        acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q,  #
+                                        desc_k, desc_v,  #
+                                        offset_y, dtype, start_m, qk_scale,  #
+                                        BLOCK_M, HEAD_DIM, BLOCK_N,  #
+                                        2, offs_m, offs_n, N_CTX)
     # epilogue
     m_i += tl.math.log2(l_i)
     acc = acc / l_i[:, None]
+    # Compute off_hz based on grid layout
     if N_CTX <= 512:
-        off_hz = off_z + off_h * H
+        off_hz = tl.program_id(2)
     else:
-        off_hz = off_z * H + off_h
-    M_desc = tl.make_tensor_descriptor(
+        off_hz = tl.program_id(0) * H + tl.program_id(1)
+    desc_m = tl.make_tensor_descriptor(
         base=M + off_hz * N_CTX,
         shape=[N_CTX],
         strides=[1],
         block_shape=[BLOCK_M],
     )
-    M_desc.store([start_m * BLOCK_M], m_i)
-    O_desc.store([start_m * BLOCK_M, 0], acc.to(Out.type.element_ty))
+    desc_m.store([start_m * BLOCK_M], m_i)
+    desc_o.store([qo_offset_y, 0], acc.to(dtype))
 
 
 configs = [
@@ -166,7 +152,7 @@ configs = [
     for w in [8, 16, 32] \
     ]
 
-tuner = triton.autotune(configs, key=['N_CTX', 'BLOCK_DMODEL', 'STAGE'])
+tuner = triton.autotune(configs, key=['N_CTX', 'HEAD_DIM', 'STAGE'])
 
 
 @triton.jit
@@ -436,16 +422,12 @@ class _attention(torch.autograd.Function):
         M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
 
         _attention.tune_attn_fwd[grid](  # pylint: disable=unsubscriptable-object
-            q, k, v, sm_scale, M, o,  #
-            q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
-            k.stride(0), k.stride(1), k.stride(2), k.stride(3),  #
-            v.stride(0), v.stride(1), v.stride(2), v.stride(3),  #
-            o.stride(0), o.stride(1), o.stride(2), o.stride(3),  #
+            sm_scale, M,  #
             q.shape[0], q.shape[1],  #
+            q, k, v, o,  #
             N_CTX=q.shape[2],  #
-            BLOCK_DMODEL=Lk,  #
+            HEAD_DIM=Lk,  #
             STAGE=stage,  #
-            use_barrier=False,  #
         )
 
         ctx.save_for_backward(q, k, v, o, M)
@@ -509,7 +491,7 @@ attention = _attention.apply
 def get_benchmark(
     providers_filter: Optional[list[str]] = None,
     fa_kernel_mode='fwd',
-    attn_fwd=_attn_fwd_with_tensor_descriptors,
+    attn_fwd=_attn_fwd,
 ):
     """
     Returns a Mark object containing a Benchmark object constructed at runtime and parameterized by the provided option values.
