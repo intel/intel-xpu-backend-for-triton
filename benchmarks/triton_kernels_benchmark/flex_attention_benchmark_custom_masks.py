@@ -102,6 +102,7 @@ def run_bench_paged(q, k, v, score_mod, _, __):
 # FIXME: Enable PagedNoop mask for BMG 580
 MASKS = ['NATTEN', 'Alibi', 'Noop', 'Softcap', 'PagedNoop'] if '580' not in torch.xpu.get_device_name() else \
     ['NATTEN', 'Alibi', 'Noop', 'Softcap']
+fa_kernel_mode = os.getenv('FA_KERNEL_MODE', 'fwd')
 
 
 # Kernel profiling for Backward mode is not working as expected:
@@ -110,16 +111,16 @@ MASKS = ['NATTEN', 'Alibi', 'Noop', 'Softcap', 'PagedNoop'] if '580' not in torc
     benchmark_suite.Benchmark(
         x_names=['Z', 'H', 'N_CTX', 'D_HEAD', 'MASK', 'MODE'],
         x_vals=[[z, h, 16384 // z, dhead, mask, mode]
-                for z in [4, 8, 16, 32]
+                for z in [1, 2, 4, 8, 16, 32]
                 for (h, dhead) in [(16, 128), (32, 64)]
                 for mask in MASKS
-                for mode in [os.getenv('FA_KERNEL_MODE', 'fwd')]]  #
-        + [[4, 48, 1024, 64, mask, mode] for mask in MASKS for mode in [os.getenv('FA_KERNEL_MODE', 'fwd')]]  #
+                for mode in [fa_kernel_mode]]  #
+        + [[4, 48, 1024, 64, mask, mode] for mask in MASKS for mode in [fa_kernel_mode]]  #
         + [[z, h, 1024, dhead, mask, mode]
            for z in [1, 2, 4, 8, 16, 32, 64]
            for (h, dhead) in [(8, 128), (32, 96), (4, 128)]
            for mask in MASKS
-           for mode in [os.getenv('FA_KERNEL_MODE', 'fwd')]],
+           for mode in [fa_kernel_mode]],
         line_arg='provider',
         line_vals=['triton'] + (['onednn'] if '580' not in torch.xpu.get_device_name() else []),
         line_names=['Triton'] + (['OneDNN'] if '580' not in torch.xpu.get_device_name() else []),
