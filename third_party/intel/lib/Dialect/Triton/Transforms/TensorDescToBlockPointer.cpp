@@ -71,7 +71,7 @@ public:
       if (auto loadOp = dyn_cast_or_null<tt::DescriptorLoadOp>(op)) {
         // Retrieve the padding option from the MakeTensorDescOp.
         std::optional<tt::MakeTensorDescOp> makeTensorDescOp =
-            triton::intel::findDefiningMakeTensorPtrOp<tt::MakeTensorDescOp>(
+            tt::intel::findDefiningOpOfType<tt::MakeTensorDescOp>(
                 loadOp.getDesc());
         if (!makeTensorDescOp) {
           op->emitRemark("TritonIntelTensorDescToBlockPointer: Failed to "

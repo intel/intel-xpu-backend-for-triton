@@ -32,7 +32,7 @@ module attributes { "ttg.threads-per-warp" = 16 : i32, "ttg.num-warps" = 4 : i32
     // CHECK:           llvm.call spir_funccc @__assert_fail(%[[VAL_15]], %[[VAL_16]], %[[VAL_14]], %[[VAL_17]]) : (!llvm.ptr<4>, !llvm.ptr<4>, i32, !llvm.ptr<4>) -> ()
     // CHECK:           llvm.br ^bb2
     // CHECK:         ^bb2:
-    // CHECK:           %[[VAL_18:.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK:           %[[VAL_18:.*]] = llvm.mlir.constant(3 : i32) : i32
     // CHECK:           llvm.call spir_funccc @_Z7barrierj(%[[VAL_18]]) {convergent, no_unwind, will_return} : (i32) -> ()
     tt.assert %arg0, "assert text" : tensor<1xi1, #blocked>
     // CHECK:           %[[VAL_19:.*]] = llvm.extractvalue %[[VAL_1]][0] : !llvm.struct<(i1)>
@@ -55,7 +55,7 @@ module attributes { "ttg.threads-per-warp" = 16 : i32, "ttg.num-warps" = 4 : i32
     // CHECK:           llvm.call spir_funccc @__assert_fail(%[[VAL_31]], %[[VAL_32]], %[[VAL_30]], %[[VAL_33]]) : (!llvm.ptr<4>, !llvm.ptr<4>, i32, !llvm.ptr<4>) -> ()
     // CHECK:           llvm.br ^bb4
     // CHECK:         ^bb4:
-    // CHECK:           %[[VAL_34:.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK:           %[[VAL_34:.*]] = llvm.mlir.constant(3 : i32) : i32
     // CHECK:           llvm.call spir_funccc @_Z7barrierj(%[[VAL_34]]) {convergent, no_unwind, will_return} : (i32) -> ()
     tt.assert %arg1, "assert text" : tensor<1xi1, #blocked>
     // CHECK:           %[[VAL_35:.*]] = llvm.extractvalue %[[VAL_2]][0] : !llvm.struct<(i1)>
@@ -78,7 +78,7 @@ module attributes { "ttg.threads-per-warp" = 16 : i32, "ttg.num-warps" = 4 : i32
     // CHECK:           llvm.call spir_funccc @__assert_fail(%[[VAL_47]], %[[VAL_48]], %[[VAL_46]], %[[VAL_49]]) : (!llvm.ptr<4>, !llvm.ptr<4>, i32, !llvm.ptr<4>) -> ()
     // CHECK:           llvm.br ^bb6
     // CHECK:         ^bb6:
-    // CHECK:           %[[VAL_50:.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK:           %[[VAL_50:.*]] = llvm.mlir.constant(3 : i32) : i32
     // CHECK:           llvm.call spir_funccc @_Z7barrierj(%[[VAL_50]]) {convergent, no_unwind, will_return} : (i32) -> ()
     tt.assert %arg2, "different assert text" : tensor<1xi1, #blocked>
     tt.return
