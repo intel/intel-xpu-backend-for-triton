@@ -1,0 +1,2 @@
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/5977
+tests/test_roofline.py::test_get_memset_tbps
