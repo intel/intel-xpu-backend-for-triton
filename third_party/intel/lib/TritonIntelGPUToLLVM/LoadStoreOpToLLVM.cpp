@@ -2107,22 +2107,6 @@ struct LoadOpToBlockIOConversion
         }
       }
 
-      Type f32Type = b.f16_val(0).getType();
-      Type i32Type = b.i32_val(0).getType();
-      Type i16Type = b.i16_val(0).getType();
-
-      Value loadConstant = b.i32_val(100 * (elemIdx / numElemsPerLoad));
-      Value threadId = getThreadId(rewriter, loc);
-      threadId = b.add(threadId, loadConstant);
-      threadId = LLVM::SIToFPOp::create(rewriter, loc, f32Type, threadId);
-      threadId = b.bitcast(threadId, i16Type);
-      threadId = b.zext(i32Type, threadId);
-
-      for (auto i = 0; i < numOperandsPerLoad * numValsPerDPASOperand; ++i) {
-        Value idx = b.i32_val(i);
-        ret = b.insert_element(ret, threadId, idx);
-      }
-
       for (size_t opsIdx = 0; opsIdx < numOperandsPerLoad; ++opsIdx) {
         Value unpackedVal;
         if (numValsPerDPASOperand != numValuesPerLoad) {
@@ -2173,6 +2157,8 @@ struct LoadOpToBlockIOConversion
                     nanOtherElems[i].getDefiningOp<LLVM::ConstantOp>()) {
               constOtherElems.push_back(constOp.getValue());
             } else {
+              assert("nanOtherElems size mismatch, buildMasksFromBlockPtr "
+                     "always builds all NaNs");
               break;
             }
           }
@@ -2186,34 +2172,21 @@ struct LoadOpToBlockIOConversion
                     VectorType::get(numElemsPerUnpackedType, unpackedElemType),
                     constOtherElems));
           } else {
-            other = b.undef(unpackedType);
+            assert("nanOtherElems size mismatch, buildMasksFromBlockPtr always "
+                   "builds all NaNs");
           }
           Value packedPred =
               b.undef(VectorType::get(numElemsPerUnpackedType, i1_ty));
-          for (size_t i = 0; i < numElemsPerUnpackedType; ++i) {
-            unsigned registerIdx =
-                regMapping
-                    .apply(
-                        {{kRegister,
-                          elemIdx + opsIdx * numElemsPerUnpackedType + i}})[0]
-                    .second;
-            Value falseVal = nanOtherElems[registerIdx];
-            if (constOtherElems.size() != numElemsPerUnpackedType)
-              other = b.insert_element(other, falseVal, b.i32_val(i));
+
+          for (const auto [i, registerIdx] : llvm::enumerate(unpackIndices)) {
             packedPred = b.insert_element(packedPred, nanMaskElems[registerIdx],
                                           b.i32_val(i));
           }
-
           unpackedVal = b.select(packedPred, unpackedVal, other);
         } else if (vectorMask) {
           SmallVector<int32_t> registerIndicies(numElemsPerUnpackedType);
-          for (size_t i = 0; i < numElemsPerUnpackedType; ++i) {
-            registerIndicies[i] =
-                regMapping
-                    .apply(
-                        {{kRegister,
-                          elemIdx + opsIdx * numElemsPerUnpackedType + i}})[0]
-                    .second;
+          for (const auto [i, registerIdx] : llvm::enumerate(unpackIndices)) {
+            registerIndicies[i] = registerIdx;
           }
 
           DenseI32ArrayAttr attr =
