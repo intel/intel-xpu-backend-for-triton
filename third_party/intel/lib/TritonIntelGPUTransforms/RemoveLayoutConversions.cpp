@@ -168,7 +168,7 @@ public:
       std::function<bool(Operation *)> stopPropagation = nullptr);
 
 private:
-  // Forward remat to clean the value,
+  // Forward rematerialization to clean the value,
   void forwardRematClean(DenseMap<Value, Attribute> &values);
   void updateRematMapping(SmallVector<std::tuple<Value, Value>> &values);
   void reduceLoopCarriedValues();
@@ -1361,7 +1361,7 @@ void LayoutRematerialization::forwardRematClean(
     for (Value value : vs) {
       if (!isa<RankedTensorType>(value.getType()))
         continue;
-      bool hasChanged = false;
+
       Attribute dstEncoding;
       if (isa<StoreOp, ConvertLayoutOp>(op)) {
         // Try to remove the convert by making the dst encoding match the source
@@ -1819,8 +1819,8 @@ void LayoutRematerialization::backwardRematerialization(
   // 3. Rewrite the slice.
   rewriteSlice(slice, layout, convertOp);
 
-  // 4. Clean up the duplicated expressions added by the backward remet.
-  // There is the information about the duplicated values in rematMapping
+  // 4. Clean up the duplicated expressions added by the backward rematerialization.
+  // The information about the duplicated values is stored in rematMapping.
   forwardRematClean(forwardCleanOps);
 }
 
