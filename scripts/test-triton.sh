@@ -767,10 +767,16 @@ run_liger_install() {
 
   if ! [ -d "./Liger-Kernel" ]; then
     git clone https://github.com/linkedin/Liger-Kernel
+    cd Liger-Kernel
+    echo "Liger-Kernels commit: '$(git rev-parse HEAD)'"
+    git apply ../benchmarks/third_party/liger/liger-fix.patch --allow-empty
+    cd ..
   fi
 
   if ! pip list | grep "liger_kernel" ; then
-    pip install transformers 'pandas<3.0' datasets -e Liger-Kernel
+    # Liger requires transformers<5.0
+    # https://github.com/linkedin/Liger-Kernel/issues/978
+    pip install 'transformers<5.0' 'pandas<3.0' datasets -e Liger-Kernel
   fi
 }
 
