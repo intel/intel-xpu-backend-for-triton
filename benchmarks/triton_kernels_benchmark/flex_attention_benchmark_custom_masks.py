@@ -99,9 +99,8 @@ def run_bench_paged(q, k, v, score_mod, _, __):
                           kernel_options=kernel_options)
 
 
-# FIXME: Enable PagedNoop mask for BMG 580
-MASKS = ['NATTEN', 'Alibi', 'Noop', 'Softcap', 'PagedNoop'] if '580' not in torch.xpu.get_device_name() else \
-    ['NATTEN', 'Alibi', 'Noop', 'Softcap']
+MASKS = ['NATTEN', 'Alibi', 'Noop', 'Softcap', 'PagedNoop']
+IS_B580 = '580' in torch.xpu.get_device_name()
 
 
 # Kernel profiling for Backward mode is not working as expected:
@@ -110,19 +109,19 @@ MASKS = ['NATTEN', 'Alibi', 'Noop', 'Softcap', 'PagedNoop'] if '580' not in torc
     benchmark_suite.Benchmark(
         x_names=['Z', 'H', 'N_CTX', 'D_HEAD', 'MASK', 'MODE'],
         x_vals=[[z, h, 16384 // z, dhead, mask, mode]
-                for z in [4, 8, 16, 32]
+                for z in ([4, 8, 16, 32] if not IS_B580 else [16, 32])
                 for (h, dhead) in [(16, 128), (32, 64)]
                 for mask in MASKS
                 for mode in [os.getenv('FA_KERNEL_MODE', 'fwd')]]  #
         + [[4, 48, 1024, 64, mask, mode] for mask in MASKS for mode in [os.getenv('FA_KERNEL_MODE', 'fwd')]]  #
         + [[z, h, 1024, dhead, mask, mode]
-           for z in [1, 2, 4, 8, 16, 32, 64]
+           for z in ([1, 2, 4, 8, 16, 32, 64] if not IS_B580 else [1, 2, 4, 8, 16])
            for (h, dhead) in [(8, 128), (32, 96), (4, 128)]
            for mask in MASKS
            for mode in [os.getenv('FA_KERNEL_MODE', 'fwd')]],
         line_arg='provider',
-        line_vals=['triton'] + (['onednn'] if '580' not in torch.xpu.get_device_name() else []),
-        line_names=['Triton'] + (['OneDNN'] if '580' not in torch.xpu.get_device_name() else []),
+        line_vals=['triton'] + (['onednn'] if not IS_B580 else []),
+        line_names=['Triton'] + (['OneDNN'] if not IS_B580 else []),
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel=['GB/s', 'TFlops'],
         plot_name='flexAttnMasks-performance',
