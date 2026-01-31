@@ -32,7 +32,7 @@ jobs:
       - name: Check pre-commit
         run: |
           python3 -m pip install --upgrade pre-commit
-          python3 -m pre_commit run --all-files --verbose
+          GOSUMDB=off python3 -m pre_commit run --all-files --verbose
       - name: Print diff of changes if pre-commit failed
         if: failure()
         run: |
