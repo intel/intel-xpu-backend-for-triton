@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 import itertools
 import functools
 import json
+import traceback
+import sys
 
 import argparse
 import datetime
@@ -17,16 +19,18 @@ import time
 from pathlib import Path
 import warnings
 
+import cloudpickle
 import scipy.stats
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
 import torch
+import torch.multiprocessing as mp
 import triton.profiler as proton
 from torch.profiler import profile, ProfilerActivity, record_function
 
-from triton.testing import assert_close as triton_assert_close, Benchmark, do_bench as triton_do_bench
+from triton.testing import assert_close as triton_assert_close, Benchmark as TritonBenchmark, do_bench as triton_do_bench
 
 from triton_kernels_benchmark import build_report
 from triton_kernels_benchmark.benchmark_shapes_parser import ShapePatternParser
@@ -446,6 +450,81 @@ def enhance_df(df, bench, mark_args: MarkArgs):
     return df
 
 
+class Benchmark(TritonBenchmark):
+    # pylint: disable=dangerous-default-value
+    def __init__(self, *args, isolated_providers={}, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.isolated_providers = isolated_providers
+
+
+def _worker_wrapper(fn_bytes, args, kwargs, queue, done_event):
+    """Worker function that executes fn in subprocess and returns results via queue"""
+    try:
+        # Deserialize function
+        fn = cloudpickle.loads(fn_bytes)
+
+        result = fn(*args, **kwargs)
+
+        queue.put(("success", result))
+
+        # [Critical] Wait for parent to finish retrieving file descriptors before exiting
+        done_event.wait(timeout=60)
+
+    # pylint: disable=broad-exception-caught
+    except Exception as e:
+        queue.put(("error", str(e), traceback.format_exc()))
+
+
+# pylint: disable=dangerous-default-value
+def call_in_isolated_subprocess(fn, args=(), kwargs={}):
+    ctx = mp.get_context("spawn")
+
+    # Serialize function with cloudpickle manually to bypass multiprocessing's pickler
+    # WORKAROUND: Clear torch.compile caches before pickling to avoid unpicklable objects
+    fn_module = fn.__module__
+    if fn_module in sys.modules:
+        module = sys.modules[fn_module]
+        saved_caches = {}
+
+        # Find all torch.compile wrapper functions in the module
+        for name in dir(module):
+            obj = getattr(module, name)
+            # Identify torch.compile wrappers by internal PyTorch attribute
+            if callable(obj) and hasattr(obj, "_torchdynamo_orig_callable"):
+                saved_caches[name] = obj
+                setattr(module, name, None)
+
+        try:
+            fn_bytes = cloudpickle.dumps(fn)
+        finally:
+            # Restore all cleared caches
+            for name, obj in saved_caches.items():
+                setattr(module, name, obj)
+    else:
+        fn_bytes = cloudpickle.dumps(fn)
+
+    queue = ctx.Queue()
+    done_event = ctx.Event()
+    process = ctx.Process(target=_worker_wrapper, args=(fn_bytes, args, kwargs, queue, done_event))
+    process.start()
+
+    result = queue.get(timeout=300)
+
+    status, *data = result
+    if status == "error":
+        error_msg, traceback_str = data
+        done_event.set()
+        process.join()
+        raise RuntimeError(f"Subprocess failed: {error_msg}\n{traceback_str}")
+
+    # Signal subprocess it can exit now
+    done_event.set()
+    process.join()
+
+    output = data[0]
+    return output
+
+
 class Mark:
 
     def __init__(self, fn, benchmarks):
@@ -464,6 +543,10 @@ class Mark:
         y_vals += [f"{x}-CV" for x in bench.line_names]
         x_names = list(bench.x_names)
         df = pd.DataFrame(columns=x_names + y_vals)
+        if not hasattr(self.fn, "_RESULTS_HISTORY"):
+            # pylint: disable=protected-access
+            self.fn._RESULTS_HISTORY = {}
+
         for x in bench.x_vals:
             # x can be a single value or a sequence of values.
             if not isinstance(x, (list, tuple)):
@@ -477,7 +560,37 @@ class Mark:
             for label in itertools.chain(bench.ylabel, ["CV"]):
                 row_vals[label] = ([], [], [])
             for y in bench.line_vals:
-                ret = self.fn(**x_args, **{bench.line_arg: y}, **bench.args, **kwargs)
+                args_str = ", ".join(f"{k}={v}" for k, v in x_args.items())
+                if "provider" in bench.line_arg:
+                    args_str += f", provider={y}"
+
+                should_isolate = y in bench.isolated_providers
+
+                print(f"Running case: {args_str}")
+
+                if should_isolate:
+                    case_key = tuple(list(x_args.items()) + [(bench.line_arg, y)])
+                    print(f"Running {y} provider in isolated subprocess")
+                    try:
+                        ret = call_in_isolated_subprocess(
+                            self.fn, kwargs={**x_args, **{bench.line_arg: y}, **bench.args, **kwargs})
+                        # pylint: disable=protected-access
+                        self.fn._RESULTS_HISTORY[case_key] = {"success": True, "oom": False}
+                    except (torch.OutOfMemoryError, RuntimeError) as e:
+                        if any(keyword in str(e) for keyword in ("UR_RESULT_ERROR_OUT_OF_RESOURCES",
+                                                                 "UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY",
+                                                                 "UR_RESULT_ERROR_DEVICE_LOST", "OutOfMemoryError")):
+                            error = e.args[0].split("\n")[0]
+                            print(f"Exception during {y} provider call: {error}")
+                            # pylint: disable=protected-access
+                            self.fn._RESULTS_HISTORY[case_key] = {"success": False, "oom": True}
+                            ret = ((float("nan"), float("nan"), float("nan")), (float("nan"), float("nan"),
+                                                                                float("nan")), float("nan"))
+                        else:
+                            raise
+
+                else:
+                    ret = self.fn(**x_args, **{bench.line_arg: y}, **bench.args, **kwargs)
                 for i, label in enumerate(itertools.chain(bench.ylabel, ["CV"])):
                     try:
                         y_mean, y_min, y_max = ret[i]
