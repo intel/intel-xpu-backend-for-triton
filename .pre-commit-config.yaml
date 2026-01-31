@@ -53,7 +53,7 @@ repos:
     - id: expand-yaml-anchors
       name: Expand YAML anchors
       language: golang
-      additional_dependencies: [github.com/mikefarah/yq/v4@5f90039bdc6756f8753194152a67e1fe96957e7f]
+      additional_dependencies: [github.com/mikefarah/yq@latest]
       entry: >
         bash -c '
           OUT=".github/workflows/integration-tests.yml"
