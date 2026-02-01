@@ -158,20 +158,27 @@ def generate_junit_report(reports_path: pathlib.Path):
 
     for item in reports_path.glob('tutorial-*.json'):
         data = json.loads(item.read_text())
-        name, result, time = data['name'], data['result'], data.get('time', 0)
-        testcase = et.SubElement(testsuite, 'testcase', name=name)
-        if result == 'PASS':
-            testcase.set('time', str(time))
-        elif result == 'SKIP':
-            total_skipped += 1
-            et.SubElement(testcase, 'skipped', type='pytest.skip')
-        elif result == 'FAIL':
-            total_failures += 1
-            et.SubElement(testcase, 'failure', message=data.get('message', ''))
-        else:
-            continue
-        total_tests += 1
-        total_time += time
+        if isinstance(data, dict):
+            # make it a list, for unified flow
+            data = [data]
+
+        for entry in data:
+            name, result, time = entry['name'], entry['result'], entry.get('time', 0)
+            testcase = et.SubElement(testsuite, 'testcase', name=name)
+
+            if result == 'PASS':
+                testcase.set('time', str(time))
+            elif result == 'SKIP':
+                total_skipped += 1
+                et.SubElement(testcase, 'skipped', type='pytest.skip')
+            elif result == 'FAIL':
+                total_failures += 1
+                et.SubElement(testcase, 'failure', message=entry.get('message', ''))
+            else:
+                continue
+
+            total_tests += 1
+            total_time += time
 
     testsuite.set('tests', str(total_tests))
     testsuite.set('errors', str(total_errors))
