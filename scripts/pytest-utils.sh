@@ -33,6 +33,7 @@ handle_test_error() {
 TRITON_TEST_SKIPLIST_DIR="$(cd "$TRITON_TEST_SKIPLIST_DIR" && pwd)"
 
 pytest() {
+    local report_name="${TRITON_TEST_REPORT_NAME:-${TRITON_TEST_SUITE:-}}"
     pytest_extra_args=(
         "--dist=worksteal"
     )
@@ -40,14 +41,14 @@ pytest() {
     if [[ -v TRITON_TEST_SUITE && $TRITON_TEST_REPORTS = true ]]; then
         mkdir -p "$TRITON_TEST_REPORTS_DIR"
         pytest_extra_args+=(
-            "--junitxml=$TRITON_TEST_REPORTS_DIR/$TRITON_TEST_SUITE.xml"
+            "--junitxml=$TRITON_TEST_REPORTS_DIR/$report_name.xml"
         )
     fi
 
     if [[ -v TRITON_TEST_SUITE && $TRITON_TEST_WARNING_REPORTS = true ]]; then
         mkdir -p "$TRITON_TEST_REPORTS_DIR"
         pytest_extra_args+=(
-            "--warnings-json-output-file=$TRITON_TEST_REPORTS_DIR/${TRITON_TEST_SUITE}-warnings.json"
+            "--warnings-json-output-file=$TRITON_TEST_REPORTS_DIR/${report_name}-warnings.json"
         )
     fi
 
@@ -86,25 +87,6 @@ pytest() {
 
     export TEST_UNSKIP
     python -u -m pytest "${pytest_extra_args[@]}" "$@" || handle_test_error
-}
-
-run_tutorial_test() {
-    echo
-    echo "****** Running $1 test ******"
-    echo
-
-    run_tutorial_args=(
-        "--skip-list=$TRITON_TEST_SKIPLIST_DIR/tutorials.txt"
-        "$1.py"
-    )
-
-    if [[ $TRITON_TEST_REPORTS = true ]]; then
-        run_tutorial_args+=(
-            "--reports=$TRITON_TEST_REPORTS_DIR"
-        )
-    fi
-
-    python -u "$SCRIPTS_DIR/run_tutorial.py" "${run_tutorial_args[@]}" || handle_test_error
 }
 
 capture_runtime_env() {

@@ -338,31 +338,26 @@ jobs:
           export PYTEST_MAX_PROCESSES=4
           ${{ env.TRITON_TEST_CMD }} --triton-kernels
 
-      - name: Select tutorials to run (rest)
-        if: matrix.suite == 'rest'
-        run: |
-          cat <<EOF | tee tutorials.txt
-          01-vector-add
-          02-fused-softmax
-          03-matrix-multiplication
-          04-low-memory-dropout
-          05-layer-norm
-          07-extern-functions
-          08-grouped-gemm
-          09-persistent-matmul
-          10-experimental-block-pointer
-          EOF
-
       - name: Run Tutorials
         if: matrix.suite == 'rest'
         run: |
-          ${{ env.TRITON_TEST_CMD }} --select-from-file tutorials.txt --tutorial
+          ${{ env.TRITON_TEST_CMD }} --tutorial --tutorial06-run-mode skip
 
       # Run 06-fused-attention.py separately, because it is split into 3 configs
-      - name: Run Flash Attention tutorials
-        if: matrix.suite == 'tutorial-fa-64' || matrix.suite == 'tutorial-fa-128-fwdfp8' || matrix.suite == 'tutorial-fa-128-nofwdfp8'
+      - name: Run Flash Attention tutorials (HEAD_DIM=64)
+        if: matrix.suite == 'tutorial-fa-64'
         run: |
-          ${{ env.TRITON_TEST_CMD }} "--${{ matrix.suite }}"
+          HEAD_DIM=64 ${{ env.TRITON_TEST_CMD }} --tutorial06-run-mode fa_only
+
+      - name: Run Flash Attention tutorials (HEAD_DIM=128, FP8 only)
+        if: matrix.suite == 'tutorial-fa-128-fwdfp8'
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --tutorial06-run-mode fp8_only
+
+      - name: Run Flash Attention tutorials (HEAD_DIM=128, skip FP8)
+        if: matrix.suite == 'tutorial-fa-128-nofwdfp8'
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --tutorial06-run-mode skip_fp8
 
       - name: Install transformers
         if: matrix.suite == 'rest'
@@ -430,7 +425,6 @@ jobs:
         run: |
           python scripts/pass_rate.py --reports reports
           python scripts/pass_rate.py --reports reports --json > pass_rate.json
-          python scripts/pass_rate.py --reports reports --suite tutorials --json > pass_rate_tutorials.json
 
       - name: Upload pass rate report
         uses: actions/upload-artifact@v6
@@ -443,7 +437,7 @@ jobs:
         with:
           name: test-reports-tutorials-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           include-hidden-files: true
-          path: reports/tutorials.xml
+          path: reports/tutorials*.xml
 
       - name: Upload tutorials performance report
         uses: actions/upload-artifact@v6
