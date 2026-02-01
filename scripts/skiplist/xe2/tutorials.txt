@@ -1,0 +1,2 @@
+# [B60] 08-grouped-gemm test: UR_RESULT_ERROR_DEVICE_LOST https://github.com/intel/intel-xpu-backend-for-triton/issues/5999
+08-grouped-gemm
