@@ -62,12 +62,14 @@ namespace mlir {
 namespace test {
 namespace intel {
 void registerTestAxisInfoPass();
-}
+void registerTestRangeAnalysisPass();
+} // namespace intel
 
 void registerTestAliasPass();
 void registerTestAlignmentPass();
 void registerAMDTestAlignmentPass();
 void registerTestAllocationPass();
+void registerTestBufferRegionPass();
 void registerTestLivenessPass();
 void registerTestMembarPass();
 void registerTestAMDGPUMembarPass();
@@ -85,12 +87,14 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::gpu::registerTritonGPUPasses();
   mlir::triton::nvidia_gpu::registerTritonNvidiaGPUPasses();
   mlir::test::intel::registerTestAxisInfoPass();
+  mlir::test::intel::registerTestRangeAnalysisPass();
   mlir::triton::instrument::registerTritonInstrumentPasses();
   mlir::triton::gluon::registerGluonPasses();
   mlir::test::registerTestAliasPass();
   mlir::test::registerTestAlignmentPass();
   mlir::test::registerAMDTestAlignmentPass();
   mlir::test::registerTestAllocationPass();
+  mlir::test::registerTestBufferRegionPass();
   mlir::test::registerTestLivenessPass();
   mlir::test::registerTestMembarPass();
   mlir::test::registerTestLoopPeelingPass();
@@ -101,6 +105,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::intel::registerTritonIntelRemoveBoundaryChecks();
   mlir::triton::intel::registerTritonIntelRemoveMasks();
   mlir::triton::intel::registerTritonIntelStrideVersioning();
+  mlir::triton::intel::registerTritonIntelBlockPointerToTensorDesc();
   mlir::triton::intel::registerTritonIntelTensorDescToBlockPointer();
   mlir::triton::registerRelayoutTritonGPUPass();
   mlir::triton::gpu::registerAllocateSharedMemoryPass();
@@ -124,9 +129,10 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
 
   // TritonAMDGPUToLLVM passes
   mlir::triton::registerAllocateAMDGPUSharedMemory();
+  mlir::triton::registerTritonAMDGPUConvertWarpSpecializeToLLVM();
   mlir::triton::registerConvertTritonAMDGPUToLLVM();
   mlir::triton::registerConvertBuiltinFuncToLLVM();
-  mlir::triton::registerOptimizeAMDLDSUsage();
+  mlir::triton::registerConvertWarpPipeline();
 
   mlir::ub::registerConvertUBToLLVMInterface(registry);
   mlir::registerConvertNVVMToLLVMInterface(registry);
@@ -138,15 +144,19 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::registerTritonAMDGPUAccelerateMatmul();
   mlir::registerTritonAMDGPUOptimizeEpilogue();
   mlir::registerTritonAMDGPUHoistLayoutConversions();
+  mlir::registerTritonAMDGPUSinkLayoutConversions();
+  mlir::registerTritonAMDGPUPrepareIfCombining();
   mlir::registerTritonAMDGPUReorderInstructions();
   mlir::registerTritonAMDGPUBlockPingpong();
   mlir::registerTritonAMDGPUPipeline();
   mlir::registerTritonAMDGPUScheduleLoops();
   mlir::registerTritonAMDGPUCanonicalizePointers();
   mlir::registerTritonAMDGPUConvertToBufferOps();
+  mlir::registerTritonAMDGPUConvertToTensorOps();
   mlir::registerTritonAMDGPUInThreadTranspose();
   mlir::registerTritonAMDGPUCoalesceAsyncCopy();
   mlir::registerTritonAMDGPUUpdateAsyncWaitCount();
+  mlir::registerTritonAMDGPUWarpPipeline();
   mlir::triton::registerTritonAMDGPUInsertInstructionSchedHints();
   mlir::triton::registerTritonAMDGPULowerInstructionSchedHints();
   mlir::registerTritonAMDFoldTrueCmpI();
@@ -181,6 +191,19 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
     for (const char *passName : passNames)
       if (auto result = TP.registerPass(passName); !result)
         llvm::report_fatal_error(result.takeError());
+
+    std::vector<const char *> dialectNames;
+    if (auto result = TP.getDialectHandles(dialectNames); !result)
+      llvm::report_fatal_error(result.takeError());
+
+    for (unsigned i = 0; i < dialectNames.size(); ++i) {
+      const char *dialectName = dialectNames.data()[i];
+      auto result = TP.getDialectPluginInfo(dialectName);
+      if (!result)
+        llvm::report_fatal_error(result.takeError());
+      ::mlir::DialectPluginLibraryInfo dialectPluginInfo = *result;
+      dialectPluginInfo.registerDialectRegistryCallbacks(&registry);
+    }
   }
 
   registry.insert<

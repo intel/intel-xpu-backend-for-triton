@@ -3,6 +3,7 @@ add_triton_library(TritonIntelTransforms
   RemoveBoundaryChecks.cpp
   RemoveMasks.cpp
   StrideVersioning.cpp
+  BlockPointerToTensorDesc.cpp
   TensorDescToBlockPointer.cpp
 
   DEPENDS

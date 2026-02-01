@@ -11,8 +11,8 @@
 #include <optional>
 
 using namespace mlir;
-using namespace mlir::triton;
-using namespace mlir::triton::gpu::intel;
+
+namespace ttgi = mlir::triton::gpu::intel;
 
 namespace {
 
@@ -27,74 +27,18 @@ public:
       : dpasLayout(dpasLayout), rewriter(rewriter),
         typeConverter(typeConverter), loc(loc), ctx(dpasLayout.getContext()) {}
 
+  template <typename DPASEngineType,
+            typename = std::enable_if_t<
+                llvm::is_one_of<DPASEngineType, ttgi::DPASEngineTypeXe2,
+                                ttgi::DPASEngineTypeXe3P>::value>>
   std::tuple<Type, Type, Type, Type> static getDPASOperandsType(
-      DPASAnalysis::DPASEngineType dpasType, MLIRContext *ctx,
-      DpasEncodingAttr layout) {
-    Type fp32Ty = type::f32Ty(ctx);
-    Type fp16Ty = type::f16Ty(ctx);
-    Type bf16Ty = type::bf16Ty(ctx);
-    Type i32Ty = type::i32Ty(ctx);
-    Type i16Ty = type::i16Ty(ctx);
-    Type s32Ty = IntegerType::get(ctx, 32, IntegerType::Signed);
-
-    unsigned threadsPerWarp = layout.getThreadsPerWarp();
-    unsigned opsPerChannel = layout.getOpsPerChannel();
-    SmallVector<unsigned> shapeC = layout.getDPASInstShapeC();
-    unsigned elemNumC = product<unsigned>(shapeC) / threadsPerWarp;
-    SmallVector<unsigned> shapeA = layout.getDPASInstShapeA();
-    unsigned elemNumA = product<unsigned>(shapeA) / threadsPerWarp;
-    SmallVector<unsigned> shapeB = layout.getDPASInstShapeB();
-    unsigned elemNumB = product<unsigned>(shapeB) / threadsPerWarp;
-
-    using DPASEngineType = DPASAnalysis::DPASEngineType;
-    switch (dpasType) {
-    case DPASEngineType::FP32_FP32_FP16_FP16: {
-      Type cTy = vec_ty(fp32Ty, elemNumC);
-      Type aTy = vec_ty(i16Ty, elemNumA);                 // pack scalar to i16.
-      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
-      return {cTy, cTy, aTy, bTy};
-    }
-    case DPASEngineType::FP16_FP16_FP16_FP16: {
-      Type cTy = vec_ty(fp16Ty, elemNumC);
-      Type aTy = vec_ty(i16Ty, elemNumA);                 // pack scalar to i16.
-      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
-      return {cTy, cTy, aTy, bTy};
-    }
-    case DPASEngineType::FP32_FP32_BF16_BF16: {
-      Type cTy = vec_ty(fp32Ty, elemNumC);
-      Type aTy = vec_ty(i16Ty, elemNumA);                 // pack scalar to i16.
-      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
-      return {cTy, cTy, aTy, bTy};
-    }
-    case DPASEngineType::BF16_BF16_BF16_BF16: {
-      Type cTy = vec_ty(bf16Ty, elemNumC);
-      Type aTy = vec_ty(i16Ty, elemNumA);                 // pack scalar to i16.
-      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
-      return {cTy, cTy, aTy, bTy};
-    }
-    case DPASEngineType::FP32_FP32_TF32_TF32: {
-      Type cTy = vec_ty(fp32Ty, elemNumC);
-      Type aTy = vec_ty(i32Ty, elemNumA);                 // pack scalar to i32.
-      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
-      return {cTy, cTy, aTy, bTy};
-    }
-    case DPASEngineType::U32_U32_U8_U8: {
-      Type cTy = vec_ty(i32Ty, elemNumC);
-      Type aTy = vec_ty(i16Ty, elemNumA / 2);             // pack 2 i8 to i16.
-      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
-      return {cTy, cTy, aTy, bTy};
-    }
-    case DPASEngineType::S32_S32_S8_S8: {
-      Type cTy = vec_ty(s32Ty, elemNumC);
-      Type aTy = vec_ty(i16Ty, elemNumA / 2);             // pack 2 i8 to i16.
-      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
-      return {cTy, cTy, aTy, bTy};
-    }
-    default:
-      llvm::report_fatal_error("Unsupported dpas type found");
-    }
-
-    return std::make_tuple<Type, Type, Type, Type>({}, {}, {}, {});
+      DPASEngineType dpasType, MLIRContext *ctx, DpasEncodingAttr layout) {
+    if constexpr (std::is_same_v<DPASEngineType, ttgi::DPASEngineTypeXe2>)
+      return getDPASOperandsType(static_cast<ttgi::DPASEngineTypeXe2>(dpasType),
+                                 ctx, layout);
+    if constexpr (std::is_same_v<DPASEngineType, ttgi::DPASEngineTypeXe3P>)
+      return getDPASOperandsType(
+          static_cast<ttgi::DPASEngineTypeXe3P>(dpasType), ctx, layout);
   }
 
   /// Generate the GEN dialect dpas operation. Rules (for PVC):
@@ -115,7 +59,11 @@ public:
   ///      gen.matrix.dpas C, A, B {pa, pb, rc=M, sd=8}
   ///        : (vector<8xf32>, vector<4xi32>, vector<4xi32>) -> vector<8xf32>
   ///
-  LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor) const {
+  template <typename OpTy, typename DPASEngineType,
+            typename = std::enable_if_t<
+                llvm::is_one_of<DPASEngineType, ttgi::DPASEngineTypeXe2,
+                                ttgi::DPASEngineTypeXe3P>::value>>
+  LogicalResult convertDot(OpTy op, typename OpTy::Adaptor adaptor) const {
     Value A = op.getA(), B = op.getB(), C = op.getC(), D = op.getResult();
     Value loadedA = adaptor.getA(), loadedB = adaptor.getB(),
           loadedC = adaptor.getC();
@@ -142,11 +90,11 @@ public:
     unsigned repBatch = repA[0];
     unsigned repM = repA[1], repN = repB[2], repK = repA[2];
 
-    auto dpasType = DPASAnalysis::getDPASType(op);
+    auto dpasType = ttgi::DPASAnalysis<DPASEngineType>::getDPASType(op);
     auto dpasEncoding = cast<DpasEncodingAttr>(DTensorTy.getEncoding());
     Type aTy, bTy, cTy, dTy;
-    std::tie(dTy, cTy, aTy, bTy) =
-        getDPASOperandsType(dpasType, op.getContext(), dpasEncoding);
+    std::tie(dTy, cTy, aTy, bTy) = getDPASOperandsType<DPASEngineType>(
+        dpasType, op.getContext(), dpasEncoding);
     ValueTable ha = getValuesFromDotOperandLayoutStruct(
         loadedA, repBatch, repM, repK,
         typeConverter->convertType(ATensorTy.getElementType()),
@@ -160,15 +108,47 @@ public:
         typeConverter->convertType(CTensorTy.getElementType()),
         DpasEncodingAttr::OpIdx::OperandC);
 
+    ValueTable scaleA, scaleB;
+    if constexpr (std::is_same<OpTy, DotScaledOp>::value) {
+      auto scaleAVal = adaptor.getAScale();
+      if (scaleAVal) {
+        scaleA = getScaleValuesFromDotOperandLayoutStruct(
+            scaleAVal, repBatch, repM, repK, 3 /*opIdx*/,
+            ATensorTy.getElementType().getIntOrFloatBitWidth() == 16);
+      }
+
+      auto scaleBVal = adaptor.getBScale();
+      if (scaleBVal) {
+        scaleB = getScaleValuesFromDotOperandLayoutStruct(
+            scaleBVal, repBatch, repN, repK, 4 /*opIdx*/,
+            BTensorTy.getElementType().getIntOrFloatBitWidth() == 16);
+      }
+    }
+
     Type resElemTy = DTensorTy.getElementType();
 
-    TritonGEN::PrecisionType APrecision =
-                                 getElementPrecision(ATensorTy, resElemTy),
-                             BPrecision =
-                                 getElementPrecision(BTensorTy, resElemTy);
+    TritonGEN::PrecisionType APrecision;
+    TritonGEN::PrecisionType BPrecision;
 
-    assert(APrecision == BPrecision &&
-           "A and B precision enumerators do not match");
+    if constexpr (std::is_same<OpTy, DotOp>::value) {
+      APrecision = getElementPrecision(ATensorTy, resElemTy),
+      BPrecision = getElementPrecision(BTensorTy, resElemTy);
+
+      assert(APrecision == BPrecision &&
+             "A and B precision enumerators do not match");
+    } else if constexpr (std::is_same<OpTy, DotScaledOp>::value) {
+      auto aElemType = adaptor.getAElemType();
+      APrecision = getElementPrecision(aElemType);
+      auto bElemType = adaptor.getBElemType();
+      BPrecision = getElementPrecision(bElemType);
+      [[maybe_unused]] bool isBothFP8 =
+          (aElemType == triton::ScaleDotElemType::E4M3 ||
+           aElemType == triton::ScaleDotElemType::E5M2) &&
+          (bElemType == triton::ScaleDotElemType::E4M3 ||
+           bElemType == triton::ScaleDotElemType::E5M2);
+      assert((isBothFP8 || APrecision == BPrecision) &&
+             "A and B precision enumerators do not match");
+    }
 
     LLVM_DEBUG({
       llvm::dbgs() << "repBatch = " << repBatch << "\n";
@@ -190,9 +170,22 @@ public:
           TritonGEN::PrecisionTypeAttr::get(B.getContext(), BPrecision);
       auto RC = IntegerAttr::get(rewriter.getIntegerType(32),
                                  dpasEncoding.getRepeatCount());
-      fc.at({b, m, n}) = TritonGEN::MatrixDPASOp::create(
-          rewriter, loc, dTy, tb.bitcast(valc, cTy), tb.bitcast(valA, aTy),
-          tb.bitcast(valB, bTy), pA, pB, RC);
+
+      if constexpr (std::is_same<OpTy, DotOp>::value) {
+        fc.at({b, m, n}) = TritonGEN::MatrixDPASOp::create(
+            rewriter, loc, dTy, tb.bitcast(valc, cTy), tb.bitcast(valA, aTy),
+            tb.bitcast(valB, bTy), pA, pB, RC);
+      } else if constexpr (std::is_same<OpTy, DotScaledOp>::value) {
+        Value sA;
+        if (!scaleA.empty())
+          sA = scaleA.at({b, m, k});
+        Value sB;
+        if (!scaleB.empty())
+          sB = scaleB.at({b, n, k});
+        fc.at({b, m, n}) = TritonGEN::MatrixBlockScaleDPASOp::create(
+            rewriter, loc, dTy, tb.bitcast(valc, cTy), tb.bitcast(valA, aTy),
+            tb.bitcast(valB, bTy), sA, sB, pA, pB, RC);
+      }
     };
 
     ArrayRef<unsigned> repCluster = dpasEncoding.getRepCluster();
@@ -244,8 +237,153 @@ public:
   }
 
 private:
-  /// Return the bit width corresponding to the given precision or std::nullopt
-  /// if it cannot be computed.
+  std::tuple<Type, Type, Type, Type> static getDPASOperandsType(
+      ttgi::DPASEngineTypeXe2 dpasType, MLIRContext *ctx,
+      DpasEncodingAttr layout) {
+    Type fp32Ty = type::f32Ty(ctx);
+    Type fp16Ty = type::f16Ty(ctx);
+    Type bf16Ty = type::bf16Ty(ctx);
+    Type i32Ty = type::i32Ty(ctx);
+    Type i16Ty = type::i16Ty(ctx);
+    Type s32Ty = IntegerType::get(ctx, 32, IntegerType::Signed);
+
+    unsigned threadsPerWarp = layout.getThreadsPerWarp();
+    unsigned opsPerChannel = layout.getOpsPerChannel();
+    SmallVector<unsigned> shapeC = layout.getDPASInstShapeC();
+    unsigned elemNumC = product<unsigned>(shapeC) / threadsPerWarp;
+    SmallVector<unsigned> shapeA = layout.getDPASInstShapeA();
+    unsigned elemNumA = product<unsigned>(shapeA) / threadsPerWarp;
+    SmallVector<unsigned> shapeB = layout.getDPASInstShapeB();
+    unsigned elemNumB = product<unsigned>(shapeB) / threadsPerWarp;
+
+    switch (dpasType) {
+    case ttgi::DPASEngineTypeXe2::FP32_FP32_FP16_FP16:
+    case ttgi::DPASEngineTypeXe2::FP32_FP32_BF16_BF16: {
+      Type cTy = vec_ty(fp32Ty, elemNumC);
+      Type aTy = vec_ty(i16Ty, elemNumA);                 // pack scalar to i16.
+      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
+      return {cTy, cTy, aTy, bTy};
+    }
+    case ttgi::DPASEngineTypeXe2::FP16_FP16_FP16_FP16: {
+      Type cTy = vec_ty(fp16Ty, elemNumC);
+      Type aTy = vec_ty(i16Ty, elemNumA);                 // pack scalar to i16.
+      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
+      return {cTy, cTy, aTy, bTy};
+    }
+    case ttgi::DPASEngineTypeXe2::BF16_BF16_BF16_BF16: {
+      Type cTy = vec_ty(bf16Ty, elemNumC);
+      Type aTy = vec_ty(i16Ty, elemNumA);                 // pack scalar to i16.
+      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
+      return {cTy, cTy, aTy, bTy};
+    }
+    case ttgi::DPASEngineTypeXe2::FP32_FP32_TF32_TF32: {
+      Type cTy = vec_ty(fp32Ty, elemNumC);
+      Type aTy = vec_ty(i32Ty, elemNumA);                 // pack scalar to i32.
+      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
+      return {cTy, cTy, aTy, bTy};
+    }
+    case ttgi::DPASEngineTypeXe2::U32_U32_U8_U8: {
+      Type cTy = vec_ty(i32Ty, elemNumC);
+      Type aTy = vec_ty(i16Ty, elemNumA / 2);             // pack 2 i8 to i16.
+      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
+      return {cTy, cTy, aTy, bTy};
+    }
+    case ttgi::DPASEngineTypeXe2::S32_S32_S8_S8: {
+      Type cTy = vec_ty(s32Ty, elemNumC);
+      Type aTy = vec_ty(i16Ty, elemNumA / 2);             // pack 2 i8 to i16.
+      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
+      return {cTy, cTy, aTy, bTy};
+    }
+    default:
+      llvm::report_fatal_error(
+          "Unsupported dpas type found: " +
+          StringRef(std::to_string(static_cast<int>(dpasType))));
+    }
+
+    return std::make_tuple<Type, Type, Type, Type>({}, {}, {}, {});
+  }
+
+  std::tuple<Type, Type, Type, Type> static getDPASOperandsType(
+      ttgi::DPASEngineTypeXe3P dpasType, MLIRContext *ctx,
+      DpasEncodingAttr layout) {
+    Type fp32Ty = type::f32Ty(ctx);
+    Type fp16Ty = type::f16Ty(ctx);
+    Type bf16Ty = type::bf16Ty(ctx);
+    Type i32Ty = type::i32Ty(ctx);
+    Type i16Ty = type::i16Ty(ctx);
+    Type s32Ty = IntegerType::get(ctx, 32, IntegerType::Signed);
+
+    unsigned threadsPerWarp = layout.getThreadsPerWarp();
+    unsigned opsPerChannel = layout.getOpsPerChannel();
+    SmallVector<unsigned> shapeC = layout.getDPASInstShapeC();
+    unsigned elemNumC = product<unsigned>(shapeC) / threadsPerWarp;
+    SmallVector<unsigned> shapeA = layout.getDPASInstShapeA();
+    unsigned elemNumA = product<unsigned>(shapeA) / threadsPerWarp;
+    SmallVector<unsigned> shapeB = layout.getDPASInstShapeB();
+    unsigned elemNumB = product<unsigned>(shapeB) / threadsPerWarp;
+
+    switch (dpasType) {
+    case ttgi::DPASEngineTypeXe3P::FP32_FP32_FP16_FP16:
+    case ttgi::DPASEngineTypeXe3P::FP32_FP32_BF16_BF16: {
+      Type cTy = vec_ty(fp32Ty, elemNumC);
+      Type aTy = vec_ty(i16Ty, elemNumA);                 // pack scalar to i16.
+      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
+      return {cTy, cTy, aTy, bTy};
+    }
+    case ttgi::DPASEngineTypeXe3P::FP16_FP16_FP16_FP16: {
+      Type cTy = vec_ty(fp16Ty, elemNumC);
+      Type aTy = vec_ty(i16Ty, elemNumA);                 // pack scalar to i16.
+      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
+      return {cTy, cTy, aTy, bTy};
+    }
+    case ttgi::DPASEngineTypeXe3P::BF16_BF16_BF16_BF16: {
+      Type cTy = vec_ty(bf16Ty, elemNumC);
+      Type aTy = vec_ty(i16Ty, elemNumA);                 // pack scalar to i16.
+      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
+      return {cTy, cTy, aTy, bTy};
+    }
+    case ttgi::DPASEngineTypeXe3P::FP32_FP32_TF32_TF32: {
+      Type cTy = vec_ty(fp32Ty, elemNumC);
+      Type aTy = vec_ty(i32Ty, elemNumA);                 // pack scalar to i32.
+      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
+      return {cTy, cTy, aTy, bTy};
+    }
+    case ttgi::DPASEngineTypeXe3P::U32_U32_U8_U8: {
+      Type cTy = vec_ty(i32Ty, elemNumC);
+      Type aTy = vec_ty(i16Ty, elemNumA / 2);             // pack 2 i8 to i16.
+      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
+      return {cTy, cTy, aTy, bTy};
+    }
+    case ttgi::DPASEngineTypeXe3P::S32_S32_S8_S8: {
+      Type cTy = vec_ty(s32Ty, elemNumC);
+      Type aTy = vec_ty(i16Ty, elemNumA / 2);             // pack 2 i8 to i16.
+      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
+      return {cTy, cTy, aTy, bTy};
+    }
+    case ttgi::DPASEngineTypeXe3P::BF16_BF16_FP8_FP8: {
+      Type cTy = vec_ty(bf16Ty, elemNumC);
+      Type aTy = vec_ty(i16Ty, elemNumA / 2);             // pack scalar to i16.
+      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
+      return {cTy, cTy, aTy, bTy};
+    }
+    case ttgi::DPASEngineTypeXe3P::FP32_FP32_FP8_FP8:
+    case ttgi::DPASEngineTypeXe3P::FP32_FP32_FP4_FP4: {
+      Type cTy = vec_ty(fp32Ty, elemNumC);
+      Type aTy = vec_ty(i16Ty, elemNumA / 2);             // pack scalar to i16.
+      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
+      return {cTy, cTy, aTy, bTy};
+    }
+    default:
+      llvm::report_fatal_error(
+          "Unsupported dpas type found: " +
+          StringRef(std::to_string(static_cast<int>(dpasType))));
+    }
+
+    return std::make_tuple<Type, Type, Type, Type>({}, {}, {}, {});
+  }
+
+  /// Return the bit width corresponding to the given precision or
+  /// std::nullopt if it cannot be computed.
   std::optional<unsigned> getBitWidth(TritonGEN::PrecisionType PT) const {
     switch (PT) {
     case TritonGEN::PrecisionType::U2:
@@ -371,6 +509,73 @@ private:
     return vals;
   }
 
+  ValueTable getScaleValuesFromDotOperandLayoutStruct(Value val, int64_t batch,
+                                                      int64_t outer,
+                                                      int64_t inner,
+                                                      unsigned opIdx,
+                                                      bool isFp16) const {
+    SmallVector<Value> elems = unpackLLElements(loc, val, rewriter);
+
+    ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
+    size_t rank = repCluster.size();
+    unsigned repClusterOuter = 0u;
+    unsigned repClusterInner = 1u;
+    switch (opIdx) {
+    case 3:
+      // operand scale A
+      repClusterOuter = repCluster[rank - 2];
+      break;
+    case 4:
+      // operand scale B
+      repClusterOuter = repCluster[rank - 1];
+      break;
+    default:
+      llvm_unreachable("error");
+    }
+
+    size_t totalElems = elems.size();
+    unsigned packedElem = mlir::ceil<unsigned>(
+        totalElems, batch * outer * inner * repClusterOuter * repClusterInner);
+    unsigned innerStepping = isFp16 ? 2 : 1;
+
+    int offset = 0;
+    auto tb = TritonLLVMOpBuilder(loc, rewriter);
+    ValueTable vals;
+    for (unsigned b = 0; b < batch; ++b) {
+      for (int i = 0; i < outer; ++i) {
+        for (int j = 0; j < inner; j += innerStepping) {
+          for (int repOuter = 0; repOuter < repClusterOuter; ++repOuter) {
+            for (int repInner = 0; repInner < repClusterInner; ++repInner) {
+              Value matVal;
+              if (packedElem != 1) {
+                VectorType scaleOpTy = vec_ty(i8_ty, packedElem);
+                matVal = LLVM::UndefOp::create(rewriter, loc, scaleOpTy);
+                for (int k = 0; k < packedElem; ++k)
+                  matVal =
+                      tb.insert_element(matVal, elems[offset++], tb.i32_val(k));
+              } else
+                matVal = elems[offset++];
+
+              unsigned offsetOuter = i * repClusterOuter + repOuter;
+              unsigned offsetInner = j * repClusterInner + repInner;
+              vals[{b, offsetOuter, offsetInner}] = matVal;
+
+              if (isFp16) {
+                // For fp16 bdpas, the size of k dimension is 16.
+                // The triton ops share the scale for every 32 elements.
+                // So we need to reuse the scale operands for two continuous
+                // bdpas ops on the K dim.
+                vals[{b, offsetOuter, offsetInner + 1}] = matVal;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return vals;
+  }
+
   /// Return the precision for the given tensor type (the type of A or B) and
   /// result element type.
   TritonGEN::PrecisionType getElementPrecision(RankedTensorType tensorTy,
@@ -389,9 +594,34 @@ private:
         return TritonGEN::PrecisionType::BF16;
       if (isa<Float16Type>(elemType))
         return TritonGEN::PrecisionType::FP16;
+      if (isa<Float8E5M2Type>(elemType))
+        return TritonGEN::PrecisionType::F8E5M2;
+      if (isa<Float8E4M3FNType>(elemType))
+        return TritonGEN::PrecisionType::F8E4M3FN;
     } else if (width == 8) {
       return elemType.isUnsignedInteger() ? TritonGEN::PrecisionType::U8
                                           : TritonGEN::PrecisionType::S8;
+    }
+
+    return TritonGEN::PrecisionType::UNUSED;
+  }
+
+  /// Return the precision for the given tensor type (the type of A or B).
+  TritonGEN::PrecisionType
+  getElementPrecision(ScaleDotElemType elemType) const {
+    switch (elemType) {
+    case ScaleDotElemType::E2M1:
+      return TritonGEN::PrecisionType::F4E2M1;
+    case ScaleDotElemType::BF16:
+      return TritonGEN::PrecisionType::BF16;
+    case ScaleDotElemType::FP16:
+      return TritonGEN::PrecisionType::FP16;
+    case ScaleDotElemType::E4M3:
+      return TritonGEN::PrecisionType::F8E4M3FN;
+    case ScaleDotElemType::E5M2:
+      return TritonGEN::PrecisionType::F8E5M2;
+    default:
+      llvm::report_fatal_error("Unsupported ScaleDotElemType found");
     }
 
     return TritonGEN::PrecisionType::UNUSED;
@@ -407,13 +637,15 @@ private:
 } // namespace
 
 namespace fma_details {
-LogicalResult convertDPAS(triton::DotOp op, triton::DotOp::Adaptor adaptor,
+template <typename OpTy>
+LogicalResult convertDPAS(OpTy op, typename OpTy::Adaptor adaptor,
                           TritonIntelGPUToLLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter) {
+  auto mod = op->template getParentOfType<ModuleOp>();
+
   LLVM_DEBUG({
-    auto module = op->getParentOfType<ModuleOp>();
     llvm::dbgs() << "module before DPAS generation\n";
-    module->dump();
+    mod->dump();
   });
 
   Value A = op.getA(), B = op.getB(), C = op.getC(), D = op.getResult();
@@ -439,6 +671,23 @@ LogicalResult convertDPAS(triton::DotOp op, triton::DotOp::Adaptor adaptor,
   DotOpDPASConversionHelper helper(dpasLayout, rewriter, typeConverter,
                                    op.getLoc());
 
-  return helper.convertDot(op, adaptor);
+  bool supportDPASWithBF8 = mod->hasAttr(
+      ttgi::TritonIntelGPUDialect::getSupportDPASWithBF8AttrName());
+
+  if (!supportDPASWithBF8)
+    return helper.convertDot<OpTy, ttgi::DPASEngineTypeXe2>(op, adaptor);
+
+  return helper.convertDot<OpTy, ttgi::DPASEngineTypeXe3P>(op, adaptor);
 }
+
+template LogicalResult
+convertDPAS<DotOp>(DotOp op, DotOp::Adaptor adaptor,
+                   TritonIntelGPUToLLVMTypeConverter *typeConverter,
+                   ConversionPatternRewriter &rewriter);
+
+template LogicalResult
+convertDPAS<DotScaledOp>(DotScaledOp op, DotScaledOp::Adaptor adaptor,
+                         TritonIntelGPUToLLVMTypeConverter *typeConverter,
+                         ConversionPatternRewriter &rewriter);
+
 } // namespace fma_details

@@ -71,12 +71,14 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str]]:
         # being add: include and include/sycl.
         if "sycl.hpp" in f.name:
             include_dir += [str(f.locate().parent.parent.resolve())]
-        if any(map(lambda el: el in f.name, ("libsycl.so", "sycl8.dll", "sycl8.lib"))):
-            sycl_dir = str(f.locate().parent.resolve())
-            # should we handle `_` somehow?
+        if any(map(lambda el: el in f.name, ("libsycl.so", "sycl.lib"))):
+            sycl_dir = f.locate().parent.resolve()
             if os.name == "nt":
-                _ = os.add_dll_directory(sycl_dir)
-            sycl_dirs.append(sycl_dir)
+                # for sycl8.dll loading on Windows
+                dll_path = sycl_dir.parent.joinpath("bin")
+                sycl_dirs.append(str(dll_path))
+                _ = os.add_dll_directory(str(dll_path))
+            sycl_dirs.append(str(sycl_dir))
 
     assert len(sycl_dirs) != 0
     return include_dir, sycl_dirs
@@ -91,11 +93,7 @@ class CompilationHelper:
         self._library_dir = None
         self._include_dir = None
         self._libsycl_dir = None
-        self.libraries = ['ze_loader']
-        if os.name != "nt":
-            self.libraries += ["sycl"]
-        else:
-            self.libraries += ['sycl8']
+        self.libraries = ['sycl', 'ze_loader']
 
     @property
     def inject_pytorch_dep(self):
@@ -191,7 +189,7 @@ class SpirvUtils:
 
     def __init__(self, cache_path: str):
         self.shared_library = ctypes.PyDLL(cache_path)
-        methods = ("init_devices", "load_binary", "wait_on_sycl_queue", "has_opencl_extension")
+        methods = ("init_devices", "load_binary", "wait_on_sycl_queue", "has_opencl_extension", "sycl_queue_memset")
         for method in methods:
             getattr(self.shared_library, method).restype = ctypes.py_object
             getattr(self.shared_library, method).argtypes = (ctypes.py_object, )
@@ -203,7 +201,7 @@ class SpirvUtils:
 
     def __getattribute__(self, name):
         if name in ("get_device_properties", "init_devices", "wait_on_sycl_queue", "has_opencl_extension",
-                    "get_last_selected_build_flags"):
+                    "get_last_selected_build_flags", "sycl_queue_memset"):
             shared_library = super().__getattribute__("shared_library")
             return getattr(shared_library, name)
 
@@ -214,7 +212,14 @@ class SpirvUtils:
         # we will need to rewrite the line in the general part of the code:
         # driver.active.utils.load_binary(self.name, self.kernel, self.metadata.shared, self.metadata.build_flags, device) ->
         # driver.active.utils.load_binary((self.name, self.kernel, self.metadata.shared, self.metadata.build_flags, device))
-        return self.shared_library.load_binary(args)
+        try:
+            return self.shared_library.load_binary(args)
+        except Exception as e:
+            if str(e).startswith("ZE_"):
+                from triton.runtime.errors import IntelGPUError
+                raise IntelGPUError("Error during Intel load_binary: " + str(e)) from e
+            else:
+                raise e
 
     if os.name != 'nt':
 
@@ -321,6 +326,7 @@ class XPUUtils(object):
         self.wait_on_sycl_queue = mod.wait_on_sycl_queue
         self.has_opencl_extension = mod.has_opencl_extension
         self.get_last_selected_build_flags = mod.get_last_selected_build_flags
+        self.sycl_queue_memset = mod.sycl_queue_memset
 
     def get_current_device(self):
         import torch
@@ -332,6 +338,10 @@ class XPUUtils(object):
 
     def wait(self):
         self.wait_on_sycl_queue(self.get_sycl_queue())
+
+    def memset(self, ptr, value, count):
+        """Wrapper for SYCL queue memset"""
+        return self.sycl_queue_memset((self.get_sycl_queue(), ptr, value, count))
 
 
 # ------------------------
@@ -567,9 +577,11 @@ static inline void checkDevicePointer(DevicePtrInfo *ptr_info, int idx, const sy
     PyErr_Format(PyExc_ValueError,
                  "Cannot get memory properties for pointer argument (at %d, err=%d)", idx, res);
     ptr_info->valid = false;
-  }} else if (prop.type != ZE_MEMORY_TYPE_DEVICE) {{
+  }} else if (prop.type == ZE_MEMORY_TYPE_UNKNOWN) {{
+    // We can work with any memory, known to the driver:
+    // ZE_MEMORY_TYPE_DEVICE, ZE_MEMORY_TYPE_SHARED, ZE_MEMORY_TYPE_HOST
     PyErr_Format(PyExc_ValueError,
-                 "Pointer argument (at %d) doesn't reference XPU device memory (cpu tensor?)", idx);
+                 "Pointer argument (at %d) doesn't reference accessible memory.", idx);
     ptr_info->valid = false;
   }}
 }}
@@ -922,7 +934,7 @@ class XPUDriver(DriverBase):
                 dev_property[
                     "has_subgroup_matrix_multiply_accumulate_tensor_float32"] = "cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32" in supported_extensions
                 dev_property["has_subgroup_2d_block_io"] = "cl_intel_subgroup_2d_block_io" in supported_extensions
-                dev_property["has_bfloat16_conversions"] = "cl_intel_bfloat16_conversions" in supported_extensions
+                dev_property["has_bfloat16_conversion"] = "cl_intel_bfloat16_conversions" in supported_extensions
             else:
                 check = self.utils.has_opencl_extension
                 dev_property["has_subgroup_matrix_multiply_accumulate"] = check(
@@ -930,7 +942,7 @@ class XPUDriver(DriverBase):
                 dev_property["has_subgroup_matrix_multiply_accumulate_tensor_float32"] = check(
                     device, b"cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32")
                 dev_property["has_subgroup_2d_block_io"] = check(device, b"cl_intel_subgroup_2d_block_io")
-                dev_property["has_bfloat16_conversions"] = check(device, b"cl_intel_bfloat16_conversions")
+                dev_property["has_bfloat16_conversion"] = check(device, b"cl_intel_bfloat16_conversions")
 
         def update_device_arch(dev_property):
             if not (arch := knobs.intel.device_arch):

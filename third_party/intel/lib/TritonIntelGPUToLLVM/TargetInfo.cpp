@@ -34,9 +34,14 @@ Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
 }
 
 void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
-                         bool isWarpSync) const {
+                         triton::gpu::AddrSpace targets) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  b.barrier();
+  b.barrier(targets);
+}
+
+void TargetInfo::warpSync(Location loc, RewriterBase &rewriter) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  b.barrier(triton::gpu::AddrSpace::Local);
 }
 
 Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {

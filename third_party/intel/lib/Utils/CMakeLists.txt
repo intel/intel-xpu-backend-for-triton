@@ -5,6 +5,10 @@ add_triton_library(TritonIntelUtils
   Mangling.cpp
   Utility.cpp
 
+  DEPENDS
+  TritonGENTableGen
+  TritonGENAttrDefsIncGen
+
   LINK_LIBS PUBLIC
   MLIRIR
 )

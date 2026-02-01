@@ -237,26 +237,19 @@ The semantic of this `tt.dot` includes GEMM tiling configuration as:
     SmallVector<unsigned> getContigPerThread() const;
 
     struct DPASCapability {
-      explicit DPASCapability(unsigned minSGSize) : executionSize(minSGSize) {}
-      DPASCapability() = default;
-
-      bool isPVC() const {
-        return executionSize == 16;
-      }
-      bool isFalconShore() const {
-        return executionSize == 16;
-      }
-      bool isATSM() const {
-        return executionSize == 8;
+      DPASCapability(unsigned executionSize, bool dpasSupportsFP8 = false)
+        : executionSize(executionSize), supportsFP8(dpasSupportsFP8) {
+        assert(executionSize == 8 || executionSize == 16 && "Invalid execution size");
       }
 
       static constexpr unsigned systolicDepth = 8u;
       static constexpr unsigned repeatCount = 8u;
       static constexpr unsigned opsChanBitWidths = 32u;
-      unsigned executionSize = 0u;
+      const unsigned executionSize = 0u;
+      const bool supportsFP8 = false;
     };
 
-    static DPASCapability getDPASCapability(mlir::ModuleOp mod);
+    static std::optional<DPASCapability> getDPASCapability(mlir::ModuleOp);
   }];
 
   let hasCustomAssemblyFormat = 1;
@@ -317,13 +310,13 @@ def Subgroup2DBlockEncodingAttr : DistributedEncoding<"Subgroup2DBlockEncoding",
     - `warpsPerCTA` : the number of warps per block / subgroups per workgroup and their distribution
     - `order` : The order within the block, used to determine along which dimension to broadcast.
     - `kWidth` : Currently unused, but keeping because we will likely need it for layout conversions.
-    - `CTALayout` : Describes how blocks are distributed among work-groups/thread blocks.
+    - `CGALayout` : Describes how blocks are distributed among work-groups/thread blocks.
   }];
 
   let parameters = (
     ins
     ArrayRefParameter<"unsigned">:$warpsPerCTA,
-    "CTAEncodingAttr":$CTALayout,
+    "CGAEncodingAttr":$CGALayout,
     ArrayRefParameter<"unsigned">:$instrShape,
     "unsigned":$numBlocks,
     ArrayRefParameter<"unsigned">:$order,

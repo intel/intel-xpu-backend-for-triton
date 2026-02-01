@@ -74,7 +74,7 @@ jobs:
       - name: Install benchmark dependencies
         id: install
         run: |
-          pip install transformers pandas pytest
+          pip install transformers 'pandas<3.0' pytest
 
       - name: Install benchmarks
         id: install-benchmarks
@@ -139,8 +139,6 @@ jobs:
         if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm')) }}
         run: |
           source ./scripts/capture-hw-details.sh
-
-          cp -r vllm/tests benchmarks/third_party/vllm/tests
 
           cd benchmarks/third_party/vllm
           python batched_moe_benchmark.py --reports $REPORTS

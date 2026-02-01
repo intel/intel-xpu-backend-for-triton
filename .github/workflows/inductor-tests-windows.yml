@@ -135,7 +135,7 @@ jobs:
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
-          pip install pandas scipy tqdm
+          pip install 'pandas<3.0' scipy tqdm
 
       - name: Run inductor tests
         run: |
