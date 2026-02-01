@@ -176,7 +176,7 @@ jobs:
             source ./scripts/capture-hw-details.sh; \
             python scripts/pass_rate.py --reports reports; \
             python scripts/pass_rate.py --reports reports --json > pass_rate.json; \
-            python scripts/pass_rate.py --reports reports --suite tutorials --json > pass_rate_tutorials.json; \
+            python scripts/pass_rate.py --reports reports --suite tutorial --json > pass_rate_tutorials.json; \
           "
 
       - name: Upload pass rate report

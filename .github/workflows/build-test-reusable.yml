@@ -342,15 +342,15 @@ jobs:
         if: matrix.suite == 'rest'
         run: |
           cat <<EOF | tee tutorials.txt
-          01-vector-add
-          02-fused-softmax
-          03-matrix-multiplication
-          04-low-memory-dropout
-          05-layer-norm
-          07-extern-functions
-          08-grouped-gemm
-          09-persistent-matmul
-          10-experimental-block-pointer
+          test_tutorials.py::test_tutorial[01-vector-add]
+          test_tutorials.py::test_tutorial[02-fused-softmax]
+          test_tutorials.py::test_tutorial[03-matrix-multiplication]
+          test_tutorials.py::test_tutorial[04-low-memory-dropout]
+          test_tutorials.py::test_tutorial[05-layer-norm]
+          test_tutorials.py::test_tutorial[07-extern-functions]
+          test_tutorials.py::test_tutorial[08-grouped-gemm]
+          test_tutorials.py::test_tutorial[09-persistent-matmul]
+          test_tutorials.py::test_tutorial[10-experimental-block-pointer]
           EOF
 
       - name: Run Tutorials
@@ -430,7 +430,7 @@ jobs:
         run: |
           python scripts/pass_rate.py --reports reports
           python scripts/pass_rate.py --reports reports --json > pass_rate.json
-          python scripts/pass_rate.py --reports reports --suite tutorials --json > pass_rate_tutorials.json
+          python scripts/pass_rate.py --reports reports --suite tutorial --json > pass_rate_tutorials.json
 
       - name: Upload pass rate report
         uses: actions/upload-artifact@v6
@@ -443,7 +443,7 @@ jobs:
         with:
           name: test-reports-tutorials-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           include-hidden-files: true
-          path: reports/tutorials.xml
+          path: reports/tutorial.xml
 
       - name: Upload tutorials performance report
         uses: actions/upload-artifact@v6

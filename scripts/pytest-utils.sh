@@ -71,25 +71,6 @@ pytest() {
     python -u -m pytest "${pytest_extra_args[@]}" "$@" || $TRITON_TEST_IGNORE_ERRORS
 }
 
-run_tutorial_test() {
-    echo
-    echo "****** Running $1 test ******"
-    echo
-
-    run_tutorial_args=(
-        "--skip-list=$TRITON_TEST_SKIPLIST_DIR/tutorials.txt"
-        "$1.py"
-    )
-
-    if [[ $TRITON_TEST_REPORTS = true ]]; then
-        run_tutorial_args+=(
-            "--reports=$TRITON_TEST_REPORTS_DIR"
-        )
-    fi
-
-    python -u "$SCRIPTS_DIR/run_tutorial.py" "${run_tutorial_args[@]}" || $TRITON_TEST_IGNORE_ERRORS
-}
-
 capture_runtime_env() {
     mkdir -p "$TRITON_TEST_REPORTS_DIR"
 
