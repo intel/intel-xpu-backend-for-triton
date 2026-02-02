@@ -305,11 +305,11 @@ struct LoadStoreConversionBase {
     return std::make_tuple(ptrElems, maskElems, otherElems);
   }
 
-  std::tuple<SmallVector<Value>, SmallVector<Value>> buildMasksFromBlockPtr(
-      Location loc, Value blockPointerStruct, RankedTensorType tensorType,
-      Type valueElemTy, ConversionPatternRewriter &rewriter,
-      ArrayRef<int32_t> boundaryCheck = {},
-      std::optional<PaddingOption> padding = std::nullopt) const {
+  SmallVector<Value>
+  buildNaNMasksFromBlockPtr(Location loc, Value blockPointerStruct,
+                            RankedTensorType tensorType, Type valueElemTy,
+                            ConversionPatternRewriter &rewriter,
+                            ArrayRef<int32_t> boundaryCheck = {}) const {
 
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     size_t rank = tensorType.getRank();
@@ -378,35 +378,10 @@ struct LoadStoreConversionBase {
       }
     }
 
-    // Get the LLVM values for `other`
-    SmallVector<Value> otherElems;
-    if (padding) {
-      Value other;
-      switch (*padding) {
-      case PaddingOption::PAD_ZERO:
-        other = LLVM::ConstantOp::create(rewriter, loc, valueElemTy,
-                                         rewriter.getZeroAttr(valueElemTy));
-
-        break;
-      case PaddingOption::PAD_NAN: {
-        assert(!valueElemTy.isIntOrIndex() &&
-               "Expect element type to be non-integer type");
-        auto apNaN = llvm::APFloat::getNaN(
-            cast<FloatType>(valueElemTy).getFloatSemantics());
-        other =
-            LLVM::ConstantOp::create(rewriter, loc, valueElemTy,
-                                     rewriter.getFloatAttr(valueElemTy, apNaN));
-      } break;
-      }
-
-      for (unsigned i = 0; i < numElems; ++i)
-        otherElems.push_back(other);
-    }
-
-    return std::make_tuple(maskElems, otherElems);
+    return maskElems;
   }
 
-  std::tuple<Value, Value> buildVectorizedMasksFromBlockPtr(
+  std::tuple<Value, Value> buildVectorizedNaNMasksFromBlockPtr(
       Location loc, Value blockPointerStruct, RankedTensorType tensorType,
       Type valueElemTy, ConversionPatternRewriter &rewriter,
       ArrayRef<int32_t> boundaryCheck = {},
@@ -480,28 +455,17 @@ struct LoadStoreConversionBase {
     }
 
     // Get the LLVM values for `other`
-    Value vectorOther;
-    if (padding) {
-      Attribute other;
-      switch (*padding) {
-      case PaddingOption::PAD_ZERO:
-        other = rewriter.getZeroAttr(valueElemTy);
-        break;
-      case PaddingOption::PAD_NAN: {
-        assert(!valueElemTy.isIntOrIndex() &&
-               "Expect element type to be non-integer type");
-        auto apNaN = llvm::APFloat::getNaN(
-            cast<FloatType>(valueElemTy).getFloatSemantics());
-        other = rewriter.getFloatAttr(valueElemTy, apNaN);
-      } break;
-      }
+    assert(!valueElemTy.isIntOrIndex() &&
+           "Expect element type to be non-integer type");
+    auto apNaN =
+        llvm::APFloat::getNaN(cast<FloatType>(valueElemTy).getFloatSemantics());
+    Attribute other = rewriter.getFloatAttr(valueElemTy, apNaN);
 
-      SmallVector<Attribute> otherElems(numElems, other);
-      vectorOther =
-          b.const_val(vec_ty(valueElemTy, numElems),
-                      DenseElementsAttr::get(
-                          VectorType::get(numElems, valueElemTy), otherElems));
-    }
+    SmallVector<Attribute> otherElems(numElems, other);
+    Value vectorOther =
+        b.const_val(vec_ty(valueElemTy, numElems),
+                    DenseElementsAttr::get(
+                        VectorType::get(numElems, valueElemTy), otherElems));
 
     return std::make_tuple(vectorMask, vectorOther);
   }
@@ -2083,7 +2047,6 @@ struct LoadOpToBlockIOConversion
       Value vectorMask = nullptr;
       Value vectorOther = nullptr;
       SmallVector<Value> nanMaskElems;
-      SmallVector<Value> nanOtherElems;
 
       if (otherElems.size() == 0 && op.getPadding() == PaddingOption::PAD_NAN) {
         // create a vectorized mask to fill the out of bounds elements with NaN
@@ -2096,13 +2059,13 @@ struct LoadOpToBlockIOConversion
           if (triton::tools::getBoolEnv(
                   "TRITON_INTEL_ENABLE_NAN_VECTORIZED_BLOCK_IO")) {
             std::tie(vectorMask, vectorOther) =
-                buildVectorizedMasksFromBlockPtr(
+                buildVectorizedNaNMasksFromBlockPtr(
                     loc, adaptor.getPtr(), tensorType, valueElemTy, rewriter,
-                    op.getBoundaryCheck(), PaddingOption::PAD_NAN);
+                    op.getBoundaryCheck());
           } else {
-            std::tie(nanMaskElems, nanOtherElems) = buildMasksFromBlockPtr(
+            nanMaskElems = buildNaNMasksFromBlockPtr(
                 loc, adaptor.getPtr(), tensorType, valueElemTy, rewriter,
-                op.getBoundaryCheck(), PaddingOption::PAD_NAN);
+                op.getBoundaryCheck());
           }
         }
       }
@@ -2148,33 +2111,20 @@ struct LoadOpToBlockIOConversion
           }
           unpackedVal = b.select(pred, unpackedVal, other);
         } else if (nanMaskElems.size() != 0) {
-          assert(nanMaskElems.size() == nanOtherElems.size() &&
-                 "Invalid size of the masks");
+          Type unpackedElemType = getElementTypeOrSelf(unpackedType);
 
           SmallVector<Attribute> constOtherElems;
-          for (size_t i = 0; i < numElemsPerUnpackedType; ++i) {
-            if (auto constOp =
-                    nanOtherElems[i].getDefiningOp<LLVM::ConstantOp>()) {
-              constOtherElems.push_back(constOp.getValue());
-            } else {
-              assert("nanOtherElems size mismatch, buildMasksFromBlockPtr "
-                     "always builds all NaNs");
-              break;
-            }
+          for (auto i = 0; i < numElemsPerUnpackedType; ++i) {
+            constOtherElems.push_back(FloatAttr::get(
+                unpackedElemType, APFloat::getNaN(APFloat::IEEEsingle())));
           }
 
-          Value other;
-          if (constOtherElems.size() == numElemsPerUnpackedType) {
-            Type unpackedElemType = getElementTypeOrSelf(unpackedType);
-            other = b.const_val(
-                unpackedType,
-                DenseElementsAttr::get(
-                    VectorType::get(numElemsPerUnpackedType, unpackedElemType),
-                    constOtherElems));
-          } else {
-            assert("nanOtherElems size mismatch, buildMasksFromBlockPtr always "
-                   "builds all NaNs");
-          }
+          Value other = b.const_val(
+              unpackedType,
+              DenseElementsAttr::get(
+                  VectorType::get(numElemsPerUnpackedType, unpackedElemType),
+                  constOtherElems));
+
           Value packedPred =
               b.undef(VectorType::get(numElemsPerUnpackedType, i1_ty));
 
