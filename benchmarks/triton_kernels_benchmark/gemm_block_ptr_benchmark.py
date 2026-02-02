@@ -1,9 +1,9 @@
 """
-Gemm benchmark (tensor descriptor)
+Gemm benchmark (legacy block pointer)
 ============================
 
-This benchmark uses tensor descriptors to implement a GEMM kernel.
-To compare the performance to XeTLA kernel.
+This benchmark uses the legacy tl.make_block_ptr API (now deprecated).
+For the current API using tensor descriptors, see gemm_benchmark.py.
 
 """
 from typing import List, Optional
@@ -21,7 +21,7 @@ from triton_kernels_benchmark import gemm_benchmark
     key=['M', 'N', 'K'],
 )
 @triton.jit
-def matmul_kernel_with_tensor_descriptors(
+def matmul_kernel_with_block_pointers(
         # Pointers to matrices
         a_ptr, b_ptr, c_ptr,
         # Matrix dimensions
@@ -42,23 +42,26 @@ def matmul_kernel_with_tensor_descriptors(
     pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
     pid_n = (pid % num_pid_in_group) // group_size_m
 
-    a_desc = tl.make_tensor_descriptor(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
-                                       block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K))
-    b_desc = tl.make_tensor_descriptor(base=b_ptr, shape=(K, N), strides=(stride_bk, stride_bn),
-                                       block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N))
+    a_block_ptr = tl.make_block_ptr(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
+                                    offsets=(pid_m * BLOCK_SIZE_M, 0), block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K),
+                                    order=(1, 0))
+    b_block_ptr = tl.make_block_ptr(base=b_ptr, shape=(K, N), strides=(stride_bk, stride_bn),
+                                    offsets=(0, pid_n * BLOCK_SIZE_N), block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N),
+                                    order=(1, 0))
 
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
-    off_k = 0
     for _ in range(0, K, BLOCK_SIZE_K):
-        a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
-        b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
+        a = tl.load(a_block_ptr, boundary_check=(0, 1))
+        b = tl.load(b_block_ptr, boundary_check=(0, 1))
         accumulator += tl.dot(a, b)
-        off_k += BLOCK_SIZE_K
+        a_block_ptr = tl.advance(a_block_ptr, (0, BLOCK_SIZE_K))
+        b_block_ptr = tl.advance(b_block_ptr, (BLOCK_SIZE_K, 0))
     c = accumulator.to(tl.float32)
 
-    c_desc = tl.make_tensor_descriptor(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
-                                       block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N))
-    c_desc.store([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], c)
+    c_block_ptr = tl.make_block_ptr(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
+                                    offsets=(pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N),
+                                    block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N), order=(1, 0))
+    tl.store(c_block_ptr, c, boundary_check=(0, 1))
 
 
 # pylint: disable=unused-argument
@@ -67,7 +70,7 @@ def matmul_kernel_with_tensor_descriptors(
     key=['M', 'N', 'K'],
 )
 @triton.jit
-def matmul_kernel_with_tensor_descriptors_batched(
+def matmul_kernel_with_block_pointers_batched(
         # Pointers to matrices
         a_ptr, b_ptr, c_ptr,
         # Matrix dimensions
@@ -92,25 +95,27 @@ def matmul_kernel_with_tensor_descriptors_batched(
     offset_a = bid.to(tl.int64) * stride_az
     offset_b = bid.to(tl.int64) * stride_bz
 
-    a_desc = tl.make_tensor_descriptor(base=a_ptr + offset_a, shape=(M, K), strides=(stride_am, stride_ak),
-                                       block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K))
-    b_desc = tl.make_tensor_descriptor(base=b_ptr + offset_b, shape=(K, N), strides=(stride_bk, stride_bn),
-                                       block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N))
+    a_block_ptr = tl.make_block_ptr(base=a_ptr + offset_a, shape=(M, K), strides=(stride_am, stride_ak),
+                                    offsets=(pid_m * BLOCK_SIZE_M, 0), block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K),
+                                    order=(1, 0))
+    b_block_ptr = tl.make_block_ptr(base=b_ptr + offset_b, shape=(K, N), strides=(stride_bk, stride_bn),
+                                    offsets=(0, pid_n * BLOCK_SIZE_N), block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N),
+                                    order=(1, 0))
 
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
-    off_k = 0
     for _ in range(0, K, BLOCK_SIZE_K):
-        a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
-        b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
+        a = tl.load(a_block_ptr, boundary_check=(0, 1))
+        b = tl.load(b_block_ptr, boundary_check=(0, 1))
         accumulator += tl.dot(a, b)
-        off_k += BLOCK_SIZE_K
+        a_block_ptr = tl.advance(a_block_ptr, (0, BLOCK_SIZE_K))
+        b_block_ptr = tl.advance(b_block_ptr, (BLOCK_SIZE_K, 0))
     c = accumulator.to(tl.float32)
 
     offset_c = bid.to(tl.int64) * stride_cz
-    c_desc = tl.make_tensor_descriptor(base=c_ptr + offset_c, shape=(M, N), strides=(stride_cm, stride_cn),
-                                       block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N))
-
-    c_desc.store([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], c)
+    c_block_ptr = tl.make_block_ptr(base=c_ptr + offset_c, shape=(M, N), strides=(stride_cm, stride_cn),
+                                    offsets=(pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N),
+                                    block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N), order=(1, 0))
+    tl.store(c_block_ptr, c, boundary_check=(0, 1))
 
 
 def get_benchmark(
@@ -120,9 +125,9 @@ def get_benchmark(
 ):
     return gemm_benchmark.get_benchmark(
         providers_filter=providers_filter,
-        matmul_kernel=matmul_kernel_with_tensor_descriptors,
-        matmul_kernel_batched=matmul_kernel_with_tensor_descriptors_batched,
-        plot_name='matmul-tensor-desc-performance',
+        matmul_kernel=matmul_kernel_with_block_pointers,
+        matmul_kernel_batched=matmul_kernel_with_block_pointers_batched,
+        plot_name='matmul-block-ptr-performance',
         transpose_a=transpose_a,
         transpose_b=transpose_b,
     )
