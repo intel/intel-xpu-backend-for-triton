@@ -694,7 +694,8 @@ class TritonSemantic(Generic[TensorTy]):
 
     def permute(self, input: TensorTy, dims: Tuple[int]) -> TensorTy:
         if len(input.shape) != len(dims):
-            raise ValueError("permute dims must have the same length as input shape")
+            raise ValueError(
+                f"permute dims must have the same length as input shape, got {len(input.shape)} and {len(dims)}")
         if sorted(tl._unwrap_if_constexpr(d) for d in dims) != list(range(len(dims))):
             raise ValueError(f"permute dims must be a permutation of 0, 1, ..., n-1, but were {dims}")
 
@@ -1611,15 +1612,15 @@ class TritonSemantic(Generic[TensorTy]):
         if lhs_scale is not None:
             scale_factor = 16 if lhs_scale.dtype.is_fp8e4nv() else 32
             lhs_scale_shape = lhs_scale.type.shape
-            assert lhs_scale_shape == [
+            assert lhs_scale_shape[-2:] == [
                 M, K // scale_factor
-            ], f"lhs_scale must be a tensor of shape [{M}, {K // scale_factor}]. Got {lhs_scale_shape}"
+            ], f"lhs_scale must be a tensor of shape [..., {M}, {K // scale_factor}]. Got {lhs_scale_shape}"
         if rhs_scale is not None:
             scale_factor = 16 if rhs_scale.dtype.is_fp8e4nv() else 32
             rhs_scale_shape = rhs_scale.type.shape
-            assert rhs_scale_shape == [
+            assert rhs_scale_shape[-2:] == [
                 N, K // scale_factor
-            ], f"rhs_scale must be a tensor of shape [{N}, {K // scale_factor}]. Got {rhs_scale_shape}"
+            ], f"rhs_scale must be a tensor of shape [..., {N}, {K // scale_factor}]. Got {rhs_scale_shape}"
 
     def dot_scaled(self, lhs: TensorTy, lhs_scale: TensorTy, lhs_format: str, rhs: TensorTy,
                    rhs_scale: Optional[TensorTy], rhs_format: str, acc: TensorTy | None, fast_math: bool,

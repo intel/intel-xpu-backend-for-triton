@@ -53,6 +53,11 @@ struct TritonAnnotateModule
           ttgi::TritonIntelGPUDialect::getSupportF4ConversionAttrName(),
           builder.getUnitAttr());
 
+    if (supportF8Conversion)
+      mod->setAttr(
+          ttgi::TritonIntelGPUDialect::getSupportF8ConversionAttrName(),
+          builder.getUnitAttr());
+
     mod->setAttr(ttgi::TritonIntelGPUDialect::getTargetArchAttrName(),
                  builder.getStringAttr(targetArch));
 
@@ -70,6 +75,15 @@ struct TritonAnnotateModule
       mod->setAttr(
           ttgi::TritonIntelGPUDialect::getSupportBFloat16ArithmeticAttrName(),
           builder.getUnitAttr());
+
+    if (supportPredicatedIO)
+      mod->setAttr(
+          ttgi::TritonIntelGPUDialect::getSupportPredicatedIOAttrName(),
+          builder.getUnitAttr());
+
+    if (isLTS)
+      mod->setAttr(ttgi::TritonIntelGPUDialect::getIsLTSAttrName(),
+                   builder.getUnitAttr());
 
     setThreadsPerWarp(mod);
   }

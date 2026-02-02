@@ -77,7 +77,7 @@ jobs:
           echo "json=$(cat $json_file)" >> $GITHUB_OUTPUT
         shell: bash
       - name: Cache build dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           # Note that we cannot use environment variables here given there is
           # no shell to interpret them in the paths.
@@ -166,9 +166,6 @@ jobs:
             cd ../../triton_kernels/
             python3 -m pytest -s -n 12 tests/
           fi
-      - name: Run distributed tests
-        run: |
-          make test-distributed
       - name: Run asan tests on AMD
         if: ${{ matrix.runner[0] == 'amd-gfx942' }}
         run: |

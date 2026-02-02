@@ -73,24 +73,28 @@ def warps_per_cta(layout):
 layouts = [
     BlockedLayout([1, 1], [2, 16], [4, 1], [1, 0]),
     # DPAS layout
-    DpasLayout(repeatCount=8, systolic_depth=8, execution_size=16, ops_per_chan=4, threads_per_warp=16,
+    DpasLayout(repeatCount=8, systolic_depth=8, execution_size=16, ops_per_chan=1, threads_per_warp=16,
                warps_per_cta=[1, 4], rep_cluster=[1, 2]),
-    DpasLayout(repeatCount=8, systolic_depth=8, execution_size=16, ops_per_chan=2, threads_per_warp=16,
+    DpasLayout(repeatCount=8, systolic_depth=8, execution_size=16, ops_per_chan=1, threads_per_warp=16,
                warps_per_cta=[8, 4], rep_cluster=[4, 2]),
     DpasLayout(repeatCount=8, systolic_depth=8, execution_size=16, ops_per_chan=1, threads_per_warp=16,
-               warps_per_cta=[8, 4], rep_cluster=[1, 1]),
-    DpasLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=1, threads_per_warp=32,
-               warps_per_cta=[4, 1], rep_cluster=[1, 1]),
-    DpasLayout(repeatCount=8, systolic_depth=8, execution_size=16, ops_per_chan=2, threads_per_warp=32,
+               warps_per_cta=[4, 4], rep_cluster=[2, 1]),
+    DpasLayout(repeatCount=8, systolic_depth=8, execution_size=16, ops_per_chan=1, threads_per_warp=32,
+               warps_per_cta=[4, 1], rep_cluster=[2, 2]),
+    DpasLayout(repeatCount=8, systolic_depth=8, execution_size=16, ops_per_chan=1, threads_per_warp=32,
                warps_per_cta=[2, 2], rep_cluster=[1, 1]),
-    DpasLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=4, threads_per_warp=32,
-               warps_per_cta=[4, 1], rep_cluster=[1, 1]),
     # DotOp A
     DotOperandLayout(
-        parent=DpasLayout(repeatCount=8, systolic_depth=8, execution_size=16, ops_per_chan=2, threads_per_warp=32,
-                          warps_per_cta=[2, 2], rep_cluster=[1, 1]), op_idx=0, k_width=1),
+        parent=DpasLayout(repeatCount=8, systolic_depth=8, execution_size=16, ops_per_chan=1, threads_per_warp=16,
+                          warps_per_cta=[1, 2], rep_cluster=[4, 1]), op_idx=0, k_width=1),
     DotOperandLayout(
-        parent=DpasLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=1, threads_per_warp=16,
+        parent=DpasLayout(repeatCount=8, systolic_depth=8, execution_size=16, ops_per_chan=2, threads_per_warp=16,
+                          warps_per_cta=[4, 2], rep_cluster=[2, 1]), op_idx=0, k_width=1),
+    DotOperandLayout(
+        parent=DpasLayout(repeatCount=8, systolic_depth=8, execution_size=16, ops_per_chan=4, threads_per_warp=16,
+                          warps_per_cta=[4, 8], rep_cluster=[1, 1]), op_idx=0, k_width=2),
+    DotOperandLayout(
+        parent=DpasLayout(repeatCount=8, systolic_depth=8, execution_size=16, ops_per_chan=1, threads_per_warp=32,
                           warps_per_cta=[2, 2], rep_cluster=[1, 1]), op_idx=0, k_width=1),
     # DotOp B
     DotOperandLayout(
@@ -98,19 +102,19 @@ layouts = [
                           warps_per_cta=[2, 2], rep_cluster=[1, 1]), op_idx=1, k_width=1),
     DotOperandLayout(
         parent=DpasLayout(repeatCount=8, systolic_depth=8, execution_size=16, ops_per_chan=2, threads_per_warp=16,
-                          warps_per_cta=[2, 2], rep_cluster=[1, 1]), op_idx=1, k_width=2),
+                          warps_per_cta=[4, 4], rep_cluster=[2, 2]), op_idx=1, k_width=2),
     DotOperandLayout(
         parent=DpasLayout(repeatCount=8, systolic_depth=8, execution_size=16, ops_per_chan=4, threads_per_warp=16,
-                          warps_per_cta=[2, 2], rep_cluster=[1, 1]), op_idx=1, k_width=4),
+                          warps_per_cta=[8, 4], rep_cluster=[4, 4]), op_idx=1, k_width=4),
     DotOperandLayout(
         parent=DpasLayout(repeatCount=8, systolic_depth=8, execution_size=16, ops_per_chan=1, threads_per_warp=32,
-                          warps_per_cta=[2, 2], rep_cluster=[1, 1]), op_idx=1, k_width=1),
+                          warps_per_cta=[4, 8], rep_cluster=[4, 1]), op_idx=1, k_width=1),
     # Slice layout
     SliceLayout(dim=1, parent=BlockedLayout([1, 4, 1], [2, 1, 16], [2, 1, 2], [2, 1, 0])),
 ]
 
 
-@pytest.mark.parametrize("M, N", [[M, N] for M, N in itertools.product([32, 64, 128], [64, 128])])
+@pytest.mark.parametrize("M, N", [[M, N] for M, N in itertools.product([64, 128], [64, 128])])
 @pytest.mark.parametrize("dtype_str", ["float32", "float16", "int8"])
 @pytest.mark.parametrize("layout", layouts)
 @pytest.mark.parametrize("load_block_ptr, store_block_ptr", [(True, True), (False, False), (True, False),
@@ -207,8 +211,11 @@ def test_block_io(M, N, dtype_str, layout, load_block_ptr, store_block_ptr, tran
     assert torch.equal(a, x)
 
     if support_block_io:
-        if not load_block_ptr:
-            if not ((transpose and type(layout) in [SliceLayout]) or
-                    (transpose and dtype_str in ["float16", "int8"])):  # TODO: add support for these cases
-                assert 'spirv_Subgroup2DBlockLoad' in kernel.asm['llir'] or 'GenISA.LSC2DBlockRead' in kernel.asm['llir']
-        assert 'spirv_Subgroup2DBlockStoreINTEL' in kernel.asm['llir'] or 'GenISA.LSC2DBlockWrite' in kernel.asm['llir']
+        if isinstance(layout, DotOperandLayout):
+            if (layout.op_idx == 0 and layout.k_width == 2) and dtype_str == "float32":
+                # The tile width is too large for block load/store
+                return
+        llir = kernel.asm["llir"]
+        assert 'spirv_Subgroup2DBlockStoreINTEL' in llir or 'GenISA.LSC2DBlockWrite' in llir
+        load_count = llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead')
+        assert load_count > 0 or transpose

@@ -1,0 +1,2 @@
+# Test case is written for Rolling driver
+python/test/unit/intel/test_block_io.py::test_block_io[r".*-layout6-.*"]@regexp

@@ -1,8 +1,11 @@
-// RUN: triton-opt %s --split-input-file -triton-annotate-module='min-sg-size=16 support-2d-block-io=true support-dpas=true threads-per-warp=32' | FileCheck %s
+// RUN: triton-opt %s --split-input-file -triton-annotate-module='min-sg-size=16 support-2d-block-io=true support-dpas=true support-block-scale-dpas=false threads-per-warp=32' | FileCheck %s --check-prefix=CHECK-NO-BDPAS
+// RUN: triton-opt %s --split-input-file -triton-annotate-module='min-sg-size=16 support-2d-block-io=true support-dpas=true support-block-scale-dpas=true threads-per-warp=32' | FileCheck %s --check-prefix=CHECK-BDPAS
 
 module {
   // COM: Ensure that the 'threads-per-warp' attribute is set according to the option.
-  // CHECK: module attributes {"ttg.threads-per-warp" = 32 : i32, ttig.min_sg_size = 16 : i32, ttig.support_2d_block_io, ttig.support_subgroup_matrix_multiply_accumulate, ttig.target_arch = "spir64"}
+  // CHECK-NO-BDPAS: module attributes {"ttg.threads-per-warp" = 32 : i32, ttig.min_sg_size = 16 : i32, ttig.support_2d_block_io, ttig.support_subgroup_matrix_multiply_accumulate, ttig.target_arch = "spir64"}
+  // CHECK-BDPAS: module attributes {"ttg.threads-per-warp" = 32 : i32, ttig.min_sg_size = 16 : i32, ttig.support_2d_block_io, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_subgroup_scaled_matrix_multiply_accumulate, ttig.target_arch = "spir64"}
+
   tt.func @kernel() {
     tt.return
   }
@@ -13,7 +16,9 @@ module {
 module {
   // COM: Ensure that the 'threads-per-warp' attribute is overwritten when the kernel contains a 'tt.dot'
   //      operation that can be lowered to DPAS instructions.
-  // CHECK: module attributes {"ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_2d_block_io, ttig.support_subgroup_matrix_multiply_accumulate, ttig.target_arch = "spir64"}
+  // CHECK-NO-BDPAS: module attributes {"ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_2d_block_io, ttig.support_subgroup_matrix_multiply_accumulate, ttig.target_arch = "spir64"}
+  // CHECK-BDPAS: module attributes {"ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_2d_block_io, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_subgroup_scaled_matrix_multiply_accumulate, ttig.target_arch = "spir64"}
+
   tt.func @kernel() {
     %a = arith.constant dense<1.00e+00> : tensor<128x32xf16>
     %b = arith.constant dense<2.00e+00> : tensor<32x128xf16>

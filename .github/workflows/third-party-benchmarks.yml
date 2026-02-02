@@ -74,7 +74,7 @@ jobs:
       - name: Install benchmark dependencies
         id: install
         run: |
-          pip install transformers pandas pytest
+          pip install transformers 'pandas<3.0' pytest
 
       - name: Install benchmarks
         id: install-benchmarks
@@ -235,7 +235,7 @@ jobs:
 
       - name: Upload benchmark reports
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: benchmark-reports
           path: reports

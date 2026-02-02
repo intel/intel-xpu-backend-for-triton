@@ -6,8 +6,8 @@ module attributes {"ttg.num-warps" = 1 : i32, ttg.shared = 0 : i32} {
   tt.func public @kernel(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>, %arg2: !tt.ptr<f32>) {
     %0 = tt.load %arg0 : !tt.ptr<f32>
     %1 = tt.load %arg1 : !tt.ptr<f32>
-    // CHECK: [[LOAD0:%.*]] = llvm.extractelement {{.*}}[{{.*}}]
-    // CHECK: [[LOAD1:%.*]] = llvm.extractelement {{.*}}[{{.*}}]
+    // CHECK: [[LOAD0:%.*]] = llvm.bitcast {{.*}} : i32 to f32
+    // CHECK: [[LOAD1:%.*]] = llvm.bitcast {{.*}} : i32 to f32
     // CHECK: [[POISON:%.*]] = llvm.mlir.poison : !llvm.ptr<3>
     // CHECK: llvm.call spir_funccc @noinline_simple_fn__fp32_fp32_Pfp32__([[LOAD0]], [[LOAD1]], %arg2, [[POISON]], %arg3, %arg4)
     tt.call @noinline_simple_fn__fp32_fp32_Pfp32__(%0, %1, %arg2) : (f32, f32, !tt.ptr<f32>) -> ()
@@ -33,8 +33,8 @@ module attributes {"ttg.num-warps" = 1 : i32, ttg.shared = 1280 : i32, "ttg.thre
   tt.func public @kernel(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>, %arg2: !tt.ptr<f32>) {
     %0 = tt.load %arg0 : !tt.ptr<f32>
     %1 = tt.load %arg1 : !tt.ptr<f32>
-    // CHECK: [[LOAD0:%.*]] = llvm.extractelement {{.*}}[{{.*}}]
-    // CHECK: [[LOAD1:%.*]] = llvm.extractelement {{.*}}[{{.*}}]
+    // CHECK: [[LOAD0:%.*]] = llvm.bitcast {{.*}} : i32 to f32
+    // CHECK: [[LOAD1:%.*]] = llvm.bitcast {{.*}} : i32 to f32
     // CHECK: llvm.call spir_funccc @noinline_shared_fn([[LOAD0]], [[LOAD1]], %arg2, [[SHARED_MEM_PTR]], [[GLOBAL_PTR]], [[PROFILE_PTR]])
     tt.call @noinline_shared_fn(%0, %1, %arg2) {allocation.offset = 0 : i32} : (f32, f32, !tt.ptr<f32>) -> ()
     tt.return

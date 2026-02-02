@@ -108,7 +108,7 @@ LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom, bool unpacked,
     LinearLayout::BasesT bases;
     bases[kLane] = std::vector<std::vector<int32_t>>{
         {8, 0}, {0, 1}, {1, 0}, {2, 0}, {4, 0}};
-    tile *= LinearLayout(bases, {kRow, kCol});
+    tile *= LinearLayout(std::move(bases), {kRow, kCol});
   } else if (atom == TMemAccessAtom::I16x128b) {
     tile *= LinearLayout::identity1D(4, kLane, kCol) *
             LinearLayout::identity1D(8, kLane, kRow) *
@@ -126,7 +126,7 @@ LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom, bool unpacked,
     auto bases = tile.getBases();
     bases[kWarp].push_back({32, 0});
     bases[kWarp].push_back({64, 0});
-    tile = LinearLayout(bases, {{kRow, 128}, {kCol, nCol}}, false);
+    tile = LinearLayout(std::move(bases), {{kRow, 128}, {kCol, nCol}}, false);
   }
   return tile;
 }
@@ -150,13 +150,48 @@ static std::optional<LinearLayout> getDistributedLayoutForTmemLdSt(
         LinearLayout::identity1D(cgaShape[0], rowColDims[1], dims[0]) *
         LinearLayout::identity1D(cgaShape[1], rowColDims[1], dims[1]);
     auto quot = divideRight(ll, ctaCol);
-    assert(quot.has_value());
+    bool isM64TwoCTA = !quot.has_value();
+    if (isM64TwoCTA) {
+      auto bases = ll.getBases();
+      auto logNCols = ll.getInDimSizeLog2(rowColDims[1]);
+      auto numCTAs = ctaCol.getTotalOutDimSize();
+      auto basisCTA1 = logNCols - 1 - llvm::Log2_32(numCTAs * numWarps / 4);
+      // Swap the (soon to be) warp=2 and block=1 bases
+      std::swap(bases[rowColDims[0]].back(), bases[rowColDims[1]][basisCTA1]);
+      auto transposedLL =
+          LinearLayout(std::move(bases), ll.getOutDims(), ll.isSurjective());
+      auto ctaCol =
+          LinearLayout::identity1D(cgaShape[0] / 2, rowColDims[1], dims[0]) *
+          LinearLayout::identity1D(cgaShape[1], rowColDims[1], dims[1]);
+      quot = divideRight(transposedLL, ctaCol);
+      assert(quot.has_value());
+    }
     auto maybeRet =
         getDistributedLayoutForTmemLdSt(*quot, atom, numWarps, bitwidth);
     if (!maybeRet)
       return maybeRet;
     // Add the full block layout (with broadcasting)
-    return *maybeRet * cgaLayout->getLinearLayout();
+    if (isM64TwoCTA) {
+      auto bases = maybeRet->getBases();
+      // Last reg has block[0] basis
+      // This is correct as we don't currently support emitting
+      // more than 1 tcgen05.mma instruction per N dimension
+      auto kReg = StringAttr::get(ctx, "register");
+      bases[kBlock].push_back(bases[kReg].back());
+      bases[kReg].pop_back();
+      auto kWarp = StringAttr::get(ctx, "warp");
+      std::swap(bases[kWarp][1], bases[kBlock][0]);
+      auto ret = LinearLayout(std::move(bases), maybeRet->getOutDims(),
+                              maybeRet->isSurjective());
+      // Remove first block basis as it's already in the layout
+      auto cta1 = LinearLayout::identity1D(2, kBlock, dims[0]);
+      auto smallCgaLayout = divideLeft(cgaLayout->getLinearLayout(), cta1);
+      assert(smallCgaLayout.has_value());
+      ret *= smallCgaLayout.value();
+      return ret;
+    } else {
+      return *maybeRet * cgaLayout->getLinearLayout();
+    }
   }
   // This code is dual to the one in lowerTMemLdSt
   if (bitwidth != 32) {
@@ -290,7 +325,7 @@ static std::optional<LinearLayout> getDistributedLayoutForTmemLdSt(
   if (row16) {
     bases[row16].push_back({16, 0});
   }
-  tile = LinearLayout(bases,
+  tile = LinearLayout(std::move(bases),
                       {{rowColDims[0], 128},
                        {rowColDims[1], tile.getOutDimSize(rowColDims[1])}},
                       false);
@@ -328,13 +363,13 @@ getDefaultLayoutForTmemLdSt(gpu::MemDescType memType, unsigned numWarps,
     auto layout = getDistributedLayoutForTmemLdSt(
         memType, TMemAccessAtom::I16x256b, numWarps, cgaLayout);
     if (layout) {
-      return LinearEncodingAttr::get(ctx, *layout);
+      return LinearEncodingAttr::get(ctx, std::move(*layout));
     }
   }
   auto layout = getDistributedLayoutForTmemLdSt(
       memType, TMemAccessAtom::I32x32b, numWarps, cgaLayout);
   assert(layout);
-  return LinearEncodingAttr::get(ctx, *layout);
+  return LinearEncodingAttr::get(ctx, std::move(*layout));
 }
 
 std::optional<DistributedEncodingTrait>
@@ -348,7 +383,7 @@ getTmemLoadLayoutSplitLongM(RankedTensorType tensorType, MemDescType memType,
       memType, TMemAccessAtom::I32x32b, numWarps, cgaLayout);
   if (!layout)
     return std::nullopt;
-  auto ret = *layout;
+  auto ret = std::move(*layout);
 
   // Optimisation for reductions:
   // We can map lane=16 to any dimension, and it will be lowered to 32x16bx2.
@@ -375,7 +410,7 @@ getTmemLoadLayoutSplitLongM(RankedTensorType tensorType, MemDescType memType,
       std::swap(bases[kWarp][2], bases[kLane][4]);
       return LinearEncodingAttr::get(
           tensorType.getContext(),
-          LinearLayout(bases, ret.getOutDims(), ret.isSurjective()));
+          LinearLayout(std::move(bases), ret.getOutDims(), ret.isSurjective()));
     }
   }
   return std::nullopt;
@@ -393,8 +428,8 @@ getTmemCompatibleLayouts(Operation *op, RankedTensorType tensorType,
     auto ll =
         getDistributedLayoutForTmemLdSt(memType, atom, numWarps, cgaLayout);
     if (ll) {
-      layouts.push_back(
-          LinearEncodingAttr::get(tensorType.getContext(), ll.value()));
+      layouts.push_back(LinearEncodingAttr::get(tensorType.getContext(),
+                                                std::move(ll.value())));
     }
   }
   // Small hack until we generalise isDistributedLayoutTMemCompatible
@@ -464,7 +499,29 @@ LogicalResult impl::verifyMMAv5Op(Operation *op) {
 // Attribute methods
 //===----------------------------------------------------------------------===//
 #define GET_ATTRDEF_CLASSES
+#include "triton/Dialect/TritonNvidiaGPU/IR/OpsEnums.cpp.inc"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUAttrDefs.cpp.inc"
+
+//===----------------------------------------------------------------------===//
+// Type methods
+//===----------------------------------------------------------------------===//
+#define GET_TYPEDEF_CLASSES
+#include "triton/Dialect/TritonNvidiaGPU/IR/Types.cpp.inc"
+
+//===----------------------------------------------------------------------===//
+// TensorDescIm2ColType Verifier
+//===----------------------------------------------------------------------===//
+LogicalResult
+TensorDescIm2ColType::verify(function_ref<InFlightDiagnostic()> emitError,
+                             RankedTensorType blockType) {
+  // blockType must be rank 2 for im2col mode
+  if (blockType.getRank() != 2) {
+    return emitError()
+           << "TensorDescIm2ColType requires rank-2 blockType, got rank "
+           << blockType.getRank();
+  }
+  return success();
+}
 
 //===----------------------------------------------------------------------===//
 // ASM Interface (i.e.: alias)
@@ -498,6 +555,10 @@ void TritonNvidiaGPUDialect::initialize() {
   addOperations<
 #define GET_OP_LIST
 #include "triton/Dialect/TritonNvidiaGPU/IR/Ops.cpp.inc"
+      >();
+  addTypes<
+#define GET_TYPEDEF_LIST
+#include "triton/Dialect/TritonNvidiaGPU/IR/Types.cpp.inc"
       >();
   addInterfaces<TritonGPUOpAsmInterface>();
   addInterfaces<TritonInlinerInterface>();

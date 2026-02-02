@@ -1,5 +1,5 @@
-// RUN: env TRITON_INTEL_PREDICATED=1 triton-opt %s -split-input-file --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm
-// RUN: env TRITON_INTEL_PREDICATED=1 TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=1 triton-opt %s -split-input-file --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm  --check-prefixes=ALL-LAYOUT
+// RUN: env TRITON_INTEL_PREDICATED_LOAD=1 TRITON_INTEL_PREDICATED_STORE=1 triton-opt %s -split-input-file --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm
+// RUN: env TRITON_INTEL_PREDICATED_LOAD=1 TRITON_INTEL_PREDICATED_STORE=1 TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=1 triton-opt %s -split-input-file --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm  --check-prefixes=ALL-LAYOUT
 
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [4, 4], repCluster = [2, 2]}>
 #dot_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
@@ -516,7 +516,7 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 4], order = [1, 0]}>
-module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_predicated_io"} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @boundary_check
   tt.func public @boundary_check(%arg0: !tt.ptr<f16>, %col_stride: i64) {
       %cst = arith.constant dense<0.000000e+00> : tensor<64x16xf16, #blocked>
@@ -526,11 +526,16 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
       %0 = tt.make_tensor_ptr %arg0, [%c64_i64, %c64_i64], [%c1_i64, %col_stride], [%c0_i32, %c0_i32] {order = array<i32: 0, 1>} : <tensor<64x16xf16, #blocked>>
       // CHECK: llvm.call spir_funccc @_Z12get_local_idj
       // CHECK-NOT: llvm.icmp "slt"
+      // CHECK: llvm.call spir_funccc @_Z12get_local_idj
+      // CHECK: llvm.call spir_funccc @_Z12get_local_idj
+      // CHECK: llvm.call spir_funccc @_Z12get_local_idj
+      // CHECK: llvm.call spir_funccc @_Z12get_local_idj
+      // CHECK: llvm.call spir_funccc @_Z12get_local_idj
+      // CHECK: %[[VAL_584:.*]] = llvm.mlir.constant(16 : i32) : i32
       // CHECK: %[[THREAD_ID:.*]] = llvm.call spir_funccc @_Z12get_local_idj
       // CHECK: %[[THREAD_ID_32:.*]] = llvm.trunc %[[THREAD_ID]] : i64 to i32
       // CHECK-DAG: %[[CST_127:.*]] = llvm.mlir.constant(127 : i32) : i32
       // CHECK-DAG: %[[RTID:.*]] = llvm.and %[[THREAD_ID_32:.*]], %[[CST_127]] : i32
-      // CHECK-DAG: %[[VAL_584:.*]] = llvm.mlir.constant(16 : i32) : i32
       // CHECK: %[[VAL_586:.*]] = llvm.udiv %[[RTID]], %[[VAL_584]] : i32
       // CHECK: %[[VAL_587:.*]] = llvm.mlir.constant(3 : i32) : i32
       // CHECK: %[[VAL_588:.*]] = llvm.and %[[VAL_586]], %[[VAL_587]] : i32

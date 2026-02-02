@@ -2,6 +2,7 @@
 
 #include "Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "Utils/LLVMIntr.h"
+#include "Utils/Mangling.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Support/LLVM.h"
@@ -97,11 +98,11 @@ Value convertFp32ToBf16(Location loc, ConversionPatternRewriter &rewriter,
   TritonLLVMIRRewriter b(loc, rewriter);
   // Intel SPIR-V extension only supports round-to-nearest-even
   // LLVM fptrunc operation also assumes round-to-nearest mode
-  if (rounding == RoundingMode::RTNE) {
-    std::string attrName = "__spirv_ConvertFToBF16INTEL";
-    auto result = convertWithFunctionCall(
-        b, v, attrName, f32_ty, i16_ty,
-        TritonIntelGPUDialect::getSupportBFloat16ConversionAttrName());
+  if (rounding == RoundingMode::RTNE && v.getDefiningOp()) {
+    StringRef attrName = triton::gpu::intel::TritonIntelGPUDialect::
+        getSupportBFloat16ConversionAttrName();
+    auto result = convertWithFunctionCall(b, v, "__spirv_ConvertFToBF16INTEL",
+                                          f32_ty, i16_ty, attrName);
     if (result)
       return b.bitcast(result, bf16_ty);
 

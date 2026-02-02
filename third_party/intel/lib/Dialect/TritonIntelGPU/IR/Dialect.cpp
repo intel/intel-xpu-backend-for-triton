@@ -2,6 +2,7 @@
 
 #include "Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/LinearLayoutConversions.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
 #include "triton/Analysis/Utility.h"
@@ -94,45 +95,31 @@ static LogicalResult parseUInt(AsmParser &parser, const NamedAttribute &attr,
 //===----------------------------------------------------------------------===//
 
 SmallVector<unsigned> DpasEncodingAttr::getDPASInstShapeA() const {
-  return {getRepeatCount(), getSystolicDepth() * getOpsPerChannel()};
+  return calculateDPASInstShapeA(getRepeatCount(), getSystolicDepth(),
+                                 getOpsPerChannel());
 };
 
 SmallVector<unsigned> DpasEncodingAttr::getDPASInstShapeB() const {
-  return {getSystolicDepth() * getOpsPerChannel(), getExecutionSize()};
+  return calculateDPASInstShapeB(getSystolicDepth(), getOpsPerChannel(),
+                                 getExecutionSize());
 };
 
 SmallVector<unsigned> DpasEncodingAttr::getDPASInstShapeC() const {
-  return {getRepeatCount(), getExecutionSize()};
+  return calculateDPASInstShapeC(getRepeatCount(), getExecutionSize());
 };
 
 SmallVector<unsigned> DpasEncodingAttr::getShapeA() const {
-  SmallVector<unsigned> instShapeA = getDPASInstShapeA();
-  ArrayRef<unsigned> repCluster = getRepCluster();
-  size_t rank = repCluster.size();
-  SmallVector<unsigned> resShape(rank, 1);
-  resShape[rank - 2] = instShapeA[0] * repCluster[rank - 2];
-  resShape[rank - 1] = instShapeA[1];
-  return resShape;
+  return calculateShapeA(getRepeatCount(), getSystolicDepth(),
+                         getOpsPerChannel(), getRepCluster());
 }
 
 SmallVector<unsigned> DpasEncodingAttr::getShapeB() const {
-  SmallVector<unsigned> instShapeB = getDPASInstShapeB();
-  ArrayRef<unsigned> repCluster = getRepCluster();
-  size_t rank = repCluster.size();
-  SmallVector<unsigned> resShape(rank, 1);
-  resShape[rank - 2] = instShapeB[0];
-  resShape[rank - 1] = instShapeB[1] * repCluster[rank - 1];
-  return resShape;
+  return calculateShapeB(getSystolicDepth(), getOpsPerChannel(),
+                         getExecutionSize(), getRepCluster());
 }
 
 SmallVector<unsigned> DpasEncodingAttr::getShapeC() const {
-  SmallVector<unsigned> instShapeC = getDPASInstShapeC();
-  ArrayRef<unsigned> repCluster = getRepCluster();
-  size_t rank = repCluster.size();
-  SmallVector<unsigned> resShape(rank, 1);
-  resShape[rank - 2] = instShapeC[0] * repCluster[rank - 2];
-  resShape[rank - 1] = instShapeC[1] * repCluster[rank - 1];
-  return resShape;
+  return calculateShapeC(getRepeatCount(), getExecutionSize(), getRepCluster());
 }
 
 SmallVector<unsigned> DpasEncodingAttr::getRepOrder() const {
@@ -157,49 +144,9 @@ CGAEncodingAttr DpasEncodingAttr::getCGALayout() const {
 SmallVector<int64_t>
 DpasEncodingAttr::getDPASRepetitions(ArrayRef<int64_t> shape,
                                      OpIdx opIdx) const {
-  // Always return a 3D shape repetitions for the ease of value handling, same
-  // to mma.
-  auto warpsPerCTA = getWarpsPerCTA();
-  size_t rank = shape.size();
-  SmallVector<int64_t> rep(3, 1);
-  switch (opIdx) {
-  case OpIdx::OperandA: {
-    SmallVector<unsigned> shapePerWarp = getShapeA();
-    int64_t numRepBatch =
-        rank == 3 ? std::max<int64_t>(1, shape[0] /
-                                             (shapePerWarp[0] * warpsPerCTA[0]))
-                  : 1;
-    return {numRepBatch,
-            std::max<int64_t>(1, shape[rank - 2] / (shapePerWarp[rank - 2] *
-                                                    warpsPerCTA[rank - 2])),
-            std::max<int64_t>(1, shape[rank - 1] / shapePerWarp[rank - 1])};
-  } break;
-  case OpIdx::OperandB: {
-    SmallVector<unsigned> shapePerWarp = getShapeB();
-    int64_t numRepBatch =
-        rank == 3 ? std::max<int64_t>(1, shape[0] /
-                                             (shapePerWarp[0] * warpsPerCTA[0]))
-                  : 1;
-    return {numRepBatch,
-            std::max<int64_t>(1, shape[rank - 2] / shapePerWarp[rank - 2]),
-            std::max<int64_t>(1, shape[rank - 1] / (shapePerWarp[rank - 1] *
-                                                    warpsPerCTA[rank - 1]))};
-  } break;
-  case OpIdx::OperandC: {
-    auto shapePerWarp = getShapeC();
-    int64_t numRepBatch =
-        rank == 3 ? std::max<int64_t>(1, shape[0] /
-                                             (shapePerWarp[0] * warpsPerCTA[0]))
-                  : 1;
-    return {numRepBatch,
-            std::max<int64_t>(1, shape[rank - 2] / (shapePerWarp[rank - 2] *
-                                                    warpsPerCTA[rank - 2])),
-            std::max<int64_t>(1, shape[rank - 1] / (shapePerWarp[rank - 1] *
-                                                    warpsPerCTA[rank - 1]))};
-  } break;
-  }
-
-  llvm_unreachable("unexpected opIdx");
+  return calculateDPASRepetitions(
+      shape, opIdx, getWarpsPerCTA(), getRepCluster(), getRepeatCount(),
+      getSystolicDepth(), getExecutionSize(), getOpsPerChannel());
 }
 
 unsigned DpasEncodingAttr::getTotalElemsPerThreadForOperand(
@@ -253,18 +200,16 @@ SmallVector<unsigned> DpasEncodingAttr::getContigPerThread() const {
                            "be smaller than the threads required per row.");
 }
 
-DpasEncodingAttr::DPASCapability
+std::optional<DpasEncodingAttr::DPASCapability>
 DpasEncodingAttr::getDPASCapability(ModuleOp mod) {
   assert(mod && "expected a valid module");
-
   if (auto minSGSizeAttr = mod->getAttrOfType<IntegerAttr>(
-          triton::gpu::intel::TritonIntelGPUDialect::getMinSGSizeAttrName())) {
-    unsigned minSGSize = minSGSizeAttr.getInt();
-    assert(minSGSize == 8 || minSGSize == 16 && "unsupported minSGSize");
-    return DPASCapability(minSGSize);
+          TritonIntelGPUDialect::getMinSGSizeAttrName())) {
+    return DPASCapability(
+        minSGSizeAttr.getInt(),
+        mod->hasAttr(TritonIntelGPUDialect::getSupportDPASWithBF8AttrName()));
   }
-
-  return DPASCapability();
+  return std::nullopt;
 }
 
 LogicalResult DpasEncodingAttr::verify(
@@ -378,8 +323,7 @@ void DpasEncodingAttr::print(AsmPrinter &printer) const {
   auto warpsPerCTA = getWarpsPerCTA();
   ArrayRef<unsigned> repCluster = getRepCluster();
   std::optional<unsigned> fp4KPack = getFp4KPack();
-  printer << "<{"
-          << "repeatCount = " << getRepeatCount() << ", "
+  printer << "<{" << "repeatCount = " << getRepeatCount() << ", "
           << "systolicDepth = " << getSystolicDepth() << ", "
           << "executionSize = " << getExecutionSize() << ", "
           << "opsPerChan = " << getOpsPerChannel() << ", ";
@@ -388,11 +332,8 @@ void DpasEncodingAttr::print(AsmPrinter &printer) const {
   }
   printer << "threadsPerWarp = " << getThreadsPerWarp() << ", "
           << "warpsPerCTA = [" << llvm::ArrayRef<unsigned>(warpsPerCTA) << "], "
-          << "repCluster = [" << repCluster << "], "
-          << "A = [" << rA << "], "
-          << "B = [" << rB << "], "
-          << "C = [" << rC << "]"
-          << "}>";
+          << "repCluster = [" << repCluster << "], " << "A = [" << rA << "], "
+          << "B = [" << rB << "], " << "C = [" << rC << "]" << "}>";
 }
 
 LinearLayout DpasEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
@@ -486,11 +427,9 @@ Attribute WarpEncodingAttr::parse(AsmParser &parser, Type type) {
 void WarpEncodingAttr::print(mlir::AsmPrinter &printer) const {
   ArrayRef<unsigned> threadsPerWarp = getThreadsPerWarp_();
   ArrayRef<unsigned> sizePerThread = getSizePerThread_();
-  printer << "<{"
-          << "sizePerThread = [" << sizePerThread << "]"
-          << ", threadsPerWarp = [" << threadsPerWarp << "]"
-          << ", order = [" << getOrder_() << "]"
-          << "}>";
+  printer << "<{" << "sizePerThread = [" << sizePerThread << "]"
+          << ", threadsPerWarp = [" << threadsPerWarp << "]" << ", order = ["
+          << getOrder_() << "]" << "}>";
 }
 
 //===----------------------------------------------------------------------===//
@@ -507,7 +446,7 @@ std::optional<CGAEncodingAttr> getCGALayoutOrError(
                                             *CTASplitNum, *CTAOrder);
   }
   if (!CTAsPerCGA && !CTASplitNum && !CTAOrder) {
-    return CGAEncodingAttr::getDefault(parser.getContext(), rank);
+    return CGAEncodingAttr::get1CTALayout(parser.getContext(), rank);
   }
   parser.emitError(parser.getNameLoc(), "CTAsPerCGA, CTASplitNum, and CTAOrder "
                                         "must all be present or all be absent");
@@ -517,7 +456,7 @@ std::optional<CGAEncodingAttr> getCGALayoutOrError(
 // Print the CGALayout if it's not equal to the default.
 void maybePrintCGALayout(mlir::MLIRContext *context, mlir::AsmPrinter &printer,
                          CGAEncodingAttr layout, unsigned rank) {
-  if (layout != CGAEncodingAttr::getDefault(context, rank)) {
+  if (layout != CGAEncodingAttr::get1CTALayout(context, rank)) {
     printer << ", CTAsPerCGA = [" << ArrayRef(layout.getCTAsPerCGA()) << "]"
             << ", CTASplitNum = [" << ArrayRef(layout.getCTASplitNum()) << "]"
             << ", CTAOrder = [" << ArrayRef(layout.getCTAOrder()) << "]";
@@ -1238,6 +1177,34 @@ struct TritonIntelGPUVerifyTensorLayoutInterface
       }
     }
 
+    return success();
+  }
+
+  LogicalResult verifyMemDescLayout(
+      Attribute layout, Type type, Operation *op,
+      function_ref<InFlightDiagnostic()> makeErr) const override {
+    auto memDescTy = dyn_cast<triton::gpu::MemDescType>(type);
+    if (!memDescTy)
+      return makeErr() << "Non-memdesc layout is not allowed in memdesc type.";
+
+    // It'd be nice to be able to do toLinearLayout, but the multibuffering
+    // dimension breaks this left right and centre
+    auto kBlock = StringAttr::get(op->getContext(), "block");
+    int nCTAsLayout;
+    if (auto sharedLinearEnc = dyn_cast<SharedLinearEncodingAttr>(layout)) {
+      nCTAsLayout = sharedLinearEnc.getLinearLayout().getInDimSize(kBlock);
+    } else {
+      nCTAsLayout = getCGALayout(layout).getLinearLayout().getInDimSize(kBlock);
+    }
+
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    // Number of CTAs per CGA.
+    int moduleCTAsPerCGA = TritonGPUDialect::getNumCTAs(module);
+    if (nCTAsLayout != moduleCTAsPerCGA) {
+      return makeErr() << layout << ".\nLayout has " << nCTAsLayout
+                       << " CTAs per CGA, but the context requires "
+                       << moduleCTAsPerCGA << " CTAs per CGA.";
+    }
     return success();
   }
 };

@@ -7,7 +7,8 @@ using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::intel::DpasEncodingAttr;
 
 namespace fma_details {
-LogicalResult convertDPAS(triton::DotOp op, triton::DotOp::Adaptor adaptor,
+template <typename OpTy>
+LogicalResult convertDPAS(OpTy op, typename OpTy::Adaptor adaptor,
                           TritonIntelGPUToLLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter);
 } // namespace fma_details
@@ -45,10 +46,30 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
         "Unsupported DotOp found when converting TritonGPU to LLVM.");
   }
 };
+
+struct DotScaledOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<triton::DotScaledOp> {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::DotScaledOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::DotScaledOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Value D = op.getResult();
+    if (isa<DpasEncodingAttr>(
+            cast<RankedTensorType>(D.getType()).getEncoding())) {
+      return fma_details::convertDPAS(op, adaptor, getTypeConverter(),
+                                      rewriter);
+    }
+
+    llvm::report_fatal_error(
+        "Unsupported DotScaledOp found when converting TritonGPU to LLVM.");
+  }
+};
 } // namespace
 
 void mlir::triton::intel::populateDotOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
-  patterns.add<DotOpConversion>(typeConverter, benefit);
+  patterns.add<DotOpConversion, DotScaledOpConversion>(typeConverter, benefit);
 }

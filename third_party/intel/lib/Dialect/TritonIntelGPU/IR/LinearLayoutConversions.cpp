@@ -463,8 +463,8 @@ LinearLayout DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
     tileLayout *=
         LinearLayout::identity1D(numReps[0], kRegister, outDimNames[0]);
 
-  return combineCtaCgaWithShape(std::move(tileLayout),
-                                CGAEncodingAttr::getDefault(ctx, rank), shape);
+  return combineCtaCgaWithShape(
+      std::move(tileLayout), CGAEncodingAttr::get1CTALayout(ctx, rank), shape);
 }
 
 // clang-format off
@@ -491,9 +491,8 @@ LinearLayout DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
 //
 // clang-format on
 std::vector<std::vector<int32_t>>
-BlockScaledDPASRegBasesScaleA(int opsPerChannel, int scaleOpKDim) {
-  assert((scaleOpKDim == 1) && "Does not support scaleOpKDim != 1 for now");
-  assert((opsPerChannel == 4 || opsPerChannel == 8) &&
+BlockScaledDPASRegBasesScaleA(int opsPerChannel) {
+  assert((opsPerChannel == 2 || opsPerChannel == 4 || opsPerChannel == 8) &&
          "invalid opsPerChannel number for bdpas.");
 
   std::vector<std::vector<int32_t>> regBases;
@@ -504,9 +503,7 @@ BlockScaledDPASRegBasesScaleA(int opsPerChannel, int scaleOpKDim) {
 }
 
 std::vector<std::vector<int32_t>>
-BlockScaledDPASLaneBasesScaleA(int repeatCount, int threadsPerWarp,
-                               int scaleOpKDim) {
-  assert((scaleOpKDim == 1) && "Does not support scaleOpKDim != 1 for now");
+BlockScaledDPASLaneBasesScaleA(int repeatCount, int threadsPerWarp) {
   assert((repeatCount == 8) && "invalid repeatCount number for bdpas.");
 
   std::vector<std::vector<int32_t>> laneBases;
@@ -546,9 +543,8 @@ BlockScaledDPASLaneBasesScaleA(int repeatCount, int threadsPerWarp,
 // Lane:      {{1,0}, {2,0}, {4,0}, {8,0}}
 // clang-format on
 std::vector<std::vector<int32_t>>
-BlockScaledDPASRegBasesScaleB(int opsPerChannel, int scaleOpKDim) {
-  assert((scaleOpKDim == 1) && "Does not support scaleOpKDim != 1 for now");
-  assert((opsPerChannel == 4 || opsPerChannel == 8) &&
+BlockScaledDPASRegBasesScaleB(int opsPerChannel) {
+  assert((opsPerChannel == 2 || opsPerChannel == 4 || opsPerChannel == 8) &&
          "invalid opsPerChannel number for bdpas.");
 
   std::vector<std::vector<int32_t>> regBases;
@@ -559,9 +555,7 @@ BlockScaledDPASRegBasesScaleB(int opsPerChannel, int scaleOpKDim) {
 }
 
 std::vector<std::vector<int32_t>>
-BlockScaledDPASLaneBasesScaleB(int execSize, int threadsPerWarp,
-                               int scaleOpKDim) {
-  assert((scaleOpKDim == 1) && "Does not support scaleOpKDim != 1 for now");
+BlockScaledDPASLaneBasesScaleB(int execSize, int threadsPerWarp) {
   assert((execSize == 16) && "invalid execSize number for bdpas.");
 
   std::vector<std::vector<int32_t>> laneBases;
@@ -607,8 +601,9 @@ LinearLayout BlockScaledDPAStoLinearLayout(ArrayRef<int64_t> shape,
   std::optional<unsigned> fp4Kpack = dpas.getFp4KPack();
   int opsPerChannel = fp4Kpack ? dpas.getOpsPerChannel() * (*fp4Kpack)
                                : dpas.getOpsPerChannel();
-  assert(((opsPerChannel == 4) || (opsPerChannel == 8)) &&
-         "block scaled dpas only supports opsPerChannel=4 or 8");
+  assert(
+      ((opsPerChannel == 2) || (opsPerChannel == 4) || (opsPerChannel == 8)) &&
+      "block scaled dpas only supports opsPerChannel of 2, 4 or 8");
   unsigned dpasKDim, dpasNonKDim;
   auto getUnsignedKDim = [&](int scaleKIdx, unsigned rank) -> unsigned {
     if (scaleKIdx < 0)
@@ -618,11 +613,13 @@ LinearLayout BlockScaledDPAStoLinearLayout(ArrayRef<int64_t> shape,
   };
 
   unsigned scaleOpKDim = getUnsignedKDim(scaleKIndex, rank);
+  assert((scaleOpKDim == rank - 1) &&
+         "scaleOpKDim must be the last dim of blocked scale");
   unsigned scaleOpNonKDim = getUnsignedKDim(scaleKIndex ^ 1, rank);
   if (opIdx == 3) { // Operand Scale A
-    auto regBasesA = BlockScaledDPASRegBasesScaleA(opsPerChannel, scaleOpKDim);
-    auto laneBasesA = BlockScaledDPASLaneBasesScaleA(
-        repeatCount, threadsPerWarp, scaleOpKDim);
+    auto regBasesA = BlockScaledDPASRegBasesScaleA(opsPerChannel);
+    auto laneBasesA =
+        BlockScaledDPASLaneBasesScaleA(repeatCount, threadsPerWarp);
     tileLayout = LinearLayout({{kRegister, regBasesA}, {kLane, laneBasesA}},
                               ArrayRef(outDimNames).take_back(2));
     // A only repeats by repCluster[rank - 2]
@@ -644,9 +641,9 @@ LinearLayout BlockScaledDPAStoLinearLayout(ArrayRef<int64_t> shape,
           LinearLayout::identity1D(warpsPerCTA[0], kWarp, outDimNames[0]);
 
   } else { // Operand Scale B
-    auto regBasesB = BlockScaledDPASRegBasesScaleB(opsPerChannel, scaleOpKDim);
-    auto laneBasesB = BlockScaledDPASLaneBasesScaleB(
-        executionSize, threadsPerWarp, scaleOpKDim);
+    auto regBasesB = BlockScaledDPASRegBasesScaleB(opsPerChannel);
+    auto laneBasesB =
+        BlockScaledDPASLaneBasesScaleB(executionSize, threadsPerWarp);
     tileLayout = LinearLayout({{kRegister, regBasesB}, {kLane, laneBasesB}},
                               ArrayRef(outDimNames).take_back(2));
     // B only repeats by repCluster[rank - 1]
@@ -669,11 +666,9 @@ LinearLayout BlockScaledDPAStoLinearLayout(ArrayRef<int64_t> shape,
   // Lastly, the layout repeats to match the shape.
   // Align the order of the repetitions to Operand A/B, repeats through the
   // K-dimension first then repeats through the non-K dimension.
-  auto tileShapes = tileLayout.getOutDimSizes();
   SmallVector<int64_t> numReps;
-
-  for (auto [tileShape, shape] :
-       llvm::zip(tileLayout.getOutDimSizes(), shape)) {
+  for (auto [i, shape] : llvm::enumerate(shape)) {
+    int32_t tileShape = tileLayout.getOutDimSize(outDimNames[i]);
     numReps.push_back(mlir::ceil<int64_t>(shape, tileShape));
   }
 
@@ -686,7 +681,7 @@ LinearLayout BlockScaledDPAStoLinearLayout(ArrayRef<int64_t> shape,
         LinearLayout::identity1D(numReps[0], kRegister, outDimNames[0]);
 
   tileLayout = combineCtaCgaWithShape(
-      std::move(tileLayout), CGAEncodingAttr::getDefault(ctx, rank), shape);
+      std::move(tileLayout), CGAEncodingAttr::get1CTALayout(ctx, rank), shape);
   return tileLayout;
 }
 

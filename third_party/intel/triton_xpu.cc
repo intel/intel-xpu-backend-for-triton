@@ -6,14 +6,15 @@
 #include "llvm/IR/Operator.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Passes/PassBuilder.h"
-#include "llvm/Passes/PassPlugin.h"
 #include "llvm/Passes/StandardInstrumentations.h"
+#include "llvm/Plugins/PassPlugin.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "intel/include/Target/LLVMIR/Dialect/TritonGEN/TritonGENToLLVMIRTranslation.h"
 #include "intel/include/Target/LLVMIR/PostProcess.h"
 #include "intel/include/TritonAnnotateModule/Passes.h"
@@ -56,6 +57,8 @@ static uint32_t findKernels(llvm::Module &M,
 }
 
 void init_triton_intel_passes_ttir(py::module &&m) {
+  ADD_PASS_WRAPPER_0("add_convert_block_pointer_to_tdesc",
+                     intel::createTritonIntelBlockPointerToTensorDesc);
   ADD_PASS_WRAPPER_0("add_convert_tdesc_to_block_pointer",
                      intel::createTritonIntelTensorDescToBlockPointer);
   ADD_PASS_WRAPPER_0("add_remove_boundary_checks",
@@ -74,9 +77,8 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      gpu::intel::createTritonIntelGPUAccelerateMatmul);
   ADD_PASS_WRAPPER_0("add_rewrite_stack_ptr",
                      gpu::intel::createTritonIntelGPURewriteStackPtr);
-  ADD_PASS_OPTION_WRAPPER_2("add_pipeline",
-                            gpu::intel::createTritonIntelGPUPipeline, int,
-                            enum gpu::intel::SplitBarrierScope);
+  ADD_PASS_OPTION_WRAPPER_2(
+      "add_pipeline", gpu::intel::createTritonIntelGPUPipeline, int, bool);
   ADD_PASS_WRAPPER_0("add_allocate_shared_memory",
                      gpu::intel::createIntelAllocateSharedMemory);
   ADD_PASS_WRAPPER_0("add_remove_layout_conversions",
@@ -91,6 +93,9 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
       .def_readwrite("min_sg_size",
                      &gpu::intel::TritonAnnotateModuleOptions::minSGSize)
       .def_readwrite(
+          "support_subgroup_matrix_multiply_accumulate_bf8",
+          &gpu::intel::TritonAnnotateModuleOptions::supportDPASWithBF8)
+      .def_readwrite(
           "support_16bit_atomics",
           &gpu::intel::TritonAnnotateModuleOptions::support16BitAtomics)
       .def_readwrite("support_2d_block_io",
@@ -101,6 +106,9 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
       .def_readwrite(
           "support_bfloat16_conversion",
           &gpu::intel::TritonAnnotateModuleOptions::supportBF16Conversion)
+      .def_readwrite(
+          "support_predicated_io",
+          &gpu::intel::TritonAnnotateModuleOptions::supportPredicatedIO)
       .def_readwrite("support_subgroup_matrix_multiply_accumulate",
                      &gpu::intel::TritonAnnotateModuleOptions::supportDPAS)
       .def_readwrite(
@@ -110,12 +118,16 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
           "support_f4_conversion",
           &gpu::intel::TritonAnnotateModuleOptions::supportF4Conversion)
       .def_readwrite(
+          "support_f8_conversion",
+          &gpu::intel::TritonAnnotateModuleOptions::supportF8Conversion)
+      .def_readwrite(
           "support_256b_prefetch",
           &gpu::intel::TritonAnnotateModuleOptions::supportPrefetch256Bytes)
       .def_readwrite("threads_per_warp",
                      &gpu::intel::TritonAnnotateModuleOptions::threadsPerWarp)
       .def_readwrite("target_arch",
-                     &gpu::intel::TritonAnnotateModuleOptions::targetArch);
+                     &gpu::intel::TritonAnnotateModuleOptions::targetArch)
+      .def_readwrite("is_lts", &gpu::intel::TritonAnnotateModuleOptions::isLTS);
   ADD_PASS_OPTION_WRAPPER_1("add_triton_annotate_module",
                             gpu::intel::createTritonAnnotateModule,
                             gpu::intel::TritonAnnotateModuleOptions);
@@ -147,12 +159,6 @@ void init_triton_intel(py::module &&m) {
   init_triton_intel_passes_ttir(passes.def_submodule("ttir"));
   init_triton_intel_passes_ttgpuir(passes.def_submodule("ttgpuir"));
   init_triton_intel_passes_arith(passes.def_submodule("arith"));
-
-  // Split barrier scope enum
-  py::enum_<gpu::intel::SplitBarrierScope>(m, "SplitBarrierScope")
-      .value("none", gpu::intel::SplitBarrierScope::None)
-      .value("Workgroup", gpu::intel::SplitBarrierScope::Workgroup)
-      .value("Subgroup", gpu::intel::SplitBarrierScope::Subgroup);
 
   m.def("optimize_module", [](llvm::Module *mod,
                               const llvm::OptimizationLevel &opt,
@@ -373,4 +379,33 @@ void init_triton_intel(py::module &&m) {
         return std::make_tuple(py::bytes(spirvBitcode), name);
       },
       ret::take_ownership);
+
+  m.def(
+      "calculate_warps_per_tile",
+      [](unsigned capRepeatCount, unsigned capExecutionSize,
+         const std::vector<int64_t> &shape,
+         unsigned numWarps) -> std::vector<unsigned> {
+        auto result = gpu::intel::calculateWarpsPerTile(
+            capRepeatCount, capExecutionSize, shape, numWarps);
+        return std::vector<unsigned>(result.begin(), result.end());
+      },
+      py::arg("capRepeatCount"), py::arg("capExecutionSize"), py::arg("shape"),
+      py::arg("numWarps"));
+
+  m.def(
+      "calculate_rep_cluster",
+      [](const gpu::intel::DpasEncodingAttr::DPASCapability &dpasCap,
+         unsigned opsPerChan, const std::vector<int64_t> &retShape,
+         unsigned threadsPerWarp, unsigned a_bitwidth, bool is_FP8,
+         const std::vector<int64_t> &a_shape,
+         const std::vector<int64_t> &b_shape,
+         const std::vector<unsigned> &warpsPerTile) -> std::vector<unsigned> {
+        auto result = gpu::intel::calculateRepCluster(
+            dpasCap, opsPerChan, retShape, threadsPerWarp, a_bitwidth, is_FP8,
+            {a_shape}, {b_shape}, {warpsPerTile});
+        return std::vector<unsigned>(result.begin(), result.end());
+      },
+      py::arg("dpasCap"), py::arg("ops_per_chan"), py::arg("ret_shape"),
+      py::arg("threads_per_warp"), py::arg("a_bitwidth"), py::arg("is_fp8"),
+      py::arg("a_shape"), py::arg("b_shape"), py::arg("warps_per_tile"));
 }

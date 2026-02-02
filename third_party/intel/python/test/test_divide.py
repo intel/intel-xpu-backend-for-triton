@@ -5,6 +5,10 @@ import pytest
 import triton
 import triton.language as tl
 
+import os
+
+os.environ["TRITON_INTEL_PREDICATED_LOAD"] = "1"
+
 aten = torch.ops.aten
 
 
