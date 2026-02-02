@@ -38,14 +38,15 @@ module {
     tt.return
   }
 
-  // CHECK: tt.func public @version_for_loop
+  // CHECK: tt.func public @version_for_loop([[ARG0:%.+]]: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, [[ARG1:%.+]]: !tt.ptr<bf16> {tt.divisibility = 16 : i32},
+  // CHECK-SAME:                             [[ARG2:%.+]]: i64, [[ARG3:%.+]]: i64, [[ARG4:%.+]]: i64 {tt.divisibility = 16 : i32}, [[ARG5:%.+]]: i64)
   // CHECK:     [[CST_1_i64:%.+]] = arith.constant 1 : i64
-  // CHECK-DAG: [[NEW_PTR1:%.+]] = tt.make_tensor_ptr %arg0, {{.*}}, [%arg2, %c1_i64], {{.*}} {order = array<i32: 1, 0>} : <tensor<256x32xbf16>>
-  // CHECK-DAG: [[ORIG_PTR1:%.+]] = tt.make_tensor_ptr %arg0, {{.*}}, [%arg2, %arg3], {{.*}} {order = array<i32: 1, 0>} : <tensor<256x32xbf16>>
-  // CHECK:     [[NEW_PTR2:%.+]] = tt.make_tensor_ptr %arg1, {{.*}}, [%arg4, %c1_i64], {{.*}} {order = array<i32: 1, 0>} : <tensor<32x256xbf16>>
-  // CHECK:     [[ORIG_PTR2:%.+]] = tt.make_tensor_ptr %arg1, {{.*}}, [%arg4, %arg5], {{.*}} {order = array<i32: 1, 0>} : <tensor<32x256xbf16>>
-  // CHECK-DAG: [[CMP1:%.+]] = arith.cmpi eq, %arg3, [[CST_1_i64]] : i64
-  // CHECK-DAG: [[CMP2:%.+]] = arith.cmpi eq, %arg5, [[CST_1_i64]] : i64
+  // CHECK-DAG: [[NEW_PTR1:%.+]] = tt.make_tensor_ptr [[ARG0]], {{.*}}, [[[ARG2]], [[CST_1_i64]]], {{.*}} {order = array<i32: 1, 0>} : <tensor<256x32xbf16>>
+  // CHECK-DAG: [[ORIG_PTR1:%.+]] = tt.make_tensor_ptr [[ARG0]], {{.*}}, [[[ARG2]], [[ARG3]]], {{.*}} {order = array<i32: 1, 0>} : <tensor<256x32xbf16>>
+  // CHECK:     [[NEW_PTR2:%.+]] = tt.make_tensor_ptr [[ARG1]], {{.*}}, [[[ARG4]], [[CST_1_i64]]], {{.*}} {order = array<i32: 1, 0>} : <tensor<32x256xbf16>>
+  // CHECK:     [[ORIG_PTR2:%.+]] = tt.make_tensor_ptr [[ARG1]], {{.*}}, [[[ARG4]], [[ARG5]]], {{.*}} {order = array<i32: 1, 0>} : <tensor<32x256xbf16>>
+  // CHECK-DAG: [[CMP1:%.+]] = arith.cmpi eq, [[ARG3]], [[CST_1_i64]] : i64
+  // CHECK-DAG: [[CMP2:%.+]] = arith.cmpi eq, [[ARG5]], [[CST_1_i64]] : i64
   // CHECK:     [[VER_COND:%.+]] = arith.andi [[CMP1]], [[CMP2]] : i1
   // CHECK:     [[LOOP_VER:%.+]]:2 = scf.if [[VER_COND]]
   // CHECK:       scf.for

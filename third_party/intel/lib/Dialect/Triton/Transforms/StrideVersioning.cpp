@@ -31,48 +31,72 @@ namespace {
 
 class OpSelector {
 public:
-  // Select load operations that use a block ptr defined by a
-  // make_tensor_ptr operation with at least one stride that has unknown value
-  // at compile time.
+  // Select load operations that use a block ptr (defined by a MakeTensorPtrOp)
+  // or a tensor descriptor (defined by a MakeTensorDescOp) with at least one
+  // stride that has unknown value at compile time.
   virtual bool isCandidate(scf::ForOp &forOp, Operation *op) const {
     assert(op->getParentOfType<scf::ForOp>() == forOp &&
            "Operation should be contains in the loop");
-
     return TypeSwitch<Operation *, bool>(op)
-        .Case<tt::LoadOp>([](auto loadOp) {
-          Value ptr = loadOp.getPtr();
-          if (!tt::isTensorPointerType(ptr.getType()))
-            return false;
-
-          auto tensorType = cast<RankedTensorType>(
-              cast<tt::PointerType>(ptr.getType()).getPointeeType());
-          if (tensorType.getRank() > 2)
-            return false;
-
-          auto isOne = [](Value v) {
-            auto constantOp = v.getDefiningOp<arith::ConstantOp>();
-            if (!constantOp)
-              return false;
-            if (auto intAttr = dyn_cast<IntegerAttr>(constantOp.getValueAttr()))
-              return intAttr.getInt() == 1;
-            return false;
-          };
-
-          // If no stride has value equal to one we have found a candidate
-          // operation.
-          tt::MakeTensorPtrOp makeTensorPtrOp = tt::getMakeTensorPtrOp(ptr);
-          bool isCandidate =
-              llvm::none_of(makeTensorPtrOp.getStrides(), [&](Value stride) {
-                Value finalVal = tt::intel::getFinalValue(stride);
-                assert(finalVal && "Expecting a valid value");
-                return finalVal.getDefiningOp() && isOne(finalVal);
-              });
-          return isCandidate;
+        .Case<tt::LoadOp>([this](auto loadOp) {
+          llvm::errs() << "at line " << __LINE__ << "\n";
+          return isCandidate(loadOp);
         })
-        .Default([](auto) { return false; });
+        .Case<tt::DescriptorLoadOp>([this](auto loadOp) {
+          llvm::errs() << "at line " << __LINE__ << "\n";
+          return isCandidate(loadOp);
+        })
+        .Default([](auto) {
+          llvm::errs() << "at line " << __LINE__ << "\n";
+          return false;
+        });
   }
 
   std::string getName() const { return "OpSelector"; };
+
+private:
+  bool isCandidate(tt::LoadOp loadOp) const {
+    std::optional<tt::MakeTensorPtrOp> makeTensorPtrOp =
+        tt::intel::findDefiningOpOfType<tt::MakeTensorPtrOp>(loadOp.getPtr());
+    if (!makeTensorPtrOp.has_value())
+      return false;
+
+    Operation::operand_range strides = makeTensorPtrOp->getStrides();
+    if (strides.size() > 2)
+      return false;
+
+    return noStrideIsOne(strides);
+  }
+
+  bool isCandidate(tt::DescriptorLoadOp loadOp) const {
+    std::optional<tt::MakeTensorDescOp> makeTensorDescOp =
+        tt::intel::findDefiningOpOfType<tt::MakeTensorDescOp>(loadOp.getDesc());
+    if (!makeTensorDescOp.has_value())
+      return false;
+
+    llvm::errs() << "at line " << __LINE__ << "\n";
+    Operation::operand_range strides = makeTensorDescOp->getStrides();
+    if (strides.size() > 2)
+      return false;
+
+    llvm::errs() << "at line " << __LINE__ << "\n";
+    return noStrideIsOne(strides);
+  }
+
+  bool noStrideIsOne(const OperandRange &strides) const {
+    auto isOne = [](Value v) {
+      if (auto constantOp = v.getDefiningOp<arith::ConstantOp>())
+        if (auto intAttr = dyn_cast<IntegerAttr>(constantOp.getValueAttr()))
+          return intAttr.getInt() == 1;
+      return false;
+    };
+
+    return llvm::none_of(strides, [&](Value stride) {
+      Value finalVal = tt::intel::getFinalValue(stride);
+      assert(finalVal && "Expecting a valid value");
+      return finalVal.getDefiningOp() && isOne(finalVal);
+    });
+  }
 };
 
 // Collects operations in a loop that satisfy the condition imposed by
@@ -84,7 +108,7 @@ public:
   OpsCollector(scf::ForOp &forOp, OpSelector &selector)
       : forOp(forOp), selector(selector) {}
 
-  bool collectOps() {
+  unsigned collectOps() {
     auto collectOps = [&](auto ops, Operations &selectedOps) {
       for (Operation *op : ops) {
         if (selector.isCandidate(forOp, op)) {
@@ -96,6 +120,7 @@ public:
     };
 
     collectOps(forOp.getOps<tt::LoadOp>(), ops);
+    collectOps(forOp.getOps<tt::DescriptorLoadOp>(), ops);
     return ops.size();
   }
 
@@ -110,11 +135,9 @@ private:
 
 class LoopVersioner {
 public:
-  void
-  version(scf::ForOp &forOp, ArrayRef<Operation *> makeTensorPtrOps,
-          std::unordered_map<Operation *, Value> makeTensorPtrToStride) const {
-    assert(!makeTensorPtrOps.empty() &&
-           makeTensorPtrOps.size() == makeTensorPtrToStride.size() &&
+  void version(scf::ForOp &forOp, ArrayRef<Operation *> ops,
+               std::unordered_map<Operation *, Value> opToStride) const {
+    assert(!ops.empty() && ops.size() == opToStride.size() &&
            "Sizes should match");
 
     Location loc = forOp.getLoc();
@@ -126,8 +149,8 @@ public:
     // Build the versioning condition for the loop.
     builder.setInsertionPoint(forOp);
     SmallVector<Value> versioningConds;
-    for (Operation *makeTensorPtrOp : makeTensorPtrOps) {
-      Value stride = makeTensorPtrToStride[makeTensorPtrOp];
+    for (Operation *op : ops) {
+      Value stride = opToStride[op];
       versioningConds.emplace_back(arith::CmpIOp::create(
           builder, loc, arith::CmpIPredicate::eq, stride, oneVal));
     }
@@ -160,20 +183,32 @@ public:
       if (!v.getUsers().empty())
         v.replaceAllUsesWith(ifOp->getResult(i));
 
-    // Clone the makeTensorPtrOps and replace 'versioned' stride with one.
-    for (Operation *makeTensorPtrOp : makeTensorPtrOps) {
-      auto newOp = cast<tt::MakeTensorPtrOp>(makeTensorPtrOp->clone());
-      Value versionedStride = makeTensorPtrToStride[makeTensorPtrOp];
-      for (OpOperand &stride : newOp.getStridesMutable()) {
+    auto updateStride = [&](MutableOperandRange strides, Value versionedStride,
+                            Value oneVal) {
+      for (OpOperand &stride : strides) {
         if (stride.get() == versionedStride) {
           stride.set(oneVal);
           break;
         }
       }
+    };
 
-      builder.setInsertionPoint(makeTensorPtrOp);
+    // Clone the original operation and replace the 'versioned' stride with one.
+    for (Operation *op : ops) {
+      Operation *newOp = op->clone();
+      Value versionedStride = opToStride[op];
+      if (isa<tt::MakeTensorPtrOp>(op))
+        updateStride(cast<tt::MakeTensorPtrOp>(newOp).getStridesMutable(),
+                     versionedStride, oneVal);
+      else if (isa<tt::MakeTensorDescOp>(op))
+        updateStride(cast<tt::MakeTensorDescOp>(newOp).getStridesMutable(),
+                     versionedStride, oneVal);
+      else
+        assert(false && "Unexpected operation type");
+
+      builder.setInsertionPoint(op);
       builder.insert(newOp);
-      makeTensorPtrOp->replaceUsesWithIf(newOp, [&](OpOperand &use) {
+      op->replaceUsesWithIf(newOp, [&](OpOperand &use) {
         return use.getOwner()->getParentOfType<scf::ForOp>() == thenForLoop;
       });
     }
@@ -206,68 +241,104 @@ public:
         // use a block ptr with no stride equal to one (at compile time).
         OpSelector selector;
         OpsCollector collector(forOp, selector);
-        if (collector.collectOps()) {
-          OpBuilder builder(forOp);
-          Location loc = forOp->getLoc();
+        if (collector.collectOps() == 0)
+          return WalkResult::advance();
 
-          SmallVector<Operation *> makeTensorPtrOps;
-          std::unordered_map<Operation *, Value> makeTensorPtrToStride;
-          for (Operation *op : collector.getOps()) {
-            TypeSwitch<Operation *>(op)
-                .Case<tt::LoadOp>([&](auto loadOp) {
-                  Value ptr = loadOp.getPtr();
-                  assert(tt::isTensorPointerType(ptr.getType()) &&
-                         "Expecting a block ptr");
+        OpBuilder builder(forOp);
+        Location loc = forOp->getLoc();
 
-                  tt::MakeTensorPtrOp makeTensorPtrOp =
-                      tt::getMakeTensorPtrOp(ptr);
-                  OperandRange strides = makeTensorPtrOp.getStrides();
-                  ArrayRef<int> order = makeTensorPtrOp.getOrder();
+        SmallVector<Operation *> selectedOps;
+        std::unordered_map<Operation *, Value> selectedOpToStride;
+        for (Operation *op : collector.getOps()) {
+          TypeSwitch<Operation *>(op)
+              .Case<tt::LoadOp>([&](auto loadOp) {
+                auto makeTensorPtrOp =
+                    *tt::intel::findDefiningOpOfType<tt::MakeTensorPtrOp>(
+                        loadOp.getPtr());
 
-                  for (size_t idx = 0; idx < order.size(); ++idx) {
-                    unsigned strideIdx = order[idx];
-                    Value stride = strides[strideIdx];
-                    Value finalVal = tt::intel::getFinalValue(stride);
-                    assert(finalVal && "Expecting a valid value");
+                OperandRange strides = makeTensorPtrOp.getStrides();
+                ArrayRef<int> order = makeTensorPtrOp.getOrder();
 
-                    Operation *defOp = finalVal.getDefiningOp();
-                    if (defOp)
-                      continue;
+                for (size_t idx = 0; idx < order.size(); ++idx) {
+                  unsigned strideIdx = order[idx];
+                  Value stride = strides[strideIdx];
+                  Value finalVal = tt::intel::getFinalValue(stride);
+                  assert(finalVal && "Expecting a valid value");
 
-                    auto blockArg = cast<BlockArgument>(finalVal);
-                    Operation *parentOp = blockArg.getOwner()->getParentOp();
-                    auto funcOp = dyn_cast<tt::FuncOp>(parentOp);
-                    if (!funcOp)
-                      continue;
+                  Operation *defOp = finalVal.getDefiningOp();
+                  if (defOp)
+                    continue;
 
-                    // arguments that have a divisibility attribute (e.g. by 16)
-                    // cannot have value equal to one (the divisibility
-                    // attribute should not be one).
-                    auto divisibilityAttr =
-                        funcOp.getArgAttrOfType<IntegerAttr>(
-                            blockArg.getArgNumber(), "tt.divisibility");
-                    if (divisibilityAttr) {
-                      assert(divisibilityAttr.getValue().isStrictlyPositive() &&
-                             !divisibilityAttr.getValue().isOne() &&
-                             "Unexpected divisibility value");
-                      continue;
-                    }
+                  auto blockArg = cast<BlockArgument>(finalVal);
+                  Operation *parentOp = blockArg.getOwner()->getParentOp();
+                  auto funcOp = dyn_cast<tt::FuncOp>(parentOp);
+                  if (!funcOp)
+                    continue;
 
-                    makeTensorPtrToStride[makeTensorPtrOp] = blockArg;
-                    break;
+                  // arguments that have a divisibility attribute (e.g. by 16)
+                  // cannot have value equal to one (the divisibility
+                  // attribute should not be one).
+                  auto divisibilityAttr = funcOp.getArgAttrOfType<IntegerAttr>(
+                      blockArg.getArgNumber(), "tt.divisibility");
+                  if (divisibilityAttr) {
+                    assert(divisibilityAttr.getValue().isStrictlyPositive() &&
+                           !divisibilityAttr.getValue().isOne() &&
+                           "Unexpected divisibility value");
+                    continue;
                   }
 
-                  if (makeTensorPtrToStride.count(makeTensorPtrOp) != 0)
-                    makeTensorPtrOps.push_back(makeTensorPtrOp);
-                })
-                .Default([](auto) { return false; });
-          }
+                  selectedOpToStride[makeTensorPtrOp] = blockArg;
+                  break;
+                }
 
-          if (!makeTensorPtrToStride.empty()) {
-            LoopVersioner loopVersioner;
-            loopVersioner.version(forOp, makeTensorPtrOps,
-                                  makeTensorPtrToStride);
-          }
+                if (selectedOpToStride.count(makeTensorPtrOp) != 0)
+                  selectedOps.push_back(makeTensorPtrOp);
+              })
+              .Case<tt::DescriptorLoadOp>([&](auto loadOp) {
+                auto makeTensorDescOp =
+                    *tt::intel::findDefiningOpOfType<tt::MakeTensorDescOp>(
+                        loadOp.getDesc());
+
+                OperandRange strides = makeTensorDescOp.getStrides();
+                for (auto stride : strides) {
+                  Value finalVal = tt::intel::getFinalValue(stride);
+                  assert(finalVal && "Expecting a valid value");
+
+                  Operation *defOp = finalVal.getDefiningOp();
+                  if (defOp)
+                    continue;
+
+                  auto blockArg = cast<BlockArgument>(finalVal);
+                  Operation *parentOp = blockArg.getOwner()->getParentOp();
+                  auto funcOp = dyn_cast<tt::FuncOp>(parentOp);
+                  if (!funcOp)
+                    continue;
+
+                  // arguments that have a divisibility attribute (e.g. by 16)
+                  // cannot have value equal to one (the divisibility
+                  // attribute should not be one).
+                  auto divisibilityAttr = funcOp.getArgAttrOfType<IntegerAttr>(
+                      blockArg.getArgNumber(), "tt.divisibility");
+                  if (divisibilityAttr) {
+                    assert(divisibilityAttr.getValue().isStrictlyPositive() &&
+                           !divisibilityAttr.getValue().isOne() &&
+                           "Unexpected divisibility value");
+                    continue;
+                  }
+
+                  selectedOpToStride[makeTensorDescOp] = blockArg;
+                  break;
+                }
+
+                if (selectedOpToStride.count(makeTensorDescOp) != 0)
+                  selectedOps.push_back(makeTensorDescOp);
+              })
+              .Default([](auto) { return false; });
+        }
+
+        if (!selectedOpToStride.empty()) {
+          LoopVersioner loopVersioner;
+          loopVersioner.version(forOp, selectedOps, selectedOpToStride);
         }
       }
 
