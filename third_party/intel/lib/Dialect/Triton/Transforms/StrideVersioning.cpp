@@ -56,9 +56,13 @@ public:
 
 private:
   bool isCandidate(tt::LoadOp loadOp) const {
+    Value ptr = loadOp.getPtr();
+    if (!tt::isTensorPointerType(ptr.getType()))
+      return false;
+
     std::optional<tt::MakeTensorPtrOp> makeTensorPtrOp =
-        tt::intel::findDefiningOpOfType<tt::MakeTensorPtrOp>(loadOp.getPtr());
-    if (!makeTensorPtrOp.has_value())
+        tt::intel::findDefiningOpOfType<tt::MakeTensorPtrOp>(ptr);
+    if (!makeTensorPtrOp)
       return false;
 
     Operation::operand_range strides = makeTensorPtrOp->getStrides();
@@ -71,7 +75,7 @@ private:
   bool isCandidate(tt::DescriptorLoadOp loadOp) const {
     std::optional<tt::MakeTensorDescOp> makeTensorDescOp =
         tt::intel::findDefiningOpOfType<tt::MakeTensorDescOp>(loadOp.getDesc());
-    if (!makeTensorDescOp.has_value())
+    if (!makeTensorDescOp)
       return false;
 
     llvm::errs() << "at line " << __LINE__ << "\n";
