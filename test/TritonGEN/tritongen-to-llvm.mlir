@@ -1,5 +1,34 @@
 // RUN: triton-opt -convert-tritongen-to-llvm -split-input-file %s | FileCheck %s
 
+// CHECK-DAG: llvm.func spir_funccc @intel_manageable_barrier_init(i32, i32) -> !llvm.ptr<3> attributes {no_unwind}
+// CHECK-DAG: llvm.func spir_funccc @intel_manageable_barrier_arrive(!llvm.ptr<3>) attributes {no_unwind}
+
+module attributes {"ttg.num-warps" = 32 : i32} {
+llvm.func @triton_gen.split_barrier_arrive() {
+  // CHECK-LABEL: triton_gen.split_barrier_arrive() {
+  // CHECK:      [[COUNT:%.*]] = llvm.mlir.constant(32 : i32) : i32
+  // CHECK:      [[BDATA:%.*]] = llvm.call spir_funccc @intel_manageable_barrier_init([[COUNT]], [[COUNT]]) {{.*}} : (i32, i32) -> !llvm.ptr<3>
+  // CHECK:      llvm.call spir_funccc @intel_manageable_barrier_arrive([[BDATA]]) {{.*}} : (!llvm.ptr<3>) -> ()
+  %bdata = triton_gen.split_barrier_arrive
+  llvm.return
+}
+}
+
+// -----
+
+// CHECK-DAG: llvm.func spir_funccc @intel_manageable_barrier_wait(!llvm.ptr<3>) attributes {no_unwind}
+// CHECK-DAG: llvm.func spir_funccc @intel_manageable_barrier_release(!llvm.ptr<3>) attributes {no_unwind}
+
+llvm.func @triton_gen.split_barrier_wait(%bdata: !llvm.ptr<3>) {
+  // CHECK: triton_gen.split_barrier_wait([[BDATA:%.*]]: !llvm.ptr<3>) {
+  // CHECK:      llvm.call spir_funccc @intel_manageable_barrier_wait([[BDATA]]) {{.*}} : (!llvm.ptr<3>) -> ()
+  // CHECK:      llvm.call spir_funccc @intel_manageable_barrier_release([[BDATA]]) {{.*}} : (!llvm.ptr<3>) -> ()
+  triton_gen.split_barrier_wait %bdata
+  llvm.return
+}
+
+// -----
+
 // CHECK: llvm.func spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iS0_i(i32, vector<8xi16>, vector<8xi32>, vector<8xi32>, i32) -> vector<8xi32> attributes {convergent, memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return}
 
 llvm.func @triton_gen.dpas.i8(%c : vector<8xi32>, %a : vector<8xi16>, %b : vector<8xi32>) {
