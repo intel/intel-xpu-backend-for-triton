@@ -155,21 +155,21 @@ def call_in_process(fn, args=()):
 def get_attn_bias(provider, use_causal, N_CTX_q, N_CTX_kv, device):
     if use_causal:
         return None
-    if provider == 'cutlass':
+    if provider == 'sycl-tla':
         return causal_lower_right(N_CTX_q, N_CTX_kv)
     return create_mask_cached(causal_mask, 1, 1, N_CTX_q, N_CTX_kv, device=device)
 
 
 def run_sdpa_benchmark(q, k, v, attn_bias, use_causal, sm_scale, H_q, H_kv, D_HEAD_qk, D_HEAD_v, MODE, provider,
                        do_bench, device):
-    """Run SDPA benchmark for CUTLASS or OneDNN providers."""
+    """Run SDPA benchmark for SYCL-TLA or OneDNN providers."""
     # SDPA backends have limitations:
     # - Require D_HEAD_qk == D_HEAD_v (no support for different head dimensions)
     # - OneDNN doesn't support backward pass for SDPA
     if D_HEAD_qk != D_HEAD_v or (provider == 'onednn' and MODE == 'bwd'):
         return None, float('nan'), float('nan'), float('nan'), float('nan')
 
-    backend = SDPBackend.FLASH_ATTENTION if provider == 'cutlass' else SDPBackend.OVERRIDEABLE
+    backend = SDPBackend.FLASH_ATTENTION if provider == 'sycl-tla' else SDPBackend.OVERRIDEABLE
 
     def sdpa_fn():
         with sdpa_kernel(backends=[backend]):
@@ -243,8 +243,8 @@ if 'B580' in torch.xpu.get_device_name():
             for seq_len in [4096, 8192]  #
         ] if fa_kernel_mode == 'bwd' else [])],
         line_arg='provider',
-        line_vals=['triton', 'torch'] + (['cutlass', 'onednn'] if 'B580' not in torch.xpu.get_device_name() else []),
-        line_names=['Triton', 'Torch'] + (['CUTLASS', 'OneDNN'] if 'B580' not in torch.xpu.get_device_name() else []),
+        line_vals=['triton', 'torch', 'sycl-tla', 'onednn'],
+        line_names=['Triton', 'Torch', 'SYCL-TLA', 'OneDNN'],
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel=['GB/s', 'TFlops'],
         plot_name='flexAttnCausal-performance',
@@ -280,7 +280,7 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
         else:
             _, min_ms, max_ms, mean, cv = do_bench(torch_fn, device=DEVICE)
 
-    elif provider in ('cutlass', 'onednn'):
+    elif provider in ('sycl-tla', 'onednn'):
         use_causal = N_CTX_q == N_CTX_kv
         attn_bias = get_attn_bias(provider, use_causal, N_CTX_q, N_CTX_kv, DEVICE)
         _, min_ms, max_ms, mean, cv = run_sdpa_benchmark(q, k, v, attn_bias, use_causal, sm_scale, H_q, H_kv, D_HEAD_qk,
