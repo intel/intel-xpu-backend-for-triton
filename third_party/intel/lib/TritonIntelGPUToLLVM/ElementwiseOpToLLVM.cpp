@@ -1349,14 +1349,17 @@ struct OpToExternCallConversion
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    Type funcType = getFunctionType(elemTy, operands[0]);
-    SmallVector<Type> operandTypes(ValueRange(operands[0]).getTypes());
-    std::string fnName =
-        mlir::triton::gpu::intel::mangle(funcName, operandTypes);
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    SmallVector<Value> args = operands[0];
+    args.push_back(b.i32_val(0)); 
+    Type funcType = getFunctionType(elemTy, args);
+    SmallVector<Type> operandTypes(ValueRange(args).getTypes());
+    std::string fnName = funcName.str();
+        //mlir::triton::gpu::intel::mangle(funcName, operandTypes);
     LLVM::LLVMFuncOp funcOp =
         appendOrGetExternFuncOp(rewriter, op, fnName, funcType);
     funcOp.setCConv(triton::gpu::intel::getDefaultCConv(op));
-    auto callOp = LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]);
+    auto callOp = LLVM::createLLVMCallOp(rewriter, loc, funcOp, args);
     callOp.setCConv(funcOp.getCConv());
     return {callOp.getResult()};
   }
@@ -1438,9 +1441,9 @@ void populateElementwiseOpToLLVMPatterns(
     PatternBenefit benefit) {
 
   patterns.add<OpToExternCallConversion<triton::PreciseSqrtOp>>(
-      typeConverter, axisInfoAnalysis, "sqrt_cr", benefit);
+      typeConverter, axisInfoAnalysis, "__builtin_IB_ieee_sqrt_rm", benefit);
   patterns.add<OpToExternCallConversion<triton::PreciseDivFOp>>(
-      typeConverter, axisInfoAnalysis, "divide_cr", benefit);
+      typeConverter, axisInfoAnalysis, "__builtin_IB_ieee_divide_rm", benefit);
   patterns.add<MulhiUIOpConversion>(typeConverter, axisInfoAnalysis, targetInfo,
                                     benefit);
   patterns.add<ExternElementwiseOpConversion>(typeConverter, axisInfoAnalysis,
