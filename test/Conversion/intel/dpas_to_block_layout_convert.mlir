@@ -69,7 +69,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.sha
     // COM: Total 32 stores are generated to save the tensor of the DPAS layout to the SLM. 128*256/(4*8*16*2) = 32
     // CHECK:           llvm.store %[[VAL_67]], %[[VAL_65]] : vector<2xf16>, !llvm.ptr<3>
     // CHECK-COUNT-31:  llvm.store {{.*}}, {{.*}} : vector<2xf16>, !llvm.ptr<3>
-    // CHECK:           llvm.call spir_funccc @_Z7barrierj(%[[CST_1]]) {convergent, no_unwind, will_return} : (i32) -> ()
+    // CHECK:           llvm.call spir_funccc @_Z7barrierj(%[[CST_3]]) {convergent, no_unwind, will_return} : (i32) -> ()
 
     // COM: Because the values per thread of blocked layout is contiguous. The values are loaded from the SLM in a vectorized way.
     // COM: Total 8 loads are generated to load the tensor of the blocked layout from the SLM. 128*256/(16*2*16*8) = 8
@@ -157,7 +157,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.sha
     // COM: Total 32 stores are generated to save the tensor of the DPAS layout to the SLM. 128*256/(4*8*16*2) = 32
     // CHECK:           llvm.store %[[VAL_67]], %[[VAL_65]] : vector<2xf16>, !llvm.ptr<3>
     // CHECK-COUNT-31:  llvm.store {{.*}}, {{.*}} : vector<2xf16>, !llvm.ptr<3>
-    // CHECK:           llvm.call spir_funccc @_Z7barrierj(%[[CST_1]]) {convergent, no_unwind, will_return} : (i32) -> ()
+    // CHECK:           llvm.call spir_funccc @_Z7barrierj(%[[CST_3]]) {convergent, no_unwind, will_return} : (i32) -> ()
 
     // COM: Because the values per thread of blocked layout is contiguous. The values are loaded from the SLM in a vectorized way.
     // COM: Total 16 loads are generated to load the tensor of the blocked layout from the SLM. 128*256/(16*2*16*4) = 16

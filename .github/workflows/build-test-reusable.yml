@@ -168,19 +168,19 @@ jobs:
           dest: ${{ steps.pip-cache.outputs.dest }}
 
       - name: Upload Triton wheels
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: triton-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           path: dist/*.whl
 
       - name: Upload PTI wheels
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: pti-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           path: .scripts_cache/pti/dist/*.whl
 
       - name: Upload test reports
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: test-reports-build-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           include-hidden-files: true
@@ -237,12 +237,12 @@ jobs:
           mode: ${{ inputs.pytorch_mode }}
 
       - name: Download Triton wheels
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           name: triton-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
 
       - name: Download PTI wheels
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           name: pti-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
 
@@ -295,9 +295,7 @@ jobs:
       - name: Run Proton tests
         if: matrix.suite == 'rest'
         run: |
-          cd third_party/proton/test
-          pytest test_api.py test_cmd.py test_lib.py test_profile.py test_viewer.py --device xpu -s -v
-          cd ..
+          ${{ env.TRITON_TEST_CMD }} --proton
 
       - name: Run minicore tests
         if: matrix.suite == 'minicore'
@@ -385,7 +383,7 @@ jobs:
           dest: ${{ steps.pip-cache.outputs.dest }}
 
       - name: Upload test reports
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: test-reports-${{ matrix.suite }}-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           include-hidden-files: true
@@ -408,7 +406,7 @@ jobs:
           key: pip-${{ inputs.python_version }}-${{ hashFiles('pyproject.toml', 'setup.py') }}-${{ env.PIP_CACHE_NUMBER }}
 
       - name: Download test reports
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           pattern: test-reports-*-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           path: reports
@@ -435,20 +433,20 @@ jobs:
           python scripts/pass_rate.py --reports reports --suite tutorials --json > pass_rate_tutorials.json
 
       - name: Upload pass rate report
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: pass_rate-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           path: pass_rate*.json
 
       - name: Upload tutorials test report
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: test-reports-tutorials-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           include-hidden-files: true
           path: reports/tutorials.xml
 
       - name: Upload tutorials performance report
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: tutorials-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           if-no-files-found: warn

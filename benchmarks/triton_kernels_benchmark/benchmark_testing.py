@@ -15,6 +15,7 @@ import datetime
 import os
 import time
 from pathlib import Path
+import warnings
 
 import scipy.stats
 import numpy as np
@@ -553,6 +554,8 @@ class Mark:
             for run_counter in range(args.n_runs):
                 df = self._run(bench, args.reports, show_plots, print_data, mark_args=args, run_counter=run_counter,
                                **kwargs)
+                if len(df) == 0:
+                    warnings.warn("No results found in the benchmark run.")
                 df["datetime"] = datetime.datetime.now()
                 df["run_counter"] = run_counter + 1
                 benchmark_dfs.append(df)
