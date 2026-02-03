@@ -35,6 +35,7 @@
 #include "llvm/Support/ErrorHandling.h"
 
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
@@ -678,6 +679,66 @@ create2DBlockAsserts(OpTy op, mlir::ConversionPatternRewriter &rewriter,
 }
 
 namespace {
+
+//===----------------------------------------------------------------------===//
+// Synchronization
+//===----------------------------------------------------------------------===//
+
+struct TritonSplitBarrierArriveLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::SplitBarrierArriveOp> {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::SplitBarrierArriveOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::SplitBarrierArriveOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    TritonLLVMOpBuilder b(loc, rewriter);
+    MLIRContext *ctx = rewriter.getContext();
+    Type smemPtrTy = ptr_ty(ctx, 3);
+    std::string fnName = "intel_manageable_barrier_init";
+    SmallVector<Type> initArgTypes{i32_ty, i32_ty};
+    Value count = b.i32_val(lookupNumWarps(op));
+    LLVM::CallOp initOp =
+        createDeviceFunctionCall(rewriter, fnName, smemPtrTy, initArgTypes,
+                                 {count, count}, {}, intel::noUnwindAttrs);
+
+    fnName = "intel_manageable_barrier_arrive";
+    SmallVector<Type> argTypes{smemPtrTy};
+    LLVM::CallOp arriveOp = createDeviceFunctionCall(
+        rewriter, fnName, void_ty(ctx), argTypes, {initOp.getResult()}, {},
+        intel::noUnwindAttrs);
+    rewriter.replaceOp(op, initOp);
+    return success();
+  }
+};
+
+struct TritonSplitBarrierWaitLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::SplitBarrierWaitOp> {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::SplitBarrierWaitOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::SplitBarrierWaitOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    TritonLLVMOpBuilder b(loc, rewriter);
+    MLIRContext *ctx = rewriter.getContext();
+    Type smemPtrTy = ptr_ty(ctx, 3);
+    std::string fnName = "intel_manageable_barrier_wait";
+    SmallVector<Type> argTypes{smemPtrTy};
+    LLVM::CallOp waitOp =
+        createDeviceFunctionCall(rewriter, fnName, void_ty(ctx), argTypes,
+                                 {op.getBData()}, {}, intel::noUnwindAttrs);
+
+    fnName = "intel_manageable_barrier_release";
+    LLVM::CallOp releaseOp =
+        createDeviceFunctionCall(rewriter, fnName, void_ty(ctx), argTypes,
+                                 {op.getBData()}, {}, intel::noUnwindAttrs);
+    rewriter.replaceOp(op, releaseOp);
+    return success();
+  }
+};
 
 //===----------------------------------------------------------------------===//
 // Matrix operations
@@ -1402,7 +1463,8 @@ void mlir::triton::populateTritonGENToLLVMConversionPatterns(
       .add<TritonMatrix2DBlockLoadLowering, TritonMatrix2DBlockStoreLowering,
            TritonMatrix2DBlockPrefetchLowering>(converter, emitter);
 
-  patterns.add<TritonMatrixDPASLowering, TritonMatrixBlockScaleDPASLowering,
+  patterns.add<TritonSplitBarrierArriveLowering, TritonSplitBarrierWaitLowering,
+               TritonMatrixDPASLowering, TritonMatrixBlockScaleDPASLowering,
                TritonSubGroupBlockReadLowering,
                TritonSubGroupBlockWriteLowering, TritonPredicatedLoadOpLowering,
                TritonPredicatedStoreOpLowering, TritonFToTf32OpLowering>(

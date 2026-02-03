@@ -58,16 +58,13 @@ static void pipelineLoop(scf::ForOp forOp, int numStages, bool useBarrier) {
 
   scf::ForOp loop = (*newForOp);
   if (useBarrier) {
-    auto barrierScope = triton::TritonGEN::MemScope::WORK_GROUP;
     OpBuilder b(loop);
     Location loc = loop.getLoc();
     b.setInsertionPointToStart(loop.getBody());
-    triton::TritonGEN::SplitBarrierArriveOp::create(b, loc, barrierScope,
-                                                    barrierScope);
+    auto bData = triton::TritonGEN::SplitBarrierArriveOp::create(b, loc);
     auto yield = cast<scf::YieldOp>(loop.getBody()->getTerminator());
     b.setInsertionPoint(yield);
-    triton::TritonGEN::SplitBarrierWaitOp::create(b, loc, barrierScope,
-                                                  barrierScope);
+    triton::TritonGEN::SplitBarrierWaitOp::create(b, loc, bData);
   }
 }
 
