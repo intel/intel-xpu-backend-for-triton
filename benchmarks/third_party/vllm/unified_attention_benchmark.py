@@ -914,7 +914,7 @@ def unified_attention_td(
     #     or max_seqlen_q > 1
     #     or num_seqs > seq_threshold_3D
     # ):
-    TILE_SIZE_PREFILL = TILE_SIZE_DECODE = block_size
+    TILE_SIZE_PREFILL = TILE_SIZE_DECODE = 16
     assert TILE_SIZE_PREFILL <= block_size, "TILE_SIZE_PREFILL must be <= block_size"
     assert TILE_SIZE_DECODE <= block_size, "TILE_SIZE_DECODE must be <= block_size"
     assert block_size % TILE_SIZE_PREFILL == 0, "block_size must be multiple of TILE_SIZE_PREFILL"
