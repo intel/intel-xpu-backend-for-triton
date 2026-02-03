@@ -11,7 +11,6 @@
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
-#include "triton/Dialect/Triton/IR/Utility.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -77,7 +76,7 @@ private:
     return noStrideIsOne(strides);
   }
 
-  bool noStrideIsOne(const OperandRange &strides) const {
+  bool noStrideIsOne(OperandRange strides) const {
     auto isOne = [](Value v) {
       if (auto constantOp = v.getDefiningOp<arith::ConstantOp>())
         if (auto intAttr = dyn_cast<IntegerAttr>(constantOp.getValueAttr()))
@@ -198,7 +197,7 @@ public:
         updateStride(cast<tt::MakeTensorDescOp>(newOp).getStridesMutable(),
                      versionedStride, oneVal);
       else
-        assert(false && "Unexpected operation type");
+        llvm_unreachable("Unexpected operation type");
 
       builder.setInsertionPoint(op);
       builder.insert(newOp);
@@ -286,13 +285,12 @@ private:
 
     for (size_t idx = 0; idx < order.size(); ++idx) {
       unsigned strideIdx = order[idx];
-      Value stride = strides[strideIdx];
-      Value finalVal = tt::intel::getFinalValue(stride);
+      Value finalVal = tt::intel::getFinalValue(strides[strideIdx]);
       assert(finalVal && "Expecting a valid value");
-
-      if (isFuncArgWithValueMaybeEqualToOne(finalVal))
+      if (isFuncArgWithValueMaybeEqualToOne(finalVal)) {
         selectedOpToStride[makeTensorPtrOp] = cast<BlockArgument>(finalVal);
-      break;
+        break;
+      }
     }
 
     if (selectedOpToStride.count(makeTensorPtrOp) != 0)
@@ -311,10 +309,10 @@ private:
     for (Value stride : llvm::reverse(strides)) {
       Value finalVal = tt::intel::getFinalValue(stride);
       assert(finalVal && "Expecting a valid value");
-
-      if (isFuncArgWithValueMaybeEqualToOne(finalVal))
+      if (isFuncArgWithValueMaybeEqualToOne(finalVal)) {
         selectedOpToStride[makeTensorDescOp] = cast<BlockArgument>(finalVal);
-      break;
+        break;
+      }
     }
 
     if (selectedOpToStride.count(makeTensorDescOp) != 0)

@@ -43,19 +43,21 @@ module {
   // CHECK:     [[CST_1_i64:%.+]] = arith.constant 1 : i64
   // CHECK-DAG: [[NEW_PTR1:%.+]] = tt.make_tensor_ptr [[ARG0]], {{.*}}, [[[ARG2]], [[CST_1_i64]]], {{.*}} {order = array<i32: 1, 0>} : <tensor<256x32xbf16>>
   // CHECK-DAG: [[ORIG_PTR1:%.+]] = tt.make_tensor_ptr [[ARG0]], {{.*}}, [[[ARG2]], [[ARG3]]], {{.*}} {order = array<i32: 1, 0>} : <tensor<256x32xbf16>>
-  // CHECK:     [[NEW_PTR2:%.+]] = tt.make_tensor_ptr [[ARG1]], {{.*}}, [[[ARG4]], [[CST_1_i64]]], {{.*}} {order = array<i32: 1, 0>} : <tensor<32x256xbf16>>
-  // CHECK:     [[ORIG_PTR2:%.+]] = tt.make_tensor_ptr [[ARG1]], {{.*}}, [[[ARG4]], [[ARG5]]], {{.*}} {order = array<i32: 1, 0>} : <tensor<32x256xbf16>>
+  // CHECK-NOT: separator of consecutive DAGs
+  // CHECK-DAG: [[NEW_PTR2:%.+]] = tt.make_tensor_ptr [[ARG1]], {{.*}}, [[[ARG4]], [[CST_1_i64]]], {{.*}} {order = array<i32: 1, 0>} : <tensor<32x256xbf16>>
+  // CHECK-DAG: [[ORIG_PTR2:%.+]] = tt.make_tensor_ptr [[ARG1]], {{.*}}, [[[ARG4]], [[ARG5]]], {{.*}} {order = array<i32: 1, 0>} : <tensor<32x256xbf16>>
+  // CHECK-NOT: separator of consecutive DAGs
   // CHECK-DAG: [[CMP1:%.+]] = arith.cmpi eq, [[ARG3]], [[CST_1_i64]] : i64
   // CHECK-DAG: [[CMP2:%.+]] = arith.cmpi eq, [[ARG5]], [[CST_1_i64]] : i64
   // CHECK:     [[VER_COND:%.+]] = arith.andi [[CMP1]], [[CMP2]] : i1
   // CHECK:     [[LOOP_VER:%.+]]:2 = scf.if [[VER_COND]]
   // CHECK:       scf.for
-  // CHECK:         tt.advance [[NEW_PTR1]]
-  // CHECK:         tt.advance [[NEW_PTR2]]
+  // CHECK-DAG:     tt.advance [[NEW_PTR1]]
+  // CHECK-DAG:     tt.advance [[NEW_PTR2]]
   // CHECK:     } else {
   // CHECK:       scf.for
-  // CHECK:         tt.advance [[ORIG_PTR1]]
-  // CHECK:         tt.advance [[ORIG_PTR2]]
+  // CHECK-DAG:     tt.advance [[ORIG_PTR1]]
+  // CHECK-DAG:     tt.advance [[ORIG_PTR2]]
   // CHECK:     }
 }
 
