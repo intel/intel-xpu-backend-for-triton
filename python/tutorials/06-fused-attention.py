@@ -85,10 +85,6 @@ def is_hopper():
     return is_cuda() and torch.cuda.get_device_capability()[0] == 9
 
 
-# FIXME: Revert temporary source code modification (only for fp8) done in last commit of PR #4399.
-# Note: Triton will fuse load+trans operations, when the data type is fp8, 2D block read aren't generated
-#       yet because DPAS doesn't natively support fp8. We have to enhance that part of the code generation
-#       in order to remove the remaining source code changes.
 @triton.jit
 def _attn_fwd_inner(acc, l_i, m_i, q,  #
                     desc_k, desc_v,  #
@@ -114,10 +110,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
     for start_n in tl.range(lo, hi, BLOCK_N, warp_specialize=warp_specialize):
         start_n = tl.multiple_of(start_n, BLOCK_N)
         # -- compute qk ----
-        if dtype == tl.float8e5:
-            k = desc_k.load([0, offsetk_y])
-        else:
-            k = desc_k.load([offsetk_y, 0]).T
+        k = desc_k.load([offsetk_y, 0]).T
         qk = tl.dot(q, k)
         if STAGE == 2:
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])
@@ -143,7 +136,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
             acc = acc * alpha[:, None]
         # prepare p and v for the dot
         if dtype == tl.float8e5:
-            v = desc_v.load([offsetv_y, 0])
+            v = desc_v.load([0, offsetv_y]).T
         else:
             v = desc_v.load([offsetv_y, 0])
         p = p.to(dtype)
@@ -245,17 +238,13 @@ def _attn_fwd(sm_scale, M,  #
     desc_q = _maybe_make_tensor_desc(desc_q, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
                                      block_shape=[BLOCK_M, HEAD_DIM])
     if FP8_OUTPUT:
-        desc_v = _maybe_make_tensor_desc(desc_v, shape=[y_dim, HEAD_DIM], strides=[1, N_CTX],
-                                         block_shape=[BLOCK_N, HEAD_DIM])
+        desc_v = _maybe_make_tensor_desc(desc_v, shape=[HEAD_DIM, y_dim], strides=[N_CTX, 1],
+                                         block_shape=[HEAD_DIM, BLOCK_N])
     else:
         desc_v = _maybe_make_tensor_desc(desc_v, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
                                          block_shape=[BLOCK_N, HEAD_DIM])
-    if FP8_OUTPUT:
-        desc_k = _maybe_make_tensor_desc(desc_k, shape=[HEAD_DIM, y_dim], strides=[1, HEAD_DIM],
-                                         block_shape=[HEAD_DIM, BLOCK_N])
-    else:
-        desc_k = _maybe_make_tensor_desc(desc_k, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
-                                         block_shape=[BLOCK_N, HEAD_DIM])
+    desc_k = _maybe_make_tensor_desc(desc_k, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
+                                     block_shape=[BLOCK_N, HEAD_DIM])
     desc_o = _maybe_make_tensor_desc(desc_o, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
                                      block_shape=[BLOCK_M, HEAD_DIM])
 
