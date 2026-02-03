@@ -130,16 +130,14 @@ module {
 // CHECK-SAME: %[[SHAPE1:[^:]*]]
 // CHECK-SAME: %[[STRIDE0:[^:]*]]
 // CHECK-SAME: %[[STRIDE1:[^:]*]]
-// CHECK-SAME: %[[PAD:[^:]*]]
-// CHECK-SAME: %[[ROUND:[^:]*]]
-// CHECK-NEXT: tt.return %[[PTR]], %[[SHAPE0]], %[[SHAPE1]], %[[STRIDE0]], %[[STRIDE1]], %[[PAD]], %[[ROUND]]
+// CHECK-NEXT: tt.return %[[PTR]], %[[SHAPE0]], %[[SHAPE1]], %[[STRIDE0]], %[[STRIDE1]]
 
 // CHECK-LABEL: @caller
 // CHECK-SAME: %[[PTR:[^:]*]]
 // CHECK-DAG: %[[c1:.*]] = arith.constant 1 : i64
 // CHECK-DAG: %[[c256:.*]] = arith.constant 256 : i64
-// CHECK: %{{.*}}:7 = tt.call @callee(%[[PTR]], %[[c256]], %[[c256]], %[[c256]], %[[c1]], %false, %false)
-// CHECK-SAME -> (!tt.ptr<f32>, i64, i64, i64, i64, i1, i1)
+// CHECK: %{{.*}}:6 = tt.call @callee(%[[PTR]], %[[c256]], %[[c256]], %[[c256]], %[[c1]], %false)
+// CHECK-SAME -> (!tt.ptr<f32>, i64, i64, i64, i64, i1)
 
 // -----
 
@@ -150,4 +148,4 @@ module {
 }
 
 // CHECK-LABEL: @arg_attr
-// CHECK-SAME: %arg7: i32 {tt.divisibility = 16 : i32}) {
+// CHECK-SAME: %arg6: i32 {tt.divisibility = 16 : i32}) {
