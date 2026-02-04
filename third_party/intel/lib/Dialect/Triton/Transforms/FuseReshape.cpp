@@ -67,22 +67,6 @@ public:
               manager.createChains(makeTensorDescOp, reshapeOp);
             })
             .Default([](Operation *) {});
-
-#if 0
-        if (isa<tt::LoadOp>(srcOp)) {
-          auto loadOp = cast<tt::LoadOp>(srcOp);
-          auto makeTensorPtrOp =
-              *tt::intel::findDefiningOpOfType<tt::MakeTensorPtrOp>(
-                  loadOp.getPtr());
-          manager.createChains(makeTensorPtrOp, reshapeOp);
-        } else if (isa<tt::DescriptorLoadOp>(srcOp)) {
-          auto descLoadOp = cast<tt::DescriptorLoadOp>(srcOp);
-          auto makeTensorDescOp =
-              *tt::intel::findDefiningOpOfType<tt::MakeTensorDescOp>(
-                  descLoadOp.getDesc());
-          manager.createChains(makeTensorDescOp, reshapeOp);
-        }
-#endif
       }
     });
 
@@ -272,9 +256,9 @@ private:
     SmallVector<Value> newShape(makeTensorDescOp.getShape().drop_front());
     SmallVector<Value> newStrides(makeTensorDescOp.getStrides().drop_front());
 
-    unsigned constexpr innermostDimIdx = 2; // TODO use rank ?
-    unsigned constexpr newInnermostDimIdx = (innermostDimIdx - 1);
-    unsigned constexpr newOutermostDimIdx = !newInnermostDimIdx;
+    const unsigned innermostDimIdx = shapes.size() - 1;
+    const unsigned newInnermostDimIdx = (innermostDimIdx - 1);
+    const unsigned newOutermostDimIdx = !newInnermostDimIdx;
     auto div = arith::DivUIOp::create(builder, loc, strides[0],
                                       newStrides[newOutermostDimIdx]);
     auto trunc =
@@ -527,9 +511,6 @@ public:
     ModuleOp moduleOp = getOperation();
     FuseReshapeWithLoad fuser;
     fuser.run(moduleOp);
-
-    llvm::errs() << "After TritonIntelFuseReshape:\n";
-    moduleOp.dump();
     assert(succeeded(verify(moduleOp)) && "Module verification failed");
   }
 };
