@@ -225,7 +225,6 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
             backwards_grad = torch.randn(Z, H_q, N_CTX_q, D_HEAD_v, dtype=dtype, device=DEVICE,
                                          requires_grad=MODE == 'bwd')
 
-            # pylint: disable=protected-access
             torch_results = benchmark_suite.get_isolated_results_history()
             case_key = (('Z', Z), ('H_q', H_q), ('H_kv', H_kv), ('N_CTX_q', N_CTX_q), ('N_CTX_kv', N_CTX_kv),
                         ('D_HEAD_qk', D_HEAD_qk), ('D_HEAD_v', D_HEAD_v), ('MODE', MODE), ('provider', 'torch'))

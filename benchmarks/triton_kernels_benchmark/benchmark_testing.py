@@ -451,10 +451,10 @@ def enhance_df(df, bench, mark_args: MarkArgs):
 
 
 class Benchmark(TritonBenchmark):
-    # pylint: disable=dangerous-default-value
-    def __init__(self, *args, isolated_providers={}, **kwargs):
+
+    def __init__(self, *args, isolated_providers=None, **kwargs):
         super().__init__(*args, **kwargs)
-        self.isolated_providers = isolated_providers
+        self.isolated_providers = {} if isolated_providers is None else isolated_providers
 
 
 def _worker_wrapper(fn_bytes, args, kwargs, queue, done_event):
@@ -475,8 +475,8 @@ def _worker_wrapper(fn_bytes, args, kwargs, queue, done_event):
         queue.put(("error", str(e), traceback.format_exc()))
 
 
-# pylint: disable=dangerous-default-value
-def call_in_isolated_subprocess(fn, args=(), kwargs={}):
+def call_in_isolated_subprocess(fn, args=(), kwargs=None):
+    kwargs = {} if kwargs is None else kwargs
     ctx = mp.get_context("spawn")
 
     # Serialize function with cloudpickle manually to bypass multiprocessing's pickler
@@ -552,7 +552,6 @@ class Mark:
         print(f"Running {y} provider in isolated subprocess")
         try:
             ret = call_in_isolated_subprocess(self.fn, kwargs={**x_args, **{bench.line_arg: y}, **bench.args, **kwargs})
-            # pylint: disable=protected-access
             self.results_history[case_key] = {"success": True, "oom": False}
         except (torch.OutOfMemoryError, RuntimeError) as e:
             if any(keyword in str(e)
@@ -560,7 +559,6 @@ class Mark:
                                    "UR_RESULT_ERROR_DEVICE_LOST", "OutOfMemoryError")):
                 error = e.args[0].split("\n")[0]
                 print(f"Exception during {y} provider call: {error}")
-                # pylint: disable=protected-access
                 self.results_history[case_key] = {"success": False, "oom": True}
                 ret = ((float("nan"), float("nan"), float("nan")), (float("nan"), float("nan"), float("nan")),
                        float("nan"))
