@@ -117,9 +117,11 @@ def run_bench_paged(q, k, v, score_mod, _, __):
                           kernel_options=kernel_options)
 
 
+IS_B580 = '580' in torch.xpu.get_device_name()
 # FIXME: Enable PagedNoop mask for BMG 580
-MASKS = ['NATTEN', 'Alibi', 'Noop', 'Softcap', 'PagedNoop'] if '580' not in torch.xpu.get_device_name() else \
+MASKS = ['NATTEN', 'Alibi', 'Noop', 'Softcap', 'PagedNoop'] if not IS_B580  else \
     ['NATTEN', 'Alibi', 'Noop', 'Softcap']
+fa_kernel_mode = os.getenv('FA_KERNEL_MODE', 'fwd')
 
 
 # Kernel profiling for Backward mode is not working as expected:
@@ -131,22 +133,25 @@ MASKS = ['NATTEN', 'Alibi', 'Noop', 'Softcap', 'PagedNoop'] if '580' not in torc
                 for z in [4, 8, 16, 32]
                 for (h, dhead) in [(16, 128), (32, 64)]
                 for mask in MASKS
-                for mode in [os.getenv('FA_KERNEL_MODE', 'fwd')]]  #
-        + [[4, 48, 1024, 64, mask, mode] for mask in MASKS for mode in [os.getenv('FA_KERNEL_MODE', 'fwd')]]  #
+                for mode in [fa_kernel_mode]]  #
+        + [[4, 48, 1024, 64, mask, mode] for mask in MASKS for mode in [fa_kernel_mode]]  #
         + [[z, h, 1024, dhead, mask, mode]
            for z in [1, 2, 4, 8, 16, 32, 64]
            for (h, dhead) in [(8, 128), (32, 96), (4, 128)]
            for mask in MASKS
-           for mode in [os.getenv('FA_KERNEL_MODE', 'fwd')]],
+           for mode in [fa_kernel_mode]],
         line_arg='provider',
-        line_vals=['triton'] + (['onednn'] if '580' not in torch.xpu.get_device_name() else []),
-        line_names=['Triton'] + (['OneDNN'] if '580' not in torch.xpu.get_device_name() else []),
+        line_vals=['triton'] + (['onednn'] if not IS_B580 else []),
+        line_names=['Triton'] + (['OneDNN'] if not IS_B580 else []),
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel=['GB/s', 'TFlops'],
         plot_name='flexAttnMasks-performance',
         args={},
     ))
 def benchmark(Z, H, N_CTX, D_HEAD, MASK, MODE, provider):
+    print(f'Running case: {Z=}, {H=}, {N_CTX=}, {D_HEAD=}, {MASK=}, {MODE=}, {provider=}')
+    torch.xpu.empty_cache()
+
     # There is still performance variance for triton, probably caused by random choice of autotune config
     do_bench = benchmark_suite.get_do_bench(n_warmup=200, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
     assert MODE in ['fwd', 'bwd']
