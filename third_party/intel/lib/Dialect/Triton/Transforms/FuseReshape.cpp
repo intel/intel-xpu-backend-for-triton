@@ -6,9 +6,13 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/IRMapping.h"
+#include "mlir/IR/ValueRange.h"
 #include "mlir/IR/Verifier.h"
+#include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Types.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -46,11 +50,39 @@ public:
     DefUseChainManager manager;
     moduleOp.walk([&](tt::ReshapeOp reshapeOp) {
       if (isCandidate(reshapeOp)) {
-        auto loadOp = cast<tt::LoadOp>(reshapeOp.getSrc().getDefiningOp());
-        auto makeTensorPtrOp =
-            *tt::intel::findDefiningOpOfType<tt::MakeTensorPtrOp>(
-                loadOp.getPtr());
-        manager.createChains(makeTensorPtrOp, reshapeOp);
+        Operation *srcOp = reshapeOp.getSrc().getDefiningOp();
+        assert(srcOp && "Expected a valid source operation");
+
+        llvm::TypeSwitch<Operation *>(srcOp)
+            .Case<tt::LoadOp>([&](auto loadOp) {
+              auto makeTensorPtrOp =
+                  *tt::intel::findDefiningOpOfType<tt::MakeTensorPtrOp>(
+                      loadOp.getPtr());
+              manager.createChains(makeTensorPtrOp, reshapeOp);
+            })
+            .Case<tt::DescriptorLoadOp>([&](auto descLoadOp) {
+              auto makeTensorDescOp =
+                  *tt::intel::findDefiningOpOfType<tt::MakeTensorDescOp>(
+                      descLoadOp.getDesc());
+              manager.createChains(makeTensorDescOp, reshapeOp);
+            })
+            .Default([](Operation *) {});
+
+#if 0
+        if (isa<tt::LoadOp>(srcOp)) {
+          auto loadOp = cast<tt::LoadOp>(srcOp);
+          auto makeTensorPtrOp =
+              *tt::intel::findDefiningOpOfType<tt::MakeTensorPtrOp>(
+                  loadOp.getPtr());
+          manager.createChains(makeTensorPtrOp, reshapeOp);
+        } else if (isa<tt::DescriptorLoadOp>(srcOp)) {
+          auto descLoadOp = cast<tt::DescriptorLoadOp>(srcOp);
+          auto makeTensorDescOp =
+              *tt::intel::findDefiningOpOfType<tt::MakeTensorDescOp>(
+                  descLoadOp.getDesc());
+          manager.createChains(makeTensorDescOp, reshapeOp);
+        }
+#endif
       }
     });
 
@@ -88,13 +120,28 @@ public:
 
 private:
   void fuse(const DefUseChain &chain) final {
-    assert(
-        isa<tt::MakeTensorPtrOp>(chain.getStart()) &&
-        "Expecting 'chain' to be rooted by a 'tt.make_tensor_ptr' operation");
     assert(isa<tt::ReshapeOp>(chain.getEnd()) &&
            "Expecting 'chain' to be terminated by a 'tt.reshape' operation");
 
-    auto makeTensorPtrOp = cast<tt::MakeTensorPtrOp>(chain.getStart());
+    llvm::TypeSwitch<Operation *>(chain.getStart())
+        .Case<tt::MakeTensorPtrOp>([&](auto makeTensorPtrOp) {
+          fuseMakeTensorPtrOp(chain, makeTensorPtrOp);
+        })
+        .Case<tt::MakeTensorDescOp>([&](auto makeTensorDescOp) {
+          fuseMakeTensorDescOp(chain, makeTensorDescOp);
+        })
+        .Default([](Operation *) {
+          llvm_unreachable("Unexpected 'chain' root operation kind");
+        });
+  }
+
+  void fuseMakeTensorPtrOp(const DefUseChain &chain,
+                           tt::MakeTensorPtrOp makeTensorPtrOp) {
+    assert(chain.getStart() == makeTensorPtrOp &&
+           "Unexpected 'chain' start operation");
+    assert(isa<tt::ReshapeOp>(chain.getEnd()) &&
+           "Expecting 'chain' to be terminated by a 'tt.reshape' operation");
+
     auto reshapeOp = cast<tt::ReshapeOp>(chain.getEnd());
     auto loadOp = cast<tt::LoadOp>(reshapeOp.getSrc().getDefiningOp());
     LLVM_DEBUG(llvm::dbgs() << "Fusing:\n  " << reshapeOp << "\nwith:\n  "
@@ -116,7 +163,7 @@ private:
     assert(order.size() == 3 && order[0] == 2 && "Invalid order");
 
     unsigned innermostDimIdx = 0;
-    for (int elem : makeTensorPtrOp.getOrder()) {
+    for (int elem : order) {
       if (elem == 0)
         break;
       ++innermostDimIdx;
@@ -134,7 +181,7 @@ private:
     //   stride [a, b, c]
     //   offset [x, y, z]
     //   order  [2, 1, 0]
-    // We create a make_tensor_ptr with:
+    // Create a make_tensor_ptr with:
     //   shape  [s0 * a / b + s1, s2]
     //   stride [b, c]
     //   offset [x * a / b + y, z]
@@ -184,16 +231,109 @@ private:
     }
   }
 
-  // Candidate is of the form:
-  //   tt.dot(tt.reshape(tt.load(..., )))
+  void fuseMakeTensorDescOp(const DefUseChain &chain,
+                            tt::MakeTensorDescOp makeTensorDescOp) {
+    assert(chain.getStart() == makeTensorDescOp &&
+           "Unexpected 'chain' start operation");
+    assert(isa<tt::ReshapeOp>(chain.getEnd()) &&
+           "Expecting 'chain' to be terminated by a 'tt.reshape' operation");
+    assert(chain.getOps().size() == 3 &&
+           "Expecting 'chain' to have exactly 3 operations");
+
+    auto reshapeOp = cast<tt::ReshapeOp>(chain.getEnd());
+    auto descLoadOp =
+        cast<tt::DescriptorLoadOp>(reshapeOp.getSrc().getDefiningOp());
+    LLVM_DEBUG(llvm::dbgs() << "Fusing:\n  " << reshapeOp << "\nwith:\n  "
+                            << descLoadOp << "\n");
+
+    // Create a MakeTensorDescOp yielding a 2-dim tensor descriptor.
+    auto descType = cast<tt::TensorDescType>(makeTensorDescOp.getType());
+    [[maybe_unused]] ArrayRef<int64_t> resShape =
+        cast<RankedTensorType>(descType.getBlockType()).getShape();
+    assert(resShape[0] == 1 && "Result shape should have extent equal to 1 in "
+                               "the outermost dimension");
+
+    auto tensorType = cast<RankedTensorType>(reshapeOp.getType());
+    auto newDescType =
+        tt::TensorDescType::get(reshapeOp->getContext(), tensorType);
+
+    OpBuilder builder(makeTensorDescOp);
+    Location loc = makeTensorDescOp.getLoc();
+    OperandRange shapes = makeTensorDescOp.getShape();
+    OperandRange strides = makeTensorDescOp.getStrides();
+
+    // Collapse the 3-dim tensor into a 2-dim tensor.
+    // Given a make_tensor_desc with:
+    //   shape  [s0, s1, s2]
+    //   stride [a, b, c]
+    // Create a make_tensor_desc with:
+    //   shape  [s0 * a / b + s1, s2]
+    //   stride [b, c]
+    SmallVector<Value> newShape(makeTensorDescOp.getShape().drop_front());
+    SmallVector<Value> newStrides(makeTensorDescOp.getStrides().drop_front());
+
+    unsigned constexpr innermostDimIdx = 2; // TODO use rank ?
+    unsigned constexpr newInnermostDimIdx = (innermostDimIdx - 1);
+    unsigned constexpr newOutermostDimIdx = !newInnermostDimIdx;
+    auto div = arith::DivUIOp::create(builder, loc, strides[0],
+                                      newStrides[newOutermostDimIdx]);
+    auto trunc =
+        builder.createOrFold<arith::TruncIOp>(loc, shapes[0].getType(), div);
+
+    newShape[newOutermostDimIdx] = arith::AddIOp::create(
+        builder, loc, arith::MulIOp::create(builder, loc, shapes[0], trunc),
+        newShape[newOutermostDimIdx]);
+
+    Value newDesc = tt::MakeTensorDescOp::create(
+        builder, loc, newDescType, makeTensorDescOp.getBase(), newShape,
+        newStrides, makeTensorDescOp.getPadding());
+    LLVM_DEBUG(llvm::dbgs() << "new MakeTensorDescOp:\n  " << newDesc << "\n");
+
+    // Adjust the descriptor load operation indices.
+    // Given a make_tensor_desc with shape/strides:
+    //   shape  [s0, s1, s2]
+    //   stride [a, b, c]
+    // And a descriptor_load with offsets:
+    //   offset [x, y, z]
+    // Create a new descriptor_load operation with indices:
+    //   offset [x * a / b + y, z]
+    builder.setInsertionPoint(descLoadOp);
+    OperandRange offsets = descLoadOp.getIndices();
+    SmallVector<Value> newOffsets(offsets.drop_front());
+    newOffsets[newOutermostDimIdx] = arith::AddIOp::create(
+        builder, loc, arith::MulIOp::create(builder, loc, offsets[0], trunc),
+        newOffsets[newOutermostDimIdx]);
+
+    auto resType = cast<tt::TensorDescType>(newDesc.getType()).getBlockType();
+    auto newDescLoadOp = tt::DescriptorLoadOp::create(
+        builder, descLoadOp.getLoc(), resType, newDesc, newOffsets,
+        descLoadOp.getCache(), descLoadOp.getEvict());
+    newDescLoadOp->setAttrs(descLoadOp->getAttrs());
+
+    LLVM_DEBUG(llvm::dbgs() << "newDescLoadOp:\n  " << newDescLoadOp << "\n");
+
+    // Propagate the new descriptor load result.
+    IRMapping mapping;
+    propagateToUser(newDescLoadOp->getResult(0), descLoadOp.getResult(),
+                    reshapeOp, reshapeOp, mapping);
+
+    cleanUp.insert(descLoadOp);
+    cleanUp.insert(makeTensorDescOp);
+  }
+
+  // Candidate is a reshape operation of having one of the following forms:
+  //   - tt.dot(tt.reshape(tt.load(..., )))
+  //   - tt.dot(tt.reshape(tt.descriptor_load(..., )))
   // Where:
   //  - the reshape operation drops the outermost dimension of the operand,
   //    which is a 3-dim tensor with outermost dimension extent equal to one
   //  - the reshape result is used by a dot operation
   //  - the reshape operation uses the result of a 3-dim load operation on a
-  //    block pointer (transitively) defined by a `make_tensor_ptr` operation
-  //  - the block pointer points to a tensor that has extent equal to 1 on the
-  //    outermost dimension
+  //    block pointer (transitively) defined by a `make_tensor_ptr` operation,
+  //    or the result of a 3-dim descriptor load operation (transitively)
+  //    defined by a `make_tensor_desc` operation
+  //  - the block pointer/tensor descriptor refers to a tensor that has extent
+  //    equal to 1 on the outermost dimension
   //  - the load operation doesn't have boundary checks on either of the
   //    dimensions collapsed
   bool isCandidate(tt::ReshapeOp reshapeOp) const {
@@ -234,17 +374,21 @@ private:
     if (!usedByDotOp(reshapeOp))
       return false;
 
-    // The reshape operation uses the result of a load operation.
     Operation *defOp = reshapeOp.getSrc().getDefiningOp();
-    if (!defOp || !isa<tt::LoadOp>(defOp))
+    if (!defOp)
       return false;
+    if (auto loadOp = dyn_cast<tt::LoadOp>(defOp))
+      return isCandidate(loadOp);
+    if (auto descLoadOp = dyn_cast<tt::DescriptorLoadOp>(defOp))
+      return isCandidate(descLoadOp);
 
-    auto loadOp = cast<tt::LoadOp>(defOp);
+    return false;
+  }
+
+  bool isCandidate(tt::LoadOp loadOp) const {
     if (!loadOp->hasOneUse())
       return false;
 
-    // The load uses a 3-dim block pointer defined by a make_tensor_ptr
-    // operation.
     Type ptrType = loadOp.getPtr().getType();
     if (!tt::isTensorPointerType(ptrType))
       return false;
@@ -274,6 +418,24 @@ private:
     // Ensure the load operation checks at most the innermost dimension.
     return llvm::all_of(loadOp.getBoundaryCheck(),
                         [&](int idx) { return idx == innermostDimIdx; });
+  }
+
+  bool isCandidate(tt::DescriptorLoadOp descLoadOp) const {
+    if (!descLoadOp->hasOneUse())
+      return false;
+
+    std::optional<tt::MakeTensorDescOp> makeTensorDescOp =
+        tt::intel::findDefiningOpOfType<tt::MakeTensorDescOp>(
+            descLoadOp.getDesc());
+    if (!makeTensorDescOp)
+      return false;
+
+    tt::TensorDescType descTy = makeTensorDescOp->getResult().getType();
+    auto tensorTy = cast<RankedTensorType>(descTy.getBlockType());
+    assert((tensorTy.getRank() == 3 && tensorTy.getDimSize(0) == 1) &&
+           "Unexpected tensor type");
+
+    return true;
   }
 
   // If \p user is not \p sentinel, propagate \p newVal to \p user. Otherwise
@@ -365,6 +527,9 @@ public:
     ModuleOp moduleOp = getOperation();
     FuseReshapeWithLoad fuser;
     fuser.run(moduleOp);
+
+    llvm::errs() << "After TritonIntelFuseReshape:\n";
+    moduleOp.dump();
     assert(succeeded(verify(moduleOp)) && "Module verification failed");
   }
 };
