@@ -1,7 +1,7 @@
 // RUN: triton-opt %s -split-input-file -triton-intel-remove-boundary-checks | FileCheck %s
 
 module {
-tt.func public @simple_load(%load_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %store_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+tt.func public @simple_load(%load_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
   %c1_i64 = arith.constant 1 : i64
   %c64_i64 = arith.constant 64 : i64
   %c512_i64 = arith.constant 512 : i64
@@ -21,7 +21,7 @@ tt.func public @simple_load(%load_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}
 // -----
 
 module {
-tt.func public @load_in_for_loop(%load_ptr0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %load_ptr1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %store_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+tt.func public @load_in_for_loop1(%load_ptr0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %load_ptr1: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
   %c0_i32 = arith.constant 0 : i32
   %c1_i32 = arith.constant 1 : i32
   %c20_i32 = arith.constant 20 : i32
@@ -51,7 +51,7 @@ tt.func public @load_in_for_loop(%load_ptr0: !tt.ptr<f16> {tt.divisibility = 16 
   }
   tt.return
 }
-// CHECK-LABEL: load_in_for_loop
+// CHECK-LABEL: load_in_for_loop1
 // CHECK-COUNT-2: scf.for
 // CHECK: [[PTR:%.*]] = tt.make_tensor_ptr
 // CHECK: tt.load [[PTR]] : !tt.ptr<tensor<1x64x64xf16>>

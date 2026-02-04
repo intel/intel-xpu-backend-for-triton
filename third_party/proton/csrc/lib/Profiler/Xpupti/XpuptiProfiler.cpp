@@ -6,6 +6,7 @@
 #include "Driver/GPU/XpuptiApi.h"
 #include "Runtime/XpuRuntime.h"
 #include "Utility/Map.h"
+#include <vector>
 
 #include "pti/pti_view.h"
 #include <cassert>
@@ -32,10 +33,6 @@ template <>
 thread_local GPUProfiler<XpuptiProfiler>::ThreadState
     GPUProfiler<XpuptiProfiler>::threadState(XpuptiProfiler::instance());
 
-template <>
-thread_local std::deque<size_t>
-    GPUProfiler<XpuptiProfiler>::Correlation::externIdQueue{};
-
 namespace {
 
 std::vector<std::array<uint8_t, 16>> deviceUUIDs_ = {};
@@ -53,14 +50,14 @@ uint8_t getDeviceIdxFromUUID(const uint8_t deviceUUID[16]) {
   return static_cast<uint8_t>(std::distance(deviceUUIDs_.begin(), it));
 }
 
-std::shared_ptr<Metric>
+std::unique_ptr<Metric>
 convertActivityToMetric(xpupti::Pti_Activity *activity) {
-  std::shared_ptr<Metric> metric;
+  std::unique_ptr<Metric> metric;
   switch (activity->_view_kind) {
   case PTI_VIEW_DEVICE_GPU_KERNEL: {
     auto *kernel = reinterpret_cast<pti_view_record_kernel *>(activity);
     if (kernel->_start_timestamp < kernel->_end_timestamp) {
-      metric = std::make_shared<KernelMetric>(
+      metric = std::make_unique<KernelMetric>(
           static_cast<uint64_t>(kernel->_start_timestamp),
           static_cast<uint64_t>(kernel->_end_timestamp), 1,
           static_cast<uint64_t>(getDeviceIdxFromUUID(kernel->_device_uuid)),
@@ -80,35 +77,40 @@ uint32_t processActivityKernel(
     XpuptiProfiler::ExternIdToStateMap &externIdToState,
     std::map<uint64_t, std::reference_wrapper<XpuptiProfiler::ExternIdState>>
         &externIdToStateCache,
-    std::set<Data *> &dataSet, xpupti::Pti_Activity *activity) {
+    xpupti::Pti_Activity *activity) {
   auto *kernel = reinterpret_cast<pti_view_record_kernel *>(activity);
   auto correlationId = kernel->_correlation_id;
-  size_t parentId = 0;
+  size_t externId = 0;
   if (!/*not valid*/ corrIdToExternId.withRead(
-          correlationId, [&](const size_t &value) { parentId = value; })) {
+          correlationId, [&externId](size_t value) { externId = value; })) {
     corrIdToExternId.erase(correlationId);
     return correlationId;
   }
   if (true) {
     // Non-graph kernels
-    bool isApiExternId = false;
-    externIdToState.withRead(parentId,
+    bool isMissingName = false;
+    DataToEntryMap dataToEntry;
+    externIdToState.withRead(externId,
                              [&](const XpuptiProfiler::ExternIdState &state) {
-                               isApiExternId = state.isApiExternId;
+                               isMissingName = state.isMissingName;
+                               dataToEntry = state.dataToEntry;
                              });
-    // Do not share the same Metric instance across multiple Data objects.
-    // Otherwise, updating one Data will mutate the Metric observed by others
-    // (counts will incorrectly compound with the number of active sessions).
-    for (auto *data : dataSet) {
-      if (auto metric = convertActivityToMetric(activity)) {
-        if (isApiExternId) {
-          data->addOpAndMetric(parentId, kernel->_name, metric);
-        } else {
-          data->addMetric(parentId, metric);
+    if (!isMissingName) {
+      for (auto &[data, entry] : dataToEntry) {
+        if (auto kernelMetric = convertActivityToMetric(activity)) {
+          entry.upsertMetric(std::move(kernelMetric));
+        }
+      }
+    } else {
+      for (auto &[data, entry] : dataToEntry) {
+        if (auto kernelMetric = convertActivityToMetric(activity)) {
+          auto childEntry =
+              data->addOp(entry.phase, entry.id, {Context(kernel->_name)});
+          childEntry.upsertMetric(std::move(kernelMetric));
         }
       }
     }
-    externIdToState.erase(parentId);
+    externIdToState.erase(externId);
     corrIdToExternId.erase(correlationId);
   } else {
     // Graph kernels
@@ -131,13 +133,12 @@ uint32_t processActivity(
     XpuptiProfiler::ExternIdToStateMap &externIdToState,
     std::map<uint64_t, std::reference_wrapper<XpuptiProfiler::ExternIdState>>
         &externIdToStateCache,
-    std::set<Data *> &dataSet, xpupti::Pti_Activity *activity) {
+    xpupti::Pti_Activity *activity) {
   auto correlationId = 0;
   switch (activity->_view_kind) {
   case PTI_VIEW_DEVICE_GPU_KERNEL: {
-    correlationId =
-        processActivityKernel(corrIdToExternId, externIdToState,
-                              externIdToStateCache, dataSet, activity);
+    correlationId = processActivityKernel(corrIdToExternId, externIdToState,
+                                          externIdToStateCache, activity);
     break;
   }
   default:
@@ -153,8 +154,12 @@ struct XpuptiProfiler::XpuptiProfilerPimpl
   XpuptiProfilerPimpl(XpuptiProfiler &profiler)
       : GPUProfiler<XpuptiProfiler>::GPUProfilerPimplInterface(profiler) {
     // FIXME: enable metrics
-    // runtime = &XpuRuntime::instance();
-    // metricBuffer = std::make_unique<MetricBuffer>(1024 * 1024 * 64, runtime);
+    auto runtime = &XpuRuntime::instance();
+    profiler.metricBuffer =
+        std::make_unique<MetricBuffer>(1024 * 1024 * 64, runtime,
+                                       /*mapped=*/true);
+    // profiler.pendingGraphPool =
+    //    std::make_unique<PendingGraphPool>(profiler.metricBuffer.get());
   }
   virtual ~XpuptiProfilerPimpl() = default;
 
@@ -204,7 +209,6 @@ void XpuptiProfiler::XpuptiProfilerPimpl::completeBuffer(uint8_t *buffer,
                                                          size_t size,
                                                          size_t validSize) {
   XpuptiProfiler &profiler = threadState.profiler;
-  auto &dataSet = profiler.dataSet;
   auto &correlation = profiler.correlation;
   uint32_t maxCorrelationId = 0;
   pti_result status;
@@ -214,10 +218,9 @@ void XpuptiProfiler::XpuptiProfilerPimpl::completeBuffer(uint8_t *buffer,
   do {
     status = xpupti::viewGetNextRecord<true>(buffer, validSize, &activity);
     if (status == pti_result::PTI_SUCCESS) {
-      auto correlationId =
-          processActivity(profiler.correlation.corrIdToExternId,
-                          profiler.correlation.externIdToState,
-                          externIdToStateCache, dataSet, activity);
+      auto correlationId = processActivity(
+          profiler.correlation.corrIdToExternId,
+          profiler.correlation.externIdToState, externIdToStateCache, activity);
       // Log latest completed correlation id.  Used to ensure we have flushed
       // all data on stop
       maxCorrelationId = std::max<uint64_t>(maxCorrelationId, correlationId);
@@ -250,9 +253,14 @@ void XpuptiProfiler::XpuptiProfilerPimpl::callbackFn(
     return;
   }
   if (callback_data->_phase == PTI_CB_PHASE_API_ENTER) {
-    threadState.enterOp();
+    // TODO: Get kernel name from pti_callback_gpu_op_data
+    threadState.enterOp(Scope(""));
+    auto &dataToEntry = threadState.dataToEntry;
+    auto &scope = threadState.scopeStack.back();
+    auto isMissingName = scope.name.empty();
     threadState.profiler.correlation.correlate(callback_data->_correlation_id,
-                                               1);
+                                               scope.scopeId, 1, isMissingName,
+                                               dataToEntry);
   } else if (callback_data->_phase == PTI_CB_PHASE_API_EXIT) {
     threadState.exitOp();
     threadState.profiler.correlation.submit(callback_data->_correlation_id);

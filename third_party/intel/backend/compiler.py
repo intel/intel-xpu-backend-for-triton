@@ -22,6 +22,8 @@ try:  # XPUBackend allows metaclasses injection
 except ImportError:
     XPUBackendMeta = type(BaseBackend)
 
+_VERSION_PATTERN = re.compile(r'(\d+)\.(\d+)\.(\d+)(?:\+(\d+))?')
+
 
 @dataclass
 class XPUOptions:
@@ -41,7 +43,7 @@ class XPUOptions:
     allow_fp8e4nv: bool = False
     allow_fp8e4b15: bool = True
     grf_mode: str = 'default'
-    split_barriers_scope: str = 'None'
+    use_barrier: bool = False
     max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
     debug: bool = False
@@ -82,7 +84,7 @@ def extract_spill_size_from_zebin(file):
                                'Section .ze_info not found in zebin')
         text = zeinfo.data().decode('utf-8')
         match = SPILL_SIZE_RE.search(text)
-        if match:
+        if match is not None:
             return int(match.group(1))
     return 0
 
@@ -136,6 +138,15 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     def get_target_name(self, options) -> str:
         return f"xpu:{self.device_arch}"
 
+    @classmethod
+    def is_lts(cls, ver) -> bool:
+        if not ver:
+            return True
+        m = _VERSION_PATTERN.match(ver)
+        if not m:
+            return True
+        return tuple(int(x) if x is not None else 0 for x in m.groups()) < (1, 6, 35096, 9)
+
     def parse_target(self, tgt_prop) -> dict:
         dev_prop = {}
         dev_prop['name'] = tgt_prop.get('name', 'xpu')
@@ -148,12 +159,16 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         dev_prop['max_num_sub_groups'] = tgt_prop.get('max_num_sub_groups', None)
         dev_prop['sub_group_sizes'] = tgt_prop.get('sub_group_sizes', None)
         dev_prop['has_fp64'] = tgt_prop.get('has_fp64', None)
+        dev_prop['has_subgroup_matrix_multiply_accumulate_bfloat8'] = tgt_prop.get(
+            'has_subgroup_matrix_multiply_accumulate_bfloat8', False)
         dev_prop['has_subgroup_matrix_multiply_accumulate_tensor_float32'] = tgt_prop.get(
             'has_subgroup_matrix_multiply_accumulate_tensor_float32', False)
         dev_prop['has_16bit_atomics'] = tgt_prop.get('has_16bit_atomics', False)
         dev_prop['has_subgroup_2d_block_io'] = tgt_prop.get('has_subgroup_2d_block_io', False)
         dev_prop['has_bfloat16_arithmetic'] = tgt_prop.get('has_bfloat16_arithmetic', False)
         dev_prop['has_bfloat16_conversion'] = tgt_prop.get('has_bfloat16_conversion', True)
+        dev_prop['has_predicated_io'] = tgt_prop.get('has_predicated_io',
+                                                     not self.is_lts(tgt_prop.get('driver_version')))
         dev_prop['has_subgroup_matrix_multiply_accumulate'] = tgt_prop.get('has_subgroup_matrix_multiply_accumulate',
                                                                            False)
         dev_prop['has_subgroup_scaled_matrix_multiply_accumulate'] = tgt_prop.get(
@@ -226,23 +241,17 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         module_opts.support_2d_block_io = properties["has_subgroup_2d_block_io"]
         module_opts.support_bfloat16_arithmetic = properties["has_bfloat16_arithmetic"]
         module_opts.support_bfloat16_conversion = properties["has_bfloat16_conversion"]
+        module_opts.support_predicated_io = properties["has_predicated_io"]
         module_opts.support_subgroup_matrix_multiply_accumulate = properties["has_subgroup_matrix_multiply_accumulate"]
         module_opts.support_subgroup_scaled_matrix_multiply_accumulate = properties[
             "has_subgroup_scaled_matrix_multiply_accumulate"]
         module_opts.support_f4_conversion = properties["has_f4_conversions"]
         module_opts.support_f8_conversion = properties["has_f8_conversions"]
         module_opts.support_256b_prefetch = properties["has_256b_prefetch"]
+        module_opts.support_subgroup_matrix_multiply_accumulate_bf8 = properties[
+            "has_subgroup_matrix_multiply_accumulate_bfloat8"]
         module_opts.threads_per_warp = opt.warp_size
         module_opts.target_arch = cls.target_arch
-
-    @staticmethod
-    def get_split_barrier_scope(opt):
-        split_barriers_scope = intel.SplitBarrierScope.none
-        if opt.split_barriers_scope == 'Workgroup':
-            split_barriers_scope = intel.SplitBarrierScope.Workgroup
-        elif opt.split_barriers_scope == 'Subgroup':
-            split_barriers_scope = intel.SplitBarrierScope.Subgroup
-        return split_barriers_scope
 
     @classmethod
     @track
@@ -254,7 +263,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
         passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
         passes.common.add_cse(pm)
-        passes.common.add_licm(pm)
+        passes.ttir.add_triton_licm(pm)
         intel.passes.ttir.add_remove_boundary_checks(pm)
         intel.passes.ttir.add_remove_masks(pm)
         intel.passes.ttir.add_stride_versioning(pm)
@@ -276,6 +285,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         pm.enable_debug()
         module_opts = intel.passes.ttgpuir.AnnotateModuleOptions()
         cls.annotate_module(module_opts, properties, opt)
+        module_opts.is_lts = cls.is_lts(metadata["target"].arch.get("driver_version"))
         intel.passes.ttgpuir.add_triton_annotate_module(pm, module_opts)
         pm.run(mod, 'annotate_module')
 
@@ -294,7 +304,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.ttgpuir.add_materialize_block_pointer(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_optimize_dot_operands(pm)
-        intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, XPUBackend.get_split_barrier_scope(opt))
+        intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.use_barrier)
 
         if (opt.reduce_variable_liveness):
             intel.passes.ttgpuir.add_reduce_variable_liveness(pm)

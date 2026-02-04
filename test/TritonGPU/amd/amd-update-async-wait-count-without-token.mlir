@@ -3,8 +3,6 @@
 // The number in SSA symbolic names represents the number of generated async load operation at assembly level a ttg.async_copy_global_to_local will generate, which is counted by this pass.
 // For example `ttg.async_copy_global_to_local %ptr2Inst, %memDesc2Inst ..` will generate two global_load_async_to_lds_b128 assembly instruction
 
-// -----
-
 #blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [2, 32], warpsPerCTA = [4, 1], order = [0, 1]}>
 #shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 16, order = [0, 1]}>
 #smem = #ttg.shared_memory
@@ -516,4 +514,122 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 
+  // CHECK-LABEL: async_wait_with_execute_regions
+  tt.func public @async_wait_with_execute_regions(
+        %memDesc1Inst: !ttg.memdesc<64x16xf16, #shared, #smem, mutable>,
+        %ptr1Inst: tensor<64x16x!tt.ptr<f16>, #blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[16, 16]> : tensor<2xi32>},
+        %memDesc2Inst: !ttg.memdesc<128x16xf16, #shared, #smem, mutable>,
+        %ptr2Inst: tensor<128x16x!tt.ptr<f16>, #blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[16, 16]> : tensor<2xi32>}) {
+
+    scf.execute_region {
+      scf.execute_region {
+        // Emits 1 instruction
+        ttg.async_copy_global_to_local %ptr1Inst, %memDesc1Inst : tensor<64x16x!tt.ptr<f16>, #blocked> -> <64x16xf16, #shared, #smem, mutable>
+        ttg.async_commit_group
+        scf.yield
+      } {triton.warp_pipeline.stage = "stage0"}
+
+      scf.execute_region {
+        // Emits 2 instructions
+        ttg.async_copy_global_to_local %ptr2Inst, %memDesc2Inst : tensor<128x16x!tt.ptr<f16>, #blocked> -> <128x16xf16, #shared, #smem, mutable>
+        ttg.async_commit_group
+
+        scf.yield
+      } {triton.warp_pipeline.stage = "stage1"}
+
+      // Wait for both execute regions
+      // CHECK: amdg.async_wait {num_inst = 3
+      ttg.async_wait {num = 2 : i32}
+
+      // Check that we only traverse each execute region once
+      // CHECK: amdg.async_wait {num_inst = 3
+      ttg.async_wait {num = 6 : i32}
+
+      // Wait only for the second execute region
+      // CHECK: amdg.async_wait {num_inst = 2
+      ttg.async_wait {num = 1 : i32}
+
+      scf.yield
+    }
+
+    // Wait for both nested execute regions
+    // CHECK: amdg.async_wait {num_inst = 3
+    ttg.async_wait {num = 2 : i32}
+
+    tt.return
+  }
+
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_gather_scatter_multiple_instructions
+  tt.func public @tdm_gather_scatter_multiple_instructions(
+    %memDesc: !ttg.memdesc<256x128xf16, #shared, #smem, mutable>,
+    %tensorDesc: !tt.tensordesc<tensor<64x128xf16>>,
+    %row_indices_i32: tensor<64xi32>,
+    %row_indices_i16: tensor<256xi16>
+  ) {
+    %c0_i32 = arith.constant 0 : i32
+
+    // Gather with 64xi32 indices: 64/8 = 8 instructions
+    amdg.async_tdm_gather %tensorDesc[%row_indices_i32, %c0_i32] to %memDesc : tensor<64xi32>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<tensor<64x128xf16>>
+    // Scatter with 64xi32 indices: 64/8 = 8 instructions
+    amdg.async_tdm_scatter %tensorDesc[%row_indices_i32, %c0_i32] from %memDesc : tensor<64xi32>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<tensor<64x128xf16>>
+    // Gather with 128xi16 indices: 256/16 = 16 instructions
+    amdg.async_tdm_gather %tensorDesc[%row_indices_i16, %c0_i32] to %memDesc : tensor<256xi16>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<tensor<64x128xf16>>
+    // Scatter with 128xi16 indices: 256/16 = 16 instructions
+    amdg.async_tdm_scatter %tensorDesc[%row_indices_i16, %c0_i32] from %memDesc : tensor<256xi16>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<tensor<64x128xf16>>
+
+    // CHECK: amdg.async_tdm_intrinsic_wait {count = 0
+    amdg.async_tdm_wait {num = 0 : i32}
+    // CHECK: amdg.async_tdm_intrinsic_wait {count = 16
+    amdg.async_tdm_wait {num = 1 : i32}
+    // CHECK: amdg.async_tdm_intrinsic_wait {count = 32
+    amdg.async_tdm_wait {num = 2 : i32}
+    // CHECK: amdg.async_tdm_intrinsic_wait {count = 40
+    amdg.async_tdm_wait {num = 3 : i32}
+    // CHECK: amdg.async_tdm_intrinsic_wait {count = 48
+    amdg.async_tdm_wait {num = 4 : i32}
+
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_load_store_single_instruction
+  tt.func public @tdm_load_store_single_instruction(
+    %memDesc: !ttg.memdesc<64x128xf16, #shared, #smem, mutable>,
+    %tensorDesc: !tt.tensordesc<tensor<64x128xf16>>,
+    %pred: i32
+  ) {
+    %c0_i32 = arith.constant 0 : i32
+
+    %0 = amdg.async_tdm_copy_global_to_local %tensorDesc[%c0_i32, %c0_i32] into %memDesc, %pred : !tt.tensordesc<tensor<64x128xf16>> -> !ttg.memdesc<64x128xf16, #shared, #smem, mutable>
+    amdg.async_tdm_copy_local_to_global %tensorDesc[%c0_i32, %c0_i32] from %memDesc : !ttg.memdesc<64x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<tensor<64x128xf16>>
+    %1 = amdg.async_tdm_copy_global_to_local %tensorDesc[%c0_i32, %c0_i32] into %memDesc, %pred : !tt.tensordesc<tensor<64x128xf16>> -> !ttg.memdesc<64x128xf16, #shared, #smem, mutable>
+    amdg.async_tdm_copy_local_to_global %tensorDesc[%c0_i32, %c0_i32] from %memDesc : !ttg.memdesc<64x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<tensor<64x128xf16>>
+
+    // CHECK: amdg.async_tdm_intrinsic_wait {count = 0
+    amdg.async_tdm_wait {num = 0 : i32}
+    // CHECK: amdg.async_tdm_intrinsic_wait {count = 1
+    amdg.async_tdm_wait {num = 1 : i32}
+    // CHECK: amdg.async_tdm_intrinsic_wait {count = 2
+    amdg.async_tdm_wait {num = 2 : i32}
+    // CHECK: amdg.async_tdm_intrinsic_wait {count = 3
+    amdg.async_tdm_wait {num = 3 : i32}
+    // CHECK: amdg.async_tdm_intrinsic_wait {count = 4
+    amdg.async_tdm_wait {num = 4 : i32}
+
+    tt.return
+  }
 }

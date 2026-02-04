@@ -85,7 +85,7 @@ int TargetInfo::getWarpSize() const {
 }
 
 int TargetInfo::getSharedMemorySize() const {
-  // Should return the maximum capacity in kbyte
+  // Should return the maximum capacity in bytes
   switch (getISAFamily()) {
   case ISAFamily::GFX1250:
     return 320 * 1024;
@@ -96,19 +96,29 @@ int TargetInfo::getSharedMemorySize() const {
   }
 }
 
+size_t TargetInfo::getSharedMemoryPartitionSize() const {
+  switch (getISAFamily()) {
+  case ISAFamily::GFX1250:
+    return 64 * 1024;
+  default:
+    // No partitioning on other targets
+    return 0;
+  }
+}
+
 bool TargetInfo::supportMaximumMinimum() const {
   return getISAFamily() == ISAFamily::CDNA4;
 }
 
 Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
-  if (supportsMultiCTALaunch()) {
-    // We dispatch only along x; return the workgroup id x
-    return LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
-                                           "llvm.amdgcn.cluster.workgroup.id.x",
-                                           {rewriter.getI32Type()}, {})
-        .getResult(0);
-  }
-  return arith::ConstantIntOp::create(rewriter, loc, 0, 32);
+  if (triton::gpu::lookupNumCTAs(&rewriter.getInsertionBlock()->front()) == 1)
+    return arith::ConstantIntOp::create(rewriter, loc, 0, 32);
+
+  // We dispatch only along x; return the workgroup id x
+  return LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
+                                         "llvm.amdgcn.cluster.workgroup.id.x",
+                                         {rewriter.getI32Type()}, {})
+      .getResult(0);
 }
 
 Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
@@ -117,14 +127,14 @@ Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
 }
 
 void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
-                         bool isWarpSync) const {
-  if (isWarpSync) {
-    LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.amdgcn.wave.barrier",
-                                    {}, {});
-  } else {
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    b.barrier();
-  }
+                         triton::gpu::AddrSpace targets) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  b.barrier(targets);
+}
+
+void TargetInfo::warpSync(Location loc, RewriterBase &rewriter) const {
+  LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.amdgcn.wave.barrier", {},
+                                  {});
 }
 
 void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
@@ -140,16 +150,37 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
 std::optional<TargetInfo::LDSTransLoadParams>
 TargetInfo::queryLDSTransLoadParams(int bitWidth) const {
   auto isaFamily = getISAFamily();
-  bool isGFX1250 = isaFamily == AMD::ISAFamily::GFX1250;
-  bool isCDNA4 = isaFamily == AMD::ISAFamily::CDNA4;
-  bool canUseTransLoad =
-      (isCDNA4 || isGFX1250) && llvm::is_contained({16, 8, 4, 6}, bitWidth);
-  if (!canUseTransLoad)
+  // Determine LDSTrans version: V1 (CDNA4), V2 (GFX1250)
+  enum { V1, V2, NONE } version = NONE;
+  if (isaFamily == AMD::ISAFamily::CDNA4) {
+    version = V1;
+  } else if (isaFamily == AMD::ISAFamily::GFX1250) {
+    version = V2;
+  }
+
+  if (version == NONE || !llvm::is_contained({16, 8, 4, 6}, bitWidth))
     return std::nullopt;
+
   unsigned numLanesInShuffleGroup = getWarpSize() / 4;
-  unsigned instBitWidth = isGFX1250 && bitWidth == 16 ? 128 : 64;
+  unsigned instBitWidth;
+  bool doubleB8Contiguity;
+
+  switch (version) {
+  case V1:
+    instBitWidth = 64;
+    doubleB8Contiguity = false;
+    break;
+  case V2:
+    instBitWidth = (bitWidth == 16) ? 128 : 64;
+    doubleB8Contiguity = (bitWidth == 8);
+    break;
+  default:
+    return std::nullopt;
+  }
+
   unsigned tileSize = instBitWidth / bitWidth;
-  return LDSTransLoadParams{numLanesInShuffleGroup, instBitWidth, tileSize};
+  return LDSTransLoadParams{numLanesInShuffleGroup, instBitWidth, tileSize,
+                            doubleB8Contiguity};
 }
 
 Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
@@ -617,7 +648,7 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
 
   // Set block barrier before aborting kernel, give a chance for all
   // the threads in a block to check/print the assert failure.
-  b.barrier();
+  b.barrier(triton::gpu::AddrSpace::All);
   // Perform the trap to abort the kernel.
   LLVM::Trap::create(rewriter, loc);
 }
@@ -682,6 +713,10 @@ bool TargetInfo::supportsMultiCTALaunch() const {
   return getISAFamily() == ISAFamily::GFX1250;
 }
 
+bool TargetInfo::supportsTDM() const {
+  return getISAFamily() == ISAFamily::GFX1250;
+}
+
 bool TargetInfo::supportsClusterLoadBitWidth(int biwWidth) const {
   if (getISAFamily() == ISAFamily::GFX1250) {
     return llvm::is_contained({32, 64, 128}, biwWidth);
@@ -694,6 +729,20 @@ bool TargetInfo::supportsDirectFromLdsStoreBitWidth(int bitWidth) const {
     return llvm::is_contained({128, 64, 32, 8}, bitWidth);
   }
   return false;
+}
+
+bool TargetInfo::supportsWaveId() const {
+  return getISAFamily() == ISAFamily::RDNA4 ||
+         getISAFamily() == ISAFamily::GFX1250;
+}
+
+bool TargetInfo::supportsPermlaneSwap() const {
+  return getISAFamily() == ISAFamily::CDNA4 ||
+         getISAFamily() == ISAFamily::GFX1250;
+}
+
+bool TargetInfo::supportsCvtPkScalePk8() const {
+  return getISAFamily() == ISAFamily::GFX1250;
 }
 
 void TargetInfo::localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,

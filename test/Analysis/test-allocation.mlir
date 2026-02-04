@@ -31,6 +31,10 @@
 #PADDED_SHARED_1_16x256 = #ttg.padded_shared<[128:+4, 256:+8] {order = [1, 0], shape = [16, 256]}>
 #PADDED_SHARED_2_16x256 = #ttg.padded_shared<[64:+2, 128:+4, 256:+8] {order = [1, 0], shape = [16, 256]}>
 
+// PartitionedSharedEncoding attributes for testing
+#PARTITIONED_SHARED_SWIZZLE = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 0, partitionLayout = #A_SHARED}>
+#PARTITIONED_SHARED_PADDED = #ttg.partitioned_shared<{numPartitions = 4, numGroups = 1, partitionDim = 1, partitionLayout = #PADDED_SHARED_0_16x32}>
+
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
@@ -917,6 +921,56 @@ tt.func @two_different_ws() {
   tt.return
 }
 
+// expected-remark @below {{default_partition_outside_alloc_interference}}
+// expected-remark @below {{size = 36}}
+// expected-remark @below {{offset = 32, size = 4}}
+tt.func @default_partition_outside_alloc_interference() {
+  // expected-remark @below {{offset = 0, size = 16}}
+  %0 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED_1D, #smem, mutable>
+  // expected-remark @below {{offset = 16, size = 12}}
+  ttg.warp_specialize(%0)
+  default {
+    // Ensure that we do not reuse the memory for %0 even though we are done
+    // with it in this partition.
+    // expected-remark @below {{offset = 16, size = 16}}
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED_1D, #smem, mutable>
+    "use"(%1) : (!ttg.memdesc<2xi64, #A_SHARED_1D, #smem, mutable>) -> ()
+    ttg.warp_yield
+  }
+  partition0(%arg0: !ttg.memdesc<2xi64, #A_SHARED_1D, #smem, mutable>) num_warps(4) {
+    "use"(%arg0) : (!ttg.memdesc<2xi64, #A_SHARED_1D, #smem, mutable>) -> ()
+    ttg.warp_return
+  } : (!ttg.memdesc<2xi64, #A_SHARED_1D, #smem, mutable>) -> ()
+  tt.return
+}
+
+// expected-remark @below {{partition_outside_alloc_interference}}
+// expected-remark @below {{size = 36}}
+// expected-remark @below {{offset = 32, size = 4}}
+tt.func @partition_outside_alloc_interference() {
+  // expected-remark @below {{offset = 0, size = 16}}
+  %0 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED_1D, #smem, mutable>
+  // expected-remark @below {{offset = 16, size = 12}}
+  ttg.warp_specialize(%0)
+  default {
+    ttg.warp_yield
+  }
+  partition0(%arg0: !ttg.memdesc<2xi64, #A_SHARED_1D, #smem, mutable>) num_warps(2) {
+    "use"(%arg0) : (!ttg.memdesc<2xi64, #A_SHARED_1D, #smem, mutable>) -> ()
+    ttg.warp_return
+  }
+  partition1(%arg1: !ttg.memdesc<2xi64, #A_SHARED_1D, #smem, mutable>) num_warps(2) {
+    "use"(%arg1) : (!ttg.memdesc<2xi64, #A_SHARED_1D, #smem, mutable>) -> ()
+    // Ensure that we do not reuse the memory for %0 even though we are done
+    // with it in this partition.
+    // expected-remark @below {{offset = 16, size = 16}}
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED_1D, #smem, mutable>
+    "use"(%1) : (!ttg.memdesc<2xi64, #A_SHARED_1D, #smem, mutable>) -> ()
+    ttg.warp_return
+  } : (!ttg.memdesc<2xi64, #A_SHARED_1D, #smem, mutable>) -> ()
+  tt.return
+}
+
 // expected-remark @below {{ptr_allocation_datalayout}}
 // expected-remark @below {{size = 8}}
 tt.func @ptr_allocation_datalayout(%arg0: !tt.ptr<i32>) {
@@ -1001,6 +1055,32 @@ tt.func @padded_shared_layout_multi_tier() {
   // expected-remark @+2 {{offset = 0, size = 4466}}
   // (16 * 256 + 2 * 63 + 4 * 31 + 8 * 15) * 1B = 4466B
   %alloc1 = ttg.local_alloc : () -> !ttg.memdesc<16x256xi8, #PADDED_SHARED_2_16x256, #ttg.shared_memory, mutable>
+  tt.return
+}
+
+// PartitionedSharedEncoding with swizzled inner layout: 64x32xf16, 2 partitions, 2 groups each
+// Without partition-size, pieces are placed consecutively
+// expected-remark @below {{partitioned_shared_swizzle_alloc}}
+// expected-remark @below {{size = 4096}}
+tt.func @partitioned_shared_swizzle_alloc() {
+  // 2 partition buffers, each containing 2 groups = 2048 bytes each
+  // expected-remark @below {{offset = 0, size = 2048}}
+  // expected-remark @below {{offset = 2048, size = 2048}}
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<64x32xf16, #PARTITIONED_SHARED_SWIZZLE, #ttg.shared_memory, mutable>
+  tt.return
+}
+
+// PartitionedSharedEncoding with padded inner layout: 64x32xf16, 4 partitions, 1 group each
+// Without partition-size, pieces are placed consecutively
+// expected-remark @below {{partitioned_shared_padded_alloc}}
+// expected-remark @below {{size = 4220}}
+tt.func @partitioned_shared_padded_alloc() {
+  // 4 partition buffers, each containing 1 group = 1052 bytes each
+  // expected-remark @below {{offset = 0, size = 1052}}
+  // expected-remark @below {{offset = 1056, size = 1052}}
+  // expected-remark @below {{offset = 2112, size = 1052}}
+  // expected-remark @below {{offset = 3168, size = 1052}}
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<64x32xf16, #PARTITIONED_SHARED_PADDED, #ttg.shared_memory, mutable>
   tt.return
 }
 }

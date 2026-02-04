@@ -359,6 +359,72 @@ For identity mappings a short form based on order and shape is used to increase 
   let genVerifyDecl = 1;
 }
 
+
+def PartitionedSharedEncodingAttr
+    : TritonGPU_Attr<"PartitionedSharedEncoding", "partitioned_shared_encoding",
+                     [SharedEncodingTrait, DeclareLayoutEncodingMethods,  LayoutEncodingTrait]> {
+  let mnemonic = "partitioned_shared";
+
+  let description = [{
+    An encoding for tensors whose elements are partitioned across multiple
+    separate shared memory allocations. This reduces shared memory partition
+    conflicts by splitting a tensor along a specific dimension into separate
+    allocations.
+
+    Parameters:
+    - numPartitions: Number of distinct memory partitions (and separate buffers).
+      Buffers in different partitions MUST be placed in different physical
+      shared memory slots.
+    - numGroups: Number of groups. Each group contains numPartitions
+      consecutive pieces of the tensor.
+    - partitionDim: The dimension along which the tensor is partitioned.
+    - partitionLayout: The shared memory layout used within each piece.
+
+    The total number of logical pieces is numPartitions * numGroups.
+    Pieces are organized as:
+      [Group 0: pieces 0..numPartitions-1]
+      [Group 1: pieces numPartitions..2*numPartitions-1]
+      ...
+
+    ## Memory Allocation
+
+    The allocator creates numPartitions buffers (NOT numLogicalPieces buffers).
+    Each buffer contains all pieces from all groups that belong to that partition,
+    concatenated together. Buffer size = pieceSize * numGroups.
+
+    For example, with numPartitions=2, numGroups=4 and
+    partitionDim=0 on a [128, 32] tensor:
+    - Total 8 logical pieces, each of size [16, 32] (pieceSize = 16*32 elements)
+    - Piece layout: [0, 1, 2, 3, 4, 5, 6, 7]
+    - Partitions:    0  1  0  1  0  1  0  1
+    - Groups:       |Grp0||Grp1||Grp2||Grp3|
+
+    Physical allocation (2 buffers, each containing 4 pieces):
+    - Buffer 0 (Partition 0): [Piece0 | Piece2 | Piece4 | Piece6]
+    - Buffer 1 (Partition 1): [Piece1 | Piece3 | Piece5 | Piece7]
+
+    Physical allocation guarantee: Buffers in different partitions MUST reside
+    in distinct physical shared memory partitions.
+  }];
+
+  let parameters = (ins
+      "unsigned":$numPartitions,
+      "unsigned":$numGroups,
+      "unsigned":$partitionDim,
+      "SharedEncodingTrait":$partitionLayout
+  );
+
+  let extraClassDeclaration = [{
+    /// Returns the total number of logical pieces.
+    unsigned getNumLogicalPieces() const {
+      return getNumPartitions() * getNumGroups();
+    }
+  }];
+
+  let hasCustomAssemblyFormat = 1;
+  let genVerifyDecl = 1;
+}
+
 def SharedLinearEncodingAttr
     : TritonGPU_Attr<"SharedLinearEncoding", "shared_linear_encoding",
                      [SharedEncodingTrait, LayoutEncodingTrait,
@@ -380,6 +446,8 @@ def SharedLinearEncodingAttr
                                       ArrayRef<unsigned> defaultOrder) const;
 
     SmallVector<unsigned> getOrder() const;
+
+    unsigned getRank() const { return getLinearLayout().getNumOutDims(); }
 
     LinearLayout toLinearLayout(ArrayRef<int64_t> shape) const;
 
@@ -698,6 +766,8 @@ def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding"
                                       bool skipBroadcast = true) const;
     SmallVector<unsigned> getThreadsPerWarp() const;
     SmallVector<unsigned> getWarpsPerCTA() const;
+
+    unsigned getRank() const { return getLinearLayout().getNumOutDims(); }
 
     // [FIXME LL] Supports legacy behaviour. We should remove these functions
     SmallVector<unsigned> getSizePerThread() const;
@@ -1080,8 +1150,9 @@ It is characterized by the following parameters:
   - 1: RDNA3; e.g., gfx1100, gfx1101
   - 2: RDNA4; e.g., gfx1200, gfx1201
   - 3: gfx1250
-- `warpsPerCTA` indicates the warp layout in the block.
-- `tilesPerWarp`  The tile layout within a warp. Defaults to unit tile layout, i.e., single tile on all dimensions.
+- `ctaLayout` indicates the warp layout in the block. This is a generalization
+   compared to previous warp layout representation using warpsPerCTA and tilesPerWarp
+   parameters.
 - `instrShape` indicates the shape in the form of (M, N, K) of the matrix
    operation performed by a single WMMA instruction. Defaults to (16, 16, 16).
 - `isTransposed` indicates the layout of the result tensor is transposed.
@@ -1162,39 +1233,77 @@ Row |
 31  |[15 15 15 15 15 15 15 15 31 ... 31] [15 15 15 ... 31]
 
 Example 2:
-This example demonstrates the tilesPerWarp parameter, which shares the same sematics with
-AMDMfmaEncodingAttr.
+This example illustrates the purpose of the ctaLayout parameter.
+ctaLayout is a linear layout describing how warps are arranged across WMMA tiles.
+Previously, this information was encoded using warpsPerCTA and tilesPerWarp parametes.
+For instance, a configuration with 4 warps, represented as:
 
-By default, WMMA layout assumes that each warp within a CTA tile computes a single WMMA tile.
-When the tensor is larger than a single CTA tile, these tiles are repeated across the tensor.
-In this setup, the output tiles computed by each warp are strided by the number of warps per CTA
-tile in both row and column dimensions.
+warpsPerCTA = [2, 2], tilesPerWarp = [1, 1]
 
-For instance, with 16 WMMA tiles and warpsPerCTA = [2, 2], the default(tilesPerWarp = [1, 1])
-distribution of warps across the WMMA tiles looked like:
+would translate to:
+
+ctaLayout = {reg = [], warp = [[0, 1], [1, 0]]}
+
+By default, WMMA assumes that each warp in a CTA computes exactly one WMMA tile.
+In the grid below, each w* label indicates which warp computes that tile:
 
 w0 w1 w0 w1
 w2 w3 w2 w3
 w0 w1 w0 w1
 w2 w3 w2 w3
 
-* Each unit reprsents a WMMA tile. w* shows which warp occupies that WMMA tile.
+To express more complex layouts, we must also account for repetitions within the mapping.
+For example, the configuration formerly described as:
 
-tilesPerWarp parameter allows each warp to compute contiguous WMMA tiles in the row and/or column dimensions.
-Using the same example with tilesPerWarp = [2, 2], the layout becomes:
+warpsPerCTA = [2, 2], tilesPerWarp  = [2, 2]
+
+would translate to:
+
+ctaLayout = {reg = [[0, 1], [1, 0]], warps = [[0, 2], [2, 0]] }
 
 w0 w0 w1 w1
 w0 w0 w1 w1
 w2 w2 w3 w3
 w2 w2 w3 w3
+
+This parameter provides a more general way to define warp mappings than what
+warpsPerCTA and tilesPerWarp alone could express.
+For instance:
+
+ctaLayout = {reg = [[1, 0], [0, 1]], warps = [[0, 2], [2, 0]]}
+
+still represents a layout similar to:
+
+warpsPerCTA  = [2, 2], tilesPerWarp = [2, 2]
+
+but with a different ordering of repetitions.
+
+The motivation for this broader formulation comes from the need to describe swizzled warp
+layouts, which help avoid LDS partition conflicts on architectures such as gfx1250.
+A valid example of such swizzled configuration is:
+
+ctaLayout = {reg = [[2, 0]], warps = [[2, 1], [1, 0]]}
+
+With corresponding mapping:
+
+w0 w1 <- second tile computed by w1
+w2 w3
+w0 w1 <- first tile computed by w1
+w2 w3
+
+Note that ctaLayout naturally composes with layout definied on a single WMMA tile
+to form final WMMA layout.
+
+wmmaLayout = tileLayout * ctaLayout
+
+This simplifies both WMMA and dotOperand layouts lowering to linear layout.
   }];
 
   let parameters = (
     ins
     "unsigned": $version,
+    LinearLayoutParam:$ctaLayout,
     "bool":$isTransposed,
-    ArrayRefParameter<"unsigned">:$warpsPerCTA,
-    ArrayRefParameter<"unsigned">:$tilesPerWarp,
     "CGAEncodingAttr":$CGALayout,
     ArrayRefParameter<"unsigned">:$instrShape
   );
@@ -1202,27 +1311,12 @@ w2 w2 w3 w3
   let genVerifyDecl = 1;
   let hasCustomAssemblyFormat = 1;
 
-  let builders = [
-    AttrBuilder<(ins "unsigned":$version,
-                     "bool":$isTransposed,
-                     "ArrayRef<unsigned>":$warpsPerCTA,
-                     "CGAEncodingAttr":$CGALayout,
-                     "ArrayRef<unsigned>":$instrShape), [{
-      SmallVector<unsigned> tilesPerWarp(warpsPerCTA.size(), 1);
-      return $_get(context, version, isTransposed, warpsPerCTA, tilesPerWarp, CGALayout, instrShape);
-    }]>
-  ];
-
   let extraClassDeclaration = extraDistributedDeclaration # [{
-    SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape, int kDim, int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
-
+    LinearLayout getTileLayout(unsigned rank) const;
     static SmallVector<unsigned, 3> getDefaultInstrShape() {
       return {16, 16, 16};
     }
-
-    // Check if tilesPerWarp is 1 in every dimension.
-    bool hasUnitTilesPerWarp() const;
 
     // Returns a swizzled shared layout matching this WMMA layout for the
     // dot operand at the given |operandIdx| with |operandShape|.
@@ -1230,6 +1324,9 @@ w2 w2 w3 w3
         CGAEncodingAttr cgaLayout, int operandIdx, ArrayRef<int64_t> operandShape,
         ArrayRef<unsigned> sharedOrder, unsigned kWidth,
         unsigned elemBitWidth, bool needTrans) const;
+
+    // Returns true if the two WMMA layouts are equal, ignoring the CGA layout.
+    bool isEqualIgnoringCGALayout(AMDWmmaEncodingAttr other) const;
   }];
 }
 

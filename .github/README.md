@@ -83,7 +83,7 @@ c_desc = tl.make_tensor_descriptor(
 c_desc.store([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], c)
 ```
 
-You can view a full example of a GEMM kernel with Tensor Descriptors [here](../benchmarks/triton_kernels_benchmark/gemm_tensor_desc_benchmark.py).
+You can view a full example of a GEMM kernel with Tensor Descriptors [here](../benchmarks/triton_kernels_benchmark/gemm_benchmark.py).
 
 **Before Tensor Descriptors:**
 ```
@@ -392,7 +392,7 @@ expert_offset = expert_id.to(tl.int64) * stride_ae
 
 Just like with any other Triton kernels, you want to pick appropriate block sizes to your hardware and tensor shapes. Use `triton.autotune` to try various combinations and find the best one. Key parameters to tune include block sizes, `num_warps`, `num_stages`, and `grf_mode`.
 
-See existing [benchmarks](../benchmarks/triton_kernels_benchmark/) for reasonable configuration grids for [GEMM](../benchmarks/triton_kernels_benchmark/gemm_tensor_desc_benchmark.py) and [Flash Attention](../benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py) kernels.
+See existing [benchmarks](../benchmarks/triton_kernels_benchmark/) for reasonable configuration grids for [GEMM](../benchmarks/triton_kernels_benchmark/gemm_benchmark.py) and [Flash Attention](../benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py) kernels.
 
 **GRF Mode**:
 The Intel-specific option `grf_mode` determines the number of registers allocated to a kernel.

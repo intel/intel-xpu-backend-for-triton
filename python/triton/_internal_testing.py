@@ -43,7 +43,11 @@ def is_ampere_or_newer():
 
 
 def is_blackwell():
-    return is_cuda() and torch.cuda.get_device_capability()[0] == 10
+    return is_cuda() and torch.cuda.get_device_capability()[0] in [10, 11]
+
+
+def is_blackwell_ultra():
+    return is_cuda() and torch.cuda.get_device_capability()[0:2] == (10, 3)
 
 
 def is_hopper_or_newer():
@@ -95,6 +99,10 @@ def is_hip_gfx1250():
 
 def is_hip_cdna():
     return is_hip_cdna2() or is_hip_cdna3() or is_hip_cdna4()
+
+
+def is_hip_rdna():
+    return is_hip_rdna3() or is_hip_rdna4()
 
 
 def get_hip_lds_size():
