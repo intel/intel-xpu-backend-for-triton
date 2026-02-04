@@ -6,6 +6,7 @@ export PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # Select what to build.
 BUILD_LLVM=false
+LLVM_SHARED=false
 BUILD_TRITON=false
 CLEAN=false
 VENV=false
@@ -14,6 +15,11 @@ for arg in "$@"; do
   case $arg in
     --llvm)
       BUILD_LLVM=true
+      shift
+      ;;
+    --llvm-shared)
+      BUILD_LLVM=true
+      LLVM_SHARED=true
       shift
       ;;
     --triton)
@@ -33,7 +39,7 @@ for arg in "$@"; do
       shift
       ;;
     --help)
-      echo "Example usage: ./compile-triton.sh [--llvm | --triton | --clean | --venv | --ccache]"
+      echo "Example usage: ./compile-triton.sh [--llvm | --llvm-shared | --triton | --clean | --venv | --ccache]"
       exit 1
       ;;
     *)
@@ -122,6 +128,11 @@ build_llvm() {
   then
     ADDITIONAL_FLAGS="$ADDITIONAL_FLAGS -DCMAKE_C_COMPILER_LAUNCHER=ccache"
     ADDITIONAL_FLAGS="$ADDITIONAL_FLAGS -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
+  fi
+
+  if [ "$LLVM_SHARED" = true ]
+  then
+    ADDITIONAL_FLAGS="$ADDITIONAL_FLAGS -DBUILD_SHARED_LIBS=ON"
   fi
 
   if [ ! -d "$LLVM_PROJ_BUILD" ]
