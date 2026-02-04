@@ -99,6 +99,7 @@ sycl::event softmax_forward(void *input, void *output, sycl::queue &queue) {
     return e_softmax_fwd;
   } catch (cl::sycl::exception const &e) {
     std::cout << "SYCL exception caught: " << e.what() << '\n';
+    throw;
   }
 }
 
