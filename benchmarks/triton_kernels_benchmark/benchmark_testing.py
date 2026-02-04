@@ -545,7 +545,7 @@ class Mark:
         args_str = ", ".join(f"{k}={v}" for k, v in x_args.items())
         if "provider" in bench.line_arg:
             args_str += f", provider={y}"
-        print(f"# [teeeest] Running case: {args_str}")
+        print(f"Running case: {args_str}")
 
     def _run_isolated(self, bench: Benchmark, x_args, y, **kwargs):
         case_key = tuple(list(x_args.items()) + [(bench.line_arg, y)])
