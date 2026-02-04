@@ -1742,27 +1742,19 @@ struct LoadOpToBlockIOConversion
         // shape sufficiently when boundary check is absent.
         SetVector<unsigned> boundaryCheck(op.getBoundaryCheck().begin(),
                                           op.getBoundaryCheck().end());
-        // FIXME: IGC currently cannot optimize 2D block IO when tt.load is used
-        // without boundary checks. Temporarily skipping logic for ignoring
-        // boundary checks which matches previous behavior by default. Restore
-        // this logic once IGC optimization is supported.
-        static const bool enableNoBoundaryCheck = triton::tools::getBoolEnv(
-            "TRITON_INTEL_2DBLOCK_ENABLE_NO_BOUNDARY_CHECK");
-        if (enableNoBoundaryCheck) {
-          if (!boundaryCheck.contains(c)) {
-            adjustedBaseWidth = b.i32_val(std::max(
-                64u, vBlocks * tileWidth * (packedElemSizeInBits / 8)));
-            // The offsetX is number of elements instead of packed elements.
-            addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, offsetX);
-            offsetX = b.i32_val(0);
-          }
-          if (!boundaryCheck.contains(r)) {
-            adjustedBaseHeight = b.i32_val(tileHeight);
-            // Use i8_ty as pitch is in number of bytes.
-            Value off = b.mul(offsetY, pitch);
-            addrElem = b.gep(ptr_ty(ctx, 1), i8_ty, addrElem, off);
-            offsetY = b.i32_val(0);
-          }
+        if (!boundaryCheck.contains(c)) {
+          adjustedBaseWidth = b.i32_val(
+              std::max(64u, vBlocks * tileWidth * (packedElemSizeInBits / 8)));
+          // The offsetX is number of elements instead of packed elements.
+          addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, offsetX);
+          offsetX = b.i32_val(0);
+        }
+        if (!boundaryCheck.contains(r)) {
+          adjustedBaseHeight = b.i32_val(tileHeight);
+          // Use i8_ty as pitch is in number of bytes.
+          Value off = b.mul(offsetY, pitch);
+          addrElem = b.gep(ptr_ty(ctx, 1), i8_ty, addrElem, off);
+          offsetY = b.i32_val(0);
         }
       } else {
         addrElem = targetInfo.shuffleIdx(rewriter, loc, addrElem, 0);
