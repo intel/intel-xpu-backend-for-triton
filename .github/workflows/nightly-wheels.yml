@@ -2,6 +2,14 @@ name: Triton wheels
 
 on:
   workflow_dispatch:
+    inputs:
+      pytorch_mode:
+        description: PyTorch mode, source or wheels or JGS pytorch artifactory revision
+        type: choice
+        options:
+          - jgs_artifactory_revision
+          - source
+        default: jgs_artifactory_revision
   push:
     branches:
       - main-cri
@@ -13,6 +21,8 @@ permissions: read-all
 
 env:
   USE_AOT_DEVLIST: pvc
+  PYTORCH_PYTHON_VERSIONS: "3.12"
+  PYTORCH_MODE: ${{ inputs.pytorch_mode || 'jgs_artifactory_revision' }}
 
 jobs:
   build:
@@ -47,10 +57,18 @@ jobs:
           pip install cmake build
 
       - name: Setup PyTorch
+        if: env.PYTORCH_MODE == 'source'
         id: setup-pytorch
         uses: ./.github/actions/setup-pytorch
 
+      - name: Copy Pytorch wheels from container
+        if: env.PYTORCH_MODE == 'jgs_artifactory_revision' && contains(env.PYTORCH_PYTHON_VERSIONS, matrix.python)
+        run: |
+          mkdir -p pytorch/dist/
+          ln -sv /opt/intel/pytorch_jgs/*.whl pytorch/dist/
+
       - name: Identify pinned versions
+        if: env.PYTORCH_MODE == 'source'
         run: |
           cd pytorch
           echo "TORCHVISION_COMMIT_ID=$(<.github/ci_commit_pins/vision.txt)" | tee -a $GITHUB_ENV
@@ -69,6 +87,7 @@ jobs:
             python -m build --wheel --no-isolation && pip install dist/*.whl
 
       - name: Install torchvision package
+        if: env.PYTORCH_MODE == 'source'
         uses: ./.github/actions/install-dependency
         with:
           package: torchvision
@@ -77,6 +96,7 @@ jobs:
           extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
 
       - name: Install torchaudio package
+        if: env.PYTORCH_MODE == 'source'
         uses: ./.github/actions/install-dependency
         with:
           package: torchaudio
@@ -85,6 +105,7 @@ jobs:
           extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
 
       - name: Install timm package
+        if: env.PYTORCH_MODE == 'source'
         uses: ./.github/actions/install-dependency
         with:
           package: timm
@@ -93,6 +114,7 @@ jobs:
           extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
 
       - name: Install transformers package
+        if: env.PYTORCH_MODE == 'source'
         run: |
           cd pytorch
           pip install -r .ci/docker/ci_commit_pins/huggingface-requirements.txt
@@ -100,11 +122,11 @@ jobs:
       - name: Prepare wheels for upload
         run: |
           mkdir -p wheels
-          cp -L pytorch/dist/*.whl wheels/
+          cp -L pytorch/dist/*.whl wheels/ || true
           cp -L dist/*.whl wheels/
-          cp -L torchvision*/dist/*.whl wheels/
-          cp -L torchaudio*/dist/*.whl wheels/
-          cp -L timm*/dist/*.whl wheels/
+          cp -L torchvision*/dist/*.whl wheels/ || true
+          cp -L torchaudio*/dist/*.whl wheels/ || true
+          cp -L timm*/dist/*.whl wheels/ || true
           ls -lh wheels/
 
       - name: Report environment details
