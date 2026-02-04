@@ -16,9 +16,9 @@ from triton_kernels_benchmark import xetla_kernel
     configs=[
         triton.Config({'BLOCK_M': 256, 'BLOCK_N': 256, 'BLOCK_K': 32, 'GROUP_M': 4, 'SPLIT_K': 4, 'grf_mode': '256'},
                       num_stages=4, num_warps=32),
-    ],  #
-    key=['M', 'N', 'K'],  #
-    restore_value=['C']  #
+    ],
+    key=['M', 'N', 'K'],
+    restore_value=['C'],
 )
 @triton.jit
 def _kernel(A, B, C,  #
