@@ -9,7 +9,6 @@ from torch.nn.attention.flex_attention import (
 
 import torch
 import torch.nn.functional as F
-from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch.nn.attention.bias import causal_lower_right
 import torch._inductor
 import torch._inductor.lowering
@@ -90,6 +89,9 @@ def get_attn_bias(provider, use_causal, N_CTX_q, N_CTX_kv, device):
 def run_sdpa_benchmark(q, k, v, attn_bias, use_causal, sm_scale, H_q, H_kv, D_HEAD_qk, D_HEAD_v, MODE, provider,
                        do_bench, device):
     """Run SDPA benchmark for SYCL-TLA or OneDNN providers."""
+    # pylint: disable=import-outside-toplevel
+    from torch.nn.attention import SDPBackend, sdpa_kernel
+
     # SDPA backends have limitations:
     # - Require D_HEAD_qk == D_HEAD_v (no support for different head dimensions)
     # - OneDNN doesn't support backward pass for SDPA
@@ -224,7 +226,7 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
                                          requires_grad=MODE == 'bwd')
 
             # pylint: disable=protected-access
-            torch_results = benchmark.fn._RESULTS_HISTORY
+            torch_results = benchmark_suite.get_isolated_results_history()
             case_key = (('Z', Z), ('H_q', H_q), ('H_kv', H_kv), ('N_CTX_q', N_CTX_q), ('N_CTX_kv', N_CTX_kv),
                         ('D_HEAD_qk', D_HEAD_qk), ('D_HEAD_v', D_HEAD_v), ('MODE', MODE), ('provider', 'torch'))
 

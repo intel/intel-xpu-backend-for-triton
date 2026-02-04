@@ -525,11 +525,49 @@ def call_in_isolated_subprocess(fn, args=(), kwargs={}):
     return output
 
 
+_CURRENT_MARK_INSTANCE = None
+
+
+def get_isolated_results_history():
+    if _CURRENT_MARK_INSTANCE is None:
+        return {}
+    return _CURRENT_MARK_INSTANCE.results_history
+
+
 class Mark:
 
     def __init__(self, fn, benchmarks):
         self.fn = fn
         self.benchmarks = benchmarks
+        self.results_history = {}
+
+    def describe_current_test_case(self, bench: Benchmark, x_args, y):
+        args_str = ", ".join(f"{k}={v}" for k, v in x_args.items())
+        if "provider" in bench.line_arg:
+            args_str += f", provider={y}"
+        print(f"# [teeeest] Running case: {args_str}")
+
+    def _run_isolated(self, bench: Benchmark, x_args, y, **kwargs):
+        case_key = tuple(list(x_args.items()) + [(bench.line_arg, y)])
+        print(f"Running {y} provider in isolated subprocess")
+        try:
+            ret = call_in_isolated_subprocess(self.fn, kwargs={**x_args, **{bench.line_arg: y}, **bench.args, **kwargs})
+            # pylint: disable=protected-access
+            self.results_history[case_key] = {"success": True, "oom": False}
+        except (torch.OutOfMemoryError, RuntimeError) as e:
+            if any(keyword in str(e)
+                   for keyword in ("UR_RESULT_ERROR_OUT_OF_RESOURCES", "UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY",
+                                   "UR_RESULT_ERROR_DEVICE_LOST", "OutOfMemoryError")):
+                error = e.args[0].split("\n")[0]
+                print(f"Exception during {y} provider call: {error}")
+                # pylint: disable=protected-access
+                self.results_history[case_key] = {"success": False, "oom": True}
+                ret = ((float("nan"), float("nan"), float("nan")), (float("nan"), float("nan"), float("nan")),
+                       float("nan"))
+            else:
+                raise
+
+        return ret
 
     # pylint: disable=too-many-branches
     def _run(self, bench: Benchmark, save_path: str, show_plots: bool, print_data: bool, mark_args, diff_col=False,
@@ -543,9 +581,10 @@ class Mark:
         y_vals += [f"{x}-CV" for x in bench.line_names]
         x_names = list(bench.x_names)
         df = pd.DataFrame(columns=x_names + y_vals)
-        if not hasattr(self.fn, "_RESULTS_HISTORY"):
-            # pylint: disable=protected-access
-            self.fn._RESULTS_HISTORY = {}
+
+        #pylint: disable=global-statement
+        global _CURRENT_MARK_INSTANCE
+        _CURRENT_MARK_INSTANCE = self
 
         for x in bench.x_vals:
             # x can be a single value or a sequence of values.
@@ -560,35 +599,10 @@ class Mark:
             for label in itertools.chain(bench.ylabel, ["CV"]):
                 row_vals[label] = ([], [], [])
             for y in bench.line_vals:
-                args_str = ", ".join(f"{k}={v}" for k, v in x_args.items())
-                if "provider" in bench.line_arg:
-                    args_str += f", provider={y}"
+                self.describe_current_test_case(bench, x_args, y)
 
-                should_isolate = y in bench.isolated_providers
-
-                print(f"Running case: {args_str}")
-
-                if should_isolate:
-                    case_key = tuple(list(x_args.items()) + [(bench.line_arg, y)])
-                    print(f"Running {y} provider in isolated subprocess")
-                    try:
-                        ret = call_in_isolated_subprocess(
-                            self.fn, kwargs={**x_args, **{bench.line_arg: y}, **bench.args, **kwargs})
-                        # pylint: disable=protected-access
-                        self.fn._RESULTS_HISTORY[case_key] = {"success": True, "oom": False}
-                    except (torch.OutOfMemoryError, RuntimeError) as e:
-                        if any(keyword in str(e) for keyword in ("UR_RESULT_ERROR_OUT_OF_RESOURCES",
-                                                                 "UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY",
-                                                                 "UR_RESULT_ERROR_DEVICE_LOST", "OutOfMemoryError")):
-                            error = e.args[0].split("\n")[0]
-                            print(f"Exception during {y} provider call: {error}")
-                            # pylint: disable=protected-access
-                            self.fn._RESULTS_HISTORY[case_key] = {"success": False, "oom": True}
-                            ret = ((float("nan"), float("nan"), float("nan")), (float("nan"), float("nan"),
-                                                                                float("nan")), float("nan"))
-                        else:
-                            raise
-
+                if y in bench.isolated_providers:
+                    ret = self._run_isolated(bench, x_args, y, **kwargs)
                 else:
                     ret = self.fn(**x_args, **{bench.line_arg: y}, **bench.args, **kwargs)
                 for i, label in enumerate(itertools.chain(bench.ylabel, ["CV"])):
@@ -649,6 +663,9 @@ class Mark:
 
         if save_path:
             df.to_csv(os.path.join(save_path, f"{filename}.csv"), float_format=f"%.{save_precision}f", index=False)
+
+        _CURRENT_MARK_INSTANCE = None
+
         return df
 
     def run(self, show_plots=False, print_data=False, return_df=False, save_precision=6, mark_args=None, **kwargs):
