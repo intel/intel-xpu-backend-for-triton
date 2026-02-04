@@ -199,7 +199,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     %29 = arith.addi %27, %28 : tensor<32x64xi32, #mma>
     %30 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<32x64x!tt.ptr<f32>, #mma>
     %31 = tt.addptr %30, %29 : tensor<32x64x!tt.ptr<f32>, #mma>, tensor<32x64xi32, #mma>
-    // COM: mask constancy is 4 which smaller to the tile shape.
+    // COM: mask constancy is 4, which is smaller than the tile shape.
     // CHECK-NOT: triton_gen.2Dblockstore
     tt.store %31, %cst, %25 {ttig.block_io = "row_major"} : tensor<32x64x!tt.ptr<f32>, #mma>
     tt.return
