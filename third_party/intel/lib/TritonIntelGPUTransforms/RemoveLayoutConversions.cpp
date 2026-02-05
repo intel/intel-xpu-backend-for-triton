@@ -333,8 +333,8 @@ void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
     for (auto encoding : info.encodings) {
       Attribute dstEncoding;
       if (isa<tt::StoreOp, ttg::ConvertLayoutOp>(op)) {
-        // Try to remove the layout conversion by making the dst encoding match
-        // the source encoding.
+        // Try to remove the convert by making the dst encoding match the source
+        // encoding.
         dstEncoding = encoding;
       } else {
         dstEncoding = inferDstEncoding(op, encoding);
