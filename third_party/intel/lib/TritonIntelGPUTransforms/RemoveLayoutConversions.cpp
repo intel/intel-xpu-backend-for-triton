@@ -167,62 +167,53 @@ public:
       std::function<bool(Operation *)> stopPropagation = nullptr);
 
 private:
-  // Forward propagate the remat value to simplify the IR.
+  /**
+  Forward propagate a rematerialized value to its users.
+  This is needed to clean up the IR after backward rematerialization. For
+  example, if we have a convert layout op that converts from layout A to layout
+  B, and we backward propagate it through an expression, we will end up with two
+  versions of the same expression with different layouts. The forward
+  propagation will propagate the rematerialized value with layout B to the users
+  of the original expression with layout A, and clean up the original expression
+  if it is no longer used.
 
-  /*
-  If the value is used by multiple users and one of its users is the convert
-  layout op.
-  1. Original IR
-   ┌─┐
+  Example:
+
+   ┌─┐ // layout A
    └┬┘
-    │
-   ┌┴┐
-   └┬┘
-    │
     ├───────┐
-    │       │
-    │      ┌┴┐ // cvt_layout
+    │      ┌┴┐ // cvt_layout (A->B)
     │      └┬┘
-    │       │
-   ┌┴┐     ┌┴┐
+   ┌┴┐     ┌┴┐ // Uses layout B
    └─┘     └─┘
 
-  After the backward propagate convert layout op, there are going to be
-  duplicated expression with different layout.
-  2. After backward propagate convert layout op.
+  After backward propagating layout B through the convert layout op, the
+  original expression is going to be duplicated (to use layout B), and the
+  cvt_layout operation is rendered useless. The original expression using layout
+  A however is still used.
 
-  ┌─┐         ┌─┐  // duplicate expression with different layout.
-  └┬┘         └┬┘
-   │           │
-  ┌┴┐         ┌┴┐
-  └┬┘         └┬┘
-   │           │
-   ├───────┐   │
-   │       │   │
-   │      ┌┴┐  │
-   │      └─┘  │
-   │       ┌───┘
-  ┌┴┐     ┌┴┐
+  ┌─┐ // layout A          ┌─┐ // layout B
+  └┬┘                      └┬┘
+   ├───────┐                │
+   │      ┌┴┐ // cvt_layout |
+   │      └─┘               │
+   │       ┌────────────────┘
+  ┌┴┐     ┌┴┐ // Uses layout B
   └─┘     └─┘
 
-  Need to forward propagate the remat value to clean up the IR as what we did in
-  forward layout propagation.
-  3. After forward propagate remet values while the mapping information is still
-  valid in rematMapping.
+  In order to eliminate the original expression we need to forward propagate the
+  rematerialized value to clean up the IR as what we did in forward layout
+  propagation:
 
-  ┌─┐         ┌─┐ // The expression with old layout could be removed later.
-  └┬┘         └┬┘
-   │           │
-  ┌┴┐         ┌┴┐
-  └┬┘         └┬┘
-   │           │
-   └───────┐   │
-           │   │
-          ┌┴┐  │
-          └─┘  │
-   ┌───────┬───┘
-  ┌┴┐     ┌┴┐
+  ┌─┐ // layout A          ┌─┐ // layout B
+  └┬┘                      └┬┘
+   └───────┐                │
+          ┌┴┐ // cvt_layout │
+          └─┘               │
+   ┌───────┬────────────────┘
+  ┌┴┐     ┌┴┐ // both use layout B
   └─┘     └─┘
+
   */
   void setEncoding(DenseMap<Value, Attribute> &values, ValueRange ops,
                    Attribute &layout, SmallVector<Value> &changed,
