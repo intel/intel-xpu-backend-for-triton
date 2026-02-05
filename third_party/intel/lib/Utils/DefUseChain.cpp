@@ -350,14 +350,15 @@ bool Fuser::validateChain(const DefUseChain &chain) const {
 
 void Fuser::propagateToUsers(Value newVal, const DefUseChain &chain,
                              IRMapping &mapping) {
-  auto start = cast<MakeTensorPtrOp>(chain.getStart());
+  Operation *start = chain.getStart();
   Operation *end = chain.getEnd();
   auto it = llvm::find_if(
       start->getUsers(), [&](Operation *user) { return chain.contains(user); });
   assert(it != start->getUsers().end() && "Expecting valid iterator");
+  assert(start->getNumResults() == 1 && "Expecting single result operations");
 
   Operation *nextOp = *it;
-  propagateToUser(newVal, start.getResult(), nextOp, end, mapping);
+  propagateToUser(newVal, start->getResult(0), nextOp, end, mapping);
 }
 
 void Fuser::propagateToUsers(Value newVal, Value origVal, Operation *origOp,

@@ -162,8 +162,7 @@ if 'B580' in torch.xpu.get_device_name():
             (40, 8, 1, 1024 + 64, 128, 128),  # Decode shapes of Deepseek-R1-Distill-Qwen-14B
 
             # Multi-query attention. H_kv equals 1
-            # OutOfResources: shared memory, Required: 262144, Hardware limit: 131072.
-            # (128, 1, 1, 1024 + 64, 576, 512),  # Decode shapes of Deepseek-v3
+            (128, 1, 1, 1024 + 64, 576, 512),  # Decode shapes of Deepseek-v3
             (128, 1, 512, 1024 + 128 + 512, 576, 512),  # Append shapes of Deepseek-v3
         ] + ([
             # Shapes only for bwd
@@ -219,6 +218,14 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
                                                          D_HEAD_v, MODE, provider, do_bench, DEVICE)
     elif provider == 'triton':
         kernel_options = {'BLOCKS_ARE_CONTIGUOUS': True, 'USE_TMA': True}
+
+        # pylint: disable=too-many-boolean-expressions
+        if H_q == 128 and H_kv == 1 and N_CTX_q == 1 and N_CTX_kv == 1088 and D_HEAD_qk == 576 and D_HEAD_v == 512:
+            # Workaround for DeepSeek-v3 decode shape
+            # Force to use prefill kernel because decode exceeds available Per Thread Scratch Space (PTSS)
+            # Due to that we cannot compile
+            kernel_options['FORCE_USE_FLEX_ATTENTION'] = True
+
         triton_fn = lambda: compiled_flex_attention(q, k, v, block_mask=block_mask, scale=sm_scale, enable_gqa=(
             not H_q == H_kv), kernel_options=kernel_options)
         if MODE == 'bwd':
