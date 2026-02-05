@@ -85,7 +85,7 @@ int TargetInfo::getWarpSize() const {
 }
 
 int TargetInfo::getSharedMemorySize() const {
-  // Should return the maximum capacity in kbyte
+  // Should return the maximum capacity in bytes
   switch (getISAFamily()) {
   case ISAFamily::GFX1250:
     return 320 * 1024;
@@ -96,8 +96,19 @@ int TargetInfo::getSharedMemorySize() const {
   }
 }
 
+size_t TargetInfo::getSharedMemoryPartitionSize() const {
+  switch (getISAFamily()) {
+  case ISAFamily::GFX1250:
+    return 64 * 1024;
+  default:
+    // No partitioning on other targets
+    return 0;
+  }
+}
+
 bool TargetInfo::supportMaximumMinimum() const {
-  return getISAFamily() == ISAFamily::CDNA4;
+  return getISAFamily() == ISAFamily::CDNA4 ||
+         getISAFamily() == ISAFamily::GFX1250;
 }
 
 Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
@@ -485,7 +496,7 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
     buf = createDppReduxOpWithBoundCtrl(valType, buf, 1 + dppCtrlRowShr,
                                         allRows, allBanks);
 
-    if (isCDNA(getISAFamily())) {
+    if (supportDppBroadcast()) {
       // row_bcast:15 row_mask:0xa
       buf = createDppReduxOpWithBoundCtrl(
           valType, buf, static_cast<uint32_t>(DppCtrl::BCAST15), 0xa, allBanks);
@@ -741,4 +752,19 @@ void TargetInfo::localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
     AMD::addLocalLoadNoAliasScope(localLoadOp, cast<LLVM::LoadOp>(llLoadOp));
 }
 
+bool TargetInfo::supportDppBroadcast() const {
+  switch (getISAFamily()) {
+  case ISAFamily::CDNA1:
+  case ISAFamily::CDNA2:
+  case ISAFamily::CDNA3:
+  case ISAFamily::CDNA4:
+    return true;
+  case ISAFamily::GFX1250:
+    return false;
+  default:
+    break;
+  }
+
+  return false;
+}
 } // namespace mlir::triton::AMD

@@ -10,15 +10,15 @@ llvm.func @triton_gen.barrier() {
 
 llvm.func @triton_gen.split_barrier_arrive() {
   // CHECK-LABEL: triton_gen.split_barrier_arrive
-  // CHECK: triton_gen.split_barrier_arrive {execution_scope = WorkGroup, memory_scope = WorkGroup}
-  triton_gen.split_barrier_arrive {execution_scope=WorkGroup, memory_scope=WorkGroup}
+  // CHECK: %0 = triton_gen.split_barrier_arrive
+  %0 = triton_gen.split_barrier_arrive
   llvm.return
 }
 
-llvm.func @triton_gen.split_barrier_wait() {
-  // CHECK-LABEL: triton_gen.split_barrier_wait
-  // CHECK: triton_gen.split_barrier_wait {execution_scope = WorkGroup, memory_scope = WorkGroup}
-  triton_gen.split_barrier_wait {execution_scope=WorkGroup, memory_scope=WorkGroup}
+llvm.func @triton_gen.split_barrier_wait(%bdata: !llvm.ptr<3>) {
+  // CHECK: triton_gen.split_barrier_wait([[BDATA:%.*]]: !llvm.ptr<3>)
+  // CHECK: triton_gen.split_barrier_wait [[BDATA]]
+  triton_gen.split_barrier_wait %bdata
   llvm.return
 }
 

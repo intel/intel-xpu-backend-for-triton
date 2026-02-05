@@ -637,7 +637,7 @@ run_benchmark_gemm() {
   python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_tensor_of_ptr_benchmark.py
 
   echo "GEMM with tensor descriptor:"
-  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_tensor_desc_benchmark.py
+  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_benchmark.py
 }
 
 run_benchmark_flash_attention() {
@@ -647,11 +647,8 @@ run_benchmark_flash_attention() {
   cd $TRITON_PROJ/benchmarks
   pip install .
 
-  echo "Forward - Default path:"
+  echo "Forward - Default path (with tensor descriptor):"
   python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
-
-  echo "Forward - with tensor descriptor:"
-  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_tensor_desc_benchmark.py
 
   echo "Forward - Advanced path:"
   TRITON_INTEL_ADVANCED_PATH=1 \
