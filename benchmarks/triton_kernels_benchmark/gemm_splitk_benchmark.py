@@ -18,6 +18,7 @@ from triton_kernels_benchmark import xetla_kernel
                       num_stages=4, num_warps=32),
     ],
     key=['M', 'N', 'K'],
+    restore_value=['C'],
 )
 @triton.jit
 def _kernel(A, B, C,  #
