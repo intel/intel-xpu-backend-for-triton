@@ -149,7 +149,6 @@ fa_kernel_mode = os.getenv('FA_KERNEL_MODE', 'fwd')
         args={},
     ))
 def benchmark(Z, H, N_CTX, D_HEAD, MASK, MODE, provider):
-    print(f'Running case: {Z=}, {H=}, {N_CTX=}, {D_HEAD=}, {MASK=}, {MODE=}, {provider=}')
     torch.xpu.empty_cache()
 
     # There is still performance variance for triton, probably caused by random choice of autotune config
