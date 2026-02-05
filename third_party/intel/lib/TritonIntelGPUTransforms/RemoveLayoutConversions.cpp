@@ -203,7 +203,8 @@ private:
 
   In order to eliminate the original expression we need to forward propagate the
   rematerialized value to clean up the IR as what we did in forward layout
-  propagation:
+  propagation. After forward propagating the rematerialized value, the original
+  expression is no longer used and can be deleted.
 
   ┌─┐ // layout A          ┌─┐ // layout B
   └┬┘                      └┬┘
@@ -227,8 +228,9 @@ private:
   Operation *rewriteOp(Operation *op, Attribute encoding);
   void forwardPropagateRemat(DenseMap<Value, Attribute> &values);
 
-  void updateRematMapping(SmallVector<std::tuple<Value, Value>> &values);
+  void updateRematMapping(const SmallVector<std::tuple<Value, Value>> &values);
   void reduceLoopCarriedValues();
+
   // Existing tuples of (value, layout) that needs to be updated when recreating
   // scf ops. This prevents keeping track of Values that have been delete when
   // rewriting slices. The Value maybe mapped to different attributes in remove
@@ -329,13 +331,11 @@ void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
       continue;
     bool hasChanged = false;
     for (auto encoding : info.encodings) {
-      Attribute dstEncoding;
+      Attribute dstEncoding = inferDstEncoding(op, encoding);
       if (isa<tt::StoreOp, ttg::ConvertLayoutOp>(op)) {
-        // Try to remove the convert by making the dst encoding match the source
-        // encoding.
+        // Try to remove the layout conversion by making the dst encoding match
+        // the source encoding.
         dstEncoding = encoding;
-      } else {
-        dstEncoding = inferDstEncoding(op, encoding);
       }
       if (dstEncoding)
         hasChanged |= layouts[value].encodings.insert(dstEncoding);
@@ -437,9 +437,9 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
 
 void LayoutPropagation::propagateLayout() {
   SmallVector<Value> queue;
-  for (auto it : layouts) {
+  for (auto it : layouts)
     queue.push_back(it.first);
-  }
+
   while (!queue.empty()) {
     Value currentValue = queue.back();
     LayoutInfo info = layouts[currentValue];
@@ -1056,7 +1056,7 @@ bool canBeRemat(Operation *op) {
 }
 
 void LayoutRematerialization::updateRematMapping(
-    SmallVector<std::tuple<Value, Value>> &values) {
+    const SmallVector<std::tuple<Value, Value>> &values) {
   for (auto [old, newV] : values) {
     auto it = mappedValues.find(old);
     if (it != mappedValues.end()) {
@@ -1446,9 +1446,8 @@ LayoutRematerialization::propagateToUsers(DenseMap<Value, Attribute> &values,
   for (OpOperand &use : value.getUses()) {
     Operation *user = use.getOwner();
     if (user->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
-        user->hasTrait<OpTrait::Elementwise>()) {
+        user->hasTrait<OpTrait::Elementwise>())
       setEncoding(values, user->getResults(), layout, changed, user);
-    }
   }
   return changed;
 }
@@ -1456,9 +1455,9 @@ LayoutRematerialization::propagateToUsers(DenseMap<Value, Attribute> &values,
 void LayoutRematerialization::propagateLayout(
     DenseMap<Value, Attribute> &values) {
   SmallVector<Value> queue;
-  for (auto it : values) {
+  for (auto it : values)
     queue.push_back(it.first);
-  }
+
   while (!queue.empty()) {
     Value currentValue = queue.back();
     Attribute layout = values[currentValue];
@@ -1483,7 +1482,7 @@ Value LayoutRematerialization::getValueAs(Value value, Attribute encoding) {
       return rewrittenValue;
     OpBuilder rewriter(value.getContext());
     rewriter.setInsertionPointAfterValue(value);
-    auto tmpType = tensorType.cloneWithEncoding(encoding);
+    RankedTensorType tmpType = tensorType.cloneWithEncoding(encoding);
     Value converted =
         ttg::ConvertLayoutOp::create(rewriter, value.getLoc(), tmpType, value);
     // Add to map for future use.
@@ -1491,35 +1490,34 @@ Value LayoutRematerialization::getValueAs(Value value, Attribute encoding) {
     return converted;
   }
   return value;
-};
+}
 
 Operation *LayoutRematerialization::cloneElementwise(OpBuilder &rewriter,
                                                      Operation *op,
                                                      Attribute encoding) {
   Operation *newOp = rewriter.clone(*op);
-
   Attribute operandEnc = ttgi::inferSrcEncoding(op, encoding);
-  assert(operandEnc);
+  assert(operandEnc && "Expected encoding not present");
 
-  for (OpOperand &operand : op->getOpOperands()) {
+  for (OpOperand &operand : op->getOpOperands())
     newOp->setOperand(operand.getOperandNumber(),
                       getValueAs(operand.get(), operandEnc));
-  }
 
   for (unsigned i = 0, e = op->getNumResults(); i < e; ++i) {
     auto origType = dyn_cast<RankedTensorType>(op->getResult(i).getType());
     if (!origType)
       continue;
-    auto newType = origType.cloneWithEncoding(encoding);
+    RankedTensorType newType = origType.cloneWithEncoding(encoding);
     newOp->getResult(i).setType(newType);
   }
   return newOp;
-};
+}
 
 Operation *LayoutRematerialization::rewriteOp(Operation *op,
                                               Attribute encoding) {
   opToDelete.insert(op);
   OpBuilder rewriter(op);
+
   if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<OpTrait::Elementwise>()) {
     Operation *newOp = cloneElementwise(rewriter, op, encoding);
@@ -1533,13 +1531,13 @@ Operation *LayoutRematerialization::rewriteOp(Operation *op,
     }
     return newOp;
   }
+
   llvm::report_fatal_error("unexpected op in rewrite");
-  return (mlir::Operation *)nullptr;
-};
+  return nullptr;
+}
 
 void LayoutRematerialization::forwardPropagateRemat(
     DenseMap<Value, Attribute> &valuesToPropagate) {
-
   if (valuesToPropagate.empty())
     return;
 
@@ -1559,8 +1557,7 @@ void LayoutRematerialization::forwardPropagateRemat(
     regQueue.pop_front();
     for (Operation &op : currentRegion->getOps()) {
       bool needRewrite = false;
-      SmallVector<Value> results = op.getResults();
-      for (Value result : results) {
+      for (Value result : op.getResults()) {
         if (isa<scf::ForOp, scf::IfOp>(op)) {
           // The scf::ForOp and scf::IfOp are handled separately in
           // rewriteSlice. Just skip those two ops here.
@@ -1569,10 +1566,10 @@ void LayoutRematerialization::forwardPropagateRemat(
         // Only care about value in the given set.
         if (!valuesToPropagate.contains(result))
           continue;
-        auto layout = valuesToPropagate[result];
-        auto remtValue = getRematValue(result, layout);
+        Attribute layout = valuesToPropagate[result];
+        Value rematValue = getRematValue(result, layout);
         // If the value is already rematerialized, skip.
-        if (remtValue)
+        if (rematValue)
           continue;
         auto encoding = cast<RankedTensorType>(result.getType()).getEncoding();
         // If the encoding is already what we want skip.
@@ -1580,6 +1577,7 @@ void LayoutRematerialization::forwardPropagateRemat(
           continue;
         needRewrite = true;
       }
+
       if (needRewrite) {
         // Create the op with the new layout.
         rewriteOp(&op, valuesToPropagate[op.getResult(0)]);
@@ -1592,6 +1590,7 @@ void LayoutRematerialization::forwardPropagateRemat(
         Value newOperand = getRematValue(operand, valuesToPropagate[operand]);
         assertOp->setOperand(0, newOperand);
       }
+
       for (Region &R : op.getRegions())
         regQueue.push_back(&R);
     }
