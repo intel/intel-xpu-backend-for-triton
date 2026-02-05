@@ -637,7 +637,7 @@ run_benchmark_gemm() {
   python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_tensor_of_ptr_benchmark.py
 
   echo "GEMM with tensor descriptor:"
-  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_tensor_desc_benchmark.py
+  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_benchmark.py
 }
 
 run_benchmark_flash_attention() {
@@ -647,11 +647,8 @@ run_benchmark_flash_attention() {
   cd $TRITON_PROJ/benchmarks
   pip install .
 
-  echo "Forward - Default path:"
+  echo "Forward - Default path (with tensor descriptor):"
   python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
-
-  echo "Forward - with tensor descriptor:"
-  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_tensor_desc_benchmark.py
 
   echo "Forward - Advanced path:"
   TRITON_INTEL_ADVANCED_PATH=1 \
@@ -767,10 +764,16 @@ run_liger_install() {
 
   if ! [ -d "./Liger-Kernel" ]; then
     git clone https://github.com/linkedin/Liger-Kernel
+    cd Liger-Kernel
+    echo "Liger-Kernels commit: '$(git rev-parse HEAD)'"
+    git apply ../benchmarks/third_party/liger/liger-fix.patch --allow-empty
+    cd ..
   fi
 
   if ! pip list | grep "liger_kernel" ; then
-    pip install transformers 'pandas<3.0' datasets -e Liger-Kernel
+    # Liger requires transformers<5.0
+    # https://github.com/linkedin/Liger-Kernel/issues/978
+    pip install 'transformers<5.0' 'pandas<3.0' datasets -e Liger-Kernel
   fi
 }
 

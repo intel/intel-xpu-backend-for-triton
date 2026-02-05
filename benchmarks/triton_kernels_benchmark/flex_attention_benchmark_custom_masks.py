@@ -51,6 +51,24 @@ def natten_mask(_, __, q_idx, kv_idx):
     return hori_mask & vert_mask
 
 
+def count_natten_pairs(N):
+    count = 0
+
+    for q_idx in range(N):
+        q_x, q_y = get_x_y(q_idx)
+        kernel_x = min(max(q_x, K_W // 2), (G_W - 1) - K_W // 2)
+        kernel_y = min(max(q_y, K_H // 2), (G_H - 1) - K_H // 2)
+
+        for kv_idx in range(N):
+            kv_x, kv_y = get_x_y(kv_idx)
+            hori_mask = abs(kernel_x - kv_x) <= K_W // 2
+            vert_mask = abs(kernel_y - kv_y) <= K_H // 2
+            if hori_mask & vert_mask:
+                count += 1
+
+    return count
+
+
 def alibi_functional(score, _, h, q_idx, kv_idx):
     scale = torch.exp2(-((h + 1) * 8.0 / G_H))
     bias = (kv_idx - q_idx) * scale
@@ -99,8 +117,9 @@ def run_bench_paged(q, k, v, score_mod, _, __):
                           kernel_options=kernel_options)
 
 
-MASKS = ['NATTEN', 'Alibi', 'Noop', 'Softcap', 'PagedNoop']
 IS_B580 = '580' in torch.xpu.get_device_name()
+MASKS = ['NATTEN', 'Alibi', 'Noop', 'Softcap', 'PagedNoop']
+fa_kernel_mode = os.getenv('FA_KERNEL_MODE', 'fwd')
 
 
 # Kernel profiling for Backward mode is not working as expected:
@@ -112,13 +131,13 @@ IS_B580 = '580' in torch.xpu.get_device_name()
                 for z in ([4, 8, 16, 32] if not IS_B580 else [16, 32])
                 for (h, dhead) in [(16, 128), (32, 64)]
                 for mask in MASKS
-                for mode in [os.getenv('FA_KERNEL_MODE', 'fwd')]]  #
-        + [[4, 48, 1024, 64, mask, mode] for mask in MASKS for mode in [os.getenv('FA_KERNEL_MODE', 'fwd')]]  #
+                for mode in [fa_kernel_mode]]  #
+        + [[4, 48, 1024, 64, mask, mode] for mask in MASKS for mode in [fa_kernel_mode]]  #
         + [[z, h, 1024, dhead, mask, mode]
            for z in ([1, 2, 4, 8, 16, 32, 64] if not IS_B580 else [1, 2, 4, 8, 16])
            for (h, dhead) in [(8, 128), (32, 96), (4, 128)]
            for mask in MASKS
-           for mode in [os.getenv('FA_KERNEL_MODE', 'fwd')]],
+           for mode in [fa_kernel_mode]],
         line_arg='provider',
         line_vals=['triton'] + (['onednn'] if not IS_B580 else []),
         line_names=['Triton'] + (['OneDNN'] if not IS_B580 else []),
@@ -128,6 +147,9 @@ IS_B580 = '580' in torch.xpu.get_device_name()
         args={},
     ))
 def benchmark(Z, H, N_CTX, D_HEAD, MASK, MODE, provider):
+    print(f'Running case: {Z=}, {H=}, {N_CTX=}, {D_HEAD=}, {MASK=}, {MODE=}, {provider=}')
+    torch.xpu.empty_cache()
+
     # There is still performance variance for triton, probably caused by random choice of autotune config
     do_bench = benchmark_suite.get_do_bench(n_warmup=200, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
     assert MODE in ['fwd', 'bwd']
@@ -141,17 +163,18 @@ def benchmark(Z, H, N_CTX, D_HEAD, MASK, MODE, provider):
     score_mod = None
     requires_grad = True
     bench_func = run_bench_contiguous
+    num_pairs = None
 
-    # Maps MASK to a tuple: (mask_mod, score_mod, bench_func, requires_grad)
+    # Maps MASK to a tuple: (mask_mod, score_mod, bench_func, requires_grad, num_pairs)
     MASK_CONFIGS = {
-        'NATTEN': (natten_mask, None, run_bench_contiguous, True),
-        'Alibi': (None, alibi_functional, run_bench_contiguous, True),
-        'Noop': (noop_mask, None, run_bench_contiguous, True),
-        'Softcap': (None, tanh_softcap_functional, run_bench_contiguous, True),
-        'PagedNoop': (None, None, run_bench_paged, False),
+        'NATTEN': (natten_mask, None, run_bench_contiguous, True, count_natten_pairs(N_CTX)),
+        'Alibi': (None, alibi_functional, run_bench_contiguous, True, N_CTX * N_CTX),
+        'Noop': (noop_mask, None, run_bench_contiguous, True, N_CTX * N_CTX),
+        'Softcap': (None, tanh_softcap_functional, run_bench_contiguous, True, N_CTX * N_CTX),
+        'PagedNoop': (None, None, run_bench_paged, False, N_CTX * N_CTX),
     }
 
-    mask_mod, score_mod, bench_func, requires_grad = MASK_CONFIGS[MASK]
+    mask_mod, score_mod, bench_func, requires_grad, num_pairs = MASK_CONFIGS[MASK]
 
     dtype = torch.float16
     q = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype, requires_grad=requires_grad)
@@ -192,11 +215,11 @@ def benchmark(Z, H, N_CTX, D_HEAD, MASK, MODE, provider):
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 
-    tflops = lambda mean: 2 * 2 * Z * H * N_CTX * N_CTX * D_HEAD * (1e-12) / (mean * 1e-3)
+    tflops = lambda mean: 2 * 2 * Z * H * num_pairs * D_HEAD * (1e-12) / (mean * 1e-3)
     gbps = lambda mean: Z * H * (N_CTX * D_HEAD + N_CTX * D_HEAD) * 2 * 2 * (1e-9) / (mean * 1e-3)
 
     if MODE == 'bwd':
-        tflops = lambda mean: 2.5 * 2 * 2 * Z * H * N_CTX * N_CTX * D_HEAD * (1e-12) / (mean * 1e-3)
+        tflops = lambda mean: 2.5 * 2 * 2 * Z * H * num_pairs * D_HEAD * (1e-12) / (mean * 1e-3)
         gbps = lambda mean: 2.5 * Z * H * (N_CTX * D_HEAD + N_CTX * D_HEAD) * 2 * 2 * (1e-9) / (mean * 1e-3)
 
     return (gbps(mean), gbps(max_ms), gbps(min_ms)), (tflops(mean), tflops(max_ms), tflops(min_ms)), cv

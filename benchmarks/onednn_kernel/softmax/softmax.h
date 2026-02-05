@@ -80,6 +80,7 @@ dnnl::stream softmax_example(const int M, const int N, const int axis,
     std::cerr << "oneDNN error caught: " << std::endl
               << "\tStatus: " << dnnl_status2str(e.status) << std::endl
               << "\tMessage: " << e.what() << std::endl;
+    throw;
   }
 }
 #endif // TRITONBENCHMARK_ONEDNN_SOFTMAX_H
