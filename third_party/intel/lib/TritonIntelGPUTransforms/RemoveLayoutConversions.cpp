@@ -228,7 +228,7 @@ private:
   Operation *rewriteOp(Operation *op, Attribute encoding);
   void forwardPropagateRemat(DenseMap<Value, Attribute> &values);
 
-  void updateRematMapping(const SmallVector<std::tuple<Value, Value>> &values);
+  void updateRematMapping(SmallVector<std::tuple<Value, Value>> &values);
   void reduceLoopCarriedValues();
 
   // Existing tuples of (value, layout) that needs to be updated when recreating
@@ -331,11 +331,13 @@ void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
       continue;
     bool hasChanged = false;
     for (auto encoding : info.encodings) {
-      Attribute dstEncoding = inferDstEncoding(op, encoding);
+      Attribute dstEncoding;
       if (isa<tt::StoreOp, ttg::ConvertLayoutOp>(op)) {
         // Try to remove the layout conversion by making the dst encoding match
         // the source encoding.
         dstEncoding = encoding;
+      } else {
+        dstEncoding = inferDstEncoding(op, encoding);
       }
       if (dstEncoding)
         hasChanged |= layouts[value].encodings.insert(dstEncoding);
@@ -437,9 +439,9 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
 
 void LayoutPropagation::propagateLayout() {
   SmallVector<Value> queue;
-  for (auto it : layouts)
+  for (auto it : layouts) {
     queue.push_back(it.first);
-
+  }
   while (!queue.empty()) {
     Value currentValue = queue.back();
     LayoutInfo info = layouts[currentValue];
@@ -1056,7 +1058,7 @@ bool canBeRemat(Operation *op) {
 }
 
 void LayoutRematerialization::updateRematMapping(
-    const SmallVector<std::tuple<Value, Value>> &values) {
+    SmallVector<std::tuple<Value, Value>> &values) {
   for (auto [old, newV] : values) {
     auto it = mappedValues.find(old);
     if (it != mappedValues.end()) {
@@ -1556,23 +1558,23 @@ void LayoutRematerialization::forwardPropagateRemat(
     Region *currentRegion = regQueue.front();
     regQueue.pop_front();
     for (Operation &op : currentRegion->getOps()) {
+      // The scf::ForOp and scf::IfOp are handled separately in
+      // rewriteSlice. Just skip those two ops here.
+      if (isa<scf::ForOp, scf::IfOp>(op))
+        continue;
+
       bool needRewrite = false;
       for (Value result : op.getResults()) {
-        if (isa<scf::ForOp, scf::IfOp>(op)) {
-          // The scf::ForOp and scf::IfOp are handled separately in
-          // rewriteSlice. Just skip those two ops here.
-          break;
-        }
         // Only care about value in the given set.
         if (!valuesToPropagate.contains(result))
           continue;
         Attribute layout = valuesToPropagate[result];
         Value rematValue = getRematValue(result, layout);
-        // If the value is already rematerialized, skip.
+        // If the value is already rematerialized, skip it.
         if (rematValue)
           continue;
         auto encoding = cast<RankedTensorType>(result.getType()).getEncoding();
-        // If the encoding is already what we want skip.
+        // If the encoding is already what we want, skip it.
         if (encoding == layout)
           continue;
         needRewrite = true;
@@ -1832,23 +1834,25 @@ void LayoutRematerialization::backwardRematerialization(
   int64_t convertLayoutCost = 32 * convertLayoutBytes * 3;
   int64_t rematerialisationCost = 0;
 
+  // Collect rematerialization candidates for forward propagation.
   DenseMap<Value, Attribute> forwardPropagateCandidates;
-  // Evaluate single-use status for every operation in slice
   for (Operation *op : sliceOps) {
-    auto dialect = op->getDialect();
-    if (!isOpSingleUse(op)) {
-      for (Value result : op->getResults()) {
-        for (Operation *user : result.getUsers()) {
-          if (user == convertOp) {
-            continue;
-          }
-          Attribute encoding = layout[result];
-          if (encoding)
-            forwardPropagateCandidates[result] = encoding;
-          break;
-        }
+    if (isOpSingleUse(op))
+      continue;
+    for (Value result : op->getResults()) {
+      for (Operation *user : result.getUsers()) {
+        if (user == convertOp)
+          continue;
+        Attribute encoding = layout[result];
+        if (encoding)
+          forwardPropagateCandidates[result] = encoding;
+        break;
       }
     }
+  }
+
+  for (Operation *op : sliceOps) {
+    auto dialect = op->getDialect();
     if (isOpSingleUse(op)) {
       // when we rematerialise, this operation does not get duplicated
       // so it does not contribute to our cost model:
@@ -1906,7 +1910,7 @@ void LayoutRematerialization::backwardRematerialization(
   // 3. Rewrite the slice.
   rewriteSlice(slice, layout, convertOp);
 
-  // 4. Forward propagate rematerial values created during backward slice.
+  // 4. Forward propagate remat values created during backward propagation.
   forwardPropagateRemat(forwardPropagateCandidates);
 }
 
