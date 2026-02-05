@@ -20,7 +20,7 @@ module attributes {"ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 32 : i32
     %6 = arith.extsi %5 : tensor<2x2048xi32, #blocked> to tensor<2x2048xi64, #blocked>
     %7 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<2x2048x!tt.ptr<f16>, #blocked>
     %8 = tt.addptr %7, %6 : tensor<2x2048x!tt.ptr<f16>, #blocked>, tensor<2x2048xi64, #blocked>
-    // COM: the following conversion layout should be backward to tt.assert.
+    // COM: the following conversion should be removed because the layout used by the load operation is backward propagated.
     %9 = ttg.convert_layout %8 : tensor<2x2048x!tt.ptr<f16>, #blocked> -> tensor<2x2048x!tt.ptr<f16>, #blocked1>
     %10 = tt.load %9 evictionPolicy = evict_last : tensor<2x2048x!tt.ptr<f16>, #blocked1>
     tt.print " " {hex = false, isSigned = array<i32: 0>} : %10 : tensor<2x2048xf16, #blocked1>
