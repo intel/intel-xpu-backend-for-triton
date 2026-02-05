@@ -484,6 +484,7 @@ class CMakeBuild(build_ext):
             "-DTRITON_CODEGEN_BACKENDS=" + ';'.join([b.name for b in backends if not b.is_external]),
             "-DTRITON_PLUGIN_DIRS=" + ';'.join([b.src_dir for b in backends if b.is_external]),
             "-DTRITON_EXT_DIRS=" + os.getenv("TRITON_EXT_DIRS", ""),
+            "-DTRITON_EXT_NAMES=" + os.getenv("TRITON_EXT_NAMES", ""),
             "-DTRITON_WHEEL_DIR=" + wheeldir
         ]
         if lit_dir is not None:
