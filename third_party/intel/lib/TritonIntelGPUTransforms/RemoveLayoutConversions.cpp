@@ -258,7 +258,7 @@ void LayoutRematerialization::addRematValue(Value old, Attribute encoding,
 // Remove unneeded values now that we are done with the rematMapping.
 void LayoutRematerialization::cleanup() {
   for (Operation *op : llvm::reverse(opToDelete))
-    if (op->getUsers().empty())
+    if (op->use_empty())
       op->erase();
 }
 
