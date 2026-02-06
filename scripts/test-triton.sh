@@ -573,38 +573,21 @@ run_tutorial_tests() {
   echo "**** Running Triton Tutorial tests           ******"
   echo "***************************************************"
   python -m pip install matplotlib 'pandas<3.0' tabulate -q
-  cd $TRITON_PROJ/python/tutorials
 
-  tutorials=(
-    "01-vector-add"
-    "02-fused-softmax"
-    "03-matrix-multiplication"
-    "04-low-memory-dropout"
-    "05-layer-norm"
-    "06-fused-attention"
-    "07-extern-functions"
-    "08-grouped-gemm"
-    "09-persistent-matmul"
-    "10-experimental-block-pointer"
-  )
+  cd $TRITON_PROJ/python/test/tutorials
+
   if [ "${TEST_TUTORIAL_FA:-false}" = true ]; then
-    tutorials=(
-      "06-fused-attention"
-    )
-
     if [ -n "${FA_CONFIG:-}" ]; then
-      # Containst specific config for Fused attention tutorial
+      # contains space-separated VAR=VALUE pairs
       export $FA_CONFIG
     fi
+
+    TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=tutorial \
+      run_pytest_command -vvv --device xpu test_tutorials.py -k "test_tutorial[06-fused-attention]"
+  else
+    TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=tutorial \
+      run_pytest_command -vvv --device xpu test_tutorials.py
   fi
-
-  for tutorial in "${tutorials[@]}"; do
-    if [[ -f $TRITON_TEST_SELECTFILE ]] && ! grep -qF "$tutorial" "$TRITON_TEST_SELECTFILE"; then
-        continue
-    fi
-
-    run_tutorial_test "$tutorial"
-  done
 }
 
 run_microbench_tests() {
