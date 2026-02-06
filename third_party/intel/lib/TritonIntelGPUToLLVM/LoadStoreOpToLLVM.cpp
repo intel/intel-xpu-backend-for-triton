@@ -24,6 +24,8 @@ using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 using namespace mlir::triton::gpu::intel;
 
+// #define DEBUG_TYPE "triton-intel-gpu-to-llvm" its ttgpu_to_llvm
+
 #define S(v) StringAttr::get(ctx, (v))
 
 #if defined(_MSC_VER) && !defined(__clang__)
@@ -301,6 +303,206 @@ struct LoadStoreConversionBase {
     }
 
     return std::make_tuple(ptrElems, maskElems, otherElems);
+  }
+
+  std::tuple<SmallVector<Value>, SmallVector<Value>> buildMasksFromBlockPtr(
+      Location loc, Value blockPointerStruct, RankedTensorType tensorType,
+      Type valueElemTy, ConversionPatternRewriter &rewriter,
+      ArrayRef<int32_t> boundaryCheck = {},
+      std::optional<PaddingOption> padding = std::nullopt) const {
+
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    size_t rank = tensorType.getRank();
+    // The block pointer struct is expected to have the following layout:
+    //    Struct {
+    //      Value offset[rank];
+    //      Value shape[rank];
+    //      Value stride[rank];
+    //      Value base;
+    //    }
+    // All the values are decomposed by `unpackLLElements` into a vector.
+    // Defines the indices for the block pointer struct.
+    const unsigned blockOffset = 0, blockShape = 1 * rank,
+                   blockStride = 2 * rank, blockBase = 3 * rank;
+    const SmallVector<Value> &blockPtr =
+        unpackLLElements(loc, blockPointerStruct, rewriter);
+    const unsigned numElems = getTotalElemsPerThread(tensorType);
+
+    // Get the LLVM values for indices in block
+    auto indices = emitIndices(loc, rewriter, targetInfo,
+                               tensorType.getEncoding(), tensorType, true);
+
+    auto linearize =
+        [](ArrayRef<Value> A, ArrayRef<Value> B, Value init,
+           std::function<Value(const Value &, const Value &, const Value &)>
+               linearizeFunc) {
+          unsigned rank = A.size();
+          Value accumulate = init;
+          if (rank > 0) {
+            for (auto [a, b] : llvm::zip(A, B))
+              accumulate = linearizeFunc(a, b, accumulate);
+          }
+          return accumulate;
+        };
+
+    SetVector<unsigned> boundaryProtect(boundaryCheck.begin(),
+                                        boundaryCheck.end());
+    SmallVector<Value> maskElems;
+    for (unsigned i = 0; i < numElems; ++i) {
+      SmallVector<Value> index = indices[i];
+      SmallVector<Value> indicesInTensor(rank);
+      for (unsigned j = 0; j < rank; ++j)
+        indicesInTensor[j] = b.add(index[j], blockPtr[blockOffset + j]);
+
+      if (boundaryProtect.size() > 0) {
+        // Get the LLVM values for mask
+        unsigned dim = 0;
+        maskElems.push_back(linearize(
+            indicesInTensor,
+            {blockPtr.begin() + blockShape, blockPtr.begin() + blockStride},
+            b.int_val(1, 1),
+            [&](const Value &index, const Value &shape, const Value &mask) {
+              if (boundaryProtect.contains(dim++)) {
+                // mask = mask && (index < shape) && idx >= 0
+                auto is_pos_idx = b.icmp_sge(index, b.i32_val(0));
+                return b
+                    .and_(
+                        b.and_(b.icmp_slt(index, b.trunc(i32_ty, shape)), mask),
+                        is_pos_idx)
+                    .getResult();
+              }
+
+              return mask;
+            }));
+      }
+    }
+
+    // Get the LLVM values for `other`
+    SmallVector<Value> otherElems;
+    if (padding) {
+      Value other;
+      switch (*padding) {
+      case PaddingOption::PAD_ZERO:
+        other = LLVM::ConstantOp::create(rewriter, loc, valueElemTy,
+                                         rewriter.getZeroAttr(valueElemTy));
+
+        break;
+      case PaddingOption::PAD_NAN: {
+        assert(!valueElemTy.isIntOrIndex() &&
+               "Expect element type to be non-integer type");
+        auto apNaN = llvm::APFloat::getNaN(
+            cast<FloatType>(valueElemTy).getFloatSemantics());
+        other =
+            LLVM::ConstantOp::create(rewriter, loc, valueElemTy,
+                                     rewriter.getFloatAttr(valueElemTy, apNaN));
+      } break;
+      }
+
+      for (unsigned i = 0; i < numElems; ++i)
+        otherElems.push_back(other);
+    }
+
+    return std::make_tuple(maskElems, otherElems);
+  }
+
+  std::tuple<Value, Value> buildVectorizedMasksFromBlockPtr(
+      Location loc, Value blockPointerStruct, RankedTensorType tensorType,
+      Type valueElemTy, ConversionPatternRewriter &rewriter,
+      ArrayRef<int32_t> boundaryCheck = {},
+      std::optional<PaddingOption> padding = std::nullopt) const {
+
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    size_t rank = tensorType.getRank();
+    // The block pointer struct is expected to have the following layout:
+    //    Struct {
+    //      Value offset[rank];
+    //      Value shape[rank];
+    //      Value stride[rank];
+    //      Value base;
+    //    }
+    // All the values are decomposed by `unpackLLElements` into a vector.
+    // Defines the indices for the block pointer struct.
+    const unsigned blockOffset = 0, blockShape = 1 * rank,
+                   blockStride = 2 * rank, blockBase = 3 * rank;
+    const SmallVector<Value> &blockPtr =
+        unpackLLElements(loc, blockPointerStruct, rewriter);
+    const unsigned numElems = getTotalElemsPerThread(tensorType);
+
+    // Get the LLVM values for indices in block
+    auto indices = emitIndices(loc, rewriter, targetInfo,
+                               tensorType.getEncoding(), tensorType, true);
+
+    Value vectorMask = b.vec_splat_i1_cons(numElems, 1);
+    SmallVector<Value> vectorIndicesInTensor(rank);
+    for (auto i = 0; i < rank; ++i) {
+      vectorIndicesInTensor[i] = b.undef(vec_ty(i32_ty, numElems));
+    }
+
+    SetVector<unsigned> boundaryProtect(boundaryCheck.begin(),
+                                        boundaryCheck.end());
+    for (unsigned i = 0; i < numElems; i++) {
+      SmallVector<Value> index = indices[i];
+      for (unsigned k = 0; k < rank; ++k) {
+        Value idx = b.add(index[k], blockPtr[blockOffset + k]);
+        vectorIndicesInTensor[k] =
+            b.insert_element(vectorIndicesInTensor[k], idx, b.i32_val(i));
+      }
+    }
+
+    SmallVector<Value> shapeCons(rank);
+    for (auto k = 0; k < rank; ++k) {
+      auto shape_cons = (k == 0) ? blockPtr.begin() + blockShape
+                                 : blockPtr.begin() + blockStride;
+      auto undefOp = b.undef(vec_ty(i64_ty, numElems));
+      shapeCons[k] = undefOp;
+      shapeCons[k] = b.insert_element(shapeCons[k], *shape_cons, b.i32_val(0));
+      SmallVector<int32_t> mask(numElems, 0);
+      shapeCons[k] = LLVM::ShuffleVectorOp::create(
+          rewriter, loc, vec_ty(i64_ty, numElems), shapeCons[k], undefOp,
+          rewriter.getDenseI32ArrayAttr(mask));
+    }
+
+    if (boundaryProtect.size() > 0) {
+      for (unsigned k = 0; k < rank; ++k) {
+        if (boundaryProtect.contains(k)) {
+          auto is_pos_idx = b.icmp_sge(vectorIndicesInTensor[k],
+                                       b.vec_splat_i32_cons(numElems, 0));
+          auto is_within_shape =
+              b.icmp_slt(vectorIndicesInTensor[k],
+                         b.trunc(vec_ty(i32_ty, numElems), shapeCons[k]));
+          vectorIndicesInTensor[k] = b.and_(is_pos_idx, is_within_shape);
+        }
+      }
+      for (unsigned k = 0; k < rank; ++k) {
+        vectorMask = b.and_(vectorMask, vectorIndicesInTensor[k]);
+      }
+    }
+
+    // Get the LLVM values for `other`
+    Value vectorOther;
+    if (padding) {
+      Attribute other;
+      switch (*padding) {
+      case PaddingOption::PAD_ZERO:
+        other = rewriter.getZeroAttr(valueElemTy);
+        break;
+      case PaddingOption::PAD_NAN: {
+        assert(!valueElemTy.isIntOrIndex() &&
+               "Expect element type to be non-integer type");
+        auto apNaN = llvm::APFloat::getNaN(
+            cast<FloatType>(valueElemTy).getFloatSemantics());
+        other = rewriter.getFloatAttr(valueElemTy, apNaN);
+      } break;
+      }
+
+      SmallVector<Attribute> otherElems(numElems, other);
+      vectorOther =
+          b.const_val(vec_ty(valueElemTy, numElems),
+                      DenseElementsAttr::get(
+                          VectorType::get(numElems, valueElemTy), otherElems));
+    }
+
+    return std::make_tuple(vectorMask, vectorOther);
   }
 
   // Ensure the operation doesn't have attributes that the IGC predicated
@@ -1356,10 +1558,6 @@ struct LoadOpToBlockIOConversion
   LogicalResult
   matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
-    // FIXME: Handle the case where padding is set to PAD_NAN (#5145).
-    if (op.getPadding() && op.getPadding() == PaddingOption::PAD_NAN)
-      return failure();
-
     if (!isBlockIOCandidate(op))
       return failure();
 
@@ -1467,6 +1665,7 @@ struct LoadOpToBlockIOConversion
 
     SmallVector<Value> maskElems;
     Value llMask = adaptor.getMask();
+
     // Get the LLVM values for mask
     if (llMask) {
       Value mask = op.getMask();
@@ -1880,6 +2079,33 @@ struct LoadOpToBlockIOConversion
               : numValuesPerLoad;
       unsigned numOperandsPerLoad = numValuesPerLoad / numValsPerDPASOperand;
 
+      Value vectorMask = nullptr;
+      Value vectorOther = nullptr;
+      SmallVector<Value> nanMaskElems;
+      SmallVector<Value> nanOtherElems;
+
+      if (otherElems.size() == 0 && op.getPadding() == PaddingOption::PAD_NAN) {
+        // create a vectorized mask to fill the out of bounds elements with NaN
+        if (isTensorPointerType(ptr.getType())) {
+          SmallVector<Value> ptrElems; // will discard
+          auto tensorType = cast<RankedTensorType>(op.getType());
+          Type valueElemTy =
+              typeConverter->convertType(getElementTypeOrSelf(op.getType()));
+
+          if (triton::tools::getBoolEnv(
+                  "TRITON_INTEL_ENABLE_NAN_VECTORIZED_BLOCK_IO")) {
+            std::tie(vectorMask, vectorOther) =
+                buildVectorizedMasksFromBlockPtr(
+                    loc, adaptor.getPtr(), tensorType, valueElemTy, rewriter,
+                    op.getBoundaryCheck(), PaddingOption::PAD_NAN);
+          } else {
+            std::tie(nanMaskElems, nanOtherElems) = buildMasksFromBlockPtr(
+                loc, adaptor.getPtr(), tensorType, valueElemTy, rewriter,
+                op.getBoundaryCheck(), PaddingOption::PAD_NAN);
+          }
+        }
+      }
+
       for (size_t opsIdx = 0; opsIdx < numOperandsPerLoad; ++opsIdx) {
         Value unpackedVal;
         if (numValsPerDPASOperand != numValuesPerLoad) {
@@ -1919,6 +2145,70 @@ struct LoadOpToBlockIOConversion
             Value falseVal = otherElems[registerIdx];
             other = b.insert_element(other, falseVal, b.i32_val(i));
           }
+          unpackedVal = b.select(pred, unpackedVal, other);
+        } else if (nanMaskElems.size() != 0) {
+          assert(nanMaskElems.size() == nanOtherElems.size() &&
+                 "Invalid size of the masks");
+
+          SmallVector<Attribute> constOtherElems;
+          for (size_t i = 0; i < numElemsPerUnpackedType; ++i) {
+            if (auto constOp =
+                    nanOtherElems[i].getDefiningOp<LLVM::ConstantOp>()) {
+              constOtherElems.push_back(constOp.getValue());
+            } else {
+              break;
+            }
+          }
+
+          Value other;
+          if (constOtherElems.size() == numElemsPerUnpackedType) {
+            Type unpackedElemType = getElementTypeOrSelf(unpackedType);
+            other = b.const_val(
+                unpackedType,
+                DenseElementsAttr::get(
+                    VectorType::get(numElemsPerUnpackedType, unpackedElemType),
+                    constOtherElems));
+          } else {
+            other = b.undef(unpackedType);
+          }
+          Value packedPred =
+              b.undef(VectorType::get(numElemsPerUnpackedType, i1_ty));
+          for (size_t i = 0; i < numElemsPerUnpackedType; ++i) {
+            unsigned registerIdx =
+                regMapping
+                    .apply(
+                        {{kRegister,
+                          elemIdx + opsIdx * numElemsPerUnpackedType + i}})[0]
+                    .second;
+            Value falseVal = nanOtherElems[registerIdx];
+            if (constOtherElems.size() != numElemsPerUnpackedType)
+              other = b.insert_element(other, falseVal, b.i32_val(i));
+            packedPred = b.insert_element(packedPred, nanMaskElems[registerIdx],
+                                          b.i32_val(i));
+          }
+
+          unpackedVal = b.select(packedPred, unpackedVal, other);
+        } else if (vectorMask) {
+          SmallVector<int32_t> registerIndicies(numElemsPerUnpackedType);
+          for (size_t i = 0; i < numElemsPerUnpackedType; ++i) {
+            registerIndicies[i] =
+                regMapping
+                    .apply(
+                        {{kRegister,
+                          elemIdx + opsIdx * numElemsPerUnpackedType + i}})[0]
+                    .second;
+          }
+
+          DenseI32ArrayAttr attr =
+              rewriter.getDenseI32ArrayAttr(registerIndicies);
+          Value pred = LLVM::ShuffleVectorOp::create(
+              rewriter, loc, vec_ty(i1_ty, numElemsPerUnpackedType), vectorMask,
+              vectorMask, attr);
+          Value other = LLVM::ShuffleVectorOp::create(
+              rewriter, loc,
+              vec_ty(getElementTypeOrSelf(vectorOther),
+                     numElemsPerUnpackedType),
+              vectorOther, vectorOther, attr);
           unpackedVal = b.select(pred, unpackedVal, other);
         }
 
