@@ -74,20 +74,18 @@ Operation *cloneElementwiseImpl(
 
 Value getValueAsImpl(
     Value value, Attribute encoding,
-    std::function<Value(Value)> getRewrittenValue,
+    std::function<Value(Value, Attribute)> getRewrittenValue,
     std::function<void(Value, Attribute, Value)> cacheRewrittenValue) {
   if (auto tensorType = dyn_cast<RankedTensorType>(value.getType())) {
-    Value rewrittenValue = getRewrittenValue(value);
-    if (rewrittenValue &&
-        cast<RankedTensorType>(rewrittenValue.getType()).getEncoding() ==
-            encoding)
+    Value rewrittenValue = getRewrittenValue(value, encoding);
+    if (cast<RankedTensorType>(rewrittenValue.getType()).getEncoding() ==
+        encoding)
       return rewrittenValue;
     OpBuilder rewriter(value.getContext());
-    rewriter.setInsertionPointAfterValue(value);
-    auto tmpType =
-        cast<RankedTensorType>(value.getType()).cloneWithEncoding(encoding);
-    Value converted =
-        ttg::ConvertLayoutOp::create(rewriter, value.getLoc(), tmpType, value);
+    rewriter.setInsertionPointAfterValue(rewrittenValue);
+    auto tmpType = tensorType.cloneWithEncoding(encoding);
+    Value converted = ttg::ConvertLayoutOp::create(rewriter, value.getLoc(),
+                                                   tmpType, rewrittenValue);
     cacheRewrittenValue(value, encoding, converted);
     return converted;
   }
@@ -642,7 +640,8 @@ Value LayoutPropagation::getRewrittenValue(Value value) {
 
 Value LayoutPropagation::getValueAs(Value value, Attribute encoding) {
   return getValueAsImpl(
-      value, encoding, [this](Value v) { return getRewrittenValue(v); },
+      value, encoding,
+      [this](Value v, Attribute) { return getRewrittenValue(v); },
       [](Value v, Attribute enc, Value converted) {
         // TODO: we could cache the conversion.
       });
@@ -1512,7 +1511,13 @@ void LayoutRematerialization::propagateLayout(
 Value LayoutRematerialization::getValueAs(Value value, Attribute encoding) {
   return getValueAsImpl(
       value, encoding,
-      [this, encoding](Value v) { return getRematValue(v, encoding); },
+      [this](Value v, Attribute enc) {
+        Value rematVale = getRematValue(v, enc);
+        if (rematVale)
+          return rematVale;
+        else
+          return v;
+      },
       [this](Value v, Attribute enc, Value converted) {
         addRematValue(v, enc, converted);
       });
