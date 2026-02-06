@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -466,4 +467,28 @@ extern "C" EXPORT_FUNC PyObject *has_opencl_extension(int device_id,
   if (device.ext_oneapi_supports_cl_extension(extension))
     Py_RETURN_TRUE;
   Py_RETURN_FALSE;
+}
+extern "C" EXPORT_FUNC PyObject *sycl_queue_memset(PyObject *args) {
+  PyObject *py_queue;
+  uint64_t ptr, count;
+  int value;
+
+  if (!PyArg_ParseTuple(args, "OKiK", &py_queue, &ptr, &value, &count)) {
+    return NULL;
+  }
+
+  sycl::queue *queue = static_cast<sycl::queue *>(PyLong_AsVoidPtr(py_queue));
+  if (!queue) {
+    zeConstructError(__FILE__, __LINE__, "Invalid SYCL queue pointer");
+    return NULL;
+  }
+
+  try {
+    queue->memset((void *)ptr, value, (size_t)count);
+  } catch (const sycl::exception &e) {
+    zeConstructError(__FILE__, __LINE__, e.what());
+    return NULL;
+  }
+
+  Py_RETURN_NONE;
 }

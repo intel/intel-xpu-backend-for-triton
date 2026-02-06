@@ -52,6 +52,7 @@ class TT_AMDGPU_Op<string mnemonic, list<Trait> traits = []> :
 //
 def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
 def SharedMemory : Resource<"::mlir::triton::gpu::SharedMemory">;
+def L2Cache : Resource<"::mlir::triton::amd::L2Cache">;
 
 //===----------------------------------------------------------------------===//
 // ExtractSliceOp
@@ -644,7 +645,7 @@ def ScaledUpcastFp8Op : TT_AMDGPU_Op<"scaled_upcast_fp8", [
 
   let arguments = (ins
     RankedTensorOf<[AnyTypeOf<[F8E4M3FN, F8E5M2]>]>:$input,
-    RankedTensorOf<[BF16, I8]>:$scale);
+    RankedTensorOf<[AnyTypeOf<[BF16, I8]>]>:$scale);
   let results = (outs RankedTensorOf<[AnyTypeOf<[F16, BF16, F32]>]>:$output);
 
   let assemblyFormat = [{
@@ -778,7 +779,7 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
     Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
     Variadic<I32>:$indices,
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result,
-    I1:$pred,
+    I32:$pred,
     Optional<TTG_MemDescType>:$barrier
   );
 
@@ -831,6 +832,86 @@ def AsyncTDMCopyLocalToGlobalOp : TT_AMDGPU_Op<"async_tdm_copy_local_to_global",
 }
 
 //===----------------------------------------------------------------------===//
+// AsyncTDMScatterOp
+//===----------------------------------------------------------------------===//
+
+def AsyncTDMScatterOp : TT_AMDGPU_Op<"async_tdm_scatter"> {
+  let summary = "Scatter data from local memory to non-contiguous global memory rows asynchronously";
+
+  let description = [{
+    This operation scatters data from local memory to non-contiguous rows in global
+    memory using TDM scatter mode.
+    Unlike the regular async_tdm_copy_local_to_global which copies to contiguous memory,
+    this operation uses dst_row_indices to specify which rows in global memory to write to.
+
+    The descriptor must be 2D. The dst_row_indices specify which rows in global memory
+    to write to. The element type of dst_row_indices determines the index size:
+    - I16: 16-bit indices, up to 16 rows per instruction
+    - I32: 32-bit indices, up to 8 rows per instruction
+    If more rows are needed, multiple TDM instructions will be issued.
+
+    The dst_col_offset specifies the starting column in the destination tensor for
+    all scattered rows.
+  }];
+
+  let arguments = (ins
+    Arg<TT_TensorDescType, "", [MemWrite<GlobalMemory>]>:$desc,
+    TensorOf<[I16, I32]>:$dst_row_indices,
+    I32:$dst_col_offset,
+    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
+    Optional<TTG_MemDescType>:$barrier
+  );
+  let results = (outs TTG_AsyncToken:$retToken);
+
+  let assemblyFormat = [{
+    $desc `[` $dst_row_indices `,` $dst_col_offset `]` `from` $src (`,` `barrier` `=` $barrier^)?
+    attr-dict `:` qualified(type($dst_row_indices)) `,` qualified(type($src)) (`,` qualified(type($barrier))^)? `->` qualified(type($desc))
+  }];
+
+  let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// AsyncTDMGatherOp
+//===----------------------------------------------------------------------===//
+
+def AsyncTDMGatherOp : TT_AMDGPU_Op<"async_tdm_gather"> {
+  let summary = "Gather data from non-contiguous global memory rows to local memory asynchronously";
+
+  let description = [{
+    This operation gathers data from non-contiguous rows in global memory to local
+    memory using TDM gather mode.
+    Unlike the regular async_tdm_copy_global_to_local which reads from contiguous memory,
+    this operation uses src_row_indices to specify which rows in global memory to read from.
+
+    The descriptor must be 2D. The src_row_indices specify which rows in global memory
+    to read from. The element type of src_row_indices determines the index size:
+    - I16: 16-bit indices, up to 16 rows per instruction
+    - I32: 32-bit indices, up to 8 rows per instruction
+    If more rows are needed, multiple TDM instructions will be issued.
+
+    The src_col_offset specifies the starting column in the source tensor for
+    all gathered rows.
+  }];
+
+  let arguments = (ins
+    Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
+    TensorOf<[I16, I32]>:$src_row_indices,
+    I32:$src_col_offset,
+    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$dst,
+    Optional<TTG_MemDescType>:$barrier
+  );
+  let results = (outs TTG_AsyncToken:$token);
+
+  let assemblyFormat = [{
+    $desc `[` $src_row_indices `,` $src_col_offset `]` `to` $dst (`,` `barrier` `=` $barrier^)?
+    attr-dict `:` qualified(type($src_row_indices)) `,` qualified(type($dst)) (`,` qualified(type($barrier))^)? `->` qualified(type($desc))
+  }];
+
+  let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
 // AsyncTDMWait
 //===----------------------------------------------------------------------===//
 
@@ -839,12 +920,74 @@ def AsyncTDMWait : TT_AMDGPU_Op<"async_tdm_wait", [MemWaitOpTrait]> {
   let arguments = (ins Variadic<TTG_AsyncToken>:$asyncToken, I32Attr:$num);
   let description = [{
     This operation waits until there are less than or equal to the given number
-    of outstanding TDM operations, including both loads and stores. This is
-    necessary to ensure that data is available in the LDS before it is used.
+    of outstanding async TDM operations.
+    This is necessary to ensure that data is available in the LDS (load, gather)
+    or HBM (store, scatter) before it is used.
+
+    This operation counts the number of TDM IR operations (AsyncTDMCopyGlobalToLocalOp,
+    AsyncTDMCopyLocalToGlobalOp, AsyncTDMScatterOp, AsyncTDMGatherOp).
   }];
   let results = (outs TTG_AsyncToken:$retToken);
   let assemblyFormat = "$asyncToken attr-dict";
 }
+
+def AsyncTDMIntrinsicWait : TT_AMDGPU_Op<"async_tdm_intrinsic_wait", [MemWaitOpTrait]> {
+  let summary = "Wait until there are less than or equal to the given number of outstanding TDM intrinsics";
+  let arguments = (ins Variadic<TTG_AsyncToken>:$asyncToken, I32Attr:$count);
+  let description = [{
+    This operation waits until there are less than or equal to the given number
+    of outstanding TDM intrinsics (assembly instructions). This is necessary to
+    ensure that data is available in LDS (load, gather) or HBM (store, scatter)
+    before it is used.
+
+    Unlike AsyncTDMWait which counts IR operations, this operation counts the
+    actual number of TDM assembly instructions (e.g., tensor_load_to_lds,
+    tensor_store_from_lds) that are emitted. Which is required for the lowering
+    to LLVM.
+  }];
+  let results = (outs TTG_AsyncToken:$retToken);
+  let assemblyFormat = "($asyncToken^)? attr-dict";
+}
+
+//===----------------------------------------------------------------------===//
+// TDMPrefetchOp
+//===----------------------------------------------------------------------===//
+
+def TDMPrefetchOp : TT_AMDGPU_Op<"tdm_prefetch", [
+    MemoryEffects<[MemWrite<L2Cache>]>,
+    DeclareOpInterfaceMethods<InferTypeOpInterface>
+  ]> {
+  let summary = "Prefetch data based on a TDM descriptor from global memory to L2.";
+
+  let description = [{
+    This operation prefetches data from global memory to L2. It is analogous to the AsyncTDMCopyGlobalToLocalOp,
+    but it does not copy the data to local memory and instead only prefetches the data into the L2 cache.
+    Speculative prefetches can generate more efficient assembly because they do not require out of bounds checks.
+    However, they are dropped by the hardware in case the virtual address translation is not already cached at CU level.
+  }];
+
+  let arguments = (ins
+    Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
+    Variadic<I32>:$indices,
+    I1:$pred,
+    BoolAttr:$speculative,
+    // Optional attribute (intended for testing) that, when set, causes the prefetch operation to return the computed offsets.
+    // This should not be used in production code and is only for validation or debugging purposes.
+    OptionalAttr<UnitAttr>:$returnOffsets
+  );
+
+  // Optional result type in case returnOffsets is set, see inferReturnTypes for more details (testing only).
+  let results = (outs Optional<TT_Tensor>:$maybeOffsets);
+
+  let assemblyFormat = [{
+    $desc `[` $indices `]` `,` $pred `,` `speculative` `=` $speculative
+    (`returnOffsets` $returnOffsets^)?
+    attr-dict `:` qualified(type($desc))
+    (`->` type($maybeOffsets)^)?
+  }];
+}
+
+
 
 //===----------------------------------------------------------------------===//
 // AsyncWait
@@ -981,6 +1124,36 @@ def AsyncCopyMbarrierArriveOp : TT_AMDGPU_Op<"async_copy_mbarrier_arrive"> {
   );
   let assemblyFormat = "$barrier attr-dict `:` qualified(type($barrier))";
   let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// ClusterBarrierSignalOp
+//===----------------------------------------------------------------------===//
+
+def ClusterBarrierArriveOp : TT_AMDGPU_Op<"cluster_barrier_arrive"> {
+  let summary = "Arrive at a cluster barrier";
+  let description = [{
+    Signals that the cluster has arrived at a barrier, used to synchronizing CTAs within a cluster.
+
+    See ClusterBarrierWaitOp for how to wait on the arrived cluster barrier.
+  }];
+  let hasVerifier = 1;
+  let assemblyFormat = "attr-dict";
+}
+
+//===----------------------------------------------------------------------===//
+// ClusterBarrierWaitOp
+//===----------------------------------------------------------------------===//
+
+def ClusterBarrierWaitOp : TT_AMDGPU_Op<"cluster_barrier_wait"> {
+  let summary = "Wait on a cluster barrier";
+  let description = [{
+    Waits for all CTAs of the same cluster to have arrived at a cluster barrier.
+    Arrive and wait operations must come in pairs. Waiting before arriving or arriving
+    more than once without a corresponding wait will result in undefined behavior.
+  }];
+  let hasVerifier = 1;
+  let assemblyFormat = "attr-dict";
 }
 
 #endif

@@ -8,6 +8,7 @@ from triton_kernels.tensor_details.layout_details.hopper_value import mxfp4_to_b
 from triton_kernels.tensor_details.layout_details.cdna4_scale import unswizzle_mx_scale_cdna4
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
+from triton_kernels.target_info import cuda_capability_geq
 from ._common import (
     compute_offsets,
     get_scaled_dot_format_string,
@@ -16,6 +17,11 @@ from ._common import (
     compute_pids,
 )
 
+
+@triton.jit
+def round_f32_to_tf32(x: tl.tensor):
+    ASM: tl.constexpr = "cvt.rna.tf32.f32 $0, $1;"
+    return tl.inline_asm_elementwise(ASM, "=r, r", [x], dtype=tl.float32, is_pure=True, pack=1)
 
 _matmul_repr = make_matmul_repr("_matmul", [0, 1, 2])
 @triton.jit(do_not_specialize=["TOKENS_PER_EXPT_FOR_ANNOTATION"],
@@ -74,6 +80,7 @@ def _matmul(
              UPCAST_INDICES: tl.constexpr = False,
              SWAP_XW: tl.constexpr = False,
              IS_EPILOGUE_QUANT_MXFP8: tl.constexpr = False,
+             FLATTEN_LOOPS: tl.constexpr = True, # Only relevant to persistent kernel
              pYPtrs=None,
              map_dst_coord=None,
              all_writes_issued=None,
@@ -114,7 +121,7 @@ def _matmul(
                          "mx_weight_ptr must be uint8 or fp8")
         tl.static_assert(WMxScale.dtype.element_ty == tl.uint8, "mx_scale_ptr must be uint8")
         tl.static_assert(BLOCK_K % MX_PACK_DIVISOR == 0, f"{BLOCK_K=} must be a multiple of {MX_PACK_DIVISOR=}")
-        tl.static_assert(SWIZZLE_MX_VALUE == "HOPPER_VALUE" or SWIZZLE_MX_VALUE is None, "Only Hopper swizzling is supported for values")
+        tl.static_assert(SWIZZLE_MX_VALUE == "HOPPER_VALUE" or SWIZZLE_MX_VALUE == "STRIDED", "Only Hopper swizzling is supported for values")
 
         if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
             tl.static_assert(is_w_mxfp4, "Only mxfp4 is supported for HOPPER swizzling")
@@ -147,8 +154,8 @@ def _matmul(
         W_N_DIVISOR: tl.constexpr = 1
         PACKED_BLOCK_K_W: tl.constexpr = BLOCK_K
         PACKED_BLOCK_N_W: tl.constexpr = BLOCK_N
-        tl.static_assert(SWIZZLE_MX_VALUE is None)
-        tl.static_assert(SWIZZLE_MX_SCALE is None)
+        tl.static_assert(SWIZZLE_MX_VALUE == "STRIDED")
+        tl.static_assert(SWIZZLE_MX_SCALE == "STRIDED")
     if is_x_microscaled:
         x_type: tl.constexpr = X.dtype.element_ty
         tl.static_assert(is_w_microscaled)
@@ -186,7 +193,6 @@ def _matmul(
         return
 
     pid_s, pid_m, pid_n, pid_k = compute_pids(pid, unpadded_m, grid_n, total_actual_tiles, XCD_SWIZZLE, GROUP_M, SPLIT_K)
-    loop_k = tl.multiple_of(tl.load(XSliceSizes + pid_s), X_SLICE_SIZES_DIVISIBILITY) if RAGGED_DIMENSION == "K" else K
 
     (
         expt_id, start_z, start_z_out,
@@ -320,14 +326,14 @@ def _matmul(
         if EVEN_K:
             mask_k_x = tl.full([BLOCK_K], True, dtype=tl.int1)
             mask_k_w = tl.full([PACKED_BLOCK_K_W], True, dtype=tl.int1)
-            if is_w_microscaled and SWIZZLE_MX_SCALE is None:
+            if is_w_microscaled and SWIZZLE_MX_SCALE == "STRIDED":
                 mask_k_scale = tl.full([PACKED_MX_BLOCK], True, dtype=tl.int1)
             if is_x_microscaled:
                 mask_x_k_scale = tl.full([MX_SCALE_BLOCK_K], True, dtype=tl.int1)
         else:
             mask_k_x = offs_k < x_k_limit
             mask_k_w = offs_w_k < w_k_limit
-            if is_w_microscaled and SWIZZLE_MX_SCALE is None:
+            if is_w_microscaled and SWIZZLE_MX_SCALE == "STRIDED":
                 # dividing by W_K_DIVISOR because w_k_limit is also already
                 # divided by W_K_DIVISOR (2 for mxfp4 wehre 2 fp4 values are
                 # packed per Byte along K)
@@ -339,6 +345,11 @@ def _matmul(
 
         x = tl.load(XPtrs, mask=mask_k_x[None, :], other=0.0)
         w = tl.load(WPtrs, mask=mask_k_w[:, None], other=0.0, cache_modifier=W_CACHE_MODIFIER)
+        if cuda_capability_geq(8, 0):
+            if x.dtype == tl.float32 and ALLOW_TF32:
+                x = round_f32_to_tf32(x)
+            if w.dtype == tl.float32 and ALLOW_TF32:
+                w = round_f32_to_tf32(w)
         if is_w_microscaled:
             x_format: tl.constexpr = get_scaled_dot_format_string(x.dtype)
             w_format: tl.constexpr = get_scaled_dot_format_string(w.dtype)

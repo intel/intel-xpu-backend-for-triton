@@ -6,8 +6,8 @@
 #include "llvm/IR/Operator.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Passes/PassBuilder.h"
-#include "llvm/Passes/PassPlugin.h"
 #include "llvm/Passes/StandardInstrumentations.h"
+#include "llvm/Plugins/PassPlugin.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
@@ -77,9 +77,8 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      gpu::intel::createTritonIntelGPUAccelerateMatmul);
   ADD_PASS_WRAPPER_0("add_rewrite_stack_ptr",
                      gpu::intel::createTritonIntelGPURewriteStackPtr);
-  ADD_PASS_OPTION_WRAPPER_2("add_pipeline",
-                            gpu::intel::createTritonIntelGPUPipeline, int,
-                            enum gpu::intel::SplitBarrierScope);
+  ADD_PASS_OPTION_WRAPPER_2(
+      "add_pipeline", gpu::intel::createTritonIntelGPUPipeline, int, bool);
   ADD_PASS_WRAPPER_0("add_allocate_shared_memory",
                      gpu::intel::createIntelAllocateSharedMemory);
   ADD_PASS_WRAPPER_0("add_remove_layout_conversions",
@@ -94,6 +93,9 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
       .def_readwrite("min_sg_size",
                      &gpu::intel::TritonAnnotateModuleOptions::minSGSize)
       .def_readwrite(
+          "support_subgroup_matrix_multiply_accumulate_bf8",
+          &gpu::intel::TritonAnnotateModuleOptions::supportDPASWithBF8)
+      .def_readwrite(
           "support_16bit_atomics",
           &gpu::intel::TritonAnnotateModuleOptions::support16BitAtomics)
       .def_readwrite("support_2d_block_io",
@@ -104,6 +106,9 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
       .def_readwrite(
           "support_bfloat16_conversion",
           &gpu::intel::TritonAnnotateModuleOptions::supportBF16Conversion)
+      .def_readwrite(
+          "support_predicated_io",
+          &gpu::intel::TritonAnnotateModuleOptions::supportPredicatedIO)
       .def_readwrite("support_subgroup_matrix_multiply_accumulate",
                      &gpu::intel::TritonAnnotateModuleOptions::supportDPAS)
       .def_readwrite(
@@ -121,7 +126,8 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
       .def_readwrite("threads_per_warp",
                      &gpu::intel::TritonAnnotateModuleOptions::threadsPerWarp)
       .def_readwrite("target_arch",
-                     &gpu::intel::TritonAnnotateModuleOptions::targetArch);
+                     &gpu::intel::TritonAnnotateModuleOptions::targetArch)
+      .def_readwrite("is_lts", &gpu::intel::TritonAnnotateModuleOptions::isLTS);
   ADD_PASS_OPTION_WRAPPER_1("add_triton_annotate_module",
                             gpu::intel::createTritonAnnotateModule,
                             gpu::intel::TritonAnnotateModuleOptions);
@@ -153,12 +159,6 @@ void init_triton_intel(py::module &&m) {
   init_triton_intel_passes_ttir(passes.def_submodule("ttir"));
   init_triton_intel_passes_ttgpuir(passes.def_submodule("ttgpuir"));
   init_triton_intel_passes_arith(passes.def_submodule("arith"));
-
-  // Split barrier scope enum
-  py::enum_<gpu::intel::SplitBarrierScope>(m, "SplitBarrierScope")
-      .value("none", gpu::intel::SplitBarrierScope::None)
-      .value("Workgroup", gpu::intel::SplitBarrierScope::Workgroup)
-      .value("Subgroup", gpu::intel::SplitBarrierScope::Subgroup);
 
   m.def("optimize_module", [](llvm::Module *mod,
                               const llvm::OptimizationLevel &opt,
@@ -390,10 +390,8 @@ void init_triton_intel(py::module &&m) {
       [](unsigned capRepeatCount, unsigned capExecutionSize,
          const std::vector<int64_t> &shape,
          unsigned numWarps) -> std::vector<unsigned> {
-        auto result = mlir::triton::gpu::intel::calculateWarpsPerTile(
+        auto result = gpu::intel::calculateWarpsPerTile(
             capRepeatCount, capExecutionSize, shape, numWarps);
-
-        // Explicitly convert SmallVector to std::vector for python
         return std::vector<unsigned>(result.begin(), result.end());
       },
       py::arg("capRepeatCount"), py::arg("capExecutionSize"), py::arg("shape"),
@@ -401,30 +399,18 @@ void init_triton_intel(py::module &&m) {
 
   m.def(
       "calculate_rep_cluster",
-      [](unsigned capRepeatCount, unsigned capSystolicDepth,
-         unsigned capExecutionSize, unsigned opsPerChan,
-         const std::vector<int64_t> &retShape, unsigned threadsPerWarp,
-         unsigned a_bitwidth, bool is_FP8, const std::vector<int64_t> &a_shape,
+      [](const gpu::intel::DpasEncodingAttr::DPASCapability &dpasCap,
+         unsigned opsPerChan, const std::vector<int64_t> &retShape,
+         unsigned threadsPerWarp, unsigned a_bitwidth, bool is_FP8,
+         const std::vector<int64_t> &a_shape,
          const std::vector<int64_t> &b_shape,
          const std::vector<unsigned> &warpsPerTile) -> std::vector<unsigned> {
-        // Convert std::vector to ArrayRef/SmallVector
-        llvm::ArrayRef<int64_t> retShapeRef(retShape);
-        llvm::ArrayRef<int64_t> aShapeRef(a_shape);
-        llvm::ArrayRef<int64_t> bShapeRef(b_shape);
-        llvm::SmallVector<unsigned> warpsPerTileVec(warpsPerTile.begin(),
-                                                    warpsPerTile.end());
-
-        auto result = mlir::triton::gpu::intel::calculateRepCluster(
-            capRepeatCount, capSystolicDepth, capExecutionSize, opsPerChan,
-            retShapeRef, threadsPerWarp, a_bitwidth, is_FP8, aShapeRef,
-            bShapeRef, warpsPerTileVec);
-
-        // Convert SmallVector to std::vector for Python
+        auto result = gpu::intel::calculateRepCluster(
+            dpasCap, opsPerChan, retShape, threadsPerWarp, a_bitwidth, is_FP8,
+            {a_shape}, {b_shape}, {warpsPerTile});
         return std::vector<unsigned>(result.begin(), result.end());
       },
-      py::arg("cap_repeat_count"), py::arg("cap_systolic_depth"),
-      py::arg("cap_execution_size"), py::arg("ops_per_chan"),
-      py::arg("ret_shape"), py::arg("threads_per_warp"), py::arg("a_bitwidth"),
-      py::arg("is_fp8"), py::arg("a_shape"), py::arg("b_shape"),
-      py::arg("warps_per_tile"));
+      py::arg("dpasCap"), py::arg("ops_per_chan"), py::arg("ret_shape"),
+      py::arg("threads_per_warp"), py::arg("a_bitwidth"), py::arg("is_fp8"),
+      py::arg("a_shape"), py::arg("b_shape"), py::arg("warps_per_tile"));
 }

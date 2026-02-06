@@ -431,9 +431,16 @@ Value convertAndCastTensor(PatternRewriter &rewriter, Value value,
     else if (oldElemType.isF32() && newElemType.isF16())
       castedTensor =
           arith::TruncFOp::create(rewriter, loc, castedType, convertedTensor);
-    else
-      castedTensor =
-          tt::FpToFpOp::create(rewriter, loc, castedType, convertedTensor);
+    else {
+      RoundingModeAttr rmode;
+      if (oldElemType.getIntOrFloatBitWidth() >
+          newElemType.getIntOrFloatBitWidth()) {
+        rmode =
+            RoundingModeAttr::get(rewriter.getContext(), RoundingMode::RTNE);
+      }
+      castedTensor = tt::FpToFpOp::create(rewriter, loc, castedType,
+                                          convertedTensor, rmode);
+    }
   }
   return castedTensor;
 }
@@ -1317,12 +1324,15 @@ public:
 
     auto warpsPerTile =
         warpsPerTileWMMA(dotOp, oldShape, numWarps, {mDim, nDim});
+    // TODO: Select tilesPerWarp in Triton
+    SmallVector<unsigned> tilesPerWarp(rank, 1u);
 
+    auto ctaLayout =
+        ttg::chooseWmmaCTALinearLayout(ctx, rank, warpsPerTile, tilesPerWarp);
     auto wmmaEnc = ttg::AMDWmmaEncodingAttr::get(
-        ctx, wmmaVersion, true, warpsPerTile, cgaLayout, {mDim, nDim, kDim});
-    auto wmmaPackedEnc =
-        ttg::AMDWmmaEncodingAttr::get(ctx, wmmaVersion, true, warpsPerTile,
-                                      cgaLayout, {mDim, nDim, kDim / 2});
+        ctx, wmmaVersion, ctaLayout, true, cgaLayout, {mDim, nDim, kDim});
+    auto wmmaPackedEnc = ttg::AMDWmmaEncodingAttr::get(
+        ctx, wmmaVersion, ctaLayout, true, cgaLayout, {mDim, nDim, kDim / 2});
 
     auto newRetType =
         RankedTensorType::get(oldShape, oldRetType.getElementType(), wmmaEnc);
@@ -1374,13 +1384,9 @@ public:
         shape = llvm::to_vector(scale.getType().getShape());
       }
 
-      // TODO: Select tilesPerWarp in Triton
-      SmallVector<unsigned> tilesPerWarp = {1, 1};
-
-      LinearLayout newLL = ttg::chooseScaledWmmaScaleLayout(
-          ctx, idx, shape, mDim, tilesPerWarp, warpsPerTile);
-      Attribute newScaleEncoding =
-          ttg::LinearEncodingAttr::get(ctx, std::move(newLL));
+      LinearLayout newLL =
+          ttg::chooseScaledWmmaScaleLayout(ctx, idx, shape, mDim, ctaLayout);
+      Attribute newScaleEncoding = ttg::LinearEncodingAttr::get(ctx, newLL);
       // Scale's data type is always i8
       auto newScaleType = RankedTensorType::get(shape, i8_ty, newScaleEncoding);
 
@@ -1469,8 +1475,7 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
 FailureOr<WmmaIntrinsic> chooseWmmaInstruction(Location loc, int wmmaVersion,
                                                RankedTensorType cType,
                                                Type aElemType, Type bElemType,
-                                               Type cElemType, int inputKSize,
-                                               int enforcedNonKDim) {
+                                               Type cElemType, int inputKSize) {
   // number of matrix elements along k dim per one WMMA instruction
   unsigned kDim = 0;
 
@@ -1481,55 +1486,45 @@ FailureOr<WmmaIntrinsic> chooseWmmaInstruction(Location loc, int wmmaVersion,
 
   unsigned mDim = 0;
   unsigned nDim = 0;
-  if (enforcedNonKDim != 0) {
-    mDim = nDim = enforcedNonKDim;
-  } else {
-    int minSize = std::min(M, N);
-    if (minSize >= 16) {
-      mDim = 16;
-      nDim = 16;
-    }
+  int minSize = std::min(M, N);
+  if (minSize >= 16) {
+    mDim = 16;
+    nDim = 16;
   }
-  if (mDim == 0 || nDim == 0)
-
-    return failure();
 
   FailureOr<WmmaIntrinsic> maybeWmmaIntrinsic = WmmaIntrinsic::selectFor(
       wmmaVersion, mDim, nDim, inputKSize, aElemType, bElemType, cElemType);
   if (failed(maybeWmmaIntrinsic))
-    return emitError(loc, "no matching matrix core intrinsic due to "
-                          "unsupported element type: A=")
-           << aElemType << " B=" << bElemType << " C=" << cElemType;
+    return emitError(loc, "no matching matrix core intrinsic ")
+           << "for wmma version " << wmmaVersion << " with instruction shape ["
+           << mDim << ", " << nDim << ", " << inputKSize
+           << "] and element types A=" << aElemType << ", B=" << bElemType
+           << ", C=" << cElemType << ". Check whether the mfma version,"
+           << " instruction shape, and data types "
+           << "are supported on the current AMD GPU architecture.";
 
   kDim = maybeWmmaIntrinsic->kDim;
   assert(kDim != 0);
-  assert(enforcedNonKDim != 0 || (M % mDim == 0 && N % nDim == 0));
-  // if inputKSize % kDim != 0 this layout will introduce data duplication,
-  // consider FMA dot is preferred, except cases Wmma layout is enforced.
-  if (enforcedNonKDim == 0 && inputKSize % kDim != 0)
-    return failure();
+  assert(M % mDim == 0 && N % nDim == 0);
   return maybeWmmaIntrinsic;
 }
 
 FailureOr<WmmaIntrinsic> chooseWmmaInstruction(tt::DotOp dot,
                                                OperandTypesVector operandTypes,
-                                               int wmmaVersion, int nonKDim) {
+                                               int wmmaVersion) {
 
-  return chooseWmmaInstruction(dot.getLoc(), wmmaVersion, dot.getC().getType(),
-                               operandTypes[0], operandTypes[1],
-                               operandTypes[2],
-                               dot.getA().getType().getShape().back(), nonKDim);
+  return chooseWmmaInstruction(
+      dot.getLoc(), wmmaVersion, dot.getC().getType(), operandTypes[0],
+      operandTypes[1], operandTypes[2], dot.getA().getType().getShape().back());
 }
 
 class BlockedToWMMA : public OpRewritePattern<tt::DotOp> {
   int wmmaVersion;
-  int nonKDim;
 
 public:
   BlockedToWMMA(MLIRContext *context, int wmmaVersion, int nonKDim,
                 PatternBenefit benefit = 1)
-      : OpRewritePattern(context, benefit), wmmaVersion(wmmaVersion),
-        nonKDim(nonKDim) {}
+      : OpRewritePattern(context, benefit), wmmaVersion(wmmaVersion) {}
 
   LogicalResult matchAndRewrite(tt::DotOp dotOp,
                                 PatternRewriter &rewriter) const override {
@@ -1556,7 +1551,7 @@ public:
 
     // check shape
     FailureOr<WmmaIntrinsic> wmmaInstr =
-        chooseWmmaInstruction(dotOp, operandTypes, wmmaVersion, nonKDim);
+        chooseWmmaInstruction(dotOp, operandTypes, wmmaVersion);
     if (failed(wmmaInstr)) {
       return rewriter.notifyMatchFailure(
           dotOp, "Unable to choose WMMA intrinsic for dot operation.");
@@ -1580,9 +1575,13 @@ public:
     // Use transposed wmma layout to enable larger vectorization for global
     // store instructions.
     bool isTransposed = true;
-    wmmaEnc = ttg::AMDWmmaEncodingAttr::get(ctx, wmmaVersion, isTransposed,
-                                            warpsPerTile, CGALayout,
-                                            {mDim, nDim, kDim});
+    SmallVector<unsigned> tilesPerWarp(retShape.size(), 1u);
+    auto ctaLayout = ttg::chooseWmmaCTALinearLayout(ctx, retShape.size(),
+                                                    warpsPerTile, tilesPerWarp);
+
+    wmmaEnc =
+        ttg::AMDWmmaEncodingAttr::get(ctx, wmmaVersion, ctaLayout, isTransposed,
+                                      CGALayout, {mDim, nDim, kDim});
 
     auto newRetType = RankedTensorType::get(retShape, operandTypes[3], wmmaEnc);
 

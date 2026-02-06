@@ -18,8 +18,9 @@ namespace {
 
 class CallOpConversion : public OpRewritePattern<LLVM::CallOp> {
 public:
-  CallOpConversion(mlir::MLIRContext *context, bool ftz)
-      : OpRewritePattern(context, 1), ftz(ftz) {}
+  CallOpConversion(mlir::MLIRContext *context,
+                   const AMD::TargetInfo &targetInfo, bool ftz)
+      : OpRewritePattern(context, 1), targetInfo(targetInfo), ftz(ftz) {}
 
   LogicalResult
   matchAndRewrite(LLVM::CallOp callOp,
@@ -52,9 +53,11 @@ private:
         rewriter, loc, rewriter.getF32Type(), input,
         LLVM::createConstantF32(loc, rewriter, log2e), defaultFlags);
 
-    const char *intrinsic = ftz ? "llvm.amdgcn.exp2.f32" : "llvm.exp2.f32";
-    return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, returnType,
-                                           mulOp->getResult(0));
+    Value arg = mulOp->getResult(0);
+    if (ftz)
+      return ROCDL::ROCDLExp2::create(rewriter, loc, returnType, arg);
+
+    return LLVM::Exp2Op::create(rewriter, loc, returnType, arg);
   }
 
   LogicalResult convertToLLVMIntrinsic(LLVM::CallOp callOp,
@@ -86,11 +89,14 @@ private:
                                            operands[0]);
       replacementOp =
           LLVM::FPToSIOp::create(rewriter, loc, returnType, op->getResult(0));
+    } else if (calleeName == "__triton_hip_rint") {
+      assert(operands.size() == 1);
+      replacementOp =
+          LLVM::RintOp::create(rewriter, loc, returnType, operands[0]);
     } else if (calleeName == "__triton_hip_fast_fdividef") {
       assert(operands.size() == 2);
-      const char *intrinsic = "llvm.amdgcn.rcp.f32";
-      auto rcpOp = LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic,
-                                                   returnType, operands[1]);
+      auto rcpOp =
+          ROCDL::ROCDLRcp::create(rewriter, loc, returnType, operands[1]);
 
       LLVM::FastmathFlagsAttr defaultFlags{};
       replacementOp =
@@ -166,13 +172,17 @@ private:
   }
 
 private:
+  const AMD::TargetInfo &targetInfo;
   bool ftz;
 };
 
 struct ConvertBuiltinFuncToLLVM
     : public triton::impl::ConvertBuiltinFuncToLLVMBase<
           ConvertBuiltinFuncToLLVM> {
-  explicit ConvertBuiltinFuncToLLVM(bool ftz) { this->ftz = ftz; }
+  ConvertBuiltinFuncToLLVM(StringRef targetArch, bool ftz) {
+    this->arch = targetArch.str();
+    this->ftz = ftz;
+  }
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -181,10 +191,11 @@ struct ConvertBuiltinFuncToLLVM
     GreedyRewriteConfig config;
     config.setRegionSimplificationLevel(GreedySimplifyRegionLevel::Aggressive);
 
+    AMD::TargetInfo targetInfo(this->arch.getValue());
     RewritePatternSet patterns(context);
-    patterns.add<CallOpConversion>(context, this->ftz);
-    if (mlir::applyPatternsGreedily(mod, std::move(patterns), config)
-            .failed()) {
+    patterns.add<CallOpConversion>(context, targetInfo, this->ftz);
+
+    if (failed(applyPatternsGreedily(mod, std::move(patterns), config))) {
       signalPassFailure();
     }
   }
@@ -195,8 +206,8 @@ struct ConvertBuiltinFuncToLLVM
 namespace mlir::triton {
 
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertBuiltinFuncToLLVMPass(bool ftz) {
-  return std::make_unique<ConvertBuiltinFuncToLLVM>(ftz);
+createConvertBuiltinFuncToLLVMPass(StringRef targetArch, bool ftz) {
+  return std::make_unique<ConvertBuiltinFuncToLLVM>(targetArch, ftz);
 }
 
 } // namespace mlir::triton

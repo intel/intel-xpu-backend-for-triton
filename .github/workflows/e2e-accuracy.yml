@@ -155,14 +155,14 @@ jobs:
           use_pyenv: true
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           path: separate-reports
           merge-multiple: true
 
       - name: Run aggregation script
         run: |
-          pip install pandas numpy
+          pip install 'pandas<3.0' numpy
           ls -la separate-reports
           echo "Local dir"
           ls -la ./
@@ -171,7 +171,7 @@ jobs:
              --output-dir aggregated-results
 
       - name: Upload aggregated results
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         if: ${{ !cancelled() }}
         with:
           name: aggregated-results-${{ github.run_id }}

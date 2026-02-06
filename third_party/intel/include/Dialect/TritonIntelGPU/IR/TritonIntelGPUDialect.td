@@ -56,6 +56,12 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.support_bfloat16_conversion";
     }
 
+    /// Get the name of the attribute used to indicate whether predicated io
+    /// is available.
+    static constexpr llvm::StringRef getSupportPredicatedIOAttrName() {
+      return "ttig.support_predicated_io";
+    }
+
     /// Get the name of the attribute used to indicate whether the DPAS
     /// operation is available.
     static constexpr llvm::StringRef getSupportDPASAttrName() {
@@ -97,6 +103,12 @@ def TritonIntelGPU_Dialect : Dialect {
     /// IR module.
     static constexpr llvm::StringRef getTargetArchAttrName() {
       return "ttig.target_arch";
+    }
+
+    /// Get the name of the attribute used to indicate whether is driver is LTS.
+    /// Please use this attribute with caution, this is intended for temporary use.
+    static constexpr llvm::StringRef getIsLTSAttrName() {
+      return "ttig.is_lts";
     }
 
     /// Get the name of the attribute used to indicate whether prefetching 256

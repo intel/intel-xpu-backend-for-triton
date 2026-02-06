@@ -27,25 +27,15 @@ from triton.experimental.gluon.language.amd.gfx1250 import tdm
 from triton.experimental.gluon.language.amd.gfx1250 import buffer_load, buffer_store
 from triton.experimental.gluon.language.amd.gfx1250 import async_copy as cp
 
+# Handle imports for both pytest (module context) and direct execution
+try:
+    from .gfx1250_utils import static_profile, composition
+except ImportError:
+    from gfx1250_utils import static_profile, composition
+
 # ===-----------------------------------------------------------------------===#
 # Kernel Utilities
 # ===-----------------------------------------------------------------------===#
-
-
-def composition(cls):
-    """ A decorator lets aggregate type to directly access attributes from its aggregate member. """
-
-    def __getattr__(self, name):
-        if name in self.__dict__:
-            return object.__getattribute__(self, name)
-        for member in self.__dict__.values():
-            if getattr(member, "__triton_aggregate__", False) and not hasattr(member, name):
-                continue
-            return getattr(member, name)
-        raise AttributeError(f"{type(self).__name__} object has no attribute '{name}'")
-
-    cls.__getattr__ = __getattr__
-    return cls
 
 
 @gluon.constexpr_function
@@ -170,7 +160,7 @@ class MemoryUnit:
         return off
 
     @gluon.jit
-    def issue_tdm_load(self, idx, sub_idx=0, buf=0, pred=True):
+    def issue_tdm_load(self, idx, sub_idx=0, buf=0, pred=1):
         axis_off = self._compute_axis_offset(idx, sub_idx)
         num_subtile: ttgl.constexpr = 2 if self.sub_axis is not None else 1
         smem = self.smem.index(buf * num_subtile + sub_idx)
@@ -277,9 +267,11 @@ class GlobalScaledAttentionConfig:
 
     @gluon.constexpr_function
     def __init__(self, Q_TYPE, KV_TYPE, SEQLEN_Q, SEQLEN_K, NUM_Q_HEADS, NUM_K_HEADS, HEAD_SZ, BLOCK_M, BLOCK_N,
-                 P_K_WIDTH, SUBTILE, NUM_BUFFERS, NUM_WARPS):
+                 P_K_WIDTH, SUBTILE, NUM_BUFFERS, WARP_BASES):
         assert Q_TYPE in ['e5m2', 'e4m3']
         assert KV_TYPE in ['e5m2', 'e4m3']
+
+        NUM_WARPS: ttgl.constexpr = 2**len(WARP_BASES)
         assert NUM_WARPS == 4 or NUM_WARPS == 8
         assert P_K_WIDTH == 16 or P_K_WIDTH == 8
 
@@ -287,7 +279,7 @@ class GlobalScaledAttentionConfig:
                                         BLOCK_N, NUM_BUFFERS, NUM_WARPS)
 
         wmma_layout: ttgl.constexpr = ttgl.amd.AMDWMMALayout(  #
-            version=3, transposed=True, warps_per_cta=[NUM_WARPS, 1], instr_shape=[16, 16, 128])
+            version=3, transposed=True, warp_bases=WARP_BASES, instr_shape=[16, 16, 128])
         self.q_layout = ttgl.constexpr(ttgl.DotOperandLayout(0, wmma_layout, 16))
         self.k_layout = ttgl.constexpr(ttgl.DotOperandLayout(1, wmma_layout, 16))
         self.p_layout = ttgl.constexpr(ttgl.DotOperandLayout(0, wmma_layout, P_K_WIDTH))
@@ -401,11 +393,11 @@ class GlobalScaledAttentionProgram:
             sm_scale)
 
     @gluon.jit
-    def issue_global_load_k(self, idx, sub_idx=0, buf=0, pred=True):
+    def issue_global_load_k(self, idx, sub_idx=0, buf=0, pred=1):
         self.k_mem.issue_tdm_load(idx, sub_idx, buf, pred)
 
     @gluon.jit
-    def issue_global_load_v(self, idx, sub_idx=0, buf=0, pred=True):
+    def issue_global_load_v(self, idx, sub_idx=0, buf=0, pred=1):
         self.v_mem.issue_tdm_load(idx, sub_idx, buf, pred)
 
     @gluon.jit
@@ -566,6 +558,8 @@ class GlobalScaledAttentionProgram:
         for i in range(0, end - 2):
             a = i % 2
             b = 1 - a
+            pred = i - end + 3
+            pred = (pred >> 31) & 1
 
             qk = self.compute_qk(k, k_scale, zero)  # ......................... iter i+1
             l_ij = ttgl.sum(p, 1)  # .......................................... iter i
@@ -575,7 +569,7 @@ class GlobalScaledAttentionProgram:
 
             self.async_wait(2)  # ............................................. iter i
             v = self.shared_load_v(buf=a)
-            self.issue_global_load_k(i + 3, buf=b, pred=i != end - 3)  # ...... iter i+3
+            self.issue_global_load_k(i + 3, buf=b, pred=pred)  # ...... iter i+3
 
             acc = self.compute_pv(p, p_scale, v, v_scale, acc)  # ............. iter i
             m = ttgl.max(qk, 1)  # ............................................ iter i+1
@@ -739,7 +733,8 @@ class GlobalScaledAttentionProgram:
         for i in range(0, end - 2):
             a = i % 2
             b = 1 - a
-            pred = (i != end - 3)
+            pred = i - end + 3
+            pred = (pred >> 31) & 1
 
             qk0 = self.compute_qk(k0, k_scale, zero)  # ....................... iter i+1
             self.async_wait(4)  # ............................................. iter i+1
@@ -880,9 +875,11 @@ class BlockScaledAttentionConfig:
 
     @gluon.constexpr_function
     def __init__(self, Q_TYPE, KV_TYPE, SEQLEN_Q, SEQLEN_K, NUM_Q_HEADS, NUM_K_HEADS, HEAD_SZ, BLOCK_M, BLOCK_N,
-                 P_SCALING, P_K_WIDTH, SUBTILE, NUM_BUFFERS, NUM_WARPS):
+                 P_SCALING, P_K_WIDTH, SUBTILE, NUM_BUFFERS, WARP_BASES):
         assert Q_TYPE in ['e5m2', 'e4m3']
         assert KV_TYPE in ['e5m2', 'e4m3', 'e2m1']
+
+        NUM_WARPS: ttgl.constexpr = 2**len(WARP_BASES)
         assert NUM_WARPS == 4 or NUM_WARPS == 8
         assert P_K_WIDTH == 16 or (KV_TYPE != 'e2m1' and P_K_WIDTH == 8)
         KV_PACK_DIV: ttgl.constexpr = 2 if KV_TYPE == 'e2m1' else 1
@@ -890,15 +887,10 @@ class BlockScaledAttentionConfig:
         self.base = AttentionConfigBase(Q_TYPE, KV_TYPE, SEQLEN_Q, SEQLEN_K, NUM_Q_HEADS, NUM_K_HEADS, HEAD_SZ, BLOCK_M,
                                         BLOCK_N, NUM_BUFFERS, NUM_WARPS)
 
-        tiles_per_warp: ttgl.constexpr = [2, 2]
-        num_warps: ttgl.constexpr = NUM_WARPS
-
         wmma_layout: ttgl.constexpr = ttgl.amd.AMDWMMALayout(  #
-            version=3, transposed=True, warps_per_cta=[num_warps, 1], instr_shape=[16, 16, 128],
-            tiles_per_warp=tiles_per_warp)
+            version=3, transposed=True, warp_bases=WARP_BASES, instr_shape=[16, 16, 128])
         wmma_layout_packed: ttgl.constexpr = ttgl.amd.AMDWMMALayout(  #
-            version=3, transposed=True, warps_per_cta=[num_warps, 1], instr_shape=[16, 16, 64],
-            tiles_per_warp=tiles_per_warp)
+            version=3, transposed=True, warp_bases=WARP_BASES, instr_shape=[16, 16, 64])
 
         self.q_layout = ttgl.constexpr(ttgl.DotOperandLayout(0, wmma_layout, k_width=16))
         if KV_TYPE == 'e2m1':
@@ -921,8 +913,8 @@ class BlockScaledAttentionConfig:
         self.v_scale_layout = ttgl.constexpr(
             ttgl.amd.gfx1250.get_wmma_scale_layout(self.v_layout, [HEAD_SZ, BLOCK_N // 32]))
 
-        self.k_scale_load_layout = ttgl.constexpr(get_load_layout([HEAD_SZ // 32, BLOCK_N], num_warps))
-        self.v_scale_load_layout = ttgl.constexpr(get_load_layout([BLOCK_N // 32, HEAD_SZ], num_warps))
+        self.k_scale_load_layout = ttgl.constexpr(get_load_layout([HEAD_SZ // 32, BLOCK_N], NUM_WARPS))
+        self.v_scale_load_layout = ttgl.constexpr(get_load_layout([BLOCK_N // 32, HEAD_SZ], NUM_WARPS))
 
         self.k_smem_layout = ttgl.constexpr(  #
             get_padded_shared_layout([BLOCK_N, HEAD_SZ // KV_PACK_DIV]))
@@ -1075,19 +1067,19 @@ class BlockScaledAttentionProgram:
             sm_scale)
 
     @gluon.jit
-    def issue_global_load_k(self, idx, sub_idx=0, buf=0, pred=True):
+    def issue_global_load_k(self, idx, sub_idx=0, buf=0, pred=1):
         self.k_mem.issue_tdm_load(idx, sub_idx, buf, pred)
 
     @gluon.jit
-    def issue_global_load_v(self, idx, sub_idx=0, buf=0, pred=True):
+    def issue_global_load_v(self, idx, sub_idx=0, buf=0, pred=1):
         self.v_mem.issue_tdm_load(idx, sub_idx, buf, pred)
 
     @gluon.jit
-    def issue_global_load_k_scale(self, idx, buf=0, pred=True):
+    def issue_global_load_k_scale(self, idx, buf=0, pred=1):
         self.k_scale_mem.issue_tdm_load(idx, buf=buf, pred=pred)
 
     @gluon.jit
-    def issue_global_load_v_scale(self, idx, buf=0, pred=True):
+    def issue_global_load_v_scale(self, idx, buf=0, pred=1):
         self.v_scale_mem.issue_tdm_load(idx, buf=buf, pred=pred)
 
     @gluon.jit
@@ -1330,7 +1322,8 @@ class BlockScaledAttentionProgram:
         for i in range(0, end - 2):
             a = i % 2
             b = 1 - a
-            pred = (i != end - 3)
+            pred = i - end + 3
+            pred = (pred >> 31) & 1
 
             qk = self.compute_qk(k, k_scale, zero)  # ......................... iter i+1
             l_ij = ttgl.sum(p, 1)  # .......................................... iter i
@@ -1518,7 +1511,8 @@ class BlockScaledAttentionProgram:
         for i in range(0, end - 2):
             a = i % 2
             b = 1 - a
-            pred = (i != end - 3)
+            pred = i - end + 3
+            pred = (pred >> 31) & 1
 
             qk0 = self.compute_qk(k0, k0_scale, zero)  # ...................... iter i+1
             self.async_wait(5)  # ............................................. iter i+1
@@ -1657,20 +1651,23 @@ def attn_fwd_kernel(  #
         SUBTILE: ttgl.constexpr,  #
         PIPELINED: ttgl.constexpr,  #
         P_SCALING: ttgl.constexpr,  #
-        P_K_WIDTH: ttgl.constexpr):
+        P_K_WIDTH: ttgl.constexpr,  #
+        WARP_BASES: ttgl.constexpr):
 
     NUM_WARPS: ttgl.constexpr = ttgl.num_warps()
+    ttgl.static_assert(2**len(WARP_BASES) == NUM_WARPS)
+
     NUM_BUFFERS: ttgl.constexpr = 2 if PIPELINED else 1
     if BLOCK_SCALING:
         cfg = BlockScaledAttentionConfig(  #
             Q_TYPE, KV_TYPE, SEQLEN_Q, SEQLEN_K, NUM_Q_HEADS, NUM_K_HEADS, HEAD_SZ, BLOCK_M, BLOCK_N, P_SCALING,
-            P_K_WIDTH, SUBTILE, NUM_BUFFERS, NUM_WARPS)
+            P_K_WIDTH, SUBTILE, NUM_BUFFERS, WARP_BASES)
         pgm = BlockScaledAttentionProgram.initialize(  #
             cfg, q_ptr, q_scale_ptr, k_ptr, k_scale_ptr, v_ptr, v_scale_ptr, o_ptr, sm_scale)
     else:
         cfg = GlobalScaledAttentionConfig(  #
             Q_TYPE, KV_TYPE, SEQLEN_Q, SEQLEN_K, NUM_Q_HEADS, NUM_K_HEADS, HEAD_SZ, BLOCK_M, BLOCK_N, P_K_WIDTH,
-            SUBTILE, NUM_BUFFERS, NUM_WARPS)
+            SUBTILE, NUM_BUFFERS, WARP_BASES)
         pgm = GlobalScaledAttentionProgram.initialize(  #
             cfg, q_ptr, q_scale_ptr, k_ptr, k_scale_ptr, v_ptr, v_scale_ptr, o_ptr, sm_scale)
 
@@ -1749,10 +1746,15 @@ def attn_fwd(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,  #
 
     # Use (NUM_Q_HEADS, NUM_BLOCKS, BATCH) for better xcd locality
     grid = (num_q_heads, cdiv(seqlen_q, block_m), batch)
+    warp_bases = []
+    for i in range(int(math.log2(num_warps))):
+        warp_bases.append((1 << i, 0))
+    warp_bases = tuple(warp_bases)
+
     args = [
         q, k, v, q_scale, k_scale, v_scale, o, sm_scale,  #
         q_type, kv_type, seqlen_q, seqlen_k, num_q_heads, num_k_heads, head_sz, block_m, block_n,  #
-        block_scaling, subtile, pipelined, p_scaling, p_k_width
+        block_scaling, subtile, pipelined, p_scaling, p_k_width, warp_bases
     ]
     kwargs = {"num_warps": num_warps, "waves_per_eu": 1}
     kernel = attn_fwd_kernel[grid](*args, **kwargs)
@@ -1831,26 +1833,6 @@ def create_global_scale(dtype: str):
     scale = torch.randint(low, high + 1, (), dtype=torch.uint8).item()
     scale_ref = 2**(scale - 0x7F)
     return scale, scale_ref
-
-
-def static_profile(kernel):
-    amdgcn = kernel.asm['amdgcn']
-
-    sgpr_count = int(re.search(r'\.sgpr_count:\s+(\d+)', amdgcn).group(1))
-    sgpr_spill_count = int(re.search(r'\.sgpr_spill_count:\s+(\d+)', amdgcn).group(1))
-    vgpr_count = int(re.search(r'\.vgpr_count:\s+(\d+)', amdgcn).group(1))
-    vgpr_spill_count = int(re.search(r'\.vgpr_spill_count:\s+(\d+)', amdgcn).group(1))
-    scratch_size = int(re.search(r';\s+ScratchSize:\s+(\d+)', amdgcn).group(1))
-    code_len_in_byte = int(re.search(r';\s+codeLenInByte\s+=\s+(\d+)', amdgcn).group(1))
-    occupancy = int(re.search(r';\s+Occupancy:\s+(\d+)', amdgcn).group(1))
-
-    print(f"- sgpr_count: {sgpr_count}\n"
-          f"- sgpr_spill_count: {sgpr_spill_count}\n"
-          f"- vgpr_count: {vgpr_count}\n"
-          f"- vgpr_spill_count: {vgpr_spill_count}\n"
-          f"- scratch_size: {scratch_size}\n"
-          f"- code_len_in_byte: {code_len_in_byte}\n"
-          f"- occupancy: {occupancy}\n")
 
 
 def get_source_mapping(block_scaling, subtile, pipelined, amdgcn):

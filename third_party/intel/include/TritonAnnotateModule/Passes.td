@@ -45,11 +45,15 @@ def TritonAnnotateModule: Pass<"triton-annotate-module", "mlir::ModuleOp"> {
            "whether 16bit atomic operations are available">,
     Option<"supportBfloat16Arithmetic", "support-bfloat16-arithmetic", "bool", /*default*/"false",
            "whether bfloat16 arithmetic is supported">,
+    Option<"supportPredicatedIO", "support-predicated-io", "bool", /*default*/"false",
+           "whether predicated io is supported">,
     Option<"threadsPerWarp", "threads-per-warp",
            "unsigned", /*default*/"32",
            "number of threads per warp (aka subgroup size)">,
     Option<"targetArch", "target-arch", "std::string", /*default*/"\"spir64\"",
            "target architecture name">,
+    Option<"isLTS", "is-lts", "bool", /*default*/"false",
+           "whether driver is LTS">,
     Option<"supportPrefetch256Bytes", "support-prefetch-256b", "bool", /*default*/"false",
            "whether prefetch 256 bytes is supported">
   ];

@@ -27,11 +27,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.sha
     // CHECK-DAG:       %[[CST_511:.*]] = llvm.mlir.constant(511 : i32) : i32
     // CHECK-DAG:       %[[CST_0:.*]] = llvm.mlir.constant(0 : i32) : i32
     // COM: The following operations is generated for the conversion of DPAS layout to blocked layout.  The conversion replica size is 128*256. So there is 1 round of load/store with synchronization.
+    // CHECK:           llvm.call spir_funccc @_Z12get_local_idj(%[[CST_0]]) {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return} : (i32) -> i64
+    // CHECK:           llvm.call spir_funccc @_Z12get_local_idj(%[[CST_0]]) {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return} : (i32) -> i64
+    // CHECK:           %[[threadId_64:.*]] = llvm.call spir_funccc @_Z12get_local_idj(%[[CST_0]]) {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return} : (i32) -> i64
+    // CHECK:           %[[threadId:.*]] = llvm.trunc %[[threadId_64]] : i64 to i32
+    // CHECK:           %[[rtid:.*]] = llvm.and %[[threadId:.*]], %[[CST_511]] : i32
+    // CHECK:           %[[warpId:.*]] = llvm.udiv %[[rtid]], %[[CST_16]]  : i32
     // CHECK:           %[[threadId_64:.*]] = llvm.call spir_funccc @_Z12get_local_idj(%[[CST_0]]) {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return} : (i32) -> i64
     // CHECK:           %[[threadId:.*]] = llvm.trunc %[[threadId_64]] : i64 to i32
     // CHECK:           %[[rtid:.*]] = llvm.and %[[threadId:.*]], %[[CST_511]] : i32
     // CHECK:           %[[laneId:.*]] = llvm.urem %[[rtid]], %[[CST_16]]  : i32
-    // CHECK:           %[[warpId:.*]] = llvm.udiv %[[rtid]], %[[CST_16]]  : i32
     // CHECK:           %[[VAL_25:.*]] = llvm.shl %[[laneId]], %[[CST_0]] : i32
     // CHECK:           %[[VAL_26:.*]] = llvm.or %[[CST_0]], %[[VAL_25]] : i32
     // CHECK:           %[[VAL_27:.*]] = llvm.shl %[[warpId]], %[[CST_4]] : i32
@@ -64,7 +69,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.sha
     // COM: Total 32 stores are generated to save the tensor of the DPAS layout to the SLM. 128*256/(4*8*16*2) = 32
     // CHECK:           llvm.store %[[VAL_67]], %[[VAL_65]] : vector<2xf16>, !llvm.ptr<3>
     // CHECK-COUNT-31:  llvm.store {{.*}}, {{.*}} : vector<2xf16>, !llvm.ptr<3>
-    // CHECK:           llvm.call spir_funccc @_Z7barrierj(%[[CST_1]]) {convergent, no_unwind, will_return} : (i32) -> ()
+    // CHECK:           llvm.call spir_funccc @_Z7barrierj(%[[CST_3]]) {convergent, no_unwind, will_return} : (i32) -> ()
 
     // COM: Because the values per thread of blocked layout is contiguous. The values are loaded from the SLM in a vectorized way.
     // COM: Total 8 loads are generated to load the tensor of the blocked layout from the SLM. 128*256/(16*2*16*8) = 8
@@ -110,11 +115,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.sha
     // CHECK-DAG:           %[[CST_511:.*]] = llvm.mlir.constant(511 : i32) : i32
 
     // COM: The following operations is generated for the conversion of DPAS layout to blocked layout. The conversion replica size is 64*256. So there are 2 round of load/store with synchronization.
+    // CHECK:           llvm.call spir_funccc @_Z12get_local_idj(%[[CST_0]]) {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return} : (i32) -> i64
+    // CHECK:           llvm.call spir_funccc @_Z12get_local_idj(%[[CST_0]]) {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return} : (i32) -> i64
+    // CHECK:           %[[threadId_64:.*]] = llvm.call spir_funccc @_Z12get_local_idj(%[[CST_0]]) {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return} : (i32) -> i64
+    // CHECK:           %[[threadId:.*]] = llvm.trunc %[[threadId_64]] : i64 to i32
+    // CHECK:           %[[rtid:.*]] = llvm.and %[[threadId]], %[[CST_511]] : i32
+    // CHECK:           %[[warpId:.*]] = llvm.udiv %[[rtid]], %[[CST_16]]  : i32
     // CHECK:           %[[threadId_64:.*]] = llvm.call spir_funccc @_Z12get_local_idj(%[[CST_0]]) {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return} : (i32) -> i64
     // CHECK:           %[[threadId:.*]] = llvm.trunc %[[threadId_64]] : i64 to i32
     // CHECK:           %[[rtid:.*]] = llvm.and %[[threadId]], %[[CST_511]] : i32
     // CHECK:           %[[laneId:.*]] = llvm.urem %[[rtid]], %[[CST_16]]  : i32
-    // CHECK:           %[[warpId:.*]] = llvm.udiv %[[rtid]], %[[CST_16]]  : i32
     // CHECK:           %[[VAL_25:.*]] = llvm.shl %[[laneId]], %[[CST_0]] : i32
     // CHECK:           %[[VAL_26:.*]] = llvm.or %[[CST_0]], %[[VAL_25]] : i32
     // CHECK:           %[[VAL_27:.*]] = llvm.shl %[[warpId]], %[[CST_4]] : i32
@@ -147,7 +157,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.sha
     // COM: Total 32 stores are generated to save the tensor of the DPAS layout to the SLM. 128*256/(4*8*16*2) = 32
     // CHECK:           llvm.store %[[VAL_67]], %[[VAL_65]] : vector<2xf16>, !llvm.ptr<3>
     // CHECK-COUNT-31:  llvm.store {{.*}}, {{.*}} : vector<2xf16>, !llvm.ptr<3>
-    // CHECK:           llvm.call spir_funccc @_Z7barrierj(%[[CST_1]]) {convergent, no_unwind, will_return} : (i32) -> ()
+    // CHECK:           llvm.call spir_funccc @_Z7barrierj(%[[CST_3]]) {convergent, no_unwind, will_return} : (i32) -> ()
 
     // COM: Because the values per thread of blocked layout is contiguous. The values are loaded from the SLM in a vectorized way.
     // COM: Total 16 loads are generated to load the tensor of the blocked layout from the SLM. 128*256/(16*2*16*4) = 16

@@ -826,7 +826,7 @@ def get_triton_version_suffix():
 
 
 # keep it separate for easy substitution
-TRITON_VERSION = "3.6.0" + get_triton_version_suffix()
+TRITON_VERSION = "3.7.0" + get_triton_version_suffix()
 
 # Dynamically define supported Python versions and classifiers
 MIN_PYTHON = (3, 10)
@@ -895,7 +895,7 @@ setup(
         ],
         "tutorials": [
             "matplotlib",
-            "pandas",
+            "pandas<3.0",
             "tabulate",
         ],
     },

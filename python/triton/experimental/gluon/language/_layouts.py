@@ -1,10 +1,11 @@
 from dataclasses import dataclass, field
 import itertools
+import math
 from typing import List
 
 from triton.language.core import _unwrap_if_constexpr, _unwrap_shape, constexpr_type
 from triton.runtime.jit import constexpr_function
-import math
+from triton._C.libtriton import gluon_ir
 
 
 class DistributedLayout:
@@ -19,6 +20,12 @@ class DistributedLayout:
     @property
     def rank(self):
         raise NotImplementedError("DistributedLayout subclasses must define rank")
+
+    def format_tensor_view(self, shape: list[int]) -> str:
+        return gluon_ir.get_layout_view(self, [_unwrap_if_constexpr(s) for s in shape], False)
+
+    def format_hardware_view(self, shape: list[int]) -> str:
+        return gluon_ir.get_layout_view(self, [_unwrap_if_constexpr(s) for s in shape], True)
 
 
 @dataclass(frozen=True)
@@ -316,6 +323,12 @@ class SharedLayout:
     def type(self):
         return constexpr_type(self)
 
+    def format_tensor_view(self, shape: list[int]) -> str:
+        return gluon_ir.get_layout_view(self, [_unwrap_if_constexpr(s) for s in shape], False)
+
+    def format_hardware_view(self, shape: list[int]) -> str:
+        return gluon_ir.get_layout_view(self, [_unwrap_if_constexpr(s) for s in shape], True)
+
 
 @constexpr_function
 def _get_shape_per_cta(shape, cga_layout):
@@ -323,14 +336,17 @@ def _get_shape_per_cta(shape, cga_layout):
         return shape
     shape_per_cta = list(shape)
     rank = len(cga_layout[0])
-    cga_shape = [1] * rank
+    cga_shape = [0] * rank
     for basis in cga_layout:
         assert len(basis) == rank
         for i in range(rank):
             cga_shape[i] = max(cga_shape[i], basis[i])
-    # The shape is the largest stride * 2
+    # The shape is the largest stride * 2, or 1 if the stride was always zero
     for i in range(rank):
-        cga_shape[i] *= 2
+        if cga_shape[i] == 0:
+            cga_shape[i] = 1
+        else:
+            cga_shape[i] *= 2
     for dim in range(rank):
         assert shape_per_cta[dim] % cga_shape[dim] == 0, f"Shape {shape} is not divisible by CGA layout {cga_layout}"
         shape_per_cta[dim] //= cga_shape[dim]
@@ -520,10 +536,10 @@ class PaddedSharedLayout(SharedLayout):
     Some concrete examples using `xN` and `yN` to mean the logical n-D tensor elements
     and `pN` to mean padding:
 
-    After padding for shape = [8] with interval-padding list [[2, 2]], offset_bases = [[2], [1]] and block_bases = []:
+    After padding for shape = [8] with interval-padding list [[2, 2]], offset_bases = [[2], [1]] and cga_layout = []:
     [x0, x2, p0 p1, x1, x3]
 
-    After padding for shape = [8, 4] with interval_padding_pairs = [[8, 1]], offset_bases = [[0, 1], [0, 2], /*gap, stride by 2 rows*/[2, 0], [4, 0], [1, 0]]] and block_bases = []:
+    After padding for shape = [8, 4] with interval_padding_pairs = [[8, 1]], offset_bases = [[0, 1], [0, 2], /*gap, stride by 2 rows*/[2, 0], [4, 0], [1, 0]]] and cga_layout = []:
     [
         x0y0, x0y1, x0y2, x0y3,
         x2y0, x2y1, x2y2, x2y3,
@@ -541,35 +557,35 @@ class PaddedSharedLayout(SharedLayout):
     Args:
         interval_padding_pairs (List[int]): List of [interval, padding] pair and both interval and padding must be powers of 2.
         offset_bases (List[int]): Bases for shared memory offsets
-        block_bases (List[List[int]]): Bases for block-level shared memory offsets.
+        cga_layout (List[List[int]]): Bases for block-level shared memory offsets.
         shape (List[int]): n-D logical shared memory shape
     """
     interval_padding_pairs: List[List[int]]
     offset_bases: List[List[int]]
-    block_bases: List[List[int]]
+    cga_layout: List[List[int]]
     shape: List[int]
 
     def __post_init__(self):
         super().__setattr__("interval_padding_pairs", _unwrap_shape(self.interval_padding_pairs))
         super().__setattr__("offset_bases", _unwrap_shape(self.offset_bases))
-        super().__setattr__("block_bases", _unwrap_shape(self.block_bases))
+        super().__setattr__("cga_layout", _unwrap_shape(self.cga_layout))
         super().__setattr__("shape", _unwrap_shape(self.shape))
 
         rank = len(self.shape)
 
         for basis in self.offset_bases:
             assert len(basis) == rank
-        for basis in self.block_bases:
+        for basis in self.cga_layout:
             assert len(basis) == rank
 
         self.verify()
 
     def _to_ir(self, builder):
         intervals, paddings = zip(*self.interval_padding_pairs)
-        return builder.get_padded_shared_layout(intervals, paddings, self.offset_bases, self.block_bases, self.shape)
+        return builder.get_padded_shared_layout(intervals, paddings, self.offset_bases, self.cga_layout, self.shape)
 
     def mangle(self) -> str:
-        return f"PaddedShared_{self.interval_padding_pairs}_{self.offset_bases}_{self.block_bases}_{self.shape}_PaddedShared"
+        return f"PaddedShared_{self.interval_padding_pairs}_{self.offset_bases}_{self.cga_layout}_{self.shape}_PaddedShared"
 
     def verify(self):
         pairs = self.interval_padding_pairs
@@ -589,7 +605,7 @@ class PaddedSharedLayout(SharedLayout):
 
     @staticmethod
     @constexpr_function
-    def with_identity_for(interval_padding_pairs, shape, order):
+    def with_identity_for(interval_padding_pairs, shape, order, cga_layout=[]):
         """Returns a PaddedSharedLayout with the given interval and padding pairs and an identity mapping as the linear component for the given shape and order.
         """
         assert len(shape) == len(order)
@@ -597,17 +613,18 @@ class PaddedSharedLayout(SharedLayout):
         assert all(is_power_of_2(n) for n in shape)
 
         rank = len(shape)
-        # Create a idendity mapping based on shape + order
+        shape_per_cta = _get_shape_per_cta(shape, cga_layout) if cga_layout else shape
+        # Create a idendity mapping based on shape_per_cta + order
         offset_bases = []
         for dim in order:
-            for basis in range(int(math.log2(shape[dim]))):
+            for basis in range(int(math.log2(shape_per_cta[dim]))):
                 offset_bases.append([1 << basis if i == dim else 0 for i in range(rank)])
 
-        return PaddedSharedLayout(interval_padding_pairs, offset_bases, [], shape)
+        return PaddedSharedLayout(interval_padding_pairs, offset_bases, cga_layout, shape)
 
     def __hash__(self):
         return hash((tuple(map(tuple, self.interval_padding_pairs)), tuple(map(tuple, self.offset_bases)),
-                     tuple(map(tuple, self.block_bases)), tuple(self.shape)))
+                     tuple(map(tuple, self.cga_layout)), tuple(self.shape)))
 
 
 @dataclass(frozen=True)

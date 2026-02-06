@@ -200,18 +200,16 @@ SmallVector<unsigned> DpasEncodingAttr::getContigPerThread() const {
                            "be smaller than the threads required per row.");
 }
 
-DpasEncodingAttr::DPASCapability
+std::optional<DpasEncodingAttr::DPASCapability>
 DpasEncodingAttr::getDPASCapability(ModuleOp mod) {
   assert(mod && "expected a valid module");
-
   if (auto minSGSizeAttr = mod->getAttrOfType<IntegerAttr>(
-          triton::gpu::intel::TritonIntelGPUDialect::getMinSGSizeAttrName())) {
-    unsigned minSGSize = minSGSizeAttr.getInt();
-    assert(minSGSize == 8 || minSGSize == 16 && "unsupported minSGSize");
-    return DPASCapability(minSGSize);
+          TritonIntelGPUDialect::getMinSGSizeAttrName())) {
+    return DPASCapability(
+        minSGSizeAttr.getInt(),
+        mod->hasAttr(TritonIntelGPUDialect::getSupportDPASWithBF8AttrName()));
   }
-
-  return DPASCapability();
+  return std::nullopt;
 }
 
 LogicalResult DpasEncodingAttr::verify(
@@ -325,8 +323,7 @@ void DpasEncodingAttr::print(AsmPrinter &printer) const {
   auto warpsPerCTA = getWarpsPerCTA();
   ArrayRef<unsigned> repCluster = getRepCluster();
   std::optional<unsigned> fp4KPack = getFp4KPack();
-  printer << "<{"
-          << "repeatCount = " << getRepeatCount() << ", "
+  printer << "<{" << "repeatCount = " << getRepeatCount() << ", "
           << "systolicDepth = " << getSystolicDepth() << ", "
           << "executionSize = " << getExecutionSize() << ", "
           << "opsPerChan = " << getOpsPerChannel() << ", ";
@@ -335,11 +332,8 @@ void DpasEncodingAttr::print(AsmPrinter &printer) const {
   }
   printer << "threadsPerWarp = " << getThreadsPerWarp() << ", "
           << "warpsPerCTA = [" << llvm::ArrayRef<unsigned>(warpsPerCTA) << "], "
-          << "repCluster = [" << repCluster << "], "
-          << "A = [" << rA << "], "
-          << "B = [" << rB << "], "
-          << "C = [" << rC << "]"
-          << "}>";
+          << "repCluster = [" << repCluster << "], " << "A = [" << rA << "], "
+          << "B = [" << rB << "], " << "C = [" << rC << "]" << "}>";
 }
 
 LinearLayout DpasEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
@@ -433,11 +427,9 @@ Attribute WarpEncodingAttr::parse(AsmParser &parser, Type type) {
 void WarpEncodingAttr::print(mlir::AsmPrinter &printer) const {
   ArrayRef<unsigned> threadsPerWarp = getThreadsPerWarp_();
   ArrayRef<unsigned> sizePerThread = getSizePerThread_();
-  printer << "<{"
-          << "sizePerThread = [" << sizePerThread << "]"
-          << ", threadsPerWarp = [" << threadsPerWarp << "]"
-          << ", order = [" << getOrder_() << "]"
-          << "}>";
+  printer << "<{" << "sizePerThread = [" << sizePerThread << "]"
+          << ", threadsPerWarp = [" << threadsPerWarp << "]" << ", order = ["
+          << getOrder_() << "]" << "}>";
 }
 
 //===----------------------------------------------------------------------===//

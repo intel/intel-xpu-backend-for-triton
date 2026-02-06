@@ -641,7 +641,8 @@ def _gemm_kernel_preshuffled_scales_cdna4(a_ptr, b_ptr, c_ptr, a_scales_ptr, b_s
                                                          ("mxfp8e4", "bf16", False), ("bf16", "mxfp4", True)])
 @pytest.mark.parametrize("mfma_nonkdim", [16, 32])
 @pytest.mark.parametrize("preshuffle", [True, False])
-@pytest.mark.skipif(is_cuda() and torch.cuda.get_device_capability()[0] == 10, reason="Compilation bug for GB200.")
+@pytest.mark.skipif(is_cuda() and torch.cuda.get_device_capability()[0] in [10, 11],
+                    reason="Compilation bug for GB200.")
 @pytest.mark.skipif(is_hip() and not (is_hip_cdna4() or is_hip_gfx1250()),
                     reason="Scaled dot is not emulated on other archs yet.")
 def test_preshuffle_scale_mxfp_cdna4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, DTYPE_A, DTYPE_B, FAST_MATH, mfma_nonkdim,
@@ -755,7 +756,7 @@ def test_preshuffle_scale_mxfp_cdna4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, DTYPE_A
                                                     num_stages=1, **kernel_kwargs)
     triton_out = triton_out.to(torch.float32)
     torch.testing.assert_close(torch_out, triton_out, atol=2e-5, rtol=1e-4)
-    if is_hip() and preshuffle:
+    if is_hip_cdna4() and preshuffle:
         assert "ds_read_u8" not in k.asm["amdgcn"]
         if mfma_nonkdim == 16:
             assert "tilesPerWarp = [2, 2]" in k.asm["ttgir"]
@@ -1036,6 +1037,8 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
     elif is_hip():
         if not (is_hip_cdna4() or is_hip_gfx1250()):
             pytest.skip("Scaled fp4 matmul is only natively supported on CDNA4")
+        if is_hip_gfx1250() and scale_type == "float8_e8m0fnu" and not pack_along_k:
+            pytest.skip("fp4 matmul packed along M/N unsupported on gfx1250")
         if scale_type != 'float8_e8m0fnu':
             pytest.skip("CDNA4 only supports E8M0 scale")
         if (nonKDim == 16 and BLOCK_K < 128) or (nonKDim == 32 and BLOCK_K < 64):
@@ -1178,7 +1181,7 @@ def mxfp8_mxfp4_matmul(  #
     tl.store(output_ptrs, accumulator, mask=c_mask)
 
 
-@pytest.mark.parametrize("M, N, K", [(1024, 512, 512)])
+@pytest.mark.parametrize("M, N, K", [(256, 256, 256) if is_xpu_cri() else (1024, 512, 512)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (256, 128, 128), (128, 256, 128),
                                                        (128, 256, 256), (128, 128, 64), (128, 64, 128)])
 @pytest.mark.parametrize("NUM_STAGES", [1, 3])
@@ -1206,6 +1209,8 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
             pytest.skip(f"CDNA4 does not support {BLOCK_K=} for scaled mfma {nonKDim=} variants")
         if (A_DATA_TYPE == 'float4' and not WITH_A_SCALE) or (B_DATA_TYPE == 'float4' and not WITH_B_SCALE):
             pytest.skip("Float4 without scale is tested in test_block_scale_fp4")
+        if (is_hip_gfx1250() and B_DATA_TYPE == 'float4' and not PACK_B_ALONG_K):
+            pytest.skip("Float4 matmul packed along M/N unsupported on gfx1250")
         if (BLOCK_M == 256 or BLOCK_N == 256) and BLOCK_K == 256:
             pytest.skip("Config requires too much shared memory")
     elif is_xpu():
@@ -1216,14 +1221,6 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
         if ((BLOCK_M, BLOCK_N, BLOCK_K) == (128, 256, 256) and triton.runtime.driver.active.utils.get_device_properties(
                 triton.runtime.driver.active.get_current_device())["max_shared_mem"] < 196608):
             pytest.xfail("XPU: Not enough shared memory")
-        if is_xpu_cri():
-            is_both_fp8 = (A_DATA_TYPE in ['float8e5', 'float8e4nv']) and (B_DATA_TYPE in ['float8e5', 'float8e4nv'])
-            if not is_both_fp8 and A_DATA_TYPE != B_DATA_TYPE:
-                pytest.skip("Skip mixed precision because it is emulated by dpas for now. issue #678")
-            if is_both_fp8 and (BLOCK_M, BLOCK_N, BLOCK_K) == (128, 256, 256):
-                pytest.skip("Skip the test on simulator because too many register spilling occurs on XPU for now.")
-            if B_DATA_TYPE == "float4" and not PACK_B_ALONG_K:
-                pytest.skip("Skip pack along non-K because it is emulated by dpas for now. issue #678")
     if not PACK_B_ALONG_K and B_DATA_TYPE != "float4":
         pytest.xfail("Pack along K can only be False for float4")
 
@@ -1392,6 +1389,8 @@ def test_batched_mxfp(BATCH_SIZE, BLOCK_BATCH_SIZE, BLOCK_M, BLOCK_N, BLOCK_K, N
     elif is_xpu():
         if BLOCK_BATCH_SIZE == 4 and BLOCK_N == 64:
             pytest.skip("FIXME: #5762")
+        if is_xpu_cri() and ([BLOCK_M, BLOCK_N, BLOCK_K] == [64, 64, 128]):
+            pytest.skip("FIXME: #929")
 
     torch.manual_seed(42)
     dtype_src_str = "float8e5"
