@@ -1,0 +1,2205 @@
+diff --git a/presi-models/test/reduced-llama/inductor/test_triton_kernels.py b/presi-models/test/reduced-llama/inductor/test_triton_kernels.py
+index e6f89aa43..0d16f9211 100644
+--- a/presi-models/test/reduced-llama/inductor/test_triton_kernels.py
++++ b/presi-models/test/reduced-llama/inductor/test_triton_kernels.py
+@@ -1,4 +1,4 @@
+-
++import os
+ import unittest
+ import pathlib
+ import torch
+@@ -7,6 +7,8 @@ import importlib.util
+ from torch._inductor.test_case import TestCase, run_tests
+ from torch.testing._internal.common_device_type import instantiate_device_type_tests
+ from torch.utils._triton import has_triton
++from torch._inductor.runtime.triton_heuristics import filter_reduction_configs_for_determinism as old_filter_reduction_configs_for_determinism
++from torch._dynamo.testing import rand_strided
+ 
+ def to_device(obj, device="xpu"):
+     if torch.is_tensor(obj):
+@@ -22,6 +24,25 @@ def to_device(obj, device="xpu"):
+     else:
+         return obj
+ 
++
++def prepare_args(args):
++    new_args = [None] * len(args)
++    for idx, value in enumerate(args):
++        if isinstance(value, tuple):
++            new_args[idx] = rand_strided(*value)
++        else:
++            new_args[idx] = value
++    return tuple(new_args)
++
++
++# this implicitly disable validation 
++GENERATE_DATA = int(os.getenv("GENERATE_DATA", "0"))
++
++
++# HACK to disable extra autotune configs
++torch._inductor.runtime.triton_heuristics.filter_reduction_configs_for_determinism = lambda *args, **kwargs: old_filter_reduction_configs_for_determinism(*args, **kwargs)[:1]
++
++
+ # This decorator applies to all test classes, skipping them if the environment is not XPU + Triton.
+ @unittest.skipUnless(
+     torch.xpu.is_available() and has_triton(),
+@@ -71,8 +92,11 @@ class TestGraph_c55uxh25dhggnpnm666db2a5xn6yhinukzlhsmg37d7bjkwvwxv5(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 4096), (4096, 1), torch.bfloat16, 'cpu'), ((4, 64, 1), (64, 1, 1), torch.float32, 'cpu'), 1.0, ((4, 32, 1, 128), (4096, 128, 128, 1), torch.bfloat16, 'cpu'), 16384])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -80,10 +104,11 @@ class TestGraph_c55uxh25dhggnpnm666db2a5xn6yhinukzlhsmg37d7bjkwvwxv5(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_poi_fused__scaled_dot_product_fused_attention_overrideable__to_copy__unsafe_view_add_arange_bitwise_and_cat_clone_cos_index_le_mul_neg_scalar_tensor_sin_unsqueeze_view_where_5(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -94,8 +119,11 @@ class TestGraph_c55uxh25dhggnpnm666db2a5xn6yhinukzlhsmg37d7bjkwvwxv5(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 4, 1025, 128), (524800, 131200, 128, 1), torch.bfloat16, 'cpu'), ((4, 32, 1025, 128), (4198400, 131200, 128, 1), torch.bfloat16, 'cpu'), 131200, 4198400, 1024, 16793600])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -103,10 +131,11 @@ class TestGraph_c55uxh25dhggnpnm666db2a5xn6yhinukzlhsmg37d7bjkwvwxv5(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_poi_fused__scaled_dot_product_fused_attention_overrideable__to_copy__unsafe_view_add_arange_bitwise_and_cat_clone_cos_index_le_mul_neg_scalar_tensor_sin_unsqueeze_view_where_6(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -117,8 +146,11 @@ class TestGraph_c55uxh25dhggnpnm666db2a5xn6yhinukzlhsmg37d7bjkwvwxv5(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((1,), (1,), torch.int64, 'cpu'), ((4, 1025), (1025, 1), torch.int64, 'cpu'), ((4, 1, 1, 1025), (1025, 1025, 1025, 1), torch.bfloat16, 'cpu'), ((4, 1, 1, 1025), (1025, 1025, 1025, 1), torch.bfloat16, 'cpu'), 1025, 1025, 4100])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -126,10 +158,11 @@ class TestGraph_c55uxh25dhggnpnm666db2a5xn6yhinukzlhsmg37d7bjkwvwxv5(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_poi_fused__to_copy_1(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -140,8 +173,11 @@ class TestGraph_c55uxh25dhggnpnm666db2a5xn6yhinukzlhsmg37d7bjkwvwxv5(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 1), (1, 1), torch.int64, 'cpu'), ((4, 1, 1), (1, 4, 4), torch.float32, 'cpu'), 4])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -149,10 +185,11 @@ class TestGraph_c55uxh25dhggnpnm666db2a5xn6yhinukzlhsmg37d7bjkwvwxv5(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_poi_fused__to_copy_add_cat_cos_mul_neg_sin_unsqueeze_2(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -163,8 +200,11 @@ class TestGraph_c55uxh25dhggnpnm666db2a5xn6yhinukzlhsmg37d7bjkwvwxv5(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 4, 1024, 128), (524288, 128, 512, 1), torch.bfloat16, 'cpu'), ((4, 512), (512, 1), torch.bfloat16, 'cpu'), ((4, 64, 1), (64, 1, 1), torch.float32, 'cpu'), 1.0, ((4, 4, 1025, 128), (524800, 131200, 128, 1), torch.bfloat16, 'cpu'), 1025, 1024, 131200, 524800, 2099200])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -172,10 +212,11 @@ class TestGraph_c55uxh25dhggnpnm666db2a5xn6yhinukzlhsmg37d7bjkwvwxv5(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_poi_fused_cat_3(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -186,8 +227,11 @@ class TestGraph_c55uxh25dhggnpnm666db2a5xn6yhinukzlhsmg37d7bjkwvwxv5(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 4, 1024, 128), (524288, 128, 512, 1), torch.bfloat16, 'cpu'), ((4, 512), (512, 1), torch.bfloat16, 'cpu'), ((4, 4, 1025, 128), (524800, 131200, 128, 1), torch.bfloat16, 'cpu'), 1025, 1024, 131200, 524800, 2099200])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -195,10 +239,11 @@ class TestGraph_c55uxh25dhggnpnm666db2a5xn6yhinukzlhsmg37d7bjkwvwxv5(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_poi_fused_mul_silu_8(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -209,8 +254,11 @@ class TestGraph_c55uxh25dhggnpnm666db2a5xn6yhinukzlhsmg37d7bjkwvwxv5(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 1, 2048), (2048, 2048, 1), torch.bfloat16, 'cpu'), ((4, 2048), (2048, 1), torch.bfloat16, 'cpu'), 8192])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -218,10 +266,11 @@ class TestGraph_c55uxh25dhggnpnm666db2a5xn6yhinukzlhsmg37d7bjkwvwxv5(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_red_fused__to_copy_add_embedding_mean_mul_pow_rsqrt_10(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -232,8 +281,11 @@ class TestGraph_c55uxh25dhggnpnm666db2a5xn6yhinukzlhsmg37d7bjkwvwxv5(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 1, 4096), (4096, 16384, 1), torch.bfloat16, 'cpu'), ((4, 1), (1, 1), torch.int64, 'cpu'), ((128256, 4096), (4096, 1), torch.bfloat16, 'cpu'), ((4, 4096), (4096, 1), torch.bfloat16, 'cpu'), ((4, 4096), (4096, 1), torch.bfloat16, 'cpu'), ((4096,), (1,), torch.bfloat16, 'cpu'), 1e-05, ((4, 1, 4096), (4096, 4096, 1), torch.bfloat16, 'cpu'), 4, 4096])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -241,10 +293,11 @@ class TestGraph_c55uxh25dhggnpnm666db2a5xn6yhinukzlhsmg37d7bjkwvwxv5(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_red_fused__to_copy_add_embedding_mean_mul_pow_rsqrt_7(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -255,8 +308,11 @@ class TestGraph_c55uxh25dhggnpnm666db2a5xn6yhinukzlhsmg37d7bjkwvwxv5(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 1), (1, 1), torch.int64, 'cpu'), ((128256, 4096), (4096, 1), torch.bfloat16, 'cpu'), ((4, 4096), (4096, 1), torch.bfloat16, 'cpu'), ((4096,), (1,), torch.bfloat16, 'cpu'), 1e-05, ((4, 1, 4096), (4096, 4096, 1), torch.bfloat16, 'cpu'), 4, 4096])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -264,10 +320,11 @@ class TestGraph_c55uxh25dhggnpnm666db2a5xn6yhinukzlhsmg37d7bjkwvwxv5(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_red_fused__to_copy_add_embedding_mean_mul_pow_rsqrt_9(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -278,8 +335,11 @@ class TestGraph_c55uxh25dhggnpnm666db2a5xn6yhinukzlhsmg37d7bjkwvwxv5(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 1), (1, 1), torch.int64, 'cpu'), ((128256, 4096), (4096, 1), torch.bfloat16, 'cpu'), ((4, 4096), (4096, 1), torch.bfloat16, 'cpu'), ((4, 4096), (4096, 1), torch.bfloat16, 'cpu'), ((4096,), (1,), torch.bfloat16, 'cpu'), 1e-05, ((4, 1, 4096), (4096, 4096, 1), torch.bfloat16, 'cpu'), 4, 4096])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -287,10 +347,11 @@ class TestGraph_c55uxh25dhggnpnm666db2a5xn6yhinukzlhsmg37d7bjkwvwxv5(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_red_fused__to_copy_add_mean_mul_pow_rsqrt_11(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -301,8 +362,11 @@ class TestGraph_c55uxh25dhggnpnm666db2a5xn6yhinukzlhsmg37d7bjkwvwxv5(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 1, 4096), (4096, 4096, 1), torch.bfloat16, 'cpu'), ((4, 4096), (4096, 1), torch.bfloat16, 'cpu'), ((4096,), (1,), torch.bfloat16, 'cpu'), 1e-05, 4, 4096])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -310,10 +374,11 @@ class TestGraph_c55uxh25dhggnpnm666db2a5xn6yhinukzlhsmg37d7bjkwvwxv5(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_red_fused__to_copy_embedding_mean_mul_pow_rsqrt_0(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -324,8 +389,11 @@ class TestGraph_c55uxh25dhggnpnm666db2a5xn6yhinukzlhsmg37d7bjkwvwxv5(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 1), (1, 1), torch.int64, 'cpu'), ((128256, 4096), (4096, 1), torch.bfloat16, 'cpu'), ((4096,), (1,), torch.bfloat16, 'cpu'), 1e-05, ((4, 1, 4096), (4096, 4096, 1), torch.bfloat16, 'cpu'), 4, 4096])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -333,10 +401,11 @@ class TestGraph_c55uxh25dhggnpnm666db2a5xn6yhinukzlhsmg37d7bjkwvwxv5(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+ 
+ class TestGraph_c73rjzhjltgjyxfz2xvyjobnbsst4ib7q6jcmdmalzhuklxx3qfx(GeneratedKernelsTestCaseBase):
+@@ -365,8 +434,11 @@ class TestGraph_c73rjzhjltgjyxfz2xvyjobnbsst4ib7q6jcmdmalzhuklxx3qfx(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 4096), (4096, 1), torch.bfloat16, 'cpu'), ((4, 64, 1), (64, 1, 1), torch.float32, 'cpu'), 1.0, ((4, 32, 1, 128), (4096, 128, 128, 1), torch.bfloat16, 'cpu'), 16384])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -374,10 +446,11 @@ class TestGraph_c73rjzhjltgjyxfz2xvyjobnbsst4ib7q6jcmdmalzhuklxx3qfx(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_poi_fused__scaled_dot_product_fused_attention_overrideable__to_copy__unsafe_view_add_arange_bitwise_and_cat_clone_cos_index_le_mul_neg_scalar_tensor_sin_unsqueeze_view_where_5(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -388,8 +461,11 @@ class TestGraph_c73rjzhjltgjyxfz2xvyjobnbsst4ib7q6jcmdmalzhuklxx3qfx(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 4, 1028, 128), (526336, 131584, 128, 1), torch.bfloat16, 'cpu'), ((4, 32, 1028, 128), (4210688, 131584, 128, 1), torch.bfloat16, 'cpu'), 131584, 4210688, 1027, 16842752])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -397,10 +473,11 @@ class TestGraph_c73rjzhjltgjyxfz2xvyjobnbsst4ib7q6jcmdmalzhuklxx3qfx(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_poi_fused__scaled_dot_product_fused_attention_overrideable__to_copy__unsafe_view_add_arange_bitwise_and_cat_clone_cos_index_le_mul_neg_scalar_tensor_sin_unsqueeze_view_where_6(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -411,8 +488,11 @@ class TestGraph_c73rjzhjltgjyxfz2xvyjobnbsst4ib7q6jcmdmalzhuklxx3qfx(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((1,), (1,), torch.int64, 'cpu'), ((4, 1028), (1028, 1), torch.int64, 'cpu'), ((4, 1, 1, 1028), (1028, 1028, 1028, 1), torch.bfloat16, 'cpu'), ((4, 1, 1, 1028), (1028, 1028, 1028, 1), torch.bfloat16, 'cpu'), 1028, 1028, 4112])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -420,10 +500,11 @@ class TestGraph_c73rjzhjltgjyxfz2xvyjobnbsst4ib7q6jcmdmalzhuklxx3qfx(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_poi_fused__to_copy_1(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -434,8 +515,11 @@ class TestGraph_c73rjzhjltgjyxfz2xvyjobnbsst4ib7q6jcmdmalzhuklxx3qfx(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 1), (1, 1), torch.int64, 'cpu'), ((4, 1, 1), (1, 4, 4), torch.float32, 'cpu'), 4])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -443,10 +527,11 @@ class TestGraph_c73rjzhjltgjyxfz2xvyjobnbsst4ib7q6jcmdmalzhuklxx3qfx(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_poi_fused__to_copy_add_cat_cos_mul_neg_sin_unsqueeze_2(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -457,8 +542,11 @@ class TestGraph_c73rjzhjltgjyxfz2xvyjobnbsst4ib7q6jcmdmalzhuklxx3qfx(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 4, 1027, 128), (525824, 131456, 128, 1), torch.bfloat16, 'cpu'), ((4, 512), (512, 1), torch.bfloat16, 'cpu'), ((4, 64, 1), (64, 1, 1), torch.float32, 'cpu'), 1.0, ((4, 4, 1028, 128), (526336, 131584, 128, 1), torch.bfloat16, 'cpu'), 1028, 1027, 131584, 526336, 2105344])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -466,10 +554,11 @@ class TestGraph_c73rjzhjltgjyxfz2xvyjobnbsst4ib7q6jcmdmalzhuklxx3qfx(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_poi_fused_cat_3(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -480,8 +569,11 @@ class TestGraph_c73rjzhjltgjyxfz2xvyjobnbsst4ib7q6jcmdmalzhuklxx3qfx(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 4, 1027, 128), (525824, 131456, 128, 1), torch.bfloat16, 'cpu'), ((4, 512), (512, 1), torch.bfloat16, 'cpu'), ((4, 4, 1028, 128), (526336, 131584, 128, 1), torch.bfloat16, 'cpu'), 1028, 1027, 131584, 2105344])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -489,10 +581,11 @@ class TestGraph_c73rjzhjltgjyxfz2xvyjobnbsst4ib7q6jcmdmalzhuklxx3qfx(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_poi_fused_mul_silu_8(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -503,8 +596,11 @@ class TestGraph_c73rjzhjltgjyxfz2xvyjobnbsst4ib7q6jcmdmalzhuklxx3qfx(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 1, 2048), (2048, 2048, 1), torch.bfloat16, 'cpu'), ((4, 2048), (2048, 1), torch.bfloat16, 'cpu'), 8192])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -512,10 +608,11 @@ class TestGraph_c73rjzhjltgjyxfz2xvyjobnbsst4ib7q6jcmdmalzhuklxx3qfx(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_red_fused__to_copy_add_embedding_mean_mul_pow_rsqrt_10(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -526,8 +623,11 @@ class TestGraph_c73rjzhjltgjyxfz2xvyjobnbsst4ib7q6jcmdmalzhuklxx3qfx(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 1, 4096), (4096, 16384, 1), torch.bfloat16, 'cpu'), ((4, 1), (1, 1), torch.int64, 'cpu'), ((128256, 4096), (4096, 1), torch.bfloat16, 'cpu'), ((4, 4096), (4096, 1), torch.bfloat16, 'cpu'), ((4, 4096), (4096, 1), torch.bfloat16, 'cpu'), ((4096,), (1,), torch.bfloat16, 'cpu'), 1e-05, ((4, 1, 4096), (4096, 4096, 1), torch.bfloat16, 'cpu'), 4, 4096])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -535,10 +635,11 @@ class TestGraph_c73rjzhjltgjyxfz2xvyjobnbsst4ib7q6jcmdmalzhuklxx3qfx(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_red_fused__to_copy_add_embedding_mean_mul_pow_rsqrt_7(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -549,8 +650,11 @@ class TestGraph_c73rjzhjltgjyxfz2xvyjobnbsst4ib7q6jcmdmalzhuklxx3qfx(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 1), (1, 1), torch.int64, 'cpu'), ((128256, 4096), (4096, 1), torch.bfloat16, 'cpu'), ((4, 4096), (4096, 1), torch.bfloat16, 'cpu'), ((4096,), (1,), torch.bfloat16, 'cpu'), 1e-05, ((4, 1, 4096), (4096, 4096, 1), torch.bfloat16, 'cpu'), 4, 4096])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -558,10 +662,11 @@ class TestGraph_c73rjzhjltgjyxfz2xvyjobnbsst4ib7q6jcmdmalzhuklxx3qfx(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_red_fused__to_copy_add_embedding_mean_mul_pow_rsqrt_9(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -572,8 +677,11 @@ class TestGraph_c73rjzhjltgjyxfz2xvyjobnbsst4ib7q6jcmdmalzhuklxx3qfx(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 1), (1, 1), torch.int64, 'cpu'), ((128256, 4096), (4096, 1), torch.bfloat16, 'cpu'), ((4, 4096), (4096, 1), torch.bfloat16, 'cpu'), ((4, 4096), (4096, 1), torch.bfloat16, 'cpu'), ((4096,), (1,), torch.bfloat16, 'cpu'), 1e-05, ((4, 1, 4096), (4096, 4096, 1), torch.bfloat16, 'cpu'), 4, 4096])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -581,10 +689,11 @@ class TestGraph_c73rjzhjltgjyxfz2xvyjobnbsst4ib7q6jcmdmalzhuklxx3qfx(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_red_fused__to_copy_add_mean_mul_pow_rsqrt_11(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -595,8 +704,11 @@ class TestGraph_c73rjzhjltgjyxfz2xvyjobnbsst4ib7q6jcmdmalzhuklxx3qfx(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 1, 4096), (4096, 4096, 1), torch.bfloat16, 'cpu'), ((4, 4096), (4096, 1), torch.bfloat16, 'cpu'), ((4096,), (1,), torch.bfloat16, 'cpu'), 1e-05, 4, 4096])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -604,10 +716,11 @@ class TestGraph_c73rjzhjltgjyxfz2xvyjobnbsst4ib7q6jcmdmalzhuklxx3qfx(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_red_fused__to_copy_embedding_mean_mul_pow_rsqrt_0(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -618,8 +731,11 @@ class TestGraph_c73rjzhjltgjyxfz2xvyjobnbsst4ib7q6jcmdmalzhuklxx3qfx(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 1), (1, 1), torch.int64, 'cpu'), ((128256, 4096), (4096, 1), torch.bfloat16, 'cpu'), ((4096,), (1,), torch.bfloat16, 'cpu'), 1e-05, ((4, 1, 4096), (4096, 4096, 1), torch.bfloat16, 'cpu'), 4, 4096])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -627,10 +743,11 @@ class TestGraph_c73rjzhjltgjyxfz2xvyjobnbsst4ib7q6jcmdmalzhuklxx3qfx(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+ 
+ class TestGraph_cijqgauprdopmetfxldyxed4clq5fzhff5pwjn3hbx32ipjy52by(GeneratedKernelsTestCaseBase):
+@@ -659,8 +776,11 @@ class TestGraph_cijqgauprdopmetfxldyxed4clq5fzhff5pwjn3hbx32ipjy52by(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 2048), (2048, 1), torch.bfloat16, 'cpu'), ((4, 64, 1), (64, 1, 1), torch.float32, 'cpu'), 1.0, ((4, 16, 1, 128), (2048, 128, 128, 1), torch.bfloat16, 'cpu'), 8192])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -668,10 +788,11 @@ class TestGraph_cijqgauprdopmetfxldyxed4clq5fzhff5pwjn3hbx32ipjy52by(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_poi_fused__scaled_dot_product_fused_attention_overrideable__to_copy__unsafe_view_add_arange_bitwise_and_cat_clone_cos_index_le_mul_neg_scalar_tensor_sin_unsqueeze_view_where_5(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -682,8 +803,11 @@ class TestGraph_cijqgauprdopmetfxldyxed4clq5fzhff5pwjn3hbx32ipjy52by(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 2, 129, 128), (33024, 16512, 128, 1), torch.bfloat16, 'cpu'), ((4, 16, 129, 128), (264192, 16512, 128, 1), torch.bfloat16, 'cpu'), 16512, 264192, 128, 1056768])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -691,10 +815,11 @@ class TestGraph_cijqgauprdopmetfxldyxed4clq5fzhff5pwjn3hbx32ipjy52by(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_poi_fused__scaled_dot_product_fused_attention_overrideable__to_copy__unsafe_view_add_arange_bitwise_and_cat_clone_cos_index_le_mul_neg_scalar_tensor_sin_unsqueeze_view_where_6(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -705,8 +830,11 @@ class TestGraph_cijqgauprdopmetfxldyxed4clq5fzhff5pwjn3hbx32ipjy52by(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((1,), (1,), torch.int64, 'cpu'), ((4, 129), (129, 1), torch.int64, 'cpu'), ((4, 1, 1, 129), (129, 129, 129, 1), torch.bfloat16, 'cpu'), ((4, 1, 1, 129), (129, 129, 129, 1), torch.bfloat16, 'cpu'), 129, 129, 516])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -714,10 +842,11 @@ class TestGraph_cijqgauprdopmetfxldyxed4clq5fzhff5pwjn3hbx32ipjy52by(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_poi_fused__to_copy_1(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -728,8 +857,11 @@ class TestGraph_cijqgauprdopmetfxldyxed4clq5fzhff5pwjn3hbx32ipjy52by(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 1), (1, 1), torch.int64, 'cpu'), ((4, 1, 1), (1, 4, 4), torch.float32, 'cpu'), 4])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -737,10 +869,11 @@ class TestGraph_cijqgauprdopmetfxldyxed4clq5fzhff5pwjn3hbx32ipjy52by(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_poi_fused__to_copy_add_cat_cos_mul_neg_sin_unsqueeze_2(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -751,8 +884,11 @@ class TestGraph_cijqgauprdopmetfxldyxed4clq5fzhff5pwjn3hbx32ipjy52by(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 2, 128, 128), (32768, 128, 256, 1), torch.bfloat16, 'cpu'), ((4, 256), (256, 1), torch.bfloat16, 'cpu'), ((4, 64, 1), (64, 1, 1), torch.float32, 'cpu'), 1.0, ((4, 2, 129, 128), (33024, 16512, 128, 1), torch.bfloat16, 'cpu'), 129, 128, 16512, 33024, 132096])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -760,10 +896,11 @@ class TestGraph_cijqgauprdopmetfxldyxed4clq5fzhff5pwjn3hbx32ipjy52by(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_poi_fused_cat_3(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -774,8 +911,11 @@ class TestGraph_cijqgauprdopmetfxldyxed4clq5fzhff5pwjn3hbx32ipjy52by(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 2, 128, 128), (32768, 128, 256, 1), torch.bfloat16, 'cpu'), ((4, 256), (256, 1), torch.bfloat16, 'cpu'), ((4, 2, 129, 128), (33024, 16512, 128, 1), torch.bfloat16, 'cpu'), 129, 128, 16512, 33024, 132096])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -783,10 +923,11 @@ class TestGraph_cijqgauprdopmetfxldyxed4clq5fzhff5pwjn3hbx32ipjy52by(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_poi_fused_mul_silu_8(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -797,8 +938,11 @@ class TestGraph_cijqgauprdopmetfxldyxed4clq5fzhff5pwjn3hbx32ipjy52by(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 1, 128), (128, 128, 1), torch.bfloat16, 'cpu'), ((4, 128), (128, 1), torch.bfloat16, 'cpu'), 512])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -806,10 +950,11 @@ class TestGraph_cijqgauprdopmetfxldyxed4clq5fzhff5pwjn3hbx32ipjy52by(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_red_fused__to_copy_add_embedding_mean_mul_pow_rsqrt_10(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -820,8 +965,11 @@ class TestGraph_cijqgauprdopmetfxldyxed4clq5fzhff5pwjn3hbx32ipjy52by(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 1, 2048), (2048, 8192, 1), torch.bfloat16, 'cpu'), ((4, 1), (1, 1), torch.int64, 'cpu'), ((128256, 2048), (2048, 1), torch.bfloat16, 'cpu'), ((4, 2048), (2048, 1), torch.bfloat16, 'cpu'), ((4, 2048), (2048, 1), torch.bfloat16, 'cpu'), ((2048,), (1,), torch.bfloat16, 'cpu'), 1e-05, ((4, 1, 2048), (2048, 2048, 1), torch.bfloat16, 'cpu'), 4, 2048])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -829,10 +977,11 @@ class TestGraph_cijqgauprdopmetfxldyxed4clq5fzhff5pwjn3hbx32ipjy52by(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_red_fused__to_copy_add_embedding_mean_mul_pow_rsqrt_7(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -843,8 +992,11 @@ class TestGraph_cijqgauprdopmetfxldyxed4clq5fzhff5pwjn3hbx32ipjy52by(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 1), (1, 1), torch.int64, 'cpu'), ((128256, 2048), (2048, 1), torch.bfloat16, 'cpu'), ((4, 2048), (2048, 1), torch.bfloat16, 'cpu'), ((2048,), (1,), torch.bfloat16, 'cpu'), 1e-05, ((4, 1, 2048), (2048, 2048, 1), torch.bfloat16, 'cpu'), 4, 2048])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -852,10 +1004,11 @@ class TestGraph_cijqgauprdopmetfxldyxed4clq5fzhff5pwjn3hbx32ipjy52by(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_red_fused__to_copy_add_embedding_mean_mul_pow_rsqrt_9(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -866,8 +1019,11 @@ class TestGraph_cijqgauprdopmetfxldyxed4clq5fzhff5pwjn3hbx32ipjy52by(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 1), (1, 1), torch.int64, 'cpu'), ((128256, 2048), (2048, 1), torch.bfloat16, 'cpu'), ((4, 2048), (2048, 1), torch.bfloat16, 'cpu'), ((4, 2048), (2048, 1), torch.bfloat16, 'cpu'), ((2048,), (1,), torch.bfloat16, 'cpu'), 1e-05, ((4, 1, 2048), (2048, 2048, 1), torch.bfloat16, 'cpu'), 4, 2048])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -875,10 +1031,11 @@ class TestGraph_cijqgauprdopmetfxldyxed4clq5fzhff5pwjn3hbx32ipjy52by(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_red_fused__to_copy_add_mean_mul_pow_rsqrt_11(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -889,8 +1046,11 @@ class TestGraph_cijqgauprdopmetfxldyxed4clq5fzhff5pwjn3hbx32ipjy52by(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 1, 2048), (2048, 2048, 1), torch.bfloat16, 'cpu'), ((4, 2048), (2048, 1), torch.bfloat16, 'cpu'), ((2048,), (1,), torch.bfloat16, 'cpu'), 1e-05, 4, 2048])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -898,10 +1058,11 @@ class TestGraph_cijqgauprdopmetfxldyxed4clq5fzhff5pwjn3hbx32ipjy52by(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_red_fused__to_copy_embedding_mean_mul_pow_rsqrt_0(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -912,8 +1073,11 @@ class TestGraph_cijqgauprdopmetfxldyxed4clq5fzhff5pwjn3hbx32ipjy52by(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 1), (1, 1), torch.int64, 'cpu'), ((128256, 2048), (2048, 1), torch.bfloat16, 'cpu'), ((2048,), (1,), torch.bfloat16, 'cpu'), 1e-05, ((4, 1, 2048), (2048, 2048, 1), torch.bfloat16, 'cpu'), 4, 2048])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -921,10 +1085,11 @@ class TestGraph_cijqgauprdopmetfxldyxed4clq5fzhff5pwjn3hbx32ipjy52by(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+ 
+ class TestGraph_cmpfqnu6gh5pzr75qdhwgxwj2duipejt5ku3o634ahumdbjthnbw(GeneratedKernelsTestCaseBase):
+@@ -953,8 +1118,11 @@ class TestGraph_cmpfqnu6gh5pzr75qdhwgxwj2duipejt5ku3o634ahumdbjthnbw(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((512, 2048), (2048, 1), torch.bfloat16, 'cpu'), ((4, 64, 128), (8192, 128, 1), torch.float32, 'cpu'), 1.0, ((4, 16, 128, 128), (262144, 16384, 128, 1), torch.bfloat16, 'cpu'), 128, 262144, 1048576])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -962,10 +1130,11 @@ class TestGraph_cmpfqnu6gh5pzr75qdhwgxwj2duipejt5ku3o634ahumdbjthnbw(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_poi_fused__scaled_dot_product_fused_attention_overrideable__to_copy__unsafe_view_add_arange_bitwise_and_cat_clone_cos_expand_index_le_mul_neg_scalar_tensor_sin_unsqueeze_view_where_4(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -976,8 +1145,11 @@ class TestGraph_cmpfqnu6gh5pzr75qdhwgxwj2duipejt5ku3o634ahumdbjthnbw(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((512, 256), (256, 1), torch.bfloat16, 'cpu'), ((4, 16, 128, 128), (262144, 16384, 128, 1), torch.bfloat16, 'cpu'), 128, 16384, 262144, 1048576])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -985,10 +1157,11 @@ class TestGraph_cmpfqnu6gh5pzr75qdhwgxwj2duipejt5ku3o634ahumdbjthnbw(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_poi_fused__scaled_dot_product_fused_attention_overrideable__to_copy__unsafe_view_add_arange_bitwise_and_cat_clone_cos_expand_index_le_mul_neg_scalar_tensor_sin_unsqueeze_view_where_5(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -999,8 +1172,11 @@ class TestGraph_cmpfqnu6gh5pzr75qdhwgxwj2duipejt5ku3o634ahumdbjthnbw(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((128,), (1,), torch.int64, 'cpu'), ((4, 128), (0, 1), torch.int64, 'cpu'), ((4, 1, 128, 128), (16384, 16384, 128, 1), torch.bfloat16, 'cpu'), ((4, 1, 128, 128), (16384, 16384, 128, 1), torch.bfloat16, 'cpu'), 128, 65536])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -1008,10 +1184,11 @@ class TestGraph_cmpfqnu6gh5pzr75qdhwgxwj2duipejt5ku3o634ahumdbjthnbw(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_poi_fused__to_copy_1(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -1022,8 +1199,11 @@ class TestGraph_cmpfqnu6gh5pzr75qdhwgxwj2duipejt5ku3o634ahumdbjthnbw(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 128), (128, 1), torch.int64, 'cpu'), ((4, 1, 128), (128, 512, 1), torch.float32, 'cpu'), 512])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -1031,10 +1211,11 @@ class TestGraph_cmpfqnu6gh5pzr75qdhwgxwj2duipejt5ku3o634ahumdbjthnbw(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_poi_fused__to_copy_add_cat_cos_mul_neg_sin_unsqueeze_2(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -1045,8 +1226,11 @@ class TestGraph_cmpfqnu6gh5pzr75qdhwgxwj2duipejt5ku3o634ahumdbjthnbw(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((512, 256), (256, 1), torch.bfloat16, 'cpu'), ((4, 64, 128), (8192, 128, 1), torch.float32, 'cpu'), 1.0, ((4, 2, 128, 128), (32768, 128, 256, 1), torch.bfloat16, 'cpu'), 128, 512, 256])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -1054,10 +1238,11 @@ class TestGraph_cmpfqnu6gh5pzr75qdhwgxwj2duipejt5ku3o634ahumdbjthnbw(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_poi_fused_clone_6(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -1068,8 +1253,11 @@ class TestGraph_cmpfqnu6gh5pzr75qdhwgxwj2duipejt5ku3o634ahumdbjthnbw(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 16, 128, 128), (262144, 16384, 128, 1), torch.bfloat16, 'cpu'), ((4, 128, 16, 128), (262144, 2048, 128, 1), torch.bfloat16, 'cpu'), 128, 262144, 1048576])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -1077,10 +1265,11 @@ class TestGraph_cmpfqnu6gh5pzr75qdhwgxwj2duipejt5ku3o634ahumdbjthnbw(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_poi_fused_mul_silu_8(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -1091,8 +1280,11 @@ class TestGraph_cmpfqnu6gh5pzr75qdhwgxwj2duipejt5ku3o634ahumdbjthnbw(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 128, 128), (16384, 128, 1), torch.bfloat16, 'cpu'), ((512, 128), (128, 1), torch.bfloat16, 'cpu'), 65536])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -1100,10 +1292,11 @@ class TestGraph_cmpfqnu6gh5pzr75qdhwgxwj2duipejt5ku3o634ahumdbjthnbw(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_red_fused__to_copy_add_embedding_mean_mul_pow_rsqrt_10(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -1114,8 +1307,11 @@ class TestGraph_cmpfqnu6gh5pzr75qdhwgxwj2duipejt5ku3o634ahumdbjthnbw(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 128, 2048), (262144, 2048, 1), torch.bfloat16, 'cpu'), ((4, 128), (128, 1), torch.int64, 'cpu'), ((128256, 2048), (2048, 1), torch.bfloat16, 'cpu'), ((512, 2048), (2048, 1), torch.bfloat16, 'cpu'), ((512, 2048), (2048, 1), torch.bfloat16, 'cpu'), ((2048,), (1,), torch.bfloat16, 'cpu'), 1e-05, ((4, 128, 2048), (262144, 2048, 1), torch.bfloat16, 'cpu'), 512, 2048])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -1123,10 +1319,11 @@ class TestGraph_cmpfqnu6gh5pzr75qdhwgxwj2duipejt5ku3o634ahumdbjthnbw(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_red_fused__to_copy_add_embedding_mean_mul_pow_rsqrt_7(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -1137,8 +1334,11 @@ class TestGraph_cmpfqnu6gh5pzr75qdhwgxwj2duipejt5ku3o634ahumdbjthnbw(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 128), (128, 1), torch.int64, 'cpu'), ((128256, 2048), (2048, 1), torch.bfloat16, 'cpu'), ((512, 2048), (2048, 1), torch.bfloat16, 'cpu'), ((2048,), (1,), torch.bfloat16, 'cpu'), 1e-05, ((4, 128, 2048), (262144, 2048, 1), torch.bfloat16, 'cpu'), 512, 2048])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -1146,10 +1346,11 @@ class TestGraph_cmpfqnu6gh5pzr75qdhwgxwj2duipejt5ku3o634ahumdbjthnbw(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_red_fused__to_copy_add_embedding_mean_mul_pow_rsqrt_9(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -1160,8 +1361,11 @@ class TestGraph_cmpfqnu6gh5pzr75qdhwgxwj2duipejt5ku3o634ahumdbjthnbw(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 128), (128, 1), torch.int64, 'cpu'), ((128256, 2048), (2048, 1), torch.bfloat16, 'cpu'), ((512, 2048), (2048, 1), torch.bfloat16, 'cpu'), ((512, 2048), (2048, 1), torch.bfloat16, 'cpu'), ((2048,), (1,), torch.bfloat16, 'cpu'), 1e-05, ((4, 128, 2048), (262144, 2048, 1), torch.bfloat16, 'cpu'), 512, 2048])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -1169,10 +1373,11 @@ class TestGraph_cmpfqnu6gh5pzr75qdhwgxwj2duipejt5ku3o634ahumdbjthnbw(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_red_fused__to_copy_add_mean_mul_pow_rsqrt_11(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -1183,8 +1388,11 @@ class TestGraph_cmpfqnu6gh5pzr75qdhwgxwj2duipejt5ku3o634ahumdbjthnbw(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 128, 2048), (262144, 2048, 1), torch.bfloat16, 'cpu'), ((512, 2048), (2048, 1), torch.bfloat16, 'cpu'), ((2048,), (1,), torch.bfloat16, 'cpu'), 1e-05, 512, 2048])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -1192,10 +1400,11 @@ class TestGraph_cmpfqnu6gh5pzr75qdhwgxwj2duipejt5ku3o634ahumdbjthnbw(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_red_fused__to_copy_embedding_mean_mul_pow_rsqrt_0(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -1206,8 +1415,11 @@ class TestGraph_cmpfqnu6gh5pzr75qdhwgxwj2duipejt5ku3o634ahumdbjthnbw(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 128), (128, 1), torch.int64, 'cpu'), ((128256, 2048), (2048, 1), torch.bfloat16, 'cpu'), ((2048,), (1,), torch.bfloat16, 'cpu'), 1e-05, ((4, 128, 2048), (262144, 2048, 1), torch.bfloat16, 'cpu'), 512, 2048])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -1215,10 +1427,11 @@ class TestGraph_cmpfqnu6gh5pzr75qdhwgxwj2duipejt5ku3o634ahumdbjthnbw(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+ 
+ class TestGraph_ctvh7zupnmq4mzpthouexdrnbshmgkjuk325sfaz5l2y6t6oxmkr(GeneratedKernelsTestCaseBase):
+@@ -1247,8 +1460,11 @@ class TestGraph_ctvh7zupnmq4mzpthouexdrnbshmgkjuk325sfaz5l2y6t6oxmkr(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 2048), (2048, 1), torch.bfloat16, 'cpu'), ((4, 64, 1), (64, 1, 1), torch.float32, 'cpu'), 1.0, ((4, 16, 1, 128), (2048, 128, 128, 1), torch.bfloat16, 'cpu'), 8192])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -1256,10 +1472,11 @@ class TestGraph_ctvh7zupnmq4mzpthouexdrnbshmgkjuk325sfaz5l2y6t6oxmkr(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_poi_fused__scaled_dot_product_fused_attention_overrideable__to_copy__unsafe_view_add_arange_bitwise_and_cat_clone_cos_index_le_mul_neg_scalar_tensor_sin_unsqueeze_view_where_5(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -1270,8 +1487,11 @@ class TestGraph_ctvh7zupnmq4mzpthouexdrnbshmgkjuk325sfaz5l2y6t6oxmkr(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 2, 132, 128), (33792, 16896, 128, 1), torch.bfloat16, 'cpu'), ((4, 16, 132, 128), (270336, 16896, 128, 1), torch.bfloat16, 'cpu'), 16896, 270336, 131, 1081344])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -1279,10 +1499,11 @@ class TestGraph_ctvh7zupnmq4mzpthouexdrnbshmgkjuk325sfaz5l2y6t6oxmkr(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_poi_fused__scaled_dot_product_fused_attention_overrideable__to_copy__unsafe_view_add_arange_bitwise_and_cat_clone_cos_index_le_mul_neg_scalar_tensor_sin_unsqueeze_view_where_6(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -1293,8 +1514,11 @@ class TestGraph_ctvh7zupnmq4mzpthouexdrnbshmgkjuk325sfaz5l2y6t6oxmkr(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((1,), (1,), torch.int64, 'cpu'), ((4, 132), (132, 1), torch.int64, 'cpu'), ((4, 1, 1, 132), (132, 132, 132, 1), torch.bfloat16, 'cpu'), ((4, 1, 1, 132), (132, 132, 132, 1), torch.bfloat16, 'cpu'), 132, 132, 528])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -1302,10 +1526,11 @@ class TestGraph_ctvh7zupnmq4mzpthouexdrnbshmgkjuk325sfaz5l2y6t6oxmkr(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_poi_fused__to_copy_1(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -1316,8 +1541,11 @@ class TestGraph_ctvh7zupnmq4mzpthouexdrnbshmgkjuk325sfaz5l2y6t6oxmkr(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 1), (1, 1), torch.int64, 'cpu'), ((4, 1, 1), (1, 4, 4), torch.float32, 'cpu'), 4])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -1325,10 +1553,11 @@ class TestGraph_ctvh7zupnmq4mzpthouexdrnbshmgkjuk325sfaz5l2y6t6oxmkr(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_poi_fused__to_copy_add_cat_cos_mul_neg_sin_unsqueeze_2(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -1339,8 +1568,11 @@ class TestGraph_ctvh7zupnmq4mzpthouexdrnbshmgkjuk325sfaz5l2y6t6oxmkr(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 2, 131, 128), (33536, 16768, 128, 1), torch.bfloat16, 'cpu'), ((4, 256), (256, 1), torch.bfloat16, 'cpu'), ((4, 64, 1), (64, 1, 1), torch.float32, 'cpu'), 1.0, ((4, 2, 132, 128), (33792, 16896, 128, 1), torch.bfloat16, 'cpu'), 132, 131, 16896, 33792, 135168])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -1348,10 +1580,11 @@ class TestGraph_ctvh7zupnmq4mzpthouexdrnbshmgkjuk325sfaz5l2y6t6oxmkr(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_poi_fused_cat_3(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -1362,8 +1595,11 @@ class TestGraph_ctvh7zupnmq4mzpthouexdrnbshmgkjuk325sfaz5l2y6t6oxmkr(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 2, 131, 128), (33536, 16768, 128, 1), torch.bfloat16, 'cpu'), ((4, 256), (256, 1), torch.bfloat16, 'cpu'), ((4, 2, 132, 128), (33792, 16896, 128, 1), torch.bfloat16, 'cpu'), 132, 131, 16896, 135168])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -1371,10 +1607,11 @@ class TestGraph_ctvh7zupnmq4mzpthouexdrnbshmgkjuk325sfaz5l2y6t6oxmkr(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_poi_fused_mul_silu_8(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -1385,8 +1622,11 @@ class TestGraph_ctvh7zupnmq4mzpthouexdrnbshmgkjuk325sfaz5l2y6t6oxmkr(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 1, 128), (128, 128, 1), torch.bfloat16, 'cpu'), ((4, 128), (128, 1), torch.bfloat16, 'cpu'), 512])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -1394,10 +1634,11 @@ class TestGraph_ctvh7zupnmq4mzpthouexdrnbshmgkjuk325sfaz5l2y6t6oxmkr(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_red_fused__to_copy_add_embedding_mean_mul_pow_rsqrt_10(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -1408,8 +1649,11 @@ class TestGraph_ctvh7zupnmq4mzpthouexdrnbshmgkjuk325sfaz5l2y6t6oxmkr(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 1, 2048), (2048, 8192, 1), torch.bfloat16, 'cpu'), ((4, 1), (1, 1), torch.int64, 'cpu'), ((128256, 2048), (2048, 1), torch.bfloat16, 'cpu'), ((4, 2048), (2048, 1), torch.bfloat16, 'cpu'), ((4, 2048), (2048, 1), torch.bfloat16, 'cpu'), ((2048,), (1,), torch.bfloat16, 'cpu'), 1e-05, ((4, 1, 2048), (2048, 2048, 1), torch.bfloat16, 'cpu'), 4, 2048])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -1417,10 +1661,11 @@ class TestGraph_ctvh7zupnmq4mzpthouexdrnbshmgkjuk325sfaz5l2y6t6oxmkr(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_red_fused__to_copy_add_embedding_mean_mul_pow_rsqrt_7(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -1431,8 +1676,11 @@ class TestGraph_ctvh7zupnmq4mzpthouexdrnbshmgkjuk325sfaz5l2y6t6oxmkr(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 1), (1, 1), torch.int64, 'cpu'), ((128256, 2048), (2048, 1), torch.bfloat16, 'cpu'), ((4, 2048), (2048, 1), torch.bfloat16, 'cpu'), ((2048,), (1,), torch.bfloat16, 'cpu'), 1e-05, ((4, 1, 2048), (2048, 2048, 1), torch.bfloat16, 'cpu'), 4, 2048])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -1440,10 +1688,11 @@ class TestGraph_ctvh7zupnmq4mzpthouexdrnbshmgkjuk325sfaz5l2y6t6oxmkr(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_red_fused__to_copy_add_embedding_mean_mul_pow_rsqrt_9(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -1454,8 +1703,11 @@ class TestGraph_ctvh7zupnmq4mzpthouexdrnbshmgkjuk325sfaz5l2y6t6oxmkr(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 1), (1, 1), torch.int64, 'cpu'), ((128256, 2048), (2048, 1), torch.bfloat16, 'cpu'), ((4, 2048), (2048, 1), torch.bfloat16, 'cpu'), ((4, 2048), (2048, 1), torch.bfloat16, 'cpu'), ((2048,), (1,), torch.bfloat16, 'cpu'), 1e-05, ((4, 1, 2048), (2048, 2048, 1), torch.bfloat16, 'cpu'), 4, 2048])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -1463,10 +1715,11 @@ class TestGraph_ctvh7zupnmq4mzpthouexdrnbshmgkjuk325sfaz5l2y6t6oxmkr(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_red_fused__to_copy_add_mean_mul_pow_rsqrt_11(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -1477,8 +1730,11 @@ class TestGraph_ctvh7zupnmq4mzpthouexdrnbshmgkjuk325sfaz5l2y6t6oxmkr(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 1, 2048), (2048, 2048, 1), torch.bfloat16, 'cpu'), ((4, 2048), (2048, 1), torch.bfloat16, 'cpu'), ((2048,), (1,), torch.bfloat16, 'cpu'), 1e-05, 4, 2048])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -1486,10 +1742,11 @@ class TestGraph_ctvh7zupnmq4mzpthouexdrnbshmgkjuk325sfaz5l2y6t6oxmkr(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_red_fused__to_copy_embedding_mean_mul_pow_rsqrt_0(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -1500,8 +1757,11 @@ class TestGraph_ctvh7zupnmq4mzpthouexdrnbshmgkjuk325sfaz5l2y6t6oxmkr(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 1), (1, 1), torch.int64, 'cpu'), ((128256, 2048), (2048, 1), torch.bfloat16, 'cpu'), ((2048,), (1,), torch.bfloat16, 'cpu'), 1e-05, ((4, 1, 2048), (2048, 2048, 1), torch.bfloat16, 'cpu'), 4, 2048])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -1509,10 +1769,11 @@ class TestGraph_ctvh7zupnmq4mzpthouexdrnbshmgkjuk325sfaz5l2y6t6oxmkr(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+ 
+ class TestGraph_cy77lwjrkltm4x4oaxrzfyuqe3vl6kfaas7c6bhn3qqach4koszf(GeneratedKernelsTestCaseBase):
+@@ -1541,8 +1802,11 @@ class TestGraph_cy77lwjrkltm4x4oaxrzfyuqe3vl6kfaas7c6bhn3qqach4koszf(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4096, 4096), (4096, 1), torch.bfloat16, 'cpu'), ((4, 64, 1024), (65536, 1024, 1), torch.float32, 'cpu'), 1.0, ((4, 32, 1024, 128), (4194304, 131072, 128, 1), torch.bfloat16, 'cpu'), 1024, 4194304, 16777216])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -1550,10 +1814,11 @@ class TestGraph_cy77lwjrkltm4x4oaxrzfyuqe3vl6kfaas7c6bhn3qqach4koszf(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_poi_fused__scaled_dot_product_fused_attention_overrideable__to_copy__unsafe_view_add_arange_bitwise_and_cat_clone_cos_expand_index_le_mul_neg_scalar_tensor_sin_unsqueeze_view_where_4(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -1564,8 +1829,11 @@ class TestGraph_cy77lwjrkltm4x4oaxrzfyuqe3vl6kfaas7c6bhn3qqach4koszf(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4096, 512), (512, 1), torch.bfloat16, 'cpu'), ((4, 32, 1024, 128), (4194304, 131072, 128, 1), torch.bfloat16, 'cpu'), 1024, 131072, 4194304, 16777216])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -1573,10 +1841,11 @@ class TestGraph_cy77lwjrkltm4x4oaxrzfyuqe3vl6kfaas7c6bhn3qqach4koszf(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_poi_fused__scaled_dot_product_fused_attention_overrideable__to_copy__unsafe_view_add_arange_bitwise_and_cat_clone_cos_expand_index_le_mul_neg_scalar_tensor_sin_unsqueeze_view_where_5(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -1587,8 +1856,11 @@ class TestGraph_cy77lwjrkltm4x4oaxrzfyuqe3vl6kfaas7c6bhn3qqach4koszf(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((1024,), (1,), torch.int64, 'cpu'), ((4, 1024), (0, 1), torch.int64, 'cpu'), ((4, 1, 1024, 1024), (1048576, 1048576, 1024, 1), torch.bfloat16, 'cpu'), ((4, 1, 1024, 1024), (1048576, 1048576, 1024, 1), torch.bfloat16, 'cpu'), 1024, 4194304])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -1596,10 +1868,11 @@ class TestGraph_cy77lwjrkltm4x4oaxrzfyuqe3vl6kfaas7c6bhn3qqach4koszf(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_poi_fused__to_copy_1(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -1610,8 +1883,11 @@ class TestGraph_cy77lwjrkltm4x4oaxrzfyuqe3vl6kfaas7c6bhn3qqach4koszf(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 1024), (1024, 1), torch.int64, 'cpu'), ((4, 1, 1024), (1024, 4096, 1), torch.float32, 'cpu'), 4096])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -1619,10 +1895,11 @@ class TestGraph_cy77lwjrkltm4x4oaxrzfyuqe3vl6kfaas7c6bhn3qqach4koszf(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_poi_fused__to_copy_add_cat_cos_mul_neg_sin_unsqueeze_2(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -1633,8 +1910,11 @@ class TestGraph_cy77lwjrkltm4x4oaxrzfyuqe3vl6kfaas7c6bhn3qqach4koszf(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4096, 512), (512, 1), torch.bfloat16, 'cpu'), ((4, 64, 1024), (65536, 1024, 1), torch.float32, 'cpu'), 1.0, ((4, 4, 1024, 128), (524288, 128, 512, 1), torch.bfloat16, 'cpu'), 1024, 4096, 512])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -1642,10 +1922,11 @@ class TestGraph_cy77lwjrkltm4x4oaxrzfyuqe3vl6kfaas7c6bhn3qqach4koszf(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_poi_fused_clone_6(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -1656,8 +1937,11 @@ class TestGraph_cy77lwjrkltm4x4oaxrzfyuqe3vl6kfaas7c6bhn3qqach4koszf(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 32, 1024, 128), (4194304, 131072, 128, 1), torch.bfloat16, 'cpu'), ((4, 1024, 32, 128), (4194304, 4096, 128, 1), torch.bfloat16, 'cpu'), 1024, 4194304, 16777216])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -1665,10 +1949,11 @@ class TestGraph_cy77lwjrkltm4x4oaxrzfyuqe3vl6kfaas7c6bhn3qqach4koszf(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_poi_fused_mul_silu_8(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -1679,8 +1964,11 @@ class TestGraph_cy77lwjrkltm4x4oaxrzfyuqe3vl6kfaas7c6bhn3qqach4koszf(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 1024, 2048), (2097152, 2048, 1), torch.bfloat16, 'cpu'), ((4096, 2048), (2048, 1), torch.bfloat16, 'cpu'), 8388608])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -1688,10 +1976,11 @@ class TestGraph_cy77lwjrkltm4x4oaxrzfyuqe3vl6kfaas7c6bhn3qqach4koszf(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_red_fused__to_copy_add_embedding_mean_mul_pow_rsqrt_10(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -1702,8 +1991,11 @@ class TestGraph_cy77lwjrkltm4x4oaxrzfyuqe3vl6kfaas7c6bhn3qqach4koszf(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 1024, 4096), (4194304, 4096, 1), torch.bfloat16, 'cpu'), ((4, 1024), (1024, 1), torch.int64, 'cpu'), ((128256, 4096), (4096, 1), torch.bfloat16, 'cpu'), ((4096, 4096), (4096, 1), torch.bfloat16, 'cpu'), ((4096, 4096), (4096, 1), torch.bfloat16, 'cpu'), ((4096,), (1,), torch.bfloat16, 'cpu'), 1e-05, ((4, 1024, 4096), (4194304, 4096, 1), torch.bfloat16, 'cpu'), 4096, 4096])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -1711,10 +2003,11 @@ class TestGraph_cy77lwjrkltm4x4oaxrzfyuqe3vl6kfaas7c6bhn3qqach4koszf(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_red_fused__to_copy_add_embedding_mean_mul_pow_rsqrt_7(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -1725,8 +2018,11 @@ class TestGraph_cy77lwjrkltm4x4oaxrzfyuqe3vl6kfaas7c6bhn3qqach4koszf(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 1024), (1024, 1), torch.int64, 'cpu'), ((128256, 4096), (4096, 1), torch.bfloat16, 'cpu'), ((4096, 4096), (4096, 1), torch.bfloat16, 'cpu'), ((4096,), (1,), torch.bfloat16, 'cpu'), 1e-05, ((4, 1024, 4096), (4194304, 4096, 1), torch.bfloat16, 'cpu'), 4096, 4096])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -1734,10 +2030,11 @@ class TestGraph_cy77lwjrkltm4x4oaxrzfyuqe3vl6kfaas7c6bhn3qqach4koszf(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_red_fused__to_copy_add_embedding_mean_mul_pow_rsqrt_9(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -1748,8 +2045,11 @@ class TestGraph_cy77lwjrkltm4x4oaxrzfyuqe3vl6kfaas7c6bhn3qqach4koszf(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 1024), (1024, 1), torch.int64, 'cpu'), ((128256, 4096), (4096, 1), torch.bfloat16, 'cpu'), ((4096, 4096), (4096, 1), torch.bfloat16, 'cpu'), ((4096, 4096), (4096, 1), torch.bfloat16, 'cpu'), ((4096,), (1,), torch.bfloat16, 'cpu'), 1e-05, ((4, 1024, 4096), (4194304, 4096, 1), torch.bfloat16, 'cpu'), 4096, 4096])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -1757,10 +2057,11 @@ class TestGraph_cy77lwjrkltm4x4oaxrzfyuqe3vl6kfaas7c6bhn3qqach4koszf(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_red_fused__to_copy_add_mean_mul_pow_rsqrt_11(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -1771,8 +2072,11 @@ class TestGraph_cy77lwjrkltm4x4oaxrzfyuqe3vl6kfaas7c6bhn3qqach4koszf(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 1024, 4096), (4194304, 4096, 1), torch.bfloat16, 'cpu'), ((4096, 4096), (4096, 1), torch.bfloat16, 'cpu'), ((4096,), (1,), torch.bfloat16, 'cpu'), 1e-05, 4096, 4096])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -1780,10 +2084,11 @@ class TestGraph_cy77lwjrkltm4x4oaxrzfyuqe3vl6kfaas7c6bhn3qqach4koszf(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+     def test_triton_red_fused__to_copy_embedding_mean_mul_pow_rsqrt_0(self, device):
+         # 1. Get kernel launcher from the pre-loaded module.
+@@ -1794,8 +2099,11 @@ class TestGraph_cy77lwjrkltm4x4oaxrzfyuqe3vl6kfaas7c6bhn3qqach4koszf(GeneratedKe
+         input_file = self.data_path / f"{kernel_name}.input.pt"
+         output_file = self.data_path / f"{kernel_name}.output.pt"
+         
+-        kernel_args = torch.load(input_file, map_location="cpu")
+-        golden_args = torch.load(output_file, map_location="cpu")
++        if GENERATE_DATA:
++            kernel_args = prepare_args([((4, 1024), (1024, 1), torch.int64, 'cpu'), ((128256, 4096), (4096, 1), torch.bfloat16, 'cpu'), ((4096,), (1,), torch.bfloat16, 'cpu'), 1e-05, ((4, 1024, 4096), (4194304, 4096, 1), torch.bfloat16, 'cpu'), 4096, 4096])
++        else:
++            kernel_args = torch.load(input_file, map_location="cpu")
++            golden_args = torch.load(output_file, map_location="cpu")
+         kernel_args = to_device(kernel_args, device)
+ 
+ 
+@@ -1803,10 +2111,11 @@ class TestGraph_cy77lwjrkltm4x4oaxrzfyuqe3vl6kfaas7c6bhn3qqach4koszf(GeneratedKe
+         kernel_launcher(*kernel_args, stream=self.stream)
+         kernel_args = to_device(kernel_args, "cpu")
+ 
+-        # 4. Compare all tensor-type arguments.
+-        for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
+-            if isinstance(res, torch.Tensor):
+-                self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
++        if not GENERATE_DATA:
++            # 4. Compare all tensor-type arguments.
++            for i, (res, gold) in enumerate(zip(kernel_args, golden_args)):
++                if isinstance(res, torch.Tensor):
++                    self.assertEqual(res, gold, msg=f"Tensor mismatch at arg index {i} for kernel '{kernel_name}'")
+ 
+ 
+ # Instantiate tests for each generated class.

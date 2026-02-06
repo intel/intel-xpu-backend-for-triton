@@ -1,0 +1,14 @@
+diff --git a/presi-models/test/reduced-llama/inductor/conftest.py b/presi-models/test/reduced-llama/inductor/conftest.py
+new file mode 100644
+index 000000000..f56d2ac69
+--- /dev/null
++++ b/presi-models/test/reduced-llama/inductor/conftest.py
+@@ -0,0 +1,8 @@
++import os
++
++def pytest_runtest_teardown(item, nextitem):
++    start_dir = os.getenv("TRITON_INTEL_SIMULATOR_EFFECTIVE_START_DIR", ".")
++    file_name = os.path.join(start_dir, "tests_list.csv")
++    with open(file_name, "a") as f:
++        print(f"{item.nodeid}", file=f)
++

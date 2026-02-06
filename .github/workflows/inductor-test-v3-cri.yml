@@ -1,0 +1,118 @@
+name: Pytorch llama 3.1 kernels as inductor tests (CRI)
+
+on:
+  schedule:
+    - cron: "5 22 * * *"
+  workflow_dispatch:
+
+permissions: read-all
+
+env:
+  PYTHON_VERSION: "3.12"
+  TRITON_INTEL_DEVICE_ARCH: cri
+  TRITON_INTEL_ENABLE_SIMULATOR_WRAPPER: 1
+
+jobs:
+  run-llama-kernels:
+    name: Test
+    runs-on: 'cri'
+    timeout-minutes: 960
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup ONE API environment
+        id: setup-oneapi
+        uses: ./.github/actions/setup-oneapi-env
+        with:
+          oneapi_mode: DPCPP_JGS_revision
+          dpcpp_jgs_revision: '2026-01-06-0105'
+          pti_mode: 'PTI_JGS_revision'
+          pti_jgs_revision: '2026-01-22-0046'
+
+      - name: Install Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Setup PyTorch from JGS artifactory
+        id: setup-pytorch-jgs
+        uses: ./.github/actions/setup-pytorch-jgs
+        with:
+          pytorch_mode: 'jgs_artifactory_revision'
+          pytorch_jgs_artifactory_revision: '2026-01-08-0626'
+
+      - name: Build Triton
+        uses: ./.github/actions/setup-triton
+        with:
+          command: >
+            DEBUG=1
+            python setup.py bdist_wheel && pip install dist/*.whl
+
+      - name: Report environment details
+        if: always()
+        timeout-minutes: 1
+        run: |
+          source ./scripts/capture-hw-details.sh --quiet
+          TIMESTAMP=$(date '+%Y%m%d%H%M%S')
+          mkdir -p pytorch/test/test-reports
+          cat <<EOF | tee pytorch/test/test-reports/.env
+          TIMESTAMP=$TIMESTAMP
+          JOB_NAME='run-llama-kernels-cri'
+          GITHUB_RUN_ID=$GITHUB_RUN_ID
+          GITHUB_RUN_NUMBER=$GITHUB_RUN_NUMBER
+          GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT
+          PYTHON_VERSION=$PYTHON_VERSION
+          PYTORCH_COMMIT_ID=$PYTORCH_COMMIT_ID
+          TRITON_REPO=$GITHUB_REPOSITORY
+          TRITON_COMMIT_ID=$GITHUB_SHA
+          LIBIGC1_VERSION=$LIBIGC1_VERSION
+          LEVEL_ZERO_VERSION=$LEVEL_ZERO_VERSION
+          GPU_DEVICE=$GPU_DEVICE
+          AGAMA_VERSION=$AGAMA_VERSION
+          EOF
+
+      - name: Clone internal PyTorch gpu models
+        uses: actions/checkout@v5
+        with:
+          repository: intel-innersource/frameworks.ai.pytorch.gpu-models
+          path: frameworks.ai.pytorch.gpu-models
+          token: ${{ secrets.GLADOS_TOKEN }}
+
+      - name: Prepare llama 3.1 kernels
+        env:
+          GH_TOKEN: ${{ secrets.GLADOS_TOKEN }}
+        run: |
+          cd frameworks.ai.pytorch.gpu-models
+          gh auth status
+          gh pr checkout 993 # checkout to pr
+          git apply ../scripts/llama3.1_kernels.patch
+          git apply ../scripts/llama3.1_kernel_tests_list.patch
+
+      - name: Install python test dependencies
+        run: |
+          pip install -r scripts/requirements-test.txt
+          pip list
+
+      - name: Run llama 3.1 kernels as inductor tests
+        run: |
+          export TORCHINDUCTOR_WORKER_START=fork
+          export TORCHINDUCTOR_COMPILE_THREADS=1
+          # Workaround for 'ModuleNotFoundError: No module named 'xmlrunner''
+          export CI=
+          export GENERATE_DATA=1
+
+          cd frameworks.ai.pytorch.gpu-models/presi-models/test/reduced-llama/inductor
+          # FIXME: Temporarily allowing test failures
+          pytest -vvv -s -n 32 --max-worker-restart=9999 test_triton_kernels.py || true
+
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: run-llama-kernels-logs-cri-${{ env.PYTHON_VERSION }}
+          path: pytorch/test/test-reports
+          include-hidden-files: true
