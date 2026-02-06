@@ -21,8 +21,6 @@
 #include <optional>
 
 #define DEBUG_TYPE "tritonintelgpu-coalesce"
-#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
-#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace mlir::triton::gpu::intel {
 #define GEN_PASS_DEF_TRITONINTELGPUCOALESCE
