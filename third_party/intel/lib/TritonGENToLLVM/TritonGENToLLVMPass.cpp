@@ -180,14 +180,6 @@ static bool isSPVBuiltinAvailableImpl(TritonGEN::Matrix2DBlockStoreOp op) {
 }
 
 static bool isSPVBuiltinAvailableImpl(TritonGEN::Matrix2DBlockPrefetchOp op) {
-  // FIXME: The following signatures are not valid in SPV interface.
-
-  // TODO: Change the interface to SPV once it is supported. (GSD-12074)
-  unsigned prefetchBytes =
-      (op.getElemSizeInBits() * op.getTileWidth() * op.getVBlocks()) / 8;
-  if (prefetchBytes == 256)
-    return false;
-
   return true;
 }
 
