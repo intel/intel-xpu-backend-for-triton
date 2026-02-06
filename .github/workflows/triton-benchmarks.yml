@@ -301,7 +301,6 @@ jobs:
 
           source ../../scripts/capture-hw-details.sh
           python build_report.py $REPORTS/flexAttnCausal-performance.csv $REPORTS/flexAttnCausal-triton-report.csv --benchmark flex-attn-causal --compiler triton --param_cols "Z,H_q,H_kv,N_CTX_q,N_CTX_kv,D_HEAD_qk,D_HEAD_v" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
-          python build_report.py $REPORTS/flexAttnCausal-performance.csv $REPORTS/flexAttnCausal-torch-report.csv --benchmark flex-attn-causal --compiler torch --param_cols "Z,H_q,H_kv,N_CTX_q,N_CTX_kv,D_HEAD_qk,D_HEAD_v" --tflops_col Torch-TFlops --hbm_col "Torch-GB/s" --tag $TAG
           python build_report.py $REPORTS/flexAttnCausal-performance.csv $REPORTS/flexAttnCausal-sycl-tla-report.csv --benchmark flex-attn-causal --compiler sycl-tla --param_cols "Z,H_q,H_kv,N_CTX_q,N_CTX_kv,D_HEAD_qk,D_HEAD_v" --tflops_col SYCL-TLA-TFlops --hbm_col "SYCL-TLA-GB/s" --tag $TAG
           python build_report.py $REPORTS/flexAttnCausal-performance.csv $REPORTS/flexAttnCausal-onednn-report.csv --benchmark flex-attn-causal --compiler onednn --param_cols "Z,H_q,H_kv,N_CTX_q,N_CTX_kv,D_HEAD_qk,D_HEAD_v" --tflops_col OneDNN-TFlops --hbm_col "OneDNN-GB/s" --tag $TAG
 
@@ -314,7 +313,6 @@ jobs:
 
           source ../../scripts/capture-hw-details.sh
           python build_report.py $REPORTS/flexAttnCausal-performance.csv $REPORTS/flexAttnCausal-batch4-triton-report.csv --benchmark flex-attn-causal-batch4 --compiler triton --param_cols "Z,H_q,H_kv,N_CTX_q,N_CTX_kv,D_HEAD_qk,D_HEAD_v" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
-          python build_report.py $REPORTS/flexAttnCausal-performance.csv $REPORTS/flexAttnCausal-batch4-torch-report.csv --benchmark flex-attn-causal-batch4 --compiler torch --param_cols "Z,H_q,H_kv,N_CTX_q,N_CTX_kv,D_HEAD_qk,D_HEAD_v" --tflops_col Torch-TFlops --hbm_col "Torch-GB/s" --tag $TAG
           python build_report.py $REPORTS/flexAttnCausal-performance.csv $REPORTS/flexAttnCausal-batch4-sycl-tla-report.csv --benchmark flex-attn-causal-batch4 --compiler sycl-tla --param_cols "Z,H_q,H_kv,N_CTX_q,N_CTX_kv,D_HEAD_qk,D_HEAD_v" --tflops_col SYCL-TLA-TFlops --hbm_col "SYCL-TLA-GB/s" --tag $TAG
           python build_report.py $REPORTS/flexAttnCausal-performance.csv $REPORTS/flexAttnCausal-batch4-onednn-report.csv --benchmark flex-attn-causal-batch4 --compiler onednn --param_cols "Z,H_q,H_kv,N_CTX_q,N_CTX_kv,D_HEAD_qk,D_HEAD_v" --tflops_col OneDNN-TFlops --hbm_col "OneDNN-GB/s" --tag $TAG
 
@@ -327,7 +325,6 @@ jobs:
 
           source ../../scripts/capture-hw-details.sh
           python build_report.py $REPORTS/flexAttnCausal-performance.csv $REPORTS/flexAttnCausal-batch16-triton-report.csv --benchmark flex-attn-causal-batch16 --compiler triton --param_cols "Z,H_q,H_kv,N_CTX_q,N_CTX_kv,D_HEAD_qk,D_HEAD_v" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
-          python build_report.py $REPORTS/flexAttnCausal-performance.csv $REPORTS/flexAttnCausal-batch16-torch-report.csv --benchmark flex-attn-causal-batch16 --compiler torch --param_cols "Z,H_q,H_kv,N_CTX_q,N_CTX_kv,D_HEAD_qk,D_HEAD_v" --tflops_col Torch-TFlops --hbm_col "Torch-GB/s" --tag $TAG
           python build_report.py $REPORTS/flexAttnCausal-performance.csv $REPORTS/flexAttnCausal-batch16-sycl-tla-report.csv --benchmark flex-attn-causal-batch16 --compiler sycl-tla --param_cols "Z,H_q,H_kv,N_CTX_q,N_CTX_kv,D_HEAD_qk,D_HEAD_v" --tflops_col SYCL-TLA-TFlops --hbm_col "SYCL-TLA-GB/s" --tag $TAG
           python build_report.py $REPORTS/flexAttnCausal-performance.csv $REPORTS/flexAttnCausal-batch16-onednn-report.csv --benchmark flex-attn-causal-batch16 --compiler onednn --param_cols "Z,H_q,H_kv,N_CTX_q,N_CTX_kv,D_HEAD_qk,D_HEAD_v" --tflops_col OneDNN-TFlops --hbm_col "OneDNN-GB/s" --tag $TAG
 
@@ -341,7 +338,6 @@ jobs:
 
           source ../../scripts/capture-hw-details.sh
           python build_report.py $REPORTS/flexAttnCausal-performance.csv $REPORTS/flexAttnCausal-bwd-triton-report.csv --benchmark flex-attn-causal-bwd --compiler triton --param_cols "Z,H_q,H_kv,N_CTX_q,N_CTX_kv,D_HEAD_qk,D_HEAD_v" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
-          python build_report.py $REPORTS/flexAttnCausal-performance.csv $REPORTS/flexAttnCausal-bwd-torch-report.csv --benchmark flex-attn-causal-bwd --compiler torch --param_cols "Z,H_q,H_kv,N_CTX_q,N_CTX_kv,D_HEAD_qk,D_HEAD_v" --tflops_col Torch-TFlops --hbm_col "Torch-GB/s" --tag $TAG
           python build_report.py $REPORTS/flexAttnCausal-performance.csv $REPORTS/flexAttnCausal-bwd-sycl-tla-report.csv --benchmark flex-attn-causal-bwd --compiler sycl-tla --param_cols "Z,H_q,H_kv,N_CTX_q,N_CTX_kv,D_HEAD_qk,D_HEAD_v" --tflops_col SYCL-TLA-TFlops --hbm_col "SYCL-TLA-GB/s" --tag $TAG
 
       - name: Run Triton FlexAttention Custom Masks fwd kernel benchmark
