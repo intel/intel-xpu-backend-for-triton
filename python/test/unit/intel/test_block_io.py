@@ -1,4 +1,3 @@
-import os
 import itertools
 
 import numpy as np
@@ -8,8 +7,6 @@ import pathlib
 
 import triton
 from triton._internal_testing import is_xpu
-
-os.environ["TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS"] = "1"
 
 
 class DpasLayout:
