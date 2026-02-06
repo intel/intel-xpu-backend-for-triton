@@ -223,62 +223,54 @@ public:
       std::function<bool(Operation *)> stopPropagation = nullptr);
 
 private:
-  // Forward propagate the remat value to simplify the IR.
+  /**
+  Forward propagate a rematerialized value to its users.
+  This is needed to clean up the IR after backward rematerialization. For
+  example, if we have a convert layout op that converts from layout A to layout
+  B, and we backward propagate it through an expression, we will end up with two
+  versions of the same expression with different layouts. The forward
+  propagation will propagate the rematerialized value with layout B to the users
+  of the original expression with layout A, and clean up the original expression
+  if it is no longer used.
 
-  /*
-  If the value is used by multiple users and one of its users is the convert
-  layout op.
-  1. Original IR
-   ┌─┐
+  Example:
+
+   ┌─┐ // layout A
    └┬┘
-    │
-   ┌┴┐
-   └┬┘
-    │
     ├───────┐
-    │       │
-    │      ┌┴┐ // cvt_layout
+    │      ┌┴┐ // cvt_layout (A->B)
     │      └┬┘
-    │       │
-   ┌┴┐     ┌┴┐
+   ┌┴┐     ┌┴┐ // Uses layout B
    └─┘     └─┘
 
-  After the backward propagate convert layout op, there are going to be
-  duplicated expression with different layout.
-  2. After backward propagate convert layout op.
+  After backward propagating layout B through the convert layout op, the
+  original expression is going to be duplicated (to use layout B), and the
+  cvt_layout operation is rendered useless. The original expression using layout
+  A however is still used.
 
-  ┌─┐         ┌─┐  // duplicate expression with different layout.
-  └┬┘         └┬┘
-   │           │
-  ┌┴┐         ┌┴┐
-  └┬┘         └┬┘
-   │           │
-   ├───────┐   │
-   │       │   │
-   │      ┌┴┐  │
-   │      └─┘  │
-   │       ┌───┘
-  ┌┴┐     ┌┴┐
+  ┌─┐ // layout A          ┌─┐ // layout B
+  └┬┘                      └┬┘
+   ├───────┐                │
+   │      ┌┴┐ // cvt_layout |
+   │      └─┘               │
+   │       ┌────────────────┘
+  ┌┴┐     ┌┴┐ // Uses layout B
   └─┘     └─┘
 
-  Need to forward propagate the remat value to clean up the IR as what we did in
-  forward layout propagation.
-  3. After forward propagate remat values while the mapping information is still
-  valid in rematMapping.
+  In order to eliminate the original expression we need to forward propagate the
+  rematerialized value to clean up the IR as what we did in forward layout
+  propagation. After forward propagating the rematerialized value, the original
+  expression is no longer used and can be deleted.
 
-  ┌─┐         ┌─┐ // The expression with old layout could be removed later.
-  └┬┘         └┬┘
-   │           │
-  ┌┴┐         ┌┴┐
-  └┬┘         └┬┘
-   │           │
-   └───────┐   │
-           │   │
-          ┌┴┐  │
-          └─┘  │
-   ┌───────┬───┘
-  ┌┴┐     ┌┴┐
+  ┌─┐ // layout A          ┌─┐ // layout B
+  └┬┘                      └┬┘
+   └───────┐                │
+          ┌┴┐ // cvt_layout │
+          └─┘               │
+   ┌───────┬────────────────┘
+  ┌┴┐     ┌┴┐ // both use layout B
   └─┘     └─┘
+
   */
   void setEncoding(DenseMap<Value, Attribute> &values, ValueRange ops,
                    Attribute &layout, SmallVector<Value> &changed,
@@ -294,6 +286,7 @@ private:
 
   void updateRematMapping(SmallVector<std::tuple<Value, Value>> &values);
   void reduceLoopCarriedValues();
+
   // Existing tuples of (value, layout) that needs to be updated when recreating
   // scf ops. This prevents keeping track of Values that have been delete when
   // rewriting slices. The Value maybe mapped to different attributes in remove
@@ -1487,9 +1480,8 @@ LayoutRematerialization::propagateToUsers(DenseMap<Value, Attribute> &values,
   for (OpOperand &use : value.getUses()) {
     Operation *user = use.getOwner();
     if (user->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
-        user->hasTrait<OpTrait::Elementwise>()) {
+        user->hasTrait<OpTrait::Elementwise>())
       setEncoding(values, user->getResults(), layout, changed, user);
-    }
   }
   return changed;
 }
@@ -1497,9 +1489,9 @@ LayoutRematerialization::propagateToUsers(DenseMap<Value, Attribute> &values,
 void LayoutRematerialization::propagateLayout(
     DenseMap<Value, Attribute> &values) {
   SmallVector<Value> queue;
-  for (auto it : values) {
+  for (auto it : values)
     queue.push_back(it.first);
-  }
+
   while (!queue.empty()) {
     Value currentValue = queue.back();
     Attribute layout = values[currentValue];
@@ -1543,6 +1535,7 @@ Operation *LayoutRematerialization::rewriteOp(Operation *op,
                                               Attribute encoding) {
   opToDelete.insert(op);
   OpBuilder rewriter(op);
+
   if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<OpTrait::Elementwise>()) {
     Operation *newOp = cloneElementwise(rewriter, op, encoding);
@@ -1556,13 +1549,13 @@ Operation *LayoutRematerialization::rewriteOp(Operation *op,
     }
     return newOp;
   }
+
   llvm::report_fatal_error("unexpected op in rewrite");
-  return (mlir::Operation *)nullptr;
-};
+  return nullptr;
+}
 
 void LayoutRematerialization::forwardPropagateRemat(
     DenseMap<Value, Attribute> &valuesToPropagate) {
-
   if (valuesToPropagate.empty())
     return;
 
@@ -1581,28 +1574,28 @@ void LayoutRematerialization::forwardPropagateRemat(
     Region *currentRegion = regQueue.front();
     regQueue.pop_front();
     for (Operation &op : currentRegion->getOps()) {
+      // The scf::ForOp and scf::IfOp are handled separately in
+      // rewriteSlice. Just skip those two ops here.
+      if (isa<scf::ForOp, scf::IfOp>(op))
+        continue;
+
       bool needRewrite = false;
-      SmallVector<Value> results = op.getResults();
-      for (Value result : results) {
-        if (isa<scf::ForOp, scf::IfOp>(op)) {
-          // The scf::ForOp and scf::IfOp are handled separately in
-          // rewriteSlice. Just skip those two ops here.
-          break;
-        }
+      for (Value result : op.getResults()) {
         // Only care about value in the given set.
         if (!valuesToPropagate.contains(result))
           continue;
-        auto layout = valuesToPropagate[result];
-        auto rematValue = getRematValue(result, layout);
-        // If the value is already rematerialized, skip.
+        Attribute layout = valuesToPropagate[result];
+        Value rematValue = getRematValue(result, layout);
+        // If the value is already rematerialized, skip it.
         if (rematValue)
           continue;
         auto encoding = cast<RankedTensorType>(result.getType()).getEncoding();
-        // If the encoding is already what we want skip.
+        // If the encoding is already what we want, skip it.
         if (encoding == layout)
           continue;
         needRewrite = true;
       }
+
       if (needRewrite) {
         // Create the op with the new layout.
         rewriteOp(&op, valuesToPropagate[op.getResult(0)]);
@@ -1615,6 +1608,7 @@ void LayoutRematerialization::forwardPropagateRemat(
         Value newOperand = getRematValue(operand, valuesToPropagate[operand]);
         assertOp->setOperand(0, newOperand);
       }
+
       for (Region &R : op.getRegions())
         regQueue.push_back(&R);
     }
@@ -1856,8 +1850,23 @@ void LayoutRematerialization::backwardRematerialization(
   int64_t convertLayoutCost = 32 * convertLayoutBytes * 3;
   int64_t rematerialisationCost = 0;
 
+  // Collect rematerialization candidates for forward propagation.
   DenseMap<Value, Attribute> forwardPropagateCandidates;
-  // Evaluate single-use status for every operation in slice
+  for (Operation *op : sliceOps) {
+    if (isOpSingleUse(op))
+      continue;
+    for (Value result : op->getResults()) {
+      for (Operation *user : result.getUsers()) {
+        if (user == convertOp)
+          continue;
+        Attribute encoding = layout[result];
+        if (encoding)
+          forwardPropagateCandidates[result] = encoding;
+        break;
+      }
+    }
+  }
+
   for (Operation *op : sliceOps) {
     auto dialect = op->getDialect();
     if (!isOpSingleUse(op)) {
@@ -1930,7 +1939,7 @@ void LayoutRematerialization::backwardRematerialization(
   // 3. Rewrite the slice.
   rewriteSlice(slice, layout, convertOp);
 
-  // 4. Forward propagate rematerial values created during backward slice.
+  // 4. Forward propagate remat values created during backward propagation.
   forwardPropagateRemat(forwardPropagateCandidates);
 }
 
