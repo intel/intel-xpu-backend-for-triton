@@ -319,7 +319,7 @@ private:
 
 private:
   SmallPtrSet<Operation *, 8> cleanUp;
-  llvm::SmallDenseMap<Operation *, triton::PaddingOption, 8> OpToPaddingMap;
+  llvm::SmallDenseMap<Operation *, tt::PaddingOption, 8> OpToPaddingMap;
 };
 
 } // namespace
