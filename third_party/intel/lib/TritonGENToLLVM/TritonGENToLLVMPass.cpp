@@ -128,11 +128,6 @@ loadCacheControlToCacheControls(Builder &builder,
 static bool isSPVBuiltinAvailableImpl(TritonGEN::Matrix2DBlockLoadOp op) {
   // FIXME: The following signatures are not valid in SPV interface.
 
-  // intel_sub_group_2d_block_read_8b_1r16x4c
-  if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 1 &&
-      op.getTileWidth() == 16 && op.getVBlocks() == 1 && !op.getVnniTransform())
-    return false;
-
   // intel_sub_group_2d_block_read_8b_8r8x1c
   if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 8 &&
       op.getTileWidth() == 8 && op.getVBlocks() == 1 && !op.getVnniTransform())
@@ -153,74 +148,14 @@ static bool isSPVBuiltinAvailableImpl(TritonGEN::Matrix2DBlockLoadOp op) {
       op.getTileWidth() == 8 && op.getVBlocks() == 4 && !op.getVnniTransform())
     return false;
 
-  // intel_sub_group_2d_block_read_8b_8r16x1c
-  if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 8 &&
-      op.getTileWidth() == 16 && op.getVBlocks() == 1 && !op.getVnniTransform())
-    return false;
-
-  // intel_sub_group_2d_block_read_8b_8r16x2c
-  if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 8 &&
-      op.getTileWidth() == 16 && op.getVBlocks() == 2 && !op.getVnniTransform())
-    return false;
-
-  // intel_sub_group_2d_block_read_8b_16r8x4c
-  if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 16 &&
-      op.getTileWidth() == 8 && op.getVBlocks() == 4 && !op.getVnniTransform())
-    return false;
-
-  // intel_sub_group_2d_block_read_8b_16r16x2c
-  if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 16 &&
-      op.getTileWidth() == 16 && op.getVBlocks() == 2 && !op.getVnniTransform())
-    return false;
-
-  // intel_sub_group_2d_block_read_8b_32r16x1c
-  if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 32 &&
-      op.getTileWidth() == 16 && op.getVBlocks() == 1 && !op.getVnniTransform())
-    return false;
-
-  // intel_sub_group_2d_block_read_8b_32r16x2c
-  if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 32 &&
-      op.getTileWidth() == 16 && op.getVBlocks() == 2 && !op.getVnniTransform())
-    return false;
-
   // intel_sub_group_2d_block_read_16b_8r8x1c
   if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 8 &&
       op.getTileWidth() == 8 && op.getVBlocks() == 1 && !op.getVnniTransform())
     return false;
 
-  // intel_sub_group_2d_block_read_16b_8r8x2c
-  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 8 &&
-      op.getTileWidth() == 8 && op.getVBlocks() == 2 && !op.getVnniTransform())
-    return false;
-
-  // intel_sub_group_2d_block_read_16b_8r8x4c
-  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 8 &&
-      op.getTileWidth() == 8 && op.getVBlocks() == 4 && !op.getVnniTransform())
-    return false;
-
-  // intel_sub_group_2d_block_read_16b_16r8x4c
-  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 16 &&
-      op.getTileWidth() == 8 && op.getVBlocks() == 4 && !op.getVnniTransform())
-    return false;
-
-  // intel_sub_group_2d_block_read_transpose_32b_8r2x1c
-  if (op.getElemSizeInBits() == 32 && op.getTileHeight() == 8 &&
-      op.getTileWidth() == 2 && op.getVBlocks() == 1 && op.getTranspose())
-    return false;
-
-  // intel_sub_group_2d_block_read_transpose_32b_8r4x1c
-  if (op.getElemSizeInBits() == 32 && op.getTileHeight() == 8 &&
-      op.getTileWidth() == 4 && op.getVBlocks() == 1 && op.getTranspose())
-    return false;
-
   // intel_sub_group_2d_block_read_transpose_32b_32r4x1c
   if (op.getElemSizeInBits() == 32 && op.getTileHeight() == 32 &&
       op.getTileWidth() == 4 && op.getVBlocks() == 1 && op.getTranspose())
-    return false;
-
-  // intel_sub_group_2d_block_read_transpose_32b_8r8x1c
-  if (op.getElemSizeInBits() == 32 && op.getTileHeight() == 8 &&
-      op.getTileWidth() == 8 && op.getVBlocks() == 1 && op.getTranspose())
     return false;
 
   // FIXME: The SPV block load only support subgroup size 16.
@@ -235,36 +170,6 @@ static bool isSPVBuiltinAvailableImpl(TritonGEN::Matrix2DBlockLoadOp op) {
 static bool isSPVBuiltinAvailableImpl(TritonGEN::Matrix2DBlockStoreOp op) {
   // FIXME: The following signatures are not valid in SPV interface.
 
-  // intel_sub_group_2d_block_write_8b_8r8x1c
-  if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 8 &&
-      op.getTileWidth() == 8 && op.getVBlocks() == 1)
-    return false;
-
-  // intel_sub_group_2d_block_write_16b_1r32x1c
-  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 1 &&
-      op.getTileWidth() == 32 && op.getVBlocks() == 1)
-    return false;
-
-  // intel_sub_group_2d_block_write_16b_8r8x1c
-  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 8 &&
-      op.getTileWidth() == 8 && op.getVBlocks() == 1)
-    return false;
-
-  // intel_sub_group_2d_block_write_16b_8r32x1c
-  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 8 &&
-      op.getTileWidth() == 32 && op.getVBlocks() == 1)
-    return false;
-
-  // intel_sub_group_2d_block_write_32b_8r4x1c
-  if (op.getElemSizeInBits() == 32 && op.getTileHeight() == 8 &&
-      op.getTileWidth() == 4 && op.getVBlocks() == 1)
-    return false;
-
-  // intel_sub_group_2d_block_write_32b_8r8x1c
-  if (op.getElemSizeInBits() == 32 && op.getTileHeight() == 8 &&
-      op.getTileWidth() == 8 && op.getVBlocks() == 1)
-    return false;
-
   // FIXME: The SPV block store only support subgroup size 16.
   int subGroupSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(
       op->getParentOfType<mlir::ModuleOp>());
@@ -275,34 +180,6 @@ static bool isSPVBuiltinAvailableImpl(TritonGEN::Matrix2DBlockStoreOp op) {
 }
 
 static bool isSPVBuiltinAvailableImpl(TritonGEN::Matrix2DBlockPrefetchOp op) {
-  // FIXME: The following signatures are not valid in SPV interface.
-
-  // intel_sub_group_2d_block_prefetch_16b_1r8x1c
-  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 1 &&
-      op.getTileWidth() == 8 && op.getVBlocks() == 1)
-    return false;
-
-  // intel_sub_group_2d_block_prefetch_16b_2r8x1c
-  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 2 &&
-      op.getTileWidth() == 8 && op.getVBlocks() == 1)
-    return false;
-
-  // intel_sub_group_2d_block_prefetch_16b_4r8x1c
-  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 4 &&
-      op.getTileWidth() == 8 && op.getVBlocks() == 1)
-    return false;
-
-  // intel_sub_group_2d_block_prefetch_16b_16r8x1c
-  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 16 &&
-      op.getTileWidth() == 8 && op.getVBlocks() == 1)
-    return false;
-
-  // TODO: Change the interface to SPV once it is supported. (GSD-12074)
-  unsigned prefetchBytes =
-      (op.getElemSizeInBits() * op.getTileWidth() * op.getVBlocks()) / 8;
-  if (prefetchBytes == 256)
-    return false;
-
   return true;
 }
 
