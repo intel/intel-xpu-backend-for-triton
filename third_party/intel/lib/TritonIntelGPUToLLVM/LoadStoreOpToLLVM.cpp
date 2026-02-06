@@ -381,95 +381,6 @@ struct LoadStoreConversionBase {
     return maskElems;
   }
 
-  std::tuple<Value, Value> buildVectorizedNaNMasksFromBlockPtr(
-      Location loc, Value blockPointerStruct, RankedTensorType tensorType,
-      Type valueElemTy, ConversionPatternRewriter &rewriter,
-      ArrayRef<int32_t> boundaryCheck = {},
-      std::optional<PaddingOption> padding = std::nullopt) const {
-
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    size_t rank = tensorType.getRank();
-    // The block pointer struct is expected to have the following layout:
-    //    Struct {
-    //      Value offset[rank];
-    //      Value shape[rank];
-    //      Value stride[rank];
-    //      Value base;
-    //    }
-    // All the values are decomposed by `unpackLLElements` into a vector.
-    // Defines the indices for the block pointer struct.
-    const unsigned blockOffset = 0, blockShape = 1 * rank,
-                   blockStride = 2 * rank, blockBase = 3 * rank;
-    const SmallVector<Value> &blockPtr =
-        unpackLLElements(loc, blockPointerStruct, rewriter);
-    const unsigned numElems = getTotalElemsPerThread(tensorType);
-
-    // Get the LLVM values for indices in block
-    auto indices = emitIndices(loc, rewriter, targetInfo,
-                               tensorType.getEncoding(), tensorType, true);
-
-    Value vectorMask = b.vec_splat_i1_cons(numElems, 1);
-    SmallVector<Value> vectorIndicesInTensor(rank);
-    for (auto i = 0; i < rank; ++i) {
-      vectorIndicesInTensor[i] = b.undef(vec_ty(i32_ty, numElems));
-    }
-
-    SetVector<unsigned> boundaryProtect(boundaryCheck.begin(),
-                                        boundaryCheck.end());
-    for (unsigned i = 0; i < numElems; i++) {
-      SmallVector<Value> index = indices[i];
-      for (unsigned k = 0; k < rank; ++k) {
-        Value idx = b.add(index[k], blockPtr[blockOffset + k]);
-        vectorIndicesInTensor[k] =
-            b.insert_element(vectorIndicesInTensor[k], idx, b.i32_val(i));
-      }
-    }
-
-    SmallVector<Value> shapeCons(rank);
-    for (auto k = 0; k < rank; ++k) {
-      auto shape_cons = blockPtr.begin() + blockShape + k;
-
-      auto undefOp = b.undef(vec_ty(i64_ty, numElems));
-      shapeCons[k] = undefOp;
-      shapeCons[k] = b.insert_element(shapeCons[k], *shape_cons, b.i32_val(0));
-      SmallVector<int32_t> mask(numElems, 0);
-      shapeCons[k] = LLVM::ShuffleVectorOp::create(
-          rewriter, loc, vec_ty(i64_ty, numElems), shapeCons[k], undefOp,
-          rewriter.getDenseI32ArrayAttr(mask));
-    }
-
-    if (boundaryProtect.size() > 0) {
-      for (unsigned k = 0; k < rank; ++k) {
-        if (boundaryProtect.contains(k)) {
-          auto is_pos_idx = b.icmp_sge(vectorIndicesInTensor[k],
-                                       b.vec_splat_i32_cons(numElems, 0));
-          auto is_within_shape =
-              b.icmp_slt(vectorIndicesInTensor[k],
-                         b.trunc(vec_ty(i32_ty, numElems), shapeCons[k]));
-          vectorIndicesInTensor[k] = b.and_(is_pos_idx, is_within_shape);
-        }
-      }
-      for (unsigned k = 0; k < rank; ++k) {
-        vectorMask = b.and_(vectorMask, vectorIndicesInTensor[k]);
-      }
-    }
-
-    // Get the LLVM values for `other`
-    assert(!valueElemTy.isIntOrIndex() &&
-           "Expect element type to be non-integer type");
-    auto apNaN =
-        llvm::APFloat::getNaN(cast<FloatType>(valueElemTy).getFloatSemantics());
-    Attribute other = rewriter.getFloatAttr(valueElemTy, apNaN);
-
-    SmallVector<Attribute> otherElems(numElems, other);
-    Value vectorOther =
-        b.const_val(vec_ty(valueElemTy, numElems),
-                    DenseElementsAttr::get(
-                        VectorType::get(numElems, valueElemTy), otherElems));
-
-    return std::make_tuple(vectorMask, vectorOther);
-  }
-
   // Ensure the operation doesn't have attributes that the IGC predicated
   // instruction cannot handle.
   template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
@@ -2044,8 +1955,6 @@ struct LoadOpToBlockIOConversion
               : numValuesPerLoad;
       unsigned numOperandsPerLoad = numValuesPerLoad / numValsPerDPASOperand;
 
-      Value vectorMask = nullptr;
-      Value vectorOther = nullptr;
       SmallVector<Value> nanMaskElems;
 
       if (otherElems.size() == 0 && op.getPadding() == PaddingOption::PAD_NAN) {
@@ -2056,17 +1965,9 @@ struct LoadOpToBlockIOConversion
           Type valueElemTy =
               typeConverter->convertType(getElementTypeOrSelf(op.getType()));
 
-          if (triton::tools::getBoolEnv(
-                  "TRITON_INTEL_ENABLE_NAN_VECTORIZED_BLOCK_IO")) {
-            std::tie(vectorMask, vectorOther) =
-                buildVectorizedNaNMasksFromBlockPtr(
-                    loc, adaptor.getPtr(), tensorType, valueElemTy, rewriter,
-                    op.getBoundaryCheck());
-          } else {
-            nanMaskElems = buildNaNMasksFromBlockPtr(
-                loc, adaptor.getPtr(), tensorType, valueElemTy, rewriter,
-                op.getBoundaryCheck());
-          }
+          nanMaskElems = buildNaNMasksFromBlockPtr(
+              loc, adaptor.getPtr(), tensorType, valueElemTy, rewriter,
+              op.getBoundaryCheck());
         }
       }
 
@@ -2133,23 +2034,6 @@ struct LoadOpToBlockIOConversion
                                           b.i32_val(i));
           }
           unpackedVal = b.select(packedPred, unpackedVal, other);
-        } else if (vectorMask) {
-          SmallVector<int32_t> registerIndicies(numElemsPerUnpackedType);
-          for (const auto [i, registerIdx] : llvm::enumerate(unpackIndices)) {
-            registerIndicies[i] = registerIdx;
-          }
-
-          DenseI32ArrayAttr attr =
-              rewriter.getDenseI32ArrayAttr(registerIndicies);
-          Value pred = LLVM::ShuffleVectorOp::create(
-              rewriter, loc, vec_ty(i1_ty, numElemsPerUnpackedType), vectorMask,
-              vectorMask, attr);
-          Value other = LLVM::ShuffleVectorOp::create(
-              rewriter, loc,
-              vec_ty(getElementTypeOrSelf(vectorOther),
-                     numElemsPerUnpackedType),
-              vectorOther, vectorOther, attr);
-          unpackedVal = b.select(pred, unpackedVal, other);
         }
 
         for (const auto [i, registerIdx] : llvm::enumerate(unpackIndices)) {
