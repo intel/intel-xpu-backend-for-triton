@@ -24,8 +24,6 @@ using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 using namespace mlir::triton::gpu::intel;
 
-// #define DEBUG_TYPE "triton-intel-gpu-to-llvm" its ttgpu_to_llvm
-
 #define S(v) StringAttr::get(ctx, (v))
 
 #if defined(_MSC_VER) && !defined(__clang__)
