@@ -37,8 +37,7 @@ public:
     assert(op->getParentOfType<scf::ForOp>() == forOp &&
            "Operation should be contains in the loop");
     return TypeSwitch<Operation *, bool>(op)
-        .Case<tt::LoadOp>([this](auto loadOp) { return isCandidate(loadOp); })
-        .Case<tt::DescriptorLoadOp>(
+        .Case<tt::LoadOp, tt::DescriptorLoadOp>(
             [this](auto loadOp) { return isCandidate(loadOp); })
         .Default([](auto) { return false; });
   }
