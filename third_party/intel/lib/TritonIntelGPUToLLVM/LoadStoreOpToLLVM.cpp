@@ -643,7 +643,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
         !llvm::isPowerOf2_64(maskAxisInfo->getConstancy(fastChangeDim)))
       return BlockIOTileSizeInfo::unknown();
 
-    unsigned maskConstancyWidthLimit =
+    unsigned maskConstancyFastChangeDimLimit =
         maskAxisInfo ? maskAxisInfo->getConstancy(fastChangeDim)
                      : std::numeric_limits<unsigned>::max();
     bool transpose = fastChangeDim != memContiguousDim;
@@ -738,18 +738,37 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     if (sliceRank > 2)
       return BlockIOTileSizeInfo::unknown();
 
-    unsigned maskConstancyHeightLimit = std::numeric_limits<unsigned>::max();
+    // When transposed, width and height constraints swap between fastChangeDim
+    // and rowDim: fastChangeDim is constrained by block io tile width in the
+    // non-transposed case and by block io tile height in the transposed case,
+    // while rowDim uses the opposite limits.
+
+    // The tile shape sizes should not exceed the hardware limit.
+    unsigned fastChangeDimLimit =
+        !transpose ? MAX_BITS_WIDTH / elemSizeInBits : MAX_TILE_HEIGHT;
+    unsigned rowDimLimit =
+        !transpose ? MAX_TILE_HEIGHT : MAX_BITS_WIDTH / elemSizeInBits;
+
+    // The tile shape sizes should not exceed the mask constancy limit.
+    fastChangeDimLimit =
+        std::min(fastChangeDimLimit, maskConstancyFastChangeDimLimit);
+
+    unsigned maskConstancyRowDimLimit = std::numeric_limits<unsigned>::max();
     if (rowDim >= 0) {
       // The mask constancy has to be power of 2 for block IO.
       if (maskAxisInfo &&
           !llvm::isPowerOf2_64(maskAxisInfo->getConstancy(rowDim)))
         return BlockIOTileSizeInfo::unknown();
       if (maskAxisInfo)
-        maskConstancyHeightLimit = maskAxisInfo->getConstancy(rowDim);
+        maskConstancyRowDimLimit = maskAxisInfo->getConstancy(rowDim);
     }
 
-    // The size should not exceed the mask constancy limit.
-    if ((rowDim >= 0) && tileShape[rowDim] > maskConstancyHeightLimit)
+    rowDimLimit = std::min(rowDimLimit, maskConstancyRowDimLimit);
+
+    if (tileShape[fastChangeDim] > fastChangeDimLimit)
+      return BlockIOTileSizeInfo::unknown();
+
+    if (rowDim >= 0 && tileShape[rowDim] > rowDimLimit)
       return BlockIOTileSizeInfo::unknown();
 
     if (!oneMatrixPerLoadForBT && transpose &&
@@ -768,7 +787,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
           continue; // Skip the register not mapped to the row dim.
         if ((tileShape[fastChangeDim] << 1) > MAX_TILE_HEIGHT)
           break; // The col dim is the height.
-        if ((tileShape[fastChangeDim] << 1) > maskConstancyWidthLimit)
+        if ((tileShape[fastChangeDim] << 1) > maskConstancyFastChangeDimLimit)
           break; // Should not exceed the mask constancy limit.
         tileShape[fastChangeDim] <<= 1;
         regPackBases.insert(1 << regBaseIter);
@@ -826,7 +845,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
             !llvm::isPowerOf2_64(maskAxisInfo->getConstancy(rowDim)))
           return BlockIOTileSizeInfo::unknown();
         if (maskAxisInfo)
-          maskConstancyHeightLimit = maskAxisInfo->getConstancy(rowDim);
+          maskConstancyRowDimLimit = maskAxisInfo->getConstancy(rowDim);
       }
       if (dim != rowDim || tileShape[rowDim] != base[rowDim])
         continue; // Skip the register not mapped to the row dim.
@@ -838,7 +857,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
           break; // The row is the width.
       }
       // The size should not exceed the mask constancy limit.
-      if ((tileShape[rowDim] << 1) > maskConstancyHeightLimit)
+      if ((tileShape[rowDim] << 1) > maskConstancyRowDimLimit)
         break;
       tileShape[rowDim] <<= 1;
       regPackBases.insert(1 << regBaseIter);
@@ -868,7 +887,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
         if (dim != fastChangeDim || (tileShape[dim] * vBlocks) != base[dim])
           continue;
         if ((tileShape[fastChangeDim] * (vBlocks << 1)) >
-            maskConstancyWidthLimit)
+            maskConstancyFastChangeDimLimit)
           break; // Should not exceed the mask constancy limit.
         vBlocks <<= 1;
         regPackBases.insert(1 << regBaseIter);
@@ -1742,27 +1761,19 @@ struct LoadOpToBlockIOConversion
         // shape sufficiently when boundary check is absent.
         SetVector<unsigned> boundaryCheck(op.getBoundaryCheck().begin(),
                                           op.getBoundaryCheck().end());
-        // FIXME: IGC currently cannot optimize 2D block IO when tt.load is used
-        // without boundary checks. Temporarily skipping logic for ignoring
-        // boundary checks which matches previous behavior by default. Restore
-        // this logic once IGC optimization is supported.
-        static const bool enableNoBoundaryCheck = triton::tools::getBoolEnv(
-            "TRITON_INTEL_2DBLOCK_ENABLE_NO_BOUNDARY_CHECK");
-        if (enableNoBoundaryCheck) {
-          if (!boundaryCheck.contains(c)) {
-            adjustedBaseWidth = b.i32_val(std::max(
-                64u, vBlocks * tileWidth * (packedElemSizeInBits / 8)));
-            // The offsetX is number of elements instead of packed elements.
-            addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, offsetX);
-            offsetX = b.i32_val(0);
-          }
-          if (!boundaryCheck.contains(r)) {
-            adjustedBaseHeight = b.i32_val(tileHeight);
-            // Use i8_ty as pitch is in number of bytes.
-            Value off = b.mul(offsetY, pitch);
-            addrElem = b.gep(ptr_ty(ctx, 1), i8_ty, addrElem, off);
-            offsetY = b.i32_val(0);
-          }
+        if (!boundaryCheck.contains(c)) {
+          adjustedBaseWidth = b.i32_val(
+              std::max(64u, vBlocks * tileWidth * (packedElemSizeInBits / 8)));
+          // The offsetX is number of elements instead of packed elements.
+          addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, offsetX);
+          offsetX = b.i32_val(0);
+        }
+        if (!boundaryCheck.contains(r)) {
+          adjustedBaseHeight = b.i32_val(tileHeight);
+          // Use i8_ty as pitch is in number of bytes.
+          Value off = b.mul(offsetY, pitch);
+          addrElem = b.gep(ptr_ty(ctx, 1), i8_ty, addrElem, off);
+          offsetY = b.i32_val(0);
         }
       } else {
         addrElem = targetInfo.shuffleIdx(rewriter, loc, addrElem, 0);
