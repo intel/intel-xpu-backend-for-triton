@@ -785,6 +785,10 @@ static void updateAdvanceOpChain(tt::AdvanceOp advanceOp, tt::StoreOp storeOp,
         storeOp.setOperand(0, newAdvanceOp);
         storeOp.setOperand(1, dataToStore);
       }
+    } else if (auto loadUser = dyn_cast<tt::LoadOp>(user)) {
+      // The inconsistency will be corrected in the subsequent code,
+      // however, there is room for improvement.
+      continue;
     } else if (auto advanceOp = dyn_cast<tt::AdvanceOp>(user)) {
       updateAdvanceOpChain(advanceOp, storeOp, makeTensorPtrOp, dataToStore);
     } else {
