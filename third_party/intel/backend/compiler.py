@@ -22,7 +22,7 @@ try:  # XPUBackend allows metaclasses injection
 except ImportError:
     XPUBackendMeta = type(BaseBackend)
 
-_VERSION_PATTERN = re.compile(r'(\d+)\.(\d+)\.(\d+)\+(\d+)')
+_VERSION_PATTERN = re.compile(r'(\d+)\.(\d+)\.(\d+)(?:\+(\d+))?')
 
 
 @dataclass
@@ -145,7 +145,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         m = _VERSION_PATTERN.match(ver)
         if not m:
             return True
-        return tuple(map(int, m.groups())) < (1, 6, 35096, 9)
+        return tuple(int(x) if x is not None else 0 for x in m.groups()) < (1, 6, 35096, 9)
 
     def parse_target(self, tgt_prop) -> dict:
         dev_prop = {}
