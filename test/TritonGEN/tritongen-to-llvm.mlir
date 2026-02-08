@@ -166,7 +166,17 @@ llvm.func @triton_gen.sub_group_block_write(%ptr: !llvm.ptr<1>, %val : i32) {
 llvm.func @triton_gen.predicated_load(%ptr : !llvm.ptr<1>, %predicate : i1, %default_value : i32) {
   // CHECK:     llvm.func @triton_gen.predicated_load(%arg0: !llvm.ptr<1>, %arg1: i1, %arg2: i32) {
   // CHECK:       %0 = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi(%arg0, %arg1, %arg2) {{.*}} : (!llvm.ptr<1>, i1, i32) -> i32
-  %0 = triton_gen.predicated_load %ptr, %predicate, %default_value : !llvm.ptr<1>, i1, i32 -> i32
+  %0 = triton_gen.predicated_load %ptr, %predicate, %default_value {cache_control = Default} : (!llvm.ptr<1>, i1, i32) -> i32
+  llvm.return
+}
+
+// -----
+
+// CHECK: llvm.func spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi(!llvm.ptr<1>, i1, i32) -> i32 attributes {no_unwind, will_return}
+llvm.func @triton_gen.predicated_load(%ptr : !llvm.ptr<1>, %predicate : i1, %default_value : i32) {
+  // CHECK:     llvm.func @triton_gen.predicated_load(%arg0: !llvm.ptr<1>, %arg1: i1, %arg2: i32) {
+  // CHECK:       %0 = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi(%arg0, %arg1, %arg2) {{{.*}} triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.load_cache_control<0, Uncached, 0>, #triton_gen.load_cache_control<1, Uncached, 0>>, {{.*}}} : (!llvm.ptr<1>, i1, i32) -> i32
+  %0 = triton_gen.predicated_load %ptr, %predicate, %default_value {cache_control = L1UC_L3UC} : (!llvm.ptr<1>, i1, i32) -> i32
   llvm.return
 }
 
@@ -176,7 +186,17 @@ llvm.func @triton_gen.predicated_load(%ptr : !llvm.ptr<1>, %predicate : i1, %def
 llvm.func @triton_gen.predicated_store(%ptr : !llvm.ptr<1>, %value : i32, %predicate : i1) {
   // CHECK:      llvm.func @triton_gen.predicated_store(%arg0: !llvm.ptr<1>, %arg1: i32, %arg2: i1) {
   // CHECK:        llvm.call spir_funccc @_Z28__spirv_PredicatedStoreINTELPU3AS1vib(%arg0, %arg1, %arg2) {{.*}} : (!llvm.ptr<1>, i32, i1) -> ()
-  triton_gen.predicated_store %ptr, %value, %predicate : !llvm.ptr<1>, i32, i1
+  triton_gen.predicated_store %ptr, %value, %predicate {cache_control = Default} : (!llvm.ptr<1>, i32, i1) -> ()
+  llvm.return
+}
+
+// -----
+
+// CHECK: llvm.func spir_funccc @_Z28__spirv_PredicatedStoreINTELPU3AS1vib(!llvm.ptr<1>, i32, i1) attributes {no_unwind, will_return}
+llvm.func @triton_gen.predicated_store(%ptr : !llvm.ptr<1>, %value : i32, %predicate : i1) {
+  // CHECK:      llvm.func @triton_gen.predicated_store(%arg0: !llvm.ptr<1>, %arg1: i32, %arg2: i1) {
+  // CHECK:        llvm.call spir_funccc @_Z28__spirv_PredicatedStoreINTELPU3AS1vib(%arg0, %arg1, %arg2) {{{.*}} triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.store_cache_control<0, WriteThrough, 0>, #triton_gen.store_cache_control<1, WriteThrough, 0>>, {{.*}}} : (!llvm.ptr<1>, i32, i1) -> ()
+  triton_gen.predicated_store %ptr, %value, %predicate {cache_control = L1WT_L3WT} : (!llvm.ptr<1>, i32, i1) -> ()
   llvm.return
 }
 
