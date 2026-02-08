@@ -424,7 +424,9 @@ def TritonGEN_PredicatedLoadOp
       I64: $alignment,
       I1:$predicate,
       AnyType:$default_value,
-      DefaultValuedAttr<TritonGEN_LoadCacheControl, "::mlir::triton::TritonGEN::LoadCacheControl::DEFAULT">:$cache_control);
+      DefaultValuedAttr<TritonGEN_LoadCacheControl,
+                        "::mlir::triton::TritonGEN::LoadCacheControl::"
+                        "DEFAULT">:$cache_control);
   let results = (outs
       AnyType:$res);
   let assemblyFormat = [{

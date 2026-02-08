@@ -320,8 +320,7 @@ struct LoadStoreConversionBase {
     // SPIRV predicated load/store does not support volatile qualifier.
     if constexpr (std::is_same_v<OpType, LoadOp>) {
       return canUsePredicatedLoad && !op.getIsVolatile();
-    }
-    else if constexpr (std::is_same_v<OpType, StoreOp>) {
+    } else if constexpr (std::is_same_v<OpType, StoreOp>) {
       return canUsePredicatedStore;
     }
 
@@ -335,43 +334,43 @@ struct LoadStoreConversionBase {
     CacheModifier cacheModifier = op.getCache();
 
     /******** LoadOp ********
-      * ""   -> DEFAULT (No cache modifier provided)
-      * "cg" -> L1UC_L3C (Cache at global level, not L1)
-      * "cv" -> L1UC_L3UC (Do not cache at all)
-      * "ca" -> L1C_L3C (Cache at all levels)
-    **/
+     * ""   -> DEFAULT (No cache modifier provided)
+     * "cg" -> L1UC_L3C (Cache at global level, not L1)
+     * "cv" -> L1UC_L3UC (Do not cache at all)
+     * "ca" -> L1C_L3C (Cache at all levels)
+     **/
     if constexpr (std::is_same_v<OpType, LoadOp>) {
       switch (cacheModifier) {
-        case CacheModifier::NONE:
-          return TritonGEN::LoadCacheControl::DEFAULT;
-        case CacheModifier::CG:
-          return TritonGEN::LoadCacheControl::L1UC_L3C;
-        case CacheModifier::CV:
-          return TritonGEN::LoadCacheControl::L1UC_L3UC;
-        case CacheModifier::CA:
-          return TritonGEN::LoadCacheControl::L1C_L3C;
+      case CacheModifier::NONE:
+        return TritonGEN::LoadCacheControl::DEFAULT;
+      case CacheModifier::CG:
+        return TritonGEN::LoadCacheControl::L1UC_L3C;
+      case CacheModifier::CV:
+        return TritonGEN::LoadCacheControl::L1UC_L3UC;
+      case CacheModifier::CA:
+        return TritonGEN::LoadCacheControl::L1C_L3C;
       }
     }
 
     /******** StoreOp ********
-      * ""   -> DEFAULT (No cache modifier provided)
-      * "wb" -> L1WB_L3WB (Cache write-back at all levels.)
-      * "cg" -> L1UC_L3WB (Cache at global level, not L1)
-      * "cs" -> L1S_L3S (Cache streaming at all levels)
-      * "wt" -> L1WT_L3WT (Cache write-through at all levels)
-    **/
+     * ""   -> DEFAULT (No cache modifier provided)
+     * "wb" -> L1WB_L3WB (Cache write-back at all levels.)
+     * "cg" -> L1UC_L3WB (Cache at global level, not L1)
+     * "cs" -> L1S_L3S (Cache streaming at all levels)
+     * "wt" -> L1WT_L3WT (Cache write-through at all levels)
+     **/
     else {
       switch (cacheModifier) {
-        case CacheModifier::NONE:
-          return TritonGEN::StoreCacheControl::DEFAULT;
-        case CacheModifier::WB:
-          return TritonGEN::StoreCacheControl::L1WB_L3WB;
-        case CacheModifier::CG:
-          return TritonGEN::StoreCacheControl::L1UC_L3WB;
-        case CacheModifier::CS:
-          return TritonGEN::StoreCacheControl::L1S_L3S;
-        case CacheModifier::WT:
-          return TritonGEN::StoreCacheControl::L1WT_L3WT;
+      case CacheModifier::NONE:
+        return TritonGEN::StoreCacheControl::DEFAULT;
+      case CacheModifier::WB:
+        return TritonGEN::StoreCacheControl::L1WB_L3WB;
+      case CacheModifier::CG:
+        return TritonGEN::StoreCacheControl::L1UC_L3WB;
+      case CacheModifier::CS:
+        return TritonGEN::StoreCacheControl::L1S_L3S;
+      case CacheModifier::WT:
+        return TritonGEN::StoreCacheControl::L1WT_L3WT;
       }
     }
 
