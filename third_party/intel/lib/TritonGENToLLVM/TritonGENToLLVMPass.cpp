@@ -1395,12 +1395,11 @@ struct TritonPredicatedStoreOpLowering
         intel::noUnwindWillReturnAttrs);
 
     if (std::optional<TritonGEN::DecorationCacheControlAttr> optCacheControls =
-      storeCacheControlToCacheControls(rewriter, op.getCacheControl(),
-                                            /*ptrOperandIndex=*/0)) {
+            storeCacheControlToCacheControls(rewriter, op.getCacheControl(),
+                                             /*ptrOperandIndex=*/0)) {
       callOp->setAttr(TritonGEN::TritonGENDialect::getCacheControlsAttrName(),
                       *optCacheControls);
     }
-
 
     rewriter.replaceOp(op, callOp);
     return success();
