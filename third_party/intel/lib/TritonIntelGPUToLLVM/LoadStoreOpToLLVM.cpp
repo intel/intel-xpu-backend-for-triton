@@ -312,21 +312,70 @@ struct LoadStoreConversionBase {
             op, TritonIntelGPUDialect::getSupportPredicatedIOAttrName()))
       return false;
 
+    static const bool canUsePredicatedLoad =
+        triton::tools::getBoolEnv("TRITON_INTEL_PREDICATED_LOAD");
+    static const bool canUsePredicatedStore =
+        triton::tools::getBoolEnv("TRITON_INTEL_PREDICATED_STORE");
+
+    // SPIRV predicated load/store does not support volatile qualifier.
     if constexpr (std::is_same_v<OpType, LoadOp>) {
-      if (!triton::tools::getBoolEnv("TRITON_INTEL_PREDICATED_LOAD"))
-        return false;
-      return !op.getIsVolatile() && op.getCache() == CacheModifier::NONE;
+      return canUsePredicatedLoad && !op.getIsVolatile();
+    }
+    else if constexpr (std::is_same_v<OpType, StoreOp>) {
+      return canUsePredicatedStore;
     }
 
-    if constexpr (std::is_same_v<OpType, StoreOp>) {
-      std::optional<bool> usePredicatedStore =
-          mlir::triton::tools::isEnvValueBool(
-              mlir::triton::tools::getStrEnv("TRITON_INTEL_PREDICATED_STORE"));
-      if (usePredicatedStore.has_value() && !usePredicatedStore.value())
-        return false;
+    llvm_unreachable("unsupported operation type for predicated instruction");
+  }
+
+  // Convert Triton cache modifier to Intel GEN load cache control enum.
+  template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
+                                 OpType, LoadOp, StoreOp>::value>>
+  auto tritonToIntelCacheModifier(OpType &op) const {
+    CacheModifier cacheModifier = op.getCache();
+
+    /******** LoadOp ********
+      * ""   -> DEFAULT (No cache modifier provided)
+      * "cg" -> L1UC_L3C (Cache at global level, not L1)
+      * "cv" -> L1UC_L3UC (Do not cache at all)
+      * "ca" -> L1C_L3C (Cache at all levels)
+    **/
+    if constexpr (std::is_same_v<OpType, LoadOp>) {
+      switch (cacheModifier) {
+        case CacheModifier::NONE:
+          return TritonGEN::LoadCacheControl::DEFAULT;
+        case CacheModifier::CG:
+          return TritonGEN::LoadCacheControl::L1UC_L3C;
+        case CacheModifier::CV:
+          return TritonGEN::LoadCacheControl::L1UC_L3UC;
+        case CacheModifier::CA:
+          return TritonGEN::LoadCacheControl::L1C_L3C;
+      }
     }
 
-    return op.getCache() == CacheModifier::NONE;
+    /******** StoreOp ********
+      * ""   -> DEFAULT (No cache modifier provided)
+      * "wb" -> L1WB_L3WB (Cache write-back at all levels.)
+      * "cg" -> L1UC_L3WB (Cache at global level, not L1)
+      * "cs" -> L1S_L3S (Cache streaming at all levels)
+      * "wt" -> L1WT_L3WT (Cache write-through at all levels)
+    **/
+    else {
+      switch (cacheModifier) {
+        case CacheModifier::NONE:
+          return TritonGEN::StoreCacheControl::DEFAULT;
+        case CacheModifier::WB:
+          return TritonGEN::StoreCacheControl::L1WB_L3WB;
+        case CacheModifier::CG:
+          return TritonGEN::StoreCacheControl::L1UC_L3WB;
+        case CacheModifier::CS:
+          return TritonGEN::StoreCacheControl::L1S_L3S;
+        case CacheModifier::WT:
+          return TritonGEN::StoreCacheControl::L1WT_L3WT;
+      }
+    }
+
+    llvm_unreachable("invalid cache modifier");
   }
 
   template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
@@ -2079,9 +2128,11 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       Value ret;
       if (!pred)
         ret = createLoadWithAttrs()[0];
-      else if (canUsePredicatedInstructions(op))
-        ret = TritonGEN::PredicatedLoadOp::create(rewriter, loc, retTy,
-                                                  addrElem, pred, other_);
+      else if (canUsePredicatedInstructions(op)) {
+          auto cacheModifier = tritonToIntelCacheModifier(op);
+          ret = TritonGEN::PredicatedLoadOp::create(
+              rewriter, loc, retTy, addrElem, pred, other_, cacheModifier);
+      }
       else {
         Block &endBlock = LLVM::intel::createPredicatedBlock(
             rewriter, loc, pred, SmallVector<Value, 1>{other_},
@@ -2527,9 +2578,11 @@ struct StoreOpConversion
 
       if (!maskVal)
         auto _ = createStoreWithAttrs();
-      else if (canUsePredicatedInstructions(op))
+      else if (canUsePredicatedInstructions(op)) {
+        auto cacheModifier = tritonToIntelCacheModifier(op);
         TritonGEN::PredicatedStoreOp::create(rewriter, loc, addrElem, vecWord,
-                                             maskVal);
+                                             maskVal, cacheModifier);
+      }
       else
         LLVM::intel::createPredicatedBlock(rewriter, loc, maskVal,
                                            createStoreWithAttrs);

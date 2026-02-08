@@ -422,12 +422,12 @@ def TritonGEN_PredicatedLoadOp
   let arguments = (ins
       Arg<LLVM_AnyPointer, "", [MemRead]>:$ptr,
       I1:$predicate,
-      AnyType:$default_value);
+      AnyType:$default_value,
+      DefaultValuedAttr<TritonGEN_LoadCacheControl, "::mlir::triton::TritonGEN::LoadCacheControl::DEFAULT">:$cache_control);
   let results = (outs
       AnyType:$res);
   let assemblyFormat = [{
-    $ptr `,` $predicate `,` $default_value attr-dict `:` qualified(type($ptr)) `,`
-    type($predicate) `,` type($default_value) `->` type($res)
+    operands ` ` `{` `cache_control` `=` $cache_control `}` attr-dict `:` functional-type(operands, results)
   }];
 }
 
@@ -442,11 +442,12 @@ def TritonGEN_PredicatedStoreOp
   let arguments = (ins
       Arg<LLVM_AnyPointer, "", [MemWrite]>:$ptr,
       AnyType:$value,
-      I1:$predicate);
+      I1:$predicate,
+      DefaultValuedAttr<TritonGEN_StoreCacheControl, "::mlir::triton::TritonGEN::StoreCacheControl::DEFAULT">:$cache_control
+      );
   let results = (outs);
   let assemblyFormat = [{
-    $ptr `,` $value `,` $predicate attr-dict `:` qualified(type($ptr)) `,`
-    type($value) `,` type($predicate)
+    operands ` ` `{` `cache_control` `=` $cache_control `}` attr-dict `:` functional-type(operands, results)
   }];
 }
 

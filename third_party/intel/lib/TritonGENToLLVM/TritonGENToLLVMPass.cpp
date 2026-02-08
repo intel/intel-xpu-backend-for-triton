@@ -446,6 +446,12 @@ storeCacheControlToDecoration(Builder &builder, uint32_t operandNum,
   case TritonGEN::StoreCacheControl::L1WB_L3WB:
     return build(TritonGEN::StoreCacheControlDecorationEnum::WriteBack,
                  TritonGEN::StoreCacheControlDecorationEnum::WriteBack);
+  case TritonGEN::StoreCacheControl::L1S_L3S:
+    return build(TritonGEN::StoreCacheControlDecorationEnum::Streaming,
+                 TritonGEN::StoreCacheControlDecorationEnum::Streaming);
+  case TritonGEN::StoreCacheControl::L1WT_L3WT:
+    return build(TritonGEN::StoreCacheControlDecorationEnum::WriteThrough,
+                 TritonGEN::StoreCacheControlDecorationEnum::WriteThrough);
   }
   llvm_unreachable("Unhandled case");
 }
@@ -1353,6 +1359,14 @@ struct TritonPredicatedLoadOpLowering
     LLVM::CallOp callOp = intel::createDeviceFunctionCall(
         rewriter, fnName, resType, argTypes, args, {},
         intel::noUnwindWillReturnAttrs);
+
+    if (std::optional<TritonGEN::DecorationCacheControlAttr> optCacheControls =
+            loadCacheControlToCacheControls(rewriter, op.getCacheControl(),
+                                            /*ptrOperandIndex=*/0)) {
+      callOp->setAttr(TritonGEN::TritonGENDialect::getCacheControlsAttrName(),
+                      *optCacheControls);
+    }
+
     rewriter.replaceOp(op, callOp);
     return success();
   }
@@ -1379,6 +1393,15 @@ struct TritonPredicatedStoreOpLowering
     LLVM::CallOp callOp = intel::createDeviceFunctionCall(
         rewriter, fnName, void_ty(ctx), argTypes, args, {},
         intel::noUnwindWillReturnAttrs);
+
+    if (std::optional<TritonGEN::DecorationCacheControlAttr> optCacheControls =
+      storeCacheControlToCacheControls(rewriter, op.getCacheControl(),
+                                            /*ptrOperandIndex=*/0)) {
+      callOp->setAttr(TritonGEN::TritonGENDialect::getCacheControlsAttrName(),
+                      *optCacheControls);
+    }
+
+
     rewriter.replaceOp(op, callOp);
     return success();
   }
