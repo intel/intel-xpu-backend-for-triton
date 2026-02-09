@@ -360,7 +360,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
             std::enable_if_t<
                 llvm::is_one_of<OpTy, triton::LoadOp, triton::StoreOp>::value,
                 bool> = true>
-  static bool isBlockIOCandidate(OpTy op, bool allLayout = false) {
+  static bool isBlockIOCandidate(OpTy op) {
     ModuleOp mod = op->template getParentOfType<ModuleOp>();
     if (!mod->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
                           getSupport2DBlockIOAttrName()))
@@ -371,10 +371,13 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     if (!blockIOAttr)
       return false;
 
+    static const bool enableBlockIOForAllLayout =
+        triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS");
+
     // Only lower operation with dpas layout encoding.
     auto tensorTy =
         cast<RankedTensorType>(getPointeeType(op.getPtr().getType()));
-    return allLayout || hasDpasEncoding(tensorTy) ||
+    return enableBlockIOForAllLayout || hasDpasEncoding(tensorTy) ||
            hasDotDpasEncoding(tensorTy);
   }
 
@@ -643,7 +646,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
         !llvm::isPowerOf2_64(maskAxisInfo->getConstancy(fastChangeDim)))
       return BlockIOTileSizeInfo::unknown();
 
-    unsigned maskConstancyWidthLimit =
+    unsigned maskConstancyFastChangeDimLimit =
         maskAxisInfo ? maskAxisInfo->getConstancy(fastChangeDim)
                      : std::numeric_limits<unsigned>::max();
     bool transpose = fastChangeDim != memContiguousDim;
@@ -738,21 +741,37 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     if (sliceRank > 2)
       return BlockIOTileSizeInfo::unknown();
 
-    // The size should not exceed the mask constancy limit.
-    if (tileShape[fastChangeDim] > maskConstancyWidthLimit)
-      return BlockIOTileSizeInfo::unknown();
+    // When transposed, width and height constraints swap between fastChangeDim
+    // and rowDim: fastChangeDim is constrained by block io tile width in the
+    // non-transposed case and by block io tile height in the transposed case,
+    // while rowDim uses the opposite limits.
 
-    unsigned maskConstancyHeightLimit = std::numeric_limits<unsigned>::max();
+    // The tile shape sizes should not exceed the hardware limit.
+    unsigned fastChangeDimLimit =
+        !transpose ? MAX_BITS_WIDTH / elemSizeInBits : MAX_TILE_HEIGHT;
+    unsigned rowDimLimit =
+        !transpose ? MAX_TILE_HEIGHT : MAX_BITS_WIDTH / elemSizeInBits;
+
+    // The tile shape sizes should not exceed the mask constancy limit.
+    fastChangeDimLimit =
+        std::min(fastChangeDimLimit, maskConstancyFastChangeDimLimit);
+
+    unsigned maskConstancyRowDimLimit = std::numeric_limits<unsigned>::max();
     if (rowDim >= 0) {
       // The mask constancy has to be power of 2 for block IO.
       if (maskAxisInfo &&
           !llvm::isPowerOf2_64(maskAxisInfo->getConstancy(rowDim)))
         return BlockIOTileSizeInfo::unknown();
       if (maskAxisInfo)
-        maskConstancyHeightLimit = maskAxisInfo->getConstancy(rowDim);
+        maskConstancyRowDimLimit = maskAxisInfo->getConstancy(rowDim);
     }
 
-    if ((rowDim >= 0) && tileShape[rowDim] > maskConstancyHeightLimit)
+    rowDimLimit = std::min(rowDimLimit, maskConstancyRowDimLimit);
+
+    if (tileShape[fastChangeDim] > fastChangeDimLimit)
+      return BlockIOTileSizeInfo::unknown();
+
+    if (rowDim >= 0 && tileShape[rowDim] > rowDimLimit)
       return BlockIOTileSizeInfo::unknown();
 
     if (!oneMatrixPerLoadForBT && transpose &&
@@ -771,7 +790,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
           continue; // Skip the register not mapped to the row dim.
         if ((tileShape[fastChangeDim] << 1) > MAX_TILE_HEIGHT)
           break; // The col dim is the height.
-        if ((tileShape[fastChangeDim] << 1) > maskConstancyWidthLimit)
+        if ((tileShape[fastChangeDim] << 1) > maskConstancyFastChangeDimLimit)
           break; // Should not exceed the mask constancy limit.
         tileShape[fastChangeDim] <<= 1;
         regPackBases.insert(1 << regBaseIter);
@@ -829,7 +848,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
             !llvm::isPowerOf2_64(maskAxisInfo->getConstancy(rowDim)))
           return BlockIOTileSizeInfo::unknown();
         if (maskAxisInfo)
-          maskConstancyHeightLimit = maskAxisInfo->getConstancy(rowDim);
+          maskConstancyRowDimLimit = maskAxisInfo->getConstancy(rowDim);
       }
       if (dim != rowDim || tileShape[rowDim] != base[rowDim])
         continue; // Skip the register not mapped to the row dim.
@@ -841,7 +860,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
           break; // The row is the width.
       }
       // The size should not exceed the mask constancy limit.
-      if ((tileShape[rowDim] << 1) > maskConstancyHeightLimit)
+      if ((tileShape[rowDim] << 1) > maskConstancyRowDimLimit)
         break;
       tileShape[rowDim] <<= 1;
       regPackBases.insert(1 << regBaseIter);
@@ -871,7 +890,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
         if (dim != fastChangeDim || (tileShape[dim] * vBlocks) != base[dim])
           continue;
         if ((tileShape[fastChangeDim] * (vBlocks << 1)) >
-            maskConstancyWidthLimit)
+            maskConstancyFastChangeDimLimit)
           break; // Should not exceed the mask constancy limit.
         vBlocks <<= 1;
         regPackBases.insert(1 << regBaseIter);
@@ -1341,9 +1360,7 @@ struct LoadOpToBlockIOConversion
     if (op.getPadding() && op.getPadding() == PaddingOption::PAD_NAN)
       return failure();
 
-    static const bool enableBlockIOForAllLayout =
-        triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS");
-    if (!isBlockIOCandidate(op, enableBlockIOForAllLayout))
+    if (!isBlockIOCandidate(op))
       return failure();
 
     // FIXME: Remove once IGC can split large 2D block loads.
@@ -2138,9 +2155,7 @@ struct StoreOpToBlockIOConversion
   LogicalResult
   matchAndRewrite(triton::StoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
-    static const bool enableBlockIOForAllLayout =
-        triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS");
-    if (!isBlockIOCandidate(op, enableBlockIOForAllLayout))
+    if (!isBlockIOCandidate(op))
       return failure();
 
     // Get the max tile shape supported by the layout.
