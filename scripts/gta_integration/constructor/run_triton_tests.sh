@@ -2,6 +2,24 @@
 
 saved_args=("$@")
 
+install_only=0
+for a in "$@"; do
+  [[ "$a" == "--install-only" ]] && install_only=1 && break
+done
+
+if (( install_only && $# != 1 )); then
+  echo "Error: --install-only must be the only argument." >&2
+  return 2 2>/dev/null || exit 2
+fi
+
+if [[ "$install_only" -eq 1 ]]; then
+  if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+    echo "Error: to persist activation, run:" >&2
+    echo "  source $0 --install-only" >&2
+    exit 2
+  fi
+fi
+
 # Clear all positional arguments to prevent them from being passed as an argument to the conda activation script
 set --
 
@@ -48,6 +66,10 @@ git config --global --add safe.directory "$TRITON_PROJ"
 
 source "$HOME/triton-xpu/bin/activate"
 source /opt/intel/oneapi/setvars.sh --force
+
+if [[ "$install_only" -eq 1 ]]; then
+  return 0
+fi
 
 cd $TRITON_PROJ
 echo "Working directory: $(pwd)"
