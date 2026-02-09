@@ -188,8 +188,8 @@ def _attn_bwd_dkdv(dk, dv,  #
                    start_n, start_m, num_steps,  #
                    MASK: tl.constexpr):
     offs_n = start_n + tl.arange(0, BLOCK_N1)
-    qT_desc = tl.make_tensor_descriptor(Q, shape=[HEAD_DIM, N_CTX], strides=[stride_d, stride_tok],
-                                        block_shape=[HEAD_DIM, BLOCK_M1])
+    q_desc = tl.make_tensor_descriptor(Q, shape=[N_CTX, HEAD_DIM], strides=[stride_tok, stride_d],
+                                       block_shape=[BLOCK_M1, HEAD_DIM])
 
     do_desc = tl.make_tensor_descriptor(DO, shape=[N_CTX, HEAD_DIM], strides=[stride_tok, stride_d],
                                         block_shape=[BLOCK_M1, HEAD_DIM])
@@ -198,7 +198,7 @@ def _attn_bwd_dkdv(dk, dv,  #
     curr_m = start_m
     step_m = BLOCK_M1
     for blk_idx in range(num_steps):
-        qT = qT_desc.load([0, start_m + blk_idx * step_m])
+        qT = q_desc.load([start_m + blk_idx * step_m, 0]).T
         # Load m before computing qk to reduce pipeline stall.
         offs_m = curr_m + tl.arange(0, BLOCK_M1)
         m = tl.load(M + offs_m)
@@ -240,11 +240,11 @@ def _attn_bwd_dq(dq, q, K, V,  #
                  start_m, start_n, num_steps,  #
                  MASK: tl.constexpr):
     offs_m = start_m + tl.arange(0, BLOCK_M2)
-    kT_desc = tl.make_tensor_descriptor(K, shape=[HEAD_DIM, N_CTX], strides=[stride_d, stride_tok],
-                                        block_shape=[HEAD_DIM, BLOCK_N2])
+    k_desc = tl.make_tensor_descriptor(K, shape=[N_CTX, HEAD_DIM], strides=[stride_tok, stride_d],
+                                       block_shape=[BLOCK_N2, HEAD_DIM])
 
-    vT_desc = tl.make_tensor_descriptor(V, shape=[HEAD_DIM, N_CTX], strides=[stride_d, stride_tok],
-                                        block_shape=[HEAD_DIM, BLOCK_N2])
+    v_desc = tl.make_tensor_descriptor(V, shape=[N_CTX, HEAD_DIM], strides=[stride_tok, stride_d],
+                                       block_shape=[BLOCK_N2, HEAD_DIM])
     # D (= delta) is pre-divided by ds_scale.
     Di = tl.load(D + offs_m)
     # BLOCK_M2 must be a multiple of BLOCK_N2, otherwise the code wouldn't work.
@@ -252,8 +252,8 @@ def _attn_bwd_dq(dq, q, K, V,  #
     curr_n = start_n
     step_n = BLOCK_N2
     for blk_idx in range(num_steps):
-        kT = kT_desc.load([0, start_n + blk_idx * step_n])
-        vT = vT_desc.load([0, start_n + blk_idx * step_n])
+        kT = k_desc.load([start_n + blk_idx * step_n, 0]).T
+        vT = v_desc.load([start_n + blk_idx * step_n, 0]).T
         qk = tl.dot(q, kT)
         p = tl.math.exp2(qk - m)
         # Autoregressive masking.
