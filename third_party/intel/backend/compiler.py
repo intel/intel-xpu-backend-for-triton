@@ -80,8 +80,9 @@ def extract_spill_size_from_zebin(file):
         elf = ELFFile(f)
         zeinfo = elf.get_section_by_name(".ze_info")
         if zeinfo is None:
-            raise RuntimeError('Internal Triton ZEBIN codegen error:'
-                               'Section .ze_info not found in zebin')
+            from triton.runtime.errors import IntelGPUError
+            raise IntelGPUError('Internal Triton ZEBIN codegen error:'
+                                'Section .ze_info not found in zebin')
         text = zeinfo.data().decode('utf-8')
         match = SPILL_SIZE_RE.search(text)
         if match is not None:
