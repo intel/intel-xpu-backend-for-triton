@@ -1110,6 +1110,69 @@ def ref_paged_attn(
     return torch.cat(outputs, dim=0)
 
 
+TOTAL_MEMORY = torch.xpu.get_device_properties(0).total_memory
+
+
+def _dtype_size(dtype):
+    """Return element size in bytes for a torch dtype."""
+    if dtype is None:
+        return 0
+    if hasattr(dtype, 'itemsize'):
+        return dtype.itemsize
+    # Fallback for dtype objects without itemsize
+    return torch.tensor([], dtype=dtype).element_size()
+
+
+def is_enough_memory(x_val, safety_factor=0.80):
+    """Check whether all tensors created by the benchmark fit in GPU memory.
+
+    Mirrors every allocation inside ``benchmark()`` so the estimate is
+    precise.  Returns *True* when the total fits within
+    ``safety_factor`` of the device's total memory.
+    """
+    q_heads, k_heads, head_size, dtype, qdtype, seq_lens, sliding_window, soft_cap, num_blocks, block_size = x_val
+
+    num_seqs = len(seq_lens)
+    query_lens = [s[0] for s in seq_lens]
+    kv_lens = [s[1] for s in seq_lens]
+    total_query_tokens = sum(query_lens)
+    max_kv_len = max(kv_lens)
+    max_num_blocks_per_seq = (max_kv_len + block_size - 1) // block_size
+
+    d_bytes = _dtype_size(dtype)  # e.g. 2 for bfloat16
+
+    # --- tensors allocated in benchmark() ---
+    # query:       (total_query_tokens, q_heads, head_size)  dtype
+    query_mem = total_query_tokens * q_heads * head_size * d_bytes
+    # key_cache:   (num_blocks, block_size, k_heads, head_size) dtype
+    kv_cache_mem = 2 * num_blocks * block_size * k_heads * head_size * d_bytes
+    # output:      same shape/dtype as query  (empty_like)
+    output_mem = query_mem
+    # cu_query_lens: (num_seqs + 1,) int32
+    cu_mem = (num_seqs + 1) * 4
+    # kv_lens_tensor: (num_seqs,) int32
+    kvl_mem = num_seqs * 4
+    # block_tables: (num_seqs, max_num_blocks_per_seq) int32
+    bt_mem = num_seqs * max_num_blocks_per_seq * 4
+
+    # quantised duplicates (when qdtype is set the originals are *kept*)
+    q_quant_mem = 0
+    if qdtype is not None:
+        qd_bytes = _dtype_size(qdtype)
+        # maybe_quantized_query, _key_cache, _value_cache
+        q_quant_mem += total_query_tokens * q_heads * head_size * qd_bytes
+        q_quant_mem += 2 * num_blocks * block_size * k_heads * head_size * qd_bytes
+        # k_descale, v_descale: (num_seqs, k_heads) float32
+        q_quant_mem += 2 * num_seqs * k_heads * 4
+
+    total_memory = (query_mem + kv_cache_mem + output_mem + cu_mem + kvl_mem + bt_mem + q_quant_mem)
+
+    threshold = TOTAL_MEMORY * safety_factor
+    enough = total_memory < threshold
+
+    return enough
+
+
 # Benchmark configurations for unified attention
 # (seq_lens, num_heads, head_size, block_size, dtype, sliding_window, soft_cap)
 # NUM_HEADS = [(4, 4), (8, 2)]
@@ -1146,14 +1209,22 @@ for model_config, seq_len, sliding_window, soft_cap, num_blocks in product(MODEL
     if model_config[-1] is not None and model_config[-1].itemsize < 2 and PAGED_ATTENTION_MMAP_SIZE < 32:
         print("Skipping configuration due to incompatible q_dtype and block_size.")
         continue
-    ATTENTION_CONFIGS_BF16.append((
-        *model_config,
-        seq_len,
-        sliding_window,
-        soft_cap,
-        num_blocks,
-        PAGED_ATTENTION_MMAP_SIZE,
-    ))
+
+    enough_memory_flag = is_enough_memory(x_val=(*model_config, seq_len, sliding_window, soft_cap, num_blocks,
+                                                 PAGED_ATTENTION_MMAP_SIZE))
+    if enough_memory_flag:
+        ATTENTION_CONFIGS_BF16.append((
+            *model_config,
+            seq_len,
+            sliding_window,
+            soft_cap,
+            num_blocks,
+            PAGED_ATTENTION_MMAP_SIZE,
+        ))
+    else:
+        print(
+            f"Skipping configuration due to memory constraints: {(*model_config, seq_len, sliding_window, soft_cap, num_blocks, PAGED_ATTENTION_MMAP_SIZE)}"
+        )
 
 # ATTENTION_CONFIGS_FP8 = [
 #     # FP8 configurations
@@ -1161,46 +1232,6 @@ for model_config, seq_len, sliding_window, soft_cap, num_blocks in product(MODEL
 #     (4, 128, 1024, 16, 4, 128, 32, torch.float8_e4m3fn, None, None),
 #     (8, 256, 2048, 32, 8, 256, 32, torch.float8_e4m3fn, None, None),
 # ]
-
-
-def is_enough_memory(x_val):
-    q_heads, k_heads, head_size, dtype, qdtype, seq_lens, sliding_window, soft_cap, num_blocks, block_size = x_val
-
-    # Calculate total tokens
-    num_seqs = len(seq_lens)
-    query_lens = [x[0] for x in seq_lens]
-    total_query_tokens = sum(query_lens)
-
-    # Determine byte size based on dtype
-    if dtype == torch.float8_e4m3fn or (hasattr(dtype, 'itemsize') and dtype.itemsize == 1):
-        n_bytes = 1
-    elif hasattr(dtype, 'itemsize'):
-        n_bytes = dtype.itemsize
-    else:
-        n_bytes = 2  # Default for bfloat16
-
-    # Calculate required memory
-    required_memory = (
-        total_query_tokens * q_heads * head_size * n_bytes +  # Query tensor
-        num_blocks * block_size * k_heads * head_size * n_bytes +  # Key cache
-        num_blocks * block_size * k_heads * head_size * n_bytes +  # Value cache
-        total_query_tokens * q_heads * head_size * 2 +  # Output (always bf16)
-        num_seqs * 128 +  # Metadata overhead (cu_seqlens, kv_lens, block_tables)
-        total_query_tokens * q_heads * 16 * head_size * 4  # Intermediate buffers for 3D path (segm_output, etc.)
-    )
-
-    # Get device memory
-    DEVICE_NAME = torch.xpu.get_device_name()
-    DEVICE_TOTAL_MEMORY = torch.xpu.get_device_properties(0).total_memory
-
-    # Use 80% of memory as threshold
-    enough_memory = required_memory < DEVICE_TOTAL_MEMORY * 0.8
-
-    if not enough_memory:
-        print(f"Configuration skipped for '{DEVICE_NAME}': required={required_memory / 1e9:.2f}GB, "
-              f"available={DEVICE_TOTAL_MEMORY * 0.8 / 1e9:.2f}GB")
-
-    return enough_memory
 
 
 def get_unified_attention_benchmark(
