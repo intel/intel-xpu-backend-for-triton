@@ -805,4 +805,3 @@ if __name__ == "__main__":
         if is_cuda():
             proton.finalize()
             show_profile(args.prec, "matmul")
-
