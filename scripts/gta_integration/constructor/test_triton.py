@@ -4,8 +4,32 @@ import sys
 import subprocess
 from pathlib import Path
 import json
+import re
 
 import triton_utils
+
+
+def make_select_option(test_name: str) -> list[str]:
+    if not test_name:
+        return []
+
+    def dedupe_module_dir(nodeid: str) -> str:
+        # triton_utils generates nodeid-like paths from pytest.Item.nodeid,
+        # in suites it can emit paths with a duplicated module component.
+        # turns ".../name/name.py::test" into ".../name.py::test"
+        return re.sub(r"(?<=/)([^/]+)/\1(?=\.py::)", r"\1", nodeid)
+
+    select_test_name = dedupe_module_dir(test_name)
+    print(f"Select - rewrite: {test_name} to {select_test_name}")
+
+    select_file = os.path.join(os.getcwd(), "select.txt")
+    with open(select_file, "w", encoding="utf-8") as f:
+        f.write(select_test_name)
+
+    return [
+        "--select-from-file",
+        str(select_file),
+    ]
 
 
 def main():  # pylint: disable=too-many-locals
@@ -76,15 +100,7 @@ def main():  # pylint: disable=too-many-locals
         "--skip-list",
         skiplist_dir,
     ]
-    test_opt = []
-    # if test_name:
-    #     select_file = os.path.join(triton_proj, "select.txt")
-    #     with open(select_file, "w") as f:
-    #         f.write(test_name)
-    #     test_opt = [
-    #         "--select-from-file",
-    #         select_file,
-    #     ]
+    test_opt = make_select_option(test_name)
 
     base_cmd = [
         "bash",

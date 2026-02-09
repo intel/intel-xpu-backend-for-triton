@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 
-tar -xf intel-xpu-backend-for-triton.tar.gz
+tar -xf snapshot.tar.gz
+mv snapshot intel-xpu-backend-for-triton
+
 tar -xf wheels.tar.gz
 
 # cp run.sh ~
@@ -13,4 +15,4 @@ pip install wheels/*
 mkdir -p ~/.local/bin
 tar Jxf vulkan-sdk.tar.xz -C $HOME/.local/bin --strip-components 3 --no-anchored spirv-dis
 
-/bin/sh ./intel-deep-learning-essentials_offline.sh -a --silent --eula accept
+/bin/sh ./intel-deep-learning-essentials_offline.sh -a --silent --eula accept || true
