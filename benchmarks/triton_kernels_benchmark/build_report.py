@@ -73,6 +73,8 @@ def check_cols(target_cols, all_cols):
 
 def build_report(args: PassedArgs, results_df: Optional[pd.DataFrame] = None):
     df = pd.read_csv(args.source) if results_df is None else results_df
+    if len(df) == 0:
+        raise ValueError("No results found in the source file.")
     param_cols = args.param_cols.split(",")
     hbm_col = args.hbm_col
     check_cols(param_cols, df.columns)

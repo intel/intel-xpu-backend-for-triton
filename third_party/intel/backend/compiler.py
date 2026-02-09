@@ -22,7 +22,7 @@ try:  # XPUBackend allows metaclasses injection
 except ImportError:
     XPUBackendMeta = type(BaseBackend)
 
-_VERSION_PATTERN = re.compile(r'(\d+)\.(\d+)\.(\d+)\+(\d+)')
+_VERSION_PATTERN = re.compile(r'(\d+)\.(\d+)\.(\d+)(?:\+(\d+))?')
 
 
 @dataclass
@@ -80,8 +80,9 @@ def extract_spill_size_from_zebin(file):
         elf = ELFFile(f)
         zeinfo = elf.get_section_by_name(".ze_info")
         if zeinfo is None:
-            raise RuntimeError('Internal Triton ZEBIN codegen error:'
-                               'Section .ze_info not found in zebin')
+            from triton.runtime.errors import IntelGPUError
+            raise IntelGPUError('Internal Triton ZEBIN codegen error:'
+                                'Section .ze_info not found in zebin')
         text = zeinfo.data().decode('utf-8')
         match = SPILL_SIZE_RE.search(text)
         if match is not None:
@@ -145,7 +146,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         m = _VERSION_PATTERN.match(ver)
         if not m:
             return True
-        return tuple(map(int, m.groups())) < (1, 6, 35096, 9)
+        return tuple(int(x) if x is not None else 0 for x in m.groups()) < (1, 6, 35096, 9)
 
     def parse_target(self, tgt_prop) -> dict:
         dev_prop = {}

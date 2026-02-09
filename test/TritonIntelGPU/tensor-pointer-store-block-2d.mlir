@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm
+// RUN: env TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=0 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm
 // RUN: env TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=1 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm  --check-prefixes=ALL-LAYOUT
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4, 2], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 8, 2], order = [2, 1, 0]}>
@@ -149,6 +149,59 @@ module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 16 : i32, "ttg.th
     // CHECK-COUNT-16: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 32, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
     tt.store %addr, %cst {ttig.block_io = "row_major"} : tensor<256x64x!tt.ptr<f32>, #dpas>
 
+    tt.return
+  }
+}
+
+// -----
+
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [2, 4], repCluster = [2, 1], A = [16, 8], B = [8, 16], C = [16, 16]}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  tt.func public @triton_tem_fused_mm_0(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %cst = arith.constant dense<0.000000e+00> : tensor<32x64xf32, #mma>
+    %c0_i32 = arith.constant 0 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %c64_i32 = arith.constant 64 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %c16_i32 = arith.constant 16 : i32
+    %c3_i32 = arith.constant 3 : i32
+    %cst_0 = arith.constant dense<92> : tensor<1x64xi32, #mma>
+    %cst_1 = arith.constant dense<92> : tensor<32x1xi32, #mma>
+    %0 = tt.get_program_id x : i32
+    %1 = arith.divsi %0, %c16_i32 : i32
+    %2 = arith.muli %1, %c8_i32 : i32
+    %3 = arith.subi %c3_i32, %2 : i32
+    %4 = arith.minsi %3, %c8_i32 : i32
+    %5 = arith.remsi %0, %4 : i32
+    %6 = arith.addi %2, %5 : i32
+    %7 = arith.remsi %0, %c16_i32 : i32
+    %8 = arith.divsi %7, %4 : i32
+    %9 = arith.cmpi sge, %6, %c0_i32 : i32
+    %10 = arith.cmpi sge, %8, %c0_i32 : i32
+    %11 = arith.muli %6, %c32_i32 : i32
+    %12 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 1, parent = #mma}>>
+    %13 = tt.splat %11 : i32 -> tensor<32xi32, #ttg.slice<{dim = 1, parent = #mma}>>
+    %14 = arith.addi %13, %12 : tensor<32xi32, #ttg.slice<{dim = 1, parent = #mma}>>
+    %15 = arith.muli %8, %c64_i32 : i32
+    %16 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #mma}>>
+    %17 = tt.splat %15 : i32 -> tensor<64xi32, #ttg.slice<{dim = 0, parent = #mma}>>
+    %18 = arith.addi %17, %16 : tensor<64xi32, #ttg.slice<{dim = 0, parent = #mma}>>
+    %19 = tt.expand_dims %14 {axis = 1 : i32} : tensor<32xi32, #ttg.slice<{dim = 1, parent = #mma}>> -> tensor<32x1xi32, #mma>
+    %20 = tt.expand_dims %18 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #mma}>> -> tensor<1x64xi32, #mma>
+    %21 = arith.cmpi slt, %19, %cst_1 : tensor<32x1xi32, #mma>
+    %22 = arith.cmpi slt, %20, %cst_0 : tensor<1x64xi32, #mma>
+    %23 = tt.broadcast %21 : tensor<32x1xi1, #mma> -> tensor<32x64xi1, #mma>
+    %24 = tt.broadcast %22 : tensor<1x64xi1, #mma> -> tensor<32x64xi1, #mma>
+    %25 = arith.andi %23, %24 : tensor<32x64xi1, #mma>
+    %26 = arith.muli %19, %cst_1 : tensor<32x1xi32, #mma>
+    %27 = tt.broadcast %20 : tensor<1x64xi32, #mma> -> tensor<32x64xi32, #mma>
+    %28 = tt.broadcast %26 : tensor<32x1xi32, #mma> -> tensor<32x64xi32, #mma>
+    %29 = arith.addi %27, %28 : tensor<32x64xi32, #mma>
+    %30 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<32x64x!tt.ptr<f32>, #mma>
+    %31 = tt.addptr %30, %29 : tensor<32x64x!tt.ptr<f32>, #mma>, tensor<32x64xi32, #mma>
+    // COM: mask constancy is 4, which is smaller than the tile shape.
+    // CHECK-NOT: triton_gen.2Dblockstore
+    tt.store %31, %cst, %25 {ttig.block_io = "row_major"} : tensor<32x64x!tt.ptr<f32>, #mma>
     tt.return
   }
 }

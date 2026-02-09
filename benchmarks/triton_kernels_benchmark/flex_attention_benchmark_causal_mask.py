@@ -5,10 +5,14 @@ import traceback
 import torch.multiprocessing as mp
 from torch.nn.attention.flex_attention import (
     create_block_mask,
+    create_mask,
     flex_attention,
 )
 
 import torch
+import torch.nn.functional as F
+from torch.nn.attention import SDPBackend, sdpa_kernel
+from torch.nn.attention.bias import causal_lower_right
 import torch._inductor
 import torch._inductor.lowering
 import torch._inductor.kernel
@@ -65,6 +69,12 @@ compiled_flex_attention = torch.compile(flex_attention, dynamic=False)
 def create_block_mask_cached(score_mod, B, H, M, N, device=DEVICE):
     block_mask = create_block_mask(score_mod, B, H, M, N, device=device)
     return block_mask
+
+
+@lru_cache
+def create_mask_cached(score_mod, B, H, M, N, device=DEVICE):
+    mask = create_mask(score_mod, B, H, M, N, device=device)
+    return mask
 
 
 def causal_mask(_, __, q_idx, kv_idx):
@@ -142,6 +152,46 @@ def call_in_process(fn, args=()):
     return output
 
 
+def get_attn_bias(provider, use_causal, N_CTX_q, N_CTX_kv, device):
+    if use_causal:
+        return None
+    if provider == 'sycl-tla':
+        return causal_lower_right(N_CTX_q, N_CTX_kv)
+    return create_mask_cached(causal_mask, 1, 1, N_CTX_q, N_CTX_kv, device=device)
+
+
+def run_sdpa_benchmark(q, k, v, attn_bias, use_causal, sm_scale, H_q, H_kv, D_HEAD_qk, D_HEAD_v, MODE, provider,
+                       do_bench, device):
+    """Run SDPA benchmark for SYCL-TLA or OneDNN providers."""
+    # SDPA backends have limitations:
+    # - Require D_HEAD_qk == D_HEAD_v (no support for different head dimensions)
+    # - OneDNN doesn't support backward pass for SDPA
+    if D_HEAD_qk != D_HEAD_v or (provider == 'onednn' and MODE == 'bwd'):
+        return None, float('nan'), float('nan'), float('nan'), float('nan')
+
+    backend = SDPBackend.FLASH_ATTENTION if provider == 'sycl-tla' else SDPBackend.OVERRIDEABLE
+
+    def sdpa_fn():
+        with sdpa_kernel(backends=[backend]):
+            return F.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                attn_mask=attn_bias,
+                is_causal=use_causal,
+                scale=sm_scale,
+                enable_gqa=(H_q != H_kv),
+            )
+
+    fn = sdpa_fn
+    if MODE == 'bwd':
+        o = fn()
+        do = torch.randn_like(o)
+        fn = lambda: o.backward(do, retain_graph=True)
+        return do_bench(fn, device=device, benchmark_label='ScaledDotProductFlashAttentionBackward0')
+    return do_bench(fn, device=device)
+
+
 throughput_test = os.getenv('THROUGHPUT_TEST', '0') == '1'
 batch_size = int(os.getenv('BATCH_SIZE', '1'))
 batch_sizes = [16, 32, 64] if throughput_test else [batch_size]
@@ -183,8 +233,7 @@ if 'B580' in torch.xpu.get_device_name():
             (40, 8, 1, 1024 + 64, 128, 128),  # Decode shapes of Deepseek-R1-Distill-Qwen-14B
 
             # Multi-query attention. H_kv equals 1
-            # OutOfResources: shared memory, Required: 262144, Hardware limit: 131072.
-            # (128, 1, 1, 1024 + 64, 576, 512),  # Decode shapes of Deepseek-v3
+            (128, 1, 1, 1024 + 64, 576, 512),  # Decode shapes of Deepseek-v3
             (128, 1, 512, 1024 + 128 + 512, 576, 512),  # Append shapes of Deepseek-v3
         ] + ([
             # Shapes only for bwd
@@ -193,8 +242,8 @@ if 'B580' in torch.xpu.get_device_name():
             for seq_len in [4096, 8192]  #
         ] if fa_kernel_mode == 'bwd' else [])],
         line_arg='provider',
-        line_vals=['triton', 'torch'],
-        line_names=['Triton', 'Torch'],
+        line_vals=['triton', 'sycl-tla', 'onednn'],
+        line_names=['Triton', 'SYCL-TLA', 'OneDNN'],
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel=['GB/s', 'TFlops'],
         plot_name='flexAttnCausal-performance',
@@ -221,17 +270,21 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
     block_mask = create_block_mask_cached(causal_mask, 1, 1, N_CTX_q, N_CTX_kv, device=DEVICE)
     torch_fn = lambda: flex_attention(q, k, v, block_mask=block_mask, scale=sm_scale, enable_gqa=not H_q == H_kv)
 
-    if provider == 'torch':
-        if MODE == 'bwd':
-            min_ms = float('nan')
-            max_ms = float('nan')
-            mean = float('nan')
-            cv = float('nan')
-        else:
-            _, min_ms, max_ms, mean, cv = do_bench(torch_fn, device=DEVICE)
-
+    if provider in ('sycl-tla', 'onednn'):
+        use_causal = N_CTX_q == N_CTX_kv
+        attn_bias = get_attn_bias(provider, use_causal, N_CTX_q, N_CTX_kv, DEVICE)
+        _, min_ms, max_ms, mean, cv = run_sdpa_benchmark(q, k, v, attn_bias, use_causal, sm_scale, H_q, H_kv, D_HEAD_qk,
+                                                         D_HEAD_v, MODE, provider, do_bench, DEVICE)
     elif provider == 'triton':
         kernel_options = {'BLOCKS_ARE_CONTIGUOUS': True, 'USE_TMA': True}
+
+        # pylint: disable=too-many-boolean-expressions
+        if H_q == 128 and H_kv == 1 and N_CTX_q == 1 and N_CTX_kv == 1088 and D_HEAD_qk == 576 and D_HEAD_v == 512:
+            # Workaround for DeepSeek-v3 decode shape
+            # Force to use prefill kernel because decode exceeds available Per Thread Scratch Space (PTSS)
+            # Due to that we cannot compile
+            kernel_options['FORCE_USE_FLEX_ATTENTION'] = True
+
         triton_fn = lambda: compiled_flex_attention(q, k, v, block_mask=block_mask, scale=sm_scale, enable_gqa=(
             not H_q == H_kv), kernel_options=kernel_options)
         if MODE == 'bwd':

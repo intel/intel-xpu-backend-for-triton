@@ -3,10 +3,9 @@ from triton_kernels_benchmark.benchmark_testing import BenchmarkCategory, Benchm
 from triton_kernels_benchmark import (
     fused_softmax,
     gemm_benchmark,
-    gemm_tensor_desc_benchmark,
+    gemm_block_ptr_benchmark,
     gemm_tensor_of_ptr_benchmark,
     flash_attention_benchmark,
-    flash_attention_tensor_desc_benchmark,
     prefix_sums,
 )
 
@@ -33,11 +32,11 @@ CONFIGS = [
         description="GEMM kernel benchmark - with tensor of pointer",
     ),
     BenchmarkConfig(
-        key="gemm-tensor-desc",
-        get_benchmark=gemm_tensor_desc_benchmark.get_benchmark,
+        key="gemm-block-ptr",
+        get_benchmark=gemm_block_ptr_benchmark.get_benchmark,
         run_opts={},
         categories={BenchmarkCategory.EXPERIMENTAL, BenchmarkCategory.GEMM},
-        description="GEMM kernel benchmark - with tensor descriptor",
+        description="GEMM kernel benchmark - with legacy block pointer",
     ),
     BenchmarkConfig(
         key="gemm_bt",
@@ -59,12 +58,6 @@ CONFIGS = [
         run_opts={"fa_kernel_mode": "fwd"},
         categories={BenchmarkCategory.CORE, BenchmarkCategory.FLASH_ATTENTION},
         description="FlashAttention forward kernel benchmark",
-    ),
-    BenchmarkConfig(
-        key="flash_attention_tensor_desc",
-        get_benchmark=flash_attention_tensor_desc_benchmark.get_benchmark,
-        run_opts={"fa_kernel_mode": "fwd"},
-        categories={BenchmarkCategory.EXPERIMENTAL, BenchmarkCategory.FLASH_ATTENTION},
     ),
     BenchmarkConfig(
         key="flash_attention_bwd",

@@ -126,8 +126,7 @@ private:
 
   static RankedTensorType getNewType(RankedTensorType tensorType,
                                      Attribute encoding) {
-    return RankedTensorType::get(tensorType.getShape(),
-                                 tensorType.getElementType(), encoding);
+    return tensorType.cloneWithEncoding(encoding);
   }
 
   static bool filterUser(Operation *op) {
@@ -345,8 +344,7 @@ private:
         assert(tt::isTensorPointerType(operand.getType()) &&
                "Expecting operand to have blocked pointer type");
         std::optional<tt::MakeTensorPtrOp> defOp =
-            triton::intel::findDefiningMakeTensorPtrOp<tt::MakeTensorPtrOp>(
-                operand);
+            tt::intel::findDefiningOpOfType<tt::MakeTensorPtrOp>(operand);
         if (!defOp) {
           LLVM_DEBUG(llvm::dbgs()
                      << "[" DEBUG_TYPE

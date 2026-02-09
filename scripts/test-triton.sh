@@ -23,6 +23,7 @@ TEST:
     --regression      part of core
     --gluon
     --interpreter
+    --proton
     --benchmarks
     --softmax
     --gemm
@@ -77,6 +78,7 @@ TEST_TOOLS=false
 TEST_REGRESSION=false
 TEST_GLUON=false
 TEST_INTERPRETER=false
+TEST_PROTON=false
 TEST_TUTORIAL=false
 TEST_MICRO_BENCHMARKS=false
 TEST_BENCHMARKS=false
@@ -174,6 +176,11 @@ while (( $# != 0 )); do
       ;;
     --interpreter)
       TEST_INTERPRETER=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --proton)
+      TEST_PROTON=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -552,6 +559,15 @@ run_interpreter_tests() {
     language/test_random.py language/test_line_info.py --device cpu
 }
 
+run_proton_tests() {
+  echo "***************************************************"
+  echo "******      Running Triton Proton tests     ******"
+  echo "***************************************************"
+  cd $TRITON_PROJ/third_party/proton/test
+
+  run_pytest_command -vvv test_api.py test_cmd.py test_lib.py test_profile.py test_viewer.py --device xpu -s
+}
+
 run_tutorial_tests() {
   echo "***************************************************"
   echo "**** Running Triton Tutorial tests           ******"
@@ -621,7 +637,7 @@ run_benchmark_gemm() {
   python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_tensor_of_ptr_benchmark.py
 
   echo "GEMM with tensor descriptor:"
-  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_tensor_desc_benchmark.py
+  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_benchmark.py
 }
 
 run_benchmark_flash_attention() {
@@ -631,11 +647,8 @@ run_benchmark_flash_attention() {
   cd $TRITON_PROJ/benchmarks
   pip install .
 
-  echo "Forward - Default path:"
+  echo "Forward - Default path (with tensor descriptor):"
   python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
-
-  echo "Forward - with tensor descriptor:"
-  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_tensor_desc_benchmark.py
 
   echo "Forward - Advanced path:"
   TRITON_INTEL_ADVANCED_PATH=1 \
@@ -751,10 +764,16 @@ run_liger_install() {
 
   if ! [ -d "./Liger-Kernel" ]; then
     git clone https://github.com/linkedin/Liger-Kernel
+    cd Liger-Kernel
+    echo "Liger-Kernels commit: '$(git rev-parse HEAD)'"
+    git apply ../benchmarks/third_party/liger/liger-fix.patch --allow-empty
+    cd ..
   fi
 
   if ! pip list | grep "liger_kernel" ; then
-    pip install transformers 'pandas<3.0' datasets -e Liger-Kernel
+    # Liger requires transformers<5.0
+    # https://github.com/linkedin/Liger-Kernel/issues/978
+    pip install 'transformers<5.0' 'pandas<3.0' datasets -e Liger-Kernel
   fi
 }
 
@@ -887,6 +906,9 @@ test_triton() {
   fi
   if [ "$TEST_INTERPRETER" = true ]; then
     run_interpreter_tests
+  fi
+  if [ "$TEST_PROTON" == true ]; then
+    run_proton_tests
   fi
   if [ "$TEST_TUTORIAL" = true ]; then
     run_tutorial_tests
