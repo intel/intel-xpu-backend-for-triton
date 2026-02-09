@@ -205,11 +205,12 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
 
         if MODE == 'bwd':
             sdpa_fn, _, _ = sdpa_result
-            _, min_ms, max_ms, mean, cv = do_bench(sdpa_fn, device=DEVICE,
-                                                   benchmark_label='ScaledDotProductFlashAttentionBackward0')
         else:
             sdpa_fn = sdpa_result
-            _, min_ms, max_ms, mean, cv = do_bench(sdpa_fn, device=DEVICE)
+        _, min_ms, max_ms, mean, cv = do_bench(
+            sdpa_fn, device=DEVICE,
+            benchmark_label='ScaledDotProductFlashAttentionBackward0' if MODE == 'bwd' else None)
+
     elif provider == 'triton':
         kernel_options = {'BLOCKS_ARE_CONTIGUOUS': True, 'USE_TMA': True}
 
@@ -222,30 +223,28 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
 
         triton_fn = lambda: compiled_flex_attention(q, k, v, block_mask=block_mask, scale=sm_scale, enable_gqa=(
             not H_q == H_kv), kernel_options=kernel_options)
+
+        perform_correctness_check = True
+        if D_HEAD_qk != D_HEAD_v:
+            print('Skipping correctness check: sycl-tla requires D_HEAD_qk == D_HEAD_v')
+            perform_correctness_check = False
+        elif N_CTX_q != N_CTX_kv:
+            print('Skipping correctness check: sycl-tla Flash Attention does not support non-square attention masks')
+            perform_correctness_check = False
+
         if MODE == 'bwd':
             backwards_grad = torch.randn(Z, H_q, N_CTX_q, D_HEAD_v, dtype=dtype, device=DEVICE,
                                          requires_grad=MODE == 'bwd')
 
-            perform_correctness_check = True
-            if D_HEAD_qk != D_HEAD_v:
-                print('Skipping correctness check: sycl-tla requires D_HEAD_qk == D_HEAD_v')
-                perform_correctness_check = False
-            elif N_CTX_q != N_CTX_kv:
-                print(
-                    'Skipping correctness check: sycl-tla Flash Attention does not support non-square attention masks')
-                perform_correctness_check = False
-            else:
+            if perform_correctness_check:
                 use_causal = N_CTX_q == N_CTX_kv
                 attn_bias_ref = get_attn_bias('sycl-tla', use_causal, N_CTX_q, N_CTX_kv, DEVICE)
 
                 sdpa_result = get_sdpa_benchmark(q, k, v, attn_bias_ref, use_causal, sm_scale, H_q, H_kv, D_HEAD_qk,
                                                  D_HEAD_v, MODE, 'sycl-tla', backwards_grad=backwards_grad)
-                if sdpa_result is not None:
-                    _, _, sycl_o = sdpa_result
-                    sycl_grads = torch.autograd.grad((sycl_o, ), (q, k, v), backwards_grad, retain_graph=True)
-                    sycl_tensors = (sycl_o, *sycl_grads)
-                else:
-                    perform_correctness_check = False
+                _, _, sycl_o = sdpa_result
+                sycl_grads = torch.autograd.grad((sycl_o, ), (q, k, v), backwards_grad, retain_graph=True)
+                sycl_tensors = (sycl_o, *sycl_grads)
 
             triton_o = triton_fn()
             triton_grads = torch.autograd.grad((triton_o, ), (q, k, v), backwards_grad, retain_graph=True)
@@ -259,15 +258,6 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
 
             triton_fn = lambda: torch.autograd.grad((triton_o, ), (q, k, v), backwards_grad, retain_graph=True)
         else:
-            perform_correctness_check = True
-            if D_HEAD_qk != D_HEAD_v:
-                print('Skipping correctness check: sycl-tla requires D_HEAD_qk == D_HEAD_v')
-                perform_correctness_check = False
-            elif N_CTX_q != N_CTX_kv:
-                print(
-                    'Skipping correctness check: sycl-tla Flash Attention does not support non-square attention masks')
-                perform_correctness_check = False
-
             if perform_correctness_check:
                 use_causal = N_CTX_q == N_CTX_kv
                 attn_bias_ref = get_attn_bias('sycl-tla', use_causal, N_CTX_q, N_CTX_kv, DEVICE)
