@@ -271,6 +271,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.ttir.add_fuse_reshape(pm)
         passes.common.add_canonicalizer(pm)
         passes.ttir.add_combine(pm)
+        intel.passes.ttir.add_simplify_signed_arithmetic(pm)
         passes.ttir.add_reorder_broadcast(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
