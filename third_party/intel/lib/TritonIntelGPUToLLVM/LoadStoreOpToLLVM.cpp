@@ -345,6 +345,12 @@ struct LoadStoreConversionBase {
 
     SetVector<unsigned> boundaryProtect(boundaryCheck.begin(),
                                         boundaryCheck.end());
+    for (unsigned j = 0; j < rank; j++) {
+      if (!boundaryProtect.contains(j)) {
+        // The NaN padding logic assumes that all dims are being padded.
+        return {};
+      }
+    }
 
     SmallVector<Value> maskElems;
     for (unsigned i = 0; i < numElems; ++i) {
@@ -355,21 +361,17 @@ struct LoadStoreConversionBase {
 
       if (boundaryProtect.size() > 0) {
         // Get the LLVM values for mask
-        unsigned dim = 0;
         maskElems.push_back(linearize(
             indicesInTensor,
             {blockPtr.begin() + blockShape, blockPtr.begin() + blockStride},
             b.int_val(1, 1),
             [&](const Value &index, const Value &shape, const Value &mask) {
-              if (boundaryProtect.contains(dim++)) {
-                // mask = mask && (index < shape) && idx >= 0
-                auto is_pos_idx = b.icmp_sge(index, b.i32_val(0));
-                return b
-                    .and_(
-                        b.and_(b.icmp_slt(index, b.trunc(i32_ty, shape)), mask),
+              // mask = mask && (index < shape) && idx >= 0
+              auto is_pos_idx = b.icmp_sge(index, b.i32_val(0));
+              return b
+                  .and_(b.and_(b.icmp_slt(index, b.trunc(i32_ty, shape)), mask),
                         is_pos_idx)
-                    .getResult();
-              }
+                  .getResult();
 
               return mask;
             }));
