@@ -203,7 +203,7 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
             return None, float('nan'), float('nan'), float('nan'), float('nan')
 
         if MODE == 'bwd':
-            sdpa_fn, _ = sdpa_result
+            sdpa_fn, _, _ = sdpa_result
             _, min_ms, max_ms, mean, cv = do_bench(sdpa_fn, device=DEVICE,
                                                    benchmark_label='ScaledDotProductFlashAttentionBackward0')
         else:
