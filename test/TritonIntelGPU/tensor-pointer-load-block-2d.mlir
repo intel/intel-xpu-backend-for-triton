@@ -793,3 +793,55 @@ module attributes {ttg.global_scratch_memory_alignment = 1 : i32, ttg.global_scr
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [0, 1]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
+  tt.func public @kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) -> tensor<128x2xf32, #blocked> {
+    %cst = arith.constant dense<128> : tensor<2xi32, #ttg.slice<{dim = 1, parent = #blocked1}>>
+    %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked1}>>
+    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked1}>> -> tensor<1x128xi32, #blocked1>
+    %2 = tt.make_range {end = 2 : i32, start = 0 : i32} : tensor<2xi32, #ttg.slice<{dim = 1, parent = #blocked1}>>
+    %3 = arith.muli %2, %cst : tensor<2xi32, #ttg.slice<{dim = 1, parent = #blocked1}>>
+    %4 = tt.expand_dims %3 {axis = 1 : i32} : tensor<2xi32, #ttg.slice<{dim = 1, parent = #blocked1}>> -> tensor<2x1xi32, #blocked1>
+    %5 = tt.broadcast %1 : tensor<1x128xi32, #blocked1> -> tensor<2x128xi32, #blocked1>
+    %6 = tt.broadcast %4 : tensor<2x1xi32, #blocked1> -> tensor<2x128xi32, #blocked1>
+    %7 = arith.addi %5, %6 : tensor<2x128xi32, #blocked1>
+    %8 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<2x128x!tt.ptr<f32>, #blocked1>
+    %9 = tt.addptr %8, %7 : tensor<2x128x!tt.ptr<f32>, #blocked1>, tensor<2x128xi32, #blocked1>
+
+    // COM: The threadsPerWarp = [16, 2] requires the tileWidth=16 for transpose block IO. But the max width is 8 for transpose block IO.
+    // CHECK-NOT: triton_gen.2Dblockload
+    %10 = tt.load %9 {ttig.block_io = "row_major"} : tensor<2x128x!tt.ptr<f32>, #blocked1>
+    %11 = tt.trans %10 {order = array<i32: 1, 0>} : tensor<2x128xf32, #blocked1> -> tensor<128x2xf32, #blocked>
+    tt.return %11 : tensor<128x2xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 4], order = [0, 1]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
+  tt.func public @kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) -> tensor<128x128xf32, #blocked> {
+    %cst = arith.constant dense<128> : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked1}>>
+    %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked1}>>
+    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked1}>> -> tensor<1x128xi32, #blocked1>
+    %2 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked1}>>
+    %3 = arith.muli %2, %cst : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked1}>>
+    %4 = tt.expand_dims %3 {axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked1}>> -> tensor<128x1xi32, #blocked1>
+    %5 = tt.broadcast %1 : tensor<1x128xi32, #blocked1> -> tensor<128x128xi32, #blocked1>
+    %6 = tt.broadcast %4 : tensor<128x1xi32, #blocked1> -> tensor<128x128xi32, #blocked1>
+    %7 = arith.addi %5, %6 : tensor<128x128xi32, #blocked1>
+    %8 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<128x128x!tt.ptr<f32>, #blocked1>
+    %9 = tt.addptr %8, %7 : tensor<128x128x!tt.ptr<f32>, #blocked1>, tensor<128x128xi32, #blocked1>
+
+    // COM: The threadsPerWarp = [8, 4] is ok.
+    // CHECK-COUNT-128: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 32, tile_width = 4, tile_height = 8, v_blocks = 1, transpose = true, vnni_transform = false, cache_control = Default}
+    %10 = tt.load %9 {ttig.block_io = "row_major"} : tensor<128x128x!tt.ptr<f32>, #blocked1>
+    %11 = tt.trans %10 {order = array<i32: 1, 0>} : tensor<128x128xf32, #blocked1> -> tensor<128x128xf32, #blocked>
+    tt.return %11 : tensor<128x128xf32, #blocked>
+  }
+}

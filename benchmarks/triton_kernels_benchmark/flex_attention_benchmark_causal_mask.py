@@ -242,8 +242,8 @@ if 'B580' in torch.xpu.get_device_name():
             for seq_len in [4096, 8192]  #
         ] if fa_kernel_mode == 'bwd' else [])],
         line_arg='provider',
-        line_vals=['triton', 'torch', 'sycl-tla', 'onednn'],
-        line_names=['Triton', 'Torch', 'SYCL-TLA', 'OneDNN'],
+        line_vals=['triton', 'sycl-tla', 'onednn'],
+        line_names=['Triton', 'SYCL-TLA', 'OneDNN'],
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel=['GB/s', 'TFlops'],
         plot_name='flexAttnCausal-performance',
@@ -270,16 +270,7 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
     block_mask = create_block_mask_cached(causal_mask, 1, 1, N_CTX_q, N_CTX_kv, device=DEVICE)
     torch_fn = lambda: flex_attention(q, k, v, block_mask=block_mask, scale=sm_scale, enable_gqa=not H_q == H_kv)
 
-    if provider == 'torch':
-        if MODE == 'bwd':
-            min_ms = float('nan')
-            max_ms = float('nan')
-            mean = float('nan')
-            cv = float('nan')
-        else:
-            _, min_ms, max_ms, mean, cv = do_bench(torch_fn, device=DEVICE)
-
-    elif provider in ('sycl-tla', 'onednn'):
+    if provider in ('sycl-tla', 'onednn'):
         use_causal = N_CTX_q == N_CTX_kv
         attn_bias = get_attn_bias(provider, use_causal, N_CTX_q, N_CTX_kv, DEVICE)
         _, min_ms, max_ms, mean, cv = run_sdpa_benchmark(q, k, v, attn_bias, use_causal, sm_scale, H_q, H_kv, D_HEAD_qk,

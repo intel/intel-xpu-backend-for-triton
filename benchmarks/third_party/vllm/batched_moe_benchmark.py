@@ -100,7 +100,7 @@ def moe_mmk(
     for k in range(0, tl.cdiv(K, BLOCK_K)):
         # Load the next block of A and B using tensor descriptors
         a = a_desc.load([pid_m * BLOCK_M, k * BLOCK_K])
-        b = b_desc.load([k * BLOCK_K, pid_n * BLOCK_N])
+        b = b_desc.load([pid_n * BLOCK_N, k * BLOCK_K]).T
 
         # We accumulate along the K dimension.
         if use_w8a16:
@@ -135,7 +135,7 @@ def moe_mmk(
 @triton.jit
 def expert_triton_kernel(
     a_desc,  #[max_tokens, K]
-    b_desc,  #[K, N]
+    b_desc,  #[N, K]
     c_desc,  #[max_tokens, N]
     expert_id,
     compute_type: tl.constexpr,
@@ -294,8 +294,8 @@ def batched_triton_kernel(
 
     a_desc = tl.make_tensor_descriptor(base=a_ptr + expert_id * stride_ae, shape=(e_num_tokens, K),
                                        strides=(stride_am, stride_ak), block_shape=(BLOCK_M, BLOCK_K))
-    b_desc = tl.make_tensor_descriptor(base=b_ptr + expert_id * stride_be, shape=(K, N), strides=(stride_bk, stride_bn),
-                                       block_shape=(BLOCK_K, BLOCK_N))
+    b_desc = tl.make_tensor_descriptor(base=b_ptr + expert_id * stride_be, shape=(N, K), strides=(stride_bn, stride_bk),
+                                       block_shape=(BLOCK_N, BLOCK_K))
     c_desc = tl.make_tensor_descriptor(base=c_ptr + expert_id * stride_ce, shape=(e_num_tokens, N),
                                        strides=(stride_cm, stride_cn), block_shape=(BLOCK_M, BLOCK_N))
 
