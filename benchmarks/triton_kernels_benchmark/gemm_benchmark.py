@@ -56,7 +56,8 @@ def matmul_kernel_with_tensor_descriptors(
         stride_bk: tl.constexpr, stride_bn: tl.constexpr,  #
         stride_cm: tl.constexpr, stride_cn: tl.constexpr,
         # Meta-parameters
-        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr):
+        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr,
+        transpose_a: tl.constexpr, transpose_b: tl.constexpr):
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
@@ -67,16 +68,30 @@ def matmul_kernel_with_tensor_descriptors(
     pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
     pid_n = (pid % num_pid_in_group) // group_size_m
 
-    a_desc = tl.make_tensor_descriptor(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
-                                       block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K))
-    b_desc = tl.make_tensor_descriptor(base=b_ptr, shape=(K, N), strides=(stride_bk, stride_bn),
-                                       block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N))
+    if transpose_a:
+        a_desc = tl.make_tensor_descriptor(base=a_ptr, shape=(K, M), strides=(stride_ak, stride_am),
+                                           block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_M))
+    else:
+        a_desc = tl.make_tensor_descriptor(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
+                                           block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K))
+    if transpose_b:
+        b_desc = tl.make_tensor_descriptor(base=b_ptr, shape=(N, K), strides=(stride_bn, stride_bk),
+                                           block_shape=(BLOCK_SIZE_N, BLOCK_SIZE_K))
+    else:
+        b_desc = tl.make_tensor_descriptor(base=b_ptr, shape=(K, N), strides=(stride_bk, stride_bn),
+                                           block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N))
 
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     off_k = 0
     for _ in range(0, K, BLOCK_SIZE_K):
-        a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
-        b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
+        if transpose_a:
+            a = a_desc.load([off_k, pid_m * BLOCK_SIZE_M]).T
+        else:
+            a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
+        if transpose_b:
+            b = b_desc.load([pid_n * BLOCK_SIZE_N, off_k]).T
+        else:
+            b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
         accumulator += tl.dot(a, b)
         off_k += BLOCK_SIZE_K
     c = accumulator.to(tl.float32)
@@ -131,7 +146,8 @@ def matmul_kernel_with_tensor_descriptors_batched(
         stride_bz: tl.constexpr, stride_bk: tl.constexpr, stride_bn: tl.constexpr,  #
         stride_cz: tl.constexpr, stride_cm: tl.constexpr, stride_cn: tl.constexpr,
         # Meta-parameters
-        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr):
+        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr,
+        transpose_a: tl.constexpr, transpose_b: tl.constexpr):
     bid = tl.program_id(axis=1)
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
@@ -146,16 +162,30 @@ def matmul_kernel_with_tensor_descriptors_batched(
     offset_a = bid.to(tl.int64) * stride_az
     offset_b = bid.to(tl.int64) * stride_bz
 
-    a_desc = tl.make_tensor_descriptor(base=a_ptr + offset_a, shape=(M, K), strides=(stride_am, stride_ak),
-                                       block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K))
-    b_desc = tl.make_tensor_descriptor(base=b_ptr + offset_b, shape=(K, N), strides=(stride_bk, stride_bn),
-                                       block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N))
+    if transpose_a:
+        a_desc = tl.make_tensor_descriptor(base=a_ptr + offset_a, shape=(K, M), strides=(stride_ak, stride_am),
+                                           block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_M))
+    else:
+        a_desc = tl.make_tensor_descriptor(base=a_ptr + offset_a, shape=(M, K), strides=(stride_am, stride_ak),
+                                           block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K))
+    if transpose_b:
+        b_desc = tl.make_tensor_descriptor(base=b_ptr + offset_b, shape=(N, K), strides=(stride_bn, stride_bk),
+                                           block_shape=(BLOCK_SIZE_N, BLOCK_SIZE_K))
+    else:
+        b_desc = tl.make_tensor_descriptor(base=b_ptr + offset_b, shape=(K, N), strides=(stride_bk, stride_bn),
+                                           block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N))
 
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     off_k = 0
     for _ in range(0, K, BLOCK_SIZE_K):
-        a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
-        b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
+        if transpose_a:
+            a = a_desc.load([off_k, pid_m * BLOCK_SIZE_M]).T
+        else:
+            a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
+        if transpose_b:
+            b = b_desc.load([pid_n * BLOCK_SIZE_N, off_k]).T
+        else:
+            b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
         accumulator += tl.dot(a, b)
         off_k += BLOCK_SIZE_K
     c = accumulator.to(tl.float32)
@@ -203,7 +233,8 @@ def matmul(
             B, M, N, K,  #
             a.stride(0), a.stride(a_major), a.stride(a_minor),  #
             b.stride(0), b.stride(b_minor), b.stride(b_major),  #
-            c.stride(0), c.stride(1), c.stride(2))
+            c.stride(0), c.stride(1), c.stride(2),  #
+            transpose_a=transpose_a, transpose_b=transpose_b)
     elif len(a.shape) == 2 and len(b.shape) == 2:
         grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
         matmul_kernel[grid](
@@ -211,7 +242,8 @@ def matmul(
             M, N, K,  #
             a.stride(a_major), a.stride(a_minor),  #
             b.stride(b_minor), b.stride(b_major),  #
-            c.stride(0), c.stride(1))
+            c.stride(0), c.stride(1),  #
+            transpose_a=transpose_a, transpose_b=transpose_b)
     else:
         assert False, 'Input matrixs dimensions mismatch'
     return c
