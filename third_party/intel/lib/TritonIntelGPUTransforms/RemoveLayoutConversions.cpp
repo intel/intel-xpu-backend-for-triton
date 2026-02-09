@@ -838,8 +838,7 @@ bool LayoutPropagation::rewriteTensorPtrStoreOp(tt::StoreOp storeOp) {
     auto ptrType = cast<tt::PointerType>(makeTensorPtrOp.getType());
     auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
 
-    auto tmpType = RankedTensorType::get(tensorType.getShape(),
-                                         tensorType.getElementType(), encoding);
+    auto tmpType = tensorType.cloneWithEncoding(encoding);
     newPtrType = tt::PointerType::get(tmpType, ptrType.getAddressSpace());
   } else {
     RankedTensorType convertOpSrcType = convertOp.getSrc().getType();
