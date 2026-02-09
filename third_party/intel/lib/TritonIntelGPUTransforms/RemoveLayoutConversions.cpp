@@ -57,16 +57,15 @@ Operation *cloneElementwiseImpl(
   assert(operandEnc ||
          op->getNumOperands() == 0 && "invalid new operand encoding");
 
-  for (OpOperand &operand : op->getOpOperands()) {
+  for (OpOperand &operand : op->getOpOperands())
     newOp->setOperand(operand.getOperandNumber(),
                       getValueAs(operand.get(), operandEnc));
-  }
 
   for (unsigned i = 0, e = op->getNumResults(); i < e; ++i) {
     auto origType = dyn_cast<RankedTensorType>(op->getResult(i).getType());
     if (!origType)
       continue;
-    auto newType = origType.cloneWithEncoding(encoding);
+    RankedTensorType newType = origType.cloneWithEncoding(encoding);
     newOp->getResult(i).setType(newType);
   }
   return newOp;
@@ -93,11 +92,9 @@ Value getValueAsImpl(
 }
 
 void eraseUnusedOps(SetVector<Operation *> &opsToDelete) {
-  for (Operation *op : llvm::reverse(opsToDelete)) {
-    if (op->getUsers().empty()) {
+  for (Operation *op : llvm::reverse(opsToDelete))
+    if (op->getUsers().empty())
       op->erase();
-    }
-  }
 }
 
 // -----------------------------------------------------------------------------
@@ -1512,11 +1509,10 @@ Value LayoutRematerialization::getValueAs(Value value, Attribute encoding) {
   return getValueAsImpl(
       value, encoding,
       [this](Value v, Attribute enc) {
-        Value rematVale = getRematValue(v, enc);
-        if (rematVale)
-          return rematVale;
-        else
-          return v;
+        Value rematValue = getRematValue(v, enc);
+        if (rematValue)
+          return rematValue;
+        return v;
       },
       [this](Value v, Attribute enc, Value converted) {
         addRematValue(v, enc, converted);
@@ -1855,38 +1851,8 @@ void LayoutRematerialization::backwardRematerialization(
   int64_t convertLayoutCost = 32 * convertLayoutBytes * 3;
   int64_t rematerialisationCost = 0;
 
-  // Collect rematerialization candidates for forward propagation.
-  DenseMap<Value, Attribute> forwardPropagateCandidates;
-  for (Operation *op : sliceOps) {
-    if (isOpSingleUse(op))
-      continue;
-    for (Value result : op->getResults()) {
-      for (Operation *user : result.getUsers()) {
-        if (user == convertOp)
-          continue;
-        Attribute encoding = layout[result];
-        if (encoding)
-          forwardPropagateCandidates[result] = encoding;
-        break;
-      }
-    }
-  }
-
   for (Operation *op : sliceOps) {
     auto dialect = op->getDialect();
-    if (!isOpSingleUse(op)) {
-      for (Value result : op->getResults()) {
-        for (Operation *user : result.getUsers()) {
-          if (user == convertOp) {
-            continue;
-          }
-          Attribute encoding = layout[result];
-          if (encoding)
-            forwardPropagateCandidates[result] = encoding;
-          break;
-        }
-      }
-    }
     if (isOpSingleUse(op)) {
       // when we rematerialise, this operation does not get duplicated
       // so it does not contribute to our cost model:
@@ -1943,6 +1909,23 @@ void LayoutRematerialization::backwardRematerialization(
 
   // 3. Rewrite the slice.
   rewriteSlice(slice, layout, convertOp);
+
+  // Collect rematerialization candidates for forward propagation.
+  DenseMap<Value, Attribute> forwardPropagateCandidates;
+  for (Operation *op : sliceOps) {
+    if (isOpSingleUse(op))
+      continue;
+    for (Value result : op->getResults()) {
+      for (Operation *user : result.getUsers()) {
+        if (user == convertOp)
+          continue;
+        Attribute encoding = layout[result];
+        if (encoding)
+          forwardPropagateCandidates[result] = encoding;
+        break;
+      }
+    }
+  }
 
   // 4. Forward propagate remat values created during backward propagation.
   forwardPropagateRemat(forwardPropagateCandidates);
