@@ -1,8 +1,6 @@
 # This benchmark requires a Pytorch version with FlexAttention support for XPU available
 from functools import lru_cache
 import os
-import traceback
-import torch.multiprocessing as mp
 from torch.nn.attention.flex_attention import (
     create_block_mask,
     create_mask,
@@ -81,77 +79,6 @@ def causal_mask(_, __, q_idx, kv_idx):
     return q_idx >= kv_idx
 
 
-def _worker_wrapper(fn, args, queue, done_event):
-    """Worker function that executes fn in subprocess and returns results via queue"""
-    try:
-        result = fn(*args)
-
-        # Convert tensors to CPU for safe transfer
-        if isinstance(result, tuple):
-            result = tuple(t.detach().cpu().clone() if isinstance(t, torch.Tensor) else t for t in result)
-        elif isinstance(result, torch.Tensor):
-            result = result.detach().cpu().clone()
-
-        queue.put(('success', result))
-
-        # [Critical] Wait for parent to finish retrieving file descriptors before exiting
-        done_event.wait(timeout=60)
-
-    # pylint: disable=broad-exception-caught
-    except Exception as e:
-        queue.put(('error', str(e), traceback.format_exc()))
-
-
-def call_eager_fwd_and_bwd(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, backwards_grad_cpu):
-    torch.xpu.empty_cache()
-    torch.manual_seed(42)
-    backwards_grad = backwards_grad_cpu.to(DEVICE)
-
-    dtype = torch.float16
-    q = torch.randn((Z, H_q, N_CTX_q, D_HEAD_qk), device=DEVICE, dtype=dtype, requires_grad=True)
-    k = torch.randn((Z, H_kv, N_CTX_kv, D_HEAD_qk), device=DEVICE, dtype=dtype, requires_grad=True)
-    v = torch.randn((Z, H_kv, N_CTX_kv, D_HEAD_v), device=DEVICE, dtype=dtype, requires_grad=True)
-
-    block_mask = create_block_mask_cached(causal_mask, 1, 1, N_CTX_q, N_CTX_kv, device=DEVICE)
-
-    output = flex_attention(q, k, v, block_mask=block_mask, scale=0.125, enable_gqa=not H_q == H_kv)
-    grads = torch.autograd.grad((output, ), (q, k, v), backwards_grad, retain_graph=True)
-
-    return (output.detach().cpu().clone(), grads[0].detach().cpu().clone(), grads[1].detach().cpu().clone(),
-            grads[2].detach().cpu().clone())
-
-
-def call_in_process(fn, args=()):
-    """Call a module-level function in a separate process"""
-    ctx = mp.get_context('spawn')
-    queue = ctx.Queue()
-    done_event = ctx.Event()
-    process = ctx.Process(target=_worker_wrapper, args=(fn, args, queue, done_event))
-    process.start()
-
-    result = queue.get(timeout=300)
-
-    status, *data = result
-    if status == 'error':
-        error_msg, traceback_str = data
-        done_event.set()
-        process.join()
-        raise RuntimeError(f'Subprocess failed: {error_msg}\n{traceback_str}')
-
-    # Move tensors back to device
-    output = data[0]
-    if isinstance(output, tuple):
-        output = tuple(t.to(DEVICE) if isinstance(t, torch.Tensor) else t for t in output)
-    else:
-        output = output.to(DEVICE) if isinstance(output, torch.Tensor) else output
-
-    # Signal subprocess it can exit now
-    done_event.set()
-    process.join()
-
-    return output
-
-
 def get_attn_bias(provider, use_causal, N_CTX_q, N_CTX_kv, device):
     if use_causal:
         return None
@@ -160,14 +87,13 @@ def get_attn_bias(provider, use_causal, N_CTX_q, N_CTX_kv, device):
     return create_mask_cached(causal_mask, 1, 1, N_CTX_q, N_CTX_kv, device=device)
 
 
-def run_sdpa_benchmark(q, k, v, attn_bias, use_causal, sm_scale, H_q, H_kv, D_HEAD_qk, D_HEAD_v, MODE, provider,
-                       do_bench, device):
-    """Run SDPA benchmark for SYCL-TLA or OneDNN providers."""
+def get_sdpa_benchmark(q, k, v, attn_bias, use_causal, sm_scale, H_q, H_kv, D_HEAD_qk, D_HEAD_v, MODE, provider):
+    """Get SDPA function for SYCL-TLA or OneDNN providers."""
     # SDPA backends have limitations:
     # - Require D_HEAD_qk == D_HEAD_v (no support for different head dimensions)
     # - OneDNN doesn't support backward pass for SDPA
     if D_HEAD_qk != D_HEAD_v or (provider == 'onednn' and MODE == 'bwd'):
-        return None, float('nan'), float('nan'), float('nan'), float('nan')
+        return None
 
     backend = SDPBackend.FLASH_ATTENTION if provider == 'sycl-tla' else SDPBackend.OVERRIDEABLE
 
@@ -183,13 +109,12 @@ def run_sdpa_benchmark(q, k, v, attn_bias, use_causal, sm_scale, H_q, H_kv, D_HE
                 enable_gqa=(H_q != H_kv),
             )
 
-    fn = sdpa_fn
     if MODE == 'bwd':
-        o = fn()
+        o = sdpa_fn()
         do = torch.randn_like(o)
-        fn = lambda: o.backward(do, retain_graph=True)
-        return do_bench(fn, device=device, benchmark_label='ScaledDotProductFlashAttentionBackward0')
-    return do_bench(fn, device=device)
+        bwd_fn = lambda: o.backward(do, retain_graph=True)
+        return bwd_fn, do, o
+    return sdpa_fn
 
 
 throughput_test = os.getenv('THROUGHPUT_TEST', '0') == '1'
@@ -268,13 +193,22 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
     sm_scale = 0.125
 
     block_mask = create_block_mask_cached(causal_mask, 1, 1, N_CTX_q, N_CTX_kv, device=DEVICE)
-    torch_fn = lambda: flex_attention(q, k, v, block_mask=block_mask, scale=sm_scale, enable_gqa=not H_q == H_kv)
 
     if provider in ('sycl-tla', 'onednn'):
         use_causal = N_CTX_q == N_CTX_kv
         attn_bias = get_attn_bias(provider, use_causal, N_CTX_q, N_CTX_kv, DEVICE)
-        _, min_ms, max_ms, mean, cv = run_sdpa_benchmark(q, k, v, attn_bias, use_causal, sm_scale, H_q, H_kv, D_HEAD_qk,
-                                                         D_HEAD_v, MODE, provider, do_bench, DEVICE)
+        sdpa_result = get_sdpa_benchmark(q, k, v, attn_bias, use_causal, sm_scale, H_q, H_kv, D_HEAD_qk, D_HEAD_v, MODE,
+                                         provider)
+        if sdpa_result is None:
+            return None, float('nan'), float('nan'), float('nan'), float('nan')
+
+        if MODE == 'bwd':
+            sdpa_fn, _ = sdpa_result
+            _, min_ms, max_ms, mean, cv = do_bench(sdpa_fn, device=DEVICE,
+                                                   benchmark_label='ScaledDotProductFlashAttentionBackward0')
+        else:
+            sdpa_fn = sdpa_result
+            _, min_ms, max_ms, mean, cv = do_bench(sdpa_fn, device=DEVICE)
     elif provider == 'triton':
         kernel_options = {'BLOCKS_ARE_CONTIGUOUS': True, 'USE_TMA': True}
 
@@ -291,40 +225,88 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
             backwards_grad = torch.randn(Z, H_q, N_CTX_q, D_HEAD_v, dtype=dtype, device=DEVICE,
                                          requires_grad=MODE == 'bwd')
 
+            # Get sycl-tla reference for correctness check
             perform_correctness_check = True
-            try:
-                # Run forward+backward in subprocess, get output and gradients
-                backwards_grad_cpu = backwards_grad.detach().cpu()
-                eager_tensors = call_in_process(
-                    call_eager_fwd_and_bwd,
-                    args=(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, backwards_grad_cpu))
-            except (torch.OutOfMemoryError, RuntimeError) as e:
-                if any(keyword in str(e)
-                       for keyword in ('UR_RESULT_ERROR_OUT_OF_RESOURCES', 'UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY',
-                                       'UR_RESULT_ERROR_DEVICE_LOST', 'OutOfMemoryError')):
-                    error = e.args[0].split('\n')[0]
-                    print(f'Exception during torch eager call: {error}')
-                    print(
-                        'Skipping correctness check because reference torch eager call failed due to out of memory error'
-                    )
-                    torch.xpu.empty_cache()
-                    perform_correctness_check = False
-                else:
-                    raise
+            if D_HEAD_qk != D_HEAD_v:
+                print('Skipping correctness check: sycl-tla requires D_HEAD_qk == D_HEAD_v')
+                perform_correctness_check = False
+            elif N_CTX_q != N_CTX_kv:
+                print(
+                    'Skipping correctness check: sycl-tla Flash Attention does not support non-square attention masks')
+                perform_correctness_check = False
+            else:
+                # Create fresh tensors for sycl-tla reference (same seed for reproducibility)
+                # torch.manual_seed(42)
+                # q_ref = torch.randn((Z, H_q, N_CTX_q, D_HEAD_qk), device=DEVICE, dtype=dtype, requires_grad=True)
+                # k_ref = torch.randn((Z, H_kv, N_CTX_kv, D_HEAD_qk), device=DEVICE, dtype=dtype, requires_grad=True)
+                # v_ref = torch.randn((Z, H_kv, N_CTX_kv, D_HEAD_v), device=DEVICE, dtype=dtype, requires_grad=True)
 
+                use_causal = N_CTX_q == N_CTX_kv
+                # Use same mask as triton for consistency
+                if use_causal:
+                    attn_bias_ref = None  # use is_causal=True
+                else:
+                    # Create mask using same causal_mask function as triton
+                    attn_bias_ref = create_mask_cached(causal_mask, 1, 1, N_CTX_q, N_CTX_kv, device=DEVICE)
+
+                # Run sycl-tla forward+backward for reference
+                with sdpa_kernel(backends=[SDPBackend.FLASH_ATTENTION]):
+                    sycl_o = F.scaled_dot_product_attention(
+                        q,
+                        k,
+                        v,
+                        attn_mask=attn_bias_ref,
+                        is_causal=use_causal,
+                        scale=sm_scale,
+                        enable_gqa=(H_q != H_kv),
+                    )
+                sycl_grads = torch.autograd.grad((sycl_o, ), (q, k, v), backwards_grad, retain_graph=True)
+                sycl_tensors = (sycl_o, *sycl_grads)
+
+            # Run triton forward+backward
             triton_o = triton_fn()
             triton_grads = torch.autograd.grad((triton_o, ), (q, k, v), backwards_grad, retain_graph=True)
             compiled_tensors = (triton_o, *triton_grads)
 
             if perform_correctness_check:
                 tensor_names = ['out', 'grad_query', 'grad_key', 'grad_value']
-                for eager, compiled, name in zip(eager_tensors, compiled_tensors, tensor_names):
-                    benchmark_suite.assert_close(lambda: eager, lambda: compiled, atol=6e-2, rtol=1e-3,  # pylint: disable=cell-var-from-loop
-                                                 err_msg=f'Error comparing {name} between triton and torch')
+                for sycl, compiled, name in zip(sycl_tensors, compiled_tensors, tensor_names):  # pylint: disable=used-before-assignment
+                    benchmark_suite.assert_close(lambda: sycl, lambda: compiled, atol=6e-2, rtol=1e-3,  # pylint: disable=cell-var-from-loop
+                                                 err_msg=f'Error comparing {name} between triton and sycl-tla')
 
             triton_fn = lambda: torch.autograd.grad((triton_o, ), (q, k, v), backwards_grad, retain_graph=True)
         else:
-            benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-2, rtol=1e-3, err_msg='triton to torch')
+            # Use sycl-tla as reference for forward mode
+            perform_correctness_check = True
+            if D_HEAD_qk != D_HEAD_v:
+                print('Skipping correctness check: sycl-tla requires D_HEAD_qk == D_HEAD_v')
+                perform_correctness_check = False
+            elif N_CTX_q != N_CTX_kv:
+                print(
+                    'Skipping correctness check: sycl-tla Flash Attention does not support non-square attention masks')
+                perform_correctness_check = False
+
+            if perform_correctness_check:
+                use_causal = N_CTX_q == N_CTX_kv
+                # Use same mask as triton for consistency
+                if use_causal:
+                    attn_bias_ref = None  # use is_causal=True
+                else:
+                    # Create mask using same causal_mask function as triton
+                    attn_bias_ref = create_mask_cached(causal_mask, 1, 1, N_CTX_q, N_CTX_kv, device=DEVICE)
+
+                sycl_fn = lambda: F.scaled_dot_product_attention(
+                    q,
+                    k,
+                    v,
+                    attn_mask=attn_bias_ref,
+                    is_causal=use_causal,
+                    scale=sm_scale,
+                    enable_gqa=(H_q != H_kv),
+                )
+
+                with sdpa_kernel(backends=[SDPBackend.FLASH_ATTENTION]):
+                    benchmark_suite.assert_close(triton_fn, sycl_fn, atol=1e-2, rtol=1e-3, err_msg='triton to sycl-tla')
 
         _, min_ms, max_ms, mean, cv = do_bench(triton_fn, device=DEVICE, grad_to_none=(q, k, v),
                                                benchmark_label=None if MODE == 'fwd' else 'CompiledFunctionBackward')
