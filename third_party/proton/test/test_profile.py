@@ -80,7 +80,8 @@ def test_triton(tmp_path: pathlib.Path, device: str):
     assert data[0]["children"][1]["frame"]["name"] == "test2"
 
 
-@pytest.mark.skipif(not is_cuda(), reason="HIP backend does not reliably attribute cudagraph replay launches to scopes")
+@pytest.mark.xfail(not is_cuda(), reason="HIP backend does not reliably attribute cudagraph replay launches to scopes",
+                   run=False)
 def test_cudagraph(tmp_path: pathlib.Path, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
@@ -153,7 +154,7 @@ def test_cudagraph(tmp_path: pathlib.Path, device: str):
                 assert child["children"][i]["children"][0]["metrics"]["time (ns)"] > 0
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports cudagraph deactivation")
+@pytest.mark.xfail(not is_cuda(), reason="Only CUDA backend supports cudagraph deactivation", run=False)
 def test_cudagraph_deactivate(tmp_path, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
@@ -748,7 +749,7 @@ def test_scope_multiple_threads(tmp_path: pathlib.Path, device: str):
     assert names == expected
 
 
-@pytest.mark.skipif(not is_cuda() and not is_hip(), reason="Only CUDA/HIP backend supports NVTX profiling")
+@pytest.mark.xfail(not is_cuda() and not is_hip(), reason="Only CUDA/HIP backend supports NVTX profiling", run=False)
 @pytest.mark.parametrize("enable_nvtx", [None, True, False])
 def test_nvtx_range_push_pop(enable_nvtx, fresh_knobs, tmp_path: pathlib.Path, device: str):
     if enable_nvtx is not None:
@@ -854,7 +855,7 @@ def test_tensor_metrics_hook(tmp_path: pathlib.Path, device: str):
     assert foo_test_frame["metrics"]["flops"] == 8.0
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
+@pytest.mark.xfail(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs", run=False)
 def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
@@ -941,7 +942,7 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path, device: str):
     assert scope_d_frame["metrics"]["vec"] == [0, 10, 20, 30]
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
+@pytest.mark.xfail(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs", run=False)
 def test_tensor_metrics_cudagraph_deactivate(tmp_path: pathlib.Path, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
@@ -993,7 +994,7 @@ def test_tensor_metrics_cudagraph_deactivate(tmp_path: pathlib.Path, device: str
         assert c_frame["metrics"]["count"] == 10
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
+@pytest.mark.xfail(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs", run=False)
 def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
     if torch.cuda.device_count() < 2:
         pytest.skip("Requires at least two CUDA devices")
@@ -1122,7 +1123,7 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size, devi
     assert num_scopes == 10000
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
+@pytest.mark.xfail(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs", run=False)
 @pytest.mark.parametrize("buffer_size", [256 * 1024, 64 * 1024 * 1024])
 @pytest.mark.parametrize("data_format", ["hatchet_msgpack", "hatchet"])
 def test_periodic_flushing_cudagraph(tmp_path, fresh_knobs, data_format, buffer_size, device: str):
