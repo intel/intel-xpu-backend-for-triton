@@ -79,7 +79,7 @@ upload_almalinux() {
     cd "$WORKSPACE"
     tar -I "$GZIP -9" -cf "$LLVM_PREFIX-almalinux-x64.tar.gz" "$LLVM_PREFIX-almalinux-x64"
     ls -lh "$LLVM_PREFIX-almalinux-x64.tar.gz"
-    aws --endpoint-url=http://s3.icx.x1infra.com s3 cp "$LLVM_PREFIX-almalinux-x64.tar.gz" "s3://ceph-bkt-f9889ed3-723e-4693-99c3-56622282640e/llvm/"
+    aws --endpoint-url=http://s3.icx.x1infra.intel.com s3 cp "$LLVM_PREFIX-almalinux-x64.tar.gz" "s3://ceph-bkt-f9889ed3-723e-4693-99c3-56622282640e/llvm/"
 }
 
 build_centos() {
@@ -126,7 +126,7 @@ upload_centos() {
     cd "$WORKSPACE"
     tar -I "$GZIP -9" -cf "$LLVM_PREFIX-centos-x64.tar.gz" "$LLVM_PREFIX-centos-x64"
     ls -lh "$LLVM_PREFIX-centos-x64.tar.gz"
-    aws --endpoint-url=http://s3.icx.x1infra.com s3 cp "$LLVM_PREFIX-centos-x64.tar.gz" "s3://ceph-bkt-f9889ed3-723e-4693-99c3-56622282640e/llvm/"
+    aws --endpoint-url=http://s3.icx.x1infra.intel.com s3 cp "$LLVM_PREFIX-centos-x64.tar.gz" "s3://ceph-bkt-f9889ed3-723e-4693-99c3-56622282640e/llvm/"
 }
 
 build_ubuntu() {
@@ -171,5 +171,5 @@ upload_ubuntu() {
     cd "$WORKSPACE"
     tar -I "$GZIP -9" -cf "$LLVM_PREFIX-ubuntu-x64.tar.gz" "$LLVM_PREFIX-ubuntu-x64"
     ls -lh "$LLVM_PREFIX-ubuntu-x64.tar.gz"
-    aws --endpoint-url=http://s3.icx.x1infra.com s3 cp "$LLVM_PREFIX-ubuntu-x64.tar.gz" "s3://ceph-bkt-f9889ed3-723e-4693-99c3-56622282640e/llvm/"
+    aws --endpoint-url=http://s3.icx.x1infra.intel.com s3 cp "$LLVM_PREFIX-ubuntu-x64.tar.gz" "s3://ceph-bkt-f9889ed3-723e-4693-99c3-56622282640e/llvm/"
 }
