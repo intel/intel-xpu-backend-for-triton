@@ -5,7 +5,7 @@
     "gluon": "gluon",
     "instrumentation": "instrumentation",
     "intel": "minicore",
-    "language": "minicore",
+    "language": "language",
     "line_info": "minicore",
     "runtime": "minicore",
     "regression": "minicore",

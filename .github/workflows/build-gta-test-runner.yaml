@@ -8,7 +8,7 @@ on:
         default: "3.10"
       dle_installer:
         description: DLE installer file name
-        default: "de3686c4-d3e1-41da-bf3b-bf5908da075c/intel-deep-learning-essentials-2025.2.1.24_offline.sh"
+        default: "9065c156-58ab-41b0-bbee-9b0e229ffca5/intel-deep-learning-essentials-2025.3.1.15_offline.sh"
 
 permissions: read-all
 
@@ -26,9 +26,6 @@ jobs:
       - self-hosted
       - linux
       - cpu-generic
-    # defaults:
-    #   run:
-    #     shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -111,6 +108,12 @@ jobs:
           # TODO: use pinned nightly gh run id from step "Get nightly wheels" instead of latest
           python scripts/gta_integration/constructor/abn_metadata.py
 
+          if [[ ! -f abn_metadata.json ]]; then
+            echo "ERROR: abn_metadata.json was not created by abn_metadata.py" >&2
+            exit 1
+          fi
+          ls -lh abn_metadata.json
+
           # TODO: https://github.com/intel-tools/intel-xpu-backend-for-triton/issues/501
           # pip uninstall -y torch triton triton-kernels-benchmark triton_utils
           pip uninstall -y torch triton triton_utils
@@ -122,8 +125,9 @@ jobs:
           # cp -L intel-xpu-backend-for-triton/benchmarks/dist/*.whl wheels/
           cp scripts/gta_integration/constructor/test_triton.py snapshot/scripts/test_triton.py
           cp scripts/gta_integration/constructor/test_triton_config.json snapshot/scripts/test_triton_config.json
+          cp scripts/gta_integration/constructor/run_triton_tests.sh run_triton_tests.sh
           tar -czvf wheels.tar.gz wheels
-          tar -czvf intel-xpu-backend-for-triton.tar.gz snapshot
+          tar -czvf snapshot.tar.gz snapshot
 
           # Download DLE and Vulkan SDK
           wget -O intel-deep-learning-essentials_offline.sh "${ONEAPI_DOWNLOAD_URL}${DLE_INSTALLER}"
@@ -158,14 +162,26 @@ jobs:
             TritonXPU-GTA.sh
             run_triton_tests.sh
 
-      # - name: Upload asset to GTA artifactory
-      #   run: |
-      #     TIMESTAMP=$(date '+%Y%m%d_%H-%M-%S')
-      #     echo "TIMESTAMP=$TIMESTAMP" >> "${GITHUB_ENV}"
-      #     mkdir triton-xpu-installer
-      #     mv TritonXPU-GTA.sh triton-xpu-installer/
-      #     mv run_triton_tests.sh triton-xpu-installer/
-      #     mv abn_metadata.json triton-xpu-installer/
-      #     /gta/gta-asset push gfx-ocl-abn-assets-igk/oneAPI/linux triton-xpu ${{ env.TIMESTAMP }} triton-xpu-installer \
-      #         --root-url=https://gfx-assets.igk.intel.com/ \
-      #         -u glados --password ${{ secrets.GLADOS_DEVTOOLS_ARTIFACTORY_TOKEN }}
+      - name: Upload asset to GTA artifactory
+        run: |
+          set -euo pipefail
+          TIMESTAMP=$(date '+%Y%m%d_%H-%M-%S')
+          echo "TIMESTAMP=$TIMESTAMP" >> "${GITHUB_ENV}"
+
+          GTA_FILES=(
+            "TritonXPU-GTA.sh"
+            "TritonXPU-GTA.sh.sha256"
+            "run_triton_tests.sh"
+            "abn_metadata.json"
+          )
+
+          mkdir triton-xpu-installer
+
+          for file in "${GTA_FILES[@]}"; do
+            test -f "$file"
+            mv "$file" triton-xpu-installer/
+          done
+
+          /gta/gta-asset push gfx-ocl-abn-assets-igk/oneAPI/linux triton-xpu $TIMESTAMP ./triton-xpu-installer \
+              --root-url=https://gfx-assets.igk.intel.com/artifactory \
+              -u ${{ vars.GFX_ARTIFACTORY_USER }} --password ${{ secrets.GFX_ARTIFACTORY_USER_TOKEN }}
