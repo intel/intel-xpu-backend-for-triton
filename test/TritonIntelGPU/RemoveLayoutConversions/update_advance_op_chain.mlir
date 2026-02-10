@@ -1,5 +1,6 @@
 // RUN: triton-opt %s -tritonintelgpu-remove-layout-conversions 2>&1 | FileCheck %s
 
+// CHECK-LABEL: tt.func public @update_advance_op_chain
 // CHECK-NOT: ttg.convert_layout
 // CHECK: [[MAKETENSORPTR:%.*]] = tt.make_tensor_ptr
 // CHECK: [[ADVANCE:%.*]] = tt.advance [[MAKETENSORPTR]]
