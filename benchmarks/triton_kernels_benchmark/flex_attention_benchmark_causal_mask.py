@@ -10,7 +10,6 @@ from torch.nn.attention.flex_attention import (
 import torch
 import torch.nn.functional as F
 from torch.nn.attention import SDPBackend, sdpa_kernel
-from torch.nn.attention.bias import causal_lower_right
 import torch._inductor
 import torch._inductor.lowering
 import torch._inductor.kernel
@@ -79,11 +78,9 @@ def causal_mask(_, __, q_idx, kv_idx):
     return q_idx >= kv_idx
 
 
-def get_attn_bias(provider, use_causal, N_CTX_q, N_CTX_kv, device):
+def get_attn_bias(use_causal, N_CTX_q, N_CTX_kv, device):
     if use_causal:
         return None
-    if provider == 'sycl-tla':
-        return causal_lower_right(N_CTX_q, N_CTX_kv)
     return create_mask_cached(causal_mask, 1, 1, N_CTX_q, N_CTX_kv, device=device)
 
 
@@ -94,6 +91,10 @@ def get_sdpa_benchmark(q, k, v, attn_bias, use_causal, sm_scale, H_q, H_kv, D_HE
     # - Require D_HEAD_qk == D_HEAD_v (no support for different head dimensions)
     # - OneDNN doesn't support backward pass for SDPA
     if D_HEAD_qk != D_HEAD_v or (provider == 'onednn' and MODE == 'bwd'):
+        return None
+    if provider == 'sycl-tla' and not use_causal:
+        # sycl-tla doesn't support upper-left non-square causal mask
+        # so it doesn't make sense to compare results
         return None
 
     backend = SDPBackend.FLASH_ATTENTION if provider == 'sycl-tla' else SDPBackend.OVERRIDEABLE
@@ -197,7 +198,7 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
 
     if provider in ('sycl-tla', 'onednn'):
         use_causal = N_CTX_q == N_CTX_kv
-        attn_bias = get_attn_bias(provider, use_causal, N_CTX_q, N_CTX_kv, DEVICE)
+        attn_bias = get_attn_bias(use_causal, N_CTX_q, N_CTX_kv, DEVICE)
         sdpa_result = get_sdpa_benchmark(q, k, v, attn_bias, use_causal, sm_scale, H_q, H_kv, D_HEAD_qk, D_HEAD_v, MODE,
                                          provider)
         if sdpa_result is None:
@@ -212,6 +213,7 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
             benchmark_label='ScaledDotProductFlashAttentionBackward0' if MODE == 'bwd' else None)
 
     elif provider == 'triton':
+        ref_results_provider = 'sycl-tla'
         kernel_options = {'BLOCKS_ARE_CONTIGUOUS': True, 'USE_TMA': True}
 
         # pylint: disable=too-many-boolean-expressions
@@ -226,22 +228,25 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
 
         perform_correctness_check = True
         if D_HEAD_qk != D_HEAD_v:
-            print('Skipping correctness check: sycl-tla requires D_HEAD_qk == D_HEAD_v')
-            perform_correctness_check = False
-        elif N_CTX_q != N_CTX_kv:
-            print('Skipping correctness check: sycl-tla Flash Attention does not support non-square attention masks')
+            print(f'Skipping correctness check: {ref_results_provider} requires D_HEAD_qk == D_HEAD_v')
             perform_correctness_check = False
 
         if MODE == 'bwd':
+            if N_CTX_q != N_CTX_kv and perform_correctness_check:
+                print(
+                    f'Skipping correctness check: {ref_results_provider} Flash Attention does not support non-square attention masks'
+                )
+                perform_correctness_check = False
+
             backwards_grad = torch.randn(Z, H_q, N_CTX_q, D_HEAD_v, dtype=dtype, device=DEVICE,
                                          requires_grad=MODE == 'bwd')
 
             if perform_correctness_check:
                 use_causal = N_CTX_q == N_CTX_kv
-                attn_bias_ref = get_attn_bias('sycl-tla', use_causal, N_CTX_q, N_CTX_kv, DEVICE)
+                attn_bias_ref = get_attn_bias(use_causal, N_CTX_q, N_CTX_kv, DEVICE)
 
                 sdpa_result = get_sdpa_benchmark(q, k, v, attn_bias_ref, use_causal, sm_scale, H_q, H_kv, D_HEAD_qk,
-                                                 D_HEAD_v, MODE, 'sycl-tla', backwards_grad=backwards_grad)
+                                                 D_HEAD_v, MODE, ref_results_provider, backwards_grad=backwards_grad)
                 _, _, sycl_o = sdpa_result
                 sycl_grads = torch.autograd.grad((sycl_o, ), (q, k, v), backwards_grad, retain_graph=True)
                 sycl_tensors = (sycl_o, *sycl_grads)
@@ -253,20 +258,26 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
             if perform_correctness_check:
                 tensor_names = ['out', 'grad_query', 'grad_key', 'grad_value']
                 for sycl, compiled, name in zip(sycl_tensors, compiled_tensors, tensor_names):  # pylint: disable=used-before-assignment
-                    benchmark_suite.assert_close(lambda: sycl, lambda: compiled, atol=6e-2, rtol=1e-3,  # pylint: disable=cell-var-from-loop
-                                                 err_msg=f'Error comparing {name} between triton and sycl-tla')
+                    benchmark_suite.assert_close(
+                        lambda: sycl, lambda: compiled, atol=6e-2, rtol=1e-3,  # pylint: disable=cell-var-from-loop
+                        err_msg=f'Error comparing {name} between triton and {ref_results_provider}')
 
             triton_fn = lambda: torch.autograd.grad((triton_o, ), (q, k, v), backwards_grad, retain_graph=True)
         else:
             if perform_correctness_check:
+                if N_CTX_q != N_CTX_kv:
+                    # sycl-tla doesn't support upper-left for non-square causal masks
+                    ref_results_provider = 'onednn'
+
                 use_causal = N_CTX_q == N_CTX_kv
-                attn_bias_ref = get_attn_bias('sycl-tla', use_causal, N_CTX_q, N_CTX_kv, DEVICE)
+                attn_bias_ref = get_attn_bias(use_causal, N_CTX_q, N_CTX_kv, DEVICE)
 
                 sycl_fn = get_sdpa_benchmark(q, k, v, attn_bias_ref, use_causal, sm_scale, H_q, H_kv, D_HEAD_qk,
-                                             D_HEAD_v, MODE, 'sycl-tla')
+                                             D_HEAD_v, MODE, ref_results_provider)
 
                 if sycl_fn is not None:
-                    benchmark_suite.assert_close(triton_fn, sycl_fn, atol=1e-2, rtol=1e-3, err_msg='triton to sycl-tla')
+                    benchmark_suite.assert_close(triton_fn, sycl_fn, atol=1e-2, rtol=1e-3,
+                                                 err_msg=f'triton to {ref_results_provider}')
 
         _, min_ms, max_ms, mean, cv = do_bench(triton_fn, device=DEVICE, grad_to_none=(q, k, v),
                                                benchmark_label=None if MODE == 'fwd' else 'CompiledFunctionBackward')
