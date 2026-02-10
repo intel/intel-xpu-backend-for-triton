@@ -226,22 +226,22 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
         triton_fn = lambda: compiled_flex_attention(q, k, v, block_mask=block_mask, scale=sm_scale, enable_gqa=(
             not H_q == H_kv), kernel_options=kernel_options)
 
-        perform_correctness_check = True
+        is_reference_available = True
         if D_HEAD_qk != D_HEAD_v:
             print(f'Skipping correctness check: {ref_results_provider} requires D_HEAD_qk == D_HEAD_v')
-            perform_correctness_check = False
+            is_reference_available = False
 
         if MODE == 'bwd':
-            if N_CTX_q != N_CTX_kv and perform_correctness_check:
+            if N_CTX_q != N_CTX_kv and is_reference_available:
                 print(
                     f'Skipping correctness check: {ref_results_provider} Flash Attention does not support non-square attention masks'
                 )
-                perform_correctness_check = False
+                is_reference_available = False
 
             backwards_grad = torch.randn(Z, H_q, N_CTX_q, D_HEAD_v, dtype=dtype, device=DEVICE,
                                          requires_grad=MODE == 'bwd')
 
-            if perform_correctness_check:
+            if is_reference_available:
                 use_causal = N_CTX_q == N_CTX_kv
                 attn_bias_ref = get_attn_bias(use_causal, N_CTX_q, N_CTX_kv, DEVICE)
 
@@ -255,7 +255,7 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
             triton_grads = torch.autograd.grad((triton_o, ), (q, k, v), backwards_grad, retain_graph=True)
             compiled_tensors = (triton_o, *triton_grads)
 
-            if perform_correctness_check:
+            if is_reference_available:
                 tensor_names = ['out', 'grad_query', 'grad_key', 'grad_value']
                 for sycl, compiled, name in zip(sycl_tensors, compiled_tensors, tensor_names):  # pylint: disable=used-before-assignment
                     benchmark_suite.assert_close(
@@ -264,7 +264,7 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
 
             triton_fn = lambda: torch.autograd.grad((triton_o, ), (q, k, v), backwards_grad, retain_graph=True)
         else:
-            if perform_correctness_check:
+            if is_reference_available:
                 if N_CTX_q != N_CTX_kv:
                     # sycl-tla doesn't support upper-left for non-square causal masks
                     ref_results_provider = 'onednn'
