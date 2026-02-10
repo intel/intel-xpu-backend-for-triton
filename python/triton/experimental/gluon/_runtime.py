@@ -37,6 +37,13 @@ class GluonASTSource(ASTSource):
         if is_cuda and options.maxnreg is not None:
             module.set_attr("ttg.maxnreg", builder.get_int32_attr(options.maxnreg))
 
+        is_xpu = options.backend_name == "intel"
+        if is_xpu:
+            from triton._C.libtriton import intel
+
+            supported_sg_sizes = options.supported_sg_sizes
+            module.set_attr(intel.get_supported_sg_sizes_attr_name(), ir.make_attr(supported_sg_sizes, context))
+
         module = ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,
                              module_map=module_map, module=module)
         return module

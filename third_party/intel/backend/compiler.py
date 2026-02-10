@@ -32,6 +32,7 @@ class XPUOptions:
     num_stages: int = 2
     cluster_dims: tuple = (1, 1, 1)
     warp_size: int = 32
+    supported_sg_sizes: Tuple[int] = (32, )
     optimize_epilogue: bool = False
     enable_fp_fusion: bool = True
     launch_cooperative_grid: bool = False
@@ -183,6 +184,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     def parse_options(self, opts) -> Any:
         args = {k: v for k, v in opts.items() if k in XPUOptions.__dataclass_fields__}
         args["allow_fp8e4nv"] = True
+        args["supported_sg_sizes"] = self.properties['sub_group_sizes']
         return XPUOptions(**args)
 
     def pack_metadata(self, metadata):
@@ -335,10 +337,22 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         pm.run(mod, 'make_ttgir')
         return mod
 
-    def gluon_to_ttgir(self, src, metadata, options):
-        mod = src
+    def gluon_to_ttgir(self, mod, metadata, options):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
+
+        module_opts = intel.passes.ttgpuir.AnnotateModuleOptions()
+        self.annotate_module(module_opts, self.properties, options)
+        intel.passes.ttgpuir.add_triton_annotate_module(pm, module_opts)
+        pm.run(mod, 'annotate_module')
+
+        pm = ir.pass_manager(mod.context)
+        pm.enable_debug()
+
+        # TODO: support tensor descriptors
+        # This is W/A to convert them into block_pointers
+        intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
+        passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
 
         passes.gluon.add_inliner(pm)
         passes.gluon.add_resolve_auto_encodings(pm)

@@ -1,5 +1,6 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <numeric>
 #include <utility>
@@ -3505,9 +3506,28 @@ struct TritonGPUVerifyTensorLayoutInterface
               dyn_cast<intel::DpasEncodingAttr>(dotOperandLayout.getParent()))
         layoutThreadsPerWarp = dpasLayout.getThreadsPerWarp();
     if (layoutThreadsPerWarp != moduleThreadsPerWarp) {
-      return makeErr() << layout << ".\nLayout has " << ll.getInDimSize(kLane)
-                       << " threads per warp, but the module specifies "
-                       << moduleThreadsPerWarp << " threads per warp.";
+      SmallVector<unsigned> supportedSgSizes;
+      auto threadsPerWarpAttr = module->getAttrOfType<DenseIntElementsAttr>(
+          triton::gpu::intel::TritonIntelGPUDialect::
+              getSupportedSGSizesAttrName());
+      if (threadsPerWarpAttr) {
+        for (auto value : threadsPerWarpAttr) {
+          supportedSgSizes.push_back(value.getSExtValue());
+        }
+      }
+
+      bool isSupported = std::any_of(
+          supportedSgSizes.begin(), supportedSgSizes.end(),
+          [&](unsigned size) { return size == layoutThreadsPerWarp; });
+      if (!isSupported) {
+        return makeErr() << layout << ".\nLayout has " << ll.getInDimSize(kLane)
+                         << " threads per warp, but the module specifies "
+                         << moduleThreadsPerWarp << " threads per warp.";
+      }
+
+      Builder builder(module);
+      module->setAttr(AttrNumThreadsPerWarp,
+                      builder.getI32IntegerAttr(layoutThreadsPerWarp));
     }
 
     // Number of warps per CTA.

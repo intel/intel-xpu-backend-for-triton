@@ -380,6 +380,11 @@ void init_triton_intel(py::module &&m) {
       },
       ret::take_ownership);
 
+  m.def("get_supported_sg_sizes_attr_name", []() {
+    return gpu::intel::TritonIntelGPUDialect::getSupportedSGSizesAttrName()
+        .str();
+  });
+
   m.def(
       "calculate_warps_per_tile",
       [](unsigned capRepeatCount, unsigned capExecutionSize,

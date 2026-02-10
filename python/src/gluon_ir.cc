@@ -32,6 +32,7 @@ namespace ttg = triton::gpu;
 namespace ttng = triton::nvidia_gpu;
 namespace gluon = mlir::triton::gluon;
 namespace ttag = mlir::triton::amdgpu;
+namespace ttgi = mlir::triton::gpu::intel;
 
 static ttg::CGAEncodingAttr
 buildCgaLayoutAttr(MLIRContext *ctx,
@@ -1038,6 +1039,59 @@ void init_gluon_ir(py::module &&m) {
       .def("create_lds_barrier_arrive",
            [](GluonOpBuilder &self, Value memDesc, int count) -> Value {
              return self.create<ttag::ArriveBarrierOp>(memDesc, count);
+           })
+      .def("create_prefetch",
+           [](GluonOpBuilder &self, Value tensorDesc,
+              std::vector<Value> &offsets, bool isVolatile) {
+             // Get the base pointer from tensor descriptor
+             auto makeTensorDescOp =
+                 tensorDesc.getDefiningOp<triton::MakeTensorDescOp>();
+             if (!makeTensorDescOp) {
+               throw std::runtime_error(
+                   "Expected tensor descriptor from MakeTensorDescOp");
+             }
+
+             Value base = makeTensorDescOp.getBase();
+             auto shape = makeTensorDescOp.getShape();
+             auto strides = makeTensorDescOp.getStrides();
+
+             // Convert shape from i32 to i64 as required by MakeTensorPtrOp.
+             SmallVector<Value> i64Shape;
+             for (auto shapeVal : shape) {
+               auto i64Val = self.create<arith::ExtSIOp>(
+                   self.getBuilder().getI64Type(), shapeVal);
+               i64Shape.push_back(i64Val);
+             }
+
+             // Get block shape from tensor descriptor type
+             auto descType = cast<triton::TensorDescType>(tensorDesc.getType());
+             auto blockType = cast<RankedTensorType>(descType.getBlockType());
+             auto tensorShape = blockType.getShape();
+
+             // Convert to int32 vector for MakeTensorPtrOp
+             std::vector<int32_t> blockShape;
+             for (int64_t dim : tensorShape) {
+               blockShape.push_back(static_cast<int32_t>(dim));
+             }
+
+             // Default order for 2D tensors (row-major)
+             std::vector<int32_t> order = {1, 0};
+             if (blockShape.size() != 2) {
+               // For non-2D tensors, use sequential order
+               order.resize(blockShape.size());
+               std::iota(order.begin(), order.end(), 0);
+             }
+
+             // Empty mask
+             Value maskVal = Value();
+
+             auto tensorPtrOp = self.create<mlir::triton::MakeTensorPtrOp>(
+                 base, i64Shape, strides, offsets, blockShape, order);
+
+             auto op = self.create<ttgi::PrefetchOp>(
+                 tensorPtrOp.getResult(), maskVal, tt::CacheModifier::NONE,
+                 tt::EvictionPolicy::NORMAL, isVolatile);
+             return op.getOperation();
            })
       .def("create_amd_cluster_arrive",
            [](GluonOpBuilder &self) {

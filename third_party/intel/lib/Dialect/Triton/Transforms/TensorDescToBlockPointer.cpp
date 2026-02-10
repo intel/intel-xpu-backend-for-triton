@@ -1,11 +1,13 @@
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Utils/Utility.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
@@ -15,6 +17,7 @@
 
 using namespace mlir;
 namespace tt = mlir::triton;
+namespace ttgi = mlir::triton::gpu::intel;
 
 namespace mlir::triton::intel {
 #define GEN_PASS_DEF_TRITONINTELTENSORDESCTOBLOCKPOINTER
@@ -122,7 +125,8 @@ private:
   tt::MakeTensorPtrOp
   findOrCreateMakeTensorPtr(Location loc, Value base, ValueRange shape,
                             ValueRange strides, ValueRange offsets,
-                            ArrayRef<int32_t> sizes, OpBuilder &builder) {
+                            ArrayRef<int32_t> sizes, Attribute encoding,
+                            OpBuilder &builder) {
     Block *block = builder.getInsertionBlock();
     const Block::iterator insertPoint = builder.getInsertionPoint();
     auto it = std::find_if(block->begin(), insertPoint, [&](Operation &op) {
@@ -147,8 +151,16 @@ private:
     });
 
     auto makeTensorPtrOp = [&]() {
+      // Create the tensor type with encoding
+      auto pointerType = cast<mlir::triton::PointerType>(base.getType());
+      auto tensorType = RankedTensorType::get(
+          SmallVector<int64_t>(sizes.begin(), sizes.end()),
+          pointerType.getPointeeType(), encoding);
+      auto resultType = mlir::triton::PointerType::get(
+          tensorType, pointerType.getAddressSpace());
+
       auto makeTensorPtr = tt::MakeTensorPtrOp::create(
-          builder, loc, base, shape, strides, offsets, sizes,
+          builder, loc, resultType, base, shape, strides, offsets,
           builder.getDenseI32ArrayAttr({1, 0}));
       return makeTensorPtr;
     };
@@ -203,6 +215,8 @@ private:
     Location loc = op.getLoc();
     tt::TensorDescType tDescType = op.getType();
 
+    // Extract encoding from the tensor descriptor's block type
+    Attribute encoding = tDescType.getBlockType().getEncoding();
     // Create a new block pointer if a suitable one doesn't already exist.
     SmallVector<Value> shapes, strides, offsets;
     SmallVector<int32_t> sizes;
@@ -222,7 +236,7 @@ private:
     }
 
     auto tensorPtr = findOrCreateMakeTensorPtr(
-        loc, op.getBase(), shapes, strides, offsets, sizes, builder);
+        loc, op.getBase(), shapes, strides, offsets, sizes, encoding, builder);
     LLVM_DEBUG({
       llvm::dbgs() << "With:\n";
       llvm::dbgs().indent(2) << tensorPtr << "\n";
@@ -268,6 +282,9 @@ private:
     for (size_t i = 0; i < tensorType.getRank(); ++i)
       boundaryCheck.push_back(i);
 
+    Attribute blockIOAttr =
+        op->getAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName());
+
     constexpr bool isLoad = std::is_same_v<OpTy, tt::DescriptorLoadOp>;
     if constexpr (isLoad) {
       // Default to PAD_ZERO as this is the expected padding behavior for
@@ -281,12 +298,21 @@ private:
           loc, ptr, boundaryCheck,
           /*padding*/ padding, op.getCache(), op.getEvict(),
           /*volatile*/ false);
+      if (blockIOAttr) {
+        auto *loadOpInst = loadOp.getDefiningOp();
+        loadOpInst->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
+                            blockIOAttr);
+      }
       LLVM_DEBUG(llvm::dbgs().indent(2) << loadOp << "\n");
       op.replaceAllUsesWith(loadOp);
     } else {
       [[maybe_unused]] auto storeOp = builder.createOrFold<tt::StoreOp>(
           loc, ptr, op.getSrc(), boundaryCheck, tt::CacheModifier::NONE,
           tt::EvictionPolicy::NORMAL);
+      if (blockIOAttr) {
+        storeOp->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
+                         blockIOAttr);
+      }
       LLVM_DEBUG(llvm::dbgs().indent(2) << storeOp << "\n");
     }
 
