@@ -1123,7 +1123,7 @@ def ref_paged_attn(
     return torch.cat(outputs, dim=0)
 
 
-TOTAL_MEMORY = torch.xpu.get_device_properties(0).total_memory
+TOTAL_MEMORY_BYTES = benchmark_suite.get_total_gpu_memory_bytes()
 
 
 def _dtype_size(dtype):
@@ -1180,7 +1180,7 @@ def is_enough_memory(x_val, safety_factor=0.80):
 
     total_memory = (query_mem + kv_cache_mem + output_mem + cu_mem + kvl_mem + bt_mem + q_quant_mem)
 
-    threshold = TOTAL_MEMORY * safety_factor
+    threshold = TOTAL_MEMORY_BYTES * safety_factor
     enough = total_memory < threshold
 
     return enough
@@ -1218,26 +1218,15 @@ SOFT_CAPS = [None, 50.0]
 SLIDING_WINDOWS = [None, 256]
 ATTENTION_CONFIGS_BF16 = []
 config_matrix = product(MODEL_CONFIGS, SEQ_LENS, SLIDING_WINDOWS, SOFT_CAPS, NUM_BLOCKS, MMAP_BLOCK_SIZES)
-for model_config, seq_len, sliding_window, soft_cap, num_blocks, block_size in config_matrix:
-    if model_config[-1] is not None and model_config[-1].itemsize < 2 and block_size < 32:
+for x_val in config_matrix:
+    if x_val[4] is not None and x_val[4].itemsize < 2 and x_val[-1] < 32:
         print("Skipping configuration due to incompatible q_dtype and block_size.")
         continue
 
-    enough_memory_flag = is_enough_memory(x_val=(*model_config, seq_len, sliding_window, soft_cap, num_blocks,
-                                                 block_size))
-    if enough_memory_flag:
-        ATTENTION_CONFIGS_BF16.append((
-            *model_config,
-            seq_len,
-            sliding_window,
-            soft_cap,
-            num_blocks,
-            block_size,
-        ))
+    if is_enough_memory(x_val=x_val):
+        ATTENTION_CONFIGS_BF16.append(x_val)
     else:
-        print(
-            f"Skipping configuration due to memory constraints: {(*model_config, seq_len, sliding_window, soft_cap, num_blocks, block_size)}"
-        )
+        print(f"Skipping configuration due to memory constraints: {x_val}")
 
 # ATTENTION_CONFIGS_FP8 = [
 #     # FP8 configurations
@@ -1285,6 +1274,7 @@ def get_unified_attention_benchmark(
         ))
     def benchmark(q_heads, k_heads, head_size, dtype, qdtype, seq_lens, sliding_window, soft_cap, num_blocks,
                   block_size, provider):
+        print("Config:", q_heads, k_heads, head_size, dtype, qdtype, seq_lens, sliding_window, soft_cap, num_blocks, block_size, provider)
         # Set default device like in the test
         current_platform.seed_everything(0)  # Use same seed as test
         n_warmup = 100
@@ -1403,7 +1393,7 @@ def get_unified_attention_benchmark(
                 total_query_tokens * q_heads * head_size * n_bytes +  # Query
                 sum([min(l, sliding_window) if sliding_window is not None else l
                      for l in kv_lens]) * k_heads * head_size * n_bytes * 2 +  # KV cache accessed
-                total_query_tokens * q_heads * head_size * 2  # Output
+                total_query_tokens * q_heads * head_size * n_bytes  # Output
             )
             return total_bytes * (1e-9) / (ms * 1e-3)
 
