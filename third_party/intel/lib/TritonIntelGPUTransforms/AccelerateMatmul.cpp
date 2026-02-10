@@ -3,6 +3,7 @@
 #include "Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
@@ -167,8 +168,7 @@ public:
             ? std::make_optional(2)
             : std::nullopt);
 
-    RankedTensorType newRetType =
-        RankedTensorType::get(retShape, oldRetType.getElementType(), dpasEnc);
+    RankedTensorType newRetType = oldRetType.cloneWithEncoding(dpasEnc);
 
     // convert accumulator
     TensorValue oldAcc = op.getC();
@@ -181,10 +181,8 @@ public:
     auto newBEncoding = ttg::DotOperandEncodingAttr::get(
         oldBType.getContext(), 1, newRetType.getEncoding(), opsPerChan);
 
-    auto newAType = RankedTensorType::get(
-        oldAType.getShape(), oldAType.getElementType(), newAEncoding);
-    auto newBType = RankedTensorType::get(
-        oldBType.getShape(), oldBType.getElementType(), newBEncoding);
+    RankedTensorType newAType = oldAType.cloneWithEncoding(newAEncoding);
+    RankedTensorType newBType = oldBType.cloneWithEncoding(newBEncoding);
 
     a = ttg::ConvertLayoutOp::create(rewriter, a.getLoc(), newAType, a);
     b = ttg::ConvertLayoutOp::create(rewriter, b.getLoc(), newBType, b);
@@ -196,8 +194,7 @@ public:
       if (scaleA) {
         tt::LinearLayout scaleALayout = BlockScaledDPAStoLinearLayout(
             scaleA.getType().getShape(), dpasEnc, 3);
-        auto newScaleAType = RankedTensorType::get(
-            scaleA.getType().getShape(), scaleA.getType().getElementType(),
+        RankedTensorType newScaleAType = scaleA.getType().cloneWithEncoding(
             ttg::LinearEncodingAttr::get(ctx, scaleALayout));
         scaleA = ttg::ConvertLayoutOp::create(rewriter, scaleA.getLoc(),
                                               newScaleAType, scaleA);
@@ -206,8 +203,7 @@ public:
       if (scaleB) {
         tt::LinearLayout scaleBLayout = BlockScaledDPAStoLinearLayout(
             scaleB.getType().getShape(), dpasEnc, 4);
-        auto newScaleBType = RankedTensorType::get(
-            scaleB.getType().getShape(), scaleB.getType().getElementType(),
+        RankedTensorType newScaleBType = scaleB.getType().cloneWithEncoding(
             ttg::LinearEncodingAttr::get(ctx, scaleBLayout));
         scaleB = ttg::ConvertLayoutOp::create(rewriter, scaleB.getLoc(),
                                               newScaleBType, scaleB);
