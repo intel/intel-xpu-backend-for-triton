@@ -13,6 +13,9 @@ Intel® XPU Backend for Triton\* support for Windows is currently experimental a
   * Intel® Arc™ B-Series Graphics for Desktops
     * [Intel® Arc™ B570](https://www.intel.com/content/www/us/en/products/sku/241676/intel-arc-b570-graphics/specifications.html)
     * [Intel® Arc™ B580](https://www.intel.com/content/www/us/en/products/sku/241598/intel-arc-b580-graphics/specifications.html)
+  * Intel® Arc™ Pro B-Series Graphics
+    * [Intel® Arc™ Pro B50](https://www.intel.com/content/www/us/en/products/sku/242615/intel-arc-pro-b50-graphics/specifications.html)
+    * [Intel® Arc™ Pro B60](https://www.intel.com/content/www/us/en/products/sku/243916/intel-arc-pro-b60-graphics/specifications.html)
 
 * Latest [GPU driver](https://www.intel.com/content/www/us/en/download/785597/intel-arc-iris-xe-graphics-windows.html)
 

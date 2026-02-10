@@ -646,10 +646,10 @@ void fillTDMDescriptor(
 void fillTDMDescriptorForGatherScatter(
     RewriterBase &rewriter, Location loc,
     const LLVMTypeConverter *typeConverter, Type elementType,
-    SmallVector<int64_t> blockShape, SmallVector<Value> &group0,
-    SmallVector<Value> &group1, SmallVector<Value> &group2,
-    SmallVector<Value> &group3, Value ldsRowOffset, Value globalColOffset,
-    Value ldsPtr, Value pred, Value barrierPtr,
+    SmallVector<int64_t> blockShape, unsigned padInterval, unsigned padAmount,
+    SmallVector<Value> &group0, SmallVector<Value> &group1,
+    SmallVector<Value> &group2, SmallVector<Value> &group3, Value ldsRowOffset,
+    Value globalColOffset, Value ldsPtr, Value pred, Value barrierPtr,
     const triton::LinearLayout &cgaLayout, Value ctaId,
     ArrayRef<Value> rowIndices, bool use32BitIndices) {
   assert(!rowIndices.empty() && "Gather/scatter requires row indices.");
@@ -665,16 +665,13 @@ void fillTDMDescriptorForGatherScatter(
       decodeTDMDescriptorFull(rewriter, loc, group0, group1, group2, group3,
                               /*numDims=*/2);
 
-  // Apply CTA offsets to the base pointer
+  // Apply CTA column offset to the base pointer.
+  // Row positions are specified by rowIndices, so only column offset applies.
   auto kBlock = str_attr("block");
   auto cgaOffsets =
       applyLinearLayout(loc, rewriter, cgaLayout, {{kBlock, ctaId}});
-  Value cgaBaseOffset = b.i32_val(0);
-  for (size_t i = 0; i < 2; ++i) {
-    Value dimOffset = b.mul(cgaOffsets[i].second, tensorStride[i]);
-    cgaBaseOffset = b.add(cgaBaseOffset, dimOffset);
-  }
-  globalPtr = b.gep(globalPtrTy, elementType, globalPtr, cgaBaseOffset);
+  Value cgaColOffset = b.mul(cgaOffsets[1].second, tensorStride[1]);
+  globalPtr = b.gep(globalPtrTy, elementType, globalPtr, cgaColOffset);
 
   // For scatter, only apply column offset to global address
   // Row positions are specified by rowIndices
@@ -683,7 +680,19 @@ void fillTDMDescriptorForGatherScatter(
 
   // Calculate LDS offset based on row offset only (column always starts at 0)
   Value ldsOffset = b.mul(ldsRowOffset, b.i32_val(blockShape[1]));
+
+  // Apply padding if needed
+  if (padInterval > 0 && padAmount > 0) {
+    Value iVal = b.i32_val(log2(padInterval));
+    Value pVal = b.i32_val(log2(padAmount));
+    Value padOffset = b.shl(i32_ty, b.ashr(ldsOffset, iVal), pVal);
+    ldsOffset = b.add(ldsOffset, padOffset);
+  }
   ldsPtr = b.gep(sharedPtrTy, elementType, ldsPtr, ldsOffset);
+
+  // Adjust column tensor shape for OOB handling - subtract column offset to
+  // get remaining elements.
+  tensorShape[1] = b.smax(b.i32_val(0), b.sub(tensorShape[1], globalColOffset));
 
   // Update group0 with addresses and enable gather/scatter mode
   Value globalAddr = b.ptrtoint(i64_ty, globalPtr);
@@ -705,7 +714,7 @@ void fillTDMDescriptorForGatherScatter(
   Value typeBits = b.and_(group0[3], b.i32_val(0xC0000000));
   group0[3] = b.or_(typeBits, globalAddrHigh);
 
-  // Update group1 with tensor shapes (keep original for stride calculation)
+  // Update group1 with adjusted tensor shapes for proper OOB handling
   group1[1] = b.shl(tensorShape[1], b.i32_val(16));
   group1[2] = b.lshr(tensorShape[1], b.i32_val(16));
   group1[2] = b.or_(group1[2], b.shl(tensorShape[0], b.i32_val(16)));
@@ -835,6 +844,7 @@ size_t getTDMGatherScatterInstrinsicCount(size_t numIndices,
 void emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
                           const LLVMTypeConverter *typeConverter,
                           ArrayRef<Value> desc, ArrayRef<int64_t> blockShape,
+                          unsigned padInterval, unsigned padAmount,
                           Value ldsPtr, Value pred, Type elementType,
                           Value barrierPtr,
                           const triton::LinearLayout &cgaLayout, Value ctaId,
@@ -879,9 +889,10 @@ void emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
     // - ldsRowOffset: row offset within shared memory for this batch
     // - colOffset: starting column in global memory
     fillTDMDescriptorForGatherScatter(
-        rewriter, loc, typeConverter, elementType, to_vector(blockShape), g0,
-        g1, g2, g3, b.i32_val(startIdx), colOffset, ldsPtr, pred, barrierPtr,
-        cgaLayout, ctaId, batchIndices, use32BitIndices);
+        rewriter, loc, typeConverter, elementType, to_vector(blockShape),
+        padInterval, padAmount, g0, g1, g2, g3, b.i32_val(startIdx), colOffset,
+        ldsPtr, pred, barrierPtr, cgaLayout, ctaId, batchIndices,
+        use32BitIndices);
 
     // Pack and emit the instruction
     auto group0 = packLLVector(loc, g0, rewriter);

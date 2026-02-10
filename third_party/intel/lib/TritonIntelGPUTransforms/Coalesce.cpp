@@ -126,8 +126,7 @@ private:
 
   static RankedTensorType getNewType(RankedTensorType tensorType,
                                      Attribute encoding) {
-    return RankedTensorType::get(tensorType.getShape(),
-                                 tensorType.getElementType(), encoding);
+    return tensorType.cloneWithEncoding(encoding);
   }
 
   static bool filterUser(Operation *op) {
