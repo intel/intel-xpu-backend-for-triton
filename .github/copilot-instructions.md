@@ -211,7 +211,7 @@ bool bIsValid;
 class MyClass {
   int count;
   bool isValid;
-  
+
   // Or use descriptive names that don't conflict
   int elementCount;
   bool valid;
@@ -240,7 +240,7 @@ for (auto [key, value] : mapping) {
 
 ### Operation and Pass Naming
 ```cpp
-// ✅ Correct: Triton operations use CamelCase starting with an uppercase letter 
+// ✅ Correct: Triton operations use CamelCase starting with an uppercase letter
 triton::LoadOp
 triton::gpu::ConvertLayoutOp
 
@@ -286,5 +286,5 @@ CallInst *call = cast<CallInst>(instr);  // Use dyn_cast with null check when in
 - **Suggest Improvements:** Don't just identify problems, propose solutions
 
 ## Conclusion
-These guidelines ensure that code reviews maintain LLVM/MLIR's high standards for code quality, performance, and maintainability. 
+These guidelines ensure that code reviews maintain LLVM/MLIR's high standards for code quality, performance, and maintainability.
 Always consider the broader impact of changes on the codebase and the developer experience.
