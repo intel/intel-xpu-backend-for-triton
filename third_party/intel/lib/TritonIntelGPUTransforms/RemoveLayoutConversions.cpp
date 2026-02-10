@@ -863,11 +863,11 @@ void LayoutPropagation::rewriteAssertOp(tt::AssertOp assertOp) {
 // Recursively update the operands in a chain of AdvanceOps, after setting the
 // pointer operand of the first one.
 static void updateAdvanceOpChain(tt::AdvanceOp advanceOp, tt::StoreOp storeOp,
-                                 Value makeTensorPtrOp, Value dataToStore) {
+                                 Value parentOp, Value dataToStore) {
   OpBuilder rewriter(advanceOp);
-  auto newAdvanceOp = tt::AdvanceOp::create(
-      rewriter, advanceOp.getLoc(), makeTensorPtrOp.getType(), makeTensorPtrOp,
-      advanceOp.getOffsets());
+  auto newAdvanceOp =
+      tt::AdvanceOp::create(rewriter, advanceOp.getLoc(), parentOp.getType(),
+                            parentOp, advanceOp.getOffsets());
 
   SmallVector<Operation *> advanceOpUsers(advanceOp->getUsers());
   for (Operation *user : advanceOpUsers) {
@@ -877,7 +877,7 @@ static void updateAdvanceOpChain(tt::AdvanceOp advanceOp, tt::StoreOp storeOp,
         storeOp.setOperand(1, dataToStore);
       }
     } else if (auto advanceOp = dyn_cast<tt::AdvanceOp>(user)) {
-      updateAdvanceOpChain(advanceOp, storeOp, makeTensorPtrOp, dataToStore);
+      updateAdvanceOpChain(advanceOp, storeOp, newAdvanceOp, dataToStore);
     } else {
       llvm::errs() << "user: " << *user << "\n";
       llvm_unreachable("Unexpected user");
@@ -959,16 +959,17 @@ bool LayoutPropagation::rewriteTensorPtrStoreOp(tt::StoreOp storeOp) {
         storeOp.setOperand(1, dataToStore);
       }
     } else if (auto advanceOp = dyn_cast<tt::AdvanceOp>(user)) {
-      auto chainIsTerminatedByCurrentStore = [&](tt::AdvanceOp advanceOp) {
-        tt::AdvanceOp currentAdvOp = advanceOp;
-        for (Operation *user : currentAdvOp->getUsers()) {
-          if (isa<tt::StoreOp>(user) && cast<tt::StoreOp>(user) == storeOp)
-            return true;
-          if (isa<tt::AdvanceOp>(user))
-            currentAdvOp = cast<tt::AdvanceOp>(user);
-        }
-        return false;
-      };
+      std::function<bool(tt::AdvanceOp)> chainIsTerminatedByCurrentStore =
+          [&](tt::AdvanceOp advanceOp) {
+            for (Operation *user : advanceOp->getUsers()) {
+              if (isa<tt::StoreOp>(user) && cast<tt::StoreOp>(user) == storeOp)
+                return true;
+              if (auto advanceOp = dyn_cast<tt::AdvanceOp>(user))
+                if (chainIsTerminatedByCurrentStore(advanceOp))
+                  return true;
+            }
+            return false;
+          };
 
       if (chainIsTerminatedByCurrentStore(advanceOp))
         updateAdvanceOpChain(advanceOp, storeOp, newMakeTensorPtrOp,
