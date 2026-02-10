@@ -12,18 +12,19 @@ This document provides custom instructions for AI-assisted code reviews followin
 - Check for proper error handling and edge cases
 
 ### 2. LLVM Coding Standards Compliance
-- Enforce LLVM naming conventions and style guidelines
-- Verify proper use of LLVM data structures and APIs
-- Ensure compliance with C++ best practices as adopted by LLVM
+- Verify proper use of LLVM and MLIR data structures and APIs
+- Use LLVM containers (SmallVector, DenseMap, StringMap) for better performance
+- Prefer SmallVector<T, N> for small, frequently-used collections
+- Ensure compliance with C++ best practices as adopted by LLVM/MLIR
 
 ## Naming Conventions
 
 ### Variables and Functions
 ```cpp
-// ✅ Correct: CamelCase for functions and variables
+// ✅ Correct: CamelCase starting with a lowercase letter for functions and variables
 int calculateOffset();
-StringRef FileName;
-bool IsValid;
+StringRef fileName;
+bool isValid;
 
 // ❌ Incorrect: snake_case or other conventions
 int calculate_offset();
@@ -32,7 +33,7 @@ bool is_valid;
 ```
 
 ### Types and Classes
-``` cpp
+```cpp
 // ✅ Correct: CamelCase starting with uppercase
 class MemoryBuffer;
 struct SourceLocation;
@@ -43,17 +44,30 @@ class memory_buffer;
 struct sourcelocation;
 ```
 
+### Special Cases
+```cpp
+// ✅ Correct: Standard container-like methods use lowercase
+class MyContainer {
+  iterator begin();
+  iterator end();
+  size_t size() const;
+};
+```
+
 ### Constants and Enumerators
 ```cpp
-// ✅ Correct: CamelCase for enum values
+// ✅ Correct: CamelCase starting with an uppercase letter for enum values
 enum TokenKind {
   Identifier,
   NumericConstant,
   StringLiteral
 };
 
-// ✅ Correct: Static constants
+// ✅ Correct: CamelCase starting with uppercase for static constants
 static constexpr unsigned DefaultAlignment = 8;
+
+// ✅ Also correct for constexpr constants
+constexpr unsigned MaxBufferSize = 1024;
 ```
 
 ## Code Structure and Organization
@@ -69,24 +83,24 @@ static constexpr unsigned DefaultAlignment = 8;
 
 ```cpp
 // ✅ Correct include order
-#include "llvm/Analysis/TargetTransformInfo.h"  // Main header
-#include "LocalHelper.h"                        // Local headers
-#include "llvm/IR/Function.h"                   // LLVM headers
-#include <algorithm>                            // System headers
+#include "MyFile.h"             // Main header
+#include "LocalHelper.h"        // Local headers
+#include "llvm/IR/Function.h"   // LLVM headers
+#include <algorithm>            // System headers
 ```
 
 ### Function Design
 - Verify functions have single, clear responsibilities
 - Check parameter ordering: inputs first, then outputs
-- Ensure proper use of const-correctness
+- Suggest proper use of const-correctness
 - Validate return types (prefer returning values over out-parameters)
 
 ```cpp
 // ✅ Preferred: Return by value
-std::unique_ptr<Module> parseModule(StringRef Filename);
+std::unique_ptr<Module> parseModule(StringRef name);
 
-// ✅ Acceptable: Out-parameter when necessary
-bool parseModule(StringRef Filename, Module &Result);
+// ✅ Acceptable: out-parameter when necessary
+bool parseModule(StringRef name, Module &result);
 ```
 
 ## Memory Management
@@ -98,21 +112,21 @@ bool parseModule(StringRef Filename, Module &Result);
 
 ```cpp
 // ✅ Correct: Use StringRef for parameters
-void processName(StringRef Name);
+void processName(StringRef name);
 
 // ✅ Correct: Use LLVM casting
-if (auto *CI = dyn_cast<CallInst>(I)) {
+if (auto *call = dyn_cast<CallInst>(instr)) {
   // Handle call instruction
 }
 
 // ❌ Incorrect: C-style cast
-CallInst *CI = (CallInst*)I;
+CallInst *call = (CallInst*)instr;
 ```
 
 ### Resource Management
 - Verify RAII principles are followed
-- Check for proper cleanup in destructors
-- Ensure exception safety where applicable
+- Check for proper, deterministic cleanup in destructors and other RAII-managed objects
+- Avoid relying on C++ exceptions; prefer RAII plus LLVM-style error propagation (`llvm::Error`/`llvm::Expected`)
 - Validate proper use of move semantics
 
 ## Error Handling
@@ -123,12 +137,12 @@ CallInst *CI = (CallInst*)I;
 
 ```cpp
 // ✅ Correct: Using Expected<T>
-Expected<std::unique_ptr<Module>> parseModule(StringRef Filename);
+Expected<std::unique_ptr<Module>> parseModule(StringRef filename);
 
 // ✅ Correct: Error handling
-auto ModuleOrErr = parseModule(Filename);
-if (!ModuleOrErr)
-  return ModuleOrErr.takeError();
+auto moduleOrErr = parseModule(filename);
+if (!moduleOrErr)
+  return moduleOrErr.takeError();
 ```
 
 ## Performance Considerations
@@ -136,15 +150,17 @@ if (!ModuleOrErr)
 - Check for unnecessary copies (prefer move semantics)
 - Verify appropriate use of references vs. pointers
 - Ensure efficient container usage
-- Validate algorithmic complexity considerations
+- Validate algorithmic complexity (prefer O(n) over O(n²) where possible)
+- Check for redundant operations in hot paths
+- Verify loop invariant code motion opportunities
 
 ```cpp
 // ✅ Efficient: Pass by const reference
-void processInstructions(const std::vector<Instruction*> &Instructions);
+void processInstructions(const std::vector<Instruction*> &instructions);
 
 // ✅ Efficient: Use range-based loops
-for (const auto &BB : F) {
-  for (const auto &I : BB) {
+for (const BasicBlock &block : func) {
+  for (const Instruction &inst : block) {
     // Process instruction
   }
 }
@@ -158,16 +174,12 @@ for (const auto &BB : F) {
 - Validate that comments are up-to-date with code changes
 
 ```cpp
-/// \brief Analyzes the given function for optimization opportunities.
+/// Analyzes the given function for optimization opportunities.
 ///
-/// This function performs a comprehensive analysis of the control flow
-/// and identifies potential optimizations that can be applied safely.
-///
-/// \param F The function to analyze
-/// \param TTI Target-specific information for cost modeling
-/// \return A list of suggested optimizations
-std::vector<Optimization> analyzeFunction(Function &F,
-                                         const TargetTransformInfo &TTI);
+/// This performs comprehensive control flow analysis and identifies
+/// optimizations that can be applied safely.
+SmallVector<Optimization> analyzeFunction(Function &func,
+                                          const TargetTransformInfo &tti);
 ```
 
 ## Testing and Validation
@@ -178,31 +190,79 @@ std::vector<Optimization> analyzeFunction(Function &F,
 - Validate that tests are deterministic and reliable
 
 ### Code Review Checklist
- - [ ] Follows LLVM naming conventions
- - [ ] Proper include organization and dependencies
+ - [ ] Follows MLIR/LLVM naming conventions
  - [ ] Appropriate error handling
- - [ ] Memory management follows LLVM patterns
- - [ ] Performance considerations addressed
- - [ ] Adequate test coverage
- - [ ] Documentation is clear and complete
+ - [ ] Memory management follows MLIR/LLVM patterns
+ - [ ] Proper include organization and dependencies
  - [ ] No obvious security vulnerabilities
+ - [ ] Performance considerations addressed
  - [ ] Code is readable and maintainable
+ - [ ] Documentation is clear and complete
+ - [ ] Adequate test coverage
 
 ## Common Anti-Patterns to Flag
 ### Style Issues
 ```cpp
-// ❌ Avoid: Inconsistent naming
-void ProcessFile();  // Should be processFile()
-int m_count;         // Should be Count
+// ❌ Avoid: Hungarian notation or prefixes
+int m_count;
+bool bIsValid;
+
+// ✅ Correct: CamelCase with lowercase start for members
+class MyClass {
+  int count;
+  bool isValid;
+  
+  // Or use descriptive names that don't conflict
+  int elementCount;
+  bool valid;
+};
 
 // ❌ Avoid: Unnecessary complexity
 if (condition == true)  // Should be if (condition)
 ```
 
+### Modern C++ Features
+```cpp
+// ✅ Good use of auto with clear type
+auto *func = dyn_cast<Function>(val);
+auto count = vec.size();  // Type is obvious
+
+// ❌ Avoid: Unclear types
+auto thing = process();  // What type is Thing?
+
+// ✅ Structured bindings for clarity
+for (auto [key, value] : mapping) {
+  // Use key and value
+}
+```
+
+## Triton/MLIR-Specific Guidelines
+
+### Operation and Pass Naming
+```cpp
+// ✅ Correct: Triton operations use CamelCase starting with an uppercase letter 
+triton::LoadOp
+triton::gpu::ConvertLayoutOp
+
+// ✅ Correct: Passes use descriptive names
+class RemoveLayoutConversionsPass : public PassWrapper<...>
+```
+
+### GPU Kernel Considerations
+- Verify thread block size calculations are within hardware limits
+- Check for proper memory coalescing patterns
+- Validate shared memory usage and bank conflict avoidance
+- Ensure proper synchronization primitives
+
+### MLIR Patterns
+- Use proper MLIR rewriter patterns for transformations
+- Verify dialect conversions follow MLIR infrastructure
+- Check that operations are properly registered and verified
+
 ### Performance Issues
 ```cpp
 // ❌ Avoid: Unnecessary string copies
-void func(std::string Name);  // Should use StringRef
+void func(std::string name);  // Should use StringRef
 
 // ❌ Avoid: Inefficient loops
 for (int i = 0; i < vec.size(); ++i)  // Prefer range-based loops
@@ -214,16 +274,17 @@ for (int i = 0; i < vec.size(); ++i)  // Prefer range-based loops
 Instruction *createInst();  // Should return unique_ptr or similar
 
 // ❌ Avoid: Unchecked casts
-CallInst *CI = cast<CallInst>(I);  // Should use dyn_cast with null check
+CallInst *call = cast<CallInst>(instr);  // Use dyn_cast with null check when instr may not be a CallInst; use cast only when invariants guarantee it
 ```
 
 ## Review Response Guidelines
 ### When providing feedback:
-- Be Constructive: Explain the reasoning behind suggestions
-- Provide Examples: Show correct implementations when possible
-- Prioritize Issues: Distinguish between critical issues and style preferences
-- Reference Standards: Cite specific LLVM guidelines when applicable
-- Suggest Improvements: Don't just identify problems, propose solutions
+- **Be Constructive:** Explain the reasoning behind suggestions
+- **Provide Examples:** Show correct implementations when possible
+- **Prioritize Issues:** Distinguish between critical issues and style preferences
+- **Reference Standards:** Cite specific LLVM guidelines when applicable
+- **Suggest Improvements:** Don't just identify problems, propose solutions
 
 ## Conclusion
-These guidelines ensure that code reviews maintain LLVM's high standards for code quality, performance, and maintainability. Always consider the broader impact of changes on the codebase and the developer experience.
+These guidelines ensure that code reviews maintain LLVM/MLIR's high standards for code quality, performance, and maintainability. 
+Always consider the broader impact of changes on the codebase and the developer experience.
