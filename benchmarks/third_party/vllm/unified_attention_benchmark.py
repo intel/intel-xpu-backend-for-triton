@@ -1274,7 +1274,8 @@ def get_unified_attention_benchmark(
         ))
     def benchmark(q_heads, k_heads, head_size, dtype, qdtype, seq_lens, sliding_window, soft_cap, num_blocks,
                   block_size, provider):
-        print("Config:", q_heads, k_heads, head_size, dtype, qdtype, seq_lens, sliding_window, soft_cap, num_blocks, block_size, provider)
+        print("Config:", q_heads, k_heads, head_size, dtype, qdtype, seq_lens, sliding_window, soft_cap, num_blocks,
+              block_size, provider)
         # Set default device like in the test
         current_platform.seed_everything(0)  # Use same seed as test
         n_warmup = 100
