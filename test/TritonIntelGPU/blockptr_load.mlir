@@ -138,11 +138,11 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK:           %[[WIDTH:.*]] = llvm.mul %[[WIDTH_i32]], %[[ELEM_SIZE_IN_BYTES]] : i32
     // CHECK:           %[[SUB_GROUP_ID_RAW:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id() {no_unwind, will_return} : () -> i32
     // CHECK:           %[[SUB_GROUP_ID_EXT:.*]] = llvm.zext %[[SUB_GROUP_ID_RAW]] : i32 to i64
-    // CHECK:           %[[SUB_GROUP_ID:.*]] = llvm.trunc %[[SUB_GROUP_ID_EXT]] : i64 to i32
-    // CHECK:           %[[OFFSET_Y:.*]] = llvm.add %[[OFFSET_0]], {{.*}} : i32
-    // CHECK:           %[[OFFSET_COL:.*]] = llvm.add %[[OFFSET_1]], {{.*}} : i32
-    // CHECK:           %[[NUM_VALUES_PER_PACK:.*]] = llvm.mlir.constant(1 : i32) : i32
-    // CHECK:           %[[OFFSET_X:.*]] = llvm.udiv %[[OFFSET_COL]], %[[NUM_VALUES_PER_PACK]] : i32
+    // CHECK-DAG:       %[[SUB_GROUP_ID:.*]] = llvm.trunc %[[SUB_GROUP_ID_EXT]] : i64 to i32
+    // CHECK-DAG:       %[[OFFSET_Y:.*]] = llvm.add %[[OFFSET_0]], {{.*}} : i32
+    // CHECK-DAG:       %[[OFFSET_COL:.*]] = llvm.add %[[OFFSET_1]], {{.*}} : i32
+    // CHECK-DAG:       %[[NUM_VALUES_PER_PACK:.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK-DAG:        %[[OFFSET_X:.*]] = llvm.udiv %[[OFFSET_COL]], %[[NUM_VALUES_PER_PACK]] : i32
     // CHECK:           triton_gen.2Dblockload %[[BASE]], %[[WIDTH]], %[[HEIGHT_i32]], %[[ROW_STRIDE_IN_BYTES]], %[[OFFSET_X]], %[[OFFSET_Y]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 2, transpose = false, vnni_transform = false, cache_control = Default}
     %ptrA = tt.make_tensor_ptr %arg0, [%arg2, %arg4], [%arg5, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<32x32xf16, #dot0>>
     %A = tt.load %ptrA {boundaryCheck = array<i32: 0, 1>, padding = 1 : i32, ttig.block_io = "row_major"} : !tt.ptr<tensor<32x32xf16, #dot0>>
@@ -192,9 +192,9 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK:           %[[SUB_GROUP_ID_RAW:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id() {no_unwind, will_return} : () -> i32
     // CHECK:           %[[SUB_GROUP_ID_EXT:.*]] = llvm.zext %[[SUB_GROUP_ID_RAW]] : i32 to i64
     // CHECK:           %[[SUB_GROUP_ID:.*]] = llvm.trunc %[[SUB_GROUP_ID_EXT]] : i64 to i32
-    // CHECK:           %[[VAL_47:.*]] = llvm.add %[[OFFSET_0]], {{.*}} : i32
-    // CHECK:           %[[OFFSET_COL:.*]] = llvm.add %[[OFFSET_1]], {{.*}} : i32
-    // CHECK:           %[[NUM_VALUES_PACKED:.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK-DAG:       %[[VAL_47:.*]] = llvm.add %[[OFFSET_0]], {{.*}} : i32
+    // CHECK-DAG:       %[[OFFSET_COL:.*]] = llvm.add %[[OFFSET_1]], {{.*}} : i32
+    // CHECK-DAG:       %[[NUM_VALUES_PACKED:.*]] = llvm.mlir.constant(1 : i32) : i32
     // CHECK:           %[[OFFSET_X:.*]] = llvm.udiv %[[OFFSET_COL]], %[[NUM_VALUES_PACKED]] : i32
     // CHECK:           triton_gen.2Dblockload %[[BASE]], %[[WIDTH]], %[[HEIGHT_i32]], %[[ROW_STRIDE_IN_BYTES]], %[[OFFSET_X]], {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 2, transpose = false, vnni_transform = true, cache_control = Default}
     %ptrB = tt.make_tensor_ptr %arg1, [%arg4, %arg3], [%arg7, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<32x32xf16, #dot1>>
@@ -379,8 +379,8 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
   tt.func public @dot_op_a_2d_load(%arg0: !tt.ptr<f16>, %arg1: i64, %arg2: i64) -> (tensor<4x32x32xf16, #dot0>, tensor<4x32x32xf16, #dot1>, tensor<4x32x32xf16, #dpas>) {
     %c0_i32 = arith.constant 0 : i32
     %c1_i64 = arith.constant 1 : i64
-    // CHECK:           %[[MLIR_0:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:           %[[MLIR_1:.*]] = llvm.mlir.constant(1 : i64) : i64
+    // CHECK-DAG:       %[[MLIR_0:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK-DAG:       %[[MLIR_1:.*]] = llvm.mlir.constant(1 : i64) : i64
     // CHECK:           %[[MLIR_2:.*]] = llvm.mlir.undef : !llvm.struct<(i32, i32, i32, i64, i64, i64, i64, i64, i64, ptr<1>)>
     // CHECK:           %[[INSERTVALUE_0:.*]] = llvm.insertvalue {{.*}} : !llvm.struct<(i32, i32, i32, i64, i64, i64, i64, i64, i64, ptr<1>)>
     // CHECK:           %[[INSERTVALUE_1:.*]] = llvm.insertvalue {{.*}} : !llvm.struct<(i32, i32, i32, i64, i64, i64, i64, i64, i64, ptr<1>)>
@@ -474,7 +474,6 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     %ptrB = tt.make_tensor_ptr %arg0, [%arg1, %arg1, %arg1], [%arg2, %arg2, %c1_i64], [%c0_i32, %c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<4x32x32xf16, #dot1>>
     %B = tt.load %ptrB {boundaryCheck = array<i32: 0, 1, 2>, padding = 1 : i32, ttig.block_io = "row_major"} : !tt.ptr<tensor<4x32x32xf16, #dot1>>
 
-
     // CHECK:           %[[MLIR_2:.*]] = llvm.mlir.undef : !llvm.struct<(i32, i32, i32, i64, i64, i64, i64, i64, i64, ptr<1>)>
     // CHECK:           %[[INSERTVALUE_0:.*]] = llvm.insertvalue {{.*}} : !llvm.struct<(i32, i32, i32, i64, i64, i64, i64, i64, i64, ptr<1>)>
     // CHECK:           %[[INSERTVALUE_1:.*]] = llvm.insertvalue {{.*}} : !llvm.struct<(i32, i32, i32, i64, i64, i64, i64, i64, i64, ptr<1>)>
@@ -496,14 +495,14 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK:           %[[STRIDE_1:.*]] = llvm.extractvalue %[[BLOCK_POINTER]][7] : !llvm.struct<(i32, i32, i32, i64, i64, i64, i64, i64, i64, ptr<1>)>
     // CHECK:           %[[STRIDE_2:.*]] = llvm.extractvalue %[[BLOCK_POINTER]][8] : !llvm.struct<(i32, i32, i32, i64, i64, i64, i64, i64, i64, ptr<1>)>
     // CHECK:           %[[BASE:.*]] = llvm.extractvalue %[[BLOCK_POINTER]][9] : !llvm.struct<(i32, i32, i32, i64, i64, i64, i64, i64, i64, ptr<1>)>
-    // CHECK:           %[[SHAPE_Y:.*]] = llvm.trunc %[[SHAPE_1]] : i64 to i32
 
-    // CHECK:           %[[OFFSET:.*]] = llvm.mul {{.*}}, %[[STRIDE_0]] : i64
+    // CHECK-DAG:       %[[SHAPE_Y:.*]] = llvm.trunc %[[SHAPE_1]] : i64 to i32
+    // CHECK-DAG:       %[[OFFSET:.*]] = llvm.mul {{.*}}, %[[STRIDE_0]] : i64
     // CHECK:           %[[ADJUSTED_BASE:.*]] = llvm.getelementptr %[[BASE]]{{\[}}%[[OFFSET]]] : (!llvm.ptr<1>, i64) -> !llvm.ptr<1>, f16
     // CHECK:           %[[BOUDNARY_CHECK_0:.*]] = llvm.icmp "ult" {{.*}}, %[[SHAPE_0]] : i64
     // CHECK:           %[[OFFSET_Y:.*]] = llvm.select %[[BOUDNARY_CHECK_0]], {{.*}}, %[[SHAPE_Y]] : i1, i32
     // CHECK:           triton_gen.2Dblockload %[[ADJUSTED_BASE]], {{.*}}, %[[SHAPE_Y]], {{.*}}, {{.*}}, %[[OFFSET_Y]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, transpose = false, vnni_transform = false, cache_control = Default}
-    // CHECK-COUNT-31: triton_gen.2Dblockload
+    // CHECK-COUNT-31:  triton_gen.2Dblockload
     %ptrC = tt.make_tensor_ptr %arg0, [%arg1, %arg1, %arg1], [%arg2, %arg2, %c1_i64], [%c0_i32, %c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<4x32x32xf16, #dpas>>
     %C = tt.load %ptrC {boundaryCheck = array<i32: 0, 1, 2>, padding = 1 : i32, ttig.block_io = "row_major"} : !tt.ptr<tensor<4x32x32xf16, #dpas>>
     tt.return %A, %B, %C : tensor<4x32x32xf16, #dot0>, tensor<4x32x32xf16, #dot1>, tensor<4x32x32xf16, #dpas>

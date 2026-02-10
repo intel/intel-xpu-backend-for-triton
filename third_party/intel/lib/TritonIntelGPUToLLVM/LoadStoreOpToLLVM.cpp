@@ -541,8 +541,9 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
   }
 
   // Returns the strides in elements from regular pointer or block pointer.
-  SmallVector<Value> getStrides(ConversionPatternRewriter &rewriter, Value ptr,
-                                const SmallVector<Value> &unpackedPtrs) const {
+  SmallVector<Value>
+  getStrides(ConversionPatternRewriter &rewriter, Value ptr,
+             const SmallVectorImpl<Value> &unpackedPtrs) const {
     Location loc = ptr.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
@@ -558,23 +559,22 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
              "unexpected number of values unpacked from a block pointer");
       unsigned rank = (unpackedPtrs.size() - 1) / 3;
       unsigned blockStride = 2 * rank, blockBase = 3 * rank;
-      ;
-      return SmallVector<Value>(unpackedPtrs.begin() + blockStride,
-                                unpackedPtrs.begin() + blockBase);
-    } else {
-      // Regular pointer.
-      Type resultType = ptr.getType();
-      RankedTensorType tensorType = cast<RankedTensorType>(resultType);
-      unsigned rank = tensorType.getRank();
-      SmallVector<Value> strides(rank);
-      for (unsigned dim = 0; dim < rank; ++dim) {
-        int stride = getStride(ptr, dim);
-        if (stride < 0)
-          return {};
-        strides[dim] = b.i32_val(stride);
-      }
-      return strides;
+      return {unpackedPtrs.begin() + blockStride,
+              unpackedPtrs.begin() + blockBase};
     }
+
+    // Regular pointer.
+    Type resultType = ptr.getType();
+    RankedTensorType tensorType = cast<RankedTensorType>(resultType);
+    unsigned rank = tensorType.getRank();
+    SmallVector<Value> strides(rank);
+    for (unsigned dim = 0; dim < rank; ++dim) {
+      int stride = getStride(ptr, dim);
+      if (stride < 0)
+        return {};
+      strides[dim] = b.i32_val(stride);
+    }
+    return strides;
   }
 
   // Returns the offsets of the block from regular pointer or block pointer.
@@ -1383,6 +1383,9 @@ struct LoadOpToBlockIOConversion
 
   using ValueTable = std::map<std::pair<int, int>, Value>;
 
+  // Minimum base width in bytes for 2D block operations
+  static constexpr unsigned MIN_BASE_WIDTH_BYTES = 64;
+
   LoadOpToBlockIOConversion(
       LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
@@ -1390,6 +1393,99 @@ struct LoadOpToBlockIOConversion
       : ConvertTritonGPUOpToLLVMPattern<triton::LoadOp>(converter, benefit),
         BlockIOConversionBase(targetInfo, axisAnalysisPass) {}
 
+private:
+  /// Adjust row dimension offset and address for boundary checking.
+  void adjustRowDimension(Value &adjustedOffset, Value &offsetY,
+                          Value &adjustedBaseHeight, Value &addrElem,
+                          Value pitch, unsigned tileHeight,
+                          bool hasBoundaryCheck, TritonLLVMOpBuilder &b,
+                          MLIRContext *ctx) const {
+    if (hasBoundaryCheck) {
+      offsetY = adjustedOffset;
+      return;
+    }
+
+    adjustedBaseHeight = b.i32_val(tileHeight);
+    // Use i8 type as pitch is in number of bytes.
+    adjustedOffset = b.mul(adjustedOffset, pitch);
+    Type i8Ty = IntegerType::get(ctx, 8);
+    addrElem = b.gep(ptr_ty(ctx, 1), i8Ty, addrElem, adjustedOffset);
+    offsetY = b.i32_val(0);
+  }
+
+  /// Adjust column dimension offset and address for boundary checking.
+  void adjustColDimension(Value adjustedOffset, Value &offsetX,
+                          Value &adjustedBaseWidth, Value &addrElem, Type eltTy,
+                          unsigned vBlocks, unsigned tileWidth,
+                          unsigned packedElemSizeInBits, bool hasBoundaryCheck,
+                          TritonLLVMOpBuilder &b, MLIRContext *ctx) const {
+    if (hasBoundaryCheck) {
+      offsetX = adjustedOffset;
+      return;
+    }
+
+    adjustedBaseWidth =
+        b.i32_val(std::max(MIN_BASE_WIDTH_BYTES,
+                           vBlocks * tileWidth * (packedElemSizeInBits / 8)));
+    // The offsetX is number of elements instead of packed elements.
+    addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, adjustedOffset);
+    offsetX = b.i32_val(0);
+  }
+
+  /// Adjust other dimension offsets and optionally add boundary checking.
+  void adjustOtherDimension(Value &adjustedOffset, Value &addrElem, Value &pred,
+                            Type eltTy, ArrayRef<Value> strides,
+                            ArrayRef<Value> shapes, unsigned dim,
+                            bool hasBoundaryCheck, Location loc,
+                            ConversionPatternRewriter &rewriter,
+                            TritonLLVMOpBuilder &b) const {
+    MLIRContext *ctx = rewriter.getContext();
+    Type i64Ty = IntegerType::get(ctx, 64);
+    adjustedOffset = b.zext(i64Ty, adjustedOffset);
+    Value p = b.mul(adjustedOffset, strides[dim]);
+    addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, p);
+    if (hasBoundaryCheck) {
+      // Add boundary checking for other dims with predication.
+      pred = maybeAnd(rewriter, loc, pred,
+                      b.icmp_ult(adjustedOffset, shapes[dim]));
+    }
+  }
+
+  /// Compute and apply offsets for tensor pointer type.
+  void computeTensorPointerOffsets(
+      Value &addrElem, Value &offsetX, Value &offsetY, Value &adjustedBaseWidth,
+      Value &adjustedBaseHeight, Value &pred,
+      ArrayRef<std::pair<StringAttr, Value>> offsets,
+      ArrayRef<Value> baseOffsets, ArrayRef<Value> strides,
+      ArrayRef<Value> shapes, Value pitch, Type eltTy,
+      const SetVector<unsigned> &boundaryCheck, unsigned rowDim,
+      unsigned colDim, unsigned tileHeight, unsigned tileWidth,
+      unsigned vBlocks, unsigned packedElemSizeInBits, bool isTransposeRequired,
+      Location loc, ConversionPatternRewriter &rewriter,
+      TritonLLVMOpBuilder &b) const {
+    MLIRContext *ctx = rewriter.getContext();
+    unsigned c = isTransposeRequired ? rowDim : colDim;
+    unsigned r = isTransposeRequired ? colDim : rowDim;
+
+    for (auto [dim, offsetPair] : llvm::enumerate(offsets)) {
+      Value adjustedOffset = b.add(baseOffsets[dim], offsetPair.second);
+
+      bool hasBoundaryCheck = boundaryCheck.contains(dim);
+      if (dim == r)
+        adjustRowDimension(adjustedOffset, offsetY, adjustedBaseHeight,
+                           addrElem, pitch, tileHeight, hasBoundaryCheck, b,
+                           ctx);
+      else if (dim == c)
+        adjustColDimension(adjustedOffset, offsetX, adjustedBaseWidth, addrElem,
+                           eltTy, vBlocks, tileWidth, packedElemSizeInBits,
+                           hasBoundaryCheck, b, ctx);
+      else
+        adjustOtherDimension(adjustedOffset, addrElem, pred, eltTy, strides,
+                             shapes, dim, hasBoundaryCheck, loc, rewriter, b);
+    }
+  }
+
+public:
   LogicalResult
   matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
@@ -1789,49 +1885,18 @@ struct LoadOpToBlockIOConversion
       Value offsetX, offsetY;
       Value adjustedBaseWidth = baseWidth, adjustedBaseHeight = baseHeight;
       Value pred;
-      if (isTensorPointerType(ptr.getType())) {
-        unsigned c = isTransposeRequired ? rowDim : colDim;
-        unsigned r = isTransposeRequired ? colDim : rowDim;
 
+      if (isTensorPointerType(ptr.getType())) {
         // To prevent triggering hardware boundary protection, expand the base
         // shape sufficiently when boundary check is absent.
         SetVector<unsigned> boundaryCheck(op.getBoundaryCheck().begin(),
                                           op.getBoundaryCheck().end());
 
-        for (auto [dim, offset] : llvm::enumerate(offsets)) {
-          Value off = b.add(baseOffsets[dim], offset.second);
-          if (dim == r) {
-            if (boundaryCheck.contains(r)) {
-              offsetY = off;
-            } else {
-              adjustedBaseHeight = b.i32_val(tileHeight);
-              // Use i8_ty as pitch is in number of bytes.
-              off = b.mul(off, pitch);
-              addrElem = b.gep(ptr_ty(ctx, 1), i8_ty, addrElem, off);
-              offsetY = b.i32_val(0);
-            }
-          } else if (dim == c) {
-            if (boundaryCheck.contains(dim)) {
-              offsetX = off;
-            } else {
-              adjustedBaseWidth = b.i32_val(std::max(
-                  64u, vBlocks * tileWidth * (packedElemSizeInBits / 8)));
-              // The offsetX is number of elements instead of packed elements.
-              addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, off);
-              offsetX = b.i32_val(0);
-            }
-          } else {
-            // Add the offsets of other dim to the base.
-            off = b.zext(i64_ty, off);
-            Value p = b.mul(off, strides[dim]);
-            addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, p);
-            if (boundaryCheck.contains(dim)) {
-              // Add boundary checking for other dims with predication.
-              pred =
-                  maybeAnd(rewriter, loc, pred, b.icmp_ult(off, shapes[dim]));
-            }
-          }
-        }
+        computeTensorPointerOffsets(
+            addrElem, offsetX, offsetY, adjustedBaseWidth, adjustedBaseHeight,
+            pred, offsets, baseOffsets, strides, shapes, pitch, eltTy,
+            boundaryCheck, rowDim, colDim, tileHeight, tileWidth, vBlocks,
+            packedElemSizeInBits, isTransposeRequired, loc, rewriter, b);
       } else {
         addrElem = targetInfo.shuffleIdx(rewriter, loc, addrElem, 0);
 
@@ -1839,15 +1904,16 @@ struct LoadOpToBlockIOConversion
         // of the BLOCK.
         offsetX = offsets[isTransposeRequired ? rowDim : colDim].second;
         offsetY = b.i32_val(0);
-        Value negOffsetX = b.sub(b.i32_val(0), offsetX);
-        addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, negOffsetX);
+        Value negativeOffsetX = b.sub(b.i32_val(0), offsetX);
+        addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, negativeOffsetX);
         // The offset is in number of original elements. So we need to scale it
         // by element bytes size.
         adjustedBaseWidth =
             b.add(baseWidth, b.mul(offsetX, b.i32_val(elemSizeInBits / 8)));
-        adjustedBaseWidth = b.umax(adjustedBaseWidth, b.i32_val(64));
-        // Use the top-left address and mask of the block to store the data.
-        // (The first value refer by the registerIdx.)
+        adjustedBaseWidth =
+            b.umax(adjustedBaseWidth, b.i32_val(MIN_BASE_WIDTH_BYTES));
+        // Use the top-left address and mask of the block to load the data.
+        // (The first value referred to by the registerIdx.)
         if (maskElems.size()) {
           pred =
               targetInfo.shuffleIdx(rewriter, loc, maskElems[registerIdx], 0);
