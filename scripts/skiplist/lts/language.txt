@@ -5,3 +5,6 @@ python/test/unit/language/test_core.py::test_tensor_atomic_add_non_exclusive_off
 python/test/unit/language/test_core.py::test_tensor_atomic_add_shift_1[r".*bfloat16.*"]@regexp
 python/test/unit/language/test_core.py::test_tensor_atomic_add_access_patterns[r".*bfloat16.*"]@regexp
 python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_reduce[r".*bfloat16.*"]@regexp
+# Below tests require AGAMA 1208 or above
+python/test/unit/language/test_core.py::test_side_effectful_reduction
+python/test/unit/language/test_core.py::test_side_effectful_reduction_2d
