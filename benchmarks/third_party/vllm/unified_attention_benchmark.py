@@ -1219,7 +1219,7 @@ SLIDING_WINDOWS = [None, 256]
 ATTENTION_CONFIGS_BF16 = []
 config_matrix = product(MODEL_CONFIGS, SEQ_LENS, SLIDING_WINDOWS, SOFT_CAPS, NUM_BLOCKS, MMAP_BLOCK_SIZES)
 for x_val in config_matrix:
-    if x_val[4] is not None and x_val[4].itemsize < 2 and x_val[-1] < 32:
+    if x_val[3] is not None and x_val[3].itemsize < 2 and x_val[-1] < 32:
         print("Skipping configuration due to incompatible q_dtype and block_size.")
         continue
 
