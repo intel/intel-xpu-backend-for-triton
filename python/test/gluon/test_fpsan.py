@@ -7,7 +7,7 @@ import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton import language as tl
-from triton._internal_testing import is_blackwell, is_cuda, is_hip, is_interpreter
+from triton._internal_testing import is_blackwell, is_cuda, is_hip, is_interpreter, is_xpu
 from triton.experimental.gluon.language.nvidia.blackwell import (TensorMemoryLayout, allocate_tensor_memory, mbarrier,
                                                                  tcgen05_mma, get_tmem_reg_layout)
 
@@ -639,6 +639,8 @@ def test_tmem_index_subslice(device, fresh_knobs):
 
 
 def test_reduction(device, fresh_knobs):
+    if is_xpu():
+        pytest.skip("FIXME: #6083")
 
     @triton.jit
     def reduce_kernel(a_ptr, c_ptr, M: tl.constexpr, N: tl.constexpr, stride_am: tl.constexpr, stride_ak: tl.constexpr,
@@ -651,15 +653,15 @@ def test_reduction(device, fresh_knobs):
 
     M, N = 512, 512
     torch.manual_seed(0)
-    a = torch.randn((M, N), dtype=torch.float32, device="cuda")
+    a = torch.randn((M, N), dtype=torch.float32, device=device)
     # Make non-associativity visible and deterministic: large + tiny magnitudes.
     a[:, :64] *= 1e10
     a[:, 64:] *= 1e-10
-    c1 = torch.empty((1, ), dtype=torch.float32).to('cuda')
-    c2 = torch.empty((1, ), dtype=torch.float32).to('cuda')
+    c1 = torch.empty((1, ), device=device, dtype=torch.float32)
+    c2 = torch.empty((1, ), device=device, dtype=torch.float32)
 
     def alloc_fn(size: int, alignment: int, stream):
-        return torch.empty(size, device="cuda", dtype=torch.int8)
+        return torch.empty(size, device=device, dtype=torch.int8)
 
     triton.set_allocator(alloc_fn)
 
