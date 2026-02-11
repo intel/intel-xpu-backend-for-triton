@@ -4,6 +4,7 @@ add_triton_library(TritonIntelTransforms
   RemoveMasks.cpp
   StrideVersioning.cpp
   BlockPointerToTensorDesc.cpp
+  SimplifySignedArithmetic.cpp
   TensorDescToBlockPointer.cpp
 
   DEPENDS

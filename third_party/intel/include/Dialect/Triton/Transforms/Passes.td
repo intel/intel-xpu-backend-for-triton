@@ -158,4 +158,32 @@ def TritonIntelStrideVersioning
   ];
 }
 
+def TritonIntelSimplifySignedArithmetic
+    : Pass<"triton-intel-simplify-signed-arithmetic", "mlir::ModuleOp"> {
+  let summary = "Simplify signed arithmetic ops by converting to unsigned when operands are non-negative";
+
+  let description = [{
+    Converts signed arithmetic operations (remsi, divsi) to their unsigned
+    equivalents when operands are provably non-negative. This enables simpler
+    code generation (e.g., power-of-2 remainder becomes bitwise AND, division
+    becomes logical shift right).
+
+    Conversions:
+    - arith.remsi -> arith.remui (when dividend >= 0, divisor > 0)
+    - arith.divsi -> arith.divui (when dividend >= 0, divisor > 0)
+
+    Sources of non-negative values:
+    - tt.get_program_id (always [0, 2^31-1])
+    - tt.get_num_programs (always [1, 2^31])
+    - tt.make_range(start, end) with start >= 0
+    - Non-negative integer constants
+    - arith.addi/muli of non-negative operands
+    - arith.divsi/divui/remui with non-negative dividend and positive divisor
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::TritonDialect"
+  ];
+}
+
 #endif // TRITON_DIALECT_TRITON_INTEL_TRANSFORMS_PASSES
