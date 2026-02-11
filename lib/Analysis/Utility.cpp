@@ -24,6 +24,33 @@ namespace mlir {
 using namespace triton;
 using namespace triton::gpu;
 
+SmallVector<unsigned> ReduceOpHelper::getOrderWithAxisAtBeginning() {
+  auto order = toLinearEncoding(srcTy).getOrder();
+  auto it = std::find(order.begin(), order.end(), axis);
+  // delete the axis from order
+  order.erase(it);
+  // insert axis at the beginning of order
+  order.insert(order.begin(), axis);
+  return order;
+}
+
+// Thread offset is the thread index offset of two adjacent threads on the
+// reduction axis within the warp.
+unsigned ReduceOpHelper::getThreadOffsetOnReductionAxis() {
+  auto *ctx = srcEncoding.getContext();
+  auto linearLayout = toLinearLayout(srcTy);
+  auto kLane = mlir::StringAttr::get(ctx, "lane");
+  const auto &bases = linearLayout.getBases();
+  const auto &lanes = bases.find(kLane)->second;
+  auto offset = 1;
+  for (const auto &lane : lanes) {
+    if (lane[axis] != 0)
+      break;
+    offset *= 2;
+  }
+  return offset;
+}
+
 // Cases where distributed shared memory is not required in ConvertLayout:
 // (1) numCTAs == 1
 // (2) numCTAs > 1 but srcCGALayout == dstCGALayout
@@ -79,6 +106,29 @@ unsigned ReduceOpHelper::getIntraWarpSizeWithUniqueData() {
 
 bool ReduceOpHelper::isWarpSynchronous() {
   return getWarpsPerCTA(srcEncoding, srcShape)[axis] == 1;
+}
+
+SmallVector<unsigned> ReduceOpHelper::getScratchRepShape() {
+  SmallVector<unsigned> smemShape;
+  // This case doesn't need inter-warp communication
+  if (isWarpSynchronous())
+    return {0, 0};
+
+  smemShape = convertType<unsigned>(srcShape);
+  smemShape[axis] = getInterWarpSizeWithUniqueData();
+
+  return smemShape;
+}
+
+unsigned ReduceOpHelper::getScratchSizeInBytes() {
+  auto smemShape = getScratchRepShape();
+  auto elems = product<unsigned>(smemShape);
+
+  unsigned bytesPerElem = 0;
+  for (const auto &ty : srcElementTypes) {
+    bytesPerElem += ceil<unsigned>(ty.getIntOrFloatBitWidth(), 8);
+  }
+  return bytesPerElem * elems;
 }
 
 bool ReduceOpHelper::isReduceWithinCTA() {

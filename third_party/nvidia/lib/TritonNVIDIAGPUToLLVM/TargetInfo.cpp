@@ -464,6 +464,12 @@ Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
 }
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
+                            unsigned numLaneToReduce,
+                            unsigned interleave) const {
+  llvm_unreachable("FIXME: implement warpReduce for Intel GPU");
+}
+bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
+                            SmallVector<Value> &acc, triton::ReduceOp op,
                             unsigned reduceLaneIdMask) const {
 
   // Based on benchmarking on A100 redux op gives a speed up only when doing
