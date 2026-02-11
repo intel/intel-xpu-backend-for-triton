@@ -24,7 +24,50 @@ if (NOT SPIRVToLLVMTranslator_FOUND)
             set(LLVM_DIR "${LLVM_LIBRARY_DIR}/cmake/llvm" CACHE PATH "Path to LLVM build dir " FORCE)
             set(LLVM_SPIRV_BUILD_EXTERNAL YES CACHE BOOL "Build SPIRV-LLVM Translator as external" FORCE)
 
-            FetchContent_MakeAvailable(spirv-llvm-translator)
+            # Populate and add SPIRV-LLVM-Translator in two steps rather than
+            # using FetchContent_MakeAvailable(). MakeAvailable() performs
+            # populate + add_subdirectory() in one call, which immediately
+            # configures the subproject. We need a hook to apply patches after
+            # the repo is fetched but before CMake processes the project's
+            # CMakeLists.txt (otherwise patches affecting the configuration
+            # would be applied too late).
+            FetchContent_Populate(spirv-llvm-translator)
+
+            # Apply a patch to the SPIRV-LLVM-Translator project to ensure that
+            # its configuration finds the LLVM config package (LLVMConfig.cmake)
+            # used by the main project. This avoids falling back to the find
+            # module (FindLLVM.cmake). We need this patch to support builds with
+            # LLVM shared libraries because FindLLVM.cmake always invokes
+            # `llvm-config --link-static` and requires that static LLVM
+            # libraries are available.
+            message(STATUS "Applying spirv-llvm-translator-llvm-config.patch to SPIRV-LLVM-Translator")
+            execute_process(
+                COMMAND git apply --check ${CMAKE_CURRENT_LIST_DIR}/spirv-llvm-translator-llvm-config.patch
+                WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}
+                ERROR_QUIET
+                RESULT_VARIABLE PATCH_RESULT
+            )
+            if(PATCH_RESULT EQUAL 0)
+                execute_process(
+                        COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/spirv-llvm-translator-llvm-config.patch
+                        WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}
+                        RESULT_VARIABLE PATCH_RESULT
+                )
+            else()
+                execute_process( # Check if the patch is already applied
+                        COMMAND git apply --reverse --check ${CMAKE_CURRENT_LIST_DIR}/spirv-llvm-translator-llvm-config.patch
+                        WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}
+                        RESULT_VARIABLE PATCH_RESULT
+                )
+            endif()
+            if(NOT PATCH_RESULT EQUAL 0)
+                message(FATAL_ERROR "Failed to apply spirv-llvm-translator-llvm-config.patch to SPIRV-LLVM-Translator")
+            endif()
+
+            add_subdirectory(
+                ${spirv-llvm-translator_SOURCE_DIR}
+                ${spirv-llvm-translator_BINARY_DIR}
+            )
 
             # FIXME: Don't apply patch when LTS driver is updated.
             execute_process(
