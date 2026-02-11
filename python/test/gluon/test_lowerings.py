@@ -144,7 +144,7 @@ def _funky_reduce_layouts():
 @pytest.mark.parametrize("src_layout, axis", list(_funky_reduce_layouts()))
 def test_reduce_funky_layout(src_layout, axis, device):
     if not is_cuda():
-        pytest.skip("requires CUDA")
+        pytest.xfail("requires CUDA")
     if THREADS_PER_WARP != 32:
         pytest.skip("requires 32-thread warps")
 
