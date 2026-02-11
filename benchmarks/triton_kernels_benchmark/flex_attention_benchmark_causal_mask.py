@@ -78,7 +78,7 @@ def create_mask_cached(score_mod, B, H, M, N, device=DEVICE):
 
 
 def causal_mask(_, __, q_idx, kv_idx):
-    return q_idx >= kv_idx
+    return q_idx < kv_idx
 
 
 def _worker_wrapper(fn, args, queue, done_event):
