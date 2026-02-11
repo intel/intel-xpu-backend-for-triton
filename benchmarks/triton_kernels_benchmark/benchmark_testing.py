@@ -48,6 +48,15 @@ def synchronize():
         torch.xpu.synchronize()
 
 
+def get_total_gpu_memory_bytes():
+    if torch.xpu.is_available():
+        return torch.xpu.get_device_properties(torch.xpu.current_device()).total_memory
+    if torch.cuda.is_available():
+        return torch.cuda.get_device_properties(torch.cuda.current_device()).total_memory
+
+    raise RuntimeError("No supported GPU device found.")
+
+
 def _summarize_statistics(times, quantiles, return_mode):
     if quantiles is not None:
         ret = torch.quantile(times, torch.tensor(quantiles, dtype=torch.float)).tolist()
