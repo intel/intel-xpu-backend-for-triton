@@ -11,6 +11,17 @@
 #include "SPIRVTargetInfo.h"
 #include "Utility.h"
 
+#if defined(_MSC_VER) && !defined(__clang__)
+// from https://gist.github.com/pps83/3210a2f980fd02bb2ba2e5a1fc4a2ef0
+#include <intrin.h>
+
+static int __builtin_ctz(unsigned x) {
+  unsigned long r;
+  _BitScanForward(&r, x);
+  return static_cast<int>(r);
+}
+#endif
+
 using namespace mlir;
 
 namespace mlir::triton::intel {
@@ -110,12 +121,46 @@ Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
 
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
-                            unsigned numLaneToReduce,
-                            unsigned interleave) const {
+                            unsigned reduceLaneIdMask) const {
+  /**
+  The reduceLaneIdMask is the bit map of the bases of the linear layout to be
+  reducted with in warp. Here is the code piecies of ReduceOpToLLVM.cpp:
+  ```
+    const auto &laneBases = layout.getBases().lookup(kLane);
+    unsigned reduceLaneIdMask = 0;
+    for (unsigned bit = 0; bit < laneBases.size(); ++bit) {
+      if (laneBases[bit][op.getAxis()] != 0) {
+        reduceLaneIdMask |= 1u << bit;
+      }
+    }
+  ```
+  For example of warp size=32:
+  1. For a 32-lane reduction with interleave 1, the reduce of lanes are [0, 1,
+  2, 3, 4, 5, 6, 7, ... 31], and the reduceLaneIdMask is 0b11111.
+  2. For a 4-lane reduction with interleave 1, the reduce of lanes are [0, 1, 2,
+  3], [4, 5, 6, 7], ... [28, 29, 30 ,31], and the reduceLaneIdMask is 0b00011.
+  3. For a 4-lane reduction with interleave 2, the reduce of lanes are [0, 2, 4,
+  6], [1, 3, 5, 7], ... [24, 26, 28 ,30], [25, 27, 29 ,31], and the
+  reduceLaneIdMask is 0b00110. For other cases there is 0 in the middle of 1's,
+  e.g: 0b00101. the reduce of lanes are [0, 1, 4, 5], ..., It is not supported
+  by single intrinsic trivally.
+  */
+  assert(reduceLaneIdMask && "reduceLaneIdMask cannot be 0");
+  unsigned tailingZeros = __builtin_ctz(reduceLaneIdMask);
+  unsigned interleave = 0x1 << tailingZeros;
+  unsigned bitMap = reduceLaneIdMask >> tailingZeros;
+  unsigned numLaneToReduce = 1;
+  while (bitMap & 0x1) {
+    numLaneToReduce <<= 1;
+    bitMap >>= 1;
+  }
+  if (bitMap)
+    return false;
   // No horizontal reduce required.
   if (numLaneToReduce == 1)
     return false;
   // Horizontal reduce with interleave stride not supported.
+  // TODO: It can be supported.
   if (interleave > 1)
     return false;
   // Check if it is a simple reduce operation supported by
