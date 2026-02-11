@@ -285,8 +285,8 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
         raise NotImplementedError(f'Unsupported provider {provider}')
 
     def flops_triangle(length):
-        # the triangle without diagonal.
-        return ((length - 1) * length // 2) * 2  # mul + add
+        # the triangle with diagonal.
+        return ((length + 1) * length // 2) * 2  # mul + add
 
     def flops_rectangle(m, n, k):
         return m * n * k * 2  # mul + add
