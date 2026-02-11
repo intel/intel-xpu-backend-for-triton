@@ -10,6 +10,7 @@ from torch.nn.attention.flex_attention import (
 import torch
 import torch.nn.functional as F
 from torch.nn.attention import SDPBackend, sdpa_kernel
+from torch.nn.attention.bias import causal_lower_right
 import torch._inductor
 import torch._inductor.lowering
 import torch._inductor.kernel
@@ -74,14 +75,25 @@ def create_mask_cached(score_mod, B, H, M, N, device=DEVICE):
     return mask
 
 
-def causal_mask(_, __, q_idx, kv_idx):
-    return q_idx >= kv_idx
+def create_causal_mask_fn(N_CTX_q, N_CTX_kv):
+    offset = N_CTX_kv - N_CTX_q
+
+    def causal_mask(_, __, q_idx, kv_idx):
+        # Bottom-right aligned lower triangular mask
+        # For square: offset=0, gives q_idx >= kv_idx (standard causal)
+        # For non-square: offset>0, shifts alignment to bottom-right
+        return q_idx >= (kv_idx - offset)
+
+    return causal_mask
 
 
-def get_attn_bias(use_causal, N_CTX_q, N_CTX_kv, device):
+def get_attn_bias(provider, use_causal, N_CTX_q, N_CTX_kv, device):
     if use_causal:
         return None
-    return create_mask_cached(causal_mask, 1, 1, N_CTX_q, N_CTX_kv, device=device)
+    if provider == 'sycl-tla':
+        return causal_lower_right(N_CTX_q, N_CTX_kv)
+    causal_mask_fn = create_causal_mask_fn(N_CTX_q, N_CTX_kv)
+    return create_mask_cached(causal_mask_fn, 1, 1, N_CTX_q, N_CTX_kv, device=device)
 
 
 def get_sdpa_benchmark(q, k, v, attn_bias, use_causal, sm_scale, H_q, H_kv, D_HEAD_qk, D_HEAD_v, MODE, provider,
@@ -91,10 +103,6 @@ def get_sdpa_benchmark(q, k, v, attn_bias, use_causal, sm_scale, H_q, H_kv, D_HE
     # - Require D_HEAD_qk == D_HEAD_v (no support for different head dimensions)
     # - OneDNN doesn't support backward pass for SDPA
     if D_HEAD_qk != D_HEAD_v or (provider == 'onednn' and MODE == 'bwd'):
-        return None
-    if provider == 'sycl-tla' and not use_causal:
-        # sycl-tla doesn't support upper-left non-square causal mask
-        # so it doesn't make sense to compare results
         return None
 
     backend = SDPBackend.FLASH_ATTENTION if provider == 'sycl-tla' else SDPBackend.OVERRIDEABLE
@@ -194,11 +202,12 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
     v = torch.randn((Z, H_kv, N_CTX_kv, D_HEAD_v), device=DEVICE, dtype=dtype, requires_grad=MODE == 'bwd')
     sm_scale = 0.125
 
-    block_mask = create_block_mask_cached(causal_mask, 1, 1, N_CTX_q, N_CTX_kv, device=DEVICE)
+    block_mask = create_block_mask_cached(create_causal_mask_fn(N_CTX_q, N_CTX_kv), 1, 1, N_CTX_q, N_CTX_kv,
+                                          device=DEVICE)
 
     if provider in ('sycl-tla', 'onednn'):
         use_causal = N_CTX_q == N_CTX_kv
-        attn_bias = get_attn_bias(use_causal, N_CTX_q, N_CTX_kv, DEVICE)
+        attn_bias = get_attn_bias(provider, use_causal, N_CTX_q, N_CTX_kv, DEVICE)
         sdpa_result = get_sdpa_benchmark(q, k, v, attn_bias, use_causal, sm_scale, H_q, H_kv, D_HEAD_qk, D_HEAD_v, MODE,
                                          provider)
         if sdpa_result is None:
@@ -232,18 +241,12 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
             is_reference_available = False
 
         if MODE == 'bwd':
-            if N_CTX_q != N_CTX_kv and is_reference_available:
-                print(
-                    f'Skipping correctness check: {ref_results_provider} Flash Attention does not support non-square attention masks'
-                )
-                is_reference_available = False
-
             backwards_grad = torch.randn(Z, H_q, N_CTX_q, D_HEAD_v, dtype=dtype, device=DEVICE,
                                          requires_grad=MODE == 'bwd')
 
             if is_reference_available:
                 use_causal = N_CTX_q == N_CTX_kv
-                attn_bias_ref = get_attn_bias(use_causal, N_CTX_q, N_CTX_kv, DEVICE)
+                attn_bias_ref = get_attn_bias(ref_results_provider, use_causal, N_CTX_q, N_CTX_kv, DEVICE)
 
                 sdpa_result = get_sdpa_benchmark(q, k, v, attn_bias_ref, use_causal, sm_scale, H_q, H_kv, D_HEAD_qk,
                                                  D_HEAD_v, MODE, ref_results_provider, backwards_grad=backwards_grad)
@@ -265,12 +268,8 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
             triton_fn = lambda: torch.autograd.grad((triton_o, ), (q, k, v), backwards_grad, retain_graph=True)
         else:
             if is_reference_available:
-                if N_CTX_q != N_CTX_kv:
-                    # sycl-tla doesn't support upper-left for non-square causal masks
-                    ref_results_provider = 'onednn'
-
                 use_causal = N_CTX_q == N_CTX_kv
-                attn_bias_ref = get_attn_bias(use_causal, N_CTX_q, N_CTX_kv, DEVICE)
+                attn_bias_ref = get_attn_bias(ref_results_provider, use_causal, N_CTX_q, N_CTX_kv, DEVICE)
 
                 sycl_fn = get_sdpa_benchmark(q, k, v, attn_bias_ref, use_causal, sm_scale, H_q, H_kv, D_HEAD_qk,
                                              D_HEAD_v, MODE, ref_results_provider)
@@ -296,11 +295,23 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
         # decoding ignore the causal mask since only one query is involved.
         qk_flops = H_q * N_CTX_q * N_CTX_kv * D_HEAD_qk * 2  # mul + add.
         pv_flops = H_q * N_CTX_q * D_HEAD_v * N_CTX_kv * 2  # mul + add.
-    else:
-        qk_flops = H_q * (flops_triangle(min(N_CTX_q, N_CTX_kv)) * D_HEAD_qk +
-                          flops_rectangle(max(N_CTX_q, N_CTX_kv) - N_CTX_kv, N_CTX_kv, D_HEAD_qk))
-        pv_flops = H_q * (flops_triangle(min(N_CTX_q, N_CTX_kv)) * D_HEAD_v +
-                          flops_rectangle(max(N_CTX_q, N_CTX_kv) - N_CTX_kv, D_HEAD_v, N_CTX_kv))
+    elif N_CTX_q == N_CTX_kv:
+        # Square matrix - standard causal mask (lower triangle)
+        qk_flops = H_q * flops_triangle(N_CTX_q) * D_HEAD_qk
+        pv_flops = H_q * flops_triangle(N_CTX_q) * D_HEAD_v
+    elif N_CTX_q < N_CTX_kv:
+        # More keys than queries - bottom-right aligned: rectangle + triangle
+        # Each query q can attend to keys [0, q + offset] where offset = N_CTX_kv - N_CTX_q
+        # This forms: all queries attend to first (N_CTX_kv - N_CTX_q) keys (rectangle)
+        #             plus a lower triangle for the remaining N_CTX_q x N_CTX_q region
+        rect_width = N_CTX_kv - N_CTX_q
+        qk_flops = H_q * (flops_rectangle(N_CTX_q, rect_width, D_HEAD_qk) + flops_triangle(N_CTX_q) * D_HEAD_qk)
+        pv_flops = H_q * (flops_rectangle(N_CTX_q, rect_width, D_HEAD_v) + flops_triangle(N_CTX_q) * D_HEAD_v)
+    else:  # N_CTX_q > N_CTX_kv
+        # More queries than keys - bottom-right aligned: only last N_CTX_kv queries have attention
+        # First (N_CTX_q - N_CTX_kv) queries are fully masked out
+        qk_flops = H_q * flops_triangle(N_CTX_kv) * D_HEAD_qk
+        pv_flops = H_q * flops_triangle(N_CTX_kv) * D_HEAD_v
 
     tflops = lambda mean: Z * (qk_flops + pv_flops) * (1e-12) / (mean * 1e-3)
 
