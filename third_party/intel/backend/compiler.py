@@ -273,6 +273,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
         passes.ttir.add_loop_unroll(pm)
+        # FIXME: move add_rewrite_tensor_descriptor_to_pointer back to be consistent with other backends.
         intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
         passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
         pm.run(mod, 'make_ttir')
