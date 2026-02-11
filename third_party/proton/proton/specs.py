@@ -18,6 +18,12 @@ amd_bps_by_arch = {
     'gfx950': 8.0 * 1e12,
 }
 
+xpu_arch_to_mem_type_multiplier = {
+    "pvc": 2,
+    "dg2": 8,
+    "bmg": 8,
+}
+
 # FP8 Matrix Performance(FLOPS/clock/CU)
 # For gfx90a we use the performance of INT8 since it doesn't support FP8 matrix operations.
 amd_fp8_flops_by_arch = {'gfx90a': 1024, 'gfx942': 4096, 'gfx950': 8192}
@@ -64,6 +70,8 @@ def max_bps(device_type, arch, bus_width, memory_clock_rate):
     """
     if device_type == "CUDA":
         return 2 * bus_width * memory_clock_rate * 1e3 / 8
-    else:
-        assert device_type == "HIP"
+    elif device_type == "HIP":
         return amd_bps_by_arch[arch]
+    else:
+        assert device_type == "XPU"
+        return xpu_arch_to_mem_type_multiplier[arch] * bus_width * memory_clock_rate * 1e3 / 8

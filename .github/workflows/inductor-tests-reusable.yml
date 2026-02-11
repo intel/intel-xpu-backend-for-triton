@@ -37,7 +37,7 @@ env:
 jobs:
   build:
     name: Test
-    runs-on: ${{ startsWith(inputs.runner_label, 'igc') && fromJSON(format('["linux","{0}"]', inputs.runner_label)) || fromJSON(format('["linux","rolling","{0}","{1}"]', inputs.runner_label || 'max1100', inputs.runner_version)) }}
+    runs-on: ${{ (inputs.runner_label == 'lts' || contains(inputs.runner_label, 'igc')) && fromJSON(format('["linux","{0}"]', inputs.runner_label)) || fromJSON(format('["linux","rolling","{0}","{1}"]', inputs.runner_label || 'max1100', inputs.runner_version)) }}
     timeout-minutes: 960
     defaults:
       run:
@@ -50,7 +50,7 @@ jobs:
           EOF
 
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Install Python
         uses: actions/setup-python@v6
@@ -68,7 +68,8 @@ jobs:
 
       - name: Install python test dependencies
         run: |
-          pip install pandas scipy tqdm
+          pip install 'pandas<3.0' scipy tqdm
+          pip uninstall pytest-skip
 
       - name: Run inductor tests
         run: |
@@ -78,6 +79,7 @@ jobs:
 
       - name: Report environment details
         if: always()
+        timeout-minutes: 1
         run: |
           source ./scripts/capture-hw-details.sh --quiet
           TIMESTAMP=$(date '+%Y%m%d%H%M%S')
@@ -102,7 +104,7 @@ jobs:
 
       - name: Upload test logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: logs-${{ env.PYTHON_VERSION }}
           path: pytorch/test/test-reports

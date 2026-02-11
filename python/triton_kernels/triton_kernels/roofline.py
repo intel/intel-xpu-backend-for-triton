@@ -6,7 +6,7 @@ import torch
 import csv
 from dataclasses import dataclass
 import inspect
-from .target_info import is_hip, is_cuda
+from .target_info import is_hip, is_xpu, is_cuda, get_cdna_version, is_xpu_cri
 
 
 @dataclass
@@ -84,9 +84,15 @@ def compute_roofline(*args, \
 # -- plot roofline --
 
 
-def get_memset_tbps():
+def get_memset_tbps(device="cuda"):
     n_bytes = 1 << 32
-    buf = torch.empty(n_bytes, device="cuda", dtype=torch.uint8)
+    # FIXME: XPU CRI requires explicit device index, otherwise tensor memory
+    # is not recognized as USM device memory and memset fails. Also use smaller
+    # buffer size (1<<16 vs 1<<32) to avoid hangs/segfaults on CRI simulator
+    if is_xpu_cri():
+        n_bytes = 1 << 16
+        device = f'xpu:{torch.xpu.current_device()}'
+    buf = torch.empty(n_bytes, device=device, dtype=torch.uint8)
     stream0 = ctypes.c_void_p(0)
 
     if is_cuda():
@@ -103,10 +109,48 @@ def get_memset_tbps():
         memset_argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_size_t, ctypes.c_void_p]
         dptr = ctypes.c_void_p(buf.data_ptr())
         value = ctypes.c_int(0)
-    else:
-        raise RuntimeError("Unsupported platform: neither CUDA nor ROCm detected")
+    elif is_xpu():
+        from triton.backends.intel.driver import XPUDriver
 
-    lib = ctypes.CDLL(libname)
+        # Create a mock library object that wraps SYCL memset
+        class XPUSyclMemsetLib:
+
+            def __init__(self, buffer, driver):
+                self.buffer = buffer
+                self.driver = driver
+                self.utils = driver.utils
+
+            class MockMemsetFn:
+
+                def __init__(self, buffer, utils):
+                    self.buffer = buffer
+                    self.utils = utils
+                    self.argtypes = None  # Mock attribute
+                    self.restype = None  # Mock attribute
+
+                def __call__(self, dptr, value, size, stream):
+                    size_val = size.value if hasattr(size, 'value') else size
+                    driver.utils.memset(buf.data_ptr(), value, size_val)
+                    return 0
+
+            def __getattr__(self, name):
+                if name == "memset":
+                    return self.MockMemsetFn(self.buffer, self.utils)
+                raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+
+        driver = XPUDriver()
+
+        libname = "xpu_sycl_wrapper"
+        init_name = ""
+        memset_name = "memset"
+        memset_argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_size_t, ctypes.c_void_p]
+
+        lib = XPUSyclMemsetLib(buf, driver)
+        dptr = None
+        value = 0
+
+    if not is_xpu():
+        lib = ctypes.CDLL(libname)
 
     # optional init
     if hasattr(lib, init_name):
@@ -132,22 +176,30 @@ def get_memset_tbps():
     return tbps
 
 
-def get_cublas_tflops(dtype):
-    dtype = {"fp16": torch.float16, "bf16": torch.bfloat16, "fp8": torch.float8_e4m3fn}[dtype]
-    cublas_workspace = torch.empty(32 * 1024 * 1024, device="cuda", dtype=torch.uint8)
+def get_blas_tflops(dtype, workspace_size=32 * 1024 * 1024, device="cuda"):
+    workspace = torch.empty(workspace_size, device=device, dtype=torch.uint8)
     if is_cuda():
-        cublas = nvidia.cublas.CublasLt(cublas_workspace)
+        dtype = {"fp16": torch.float16, "bf16": torch.bfloat16, "fp8": torch.float8_e4m3fn}[dtype]
+        c_dtype = dtype
+        cublas = nvidia.cublas.CublasLt(workspace)
         bench_fn = cublas.matmul
     elif is_hip():
-        hipblas = amd.hipblas.HipblasLt(cublas_workspace)
+        cdna_version = get_cdna_version()
+        if cdna_version == 4:
+            dtype = {"fp16": torch.float16, "bf16": torch.bfloat16, "fp8": torch.float8_e4m3fn}[dtype]
+        elif cdna_version == 3:
+            dtype = {"fp16": torch.float16, "bf16": torch.bfloat16, "fp8": torch.float8_e4m3fnuz}[dtype]
+        else:
+            raise RuntimeError(f"Unsupported CDNA version: {cdna_version}")
+        c_dtype = dtype if dtype.itemsize == 2 else torch.float16
+        hipblas = amd.hipblas.HipblasLt(workspace)
         bench_fn = hipblas.matmul
     else:
         raise RuntimeError("Unsupported platform: neither CUDA nor ROCm detected")
-    device = "cuda"
     M, N, K = 8192, 8192, 8192
     a = torch.randn(M, K, device=device, dtype=torch.float32).to(dtype)
     b = torch.randn(K, N, device=device, dtype=torch.float32).to(dtype).T
-    c = torch.empty((M, N), device=device, dtype=dtype)
+    c = torch.empty((M, N), device=device, dtype=c_dtype)
     time_ms = triton.testing.do_bench(lambda: bench_fn(a, b, c), rep=1000)
     return 2 * M * N * K / time_ms * 1e-9
 
@@ -194,7 +246,7 @@ def plot_roofline(series, flops_dtype, out_path, max_tbps="memset", max_tflops="
         max_tbps = get_memset_tbps()
     if not isinstance(max_tflops, int):
         assert max_tflops == "cublas"
-        max_tflops = get_cublas_tflops(flops_dtype)
+        max_tflops = get_blas_tflops(flops_dtype)
 
     grey = "#7f7f7f"
     opints = [f / b for f, b in zip(flops_ref, bytes_ref)]  # arithmetic intensity per sample

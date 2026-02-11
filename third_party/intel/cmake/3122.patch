@@ -1,20 +1,29 @@
 diff --git a/lib/SPIRV/SPIRVWriter.cpp b/lib/SPIRV/SPIRVWriter.cpp
-index a124ba48c..3f46b5685 100644
+index 1a7dc7a0..6ed931c1 100644
 --- a/lib/SPIRV/SPIRVWriter.cpp
 +++ b/lib/SPIRV/SPIRVWriter.cpp
-@@ -397,6 +397,7 @@ SPIRVType *LLVMToSPIRVBase::transType(Type *T) {
-     }
+@@ -401,13 +401,17 @@ SPIRVType *LLVMToSPIRVBase::transType(Type *T) {
    }
  
-+#if 0
    if (T->isBFloatTy()) {
-     BM->getErrorLog().checkError(
-         BM->isAllowedToUseExtension(ExtensionID::SPV_KHR_bfloat16),
-@@ -406,6 +407,7 @@ SPIRVType *LLVMToSPIRVBase::transType(Type *T) {
-         "requires this extension");
-     return mapType(T, BM->addFloatType(16, FPEncodingBFloat16KHR));
+-    BM->getErrorLog().checkError(
+-        BM->isAllowedToUseExtension(ExtensionID::SPV_KHR_bfloat16),
+-        SPIRVEC_RequiresExtension,
+-        "SPV_KHR_bfloat16\n"
+-        "NOTE: LLVM module contains bfloat type, translation of which "
+-        "requires this extension");
+-    return mapType(T, BM->addFloatType(16, FPEncodingBFloat16KHR));
++    // Workaround for LTS2 driver.
++    const char *isLTS = std::getenv("INTEL_XPU_BACKEND_IS_LTS");
++    if (isLTS && std::tolower(isLTS[0]) == '0') {
++      BM->getErrorLog().checkError(
++          BM->isAllowedToUseExtension(ExtensionID::SPV_KHR_bfloat16),
++          SPIRVEC_RequiresExtension,
++          "SPV_KHR_bfloat16\n"
++          "NOTE: LLVM module contains bfloat type, translation of which "
++          "requires this extension");
++      return mapType(T, BM->addFloatType(16, FPEncodingBFloat16KHR));
++    }
    }
-+#endif
  
    if (T->isFloatingPointTy())
-     return mapType(T, BM->addFloatType(T->getPrimitiveSizeInBits()));

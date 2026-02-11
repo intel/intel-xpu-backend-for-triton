@@ -179,9 +179,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       for (Value val : inVals) {
         for (int32_t i = 0; i < numElems; ++i) {
           res.push_back(
-              rewriter
-                  .create<mlir::gpu::ShuffleOp>(loc, val, b.i32_val(i), width,
-                                                mlir::gpu::ShuffleMode::IDX)
+              mlir::gpu::ShuffleOp::create(rewriter, loc, val, b.i32_val(i),
+                                           width, mlir::gpu::ShuffleMode::IDX)
                   .getShuffleResult());
         }
       }
@@ -192,9 +191,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       for (int32_t i = 0; i < numElems; ++i) {
         for (Value val : inVals) {
           res.push_back(
-              rewriter
-                  .create<mlir::gpu::ShuffleOp>(loc, val, b.i32_val(i), width,
-                                                mlir::gpu::ShuffleMode::IDX)
+              mlir::gpu::ShuffleOp::create(rewriter, loc, val, b.i32_val(i),
+                                           width, mlir::gpu::ShuffleMode::IDX)
                   .getShuffleResult());
         }
       }
@@ -339,12 +337,12 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     unsigned offsetBitWidth = offsetType.getIntOrFloatBitWidth();
     Value subGroupId = getValueOrCreateCastToIndexLike(
         rewriter, loc, offsetType,
-        rewriter.create<mlir::gpu::SubgroupIdOp>(
-            loc, /*upper_bound=*/IntegerAttr{}));
+        mlir::gpu::SubgroupIdOp::create(rewriter, loc,
+                                        /*upper_bound=*/IntegerAttr{}));
     Value subGroupLocalId = getValueOrCreateCastToIndexLike(
         rewriter, loc, offsetType,
-        rewriter.create<mlir::gpu::LaneIdOp>(loc,
-                                             /*upper_bound=*/IntegerAttr{}));
+        mlir::gpu::LaneIdOp::create(rewriter, loc,
+                                    /*upper_bound=*/IntegerAttr{}));
     Value subGroupOffset =
         b.mul(subGroupId, b.int_val(offsetBitWidth, rowLength * numRows));
     Value subGroupBasePtr =
@@ -353,7 +351,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     Value base = subGroupBasePtr;
     // Store in matrix, transposed
     for (Value val : inVals) {
-      rewriter.create<TritonGEN::SubGroupBlockWriteOp>(loc, base, val);
+      TritonGEN::SubGroupBlockWriteOp::create(rewriter, loc, base, val);
       base = b.gep(base.getType(), elementType, base,
                    ArrayRef<LLVM::GEPArg>{rowLength},
                    LLVM::GEPNoWrapFlags::inbounds);

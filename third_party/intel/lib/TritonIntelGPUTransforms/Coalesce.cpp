@@ -66,7 +66,7 @@ private:
     llvm::SmallSetVector<Operation *, 32> memAccessesSameOrder;
     memAccessesSameOrder.insert(op);
     if (ptr.getDefiningOp()) {
-      for (Operation *use : mlir::multiRootGetSlice(op)) {
+      for (Operation *use : mlir::getSlice(op)) {
         Value val = getMemAccessPtr(use);
         if (!val || !matchesShape(val) || memAccessesSameOrder.contains(use))
           continue;
@@ -118,16 +118,15 @@ private:
     SmallVector<unsigned> sizePerThread(refTensorType.getRank(), 1);
     sizePerThread[order[0]] = perThread;
 
-    auto CTALayout = ttg::getCTALayout(refTensorType.getEncoding());
+    auto CGALayout = ttg::getCGALayout(refTensorType.getEncoding());
     layoutMap[op] = ttg::BlockedEncodingAttr::get(
         &getContext(), refTensorType.getShape(), sizePerThread, order, numWarps,
-        threadsPerWarp, CTALayout);
+        threadsPerWarp, CGALayout);
   }
 
   static RankedTensorType getNewType(RankedTensorType tensorType,
                                      Attribute encoding) {
-    return RankedTensorType::get(tensorType.getShape(),
-                                 tensorType.getElementType(), encoding);
+    return tensorType.cloneWithEncoding(encoding);
   }
 
   static bool filterUser(Operation *op) {
@@ -339,13 +338,13 @@ private:
       if (tensorType &&
           !isa<ttg::SharedEncodingTrait>(tensorType.getEncoding())) {
         RankedTensorType newType = getNewType(tensorType, encoding);
-        newArgs.push_back(builder.create<ttg::ConvertLayoutOp>(
-            op->getLoc(), newType, operand));
+        newArgs.push_back(ttg::ConvertLayoutOp::create(builder, op->getLoc(),
+                                                       newType, operand));
       } else {
         assert(tt::isTensorPointerType(operand.getType()) &&
                "Expecting operand to have blocked pointer type");
         std::optional<tt::MakeTensorPtrOp> defOp =
-            triton::intel::findDefiningMakeTensorPtrOp(operand);
+            tt::intel::findDefiningOpOfType<tt::MakeTensorPtrOp>(operand);
         if (!defOp) {
           LLVM_DEBUG(llvm::dbgs()
                      << "[" DEBUG_TYPE
@@ -378,8 +377,8 @@ private:
     for (size_t i = 0; i < op->getNumResults(); i++) {
       Value newResult = newOp->getResult(i);
       if (newTypes[i] != op->getResultTypes()[i]) {
-        newResult = builder.create<ttg::ConvertLayoutOp>(
-            op->getLoc(), op->getResult(i).getType(), newResult);
+        newResult = ttg::ConvertLayoutOp::create(
+            builder, op->getLoc(), op->getResult(i).getType(), newResult);
       }
       op->getResult(i).replaceAllUsesWith(newResult);
     }

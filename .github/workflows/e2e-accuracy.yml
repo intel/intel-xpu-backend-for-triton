@@ -125,17 +125,19 @@ jobs:
         dtype: ${{ fromJson(needs.setup.outputs.dtype) }}
       fail-fast: false
     uses: ./.github/workflows/e2e-reusable.yml
+    secrets:
+      HUGGING_FACE_HUB_TOKEN: ${{ secrets.HUGGING_FACE_HUB_TOKEN }}
     with:
-      pytorch_ref: ${{ inputs.pytorch_ref }}
+      pytorch_ref: ${{ inputs.pytorch_ref || '' }}
       suite: ${{ matrix.suite }}
       mode: ${{ matrix.mode }}
       test_mode: accuracy
       dtype: ${{ matrix.dtype }}
-      models: ${{ inputs.models }}
+      models: ${{ inputs.models || 'all' }}
       check_all_subset_models: ${{ inputs.check_all_subset_models || false }}
-      only_one_model: ${{ inputs.only_one_model }}
+      only_one_model: ${{ inputs.only_one_model || '' }}
       runner_label: ${{ inputs.runner_label || 'max1100' }}
-      TORCH_COMPILE_DEBUG: ${{ inputs.TORCH_COMPILE_DEBUG }}
+      TORCH_COMPILE_DEBUG: ${{ inputs.TORCH_COMPILE_DEBUG || '' }}
 
   summary:
     name: Aggregate and check results
@@ -144,22 +146,23 @@ jobs:
     if: always()
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
-      - name: Install Python (from pyenv)
-        uses: ./.github/actions/setup-pyenv-python
+      - name: Install Python
+        uses: ./.github/actions/setup-python
         with:
-          python-version: "3.10"
+          python_version: "3.10"
+          use_pyenv: true
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         with:
           path: separate-reports
           merge-multiple: true
 
       - name: Run aggregation script
         run: |
-          pip install pandas numpy
+          pip install 'pandas<3.0' numpy
           ls -la separate-reports
           echo "Local dir"
           ls -la ./
@@ -168,7 +171,7 @@ jobs:
              --output-dir aggregated-results
 
       - name: Upload aggregated results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         if: ${{ !cancelled() }}
         with:
           name: aggregated-results-${{ github.run_id }}
@@ -176,9 +179,9 @@ jobs:
           include-hidden-files: true
 
       - name: Check results against reference
-        if: ${{ inputs.models == 'all' && inputs.only_one_model == ''  && !cancelled()}}
+        if: ${{ (inputs.models || 'all') == 'all' && (inputs.only_one_model || '') == ''  && !cancelled()}}
         run: |
-          PYTORCH_XPU_OPS_REF="$(<.github/pins/e2e_reference_torch-xpu-ops.txt)"
+          PYTORCH_XPU_OPS_REF="$(curl -s https://raw.githubusercontent.com/pytorch/pytorch/$(<.github/pins/pytorch.txt)/third_party/xpu.txt)"
           git clone https://github.com/intel/torch-xpu-ops.git
           cd torch-xpu-ops
           git checkout $PYTORCH_XPU_OPS_REF

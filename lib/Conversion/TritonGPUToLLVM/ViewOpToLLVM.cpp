@@ -11,6 +11,16 @@ using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 namespace {
+
+Value bitOrPtrCast(Value val, Type type, TritonLLVMOpBuilder &b) {
+  if (isa<LLVM::LLVMPointerType>(val.getType()) &&
+      !isa<LLVM::LLVMPointerType>(type)) {
+    return b.ptrtoint(type, val);
+  } else {
+    return b.bitcast(val, type);
+  }
+}
+
 struct SplatOpConversion : public ConvertOpToLLVMPattern<triton::SplatOp> {
   using ConvertOpToLLVMPattern<triton::SplatOp>::ConvertOpToLLVMPattern;
   // Convert SplatOp or arith::ConstantOp with SplatElementsAttr to a
@@ -39,13 +49,13 @@ struct SplatOpConversion : public ConvertOpToLLVMPattern<triton::SplatOp> {
       unsigned ratio = srcBitWidth / cstBitWidth;
       Type intTy = IntegerType::get(elemType.getContext(), cstBitWidth);
       VectorType vecType = VectorType::get(ratio, intTy);
-      Value intCst = b.bitcast(constVal, intTy);
+      Value intCst = bitOrPtrCast(constVal, intTy, b);
       Value vec = b.undef(vecType);
       for (unsigned i = 0; i < ratio; ++i)
         vec = b.insert_element(vecType, vec, intCst, b.int_val(32, i));
       constVal = vec;
     }
-    auto llSrc = b.bitcast(constVal, srcType);
+    Value llSrc = bitOrPtrCast(constVal, srcType, b);
     size_t elemsPerThread = getTotalElemsPerThread(tensorTy);
     llvm::SmallVector<Value> elems(elemsPerThread, llSrc);
     return packLLElements(loc, typeConverter, elems, rewriter, resType);
@@ -83,11 +93,11 @@ struct ArithConstantSplatOpConversion
   matchAndRewrite(arith::ConstantOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto value = op.getValue();
-    if (!mlir::dyn_cast<SplatElementsAttr>(value))
+    auto values = dyn_cast<SplatElementsAttr>(op.getValue());
+    if (!values)
       return failure();
     auto loc = op->getLoc();
     LLVM::ConstantOp arithConstantOp;
-    auto values = mlir::dyn_cast<SplatElementsAttr>(op.getValue());
     auto elemType = values.getElementType();
     Attribute val;
     if (type::isFloat(elemType)) {
@@ -103,48 +113,11 @@ struct ArithConstantSplatOpConversion
     // LLVM IR.
     if (type::isFloat8(elemType))
       elemType = rewriter.getIntegerType(8);
-    auto constOp = rewriter.create<LLVM::ConstantOp>(loc, elemType, val);
+    auto constOp = LLVM::ConstantOp::create(rewriter, loc, elemType, val);
     auto typeConverter = getTypeConverter();
     auto llStruct = SplatOpConversion::convertSplatLikeOp(
         elemType, op.getType(), constOp, typeConverter, rewriter, loc);
     rewriter.replaceOp(op, llStruct);
-    return success();
-  }
-};
-
-// Convert arith::ConstantOp with an array DenseElementsAttr to a
-// LLVM::StructType value.
-struct ArithConstantArrayOpConversion
-    : public ConvertOpToLLVMPattern<arith::ConstantOp> {
-  using ConvertOpToLLVMPattern<arith::ConstantOp>::ConvertOpToLLVMPattern;
-  LogicalResult
-  matchAndRewrite(arith::ConstantOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    auto value = op.getValue();
-    if (!mlir::dyn_cast<DenseElementsAttr>(value))
-      return failure();
-    if (mlir::isa<SplatElementsAttr>(value))
-      return failure();
-    auto tensorTy = cast<RankedTensorType>(op.getType());
-    auto loc = op->getLoc();
-    auto values = mlir::dyn_cast<DenseElementsAttr>(op.getValue());
-    auto elemType = values.getElementType();
-    SmallVector<Value> llVals;
-    for (auto v : values.getValues<APInt>()) {
-      auto ll = rewriter.create<LLVM::ConstantOp>(loc, elemType, v);
-      llVals.push_back(ll);
-    }
-    size_t elemsPerThread = getTotalElemsPerThread(tensorTy);
-
-    if (elemsPerThread != llVals.size()) {
-      op->emitError(
-          "Right now we only support constant arrays with the same number of "
-          "elements as the number of threads per warp");
-      return failure();
-    }
-    auto llStruct =
-        packLLElements(loc, getTypeConverter(), llVals, rewriter, op.getType());
-    rewriter.replaceOp(op, {llStruct});
     return success();
   }
 };
@@ -159,19 +132,57 @@ struct CatOpConversion : public ConvertOpToLLVMPattern<CatOp> {
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     auto resultTy = cast<RankedTensorType>(op.getType());
-    unsigned elems = getTotalElemsPerThread(resultTy);
     auto typeConverter = getTypeConverter();
-    Type elemTy = typeConverter->convertType(resultTy.getElementType());
-    SmallVector<Type> types(elems, elemTy);
-    // unpack input values
+
+    // Note: We must explicitly handle broadcasted registers. The LLVM lowering
+    // generally represents broadcasted register bits by *duplicating* elements
+    // in the LLVM struct. Many conversions operate on a "stripped" (no-bcast)
+    // view and then re-introduce broadcasting at the end (see
+    // ConvertLayoutOpConversion).
+    StringAttr kReg = StringAttr::get(rewriter.getContext(), "register");
+
+    // Unpack input values.
     auto lhsVals = unpackLLElements(loc, adaptor.getLhs(), rewriter);
     auto rhsVals = unpackLLElements(loc, adaptor.getRhs(), rewriter);
+
+    // Strip broadcasted registers from inputs.
+    auto lhsTy = cast<RankedTensorType>(op.getLhs().getType());
+    auto rhsTy = cast<RankedTensorType>(op.getRhs().getType());
+    auto lhsLayout = toLinearLayout(lhsTy);
+    auto rhsLayout = toLinearLayout(rhsTy);
+    auto removeBroadcastLhs = actionRemoveBroadcastedRegs(lhsLayout);
+    auto removeBroadcastRhs = actionRemoveBroadcastedRegs(rhsLayout);
+    if (!removeBroadcastLhs.isIdentity())
+      lhsVals = removeBroadcastLhs.apply(lhsVals);
+    if (!removeBroadcastRhs.isIdentity())
+      rhsVals = removeBroadcastRhs.apply(rhsVals);
+
+    // Compute the expected non-broadcast register count for the result.
+    auto dstLayout = toLinearLayout(resultTy);
+    auto removeBroadcastDst = actionRemoveBroadcastedRegs(dstLayout);
+    auto strippedDstLayout = removeBroadcastDst.apply(dstLayout);
+
     // concatenate (and potentially reorder) values
     SmallVector<Value> retVals;
     for (Value v : lhsVals)
       retVals.push_back(v);
     for (Value v : rhsVals)
       retVals.push_back(v);
+
+    if (retVals.size() != strippedDstLayout.getInDimSize(kReg)) {
+      return op->emitError()
+             << "tt.cat lowering expected "
+             << strippedDstLayout.getInDimSize(kReg)
+             << " (non-broadcast) register values for the result, but got "
+             << retVals.size()
+             << ". (hint: this usually means the operands/result encodings are "
+                "incompatible for the current CatOp lowering)";
+    }
+
+    // Re-introduce broadcasting if the destination expects it.
+    if (!removeBroadcastDst.isIdentity())
+      retVals = broadcastAs(retVals, dstLayout);
+
     // pack and replace
     Value ret = packLLElements(loc, typeConverter, retVals, rewriter, resultTy);
     rewriter.replaceOp(op, ret);
@@ -498,9 +509,9 @@ struct MemDescIndexOpConversion
     // Apply padding based on the amount we move the base ptr
     if (auto padEnc = dyn_cast<PaddedSharedEncodingAttr>(dstTy.getEncoding())) {
       auto bitwidth = dstTy.getElementTypeBitWidth();
-      Value padOffset = emitPadding(loc, rewriter, padEnc, bitwidth, offset,
-                                    /*offsetInBytes=*/false);
-      offset = b.add(offset, padOffset);
+      auto paddingShifts = getPaddedSharedShifts(padEnc, bitwidth,
+                                                 /*offsetInBytes=*/false);
+      offset = applyPadding(loc, rewriter, offset, paddingShifts);
     }
 
     // Advance the pointer and keep the opOffsets as the new shape
@@ -579,7 +590,6 @@ void mlir::triton::populateViewOpToLLVMPatterns(
   patterns.add<SplatOpConversion>(typeConverter, benefit);
   patterns.add<UnsplatOpConversion>(typeConverter, benefit);
   patterns.add<ArithConstantSplatOpConversion>(typeConverter, benefit);
-  patterns.add<ArithConstantArrayOpConversion>(typeConverter, benefit);
   patterns.add<CatOpConversion>(typeConverter, benefit);
   patterns.add<JoinOpConversion>(typeConverter, benefit);
   patterns.add<SplitOpConversion>(typeConverter, benefit);

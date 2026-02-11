@@ -46,7 +46,7 @@ jobs:
       - ${{ inputs.runner_label || 'a770' }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -90,14 +90,27 @@ jobs:
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           cd ${{ env.NEW_WORKSPACE }}
-          pip install -U wheel pybind11 cython cmake intel-sycl-rt==2025.2.1
-          python setup.py -v bdist_wheel
+          pip install -r python\requirements.txt
+          pip install -U intel-sycl-rt==2025.3.1
+          # `build` can't determine that Ninja is already installed.
+          # similar issue: https://github.com/pypa/build/issues/506
+          python -m build --wheel --no-isolation --skip-dependency-check
           pip install (Get-Item ${{ env.NEW_WORKSPACE }}\dist\*.whl)
 
       - name: Triton version
         run: |
           .venv\Scripts\activate.ps1
           python -c 'import triton; print(triton.__version__)'
+
+      - name: Build && Install PTI
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          cd ${{ env.NEW_WORKSPACE }}
+          bash -c './scripts/install-pti.sh --build-level-zero'
+          $PTI_LIBS_DIR = python ./scripts/pti_lib.py
+          ls $PTI_LIBS_DIR
+          echo "PATH=$PTI_LIBS_DIR;$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Install test dependencies
         run: |
@@ -169,7 +182,7 @@ jobs:
       - name: Upload pass rate report
         # upload reports only for the default branch
         if: github.ref_name == 'main'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: pass_rate
           path: ${{ env.NEW_WORKSPACE }}\pass_rate*.json

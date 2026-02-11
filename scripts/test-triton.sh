@@ -12,10 +12,18 @@ TEST:
     --microbench      default
     --triton-kernels  default
     --minicore        part of core
+    --intel           part of core
+    --language        part of core
     --mxfp            part of core
     --scaled-dot      part of core
+    --runtime         part of core
+    --debug           part of core
+    --warnings        part of core
+    --tools           part of core
+    --regression      part of core
     --gluon
     --interpreter
+    --proton
     --benchmarks
     --softmax
     --gemm
@@ -26,9 +34,12 @@ TEST:
     --flex-attention
     --instrumentation
     --inductor
-    --sglang
-    --liger
     --vllm
+    --install-vllm
+    --sglang
+    --install-sglang
+    --liger
+    --install-liger
 
 OPTION:
     --unskip
@@ -56,10 +67,18 @@ TEST_DEFAULT=true
 TEST_UNIT=false
 TEST_CORE=false
 TEST_MINICORE=false
+TEST_INTEL=false
+TEST_LANGUAGE=false
 TEST_MXFP=false
 TEST_SCALED_DOT=false
+TEST_RUNTIME=false
+TEST_DEBUG=false
+TEST_WARNINGS=false
+TEST_TOOLS=false
+TEST_REGRESSION=false
 TEST_GLUON=false
 TEST_INTERPRETER=false
+TEST_PROTON=false
 TEST_TUTORIAL=false
 TEST_MICRO_BENCHMARKS=false
 TEST_BENCHMARKS=false
@@ -70,8 +89,11 @@ TEST_BENCHMARK_FLEX_ATTENTION=false
 TEST_INSTRUMENTATION=false
 TEST_INDUCTOR=false
 TEST_SGLANG=false
+INSTALL_SGLANG=false
 TEST_LIGER=false
+INSTALL_LIGER=false
 TEST_VLLM=false
+INSTALL_VLLM=false
 TEST_TRITON_KERNELS=false
 VENV=false
 TRITON_TEST_REPORTS=false
@@ -102,6 +124,16 @@ while (( $# != 0 )); do
       TEST_DEFAULT=false
       shift
       ;;
+    --intel)
+      TEST_INTEL=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --language)
+      TEST_LANGUAGE=true
+      TEST_DEFAULT=false
+      shift
+      ;;
     --mxfp)
       TEST_MXFP=true
       TEST_DEFAULT=false
@@ -112,6 +144,31 @@ while (( $# != 0 )); do
       TEST_DEFAULT=false
       shift
       ;;
+    --runtime)
+      TEST_RUNTIME=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --debug)
+      TEST_DEBUG=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --warnings)
+      TEST_WARNINGS=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --tools)
+      TEST_TOOLS=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --regression)
+      TEST_REGRESSION=true
+      TEST_DEFAULT=false
+      shift
+      ;;
     --gluon)
       TEST_GLUON=true
       TEST_DEFAULT=false
@@ -119,6 +176,11 @@ while (( $# != 0 )); do
       ;;
     --interpreter)
       TEST_INTERPRETER=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --proton)
+      TEST_PROTON=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -193,13 +255,28 @@ while (( $# != 0 )); do
       TEST_DEFAULT=false
       shift
       ;;
+    --install-sglang)
+      INSTALL_SGLANG=true
+      TEST_DEFAULT=false
+      shift
+      ;;
     --liger)
       TEST_LIGER=true
       TEST_DEFAULT=false
       shift
       ;;
+    --install-liger)
+      INSTALL_LIGER=true
+      TEST_DEFAULT=false
+      shift
+      ;;
     --vllm)
       TEST_VLLM=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --install-vllm)
+      INSTALL_VLLM=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -330,6 +407,105 @@ run_pytest_command() {
   fi
 }
 
+run_intel_tests() {
+  echo "***************************************************"
+  echo "******   Running Triton Intel tests     ******"
+  echo "***************************************************"
+
+  cd $TRITON_PROJ/python/test/unit
+
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=intel \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu intel/
+
+  cd $TRITON_PROJ/third_party/intel/python/test
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=third_party \
+    run_pytest_command --device xpu .
+}
+
+run_language_tests() {
+  echo "***************************************************"
+  echo "******     Running Triton Language tests     ******"
+  echo "***************************************************"
+  cd $TRITON_PROJ/python/test/unit
+  ensure_spirv_dis
+
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=language \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py \
+    -k "not test_mxfp and not test_preshuffle_scale_mxfp_cdna4 and not test_scaled_dot"
+
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=subprocess \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/test_subprocess.py
+
+  # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
+  TRITON_DISABLE_LINE_INFO=0 TRITON_TEST_SUITE=line_info \
+    run_pytest_command -k "not test_line_info_interpreter" --verbose --device xpu language/test_line_info.py
+}
+
+run_mxfp_tests() {
+  echo "***************************************************"
+  echo "******    Running Triton matmul mxfp tests   ******"
+  echo "***************************************************"
+  cd $TRITON_PROJ/python/test/unit
+
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=mxfp \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/test_matmul.py::test_mxfp8_mxfp4_matmul
+}
+
+run_scaled_dot_tests() {
+  echo "***************************************************"
+  echo "******    Running Triton scaled_dot tests    ******"
+  echo "***************************************************"
+  cd $TRITON_PROJ/python/test/unit
+
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=scaled_dot \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py --ignore=language/test_frontend.py\
+    -k "test_scaled_dot"
+}
+
+run_runtime_tests() {
+  echo "***************************************************"
+  echo "******   Running Triton Runtime tests     ******"
+  echo "***************************************************"
+
+  cd $TRITON_PROJ/python/test/unit
+
+  # run runtime tests serially to avoid race condition with cache handling.
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=runtime \
+    run_pytest_command -k "not test_within_2gb" --verbose --device xpu runtime/ --ignore=runtime/test_cublas.py
+}
+
+run_debug_tests() {
+  echo "***************************************************"
+  echo "******   Running Triton Debug tests     ******"
+  echo "***************************************************"
+
+  cd $TRITON_PROJ/python/test/unit
+
+  TRITON_TEST_SUITE=debug \
+    run_pytest_command --verbose -n ${PYTEST_MAX_PROCESSES:-8} test_debug.py test_debuginfo.py test_debug_dump.py --forked --device xpu
+}
+
+run_warnings_tests() {
+  echo "***************************************************"
+  echo "******   Running Triton Warnings tests     ******"
+  echo "***************************************************"
+  cd $TRITON_PROJ/python/test/unit
+
+  TRITON_TEST_SUITE=warnings \
+    run_pytest_command --verbose -n ${PYTEST_MAX_PROCESSES:-8} test_perf_warning.py --device xpu
+}
+
+run_tools_tests() {
+  echo "***************************************************"
+  echo "******    Running Triton Tools tests      ******"
+  echo "***************************************************"
+  cd $TRITON_PROJ/python/test/unit
+  ensure_spirv_dis
+
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=tools \
+    run_pytest_command -n ${PYTEST_MAX_PROCESSES:-8} -k "not test_disam_cubin" --verbose tools
+}
+
 run_regression_tests() {
   echo "***************************************************"
   echo "******   Running Triton Regression tests     ******"
@@ -344,62 +520,11 @@ run_minicore_tests() {
   echo "***************************************************"
   echo "******    Running Triton mini core tests     ******"
   echo "***************************************************"
-  cd $TRITON_PROJ/python/test/unit
-  ensure_spirv_dis
-
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=language \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py \
-    -k "not test_mxfp and not test_preshuffle_scale_mxfp_cdna4 and not test_scaled_dot"
-
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=subprocess \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/test_subprocess.py
-
-  # run runtime tests serially to avoid race condition with cache handling.
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=runtime \
-    run_pytest_command -k "not test_within_2gb" --verbose --device xpu runtime/ --ignore=runtime/test_cublas.py
-
-  TRITON_TEST_SUITE=debug \
-    run_pytest_command --verbose -n ${PYTEST_MAX_PROCESSES:-8} test_debug.py test_debuginfo.py test_debug_dump.py --forked --device xpu
-
-  TRITON_TEST_SUITE=warnings \
-    run_pytest_command --verbose -n ${PYTEST_MAX_PROCESSES:-8} test_perf_warning.py --device xpu
-
-  # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-  TRITON_DISABLE_LINE_INFO=0 TRITON_TEST_SUITE=line_info \
-    run_pytest_command -k "not test_line_info_interpreter" --verbose --device xpu language/test_line_info.py
-
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=tools \
-    run_pytest_command -n ${PYTEST_MAX_PROCESSES:-8} -k "not test_disam_cubin" --verbose tools
-
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=intel \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu intel/ --ignore=intel/test_mxfp_matmul.py
-
-  cd $TRITON_PROJ/third_party/intel/python/test
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=third_party \
-    run_pytest_command --device xpu .
-
+  run_intel_tests
+  run_runtime_tests
+  run_warnings_tests
+  run_tools_tests
   run_regression_tests
-}
-
-run_mxfp_tests() {
-  echo "***************************************************"
-  echo "******    Running Triton matmul mxfp tests   ******"
-  echo "***************************************************"
-  cd $TRITON_PROJ/python/test/unit
-
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=mxfp \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu intel/test_mxfp_matmul.py
-}
-
-run_scaled_dot_tests() {
-  echo "***************************************************"
-  echo "******    Running Triton scaled_dot tests    ******"
-  echo "***************************************************"
-  cd $TRITON_PROJ/python/test/unit
-
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=scaled_dot \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py --ignore=language/test_frontend.py\
-    -k "test_scaled_dot"
 }
 
 run_core_tests() {
@@ -407,8 +532,10 @@ run_core_tests() {
   echo "******      Running Triton Core tests        ******"
   echo "***************************************************"
   run_minicore_tests
+  run_language_tests
   run_mxfp_tests
   run_scaled_dot_tests
+  run_debug_tests
 }
 
 run_gluon_tests() {
@@ -432,11 +559,20 @@ run_interpreter_tests() {
     language/test_random.py language/test_line_info.py --device cpu
 }
 
+run_proton_tests() {
+  echo "***************************************************"
+  echo "******      Running Triton Proton tests     ******"
+  echo "***************************************************"
+  cd $TRITON_PROJ/third_party/proton/test
+
+  run_pytest_command -vvv test_api.py test_cmd.py test_lib.py test_profile.py test_viewer.py --device xpu -s
+}
+
 run_tutorial_tests() {
   echo "***************************************************"
   echo "**** Running Triton Tutorial tests           ******"
   echo "***************************************************"
-  python -m pip install matplotlib pandas tabulate -q
+  python -m pip install matplotlib 'pandas<3.0' tabulate -q
   cd $TRITON_PROJ/python/tutorials
 
   tutorials=(
@@ -501,7 +637,7 @@ run_benchmark_gemm() {
   python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_tensor_of_ptr_benchmark.py
 
   echo "GEMM with tensor descriptor:"
-  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_tensor_desc_benchmark.py
+  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_benchmark.py
 }
 
 run_benchmark_flash_attention() {
@@ -511,11 +647,8 @@ run_benchmark_flash_attention() {
   cd $TRITON_PROJ/benchmarks
   pip install .
 
-  echo "Forward - Default path:"
+  echo "Forward - Default path (with tensor descriptor):"
   python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
-
-  echo "Forward - with tensor descriptor:"
-  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_tensor_desc_benchmark.py
 
   echo "Forward - Advanced path:"
   TRITON_INTEL_ADVANCED_PATH=1 \
@@ -573,7 +706,7 @@ run_inductor_tests() {
     git checkout $rev
   )
 
-  pip install pyyaml pandas scipy 'numpy==1.26.4' psutil pyre_extensions torchrec
+  pip install pyyaml 'pandas<3.0' scipy 'numpy==1.26.4' psutil pyre_extensions torchrec
 
   # TODO: Find the fastest Hugging Face model
   ZE_AFFINITY_MASK=0 python pytorch/benchmarks/dynamo/huggingface.py --accuracy --float32 -dxpu -n10 --no-skip --dashboard --inference --freezing --total-partitions 1 --partition-id 0 --only AlbertForMaskedLM --backend=inductor --timeout=4800 --output=$(pwd -P)/inductor_log.csv
@@ -582,125 +715,238 @@ run_inductor_tests() {
   grep AlbertForMaskedLM inductor_log.csv | grep -q ,pass,
 }
 
+run_test_deps_install() {
+  pip install pytest pytest-cov pytest-xdist
+}
+
+run_sglang_install() {
+  echo "************************************************"
+  echo "******    Installing SGLang                 ****"
+  echo "************************************************"
+
+  if pip show sglang >/dev/null 2>&1; then
+    echo "WARNING: sglang is already installed, skipping installation."
+    echo "To get clean installation, run:"
+    echo "  rm -rf ./sglang && pip uninstall -y sglang"
+    return
+  fi
+
+  if [ -d "./sglang" ]; then
+    echo "WARNING: ./sglang directory already exists, installing from it."
+    echo "To get clean installation, run:"
+    echo "  rm -rf ./sglang && pip uninstall -y sglang"
+  else
+    git clone https://github.com/sgl-project/sglang.git
+    cd sglang
+    git checkout "$(<../benchmarks/third_party/sglang/sglang-pin.txt)"
+    git apply ../benchmarks/third_party/sglang/sglang-test-fix.patch
+    git apply ../benchmarks/third_party/sglang/sglang-bench-fix.patch
+
+    # That's how sglang assumes we'll pick out platform for now
+    cp python/pyproject_xpu.toml python/pyproject.toml
+    # We should remove all torch libraries from requirements to avoid reinstalling triton & torch
+    # We remove sgl kernel due to a bug in the current environment probably due to using newer torch, we don't currently use it anyway
+    # We remove timm because it depends on torchvision, which depends on torch==2.9
+    sed -i '/pytorch\|torch\|sgl-kernel\|timm/d' python/pyproject.toml
+    cat python/pyproject.toml
+    cd ..
+  fi
+
+  pip install -e "./sglang/python"
+}
+
 run_sglang_tests() {
   echo "***************************************************"
   echo "******    Running SGLang Triton tests        ******"
   echo "***************************************************"
 
-  if ! [ -d "./sglang" ]; then
-    git clone https://github.com/sgl-project/sglang.git
-  fi
+  run_sglang_install
+  run_test_deps_install
   cd sglang
-
-  if ! pip list | grep "sglang" ; then
-    git apply $TRITON_PROJ/benchmarks/third_party/sglang/sglang-fix.patch
-    pip install "./python[dev_xpu]"
-
-    # SGLang installation breaks the default PyTorch and Triton versions, so we need to reinstall them.
-    $SCRIPTS_DIR/install-pytorch.sh --force-reinstall
-    $SCRIPTS_DIR/compile-triton.sh --triton
-  fi
-
-  pip install pytest pytest-xdist
   run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-4} test/srt/test_triton_attention_kernels.py
 }
 
-run_liger_tests() {
+run_liger_install() {
   echo "************************************************"
-  echo "******    Running Liger Triton tests      ******"
+  echo "******    Installing Liger-Kernel         ******"
   echo "************************************************"
 
   if ! [ -d "./Liger-Kernel" ]; then
     git clone https://github.com/linkedin/Liger-Kernel
+    cd Liger-Kernel
+    echo "Liger-Kernels commit: '$(git rev-parse HEAD)'"
+    git apply ../benchmarks/third_party/liger/liger-fix.patch --allow-empty
+    cd ..
   fi
 
   if ! pip list | grep "liger_kernel" ; then
-    pip install pytest pytest-xdist pytest-cov transformers pandas pytest datasets -e Liger-Kernel
+    # Liger requires transformers<5.0
+    # https://github.com/linkedin/Liger-Kernel/issues/978
+    pip install 'transformers<5.0' 'pandas<3.0' datasets -e Liger-Kernel
+  fi
+}
+
+
+run_liger_tests() {
+  echo "************************************************"
+  echo "******    Running Liger-Kernel tests      ******"
+  echo "************************************************"
+
+  run_liger_install
+  run_test_deps_install
+  run_pytest_command -vvv Liger-Kernel/test/
+}
+
+run_vllm_install() {
+  echo "************************************************"
+  echo "******    Installing VLLM                 ******"
+  echo "************************************************"
+  CLEAN_MSG="To get a clean install, run: \n    rm -rf ./vllm ./vllm-xpu-kernels && pip uninstall -y vllm vllm-xpu-kernels"
+
+  local has_vllm_pip=false
+  local has_kernels_pip=false
+  pip show vllm >/dev/null 2>&1 && has_vllm_pip=true
+  pip show vllm-xpu-kernels >/dev/null 2>&1 && has_kernels_pip=true
+
+  # Both libraries already installed — nothing to do
+  if [ "$has_vllm_pip" = true ] && [ "$has_kernels_pip" = true ]; then
+    echo "WARNING: vllm and vllm-xpu-kernels are already installed, skipping installation."
+    echo -e $CLEAN_MSG
+    return
   fi
 
-  run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-4} Liger-Kernel/test/
+  # Only one of the two libraries installed — partial state, refuse to continue
+  if [ "$has_vllm_pip" = true ] || [ "$has_kernels_pip" = true ]; then
+    echo "ERROR: Partial vllm installation detected (vllm=$has_vllm_pip, vllm-xpu-kernels=$has_kernels_pip)."
+    echo -e $CLEAN_MSG
+    return 1
+  fi
+
+  # Neither library is installed — proceed, reusing existing directories if present
+  if [ -d "./vllm" ]; then
+    echo "WARNING: ./vllm directory already exists, installing from it."
+    echo -e $CLEAN_MSG
+  else
+    git clone https://github.com/vllm-project/vllm.git
+
+    # Checkout the pinned commit, apply necessary patches and modify tests to run on xpu
+    cd vllm
+    git checkout "$(<../benchmarks/third_party/vllm/vllm-pin.txt)"
+    git apply ../benchmarks/third_party/vllm/vllm-fix.patch
+    sed -i 's/device="cuda"/device="xpu"/g' \
+      tests/kernels/moe/utils.py \
+      tests/kernels/moe/test_batched_moe.py \
+      tests/kernels/attention/test_triton_unified_attention.py
+
+    sed -i 's/set_default_device("cuda")/set_default_device("xpu")/g' \
+      tests/kernels/attention/test_triton_unified_attention.py
+
+    cd ..
+  fi
+  # These files are neceassary for benchmarking runs
+  cp -r vllm/tests benchmarks/third_party/vllm/tests
+
+  pip install -r vllm/requirements/xpu.txt
+
+  if [ -d "./vllm-xpu-kernels" ]; then
+    echo "WARNING: ./vllm-xpu-kernels directory already exists, installing from it."
+    echo $CLEAN_MSG
+  else
+    git clone https://github.com/vllm-project/vllm-xpu-kernels
+    cd vllm-xpu-kernels
+    git checkout "$(<../benchmarks/third_party/vllm/vllm-kernels-pin.txt)"
+    sed -i '/pytorch\|torch/d' requirements.txt
+    sed -i '/pytorch\|torch/d' pyproject.toml
+    pip install -r requirements.txt
+    cd ..
+  fi
+  VLLM_TARGET_DEVICE=xpu pip install --no-build-isolation -e vllm-xpu-kernels
+  VLLM_TARGET_DEVICE=xpu pip install --no-deps --no-build-isolation -e vllm
+
+  pip install cachetools cbor2 blake3 pybase64 openai_harmony tblib
 }
+
 
 run_vllm_tests() {
   echo "************************************************"
   echo "******    Running VLLM Triton tests       ******"
   echo "************************************************"
 
-  if ! [ -d "./vllm" ]; then
-    git clone https://github.com/vllm-project/vllm.git
-    cd vllm
-    git checkout "$(<../benchmarks/third_party/vllm/vllm-pin.txt)"
-    git apply $TRITON_PROJ/benchmarks/third_party/vllm/vllm-fix.patch
-    cd ..
-  fi
-
-  if ! pip list | grep "vllm" ; then
-    pip install -r vllm/requirements/xpu.txt
-
-    git clone https://github.com/vllm-project/vllm-xpu-kernels
-    cd vllm-xpu-kernels
-    git checkout "$(<../benchmarks/third_party/vllm/vllm-kernels-pin.txt)"
-    sed -i '/pytorch\|torch/d' requirements.txt
-    pip install -r requirements.txt
-    VLLM_TARGET_DEVICE=xpu pip install -e .
-    cd ..
-
-    VLLM_TARGET_DEVICE=xpu pip install --no-deps vllm
-  fi
+  run_vllm_install
+  run_test_deps_install
 
   cd vllm
-  pip install pytest pytest-cov pytest-xdist cachetools cbor2 blake3 pybase64 openai_harmony tblib
-
   run_pytest_command -vvv tests/kernels/moe/test_batched_moe.py tests/kernels/attention/test_triton_unified_attention.py
 }
 
 run_triton_kernels_tests() {
   echo "***************************************************"
-  echo "******    Running Triton Kernels tests      ******"
+  echo "******    Running Triton Kernels tests      *******"
   echo "***************************************************"
   cd $TRITON_PROJ/python/triton_kernels/tests
 
   # available after `capture_runtime_env` call
   gpu_file="$TRITON_TEST_REPORTS_DIR/gpu.txt"
-  if [[ -f "$gpu_file" ]] && grep -q "B580" "$gpu_file"; then
-    # Using any other number of processes results in an error on the BMG due to insufficient resources.
+  # BMG, LNL, ARLs, A770
+  if [[ -f "$gpu_file" ]] && grep -Eq "(B580|64a0|7d6|7d5|770)" "$gpu_file"; then
+    # Using any other number of processes results in an error on small GPUs due to insufficient resources.
     # FIXME: reconsider in the future
     max_procs=1
   else
     # Using any other number of processes results in an error on the PVC due to insufficient resources.
     # FIXME: reconsider in the future
-    max_procs=4
+    max_procs=${PYTEST_MAX_PROCESSES:-4}
   fi
-
+  # skipping mxfp, they are part of mxfp_tests suite
   TRITON_TEST_SUITE=triton_kernels \
-    run_pytest_command -vvv -n $max_procs --device xpu .
+    run_pytest_command -vvv -n $max_procs --device xpu . -k 'not test_mxfp'
 }
 
 test_triton() {
   if [ "$TEST_UNIT" = true ]; then
     run_unit_tests
   fi
-
-  # core suite consists of minicore, mxfp, scaled_dot
   if [ "$TEST_CORE" = true ]; then
     run_core_tests
-  else
-    if [ "$TEST_MINICORE" = true ]; then
-        run_minicore_tests
-    fi
-    if [ "$TEST_MXFP" = true ]; then
-        run_mxfp_tests
-    fi
-    if [ "$TEST_SCALED_DOT" = true ]; then
-        run_scaled_dot_tests
-    fi
   fi
-
+  if [ "$TEST_MINICORE" = true ]; then
+    run_minicore_tests
+  fi
+  if [ "$TEST_INTEL" = true ]; then
+    run_intel_tests
+  fi
+  if [ "$TEST_LANGUAGE" = true ]; then
+    run_language_tests
+  fi
+  if [ "$TEST_MXFP" = true ]; then
+    run_mxfp_tests
+  fi
+  if [ "$TEST_SCALED_DOT" = true ]; then
+    run_scaled_dot_tests
+  fi
+  if [ "$TEST_RUNTIME" = true ]; then
+    run_runtime_tests
+  fi
+  if [ "$TEST_DEBUG" = true ]; then
+    run_debug_tests
+  fi
+  if [ "$TEST_WARNINGS" = true ]; then
+    run_warnings_tests
+  fi
+  if [ "$TEST_TOOLS" = true ]; then
+    run_tools_tests
+  fi
+  if [ "$TEST_REGRESSION" = true ]; then
+    run_regression_tests
+  fi
   if [ "$TEST_GLUON" == true ]; then
     run_gluon_tests
   fi
   if [ "$TEST_INTERPRETER" = true ]; then
     run_interpreter_tests
+  fi
+  if [ "$TEST_PROTON" == true ]; then
+    run_proton_tests
   fi
   if [ "$TEST_TUTORIAL" = true ]; then
     run_tutorial_tests
@@ -729,11 +975,20 @@ test_triton() {
   if [ "$TEST_INDUCTOR" == true ]; then
     run_inductor_tests
   fi
+  if [ "$INSTALL_SGLANG" == true ]; then
+    run_sglang_install
+  fi
   if [ "$TEST_SGLANG" == true ]; then
     run_sglang_tests
   fi
+  if [ "$INSTALL_LIGER" == true ]; then
+    run_liger_install
+  fi
   if [ "$TEST_LIGER" == true ]; then
     run_liger_tests
+  fi
+  if [ "$INSTALL_VLLM" == true ]; then
+    run_vllm_install
   fi
   if [ "$TEST_VLLM" == true ]; then
     run_vllm_tests

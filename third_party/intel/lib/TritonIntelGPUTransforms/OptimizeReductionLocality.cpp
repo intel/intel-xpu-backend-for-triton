@@ -349,7 +349,8 @@ private:
                                            1,
                                            dpasEncoding.getWarpsPerCTA()[0]};
     constexpr std::array<unsigned, rank> order{0, 1, 2, 3, 4, 5, 6};
-    CTALayoutAttr ctaLayout = CTALayoutAttr::getDefault(getContext(), rank);
+    CGAEncodingAttr ctaLayout =
+        CGAEncodingAttr::get1CTALayout(getContext(), rank);
 
     auto encoding = rewriter.getAttr<BlockedEncodingAttr>(
         sizePerThread, threadsPerWarp, warpsPerCTA, order, ctaLayout);
@@ -360,17 +361,17 @@ private:
 
     // Although this is a NOP, we have to pass allow_reorder=true as static
     // analysis will fail to infer it.
-    return rewriter.create<ReshapeOp>(op.getLoc(),
-                                      static_cast<RankedTensorType>(type), val,
-                                      /*allow_reorder=*/true,
-                                      /*efficient_layout=*/true);
+    return ReshapeOp::create(rewriter, op.getLoc(),
+                             static_cast<RankedTensorType>(type), val,
+                             /*allow_reorder=*/true,
+                             /*efficient_layout=*/true);
   }
 
   Value performReduction(ReduceOp op, PatternRewriter &rewriter, Value val,
                          int axis) const {
     assert(axis >= 0 && "Expecting positive axis");
 
-    auto newOp = rewriter.create<ReduceOp>(op.getLoc(), val, /*axis=*/axis);
+    auto newOp = ReduceOp::create(rewriter, op.getLoc(), val, /*axis=*/axis);
     auto &newCombineOp = newOp.getCombineOp();
     rewriter.cloneRegionBefore(op.getCombineOp(), newCombineOp,
                                newCombineOp.end());
@@ -407,15 +408,16 @@ private:
                                            dpasEncoding.getWarpsPerCTA()[1],
                                            dpasEncoding.getWarpsPerCTA()[0]};
     constexpr std::array<unsigned, rank> order{0, 1, 2, 3, 4};
-    CTALayoutAttr ctaLayout = CTALayoutAttr::getDefault(getContext(), rank);
+    CGAEncodingAttr ctaLayout =
+        CGAEncodingAttr::get1CTALayout(getContext(), rank);
 
     auto encoding = rewriter.getAttr<BlockedEncodingAttr>(
         sizePerThread, threadsPerWarp, warpsPerCTA, order, ctaLayout);
 
     type.setEncoding(encoding);
 
-    return rewriter.create<ConvertLayoutOp>(
-        op.getLoc(), static_cast<RankedTensorType>(type), val);
+    return ConvertLayoutOp::create(rewriter, op.getLoc(),
+                                   static_cast<RankedTensorType>(type), val);
   }
 
   Value reshapeForFinalReduction(ReduceOp op, PatternRewriter &rewriter,
@@ -440,7 +442,8 @@ private:
                                            dpasEncoding.getWarpsPerCTA()[1],
                                            dpasEncoding.getWarpsPerCTA()[0]};
     constexpr std::array<unsigned, rank> order{0, 1, 2, 3};
-    CTALayoutAttr ctaLayout = CTALayoutAttr::getDefault(getContext(), rank);
+    CGAEncodingAttr ctaLayout =
+        CGAEncodingAttr::get1CTALayout(getContext(), rank);
 
     auto encoding = rewriter.getAttr<BlockedEncodingAttr>(
         sizePerThread, threadsPerWarp, warpsPerCTA, order, ctaLayout);
@@ -451,10 +454,10 @@ private:
 
     // Although this is a NOP, we have to pass allow_reorder=true as static
     // analysis will fail to infer it.
-    return rewriter.create<ReshapeOp>(op.getLoc(),
-                                      static_cast<RankedTensorType>(type), val,
-                                      /*allow_reorder=*/true,
-                                      /*efficient_layout=*/true);
+    return ReshapeOp::create(rewriter, op.getLoc(),
+                             static_cast<RankedTensorType>(type), val,
+                             /*allow_reorder=*/true,
+                             /*efficient_layout=*/true);
   }
 
   Value performFinalElementwiseReduction(ReduceOp op, PatternRewriter &rewriter,
@@ -483,23 +486,24 @@ private:
     std::array<unsigned, rank> warpsPerCTA{dpasEncoding.getWarpsPerCTA()[1],
                                            dpasEncoding.getWarpsPerCTA()[0]};
     constexpr std::array<unsigned, rank> order{0, 1};
-    CTALayoutAttr ctaLayout = CTALayoutAttr::getDefault(getContext(), rank);
+    CGAEncodingAttr ctaLayout =
+        CGAEncodingAttr::get1CTALayout(getContext(), rank);
 
     auto parentEncoding = rewriter.getAttr<BlockedEncodingAttr>(
         sizePerThread, threadsPerWarp, warpsPerCTA, order, ctaLayout);
 
     type.setEncoding(SliceEncodingAttr::get(getContext(), 0, parentEncoding));
 
-    return rewriter.create<ReshapeOp>(op.getLoc(),
-                                      static_cast<RankedTensorType>(type), val,
-                                      /*allow_reorder=*/true,
-                                      /*efficient_layout=*/true);
+    return ReshapeOp::create(rewriter, op.getLoc(),
+                             static_cast<RankedTensorType>(type), val,
+                             /*allow_reorder=*/true,
+                             /*efficient_layout=*/true);
   }
 
   Value convertLayoutToOriginalType(ReduceOp op, PatternRewriter &rewriter,
                                     Value val) const {
-    return rewriter.create<ConvertLayoutOp>(
-        op.getLoc(), op.getResult().front().getType(), val);
+    return ConvertLayoutOp::create(rewriter, op.getLoc(),
+                                   op.getResult().front().getType(), val);
   }
 };
 

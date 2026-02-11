@@ -119,8 +119,9 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     }
 
     // 3. Add the new arguments to the region
-    auto amendedFuncOp = rewriter.create<triton::FuncOp>(
-        funcOp.getLoc(), funcOp.getName(), amendedFuncTy, amendedAttrs);
+    auto amendedFuncOp =
+        triton::FuncOp::create(rewriter, funcOp.getLoc(), funcOp.getName(),
+                               amendedFuncTy, amendedAttrs);
     Region &region = funcOp.getBody();
     if (!isKernel)
       region.addArgument(sharedPtrTy, loc);
@@ -247,6 +248,7 @@ public:
     // to help convert scalar expression to LLVM.
     arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
     populateMathToLLVMConversionPatterns(typeConverter, patterns);
+    intel::populateWarpIdOpToLLVMPattern(typeConverter, patterns, benefit);
     triton::populateGPUToTritonGENConversionPatterns(typeConverter, patterns);
     cf::populateControlFlowToLLVMConversionPatterns(typeConverter, patterns);
     populateGpuToLLVMSPVConversionPatterns(typeConverter, patterns);

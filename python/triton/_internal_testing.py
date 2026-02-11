@@ -43,7 +43,11 @@ def is_ampere_or_newer():
 
 
 def is_blackwell():
-    return is_cuda() and torch.cuda.get_device_capability()[0] == 10
+    return is_cuda() and torch.cuda.get_device_capability()[0] in [10, 11]
+
+
+def is_blackwell_ultra():
+    return is_cuda() and torch.cuda.get_device_capability()[0:2] == (10, 3)
 
 
 def is_hopper_or_newer():
@@ -52,6 +56,10 @@ def is_hopper_or_newer():
 
 def is_hopper():
     return is_cuda() and torch.cuda.get_device_capability()[0] == 9
+
+
+def is_sm12x():
+    return is_cuda() and torch.cuda.get_device_capability()[0] == 12
 
 
 def is_hip():
@@ -74,12 +82,12 @@ def is_hip_cdna4():
     return target is not None and target.backend == 'hip' and target.arch == 'gfx950'
 
 
-def is_hip_gfx11():
+def is_hip_rdna3():
     target = get_current_target()
     return target is not None and target.backend == 'hip' and 'gfx11' in target.arch
 
 
-def is_hip_gfx12():
+def is_hip_rdna4():
     target = get_current_target()
     return target is not None and target.backend == 'hip' and 'gfx12' in target.arch
 
@@ -93,6 +101,10 @@ def is_hip_cdna():
     return is_hip_cdna2() or is_hip_cdna3() or is_hip_cdna4()
 
 
+def is_hip_rdna():
+    return is_hip_rdna3() or is_hip_rdna4()
+
+
 def get_hip_lds_size():
     return 163840 if is_hip_cdna4() else 65536
 
@@ -100,6 +112,68 @@ def get_hip_lds_size():
 def is_xpu():
     target = get_current_target()
     return False if target is None else target.backend == "xpu"
+
+
+def is_xpu_arl_h():
+    target = get_current_target()
+    return target is not None and target.backend == 'xpu' and target.arch["arch"] == 'arl_h'
+
+
+def is_xpu_arl_s():
+    target = get_current_target()
+    return target is not None and target.backend == 'xpu' and target.arch["arch"] == 'arl_s'
+
+
+def is_xpu_bmg():
+    target = get_current_target()
+    return target is not None and target.backend == 'xpu' and target.arch["arch"] == 'bmg'
+
+
+def is_xpu_dg2():
+    target = get_current_target()
+    return target is not None and target.backend == 'xpu' and target.arch["arch"] == 'dg2'
+
+
+def is_xpu_lnl():
+    target = get_current_target()
+    return target is not None and target.backend == 'xpu' and target.arch["arch"] == 'lnl'
+
+
+def is_xpu_mtl():
+    target = get_current_target()
+    return target is not None and target.backend == 'xpu' and target.arch["arch"] == 'mtl'
+
+
+def is_xpu_pvc():
+    target = get_current_target()
+    return target is not None and target.backend == 'xpu' and target.arch["arch"] == 'pvc'
+
+
+def is_xpu_ptl_h():
+    target = get_current_target()
+    return target is not None and target.backend == 'xpu' and target.arch["arch"] == 'ptl_h'
+
+
+def is_xpu_ptl_u():
+    target = get_current_target()
+    return target is not None and target.backend == 'xpu' and target.arch["arch"] == 'ptl_u'
+
+
+def is_xpu_cri():
+    target = get_current_target()
+    return target is not None and target.backend == 'xpu' and target.arch["arch"] == 'cri'
+
+
+def is_xpu_xe2():
+    return is_xpu_bmg()
+
+
+def is_xpu_xe3():
+    return is_xpu_ptl_h() or is_xpu_ptl_u()
+
+
+def is_xpu_xe3p():
+    return is_xpu_cri()
 
 
 def get_arch():

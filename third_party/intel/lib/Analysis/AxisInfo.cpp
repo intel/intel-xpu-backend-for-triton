@@ -192,15 +192,13 @@ private:
   }
 
   void visitNonControlFlowArguments(
-      Operation *op, const RegionSuccessor &successor,
-      ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices,
-      unsigned firstIndex) override {
+      Operation *op, const RegionSuccessor & /*successor*/,
+      ValueRange /*nonSuccessorInputs*/,
+      ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices) override {
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
       visitForOpInductionVar(forOp, argLattices);
     } else {
-      setAllToEntryStates(argLattices.take_front(firstIndex));
-      setAllToEntryStates(argLattices.drop_front(
-          firstIndex + successor.getSuccessorInputs().size()));
+      setAllToEntryStates(argLattices);
     }
   }
 
@@ -295,7 +293,12 @@ public:
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
     constexpr int64_t largePowerOf2 = int64_t(1) << 32;
     // Poison values are never accessed, thus assume optimistic values.
-    if (auto shape = dyn_cast<mlir::ShapedType>(op.getType())) {
+    Type type = op.getType();
+    if (auto ptrTy = dyn_cast<triton::PointerType>(type)) {
+      type = ptrTy.getPointeeType();
+    }
+
+    if (auto shape = dyn_cast<mlir::ShapedType>(type)) {
       unsigned rank = shape.getRank();
       return AxisInfo(
           /*contiguity=*/AxisInfo::DimVectorT(rank, largePowerOf2),

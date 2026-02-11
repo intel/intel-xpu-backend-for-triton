@@ -1,0 +1,4 @@
+# Below test cases are written for Rolling driver
+python/test/unit/intel/test_block_io.py::test_block_io
+python/test/unit/intel/test_block_load.py::test_block_load_asserts
+python/test/unit/intel/test_block_load.py::test_block_load_dpas_layout

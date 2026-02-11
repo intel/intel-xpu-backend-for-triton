@@ -13,6 +13,9 @@ Intel® XPU Backend for Triton\* support for Windows is currently experimental a
   * Intel® Arc™ B-Series Graphics for Desktops
     * [Intel® Arc™ B570](https://www.intel.com/content/www/us/en/products/sku/241676/intel-arc-b570-graphics/specifications.html)
     * [Intel® Arc™ B580](https://www.intel.com/content/www/us/en/products/sku/241598/intel-arc-b580-graphics/specifications.html)
+  * Intel® Arc™ Pro B-Series Graphics
+    * [Intel® Arc™ Pro B50](https://www.intel.com/content/www/us/en/products/sku/242615/intel-arc-pro-b50-graphics/specifications.html)
+    * [Intel® Arc™ Pro B60](https://www.intel.com/content/www/us/en/products/sku/243916/intel-arc-pro-b60-graphics/specifications.html)
 
 * Latest [GPU driver](https://www.intel.com/content/www/us/en/download/785597/intel-arc-iris-xe-graphics-windows.html)
 
@@ -39,7 +42,7 @@ Install Microsoft Visual Studio 2022 and make sure the following [components](ht
 
 ### Intel® Deep Learning Essentials
 
-Install [Intel® Deep Learning Essentials 2025.2.1](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html?packages=dl-essentials&dl-essentials-os=windows&dl-win=offline).
+Install [Intel® Deep Learning Essentials 2025.3.1](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html?packages=dl-essentials&dl-essentials-os=windows&dl-win=offline).
 By default, it is installed to `C:\Program Files (x86)\Intel\oneAPI`.
 
 ### Chocolatey
@@ -141,7 +144,7 @@ python -c 'import torch;print(torch.__version__)'
 Install build dependencies:
 
 ```
-pip install -U wheel pybind11 cython cmake
+pip install -U pybind11 cmake
 ```
 
 Build and install Triton:

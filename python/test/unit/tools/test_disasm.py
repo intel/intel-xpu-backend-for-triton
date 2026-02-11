@@ -7,7 +7,7 @@ import triton.language as tl
 
 def test_disam_cubin():
     if not triton.runtime.driver.active.get_current_target().backend == "cuda":
-        pytest.skip("Test requires CUDA.")
+        pytest.xfail("Test requires CUDA.")
 
     @triton.jit
     def kernel(X, i: tl.constexpr):
@@ -34,4 +34,4 @@ def test_disam_spvbin():
     assert x[0] == 12
     dis = h.asm["spvdis"]
     # check that the spvdis has a store instruction.
-    assert "PredicatedStore" in dis
+    assert "PredicatedStore" in dis or "OpStore" in dis

@@ -221,14 +221,10 @@ def get_llvm_package_info():
                 # Ubuntu 22 LTS (v2.35)
                 # Ubuntu 20 LTS (v2.31)
                 system_suffix = "ubuntu-x64"
-            elif vglibc > 217:
+            else:
                 # Manylinux_2.28 (v2.28)
                 # AlmaLinux 8 (v2.28)
                 system_suffix = "almalinux-x64"
-            else:
-                # Manylinux_2014 (v2.17)
-                # CentOS 7 (v2.17)
-                system_suffix = "centos-x64"
         else:
             print(
                 f"LLVM pre-compiled image is not available for {system}-{arch}. Proceeding with user-configured LLVM from source build."
@@ -317,7 +313,11 @@ def get_thirdparty_packages(packages: list):
                         file.extractall(path=package_root_dir)
                 else:
                     with tarfile.open(fileobj=response, mode="r|*") as file:
-                        file.extractall(path=package_root_dir)
+                        # Use extractall without filter for Python version < 3.12 compatibility
+                        if hasattr(tarfile, 'data_filter'):
+                            file.extractall(path=package_root_dir, filter="data")
+                        else:
+                            file.extractall(path=package_root_dir)
             # write version url to package_dir
             with open(os.path.join(package_dir, "version.txt"), "w") as f:
                 f.write(p.url)
@@ -368,7 +368,11 @@ def download_and_copy(name, src_func, dst_path, variable, version, url_func):
                     file.extractall(path=tmp_path)
         else:
             with open_url(url) as url_file, tarfile.open(fileobj=url_file, mode="r|*") as tar_file:
-                tar_file.extractall(path=tmp_path, filter="data")
+                # Use extractall without filter for Python version < 3.12 compatibility
+                if hasattr(tarfile, 'data_filter'):
+                    tar_file.extractall(path=tmp_path, filter="data")
+                else:
+                    tar_file.extractall(path=tmp_path)
     os.makedirs(os.path.split(dst_path)[0], exist_ok=True)
     print(f'copy {src_path} to {dst_path} ...')
     if os.path.isdir(src_path):
@@ -506,6 +510,11 @@ class CMakeBuild(build_ext):
                 "-DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=lld",
             ]
 
+        if check_env_flag("LLVM_BUILD_SHARED_LIBS"):
+            cmake_args += ["-DLLVM_BUILD_SHARED_LIBS=1"]
+        else:
+            cmake_args += ["-DLLVM_BUILD_SHARED_LIBS=0"]
+
         # Note that asan doesn't work with binaries that use the GPU, so this is
         # only useful for tools like triton-opt that don't run code on the GPU.
         #
@@ -523,7 +532,6 @@ class CMakeBuild(build_ext):
         # environment variables we will pass through to cmake
         passthrough_args = [
             "TRITON_BUILD_PROTON",
-            "TRITON_BUILD_PROTON_XPU",
             "TRITON_BUILD_WITH_CCACHE",
             "TRITON_PARALLEL_LINK_JOBS",
         ]
@@ -561,6 +569,17 @@ def download_and_copy_dependencies():
         dst_path=f"bin/ptxas{exe_extension}",
         variable="TRITON_PTXAS_PATH",
         version=NVIDIA_TOOLCHAIN_VERSION["ptxas"],
+        url_func=lambda system, arch, version:
+        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/{system}-{arch}/cuda_nvcc-{system}-{arch}-{version}-archive.tar.xz",
+    )
+
+    # We download a separate ptxas for blackwell, since there are some bugs when using it for hopper
+    download_and_copy(
+        name="nvcc",
+        src_func=lambda system, arch, version: f"cuda_nvcc-{system}-{arch}-{version}-archive/bin/ptxas{exe_extension}",
+        dst_path="bin/ptxas-blackwell",
+        variable="TRITON_PTXAS_BLACKWELL_PATH",
+        version=NVIDIA_TOOLCHAIN_VERSION["ptxas-blackwell"],
         url_func=lambda system, arch, version:
         f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/{system}-{arch}/cuda_nvcc-{system}-{arch}-{version}-archive.tar.xz",
     )
@@ -807,7 +826,7 @@ def get_triton_version_suffix():
 
 
 # keep it separate for easy substitution
-TRITON_VERSION = "3.5.0" + get_triton_version_suffix()
+TRITON_VERSION = "3.7.0" + get_triton_version_suffix()
 
 # Dynamically define supported Python versions and classifiers
 MIN_PYTHON = (3, 10)
@@ -833,6 +852,7 @@ setup(
     description="A language and compiler for custom Deep Learning operations",
     long_description="",
     install_requires=[
+        "pyelftools",
         "importlib-metadata; python_version < '3.10'",
     ],
     packages=list(get_packages()),
@@ -875,7 +895,7 @@ setup(
         ],
         "tutorials": [
             "matplotlib",
-            "pandas",
+            "pandas<3.0",
             "tabulate",
         ],
     },

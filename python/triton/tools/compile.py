@@ -5,7 +5,7 @@ import sys
 from argparse import ArgumentParser
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 import triton
 from triton._internal_testing import is_xpu
@@ -23,12 +23,12 @@ class CompileArgs:
     grid: str = ''
     grf_mode: str = ''
     generate_native_code: bool = False
-    target: Optional[str] = None
+    target: str | None = None
     num_warps: int = 1
     threads_per_warp: int = 32
     num_stages: int = 3
-    out_name: Optional[str] = None
-    out_path: Optional[Path] = None
+    out_name: str | None = None
+    out_path: Path | None = None
 
 
 desc = """
@@ -70,14 +70,14 @@ def main():
         help="The target to compile towards, in format of '<backend>:<arch>:<warp-size>'; "
         "e.g., 'cuda:80:32', 'hip:gfx942:64'. Default to None, which means using current machine's GPU target")
     parser.add_argument("--num-warps", "-w", type=int, default=1, help="Number of warps to launch the kernel")
-    parser.add_argument("--threads-per-warp", "-tpw", type=int, default=32, help="Number of theads per warp")
+    parser.add_argument("--threads-per-warp", "-tpw", type=int, default=32, help="Number of threads per warp")
     parser.add_argument("--num-stages", "-ns", type=int, default=3,
                         help="Number of stages (meta-parameter of the kernel)")
     parser.add_argument("--out-name", "-on", type=str, default=None, help="Out name for the compiled kernel")
     parser.add_argument("--out-path", "-o", type=Path, default=None, help="Out filename")
     parser.add_argument("--signature", "-s", type=str, help="Signature of the kernel", required=True)
     parser.add_argument("--grid", "-g", type=str, help="Launch grid of the kernel", required=True)
-    parser.add_argument("--grf-mode", "-gm", type=str, default="large", help="Detemine spv build flags")
+    parser.add_argument("--grf-mode", "-gm", type=str, default="256", help="Determine spv build flags")
     parser.add_argument("--generate-native-code", "-gnc", action="store_true",
                         help="Generate native binary instead of SPV for XPU")
     cli_args = parser.parse_args()
@@ -140,8 +140,8 @@ def compile_kernel(args: CompileArgs):
     for h in hints.values():
         assert h in [1, 16], f"Only 1 and 16 are valid hints, got {h}"
     attrs = {k: [["tt.divisibility", 16]] for k, v in hints.items() if v == 16}
-    src = triton.compiler.ASTSource(fn=kernel, constexprs=constants, signature=signature, attrs=attrs)
-
+    kernel.create_binder()
+    src = kernel.ASTSource(fn=kernel, constexprs=constants, signature=signature, attrs=attrs)
     target = triton.backends.compiler.GPUTarget(*args.target.split(":")) \
         if args.target else triton.runtime.driver.active.get_current_target()
     backend = triton.compiler.make_backend(target)
@@ -177,17 +177,21 @@ def compile_kernel(args: CompileArgs):
     # dump C stub code
     suffix = ''
     for i, ty in enumerate(signature.values()):
-        suffix += str(i)
         if hints.get((i, ), None) == 1:
-            suffix += 'c'
+            suffix += f'{i}c'
         if hints.get((i, ), None) == 16:
-            suffix += 'd'
+            suffix += f'{i}d'
     func_name = '_'.join([out_name, sig_hash, suffix])
-    asm = ccinfo.asm[backend.binary_ext]  # store binary data once
+    binary_ext = getattr(ccinfo.metadata, "binary_ext", backend.binary_ext)
+    asm = ccinfo.asm[binary_ext]  # store binary data once
 
     hex_ = str(binascii.hexlify(asm))[2:-1]
 
     ty_to_cpp = triton.runtime.driver.active.map_python_to_cpp_type
+    backend_name = target.backend
+    if is_xpu():
+        # instead of "xpu"
+        backend_name = "intel"
 
     params = {
         "kernel_name": func_name,
@@ -206,6 +210,8 @@ def compile_kernel(args: CompileArgs):
         "gridY": grid[1],
         "gridZ": grid[2],
         "_placeholder": "",
+        "warp_size": target.warp_size,
+        "backend_name": backend_name,
     }
     if is_xpu():
         if args.generate_native_code:
@@ -220,10 +226,6 @@ def compile_kernel(args: CompileArgs):
             "format_name": format_name,
         }
     output_files = []
-    backend_name = target.backend
-    if is_xpu():
-        # instead of "xpu"
-        backend_name = "intel"
     template_dir = Path(__file__).parent / "extra" / backend_name
     for template_path in template_dir.glob('compile.*'):
         ext = template_path.suffix

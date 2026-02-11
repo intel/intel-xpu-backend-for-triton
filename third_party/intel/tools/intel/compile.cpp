@@ -138,9 +138,6 @@ int32_t {kernel_name}(sycl::queue &stream, {signature}) {{
   size_t global_range_y = {gridY};
   size_t global_range_z = {gridZ};
   size_t local_range_x = {num_warps} * {threads_per_warp};
-  if (driver_version.find("+") != std::string::npos) {{
-    local_range_x = 16;
-  }}
   size_t local_range_y = 1;
   size_t local_range_z = 1;
 

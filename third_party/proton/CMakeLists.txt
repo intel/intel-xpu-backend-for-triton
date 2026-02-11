@@ -3,11 +3,6 @@ project(Proton LANGUAGES CXX)
 set(PROTON_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/csrc")
 set(PROTON_COMMON_DIR "${CMAKE_CURRENT_SOURCE_DIR}/common")
 
-option(TRITON_BUILD_PROTON_XPU "Build Proton with XPU support" OFF)
-if(TRITON_BUILD_PROTON_XPU)
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DTRITON_BUILD_PROTON_XPU")
-endif()
-
 # ============ Check for includes =============
 if(NOT CUPTI_INCLUDE_DIR)
   message(FATAL_ERROR "CUPTI include directory not defined")
@@ -87,14 +82,16 @@ endforeach()
 add_library(proton SHARED ${_proton_obj_sources})
 
 target_link_libraries(proton PRIVATE Python3::Module)
-find_library(ZE_TRACING_LIB NAMES ze_tracing_layer PATHS /usr/lib/x86_64-linux-gnu)
-find_library(ZE_LOADER_LIB NAMES ze_loader PATHS /usr/lib/x86_64-linux-gnu)
 
-if(ZE_TRACING_LIB)
-    target_link_libraries(proton PRIVATE ${ZE_TRACING_LIB})
-endif()
-if(ZE_LOADER_LIB)
-    target_link_libraries(proton PRIVATE ${ZE_LOADER_LIB})
+if(WIN32)
+  set_target_properties(proton PROPERTIES SUFFIX ".pyd")
+  set_target_properties(proton PROPERTIES PREFIX "lib")
+  if(DEFINED TRITON_PYD_PATH)
+    string(TOUPPER "${CMAKE_BUILD_TYPE}" UPPER_CMAKE_BUILD_TYPE)
+    set_target_properties(proton PROPERTIES
+      RUNTIME_OUTPUT_DIRECTORY_${UPPER_CMAKE_BUILD_TYPE}
+    "${TRITON_PYD_PATH}")
+  endif(DEFINED TRITON_PYD_PATH)
 endif()
 
 # Apply any macOS linker flags or extra link options

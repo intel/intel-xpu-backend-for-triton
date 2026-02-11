@@ -1,23 +1,29 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import re
 from typing import Callable, ClassVar, Dict, Optional, List, Tuple, Union, Set
 from collections.abc import Iterable
 from enum import Enum
 from dataclasses import dataclass, field
 import itertools
 import functools
+import json
 
 import argparse
 import datetime
 import os
 import time
+from pathlib import Path
+import warnings
 
 import scipy.stats
+import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
 import torch
+import triton.profiler as proton
 from torch.profiler import profile, ProfilerActivity, record_function
 
 from triton.testing import assert_close as triton_assert_close, Benchmark, do_bench as triton_do_bench
@@ -40,6 +46,15 @@ def synchronize():
         torch.cuda.synchronize()
     elif torch.xpu.is_available():
         torch.xpu.synchronize()
+
+
+def get_total_gpu_memory_bytes():
+    if torch.xpu.is_available():
+        return torch.xpu.get_device_properties(torch.xpu.current_device()).total_memory
+    if torch.cuda.is_available():
+        return torch.cuda.get_device_properties(torch.cuda.current_device()).total_memory
+
+    raise RuntimeError("No supported GPU device found.")
 
 
 def _summarize_statistics(times, quantiles, return_mode):
@@ -153,7 +168,6 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
             fn()
             synchronize()
             i += 1
-        print(f"Stopped warmup after {i} iterations")
     else:
         for _ in range(n_warmup):
             fn()
@@ -210,10 +224,96 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
     return _summarize_statistics(times, quantiles, return_mode)
 
 
+def do_bench_proton(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quantiles=None, return_mode="mean", device="xpu",
+                    sync_submitting=True, time_warmup=True, benchmark_label=None, max_iters=1500):
+    """
+    Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
+    the 20-th and 80-th performance percentile.
+
+    :param fn: Function to benchmark
+    :type fn: Callable
+    :param n_warmup: Number of repetitions for warmup
+    :type n_warmup: int
+    :param n_repeat: Number of repetitions to collect measurements
+    :type n_repeat: int
+    :param grad_to_none: Reset the gradient of the provided tensor to None
+    :type grad_to_none: torch.tensor, optional
+    :param quantiles: Performance percentile to return in addition to the median.
+    :type quantiles: list[float]
+    """
+
+    assert return_mode in ["min", "max", "mean", "median"]
+
+    fn()
+    synchronize()
+
+    # We maintain a buffer of 256 MB that we clear
+    # before each kernel call to make sure that the L2
+    # doesn't contain any input data before the run
+    cache_size = 256 * 1024 * 1024
+    cache = torch.empty(int(cache_size // 4), dtype=torch.int, device=device)
+
+    # Warm-up
+    if time_warmup:
+        # Stop either on max iteration number or max time
+        warmup_time_s = n_warmup / 1000
+        assert sync_submitting
+        start = time.perf_counter()
+        i = 0
+        while i < max_iters and time.perf_counter() - start < warmup_time_s:
+            fn()
+            synchronize()
+            i += 1
+        print(f"Stopped warmup after {i} iterations")
+    else:
+        for _ in range(n_warmup):
+            fn()
+            # To be consistent with the benchmark measurements
+            if sync_submitting:
+                synchronize()
+
+    proton.start()
+    # Benchmark
+    for idx in range(n_repeat):
+        # we don't want `fn` to accumulate gradient values
+        # if it contains a backward pass. So we clear the
+        # provided gradients
+        if grad_to_none is not None:
+            for x in grad_to_none:
+                x.grad = None
+        # we clear the L2 cache before each run
+        cache.zero_()
+        if sync_submitting:
+            synchronize()
+        # record time of `fn`
+        with proton.scope(f"__profile_kernel_of_func{idx}"):
+            fn()
+    # Record clocks
+    synchronize()
+    proton.finalize()
+    with open("./proton.hatchet", encoding="utf-8") as f:
+        data = json.load(f)
+
+    profiling_func_filter = filter(
+        lambda x: x["frame"]["name"].startswith("__profile_kernel_of_func"
+                                                if benchmark_label is None else benchmark_label), data[0]["children"])
+    functions = list(profiling_func_filter)
+
+    def extract_kernels(funcs):
+        return [x["children"][0]["metrics"] for x in funcs]
+
+    kernels = extract_kernels(functions)
+    # Make the time to the milliseconds.
+    times = torch.tensor([ks["time (ns)"] * 1e-6 for ks in kernels], dtype=torch.float)
+    return _summarize_statistics(times, quantiles, return_mode)
+
+
 if BENCHMARKING_METHOD == "ELAPSED_TIME":
     do_bench = do_bench_elapsed_time
 elif BENCHMARKING_METHOD == "UPSTREAM_PYTORCH_PROFILER":
     do_bench = do_bench_upstream_pytorch_profiler
+elif BENCHMARKING_METHOD == "PROTON_PROFILER":
+    do_bench = do_bench_proton
 else:
     raise NotImplementedError(f"BENCHMARKING_METHOD: {BENCHMARKING_METHOD} isn't implemented")
 
@@ -248,6 +348,30 @@ def filter_providers(
     return supported_providers
 
 
+def get_gpu_info():
+    device_name = torch.xpu.is_available() and torch.xpu.get_device_name()
+    if device_name is None:
+        print("Couldn't read device name.")
+        return None, None
+
+    # benchmarks/triton_kernels_benchmark/benchmark_testing.py -> benchmarks/gpu_info.json
+    current_dir = Path(__file__).parent.resolve()
+    gpu_info_path = current_dir.parent / "gpu_info.json"
+
+    if not gpu_info_path.exists():
+        print(f"Warning: '{gpu_info_path}' not found.")
+        return None, None
+
+    with open(gpu_info_path, "r", encoding="utf-8") as f:
+        gpu_info = json.load(f)
+
+    if device_name not in gpu_info:
+        print(f"Warning: Device '{device_name}' not found in {gpu_info_path}")
+        return None, None
+
+    return gpu_info[device_name]
+
+
 def perf_report(benchmarks):
     """
     Mark a function for benchmarking. The benchmark can then be executed by using the :code:`.run` method on the return value.
@@ -263,9 +387,11 @@ def perf_report(benchmarks):
 class MarkArgs:
     reports: str = ""
     n_runs: int = 1
+    brief: bool = False
+    eff: bool = False
 
-    @classmethod
-    def _get_parser(cls) -> argparse.ArgumentParser:
+    @staticmethod
+    def load_cli_args() -> MarkArgs:
         """Parses arguments via CLI, allows save_path overloading to `reports`."""
         parser = argparse.ArgumentParser()
         parser.add_argument(
@@ -280,12 +406,53 @@ class MarkArgs:
             default=1,
             help="Number of runs for this benchmark. The default is one.",
         )
-        return parser
+        parser.add_argument(
+            "--brief",
+            "-b",
+            action="store_true",
+            help="Print only mean values without min, max, CV.",
+        )
+        parser.add_argument(
+            "--eff",
+            "-e",
+            action="store_true",
+            help="Print HW utilization, will use internal database from 'gpu_info.json'.",
+        )
+        args = parser.parse_args()
+        return MarkArgs(args.reports, args.n_runs, args.brief, args.eff)
 
-    @classmethod
-    def from_args(cls) -> "MarkArgs":
-        args = cls._get_parser().parse_args()
-        return MarkArgs(args.reports, args.n_runs)
+
+def enhance_df(df, bench, mark_args: MarkArgs):
+    hw_tflops, hw_gbps = None, None
+    if mark_args.eff:
+        hw_tflops, hw_gbps = get_gpu_info()
+
+    df = df.copy()
+    if mark_args.brief:
+        df = df[[c for c in df.columns if not any(map(c.endswith, ("min", "max", "CV")))]]
+
+    # Find and write down HW efficiency columns
+    tflops_labels = [l for l in bench.ylabel if l.lower().endswith("tflops")]
+    tflops_pattern = "-(" + "|".join(tflops_labels) + ")(-min|-max)?$"
+
+    gbps_labels = [l for l in bench.ylabel if l.lower().replace("/", "p").endswith("gbps")]
+    gbps_pattern = "-(" + "|".join(gbps_labels) + ")(-min|-max)?$"
+
+    for col in df.columns:
+        if re.search(tflops_pattern, col) and hw_tflops:
+            df[re.sub(tflops_pattern, "-ceff", col)] = df[col] / hw_tflops
+        if re.search(gbps_pattern, col) and hw_gbps:
+            df[re.sub(gbps_pattern, "-meff", col)] = df[col] / hw_gbps
+            # df[re.sub(gbps_pattern, "-meff", col)] = (df[col] / mark_args.hw_gbps).apply(lambda x: f"{x:.1%}")
+    # We will only keep resulting efficiency column, we are either compute or memory bound.
+    for provider in bench.line_names:
+        if f"{provider}-ceff" in df.columns and f"{provider}-meff" in df.columns:
+            df[f"{provider}-eff"] = np.maximum(df[f"{provider}-ceff"],
+                                               df[f"{provider}-meff"]).apply(lambda x: f"{x:.2%}")
+            del df[f"{provider}-ceff"]
+            del df[f"{provider}-meff"]
+
+    return df
 
 
 class Mark:
@@ -295,8 +462,8 @@ class Mark:
         self.benchmarks = benchmarks
 
     # pylint: disable=too-many-branches
-    def _run(self, bench: Benchmark, save_path: str, show_plots: bool, print_data: bool, diff_col=False, run_counter=0,
-             save_precision=6, **kwargs):
+    def _run(self, bench: Benchmark, save_path: str, show_plots: bool, print_data: bool, mark_args, diff_col=False,
+             run_counter=0, save_precision=6, **kwargs):
         y_vals = []
         for label in bench.ylabel:
             y_mean = [f"{x}-{label}" for x in bench.line_names]
@@ -371,15 +538,17 @@ class Mark:
             col0, col1 = df.columns.tolist()
             df["Diff"] = df[col1] - df[col0]
 
+        df = enhance_df(df, bench, mark_args)
         if print_data:
             print(bench.plot_name + ":")
             print(df.to_string())
+
         if save_path:
             df.to_csv(os.path.join(save_path, f"{filename}.csv"), float_format=f"%.{save_precision}f", index=False)
         return df
 
     def run(self, show_plots=False, print_data=False, return_df=False, save_precision=6, mark_args=None, **kwargs):
-        args = MarkArgs().from_args() if mark_args is None else mark_args
+        args = mark_args or MarkArgs.load_cli_args()
 
         has_single_bench = isinstance(self.benchmarks, Benchmark)
         benchmarks = [self.benchmarks] if has_single_bench else self.benchmarks
@@ -392,7 +561,10 @@ class Mark:
         for bench in benchmarks:
             benchmark_dfs = []
             for run_counter in range(args.n_runs):
-                df = self._run(bench, args.reports, show_plots, print_data, run_counter=run_counter, **kwargs)
+                df = self._run(bench, args.reports, show_plots, print_data, mark_args=args, run_counter=run_counter,
+                               **kwargs)
+                if len(df) == 0:
+                    warnings.warn("No results found in the benchmark run.")
                 df["datetime"] = datetime.datetime.now()
                 df["run_counter"] = run_counter + 1
                 benchmark_dfs.append(df)

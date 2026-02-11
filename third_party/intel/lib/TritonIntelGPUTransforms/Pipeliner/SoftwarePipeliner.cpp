@@ -38,9 +38,7 @@ static bool preCondition(scf::ForOp forOp) {
   return true;
 }
 
-static void pipelineLoop(
-    scf::ForOp forOp, int numStages,
-    std::optional<triton::TritonGEN::MemScope> barrierScope = std::nullopt) {
+static void pipelineLoop(scf::ForOp forOp, int numStages, bool useBarrier) {
   mlir::scf::PipeliningOption options;
   if (!preCondition(forOp))
     return;
@@ -59,19 +57,14 @@ static void pipelineLoop(
     return;
 
   scf::ForOp loop = (*newForOp);
-  if (barrierScope) {
-    assert((*barrierScope == triton::TritonGEN::MemScope::SUB_GROUP) ||
-           (*barrierScope == triton::TritonGEN::MemScope::WORK_GROUP) &&
-               "The barrier scope must be SubGroup or Workgroup");
+  if (useBarrier) {
     OpBuilder b(loop);
     Location loc = loop.getLoc();
     b.setInsertionPointToStart(loop.getBody());
-    b.create<triton::TritonGEN::SplitBarrierArriveOp>(loc, *barrierScope,
-                                                      *barrierScope);
+    auto bData = triton::TritonGEN::SplitBarrierArriveOp::create(b, loc);
     auto yield = cast<scf::YieldOp>(loop.getBody()->getTerminator());
     b.setInsertionPoint(yield);
-    b.create<triton::TritonGEN::SplitBarrierWaitOp>(loc, *barrierScope,
-                                                    *barrierScope);
+    triton::TritonGEN::SplitBarrierWaitOp::create(b, loc, bData);
   }
 }
 
@@ -86,29 +79,17 @@ struct IntelGPUPipelinePass
   void runOnOperation() override {
     ModuleOp m = getOperation();
 
-    if (!m->hasAttr(ttgi::TritonIntelGPUDialect::getSupportSG2DBlockAttrName()))
+    if (!m->hasAttr(ttgi::TritonIntelGPUDialect::getSupport2DBlockIOAttrName()))
       return;
 
     if (numStages <= 1)
       return;
 
-    std::optional<triton::TritonGEN::MemScope> barrierScope = std::nullopt;
-    switch (splitBarrierScope) {
-    case ttgi::SplitBarrierScope::None:
-      break;
-    case ttgi::SplitBarrierScope::Workgroup:
-      barrierScope = triton::TritonGEN::MemScope::WORK_GROUP;
-      break;
-    case ttgi::SplitBarrierScope::Subgroup:
-      barrierScope = triton::TritonGEN::MemScope::SUB_GROUP;
-      break;
-    }
-
     SmallVector<scf::ForOp> loops;
     getOperation()->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
 
     for (scf::ForOp forOp : loops)
-      pipelineLoop(forOp, numStages, barrierScope);
+      pipelineLoop(forOp, numStages, useBarrier);
   }
 };
 } // anonymous namespace

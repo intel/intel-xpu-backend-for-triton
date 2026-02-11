@@ -37,7 +37,7 @@ jobs:
       - runner-0.0.22
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Install Python
         uses: actions/setup-python@v6
@@ -55,10 +55,17 @@ jobs:
       - name: Install Triton
         uses: ./.github/actions/setup-triton
 
+      - name: Build && Install PTI
+        run: |
+          ./scripts/install-pti.sh --build-level-zero
+          PTI_LIBS_DIR=$(python ./scripts/pti_lib.py)
+          ls $PTI_LIBS_DIR
+          echo "LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH" | tee -a $GITHUB_ENV
+
       - name: Install runtime dependencies
         run: |
           curl -sSLO --retry 10 https://raw.githubusercontent.com/pytorch/pytorch/$(<.github/pins/pytorch.txt)/.github/scripts/generate_binary_build_matrix.py
-          sed -i '/^validate_nccl_dep_consistency.*/d' generate_binary_build_matrix.py
+          sed -i 's/^\(\s*\)validate_nccl_dep_consistency(arch_version)/\1pass/' generate_binary_build_matrix.py
           python -c "from generate_binary_build_matrix import PYTORCH_EXTRA_INSTALL_REQUIREMENTS; print('\n'.join(PYTORCH_EXTRA_INSTALL_REQUIREMENTS['xpu'].split(' | ')))" | tee /tmp/requirements.txt
           pip install -r /tmp/requirements.txt
           pip install transformers==4.54.0

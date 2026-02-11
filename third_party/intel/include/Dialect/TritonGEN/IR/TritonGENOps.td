@@ -54,50 +54,22 @@ def TritonGEN_SplitBarrierArriveOp : TritonGEN_Op<"split_barrier_arrive"> {
     may allow other invocations waiting on the split control barrier to continue
     executing.
 
-    When `Execution` is `Workgroup` or larger, behavior is undefined unless all
-    invocations within `Execution` execute the same dynamic instance of this
-    instruction. When `Execution` is `Subgroup` or `Invocation`, the behavior of
-    this instruction in non-uniform control flow is defined by the client API.
-
-    If `Semantics` is not `None`, this instruction also serves as the start of a
-    memory barrier similar to an `OpMemoryBarrier` instruction with the same
-    `Memory` and `Semantics` operands. This allows atomically specifying both a
-    control barrier and a memory barrier (that is, without needing two
-    instructions). If `Semantics` is `None`, `Memory` is ignored.
+    The scope of these barrier is only Workgroup and the Subgroups are the
+    objects which barriers control.
+    The barrier implicitly perform the acq-rel memory semantic.
   }];
-  let arguments = (ins TritonGEN_MemScope:$execution_scope, TritonGEN_MemScope:$memory_scope);
-  let results = (outs);
-  let assemblyFormat = [{
-    ` ` `{` `execution_scope` `=` $execution_scope `,` `memory_scope` `=` $memory_scope `}` attr-dict
-  }];
+  let results = (outs LLVM_PointerInAddressSpace<3>:$bData);
+  let assemblyFormat = "attr-dict";
 }
 
 def TritonGEN_SplitBarrierWaitOp : TritonGEN_Op<"split_barrier_wait"> {
   let summary = "Split barrier wait";
   let description = [{
-    Waits for other invocations of this module to arrive at a split control
-    barrier.
-
-    When `Execution` is `Workgroup` or larger, behavior is undefined unless all
-    invocations within `Execution` execute the same dynamic instance of this
-    instruction. When `Execution` is `Subgroup` or `Invocation`, the behavior of
-    this instruction in non-uniform control flow is defined by the client API.
-
-    If `Semantics` is not `None`, this instruction also serves as the end of a
-    memory barrier similar to an `OpMemoryBarrier` instruction with the same
-    `Memory` and `Semantics` operands. This ensures that memory accesses issued
-    before arriving at the split barrier are observed before memory accesses
-    issued after this instruction. This control is ensured only for memory
-    accesses issued by this invocation and observed by another invocation
-    executing within `Memory` scope. This allows atomically specifying both a
-    control barrier and a memory barrier (that is, without needing two
-    instructions). If `Semantics` is `None`, `Memory` is ignored.
+    Blocks the current invocation until the barrier’s arrival count reaches zero.
   }];
-  let arguments = (ins TritonGEN_MemScope:$execution_scope, TritonGEN_MemScope:$memory_scope);
+  let arguments = (ins LLVM_PointerInAddressSpace<3>:$bData);
   let results = (outs);
-  let assemblyFormat = [{
-    ` ` `{` `execution_scope` `=` $execution_scope `,` `memory_scope` `=` $memory_scope `}` attr-dict
-  }];
+  let assemblyFormat = "operands attr-dict";
 }
 
 //===----------------------------------------------------------------------===//
@@ -143,6 +115,57 @@ def TritonGEN_MatrixDPASOp : TritonGEN_Op<"dpas">,
 
     $a, $b, $c, $d - matrix A, B, C, D, respectively
     $pa, $pb - precision of matrix A and B resepectively
+    $rc - repeat count
+  }];
+
+  let assemblyFormat = [{
+    operands ` ` `{` `pa` `=` $pa `,` `pb` `=` $pb `,` `rc` `=` $rc `}` attr-dict `:` functional-type(operands, results)
+  }];
+
+  let hasVerifier = 1;
+}
+
+def TritonGEN_MatrixBlockScaleDPASOp : TritonGEN_Op<"bdpas", [AttrSizedOperandSegments]>,
+  Results<(outs FixedVectorOfNonZeroRankOf<[F32, BF16]>:$d)>,
+  Arguments<(ins
+    FixedVectorOfRankAndType<[1], [F32, BF16]>:$c,
+    FixedVectorOfRankAndType<[1], [AnyI16]>:$a,
+    FixedVectorOfRankAndType<[1], [AnyI32]>:$b,
+    Optional<AnyTypeOf<[AnyI8, FixedVectorOfRankAndType<[1], [AnyI8]>]>>:$scaleA,
+    Optional<AnyTypeOf<[AnyI8, FixedVectorOfRankAndType<[1], [AnyI8]>]>>:$scaleB,
+    TritonGEN_PrecisionTypeAttr:$pa,
+    TritonGEN_PrecisionTypeAttr:$pb,
+    I32Attr:$rc
+  )> {
+
+  let summary = "Block scale matrix multiply-add for MXFP";
+
+  let description = [{
+    The `triton_gen.bdpas` operation is a matrix multiplication plus accumulation for MXFP:
+
+      D = C + (A x B) * scaleA * scaleB
+
+      where the A, B, C input matrices and the result D have shapes:
+        D : MxN
+        C : MxN
+        A : MxK
+        B : KxN
+        scaleA: Mx(K/32)
+        scaleB: (K/32)xN
+
+        M : repeat count, must be 8
+        N : fixed execution size, must be 16
+        K : depth * OPS_PER_CHAN
+            OPS_PER_CHAN
+              2 : for 16-bit precision(BF, HF)
+              4 : for 8-bit precision (FP8, UB, B)
+              8 : for less-then 8 bit precision (U4/S4, U2/S2).
+
+            If depth is 8, K would be 8, 16, 32, or 64 (based on OPS_PER_CHAN).
+
+    $a, $b, $c, $d - matrix A, B, C, D, respectively
+    $scaleA, $scaleB - scale factors for matrix A and B, respectively
+    $pa, $pb - precision of matrix A and B respectively
     $rc - repeat count
   }];
 

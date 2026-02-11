@@ -45,11 +45,11 @@ python/triton/tools/extra
 # Proton
 python/triton/profiler
 
-# Pytest
-pytest.ini
-
 # Instrumentation
 python/triton/instrumentation
+
+# MLIR Plugin
+python/triton/plugins
 
 # Python caches
 __pycache__/
@@ -73,6 +73,7 @@ cmake-build-*
 cuobjdump
 nvdisasm
 ptxas
+ptxas-blackwell
 
 # Third-party include
 third_party/nvidia/backend/include

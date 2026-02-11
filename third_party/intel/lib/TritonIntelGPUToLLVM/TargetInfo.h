@@ -9,6 +9,7 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOINTEL_H
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOINTEL_H
 
+#include "Utils/LibCallEmitter.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
@@ -26,7 +27,9 @@ public:
                Value cmp) const override;
 
   void barrier(Location loc, RewriterBase &rewriter,
-               bool isWarpSync = false) const override;
+               triton::gpu::AddrSpace targets) const override;
+
+  void warpSync(Location loc, RewriterBase &rewriter) const override;
 
   void storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
                     std::optional<Value> ctaId, Value val,
@@ -87,8 +90,7 @@ private:
                                  StringRef name, StringRef value,
                                  unsigned addressSpace) const;
 
-  mutable llvm::DenseMap<std::pair<unsigned, StringAttr>, LLVM::GlobalOp>
-      globals;
+  const mlir::triton::gpu::intel::LibCallEmitter emitter;
 };
 
 std::unique_ptr<TargetInfo> createTargetInfo(ModuleOp mod);

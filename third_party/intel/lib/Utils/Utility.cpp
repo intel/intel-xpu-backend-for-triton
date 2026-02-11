@@ -1,5 +1,6 @@
 #include "intel/include/Utils/Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
@@ -36,96 +37,55 @@ Value findOrCreateIntConstant(Location loc, int val, unsigned bitWidth,
              : builder.createOrFold<arith::ConstantIntOp>(loc, val, bitWidth);
 }
 
-std::optional<tt::MakeTensorPtrOp> findDefiningMakeTensorPtrOp(Value val) {
-  if (auto arg = dyn_cast<BlockArgument>(val)) {
-    Operation *parentOp = arg.getParentBlock()->getParentOp();
+static Value skipCasts(Value v) {
+  Operation *def = v.getDefiningOp();
+  if (def &&
+      isa<LLVM::TruncOp, LLVM::SExtOp, LLVM::ZExtOp, LLVM::BitcastOp>(def))
+    return def->getOperand(0);
+  return v;
+}
 
-    Value loopArg;
-    if (auto forOp = dyn_cast<scf::ForOp>(parentOp))
-      loopArg = forOp.getInitArgs()[arg.getArgNumber() - 1];
-    else if (auto whileOp = dyn_cast<scf::WhileOp>(parentOp))
-      loopArg = whileOp.getInits()[arg.getArgNumber()];
-    else
-      llvm_unreachable("Unexpected parent operator");
+static Value foldValue(Value v) {
+  if (Operation *def = v.getDefiningOp()) {
+    SmallVector<OpFoldResult> results;
 
-    return findDefiningMakeTensorPtrOp(loopArg);
+    if (failed(def->fold(results)))
+      return v;
+
+    // If fold succeeded but `results` is empty, we give a second try, after the
+    // operands have been switched during the first call to `fold()`.
+    if (results.empty()) {
+      if (failed(def->fold(results)))
+        return v;
+    }
+
+    if (results.size() == 1) {
+      if (auto val = dyn_cast_or_null<Value>(results[0]))
+        return val;
+    }
   }
+  return v;
+}
 
-  if (auto poisonOp = val.getDefiningOp<ub::PoisonOp>())
-    return std::nullopt;
-  if (auto callOp = val.getDefiningOp<tt::CallOp>())
-    return std::nullopt;
-  if (auto advanceOp = val.getDefiningOp<tt::AdvanceOp>())
-    return findDefiningMakeTensorPtrOp(advanceOp.getPtr());
-  if (auto makePtrOp = val.getDefiningOp<tt::MakeTensorPtrOp>())
-    return makePtrOp;
-  if (auto opRes = dyn_cast<OpResult>(val)) {
-    Operation *defOp = opRes.getOwner();
-    if (auto loopOp = dyn_cast<LoopLikeOpInterface>(defOp))
-      return findDefiningMakeTensorPtrOp(
-          loopOp.getYieldedValues()[opRes.getResultNumber()]);
-    if (auto ifOp = dyn_cast<scf::IfOp>(defOp)) {
-      // Give up if the 2 possible definitions aren't the same.
-      Region &thenRgn = ifOp.getThenRegion();
-      Region &elseRgn = ifOp.getElseRegion();
-      assert(thenRgn.hasOneBlock() && elseRgn.hasOneBlock() &&
-             "Expecting single blocks on both the 'then' and 'else' regions");
-      auto thenYieldOp =
-               cast<scf::YieldOp>(thenRgn.getBlocks().front().getTerminator()),
-           elseYieldOp =
-               cast<scf::YieldOp>(elseRgn.getBlocks().front().getTerminator());
-      Value thenVal = thenYieldOp->getOperand(opRes.getResultNumber()),
-            elseVal = elseYieldOp->getOperand(opRes.getResultNumber());
-      std::optional<tt::MakeTensorPtrOp> thenDef = findDefiningMakeTensorPtrOp(
-                                             thenVal),
-                                         elseDef = findDefiningMakeTensorPtrOp(
-                                             elseVal);
-      if (!thenDef || !elseDef || *thenDef != *elseDef)
-        return std::nullopt;
-      return thenDef;
-    }
-    if (auto selectOp = dyn_cast<arith::SelectOp>(defOp)) {
-      // Give up if the 2 possible definitions aren't the same.
-      Value trueVal = selectOp.getTrueValue(),
-            falseVal = selectOp.getFalseValue();
-      std::optional<tt::MakeTensorPtrOp> trueDef = findDefiningMakeTensorPtrOp(
-                                             trueVal),
-                                         falseDef = findDefiningMakeTensorPtrOp(
-                                             falseVal);
-      if (!trueDef || !falseDef || *trueDef != *falseDef)
-        return std::nullopt;
-      return trueDef;
-    }
+std::optional<int64_t> getFoldedConstantValue(Value v, int depth) {
+  for (int i = 0; i < depth; ++i) {
+    if (auto res = getConstantIntValue(v))
+      return res;
 
-    llvm::errs() << "defOp: " << *defOp << "\n";
-    assert(false && "unhandled operation");
+    Value newV = skipCasts(v);
+    newV = foldValue(newV);
+
+    if (newV == v)
+      break;
+
+    v = newV;
   }
 
   return std::nullopt;
 }
 
-std::optional<int64_t> getFoldedConstantValue(Operation *op) {
-  SmallVector<OpFoldResult> results;
-  if (failed(op->fold(results)))
-    return std::nullopt;
-
-  // If fold succeeded but `results` is empty, we give a second try, after the
-  // operands have been switched during the first call to `fold()`.
-  if (results.empty()) {
-    if (failed(op->fold(results)))
-      return std::nullopt;
-  }
-
-  if (results.size() != 1)
-    return std::nullopt;
-
-  return getConstantIntValue(results[0]);
-}
-
 bool isConstant(Value val, int64_t expected) {
-  if (auto defOp = val.getDefiningOp())
-    return (getFoldedConstantValue(defOp) == expected);
-  return false;
+  return (getFoldedConstantValue(val) == expected);
 }
 
 Value getFinalValue(Value value) {
@@ -181,6 +141,11 @@ Value getFinalValue(Value value) {
       return getFinalValue(divOp.getLhs());
     return divOp.getResult();
   }
+
+  if (auto extOp = dyn_cast<arith::ExtSIOp>(defOp))
+    return getFinalValue(extOp.getIn());
+  if (auto extOp = dyn_cast<arith::ExtUIOp>(defOp))
+    return getFinalValue(extOp.getIn());
 
   return value;
 }

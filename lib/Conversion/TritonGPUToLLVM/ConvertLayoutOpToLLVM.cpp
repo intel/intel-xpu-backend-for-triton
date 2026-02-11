@@ -26,8 +26,6 @@ struct ConvertLayoutOpConversion
     : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
   const TargetInfoBase &targetInfo;
 
-  // Set benefit to 2 so that this pattern applies before other convert-layout
-  // conversions.  TODO(jlebar): Eventually we want this to be the only pattern.
   explicit ConvertLayoutOpConversion(LLVMTypeConverter &typeConverter,
                                      const TargetInfoBase &targetInfo,
                                      PatternBenefit benefit = 1)
@@ -52,9 +50,12 @@ struct ConvertLayoutOpConversion
     StringAttr kLane = str_attr("lane");
     StringAttr kRegister = str_attr("register");
 
+    auto dims = conversion.getInDimNames();
+    bool alwaysUseWarpShuffle = cvtAlwaysUseWarpShuffle(op);
+    assert(!alwaysUseWarpShuffle || (!llvm::is_contained(dims, kBlock) &&
+                                     !llvm::is_contained(dims, kWarp)));
     assert(to_vector(conversion.getInDimNames()) ==
            to_vector(conversion.getOutDimNames()));
-    auto dims = conversion.getInDimNames();
     if (llvm::is_contained(dims, kBlock)) {
       // Case 1: Transfer between values in different CTAs.
       //          This requires moving values through distributed shared memory.
@@ -69,7 +70,7 @@ struct ConvertLayoutOpConversion
       // Case 3. Transfer between values in the same warp, in which case we try
       //         to move values using warp shuffles, though if the pattern is
       //         expensive enough we fall back to using shared memory
-      if (cvtNeedsWarpShuffle(srcTy, dstTy))
+      if (cvtNeedsWarpShuffle(srcTy, dstTy) || alwaysUseWarpShuffle)
         return transferWithinWarp(op, adaptor, rewriter);
 
       transferWithinBlockSwizzling(op, adaptor.getSrc(), rewriter);
@@ -208,23 +209,30 @@ struct ConvertLayoutOpConversion
     SmallVector<Value> outVals;
     auto affineOffset = b.i32_val(0);
     auto maskSpanAffineOffset = 0;
-    auto noPaddingOffset = [](Value v) { return v; };
 
     bool isWarpSync = mlir::isCvtWarpSync(srcLayout, dstLayout);
     for (int i = 0; i < nReps; ++i) {
-      if (i > 0)
-        targetInfo.barrier(loc, rewriter, isWarpSync);
-
+      if (i > 0) {
+        if (isWarpSync) {
+          targetInfo.warpSync(loc, rewriter);
+        } else {
+          targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
+        }
+      }
       auto tileInVals =
           ArrayRef<Value>(permutedInVals).slice(i * tileSize, tileSize);
       // Store
       lowerLdStShared(loc, ctx, storeCvt, tileInVals, llvmElemTy, smemBase,
-                      noPaddingOffset, affineOffset, maskSpanAffineOffset,
+                      /*paddingShifts=*/{}, affineOffset, maskSpanAffineOffset,
                       rewriter, targetInfo);
-      targetInfo.barrier(loc, rewriter, isWarpSync);
+      if (isWarpSync) {
+        targetInfo.warpSync(loc, rewriter);
+      } else {
+        targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
+      }
       // Load
       SmallVector<Value> tileOutVals = lowerLdStShared(
-          loc, ctx, loadCvt, {}, llvmElemTy, smemBase, noPaddingOffset,
+          loc, ctx, loadCvt, {}, llvmElemTy, smemBase, /*paddingShifts=*/{},
           affineOffset, maskSpanAffineOffset, rewriter, targetInfo);
       llvm::append_range(outVals, tileOutVals);
     }
@@ -277,8 +285,7 @@ struct ConvertLayoutOpConversion
     StringAttr kReg = str_attr("register");
     StringAttr kLane = str_attr("lane");
     auto elemTy = getTypeConverter()->convertType(srcTy.getElementType());
-    int bitwidth =
-        elemTy.isIntOrFloat() ? elemTy.getIntOrFloatBitWidth() : kPtrBitWidth;
+    int bitwidth = getIntOrFloatOrPtrBitWidth(elemTy);
 
     auto factors = getWarpLayoutConvertDecomposition(srcTy, dstTy, bitwidth);
     auto &[pReg, pLane, mixedTranspositions, nPack] = factors;

@@ -37,6 +37,20 @@ def _filter_layouts(layouts):
 THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
 
 
+@gluon.jit
+def _combine(a, b):
+    return a + b
+
+
+@gluon.jit
+def scan_kernel(x_ptr, z_ptr, M: ttgl.constexpr, N: ttgl.constexpr, layout: ttgl.constexpr, axis: ttgl.constexpr):
+    x_offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, layout))[:, None]
+    x_offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, layout))[None, :]
+    x = ttgl.load(x_ptr + x_offs_m * N + x_offs_n)
+    y = ttgl.associative_scan(x, axis=axis, combine_fn=_combine)
+    ttgl.store(z_ptr + x_offs_m * N + x_offs_n, y)
+
+
 @pytest.mark.parametrize("M, N", [(32, 16), (32, 32), (32, 64), (64, 32)])
 @pytest.mark.parametrize(
     "src_layout",
@@ -57,29 +71,62 @@ THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
 @pytest.mark.parametrize("sanitize_overflow", [False, True])
 def test_scan_layouts(M, N, src_layout, axis, sanitize_overflow, device):
 
-    @gluon.jit
-    def _combine(a, b):
-        return a + b
-
-    @gluon.jit
-    def kernel(x_ptr, z_ptr, M: ttgl.constexpr, N: ttgl.constexpr, layout: ttgl.constexpr, axis: ttgl.constexpr):
-        x_offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, layout))[:, None]
-        x_offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, layout))[None, :]
-        x = ttgl.load(x_ptr + x_offs_m * N + x_offs_n)
-        y = ttgl.associative_scan(x, axis=axis, combine_fn=_combine)
-        ttgl.store(z_ptr + x_offs_m * N + x_offs_n, y)
-
     torch.manual_seed(0)
 
     x = torch.randint(-100, 100, (M, N), dtype=torch.int32, device=device)
     z = torch.zeros((M, N), dtype=torch.int32, device=device)
     z_tri = torch.empty_like(z)
 
-    kernel[(1, 1, 1)](x, z_tri, M, N, src_layout, axis, num_warps=4, sanitize_overflow=sanitize_overflow,
-                      debug=sanitize_overflow)
+    scan_kernel[(1, 1, 1)](x, z_tri, M, N, src_layout, axis, num_warps=4, sanitize_overflow=sanitize_overflow,
+                           debug=sanitize_overflow)
 
     z_ref = torch.cumsum(x, dim=axis, dtype=torch.int32)
     torch.testing.assert_close(z_tri, z_ref)
+
+
+def test_scan_blocked_broadcast_layout(device):
+    if not is_cuda():
+        pytest.skip("requires CUDA")
+    if THREADS_PER_WARP != 32:
+        pytest.skip("requires 32-thread warps")
+
+    M = 32
+    # Broadcasting in register, lane and warp
+    # - register=1 -> (1, 0)
+    # - lane=1 -> (0, 0)
+    #   lane=2 -> (2, 0)
+    #   lane=4 -> (4, 0)
+    #   lane=8 -> (8, 0)
+    #   lane=16 -> (16, 0)
+    # - warp=1 -> (0, 0)
+    #   warp=2 -> (0, 0)
+    # - block is a size 1 dimension
+    src_layout = ttgl.BlockedLayout([2, 4], [16, 2], [2, 2], [1, 0])
+
+    torch.manual_seed(0)
+    x = torch.randn((M, 1), dtype=torch.float32, device=device)
+    y = torch.empty_like(x)
+    scan_kernel[(1, )](x, y, M, 1, src_layout, 0, num_warps=4)
+
+    torch.testing.assert_close(y, torch.cumsum(x, dim=0))
+
+
+def test_scan_blocked_broadcast_layout_multiblock(device):
+    if not is_cuda():
+        pytest.skip("requires CUDA")
+    if THREADS_PER_WARP != 32:
+        pytest.skip("requires 32-thread warps")
+
+    M = 64
+    # Broadcasting in lane for dim1 and multiple scan blocks along axis 0.
+    src_layout = ttgl.BlockedLayout([2, 4], [16, 2], [1, 2], [1, 0])
+
+    torch.manual_seed(0)
+    x = torch.randn((M, 1), dtype=torch.float32, device=device)
+    y = torch.empty_like(x)
+    scan_kernel[(1, )](x, y, M, 1, src_layout, 0, num_warps=2)
+
+    torch.testing.assert_close(y, torch.cumsum(x, dim=0))
 
 
 def _reduce_linear_layouts():
@@ -113,37 +160,34 @@ def _reduce_layouts():
         # FIXME: Do not enable these tests until the SLPVectorizor problem with nvptx target has been resolved
         # SliceLayout(dim=1, parent=BlockedLayout([1, 4, 1], [1, 8, THREADS_PER_WARP // 8], [1, 1, 4], [2, 0, 1], [1, 1, 1], [1, 1, 1], [0, 1, 2])),
         # SliceLayout(dim=0, parent=BlockedLayout([1, 4, 1], [1, 8, THREADS_PER_WARP // 8], [1, 4, 1], [2, 1, 0], [1, 1, 1], [1, 1, 1], [0, 1, 2])),
-        ttgl.BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-        ttgl.BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1]),
-        ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[2, 4], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
-                                    cta_order=[0, 1], instr_shape=[16, 8]),
-        ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
-                                    cta_order=[1, 0], instr_shape=[16, 16, 16]),
+        ttgl.BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [4, 1], [1, 0]),
+        ttgl.BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [4, 1], [0, 1]),
+        ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[2, 4], instr_shape=[16, 8]),
+        ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], instr_shape=[16, 16, 16]),
         ttgl.amd.AMDMFMALayout(version=1, instr_shape=[32, 32, 8], transposed=True, warps_per_cta=[1, 4]),
         ttgl.amd.AMDMFMALayout(version=2, instr_shape=[32, 32, 8], transposed=True, warps_per_cta=[1, 4]),
         ttgl.amd.AMDMFMALayout(version=3, instr_shape=[32, 32, 8], transposed=True, warps_per_cta=[1, 4]),
         ttgl.amd.AMDMFMALayout(version=4, instr_shape=[32, 32, 16], transposed=True, warps_per_cta=[1, 4]),
-        ttgl.amd.AMDWMMALayout(version=1, transposed=True, warps_per_cta=[1, 4]),
-        ttgl.amd.AMDWMMALayout(version=2, transposed=True, warps_per_cta=[1, 4]),
+        ttgl.amd.AMDWMMALayout(version=1, transposed=True, warp_bases=[[0, 1], [0, 2]]),
+        ttgl.amd.AMDWMMALayout(version=2, transposed=True, warp_bases=[[0, 1], [0, 2]]),
         ttgl.intel.IntelDPASLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=1,
                                    warps_per_cta=[4, 1], rep_cluster=[1, 1], threads_per_warp=32),
+        ttgl.intel.IntelDPASLayout(repeatCount=8, systolic_depth=8, execution_size=16, ops_per_chan=2,
+                                   warps_per_cta=[2, 2], rep_cluster=[1, 1], threads_per_warp=32),
+        ttgl.intel.IntelDPASLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=4,
+                                   warps_per_cta=[4, 1], rep_cluster=[1, 1], threads_per_warp=32),
         ttgl.DotOperandLayout(
-            parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[2, 4], ctas_per_cga=[1, 1],
-                                               cta_split_num=[1, 1], cta_order=[0, 1], instr_shape=[16, 8]),
+            parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[2, 4], instr_shape=[16, 8]),
             operand_index=1, k_width=8),
         ttgl.DotOperandLayout(
-            parent=ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[8, 1], ctas_per_cga=[1, 1],
-                                               cta_split_num=[1, 1], cta_order=[1, 0], instr_shape=[16, 32, 16]),
+            parent=ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[8, 1], instr_shape=[16, 32, 16]),
             operand_index=0, k_width=2),
         ttgl.SliceLayout(
-            dim=0, parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1, 1], ctas_per_cga=[1, 1, 1],
-                                                      cta_split_num=[1, 1, 1], cta_order=[2, 1,
-                                                                                          0], instr_shape=[1, 16, 8])),
+            dim=0, parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1, 1], instr_shape=[1, 16, 8])),
         ttgl.SliceLayout(
             dim=1, parent=ttgl.DotOperandLayout(
-                parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1, 1], ctas_per_cga=[1, 1, 1],
-                                                   cta_split_num=[1, 1, 1], cta_order=[2, 1, 0],
-                                                   instr_shape=[1, 16, 8]), operand_index=1, k_width=2)),
+                parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1, 1], instr_shape=[1, 16, 8]),
+                operand_index=1, k_width=2)),
     ])
 
     rets = []
@@ -173,6 +217,9 @@ def _reduce_cases():
                                                           ("float16", False)])
 @pytest.mark.parametrize("reduce_op", ["sum", "max"])
 def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, sanitize_overflow, reduce_op, device):
+    if is_xpu() and isinstance(src_layout,
+                               (ttgl.amd.AMDMFMALayout, ttgl.amd.AMDWMMALayout, ttgl.NVMMADistributedLayout)):
+        pytest.xfail("AMD and NVIDIA MMA layouts are not supported on Intel GPUs")
 
     @gluon.jit
     def _add(a, b):
@@ -228,10 +275,9 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, saniti
 @pytest.mark.parametrize(
     "src_layout",
     _filter_layouts([
-        ttgl.BlockedLayout([1, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-        ttgl.BlockedLayout([1, 4], [1, THREADS_PER_WARP], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
-        ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
-                                    cta_order=[0, 1], instr_shape=[16, 8]),
+        ttgl.BlockedLayout([1, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0]),
+        ttgl.BlockedLayout([1, 4], [1, THREADS_PER_WARP], [2, 2], [1, 0]),
+        ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1], instr_shape=[16, 8]),
     ]))
 def test_store_layouts(M, src_layout, device):
 
@@ -251,20 +297,15 @@ def test_store_layouts(M, src_layout, device):
 
 
 _1d_layouts = _filter_layouts([
-    ttgl.BlockedLayout([1, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    ttgl.BlockedLayout([1, 4], [1, THREADS_PER_WARP], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
-    ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
-                                cta_order=[1, 0], instr_shape=[16, 32, 16]),
-    ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
-                                cta_order=[0, 1], instr_shape=[16, 8]),
+    ttgl.BlockedLayout([1, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0]),
+    ttgl.BlockedLayout([1, 4], [1, THREADS_PER_WARP], [2, 2], [1, 0]),
+    ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], instr_shape=[16, 32, 16]),
+    ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1], instr_shape=[16, 8]),
     ttgl.DotOperandLayout(
-        parent=ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1],
-                                           cta_split_num=[1, 1], cta_order=[1, 0], instr_shape=[16, 32, 16]),
+        parent=ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], instr_shape=[16, 32, 16]),
         operand_index=0, k_width=2),
-    ttgl.DotOperandLayout(
-        parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[2, 2], ctas_per_cga=[1, 1],
-                                           cta_split_num=[1, 1], cta_order=[0, 1], instr_shape=[16, 8]),
-        operand_index=0, k_width=2),
+    ttgl.DotOperandLayout(parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[2, 2], instr_shape=[16, 8]),
+                          operand_index=0, k_width=2),
 ])
 
 
@@ -342,39 +383,27 @@ def test_convert1d_layouts(M, src_layout, dst_layout, src_dim, dst_dim, is_bool,
 _2d_layouts = _filter_layouts([
     ttgl.BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [2, 2], [0, 1]),
     ttgl.BlockedLayout([1, 16], [8, THREADS_PER_WARP // 8], [4, 1], [1, 0]),
-    ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
-                                cta_order=[1, 0], instr_shape=[16, 32, 16]),
+    ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], instr_shape=[16, 32, 16]),
     ttgl.DotOperandLayout(
-        parent=ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1],
-                                           cta_split_num=[1, 1], cta_order=[1, 0], instr_shape=[16, 32, 16]),
+        parent=ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], instr_shape=[16, 32, 16]),
         operand_index=0, k_width=2),
     ttgl.DotOperandLayout(
-        parent=ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1],
-                                           cta_split_num=[1, 1], cta_order=[1, 0], instr_shape=[16, 32, 16]),
+        parent=ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], instr_shape=[16, 32, 16]),
         operand_index=0, k_width=1),
-    ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
-                                cta_order=[1, 0], instr_shape=[16, 8]),
-    ttgl.DotOperandLayout(
-        parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1],
-                                           cta_split_num=[1, 1], cta_order=[1, 0], instr_shape=[16, 8]),
-        operand_index=1, k_width=2),
-    ttgl.DotOperandLayout(
-        parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[2, 2], ctas_per_cga=[1, 1],
-                                           cta_split_num=[1, 1], cta_order=[1, 0], instr_shape=[16, 8]),
-        operand_index=0, k_width=2),
-    ttgl.DotOperandLayout(
-        parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1],
-                                           cta_split_num=[1, 1], cta_order=[1, 0], instr_shape=[16, 8]),
-        operand_index=0, k_width=8),
+    ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1], instr_shape=[16, 8]),
+    ttgl.DotOperandLayout(parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1], instr_shape=[16, 8]),
+                          operand_index=1, k_width=2),
+    ttgl.DotOperandLayout(parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[2, 2], instr_shape=[16, 8]),
+                          operand_index=0, k_width=2),
+    ttgl.DotOperandLayout(parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1], instr_shape=[16, 8]),
+                          operand_index=0, k_width=8),
     ttgl.SliceLayout(
         dim=1, parent=ttgl.DotOperandLayout(
-            parent=ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1, 1], ctas_per_cga=[1, 1, 1],
-                                               cta_split_num=[1, 1, 1], cta_order=[2, 1, 0], instr_shape=[16, 32, 16]),
+            parent=ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1, 1], instr_shape=[16, 32, 16]),
             operand_index=0, k_width=2)),
     ttgl.SliceLayout(
         dim=1, parent=ttgl.DotOperandLayout(
-            parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1, 1], ctas_per_cga=[1, 1, 1],
-                                               cta_split_num=[1, 1, 1], cta_order=[2, 1, 0], instr_shape=[1, 16, 8]),
+            parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1, 1], instr_shape=[1, 16, 8]),
             operand_index=1, k_width=2)),
 ])
 
@@ -467,54 +496,38 @@ def test_convert2d_layouts(M, N, src_layout, interm_layout, dst_layout, dtype, d
 _mma_pairs = [
     # MMA v2.0 layouts
     [
-        ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[1, 4], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
-                                    cta_order=[0, 1], instr_shape=[16, 8]),
-        ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
-                                    cta_order=[0, 1], instr_shape=[16, 8]),
+        ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[1, 4], instr_shape=[16, 8]),
+        ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1], instr_shape=[16, 8]),
     ],
     [
-        ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[2, 8], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
-                                    cta_order=[0, 1], instr_shape=[16, 8]),
-        ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[8, 2], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
-                                    cta_order=[0, 1], instr_shape=[16, 8]),
+        ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[2, 8], instr_shape=[16, 8]),
+        ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[8, 2], instr_shape=[16, 8]),
     ],
     # MMA v2.1 layouts
     [
-        ttgl.NVMMADistributedLayout(version=[2, 1], warps_per_cta=[1, 4], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
-                                    cta_order=[0, 1], instr_shape=[16, 8]),
-        ttgl.NVMMADistributedLayout(version=[2, 1], warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
-                                    cta_order=[0, 1], instr_shape=[16, 8]),
+        ttgl.NVMMADistributedLayout(version=[2, 1], warps_per_cta=[1, 4], instr_shape=[16, 8]),
+        ttgl.NVMMADistributedLayout(version=[2, 1], warps_per_cta=[4, 1], instr_shape=[16, 8]),
     ],
     [
-        ttgl.NVMMADistributedLayout(version=[2, 1], warps_per_cta=[2, 8], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
-                                    cta_order=[0, 1], instr_shape=[16, 8]),
-        ttgl.NVMMADistributedLayout(version=[2, 1], warps_per_cta=[8, 2], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
-                                    cta_order=[0, 1], instr_shape=[16, 8]),
+        ttgl.NVMMADistributedLayout(version=[2, 1], warps_per_cta=[2, 8], instr_shape=[16, 8]),
+        ttgl.NVMMADistributedLayout(version=[2, 1], warps_per_cta=[8, 2], instr_shape=[16, 8]),
     ],
     # MMA v3.0 layouts
     [
-        ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
-                                    cta_order=[0, 1], instr_shape=[16, 32, 32]),
-        ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
-                                    cta_order=[0, 1], instr_shape=[16, 64, 32]),
+        ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], instr_shape=[16, 32, 32]),
+        ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], instr_shape=[16, 64, 32]),
     ],
     [
-        ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[1, 4], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
-                                    cta_order=[0, 1], instr_shape=[16, 32, 32]),
-        ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
-                                    cta_order=[0, 1], instr_shape=[16, 64, 32]),
+        ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[1, 4], instr_shape=[16, 32, 32]),
+        ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], instr_shape=[16, 64, 32]),
     ],
     [
-        ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[2, 8], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
-                                    cta_order=[0, 1], instr_shape=[16, 64, 32]),
-        ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[8, 2], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
-                                    cta_order=[0, 1], instr_shape=[16, 32, 32]),
+        ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[2, 8], instr_shape=[16, 64, 32]),
+        ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[8, 2], instr_shape=[16, 32, 32]),
     ],
     [
-        ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
-                                    cta_order=[0, 1], instr_shape=[16, 128, 16]),
-        ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
-                                    cta_order=[0, 1], instr_shape=[16, 64, 16]),
+        ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], instr_shape=[16, 128, 16]),
+        ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], instr_shape=[16, 64, 16]),
     ],
     # AMD MFMA v1 layouts
     [
@@ -554,13 +567,13 @@ _mma_pairs = [
     ],
     # AMD WMMA v1 layouts
     [
-        ttgl.amd.AMDWMMALayout(version=1, transposed=True, warps_per_cta=[4, 4]),
-        ttgl.amd.AMDWMMALayout(version=1, transposed=True, warps_per_cta=[16, 1]),
+        ttgl.amd.AMDWMMALayout(version=1, transposed=True, warp_bases=[[0, 1], [0, 2], [1, 0], [2, 0]]),
+        ttgl.amd.AMDWMMALayout(version=1, transposed=True, warp_bases=[[1, 0], [2, 0], [4, 0], [8, 0]]),
     ],
     # AMD WMMA v2 layouts
     [
-        ttgl.amd.AMDWMMALayout(version=2, transposed=True, warps_per_cta=[4, 4]),
-        ttgl.amd.AMDWMMALayout(version=2, transposed=True, warps_per_cta=[16, 1]),
+        ttgl.amd.AMDWMMALayout(version=2, transposed=True, warp_bases=[[0, 1], [0, 2], [1, 0], [2, 0]]),
+        ttgl.amd.AMDWMMALayout(version=2, transposed=True, warp_bases=[[1, 0], [2, 0], [4, 0], [8, 0]]),
     ],
 ]
 
@@ -571,7 +584,8 @@ _mma_pairs = [
                          [pair for pair in _mma_pairs if all(_is_layout_applicable(layout) for layout in pair)])
 def test_convert_mma2mma_layouts(M, N, mma_pair, dtype, device):
     src_layout, dst_layout = mma_pair
-    if is_xpu() and isinstance(src_layout, (ttgl.amd.AMDMFMALayout, ttgl.NVMMADistributedLayout)):
+    if is_xpu() and isinstance(src_layout,
+                               (ttgl.amd.AMDMFMALayout, ttgl.amd.AMDWMMALayout, ttgl.NVMMADistributedLayout)):
         pytest.xfail("AMD and NVIDIA MMA layouts are not supported on Intel GPUs")
 
     @gluon.jit
@@ -665,37 +679,23 @@ def test_convert_warp_local_layouts(M, N, src_layout, dst_layout, dtype, device)
 
 
 _ld_st_dot_layouts = _filter_layouts([
-    ttgl.DotOperandLayout(
-        parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1],
-                                           cta_split_num=[1, 1], cta_order=[1, 0], instr_shape=[16, 8]),
-        operand_index=0, k_width=4),
-    ttgl.DotOperandLayout(
-        parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1],
-                                           cta_split_num=[1, 1], cta_order=[0, 1], instr_shape=[16, 8]),
-        operand_index=1, k_width=4),
-    ttgl.DotOperandLayout(
-        parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1],
-                                           cta_split_num=[1, 1], cta_order=[0, 1], instr_shape=[16, 8]),
-        operand_index=0, k_width=2),
-    ttgl.DotOperandLayout(
-        parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1],
-                                           cta_split_num=[1, 1], cta_order=[1, 0], instr_shape=[16, 8]),
-        operand_index=1, k_width=2),
+    ttgl.DotOperandLayout(parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1], instr_shape=[16, 8]),
+                          operand_index=0, k_width=4),
+    ttgl.DotOperandLayout(parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1], instr_shape=[16, 8]),
+                          operand_index=1, k_width=4),
+    ttgl.DotOperandLayout(parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1], instr_shape=[16, 8]),
+                          operand_index=0, k_width=2),
+    ttgl.DotOperandLayout(parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1], instr_shape=[16, 8]),
+                          operand_index=1, k_width=2),
 ])
 
 _ld_st_mma_layouts = _filter_layouts([
-    ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[1, 4], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
-                                cta_order=[0, 1], instr_shape=[16, 8]),
-    ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
-                                cta_order=[0, 1], instr_shape=[16, 128, 16]),
-    ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 2], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
-                                cta_order=[0, 1], instr_shape=[16, 128, 16]),
-    ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 2], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
-                                cta_order=[0, 1], instr_shape=[16, 64, 16]),
-    ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[8, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
-                                cta_order=[0, 1], instr_shape=[16, 128, 16]),
-    ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[8, 4], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
-                                cta_order=[0, 1], instr_shape=[16, 64, 16]),
+    ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[1, 4], instr_shape=[16, 8]),
+    ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], instr_shape=[16, 128, 16]),
+    ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 2], instr_shape=[16, 128, 16]),
+    ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 2], instr_shape=[16, 64, 16]),
+    ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[8, 1], instr_shape=[16, 128, 16]),
+    ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[8, 4], instr_shape=[16, 64, 16]),
 ])
 
 _ld_st_shared_layouts = _filter_layouts([
@@ -793,11 +793,10 @@ def test_local_load_store_2d_layouts(shape, dtype, dist_layout, shared_layout, d
 
 
 _ld_st_3d_layouts = _filter_layouts([
-    ttgl.BlockedLayout([4, 4, 1], [1, 8, THREADS_PER_WARP // 8], [2, 2, 1], [2, 1, 0], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
-    ttgl.BlockedLayout([1, 1, 4], [8, THREADS_PER_WARP // 8, 1], [2, 1, 2], [1, 2, 0], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
+    ttgl.BlockedLayout([4, 4, 1], [1, 8, THREADS_PER_WARP // 8], [2, 2, 1], [2, 1, 0]),
+    ttgl.BlockedLayout([1, 1, 4], [8, THREADS_PER_WARP // 8, 1], [2, 1, 2], [1, 2, 0]),
     ttgl.DotOperandLayout(
-        parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1, 1], ctas_per_cga=[1, 1, 1],
-                                           cta_split_num=[1, 1, 1], cta_order=[2, 1, 0], instr_shape=[1, 16, 8]),
+        parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1, 1], instr_shape=[1, 16, 8]),
         operand_index=0, k_width=1),
 ])
 

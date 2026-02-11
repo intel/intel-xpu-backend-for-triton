@@ -35,9 +35,7 @@ ExternalProject_Add(
 )
 set(JSON_INCLUDE_DIR ${CMAKE_BINARY_DIR}/nlohmann_json/src/json/include/)
 
-# Add preview-breaking-changes for ABI compatibility with SYCL library linked by PyTorch:
-# https://github.com/pytorch/pytorch/commit/92bebb46fa9fd60523d8aeb7b5f1a3f488c4cd93
-set(COMPILE_FLAGS "-fsycl -Wall -fpreview-breaking-changes")
+set(COMPILE_FLAGS "-fsycl -Wall")
 set(LINK_FLAGS "-fsycl -lze_loader")
 
 set(SYCL_FUNCTIONS_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/intel/backend/include")

@@ -1,0 +1,19 @@
+{
+  "_comment": "GPU -> [BF16/FP16 DPAS TFLOPs , Memory bandwidth GB/s]",
+  "Intel(R) Data Center GPU Max 1100": [
+    355.53,
+    1228.80
+  ],
+  "Intel(R) Data Center GPU Max 1550": [
+    419.43,
+    3276.8
+  ],
+  "Intel(R) Arc(TM) B580 Graphics": [
+    116.74,
+    456.0
+  ],
+  "Intel(R) Arc(TM) B570 Graphics": [
+    103.22,
+    380.0
+  ]
+}

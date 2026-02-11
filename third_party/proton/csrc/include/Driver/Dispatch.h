@@ -1,7 +1,13 @@
 #ifndef PROTON_DRIVER_DISPATCH_H_
 #define PROTON_DRIVER_DISPATCH_H_
 
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#else
 #include <dlfcn.h>
+#endif
 
 #include "Utility/Env.h"
 #include <stdexcept>
@@ -12,20 +18,54 @@
 #define DISPATCH_ARGS_2(t1, t2) t1 v1, t2 v2
 #define DISPATCH_ARGS_3(t1, t2, t3) t1 v1, t2 v2, t3 v3
 #define DISPATCH_ARGS_4(t1, t2, t3, t4) t1 v1, t2 v2, t3 v3, t4 v4
-#define DISPATCH_ARGS_N(_4, _3, _2, _1, _0, N, ...) DISPATCH_ARGS##N
+#define DISPATCH_ARGS_5(t1, t2, t3, t4, t5) t1 v1, t2 v2, t3 v3, t4 v4, t5 v5
+#define DISPATCH_ARGS_6(t1, t2, t3, t4, t5, t6)                                \
+  t1 v1, t2 v2, t3 v3, t4 v4, t5 v5, t6 v6
+#define DISPATCH_ARGS_7(t1, t2, t3, t4, t5, t6, t7)                            \
+  t1 v1, t2 v2, t3 v3, t4 v4, t5 v5, t6 v6, t7 v7
+#define DISPATCH_ARGS_8(t1, t2, t3, t4, t5, t6, t7, t8)                        \
+  t1 v1, t2 v2, t3 v3, t4 v4, t5 v5, t6 v6, t7 v7, t8 v8
+#define DISPATCH_ARGS_9(t1, t2, t3, t4, t5, t6, t7, t8, t9)                    \
+  t1 v1, t2 v2, t3 v3, t4 v4, t5 v5, t6 v6, t7 v7, t8 v8, t9 v9
+#define DISPATCH_ARGS_10(t1, t2, t3, t4, t5, t6, t7, t8, t9, t10)              \
+  t1 v1, t2 v2, t3 v3, t4 v4, t5 v5, t6 v6, t7 v7, t8 v8, t9 v9, t10 v10
+#define DISPATCH_ARGS_11(t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11)         \
+  t1 v1, t2 v2, t3 v3, t4 v4, t5 v5, t6 v6, t7 v7, t8 v8, t9 v9, t10 v10,      \
+      t11 v11
+#define DISPATCH_ARGS_12(t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12)    \
+  t1 v1, t2 v2, t3 v3, t4 v4, t5 v5, t6 v6, t7 v7, t8 v8, t9 v9, t10 v10,      \
+      t11 v11, t12 v12
+#define DISPATCH_ARGS_N(_12, _11, _10, _9, _8, _7, _6, _5, _4, _3, _2, _1, _0, \
+                        N, ...)                                                \
+  DISPATCH_ARGS##N
 #define DISPATCH_ARGS(...)                                                     \
-  DISPATCH_ARGS_N(_0, ##__VA_ARGS__, _4, _3, _2, _1, _0)                       \
-  (__VA_ARGS__)
+  DISPATCH_ARGS_N(_0, ##__VA_ARGS__, _12, _11, _10, _9, _8, _7, _6, _5, _4,    \
+                  _3, _2, _1, _0)(__VA_ARGS__)
 
 #define DISPATCH_VALS_0()
 #define DISPATCH_VALS_1(t1) , v1
 #define DISPATCH_VALS_2(t1, t2) , v1, v2
 #define DISPATCH_VALS_3(t1, t2, t3) , v1, v2, v3
 #define DISPATCH_VALS_4(t1, t2, t3, t4) , v1, v2, v3, v4
-#define DISPATCH_VALS_N(_4, _3, _2, _1, _0, N, ...) DISPATCH_VALS##N
+#define DISPATCH_VALS_5(t1, t2, t3, t4, t5) , v1, v2, v3, v4, v5
+#define DISPATCH_VALS_6(t1, t2, t3, t4, t5, t6) , v1, v2, v3, v4, v5, v6
+#define DISPATCH_VALS_7(t1, t2, t3, t4, t5, t6, t7) , v1, v2, v3, v4, v5, v6, v7
+#define DISPATCH_VALS_8(t1, t2, t3, t4, t5, t6, t7, t8)                        \
+  , v1, v2, v3, v4, v5, v6, v7, v8
+#define DISPATCH_VALS_9(t1, t2, t3, t4, t5, t6, t7, t8, t9)                    \
+  , v1, v2, v3, v4, v5, v6, v7, v8, v9
+#define DISPATCH_VALS_10(t1, t2, t3, t4, t5, t6, t7, t8, t9, t10)              \
+  , v1, v2, v3, v4, v5, v6, v7, v8, v9, v10
+#define DISPATCH_VALS_11(t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11)         \
+  , v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11
+#define DISPATCH_VALS_12(t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12)    \
+  , v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12
+#define DISPATCH_VALS_N(_12, _11, _10, _9, _8, _7, _6, _5, _4, _3, _2, _1, _0, \
+                        N, ...)                                                \
+  DISPATCH_VALS##N
 #define DISPATCH_VALS(...)                                                     \
-  DISPATCH_VALS_N(_0, ##__VA_ARGS__, _4, _3, _2, _1, _0)                       \
-  (__VA_ARGS__)
+  DISPATCH_VALS_N(_0, ##__VA_ARGS__, _12, _11, _10, _9, _8, _7, _6, _5, _4,    \
+                  _3, _2, _1, _0)(__VA_ARGS__)
 
 #define DEFINE_DISPATCH_TEMPLATE(CheckSuccess, FuncName, ExternLib, FuncType,  \
                                  ...)                                          \
@@ -59,6 +99,31 @@ template <typename ExternLib> class Dispatch {
 public:
   Dispatch() = delete;
 
+#if defined(_WIN32)
+  static void init(const char *name, void **lib) {
+    if (*lib == nullptr) {
+      // If not found, try to load it from the default path
+      auto dir =
+          ExternLib::pathEnv == nullptr ? "" : getStrEnv(ExternLib::pathEnv);
+      if (!dir.empty()) {
+        auto fullPath = dir + "/" + name;
+        *lib = (void *)LoadLibrary(fullPath.c_str());
+      } else {
+        // Only if the default path is not set, we try to load it from the
+        // system.
+        // First reuse the existing handle
+        *lib = (void *)GetModuleHandle(name);
+        if (*lib == nullptr) {
+          // If not found, try to load it from LD_LIBRARY_PATH
+          *lib = (void *)LoadLibrary(name);
+        }
+      }
+    }
+    if (*lib == nullptr) {
+      throw std::runtime_error("Could not load `" + std::string(name) + "`");
+    }
+  }
+#else
   static void init(const char *name, void **lib) {
     if (*lib == nullptr) {
       // If not found, try to load it from the default path
@@ -82,6 +147,7 @@ public:
       throw std::runtime_error("Could not load `" + std::string(name) + "`");
     }
   }
+#endif
 
   static void check(typename ExternLib::RetType ret, const char *functionName) {
     if (ret != ExternLib::success) {
@@ -96,7 +162,12 @@ public:
   exec(FnT &handler, const char *functionName, Args... args) {
     init(ExternLib::name, &ExternLib::lib);
     if (handler == nullptr) {
+#if defined(_WIN32)
+      handler = reinterpret_cast<FnT>(
+          GetProcAddress((HMODULE)ExternLib::lib, functionName));
+#else
       handler = reinterpret_cast<FnT>(dlsym(ExternLib::lib, functionName));
+#endif
       if (handler == nullptr) {
         throw std::runtime_error("Failed to load " +
                                  std::string(ExternLib::name));
@@ -118,12 +189,30 @@ public:
       }
     }
     if (ExternLib::lib != nullptr) {
+#if defined(_WIN32)
+      void *sym =
+          GetProcAddress((HMODULE)ExternLib::lib,
+                         ExternLib::symbolName); // pick any known symbol
+      HMODULE mod = nullptr;
+
+      if (GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            (LPCSTR)sym, &mod)) {
+        static char path[MAX_PATH];
+        DWORD len = GetModuleFileName(mod, path, MAX_PATH);
+        if (len > 0)
+          return path;
+      }
+
+      return nullptr;
+#else
       void *sym = dlsym(ExternLib::lib,
                         ExternLib::symbolName); // pick any known symbol
       Dl_info info;
       if (dladdr(sym, &info)) {
         return info.dli_fname;
       }
+#endif
     }
     return "";
   }

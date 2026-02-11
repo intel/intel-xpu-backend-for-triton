@@ -68,8 +68,8 @@ static SmallVector<Value> computeWarpLevelHistogram(
       }
       // at this point, 'bin_mask' tells you which elements are in the kth bin
       // owned by this thread.
-      Value bitCount = rewriter.create<LLVM::CtPopOp>(
-          loc, int_ty(numThreadPerWarp), binMask);
+      Value bitCount = LLVM::CtPopOp::create(rewriter, loc,
+                                             int_ty(numThreadPerWarp), binMask);
       if (numThreadPerWarp > 32)
         bitCount = b.trunc(i32_ty, bitCount);
       warpLevelHistogram[k] = b.add(warpLevelHistogram[k], bitCount);
@@ -80,8 +80,8 @@ static SmallVector<Value> computeWarpLevelHistogram(
 
 static void atomicAdd(Value ptr, Value val, Location loc,
                       ConversionPatternRewriter &rewriter) {
-  rewriter.create<LLVM::AtomicRMWOp>(loc, LLVM::AtomicBinOp::add, ptr, val,
-                                     LLVM::AtomicOrdering::monotonic);
+  LLVM::AtomicRMWOp::create(rewriter, loc, LLVM::AtomicBinOp::add, ptr, val,
+                            LLVM::AtomicOrdering::monotonic);
 }
 
 static SmallVector<Value> computeCrossWarpHistogram(
@@ -103,7 +103,7 @@ static SmallVector<Value> computeCrossWarpHistogram(
         b.gep(baseSharedMemPtr.getType(), i32_ty, baseSharedMemPtr, offset);
     b.store(b.i32_val(0), sharedMemPtr);
   }
-  b.barrier();
+  b.barrier(triton::gpu::AddrSpace::Local);
   Block *afterAtomics = nullptr;
   // Apply atomic add to update the histogram in shared memory.
   for (int i = 0; i < warpLevelHistogram.size(); ++i) {
@@ -115,10 +115,10 @@ static SmallVector<Value> computeCrossWarpHistogram(
     atomicAdd(sharedMemPtr, warpLevelHistogramValue, loc, rewriter);
   }
   if (afterAtomics) {
-    rewriter.create<LLVM::BrOp>(loc, afterAtomics);
+    LLVM::BrOp::create(rewriter, loc, afterAtomics);
     rewriter.setInsertionPointToStart(afterAtomics);
   }
-  b.barrier();
+  b.barrier(triton::gpu::AddrSpace::Local);
   // load the histogram to register with the right layout.
   for (Value index : indices) {
     Value sharedMemPtr =

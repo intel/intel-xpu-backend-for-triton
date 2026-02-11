@@ -25,7 +25,7 @@ jobs:
       max-parallel: 2
     steps:
       - name: Checkout Triton repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -81,7 +81,7 @@ jobs:
           echo "WHEELS_NAME=$WHEELS_NAME" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Upload wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ env.WHEELS_NAME }}
           path: ${{ env.NEW_WORKSPACE }}\wheelhouse\*.whl

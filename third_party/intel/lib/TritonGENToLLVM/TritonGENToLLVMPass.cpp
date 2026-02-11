@@ -8,6 +8,7 @@
 
 #include "Attributes.h"
 #include "Utils/LLVMIntr.h"
+#include "Utils/LibCallEmitter.h"
 #include "Utils/Mangling.h"
 #include "mlir/Conversion/ConvertToLLVM/ToLLVMInterface.h"
 #include "mlir/Conversion/LLVMCommon/ConversionTarget.h"
@@ -31,12 +32,14 @@
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/TypeSwitch.h"
-#include "llvm/ADT/identity.h"
 #include "llvm/Support/ErrorHandling.h"
 
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/TritonGENToLLVM/TritonGENToLLVMPass.h"
 #include "intel/include/TritonGENToSPIRV/TritonGENToSPIRVPass.h"
 
@@ -58,6 +61,16 @@ using namespace mlir::triton::gpu;
            getGenISATypeMangling(vecTy.getElementType());
   return (ty.isInteger() ? "i" : "f") +
          std::to_string(ty.getIntOrFloatBitWidth());
+}
+
+[[maybe_unused]] static std::string getGenISATypeMangling(ArrayRef<Type> tys) {
+  std::string name;
+  for (int i = 0; i < tys.size(); i++) {
+    name += getGenISATypeMangling(tys[i]);
+    if (i != tys.size() - 1)
+      name += ".";
+  }
+  return name;
 }
 
 static SmallVector<Attribute>
@@ -112,7 +125,7 @@ loadCacheControlToCacheControls(Builder &builder,
   return builder.getAttr<TritonGEN::DecorationCacheControlAttr>(decorations);
 }
 
-static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
+static bool isSPVBuiltinAvailableImpl(TritonGEN::Matrix2DBlockLoadOp op) {
   // FIXME: The following signatures are not valid in SPV interface.
 
   // intel_sub_group_2d_block_read_8b_8r8x1c
@@ -130,69 +143,14 @@ static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
       op.getTileWidth() == 8 && op.getVBlocks() == 4 && !op.getVnniTransform())
     return false;
 
-  // intel_sub_group_2d_block_read_8b_8r16x1c
-  if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 8 &&
-      op.getTileWidth() == 16 && op.getVBlocks() == 1 && !op.getVnniTransform())
-    return false;
-
-  // intel_sub_group_2d_block_read_8b_8r16x2c
-  if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 8 &&
-      op.getTileWidth() == 16 && op.getVBlocks() == 2 && !op.getVnniTransform())
-    return false;
-
-  // intel_sub_group_2d_block_read_8b_16r8x4c
-  if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 16 &&
-      op.getTileWidth() == 8 && op.getVBlocks() == 4 && !op.getVnniTransform())
-    return false;
-
-  // intel_sub_group_2d_block_read_8b_16r16x2c
-  if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 16 &&
-      op.getTileWidth() == 16 && op.getVBlocks() == 2 && !op.getVnniTransform())
-    return false;
-
-  // intel_sub_group_2d_block_read_8b_32r16x1c
+  // intel_sub_group_2d_block_read_8b_32r8x4c
   if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 32 &&
-      op.getTileWidth() == 16 && op.getVBlocks() == 1 && !op.getVnniTransform())
-    return false;
-
-  // intel_sub_group_2d_block_read_8b_32r16x2c
-  if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 32 &&
-      op.getTileWidth() == 16 && op.getVBlocks() == 2 && !op.getVnniTransform())
-    return false;
-
-  // intel_sub_group_2d_block_read_16b_8r8x1c
-  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 8 &&
-      op.getTileWidth() == 8 && op.getVBlocks() == 1 && !op.getVnniTransform())
-    return false;
-
-  // intel_sub_group_2d_block_read_16b_8r8x2c
-  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 8 &&
-      op.getTileWidth() == 8 && op.getVBlocks() == 2 && !op.getVnniTransform())
-    return false;
-
-  // intel_sub_group_2d_block_read_16b_8r8x4c
-  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 8 &&
       op.getTileWidth() == 8 && op.getVBlocks() == 4 && !op.getVnniTransform())
     return false;
 
-  // intel_sub_group_2d_block_read_16b_16r8x4c
-  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 16 &&
-      op.getTileWidth() == 8 && op.getVBlocks() == 4 && !op.getVnniTransform())
-    return false;
-
-  // intel_sub_group_2d_block_read_transpose_32b_8r2x1c
-  if (op.getElemSizeInBits() == 32 && op.getTileHeight() == 8 &&
-      op.getTileWidth() == 2 && op.getVBlocks() == 1 && op.getTranspose())
-    return false;
-
-  // intel_sub_group_2d_block_read_transpose_32b_8r4x1c
-  if (op.getElemSizeInBits() == 32 && op.getTileHeight() == 8 &&
+  // intel_sub_group_2d_block_read_transpose_32b_32r4x1c
+  if (op.getElemSizeInBits() == 32 && op.getTileHeight() == 32 &&
       op.getTileWidth() == 4 && op.getVBlocks() == 1 && op.getTranspose())
-    return false;
-
-  // intel_sub_group_2d_block_read_transpose_32b_8r8x1c
-  if (op.getElemSizeInBits() == 32 && op.getTileHeight() == 8 &&
-      op.getTileWidth() == 8 && op.getVBlocks() == 1 && op.getTranspose())
     return false;
 
   // FIXME: The SPV block load only support subgroup size 16.
@@ -204,38 +162,8 @@ static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
   return true;
 }
 
-static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockStoreOp op) {
+static bool isSPVBuiltinAvailableImpl(TritonGEN::Matrix2DBlockStoreOp op) {
   // FIXME: The following signatures are not valid in SPV interface.
-
-  // intel_sub_group_2d_block_write_8b_8r8x1c
-  if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 8 &&
-      op.getTileWidth() == 8 && op.getVBlocks() == 1)
-    return false;
-
-  // intel_sub_group_2d_block_write_16b_1r32x1c
-  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 1 &&
-      op.getTileWidth() == 32 && op.getVBlocks() == 1)
-    return false;
-
-  // intel_sub_group_2d_block_write_16b_8r8x1c
-  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 8 &&
-      op.getTileWidth() == 8 && op.getVBlocks() == 1)
-    return false;
-
-  // intel_sub_group_2d_block_write_16b_8r32x1c
-  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 8 &&
-      op.getTileWidth() == 32 && op.getVBlocks() == 1)
-    return false;
-
-  // intel_sub_group_2d_block_write_32b_8r4x1c
-  if (op.getElemSizeInBits() == 32 && op.getTileHeight() == 8 &&
-      op.getTileWidth() == 4 && op.getVBlocks() == 1)
-    return false;
-
-  // intel_sub_group_2d_block_write_32b_8r8x1c
-  if (op.getElemSizeInBits() == 32 && op.getTileHeight() == 8 &&
-      op.getTileWidth() == 8 && op.getVBlocks() == 1)
-    return false;
 
   // FIXME: The SPV block store only support subgroup size 16.
   int subGroupSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(
@@ -246,30 +174,22 @@ static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockStoreOp op) {
   return true;
 }
 
-static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockPrefetchOp op) {
-  // FIXME: The following signatures are not valid in SPV interface.
-
-  // intel_sub_group_2d_block_prefetch_16b_1r8x1c
-  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 1 &&
-      op.getTileWidth() == 8 && op.getVBlocks() == 1)
-    return false;
-
-  // intel_sub_group_2d_block_prefetch_16b_2r8x1c
-  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 2 &&
-      op.getTileWidth() == 8 && op.getVBlocks() == 1)
-    return false;
-
-  // intel_sub_group_2d_block_prefetch_16b_4r8x1c
-  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 4 &&
-      op.getTileWidth() == 8 && op.getVBlocks() == 1)
-    return false;
-
-  // intel_sub_group_2d_block_prefetch_16b_16r8x1c
-  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 16 &&
-      op.getTileWidth() == 8 && op.getVBlocks() == 1)
-    return false;
-
+static bool isSPVBuiltinAvailableImpl(TritonGEN::Matrix2DBlockPrefetchOp op) {
   return true;
+}
+
+template <
+    typename OpTy,
+    typename = std::enable_if<llvm::is_one_of<
+        OpTy, TritonGEN::Matrix2DBlockLoadOp, TritonGEN::Matrix2DBlockStoreOp,
+        TritonGEN::Matrix2DBlockPrefetchOp>::value>>
+static bool isSPVBuiltinAvailable(OpTy op) {
+  // Use GenISA for LTS driver.
+  auto m = op->template getParentOfType<mlir::ModuleOp>();
+  if (m->hasAttr(intel::TritonIntelGPUDialect::getIsLTSAttrName()))
+    return false;
+
+  return isSPVBuiltinAvailableImpl(op);
 }
 
 // HW requires base address to be 64-byte aligned. Compensate the non-64-byte
@@ -325,7 +245,7 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
   auto [ptr, baseWidth, x] = computeAlignedBasePtrWidthAndOffset(op, rewriter);
 
   // The IGC intrinsic requires the first argument be int64
-  ptr = rewriter.create<LLVM::PtrToIntOp>(loc, int64Ty, ptr);
+  ptr = LLVM::PtrToIntOp::create(rewriter, loc, int64Ty, ptr);
 
   SmallVector<Type> argTypes{int64Ty,
                              baseWidth.getType(),
@@ -432,7 +352,7 @@ createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
   auto [ptr, baseWidth, x] = computeAlignedBasePtrWidthAndOffset(op, rewriter);
 
   // The IGC intrinsic requires the first argument be int64
-  ptr = rewriter.create<LLVM::PtrToIntOp>(loc, int_ty(64), ptr);
+  ptr = LLVM::PtrToIntOp::create(rewriter, loc, int_ty(64), ptr);
 
   SmallVector<Type> argTypes{
       int_ty(64),          baseWidth.getType(), baseHeight.getType(),
@@ -475,7 +395,7 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
   auto [ptr, baseWidth, x] = computeAlignedBasePtrWidthAndOffset(op, rewriter);
 
   // The IGC intrinsic requires the first argument be int64
-  ptr = rewriter.create<LLVM::PtrToIntOp>(loc, int_ty(64), ptr);
+  ptr = LLVM::PtrToIntOp::create(rewriter, loc, int_ty(64), ptr);
 
   SmallVector<Type> argTypes{
       int_ty(64),          baseWidth.getType(), baseHeight.getType(),
@@ -503,7 +423,194 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
                                          intel::noUnwindWillReturnAttrs);
 }
 
+static void
+createAssertNot(ConversionPatternRewriter &rewriter,
+                const mlir::triton::gpu::intel::LibCallEmitter &emitter,
+                Value condition, StringRef message) {
+
+  auto *ctx = rewriter.getContext();
+  auto loc = rewriter.getInsertionPoint() != rewriter.getBlock()->end()
+                 ? rewriter.getInsertionPoint()->getLoc()
+                 : UnknownLoc::get(ctx);
+
+  StringRef file = "unknown";
+  StringRef func = "unknown";
+  int line = 0;
+
+  while (auto callLoc = dyn_cast<CallSiteLoc>(loc))
+    loc = callLoc.getCallee();
+
+  while (auto nameLoc = dyn_cast<NameLoc>(loc))
+    loc = nameLoc.getChildLoc();
+
+  if (auto fileLineColLoc = dyn_cast<FileLineColLoc>(loc)) {
+    file = fileLineColLoc.getFilename();
+    line = fileLineColLoc.getLine();
+  }
+
+  Block *prevBlock = rewriter.getBlock();
+  auto insertPt = rewriter.getInsertionPoint();
+
+  Block *thenBlock = rewriter.splitBlock(prevBlock, insertPt);
+
+  Block *ifBlock = rewriter.createBlock(prevBlock->getParent());
+  rewriter.setInsertionPointToStart(ifBlock);
+  emitter.assertFail(rewriter, loc, message, file, func, line);
+  LLVM::BrOp::create(rewriter, loc, thenBlock);
+
+  rewriter.setInsertionPointToEnd(prevBlock);
+  LLVM::CondBrOp::create(rewriter, loc, condition, ifBlock, thenBlock);
+
+  rewriter.setInsertionPointToStart(thenBlock);
+}
+
+static void create2DBlockAssertsImpl(
+    const mlir::Value &baseWidth, const mlir::Value &baseHeight,
+    const mlir::Value &basePitch, const mlir::Value &x, unsigned int elemSize,
+    const mlir::Location &loc, mlir::ConversionPatternRewriter &rewriter,
+    const mlir::triton::gpu::intel::LibCallEmitter &emitter) {
+  using namespace mlir;
+  using namespace mlir::LLVM;
+
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+  Value c0 = b.i32_val(0);
+  Value c4 = b.i32_val(4);
+  Value c64 = b.i32_val(64);
+  Value c16 = b.i32_val(16);
+  Value c24m1 = b.i32_val((1u << 24) - 1);
+  Value cElemSize = b.i32_val(elemSize);
+  Value cMaxAlign = b.i32_val(std::max(4u, elemSize));
+
+  Value wTooLarge =
+      ICmpOp::create(rewriter, loc, ICmpPredicate::ugt, baseWidth, c24m1);
+  createAssertNot(rewriter, emitter, wTooLarge,
+                  "2nd operand (base width) should be <= 24 bits");
+
+  Value wTooSmall =
+      ICmpOp::create(rewriter, loc, ICmpPredicate::ult, baseWidth, c64);
+  createAssertNot(rewriter, emitter, wTooSmall,
+                  "2nd operand (base width) should be >= 64");
+
+  Value wRem = URemOp::create(rewriter, loc, baseWidth, cMaxAlign);
+  Value wNotAligned =
+      ICmpOp::create(rewriter, loc, ICmpPredicate::ne, wRem, c0);
+  createAssertNot(
+      rewriter, emitter, wNotAligned,
+      "2nd operand (base width) should be aligned to MAX(4, element_size)");
+
+  Value hTooLarge =
+      ICmpOp::create(rewriter, loc, ICmpPredicate::ugt, baseHeight, c24m1);
+  createAssertNot(rewriter, emitter, hTooLarge,
+                  "3rd operand (base height) should be <= 24 bits");
+
+  Value pTooLarge =
+      ICmpOp::create(rewriter, loc, ICmpPredicate::ugt, basePitch, c24m1);
+  createAssertNot(rewriter, emitter, pTooLarge,
+                  "4th operand (base pitch) should be <= 24 bits");
+
+  Value pTooSmall =
+      ICmpOp::create(rewriter, loc, ICmpPredicate::ult, basePitch, c64);
+  createAssertNot(rewriter, emitter, pTooSmall,
+                  "4th operand (base pitch) should be >= 64");
+
+  Value pRem = URemOp::create(rewriter, loc, basePitch, c16);
+  Value pNotAligned =
+      ICmpOp::create(rewriter, loc, ICmpPredicate::ne, pRem, c0);
+  createAssertNot(rewriter, emitter, pNotAligned,
+                  "4th operand (base pitch) should be a multiple of 16 bytes");
+
+  Value pLessThanWidth =
+      ICmpOp::create(rewriter, loc, ICmpPredicate::ult, basePitch, baseWidth);
+  createAssertNot(
+      rewriter, emitter, pLessThanWidth,
+      "4th operand (base pitch) should be >= 2nd operand (base width)");
+
+  Value offsetBytes = MulOp::create(rewriter, loc, x, cElemSize);
+  Value offsetRem = URemOp::create(rewriter, loc, offsetBytes, c4);
+  Value badOffset =
+      ICmpOp::create(rewriter, loc, ICmpPredicate::ne, offsetRem, c0);
+  createAssertNot(
+      rewriter, emitter, badOffset,
+      "5th operand (x) should be properly aligned for the element size");
+}
+
+template <typename OpTy>
+static void
+create2DBlockAsserts(OpTy op, mlir::ConversionPatternRewriter &rewriter,
+                     const mlir::triton::gpu::intel::LibCallEmitter &emitter) {
+
+  if (!triton::tools::getBoolEnv("TRITON_INTEL_2DBLOCK_ASSERT")) {
+    return;
+  }
+
+  // put implementation in a separate function to avoid template bloat
+  create2DBlockAssertsImpl(
+      op.getBaseWidth(), op.getBaseHeight(), op.getBasePitch(), op.getX(),
+      op.getElemSizeInBits() / 8, op->getLoc(), rewriter, emitter);
+}
+
 namespace {
+
+//===----------------------------------------------------------------------===//
+// Synchronization
+//===----------------------------------------------------------------------===//
+
+struct TritonSplitBarrierArriveLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::SplitBarrierArriveOp> {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::SplitBarrierArriveOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::SplitBarrierArriveOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    TritonLLVMOpBuilder b(loc, rewriter);
+    MLIRContext *ctx = rewriter.getContext();
+    Type smemPtrTy = ptr_ty(ctx, 3);
+    std::string fnName = "intel_manageable_barrier_init";
+    SmallVector<Type> initArgTypes{i32_ty, i32_ty};
+    Value count = b.i32_val(lookupNumWarps(op));
+    LLVM::CallOp initOp =
+        createDeviceFunctionCall(rewriter, fnName, smemPtrTy, initArgTypes,
+                                 {count, count}, {}, intel::noUnwindAttrs);
+
+    fnName = "intel_manageable_barrier_arrive";
+    SmallVector<Type> argTypes{smemPtrTy};
+    LLVM::CallOp arriveOp = createDeviceFunctionCall(
+        rewriter, fnName, void_ty(ctx), argTypes, {initOp.getResult()}, {},
+        intel::noUnwindAttrs);
+    rewriter.replaceOp(op, initOp);
+    return success();
+  }
+};
+
+struct TritonSplitBarrierWaitLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::SplitBarrierWaitOp> {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::SplitBarrierWaitOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::SplitBarrierWaitOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    TritonLLVMOpBuilder b(loc, rewriter);
+    MLIRContext *ctx = rewriter.getContext();
+    Type smemPtrTy = ptr_ty(ctx, 3);
+    std::string fnName = "intel_manageable_barrier_wait";
+    SmallVector<Type> argTypes{smemPtrTy};
+    LLVM::CallOp waitOp =
+        createDeviceFunctionCall(rewriter, fnName, void_ty(ctx), argTypes,
+                                 {op.getBData()}, {}, intel::noUnwindAttrs);
+
+    fnName = "intel_manageable_barrier_release";
+    LLVM::CallOp releaseOp =
+        createDeviceFunctionCall(rewriter, fnName, void_ty(ctx), argTypes,
+                                 {op.getBData()}, {}, intel::noUnwindAttrs);
+    rewriter.replaceOp(op, releaseOp);
+    return success();
+  }
+};
 
 //===----------------------------------------------------------------------===//
 // Matrix operations
@@ -537,7 +644,7 @@ struct TritonMatrixDPASLowering
     VectorType aTy = VectorType::get(
         bitWidth / packedAType.getIntOrFloatBitWidth(), packedAType);
     if (aOrigTy != aTy)
-      a = rewriter.create<LLVM::BitcastOp>(loc, aTy, a);
+      a = LLVM::BitcastOp::create(rewriter, loc, aTy, a);
 
     Value b = op.getB();
     VectorType bOrigTy = cast<VectorType>(b.getType());
@@ -546,7 +653,7 @@ struct TritonMatrixDPASLowering
     VectorType bTy = VectorType::get(
         bitWidth / packedBType.getIntOrFloatBitWidth(), packedBType);
     if (bOrigTy != bTy)
-      b = rewriter.create<LLVM::BitcastOp>(loc, bTy, b);
+      b = LLVM::BitcastOp::create(rewriter, loc, bTy, b);
 
     Value c = op.getC();
     VectorType cOrigTy = cast<VectorType>(c.getType());
@@ -557,7 +664,7 @@ struct TritonMatrixDPASLowering
                          ? VectorType::get(cOrigTy.getShape(), int16Ty)
                          : cOrigTy;
     if (cOrigTy != cTy)
-      c = rewriter.create<LLVM::BitcastOp>(loc, cTy, c);
+      c = LLVM::BitcastOp::create(rewriter, loc, cTy, c);
 
     std::string fnName = "__spirv_SubgroupMatrixMultiplyAccumulateINTEL";
     SmallVector<Type> argTypes{int32Ty, aTy, bTy, cTy, int32Ty};
@@ -573,7 +680,10 @@ struct TritonMatrixDPASLowering
     auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
         /*other=*/LLVM::ModRefInfo::NoModRef,
         /*argMem=*/LLVM::ModRefInfo::NoModRef,
-        /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef);
+        /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef,
+        /*errnoMem=*/LLVM::ModRefInfo::NoModRef,
+        /*targetMem0=*/LLVM::ModRefInfo::NoModRef,
+        /*targetMem1=*/LLVM::ModRefInfo::NoModRef);
     auto funcAttrs = intel::convergentNoUnwindWillReturnAttrs;
     funcAttrs.memEffectsAttr = memAttr;
 
@@ -581,7 +691,7 @@ struct TritonMatrixDPASLowering
                        rewriter, fnName, cTy, argTypes, args, {}, funcAttrs)
                        ->getResult(0);
     if (cOrigTy != cTy)
-      result = rewriter.create<LLVM::BitcastOp>(loc, cOrigTy, result);
+      result = LLVM::BitcastOp::create(rewriter, loc, cOrigTy, result);
 
     rewriter.replaceOp(op, result);
     return success();
@@ -597,6 +707,8 @@ private:
       return 2;
     case TritonGEN::PrecisionType::U8:
     case TritonGEN::PrecisionType::S8:
+    case TritonGEN::PrecisionType::F8E5M2:
+    case TritonGEN::PrecisionType::F8E4M3FN:
       return 4;
     default:
       llvm_unreachable("unsupported TritonGEN::PrecisionType");
@@ -622,9 +734,125 @@ private:
       return res | 0x10 | 0x20;
     case TritonGEN::PrecisionType::S8:
       return res | 0x1 | 0x2 | 0x10 | 0x20;
+    case TritonGEN::PrecisionType::F8E5M2:
+      return res | 0x10000 | 0x20000;
+    case TritonGEN::PrecisionType::F8E4M3FN:
+      return res | 0x4000 | 0x8000;
     default:
       llvm_unreachable("unsupported TritonGEN::PrecisionType");
     }
+  }
+};
+
+struct TritonMatrixBlockScaleDPASLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::MatrixBlockScaleDPASOp> {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::MatrixBlockScaleDPASOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::MatrixBlockScaleDPASOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+
+    IntegerType int16Ty = int_ty(16);
+    IntegerType int32Ty = int_ty(32);
+
+    Type packedAType = int16Ty;
+    Type packedBType = int32Ty;
+
+    Value a = op.getA();
+    VectorType aOrigTy = cast<VectorType>(a.getType());
+    unsigned bitWidth = aOrigTy.getNumElements() *
+                        aOrigTy.getElementType().getIntOrFloatBitWidth();
+    VectorType aTy = VectorType::get(
+        bitWidth / packedAType.getIntOrFloatBitWidth(), packedAType);
+    if (aOrigTy != aTy)
+      a = LLVM::BitcastOp::create(rewriter, loc, aTy, a);
+
+    Value b = op.getB();
+    VectorType bOrigTy = cast<VectorType>(b.getType());
+    bitWidth = bOrigTy.getNumElements() *
+               bOrigTy.getElementType().getIntOrFloatBitWidth();
+    VectorType bTy = VectorType::get(
+        bitWidth / packedBType.getIntOrFloatBitWidth(), packedBType);
+    if (bOrigTy != bTy)
+      b = LLVM::BitcastOp::create(rewriter, loc, bTy, b);
+
+    Value c = op.getC();
+    VectorType cOrigTy = cast<VectorType>(c.getType());
+    assert(cOrigTy == op->getResultTypes()[0] &&
+           "Accumulator and result type mismatch");
+    VectorType cTy = cOrigTy;
+
+    TritonGEN::PrecisionType precision = op.getPa();
+    Type scaleTy = getScaleType(rewriter, precision);
+
+    Value scaleA = op.getScaleA();
+    Value scaleB = op.getScaleB();
+
+    SmallVector<Type> funcTypes{cTy, cTy, aTy, bTy, scaleTy, scaleTy};
+    std::string funcName =
+        "llvm.genx.GenISA.sub.group.bdpas." + getGenISATypeMangling(funcTypes);
+
+    SmallVector<Type> argTypes{cTy,     aTy,     bTy,    scaleTy,
+                               scaleTy, int32Ty, int32Ty};
+
+    auto precA = LLVM::ConstantOp::create(rewriter, loc, int32Ty,
+                                          static_cast<int>(op.getPa()));
+    auto precB = LLVM::ConstantOp::create(rewriter, loc, int32Ty,
+                                          static_cast<int>(op.getPb()));
+
+    // When either scale operand is missing, set it to the value 1.0 in E8M0
+    // format (encoded as 0x7f).
+    if (!scaleA)
+      scaleA = defineScale(rewriter, loc, 0x7f, scaleTy);
+    if (!scaleB)
+      scaleB = defineScale(rewriter, loc, 0x7f, scaleTy);
+
+    SmallVector<Value> args{c, a, b, scaleA, scaleB, precA, precB};
+
+    LLVM::CallOp call = intel::createDeviceFunctionCall(
+        rewriter, funcName, cTy, argTypes, args, {},
+        intel::convergentNoUnwindWillReturnAttrs);
+    rewriter.replaceOp(op, call);
+    return success();
+  }
+
+private:
+  Value defineScale(ConversionPatternRewriter &rewriter, Location loc,
+                    unsigned val, Type scaleTy) const {
+    Value scale;
+    if (auto vecTy = dyn_cast<VectorType>(scaleTy)) {
+      scale = LLVM::ConstantOp::create(
+          rewriter, loc, vecTy,
+          DenseElementsAttr::get(vecTy, rewriter.getI8IntegerAttr(val)));
+    } else {
+      assert(isa<IntegerType>(scaleTy) &&
+             (scaleTy.getIntOrFloatBitWidth() == 8) && "unexpected scaleTy");
+      scale = LLVM::ConstantOp::create(rewriter, loc, scaleTy,
+                                       rewriter.getI8IntegerAttr(val));
+    }
+    return scale;
+  }
+
+  Type getScaleType(ConversionPatternRewriter &rewriter,
+                    TritonGEN::PrecisionType precision) const {
+    Type scaleTy;
+
+    switch (precision) {
+    case TritonGEN::PrecisionType::BF16:
+    case TritonGEN::PrecisionType::FP16:
+    case TritonGEN::PrecisionType::F8E5M2:
+    case TritonGEN::PrecisionType::F8E4M3FN:
+      scaleTy = int_ty(8);
+      break;
+    case TritonGEN::PrecisionType::F4E2M1:
+      scaleTy = vec_ty(int_ty(8), 2);
+      break;
+    default:
+      assert(false && "unsupported precision type");
+    }
+    return scaleTy;
   }
 };
 
@@ -633,9 +861,17 @@ struct TritonMatrix2DBlockLoadLowering
   using ConvertOpToLLVMPattern<
       TritonGEN::Matrix2DBlockLoadOp>::ConvertOpToLLVMPattern;
 
+  explicit TritonMatrix2DBlockLoadLowering(
+      LLVMTypeConverter &typeConverter,
+      const mlir::triton::gpu::intel::LibCallEmitter &emitter)
+      : ConvertOpToLLVMPattern<TritonGEN::Matrix2DBlockLoadOp>(typeConverter),
+        emitter(emitter) {}
+
   LogicalResult
   matchAndRewrite(TritonGEN::Matrix2DBlockLoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    create2DBlockAsserts(op, rewriter, emitter);
+
     if (!isSPVBuiltinAvailable(op)) {
       // Fallback to GenISA interface.
       rewriter.replaceOp(op, createGenISA2DBlockRead(op, rewriter));
@@ -647,9 +883,9 @@ struct TritonMatrix2DBlockLoadLowering
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     VectorType resType = op.getRes().getType();
 
-    auto dest = rewriter.create<LLVM::AllocaOp>(
-        loc, ptr_ty(ctx), resType.getElementType(),
-        b.i32_val(resType.getNumElements()));
+    auto dest = LLVM::AllocaOp::create(rewriter, loc, ptr_ty(ctx),
+                                       resType.getElementType(),
+                                       b.i32_val(resType.getNumElements()));
     std::string fnName = "__spirv_Subgroup2DBlockLoad";
     if (op.getVnniTransform())
       fnName += "Transform";
@@ -698,9 +934,12 @@ struct TritonMatrix2DBlockLoadLowering
                     *optCacheControls);
     }
 
-    rewriter.replaceOp(op, rewriter.create<LLVM::LoadOp>(loc, resType, dest));
+    rewriter.replaceOp(op, LLVM::LoadOp::create(rewriter, loc, resType, dest));
     return success();
   }
+
+private:
+  const mlir::triton::gpu::intel::LibCallEmitter &emitter;
 };
 
 struct TritonMatrix2DBlockStoreLowering
@@ -708,9 +947,17 @@ struct TritonMatrix2DBlockStoreLowering
   using ConvertOpToLLVMPattern<
       TritonGEN::Matrix2DBlockStoreOp>::ConvertOpToLLVMPattern;
 
+  explicit TritonMatrix2DBlockStoreLowering(
+      LLVMTypeConverter &typeConverter,
+      const mlir::triton::gpu::intel::LibCallEmitter &emitter)
+      : ConvertOpToLLVMPattern<TritonGEN::Matrix2DBlockStoreOp>(typeConverter),
+        emitter(emitter) {}
+
   LogicalResult
   matchAndRewrite(TritonGEN::Matrix2DBlockStoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    create2DBlockAsserts(op, rewriter, emitter);
+
     if (!isSPVBuiltinAvailable(op)) {
       // Fallback to GenISA interface.
       rewriter.replaceOp(op, createGenISA2DBlockWrite(op, rewriter));
@@ -722,10 +969,10 @@ struct TritonMatrix2DBlockStoreLowering
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
     VectorType storeValType = op.getStoredVal().getType();
-    auto storeValPtr = rewriter.create<LLVM::AllocaOp>(
-        loc, ptr_ty(ctx), storeValType.getElementType(),
+    auto storeValPtr = LLVM::AllocaOp::create(
+        rewriter, loc, ptr_ty(ctx), storeValType.getElementType(),
         b.i32_val(storeValType.getNumElements()));
-    rewriter.create<LLVM::StoreOp>(loc, op.getStoredVal(), storeValPtr);
+    LLVM::StoreOp::create(rewriter, loc, op.getStoredVal(), storeValPtr);
 
     std::string fnName = "__spirv_Subgroup2DBlockStoreINTEL";
 
@@ -775,6 +1022,9 @@ struct TritonMatrix2DBlockStoreLowering
     rewriter.replaceOp(op, call);
     return success();
   }
+
+protected:
+  const mlir::triton::gpu::intel::LibCallEmitter &emitter;
 };
 
 struct TritonMatrix2DBlockPrefetchLowering
@@ -782,9 +1032,18 @@ struct TritonMatrix2DBlockPrefetchLowering
   using ConvertOpToLLVMPattern<
       TritonGEN::Matrix2DBlockPrefetchOp>::ConvertOpToLLVMPattern;
 
+  explicit TritonMatrix2DBlockPrefetchLowering(
+      LLVMTypeConverter &typeConverter,
+      const mlir::triton::gpu::intel::LibCallEmitter &emitter)
+      : ConvertOpToLLVMPattern<TritonGEN::Matrix2DBlockPrefetchOp>(
+            typeConverter),
+        emitter(emitter) {}
+
   LogicalResult
   matchAndRewrite(TritonGEN::Matrix2DBlockPrefetchOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    create2DBlockAsserts(op, rewriter, emitter);
+
     if (!isSPVBuiltinAvailable(op)) {
       // Fallback to GenISA interface.
       rewriter.replaceOp(op, createGenISA2DBlockPrefetch(op, rewriter));
@@ -824,7 +1083,10 @@ struct TritonMatrix2DBlockPrefetchLowering
     auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
         /*other=*/LLVM::ModRefInfo::NoModRef,
         /*argMem=*/LLVM::ModRefInfo::Ref,
-        /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef);
+        /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef,
+        /*errnoMem=*/LLVM::ModRefInfo::NoModRef,
+        /*targetMem0=*/LLVM::ModRefInfo::NoModRef,
+        /*targetMem1=*/LLVM::ModRefInfo::NoModRef);
     auto funcAttrs = intel::noUnwindAttrs;
     funcAttrs.memEffectsAttr = memAttr;
 
@@ -841,6 +1103,9 @@ struct TritonMatrix2DBlockPrefetchLowering
     rewriter.replaceOp(op, call);
     return success();
   }
+
+private:
+  const mlir::triton::gpu::intel::LibCallEmitter &emitter;
 };
 
 template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
@@ -860,7 +1125,7 @@ static std::string getSubGroupBlockManglingName(OpType op, Type type) {
       TypeSwitch<Type, Type>(type)
           .Case([](VectorType vecType) { return vecType.getElementType(); })
           // Scalar case
-          .Default(llvm::identity<Type>());
+          .Default([](Type t) { return t; });
   const unsigned numElems =
       TypeSwitch<Type, unsigned>(type)
           .Case([](VectorType vecType) { return vecType.getNumElements(); })
@@ -891,7 +1156,10 @@ struct TritonSubGroupBlockReadLowering
     auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
         /*other=*/LLVM::ModRefInfo::NoModRef,
         /*argMem=*/LLVM::ModRefInfo::Ref,
-        /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef);
+        /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef,
+        /*errnoMem=*/LLVM::ModRefInfo::NoModRef,
+        /*targetMem0=*/LLVM::ModRefInfo::NoModRef,
+        /*targetMem1=*/LLVM::ModRefInfo::NoModRef);
     auto funcAttrs = intel::noUnwindWillReturnAttrs;
     funcAttrs.memEffectsAttr = memAttr;
     LLVM::CallOp call = intel::createDeviceFunctionCall(
@@ -919,7 +1187,10 @@ struct TritonSubGroupBlockWriteLowering
     auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
         /*other=*/LLVM::ModRefInfo::NoModRef,
         /*argMem=*/LLVM::ModRefInfo::ModRef,
-        /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef);
+        /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef,
+        /*errnoMem=*/LLVM::ModRefInfo::NoModRef,
+        /*targetMem0=*/LLVM::ModRefInfo::NoModRef,
+        /*targetMem1=*/LLVM::ModRefInfo::NoModRef);
     auto funcAttrs = intel::noUnwindWillReturnAttrs;
     funcAttrs.memEffectsAttr = memAttr;
     LLVM::CallOp call = intel::createDeviceFunctionCall(
@@ -1037,7 +1308,9 @@ struct ConvertTritonGENToLLVM
     LLVMTypeConverter typeConverter(ctx, options);
     LLVMConversionTarget target(*ctx);
 
-    populateTritonGENToLLVMConversionPatterns(typeConverter, patterns);
+    mlir::triton::gpu::intel::LibCallEmitter emitter;
+
+    populateTritonGENToLLVMConversionPatterns(typeConverter, patterns, emitter);
 
     populateTritonGENToSPIRVConversionPatterns(patterns);
     populateSPIRVToLLVMConversionPatterns(typeConverter, patterns,
@@ -1052,45 +1325,20 @@ struct ConvertTritonGENToLLVM
 } // namespace
 
 //===----------------------------------------------------------------------===//
-// ConvertToLLVMPatternInterface implementation
-//===----------------------------------------------------------------------===//
-
-namespace {
-/// Implement the interface to convert TritonGEN to LLVM.
-struct TritonGENToLLVMDialectInterface : public ConvertToLLVMPatternInterface {
-  using ConvertToLLVMPatternInterface::ConvertToLLVMPatternInterface;
-  void loadDependentDialects(MLIRContext *ctx) const final {
-    ctx->loadDialect<LLVM::LLVMDialect>();
-  }
-
-  /// Hook for derived dialect interface to provide conversion patterns
-  /// and mark dialect legal for the conversion target.
-  void populateConvertToLLVMConversionPatterns(
-      ConversionTarget &target, LLVMTypeConverter &typeConverter,
-      RewritePatternSet &patterns) const final {
-    populateTritonGENToLLVMConversionPatterns(typeConverter, patterns);
-  }
-};
-
-} // namespace
-
-//===----------------------------------------------------------------------===//
 // Pattern Population and Registration
 //===----------------------------------------------------------------------===//
 
 void mlir::triton::populateTritonGENToLLVMConversionPatterns(
-    LLVMTypeConverter &converter, RewritePatternSet &patterns) {
+    LLVMTypeConverter &converter, RewritePatternSet &patterns,
+    const mlir::triton::gpu::intel::LibCallEmitter &emitter) {
   patterns
-      .add<TritonMatrixDPASLowering, TritonMatrix2DBlockLoadLowering,
-           TritonMatrix2DBlockStoreLowering,
-           TritonMatrix2DBlockPrefetchLowering, TritonSubGroupBlockReadLowering,
-           TritonSubGroupBlockWriteLowering, TritonPredicatedLoadOpLowering,
-           TritonPredicatedStoreOpLowering, TritonFToTf32OpLowering>(converter);
-}
+      .add<TritonMatrix2DBlockLoadLowering, TritonMatrix2DBlockStoreLowering,
+           TritonMatrix2DBlockPrefetchLowering>(converter, emitter);
 
-void registerConvertTritonTritonGENToLLVMInterface(DialectRegistry &registry) {
-  registry.addExtension(
-      +[](MLIRContext *ctx, TritonGEN::TritonGENDialect *dialect) {
-        dialect->addInterfaces<TritonGENToLLVMDialectInterface>();
-      });
+  patterns.add<TritonSplitBarrierArriveLowering, TritonSplitBarrierWaitLowering,
+               TritonMatrixDPASLowering, TritonMatrixBlockScaleDPASLowering,
+               TritonSubGroupBlockReadLowering,
+               TritonSubGroupBlockWriteLowering, TritonPredicatedLoadOpLowering,
+               TritonPredicatedStoreOpLowering, TritonFToTf32OpLowering>(
+      converter);
 }

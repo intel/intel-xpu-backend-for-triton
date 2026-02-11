@@ -4,6 +4,7 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
 #include "TritonAMDGPUToLLVM/MembarUtility.h"
+#include "TritonAMDGPUToLLVM/TypeConverter.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
@@ -60,36 +61,15 @@ public:
     addIllegalDialect<mlir::gpu::GPUDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
     addLegalOp<triton::amdgpu::InstructionSchedHint>();
-  }
-};
-
-class TritonAMDGPUToLLVMTypeConverter : public TritonGPUToLLVMTypeConverter {
-public:
-  TritonAMDGPUToLLVMTypeConverter(MLIRContext *ctx,
-                                  const LowerToLLVMOptions &options,
-                                  const TargetInfoBase &targetInfo,
-                                  const DataLayoutAnalysis *analysis = nullptr)
-      : TritonGPUToLLVMTypeConverter(ctx, options, targetInfo, analysis) {
-    addConversion([&](TensorDescType type) -> std::optional<Type> {
-      return convertTensorDescType(type);
-    });
-  }
-
-  Type convertTensorDescType(triton::TensorDescType type) {
-    auto ctx = type.getContext();
-
-    RankedTensorType rankedTensorType = type.getBlockType();
-    auto eleType = rankedTensorType.getElementType();
-    auto shape = rankedTensorType.getShape();
-    SmallVector<Type, 5> types;
-    // base ptr
-    types.push_back(LLVM::LLVMPointerType::get(ctx, 1));
-    // 32 bit shapes
-    types.append(shape.size(), IntegerType::get(ctx, 32));
-    // 64 bit strides
-    types.append(shape.size(), IntegerType::get(ctx, 64));
-
-    return LLVM::LLVMStructType::getLiteral(ctx, types);
+    addDynamicallyLegalOp<triton::gpu::GlobalScratchAllocOp>(
+        [](triton::gpu::GlobalScratchAllocOp op) {
+          return op.getBackend() != "default";
+        });
+    // Warp specialization is lowered later.
+    addLegalOp<triton::gpu::WarpSpecializeOp>();
+    addLegalOp<triton::gpu::WarpYieldOp>();
+    addLegalOp<triton::gpu::WarpSpecializePartitionsOp>();
+    addLegalOp<triton::gpu::WarpReturnOp>();
   }
 };
 
@@ -129,7 +109,9 @@ struct ConvertTritonAMDGPUToLLVM
     // Allocate shared memory and set barrier
     ModuleAllocation allocation(mod);
 
-    AMD::annotateLocalLoadsSyncedViaAsyncWait(mod);
+    if (targetInfo.requiresAliasInfoForAsyncOps())
+      AMD::annotateLocalLoadsSyncedViaAsyncWait(mod);
+
     ModuleMembarAnalysis membarPass(&allocation,
                                     mlir::triton::AMD::membarFilter);
     membarPass.run();
@@ -138,7 +120,7 @@ struct ConvertTritonAMDGPUToLLVM
     {
       TritonLLVMFunctionConversionTarget funcTarget(*context);
       RewritePatternSet funcPatterns(context);
-      mlir::triton::populateFuncOpConversionPattern(
+      mlir::triton::AMD::populateFuncOpConversionPattern(
           typeConverter, funcPatterns, targetInfo, patternBenefitDefault);
       mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                             funcPatterns);
@@ -204,7 +186,8 @@ struct ConvertTritonAMDGPUToLLVM
                                              targetInfo, AMDBenefit);
     AMD::populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo, patterns,
                                            axisInfoAnalysis, AMDBenefit);
-    AMD::populateMaskedOpsToLLVMPatterns(patterns);
+    AMD::populateMaskedOpsToLLVMPatterns(patterns, targetInfo);
+    AMD::populateBarrierOpToLLVMPatterns(typeConverter, patterns, AMDBenefit);
     AMD::populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns,
                                             AMDBenefit);
 
@@ -233,8 +216,8 @@ struct ConvertTritonAMDGPUToLLVM
                                               targetInfo, commonBenefit);
     AMD::populateSPMDOpToLLVMPattern(typeConverter, patterns, AMDBenefit);
 
-    mlir::triton::AMD::populateTritonAMDGPUToLLVMPatterns(typeConverter,
-                                                          patterns, AMDBenefit);
+    mlir::triton::AMD::populateTritonAMDGPUToLLVMPatterns(
+        typeConverter, patterns, targetInfo, AMDBenefit);
     mlir::triton::AMD::populateUpcastMXFPToLLVMPatterns(typeConverter, patterns,
                                                         targetInfo, AMDBenefit);
     mlir::triton::AMD::populateFp4ToFpToLLVMPatterns(typeConverter, patterns,
@@ -244,6 +227,9 @@ struct ConvertTritonAMDGPUToLLVM
     // to help convert scalar expression to LLVM.
     mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
     mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
+
+    mlir::triton::AMD::populateWarpIdOpToLLVMPattern(typeConverter, targetInfo,
+                                                     patterns, commonBenefit);
 
     FailureOr<mlir::amdgpu::Chipset> maybeChipset =
         mlir::amdgpu::Chipset::parse(this->arch);
@@ -268,6 +254,9 @@ struct ConvertTritonAMDGPUToLLVM
 
     AMD::adjustModeRegister(mod, targetInfo);
     fixUpLoopAnnotation(mod);
+
+    // Ensure warp group code is isolated from above.
+    makeAllWarpGroupsIsolatedFromAbove(mod);
   }
 
 private:
@@ -283,8 +272,8 @@ private:
     // Ask for 16B alignment on global_smem because that's the largest we should
     // ever need (4xi32).
     auto arrayTy = LLVM::LLVMArrayType::get(elemTy, 0);
-    auto global = b.create<LLVM::GlobalOp>(
-        loc, arrayTy, /*isConstant=*/false, LLVM::Linkage::External,
+    auto global = LLVM::GlobalOp::create(
+        b, loc, arrayTy, /*isConstant=*/false, LLVM::Linkage::External,
         "global_smem", /*value=*/Attribute(), /*alignment=*/16,
         // Add ROCm support.
         static_cast<unsigned>(NVVM::NVVMMemorySpace::Shared));

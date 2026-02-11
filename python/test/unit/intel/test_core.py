@@ -16,7 +16,6 @@ from triton._internal_testing import (
     is_xpu,
     numpy_random,
     to_triton,
-    to_numpy,
 )
 
 GPU_DIALECT = "ttg"
@@ -62,33 +61,26 @@ class SliceLayout:
 
 class BlockedLayout:
 
-    def __init__(self, size_per_thread, threads_per_warp, warps_per_cta, order, ctas_per_cga=[1, 1],
-                 cta_split_num=[1, 1], cta_order=[0, 1]):
+    def __init__(self, size_per_thread, threads_per_warp, warps_per_cta, order):
         self.sz_per_thread = size_per_thread
         self.threads_per_warp = threads_per_warp
         self.warps_per_cta = warps_per_cta
         self.order = order
-        self.ctas_per_cga = ctas_per_cga
-        self.cta_split_num = cta_split_num
-        self.cta_order = cta_order
 
     def __str__(self):
-        return f"#{GPU_DIALECT}.blocked<{{sizePerThread={self.sz_per_thread}, threadsPerWarp={self.threads_per_warp}, warpsPerCTA={self.warps_per_cta}, order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
+        return f"#{GPU_DIALECT}.blocked<{{sizePerThread={self.sz_per_thread}, threadsPerWarp={self.threads_per_warp}, warpsPerCTA={self.warps_per_cta}, order={self.order}}}>"
 
 
 class SwizzledSharedLayout:
 
-    def __init__(self, vec, per_phase, max_phase, order, ctas_per_cga, cta_split_num, cta_order):
+    def __init__(self, vec, per_phase, max_phase, order):
         self.vec = vec
         self.per_phase = per_phase
         self.max_phase = max_phase
         self.order = order
-        self.ctas_per_cga = ctas_per_cga
-        self.cta_split_num = cta_split_num
-        self.cta_order = cta_order
 
     def __str__(self):
-        return f"#{GPU_DIALECT}.swizzled_shared<{{vec={self.vec}, perPhase={self.per_phase}, maxPhase={self.max_phase}, order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
+        return f"#{GPU_DIALECT}.swizzled_shared<{{vec={self.vec}, perPhase={self.per_phase}, maxPhase={self.max_phase}, order={self.order}}}>"
 
 
 class PaddedSharedLayout:
@@ -171,234 +163,9 @@ def get_reduce_input(dtype_str, shape):
     return numpy_random(shape, dtype_str=dtype_str, low=low, high=high)
 
 
-scan_layouts = [
-    BlockedLayout([1, 4], [4, THREADS_PER_WARP // 4], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([4, 1], [4, THREADS_PER_WARP // 4], [1, 4], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([2, 2], [4, THREADS_PER_WARP // 4], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([2, 2], [8, THREADS_PER_WARP // 8], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [4, THREADS_PER_WARP // 4], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([4, 1], [4, THREADS_PER_WARP // 4], [1, 4], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([2, 2], [4, THREADS_PER_WARP // 4], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([2, 2], [8, THREADS_PER_WARP // 8], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 2], [1, THREADS_PER_WARP // 1], [1, 4], [1, 0], [1, 1], [1, 1], [0, 1]),
-]
-
-
-@pytest.mark.parametrize("M, N", [[32, 16], [32, 32], [32, 64], [64, 32]])
-@pytest.mark.parametrize("src_layout", scan_layouts)
-@pytest.mark.parametrize("axis", [0, 1])
-@pytest.mark.parametrize("add_overflow_check", [False, True])
-def test_scan_layouts(M, N, src_layout, axis, add_overflow_check, device, tmp_path: pathlib.Path):
-
-    overflow_check = """
-        %17 = arith.extsi %arg2 : i32 to i64
-        %18 = arith.extsi %arg3 : i32 to i64
-        %19 = arith.addi %17, %18 : i64
-        %i32.min = arith.constant -2147483648: i64
-        %i32.max = arith.constant 2147483647: i64
-        %20 = arith.cmpi slt, %19, %i32.max : i64
-        %21 = arith.cmpi sge, %19, %i32.min : i64
-        %22 = arith.andi %20, %21 : i1
-        tt.assert %22, "overflow detected" : i1
-    """
-
-    ir = f"""
-    #blocked = {src_layout}
-    module attributes {{"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.threads-per-warp" = {THREADS_PER_WARP} : i32}} {{
-    tt.func public @kernel_0d1d(%arg0: !tt.ptr<i32> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<i32> {{tt.divisibility = 16 : i32}}) {{
-      %cst = arith.constant dense<{N}> : tensor<{M}x1xi32, #blocked>
-      %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #ttg.slice<{{dim = 1, parent = #blocked}}>>
-      %1 = tt.expand_dims %0 {{axis = 1 : i32}} : tensor<{M}xi32, #ttg.slice<{{dim = 1, parent = #blocked}}>> -> tensor<{M}x1xi32, #blocked>
-      %2 = arith.muli %1, %cst : tensor<{M}x1xi32, #blocked>
-      %3 = tt.splat %arg0 : !tt.ptr<i32> -> tensor<{M}x1x!tt.ptr<i32>, #blocked>
-      %4 = tt.addptr %3, %2 : tensor<{M}x1x!tt.ptr<i32>, #blocked>, tensor<{M}x1xi32, #blocked>
-      %5 = tt.make_range {{end = {N} : i32, start = 0 : i32}} : tensor<{N}xi32, #ttg.slice<{{dim = 0, parent = #blocked}}>>
-      %6 = tt.expand_dims %5 {{axis = 0 : i32}} : tensor<{N}xi32, #ttg.slice<{{dim = 0, parent = #blocked}}>> -> tensor<1x{N}xi32, #blocked>
-      %7 = tt.broadcast %4 : tensor<{M}x1x!tt.ptr<i32>, #blocked> -> tensor<{M}x{N}x!tt.ptr<i32>, #blocked>
-      %8 = tt.broadcast %6 : tensor<1x{N}xi32, #blocked> -> tensor<{M}x{N}xi32, #blocked>
-      %9 = tt.addptr %7, %8 : tensor<{M}x{N}x!tt.ptr<i32>, #blocked>, tensor<{M}x{N}xi32, #blocked>
-      %10 = tt.load %9 : tensor<{M}x{N}x!tt.ptr<i32>, #blocked>
-      %11 = "tt.scan"(%10) <{{axis = {axis} : i32, reverse = false}}> ({{
-      ^bb0(%arg2: i32, %arg3: i32):
-        %16 = arith.addi %arg2, %arg3 : i32{overflow_check if add_overflow_check else ""}
-        tt.scan.return %16 : i32
-      }}) : (tensor<{M}x{N}xi32, #blocked>) -> tensor<{M}x{N}xi32, #blocked>
-      %12 = tt.splat %arg1 : !tt.ptr<i32> -> tensor<{M}x1x!tt.ptr<i32>, #blocked>
-      %13 = tt.addptr %12, %2 : tensor<{M}x1x!tt.ptr<i32>, #blocked>, tensor<{M}x1xi32, #blocked>
-      %14 = tt.broadcast %13 : tensor<{M}x1x!tt.ptr<i32>, #blocked> -> tensor<{M}x{N}x!tt.ptr<i32>, #blocked>
-      %15 = tt.addptr %14, %8 : tensor<{M}x{N}x!tt.ptr<i32>, #blocked>, tensor<{M}x{N}xi32, #blocked>
-      tt.store %15, %11 : tensor<{M}x{N}x!tt.ptr<i32>, #blocked>
-      tt.return
-    }}
-    }}
-    """
-
-    temp_file = tmp_path / "test_scan_layouts.ttgir"
-    temp_file.write_text(ir)
-    kernel = triton.compile(str(temp_file))
-
-    rs = RandomState(17)
-    x = rs.randint(-100, 100, (M, N)).astype('int32')
-
-    z = np.zeros((M, N)).astype('int32')
-    x_tri = torch.tensor(x, device=device)
-    z_tri = torch.tensor(z, device=device)
-
-    kernel[(1, 1, 1)](x_tri, z_tri)
-
-    z_ref = np.cumsum(x, axis=axis)
-
-    np.testing.assert_equal(z_ref, z_tri.cpu().numpy())
-
-
 layouts = [
-    BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1]),
-    DpasLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=1, threads_per_warp=32,
-               warps_per_cta=[4, 1], rep_cluster=[1, 1]),
-    DpasLayout(repeatCount=8, systolic_depth=8, execution_size=16, ops_per_chan=2, threads_per_warp=32,
-               warps_per_cta=[2, 2], rep_cluster=[1, 1]),
-    DpasLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=4, threads_per_warp=32,
-               warps_per_cta=[4, 1], rep_cluster=[1, 1]),
-    LinearLayout(register=[[0, 16], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], lane=[[0, 0], [0, 1], [0, 2], [0, 4],
-                                                                                    [0, 8]], warp=[[32, 0], [0, 32]],
-                 block=[]),
-]
-
-
-@pytest.mark.parametrize("M, N", [[128, 16], [32, 128], [32, 32], [16, 16]])
-@pytest.mark.parametrize("src_layout", filter_layouts(layouts))
-@pytest.mark.parametrize("axis", [0, 1])
-@pytest.mark.parametrize("epilogue_kind", ['reduce1d', 'reduce2d', 'expand_reduce2d'])
-@pytest.mark.parametrize("dtype_str,add_overflow_check", [("int32", False), ("int32", True), ("float32", False),
-                                                          ("float16", False)])
-@pytest.mark.parametrize("reduce_op", ["sum", "max"])
-def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, add_overflow_check, reduce_op, device,
-                        tmp_path: pathlib.Path):
-    if reduce_op == "sum" and dtype_str == "float16" and M * N > 1024:
-        pytest.xfail("Skipping sum reduction on float16 due to accuracy issues")
-    if isinstance(src_layout, LinearLayout) and THREADS_PER_WARP != (1 << len(src_layout.lane)):
-        pytest.xfail(f"Skipping. This LinearLayout assumes {1 << len(src_layout.lane)} threads per warp")
-
-    overflow_check = """
-        %18 = arith.extsi %arg3 : i32 to i64
-        %19 = arith.extsi %arg4 : i32 to i64
-        %20 = arith.addi %18, %19 : i64
-        %i32.min = arith.constant -2147483648: i64
-        %i32.max = arith.constant 2147483647: i64
-        %21 = arith.cmpi slt, %20, %i32.max : i64
-        %22 = arith.cmpi sge, %20, %i32.min : i64
-        %23 = arith.andi %21, %22 : i1
-        tt.assert %23, "overflow detected" : i1
-    """
-
-    ty = {"int32": "i32", "float32": "f32", "float16": "f16"}[dtype_str]
-    arith_op = {
-        "max": {"int32": "arith.maxsi", "float32": "arith.maximumf", "float16": "arith.maximumf"},  #
-        "sum": {"int32": "arith.addi", "float32": "arith.addf", "float16": "arith.addf"}
-    }[reduce_op][dtype_str]
-    numpy_op = {"max": np.max, "sum": np.sum}[reduce_op]
-    rdims_1d = f"{N}" if axis == 0 else f"{M}"
-    rdims_2d = f"1x{N}" if axis == 0 else f"{M}x1"
-    store_range = "%7" if axis == 0 else "%1"
-    warps = warps_per_cta(src_layout, [M, N])
-    num_warps = int(np.prod(warps))
-    blocked = BlockedLayout([1, 1], [32, THREADS_PER_WARP // 32], [4, num_warps // 4], [0, 1], [1, 1], [1, 1], [0, 1])
-    one_d_layout = BlockedLayout([1], [THREADS_PER_WARP], [num_warps], [0], [1], [1], [0])
-
-    expanded_shape = f"1x{N}" if axis == 0 else f"{M}x1"
-    other_axis = 1 - axis
-    epilogue = {
-        "reduce1d":
-        f"""
-        %14 = tt.splat %arg2 : !tt.ptr<{ty}> -> tensor<{rdims_2d}x!tt.ptr<{ty}>, #blocked>
-        %15 = tt.addptr %14, {store_range} : tensor<{rdims_2d}x!tt.ptr<{ty}>, #blocked>, tensor<{rdims_2d}xi32, #blocked>
-        %16 = {GPU_DIALECT}.convert_layout %13 : tensor<{rdims_1d}x{ty}, #{GPU_DIALECT}.slice<{{dim = {axis}, parent = #src}}>> -> tensor<{rdims_1d}x{ty}, #{GPU_DIALECT}.slice<{{dim = {axis}, parent = #blocked}}>>
-        %17 = tt.expand_dims %16 {{axis = {axis} : i32}} : tensor<{rdims_1d}x{ty}, #{GPU_DIALECT}.slice<{{dim = {axis}, parent = #blocked}}>> -> tensor<{rdims_2d}x{ty}, #blocked>
-        tt.store %15, %17 : tensor<{rdims_2d}x!tt.ptr<{ty}>, #blocked>
-        tt.return
-        }}
-        }}
-    """, "reduce2d":
-        f"""
-        %14 = "tt.reduce"(%13) ({{
-        ^bb0(%arg3: {ty}, %arg4: {ty}):
-          %17 = {arith_op} %arg3, %arg4 : {ty}{overflow_check if add_overflow_check else ""}
-          tt.reduce.return %17 : {ty}
-        }}) {{axis = 0 : i32}} : (tensor<{rdims_1d}x{ty}, #{GPU_DIALECT}.slice<{{dim = {axis}, parent = #src}}>>) -> {ty}
-        tt.store %arg2, %14 : !tt.ptr<{ty}>
-        tt.return
-        }}
-        }}
-    """, "expand_reduce2d":
-        f"""
-        %14 = tt.expand_dims %13 {{axis = {axis} : i32}} : tensor<{rdims_1d}x{ty}, #{GPU_DIALECT}.slice<{{dim = {axis}, parent = #src}}>> -> tensor<{expanded_shape}x{ty}, #src>
-        %15 = "tt.reduce"(%14) ({{
-        ^bb0(%arg3: {ty}, %arg4: {ty}):
-          %17 = {arith_op} %arg3, %arg4 : {ty}{overflow_check if add_overflow_check else ""}
-          tt.reduce.return %17 : {ty}
-        }}) {{axis = {other_axis} : i32}} : (tensor<{expanded_shape}x{ty}, #src>) -> (tensor<1x{ty}, #{GPU_DIALECT}.slice<{{dim = {other_axis}, parent = #src}}>>)
-        %16 = ttg.convert_layout %15 : tensor<1x{ty}, #{GPU_DIALECT}.slice<{{dim = {other_axis}, parent = #src}}>> -> tensor<1x{ty}, #one_d_layout>
-        %17 = tt.splat %arg2 : !tt.ptr<{ty}> -> tensor<1x!tt.ptr<{ty}>, #one_d_layout>
-        tt.store %17, %16 : tensor<1x!tt.ptr<{ty}>, #one_d_layout>
-        tt.return
-        }}
-        }}
-                """
-    }[epilogue_kind]
-
-    ir = f"""
-    #blocked = {blocked}
-    #src = {src_layout}
-    #one_d_layout = {one_d_layout}
-    module attributes {{"ttg.num-warps" = {num_warps} : i32, "ttg.num-ctas" = 1 : i32, "ttg.threads-per-warp" = {THREADS_PER_WARP} : i32}} {{
-    tt.func public @kernel_0d1d2c3d4c(%arg0: !tt.ptr<{ty}> {{tt.divisibility = 16 : i32}}, %arg1: i32 {{tt.divisibility = 16 : i32}}, %arg2: !tt.ptr<{ty}> {{tt.divisibility = 16 : i32}}) {{
-        %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #{GPU_DIALECT}.slice<{{dim = 1, parent = #blocked}}>>
-        %1 = tt.expand_dims %0 {{axis = 1 : i32}} : tensor<{M}xi32, #{GPU_DIALECT}.slice<{{dim = 1, parent = #blocked}}>> -> tensor<{M}x1xi32, #blocked>
-        %2 = tt.splat %arg1 : i32 -> tensor<{M}x1xi32, #blocked>
-        %3 = arith.muli %1, %2 : tensor<{M}x1xi32, #blocked>
-        %4 = tt.splat %arg0 : !tt.ptr<{ty}> -> tensor<{M}x1x!tt.ptr<{ty}>, #blocked>
-        %5 = tt.addptr %4, %3 : tensor<{M}x1x!tt.ptr<{ty}>, #blocked>, tensor<{M}x1xi32, #blocked>
-        %6 = tt.make_range {{end = {N} : i32, start = 0 : i32}} : tensor<{N}xi32, #{GPU_DIALECT}.slice<{{dim = 0, parent = #blocked}}>>
-        %7 = tt.expand_dims %6 {{axis = 0 : i32}} : tensor<{N}xi32, #{GPU_DIALECT}.slice<{{dim = 0, parent = #blocked}}>> -> tensor<1x{N}xi32, #blocked>
-        %8 = tt.broadcast %5 : tensor<{M}x1x!tt.ptr<{ty}>, #blocked> -> tensor<{M}x{N}x!tt.ptr<{ty}>, #blocked>
-        %9 = tt.broadcast %7 : tensor<1x{N}xi32, #blocked> -> tensor<{M}x{N}xi32, #blocked>
-        %10 = tt.addptr %8, %9 : tensor<{M}x{N}x!tt.ptr<{ty}>, #blocked>, tensor<{M}x{N}xi32, #blocked>
-        %11 = tt.load %10 : tensor<{M}x{N}x!tt.ptr<{ty}>, #blocked>
-        %12 = {GPU_DIALECT}.convert_layout %11 : tensor<{M}x{N}x{ty}, #blocked> -> tensor<{M}x{N}x{ty}, #src>
-        %13 = "tt.reduce"(%12) ({{
-        ^bb0(%arg3: {ty}, %arg4: {ty}):
-          %17 = {arith_op} %arg3, %arg4 : {ty}{overflow_check if add_overflow_check else ""}
-          tt.reduce.return %17 : {ty}
-        }}) {{axis = {axis} : i32}} : (tensor<{M}x{N}x{ty}, #src>) -> tensor<{rdims_1d}x{ty}, #{GPU_DIALECT}.slice<{{dim = {axis}, parent = #src}}>>
-    """ + epilogue
-
-    temp_file = tmp_path / "test_reduce_layouts.ttgir"
-    temp_file.write_text(ir)
-    kernel = triton.compile(str(temp_file))
-
-    x = get_reduce_input(dtype_str, (M, N))
-    reduce2d = 'reduce2d' in epilogue_kind
-    z_shape = (1, 1) if reduce2d else (1, N) if axis == 0 else (M, 1)
-    z = np.zeros(z_shape).astype(dtype_str)
-
-    x_tri = torch.tensor(x, device=device)
-    z_tri = torch.tensor(z, device=device)
-
-    kernel[(1, 1, 1)](x_tri, x_tri.stride(0), z_tri)
-    z_ref = numpy_op(x) if reduce2d else numpy_op(x, axis=axis, keepdims=True)
-
-    if dtype_str == 'float16':
-        np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01, atol=1e-2)
-    else:
-        np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01, atol=1e-3)
-
-
-layouts = [
-    BlockedLayout([1, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [1, THREADS_PER_WARP], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0]),
+    BlockedLayout([1, 4], [1, THREADS_PER_WARP], [2, 2], [1, 0]),
     DpasLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=1, threads_per_warp=32,
                warps_per_cta=[4, 1], rep_cluster=[1, 1]),
 ]
@@ -443,8 +210,8 @@ def test_store_op(M, src_layout, device, tmp_path: pathlib.Path):
 
 
 layouts = [
-    BlockedLayout([1, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [1, THREADS_PER_WARP], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0]),
+    BlockedLayout([1, 4], [1, THREADS_PER_WARP], [2, 2], [1, 0]),
     DpasLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=1, threads_per_warp=32,
                warps_per_cta=[4, 1], rep_cluster=[1, 1])
 ]
@@ -532,10 +299,10 @@ def test_convert1d_bool(M, src_layout, dst_layout, src_dim, dst_dim, device, tmp
 
 
 layouts = [
-    BlockedLayout([1, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [1, THREADS_PER_WARP], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [THREADS_PER_WARP // 32, 32], [1, 4], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1])
+    BlockedLayout([1, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0]),
+    BlockedLayout([1, 4], [1, THREADS_PER_WARP], [2, 2], [1, 0]),
+    BlockedLayout([1, 4], [THREADS_PER_WARP // 32, 32], [1, 4], [1, 0]),
+    BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [2, 2], [0, 1])
 ]
 
 
@@ -611,8 +378,8 @@ def test_chain_reduce(M, N, src_layout, op, device, first_axis, tmp_path: pathli
 # TODO: backend should be tested separately
 
 layouts = [
-    BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 16], [8, THREADS_PER_WARP // 8], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [2, 2], [0, 1]),
+    BlockedLayout([1, 16], [8, THREADS_PER_WARP // 8], [4, 1], [1, 0]),
     DpasLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=1, threads_per_warp=32,
                warps_per_cta=[4, 1], rep_cluster=[1, 1]),
     DpasLayout(repeatCount=2, systolic_depth=8, execution_size=8, ops_per_chan=1, threads_per_warp=32,
@@ -621,10 +388,10 @@ layouts = [
 
 intermediate_layouts = [
     None,
-    SwizzledSharedLayout(1, 1, 1, [0, 1], [1, 1], [1, 1], [0, 1]),
-    SwizzledSharedLayout(1, 1, 1, [1, 0], [1, 1], [1, 1], [0, 1]),
-    SwizzledSharedLayout(4, 2, 4, [1, 0], [1, 1], [1, 1], [0, 1]),
-    SwizzledSharedLayout(2, 2, 4, [1, 0], [1, 1], [1, 1], [0, 1]),
+    SwizzledSharedLayout(1, 1, 1, [0, 1]),
+    SwizzledSharedLayout(1, 1, 1, [1, 0]),
+    SwizzledSharedLayout(4, 2, 4, [1, 0]),
+    SwizzledSharedLayout(2, 2, 4, [1, 0]),
 ]
 
 
@@ -736,15 +503,15 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device, t
 
 
 layouts_3d = [
-    BlockedLayout([4, 4, 1], [1, 8, THREADS_PER_WARP // 8], [2, 2, 1], [2, 1, 0], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
-    BlockedLayout([1, 1, 4], [8, THREADS_PER_WARP // 8, 1], [2, 1, 2], [1, 2, 0], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
+    BlockedLayout([4, 4, 1], [1, 8, THREADS_PER_WARP // 8], [2, 2, 1], [2, 1, 0]),
+    BlockedLayout([1, 1, 4], [8, THREADS_PER_WARP // 8, 1], [2, 1, 2], [1, 2, 0]),
 ]
 
 shared_layouts_3d = [
-    SwizzledSharedLayout(1, 1, 1, [2, 1, 0], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
-    SwizzledSharedLayout(4, 2, 4, [1, 2, 0], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
-    SwizzledSharedLayout(8, 2, 4, [0, 2, 1], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
-    SwizzledSharedLayout(4, 2, 1, [2, 0, 1], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
+    SwizzledSharedLayout(1, 1, 1, [2, 1, 0]),
+    SwizzledSharedLayout(4, 2, 4, [1, 2, 0]),
+    SwizzledSharedLayout(8, 2, 4, [0, 2, 1]),
+    SwizzledSharedLayout(4, 2, 1, [2, 0, 1]),
 ]
 
 
@@ -841,9 +608,9 @@ dot_layouts = [
 ]
 
 shared_layouts = [
-    SwizzledSharedLayout(4, 2, 4, [0, 1], [1, 1], [1, 1], [0, 1]),
-    SwizzledSharedLayout(8, 1, 8, [1, 0], [1, 1], [1, 1], [0, 1]),
-    SwizzledSharedLayout(16, 1, 16, [1, 0], [1, 1], [1, 1], [0, 1]),
+    SwizzledSharedLayout(4, 2, 4, [0, 1]),
+    SwizzledSharedLayout(8, 1, 8, [1, 0]),
+    SwizzledSharedLayout(16, 1, 16, [1, 0]),
 ]
 
 
@@ -855,7 +622,7 @@ def test_split_subview(M, N, M_tile_size, N_tile_size, device, tmp_path: pathlib
     num_repeats_N = triton.cdiv(N, N_tile_size)
 
     ir = f"""
-    #blocked = #ttg.blocked<{{sizePerThread=[1, 8], threadsPerWarp=[{num_rows_per_warp}, 4], warpsPerCTA=[4, 1], order=[1, 0], CTAsPerCGA=[1, 1], CTASplitNum=[1, 1], CTAOrder=[0, 1]}}>
+    #blocked = #ttg.blocked<{{sizePerThread=[1, 8], threadsPerWarp=[{num_rows_per_warp}, 4], warpsPerCTA=[4, 1], order=[1, 0]}}>
     #shared = #ttg.swizzled_shared<{{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0]}}>
     #smem = #ttg.shared_memory
 
@@ -989,7 +756,7 @@ mma_layouts = [
 ]
 
 shared_layouts = [
-    SwizzledSharedLayout(8, 1, 1, [1, 0], [1, 1], [1, 1], [0, 1]),
+    SwizzledSharedLayout(8, 1, 1, [1, 0]),
 ]
 
 
@@ -1298,3 +1065,33 @@ def test_gather_warp_shuffle(src_shape, indices_shape, axis, src_layout, indices
     kernel[(1, 1, 1)](src, indices, output)
 
     torch.testing.assert_close(output, ref, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("pinned", [True, False])
+def test_host_memory_access(device, pinned):
+    # This test verifies that Triton kernels can correctly access CPU pinned memory.
+    N = 1024
+    cpu_tensor = torch.arange(N, dtype=torch.float32)
+    if pinned:
+        cpu_tensor = cpu_tensor.pin_memory()
+
+    @triton.jit
+    def add_one_kernel(X, Y, N, BLOCK: tl.constexpr):
+        pid = tl.program_id(0)
+        offs = pid * BLOCK + tl.arange(0, BLOCK)
+        mask = offs < N
+        x = tl.load(X + offs, mask=mask)
+        y = x + 1.0
+        tl.store(Y + offs, y, mask=mask)
+
+    # Output tensor on device
+    out_tensor = torch.empty_like(cpu_tensor, device=device)
+
+    # Passing cpu_tensor directly - driver should handle the pinned memory pointer
+    BLOCK = 1024
+    if pinned:
+        add_one_kernel[(1, )](cpu_tensor, out_tensor, N, BLOCK=BLOCK)
+        assert torch.allclose(cpu_tensor + 1, out_tensor.cpu())
+    else:
+        with pytest.raises(ValueError, match="Pointer argument"):
+            add_one_kernel[(1, )](cpu_tensor, out_tensor, N, BLOCK=BLOCK)

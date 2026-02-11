@@ -2,6 +2,9 @@ import pytest
 import torch
 import triton.language as tl
 import triton
+import sys
+import subprocess
+import os
 
 
 @pytest.mark.parametrize('cond', [True, False])
@@ -10,29 +13,35 @@ import triton
 @pytest.mark.parametrize('env_var', [True, False])
 @pytest.mark.parametrize('jit_flag', [True, False])
 @pytest.mark.forked
-def test_device_assert(monkeypatch, cond, mask, opt_flag, env_var, jit_flag, device):
-    monkeypatch.setenv("TRITON_DEBUG", str(int(env_var)))
-    triton.knobs.refresh_knobs()
-    torch.zeros([1], dtype=torch.int32, device=device)
-
-    @triton.jit(debug=jit_flag)
-    def _kernel(COND: tl.constexpr, MASK: tl.constexpr):
-        tl.device_assert(COND, 'test', mask=MASK)
+def test_device_assert(cond, mask, opt_flag, env_var, jit_flag, device):
+    """Temporary subprocess solution due to:
+    https://github.com/pytorch/pytorch/issues/142135"""
 
     is_debug = env_var or (opt_flag if opt_flag is not None else jit_flag)
 
-    kwargs = {}
-    if opt_flag is not None:
-        kwargs["debug"] = opt_flag
+    should_fail = not cond and is_debug and mask is not False
+    kernel_file = os.path.join(os.path.dirname(__file__), "test_debug_kernels.py")
+    mask_str = "None" if mask is None else str(mask)
+    opt_flag_str = "None" if opt_flag is None else str(opt_flag)
 
-    if not cond and is_debug and mask is not False:
-        with pytest.raises(RuntimeError):
-            _kernel[(1, )](cond, mask, **kwargs)
-            getattr(torch, device).synchronize()
-        return
+    env = os.environ.copy()
+    env["TRITON_DEBUG"] = str(int(env_var))
 
-    _kernel[(1, )](cond, mask, **kwargs)
-    getattr(torch, device).synchronize()
+    result = subprocess.run(
+        [sys.executable, kernel_file, "device_assert",
+         str(cond), mask_str, opt_flag_str,
+         str(jit_flag), device], capture_output=True, text=True, env=env)
+
+    if should_fail:
+        if device == 'xpu':
+            assert result.returncode == -6, (f"Expected SIGABRT but got exit code {result.returncode}. "
+                                             f"stdout: {result.stdout}, stderr: {result.stderr}")
+        else:
+            assert result.returncode == 1, (f"Expected runtime error but got unexpected exit code {result.returncode}. "
+                                            f"stdout: {result.stdout}, stderr: {result.stderr}")
+    else:
+        assert result.returncode == 0, (f"Expected success but got unexpected exit code {result.returncode}. "
+                                        f"stdout: {result.stdout}, stderr: {result.stderr}")
 
 
 def test_device_assert_barrier(monkeypatch, device):

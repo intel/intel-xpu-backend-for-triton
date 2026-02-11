@@ -1,8 +1,11 @@
 #ifndef TRITON_INTEL_UTILS_DEFUSECHAIN_H
 #define TRITON_INTEL_UTILS_DEFUSECHAIN_H
 
+#include "Utils/Utility.h"
 #include "mlir/IR/Value.h"
+#include "mlir/Interfaces/LoopLikeInterface.h"
 #include "llvm/ADT/SetVector.h"
+#include <unordered_set>
 
 namespace mlir::triton::intel {
 
@@ -19,12 +22,6 @@ public:
   using Operations = llvm::SmallSetVector<Operation *, 32>;
 
   DefUseChain() = delete;
-
-  bool operator<(const DefUseChain &other) const {
-    if (start == other.start)
-      return end < other.end;
-    return start < other.start;
-  }
 
   bool operator==(const DefUseChain &other) const { return ops == other.ops; }
 
@@ -61,13 +58,19 @@ private:
   Operation *end;   //< last operation in the chain
 };
 
+struct DefUseChainHash {
+  size_t operator()(const mlir::triton::intel::DefUseChain &c) const noexcept {
+    return llvm::hash_combine(c.getStart(), c.getEnd());
+  }
+};
+
 /// \class DefUseChainManager
 /// Manages collection of one or more \class DefUseChain.
 class DefUseChainManager {
   friend raw_ostream &operator<<(raw_ostream &, const DefUseChainManager &);
 
 public:
-  using DefUseChains = std::set<DefUseChain>;
+  using DefUseChains = std::unordered_set<DefUseChain, DefUseChainHash>;
   using Operations = DefUseChain::Operations;
 
   /// Create all def-use chains rooted at \p start and terminated by \p end.
@@ -94,6 +97,72 @@ private:
   DefUseChains getOverlappingChains() const;
 
   DefUseChains chains;
+};
+
+/// \class Fuser
+/// Abstract base class providing functionality to fuse operations within a
+/// set of def-use chains.
+class Fuser {
+protected:
+  SmallPtrSet<Operation *, 8> cleanUp;
+
+  virtual ~Fuser() {
+    if (!cleanUp.empty())
+      eraseOperations(cleanUp);
+  }
+
+  using DefUseChain = intel::DefUseChain;
+  using DefUseChainManager = intel::DefUseChainManager;
+  using DefUseChains = DefUseChainManager::DefUseChains;
+
+  // Delegate to derived classes details on which operations within a
+  // DefUseChain to fuse.
+  virtual void fuse(const DefUseChain &) = 0;
+
+  // Fuse operations in the given \p chains.
+  void fuse(const DefUseChains &chains);
+
+  // Duplicate the root operation of the given \p chains.
+  void duplicateRoot(DefUseChains &chains) const;
+
+  // Duplicate the root operation of \p sameRootChains and update \p chains.
+  void duplicateRoot(DefUseChains &sameRootChains, DefUseChains &chains) const;
+
+  // Prune \p chains that cannot be handled during fusion. For example,
+  // operations in the def-use chain should have a single user, except in
+  // special circumstances (e.g. the root operation of a chain might have more
+  // than one user).
+  void pruneInvalid(DefUseChains &chains) const;
+
+  // Determine whether all operations in the given def-use \p chain have a
+  // single user. Note: we allow an operation in the def-use chain to have an
+  // additional user if the operation is in a for loop, and the additional user
+  // is the loop yield operation, provided that the result yielded is not used
+  // after the loop. Example:
+  //   make_tensor_ptr -> advance -> load (OK)
+  //   make_tensor_ptr -> for init_arg -> advance -> load (OK)
+  //                                   -> yield (OK)
+  //   make_tensor_ptr -> for init_arg -> advance -> load (OK)
+  //                                              -> yield -> load (NOT OK)
+  //
+  bool validateChain(const DefUseChain &chain) const;
+
+  // Propagate \p newVal to operations in the given def-use \p chain.
+  void propagateToUsers(Value newVal, const DefUseChain &chain,
+                        IRMapping &mapping);
+
+  // Propagate \p newVal to users of \p origOp.
+  void propagateToUsers(Value newVal, Value origVal, Operation *origOp,
+                        Operation *sentinel, IRMapping &mapping);
+
+  // If \p user is not \p sentinel, propagate \p newVal to \p user. Otherwise
+  // terminate the propagation.
+  virtual void propagateToUser(Value newVal, Value origVal, Operation *user,
+                               Operation *sentinel, IRMapping &mapping) = 0;
+
+  // Propagate \p newVal to users of \p origOp in the given \p loop.
+  void propagateToLoop(Value newVal, Value origVal, LoopLikeOpInterface loopOp,
+                       Operation *sentinel, IRMapping &mapping);
 };
 
 } // namespace mlir::triton::intel

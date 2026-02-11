@@ -4,7 +4,7 @@ import numpy as np
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_hopper, is_interpreter, numpy_random, to_triton, unwrap_tensor, tma_dtypes, to_numpy
+from triton._internal_testing import is_hopper, is_sm12x, is_interpreter, numpy_random, to_triton, unwrap_tensor, tma_dtypes, to_numpy
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from typing import Optional
 from triton._internal_testing import is_cuda, is_hip, is_hip_cdna3, is_xpu
@@ -308,7 +308,7 @@ def test_tensor_descriptor_load_nd(dtype_str, num_ctas, ndim, INNER_BLOCK, devic
     # Check in-bounds
     actual = unwrap_tensor(out)
     expect = unwrap_tensor(inp)
-    idx = [slice(None, s) for s in inp.shape]
+    idx = tuple(slice(None, s) for s in inp.shape)
     torch.testing.assert_close(expect, actual[idx])
 
     # Check out-of-bounds
@@ -373,7 +373,7 @@ def test_tensor_descriptor_store_nd(dtype_str, num_ctas, ndim, INNER_BLOCK, devi
     # Check in-bounds
     actual = unwrap_tensor(out)
     expect = unwrap_tensor(inp)
-    idx = [slice(None, s) for s in desc_shape]
+    idx = tuple(slice(None, s) for s in desc_shape)
     torch.testing.assert_close(expect[idx], actual[idx])
 
     # Check out-of-bounds
@@ -384,8 +384,6 @@ def test_tensor_descriptor_store_nd(dtype_str, num_ctas, ndim, INNER_BLOCK, devi
 
 @pytest.mark.interpreter
 def test_tensor_descriptor_padding(device):
-    if not is_cuda():
-        pytest.xfail("padding is unsupported")
 
     @triton.jit
     def device_tma_load(in_ptr, out_ptr, IM, IN, YM, YN, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr,
@@ -1014,7 +1012,7 @@ def test_tensor_descriptor_rank_reducing_load(dtype_str, ndim, INNER_BLOCK, devi
     # Check in-bounds
     actual = unwrap_tensor(out)
     expect = unwrap_tensor(inp)
-    idx = [slice(None, s) for s in inp.shape]
+    idx = tuple(slice(None, s) for s in inp.shape)
     torch.testing.assert_close(expect, actual[idx])
 
     # Check out-of-bounds
@@ -1189,6 +1187,8 @@ def test_tensor_descriptor_reshape_matmul(dtype_str, device):
     BLOCK_SIZE_N = 64
     BLOCK_SIZE_K = 64
 
+    torch.manual_seed(42)
+
     # trunc float32 to avoid large precision differences.
     def trunc_to_tf32(tensor):
         int_view = tensor.view(np.uint32)
@@ -1198,7 +1198,7 @@ def test_tensor_descriptor_reshape_matmul(dtype_str, device):
         return tf32_simulated
 
     # test a layout where block_m and block_N are split into two separate chunks.
-    A = numpy_random((M, K), dtype_str)
+    A = numpy_random((M, K), dtype_str) - 0.25
     if dtype_str == "float32":
         A = trunc_to_tf32(A)
 
@@ -1211,7 +1211,7 @@ def test_tensor_descriptor_reshape_matmul(dtype_str, device):
     A = to_triton(A, device=device, dst_type=dtype_str)
     A_reshaped = to_triton(A_reshaped, device=device, dst_type=dtype_str)
 
-    B = numpy_random((N, K), dtype_str)
+    B = numpy_random((N, K), dtype_str) - 0.25
     if dtype_str == "float32":
         B = trunc_to_tf32(B)
 
@@ -1487,6 +1487,7 @@ def tma_scatter_rows_kernel(out_ptr, in_ptr, idx_ptr, y, X: tl.constexpr, Y: tl.
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.int8])
 @pytest.mark.parametrize("y", [0, 32, 48])
 @pytest.mark.skipif(is_hopper(), reason="TMA Scatter is not supported on hopper")
+@pytest.mark.skipif(is_sm12x(), reason="TMA Scatter is not supported on sm120")
 def test_tma_scatter(X, Y, BLOCK_X, BLOCK_Y, dtype, y, device):
     if BLOCK_X > X or y + BLOCK_Y > Y:
         pytest.xfail()
@@ -1566,9 +1567,6 @@ def test_tensor_descriptor_reduce(kind, descriptor, dtype_str, num_ctas, M_BLOCK
             pytest.xfail("Multi-CTA not supported")
         if is_hip_cdna3() and (kind, dtype_str, M_BLOCK, N_BLOCK) in REDUCE_SKIP_HIP_CDNA3:
             pytest.skip("Broken on rocm")
-        if is_xpu():
-            if (kind, dtype_str) in [("add", "bfloat16")]:
-                pytest.skip("FIXME: issue #3914")
 
     @triton.jit(debug=True)
     def kernel(out_desc, out_ptr, a_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr, kind: tl.constexpr):

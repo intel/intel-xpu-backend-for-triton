@@ -26,7 +26,7 @@ if (NOT SPIRVToLLVMTranslator_FOUND)
 
             FetchContent_MakeAvailable(spirv-llvm-translator)
 
-            # FIXME: Don't apply patch when Agama driver is updated.
+            # FIXME: Don't apply patch when LTS driver is updated.
             execute_process(
                 COMMAND git apply --check ${CMAKE_CURRENT_LIST_DIR}/3122.patch
                 WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}

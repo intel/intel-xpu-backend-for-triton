@@ -31,6 +31,7 @@ The encoding is characterized by parameters:
         - `repCluster` indicates the cluster size of the repetitions of the DPAS tile.
         - `threadsPerWarp__` AKA threadsPerWarp, use the name threadsPerWarp__ to avoid conflicting
                             with the `getThreadsPerWarp` in interface DistributedLayout. Currently only 16 is supported.
+        - `fp4KPack` How many fp4 values are packed into an i8 type along the k dimension. Valid only when opsPerChannel=4.
 
 The values of the matrix is distributed across the threads in the subgroup as row-major order.
   - If the column size of the matrix is equal to the number of threads in the subgroup, one scalar represents one row of the matrix in register.
@@ -187,8 +188,21 @@ The semantic of this `tt.dot` includes GEMM tiling configuration as:
     "unsigned":$opsPerChannel,
     ArrayRefParameter<"unsigned">:$warpsPerCTA,
     ArrayRefParameter<"unsigned">:$repCluster,
-    "unsigned":$threadsPerWarp
+    "unsigned":$threadsPerWarp,
+    "std::optional<unsigned>":$fp4KPack // Optional parameter for indicating FP4 are packed to i8 along K dim.
   );
+
+  let builders = [
+      AttrBuilder<(ins "unsigned":$repeatCount,
+                        "unsigned":$systolicDepth,
+                        "unsigned":$executionSize,
+                        "unsigned":$opsPerChannel,
+                        "ArrayRef<unsigned>":$warpsPerCTA,
+                        "ArrayRef<unsigned>":$repCluster,
+                        "unsigned":$threadsPerWarp), [{
+        return $_get(context, repeatCount, systolicDepth, executionSize, opsPerChannel, warpsPerCTA, repCluster, threadsPerWarp, std::nullopt);
+      }]>
+    ];
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
     enum class OpIdx : unsigned {
@@ -223,27 +237,19 @@ The semantic of this `tt.dot` includes GEMM tiling configuration as:
     SmallVector<unsigned> getContigPerThread() const;
 
     struct DPASCapability {
-      explicit DPASCapability(unsigned minSGSize) : executionSize(minSGSize) {}
-      DPASCapability() = default;
-
-      bool isPVC() const {
-        return executionSize == 16;
-      }
-      bool isFalconShore() const {
-        return executionSize == 16;
-      }
-      bool isATSM() const {
-        return executionSize == 8;
+      DPASCapability(unsigned executionSize, bool dpasSupportsFP8 = false)
+        : executionSize(executionSize), supportsFP8(dpasSupportsFP8) {
+        assert(executionSize == 8 || executionSize == 16 && "Invalid execution size");
       }
 
       static constexpr unsigned systolicDepth = 8u;
       static constexpr unsigned repeatCount = 8u;
       static constexpr unsigned opsChanBitWidths = 32u;
-      unsigned executionSize = 0u;
+      const unsigned executionSize = 0u;
+      const bool supportsFP8 = false;
     };
 
-    static DPASCapability getDPASCapability(mlir::ModuleOp mod);
-    static unsigned getOpsPerChannel(Type elemType);
+    static std::optional<DPASCapability> getDPASCapability(mlir::ModuleOp);
   }];
 
   let hasCustomAssemblyFormat = 1;
@@ -304,13 +310,13 @@ def Subgroup2DBlockEncodingAttr : DistributedEncoding<"Subgroup2DBlockEncoding",
     - `warpsPerCTA` : the number of warps per block / subgroups per workgroup and their distribution
     - `order` : The order within the block, used to determine along which dimension to broadcast.
     - `kWidth` : Currently unused, but keeping because we will likely need it for layout conversions.
-    - `CTALayout` : Describes how blocks are distributed among work-groups/thread blocks.
+    - `CGALayout` : Describes how blocks are distributed among work-groups/thread blocks.
   }];
 
   let parameters = (
     ins
     ArrayRefParameter<"unsigned">:$warpsPerCTA,
-    "CTALayoutAttr":$CTALayout,
+    "CGAEncodingAttr":$CGALayout,
     ArrayRefParameter<"unsigned">:$instrShape,
     "unsigned":$numBlocks,
     ArrayRefParameter<"unsigned">:$order,

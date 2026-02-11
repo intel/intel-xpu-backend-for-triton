@@ -4,7 +4,7 @@
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 
   // CHECK-DAG: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
-  // CHECK-DAG: llvm.func spir_funccc @_Z12get_local_idj(i32) -> i64 attributes {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none>, no_unwind, will_return}
+  // CHECK-DAG: llvm.func spir_funccc @_Z12get_local_idj(i32) -> i64 attributes {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return}
   // CHECK-DAG: llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
 
   // CHECK-LABEL: llvm.func spir_kernelcc @test_atomic_cas_i32_global
@@ -43,7 +43,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 
   // CHECK-DAG: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
-  // CHECK-DAG: llvm.func spir_funccc @_Z12get_local_idj(i32) -> i64 attributes {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none>, no_unwind, will_return}
+  // CHECK-DAG: llvm.func spir_funccc @_Z12get_local_idj(i32) -> i64 attributes {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return}
   // CHECK-DAG: llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
 
   // CHECK-LABEL: llvm.func spir_kernelcc @test_atomic_cas_i64_global
@@ -82,7 +82,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
 
-  // CHECK-DAG: llvm.func spir_funccc @_Z12get_local_idj(i32) -> i64 attributes {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none>, no_unwind, will_return}
+  // CHECK-DAG: llvm.func spir_funccc @_Z12get_local_idj(i32) -> i64 attributes {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return}
   // CHECK-DAG: llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
 
   // CHECK-LABEL: llvm.func spir_kernelcc @test_atomic_cas_tensor
@@ -99,7 +99,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // CHECK: %[[C0_1:.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: %[[C0_2:.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: %[[TID_CALL:.*]] = llvm.call spir_funccc @_Z12get_local_idj(%[[C0_2]])
-    // CHECK-SAME: {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none>, no_unwind, will_return} : (i32) -> i64
+    // CHECK-SAME: {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return} : (i32) -> i64
     // CHECK: %[[TID:.*]] = llvm.trunc %[[TID_CALL]] : i64 to i32
 
     // CHECK: %[[C31:.*]] = llvm.mlir.constant(31 : i32) : i32
@@ -131,7 +131,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 module attributes {ttig.support_16bit_atomics = true, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 2 : i32} {
 
   // CHECK-DAG: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
-  // CHECK-DAG: llvm.func spir_funccc @_Z12get_local_idj(i32) -> i64 attributes {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none>, no_unwind, will_return}
+  // CHECK-DAG: llvm.func spir_funccc @_Z12get_local_idj(i32) -> i64 attributes {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return}
   // CHECK-DAG: llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
 
   // CHECK-LABEL: llvm.func spir_kernelcc @test_atomic_cas_i16_hw_support
@@ -142,7 +142,7 @@ module attributes {ttig.support_16bit_atomics = true, "ttg.num-ctas" = 1 : i32, 
     // CHECK: %[[C0_1:.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: %[[C0_2:.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: %[[TID_CALL:.*]] = llvm.call spir_funccc @_Z12get_local_idj(%[[C0_2]])
-    // CHECK-SAME: {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none>, no_unwind, will_return} : (i32) -> i64
+    // CHECK-SAME: {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return} : (i32) -> i64
     // CHECK: %[[TID:.*]] = llvm.trunc %[[TID_CALL]] : i64 to i32
     // CHECK: %[[C31:.*]] = llvm.mlir.constant(31 : i32) : i32
     // CHECK: %[[THREAD_MASK:.*]] = llvm.and %[[TID]], %[[C31]] : i32
@@ -187,7 +187,7 @@ module attributes {ttig.support_16bit_atomics = true, "ttg.num-ctas" = 1 : i32, 
     // CHECK: llvm.br ^bb4
 
     // CHECK: ^bb4:
-    // CHECK: %[[BARRIER_FLAG:.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK: %[[BARRIER_FLAG:.*]] = llvm.mlir.constant(3 : i32) : i32
     // CHECK: llvm.call spir_funccc @_Z7barrierj(%[[BARRIER_FLAG]]) {convergent, no_unwind, will_return} : (i32) -> ()
     // CHECK: %[[FINAL_RESULT:.*]] = llvm.load %[[SMEM_PTR]] : !llvm.ptr<3> -> i16
     // CHECK: llvm.return %[[FINAL_RESULT]] : i16
@@ -203,7 +203,7 @@ module attributes {ttig.support_16bit_atomics = true, "ttg.num-ctas" = 1 : i32, 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 2 : i32} {
 
   // CHECK-DAG: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
-  // CHECK-DAG: llvm.func spir_funccc @_Z12get_local_idj(i32) -> i64 attributes {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none>, no_unwind, will_return}
+  // CHECK-DAG: llvm.func spir_funccc @_Z12get_local_idj(i32) -> i64 attributes {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return}
   // CHECK-DAG: llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
 
   // CHECK-LABEL: llvm.func spir_kernelcc @test_atomic_cas_i16_emulated
@@ -227,7 +227,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 2 : i32} {
 
   // CHECK-DAG: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
-  // CHECK-DAG: llvm.func spir_funccc @_Z12get_local_idj(i32) -> i64 attributes {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none>, no_unwind, will_return}
+  // CHECK-DAG: llvm.func spir_funccc @_Z12get_local_idj(i32) -> i64 attributes {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return}
   // CHECK-DAG: llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
 
   // CHECK-LABEL: llvm.func spir_kernelcc @test_atomic_cas_f16_emulated
@@ -265,7 +265,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 2 : i32} {
 
   // CHECK-DAG: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
-  // CHECK-DAG: llvm.func spir_funccc @_Z12get_local_idj(i32) -> i64 attributes {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none>, no_unwind, will_return}
+  // CHECK-DAG: llvm.func spir_funccc @_Z12get_local_idj(i32) -> i64 attributes {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return}
   // CHECK-DAG: llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
 
   // CHECK-LABEL: llvm.func spir_kernelcc @test_atomic_cas_bf16_emulated

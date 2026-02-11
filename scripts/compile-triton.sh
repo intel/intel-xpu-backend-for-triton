@@ -74,7 +74,7 @@ if [ "$VENV" = true ]; then
   echo "**** Creating Python virtualenv ****"
   python3 -m venv .venv --prompt triton
   source .venv/bin/activate
-  pip install ninja cmake wheel pybind11
+  pip install ninja cmake pybind11
 fi
 
 if [ ! -d "$PACKAGES_DIR" ]; then

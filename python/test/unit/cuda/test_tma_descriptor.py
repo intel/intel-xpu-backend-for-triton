@@ -2,6 +2,7 @@ from contextlib import nullcontext
 import pytest
 import torch
 import triton
+import triton.language as tl
 from triton.tools.ragged_tma import create_ragged_descriptor, atomic_add_ragged, load_ragged, store_ragged
 from triton.tools.tensor_descriptor import TensorDescriptor
 
@@ -23,7 +24,7 @@ def test_1d_tma_descriptor_exception(M, BLOCK_M, expect_error):
         _ = TensorDescriptor.from_tensor(x, [BLOCK_M])
 
 
-@pytest.mark.parametrize("M, BLOCK_M, expect_error_m", [(128, 32, False), (125, 33, True)])
+@pytest.mark.parametrize("M, BLOCK_M, expect_error_m", [(128, 32, False), (125, 33, True), (0, 32, False)])
 @pytest.mark.parametrize("N, BLOCK_N, expect_error_n", [(128, 32, False), (128, 30, True), (127, 32, False)])
 def test_2d_tma_descriptor_exception(M, N, BLOCK_M, BLOCK_N, expect_error_n, expect_error_m):
     if not torch.cuda.is_available() or not torch.cuda.get_device_capability()[0] >= 9:
@@ -39,10 +40,14 @@ def test_2d_tma_descriptor_exception(M, N, BLOCK_M, BLOCK_N, expect_error_n, exp
 
     shape_error = expect_error_n or expect_error_m
     error_alignment = (N % 16) != 0
-    expect_error = shape_error or error_alignment
+    zero_shape_error = M <= 0 or N <= 0
+    expect_error = shape_error or error_alignment or zero_shape_error
 
     exc_type = ValueError if shape_error else AssertionError
     match = "Shape element . must be a power of 2" if shape_error else "strides must be 16-byte aligned"
+    if zero_shape_error and not shape_error and not error_alignment:
+        match = "shape must be positive"
+        exc_type = AssertionError
     ctx = pytest.raises(exc_type, match=match) if expect_error else nullcontext()
     with ctx:
         _ = TensorDescriptor.from_tensor(A, [BLOCK_M, BLOCK_N])
@@ -106,3 +111,32 @@ def test_ragged_tma(dtype):
     res3 = torch.all(dst[y_off + x_size:y_off + y_size] == 0.0).item()
 
     assert [res0, res1, res2, res3] == [True, True, True, True]
+
+
+def test_tma_descriptor_round_f32_to_tf32():
+
+    @triton.jit
+    def kernel(desc, out_ptr):
+        block = desc.load([0, 0])
+        idx = tl.arange(0, 16)[None, :]
+        tl.store(out_ptr + idx, block)
+
+    def round_to_tf32(x: torch.Tensor) -> torch.Tensor:
+        bits = x.view(torch.int32)
+        bits_i64 = bits.to(torch.int64) & 0xFFFFFFFF
+        exp_mask = 0x7F800000
+        is_special = (bits_i64 & exp_mask) == exp_mask
+        round_bias = ((bits_i64 >> 13) & 1) + 0x00000FFF
+        rounded = (bits_i64 + round_bias) & 0xFFFFE000
+        out_bits = torch.where(is_special, bits_i64, rounded)
+        return (out_bits & 0xFFFFFFFF).to(torch.int32).view(torch.float32)
+
+    device = "cuda"
+    torch.manual_seed(17)
+    inp = torch.randn((1, 16), device=device, dtype=torch.float32)
+    out = torch.empty_like(inp)
+    desc = TensorDescriptor.from_tensor(inp, [1, 16], round_f32_to_tf32=True)
+    kernel[(1, )](desc, out)
+
+    expected = round_to_tf32(inp)
+    torch.testing.assert_close(out, expected, rtol=0, atol=0)
