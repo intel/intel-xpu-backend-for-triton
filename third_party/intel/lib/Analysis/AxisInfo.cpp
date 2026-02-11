@@ -589,7 +589,6 @@ private:
       // rhs: d_rhs * p = gcd(d_lhs, d_rhs) * p' * p = gcd(d_lhs, d_rhs) * p''
       // lhs = gcd(d_lhs, d_rhs) * k'' = gcd(d_lhs, d_rhs) * d + r
       // r must be divisible by gcd(d_lhs, d_rhs)
-
       return gcd(lhs.getDivisibility(dim), rhs.getDivisibility(dim));
     }
     // Otherwise we shouldn't assume any divisibility.
@@ -772,7 +771,7 @@ public:
     AxisInfo::DimVectorT contiguity, divisibility, constancy;
     std::optional<int64_t> constantValue;
     for (short d = 0; d < rank; ++d) {
-      int64_t constHint = 1;
+      int64_t constHint;
       if (lhsInfo.getConstantValue().has_value() &&
           rhsInfo.getConstantValue().has_value()) {
         constHint = lhsInfo.getConstancy(d);
@@ -797,8 +796,8 @@ public:
           // lhs ge rhs: 1, 0, 0, 0
           // lhs gt rhs: 0, 0, 0, 0
           constHint = std::max(constHint, gcd(rhsInfo.getContiguity(d),
-                                              gcd(lhsInfo.getDivisibility(d),
-                                                  rhsInfo.getDivisibility(d))));
+                                              lhsInfo.getDivisibility(d),
+                                              rhsInfo.getDivisibility(d)));
         } else if ((ltPredicate(getPredicate(op)) ||
                     gePredicate(getPredicate(op))) &&
                    AxisInfoVisitor::isConstantDim(rhsInfo, shape, d)) {
@@ -813,8 +812,8 @@ public:
           // lhs gt rhs: 0, 1, 1, 1
           // lhs ge rhs: 1, 1, 1, 1
           constHint = std::max(constHint, gcd(lhsInfo.getContiguity(d),
-                                              gcd(lhsInfo.getDivisibility(d),
-                                                  rhsInfo.getDivisibility(d))));
+                                              lhsInfo.getDivisibility(d),
+                                              rhsInfo.getDivisibility(d)));
         }
       }
 
