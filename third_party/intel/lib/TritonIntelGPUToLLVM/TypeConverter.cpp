@@ -32,11 +32,29 @@ static Type convertTritonPointerType(triton::PointerType type) {
   return LLVM::LLVMPointerType::get(ctx, type.getAddressSpace());
 }
 
+static Type convertTritonDescType(triton::TensorDescType type) {
+  auto ctx = type.getContext();
+  auto blockType = type.getBlockType();
+  // struct { shape0, shape1, ..., stride0, stride1, ..., base_ptr }
+  auto shape = blockType.getShape();
+  SmallVector<Type, 4> types;
+  // shapes, strides
+  for (size_t i = 0; i < 2 * shape.size(); ++i)
+    types.push_back(IntegerType::get(ctx, 64));
+  // base_ptr (global address space = 1 on Intel GPUs)
+  types.push_back(LLVM::LLVMPointerType::get(ctx, 1));
+
+  return LLVM::LLVMStructType::getLiteral(ctx, types);
+}
+
 TritonIntelGPUToLLVMTypeConverter::TritonIntelGPUToLLVMTypeConverter(
     MLIRContext *ctx, LowerToLLVMOptions &option,
     const TargetInfoBase &targetInfo, const DataLayoutAnalysis *analysis)
     : TritonGPUToLLVMTypeConverter(ctx, option, targetInfo, analysis) {
   addConversion([&](triton::PointerType type) -> std::optional<Type> {
     return convertTritonPointerType(type);
+  });
+  addConversion([&](triton::TensorDescType type) -> std::optional<Type> {
+    return convertTritonDescType(type);
   });
 }
