@@ -1,8 +1,6 @@
 # This benchmark requires a Pytorch version with FlexAttention support for XPU available
 from functools import lru_cache
 import os
-import traceback
-import torch.multiprocessing as mp
 from torch.nn.attention.flex_attention import (
     create_block_mask,
     create_mask,
@@ -77,79 +75,16 @@ def create_mask_cached(score_mod, B, H, M, N, device=DEVICE):
     return mask
 
 
-def causal_mask(_, __, q_idx, kv_idx):
-    return q_idx >= kv_idx
+def create_causal_mask_fn(N_CTX_q, N_CTX_kv):
+    offset = N_CTX_kv - N_CTX_q
 
+    def causal_mask(_, __, q_idx, kv_idx):
+        # Bottom-right aligned lower triangular mask
+        # For square: offset=0, gives q_idx >= kv_idx (standard causal)
+        # For non-square: offset>0, shifts alignment to bottom-right
+        return q_idx >= (kv_idx - offset)
 
-def _worker_wrapper(fn, args, queue, done_event):
-    """Worker function that executes fn in subprocess and returns results via queue"""
-    try:
-        result = fn(*args)
-
-        # Convert tensors to CPU for safe transfer
-        if isinstance(result, tuple):
-            result = tuple(t.detach().cpu().clone() if isinstance(t, torch.Tensor) else t for t in result)
-        elif isinstance(result, torch.Tensor):
-            result = result.detach().cpu().clone()
-
-        queue.put(('success', result))
-
-        # [Critical] Wait for parent to finish retrieving file descriptors before exiting
-        done_event.wait(timeout=60)
-
-    # pylint: disable=broad-exception-caught
-    except Exception as e:
-        queue.put(('error', str(e), traceback.format_exc()))
-
-
-def call_eager_fwd_and_bwd(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, backwards_grad_cpu):
-    torch.xpu.empty_cache()
-    torch.manual_seed(42)
-    backwards_grad = backwards_grad_cpu.to(DEVICE)
-
-    dtype = torch.float16
-    q = torch.randn((Z, H_q, N_CTX_q, D_HEAD_qk), device=DEVICE, dtype=dtype, requires_grad=True)
-    k = torch.randn((Z, H_kv, N_CTX_kv, D_HEAD_qk), device=DEVICE, dtype=dtype, requires_grad=True)
-    v = torch.randn((Z, H_kv, N_CTX_kv, D_HEAD_v), device=DEVICE, dtype=dtype, requires_grad=True)
-
-    block_mask = create_block_mask_cached(causal_mask, 1, 1, N_CTX_q, N_CTX_kv, device=DEVICE)
-
-    output = flex_attention(q, k, v, block_mask=block_mask, scale=0.125, enable_gqa=not H_q == H_kv)
-    grads = torch.autograd.grad((output, ), (q, k, v), backwards_grad, retain_graph=True)
-
-    return (output.detach().cpu().clone(), grads[0].detach().cpu().clone(), grads[1].detach().cpu().clone(),
-            grads[2].detach().cpu().clone())
-
-
-def call_in_process(fn, args=()):
-    """Call a module-level function in a separate process"""
-    ctx = mp.get_context('spawn')
-    queue = ctx.Queue()
-    done_event = ctx.Event()
-    process = ctx.Process(target=_worker_wrapper, args=(fn, args, queue, done_event))
-    process.start()
-
-    result = queue.get(timeout=300)
-
-    status, *data = result
-    if status == 'error':
-        error_msg, traceback_str = data
-        done_event.set()
-        process.join()
-        raise RuntimeError(f'Subprocess failed: {error_msg}\n{traceback_str}')
-
-    # Move tensors back to device
-    output = data[0]
-    if isinstance(output, tuple):
-        output = tuple(t.to(DEVICE) if isinstance(t, torch.Tensor) else t for t in output)
-    else:
-        output = output.to(DEVICE) if isinstance(output, torch.Tensor) else output
-
-    # Signal subprocess it can exit now
-    done_event.set()
-    process.join()
-
-    return output
+    return causal_mask
 
 
 def get_attn_bias(provider, use_causal, N_CTX_q, N_CTX_kv, device):
@@ -157,17 +92,18 @@ def get_attn_bias(provider, use_causal, N_CTX_q, N_CTX_kv, device):
         return None
     if provider == 'sycl-tla':
         return causal_lower_right(N_CTX_q, N_CTX_kv)
-    return create_mask_cached(causal_mask, 1, 1, N_CTX_q, N_CTX_kv, device=device)
+    causal_mask_fn = create_causal_mask_fn(N_CTX_q, N_CTX_kv)
+    return create_mask_cached(causal_mask_fn, 1, 1, N_CTX_q, N_CTX_kv, device=device)
 
 
-def run_sdpa_benchmark(q, k, v, attn_bias, use_causal, sm_scale, H_q, H_kv, D_HEAD_qk, D_HEAD_v, MODE, provider,
-                       do_bench, device):
-    """Run SDPA benchmark for SYCL-TLA or OneDNN providers."""
+def get_sdpa_benchmark(q, k, v, attn_bias, use_causal, sm_scale, H_q, H_kv, D_HEAD_qk, D_HEAD_v, MODE, provider,
+                       backwards_grad=None):
+    """Get SDPA function for SYCL-TLA or OneDNN providers."""
     # SDPA backends have limitations:
     # - Require D_HEAD_qk == D_HEAD_v (no support for different head dimensions)
     # - OneDNN doesn't support backward pass for SDPA
     if D_HEAD_qk != D_HEAD_v or (provider == 'onednn' and MODE == 'bwd'):
-        return None, float('nan'), float('nan'), float('nan'), float('nan')
+        return None
 
     backend = SDPBackend.FLASH_ATTENTION if provider == 'sycl-tla' else SDPBackend.OVERRIDEABLE
 
@@ -183,13 +119,12 @@ def run_sdpa_benchmark(q, k, v, attn_bias, use_causal, sm_scale, H_q, H_kv, D_HE
                 enable_gqa=(H_q != H_kv),
             )
 
-    fn = sdpa_fn
     if MODE == 'bwd':
-        o = fn()
-        do = torch.randn_like(o)
-        fn = lambda: o.backward(do, retain_graph=True)
-        return do_bench(fn, device=device, benchmark_label='ScaledDotProductFlashAttentionBackward0')
-    return do_bench(fn, device=device)
+        o = sdpa_fn()
+        do = backwards_grad if backwards_grad is not None else torch.randn_like(o)
+        bwd_fn = lambda: o.backward(do, retain_graph=True)
+        return bwd_fn, do, o
+    return sdpa_fn
 
 
 throughput_test = os.getenv('THROUGHPUT_TEST', '0') == '1'
@@ -267,15 +202,27 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
     v = torch.randn((Z, H_kv, N_CTX_kv, D_HEAD_v), device=DEVICE, dtype=dtype, requires_grad=MODE == 'bwd')
     sm_scale = 0.125
 
-    block_mask = create_block_mask_cached(causal_mask, 1, 1, N_CTX_q, N_CTX_kv, device=DEVICE)
-    torch_fn = lambda: flex_attention(q, k, v, block_mask=block_mask, scale=sm_scale, enable_gqa=not H_q == H_kv)
+    block_mask = create_block_mask_cached(create_causal_mask_fn(N_CTX_q, N_CTX_kv), 1, 1, N_CTX_q, N_CTX_kv,
+                                          device=DEVICE)
 
     if provider in ('sycl-tla', 'onednn'):
         use_causal = N_CTX_q == N_CTX_kv
         attn_bias = get_attn_bias(provider, use_causal, N_CTX_q, N_CTX_kv, DEVICE)
-        _, min_ms, max_ms, mean, cv = run_sdpa_benchmark(q, k, v, attn_bias, use_causal, sm_scale, H_q, H_kv, D_HEAD_qk,
-                                                         D_HEAD_v, MODE, provider, do_bench, DEVICE)
+        sdpa_result = get_sdpa_benchmark(q, k, v, attn_bias, use_causal, sm_scale, H_q, H_kv, D_HEAD_qk, D_HEAD_v, MODE,
+                                         provider)
+        if sdpa_result is None:
+            return None, float('nan'), float('nan'), float('nan'), float('nan')
+
+        if MODE == 'bwd':
+            sdpa_fn, _, _ = sdpa_result
+        else:
+            sdpa_fn = sdpa_result
+        _, min_ms, max_ms, mean, cv = do_bench(
+            sdpa_fn, device=DEVICE,
+            benchmark_label='ScaledDotProductFlashAttentionBackward0' if MODE == 'bwd' else None)
+
     elif provider == 'triton':
+        ref_results_provider = 'sycl-tla'
         kernel_options = {'BLOCKS_ARE_CONTIGUOUS': True, 'USE_TMA': True}
 
         # pylint: disable=too-many-boolean-expressions
@@ -287,44 +234,49 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
 
         triton_fn = lambda: compiled_flex_attention(q, k, v, block_mask=block_mask, scale=sm_scale, enable_gqa=(
             not H_q == H_kv), kernel_options=kernel_options)
+
+        is_reference_available = True
+        if D_HEAD_qk != D_HEAD_v:
+            print(f'Skipping correctness check: {ref_results_provider} requires D_HEAD_qk == D_HEAD_v')
+            is_reference_available = False
+
         if MODE == 'bwd':
             backwards_grad = torch.randn(Z, H_q, N_CTX_q, D_HEAD_v, dtype=dtype, device=DEVICE,
                                          requires_grad=MODE == 'bwd')
 
-            perform_correctness_check = True
-            try:
-                # Run forward+backward in subprocess, get output and gradients
-                backwards_grad_cpu = backwards_grad.detach().cpu()
-                eager_tensors = call_in_process(
-                    call_eager_fwd_and_bwd,
-                    args=(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, backwards_grad_cpu))
-            except (torch.OutOfMemoryError, RuntimeError) as e:
-                if any(keyword in str(e)
-                       for keyword in ('UR_RESULT_ERROR_OUT_OF_RESOURCES', 'UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY',
-                                       'UR_RESULT_ERROR_DEVICE_LOST', 'OutOfMemoryError')):
-                    error = e.args[0].split('\n')[0]
-                    print(f'Exception during torch eager call: {error}')
-                    print(
-                        'Skipping correctness check because reference torch eager call failed due to out of memory error'
-                    )
-                    torch.xpu.empty_cache()
-                    perform_correctness_check = False
-                else:
-                    raise
+            if is_reference_available:
+                use_causal = N_CTX_q == N_CTX_kv
+                attn_bias_ref = get_attn_bias(ref_results_provider, use_causal, N_CTX_q, N_CTX_kv, DEVICE)
+
+                sdpa_result = get_sdpa_benchmark(q, k, v, attn_bias_ref, use_causal, sm_scale, H_q, H_kv, D_HEAD_qk,
+                                                 D_HEAD_v, MODE, ref_results_provider, backwards_grad=backwards_grad)
+                _, _, sycl_o = sdpa_result
+                sycl_grads = torch.autograd.grad((sycl_o, ), (q, k, v), backwards_grad, retain_graph=True)
+                sycl_tensors = (sycl_o, *sycl_grads)
 
             triton_o = triton_fn()
             triton_grads = torch.autograd.grad((triton_o, ), (q, k, v), backwards_grad, retain_graph=True)
             compiled_tensors = (triton_o, *triton_grads)
 
-            if perform_correctness_check:
+            if is_reference_available:
                 tensor_names = ['out', 'grad_query', 'grad_key', 'grad_value']
-                for eager, compiled, name in zip(eager_tensors, compiled_tensors, tensor_names):
-                    benchmark_suite.assert_close(lambda: eager, lambda: compiled, atol=6e-2, rtol=1e-3,  # pylint: disable=cell-var-from-loop
-                                                 err_msg=f'Error comparing {name} between triton and torch')
+                for sycl, compiled, name in zip(sycl_tensors, compiled_tensors, tensor_names):  # pylint: disable=used-before-assignment
+                    benchmark_suite.assert_close(
+                        lambda: sycl, lambda: compiled, atol=6e-2, rtol=1e-3,  # pylint: disable=cell-var-from-loop
+                        err_msg=f'Error comparing {name} between triton and {ref_results_provider}')
 
             triton_fn = lambda: torch.autograd.grad((triton_o, ), (q, k, v), backwards_grad, retain_graph=True)
         else:
-            benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-2, rtol=1e-3, err_msg='triton to torch')
+            if is_reference_available:
+                use_causal = N_CTX_q == N_CTX_kv
+                attn_bias_ref = get_attn_bias(ref_results_provider, use_causal, N_CTX_q, N_CTX_kv, DEVICE)
+
+                sycl_fn = get_sdpa_benchmark(q, k, v, attn_bias_ref, use_causal, sm_scale, H_q, H_kv, D_HEAD_qk,
+                                             D_HEAD_v, MODE, ref_results_provider)
+
+                if sycl_fn is not None:
+                    benchmark_suite.assert_close(triton_fn, sycl_fn, atol=1e-2, rtol=1e-3,
+                                                 err_msg=f'triton to {ref_results_provider}')
 
         _, min_ms, max_ms, mean, cv = do_bench(triton_fn, device=DEVICE, grad_to_none=(q, k, v),
                                                benchmark_label=None if MODE == 'fwd' else 'CompiledFunctionBackward')
@@ -333,8 +285,8 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
         raise NotImplementedError(f'Unsupported provider {provider}')
 
     def flops_triangle(length):
-        # the triangle without diagonal.
-        return ((length - 1) * length // 2) * 2  # mul + add
+        # the triangle with diagonal.
+        return ((length + 1) * length // 2) * 2  # mul + add
 
     def flops_rectangle(m, n, k):
         return m * n * k * 2  # mul + add
@@ -343,11 +295,23 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
         # decoding ignore the causal mask since only one query is involved.
         qk_flops = H_q * N_CTX_q * N_CTX_kv * D_HEAD_qk * 2  # mul + add.
         pv_flops = H_q * N_CTX_q * D_HEAD_v * N_CTX_kv * 2  # mul + add.
-    else:
-        qk_flops = H_q * (flops_triangle(min(N_CTX_q, N_CTX_kv)) * D_HEAD_qk +
-                          flops_rectangle(max(N_CTX_q, N_CTX_kv) - N_CTX_kv, N_CTX_kv, D_HEAD_qk))
-        pv_flops = H_q * (flops_triangle(min(N_CTX_q, N_CTX_kv)) * D_HEAD_v +
-                          flops_rectangle(max(N_CTX_q, N_CTX_kv) - N_CTX_kv, D_HEAD_v, N_CTX_kv))
+    elif N_CTX_q == N_CTX_kv:
+        # Square matrix - standard causal mask (lower triangle)
+        qk_flops = H_q * flops_triangle(N_CTX_q) * D_HEAD_qk
+        pv_flops = H_q * flops_triangle(N_CTX_q) * D_HEAD_v
+    elif N_CTX_q < N_CTX_kv:
+        # More keys than queries - bottom-right aligned: rectangle + triangle
+        # Each query q can attend to keys [0, q + offset] where offset = N_CTX_kv - N_CTX_q
+        # This forms: all queries attend to first (N_CTX_kv - N_CTX_q) keys (rectangle)
+        #             plus a lower triangle for the remaining N_CTX_q x N_CTX_q region
+        rect_width = N_CTX_kv - N_CTX_q
+        qk_flops = H_q * (flops_rectangle(N_CTX_q, rect_width, D_HEAD_qk) + flops_triangle(N_CTX_q) * D_HEAD_qk)
+        pv_flops = H_q * (flops_rectangle(N_CTX_q, rect_width, D_HEAD_v) + flops_triangle(N_CTX_q) * D_HEAD_v)
+    else:  # N_CTX_q > N_CTX_kv
+        # More queries than keys - bottom-right aligned: only last N_CTX_kv queries have attention
+        # First (N_CTX_q - N_CTX_kv) queries are fully masked out
+        qk_flops = H_q * flops_triangle(N_CTX_kv) * D_HEAD_qk
+        pv_flops = H_q * flops_triangle(N_CTX_kv) * D_HEAD_v
 
     tflops = lambda mean: Z * (qk_flops + pv_flops) * (1e-12) / (mean * 1e-3)
 
