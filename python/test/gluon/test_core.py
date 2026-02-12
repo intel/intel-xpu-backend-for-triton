@@ -127,7 +127,7 @@ def tma_round_f32_to_tf32_kernel(in_desc, out_desc):
     smem._keep_alive()
 
 
-@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires Hopper", run=False)
 def test_gluon_tma_round_f32_to_tf32():
 
     def round_to_tf32(x: torch.Tensor) -> torch.Tensor:
@@ -258,7 +258,7 @@ def tcgen05_mma_multicast_commit_kernel(a_desc, b_desc, out_ptrs, BLOCK_M: ttgl.
     ttgl.store(out_ptrs, out)
 
 
-@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
 @pytest.mark.parametrize("ctas_per_cga", [[2, 1], [2, 4], [4, 4]])
 @pytest.mark.parametrize("two_ctas", [True, False] if is_blackwell() else [False])
 def test_tcgen05_mma_multicast_commit(ctas_per_cga, two_ctas):
@@ -2132,8 +2132,8 @@ def in_thread_transpose_roundtrip_kernel(input, output, M: ttgl.constexpr, N: tt
     ttgl.store(output + offs_m * N + offs_n, out_data)
 
 
-@pytest.mark.skipif(not (is_hip_cdna() or is_hip_rdna()),
-                    reason="Correctness tests for special cases on AMD architectures")
+@pytest.mark.xfail(not (is_hip_cdna() or is_hip_rdna()),
+                   reason="Correctness tests for special cases on AMD architectures", run=False)
 @pytest.mark.parametrize("reg_bases", [
     [[1, 0], [2, 0], [4, 0], [0, 1], [0, 2], [0, 4]],
     [[0, 1], [0, 4], [0, 2], [1, 0], [2, 0], [4, 0]],
