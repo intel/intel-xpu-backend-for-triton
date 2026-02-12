@@ -88,7 +88,7 @@ def get_memset_tbps(device="cuda"):
     n_bytes = 1 << 32
     # FIXME: XPU CRI requires explicit device index, otherwise tensor memory
     # is not recognized as USM device memory and memset fails. Also use smaller
-    # buffer size (1<<16 vs 1<<32) to avoid hangs/segfaults on CRI simulator
+    # buffer size (1<<16 vs 1<<32) to avoid hangs/segfaults
     if is_xpu_cri():
         n_bytes = 1 << 16
         device = f'xpu:{torch.xpu.current_device()}'
