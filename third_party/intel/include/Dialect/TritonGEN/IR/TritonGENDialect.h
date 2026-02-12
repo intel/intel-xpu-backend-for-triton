@@ -40,6 +40,9 @@ enum TritonGENMemorySpace {
   kGeneric = 4          // OpenCL Generic memory
 };
 
-} // namespace mlir::triton::TritonGEN
+struct L2Cache : public SideEffects::Resource::Base<L2Cache> {
+  StringRef getName() final { return "<L2Cache>"; }
+};
 
+} // namespace mlir::triton::TritonGEN
 #endif // TRITON_DIALECT_TRITONGENDIALECT_H

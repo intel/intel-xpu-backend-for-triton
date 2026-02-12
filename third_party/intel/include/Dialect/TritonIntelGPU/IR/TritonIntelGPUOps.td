@@ -16,8 +16,18 @@ include "intel/include/Dialect/TritonIntelGPU/IR/TritonIntelGPUAttrDefs.td"
 include "intel/include/Dialect/TritonIntelGPU/IR/TritonIntelGPUDialect.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 
+//===----------------------------------------------------------------------===//
+// Interfaces
+//===----------------------------------------------------------------------===//
+
+def L2Cache : Resource<"::mlir::triton::gpu::intel::L2Cache">;
+
+//===----------------------------------------------------------------------===//
+// TritonIntelGPU op definitions
+//===----------------------------------------------------------------------===//
+
 class TTIG_Op<string mnemonic, list<Trait> traits = []> :
-    Op<TritonIntelGPU_Dialect, mnemonic, traits>;
+    Op<TritonIntelGPU_Dialect, mnemonic, !listconcat(traits, [])>;
 
 def TT_TensorOrTensorPtr : AnyTypeOf<[TT_Tensor, TT_TensorPtr]>;
 
@@ -108,6 +118,7 @@ def TTIG_ExtractOp : TTIG_Op<"extract", [Pure]> {
 }
 
 def TTIG_PrefetchOp : TTIG_Op<"prefetch", [
+  MemoryEffects<[MemWrite<L2Cache>]>,
   TypesMatchWith<"mask type matches ptr type", "ptr", "mask", "getI1SameShape(getPointeeType($_self))",
                  "($_op.getOperands().size() <= 1) || std::equal_to<>()">,
 ]> {
@@ -120,8 +131,8 @@ def TTIG_PrefetchOp : TTIG_Op<"prefetch", [
           : !tt.ptr<tensor<256x32xf16>
       ```
   }];
-  let arguments = (
-    ins AnyTypeOf<[TT_PtrLike, TT_TensorPtr]>:$ptr,
+  let arguments = (ins
+    Arg<AnyTypeOf<[TT_PtrLike, TT_TensorPtr]>, "Global memory pointer", [MemRead]>:$ptr,
     Optional<TT_BoolLike>:$mask,
     TT_CacheModifierAttr:$cache,
     TT_EvictionPolicyAttr:$evict,
