@@ -16,7 +16,7 @@ import triton.language as tl
 from triton.profiler.hooks.launch import COMPUTE_METADATA_SCOPE_NAME
 import triton.profiler.hooks.launch as proton_launch
 import triton.profiler.viewer as viewer
-from triton._internal_testing import is_hip, is_blackwell
+from triton._internal_testing import is_hip, is_cuda, is_blackwell
 
 
 def is_xpu():
@@ -28,8 +28,7 @@ def test_torch(context, tmp_path: pathlib.Path, device: str):
     temp_file = tmp_path / "test_torch.hatchet"
     proton.start(str(temp_file.with_suffix("")), context=context)
     proton.enter_scope("test")
-    # F841 Local variable `temp` is assigned to but never used
-    temp = torch.ones((2, 2), device=device)  # noqa: F841
+    torch.ones((2, 2), device=device)
     proton.exit_scope()
     proton.finalize()
     with temp_file.open() as f:
@@ -81,10 +80,9 @@ def test_triton(tmp_path: pathlib.Path, device: str):
     assert data[0]["children"][1]["frame"]["name"] == "test2"
 
 
-@pytest.mark.skipif(is_hip(), reason="HIP backend does not reliably attribute cudagraph replay launches to scopes")
+@pytest.mark.xfail(not is_cuda(), reason="HIP backend does not reliably attribute cudagraph replay launches to scopes",
+                   run=False)
 def test_cudagraph(tmp_path: pathlib.Path, device: str):
-    if is_xpu():
-        pytest.skip("xpu doesn't support cudagraph; FIXME: double check")
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
 
@@ -156,9 +154,8 @@ def test_cudagraph(tmp_path: pathlib.Path, device: str):
                 assert child["children"][i]["children"][0]["metrics"]["time (ns)"] > 0
 
 
-@pytest.mark.xfail(is_xpu(), reason="XPU backend does not support cudagraph deactivation", run=False)
-@pytest.mark.skipif(is_hip(), reason="HIP backend does not support cudagraph deactivation")
-def test_cudagraph_deactivate(tmp_path):
+@pytest.mark.xfail(not is_cuda(), reason="Only CUDA backend supports cudagraph deactivation", run=False)
+def test_cudagraph_deactivate(tmp_path, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
 
@@ -168,10 +165,10 @@ def test_cudagraph_deactivate(tmp_path):
 
     def fn(session):
         with proton.scope("scope_a"):
-            a = torch.ones((2, 2), device="cuda")
+            a = torch.ones((2, 2), device=device)
         proton.deactivate(session)
         with proton.scope("scope_b"):
-            b = torch.ones((2, 2), device="cuda")
+            b = torch.ones((2, 2), device=device)
         proton.activate(session)
         with proton.scope("scope_c"):
             c = a + b
@@ -617,10 +614,8 @@ def test_hook_multiple_threads(tmp_path: pathlib.Path, device: str):
 
 
 def test_pcsampling(tmp_path: pathlib.Path, device: str):
-    if is_hip():
-        pytest.skip("HIP backend does not support pc sampling")
-    if is_xpu():
-        pytest.skip("XPU backend does not support pc sampling")
+    if not is_cuda():
+        pytest.skip("Only CUDA backend supports pc sampling")
 
     import os
 
@@ -754,10 +749,9 @@ def test_scope_multiple_threads(tmp_path: pathlib.Path, device: str):
     assert names == expected
 
 
+@pytest.mark.xfail(not is_cuda() and not is_hip(), reason="Only CUDA/HIP backend supports NVTX profiling", run=False)
 @pytest.mark.parametrize("enable_nvtx", [None, True, False])
-def test_nvtx_range_push_pop(enable_nvtx, fresh_knobs, tmp_path: pathlib.Path):
-    if is_xpu():
-        pytest.xfail("cuda related")
+def test_nvtx_range_push_pop(enable_nvtx, fresh_knobs, tmp_path: pathlib.Path, device: str):
     if enable_nvtx is not None:
         fresh_knobs.proton.enable_nvtx = enable_nvtx
     temp_file = tmp_path / "test_nvtx_range_push_pop.hatchet"
@@ -766,7 +760,7 @@ def test_nvtx_range_push_pop(enable_nvtx, fresh_knobs, tmp_path: pathlib.Path):
     with proton.scope("proton_scope"):
         torch.cuda.nvtx.range_push("nvtx_range0")
         torch.cuda.nvtx.range_push("nvtx_range1")
-        torch.ones((1, ), device="cuda")
+        torch.ones((1, ), device=device)
         torch.cuda.nvtx.range_pop()
         torch.cuda.nvtx.range_pop()
 
@@ -861,10 +855,8 @@ def test_tensor_metrics_hook(tmp_path: pathlib.Path, device: str):
     assert foo_test_frame["metrics"]["flops"] == 8.0
 
 
-@pytest.mark.skipif(is_hip(), reason="HIP backend does not support metrics profiling in cudagraphs")
-def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path):
-    if is_xpu():
-        pytest.skip("xpu doesn't support cudagraph; FIXME: double check")
+@pytest.mark.xfail(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs", run=False)
+def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
 
@@ -879,11 +871,11 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path):
 
     def fn():
         with proton.scope("scope_a", metrics={"bytes": 4 * 4}):
-            a = torch.ones((2, 2), device="cuda")
+            a = torch.ones((2, 2), device=device)
         with proton.metadata_state():
             a_sum = a.sum()
         with proton.scope("scope_b", metrics={"sum": a_sum}):
-            b = torch.ones((2, 2), device="cuda")
+            b = torch.ones((2, 2), device=device)
         c = a + b
         foo[(1, )](a, b, c)
         with proton.metadata_state():
@@ -950,16 +942,15 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path):
     assert scope_d_frame["metrics"]["vec"] == [0, 10, 20, 30]
 
 
-@pytest.mark.xfail(is_xpu(), reason="XPU backend does not support cudagraph deactivation", run=False)
-@pytest.mark.skipif(is_hip(), reason="HIP backend does not support metrics profiling in cudagraphs")
-def test_tensor_metrics_cudagraph_deactivate(tmp_path: pathlib.Path):
+@pytest.mark.xfail(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs", run=False)
+def test_tensor_metrics_cudagraph_deactivate(tmp_path: pathlib.Path, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
 
     def fn(session):
         proton.deactivate(session)
         with proton.scope("scope_b", metrics={"sum": 4}):
-            b = torch.ones((2, 2), device="cuda")
+            b = torch.ones((2, 2), device=device)
         proton.activate(session)
         c = b * 2  # noqa: F841
 
@@ -1003,7 +994,7 @@ def test_tensor_metrics_cudagraph_deactivate(tmp_path: pathlib.Path):
         assert c_frame["metrics"]["count"] == 10
 
 
-@pytest.mark.skipif(is_hip(), reason="HIP backend does not support metrics profiling in cudagraphs")
+@pytest.mark.xfail(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs", run=False)
 def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
     if torch.cuda.device_count() < 2:
         pytest.skip("Requires at least two CUDA devices")
@@ -1096,7 +1087,7 @@ def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
 
 @pytest.mark.parametrize("buffer_size", [256 * 1024, 64 * 1024 * 1024])
 @pytest.mark.parametrize("data_format", ["hatchet_msgpack", "hatchet"])
-def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size):
+def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size, device: str):
     if is_xpu():
         pytest.skip("FIXME: #5844")
     fresh_knobs.proton.profile_buffer_size = buffer_size
@@ -1107,7 +1098,7 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size):
         if i != 0 and i % 1000 == 0:
             proton.data.advance_phase(session=session)
         with proton.scope(f"test_{i}", metrics={"count": 1}):
-            torch.zeros((100), device="cuda")
+            torch.zeros((100), device=device)
 
     proton.finalize(output_format=data_format)
 
@@ -1132,11 +1123,10 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size):
     assert num_scopes == 10000
 
 
-@pytest.mark.xfail(is_xpu(), reason="XPU backend does not support cudagraph deactivation", run=False)
-@pytest.mark.skipif(is_hip(), reason="HIP backend does not support metrics profiling in cudagraphs")
+@pytest.mark.xfail(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs", run=False)
 @pytest.mark.parametrize("buffer_size", [256 * 1024, 64 * 1024 * 1024])
 @pytest.mark.parametrize("data_format", ["hatchet_msgpack", "hatchet"])
-def test_periodic_flushing_cudagraph(tmp_path, fresh_knobs, data_format, buffer_size):
+def test_periodic_flushing_cudagraph(tmp_path, fresh_knobs, data_format, buffer_size, device: str):
     fresh_knobs.proton.profile_buffer_size = buffer_size
     temp_file = tmp_path / f"test_periodic_flushing.{data_format}"
     session = proton.start(str(temp_file.with_suffix("")), mode=f"periodic_flushing:format={data_format}",
@@ -1153,7 +1143,7 @@ def test_periodic_flushing_cudagraph(tmp_path, fresh_knobs, data_format, buffer_
 
     def fn():
         with proton.scope("scope_a", metrics={"bytes": 4 * 4}):
-            a = torch.ones((2, 2), device="cuda")
+            a = torch.ones((2, 2), device=device)
         c = a + a
         foo[(1, )](a, a, c)
 
@@ -1206,13 +1196,13 @@ def test_periodic_flushing_cudagraph(tmp_path, fresh_knobs, data_format, buffer_
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="HW trace is only supported on Blackwell GPUs")
-def test_hw_trace(fresh_knobs, tmp_path: pathlib.Path):
+def test_hw_trace(fresh_knobs, tmp_path: pathlib.Path, device: str):
     fresh_knobs.proton.enable_hw_trace = True
     temp_file = tmp_path / "test_hw_trace.hatchet"
     proton.start(str(temp_file.with_suffix("")), hook="triton")
 
     with proton.scope("init"):
-        x = torch.ones((1024, ), device="cuda", dtype=torch.float32)  # noqa: F841
+        x = torch.ones((1024, ), device=device, dtype=torch.float32)  # noqa: F841
 
     proton.finalize()
 
