@@ -15,17 +15,6 @@ on:
         description: JSON list of benchmarks to run. Leave empty to run all benchmarks.
         type: string
         default: ""
-  # This workflow is also called from workflows third-party-benchmarks-*.yml.
-  workflow_call:
-    inputs:
-      runner_label:
-        description: Runner label
-        type: string
-      benchmarks:
-        description: JSON list of benchmarks to run. Leave empty to run all benchmarks.
-        type: string
-        default: ""
-
   schedule:
     # About midnight PST (UTC-8)
     - cron: "5 10 * * *"
