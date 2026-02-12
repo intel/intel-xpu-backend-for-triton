@@ -321,12 +321,30 @@ class XPUUtils(object):
         # and can cause `Fatal Python error: Segmentation fault`
         mod = compile_module_from_src(src=Path(os.path.join(dirname, "driver.c")).read_text(), name="spirv_utils")
         self.load_binary = mod.load_binary
-        self.get_device_properties = mod.get_device_properties
+        self._get_device_properties_raw = mod.get_device_properties
         self.device_count = mod.init_devices(self.get_sycl_queue())
         self.wait_on_sycl_queue = mod.wait_on_sycl_queue
         self.has_opencl_extension = mod.has_opencl_extension
         self.get_last_selected_build_flags = mod.get_last_selected_build_flags
         self.sycl_queue_memset = mod.sycl_queue_memset
+
+    def get_device_properties(self, device):
+        """Return device properties, enriched with total bus width and bandwidth."""
+        props = self._get_device_properties_raw(device)
+        props["mem_bus_width_per_channel"] = props["mem_bus_width"]
+        try:
+            from .device_specs import get_aggregate_bus_width, get_dram_gbps
+            pci_id = props.get("pci_device_id")
+            props["mem_bus_width"] = get_aggregate_bus_width(pci_id)
+            props["dram_gbps"] = get_dram_gbps(pci_id, props.get("mem_clock_rate", 0))
+        except Exception:
+            props["mem_bus_width"] = -1
+            props["dram_gbps"] = -1
+        return props
+
+    def get_bandwidth(self, device):
+        """Return peak DRAM bandwidth in GB/s, or -1 if unknown."""
+        return self.get_device_properties(device)["dram_gbps"]
 
     def get_current_device(self):
         import torch
