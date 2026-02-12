@@ -1958,17 +1958,17 @@ struct LoadOpToBlockIOConversion
       SmallVector<Value> nanMaskElems;
 
       if (otherElems.size() == 0 && op.getPadding() == PaddingOption::PAD_NAN) {
-        // create a vectorized mask to fill the out of bounds elements with NaN
-        if (isTensorPointerType(ptr.getType())) {
-          SmallVector<Value> ptrElems; // will discard
-          auto tensorType = cast<RankedTensorType>(op.getType());
-          Type valueElemTy =
-              typeConverter->convertType(getElementTypeOrSelf(op.getType()));
+        assert(
+            isTensorPointerType(ptr.getType()) &&
+            "Supplied PaddingOption::PAD_NAN only applies to block pointers.");
 
-          nanMaskElems = buildNaNMasksFromBlockPtr(
-              loc, adaptor.getPtr(), tensorType, valueElemTy, rewriter,
-              op.getBoundaryCheck());
-        }
+        auto tensorType = cast<RankedTensorType>(op.getType());
+        Type valueElemTy =
+            typeConverter->convertType(getElementTypeOrSelf(op.getType()));
+
+        nanMaskElems = buildNaNMasksFromBlockPtr(
+            loc, adaptor.getPtr(), tensorType, valueElemTy, rewriter,
+            op.getBoundaryCheck());
       }
 
       for (size_t opsIdx = 0; opsIdx < numOperandsPerLoad; ++opsIdx) {
