@@ -219,6 +219,26 @@ public:
   }
 };
 
+class UnrealizedConversionCastOpAxisInfoVisitor final
+    : public AxisInfoVisitorImpl<mlir::UnrealizedConversionCastOp> {
+public:
+  using AxisInfoVisitorImpl<
+      mlir::UnrealizedConversionCastOp>::AxisInfoVisitorImpl;
+
+  AxisInfo
+  getAxisInfo(mlir::UnrealizedConversionCastOp op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    auto tensorType = dyn_cast<RankedTensorType>(op.getResultTypes()[0]);
+    if (tensorType &&
+        tensorType.getRank() != operands[0]->getValue().getRank()) {
+      // Do not propagate AxisInfo with incorrect rank. This can cause a crash
+      // in future visitor applications.
+      return AxisInfo::getPessimisticValueState(op->getResult(0));
+    }
+    return operands[0]->getValue();
+  }
+};
+
 class MakeRangeOpAxisInfoVisitor final
     : public AxisInfoVisitorImpl<triton::MakeRangeOp> {
 public:
@@ -1086,6 +1106,35 @@ public:
   }
 };
 
+class TransOpAxisInfoVisitor final
+    : public AxisInfoVisitorImpl<triton::TransOp> {
+public:
+  using AxisInfoVisitorImpl<triton::TransOp>::AxisInfoVisitorImpl;
+
+  AxisInfo
+  getAxisInfo(triton::TransOp op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    AxisInfo srcInfo = operands[0]->getValue();
+    auto order = op.getOrder();
+    auto rank = srcInfo.getRank();
+
+    // Apply the transpose permutation to all axis info properties
+    AxisInfo::DimVectorT contiguity;
+    AxisInfo::DimVectorT divisibility;
+    AxisInfo::DimVectorT constancy;
+
+    for (int d = 0; d < rank; ++d) {
+      int srcDim = order[d];
+      contiguity.push_back(srcInfo.getContiguity(srcDim));
+      divisibility.push_back(srcInfo.getDivisibility(srcDim));
+      constancy.push_back(srcInfo.getConstancy(srcDim));
+    }
+
+    return AxisInfo(contiguity, divisibility, constancy,
+                    srcInfo.getConstantValue());
+  }
+};
+
 class MakeTensorPtrOpAxisInfoVisitor final
     : public AxisInfoVisitorImpl<triton::MakeTensorPtrOp> {
 public:
@@ -1166,6 +1215,7 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
   // This is needed by TritonGPUToLLVM, to get AxisInfo when the graph is
   // in the process of a PartialConversion, where UnrealizedConversionCast
   // may exist
+  visitors.append<UnrealizedConversionCastOpAxisInfoVisitor>();
   visitors.append<CastOpAxisInfoVisitor<arith::ExtSIOp>,
                   CastOpAxisInfoVisitor<arith::ExtUIOp>,
                   CastOpAxisInfoVisitor<arith::TruncIOp>,
@@ -1203,6 +1253,8 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
                   MaxMinOpAxisInfoVisitor<arith::MinSIOp>,
                   MaxMinOpAxisInfoVisitor<arith::MinUIOp>>();
   visitors.append<LoadOpAxisInfoVisitor>();
+  visitors.append<TransOpAxisInfoVisitor>();
+
   visitors.append<MakeTensorPtrOpAxisInfoVisitor>();
   visitors.append<AdvanceOpAxisInfoVisitor>();
 }
