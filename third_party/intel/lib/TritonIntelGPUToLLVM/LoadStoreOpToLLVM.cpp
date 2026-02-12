@@ -312,16 +312,20 @@ struct LoadStoreConversionBase {
             op, TritonIntelGPUDialect::getSupportPredicatedIOAttrName()))
       return false;
 
+    // There's an IGC bug with predicated load so it is disabled by default.
+    // On the other hand, predicated store is expected to be correct and it is
+    // enabled by default. Both can be overridden by env vars.
     static const bool canUsePredicatedLoad =
         triton::tools::getBoolEnv("TRITON_INTEL_PREDICATED_LOAD");
-    static const bool canUsePredicatedStore =
-        triton::tools::getBoolEnv("TRITON_INTEL_PREDICATED_STORE");
+    static const std::optional<bool> usePredicatedStore =
+        mlir::triton::tools::isEnvValueBool(
+            mlir::triton::tools::getStrEnv("TRITON_INTEL_PREDICATED_STORE"));
 
     // SPIRV predicated load/store does not support volatile qualifier.
     if constexpr (std::is_same_v<OpType, LoadOp>) {
       return canUsePredicatedLoad && !op.getIsVolatile();
     } else if constexpr (std::is_same_v<OpType, StoreOp>) {
-      return canUsePredicatedStore;
+      return !usePredicatedStore.has_value() || usePredicatedStore.value();
     }
 
     llvm_unreachable("unsupported operation type for predicated instruction");
@@ -2145,11 +2149,11 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       if (!pred)
         ret = createLoadWithAttrs()[0];
       else if (canUsePredicatedInstructions(op)) {
-          auto cacheModifier = tritonToIntelCacheModifier(op);
-          ret = TritonGEN::PredicatedLoadOp::create(
-              rewriter, loc, retTy, addrElem, b.i64_val(alignment), pred, other_, cacheModifier);
-      }
-      else {
+        auto cacheModifier = tritonToIntelCacheModifier(op);
+        ret = TritonGEN::PredicatedLoadOp::create(
+            rewriter, loc, retTy, addrElem, b.i64_val(alignment), pred, other_,
+            cacheModifier);
+      } else {
         Block &endBlock = LLVM::intel::createPredicatedBlock(
             rewriter, loc, pred, SmallVector<Value, 1>{other_},
             createLoadWithAttrs);
@@ -2595,9 +2599,9 @@ struct StoreOpConversion
       else if (canUsePredicatedInstructions(op)) {
         auto cacheModifier = tritonToIntelCacheModifier(op);
         TritonGEN::PredicatedStoreOp::create(rewriter, loc, addrElem, vecWord,
-                                             b.i64_val(alignment), maskVal, cacheModifier);
-      }
-      else
+                                             b.i64_val(alignment), maskVal,
+                                             cacheModifier);
+      } else
         LLVM::intel::createPredicatedBlock(rewriter, loc, maskVal,
                                            createStoreWithAttrs);
     }

@@ -393,16 +393,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttig.su
     %9 = tt.splat %n_elements : i32 -> tensor<64xi32, #blocked>
     %10 = arith.cmpi "slt", %4, %9 : tensor<64xi32, #blocked>
     // load op has a vector width = 1 due to the %mask's alignment
-    // PREDICATED: llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi({{.*}}) {{{.*}} triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.load_cache_control<0, Uncached, 0>, #triton_gen.load_cache_control<1, Uncached, 0>>, {{.*}}} : (!llvm.ptr<1>, i1, i32) -> i32
+    // PREDICATED: llvm.call spir_funccc @llvm.genx.GenISA.PredicatedLoad.i32.p1i32.i32({{.*}}) {{{.*}}, triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.load_cache_control<0, Uncached, 0>, #triton_gen.load_cache_control<1, Uncached, 0>>, {{.*}}} : {{.*}}
     // NO_PREDICATED: llvm.load %{{.*}} {alignment = 4 : i64} : !llvm.ptr<1> -> i32
     %11 = tt.load %6, %10 cacheModifier = cv : tensor<64x!tt.ptr<f32>, #blocked>
-    // PREDICATED: llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi({{.*}}) {{{.*}} triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.load_cache_control<0, Uncached, 0>, #triton_gen.load_cache_control<1, Cached, 0>>, {{.*}}} : (!llvm.ptr<1>, i1, i32) -> i32
+    // PREDICATED: llvm.call spir_funccc @llvm.genx.GenISA.PredicatedLoad.i32.p1i32.i32({{.*}}) {{{.*}}, triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.load_cache_control<0, Uncached, 0>, #triton_gen.load_cache_control<1, Cached, 0>>, {{.*}}} : {{.*}}
     // NO_PREDICATED: llvm.load %{{.*}} {alignment = 4 : i64} : !llvm.ptr<1> -> i32
     %12 = tt.load %8, %10 cacheModifier = cg : tensor<64x!tt.ptr<f32>, #blocked>
     %13 = arith.addf %11, %12 : tensor<64xf32, #blocked>
     %14 = tt.splat %arg2 : !tt.ptr<f32> -> tensor<64x!tt.ptr<f32>, #blocked>
     %15 = tt.addptr %14, %4 : tensor<64x!tt.ptr<f32>, #blocked>, tensor<64xi32, #blocked>
-    // PREDICATED: llvm.call spir_funccc @_Z28__spirv_PredicatedStoreINTELPU3AS1vib({{.*}}) {{{.*}} triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.store_cache_control<0, WriteThrough, 0>, #triton_gen.store_cache_control<1, WriteThrough, 0>>, {{.*}}} : (!llvm.ptr<1>, i32, i1) -> ()
+    // PREDICATED: llvm.call spir_funccc @llvm.genx.GenISA.PredicatedStore.p1i32.i32({{.*}}) {{{.*}}, triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.store_cache_control<0, WriteThrough, 0>, #triton_gen.store_cache_control<1, WriteThrough, 0>>, {{.*}}} : {{.*}}
     // NO_PREDICATED: llvm.store {{.*}} {alignment = 4 : i64} : i32, !llvm.ptr<1>
     tt.store %15, %13, %10 cacheModifier = wt : tensor<64x!tt.ptr<f32>, #blocked>
     tt.return
