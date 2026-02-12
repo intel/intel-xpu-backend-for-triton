@@ -192,6 +192,8 @@ def _funky_reduce_layouts():
 
 @pytest.mark.parametrize("src_layout, axis", list(_funky_reduce_layouts()))
 def test_reduce_funky_layout(src_layout, axis, device):
+    if is_xpu():
+        pytest.skip("FIXME: #6096")
 
     shape = tuple(src_layout.shape)
     num_warps = 2**len(src_layout.warp_bases)
