@@ -5,6 +5,8 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 
+#include "third_party/intel/include/Utils/Utility.h"
+
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/SCF/Transforms/Patterns.h"
 #include "mlir/IR/Attributes.h"
@@ -16,6 +18,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/SmallVectorExtras.h"
+#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/LogicalResult.h"
 #include "llvm/Support/raw_ostream.h"
 #include <mlir/Dialect/Arith/IR/Arith.h>
@@ -547,13 +550,28 @@ class TritonRewriteTensorDescriptorToPointerPass
     auto op = getOperation();
 
     mlir::ConversionTarget target(getContext());
-    target.addDynamicallyLegalDialect<mlir::arith::ArithDialect,
-                                      mlir::scf::SCFDialect,
-                                      mlir::triton::TritonDialect>(
-        [](mlir::Operation *op) {
-          return !hasATensorDescriptorType(op->getOperandTypes()) &&
-                 !hasATensorDescriptorType(op->getResultTypes());
-        });
+    target.addDynamicallyLegalDialect<
+        mlir::arith::ArithDialect, mlir::scf::SCFDialect,
+        mlir::triton::TritonDialect>([](mlir::Operation *op) {
+      if (!hasATensorDescriptorType(op->getOperandTypes()) &&
+          !hasATensorDescriptorType(op->getResultTypes()))
+        return true;
+
+      return mlir::TypeSwitch<mlir::Operation *, bool>(op)
+          .Case<triton::MakeTensorDescOp>([](auto op) {
+            return all_of(op->getUsers(), [](mlir::Operation *user) {
+              return isa<triton::DescriptorLoadOp, triton::DescriptorStoreOp>(
+                  user);
+            });
+          })
+          .Case<triton::DescriptorLoadOp, triton::DescriptorStoreOp>(
+              [](auto op) {
+                return triton::intel::findDefiningOpOfType<
+                           triton::MakeTensorDescOp>(op.getDesc())
+                    .has_value();
+              })
+          .Default([](mlir::Operation *) { return false; });
+    });
     target.addDynamicallyLegalOp<triton::FuncOp>([](triton::FuncOp funcOp) {
       return !hasATensorDescriptorType(funcOp.getFunctionType().getInputs()) &&
              !hasATensorDescriptorType(funcOp.getFunctionType().getResults());

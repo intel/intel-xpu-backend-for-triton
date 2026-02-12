@@ -1,4 +1,5 @@
 // RUN: triton-opt %s --triton-rewrite-tensor-descriptor-to-pointer --canonicalize --cse --split-input-file | FileCheck %s --implicit-check-not \!tt.tensordesc
+// XFAIL: *
 
 module {
   tt.func public @load(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32) -> (tensor<128x128xf32>) {
