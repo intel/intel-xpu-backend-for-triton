@@ -11,8 +11,8 @@
 
 #define CUTLASS_CREATE_GEMM_BENCHMARK(x)
 #define CUTLASS_BENCHMARK(x)
-#include "gemm/benchmarks_sycl.hpp"
-#include "gemm/gemm_configuration_sycl.hpp"
+#include "gemm/legacy/benchmarks_sycl.hpp"
+#include "gemm/legacy/gemm_configuration_sycl.hpp"
 
 ////////////////////////////////////////////////////////////////////////////////
 // PRIVATE FUNCTION
