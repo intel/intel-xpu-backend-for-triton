@@ -149,6 +149,12 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
   return true;
 }
 
+bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
+                            SmallVector<Value> &acc, triton::ReduceOp op,
+                            unsigned reduceLaneIdMask) const {
+  llvm_unreachable("FIXME: implement warpReduce for Intel GPU");
+}
+
 std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {
   std::string funcName =
       resultElementTy.isInteger(32) ? "__imf_umulhi" : "__imf_umul64hi";

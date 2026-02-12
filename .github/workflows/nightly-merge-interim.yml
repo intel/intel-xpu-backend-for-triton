@@ -1,0 +1,49 @@
+name: Nightly merge main-interim into main-cri
+run-name: Nightly merge main-interim into main-cri
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 9 * * *' # Every day at 9:00 UTC
+
+permissions: read-all
+
+jobs:
+  do-merge:
+    if: ${{ github.ref == 'refs/heads/main-interim' }}
+    name: Do the merge
+    runs-on:
+      - cri
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout main-cri branch
+        uses: actions/checkout@v6
+        with:
+          ref: main-cri
+
+      - name: Do merge in a new branch and create PR
+        run: |
+          set -xe
+
+          TIMESTAMP=$(date +%Y%m%d%H%M%S)
+          BRANCH_NAME=merge-main-interim-${TIMESTAMP}
+
+          git config user.name "GlaDOS"
+          git config user.email "glados@intel.com"
+
+          git checkout -b "${BRANCH_NAME}" main-cri
+          git merge --verbose --commit --no-ff --no-squash --stat main-interim
+          git push origin "${BRANCH_NAME}"
+
+          gh pr create \
+            --repo intel-tools/intel-xpu-backend-for-triton \
+            --title "[CRI] Merge main-interim into main-cri ${TIMESTAMP}" \
+            --body "Automated merge of main-interim into main-cri. Do not squash!" \
+            --reviewer gshimansky,whitneywhtsang \
+            --base main-cri \
+            --head "${BRANCH_NAME}"
+
+          gh pr review --approve --repo intel-tools/intel-xpu-backend-for-triton --pr "${BRANCH_NAME}" --reviewer glados-intel
+          gh pr merge --repo intel-tools/intel-xpu-backend-for-triton --pr "${BRANCH_NAME}" --auto

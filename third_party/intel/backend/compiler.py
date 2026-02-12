@@ -261,8 +261,6 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         pm.enable_debug()
         passes.common.add_inliner(pm)
         intel.passes.ttir.add_convert_block_pointer_to_tdesc(pm)
-        intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
-        passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
         passes.common.add_cse(pm)
         passes.ttir.add_triton_licm(pm)
         intel.passes.ttir.add_remove_boundary_checks(pm)
@@ -271,10 +269,14 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.ttir.add_fuse_reshape(pm)
         passes.common.add_canonicalizer(pm)
         passes.ttir.add_combine(pm)
+        intel.passes.ttir.add_simplify_signed_arithmetic(pm)
         passes.ttir.add_reorder_broadcast(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
         passes.ttir.add_loop_unroll(pm)
+        # FIXME: move add_rewrite_tensor_descriptor_to_pointer back to be consistent with other backends.
+        intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
+        passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
         pm.run(mod, 'make_ttir')
         return mod
 
@@ -439,7 +441,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     @track
     def make_spv(cls, src, metadata, options):
         driver_version = metadata["target"].arch.get("driver_version")
-        os.environ["INTEL_XPU_BACKEND_DRIVER_VERSION"] = driver_version
+        os.environ["INTEL_XPU_BACKEND_IS_LTS"] = "1" if cls.is_lts(driver_version) else "0"
         spirv, name = intel.translate_to_spirv(src)
         metadata["name"] = name
         metadata.setdefault("build_flags", "")
