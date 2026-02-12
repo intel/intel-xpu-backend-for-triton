@@ -630,7 +630,7 @@ def test_hooks(device, fresh_triton_cache) -> None:
     assert name == "test_hooks.<locals>.kernel_add"
 
 
-@pytest.mark.skipif(reason="within_2g is a HIP specific optimization", condition=not is_hip())
+@pytest.mark.xfail(reason="within_2g is a HIP specific optimization", condition=not is_hip(), run=False)
 def test_within_2gb(device, fresh_triton_cache) -> None:
     default_buffer_ops = os.environ.get("AMDGCN_USE_BUFFER_OPS", "0")
     try:
