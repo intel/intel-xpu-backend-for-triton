@@ -359,23 +359,21 @@ struct LoadStoreConversionBase {
       for (unsigned j = 0; j < rank; ++j)
         indicesInTensor[j] = b.add(index[j], blockPtr[blockOffset + j]);
 
-      if (boundaryProtect.size() > 0) {
-        // Get the LLVM values for mask
-        maskElems.push_back(linearize(
-            indicesInTensor,
-            {blockPtr.begin() + blockShape, blockPtr.begin() + blockStride},
-            b.int_val(1, 1),
-            [&](const Value &index, const Value &shape, const Value &mask) {
-              // mask = mask && (index < shape) && idx >= 0
-              auto is_pos_idx = b.icmp_sge(index, b.i32_val(0));
-              return b
-                  .and_(b.and_(b.icmp_slt(index, b.trunc(i32_ty, shape)), mask),
-                        is_pos_idx)
-                  .getResult();
+      // Get the LLVM values for mask
+      maskElems.push_back(linearize(
+          indicesInTensor,
+          {blockPtr.begin() + blockShape, blockPtr.begin() + blockStride},
+          b.int_val(1, 1),
+          [&](const Value &index, const Value &shape, const Value &mask) {
+            // mask = mask && (index < shape) && idx >= 0
+            auto is_pos_idx = b.icmp_sge(index, b.i32_val(0));
+            return b
+                .and_(b.and_(b.icmp_slt(index, b.trunc(i32_ty, shape)), mask),
+                      is_pos_idx)
+                .getResult();
 
-              return mask;
-            }));
-      }
+            return mask;
+          }));
     }
 
     return maskElems;
