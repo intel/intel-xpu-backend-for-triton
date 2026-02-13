@@ -329,7 +329,6 @@ class XPUUtils(object):
         self.sycl_queue_memset = mod.sycl_queue_memset
 
     def get_device_properties(self, device):
-        """Return device properties, enriched with total bus width and bandwidth."""
         props = self._get_device_properties_raw(device)
         props["mem_bus_width_per_channel"] = props["mem_bus_width"]
         try:
