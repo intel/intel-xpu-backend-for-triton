@@ -1,12 +1,13 @@
+#include "intel/include/Analysis/AxisInfo.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
-#include "intel/include/Analysis/AxisInfo.h"
-#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
-#include "triton/Dialect/Triton/IR/Dialect.h"
+#include <numeric>
 
 #define DEBUG_TYPE "intel-axis-info"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -17,41 +18,45 @@ namespace mlir::triton::intel {
 namespace ttgi = mlir::triton::gpu::intel;
 namespace {
 
-int64_t gcdImpl(int64_t a, int64_t b, int64_t *x, int64_t *y) {
-  // Base Case
-  if (a == 0) {
-    *x = 0;
-    *y = 1;
-    return b;
-  }
-  int64_t x1, y1; // To store results of recursive call
-  int64_t gcd = gcdImpl(b % a, a, &x1, &y1);
-  // Update x and y using results of
-  // recursive call
-  *x = y1 - (b / a) * x1;
-  *y = x1;
-  return gcd;
-}
+constexpr int64_t kMaxDivisor = highestPowOf2Divisor<int64_t>(0);
 
-int64_t gcd(int64_t a, int64_t b) {
+template <typename... Args> int64_t gcd(int64_t a, int64_t b, Args... args) {
   if (a == 0)
     return b;
   if (b == 0)
     return a;
-  int64_t x, y;
-  return gcdImpl(a, b, &x, &y);
-}
-
-constexpr int log2Int(int64_t num) {
-  return (num > 1) ? 1 + log2Int(num / 2) : 0;
+  if constexpr (sizeof...(args) == 0)
+    return std::gcd(a, b);
+  else
+    return gcd(std::gcd(a, b), args...);
 }
 
 // If lhs * rhs overflows, return max value possible value for the type
 int64_t multiplyDivisor(int64_t lhs, int64_t rhs) {
-  int64_t maxDivisor = highestPowOf2Divisor<int64_t>(0);
-  if (lhs > maxDivisor / rhs)
-    return maxDivisor;
+  if (lhs > kMaxDivisor / rhs)
+    return kMaxDivisor;
   return lhs * rhs;
+}
+
+int64_t getDivisibilityFromContiguity(const AxisInfo &lhs, const AxisInfo &rhs,
+                                      int d) {
+  // For example if we have the following two arrays using the selectOp:
+  // lhs: [[0, 1], [4, 5]]
+  // rhs: [[16, 17, 18, 19]]
+  // The resulting contiguity will be 2, while the divisibility will be 2
+  // because 18 is not divisible by 4.
+  if (lhs.getContiguity(d) == rhs.getContiguity(d) ||
+      lhs.getContiguity(d) == kMaxDivisor ||
+      rhs.getContiguity(d) == kMaxDivisor) {
+    // Contiguity not changed or one of them is unresolved.
+    // If unresolved, we can first perform a loose bound gcd since the unknown
+    // contiguity will be resolved in the end.
+    return gcd(lhs.getDivisibility(d), rhs.getDivisibility(d));
+  } else {
+    // Contiguity changed, we cannot use only divisibility.
+    return gcd(lhs.getDivisibility(d), rhs.getDivisibility(d),
+               lhs.getContiguity(d), rhs.getContiguity(d));
+  }
 }
 
 class AxisInfoVisitor {
@@ -106,6 +111,8 @@ public:
     const auto &lhsInfo = operands[0]->getValue();
     const auto &rhsInfo = operands[1]->getValue();
     auto rank = lhsInfo.getRank();
+    assert(isa<RankedTensorType>(op.getType()) ||
+           rank == 1 && "Expected ranked tensor or scalar");
     assert(operands.size() == 2 && "Expected two operands");
     AxisInfo::DimVectorT stride;
     AxisInfo::DimVectorT contiguity;
@@ -152,7 +159,7 @@ protected:
 
   virtual int64_t getConstancy(OpTy op, const AxisInfo &lhs,
                                const AxisInfo &rhs, int dim) {
-    return 1;
+    return gcd(lhs.getConstancy(dim), rhs.getConstancy(dim));
   }
 
   virtual std::optional<int64_t> getConstantValue(OpTy op, const AxisInfo &lhs,
@@ -492,12 +499,11 @@ private:
   int64_t getConstancy(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                        int dim) override {
     auto resTy = ttgi::getRankedTensorType(op.getType());
+    auto constancy = BinaryOpVisitorImpl<OpTy>::getConstancy(op, lhs, rhs, dim);
     if (!resTy)
-      return BinaryOpVisitorImpl<OpTy>::getConstancy(op, lhs, rhs, dim);
+      return constancy;
     auto shape = resTy.getShape();
-    // Case 1: both lhs and rhs are constants.
-    auto constancy = gcd(lhs.getConstancy(dim), rhs.getConstancy(dim));
-    // Case 2: lhs contiguous, rhs constant.
+    // Case: lhs contiguous, rhs constant.
     // lhs: d_lhs * k, d_lhs * k + 1, ..., d_lhs * k + n
     // rhs: d_rhs * p, d_rhs * p, ..., d_rhs * p
     // lhs / rhs = d_lhs * k / (d_rhs * p), (d_lhs * k + 1) / (d_rhs * p),
@@ -508,9 +514,9 @@ private:
     // we need to use another gcd to get the actual constancy.
     if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
         AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
-      constancy = std::max(constancy, gcd(lhs.getContiguity(dim),
-                                          gcd(lhs.getDivisibility(dim),
-                                              rhs.getDivisibility(dim))));
+      constancy = std::max(constancy,
+                           gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
+                               rhs.getDivisibility(dim)));
     }
     return constancy;
   }
@@ -525,6 +531,13 @@ private:
     if (rhs.getConstantValue().has_value() &&
         rhs.getConstantValue().value() == 1)
       return lhs.getDivisibility(dim);
+    // Case 3: lhs has contiguity of 1 in this dimension and rhs is a power of 2
+    if (rhs.getConstantValue().has_value() &&
+        llvm::isPowerOf2_64(std::abs(rhs.getConstantValue().value())) &&
+        lhs.getContiguity(dim) == 1) {
+      int64_t absRhs = std::abs(rhs.getConstantValue().value());
+      return std::max<int64_t>(1, lhs.getDivisibility(dim) / absRhs);
+    }
     // otherwise: return 1
     return 1;
   }
@@ -562,29 +575,37 @@ private:
     // we need to use another gcd to get the actual contiguity.
     if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
         AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
-      contiguity = std::max(contiguity, gcd(lhs.getContiguity(dim),
-                                            gcd(lhs.getDivisibility(dim),
-                                                rhs.getDivisibility(dim))));
+      contiguity = gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
+                       rhs.getDivisibility(dim));
     }
     return contiguity;
   }
 
   int64_t getDivisibility(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                           int dim) override {
-    // lhs: d_lhs * k = gcd(d_lhs, d_rhs) * k' * k = gcd(d_lhs, d_rhs) * k''
-    // rhs: d_rhs * p = gcd(d_lhs, d_rhs) * p' * p = gcd(d_lhs, d_rhs) * p''
-    // lhs = gcd(d_lhs, d_rhs) * k'' = gcd(d_lhs, d_rhs) * d + r
-    // r must be divisible by gcd(d_lhs, d_rhs)
-    return gcd(lhs.getDivisibility(dim), rhs.getDivisibility(dim));
-  };
+    auto resTy = dyn_cast<RankedTensorType>(op.getType());
+    if (rhs.getConstancy(dim) > 1) {
+      // lhs: d_lhs * k = gcd(d_lhs, d_rhs) * k' * k = gcd(d_lhs, d_rhs) * k''
+      // rhs: d_rhs * p = gcd(d_lhs, d_rhs) * p' * p = gcd(d_lhs, d_rhs) * p''
+      // lhs = gcd(d_lhs, d_rhs) * k'' = gcd(d_lhs, d_rhs) * d + r
+      // r must be divisible by gcd(d_lhs, d_rhs)
+      return gcd(lhs.getDivisibility(dim), rhs.getDivisibility(dim));
+    }
+    // Otherwise we shouldn't assume any divisibility.
+    // For example:
+    // lhs: [2, 2, 4, 4], rhs: [0, 1, 2, 3]
+    // lhs % rhs = [0, 0, 0, 1]
+    return 1;
+  }
 
   int64_t getConstancy(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                        int dim) override {
+    auto constancy = BinaryOpVisitorImpl<OpTy>::getConstancy(op, lhs, rhs, dim);
     auto resTy = ttgi::getRankedTensorType(op.getType());
     if (!resTy)
-      return BinaryOpVisitorImpl<OpTy>::getConstancy(op, lhs, rhs, dim);
+      return constancy;
+    // Case: lhs % 1 = 0
     auto shape = resTy.getShape();
-    // lhs % 1 = 0
     return rhs.getConstantValue().has_value() &&
                    rhs.getConstantValue().value() == 1
                ? shape[dim]
@@ -750,7 +771,7 @@ public:
     AxisInfo::DimVectorT contiguity, divisibility, constancy;
     std::optional<int64_t> constantValue;
     for (short d = 0; d < rank; ++d) {
-      int64_t constHint = 1;
+      int64_t constHint;
       if (lhsInfo.getConstantValue().has_value() &&
           rhsInfo.getConstantValue().has_value()) {
         constHint = lhsInfo.getConstancy(d);
@@ -775,8 +796,8 @@ public:
           // lhs ge rhs: 1, 0, 0, 0
           // lhs gt rhs: 0, 0, 0, 0
           constHint = std::max(constHint, gcd(rhsInfo.getContiguity(d),
-                                              gcd(lhsInfo.getDivisibility(d),
-                                                  rhsInfo.getDivisibility(d))));
+                                              lhsInfo.getDivisibility(d),
+                                              rhsInfo.getDivisibility(d)));
         } else if ((ltPredicate(getPredicate(op)) ||
                     gePredicate(getPredicate(op))) &&
                    AxisInfoVisitor::isConstantDim(rhsInfo, shape, d)) {
@@ -791,8 +812,8 @@ public:
           // lhs gt rhs: 0, 1, 1, 1
           // lhs ge rhs: 1, 1, 1, 1
           constHint = std::max(constHint, gcd(lhsInfo.getContiguity(d),
-                                              gcd(lhsInfo.getDivisibility(d),
-                                                  rhsInfo.getDivisibility(d))));
+                                              lhsInfo.getDivisibility(d),
+                                              rhsInfo.getDivisibility(d)));
         }
       }
 
@@ -895,39 +916,31 @@ public:
       for (auto d = 0; d < rank; ++d) {
         if (i1Cond) {
           constancy.push_back(
-              std::min(lhsInfo.getConstancy(d), rhsInfo.getConstancy(d)));
+              gcd(lhsInfo.getConstancy(d), rhsInfo.getConstancy(d)));
           divisibility.push_back(
-              std::min(lhsInfo.getDivisibility(d), rhsInfo.getDivisibility(d)));
+              getDivisibilityFromContiguity(lhsInfo, rhsInfo, d));
           contiguity.push_back(
-              std::min(lhsInfo.getContiguity(d), rhsInfo.getContiguity(d)));
+              gcd(lhsInfo.getContiguity(d), rhsInfo.getContiguity(d)));
         } else {
-          constancy.push_back(
-              std::min(gcd(lhsInfo.getConstancy(d), condConstancy[d]),
-                       gcd(rhsInfo.getConstancy(d), condConstancy[d])));
-          contiguity.push_back(
-              std::min(gcd(lhsInfo.getContiguity(d), condConstancy[d]),
-                       gcd(rhsInfo.getContiguity(d), condConstancy[d])));
-          if (contiguity.back() == lhsInfo.getContiguity(d) &&
-              contiguity.back() == rhsInfo.getContiguity(d)) {
-            // Contiguity not changed
-            divisibility.push_back(
-                gcd(lhsInfo.getDivisibility(d), rhsInfo.getDivisibility(d)));
-          } else {
-            // Contiguity changed, we cannot use only divisibility.
-            // For example, the following example should have contiguity 2 and
-            // divisibility 2
-            // [[0, 1], [4, 5]]
-            // [[16, 17, 18, 19]]
-            divisibility.push_back(
-                std::min(gcd(lhsInfo.getDivisibility(d), contiguity.back()),
-                         gcd(rhsInfo.getDivisibility(d), contiguity.back())));
-          }
+          constancy.push_back(gcd(lhsInfo.getConstancy(d),
+                                  rhsInfo.getConstancy(d), condConstancy[d]));
+          contiguity.push_back(gcd(lhsInfo.getContiguity(d),
+                                   rhsInfo.getContiguity(d), condConstancy[d]));
+          divisibility.push_back(
+              getDivisibilityFromContiguity(lhsInfo, rhsInfo, d));
         }
       }
       if (lhsInfo.getConstantValue().has_value() &&
           rhsInfo.getConstantValue().has_value() &&
           lhsInfo.getConstantValue() == rhsInfo.getConstantValue())
         constantValue = lhsInfo.getConstantValue();
+
+      if (constantValue.has_value()) {
+        auto resTy = dyn_cast<RankedTensorType>(op.getType());
+        assert(resTy || rank == 1);
+        constancy =
+            resTy ? to_vector(resTy.getShape()) : AxisInfo::DimVectorT(rank, 1);
+      }
     }
 
     return AxisInfo(std::move(contiguity), std::move(divisibility),
@@ -987,7 +1000,6 @@ private:
       // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
       lhsDivisibility = 1;
     }
-    auto numBits = log2Int(lhsDivisibility);
     return multiplyDivisor(lhsDivisibility, 1ll << shift);
   }
 
@@ -1070,19 +1082,25 @@ public:
         constantValue = {std::min(lhsInfo.getConstantValue().value(),
                                   rhsInfo.getConstantValue().value())};
       }
+      auto resTy = dyn_cast<RankedTensorType>(op.getType());
+      assert(resTy || rank == 1);
+      AxisInfo::DimVectorT constancy =
+          resTy ? to_vector(resTy.getShape()) : AxisInfo::DimVectorT(rank, 1);
+      AxisInfo::DimVectorT divisibility(
+          rank, highestPowOf2Divisor<int64_t>(constantValue.value()));
       return AxisInfo(/*knownContiguity=*/AxisInfo::DimVectorT(rank, 1),
-                      /*knownDivisibility=*/AxisInfo::DimVectorT(rank, 1),
-                      /*knownConstancy=*/AxisInfo::DimVectorT(rank, 1),
+                      /*knownDivisibility=*/divisibility,
+                      /*knownConstancy=*/constancy,
                       /*constantValue=*/constantValue);
     } else {
       AxisInfo::DimVectorT contiguity, divisibility, constancy;
       for (auto d = 0; d < rank; ++d) {
         constancy.push_back(
-            std::min(lhsInfo.getConstancy(d), rhsInfo.getConstancy(d)));
+            gcd(lhsInfo.getConstancy(d), rhsInfo.getConstancy(d)));
         divisibility.push_back(
-            std::min(lhsInfo.getDivisibility(d), rhsInfo.getDivisibility(d)));
+            getDivisibilityFromContiguity(lhsInfo, rhsInfo, d));
         contiguity.push_back(
-            std::min(lhsInfo.getContiguity(d), rhsInfo.getContiguity(d)));
+            gcd(lhsInfo.getContiguity(d), rhsInfo.getContiguity(d)));
       }
       return AxisInfo(std::move(contiguity), std::move(divisibility),
                       std::move(constancy), std::nullopt);
@@ -1435,7 +1453,7 @@ void ModuleAxisInfoAnalysis::update(CallOpInterface callOp,
     auto index = entry.index();
     auto value = entry.value();
     auto setAttrFn = [&](StringRef attrName, int64_t prevValue) {
-      auto curValue = highestPowOf2Divisor<int64_t>(0);
+      auto curValue = kMaxDivisor;
       if (callee.getArgAttrOfType<IntegerAttr>(index, attrName)) {
         curValue =
             callee.getArgAttrOfType<IntegerAttr>(index, attrName).getInt();
@@ -1445,7 +1463,10 @@ void ModuleAxisInfoAnalysis::update(CallOpInterface callOp,
       callee.setArgAttr(index, attrName, attr);
     };
     auto axisInfo = axisInfoMap->lookup(value);
-    assert(axisInfo.getRank() == 1 && "only scalar arguments are supported");
+    // Only scalar arguments are supported. Do not forward multi-dimensional
+    // AxisInfo to the callee.
+    if (axisInfo.getRank() != 1)
+      continue;
     setAttrFn("tt.contiguity", axisInfo.getContiguity(0));
     setAttrFn("tt.divisibility", axisInfo.getDivisibility(0));
     setAttrFn("tt.constancy", axisInfo.getConstancy(0));
