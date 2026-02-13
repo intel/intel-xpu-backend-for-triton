@@ -896,6 +896,47 @@ tt.func public @make_tensor_ptr(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f8E5M2> {tt.
 
 // -----
 
+// CHECK-LABEL: @make_tensor_descriptor
+tt.func public @make_tensor_descriptor(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f32> {tt.divisibility = 32 : i32}, %arg2: i64 {tt.divisibility = 16 : i32}) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c32_i64 = arith.constant 32 : i64
+  %c32_i32 = arith.constant 32 : i32
+  %c128_i32 = arith.constant 128 : i32
+  %conv = arith.trunci %arg2 : i64 to i32
+  // CHECK: tt.make_tensor_descriptor %arg0, {{.*}} => stride = [1, 1], contiguity = [128, 32], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
+  %0 = tt.make_tensor_descriptor %arg0, [%c128_i32, %c32_i32], [%c1_i64, %c1_i64] : <f16>, <tensor<128x32xf16>>
+  // CHECK: tt.make_tensor_descriptor %arg1, {{.*}} => stride = [1, -1], contiguity = [64, 1], divisibility = [16, 1], constancy = [1, 1], constant_value = <none>
+  %1 = tt.make_tensor_descriptor %arg1, [%c32_i32, %c32_i32], [%c1_i64, %arg2] : <f32>, <tensor<64x16xf32>>
+  // CHECK: tt.make_tensor_descriptor %arg1, {{.*}} => stride = [1, 1], contiguity = [32, 64], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
+  %2 = tt.make_tensor_descriptor %arg1, [%conv, %c128_i32], [%c1_i64, %c1_i64] : <f32>, <tensor<32x64xf32>>
+  tt.return
+}
+
+// -----
+
+// CHECK-LABEL: @descriptor_load
+tt.func public @descriptor_load(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f32> {tt.divisibility = 32 : i32}) {
+  %c0_i32 = arith.constant 0 : i32
+  %c8_i32 = arith.constant 8 : i32
+  %c16_i32 = arith.constant 16 : i32
+  %c32_i32 = arith.constant 32 : i32
+  %c64_i32 = arith.constant 64 : i32
+  %c128_i32 = arith.constant 128 : i32
+  %c1_i64 = arith.constant 1 : i64
+  // CHECK: tt.make_tensor_descriptor %arg0, {{.*}} => stride = [1, 1], contiguity = [128, 32], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
+  %desc0 = tt.make_tensor_descriptor %arg0, [%c128_i32, %c32_i32], [%c1_i64, %c1_i64] : <f16>, <tensor<128x32xf16>>
+  // CHECK: tt.descriptor_load {{.*}} => stride = [1, 1], contiguity = [128, 32], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
+  %load0 = tt.descriptor_load %desc0[%c0_i32, %c0_i32] : !tt.tensordesc<tensor<128x32xf16>> -> tensor<128x32xf16>
+  // CHECK: tt.make_tensor_descriptor %arg1, {{.*}} => stride = [1, 1], contiguity = [64, 32], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
+  %desc1 = tt.make_tensor_descriptor %arg1, [%c64_i32, %c128_i32], [%c1_i64, %c1_i64] : <f32>, <tensor<64x32xf32>>
+  // CHECK: tt.descriptor_load {{.*}} => stride = [1, 1], contiguity = [64, 32], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
+  %load1 = tt.descriptor_load %desc1[%c8_i32, %c16_i32] : !tt.tensordesc<tensor<64x32xf32>> -> tensor<64x32xf32>
+  tt.return
+}
+
+// -----
+
 // CHECK-LABEL: @ptr_offset
 tt.func public @ptr_offset(%arg0: i32, %arg1: tensor<128x1xi32>) {
   // CHECK: stride = [0, 0], contiguity = [1, 1], divisibility = [512, 512], constancy = [128, 1], constant_value = 512

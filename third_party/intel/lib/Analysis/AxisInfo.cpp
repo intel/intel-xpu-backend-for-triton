@@ -1155,6 +1155,114 @@ public:
   }
 };
 
+class MakeTensorDescOpAxisInfoVisitor final
+    : public AxisInfoVisitorImpl<triton::MakeTensorDescOp> {
+public:
+  using AxisInfoVisitorImpl<triton::MakeTensorDescOp>::AxisInfoVisitorImpl;
+
+  AxisInfo
+  getAxisInfo(triton::MakeTensorDescOp op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    LDBG("MakeTensorDescOpAxisInfoVisitor: " << *op);
+
+    auto descTy = cast<TensorDescType>(op.getResult().getType());
+    RankedTensorType tensorType = descTy.getBlockType();
+    ArrayRef<int64_t> blkShape = tensorType.getShape();
+    unsigned rank = op.getShape().size();
+
+    // TODO: Support higher rank tensors.
+    if (rank > 2) {
+      LDBG("Unsupported tensor rank > 2, returning default AxisInfo");
+      return AxisInfo();
+    }
+
+    assert(operands.size() >= rank * 2 + 1 &&
+           "Insufficient operands for MakeTensorDescOp AxisInfo analysis");
+
+    SmallVector<AxisInfo, 2> strideInfo;
+    // Strides start after base (operand 0) and shape operands
+    for (unsigned i = rank + 1; i <= rank * 2; ++i)
+      strideInfo.emplace_back(operands[i]->getValue());
+
+    AxisInfo ptrInfo = operands[0]->getValue();
+    int64_t ptrDivisibility = ptrInfo.getDivisibility(0);
+
+    AxisInfo::DimVectorT stride, contiguity, constancy, divisibility;
+    for (unsigned dim = 0; dim < rank; ++dim) {
+      stride.push_back(strideInfo[dim].getConstantValue().has_value()
+                           ? strideInfo[dim].getConstantValue().value()
+                           : -1);
+      contiguity.push_back(
+          strideInfo[dim].getConstantValue() == 1 ? blkShape[dim] : 1);
+      const AxisInfo &relevantStride =
+          (rank == 2) ? strideInfo[dim == 0 ? 1 : 0] : strideInfo[dim];
+      divisibility.push_back(
+          contiguity[dim] > 1
+              ? std::min(ptrDivisibility, relevantStride.getDivisibility()[0])
+              : 1);
+      constancy.push_back(1);
+    }
+
+    auto axisInfo =
+        AxisInfo(std::move(stride), std::move(contiguity),
+                 std::move(divisibility), std::move(constancy), std::nullopt);
+
+    LLVM_DEBUG({
+      std::string axisStr;
+      llvm::raw_string_ostream os(axisStr);
+      axisInfo.print(os);
+      LDBG("-- " << axisStr);
+    });
+
+    return axisInfo;
+  }
+};
+
+class DescriptorLoadOpAxisInfoVisitor final
+    : public AxisInfoVisitorImpl<triton::DescriptorLoadOp> {
+public:
+  using AxisInfoVisitorImpl<triton::DescriptorLoadOp>::AxisInfoVisitorImpl;
+
+  AxisInfo
+  getAxisInfo(triton::DescriptorLoadOp op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    LDBG("DescriptorLoadOpAxisInfoVisitor: " << *op);
+
+    // Get descriptor info from first operand
+    AxisInfo descInfo = operands[0]->getValue();
+    auto resultType = cast<RankedTensorType>(op.getResult().getType());
+    unsigned rank = resultType.getRank();
+
+    AxisInfo::DimVectorT stride, contiguity, divisibility, constancy;
+
+    // For descriptor loads, propagate AxisInfo from the descriptor
+    for (unsigned d = 0; d < rank; ++d) {
+      bool validDescDim = d < descInfo.getRank();
+      // Preserve stride information if available
+      stride.push_back(validDescDim ? descInfo.getStride(d) : -1);
+      // Preserve contiguity from descriptor
+      contiguity.push_back(validDescDim ? descInfo.getContiguity(d) : 1);
+      // Preserve divisibility from descriptor
+      divisibility.push_back(validDescDim ? descInfo.getDivisibility(d) : 1);
+      // Constancy is 1 after load (values may vary)
+      constancy.push_back(1);
+    }
+
+    auto axisInfo =
+        AxisInfo(std::move(stride), std::move(contiguity),
+                 std::move(divisibility), std::move(constancy), std::nullopt);
+
+    LLVM_DEBUG({
+      std::string axisStr;
+      llvm::raw_string_ostream os(axisStr);
+      axisInfo.print(os);
+      LDBG("-- " << axisStr);
+    });
+
+    return axisInfo;
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // AxisInfoAnalysis
 //===----------------------------------------------------------------------===//
@@ -1205,6 +1313,8 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
   visitors.append<LoadOpAxisInfoVisitor>();
   visitors.append<MakeTensorPtrOpAxisInfoVisitor>();
   visitors.append<AdvanceOpAxisInfoVisitor>();
+  visitors.append<MakeTensorDescOpAxisInfoVisitor>();
+  visitors.append<DescriptorLoadOpAxisInfoVisitor>();
 }
 
 LogicalResult AxisInfoAnalysis::visitOperation(
