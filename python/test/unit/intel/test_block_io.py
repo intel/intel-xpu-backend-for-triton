@@ -9,7 +9,11 @@ import pathlib
 import triton
 from triton._internal_testing import is_xpu
 
-os.environ["TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS"] = "1"
+
+@pytest.fixture(autouse=True)
+def triton_block_io(monkeypatch):
+    monkeypatch.setenv("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS", "1")
+    yield
 
 
 class DpasLayout:
@@ -122,7 +126,7 @@ layouts = [
 @pytest.mark.parametrize("transpose", [True, False])
 @pytest.mark.skipif(not is_xpu(), reason="Block store tests are specific to the XPU backend")
 def test_block_io(M, N, dtype_str, layout, load_block_ptr, store_block_ptr, transpose, device, tmp_path: pathlib.Path):
-
+    assert os.environ["TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS"] == "1"
     warps = warps_per_cta(layout)
     num_warps = int(np.prod(warps))
     threads_per_warp = layout.threads_per_warp
