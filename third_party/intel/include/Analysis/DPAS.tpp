@@ -5,10 +5,15 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include <triton/Tools/Sys/GetEnv.hpp>
+#include "triton/Tools/Sys/GetEnv.hpp"
 
 namespace mlir::triton::gpu::intel {
 
+/// Constructs a DPAS analysis for the given operation's module.
+///
+/// Walks all functions in the module to identify dot operations and determine
+/// their compatible DPAS engine types based on operand types and module
+/// attributes.
 template <typename DPASEngineType, typename Enable>
 DPASAnalysis<DPASEngineType, Enable>::DPASAnalysis(Operation *root) {
   if (auto m = dyn_cast<ModuleOp>(root))
@@ -21,10 +26,7 @@ DPASAnalysis<DPASEngineType, Enable>::DPASAnalysis(Operation *root) {
 
   // Populate the maps.
   mod.walk([&](FunctionOpInterface funcOp) {
-    if (funcToDotMap.find(funcOp) == funcToDotMap.end())
-      funcToDotMap[funcOp] = {};
-
-    auto it = funcToDotMap.find(funcOp);
+    [[maybe_unused]] auto [it, inserted] = funcToDotMap.try_emplace(funcOp);
 
     funcOp.walk([&](Operation *op) {
       if (!isa<DotOp, DotScaledOp>(op))
@@ -36,9 +38,12 @@ DPASAnalysis<DPASEngineType, Enable>::DPASAnalysis(Operation *root) {
                                           ? DPASAnalysis::getDPASType(op)
                                           : DPASEngineType::NOT_APPLICABLE;
 
-      if (dpasEngineType == DPASEngineType::FP32_FP32_TF32_TF32 &&
-          cast<DotOp>(op).getInputPrecision() != InputPrecision::TF32)
-        dpasEngineType = DPASEngineType::NOT_APPLICABLE;
+      if (dpasEngineType == DPASEngineType::FP32_FP32_TF32_TF32) {
+        if (auto dotOp = dyn_cast<DotOp>(op)) {
+          if (dotOp.getInputPrecision() != InputPrecision::TF32)
+            dpasEngineType = DPASEngineType::NOT_APPLICABLE;
+        }
+      }
 
       dotToDPASEngineMap[op] = dpasEngineType;
     });
@@ -58,13 +63,13 @@ DPASAnalysisResult DPASAnalysis<DPASEngineType, Enable>::canUseDPAS(
   // Ensure all dot operations in the function can be lowered to DPAS
   // instructions.
   for (Operation *op : it->second) {
-    auto it = dotToDPASEngineMap.find(op);
-    if (it == dotToDPASEngineMap.end()) {
+    auto dpasIt = dotToDPASEngineMap.find(op);
+    if (dpasIt == dotToDPASEngineMap.end()) {
       llvm::errs() << "DPASAnalysis: Operation not found in map.\n";
       return DPASAnalysisResult::False;
     }
 
-    DPASEngineType dpasEngineType = dotToDPASEngineMap.at(op);
+    DPASEngineType dpasEngineType = dpasIt->second;
     if (dpasEngineType == DPASEngineType::NOT_APPLICABLE)
       return DPASAnalysisResult::False;
   }
@@ -77,13 +82,15 @@ DPASAnalysisResult DPASAnalysis<DPASEngineType, Enable>::canUseDPAS(
     return DPASAnalysisResult::Maybe;
 
   unsigned threadsPerWarp = cast<IntegerAttr>(threadsPerWarpAttr).getInt();
-  unsigned minSGSize = mod->getAttrOfType<IntegerAttr>(
-                              TritonIntelGPUDialect::getMinSGSizeAttrName())
-                           .getInt();
+  IntegerAttr minSGSizeAttr = mod->getAttrOfType<IntegerAttr>(
+      TritonIntelGPUDialect::getMinSGSizeAttrName());
+  if (!minSGSizeAttr)
+    return DPASAnalysisResult::False;
+  unsigned minSGSize = minSGSizeAttr.getInt();
   bool enableWarp32 =
       tools::getBoolEnv("TRITON_INTEL_ENABLE_DPAS_FOR_WARP_SIZE_32");
-  assert(minSGSize == 8 || minSGSize == 16 ||
-         minSGSize == 32 && "Unexpected minimum subgroup size");
+  assert((minSGSize == 8 || minSGSize == 16 || minSGSize == 32) &&
+         "Unexpected minimum subgroup size");
 
   if (enableWarp32 && minSGSize != 8) {
     // We can support threads_per_warp=16 or 32 on Xe+ and later architectures.
@@ -143,6 +150,8 @@ DPASAnalysis<DPASEngineType, Enable>::getDPASType(OpTy op) {
     }
 
     auto m = op->template getParentOfType<ModuleOp>();
+    if (!m)
+      return DPASEngineType::NOT_APPLICABLE;
     bool isFp8Supported =
         m->hasAttr(TritonIntelGPUDialect::getSupportDPASWithBF8AttrName());
 
@@ -201,7 +210,7 @@ DPASAnalysis<DPASEngineType, Enable>::getDPASType(OpTy op) {
         if (isa<Float8E4M3FNType, Float8E5M2Type>(aElemTy) &&
             isa<Float8E4M3FNType, Float8E5M2Type>(bElemTy))
           return DPASEngineType::FP32_FP32_FP8_FP8;
-        if ((isa<Float8E4M3FNType>(aElemTy) || isa<Float8E5M2Type>(aElemTy)) &&
+        if (isa<Float8E4M3FNType, Float8E5M2Type>(aElemTy) &&
             bElemTy.isInteger(8))
           return DPASEngineType::FP32_FP32_FP8_FP4;
         if (aElemTy.isInteger(8) && bElemTy.isBF16())
