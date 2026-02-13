@@ -218,7 +218,8 @@ def test_async_tma_kernel_2bufs_1bar(FAILURE, device, run_wrapper, monkeypatch):
     kernel[(1, )](a_desc, b_desc, output, FAILURE=FAILURE, num_warps=4)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
+                   run=False)
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_tma_interleave_kernel(FAILURE, device, run_wrapper, monkeypatch):
     if run_wrapper:
@@ -1823,7 +1824,8 @@ def async_copy_mma_write_after_read_kernel(a_ptr, BLOCK_M: ttgl.constexpr, BLOCK
     ampere.async_copy.async_copy_global_to_shared(a_smem, a_ptr + offs)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer",
+                   run=False)
 def test_mma_read_async_copy_write(run_wrapper, monkeypatch):
     if run_wrapper:
         result = run_in_process(test_mma_read_async_copy_write, (False, monkeypatch))
@@ -1871,7 +1873,8 @@ def load_local_alloc_mma_write_after_read_kernel(a_ptr, K, BLOCK_M: ttgl.constex
     mbarrier.invalidate(bar)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer",
+                   run=False)
 def test_mma_read_local_alloc_write(run_wrapper, monkeypatch):
     if run_wrapper:
         result = run_in_process(test_mma_read_local_alloc_write, (False, monkeypatch))
