@@ -506,7 +506,7 @@ def test_dot_fma(device, fresh_knobs):
     _assert_payload_equal(out, exp_bits)
 
 
-@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
 @pytest.mark.parametrize("use_acc", [False, True])
 def test_tcgen05_mma(device, use_acc, fresh_knobs):
     _require_cuda_backend(device)
@@ -586,7 +586,7 @@ def test_tcgen05_mma(device, use_acc, fresh_knobs):
     _assert_payload_equal(out, exp_bits)
 
 
-@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
 def test_tmem_index_subslice(device, fresh_knobs):
     _require_cuda_backend(device)
 

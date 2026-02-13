@@ -20,7 +20,7 @@ def is_hopper_or_blackwell():
 
 
 @pytest.mark.skipif(is_hip(), reason="warp specialization is not supported on hip devices")
-@pytest.mark.skipif(not is_hopper_or_blackwell(), reason="Requires Hopper or Blackwell")
+@pytest.mark.xfail(not is_hopper_or_blackwell(), reason="Requires Hopper or Blackwell", run=False)
 def test_warp_specialize_basic_ir(tmp_path: pathlib.Path):
     ir = """
     tt.func @kernel(%arg0: !tt.ptr<i32>) {
@@ -55,7 +55,7 @@ def test_warp_specialize_basic_ir(tmp_path: pathlib.Path):
 
 
 @pytest.mark.skipif(is_hip(), reason="warp specialization is not supported on hip devices")
-@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
 def test_warp_specialize_tmem_ir(tmp_path: pathlib.Path):
     ir = """
     #blocked = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
@@ -123,7 +123,7 @@ def test_warp_specialize_tmem_ir(tmp_path: pathlib.Path):
 
 
 @pytest.mark.skipif(is_hip(), reason="warp specialization is not supported on hip devices")
-@pytest.mark.skipif(not is_hopper_or_blackwell(), reason="Requires Hopper or Blackwell")
+@pytest.mark.xfail(not is_hopper_or_blackwell(), reason="Requires Hopper or Blackwell", run=False)
 def test_warpgroup_reduction(tmp_path: pathlib.Path):
 
     def template(i, num_warps, in_ptr, out_ptr):
@@ -319,7 +319,7 @@ def test_warp_specialize_tma_matmul(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_S
 @pytest.mark.parametrize("num_stages", [0, 3])
 @pytest.mark.parametrize("a_use_tma", [False, True])
 @pytest.mark.parametrize("b_use_tma", [False, True])
-@pytest.mark.skipif(not is_hopper_or_blackwell(), reason="Requires Hopper or Blackwell")
+@pytest.mark.xfail(not is_hopper_or_blackwell(), reason="Requires Hopper or Blackwell", run=False)
 def test_warp_specialize_tma_matmul_consan(M, N, K, num_stages, a_use_tma, b_use_tma, fresh_knobs):
     if is_hopper():
         # FIXME: Hopper warp specialization generates incorrect debug info.
@@ -444,7 +444,7 @@ def test_warp_specialize_tma_matmul_persistent(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE
 @pytest.mark.parametrize("a_use_tma", [False, True])
 @pytest.mark.parametrize("b_use_tma", [False, True])
 @pytest.mark.parametrize("flatten", [False, True] if is_blackwell() else [True])
-@pytest.mark.skipif(not is_hopper_or_blackwell(), reason="Requires Hopper or Blackwell")
+@pytest.mark.xfail(not is_hopper_or_blackwell(), reason="Requires Hopper or Blackwell", run=False)
 def test_warp_specialize_tma_matmul_persistent_consan(M, N, K, a_use_tma, b_use_tma, flatten, fresh_knobs):
     if is_hopper():
         # FIXME: Hopper warp specialization generates incorrect debug info.
@@ -603,7 +603,7 @@ def attention_persistent_inner_loop_kernel(  #
 @pytest.mark.parametrize("disable_acc_multibuf", [False, True])
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("use_fp8", [False, True])
-@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
 def test_warp_specialize_attention_persistent_forward(M, N, BLOCK_M, HEAD_DIM, num_stages, disable_acc_multibuf,
                                                       num_warps, use_fp8):
     if BLOCK_M == 128 and HEAD_DIM == 128 and not use_fp8:
@@ -756,7 +756,7 @@ def group_gemm_tma_fn(group_A, group_B):
 @pytest.mark.parametrize("N", [256, 512, 1024, 2048, 4096, 8192])
 @pytest.mark.parametrize("K", [128, 512, 1024, 2048, 4096])
 @pytest.mark.parametrize("group_size", [4, 8, 16])
-@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
 def test_grouped_gemm(M, N, K, group_size):
     torch.manual_seed(42)
     group_A = []
