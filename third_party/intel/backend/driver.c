@@ -102,12 +102,14 @@ extern "C" EXPORT_FUNC PyObject *get_device_properties(int device_id) {
 
   delete[] pMemoryProperties;
 
-  return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i, s:i, s:N}", "max_shared_mem",
-                       max_shared_mem, "multiprocessor_count",
-                       multiprocessor_count, "sm_clock_rate", sm_clock_rate,
-                       "mem_clock_rate", mem_clock_rate, "mem_bus_width",
-                       mem_bus_width, "max_work_group_size", max_group_size,
-                       "sub_group_sizes", subgroup_sizes);
+  int pci_device_id = static_cast<int>(device_properties.deviceId);
+
+  return Py_BuildValue(
+      "{s:i, s:i, s:i, s:i, s:i, s:i, s:N, s:i}", "max_shared_mem",
+      max_shared_mem, "multiprocessor_count", multiprocessor_count,
+      "sm_clock_rate", sm_clock_rate, "mem_clock_rate", mem_clock_rate,
+      "mem_bus_width", mem_bus_width, "max_work_group_size", max_group_size,
+      "sub_group_sizes", subgroup_sizes, "pci_device_id", pci_device_id);
 }
 
 void freeKernel(PyObject *p) {
