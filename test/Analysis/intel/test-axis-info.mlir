@@ -879,6 +879,39 @@ module {
 
 // -----
 
+// CHECK-LABEL: @trans_4d_tensor_kernel
+tt.func public @trans_4d_tensor_kernel(%arg0: tensor<32x32x32x32xi32> {tt.contiguity = dense<[32, 1, 1, 1]> : tensor<4xi32>, tt.divisibility = dense<[16, 1, 1, 1]> : tensor<4xi32>}) attributes {noinline = false} {
+  // CHECK: contiguity = [1, 1, 1, 32], divisibility = [1, 1, 1, 16], constancy = [1, 1, 1, 1], constant_value = <none>
+  %101 = tt.trans %arg0 {order = array<i32: 3, 2, 1, 0>} : tensor<32x32x32x32xi32> -> tensor<32x32x32x32xi32>
+  // CHECK: contiguity = [1, 32, 1, 1], divisibility = [1, 16, 1, 1], constancy = [1, 1, 1, 1], constant_value = <none>
+  %102 = tt.trans %arg0 {order = array<i32: 1, 0, 2, 3>} : tensor<32x32x32x32xi32> -> tensor<32x32x32x32xi32>
+  tt.return
+}
+
+// -----
+
+// CHECK-LABEL: @unrealized_conversion_cast
+tt.func @unrealized_conversion_cast(%arg0: tensor<128x128xi32> {tt.contiguity = dense<[16, 32]> : tensor<2xi32>}) {
+  // Case 1: AxisInfo is propagated through a sequence of
+  // unrealized_conversion_cast ops.
+  // CHECK: contiguity = [16, 32], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
+  %0 = builtin.unrealized_conversion_cast %arg0 : tensor<128x128xi32> to !llvm.struct<(i32, i32, i32, i32)>
+  // CHECK: contiguity = [16, 32], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
+  %1 = builtin.unrealized_conversion_cast %0 : !llvm.struct<(i32, i32, i32, i32)> to tensor<128x128xi32>
+
+  // Case 2: AxisInfo is falling back to the pessimistic state if the
+  // propagated AxisInfo would be invalid.
+  // CHECK: contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>
+  %2 = llvm.mlir.undef : !llvm.struct<(i32, i32, i32, i32)>
+  // CHECK: contiguity = [1, 1], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
+  %3 = builtin.unrealized_conversion_cast %2 : !llvm.struct<(i32, i32, i32, i32)> to tensor<128x128xi32>
+  // CHECK: contiguity = [1, 1], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
+  %4 = tt.trans %3 {order = array<i32: 1, 0>} : tensor<128x128xi32> -> tensor<128x128xi32>
+  tt.return
+}
+
+// -----
+
 // CHECK-LABEL: @make_tensor_ptr
 tt.func public @make_tensor_ptr(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f8E5M2> {tt.divisibility = 32 : i32}, %arg2: i64 {tt.divisibility = 16 : i32}) {
   %c0_i32 = arith.constant 0 : i32
