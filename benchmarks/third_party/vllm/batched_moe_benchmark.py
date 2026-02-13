@@ -481,7 +481,8 @@ def is_enough_memory(x_val, safety_factor=0.80):
     E, M, K, N, fp8, block_quant = x_val
 
     # A and B bf16 originals (always allocated, freed later in fp8 case)
-    a_mem = E * M * K * 2
+    # A memory is doubled because make_quantized_test_activations uses out-of-place / 15
+    a_mem = E * M * K * 2 * 2
     b_mem = E * N * K * 2
 
     if fp8:
