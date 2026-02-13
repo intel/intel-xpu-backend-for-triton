@@ -22,7 +22,7 @@ template <typename GemmConfig>
 static auto gemm_run(const at::Tensor &A, const at::Tensor &B, at::Tensor &C,
                      const int M, const int N, const int K, const int L)
     -> int {
-  RECORD_FUNCTION("cutlass gemm", {});
+  RECORD_FUNCTION("sycl-tla gemm", {});
 
   using ElementComputeEpilogue = float;
 

@@ -122,7 +122,7 @@ setup(
     package_data={
         "triton_kernels_benchmark": [
             "xetla_kernel.cpython-*.so",
-            "cutlass_kernel.cpython-*.so",
+            "sycl_tla_kernel.cpython-*.so",
             "onednn_kernel.cpython-*.so",
         ]
     },
@@ -131,7 +131,7 @@ setup(
     },
     ext_modules=[
         CMakeExtension("triton_kernels_benchmark.xetla_kernel"),
-        CMakeExtension("triton_kernels_benchmark.cutlass_kernel"),
+        CMakeExtension("triton_kernels_benchmark.sycl_tla_kernel"),
         CMakeExtension("triton_kernels_benchmark.onednn_kernel"),
     ],
     entry_points={
