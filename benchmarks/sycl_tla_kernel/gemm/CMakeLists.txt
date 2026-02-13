@@ -1,0 +1,1 @@
+target_include_directories(sycl_tla_kernel PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

@@ -9,7 +9,7 @@ import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
 from triton_kernels_benchmark import xetla_kernel
-from triton_kernels_benchmark import cutlass_kernel
+from triton_kernels_benchmark import sycl_tla_kernel
 
 
 # pylint: disable=unused-argument
@@ -505,7 +505,7 @@ def get_benchmark(
         'triton': 'Triton',
         # FIXME: #5896
         #'xetla': 'XeTLA',
-        'cutlass': 'CUTLASS',
+        'sycl-tla': 'SYCL-TLA',
     }
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
@@ -540,8 +540,8 @@ def get_benchmark(
     def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
         modes = ['fwd', 'bwd']
         # This warmup logic improves performance on BMG significantly
-        # For FWD mode in triton & cutlass: Some configs increase performance with warmup as a step function, but some slowly decrease with saturation
-        # Performance is best at 250-400ms range, but we want stable, not just best at ~600ms (triton/cutlass providers)
+        # For FWD mode in triton & sycl-tla: Some configs increase performance with warmup as a step function, but some slowly decrease with saturation
+        # Performance is best at 250-400ms range, but we want stable, not just best at ~600ms (triton/sycl-tla providers)
         n_warmup_fwd = 600
         # For BWD mode: Performance doesn't really improve much with warmup for triton, but xetla benefit from more warmup
         n_warmup_bwd = 400  # Maximum across xetla=400, triton=10, onednn=10
@@ -623,19 +623,20 @@ def get_benchmark(
                 mean = float('nan')
                 cv = float('nan')
 
-        elif provider == 'cutlass':
+        elif provider == 'sycl-tla':
             if MODE == 'fwd':
                 name = 'attention'
-                func = getattr(cutlass_kernel, name)
+                func = getattr(sycl_tla_kernel, name)
                 out = torch.zeros((Z, H, N_CTX, D_HEAD), device='xpu', dtype=torch.float32, requires_grad=True)
 
-                def cutlass_fwd_fn():
+                def sycl_tla_fwd_fn():
                     func(q, k, v, out, Z, H, H, N_CTX, N_CTX, D_HEAD, D_HEAD, CAUSAL, sm_scale)
                     return out
 
-                benchmark_suite.assert_close(cutlass_fwd_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='cutlass to torch')
+                benchmark_suite.assert_close(sycl_tla_fwd_fn, torch_fn, atol=atol, rtol=1e-3,
+                                             err_msg='sycl-tla to torch')
 
-                _, min_ms, max_ms, mean, cv = do_bench(cutlass_fwd_fn)
+                _, min_ms, max_ms, mean, cv = do_bench(sycl_tla_fwd_fn)
 
             else:
                 min_ms = float('nan')
