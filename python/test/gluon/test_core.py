@@ -127,7 +127,7 @@ def tma_im2col_kernel(in_desc, out_desc):
     tma.store_wait(pendings=0)
 
 
-@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires Hopper", run=False)
 @pytest.mark.parametrize("pixels_per_column", [32, 256, 512, 1024])
 @pytest.mark.parametrize("channels_per_pixel", [32])
 @pytest.mark.parametrize("swizzle_byte_width", [32])
@@ -3468,7 +3468,7 @@ def test_tmem_reduction(red_op, use_abs, propagate_nan, M, N, num_warps):
 
 
 @pytest.mark.parametrize("num_ctas", [1, 2])
-@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
 def test_clc_basic(num_ctas):
 
     @gluon.jit
