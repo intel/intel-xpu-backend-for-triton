@@ -7,7 +7,7 @@ import pytest
 from triton._internal_testing import is_cuda
 
 
-@pytest.mark.skipif(not is_cuda(), reason="only currently tested on CUDA")
+@pytest.mark.xfail(not is_cuda(), reason="only currently tested on CUDA", run=False)
 def test_inspection(monkeypatch, fresh_knobs, tmp_path: pathlib.Path):
     stage_name = 'make_ttgir'
     curr_repro_path = tmp_path / ("repro_prefix." + stage_name + ".repro.mlir")
