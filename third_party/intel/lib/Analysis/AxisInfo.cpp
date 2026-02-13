@@ -1,12 +1,13 @@
+#include "intel/include/Analysis/AxisInfo.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
-#include "intel/include/Analysis/AxisInfo.h"
-#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
-#include "triton/Dialect/Triton/IR/Dialect.h"
+#include <numeric>
 
 #define DEBUG_TYPE "intel-axis-info"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -17,29 +18,17 @@ namespace mlir::triton::intel {
 namespace ttgi = mlir::triton::gpu::intel;
 namespace {
 
-int64_t gcdImpl(int64_t a, int64_t b, int64_t *x, int64_t *y) {
-  // Base Case
-  if (a == 0) {
-    *x = 0;
-    *y = 1;
-    return b;
-  }
-  int64_t x1, y1; // To store results of recursive call
-  int64_t gcd = gcdImpl(b % a, a, &x1, &y1);
-  // Update x and y using results of
-  // recursive call
-  *x = y1 - (b / a) * x1;
-  *y = x1;
-  return gcd;
-}
+constexpr int64_t kMaxDivisor = highestPowOf2Divisor<int64_t>(0);
 
-int64_t gcd(int64_t a, int64_t b) {
+template <typename... Args> int64_t gcd(int64_t a, int64_t b, Args... args) {
   if (a == 0)
     return b;
   if (b == 0)
     return a;
-  int64_t x, y;
-  return gcdImpl(a, b, &x, &y);
+  if constexpr (sizeof...(args) == 0)
+    return std::gcd(a, b);
+  else
+    return gcd(std::gcd(a, b), args...);
 }
 
 constexpr int log2Int(int64_t num) {
@@ -48,9 +37,8 @@ constexpr int log2Int(int64_t num) {
 
 // If lhs * rhs overflows, return max value possible value for the type
 int64_t multiplyDivisor(int64_t lhs, int64_t rhs) {
-  int64_t maxDivisor = highestPowOf2Divisor<int64_t>(0);
-  if (lhs > maxDivisor / rhs)
-    return maxDivisor;
+  if (lhs > kMaxDivisor / rhs)
+    return kMaxDivisor;
   return lhs * rhs;
 }
 
@@ -106,6 +94,8 @@ public:
     const auto &lhsInfo = operands[0]->getValue();
     const auto &rhsInfo = operands[1]->getValue();
     auto rank = lhsInfo.getRank();
+    assert(isa<RankedTensorType>(op.getType()) ||
+           rank == 1 && "Expected ranked tensor or scalar");
     assert(operands.size() == 2 && "Expected two operands");
     AxisInfo::DimVectorT stride;
     AxisInfo::DimVectorT contiguity;
@@ -152,7 +142,7 @@ protected:
 
   virtual int64_t getConstancy(OpTy op, const AxisInfo &lhs,
                                const AxisInfo &rhs, int dim) {
-    return 1;
+    return gcd(lhs.getConstancy(dim), rhs.getConstancy(dim));
   }
 
   virtual std::optional<int64_t> getConstantValue(OpTy op, const AxisInfo &lhs,
@@ -492,12 +482,11 @@ private:
   int64_t getConstancy(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                        int dim) override {
     auto resTy = ttgi::getRankedTensorType(op.getType());
+    auto constancy = BinaryOpVisitorImpl<OpTy>::getConstancy(op, lhs, rhs, dim);
     if (!resTy)
-      return BinaryOpVisitorImpl<OpTy>::getConstancy(op, lhs, rhs, dim);
+      return constancy;
     auto shape = resTy.getShape();
-    // Case 1: both lhs and rhs are constants.
-    auto constancy = gcd(lhs.getConstancy(dim), rhs.getConstancy(dim));
-    // Case 2: lhs contiguous, rhs constant.
+    // Case: lhs contiguous, rhs constant.
     // lhs: d_lhs * k, d_lhs * k + 1, ..., d_lhs * k + n
     // rhs: d_rhs * p, d_rhs * p, ..., d_rhs * p
     // lhs / rhs = d_lhs * k / (d_rhs * p), (d_lhs * k + 1) / (d_rhs * p),
@@ -508,9 +497,9 @@ private:
     // we need to use another gcd to get the actual constancy.
     if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
         AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
-      constancy = std::max(constancy, gcd(lhs.getContiguity(dim),
-                                          gcd(lhs.getDivisibility(dim),
-                                              rhs.getDivisibility(dim))));
+      constancy = std::max(constancy,
+                           gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
+                               rhs.getDivisibility(dim)));
     }
     return constancy;
   }
@@ -525,6 +514,13 @@ private:
     if (rhs.getConstantValue().has_value() &&
         rhs.getConstantValue().value() == 1)
       return lhs.getDivisibility(dim);
+    // Case 3: lhs has contiguity of 1 in this dimension and rhs is a power of 2
+    if (rhs.getConstantValue().has_value() &&
+        llvm::isPowerOf2_64(std::abs(rhs.getConstantValue().value())) &&
+        lhs.getContiguity(dim) == 1) {
+      int64_t absRhs = std::abs(rhs.getConstantValue().value());
+      return std::max<int64_t>(1, lhs.getDivisibility(dim) / absRhs);
+    }
     // otherwise: return 1
     return 1;
   }
@@ -1435,7 +1431,7 @@ void ModuleAxisInfoAnalysis::update(CallOpInterface callOp,
     auto index = entry.index();
     auto value = entry.value();
     auto setAttrFn = [&](StringRef attrName, int64_t prevValue) {
-      auto curValue = highestPowOf2Divisor<int64_t>(0);
+      auto curValue = kMaxDivisor;
       if (callee.getArgAttrOfType<IntegerAttr>(index, attrName)) {
         curValue =
             callee.getArgAttrOfType<IntegerAttr>(index, attrName).getInt();
@@ -1445,7 +1441,10 @@ void ModuleAxisInfoAnalysis::update(CallOpInterface callOp,
       callee.setArgAttr(index, attrName, attr);
     };
     auto axisInfo = axisInfoMap->lookup(value);
-    assert(axisInfo.getRank() == 1 && "only scalar arguments are supported");
+    // Only scalar arguments are supported. Do not forward multi-dimensional
+    // AxisInfo to the callee.
+    if (axisInfo.getRank() != 1)
+      continue;
     setAttrFn("tt.contiguity", axisInfo.getContiguity(0));
     setAttrFn("tt.divisibility", axisInfo.getDivisibility(0));
     setAttrFn("tt.constancy", axisInfo.getConstancy(0));
