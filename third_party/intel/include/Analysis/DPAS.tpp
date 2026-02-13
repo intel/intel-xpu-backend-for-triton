@@ -77,9 +77,12 @@ DPASAnalysisResult DPASAnalysis<DPASEngineType, Enable>::canUseDPAS(
     return DPASAnalysisResult::Maybe;
 
   unsigned threadsPerWarp = cast<IntegerAttr>(threadsPerWarpAttr).getInt();
-  unsigned minSGSize = mod->getAttrOfType<IntegerAttr>(
-                              TritonIntelGPUDialect::getMinSGSizeAttrName())
-                           .getInt();
+  auto minSGSizeAttr = mod->getAttrOfType<IntegerAttr>(
+      TritonIntelGPUDialect::getMinSGSizeAttrName());
+  if (!minSGSizeAttr)
+    return DPASAnalysisResult::Maybe;
+
+  unsigned minSGSize = minSGSizeAttr.getInt();
   bool enableWarp32 =
       tools::getBoolEnv("TRITON_INTEL_ENABLE_DPAS_FOR_WARP_SIZE_32");
   assert(minSGSize == 8 || minSGSize == 16 ||
