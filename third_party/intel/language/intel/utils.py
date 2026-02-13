@@ -3,14 +3,20 @@ from triton.language import core
 
 @core.extern
 def globaltimer(_semantic=None):
-    return core.inline_asm_elementwise("mov.u64 $0, %globaltimer;", "=l", [], dtype=core.int64, is_pure=False, pack=1,
-                                       _semantic=_semantic)
+    return core.inline_asm_elementwise(
+        """{\n .decl globaltimer v_type=G type=ud num_elts=2 align=qword alias=<$0, 0> \n"""
+        """  mov (M1_NM, 2) globaltimer(0, 0)<1> %tsc(0,0)<1;1,0> \n}""", "=rw.u", [], dtype=core.uint64, is_pure=False,
+        pack=1, _semantic=_semantic)
 
 
 @core.extern
 def smid(_semantic=None):
-    return core.inline_asm_elementwise("mov.u32 $0, %smid;", "=r", [], dtype=core.int32, is_pure=True, pack=1,
-                                       _semantic=_semantic)
+    sr = core.inline_asm_elementwise("mov (M1_NM, 1) $0(0, 0)<1> %sr0(0,0)<0;1,0>", "=rw.u", [], dtype=core.uint32,
+                                     is_pure=True, pack=1, _semantic=_semantic)
+    pos: core.constexpr = core.constexpr(9)
+    subslice_mask: core.constexpr = core.constexpr((1 << 11) - 1)
+    return sr.__and__(subslice_mask, _semantic=_semantic).__rshift__(pos, _semantic=_semantic)
+
 
 
 @core.builtin
