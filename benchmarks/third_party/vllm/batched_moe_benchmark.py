@@ -10,6 +10,7 @@ the framework from gemm_benchmark.py to compare performance of different
 batched MoE implementations using vLLM kernels.
 
 """
+import gc
 import os
 from typing import Optional, List
 
@@ -478,10 +479,12 @@ DEVICE_TOTAL_MEMORY_BYTES = benchmark_suite.get_total_gpu_memory_bytes()
 
 
 def is_enough_memory(x_val, safety_factor=0.80):
+    print("Calculating memory for config:", x_val, flush=True)
     E, M, K, N, fp8, block_quant = x_val
 
     # A and B bf16 originals (always allocated, freed later in fp8 case)
-    a_mem = E * M * K * 2
+    # A memory is doubled because make_quantized_test_activations uses out-of-place / 15
+    a_mem = E * M * K * 2 * 2
     b_mem = E * N * K * 2
 
     if fp8:
@@ -501,6 +504,7 @@ def is_enough_memory(x_val, safety_factor=0.80):
 
     # Peak is before bf16 originals are freed
     required_memory = a_mem + b_mem + out_mem
+    print(f"Estimated memory for {x_val}: {required_memory * 1e-9:.2f} GB", flush=True)
     return required_memory < DEVICE_TOTAL_MEMORY_BYTES * safety_factor
 
 
@@ -552,7 +556,9 @@ def get_batched_mm_benchmark(
             args={},
         ))
     def benchmark(num_experts, max_tokens_per_expert, K, N, fp8, block_quant, provider):
-        print("Config:", num_experts, max_tokens_per_expert, K, N, fp8, block_quant, provider)
+        print("Config:", num_experts, max_tokens_per_expert, K, N, fp8, block_quant, provider, flush=True)
+        gc.collect()
+        torch.xpu.empty_cache()
         current_platform.seed_everything(70)
         n_warmup = 600
 
