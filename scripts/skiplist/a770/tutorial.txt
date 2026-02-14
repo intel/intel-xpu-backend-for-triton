@@ -1,0 +1,4 @@
+test_tutorials.py::test_tutorial[06-fused-attention]
+test_tutorials.py::test_tutorial[08-grouped-gemm]
+test_tutorials.py::test_tutorial[09-persistent-matmul]
+test_tutorials.py::test_tutorial[10-experimental-block-pointer]

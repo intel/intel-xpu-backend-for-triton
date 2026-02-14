@@ -1,15 +1,12 @@
 """Script to run a Triton tutorial and collect generated csv files."""
 
 import argparse
-import dataclasses
 import datetime
 import importlib.util
-import json
 import pathlib
 import shutil
 import tempfile
 import sys
-from typing import Set, Optional
 
 import triton.testing
 
@@ -39,17 +36,7 @@ def create_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument('tutorial', help='Tutorial to run')
     parser.add_argument('--reports', required=False, type=str, help='Directory to store tutorial CSV reports')
-    parser.add_argument('--skip-list', required=False, type=str, help='Skip list for tutorials')
     return parser
-
-
-def get_skip_list(path: pathlib.Path) -> Set[str]:
-    """Loads skip list from the specified file."""
-    skip_list = set()
-    if path.exists() and path.is_file():
-        for item in path.read_text().splitlines():
-            skip_list.add(item.strip())
-    return skip_list
 
 
 def run_tutorial(path: pathlib.Path) -> float:
@@ -66,64 +53,25 @@ def run_tutorial(path: pathlib.Path) -> float:
     return elapsed_time.total_seconds()
 
 
-@dataclasses.dataclass
-class TutorialInfo:
-    """A record about tutorial execution."""
-    name: str
-    path: Optional[pathlib.Path] = None
-
-    def _report(self, **kwargs):
-        """Writes tutorial info."""
-        if self.path:
-            with self.path.open(mode='w') as f:
-                json.dump({'name': self.name} | kwargs, f)
-
-    def report_pass(self, time: float):
-        """Reports successful tutorial."""
-        self._report(result='PASS', time=time)
-
-    def report_skip(self):
-        """Reports skipped tutorial."""
-        self._report(result='SKIP')
-
-    def report_fail(self, message: str):
-        """Reports failed tutorial."""
-        self._report(result='FAIL', message=message)
-
-
 def main():
     """Main."""
-    skip_list = set()
     args = create_argument_parser().parse_args()
     tutorial_path = pathlib.Path(args.tutorial)
 
     reports_path = pathlib.Path(args.reports) if args.reports else None
-    if args.skip_list:
-        skip_list = get_skip_list(pathlib.Path(args.skip_list))
-
     name = tutorial_path.stem
+
     if reports_path:
         report_path = reports_path / name
         report_path.mkdir(parents=True, exist_ok=True)
-        info = TutorialInfo(name=name, path=reports_path / f'tutorial-{name}.json')
-    else:
-        info = TutorialInfo(name=name)
 
-    def perf_report(benchmarks):
-        """Marks a function for benchmarking."""
-        return lambda fn: CustomMark(fn, benchmarks, report_path)
+        def perf_report(benchmarks):
+            """Marks a function for benchmarking."""
+            return lambda fn: CustomMark(fn, benchmarks, report_path)
 
-    if name in skip_list:
-        info.report_skip()
-    else:
-        if reports_path:
-            triton.testing.perf_report = perf_report
-        try:
-            time = run_tutorial(tutorial_path)
-            info.report_pass(time)
-        except Exception as e:
-            info.report_fail(str(e))
-            raise
+        triton.testing.perf_report = perf_report
+
+    run_tutorial(tutorial_path)
 
 
 if __name__ == '__main__':

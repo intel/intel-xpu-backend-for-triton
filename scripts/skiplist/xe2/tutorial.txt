@@ -1,0 +1,3 @@
+# [B60] Tutorials randomly UR_RESULT_ERROR_DEVICE_LOST https://github.com/intel/intel-xpu-backend-for-triton/issues/5999
+test_tutorials.py::test_tutorial[01-vector-add]
+test_tutorials.py::test_tutorial[08-grouped-gemm]
