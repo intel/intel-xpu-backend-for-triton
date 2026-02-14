@@ -797,6 +797,30 @@ run_liger_tests() {
   run_pytest_command -vvv Liger-Kernel/test/
 }
 
+run_vllm_upstream_install() {
+    git clone https://github.com/vllm-project/vllm.git
+    # vllm will install vllm-xpu-kernels
+    # git clone https://github.com/vllm-project/vllm-xpu-kernels
+
+    # cd vllm-xpu-kernels
+    # sed -i '/pytorch\|torch\|triton/d' requirements.txt
+    # sed -i '/pytorch\|torch\|triton/d' pyproject.toml
+    # pip install -r requirements.txt
+    # VLLM_TARGET_DEVICE=xpu pip install --no-build-isolation -e vllm-xpu-kernelsk
+
+
+
+    # VLLM project tests use pytest-shard which conflicts with pytest-skip
+    pip uninstall pytest-skip -y
+
+    # These files contain specific versions of pytorch and triton, so let's remove them
+    sed -i '/pytorch\|torch\|triton/d' vllm/requirements/xpu.txt
+    sed -i '/pytorch\|torch\|triton/d' vllm/requirements/test.in
+    pip install -r vllm/requirements/xpu.txt
+    pip install -r vllm/requirements/test.in
+    VLLM_TARGET_DEVICE=xpu pip install --no-deps --no-build-isolation -e vllm
+}
+
 run_vllm_install() {
   echo "************************************************"
   echo "******    Installing VLLM                 ******"
@@ -855,8 +879,8 @@ run_vllm_install() {
     git clone https://github.com/vllm-project/vllm-xpu-kernels
     cd vllm-xpu-kernels
     git checkout "$(<../benchmarks/third_party/vllm/vllm-kernels-pin.txt)"
-    sed -i '/pytorch\|torch/d' requirements.txt
-    sed -i '/pytorch\|torch/d' pyproject.toml
+    sed -i '/pytorch\|torch\|triton/d' requirements.txt
+    sed -i '/pytorch\|torch\|triton/d' pyproject.toml
     pip install -r requirements.txt
     cd ..
   fi

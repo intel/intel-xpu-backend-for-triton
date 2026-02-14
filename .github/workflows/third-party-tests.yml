@@ -11,6 +11,10 @@ on:
         description: Use Python built with pyenv
         type: boolean
         default: false
+      tests:
+        description: JSON list of tests to run, e.g. ["liger", "vllm"]. Leave empty to run all.
+        type: string
+        default: ""
   schedule:
     # About midnight PST Sunday (UTC-8)
     - cron: "5 10 * * SUN"
@@ -30,6 +34,7 @@ env:
 jobs:
   small-tests:
     name: Third party tests [vllm, sglang]
+    if: ${{ inputs.tests == '' || contains(inputs.tests, 'vllm') || contains(inputs.tests, 'sglang') }}
     runs-on:
       - linux
       - ${{ inputs.runner_label || 'max1550' }}
@@ -74,12 +79,12 @@ jobs:
           echo "REPORTS=$PWD/reports" >> $GITHUB_ENV
 
       - name: Run SGLANG tests
-        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.tests == '' || contains(inputs.tests, 'sglang')) }}
         run: |
           ./scripts/test-triton.sh --sglang --skip-pip-install --skip-pytorch-install
 
       - name: Run VLLM tests
-        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.tests == '' || contains(inputs.tests, 'vllm')) }}
         run: |
           ./scripts/test-triton.sh --vllm --skip-pip-install --skip-pytorch-install
 
@@ -92,6 +97,7 @@ jobs:
   # We run all tests for Liger, so it's slow and we test it separately
   liger:
     name: Liger testing
+    if: ${{ inputs.tests == '' || contains(inputs.tests, 'liger') }}
     runs-on:
       - linux
       - ${{ inputs.runner_label || 'max1550' }}
