@@ -12,7 +12,8 @@ bool filterAsyncLocalLoadsDependencies(Operation *op1, Operation *op2,
                                        Allocation *allocation) {
   auto isAsyncLoad = [](Operation *op) {
     return llvm::isa<triton::gpu::AsyncCopyGlobalToLocalOp,
-                     triton::amdgpu::BufferLoadToLocalOp>(op);
+                     triton::amdgpu::BufferLoadToLocalOp,
+                     triton::amdgpu::AsyncTDMCopyLocalToGlobalOp>(op);
   };
   auto isLocalLoadWithAsyncWaitToken = [](Operation *op) {
     auto localLoad = llvm::dyn_cast<triton::gpu::LocalLoadOp>(op);
@@ -37,8 +38,8 @@ bool filterAsyncLocalLoadsDependencies(Operation *op1, Operation *op2,
   Value op2Memdesc = getMemdescValue(op2);
   if (!op1Memdesc || !op2Memdesc)
     return false;
-  auto op1BufferIds = allocation->getBufferIds(op1Memdesc);
-  auto op2BufferIds = allocation->getBufferIds(op2Memdesc);
+  auto op1BufferIds = allocation->getAllBufferIdsWithAliases(op1Memdesc);
+  auto op2BufferIds = allocation->getAllBufferIdsWithAliases(op2Memdesc);
 
   // Check if operations access the same buffer
   bool sameBuffer = llvm::any_of(

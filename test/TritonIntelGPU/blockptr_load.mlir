@@ -145,7 +145,7 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK:           %[[OFFSET_X:.*]] = llvm.udiv %[[OFFSET_COL]], %[[NUM_VALUES_PER_PACK]] : i32
     // CHECK:           triton_gen.2Dblockload %[[BASE]], %[[WIDTH]], %[[HEIGHT_i32]], %[[ROW_STRIDE_IN_BYTES]], %[[OFFSET_X]], %[[OFFSET_Y]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 2, transpose = false, vnni_transform = false, cache_control = Default}
     %ptrA = tt.make_tensor_ptr %arg0, [%arg2, %arg4], [%arg5, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<32x32xf16, #dot0>>
-    %A = tt.load %ptrA {boundaryCheck = array<i32: 1>, padding = 1 : i32, ttig.block_io = "row_major"} : !tt.ptr<tensor<32x32xf16, #dot0>>
+    %A = tt.load %ptrA {boundaryCheck = array<i32: 0, 1>, padding = 1 : i32, ttig.block_io = "row_major"} : !tt.ptr<tensor<32x32xf16, #dot0>>
     %B = arith.constant dense<0.000000e+00> : tensor<32x32xf16, #dot1>
     %C = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #dpas>
     %D = tt.dot %A, %B, %C, inputPrecision = tf32 : tensor<32x32xf16, #dot0> * tensor<32x32xf16, #dot1> -> tensor<32x32xf32, #dpas>
@@ -198,7 +198,7 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK:           %[[OFFSET_X:.*]] = llvm.udiv %[[OFFSET_COL]], %[[NUM_VALUES_PACKED]] : i32
     // CHECK:           triton_gen.2Dblockload %[[BASE]], %[[WIDTH]], %[[HEIGHT_i32]], %[[ROW_STRIDE_IN_BYTES]], %[[OFFSET_X]], {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 2, transpose = false, vnni_transform = true, cache_control = Default}
     %ptrB = tt.make_tensor_ptr %arg1, [%arg4, %arg3], [%arg7, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<32x32xf16, #dot1>>
-    %B = tt.load %ptrB {boundaryCheck = array<i32: 0>, padding = 1 : i32, ttig.block_io = "row_major"} : !tt.ptr<tensor<32x32xf16, #dot1>>
+    %B = tt.load %ptrB {boundaryCheck = array<i32: 0, 1>, padding = 1 : i32, ttig.block_io = "row_major"} : !tt.ptr<tensor<32x32xf16, #dot1>>
     %A = arith.constant dense<0.000000e+00> : tensor<32x32xf16, #dot0>
     %C = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #dpas>
     %D = tt.dot %A, %B, %C, inputPrecision = tf32 : tensor<32x32xf16, #dot0> * tensor<32x32xf16, #dot1> -> tensor<32x32xf32, #dpas>

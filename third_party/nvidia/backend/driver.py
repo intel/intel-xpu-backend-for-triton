@@ -131,10 +131,23 @@ def expand_signature(signature, tensordesc_meta):
             meta = tensordesc_meta[tensordesc_idx] if tensordesc_meta else None
             tensordesc_idx += 1
 
-            match = re.match("tensordesc<([^[>]*)\\[([^]]*)\\]", sig)
+            # Parse tensordesc signature with optional input_rank for im2col mode
+            # Format: tensordesc<dtype[block_shape],...> or tensordesc_im2col<dtype[block_shape],input_rank=N,...>
+            is_im2col = sig.startswith("tensordesc_im2col")
+            match = re.match(r"tensordesc(?:_im2col)?<([^[>]*)\[([^\]]*)\]", sig)
             dtype = match.group(1)
-            shape = match.group(2)
-            ndim = shape.count(",") + 1
+            block_shape = match.group(2)
+            block_ndim = block_shape.count(",") + 1
+
+            # For im2col, look for input_rank=N in the type string
+            tensor_rank = None
+            if is_im2col:
+                rank_match = re.search(r",input_rank=(\d+)", sig)
+                assert rank_match, "Expected tensordesc_im2col to have input_rank"
+                tensor_rank = int(rank_match.group(1))
+
+            # For im2col with input_rank, use tensor's rank; otherwise use block_shape ndim
+            ndim = tensor_rank if tensor_rank else block_ndim
 
             if meta is None:
                 output.append("*" + dtype)
@@ -145,6 +158,7 @@ def expand_signature(signature, tensordesc_meta):
                 # we have to pass the shape and strides twice.
                 for _ in range(2 * ndim):
                     output.append("i64")
+                output.append("i1")
                 output.append("i1")
             else:
                 output.append("nvTmaDesc")
@@ -203,6 +217,7 @@ TMA_DTYPE_DEVICE_TO_HOST = dict((i, i) for i in range(16))
 TMA_DTYPE_DEVICE_TO_HOST[8] = 10
 TMA_DTYPE_DEVICE_TO_HOST[9] = 8
 TMA_DTYPE_DEVICE_TO_HOST[10] = 9
+TMA_TF32 = 11
 
 
 def make_tensordesc_arg(arg, metadata):
@@ -213,13 +228,22 @@ def make_tensordesc_arg(arg, metadata):
         # descriptors which is why we provide our own decomposition
         # above. Sadly this means we have to pass the shape and strides
         # twice.
-        return [arg.base, *arg.shape, *arg.strides, arg.padding == "nan", *arg.shape, *arg.strides]
+        return [
+            arg.base,
+            *arg.shape,
+            *arg.strides,
+            arg.padding == "nan",
+            arg.round_f32_to_tf32,
+            *arg.shape,
+            *arg.strides,
+        ]
 
     swizzle = metadata["swizzle"]
     elem_size = metadata["elem_size"]
     elem_type = metadata["elem_type"]
     block_size = metadata["block_size"]
     fp4_padded = metadata["fp4_padded"]
+    is_im2col = metadata.get("is_im2col", False)
 
     shape = arg.shape
     strides = arg.strides
@@ -232,16 +256,38 @@ def make_tensordesc_arg(arg, metadata):
     else:
         expanded_shape = shape
 
-    cu_tensor_map = triton.runtime.driver.active.utils.fill_tma_descriptor_tiled(
-        arg.base.data_ptr(),
-        swizzle,
-        elem_size,
-        TMA_DTYPE_DEVICE_TO_HOST[elem_type],
-        block_size,
-        expanded_shape,
-        strides,
-        padding,
-    )
+    if arg.round_f32_to_tf32:
+        elem_type = TMA_TF32
+
+    if is_im2col:
+        # Im2col mode - use im2col descriptor fill function
+        # block_size from metadata is [pixelsPerColumn, channelsPerPixel] (possibly clamped)
+        element_strides = arg.element_strides if arg.element_strides is not None else [1] * len(shape)
+        cu_tensor_map = triton.runtime.driver.active.utils.fill_tma_descriptor_im2col(
+            arg.base.data_ptr(),
+            swizzle,
+            elem_size,
+            TMA_DTYPE_DEVICE_TO_HOST[elem_type],
+            block_size,
+            expanded_shape,
+            strides,
+            padding,
+            arg.pixel_box_lower_corner,
+            arg.pixel_box_upper_corner,
+            element_strides,
+        )
+    else:
+        # Tiled mode - use existing tiled descriptor fill function
+        cu_tensor_map = triton.runtime.driver.active.utils.fill_tma_descriptor_tiled(
+            arg.base.data_ptr(),
+            swizzle,
+            elem_size,
+            TMA_DTYPE_DEVICE_TO_HOST[elem_type],
+            block_size,
+            expanded_shape,
+            strides,
+            padding,
+        )
 
     return [cu_tensor_map, *shape, *strides]
 

@@ -22,7 +22,7 @@ try:  # XPUBackend allows metaclasses injection
 except ImportError:
     XPUBackendMeta = type(BaseBackend)
 
-_VERSION_PATTERN = re.compile(r'(\d+)\.(\d+)\.(\d+)\+(\d+)')
+_VERSION_PATTERN = re.compile(r'(\d+)\.(\d+)\.(\d+)(?:\+(\d+))?')
 
 
 @dataclass
@@ -80,8 +80,9 @@ def extract_spill_size_from_zebin(file):
         elf = ELFFile(f)
         zeinfo = elf.get_section_by_name(".ze_info")
         if zeinfo is None:
-            raise RuntimeError('Internal Triton ZEBIN codegen error:'
-                               'Section .ze_info not found in zebin')
+            from triton.runtime.errors import IntelGPUError
+            raise IntelGPUError('Internal Triton ZEBIN codegen error:'
+                                'Section .ze_info not found in zebin')
         text = zeinfo.data().decode('utf-8')
         match = SPILL_SIZE_RE.search(text)
         if match is not None:
@@ -145,7 +146,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         m = _VERSION_PATTERN.match(ver)
         if not m:
             return True
-        return tuple(map(int, m.groups())) < (1, 6, 35096, 9)
+        return tuple(int(x) if x is not None else 0 for x in m.groups()) < (1, 6, 35096, 9)
 
     def parse_target(self, tgt_prop) -> dict:
         dev_prop = {}
@@ -260,8 +261,6 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         pm.enable_debug()
         passes.common.add_inliner(pm)
         intel.passes.ttir.add_convert_block_pointer_to_tdesc(pm)
-        intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
-        passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
         passes.common.add_cse(pm)
         passes.ttir.add_triton_licm(pm)
         intel.passes.ttir.add_remove_boundary_checks(pm)
@@ -270,10 +269,14 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.ttir.add_fuse_reshape(pm)
         passes.common.add_canonicalizer(pm)
         passes.ttir.add_combine(pm)
+        intel.passes.ttir.add_simplify_signed_arithmetic(pm)
         passes.ttir.add_reorder_broadcast(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
         passes.ttir.add_loop_unroll(pm)
+        # FIXME: move add_rewrite_tensor_descriptor_to_pointer back to be consistent with other backends.
+        intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
+        passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
         pm.run(mod, 'make_ttir')
         return mod
 
@@ -438,7 +441,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     @track
     def make_spv(cls, src, metadata, options):
         driver_version = metadata["target"].arch.get("driver_version")
-        os.environ["INTEL_XPU_BACKEND_DRIVER_VERSION"] = driver_version
+        os.environ["INTEL_XPU_BACKEND_IS_LTS"] = "1" if cls.is_lts(driver_version) else "0"
         spirv, name = intel.translate_to_spirv(src)
         metadata["name"] = name
         metadata.setdefault("build_flags", "")

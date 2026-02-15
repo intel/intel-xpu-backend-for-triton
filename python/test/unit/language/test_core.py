@@ -83,9 +83,9 @@ elif is_hip():
     # for CDNA multiple variants of mma instructions are supported:
     # mfma 16x16/mfma 32x32
     # 0 is a special value for automatic heuristic
-    if is_hip_cdna() or is_hip_gfx1250():
+    if is_hip_cdna():
         mma_nonk_sizes = [0, 16, 32]
-    elif is_hip_rdna3() or is_hip_rdna4():
+    elif is_hip_rdna3() or is_hip_rdna4() or is_hip_gfx1250():
         mma_nonk_sizes = [16]
 else:
     THREADS_PER_WARP = 32
@@ -3346,6 +3346,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                 pytest.skip(f"{in_dtype} only supported on CDNA4, RDNA4 and above")
             if in_dtype in ("float8e5b16", "float8e4b8") and not is_hip_cdna3():
                 pytest.skip(f"{in_dtype} only supported on CDNA3")
+            if input_precision in ("bf16x3", "bf16x6") and is_hip_gfx1250():
+                pytest.skip(f"{input_precision} not fully supported on gfx1250")
             if not ((input_precision in ("bf16x3", "bf16x6")) or (input_precision == "ieee") or
                     (input_precision == "tf32" and is_hip_cdna3())):
                 pytest.skip(f"{input_precision} not supported on HIP")
@@ -6350,8 +6352,6 @@ def sanitize_add(a, b):
 
 
 def test_side_effectful_reduction(device):
-    if device != "cuda":
-        pytest.xfail()
 
     @triton.jit(debug=True)
     def sanitize_sum_kernel(Z, X, BLOCK: tl.constexpr):
@@ -6361,18 +6361,16 @@ def test_side_effectful_reduction(device):
 
     BLOCK = 512
     torch.manual_seed(42)
-    X = torch.randint(0, 10, [BLOCK], device="cuda", dtype=torch.int32)
+    X = torch.randint(0, 10, [BLOCK], device=device, dtype=torch.int32)
     X[:300] = 32
     X[300:] = 0
-    Z = torch.zeros((), device="cuda", dtype=torch.int32)
+    Z = torch.zeros((), device=device, dtype=torch.int32)
     sanitize_sum_kernel[(1, )](Z, X, BLOCK=BLOCK)
     torch.testing.assert_close(Z, X.sum().to(torch.int32))
 
 
 @pytest.mark.parametrize("reduce_dim", [0, 1])
 def test_side_effectful_reduction_2d(device, reduce_dim):
-    if device != "cuda":
-        pytest.xfail()
 
     @triton.jit(debug=True)
     def sanitize_sum_2d_kernel(Z, X, BLOCK_0: tl.constexpr, BLOCK_1: tl.constexpr, reduce_dim: tl.constexpr,
@@ -6386,8 +6384,8 @@ def test_side_effectful_reduction_2d(device, reduce_dim):
     BLOCK_1 = 32
     NON_REDUCE_DIM = BLOCK_1 if reduce_dim == 0 else BLOCK_0
     torch.manual_seed(42)
-    X = torch.randint(0, 10, [BLOCK_0, BLOCK_1], device="cuda", dtype=torch.int32)
-    Z = torch.zeros([NON_REDUCE_DIM], device="cuda", dtype=torch.int32)
+    X = torch.randint(0, 10, [BLOCK_0, BLOCK_1], device=device, dtype=torch.int32)
+    Z = torch.zeros([NON_REDUCE_DIM], device=device, dtype=torch.int32)
     sanitize_sum_2d_kernel[(1, )](Z, X, BLOCK_0=BLOCK_0, BLOCK_1=BLOCK_1, reduce_dim=reduce_dim,
                                   NON_REDUCE_DIM=NON_REDUCE_DIM)
     torch.testing.assert_close(Z, X.sum(reduce_dim).to(torch.int32))

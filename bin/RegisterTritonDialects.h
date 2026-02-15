@@ -106,11 +106,13 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::intel::registerTritonIntelRemoveMasks();
   mlir::triton::intel::registerTritonIntelStrideVersioning();
   mlir::triton::intel::registerTritonIntelBlockPointerToTensorDesc();
+  mlir::triton::intel::registerTritonIntelSimplifySignedArithmetic();
   mlir::triton::intel::registerTritonIntelTensorDescToBlockPointer();
   mlir::triton::registerRelayoutTritonGPUPass();
   mlir::triton::gpu::registerAllocateSharedMemoryPass();
   mlir::triton::gpu::registerTritonGPUAllocateWarpGroups();
   mlir::triton::gpu::registerTritonGPUGlobalScratchAllocationPass();
+  mlir::triton::gpu::registerCanonicalizeLLVMIR();
   mlir::triton::registerConvertWarpSpecializeToLLVM();
   mlir::triton::registerConvertTritonGPUToLLVMPass();
   mlir::triton::registerConvertNVGPUToLLVMPass();
@@ -146,7 +148,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::registerTritonAMDGPUHoistLayoutConversions();
   mlir::registerTritonAMDGPUSinkLayoutConversions();
   mlir::registerTritonAMDGPUPrepareIfCombining();
-  mlir::registerTritonAMDGPUReorderInstructions();
+  mlir::registerTritonAMDGPUMoveUpPrologueLoads();
   mlir::registerTritonAMDGPUBlockPingpong();
   mlir::registerTritonAMDGPUPipeline();
   mlir::registerTritonAMDGPUScheduleLoops();

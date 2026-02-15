@@ -112,6 +112,8 @@ def kernel_unified_attention_2d_td(
     FP8_MIN: tl.constexpr = float8_info.min,
     FP8_MAX: tl.constexpr = float8_info.max,
 ):
+    tl.static_assert(BLOCK_SIZE % TILE_SIZE == 0, "BLOCK_SIZE must be multiple of TILE_SIZE")
+    tl.static_assert(BLOCK_SIZE >= TILE_SIZE, "BLOCK_SIZE must be >= TILE_SIZE")
     q_block_global_idx = tl.program_id(0)
     kv_head_idx = tl.program_id(1)
 
@@ -132,7 +134,7 @@ def kernel_unified_attention_2d_td(
 
     offs_m = tl.arange(0, BLOCK_M)
     # offs_d = tl.arange(0, HEAD_SIZE_PADDED)
-    offs_t = tl.arange(0, BLOCK_SIZE)
+    offs_t = tl.arange(0, TILE_SIZE)
     query_pos = q_block_local_idx * BLOCK_Q + offs_m // num_queries_per_kv
 
     # query_offset_0 = cur_batch_in_all_start_index + query_pos
@@ -207,7 +209,7 @@ def kernel_unified_attention_2d_td(
     # calculate the number of tiles that need to be processed to
     # cover the longest sequence prefix (due to causal masking, tiles beyond
     # this prefix can be skipped)
-    num_tiles = cdiv_fn(max_seq_prefix_len, BLOCK_SIZE)
+    num_tiles = cdiv_fn(max_seq_prefix_len, TILE_SIZE)
 
     # ---- Sliding-window tile pruning --------------------
     # Default: keep previous global behavior
@@ -229,27 +231,29 @@ def kernel_unified_attention_2d_td(
         first_allowed_key = context_len + qpos_lo - SLIDING_WINDOW + 1
         last_allowed_key = context_len + qpos_hi
         # Convert to tile indices and clamp
-        tile_start = tl.maximum(0, first_allowed_key // BLOCK_SIZE)
-        tile_end = tl.minimum((last_allowed_key // BLOCK_SIZE) + 1, num_tiles)
+        tile_start = tl.maximum(0, first_allowed_key // TILE_SIZE)
+        tile_end = tl.minimum((last_allowed_key // TILE_SIZE) + 1, num_tiles)
 
     # iterate through tiles (now limited to the sliding window range)
     for j in range(tile_start, tile_end):
-        seq_offset = j * BLOCK_SIZE + offs_t
+        seq_offset = j * TILE_SIZE + offs_t
         # tile_mask = seq_offset < max_seq_prefix_len
 
-        physical_block_idx = tl.load(block_tables_ptr + block_table_offset + j).to(tl.int64)
+        physical_block_idx = tl.load(block_tables_ptr + block_table_offset + j // (BLOCK_SIZE // TILE_SIZE)).to(
+            tl.int64)
 
         v_base = value_cache_ptr + physical_block_idx * stride_v_cache_0 + kv_head_idx * stride_v_cache_2
         v_desc = tl.make_tensor_descriptor(base=v_base, shape=(BLOCK_SIZE, HEAD_SIZE),
                                            strides=(stride_v_cache_1, stride_v_cache_3),
-                                           block_shape=(BLOCK_SIZE, HEAD_SIZE_PADDED))
+                                           block_shape=(TILE_SIZE, HEAD_SIZE_PADDED))
 
         k_base = key_cache_ptr + physical_block_idx * stride_k_cache_0 + kv_head_idx * stride_k_cache_2
         k_desc = tl.make_tensor_descriptor(base=k_base, shape=(BLOCK_SIZE, HEAD_SIZE),
                                            strides=(stride_k_cache_1, stride_k_cache_3),
-                                           block_shape=(BLOCK_SIZE, HEAD_SIZE_PADDED))
+                                           block_shape=(TILE_SIZE, HEAD_SIZE_PADDED))
         # K : (HEAD_SIZE, BLOCK_SIZE)
-        K_load = k_desc.load([0, 0]).T
+        offset_in_block = (j * TILE_SIZE) % BLOCK_SIZE
+        K_load = k_desc.load([offset_in_block, 0]).T
 
         # v_offset = (
         #     physical_block_idx[:, None] * stride_v_cache_0
@@ -286,7 +290,7 @@ def kernel_unified_attention_2d_td(
         #     mask=dim_mask[None, :] & tile_mask[:, None],
         #     other=0.0,
         # )
-        V_load = v_desc.load([0, 0])
+        V_load = v_desc.load([offset_in_block, 0])
 
         if V_load.dtype.is_fp8():
             if Q.dtype.is_fp8():
@@ -318,7 +322,7 @@ def kernel_unified_attention_2d_td(
                 seq_mask |= q_in_range & k_in_range
 
         # S : (BLOCK_M, TILE_SIZE)
-        S = tl.zeros(shape=(BLOCK_M, BLOCK_SIZE), dtype=tl.float32)
+        S = tl.zeros(shape=(BLOCK_M, TILE_SIZE), dtype=tl.float32)
 
         S += scale * tl.dot(Q, K)
 
@@ -444,6 +448,8 @@ def kernel_unified_attention_3d_td(segm_output_ptr,
                                    MAX_MM_RANGES: tl.constexpr,  # int
                                    mm_prefix_range_ptr,  # [num_seqs] - prefix length for each sequence
                                    ):
+    tl.static_assert(BLOCK_SIZE % TILE_SIZE == 0, "BLOCK_SIZE must be multiple of TILE_SIZE")
+    tl.static_assert(BLOCK_SIZE >= TILE_SIZE, "BLOCK_SIZE must be >= TILE_SIZE")
     q_block_global_idx = tl.program_id(0)
     kv_head_idx = tl.program_id(1)
     segm_idx = tl.program_id(2)
@@ -467,13 +473,13 @@ def kernel_unified_attention_3d_td(segm_output_ptr,
 
     # number of segments for this particular sequence
     num_segments = NUM_SEGMENTS_PER_SEQ
-    tiles_per_segment = cdiv_fn(seq_len, num_segments * BLOCK_SIZE)
+    tiles_per_segment = cdiv_fn(seq_len, num_segments * TILE_SIZE)
 
-    if segm_idx * tiles_per_segment * BLOCK_SIZE >= seq_len:
+    if segm_idx * tiles_per_segment * TILE_SIZE >= seq_len:
         return
 
     offs_m = tl.arange(0, BLOCK_M)
-    offs_t = tl.arange(0, BLOCK_SIZE)
+    offs_t = tl.arange(0, TILE_SIZE)
     query_pos = q_block_local_idx * BLOCK_Q + offs_m // num_queries_per_kv
 
     query_offset_0 = cur_batch_in_all_start_index + query_pos
@@ -544,32 +550,34 @@ def kernel_unified_attention_3d_td(segm_output_ptr,
     # calculate the number of tiles that need to be processed to
     # cover the longest sequence prefix (due to causal masking, tiles beyond
     # this prefix can be skipped)
-    num_tiles = cdiv_fn(max_seq_prefix_len, BLOCK_SIZE)
+    num_tiles = cdiv_fn(max_seq_prefix_len, TILE_SIZE)
 
     # iterate through tiles within current segment
     for j in range(
             segm_idx * tiles_per_segment,
             min((segm_idx + 1) * tiles_per_segment, num_tiles),
     ):
-        seq_offset = j * BLOCK_SIZE + offs_t
+        seq_offset = j * TILE_SIZE + offs_t
 
-        physical_block_idx = tl.load(block_tables_ptr + block_table_offset + j).to(tl.int64)
+        physical_block_idx = tl.load(block_tables_ptr + block_table_offset + j // (BLOCK_SIZE // TILE_SIZE)).to(
+            tl.int64)
 
         #############
         # TD version
         v_base = value_cache_ptr + physical_block_idx * stride_v_cache_0 + kv_head_idx * stride_v_cache_2
         v_desc = tl.make_tensor_descriptor(base=v_base, shape=(BLOCK_SIZE, HEAD_SIZE),
                                            strides=(stride_v_cache_1, stride_v_cache_3),
-                                           block_shape=(BLOCK_SIZE, HEAD_SIZE_PADDED))
+                                           block_shape=(TILE_SIZE, HEAD_SIZE_PADDED))
 
         k_base = key_cache_ptr + physical_block_idx * stride_k_cache_0 + kv_head_idx * stride_k_cache_2
         k_desc = tl.make_tensor_descriptor(base=k_base, shape=(BLOCK_SIZE, HEAD_SIZE),
                                            strides=(stride_k_cache_1, stride_k_cache_3),
-                                           block_shape=(BLOCK_SIZE, HEAD_SIZE_PADDED))
+                                           block_shape=(TILE_SIZE, HEAD_SIZE_PADDED))
         # K : (HEAD_SIZE, BLOCK_SIZE)
-        K_load = k_desc.load([0, 0]).T
+        offset_in_block = (j * TILE_SIZE) % BLOCK_SIZE
+        K_load = k_desc.load([offset_in_block, 0]).T
         # V : (BLOCK_SIZE, HEAD_SIZE)
-        V_load = v_desc.load([0, 0])
+        V_load = v_desc.load([offset_in_block, 0])
         #############
         # End
         #############
@@ -612,7 +620,7 @@ def kernel_unified_attention_3d_td(segm_output_ptr,
                 seq_mask |= q_in_range & k_in_range
 
         # S : (BLOCK_M, BLOCK_SIZE)
-        S = tl.zeros(shape=(BLOCK_M, BLOCK_SIZE), dtype=tl.float32)
+        S = tl.zeros(shape=(BLOCK_M, TILE_SIZE), dtype=tl.float32)
         S += scale * tl.dot(Q, K)
 
         if USE_SOFTCAP:
@@ -890,7 +898,7 @@ def unified_attention_td(
         q.element_size(),
         is_prefill=False,
     )
-    TILE_SIZE_PREFILL = TILE_SIZE_DECODE = block_size
+    # TILE_SIZE_PREFILL = TILE_SIZE_DECODE = block_size
 
     # Original
     # Launch the 2D kernel if
@@ -906,6 +914,11 @@ def unified_attention_td(
     #     or max_seqlen_q > 1
     #     or num_seqs > seq_threshold_3D
     # ):
+    TILE_SIZE_PREFILL = TILE_SIZE_DECODE = 16
+    assert TILE_SIZE_PREFILL <= block_size, "TILE_SIZE_PREFILL must be <= block_size"
+    assert TILE_SIZE_DECODE <= block_size, "TILE_SIZE_DECODE must be <= block_size"
+    assert block_size % TILE_SIZE_PREFILL == 0, "block_size must be multiple of TILE_SIZE_PREFILL"
+    assert block_size % TILE_SIZE_DECODE == 0, "block_size must be multiple of TILE_SIZE_DECODE"
     seq_threshold_3D = 32
     if (max_seqlen_q > 1 or num_seqs > seq_threshold_3D
             # 2d kernel includes crucial optimizations for models with sliding window
@@ -1110,11 +1123,74 @@ def ref_paged_attn(
     return torch.cat(outputs, dim=0)
 
 
+TOTAL_MEMORY_BYTES = benchmark_suite.get_total_gpu_memory_bytes()
+
+
+def _dtype_size(dtype):
+    """Return element size in bytes for a torch dtype."""
+    if dtype is None:
+        return 0
+    if hasattr(dtype, 'itemsize'):
+        return dtype.itemsize
+    # Fallback for dtype objects without itemsize
+    return torch.tensor([], dtype=dtype).element_size()
+
+
+def is_enough_memory(x_val, safety_factor=0.80):
+    """Check whether all tensors created by the benchmark fit in GPU memory.
+
+    Mirrors every allocation inside ``benchmark()`` so the estimate is
+    precise.  Returns *True* when the total fits within
+    ``safety_factor`` of the device's total memory.
+    """
+    q_heads, k_heads, head_size, dtype, qdtype, seq_lens, sliding_window, soft_cap, num_blocks, block_size = x_val
+
+    num_seqs = len(seq_lens)
+    query_lens = [s[0] for s in seq_lens]
+    kv_lens = [s[1] for s in seq_lens]
+    total_query_tokens = sum(query_lens)
+    max_kv_len = max(kv_lens)
+    max_num_blocks_per_seq = (max_kv_len + block_size - 1) // block_size
+
+    d_bytes = _dtype_size(dtype)  # e.g. 2 for bfloat16
+
+    # --- tensors allocated in benchmark() ---
+    # query:       (total_query_tokens, q_heads, head_size)  dtype
+    query_mem = total_query_tokens * q_heads * head_size * d_bytes
+    # key_cache:   (num_blocks, block_size, k_heads, head_size) dtype
+    kv_cache_mem = 2 * num_blocks * block_size * k_heads * head_size * d_bytes
+    # output:      same shape/dtype as query  (empty_like)
+    output_mem = query_mem
+    # cu_query_lens: (num_seqs + 1,) int32
+    cu_mem = (num_seqs + 1) * 4
+    # kv_lens_tensor: (num_seqs,) int32
+    kvl_mem = num_seqs * 4
+    # block_tables: (num_seqs, max_num_blocks_per_seq) int32
+    bt_mem = num_seqs * max_num_blocks_per_seq * 4
+
+    # quantised duplicates (when qdtype is set the originals are *kept*)
+    q_quant_mem = 0
+    if qdtype is not None:
+        qd_bytes = _dtype_size(qdtype)
+        # maybe_quantized_query, _key_cache, _value_cache
+        q_quant_mem += total_query_tokens * q_heads * head_size * qd_bytes
+        q_quant_mem += 2 * num_blocks * block_size * k_heads * head_size * qd_bytes
+        # k_descale, v_descale: (num_seqs, k_heads) float32
+        q_quant_mem += 2 * num_seqs * k_heads * 4
+
+    total_memory = (query_mem + kv_cache_mem + output_mem + cu_mem + kvl_mem + bt_mem + q_quant_mem)
+
+    threshold = TOTAL_MEMORY_BYTES * safety_factor
+    enough = total_memory < threshold
+
+    return enough
+
+
 # Benchmark configurations for unified attention
 # (seq_lens, num_heads, head_size, block_size, dtype, sliding_window, soft_cap)
 # NUM_HEADS = [(4, 4), (8, 2)]
 # HEAD_SIZES = [128, 256]
-PAGED_ATTENTION_MMAP_SIZE = 16
+MMAP_BLOCK_SIZES = [16, 64]
 # Models
 MODEL_CONFIGS = [
     # q_heads, k_heads, head_size, dtype, qdtype
@@ -1141,19 +1217,16 @@ SEQ_LENS = [
 SOFT_CAPS = [None, 50.0]
 SLIDING_WINDOWS = [None, 256]
 ATTENTION_CONFIGS_BF16 = []
-for model_config, seq_len, sliding_window, soft_cap, num_blocks in product(MODEL_CONFIGS, SEQ_LENS, SLIDING_WINDOWS,
-                                                                           SOFT_CAPS, NUM_BLOCKS):
-    if model_config[-1] is not None and model_config[-1].itemsize < 2 and PAGED_ATTENTION_MMAP_SIZE < 32:
+config_matrix = product(MODEL_CONFIGS, SEQ_LENS, SLIDING_WINDOWS, SOFT_CAPS, NUM_BLOCKS, MMAP_BLOCK_SIZES)
+for x_val in config_matrix:
+    if x_val[3] is not None and x_val[3].itemsize < 2 and x_val[-1] < 32:
         print("Skipping configuration due to incompatible q_dtype and block_size.")
         continue
-    ATTENTION_CONFIGS_BF16.append((
-        *model_config,
-        seq_len,
-        sliding_window,
-        soft_cap,
-        num_blocks,
-        PAGED_ATTENTION_MMAP_SIZE,
-    ))
+
+    if is_enough_memory(x_val=x_val):
+        ATTENTION_CONFIGS_BF16.append(x_val)
+    else:
+        print(f"Skipping configuration due to memory constraints: {x_val}")
 
 # ATTENTION_CONFIGS_FP8 = [
 #     # FP8 configurations
@@ -1161,46 +1234,6 @@ for model_config, seq_len, sliding_window, soft_cap, num_blocks in product(MODEL
 #     (4, 128, 1024, 16, 4, 128, 32, torch.float8_e4m3fn, None, None),
 #     (8, 256, 2048, 32, 8, 256, 32, torch.float8_e4m3fn, None, None),
 # ]
-
-
-def is_enough_memory(x_val):
-    q_heads, k_heads, head_size, dtype, qdtype, seq_lens, sliding_window, soft_cap, num_blocks, block_size = x_val
-
-    # Calculate total tokens
-    num_seqs = len(seq_lens)
-    query_lens = [x[0] for x in seq_lens]
-    total_query_tokens = sum(query_lens)
-
-    # Determine byte size based on dtype
-    if dtype == torch.float8_e4m3fn or (hasattr(dtype, 'itemsize') and dtype.itemsize == 1):
-        n_bytes = 1
-    elif hasattr(dtype, 'itemsize'):
-        n_bytes = dtype.itemsize
-    else:
-        n_bytes = 2  # Default for bfloat16
-
-    # Calculate required memory
-    required_memory = (
-        total_query_tokens * q_heads * head_size * n_bytes +  # Query tensor
-        num_blocks * block_size * k_heads * head_size * n_bytes +  # Key cache
-        num_blocks * block_size * k_heads * head_size * n_bytes +  # Value cache
-        total_query_tokens * q_heads * head_size * 2 +  # Output (always bf16)
-        num_seqs * 128 +  # Metadata overhead (cu_seqlens, kv_lens, block_tables)
-        total_query_tokens * q_heads * 16 * head_size * 4  # Intermediate buffers for 3D path (segm_output, etc.)
-    )
-
-    # Get device memory
-    DEVICE_NAME = torch.xpu.get_device_name()
-    DEVICE_TOTAL_MEMORY = torch.xpu.get_device_properties(0).total_memory
-
-    # Use 80% of memory as threshold
-    enough_memory = required_memory < DEVICE_TOTAL_MEMORY * 0.8
-
-    if not enough_memory:
-        print(f"Configuration skipped for '{DEVICE_NAME}': required={required_memory / 1e9:.2f}GB, "
-              f"available={DEVICE_TOTAL_MEMORY * 0.8 / 1e9:.2f}GB")
-
-    return enough_memory
 
 
 def get_unified_attention_benchmark(
@@ -1241,6 +1274,8 @@ def get_unified_attention_benchmark(
         ))
     def benchmark(q_heads, k_heads, head_size, dtype, qdtype, seq_lens, sliding_window, soft_cap, num_blocks,
                   block_size, provider):
+        print("Config:", q_heads, k_heads, head_size, dtype, qdtype, seq_lens, sliding_window, soft_cap, num_blocks,
+              block_size, provider)
         # Set default device like in the test
         current_platform.seed_everything(0)  # Use same seed as test
         n_warmup = 100
@@ -1336,7 +1371,7 @@ def get_unified_attention_benchmark(
                 )
                 return output
 
-            atol, rtol = 1.5e-2, 1e-2
+            atol, rtol = 2e-2, 1e-2
             if dtype != torch.bfloat16:
                 atol, rtol = 1.5e-1, 1.5e-1
             benchmark_suite.assert_close(triton_fn, torch_fn, atol=atol, rtol=rtol, err_msg='triton to torch')
@@ -1359,7 +1394,7 @@ def get_unified_attention_benchmark(
                 total_query_tokens * q_heads * head_size * n_bytes +  # Query
                 sum([min(l, sliding_window) if sliding_window is not None else l
                      for l in kv_lens]) * k_heads * head_size * n_bytes * 2 +  # KV cache accessed
-                total_query_tokens * q_heads * head_size * 2  # Output
+                total_query_tokens * q_heads * head_size * n_bytes  # Output
             )
             return total_bytes * (1e-9) / (ms * 1e-3)
 

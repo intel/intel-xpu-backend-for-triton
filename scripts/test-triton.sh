@@ -637,7 +637,7 @@ run_benchmark_gemm() {
   python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_tensor_of_ptr_benchmark.py
 
   echo "GEMM with tensor descriptor:"
-  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_tensor_desc_benchmark.py
+  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_benchmark.py
 }
 
 run_benchmark_flash_attention() {
@@ -647,11 +647,8 @@ run_benchmark_flash_attention() {
   cd $TRITON_PROJ/benchmarks
   pip install .
 
-  echo "Forward - Default path:"
+  echo "Forward - Default path (with tensor descriptor):"
   python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
-
-  echo "Forward - with tensor descriptor:"
-  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_tensor_desc_benchmark.py
 
   echo "Forward - Advanced path:"
   TRITON_INTEL_ADVANCED_PATH=1 \
@@ -727,11 +724,19 @@ run_sglang_install() {
   echo "******    Installing SGLang                 ****"
   echo "************************************************"
 
-  if ! [ -d "./sglang" ]; then
-    git clone https://github.com/sgl-project/sglang.git
+  if pip show sglang >/dev/null 2>&1; then
+    echo "WARNING: sglang is already installed, skipping installation."
+    echo "To get clean installation, run:"
+    echo "  rm -rf ./sglang && pip uninstall -y sglang"
+    return
   fi
 
-  if ! pip list | grep "sglang" ; then
+  if [ -d "./sglang" ]; then
+    echo "WARNING: ./sglang directory already exists, installing from it."
+    echo "To get clean installation, run:"
+    echo "  rm -rf ./sglang && pip uninstall -y sglang"
+  else
+    git clone https://github.com/sgl-project/sglang.git
     cd sglang
     git checkout "$(<../benchmarks/third_party/sglang/sglang-pin.txt)"
     git apply ../benchmarks/third_party/sglang/sglang-test-fix.patch
@@ -744,9 +749,10 @@ run_sglang_install() {
     # We remove timm because it depends on torchvision, which depends on torch==2.9
     sed -i '/pytorch\|torch\|sgl-kernel\|timm/d' python/pyproject.toml
     cat python/pyproject.toml
-    pip install -e "./python"
     cd ..
   fi
+
+  pip install -e "./sglang/python"
 }
 
 run_sglang_tests() {
@@ -795,9 +801,35 @@ run_vllm_install() {
   echo "************************************************"
   echo "******    Installing VLLM                 ******"
   echo "************************************************"
+  CLEAN_MSG="To get a clean install, run: \n    rm -rf ./vllm ./vllm-xpu-kernels && pip uninstall -y vllm vllm-xpu-kernels"
 
-  if ! [ -d "./vllm" ]; then
+  local has_vllm_pip=false
+  local has_kernels_pip=false
+  pip show vllm >/dev/null 2>&1 && has_vllm_pip=true
+  pip show vllm-xpu-kernels >/dev/null 2>&1 && has_kernels_pip=true
+
+  # Both libraries already installed — nothing to do
+  if [ "$has_vllm_pip" = true ] && [ "$has_kernels_pip" = true ]; then
+    echo "WARNING: vllm and vllm-xpu-kernels are already installed, skipping installation."
+    echo -e $CLEAN_MSG
+    return
+  fi
+
+  # Only one of the two libraries installed — partial state, refuse to continue
+  if [ "$has_vllm_pip" = true ] || [ "$has_kernels_pip" = true ]; then
+    echo "ERROR: Partial vllm installation detected (vllm=$has_vllm_pip, vllm-xpu-kernels=$has_kernels_pip)."
+    echo -e $CLEAN_MSG
+    return 1
+  fi
+
+  # Neither library is installed — proceed, reusing existing directories if present
+  if [ -d "./vllm" ]; then
+    echo "WARNING: ./vllm directory already exists, installing from it."
+    echo -e $CLEAN_MSG
+  else
     git clone https://github.com/vllm-project/vllm.git
+
+    # Checkout the pinned commit, apply necessary patches and modify tests to run on xpu
     cd vllm
     git checkout "$(<../benchmarks/third_party/vllm/vllm-pin.txt)"
     git apply ../benchmarks/third_party/vllm/vllm-fix.patch
@@ -810,23 +842,26 @@ run_vllm_install() {
       tests/kernels/attention/test_triton_unified_attention.py
 
     cd ..
-    cp -r vllm/tests benchmarks/third_party/vllm/tests
   fi
+  # These files are neceassary for benchmarking runs
+  cp -r vllm/tests benchmarks/third_party/vllm/tests
 
-  if ! pip list | grep "vllm" ; then
-    pip install -r vllm/requirements/xpu.txt
+  pip install -r vllm/requirements/xpu.txt
 
+  if [ -d "./vllm-xpu-kernels" ]; then
+    echo "WARNING: ./vllm-xpu-kernels directory already exists, installing from it."
+    echo $CLEAN_MSG
+  else
     git clone https://github.com/vllm-project/vllm-xpu-kernels
     cd vllm-xpu-kernels
     git checkout "$(<../benchmarks/third_party/vllm/vllm-kernels-pin.txt)"
     sed -i '/pytorch\|torch/d' requirements.txt
     sed -i '/pytorch\|torch/d' pyproject.toml
     pip install -r requirements.txt
-    VLLM_TARGET_DEVICE=xpu pip install --no-build-isolation -e .
     cd ..
-
-    VLLM_TARGET_DEVICE=xpu pip install --no-deps --no-build-isolation -e vllm
   fi
+  VLLM_TARGET_DEVICE=xpu pip install --no-build-isolation -e vllm-xpu-kernels
+  VLLM_TARGET_DEVICE=xpu pip install --no-deps --no-build-isolation -e vllm
 
   pip install cachetools cbor2 blake3 pybase64 openai_harmony tblib
 }

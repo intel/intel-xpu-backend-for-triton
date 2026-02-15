@@ -100,7 +100,7 @@ def moe_mmk(
     for k in range(0, tl.cdiv(K, BLOCK_K)):
         # Load the next block of A and B using tensor descriptors
         a = a_desc.load([pid_m * BLOCK_M, k * BLOCK_K])
-        b = b_desc.load([k * BLOCK_K, pid_n * BLOCK_N])
+        b = b_desc.load([pid_n * BLOCK_N, k * BLOCK_K]).T
 
         # We accumulate along the K dimension.
         if use_w8a16:
@@ -135,7 +135,7 @@ def moe_mmk(
 @triton.jit
 def expert_triton_kernel(
     a_desc,  #[max_tokens, K]
-    b_desc,  #[K, N]
+    b_desc,  #[N, K]
     c_desc,  #[max_tokens, N]
     expert_id,
     compute_type: tl.constexpr,
@@ -294,8 +294,8 @@ def batched_triton_kernel(
 
     a_desc = tl.make_tensor_descriptor(base=a_ptr + expert_id * stride_ae, shape=(e_num_tokens, K),
                                        strides=(stride_am, stride_ak), block_shape=(BLOCK_M, BLOCK_K))
-    b_desc = tl.make_tensor_descriptor(base=b_ptr + expert_id * stride_be, shape=(K, N), strides=(stride_bk, stride_bn),
-                                       block_shape=(BLOCK_K, BLOCK_N))
+    b_desc = tl.make_tensor_descriptor(base=b_ptr + expert_id * stride_be, shape=(N, K), strides=(stride_bn, stride_bk),
+                                       block_shape=(BLOCK_N, BLOCK_K))
     c_desc = tl.make_tensor_descriptor(base=c_ptr + expert_id * stride_ce, shape=(e_num_tokens, N),
                                        strides=(stride_cm, stride_cn), block_shape=(BLOCK_M, BLOCK_N))
 
@@ -474,25 +474,48 @@ MM_CONFIGS_FP8 = sum([[(E, M, hidden_size, int_size * 2, fp8, block_quant),
                           (128, 2048, 768, True, False),
                       ]], [])
 
-DEVICE_NAME = torch.xpu.get_device_name()
-DEVICE_TOTAL_MEMORY = torch.xpu.get_device_properties().total_memory
+DEVICE_TOTAL_MEMORY_BYTES = benchmark_suite.get_total_gpu_memory_bytes()
 
 
-def is_enough_memory(x_val):
+def is_enough_memory(x_val, safety_factor=0.80):
     E, M, K, N, fp8, block_quant = x_val
-    # A: (E, M, K) bfloat16 or fp8
-    # B: (E, K, N) bfloat16 or fp8
-    # C: (E, M, N) bfloat16
-    # num_expert_tokens: (E,) int32
-    n_bytes = 1 if fp8 else 2
-    required_memory = E * M * K * n_bytes + E * K * N * n_bytes + E * M * N * 2 + E * 4
-    enough_memory = required_memory < DEVICE_TOTAL_MEMORY
-    if not enough_memory:
-        print(f"'{x_val}' combination skipped for '{DEVICE_NAME}'; {required_memory=} but {DEVICE_TOTAL_MEMORY=}")
-    return enough_memory
+
+    # A and B bf16 originals (always allocated, freed later in fp8 case)
+    a_mem = E * M * K * 2
+    b_mem = E * N * K * 2
+
+    if fp8:
+        # fp8 copies + scales
+        a_mem += E * M * K
+        b_mem += E * N * K
+        if block_quant:
+            bk_n, bk_k = 128, 128
+            a_mem += E * ((M + bk_n - 1) // bk_n) * ((K + bk_k - 1) // bk_k) * 4
+            b_mem += E * ((N + bk_n - 1) // bk_n) * ((K + bk_k - 1) // bk_k) * 4
+        else:
+            a_mem += E * 4
+            b_mem += E * 4
+
+    # C, ref (E, M, N) bf16 each + num_expert_tokens (E,) int32
+    out_mem = 2 * E * M * N * 2 + E * 4
+
+    # Peak is before bf16 originals are freed
+    required_memory = a_mem + b_mem + out_mem
+    return required_memory < DEVICE_TOTAL_MEMORY_BYTES * safety_factor
 
 
-MM_CONFIGS_BF16 = [x_val for x_val in MM_CONFIGS_BF16 if is_enough_memory(x_val)]
+def filter_by_memory(configs):
+    result = []
+    for x_val in configs:
+        if is_enough_memory(x_val):
+            result.append(x_val)
+        else:
+            print(f"'{x_val}' combination skipped, OOM expected")
+    return result
+
+
+MM_CONFIGS_BF16 = filter_by_memory(MM_CONFIGS_BF16)
+MM_CONFIGS_FP8 = filter_by_memory(MM_CONFIGS_FP8)
 
 
 def get_batched_mm_benchmark(
@@ -529,6 +552,7 @@ def get_batched_mm_benchmark(
             args={},
         ))
     def benchmark(num_experts, max_tokens_per_expert, K, N, fp8, block_quant, provider):
+        print("Config:", num_experts, max_tokens_per_expert, K, N, fp8, block_quant, provider)
         current_platform.seed_everything(70)
         n_warmup = 600
 
@@ -564,6 +588,10 @@ def get_batched_mm_benchmark(
             block_shape=block_shape,
             per_out_ch_quant=per_act_token_quant,
         )
+
+        # Free unused bf16 originals in the fp8 case
+        if quant_dtype is not None:
+            del A, B
         quantiles = [0.5, 0.0, 1.0]
 
         C = torch.zeros(out_shape, device='xpu', dtype=act_dtype)
