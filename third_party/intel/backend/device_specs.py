@@ -9,8 +9,8 @@
 _PCI_ID_SPECS = {
     0x0BD5: (8192, 1),  # PVC Max 1550 — 8 HBM2e stacks × 1024b
     0x0BDA: (3072, 1),  # PVC Max 1100 — 3 HBM2e stacks × 1024b
-    0xE20B: (192, 8),  # BMG B580 — 3 × 64b GDDR6
-    0xE20C: (128, 8),  # BMG B570 — 2 × 64b GDDR6
+    0xE20B: (192, 8),  # BMG B580 — 6 × 32b GDDR6
+    0xE20C: (160, 8),  # BMG B570 — 5 × 32b GDDR6
 }
 
 
