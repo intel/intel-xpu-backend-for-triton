@@ -94,7 +94,9 @@ def TritonGEN_StoreCacheControl : I32EnumAttr<"StoreCacheControl",
     I32EnumAttrCase<"L1WT_L3WB",   4,  "L1WT_L3WB">, // Override to L1 written through and L3 written back
     I32EnumAttrCase<"L1S_L3UC",    5,  "L1S_L3UC">,  // Override to L1 streaming and L3 uncached
     I32EnumAttrCase<"L1S_L3WB",    6,  "L1S_L3WB">,  // Override to L1 streaming and L3 written back
-    I32EnumAttrCase<"L1WB_L3WB",   7,  "L1WB_L3WB">  // Override to L1 written through and L3 written back
+    I32EnumAttrCase<"L1WB_L3WB",   7,  "L1WB_L3WB">, // Override to L1 written through and L3 written back
+    I32EnumAttrCase<"L1WT_L3WT",   8,  "L1WT_L3WT">, // Override to L1 written through and L3 written through
+    I32EnumAttrCase<"L1S_L3S",     9,  "L1S_L3S">    // Override to L1 streaming and L3 streaming
   ]> {
   let cppNamespace = "::mlir::triton::TritonGEN";
 }
