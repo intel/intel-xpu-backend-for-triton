@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import gc
 import re
 from typing import Callable, ClassVar, Dict, Optional, List, Tuple, Union, Set
 from collections.abc import Iterable
@@ -372,6 +373,15 @@ def get_gpu_info():
     return gpu_info[device_name]
 
 
+def cleanup_memory():
+    """Cleanup GPU memory by calling garbage collector and emptying cache."""
+    gc.collect()
+    if hasattr(torch, "cuda") and torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    if hasattr(torch, "xpu") and torch.xpu.is_available():
+        torch.xpu.empty_cache()
+
+
 def perf_report(benchmarks):
     """
     Mark a function for benchmarking. The benchmark can then be executed by using the :code:`.run` method on the return value.
@@ -559,6 +569,7 @@ class Mark:
             os.makedirs(args.reports, exist_ok=True)
 
         for bench in benchmarks:
+            cleanup_memory()
             benchmark_dfs = []
             for run_counter in range(args.n_runs):
                 df = self._run(bench, args.reports, show_plots, print_data, mark_args=args, run_counter=run_counter,
