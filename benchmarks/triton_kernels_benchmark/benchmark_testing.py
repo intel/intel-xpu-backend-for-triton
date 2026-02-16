@@ -524,6 +524,7 @@ class Mark:
             first_x = x_names[0]
             for label in bench.ylabel:
                 for i, y in enumerate(bench.line_names):
+                    cleanup_memory()
                     y = f"{y}-{label}"
                     y_min, y_max = df[y + "-min"], df[y + "-max"]
                     col = bench.styles[i][0] if bench.styles else None
@@ -569,7 +570,6 @@ class Mark:
             os.makedirs(args.reports, exist_ok=True)
 
         for bench in benchmarks:
-            cleanup_memory()
             benchmark_dfs = []
             for run_counter in range(args.n_runs):
                 df = self._run(bench, args.reports, show_plots, print_data, mark_args=args, run_counter=run_counter,
