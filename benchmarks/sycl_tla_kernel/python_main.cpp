@@ -23,7 +23,7 @@
 // PYBIND MODULE
 ////////////////////////////////////////////////////////////////////////////////
 
-PYBIND11_MODULE(cutlass_kernel, m) {
-  m.def("gemm", &gemm_kernel, "gemm (CUTLASS)");
-  m.def("attention", &attention_kernel, "attention (CUTLASS)");
+PYBIND11_MODULE(sycl_tla_kernel, m) {
+  m.def("gemm", &gemm_kernel, "gemm (SYCL-TLA)");
+  m.def("attention", &attention_kernel, "attention (SYCL-TLA)");
 }

@@ -55,7 +55,7 @@ static auto attention_run(const at::Tensor &Q, const at::Tensor &K,
                           int NumHeadsQ, int NumHeadsKV, int SeqLengthQO,
                           int SeqLengthKV, int HeadSizeQK, int HeadSizeVO,
                           float sm_scale) -> int {
-  RECORD_FUNCTION("cutlass fa", {});
+  RECORD_FUNCTION("sycl-tla fa", {});
 
   using ElementAccumulator = float;
   using ElementInputQ = cutlass::half_t;
