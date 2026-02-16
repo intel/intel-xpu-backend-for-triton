@@ -18,7 +18,7 @@ import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
 from triton_kernels_benchmark import xetla_kernel
-from triton_kernels_benchmark import cutlass_kernel
+from triton_kernels_benchmark import sycl_tla_kernel
 
 
 def get_matmul_autotune_configs() -> List[triton.Config]:
@@ -343,11 +343,11 @@ def get_benchmark(
         'triton': 'Triton',
         'onednn': 'OneDNN',
     }
-    # use_cutlass
+    # use_sycl-tla
     if not (transpose_a or transpose_b):
         if torch.xpu.get_device_name() != 'Intel(R) Arc(TM) Graphics':
-            # FIXME: enable cutlass on LNL
-            supported_providers['cutlass'] = 'CUTLASS'
+            # FIXME: enable sycl-tla on LNL
+            supported_providers['sycl-tla'] = 'SYCL-TLA'
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
     # Benchmark Performance
@@ -372,7 +372,7 @@ def get_benchmark(
             args={},
         ))
     def benchmark(B, M, N, K, provider):
-        # Maximum across onednn=600, triton=800, xetla=10, cutlass=600
+        # Maximum across onednn=600, triton=800, xetla=10, sycl-tla=600
         do_bench = benchmark_suite.get_do_bench(n_warmup=800, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
         a_shape, b_shape = get_shapes(B, M, N, K, transpose_a=transpose_a, transpose_b=transpose_b)
 
@@ -443,18 +443,18 @@ def get_benchmark(
             # benchmark_suite.assert_close(xetla_fn, torch_fn, atol=1e-4, rtol=1.0, err_msg='xetla to torch')
             _, min_ms, max_ms, mean_ms, cv = do_bench(xetla_fn)
 
-        elif provider == 'cutlass':
+        elif provider == 'sycl-tla':
             name = 'gemm'
-            func = getattr(cutlass_kernel, name)
+            func = getattr(sycl_tla_kernel, name)
 
-            # Special case where the b matrix needs to be transposed (see: `./cutlass_kernel/gemm/input_gemm.in`)
+            # Special case where the b matrix needs to be transposed (see: `./sycl_tla_kernel/gemm/input_gemm.in`)
             if (B, M, N, K) == (1, 1, 1024, 4096):
                 _, b_shape = get_shapes(B, M, N, K, transpose_a=False, transpose_b=True)
                 b = torch.reshape(b, b_shape)
                 torch_b = b
                 torch_b = torch.transpose(torch_b, -2, -1)
 
-            def cutlass_invoker():
+            def sycl_tla_invoker():
                 if B == 1:
                     c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
                 else:
@@ -462,12 +462,12 @@ def get_benchmark(
                 func(a, b, c, M, N, K, B)
                 return c
 
-            cutlass_fn = cutlass_invoker
+            sycl_tla_fn = sycl_tla_invoker
             torch_fn = lambda: torch.matmul(torch_a, torch_b).to(torch.float32)
 
             rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
-            benchmark_suite.assert_close(cutlass_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='cutlass to torch')
-            _, min_ms, max_ms, mean_ms, cv = do_bench(cutlass_fn)
+            benchmark_suite.assert_close(sycl_tla_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='sycl-tla to torch')
+            _, min_ms, max_ms, mean_ms, cv = do_bench(sycl_tla_fn)
 
         else:
             raise NotImplementedError(f'Unsupported provider {provider}')
