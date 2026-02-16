@@ -496,6 +496,7 @@ class Mark:
             for label in itertools.chain(bench.ylabel, ["CV"]):
                 row_vals[label] = ([], [], [])
             for y in bench.line_vals:
+                cleanup_memory()
                 ret = self.fn(**x_args, **{bench.line_arg: y}, **bench.args, **kwargs)
                 for i, label in enumerate(itertools.chain(bench.ylabel, ["CV"])):
                     try:
@@ -524,7 +525,6 @@ class Mark:
             first_x = x_names[0]
             for label in bench.ylabel:
                 for i, y in enumerate(bench.line_names):
-                    cleanup_memory()
                     y = f"{y}-{label}"
                     y_min, y_max = df[y + "-min"], df[y + "-max"]
                     col = bench.styles[i][0] if bench.styles else None
