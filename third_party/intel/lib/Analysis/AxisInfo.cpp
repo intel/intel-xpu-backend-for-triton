@@ -111,8 +111,8 @@ public:
     const auto &lhsInfo = operands[0]->getValue();
     const auto &rhsInfo = operands[1]->getValue();
     auto rank = lhsInfo.getRank();
-    assert(isa<RankedTensorType>(op.getType()) ||
-           rank == 1 && "Expected ranked tensor or scalar");
+    assert((isa<RankedTensorType>(op.getType()) || rank == 1) &&
+           "Expected ranked tensor or scalar");
     assert(operands.size() == 2 && "Expected two operands");
     AxisInfo::DimVectorT stride;
     AxisInfo::DimVectorT contiguity;
@@ -583,7 +583,6 @@ private:
 
   int64_t getDivisibility(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                           int dim) override {
-    auto resTy = dyn_cast<RankedTensorType>(op.getType());
     if (rhs.getConstancy(dim) > 1) {
       // lhs: d_lhs * k = gcd(d_lhs, d_rhs) * k' * k = gcd(d_lhs, d_rhs) * k''
       // rhs: d_rhs * p = gcd(d_lhs, d_rhs) * p' * p = gcd(d_lhs, d_rhs) * p''
@@ -771,7 +770,7 @@ public:
     AxisInfo::DimVectorT contiguity, divisibility, constancy;
     std::optional<int64_t> constantValue;
     for (short d = 0; d < rank; ++d) {
-      int64_t constHint;
+      int64_t constHint = 1;
       if (lhsInfo.getConstantValue().has_value() &&
           rhsInfo.getConstantValue().has_value()) {
         constHint = lhsInfo.getConstancy(d);
