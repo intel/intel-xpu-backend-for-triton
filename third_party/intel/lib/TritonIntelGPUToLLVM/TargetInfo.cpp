@@ -39,6 +39,11 @@ void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
   b.barrier(targets);
 }
 
+void TargetInfo::clusterBarrier(Location loc, RewriterBase &rewriter) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  b.barrier(triton::gpu::AddrSpace::Local);
+}
+
 void TargetInfo::warpSync(Location loc, RewriterBase &rewriter) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   b.barrier(triton::gpu::AddrSpace::Local);
@@ -147,6 +152,12 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
   }
 
   return true;
+}
+
+bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
+                            SmallVector<Value> &acc, triton::ReduceOp op,
+                            unsigned reduceLaneIdMask) const {
+  llvm_unreachable("FIXME: implement warpReduce for Intel GPU");
 }
 
 std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {

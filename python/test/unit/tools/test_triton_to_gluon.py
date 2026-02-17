@@ -298,7 +298,7 @@ def num_threads_kernel(out_ptr):
     tl.store(out_ptr + offs, 1)
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
+@pytest.mark.xfail(not is_cuda(), reason="Requires CUDA", run=False)
 def test_num_threads(tmp_path):
     kernel = convert_kernel(num_threads_kernel, "num_threads_kernel", tmp_path)
 

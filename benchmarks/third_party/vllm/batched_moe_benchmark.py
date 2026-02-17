@@ -480,16 +480,31 @@ DEVICE_TOTAL_MEMORY = torch.xpu.get_device_properties().total_memory
 
 def is_enough_memory(x_val):
     E, M, K, N, fp8, block_quant = x_val
-    # A: (E, M, K) bfloat16 or fp8
-    # B: (E, K, N) bfloat16 or fp8
-    # C: (E, M, N) bfloat16
-    # num_expert_tokens: (E,) int32
-    n_bytes = 1 if fp8 else 2
-    required_memory = E * M * K * n_bytes + E * K * N * n_bytes + E * M * N * 2 + E * 4
-    enough_memory = required_memory < DEVICE_TOTAL_MEMORY
-    if not enough_memory:
-        print(f"'{x_val}' combination skipped for '{DEVICE_NAME}'; {required_memory=} but {DEVICE_TOTAL_MEMORY=}")
-    return enough_memory
+
+    # A and B bf16 originals (always allocated, freed later in fp8 case)
+    # A memory is doubled because make_quantized_test_activations uses out-of-place / 15
+    a_mem = E * M * K * 2 * 2
+    b_mem = E * N * K * 2
+
+    if fp8:
+        # fp8 copies + scales
+        a_mem += E * M * K
+        b_mem += E * N * K
+        if block_quant:
+            bk_n, bk_k = 128, 128
+            a_mem += E * ((M + bk_n - 1) // bk_n) * ((K + bk_k - 1) // bk_k) * 4
+            b_mem += E * ((N + bk_n - 1) // bk_n) * ((K + bk_k - 1) // bk_k) * 4
+        else:
+            a_mem += E * 4
+            b_mem += E * 4
+
+    # C, ref (E, M, N) bf16 each + num_expert_tokens (E,) int32
+    out_mem = 2 * E * M * N * 2 + E * 4
+
+    # Peak is before bf16 originals are freed
+    required_memory = a_mem + b_mem + out_mem
+    print(f"Estimated memory for {x_val}: {required_memory * 1e-9:.2f} GB", flush=True)
+    return required_memory < DEVICE_TOTAL_MEMORY_BYTES * safety_factor
 
 
 MM_CONFIGS_BF16 = [x_val for x_val in MM_CONFIGS_BF16 if is_enough_memory(x_val)]

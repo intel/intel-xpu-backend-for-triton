@@ -1155,8 +1155,9 @@ SOFT_CAPS = [None, 50.0]
 SLIDING_WINDOWS = [None, 256]
 ATTENTION_CONFIGS_BF16 = []
 config_matrix = product(MODEL_CONFIGS, SEQ_LENS, SLIDING_WINDOWS, SOFT_CAPS, NUM_BLOCKS, MMAP_BLOCK_SIZES)
-for model_config, seq_len, sliding_window, soft_cap, num_blocks, block_size in config_matrix:
-    if model_config[-1] is not None and model_config[-1].itemsize < 2 and block_size < 32:
+for model_config, seq_lens, sliding_window, soft_cap, num_blocks, block_size in config_matrix:
+    x_val = (*model_config, seq_lens, sliding_window, soft_cap, num_blocks, block_size)
+    if x_val[3] is not None and x_val[3].itemsize < 2 and x_val[-1] < 32:
         print("Skipping configuration due to incompatible q_dtype and block_size.")
         continue
     ATTENTION_CONFIGS_BF16.append((

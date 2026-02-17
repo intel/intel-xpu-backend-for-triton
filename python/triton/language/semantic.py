@@ -1955,8 +1955,7 @@ class TritonSemantic(Generic[TensorTy]):
             )
 
         last_stride = tl._unwrap_if_constexpr(strides[-1])
-        backend = self.builder.options.backend_name
-        if backend != "intel" and last_stride != 1:
+        if last_stride != 1:
             raise ValueError(f"Tensor descriptor last dim must be 1 but got {last_stride}")
 
         shape = [self.make_scalar(x, tl.int32) for x in shape]
