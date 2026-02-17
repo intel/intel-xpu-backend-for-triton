@@ -10,6 +10,7 @@ from triton_kernels_benchmark.benchmark_testing import (
     BenchmarkConfig,
     BENCHMARKING_METHOD,
     get_do_bench,
+    get_total_gpu_memory_bytes,
 )
 
 from triton_kernels_benchmark.benchmark_shapes_parser import ShapePatternParser
@@ -28,5 +29,4 @@ __all__ = [
     "BENCHMARKING_METHOD",
     "ShapePatternParser",
     "get_do_bench",
-    "get_total_gpu_memory_bytes",
 ]
