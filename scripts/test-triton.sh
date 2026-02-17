@@ -818,6 +818,7 @@ run_vllm_upstream_install() {
     sed -i '/pytorch\|torch\|triton/d' vllm/requirements/test.in
     pip install -r vllm/requirements/xpu.txt
     pip install -r vllm/requirements/test.in
+    cp -r vllm/tests benchmarks/third_party/vllm/tests
     VLLM_TARGET_DEVICE=xpu pip install --no-deps --no-build-isolation -e vllm
 }
 
