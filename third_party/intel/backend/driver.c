@@ -299,6 +299,12 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
     l0_kernel = l0_kernel_retry;
     n_spills = n_spills_retry;
 
+    // Always print recovery message to stderr to follow up on the
+    // "L0 build module failed" error that was already printed.
+    std::cerr << "(I): Build failure recovered by retrying with large GRF "
+                 "mode for \""
+              << kernel_name << "\"" << std::endl;
+
     if (debugEnabled)
       std::cout << "(I): Retry with large GRF succeeded, kernel has "
                 << n_spills << " spills" << std::endl;
