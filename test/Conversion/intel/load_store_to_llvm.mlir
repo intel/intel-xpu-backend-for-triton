@@ -67,23 +67,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.support_predicated_io} {
-  tt.func @load_store_cache_pred(%x_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %y_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %output_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %n_elements: i32) {
-    %c1024_i32 = arith.constant 1024 : i32
-    %pid = tt.get_program_id x : i32
-    %block_start = arith.muli %pid, %c1024_i32 : i32
-    %offsets = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
-    %offsets_0 = tt.splat %block_start : i32 -> tensor<1024xi32, #blocked>
-    %offsets_1 = arith.addi %offsets_0, %offsets : tensor<1024xi32, #blocked>
-    %mask = tt.splat %n_elements : i32 -> tensor<1024xi32, #blocked>
-    %mask_2 = arith.cmpi slt, %offsets_1, %mask : tensor<1024xi32, #blocked>
-    %x = tt.splat %x_ptr : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
-    %x_3 = tt.addptr %x, %offsets_1 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+  tt.func @load_store_cache_pred(%ptr: tensor<1024x!tt.ptr<f32>, #blocked>, %mask: tensor<1024xi1, #blocked>) {
     // CHECK: triton_gen.predicated_load {{.*}} {cache_control = L1UC_L3C} : (!llvm.ptr<1>, i64, i1, i32) -> i32
-    %x_4 = tt.load %x_3, %mask_2 cacheModifier = cg : tensor<1024x!tt.ptr<f32>, #blocked>
-    %0 = tt.splat %output_ptr : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
-    %1 = tt.addptr %0, %offsets_1 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+    %val = tt.load %ptr, %mask cacheModifier = cg : tensor<1024x!tt.ptr<f32>, #blocked>
     // CHECK: triton_gen.predicated_store {{.*}} {cache_control = L1WT_L3WT} : (!llvm.ptr<1>, i32, i64, i1) -> ()
-    tt.store %1, %x_4, %mask_2 cacheModifier = wt : tensor<1024x!tt.ptr<f32>, #blocked>
+    tt.store %ptr, %val, %mask cacheModifier = wt : tensor<1024x!tt.ptr<f32>, #blocked>
     tt.return
   }
 }
