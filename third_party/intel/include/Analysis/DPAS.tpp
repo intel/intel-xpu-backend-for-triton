@@ -58,13 +58,11 @@ DPASAnalysisResult DPASAnalysis<DPASEngineType, Enable>::canUseDPAS(
   // Ensure all dot operations in the function can be lowered to DPAS
   // instructions.
   for (Operation *op : it->second) {
-    auto it = dotToDPASEngineMap.find(op);
-    if (it == dotToDPASEngineMap.end()) {
-      llvm::errs() << "DPASAnalysis: Operation not found in map.\n";
+    auto dpasIt = dotToDPASEngineMap.find(op);
+    if (dpasIt == dotToDPASEngineMap.end())
       return DPASAnalysisResult::False;
-    }
 
-    DPASEngineType dpasEngineType = dotToDPASEngineMap.at(op);
+    DPASEngineType dpasEngineType = dpasIt->second;
     if (dpasEngineType == DPASEngineType::NOT_APPLICABLE)
       return DPASAnalysisResult::False;
   }
@@ -77,13 +75,14 @@ DPASAnalysisResult DPASAnalysis<DPASEngineType, Enable>::canUseDPAS(
     return DPASAnalysisResult::Maybe;
 
   unsigned threadsPerWarp = cast<IntegerAttr>(threadsPerWarpAttr).getInt();
-  unsigned minSGSize = mod->getAttrOfType<IntegerAttr>(
-                              TritonIntelGPUDialect::getMinSGSizeAttrName())
-                           .getInt();
+  auto minSGSizeAttr = mod->getAttrOfType<IntegerAttr>(
+      TritonIntelGPUDialect::getMinSGSizeAttrName());
+  assert(minSGSizeAttr && "Module should have minSGSize attribute");
+  unsigned minSGSize = minSGSizeAttr.getInt();
   bool enableWarp32 =
       tools::getBoolEnv("TRITON_INTEL_ENABLE_DPAS_FOR_WARP_SIZE_32");
-  assert(minSGSize == 8 || minSGSize == 16 ||
-         minSGSize == 32 && "Unexpected minimum subgroup size");
+  assert((minSGSize == 8 || minSGSize == 16 || minSGSize == 32) &&
+         "Unexpected minimum subgroup size");
 
   if (enableWarp32 && minSGSize != 8) {
     // We can support threads_per_warp=16 or 32 on Xe+ and later architectures.
@@ -143,6 +142,7 @@ DPASAnalysis<DPASEngineType, Enable>::getDPASType(OpTy op) {
     }
 
     auto m = op->template getParentOfType<ModuleOp>();
+    assert(m && "Operation should have a parent ModuleOp");
     bool isFp8Supported =
         m->hasAttr(TritonIntelGPUDialect::getSupportDPASWithBF8AttrName());
 
@@ -201,7 +201,7 @@ DPASAnalysis<DPASEngineType, Enable>::getDPASType(OpTy op) {
         if (isa<Float8E4M3FNType, Float8E5M2Type>(aElemTy) &&
             isa<Float8E4M3FNType, Float8E5M2Type>(bElemTy))
           return DPASEngineType::FP32_FP32_FP8_FP8;
-        if ((isa<Float8E4M3FNType>(aElemTy) || isa<Float8E5M2Type>(aElemTy)) &&
+        if (isa<Float8E4M3FNType, Float8E5M2Type>(aElemTy) &&
             bElemTy.isInteger(8))
           return DPASEngineType::FP32_FP32_FP8_FP4;
         if (aElemTy.isInteger(8) && bElemTy.isBF16())
