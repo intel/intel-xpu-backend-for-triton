@@ -20,7 +20,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
 
 // -----
 
-// Test mismatched threads-per-warp and  min_sg_size (should NOT use DPAS)
+// Test mismatched threads-per-warp and min_sg_size (should NOT use DPAS)
 // CHECK-NOT: ttig.dpas
 #blocked = #ttg.blocked<{sizePerThread = [4, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttig.min_sg_size" = 16 : i32, "ttig.support_subgroup_matrix_multiply_accumulate"} {
