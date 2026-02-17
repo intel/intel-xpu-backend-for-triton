@@ -182,8 +182,8 @@ llvm.func @triton_gen.predicated_load(%ptr : !llvm.ptr<1>, %alignment : i64, %pr
 
 llvm.func @triton_gen.predicated_store(%ptr : !llvm.ptr<1>, %value : i32, %alignment : i64, %predicate : i1) {
   // CHECK:      llvm.func @triton_gen.predicated_store(%arg0: !llvm.ptr<1>, %arg1: i32, %arg2: i64, %arg3: i1) {
+  // CHECK-NOT:  {{.*}} triton_gen.DecorationCacheControlINTEL = {{.*}}
   // CHECK:        llvm.call spir_funccc @llvm.genx.GenISA.PredicatedStore.p1i32.i32{{.*}}
-  // CEHCK-SAME-NOT:  {{.*}} triton_gen.DecorationCacheControlINTEL = {{.*}}
   triton_gen.predicated_store %ptr, %value, %alignment, %predicate {cache_control = Default} : (!llvm.ptr<1>, i32, i64, i1) -> ()
   llvm.return
 }
