@@ -272,11 +272,39 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   auto [l0_module, l0_kernel, n_spills] =
       compileLevelZeroObjects(binary_ptr, binary_size, kernel_name, l0_device,
                               l0_context, build_flags(), is_spv);
-  if (PyErr_Occurred()) {
-    return NULL;
-  }
 
   const bool debugEnabled = getBoolEnv("TRITON_DEBUG");
+
+  // If the initial compilation failed entirely (e.g., scratch space exceeds
+  // HW limit), and GRF mode was not explicitly set, retry with large GRF mode.
+  // This handles cases where the default GRF mode doesn't provide enough
+  // registers, causing the backend compiler to fail.
+  if (PyErr_Occurred() && is_spv && !build_flags.hasGRFSizeFlag()) {
+    if (debugEnabled)
+      std::cout << "(I): Build failed for \"" << kernel_name
+                << "\", retrying with large GRF mode" << std::endl;
+
+    PyErr_Clear();
+    build_flags.addLargeGRFSizeFlag();
+
+    auto [l0_module_retry, l0_kernel_retry, n_spills_retry] =
+        compileLevelZeroObjects(binary_ptr, binary_size, kernel_name, l0_device,
+                                l0_context, build_flags(), is_spv);
+    if (PyErr_Occurred()) {
+      // Retry also failed — propagate the error.
+      return NULL;
+    }
+
+    l0_module = l0_module_retry;
+    l0_kernel = l0_kernel_retry;
+    n_spills = n_spills_retry;
+
+    if (debugEnabled)
+      std::cout << "(I): Retry with large GRF succeeded, kernel has "
+                << n_spills << " spills" << std::endl;
+  } else if (PyErr_Occurred()) {
+    return NULL;
+  }
 
   if (is_spv) {
     constexpr int32_t max_reg_spill = 1000;

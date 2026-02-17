@@ -99,3 +99,51 @@ def test_has_opencl_extension_error(device):
     # Pass an invalid device_id (out of range) to trigger error
     with pytest.raises(RuntimeError, match="Device is not found"):
         driver.active.utils.has_opencl_extension(device_count, b"cl_khr_fp16")
+
+
+@pytest.mark.parametrize("grf_mode, expect_retry, expect_fail",
+                         [("default", True, False),  # Should auto-retry with large GRF and succeed
+                          ("256", False, False),  # Explicit large GRF — compiles on first attempt
+                          ("128", False, True),  # Explicit small GRF — should fail, no retry
+                          ])
+def test_auto_grf_on_build_failure(device, monkeypatch, capfd, grf_mode, expect_retry, expect_fail):
+    """Test GRF mode behavior for register-heavy kernels:
+    - 'default': build fails, driver auto-retries with large GRF, succeeds
+    - '256': explicit large GRF, compiles directly without retry
+    - '128': explicit small GRF, build fails and is NOT retried
+    """
+    monkeypatch.setenv("TRITON_DEBUG", "1")
+
+    @triton.jit
+    def _register_heavy_kernel(
+        output_ptr,
+        input_ptr,
+        q_ptr,
+        size,
+        BLOCK: tl.constexpr,
+    ):
+        off = tl.arange(0, BLOCK)
+        mask = off < size
+        x = tl.load(input_ptr + off, mask=mask, other=0.0)
+        q = tl.load(q_ptr + off, mask=mask, other=float("-inf"))
+        result = tl.argmax(x / q, axis=-1)
+        tl.store(output_ptr, result)
+
+    BLOCK = 131072  # Large enough to exceed PTSS with default/small GRF
+    size = 128000
+    x = torch.randn(size, dtype=torch.float32, device=device)
+    q = torch.rand(size, dtype=torch.float32, device=device)
+    out = torch.empty(1, dtype=torch.int32, device=device)
+
+    if expect_fail:
+        with pytest.raises(RuntimeError):
+            _register_heavy_kernel[(1, )](out, x, q, size, BLOCK=BLOCK, grf_mode=grf_mode)
+    else:
+        _register_heavy_kernel[(1, )](out, x, q, size, BLOCK=BLOCK, grf_mode=grf_mode)
+
+        outs = capfd.readouterr().out
+        if expect_retry:
+            assert "retrying with large GRF mode" in outs or "recompiling the kernel using large GRF mode" in outs
+        else:
+            assert "retrying with large GRF mode" not in outs
+            assert "Build failed" not in outs
