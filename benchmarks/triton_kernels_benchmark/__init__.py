@@ -28,4 +28,5 @@ __all__ = [
     "BENCHMARKING_METHOD",
     "ShapePatternParser",
     "get_do_bench",
+    "get_total_gpu_memory_bytes",
 ]
