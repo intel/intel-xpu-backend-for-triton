@@ -474,11 +474,10 @@ MM_CONFIGS_FP8 = sum([[(E, M, hidden_size, int_size * 2, fp8, block_quant),
                           (128, 2048, 768, True, False),
                       ]], [])
 
-DEVICE_NAME = torch.xpu.get_device_name()
-DEVICE_TOTAL_MEMORY = torch.xpu.get_device_properties().total_memory
+DEVICE_TOTAL_MEMORY_BYTES = benchmark_suite.get_total_gpu_memory_bytes()
 
 
-def is_enough_memory(x_val):
+def is_enough_memory(x_val, safety_factor=0.80):
     E, M, K, N, fp8, block_quant = x_val
 
     # A and B bf16 originals (always allocated, freed later in fp8 case)
@@ -507,7 +506,18 @@ def is_enough_memory(x_val):
     return required_memory < DEVICE_TOTAL_MEMORY_BYTES * safety_factor
 
 
-MM_CONFIGS_BF16 = [x_val for x_val in MM_CONFIGS_BF16 if is_enough_memory(x_val)]
+def filter_by_memory(configs):
+    result = []
+    for x_val in configs:
+        if is_enough_memory(x_val):
+            result.append(x_val)
+        else:
+            print(f"'{x_val}' combination skipped, OOM expected")
+    return result
+
+
+MM_CONFIGS_BF16 = filter_by_memory(MM_CONFIGS_BF16)
+MM_CONFIGS_FP8 = filter_by_memory(MM_CONFIGS_FP8)
 
 
 def get_batched_mm_benchmark(
@@ -579,6 +589,10 @@ def get_batched_mm_benchmark(
             block_shape=block_shape,
             per_out_ch_quant=per_act_token_quant,
         )
+
+        # Free unused bf16 originals in the fp8 case
+        if quant_dtype is not None:
+            del A, B
         quantiles = [0.5, 0.0, 1.0]
 
         C = torch.zeros(out_shape, device='xpu', dtype=act_dtype)
