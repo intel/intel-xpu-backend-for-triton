@@ -1,13 +1,18 @@
 # flake8: noqa: F821, F841
+import os
+
 import torch
 import pytest
 
 import triton
 import triton.language as tl
 
-import os
 
-os.environ["TRITON_INTEL_PREDICATED_LOAD"] = "1"
+@pytest.fixture(autouse=True)
+def triton_predicated_load(monkeypatch):
+    monkeypatch.setenv("TRITON_INTEL_PREDICATED_LOAD", "1")
+    yield
+
 
 aten = torch.ops.aten
 
@@ -24,6 +29,7 @@ def patch_kernel(template, to_replace):
 @pytest.mark.parametrize("trunc", [True, False])
 def test_divide(float_div, floor, trunc, device):
     # regression test for various division cases
+    assert os.environ["TRITON_INTEL_PREDICATED_LOAD"] == "1"
 
     @triton.jit
     def divide_kernel(a, b, out_ptr0, out_ptr1, out_ptr2, out_ptr3, out_ptr4, xnumel, XBLOCK: tl.constexpr):

@@ -11,8 +11,8 @@
 
 #define CUTLASS_CREATE_GEMM_BENCHMARK(x)
 #define CUTLASS_BENCHMARK(x)
-#include "gemm/benchmarks_sycl.hpp"
-#include "gemm/gemm_configuration_sycl.hpp"
+#include "gemm/legacy/benchmarks_sycl.hpp"
+#include "gemm/legacy/gemm_configuration_sycl.hpp"
 
 ////////////////////////////////////////////////////////////////////////////////
 // PRIVATE FUNCTION
@@ -22,7 +22,7 @@ template <typename GemmConfig>
 static auto gemm_run(const at::Tensor &A, const at::Tensor &B, at::Tensor &C,
                      const int M, const int N, const int K, const int L)
     -> int {
-  RECORD_FUNCTION("cutlass gemm", {});
+  RECORD_FUNCTION("sycl-tla gemm", {});
 
   using ElementComputeEpilogue = float;
 
