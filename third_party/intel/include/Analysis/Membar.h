@@ -12,7 +12,8 @@ namespace intel {
 /// This is useful as the granularity to check whether barriers are needed is
 /// quite coarse. The filter will return true if no barrier is needed between
 /// `lhsOp` and `rhsOp`.
-bool membarFilter(Operation *lhsOp, Operation *rhsOp, Allocation *allocation);
+bool membarFilter(Operation *lhsOp, Operation *rhsOp, bool /*lhsOpIsRead*/,
+                  bool /*rhsOpIsRead*/, Allocation *allocation);
 } // namespace intel
 } // namespace mlir
 
