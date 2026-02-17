@@ -36,8 +36,9 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
     tt.store %arg2, %1 : tensor<128x128x!tt.ptr<i32>, #blocked>
     tt.return
   }
-}// -----
+}
 
+// -----
 // Test INT8 with wrong output width (should NOT use DPAS - needs i32, got i16)
 // CHECK-NOT: ttig.dpas
 #blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [4, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
