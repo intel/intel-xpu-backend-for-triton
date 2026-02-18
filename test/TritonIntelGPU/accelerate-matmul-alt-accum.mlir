@@ -12,8 +12,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf16, #blocked>
     // CHECK: tt.dot {{.*}} : tensor<128x64xf16{{.*}}> * tensor<64x128xf16{{.*}}> -> tensor<128x128xf16, #[[$DPAS]]>
     %result = tt.dot %arg0, %arg1, %cst : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x128xf16, #blocked>
-    %1 = ttg.convert_layout %result : tensor<128x128xf16, #blocked> -> tensor<128x128xf16, #blocked>
-    tt.store %arg2, %1 : tensor<128x128x!tt.ptr<f16>, #blocked>
+    tt.store %arg2, %result : tensor<128x128x!tt.ptr<f16>, #blocked>
     tt.return
   }
 }
@@ -32,8 +31,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xbf16, #blocked>
     // CHECK: tt.dot {{.*}} : tensor<128x64xbf16{{.*}}> * tensor<64x128xbf16{{.*}}> -> tensor<128x128xbf16, #[[$DPAS2]]>
     %result = tt.dot %arg0, %arg1, %cst : tensor<128x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x128xbf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x128xbf16, #blocked>
-    %1 = ttg.convert_layout %result : tensor<128x128xbf16, #blocked> -> tensor<128x128xbf16, #blocked>
-    tt.store %arg2, %1 : tensor<128x128x!tt.ptr<bf16>, #blocked>
+    tt.store %arg2, %result : tensor<128x128x!tt.ptr<bf16>, #blocked>
     tt.return
   }
 }
@@ -52,8 +50,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xbf16, #blocked>
     // FP8 types get converted to BF16, so no DPAS is used
     %result = tt.dot %arg0, %arg1, %cst : tensor<128x64xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x128xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x128xbf16, #blocked>
-    %1 = ttg.convert_layout %result : tensor<128x128xbf16, #blocked> -> tensor<128x128xbf16, #blocked>
-    tt.store %arg2, %1 : tensor<128x128x!tt.ptr<bf16>, #blocked>
+    tt.store %arg2, %result : tensor<128x128x!tt.ptr<bf16>, #blocked>
     tt.return
   }
 }
@@ -72,8 +69,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
     // Mixed FP16 and BF16 operands should not use DPAS
     %result = tt.dot %arg0, %arg1, %cst : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x128xbf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x128xf32, #blocked>
-    %1 = ttg.convert_layout %result : tensor<128x128xf32, #blocked> -> tensor<128x128xf32, #blocked>
-    tt.store %arg2, %1 : tensor<128x128x!tt.ptr<f32>, #blocked>
+    tt.store %arg2, %result : tensor<128x128x!tt.ptr<f32>, #blocked>
     tt.return
   }
 }
