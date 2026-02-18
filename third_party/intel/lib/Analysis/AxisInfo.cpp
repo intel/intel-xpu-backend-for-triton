@@ -111,8 +111,8 @@ public:
     const auto &lhsInfo = operands[0]->getValue();
     const auto &rhsInfo = operands[1]->getValue();
     auto rank = lhsInfo.getRank();
-    assert((isa<RankedTensorType>(op.getType()) || rank == 1) &&
-           "Expected ranked tensor or scalar");
+    assert(isa<RankedTensorType>(op.getType()) ||
+           rank == 1 && "Expected ranked tensor or scalar");
     assert(operands.size() == 2 && "Expected two operands");
     AxisInfo::DimVectorT stride;
     AxisInfo::DimVectorT contiguity;
