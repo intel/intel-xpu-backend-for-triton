@@ -111,8 +111,8 @@ public:
     const auto &lhsInfo = operands[0]->getValue();
     const auto &rhsInfo = operands[1]->getValue();
     auto rank = lhsInfo.getRank();
-    assert(isa<RankedTensorType>(op.getType()) ||
-           rank == 1 && "Expected ranked tensor or scalar");
+    assert((isa<RankedTensorType>(op.getType()) || rank == 1) &&
+           "Expected ranked tensor or scalar");
     assert(operands.size() == 2 && "Expected two operands");
     AxisInfo::DimVectorT stride;
     AxisInfo::DimVectorT contiguity;
@@ -383,7 +383,6 @@ private:
       // with element locations:
       // [4, 5, 6, 7]
       // It is "strided contiguous" with a divisilibity of 16 bytes
-      auto rank = lhs.getRank();
       auto elemSize = std::max<int64_t>(
           1, triton::getPointeeBitWidth(op.getPtr().getType()) / 8);
       rhsDivisibility = multiplyDivisor(rhs.getDivisibility(dim), elemSize);
@@ -496,7 +495,7 @@ private:
     if (getContiguity(op, lhs, rhs, dim) > 1)
       return 1;
     if (lhs.getStride(dim) > 0 && rhs.getConstantValue().has_value() &&
-        rhs.getConstantValue().has_value() != 0 &&
+        rhs.getConstantValue().value() != 0 &&
         lhs.getStride(dim) % rhs.getConstantValue().value() == 0)
       return lhs.getStride(dim) / rhs.getConstantValue().value();
     if (rhs.getStride(dim) > 0 && lhs.getConstantValue().has_value() &&
@@ -1156,6 +1155,47 @@ public:
   }
 };
 
+/// Compute AxisInfo for ops that create a block pointer or tensor descriptor.
+///
+/// Both MakeTensorPtrOp and MakeTensorDescOp share the same operand layout:
+///   operand 0            – base pointer
+///   operands [1, rank)   – shape values  (rank operands)
+///   operands [rank+1, 2*rank] – stride values (rank operands)
+/// and the same stride / contiguity / divisibility / constancy logic.
+/// The only difference between the two ops is how the block shape and rank are
+/// extracted from the result type, which is passed in by the caller.
+static AxisInfo
+makeTensorPtrAxisInfo(ArrayRef<int64_t> blkShape, unsigned rank,
+                      ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) {
+  SmallVector<AxisInfo, 2> strideInfo;
+  // Strides start after base (operand 0) and shape operands.
+  for (unsigned i = rank + 1; i <= rank * 2; ++i)
+    strideInfo.emplace_back(operands[i]->getValue());
+
+  int64_t ptrDivisibility = operands[0]->getValue().getDivisibility(0);
+
+  AxisInfo::DimVectorT stride, contiguity, constancy, divisibility;
+  for (unsigned dim = 0; dim < rank; ++dim) {
+    stride.push_back(strideInfo[dim].getConstantValue().has_value()
+                         ? strideInfo[dim].getConstantValue().value()
+                         : -1);
+    contiguity.push_back(strideInfo[dim].getConstantValue() == 1 ? blkShape[dim]
+                                                                 : 1);
+    // For 2-D tensors the divisibility of dim d is bounded by the stride of
+    // the *other* dimension; for 1-D tensors the single stride suffices.
+    const AxisInfo &relevantStride =
+        (rank == 2) ? strideInfo[dim == 0 ? 1 : 0] : strideInfo[dim];
+    divisibility.push_back(
+        contiguity[dim] > 1
+            ? std::min(ptrDivisibility, relevantStride.getDivisibility()[0])
+            : 1);
+    constancy.push_back(1);
+  }
+
+  return AxisInfo(std::move(stride), std::move(contiguity),
+                  std::move(divisibility), std::move(constancy), std::nullopt);
+}
+
 class MakeTensorPtrOpAxisInfoVisitor final
     : public AxisInfoVisitorImpl<triton::MakeTensorPtrOp> {
 public:
@@ -1166,42 +1206,16 @@ public:
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
     LDBG("MakeTensorPtrOpAxisInfoVisitor: " << *op);
 
-    auto ptrTy = cast<PointerType>(op.getResult().getType());
-    auto tensorType = cast<RankedTensorType>(ptrTy.getPointeeType());
-    ArrayRef<int64_t> blkShape = tensorType.getShape();
+    auto tensorType = cast<RankedTensorType>(
+        cast<PointerType>(op.getResult().getType()).getPointeeType());
     unsigned rank = op.getShape().size();
 
     // TODO: Support higher rank tensors.
     if (rank > 2)
       return AxisInfo();
 
-    SmallVector<AxisInfo, 2> strideInfo;
-    for (int i = rank + 1; i <= rank * 2; ++i)
-      strideInfo.emplace_back(operands[i]->getValue());
-
-    AxisInfo ptrInfo = operands[0]->getValue();
-    int64_t ptrDivisibility = ptrInfo.getDivisibility(0);
-
-    AxisInfo::DimVectorT stride, contiguity, constancy, divisibility;
-    for (int dim = 0; dim < rank; ++dim) {
-      stride.push_back(strideInfo[dim].getConstantValue().has_value()
-                           ? strideInfo[dim].getConstantValue().value()
-                           : -1);
-      contiguity.push_back(
-          strideInfo[dim].getConstantValue() == 1 ? blkShape[dim] : 1);
-      divisibility.push_back(
-          contiguity[dim] > 1
-              ? std::min(
-                    ptrDivisibility,
-                    (rank == 2 ? strideInfo[dim == 0 ? 1 : 0] : strideInfo[dim])
-                        .getDivisibility()[0])
-              : 1);
-      constancy.push_back(1);
-    }
-
     auto axisInfo =
-        AxisInfo(std::move(stride), std::move(contiguity),
-                 std::move(divisibility), std::move(constancy), std::nullopt);
+        makeTensorPtrAxisInfo(tensorType.getShape(), rank, operands);
 
     LLVM_DEBUG({
       std::string axisStr;
@@ -1235,9 +1249,8 @@ public:
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
     LDBG("MakeTensorDescOpAxisInfoVisitor: " << *op);
 
-    auto descTy = cast<TensorDescType>(op.getResult().getType());
-    RankedTensorType tensorType = descTy.getBlockType();
-    ArrayRef<int64_t> blkShape = tensorType.getShape();
+    RankedTensorType tensorType =
+        cast<TensorDescType>(op.getResult().getType()).getBlockType();
     unsigned rank = op.getShape().size();
 
     // TODO: Support higher rank tensors.
@@ -1249,33 +1262,8 @@ public:
     assert(operands.size() >= rank * 2 + 1 &&
            "Insufficient operands for MakeTensorDescOp AxisInfo analysis");
 
-    SmallVector<AxisInfo, 2> strideInfo;
-    // Strides start after base (operand 0) and shape operands
-    for (unsigned i = rank + 1; i <= rank * 2; ++i)
-      strideInfo.emplace_back(operands[i]->getValue());
-
-    AxisInfo ptrInfo = operands[0]->getValue();
-    int64_t ptrDivisibility = ptrInfo.getDivisibility(0);
-
-    AxisInfo::DimVectorT stride, contiguity, constancy, divisibility;
-    for (unsigned dim = 0; dim < rank; ++dim) {
-      stride.push_back(strideInfo[dim].getConstantValue().has_value()
-                           ? strideInfo[dim].getConstantValue().value()
-                           : -1);
-      contiguity.push_back(
-          strideInfo[dim].getConstantValue() == 1 ? blkShape[dim] : 1);
-      const AxisInfo &relevantStride =
-          (rank == 2) ? strideInfo[dim == 0 ? 1 : 0] : strideInfo[dim];
-      divisibility.push_back(
-          contiguity[dim] > 1
-              ? std::min(ptrDivisibility, relevantStride.getDivisibility()[0])
-              : 1);
-      constancy.push_back(1);
-    }
-
     auto axisInfo =
-        AxisInfo(std::move(stride), std::move(contiguity),
-                 std::move(divisibility), std::move(constancy), std::nullopt);
+        makeTensorPtrAxisInfo(tensorType.getShape(), rank, operands);
 
     LLVM_DEBUG({
       std::string axisStr;
@@ -1303,24 +1291,17 @@ public:
     auto resultType = cast<RankedTensorType>(op.getResult().getType());
     unsigned rank = resultType.getRank();
 
-    AxisInfo::DimVectorT stride, contiguity, divisibility, constancy;
+    AxisInfo::DimVectorT contiguity, divisibility, constancy;
 
     // For descriptor loads, propagate AxisInfo from the descriptor
     for (unsigned d = 0; d < rank; ++d) {
-      bool validDescDim = d < descInfo.getRank();
-      // Preserve stride information if available
-      stride.push_back(validDescDim ? descInfo.getStride(d) : -1);
-      // Preserve contiguity from descriptor
-      contiguity.push_back(validDescDim ? descInfo.getContiguity(d) : 1);
-      // Preserve divisibility from descriptor
-      divisibility.push_back(validDescDim ? descInfo.getDivisibility(d) : 1);
-      // Constancy is 1 after load (values may vary)
-      constancy.push_back(1);
+      contiguity.push_back(1);
+      divisibility.push_back(1);
+      constancy.push_back(descInfo.getConstancy(d));
     }
 
-    auto axisInfo =
-        AxisInfo(std::move(stride), std::move(contiguity),
-                 std::move(divisibility), std::move(constancy), std::nullopt);
+    auto axisInfo = AxisInfo(std::move(contiguity), std::move(divisibility),
+                             std::move(constancy));
 
     LLVM_DEBUG({
       std::string axisStr;
