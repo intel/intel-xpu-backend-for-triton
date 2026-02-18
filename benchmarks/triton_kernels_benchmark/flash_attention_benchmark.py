@@ -167,6 +167,7 @@ bwd_configs = [
     for blk_slice in [2]
     for s in [2, 3, 4]
     for w in [8, 16, 32]
+    if bn1 % bm1 == 0 and bm2 % bn2 == 0
 ]
 
 
