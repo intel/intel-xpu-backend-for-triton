@@ -280,20 +280,30 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   // This handles cases where the default GRF mode doesn't provide enough
   // registers, causing the backend compiler to fail.
   if (PyErr_Occurred() && is_spv && !build_flags.hasGRFSizeFlag()) {
+    // Save the original error before clearing it for the retry attempt.
+    PyObject *orig_type, *orig_value, *orig_tb;
+    PyErr_Fetch(&orig_type, &orig_value, &orig_tb);
+
     if (debugEnabled)
       std::cout << "(I): Build failed for \"" << kernel_name
                 << "\", retrying with large GRF mode" << std::endl;
 
-    PyErr_Clear();
     build_flags.addLargeGRFSizeFlag();
 
     auto [l0_module_retry, l0_kernel_retry, n_spills_retry] =
         compileLevelZeroObjects(binary_ptr, binary_size, kernel_name, l0_device,
                                 l0_context, build_flags(), is_spv);
     if (PyErr_Occurred()) {
-      // Retry also failed — propagate the error.
+      // Retry also failed — restore and propagate the original error.
+      PyErr_Clear();
+      PyErr_Restore(orig_type, orig_value, orig_tb);
       return NULL;
     }
+
+    // Retry succeeded — discard the saved original error.
+    Py_XDECREF(orig_type);
+    Py_XDECREF(orig_value);
+    Py_XDECREF(orig_tb);
 
     l0_module = l0_module_retry;
     l0_kernel = l0_kernel_retry;
