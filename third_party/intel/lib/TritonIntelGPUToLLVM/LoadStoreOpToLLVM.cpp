@@ -303,6 +303,82 @@ struct LoadStoreConversionBase {
     return std::make_tuple(ptrElems, maskElems, otherElems);
   }
 
+  SmallVector<Value>
+  buildNaNMasksFromBlockPtr(Location loc, Value blockPointerStruct,
+                            RankedTensorType tensorType, Type valueElemTy,
+                            ConversionPatternRewriter &rewriter,
+                            ArrayRef<int32_t> boundaryCheck = {}) const {
+
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    size_t rank = tensorType.getRank();
+    // The block pointer struct is expected to have the following layout:
+    //    Struct {
+    //      Value offset[rank];
+    //      Value shape[rank];
+    //      Value stride[rank];
+    //      Value base;
+    //    }
+    // All the values are decomposed by `unpackLLElements` into a vector.
+    // Defines the indices for the block pointer struct.
+    const unsigned blockOffset = 0, blockShape = 1 * rank,
+                   blockStride = 2 * rank, blockBase = 3 * rank;
+    const SmallVector<Value> &blockPtr =
+        unpackLLElements(loc, blockPointerStruct, rewriter);
+    const unsigned numElems = getTotalElemsPerThread(tensorType);
+
+    // Get the LLVM values for indices in block
+    auto indices = emitIndices(loc, rewriter, targetInfo,
+                               tensorType.getEncoding(), tensorType, true);
+
+    auto linearize =
+        [](ArrayRef<Value> A, ArrayRef<Value> B, Value init,
+           std::function<Value(const Value &, const Value &, const Value &)>
+               linearizeFunc) {
+          unsigned rank = A.size();
+          Value accumulate = init;
+          if (rank > 0) {
+            for (auto [a, b] : llvm::zip(A, B))
+              accumulate = linearizeFunc(a, b, accumulate);
+          }
+          return accumulate;
+        };
+
+    SetVector<unsigned> boundaryProtect(boundaryCheck.begin(),
+                                        boundaryCheck.end());
+    for (unsigned j = 0; j < rank; j++) {
+      if (!boundaryProtect.contains(j)) {
+        // The NaN padding logic assumes that all dims are being padded.
+        return {};
+      }
+    }
+
+    SmallVector<Value> maskElems;
+    for (unsigned i = 0; i < numElems; ++i) {
+      SmallVector<Value> index = indices[i];
+      SmallVector<Value> indicesInTensor(rank);
+      for (unsigned j = 0; j < rank; ++j)
+        indicesInTensor[j] = b.add(index[j], blockPtr[blockOffset + j]);
+
+      // Get the LLVM values for mask
+      maskElems.push_back(linearize(
+          indicesInTensor,
+          {blockPtr.begin() + blockShape, blockPtr.begin() + blockStride},
+          b.int_val(1, 1),
+          [&](const Value &index, const Value &shape, const Value &mask) {
+            // mask = mask && (index < shape) && idx >= 0
+            auto is_pos_idx = b.icmp_sge(index, b.i32_val(0));
+            return b
+                .and_(b.and_(b.icmp_slt(index, b.trunc(i32_ty, shape)), mask),
+                      is_pos_idx)
+                .getResult();
+
+            return mask;
+          }));
+    }
+
+    return maskElems;
+  }
+
   // Ensure the operation doesn't have attributes that the IGC predicated
   // instruction cannot handle.
   template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
@@ -1356,10 +1432,6 @@ struct LoadOpToBlockIOConversion
   LogicalResult
   matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
-    // FIXME: Handle the case where padding is set to PAD_NAN (#5145).
-    if (op.getPadding() && op.getPadding() == PaddingOption::PAD_NAN)
-      return failure();
-
     if (!isBlockIOCandidate(op))
       return failure();
 
@@ -1467,6 +1539,7 @@ struct LoadOpToBlockIOConversion
 
     SmallVector<Value> maskElems;
     Value llMask = adaptor.getMask();
+
     // Get the LLVM values for mask
     if (llMask) {
       Value mask = op.getMask();
@@ -1880,6 +1953,22 @@ struct LoadOpToBlockIOConversion
               : numValuesPerLoad;
       unsigned numOperandsPerLoad = numValuesPerLoad / numValsPerDPASOperand;
 
+      SmallVector<Value> nanMaskElems;
+
+      if (otherElems.size() == 0 && op.getPadding() == PaddingOption::PAD_NAN) {
+        assert(
+            isTensorPointerType(ptr.getType()) &&
+            "Supplied PaddingOption::PAD_NAN only applies to block pointers.");
+
+        auto tensorType = cast<RankedTensorType>(op.getType());
+        Type valueElemTy =
+            typeConverter->convertType(getElementTypeOrSelf(op.getType()));
+
+        nanMaskElems = buildNaNMasksFromBlockPtr(
+            loc, adaptor.getPtr(), tensorType, valueElemTy, rewriter,
+            op.getBoundaryCheck());
+      }
+
       for (size_t opsIdx = 0; opsIdx < numOperandsPerLoad; ++opsIdx) {
         Value unpackedVal;
         if (numValsPerDPASOperand != numValuesPerLoad) {
@@ -1920,6 +2009,29 @@ struct LoadOpToBlockIOConversion
             other = b.insert_element(other, falseVal, b.i32_val(i));
           }
           unpackedVal = b.select(pred, unpackedVal, other);
+        } else if (nanMaskElems.size() != 0) {
+          Type unpackedElemType = getElementTypeOrSelf(unpackedType);
+
+          SmallVector<Attribute> constOtherElems;
+          for (auto i = 0; i < numElemsPerUnpackedType; ++i) {
+            constOtherElems.push_back(FloatAttr::get(
+                unpackedElemType, APFloat::getNaN(APFloat::IEEEsingle())));
+          }
+
+          Value other = b.const_val(
+              unpackedType,
+              DenseElementsAttr::get(
+                  VectorType::get(numElemsPerUnpackedType, unpackedElemType),
+                  constOtherElems));
+
+          Value packedPred =
+              b.undef(VectorType::get(numElemsPerUnpackedType, i1_ty));
+
+          for (const auto [i, registerIdx] : llvm::enumerate(unpackIndices)) {
+            packedPred = b.insert_element(packedPred, nanMaskElems[registerIdx],
+                                          b.i32_val(i));
+          }
+          unpackedVal = b.select(packedPred, unpackedVal, other);
         }
 
         for (const auto [i, registerIdx] : llvm::enumerate(unpackIndices)) {

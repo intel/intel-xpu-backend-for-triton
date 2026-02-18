@@ -11,6 +11,17 @@
 
 include "mlir/Pass/PassBase.td"
 
+def TritonRewriteTensorDescriptorToPointer : Pass</*cli-arg*/"triton-intel-rewrite-tensor-descriptor-to-pointer", /*Op*/"mlir::ModuleOp"> {
+  let summary = "Rewrite load/stores of tensor descriptors into pointer load/stores";
+  let description = [{
+    This pass rewrites all load/store semantics initiated by a `tt.make_tensor_descriptor` into pointer semantics. After
+    this pass, `tt.make_tensor_descriptor`  will disappear, and it generates logics to compute the pointer/mask/other
+    for each load/store.
+  }];
+
+  let dependentDialects = ["mlir::triton::TritonDialect"];
+}
+
 def TritonIntelBlockPointerToTensorDesc
     : Pass<"triton-intel-block-pointer-to-tdesc", "mlir::ModuleOp"> {
   let summary = "Convert block pointers into tensor descriptors";
