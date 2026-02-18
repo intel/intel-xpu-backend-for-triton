@@ -37,6 +37,7 @@ jobs:
 
           git config user.name "GlaDOS"
           git config user.email "glados@intel.com"
+          git config merge.ours.driver true
 
           git checkout -b "${BRANCH_NAME}" main-cri
           git fetch origin main-interim:main-interim
