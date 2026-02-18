@@ -4,9 +4,11 @@ run-name: Nightly merge main-interim into main-cri
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 9 * * *' # Every day at 9:00 UTC
+    - cron: '0 9 * * 2-4' # Every day at 9:00 UTC
 
-permissions: read-all
+permissions:
+  contents: write
+  pull-requests: write
 
 jobs:
   do-merge:
@@ -21,9 +23,13 @@ jobs:
       - name: Checkout main-cri branch
         uses: actions/checkout@v6
         with:
+          fetch-depth: 0
           ref: main-cri
+          token: ${{ secrets.GLADOS_TOKEN }}
 
       - name: Do merge in a new branch and create PR
+        env:
+          GH_TOKEN: ${{ secrets.GLADOS_TOKEN }}
         run: |
           set -xe
 
@@ -32,18 +38,22 @@ jobs:
 
           git config user.name "GlaDOS"
           git config user.email "glados@intel.com"
+          git config merge.ours.driver true
 
           git checkout -b "${BRANCH_NAME}" main-cri
-          git merge --verbose --commit --no-ff --no-squash --stat main-interim
+          git fetch origin main-interim:main-interim
+          git merge --verbose --commit --no-edit -m "AUTOMERGE main-interim into main-cri" --no-ff --no-squash --stat main-interim
           git push origin "${BRANCH_NAME}"
+          TOP_COMMIT=$(git rev-parse --short HEAD)
 
           gh pr create \
             --repo intel-tools/intel-xpu-backend-for-triton \
-            --title "[CRI] Merge main-interim into main-cri ${TIMESTAMP}" \
+            --title "[CRI] AUTOMERGE main-interim into main-cri commit ${TOP_COMMIT}" \
             --body "Automated merge of main-interim into main-cri. Do not squash!" \
             --reviewer gshimansky,whitneywhtsang \
             --base main-cri \
             --head "${BRANCH_NAME}"
 
-          gh pr review --approve --repo intel-tools/intel-xpu-backend-for-triton --pr "${BRANCH_NAME}" --reviewer glados-intel
-          gh pr merge --repo intel-tools/intel-xpu-backend-for-triton --pr "${BRANCH_NAME}" --auto
+          gh api repos/intel-tools/intel-xpu-backend-for-triton -X PATCH -f allow_merge_commit=true
+          gh pr merge --repo intel-tools/intel-xpu-backend-for-triton --merge --auto "${BRANCH_NAME}"
+          gh api repos/intel-tools/intel-xpu-backend-for-triton -X PATCH -f allow_merge_commit=false

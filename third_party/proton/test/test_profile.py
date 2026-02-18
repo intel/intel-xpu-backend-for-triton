@@ -1195,7 +1195,7 @@ def test_periodic_flushing_cudagraph(tmp_path, fresh_knobs, data_format, buffer_
         assert foo_test_frame["metrics"]["flops"] == 4000
 
 
-@pytest.mark.skipif(not is_blackwell(), reason="HW trace is only supported on Blackwell GPUs")
+@pytest.mark.xfail(not is_blackwell(), reason="HW trace is only supported on Blackwell GPUs", run=False)
 def test_hw_trace(fresh_knobs, tmp_path: pathlib.Path, device: str):
     fresh_knobs.proton.enable_hw_trace = True
     temp_file = tmp_path / "test_hw_trace.hatchet"
