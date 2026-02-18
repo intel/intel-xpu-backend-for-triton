@@ -308,7 +308,7 @@ def test_tensor_descriptor_load_nd(dtype_str, num_ctas, ndim, INNER_BLOCK, devic
     # Check in-bounds
     actual = unwrap_tensor(out)
     expect = unwrap_tensor(inp)
-    idx = [slice(None, s) for s in inp.shape]
+    idx = tuple(slice(None, s) for s in inp.shape)
     torch.testing.assert_close(expect, actual[idx])
 
     # Check out-of-bounds
@@ -373,7 +373,7 @@ def test_tensor_descriptor_store_nd(dtype_str, num_ctas, ndim, INNER_BLOCK, devi
     # Check in-bounds
     actual = unwrap_tensor(out)
     expect = unwrap_tensor(inp)
-    idx = [slice(None, s) for s in desc_shape]
+    idx = tuple(slice(None, s) for s in desc_shape)
     torch.testing.assert_close(expect[idx], actual[idx])
 
     # Check out-of-bounds
@@ -384,8 +384,6 @@ def test_tensor_descriptor_store_nd(dtype_str, num_ctas, ndim, INNER_BLOCK, devi
 
 @pytest.mark.interpreter
 def test_tensor_descriptor_padding(device):
-    if is_xpu():
-        pytest.skip("FIXME: issue #5400")
 
     @triton.jit
     def device_tma_load(in_ptr, out_ptr, IM, IN, YM, YN, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr,
@@ -1014,7 +1012,7 @@ def test_tensor_descriptor_rank_reducing_load(dtype_str, ndim, INNER_BLOCK, devi
     # Check in-bounds
     actual = unwrap_tensor(out)
     expect = unwrap_tensor(inp)
-    idx = [slice(None, s) for s in inp.shape]
+    idx = tuple(slice(None, s) for s in inp.shape)
     torch.testing.assert_close(expect, actual[idx])
 
     # Check out-of-bounds

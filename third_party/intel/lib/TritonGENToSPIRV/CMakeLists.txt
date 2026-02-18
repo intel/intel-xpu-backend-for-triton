@@ -3,6 +3,8 @@ add_triton_library(TritonGENToSPIRV
 
   DEPENDS
   TritonGENToSPIRVConversionPassIncGen
+  TritonGENTableGen
+  TritonGENAttrDefsIncGen
 
   LINK_LIBS PUBLIC
   MLIRSPIRVDialect

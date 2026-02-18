@@ -108,11 +108,11 @@ def get_git_commit_hash(length=8):
 
 setup(
     name="triton-kernels-benchmark",
-    version="3.6.0" + get_git_commit_hash(),
+    version="3.7.0" + get_git_commit_hash(),
     packages=find_packages(),
     install_requires=[
         "torch>=2.6",
-        "pandas",
+        "pandas<3.0",
         "scipy",
         "psutil",
         "tabulate",
@@ -122,7 +122,7 @@ setup(
     package_data={
         "triton_kernels_benchmark": [
             "xetla_kernel.cpython-*.so",
-            "cutlass_kernel.cpython-*.so",
+            "sycl_tla_kernel.cpython-*.so",
             "onednn_kernel.cpython-*.so",
         ]
     },
@@ -131,7 +131,7 @@ setup(
     },
     ext_modules=[
         CMakeExtension("triton_kernels_benchmark.xetla_kernel"),
-        CMakeExtension("triton_kernels_benchmark.cutlass_kernel"),
+        CMakeExtension("triton_kernels_benchmark.sycl_tla_kernel"),
         CMakeExtension("triton_kernels_benchmark.onednn_kernel"),
     ],
     entry_points={

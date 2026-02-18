@@ -36,6 +36,7 @@
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
+#include "triton/Tools/PluginUtils.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/SourceMgr.h"
@@ -194,6 +195,9 @@ OpPrintingFlags getOpPrintingFlags() {
 }
 
 py::list getTensorDescMetadata(ModuleOp &mod) {
+  TritonSourceMgrDiagnosticHandler handler =
+      setupTritonDiagnosticHandler(mod.getContext());
+
   py::list result;
   triton::FuncOp kernelFunc;
   mod.walk([&](triton::FuncOp func) {
@@ -205,29 +209,32 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
   });
   assert(kernelFunc);
 
-  for (auto [i, argTy] : llvm::enumerate(kernelFunc.getArgumentTypes())) {
-    auto descTy = dyn_cast<TensorDescType>(argTy);
+  for (auto [i, arg] : llvm::enumerate(kernelFunc.getArguments())) {
+    auto descTy = dyn_cast<TensorDescInterface>(arg.getType());
     if (!descTy)
       continue;
 
+    bool isIm2Col = isa<ttng::TensorDescIm2ColType>(arg.getType());
     auto blockType = descTy.getBlockType();
     auto encoding = blockType.getEncoding();
 
     py::dict metadata;
     if (isa<ttg::NVMMASharedEncodingAttr>(encoding)) {
       auto mmaEncoding = dyn_cast<ttg::NVMMASharedEncodingAttr>(encoding);
-      auto swizzle = ttng::getTMASwizzleMode(nullptr, descTy);
-      auto elemType = ttng::getTMAElementType(nullptr, descTy);
-      assert(swizzle.has_value());
-      assert(elemType.has_value());
-      auto blockSize = ttng::getTMABlockShape(blockType, /*packedSize=*/false);
+      auto swizzle = ttng::getTMASwizzleMode(arg.getLoc(), descTy);
+      auto elemType = ttng::getTMAElementType(arg.getLoc(), descTy);
+      if (failed(swizzle) || failed(elemType))
+        throw py::type_error("invalid TMA descriptor type");
+      auto tmaMode = isIm2Col ? ttg::TMAMode::Im2Col : ttg::TMAMode::Tiled;
+      auto blockSize =
+          ttng::getTMABlockShape(blockType, /*packedSize=*/false, tmaMode);
       metadata["swizzle"] = *swizzle;
-      metadata["elem_size"] =
-          descTy.getBlockType().getElementTypeBitWidth() / 8;
+      metadata["elem_size"] = blockType.getElementTypeBitWidth() / 8;
       metadata["elem_type"] = *elemType;
       metadata["block_size"] =
           std::vector<int>(blockSize.begin(), blockSize.end());
       metadata["fp4_padded"] = mmaEncoding && mmaEncoding.getFp4Padded();
+      metadata["is_im2col"] = isIm2Col;
     } else {
       auto blockShape = blockType.getShape();
       metadata["block_size"] =
@@ -362,6 +369,26 @@ void init_triton_ir(py::module &&m) {
 
   m.def("load_dialects", [](MLIRContext &context) {
     DialectRegistry registry;
+
+    if (std::string filename =
+            mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
+        !filename.empty()) {
+      TritonPlugin TP(filename);
+
+      std::vector<const char *> dialectNames;
+      if (auto result = TP.getDialectHandles(dialectNames); !result)
+        llvm::report_fatal_error(result.takeError());
+
+      for (unsigned i = 0; i < dialectNames.size(); ++i) {
+        const char *dialectName = dialectNames.data()[i];
+        auto result = TP.getDialectPluginInfo(dialectName);
+        if (!result)
+          throw TP.err2exp(result.takeError());
+        ::mlir::DialectPluginLibraryInfo dialectPluginInfo = *result;
+        dialectPluginInfo.registerDialectRegistryCallbacks(&registry);
+      }
+    }
+
     registry.insert<TritonDialect, ::mlir::triton::gpu::TritonGPUDialect,
                     ::mlir::triton::instrument::TritonInstrumentDialect,
                     ::mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
@@ -635,6 +662,13 @@ void init_triton_ir(py::module &&m) {
                return py::none();
              return py::str(ret.getValue().str());
            })
+      .def("get_int_attr",
+           [](Operation &self, const std::string &name) -> py::object {
+             auto ret = self.getAttrOfType<IntegerAttr>(name);
+             if (!ret)
+               return py::none();
+             return py::int_(ret.getInt());
+           })
       .def("get_bool_attr",
            [](Operation &self, const std::string &name) -> py::object {
              auto ret = self.getAttrOfType<BoolAttr>(name);
@@ -789,7 +823,6 @@ void init_triton_ir(py::module &&m) {
           },
           ret::reference)
       //  .def("has_attr", &::FuncOp::hasAttr)
-      .def("finalize", [](FuncOp &self) -> void {})
       .def_property_readonly("type", &FuncOp::getFunctionType)
       .def("reset_type", &FuncOp::setType);
 
@@ -974,6 +1007,10 @@ void init_triton_ir(py::module &&m) {
       .def("get_int64_ty",
            [](TritonOpBuilder &self) -> Type {
              return self.getBuilder().getI64Type();
+           })
+      .def("get_int128_ty",
+           [](TritonOpBuilder &self) -> Type {
+             return self.getBuilder().getIntegerType(128);
            })
       .def("get_fp8e4nv_ty",
            [](TritonOpBuilder &self) -> Type {
@@ -1820,7 +1857,9 @@ void init_triton_ir(py::module &&m) {
                -> Value { return self.create<GatherOp>(src, indices, axis); })
       // Force GPU barrier
       .def("create_barrier",
-           [](TritonOpBuilder &self) { self.create<mlir::gpu::BarrierOp>(); })
+           [](TritonOpBuilder &self) {
+             self.create<triton::gpu::BarrierOp>(triton::gpu::AddrSpace::All);
+           })
       // Make a block pointer (tensor pointer in Triton IR)
       .def("create_make_block_ptr",
            [](TritonOpBuilder &self, Value &base, std::vector<Value> &shape,

@@ -15,6 +15,8 @@
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/STLExtras.h"
 
+#include <optional>
+
 #define DEBUG_TYPE "ttgpu_to_llvm"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
@@ -237,8 +239,8 @@ struct TritonLLVMOpBuilder {
     return LLVM::AddressOfOp::create(*builder, loc,
                                      std::forward<Args>(args)...);
   }
-  mlir::gpu::BarrierOp barrier() {
-    return mlir::gpu::BarrierOp::create(*builder, loc);
+  mlir::triton::gpu::BarrierOp barrier(triton::gpu::AddrSpace addrspace) {
+    return mlir::triton::gpu::BarrierOp::create(*builder, loc, addrspace);
   }
   template <typename... Args> LLVM::UndefOp undef(Args &&...args) {
     return LLVM::UndefOp::create(*builder, loc, std::forward<Args>(args)...);
@@ -266,6 +268,32 @@ struct TritonLLVMOpBuilder {
   Value i16_val(int64_t val) { return int_val(16, val); }
   Value i32_val(int64_t val) { return int_val(32, val); }
   Value i64_val(int64_t val) { return int_val(64, val); }
+
+  Value const_val(Type ty, Attribute attr) {
+    return LLVM::ConstantOp::create(*builder, loc, ty, attr);
+  }
+
+  Value vec_splat_i1_cons(unsigned numElements, int32_t val) {
+    auto type = builder->getIntegerType(1);
+    SmallVector<int32_t> consElems(numElements, val);
+    SmallVector<Attribute> attrElems;
+    for (auto c : consElems)
+      attrElems.push_back(builder->getIntegerAttr(type, c));
+    auto attr =
+        DenseElementsAttr::get(VectorType::get(numElements, type), attrElems);
+    return const_val(VectorType::get(numElements, type), attr);
+  }
+
+  Value vec_splat_i32_cons(unsigned numElements, int32_t val) {
+    auto type = builder->getIntegerType(32);
+    SmallVector<int32_t> consElems(numElements, val);
+    SmallVector<Attribute> attrElems;
+    for (auto c : consElems)
+      attrElems.push_back(builder->getIntegerAttr(type, c));
+    auto attr =
+        DenseElementsAttr::get(VectorType::get(numElements, type), attrElems);
+    return const_val(VectorType::get(numElements, type), attr);
+  }
 
   Location loc;
   OpBuilder *builder;
@@ -331,7 +359,7 @@ namespace triton {
 namespace gpu {
 
 std::pair<SmallVector<LocalMemOpTile>, SmallVector<LocalMemOpTile>>
-getSrcDstTiles(const TargetInfoBase &targetInfo, int bitwidth);
+getSrcDstTiles(const TargetInfoBase &targetInfo, int bitwidth, bool crossCTA);
 
 Type getFunctionType(Type resultType, ValueRange operands);
 
@@ -342,6 +370,9 @@ LLVM::LLVMFuncOp appendOrGetExternFuncOp(RewriterBase &rewriter, Operation *op,
 
 // Multiply a square layout with 1 input and output dimension with a vector
 Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x);
+
+// Whether the convert layout should be forced to use warp shuffles.
+bool cvtAlwaysUseWarpShuffle(triton::gpu::ConvertLayoutOp cvt);
 } // namespace gpu
 
 } // namespace triton
@@ -436,8 +467,14 @@ Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
 Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
                 ArrayRef<unsigned> shape);
 
+Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
+                triton::gpu::LinearEncodingAttr encoding, StringAttr dimName);
+
 size_t linearize(ArrayRef<unsigned> multiDim, ArrayRef<unsigned> shape,
                  ArrayRef<unsigned> order);
+
+GlobalOp getOrInsertGlobalConstant(RewriterBase &rewriter, ModuleOp module,
+                                   Type type, Attribute content, StringRef key);
 
 Value addStringToModule(Location loc, RewriterBase &rewriter, StringRef key,
                         StringRef content);
@@ -467,6 +504,10 @@ Value mxfpScaleBf16(RewriterBase &rewriter, Location loc, Value v, Value scale,
 // -----------------------------------------------------------------------
 // Hardware Indices
 // -----------------------------------------------------------------------
+
+// If an operation is contained within a warp specialize region, this returns
+// the warp ID offset of that warpgroup.
+std::optional<int> getWarpGroupStartWarpId(Block *block);
 
 // If an operation is contained within a warp specialize region, this returns
 // the thread ID offset of that warpgroup.
@@ -520,27 +561,29 @@ SmallVector<SmallVector<Value>>
 emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
             Attribute layout, RankedTensorType type, bool withCTAOffset);
 
-// Emits the required padding given shared memory offset
-// - If `offsetInBytes` is true, smemOffset and padding is assumed in bytes.
-// - If false, smemOffset and padding are assumed to be scaled by element
-// bitwidth, in which case, `bitwidth` is not used.
-Value emitPadding(Location loc, RewriterBase &rewriter,
-                  triton::gpu::PaddedSharedEncodingAttr layout,
-                  unsigned bitwidth, Value smemOffset, bool offsetInBytes);
+// Calculates the required interval chunking and padding logical-shift values
+// for shared memory padding, depending on elements' bit width and whether
+// offsets count the number of bytes or number of elements.
+SmallVector<std::pair<unsigned, unsigned>>
+getPaddedSharedShifts(Attribute enc, unsigned bitwidth, bool offsetInBytes);
+
+// Applies padding to base offset values in shared memory.
+Value applyPadding(Location loc, RewriterBase &rewriter, Value baseOffset,
+                   ArrayRef<std::pair<unsigned, unsigned>> shifts);
+uint32_t applyPadding(uint32_t baseOffset,
+                      ArrayRef<std::pair<unsigned, unsigned>> shifts);
 
 // Close cousin of lowerLdStMatrix in MemoryOpToLLVM.cpp
 // We might want to merge them at some point, but having to support
 // ldmatrix.trans makes the code in lowerLdStMatrix a bit specific
 // Lowers to st when valArrays is empty, and to ld when it is not,
 // and returns the output values.
-// calcPaddedOffset is a lambda that takes a base offset (mlir::Value)
-// and computes a new offset (mlir::Value) by applying padding based on
-// shared memory layout.
+// `paddingShifts` encodes shared memory padding if any.
 SmallVector<Value>
 lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                 ArrayRef<Value> valsArray, // Input for store, output for load
                 Type llvmElemTy, Value smemBase,
-                std::function<Value(Value)> calcPaddedOffset,
+                ArrayRef<std::pair<unsigned, unsigned>> paddingShifts,
                 Value affineOffset, uint64_t maskSpanAffineOffset,
                 RewriterBase &rewriter, const TargetInfoBase &targetInfo,
                 std::optional<int> maybeMaxVecElems = {},
@@ -552,17 +595,18 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
 // calcPaddedOffset is a lambda that takes a base offset (mlir::Value)
 // and computes a new offset (mlir::Value) by applying padding based on
 // shared memory layout.
-SmallVector<Value> lowerLdSt(
-    Location loc, MLIRContext *ctx, LinearLayout cvt,
-    ArrayRef<Value> valsArray, // Input for store, output for load
-    Type llvmElemTy, Value smemBase,
-    std::function<Value(Value)> calcPaddedOffset, Value affineOffset,
-    uint64_t maskSpanAffineOffset, Value laneId, Value warpId,
-    RewriterBase &rewriter, const TargetInfoBase &targetInfo,
-    std::optional<int> maybeMaxVecElems,
-    std::function<SmallVector<Value>(RewriterBase &, Location, ArrayRef<Value>,
-                                     Value, int, VectorType)>
-        lowerInst);
+SmallVector<Value>
+lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
+          ArrayRef<Value> valsArray, // Input for store, output for load
+          Type llvmElemTy, Value smemBase,
+          ArrayRef<std::pair<unsigned, unsigned>> paddingShifts,
+          Value affineOffset, uint64_t maskSpanAffineOffset, Value laneId,
+          Value warpId, RewriterBase &rewriter,
+          const TargetInfoBase &targetInfo, std::optional<int> maybeMaxVecElems,
+          std::function<SmallVector<Value>(RewriterBase &, Location,
+                                           ArrayRef<Value>, Value, int,
+                                           VectorType, std::optional<Value>)>
+              lowerInst);
 
 // Lower local_load/local_store via ld.shared/st.shared
 SmallVector<Value>
@@ -604,10 +648,10 @@ void makeAllWarpGroupsIsolatedFromAbove(Operation *op);
 // Set the correct loop annotation on LLVM branch ops.
 void fixUpLoopAnnotation(ModuleOp mod);
 
-void transferWithinBlockSwizzling(triton::gpu::ConvertLayoutOp op, Value src,
-                                  const TargetInfoBase &targetInfo,
-                                  const LLVMTypeConverter *typeConverter,
-                                  RewriterBase &rewriter);
+void transferSwizzlingLocalMem(triton::gpu::ConvertLayoutOp op, Value src,
+                               const TargetInfoBase &targetInfo,
+                               const LLVMTypeConverter *typeConverter,
+                               RewriterBase &rewriter);
 
 SmallVector<Value> inlineRegionImpl(RewriterBase &rewriter, Region &region,
                                     ArrayRef<Value> args,
@@ -621,6 +665,14 @@ SmallVector<Value> inlineRegion(RewriterBase &rewriter, Region &region,
                           mlir::TypeID::get<TerminatorOp>(), loc);
 }
 
+// #prevBlock
+// if (condition) {
+//   #ifBlock
+// }
+// #thenBlock
+std::tuple</*prevBlock=*/Block *, /*ifBlock=*/Block *, /*thenBlock=*/Block *>
+createIfBlock(ConversionPatternRewriter &b, Location loc, Value cnd);
+
 void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
                                  ConversionPatternRewriter &rewriter,
                                  SmallVector<Value> &resultVals,
@@ -628,6 +680,16 @@ void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
                                  Value threadPred,
                                  const TargetInfoBase &targetInfo,
                                  const LLVMTypeConverter *typeConverter);
+
+// -----------------------------------------------------------------------
+// FuncOp conversion utilities
+// -----------------------------------------------------------------------
+void filterFuncAttributes(triton::FuncOp op, bool filterArgAttrs,
+                          SmallVectorImpl<NamedAttribute> &result);
+triton::FuncOp amendFuncOp(triton::FuncOp funcOp,
+                           ConversionPatternRewriter &rewriter,
+                           const TargetInfoBase &targetInfo);
+void handleArgPtrDatatype(triton::FuncOp funcOp, LLVM::LLVMFuncOp &llvmFuncOp);
 } // namespace mlir
 
 #endif

@@ -18,11 +18,14 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierInsertion.h"
 
 #include "Allocation.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
+
+namespace ttng = mlir::triton::nvidia_gpu;
 
 namespace mlir {
 namespace triton {
@@ -55,7 +58,11 @@ public:
     addLegalDialect<cf::ControlFlowDialect>();
     addLegalDialect<mlir::triton::nvgpu::NVGPUDialect>();
     addIllegalDialect<triton::TritonDialect>();
-    addIllegalDialect<triton::gpu::TritonGPUDialect>();
+    addDynamicallyLegalDialect<triton::gpu::TritonGPUDialect>(
+        [](mlir::Operation *op) {
+          // We handle the warp ID op during NVGPUToLLVM.
+          return isa<triton::gpu::WarpIdOp>(op);
+        });
     addIllegalDialect<triton::nvidia_gpu::TritonNvidiaGPUDialect>();
     addIllegalDialect<mlir::gpu::GPUDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
@@ -65,6 +72,10 @@ public:
     addLegalOp<triton::gpu::WarpYieldOp>();
     addLegalOp<triton::gpu::WarpSpecializePartitionsOp>();
     addLegalOp<triton::gpu::WarpReturnOp>();
+    addDynamicallyLegalOp<triton::gpu::GlobalScratchAllocOp>(
+        [](triton::gpu::GlobalScratchAllocOp op) {
+          return op.getBackend() != "default";
+        });
   }
 };
 
@@ -86,7 +97,9 @@ struct ConvertTritonGPUToLLVM
     ModuleAllocation allocation(
         mod, mlir::triton::nvidia_gpu::getNvidiaAllocationAnalysisScratchSizeFn(
                  targetInfo));
-    ModuleMembarAnalysis membarPass(&allocation);
+    mlir::triton::nvidia_gpu::runClusterBarrierInsertion(allocation,
+                                                         computeCapability);
+    ModuleMembarAnalysis membarPass(&allocation, canSkipBarSync);
     membarPass.run();
 
     mlir::LowerToLLVMOptions option(context);
@@ -169,8 +182,8 @@ struct ConvertTritonGPUToLLVM
                                                            patterns, benefit);
     mlir::triton::NVIDIA::populateFp4ToFpToLLVMPatterns(typeConverter, patterns,
                                                         benefit);
-    mlir::triton::populateInstrumentationToLLVMPatterns(
-        typeConverter, targetInfo, patterns, benefit);
+    mlir::triton::populateInstrumentationToLLVMPatterns(typeConverter,
+                                                        patterns);
 
     TritonLLVMConversionTarget convTarget(*context);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
@@ -242,46 +255,20 @@ createConvertTritonGPUToLLVMPass(int32_t computeCapability,
                                                   ptxVersion);
 }
 
-bool NVIDIA::canSkipBarSync(Operation *before, Operation *after) {
-  // Multiple init barriers on the same allocation would usually not happen but
-  // that allows us to avoid barriers between multiple subslice of an array of
-  // mbarriers. This is still correct even if the inits happen on the same
-  // allocation.
-  if (isa<triton::nvidia_gpu::InitBarrierOp>(before) &&
-      isa<triton::nvidia_gpu::InitBarrierOp>(after))
+bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
+                            bool /*beforeIsRead*/, bool /*afterIsRead*/,
+                            Allocation *allocation) {
+  // These mbarrier ops are single threaded, so are always synchronized wrt.
+  // each other.
+  if (isa<ttng::InitBarrierOp, ttng::InvalBarrierOp, ttng::BarrierExpectOp>(
+          before) &&
+      isa<ttng::InitBarrierOp, ttng::InvalBarrierOp, ttng::BarrierExpectOp>(
+          after))
     return true;
 
-  if (isa<triton::nvidia_gpu::InvalBarrierOp>(before) &&
-      isa<triton::nvidia_gpu::InvalBarrierOp>(after))
-    return true;
-
-  //  We can't have a warp get ahead when we have a chain of mbarrier wait so we
-  //  need a barrier in between two WaitBarrierOp.
-  if (isa<triton::nvidia_gpu::WaitBarrierOp>(before) &&
-      isa<triton::nvidia_gpu::WaitBarrierOp>(after))
-    return false;
-
-  // Even though WaitBarrierOp, AsyncTMACopyGlobalToLocalOp and
-  // AsyncTMACopyGlobalToLocalOp read and write to the mbarrier allocation it is
-  // valid for them to happen in different order on different threads, therefore
-  // we don't need a barrier between those operations.
-  if (isa<triton::nvidia_gpu::WaitBarrierOp,
-          triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp,
-          triton::nvidia_gpu::AsyncTMAGatherOp,
-          triton::nvidia_gpu::BarrierExpectOp>(before) &&
-      isa<triton::nvidia_gpu::WaitBarrierOp,
-          triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp,
-          triton::nvidia_gpu::AsyncTMAGatherOp,
-          triton::nvidia_gpu::BarrierExpectOp>(after))
-    return true;
-
-  // A mbarrier wait is released only when the whole operations is done,
-  // therefore any thread can access the memory after the barrier even if some
-  // threads haven't reached the mbarrier wait.
-  if (isa<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp,
-          triton::nvidia_gpu::AsyncTMAGatherOp,
-          triton::nvidia_gpu::WaitBarrierOp>(before) &&
-      !isa<triton::nvidia_gpu::InvalBarrierOp>(after))
+  // wait_barrier will never run ahead of the load it's waiting on
+  if (isa<ttng::AsyncTMACopyGlobalToLocalOp, ttng::AsyncTMAGatherOp>(before) &&
+      isa<ttng::WaitBarrierOp>(after))
     return true;
 
   return false;

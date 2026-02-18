@@ -1,9 +1,11 @@
 #ifndef TRITON_INTEL_ANALYSIS_DPAS_H
 #define TRITON_INTEL_ANALYSIS_DPAS_H
 
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include <variant>
 
 namespace mlir::triton::gpu::intel {
 
@@ -11,36 +13,83 @@ namespace mlir::triton::gpu::intel {
 // Intel DPAS Analysis
 //===----------------------------------------------------------------------===//
 
+// Encode operands as D,C,A,B.
+enum class DPASEngineTypeXe2 : uint8_t {
+  // data types for dot.
+  FP32_FP32_FP16_FP16 = 0, // default
+  FP32_FP32_BF16_BF16,
+  FP32_FP32_TF32_TF32,
+  FP16_FP16_FP16_FP16,
+  BF16_BF16_BF16_BF16,
+  U32_U32_U8_U8,
+  S32_S32_S8_S8,
+  // data types for dot scaled.
+  FP32_FP32_BF16_FP8,
+  FP32_FP32_BF16_FP4,
+  FP32_FP32_FP16_FP8,
+  FP32_FP32_FP16_FP4,
+  FP32_FP32_FP8_BF16,
+  FP32_FP32_FP8_FP16,
+  FP32_FP32_FP8_FP8,
+  FP32_FP32_FP8_FP4,
+  FP32_FP32_FP4_BF16,
+  FP32_FP32_FP4_FP16,
+  FP32_FP32_FP4_FP8,
+  FP32_FP32_FP4_FP4,
+  NOT_APPLICABLE
+};
+
+// Encode operands as D,C,A,B.
+enum class DPASEngineTypeXe3P : uint8_t {
+  // data types for dot.
+  FP32_FP32_FP16_FP16 = 0, // default
+  FP32_FP32_BF16_BF16,
+  FP32_FP32_TF32_TF32,
+  FP16_FP16_FP16_FP16,
+  BF16_BF16_FP8_FP8,
+  BF16_BF16_BF16_BF16,
+  U32_U32_U8_U8,
+  S32_S32_S8_S8,
+  // data types for dot scaled.
+  FP32_FP32_BF16_FP8,
+  FP32_FP32_BF16_FP4,
+  FP32_FP32_FP16_FP8,
+  FP32_FP32_FP16_FP4,
+  FP32_FP32_FP8_BF16,
+  FP32_FP32_FP8_FP16,
+  FP32_FP32_FP8_FP8,
+  FP32_FP32_FP8_FP4,
+  FP32_FP32_FP4_BF16,
+  FP32_FP32_FP4_FP16,
+  FP32_FP32_FP4_FP8,
+  FP32_FP32_FP4_FP4,
+  NOT_APPLICABLE
+};
+
+enum class DPASAnalysisResult { True, False, Maybe };
+
+// Analysis class for DPAS support.
+template <typename EngineType,
+          typename = std::enable_if_t<llvm::is_one_of<
+              EngineType, DPASEngineTypeXe2, DPASEngineTypeXe3P>::value>>
 class DPASAnalysis {
+  friend class DPASAnalysisFactory;
+
 public:
+  using DPASEngineType = EngineType;
+
+  /// Given a 'DotOp' or 'ScaledDot' operation, return its DPAS engine type.
+  static DPASEngineType getDPASType(Operation *op);
+
+  // clang-format off
+  template <typename OpTy>
+  typename std::enable_if<llvm::is_one_of<OpTy, DotOp, DotScaledOp>::value,
+                          DPASEngineType>::type
+  static getDPASType(OpTy);
+  // clang-format on
+
+private:
   explicit DPASAnalysis(Operation *root);
-
-  enum class Result { True, False, Maybe };
-
-  enum class DPASEngineType : uint8_t {
-    // data types for operands D,C,A,B.
-    FP32_FP32_FP16_FP16 = 0, // default
-    FP32_FP32_BF16_BF16,
-    FP32_FP32_TF32_TF32,
-    FP16_FP16_FP16_FP16,
-    BF16_BF16_BF16_BF16,
-    U32_U32_U8_U8,
-    S32_S32_S8_S8,
-    // data types for dot scaled.
-    FP32_FP32_BF16_FP8,
-    FP32_FP32_BF16_FP4,
-    FP32_FP32_FP16_FP8,
-    FP32_FP32_FP16_FP4,
-    FP32_FP32_FP8_BF16,
-    FP32_FP32_FP8_FP16,
-    FP32_FP32_FP8_FP8,
-    FP32_FP32_FP8_FP4,
-    FP32_FP32_FP4_BF16,
-    FP32_FP32_FP4_FP16,
-    FP32_FP32_FP4_FP8,
-    FP32_FP32_FP4_FP4,
-    NOT_APPLICABLE
-  };
 
   /// Analyze the 'dotToDPASEngineMap' for the given function and return:
   ///  - Result::True if the function associated with this analysis contains
@@ -50,17 +99,7 @@ public:
   ///  - Result::Maybe if it contains DotOp operations that could be lowered to
   ///    DPAS instructions if the module was executed with a different subgroup
   ///    (aka threads per warp) size.
-  Result canUseDPAS(FunctionOpInterface funcOp) const;
-
-  /// Given a 'DotOp' or 'ScaledDot' operation, return its DPAS engine type.
-  static DPASEngineType getDPASType(Operation *op);
-
-  // clang-format off
-  template <typename OpTy>
-  typename std::enable_if<llvm::is_one_of<OpTy, DotOp, DotScaledOp>::value,
-                          DPASAnalysis::DPASEngineType>::type
-  static getDPASType(OpTy);
-  // clang-format on
+  DPASAnalysisResult canUseDPAS(FunctionOpInterface funcOp) const;
 
 private:
   mlir::ModuleOp mod;
@@ -72,6 +111,109 @@ private:
   std::map<FunctionOpInterface, SmallVector<Operation *>> funcToDotMap;
 };
 
+using DPASAnalysisV1 = DPASAnalysis<DPASEngineTypeXe2>;
+using DPASAnalysisV2 = DPASAnalysis<DPASEngineTypeXe3P>;
+using DPASAnalysisVariant = std::variant<DPASAnalysisV1, DPASAnalysisV2>;
+using DPASEngineTypeVariant =
+    std::variant<DPASEngineTypeXe2, DPASEngineTypeXe3P>;
+
+// Factory class used to create a concrete DPAS analysis.
+class DPASAnalysisFactory {
+public:
+  static DPASAnalysisVariant createDPASAnalysis(ModuleOp &mod) {
+    bool supportDPASWithBF8 =
+        mod->hasAttr(TritonIntelGPUDialect::getSupportDPASWithBF8AttrName());
+    if (!supportDPASWithBF8)
+      return DPASAnalysisV1(mod);
+    return DPASAnalysisV2(mod);
+  }
+
+  // Retrieve the DPAS engine type for a given operation.
+  template <typename OpTy, typename = std::enable_if<llvm::is_one_of<
+                               OpTy, DotOp, DotScaledOp>::value>>
+  static DPASEngineTypeVariant getDPASType(OpTy op,
+                                           DPASAnalysisVariant variant) {
+    return std::visit(
+        [&](auto &&analysis) {
+          return DPASEngineTypeVariant(analysis.getDPASType(op));
+        },
+        variant);
+  }
+
+  // Ensure function wide DPAS applicability.
+  static DPASAnalysisResult canUseDPAS(FunctionOpInterface funcOp,
+                                       DPASAnalysisVariant variant) {
+    return std::visit(
+        [&](auto &&analysis) { return analysis.canUseDPAS(funcOp); }, variant);
+  }
+
+  // Ensure DPAS applicability for a given operation.
+  template <typename OpTy, typename = std::enable_if<llvm::is_one_of<
+                               OpTy, DotOp, DotScaledOp>::value>>
+  static DPASAnalysisResult canUseDPAS(OpTy op, DPASAnalysisVariant variant) {
+    return std::visit(
+        [&](auto &&analysis) {
+          using ConcreteAnalysisType = std::decay_t<decltype(analysis)>;
+          using DPASEngineType = typename ConcreteAnalysisType::DPASEngineType;
+
+          if constexpr (std::is_same_v<OpTy, DotOp>) {
+            DPASEngineType dpasType = analysis.getDPASType(op);
+            return (dpasType != DPASEngineType::NOT_APPLICABLE)
+                       ? DPASAnalysisResult::True
+                       : DPASAnalysisResult::False;
+          }
+
+          if constexpr (std::is_same_v<OpTy, DotScaledOp>) {
+            if constexpr (std::is_same_v<DPASEngineType, DPASEngineTypeXe3P>) {
+              DPASEngineType dpasType = analysis.getDPASType(op);
+
+              switch (dpasType) {
+              case DPASEngineTypeXe3P::FP32_FP32_FP16_FP16:
+              case DPASEngineTypeXe3P::FP32_FP32_BF16_BF16:
+              case DPASEngineTypeXe3P::BF16_BF16_BF16_BF16:
+              case DPASEngineTypeXe3P::FP16_FP16_FP16_FP16:
+              case DPASEngineTypeXe3P::FP32_FP32_FP8_FP8:
+              case DPASEngineTypeXe3P::BF16_BF16_FP8_FP8:
+                break;
+              case DPASEngineTypeXe3P::FP32_FP32_FP4_FP4:
+                // BDPAS only support packing along K for A and B matrix.
+                if (!op.getRhsKPack() || !op.getLhsKPack())
+                  return DPASAnalysisResult::False;
+                break;
+              default:
+                return DPASAnalysisResult::False;
+              }
+            }
+
+            ScaleDotElemType aElemType = op.getAElemType();
+            ScaleDotElemType bElemType = op.getBElemType();
+            bool isBothFP8 = (aElemType == ScaleDotElemType::E4M3 ||
+                              aElemType == ScaleDotElemType::E5M2) &&
+                             (bElemType == ScaleDotElemType::E4M3 ||
+                              bElemType == ScaleDotElemType::E5M2);
+            if (!isBothFP8) {
+              // Doesn't support these mixed precision in bdpas natively.
+              // Need to decompose to simpler tt.dot with software scale for
+              // now.
+              // TODO: improve this by decompose to simpler tt.dot_scale with
+              // hardware scaling.
+              // (intel-tools/intel-xpu-backend-for-triton#755)
+              if (aElemType != bElemType)
+                return DPASAnalysisResult::False;
+            }
+
+            return DPASAnalysisResult::True;
+          }
+
+          return DPASAnalysisResult::True;
+        },
+        variant);
+  }
+};
+
 } // namespace mlir::triton::gpu::intel
+
+// Include implementation (required for templates)
+#include "DPAS.tpp"
 
 #endif // TRITON_INTEL_ANALYSIS_DPAS_H

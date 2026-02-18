@@ -19,9 +19,11 @@ from .standard import (
     sigmoid,
     softmax,
     sort,
+    squeeze,
     sum,
     swizzle2d,
     topk,
+    unsqueeze,
     xor_sum,
     zeros,
     zeros_like,
@@ -108,6 +110,7 @@ from .core import (
     store,
     sub,
     tensor,
+    to_tensor,
     trans,
     tuple,
     tuple_type,
@@ -252,6 +255,7 @@ __all__ = [
     "split",
     "sqrt",
     "sqrt_rn",
+    "squeeze",
     "static_assert",
     "static_print",
     "static_range",
@@ -262,6 +266,7 @@ __all__ = [
     "target_info",
     "tensor",
     "topk",
+    "to_tensor",
     "trans",
     "tuple",
     "uint16",
@@ -270,6 +275,7 @@ __all__ = [
     "uint8",
     "uint_to_uniform_float",
     "umulhi",
+    "unsqueeze",
     "view",
     "void",
     "where",
@@ -296,14 +302,25 @@ def str_to_ty(name, c):
         return pointer_type(element_ty=ty, const=const)
 
     if name.startswith("tensordesc"):
+        # Determine mode from type name: tensordesc_im2col vs tensordesc
+        is_im2col = name.startswith("tensordesc_im2col")
+
         inner = name.split("<")[1].rstrip(">")
         dtype, rest = inner.split("[", maxsplit=1)
         block_shape, rest = rest.split("]", maxsplit=1)
         block_shape = [int(s.strip()) for s in block_shape.rstrip("]").split(",")]
-        layout = rest.lstrip(",")
-        is_gluon = len(layout)
+        # For im2col, parse optional input_rank=N (e.g., ",input_rank=4,layout")
+        tensor_rank = None
+        import re as _re
+        rank_match = _re.search(r",input_rank=(\d+)", rest)
+        if rank_match:
+            tensor_rank = int(rank_match.group(1))
+            rest = rest[:rank_match.start()] + rest[rank_match.end():]
+        layout_str = rest.lstrip(",")
+        is_gluon = len(layout_str)
         dtype = str_to_ty(dtype, None)
-        ndim = len(block_shape)
+        # For im2col with tensor_rank, use it for shape/stride types; otherwise use block_shape ndim
+        ndim = tensor_rank if (is_im2col and tensor_rank is not None) else len(block_shape)
         shape_type = tuple_type([int32] * ndim)
         # FIXME: Last dim stride should be constexpr(1)
         stride_type = tuple_type(([int64] * ndim))
@@ -311,12 +328,15 @@ def str_to_ty(name, c):
         if is_gluon:
             from triton.experimental.gluon.language._layouts import NVMMASharedLayout, PaddedSharedLayout, SwizzledSharedLayout
             from triton.experimental.gluon.language.nvidia.hopper.tma import tensor_descriptor_type as nvidia_tensor_descriptor_type
+            from triton.experimental.gluon.language.nvidia.hopper.tma import tensor_descriptor_im2col_type as nvidia_tensor_descriptor_im2col_type
             from triton.experimental.gluon.language.amd.gfx1250.tdm import tensor_descriptor_type as amd_tensor_descriptor_type
             layout = eval(
-                layout,
+                layout_str,
                 dict(NVMMASharedLayout=NVMMASharedLayout, PaddedSharedLayout=PaddedSharedLayout,
                      SwizzledSharedLayout=SwizzledSharedLayout))
             if isinstance(layout, NVMMASharedLayout):
+                if is_im2col:
+                    return nvidia_tensor_descriptor_im2col_type(block, shape_type, stride_type, layout)
                 return nvidia_tensor_descriptor_type(block, shape_type, stride_type, layout)
             else:
                 return amd_tensor_descriptor_type(block, shape_type, stride_type, layout)

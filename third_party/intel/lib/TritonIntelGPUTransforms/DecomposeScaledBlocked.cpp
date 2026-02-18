@@ -1,4 +1,5 @@
 #include "Dialect/TritonIntelGPU/Transforms/DecomposeScaledBlocked.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 
 #include "mlir/IR/Types.h"
 #include "mlir/IR/Value.h"
@@ -30,6 +31,11 @@ public:
 
   LogicalResult matchAndRewrite(DotScaledOp scaledDotOp,
                                 PatternRewriter &rewriter) const override {
+    RankedTensorType oldRetType = scaledDotOp.getType();
+    if (!oldRetType.getEncoding() ||
+        isa<intel::DpasEncodingAttr>(oldRetType.getEncoding()))
+      return failure();
+
     // Types
     auto computeType = getComputeType(scaledDotOp.getAElemType(),
                                       scaledDotOp.getBElemType(), rewriter);
@@ -42,8 +48,7 @@ public:
       auto vType = v.getType();
       auto encoding = DotOperandEncodingAttr::get(ctx, opIdx, retEnc,
                                                   vType.getElementType());
-      auto retTy = RankedTensorType::get(vType.getShape(),
-                                         vType.getElementType(), encoding);
+      RankedTensorType retTy = vType.cloneWithEncoding(encoding);
       return ConvertLayoutOp::create(rewriter, loc, retTy, v);
     };
 
@@ -122,8 +127,7 @@ private:
                                                   threadsPerWarp, numCTAs);
       // 2.1.2) Cast scale16 to SliceEncoding
       auto sliceEnc = SliceEncodingAttr::get(ctx, rank, blockedEnc);
-      auto sliceType = RankedTensorType::get(
-          scaleTy.getShape(), scaleTy.getElementType(), sliceEnc);
+      RankedTensorType sliceType = scaleTy.cloneWithEncoding(sliceEnc);
       scale = ConvertLayoutOp::create(rewriter, loc, sliceType, scale);
     }
     auto expandScale = ExpandDimsOp::create(rewriter, loc, scale, rank);
@@ -166,8 +170,7 @@ private:
     auto cond = broadcastScale(rewriter, scaledDotOp, mod, scaleIsNan, dim);
     // Make scale is NaN compatible with mxfp
     auto condTy = cond.getType();
-    condTy = RankedTensorType::get(condTy.getShape(), condTy.getElementType(),
-                                   mxfp.getType().getEncoding());
+    condTy = condTy.cloneWithEncoding(mxfp.getType().getEncoding());
     cond = ConvertLayoutOp::create(rewriter, loc, condTy, cond);
 
     // Create NaN

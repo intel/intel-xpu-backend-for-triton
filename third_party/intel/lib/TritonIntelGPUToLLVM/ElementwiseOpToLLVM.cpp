@@ -1,4 +1,5 @@
 #include "PatternTritonGPUOpToLLVM.h"
+#include "Utility.h"
 #include "mlir/Conversion/ArithCommon/AttrToLLVMConverter.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/MLIRContext.h"
@@ -767,9 +768,136 @@ inline Type getElementType(Value value) {
   return type;
 }
 
+template <typename Ty> Type toType(TritonLLVMIRRewriter &b) {
+  return Ty::name.contains("f8E") ? ((Type)b.builder->getI8Type())
+                                  : ((Type)Ty::get(b.builder->getContext()));
+}
+
+constexpr const auto SUPPORT_F8_CONV =
+    triton::gpu::intel::TritonIntelGPUDialect::getSupportF8ConversionAttrName;
+constexpr const char BUILTIN_HFTOHF8[] =
+    "__builtin_spirv_ClampConvertFP16ToE4M3INTEL";
+constexpr const char BUILTIN_HFTOBF8[] =
+    "__builtin_spirv_ClampConvertFP16ToE5M2INTEL";
+constexpr const char BUILTIN_BFTOHF8[] =
+    "__builtin_spirv_ClampConvertBF16ToE4M3INTEL";
+constexpr const char BUILTIN_BFTOBF8[] =
+    "__builtin_spirv_ClampConvertBF16ToE5M2INTEL";
+constexpr const char BUILTIN_HF8TOHF[] =
+    "__builtin_spirv_ConvertE4M3ToFP16INTEL";
+constexpr const char BUILTIN_BF8TOHF[] =
+    "__builtin_spirv_ConvertE5M2ToFP16INTEL";
+
+// Call the builtin function BaseName. If the
+// input size > 1, pack the values in vectors of size pow 2 <= MaxVecSize.
+template <auto BaseName, typename DstTy, size_t MaxVecSize = 16>
+SmallVector<Value> BuiltinConvert(Location loc,
+                                  ConversionPatternRewriter &rewriter,
+                                  const SmallVector<Value> &values) {
+  auto convert = [&](TritonLLVMIRRewriter &rw, Value v) {
+    Type srcTy;
+    if (auto vecTy = dyn_cast<mlir::VectorType>(v.getType())) {
+      srcTy = vecTy.getElementType();
+    } else {
+      srcTy = v.getType();
+    }
+
+    if (srcTy.isF32()) { // Convert to F16
+      srcTy = rw.builder->getF16Type();
+      v = LLVM::FPTruncOp::create(
+          *rw.builder, loc,
+          mlir::LLVM::intel::getTypeWithSameShape(v.getType(), srcTy), v);
+    }
+
+    auto result = mlir::triton::intel::convertWithFunctionCall(
+        rw, v, BaseName, srcTy, toType<DstTy>(rw));
+
+    // TODO: remove the below code when natively supported by IGC
+    // Clamp the B/HF8 result to [min, max]
+    int8_t min;
+    int8_t max;
+    int8_t inf;
+    int8_t minf;
+    if constexpr (std::is_same_v<DstTy, Float8E4M3Type>) {
+      min = 0b11111110;
+      max = 0b01111110;
+      inf = 0b01111111;
+      minf = 0b11111111;
+    } else if constexpr (std::is_same_v<DstTy, Float8E5M2Type>) {
+      min = 0b11111011;
+      max = 0b01111011;
+      inf = 0b01111100;
+      minf = 0b11111100;
+    } else {
+      return result;
+    }
+
+    Type dstTy = rw.builder->getI8Type();
+    Attribute maxAttr = rw.builder->getI8IntegerAttr(max);
+    Attribute minAttr = rw.builder->getI8IntegerAttr(min);
+    auto &lfs = static_cast<FloatType>(srcTy).getFloatSemantics();
+    Attribute infAttr =
+        rw.builder->getFloatAttr(srcTy, APFloat::getInf(lfs, false));
+    Attribute minfAttr =
+        rw.builder->getFloatAttr(srcTy, APFloat::getInf(lfs, true));
+    if (auto vecTy = dyn_cast<mlir::VectorType>(v.getType())) {
+      auto numEls = vecTy.getNumElements();
+      auto srcVecTy = VectorType::get(numEls, srcTy);
+      auto dstVecTy = VectorType::get(numEls, dstTy);
+      maxAttr = DenseElementsAttr::get(dstVecTy, SmallVector(numEls, maxAttr));
+      minAttr = DenseElementsAttr::get(dstVecTy, SmallVector(numEls, minAttr));
+      infAttr = DenseElementsAttr::get(srcVecTy, SmallVector(numEls, infAttr));
+      minfAttr =
+          DenseElementsAttr::get(srcVecTy, SmallVector(numEls, minfAttr));
+      srcTy = srcVecTy;
+      dstTy = dstVecTy;
+    }
+
+    Value minVal = LLVM::ConstantOp::create(*rw.builder, loc, dstTy, minAttr);
+    Value maxVal = LLVM::ConstantOp::create(*rw.builder, loc, dstTy, maxAttr);
+    Value infVal = LLVM::ConstantOp::create(*rw.builder, loc, srcTy, infAttr);
+    Value minfVal = LLVM::ConstantOp::create(*rw.builder, loc, srcTy, minfAttr);
+
+    // Clamp -inf to min
+    result = LLVM::SelectOp::create(
+        *rw.builder, loc,
+        LLVM::FCmpOp::create(*rw.builder, loc, LLVM::FCmpPredicate::oeq, v,
+                             minfVal),
+        minVal, result);
+    // Clamp +inf to max
+    result = LLVM::SelectOp::create(
+        *rw.builder, loc,
+        LLVM::FCmpOp::create(*rw.builder, loc, LLVM::FCmpPredicate::oeq, v,
+                             infVal),
+        maxVal, result);
+    return result;
+  };
+  return mlir::LLVM::intel::vectorize(convert, loc, rewriter, values,
+                                      MaxVecSize);
+}
+
+template <auto GetAttrName> bool HasAttr(Operation *op) {
+  return mlir::triton::gpu::intel::hasSpirvTargetArch(op) &&
+         mlir::LLVM::intel::hasModuleAttr(op, GetAttrName());
+}
+
 typedef std::function<SmallVector<Value>(Location, ConversionPatternRewriter &,
                                          const SmallVector<Value> &)>
-    ConverterT;
+    ConverterFunc;
+
+struct Converter {
+  const ConverterFunc func;
+  // Minimum number of elements that can be converted by this function. If there
+  // are less elements, the input vector should be padded with undef.
+  size_t minElements;
+  size_t maxElements;
+
+  Converter(ConverterFunc func, size_t minElements = 1, size_t maxElements = 1)
+      : func(func), minElements(minElements),
+        maxElements(std::max(maxElements, minElements)) {
+    assert(minElements > 0 && "minElements must be > 0");
+  }
+};
 
 // Attempts to use vectorized conversions via inline PTX when possible.
 struct FpToFpOpConversion
@@ -800,9 +928,8 @@ struct FpToFpOpConversion
         arith::getLLVMDefaultFPExceptionBehavior(*ctx));
   }
 
-  std::pair<ConverterT, size_t>
-  getConversionFunc(Type srcTy, Type dstTy,
-                    std::optional<RoundingMode> roundingMode) const {
+  Converter &getConverter(Operation *op, Type srcTy, Type dstTy,
+                          std::optional<RoundingMode> roundingMode) const {
     auto F8E4M3B15TyID = TypeID::get<Float8E4M3FNUZType>();
     auto F8E4M3TyID = TypeID::get<Float8E4M3FNType>();
     auto F8E5M2TyID = TypeID::get<Float8E5M2Type>();
@@ -812,23 +939,53 @@ struct FpToFpOpConversion
     auto F64TyID = TypeID::get<Float64Type>();
 
     if (srcTy.getTypeID() == dstTy.getTypeID()) {
-      constexpr auto identityFn = [](Location,
-                                     ConversionPatternRewriter &rewriter,
+      constexpr auto identityFn = [](Location, ConversionPatternRewriter &,
                                      const SmallVector<Value> &v) { return v; };
-      return {identityFn, (srcTy.getTypeID() == F8E4M3TyID ||
-                           dstTy.getTypeID() == F8E4M3TyID)
-                              ? 2
-                              : 4};
+
+      if ((srcTy.getTypeID() == F8E4M3TyID ||
+           dstTy.getTypeID() == F8E4M3TyID)) {
+        static Converter c{identityFn, 2, 2};
+        return c;
+      } else {
+        static Converter c{identityFn, 4, 4};
+        return c;
+      }
     }
 
+    // If the predicate returns true, use converterA, otherwise - converterB
+    struct ConverterSelector {
+      std::function<bool(Operation *)> predicate;
+      Converter converterA;
+      Converter converterB;
+
+      ConverterSelector(std::function<bool(Operation *)> predicate,
+                        Converter converterA, Converter converterB)
+          : predicate(predicate), converterA(converterA),
+            converterB(converterB) {}
+
+      ConverterSelector(ConverterFunc func, size_t minElements,
+                        size_t maxElements)
+          : ConverterSelector([](Operation *) { return true; },
+                              {func, minElements, maxElements},
+                              {nullptr, 1, 1}) {}
+
+      ConverterSelector(ConverterFunc func, size_t numElements)
+          : ConverterSelector(func, numElements, numElements) {}
+    };
+
     auto undefRounding = static_cast<RoundingMode>(-1);
-    static DenseMap<std::tuple<TypeID, TypeID, RoundingMode>,
-                    std::pair<ConverterT, size_t>>
+    static DenseMap<std::tuple<TypeID, TypeID, RoundingMode>, ConverterSelector>
         srcMap = {
             // F8 -> F16
             {{F8E4M3B15TyID, F16TyID, undefRounding}, {Fp8E4M3B15_to_Fp16, 4}},
-            {{F8E4M3TyID, F16TyID, undefRounding}, {Fp8E4M3Nv_to_Fp16, 2}},
-            {{F8E5M2TyID, F16TyID, undefRounding}, {Fp8E5M2_to_Fp16, 4}},
+            {{F8E4M3TyID, F16TyID, undefRounding},
+             {HasAttr<SUPPORT_F8_CONV>,
+              {BuiltinConvert<BUILTIN_HF8TOHF, Float16Type>, 1, 16},
+              {Fp8E4M3Nv_to_Fp16, 2}}},
+            {{F8E5M2TyID, F16TyID, undefRounding},
+             {HasAttr<SUPPORT_F8_CONV>,
+              {BuiltinConvert<BUILTIN_BF8TOHF, Float16Type>, 1, 16},
+              {Fp8E5M2_to_Fp16, 4}}},
             // F16 -> F8
             {{F16TyID, F8E4M3B15TyID, RoundingMode::RTZ},
              {Fp16_to_Fp8E4M3B15, 4}},
@@ -837,21 +994,29 @@ struct FpToFpOpConversion
              {Fp16_to_Fp8E4M3B15, 4}},
             {{F16TyID, F8E4M3TyID, RoundingMode::RTZ}, {Fp16_to_Fp8E4M3Nv, 2}},
             {{F16TyID, F8E4M3TyID, RoundingMode::RTNE},
-             {Fp_to_Fp8_RTNE<Float16Type, Float8E4M3Type>, 1}},
+             {HasAttr<SUPPORT_F8_CONV>,
+              {BuiltinConvert<BUILTIN_HFTOHF8, Float8E4M3Type>, 1, 16},
+              {Fp_to_Fp8_RTNE<Float16Type, Float8E4M3Type>, 1}}},
             {{F16TyID, F8E5M2TyID, RoundingMode::RTZ},
              {Fp16_to_Fp8E5M2_RTZ, 4}},
             {{F16TyID, F8E5M2TyID, RoundingMode::RTNE},
-             {Fp_to_Fp8_RTNE<Float16Type, Float8E5M2Type>, 1}},
+             {HasAttr<SUPPORT_F8_CONV>,
+              {BuiltinConvert<BUILTIN_HFTOBF8, Float8E5M2Type>, 1, 16},
+              {Fp_to_Fp8_RTNE<Float16Type, Float8E5M2Type>, 1}}},
             // F8 -> BF16
             {{F8E5M2TyID, BF16TyID, undefRounding}, {Fp8E5M2_to_Bf16, 4}},
             {{F8E4M3TyID, BF16TyID, undefRounding}, {Fp8E4M3Nv_to_Bf16, 4}},
             // BF16 -> F8
             {{BF16TyID, F8E5M2TyID, RoundingMode::RTZ}, {Bf16_to_Fp8E5M2, 4}},
             {{BF16TyID, F8E5M2TyID, RoundingMode::RTNE},
-             {Fp_to_Fp8_RTNE<BFloat16Type, Float8E5M2Type>, 1}},
+             {HasAttr<SUPPORT_F8_CONV>,
+              {BuiltinConvert<BUILTIN_BFTOBF8, Float8E5M2Type>, 1, 16},
+              {Fp_to_Fp8_RTNE<BFloat16Type, Float8E5M2Type>, 1}}},
             {{BF16TyID, F8E4M3TyID, RoundingMode::RTZ}, {Bf16_to_Fp8E4M3Nv, 4}},
             {{BF16TyID, F8E4M3TyID, RoundingMode::RTNE},
-             {Fp_to_Fp8_RTNE<BFloat16Type, Float8E4M3Type>, 1}},
+             {HasAttr<SUPPORT_F8_CONV>,
+              {BuiltinConvert<BUILTIN_BFTOHF8, Float8E4M3Type>, 1, 16},
+              {Fp_to_Fp8_RTNE<BFloat16Type, Float8E4M3Type>, 1}}},
             // BF16 -> F16
             {{BF16TyID, F16TyID, undefRounding}, {Bf16_to_Fp16, 2}},
             // F32 -> F8
@@ -859,21 +1024,35 @@ struct FpToFpOpConversion
              {Fp_to_Fp8_RTNE<Float32Type, Float8E4M3Type>, 1}},
             {{F32TyID, F8E5M2TyID, RoundingMode::RTNE},
              {Fp_to_Fp8_RTNE<Float32Type, Float8E5M2Type>, 1}},
+
+            // The below convertors use intermediate F32->F16 conversion.
+            // With this implementation a few tests fail due to
+            // precision loss.
+            // FIXME: Uncomment when the precision issue #847 is resolved
+            // {{F32TyID, F8E4M3TyID, RoundingMode::RTNE},
+            //  {HasAttr<SUPPORT_F8_CONV>,
+            //   {BuiltinConvert<BUILTIN_HFTOHF8, Float8E4M3Type>, 1, 16},
+            //   {Fp_to_Fp8_RTNE<Float32Type, Float8E4M3Type>, 1}}},
+            // {{F32TyID, F8E5M2TyID, RoundingMode::RTNE},
+            //  {HasAttr<SUPPORT_F8_CONV>,
+            //   {BuiltinConvert<BUILTIN_HFTOBF8, Float8E5M2Type>, 1, 16},
+            //   {Fp_to_Fp8_RTNE<Float32Type, Float8E5M2Type>, 1}}},
         };
 
     std::tuple<TypeID, TypeID, RoundingMode> key = {
         srcTy.getTypeID(), dstTy.getTypeID(),
         roundingMode.value_or(undefRounding)};
-    if (srcMap.count(key) == 0) {
-      llvm::errs() << "Unsupported conversion from " << srcTy << " to "
-                   << dstTy;
-      if (roundingMode.has_value())
-        llvm::errs() << " with rounding mode "
-                     << stringifyRoundingMode(roundingMode.value());
-      llvm::errs() << "\n";
-      llvm_unreachable("");
+    if (auto it = srcMap.find(key); it != srcMap.end()) {
+      auto &c = it->second;
+      return c.predicate(op) ? c.converterA : c.converterB;
     }
-    return srcMap.lookup(key);
+
+    llvm::errs() << "Unsupported conversion from " << srcTy << " to " << dstTy;
+    if (roundingMode.has_value())
+      llvm::errs() << " with rounding mode "
+                   << stringifyRoundingMode(roundingMode.value());
+    llvm::errs() << "\n";
+    llvm_unreachable("");
   }
 
   SmallVector<Value> createDestOps(FpToFpOp op, OpAdaptor adaptor,
@@ -936,23 +1115,32 @@ struct FpToFpOpConversion
     bool isDstFP32 = dstElementType.isF32();
     Type srcType = useFP16IntermediateSrc ? f16_ty : srcElementType;
     Type dstType = isDstFP32 ? f16_ty : dstElementType;
-    auto [cvtFunc, numElements] =
-        getConversionFunc(srcType, dstType, roundingMode);
+    Converter &converter =
+        getConverter(op.getOperation(), srcType, dstType, roundingMode);
+    uint64_t numProduce =
+        std::max(converter.minElements,
+                 std::min(converter.maxElements, operands.size()));
+    uint64_t numConsume = std::min(numProduce, operands.size());
+
     SmallVector<Value> inVals;
-    inVals.reserve(std::min(numElements, operands.size()));
-    for (unsigned i = 0; i < std::min(numElements, operands.size()); i++) {
+    inVals.reserve(numConsume);
+    for (unsigned i = 0; i < numConsume; i++)
       inVals.push_back(operands[i][0]);
-    }
+
     if (useFP16IntermediateSrc)
       for (Value &v : inVals)
         v = convertFp32ToFp16(loc, rewriter, v, roundingMode.value());
-    inVals.resize(numElements, b.undef(typeConverter->convertType(srcType)));
-    SmallVector<Value> outVals = cvtFunc(loc, rewriter, inVals);
+
+    if (numConsume != numProduce) // Pad with undef
+      inVals.resize(numProduce, b.undef(typeConverter->convertType(srcType)));
+
+    SmallVector<Value> outVals = converter.func(loc, rewriter, inVals);
     assert(outVals.size() == inVals.size());
-    outVals.resize(std::min(numElements, operands.size()));
+    outVals.resize(numConsume);
     if (isDstFP32)
       for (Value &v : outVals)
         v = convertFp16ToFp32(loc, rewriter, v);
+
     // Pack values
     return outVals;
   }
@@ -1112,12 +1300,13 @@ struct AbsFOpConversion
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    // FIXME: Remove bitcast to and from i16 once SPIRV-LLVM-Translator supports
-    // LLVM::FAbsOp with bf16.
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     Value v = operands[0][0];
     Type origTy = elemTy;
-    if (llvm::isa<BFloat16Type>(origTy)) {
+    if (!mlir::LLVM::intel::hasModuleAttr(
+            op, triton::gpu::intel::TritonIntelGPUDialect::
+                    getSupportBFloat16ArithmeticAttrName()) &&
+        llvm::isa<BFloat16Type>(origTy)) {
       v = b.bitcast(v, i16_ty);
       elemTy = i16_ty;
     }
@@ -1130,7 +1319,7 @@ struct AbsFOpConversion
       auto maskAttr = rewriter.getIntegerAttr(elemTy, mask);
       auto maskConst = LLVM::ConstantOp::create(rewriter, loc, maskAttr);
       Value res = b.and_(v, maskConst);
-      if (llvm::isa<BFloat16Type>(origTy))
+      if (origTy != elemTy)
         res = b.bitcast(res, origTy);
       return {res};
     }

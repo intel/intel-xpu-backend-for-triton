@@ -7,7 +7,7 @@ import pytest
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_cuda, is_xpu, is_hip, is_hip_cdna2, is_hip_cdna3, is_hip_cdna4, is_hip_gfx12
+from triton._internal_testing import is_cuda, is_xpu, is_xpu_cri, is_hip, is_hip_cdna2, is_hip_cdna3, is_hip_cdna4, is_hip_rdna4
 
 
 def matching_int(dtype):
@@ -231,8 +231,11 @@ def launch_upcast_emulated(src, exponent_bits, mantissa_bits, exponent_bias, dev
 
 
 def downcast_test(src_dtype, dst_dtype, rounding, exponent_bits, mantissa_bits, exponent_bias, max_repr, offset, device):
+    numel = 2**24
+    if is_xpu_cri():
+        numel = 2**12 # Limit input size to reduce test time.
 
-    src = launch_exhaustive_populate(src_dtype, offset << 24, 2**24, False, src_dtype.primitive_bitwidth, max_repr, device)
+    src = launch_exhaustive_populate(src_dtype, offset << 24, numel, False, src_dtype.primitive_bitwidth, max_repr, device)
     dst = launch_type_convert_triton(src, src_dtype, dst_dtype, device=device, rounding=rounding)
     src = launch_type_convert_triton(src, src_dtype, tl.float32, device=device)
 
@@ -314,7 +317,7 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
             with pytest.raises(triton.CompilationError, match="not supported in this architecture"):
                 launch_exhaustive_populate(getattr(tl, src_dtype), 0, 65536, False, 8, 0x7f, device=device)
             return
-        if src_dtype in ('float8e4b8', 'float8e5b16') and (is_hip_cdna2() or is_hip_gfx12()):
+        if src_dtype in ('float8e4b8', 'float8e5b16') and (is_hip_cdna2() or is_hip_rdna4()):
             pytest.skip(f"{src_dtype} is not supported on AMDGPU CDNA2 and RDNA4")
     elif is_xpu():
         if (src_dtype in ('float8e4b8', 'float8e5b16')):
@@ -373,7 +376,7 @@ def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
             pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on AMDGPU CDNA3")
 
     if is_hip():
-        if dst_dtype in ('float8e4b8', 'float8e5b16') and (is_hip_cdna2() or is_hip_gfx12()):
+        if dst_dtype in ('float8e4b8', 'float8e5b16') and (is_hip_cdna2() or is_hip_rdna4()):
             pytest.skip(f"{dst_dtype} is not supported on AMDGPU CDNA2 and RDNA4")
 
     if is_xpu():
@@ -406,6 +409,9 @@ def test_typeconvert_downcast_clamping(src_dtype, dst_dtype, mode, device, round
 
         if dst_dtype in ('float8e5', 'float8e4nv') and rounding == 'rtne' and torch.cuda.get_device_capability(0) < (9, 0):
             pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on NVGPU with compute capability 9.0+")
+
+    if mode in ('inf', '-inf') and is_hip_rdna4():
+        pytest.skip(f"clamping from `{mode}` is not supported on AMDGPU GFX12")
 
     converter = {
         tl.float8e4nv: torch.float8_e4m3fn,
