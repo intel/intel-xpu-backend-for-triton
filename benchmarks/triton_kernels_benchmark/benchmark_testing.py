@@ -378,7 +378,7 @@ def cleanup_memory():
     # For now we only clean on B580 machines, because cleaning introduces this bug
     # https://github.com/intel/intel-xpu-backend-for-triton/issues/5640
     # Bug appears specifically on GPU Max series
-    # We can reamove this cleaning once issue above is fixed
+    # We can remove this early exit once issue above is fixed
     device_name = torch.xpu.get_device_name().lower()
     if "b580" not in device_name and "b570" not in device_name:
         return
