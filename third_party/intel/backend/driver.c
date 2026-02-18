@@ -294,8 +294,7 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
         compileLevelZeroObjects(binary_ptr, binary_size, kernel_name, l0_device,
                                 l0_context, build_flags(), is_spv);
     if (PyErr_Occurred()) {
-      // Retry also failed — restore and propagate the original error.
-      PyErr_Clear();
+      // Retry also failed — propagate the original error.
       PyErr_Restore(orig_type, orig_value, orig_tb);
       return NULL;
     }
