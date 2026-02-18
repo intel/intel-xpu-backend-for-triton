@@ -1,9 +1,9 @@
-// RUN: triton-opt %s --split-input-file -triton-annotate-module='min-sg-size=16 support-2d-block-io=true support-dpas=true threads-per-warp=32' | FileCheck %s
-// RUN: triton-opt %s --split-input-file -triton-annotate-module='min-sg-size=8 support-2d-block-io=true support-dpas=true threads-per-warp=32' | FileCheck %s --check-prefix=CHECK-SG8
-// RUN: triton-opt %s --split-input-file -triton-annotate-module='min-sg-size=16 support-2d-block-io=true support-dpas=false threads-per-warp=16' | FileCheck %s --check-prefix=CHECK-NO-DPAS
+// RUN: triton-opt %s --split-input-file -triton-annotate-module='min-sg-size=16 support-dpas=true threads-per-warp=32' | FileCheck %s
+// RUN: triton-opt %s --split-input-file -triton-annotate-module='min-sg-size=8 support-dpas=true threads-per-warp=32' | FileCheck %s --check-prefix=CHECK-SG8
+// RUN: triton-opt %s --split-input-file -triton-annotate-module='min-sg-size=16 support-dpas=false threads-per-warp=16' | FileCheck %s --check-prefix=CHECK-NO-DPAS
 
 // Test that module annotations are applied correctly without dot operations
-// CHECK: module attributes {"ttg.threads-per-warp" = 32 : i32{{.*}}ttig.min_sg_size = 16
+// CHECK: module attributes {"ttg.threads-per-warp" = 32 : i32{{.*}}ttig.min_sg_size = 16{{.*}}ttig.support_subgroup_matrix_multiply_accumulate
 module {
   tt.func @kernel_no_dots(%arg0: tensor<128x128x!tt.ptr<f32>>) {
     %cst = arith.constant dense<1.000000e+00> : tensor<128x128xf32>
@@ -15,7 +15,7 @@ module {
 // -----
 
 // Test that warp size IS adjusted when DPAS-compatible dot is present
-// CHECK: module attributes {"ttg.threads-per-warp" = 16 : i32{{.*}}ttig.min_sg_size = 16
+// CHECK: module attributes {"ttg.threads-per-warp" = 16 : i32{{.*}}ttig.min_sg_size = 16{{.*}}ttig.support_subgroup_matrix_multiply_accumulate
 module {
   tt.func @kernel_with_dpas_dot(%arg0: tensor<128x128x!tt.ptr<f32>>) {
     %a = arith.constant dense<1.00e+00> : tensor<128x64xf16>
@@ -30,7 +30,7 @@ module {
 // -----
 
 // Test with integer dot operation
-// CHECK: module attributes {"ttg.threads-per-warp" = 16 : i32{{.*}}ttig.min_sg_size = 16
+// CHECK: module attributes {"ttg.threads-per-warp" = 16 : i32{{.*}}ttig.min_sg_size = 16{{.*}}ttig.support_subgroup_matrix_multiply_accumulate
 module {
   tt.func @kernel_with_int_dot(%arg0: tensor<128x128x!tt.ptr<i32>>) {
     %a = arith.constant dense<1> : tensor<128x64xi8>
@@ -45,7 +45,7 @@ module {
 // -----
 
 // Test with incompatible dot (mixed types) - warp size should NOT change
-// CHECK: module attributes {"ttg.threads-per-warp" = 32 : i32{{.*}}ttig.min_sg_size = 16
+// CHECK: module attributes {"ttg.threads-per-warp" = 32 : i32{{.*}}ttig.min_sg_size = 16{{.*}}ttig.support_subgroup_matrix_multiply_accumulate
 module {
   tt.func @kernel_incompatible_dot(%arg0: tensor<128x128x!tt.ptr<f32>>) {
     %a = arith.constant dense<1.00e+00> : tensor<128x64xf16>
@@ -60,7 +60,7 @@ module {
 // -----
 
 // Test with min_sg_size=8 - should NOT use DPAS, warp size stays 32
-// CHECK-SG8: module attributes {"ttg.threads-per-warp" = 32 : i32{{.*}}ttig.min_sg_size = 8
+// CHECK-SG8: module attributes {"ttg.threads-per-warp" = 32 : i32{{.*}}ttig.min_sg_size = 8{{.*}}ttig.support_subgroup_matrix_multiply_accumulate
 module {
   tt.func @kernel_min_sg_8(%arg0: tensor<128x128x!tt.ptr<f32>>) {
     %a = arith.constant dense<1.00e+00> : tensor<128x64xf16>
@@ -91,7 +91,7 @@ module {
 // -----
 
 // Test multiple functions - all must be DPAS-compatible for warp adjustment
-// CHECK: module attributes {"ttg.threads-per-warp" = 16 : i32
+// CHECK: module attributes {"ttg.threads-per-warp" = 16 : i32{{.*}}ttig.min_sg_size = 16{{.*}}ttig.support_subgroup_matrix_multiply_accumulate
 module {
   tt.func @kernel_func1(%arg0: tensor<128x128x!tt.ptr<f32>>) {
     %a = arith.constant dense<1.00e+00> : tensor<128x64xf16>
