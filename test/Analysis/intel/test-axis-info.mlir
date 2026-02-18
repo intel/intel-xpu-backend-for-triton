@@ -179,7 +179,7 @@ tt.func @rem() {
   %4 = arith.constant dense<64> : tensor<128xi32>
   // CHECK-NEXT: contiguity = [64], divisibility = [64], constancy = [1], constant_value = <none>
   %5 = arith.remsi %0, %4 : tensor<128xi32>
-  // CHECK-NEXT: contiguity = [1], divisibility = [64], constancy = [1], constant_value = <none>
+  // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>
   %6 = arith.remsi %4, %0 : tensor<128xi32>
   // CHECK-NEXT: contiguity = [1], divisibility = [2], constancy = [128], constant_value = 66
   %7 = arith.constant dense<66> : tensor<128xi32>
@@ -438,7 +438,7 @@ tt.func @max_min() {
   %4 = arith.constant dense<8> : tensor<128xi32>
   // CHECK-NEXT: contiguity = [1], divisibility = [4], constancy = [128], constant_value = 4
   %5 = arith.constant dense<4> : tensor<128xi32>
-  // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [1], constant_value = 8
+  // CHECK-NEXT: contiguity = [1], divisibility = [8], constancy = [128], constant_value = 8
   %6 = arith.maxsi %4, %5 : tensor<128xi32>
   tt.return
 }
