@@ -1,10 +1,11 @@
 add_triton_library(TritonIntelTransforms
+  BlockPointerToTensorDesc.cpp
   FuseReshape.cpp
   RemoveBoundaryChecks.cpp
   RemoveMasks.cpp
-  StrideVersioning.cpp
-  BlockPointerToTensorDesc.cpp
+  RewriteTensorDescriptorToPointer.cpp
   SimplifySignedArithmetic.cpp
+  StrideVersioning.cpp
   TensorDescToBlockPointer.cpp
 
   DEPENDS
