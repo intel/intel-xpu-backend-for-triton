@@ -377,7 +377,7 @@ def cleanup_memory():
     """Cleanup GPU memory by calling garbage collector and emptying cache."""
     # For now we only clean on B580 machines, because cleaning introduces this bug
     # https://github.com/intel/intel-xpu-backend-for-triton/issues/5640
-    # Bug appears specifically on GPU Max series
+    # Bug is not relevant on B580 because the shape is skipped due to limited memory
     # We can remove this early exit once issue above is fixed
     device_name = torch.xpu.get_device_name().lower()
     if "b580" not in device_name and "b570" not in device_name:
