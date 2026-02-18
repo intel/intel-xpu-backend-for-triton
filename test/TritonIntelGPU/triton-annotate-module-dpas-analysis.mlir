@@ -1,4 +1,6 @@
 // RUN: triton-opt %s --split-input-file -triton-annotate-module='min-sg-size=16 support-2d-block-io=true support-dpas=true threads-per-warp=32' | FileCheck %s
+// RUN: triton-opt %s --split-input-file -triton-annotate-module='min-sg-size=8 support-2d-block-io=true support-dpas=true threads-per-warp=32' | FileCheck %s --check-prefix=CHECK-SG8
+// RUN: triton-opt %s --split-input-file -triton-annotate-module='min-sg-size=16 support-2d-block-io=true support-dpas=false threads-per-warp=16' | FileCheck %s --check-prefix=CHECK-NO-DPAS
 
 // Test that module annotations are applied correctly without dot operations
 // CHECK: module attributes {"ttg.threads-per-warp" = 32 : i32{{.*}}ttig.min_sg_size = 16
@@ -57,8 +59,6 @@ module {
 
 // -----
 
-// RUN: triton-opt %s --split-input-file -triton-annotate-module='min-sg-size=8 support-2d-block-io=true support-dpas=true threads-per-warp=32' | FileCheck %s --check-prefix=CHECK-SG8
-
 // Test with min_sg_size=8 - should NOT use DPAS, warp size stays 32
 // CHECK-SG8: module attributes {"ttg.threads-per-warp" = 32 : i32{{.*}}ttig.min_sg_size = 8
 module {
@@ -73,8 +73,6 @@ module {
 }
 
 // -----
-
-// RUN: triton-opt %s --split-input-file -triton-annotate-module='min-sg-size=16 support-dpas=false threads-per-warp=16' | FileCheck %s --check-prefix=CHECK-NO-DPAS
 
 // Test without DPAS support - warp size stays as configured
 // CHECK-NO-DPAS: module attributes {"ttg.threads-per-warp" = 16 : i32{{.*}}ttig.min_sg_size = 16
