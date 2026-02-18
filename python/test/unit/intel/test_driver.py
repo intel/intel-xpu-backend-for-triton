@@ -132,6 +132,7 @@ def test_auto_grf_on_build_failure(device, monkeypatch, capfd, grf_mode, expect_
 
     BLOCK = 131072  # Large enough to exceed PTSS with default/small GRF
     size = 128000
+
     x = torch.randn(size, dtype=torch.float32, device=device)
     q = torch.rand(size, dtype=torch.float32, device=device)
     out = torch.empty(1, dtype=torch.int32, device=device)
