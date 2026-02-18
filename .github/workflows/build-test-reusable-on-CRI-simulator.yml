@@ -63,7 +63,7 @@ on:
       skip_list_extra:
         description: Extra skip list suffixes
         type: string
-        default: "slow,emu"
+        default: "slow"
       run_name:
         description: Custom run name
         type: string
