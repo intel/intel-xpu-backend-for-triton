@@ -154,6 +154,41 @@ configs = [
 
 tuner = triton.autotune(configs, key=['N_CTX', 'HEAD_DIM', 'STAGE'])
 
+bwd_configs = [
+    triton.Config(
+        {
+            'BLOCK_M1': bm1, 'BLOCK_N1': bn1, 'BLOCK_M2': bm2, 'BLOCK_N2': bn2, 'BLK_SLICE_FACTOR': blk_slice,
+            'grf_mode': '256'
+        }, num_stages=s, num_warps=w)
+    for bm1 in [32, 64]
+    for bn1 in [64, 128]
+    for bm2 in [64, 128]
+    for bn2 in [32, 64]
+    for blk_slice in [2]
+    for s in [2, 3, 4]
+    for w in [8, 16, 32]
+]
+
+
+def filter_func(_dict):
+    # These combinations result in the following error:
+    # Segmentation fault from GPU at 0xff00ffffffe00000, ctx_id: 1 (CCS) type: 0 \
+    #   (NotPresent), level: 1 (PDE), access: 0 (Read), banned: 1, aborting.
+    skip_dicts = [
+        {'BLOCK_M1': 32, 'BLOCK_N1': 64, 'BLOCK_M2': 64, 'BLOCK_N2': 32, 'BLK_SLICE_FACTOR': 2, 'grf_mode': '256'},
+        {'BLOCK_M1': 32, 'BLOCK_N1': 64, 'BLOCK_M2': 128, 'BLOCK_N2': 32, 'BLK_SLICE_FACTOR': 2, 'grf_mode': '256'},
+        {'BLOCK_M1': 32, 'BLOCK_N1': 64, 'BLOCK_M2': 128, 'BLOCK_N2': 64, 'BLK_SLICE_FACTOR': 2, 'grf_mode': '256'},
+        {'BLOCK_M1': 64, 'BLOCK_N1': 64, 'BLOCK_M2': 128, 'BLOCK_N2': 32, 'BLK_SLICE_FACTOR': 2, 'grf_mode': '256'},
+        {'BLOCK_M1': 64, 'BLOCK_N1': 64, 'BLOCK_M2': 128, 'BLOCK_N2': 64, 'BLK_SLICE_FACTOR': 2, 'grf_mode': '256'},
+    ]
+    if _dict.kwargs in skip_dicts:
+        return False
+    return True
+
+
+bwd_configs = list(filter(filter_func, bwd_configs))
+bwd_tuner = triton.autotune(bwd_configs, key=['N_CTX', 'HEAD_DIM'])
+
 
 @triton.jit
 def _attn_bwd_preprocess(O, DO,  #
@@ -273,6 +308,7 @@ def _attn_bwd_dq(dq, q, K, V,  #
     return dq
 
 
+@bwd_tuner
 @triton.jit
 def _attn_bwd(Q, K, V, sm_scale,  #
               DO,  #
@@ -452,13 +488,9 @@ class _attention(torch.autograd.Function):
             dv = torch.empty_like(v)
             BATCH, N_HEAD, N_CTX = q.shape[:3]
             PRE_BLOCK = 128
-            NUM_WARPS, NUM_STAGES = 16, 3
-            BLOCK_M1, BLOCK_N1, BLOCK_M2, BLOCK_N2 = 32, 128, 128, 32
-            BLK_SLICE_FACTOR = 2
             RCP_LN2 = 1.4426950408889634  # = 1.0 / ln(2)
             arg_k = k
             arg_k = arg_k * (ctx.sm_scale * RCP_LN2)
-            PRE_BLOCK = 128
             assert N_CTX % PRE_BLOCK == 0
             pre_grid = (N_CTX // PRE_BLOCK, BATCH * N_HEAD)
             delta = torch.empty_like(M)
@@ -468,18 +500,14 @@ class _attention(torch.autograd.Function):
                 BATCH, N_HEAD, N_CTX,  #
                 BLOCK_M=PRE_BLOCK, HEAD_DIM=ctx.HEAD_DIM  #
             )
-            grid = (N_CTX // BLOCK_N1, 1, BATCH * N_HEAD)
-            _attn_bwd[grid](
+            # Grid will be inferred from autotune configs, specifically using BLOCK_N1
+            # The lambda ensures grid is computed with the selected config's BLOCK_N1
+            _attn_bwd[(lambda args: (N_CTX // args['BLOCK_N1'], 1, BATCH * N_HEAD))](
                 q, arg_k, v, ctx.sm_scale, do, dq, dk, dv,  #
                 M, delta,  #
                 q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
                 N_HEAD, N_CTX,  #
-                BLOCK_M1=BLOCK_M1, BLOCK_N1=BLOCK_N1,  #
-                BLOCK_M2=BLOCK_M2, BLOCK_N2=BLOCK_N2,  #
-                BLK_SLICE_FACTOR=BLK_SLICE_FACTOR,  #
                 HEAD_DIM=ctx.HEAD_DIM,  #
-                num_warps=NUM_WARPS,  #
-                num_stages=NUM_STAGES  #
             )
 
         return dq, dk, dv, None, None, None, None
