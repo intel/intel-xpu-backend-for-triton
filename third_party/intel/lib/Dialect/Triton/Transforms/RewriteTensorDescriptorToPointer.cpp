@@ -554,7 +554,7 @@ class TritonRewriteTensorDescriptorToPointerPass
     llvm::SmallSetVector<triton::MakeTensorDescOp, 4>
         unhandledMakeTensorDescOps;
     op->walk([&](Operation *op) {
-      mlir::TypeSwitch<mlir::Operation *>(op)
+      TypeSwitch<Operation *>(op)
           .Case<triton::DescriptorLoadOp,
                 triton::DescriptorStoreOp>([&](auto op) {
             auto makeTensorDescOp =
@@ -585,7 +585,7 @@ class TritonRewriteTensorDescriptorToPointerPass
           !hasATensorDescriptorType(op->getResultTypes()))
         return true;
 
-      return mlir::TypeSwitch<mlir::Operation *, bool>(op)
+      return TypeSwitch<Operation *, bool>(op)
           .Case<triton::MakeTensorDescOp>(
               [&](auto op) { return candidateMakeTensorDescOps.contains(op); })
           .Case<triton::DescriptorLoadOp,
