@@ -25,6 +25,7 @@ jobs:
         with:
           fetch-depth: 0
           ref: main-cri
+          token: ${{ secrets.GLADOS_TOKEN }}
 
       - name: Do merge in a new branch and create PR
         env:
