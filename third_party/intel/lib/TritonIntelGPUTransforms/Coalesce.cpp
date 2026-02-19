@@ -11,6 +11,7 @@
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/STLExtras.h"
@@ -395,10 +396,18 @@ public:
 
     // For each i/o operation, we determine what layout
     // the pointers should have for best memory coalescing
+    // This pass only handles block pointer (tt.ptr<tensor<>>) coalescing.
+    // Regular tensor<tt.ptr<>> and descriptor ops are handled by the upstream
+    // tritongpu-coalesce pass which runs after this pass in the pipeline.
     llvm::MapVector<Operation *, Attribute> layoutMap;
     moduleOp.walk([&](Operation *curr) {
       Value ptr = getMemAccessPtr(curr);
       if (!ptr)
+        return;
+
+      // Only handle block pointers; regular pointer tensors are handled by the
+      // upstream coalesce pass.
+      if (!tt::isTensorPointerType(ptr.getType()))
         return;
 
       RankedTensorType refTensorType = ttgi::getRankedTensorType(ptr.getType());
