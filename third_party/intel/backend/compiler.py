@@ -261,6 +261,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         pm.enable_debug()
         passes.common.add_inliner(pm)
         intel.passes.ttir.add_convert_block_pointer_to_tdesc(pm)
+        intel.passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
         passes.common.add_cse(pm)
         passes.ttir.add_triton_licm(pm)
         intel.passes.ttir.add_remove_boundary_checks(pm)
@@ -274,9 +275,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
         passes.ttir.add_loop_unroll(pm)
-        # FIXME: move add_rewrite_tensor_descriptor_to_pointer back to be consistent with other backends.
         intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
-        intel.passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
         pm.run(mod, 'make_ttir')
         return mod
 
@@ -495,16 +494,33 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                         ocloc_cmd[-1] = metadata["build_flags"] + shader_dump_opt
                         subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
             except subprocess.CalledProcessError as e:
-                if e.returncode == 255:
-                    error = 'Internal Triton ZEBIN codegen error'
-                elif e.returncode == 128 + signal.SIGSEGV:
-                    error = '`ocloc` raised SIGSEGV'
-                else:
-                    error = f'`ocloc` failed with error code {e.returncode}'
+                # If GRF mode was not explicitly set, retry with large GRF mode
+                # before giving up. This handles cases where the default GRF mode
+                # doesn't provide enough registers (e.g., scratch space exceeds
+                # HW PTSS limit).
+                retry_succeeded = False
+                if options.grf_mode == 'default' and \
+                        "-cl-intel-256-GRF-per-thread" not in metadata.get("build_flags", ""):
+                    metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
+                    ocloc_cmd[-1] = metadata["build_flags"] + shader_dump_opt
+                    try:
+                        subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
+                        retry_succeeded = True
+                    except subprocess.CalledProcessError:
+                        # Retry also failed — raise the original error below.
+                        pass
 
-                raise RuntimeError(f'{error}\n'
-                                   f'`ocloc` stderr:\n{e.output}\n'
-                                   f'Repro command: {ocloc_cmd}\n') from e
+                if not retry_succeeded:
+                    if e.returncode == 255:
+                        error = 'Internal Triton ZEBIN codegen error'
+                    elif e.returncode == 128 + signal.SIGSEGV:
+                        error = '`ocloc` raised SIGSEGV'
+                    else:
+                        error = f'`ocloc` failed with error code {e.returncode}'
+
+                    raise RuntimeError(f'{error}\n'
+                                       f'`ocloc` stderr:\n{e.output}\n'
+                                       f'Repro command: {ocloc_cmd}\n') from e
 
             with open(fbin, 'rb') as f:
                 zebin = f.read()
