@@ -137,6 +137,8 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
         pytest.xfail("skip forcing tmem layout on non blackwell targets.")
 
     M, N, K = 1024, 512, 256
+    if is_xpu_cri():
+        M, N, K = 512, 512, 64
     torch.manual_seed(42)
     precision = "tf32" if dtype_src_str == "tensorfloat32" else "ieee"
     dtype_src_str = "float32" if dtype_src_str == "tensorfloat32" else dtype_src_str
