@@ -113,6 +113,10 @@ def test_auto_grf_on_build_failure(device, monkeypatch, capfd, grf_mode, expect_
     - load_binary (generate_native_code=False): L0 runtime compilation via zeModuleCreate
     - make_zebin (generate_native_code=True): offline compilation via ocloc
     """
+    # The build failure with grf_mode="128" is not simulated on CRI properly
+    if grf_mode == "128" and is_xpu_cri():
+        pytest.xfail("grf_mode=128 build failure is not simulated on CRI properly")
+
     monkeypatch.setenv("TRITON_DEBUG", "1")
 
     @triton.jit
