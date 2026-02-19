@@ -63,11 +63,13 @@ DPASAnalysisResult DPASAnalysis<DPASEngineType, Enable>::canUseDPAS(
   // Ensure all dot operations in the function can be lowered to DPAS
   // instructions.
   for (Operation *op : it->second) {
-    auto dpasIt = dotToDPASEngineMap.find(op);
-    if (dpasIt == dotToDPASEngineMap.end())
+    auto it = dotToDPASEngineMap.find(op);
+    if (it == dotToDPASEngineMap.end()) {
+      llvm::errs() << "DPASAnalysis: Operation not found in map.\n";
       return DPASAnalysisResult::False;
+    }
 
-    DPASEngineType dpasEngineType = dpasIt->second;
+    DPASEngineType dpasEngineType = dotToDPASEngineMap.at(op);
     if (dpasEngineType == DPASEngineType::NOT_APPLICABLE)
       return DPASAnalysisResult::False;
   }
@@ -88,8 +90,8 @@ DPASAnalysisResult DPASAnalysis<DPASEngineType, Enable>::canUseDPAS(
   unsigned minSGSize = minSGSizeAttr.getInt();
   bool enableWarp32 =
       tools::getBoolEnv("TRITON_INTEL_ENABLE_DPAS_FOR_WARP_SIZE_32");
-  assert((minSGSize == 8 || minSGSize == 16 || minSGSize == 32) &&
-         "Unexpected minimum subgroup size");
+  assert(minSGSize == 8 || minSGSize == 16 ||
+         minSGSize == 32 && "Unexpected minimum subgroup size");
 
   if (enableWarp32 && minSGSize != 8) {
     // We can support threads_per_warp=16 or 32 on Xe+ and later architectures.
@@ -210,7 +212,7 @@ DPASAnalysis<DPASEngineType, Enable>::getDPASType(OpTy op) {
         if (isa<Float8E4M3FNType, Float8E5M2Type>(aElemTy) &&
             isa<Float8E4M3FNType, Float8E5M2Type>(bElemTy))
           return DPASEngineType::FP32_FP32_FP8_FP8;
-        if (isa<Float8E4M3FNType, Float8E5M2Type>(aElemTy) &&
+        if ((isa<Float8E4M3FNType>(aElemTy) || isa<Float8E5M2Type>(aElemTy)) &&
             bElemTy.isInteger(8))
           return DPASEngineType::FP32_FP32_FP8_FP4;
         if (aElemTy.isInteger(8) && bElemTy.isBF16())
