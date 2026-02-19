@@ -1,3 +1,4 @@
+import warnings
 from triton.backends.compiler import BaseBackend, GPUTarget, Language
 from triton._C.libtriton import ir, passes, llvm, intel
 from triton.backends.intel.driver import compile_module_from_src
@@ -77,9 +78,17 @@ SPILL_SIZE_RE = re.compile(r'spill_size\s*[:=]\s*(\d+)')
 
 def extract_spill_size_from_zebin(file):
     with open(file, 'rb') as f:
+        f.seek(0, 2)
+        file_size = f.tell()
+        f.seek(0)
+        print(f"zebin file size: {file_size} bytes")
         elf = ELFFile(f)
         zeinfo = elf.get_section_by_name(".ze_info")
         if zeinfo is None:
+            warnings.warn(
+                "Section .ze_info not found in zebin, cannot extract spill size. This may be due to an LTS driver that does not include ze_info in the zebin."
+            )
+            return 0
             from triton.runtime.errors import IntelGPUError
             raise IntelGPUError('Internal Triton ZEBIN codegen error:'
                                 'Section .ze_info not found in zebin')
@@ -493,6 +502,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                         # re-run with double GRF mode
                         ocloc_cmd[-1] = metadata["build_flags"] + shader_dump_opt
                         subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
+            # LTS drivers do not generate zebin file
             except subprocess.CalledProcessError as e:
                 # If GRF mode was not explicitly set, retry with large GRF mode
                 # before giving up. This handles cases where the default GRF mode
