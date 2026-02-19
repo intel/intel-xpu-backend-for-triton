@@ -16,6 +16,12 @@ endfunction()
 
 parse_sycl_compiler_version(SYCL_COMPILER_VERSION)
 
+set(SYCL_GPU_TARGETS "intel_gpu_pvc,intel_gpu_bmg_g21")
+
+if (SYCL_COMPILER_VERSION GREATER_EQUAL 20251010)
+  string(APPEND SYCL_GPU_TARGETS ",intel_gpu_bmg_g31")
+endif()
+
 set(SPIRV_EXTENSIONS "+SPV_INTEL_split_barrier")
 
 if (SYCL_COMPILER_VERSION GREATER_EQUAL 20250200)
@@ -25,9 +31,17 @@ endif()
 set(CUTLASS_KERNEL_FLAGS ${CUTLASS_KERNEL_FLAGS}
   -fsycl
   -fsycl-device-code-split=per_kernel
-  -fsycl-targets=intel_gpu_pvc,intel_gpu_bmg_g21
+  -fsycl-targets=${SYCL_GPU_TARGETS}
   "SHELL:-Xspirv-translator=intel_gpu_pvc --spirv-ext=${SPIRV_EXTENSIONS}"
   "SHELL:-Xspirv-translator=intel_gpu_bmg_g21 --spirv-ext=${SPIRV_EXTENSIONS}"
+)
+
+if (SYCL_COMPILER_VERSION GREATER_EQUAL 20251010)
+  list(APPEND CUTLASS_KERNEL_FLAGS
+    "SHELL:-Xspirv-translator=intel_gpu_bmg_g31 --spirv-ext=${SPIRV_EXTENSIONS}")
+endif()
+
+list(APPEND CUTLASS_KERNEL_FLAGS
   -Xs "-options \"-igc_opts 'VISAOptions=-perfmodel,VectorAliasBBThreshold=1000,ExtraOCLOptions=-cl-intel-256-GRF-per-thread'\" -options -ze-opt-large-register-file"
 )
 
@@ -58,7 +72,7 @@ add_custom_target(generate_gemm_config DEPENDS ${GEMM_CONFIG_OUTPUT})
 
 Python3_add_library(cutlass_kernel MODULE WITH_SOABI python_main.cpp)
 
-target_compile_options(cutlass_kernel PRIVATE "-fsycl" "-fsycl-targets=intel_gpu_pvc,intel_gpu_bmg_g21")
+target_compile_options(cutlass_kernel PRIVATE "-fsycl" "-fsycl-targets=${SYCL_GPU_TARGETS}")
 target_compile_options(cutlass_kernel PRIVATE "-DCUTLASS_ENABLE_SYCL")
 target_compile_options(cutlass_kernel PRIVATE "-DSYCL_INTEL_TARGET")
 target_compile_definitions(cutlass_kernel PRIVATE GEMM_CONFIG_HEADER=\"${GEMM_CONFIG_OUTPUT}\")
