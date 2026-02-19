@@ -106,7 +106,10 @@ def test_has_opencl_extension_error(device):
                           ("256", False, False),  # Explicit large GRF — compiles on first attempt
                           ("128", False, True),  # Explicit small GRF — should fail, no retry
                           ])
-@pytest.mark.parametrize("generate_native_code", [False, True], ids=["load_binary", "make_zebin"])
+@pytest.mark.parametrize("generate_native_code", [
+    False,
+    pytest.param(True, marks=pytest.mark.xfail(is_xpu_cri(), reason="unable to get spill_size")),
+], ids=["load_binary", "make_zebin"])
 def test_auto_grf_on_build_failure(device, monkeypatch, capfd, grf_mode, expect_retry, expect_fail,
                                    generate_native_code):
     """Test GRF mode behavior for register-heavy kernels on both compilation paths:
