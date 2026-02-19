@@ -25,6 +25,48 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[0, 1]]}>
+#slice0 = #ttg.slice<{dim = 0, parent = #blocked}>
+#slice1 = #ttg.slice<{dim = 1, parent = #blocked}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // First reduction does not cross CTAs; second one does.
+  // There should be no cluster barrier between them as tt.reduce always syncs internally before touching distributed shared memory.
+  // but there should be a cluster barrier after the reduction that touches distributed shared memory
+  // CHECK-LABEL: @reduce_nocross_then_cross
+  // CHECK: "tt.reduce"{{.*}}axis = 0
+  // CHECK-NOT: ttng.cluster_arrive
+  // CHECK-NOT: ttng.cluster_wait
+  // CHECK: ttg.barrier local
+  // CHECK: "tt.reduce"{{.*}}axis = 1
+  // CHECK: ttng.cluster_arrive
+  // CHECK-NEXT: ttng.cluster_wait
+  // CHECK: "tt.reduce"{{.*}}axis = 0
+  tt.func @reduce_nocross_then_cross(%t1: tensor<256x128xf16, #blocked>, %t2: tensor<256x128xf16, #blocked>) -> (tensor<128xf16, #slice0>, tensor<256xf16, #slice1>, tensor<128xf16, #slice0>) {
+    %red_nc = "tt.reduce"(%t1) ({
+    ^bb0(%lhs: f16, %rhs: f16):
+      %add = arith.addf %lhs, %rhs : f16
+      tt.reduce.return %add : f16
+    }) {axis = 0 : i32} : (tensor<256x128xf16, #blocked>) -> tensor<128xf16, #slice0>
+
+    %red_c = "tt.reduce"(%t1) ({
+    ^bb0(%lhs: f16, %rhs: f16):
+      %add = arith.addf %lhs, %rhs : f16
+      tt.reduce.return %add : f16
+    }) {axis = 1 : i32} : (tensor<256x128xf16, #blocked>) -> tensor<256xf16, #slice1>
+
+    %red_nc2 = "tt.reduce"(%t2) ({
+    ^bb0(%lhs: f16, %rhs: f16):
+      %add = arith.addf %lhs, %rhs : f16
+      tt.reduce.return %add : f16
+    }) {axis = 0 : i32} : (tensor<256x128xf16, #blocked>) -> tensor<128xf16, #slice0>
+
+    tt.return %red_nc, %red_c, %red_nc2 : tensor<128xf16, #slice0>, tensor<256xf16, #slice1>, tensor<128xf16, #slice0>
+  }
+}
+
+
+// -----
+
 #blockedSplitM = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[1, 0]]}>
 #slice0 = #ttg.slice<{dim = 0, parent = #blockedSplitM}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0]]}>

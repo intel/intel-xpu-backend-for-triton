@@ -39,11 +39,12 @@ unsigned allocationAnalysisScratchSizeFn(Operation *op) {
   return TypeSwitch<Operation *, unsigned>(op)
       .Case<gpu::ConvertLayoutOp>([](auto op) {
         unsigned size = allocationAnalysisScratchSizeFn(op);
-        return size == invalidSize ? defaultAllocationAnalysisScratchSizeFn(op)
-                                   : size;
+        return size == invalidSize
+                   ? defaultAllocationAnalysisScratchSizeFnOld(op)
+                   : size;
       })
       .Default([](Operation *op) {
-        return defaultAllocationAnalysisScratchSizeFn(op);
+        return defaultAllocationAnalysisScratchSizeFnOld(op);
       });
 }
 } // namespace mlir::triton::intel
