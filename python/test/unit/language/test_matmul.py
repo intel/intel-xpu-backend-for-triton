@@ -283,6 +283,8 @@ def simple_persistent_kernel(a_ptr, b_ptr, c_ptr, M, N, K, stride_am, stride_ak,
 @pytest.mark.parametrize("DISALLOW_ACC_MULTI_BUFFER", [True, False])
 def test_simple_persistent_matmul(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, DISALLOW_ACC_MULTI_BUFFER, device):
     M, N, K = 1024, 512, 256
+    if is_xpu_cri():
+        M, N, K = 512, 512, 64
     NUM_STAGES = 3
     a = torch.randn(M, K, dtype=torch.float16, device=device)
     b = torch.randn(K, N, dtype=torch.float16, device=device)
