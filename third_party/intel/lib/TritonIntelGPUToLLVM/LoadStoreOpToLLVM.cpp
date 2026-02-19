@@ -1854,10 +1854,20 @@ struct LoadOpToBlockIOConversion
 
     Value finalResult;
     bool useSepcConst = false;
+    bool useGenericLoad = true;
     if (!needRuntimePitchCheck) {
       // No spec-const gating; always use block-IO.
       finalResult = buildBlockIOResult();
-    } else if (useSepcConst){
+    }
+    // We don't know pitch at compile time, so either use runtime cehck or always
+    // use generic load instead of block io.
+    else if (useGenericLoad) {
+      Value genericResult =
+          emitGenericLoad(op, adaptor.getPtr(), adaptor.getMask(),
+                          adaptor.getOther(), rewriter, typeConverter, *this);
+      finalResult = genericResult;
+    }
+    else if (useSepcConst) {
       // === spec-constant-based branch ===
 
       FailureOr<Value> vOr = mlir::triton::intel::buildSpecConstBasedValue(
@@ -1886,8 +1896,7 @@ struct LoadOpToBlockIOConversion
           createBlockIOResult);
 
       finalResult = mergeBlock.getArgument(0);
-    }
-    else {
+    } else {
       // Runtime check-based branch (fallback to generic load if pitch is too small).
       Value cond = b.icmp_sge(pitch, b.i32_val(64 / (originalElemBits / 8)));
       Value genericResult =
