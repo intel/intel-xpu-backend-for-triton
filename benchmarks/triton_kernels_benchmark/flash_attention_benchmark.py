@@ -189,14 +189,14 @@ def filter_func(_dict):
 bwd_configs = list(filter(filter_func, bwd_configs))
 
 
-def early_prune(configs, named_args, **kwargs):
+def early_prune(prune_configs, named_args, **kwargs):
     if named_args['H'] == 48 and named_args['N_CTX'] == 1024 and kwargs['HEAD_DIM'] == 64:
         # benchmark_suite.assert_close fails for this configuration
         bad_case = {
             'BLOCK_M1': 64, 'BLOCK_N1': 128, 'BLOCK_M2': 64, 'BLOCK_N2': 64, 'BLK_SLICE_FACTOR': 2, 'grf_mode': '256'
         }
-        configs = list(filter(lambda cfg: cfg.kwargs != bad_case, bwd_configs))
-    return configs
+        prune_configs = list(filter(lambda cfg: cfg.kwargs != bad_case, prune_configs))
+    return prune_configs
 
 
 bwd_tuner = triton.autotune(bwd_configs, key=['N_CTX', 'HEAD_DIM'],
