@@ -210,7 +210,7 @@ DPASAnalysis<DPASEngineType, Enable>::getDPASType(OpTy op) {
         if (isa<Float8E4M3FNType, Float8E5M2Type>(aElemTy) &&
             isa<Float8E4M3FNType, Float8E5M2Type>(bElemTy))
           return DPASEngineType::FP32_FP32_FP8_FP8;
-        if ((isa<Float8E4M3FNType, Float8E5M2Type>(aElemTy)) &&
+        if (isa<Float8E4M3FNType, Float8E5M2Type>(aElemTy) &&
             bElemTy.isInteger(8))
           return DPASEngineType::FP32_FP32_FP8_FP4;
         if (aElemTy.isInteger(8) && bElemTy.isBF16())
