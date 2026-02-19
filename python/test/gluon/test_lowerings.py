@@ -1373,7 +1373,7 @@ def test_memdesc_subslice(M, N, M_tile_size, N_tile_size, device):
 @pytest.mark.parametrize("num_groups", [1, 2])
 @pytest.mark.parametrize("partition_dim", [0, 1])
 @pytest.mark.parametrize("partition_layout_type", ["swizzled", "padded"])
-def test_partitioned_shared_layout(M, K, num_partitions, num_groups, partition_dim, partition_layout_type):
+def test_partitioned_shared_layout(M, K, num_partitions, num_groups, partition_dim, partition_layout_type, device):
     """
     Test that PartitionedSharedLayout works correctly with various configurations.
 
@@ -1387,6 +1387,8 @@ def test_partitioned_shared_layout(M, K, num_partitions, num_groups, partition_d
     - partition_dim: Dimension along which to partition (0=rows, 1=cols)
     - partition_layout_type: Layout within each piece ("swizzled" or "padded")
     """
+    if is_xpu() and partition_layout_type == "swizzled":
+        pytest.skip("FIXME: #6154")
 
     blocked_layout = ttgl.BlockedLayout(
         size_per_thread=[1, 8],
@@ -1447,7 +1449,7 @@ def test_partitioned_shared_layout(M, K, num_partitions, num_groups, partition_d
     )
 
     # Create input/output tensors
-    input_tensor = torch.randn((M, K), device="cuda", dtype=torch.float16)
+    input_tensor = torch.randn((M, K), device=device, dtype=torch.float16)
     output_tensor = torch.empty_like(input_tensor)
 
     # Run the kernel
