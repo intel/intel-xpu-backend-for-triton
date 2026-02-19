@@ -17,6 +17,4 @@ add_triton_ut(
 
 # Suppress deprecation warnings for OpBuilder::create<> API
 # TODO: Migrate to modern MLIR operation creation patterns
-if(NOT WIN32)
-  target_compile_options(DPASAnalysis PRIVATE -Wno-deprecated-declarations)
-endif()
+target_compile_options(DPASAnalysis PRIVATE -Wno-deprecated-declarations)
