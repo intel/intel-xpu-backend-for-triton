@@ -9,8 +9,10 @@
 #include "mlir/IR/Verifier.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
 #include "mlir/Support/LLVM.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/STLExtras.h"
@@ -33,6 +35,51 @@ namespace ttg = mlir::triton::gpu;
 namespace ttgi = mlir::triton::gpu::intel;
 
 namespace {
+
+// Descriptor load/stores don't need to consider L1 coalescing but the
+// destination layout will affect the shared memory load/store generated. So we
+// still want to allow vectorization for the src/destination layout up to
+// 16 bytes.
+static Attribute pickDescriptorLoadStoreLayout(int numWarps, int threadsPerWarp,
+                                               RankedTensorType type) {
+  auto shapePerCTA = ttg::getShapePerCTA(type);
+  int numElems = product<int64_t>(shapePerCTA);
+  int numThreads = numWarps * threadsPerWarp;
+  int numElemsPerThread = std::max(numElems / numThreads, 1);
+
+  int maxVectorSize = 128 / type.getElementTypeBitWidth();
+
+  int vectorSize = std::min(numElemsPerThread, maxVectorSize);
+  SmallVector<unsigned> sizePerThread(type.getRank(), 1);
+  sizePerThread.back() = vectorSize;
+
+  SmallVector<unsigned> order =
+      ttg::getMatrixOrder(type.getRank(), /*rowMajor*/ true);
+  auto cgaLayout = ttg::getCGALayout(type.getEncoding());
+
+  Attribute layout = ttg::BlockedEncodingAttr::get(
+      type.getContext(), type.getShape(), sizePerThread, order, numWarps,
+      threadsPerWarp, cgaLayout);
+  return layout;
+}
+
+static void pickDescriptorLoadStoreLayout(
+    ModuleOp moduleOp, llvm::MapVector<Operation *, Attribute> &layoutMap) {
+  int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(moduleOp);
+  moduleOp.walk([&](Operation *op) {
+    int numWarps = ttg::lookupNumWarps(op);
+    if (auto load = dyn_cast<tt::DescriptorOpInterface>(op)) {
+      if (load->getNumResults() == 1)
+        layoutMap[op] = pickDescriptorLoadStoreLayout(
+            numWarps, threadsPerWarp,
+            cast<RankedTensorType>(load->getResult(0).getType()));
+    }
+    if (auto store = dyn_cast<tt::DescriptorStoreLikeOpInterface>(op)) {
+      layoutMap[op] = pickDescriptorLoadStoreLayout(numWarps, threadsPerWarp,
+                                                    store.getSrc().getType());
+    }
+  });
+}
 
 struct CoalescePass
     : public ttgi::impl::TritonIntelGPUCoalesceBase<CoalescePass> {
@@ -411,6 +458,9 @@ public:
                            layoutMap);
     });
 
+    // Also pick a layout for descriptor load/store ops.
+    pickDescriptorLoadStoreLayout(moduleOp, layoutMap);
+
     LLVM_DEBUG({
       llvm::dbgs() << "[" DEBUG_TYPE "]: " << "layoutMap:\n";
       if (layoutMap.empty())
@@ -431,7 +481,11 @@ public:
     // 4. Convert the output of this new memory op back to L1
     // 5. Replace all the uses of the original memory op by the new one
     for (auto [op, layout] : layoutMap) {
-      coalesceOp(layout, op);
+      if (isa<tt::DescriptorOpInterface>(op) ||
+          isa<tt::DescriptorStoreLikeOpInterface>(op))
+        convertDistributedOpEncoding(layout, op);
+      else
+        coalesceOp(layout, op);
     }
 
     assert(succeeded(verify(moduleOp)) && "Module verification failed");
