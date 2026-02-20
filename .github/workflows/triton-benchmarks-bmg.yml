@@ -8,6 +8,12 @@ on:
       - main
     types: [opened, synchronize, reopened, labeled]
 
+# Prevent guard-only runs (e.g. unrelated label events) from cancelling
+# in-progress benchmark runs for the same PR.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
 jobs:
   guard:
     name: Check benchmark trigger
@@ -19,10 +25,15 @@ jobs:
         id: check
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          EVENT_ACTION: ${{ github.event.action }}
+          LABEL_NAME: ${{ github.event.label.name }}
+          API_URL: ${{ github.api_url }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           # Run benchmarks if the run-benchmarks label was just added.
-          if [[ "${{ github.event.action }}" == "labeled" ]]; then
-            if [[ "${{ github.event.label.name }}" == "run-benchmarks" ]]; then
+          if [[ "$EVENT_ACTION" == "labeled" ]]; then
+            if [[ "$LABEL_NAME" == "run-benchmarks" ]]; then
               echo "should_run=true" >> "$GITHUB_OUTPUT"
             else
               echo "should_run=false" >> "$GITHUB_OUTPUT"
@@ -30,15 +41,22 @@ jobs:
             exit 0
           fi
           # For non-label events, check if benchmark-related files changed.
-          MATCH=$(curl -sf -H "Authorization: Bearer $GITHUB_TOKEN" \
-            "${{ github.api_url }}/repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files?per_page=100" | \
-            python3 -c "
+          RESPONSE=$(curl -sf -H "Authorization: Bearer $GITHUB_TOKEN" \
+            "${API_URL}/repos/${REPO}/pulls/${PR_NUMBER}/files?per_page=100" 2>&1) || {
+            echo "::warning::Failed to fetch PR file list from GitHub API"
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+          MATCH=$(echo "$RESPONSE" | python3 -c "
           import sys, json
-          files = [f['filename'] for f in json.load(sys.stdin)]
-          print('true' if any(
-              f.startswith('.github/workflows/triton-benchmarks') or f.startswith('benchmarks/')
-              for f in files
-          ) else 'false')
+          try:
+              files = [f['filename'] for f in json.load(sys.stdin)]
+              print('true' if any(
+                  f.startswith('.github/workflows/triton-benchmarks') or f.startswith('benchmarks/')
+                  for f in files
+              ) else 'false')
+          except Exception:
+              print('false')
           ")
           echo "should_run=$MATCH" >> "$GITHUB_OUTPUT"
 
