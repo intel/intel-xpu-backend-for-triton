@@ -272,11 +272,54 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   auto [l0_module, l0_kernel, n_spills] =
       compileLevelZeroObjects(binary_ptr, binary_size, kernel_name, l0_device,
                               l0_context, build_flags(), is_spv);
-  if (PyErr_Occurred()) {
-    return NULL;
-  }
 
   const bool debugEnabled = getBoolEnv("TRITON_DEBUG");
+
+  // If the initial compilation failed entirely (e.g., scratch space exceeds
+  // HW limit), and GRF mode was not explicitly set, retry with large GRF mode.
+  // This handles cases where the default GRF mode doesn't provide enough
+  // registers, causing the backend compiler to fail.
+  if (PyErr_Occurred() && is_spv && !build_flags.hasGRFSizeFlag()) {
+    // Save the original error before clearing it for the retry attempt.
+    PyObject *orig_type, *orig_value, *orig_tb;
+    PyErr_Fetch(&orig_type, &orig_value, &orig_tb);
+
+    if (debugEnabled)
+      std::cout << "(I): Build failed for \"" << kernel_name
+                << "\", retrying with large GRF mode" << std::endl;
+
+    build_flags.addLargeGRFSizeFlag();
+
+    auto [l0_module_retry, l0_kernel_retry, n_spills_retry] =
+        compileLevelZeroObjects(binary_ptr, binary_size, kernel_name, l0_device,
+                                l0_context, build_flags(), is_spv);
+    if (PyErr_Occurred()) {
+      // Retry also failed — propagate the original error.
+      PyErr_Restore(orig_type, orig_value, orig_tb);
+      return NULL;
+    }
+
+    // Retry succeeded — discard the saved original error.
+    Py_XDECREF(orig_type);
+    Py_XDECREF(orig_value);
+    Py_XDECREF(orig_tb);
+
+    l0_module = l0_module_retry;
+    l0_kernel = l0_kernel_retry;
+    n_spills = n_spills_retry;
+
+    // Always print recovery message to stderr to follow up on the
+    // "L0 build module failed" error that was already printed.
+    std::cerr << "(I): Build failure recovered by retrying with large GRF "
+                 "mode for \""
+              << kernel_name << "\"" << std::endl;
+
+    if (debugEnabled)
+      std::cout << "(I): Retry with large GRF succeeded, kernel has "
+                << n_spills << " spills" << std::endl;
+  } else if (PyErr_Occurred()) {
+    return NULL;
+  }
 
   if (is_spv) {
     constexpr int32_t max_reg_spill = 1000;

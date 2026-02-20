@@ -12,6 +12,7 @@
 include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUOpInterfaces.td"
 include "intel/include/Dialect/TritonIntelGPU/IR/TritonIntelGPUAttrDefs.td"
 include "intel/include/Dialect/TritonIntelGPU/IR/TritonIntelGPUDialect.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
@@ -27,7 +28,7 @@ def L2Cache : Resource<"::mlir::triton::gpu::intel::L2Cache">;
 //===----------------------------------------------------------------------===//
 
 class TTIG_Op<string mnemonic, list<Trait> traits = []> :
-    Op<TritonIntelGPU_Dialect, mnemonic, !listconcat(traits, [])>;
+    Op<TritonIntelGPU_Dialect, mnemonic, !listconcat(traits, [VerifyMemDescLayoutsTrait])>;
 
 def TT_TensorOrTensorPtr : AnyTypeOf<[TT_Tensor, TT_TensorPtr]>;
 
