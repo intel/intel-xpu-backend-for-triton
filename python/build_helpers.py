@@ -165,6 +165,8 @@ def get_llvm_package_info(helper_args: BuildHelperArgs):
                 f"LLVM pre-compiled image is not available for {system}-{arch}. Proceeding with user-configured LLVM from source build."
             )
             return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
+    elif system == 'Windows':
+        system_suffix = "windows-x64"
     else:
         print(
             f"LLVM pre-compiled image is not available for {system}-{arch}. Proceeding with user-configured LLVM from source build."
@@ -281,9 +283,11 @@ def download_and_copy(name, src_func, dst_path, override_path, version, url_func
     system = platform.system()
     arch = platform.machine()
     # NOTE: This might be wrong for jetson if both grace chips and jetson chips return aarch64
-    arch = {"arm64": "sbsa", "aarch64": "sbsa"}.get(arch, arch)
-    supported = {"Linux": "linux", "Darwin": "linux"}
+    arch = {"arm64": "sbsa", "aarch64": "sbsa", "AMD64": "x86_64"}.get(arch, arch)
+    supported = {"Linux": "linux", "Darwin": "linux", "Windows": "windows"}
     url = url_func(supported[system], arch, version)
+    if system == "Windows":
+        url = url.replace("tar.xz", "zip")
     src_path = src_func(supported[system], arch, version)
     tmp_path = os.path.join(cache_path, "nvidia", name)  # path to cache the download
     dst_path = os.path.join(base_dir, "third_party", "nvidia", "backend", dst_path)  # final binary path
@@ -296,12 +300,18 @@ def download_and_copy(name, src_func, dst_path, override_path, version, url_func
         download = download or curr_version.group(1) != version
     if download:
         print(f"downloading and extracting {url} ...")
-        with open_url(url) as url_file, tarfile.open(fileobj=url_file, mode="r|*") as tar_file:
-            # Use extractall without filter for Python version < 3.12 compatibility
-            if hasattr(tarfile, "data_filter"):
-                tar_file.extractall(path=tmp_path, filter="data")
-            else:
-                tar_file.extractall(path=tmp_path)
+        if url.endswith(".zip"):
+            with open_url(url) as response:
+                file_bytes = BytesIO(response.read())
+                with zipfile.ZipFile(file_bytes, "r") as file:
+                    file.extractall(path=tmp_path)
+        else:
+            with open_url(url) as url_file, tarfile.open(fileobj=url_file, mode="r|*") as tar_file:
+                # Use extractall without filter for Python version < 3.12 compatibility
+                if hasattr(tarfile, "data_filter"):
+                    tar_file.extractall(path=tmp_path, filter="data")
+                else:
+                    tar_file.extractall(path=tmp_path)
     os.makedirs(os.path.split(dst_path)[0], exist_ok=True)
     print(f"copy {src_path} to {dst_path} ...")
     if os.path.isdir(src_path):
@@ -321,7 +331,7 @@ def download_and_copy_dependencies(helper_args: BuildHelperArgs):
     download_and_copy(
         name="nvcc",
         src_func=lambda system, arch, version: f"cuda_nvcc-{system}-{arch}-{version}-archive/bin/ptxas{exe_extension}",
-        dst_path="bin/ptxas",
+        dst_path=f"bin/ptxas{exe_extension}",
         override_path=helper_args.ptxas_path,
         version=nvidia_toolchain_version["ptxas"],
         url_func=lambda system, arch, version:
@@ -344,7 +354,7 @@ def download_and_copy_dependencies(helper_args: BuildHelperArgs):
         name="cuobjdump",
         src_func=lambda system, arch, version:
         f"cuda_cuobjdump-{system}-{arch}-{version}-archive/bin/cuobjdump{exe_extension}",
-        dst_path="bin/cuobjdump",
+        dst_path=f"bin/cuobjdump{exe_extension}",
         override_path=helper_args.cuobjdump_path,
         version=nvidia_toolchain_version["cuobjdump"],
         url_func=lambda system, arch, version:
@@ -355,7 +365,7 @@ def download_and_copy_dependencies(helper_args: BuildHelperArgs):
         name="nvdisasm",
         src_func=lambda system, arch, version:
         f"cuda_nvdisasm-{system}-{arch}-{version}-archive/bin/nvdisasm{exe_extension}",
-        dst_path="bin/nvdisasm",
+        dst_path=f"bin/nvdisasm{exe_extension}",
         override_path=helper_args.nvdisasm_path,
         version=nvidia_toolchain_version["nvdisasm"],
         url_func=lambda system, arch, version:
