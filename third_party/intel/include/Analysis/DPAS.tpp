@@ -26,7 +26,7 @@ DPASAnalysis<DPASEngineType, Enable>::DPASAnalysis(Operation *root) {
 
   // Populate the maps.
   mod.walk([&](FunctionOpInterface funcOp) {
-    [[maybe_unused]] auto [it, inserted] = funcToDotMap.try_emplace(funcOp);
+    auto it = funcToDotMap.try_emplace(funcOp).first;
 
     funcOp.walk([&](Operation *op) {
       if (!isa<DotOp, DotScaledOp>(op))
