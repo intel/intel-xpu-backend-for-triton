@@ -338,31 +338,26 @@ jobs:
           export PYTEST_MAX_PROCESSES=4
           ${{ env.TRITON_TEST_CMD }} --triton-kernels
 
-      - name: Select tutorials to run (rest)
-        if: matrix.suite == 'rest'
-        run: |
-          cat <<EOF | tee tutorials.txt
-          test_tutorials.py::test_tutorial[01-vector-add]
-          test_tutorials.py::test_tutorial[02-fused-softmax]
-          test_tutorials.py::test_tutorial[03-matrix-multiplication]
-          test_tutorials.py::test_tutorial[04-low-memory-dropout]
-          test_tutorials.py::test_tutorial[05-layer-norm]
-          test_tutorials.py::test_tutorial[07-extern-functions]
-          test_tutorials.py::test_tutorial[08-grouped-gemm]
-          test_tutorials.py::test_tutorial[09-persistent-matmul]
-          test_tutorials.py::test_tutorial[10-experimental-block-pointer]
-          EOF
-
       - name: Run Tutorials
         if: matrix.suite == 'rest'
         run: |
-          ${{ env.TRITON_TEST_CMD }} --select-from-file tutorials.txt --tutorial
+          ${{ env.TRITON_TEST_CMD }} --tutorial --tutorial06-run-mode skip
 
       # Run 06-fused-attention.py separately, because it is split into 3 configs
-      - name: Run Flash Attention tutorials
-        if: matrix.suite == 'tutorial-fa-64' || matrix.suite == 'tutorial-fa-128-fwdfp8' || matrix.suite == 'tutorial-fa-128-nofwdfp8'
+      - name: Run Flash Attention tutorials (HEAD_DIM=64)
+        if: matrix.suite == 'tutorial-fa-64'
         run: |
-          ${{ env.TRITON_TEST_CMD }} "--${{ matrix.suite }}"
+          HEAD_DIM=64 ${{ env.TRITON_TEST_CMD }} --tutorial06-run-mode fa_only
+
+      - name: Run Flash Attention tutorials (HEAD_DIM=128, FP8 only)
+        if: matrix.suite == 'tutorial-fa-128-fwdfp8'
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --tutorial06-run-mode fp8_only
+
+      - name: Run Flash Attention tutorials (HEAD_DIM=128, skip FP8)
+        if: matrix.suite == 'tutorial-fa-128-nofwdfp8'
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --tutorial06-run-mode skip_fp8
 
       - name: Install transformers
         if: matrix.suite == 'rest'

@@ -28,9 +28,7 @@ TEST:
     --softmax
     --gemm
     --flash-attention
-    - tutorial-fa-64
-    - tutorial-fa-128-fwdfp8
-    - tutorial-fa-128-nofwdfp8
+    --tutorial06-run-mode MODE   FA run mode: all, skip, fp8_only, skip_fp8
     --flex-attention
     --instrumentation
     --inductor
@@ -80,6 +78,7 @@ TEST_GLUON=false
 TEST_INTERPRETER=false
 TEST_PROTON=false
 TEST_TUTORIAL=false
+TUTORIAL06_RUN_MODE=all
 TEST_MICRO_BENCHMARKS=false
 TEST_BENCHMARKS=false
 TEST_BENCHMARK_SOFTMAX=false
@@ -189,26 +188,11 @@ while (( $# != 0 )); do
       TEST_DEFAULT=false
       shift
       ;;
-    --tutorial-fa-64)
+    --tutorial06-run-mode)
       TEST_TUTORIAL=true
-      TEST_TUTORIAL_FA=true
-      FA_CONFIG="HEAD_DIM=64"
+      TUTORIAL06_RUN_MODE="$2"
       TEST_DEFAULT=false
-      shift
-      ;;
-    --tutorial-fa-128-fwdfp8)
-      TEST_TUTORIAL=true
-      TEST_TUTORIAL_FA=true
-      FA_CONFIG="HEAD_DIM=128 FWD_FP8_ONLY=1"
-      TEST_DEFAULT=false
-      shift
-      ;;
-    --tutorial-fa-128-nofwdfp8)
-      TEST_TUTORIAL=true
-      TEST_TUTORIAL_FA=true
-      FA_CONFIG="HEAD_DIM=128 FWD_FP8_SKIP=1"
-      TEST_DEFAULT=false
-      shift
+      shift 2
       ;;
     --microbench)
       TEST_MICRO_BENCHMARKS=true
@@ -576,18 +560,8 @@ run_tutorial_tests() {
 
   cd $TRITON_PROJ/python/test/tutorials
 
-  if [ "${TEST_TUTORIAL_FA:-false}" = true ]; then
-    if [ -n "${FA_CONFIG:-}" ]; then
-      # contains space-separated VAR=VALUE pairs
-      export $FA_CONFIG
-    fi
-
-    TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=tutorial \
-      run_pytest_command -vvv --device xpu test_tutorials.py -k "test_tutorial[06-fused-attention]"
-  else
-    TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=tutorial \
-      run_pytest_command -vvv --device xpu test_tutorials.py
-  fi
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=tutorial \
+    run_pytest_command -vvv --device xpu test_tutorials.py --tutorial06-mode "$TUTORIAL06_RUN_MODE"
 }
 
 run_microbench_tests() {

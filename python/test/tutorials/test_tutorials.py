@@ -69,9 +69,34 @@ def tutorial_environment():
     triton.testing.perf_report = original_perf_report
 
 
+def _configure_fa(mode: str) -> None:
+    """Set environment variables for 06-fused-attention based on run mode.
+
+    HEAD_DIM can be overridden externally (e.g. workflow sets HEAD_DIM=64).
+    fp8_only and skip_fp8 imply HEAD_DIM=128 unless already set.
+    """
+    if mode == "fp8_only":
+        os.environ.setdefault("HEAD_DIM", "128")
+        os.environ["FWD_FP8_ONLY"] = "1"
+    elif mode == "skip_fp8":
+        os.environ.setdefault("HEAD_DIM", "128")
+        os.environ["FWD_FP8_SKIP"] = "1"
+
+
 @pytest.mark.parametrize("name", TUTORIALS, ids=TUTORIALS)
-def test_tutorial(name: str, tutorial_environment):
+def test_tutorial(name: str, request, tutorial_environment):
     """Run a single Triton tutorial as a pytest test case."""
+    mode = request.config.getoption("--tutorial06-mode")
+    is_fa = name == "06-fused-attention"
+
+    if mode == "skip" and is_fa:
+        pytest.skip("06-fused-attention skipped")
+    if mode in ("fa_only", "fp8_only", "skip_fp8") and not is_fa:
+        pytest.skip("Only 06-fused-attention runs in this FA configuration")
+
+    if is_fa and mode in ("fp8_only", "skip_fp8"):
+        _configure_fa(mode)
+
     tutorial_path = TUTORIALS_DIR / f"{name}.py"
     assert tutorial_path.exists(), f"Missing tutorial file: {tutorial_path}"
 
