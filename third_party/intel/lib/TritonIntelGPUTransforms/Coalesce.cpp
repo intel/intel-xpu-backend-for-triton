@@ -61,9 +61,8 @@ static Attribute pickDescriptorLoadStoreLayout(int numWarps, int threadsPerWarp,
                                        threadsPerWarp, cgaLayout);
 }
 
-static void
-pickDescriptorLoadStoreLayout(ModuleOp moduleOp,
-                              llvm::MapVector<Operation *, Attribute> &layoutMap) {
+static void pickDescriptorLoadStoreLayout(
+    ModuleOp moduleOp, llvm::MapVector<Operation *, Attribute> &layoutMap) {
   int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(moduleOp);
   moduleOp.walk([&](Operation *op) {
     int numWarps = ttg::lookupNumWarps(op);
