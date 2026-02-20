@@ -192,7 +192,7 @@ bwd_configs = list(filter(filter_func, bwd_configs))
 
 def early_prune(prune_configs, named_args, **kwargs):
     if named_args['H'] == 48 and named_args['N_CTX'] == 1024 and kwargs['HEAD_DIM'] == 64:
-        # benchmark_suite.assert_close fails for this configuration
+        # FIXME: benchmark_suite.assert_close fails for this configuration
         bad_case = {'BLOCK_M1': 64, 'BLOCK_N1': 128, 'BLOCK_M2': 64, 'BLOCK_N2': 64, 'grf_mode': '256'}
         prune_configs = list(filter(lambda cfg: cfg.kwargs != bad_case, prune_configs))
     return prune_configs
@@ -582,7 +582,13 @@ def get_benchmark(
     def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
         modes = ['fwd', 'bwd']
         if H == 48 and N_CTX == 1024 and D_HEAD == 64:
-            # FIXME: to rerun autotuning and skip problem configs using `early_config_prune` option
+            # Clear cache to rerun autotuning and skip problem configs using `early_config_prune` option.
+            # Note: The cache key uses only N_CTX and D_HEAD, so different Z values with the same N_CTX and D_HEAD
+            # will hit the same cache entry. For example:
+            #   Z=16, H=32, N_CTX=1024, D_HEAD=64 -> creates cache entry
+            #   Z=4, H=48, N_CTX=1024, D_HEAD=64 -> cache hit (same key, kernel doesn't depend on Z)
+            # We don't add Z or H to the cache key because the kernel doesn't depend on them, and doing so would
+            # result in more kernel compilations.
             key = (1024, 64, 'torch.float16', 'torch.float16', 'torch.float16', 'torch.float16', 'torch.float16',
                    'torch.float16', 'torch.float16', 'torch.float32', 'torch.float32')
             if key in _attention.tune_attn_bwd.cache:
