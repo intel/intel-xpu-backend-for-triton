@@ -916,6 +916,8 @@ run_vllm_install() {
   current_pin=$(<"$pin_file")
   echo "VLLM pin: $current_pin"
 
+  # Old pin that we currently have have specific patch to fix it, new version is expected to work OOB
+  # We can remove this when we update the pin to a newer version, but for now we want to be able to test both the old and new versions
   if [ "$current_pin" = "97a042f3bca53417de6405a248e3d11fca568e2c" ]; then
     run_vllm_old_install
   else

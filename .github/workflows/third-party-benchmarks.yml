@@ -74,13 +74,13 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Override vLLM pin
-        if: ${{ inputs.vllm_pin != '' }}
+        if: ${{ inputs.vllm_pin }}
         run: |
           echo "${{ inputs.vllm_pin }}" > benchmarks/third_party/vllm/vllm-pin.txt
           echo "Overriding vLLM pin to: ${{ inputs.vllm_pin }}"
 
       - name: Override SGLang pin
-        if: ${{ inputs.sglang_pin != '' }}
+        if: ${{ inputs.sglang_pin }}
         run: |
           echo "${{ inputs.sglang_pin }}" > benchmarks/third_party/sglang/sglang-pin.txt
           echo "Overriding SGLang pin to: ${{ inputs.sglang_pin }}"
