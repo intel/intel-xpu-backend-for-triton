@@ -1293,11 +1293,15 @@ public:
 
     AxisInfo::DimVectorT contiguity, divisibility, constancy;
 
-    // For descriptor loads, propagate AxisInfo from the descriptor
+    // For descriptor loads, propagate AxisInfo from the descriptor.
+    // The descriptor operand (!tt.tensordesc<...>) is a scalar (rank 0), so
+    // its axis info has no dimensions. Fall back to constancy = 1
+    // (conservative) for any dimension beyond the descriptor's rank.
+    unsigned descRank = static_cast<unsigned>(descInfo.getRank());
     for (unsigned d = 0; d < rank; ++d) {
       contiguity.push_back(1);
       divisibility.push_back(1);
-      constancy.push_back(descInfo.getConstancy(d));
+      constancy.push_back(d < descRank ? descInfo.getConstancy(d) : 1);
     }
 
     auto axisInfo = AxisInfo(std::move(contiguity), std::move(divisibility),

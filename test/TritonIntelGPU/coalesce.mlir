@@ -623,3 +623,40 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 }
+
+// -----
+
+// Verify that descriptor stores are assigned a row-major coalesced layout and
+// that the src tensor is wrapped in a convert_layout to match it.
+
+// CHECK: #[[$LAYOUT:.*]] = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @descriptor_store
+  tt.func public @descriptor_store(%arg0: !tt.tensordesc<tensor<2x64xf16>>) {
+    %c0_i32 = arith.constant 0 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<2x64xf16, #blocked>
+    // CHECK: %[[CL:.+]] = ttg.convert_layout %{{.+}} : tensor<2x64xf16, #{{.+}}> -> tensor<2x64xf16, #[[$LAYOUT]]>
+    // CHECK: tt.descriptor_store {{.*}}, %[[CL]] : !tt.tensordesc<tensor<2x64xf16>>, tensor<2x64xf16, #[[$LAYOUT]]>
+    tt.descriptor_store %arg0[%c0_i32, %c0_i32], %cst : !tt.tensordesc<tensor<2x64xf16>>, tensor<2x64xf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// Verify that descriptor loads are assigned a row-major coalesced layout and
+// that a convert_layout is inserted after the load to restore the original type.
+
+// CHECK: #[[$LAYOUT:.*]] = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @descriptor_load
+  tt.func public @descriptor_load(%arg0: !tt.tensordesc<tensor<2x64xf16>>) -> tensor<2x64xf16, #blocked> {
+    %c0_i32 = arith.constant 0 : i32
+    // CHECK: %[[LOAD:.+]] = tt.descriptor_load %{{.+}}[{{.*}}] : !tt.tensordesc<tensor<2x64xf16>> -> tensor<2x64xf16, #[[$LAYOUT]]>
+    // CHECK: ttg.convert_layout %[[LOAD]] : tensor<2x64xf16, #[[$LAYOUT]]> -> tensor<2x64xf16, #{{.+}}>
+    %result = tt.descriptor_load %arg0[%c0_i32, %c0_i32] : !tt.tensordesc<tensor<2x64xf16>> -> tensor<2x64xf16, #blocked>
+    tt.return %result : tensor<2x64xf16, #blocked>
+  }
+}
