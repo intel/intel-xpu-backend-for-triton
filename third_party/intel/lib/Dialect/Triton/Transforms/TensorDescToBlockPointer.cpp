@@ -26,6 +26,12 @@ namespace {
 constexpr unsigned offsetBitwidth = 32u;
 constexpr unsigned shapeAndStridesBitwidth = 64u;
 
+bool hasATensorDescriptorType(mlir::TypeRange types) {
+  return llvm::any_of(types, [](mlir::Type t) {
+    return llvm::isa<mlir::triton::TensorDescType>(t);
+  });
+}
+
 Value findOrCreateCast(Location loc, Value val, Type tgtType,
                        OpBuilder &builder) {
   assert(isa<IntegerType>(tgtType) && isa<IntegerType>(val.getType()) &&
@@ -61,52 +67,37 @@ public:
   void runOnOperation() final {
     ModuleOp moduleOp = getOperation();
 
-    WalkResult res = moduleOp->walk<WalkOrder::PreOrder>([=](Operation *op) {
-      if (isa<tt::DescriptorGatherOp>(op) || isa<tt::DescriptorScatterOp>(op) ||
-          isa<tt::DescriptorReduceOp>(op)) {
-        op->emitRemark(
-            "TritonIntelTensorDescToBlockPointer: Failed to rewrite");
-        return WalkResult::interrupt();
-      }
-      if (auto loadOp = dyn_cast_or_null<tt::DescriptorLoadOp>(op)) {
-        // Retrieve the padding option from the MakeTensorDescOp.
-        std::optional<tt::MakeTensorDescOp> makeTensorDescOp =
-            tt::intel::findDefiningOpOfType<tt::MakeTensorDescOp>(
-                loadOp.getDesc());
-        if (!makeTensorDescOp) {
-          op->emitRemark("TritonIntelTensorDescToBlockPointer: Failed to "
-                         "retrieve the padding option.");
-          return WalkResult::interrupt();
-        }
-
-        OpToPaddingMap[loadOp] = makeTensorDescOp->getPadding();
-      }
+    moduleOp->walk<WalkOrder::PreOrder>([&](tt::DescriptorLoadOp loadOp) {
+      // Retrieve the padding option from the MakeTensorDescOp.
+      std::optional<tt::MakeTensorDescOp> makeTensorDescOp =
+          tt::intel::findDefiningOpOfType<tt::MakeTensorDescOp>(
+              loadOp.getDesc());
+      assert(makeTensorDescOp.has_value() &&
+             "Expecting to find the defining MakeTensorDescOp");
+      OpToPaddingMap[loadOp] = makeTensorDescOp->getPadding();
       return WalkResult::advance();
     });
 
-    if (res.wasInterrupted()) {
-      LLVM_DEBUG(llvm::dbgs()
-                 << "TritonIntelTensorDescToBlockPointer: Skipping module - "
-                    "contains unsupported operations\n");
-      return;
-    }
-
     moduleOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
-      return TypeSwitch<Operation *, WalkResult>(op)
+      assert(!isa<tt::DescriptorGatherOp>(op) &&
+             !isa<tt::DescriptorScatterOp>(op) &&
+             !isa<tt::DescriptorReduceOp>(op) &&
+             "Expecting no gather/scatter/reduce ops at this stage");
+      TypeSwitch<Operation *>(op)
           .Case<tt::MakeTensorDescOp>([&](auto makeTensorDescOp) {
-            if (failed(rewriteMakeTensorDescriptorOp(makeTensorDescOp)))
-              makeTensorDescOp->emitRemark(
-                  "TritonIntelTensorDescToBlockPointer: Failed to rewrite");
-            return WalkResult::advance();
+            LogicalResult res = rewriteMakeTensorDescriptorOp(makeTensorDescOp);
+            assert(succeeded(res) &&
+                   "Failed to rewrite make_tensor_descriptor op");
           })
           .Case<tt::DescriptorLoadOp, tt::DescriptorStoreOp>(
               [&](auto loadOrStoreOp) {
-                if (failed(rewriteDescriptorLoadOrStoreOp(loadOrStoreOp)))
-                  loadOrStoreOp->emitRemark(
-                      "TritonIntelTensorDescToBlockPointer: Failed to rewrite");
-                return WalkResult::advance();
+                LogicalResult res =
+                    rewriteDescriptorLoadOrStoreOp(loadOrStoreOp);
+                assert(succeeded(res) &&
+                       "Failed to rewrite descriptor load/store op");
               })
-          .Default([&](auto) { return WalkResult::advance(); });
+          .Default([&](auto) {});
+      return WalkResult::advance();
     });
 
     if (!cleanUp.empty())
@@ -114,6 +105,11 @@ public:
 
     LLVM_DEBUG(llvm::dbgs()
                    << "After TDesc to block_ptr: << " << moduleOp << "\n";);
+    moduleOp->walk([&](Operation *op) {
+      assert(!hasATensorDescriptorType(op->getOperandTypes()) &&
+             !hasATensorDescriptorType(op->getResultTypes()) &&
+             "Expecting no tensor descriptor types after conversion");
+    });
     assert(succeeded(verify(moduleOp)) && "Module verification failed");
   }
 
