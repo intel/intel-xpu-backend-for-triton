@@ -7,13 +7,44 @@ on:
     branches:
       - main
     types: [opened, synchronize, reopened, labeled]
-    paths:
-      - .github/workflows/triton-benchmarks*.yml
-      - benchmarks/**
 
 jobs:
+  guard:
+    name: Check benchmark trigger
+    runs-on: Linux
+    outputs:
+      should_run: ${{ steps.check.outputs.should_run }}
+    steps:
+      - name: Check trigger conditions
+        id: check
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          # Run benchmarks if the run-benchmarks label was just added.
+          if [[ "${{ github.event.action }}" == "labeled" ]]; then
+            if [[ "${{ github.event.label.name }}" == "run-benchmarks" ]]; then
+              echo "should_run=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "should_run=false" >> "$GITHUB_OUTPUT"
+            fi
+            exit 0
+          fi
+          # For non-label events, check if benchmark-related files changed.
+          MATCH=$(curl -sf -H "Authorization: Bearer $GITHUB_TOKEN" \
+            "${{ github.api_url }}/repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files?per_page=100" | \
+            python3 -c "
+          import sys, json
+          files = [f['filename'] for f in json.load(sys.stdin)]
+          print('true' if any(
+              f.startswith('.github/workflows/triton-benchmarks') or f.startswith('benchmarks/')
+              for f in files
+          ) else 'false')
+          ")
+          echo "should_run=$MATCH" >> "$GITHUB_OUTPUT"
+
   benchmarks:
-    if: github.event.action != 'labeled' || github.event.label.name == 'run-benchmarks'
+    needs: guard
+    if: needs.guard.outputs.should_run == 'true'
     uses: ./.github/workflows/triton-benchmarks.yml
     with:
       runner_label: max1550
