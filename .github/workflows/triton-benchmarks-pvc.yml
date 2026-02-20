@@ -8,12 +8,6 @@ on:
       - main
     types: [opened, synchronize, reopened, labeled]
 
-# Prevent guard-only runs (e.g. unrelated label events) from cancelling
-# in-progress benchmark runs for the same PR.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
-  cancel-in-progress: false
-
 jobs:
   guard:
     name: Check benchmark trigger
