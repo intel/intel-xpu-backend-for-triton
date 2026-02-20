@@ -393,8 +393,7 @@ struct LoadStoreConversionBase {
     // enabled by default. Both can be overridden by env vars.
     static const bool canUsePredicatedLoad =
         tools::getBoolEnv("TRITON_INTEL_PREDICATED_LOAD");
-    static const std::optional<bool> usePredicatedStore =
-        tools::isEnvValueBool(
+    static const std::optional<bool> usePredicatedStore = tools::isEnvValueBool(
         tools::getStrEnv("TRITON_INTEL_PREDICATED_STORE"));
 
     // SPIRV predicated load/store does not support volatile qualifier.
@@ -408,8 +407,8 @@ struct LoadStoreConversionBase {
   }
 
   // Convert Triton cache modifier to Intel GEN load cache control enum.
-  template <typename OpType, typename = std::enable_if_t<
-                                 std::is_same_v<OpType, LoadOp>>>
+  template <typename OpType,
+            typename = std::enable_if_t<std::is_same_v<OpType, LoadOp>>>
   TritonGEN::LoadCacheControl tritonToIntelCacheModifier(OpType &op) const {
     CacheModifier cacheModifier = op.getCache();
 
@@ -433,8 +432,8 @@ struct LoadStoreConversionBase {
     }
   }
 
-  template <typename OpType, typename = std::enable_if_t<
-                                 std::is_same_v<OpType, StoreOp>>>
+  template <typename OpType,
+            typename = std::enable_if_t<std::is_same_v<OpType, StoreOp>>>
   TritonGEN::StoreCacheControl tritonToIntelCacheModifier(OpType &op) const {
     CacheModifier cacheModifier = op.getCache();
 
