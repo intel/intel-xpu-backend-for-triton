@@ -63,6 +63,20 @@ def main():
                 "totalCount": "",
             },
         }
+    json_data["pytorch_tests"] = {
+        "api": "L0",
+        "commandLine": "run_pytorch_tests.sh",  # use --scripts.additional_cmd_args to select tests
+        "validReturnCodes": [0],
+        "passRatesFunctionalCheck": True,
+        "passRatesRegex": {
+            "blockCount": "",
+            "errorCount": "",
+            "failCount": 'failed": (\\d+)',
+            "passCount": 'passed": (\\d+)',
+            "skipCount": "",
+            "totalCount": "",
+        },
+    }
     with open(config.file_name, "w", encoding="utf-8") as f:
         json.dump(json_data, f, indent=4)
 
