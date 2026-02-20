@@ -1,4 +1,5 @@
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
+#include "intel/include/Utils/Utility.h"
 
 #include "triton/Dialect/Triton/Transforms/ArithTypeConversion.h"
 #include "triton/Dialect/Triton/Transforms/FunctionTypeConversion.h"
@@ -17,6 +18,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/SmallVectorExtras.h"
+#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/LogicalResult.h"
 #include "llvm/Support/raw_ostream.h"
 #include <mlir/Dialect/Arith/IR/Arith.h>
@@ -547,14 +549,55 @@ class TritonRewriteTensorDescriptorToPointerPass
   void runOnOperation() override {
     auto op = getOperation();
 
+    llvm::SmallSetVector<triton::MakeTensorDescOp, 4>
+        candidateMakeTensorDescOps;
+    llvm::SmallSetVector<triton::MakeTensorDescOp, 4>
+        unhandledMakeTensorDescOps;
+    op->walk([&](Operation *op) {
+      TypeSwitch<Operation *>(op)
+          .Case<triton::DescriptorLoadOp,
+                triton::DescriptorStoreOp>([&](auto op) {
+            auto makeTensorDescOp =
+                triton::intel::findDefiningOpOfType<triton::MakeTensorDescOp>(
+                    op.getDesc());
+            if (makeTensorDescOp.has_value())
+              candidateMakeTensorDescOps.insert(*makeTensorDescOp);
+          })
+          .Case<triton::DescriptorGatherOp, triton::DescriptorScatterOp,
+                triton::DescriptorReduceOp>([&](auto op) {
+            auto makeTensorDescOp =
+                triton::intel::findDefiningOpOfType<triton::MakeTensorDescOp>(
+                    op.getDesc());
+            if (makeTensorDescOp.has_value())
+              unhandledMakeTensorDescOps.insert(*makeTensorDescOp);
+          })
+          .Default([](auto) {});
+      return WalkResult::advance();
+    });
+    for (auto op : unhandledMakeTensorDescOps)
+      candidateMakeTensorDescOps.remove(op);
+
     mlir::ConversionTarget target(getContext());
-    target.addDynamicallyLegalDialect<mlir::arith::ArithDialect,
-                                      mlir::scf::SCFDialect,
-                                      mlir::triton::TritonDialect>(
-        [](mlir::Operation *op) {
-          return !hasATensorDescriptorType(op->getOperandTypes()) &&
-                 !hasATensorDescriptorType(op->getResultTypes());
-        });
+    target.addDynamicallyLegalDialect<
+        mlir::arith::ArithDialect, mlir::scf::SCFDialect,
+        mlir::triton::TritonDialect>([&](mlir::Operation *op) {
+      if (!hasATensorDescriptorType(op->getOperandTypes()) &&
+          !hasATensorDescriptorType(op->getResultTypes()))
+        return true;
+
+      return TypeSwitch<Operation *, bool>(op)
+          .Case<triton::MakeTensorDescOp>(
+              [&](auto op) { return candidateMakeTensorDescOps.contains(op); })
+          .Case<triton::DescriptorLoadOp,
+                triton::DescriptorStoreOp>([&](auto op) {
+            auto makeTensorDescOp =
+                triton::intel::findDefiningOpOfType<triton::MakeTensorDescOp>(
+                    op.getDesc());
+            return makeTensorDescOp.has_value() &&
+                   candidateMakeTensorDescOps.contains(*makeTensorDescOp);
+          })
+          .Default([](auto) { return false; });
+    });
     target.addDynamicallyLegalOp<triton::FuncOp>([](triton::FuncOp funcOp) {
       return !hasATensorDescriptorType(funcOp.getFunctionType().getInputs()) &&
              !hasATensorDescriptorType(funcOp.getFunctionType().getResults());
