@@ -392,10 +392,10 @@ struct LoadStoreConversionBase {
     // On the other hand, predicated store is expected to be correct and it is
     // enabled by default. Both can be overridden by env vars.
     static const bool canUsePredicatedLoad =
-        triton::tools::getBoolEnv("TRITON_INTEL_PREDICATED_LOAD");
+        tools::getBoolEnv("TRITON_INTEL_PREDICATED_LOAD");
     static const std::optional<bool> usePredicatedStore =
-        mlir::triton::tools::isEnvValueBool(
-            mlir::triton::tools::getStrEnv("TRITON_INTEL_PREDICATED_STORE"));
+        tools::isEnvValueBool(
+        tools::getStrEnv("TRITON_INTEL_PREDICATED_STORE"));
 
     // SPIRV predicated load/store does not support volatile qualifier.
     if constexpr (std::is_same_v<OpType, LoadOp>) {
@@ -408,9 +408,9 @@ struct LoadStoreConversionBase {
   }
 
   // Convert Triton cache modifier to Intel GEN load cache control enum.
-  template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
-                                 OpType, LoadOp, StoreOp>::value>>
-  auto tritonToIntelCacheModifier(OpType &op) const {
+  template <typename OpType, typename = std::enable_if_t<
+                                 std::is_same_v<OpType, LoadOp>>>
+  TritonGEN::LoadCacheControl tritonToIntelCacheModifier(OpType &op) const {
     CacheModifier cacheModifier = op.getCache();
 
     /******** LoadOp ********
@@ -419,18 +419,24 @@ struct LoadStoreConversionBase {
      * "cv" -> L1UC_L3UC (Do not cache at all)
      * "ca" -> L1C_L3C (Cache at all levels)
      **/
-    if constexpr (std::is_same_v<OpType, LoadOp>) {
-      switch (cacheModifier) {
-      case CacheModifier::NONE:
-        return TritonGEN::LoadCacheControl::DEFAULT;
-      case CacheModifier::CG:
-        return TritonGEN::LoadCacheControl::L1UC_L3C;
-      case CacheModifier::CV:
-        return TritonGEN::LoadCacheControl::L1UC_L3UC;
-      case CacheModifier::CA:
-        return TritonGEN::LoadCacheControl::L1C_L3C;
-      }
+    switch (cacheModifier) {
+    case CacheModifier::NONE:
+      return TritonGEN::LoadCacheControl::DEFAULT;
+    case CacheModifier::CG:
+      return TritonGEN::LoadCacheControl::L1UC_L3C;
+    case CacheModifier::CV:
+      return TritonGEN::LoadCacheControl::L1UC_L3UC;
+    case CacheModifier::CA:
+      return TritonGEN::LoadCacheControl::L1C_L3C;
+    default:
+      llvm_unreachable("invalid cache modifier for LoadOp");
     }
+  }
+
+  template <typename OpType, typename = std::enable_if_t<
+                                 std::is_same_v<OpType, StoreOp>>>
+  TritonGEN::StoreCacheControl tritonToIntelCacheModifier(OpType &op) const {
+    CacheModifier cacheModifier = op.getCache();
 
     /******** StoreOp ********
      * ""   -> DEFAULT (No cache modifier provided)
@@ -439,22 +445,20 @@ struct LoadStoreConversionBase {
      * "cs" -> L1S_L3S (Cache streaming at all levels)
      * "wt" -> L1WT_L3WT (Cache write-through at all levels)
      **/
-    else {
-      switch (cacheModifier) {
-      case CacheModifier::NONE:
-        return TritonGEN::StoreCacheControl::DEFAULT;
-      case CacheModifier::WB:
-        return TritonGEN::StoreCacheControl::L1WB_L3WB;
-      case CacheModifier::CG:
-        return TritonGEN::StoreCacheControl::L1UC_L3WB;
-      case CacheModifier::CS:
-        return TritonGEN::StoreCacheControl::L1S_L3S;
-      case CacheModifier::WT:
-        return TritonGEN::StoreCacheControl::L1WT_L3WT;
-      }
+    switch (cacheModifier) {
+    case CacheModifier::NONE:
+      return TritonGEN::StoreCacheControl::DEFAULT;
+    case CacheModifier::WB:
+      return TritonGEN::StoreCacheControl::L1WB_L3WB;
+    case CacheModifier::CG:
+      return TritonGEN::StoreCacheControl::L1UC_L3WB;
+    case CacheModifier::CS:
+      return TritonGEN::StoreCacheControl::L1S_L3S;
+    case CacheModifier::WT:
+      return TritonGEN::StoreCacheControl::L1WT_L3WT;
+    default:
+      llvm_unreachable("invalid cache modifier for StoreOp");
     }
-
-    llvm_unreachable("invalid cache modifier");
   }
 
   template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
