@@ -166,7 +166,7 @@ bwd_configs = [
     for bn1 in [64, 128]
     for bm2 in [64, 128]
     for bn2 in [32, 64]
-    for s in [2, 3, 4]
+    for s in [2, 3]
     for w in [8, 16]
 ]
 
