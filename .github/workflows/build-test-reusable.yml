@@ -437,7 +437,7 @@ jobs:
         with:
           name: test-reports-tutorials-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           include-hidden-files: true
-          path: reports/tutorial.xml
+          path: reports/tutorials.xml
 
       - name: Upload tutorials performance report
         uses: actions/upload-artifact@v6

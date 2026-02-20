@@ -560,7 +560,7 @@ run_tutorial_tests() {
 
   cd $TRITON_PROJ/python/test/tutorials
 
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=tutorial \
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=tutorials \
     run_pytest_command -vvv --device xpu test_tutorials.py --tutorial06-mode "$TUTORIAL06_RUN_MODE"
 }
 
