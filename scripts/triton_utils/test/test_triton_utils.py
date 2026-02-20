@@ -112,7 +112,7 @@ TESTS_WITH_DIFFERENT_STATUSES = {
         <testcase classname="python.test.unit.language.test_tensor_descriptor" name="test_tensor_descriptor_reduce[1-1024-device-2-uint16-or]" time="0.001">
             <skipped type="pytest.xfail" message="Multi-CTA not supported" />
         </testcase>
-        <testcase classname="python.test.unit.language.test_tensor_descriptor" name="test_host_tensor_descriptor_matmul[128-128-16-4-2]" time="0.000">
+        <testcase classname="python.test.unit.language.test_tensor_descriptor" name="test_host_\tensor_descriptor_matmul[128-128-16-4-2]" time="0.000">
             <skipped type="pytest.skip" message="Skipped by pytest-skip">
                 /runner/.../test_tensor_descriptor.py:1708: Skipped by pytest-skip
             </skipped>
@@ -133,7 +133,7 @@ TESTS_WITH_DIFFERENT_STATUSES = {
 ''', 'scaled_dot.xml':
     '''<?xml version="1.0" encoding="utf-8"?>
 <testsuites name="pytest tests">
-    <testsuite name="pytest" errors="0" failures="0" skipped="2" tests="3" time="12.498" timestamp="2025-10-22T16:53:55.914818+00:00" hostname="intel-xpu-backend-for-triton">
+    <testsuite name="pytest" errors="0" failures="0" skipped="2" tests="3" time="12.498" timestamp="2025-10-22T16:53:55.914818+00:00" hostname="hostname">
         <testcase classname="python.test.unit.language.test_matmul" name="test_mxfp8_mxfp4_matmul[0-False-False-float4-float4-False-False-False-3-128-64-128-1024-512-512]" time="0.000">
             <skipped type="pytest.skip" message="Skipped by pytest-skip">
                 /runner/_work/.../test_matmul.py:1204: Skipped by pytest-skip
@@ -217,8 +217,10 @@ def test_multiple_test_suites(tmp_path):
     pass_rate_dicts = extract_pass_rate_dicts(out)
 
     assert len(pass_rate_dicts) == 2
-    assert pass_rate_dicts[0]['language']['total'] == 5
-    assert pass_rate_dicts[1]['scaled_dot']['total'] == 3
+    # Results order is not guaranteed, so check by key
+    results_by_name = {list(d.keys())[0]: d for d in pass_rate_dicts}
+    assert results_by_name['language']['language']['total'] == 5
+    assert results_by_name['scaled_dot']['scaled_dot']['total'] == 3
 
 
 @pytest.mark.parametrize(
@@ -668,9 +670,9 @@ TESTS_WITH_NO_CLASSNAME_AND_NAME = {
     'test-report1/regression.xml':
     '''<?xml version="1.0" encoding="utf-8"?>
 <testsuites name="pytest tests">
-    <testsuite name="pytest" errors="0" failures="0" skipped="325" tests="334" time="74.027" timestamp="2025-12-03T17:18:38.148662+00:00" hostname="intel-xpu-backend-for-triton">
+    <testsuite name="pytest" errors="0" failures="0" skipped="325" tests="334" time="74.027" timestamp="2025-12-03T17:18:38.148662+00:00" hostname="hostname">
         <testcase classname="python.test.regression.test_cast_matmul" name="test_cast_matmul[768-768-1024-32-16-128-bfloat16-bfloat16-float16]" time="0.000">
-            <skipped type="pytest.skip" message="Skipped by pytest-skip">/runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/python/test/regression/test_cast_matmul.py:80: Skipped by pytest-skip</skipped>
+            <skipped type="pytest.skip" message="Skipped by pytest-skip">python/test/regression/test_cast_matmul.py:80: Skipped by pytest-skip</skipped>
         </testcase>
         <testcase classname="python.test.regression.test_functional_regressions" name="test_inductor_cummax_bool" time="1.788" />
         <testcase time="0.000" />
