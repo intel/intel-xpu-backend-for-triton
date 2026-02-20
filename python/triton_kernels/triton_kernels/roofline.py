@@ -176,8 +176,14 @@ def get_memset_tbps(device="cuda"):
     return tbps
 
 
+def has_mkldnn():
+    return hasattr(torch.backends, "mkldnn") and torch.backends.mkldnn.is_available()
+
+
 def get_blas_tflops(dtype, workspace_size=32 * 1024 * 1024, device="cuda"):
     workspace = torch.empty(workspace_size, device=device, dtype=torch.uint8)
+    return_result = False
+    c_dtype = None
     if is_cuda():
         dtype = {"fp16": torch.float16, "bf16": torch.bfloat16, "fp8": torch.float8_e4m3fn}[dtype]
         c_dtype = dtype
@@ -194,13 +200,25 @@ def get_blas_tflops(dtype, workspace_size=32 * 1024 * 1024, device="cuda"):
         c_dtype = dtype if dtype.itemsize == 2 else torch.float16
         hipblas = amd.hipblas.HipblasLt(workspace)
         bench_fn = hipblas.matmul
+    elif is_xpu():
+        if not has_mkldnn():
+            raise RuntimeError("MKL-DNN is required for BLAS performance on XPU")
+
+        # Assumes PyTorch calls into oneDNN for GPU-accelerated matmul
+        bench_fn = torch.matmul
+        return_result = True
+        dtype = {"fp16": torch.float16, "bf16": torch.bfloat16, "fp8": torch.float32}[dtype]
     else:
-        raise RuntimeError("Unsupported platform: neither CUDA nor ROCm detected")
+        raise RuntimeError("Unsupported platform: not CUDA, ROCm or XPU")
     M, N, K = 8192, 8192, 8192
     a = torch.randn(M, K, device=device, dtype=torch.float32).to(dtype)
     b = torch.randn(K, N, device=device, dtype=torch.float32).to(dtype).T
-    c = torch.empty((M, N), device=device, dtype=c_dtype)
-    time_ms = triton.testing.do_bench(lambda: bench_fn(a, b, c), rep=1000)
+    if not return_result:
+        assert c_dtype is not None
+        c = torch.empty((M, N), device=device, dtype=c_dtype)
+        time_ms = triton.testing.do_bench(lambda: bench_fn(a, b, c), rep=1000)
+    else:
+        time_ms = triton.testing.do_bench(lambda: bench_fn(a, b), rep=1000)
     return 2 * M * N * K / time_ms * 1e-9
 
 

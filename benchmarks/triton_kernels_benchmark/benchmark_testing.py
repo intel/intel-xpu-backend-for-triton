@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import gc
 import re
 from typing import Callable, ClassVar, Dict, Optional, List, Tuple, Union, Set
 from collections.abc import Iterable
@@ -372,6 +373,22 @@ def get_gpu_info():
     return gpu_info[device_name]
 
 
+def cleanup_memory():
+    """Cleanup GPU memory by calling garbage collector and emptying cache."""
+    # For now we only clean on B580 machines, because cleaning introduces this bug
+    # https://github.com/intel/intel-xpu-backend-for-triton/issues/5640
+    # Bug is not relevant on B580 because the shape is skipped due to limited memory
+    # We can remove this early exit once issue above is fixed
+    device_name = torch.xpu.get_device_name().lower()
+    if "b580" not in device_name and "b570" not in device_name:
+        return
+    gc.collect()
+    if hasattr(torch, "cuda") and torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    if hasattr(torch, "xpu") and torch.xpu.is_available():
+        torch.xpu.empty_cache()
+
+
 def perf_report(benchmarks):
     """
     Mark a function for benchmarking. The benchmark can then be executed by using the :code:`.run` method on the return value.
@@ -486,6 +503,7 @@ class Mark:
             for label in itertools.chain(bench.ylabel, ["CV"]):
                 row_vals[label] = ([], [], [])
             for y in bench.line_vals:
+                cleanup_memory()
                 ret = self.fn(**x_args, **{bench.line_arg: y}, **bench.args, **kwargs)
                 for i, label in enumerate(itertools.chain(bench.ylabel, ["CV"])):
                     try:

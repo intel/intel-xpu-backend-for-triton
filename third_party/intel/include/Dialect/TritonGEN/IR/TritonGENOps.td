@@ -23,11 +23,17 @@ include "mlir/IR/OpAsmInterface.td"
 include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
 
 //===----------------------------------------------------------------------===//
+// Interfaces
+//===----------------------------------------------------------------------===//
+
+def L2Cache : Resource<"::mlir::triton::TritonGEN::L2Cache">;
+
+//===----------------------------------------------------------------------===//
 // TritonGEN op definitions
 //===----------------------------------------------------------------------===//
 
 class TritonGEN_Op<string mnemonic, list<Trait> traits = []> :
-  Op<TritonGEN_Dialect, mnemonic, traits>;
+  Op<TritonGEN_Dialect, mnemonic, !listconcat(traits, [])>;
 
 //===----------------------------------------------------------------------===//
 // Synchronization
@@ -114,7 +120,7 @@ def TritonGEN_MatrixDPASOp : TritonGEN_Op<"dpas">,
             If depth is 8, K would be 8, 16, 32, or 64 (based on OPS_PER_CHAN).
 
     $a, $b, $c, $d - matrix A, B, C, D, respectively
-    $pa, $pb - precision of matrix A and B resepectively
+    $pa, $pb - precision of matrix A and B respectively
     $rc - repeat count
   }];
 
@@ -209,8 +215,8 @@ def TritonGEN_Matrix2DBlockLoadOp : TritonGEN_Op<"2Dblockload">,
         - 8 for int8, int4, int2
       $v_blocks - number of tiles to load
       $transpose - transpose the tile in registers (useful for 32 bit element type)
-      $vnni_transform - transpose and pack the submatrix in registers (useful for < 32 bit element types)
-      $cache_control - an enumerator that sets the L1 and L3 cache behaviour
+      $vnni_transform - transpose and pack the sub matrix in registers (useful for < 32 bit element types)
+      $cache_control - an enumerator that sets the L1 and L3 cache behavior
 
     Notes:
       - the $transpose and $vnni_transform parameters are mutual exclusive
@@ -259,7 +265,7 @@ def TritonGEN_Matrix2DBlockStoreOp : TritonGEN_Op<"2Dblockstore">,
         - 16 for f16, int16, bf16
         - 8 for int8, int4, int2
       $v_blocks - number of tiles to store
-      $cache_control - an enumerator that sets the L1 and L3 cache behaviour
+      $cache_control - an enumerator that sets the L1 and L3 cache behavior
       $stored_val - the tile to store
 
     Notes:
@@ -275,21 +281,9 @@ def TritonGEN_Matrix2DBlockStoreOp : TritonGEN_Op<"2Dblockstore">,
   let hasVerifier = 1;
 }
 
-def TritonGEN_Matrix2DBlockPrefetchOp : TritonGEN_Op<"2Dblockprefetch">,
-  Arguments<(ins
-    Arg<LLVM_AnyPointer, "", [MemRead]>:$ptr,
-    I32:$base_width,
-    I32:$base_height,
-    I32:$base_pitch,
-    I32:$x,
-    I32:$y,
-    I32Attr:$elem_size_in_bits,
-    I32Attr:$tile_width,
-    I32Attr:$tile_height,
-    I32Attr:$v_blocks,
-    DefaultValuedAttr<TritonGEN_LoadCacheControl, "::mlir::triton::TritonGEN::LoadCacheControl::DEFAULT">:$cache_control
-  )> {
-
+def TritonGEN_Matrix2DBlockPrefetchOp : TritonGEN_Op<"2Dblockprefetch", [
+  MemoryEffects<[MemWrite<L2Cache>]>
+]> {
   let summary = "2D block prefetch";
 
   let description = [{
@@ -304,11 +298,25 @@ def TritonGEN_Matrix2DBlockPrefetchOp : TritonGEN_Op<"2Dblockprefetch">,
       - 16 for f16, int16, bf16
       - 8 for int8, int4, int2
     $v_blocks - number of tiles to prefetch
-    $cache_control - an enumerator that sets the L1 and L3 cache behaviour
+    $cache_control - an enumerator that sets the L1 and L3 cache behavior
 
     Notes:
       - coordinate is provided in elements, while width and pitch are provided in bytes.
   }];
+
+  let arguments = (ins
+    Arg<LLVM_AnyPointer, "Global memory pointer", [MemRead]>:$ptr,
+    I32:$base_width,
+    I32:$base_height,
+    I32:$base_pitch,
+    I32:$x,
+    I32:$y,
+    I32Attr:$elem_size_in_bits,
+    I32Attr:$tile_width,
+    I32Attr:$tile_height,
+    I32Attr:$v_blocks,
+    DefaultValuedAttr<TritonGEN_LoadCacheControl, "::mlir::triton::TritonGEN::LoadCacheControl::DEFAULT">:$cache_control
+  );
 
   let assemblyFormat = [{
     operands ` ` `{` `elem_size_in_bits` `=` $elem_size_in_bits `,` `tile_width` `=` $tile_width `,`
