@@ -15,6 +15,14 @@ on:
         description: JSON list of benchmarks to run. Leave empty to run all benchmarks.
         type: string
         default: ""
+      vllm_pin:
+        description: vLLM pin (commit hash), keep empty for default
+        type: string
+        default: ""
+      sglang_pin:
+        description: SGLang pin (commit hash), keep empty for default
+        type: string
+        default: ""
   # This workflow is also called from workflows third-party-benchmarks-*.yml.
   workflow_call:
     inputs:
@@ -23,6 +31,14 @@ on:
         type: string
       benchmarks:
         description: JSON list of benchmarks to run. Leave empty to run all benchmarks.
+        type: string
+        default: ""
+      vllm_pin:
+        description: vLLM pin (commit hash), keep empty for default
+        type: string
+        default: ""
+      sglang_pin:
+        description: SGLang pin (commit hash), keep empty for default
         type: string
         default: ""
 
@@ -56,6 +72,18 @@ jobs:
 
       - name: Checkout repository
         uses: actions/checkout@v6
+
+      - name: Override vLLM pin
+        if: ${{ inputs.vllm_pin != '' }}
+        run: |
+          echo "${{ inputs.vllm_pin }}" > benchmarks/third_party/vllm/vllm-pin.txt
+          echo "Overriding vLLM pin to: ${{ inputs.vllm_pin }}"
+
+      - name: Override SGLang pin
+        if: ${{ inputs.sglang_pin != '' }}
+        run: |
+          echo "${{ inputs.sglang_pin }}" > benchmarks/third_party/sglang/sglang-pin.txt
+          echo "Overriding SGLang pin to: ${{ inputs.sglang_pin }}"
 
       - name: Install Python (from pyenv) ${{ inputs.python_version }}
         uses: ./.github/actions/setup-pyenv-python
@@ -246,7 +274,7 @@ jobs:
 
       - name: Upload benchmark reports
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v5
         with:
           name: benchmark-reports
           path: reports
