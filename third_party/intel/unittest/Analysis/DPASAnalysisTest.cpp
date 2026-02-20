@@ -75,7 +75,7 @@ public:
 
     // Create placeholder values
     auto a = builder->create<arith::ConstantOp>(
-        loc, tensorType, builder->getZeroAttr(tensorType));
+        loc, tensorTypeA, builder->getZeroAttr(tensorTypeA));
     auto b = builder->create<arith::ConstantOp>(
         loc, tensorTypeB, builder->getZeroAttr(tensorTypeB));
     auto c = builder->create<arith::ConstantOp>(
