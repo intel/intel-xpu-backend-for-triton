@@ -430,7 +430,6 @@ jobs:
         run: |
           python scripts/pass_rate.py --reports reports
           python scripts/pass_rate.py --reports reports --json > pass_rate.json
-          python scripts/pass_rate.py --reports reports --suite tutorial --json > pass_rate_tutorials.json
 
       - name: Upload pass rate report
         uses: actions/upload-artifact@v6
