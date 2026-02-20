@@ -6,7 +6,7 @@ from triton import knobs
 
 from dataclasses import dataclass
 import functools
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Tuple, Union
 from types import ModuleType
 import hashlib
 import tempfile
@@ -21,6 +21,8 @@ try:  # XPUBackend allows metaclasses injection
     from .meta import XPUBackendMeta
 except ImportError:
     XPUBackendMeta = type(BaseBackend)
+
+_VERSION_PATTERN = re.compile(r'(\d+)\.(\d+)\.(\d+)(?:\+(\d+))?')
 
 
 @dataclass
@@ -41,7 +43,7 @@ class XPUOptions:
     allow_fp8e4nv: bool = False
     allow_fp8e4b15: bool = True
     grf_mode: str = 'default'
-    split_barriers_scope: str = 'None'
+    use_barrier: bool = False
     max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
     debug: bool = False
@@ -78,13 +80,24 @@ def extract_spill_size_from_zebin(file):
         elf = ELFFile(f)
         zeinfo = elf.get_section_by_name(".ze_info")
         if zeinfo is None:
-            raise RuntimeError('Internal Triton ZEBIN codegen error:'
-                               'Section .ze_info not found in zebin')
+            from triton.runtime.errors import IntelGPUError
+            raise IntelGPUError('Internal Triton ZEBIN codegen error:'
+                                'Section .ze_info not found in zebin')
         text = zeinfo.data().decode('utf-8')
         match = SPILL_SIZE_RE.search(text)
-        if match:
+        if match is not None:
             return int(match.group(1))
     return 0
+
+
+def min_dot_size(device_props: Union[Dict, GPUTarget]):
+    if isinstance(device_props, GPUTarget):
+        backend = XPUBackend(device_props)
+        device_props = backend.properties
+    else:
+        from triton.runtime import driver
+        backend = XPUBackend(driver.active.get_current_target())
+    return backend.min_dot_size(device_props)
 
 
 class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
@@ -126,6 +139,15 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     def get_target_name(self, options) -> str:
         return f"xpu:{self.device_arch}"
 
+    @classmethod
+    def is_lts(cls, ver) -> bool:
+        if not ver:
+            return True
+        m = _VERSION_PATTERN.match(ver)
+        if not m:
+            return True
+        return tuple(int(x) if x is not None else 0 for x in m.groups()) < (1, 6, 35096, 9)
+
     def parse_target(self, tgt_prop) -> dict:
         dev_prop = {}
         dev_prop['name'] = tgt_prop.get('name', 'xpu')
@@ -138,12 +160,23 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         dev_prop['max_num_sub_groups'] = tgt_prop.get('max_num_sub_groups', None)
         dev_prop['sub_group_sizes'] = tgt_prop.get('sub_group_sizes', None)
         dev_prop['has_fp64'] = tgt_prop.get('has_fp64', None)
-        dev_prop['has_subgroup_matrix_multiply_accumulate'] = tgt_prop.get('has_subgroup_matrix_multiply_accumulate',
-                                                                           False)
+        dev_prop['has_subgroup_matrix_multiply_accumulate_bfloat8'] = tgt_prop.get(
+            'has_subgroup_matrix_multiply_accumulate_bfloat8', False)
         dev_prop['has_subgroup_matrix_multiply_accumulate_tensor_float32'] = tgt_prop.get(
             'has_subgroup_matrix_multiply_accumulate_tensor_float32', False)
+        dev_prop['has_16bit_atomics'] = tgt_prop.get('has_16bit_atomics', False)
         dev_prop['has_subgroup_2d_block_io'] = tgt_prop.get('has_subgroup_2d_block_io', False)
-        dev_prop['has_bfloat16_conversions'] = tgt_prop.get('has_bfloat16_conversions', True)
+        dev_prop['has_bfloat16_arithmetic'] = tgt_prop.get('has_bfloat16_arithmetic', False)
+        dev_prop['has_bfloat16_conversion'] = tgt_prop.get('has_bfloat16_conversion', True)
+        dev_prop['has_predicated_io'] = tgt_prop.get('has_predicated_io',
+                                                     not self.is_lts(tgt_prop.get('driver_version')))
+        dev_prop['has_subgroup_matrix_multiply_accumulate'] = tgt_prop.get('has_subgroup_matrix_multiply_accumulate',
+                                                                           False)
+        dev_prop['has_subgroup_scaled_matrix_multiply_accumulate'] = tgt_prop.get(
+            'has_subgroup_scaled_matrix_multiply_accumulate', False)
+        dev_prop['has_f4_conversions'] = tgt_prop.get('has_f4_conversions', False)
+        dev_prop['has_f8_conversions'] = tgt_prop.get('has_f8_conversions', False)
+        dev_prop['has_256b_prefetch'] = tgt_prop.get('has_256b_prefetch', False)
 
         return dev_prop
 
@@ -205,20 +238,21 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     def annotate_module(cls, module_opts, properties, opt):
         # Annotate module with information required by subsequent transformations.
         module_opts.min_sg_size = min(properties["sub_group_sizes"])
-        module_opts.support_sg_2d_block = properties["has_subgroup_2d_block_io"]
-        module_opts.support_dpas = properties["has_subgroup_matrix_multiply_accumulate"]
-        module_opts.support_bf16_conversion = properties["has_bfloat16_conversions"]
+        module_opts.support_16bit_atomics = properties["has_16bit_atomics"]
+        module_opts.support_2d_block_io = properties["has_subgroup_2d_block_io"]
+        module_opts.support_bfloat16_arithmetic = properties["has_bfloat16_arithmetic"]
+        module_opts.support_bfloat16_conversion = properties["has_bfloat16_conversion"]
+        module_opts.support_predicated_io = properties["has_predicated_io"]
+        module_opts.support_subgroup_matrix_multiply_accumulate = properties["has_subgroup_matrix_multiply_accumulate"]
+        module_opts.support_subgroup_scaled_matrix_multiply_accumulate = properties[
+            "has_subgroup_scaled_matrix_multiply_accumulate"]
+        module_opts.support_f4_conversion = properties["has_f4_conversions"]
+        module_opts.support_f8_conversion = properties["has_f8_conversions"]
+        module_opts.support_256b_prefetch = properties["has_256b_prefetch"]
+        module_opts.support_subgroup_matrix_multiply_accumulate_bf8 = properties[
+            "has_subgroup_matrix_multiply_accumulate_bfloat8"]
         module_opts.threads_per_warp = opt.warp_size
         module_opts.target_arch = cls.target_arch
-
-    @staticmethod
-    def get_split_barrier_scope(opt):
-        split_barriers_scope = intel.SplitBarrierScope.none
-        if opt.split_barriers_scope == 'Workgroup':
-            split_barriers_scope = intel.SplitBarrierScope.Workgroup
-        elif opt.split_barriers_scope == 'Subgroup':
-            split_barriers_scope = intel.SplitBarrierScope.Subgroup
-        return split_barriers_scope
 
     @classmethod
     @track
@@ -226,37 +260,34 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
-        intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
-        passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
+        intel.passes.ttir.add_convert_block_pointer_to_tdesc(pm)
+        intel.passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
         passes.common.add_cse(pm)
-        passes.common.add_licm(pm)
+        passes.ttir.add_triton_licm(pm)
         intel.passes.ttir.add_remove_boundary_checks(pm)
         intel.passes.ttir.add_remove_masks(pm)
         intel.passes.ttir.add_stride_versioning(pm)
         intel.passes.ttir.add_fuse_reshape(pm)
         passes.common.add_canonicalizer(pm)
         passes.ttir.add_combine(pm)
+        intel.passes.ttir.add_simplify_signed_arithmetic(pm)
         passes.ttir.add_reorder_broadcast(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
         passes.ttir.add_loop_unroll(pm)
+        intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
         pm.run(mod, 'make_ttir')
         return mod
 
     @classmethod
     @track
     def make_ttgir(cls, mod, metadata, opt, properties):
-        cluster_info = intel.ClusterInfo()
-        if opt.cluster_dims is not None:
-            cluster_info.clusterDimX = opt.cluster_dims[0]
-            cluster_info.clusterDimY = opt.cluster_dims[1]
-            cluster_info.clusterDimZ = opt.cluster_dims[2]
-
         # Annotate module with information required by subsequent transformations.
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         module_opts = intel.passes.ttgpuir.AnnotateModuleOptions()
         cls.annotate_module(module_opts, properties, opt)
+        module_opts.is_lts = cls.is_lts(metadata["target"].arch.get("driver_version"))
         intel.passes.ttgpuir.add_triton_annotate_module(pm, module_opts)
         pm.run(mod, 'annotate_module')
 
@@ -275,7 +306,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.ttgpuir.add_materialize_block_pointer(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_optimize_dot_operands(pm)
-        intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, XPUBackend.get_split_barrier_scope(opt))
+        intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.use_barrier)
 
         if (opt.reduce_variable_liveness):
             intel.passes.ttgpuir.add_reduce_variable_liveness(pm)
@@ -303,7 +334,6 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             intel.passes.ttgpuir.add_optimize_reduction_locality(pm)
         intel.passes.arith.add_arith_emulate_unsupported_floats(pm, ["bf16"], "f32")
         pm.run(mod, 'make_ttgir')
-        metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
         return mod
 
     def gluon_to_ttgir(self, src, metadata, options):
@@ -414,6 +444,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     @classmethod
     @track
     def make_spv(cls, src, metadata, options):
+        driver_version = metadata["target"].arch.get("driver_version")
+        os.environ["INTEL_XPU_BACKEND_IS_LTS"] = "1" if cls.is_lts(driver_version) else "0"
         spirv, name = intel.translate_to_spirv(src)
         metadata["name"] = name
         metadata.setdefault("build_flags", "")
@@ -467,16 +499,33 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                         ocloc_cmd[-1] = metadata["build_flags"] + shader_dump_opt
                         subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
             except subprocess.CalledProcessError as e:
-                if e.returncode == 255:
-                    error = 'Internal Triton ZEBIN codegen error'
-                elif e.returncode == 128 + signal.SIGSEGV:
-                    error = '`ocloc` raised SIGSEGV'
-                else:
-                    error = f'`ocloc` failed with error code {e.returncode}'
+                # If GRF mode was not explicitly set, retry with large GRF mode
+                # before giving up. This handles cases where the default GRF mode
+                # doesn't provide enough registers (e.g., scratch space exceeds
+                # HW PTSS limit).
+                retry_succeeded = False
+                if options.grf_mode == 'default' and \
+                        "-cl-intel-256-GRF-per-thread" not in metadata.get("build_flags", ""):
+                    metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
+                    ocloc_cmd[-1] = metadata["build_flags"] + shader_dump_opt
+                    try:
+                        subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
+                        retry_succeeded = True
+                    except subprocess.CalledProcessError:
+                        # Retry also failed — raise the original error below.
+                        pass
 
-                raise RuntimeError(f'{error}\n'
-                                   f'`ocloc` stderr:\n{e.output}\n'
-                                   f'Repro command: {ocloc_cmd}\n') from e
+                if not retry_succeeded:
+                    if e.returncode == 255:
+                        error = 'Internal Triton ZEBIN codegen error'
+                    elif e.returncode == 128 + signal.SIGSEGV:
+                        error = '`ocloc` raised SIGSEGV'
+                    else:
+                        error = f'`ocloc` failed with error code {e.returncode}'
+
+                    raise RuntimeError(f'{error}\n'
+                                       f'`ocloc` stderr:\n{e.output}\n'
+                                       f'Repro command: {ocloc_cmd}\n') from e
 
             with open(fbin, 'rb') as f:
                 zebin = f.read()

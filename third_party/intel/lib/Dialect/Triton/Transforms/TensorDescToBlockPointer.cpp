@@ -61,15 +61,29 @@ public:
   void runOnOperation() final {
     ModuleOp moduleOp = getOperation();
 
-    WalkResult res = moduleOp->walk<WalkOrder::PreOrder>([](Operation *op) {
+    WalkResult res = moduleOp->walk<WalkOrder::PreOrder>([=](Operation *op) {
       if (isa<tt::DescriptorGatherOp>(op) || isa<tt::DescriptorScatterOp>(op) ||
           isa<tt::DescriptorReduceOp>(op)) {
         op->emitRemark(
             "TritonIntelTensorDescToBlockPointer: Failed to rewrite");
         return WalkResult::interrupt();
       }
+      if (auto loadOp = dyn_cast_or_null<tt::DescriptorLoadOp>(op)) {
+        // Retrieve the padding option from the MakeTensorDescOp.
+        std::optional<tt::MakeTensorDescOp> makeTensorDescOp =
+            tt::intel::findDefiningOpOfType<tt::MakeTensorDescOp>(
+                loadOp.getDesc());
+        if (!makeTensorDescOp) {
+          op->emitRemark("TritonIntelTensorDescToBlockPointer: Failed to "
+                         "retrieve the padding option.");
+          return WalkResult::interrupt();
+        }
+
+        OpToPaddingMap[loadOp] = makeTensorDescOp->getPadding();
+      }
       return WalkResult::advance();
     });
+
     if (res.wasInterrupted()) {
       LLVM_DEBUG(llvm::dbgs()
                  << "TritonIntelTensorDescToBlockPointer: Skipping module - "
@@ -98,6 +112,8 @@ public:
     if (!cleanUp.empty())
       tt::intel::eraseOperations(cleanUp);
 
+    LLVM_DEBUG(llvm::dbgs()
+                   << "After TDesc to block_ptr: << " << moduleOp << "\n";);
     assert(succeeded(verify(moduleOp)) && "Module verification failed");
   }
 
@@ -257,12 +273,38 @@ private:
 
     constexpr bool isLoad = std::is_same_v<OpTy, tt::DescriptorLoadOp>;
     if constexpr (isLoad) {
+      // Default to PAD_ZERO as this is the expected padding behavior for
+      // descriptor loads. It should be specified in the tt.make_tensor_desc if
+      // it is retrieved.
+      triton::PaddingOption padding = triton::PaddingOption::PAD_ZERO;
+      if (OpToPaddingMap.contains(op))
+        padding = OpToPaddingMap[op];
+
       auto loadOp = builder.createOrFold<tt::LoadOp>(
-          loc, ptr, boundaryCheck,
-          /*padding*/ std::nullopt, op.getCache(), op.getEvict(),
+          loc, ptr, boundaryCheck, padding, op.getCache(), op.getEvict(),
           /*volatile*/ false);
-      LLVM_DEBUG(llvm::dbgs().indent(2) << loadOp << "\n");
-      op.replaceAllUsesWith(loadOp);
+
+      RankedTensorType loadType = cast<RankedTensorType>(loadOp.getType());
+      RankedTensorType resType = cast<RankedTensorType>(op.getType());
+      if (loadType == resType) {
+        LLVM_DEBUG(llvm::dbgs().indent(2) << loadOp << "\n");
+        op.replaceAllUsesWith(loadOp);
+      } else {
+        // Note: the Triton combine pass might 'combine' a reshape op with the
+        // descriptor load op by changing the result yielded by the descriptor
+        // load op (see RankedReduceDescriptorLoads). In this case we need to
+        // insert a reshape op to ensure the load op result has the expected
+        // shape for subsequent operations.
+        ArrayRef<int64_t> resShape = resType.getShape();
+        assert(loadType.getShape() != resShape && "Expecting different shapes");
+        assert(loadType.getElementType() == resType.getElementType() &&
+               "Expecting the same element type");
+        auto reshapeOp =
+            builder.createOrFold<tt::ReshapeOp>(loc, resShape, loadOp);
+        LLVM_DEBUG(llvm::dbgs().indent(2) << loadOp << "\n";
+                   llvm::dbgs().indent(2) << reshapeOp << "\n");
+        op.replaceAllUsesWith(reshapeOp);
+      }
     } else {
       [[maybe_unused]] auto storeOp = builder.createOrFold<tt::StoreOp>(
           loc, ptr, op.getSrc(), boundaryCheck, tt::CacheModifier::NONE,
@@ -277,6 +319,7 @@ private:
 
 private:
   SmallPtrSet<Operation *, 8> cleanUp;
+  llvm::SmallDenseMap<Operation *, tt::PaddingOption, 8> OpToPaddingMap;
 };
 
 } // namespace

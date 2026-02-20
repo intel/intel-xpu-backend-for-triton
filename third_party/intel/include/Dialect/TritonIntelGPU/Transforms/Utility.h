@@ -13,6 +13,8 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 
+#include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
+
 namespace mlir {
 class ConversionPatternRewriter;
 }
@@ -59,6 +61,50 @@ LLVM::LLVMFuncOp lookupOrCreateSPIRVFn(Operation *symbolTable, StringRef name,
 LLVM::CallOp createSPIRVBuiltinCall(Location loc,
                                     ConversionPatternRewriter &rewriter,
                                     LLVM::LLVMFuncOp func, ValueRange args);
+
+SmallVector<unsigned> calculateDPASInstShapeA(unsigned repeatCount,
+                                              unsigned systolicDepth,
+                                              unsigned opsPerChannel);
+
+SmallVector<unsigned> calculateDPASInstShapeB(unsigned systolicDepth,
+                                              unsigned opsPerChannel,
+                                              unsigned executionSize);
+
+SmallVector<unsigned> calculateDPASInstShapeC(unsigned repeatCount,
+                                              unsigned executionSize);
+
+SmallVector<unsigned> calculateShapeA(unsigned repeatCount,
+                                      unsigned systolicDepth,
+                                      unsigned opsPerChannel,
+                                      ArrayRef<unsigned> repCluster);
+
+SmallVector<unsigned> calculateShapeB(unsigned systolicDepth,
+                                      unsigned opsPerChannel,
+                                      unsigned executionSize,
+                                      ArrayRef<unsigned> repCluster);
+
+SmallVector<unsigned> calculateShapeC(unsigned repeatCount,
+                                      unsigned executionSize,
+                                      ArrayRef<unsigned> repCluster);
+
+SmallVector<unsigned> calculateWarpsPerTile(unsigned capRepeatCount,
+                                            unsigned capExecutionSize,
+                                            const ArrayRef<int64_t> shape,
+                                            unsigned numWarps);
+
+SmallVector<unsigned>
+calculateRepCluster(const DpasEncodingAttr::DPASCapability &dpasCap,
+                    unsigned opsPerChan, ArrayRef<int64_t> retShape,
+                    unsigned threadsPerWarp, unsigned a_bitwidth, bool is_FP8,
+                    ArrayRef<int64_t> a_shape, ArrayRef<int64_t> b_shape,
+                    ArrayRef<unsigned> warpsPerTile);
+
+SmallVector<int64_t>
+calculateDPASRepetitions(ArrayRef<int64_t> shape, DpasEncodingAttr::OpIdx opIdx,
+                         ArrayRef<unsigned> warpsPerCTA,
+                         ArrayRef<unsigned> repCluster, unsigned repeatCount,
+                         unsigned systolicDepth, unsigned executionSize,
+                         unsigned opsPerChannel);
 
 } // namespace mlir::triton::gpu::intel
 

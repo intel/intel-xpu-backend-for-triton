@@ -489,15 +489,6 @@ class CMakeBuild(build_ext):
             cmake_args.append("-DLLVM_EXTERNAL_LIT=" + lit_dir)
         cmake_args.extend(thirdparty_cmake_args)
 
-        result = subprocess.run(["bash", "./scripts/capture-hw-details.sh"], stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, check=True, text=True, env=os.environ.copy())
-        agama_version = None
-        for line in result.stdout.splitlines():
-            if line.startswith("AGAMA_VERSION="):
-                agama_version = line.split("=", 1)[1].strip()
-                break
-        cmake_args.append(f"-DAGAMA_VERSION={agama_version}")
-
         # configuration
         cfg = get_build_type()
         build_args = ["--config", cfg]
@@ -646,6 +637,15 @@ def download_and_copy_dependencies():
         dst_path="lib/cupti",
         variable="TRITON_CUPTI_LIB_PATH",
         version=NVIDIA_TOOLCHAIN_VERSION["cupti"],
+        url_func=lambda system, arch, version:
+        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_cupti/{system}-{arch}/cuda_cupti-{system}-{arch}-{version}-archive.tar.xz",
+    )
+    download_and_copy(
+        name="cupti",
+        src_func=lambda system, arch, version: f"cuda_cupti-{system}-{arch}-{version}-archive/lib",
+        dst_path="lib/cupti-blackwell",
+        variable="TRITON_CUPTI_LIB_BLACKWELL_PATH",
+        version=NVIDIA_TOOLCHAIN_VERSION["cupti-blackwell"],
         url_func=lambda system, arch, version:
         f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_cupti/{system}-{arch}/cuda_cupti-{system}-{arch}-{version}-archive.tar.xz",
     )
@@ -835,7 +835,7 @@ def get_triton_version_suffix():
 
 
 # keep it separate for easy substitution
-TRITON_VERSION = "3.6.0" + get_triton_version_suffix()
+TRITON_VERSION = "3.7.0" + get_triton_version_suffix()
 
 # Dynamically define supported Python versions and classifiers
 MIN_PYTHON = (3, 10)
@@ -843,10 +843,7 @@ MAX_PYTHON = (3, 14)
 
 PYTHON_REQUIRES = f">={MIN_PYTHON[0]}.{MIN_PYTHON[1]},<{MAX_PYTHON[0]}.{MAX_PYTHON[1] + 1}"
 BASE_CLASSIFIERS = [
-    "Development Status :: 4 - Beta",
-    "Intended Audience :: Developers",
-    "Topic :: Software Development :: Build Tools",
-    "License :: OSI Approved :: MIT License",
+    "Development Status :: 4 - Beta", "Intended Audience :: Developers", "Topic :: Software Development :: Build Tools"
 ]
 PYTHON_CLASSIFIERS = [
     f"Programming Language :: Python :: {MIN_PYTHON[0]}.{m}" for m in range(MIN_PYTHON[1], MAX_PYTHON[1] + 1)
@@ -860,6 +857,7 @@ setup(
     author_email="phil@openai.com",
     description="A language and compiler for custom Deep Learning operations",
     long_description="",
+    license="MIT",
     install_requires=[
         "pyelftools",
         "importlib-metadata; python_version < '3.10'",
@@ -886,7 +884,6 @@ setup(
     url="https://github.com/triton-lang/triton/",
     python_requires=PYTHON_REQUIRES,
     classifiers=CLASSIFIERS,
-    test_suite="tests",
     extras_require={
         "build": [
             "cmake>=3.20,<4.0",
@@ -904,7 +901,7 @@ setup(
         ],
         "tutorials": [
             "matplotlib",
-            "pandas",
+            "pandas<3.0",
             "tabulate",
         ],
     },

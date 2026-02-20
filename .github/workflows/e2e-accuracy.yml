@@ -155,14 +155,14 @@ jobs:
           use_pyenv: true
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           path: separate-reports
           merge-multiple: true
 
       - name: Run aggregation script
         run: |
-          pip install pandas numpy
+          pip install 'pandas<3.0' numpy
           ls -la separate-reports
           echo "Local dir"
           ls -la ./
@@ -171,7 +171,7 @@ jobs:
              --output-dir aggregated-results
 
       - name: Upload aggregated results
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         if: ${{ !cancelled() }}
         with:
           name: aggregated-results-${{ github.run_id }}
@@ -181,7 +181,7 @@ jobs:
       - name: Check results against reference
         if: ${{ (inputs.models || 'all') == 'all' && (inputs.only_one_model || '') == ''  && !cancelled()}}
         run: |
-          PYTORCH_XPU_OPS_REF="$(<.github/pins/e2e_reference_torch-xpu-ops.txt)"
+          PYTORCH_XPU_OPS_REF="$(curl -s https://raw.githubusercontent.com/pytorch/pytorch/$(<.github/pins/pytorch.txt)/third_party/xpu.txt)"
           git clone https://github.com/intel/torch-xpu-ops.git
           cd torch-xpu-ops
           git checkout $PYTORCH_XPU_OPS_REF

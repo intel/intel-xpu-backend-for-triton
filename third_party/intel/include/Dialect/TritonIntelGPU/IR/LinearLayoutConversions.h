@@ -11,9 +11,17 @@ namespace mlir::triton::gpu {
 // DPAS operand A: opIdx=0
 // DPAS operand B: opIdx=1
 // DPAS operand C (default): opIdx=2
-// Operand A and B conversion are not used yet
 LinearLayout DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
                                 unsigned opIdx = 2);
+
+// DPAS operand A: opIdx=0
+// DPAS operand B: opIdx=1
+// DPAS operand C (default): opIdx=2
+// DPAS scale A: opIdx=3
+// DPAS scale B: opIdx=4
+LinearLayout BlockScaledDPAStoLinearLayout(ArrayRef<int64_t> shape,
+                                           Attribute layout, unsigned opIdx = 2,
+                                           int scaleKIndex = -1);
 
 LinearLayout dotOperandDpasToLinearLayout(DotOperandEncodingAttr dotDpasLayout,
                                           ArrayRef<int64_t> shape);

@@ -58,3 +58,9 @@ def is_hip_cdna4():
 def is_xpu():
     target = current_target()
     return target is not None and target.backend == "xpu"
+
+
+@constexpr_function
+def is_xpu_cri():
+    target = current_target()
+    return target is not None and target.backend == 'xpu' and target.arch["arch"] == 'cri'

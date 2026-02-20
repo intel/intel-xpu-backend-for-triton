@@ -1001,9 +1001,13 @@ LogicalResult LayoutRematerialization::getConvertBackwardSlice(
 }
 
 LogicalResult LayoutRematerialization::getRematerializableSlice(
-    OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
-    DenseMap<Value, Attribute> &layout,
+    OpOperand &root, Attribute rootEncoding, SetVector<Value> &sliceArg,
+    DenseMap<Value, Attribute> &layoutArg,
     std::function<bool(Operation *)> stopPropagation) {
+  // Operate on copies of the input, we do not want to modify them unless we
+  // have succeeded.
+  auto slice = sliceArg;
+  auto layout = layoutArg;
   LogicalResult result = getConvertBackwardSlice(root, rootEncoding, slice,
                                                  layout, stopPropagation);
   if (result.failed() || slice.empty())
@@ -1016,6 +1020,8 @@ LogicalResult LayoutRematerialization::getRematerializableSlice(
         return failure();
     }
   }
+  sliceArg = std::move(slice);
+  layoutArg = std::move(layout);
   return success();
 }
 
@@ -1105,6 +1111,118 @@ static int64_t getByteCount(Value result, int64_t minElementCount = 0,
   return (elementCount * dtypeBitWidth) >> 3;
 }
 
+/// Compute the cost of a ConvertLayoutOp with source \p convertSrc.
+int64_t getConvertCost(Value convertSrc) {
+  // Measure the number of bytes that we're manipulating with the
+  // ConvertLayoutOp. We pessimistically assume that we round-trip
+  // through shared memory and that we cannot vectorise sub-register
+  // loads/stores, so we set a minimum element count of 32 (the warp
+  // size and number of shared memory banks) and minimum bitwidth of
+  // 32 (the width per bank of the shared memory load/store unit).
+  auto convertLayoutBytes = getByteCount(convertSrc, 32, 32);
+  // We measure costs in standardised milli-SM-cycles. The smem load
+  // and store each cost 8 * convertLayoutBytes, and then we double
+  // it to account for extra cost due to synchronisation.
+  return 32 * convertLayoutBytes;
+}
+
+/// Determine whether rematerializing \p slice is beneficial given that it will
+/// eliminate \p convertOp and require creating new convert ops with cost \p
+/// newCvtCost.
+bool isRematBeneficial(ConvertLayoutOp convertOp, const SetVector<Value> &slice,
+                       int64_t newCvtCost) {
+  // Identify all operations in the slice
+  SetVector<Operation *> sliceOps;
+  for (Value v : slice) {
+    if (Operation *op = v.getDefiningOp()) {
+      sliceOps.insert(op);
+    }
+  }
+
+  // Determine which values used by operations outside the slice. We can use
+  // this to determine whether they will actually survive and therefore need to
+  // contribute to the cost.
+  SetVector<Value> nonSliceOnlyValues;
+
+  // Identify values that directly have uses outside the slice.
+  for (Value v : slice) {
+    for (auto &use : v.getUses()) {
+      auto *user = use.getOwner();
+      if (user == convertOp || sliceOps.contains(user))
+        continue;
+      nonSliceOnlyValues.insert(v);
+      break;
+    }
+  }
+
+  // Expand the set to all transitive operands in the slice.
+  for (size_t i = 0; i < nonSliceOnlyValues.size(); ++i) {
+    Value v = nonSliceOnlyValues[i];
+    if (auto *op = v.getDefiningOp()) {
+      for (auto operand : op->getOperands())
+        if (slice.contains(operand))
+          nonSliceOnlyValues.insert(operand);
+    }
+    // TODO: Handle block arguments.
+  }
+
+  int64_t convertLayoutCost = getConvertCost(convertOp.getSrc());
+  int64_t rematerialisationCost = newCvtCost;
+
+  // Evaluate single-use status for every operation in slice
+  for (Operation *op : sliceOps) {
+    auto dialect = op->getDialect();
+    // If all of the results of the op are only used within the slice, when we
+    // rematerialise, this operation does not get duplicated so it does not
+    // contribute to our cost model.
+    bool isOpUsedOutsideSlice = llvm::any_of(op->getResults(), [&](Value v) {
+      return nonSliceOnlyValues.contains(v);
+    });
+    if (!isOpUsedOutsideSlice)
+      continue;
+
+    if (isa<arith::ConstantOp>(op)) {
+      // special-case: arith.constant has zero cost
+      continue;
+    } else if (isa<LoadOp>(op) || isa<LocalLoadOp>(op)) {
+      // optimistically assume L1-cached:
+      for (Value result : op->getResults()) {
+        rematerialisationCost += 8 * getByteCount(result);
+      }
+    } else if (isa<arith::ArithDialect, math::MathDialect>(dialect)) {
+      // this is an arithmetic operation; we distinguish between cheap
+      // operations (such as floating point add/mul which can be fused
+      // as halves of a single-cycle FMA instruction) and expensive
+      // operations which use the special function unit and/or involve
+      // multiple instructions.
+      int64_t multiplier = isExpensiveMathOp(op) ? 8 : 1;
+      for (Value result : op->getResults()) {
+        rematerialisationCost += multiplier * getByteCount(result);
+      }
+    } else if (isa<ReduceOp>(op)) {
+      // Reduce op introduce much cost.
+      auto reduceOp = dyn_cast<ReduceOp>(op);
+      ReduceOpHelper helper(reduceOp);
+      if (!helper.isAssociative()) {
+        // We shouldn't rematerize a no associative reduce op if it has multiple
+        // use chain.
+        LDBG("  skipped rematerialization due to non-associative reduce in the "
+             "slice");
+        return false;
+      }
+      rematerialisationCost += helper.getIntraWarpSizeWithUniqueData();
+      rematerialisationCost += 8 * helper.getInterWarpSizeWithUniqueData();
+    }
+  }
+
+  LLVM_DEBUG({
+    DBGS() << "  convert layout cost: " << convertLayoutCost << "\n";
+    DBGS() << "  rematerialisation cost: " << rematerialisationCost << "\n";
+  });
+
+  return convertLayoutCost >= rematerialisationCost;
+}
+
 void LayoutRematerialization::backwardRematerialization(
     ConvertLayoutOp convertOp) {
   // DotOperand is hoisted by hoistDotOperand
@@ -1137,113 +1255,7 @@ void LayoutRematerialization::backwardRematerialization(
   }
 
   // 2. Determine whether rematerialisation is beneficial.
-
-  // Identify all operations in the slice
-  SetVector<Operation *> sliceOps;
-  for (Value v : slice) {
-    if (Operation *op = v.getDefiningOp()) {
-      sliceOps.insert(op);
-    }
-  }
-
-  // Compute single-use operations
-  DenseMap<Operation *, bool> isSingleUse;
-  std::function<bool(Operation *)> isOpSingleUse;
-  isOpSingleUse = [&](Operation *op) -> bool {
-    // lookup in memoization array:
-    auto it = isSingleUse.find(op);
-    if (it != isSingleUse.end()) {
-      return it->second;
-    }
-
-    bool singleUse = true;
-
-    for (Value result : op->getResults()) {
-      for (Operation *user : result.getUsers()) {
-        if (user == convertOp) {
-          continue;
-        }
-        if (sliceOps.contains(user)) {
-          if (!isOpSingleUse(user)) {
-            singleUse = false;
-            break;
-          }
-        } else {
-          singleUse = false;
-          break;
-        }
-      }
-      if (!singleUse) {
-        break;
-      }
-    }
-
-    // insert into memoization array:
-    isSingleUse[op] = singleUse;
-    return singleUse;
-  };
-
-  // Measure the number of bytes that we're manipulating with the
-  // ConvertLayoutOp. We pessimistically assume that we round-trip
-  // through shared memory and that we cannot vectorise sub-register
-  // loads/stores, so we set a minimum element count of 32 (the warp
-  // size and number of shared memory banks) and minimum bitwidth of
-  // 32 (the width per bank of the shared memory load/store unit).
-  int64_t convertLayoutBytes = getByteCount(convertOp.getSrc(), 32, 32);
-
-  // We measure costs in standardised milli-SM-cycles. The smem load
-  // and store each cost 8 * convertLayoutBytes, and then we double
-  // it to account for extra cost due to synchronisation.
-  int64_t convertLayoutCost = 32 * convertLayoutBytes;
-  int64_t rematerialisationCost = 0;
-
-  // Evaluate single-use status for every operation in slice
-  for (Operation *op : sliceOps) {
-    auto dialect = op->getDialect();
-    if (isOpSingleUse(op)) {
-      // when we rematerialise, this operation does not get duplicated
-      // so it does not contribute to our cost model:
-      continue;
-    } else if (isa<arith::ConstantOp>(op)) {
-      // special-case: arith.constant has zero cost
-      continue;
-    } else if (isa<LoadOp>(op) || isa<LocalLoadOp>(op)) {
-      // optimistically assume L1-cached:
-      for (Value result : op->getResults()) {
-        rematerialisationCost += 8 * getByteCount(result);
-      }
-    } else if (isa<arith::ArithDialect, math::MathDialect>(dialect)) {
-      // this is an arithmetic operation; we distinguish between cheap
-      // operations (such as floating point add/mul which can be fused
-      // as halves of a single-cycle FMA instruction) and expensive
-      // operations which use the special function unit and/or involve
-      // multiple instructions.
-      int64_t multiplier = isExpensiveMathOp(op) ? 8 : 1;
-      for (Value result : op->getResults()) {
-        rematerialisationCost += multiplier * getByteCount(result);
-      }
-    } else if (isa<ReduceOp>(op)) {
-      // Reduce op introduce much cost.
-      auto reduceOp = dyn_cast<ReduceOp>(op);
-      ReduceOpHelper helper(reduceOp);
-      if (!helper.isAssociative()) {
-        // We shouldn't rematerize a no associative reduce op if it has multiple
-        // use chain.
-        LDBG("  skipped rematerialization due to non-associative reduce in the "
-             "slice");
-        return;
-      }
-      rematerialisationCost += helper.getIntraWarpSizeWithUniqueData();
-      rematerialisationCost += 8 * helper.getInterWarpSizeWithUniqueData();
-    }
-  }
-
-  LLVM_DEBUG({
-    DBGS() << "  convert layout cost: " << convertLayoutCost << "\n";
-    DBGS() << "  rematerialisation cost: " << rematerialisationCost << "\n";
-  });
-
-  if (rematerialisationCost > convertLayoutCost) {
+  if (!isRematBeneficial(convertOp, slice, /*newCvtCost=*/0)) {
     LDBG("  skipped rematerialization due to higher cost");
     return;
   }
@@ -1417,42 +1429,24 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   for (unsigned i = 0; i < sliceSize; i++) {
     Value v = slice[i];
     Operation *op = v.getDefiningOp();
-    if (!op)
+    if (!op || !isExtOrBroadcastOp(op))
       continue;
-    if (isExtOrBroadcastOp(op)) {
-      SetVector<Value> tempSlice;
-      DenseMap<Value, Attribute> tempLayout;
-      Attribute srcEncoding = inferSrcEncoding(op, layout[v]);
-      if (!srcEncoding)
-        return;
-      LogicalResult result = getRematerializableSlice(
-          op->getOpOperand(0), srcEncoding, tempSlice, tempLayout);
 
-      // If a value is already assigned to a _different_ layout,
-      // we cannot propagate past this op (as it would conflict with
-      // an already-assigned layout).
-      for (auto [val, enc] : tempLayout) {
-        auto preexistingLayout = layout.find(val);
-        if (preexistingLayout != layout.end() &&
-            preexistingLayout->second != enc) {
-          result = failure();
-          break;
-        }
-      }
+    Attribute srcEncoding = inferSrcEncoding(op, layout[v]);
+    if (!srcEncoding)
+      return;
 
-      // If we can rematerialize the rest of the ext slice we can ignore this
-      // ext as it won't need a convert.
-      if (result.succeeded()) {
-        slice.insert(tempSlice.begin(), tempSlice.end());
-        layout.insert(tempLayout.begin(), tempLayout.end());
-        continue;
-      }
-      // Only apply it if there is a single ext op otherwise we would have to
-      // duplicate the convert.
-      if (extOrBroadcastOp != nullptr)
-        return;
-      extOrBroadcastOp = op;
-    }
+    // If we can rematerialize the rest of the ext slice we can ignore this ext
+    // as it won't need a convert.
+    if (succeeded(getRematerializableSlice(op->getOpOperand(0), srcEncoding,
+                                           slice, layout)))
+      continue;
+
+    // Only apply it if there is a single ext op otherwise we would have to
+    // duplicate the convert.
+    if (extOrBroadcastOp != nullptr)
+      return;
+    extOrBroadcastOp = op;
   }
 
   if (extOrBroadcastOp == nullptr)
@@ -1460,6 +1454,9 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   Attribute dstEncoding = layout[extOrBroadcastOp->getResult(0)];
   Attribute srcEncoding = inferSrcEncoding(extOrBroadcastOp, dstEncoding);
   if (!srcEncoding)
+    return;
+  int64_t newCvtCost = getConvertCost(extOrBroadcastOp->getOperand(0));
+  if (!isRematBeneficial(convertOp, slice, newCvtCost))
     return;
   // Move the convert before the ext op and rewrite the slice.
   OpBuilder builder(extOrBroadcastOp);
@@ -1523,21 +1520,19 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
     OpOperand &thenRes = thenYield.getResultsMutable()[resIdx];
     OpOperand &elseRes = elseYield.getResultsMutable()[resIdx];
 
-    SetVector<Value> thenSlice, elseSlice;
-    DenseMap<Value, Attribute> thenLayout, elseLayout;
+    auto newSlice = slice;
+    auto newLayout = layout;
 
     LogicalResult thenResult = getRematerializableSlice(
-        thenRes, rootLayout, thenSlice, thenLayout, isIfOp);
+        thenRes, rootLayout, newSlice, newLayout, isIfOp);
     LogicalResult elseResult = getRematerializableSlice(
-        elseRes, rootLayout, elseSlice, elseLayout, isIfOp);
+        elseRes, rootLayout, newSlice, newLayout, isIfOp);
 
     // If propagation across both edges of this conditional succeeded, then we
     // don't need to hoist across it. Merge into the current slice.
     if (succeeded(thenResult) && succeeded(elseResult)) {
-      slice.insert(thenSlice.begin(), thenSlice.end());
-      slice.insert(elseSlice.begin(), elseSlice.end());
-      layout.insert(thenLayout.begin(), thenLayout.end());
-      layout.insert(elseLayout.begin(), elseLayout.end());
+      slice = std::move(newSlice);
+      layout = std::move(newLayout);
       continue;
     }
 
@@ -1556,17 +1551,15 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
       continue;
     }
 
+    slice = std::move(newSlice);
+    layout = std::move(newLayout);
     // The layout conversion can be rematerialized along one edge but not the
     // other. We can hoist the conversion into the other branch. Push this
     // into the subslice list for analysis.
     if (succeeded(thenResult)) {
       hoistAbove.emplace_back(v, &elseRes);
-      slice.insert(thenSlice.begin(), thenSlice.end());
-      layout.insert(thenLayout.begin(), thenLayout.end());
     } else {
       hoistAbove.emplace_back(v, &thenRes);
-      slice.insert(elseSlice.begin(), elseSlice.end());
-      layout.insert(elseLayout.begin(), elseLayout.end());
     }
   }
 

@@ -80,12 +80,12 @@ def get_ptx_version_from_options(options, arch: int):
 def get_features(options, arch: int):
     ptx_version = get_ptx_version_from_options(options, arch)
 
-    # PTX 8.6 is the max version supported by llvm c1188642.
+    # PTX 8.6 is the max version supported by llvm 979132a0.
     #
     # To check if a newer PTX version is supported, increase this value
     # and run a test.  If it's not supported, LLVM will print a warning
     # like "+ptx8.4 is not a recognized feature for this target".
-    llvm_ptx_version = min(86, ptx_version)
+    llvm_ptx_version = min(90, ptx_version)
     features = f'+ptx{llvm_ptx_version}'
     return features
 
@@ -146,6 +146,10 @@ class CUDAOptions:
         key = "_".join([f"{name}-{val}" for name, val in sorted(hash_dict.items())])
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
+    @property
+    def enable_iisan(self):
+        return "iisan" in self.instrumentation_mode
+
 
 class CUDABackend(BaseBackend):
     instrumentation = None
@@ -171,8 +175,9 @@ class CUDABackend(BaseBackend):
 
     def parse_options(self, opts) -> Any:
         # Enable debug mode for ConSan, so device-side assertions are not optimized out
-        if "instrumentation_mode" in opts and opts["instrumentation_mode"] == "consan":
+        if any(mode in opts.get("instrumentation_mode", "") for mode in ["consan", "iisan"]):
             opts["debug"] = True
+            opts["sanitize_overflow"] = False
 
         args = {'arch': knobs.runtime.override_arch or f"sm{self.target.arch}"}
         args.update({k: opts[k] for k in CUDAOptions.__dataclass_fields__.keys() if k in opts if opts[k] is not None})
@@ -205,9 +210,6 @@ class CUDABackend(BaseBackend):
             metadata.num_warps,
             metadata.num_ctas,
             metadata.shared,
-            metadata.cluster_dims[0],
-            metadata.cluster_dims[1],
-            metadata.cluster_dims[2],
         )
 
     def get_codegen_implementation(self, options):
@@ -315,10 +317,10 @@ class CUDABackend(BaseBackend):
         passes.common.add_sccp(pm)
         passes.common.add_cse(pm)
         passes.common.add_canonicalizer(pm)
+        if opt.instrumentation_mode == "fpsan":
+            passes.ttgpuir.add_fp_sanitizer(pm)
 
         pm.run(mod, 'make_ttgir')
-        # num_ctas == 16 is non-portable. Does work for H100 and B200 tho
-        metadata["cluster_dims"] = (opt.num_ctas, 1, 1)
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
         return mod
 
@@ -337,9 +339,10 @@ class CUDABackend(BaseBackend):
         passes.gluon.add_canonicalizer(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
 
+        if options.instrumentation_mode == "fpsan":
+            passes.ttgpuir.add_fp_sanitizer(pm)
+
         pm.run(mod, 'gluon_to_ttgir')
-        # num_ctas == 16 is non-portable. Does work for H100 and B200 tho
-        metadata["cluster_dims"] = (options.num_ctas, 1, 1)
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
         return mod
 
@@ -358,16 +361,18 @@ class CUDABackend(BaseBackend):
         nvidia.passes.ttgpuir.add_allocate_shared_memory_nv(pm, capability, ptx_version)
         nvidia.passes.ttnvgpuir.add_allocate_tensor_memory(pm)
         nvidia.passes.ttnvgpuir.add_check_matmul_two_cta(pm)
-        if knobs.compilation.instrumentation_mode == "consan":
+        if "consan" in options.instrumentation_mode:
             # Call ConcurrencySanitizerPass here, before allocating global scratch memory but after allocating tensor and shared
             passes.ttgpuir.add_concurrency_sanitizer(pm)
+            passes.gluon.add_canonicalizer(pm)
+            passes.common.add_cse(pm)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
         nvidia.passes.ttnvgpuir.add_proxy_fence_insertion(pm, capability)
         # instrumentation point here so we can override IRs above (e.g., ttir and ttgir)
         if CUDABackend.instrumentation:
             CUDABackend.instrumentation.patch("ttgpuir_to_llvmir", pm, mod.context)
         nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, ptx_version)
-        passes.common.add_canonicalizer(pm)
+        passes.ttgpuir.add_canonicalize_llvm_ir(pm)
         passes.common.add_cse(pm)
         nvidia.passes.ttnvgpuir.add_nvgpu_to_llvm(pm)
         nvidia.passes.ttnvgpuir.add_warp_specialize_to_llvm(pm)
@@ -493,9 +498,16 @@ class CUDABackend(BaseBackend):
             # Accept more ptxas options if provided
             ptx_extra_options = opt.ptx_options.split(" ") if opt.ptx_options else []
 
+            # Use -Ofc mid to compile ConSan code, if nothing else is specified.
+            if any(mode in knobs.compilation.instrumentation_mode for mode in ["consan", "fpsan"]):
+                ptx_extra_options += ["-Ofc", "mid"]
+
+            # Add --regAllocOptLevel=2 to work around ptxas 13.x bug
+            reg_alloc = ['--regAllocOptLevel=2']
+
             ptxas_cmd = [
-                ptxas, *debug_info, *fmad, '-v', *disable_opt, *ptx_extra_options, f'--gpu-name={arch}', fsrc.name,
-                '-o', fbin
+                ptxas, *debug_info, *fmad, '-v', *disable_opt, *reg_alloc, *ptx_extra_options, f'--gpu-name={arch}',
+                fsrc.name, '-o', fbin
             ]
             try:
                 subprocess.run(ptxas_cmd, check=True, close_fds=False, stderr=flog)

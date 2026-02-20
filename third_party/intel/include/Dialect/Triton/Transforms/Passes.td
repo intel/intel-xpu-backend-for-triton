@@ -11,6 +11,32 @@
 
 include "mlir/Pass/PassBase.td"
 
+def TritonRewriteTensorDescriptorToPointer : Pass</*cli-arg*/"triton-intel-rewrite-tensor-descriptor-to-pointer", /*Op*/"mlir::ModuleOp"> {
+  let summary = "Rewrite load/stores of tensor descriptors into pointer load/stores";
+  let description = [{
+    This pass rewrites all load/store semantics initiated by a `tt.make_tensor_descriptor` into pointer semantics. After
+    this pass, `tt.make_tensor_descriptor`  will disappear, and it generates logics to compute the pointer/mask/other
+    for each load/store.
+  }];
+
+  let dependentDialects = ["mlir::triton::TritonDialect"];
+}
+
+def TritonIntelBlockPointerToTensorDesc
+    : Pass<"triton-intel-block-pointer-to-tdesc", "mlir::ModuleOp"> {
+  let summary = "Convert block pointers into tensor descriptors";
+
+  let description = [{
+    This pass attempts to convert block pointers into tensor descriptors.
+  }];
+
+  let dependentDialects = [
+    "mlir::arith::ArithDialect",
+    "mlir::scf::SCFDialect",
+    "mlir::triton::TritonDialect"
+  ];
+}
+
 def TritonIntelTensorDescToBlockPointer
     : Pass<"triton-intel-tdesc-to-block-pointer", "mlir::ModuleOp"> {
   let summary = "Convert tensor descriptors into block pointers";
@@ -136,6 +162,34 @@ def TritonIntelStrideVersioning
         %load = tt.load %ptr : !tt.ptr<tensor<512x64xf16>>
         ...
       }
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::TritonDialect"
+  ];
+}
+
+def TritonIntelSimplifySignedArithmetic
+    : Pass<"triton-intel-simplify-signed-arithmetic", "mlir::ModuleOp"> {
+  let summary = "Simplify signed arithmetic ops by converting to unsigned when operands are non-negative";
+
+  let description = [{
+    Converts signed arithmetic operations (remsi, divsi) to their unsigned
+    equivalents when operands are provably non-negative. This enables simpler
+    code generation (e.g., power-of-2 remainder becomes bitwise AND, division
+    becomes logical shift right).
+
+    Conversions:
+    - arith.remsi -> arith.remui (when dividend >= 0, divisor > 0)
+    - arith.divsi -> arith.divui (when dividend >= 0, divisor > 0)
+
+    Sources of non-negative values:
+    - tt.get_program_id (always [0, 2^31-1])
+    - tt.get_num_programs (always [1, 2^31])
+    - tt.make_range(start, end) with start >= 0
+    - Non-negative integer constants
+    - arith.addi/muli of non-negative operands
+    - arith.divsi/divui/remui with non-negative dividend and positive divisor
   }];
 
   let dependentDialects = [

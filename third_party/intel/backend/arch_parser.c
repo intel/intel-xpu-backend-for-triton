@@ -28,6 +28,9 @@ extern "C" EXPORT_FUNC const char *parse_device_arch(uint64_t dev_arch) {
   case sycl::ext::oneapi::experimental::architecture::intel_gpu_arl_s:
     arch = "arl_s";
     break;
+#if __SYCL_COMPILER_VERSION >= 20251010
+  case sycl::ext::oneapi::experimental::architecture::intel_gpu_bmg_g31:
+#endif
   case sycl::ext::oneapi::experimental::architecture::intel_gpu_bmg_g21:
     arch = "bmg";
     break;
@@ -52,10 +55,10 @@ extern "C" EXPORT_FUNC const char *parse_device_arch(uint64_t dev_arch) {
     break;
 #endif
   case sycl::ext::oneapi::experimental::architecture::unknown:
-    std::cerr << "unknown sycl_arch" << std::endl;
+    arch = "unknown";
     break;
   default:
-    std::cerr << "sycl_arch not recognized: " << (uint64_t)sycl_arch
+    std::cerr << "device architecture not recognized: " << (uint64_t)sycl_arch
               << std::endl;
   }
 

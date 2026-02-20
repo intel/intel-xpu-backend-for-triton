@@ -100,7 +100,7 @@ def moe_mmk(
     for k in range(0, tl.cdiv(K, BLOCK_K)):
         # Load the next block of A and B using tensor descriptors
         a = a_desc.load([pid_m * BLOCK_M, k * BLOCK_K])
-        b = b_desc.load([k * BLOCK_K, pid_n * BLOCK_N])
+        b = b_desc.load([pid_n * BLOCK_N, k * BLOCK_K]).T
 
         # We accumulate along the K dimension.
         if use_w8a16:
@@ -135,7 +135,7 @@ def moe_mmk(
 @triton.jit
 def expert_triton_kernel(
     a_desc,  #[max_tokens, K]
-    b_desc,  #[K, N]
+    b_desc,  #[N, K]
     c_desc,  #[max_tokens, N]
     expert_id,
     compute_type: tl.constexpr,
@@ -270,14 +270,14 @@ def batched_triton_kernel(
     BLOCK_N: tl.constexpr,
     BLOCK_K: tl.constexpr,
 ):
-    expert_id = tl.program_id(axis=0)
+    expert_id = tl.program_id(axis=1)
     e_num_tokens = tl.load(expert_num_tokens + expert_id)
     if e_num_tokens == 0:
         # Early exit
         return
 
-    # axis 1 is M_blocks * N_blocks
-    pid_mn = tl.program_id(axis=1)
+    # axis 0 is M_blocks * N_blocks
+    pid_mn = tl.program_id(axis=0)
     #num_pid_m = tl.cdiv(max_num_tokens, BLOCK_M)
     num_pid_n = tl.cdiv(N, BLOCK_N)
     pid_m = pid_mn // num_pid_n
@@ -294,8 +294,8 @@ def batched_triton_kernel(
 
     a_desc = tl.make_tensor_descriptor(base=a_ptr + expert_id * stride_ae, shape=(e_num_tokens, K),
                                        strides=(stride_am, stride_ak), block_shape=(BLOCK_M, BLOCK_K))
-    b_desc = tl.make_tensor_descriptor(base=b_ptr + expert_id * stride_be, shape=(K, N), strides=(stride_bk, stride_bn),
-                                       block_shape=(BLOCK_K, BLOCK_N))
+    b_desc = tl.make_tensor_descriptor(base=b_ptr + expert_id * stride_be, shape=(N, K), strides=(stride_bn, stride_bk),
+                                       block_shape=(BLOCK_N, BLOCK_K))
     c_desc = tl.make_tensor_descriptor(base=c_ptr + expert_id * stride_ce, shape=(e_num_tokens, N),
                                        strides=(stride_cm, stride_cn), block_shape=(BLOCK_M, BLOCK_N))
 
@@ -356,7 +356,10 @@ def invoke_moe_batched_triton_kernel_td(A: torch.Tensor,  # [E, max_tokens, K]
     # BLOCK_K = 32
     # num_warps = 64
 
-    grid = (expert_num_tokens.size(0), triton.cdiv(max_num_tokens, BLOCK_M) * triton.cdiv(B.size(1), BLOCK_N))
+    grid = (
+        triton.cdiv(max_num_tokens, BLOCK_M) * triton.cdiv(B.size(1), BLOCK_N),
+        expert_num_tokens.size(0),
+    )
 
     A_scale = normalize_batched_scales_shape(A_scale, expert_num_tokens.shape[0])
 
@@ -471,25 +474,50 @@ MM_CONFIGS_FP8 = sum([[(E, M, hidden_size, int_size * 2, fp8, block_quant),
                           (128, 2048, 768, True, False),
                       ]], [])
 
-DEVICE_NAME = torch.xpu.get_device_name()
-DEVICE_TOTAL_MEMORY = torch.xpu.get_device_properties().total_memory
+DEVICE_TOTAL_MEMORY_BYTES = benchmark_suite.get_total_gpu_memory_bytes()
 
 
-def is_enough_memory(x_val):
+def is_enough_memory(x_val, safety_factor=0.80):
     E, M, K, N, fp8, block_quant = x_val
-    # A: (E, M, K) bfloat16 or fp8
-    # B: (E, K, N) bfloat16 or fp8
-    # C: (E, M, N) bfloat16
-    # num_expert_tokens: (E,) int32
-    n_bytes = 1 if fp8 else 2
-    required_memory = E * M * K * n_bytes + E * K * N * n_bytes + E * M * N * 2 + E * 4
-    enough_memory = required_memory < DEVICE_TOTAL_MEMORY
-    if not enough_memory:
-        print(f"'{x_val}' combination skipped for '{DEVICE_NAME}'; {required_memory=} but {DEVICE_TOTAL_MEMORY=}")
-    return enough_memory
+
+    # A and B bf16 originals (always allocated, freed later in fp8 case)
+    # A memory is doubled because make_quantized_test_activations uses out-of-place / 15
+    a_mem = E * M * K * 2 * 2
+    b_mem = E * N * K * 2
+
+    if fp8:
+        # fp8 copies + scales
+        a_mem += E * M * K
+        b_mem += E * N * K
+        if block_quant:
+            bk_n, bk_k = 128, 128
+            a_mem += E * ((M + bk_n - 1) // bk_n) * ((K + bk_k - 1) // bk_k) * 4
+            b_mem += E * ((N + bk_n - 1) // bk_n) * ((K + bk_k - 1) // bk_k) * 4
+        else:
+            a_mem += E * 4
+            b_mem += E * 4
+
+    # C, ref (E, M, N) bf16 each + num_expert_tokens (E,) int32
+    out_mem = 2 * E * M * N * 2 + E * 4
+
+    # Peak is before bf16 originals are freed
+    required_memory = a_mem + b_mem + out_mem
+    print(f"Estimated memory for {x_val}: {required_memory * 1e-9:.2f} GB", flush=True)
+    return required_memory < DEVICE_TOTAL_MEMORY_BYTES * safety_factor
 
 
-MM_CONFIGS_BF16 = [x_val for x_val in MM_CONFIGS_BF16 if is_enough_memory(x_val)]
+def filter_by_memory(configs):
+    result = []
+    for x_val in configs:
+        if is_enough_memory(x_val):
+            result.append(x_val)
+        else:
+            print(f"'{x_val}' combination skipped, OOM expected")
+    return result
+
+
+MM_CONFIGS_BF16 = filter_by_memory(MM_CONFIGS_BF16)
+MM_CONFIGS_FP8 = filter_by_memory(MM_CONFIGS_FP8)
 
 
 def get_batched_mm_benchmark(
@@ -559,8 +587,12 @@ def get_batched_mm_benchmark(
             in_dtype=act_dtype,
             quant_dtype=quant_dtype,
             block_shape=block_shape,
-            per_act_token_quant=per_act_token_quant,
+            per_out_ch_quant=per_act_token_quant,
         )
+
+        # Free unused bf16 originals in the fp8 case
+        if quant_dtype is not None:
+            del A, B
         quantiles = [0.5, 0.0, 1.0]
 
         C = torch.zeros(out_shape, device='xpu', dtype=act_dtype)

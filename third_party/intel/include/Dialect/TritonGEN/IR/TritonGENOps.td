@@ -23,11 +23,17 @@ include "mlir/IR/OpAsmInterface.td"
 include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
 
 //===----------------------------------------------------------------------===//
+// Interfaces
+//===----------------------------------------------------------------------===//
+
+def L2Cache : Resource<"::mlir::triton::TritonGEN::L2Cache">;
+
+//===----------------------------------------------------------------------===//
 // TritonGEN op definitions
 //===----------------------------------------------------------------------===//
 
 class TritonGEN_Op<string mnemonic, list<Trait> traits = []> :
-  Op<TritonGEN_Dialect, mnemonic, traits>;
+  Op<TritonGEN_Dialect, mnemonic, !listconcat(traits, [])>;
 
 //===----------------------------------------------------------------------===//
 // Synchronization
@@ -54,50 +60,22 @@ def TritonGEN_SplitBarrierArriveOp : TritonGEN_Op<"split_barrier_arrive"> {
     may allow other invocations waiting on the split control barrier to continue
     executing.
 
-    When `Execution` is `Workgroup` or larger, behavior is undefined unless all
-    invocations within `Execution` execute the same dynamic instance of this
-    instruction. When `Execution` is `Subgroup` or `Invocation`, the behavior of
-    this instruction in non-uniform control flow is defined by the client API.
-
-    If `Semantics` is not `None`, this instruction also serves as the start of a
-    memory barrier similar to an `OpMemoryBarrier` instruction with the same
-    `Memory` and `Semantics` operands. This allows atomically specifying both a
-    control barrier and a memory barrier (that is, without needing two
-    instructions). If `Semantics` is `None`, `Memory` is ignored.
+    The scope of these barrier is only Workgroup and the Subgroups are the
+    objects which barriers control.
+    The barrier implicitly perform the acq-rel memory semantic.
   }];
-  let arguments = (ins TritonGEN_MemScope:$execution_scope, TritonGEN_MemScope:$memory_scope);
-  let results = (outs);
-  let assemblyFormat = [{
-    ` ` `{` `execution_scope` `=` $execution_scope `,` `memory_scope` `=` $memory_scope `}` attr-dict
-  }];
+  let results = (outs LLVM_PointerInAddressSpace<3>:$bData);
+  let assemblyFormat = "attr-dict";
 }
 
 def TritonGEN_SplitBarrierWaitOp : TritonGEN_Op<"split_barrier_wait"> {
   let summary = "Split barrier wait";
   let description = [{
-    Waits for other invocations of this module to arrive at a split control
-    barrier.
-
-    When `Execution` is `Workgroup` or larger, behavior is undefined unless all
-    invocations within `Execution` execute the same dynamic instance of this
-    instruction. When `Execution` is `Subgroup` or `Invocation`, the behavior of
-    this instruction in non-uniform control flow is defined by the client API.
-
-    If `Semantics` is not `None`, this instruction also serves as the end of a
-    memory barrier similar to an `OpMemoryBarrier` instruction with the same
-    `Memory` and `Semantics` operands. This ensures that memory accesses issued
-    before arriving at the split barrier are observed before memory accesses
-    issued after this instruction. This control is ensured only for memory
-    accesses issued by this invocation and observed by another invocation
-    executing within `Memory` scope. This allows atomically specifying both a
-    control barrier and a memory barrier (that is, without needing two
-    instructions). If `Semantics` is `None`, `Memory` is ignored.
+    Blocks the current invocation until the barrier’s arrival count reaches zero.
   }];
-  let arguments = (ins TritonGEN_MemScope:$execution_scope, TritonGEN_MemScope:$memory_scope);
+  let arguments = (ins LLVM_PointerInAddressSpace<3>:$bData);
   let results = (outs);
-  let assemblyFormat = [{
-    ` ` `{` `execution_scope` `=` $execution_scope `,` `memory_scope` `=` $memory_scope `}` attr-dict
-  }];
+  let assemblyFormat = "operands attr-dict";
 }
 
 //===----------------------------------------------------------------------===//
@@ -142,7 +120,58 @@ def TritonGEN_MatrixDPASOp : TritonGEN_Op<"dpas">,
             If depth is 8, K would be 8, 16, 32, or 64 (based on OPS_PER_CHAN).
 
     $a, $b, $c, $d - matrix A, B, C, D, respectively
-    $pa, $pb - precision of matrix A and B resepectively
+    $pa, $pb - precision of matrix A and B respectively
+    $rc - repeat count
+  }];
+
+  let assemblyFormat = [{
+    operands ` ` `{` `pa` `=` $pa `,` `pb` `=` $pb `,` `rc` `=` $rc `}` attr-dict `:` functional-type(operands, results)
+  }];
+
+  let hasVerifier = 1;
+}
+
+def TritonGEN_MatrixBlockScaleDPASOp : TritonGEN_Op<"bdpas", [AttrSizedOperandSegments]>,
+  Results<(outs FixedVectorOfNonZeroRankOf<[F32, BF16]>:$d)>,
+  Arguments<(ins
+    FixedVectorOfRankAndType<[1], [F32, BF16]>:$c,
+    FixedVectorOfRankAndType<[1], [AnyI16]>:$a,
+    FixedVectorOfRankAndType<[1], [AnyI32]>:$b,
+    Optional<AnyTypeOf<[AnyI8, FixedVectorOfRankAndType<[1], [AnyI8]>]>>:$scaleA,
+    Optional<AnyTypeOf<[AnyI8, FixedVectorOfRankAndType<[1], [AnyI8]>]>>:$scaleB,
+    TritonGEN_PrecisionTypeAttr:$pa,
+    TritonGEN_PrecisionTypeAttr:$pb,
+    I32Attr:$rc
+  )> {
+
+  let summary = "Block scale matrix multiply-add for MXFP";
+
+  let description = [{
+    The `triton_gen.bdpas` operation is a matrix multiplication plus accumulation for MXFP:
+
+      D = C + (A x B) * scaleA * scaleB
+
+      where the A, B, C input matrices and the result D have shapes:
+        D : MxN
+        C : MxN
+        A : MxK
+        B : KxN
+        scaleA: Mx(K/32)
+        scaleB: (K/32)xN
+
+        M : repeat count, must be 8
+        N : fixed execution size, must be 16
+        K : depth * OPS_PER_CHAN
+            OPS_PER_CHAN
+              2 : for 16-bit precision(BF, HF)
+              4 : for 8-bit precision (FP8, UB, B)
+              8 : for less-then 8 bit precision (U4/S4, U2/S2).
+
+            If depth is 8, K would be 8, 16, 32, or 64 (based on OPS_PER_CHAN).
+
+    $a, $b, $c, $d - matrix A, B, C, D, respectively
+    $scaleA, $scaleB - scale factors for matrix A and B, respectively
+    $pa, $pb - precision of matrix A and B respectively
     $rc - repeat count
   }];
 
@@ -186,8 +215,8 @@ def TritonGEN_Matrix2DBlockLoadOp : TritonGEN_Op<"2Dblockload">,
         - 8 for int8, int4, int2
       $v_blocks - number of tiles to load
       $transpose - transpose the tile in registers (useful for 32 bit element type)
-      $vnni_transform - transpose and pack the submatrix in registers (useful for < 32 bit element types)
-      $cache_control - an enumerator that sets the L1 and L3 cache behaviour
+      $vnni_transform - transpose and pack the sub matrix in registers (useful for < 32 bit element types)
+      $cache_control - an enumerator that sets the L1 and L3 cache behavior
 
     Notes:
       - the $transpose and $vnni_transform parameters are mutual exclusive
@@ -236,7 +265,7 @@ def TritonGEN_Matrix2DBlockStoreOp : TritonGEN_Op<"2Dblockstore">,
         - 16 for f16, int16, bf16
         - 8 for int8, int4, int2
       $v_blocks - number of tiles to store
-      $cache_control - an enumerator that sets the L1 and L3 cache behaviour
+      $cache_control - an enumerator that sets the L1 and L3 cache behavior
       $stored_val - the tile to store
 
     Notes:
@@ -252,21 +281,9 @@ def TritonGEN_Matrix2DBlockStoreOp : TritonGEN_Op<"2Dblockstore">,
   let hasVerifier = 1;
 }
 
-def TritonGEN_Matrix2DBlockPrefetchOp : TritonGEN_Op<"2Dblockprefetch">,
-  Arguments<(ins
-    Arg<LLVM_AnyPointer, "", [MemRead]>:$ptr,
-    I32:$base_width,
-    I32:$base_height,
-    I32:$base_pitch,
-    I32:$x,
-    I32:$y,
-    I32Attr:$elem_size_in_bits,
-    I32Attr:$tile_width,
-    I32Attr:$tile_height,
-    I32Attr:$v_blocks,
-    DefaultValuedAttr<TritonGEN_LoadCacheControl, "::mlir::triton::TritonGEN::LoadCacheControl::DEFAULT">:$cache_control
-  )> {
-
+def TritonGEN_Matrix2DBlockPrefetchOp : TritonGEN_Op<"2Dblockprefetch", [
+  MemoryEffects<[MemWrite<L2Cache>]>
+]> {
   let summary = "2D block prefetch";
 
   let description = [{
@@ -281,11 +298,25 @@ def TritonGEN_Matrix2DBlockPrefetchOp : TritonGEN_Op<"2Dblockprefetch">,
       - 16 for f16, int16, bf16
       - 8 for int8, int4, int2
     $v_blocks - number of tiles to prefetch
-    $cache_control - an enumerator that sets the L1 and L3 cache behaviour
+    $cache_control - an enumerator that sets the L1 and L3 cache behavior
 
     Notes:
       - coordinate is provided in elements, while width and pitch are provided in bytes.
   }];
+
+  let arguments = (ins
+    Arg<LLVM_AnyPointer, "Global memory pointer", [MemRead]>:$ptr,
+    I32:$base_width,
+    I32:$base_height,
+    I32:$base_pitch,
+    I32:$x,
+    I32:$y,
+    I32Attr:$elem_size_in_bits,
+    I32Attr:$tile_width,
+    I32Attr:$tile_height,
+    I32Attr:$v_blocks,
+    DefaultValuedAttr<TritonGEN_LoadCacheControl, "::mlir::triton::TritonGEN::LoadCacheControl::DEFAULT">:$cache_control
+  );
 
   let assemblyFormat = [{
     operands ` ` `{` `elem_size_in_bits` `=` $elem_size_in_bits `,` `tile_width` `=` $tile_width `,`

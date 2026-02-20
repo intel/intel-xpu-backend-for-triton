@@ -13,14 +13,14 @@ def run_load_ir(temp_file, elem_size, *args):
         tt.func @dyn_block(
             %iptr: i64, %base_width: i32, %base_height: i32, %base_pitch: i32,
             %x: i32, %y: i32) {{
-            %p0 = llvm.inttoptr %iptr : i64 to !llvm.ptr
+            %p0 = llvm.inttoptr %iptr : i64 to !llvm.ptr<1>
 
             %v = triton_gen.2Dblockload %p0, %base_width, %base_height,
                 %base_pitch, %x, %y
                 {{ elem_size_in_bits = {elem_size}, tile_width = 8, tile_height = 8,
                 v_blocks = 1, transpose = false,
                 vnni_transform = false, cache_control = Default }}
-                : (!llvm.ptr, i32, i32, i32, i32, i32)
+                : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
                 -> vector<1x{out_type}>
 
             // To prevent gluon-inline from removing the unused 2Dblockload call.

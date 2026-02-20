@@ -97,11 +97,6 @@ class WGMMA:
     acc: Union[warpgroup_mma_accumulator, gl.tensor]
     use_acc: gl.tensor
 
-    @gluon.constexpr_function
-    def __init__(self, acc, use_acc):
-        self.acc = acc
-        self.use_acc = use_acc
-
     @gluon.jit
     def initialize(dtype: gl.constexpr, BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, num_warps: gl.constexpr):
         mma_layout: gl.constexpr = t5.pick_wgmma_layout(dtype, BLOCK_M, BLOCK_N, num_warps)
@@ -136,14 +131,6 @@ class MMAv5:
     bar: gl.shared_memory_descriptor
     counter: gl.tensor
     reg_layout: gl.constexpr
-
-    @gluon.constexpr_function
-    def __init__(self, use_acc, acc_tmem, bar, counter, reg_layout):
-        self.use_acc = use_acc
-        self.acc_tmem = acc_tmem
-        self.bar = bar
-        self.counter = counter
-        self.reg_layout = gl.constexpr(reg_layout)
 
     @gluon.jit
     def initialize(dtype: gl.constexpr, BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, num_warps: gl.constexpr):
@@ -195,7 +182,7 @@ def issue_loads(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs,
     index = producer % num_buffers
     producer += 1
     bar = bars.index(index)
-    mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes, pred)
+    mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes, pred=pred)
     tma.async_copy_global_to_shared(a_desc, [off_m, k], bar, a_bufs.index(index), pred)
     tma.async_copy_global_to_shared(b_desc, [k, off_n], bar, b_bufs.index(index), pred)
     return producer
@@ -343,12 +330,6 @@ class PersistentTileScheduler:
     pid_start: gl.tensor
     pid_end: gl.tensor
     num_pid_m: gl.tensor
-
-    @gluon.constexpr_function
-    def __init__(self, pid_start, pid_end, num_pid_m):
-        self.pid_start = pid_start
-        self.pid_end = pid_end
-        self.num_pid_m = num_pid_m
 
     @gluon.jit
     def initialize(M, N, BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr):
@@ -526,13 +507,6 @@ def GroupedPersistentTileScheduler(GROUP_SIZE_M):
         num_pid_in_group: gl.tensor
         num_pid: gl.tensor
 
-        @gluon.constexpr_function
-        def __init__(self, start_pid, num_pid_m, num_pid_in_group, num_pid):
-            self.start_pid = start_pid
-            self.num_pid_m = num_pid_m
-            self.num_pid_in_group = num_pid_in_group
-            self.num_pid = num_pid
-
         @gluon.jit
         def initialize(M, N, BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr):
             start_pid = gl.program_id(axis=0)
@@ -625,7 +599,7 @@ def issue_loads_stealb(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, 
     b_index = producer % (num_buffers + stealb)
     producer += 1
     bar = bars.index(index)
-    mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes, pred)
+    mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes, pred=pred)
     tma.async_copy_global_to_shared(a_desc, [off_m, k], bar, a_bufs.index(index), pred)
     tma.async_copy_global_to_shared(b_desc, [k, off_n], bar, b_bufs.index(b_index), pred)
     return producer
@@ -834,7 +808,8 @@ if __name__ == "__main__":
 #   Hopper and Blackwell: we are not double-buffering the accumulator and
 #   leaving 256 columns of TMEM unused.
 # - On Blackwell, we can use `clusterlaunchcontrol` to dynamically schedule
-#   work in conjunction with the GPU, getting the best of both worlds.
+#   work in conjunction with the GPU, getting the best of both worlds. This is
+#   explored further in tutorial 12.
 #
 # Main takeaways:
 #

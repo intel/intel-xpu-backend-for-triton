@@ -4,7 +4,7 @@ import math
 from warnings import warn
 from contextlib import contextmanager
 from enum import Enum
-from functools import partial, wraps
+from functools import partial, wraps, cached_property
 import typing
 from typing import Union, Callable, List, Sequence, TypeVar, Optional, Tuple
 from dataclasses import dataclass
@@ -14,7 +14,7 @@ from ..runtime.jit import JITCallable
 import inspect
 
 from .._C.libtriton import ir
-from .._utils import TRITON_MAX_TENSOR_NUMEL, validate_block_shape, get_primitive_bitwidth
+from .._utils import TRITON_MAX_TENSOR_NUMEL, validate_block_shape, get_primitive_bitwidth, _tuple_create
 
 T = TypeVar('T')
 
@@ -43,6 +43,7 @@ def builtin(fn: T) -> T:
         return fn(*args, **kwargs)
 
     setattr(wrapper, TRITON_BUILTIN, True)
+    wrapper.signature = inspect.signature(fn)
 
     return wrapper
 
@@ -82,6 +83,7 @@ def _tensor_member_fn(fn: T) -> T:
     new_params[0] = new_params[0].replace(name='self')
     new_sig = orig_sig.replace(parameters=new_params)
     wrapper.__signature__ = new_sig
+    wrapper.signature = new_sig
     wrapper.__doc__ = f"Forwards to :py:func:`{fn.__name__}` free function"
     # If fn is a builtin, mark the wrapper as a builtin too.
     if is_builtin(fn):
@@ -144,6 +146,9 @@ class base_value:
     """
     type: base_type
 
+    def _set_name(self, builder: ir.builder, name: str) -> None:
+        raise NotImplementedError
+
     def _flatten_ir(self, handles: List[ir.value]) -> None:
         """Flatten frontend value into a sequence of mlir handles, which are appended
         to the output list
@@ -188,7 +193,11 @@ class constexpr_type(base_type):
         return hash(self.value)
 
     def mangle(self) -> str:
-        return repr(self)
+        if hasattr(self.value, "mangle"):
+            val = self.value.mangle()
+        else:
+            val = repr(self.value)
+        return f"c{val}"
 
     def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
         return
@@ -213,6 +222,9 @@ class constexpr(base_value):
 
     def __hash__(self):
         return hash((self.value, self.type))
+
+    def _set_name(self, builder: ir.builder, name: str) -> None:
+        return
 
     def _flatten_ir(self, handles: List[ir.value]) -> None:
         return
@@ -347,9 +359,9 @@ def _unwrap_if_constexpr(o):
     if isinstance(o, list):
         return [_unwrap_if_constexpr(x) for x in o]
     if isinstance(o, builtins.tuple):
-        return builtins.tuple(_unwrap_if_constexpr(x) for x in o)
+        return _tuple_create(o, [_unwrap_if_constexpr(x) for x in o])
     if isinstance(o, tuple):
-        return tuple(_unwrap_if_constexpr(x) for x in o)
+        return tuple([_unwrap_if_constexpr(x) for x in o], o.type)
     return o.value if isinstance(o, constexpr) else o
 
 
@@ -749,8 +761,13 @@ class tuple_type(base_type):
 
     def __init__(self, types, fields=None):
         self.types = types
-        self.fields = fields or [''] * len(types)
-        self.name = '[' + ','.join([f"{k}:{v}" for k, v in zip(self.fields, self.types)]) + ']'
+        self.fields = fields
+
+    @cached_property
+    def name(self):
+        if self.fields is None:
+            return '[' + ','.join(str(v) for v in self.types) + ']'
+        return '[' + ','.join([f"{k}:{v}" for k, v in zip(self.fields, self.types)]) + ']'
 
     def __str__(self):
         return self.name
@@ -760,8 +777,7 @@ class tuple_type(base_type):
 
     def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]):
         for ty in self.types:
-            if not isinstance(ty, constexpr):
-                ty._flatten_ir_types(builder, out)
+            ty._flatten_ir_types(builder, out)
 
     def __getitem__(self, index: int) -> dtype:
         return self.types[index]
@@ -870,6 +886,9 @@ class tensor(base_value):
         # Following the practice in pytorch, dtype is scalar type
         self.dtype = type.scalar
         self.shape = tuple([constexpr(s) for s in self.shape])
+
+    def _set_name(self, builder: ir.builder, name: str) -> None:
+        self.handle.set_loc(builder.create_name_loc(name, self.handle.get_loc()))
 
     def _flatten_ir(self, handles: List[ir.value]) -> None:
         handles.append(self.handle)
@@ -1276,7 +1295,10 @@ class tuple(base_value):
             return tuple(self.values[idx.start:idx.stop:idx.step])
 
     def __getattr__(self, name):
-        return self.values[self.type.fields.index(name)]
+        fields = self.type.fields
+        if fields is None or name not in fields:
+            raise AttributeError(f"'tuple' object has no attribute {name}")
+        return self.values[fields.index(name)]
 
     # TODO: remove
     def _setitem(self, idx, value):
@@ -1309,6 +1331,15 @@ class tuple(base_value):
 
     def __len__(self):
         return len(self.values)
+
+    def _set_name(self, builder: ir.builder, name: str) -> None:
+        fields = self.type.fields
+        if fields is not None:
+            for field, v in zip(fields, self.values):
+                v._set_name(builder, f"{name}.{field}")
+        else:
+            for i, v in enumerate(self.values):
+                v._set_name(builder, f"{name}.{i}")
 
     def _flatten_ir(self, handles: List[ir.value]):
         for v in self.values:
@@ -1367,6 +1398,9 @@ class tensor_descriptor_base(base_value):
 
         self.handle = handle  # IR handle
         self.type = tensor_descriptor_base_type(block_type)  # Tensor type (block_type)
+
+    def _set_name(self, builder: ir.builder, name: str) -> None:
+        self.handle.set_loc(builder.create_name_loc(name, self.handle.get_loc()))
 
     def _flatten_ir(self, handles: List[ir.value]) -> None:
         handles.append(self.handle)
@@ -1491,8 +1525,13 @@ class tensor_descriptor(tensor_descriptor_base):
             strides_type=self.strides.type,
         )
 
+    def _set_name(self, builder: ir.builder, name: str) -> None:
+        super()._set_name(builder, name)
+        self.shape._set_name(builder, name + ".shape")
+        self.strides._set_name(builder, name + ".stride")
+
     def _flatten_ir(self, handles: List[ir.value]) -> None:
-        handles.append(self.handle)
+        super()._flatten_ir(handles)
         self.shape._flatten_ir(handles)
         self.strides._flatten_ir(handles)
 
@@ -1530,12 +1569,54 @@ class _aggregate_type(base_type):
         return f"{name}<{', '.join(fields)}>"
 
 
+def _wrap_init_args(x):
+    if isinstance(x, tuple):
+        from triton.compiler.code_generator import _apply_to_tuple_values
+        return _apply_to_tuple_values(x, _wrap_init_args)
+    if isinstance(x, builtins.tuple):
+        wrapped = builtins.tuple(_wrap_init_args(i) for i in x)
+        fields = getattr(x, "_fields", None)
+        ty = tuple_type([v.type for v in wrapped], fields)
+        return tuple(wrapped, ty)
+    if isinstance(x, base_value):
+        return x
+    return constexpr(x)
+
+
 def _aggregate(cls):
+    init = cls.__dict__.get("__init__", None)
+    if init is None:
+        field_names = builtins.tuple(cls.__annotations__.keys())
+
+        def init(self, *args, **kwargs):
+            if len(args) > len(field_names):
+                raise TypeError(f"{cls.__name__}.__init__() takes {len(field_names) + 1} positional arguments "
+                                f"but {len(args) + 1} were given")
+
+            for index, name in enumerate(field_names):
+                if index < len(args):
+                    if name in kwargs:
+                        raise TypeError(f"{cls.__name__}.__init__() got multiple values for argument '{name}'")
+                    value = args[index]
+                elif name in kwargs:
+                    value = kwargs.pop(name)
+                else:
+                    raise TypeError(f"{cls.__name__}.__init__() missing required argument: '{name}'")
+
+                value = _wrap_init_args(value)
+                setattr(self, name, value)
+
+            if kwargs:
+                unexpected = next(iter(kwargs))
+                raise TypeError(f"{cls.__name__}.__init__() got an unexpected keyword argument '{unexpected}'")
+
+        init.__triton_builtin__ = True
 
     # Define the wrapped Triton value type.
     class aggregate_value(base_value):
         __triton_builtin__ = True
         __triton_aggregate__ = True
+        __annotations__ = cls.__annotations__
 
         @classmethod
         def _get_instance(this_cls):
@@ -1545,15 +1626,15 @@ def _aggregate(cls):
             # Call into the user-defined constructor.
             instance = this_cls._get_instance()
             extra_kwargs = {}
-            if isinstance(cls.__init__, JITCallable):
+            if isinstance(init, JITCallable):
                 # raise ValueError(f"{cls.__name__}.__init__ cannot be a @triton.jit function")
                 pass
             else:
-                if "_semantic" in inspect.signature(cls.__init__).parameters:
+                if "_semantic" in inspect.signature(init).parameters:
                     extra_kwargs["_semantic"] = _semantic
-                if "_generator" in inspect.signature(cls.__init__).parameters:
+                if "_generator" in inspect.signature(init).parameters:
                     extra_kwargs["_generator"] = _generator
-            cls.__init__(instance, *args, **extra_kwargs, **kwargs)
+            init(instance, *args, **extra_kwargs, **kwargs)
 
             # Require that the user-defined constructor initialized all fields.
             for name in cls.__annotations__.keys():
@@ -1570,6 +1651,10 @@ def _aggregate(cls):
                 raise TypeError(f"Expected {cls.__annotations__[name]} for attribute '{name}', got {type(value)}")
             super().__setattr__(name, value)
 
+        def _set_name(self, builder: ir.builder, name: str) -> None:
+            for key_name in cls.__annotations__.keys():
+                getattr(self, key_name)._set_name(builder, f"{name}.{key_name}")
+
         def _flatten_ir(self, handles: List[ir.value]) -> None:
             for name in cls.__annotations__.keys():
                 getattr(self, name)._flatten_ir(handles)
@@ -1579,7 +1664,7 @@ def _aggregate(cls):
             return _aggregate_type(aggregate_value,
                                    [(name, getattr(self, name).type) for name in cls.__annotations__.keys()])
 
-    hash_attrs = [cls.__init__]
+    hash_attrs = [init]
 
     for (name, member) in inspect.getmembers(cls):
         if inspect.isfunction(member) or inspect.ismethod(member) or isinstance(member, JITCallable):
@@ -1782,7 +1867,7 @@ def permute(input, *dims, _semantic=None):
 
 
 @builtin
-def cat(input, other, can_reorder=False, _semantic=None):
+def cat(input, other, can_reorder=False, dim=0, _semantic=None):
     """
     Concatenate the given blocks
 
@@ -1790,12 +1875,30 @@ def cat(input, other, can_reorder=False, _semantic=None):
     :type input: Tensor
     :param other: The second input tensor.
     :type other: Tensor
-    :param reorder: Compiler hint. If true, the compiler is
+    :param can_reorder: Compiler hint. If true, the compiler is
         allowed to reorder elements while concatenating inputs.  Only use if the
         order does not matter (e.g., result is only used in reduction ops).
-        Current implementation of `cat` supports only can_reorder=True.
+    :type can_reorder: bool
+    :param dim: The dimension to concatenate along (used when can_reorder is False).
+    :type dim: int
     """
-    return _semantic.cat(input, other, can_reorder)
+    if can_reorder:
+        return _semantic.cat(input, other, can_reorder)
+
+    rank = len(input.shape)
+    assert rank == len(other.shape), f"tensors must have the same rank, got {rank} and {len(other.shape)}"
+    dim = _wrap_axis(_unwrap_if_constexpr(dim), rank)
+    assert all(input.shape[i] == other.shape[i] for i in builtins.range(rank) if i !=
+               dim), f"tensor dims must match except in the concat dimension {dim}, got {input.shape} and {other.shape}"
+
+    # Join introduces a new minor dim; move it before the concat dim and merge.
+    c = join(input, other, _semantic=_semantic)
+    order = list(builtins.range(rank))
+    order.insert(dim, rank)
+    c = permute(c, order, _semantic=_semantic)
+    new_shape = list(input.shape)
+    new_shape[dim] = input.shape[dim] + other.shape[dim]
+    return reshape(c, new_shape, _semantic=_semantic)
 
 
 @builtin
@@ -2002,6 +2105,11 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
     The two blocks must both be two-dimensional or three-dimensional and have compatible inner dimensions.
     For three-dimensional blocks, `tl.dot` performs the batched matrix product,
     where the first dimension of each block represents the batch dimension.
+
+    .. warning::
+      When using TF32 precision, the float32 inputs may be truncated to TF32 format (19-bit floating point)
+      without rounding which may bias the result. For best results, you must round to TF32 explicitly, or load
+      the data using `TensorDescriptor` with `round_f32_to_tf32=True`.
 
     :param input: The first tensor to be multiplied.
     :type input: 2D or 3D tensor of scalar-type in {:code:`int8`, :code:`float8_e5m2`, :code:`float16`, :code:`bfloat16`, :code:`float32`}
@@ -2587,6 +2695,8 @@ def _add_reduction_docstr(name: str, return_indices_arg: str = None, tie_break_a
     def _decorator(func: T) -> T:
         docstr = """
     Returns the {name} of all elements in the :code:`input` tensor along the provided :code:`axis`
+
+    The reduction operation should be associative and commutative.
 
     :param input: the input values
     :type input: Tensor
@@ -3455,14 +3565,14 @@ def builtin_max(*args, propagate_nan=_NOTHING, _semantic=None):
     if propagate_nan is _NOTHING:
         propagate_nan = PropagateNan.NONE
     else:
-        warn("passing propagate_nan to builtin max is deprecated, use tl.minimum instead", DeprecationWarning)
+        warn("passing propagate_nan to builtin max is deprecated, use tl.minimum instead")
 
     assert len(args) >= 2, "min requires at least 2 values"
     max_val = args[0]
     for arg in args[1:]:
         max_val = maximum(max_val, arg, propagate_nan=propagate_nan, _semantic=_semantic)
     if max_val.type.is_block():
-        warn("builtin max on non-scalar tensor values is deprecated, use tl.maximum instead", DeprecationWarning)
+        warn("builtin max on non-scalar tensor values is deprecated, use tl.maximum instead")
     return max_val
 
 
@@ -3479,12 +3589,12 @@ def builtin_min(*args, propagate_nan=_NOTHING, _semantic=None):
     if propagate_nan is _NOTHING:
         propagate_nan = PropagateNan.NONE
     else:
-        warn("passing propagate_nan to builtin min is deprecated, use tl.minimum instead", DeprecationWarning)
+        warn("passing propagate_nan to builtin min is deprecated, use tl.minimum instead")
 
     assert len(args) >= 2, "min requires at least 2 values"
     min_val = args[0]
     for arg in args[1:]:
         min_val = minimum(min_val, arg, propagate_nan=propagate_nan, _semantic=_semantic)
     if min_val.type.is_block():
-        warn("builtin min on non-scalar tensor values is deprecated, use tl.minimum instead", DeprecationWarning)
+        warn("builtin min on non-scalar tensor values is deprecated, use tl.minimum instead")
     return min_val

@@ -21,43 +21,44 @@ class TTI_Op<string mnemonic, list<Trait> traits = []> :
     Op<TritonInstrument_Dialect, mnemonic, traits> {
 }
 
-def TTI_ExperimentalAssertInThreadOp : TTI_Op<"experimental_assert_in_thread", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "assert the condition within the current thread";
+def TTI_ExperimentalAssertUniformOp : TTI_Op<"experimental_assert_uniform", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "assert the uniform condition";
   let description = [{
-    Assert that the condition is true given all the values are available in the current thread.
-    If the condition is false, the message is printed, and the program is aborted.
-    If check_any is true, any of the values in the condition must be true. Otherwise, all the
-    values in the condition must be true.
+    Assert that the condition is true given all threads in the warp group have
+    the same value, so only one thread needs to evaluate the assert and print
+    the message.
   }];
-  let arguments = (ins AnyTypeOf<[I1, I1Tensor]>:$condition, StrAttr:$message, BoolAttr:$check_any);
-  let assemblyFormat = "$condition `,` $message attr-dict `:` type($condition)";
+  let arguments = (ins I1:$condition, StrAttr:$message);
+  let assemblyFormat = "$condition `,` $message attr-dict-with-keyword";
 }
 
-
-def TTI_ExperimentalBufferPointersOp : TTI_Op<"experimental_buffer_pointers", [Pure]> {
-  let summary = "definte an array of pointers to shared memory buffers";
+def TTI_ExperimentalBufferDescriptorsOp
+    : TTI_Op<"experimental_buffer_descriptors", [Pure]> {
+  let summary = "define an array of buffer descriptors";
   let description = [{
-    Create a tensor of pointers to shared memory buffers.
+    Create a tensor of buffer descriptors packing 32-bit pointer offsets and
+    32-bit lengths into 64-bit elements.
   }];
-  let arguments = (ins DenseI32ArrayAttr:$offsets, TT_MemTypeAttr:$memType);
+  let arguments = (ins DenseI32ArrayAttr:$offsets, DenseI32ArrayAttr:$lengths,
+                   TT_MemTypeAttr:$memType);
   let results = (outs TT_Tensor:$result);
   let assemblyFormat = [{
-    $offsets `,` $memType attr-dict `:` type($result)
+    $offsets `,` $lengths `,` $memType attr-dict `:` type($result)
   }];
 }
 
-def TTI_ExperimentalMemDescToI64Op : TTI_Op<"experimental_memdesc_to_i64", [Pure]> {
-  let summary = "Convert a memdesc into its base pointer as i64";
+def TTI_ExperimentalMemDescToI32Op : TTI_Op<"experimental_memdesc_to_i32", [Pure]> {
+  let summary = "Convert a memdesc into its base pointer as i32";
   let description = [{
-    Extract the base pointer from the given memdesc and return it as a 64-bit
+    Extract the base pointer from the given memdesc and return it as a 32-bit
     integer. This can be used to compare the memdesc against tensors of barrier
     pointers maintained by the concurrency sanitizer.
   }];
   let arguments = (ins TTG_MemDescType:$memdesc);
-  let results = (outs I64:$result);
+  let results = (outs I32:$result);
   let builders = [
     OpBuilder<(ins "Value":$memdesc), [{
-      build($_builder, $_state, $_builder.getI64Type(), memdesc);
+      build($_builder, $_state, $_builder.getI32Type(), memdesc);
     }]>
   ];
   let assemblyFormat = "$memdesc attr-dict `:` type($memdesc)";

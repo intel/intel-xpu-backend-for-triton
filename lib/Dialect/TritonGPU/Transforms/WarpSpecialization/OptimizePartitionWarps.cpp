@@ -53,7 +53,8 @@ static OwningOpRef<ModuleOp> takeIntoFunction(ModuleAxisInfoAnalysis &axisInfo,
   auto *funcInfo =
       axisInfo.getFuncData(wsOp->getParentOfType<FunctionOpInterface>());
   assert(funcInfo && "expected to find function axis info");
-  for (auto [i, capture] : llvm::enumerate(wsOp.getExplicitCaptures())) {
+  for (auto [i, capture] :
+       llvm::enumerate(wsOp.getPartitionOp().getExplicitCaptures())) {
     AxisInfo info = funcInfo->lookup(capture);
     containerFunc.setArgAttr(i, "tt.contiguity",
                              b.getI64IntegerAttr(info.getContiguity(0)));
@@ -305,7 +306,7 @@ void OptimizePartitionWarps::runOnOperation() {
     // The module must be directly nested under the current op for `runPipeline`
     // to work.
     getOperation().push_back(container);
-    auto remove = llvm::make_scope_exit([&] { container->remove(); });
+    llvm::scope_exit remove([&] { container->remove(); });
     return runPipeline(pm, container);
   };
 

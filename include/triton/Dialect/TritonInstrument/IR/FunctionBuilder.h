@@ -22,10 +22,11 @@ namespace mlir::triton {
 class FuncOp;
 
 namespace instrument {
+std::string mangleType(Type t);
 
 class ManglingArgs {
 public:
-  using Arg = std::variant<Type, int, std::string>;
+  using Arg = std::variant<Type, uint64_t, std::string>;
 
   ManglingArgs() = default;
   ManglingArgs(const ManglingArgs &) = default;
@@ -51,9 +52,8 @@ public:
 
   std::string mangleArg(Arg arg) const {
     if (auto type = std::get_if<Type>(&arg)) {
-      auto hash = static_cast<uint64_t>(mlir::hash_value(*type));
-      return std::string("_T") + llvm::utohexstr(hash);
-    } else if (auto intVal = std::get_if<int>(&arg)) {
+      return std::string("_") + mangleType(*type);
+    } else if (auto intVal = std::get_if<uint64_t>(&arg)) {
       return std::string("_I") + std::to_string(*intVal);
     } else if (auto stringVal = std::get_if<std::string>(&arg)) {
       return *stringVal;
@@ -74,18 +74,14 @@ private:
   SmallVector<Arg> args;
 };
 
-/// Utility to mangle helper function names produced by the instrumentation
-/// passes. The mangled name encodes the base name, number of warps and the
-/// participating types.
-std::string mangleInstrumentHelperName(const std::string &baseName,
-                                       int numWarps,
-                                       llvm::ArrayRef<Type> types);
-
 class FunctionBuilder {
 public:
   FunctionBuilder(ModuleOp module, AuxDataMap &auxData)
       : module(module), auxData(auxData) {}
 
+  // Create a function that fills a global tensor with a scalar value.
+  void createFillGlobalTensorCall(ImplicitLocOpBuilder &b, Value ptr,
+                                  RankedTensorType type, Value scalar);
   // setWaiting: mark the base thread as waiting on the given barrier phase and
   // record that phase for deadlock detection.
   void createSetWaitingCall(ImplicitLocOpBuilder &b, Value mbar, int thread,
@@ -117,25 +113,27 @@ public:
   // from the visibility bitmask. We know this is safe because there cannot be
   // outstanding writes to this buffer at this point.
   void createSetWriteVisibilityCall(ImplicitLocOpBuilder &b, Value buf,
-                                    uint64_t threadMask, Value pred,
-                                    MemType memType, Operation *insertPoint);
+                                    uint32_t length, uint64_t threadMask,
+                                    Value pred, MemType memType,
+                                    Operation *insertPoint);
   // setReadVisibility: add the threads set in threadMask to the buffer's read
   // visibility bitmask.
   void createSetReadVisibilityCall(ImplicitLocOpBuilder &b, Value buf,
-                                   uint64_t threadMask, Value pred,
-                                   MemType memType, Operation *insertPoint);
+                                   uint32_t length, uint64_t threadMask,
+                                   Value pred, MemType memType,
+                                   Operation *insertPoint);
   // clearWriteTracking: clear all the information about threads writing to a
   // buffer.
   void createClearWriteTrackingCall(ImplicitLocOpBuilder &b, Value buf,
-                                    Value pred, MemType memType,
-                                    Operation *insertPoint);
+                                    uint32_t length, Value pred,
+                                    MemType memType, Operation *insertPoint);
   // clearReadVisibility: clear the read visibility for a buffer.
   void createClearReadVisibilityCall(ImplicitLocOpBuilder &b, Value buf,
-                                     Value pred, MemType memType,
-                                     Operation *insertPoint);
+                                     uint32_t length, Value pred,
+                                     MemType memType, Operation *insertPoint);
   // clearReadTracking: clear the read tracking for a buffer.
   void createClearReadTrackingCall(ImplicitLocOpBuilder &b, Value buf,
-                                   Value pred, MemType memType,
+                                   uint32_t length, Value pred, MemType memType,
                                    Operation *insertPoint);
   // trackVisibleWrites: snapshot buffers currently visible to the thread into
   // the tracking table for a barrier.
@@ -160,15 +158,15 @@ public:
   // verifyWriteVisibility: ensure the thread either sees the latest write or no
   // other thread is writing the buffer.
   void createVerifyWriteVisibilityCall(ImplicitLocOpBuilder &b, Value buf,
-                                       int thread, StringRef operandName,
-                                       Value pred, MemType memType,
-                                       Operation *insertPoint);
+                                       uint32_t length, int thread,
+                                       StringRef operandName, Value pred,
+                                       MemType memType, Operation *insertPoint);
   // verifyReadVisibility: ensure all reads from the buffer are visible to the
   // thread.
   void createVerifyReadVisibilityCall(ImplicitLocOpBuilder &b, Value buf,
-                                      int thread, StringRef operandName,
-                                      Value pred, MemType memType,
-                                      Operation *insertPoint);
+                                      uint32_t length, int thread,
+                                      StringRef operandName, Value pred,
+                                      MemType memType, Operation *insertPoint);
   // copyWriteVisibility: replicate the write visibility bit of sourceThread to
   // every destination thread in destMask.
   void createCopyWriteVisibilityCall(ImplicitLocOpBuilder &b, int sourceThread,
@@ -182,35 +180,36 @@ public:
   // stageAccessForCommit: mark the buffer as staged (value -1) in the
   // outstanding commit table for this thread.
   void createStageAccessForCommitCall(ImplicitLocOpBuilder &b, Value buf,
-                                      int thread, Value pred, ValueType buffers,
-                                      ValueType outstandingCommits,
+                                      uint32_t length, int thread, Value pred,
+                                      MemType memType,
+                                      CommitKind::Kind commitKind,
                                       Operation *insertPoint);
   // commitAccesses: convert staged entries to 1 and increment outstanding
   // commits greater than zero for the committing thread.
   void createCommitAccessesCall(ImplicitLocOpBuilder &b, int thread, Value pred,
-                                ValueType outstandingCommits,
+                                CommitKind::Kind commitKind,
                                 Operation *insertPoint);
   // clearOutstandingCommitsTransferWrites: clear entries farther than
   // outstandingNum from the thread and set write visibility for threads in
   // transferThreadMask.
   void createClearOutstandingCommitsTransferWritesCall(
       ImplicitLocOpBuilder &b, int thread, uint64_t transferThreadMask,
-      int outstandingNum, Value pred, ValueType outstandingCommits,
-      ValueType writeVisibility, Operation *insertPoint);
+      int outstandingNum, Value pred, CommitKind::Kind commitKind,
+      MemType memType, Operation *insertPoint);
   // clearOutstandingCommitsTransferReads: clear entries farther than
   // outstandingNum from the thread and set read visibility for threads in
   // transferThreadMask.
   void createClearOutstandingCommitsTransferReadsCall(
       ImplicitLocOpBuilder &b, int thread, uint64_t transferThreadMask,
-      int outstandingNum, Value pred, ValueType outstandingCommits,
-      ValueType readVisibility, Operation *insertPoint);
+      int outstandingNum, Value pred, CommitKind::Kind commitKind,
+      MemType memType, Operation *insertPoint);
   // checkOutstandingCommits: assert that the outstanding commit row for the
   // buffer is zero before the access described by pendingAccessType.
   void createCheckOutstandingCommitsCall(ImplicitLocOpBuilder &b, Value buf,
-                                         int thread,
+                                         uint32_t length, int thread,
                                          StringRef pendingAccessType,
-                                         Value pred, ValueType buffers,
-                                         ValueType outstandingCommits,
+                                         Value pred, MemType memType,
+                                         CommitKind::Kind commitKind,
                                          Operation *insertPoint);
 
 private:

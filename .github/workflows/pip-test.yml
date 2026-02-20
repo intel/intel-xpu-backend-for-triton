@@ -65,7 +65,7 @@ jobs:
       - name: Install runtime dependencies
         run: |
           curl -sSLO --retry 10 https://raw.githubusercontent.com/pytorch/pytorch/$(<.github/pins/pytorch.txt)/.github/scripts/generate_binary_build_matrix.py
-          sed -i '/^validate_nccl_dep_consistency.*/d' generate_binary_build_matrix.py
+          sed -i 's/^\(\s*\)validate_nccl_dep_consistency(arch_version)/\1pass/' generate_binary_build_matrix.py
           python -c "from generate_binary_build_matrix import PYTORCH_EXTRA_INSTALL_REQUIREMENTS; print('\n'.join(PYTORCH_EXTRA_INSTALL_REQUIREMENTS['xpu'].split(' | ')))" | tee /tmp/requirements.txt
           pip install -r /tmp/requirements.txt
           pip install transformers==4.54.0
