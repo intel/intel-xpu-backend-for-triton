@@ -69,7 +69,7 @@ public:
     builder->setInsertionPointToStart(&funcOp.getBody().front());
 
     auto loc = builder->getUnknownLoc();
-    auto tensorType = RankedTensorType::get({32, 32}, aElemType);
+    auto tensorTypeA = RankedTensorType::get({32, 32}, aElemType);
     auto tensorTypeB = RankedTensorType::get({32, 32}, bElemType);
     auto tensorTypeC = RankedTensorType::get({32, 32}, cElemType);
 
