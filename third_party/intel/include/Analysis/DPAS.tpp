@@ -91,12 +91,11 @@ DPASAnalysisResult DPASAnalysis<DPASEngineType, Enable>::canUseDPAS(
   assert((minSGSize == 8 || minSGSize == 16 || minSGSize == 32) &&
          "Unexpected minimum subgroup size");
 
-  if (enableWarp32 && minSGSize != 8) {
+  if (enableWarp32 && minSGSize != 8)
     // We can support threads_per_warp=16 or 32 on Xe+ and later architectures.
     return (threadsPerWarp == 16 || threadsPerWarp == 32)
                ? DPASAnalysisResult::True
                : DPASAnalysisResult::False;
-  }
 
   return (threadsPerWarp == minSGSize) ? DPASAnalysisResult::True
                                        : DPASAnalysisResult::False;
