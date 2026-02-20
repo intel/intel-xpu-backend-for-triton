@@ -17,6 +17,7 @@ class AllocationAnalysis;
 /// some operations.
 using AllocationAnalysisScratchSizeFn = std::function<unsigned(Operation *)>;
 
+unsigned defaultAllocationAnalysisScratchSizeFnOld(Operation *op);
 unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op);
 
 unsigned getNumScratchElemsSwizzledCvt(const LinearLayout &srcLayout,
