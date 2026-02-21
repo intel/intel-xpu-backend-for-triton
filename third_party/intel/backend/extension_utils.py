@@ -72,10 +72,13 @@ def has_device_extension(device_id: int, extension_name: str) -> bool:
 
 def query_device_extensions(device_id: int = 0):
     """
-    Query all relevant device extensions for a given device.
+    Query all relevant device extensions.
+
+    All GPUs with the same device_id have the same extensions,
+    so we query the first available GPU device.
 
     Args:
-        device_id: Device ID to query (default: 0)
+        device_id: Device ID (used to identify device type, not index)
 
     Returns:
         Dictionary with extension capabilities

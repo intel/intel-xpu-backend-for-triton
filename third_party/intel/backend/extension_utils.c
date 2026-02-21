@@ -49,14 +49,14 @@ extern "C" EXPORT_FUNC PyObject *check_extension(int device_id,
   try {
     initializeDevicesIfNeeded();
 
-    if (device_id >= g_devices.size()) {
-      PyErr_Format(PyExc_RuntimeError,
-                   "Device %d not found (only %zu devices available)",
-                   device_id, g_devices.size());
+    if (g_devices.empty()) {
+      PyErr_SetString(PyExc_RuntimeError, "No GPU devices available");
       return NULL;
     }
 
-    const sycl::device &device = g_devices[device_id];
+    // Use first GPU device since all GPUs with same device_id have same
+    // extensions
+    const sycl::device &device = g_devices[0];
 
     // If OpenCL backend is available, use it
     if (g_has_opencl && device.get_backend() == sycl::backend::opencl) {

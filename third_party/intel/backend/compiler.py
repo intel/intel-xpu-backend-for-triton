@@ -33,16 +33,12 @@ def update_xpu_device_features(target: GPUTarget) -> GPUTarget:
     dev_property = target.arch
 
     # Always query extensions using lightweight utility to ensure consistency
-    # Use torch device index (0-based), not the internal device_id handle
-    try:
-        import torch
-        device_index = torch.xpu.current_device()
-    except (ImportError, RuntimeError):
-        # Fallback to device 0 if torch is not available
-        device_index = 0
+    # All GPUs with the same device_id have the same extensions, so we just
+    # need to query any GPU device
+    device_id = dev_property.get("device_id", 0)
 
     from . import extension_utils
-    extensions = extension_utils.query_device_extensions(device_index)
+    extensions = extension_utils.query_device_extensions(device_id)
     dev_property.update(extensions)
 
     return GPUTarget(target.backend, dev_property, target.warp_size)
