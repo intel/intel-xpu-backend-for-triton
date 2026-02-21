@@ -21,7 +21,7 @@ def _hip_device_supports_fpsan():
 def _require_cuda_backend(device: str):
     # CUDA and HIP both use torch device 'cuda'. fpsan is plumbed through both CUDAOptions and HIPOptions.
     if device != "cuda":
-        pytest.skip("fpsan tests require torch device 'cuda'")
+        pytest.xfail("fpsan tests require torch device 'cuda'")
     if is_interpreter():
         pytest.skip("fpsan tests require a real backend (not the interpreter)")
     if not (is_cuda() or is_hip()):
