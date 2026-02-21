@@ -332,8 +332,6 @@ def test_cpu_timed_scope(tmp_path: pathlib.Path, device: str):
 
 
 def test_get_data(tmp_path: pathlib.Path, device: str):
-    if is_xpu():
-        pytest.skip("FIXME: #5742")
     temp_file = tmp_path / "test_tree_json.hatchet"
     session = proton.start(str(temp_file.with_suffix("")), context="shadow")
 
@@ -352,7 +350,7 @@ def test_get_data(tmp_path: pathlib.Path, device: str):
     database = proton.data.get(session)
     gf, _, _, _ = viewer.get_raw_metrics(database)
     foo_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*foo.*' AND c IS LEAF").dataframe
-    ones_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*elementwise.*' AND c IS LEAF").dataframe
+    ones_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*VectorizedElementwiseKernel.*' AND c IS LEAF").dataframe
 
     assert len(foo_frame) == 1
     assert int(foo_frame["count"].values[0]) == 2
