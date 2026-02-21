@@ -17,6 +17,37 @@ import subprocess
 from pathlib import Path
 from elftools.elf.elffile import ELFFile
 
+
+def update_xpu_device_features(target: GPUTarget) -> GPUTarget:
+    """
+    Update XPU device features in the target's arch dict.
+    This ensures device extensions are properly detected even when
+    PyTorch Inductor creates and passes GPUTarget directly.
+    """
+    if target.backend != "xpu":
+        return target
+
+    if not isinstance(target.arch, dict):
+        return target
+
+    dev_property = target.arch
+
+    # Always query extensions using lightweight utility to ensure consistency
+    # Use torch device index (0-based), not the internal device_id handle
+    try:
+        import torch
+        device_index = torch.xpu.current_device()
+    except (ImportError, RuntimeError):
+        # Fallback to device 0 if torch is not available
+        device_index = 0
+
+    from . import extension_utils
+    extensions = extension_utils.query_device_extensions(device_index)
+    dev_property.update(extensions)
+
+    return GPUTarget(target.backend, dev_property, target.warp_size)
+
+
 try:  # XPUBackend allows metaclasses injection
     from .meta import XPUBackendMeta
 except ImportError:
@@ -133,6 +164,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         return super().__new__(impl)
 
     def __init__(self, target: GPUTarget) -> None:
+        # Update device features if target was created externally (e.g., by PyTorch Inductor)
+        target = update_xpu_device_features(target)
         super().__init__(target)
         self.properties = self.parse_target(target.arch)
 

@@ -237,6 +237,38 @@ class SpirvUtils:
                 ctypes.windll.kernel32.FreeLibrary(handle)
 
 
+class ExtensionUtils:
+    """Lightweight utility for checking device extensions without full driver initialization."""
+
+    def __init__(self, cache_path: str):
+        self.shared_library = ctypes.PyDLL(cache_path)
+        self.shared_library.check_extension.restype = ctypes.py_object
+        self.shared_library.check_extension.argtypes = (ctypes.c_int, ctypes.c_char_p)
+        self.shared_library.get_device_count.restype = ctypes.py_object
+        self.shared_library.get_device_count.argtypes = ()
+
+    def check_extension(self, device_id: int, extension: bytes) -> bool:
+        return self.shared_library.check_extension(device_id, extension)
+
+    def get_device_count(self) -> int:
+        return self.shared_library.get_device_count()
+
+    if os.name != 'nt':
+
+        def __del__(self):
+            if hasattr(self, "shared_library"):
+                handle = self.shared_library._handle
+                self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
+                self.shared_library.dlclose(handle)
+    else:
+
+        def __del__(self):
+            if hasattr(self, "shared_library"):
+                handle = self.shared_library._handle
+                ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
+                ctypes.windll.kernel32.FreeLibrary(handle)
+
+
 class TritonLauncher:
 
     def __init__(self, cache_path: str):
@@ -295,6 +327,8 @@ def compile_module_from_src(src: str, name: str):
         return ArchParser(cache_path)
     if name == 'spirv_utils':
         return SpirvUtils(cache_path)
+    if name == 'extension_utils_impl':
+        return ExtensionUtils(cache_path)
     if name == '__triton_launcher':
         return TritonLauncher(cache_path)
     if name == 'proton_utils':
@@ -927,27 +961,6 @@ class XPUDriver(DriverBase):
         device = self.get_current_device()
         dev_property = torch.xpu.get_device_capability(device)
 
-        def update_advanced_features(device, dev_property):
-            if knobs.intel.device_extensions:
-                # May be useful when using the `TRITON INTEL_DEVICE_ARCH` environment variable
-                # to be able to flexibly turn on/off the advanced feature.
-                supported_extensions = set()
-                supported_extensions.update(knobs.intel.device_extensions.split(" "))
-                dev_property[
-                    "has_subgroup_matrix_multiply_accumulate"] = "cl_intel_subgroup_matrix_multiply_accumulate" in supported_extensions
-                dev_property[
-                    "has_subgroup_matrix_multiply_accumulate_tensor_float32"] = "cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32" in supported_extensions
-                dev_property["has_subgroup_2d_block_io"] = "cl_intel_subgroup_2d_block_io" in supported_extensions
-                dev_property["has_bfloat16_conversion"] = "cl_intel_bfloat16_conversions" in supported_extensions
-            else:
-                check = self.utils.has_opencl_extension
-                dev_property["has_subgroup_matrix_multiply_accumulate"] = check(
-                    device, b"cl_intel_subgroup_matrix_multiply_accumulate")
-                dev_property["has_subgroup_matrix_multiply_accumulate_tensor_float32"] = check(
-                    device, b"cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32")
-                dev_property["has_subgroup_2d_block_io"] = check(device, b"cl_intel_subgroup_2d_block_io")
-                dev_property["has_bfloat16_conversion"] = check(device, b"cl_intel_bfloat16_conversions")
-
         def update_device_arch(dev_property):
             if not (arch := knobs.intel.device_arch):
                 dirname = os.path.dirname(os.path.realpath(__file__))
@@ -956,7 +969,6 @@ class XPUDriver(DriverBase):
                 arch = parser.parse_device_arch(dev_property["architecture"])
             dev_property["arch"] = arch
 
-        update_advanced_features(device, dev_property)
         update_device_arch(dev_property)
 
         return GPUTarget("xpu", dev_property, warp_size=32)
