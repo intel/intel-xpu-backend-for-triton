@@ -33,7 +33,7 @@ make dev-install
 
 Build tips:
 - Set `MAX_JOBS=8` on machines with <64GB RAM.
-- Set `MAX_JOBS=16` if machines has more than 64GB RAM.
+- Set `MAX_JOBS=16` if machines have more than 64GB RAM.
 - Set `TRITON_BUILD_WITH_CCACHE=true` for faster rebuilds.
 - Set `TRITON_BUILD_WITH_CLANG_LLD=true` to use clang/lld (faster linking).
 - Use `pip install -e . --no-build-isolation` for faster incremental builds.
