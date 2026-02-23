@@ -5,8 +5,22 @@ applyTo: '**/*.cpp, **/*.tpp, **/*.c, **/*.h, **/*.hpp'
 
 # LLVM/MLIR Coding Guidelines for AI Assistance
 
+> **For comprehensive project context**, see [AGENTS.md](../AGENTS.md).
+
 ## Overview
 Generate code following LLVM/MLIR standards. Apply these conventions consistently for high-quality, maintainable code.
+
+### Project Context
+This is the Intel GPU backend for the Triton compiler — a JIT compiler transforming Python GPU kernels (`@triton.jit`) into native Intel GPU binaries via MLIR progressive lowering:
+- **TTIR** (tt dialect) → **TTGIR** (ttg/ttig dialects) → **LLVM IR** → **SPIR-V** → **zebin**
+
+Key directories:
+- `lib/Dialect/Triton/` — Core Triton dialect ops and passes
+- `lib/Dialect/TritonGPU/` — GPU-annotated dialect with layout encodings
+- `third_party/intel/lib/TritonIntelGPUTransforms/` — Intel optimization passes
+- `third_party/intel/lib/TritonIntelGPUToLLVM/` — Intel TTGIR→LLVM lowering
+- `lib/Conversion/` — Dialect conversion passes
+- `lib/Analysis/` — AxisInfo, Allocation, Membar, Alias analyses
 
 ## Core Principles
 
@@ -154,11 +168,109 @@ auto count = vec.size();  // Type is obvious
 
 ## Triton/MLIR-Specific Guidelines
 
+### Naming Conventions
 ```cpp
 // ✅ Operation and pass naming: CamelCase with uppercase start
 triton::LoadOp
 triton::gpu::ConvertLayoutOp
+triton::gpu::intel::DpasOp
+
+// ✅ Passes: Descriptive CamelCase
 class RemoveLayoutConversionsPass : public PassWrapper<...>
+class AccelerateMatmulPass : public OperationPass<ModuleOp>
+
+// ✅ Encodings: Attr suffix
+DpasEncodingAttr, BlockedEncodingAttr, SlicedEncodingAttr
+```
+
+### Dialect Conversion Patterns
+```cpp
+// ✅ Use ConversionPatternRewriter for lowering
+struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp> {
+  LogicalResult matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    // Get encoding from tensor type
+    auto encoding = cast<RankedTensorType>(op.getType()).getEncoding();
+    // Use rewriter to create new ops
+    rewriter.replaceOp(op, newOp);
+    return success();
+  }
+};
+
+// ✅ Register patterns properly
+void populateTritonGPUToLLVMPatterns(LLVMTypeConverter &converter,
+                                      RewritePatternSet &patterns);
+```
+
+### Analysis Usage
+```cpp
+// ✅ AxisInfo for memory coalescing decisions
+ModuleAxisInfoAnalysis axisAnalysis(moduleOp);
+auto info = axisAnalysis.getAxisInfo(ptrValue);
+unsigned contiguity = info.getContiguity()[dim];
+unsigned divisibility = info.getDivisibility()[dim];
+
+// ✅ LinearLayout for index transformations
+auto ll = gpu::toLinearLayout(shape, encoding);
+auto indices = applyLinearLayout(loc, rewriter, ll, {{"register", regIdx}, {"lane", laneId}});
+```
+
+### Intel-Specific Patterns
+```cpp
+// ✅ DPAS operations use DpasEncodingAttr
+auto dpasEncoding = DpasEncodingAttr::get(ctx, repeatCount, systolicDepth,
+                                           executionSize, opsPerChan,
+                                           warpsPerCTA, repCluster, subGroupSize);
+
+// ✅ 2D block loads use tensor descriptors
+auto desc = rewriter.create<triton::gpu::intel::CreateTensorDescOp>(
+    loc, base, shape, strides);
+auto data = rewriter.create<triton::gpu::intel::LoadTensorDescOp>(
+    loc, resultType, desc);
+
+// ✅ Shared memory uses LocalAllocOp/LocalLoadOp
+auto alloc = rewriter.create<triton::gpu::LocalAllocOp>(loc, allocType, value);
+auto load = rewriter.create<triton::gpu::LocalLoadOp>(loc, resultType, alloc);
+```
+
+### GPU Kernel Considerations
+- **Hardware limits**: Respect GRF count (128/256), SLM size, subgroup size (16/32)
+- **Memory coalescing**: Ensure contiguous thread access patterns via layout encodings
+- **Bank conflicts**: Use swizzling patterns for shared memory access
+- **DPAS requirements**: Operand layouts must match systolic array expectations
+
+### Pass Implementation
+```cpp
+// ✅ Use runOnOperation pattern
+struct MyPass : public impl::MyPassBase<MyPass> {
+  void runOnOperation() override {
+    auto moduleOp = getOperation();
+    // 1. Run analysis if needed
+    ModuleAxisInfoAnalysis axisInfo(moduleOp);
+
+    // 2. Create rewrite patterns
+    RewritePatternSet patterns(&getContext());
+    populateMyPatterns(patterns, axisInfo);
+
+    // 3. Apply patterns
+    if (failed(applyPatternsGreedily(moduleOp, std::move(patterns))))
+      signalPassFailure();
+  }
+};
+```
+
+### Testing
+```mlir
+// ✅ LIT test with FileCheck
+// RUN: triton-opt %s --triton-intel-gpu-accelerate-matmul | FileCheck %s
+
+// CHECK: #triton_intel_gpu.dpas
+// CHECK: tt.dot {{.*}} -> tensor<{{.*}}, #triton_intel_gpu.dpas<
+tt.func @matmul(%a: tensor<128x64xf16>, %b: tensor<64x128xf16>) {
+  %c = arith.constant dense<0.0> : tensor<128x128xf32>
+  %d = tt.dot %a, %b, %c : tensor<128x64xf16> * tensor<64x128xf16> -> tensor<128x128xf32>
+  tt.return
+}
 ```
 
 **GPU kernels:** Respect hardware limits (thread blocks, shared memory), use memory coalescing, avoid bank conflicts.
