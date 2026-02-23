@@ -4,7 +4,9 @@
  * requiring a PyTorch sycl queue.
  */
 
+#include <filesystem>
 #include <iostream>
+#include <sstream>
 #include <sycl/sycl.hpp>
 #include <vector>
 

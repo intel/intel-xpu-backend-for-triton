@@ -117,7 +117,9 @@ def test_has_opencl_extension_error(device):
     # Test individual extension checking
     result = extension_utils.has_device_extension(device_id, "cl_intel_subgroup_2d_block_io")
     assert isinstance(result, bool)
-    assert result is True  # This extension should be supported
+    if device_id == 3034:
+        # PVC 1100
+        assert result is True  # This extension should be supported
 
     # Test checking for a non-existent/wrong extension name
     result_wrong = extension_utils.has_device_extension(device_id, "cl_intel_nonexistent_extension")
