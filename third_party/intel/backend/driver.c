@@ -483,34 +483,6 @@ extern "C" EXPORT_FUNC PyObject *wait_on_sycl_queue(PyObject *cap) {
   Py_RETURN_NONE;
 }
 
-extern "C" EXPORT_FUNC PyObject *has_opencl_extension(int device_id,
-                                                      const char *extension) {
-  if (has_opencl) {
-    if (device_id >= sycl_opencl_device_list.size()) {
-      zeConstructError(__FILE__, __LINE__, "Device is not found");
-      return NULL;
-    }
-    const sycl::device &device = sycl_opencl_device_list[device_id];
-
-    if (sycl::opencl::has_extension(device, extension))
-      Py_RETURN_TRUE;
-    Py_RETURN_FALSE;
-  }
-
-  if (device_id >= g_sycl_l0_device_list.size()) {
-    zeConstructError(__FILE__, __LINE__, "Device is not found");
-    return NULL;
-  }
-
-  const sycl::device &device = g_sycl_l0_device_list[device_id].first;
-
-  // `ocloc` should be in `PATH` for proper work
-  // `ext_oneapi_supports_cl_extension`; the related check is in
-  // `has_ocloc_in_path`
-  if (device.ext_oneapi_supports_cl_extension(extension))
-    Py_RETURN_TRUE;
-  Py_RETURN_FALSE;
-}
 extern "C" EXPORT_FUNC PyObject *sycl_queue_memset(PyObject *args) {
   PyObject *py_queue;
   uint64_t ptr, count;

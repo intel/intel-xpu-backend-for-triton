@@ -189,19 +189,17 @@ class SpirvUtils:
 
     def __init__(self, cache_path: str):
         self.shared_library = ctypes.PyDLL(cache_path)
-        methods = ("init_devices", "load_binary", "wait_on_sycl_queue", "has_opencl_extension", "sycl_queue_memset")
+        methods = ("init_devices", "load_binary", "wait_on_sycl_queue", "sycl_queue_memset")
         for method in methods:
             getattr(self.shared_library, method).restype = ctypes.py_object
             getattr(self.shared_library, method).argtypes = (ctypes.py_object, )
         self.shared_library.get_device_properties.restype = ctypes.py_object
         self.shared_library.get_device_properties.argtypes = (ctypes.c_int, )
-        self.shared_library.has_opencl_extension.restype = ctypes.py_object
-        self.shared_library.has_opencl_extension.argtypes = (ctypes.c_int, ctypes.c_char_p)
         self.shared_library.get_last_selected_build_flags.restype = ctypes.py_object
 
     def __getattribute__(self, name):
-        if name in ("get_device_properties", "init_devices", "wait_on_sycl_queue", "has_opencl_extension",
-                    "get_last_selected_build_flags", "sycl_queue_memset"):
+        if name in ("get_device_properties", "init_devices", "wait_on_sycl_queue", "get_last_selected_build_flags",
+                    "sycl_queue_memset"):
             shared_library = super().__getattribute__("shared_library")
             return getattr(shared_library, name)
 
@@ -246,12 +244,17 @@ class ExtensionUtils:
         self.shared_library.check_extension.argtypes = (ctypes.c_int, ctypes.c_char_p)
         self.shared_library.get_device_count.restype = ctypes.py_object
         self.shared_library.get_device_count.argtypes = ()
+        self.shared_library.get_device_id.restype = ctypes.py_object
+        self.shared_library.get_device_id.argtypes = (ctypes.c_int, )
 
     def check_extension(self, device_id: int, extension: bytes) -> bool:
         return self.shared_library.check_extension(device_id, extension)
 
     def get_device_count(self) -> int:
         return self.shared_library.get_device_count()
+
+    def get_device_id(self, device_idx: int) -> int:
+        return self.shared_library.get_device_id(device_idx)
 
     if os.name != 'nt':
 
@@ -358,7 +361,6 @@ class XPUUtils(object):
         self.get_device_properties = mod.get_device_properties
         self.device_count = mod.init_devices(self.get_sycl_queue())
         self.wait_on_sycl_queue = mod.wait_on_sycl_queue
-        self.has_opencl_extension = mod.has_opencl_extension
         self.get_last_selected_build_flags = mod.get_last_selected_build_flags
         self.sycl_queue_memset = mod.sycl_queue_memset
 

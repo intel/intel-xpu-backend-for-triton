@@ -94,11 +94,32 @@ def test_wait_on_sycl_queue_error(device):
 
 
 def test_has_opencl_extension_error(device):
-    device_count, = driver.active.utils.device_count
+    from triton.backends.intel import extension_utils
+    device_idx = torch.xpu.current_device()
+    device_id = extension_utils.get_device_id(device_idx)
 
-    # Pass an invalid device_id (out of range) to trigger error
-    with pytest.raises(RuntimeError, match="Device is not found"):
-        driver.active.utils.has_opencl_extension(device_count, b"cl_khr_fp16")
+    # Test that we can query extensions using the new API
+    extensions = extension_utils.query_device_extensions(device_id=device_id)
+
+    # Verify we got a dictionary with expected extension keys
+    assert isinstance(extensions, dict)
+    assert "has_subgroup_matrix_multiply_accumulate" in extensions
+    assert "has_subgroup_2d_block_io" in extensions
+    assert "has_bfloat16_conversion" in extensions
+
+    # Test individual extension checking
+    result = extension_utils.has_device_extension(device_id, "cl_intel_subgroup_2d_block_io")
+    assert isinstance(result, bool)
+    assert result is True  # This extension should be supported
+
+    # Test checking for a non-existent/wrong extension name
+    result_wrong = extension_utils.has_device_extension(device_id, "cl_intel_nonexistent_extension")
+    assert isinstance(result_wrong, bool)
+    assert result_wrong is False  # This extension should not be supported
+
+    # Test that invalid device_id raises exception
+    with pytest.raises(RuntimeError):
+        extension_utils.has_device_extension(0x9999, "cl_intel_subgroup_2d_block_io")
 
 
 @pytest.mark.parametrize("grf_mode, expect_retry, expect_fail",

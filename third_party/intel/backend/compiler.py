@@ -2,6 +2,7 @@ from triton.backends.compiler import BaseBackend, GPUTarget, Language
 from triton._C.libtriton import ir, passes, llvm, intel
 from triton.backends.intel.driver import compile_module_from_src
 from triton.backends.intel.track import track
+from triton.backends.intel.extension_utils import query_device_extensions
 from triton import knobs
 
 from dataclasses import dataclass
@@ -16,33 +17,6 @@ import os
 import subprocess
 from pathlib import Path
 from elftools.elf.elffile import ELFFile
-
-
-def update_xpu_device_features(target: GPUTarget) -> GPUTarget:
-    """
-    Update XPU device features in the target's arch dict.
-    This ensures device extensions are properly detected even when
-    PyTorch Inductor creates and passes GPUTarget directly.
-    """
-    if target.backend != "xpu":
-        return target
-
-    if not isinstance(target.arch, dict):
-        return target
-
-    dev_property = target.arch
-
-    # Always query extensions using lightweight utility to ensure consistency
-    # All GPUs with the same device_id have the same extensions, so we just
-    # need to query any GPU device
-    device_id = dev_property.get("device_id", 0)
-
-    from . import extension_utils
-    extensions = extension_utils.query_device_extensions(device_id)
-    dev_property.update(extensions)
-
-    return GPUTarget(target.backend, dev_property, target.warp_size)
-
 
 try:  # XPUBackend allows metaclasses injection
     from .meta import XPUBackendMeta
@@ -160,8 +134,6 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         return super().__new__(impl)
 
     def __init__(self, target: GPUTarget) -> None:
-        # Update device features if target was created externally (e.g., by PyTorch Inductor)
-        target = update_xpu_device_features(target)
         super().__init__(target)
         self.properties = self.parse_target(target.arch)
 
@@ -206,6 +178,12 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         dev_prop['has_f4_conversions'] = tgt_prop.get('has_f4_conversions', False)
         dev_prop['has_f8_conversions'] = tgt_prop.get('has_f8_conversions', False)
         dev_prop['has_256b_prefetch'] = tgt_prop.get('has_256b_prefetch', False)
+
+        # All GPUs with the same device_id have the same extensions, so we just
+        # need to query any GPU device
+        device_id = tgt_prop.get("device_id")
+        extensions = query_device_extensions(device_id)
+        dev_prop.update(extensions)
 
         return dev_prop
 
