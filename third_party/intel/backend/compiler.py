@@ -268,6 +268,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.ttir.add_remove_masks(pm)
         intel.passes.ttir.add_stride_versioning(pm)
         intel.passes.ttir.add_fuse_reshape(pm)
+        intel.passes.ttir.add_fuse_transpose(pm)
         passes.common.add_canonicalizer(pm)
         passes.ttir.add_combine(pm)
         intel.passes.ttir.add_simplify_signed_arithmetic(pm)

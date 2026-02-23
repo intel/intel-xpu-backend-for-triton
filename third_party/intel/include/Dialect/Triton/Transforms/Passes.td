@@ -96,6 +96,45 @@ def TritonIntelFuseReshape
   ];
 }
 
+def TritonIntelFuseTranspose
+    : Pass<"triton-intel-fuse-transpose", "mlir::ModuleOp"> {
+  let summary = "Fuse a tt.trans operation with a tt.load or tt.descriptor_load operation";
+
+  let description = [{
+    This pass attempts to fuse a tt.trans operation with a tt.load (block
+    pointers) or tt.descriptor_load (tensor descriptors) operation.
+    For example, given:
+        %ptr = tt.make_tensor_ptr %base, [%shapeM, %shapeK], [%strideM, %strideK],
+                 [%offM, %offK] : <tensor<MxKxf16>>
+        %load = tt.load %ptr : !tt.ptr<tensor<MxKxf16>>
+        %trans = tt.trans %load {order = [1, 0]} : tensor<MxKxf16> -> tensor<KxMxf16>
+        tt.dot(%trans, %b, ...)
+
+    The transformation drops the transpose operation, and generates:
+        %ptr = tt.make_tensor_ptr %base, [%shapeK, %shapeM], [%strideK, %strideM],
+                 [%offK, %offM] : <tensor<KxMxf16>>
+        %load = tt.load %ptr : !tt.ptr<tensor<KxMxf16>>
+        tt.dot(%load, %b, ...)
+
+    Also handles the tensor descriptor variant:
+        %desc = tt.make_tensor_desc %base, [%shapeM, %shapeK], [%strideM, %strideK]
+              : tensor_desc<MxKxf16>
+        %load = tt.descriptor_load %desc, [%idxM, %idxK] : tensor<MxKxf16>
+        %trans = tt.trans %load {order = [1, 0]} : tensor<MxKxf16> -> tensor<KxMxf16>
+        tt.dot(%trans, %b, ...)
+
+    Transformed into:
+        %desc = tt.make_tensor_desc %base, [%shapeK, %shapeM], [%strideK, %strideM]
+              : tensor_desc<KxMxf16>
+        %load = tt.descriptor_load %desc, [%idxK, %idxM] : tensor<KxMxf16>
+        tt.dot(%load, %b, ...)
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::TritonDialect"
+  ];
+}
+
 def TritonIntelRemoveBoundaryChecks
     : Pass<"triton-intel-remove-boundary-checks", "mlir::ModuleOp"> {
   let summary = "Remove unnecessary boundary checks from load operations (block pointers only)";
