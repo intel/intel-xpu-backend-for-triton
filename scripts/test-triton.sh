@@ -833,7 +833,9 @@ run_vllm_upstream_install() {
   sed -i '/pytorch\|torch\|triton/d' vllm/requirements/xpu.txt
   sed -i '/pytorch\|torch\|triton/d' vllm/requirements/test.in
   pip install -r vllm/requirements/xpu.txt
-  pip install -r vllm/requirements/test.in
+  # Let's not install whole test requirements for now, they are very large and overwrite torch
+  # pip install -r vllm/requirements/test.in
+  pip install cachetools cbor2 blake3 pybase64 openai_harmony tblib
   cp -r vllm/tests benchmarks/third_party/vllm/tests
   VLLM_TARGET_DEVICE=xpu pip install --no-deps --no-build-isolation -e vllm
 }
