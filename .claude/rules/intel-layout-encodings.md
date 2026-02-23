@@ -41,9 +41,9 @@ The primary compute encoding for Intel XMX matrix operations.
 
 | Parameter | Type | Constraint | Description |
 |-----------|------|------------|-------------|
-| `repeatCount` | unsigned | 1, 2, 4, or 8 | M dimension of DPAS tile |
+| `repeatCount` | unsigned | Range [1, 8] | M dimension of DPAS tile |
 | `systolicDepth` | unsigned | Must be **8** | Depth of systolic array (hardware-fixed) |
-| `executionSize` | unsigned | **16** (PVC/BMG) or **8** (ATSM) | N dimension (SIMD width) |
+| `executionSize` | unsigned | **16** (PVC/BMG) or **8** (DG2) | N dimension (SIMD width) |
 | `opsPerChannel` | unsigned | 1, 2, or 4 | K packing factor: `32 / element_bitwidth` |
 | `warpsPerCTA` | ArrayRef<unsigned> | Rank 2 or 3 | Warp distribution in CTA, e.g., [4, 1] |
 | `repCluster` | ArrayRef<unsigned> | Rank 2 or 3 | Repetition cluster size for memory optimization |
@@ -327,14 +327,16 @@ Pushes DotOperandEncodingAttr closer to loads by converting the operand early, r
 
 ### ConvertLayoutOp to LLVM
 
-Two lowering patterns (in order of priority):
+Three lowering patterns (in order of priority):
 
 1. **LinearLayout-based conversion** (benefit +2): Highest priority
    - Detects sub-group shuffles: `cvtIsSubGroupShuffle(srcTy, dstTy)` — lane reordering via shuffles
    - Detects sub-group transposes: `cvtIsSubGroupTranspose(srcTy, dstTy)` — transpose via shared memory
-   - Falls back to generic LinearLayout conversion
+   - Returns failure for other cases (falls through to lower-priority patterns)
 
-2. **Guard pattern** (benefit +1): Asserts all special cases were handled
+2. **Guard pattern** (benefit +1): Asserts Intel-specific cases (shuffle/transpose) were handled; returns failure for all other conversions
+
+3. **Upstream patterns** (base benefit): Generic `ConvertLayoutOp` lowering from upstream Triton
 
 ### Sub-Group Shuffle Detection
 
@@ -359,9 +361,9 @@ When source and destination layouts differ by a transpose:
 |-----------|---------------|-------|
 | threadsPerWarp (DPAS) | 16 | Fixed for all Intel DPAS |
 | threadsPerWarp (Subgroup2DBlock) | 16 | Fixed for 2D block I/O |
-| systolicDepth | 8 | Fixed for PVC/ATSM/BMG |
+| systolicDepth | 8 | Fixed for PVC/DG2/BMG |
 | executionSize (PVC/BMG) | 16 | N dimension |
-| executionSize (ATSM) | 8 | N dimension |
+| executionSize (DG2) | 8 | N dimension |
 | repeatCount range | 1-8 | Typical: 8 |
 | opsPerChannel values | 1, 2, 4 | By element bitwidth |
 | kWidth (Operand A, 16-bit) | 1 | opsPerChannel/2 |

@@ -179,8 +179,8 @@ module attributes {
   "ttg.num-ctas" = 1 : i32,
   "ttg.num-warps" = 4 : i32,
   "ttg.threads-per-warp" = 16 : i32,
-  "ttig.support_sg_2d_block",
-  "ttig.support_dpas",
+  "ttig.support_2d_block_io",
+  "ttig.support_subgroup_matrix_multiply_accumulate",
   "ttig.support_predicated_io"
 } {
   // test functions here
@@ -511,13 +511,14 @@ Each directory contains per-suite skip files:
 ```
 intel.txt           # Intel-specific tests
 language.txt        # Language feature tests
-runtime.txt         # Runtime tests
 debug.txt           # Debug tests
 gluon.txt           # Gluon tests
 tutorials.txt       # Tutorial tests
 mxfp.txt            # MXFP tests
 scaled_dot.txt      # Scaled dot tests
 triton_kernels.txt  # Triton kernel tests
+subprocess.txt      # Subprocess tests
+third_party.txt     # Third-party tests
 ```
 
 ### Skip List Format
