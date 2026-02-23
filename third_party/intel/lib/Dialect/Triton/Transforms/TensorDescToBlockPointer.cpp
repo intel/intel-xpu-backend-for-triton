@@ -85,13 +85,14 @@ public:
              "Expecting no gather/scatter/reduce ops at this stage");
       TypeSwitch<Operation *>(op)
           .Case<tt::MakeTensorDescOp>([&](auto makeTensorDescOp) {
-            LogicalResult res = rewriteMakeTensorDescriptorOp(makeTensorDescOp);
+            [[maybe_unused]] LogicalResult res =
+                rewriteMakeTensorDescriptorOp(makeTensorDescOp);
             assert(succeeded(res) &&
                    "Failed to rewrite make_tensor_descriptor op");
           })
           .Case<tt::DescriptorLoadOp, tt::DescriptorStoreOp>(
               [&](auto loadOrStoreOp) {
-                LogicalResult res =
+                [[maybe_unused]] LogicalResult res =
                     rewriteDescriptorLoadOrStoreOp(loadOrStoreOp);
                 assert(succeeded(res) &&
                        "Failed to rewrite descriptor load/store op");
@@ -104,7 +105,7 @@ public:
       tt::intel::eraseOperations(cleanUp);
 
     LLVM_DEBUG(llvm::dbgs()
-                   << "After TDesc to block_ptr: << " << moduleOp << "\n";);
+                   << "After TDesc to block_ptr: " << moduleOp << "\n";);
     moduleOp->walk([&](Operation *op) {
       assert(!hasATensorDescriptorType(op->getOperandTypes()) &&
              !hasATensorDescriptorType(op->getResultTypes()) &&
