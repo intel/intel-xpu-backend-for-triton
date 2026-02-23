@@ -30,6 +30,11 @@ public:
     auto loc = op.getLoc();
     MemDescType srcTy = op.getSrc().getType();
     RankedTensorType dstTy = op.getType();
+
+    // Partitioned tensors have multiple bases; fall back to generic lowering.
+    if (isa<triton::gpu::PartitionedSharedEncodingAttr>(srcTy.getEncoding())) {
+      return failure();
+    }
     auto typeConverter = this->getTypeConverter();
     auto llvmElemTy = typeConverter->convertType(dstTy.getElementType());
     unsigned bitWidth = llvmElemTy.getIntOrFloatBitWidth();
@@ -475,9 +480,7 @@ public:
     IntegerAttr zero = rewriter.getI32IntegerAttr(0);
     bool localBarrier = op.hasLocal();
     bool globalBarrier = op.hasGlobalRead() || op.hasGlobalWrite();
-    if (globalBarrier)
-      return failure();
-    if (localBarrier) {
+    if (localBarrier || globalBarrier) {
       amdgpu::MemoryCounterWaitOp::create(
           rewriter, op->getLoc(),
           /* load= */ op.hasGlobalRead() ? zero : nullptr,

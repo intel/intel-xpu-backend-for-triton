@@ -97,11 +97,6 @@ class WGMMA:
     acc: Union[warpgroup_mma_accumulator, gl.tensor]
     use_acc: gl.tensor
 
-    @gluon.constexpr_function
-    def __init__(self, acc, use_acc):
-        self.acc = acc
-        self.use_acc = use_acc
-
     @gluon.jit
     def initialize(dtype: gl.constexpr, BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, num_warps: gl.constexpr):
         mma_layout: gl.constexpr = t5.pick_wgmma_layout(dtype, BLOCK_M, BLOCK_N, num_warps)
@@ -137,34 +132,24 @@ class MMAv5:
     counter: gl.tensor
     reg_layout: gl.constexpr
 
-    @gluon.constexpr_function
-    def __init__(self, use_acc, acc_tmem, bar, counter, reg_layout):
-        self.use_acc = use_acc
-        self.acc_tmem = acc_tmem
-        self.bar = bar
-        self.counter = counter
-        self.reg_layout = gl.constexpr(reg_layout)
-
     @gluon.jit
     def initialize(dtype: gl.constexpr, BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, num_warps: gl.constexpr):
         layout: gl.constexpr = TensorMemoryLayout([BLOCK_M, BLOCK_N], col_stride=1)
         acc_tmem = allocate_tensor_memory(gl.float32, [BLOCK_M, BLOCK_N], layout)
-        bar = gl.allocate_shared_memory(gl.int64, [2, 1], mbarrier.MBarrierLayout())
-        for i in gl.static_range(2):
-            mbarrier.init(bar.index(i), count=1)
+        bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
+        mbarrier.init(bar, count=1)
         reg_layout: gl.constexpr = get_tmem_reg_layout(gl.float32, (BLOCK_M, BLOCK_N), layout, num_warps)
         return MMAv5(gl.to_tensor(False), acc_tmem, bar, gl.to_tensor(0), reg_layout)
 
     @gluon.jit
     def issue_async_mma(self, a, b):
         tcgen05_mma(a, b, self.acc_tmem, use_acc=self.use_acc)
-        tcgen05_commit(self.bar.index(self.counter & 1))
+        tcgen05_commit(self.bar)
         return MMAv5(gl.to_tensor(True), self.acc_tmem, self.bar, self.counter + 1, self.reg_layout)
 
     @gluon.jit
     def wait_num_outstanding(self, num_outstanding: gl.constexpr):
-        past_counter = self.counter - 1 - num_outstanding
-        mbarrier.wait(self.bar.index(past_counter & 1), (past_counter >> 1) & 1)
+        mbarrier.wait(self.bar, (self.counter - 1 - num_outstanding) & 1)
         return self
 
     @gluon.jit
@@ -346,12 +331,6 @@ class PersistentTileScheduler:
     pid_end: gl.tensor
     num_pid_m: gl.tensor
 
-    @gluon.constexpr_function
-    def __init__(self, pid_start, pid_end, num_pid_m):
-        self.pid_start = pid_start
-        self.pid_end = pid_end
-        self.num_pid_m = num_pid_m
-
     @gluon.jit
     def initialize(M, N, BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr):
         kernel_id = gl.program_id(axis=0)
@@ -527,13 +506,6 @@ def GroupedPersistentTileScheduler(GROUP_SIZE_M):
         num_pid_m: gl.tensor
         num_pid_in_group: gl.tensor
         num_pid: gl.tensor
-
-        @gluon.constexpr_function
-        def __init__(self, start_pid, num_pid_m, num_pid_in_group, num_pid):
-            self.start_pid = start_pid
-            self.num_pid_m = num_pid_m
-            self.num_pid_in_group = num_pid_in_group
-            self.num_pid = num_pid
 
         @gluon.jit
         def initialize(M, N, BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr):

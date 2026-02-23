@@ -26,7 +26,7 @@ DPASAnalysis<DPASEngineType, Enable>::DPASAnalysis(Operation *root) {
 
   // Populate the maps.
   mod.walk([&](FunctionOpInterface funcOp) {
-    [[maybe_unused]] auto [it, inserted] = funcToDotMap.try_emplace(funcOp);
+    auto it = funcToDotMap.try_emplace(funcOp).first;
 
     funcOp.walk([&](Operation *op) {
       if (!isa<DotOp, DotScaledOp>(op))
@@ -64,10 +64,8 @@ DPASAnalysisResult DPASAnalysis<DPASEngineType, Enable>::canUseDPAS(
   // instructions.
   for (Operation *op : it->second) {
     auto dpasIt = dotToDPASEngineMap.find(op);
-    if (dpasIt == dotToDPASEngineMap.end()) {
-      llvm::errs() << "DPASAnalysis: Operation not found in map.\n";
+    if (dpasIt == dotToDPASEngineMap.end())
       return DPASAnalysisResult::False;
-    }
 
     DPASEngineType dpasEngineType = dpasIt->second;
     if (dpasEngineType == DPASEngineType::NOT_APPLICABLE)
@@ -152,6 +150,7 @@ DPASAnalysis<DPASEngineType, Enable>::getDPASType(OpTy op) {
     auto m = op->template getParentOfType<ModuleOp>();
     if (!m)
       return DPASEngineType::NOT_APPLICABLE;
+
     bool isFp8Supported =
         m->hasAttr(TritonIntelGPUDialect::getSupportDPASWithBF8AttrName());
 
