@@ -12,7 +12,7 @@ Generate code following LLVM/MLIR standards. Apply these conventions consistentl
 
 ### Critical Requirements (Mandatory)
 - **Always** use LLVM/MLIR naming conventions (detailed below)
-- **Always** use `llvm::Error`/`llvm::Expected<T>` for error handling
+- **Always** use `LogicalResult`/`failure()`/`success()` for MLIR pass and pattern error handling
 - **Always** use LLVM casting (`dyn_cast`, `cast`, `isa`) instead of C-style casts
 - **Always** handle errors and edge cases properly
 
@@ -95,16 +95,23 @@ void maybeProcess(Module *mod);   // Can be nullptr
 ```
 
 ## Error Handling
-Use `llvm::Error` and `llvm::Expected<T>` for all error handling. Avoid exceptions.
+Use `LogicalResult` for MLIR pass/pattern code (the dominant pattern in this codebase). Use `signalPassFailure()` for pass-level failures. Avoid exceptions.
 
 ```cpp
-// ✅ Return Expected<T> for operations that can fail
-Expected<std::unique_ptr<Module>> parseModule(StringRef filename);
+// ✅ MLIR patterns: return LogicalResult
+LogicalResult matchAndRewrite(DotOp op, PatternRewriter &rewriter) const override {
+  if (!canApply(op))
+    return failure();
+  // ... transform ...
+  return success();
+}
 
-// ✅ Check and propagate errors
-auto moduleOrErr = parseModule(filename);
-if (!moduleOrErr)
-  return moduleOrErr.takeError();
+// ✅ Pass-level failure
+if (applyPatternsGreedily(m, std::move(patterns)).failed())
+  signalPassFailure();
+
+// ✅ LLVM utilities: use llvm::Error/Expected<T> when interfacing with LLVM APIs
+Expected<std::unique_ptr<Module>> parseModule(StringRef filename);
 ```
 
 ## Performance Considerations

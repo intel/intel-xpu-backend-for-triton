@@ -192,12 +192,12 @@ ptr[sub_group_local_id + i × sub_group_size]
 
 ### `triton_gen.predicated_load`
 Conditional load: if predicate is true, loads from pointer; otherwise returns default value.
-- Parameters: `ptr`, `alignment` (i64), `predicate` (i1), `default_value`
+- Parameters: `ptr`, `alignment` (i64), `predicate` (i1), `default_value`, `cache_control` (LoadCacheControl, default: DEFAULT)
 - Requires `has_predicated_io` device capability
 
 ### `triton_gen.predicated_store`
 Conditional store: if predicate is true, stores to pointer; otherwise no-op.
-- Parameters: `ptr`, `value`, `alignment` (i64), `predicate` (i1)
+- Parameters: `ptr`, `value`, `alignment` (i64), `predicate` (i1), `cache_control` (StoreCacheControl, default: DEFAULT)
 
 ## Format Conversion
 
@@ -248,6 +248,8 @@ Note: Values must match IGC implementation (coupling acknowledged in source as F
 | L1S_L3UC | 5 | L1 streaming, L3 uncached |
 | L1S_L3WB | 6 | L1 streaming, L3 write-back |
 | L1WB_L3WB | 7 | L1 write-back, L3 write-back |
+| L1WT_L3WT | 8 | L1 write-through, L3 write-through |
+| L1S_L3S | 9 | L1 streaming, L3 streaming |
 
 ### MemFence
 | Name | Value | Mnemonic |

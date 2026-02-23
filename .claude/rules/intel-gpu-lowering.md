@@ -48,10 +48,11 @@ Standard DPAS uses SPIR-V even on LTS. Only Block Scale DPAS always uses GenISA.
 
 Function: `llvm.genx.GenISA.sub.group.bdpas.<type_mangling>`
 
-Arguments: `(c, a, b, scaleA, scaleB, pa, pb, sd, rc, signless, precision_overrides...)`
+Arguments (7): `(c, a, b, scaleA, scaleB, precA, precB)`
 
+- `precA`, `precB`: i32 precision enum values (e.g., `static_cast<int>(op.getPa())`)
 - Default scale value when operand is absent: **0x7f** (represents 1.0 in E8M0 format)
-- The scale value is broadcast to all lanes
+- Function type mangling includes: `{cTy, cTy, aTy, bTy, scaleTy, scaleTy}`
 
 ## 2D Block I/O Lowering
 
@@ -61,13 +62,15 @@ Arguments: `(c, a, b, scaleA, scaleB, pa, pb, sd, rc, signless, precision_overri
 
 **GenISA path**: `llvm.genx.GenISA.LSC2DBlockRead.<type_mangling>`
 
-GenISA argument order:
+GenISA argument order (13 args):
 ```
-(ptr: i64, baseWidth: i32, baseHeight: i32, basePitch: i32,
- x: i32, y: i32, subBlockWidth: i32, subBlockHeight: i32,
- subBlockCount: i32, transform: i1, vnniTransform: i1,
- cache: i32)
+(ptr: i64, baseWidth-1: i32, baseHeight-1: i32, basePitch-1: i32,
+ x: i32, y: i32, elemSizeInBits: i32, tileWidth: i32,
+ tileHeight: i32, vBlocks: i32, transpose: i1, vnniTransform: i1,
+ cacheControl: i32)
 ```
+
+Note: `baseWidth`, `baseHeight`, and `basePitch` are passed as **value - 1** (0-based) to the IGC intrinsic.
 
 ### Store
 

@@ -390,12 +390,16 @@ intel::mangle(fnName, argTypes);       // SPIR-V name mangling
 | Attribute Name (getter) | Module Attr String | Checked By |
 |------------------------|-------------------|------------|
 | `getSupport2DBlockIOAttrName()` | `ttig.support_2d_block_io` | MaterializeBlockPointer, Pipeline |
-| `getSupportSubgroupMatrixMultiplyAccumulateAttrName()` | `ttig.support_subgroup_matrix_multiply_accumulate` | AccelerateMatmul (indirectly via DPASAnalysis) |
+| `getSupportDPASAttrName()` | `ttig.support_subgroup_matrix_multiply_accumulate` | AccelerateMatmul (indirectly via DPASAnalysis) |
 | `getSupportDPASWithBF8AttrName()` | `ttig.support_subgroup_matrix_multiply_accumulate_bf8` | DPASAnalysisFactory (selects Xe2 vs Xe3P) |
+| `getSupportBlockScaleDPASAttrName()` | `ttig.support_subgroup_scaled_matrix_multiply_accumulate` | Block Scale DPAS lowering |
 | `getSupportPredicatedIOAttrName()` | `ttig.support_predicated_io` | LoadStoreOpToLLVM |
 | `getSupportPrefetch256BAttrName()` | `ttig.support_prefetch_256b` | 2D block prefetch verifier |
 | `getIsLTSAttrName()` | `ttig.is_lts` | isSPVBuiltinAvailable() (lowering path selection) |
-| `getSupportBfloat16ArithmeticAttrName()` | `ttig.support_bfloat16_arithmetic` | ArithEmulation |
+| `getSupportBFloat16ArithmeticAttrName()` | `ttig.support_bfloat16_arithmetic` | ArithEmulation |
+| `getSupportBFloat16ConversionAttrName()` | `ttig.support_bfloat16_conversion` | BF16 conversion lowering |
+| `getSupportF8ConversionAttrName()` | `ttig.support_f8_conversion` | FP8 conversion lowering |
+| `getSupportF4ConversionAttrName()` | `ttig.support_f4_conversion` | FP4 conversion lowering |
 | `getSupport16BitAtomicsAttrName()` | `ttig.support_16bit_atomics` | AtomicOpLowering |
 
 ## 8. Complete Pass Inventory

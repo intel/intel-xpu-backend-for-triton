@@ -13,7 +13,7 @@ This is an out-of-tree Intel GPU backend for the [Triton](https://github.com/tri
 scripts/compile-triton.sh
 
 # Build LLVM from source + Triton
-scripts/compile-triton.sh --llvm 
+scripts/compile-triton.sh --llvm
 
 # Build with ccache
 scripts/compile-triton.sh --ccache

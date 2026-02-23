@@ -67,14 +67,14 @@ In the Intel backend: **subgroup = warp**.
 ### Supported Subgroup Sizes (typical)
 | Architecture | Subgroup Sizes |
 |-------------|---------------|
-| Xe-HPG (ATSM/Arc A) | 8, 16, 32 |
+| Xe-HPG (DG2/Arc A) | 8, 16, 32 |
 | Xe-HPC (PVC) | 16, 32 |
 | Xe2 (BMG) | 16, 32 |
 
 ### DPAS Execution Size
 The DPAS N dimension equals `min(sub_group_sizes)`:
 - **PVC, BMG**: execution_size = 16
-- **ATSM**: execution_size = 8
+- **DG2**: execution_size = 8
 
 ## Target Architectures
 
@@ -83,9 +83,14 @@ Architecture detection via `parse_device_arch()` in `arch_parser.c`, mapping SYC
 | Target | Arch String | DPAS | 2D Block IO | Notes |
 |--------|-------------|------|-------------|-------|
 | PVC | `pvc` | Yes (exec=16) | Yes | Xe-HPC, Data Center GPU Max |
-| ATSM | `atsm` | Yes (exec=8) | Yes | Xe-HPG, Arc A-series |
+| DG2 | `dg2` | Yes (exec=8) | Yes | Xe-HPG, Arc A-series |
 | BMG | `bmg` | Yes (exec=16) | Yes | Xe2, Arc B-series (Battlemage) |
-| LNL | `lnl` | Yes (exec=16) | Yes | Xe3P, Lunar Lake |
+| LNL | `lnl` | Yes (exec=16) | Yes | Xe2, Lunar Lake |
+| MTL | `mtl` | TBD | TBD | Meteor Lake (integrated) |
+| ARL-H | `arl_h` | TBD | TBD | Arrow Lake H |
+| ARL-S | `arl_s` | TBD | TBD | Arrow Lake S |
+| PTL-H | `ptl_h` | Yes (exec=16) | Yes | Xe3, Panther Lake H |
+| PTL-U | `ptl_u` | Yes (exec=16) | Yes | Xe3, Panther Lake U |
 
 ## Device Capabilities
 
@@ -119,7 +124,7 @@ Encoding attribute for DPAS layout in the TritonIntelGPU dialect.
 | `repeatCount` | M dimension of DPAS tile | 1, 2, 4, **8** (typical) |
 | `systolicDepth` | Depth of systolic array | Always **8** |
 | `executionSize` | N dimension (SIMD width) | **16** (PVC/BMG) or **8** (ATSM) |
-| `opsPerChannel` | K packing factor | 1 (TF32), 2 (FP16/BF16), 4 (INT8/FP8), 8 (sub-8-bit) |
+| `opsPerChannel` | K packing factor | 1 (TF32), 2 (FP16/BF16), 4 (INT8/FP8/FP4) |
 | `warpsPerCTA` | Warp distribution in CTA | Array, e.g., [4, 1] |
 | `repCluster` | Repetition cluster size | Array, optimization for memory access |
 | `threadsPerWarp` | Subgroup size for DPAS | Currently only **16** |
@@ -147,7 +152,7 @@ Data is distributed row-major across threads in the subgroup:
 
 ## DPAS Engine Types
 
-### Xe2 (`DPASEngineTypeXe2`) — 20 type combinations
+### Xe2 (`DPASEngineTypeXe2`) — 19 type combinations
 **Standard dot types** (D_C_A_B format):
 - FP32_FP32_FP16_FP16 (default), FP32_FP32_BF16_BF16, FP32_FP32_TF32_TF32
 - FP16_FP16_FP16_FP16, BF16_BF16_BF16_BF16
@@ -185,7 +190,7 @@ Encoding for 2D block I/O layouts:
 ### ReduceVariableLiveness Pass
 Activated when `opt.reduce_variable_liveness = true`. Thresholds from source:
 - Total block size threshold: **32768 bytes**
-- Large tensor threshold: **128 × 128** elements
+- Large tensor threshold: **128 × 128 × 2 = 32768 bytes** (per-dimension shape ≥ 128)
 
 ### Design Rationale
 Intel GPUs load dot operands directly into registers from memory (no intermediate SLM staging for A/B matrices). The hardware I/O buffer and cache handle redundant accesses. This differs from NVIDIA GPUs which typically stage through shared memory.
@@ -199,23 +204,26 @@ Intel GPUs load dot operands directly into registers from memory (no intermediat
 
 ### Stage 1: TTIR (Triton IR)
 ```
-inliner → convert_block_pointer_to_tdesc → cse → triton_licm →
-remove_boundary_checks → remove_masks → stride_versioning → fuse_reshape →
-canonicalizer → combine → simplify_signed_arithmetic → reorder_broadcast →
-cse → symbol_dce → loop_unroll → convert_tdesc_to_block_pointer →
-rewrite_tensor_descriptor_to_pointer
+inliner → convert_block_pointer_to_tdesc → rewrite_tensor_descriptor_to_pointer →
+cse → triton_licm → remove_boundary_checks → remove_masks →
+stride_versioning → fuse_reshape → canonicalizer → combine →
+simplify_signed_arithmetic → reorder_broadcast → cse → symbol_dce →
+loop_unroll
 ```
 
 ### Stage 2: TTGIR (GPU IR)
 ```
-convert_to_ttgpuir → annotate_module →
+--- separate pass manager ---
+annotate_module
+--- main pass manager ---
+convert_tdesc_to_block_pointer → convert_to_ttgpuir →
 coalesce → remove_layout_conversions →
 accelerate_matmul → materialize_block_pointer → remove_layout_conversions →
-optimize_dot_operands → pipeline(num_stages, use_barrier) →
+optimize_dot_operands(intel) → pipeline(num_stages, use_barrier) →
 [reduce_variable_liveness] → fuse_nested_loops →
-canonicalizer → triton_licm → canonicalizer →
+canonicializer → triton_licm → canonicalizer →
 combine_tensor_select_and_if → optimize_thread_locality →
-optimize_dot_operands → cse → prefetch → optimize_dot_operands →
+optimize_dot_operands(upstream) → cse → prefetch → optimize_dot_operands(upstream) →
 remove_layout_conversions → reduce_data_duplication →
 reorder_instructions → cse → symbol_dce → sccp → canonicalizer →
 [optimize_reduction_locality] → arith_emulate_unsupported_floats(bf16→f32)
@@ -223,7 +231,7 @@ reorder_instructions → cse → symbol_dce → sccp → canonicalizer →
 
 ### Stage 3: LLIR (LLVM IR)
 ```
-scf_to_cf → inliner → index_to_llvmir → allocate_shared_memory →
+scf_to_cf → gluon_inliner → index_to_llvmir → allocate_shared_memory →
 allocate_global_scratch_memory → [instrumentation] →
 to_llvmir → gen_to_llvm → canonicalizer → rewrite_stack_ptr →
 cse → arith_to_llvmir → canonicalizer → cse → symbol_dce → [di_scope]
@@ -285,7 +293,7 @@ Fence scopes (`LscScope`):
 | DPAS systolic depth | 8 |
 | DPAS max repeat count | 8 |
 | DPAS exec size (PVC/BMG) | 16 |
-| DPAS exec size (ATSM) | 8 |
+| DPAS exec size (DG2) | 8 |
 | 2D Block load max tile_height | 32 |
 | 2D Block store max tile_height | 8 |
 | 2D Block max bytes per row | 64 (load/store) |
