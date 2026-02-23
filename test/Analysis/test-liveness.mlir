@@ -5,13 +5,13 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     // CHECK-LABEL: test
     // CHECK: scf.for
     // CHECK-NEXT: LiveIntervals for block: ^bb0
-    // CHECK-NEXT:  [[[LOAD_A:%.*]], [[ADVANCE2:%.*]]] for value: %c0_i32
-    // CHECK-NEXT:  [[[LOAD_A]], [[DOT2:%.*]]] for value: %cst
-    // CHECK-NEXT:  [[[LOAD_A]], [[EXTRACT:%.*]]] for value: %16
-    // CHECK-NEXT:  [[[LOAD_A]], %29] for value: %c64_i32
-    // CHECK-NEXT:  [[[LOAD_A]], [[DOT1:%.*]]] for value: %23
+    // CHECK-NEXT:  [[[LOAD_A:%.*]], [[DOT2:%.*]]] for value: %cst
+    // CHECK-NEXT:  [[[LOAD_A]], [[ADVANCE2:%.*]]] for value: %c64_i32
+    // CHECK-NEXT:  [[[LOAD_A]], [[DOT2]]] for value: %16
+    // CHECK-NEXT:  [[[LOAD_A]], [[ADVANCE2]]] for value: %c0_i32
+
+    // CHECK-NEXT:  [[[LOAD_A]], [[DOT1:%.*]]] for value: [[LOAD_A]]
     // CHECK-NEXT:  [[[LOAD_B:%.*]], [[DOT2]]] for value: [[LOAD_B]]
-    // CHECK-NEXT:  [[[EXTRACT]], [[DOT2]]] for value: [[EXTRACT]]
     // CHECK-NEXT:  [[[DOT1]], scf.yield] for value: [[DOT1]]
     // CHECK-NEXT:  [[[DOT2]], scf.yield] for value: [[DOT2]]
     // CHECK-NEXT:  [[[ADVANCE1:%.*]], scf.yield] for value: [[ADVANCE1]]
@@ -52,10 +52,9 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     %11 = arith.muli %2, %c128_i32 : i32
     %12 = arith.muli %1, %c16_i32 : i32
     %13 = arith.addi %12, %11 : i32
-    %14 = tt.make_tensor_ptr %10, [%c1024_i64, %c64_i64], [%c64_i64, %c1_i64], [%13, %c0_i32] {order = array<i32: 1, 0>} : <tensor<16x32xf16>>
+    %14 = tt.make_tensor_ptr %10, [%c1024_i64, %c64_i64], [%c64_i64, %c1_i64], [%13, %c0_i32] {order = array<i32: 1, 0>} : <tensor<8x16xf16>>
     %15 = tt.make_tensor_ptr %10, [%c1024_i64, %c64_i64], [%c64_i64, %c1_i64], [%13, %c32_i32] {order = array<i32: 1, 0>} : <tensor<16x32xf16>>
-    %58 = tt.load %14 {DotIdx = 0 : i32} : !tt.ptr<tensor<16x32xf16>>
-    %59 = tt.load %15 {DotIdx = 0 : i32} : !tt.ptr<tensor<16x32xf16>>
+    %58 = tt.load %14 {DotIdx = 0 : i32} : !tt.ptr<tensor<8x16xf16>>
     %28 = tt.addptr %arg1, %9 : !tt.ptr<f16>, i64
     %31 = tt.make_tensor_ptr %28, [%c64_i64, %c1024_i64], [%c1_i64, %c64_i64], [%c0_i32, %c0_i32] {order = array<i32: 0, 1>} : <tensor<16x16xf16>>
     %35 = tt.make_tensor_ptr %28, [%c64_i64, %c1024_i64], [%c1_i64, %c64_i64], [%c0_i32, %c16_i32] {order = array<i32: 0, 1>} : <tensor<16x16xf16>>
@@ -63,18 +62,16 @@ module attributes {"ttg.num-warps" = 8 : i32} {
            -> (tensor<8x16xf32>, tensor<8x16xf32>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>) : i32 {
       // CHECK:      [[LOAD_A]] = tt.load %arg6 {DotIdx = 1 : i32} : !tt.ptr<tensor<16x16xf16>>
       // CHECK-NEXT: [[LOAD_B]] = tt.load %arg7 {DotIdx = 1 : i32} : !tt.ptr<tensor<16x16xf16>>
-      // CHECK-NEXT: [[EXTRACT]] = ttig.extract %16[0] : tensor<16x32xf16> -> tensor<8x16xf16>
-      // CHECK-NEXT: [[DOT1]] = tt.dot [[EXTRACT]], [[LOAD_A]], %cst, inputPrecision = tf32 : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
-      // CHECK-NEXT: [[DOT2]] = tt.dot [[EXTRACT]], [[LOAD_B]], %cst, inputPrecision = tf32 : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
+      // CHECK-NEXT: [[DOT1]] = tt.dot {{.*}}, [[LOAD_A]], %cst, inputPrecision = tf32 : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
+      // CHECK-NEXT: [[DOT2]] = tt.dot {{.*}}, [[LOAD_B]], %cst, inputPrecision = tf32 : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
       // CHECK-NEXT: [[ADVANCE1]] = tt.advance %arg6, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>
       // CHECK-NEXT: [[ADVANCE2]] = tt.advance %arg7, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>
       // CHECK-NEXT: scf.yield [[DOT1]], [[DOT2]], [[ADVANCE1]], [[ADVANCE2]] : tensor<8x16xf32>, tensor<8x16xf32>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>
 
       %75 = tt.load %arg21 {DotIdx = 1 : i32} : !tt.ptr<tensor<16x16xf16>>
       %79 = tt.load %arg25 {DotIdx = 1 : i32} : !tt.ptr<tensor<16x16xf16>>
-      %91 = ttig.extract %58[0] : tensor<16x32xf16> -> tensor<8x16xf16>
-      %92 = tt.dot %91, %75, %cst_2, inputPrecision = tf32 : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
-      %107 = tt.dot %91, %79, %cst_2, inputPrecision = tf32 : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
+      %92 = tt.dot %58, %75, %cst_2, inputPrecision = tf32 : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
+      %107 = tt.dot %58, %79, %cst_2, inputPrecision = tf32 : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
       %321 = tt.advance %arg21, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>
       %325 = tt.advance %arg25, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>
       scf.yield %92, %107, %321, %325 : tensor<8x16xf32>, tensor<8x16xf32>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>

@@ -41,6 +41,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     tcgen05_commit,
     tcgen05_copy,
     float2,
+    clc,
 )
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 
@@ -111,6 +112,104 @@ def test_tma():
     desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(out, [16, 16], layout)
     tma_kernel[(1, )](desc)
     torch.testing.assert_close(out, torch.zeros_like(out))
+
+
+@gluon.jit
+def tma_im2col_kernel(in_desc, out_desc):
+    smem = ttgl.allocate_shared_memory(in_desc.dtype, in_desc.block_shape, in_desc.layout)
+    bar = mbarrier.allocate_mbarrier()
+    mbarrier.init(bar, count=1)
+    mbarrier.expect(bar, in_desc.block_type.nbytes)
+    tma.async_copy_global_to_shared_im2col(in_desc, [0, 0, 0, 0], [0, 0], bar, smem)
+    mbarrier.wait(bar, phase=0)
+    mbarrier.invalidate(bar)
+    tma.async_copy_shared_to_global(out_desc, [0, 0], smem)
+    tma.store_wait(pendings=0)
+
+
+@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires Hopper", run=False)
+@pytest.mark.parametrize("pixels_per_column", [32, 256, 512, 1024])
+@pytest.mark.parametrize("channels_per_pixel", [32])
+@pytest.mark.parametrize("swizzle_byte_width", [32])
+def test_tma_im2col(pixels_per_column, channels_per_pixel, swizzle_byte_width):
+    smem_bytes = pixels_per_column * channels_per_pixel * 4 + 8192  # block + mbarrier overhead
+    if smem_bytes > 200000:
+        pytest.skip(f"Skipping: shared memory {smem_bytes} exceeds limit")
+
+    inp = torch.arange(pixels_per_column * channels_per_pixel, device="cuda", dtype=torch.float32)
+    inp = inp.reshape(1, 1, pixels_per_column, channels_per_pixel)
+    out = torch.zeros(pixels_per_column, channels_per_pixel, device="cuda", dtype=torch.float32)
+
+    block_shape = [pixels_per_column, channels_per_pixel]
+    layout = ttgl.NVMMASharedLayout(
+        swizzle_byte_width=swizzle_byte_width,
+        element_bitwidth=32,
+        rank=2,
+        transposed=False,
+        fp4_padded=False,
+    )
+
+    in_desc = gluon.nvidia.hopper.TensorDescriptorIm2Col(
+        base=inp,
+        shape=list(inp.shape),
+        strides=list(inp.stride()),
+        block_shape=block_shape,
+        layout=layout,
+        padding="zero",
+        element_strides=[1, 1, 1, 1],
+        pixel_box_lower_corner=[0, 0],
+        pixel_box_upper_corner=[0, 0],
+    )
+    out_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(out, block_shape, layout)
+    tma_im2col_kernel[(1, )](in_desc, out_desc, num_warps=1)
+    torch.testing.assert_close(out, inp.reshape(pixels_per_column, channels_per_pixel), atol=0, rtol=0)
+
+
+@gluon.jit
+def tma_round_f32_to_tf32_kernel(in_desc, out_desc):
+    smem = ttgl.allocate_shared_memory(in_desc.dtype, in_desc.block_shape, in_desc.layout)
+    bar = mbarrier.allocate_mbarrier()
+    mbarrier.init(bar, count=1)
+    mbarrier.expect(bar, in_desc.nbytes_per_cta)
+    tma.async_copy_global_to_shared(in_desc, [0, 0], bar, smem)
+    mbarrier.wait(bar, phase=0, deps=[smem])
+    mbarrier.invalidate(bar)
+    tma.async_copy_shared_to_global(out_desc, [0, 0], smem)
+    tma.store_wait(0)
+    smem._keep_alive()
+
+
+@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires Hopper", run=False)
+def test_gluon_tma_round_f32_to_tf32():
+
+    def round_to_tf32(x: torch.Tensor) -> torch.Tensor:
+        bits = x.view(torch.int32)
+        bits_i64 = bits.to(torch.int64) & 0xFFFFFFFF
+        exp_mask = 0x7F800000
+        is_special = (bits_i64 & exp_mask) == exp_mask
+        round_bias = ((bits_i64 >> 13) & 1) + 0x00000FFF
+        rounded = (bits_i64 + round_bias) & 0xFFFFE000
+        out_bits = torch.where(is_special, bits_i64, rounded)
+        return (out_bits & 0xFFFFFFFF).to(torch.int32).view(torch.float32)
+
+    torch.manual_seed(17)
+    inp = torch.randn((16, 16), device="cuda", dtype=torch.float32)
+    out = torch.empty_like(inp)
+
+    layout = ttgl.NVMMASharedLayout(
+        swizzle_byte_width=32,
+        element_bitwidth=32,
+        rank=2,
+        transposed=False,
+        fp4_padded=False,
+    )
+    in_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(inp, [16, 16], layout, round_f32_to_tf32=True)
+    out_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(out, [16, 16], layout)
+
+    tma_round_f32_to_tf32_kernel[(1, )](in_desc, out_desc)
+
+    expected = round_to_tf32(inp)
+    torch.testing.assert_close(out, expected, rtol=0, atol=0)
 
 
 @gluon.jit
@@ -211,7 +310,7 @@ def tcgen05_mma_multicast_commit_kernel(a_desc, b_desc, out_ptrs, BLOCK_M: ttgl.
     ttgl.store(out_ptrs, out)
 
 
-@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
 @pytest.mark.parametrize("ctas_per_cga", [[2, 1], [2, 4], [4, 4]])
 @pytest.mark.parametrize("two_ctas", [True, False] if is_blackwell() else [False])
 def test_tcgen05_mma_multicast_commit(ctas_per_cga, two_ctas):
@@ -2085,24 +2184,32 @@ def in_thread_transpose_roundtrip_kernel(input, output, M: ttgl.constexpr, N: tt
     ttgl.store(output + offs_m * N + offs_n, out_data)
 
 
-@pytest.mark.skipif(not (is_hip_cdna() or is_hip_rdna()),
-                    reason="Correctness tests for special cases on AMD architectures")
-@pytest.mark.parametrize("reg_bases", [
-    [[1, 0], [2, 0], [4, 0], [0, 1], [0, 2], [0, 4]],
-    [[0, 1], [0, 4], [0, 2], [1, 0], [2, 0], [4, 0]],
-    [[0, 2], [0, 1], [0, 4], [1, 0], [4, 0], [2, 0]],
+@pytest.mark.xfail(not (is_hip_cdna() or is_hip_rdna()),
+                   reason="Correctness tests for special cases on AMD architectures", run=False)
+@pytest.mark.parametrize("src_reg_bases, dst_reg_bases", [
+    ([[0, 1], [0, 2], [0, 4], [1, 0], [2, 0], [4, 0]], [[1, 0], [2, 0], [4, 0], [0, 1], [0, 2], [0, 4]]),
+    ([[0, 1], [0, 2], [0, 4], [1, 0], [2, 0], [4, 0]], [[0, 1], [0, 4], [0, 2], [1, 0], [2, 0], [4, 0]]),
+    ([[0, 1], [0, 2], [0, 4], [1, 0], [2, 0], [4, 0]], [[0, 2], [0, 1], [0, 4], [1, 0], [4, 0], [2, 0]]),
+    ([[0, 0], [0, 1], [0, 2], [0, 4], [1, 0], [2, 0], [4, 0]], [[0, 2], [0, 1], [0, 4], [1, 0], [4, 0], [2, 0]]),
+    ([[0, 1], [0, 2], [0, 4], [1, 0], [2, 0], [4, 0]], [[0, 2], [0, 0], [0, 1], [0, 4], [1, 0], [4, 0], [2, 0]]),
+    ([[0, 1], [0, 0], [0, 2], [0, 4], [1, 0], [2, 0], [4, 0]], [[0, 0], [0, 2], [0, 1], [0, 4], [1, 0], [4, 0], [2, 0]
+                                                                ]),
+    ([[0, 1], [0, 2], [0, 4], [0, 0], [1, 0], [2, 0], [4, 0]], [[0, 2], [0, 1], [0, 0], [0, 4], [1, 0], [4, 0], [2, 0]
+                                                                ]),
 ])
-def test_in_thread_convert_layout_8bit(reg_bases):
+def test_in_thread_convert_layout_8bit(src_reg_bases, dst_reg_bases):
     torch.manual_seed(0)
     dtype = torch.int8
-    first_layout = ttgl.BlockedLayout([8, 8], [1, THREADS_PER_WARP], warps_per_cta=[1, 1], order=[1, 0])
-    M = first_layout.size_per_thread[0] * first_layout.threads_per_warp[0] * first_layout.warps_per_cta[0]
-    N = first_layout.size_per_thread[1] * first_layout.threads_per_warp[1] * first_layout.warps_per_cta[1]
+    M = 8
+    N = 8 * THREADS_PER_WARP
 
     numLaneBases = int(math.log2(THREADS_PER_WARP))
     lane_bases = [[0, 8 * (2**baseNo)] for baseNo in range(numLaneBases)]
     warp_bases = []
-    second_layout = ttgl.DistributedLinearLayout(reg_bases=reg_bases, lane_bases=lane_bases, warp_bases=warp_bases,
+    first_layout = ttgl.DistributedLinearLayout(reg_bases=src_reg_bases, lane_bases=lane_bases, warp_bases=warp_bases,
+                                                block_bases=[], shape=[M, N])
+
+    second_layout = ttgl.DistributedLinearLayout(reg_bases=dst_reg_bases, lane_bases=lane_bases, warp_bases=warp_bases,
                                                  block_bases=[], shape=[M, N])
 
     shared_layout = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0, 1])
@@ -3366,3 +3473,50 @@ def test_tmem_reduction(red_op, use_abs, propagate_nan, M, N, num_warps):
     # Verify reduction output
     # Use equal_nan=True when testing NaN propagation
     torch.testing.assert_close(expected_red, red_output, atol=1e-5, rtol=1e-5, equal_nan=use_nan)
+
+
+@pytest.mark.parametrize("num_ctas", [1, 2])
+@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+def test_clc_basic(num_ctas):
+
+    @gluon.jit
+    def clc_kernel(WasLaunched, IsCancelled, ProgramId, smem_size: ttgl.constexpr):
+        # Large shared memory allocation to force 1 block per SM
+        cga_layout: ttgl.constexpr = [[0]] if ttgl.num_ctas() == 2 else []
+        layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0], cga_layout=cga_layout)
+        dummy = ttgl.allocate_shared_memory(ttgl.int64, [smem_size // 8 - 32], layout)
+
+        clc_result = ttgl.allocate_shared_memory(ttgl.int64, [2], layout)
+        clc_mbar = mbarrier.allocate_mbarrier()
+        mbarrier.init(clc_mbar, count=1)
+
+        clc.try_cancel(clc_result, clc_mbar, multicast=True)
+        mbarrier.expect(clc_mbar, 16)
+        mbarrier.wait(clc_mbar, 0)
+
+        response = clc.load_result(clc_result)
+        pid = ttgl.program_id(0)
+        ttgl.store(WasLaunched + pid, True)
+        ttgl.store(IsCancelled + pid, response.is_canceled())
+        ttgl.store(ProgramId + pid, response.program_id(0))
+        dummy._keep_alive()
+
+    dev_props = torch.cuda.get_device_properties("cuda")
+    num_sms = dev_props.multi_processor_count
+    smem_size = dev_props.shared_memory_per_block_optin // num_ctas
+    grid = 2 * (num_sms // num_ctas)
+
+    was_launched = torch.zeros([grid], dtype=torch.bool, device="cuda")
+    is_cancelled = torch.zeros([grid], dtype=torch.bool, device="cuda")
+    program_ids = torch.zeros([grid], dtype=torch.int32, device="cuda")
+    clc_kernel[(grid, )](was_launched, is_cancelled, program_ids, smem_size, num_ctas=num_ctas)
+
+    num_launched = torch.sum(was_launched).item()
+    assert num_launched < grid
+
+    num_cancelled = torch.sum(is_cancelled).item()
+    assert num_launched + num_cancelled == grid
+
+    for pid in range(grid):
+        if is_cancelled[pid]:
+            assert not was_launched[program_ids[pid]]

@@ -61,12 +61,16 @@ void init_triton_intel_passes_ttir(py::module &&m) {
                      intel::createTritonIntelBlockPointerToTensorDesc);
   ADD_PASS_WRAPPER_0("add_convert_tdesc_to_block_pointer",
                      intel::createTritonIntelTensorDescToBlockPointer);
+  ADD_PASS_WRAPPER_0("add_rewrite_tensor_descriptor_to_pointer",
+                     intel::createTritonRewriteTensorDescriptorToPointer);
   ADD_PASS_WRAPPER_0("add_remove_boundary_checks",
                      intel::createTritonIntelRemoveBoundaryChecks);
   ADD_PASS_WRAPPER_0("add_remove_masks", intel::createTritonIntelRemoveMasks);
   ADD_PASS_WRAPPER_0("add_stride_versioning",
                      intel::createTritonIntelStrideVersioning);
   ADD_PASS_WRAPPER_0("add_fuse_reshape", intel::createTritonIntelFuseReshape);
+  ADD_PASS_WRAPPER_0("add_simplify_signed_arithmetic",
+                     intel::createTritonIntelSimplifySignedArithmetic);
 }
 
 void init_triton_intel_passes_ttgpuir(py::module &&m) {

@@ -1414,7 +1414,9 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
     # atom.add.bf16 is unsupported prior to Hopper so instead we generate an
     # atom.cas add loop on Ampere and prior
     if dst_type == 'bfloat16' and torch.cuda.get_device_capability()[0] < 9:
-        assert f"atom.{sem_str}.gpu.global.cas" in h.asm["ptx"]
+        assert "atom.relaxed.gpu.global.cas" in h.asm["ptx"]
+        if sem_str != "relaxed":
+            assert "fence.acq_rel.gpu" in h.asm["ptx"]
         return
 
     assert f"atom.global.gpu.{sem_str}" in h.asm["ptx"]
@@ -2826,8 +2828,10 @@ def test_histogram(M, N, device):
     # https://github.com/pytorch/pytorch/issues/74236
     # This is a workload by converting the input to float
     z_torch = torch.histc(x.float(), bins=N, min=0, max=N - 1)
-    histogram_kernel[(1, )](x, z, M=M, N=N)
+    h = histogram_kernel[(1, )](x, z, M=M, N=N)
     assert (z_torch == z).all()
+    if is_cuda() and not is_interpreter():
+        assert "ATOMS.POPC.INC" in h.asm["sass"]
 
 
 @pytest.mark.interpreter
@@ -6352,8 +6356,6 @@ def sanitize_add(a, b):
 
 
 def test_side_effectful_reduction(device):
-    if device != "cuda":
-        pytest.xfail()
 
     @triton.jit(debug=True)
     def sanitize_sum_kernel(Z, X, BLOCK: tl.constexpr):
@@ -6363,18 +6365,16 @@ def test_side_effectful_reduction(device):
 
     BLOCK = 512
     torch.manual_seed(42)
-    X = torch.randint(0, 10, [BLOCK], device="cuda", dtype=torch.int32)
+    X = torch.randint(0, 10, [BLOCK], device=device, dtype=torch.int32)
     X[:300] = 32
     X[300:] = 0
-    Z = torch.zeros((), device="cuda", dtype=torch.int32)
+    Z = torch.zeros((), device=device, dtype=torch.int32)
     sanitize_sum_kernel[(1, )](Z, X, BLOCK=BLOCK)
     torch.testing.assert_close(Z, X.sum().to(torch.int32))
 
 
 @pytest.mark.parametrize("reduce_dim", [0, 1])
 def test_side_effectful_reduction_2d(device, reduce_dim):
-    if device != "cuda":
-        pytest.xfail()
 
     @triton.jit(debug=True)
     def sanitize_sum_2d_kernel(Z, X, BLOCK_0: tl.constexpr, BLOCK_1: tl.constexpr, reduce_dim: tl.constexpr,
@@ -6388,8 +6388,8 @@ def test_side_effectful_reduction_2d(device, reduce_dim):
     BLOCK_1 = 32
     NON_REDUCE_DIM = BLOCK_1 if reduce_dim == 0 else BLOCK_0
     torch.manual_seed(42)
-    X = torch.randint(0, 10, [BLOCK_0, BLOCK_1], device="cuda", dtype=torch.int32)
-    Z = torch.zeros([NON_REDUCE_DIM], device="cuda", dtype=torch.int32)
+    X = torch.randint(0, 10, [BLOCK_0, BLOCK_1], device=device, dtype=torch.int32)
+    Z = torch.zeros([NON_REDUCE_DIM], device=device, dtype=torch.int32)
     sanitize_sum_2d_kernel[(1, )](Z, X, BLOCK_0=BLOCK_0, BLOCK_1=BLOCK_1, reduce_dim=reduce_dim,
                                   NON_REDUCE_DIM=NON_REDUCE_DIM)
     torch.testing.assert_close(Z, X.sum(reduce_dim).to(torch.int32))

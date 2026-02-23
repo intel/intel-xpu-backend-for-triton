@@ -15,14 +15,42 @@ on:
         description: JSON list of benchmarks to run. Leave empty to run all benchmarks.
         type: string
         default: ""
+      vllm_pin:
+        description: vLLM pin (commit hash), keep empty for default
+        type: string
+        default: ""
+      sglang_pin:
+        description: SGLang pin (commit hash), keep empty for default
+        type: string
+        default: ""
+  # This workflow is also called from workflows third-party-benchmarks-*.yml.
+  workflow_call:
+    inputs:
+      runner_label:
+        description: Runner label
+        type: string
+      benchmarks:
+        description: JSON list of benchmarks to run. Leave empty to run all benchmarks.
+        type: string
+        default: ""
+      vllm_pin:
+        description: vLLM pin (commit hash), keep empty for default
+        type: string
+        default: ""
+      sglang_pin:
+        description: SGLang pin (commit hash), keep empty for default
+        type: string
+        default: ""
+
   schedule:
     # About midnight PST (UTC-8)
     - cron: "5 10 * * *"
 
 permissions: read-all
 
+# VLLM installation from upstream uses vllm-xpu-kernels wheel which is built just for python==3.12
 env:
-  PYTHON_VERSION: "3.10"
+  PYTHON_VERSION: "3.12"
   TAG: ${{ inputs.tag || (github.event_name == 'pull_request' && format('pr-{0}', github.event.number)) || (github.event_name == 'schedule' && 'ci') || 'test' }}
   HF_TOKEN: ${{ secrets.HF_TOKEN || '' }}
 
@@ -45,6 +73,18 @@ jobs:
 
       - name: Checkout repository
         uses: actions/checkout@v6
+
+      - name: Override vLLM pin
+        if: ${{ inputs.vllm_pin }}
+        run: |
+          echo "${{ inputs.vllm_pin }}" > benchmarks/third_party/vllm/vllm-pin.txt
+          echo "Overriding vLLM pin to: ${{ inputs.vllm_pin }}"
+
+      - name: Override SGLang pin
+        if: ${{ inputs.sglang_pin }}
+        run: |
+          echo "${{ inputs.sglang_pin }}" > benchmarks/third_party/sglang/sglang-pin.txt
+          echo "Overriding SGLang pin to: ${{ inputs.sglang_pin }}"
 
       - name: Install Python (from pyenv) ${{ inputs.python_version }}
         uses: ./.github/actions/setup-pyenv-python
@@ -80,7 +120,8 @@ jobs:
         id: install-benchmarks
         run: |
           cd benchmarks
-          pip install .
+          # --no-build-isolation is necessary after moving to python=3.12
+          pip install --no-build-isolation .
 
       - name: Run sglang benchmark int8
         if: ${{ steps.install-benchmarks.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'sglang')) }}

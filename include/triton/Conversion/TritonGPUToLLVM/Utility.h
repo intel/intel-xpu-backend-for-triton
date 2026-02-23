@@ -15,6 +15,8 @@
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/STLExtras.h"
 
+#include <optional>
+
 #define DEBUG_TYPE "ttgpu_to_llvm"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
@@ -267,6 +269,32 @@ struct TritonLLVMOpBuilder {
   Value i32_val(int64_t val) { return int_val(32, val); }
   Value i64_val(int64_t val) { return int_val(64, val); }
 
+  Value const_val(Type ty, Attribute attr) {
+    return LLVM::ConstantOp::create(*builder, loc, ty, attr);
+  }
+
+  Value vec_splat_i1_cons(unsigned numElements, int32_t val) {
+    auto type = builder->getIntegerType(1);
+    SmallVector<int32_t> consElems(numElements, val);
+    SmallVector<Attribute> attrElems;
+    for (auto c : consElems)
+      attrElems.push_back(builder->getIntegerAttr(type, c));
+    auto attr =
+        DenseElementsAttr::get(VectorType::get(numElements, type), attrElems);
+    return const_val(VectorType::get(numElements, type), attr);
+  }
+
+  Value vec_splat_i32_cons(unsigned numElements, int32_t val) {
+    auto type = builder->getIntegerType(32);
+    SmallVector<int32_t> consElems(numElements, val);
+    SmallVector<Attribute> attrElems;
+    for (auto c : consElems)
+      attrElems.push_back(builder->getIntegerAttr(type, c));
+    auto attr =
+        DenseElementsAttr::get(VectorType::get(numElements, type), attrElems);
+    return const_val(VectorType::get(numElements, type), attr);
+  }
+
   Location loc;
   OpBuilder *builder;
 };
@@ -331,7 +359,7 @@ namespace triton {
 namespace gpu {
 
 std::pair<SmallVector<LocalMemOpTile>, SmallVector<LocalMemOpTile>>
-getSrcDstTiles(const TargetInfoBase &targetInfo, int bitwidth);
+getSrcDstTiles(const TargetInfoBase &targetInfo, int bitwidth, bool crossCTA);
 
 Type getFunctionType(Type resultType, ValueRange operands);
 
@@ -352,15 +380,49 @@ bool cvtAlwaysUseWarpShuffle(triton::gpu::ConvertLayoutOp cvt);
 namespace LLVM {
 using namespace mlir::triton;
 
+/// Represents a shared memory allocation for tensor operations.
+///
+/// For non-partitioned tensors, this contains a single base pointer.
+/// For partitioned tensors (PartitionedEncodingAttr), this contains multiple
+/// base pointers, one per partition.
 class SharedMemoryObject {
 public:
+  /// Single-base constructor (for non-partitioned tensors)
   SharedMemoryObject(Value base, Type baseElemType, ArrayRef<Value> offsets);
 
+  /// Multi-base constructor (for partitioned tensors)
+  SharedMemoryObject(ArrayRef<Value> bases, Type baseElemType,
+                     ArrayRef<Value> offsets);
+
+  /// Single-base constructor
   SharedMemoryObject(Value base, Type baseElemType, int64_t rank, Location loc,
                      RewriterBase &rewriter);
 
+  /// Multi-base constructor with zero offsets
+  SharedMemoryObject(ArrayRef<Value> bases, Type baseElemType, int64_t rank,
+                     Location loc, RewriterBase &rewriter);
+
   SmallVector<Value> getOffsets() const { return offsets; }
-  Value getBase() const { return base; }
+
+  /// Returns the single base pointer.
+  /// IMPORTANT: This asserts that there is exactly one base. For partitioned
+  /// tensors (multiple bases), use getBases() instead.
+  /// Callers should use getBases() and handle all partitions appropriately.
+  Value getBase() const {
+    assert(bases.size() == 1 &&
+           "getBase() called on partitioned tensor with multiple bases. "
+           "Use getBases() and handle all partitions.");
+    return bases[0];
+  }
+
+  /// Returns all base pointers. For partitioned tensors, returns one base
+  /// per partition.
+  ArrayRef<Value> getBases() const { return bases; }
+
+  /// Returns the number of base pointers (1 for non-partitioned, N for
+  /// partitioned).
+  size_t getNumBases() const { return bases.size(); }
+
   Type getBaseElemType() const { return baseElemType; }
 
   SmallVector<Value> getElems() const;
@@ -390,11 +452,10 @@ public:
     return offsets[dim];
   }
 
-  // TODO(Keren): deprecate the method once AMD backend has cleaned up
-  Value getBaseBeforeSlice(int dim, Location loc, RewriterBase &rewriter) const;
-
 private:
-  Value base; // i32 ptr. The start address of the shared memory object.
+  SmallVector<Value>
+      bases; // Shared memory base pointers. One for non-partitioned tensors,
+             // multiple for partitioned tensors (one per partition).
   Type baseElemType;
   SmallVector<Value>
       offsets; // i32 int. The offsets are zero at the initial allocation.
@@ -462,6 +523,19 @@ Value getProfileScratchPtr(Location loc, RewriterBase &rewriter,
 
 Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
                           const TargetInfoBase &target, Operation *op);
+
+/// Returns the allocation offsets for the given operation.
+/// For non-partitioned tensors, returns a single offset.
+/// For partitioned tensors, returns multiple offsets (one per partition).
+SmallVector<int64_t> getPartitionOffsets(Operation *op);
+
+/// Returns all shared memory bases for the given operation.
+/// For non-partitioned tensors, returns a single base pointer.
+/// For partitioned tensors, returns multiple base pointers (one per
+/// partition).
+SmallVector<Value> getSharedMemoryBases(Location loc, RewriterBase &rewriter,
+                                        const TargetInfoBase &target,
+                                        Operation *op);
 
 // -----------------------------------------------------------------------
 // MXFP utilities
@@ -554,7 +628,7 @@ uint32_t applyPadding(uint32_t baseOffset,
 SmallVector<Value>
 lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                 ArrayRef<Value> valsArray, // Input for store, output for load
-                Type llvmElemTy, Value smemBase,
+                Type llvmElemTy, ArrayRef<Value> smemBases,
                 ArrayRef<std::pair<unsigned, unsigned>> paddingShifts,
                 Value affineOffset, uint64_t maskSpanAffineOffset,
                 RewriterBase &rewriter, const TargetInfoBase &targetInfo,
@@ -567,17 +641,19 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
 // calcPaddedOffset is a lambda that takes a base offset (mlir::Value)
 // and computes a new offset (mlir::Value) by applying padding based on
 // shared memory layout.
-SmallVector<Value> lowerLdSt(
-    Location loc, MLIRContext *ctx, LinearLayout cvt,
-    ArrayRef<Value> valsArray, // Input for store, output for load
-    Type llvmElemTy, Value smemBase,
-    ArrayRef<std::pair<unsigned, unsigned>> paddingShifts, Value affineOffset,
-    uint64_t maskSpanAffineOffset, Value laneId, Value warpId,
-    RewriterBase &rewriter, const TargetInfoBase &targetInfo,
-    std::optional<int> maybeMaxVecElems,
-    std::function<SmallVector<Value>(RewriterBase &, Location, ArrayRef<Value>,
-                                     Value, int, VectorType)>
-        lowerInst);
+// cvt: Maps (reg, lane, warp, block) → (offset[, partition]).
+SmallVector<Value>
+lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
+          ArrayRef<Value> valsArray, // Input for store, output for load
+          Type llvmElemTy, ArrayRef<Value> smemBases,
+          ArrayRef<std::pair<unsigned, unsigned>> paddingShifts,
+          Value affineOffset, uint64_t maskSpanAffineOffset, Value laneId,
+          Value warpId, RewriterBase &rewriter,
+          const TargetInfoBase &targetInfo, std::optional<int> maybeMaxVecElems,
+          std::function<SmallVector<Value>(RewriterBase &, Location,
+                                           ArrayRef<Value>, Value, int,
+                                           VectorType, std::optional<Value>)>
+              lowerInst);
 
 // Lower local_load/local_store via ld.shared/st.shared
 SmallVector<Value>
@@ -619,10 +695,10 @@ void makeAllWarpGroupsIsolatedFromAbove(Operation *op);
 // Set the correct loop annotation on LLVM branch ops.
 void fixUpLoopAnnotation(ModuleOp mod);
 
-void transferWithinBlockSwizzling(triton::gpu::ConvertLayoutOp op, Value src,
-                                  const TargetInfoBase &targetInfo,
-                                  const LLVMTypeConverter *typeConverter,
-                                  RewriterBase &rewriter);
+void transferSwizzlingLocalMem(triton::gpu::ConvertLayoutOp op, Value src,
+                               const TargetInfoBase &targetInfo,
+                               const LLVMTypeConverter *typeConverter,
+                               RewriterBase &rewriter);
 
 SmallVector<Value> inlineRegionImpl(RewriterBase &rewriter, Region &region,
                                     ArrayRef<Value> args,
@@ -642,7 +718,7 @@ SmallVector<Value> inlineRegion(RewriterBase &rewriter, Region &region,
 // }
 // #thenBlock
 std::tuple</*prevBlock=*/Block *, /*ifBlock=*/Block *, /*thenBlock=*/Block *>
-createIfBlock(ConversionPatternRewriter &b, Location loc, Value cnd);
+createIfBlock(RewriterBase &b, Location loc, Value cnd);
 
 void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
                                  ConversionPatternRewriter &rewriter,

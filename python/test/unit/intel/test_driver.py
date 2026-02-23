@@ -99,3 +99,64 @@ def test_has_opencl_extension_error(device):
     # Pass an invalid device_id (out of range) to trigger error
     with pytest.raises(RuntimeError, match="Device is not found"):
         driver.active.utils.has_opencl_extension(device_count, b"cl_khr_fp16")
+
+
+@pytest.mark.parametrize("grf_mode, expect_retry, expect_fail",
+                         [("default", True, False),  # Should auto-retry with large GRF and succeed
+                          ("256", False, False),  # Explicit large GRF — compiles on first attempt
+                          ("128", False, True),  # Explicit small GRF — should fail, no retry
+                          ])
+@pytest.mark.parametrize("generate_native_code", [False, True], ids=["load_binary", "make_zebin"])
+def test_auto_grf_on_build_failure(device, monkeypatch, capfd, grf_mode, expect_retry, expect_fail,
+                                   generate_native_code):
+    """Test GRF mode behavior for register-heavy kernels on both compilation paths:
+    - load_binary (generate_native_code=False): L0 runtime compilation via zeModuleCreate
+    - make_zebin (generate_native_code=True): offline compilation via ocloc
+    """
+    # The build failure with grf_mode="128" is not simulated on CRI properly
+    if grf_mode == "128" and is_xpu_cri():
+        pytest.xfail("grf_mode=128 build failure is not simulated on CRI properly")
+
+    monkeypatch.setenv("TRITON_DEBUG", "1")
+
+    @triton.jit
+    def _register_heavy_kernel(
+        output_ptr,
+        input_ptr,
+        q_ptr,
+        size,
+        BLOCK: tl.constexpr,
+    ):
+        off = tl.arange(0, BLOCK)
+        mask = off < size
+        x = tl.load(input_ptr + off, mask=mask, other=0.0)
+        q = tl.load(q_ptr + off, mask=mask, other=float("-inf"))
+        result = tl.argmax(x / q, axis=-1)
+        tl.store(output_ptr, result)
+
+    BLOCK = 131072  # Large enough to exceed PTSS with default/small GRF
+    size = 128000
+
+    x = torch.randn(size, dtype=torch.float32, device=device)
+    q = torch.rand(size, dtype=torch.float32, device=device)
+    out = torch.empty(1, dtype=torch.int32, device=device)
+
+    if expect_fail:
+        with pytest.raises(RuntimeError):
+            _register_heavy_kernel[(1, )](out, x, q, size, BLOCK=BLOCK, grf_mode=grf_mode,
+                                          generate_native_code=generate_native_code)
+    else:
+        _register_heavy_kernel[(1, )](out, x, q, size, BLOCK=BLOCK, grf_mode=grf_mode,
+                                      generate_native_code=generate_native_code)
+
+        outs = capfd.readouterr().out
+        if expect_retry and not generate_native_code:
+            # load_binary path prints a retry message to stdout.
+            assert "retrying with large GRF mode" in outs or "recompiling the kernel using large GRF mode" in outs
+        elif expect_retry and generate_native_code:
+            # make_zebin path retries silently via ocloc — no stdout message.
+            # Success without exception is sufficient verification.
+            pass
+        else:
+            assert "retrying with large GRF mode" not in outs
+            assert "Build failed" not in outs
