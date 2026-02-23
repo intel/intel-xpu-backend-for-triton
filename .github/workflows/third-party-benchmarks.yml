@@ -48,6 +48,7 @@ on:
 
 permissions: read-all
 
+# VLLM installation from upstream uses vllm-xpu-kernels wheel which is built just for python==3.12
 env:
   PYTHON_VERSION: "3.12"
   TAG: ${{ inputs.tag || (github.event_name == 'pull_request' && format('pr-{0}', github.event.number)) || (github.event_name == 'schedule' && 'ci') || 'test' }}
@@ -119,7 +120,8 @@ jobs:
         id: install-benchmarks
         run: |
           cd benchmarks
-          pip install .
+          # --no-build-isolation is necessary after moving to python=3.12
+          pip install --no-build-isolation .
 
       - name: Run sglang benchmark int8
         if: ${{ steps.install-benchmarks.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'sglang')) }}
