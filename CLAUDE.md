@@ -128,7 +128,7 @@ This project follows LLVM/MLIR coding standards (see `.github/copilot-instructio
 - **Naming**: camelCase for functions/variables, CamelCase for types/classes
 - **Casting**: use `dyn_cast`, `cast`, `isa` — never C-style casts
 - **Containers**: prefer `SmallVector`, `DenseMap`, `StringRef`, `ArrayRef`
-- **Error handling**: use `llvm::Error`/`llvm::Expected<T>`, no exceptions
+- **Error handling**: use `LogicalResult`/`failure()`/`success()` for MLIR pass and pattern code, `signalPassFailure()` for pass-level failures; no exceptions
 - **Include order**: main header, local, LLVM/MLIR, system
 
 ## IR Debugging
@@ -148,7 +148,7 @@ LLVM_IR_ENABLE_DUMP=1 python my_kernel.py
 TRITON_INTERPRET=1 python my_kernel.py
 
 # Best autotuned config with readable dump dirs
-TRITON_KERNEL_DUMP_BEST_CONFIG=1 TRITON_PRINT_AUTOTUNING=1 python my_kernel.py
+TRITON_PRINT_AUTOTUNING=1 python my_kernel.py
 ```
 
 Full list of configuration knobs: `python/triton/knobs.py`. Intel-specific knobs are under `knobs.intel.*`.
