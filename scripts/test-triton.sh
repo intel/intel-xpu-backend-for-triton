@@ -797,11 +797,53 @@ run_liger_tests() {
   run_pytest_command -vvv Liger-Kernel/test/
 }
 
-run_vllm_install() {
-  echo "************************************************"
-  echo "******    Installing VLLM                 ******"
-  echo "************************************************"
-  CLEAN_MSG="To get a clean install, run: \n    rm -rf ./vllm ./vllm-xpu-kernels && pip uninstall -y vllm vllm-xpu-kernels"
+run_vllm_upstream_install() {
+  # Installs latest vllm that doesn't depend on IPEX (no vllm-xpu-kernels needed)
+  cd "$TRITON_PROJ"
+
+  CLEAN_MSG="To get a clean install, run: \n    rm -rf $TRITON_PROJ/vllm && pip uninstall -y vllm"
+
+  local has_vllm_pip=false
+  pip show vllm >/dev/null 2>&1 && has_vllm_pip=true
+
+  # vllm already installed — nothing to do
+  if [ "$has_vllm_pip" = true ]; then
+    echo "WARNING: vllm is already installed, skipping installation."
+    echo -e $CLEAN_MSG
+    return
+  fi
+
+  # vllm not installed — proceed, reusing existing directory if present
+  if [ -d "./vllm" ]; then
+    echo "WARNING: ./vllm directory already exists, installing from it."
+    echo -e $CLEAN_MSG
+  else
+    git clone https://github.com/vllm-project/vllm.git
+
+    # Set specific pin
+    cd vllm
+    git checkout "$(<../benchmarks/third_party/vllm/vllm-pin.txt)"
+    cd ..
+  fi
+
+  # VLLM project tests use pytest-shard which conflicts with pytest-skip
+  pip uninstall pytest-skip -y
+
+  # These files contain specific versions of pytorch and triton, so let's remove them
+  sed -i '/pytorch\|torch\|triton/d' vllm/requirements/xpu.txt
+  sed -i '/pytorch\|torch\|triton/d' vllm/requirements/test.in
+  pip install -r vllm/requirements/xpu.txt
+  # Let's not install whole test requirements for now, they are very large and overwrite torch
+  # pip install -r vllm/requirements/test.in
+  pip install cachetools cbor2 blake3 pybase64 openai_harmony tblib
+  cp -r vllm/tests benchmarks/third_party/vllm/tests
+  VLLM_TARGET_DEVICE=xpu pip install --no-deps --no-build-isolation -e vllm
+}
+
+run_vllm_old_install() {
+  # Installs old vllm pin, that requires separate vllm-xpu-kernels due to IPEX dependency
+
+  CLEAN_MSG="To get a clean install, run: \n    rm -rf $TRITON_PROJ/vllm $TRITON_PROJ/vllm-xpu-kernels && pip uninstall -y vllm vllm-xpu-kernels"
 
   local has_vllm_pip=false
   local has_kernels_pip=false
@@ -855,8 +897,8 @@ run_vllm_install() {
     git clone https://github.com/vllm-project/vllm-xpu-kernels
     cd vllm-xpu-kernels
     git checkout "$(<../benchmarks/third_party/vllm/vllm-kernels-pin.txt)"
-    sed -i '/pytorch\|torch/d' requirements.txt
-    sed -i '/pytorch\|torch/d' pyproject.toml
+    sed -i '/pytorch\|torch\|triton/d' requirements.txt
+    sed -i '/pytorch\|torch\|triton/d' pyproject.toml
     pip install -r requirements.txt
     cd ..
   fi
@@ -866,6 +908,24 @@ run_vllm_install() {
   pip install cachetools cbor2 blake3 pybase64 openai_harmony tblib
 }
 
+run_vllm_install() {
+  echo "************************************************"
+  echo "******    Installing VLLM                 ******"
+  echo "************************************************"
+
+  local pin_file="$TRITON_PROJ/benchmarks/third_party/vllm/vllm-pin.txt"
+  local current_pin
+  current_pin=$(<"$pin_file")
+  echo "VLLM pin: $current_pin"
+
+  # Old pin that we currently have have specific patch to fix it, new version is expected to work OOB
+  # We can remove this when we update the pin to a newer version, but for now we want to be able to test both the old and new versions
+  if [ "$current_pin" = "97a042f3bca53417de6405a248e3d11fca568e2c" ]; then
+    run_vllm_old_install
+  else
+    run_vllm_upstream_install
+  fi
+}
 
 run_vllm_tests() {
   echo "************************************************"
@@ -878,6 +938,7 @@ run_vllm_tests() {
   cd vllm
   run_pytest_command -vvv tests/kernels/moe/test_batched_moe.py tests/kernels/attention/test_triton_unified_attention.py
 }
+
 
 run_triton_kernels_tests() {
   echo "***************************************************"
