@@ -125,7 +125,9 @@ jobs:
           # cp -L intel-xpu-backend-for-triton/benchmarks/dist/*.whl wheels/
           cp scripts/gta_integration/constructor/test_triton.py snapshot/scripts/test_triton.py
           cp scripts/gta_integration/constructor/test_triton_config.json snapshot/scripts/test_triton_config.json
+          cp scripts/gta_integration/constructor/test_pytorch.py snapshot/scripts/test_pytorch.py
           cp scripts/gta_integration/constructor/run_triton_tests.sh run_triton_tests.sh
+          cp scripts/gta_integration/constructor/run_pytorch_tests.sh run_pytorch_tests.sh
           tar -czvf wheels.tar.gz wheels
           tar -czvf snapshot.tar.gz snapshot
 
@@ -161,6 +163,7 @@ jobs:
           path: |
             TritonXPU-GTA.sh
             run_triton_tests.sh
+            run_pytorch_tests.sh
 
       - name: Upload asset to GTA artifactory
         run: |
@@ -172,6 +175,7 @@ jobs:
             "TritonXPU-GTA.sh"
             "TritonXPU-GTA.sh.sha256"
             "run_triton_tests.sh"
+            "run_pytorch_tests.sh"
             "abn_metadata.json"
           )
 

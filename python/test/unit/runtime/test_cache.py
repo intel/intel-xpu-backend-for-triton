@@ -3,6 +3,7 @@ import importlib.util
 import itertools
 import os
 import re
+import gc
 import pathlib
 from concurrent.futures import Executor, Future, ThreadPoolExecutor
 
@@ -11,7 +12,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_hip
+from triton._internal_testing import is_hip, is_xpu
 
 
 @triton.jit
@@ -897,3 +898,37 @@ def test_preload_higher_order_kernels(device, fresh_triton_cache) -> None:
     kernel[(1, )](output, fn_b)
     assert counter == 1
     assert output.item() == 31
+
+
+def test_module_load_unload(fresh_knobs, device):
+    if is_xpu():
+        pytest.skip("FIXME: #6166")
+
+    @triton.jit
+    def kernel(out_ptr, val) -> None:
+        tl.store(out_ptr, val)
+
+    # we should hit the module unload call to decrese the counter from 1 to 0
+    counter = 1
+
+    def module_unload(*args, **kwargs):
+        nonlocal counter
+        counter -= 1
+
+    # turn off python garbage collector, so the callback is not called
+    # in the garbage collector
+    gc.disable()
+    triton.knobs.runtime.module_unload_hook.add(module_unload)
+
+    out = torch.randn(1, dtype=torch.float32, device=device)
+    pre_compile = kernel.warmup(out, 1, grid=(1, ))
+    pre_compile._init_handles()
+
+    assert counter == 1
+    assert pre_compile.module is not None
+    pre_compile.__del__()
+
+    assert counter == 0
+    assert pre_compile.module is None
+    # turn on garbage collector
+    gc.enable()
