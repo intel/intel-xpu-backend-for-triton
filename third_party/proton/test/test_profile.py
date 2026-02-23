@@ -350,7 +350,10 @@ def test_get_data(tmp_path: pathlib.Path, device: str):
     database = proton.data.get(session)
     gf, _, _, _ = viewer.get_raw_metrics(database)
     foo_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*foo.*' AND c IS LEAF").dataframe
-    ones_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*VectorizedElementwiseKernel.*' AND c IS LEAF").dataframe
+    if is_xpu():
+        ones_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*Elementwise.*' AND c IS LEAF").dataframe
+    else:
+        ones_frame = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*elementwise.*' AND c IS LEAF").dataframe
 
     assert len(foo_frame) == 1
     assert int(foo_frame["count"].values[0]) == 2
