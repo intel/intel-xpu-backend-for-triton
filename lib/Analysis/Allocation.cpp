@@ -87,9 +87,16 @@ static SmallVector<unsigned> getRepShapeForAtomic(Value result) {
   return smemShape;
 }
 
-unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
+unsigned defaultAllocationAnalysisScratchSizeFnOld(Operation *op) {
   if (auto reduceOp = dyn_cast<ReduceOp>(op)) {
     return ReduceOpHelper(reduceOp).getScratchSizeInBytesOld();
+  }
+  return defaultAllocationAnalysisScratchSizeFn(op);
+}
+
+unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
+  if (auto reduceOp = dyn_cast<ReduceOp>(op)) {
+    return ReduceOpHelper(reduceOp).getScratchSizeInBytes();
   }
   if (auto scanOp = dyn_cast<ScanOp>(op)) {
     ScanLoweringHelper helper(scanOp);
@@ -127,6 +134,9 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
   if (isa<ttng::TensormapCreateOp>(op)) {
     constexpr int32_t kTMASize = 128;
     return kTMASize;
+  }
+  if (auto ws = dyn_cast<gpu::WarpSpecializeOp>(op)) {
+    return ws.getCaptureSize();
   }
   return 0;
 }
@@ -250,7 +260,8 @@ private:
     if (auto ws = dyn_cast<gpu::WarpSpecializeOp>(op)) {
       // `ttg.warp_specialize` needs memory to pass its explicit captures. Pack
       // the captures like a struct.
-      auto [captureSize, captureAlign] = ws.getCaptureSizeAlign();
+      auto captureSize = scratchSizeGetter(op);
+      auto captureAlign = ws.getCaptureAlign();
       maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, captureSize,
                                                           captureAlign);
       return;

@@ -212,20 +212,28 @@ LogicalResult FenceMBarrierInitReleaseClusterOp::verify() {
   return success();
 }
 
+static LogicalResult verifyClusterSyncOp(Operation *op) {
+  int numCTAs = triton::gpu::lookupNumCTAs(op);
+  if (numCTAs <= 1)
+    return op->emitOpError("requires ttg.num-ctas > 1");
+  if (op->getParentOfType<mlir::triton::gpu::WarpSpecializeOp>())
+    return op->emitOpError("cannot be used inside `ttg.warp_specialize`");
+  return success();
+}
+
 // -- ClusterArriveOp --
 LogicalResult ClusterArriveOp::verify() {
-  int numCTAs = triton::gpu::lookupNumCTAs(getOperation());
-  if (numCTAs <= 1)
-    return emitOpError("requires ttg.num-ctas > 1");
-  return success();
+  return verifyClusterSyncOp(getOperation());
 }
 
 // -- ClusterWaitOp --
 LogicalResult ClusterWaitOp::verify() {
-  int numCTAs = triton::gpu::lookupNumCTAs(getOperation());
-  if (numCTAs <= 1)
-    return emitOpError("requires ttg.num-ctas > 1");
-  return success();
+  return verifyClusterSyncOp(getOperation());
+}
+
+// -- ClusterBarrierOp --
+LogicalResult ClusterBarrierOp::verify() {
+  return verifyClusterSyncOp(getOperation());
 }
 
 // -- TMA operation verifiers --
@@ -516,6 +524,11 @@ LogicalResult TCGen5MMAOp::verify() {
   if (!getIsAsync() && !getBarriers().empty()) {
     return emitOpError("The op is synchronous but a barrier is present.");
   }
+  for (auto barrier : getBarriers()) {
+    auto barrierTy = cast<MemDescType>(barrier.getType());
+    if (failed(verifyBarrierType(*this, barrierTy)))
+      return failure();
+  }
   Type atype = getA().getType().getElementType();
   Type btype = getB().getType().getElementType();
   Type dtype = getD().getType().getElementType();
@@ -705,6 +718,9 @@ LogicalResult TCGen5CommitOp::verify() {
   auto numDescs = getDescs().size();
   if (numDescs > 2)
     return emitOpError("expected 0, 1, or 2 descriptors, got ") << numDescs;
+  auto barrierTy = getBarrier().getType();
+  if (failed(verifyBarrierType(*this, barrierTy)))
+    return failure();
   return success();
 }
 

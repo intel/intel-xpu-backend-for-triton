@@ -303,6 +303,82 @@ struct LoadStoreConversionBase {
     return std::make_tuple(ptrElems, maskElems, otherElems);
   }
 
+  SmallVector<Value>
+  buildNaNMasksFromBlockPtr(Location loc, Value blockPointerStruct,
+                            RankedTensorType tensorType, Type valueElemTy,
+                            ConversionPatternRewriter &rewriter,
+                            ArrayRef<int32_t> boundaryCheck = {}) const {
+
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    size_t rank = tensorType.getRank();
+    // The block pointer struct is expected to have the following layout:
+    //    Struct {
+    //      Value offset[rank];
+    //      Value shape[rank];
+    //      Value stride[rank];
+    //      Value base;
+    //    }
+    // All the values are decomposed by `unpackLLElements` into a vector.
+    // Defines the indices for the block pointer struct.
+    const unsigned blockOffset = 0, blockShape = 1 * rank,
+                   blockStride = 2 * rank, blockBase = 3 * rank;
+    const SmallVector<Value> &blockPtr =
+        unpackLLElements(loc, blockPointerStruct, rewriter);
+    const unsigned numElems = getTotalElemsPerThread(tensorType);
+
+    // Get the LLVM values for indices in block
+    auto indices = emitIndices(loc, rewriter, targetInfo,
+                               tensorType.getEncoding(), tensorType, true);
+
+    auto linearize =
+        [](ArrayRef<Value> A, ArrayRef<Value> B, Value init,
+           std::function<Value(const Value &, const Value &, const Value &)>
+               linearizeFunc) {
+          unsigned rank = A.size();
+          Value accumulate = init;
+          if (rank > 0) {
+            for (auto [a, b] : llvm::zip(A, B))
+              accumulate = linearizeFunc(a, b, accumulate);
+          }
+          return accumulate;
+        };
+
+    SetVector<unsigned> boundaryProtect(boundaryCheck.begin(),
+                                        boundaryCheck.end());
+    for (unsigned j = 0; j < rank; j++) {
+      if (!boundaryProtect.contains(j)) {
+        // The NaN padding logic assumes that all dims are being padded.
+        return {};
+      }
+    }
+
+    SmallVector<Value> maskElems;
+    for (unsigned i = 0; i < numElems; ++i) {
+      SmallVector<Value> index = indices[i];
+      SmallVector<Value> indicesInTensor(rank);
+      for (unsigned j = 0; j < rank; ++j)
+        indicesInTensor[j] = b.add(index[j], blockPtr[blockOffset + j]);
+
+      // Get the LLVM values for mask
+      maskElems.push_back(linearize(
+          indicesInTensor,
+          {blockPtr.begin() + blockShape, blockPtr.begin() + blockStride},
+          b.int_val(1, 1),
+          [&](const Value &index, const Value &shape, const Value &mask) {
+            // mask = mask && (index < shape) && idx >= 0
+            auto is_pos_idx = b.icmp_sge(index, b.i32_val(0));
+            return b
+                .and_(b.and_(b.icmp_slt(index, b.trunc(i32_ty, shape)), mask),
+                      is_pos_idx)
+                .getResult();
+
+            return mask;
+          }));
+    }
+
+    return maskElems;
+  }
+
   // Ensure the operation doesn't have attributes that the IGC predicated
   // instruction cannot handle.
   template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
@@ -312,21 +388,76 @@ struct LoadStoreConversionBase {
             op, TritonIntelGPUDialect::getSupportPredicatedIOAttrName()))
       return false;
 
+    // There's an IGC bug with predicated load so it is disabled by default.
+    // On the other hand, predicated store is expected to be correct and it is
+    // enabled by default. Both can be overridden by env vars.
+    static const bool canUsePredicatedLoad =
+        tools::getBoolEnv("TRITON_INTEL_PREDICATED_LOAD");
+    static const std::optional<bool> usePredicatedStore = tools::isEnvValueBool(
+        tools::getStrEnv("TRITON_INTEL_PREDICATED_STORE"));
+
+    // SPIRV predicated load/store does not support volatile qualifier.
     if constexpr (std::is_same_v<OpType, LoadOp>) {
-      if (!triton::tools::getBoolEnv("TRITON_INTEL_PREDICATED_LOAD"))
-        return false;
-      return !op.getIsVolatile() && op.getCache() == CacheModifier::NONE;
+      return canUsePredicatedLoad && !op.getIsVolatile();
+    } else if constexpr (std::is_same_v<OpType, StoreOp>) {
+      return !usePredicatedStore.has_value() || usePredicatedStore.value();
     }
 
-    if constexpr (std::is_same_v<OpType, StoreOp>) {
-      std::optional<bool> usePredicatedStore =
-          mlir::triton::tools::isEnvValueBool(
-              mlir::triton::tools::getStrEnv("TRITON_INTEL_PREDICATED_STORE"));
-      if (usePredicatedStore.has_value() && !usePredicatedStore.value())
-        return false;
-    }
+    llvm_unreachable("unsupported operation type for predicated instruction");
+  }
 
-    return op.getCache() == CacheModifier::NONE;
+  // Convert Triton cache modifier to Intel GEN load cache control enum.
+  template <typename OpType,
+            typename = std::enable_if_t<std::is_same_v<OpType, LoadOp>>>
+  TritonGEN::LoadCacheControl tritonToIntelCacheModifier(OpType &op) const {
+    CacheModifier cacheModifier = op.getCache();
+
+    /******** LoadOp ********
+     * ""   -> DEFAULT (No cache modifier provided)
+     * "cg" -> L1UC_L3C (Cache at global level, not L1)
+     * "cv" -> L1UC_L3UC (Do not cache at all)
+     * "ca" -> L1C_L3C (Cache at all levels)
+     **/
+    switch (cacheModifier) {
+    case CacheModifier::NONE:
+      return TritonGEN::LoadCacheControl::DEFAULT;
+    case CacheModifier::CG:
+      return TritonGEN::LoadCacheControl::L1UC_L3C;
+    case CacheModifier::CV:
+      return TritonGEN::LoadCacheControl::L1UC_L3UC;
+    case CacheModifier::CA:
+      return TritonGEN::LoadCacheControl::L1C_L3C;
+    default:
+      llvm_unreachable("invalid cache modifier for LoadOp");
+    }
+  }
+
+  template <typename OpType,
+            typename = std::enable_if_t<std::is_same_v<OpType, StoreOp>>>
+  TritonGEN::StoreCacheControl tritonToIntelCacheModifier(OpType &op) const {
+    CacheModifier cacheModifier = op.getCache();
+
+    /******** StoreOp ********
+     * ""   -> DEFAULT (No cache modifier provided)
+     * "wb" -> L1WB_L3WB (Cache write-back at all levels.)
+     * "cg" -> L1UC_L3WB (Cache at global level, not L1)
+     * "cs" -> L1S_L3S (Cache streaming at all levels)
+     * "wt" -> L1WT_L3WT (Cache write-through at all levels)
+     **/
+    switch (cacheModifier) {
+    case CacheModifier::NONE:
+      return TritonGEN::StoreCacheControl::DEFAULT;
+    case CacheModifier::WB:
+      return TritonGEN::StoreCacheControl::L1WB_L3WB;
+    case CacheModifier::CG:
+      return TritonGEN::StoreCacheControl::L1UC_L3WB;
+    case CacheModifier::CS:
+      return TritonGEN::StoreCacheControl::L1S_L3S;
+    case CacheModifier::WT:
+      return TritonGEN::StoreCacheControl::L1WT_L3WT;
+    default:
+      llvm_unreachable("invalid cache modifier for StoreOp");
+    }
   }
 
   template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
@@ -1356,10 +1487,6 @@ struct LoadOpToBlockIOConversion
   LogicalResult
   matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
-    // FIXME: Handle the case where padding is set to PAD_NAN (#5145).
-    if (op.getPadding() && op.getPadding() == PaddingOption::PAD_NAN)
-      return failure();
-
     if (!isBlockIOCandidate(op))
       return failure();
 
@@ -1467,6 +1594,7 @@ struct LoadOpToBlockIOConversion
 
     SmallVector<Value> maskElems;
     Value llMask = adaptor.getMask();
+
     // Get the LLVM values for mask
     if (llMask) {
       Value mask = op.getMask();
@@ -1880,6 +2008,22 @@ struct LoadOpToBlockIOConversion
               : numValuesPerLoad;
       unsigned numOperandsPerLoad = numValuesPerLoad / numValsPerDPASOperand;
 
+      SmallVector<Value> nanMaskElems;
+
+      if (otherElems.size() == 0 && op.getPadding() == PaddingOption::PAD_NAN) {
+        assert(
+            isTensorPointerType(ptr.getType()) &&
+            "Supplied PaddingOption::PAD_NAN only applies to block pointers.");
+
+        auto tensorType = cast<RankedTensorType>(op.getType());
+        Type valueElemTy =
+            typeConverter->convertType(getElementTypeOrSelf(op.getType()));
+
+        nanMaskElems = buildNaNMasksFromBlockPtr(
+            loc, adaptor.getPtr(), tensorType, valueElemTy, rewriter,
+            op.getBoundaryCheck());
+      }
+
       for (size_t opsIdx = 0; opsIdx < numOperandsPerLoad; ++opsIdx) {
         Value unpackedVal;
         if (numValsPerDPASOperand != numValuesPerLoad) {
@@ -1920,6 +2064,29 @@ struct LoadOpToBlockIOConversion
             other = b.insert_element(other, falseVal, b.i32_val(i));
           }
           unpackedVal = b.select(pred, unpackedVal, other);
+        } else if (nanMaskElems.size() != 0) {
+          Type unpackedElemType = getElementTypeOrSelf(unpackedType);
+
+          SmallVector<Attribute> constOtherElems;
+          for (auto i = 0; i < numElemsPerUnpackedType; ++i) {
+            constOtherElems.push_back(FloatAttr::get(
+                unpackedElemType, APFloat::getNaN(APFloat::IEEEsingle())));
+          }
+
+          Value other = b.const_val(
+              unpackedType,
+              DenseElementsAttr::get(
+                  VectorType::get(numElemsPerUnpackedType, unpackedElemType),
+                  constOtherElems));
+
+          Value packedPred =
+              b.undef(VectorType::get(numElemsPerUnpackedType, i1_ty));
+
+          for (const auto [i, registerIdx] : llvm::enumerate(unpackIndices)) {
+            packedPred = b.insert_element(packedPred, nanMaskElems[registerIdx],
+                                          b.i32_val(i));
+          }
+          unpackedVal = b.select(packedPred, unpackedVal, other);
         }
 
         for (const auto [i, registerIdx] : llvm::enumerate(unpackIndices)) {
@@ -2096,10 +2263,12 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       Value ret;
       if (!pred)
         ret = createLoadWithAttrs()[0];
-      else if (canUsePredicatedInstructions(op))
+      else if (canUsePredicatedInstructions(op)) {
+        auto cacheModifier = tritonToIntelCacheModifier(op);
         ret = TritonGEN::PredicatedLoadOp::create(
-            rewriter, loc, retTy, addrElem, b.i64_val(alignment), pred, other_);
-      else {
+            rewriter, loc, retTy, addrElem, b.i64_val(alignment), pred, other_,
+            cacheModifier);
+      } else {
         Block &endBlock = LLVM::intel::createPredicatedBlock(
             rewriter, loc, pred, SmallVector<Value, 1>{other_},
             createLoadWithAttrs);
@@ -2542,10 +2711,12 @@ struct StoreOpConversion
 
       if (!maskVal)
         auto _ = createStoreWithAttrs();
-      else if (canUsePredicatedInstructions(op))
+      else if (canUsePredicatedInstructions(op)) {
+        auto cacheModifier = tritonToIntelCacheModifier(op);
         TritonGEN::PredicatedStoreOp::create(rewriter, loc, addrElem, vecWord,
-                                             b.i64_val(alignment), maskVal);
-      else
+                                             b.i64_val(alignment), maskVal,
+                                             cacheModifier);
+      } else
         LLVM::intel::createPredicatedBlock(rewriter, loc, maskVal,
                                            createStoreWithAttrs);
     }
