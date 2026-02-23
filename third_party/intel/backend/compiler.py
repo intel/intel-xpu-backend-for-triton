@@ -275,7 +275,6 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
         passes.ttir.add_loop_unroll(pm)
-        intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
         pm.run(mod, 'make_ttir')
         return mod
 
@@ -297,6 +296,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
+        intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
         passes.ttir.add_convert_to_ttgpuir(pm, "xpu", opt.num_warps, opt.warp_size, opt.num_ctas)
         # optimize TTGIR
         intel.passes.ttgpuir.add_coalesce(pm)

@@ -88,7 +88,10 @@ public:
   static getDPASType(OpTy);
   // clang-format on
 
+// In unit testing builds, expose private members for testing
+#ifndef TRITON_DPAS_UNIT_TESTING
 private:
+#endif
   explicit DPASAnalysis(Operation *root);
 
   /// Analyze the 'dotToDPASEngineMap' for the given function and return:
