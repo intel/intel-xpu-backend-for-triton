@@ -66,7 +66,7 @@ static void pickDescriptorLoadStoreLayout(
   int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(moduleOp);
   moduleOp.walk([&](Operation *op) {
     int numWarps = ttg::lookupNumWarps(op);
-    // Modified to only pick DescriptorLoadOp/DescriptorStore op instead of
+    // Modified to only pick DescriptorLoadOp/DescriptorStoreOp instead of
     // DescriptorOpInterface/DescriptorStoreLikeOpInterfacte
     if (auto load = dyn_cast<tt::DescriptorLoadOp>(op)) {
       if (load->getNumResults() == 1)
