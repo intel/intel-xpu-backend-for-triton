@@ -86,17 +86,6 @@ def query_device_extensions(device_id: int):
     return extensions
 
 
-def get_device_count() -> int:
-    """
-    Get the number of available GPU devices.
-
-    Returns:
-        Number of GPU devices available
-    """
-    extension_checker = _get_extension_checker()
-    return extension_checker.get_device_count()
-
-
 def get_device_id(device_idx: int) -> int:
     """
     Get the Intel device ID for a device at the given index.

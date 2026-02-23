@@ -9,6 +9,7 @@ import pathlib
 
 from triton.runtime.driver import driver
 from triton._internal_testing import is_xpu_cri
+from triton.backends.intel import extension_utils
 
 
 @pytest.mark.xfail(is_xpu_cri(), reason="unable to get spill_size")
@@ -94,7 +95,6 @@ def test_wait_on_sycl_queue_error(device):
 
 
 def test_has_opencl_extension_error(device):
-    from triton.backends.intel import extension_utils
     device_idx = torch.xpu.current_device()
     device_id = extension_utils.get_device_id(device_idx)
 
@@ -104,8 +104,15 @@ def test_has_opencl_extension_error(device):
     # Verify we got a dictionary with expected extension keys
     assert isinstance(extensions, dict)
     assert "has_subgroup_matrix_multiply_accumulate" in extensions
+    assert "has_subgroup_matrix_multiply_accumulate_tensor_float32" in extensions
     assert "has_subgroup_2d_block_io" in extensions
     assert "has_bfloat16_conversion" in extensions
+    if device_id == 3034:
+        # PVC 1100
+        assert extensions["has_subgroup_matrix_multiply_accumulate"] is True
+        assert extensions["has_subgroup_matrix_multiply_accumulate_tensor_float32"] is False
+        assert extensions["has_subgroup_2d_block_io"] is True
+        assert extensions["has_bfloat16_conversion"] is True
 
     # Test individual extension checking
     result = extension_utils.has_device_extension(device_id, "cl_intel_subgroup_2d_block_io")
@@ -118,8 +125,8 @@ def test_has_opencl_extension_error(device):
     assert result_wrong is False  # This extension should not be supported
 
     # Test that invalid device_id raises exception
-    with pytest.raises(RuntimeError):
-        extension_utils.has_device_extension(0x9999, "cl_intel_subgroup_2d_block_io")
+    with pytest.raises(RuntimeError, match="No device found with device_id: 9999"):
+        extension_utils.has_device_extension(9999, "cl_intel_subgroup_2d_block_io")
 
 
 @pytest.mark.parametrize("grf_mode, expect_retry, expect_fail",

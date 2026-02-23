@@ -242,16 +242,11 @@ class ExtensionUtils:
         self.shared_library = ctypes.PyDLL(cache_path)
         self.shared_library.check_extension.restype = ctypes.py_object
         self.shared_library.check_extension.argtypes = (ctypes.c_int, ctypes.c_char_p)
-        self.shared_library.get_device_count.restype = ctypes.py_object
-        self.shared_library.get_device_count.argtypes = ()
         self.shared_library.get_device_id.restype = ctypes.py_object
         self.shared_library.get_device_id.argtypes = (ctypes.c_int, )
 
     def check_extension(self, device_id: int, extension: bytes) -> bool:
         return self.shared_library.check_extension(device_id, extension)
-
-    def get_device_count(self) -> int:
-        return self.shared_library.get_device_count()
 
     def get_device_id(self, device_idx: int) -> int:
         return self.shared_library.get_device_id(device_idx)
