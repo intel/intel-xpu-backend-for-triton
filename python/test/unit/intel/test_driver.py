@@ -105,13 +105,13 @@ def test_has_opencl_extension_error(device):
     assert isinstance(extensions, dict)
     assert "has_subgroup_matrix_multiply_accumulate" in extensions
     assert "has_subgroup_matrix_multiply_accumulate_tensor_float32" in extensions
-    assert "has_subgroup_2d_block_io" in extensions
+    assert "has_2d_block_io" in extensions
     assert "has_bfloat16_conversion" in extensions
     if device_id == 3034:
         # PVC 1100
         assert extensions["has_subgroup_matrix_multiply_accumulate"] is True
         assert extensions["has_subgroup_matrix_multiply_accumulate_tensor_float32"] is False
-        assert extensions["has_subgroup_2d_block_io"] is True
+        assert extensions["has_2d_block_io"] is True
         assert extensions["has_bfloat16_conversion"] is True
 
     # Test individual extension checking

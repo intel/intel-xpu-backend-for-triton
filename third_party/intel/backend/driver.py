@@ -955,6 +955,8 @@ class XPUDriver(DriverBase):
 
     def get_current_target(self):
         import torch
+        from triton.backends.intel.extension_utils import query_device_extensions
+
         device = self.get_current_device()
         dev_property = torch.xpu.get_device_capability(device)
 
@@ -966,6 +968,12 @@ class XPUDriver(DriverBase):
                 arch = parser.parse_device_arch(dev_property["architecture"])
             dev_property["arch"] = arch
 
+        # All GPUs with the same device_id have the same extensions, so we just
+        # need to query any GPU device
+        device_id = dev_property.get("device_id")
+        extensions = query_device_extensions(device_id)
+        dev_property.update(extensions)
+        dev_property["__intel_already_queried_extensions__"] = True
         update_device_arch(dev_property)
 
         return GPUTarget("xpu", dev_property, warp_size=32)
