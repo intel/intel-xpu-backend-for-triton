@@ -66,13 +66,15 @@ static void pickDescriptorLoadStoreLayout(
   int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(moduleOp);
   moduleOp.walk([&](Operation *op) {
     int numWarps = ttg::lookupNumWarps(op);
-    if (auto load = dyn_cast<tt::DescriptorOpInterface>(op)) {
+    // Modified to only pick DescriptorLoadOp/DescriptorStore op instead of
+    // DescriptorOpInterface/DescriptorStoreLikeOpInterfacte
+    if (auto load = dyn_cast<tt::DescriptorLoadOp>(op)) {
       if (load->getNumResults() == 1)
         layoutMap[op] = pickDescriptorLoadStoreLayout(
             numWarps, threadsPerWarp,
             cast<RankedTensorType>(load->getResult(0).getType()));
     }
-    if (auto store = dyn_cast<tt::DescriptorStoreLikeOpInterface>(op)) {
+    if (auto store = dyn_cast<tt::DescriptorStoreOp>(op)) {
       layoutMap[op] = pickDescriptorLoadStoreLayout(numWarps, threadsPerWarp,
                                                     store.getSrc().getType());
     }
@@ -479,8 +481,7 @@ public:
     // 4. Convert the output of this new memory op back to L1
     // 5. Replace all the uses of the original memory op by the new one
     for (auto [op, layout] : layoutMap) {
-      if (isa<tt::DescriptorOpInterface>(op) ||
-          isa<tt::DescriptorStoreLikeOpInterface>(op))
+      if (isa<tt::DescriptorLoadOp>(op) || isa<tt::DescriptorStoreOp>(op))
         convertDistributedOpEncoding(layout, op);
       else
         coalesceOp(layout, op);
