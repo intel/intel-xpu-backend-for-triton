@@ -1009,10 +1009,12 @@ LogicalResult MemDescSubsliceOp::verify() {
   } else {
     ll = triton::gpu::toLinearLayout(srcTy);
   }
-  // NYI: We don't support non-trivial block dimension for now.
-  auto kBlock = mlir::StringAttr::get(getContext(), "block");
-  if (ll.getInDimSize(kBlock) != 1) {
-    return emitError("non-trivial block dimension not supported");
+
+  // If any block basis is fully broadcasted, multiple CTAs can alias the same
+  // output tile region. Subslice on such layouts is unsupported.
+  auto kBlock = mlir::StringAttr::get(ctx, "block");
+  if (ll.getFreeVariableMasks()[kBlock] != 0) {
+    return emitError("We don't support splitting with broadcasted CTA outputs");
   }
 
   auto llInv = ll.invert();
@@ -1025,9 +1027,15 @@ LogicalResult MemDescSubsliceOp::verify() {
     for (int dimSize = dstTy.getDimSize(dim); dimSize < srcTy.getDimSize(dim);
          dimSize *= 2) {
       namedOffsets[dim] = {kDim, dimSize};
-      if (!llvm::isPowerOf2_32(llInv.apply(namedOffsets)[0].second)) {
+      auto offsetAndBlock = llInv.apply(namedOffsets);
+      auto offset = offsetAndBlock[0];
+      auto block = offsetAndBlock[1];
+      if (!llvm::isPowerOf2_32(offset.second) && offset.second != 0) {
         return emitError(
             "We don't support splitting along the swizzling pattern");
+      }
+      if (block.second != 0) {
+        return emitError("We don't support splitting along CTA dimensions");
       }
     }
   }
@@ -1340,7 +1348,7 @@ LogicalResult WarpYieldOp::verify() {
 static size_t getSharedMemorySize(Type type) {
   if (isa<IntegerType, FloatType>(type))
     return llvm::divideCeil(type.getIntOrFloatBitWidth(), 8);
-  if (isa<PointerType, TensorDescType>(type))
+  if (isa<PointerType, TensorDescInterface>(type))
     return 8;
   if (auto desc = dyn_cast<MemDescType>(type)) {
     if (!isa<SharedMemorySpaceAttr>(desc.getMemorySpace()))

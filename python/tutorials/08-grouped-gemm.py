@@ -511,9 +511,9 @@ def benchmark_square_matrices(N, provider):
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
-        line_vals=['cublas', 'triton'] + (['triton-tma'] if supports_tma() else []),
+        line_vals=[ref_lib.lower(), 'triton'] + (['triton-tma'] if supports_tma() else []),
         # label name for the lines
-        line_names=["cuBLAS", "Triton"] + (['Triton + TMA'] if supports_tma() else []),
+        line_names=[ref_lib, "Triton"] + (['Triton + TMA'] if supports_tma() else []),
         # line styles
         styles=[('green', '-'), ('blue', '-')] + ([('red', '-')] if supports_tma() else []),
         ylabel="runtime(ms)",  # label name for the y-axis
@@ -562,7 +562,7 @@ def benchmark_batches(M, provider):
     d_g_t_lds = torch.tensor(g_T_lds, dtype=torch.int32, device=DEVICE)
 
     quantiles = [0.5, 0.2, 0.8]
-    if provider == 'cublas':
+    if provider == ref_lib.lower():
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch_perf_fn(group_A, group_B), quantiles=quantiles)
     if provider == 'triton':
         ms, min_ms, max_ms = triton.testing.do_bench(
