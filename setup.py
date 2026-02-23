@@ -293,8 +293,6 @@ class CMakeBuild(build_ext):
             "-DTRITON_PLUGIN_DIRS=" + ';'.join([b.src_dir for b in backends if b.is_external]),
             "-DTRITON_WHEEL_DIR=" + wheeldir,
             f"-DTRITON_CACHE_PATH={get_triton_cache_path()}",
-            "-DTRITON_EXT_DIRS=" + os.getenv("TRITON_EXT_DIRS", ""),
-            "-DTRITON_EXT_NAMES=" + os.getenv("TRITON_EXT_NAMES", "")
         ]
         if lit_dir is not None:
             cmake_args.append("-DLLVM_EXTERNAL_LIT=" + lit_dir)
@@ -325,6 +323,9 @@ class CMakeBuild(build_ext):
             cmake_args += ["-DLLVM_BUILD_SHARED_LIBS=1"]
         else:
             cmake_args += ["-DLLVM_BUILD_SHARED_LIBS=0"]
+
+        if check_env_flag("BUILD_SHARED_LIBS"):
+            cmake_args += ["-DBUILD_SHARED_LIBS=1"]
 
         # Note that asan doesn't work with binaries that use the GPU, so this is
         # only useful for tools like triton-opt that don't run code on the GPU.

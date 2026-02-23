@@ -8,6 +8,7 @@ export PIP_DISABLE_PIP_VERSION_CHECK=1
 BUILD_LLVM=false
 LLVM_SHARED=false
 BUILD_TRITON=false
+TRITON_SHARED=false
 CLEAN=false
 VENV=false
 CCACHE=false
@@ -26,6 +27,11 @@ for arg in "$@"; do
       BUILD_TRITON=true
       shift
       ;;
+    --triton-shared)
+      BUILD_TRITON=true
+      TRITON_SHARED=true
+      shift
+      ;;
     --clean)
       CLEAN=true
       shift
@@ -39,7 +45,7 @@ for arg in "$@"; do
       shift
       ;;
     --help)
-      echo "Example usage: ./compile-triton.sh [--llvm | --llvm-shared | --triton | --clean | --venv | --ccache]"
+      echo "Example usage: ./compile-triton.sh [--llvm | --llvm-shared | --triton | --triton-shared | --clean | --venv | --ccache]"
       exit 1
       ;;
     *)
@@ -132,7 +138,7 @@ build_llvm() {
 
   if [ "$LLVM_SHARED" = true ]
   then
-    ADDITIONAL_FLAGS="$ADDITIONAL_FLAGS -DBUILD_SHARED_LIBS=ON"
+    ADDITIONAL_FLAGS="$ADDITIONAL_FLAGS -DBUILD_SHARED_LIBS=true"
   fi
 
   if [ ! -d "$LLVM_PROJ_BUILD" ]
@@ -189,6 +195,10 @@ build_triton() {
   if [ "$CCACHE" = true ]
   then
     export TRITON_BUILD_WITH_CCACHE=true
+  fi
+  if [ "$TRITON_SHARED" = true ]
+  then
+    export BUILD_SHARED_LIBS=true
   fi
 
   # Install triton and its dependencies.
