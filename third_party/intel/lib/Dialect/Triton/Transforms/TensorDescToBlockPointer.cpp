@@ -32,31 +32,6 @@ bool hasATensorDescriptorType(mlir::TypeRange types) {
   });
 }
 
-Value findOrCreateCast(Location loc, Value val, Type tgtType,
-                       OpBuilder &builder) {
-  assert(isa<IntegerType>(tgtType) && isa<IntegerType>(val.getType()) &&
-         "Expecting integer types");
-  assert(val.getType().getIntOrFloatBitWidth() <=
-             tgtType.getIntOrFloatBitWidth() &&
-         "Expecting smaller type");
-
-  if (val.getType() == tgtType)
-    return val;
-
-  Block *block = builder.getInsertionBlock();
-  const Block::iterator insertPoint = builder.getInsertionPoint();
-
-  auto it = std::find_if(block->begin(), insertPoint, [&](Operation &op) {
-    if (auto castOp = dyn_cast<arith::ExtSIOp>(op))
-      return castOp.getIn() == val && castOp.getType() == tgtType;
-    return false;
-  });
-
-  return (it != insertPoint)
-             ? cast<arith::ExtSIOp>(*it)
-             : getValueOrCreateCastToIndexLike(builder, loc, tgtType, val);
-}
-
 struct TritonIntelTensorDescToBlockPointer
     : tt::intel::impl::TritonIntelTensorDescToBlockPointerBase<
           TritonIntelTensorDescToBlockPointer> {
@@ -209,12 +184,10 @@ private:
     for (const auto [shape, stride, size] :
          llvm::zip(op.getShape(), op.getStrides(),
                    tDescType.getBlockType().getShape())) {
-      shapes.push_back(findOrCreateCast(
-          loc, shape, builder.getIntegerType(shapeAndStridesBitwidth),
-          builder));
-      strides.push_back(findOrCreateCast(
-          loc, stride, builder.getIntegerType(shapeAndStridesBitwidth),
-          builder));
+      shapes.push_back(tt::intel::findOrCreateCastOp(
+          shape, builder.getIntegerType(shapeAndStridesBitwidth)));
+      strides.push_back(tt::intel::findOrCreateCastOp(
+          stride, builder.getIntegerType(shapeAndStridesBitwidth)));
       Value zero =
           tt::intel::findOrCreateIntConstant(loc, 0, offsetBitwidth, builder);
       offsets.push_back(zero);
