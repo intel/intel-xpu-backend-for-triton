@@ -75,10 +75,8 @@ module {
   // CHECK:          [[TENSOR_PTR_1:%.+]] = tt.advance [[VAR_arg1]], {{\[}}[[CST_8_i32]], [[IDX_CAST]]] : <tensor<16x32xf16>>
   // CHECK:          [[LOAD:%.+]] = tt.load [[TENSOR_PTR_1]] {boundaryCheck = array<i32: 0, 1>, padding = 1 : i32} : !tt.ptr<tensor<16x32xf16>>
   // CHECK:          [[ADD:%.+]] = arith.addf [[VAR_arg2]], [[LOAD]] : tensor<16x32xf16>
-  // CHECK-DAG:      [[EXTSI_PARAM_1a:%.+]] = arith.extsi [[PARAM_1]] : i32 to i64
-  // CHECK-DAG:      [[EXTSI_PARAM_2a:%.+]] = arith.extsi [[PARAM_2]] : i32 to i64
-  // CHECK-DAG:      [[CST_0_i32_1:%.+]] = arith.constant 0 : i32
-  // CHECK:          [[TENSOR_PTR2:%.+]] = tt.make_tensor_ptr [[PARAM_0]], {{\[}}[[EXTSI_PARAM_2a]], [[EXTSI_PARAM_1a]]], {{\[}}[[CST_1_i64]], [[EXTSI_PARAM_2]]], {{\[}}[[CST_0_i32_1]], [[CST_0_i32_1]]] {{.*}} : <tensor<16x32xf16>>
+  // CHECK:          [[CST_0_i32_1:%.+]] = arith.constant 0 : i32
+  // CHECK:          [[TENSOR_PTR2:%.+]] = tt.make_tensor_ptr [[PARAM_0]], {{\[}}[[EXTSI_PARAM_2]], [[EXTSI_PARAM_1]]], {{\[}}[[CST_1_i64]], [[EXTSI_PARAM_2]]], {{\[}}[[CST_0_i32_1]], [[CST_0_i32_1]]] {{.*}} : <tensor<16x32xf16>>
   // CHECK:          [[CMP:%.+]] = arith.cmpi eq, [[IDX_CAST]], [[CST_8_i32]] : i32
   // CHECK:          [[TENSOR_PTR3:%.+]] = arith.select [[CMP]], [[VAR_arg1]], [[TENSOR_PTR:%.+]] : !tt.ptr<tensor<16x32xf16>>
   // CHECK:          scf.yield [[TENSOR_PTR3]], [[ADD]] : !tt.ptr<tensor<16x32xf16>>, tensor<16x32xf16>
