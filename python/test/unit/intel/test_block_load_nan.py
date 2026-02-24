@@ -12,7 +12,7 @@ from triton._internal_testing import is_xpu
 @pytest.mark.parametrize("dtype_str", ["float32"])
 @pytest.mark.parametrize("transpose", [True, False])
 @pytest.mark.skipif(not is_xpu(), reason="Block load tests are specific to the XPU backend")
-@pytest.mark.xfail(not triton.runtime.driver.active.get_current_target().arch['has_subgroup_2d_block_io'],
+@pytest.mark.xfail(not triton.runtime.driver.active.get_current_target().arch['has_2d_block_io'],
                    reason="Block loads not supported on this architecture", run=False)
 def test_block_load_dpas_layout(M, N, dtype_str, transpose, device, tmp_path: pathlib.Path):
     # modify the layouts to ensure the correct OCL/SPIRV intrinsic is called for each datatype
