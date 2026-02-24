@@ -122,15 +122,6 @@ The driver (`third_party/intel/backend/driver.py`) integrates with:
 - **Level Zero** (`ze_loader`) — low-level GPU access
 - **IGC** (Intel Graphics Compiler) — JIT compilation from SPIR-V
 
-## C++ Coding Conventions
-
-This project follows LLVM/MLIR coding standards (see `.github/copilot-instructions.md` for full details):
-- **Naming**: camelCase for functions/variables, CamelCase for types/classes
-- **Casting**: use `dyn_cast`, `cast`, `isa` — never C-style casts
-- **Containers**: prefer `SmallVector`, `DenseMap`, `StringRef`, `ArrayRef`
-- **Error handling**: use `LogicalResult`/`failure()`/`success()` for MLIR pass and pattern code, `signalPassFailure()` for pass-level failures; no exceptions
-- **Include order**: main header, local, LLVM/MLIR, system
-
 ## IR Debugging
 
 ```bash

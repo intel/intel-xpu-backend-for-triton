@@ -576,6 +576,7 @@ Setting `TEST_UNSKIP=true` ignores all skip/xfail decorators:
 | `--intel` | Intel backend Python | 8 workers | `python/test/unit/intel/` |
 | `--language` | Language features | 8 workers | Excludes mxfp, scaled_dot |
 | `--core` | Combined core | Mixed | intel + language + mxfp + debug + runtime |
+| `--minicore` | Subset of core | Mixed | Smaller subset of core tests |
 | `--runtime` | Runtime | Serial | Avoids race conditions |
 | `--interpreter` | Interpreter mode | 16 workers | `TRITON_INTERPRET=1`, CPU only |
 | `--tutorial` | Tutorials | Serial | Runs numbered tutorials |
