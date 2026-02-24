@@ -53,25 +53,6 @@ Intel-specific code lives in `third_party/intel/` and is symlinked into the Pyth
 
 The backend registers as the `xpu` target in Triton's multi-backend system.
 
-### Compilation Pipeline
-
-```
-Triton Python → TTIR → TTGIR → LLVM IR → SPIR-V → ZEBIN
-```
-
-Each stage is orchestrated by `XPUBackend` in `third_party/intel/backend/compiler.py`:
-
-1. **`make_ttir()`** — Triton IR optimization. Intel-specific passes in `third_party/intel/lib/Dialect/Triton/Transforms/` (RemoveBoundaryChecks, RemoveMasks, StrideVersioning, BlockPointerToTensorDesc, etc.)
-2. **`make_ttgir()`** — GPU IR lowering. Core optimization passes in `third_party/intel/lib/TritonIntelGPUTransforms/` (Coalesce, AccelerateMatmul, Pipeline, MaterializeBlockPointer, ReduceVariableLiveness, etc.)
-3. **`make_llir()`** — LLVM IR generation via `third_party/intel/lib/TritonIntelGPUToLLVM/` and `third_party/intel/lib/TritonGENToLLVM/`
-4. **`make_spv()`** — SPIR-V translation via `third_party/intel/lib/Target/SPIRV/`
-5. **`make_zebin()`** — Final binary via `ocloc` (Intel offline compiler), with auto GRF mode selection
-
-### Custom MLIR Dialects
-
-- **TritonGEN** (`third_party/intel/lib/Dialect/TritonGEN/`) — Intel GPU-specific operations
-- **TritonIntelGPU** (`third_party/intel/lib/Dialect/TritonIntelGPU/`) — GPU IR with Intel layout attributes
-
 ### Key Source Directories
 
 | Directory | Purpose |
