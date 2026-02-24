@@ -70,6 +70,10 @@ python -m pytest python/test/unit/language/test_core.py::test_name -x -s
 
 Test skip lists for Intel are in `scripts/skiplist/`.
 
+## Pre-commit
+
+Install via `pip install pre-commit`. Run `python3 -m pre_commit run --show-diff-on-failure --color=always --all-files --verbose` before pushing a PR to ensure all checks pass (formatting, linting, etc.).
+
 ## Architecture
 
 ### Intel Backend Integration
