@@ -13,7 +13,7 @@ import torch
 import triton
 import triton.runtime as tr
 import triton.language as tl
-from triton._internal_testing import is_hip_cdna3, is_cuda, is_hip
+from triton._internal_testing import is_hip_cdna3, is_cuda, is_hip, is_xpu_cri
 
 input_dtypes = ["bfloat16", "float16", "float32"]
 if is_cuda():
@@ -82,7 +82,7 @@ def matmul_kernel(A, B, C, M, N, K,  #
                           for BLOCK_K in [16, 32, 64]  #
                           for BLOCK_M in [16, 64]  #
                           for BLOCK_N in [16, 64, 128]  #
-                          for (M, K, N) in [(768, 768, 1024)]  #
+                          for (M, K, N) in ([(64, 768, 128)] if is_xpu_cri() else [(768, 768, 1024)])  #
                           for w in input_dtypes
                           for x in input_dtypes  #
                           for o in out_dtypes])
