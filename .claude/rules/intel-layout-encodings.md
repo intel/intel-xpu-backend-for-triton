@@ -37,27 +37,9 @@ SwizzledSharedEncodingAttr  (upstream, bank-conflict-aware shared memory layout)
 
 The primary compute encoding for Intel XMX matrix operations.
 
-### Parameters
+> **IMPORTANT**: Before working with encoding attributes, you MUST read the full parameter tables in `.claude/reference/build-and-debug-reference.md` using the Read tool.
 
-| Parameter | Type | Constraint | Description |
-|-----------|------|------------|-------------|
-| `repeatCount` | unsigned | Range [1, 8] | M dimension of DPAS tile |
-| `systolicDepth` | unsigned | Must be **8** | Depth of systolic array (hardware-fixed) |
-| `executionSize` | unsigned | **16** (PVC/BMG) or **8** (DG2) | N dimension (SIMD width) |
-| `opsPerChannel` | unsigned | 1, 2, or 4 | K packing factor: `32 / element_bitwidth` |
-| `warpsPerCTA` | ArrayRef<unsigned> | Rank 2 or 3 | Warp distribution in CTA, e.g., [4, 1] |
-| `repCluster` | ArrayRef<unsigned> | Rank 2 or 3 | Repetition cluster size for memory optimization |
-| `threadsPerWarp` | unsigned | Must be **16**, must be >= executionSize | Subgroup size for DPAS |
-| `fp4KPack` | optional<unsigned> | If present, must be **2**; only valid when opsPerChannel=4 | FP4 packing along K |
-
-### opsPerChannel by Element Type
-
-| Element Type | Bitwidth | opsPerChannel | K (depth=8) |
-|-------------|----------|---------------|-------------|
-| TF32 | 32 | 1 | 8 |
-| BF16, FP16 | 16 | 2 | 16 |
-| INT8, FP8 (E5M2/E4M3FN) | 8 | 4 | 32 |
-| FP4 (E2M1) | 4 | 4 (with fp4KPack=2) | 64 |
+**Do not guess** DpasEncodingAttr parameter details or opsPerChannel values — read them from `.claude/reference/build-and-debug-reference.md`.
 
 ### Instruction Shape Derivation
 
@@ -127,15 +109,7 @@ DPAS uses register and lane bases to map thread/register coordinates to tensor c
 
 ## WarpEncodingAttr (`#ttig.warp`)
 
-Thread-tile distribution encoding for non-DPAS operations.
-
-### Parameters
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `sizePerThread` | ArrayRef<unsigned> | Elements computed per thread in each dimension |
-| `threadsPerWarp` | ArrayRef<unsigned> | Number of threads per warp in each dimension |
-| `order` | ArrayRef<unsigned> | Access order (fastest-changing dimension first) |
+Thread-tile distribution encoding for non-DPAS operations. **Do not guess** parameter details — read them from `.claude/reference/build-and-debug-reference.md`.
 
 ### Element Distribution
 ```
@@ -146,19 +120,7 @@ Each thread owns a contiguous tile of `sizePerThread` elements, and `threadsPerW
 
 ## Subgroup2DBlockEncodingAttr (`#ttig.subgroup_2d_block`)
 
-Encoding for 2D block I/O layouts using Intel hardware 2D block load/store instructions.
-
-### Parameters
-
-| Parameter | Type | Constraint | Description |
-|-----------|------|------------|-------------|
-| `warpsPerCTA` | ArrayRef<unsigned> | Rank 2 | Warp distribution in CTA |
-| `CGALayout` | CGAEncodingAttr | — | CTA layout encoding |
-| `instrShape` | ArrayRef<unsigned> | Rank 2 (height, width) | Shape of 2D block operation |
-| `numBlocks` | unsigned | — | Count of vertically adjacent blocks per load |
-| `order` | ArrayRef<unsigned> | Rank 2 | Access order |
-| `kWidth` | unsigned | 1, 2, or 4 | Layout conversion parameter for K dimension |
-| `threadsPerWarp` | unsigned | Must be **16** | Subgroup size for 2D block I/O |
+Encoding for 2D block I/O layouts using Intel hardware 2D block load/store instructions. **Do not guess** parameter details — read them from `.claude/reference/build-and-debug-reference.md`.
 
 ### Layout Mapping
 
@@ -183,15 +145,7 @@ Increasing `numBlocks` scales the inner (width) dimension.
 
 ## DotOperandEncodingAttr (Upstream Wrapper)
 
-Wraps a parent MMA encoding (e.g., DpasEncodingAttr) with operand-specific metadata.
-
-### Parameters
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `opIdx` | unsigned | — | 0 = Operand A, 1 = Operand B |
-| `parent` | Attribute | — | Parent MMA encoding (DpasEncodingAttr for Intel) |
-| `kWidth` | unsigned | 0 | K-dimension element packing width |
+Wraps a parent MMA encoding (e.g., DpasEncodingAttr) with operand-specific metadata. **Do not guess** parameter details — read them from `.claude/reference/build-and-debug-reference.md`.
 
 ### kWidth for DPAS
 
@@ -354,4 +308,3 @@ When source and destination layouts differ by a transpose:
    - Uses `SubGroupBlockWriteOp` for efficient writes
 2. **Load phase**: Each thread loads back in the transposed order using vectorized loads
 3. Supports both 8/16/32/64-bit integer elements and bitcastable float types
-

@@ -29,15 +29,9 @@ Arguments: `(k_dim: i32, a: aTy, b: bTy, c: cTy, flags: i32)`
 - Operand types are packed: BF16 operands passed as i16 (OpenCL convention)
 - `flags` encodes precision information as a hex bitmask
 
-### Type Packing Rules
-| Precision | A type in MLIR | A type in SPIR-V call |
-|-----------|---------------|----------------------|
-| TF32 | f32 or i32 | f32 or i32 (no change) |
-| BF16 | i16 | i16 (BF16 → i16 in OCL) |
-| FP16 | i16 | i16 |
-| INT8/FP8 | i16 | i16 (packed pairs) |
+> **IMPORTANT**: Before modifying lowering code, you MUST read the type packing rules and cache control mappings in `.claude/reference/build-and-debug-reference.md` using the Read tool.
 
-C/D operands may need bitcast (e.g., bf16 vector → i16 vector for SPIR-V call, then bitcast back).
+**Do not guess** type packing rules (precision to SPIR-V type mapping) — read them from `.claude/reference/build-and-debug-reference.md`.
 
 ### GenISA Path (LTS fallback)
 Standard DPAS uses SPIR-V even on LTS. Only Block Scale DPAS always uses GenISA.
@@ -160,24 +154,7 @@ Cache controls are encoded as `!spirv.DecorationCacheControlINTEL` LLVM IR metad
 
 **Cache levels**: 0 = L1, 1 = L3
 
-### LoadCacheControl → Decoration Mapping
-| LoadCacheControl | L1 Decoration | L3 Decoration |
-|-----------------|---------------|---------------|
-| L1UC_L3UC | Uncached | Uncached |
-| L1UC_L3C | Uncached | Cached |
-| L1C_L3UC | Cached | Uncached |
-| L1C_L3C | Cached | Cached |
-| L1S_L3UC | Streaming | Uncached |
-| L1S_L3C | Streaming | Cached |
-| L1IAR_L3C | InvalidateAfterRead | Cached |
-
-### Example LLVM IR
-```llvm
-%1 = load i32, ptr %0, !spirv.DecorationCacheControlINTEL !1
-!1 = !{!2, !3}
-!2 = !{i32 6442, i32 0, i32 1, i32 0}  ; Load, L1, Cached, operand 0
-!3 = !{i32 6442, i32 1, i32 0, i32 0}  ; Load, L3, Uncached, operand 0
-```
+**Do not guess** LoadCacheControl-to-decoration mappings — read them and the LLVM IR examples from `.claude/reference/build-and-debug-reference.md`.
 
 ### Validation Rules
 - Two decorations of the same kind (load or store) **cannot** target the same cache level

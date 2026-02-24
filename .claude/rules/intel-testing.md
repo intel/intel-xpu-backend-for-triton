@@ -26,30 +26,9 @@ Three test frameworks, each with distinct conventions:
 
 **Registered tools**: `triton-opt`, `triton-llvm-opt`, `mlir-translate`, `llc`, `%PYTHON`
 
-### Test Directory Structure
+> **IMPORTANT**: Before writing or modifying tests, you MUST read the full testing reference in `.claude/reference/passes-and-testing-reference.md` using the Read tool.
 
-Intel-specific tests are in these directories:
-```
-test/
-├── Triton/Intel/                     # TTIR Intel passes
-│   ├── BlockPointerToTensorDesc/
-│   ├── RemoveBoundaryChecks/
-│   ├── RemoveMasks/
-│   ├── StrideVersioning/
-│   └── ...
-├── TritonIntelGPU/                   # TTGIR Intel passes
-│   ├── RemoveLayoutConversions/
-│   ├── accelerate-matmul-pvc.mlir
-│   ├── coalesce.mlir
-│   ├── loop-pipeline.mlir
-│   └── ...
-├── Conversion/intel/                 # Lowering passes
-│   ├── tritongpu_to_gen.mlir
-│   ├── tritonintelgpu_to_llvm.mlir
-│   └── ...
-├── Analysis/intel/                   # Analysis tests
-└── TritonGEN/                        # GEN dialect tests
-```
+**Do not guess** test directory structure — read it from `.claude/reference/passes-and-testing-reference.md`.
 
 ### File Naming Conventions
 
@@ -92,44 +71,7 @@ test/
 | `--dump-input-context=20` | Show 20 lines of context on mismatch |
 | `-allow-unregistered-dialect` | Allow unregistered dialects in IR |
 
-### Intel Pass CLI Flags
-
-TTIR passes:
-- `-triton-intel-remove-boundary-checks`
-- `-triton-intel-remove-masks`
-- `-triton-intel-stride-versioning`
-- `-triton-intel-block-pointer-to-tdesc`
-- `-triton-intel-tdesc-to-block-pointer`
-- `-triton-intel-fuse-reshape`
-
-TTGIR passes:
-- `-tritonintelgpu-coalesce`
-- `-tritonintelgpu-accelerate-matmul`
-- `-tritonintelgpu-optimize-dot-operands`
-- `-tritonintelgpu-remove-layout-conversions`
-- `-tritonintelgpu-materialize-block-pointer`
-- `-tritonintelgpu-pipeline`
-- `-tritonintelgpu-reduce-data-duplication`
-- `-tritonintelgpu-reduce-variable-liveness`
-- `-tritonintelgpu-optimize-reduction-locality`
-
-Conversion passes:
-- `--convert-triton-intel-gpu-to-llvm`
-- `--convert-tritongen-to-llvm`
-- `--intel-allocate-shared-memory`
-
-### FileCheck Directives
-
-| Directive | Purpose | Example |
-|-----------|---------|---------|
-| `CHECK:` | Match on next unmatched line | `// CHECK: tt.load` |
-| `CHECK-LABEL:` | Named section (resets variable scope) | `// CHECK-LABEL: @my_func` |
-| `CHECK-NEXT:` | Must be on immediately following line | `// CHECK-NEXT: llvm.return` |
-| `CHECK-SAME:` | Continues on same line | `// CHECK-SAME: %[[VAL:.*]]` |
-| `CHECK-DAG:` | Order-independent match | `// CHECK-DAG: [[PTR:%.+]]` |
-| `CHECK-NOT:` | Pattern must NOT appear | `// CHECK-NOT: tt.trans` |
-| `CHECK-COUNT-N:` | Pattern appears exactly N times | `// CHECK-COUNT-2: scf.for` |
-| `COM:` | Comment (ignored by FileCheck) | `// COM: test explanation` |
+**Do not guess** Intel pass CLI flags or FileCheck directives — read them from `.claude/reference/passes-and-testing-reference.md`.
 
 ### Variable Capture Patterns
 
@@ -159,33 +101,7 @@ For testing multiple code paths in one file:
 // PATH-B: specific_to_path_b
 ```
 
-### Environment Variables Used in Lit Tests
-
-| Variable | Purpose |
-|----------|---------|
-| `TRITON_INTEL_PREDICATED_LOAD` | Enable/disable predicated loads |
-| `TRITON_INTEL_PREDICATED_STORE` | Enable/disable predicated stores |
-| `TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS` | Block I/O for all layouts |
-| `TRITON_INTEL_ENABLE_DPAS_FOR_WARP_SIZE_32` | DPAS with warp size 32 |
-| `TRITON_INTEL_ONE_MATRIX_PER_LOAD_BT` | One matrix per block-transposed load |
-| `TRITON_INTEL_2DBLOCK_MULTIPLE_C_MATRICES_PER_LOAD` | Multiple C matrices per 2D load |
-| `TRITON_INTEL_REMOVELAYOUTCONVERSION_SUPPORT_FOR_LOOP` | Layout conversion through for-loops |
-
-### Test Module Attributes
-
-Tests declare hardware capabilities and configuration via module attributes:
-```mlir
-module attributes {
-  "ttg.num-ctas" = 1 : i32,
-  "ttg.num-warps" = 4 : i32,
-  "ttg.threads-per-warp" = 16 : i32,
-  "ttig.support_2d_block_io",
-  "ttig.support_subgroup_matrix_multiply_accumulate",
-  "ttig.support_predicated_io"
-} {
-  // test functions here
-}
-```
+**Do not guess** lit test environment variables or test module attribute syntax — read them from `.claude/reference/passes-and-testing-reference.md`.
 
 ### Running Lit Tests
 
@@ -217,34 +133,7 @@ build/.../bin/triton-opt test/TritonIntelGPU/coalesce.mlir -tritonintelgpu-coale
 - `python/test/gluon/` — Gluon dialect tests
 - `python/test/conftest.py` — Global pytest configuration
 
-### Architecture Detection Functions
-
-From `triton/_internal_testing.py`:
-
-```python
-is_xpu()         # Any Intel XPU
-is_xpu_pvc()     # Xe-HPC (Data Center GPU Max)
-is_xpu_bmg()     # Xe2 (Battlemage / Arc B-series)
-is_xpu_dg2()     # Xe-HPG (Arc A-series, DG2)
-is_xpu_cri()     # Xe3P (Crescent Island)
-is_xpu_lnl()     # Lunar Lake
-is_xpu_mtl()     # Meteor Lake
-is_xpu_arl_h()   # Arrow Lake H
-is_xpu_arl_s()   # Arrow Lake S
-is_xpu_ptl_h()   # Panther Lake H
-is_xpu_ptl_u()   # Panther Lake U
-
-# Generation shortcuts:
-is_xpu_xe2()     # Same as is_xpu_bmg()
-is_xpu_xe3()     # ptl_h or ptl_u
-is_xpu_xe3p()    # Same as is_xpu_cri()
-```
-
-### Device Capability Checks
-
-From `triton/_internal_testing.py`:
-- `check_type_supported(dtype, device)` — xfails on unsupported dtypes (e.g., float64)
-- `check_threads_supported(num_warps, threads_per_warp, device)` — xfails on unsupported warp/workgroup sizes
+**Do not guess** architecture detection function names (`is_xpu_*()`) or device capability checks — read them from `.claude/reference/passes-and-testing-reference.md`.
 
 ### Pytest Markers and Decorators
 
@@ -284,23 +173,7 @@ Standard steps for a Python kernel test:
 4. Convert with `to_triton(x, device=device)` / `to_numpy(x_tri)`
 5. Launch kernel and compare: `np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)`
 
-### Numerical Tolerance Conventions
-
-| Precision | Typical rtol | Typical atol | Notes |
-|-----------|-------------|-------------|-------|
-| float32 | 0.01 | — | Standard |
-| float16 | 0.01 | 7e-3 | May need atol |
-| bfloat16 | 0.5 | — | Large tolerance |
-| int types | exact | exact | Use `np.testing.assert_equal` |
-| float8 | 0.1 | 0.1 | Very loose |
-
-### Pytest Fixtures
-
-From `conftest.py`:
-- `device(request)` — Returns device from `--device` CLI option
-- `fresh_triton_cache()` — Forces recompilation (sets `knobs.compilation.always_compile = True`)
-- `fresh_knobs()` — Resets all knobs except build/nvidia/amd
-- `with_allocator()` — Sets up custom memory allocator
+**Do not guess** numerical tolerance conventions, pytest fixtures, or test runner details — read them from `.claude/reference/passes-and-testing-reference.md`.
 
 ### Running Python Tests
 
@@ -413,43 +286,7 @@ Setting `TEST_UNSKIP=true` ignores all skip/xfail decorators:
 
 ## Test Runner Script
 
-### `scripts/test-triton.sh` Categories
-
-| Flag | Category | Parallel | Notes |
-|------|----------|----------|-------|
-| `--unit` | C++ lit + gtest | Yes | `ctest` + `lit -v` |
-| `--intel` | Intel backend Python | 8 workers | `python/test/unit/intel/` |
-| `--language` | Language features | 8 workers | Excludes mxfp, scaled_dot |
-| `--core` | Combined core | Mixed | intel + language + mxfp + debug + runtime |
-| `--minicore` | Subset of core | Mixed | Smaller subset of core tests |
-| `--runtime` | Runtime | Serial | Avoids race conditions |
-| `--interpreter` | Interpreter mode | 16 workers | `TRITON_INTERPRET=1`, CPU only |
-| `--tutorial` | Tutorials | Serial | Runs numbered tutorials |
-| `--benchmarks` | Microbenchmarks | — | Performance benchmarks |
-| `--inductor` | PyTorch inductor | — | Integration tests |
-
-**Default** (`scripts/test-triton.sh` with no flags) runs: unit + core + tutorial + microbenchmarks + triton_kernels.
-
-### Key Environment Variables
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `TRITON_TEST_SKIPLIST_DIR` | `scripts/skiplist/default` | Skip list directory |
-| `TEST_UNSKIP` | `false` | Ignore skip/xfail decorators |
-| `TRITON_INTERPRET` | — | Run in interpreter mode (no GPU) |
-| `PYTEST_MAX_PROCESSES` | 8 | Parallel worker count |
-
-Other variables: `TRITON_TEST_SUITE` (suite name), `TRITON_TEST_REPORTS`/`TRITON_TEST_REPORTS_DIR` (JUnit XML), `TRITON_TEST_IGNORE_ERRORS`, `TRITON_DISABLE_LINE_INFO`.
-
-### Makefile Test Targets
-
-| Target | What it runs |
-|--------|-------------|
-| `make test-lit` | MLIR lit tests (`ninja check-triton-lit-tests`) |
-| `make test-cpp` | C++ gtest (`ninja check-triton-unit-tests`) |
-| `make test-unit` | Full Python test suite |
-| `make test-nogpu` | Tests without GPU (lit + cpp + frontend) |
-| `make test` | Everything (lit + cpp + python) |
+**Do not guess** test runner categories (`test-triton.sh` flags), environment variables, or Makefile targets — read them from `.claude/reference/passes-and-testing-reference.md`.
 
 ## Writing New Tests
 

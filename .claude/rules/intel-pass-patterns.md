@@ -7,17 +7,9 @@ applyTo: '**/intel/lib/**/*.cpp, **/intel/lib/**/*.h, **/intel/include/**/Transf
 
 ## 1. Pass Declaration (TableGen)
 
-### TableGen File Locations
+> **IMPORTANT**: Before creating or modifying passes, you MUST read the full pass inventory and utilities in `.claude/reference/passes-and-testing-reference.md` using the Read tool.
 
-| Scope | TableGen File | Pass Prefix |
-|-------|--------------|-------------|
-| TTIR transforms | `intel/include/Dialect/Triton/Transforms/Passes.td` | `triton-intel-<name>` |
-| TTGIR transforms | `intel/include/Dialect/TritonIntelGPU/Transforms/Passes.td` | `tritonintelgpu-<name>` |
-| GPU→TritonGEN | `intel/include/GPUToTritonGEN/Passes.td` | `convert-gpu-to-tritongen` |
-| TritonGEN→LLVM | `intel/include/TritonGENToLLVM/Passes.td` | `convert-tritongen-to-llvm` |
-| TritonGEN→SPIR-V | `intel/include/TritonGENToSPIRV/Passes.td` | `convert-tritongen-to-spirv` |
-| IntelGPU→LLVM | `intel/include/TritonIntelGPUToLLVM/Passes.td` | `convert-triton-intel-gpu-to-llvm` |
-| Module annotation | `intel/include/TritonAnnotateModule/Passes.td` | `triton-annotate-module` |
+**Do not guess** TableGen file locations or pass prefixes — read them from `.claude/reference/passes-and-testing-reference.md`.
 
 ### Basic Pass Declaration
 ```tablegen
@@ -145,7 +137,6 @@ For cross-dialect lowering that requires type conversion. Uses `ConvertOpToLLVMP
 #define GEN_PASS_DEF_CONVERTTRITONGENTOLLVM
 #include "intel/include/TritonGENToLLVM/Passes.h.inc"
 
-// Define conversion pattern
 struct DPASLowering
     : public ConvertOpToLLVMPattern<TritonGEN::MatrixDPASOp> {
   using ConvertOpToLLVMPattern<
@@ -160,7 +151,6 @@ struct DPASLowering
   }
 };
 
-// Define pass with TypeConverter and ConversionTarget
 struct ConvertTritonGENToLLVM
     : public triton::impl::ConvertTritonGENToLLVMBase<ConvertTritonGENToLLVM> {
   void runOnOperation() override {
@@ -236,14 +226,7 @@ These rules are **mandatory** per official MLIR documentation:
 | Partial Conversion | `applyPartialConversion()` | Lowering passes. Requires `ConversionTarget`. |
 | Walk | `walkAndApplyPatterns()` | Simple one-shot traversals. No revisiting. |
 
-### Pattern Base Class Reference
-
-| Base Class | Signature | TypeConverter | Use Case |
-|-----------|-----------|---------------|----------|
-| `OpRewritePattern<Op>` | `matchAndRewrite(op, PatternRewriter &)` | No | Intra-dialect transforms |
-| `ConvertOpToLLVMPattern<Op>` | `matchAndRewrite(op, OpAdaptor, ConversionPatternRewriter &)` | Yes | Lowering to LLVM |
-| `ConvertTritonGPUOpToLLVMPattern<Op>` | Same as above + target info | Yes | Triton GPU → LLVM |
-| `OpConversionPattern<Op>` | `matchAndRewrite(op, OpAdaptor, ConversionPatternRewriter &)` | Yes | Generic dialect conversion |
+**Do not guess** pattern base class signatures — read them from `.claude/reference/passes-and-testing-reference.md`.
 
 ## 4. Namespace and Macro Conventions
 
@@ -255,14 +238,7 @@ Place `GEN_PASS_DEF_<PASSNAME>` in the correct namespace before including `Passe
 
 In `Passes.h`, use `GEN_PASS_DECL` and `GEN_PASS_REGISTRATION` in the same namespace.
 
-### Standard Aliases
-
-```cpp
-using namespace mlir;
-namespace tt = mlir::triton;
-namespace ttg = mlir::triton::gpu;
-namespace ttgi = mlir::triton::gpu::intel;
-```
+**Do not guess** standard namespace aliases (`tt`, `ttg`, `ttgi`) — read them from `.claude/reference/passes-and-testing-reference.md`.
 
 ### Debug Macros
 
@@ -318,104 +294,15 @@ ADD_PASS_OPTION_WRAPPER_1("add_triton_annotate_module",
 
 ## 6. Common Utilities
 
-### Layout and Encoding Queries (`Utility.h`)
-```cpp
-bool hasDpasEncoding(RankedTensorType t);        // Has DpasEncodingAttr
-bool hasDotDpasEncoding(RankedTensorType t);     // Has DotOperand with DPAS parent
-std::optional<DotOperandEncodingAttr> getDotEncoding(RankedTensorType t);
-Attribute inferSrcEncoding(Operation *op, Attribute encoding);
-```
-
-### DPAS Calculation Helpers
-```cpp
-SmallVector<unsigned> calculateDPASInstShapeA(unsigned rc, unsigned sd, unsigned opc);
-SmallVector<unsigned> calculateWarpsPerTile(unsigned capRC, unsigned capExec,
-                                            ArrayRef<int64_t> shape, unsigned numWarps);
-SmallVector<unsigned> calculateRepCluster(const DPASCapability &cap, ...);
-```
-
-### Layout Propagation
-```cpp
-LogicalResult getConvertBackwardSlice(
-    OpOperand &root, SetVector<Value> &slice, Attribute rootEncoding,
-    DenseMap<Value, Attribute> &layout,
-    std::function<bool(Operation *)> stopPropagation = nullptr);
-```
-
-### DPAS Analysis
-```cpp
-auto dpasAnalysis = ttgi::DPASAnalysisFactory::createDPASAnalysis(mod);
-auto result = ttgi::DPASAnalysisFactory::canUseDPAS(funcOp, dpasAnalysis);
-// Returns DPASAnalysisResult::True/False/Maybe
-```
-
-### Lowering Helpers
-```cpp
-TritonLLVMOpBuilder b(loc, rewriter);  // Builder with convenience methods
-createDeviceFunctionCall(rewriter, fnName, retTy, argTys, args, attrs);
-intel::mangle(fnName, argTypes);       // SPIR-V name mangling
-```
+**Do not guess** common utility APIs (layout queries, DPAS helpers, layout propagation, lowering helpers) — read them from `.claude/reference/passes-and-testing-reference.md`.
 
 ## 7. Capability Gating Attributes
 
-Module attributes for device capabilities are listed in `intel-gpu-hardware.md` (Device Capabilities). Use `TritonIntelGPUDialect::get<Capability>AttrName()` getters to query them. Key pass-to-capability dependencies:
-
-- **MaterializeBlockPointer, Pipeline**: `support_2d_block_io`
-- **AccelerateMatmul** (via DPASAnalysis): `support_subgroup_matrix_multiply_accumulate`
-- **DPASAnalysisFactory** (Xe2 vs Xe3P): `support_subgroup_matrix_multiply_accumulate_bf8`
-- **LoadStoreOpToLLVM**: `support_predicated_io`
-- **isSPVBuiltinAvailable()**: `is_lts`
-- **ArithEmulation**: `support_bfloat16_arithmetic`
-- **Type conversion lowering**: `support_bfloat16_conversion`, `support_f8_conversion`, `support_f4_conversion`
-- **AtomicOpLowering**: `support_16bit_atomics`
+**Do not guess** pass-to-capability dependencies — read them from `.claude/reference/passes-and-testing-reference.md`. Module attribute names use `TritonIntelGPUDialect::get<Capability>AttrName()` getters.
 
 ## 8. Complete Pass Inventory
 
-### TTIR Transforms (`lib/Dialect/Triton/Transforms/`)
-
-| Pass | CLI Flag | Pattern | Gate |
-|------|----------|---------|------|
-| RemoveBoundaryChecks | `triton-intel-remove-boundary-checks` | Manual walk | — |
-| RemoveMasks | `triton-intel-remove-masks` | Manual walk + TypeSwitch | — |
-| StrideVersioning | `triton-intel-stride-versioning` | Manual walk + if-conversion | — |
-| BlockPointerToTensorDesc | `triton-intel-block-pointer-to-tdesc` | Manual pattern matching | — |
-| TensorDescToBlockPointer | `triton-intel-tdesc-to-block-pointer` | Manual pattern matching | — |
-| RewriteTensorDescToPointer | `triton-intel-rewrite-tensor-descriptor-to-pointer` | Manual walk | — |
-| FuseReshape | `triton-intel-fuse-reshape` | Manual pattern matching | — |
-| SimplifySignedArithmetic | `triton-intel-simplify-signed-arithmetic` | Manual pattern matching | — |
-
-### TTGIR Transforms (`lib/TritonIntelGPUTransforms/`)
-
-| Pass | CLI Flag | Pattern | Gate |
-|------|----------|---------|------|
-| Coalesce | `tritonintelgpu-coalesce` | Manual walk + axis analysis | — |
-| AccelerateMatmul | `tritonintelgpu-accelerate-matmul` | OpRewritePattern (greedy) | DPASAnalysis |
-| MaterializeBlockPointer | `tritonintelgpu-materialize-block-pointer` | Manual walk + annotation | `support_2d_block_io` |
-| OptimizeDotOperands | `tritonintelgpu-optimize-dot-operands` | OpRewritePattern (greedy) | — |
-| RemoveLayoutConversions | `tritonintelgpu-remove-layout-conversions` | Multi-stage (walk + greedy) | — |
-| ReduceDataDuplication | `tritonintelgpu-reduce-data-duplication` | OpRewritePattern (greedy) | — |
-| Pipeline | `tritonintelgpu-pipeline` | Loop transform + options | `support_2d_block_io` |
-| ReduceVariableLiveness | `tritonintelgpu-reduce-variable-liveness` | Manual walk + reorder | — |
-| OptimizeReductionLocality | `tritonintelgpu-optimize-reduction-locality` | Manual walk + reshape | — |
-| RewriteStackPtr | `tritonintelgpu-rewrite-stack-ptr` | Manual walk + symbol replace | — |
-| AnnotateModule | `triton-annotate-module` | Attribute annotation (struct options) | — |
-
-### Conversion/Lowering Passes
-
-| Pass | CLI Flag | Pattern | Source |
-|------|----------|---------|--------|
-| ConvertTritonIntelGPUToLLVM | `convert-triton-intel-gpu-to-llvm` | Multi-phase ConvertOp + TypeConverter | `lib/TritonIntelGPUToLLVM/` |
-| AllocateSharedMemory | `intel-allocate-shared-memory` | Manual walk + metadata | `lib/TritonIntelGPUToLLVM/` |
-| ConvertTritonGENToLLVM | `convert-tritongen-to-llvm` | ConvertOpToLLVMPattern | `lib/TritonGENToLLVM/` |
-| ConvertTritonGENToSPIRV | `convert-tritongen-to-spirv` | Dialect translation | `lib/TritonGENToSPIRV/` |
-| ConvertGPUToTritonGEN | `convert-gpu-to-tritongen` | OpRewritePattern + func call lowering | `lib/GPUToTritonGEN/` |
-
-### Post-Processing (`lib/Target/LLVMIR/`)
-
-| Transform | File | Description |
-|-----------|------|-------------|
-| LLVMIRFreezeMaskedDivRem | `LLVMIRFreezeMaskedDivRem.cpp` | Insert freeze for masked div/rem |
-| PostProcess | `PostProcess.cpp` | Final LLVM IR cleanup |
+**Do not guess** pass names, CLI flags, or patterns — read the complete pass inventory (TTIR, TTGIR, Conversion, Post-Processing tables) from `.claude/reference/passes-and-testing-reference.md`.
 
 ## 9. Anti-Patterns
 

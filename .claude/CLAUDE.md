@@ -6,38 +6,11 @@ This file provides project-level guidance to Claude Code (claude.ai/code) for th
 
 This is an out-of-tree Intel GPU backend for the [Triton](https://github.com/triton-lang/triton) compiler. The codebase is a fork of upstream Triton with Intel-specific extensions in `third_party/intel/`.
 
-## Build Commands
+## Build
 
-```bash
-# Build Triton (incremental after initial setup)
-scripts/compile-triton.sh
+Quick start: `scripts/compile-triton.sh` (incremental), `make dev-install` (pip-based).
 
-# Build LLVM from source + Triton
-scripts/compile-triton.sh --llvm
-
-# Build with ccache
-scripts/compile-triton.sh --ccache
-
-# Clean build
-scripts/compile-triton.sh --clean
-
-# Incremental rebuild (after initial pip install)
-ninja -C $(python -c 'from build_helpers import get_cmake_dir; print(get_cmake_dir())' 2>/dev/null || echo build)
-
-# Just rebuild triton-opt
-make triton-opt
-
-# Upstream-style dev install (pip-based)
-make dev-install
-```
-
-Build tips:
-- Set `MAX_JOBS=8` on machines with <64GB RAM.
-- Set `MAX_JOBS=16` if machines have more than 64GB RAM.
-- Set `TRITON_BUILD_WITH_CCACHE=true` for faster rebuilds.
-- Set `TRITON_BUILD_WITH_CLANG_LLD=true` to use clang/lld (faster linking).
-- Use `pip install -e . --no-build-isolation` for faster incremental builds.
-- LLVM version is pinned in `cmake/llvm-hash.txt`.
+> **IMPORTANT**: Before troubleshooting builds or configuring build options, you MUST read the full build commands and tips in `.claude/reference/build-and-debug-reference.md` using the Read tool.
 
 ## Pre-commit
 
@@ -53,21 +26,7 @@ Intel-specific code lives in `third_party/intel/` and is symlinked into the Pyth
 
 The backend registers as the `xpu` target in Triton's multi-backend system.
 
-### Key Source Directories
-
-| Directory | Purpose |
-|---|---|
-| `third_party/intel/backend/` | Python backend (compiler.py, driver.py) |
-| `third_party/intel/lib/TritonIntelGPUTransforms/` | Core GPU optimization passes |
-| `third_party/intel/lib/TritonIntelGPUToLLVM/` | GPU IR → LLVM IR conversion |
-| `third_party/intel/lib/TritonGENToLLVM/` | GEN dialect → LLVM conversion |
-| `third_party/intel/lib/Target/SPIRV/` | SPIR-V translation |
-| `third_party/intel/lib/Dialect/` | Custom dialect definitions (TritonGEN, TritonIntelGPU) |
-| `third_party/intel/include/` | C++ headers for all Intel-specific components |
-| `third_party/intel/triton_xpu.cc` | Plugin registration — binds all passes to Python |
-| `python/triton/` | Python language, runtime, and compiler framework |
-| `unittest/` | C++ unit tests (Analysis, Dialect, Tools) |
-| `scripts/` | Build, test, and CI automation |
+> **IMPORTANT**: Before navigating or modifying the project structure, you MUST read the full directory table in `.claude/reference/build-and-debug-reference.md` using the Read tool.
 
 ### Runtime Stack
 
@@ -78,25 +37,9 @@ The driver (`third_party/intel/backend/driver.py`) integrates with:
 
 ## IR Debugging
 
-```bash
-# Full IR dump at every compilation stage
-TRITON_KERNEL_DUMP=1 TRITON_ALWAYS_COMPILE=1 python my_kernel.py
+> **IMPORTANT**: Before debugging IR or setting dump environment variables, you MUST read the full IR debugging reference in `.claude/reference/build-and-debug-reference.md` using the Read tool.
 
-# Dump MLIR passes (optionally filter by kernel name)
-MLIR_ENABLE_DUMP=1 python my_kernel.py
-MLIR_ENABLE_DUMP=_my_kernel python my_kernel.py
-
-# Dump LLVM IR
-LLVM_IR_ENABLE_DUMP=1 python my_kernel.py
-
-# Run in interpreter mode (no GPU needed)
-TRITON_INTERPRET=1 python my_kernel.py
-
-# Best autotuned config with readable dump dirs
-TRITON_PRINT_AUTOTUNING=1 python my_kernel.py
-```
-
-Full list of configuration knobs: `python/triton/knobs.py`. Intel-specific knobs are under `knobs.intel.*`.
+Full knobs list: `python/triton/knobs.py`. Intel-specific knobs are under `knobs.intel.*`.
 
 ## Change Discipline
 
@@ -112,5 +55,6 @@ Full list of configuration knobs: `python/triton/knobs.py`. Intel-specific knobs
 
 ## Dependencies
 
-- **oneAPI**: Primary dependency — install via [Intel PyTorch Dependency Bundle](https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpus.html)
-- **Python requirements**: `python/requirements.txt` (build), `scripts/requirements-test.txt` (test)
+Python requirements: `python/requirements.txt` (build), `scripts/requirements-test.txt` (test).
+
+> **IMPORTANT**: Before setting up dependencies or troubleshooting missing libraries, you MUST read the full dependency info in `.claude/reference/build-and-debug-reference.md` using the Read tool.
