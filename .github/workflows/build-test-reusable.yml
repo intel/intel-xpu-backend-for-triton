@@ -423,8 +423,8 @@ jobs:
 
       - name: Pass rate
         run: |
-          triton-utils pass_rate --reports reports --save-to-json pass_rate.json
-          triton-utils tests_stats --reports reports --level testsuite --pretty-print
+          triton-utils pass_rate --reports reports --save-to-json pass_rate.json --merge-test-results --tests-with-multiple-testsuites
+          triton-utils tests_stats --reports reports --level testsuite --pretty-print --merge-test-results --tests-with-multiple-testsuites
 
       - name: Upload pass rate report
         uses: actions/upload-artifact@v6
@@ -437,7 +437,9 @@ jobs:
         with:
           name: test-reports-tutorials-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           include-hidden-files: true
-          path: reports/tutorials*.xml
+          path: |
+            reports/tutorials*.xml
+            reports/test-report-tutorials-*/tutorials.xml
 
       - name: Upload tutorials performance report
         uses: actions/upload-artifact@v6

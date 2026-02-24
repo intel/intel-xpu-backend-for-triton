@@ -573,11 +573,11 @@ run_tutorial_tests() {
 
   cd $TRITON_PROJ/python/test/tutorials
 
-  # Use a unique report name per run mode to avoid tutorials.xml collisions
-  # when CI merges artifacts from parallel tutorial jobs (rest, fa-64, fa-128-*).
-  local report_name="tutorials"
+  # For FA-specific runs, place the report in a subdirectory so each CI
+  # matrix job's tutorials.xml has a unique path within the upload artifact.
+  local saved_reports_dir="$TRITON_TEST_REPORTS_DIR"
   if [[ "$TUTORIAL06_RUN_MODE" != "all" && "$TUTORIAL06_RUN_MODE" != "skip" ]]; then
-    report_name="tutorials-${TUTORIAL06_RUN_MODE//_/-}"
+    TRITON_TEST_REPORTS_DIR="$TRITON_TEST_REPORTS_DIR/test-report-tutorials-${TUTORIAL06_RUN_MODE//_/-}"
   fi
 
   # For reading them via os.environ for benchmark CSV redirection.
@@ -587,8 +587,11 @@ run_tutorial_tests() {
   # Run tutorials serially (no -n flag): tutorials execute heavy GPU kernels with
   # autotuning, sys.argv manipulation, and global allocator changes that are not
   # safe to parallelize with pytest-xdist.
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=tutorials TRITON_TEST_REPORT_NAME="$report_name" \
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=tutorials \
     run_pytest_command -vvv --device xpu test_tutorials.py --tutorial06-mode "$TUTORIAL06_RUN_MODE"
+
+  # Restore the original reports directory.
+  TRITON_TEST_REPORTS_DIR="$saved_reports_dir"
 }
 
 run_microbench_tests() {

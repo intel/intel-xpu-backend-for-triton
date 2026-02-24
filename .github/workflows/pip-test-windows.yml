@@ -174,8 +174,8 @@ jobs:
           cd ${{ env.NEW_WORKSPACE }}
           bash -c "\
             source ./scripts/capture-hw-details.sh; \
-            triton-utils pass_rate --reports reports --save-to-json pass_rate.json; \
-            triton-utils tests_stats --reports reports --level testsuite --pretty-print; \
+            triton-utils pass_rate --reports reports --save-to-json pass_rate.json --merge-test-results --tests-with-multiple-testsuites; \
+            triton-utils tests_stats --reports reports --level testsuite --pretty-print --merge-test-results --tests-with-multiple-testsuites; \
           "
 
       - name: Upload pass rate report

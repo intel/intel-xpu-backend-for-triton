@@ -27,6 +27,8 @@ TUTORIALS = [
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 TUTORIALS_DIR = REPO_ROOT / "python" / "tutorials"
 
+_FA_TUTORIAL = "06-fused-attention"
+
 
 class CustomMark(triton.testing.Mark):
     """Redirects benchmark CSV reports to a given directory instead of cwd."""
@@ -48,7 +50,7 @@ class CustomMark(triton.testing.Mark):
 
 
 @pytest.fixture(autouse=True)
-def tutorial_environment(monkeypatch):
+def tutorial_environment(monkeypatch) -> pathlib.Path | None:
     """Prevent tutorials from leaking global state between test runs."""
     monkeypatch.setattr(sys, "argv", sys.argv[:])
 
@@ -61,7 +63,7 @@ def tutorial_environment(monkeypatch):
     if os.environ.get("TRITON_TEST_REPORTS", "false").lower() == "true":
         reports_dir = os.environ.get("TRITON_TEST_REPORTS_DIR", "") or None
 
-    yield reports_dir
+    yield pathlib.Path(reports_dir) if reports_dir else None
 
     _allocation._allocator.reset(saved_token)
 
@@ -76,26 +78,14 @@ def _configure_fa(mode: str, monkeypatch) -> None:
         monkeypatch.setenv("FWD_FP8_SKIP", "1")
 
 
-@pytest.mark.parametrize("name", TUTORIALS, ids=TUTORIALS)
-def test_tutorial(name: str, request, monkeypatch, tutorial_environment):
-    """Run a single Triton tutorial as a pytest test case."""
-    mode = request.config.getoption("--tutorial06-mode")
-    is_fa = name == "06-fused-attention"
-
-    if mode == "skip" and is_fa:
-        pytest.skip("06-fused-attention skipped")
-    if mode in ("fa_only", "fp8_only", "skip_fp8") and not is_fa:
-        pytest.skip("Only 06-fused-attention runs in this FA configuration")
-
-    if is_fa and mode in ("fp8_only", "skip_fp8"):
-        _configure_fa(mode, monkeypatch)
-
+def _run_tutorial(name: str, monkeypatch, tutorial_environment):
+    """Run a single Triton tutorial by name."""
     tutorial_path = TUTORIALS_DIR / f"{name}.py"
     assert tutorial_path.exists(), f"Missing tutorial file: {tutorial_path}"
 
     reports_dir = tutorial_environment
     if reports_dir:
-        report_path = pathlib.Path(reports_dir) / tutorial_path.stem
+        report_path = reports_dir / tutorial_path.stem
         report_path.mkdir(parents=True, exist_ok=True)
 
         def perf_report(benchmarks):
@@ -109,3 +99,27 @@ def test_tutorial(name: str, request, monkeypatch, tutorial_environment):
     module = importlib.util.module_from_spec(spec)
     monkeypatch.setattr(sys, "argv", [str(tutorial_path)])
     spec.loader.exec_module(module)
+
+
+# Hyphens become underscores for valid Python identifiers.
+# Tutorial 06 is parametrized via fa_config, e.g. test_06_fused_attention[default].
+# Skiplist files must match these node IDs exactly.
+
+for t in TUTORIALS:
+    name = f"test_{t.replace('-', '_')}"
+    if t == _FA_TUTORIAL:
+
+        def test(fa_config, monkeypatch, tutorial_environment, t=t):
+            # "default" = no env-var overrides; uses environment as-is.
+            if fa_config in ("fp8_only", "skip_fp8"):
+                _configure_fa(fa_config, monkeypatch)
+            _run_tutorial(t, monkeypatch, tutorial_environment)
+
+    else:
+
+        def test(monkeypatch, tutorial_environment, t=t):
+            _run_tutorial(t, monkeypatch, tutorial_environment)
+
+    globals()[name] = test
+
+del t, name, test  # Don't export from module.
