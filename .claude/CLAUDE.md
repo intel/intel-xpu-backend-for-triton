@@ -39,37 +39,6 @@ Build tips:
 - Use `pip install -e . --no-build-isolation` for faster incremental builds.
 - LLVM version is pinned in `cmake/llvm-hash.txt`.
 
-## Testing
-
-```bash
-# Run tests via the Intel test script
-scripts/test-triton.sh                      # default tests (unit + core + tutorial + microbench)
-scripts/test-triton.sh --unit               # C++ unit tests (lit + gtest)
-scripts/test-triton.sh --core               # core tests
-scripts/test-triton.sh --minicore           # subset of core tests
-scripts/test-triton.sh --intel              # Intel-specific tests only
-scripts/test-triton.sh --language           # language tests
-scripts/test-triton.sh --tutorial           # tutorial tests
-scripts/test-triton.sh --benchmarks         # performance benchmarks
-scripts/test-triton.sh --interpreter        # interpreter mode tests
-scripts/test-triton.sh --inductor           # PyTorch inductor integration
-
-# Run tests via Makefile (upstream-style)
-make test-lit                               # MLIR lit tests
-make test-cpp                               # C++ gtest unit tests
-make test-unit                              # Python unit tests (requires GPU)
-make test-nogpu                             # Tests that don't need a GPU
-
-# Run a single Python test file
-python -m pytest python/test/unit/language/test_core.py -x -s
-python -m pytest python/test/unit/language/test_core.py::test_name -x -s
-
-# Run a single lit test
-<build_dir>/bin/triton-opt test/path/to/test.mlir <pass-flags>
-```
-
-Test skip lists for Intel are in `scripts/skiplist/`.
-
 ## Pre-commit
 
 Install via `pip install pre-commit`. Run `python3 -m pre_commit run --show-diff-on-failure --color=always --all-files --verbose` before pushing a PR to ensure all checks pass (formatting, linting, etc.).
