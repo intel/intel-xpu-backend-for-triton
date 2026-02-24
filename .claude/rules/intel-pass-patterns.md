@@ -387,20 +387,16 @@ intel::mangle(fnName, argTypes);       // SPIR-V name mangling
 
 ## 7. Capability Gating Attributes
 
-| Attribute Name (getter) | Module Attr String | Checked By |
-|------------------------|-------------------|------------|
-| `getSupport2DBlockIOAttrName()` | `ttig.support_2d_block_io` | MaterializeBlockPointer, Pipeline |
-| `getSupportDPASAttrName()` | `ttig.support_subgroup_matrix_multiply_accumulate` | AccelerateMatmul (indirectly via DPASAnalysis) |
-| `getSupportDPASWithBF8AttrName()` | `ttig.support_subgroup_matrix_multiply_accumulate_bf8` | DPASAnalysisFactory (selects Xe2 vs Xe3P) |
-| `getSupportBlockScaleDPASAttrName()` | `ttig.support_subgroup_scaled_matrix_multiply_accumulate` | Block Scale DPAS lowering |
-| `getSupportPredicatedIOAttrName()` | `ttig.support_predicated_io` | LoadStoreOpToLLVM |
-| `getSupportPrefetch256BAttrName()` | `ttig.support_prefetch_256b` | 2D block prefetch verifier |
-| `getIsLTSAttrName()` | `ttig.is_lts` | isSPVBuiltinAvailable() (lowering path selection) |
-| `getSupportBFloat16ArithmeticAttrName()` | `ttig.support_bfloat16_arithmetic` | ArithEmulation |
-| `getSupportBFloat16ConversionAttrName()` | `ttig.support_bfloat16_conversion` | BF16 conversion lowering |
-| `getSupportF8ConversionAttrName()` | `ttig.support_f8_conversion` | FP8 conversion lowering |
-| `getSupportF4ConversionAttrName()` | `ttig.support_f4_conversion` | FP4 conversion lowering |
-| `getSupport16BitAtomicsAttrName()` | `ttig.support_16bit_atomics` | AtomicOpLowering |
+Module attributes for device capabilities are listed in `intel-gpu-hardware.md` (Device Capabilities). Use `TritonIntelGPUDialect::get<Capability>AttrName()` getters to query them. Key pass-to-capability dependencies:
+
+- **MaterializeBlockPointer, Pipeline**: `support_2d_block_io`
+- **AccelerateMatmul** (via DPASAnalysis): `support_subgroup_matrix_multiply_accumulate`
+- **DPASAnalysisFactory** (Xe2 vs Xe3P): `support_subgroup_matrix_multiply_accumulate_bf8`
+- **LoadStoreOpToLLVM**: `support_predicated_io`
+- **isSPVBuiltinAvailable()**: `is_lts`
+- **ArithEmulation**: `support_bfloat16_arithmetic`
+- **Type conversion lowering**: `support_bfloat16_conversion`, `support_f8_conversion`, `support_f4_conversion`
+- **AtomicOpLowering**: `support_16bit_atomics`
 
 ## 8. Complete Pass Inventory
 

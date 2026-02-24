@@ -114,23 +114,8 @@ Capabilities queried via Level Zero and set as module attributes:
 LTS (Long Term Support) driver version threshold: `(1, 6, 35096, 9)`.
 When `is_lts=true`, certain lowering paths use GenISA intrinsics instead of SPIR-V builtins.
 
-## DpasEncodingAttr (`#ttig.dpas`)
+## DPAS Hardware Constants
 
-Encoding attribute for DPAS layout in the TritonIntelGPU dialect.
-
-### Parameters
-| Parameter | Description | Values |
-|-----------|-------------|--------|
-| `repeatCount` | M dimension of DPAS tile | 1, 2, 4, **8** (typical) |
-| `systolicDepth` | Depth of systolic array | Always **8** |
-| `executionSize` | N dimension (SIMD width) | **16** (PVC/BMG) or **8** (ATSM) |
-| `opsPerChannel` | K packing factor | 1 (TF32), 2 (FP16/BF16), 4 (INT8/FP8/FP4) |
-| `warpsPerCTA` | Warp distribution in CTA | Array, e.g., [4, 1] |
-| `repCluster` | Repetition cluster size | Array, optimization for memory access |
-| `threadsPerWarp` | Subgroup size for DPAS | Currently only **16** |
-| `fp4KPack` | FP4 packing along K | Optional, for F4E2M1 |
-
-### DPASCapability Constants
 ```cpp
 systolicDepth = 8;
 repeatCount = 8;
@@ -138,17 +123,7 @@ opsChanBitWidths = 32;  // opsPerChannel = 32 / element_bitwidth
 executionSize = 16 or 8;  // architecture-dependent
 ```
 
-### Matrix Shape Derivation
-```
-M = repeatCount
-N = executionSize
-K = systolicDepth × opsPerChannel
-```
-
-Data is distributed row-major across threads in the subgroup:
-- If column size = subgroup size: one scalar per thread = one row
-- If column size < subgroup size: one scalar spans multiple rows
-- If column size > subgroup size: one scalar covers a partial row
+DpasEncodingAttr parameters and layout details are in `intel-layout-encodings.md`.
 
 ## DPAS Engine Types
 
@@ -167,23 +142,6 @@ Data is distributed row-major across threads in the subgroup:
 
 ### Factory Selection
 `DPASAnalysisFactory::createDPASAnalysis()` selects V1 (Xe2) or V2 (Xe3P) based on `support_subgroup_matrix_multiply_accumulate_bf8` module attribute.
-
-## WarpEncodingAttr (`#ttig.warp`)
-
-Thread tile distribution encoding:
-- `sizePerThread`: elements computed per thread
-- `threadsPerWarp`: subgroup size
-- `order`: access order (fastest-changing dimension first)
-
-## Subgroup2DBlockEncodingAttr (`#ttig.subgroup_2d_block`)
-
-Encoding for 2D block I/O layouts:
-- `instrShape`: (height, width) of the 2D block operation
-- `numBlocks`: count of blocks per load
-- `threadsPerWarp`: subgroup size
-- `warpsPerCTA`: warp distribution
-- `order`: access order
-- `kWidth`: layout conversion parameter for K dimension
 
 ## Register Pressure Management
 

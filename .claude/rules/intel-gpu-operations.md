@@ -268,10 +268,4 @@ Note: Values must match IGC implementation (coupling acknowledged in source as F
 | ALL_SVM_DEVICES | 3 | AllSvmDevices |
 | SUB_GROUP | 4 | SubGroup |
 
-### Cache Control Decorations (SPIR-V)
-
-**Load** (`LoadCacheControlDecorationEnum`): Uncached (0), Cached (1), Streaming (2), InvalidateAfterRead (3), ConstCached (4)
-
-**Store** (`StoreCacheControlDecorationEnum`): Uncached (0), WriteThrough (1), WriteBack (2), Streaming (3)
-
-These map to `!spirv.DecorationCacheControlINTEL` LLVM IR metadata per the SPV_INTEL_cache_controls extension. Two decorations of the same kind (load or store) cannot target the same cache level.
+Cache control SPIR-V decoration mappings are in `intel-gpu-lowering.md`.

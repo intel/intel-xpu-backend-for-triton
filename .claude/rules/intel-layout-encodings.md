@@ -355,21 +355,3 @@ When source and destination layouts differ by a transpose:
 2. **Load phase**: Each thread loads back in the transposed order using vectorized loads
 3. Supports both 8/16/32/64-bit integer elements and bitcastable float types
 
-## Key Shape Constants
-
-| Parameter | Typical Values | Notes |
-|-----------|---------------|-------|
-| threadsPerWarp (DPAS) | 16 | Fixed for all Intel DPAS |
-| threadsPerWarp (Subgroup2DBlock) | 16 | Fixed for 2D block I/O |
-| systolicDepth | 8 | Fixed for PVC/DG2/BMG |
-| executionSize (PVC/BMG) | 16 | N dimension |
-| executionSize (DG2) | 8 | N dimension |
-| repeatCount range | 1-8 | Typical: 8 |
-| opsPerChannel values | 1, 2, 4 | By element bitwidth |
-| kWidth (Operand A, 16-bit) | 1 | opsPerChannel/2 |
-| kWidth (Operand B, 16-bit) | 2 | opsPerChannel |
-| kWidth (Operand A, 8-bit) | 2 | opsPerChannel/2 |
-| kWidth (Operand B, 8-bit) | 4 | opsPerChannel |
-| repCluster[M] max | 32 | Limited by 2D block load tile_height |
-| repCluster[N] max | 64 bytes / elem_size | Limited by 2D block load bytes per row |
-| Store sizePerThread max | 128 bits | Coalesce pass enforces this |
