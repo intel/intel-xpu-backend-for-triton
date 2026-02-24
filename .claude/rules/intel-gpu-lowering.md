@@ -186,40 +186,6 @@ Cache controls are encoded as `!spirv.DecorationCacheControlINTEL` LLVM IR metad
 
 ## SPIR-V Extensions
 
-The backend registers the following SPIR-V extensions (from `SPIRVTranslation.cpp`):
+The backend registers 25 SPIR-V extensions (19 Intel + 6 Khronos/EXT) in `SPIRVTranslation.cpp`. Key extensions: `SPV_INTEL_2d_block_io`, `SPV_INTEL_subgroup_matrix_multiply_accumulate`, `SPV_INTEL_cache_controls`, `SPV_INTEL_split_barrier`, `SPV_INTEL_bfloat16_conversion`, `SPV_EXT_float8`.
 
-### Intel Extensions
-| Extension | Purpose |
-|-----------|---------|
-| `SPV_INTEL_16bit_atomics` | 16-bit atomic operations |
-| `SPV_INTEL_2d_block_io` | 2D block load/store/prefetch |
-| `SPV_INTEL_arbitrary_precision_integers` | Non-standard integer widths |
-| `SPV_INTEL_arithmetic_fence` | Arithmetic fencing |
-| `SPV_INTEL_bfloat16_arithmetic` | BF16 native arithmetic |
-| `SPV_INTEL_bfloat16_conversion` | BF16 conversions |
-| `SPV_INTEL_cache_controls` | L1/L3 cache control decorations |
-| `SPV_INTEL_float4` | FP4 type support |
-| `SPV_INTEL_fp_conversions` | FP8 conversion operations |
-| `SPV_INTEL_fp_fast_math_mode` | Fast math mode flags |
-| `SPV_INTEL_inline_assembly` | Inline assembly support |
-| `SPV_INTEL_kernel_attributes` | Kernel attribute decorations |
-| `SPV_INTEL_memory_access_aliasing` | Memory aliasing hints |
-| `SPV_INTEL_split_barrier` | Split-phase barriers |
-| `SPV_INTEL_subgroup_matrix_multiply_accumulate` | DPAS operations |
-| `SPV_INTEL_subgroups` | Subgroup operations |
-| `SPV_INTEL_tensor_float32_conversion` | TF32 conversion |
-| `SPV_INTEL_unstructured_loop_controls` | Loop control decorations |
-| `SPV_INTEL_vector_compute` | Vector compute model |
-
-### Khronos/EXT Extensions
-| Extension | Purpose |
-|-----------|---------|
-| `SPV_EXT_shader_atomic_float_add` | Float atomic add |
-| `SPV_EXT_shader_atomic_float16_add` | FP16 atomic add |
-| `SPV_EXT_float8` | FP8 type support |
-| `SPV_KHR_bfloat16` | BF16 type in SPIR-V |
-| `SPV_KHR_bit_instructions` | Bitwise instructions |
-| `SPV_KHR_non_semantic_info` | Non-semantic metadata |
-
-### GenISA Unknown Intrinsics
 When using GenISA intrinsics, the SPIR-V translator must be configured to allow unknown LLVM intrinsics (they are passed through and resolved by IGC during JIT compilation).

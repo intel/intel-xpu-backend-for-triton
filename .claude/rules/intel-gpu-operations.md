@@ -207,23 +207,7 @@ Converts f32 to TF32 (Tensor Float 32, E8M10) with rounding to nearest even. Ope
 ## Enum Reference
 
 ### PrecisionType
-| Name | Value | Mnemonic | Notes |
-|------|-------|----------|-------|
-| UNUSED | 0 | unused | |
-| U8 | 1 | u8 | |
-| U4 | 2 | u4 | |
-| U2 | 3 | u2 | |
-| S8 | 4 | i8 | |
-| S4 | 5 | i4 | |
-| S2 | 6 | i2 | |
-| F8E5M2 | 7 | bf8 | New in Xe3P |
-| F8E4M3FN | 8 | hf8 | New in Xe3P |
-| TF32 | 10 | tf32 | |
-| BF16 | 11 | bf16 | |
-| FP16 | 12 | f16 | |
-| F4E2M1 | 13 | e2m1 | New in Xe3P |
-
-Note: Values must match IGC implementation (coupling acknowledged in source as FIXME).
+Values 0-13: UNUSED(0), U8(1), U4(2), U2(3), S8(4), S4(5), S2(6), F8E5M2(7, bf8), F8E4M3FN(8, hf8), TF32(10), BF16(11), FP16(12), F4E2M1(13, e2m1). F8/F4 types new in Xe3P. Values must match IGC implementation.
 
 ### LoadCacheControl
 | Name | Value | Description |
@@ -238,34 +222,10 @@ Note: Values must match IGC implementation (coupling acknowledged in source as F
 | L1IAR_L3C | 7 | L1 invalidate-after-read, L3 cached |
 
 ### StoreCacheControl
-| Name | Value | Description |
-|------|-------|-------------|
-| DEFAULT | 0 | Default behavior |
-| L1UC_L3UC | 1 | L1 uncached, L3 uncached |
-| L1UC_L3WB | 2 | L1 uncached, L3 write-back |
-| L1WT_L3UC | 3 | L1 write-through, L3 uncached |
-| L1WT_L3WB | 4 | L1 write-through, L3 write-back |
-| L1S_L3UC | 5 | L1 streaming, L3 uncached |
-| L1S_L3WB | 6 | L1 streaming, L3 write-back |
-| L1WB_L3WB | 7 | L1 write-back, L3 write-back |
-| L1WT_L3WT | 8 | L1 write-through, L3 write-through |
-| L1S_L3S | 9 | L1 streaming, L3 streaming |
+Values 0-9: DEFAULT(0), then combinations of L1{UC,WT,S,WB}_L3{UC,WB,WT,S}. Names are self-documenting (e.g., L1UC_L3WB = L1 uncached, L3 write-back).
 
-### MemFence
-| Name | Value | Mnemonic |
-|------|-------|----------|
-| NONE | 0 | None |
-| LOCAL | 1 | Local |
-| GLOBAL | 2 | Global |
-| LOCAL_AND_GLOBAL | 3 | LocalAndGlobal |
-
-### MemScope
-| Name | Value | Mnemonic |
-|------|-------|----------|
-| WORK_ITEM | 0 | WorkItem |
-| WORK_GROUP | 1 | WorkGroup |
-| DEVICE | 2 | Device |
-| ALL_SVM_DEVICES | 3 | AllSvmDevices |
-| SUB_GROUP | 4 | SubGroup |
+### MemFence / MemScope
+MemFence: NONE(0), LOCAL(1), GLOBAL(2), LOCAL_AND_GLOBAL(3).
+MemScope: WORK_ITEM(0), WORK_GROUP(1), DEVICE(2), ALL_SVM_DEVICES(3), SUB_GROUP(4).
 
 Cache control SPIR-V decoration mappings are in `intel-gpu-lowering.md`.

@@ -213,48 +213,5 @@ SPIR-V → native binary via `ocloc compile`. Auto-GRF spill detection may trigg
 | Xe-HPC | 512 KB L1/SLM per Xe-core | 408 MB (HBM + cache) |
 
 ### LSC Fence Operations (vISA)
-Memory ports (`LscSFID`):
-- **UGM** (0x0): Untyped global memory
-- **UGML** (0x1): Low-bandwidth untyped global memory (cross-tile)
-- **TGM** (0x2): Typed global memory
-- **SLM** (0x3): Shared local memory
+Memory ports: UGM (0x0, global), UGML (0x1, cross-tile), TGM (0x2, typed), SLM (0x3, local). Fence ops range from NONE (0x0) through FLUSHL3 (0x5), with scopes from GROUP (0x0) to SYSACQ (0x6). See vISA spec for full enum values.
 
-Fence operations (`LscFenceOp`):
-- **NONE** (0x0): No operation
-- **EVICT** (0x1): Removes dirty and clean lines from L1
-- **INVALIDATE** (0x2): Clears clean lines only, retains dirty
-- **DISCARD** (0x3): Removes all lines without eviction
-- **CLEAN** (0x4): Writes dirty lines to memory, keeps cached
-- **FLUSHL3** (0x5): Flushes L3 cache only
-
-Fence scopes (`LscScope`):
-- **GROUP** (0x0): Threadgroup
-- **LOCAL** (0x1): Local (DSSs)
-- **TILE** (0x2): Multiple DSSs
-- **GPU** (0x3): Entire GPU with LLC
-- **GPUS** (0x4): All system GPUs
-- **SYSTEM** (0x5): System-level
-- **SYSACQ** (0x6): Device memory commitment
-
-## Key Numerical Constants
-
-| Item | Value |
-|------|-------|
-| Default warp_size | 32 |
-| DPAS threadsPerWarp | 16 |
-| GRF register width | 32 bytes |
-| Small GRF register count | 128 |
-| Large GRF register count | 256 |
-| GRF payload (SIMD16) | 64 bytes |
-| Spill threshold for auto-GRF | 1000 bytes |
-| Max num_warps with 256-GRF | 32 |
-| DPAS systolic depth | 8 |
-| DPAS max repeat count | 8 |
-| DPAS exec size (PVC/BMG) | 16 |
-| DPAS exec size (DG2) | 8 |
-| 2D Block load max tile_height | 32 |
-| 2D Block store max tile_height | 8 |
-| 2D Block max bytes per row | 64 (load/store) |
-| 2D Block prefetch max bytes per row | 256 (if supported) |
-| HW base address alignment | 64 bytes |
-| SW compensated base alignment | 4 bytes |
