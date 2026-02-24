@@ -28,7 +28,7 @@ on:
       pytorch_jgs_artifactory_revision:
         description: PyTorch JGS artifactory revision, used only if pytorch_mode is 'jgs_artifactory_revision'
         type: string
-        default: "2025-10-15-1934"
+        default: "2026-02-07-1603"
       oneapi_mode:
         description: oneAPI mode, DLE or DPCPP_JGS
         type: choice
@@ -40,7 +40,7 @@ on:
       dpcpp_jgs_revision:
         description: DPCPP_JGS revision, used only if oneapi_mode is 'DPCPP_JGS_revision'
         type: string
-        default: "2025-10-10-0647"
+        default: "2026-02-04-2222"
       ignore_errors:
         description: Ignore test errors
         type: boolean
@@ -63,8 +63,7 @@ on:
 #        default: false
 
   schedule:
-    # 8pm central time is 2am UTC
-    - cron: '0 2 * * *'
+    - cron: '0 7 * * *' # every day at 7 AM UTC, which is 1 AM CST or 2 AM CDT
 
 permissions:
   contents: read
@@ -74,6 +73,8 @@ permissions:
 jobs:
   pre-commit:
     name: Pre-commit checks
+    # We don't need to have per-commit checks in main-interim because this CI is not run on PRs in main-interim
+    if: github.ref != 'refs/heads/main-interim'
     runs-on: Linux
     steps:
       - name: Checkout repository
@@ -159,7 +160,7 @@ jobs:
     strategy:
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
 
-    uses: ./.github/workflows/build-test-reusable-on-JGS-simulator.yml
+    uses: intel-tools/intel-xpu-backend-for-triton/.github/workflows/build-test-reusable-on-JGS-simulator.yml@main-js
     secrets: inherit
     with:
       device: ${{ inputs.device || 'jgs' }}
@@ -167,9 +168,11 @@ jobs:
       runner_label: ${{ inputs.runner_label }}
       pytorch_ref: ${{ inputs.pytorch_ref || '' }}
       pytorch_mode: ${{ inputs.pytorch_mode || 'jgs_artifactory_revision' }}
-      pytorch_jgs_artifactory_revision: ${{ inputs.pytorch_jgs_artifactory_revision || '2025-10-15-1934' }}
+      pytorch_jgs_artifactory_revision: ${{ inputs.pytorch_jgs_artifactory_revision || '2026-02-07-1603' }}
       oneapi_mode: ${{ inputs.oneapi_mode || 'DPCPP_JGS_revision' }}
-      dpcpp_jgs_revision: ${{ inputs.dpcpp_jgs_revision || '2025-10-10-0647' }}
+      dpcpp_jgs_revision: ${{ inputs.dpcpp_jgs_revision || '2026-02-04-2222' }}
+      pti_mode: 'PTI_JGS_revision'
+      pti_jgs_revision: '2026-02-03-0048'
       python_version: ${{ matrix.python }}
       upload_test_reports: true
       ignore_errors: ${{ inputs.ignore_errors || false }}
@@ -178,3 +181,4 @@ jobs:
       enable_unskip: ${{ inputs.enable_unskip || false }}
       use_pyenv_python: ${{ inputs.use_pyenv_python || false }}
       enable_e2e_tests: ${{ needs.prepare.outputs.TESTING_ON_JGS != 'true' }}
+      nightly_run: ${{ github.event_name == 'schedule' }}
