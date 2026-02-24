@@ -95,22 +95,10 @@ void maybeProcess(Module *mod);   // Can be nullptr
 ```
 
 ## Error Handling
-Use `LogicalResult` for MLIR pass/pattern code (the dominant pattern in this codebase). Use `signalPassFailure()` for pass-level failures. Avoid exceptions.
+Use `LogicalResult`/`failure()`/`success()` for MLIR pass/pattern code. Use `signalPassFailure()` for pass-level failures. Avoid exceptions. For MLIR pattern and pass error handling conventions, see `intel-pass-patterns.md` Section 3.
 
+For LLVM API interfaces, use `llvm::Error`/`Expected<T>`:
 ```cpp
-// ✅ MLIR patterns: return LogicalResult
-LogicalResult matchAndRewrite(DotOp op, PatternRewriter &rewriter) const override {
-  if (!canApply(op))
-    return failure();
-  // ... transform ...
-  return success();
-}
-
-// ✅ Pass-level failure
-if (applyPatternsGreedily(m, std::move(patterns)).failed())
-  signalPassFailure();
-
-// ✅ LLVM utilities: use llvm::Error/Expected<T> when interfacing with LLVM APIs
 Expected<std::unique_ptr<Module>> parseModule(StringRef filename);
 ```
 
@@ -161,13 +149,4 @@ auto count = vec.size();  // Type is obvious
 
 ## Triton/MLIR-Specific Guidelines
 
-```cpp
-// ✅ Operation and pass naming: CamelCase with uppercase start
-triton::LoadOp
-triton::gpu::ConvertLayoutOp
-class RemoveLayoutConversionsPass : public PassWrapper<...>
-```
-
-**GPU kernels:** Respect hardware limits (thread blocks, shared memory), use memory coalescing, avoid bank conflicts.
-
-**MLIR patterns:** Use rewriter patterns for transformations, follow dialect conversion infrastructure, register and verify operations properly.
+Operation and pass classes follow CamelCase: `triton::LoadOp`, `triton::gpu::ConvertLayoutOp`. For MLIR pass writing patterns, rewriter conventions, and dialect conversion infrastructure, see `intel-pass-patterns.md`.
