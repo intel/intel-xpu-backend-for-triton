@@ -98,6 +98,14 @@ TRITON_PRINT_AUTOTUNING=1 python my_kernel.py
 
 Full list of configuration knobs: `python/triton/knobs.py`. Intel-specific knobs are under `knobs.intel.*`.
 
+## Change Discipline
+
+- Keep diffs minimal
+- Do not refactor unrelated code
+- Preserve public CLI behavior if applicable
+- Avoid introducing new runtime dependencies unless necessary
+- If a change impacts performance, CLI flags, output formats, or backward compatibility, explicitly document it
+
 ## General Preferences
 
 - Never ask for permission before running any read-only or non-destructive shell command (e.g. `grep`, `cat`, `find`, `ls`, `file`, `wc`, `diff`, `nm`, `objdump`, `ldd`, `which`, `env`, `echo`, `pwd`, etc.). Run them directly.
