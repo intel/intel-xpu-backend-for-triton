@@ -419,6 +419,11 @@ if(TRITON_BUILD_PYTHON_MODULE)
                   ${PYTHON_SRC_PATH}/llvm.cc
                   ${PYTHON_SRC_PATH}/specialize.cc)
 
+  # Fixes error: ‘GluonLayouts’ declared with greater visibility than the type of its field
+  if (NOT MSVC)
+    target_compile_options(triton PRIVATE -Wno-error=attributes)
+  endif()
+
   # Link triton with its dependencies
   target_link_libraries(triton PRIVATE ${TRITON_LIBRARIES})
 
