@@ -210,28 +210,12 @@ build/.../bin/triton-opt test/TritonIntelGPU/coalesce.mlir -tritonintelgpu-coale
 
 ### Directory Structure
 
-```
-python/test/
-├── unit/
-│   ├── intel/                  # Intel backend-specific
-│   │   ├── test_block_io.py
-│   │   ├── test_block_load.py
-│   │   ├── test_conversions.py
-│   │   ├── test_core.py
-│   │   ├── test_driver.py
-│   │   ├── test_native_code_generation.py
-│   │   └── test_regressions.py
-│   ├── language/               # Language features (shared)
-│   │   ├── test_core.py
-│   │   ├── test_matmul.py
-│   │   ├── test_standard.py
-│   │   └── ...
-│   ├── runtime/                # Runtime tests
-│   └── tools/                  # Tooling tests
-├── regression/                 # Regression tests
-├── gluon/                      # Gluon dialect tests
-└── conftest.py                 # Global pytest configuration
-```
+- `python/test/unit/intel/` — Intel backend-specific tests
+- `python/test/unit/language/` — Language feature tests (shared)
+- `python/test/unit/runtime/` — Runtime tests
+- `python/test/regression/` — Regression tests
+- `python/test/gluon/` — Gluon dialect tests
+- `python/test/conftest.py` — Global pytest configuration
 
 ### Architecture Detection Functions
 
@@ -258,23 +242,9 @@ is_xpu_xe3p()    # Same as is_xpu_cri()
 
 ### Device Capability Checks
 
-```python
-# Type support check — call at start of test
-def check_type_supported(dtype, device):
-    if device in ['xpu']:
-        if dtype in [torch.float64, "float64"] and not xpu_has_fp64():
-            pytest.xfail("float64 not supported on current xpu hardware")
-
-# Thread/warp configuration check
-def check_threads_supported(num_warps, threads_per_warp, device):
-    if device != "xpu":
-        return
-    props = triton.runtime.driver.active.utils.get_device_properties(...)
-    if threads_per_warp not in props['sub_group_sizes']:
-        pytest.xfail('unsupported warp size')
-    if threads_per_warp * num_warps > props['max_work_group_size']:
-        pytest.xfail('unsupported workgroup size')
-```
+From `triton/_internal_testing.py`:
+- `check_type_supported(dtype, device)` — xfails on unsupported dtypes (e.g., float64)
+- `check_threads_supported(num_warps, threads_per_warp, device)` — xfails on unsupported warp/workgroup sizes
 
 ### Pytest Markers and Decorators
 
@@ -307,40 +277,12 @@ def test_basic_ops(device):
 
 ### Test Structure Pattern
 
-Standard pattern for a Python kernel test:
-```python
-def test_feature(M, N, dtype_str, device):
-    # 1. Check device/type support
-    check_type_supported(dtype_str, device)
-
-    # 2. Define Triton kernel
-    @triton.jit
-    def kernel(X, Y, Z, BLOCK: tl.constexpr):
-        pid = tl.program_id(0)
-        offs = pid * BLOCK + tl.arange(0, BLOCK)
-        x = tl.load(X + offs)
-        y = tl.load(Y + offs)
-        z = x + y
-        tl.store(Z + offs, z)
-
-    # 3. Generate reference data
-    rs = RandomState(seed=17)
-    x = numpy_random((M, N), dtype_str=dtype_str, rs=rs)
-    y = numpy_random((M, N), dtype_str=dtype_str, rs=rs)
-    z_ref = x + y
-
-    # 4. Convert to device tensors
-    x_tri = to_triton(x, device=device)
-    y_tri = to_triton(y, device=device)
-    z_tri = to_triton(np.empty_like(z_ref), device=device)
-
-    # 5. Launch kernel
-    grid = (M * N // 128,)
-    kernel[grid](x_tri, y_tri, z_tri, BLOCK=128)
-
-    # 6. Compare with tolerance
-    np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
-```
+Standard steps for a Python kernel test:
+1. Call `check_type_supported(dtype_str, device)` for dtype-dependent tests
+2. Define `@triton.jit` kernel
+3. Generate reference data with `numpy_random((M, N), dtype_str=..., rs=RandomState(17))`
+4. Convert with `to_triton(x, device=device)` / `to_numpy(x_tri)`
+5. Launch kernel and compare: `np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)`
 
 ### Numerical Tolerance Conventions
 
@@ -351,24 +293,6 @@ def test_feature(M, N, dtype_str, device):
 | bfloat16 | 0.5 | — | Large tolerance |
 | int types | exact | exact | Use `np.testing.assert_equal` |
 | float8 | 0.1 | 0.1 | Very loose |
-
-### Test Data Generation
-
-```python
-from triton._internal_testing import numpy_random, to_triton, to_numpy
-
-# Seed-controlled random data (seed=17 by default)
-x = numpy_random((M, N), dtype_str="float16", rs=RandomState(17))
-
-# Integer data avoids zero (division-safe)
-x = numpy_random((M,), dtype_str="int32")  # x[x == 0] = 1
-
-# Convert numpy → device tensor
-x_tri = to_triton(x, device=device, dst_type="bfloat16")
-
-# Convert device tensor → numpy
-x_np = to_numpy(x_tri)
-```
 
 ### Pytest Fixtures
 
@@ -399,23 +323,8 @@ python -m pytest -n 8 --dist=worksteal python/test/unit/intel/
 
 ### Directory Structure
 
-```
-unittest/
-├── Analysis/
-│   └── UtilityTest.cpp
-└── Dialect/TritonGPU/
-    ├── DialectTest.cpp
-    ├── SwizzleTest.cpp
-    ├── LinearLayoutConversionsTest.cpp
-    └── DumpLayoutTest.cpp
-
-third_party/intel/unittest/
-├── Dialect/TritonIntelGPU/
-│   ├── DPAStoLinearLayoutTest.cpp
-│   └── LinearLayoutConversionsTest.cpp
-└── Conversion/TritonIntelGPUToLLVM/
-    └── XeAsmFormatTest.cpp
-```
+- `unittest/` — Upstream unit tests (Analysis, Dialect/TritonGPU)
+- `third_party/intel/unittest/` — Intel-specific tests (Dialect/TritonIntelGPU, Conversion/TritonIntelGPUToLLVM)
 
 ### CMake Registration
 
@@ -433,50 +342,16 @@ Tests are auto-discovered via `gtest_discover_tests()` with 60-second timeout.
 
 ### MLIR Context Setup
 
-**Per-test context (typical for Intel tests):**
+Inherit from `::testing::Test`, load required dialects in `SetUp()` or constructor:
 ```cpp
 class DPAStoLinearLayoutTest : public ::testing::Test {
 public:
-  void SetUp() {
-    ctx.getOrLoadDialect<TritonIntelGPUDialect>();
-  }
+  void SetUp() { ctx.getOrLoadDialect<TritonIntelGPUDialect>(); }
 protected:
   MLIRContext ctx;
 };
 ```
-
-**With IR construction:**
-```cpp
-class XeAsmFormatTest : public ::testing::Test {
-protected:
-  XeAsmFormatTest() {
-    ctx.loadDialect<arith::ArithDialect>();
-    createValues();
-  }
-  void createValues() {
-    OpBuilder builder(&ctx);
-    builder.setInsertionPointToStart(&block);
-    v[0] = arith::ConstantIntOp::create(builder, builder.getUnknownLoc(), 1, 1);
-  }
-  MLIRContext ctx;
-  Block block;
-  Value v[4];
-};
-```
-
-**Static shared context:**
-```cpp
-class InferLayoutTest : public ::testing::Test {
-public:
-  InferLayoutTest()
-      : inferLayout(
-            ctx.getOrLoadDialect<TritonGPUDialect>()
-                ->getRegisteredInterface<DialectInferLayoutInterface>()) {}
-protected:
-  static MLIRContext ctx;
-  DialectInferLayoutInterface *inferLayout;
-};
-```
+For tests needing IR construction, add `OpBuilder`/`Block` members. For shared context across tests, use `static MLIRContext`.
 
 ### Running C++ Tests
 
@@ -507,49 +382,19 @@ skiplist/
 └── xe2/              # Xe2 (BMG)
 ```
 
-Each directory contains per-suite skip files:
-```
-intel.txt           # Intel-specific tests
-language.txt        # Language feature tests
-debug.txt           # Debug tests
-gluon.txt           # Gluon tests
-tutorials.txt       # Tutorial tests
-mxfp.txt            # MXFP tests
-scaled_dot.txt      # Scaled dot tests
-triton_kernels.txt  # Triton kernel tests
-subprocess.txt      # Subprocess tests
-third_party.txt     # Third-party tests
-```
+Each directory contains per-suite skip files: `intel.txt`, `language.txt`, `gluon.txt`, `tutorials.txt`, `mxfp.txt`, `scaled_dot.txt`, `triton_kernels.txt`, etc.
 
 ### Skip List Format
 
-**Exact test path:**
 ```
+# Comment with tracking issue link
 python/test/unit/intel/test_block_load.py::test_block_load_dpas_layout
-```
-
-**With parameters:**
-```
-python/test/unit/intel/test_core.py::test_gather_warp_shuffle[src_shape1-indices_shape1-0-linear<{...}>]
-```
-
-**Regex patterns (with `@regexp` suffix):**
-```
+python/test/unit/intel/test_core.py::test_gather_warp_shuffle[param1-param2]
 python/test/unit/language/test_core.py::test_dot3d[r".*-int8-.*$"]@regexp
-python/test/gluon/test_lowerings.py::test_scan_layouts[r"True-.*"]@regexp
-```
-
-**Tutorial names (simple):**
-```
 06-fused-attention
-08-grouped-gemm
 ```
 
-**Comments (link to tracking issue):**
-```
-# https://github.com/intel/intel-xpu-backend-for-triton/issues/3921
-python/test/unit/intel/test_block_load.py::test_block_load_dpas_layout
-```
+Formats: exact test path, path with parameters, regex patterns (with `@regexp` suffix), tutorial names, and `#` comments.
 
 ### Skip List Application
 
@@ -590,15 +435,11 @@ Setting `TEST_UNSKIP=true` ignores all skip/xfail decorators:
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `TRITON_TEST_SKIPLIST_DIR` | `scripts/skiplist/default` | Skip list directory |
-| `TRITON_TEST_SUITE` | — | Suite name for reports and skip list lookup |
-| `TRITON_TEST_REPORTS` | `false` | Enable JUnit XML reports |
-| `TRITON_TEST_REPORTS_DIR` | `$HOME/reports/$TIMESTAMP` | Report output directory |
-| `TRITON_TEST_IGNORE_ERRORS` | `false` | Continue on test failures |
-| `TRITON_TEST_WARNING_REPORTS` | `false` | Capture pytest warnings |
 | `TEST_UNSKIP` | `false` | Ignore skip/xfail decorators |
-| `TRITON_DISABLE_LINE_INFO` | — | Disable debug line info (faster compile) |
 | `TRITON_INTERPRET` | — | Run in interpreter mode (no GPU) |
 | `PYTEST_MAX_PROCESSES` | 8 | Parallel worker count |
+
+Other variables: `TRITON_TEST_SUITE` (suite name), `TRITON_TEST_REPORTS`/`TRITON_TEST_REPORTS_DIR` (JUnit XML), `TRITON_TEST_IGNORE_ERRORS`, `TRITON_DISABLE_LINE_INFO`.
 
 ### Makefile Test Targets
 

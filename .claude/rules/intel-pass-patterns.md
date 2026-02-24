@@ -137,7 +137,7 @@ struct AccelerateMatmulPass
 
 ### Pattern C: Conversion/Lowering
 
-For cross-dialect lowering that requires type conversion.
+For cross-dialect lowering that requires type conversion. Uses `ConvertOpToLLVMPattern<Op>` with `OpAdaptor` for already-converted operands.
 
 **Examples**: TritonGENToLLVM, TritonIntelGPUToLLVM, GPUToTritonGEN
 
@@ -180,21 +180,11 @@ struct ConvertTritonGENToLLVM
 ```
 
 **Multi-phase lowering** (TritonIntelGPUToLLVM — 3 phases):
-1. Lower functions (function signatures, calling conventions)
+1. Lower functions (signatures, calling conventions)
 2. Lower call/ret operations
-3. Lower all remaining operations (bulk conversion)
+3. Lower all remaining operations (28+ populate functions)
 
 Each phase uses a separate `RewritePatternSet` and `applyPartialConversion()` call.
-
-**Pattern collection via populate functions**:
-```cpp
-void populateConversionPatterns(RewritePatternSet &patterns, ...) {
-  intel::populateLoadStoreOpToLLVMPatterns(typeConverter, patterns, ...);
-  intel::populateDotOpToLLVMPatterns(typeConverter, patterns, ...);
-  intel::populateElementwiseOpToLLVMPatterns(typeConverter, patterns, ...);
-  // ... 28+ populate functions
-}
-```
 
 **When to use**: Cross-dialect lowering, type conversions needed, ConversionTarget legality required.
 
@@ -257,32 +247,13 @@ These rules are **mandatory** per official MLIR documentation:
 
 ## 4. Namespace and Macro Conventions
 
-### GEN_PASS_DEF Placement
+### GEN_PASS_DEF and Header Macros
 
-```cpp
-// TTGIR transforms — in gpu::intel namespace
-namespace mlir::triton::gpu::intel {
-#define GEN_PASS_DEF_TRITONINTELGPUCOALESCE
-#include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
-} // namespace mlir::triton::gpu::intel
+Place `GEN_PASS_DEF_<PASSNAME>` in the correct namespace before including `Passes.h.inc`:
+- TTGIR transforms: `namespace mlir::triton::gpu::intel`
+- TTIR transforms: `namespace mlir::triton`
 
-// TTIR transforms — in triton namespace
-namespace mlir::triton {
-#define GEN_PASS_DEF_TRITONINTELREMOVEMASKS
-#include "intel/include/Dialect/Triton/Transforms/Passes.h.inc"
-} // namespace mlir::triton
-```
-
-### Pass Header (Passes.h)
-
-```cpp
-namespace mlir::triton::gpu::intel {
-#define GEN_PASS_DECL
-#include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
-#define GEN_PASS_REGISTRATION
-#include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
-} // namespace mlir::triton::gpu::intel
-```
+In `Passes.h`, use `GEN_PASS_DECL` and `GEN_PASS_REGISTRATION` in the same namespace.
 
 ### Standard Aliases
 
@@ -448,92 +419,12 @@ Module attributes for device capabilities are listed in `intel-gpu-hardware.md` 
 
 ## 9. Anti-Patterns
 
-### Incorrect Driver Selection
-```cpp
-// ❌ Using partial conversion for a non-lowering pass
-applyPartialConversion(m, target, std::move(patterns));  // Wrong for transforms
+These complement the rules in Section 3. Common mistakes:
 
-// ✅ Use greedy driver for transformation passes
-applyPatternsGreedily(m, std::move(patterns));
-```
-
-### Premature IR Mutation
-```cpp
-// ❌ Modifying IR before confirming match
-LogicalResult matchAndRewrite(DotOp op, PatternRewriter &rewriter) const override {
-  rewriter.eraseOp(someOp);  // Mutation before guards!
-  if (!canApply(op))
-    return failure();  // IR already damaged
-}
-
-// ✅ All guards first, then mutations
-LogicalResult matchAndRewrite(DotOp op, PatternRewriter &rewriter) const override {
-  if (!canApply(op))
-    return failure();
-  rewriter.eraseOp(someOp);  // Safe — match confirmed
-  return success();
-}
-```
-
-### Silent Failure
-```cpp
-// ❌ Ignoring pattern application failure
-applyPatternsGreedily(m, std::move(patterns));  // Result ignored
-
-// ✅ Signal pass failure
-if (applyPatternsGreedily(m, std::move(patterns)).failed())
-  signalPassFailure();
-```
-
-### Missing Dependent Dialects
-```cpp
-// ❌ Creating ops from undeclared dialects causes assertion failures at runtime
-// The .td file MUST list all dialects whose ops might be created:
-let dependentDialects = [
-  "mlir::triton::TritonDialect",
-  "mlir::triton::gpu::intel::TritonIntelGPUDialect",
-  "mlir::arith::ArithDialect"
-];
-```
-
-### Missing Capability Gate
-```cpp
-// ❌ Generating 2D block ops without checking hardware support
-void runOnOperation() override {
-  // Directly generating 2D block ops — will fail on unsupported hardware
-}
-
-// ✅ Check module attribute first
-void runOnOperation() override {
-  if (!mod->hasAttr(ttgi::TritonIntelGPUDialect::getSupport2DBlockIOAttrName()))
-    return;
-  // Safe to generate 2D block ops
-}
-```
-
-### Bypassing PatternRewriter
-```cpp
-// ❌ Direct IR mutation outside rewriter (breaks driver state tracking)
-op->erase();
-op->setAttr("foo", attr);
-
-// ✅ Use rewriter API
-rewriter.eraseOp(op);
-rewriter.modifyOpInPlace(op, [&] { op->setAttr("foo", attr); });
-```
-
-### Mutable Pass State
-```cpp
-// ❌ State persists across invocations (breaks thread safety)
-struct MyPass {
-  DenseMap<Operation *, Value> cache;  // Mutable member!
-  void runOnOperation() override {
-    cache[op] = val;  // Accumulates across calls
-  }
-};
-
-// ✅ All state local to runOnOperation
-void runOnOperation() override {
-  DenseMap<Operation *, Value> cache;  // Local — fresh each invocation
-}
-```
+- **Wrong driver**: Don't use `applyPartialConversion()` for transform passes — use `applyPatternsGreedily()`
+- **Premature mutation**: Never call `rewriter.eraseOp()` or modify IR before all guard checks pass
+- **Silent failure**: Always check `applyPatternsGreedily()` result and call `signalPassFailure()`
+- **Missing dependent dialects**: List all dialects in `.td` `dependentDialects` — creating ops from undeclared dialects causes assertion failures
+- **Missing capability gate**: Check `mod->hasAttr(ttgi::TritonIntelGPUDialect::get*AttrName())` before generating hardware-specific ops
+- **Bypassing rewriter**: Use `rewriter.eraseOp(op)` and `rewriter.modifyOpInPlace()`, never `op->erase()` or `op->setAttr()` directly
+- **Mutable pass state**: All state must be local to `runOnOperation()` — member variables persist across invocations and break thread safety
