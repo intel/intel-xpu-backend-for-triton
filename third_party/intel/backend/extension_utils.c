@@ -77,19 +77,13 @@ static void initializeDevicesIfNeeded() {
 
   // Get all GPU devices and organize them by platform/backend
   // Only consider OpenCL and Level Zero (ext_oneapi) platforms
-  auto all_platforms = sycl::platform::get_platforms();
-  std::vector<sycl::platform> filtered_platforms;
-
-  for (const auto &platform : all_platforms) {
+  for (const auto &platform : sycl::platform::get_platforms()) {
     auto backend = platform.get_backend();
     // Include OpenCL backend and ext_oneapi (Level Zero) backend
-    if (backend == sycl::backend::opencl ||
-        backend == sycl::backend::ext_oneapi_level_zero) {
-      filtered_platforms.push_back(platform);
+    if (backend != sycl::backend::opencl &&
+        backend != sycl::backend::ext_oneapi_level_zero) {
+      continue;
     }
-  }
-
-  for (const auto &platform : filtered_platforms) {
     auto devices = platform.get_devices(sycl::info::device_type::gpu);
     for (const auto &device : devices) {
       int device_id =
