@@ -623,3 +623,33 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 }
+
+// -----
+
+// CHECK: #[[$DESCRIPTOR_LOAD_LAYOUT:.*]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked_dl = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @descriptor_load
+  tt.func public @descriptor_load(%arg0: !tt.tensordesc<tensor<128x64xf32>>) {
+    %c0_i32 = arith.constant 0 : i32
+    // CHECK: %[[LOAD:.*]] = tt.descriptor_load {{.*}} : !tt.tensordesc<tensor<128x64xf32>> -> tensor<128x64xf32, #[[$DESCRIPTOR_LOAD_LAYOUT]]>
+    %0 = tt.descriptor_load %arg0[%c0_i32, %c0_i32] : !tt.tensordesc<tensor<128x64xf32>> -> tensor<128x64xf32, #blocked_dl>
+    tt.return
+  }
+}
+
+// -----
+
+// CHECK: #[[$DESCRIPTOR_STORE_LAYOUT:.*]] = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked_ds = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @descriptor_store
+  tt.func public @descriptor_store(%arg0: !tt.tensordesc<tensor<64x64xf16>>) {
+    %c0_i32 = arith.constant 0 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf16, #blocked_ds>
+    // CHECK: %[[C:.*]] = ttg.convert_layout %{{.*}} : tensor<64x64xf16, #{{.*}}> -> tensor<64x64xf16, #[[$DESCRIPTOR_STORE_LAYOUT]]>
+    // CHECK: tt.descriptor_store {{.*}}, %[[C]] : !tt.tensordesc<tensor<64x64xf16>>, tensor<64x64xf16, #[[$DESCRIPTOR_STORE_LAYOUT]]>
+    tt.descriptor_store %arg0[%c0_i32, %c0_i32], %cst : !tt.tensordesc<tensor<64x64xf16>>, tensor<64x64xf16, #blocked_ds>
+    tt.return
+  }
+}

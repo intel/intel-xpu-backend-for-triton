@@ -1286,18 +1286,16 @@ public:
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
     LDBG("DescriptorLoadOpAxisInfoVisitor: " << *op);
 
-    // Get descriptor info from first operand
-    AxisInfo descInfo = operands[0]->getValue();
     auto resultType = cast<RankedTensorType>(op.getResult().getType());
     unsigned rank = resultType.getRank();
 
     AxisInfo::DimVectorT contiguity, divisibility, constancy;
 
-    // For descriptor loads, propagate AxisInfo from the descriptor
+    // For descriptor loads, return conservative axis info.
     for (unsigned d = 0; d < rank; ++d) {
       contiguity.push_back(1);
       divisibility.push_back(1);
-      constancy.push_back(descInfo.getConstancy(d));
+      constancy.push_back(1);
     }
 
     auto axisInfo = AxisInfo(std::move(contiguity), std::move(divisibility),
