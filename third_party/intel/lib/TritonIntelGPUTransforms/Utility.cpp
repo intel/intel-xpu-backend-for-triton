@@ -302,7 +302,7 @@ LogicalResult getConvertBackwardSlice(
         enqueue(definingOp->getOpOperand(0), encoding);
         continue;
       }
-      if (canFoldIntoConversion(definingOp, encoding))
+      if (canUseResultEncoding(definingOp, encoding))
         continue;
       if (stopPropagation && stopPropagation(definingOp))
         continue;
