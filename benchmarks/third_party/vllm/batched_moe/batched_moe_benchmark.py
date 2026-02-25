@@ -523,14 +523,14 @@ def get_batched_mm_benchmark(
     providers_filter: Optional[list[str]] = None,
     per_act_token_quant: bool = False,
     fp8=False,
-    plot_name: str = 'moe-gemm-performance',
+    is_td_patched=False,
 ):
     """
     Returns a Mark object containing a Benchmark object for batched matrix multiplication.
     """
     supported_providers = {
-        'triton': 'triton',
-        'triton-td': 'triton-td',
+        'triton' + ('-td' if is_td_patched else ''): 'triton' + ('-td' if is_td_patched else ''),
+        'triton-td-old': 'triton-td-old',
         'pytorch': 'pytorch',
     }
     if fp8:
@@ -549,7 +549,7 @@ def get_batched_mm_benchmark(
             line_names=list(providers.values()),
             styles=[('green', '-'), ('blue', '--'), ('red', ':')],
             ylabel=['GB/s', 'TFlops'],
-            plot_name=plot_name,
+            plot_name='moe-gemm-performance' + ('-td' if is_td_patched else ''),
             args={},
         ))
     def benchmark(num_experts, max_tokens_per_expert, K, N, fp8, block_quant, provider):
@@ -614,9 +614,9 @@ def get_batched_mm_benchmark(
                 quantiles=quantiles,
             )
 
-        elif provider == 'triton' or provider == 'triton-td':
+        elif provider.startswith('triton'):
             # Triton batched MoE kernel
-            invoke_kernel = invoke_moe_batched_triton_kernel if provider == 'triton' else invoke_moe_batched_triton_kernel_td
+            invoke_kernel = invoke_moe_batched_triton_kernel_td if provider == 'triton-td-old' else invoke_moe_batched_triton_kernel
 
             def triton_fn():
                 invoke_kernel(
@@ -680,6 +680,7 @@ def get_batched_mm_benchmark(
 
 if __name__ == '__main__':
     # Run batched MM benchmark
+    is_td_patched = os.getenv('TD_PATCHED', '0') == '1'
     print('Running batched MM benchmark...')
-    _benchmark_mm = get_batched_mm_benchmark(fp8=(os.getenv('FP8', '0') == '1'), )
+    _benchmark_mm = get_batched_mm_benchmark(fp8=(os.getenv('FP8', '0') == '1'), is_td_patched=is_td_patched)
     _benchmark_mm.run(show_plots=False, print_data=True)

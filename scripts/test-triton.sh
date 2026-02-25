@@ -886,7 +886,7 @@ run_vllm_old_install() {
     cd ..
   fi
   # These files are neceassary for benchmarking runs
-  cp -r vllm/tests benchmarks/third_party/vllm/tests
+  cp -r vllm/tests benchmarks/third_party/vllm/batched_moe/tests
 
   pip install -r vllm/requirements/xpu.txt
 
