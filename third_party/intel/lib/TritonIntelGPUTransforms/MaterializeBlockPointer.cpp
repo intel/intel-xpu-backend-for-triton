@@ -141,32 +141,16 @@ private:
     }
   }
 
-  /// Walk the SSA def chain of \p val looking for arith.remsi / arith.remui.
-  /// When the def chain passes through an scf.for iter_arg, follow both
-  /// the init value and the corresponding yield operand.  This catches the
-  /// common pattern where the modulo-wrapped pointer is passed as a loop
-  /// carried value:
-  ///   offs_am = (pid * BLOCK + arange(0, BLOCK)) % M
-  ///   a_ptrs  = base + offs_am * stride
-  ///   for k in range(...):
-  ///       tl.load(a_ptrs, ...)   <-- a_ptrs is a block arg
-  ///       a_ptrs += ...
-  ///
-  /// Promoting such loads to 2D block IO is unsafe because the HW reads
-  /// tileHeight contiguous rows, but only M rows are valid.  The out-of-
-  /// bounds rows cause a GPU page fault.
   bool hasRemainderInDefChain(Value val,
                               llvm::SmallPtrSetImpl<Value> &visited) const {
     if (!visited.insert(val).second)
       return false;
 
-    // If this value is produced by a remainder op, we found the pattern.
     if (Operation *defOp = val.getDefiningOp()) {
       if (isa<arith::RemSIOp, arith::RemUIOp>(defOp)) {
         LDBG("Found remainder op in def chain: " << *defOp);
         return true;
       }
-      // Recurse into all operands of the defining op.
       for (Value operand : defOp->getOperands()) {
         if (hasRemainderInDefChain(operand, visited))
           return true;
@@ -174,23 +158,19 @@ private:
       return false;
     }
 
-    // val is a BlockArgument – check if it is an scf.for iter_arg.
     auto blockArg = cast<BlockArgument>(val);
     auto forOp = dyn_cast<scf::ForOp>(blockArg.getOwner()->getParentOp());
     if (!forOp)
       return false;
 
-    // iter_args start at index 0 of the body block, after the induction var.
     unsigned argIdx = blockArg.getArgNumber();
-    if (argIdx == 0) // induction variable, not an iter_arg
+    if (argIdx == 0)
       return false;
 
-    unsigned iterArgIdx = argIdx - 1; // 0-based among iter_args
-    // Follow the init value.
+    unsigned iterArgIdx = argIdx - 1;
     if (hasRemainderInDefChain(forOp.getInitArgs()[iterArgIdx], visited))
       return true;
 
-    // Follow the yield operand (back-edge value).
     auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
     if (iterArgIdx < yieldOp.getNumOperands()) {
       if (hasRemainderInDefChain(yieldOp.getOperand(iterArgIdx), visited))
