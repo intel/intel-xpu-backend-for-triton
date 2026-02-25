@@ -153,6 +153,11 @@ private:
         builder, makeTensorPtrOp.getLoc(), newPtrType,
         makeTensorPtrOp.getBase(), newShape, newStrides, newOffsets,
         makeTensorPtrOp.getOrderAttr());
+    // Mark the new make_tensor_ptr so that MaterializeBlockPointer can
+    // bypass its skip heuristics (FP8 column-major, OperandA transposed)
+    // for pointers whose strides were reversed by this fusion.
+    ptr.getDefiningOp()->setDiscardableAttr(
+        "tt.fused_transpose", UnitAttr::get(builder.getContext()));
     LLVM_DEBUG(llvm::dbgs() << "newMakeTensorPtrOp:\n  " << ptr << "\n");
 
     // Propagate the new ptr through the def-use chain.
@@ -232,24 +237,33 @@ private:
     if (transOp.getOrder() != ArrayRef<int32_t>{1, 0})
       return false;
 
-    // Check whether \p transOp is used by a `dotOp` (directly or indirectly).
-    auto usedByDotOp = [](tt::TransOp transOp) {
+    // Find the dot operation using the trans result (directly or indirectly)
+    // and return its operand index (0=A, 1=B). Returns std::nullopt if
+    // the trans result is not used by a dot operation.
+    auto getDotOperandIdx = [](tt::TransOp transOp) -> std::optional<unsigned> {
       if (!transOp->hasOneUse())
-        return false;
+        return std::nullopt;
 
+      Value transResult = transOp.getResult();
       Operation *user = *transOp->getUsers().begin();
       while (user) {
-        if (isa<tt::DotOp>(user))
-          return true;
+        if (auto dotOp = dyn_cast<tt::DotOp>(user)) {
+          if (dotOp.getA() == transResult)
+            return 0;
+          if (dotOp.getB() == transResult)
+            return 1;
+          return std::nullopt;
+        }
         if (!user->hasOneUse())
           break;
+        transResult = user->getResult(0);
         user = *user->getUsers().begin();
       }
 
-      return false;
+      return std::nullopt;
     };
 
-    if (!usedByDotOp(transOp))
+    if (!getDotOperandIdx(transOp))
       return false;
 
     Operation *defOp = transOp.getSrc().getDefiningOp();
@@ -276,7 +290,10 @@ private:
 
     std::optional<tt::MakeTensorPtrOp> makeTensorPtrOp =
         tt::intel::findDefiningOpOfType<tt::MakeTensorPtrOp>(loadOp.getPtr());
-    return makeTensorPtrOp.has_value();
+    if (!makeTensorPtrOp)
+      return false;
+
+    return true;
   }
 
   bool isCandidate(tt::DescriptorLoadOp descLoadOp) const {

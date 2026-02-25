@@ -1,7 +1,7 @@
 // RUN: triton-opt %s -split-input-file -triton-intel-fuse-transpose | FileCheck %s
 
-// COM: Block pointer: make_tensor_ptr -> load -> trans -> dot, not in a loop.
-tt.func public @fuseTransposeBlockPtr(%arg0: !tt.ptr<f16>, %arg1: tensor<256x128xf16>) {
+// COM: Block pointer OperandA: make_tensor_ptr -> load -> trans -> dot(A).
+tt.func public @fuseTransposeBlockPtrOperandA(%arg0: !tt.ptr<f16>, %arg1: tensor<256x128xf16>) {
   %c0_i32 = arith.constant 0 : i32
   %c1_i64 = arith.constant 1 : i64
   %c256_i64 = arith.constant 256 : i64
@@ -13,11 +13,32 @@ tt.func public @fuseTransposeBlockPtr(%arg0: !tt.ptr<f16>, %arg1: tensor<256x128
   %dot = tt.dot %trans, %arg1, %cst, inputPrecision = tf32 : tensor<64x256xf16> * tensor<256x128xf16> -> tensor<64x128xf32>
   tt.return
 }
-// CHECK-LABEL: fuseTransposeBlockPtr
+// CHECK-LABEL: fuseTransposeBlockPtrOperandA
 // CHECK-NOT: tt.trans
-// CHECK: [[PTR:%.*]] = tt.make_tensor_ptr %arg0, [%c256_i64, %c512_i64], [%c1_i64, %c256_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<64x256xf16>>
+// CHECK: [[PTR:%.*]] = tt.make_tensor_ptr %arg0, [%c256_i64, %c512_i64], [%c1_i64, %c256_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>, tt.fused_transpose} : <tensor<64x256xf16>>
 // CHECK: [[LOAD:%.*]] = tt.load [[PTR]] : !tt.ptr<tensor<64x256xf16>>
 // CHECK: tt.dot [[LOAD]], %arg1, {{.*}}, inputPrecision = tf32 : tensor<64x256xf16> * tensor<256x128xf16> -> tensor<64x128xf32>
+
+// -----
+
+// COM: Block pointer OperandB: make_tensor_ptr -> load -> trans -> dot(B), not in a loop.
+tt.func public @fuseTransposeBlockPtrOperandB(%arg0: !tt.ptr<f16>, %arg1: tensor<128x256xf16>) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c256_i64 = arith.constant 256 : i64
+  %c512_i64 = arith.constant 512 : i64
+  %cst = arith.constant dense<0.000000e+00> : tensor<128x64xf32>
+  %ptr = tt.make_tensor_ptr %arg0, [%c512_i64, %c256_i64], [%c256_i64, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<64x256xf16>>
+  %load = tt.load %ptr : !tt.ptr<tensor<64x256xf16>>
+  %trans = tt.trans %load {order = array<i32: 1, 0>} : tensor<64x256xf16> -> tensor<256x64xf16>
+  %dot = tt.dot %arg1, %trans, %cst, inputPrecision = tf32 : tensor<128x256xf16> * tensor<256x64xf16> -> tensor<128x64xf32>
+  tt.return
+}
+// CHECK-LABEL: fuseTransposeBlockPtrOperandB
+// CHECK-NOT: tt.trans
+// CHECK: [[PTR:%.*]] = tt.make_tensor_ptr %arg0, [%c256_i64, %c512_i64], [%c1_i64, %c256_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>, tt.fused_transpose} : <tensor<256x64xf16>>
+// CHECK: [[LOAD:%.*]] = tt.load [[PTR]] : !tt.ptr<tensor<256x64xf16>>
+// CHECK: tt.dot %arg1, [[LOAD]], {{.*}}, inputPrecision = tf32 : tensor<128x256xf16> * tensor<256x64xf16> -> tensor<128x64xf32>
 
 // -----
 
@@ -43,8 +64,8 @@ tt.func public @fuseTransposeTensorDesc(%arg0: !tt.ptr<f16>, %arg1: tensor<256x1
 
 // -----
 
-// COM: Block pointer in a loop: make_tensor_ptr -> advance -> load -> trans -> dot.
-tt.func public @fuseTransposeBlockPtrLoop(%arg0: !tt.ptr<f16>, %arg1: tensor<256x128xf16>) {
+// COM: Block pointer OperandA in a loop: make_tensor_ptr -> advance -> load -> trans -> dot(A).
+tt.func public @fuseTransposeBlockPtrLoopOperandA(%arg0: !tt.ptr<f16>, %arg1: tensor<256x128xf16>) {
   %c0_i32 = arith.constant 0 : i32
   %c1_i64 = arith.constant 1 : i64
   %c64_i32 = arith.constant 64 : i32
@@ -62,13 +83,43 @@ tt.func public @fuseTransposeBlockPtrLoop(%arg0: !tt.ptr<f16>, %arg1: tensor<256
   }
   tt.return
 }
-// CHECK-LABEL: fuseTransposeBlockPtrLoop
+// CHECK-LABEL: fuseTransposeBlockPtrLoopOperandA
 // CHECK-NOT: tt.trans
-// CHECK: [[PTR:%.*]] = tt.make_tensor_ptr %arg0, [%c256_i64, %c512_i64], [%c1_i64, %c256_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<64x256xf16>>
+// CHECK: [[PTR:%.*]] = tt.make_tensor_ptr %arg0, [%c256_i64, %c512_i64], [%c1_i64, %c256_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>, tt.fused_transpose} : <tensor<64x256xf16>>
 // CHECK: scf.for {{.*}} iter_args({{.*}}, [[LOOP_PTR:%.*]] = [[PTR]])
 // CHECK:   [[LOAD:%.*]] = tt.load [[LOOP_PTR]] : !tt.ptr<tensor<64x256xf16>>
 // CHECK:   tt.dot [[LOAD]], %arg1, {{.*}}, inputPrecision = tf32 : tensor<64x256xf16> * tensor<256x128xf16> -> tensor<64x128xf32>
 // CHECK:   [[ADV:%.*]] = tt.advance [[LOOP_PTR]], [%c0_i32, %c64_i32] : <tensor<64x256xf16>>
+// CHECK:   scf.yield {{.*}}, [[ADV]]
+
+// -----
+
+// COM: Block pointer OperandB in a loop: make_tensor_ptr -> advance -> load -> trans -> dot(B).
+tt.func public @fuseTransposeBlockPtrLoopOperandB(%arg0: !tt.ptr<f16>, %arg1: tensor<128x256xf16>) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c64_i32 = arith.constant 64 : i32
+  %c256_i64 = arith.constant 256 : i64
+  %c512_i32 = arith.constant 512 : i32
+  %c512_i64 = arith.constant 512 : i64
+  %cst = arith.constant dense<0.000000e+00> : tensor<128x64xf32>
+  %ptr = tt.make_tensor_ptr %arg0, [%c512_i64, %c256_i64], [%c256_i64, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<64x256xf16>>
+  %res:2 = scf.for %iv = %c0_i32 to %c512_i32 step %c64_i32 iter_args(%acc = %cst, %p = %ptr) -> (tensor<128x64xf32>, !tt.ptr<tensor<64x256xf16>>) : i32 {
+    %load = tt.load %p : !tt.ptr<tensor<64x256xf16>>
+    %trans = tt.trans %load {order = array<i32: 1, 0>} : tensor<64x256xf16> -> tensor<256x64xf16>
+    %dot = tt.dot %arg1, %trans, %acc, inputPrecision = tf32 : tensor<128x256xf16> * tensor<256x64xf16> -> tensor<128x64xf32>
+    %next = tt.advance %p, [%c64_i32, %c0_i32] : <tensor<64x256xf16>>
+    scf.yield %dot, %next : tensor<128x64xf32>, !tt.ptr<tensor<64x256xf16>>
+  }
+  tt.return
+}
+// CHECK-LABEL: fuseTransposeBlockPtrLoopOperandB
+// CHECK-NOT: tt.trans
+// CHECK: [[PTR:%.*]] = tt.make_tensor_ptr %arg0, [%c256_i64, %c512_i64], [%c1_i64, %c256_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>, tt.fused_transpose} : <tensor<256x64xf16>>
+// CHECK: scf.for {{.*}} iter_args({{.*}}, [[LOOP_PTR:%.*]] = [[PTR]])
+// CHECK:   [[LOAD:%.*]] = tt.load [[LOOP_PTR]] : !tt.ptr<tensor<256x64xf16>>
+// CHECK:   tt.dot %arg1, [[LOAD]], {{.*}}, inputPrecision = tf32 : tensor<128x256xf16> * tensor<256x64xf16> -> tensor<128x64xf32>
+// CHECK:   [[ADV:%.*]] = tt.advance [[LOOP_PTR]], [%c0_i32, %c64_i32] : <tensor<256x64xf16>>
 // CHECK:   scf.yield {{.*}}, [[ADV]]
 
 // -----
@@ -139,9 +190,8 @@ tt.func public @noFuseNonSimpleOrder(%arg0: !tt.ptr<f16>, %arg1: tensor<64x2x128
 
 // -----
 
-// COM: Block pointer in a loop: make_tensor_ptr NOT loop-carried. The ptr is defined
-// COM: outside the loop and advanced inside; no iter_arg for the ptr.
-tt.func public @fuseTransposeBlockPtrLoopNotCarried(%arg0: !tt.ptr<f16>, %arg1: tensor<256x128xf16>) {
+// COM: Block pointer OperandA in a loop (not loop-carried): make_tensor_ptr -> advance -> load -> trans -> dot(A).
+tt.func public @fuseTransposeBlockPtrLoopNotCarriedOperandA(%arg0: !tt.ptr<f16>, %arg1: tensor<256x128xf16>) {
   %c0_i32 = arith.constant 0 : i32
   %c1_i64 = arith.constant 1 : i64
   %c64_i32 = arith.constant 64 : i32
@@ -159,9 +209,9 @@ tt.func public @fuseTransposeBlockPtrLoopNotCarried(%arg0: !tt.ptr<f16>, %arg1: 
   }
   tt.return
 }
-// CHECK-LABEL: fuseTransposeBlockPtrLoopNotCarried
+// CHECK-LABEL: fuseTransposeBlockPtrLoopNotCarriedOperandA
 // CHECK-NOT: tt.trans
-// CHECK: [[PTR:%.*]] = tt.make_tensor_ptr %arg0, [%c256_i64, %c512_i64], [%c1_i64, %c256_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<64x256xf16>>
+// CHECK: [[PTR:%.*]] = tt.make_tensor_ptr %arg0, [%c256_i64, %c512_i64], [%c1_i64, %c256_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>, tt.fused_transpose} : <tensor<64x256xf16>>
 // CHECK: scf.for
 // CHECK:   [[ADV:%.*]] = tt.advance [[PTR]], [%c0_i32, %c64_i32] : <tensor<64x256xf16>>
 // CHECK:   [[LOAD:%.*]] = tt.load [[ADV]] : !tt.ptr<tensor<64x256xf16>>
@@ -169,9 +219,8 @@ tt.func public @fuseTransposeBlockPtrLoopNotCarried(%arg0: !tt.ptr<f16>, %arg1: 
 
 // -----
 
-// COM: Block pointer: same make_tensor_ptr root used in 2 separate loops.
-// COM: The root should be duplicated (one per loop chain).
-tt.func public @fuseTransposeBlockPtrTwoLoops(%arg0: i32, %arg1: !tt.ptr<f16>, %arg2: tensor<256x128xf16>) {
+// COM: Block pointer OperandA: 2 loops with same root, both fuse independently.
+tt.func public @fuseTransposeBlockPtrTwoLoopsOperandA(%arg0: i32, %arg1: !tt.ptr<f16>, %arg2: tensor<256x128xf16>) {
   %c0_i32 = arith.constant 0 : i32
   %c1_i64 = arith.constant 1 : i64
   %c64_i32 = arith.constant 64 : i32
@@ -195,24 +244,23 @@ tt.func public @fuseTransposeBlockPtrTwoLoops(%arg0: i32, %arg1: !tt.ptr<f16>, %
   }
   tt.return
 }
-// CHECK-LABEL: fuseTransposeBlockPtrTwoLoops
+// CHECK-LABEL: fuseTransposeBlockPtrTwoLoopsOperandA
 // CHECK-NOT: tt.trans
-// CHECK-COUNT-2: tt.make_tensor_ptr %arg1, [%c256_i64, %c512_i64], [%c1_i64, %c256_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<64x256xf16>>
+// CHECK-COUNT-2: tt.make_tensor_ptr %arg1, [%c256_i64, %c512_i64], [%c1_i64, %c256_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>, tt.fused_transpose} : <tensor<64x256xf16>>
 // CHECK: scf.for
-// CHECK:   [[ADV1:%.*]] = tt.advance {{.*}}, [%c0_i32, %c64_i32] : <tensor<64x256xf16>>
-// CHECK:   [[LOAD1:%.*]] = tt.load [[ADV1]] : !tt.ptr<tensor<64x256xf16>>
+// CHECK:   tt.advance {{.*}}, [%c0_i32, %c64_i32] : <tensor<64x256xf16>>
+// CHECK:   [[LOAD1:%.*]] = tt.load {{.*}} : !tt.ptr<tensor<64x256xf16>>
 // CHECK:   tt.dot [[LOAD1]], %arg2, {{.*}}, inputPrecision = tf32 : tensor<64x256xf16> * tensor<256x128xf16> -> tensor<64x128xf32>
 // CHECK: scf.for
-// CHECK:   [[ADV2:%.*]] = tt.advance {{.*}}, [%c0_i32, %c64_i32] : <tensor<64x256xf16>>
-// CHECK:   [[LOAD2:%.*]] = tt.load [[ADV2]] : !tt.ptr<tensor<64x256xf16>>
+// CHECK:   tt.advance {{.*}}, [%c0_i32, %c64_i32] : <tensor<64x256xf16>>
+// CHECK:   [[LOAD2:%.*]] = tt.load {{.*}} : !tt.ptr<tensor<64x256xf16>>
 // CHECK:   tt.dot [[LOAD2]], %arg2, {{.*}}, inputPrecision = tf32 : tensor<64x256xf16> * tensor<256x128xf16> -> tensor<64x128xf32>
 
 // -----
 
-// COM: Block pointer: 3 loops with overlapping def-use chains.
-// COM: Loops 1 and 3 share the same advance (overlapping chains) so cannot be fused.
-// COM: Loop 2 has its own advance inside the loop, so it can be fused.
-tt.func public @fuseTransposeBlockPtrOverlappingChains(%arg0: i32, %arg1: !tt.ptr<f16>, %arg2: tensor<256x128xf16>) {
+// COM: Block pointer OperandA: 3 loops with overlapping chains. Chains for loops 1 and 3
+// COM: share %adv0 and are pruned. Loop 2's chain is independent and fuses.
+tt.func public @fuseTransposeBlockPtrOverlappingChainsOperandA(%arg0: i32, %arg1: !tt.ptr<f16>, %arg2: tensor<256x128xf16>) {
   %c0_i32 = arith.constant 0 : i32
   %c1_i64 = arith.constant 1 : i64
   %c64_i32 = arith.constant 64 : i32
@@ -242,15 +290,12 @@ tt.func public @fuseTransposeBlockPtrOverlappingChains(%arg0: i32, %arg1: !tt.pt
   }
   tt.return
 }
-// CHECK-LABEL: fuseTransposeBlockPtrOverlappingChains
-// CHECK: [[PTR1:%.*]] = tt.make_tensor_ptr %arg1, [%c256_i64, %c512_i64], [%c1_i64, %c256_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<64x256xf16>>
+// CHECK-LABEL: fuseTransposeBlockPtrOverlappingChainsOperandA
 // CHECK: scf.for
 // CHECK:   tt.trans
 // CHECK: scf.for
 // CHECK-NOT: tt.trans
-// CHECK:   [[ADV:%.*]] = tt.advance [[PTR1]], [%c0_i32, %c64_i32] : <tensor<64x256xf16>>
-// CHECK:   [[LOAD:%.*]] = tt.load [[ADV]] : !tt.ptr<tensor<64x256xf16>>
-// CHECK:   tt.dot [[LOAD]], %arg2, {{.*}}, inputPrecision = tf32 : tensor<64x256xf16> * tensor<256x128xf16> -> tensor<64x128xf32>
+// CHECK:   tt.load
 // CHECK: scf.for
 // CHECK:   tt.trans
 
@@ -594,6 +639,50 @@ tt.func public @noFuseTensorDescFromCall(%arg0: i32, %arg1: !tt.ptr<f16>, %arg2:
 }
 // CHECK-LABEL: noFuseTensorDescFromCall
 // CHECK: tt.trans
+// -----
+
+// COM: FP8 row-major block pointer OperandB — fusion flips to FP8 column-major.
+// COM: MaterializeBlockPointer bypasses its FP8 column-major skip for fused pointers.
+tt.func public @fuseTransposeBlockPtrFP8RowMajorOperandB(%arg0: !tt.ptr<f8E5M2>, %arg1: tensor<128x256xf8E5M2>) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c256_i64 = arith.constant 256 : i64
+  %c512_i64 = arith.constant 512 : i64
+  %cst = arith.constant dense<0.000000e+00> : tensor<128x64xf32>
+  %ptr = tt.make_tensor_ptr %arg0, [%c512_i64, %c256_i64], [%c256_i64, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<64x256xf8E5M2>>
+  %load = tt.load %ptr : !tt.ptr<tensor<64x256xf8E5M2>>
+  %trans = tt.trans %load {order = array<i32: 1, 0>} : tensor<64x256xf8E5M2> -> tensor<256x64xf8E5M2>
+  %dot = tt.dot %arg1, %trans, %cst, inputPrecision = tf32 : tensor<128x256xf8E5M2> * tensor<256x64xf8E5M2> -> tensor<128x64xf32>
+  tt.return
+}
+// CHECK-LABEL: fuseTransposeBlockPtrFP8RowMajorOperandB
+// CHECK-NOT: tt.trans
+// CHECK: [[PTR:%.*]] = tt.make_tensor_ptr %arg0, [%c256_i64, %c512_i64], [%c1_i64, %c256_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>, tt.fused_transpose} : <tensor<256x64xf8E5M2>>
+// CHECK: [[LOAD:%.*]] = tt.load [[PTR]] : !tt.ptr<tensor<256x64xf8E5M2>>
+// CHECK: tt.dot %arg1, [[LOAD]], {{.*}}, inputPrecision = tf32 : tensor<128x256xf8E5M2> * tensor<256x64xf8E5M2> -> tensor<128x64xf32>
+
+// -----
+
+// COM: Positive test: FP8 column-major block pointer OperandB — safe to fuse because
+// COM: fusion flips to row-major FP8, which MaterializeBlockPointer handles fine.
+tt.func public @fuseTransposeBlockPtrFP8ColMajorOperandB(%arg0: !tt.ptr<f8E5M2>, %arg1: tensor<128x256xf8E5M2>) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c256_i64 = arith.constant 256 : i64
+  %c512_i64 = arith.constant 512 : i64
+  %cst = arith.constant dense<0.000000e+00> : tensor<128x64xf32>
+  %ptr = tt.make_tensor_ptr %arg0, [%c512_i64, %c256_i64], [%c1_i64, %c512_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<64x256xf8E5M2>>
+  %load = tt.load %ptr : !tt.ptr<tensor<64x256xf8E5M2>>
+  %trans = tt.trans %load {order = array<i32: 1, 0>} : tensor<64x256xf8E5M2> -> tensor<256x64xf8E5M2>
+  %dot = tt.dot %arg1, %trans, %cst, inputPrecision = tf32 : tensor<128x256xf8E5M2> * tensor<256x64xf8E5M2> -> tensor<128x64xf32>
+  tt.return
+}
+// CHECK-LABEL: fuseTransposeBlockPtrFP8ColMajorOperandB
+// CHECK-NOT: tt.trans
+// CHECK: [[PTR:%.*]] = tt.make_tensor_ptr %arg0, [%c256_i64, %c512_i64], [%c512_i64, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>, tt.fused_transpose} : <tensor<256x64xf8E5M2>>
+// CHECK: [[LOAD:%.*]] = tt.load [[PTR]] : !tt.ptr<tensor<256x64xf8E5M2>>
+// CHECK: tt.dot %arg1, [[LOAD]], {{.*}}, inputPrecision = tf32
+
 // -----
 
 // COM: Negative test: 3D block pointer with trans [1,0,2] is NOT fused.

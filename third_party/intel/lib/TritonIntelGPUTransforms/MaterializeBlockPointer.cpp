@@ -93,7 +93,14 @@ private:
            "Expected strideOneDim to be set and less than strides.size()");
     unsigned strideOneDimVal = strideOneDim.value();
 
-    if (strideOneDimVal == rank - 2 && elementWidth == 8) {
+    // FuseTranspose marks make_tensor_ptr ops whose strides were reversed
+    // by fusing a transpose into the load. For these ops, bypass the skip
+    // heuristics below and always assign blockIO based on the current
+    // (reversed) strides. This preserves the same blockIO assignment as the
+    // pre-fusion pipeline: blockIO(reversed) == flip(blockIO(original)).
+    bool fusedTranspose = makeTensorPtrOp->hasAttr("tt.fused_transpose");
+
+    if (!fusedTranspose && strideOneDimVal == rank - 2 && elementWidth == 8) {
       // TODO: column major layout w/ fp8 has performance regression
       return;
     }
@@ -113,22 +120,24 @@ private:
         return;
 
       const bool isRowMajor = (strideOneDimVal == rank - 1);
-      std::optional<ttg::DotOperandEncodingAttr> dotLayout = getDotLayout(op);
-      if (dotLayout) {
-        // Check if the load is being used by a tt.dot operation, and if so is
-        // this the first operand and is it a transposed row major matrix. If
-        // so, skip the block ptr attribute as performance is worse than if we
-        // remove the tensor pointer.
-        LDBG("dotLayout: " << *dotLayout);
-        auto opIdx =
-            static_cast<ttgi::DpasEncodingAttr::OpIdx>(dotLayout->getOpIdx());
-        auto dotOrder = tt::gpu::getThreadOrder(tensorType);
-        const bool valueRowMajor = (dotOrder[0] == 1 && dotOrder[1] == 0);
-        if (opIdx == ttgi::DpasEncodingAttr::OpIdx::OperandA &&
-            valueRowMajor ^ isRowMajor) {
-          LDBG("Skipping block pointer attribute for transposed A matrix in "
-               "dot operation");
-          return;
+      if (!fusedTranspose) {
+        std::optional<ttg::DotOperandEncodingAttr> dotLayout = getDotLayout(op);
+        if (dotLayout) {
+          // Check if the load is being used by a tt.dot operation, and if so
+          // is this the first operand and is it a transposed row major matrix.
+          // If so, skip the block ptr attribute as performance is worse than
+          // if we remove the tensor pointer.
+          LDBG("dotLayout: " << *dotLayout);
+          auto opIdx =
+              static_cast<ttgi::DpasEncodingAttr::OpIdx>(dotLayout->getOpIdx());
+          SmallVector<unsigned> dotOrder = tt::gpu::getThreadOrder(tensorType);
+          const bool valueRowMajor = (dotOrder[0] == 1 && dotOrder[1] == 0);
+          if (opIdx == ttgi::DpasEncodingAttr::OpIdx::OperandA &&
+              valueRowMajor ^ isRowMajor) {
+            LDBG("Skipping block pointer attribute for transposed A matrix "
+                 "in dot operation");
+            return;
+          }
         }
       }
 
