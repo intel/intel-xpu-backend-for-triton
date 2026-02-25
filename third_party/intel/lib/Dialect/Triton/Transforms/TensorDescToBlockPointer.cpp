@@ -240,6 +240,15 @@ private:
            "Expecting a block ptr");
     auto ptrType = cast<tt::PointerType>(operand.getType());
     auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
+
+    // FIXME: If we want to move TensorDescToBlockPointer pass further down in
+    // the pipeline, then we need to handle also non-default layouts.
+    [[maybe_unused]] Attribute defaultLayout = ttg::getDefaultBlockedEncoding(
+        builder.getContext(), tensorType.getShape(), ttg::lookupNumWarps(op),
+        ttg::lookupThreadsPerWarp(builder), ttg::lookupNumCTAs(builder));
+    assert(tensorType.getEncoding() == defaultLayout &&
+           "Expecting the default blocked encoding");
+
     Value ptr =
         tt::AdvanceOp::create(builder, loc, ptrType, operand, op.getIndices());
 
