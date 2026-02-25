@@ -23,7 +23,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include <optional>
 
-#define DEBUG_TYPE "tritonintelgpu-optimize-dot-operands"
+#define DEBUG_TYPE "triton-intel-fuse-transpose"
 
 using namespace mlir;
 namespace tt = mlir::triton;
@@ -31,7 +31,7 @@ namespace ttg = mlir::triton::gpu;
 namespace ttgi = mlir::triton::gpu::intel;
 
 namespace mlir::triton::gpu::intel {
-#define GEN_PASS_DEF_TRITONINTELGPUOPTIMIZEDOTOPERANDS
+#define GEN_PASS_DEF_TRITONINTELGPUFUSETRANSPOSE
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
 } // namespace mlir::triton::gpu::intel
 
@@ -379,14 +379,13 @@ private:
 
 } // namespace
 
-class TritonIntelGPUOptimizeDotOperandsPass
-    : public ttgi::impl::TritonIntelGPUOptimizeDotOperandsBase<
-          TritonIntelGPUOptimizeDotOperandsPass> {
+class TritonIntelGPUFuseTransposePass
+    : public ttgi::impl::TritonIntelGPUFuseTransposeBase<
+          TritonIntelGPUFuseTransposePass> {
 
 public:
-  using ttgi::impl::TritonIntelGPUOptimizeDotOperandsBase<
-      TritonIntelGPUOptimizeDotOperandsPass>::
-      TritonIntelGPUOptimizeDotOperandsBase;
+  using ttgi::impl::TritonIntelGPUFuseTransposeBase<
+      TritonIntelGPUFuseTransposePass>::TritonIntelGPUFuseTransposeBase;
 
   void runOnOperation() final {
     ModuleOp moduleOp = getOperation();

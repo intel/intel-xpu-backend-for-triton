@@ -3,7 +3,6 @@ add_triton_library(TritonIntelGPUTransforms
   Coalesce.cpp
   DecomposeScaledBlocked.cpp
   MaterializeBlockPointer.cpp
-  OptimizeDotOperands.cpp
   OptimizeReductionLocality.cpp
   Pipeliner/MatmulLoopPipeline.cpp
   Pipeliner/SoftwarePipeliner.cpp

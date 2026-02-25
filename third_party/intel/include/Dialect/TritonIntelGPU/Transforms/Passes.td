@@ -27,8 +27,8 @@ def TritonIntelGPUAccelerateMatmul
   ];
 }
 
-def TritonIntelGPUOptimizeDotOperands
-    : Pass<"tritonintelgpu-optimize-dot-operands", "mlir::ModuleOp"> {
+def TritonIntelGPUFuseTranspose
+    : Pass<"triton-intel-fuse-transpose", "mlir::ModuleOp"> {
   let summary = "Intel optimize dot operands";
 
   let description = [{
