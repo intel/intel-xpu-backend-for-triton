@@ -18,6 +18,8 @@ class LoopLikeOpInterface;
 
 namespace mlir::triton::intel {
 
+Value findOrCreateCastOp(Value val, Type targetType);
+
 // Lookup for a integer constant with the given value and bitwidth in the
 // current block (before the builder insertion point). Return it if found,
 // otherwise create a new one.
