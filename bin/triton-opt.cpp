@@ -2,8 +2,19 @@
 
 #include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
+#include "llvm/Support/Path.h"
+#include "llvm/Support/DynamicLibrary.h"
 
 int main(int argc, char **argv) {
+  if (std::string filename =
+      mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
+      !filename.empty()) {
+    std::string fakeTriton =
+      llvm::sys::path::parent_path(argv[0]).str() + "/faketriton/libtriton.so";
+    std::string error;
+    llvm::sys::DynamicLibrary::getPermanentLibrary(fakeTriton.c_str(), &error);
+  }
+
   mlir::DialectRegistry registry;
   registerTritonDialects(registry);
   registry.insert<mlir::spirv::SPIRVDialect>();
