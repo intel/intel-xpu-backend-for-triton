@@ -250,23 +250,29 @@ private:
     assert(triton::isTensorPointerType(operand.getType()) &&
            "Expecting a block ptr");
     auto ptrType = cast<tt::PointerType>(operand.getType());
-    auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
+    auto descTensorType = cast<RankedTensorType>(ptrType.getPointeeType());
+
+    constexpr bool isLoad = std::is_same_v<OpTy, tt::DescriptorLoadOp>;
+    RankedTensorType opTensorType;
+    if constexpr (isLoad)
+      opTensorType = cast<RankedTensorType>(op.getType());
+    else
+      opTensorType = cast<RankedTensorType>(op.getSrc().getType());
 
     // FIXME: If we want to move TensorDescToBlockPointer pass further down in
     // the pipeline, then we need to handle also non-default layouts.
     [[maybe_unused]] Attribute defaultLayout =
-        maybeGetDefaultBlockedEncoding(op, tensorType.getShape());
-    assert(tensorType.getEncoding() == defaultLayout &&
+        maybeGetDefaultBlockedEncoding(op, opTensorType.getShape());
+    assert(opTensorType.getEncoding() == defaultLayout &&
            "Expecting the default blocked encoding");
 
     Value ptr =
         tt::AdvanceOp::create(builder, loc, ptrType, operand, op.getIndices());
 
     SmallVector<int32_t> boundaryCheck;
-    for (size_t i = 0; i < tensorType.getRank(); ++i)
+    for (size_t i = 0; i < descTensorType.getRank(); ++i)
       boundaryCheck.push_back(i);
 
-    constexpr bool isLoad = std::is_same_v<OpTy, tt::DescriptorLoadOp>;
     if constexpr (isLoad) {
       // Default to PAD_ZERO as this is the expected padding behavior for
       // descriptor loads. It should be specified in the tt.make_tensor_desc if
@@ -279,9 +285,7 @@ private:
           loc, ptr, boundaryCheck, padding, op.getCache(), op.getEvict(),
           /*volatile*/ false);
 
-      RankedTensorType loadType = cast<RankedTensorType>(loadOp.getType());
-      RankedTensorType resType = cast<RankedTensorType>(op.getType());
-      if (loadType == resType) {
+      if (descTensorType == opTensorType) {
         LLVM_DEBUG(llvm::dbgs().indent(2) << loadOp << "\n");
         op.replaceAllUsesWith(loadOp);
       } else {
@@ -290,9 +294,11 @@ private:
         // load op (see RankedReduceDescriptorLoads). In this case we need to
         // insert a reshape op to ensure the load op result has the expected
         // shape for subsequent operations.
-        ArrayRef<int64_t> resShape = resType.getShape();
-        assert(loadType.getShape() != resShape && "Expecting different shapes");
-        assert(loadType.getElementType() == resType.getElementType() &&
+        ArrayRef<int64_t> resShape = opTensorType.getShape();
+        assert(descTensorType.getShape() != resShape &&
+               "Expecting different shapes");
+        assert(descTensorType.getElementType() ==
+                   opTensorType.getElementType() &&
                "Expecting the same element type");
         auto reshapeOp =
             builder.createOrFold<tt::ReshapeOp>(loc, resShape, loadOp);
