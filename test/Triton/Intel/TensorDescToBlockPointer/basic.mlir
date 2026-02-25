@@ -1,4 +1,32 @@
-// RUN: triton-opt %s -triton-intel-tdesc-to-block-pointer  | FileCheck %s
+// RUN: triton-opt %s -triton-intel-tdesc-to-block-pointer -split-input-file | FileCheck %s
+
+module {
+  tt.func public @test_no_encoding(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: i32) {
+    %c1_i64 = arith.constant 1 : i64
+    %c64_i32 = arith.constant 64 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %0 = arith.extsi %arg2 : i32 to i64
+    %desc1 = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%0, %c1_i64] : <f32>, <tensor<16x128xf32>>
+    %load1 = tt.descriptor_load %desc1[%c8_i32, %c64_i32] : !tt.tensordesc<tensor<16x128xf32>> -> tensor<16x128xf32>
+    tt.return
+  }
+  // CHECK:      tt.func public @test_no_encoding([[PARAM_0:%.+]]: !tt.ptr<f32>, [[PARAM_1:%.+]]: i32, [[PARAM_2:%.+]]: i32) {
+  // CHECK-NOT:    tt.make_tensor_descriptor
+  // CHECK-NOT:    tt.descriptor_load
+  // CHECK-DAG:    [[CST_0_i32:%.+]] = arith.constant 0 : i32
+  // CHECK-DAG:    [[CST_1_i64:%.+]] = arith.constant 1 : i64
+  // CHECK-DAG:    [[CST_64_i32:%.+]] = arith.constant 64 : i32
+  // CHECK-DAG:    [[CST_8_i32:%.+]] = arith.constant 8 : i32
+  // CHECK-DAG:    [[EXTSI_PARAM_1:%.+]] = arith.extsi [[PARAM_1]] : i32 to i64
+  // CHECK-DAG:    [[EXTSI_PARAM_2:%.+]] = arith.extsi [[PARAM_2]] : i32 to i64
+  // CHECK:        [[TENSOR_PTR:%.+]] = tt.make_tensor_ptr [[PARAM_0]], {{\[}}[[EXTSI_PARAM_1]], [[EXTSI_PARAM_2]]], {{\[}}[[EXTSI_PARAM_2]], [[CST_1_i64]]], {{\[}}[[CST_0_i32]], [[CST_0_i32]]] {{.*}} : <tensor<16x128xf32>>
+  // CHECK:        [[TENSOR_PTR1:%.+]] = tt.advance [[TENSOR_PTR]], {{\[}}[[CST_8_i32]], [[CST_64_i32]]] : <tensor<16x128xf32>>
+  // CHECK:        [[LOAD1:%.+]] = tt.load [[TENSOR_PTR1]] {boundaryCheck = array<i32: 0, 1>, padding = 1 : i32} : !tt.ptr<tensor<16x128xf32>>
+  // CHECK:        tt.return
+  // CHECK:      }
+}
+
+// -----
 
 // CHECK: #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 // CHECK: #blocked1 = #ttg.blocked<{sizePerThread = [1, 1, 1, 1, 1], threadsPerWarp = [1, 1, 1, 1, 32], warpsPerCTA = [1, 1, 1, 1, 4], order = [4, 3, 2, 1, 0]}>

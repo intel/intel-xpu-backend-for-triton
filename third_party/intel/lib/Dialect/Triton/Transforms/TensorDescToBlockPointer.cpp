@@ -34,6 +34,22 @@ bool hasATensorDescriptorType(mlir::TypeRange types) {
   });
 }
 
+// Returns the default blocked encoding for the given shape.
+// Returns nullptr if TensorDescToBlockPointer pass is run before
+// TritonToTritonGPU pass.
+Attribute maybeGetDefaultBlockedEncoding(Operation *op,
+                                         ArrayRef<int64_t> shape) {
+  // numWarps is unavailable before TritonToTritonGPUPass, so tensor has no
+  // encoding yet.
+  if (!ttg::maybeLookupNumWarps(op))
+    return Attribute();
+
+  OpBuilder builder(op);
+  return ttg::getDefaultBlockedEncoding(
+      builder.getContext(), shape, ttg::lookupNumWarps(op),
+      ttg::lookupThreadsPerWarp(builder), ttg::lookupNumCTAs(builder));
+}
+
 struct TritonIntelTensorDescToBlockPointer
     : tt::intel::impl::TritonIntelTensorDescToBlockPointerBase<
           TritonIntelTensorDescToBlockPointer> {
@@ -200,9 +216,7 @@ private:
       sizes.push_back(size);
     }
 
-    Attribute layout = ttg::getDefaultBlockedEncoding(
-        builder.getContext(), sizes, ttg::lookupNumWarps(op),
-        ttg::lookupThreadsPerWarp(builder), ttg::lookupNumCTAs(builder));
+    Attribute layout = maybeGetDefaultBlockedEncoding(op, sizes);
     auto tensorPtr = findOrCreateMakeTensorPtr(
         loc, op.getBase(), shapes, strides, offsets, sizes, layout, builder);
     LLVM_DEBUG({
@@ -243,9 +257,8 @@ private:
 
     // FIXME: If we want to move TensorDescToBlockPointer pass further down in
     // the pipeline, then we need to handle also non-default layouts.
-    [[maybe_unused]] Attribute defaultLayout = ttg::getDefaultBlockedEncoding(
-        builder.getContext(), tensorType.getShape(), ttg::lookupNumWarps(op),
-        ttg::lookupThreadsPerWarp(builder), ttg::lookupNumCTAs(builder));
+    [[maybe_unused]] Attribute defaultLayout =
+        maybeGetDefaultBlockedEncoding(op, tensorType.getShape());
     assert(tensorType.getEncoding() == defaultLayout &&
            "Expecting the default blocked encoding");
 
