@@ -7,9 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include <cstddef>
-#include <filesystem>
 #include <iostream>
-#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -26,10 +24,6 @@
 
 static std::vector<std::pair<sycl::device, ze_device_handle_t>>
     g_sycl_l0_device_list;
-
-static std::vector<sycl::device> sycl_opencl_device_list;
-
-static bool has_opencl = false;
 
 static void zeConstructError(const char *file, int line, const char *message) {
   const char *prefix = "Triton Error [ZE] %s:%d: ";
@@ -399,30 +393,6 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
                        n_max_threads);
 }
 
-bool has_ocloc_in_path() {
-  const char *path_env = std::getenv("PATH");
-  if (!path_env)
-    return false;
-
-#ifdef _WIN32
-  const char delimiter = ';';
-  const std::string exe = "ocloc.exe";
-#else
-  const char delimiter = ':';
-  const std::string exe = "ocloc";
-#endif
-
-  std::stringstream ss(path_env);
-  std::string dir;
-
-  while (std::getline(ss, dir, delimiter)) {
-    std::filesystem::path p = std::filesystem::path(dir) / exe;
-    if (std::filesystem::exists(p))
-      return true;
-  }
-  return false;
-}
-
 extern "C" EXPORT_FUNC PyObject *init_devices(PyObject *cap) {
   void *queue = NULL;
   if (!(queue = PyLong_AsVoidPtr(cap))) {
@@ -437,35 +407,12 @@ extern "C" EXPORT_FUNC PyObject *init_devices(PyObject *cap) {
   // Get sycl-device
   const std::vector<sycl::device> &sycl_devices = sycl_context.get_devices();
 
-  has_opencl = false;
-
-  for (const auto &platform : sycl::platform::get_platforms()) {
-    if (platform.get_backend() == sycl::backend::opencl) {
-      has_opencl = true;
-      break;
-    }
-  }
-
-  if (!has_opencl && !has_ocloc_in_path())
-    return NULL;
-
   // Retrieve l0 devices
   const uint32_t deviceCount = sycl_devices.size();
   for (uint32_t i = 0; i < deviceCount; ++i) {
     g_sycl_l0_device_list.push_back(std::make_pair(
         sycl_devices[i], sycl::get_native<sycl::backend::ext_oneapi_level_zero>(
                              sycl_devices[i])));
-    // workaround to get opencl extensions
-    const auto &name = sycl_devices[i].get_info<sycl::info::device::name>();
-    if (has_opencl) {
-      sycl::device opencl_device([&](const sycl::device &dev) -> int {
-        return (dev.get_backend() == sycl::backend::opencl &&
-                dev.get_info<sycl::info::device::name>() == name)
-                   ? 1
-                   : -1;
-      });
-      sycl_opencl_device_list.push_back(opencl_device);
-    }
   }
 
   return Py_BuildValue("(i)", deviceCount);
@@ -483,34 +430,6 @@ extern "C" EXPORT_FUNC PyObject *wait_on_sycl_queue(PyObject *cap) {
   Py_RETURN_NONE;
 }
 
-extern "C" EXPORT_FUNC PyObject *has_opencl_extension(int device_id,
-                                                      const char *extension) {
-  if (has_opencl) {
-    if (device_id >= sycl_opencl_device_list.size()) {
-      zeConstructError(__FILE__, __LINE__, "Device is not found");
-      return NULL;
-    }
-    const sycl::device &device = sycl_opencl_device_list[device_id];
-
-    if (sycl::opencl::has_extension(device, extension))
-      Py_RETURN_TRUE;
-    Py_RETURN_FALSE;
-  }
-
-  if (device_id >= g_sycl_l0_device_list.size()) {
-    zeConstructError(__FILE__, __LINE__, "Device is not found");
-    return NULL;
-  }
-
-  const sycl::device &device = g_sycl_l0_device_list[device_id].first;
-
-  // `ocloc` should be in `PATH` for proper work
-  // `ext_oneapi_supports_cl_extension`; the related check is in
-  // `has_ocloc_in_path`
-  if (device.ext_oneapi_supports_cl_extension(extension))
-    Py_RETURN_TRUE;
-  Py_RETURN_FALSE;
-}
 extern "C" EXPORT_FUNC PyObject *sycl_queue_memset(PyObject *args) {
   PyObject *py_queue;
   uint64_t ptr, count;

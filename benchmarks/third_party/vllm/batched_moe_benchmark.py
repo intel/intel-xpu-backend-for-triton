@@ -21,7 +21,6 @@ import triton_kernels_benchmark as benchmark_suite
 
 # Import vLLM MoE functions
 from vllm.model_executor.layers.fused_moe.fused_batched_moe import invoke_moe_batched_triton_kernel
-from vllm.platforms import current_platform
 from vllm.model_executor.layers.fused_moe.utils import normalize_batched_scales_shape
 
 # Import utility functions from vLLM tests
@@ -554,7 +553,7 @@ def get_batched_mm_benchmark(
             args={},
         ))
     def benchmark(num_experts, max_tokens_per_expert, K, N, fp8, block_quant, provider):
-        current_platform.seed_everything(70)
+        torch.manual_seed(20)
         n_warmup = 600
 
         act_dtype = torch.bfloat16

@@ -13,6 +13,7 @@ from triton.backends import backends
 
 from .hook import Hook
 from ..flags import flags
+from ..state import enter_state, exit_state, COMPUTE_METADATA_SCOPE_NAME
 from .. import mode
 
 # TODO(fywkevin): add support for major.minor
@@ -37,7 +38,9 @@ class CudaAllocator:
 
         # Create the buffer
         import torch
-        buffer = torch.empty((aligned_size, ), dtype=torch.uint8, device="cuda")
+        enter_state(COMPUTE_METADATA_SCOPE_NAME)
+        buffer = torch.zeros((aligned_size, ), dtype=torch.uint8, device="cuda")
+        exit_state()
         self.instrumentation_hook.buffer = buffer
         return buffer
 
@@ -248,6 +251,12 @@ class InstrumentationHook(Hook):
             libproton.init_function_metadata(function, name, scope_id_names, scope_id_parents, metadata_path)
         else:
             raise RuntimeError(f"IR path not found in metadata for function {function}")
+
+    def destroy_handle(self, module: Any, function: Any, name: str, metadata_group: Dict[str, str], hash: str) -> None:
+        if not function:
+            return
+        self.metadata_path.pop(function, None)
+        libproton.destroy_function_metadata(function)
 
     def _data_ptr(self) -> int:
         return 0 if self.buffer is None else self.buffer.data_ptr()

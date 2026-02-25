@@ -212,20 +212,28 @@ LogicalResult FenceMBarrierInitReleaseClusterOp::verify() {
   return success();
 }
 
+static LogicalResult verifyClusterSyncOp(Operation *op) {
+  int numCTAs = triton::gpu::lookupNumCTAs(op);
+  if (numCTAs <= 1)
+    return op->emitOpError("requires ttg.num-ctas > 1");
+  if (op->getParentOfType<mlir::triton::gpu::WarpSpecializeOp>())
+    return op->emitOpError("cannot be used inside `ttg.warp_specialize`");
+  return success();
+}
+
 // -- ClusterArriveOp --
 LogicalResult ClusterArriveOp::verify() {
-  int numCTAs = triton::gpu::lookupNumCTAs(getOperation());
-  if (numCTAs <= 1)
-    return emitOpError("requires ttg.num-ctas > 1");
-  return success();
+  return verifyClusterSyncOp(getOperation());
 }
 
 // -- ClusterWaitOp --
 LogicalResult ClusterWaitOp::verify() {
-  int numCTAs = triton::gpu::lookupNumCTAs(getOperation());
-  if (numCTAs <= 1)
-    return emitOpError("requires ttg.num-ctas > 1");
-  return success();
+  return verifyClusterSyncOp(getOperation());
+}
+
+// -- ClusterBarrierOp --
+LogicalResult ClusterBarrierOp::verify() {
+  return verifyClusterSyncOp(getOperation());
 }
 
 // -- TMA operation verifiers --
@@ -886,7 +894,8 @@ void TCGen5MMAScaledOp::build(OpBuilder &builder, OperationState &state,
                               Value accDep, Value aScale, Value bScale,
                               ScaleDotElemType aType, ScaleDotElemType bType,
                               Value useD, Value pred, ValueRange barriers,
-                              ValueRange barrierPreds, bool isAsync) {
+                              ValueRange barrierPreds, bool twoCTAs,
+                              bool isAsync) {
   MLIRContext *ctx = builder.getContext();
   if (!barriers.empty()) {
     isAsync = true;
@@ -894,7 +903,8 @@ void TCGen5MMAScaledOp::build(OpBuilder &builder, OperationState &state,
   build(builder, state, token, a, b, d, accDep, aScale, bScale,
         ScaleDotElemTypeAttr::get(ctx, aType),
         ScaleDotElemTypeAttr::get(ctx, bType), useD, pred, barriers,
-        barrierPreds, isAsync ? builder.getUnitAttr() : UnitAttr());
+        barrierPreds, twoCTAs ? builder.getUnitAttr() : UnitAttr(),
+        isAsync ? builder.getUnitAttr() : UnitAttr());
 }
 
 bool TCGen5MMAScaledOp::isAsync() { return getIsAsync(); }
@@ -1057,11 +1067,6 @@ LogicalResult TMEMCopyOp::verify() {
                        "representable in a matrix descriptor.");
   }
 
-  auto mod = getOperation()->getParentOfType<ModuleOp>();
-  unsigned numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
-  if (numCTAs != 1)
-    return emitOpError("NYI: Only one CTA is supported for now.");
-
   // Fp4 we could lift if we needed
   auto nvmmaEnc =
       dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(srcTy.getEncoding());
@@ -1166,13 +1171,27 @@ static LogicalResult verifyCLCResultMemdesc(Location loc, MemDescType desc) {
   auto int_ty = dyn_cast<IntegerType>(desc.getElementType());
   if (!int_ty || int_ty.getWidth() != 64) {
     return emitError(loc)
-           << "Expected CLC result buffer to have type int64, but got"
+           << "Expected CLC result buffer to have integer element type int64, "
+              "but got "
            << desc.getElementType();
   }
-  if (desc.getShape().size() != 1 || desc.getShape()[0] != 2) {
-    return emitError(loc)
-           << "Expected CLC result buffer to have shape [2], but got ["
-           << triton::join(desc.getShape(), ", ") << "]";
+  auto layout = desc.getEncoding();
+  auto kBlock = StringAttr::get(desc.getContext(), "block");
+  // TODO put this into a helper function
+  int numCTAs;
+  if (auto sharedLinearEnc = dyn_cast<SharedLinearEncodingAttr>(layout)) {
+    const auto &ll = sharedLinearEnc.getLinearLayout();
+    numCTAs = ll.getInDimSize(kBlock);
+  } else {
+    numCTAs = getCGALayout(layout).getLinearLayout().getInDimSize(kBlock);
+  }
+
+  auto rank = desc.getRank();
+  if (rank != 1 || desc.getDimSize(0) != 2 * numCTAs) {
+    return emitError(loc) << "Expected CLC result buffer to have rank 1 and a "
+                             "single dimension equal to 2x the number of CTAs, "
+                             "but got "
+                          << desc.getShape() << ".";
   }
   return success();
 }

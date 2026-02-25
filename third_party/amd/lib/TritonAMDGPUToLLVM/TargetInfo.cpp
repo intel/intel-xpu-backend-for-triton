@@ -386,13 +386,6 @@ static bool warpReduceSwap16(RewriterBase &rewriter, Location loc,
 
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
-                            unsigned numLaneToReduce,
-                            unsigned interleave) const {
-  llvm_unreachable("FIXME: implement warpReduce for Intel GPU");
-}
-
-bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
-                            SmallVector<Value> &acc, triton::ReduceOp op,
                             unsigned reduceLaneIdMask) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
@@ -746,6 +739,11 @@ bool TargetInfo::supportsDirectFromLdsStoreBitWidth(int bitWidth) const {
     return llvm::is_contained({128, 64, 32, 8}, bitWidth);
   }
   return false;
+}
+
+bool TargetInfo::supportsBufferLoadToLocal() const {
+  return llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
+                            getISAFamily());
 }
 
 bool TargetInfo::supportsWaveId() const {

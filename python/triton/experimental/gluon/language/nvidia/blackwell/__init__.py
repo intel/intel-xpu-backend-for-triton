@@ -511,7 +511,8 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
     a_type = _semantic._str_to_fp_type(a_type.value)
     b_type = _semantic._str_to_fp_type(b_type.value)
     _semantic.builder.create_tcgen05_mma_scaled(a.handle, b.handle, acc.handle, a_scale.handle, b_scale.handle, a_type,
-                                                b_type, use_acc.handle, pred.handle, mbarriers, mbarrier_preds)
+                                                b_type, use_acc.handle, pred.handle, mbarriers, mbarrier_preds,
+                                                acc.layout.two_ctas)
 
 
 @constexpr_function
@@ -542,7 +543,7 @@ def tcgen05_mma_barrier_count(smems, multicast):
     assert len(smems) == 2
     num_broadcast_bits_a = num_broadcast_bits(smems[0])
     num_broadcast_bits_b = num_broadcast_bits(smems[1])
-    # Asser that for every basis, at least one of them is non-zero
+    # Assert that for every basis, at least one of them is non-zero
     # so that the inclusion-exclusion principle below works
     # This can be generalised if needed by substracting below 2**size_intersection
     for i in range(len(smems[0].layout.cga_layout)):

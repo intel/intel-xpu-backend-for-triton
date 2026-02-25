@@ -20,6 +20,49 @@ static std::optional<int64_t> getIntAttr(const OpFoldResult ofr) {
 
 namespace mlir::triton::intel {
 
+Value findOrCreateCastOp(Value val, Type targetType) {
+  Location loc = val.getLoc();
+  OpBuilder builder(val.getContext());
+
+  auto isMatchingCastOp = [&](CastOpInterface castOp) {
+    return castOp->getNumOperands() == 1 && castOp->getOperand(0) == val &&
+           castOp->getNumResults() == 1 &&
+           castOp->getResult(0).getType() == targetType;
+  };
+
+  if (Operation *defOp = val.getDefiningOp()) {
+    Operation *nextOp = defOp->getNextNode();
+    if (auto castOp = dyn_cast<CastOpInterface>(nextOp)) {
+      if (isMatchingCastOp(castOp))
+        return castOp->getResult(0);
+    }
+
+    builder.setInsertionPointAfter(defOp);
+  } else {
+    Value foundCast = nullptr;
+    val.getParentBlock()->walk([&](Operation *op) {
+      if (isa<arith::ConstantOp>(op))
+        return WalkResult::advance();
+
+      auto castOp = dyn_cast<CastOpInterface>(op);
+      if (!castOp)
+        return WalkResult::interrupt();
+
+      if (isMatchingCastOp(castOp)) {
+        foundCast = castOp->getResult(0);
+        return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    });
+    if (foundCast)
+      return foundCast;
+
+    builder.setInsertionPointToStart(val.getParentBlock());
+  }
+
+  return getValueOrCreateCastToIndexLike(builder, loc, targetType, val);
+}
+
 Value findOrCreateIntConstant(Location loc, int val, unsigned bitWidth,
                               OpBuilder &builder) {
   Block *block = builder.getInsertionBlock();

@@ -26,29 +26,10 @@ namespace {
 constexpr unsigned offsetBitwidth = 32u;
 constexpr unsigned shapeAndStridesBitwidth = 64u;
 
-Value findOrCreateCast(Location loc, Value val, Type tgtType,
-                       OpBuilder &builder) {
-  assert(isa<IntegerType>(tgtType) && isa<IntegerType>(val.getType()) &&
-         "Expecting integer types");
-  assert(val.getType().getIntOrFloatBitWidth() <=
-             tgtType.getIntOrFloatBitWidth() &&
-         "Expecting smaller type");
-
-  if (val.getType() == tgtType)
-    return val;
-
-  Block *block = builder.getInsertionBlock();
-  const Block::iterator insertPoint = builder.getInsertionPoint();
-
-  auto it = std::find_if(block->begin(), insertPoint, [&](Operation &op) {
-    if (auto castOp = dyn_cast<arith::ExtSIOp>(op))
-      return castOp.getIn() == val && castOp.getType() == tgtType;
-    return false;
+bool hasATensorDescriptorType(mlir::TypeRange types) {
+  return llvm::any_of(types, [](mlir::Type t) {
+    return llvm::isa<mlir::triton::TensorDescType>(t);
   });
-
-  return (it != insertPoint)
-             ? cast<arith::ExtSIOp>(*it)
-             : getValueOrCreateCastToIndexLike(builder, loc, tgtType, val);
 }
 
 struct TritonIntelTensorDescToBlockPointer
@@ -61,59 +42,50 @@ public:
   void runOnOperation() final {
     ModuleOp moduleOp = getOperation();
 
-    WalkResult res = moduleOp->walk<WalkOrder::PreOrder>([=](Operation *op) {
-      if (isa<tt::DescriptorGatherOp>(op) || isa<tt::DescriptorScatterOp>(op) ||
-          isa<tt::DescriptorReduceOp>(op)) {
-        op->emitRemark(
-            "TritonIntelTensorDescToBlockPointer: Failed to rewrite");
-        return WalkResult::interrupt();
-      }
-      if (auto loadOp = dyn_cast_or_null<tt::DescriptorLoadOp>(op)) {
-        // Retrieve the padding option from the MakeTensorDescOp.
-        std::optional<tt::MakeTensorDescOp> makeTensorDescOp =
-            tt::intel::findDefiningOpOfType<tt::MakeTensorDescOp>(
-                loadOp.getDesc());
-        if (!makeTensorDescOp) {
-          op->emitRemark("TritonIntelTensorDescToBlockPointer: Failed to "
-                         "retrieve the padding option.");
-          return WalkResult::interrupt();
-        }
-
-        OpToPaddingMap[loadOp] = makeTensorDescOp->getPadding();
-      }
+    moduleOp->walk<WalkOrder::PreOrder>([&](tt::DescriptorLoadOp loadOp) {
+      // Retrieve the padding option from the MakeTensorDescOp.
+      std::optional<tt::MakeTensorDescOp> makeTensorDescOp =
+          tt::intel::findDefiningOpOfType<tt::MakeTensorDescOp>(
+              loadOp.getDesc());
+      assert(makeTensorDescOp.has_value() &&
+             "Expecting to find the defining MakeTensorDescOp");
+      OpToPaddingMap[loadOp] = makeTensorDescOp->getPadding();
       return WalkResult::advance();
     });
 
-    if (res.wasInterrupted()) {
-      LLVM_DEBUG(llvm::dbgs()
-                 << "TritonIntelTensorDescToBlockPointer: Skipping module - "
-                    "contains unsupported operations\n");
-      return;
-    }
-
     moduleOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
-      return TypeSwitch<Operation *, WalkResult>(op)
+      assert(!isa<tt::DescriptorGatherOp>(op) &&
+             !isa<tt::DescriptorScatterOp>(op) &&
+             !isa<tt::DescriptorReduceOp>(op) &&
+             "Expecting no gather/scatter/reduce ops at this stage");
+      TypeSwitch<Operation *>(op)
           .Case<tt::MakeTensorDescOp>([&](auto makeTensorDescOp) {
-            if (failed(rewriteMakeTensorDescriptorOp(makeTensorDescOp)))
-              makeTensorDescOp->emitRemark(
-                  "TritonIntelTensorDescToBlockPointer: Failed to rewrite");
-            return WalkResult::advance();
+            [[maybe_unused]] LogicalResult res =
+                rewriteMakeTensorDescriptorOp(makeTensorDescOp);
+            assert(succeeded(res) &&
+                   "Failed to rewrite make_tensor_descriptor op");
           })
           .Case<tt::DescriptorLoadOp, tt::DescriptorStoreOp>(
               [&](auto loadOrStoreOp) {
-                if (failed(rewriteDescriptorLoadOrStoreOp(loadOrStoreOp)))
-                  loadOrStoreOp->emitRemark(
-                      "TritonIntelTensorDescToBlockPointer: Failed to rewrite");
-                return WalkResult::advance();
+                [[maybe_unused]] LogicalResult res =
+                    rewriteDescriptorLoadOrStoreOp(loadOrStoreOp);
+                assert(succeeded(res) &&
+                       "Failed to rewrite descriptor load/store op");
               })
-          .Default([&](auto) { return WalkResult::advance(); });
+          .Default([&](auto) {});
+      return WalkResult::advance();
     });
 
     if (!cleanUp.empty())
       tt::intel::eraseOperations(cleanUp);
 
     LLVM_DEBUG(llvm::dbgs()
-                   << "After TDesc to block_ptr: << " << moduleOp << "\n";);
+                   << "After TDesc to block_ptr: " << moduleOp << "\n";);
+    moduleOp->walk([&](Operation *op) {
+      assert(!hasATensorDescriptorType(op->getOperandTypes()) &&
+             !hasATensorDescriptorType(op->getResultTypes()) &&
+             "Expecting no tensor descriptor types after conversion");
+    });
     assert(succeeded(verify(moduleOp)) && "Module verification failed");
   }
 
@@ -212,12 +184,10 @@ private:
     for (const auto [shape, stride, size] :
          llvm::zip(op.getShape(), op.getStrides(),
                    tDescType.getBlockType().getShape())) {
-      shapes.push_back(findOrCreateCast(
-          loc, shape, builder.getIntegerType(shapeAndStridesBitwidth),
-          builder));
-      strides.push_back(findOrCreateCast(
-          loc, stride, builder.getIntegerType(shapeAndStridesBitwidth),
-          builder));
+      shapes.push_back(tt::intel::findOrCreateCastOp(
+          shape, builder.getIntegerType(shapeAndStridesBitwidth)));
+      strides.push_back(tt::intel::findOrCreateCastOp(
+          stride, builder.getIntegerType(shapeAndStridesBitwidth)));
       Value zero =
           tt::intel::findOrCreateIntConstant(loc, 0, offsetBitwidth, builder);
       offsets.push_back(zero);

@@ -101,24 +101,6 @@ private:
     return true;
   }
 
-  arith::TruncIOp getOrCreateTruncI32Op(Value v) const {
-    assert(v.getType().isInteger(64) && "Expecting i64 value");
-    Location loc = v.getLoc();
-    OpBuilder builder(v.getContext());
-    Type targetType = builder.getIntegerType(32);
-
-    if (Operation *defOp = v.getDefiningOp()) {
-      if (auto nextOp = dyn_cast_or_null<arith::TruncIOp>(defOp->getNextNode()))
-        if (nextOp.getType() == targetType && nextOp.getIn() == v)
-          return nextOp;
-      builder.setInsertionPointAfter(defOp);
-    } else {
-      builder.setInsertionPointToStart(v.getParentBlock());
-    }
-
-    return arith::TruncIOp::create(builder, loc, targetType, v);
-  }
-
   tt::MakeTensorDescOp
   createMakeTensorDescOp(tt::MakeTensorPtrOp makeTensorPtrOp,
                          tt::PaddingOption padding) {
@@ -132,7 +114,8 @@ private:
     Value base = makeTensorPtrOp.getBase();
     SmallVector<Value> shape;
     for (Value s : makeTensorPtrOp.getShape())
-      shape.push_back(getOrCreateTruncI32Op(s));
+      shape.push_back(tt::intel::findOrCreateCastOp(
+          s, IntegerType::get(s.getContext(), 32)));
     SmallVector<Value> strides = makeTensorPtrOp.getStrides();
     return tt::MakeTensorDescOp::create(builder, loc, descTy, base, shape,
                                         strides, padding);
