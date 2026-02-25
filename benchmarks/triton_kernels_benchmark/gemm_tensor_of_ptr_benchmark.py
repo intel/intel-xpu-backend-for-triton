@@ -5,6 +5,7 @@ Gemm benchmark (tensor of pointer)
 This benchmark is come from the Triton tutorial 03-matrix-multiplication.py (commit: 3f4fdd1)
 To compare the performance to XeTLA kernel.
 
+. - just to re-run perf benchmarks
 """
 from typing import List, Optional
 
