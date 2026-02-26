@@ -253,6 +253,29 @@ public:
   }
 };
 
+template <typename OpTy>
+class RemOpStrideVisitor final : public StrideInfoVisitorImpl<OpTy> {
+public:
+  StrideInfo getStrideInfo(
+      OpTy op,
+      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) override {
+    const auto &lhs = operands[0]->getValue();
+    const auto &rhs = operands[1]->getValue();
+    auto rank = lhs.getRank();
+    StrideInfo::DimVectorT stride;
+
+    for (int d = 0; d < rank; ++d) {
+      if (lhs.getStride(d) >= 0 && rhs.getStride(d) == 0)
+        stride.push_back(lhs.getStride(d));
+      else if (lhs.getStride(d) == 0)
+        stride.push_back(0);
+      else
+        stride.push_back(-1);
+    }
+    return StrideInfo(std::move(stride));
+  }
+};
+
 class SplatOpStrideVisitor final
     : public StrideInfoVisitorImpl<triton::SplatOp> {
 public:
@@ -394,6 +417,8 @@ public:
     visitors.append<MulIOpStrideVisitor>();
     visitors.append<DivOpStrideVisitor<arith::DivSIOp>,
                     DivOpStrideVisitor<arith::DivUIOp>>();
+    visitors.append<RemOpStrideVisitor<arith::RemSIOp>,
+                    RemOpStrideVisitor<arith::RemUIOp>>();
     visitors.append<SplatOpStrideVisitor>();
     visitors.append<LoadOpStrideVisitor>();
     visitors.append<ExpandDimsOpStrideVisitor>();
