@@ -3,6 +3,7 @@ import importlib.util
 import itertools
 import os
 import re
+import gc
 import pathlib
 from concurrent.futures import Executor, Future, ThreadPoolExecutor
 
@@ -11,7 +12,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_hip
+from triton._internal_testing import is_hip, is_xpu
 
 
 @triton.jit
@@ -696,7 +697,9 @@ def test_function_arguments(device):
     kernel[(1, )](y[2], func3, (3, ))
     kernel[(1, )](y[3], func4, (3, 4))
     kernel[(1, )](y[4], func1, tuple())
-    assert len(kernel.device_caches[0][0]) == 4
+
+    device = getattr(torch, device).current_device()
+    assert len(kernel.device_caches[device][0]) == 4
     assert y.tolist() == [1, 2, 3, 7, 1]
 
 
@@ -750,19 +753,21 @@ def test_async_compile_mock(device, fresh_triton_cache):
         kernel.warmup(b, 0, grid=(1, ))
         kernel.warmup(b, 1, grid=(1, ))
 
+        device = getattr(torch, device).current_device()
+
         # Nothing has actually compiled yet
-        assert len(kernel.device_caches[0][0]) == 4
+        assert len(kernel.device_caches[device][0]) == 4
         assert len(pool.work_queue) == 4
 
         # Duplicates are only submitted once
         kernel.warmup(a, 0, grid=(1, ))
         kernel.warmup(a, 1, grid=(1, ))
-        assert len(kernel.device_caches[0][0]) == 4
+        assert len(kernel.device_caches[device][0]) == 4
         assert len(pool.work_queue) == 4
 
         pool.run_one()
         kernel[(1, )](a, 0)
-        assert len(kernel.device_caches[0][0]) == 4
+        assert len(kernel.device_caches[device][0]) == 4
         assert a[0, 0] == 0.0
 
         pool.run_all()
@@ -785,7 +790,8 @@ def test_async_compile(device, fresh_triton_cache):
         kernel.warmup(b, 0, grid=(1, ))
         kernel.warmup(b, 1, grid=(1, ))
 
-        assert len(kernel.device_caches[0][0]) == 4
+        device = getattr(torch, device).current_device()
+        assert len(kernel.device_caches[device][0]) == 4
 
         kernel[(1, )](b, 1)
         assert b[0, 0] == 1
@@ -797,6 +803,27 @@ def test_async_compile(device, fresh_triton_cache):
         assert a[0, 0] == 1
         kernel[(1, )](a, 2)
         assert a[0, 0] == 2
+
+
+def test_async_compile_error(fresh_triton_cache):
+
+    @triton.jit
+    def fn(x: tl.constexpr):
+        tl.static_assert(x == 2)
+
+    with pytest.raises(triton.compiler.errors.CompileTimeAssertionFailure):
+        with (
+                ThreadPoolExecutor(2) as pool,
+                triton.AsyncCompileMode(pool),
+        ):
+            assert triton.runtime._async_compile.active_mode.get() is not None
+            fn.warmup(1, grid=(1, ))
+
+            assert len(fn.device_caches[0][0]) == 1
+
+    # After the AsyncCompileMode context manager exits, the active mode should
+    # be set to None again, even if there was an error.
+    assert triton.runtime._async_compile.active_mode.get() is None
 
 
 def test_higher_order_kernel(device, fresh_triton_cache, capsys):
@@ -897,3 +924,37 @@ def test_preload_higher_order_kernels(device, fresh_triton_cache) -> None:
     kernel[(1, )](output, fn_b)
     assert counter == 1
     assert output.item() == 31
+
+
+def test_module_load_unload(device, fresh_knobs):
+    if is_xpu():
+        pytest.skip("FIXME: #6166")
+
+    @triton.jit
+    def kernel(out_ptr, val) -> None:
+        tl.store(out_ptr, val)
+
+    # we should hit the kernel unload call to decrese the counter from 1 to 0
+    counter = 1
+
+    def kernel_unload(*args, **kwargs):
+        nonlocal counter
+        counter -= 1
+
+    # turn off python garbage collector, so the callback is not called
+    # in the garbage collector
+    gc.disable()
+    triton.knobs.runtime.kernel_unload_hook.add(kernel_unload)
+
+    out = torch.randn(1, dtype=torch.float32, device=device)
+    pre_compile = kernel.warmup(out, 1, grid=(1, ))
+    pre_compile._init_handles()
+
+    assert counter == 1
+    assert pre_compile.module is not None
+    pre_compile.__del__()
+
+    assert counter == 0
+    assert pre_compile.module is None
+    # turn on garbage collector
+    gc.enable()

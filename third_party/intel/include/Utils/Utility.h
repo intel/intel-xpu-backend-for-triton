@@ -18,6 +18,8 @@ class LoopLikeOpInterface;
 
 namespace mlir::triton::intel {
 
+Value findOrCreateCastOp(Value val, Type targetType);
+
 // Lookup for a integer constant with the given value and bitwidth in the
 // current block (before the builder insertion point). Return it if found,
 // otherwise create a new one.
@@ -45,7 +47,7 @@ template <typename OpTy,
 std::optional<OpTy> findDefiningOpOfType(Value val) {
   if (auto arg = dyn_cast<BlockArgument>(val)) {
     Operation *parentOp = arg.getParentBlock()->getParentOp();
-    if (isa<FunctionOpInterface>(parentOp))
+    if (!parentOp || isa<FunctionOpInterface>(parentOp))
       return std::nullopt;
 
     Value loopArg;
@@ -76,6 +78,8 @@ std::optional<OpTy> findDefiningOpOfType(Value val) {
       // Give up if the 2 possible definitions aren't the same.
       Region &thenRgn = ifOp.getThenRegion();
       Region &elseRgn = ifOp.getElseRegion();
+      if (thenRgn.empty() || elseRgn.empty())
+        return std::nullopt;
       assert(thenRgn.hasOneBlock() && elseRgn.hasOneBlock() &&
              "Expecting single blocks on both the 'then' and 'else' regions");
       auto thenYieldOp =

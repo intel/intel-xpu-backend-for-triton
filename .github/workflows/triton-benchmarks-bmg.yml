@@ -6,12 +6,14 @@ on:
   pull_request:
     branches:
       - main
+    types: [opened, synchronize, reopened, labeled]
     paths:
       - .github/workflows/triton-benchmarks*.yml
       - benchmarks/**
 
 jobs:
   benchmarks:
+    if: github.event.action != 'labeled' || github.event.label.name == 'run-benchmarks'
     uses: ./.github/workflows/triton-benchmarks.yml
     with:
       runner_label: b580

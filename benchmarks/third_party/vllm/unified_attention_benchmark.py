@@ -20,12 +20,15 @@ import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
 
-# Import vLLM attention functions
-from vllm.attention.ops.triton_unified_attention import unified_attention
+# This supports both current upstream and pinned version
+try:
+    from vllm.attention.ops.triton_unified_attention import unified_attention
+except ImportError:
+    from vllm.v1.attention.ops.triton_unified_attention import unified_attention
+except ImportError as e:
+    raise ImportError(
+        "Could not import unified_attention from vLLM. Please ensure vLLM is installed and accessible.") from e
 from vllm.platforms import current_platform
-
-# from vllm.platforms import current_platform
-# from vllm.triton_utils import tl, triton
 
 float8_info = torch.finfo(current_platform.fp8_dtype())
 
@@ -1275,10 +1278,7 @@ def get_unified_attention_benchmark(
         ))
     def benchmark(q_heads, k_heads, head_size, dtype, qdtype, seq_lens, sliding_window, soft_cap, num_blocks,
                   block_size, provider):
-        print("Config:", q_heads, k_heads, head_size, dtype, qdtype, seq_lens, sliding_window, soft_cap, num_blocks,
-              block_size, provider)
-        # Set default device like in the test
-        current_platform.seed_everything(0)  # Use same seed as test
+        torch.manual_seed(20)
         n_warmup = 100
         quantiles = [0.5, 0.0, 1.0]
 

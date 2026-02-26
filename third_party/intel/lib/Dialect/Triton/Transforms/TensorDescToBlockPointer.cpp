@@ -6,6 +6,7 @@
 #include "mlir/Interfaces/LoopLikeInterface.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
@@ -15,6 +16,7 @@
 
 using namespace mlir;
 namespace tt = mlir::triton;
+namespace ttg = mlir::triton::gpu;
 
 namespace mlir::triton::intel {
 #define GEN_PASS_DEF_TRITONINTELTENSORDESCTOBLOCKPOINTER
@@ -26,29 +28,26 @@ namespace {
 constexpr unsigned offsetBitwidth = 32u;
 constexpr unsigned shapeAndStridesBitwidth = 64u;
 
-Value findOrCreateCast(Location loc, Value val, Type tgtType,
-                       OpBuilder &builder) {
-  assert(isa<IntegerType>(tgtType) && isa<IntegerType>(val.getType()) &&
-         "Expecting integer types");
-  assert(val.getType().getIntOrFloatBitWidth() <=
-             tgtType.getIntOrFloatBitWidth() &&
-         "Expecting smaller type");
-
-  if (val.getType() == tgtType)
-    return val;
-
-  Block *block = builder.getInsertionBlock();
-  const Block::iterator insertPoint = builder.getInsertionPoint();
-
-  auto it = std::find_if(block->begin(), insertPoint, [&](Operation &op) {
-    if (auto castOp = dyn_cast<arith::ExtSIOp>(op))
-      return castOp.getIn() == val && castOp.getType() == tgtType;
-    return false;
+bool hasATensorDescriptorType(mlir::TypeRange types) {
+  return llvm::any_of(types, [](mlir::Type t) {
+    return llvm::isa<mlir::triton::TensorDescType>(t);
   });
+}
 
-  return (it != insertPoint)
-             ? cast<arith::ExtSIOp>(*it)
-             : getValueOrCreateCastToIndexLike(builder, loc, tgtType, val);
+// Returns the default blocked encoding for the given shape.
+// Returns nullptr if TensorDescToBlockPointer pass is run before
+// TritonToTritonGPU pass.
+Attribute maybeGetDefaultBlockedEncoding(Operation *op,
+                                         ArrayRef<int64_t> shape) {
+  // numWarps is unavailable before TritonToTritonGPUPass, so tensor has no
+  // encoding yet.
+  if (!ttg::maybeLookupNumWarps(op))
+    return Attribute();
+
+  OpBuilder builder(op);
+  return ttg::getDefaultBlockedEncoding(
+      builder.getContext(), shape, ttg::lookupNumWarps(op),
+      ttg::lookupThreadsPerWarp(builder), ttg::lookupNumCTAs(builder));
 }
 
 struct TritonIntelTensorDescToBlockPointer
@@ -61,59 +60,47 @@ public:
   void runOnOperation() final {
     ModuleOp moduleOp = getOperation();
 
-    WalkResult res = moduleOp->walk<WalkOrder::PreOrder>([=](Operation *op) {
-      if (isa<tt::DescriptorGatherOp>(op) || isa<tt::DescriptorScatterOp>(op) ||
-          isa<tt::DescriptorReduceOp>(op)) {
-        op->emitRemark(
-            "TritonIntelTensorDescToBlockPointer: Failed to rewrite");
-        return WalkResult::interrupt();
-      }
-      if (auto loadOp = dyn_cast_or_null<tt::DescriptorLoadOp>(op)) {
-        // Retrieve the padding option from the MakeTensorDescOp.
-        std::optional<tt::MakeTensorDescOp> makeTensorDescOp =
-            tt::intel::findDefiningOpOfType<tt::MakeTensorDescOp>(
-                loadOp.getDesc());
-        if (!makeTensorDescOp) {
-          op->emitRemark("TritonIntelTensorDescToBlockPointer: Failed to "
-                         "retrieve the padding option.");
-          return WalkResult::interrupt();
-        }
-
-        OpToPaddingMap[loadOp] = makeTensorDescOp->getPadding();
-      }
+    moduleOp->walk<WalkOrder::PreOrder>([&](tt::DescriptorLoadOp loadOp) {
+      // Retrieve the padding option from the MakeTensorDescOp.
+      std::optional<tt::MakeTensorDescOp> makeTensorDescOp =
+          tt::intel::findDefiningOpOfType<tt::MakeTensorDescOp>(
+              loadOp.getDesc());
+      assert(makeTensorDescOp.has_value() &&
+             "Expecting to find the defining MakeTensorDescOp");
+      OpToPaddingMap[loadOp] = makeTensorDescOp->getPadding();
       return WalkResult::advance();
     });
 
-    if (res.wasInterrupted()) {
-      LLVM_DEBUG(llvm::dbgs()
-                 << "TritonIntelTensorDescToBlockPointer: Skipping module - "
-                    "contains unsupported operations\n");
-      return;
-    }
-
     moduleOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
-      return TypeSwitch<Operation *, WalkResult>(op)
+      assert(!isa<tt::DescriptorGatherOp>(op) &&
+             !isa<tt::DescriptorScatterOp>(op) &&
+             !isa<tt::DescriptorReduceOp>(op) &&
+             "Expecting no gather/scatter/reduce ops at this stage");
+      TypeSwitch<Operation *>(op)
           .Case<tt::MakeTensorDescOp>([&](auto makeTensorDescOp) {
-            if (failed(rewriteMakeTensorDescriptorOp(makeTensorDescOp)))
-              makeTensorDescOp->emitRemark(
-                  "TritonIntelTensorDescToBlockPointer: Failed to rewrite");
-            return WalkResult::advance();
+            [[maybe_unused]] LogicalResult res =
+                rewriteMakeTensorDescriptorOp(makeTensorDescOp);
+            assert(succeeded(res) &&
+                   "Failed to rewrite make_tensor_descriptor op");
           })
           .Case<tt::DescriptorLoadOp, tt::DescriptorStoreOp>(
               [&](auto loadOrStoreOp) {
-                if (failed(rewriteDescriptorLoadOrStoreOp(loadOrStoreOp)))
-                  loadOrStoreOp->emitRemark(
-                      "TritonIntelTensorDescToBlockPointer: Failed to rewrite");
-                return WalkResult::advance();
+                rewriteDescriptorLoadOrStoreOp(loadOrStoreOp);
               })
-          .Default([&](auto) { return WalkResult::advance(); });
+          .Default([&](auto) {});
+      return WalkResult::advance();
     });
 
     if (!cleanUp.empty())
       tt::intel::eraseOperations(cleanUp);
 
     LLVM_DEBUG(llvm::dbgs()
-                   << "After TDesc to block_ptr: << " << moduleOp << "\n";);
+                   << "After TDesc to block_ptr: " << moduleOp << "\n";);
+    moduleOp->walk([&](Operation *op) {
+      assert(!hasATensorDescriptorType(op->getOperandTypes()) &&
+             !hasATensorDescriptorType(op->getResultTypes()) &&
+             "Expecting no tensor descriptor types after conversion");
+    });
     assert(succeeded(verify(moduleOp)) && "Module verification failed");
   }
 
@@ -125,14 +112,15 @@ private:
   tt::MakeTensorPtrOp
   findOrCreateMakeTensorPtr(Location loc, Value base, ValueRange shape,
                             ValueRange strides, ValueRange offsets,
-                            ArrayRef<int32_t> sizes, OpBuilder &builder) {
+                            ArrayRef<int64_t> sizes, Attribute layout,
+                            OpBuilder &builder) {
     Block *block = builder.getInsertionBlock();
     const Block::iterator insertPoint = builder.getInsertionPoint();
     auto it = std::find_if(block->begin(), insertPoint, [&](Operation &op) {
       if (auto makeTensorPtrOp = dyn_cast<tt::MakeTensorPtrOp>(op)) {
         triton::PointerType resType = makeTensorPtrOp.getResult().getType();
         auto tensorType = cast<RankedTensorType>(resType.getPointeeType());
-        auto sameShape = [](ArrayRef<int64_t> arr1, ArrayRef<int32_t> arr2) {
+        auto sameShape = [](ArrayRef<int64_t> arr1, ArrayRef<int64_t> arr2) {
           for (auto [dim1, dim2] : llvm::zip(arr1, arr2)) {
             if (dim1 != dim2)
               return false;
@@ -144,14 +132,20 @@ private:
                makeTensorPtrOp.getShape() == shape &&
                makeTensorPtrOp.getStrides() == strides &&
                makeTensorPtrOp.getOffsets() == offsets &&
-               sameShape(tensorType.getShape(), sizes);
+               sameShape(tensorType.getShape(), sizes) &&
+               tensorType.getEncoding() == layout;
       }
       return false;
     });
 
     auto makeTensorPtrOp = [&]() {
+      auto pointerType = cast<tt::PointerType>(base.getType());
+      auto tensorType =
+          RankedTensorType::get(sizes, pointerType.getPointeeType(), layout);
+      auto tensorPtrType =
+          tt::PointerType::get(tensorType, pointerType.getAddressSpace());
       auto makeTensorPtr = tt::MakeTensorPtrOp::create(
-          builder, loc, base, shape, strides, offsets, sizes,
+          builder, loc, tensorPtrType, base, shape, strides, offsets,
           builder.getDenseI32ArrayAttr({1, 0}));
       return makeTensorPtr;
     };
@@ -208,24 +202,23 @@ private:
 
     // Create a new block pointer if a suitable one doesn't already exist.
     SmallVector<Value> shapes, strides, offsets;
-    SmallVector<int32_t> sizes;
+    SmallVector<int64_t> sizes;
     for (const auto [shape, stride, size] :
          llvm::zip(op.getShape(), op.getStrides(),
                    tDescType.getBlockType().getShape())) {
-      shapes.push_back(findOrCreateCast(
-          loc, shape, builder.getIntegerType(shapeAndStridesBitwidth),
-          builder));
-      strides.push_back(findOrCreateCast(
-          loc, stride, builder.getIntegerType(shapeAndStridesBitwidth),
-          builder));
+      shapes.push_back(tt::intel::findOrCreateCastOp(
+          shape, builder.getIntegerType(shapeAndStridesBitwidth)));
+      strides.push_back(tt::intel::findOrCreateCastOp(
+          stride, builder.getIntegerType(shapeAndStridesBitwidth)));
       Value zero =
           tt::intel::findOrCreateIntConstant(loc, 0, offsetBitwidth, builder);
       offsets.push_back(zero);
-      sizes.push_back(static_cast<int32_t>(size));
+      sizes.push_back(size);
     }
 
+    Attribute layout = maybeGetDefaultBlockedEncoding(op, sizes);
     auto tensorPtr = findOrCreateMakeTensorPtr(
-        loc, op.getBase(), shapes, strides, offsets, sizes, builder);
+        loc, op.getBase(), shapes, strides, offsets, sizes, layout, builder);
     LLVM_DEBUG({
       llvm::dbgs() << "With:\n";
       llvm::dbgs().indent(2) << tensorPtr << "\n";
@@ -246,32 +239,40 @@ private:
             std::enable_if_t<llvm::is_one_of<OpTy, tt::DescriptorLoadOp,
                                              tt::DescriptorStoreOp>::value,
                              bool> = true>
-  LogicalResult rewriteDescriptorLoadOrStoreOp(OpTy op) {
+  void rewriteDescriptorLoadOrStoreOp(OpTy op) {
     assert(op && "Expecting a valid operation");
-
-    // At this point we expect to have transformed `make_tensor_descriptor` into
-    // a `make_block_ptr` operation, except when the tensor descriptor is
-    // allocated on the host and passed to the kernel as an argument.
-    Value operand = op.getOperand(0);
-    if (isa<tt::TensorDescType>(operand.getType()))
-      return failure();
 
     LLVM_DEBUG(llvm::dbgs() << "Rewriting: " << op << "\n");
 
     OpBuilder builder(op);
     Location loc = op.getLoc();
+    Value operand = op.getOperand(0);
     assert(triton::isTensorPointerType(operand.getType()) &&
            "Expecting a block ptr");
     auto ptrType = cast<tt::PointerType>(operand.getType());
-    auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
+    auto descTensorType = cast<RankedTensorType>(ptrType.getPointeeType());
+
+    constexpr bool isLoad = std::is_same_v<OpTy, tt::DescriptorLoadOp>;
+    RankedTensorType opTensorType;
+    if constexpr (isLoad)
+      opTensorType = cast<RankedTensorType>(op.getType());
+    else
+      opTensorType = cast<RankedTensorType>(op.getSrc().getType());
+
+    // FIXME: If we want to move TensorDescToBlockPointer pass further down in
+    // the pipeline, then we need to handle also non-default layouts.
+    [[maybe_unused]] Attribute defaultLayout =
+        maybeGetDefaultBlockedEncoding(op, opTensorType.getShape());
+    assert(opTensorType.getEncoding() == defaultLayout &&
+           "Expecting the default blocked encoding");
+
     Value ptr =
         tt::AdvanceOp::create(builder, loc, ptrType, operand, op.getIndices());
 
     SmallVector<int32_t> boundaryCheck;
-    for (size_t i = 0; i < tensorType.getRank(); ++i)
+    for (size_t i = 0; i < descTensorType.getRank(); ++i)
       boundaryCheck.push_back(i);
 
-    constexpr bool isLoad = std::is_same_v<OpTy, tt::DescriptorLoadOp>;
     if constexpr (isLoad) {
       // Default to PAD_ZERO as this is the expected padding behavior for
       // descriptor loads. It should be specified in the tt.make_tensor_desc if
@@ -284,9 +285,7 @@ private:
           loc, ptr, boundaryCheck, padding, op.getCache(), op.getEvict(),
           /*volatile*/ false);
 
-      RankedTensorType loadType = cast<RankedTensorType>(loadOp.getType());
-      RankedTensorType resType = cast<RankedTensorType>(op.getType());
-      if (loadType == resType) {
+      if (descTensorType == opTensorType) {
         LLVM_DEBUG(llvm::dbgs().indent(2) << loadOp << "\n");
         op.replaceAllUsesWith(loadOp);
       } else {
@@ -295,9 +294,11 @@ private:
         // load op (see RankedReduceDescriptorLoads). In this case we need to
         // insert a reshape op to ensure the load op result has the expected
         // shape for subsequent operations.
-        ArrayRef<int64_t> resShape = resType.getShape();
-        assert(loadType.getShape() != resShape && "Expecting different shapes");
-        assert(loadType.getElementType() == resType.getElementType() &&
+        ArrayRef<int64_t> resShape = opTensorType.getShape();
+        assert(descTensorType.getShape() != resShape &&
+               "Expecting different shapes");
+        assert(descTensorType.getElementType() ==
+                   opTensorType.getElementType() &&
                "Expecting the same element type");
         auto reshapeOp =
             builder.createOrFold<tt::ReshapeOp>(loc, resShape, loadOp);
@@ -313,8 +314,6 @@ private:
     }
 
     cleanUp.insert(op);
-
-    return success();
   }
 
 private:

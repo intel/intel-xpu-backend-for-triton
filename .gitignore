@@ -78,6 +78,7 @@ ptxas-blackwell
 # Third-party include
 third_party/nvidia/backend/include
 third_party/nvidia/backend/lib/cupti
+third_party/nvidia/backend/lib/cupti-blackwell
 
 # Docs
 docs/_build/
@@ -101,3 +102,5 @@ docs/sg_execution_times.rst
 
 # macOS
 .DS_Store
+
+AGENTS.override.md

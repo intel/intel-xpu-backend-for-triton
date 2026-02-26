@@ -26,33 +26,6 @@ namespace mlir {
 using namespace triton;
 using namespace triton::gpu;
 
-SmallVector<unsigned> ReduceOpHelper::getOrderWithAxisAtBeginning() {
-  auto order = toLinearEncoding(srcTy).getOrder();
-  auto it = std::find(order.begin(), order.end(), axis);
-  // delete the axis from order
-  order.erase(it);
-  // insert axis at the beginning of order
-  order.insert(order.begin(), axis);
-  return order;
-}
-
-// Thread offset is the thread index offset of two adjacent threads on the
-// reduction axis within the warp.
-unsigned ReduceOpHelper::getThreadOffsetOnReductionAxis() {
-  auto *ctx = srcEncoding.getContext();
-  auto linearLayout = toLinearLayout(srcTy);
-  auto kLane = mlir::StringAttr::get(ctx, "lane");
-  const auto &bases = linearLayout.getBases();
-  const auto &lanes = bases.find(kLane)->second;
-  auto offset = 1;
-  for (const auto &lane : lanes) {
-    if (lane[axis] != 0)
-      break;
-    offset *= 2;
-  }
-  return offset;
-}
-
 // Cases where distributed shared memory is not required in ConvertLayout:
 // (1) numCTAs == 1
 // (2) numCTAs > 1 but srcCGALayout == dstCGALayout
@@ -108,29 +81,6 @@ unsigned ReduceOpHelper::getIntraWarpSizeWithUniqueData() {
 
 bool ReduceOpHelper::isWarpSynchronous() {
   return getWarpsPerCTA(srcEncoding, srcShape)[axis] == 1;
-}
-
-SmallVector<unsigned> ReduceOpHelper::getScratchRepShape() {
-  SmallVector<unsigned> smemShape;
-  // This case doesn't need inter-warp communication
-  if (isWarpSynchronous())
-    return {0, 0};
-
-  smemShape = convertType<unsigned>(srcShape);
-  smemShape[axis] = getInterWarpSizeWithUniqueData();
-
-  return smemShape;
-}
-
-unsigned ReduceOpHelper::getScratchSizeInBytesOld() {
-  auto smemShape = getScratchRepShape();
-  auto elems = product<unsigned>(smemShape);
-
-  unsigned bytesPerElem = 0;
-  for (const auto &ty : srcElementTypes) {
-    bytesPerElem += ceil<unsigned>(ty.getIntOrFloatBitWidth(), 8);
-  }
-  return bytesPerElem * elems;
 }
 
 bool ReduceOpHelper::isReduceWithinCTA() {
@@ -1360,115 +1310,6 @@ bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
          !cvtNeedsWarpShuffle(srcTy, dstTy) &&
          !triton::gpu::intel::isDpasToDotShortcut(srcTy, dstTy);
 }
-
-namespace {
-
-/// A data structure similar to SetVector but maintains
-/// a deque instead of a vector to allow for efficient
-/// push_back and pop_front operations.
-/// Using SetVector doesn't suffice our needs because
-/// it only pushes and pops from the back.
-/// For example, if we have a queue like this:
-/// 0->4 1->2->3
-///    ^--------
-/// where 3 depends on 4, once we pop 3, we found
-/// 4 is not ready, so we check 2 and push 3 back
-/// to the queue.
-struct DFSSubgraphState {
-  DFSSubgraphState() : set(), deque() {}
-  DenseSet<Operation *> set;
-  std::deque<Operation *> deque;
-
-  bool push_back(Operation *op) {
-    if (set.insert(op).second) {
-      deque.push_back(op);
-      return true;
-    }
-    return false;
-  }
-
-  Operation *pop_front() {
-    Operation *op = deque.front();
-    deque.pop_front();
-    set.erase(op);
-    return op;
-  }
-
-  bool empty() { return deque.empty(); }
-};
-
-/// DFS post-order implementation that maintains a global count to work across
-/// multiple invocations, to help implement topological sort on multi-root DAGs.
-/// We traverse all operations but only record the ones that appear in
-/// `toSort` for the final result.
-struct DFSState {
-  DFSState(const SetVector<Operation *> &set) : toSort(set), seen() {}
-  const SetVector<Operation *> &toSort;
-  SmallVector<Operation *, 16> topologicalCounts;
-  DenseSet<Operation *> seen;
-
-  /// We mark each op as ready if all its operands and parents ops are seen. If
-  /// an op is ready, we add it to the queue. Otherwise, we keep adding its
-  /// operands to the ancestors set.
-  /// We always want an op to be scheduled after all its parents to handle
-  /// correctly cases with scf operations.
-  void addToReadyQueue(Operation *op, DFSSubgraphState &subGraph,
-                       SmallVector<Operation *, 4> &readyQueue) {
-    bool ready = true;
-    for (Value operand : op->getOperands()) {
-      auto def = operand.getDefiningOp();
-      if (def && !seen.count(def)) {
-        subGraph.push_back(def);
-        ready = false;
-      }
-    }
-    Operation *parent = op->getParentOp();
-    while (parent) {
-      if (!seen.count(parent)) {
-        subGraph.push_back(parent);
-        ready = false;
-      }
-      parent = parent->getParentOp();
-    }
-    if (ready)
-      readyQueue.push_back(op);
-  }
-};
-
-void dfsPostorder(Operation *root, DFSState *state) {
-  DFSSubgraphState subGraph;
-  subGraph.push_back(root);
-  SmallVector<Operation *> ops;
-  while (!subGraph.empty()) {
-    // Nodes in the ready queue are ready to be processed.
-    // Meaning that either their operands are all seen or they have null
-    // operands.
-    SmallVector<Operation *, 4> readyQueue;
-    auto *current = subGraph.pop_front();
-    state->addToReadyQueue(current, subGraph, readyQueue);
-    while (!readyQueue.empty()) {
-      Operation *current = readyQueue.pop_back_val();
-      if (!state->seen.insert(current).second)
-        continue;
-      ops.push_back(current);
-      for (Value result : current->getResults()) {
-        for (Operation *op : result.getUsers())
-          state->addToReadyQueue(op, subGraph, readyQueue);
-      }
-      for (Region &region : current->getRegions()) {
-        for (Operation &op : region.getOps())
-          state->addToReadyQueue(&op, subGraph, readyQueue);
-      }
-    }
-  }
-
-  for (Operation *op : llvm::reverse(ops)) {
-    if (state->toSort.count(op) > 0)
-      state->topologicalCounts.push_back(op);
-  }
-}
-
-} // namespace
 
 std::unique_ptr<DataFlowSolver> createDataFlowSolver() {
   auto solver = std::make_unique<DataFlowSolver>();

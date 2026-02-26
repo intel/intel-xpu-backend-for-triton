@@ -153,8 +153,7 @@ void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
 }
 
 void TargetInfo::clusterBarrier(Location loc, RewriterBase &rewriter) const {
-  triton::nvidia_gpu::ClusterArriveOp::create(rewriter, loc, /*relaxed=*/false);
-  triton::nvidia_gpu::ClusterWaitOp::create(rewriter, loc);
+  triton::nvidia_gpu::ClusterBarrierOp::create(rewriter, loc);
 }
 
 void TargetInfo::warpSync(Location loc, RewriterBase &rewriter) const {
@@ -481,12 +480,6 @@ Value TargetInfo::permute(RewriterBase &rewriter, Location loc, Value a,
 Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
                             ModuleOp moduleOp, ProgramIDDim axis) const {
   return LLVM::NVIDIA::llGetPid(loc, rewriter, moduleOp, axis);
-}
-bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
-                            SmallVector<Value> &acc, triton::ReduceOp op,
-                            unsigned numLaneToReduce,
-                            unsigned interleave) const {
-  llvm_unreachable("FIXME: implement warpReduce for Intel GPU");
 }
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
