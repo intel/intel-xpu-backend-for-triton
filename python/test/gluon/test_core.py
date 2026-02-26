@@ -1928,7 +1928,7 @@ def test_dot_fma(device):
     torch.testing.assert_close(out, torch.addmm(c, a, b), atol=1e-2, rtol=1e-2)
 
 
-def test_dot3d_fma():
+def test_dot3d_fma(device):
     torch.manual_seed(42)
     B = ttgl.constexpr(32)
     BATCH = ttgl.constexpr(8)
@@ -1951,10 +1951,10 @@ def test_dot3d_fma():
         out = ttgl.dot_fma(a, b, c)
         ttgl.store(out_ptr + offs, out)
 
-    a = torch.rand((BATCH, B, B), dtype=torch.float32, device="cuda")
-    b = torch.rand((BATCH, B, B), dtype=torch.float32, device="cuda")
-    c = torch.rand((BATCH, B, B), dtype=torch.float32, device="cuda")
-    out = torch.empty((BATCH, B, B), dtype=torch.float32, device="cuda")
+    a = torch.rand((BATCH, B, B), dtype=torch.float32, device=device)
+    b = torch.rand((BATCH, B, B), dtype=torch.float32, device=device)
+    c = torch.rand((BATCH, B, B), dtype=torch.float32, device=device)
+    out = torch.empty((BATCH, B, B), dtype=torch.float32, device=device)
     kernel[(1, )](a, b, c, out)
     torch.testing.assert_close(out, torch.matmul(a, b) + c, atol=1e-2, rtol=1e-2)
 
