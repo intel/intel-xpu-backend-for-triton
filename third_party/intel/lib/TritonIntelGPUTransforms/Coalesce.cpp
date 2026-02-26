@@ -1,4 +1,4 @@
-#include "intel/include/Analysis/AxisInfo.h"
+#include "intel/include/Analysis/AxisInfoExt.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Utils.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
