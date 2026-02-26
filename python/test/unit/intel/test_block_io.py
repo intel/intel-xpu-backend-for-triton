@@ -253,7 +253,7 @@ def test_block_io_nd(shape, dtype_str, transpose, device, tmp_path: pathlib.Path
     strides_col_major_list = [f"%stride_col_major_{i}_i64" for i in range(rank)]
 
     ty = {"float32": "f32", "float16": "f16", "bfloat16": "i16", "int8": "i8"}[dtype_str]
-    support_block_io = triton.runtime.driver.active.get_current_target().arch.get('has_subgroup_2d_block_io', False)
+    support_block_io = triton.runtime.driver.active.get_current_target().arch.get('has_2d_block_io', False)
 
     # Build tensor type string
     tensor_type = "x".join(str(s) for s in shape) + f"x{ty}"

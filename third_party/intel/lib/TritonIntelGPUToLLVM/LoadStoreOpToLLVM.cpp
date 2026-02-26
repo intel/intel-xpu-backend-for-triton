@@ -551,9 +551,6 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
         op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
     assert(blockIOAttr && "Expecting block IO attribute");
 
-    // TODO: To support more layouts on memory:
-    // https://github.com/intel/intel-xpu-backend-for-triton/issues/4057.
-    // Only support rank 2 dot layout, either row major or column major.
     StringRef memoryLayoutInfo = cast<StringAttr>(blockIOAttr).getValue();
     assert((memoryLayoutInfo == "row_major" ||
             memoryLayoutInfo == "column_major") &&
@@ -623,11 +620,11 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
 
       return SmallVector<Value>(unpackedPtrs.begin() + blockShape,
                                 unpackedPtrs.begin() + blockStride);
-    } else {
-      // For the regular pointers, there is no shape boundary. Return empty
-      // vector.
-      return {};
     }
+
+    // For the regular pointers, there is no shape boundary. Return empty
+    // vector.
+    return {};
   }
 
   // Returns the pitch (stride in bytes) from regular pointer or block pointer.
@@ -727,11 +724,11 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
       unsigned blockOffset = 0, blockShape = 1 * rank;
       return SmallVector<Value>(unpackedPtrs.begin() + blockOffset,
                                 unpackedPtrs.begin() + blockShape);
-    } else {
-      // For the regular pointers, the offsets have already been added into
-      // bases. Return empty vector.
-      return {};
     }
+
+    // For the regular pointers, the offsets have already been added into
+    // bases. Return empty vector.
+    return {};
   }
 
   struct BlockIOTileSizeInfo {
