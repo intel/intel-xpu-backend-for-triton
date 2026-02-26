@@ -63,12 +63,15 @@ void collectEncodingsFromUsers(Value value, SmallPtrSetImpl<Value> &visited,
   for (Operation *user : value.getUsers()) {
     // Direct load/store user.
     if (auto loadOp = dyn_cast<tt::DescriptorLoadOp>(user)) {
-      encodings.insert(cast<RankedTensorType>(loadOp.getType()).getEncoding());
+      if (auto encoding =
+              cast<RankedTensorType>(loadOp.getType()).getEncoding())
+        encodings.insert(encoding);
       continue;
     }
     if (auto storeOp = dyn_cast<tt::DescriptorStoreOp>(user)) {
-      encodings.insert(
-          cast<RankedTensorType>(storeOp.getSrc().getType()).getEncoding());
+      if (auto encoding =
+              cast<RankedTensorType>(storeOp.getSrc().getType()).getEncoding())
+        encodings.insert(encoding);
       continue;
     }
 
@@ -124,6 +127,13 @@ void collectEncodingsFromUsers(Value value, SmallPtrSetImpl<Value> &visited,
             collectEncodingsFromUsers(result, visited, encodings);
             collectEncodingsFromUsers(beforeArg, visited, encodings);
           }
+        }
+      } else if (auto ifOp = dyn_cast<scf::IfOp>(yieldOp->getParentOp())) {
+        // Yield in if's then/else region goes to the if's results.
+        for (auto [yieldedVal, result] :
+             llvm::zip(yieldOp.getOperands(), ifOp.getResults())) {
+          if (yieldedVal == value)
+            collectEncodingsFromUsers(result, visited, encodings);
         }
       }
       continue;
