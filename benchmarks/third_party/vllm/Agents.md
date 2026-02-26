@@ -27,7 +27,7 @@ Since XPU triton requires usage of tensor descriptors we run benchmarks two time
 
 For `batched_moe` benchmark there are following files located in it's folder `benchmarks/third_party/vllm/batched_moe`:
 1. `batched_moe_benchmark.py` - python script that runs the benchmark using code from vllm. As it imports the relevant kernel from vllm it will just use whatever is available.
-2. `batched_moe.patch` - patch that we'll apply to cloned vllm repo to add necessary changes to improve performance.
+2. `batched_moe.patch` - patch that we'll apply to cloned vllm repo to add necessary changes to improve performance. Note that this patch should be generated after the general patch is applied.
 3. `run_benchmark.sh` - script that will combine 2 steps above and run both original and modified version of kernels.
 
 # Running tests
