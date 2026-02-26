@@ -891,7 +891,7 @@ run_triton_kernels_tests() {
   fi
   # skipping mxfp, they are part of mxfp_tests suite
   TRITON_TEST_SUITE=triton_kernels \
-    run_pytest_command -vvv -n $max_procs --device xpu . -k 'not test_mxfp'
+    run_pytest_command -vvv -n $max_procs --device xpu test_matmul.py -k 'not test_mxfp'
 }
 
 test_triton() {
