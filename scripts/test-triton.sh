@@ -50,6 +50,7 @@ OPTION:
     --reports-dir DIR
     --warning-reports
     --ignore-errors
+    --run-all
     --skip-list SKIPLIST
     --extra-skip-list-suffixes SEMICOLON-SEPARATED LIST OF SUFFIXES
     --select-from-file SELECTFILE
@@ -99,6 +100,7 @@ VENV=false
 TRITON_TEST_REPORTS=false
 TRITON_TEST_WARNING_REPORTS=false
 TRITON_TEST_IGNORE_ERRORS=false
+TRITON_TEST_RUN_ALL=false
 SKIP_PIP=false
 SKIP_PYTORCH=false
 TEST_UNSKIP=false
@@ -315,6 +317,10 @@ while (( $# != 0 )); do
       TRITON_TEST_IGNORE_ERRORS=true
       shift
       ;;
+    --run-all)
+      TRITON_TEST_RUN_ALL=true
+      shift
+      ;;
     --skip-list)
       # Must be absolute
       TRITON_TEST_SKIPLIST_DIR="$(mkdir -p "$2" && cd "$2" && pwd)"
@@ -394,7 +400,7 @@ run_unit_tests() {
   echo "******       Running Triton LIT tests        ******"
   echo "***************************************************"
   cd $TRITON_PROJ/build/cmake*/test
-  lit -v . || $TRITON_TEST_IGNORE_ERRORS
+  lit -v . || handle_test_error
 }
 
 run_pytest_command() {
@@ -1069,3 +1075,4 @@ test_triton() {
 
 install_deps
 test_triton
+exit $TRITON_TEST_EXIT_CODE

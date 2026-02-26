@@ -135,7 +135,9 @@ jobs:
           echo github.event_name = ${{ github.event_name }}
           echo github.base_ref = ${{ github.base_ref }}
           echo github.ref = ${{ github.ref }}
-          if [[ "${{ github.event_name }}" == 'workflow_dispatch' && "${{ inputs.device }}" == "jgs" ]]; then
+          if [[ "${{ github.event_name }}" == 'schedule' ]]; then
+            TESTING_ON_JGS="true"
+          elif [[ "${{ github.event_name }}" == 'workflow_dispatch' && "${{ inputs.device }}" == "jgs" ]]; then
             TESTING_ON_JGS="true"
           elif [[ "${{ github.event_name }}" == 'pull_request' && "${{ github.base_ref }}" == 'main-js' ]]; then
             TESTING_ON_JGS="true"
