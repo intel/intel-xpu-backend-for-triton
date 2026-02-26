@@ -622,7 +622,6 @@ def test_preload_constexpr_tuple_arg(device, fresh_triton_cache, fresh_knobs) ->
     hash = pre_compile.hash
     assert specialization_data is not None
 
-    shutil.rmtree(fresh_triton_cache)
     tuple_call_kernel.device_caches[device][0].clear()
 
     kernel_preload = tuple_call_kernel.preload(specialization_data)
