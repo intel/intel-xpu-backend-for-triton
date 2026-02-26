@@ -28,9 +28,11 @@ module {
 
 // -----
 
-// CHECK: #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
-// CHECK: #blocked1 = #ttg.blocked<{sizePerThread = [1, 1, 1, 1, 1], threadsPerWarp = [1, 1, 1, 1, 32], warpsPerCTA = [1, 1, 1, 1, 4], order = [4, 3, 2, 1, 0]}>
+// CHECK-DAG: #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+// CHECK-DAG: #blocked1 = #ttg.blocked<{sizePerThread = [1, 1, 1, 1, 1], threadsPerWarp = [1, 1, 1, 1, 32], warpsPerCTA = [1, 1, 1, 1, 4], order = [4, 3, 2, 1, 0]}>
+// CHECK-DAG: [[CUSTOM:#.+]] = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#custom = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @test_load(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: i32) {
     %c1_i64 = arith.constant 1 : i64
@@ -107,10 +109,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %c1_i64 = arith.constant 1 : i64
     %c64_i32 = arith.constant 64 : i32
     %c8_i32 = arith.constant 8 : i32
-    %cst = arith.constant dense<1.000000e+00> : tensor<16x128xf32, #blocked>
+    %cst = arith.constant dense<1.000000e+00> : tensor<16x128xf32, #custom>
     %0 = arith.extsi %arg2 : i32 to i64
     %desc1 = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%0, %c1_i64] : <f32>, <tensor<16x128xf32>>
-    tt.descriptor_store %desc1[%c8_i32, %c64_i32], %cst : !tt.tensordesc<tensor<16x128xf32>>, tensor<16x128xf32, #blocked>
+    tt.descriptor_store %desc1[%c8_i32, %c64_i32], %cst : !tt.tensordesc<tensor<16x128xf32>>, tensor<16x128xf32, #custom>
     tt.return
   }
   // CHECK:      tt.func public @test_store([[PARAM_0:%.+]]: !tt.ptr<f32>, [[PARAM_1:%.+]]: i32, [[PARAM_2:%.+]]: i32) {
@@ -120,12 +122,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK-DAG:    [[CST_1_i64:%.+]] = arith.constant 1 : i64
   // CHECK-DAG:    [[CST_64_i32:%.+]] = arith.constant 64 : i32
   // CHECK-DAG:    [[CST_8_i32:%.+]] = arith.constant 8 : i32
-  // CHECK-DAG:    [[CST:%.+]] = arith.constant dense<1.000000e+00> : tensor<16x128xf32, #blocked>
+  // CHECK-DAG:    [[CST:%.+]] = arith.constant dense<1.000000e+00> : tensor<16x128xf32, [[CUSTOM]]>
   // CHECK-DAG:    [[EXTSI_PARAM_1:%.+]] = arith.extsi [[PARAM_1]] : i32 to i64
   // CHECK-DAG:    [[EXTSI_PARAM_2:%.+]] = arith.extsi [[PARAM_2]] : i32 to i64
-  // CHECK:        [[TENSOR_PTR:%.+]] = tt.make_tensor_ptr [[PARAM_0]], {{\[}}[[EXTSI_PARAM_1]], [[EXTSI_PARAM_2]]], {{\[}}[[EXTSI_PARAM_2]], [[CST_1_i64]]], {{\[}}[[CST_0_i32]], [[CST_0_i32]]] {{.*}} : <tensor<16x128xf32, #blocked>>
-  // CHECK:        [[TENSOR_PTR1:%.+]] = tt.advance [[TENSOR_PTR]], {{\[}}[[CST_8_i32]], [[CST_64_i32]]] : <tensor<16x128xf32, #blocked>>
-  // CHECK:        tt.store [[TENSOR_PTR1]], [[CST]]  {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<16x128xf32, #blocked>>
+  // CHECK:        [[TENSOR_PTR:%.+]] = tt.make_tensor_ptr [[PARAM_0]], {{\[}}[[EXTSI_PARAM_1]], [[EXTSI_PARAM_2]]], {{\[}}[[EXTSI_PARAM_2]], [[CST_1_i64]]], {{\[}}[[CST_0_i32]], [[CST_0_i32]]] {{.*}} : <tensor<16x128xf32, [[CUSTOM]]>>
+  // CHECK:        [[TENSOR_PTR1:%.+]] = tt.advance [[TENSOR_PTR]], {{\[}}[[CST_8_i32]], [[CST_64_i32]]] : <tensor<16x128xf32, [[CUSTOM]]>>
+  // CHECK:        tt.store [[TENSOR_PTR1]], [[CST]]  {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<16x128xf32, [[CUSTOM]]>>
   // CHECK:        tt.return
   // CHECK:      }
 }
