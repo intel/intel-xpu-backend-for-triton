@@ -223,3 +223,91 @@ def test_block_io(M, N, dtype_str, layout, load_block_ptr, store_block_ptr, tran
         assert 'spirv_Subgroup2DBlockStoreINTEL' in llir or 'GenISA.LSC2DBlockWrite' in llir
         load_count = llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead')
         assert load_count > 0 or transpose
+
+
+@pytest.mark.parametrize("shape", [[64, 64, 32], [128, 128, 16], [4, 64, 64, 32]])
+@pytest.mark.parametrize("dtype_str", ["float32", "float16", "int8"])
+@pytest.mark.parametrize("transpose", [True, False])
+@pytest.mark.skipif(not is_xpu(), reason="Block store tests are specific to the XPU backend")
+def test_block_io_nd(shape, dtype_str, transpose, device, tmp_path: pathlib.Path):
+    # Determine rank and shape
+    rank = len(shape)
+
+    if rank == 3:
+        layout = BlockedLayout([1, 1, 1], [1, 2, 16], [8, 4, 1], [2, 1, 0])
+    else:
+        layout = BlockedLayout([1, 1, 1, 1], [1, 1, 2, 16], [4, 2, 4, 1], [3, 2, 1, 0])
+
+    # Generate IR constants for shape and strides
+    shapes_ir = "\n".join([f"%dim{i}_i64 = arith.constant {s} : i64" for i, s in enumerate(shape)])
+    strides_row_major = [shape[-2] * shape[-1], shape[-1], 1]
+    strides_col_major = [shape[-2] * shape[-1], 1, shape[-2]]
+    for s in reversed(shape[1:-2]):
+        strides_row_major.insert(0, strides_row_major[0] * s)
+        strides_col_major.insert(0, strides_col_major[0] * s)
+    strides_row_major_ir = "\n".join(
+        [f"%stride_row_major_{i}_i64 = arith.constant {s} : i64" for i, s in enumerate(strides_row_major)])
+    strides_col_major_ir = "\n".join(
+        [f"%stride_col_major_{i}_i64 = arith.constant {s} : i64" for i, s in enumerate(strides_col_major)])
+    strides_row_major_list = [f"%stride_row_major_{i}_i64" for i in range(rank)]
+    strides_col_major_list = [f"%stride_col_major_{i}_i64" for i in range(rank)]
+
+    ty = {"float32": "f32", "float16": "f16", "bfloat16": "i16", "int8": "i8"}[dtype_str]
+    support_block_io = triton.runtime.driver.active.get_current_target().arch.get('has_2d_block_io', False)
+
+    # Build tensor type string
+    tensor_type = "x".join(str(s) for s in shape) + f"x{ty}"
+
+    # Build order for make_tensor_ptr (reverse order for IR)
+    order = ", ".join(str(i) for i in reversed(range(rank)))
+
+    # Build boundaryCheck array
+    boundary_check = ", ".join(str(i) for i in range(rank))
+
+    block_io = "\"column_major\"" if transpose else "\"row_major\""
+
+    ir = f"""
+    #layout = {layout}
+    module attributes {{{"ttig.support_2d_block_io," if support_block_io else ""} "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = {int(np.prod(warps_per_cta(layout)))} : i32, ttg.target = "xpu", "ttg.threads-per-warp" = {int(np.prod(layout.threads_per_warp))} : i32}} {{
+        tt.func public @block_store(%src: !tt.ptr<{ty}> {{tt.divisibility = 16 : i32}}, %dst: !tt.ptr<{ty}> {{tt.divisibility = 16 : i32}}) {{
+            {shapes_ir}
+            {strides_row_major_ir}
+            {strides_col_major_ir}
+            %c1_i64 = arith.constant 1 : i64
+            %c0_i32 = arith.constant 0 : i32
+
+            %src_ptr = tt.make_tensor_ptr %src, [{", ".join([f"%dim{i}_i64" for i in range(rank)])}], {"[" + ", ".join(strides_col_major_list if transpose else strides_row_major_list) + "]"}, [{", ".join(["%c0_i32"]*rank)}] {{order = array<i32: {order}>}} : <tensor<{tensor_type}, #layout>>
+            %store_val = tt.load %src_ptr {{ttig.block_io = {block_io}, boundaryCheck = array<i32: {boundary_check}>, padding = 1 : i32}} : !tt.ptr<tensor<{tensor_type}, #layout>>
+
+            %dst_ptr = tt.make_tensor_ptr %dst, [{", ".join([f"%dim{i}_i64" for i in range(rank)])}], {"[" + ", ".join(strides_row_major_list) + "]"}, [{", ".join(["%c0_i32"]*rank)}] {{order = array<i32: {order}>}} : <tensor<{tensor_type}, #layout>>
+            tt.store %dst_ptr, %store_val {{ttig.block_io = "row_major", boundaryCheck = array<i32: {boundary_check}>}} : !tt.ptr<tensor<{tensor_type}, #layout>>
+
+            tt.return
+        }}
+    }}
+    """
+
+    torch_dtype = getattr(torch, dtype_str)
+    if torch_dtype.is_floating_point:
+        a = torch.randn(shape, dtype=torch_dtype, device=device)
+    else:
+        a = torch.randint(low=-127, high=128, size=shape, dtype=torch_dtype, device=device)
+
+    x = torch.empty_like(a)
+
+    temp_file = tmp_path / "test_block_io_nd.ttgir"
+    temp_file.write_text(ir)
+    kernel = triton.compile(str(temp_file))
+
+    if transpose:
+        perm = list(range(rank))
+        perm[-2], perm[-1] = perm[-1], perm[-2]
+        a = a.permute(*perm).contiguous().permute(*perm)
+
+    kernel[(1, 1, 1)](a, x)
+    assert torch.equal(a, x)
+
+    if support_block_io:
+        llir = kernel.asm["llir"]
+        load_count = llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead')
+        assert load_count > 0 or transpose
