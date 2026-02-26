@@ -1,12 +1,14 @@
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Utils/Utility.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
@@ -34,20 +36,164 @@ bool hasATensorDescriptorType(mlir::TypeRange types) {
   });
 }
 
-// Returns the default blocked encoding for the given shape.
-// Returns nullptr if TensorDescToBlockPointer pass is run before
-// TritonToTritonGPU pass.
-Attribute maybeGetDefaultBlockedEncoding(Operation *op,
-                                         ArrayRef<int64_t> shape) {
-  // numWarps is unavailable before TritonToTritonGPUPass, so tensor has no
-  // encoding yet.
-  if (!ttg::maybeLookupNumWarps(op))
+// Recursively find the encoding from DescriptorLoadOp/DescriptorStoreOp users,
+// following through loop arguments and other passthrough operations.
+Attribute findEncodingFromUsers(Value value,
+                                SmallPtrSetImpl<Value> &visited) {
+  if (!visited.insert(value).second)
     return Attribute();
 
-  OpBuilder builder(op);
-  return ttg::getDefaultBlockedEncoding(
-      builder.getContext(), shape, ttg::lookupNumWarps(op),
-      ttg::lookupThreadsPerWarp(builder), ttg::lookupNumCTAs(builder));
+  for (Operation *user : value.getUsers()) {
+    // Direct load/store user - return its encoding.
+    if (auto loadOp = dyn_cast<tt::DescriptorLoadOp>(user))
+      return cast<RankedTensorType>(loadOp.getType()).getEncoding();
+    if (auto storeOp = dyn_cast<tt::DescriptorStoreOp>(user))
+      return cast<RankedTensorType>(storeOp.getSrc().getType()).getEncoding();
+
+    // Follow through loop arguments.
+    if (auto forOp = dyn_cast<scf::ForOp>(user)) {
+      for (auto [initArg, regionArg] :
+           llvm::zip(forOp.getInitArgs(), forOp.getRegionIterArgs())) {
+        if (initArg == value) {
+          if (Attribute enc = findEncodingFromUsers(regionArg, visited))
+            return enc;
+        }
+      }
+    }
+    if (auto whileOp = dyn_cast<scf::WhileOp>(user)) {
+      for (auto [initArg, beforeArg] :
+           llvm::zip(whileOp.getInits(), whileOp.getBeforeArguments())) {
+        if (initArg == value) {
+          if (Attribute enc = findEncodingFromUsers(beforeArg, visited))
+            return enc;
+        }
+      }
+    }
+    // Follow through yield to loop results and back to region iter args.
+    if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
+      if (auto forOp = dyn_cast<scf::ForOp>(yieldOp->getParentOp())) {
+        for (auto [yieldedVal, result, regionArg] :
+             llvm::zip(yieldOp.getOperands(), forOp.getResults(),
+                       forOp.getRegionIterArgs())) {
+          if (yieldedVal == value) {
+            // Check users outside the loop (through loop results).
+            if (Attribute enc = findEncodingFromUsers(result, visited))
+              return enc;
+            // Check users inside the loop (through region iter args).
+            if (Attribute enc = findEncodingFromUsers(regionArg, visited))
+              return enc;
+          }
+        }
+      }
+    }
+  }
+  return Attribute();
+}
+
+// Find the encoding that a specific use (OpOperand) leads to.
+Attribute findEncodingForUse(OpOperand &use, SmallPtrSetImpl<Value> &visited) {
+  Operation *user = use.getOwner();
+
+  // Direct load/store user.
+  if (auto loadOp = dyn_cast<tt::DescriptorLoadOp>(user))
+    return cast<RankedTensorType>(loadOp.getType()).getEncoding();
+  if (auto storeOp = dyn_cast<tt::DescriptorStoreOp>(user))
+    return cast<RankedTensorType>(storeOp.getSrc().getType()).getEncoding();
+
+  // Follow through loop arguments.
+  if (auto forOp = dyn_cast<scf::ForOp>(user)) {
+    // Find which init arg this use corresponds to.
+    for (auto [idx, initArg] : llvm::enumerate(forOp.getInitArgs())) {
+      if (&use == &forOp->getOpOperand(forOp.getNumControlOperands() + idx)) {
+        Value regionArg = forOp.getRegionIterArgs()[idx];
+        return findEncodingFromUsers(regionArg, visited);
+      }
+    }
+  }
+  if (auto whileOp = dyn_cast<scf::WhileOp>(user)) {
+    for (auto [idx, initArg] : llvm::enumerate(whileOp.getInits())) {
+      if (&use == &whileOp->getOpOperand(idx)) {
+        Value beforeArg = whileOp.getBeforeArguments()[idx];
+        return findEncodingFromUsers(beforeArg, visited);
+      }
+    }
+  }
+  // Follow through yield to loop results and back to region iter args.
+  if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
+    if (auto forOp = dyn_cast<scf::ForOp>(yieldOp->getParentOp())) {
+      unsigned idx = use.getOperandNumber();
+      // Check users outside the loop (through loop results).
+      Value result = forOp.getResults()[idx];
+      if (Attribute enc = findEncodingFromUsers(result, visited))
+        return enc;
+      // Check users inside the loop (through region iter args).
+      Value regionArg = forOp.getRegionIterArgs()[idx];
+      return findEncodingFromUsers(regionArg, visited);
+    }
+  }
+
+  return Attribute();
+}
+
+// Extend a BlockedEncodingAttr to a higher rank by prepending 1s.
+Attribute extendBlockedEncoding(MLIRContext *ctx, Attribute encoding,
+                                unsigned targetRank) {
+  auto blocked = dyn_cast<ttg::BlockedEncodingAttr>(encoding);
+  if (!blocked)
+    return encoding;
+
+  unsigned currentRank = blocked.getSizePerThread().size();
+  if (currentRank >= targetRank)
+    return encoding;
+
+  unsigned extra = targetRank - currentRank;
+  auto prependOnes = [&](ArrayRef<unsigned> arr) {
+    SmallVector<unsigned> out(extra, 1);
+    out.append(arr.begin(), arr.end());
+    return out;
+  };
+  // For order arrays, shift existing indices by extra and prepend new indices.
+  auto prependOrder = [&](ArrayRef<unsigned> arr) {
+    SmallVector<unsigned> out;
+    // Prepend extra dimensions in descending order.
+    for (unsigned i = extra; i > 0; --i)
+      out.push_back(i - 1);
+    // Shift existing indices by extra.
+    for (unsigned v : arr)
+      out.push_back(v + extra);
+    return out;
+  };
+  SmallVector<unsigned> newOrder;
+  for (int i = targetRank - 1; i >= 0; --i)
+    newOrder.push_back(i);
+
+  // Extend CGALayout to match the new rank.
+  ttg::CGAEncodingAttr newCGALayout;
+  if (auto cgaLayout = blocked.getCGALayout()) {
+    newCGALayout = ttg::CGAEncodingAttr::fromSplitParams(
+        ctx, prependOnes(cgaLayout.getCTAsPerCGA()),
+        prependOnes(cgaLayout.getCTASplitNum()),
+        prependOrder(cgaLayout.getCTAOrder()));
+  }
+
+  return ttg::BlockedEncodingAttr::get(
+      ctx, prependOnes(blocked.getSizePerThread()),
+      prependOnes(blocked.getThreadsPerWarp()),
+      prependOnes(blocked.getWarpsPerCTA()), newOrder, newCGALayout);
+}
+
+// Collect all uses grouped by their encoding.
+void collectUsesGroupedByEncoding(
+    Value value, unsigned targetRank, MLIRContext *ctx,
+    llvm::MapVector<Attribute, SmallVector<OpOperand *>> &encodingToUses) {
+  for (OpOperand &use : value.getUses()) {
+    SmallPtrSet<Value, 8> visited;
+    Attribute encoding = findEncodingForUse(use, visited);
+    if (encoding) {
+      encoding = extendBlockedEncoding(ctx, encoding, targetRank);
+    }
+    encodingToUses[encoding].push_back(&use);
+  }
 }
 
 struct TritonIntelTensorDescToBlockPointer
@@ -216,21 +362,33 @@ private:
       sizes.push_back(size);
     }
 
-    Attribute layout = maybeGetDefaultBlockedEncoding(op, sizes);
-    auto tensorPtr = findOrCreateMakeTensorPtr(
-        loc, op.getBase(), shapes, strides, offsets, sizes, layout, builder);
-    LLVM_DEBUG({
-      llvm::dbgs() << "With:\n";
-      llvm::dbgs().indent(2) << tensorPtr << "\n";
-    });
+    // Collect uses grouped by their encoding (different users may have
+    // different encodings).
+    llvm::MapVector<Attribute, SmallVector<OpOperand *>> encodingToUses;
+    collectUsesGroupedByEncoding(op.getResult(), sizes.size(), op->getContext(),
+                                 encodingToUses);
 
-    op->replaceAllUsesWith(tensorPtr);
+    // Create a block pointer for each unique encoding and replace uses.
+    for (auto &[layout, uses] : encodingToUses) {
+      auto tensorPtr = findOrCreateMakeTensorPtr(
+          loc, op.getBase(), shapes, strides, offsets, sizes, layout, builder);
+      LLVM_DEBUG({
+        llvm::dbgs() << "With (encoding=" << layout << "):\n";
+        llvm::dbgs().indent(2) << tensorPtr << "\n";
+      });
+
+      // Replace the specific uses that need this encoding.
+      for (OpOperand *use : uses) {
+        use->set(tensorPtr);
+      }
+
+      // Propagate the `tensorPtr` type to loops init args, yielded values,
+      // results, ... (if necessary).
+      for (Operation *user : tensorPtr->getUsers())
+        propagateToLoops(user);
+    }
+
     cleanUp.insert(op);
-
-    // Propagate the `tensorPtr` type to loops init args, yielded values,
-    // results, ... (if necessary).
-    for (Operation *user : tensorPtr->getUsers())
-      propagateToLoops(user);
 
     return success();
   }
@@ -259,12 +417,8 @@ private:
     else
       opTensorType = cast<RankedTensorType>(op.getSrc().getType());
 
-    // FIXME: If we want to move TensorDescToBlockPointer pass further down in
-    // the pipeline, then we need to handle also non-default layouts.
-    [[maybe_unused]] Attribute defaultLayout =
-        maybeGetDefaultBlockedEncoding(op, opTensorType.getShape());
-    assert(opTensorType.getEncoding() == defaultLayout &&
-           "Expecting the default blocked encoding");
+    assert(opTensorType.getEncoding() == descTensorType.getEncoding() &&
+           "Expecting the same encoding");
 
     Value ptr =
         tt::AdvanceOp::create(builder, loc, ptrType, operand, op.getIndices());
