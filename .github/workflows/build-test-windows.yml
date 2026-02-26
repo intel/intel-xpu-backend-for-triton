@@ -210,12 +210,11 @@ jobs:
           # oneAPI is required for sycl-ls, which is used by scripts/capture-hw-details.sh
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           cd ${{ env.NEW_WORKSPACE }}
-          pip install defusedxml
+          pip install ./scripts/triton_utils
           bash -c "\
             source ./scripts/capture-hw-details.sh; \
-            python scripts/pass_rate.py --reports reports; \
-            python scripts/pass_rate.py --reports reports --json > pass_rate.json; \
-            python scripts/pass_rate.py --reports reports --suite tutorials --json > pass_rate_tutorials.json; \
+            triton-utils pass_rate --reports reports --save-to-json pass_rate.json --merge-test-results --tests-with-multiple-testsuites; \
+            triton-utils tests_stats --reports reports --level testsuite --pretty-print --merge-test-results --tests-with-multiple-testsuites; \
           "
 
       - name: Upload pass rate report

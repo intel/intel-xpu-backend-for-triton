@@ -1,2 +1,2 @@
 # https://github.com/intel/intel-xpu-backend-for-triton/issues/6124
-01-vector-add
+python/test/tutorials/test_tutorials.py::test_01_vector_add

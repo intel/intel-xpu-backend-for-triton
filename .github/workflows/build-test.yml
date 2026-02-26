@@ -91,9 +91,9 @@ jobs:
 
       - name: Run unit tests for scripts
         run: |
-          pip install pytest pytest-xdist defusedxml
-          cd scripts
-          pytest -v -n 4 test_*.py
+          pip install pytest pytest-xdist ./scripts/triton_utils
+          cd scripts/triton_utils
+          pytest -v -n 4 test/
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}
