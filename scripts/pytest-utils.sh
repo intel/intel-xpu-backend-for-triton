@@ -8,10 +8,27 @@ TRITON_EXTRA_SKIPLIST_SUFFIXES="${TRITON_EXTRA_SKIPLIST_SUFFIXES:=}"
 TRITON_TEST_SELECTFILE="${TRITON_TEST_SELECTFILE:=}"
 TRITON_TEST_WARNING_REPORTS="${TRITON_TEST_WARNING_REPORTS:-false}"
 TRITON_TEST_IGNORE_ERRORS="${TRITON_TEST_IGNORE_ERRORS:-false}"
+TRITON_TEST_RUN_ALL="${TRITON_TEST_RUN_ALL:-false}"
+TRITON_TEST_EXIT_CODE=0
 
 if [[ $TEST_UNSKIP = true ]]; then
     TRITON_TEST_IGNORE_ERRORS=true
 fi
+
+# Handle test errors based on the selected mode:
+#   --ignore-errors: swallow error, continue, exit 0
+#   --run-all:       record error, continue, exit non-zero at end
+#   default:         fail immediately (set -e kills the script)
+handle_test_error() {
+    if [[ $TRITON_TEST_IGNORE_ERRORS == true ]]; then
+        return 0
+    elif [[ $TRITON_TEST_RUN_ALL == true ]]; then
+        TRITON_TEST_EXIT_CODE=1
+        return 0
+    else
+        return 1
+    fi
+}
 # absolute path for the selected skip list
 TRITON_TEST_SKIPLIST_DIR="$(cd "$TRITON_TEST_SKIPLIST_DIR" && pwd)"
 
@@ -81,7 +98,7 @@ pytest() {
     fi
 
     export TEST_UNSKIP
-    python -u -m pytest "${pytest_extra_args[@]}" "$@" || $TRITON_TEST_IGNORE_ERRORS
+    python -u -m pytest "${pytest_extra_args[@]}" "$@" || handle_test_error
 }
 
 run_tutorial_test() {
@@ -100,7 +117,7 @@ run_tutorial_test() {
         )
     fi
 
-    python -u "$SCRIPTS_DIR/run_tutorial.py" "${run_tutorial_args[@]}" || $TRITON_TEST_IGNORE_ERRORS
+    python -u "$SCRIPTS_DIR/run_tutorial.py" "${run_tutorial_args[@]}" || handle_test_error
 }
 
 capture_runtime_env() {
