@@ -35,6 +35,7 @@ StrideInfo StrideInfo::join(const StrideInfo &lhs, const StrideInfo &rhs) {
     return rhs;
   if (rhs.getRank() == 0)
     return lhs;
+  assert(lhs.getRank() == rhs.getRank() && "Mismatched ranks");
   DimVectorT result;
   for (int d = 0; d < lhs.getRank(); ++d) {
     if (lhs.stride[d] == rhs.stride[d])
@@ -436,10 +437,10 @@ public:
   visitOperation(Operation *op,
                  ArrayRef<const dataflow::Lattice<StrideInfo> *> operands,
                  ArrayRef<dataflow::Lattice<StrideInfo> *> results) override {
-    // Initialize unresolved operands.
+    // Skip if any operand is uninitialized.
     for (auto op : operands)
       if (op->getValue().getRank() == 0)
-        setToEntryState((dataflow::Lattice<StrideInfo> *)op);
+        return success();
 
     StrideInfo curr = visitors.apply(op, operands);
     if (curr.getRank() == 0) {
