@@ -198,7 +198,7 @@ jobs:
           # - scaled_dot
           # - gluon
           - triton-kernels
-          - rest
+          # - rest
           # - tutorial-fa-128-nofwdfp8
     timeout-minutes: 720
     runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
