@@ -46,7 +46,7 @@ jobs:
           try:
               files = [f['filename'] for f in json.load(sys.stdin)]
               print('true' if any(
-                  f.startswith('to-be-reverted/.github/workflows/triton-benchmarks') or f.startswith('to-be-reverted/benchmarks/')
+                  f.startswith('.github/workflows/triton-benchmarks') or f.startswith('benchmarks/')
                   for f in files
               ) else 'false')
           except Exception:
