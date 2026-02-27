@@ -19,8 +19,8 @@ jobs:
         with:
           filters: |
             benchmarks:
-              - '.github/workflows/triton-benchmarks*.yml'
-              - 'benchmarks/**'
+              - 'to-be-removed/.github/workflows/triton-benchmarks*.yml'
+              - 'to-be-removed/benchmarks/**'
 
   benchmarks:
     needs: check-paths
