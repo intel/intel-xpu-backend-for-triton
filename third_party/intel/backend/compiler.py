@@ -467,7 +467,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         elif options.grf_mode != 'default':
             raise RuntimeError(f"Unknown grf_mode: {options.grf_mode}")
 
-        if True: #knobs.intel.disable_igc_opt:
+        if knobs.intel.disable_igc_opt:
             metadata["build_flags"] += " -cl-opt-disable"
         return spirv
 
