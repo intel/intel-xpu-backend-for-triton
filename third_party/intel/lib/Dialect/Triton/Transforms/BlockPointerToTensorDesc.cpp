@@ -1,5 +1,6 @@
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
 #include "intel/include/Utils/Utility.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Verifier.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
@@ -48,6 +49,19 @@ public:
   }
 
 private:
+  // Check if the last stride is 1, which is required for tensor descriptor.
+  bool hasUnitInnerStride(tt::MakeTensorPtrOp makeTensorPtrOp) const {
+    auto strides = makeTensorPtrOp.getStrides();
+    if (strides.empty())
+      return false;
+    Value lastStride = strides.back();
+    if (auto cst = lastStride.getDefiningOp<arith::ConstantOp>()) {
+      if (auto intAttr = dyn_cast<IntegerAttr>(cst.getValue()))
+        return intAttr.getInt() == 1;
+    }
+    return false;
+  }
+
   bool isCandidate(Operation *op) const {
     if (auto loadOp = dyn_cast<tt::LoadOp>(op))
       return isCandidate(loadOp);
@@ -78,6 +92,7 @@ private:
       return ptr;
     };
 
+    tt::MakeTensorPtrOp makeTensorPtrOp;
     if (auto arg = dyn_cast<BlockArgument>(ptr)) {
       Operation *parentOp = arg.getParentBlock()->getParentOp();
       // FIXME: Add support of other loop ops if needed.
@@ -86,17 +101,24 @@ private:
         return false;
       Value initArg =
           forOp.getInitArgs()[arg.getArgNumber() - forOp.getNumInductionVars()];
-      if (!isa_and_nonnull<tt::MakeTensorPtrOp>(
-              skipAdvance(initArg).getDefiningOp()))
+      makeTensorPtrOp = dyn_cast_or_null<tt::MakeTensorPtrOp>(
+          skipAdvance(initArg).getDefiningOp());
+      if (!makeTensorPtrOp)
         return false;
       Value yieldVal = forOp.getYieldedValues()[arg.getArgNumber() -
                                                 forOp.getNumInductionVars()];
       if (skipAdvance(yieldVal) != arg)
         return false;
-    } else if (!isa_and_nonnull<tt::MakeTensorPtrOp>(
-                   skipAdvance(ptr).getDefiningOp())) {
-      return false;
+    } else {
+      makeTensorPtrOp = dyn_cast_or_null<tt::MakeTensorPtrOp>(
+          skipAdvance(ptr).getDefiningOp());
+      if (!makeTensorPtrOp)
+        return false;
     }
+
+    // Only support row-major layout (inner stride == 1).
+    if (!hasUnitInnerStride(makeTensorPtrOp))
+      return false;
 
     return true;
   }
