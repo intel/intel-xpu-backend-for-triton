@@ -2309,12 +2309,11 @@ struct DescriptorLoadOpToBlockIOConversion
       triton::DescriptorLoadOp>::ConvertTritonGPUOpToLLVMPattern;
 
   DescriptorLoadOpToBlockIOConversion(
-      LLVMTypeConverter &converter,
-      const triton::intel::TargetInfo &targetInfo,
+      LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
       PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::DescriptorLoadOp>(converter,
-                                                                    benefit),
+                                                                  benefit),
         BlockIOConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
@@ -2410,7 +2409,7 @@ struct DescriptorLoadOpToBlockIOConversion
         b.trunc(i32_ty, descFields[shapeStart + 0]); // shape[0] (rows)
     Value surfaceWidth =
         b.trunc(i32_ty, descFields[shapeStart + 1]); // shape[1] (columns)
-    Value strideRow = descFields[strideStart + 0];    // stride[0]
+    Value strideRow = descFields[strideStart + 0];   // stride[0]
 
     // Surface parameters for 2D block load.
     Value elemBytes = b.i32_val(elemSizeInBits / 8);
