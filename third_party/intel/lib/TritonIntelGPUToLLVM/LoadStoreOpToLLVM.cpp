@@ -2332,9 +2332,16 @@ struct DescriptorLoadOpToBlockIOConversion
     assert(llEncoding.has_value() &&
            "unexpected failure when getting linear layout");
 
-    // Descriptors are always row-major (stride-1 on last dim).
+    // Descriptors are expected to be row-major (stride-1 on last dim).
     const unsigned rank = tensorType.getRank();
     unsigned contiguousDim = rank - 1;
+
+    // Verify that the layout is compatible with a row-major descriptor:
+    // the last tensor dimension must be the fastest-varying one.
+    auto layoutOrder = llEncoding->getOrder();
+    if (layoutOrder.empty() ||
+        static_cast<unsigned>(layoutOrder.back()) != contiguousDim)
+      return failure();
     Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
 
