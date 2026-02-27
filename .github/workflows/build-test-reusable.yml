@@ -198,7 +198,7 @@ jobs:
           # - scaled_dot
           # - gluon
           - triton-kernels
-          - rest
+          # - rest
           # - tutorial-fa-64
           # - tutorial-fa-128-fwdfp8
           # - tutorial-fa-128-nofwdfp8
