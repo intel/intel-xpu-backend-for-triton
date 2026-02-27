@@ -1,7 +1,6 @@
 // RUN: triton-opt %s -triton-intel-tdesc-to-block-pointer  | FileCheck %s
 
-#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // COM: Loop containing a tensor descriptor load operation using a loop invariant tensor descriptor.
   tt.func public @load_in_loop1(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32) {
@@ -219,7 +218,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
       scf.condition(%6) %arg3 : !tt.tensordesc<tensor<8x128xf32>>
     } do {
     ^bb0(%arg3: !tt.tensordesc<tensor<8x128xf32>>):
-      %12 = tt.descriptor_load %arg3[%0, %c0_i32] : !tt.tensordesc<tensor<8x128xf32>> -> tensor<8x128xf32, #blocked1>
+      %12 = tt.descriptor_load %arg3[%0, %c0_i32] : !tt.tensordesc<tensor<8x128xf32>> -> tensor<8x128xf32, #blocked>
       scf.yield %arg3 : !tt.tensordesc<tensor<8x128xf32>>
     }
     tt.return
@@ -227,14 +226,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK: tt.func public @load_in_while_loop({{.*}}) {
   // CHECK-NOT:    tt.make_tensor_descriptor
   // CHECK-NOT:    tt.descriptor_load
-  // CHECK:        [[TENSOR_PTR:%.*]] = tt.make_tensor_ptr {{.*}} : <tensor<8x128xf32, #blocked1>>
-  // CHECK:        scf.while ([[ARG3:%.*]] = [[TENSOR_PTR]]) : (!tt.ptr<tensor<8x128xf32, #blocked1>>) -> !tt.ptr<tensor<8x128xf32, #blocked1>> {
-  // CHECK:          scf.condition({{.*}}) [[ARG3]] : !tt.ptr<tensor<8x128xf32, #blocked1>>
+  // CHECK:        [[TENSOR_PTR:%.*]] = tt.make_tensor_ptr {{.*}} : <tensor<8x128xf32, #blocked>>
+  // CHECK:        scf.while ([[ARG3:%.*]] = [[TENSOR_PTR]]) : (!tt.ptr<tensor<8x128xf32, #blocked>>) -> !tt.ptr<tensor<8x128xf32, #blocked>> {
+  // CHECK:          scf.condition({{.*}}) [[ARG3]] : !tt.ptr<tensor<8x128xf32, #blocked>>
   // CHECK:        } do {
-  // CHECK:        ^bb0([[ARG4:%.*]]: !tt.ptr<tensor<8x128xf32, #blocked1>>):
-  // CHECK:          [[PTR1:%.*]] = tt.advance [[ARG4]], {{.*}} : <tensor<8x128xf32, #blocked1>>
-  // CHECK:          tt.load [[PTR1]] {boundaryCheck = array<i32: 0, 1>, padding = 1 : i32} : !tt.ptr<tensor<8x128xf32, #blocked1>>
-  // CHECK:          scf.yield [[ARG4]] : !tt.ptr<tensor<8x128xf32, #blocked1>>
+  // CHECK:        ^bb0([[ARG4:%.*]]: !tt.ptr<tensor<8x128xf32, #blocked>>):
+  // CHECK:          [[PTR1:%.*]] = tt.advance [[ARG4]], {{.*}} : <tensor<8x128xf32, #blocked>>
+  // CHECK:          tt.load [[PTR1]] {boundaryCheck = array<i32: 0, 1>, padding = 1 : i32} : !tt.ptr<tensor<8x128xf32, #blocked>>
+  // CHECK:          scf.yield [[ARG4]] : !tt.ptr<tensor<8x128xf32, #blocked>>
   // CHECK:        }
 
   // COM: For loop yields a tensor descriptor used by a while loop.
@@ -254,7 +253,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
       scf.condition(%6) %arg3 : !tt.tensordesc<tensor<8x128xf32>>
     } do {
     ^bb0(%arg3: !tt.tensordesc<tensor<8x128xf32>>):
-      %12 = tt.descriptor_load %arg3[%c8_i32, %c8_i32] : !tt.tensordesc<tensor<8x128xf32>> -> tensor<8x128xf32, #blocked1>
+      %12 = tt.descriptor_load %arg3[%c8_i32, %c8_i32] : !tt.tensordesc<tensor<8x128xf32>> -> tensor<8x128xf32, #blocked>
       scf.yield %arg3 : !tt.tensordesc<tensor<8x128xf32>>
     }
     tt.return
@@ -262,17 +261,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK:      tt.func public @while_uses_tdesc_yielded_by_for_loop({{.*}}) {
   // CHECK-NOT:    tt.make_tensor_descriptor
   // CHECK-NOT:    tt.descriptor_load
-  // CHECK:        [[TENSOR_PTR:%.*]] = tt.make_tensor_ptr {{.*}} : <tensor<8x128xf32, #blocked1>>
-  // CHECK:        [[FOR_RES:%.+]] = scf.for [[IV:%.+]] = {{.*}} iter_args([[ARG3:%.*]] = [[TENSOR_PTR]]) -> (!tt.ptr<tensor<8x128xf32, #blocked1>>) : i32 {
-  // CHECK:          scf.yield {{.*}} : !tt.ptr<tensor<8x128xf32, #blocked1>>
+  // CHECK:        [[TENSOR_PTR:%.*]] = tt.make_tensor_ptr {{.*}} : <tensor<8x128xf32, #blocked>>
+  // CHECK:        [[FOR_RES:%.+]] = scf.for [[IV:%.+]] = {{.*}} iter_args([[ARG3:%.*]] = [[TENSOR_PTR]]) -> (!tt.ptr<tensor<8x128xf32, #blocked>>) : i32 {
+  // CHECK:          scf.yield {{.*}} : !tt.ptr<tensor<8x128xf32, #blocked>>
   // CHECK:        }
-  // CHECK:        scf.while ([[ARG3:%.*]] = [[FOR_RES]]) : (!tt.ptr<tensor<8x128xf32, #blocked1>>) -> !tt.ptr<tensor<8x128xf32, #blocked1>> {
-  // CHECK:          scf.condition({{.*}}) [[ARG3]] : !tt.ptr<tensor<8x128xf32, #blocked1>>
+  // CHECK:        scf.while ([[ARG3:%.*]] = [[FOR_RES]]) : (!tt.ptr<tensor<8x128xf32, #blocked>>) -> !tt.ptr<tensor<8x128xf32, #blocked>> {
+  // CHECK:          scf.condition({{.*}}) [[ARG3]] : !tt.ptr<tensor<8x128xf32, #blocked>>
   // CHECK:        } do {
-  // CHECK:        ^bb0([[ARG4:%.*]]: !tt.ptr<tensor<8x128xf32, #blocked1>>):
-  // CHECK:          [[TENSOR_PTR1:%.*]] = tt.advance [[ARG4]], {{.*}} : <tensor<8x128xf32, #blocked1>
-  // CHECK:          tt.load [[TENSOR_PTR1]] {boundaryCheck = array<i32: 0, 1>, padding = 1 : i32} : !tt.ptr<tensor<8x128xf32, #blocked1>>
-  // CHECK:          scf.yield [[ARG4]] : !tt.ptr<tensor<8x128xf32, #blocked1>>
+  // CHECK:        ^bb0([[ARG4:%.*]]: !tt.ptr<tensor<8x128xf32, #blocked>>):
+  // CHECK:          [[TENSOR_PTR1:%.*]] = tt.advance [[ARG4]], {{.*}} : <tensor<8x128xf32, #blocked>
+  // CHECK:          tt.load [[TENSOR_PTR1]] {boundaryCheck = array<i32: 0, 1>, padding = 1 : i32} : !tt.ptr<tensor<8x128xf32, #blocked>>
+  // CHECK:          scf.yield [[ARG4]] : !tt.ptr<tensor<8x128xf32, #blocked>>
   // CHECK:        }
 
 }
