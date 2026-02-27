@@ -836,7 +836,7 @@ run_vllm_upstream_install() {
   # Let's not install whole test requirements for now, they are very large and overwrite torch
   # pip install -r vllm/requirements/test.in
   pip install cachetools cbor2 blake3 pybase64 openai_harmony tblib
-  cp -r vllm/tests benchmarks/third_party/vllm/tests
+  cp -r vllm/tests benchmarks/third_party/vllm/batched_moe/tests
   VLLM_TARGET_DEVICE=xpu pip install --no-deps --no-build-isolation -e vllm
 }
 

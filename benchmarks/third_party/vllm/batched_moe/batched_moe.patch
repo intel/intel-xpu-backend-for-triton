@@ -1,16 +1,8 @@
 diff --git a/vllm/model_executor/layers/fused_moe/fused_batched_moe.py b/vllm/model_executor/layers/fused_moe/fused_batched_moe.py
-index 7fd8511e2..200ac2701 100644
+index 7fd8511e2..dd284261e 100644
 --- a/vllm/model_executor/layers/fused_moe/fused_batched_moe.py
 +++ b/vllm/model_executor/layers/fused_moe/fused_batched_moe.py
-@@ -1,6 +1,7 @@
- # SPDX-License-Identifier: Apache-2.0
- # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
- """Fused batched MoE kernel."""
-+from typing import List
- 
- import torch
- 
-@@ -23,8 +24,8 @@ from vllm.triton_utils import tl, triton
+@@ -23,8 +23,8 @@ from vllm.triton_utils import tl, triton
  
  @triton.jit
  def moe_mmk(
@@ -21,17 +13,7 @@ index 7fd8511e2..200ac2701 100644
      K,
      expert_id,
      a_scale_ptr,
-@@ -33,9 +34,6 @@ def moe_mmk(
-     # moving by 1 element in a particular dimension. E.g. `stride_am` is
-     # how much to increase `a_ptr` by to get the element one row down
-     # (A has M rows).
--    stride_ak: tl.int64,
--    stride_bk: tl.int64,
--    stride_ase: tl.int64,
-     stride_asm: tl.int64,
-     stride_ask: tl.int64,
-     stride_bse: tl.int64,
-@@ -49,6 +47,8 @@ def moe_mmk(
+@@ -49,6 +49,8 @@ def moe_mmk(
      # Block size for block-wise quantization
      group_n: tl.constexpr,
      group_k: tl.constexpr,
@@ -40,22 +22,15 @@ index 7fd8511e2..200ac2701 100644
      # Meta-parameters
      BLOCK_M: tl.constexpr,
      BLOCK_N: tl.constexpr,
-@@ -58,12 +58,10 @@ def moe_mmk(
+@@ -58,7 +60,6 @@ def moe_mmk(
      use_w8a16: tl.constexpr,
      per_act_token_quant: tl.constexpr,
  ):
 -    offs_k = tl.arange(0, BLOCK_K)
  
      if use_w8a16:
--        b_scale_ptrs = (
--            b_scale_ptr + expert_id * stride_bse + offs_n[None, :] * stride_bsn
--        )
-+        b_scale_ptrs = (b_scale_ptr + expert_id * stride_bse +
-+                        offs_n[None, :] * stride_bsn)
-         b_scale = tl.load(b_scale_ptrs)
- 
-     if use_w8a8:
-@@ -94,14 +92,10 @@ def moe_mmk(
+         b_scale_ptrs = (
+@@ -94,14 +95,10 @@ def moe_mmk(
      # `accumulator` will be converted back to fp16 after the loop.
      accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
      for k in range(0, tl.cdiv(K, BLOCK_K)):
@@ -74,20 +49,7 @@ index 7fd8511e2..200ac2701 100644
          # We accumulate along the K dimension.
          if use_w8a16:
              accumulator = tl.dot(a, b.to(compute_type), acc=accumulator)
-@@ -109,9 +103,9 @@ def moe_mmk(
-             if group_k > 0 and group_n > 0:
-                 k_start = k * BLOCK_K
-                 offs_ks = k_start // group_k
--                a_scale = tl.load(
--                    a_scale_ptrs + offs_ks * stride_ask, mask=mask_m, other=0.0
--                )
-+                a_scale = tl.load(a_scale_ptrs + offs_ks * stride_ask,
-+                                  mask=mask_m,
-+                                  other=0.0)
-                 b_scale = tl.load(b_scale_ptrs + offs_ks * stride_bsk)
- 
-                 accumulator += tl.dot(a, b) * a_scale[:, None] * b_scale[None, :]
-@@ -121,10 +115,6 @@ def moe_mmk(
+@@ -121,10 +118,6 @@ def moe_mmk(
          else:
              accumulator += tl.dot(a, b)
  
@@ -98,7 +60,7 @@ index 7fd8511e2..200ac2701 100644
      if use_w8a16:
          accumulator = (accumulator * b_scale).to(compute_type)
      elif use_w8a8:
-@@ -140,9 +130,9 @@ def moe_mmk(
+@@ -140,9 +133,9 @@ def moe_mmk(
  
  @triton.jit
  def expert_triton_kernel(
@@ -111,22 +73,7 @@ index 7fd8511e2..200ac2701 100644
      expert_id,
      compute_type: tl.constexpr,
      # Dimensions
-@@ -152,14 +142,9 @@ def expert_triton_kernel(
-     # Quantization data
-     a_scale_ptr,
-     b_scale_ptr,
--    b_zp_ptr,
-     # strides
--    stride_am: tl.int64,
-     stride_ak: tl.int64,
-     stride_bk: tl.int64,
--    stride_bn: tl.int64,
--    stride_cm: tl.int64,
--    stride_cn: tl.int64,
-     stride_ase: tl.int64,
-     stride_asm: tl.int64,
-     stride_ask: tl.int64,
-@@ -171,6 +156,8 @@ def expert_triton_kernel(
+@@ -171,6 +164,8 @@ def expert_triton_kernel(
      # Blockwise quantization data
      group_n,
      group_k,
@@ -135,7 +82,7 @@ index 7fd8511e2..200ac2701 100644
      # Quantization schemes
      use_fp8_w8a8: tl.constexpr,
      use_int8_w8a16: tl.constexpr,
-@@ -182,16 +169,11 @@ def expert_triton_kernel(
+@@ -182,16 +177,11 @@ def expert_triton_kernel(
  ):
      offs_m = tl.arange(0, BLOCK_M)
      offs_n = tl.arange(0, BLOCK_N) % N
@@ -154,17 +101,7 @@ index 7fd8511e2..200ac2701 100644
          K,
          expert_id,
          a_scale_ptr,
-@@ -200,9 +182,6 @@ def expert_triton_kernel(
-         # moving by 1 element in a particular dimension. E.g. `stride_am` is
-         # how much to increase `a_ptr` by to get the element one row down
-         # (A has M rows).
--        stride_ak,
--        stride_bk,
--        stride_ase,
-         stride_asm,
-         stride_ask,
-         stride_bse,
-@@ -216,6 +195,8 @@ def expert_triton_kernel(
+@@ -216,6 +206,8 @@ def expert_triton_kernel(
          # Block size for block-wise quantization
          group_n,
          group_k,
@@ -173,7 +110,7 @@ index 7fd8511e2..200ac2701 100644
          # Meta-parameters
          BLOCK_M,
          BLOCK_N,
-@@ -227,12 +208,38 @@ def expert_triton_kernel(
+@@ -227,12 +219,38 @@ def expert_triton_kernel(
      )
  
      # store in C
@@ -186,7 +123,7 @@ index 7fd8511e2..200ac2701 100644
 +    c_desc.store([pid_m * BLOCK_M, pid_n * BLOCK_N], accumulator)
 +
 +
-+def get_batched_moe_configs() -> List[triton.Config]:
++def get_batched_moe_configs():
 +    return [
 +        triton.Config({'BLOCK_M': 256, 'BLOCK_N': 256, 'BLOCK_K': 32,
 +                       'grf_mode': '256'}, num_stages=s, num_warps=32)
@@ -218,7 +155,7 @@ index 7fd8511e2..200ac2701 100644
  @triton.jit
  def batched_triton_kernel(
      a_ptr,  # [E, max_num_tokens, K]
-@@ -241,9 +248,9 @@ def batched_triton_kernel(
+@@ -241,9 +259,9 @@ def batched_triton_kernel(
      expert_num_tokens,  # [E]
      compute_type: tl.constexpr,
      # Dimensions
@@ -231,7 +168,7 @@ index 7fd8511e2..200ac2701 100644
      # Quantization data
      a_scale_ptr,
      b_scale_ptr,
-@@ -253,20 +260,20 @@ def batched_triton_kernel(
+@@ -253,20 +271,20 @@ def batched_triton_kernel(
      # how much to increase `a_ptr` by to get the element one row down
      # (A has M rows).
      stride_ae: tl.int64,
@@ -265,7 +202,7 @@ index 7fd8511e2..200ac2701 100644
      # Blockwise quantization data
      group_n: tl.constexpr,
      group_k: tl.constexpr,
-@@ -279,15 +286,14 @@ def batched_triton_kernel(
+@@ -279,15 +297,14 @@ def batched_triton_kernel(
      BLOCK_N: tl.constexpr,
      BLOCK_K: tl.constexpr,
  ):
@@ -284,7 +221,7 @@ index 7fd8511e2..200ac2701 100644
      num_pid_n = tl.cdiv(N, BLOCK_N)
      pid_m = pid_mn // num_pid_n
      pid_n = pid_mn % num_pid_n
-@@ -301,14 +307,21 @@ def batched_triton_kernel(
+@@ -301,14 +318,21 @@ def batched_triton_kernel(
      cta_m_size = min(BLOCK_M, e_num_tokens - cta_m_start)
      cta_n_size = min(BLOCK_N, N - cta_n_start)
  
@@ -314,7 +251,7 @@ index 7fd8511e2..200ac2701 100644
  
      offs_bn = (pid_n * BLOCK_N + tl.arange(0, BLOCK_N).to(tl.int64)) % N
  
-@@ -321,9 +334,9 @@ def batched_triton_kernel(
+@@ -321,9 +345,9 @@ def batched_triton_kernel(
              a_scale_ptr = a_scale_ptr + cta_m_start * stride_asm
  
      expert_triton_kernel(
@@ -327,22 +264,7 @@ index 7fd8511e2..200ac2701 100644
          expert_id,
          compute_type,
          cta_m_size,  # M
-@@ -331,14 +344,9 @@ def batched_triton_kernel(
-         K,  # K
-         a_scale_ptr,
-         b_scale_ptr,
--        b_zp_ptr,
-         # Strides
--        stride_am,
-         stride_ak,
-         stride_bk,
--        stride_bn,
--        stride_cm,
--        stride_cn,
-         stride_ase,
-         stride_asm,
-         stride_ask,
-@@ -350,6 +358,8 @@ def batched_triton_kernel(
+@@ -350,6 +374,8 @@ def batched_triton_kernel(
          # Blockwise quantization data
          group_n,
          group_k,
@@ -351,7 +273,7 @@ index 7fd8511e2..200ac2701 100644
          # Quantization schemes
          use_fp8_w8a8,
          use_int8_w8a16,
-@@ -386,11 +396,10 @@ def invoke_moe_batched_triton_kernel(
+@@ -386,11 +412,10 @@ def invoke_moe_batched_triton_kernel(
  
      BLOCK_M = config["BLOCK_SIZE_M"]
      BLOCK_N = config["BLOCK_SIZE_N"]
@@ -364,7 +286,7 @@ index 7fd8511e2..200ac2701 100644
      )
  
      A_scale = normalize_batched_scales_shape(A_scale, expert_num_tokens.shape[0])
-@@ -467,10 +476,6 @@ def invoke_moe_batched_triton_kernel(
+@@ -467,10 +492,6 @@ def invoke_moe_batched_triton_kernel(
          use_fp8_w8a8,
          use_int8_w8a16,
          per_act_token_quant,

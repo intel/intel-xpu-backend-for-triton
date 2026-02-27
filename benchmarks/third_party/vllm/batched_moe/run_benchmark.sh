@@ -1,5 +1,5 @@
 #!/bin/bash
-# Run batched_moe benchmark before and after applying tensor descriptor patch
+# Run batched_moe benchmark before and after applying local patch to improve performance (e.g., tensor descriptor)
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
