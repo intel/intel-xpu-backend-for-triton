@@ -113,6 +113,56 @@ Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
   return mlir::inferSrcEncoding(op, encoding);
 }
 
+/// For a load whose pointer operand is produced by a broadcast chain
+/// (splat -> addptr -> broadcast -> load), compute the number of unique
+/// elements that are actually loaded.  Broadcast dimensions (expanded from
+/// size 1) contribute only 1 unique element each.
+///
+/// Returns std::nullopt when the pattern cannot be analyzed, in which case
+/// the caller should fall back to the full tensor element count.
+static std::optional<int64_t> getEffectiveLoadElements(Value ptr) {
+  // Walk through the pointer operand looking for a tt.broadcast.
+  // The pattern we are looking for is:
+  //   tt.splat %scalar -> tensor<1xNx!tt.ptr>
+  //   tt.addptr %splat, %offsets -> tensor<1xNx!tt.ptr>
+  //   tt.broadcast %addptr -> tensor<MxNx!tt.ptr>
+  //   tt.load %broadcast ...
+  //
+  // We handle an arbitrary chain of broadcasts (possibly multiple).
+  Value current = ptr;
+  auto resultType = getRankedTensorType(current.getType());
+  if (!resultType)
+    return std::nullopt;
+
+  // Track which dimensions are known to be broadcast (stride-0).
+  SmallVector<bool> isBroadcastDim(resultType.getRank(), false);
+
+  // Walk backwards through broadcasts.
+  while (auto broadcastOp = current.getDefiningOp<tt::BroadcastOp>()) {
+    auto srcType =
+        cast<RankedTensorType>(broadcastOp.getSrc().getType());
+    auto dstType =
+        cast<RankedTensorType>(broadcastOp.getResult().getType());
+    for (int64_t i = 0; i < srcType.getRank(); ++i) {
+      if (srcType.getDimSize(i) == 1 && dstType.getDimSize(i) > 1)
+        isBroadcastDim[i] = true;
+    }
+    current = broadcastOp.getSrc();
+  }
+
+  // If no broadcast was found, we cannot reduce the element count.
+  if (llvm::none_of(isBroadcastDim, [](bool b) { return b; }))
+    return std::nullopt;
+
+  // Compute effective unique elements: product of non-broadcast dimensions.
+  int64_t effectiveElements = 1;
+  for (int64_t i = 0; i < resultType.getRank(); ++i) {
+    if (!isBroadcastDim[i])
+      effectiveElements *= resultType.getDimSize(i);
+  }
+  return effectiveElements;
+}
+
 bool isExpensiveLoadOrStore(Operation *op) {
   assert((isa<tt::LoadOp>(op) || isa<tt::StoreOp>(op)) &&
          "Expecting Triton LoadOp or StoreOp");
@@ -137,7 +187,20 @@ bool isExpensiveLoadOrStore(Operation *op) {
     int numWarps = ttg::lookupNumWarps(op);
     auto mod = op->getParentOfType<ModuleOp>();
     int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
-    return ptrType.getNumElements() >= numWarps * threadsPerWarp;
+
+    // For broadcast loads (e.g., a bias vector broadcast to a 2D tile), the
+    // actual number of unique elements may be much smaller than the tensor
+    // size.  Use the effective element count so that broadcast loads are not
+    // treated as expensive anchors, allowing RemoveLayoutConversions to
+    // rematerialize the load+broadcast chain in the target layout and avoid
+    // an unnecessary SLM round-trip.
+    int64_t numElements = ptrType.getNumElements();
+    if (isa<tt::LoadOp>(op)) {
+      if (auto effective = getEffectiveLoadElements(base))
+        numElements = *effective;
+    }
+
+    return numElements >= numWarps * threadsPerWarp;
   }
 
   return false;
