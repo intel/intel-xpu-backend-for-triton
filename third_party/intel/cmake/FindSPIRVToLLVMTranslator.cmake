@@ -18,36 +18,48 @@ if (NOT SPIRVToLLVMTranslator_FOUND)
             SOURCE_DIR ${SPIRVToLLVMTranslator_SOURCE_DIR}
             )
 
-    FetchContent_GetProperties(spirv-llvm-translator)
-    if(NOT spirv-llvm-translator_POPULATED)
-            set(LLVM_CONFIG ${LLVM_LIBRARY_DIR}/../bin/llvm-config)
-            set(LLVM_DIR "${LLVM_LIBRARY_DIR}/cmake/llvm" CACHE PATH "Path to LLVM build dir " FORCE)
-            set(LLVM_SPIRV_BUILD_EXTERNAL YES CACHE BOOL "Build SPIRV-LLVM Translator as external" FORCE)
+    set(LLVM_CONFIG ${LLVM_LIBRARY_DIR}/../bin/llvm-config)
+    set(LLVM_DIR "${LLVM_LIBRARY_DIR}/cmake/llvm" CACHE PATH "Path to LLVM build dir " FORCE)
+    set(LLVM_SPIRV_BUILD_EXTERNAL YES CACHE BOOL "Build SPIRV-LLVM Translator as external" FORCE)
+    set(SPIRVToLLVMTranslator_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/_deps/spirv-llvm-translator-build")
 
-            FetchContent_MakeAvailable(spirv-llvm-translator)
+    # Check if sources already physically exist
+    if(EXISTS "${SPIRVToLLVMTranslator_SOURCE_DIR}/CMakeLists.txt")
+            message(STATUS "Using existing SPIRV-LLVM-Translator sources at ${SPIRVToLLVMTranslator_SOURCE_DIR}")
 
-            # FIXME: Don't apply patch when LTS driver is updated.
-            execute_process(
-                COMMAND git apply --check ${CMAKE_CURRENT_LIST_DIR}/3122.patch
-                WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}
-                ERROR_QUIET
-                RESULT_VARIABLE PATCH_RESULT
-            )
-            if(PATCH_RESULT EQUAL 0)
-                execute_process(
-                        COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/3122.patch
-                        WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}
+            # Import targets directly without FetchContent_MakeAvailable()
+            add_subdirectory(${SPIRVToLLVMTranslator_SOURCE_DIR} ${SPIRVToLLVMTranslator_BINARY_DIR})
+    else()
+            # Sources don't exist, download via FetchContent
+            message(STATUS "Downloading SPIRV-LLVM-Translator...")
+
+            FetchContent_GetProperties(spirv-llvm-translator)
+            if(NOT spirv-llvm-translator_POPULATED)
+                    FetchContent_MakeAvailable(spirv-llvm-translator)
+
+                    # FIXME: Don't apply patch when LTS driver is updated.
+                    execute_process(
+                        COMMAND git apply --check ${CMAKE_CURRENT_LIST_DIR}/3122.patch
+                        WORKING_DIRECTORY ${SPIRVToLLVMTranslator_SOURCE_DIR}
+                        ERROR_QUIET
                         RESULT_VARIABLE PATCH_RESULT
-                )
-            else()
-                execute_process( # Check if the patch is already applied
-                        COMMAND git apply --reverse --check ${CMAKE_CURRENT_LIST_DIR}/3122.patch
-                        WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}
-                        RESULT_VARIABLE PATCH_RESULT
-                )
-            endif()
-            if(NOT PATCH_RESULT EQUAL 0)
-                message(FATAL_ERROR "Failed to apply 3122.patch to SPIRV-LLVM-Translator")
+                    )
+                    if(PATCH_RESULT EQUAL 0)
+                        execute_process(
+                                COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/3122.patch
+                                WORKING_DIRECTORY ${SPIRVToLLVMTranslator_SOURCE_DIR}
+                                RESULT_VARIABLE PATCH_RESULT
+                        )
+                    else()
+                        execute_process( # Check if the patch is already applied
+                                COMMAND git apply --reverse --check ${CMAKE_CURRENT_LIST_DIR}/3122.patch
+                                WORKING_DIRECTORY ${SPIRVToLLVMTranslator_SOURCE_DIR}
+                                RESULT_VARIABLE PATCH_RESULT
+                        )
+                    endif()
+                    if(NOT PATCH_RESULT EQUAL 0)
+                        message(FATAL_ERROR "Failed to apply 3122.patch to SPIRV-LLVM-Translator")
+                    endif()
             endif()
     endif()
 
