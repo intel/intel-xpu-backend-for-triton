@@ -7,13 +7,24 @@ on:
     branches:
       - main
     types: [opened, synchronize, reopened, labeled]
-    paths:
-      - .github/workflows/triton-benchmarks*.yml
-      - benchmarks/**
 
 jobs:
+  check-paths:
+    runs-on: ubuntu-latest
+    outputs:
+      benchmarks: ${{ steps.filter.outputs.benchmarks }}
+    steps:
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            benchmarks:
+              - '.github/workflows/triton-benchmarks*.yml'
+              - 'benchmarks/**'
+
   benchmarks:
-    if: github.event.action != 'labeled' || github.event.label.name == 'run-benchmarks'
+    needs: check-paths
+    if: needs.check-paths.outputs.benchmarks == 'true' || github.event.label.name == 'run-benchmarks'
     uses: ./.github/workflows/triton-benchmarks.yml
     with:
       runner_label: max1550
