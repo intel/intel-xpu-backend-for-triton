@@ -576,6 +576,26 @@ public:
   using BinaryOpVisitorImpl<OpTy>::BinaryOpVisitorImpl;
 
 private:
+  int64_t getStride(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
+                    int dim) override {
+    // Remainder can break stride due to wrap-around.  For example:
+    //   lhs = [0, 1, 2, 3, 4, 5, 6, 7]  stride=1
+    //   rhs = [5, 5, 5, 5, 5, 5, 5, 5]  stride=0 (constant)
+    //   lhs % rhs = [0, 1, 2, 3, 4, 0, 1, 2]  -> stride broken at wrap
+    if (lhs.getStride(dim) == 0)
+      return 0;
+    if (lhs.getStride(dim) > 0 && rhs.getConstantValue().has_value()) {
+      auto resTy = ttgi::getRankedTensorType(op.getType());
+      if (resTy) {
+        int64_t dimSize = resTy.getDimSize(dim);
+        int64_t maxVal = lhs.getStride(dim) * (dimSize - 1);
+        if (rhs.getConstantValue().value() > maxVal)
+          return lhs.getStride(dim);
+      }
+    }
+    return -1;
+  }
+
   int64_t getContiguity(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                         int dim) override {
     auto resTy = ttgi::getRankedTensorType(op.getType());
