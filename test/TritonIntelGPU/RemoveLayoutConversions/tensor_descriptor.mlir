@@ -11,8 +11,9 @@
 
 // COM: ============================================================
 // COM: Test 1: Forward propagation from descriptor_load anchor.
-// COM: descriptor_load produces #blocked1; the elementwise arith.addf
-// COM: inherits #blocked1 and the convert_layout to #blocked1 is eliminated.
+// COM: descriptor_load produces #blocked1; the convert_layout to
+// COM: #blocked and the elementwise arith.addf in #blocked are
+// COM: rewritten to #blocked1, eliminating both convert_layout ops.
 // COM: ============================================================
 
 // CHECK-LABEL: @descriptor_load_forward_propagation
@@ -24,9 +25,10 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
   tt.func @descriptor_load_forward_propagation(%desc: !tt.tensordesc<tensor<16x64xf32>>) -> tensor<16x64xf32, #blocked1> {
     %c0 = arith.constant 0 : i32
     %load = tt.descriptor_load %desc[%c0, %c0] : !tt.tensordesc<tensor<16x64xf32>> -> tensor<16x64xf32, #blocked1>
-    %add = arith.addf %load, %load : tensor<16x64xf32, #blocked1>
-    %cvt = ttg.convert_layout %add : tensor<16x64xf32, #blocked1> -> tensor<16x64xf32, #blocked1>
-    tt.return %cvt : tensor<16x64xf32, #blocked1>
+    %cvt_to_blocked = ttg.convert_layout %load : tensor<16x64xf32, #blocked1> -> tensor<16x64xf32, #blocked>
+    %add = arith.addf %cvt_to_blocked, %cvt_to_blocked : tensor<16x64xf32, #blocked>
+    %cvt_back = ttg.convert_layout %add : tensor<16x64xf32, #blocked> -> tensor<16x64xf32, #blocked1>
+    tt.return %cvt_back : tensor<16x64xf32, #blocked1>
   }
 }
 
@@ -40,9 +42,9 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
 // COM: ============================================================
 // COM: Test 2: Forward propagation removes convert between
 // COM: descriptor_load and descriptor_store.
-// COM: The descriptor_load anchors layout #blocked1, an elementwise
-// COM: op in #blocked is converted, and the convert_layout feeding
-// COM: descriptor_store is eliminated.
+// COM: The descriptor_load anchors layout #blocked1. The intermediate
+// COM: convert to #blocked and elementwise op in #blocked are
+// COM: rewritten to #blocked1, eliminating the convert_layout ops.
 // COM: ============================================================
 
 // CHECK-LABEL: @descriptor_load_to_store_propagation
@@ -54,9 +56,10 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
   tt.func @descriptor_load_to_store_propagation(%desc_in: !tt.tensordesc<tensor<16x64xf32>>, %desc_out: !tt.tensordesc<tensor<16x64xf32>>) {
     %c0 = arith.constant 0 : i32
     %load = tt.descriptor_load %desc_in[%c0, %c0] : !tt.tensordesc<tensor<16x64xf32>> -> tensor<16x64xf32, #blocked1>
-    %neg = arith.negf %load : tensor<16x64xf32, #blocked1>
-    %cvt = ttg.convert_layout %neg : tensor<16x64xf32, #blocked1> -> tensor<16x64xf32, #blocked1>
-    tt.descriptor_store %desc_out[%c0, %c0], %cvt : !tt.tensordesc<tensor<16x64xf32>>, tensor<16x64xf32, #blocked1>
+    %cvt_to_blocked = ttg.convert_layout %load : tensor<16x64xf32, #blocked1> -> tensor<16x64xf32, #blocked>
+    %neg = arith.negf %cvt_to_blocked : tensor<16x64xf32, #blocked>
+    %cvt_back = ttg.convert_layout %neg : tensor<16x64xf32, #blocked> -> tensor<16x64xf32, #blocked1>
+    tt.descriptor_store %desc_out[%c0, %c0], %cvt_back : !tt.tensordesc<tensor<16x64xf32>>, tensor<16x64xf32, #blocked1>
     tt.return
   }
 }
