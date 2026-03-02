@@ -28,9 +28,7 @@ TEST:
     --softmax
     --gemm
     --flash-attention
-    - tutorial-fa-64
-    - tutorial-fa-128-fwdfp8
-    - tutorial-fa-128-nofwdfp8
+    --tutorial06-run-mode MODE   FA run mode: all, skip, fa_only, fp8_only, skip_fp8
     --flex-attention
     --instrumentation
     --inductor
@@ -50,6 +48,7 @@ OPTION:
     --reports-dir DIR
     --warning-reports
     --ignore-errors
+    --run-all
     --skip-list SKIPLIST
     --extra-skip-list-suffixes SEMICOLON-SEPARATED LIST OF SUFFIXES
     --select-from-file SELECTFILE
@@ -80,6 +79,7 @@ TEST_GLUON=false
 TEST_INTERPRETER=false
 TEST_PROTON=false
 TEST_TUTORIAL=false
+TUTORIAL06_RUN_MODE=all
 TEST_MICRO_BENCHMARKS=false
 TEST_BENCHMARKS=false
 TEST_BENCHMARK_SOFTMAX=false
@@ -99,6 +99,7 @@ VENV=false
 TRITON_TEST_REPORTS=false
 TRITON_TEST_WARNING_REPORTS=false
 TRITON_TEST_IGNORE_ERRORS=false
+TRITON_TEST_RUN_ALL=false
 SKIP_PIP=false
 SKIP_PYTORCH=false
 TEST_UNSKIP=false
@@ -189,26 +190,18 @@ while (( $# != 0 )); do
       TEST_DEFAULT=false
       shift
       ;;
-    --tutorial-fa-64)
+    --tutorial06-run-mode)
       TEST_TUTORIAL=true
-      TEST_TUTORIAL_FA=true
-      FA_CONFIG="HEAD_DIM=64"
+      if [ "$#" -lt 2 ] || [ -z "${2-}" ]; then
+        err "--tutorial06-run-mode requires an argument: one of all, skip, fa_only, fp8_only, skip_fp8."
+      fi
+      case "$2" in
+        all|skip|fa_only|fp8_only|skip_fp8) ;;
+        *) err "Invalid value for --tutorial06-run-mode: '$2'. Expected one of: all, skip, fa_only, fp8_only, skip_fp8." ;;
+      esac
+      TUTORIAL06_RUN_MODE="$2"
       TEST_DEFAULT=false
-      shift
-      ;;
-    --tutorial-fa-128-fwdfp8)
-      TEST_TUTORIAL=true
-      TEST_TUTORIAL_FA=true
-      FA_CONFIG="HEAD_DIM=128 FWD_FP8_ONLY=1"
-      TEST_DEFAULT=false
-      shift
-      ;;
-    --tutorial-fa-128-nofwdfp8)
-      TEST_TUTORIAL=true
-      TEST_TUTORIAL_FA=true
-      FA_CONFIG="HEAD_DIM=128 FWD_FP8_SKIP=1"
-      TEST_DEFAULT=false
-      shift
+      shift 2
       ;;
     --microbench)
       TEST_MICRO_BENCHMARKS=true
@@ -315,6 +308,10 @@ while (( $# != 0 )); do
       TRITON_TEST_IGNORE_ERRORS=true
       shift
       ;;
+    --run-all)
+      TRITON_TEST_RUN_ALL=true
+      shift
+      ;;
     --skip-list)
       # Must be absolute
       TRITON_TEST_SKIPLIST_DIR="$(mkdir -p "$2" && cd "$2" && pwd)"
@@ -394,7 +391,7 @@ run_unit_tests() {
   echo "******       Running Triton LIT tests        ******"
   echo "***************************************************"
   cd $TRITON_PROJ/build/cmake*/test
-  lit -v . || $TRITON_TEST_IGNORE_ERRORS
+  lit -v . || handle_test_error
 }
 
 run_pytest_command() {
@@ -573,38 +570,28 @@ run_tutorial_tests() {
   echo "**** Running Triton Tutorial tests           ******"
   echo "***************************************************"
   python -m pip install matplotlib 'pandas<3.0' tabulate -q
-  cd $TRITON_PROJ/python/tutorials
 
-  tutorials=(
-    "01-vector-add"
-    "02-fused-softmax"
-    "03-matrix-multiplication"
-    "04-low-memory-dropout"
-    "05-layer-norm"
-    "06-fused-attention"
-    "07-extern-functions"
-    "08-grouped-gemm"
-    "09-persistent-matmul"
-    "10-experimental-block-pointer"
-  )
-  if [ "${TEST_TUTORIAL_FA:-false}" = true ]; then
-    tutorials=(
-      "06-fused-attention"
-    )
+  cd $TRITON_PROJ/python/test/tutorials
 
-    if [ -n "${FA_CONFIG:-}" ]; then
-      # Containst specific config for Fused attention tutorial
-      export $FA_CONFIG
-    fi
+  # For FA-specific runs, place the report in a subdirectory so each CI
+  # matrix job's tutorials.xml has a unique path within the upload artifact.
+  local saved_reports_dir="$TRITON_TEST_REPORTS_DIR"
+  if [[ "$TUTORIAL06_RUN_MODE" != "all" && "$TUTORIAL06_RUN_MODE" != "skip" ]]; then
+    TRITON_TEST_REPORTS_DIR="$TRITON_TEST_REPORTS_DIR/test-report-tutorials-${TUTORIAL06_RUN_MODE//_/-}"
   fi
 
-  for tutorial in "${tutorials[@]}"; do
-    if [[ -f $TRITON_TEST_SELECTFILE ]] && ! grep -qF "$tutorial" "$TRITON_TEST_SELECTFILE"; then
-        continue
-    fi
+  # For reading them via os.environ for benchmark CSV redirection.
+  export TRITON_TEST_REPORTS
+  export TRITON_TEST_REPORTS_DIR
 
-    run_tutorial_test "$tutorial"
-  done
+  # Run tutorials serially (no -n flag): tutorials execute heavy GPU kernels with
+  # autotuning, sys.argv manipulation, and global allocator changes that are not
+  # safe to parallelize with pytest-xdist.
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=tutorials \
+    run_pytest_command -vvv --device xpu test_tutorials.py --tutorial06-mode "$TUTORIAL06_RUN_MODE"
+
+  # Restore the original reports directory.
+  TRITON_TEST_REPORTS_DIR="$saved_reports_dir"
 }
 
 run_microbench_tests() {
@@ -1061,3 +1048,4 @@ test_triton() {
 
 install_deps
 test_triton
+exit $TRITON_TEST_EXIT_CODE

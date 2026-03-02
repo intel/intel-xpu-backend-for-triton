@@ -1,0 +1,44 @@
+# Build artifacts (16GB+)
+build/
+build-*/
+dist/
+*.whl
+*.egg-info/
+
+# LLVM source (built separately)
+llvm-project/
+llvm-project-*/
+.llvm-project/
+
+# Generated/binary files
+python/triton/_C/*.so
+python/triton/_C/*.pyd
+python/triton/_C/*.dylib
+
+# Symlinked backend copies (originals are in third_party/intel/)
+python/triton/backends/*
+!python/triton/backends/__init__.py
+!python/triton/backends/compiler.py
+!python/triton/backends/driver.py
+python/triton/language/extra/*
+!python/triton/language/extra/__init__.py
+!python/triton/language/extra/libdevice.py
+
+# Docs build output
+docs/_build/
+docs/python-api/generated/
+docs/dialects/
+
+# Caches and indexes
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.cache/
+.clangd/
+.ruff_cache/
+.mypy_cache/
+
+# IDE files
+.vscode/
+.vs/
+cmake-build-*
