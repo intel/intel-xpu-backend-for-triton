@@ -173,6 +173,13 @@ class Config:  # pylint: disable=R0902
             dest="merge_test_results",
             required=False,
         )
+        parser.add_argument(
+            "--long-names",
+            action="store_true",
+            required=False,
+            help=
+            "Display full test names in pretty-printed tables. May produce wide output; consider redirecting to a file for easier reading.",
+        )
 
     _ALIASES: ClassVar[dict[str, str]] = {
         "stats": "tests_stats",
@@ -275,13 +282,6 @@ class Config:  # pylint: disable=R0902
             required=False,
             help="Pretty print stats",
         )
-        test_stats_parser.add_argument(
-            "--long-names",
-            action="store_true",
-            required=False,
-            help=
-            "Display full test names in pretty-printed tables. May produce wide output; consider redirecting to a file for easier reading.",
-        )
 
         compare_stats_parser = cls._add_parser(
             subparsers,
@@ -304,13 +304,6 @@ class Config:  # pylint: disable=R0902
             default=cls()._report_grouping_level,
             dest="_report_grouping_level",
             help="Grouping level for the report",
-        )
-        compare_stats_parser.add_argument(
-            "--long-names",
-            action="store_true",
-            required=False,
-            help=
-            "Display full test names in pretty-printed tables. May produce wide output; consider redirecting to a file for easier reading.",
         )
 
         convert_to_parser = cls._add_parser(
