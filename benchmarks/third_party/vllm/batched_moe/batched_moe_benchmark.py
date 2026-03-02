@@ -104,6 +104,11 @@ def filter_by_memory(configs):
 MM_CONFIGS_BF16 = filter_by_memory(MM_CONFIGS_BF16)
 MM_CONFIGS_FP8 = filter_by_memory(MM_CONFIGS_FP8)
 
+# To debug if the benchmark runs at all, without waiting for all configurations to run
+if os.getenv('DEBUG_BENCH', '0') == '1':
+    MM_CONFIGS_BF16 = MM_CONFIGS_BF16[:1]
+    MM_CONFIGS_FP8 = MM_CONFIGS_FP8[:1]
+
 
 def get_batched_mm_benchmark(
     providers_filter: Optional[list[str]] = None,

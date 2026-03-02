@@ -1236,6 +1236,10 @@ for model_config, seq_lens, sliding_window, soft_cap, num_blocks, block_size in 
     else:
         print(f"Skipping configuration due to memory constraints: {x_val}")
 
+# To debug if the benchmark runs at all, without waiting for all configurations to run
+if os.getenv('DEBUG_BENCH', '0') == '1':
+    ATTENTION_CONFIGS_BF16 = ATTENTION_CONFIGS_BF16[:1]
+
 # ATTENTION_CONFIGS_FP8 = [
 #     # FP8 configurations
 #     (1, 64, 512, 8, 8, 128, 32, torch.float8_e4m3fn, None, None),

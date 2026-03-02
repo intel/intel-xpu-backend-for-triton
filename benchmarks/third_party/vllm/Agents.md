@@ -49,6 +49,8 @@ For the `batched_moe` benchmark there are the following files located in its fol
 2. [`batched_moe.patch`](batched_moe/batched_moe.patch) - patch that we'll apply to the cloned vllm repo to add necessary changes to improve performance. Note that this patch should be generated after the general patch is applied so it should not duplicate changes from the general patch.
 3. [`run_benchmark.sh`](batched_moe/run_benchmark.sh) - script that will combine the 2 steps above and run both original and modified versions of kernels.
 
+You can run benchmark with environment variable `DEBUG_BENCH=1 python benchmarks/third_party/vllm/unified_attention_benchmark.py` to run just one configuration to speed up if the benchmark runs at all.
+
 # Running tests
 We currently support only a small subset of vllm tests, as vllm requires significant changes to support XPU. The subset covers just tests for the 2 benchmarks that we have (unified attention and MOE benchmark). To run these tests, run [`scripts/test-triton.sh --vllm`](../../../scripts/test-triton.sh). It will first install vllm if necessary and then run the available tests.
 
@@ -82,3 +84,5 @@ When updating a patch file it is easy to make mistake or get a corrupt patch. If
 For all patch files, try to keep them minimal, for example, by keeping the same line breaks as in the upstream.
 
 Sometimes you might notice that patch solved some problem for IPEX compatibility that is no loger in the source code. Try to get rid of that part of the patch then and check if tests and benchmarks work that way.
+
+Actively use env variable `DEBUG_BENCH=1` to check if benchmark runs at all. It is much faster than watiting for all configurations.
