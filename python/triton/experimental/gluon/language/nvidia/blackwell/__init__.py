@@ -336,12 +336,6 @@ class tensor_memory_descriptor(base_value):
         _check(isinstance(length, int), lambda: "length must be a constant int")
         shape = self.shape[:-1] + [length]
         layout = self.type.layout
-        layout = TensorMemoryLayout(
-            (layout.block[0], min(layout.block[1], length)),
-            layout.col_stride,
-            layout.cga_layout,
-            layout.two_ctas,
-        )
         ret = tensor_memory_descriptor(None, self.dtype, shape, layout, self.type.alloc_shape)
         builder = _semantic.builder
         ret.handle = builder.create_tmem_subslice(ret.type.to_ir(builder), self.handle, start)
@@ -435,8 +429,8 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarrier
     acc = a * b + (acc if use_acc else 0)
 
     Args:
-        a (shared_memory_descriptor): Left hand side operand in shared memory.
-        b (shared_memory_descriptor or tensor_memory_descriptor): Right hand side operand in shared or tensor memory.
+        a (shared_memory_descriptor or tensor_memory_descriptor): Left hand side operand in shared or tensor memory.
+        b (shared_memory_descriptor): Right hand side operand in shared memory.
         acc (tensor_memory_descriptor): Accumulator value in tensor memory (mutated).
         use_acc (bool): Whether to use the initial value of the accumulator. Defaults to True.
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
