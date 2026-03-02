@@ -21,10 +21,10 @@ if (NOT SPIRVToLLVMTranslator_FOUND)
     set(LLVM_CONFIG ${LLVM_LIBRARY_DIR}/../bin/llvm-config)
     set(LLVM_DIR "${LLVM_LIBRARY_DIR}/cmake/llvm" CACHE PATH "Path to LLVM build dir " FORCE)
     set(LLVM_SPIRV_BUILD_EXTERNAL YES CACHE BOOL "Build SPIRV-LLVM Translator as external" FORCE)
-    set(SPIRVToLLVMTranslator_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/_deps/spirv-llvm-translator-build")
+    set(SPIRVToLLVMTranslator_BINARY_DIR "${CMAKE_BINARY_DIR}/_deps/spirv-llvm-translator-build")
 
-    # Check if sources already physically exist
-    if(EXISTS "${SPIRVToLLVMTranslator_SOURCE_DIR}/CMakeLists.txt")
+    # indirect check that translator build succeeded
+    if(DEFINED LLVM_EXTERNAL_SPIRV_HEADERS_SOURCE_DIR)
             message(STATUS "Using existing SPIRV-LLVM-Translator sources at ${SPIRVToLLVMTranslator_SOURCE_DIR}")
 
             # Import targets directly without FetchContent_MakeAvailable()
@@ -33,38 +33,39 @@ if (NOT SPIRVToLLVMTranslator_FOUND)
             # Sources don't exist, download via FetchContent
             message(STATUS "Downloading SPIRV-LLVM-Translator...")
 
-            FetchContent_GetProperties(spirv-llvm-translator)
-            if(NOT spirv-llvm-translator_POPULATED)
-                    FetchContent_MakeAvailable(spirv-llvm-translator)
+            FetchContent_MakeAvailable(spirv-llvm-translator)
 
-                    # FIXME: Don't apply patch when LTS driver is updated.
-                    execute_process(
-                        COMMAND git apply --check ${CMAKE_CURRENT_LIST_DIR}/3122.patch
-                        WORKING_DIRECTORY ${SPIRVToLLVMTranslator_SOURCE_DIR}
-                        ERROR_QUIET
-                        RESULT_VARIABLE PATCH_RESULT
-                    )
-                    if(PATCH_RESULT EQUAL 0)
-                        execute_process(
-                                COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/3122.patch
-                                WORKING_DIRECTORY ${SPIRVToLLVMTranslator_SOURCE_DIR}
-                                RESULT_VARIABLE PATCH_RESULT
-                        )
-                    else()
-                        execute_process( # Check if the patch is already applied
-                                COMMAND git apply --reverse --check ${CMAKE_CURRENT_LIST_DIR}/3122.patch
-                                WORKING_DIRECTORY ${SPIRVToLLVMTranslator_SOURCE_DIR}
-                                RESULT_VARIABLE PATCH_RESULT
-                        )
-                    endif()
-                    if(NOT PATCH_RESULT EQUAL 0)
-                        message(FATAL_ERROR "Failed to apply 3122.patch to SPIRV-LLVM-Translator")
-                    endif()
+            # FIXME: Don't apply patch when LTS driver is updated.
+            execute_process(
+                    COMMAND git apply --check ${CMAKE_CURRENT_LIST_DIR}/3122.patch
+                    WORKING_DIRECTORY ${SPIRVToLLVMTranslator_SOURCE_DIR}
+                    ERROR_QUIET
+                    RESULT_VARIABLE PATCH_RESULT
+            )
+            if(PATCH_RESULT EQUAL 0)
+            execute_process(
+                    COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/3122.patch
+                    WORKING_DIRECTORY ${SPIRVToLLVMTranslator_SOURCE_DIR}
+                    RESULT_VARIABLE PATCH_RESULT
+            )
+            else()
+            execute_process( # Check if the patch is already applied
+                    COMMAND git apply --reverse --check ${CMAKE_CURRENT_LIST_DIR}/3122.patch
+                    WORKING_DIRECTORY ${SPIRVToLLVMTranslator_SOURCE_DIR}
+                    RESULT_VARIABLE PATCH_RESULT
+            )
+            endif()
+            if(NOT PATCH_RESULT EQUAL 0)
+                message(FATAL_ERROR "Failed to apply 3122.patch to SPIRV-LLVM-Translator")
             endif()
     endif()
 
     set(SPIRVToLLVMTranslator_INCLUDE_DIR "${SPIRVToLLVMTranslator_SOURCE_DIR}/include"
             CACHE INTERNAL "SPIRVToLLVMTranslator_INCLUDE_DIR")
+    # helps to not rebuild translator
+    set(LLVM_EXTERNAL_SPIRV_HEADERS_SOURCE_DIR
+            "${CMAKE_BINARY_DIR}/_deps/spirv-llvm-translator-build/SPIRV-Headers"
+            CACHE STRING "Path to SPIRV-Headers" FORCE)
 
     find_package_handle_standard_args(
             SPIRVToLLVMTranslator
