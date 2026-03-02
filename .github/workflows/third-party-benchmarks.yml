@@ -197,7 +197,7 @@ jobs:
             $REPORTS/moe-gemm-td-report.csv \
             --tag $TAG \
             --bgroup vllm \
-            --benchmark moe-bf16-td-benchmark \
+            --benchmark moe-bf16-benchmark \
             --param_cols="num_experts,max_tokens_per_expert,K,N"
 
 
@@ -222,7 +222,7 @@ jobs:
             $REPORTS/moe-gemm-fp8-td-report.csv \
             --tag $TAG \
             --bgroup vllm \
-            --benchmark moe-fp8-td-benchmark \
+            --benchmark moe-fp8-benchmark \
             --param_cols="num_experts,max_tokens_per_expert,K,N"
 
 
