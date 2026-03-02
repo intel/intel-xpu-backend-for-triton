@@ -51,11 +51,11 @@ public:
 private:
   // Check if the last stride is 1, which is required for tensor descriptor.
   bool hasUnitInnerStride(tt::MakeTensorPtrOp makeTensorPtrOp) const {
-    auto strides = makeTensorPtrOp.getStrides();
+    SmallVector<Value> strides = makeTensorPtrOp.getStrides();
     if (strides.empty())
       return false;
-    Value lastStride = strides.back();
-    if (auto cst = lastStride.getDefiningOp<arith::ConstantOp>()) {
+    Value innermostStride = strides.back();
+    if (auto cst = innermostStride.getDefiningOp<arith::ConstantOp>()) {
       if (auto intAttr = dyn_cast<IntegerAttr>(cst.getValue()))
         return intAttr.getInt() == 1;
     }
