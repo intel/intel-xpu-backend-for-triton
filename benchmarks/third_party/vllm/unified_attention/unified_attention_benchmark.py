@@ -1200,7 +1200,7 @@ MODEL_CONFIGS = [
     # llama3.1-8B
     (32, 8, 128, torch.bfloat16, None),
     # llama3.3-70B and llama 4 scout
-    (64, 8, 128, torch.bfloat16, None),
+    # (64, 8, 128, torch.bfloat16, None),
     # Qwen2.5-235B - for large inputs start alternating between global and sliding window attention
     # (64, 4, 128, torch.bfloat16, None),
     # gpt-oss-120b - uses attention sinks, alternations between global attention and sliding window attention 128
