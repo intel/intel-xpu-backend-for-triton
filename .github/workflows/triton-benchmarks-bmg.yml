@@ -12,15 +12,20 @@ jobs:
   check-paths:
     runs-on: ubuntu-latest
     outputs:
-      benchmarks: ${{ steps.filter.outputs.benchmarks }}
+      benchmarks: ${{ steps.check.outputs.benchmarks }}
     steps:
-      - uses: dorny/paths-filter@v3
-        id: filter
+      - uses: actions/checkout@v4
         with:
-          filters: |
-            benchmarks:
-              - '.github/workflows/triton-benchmarks*.yml'
-              - 'benchmarks/**'
+          fetch-depth: 0
+      - name: Check for benchmark changes
+        id: check
+        run: |
+          CHANGED=$(git diff --name-only origin/${{ github.base_ref }}...HEAD | grep -E '^(\.github/workflows/triton-benchmarks.*\.yml|benchmarks/)' || true)
+          if [ -n "$CHANGED" ]; then
+            echo "benchmarks=true" >> $GITHUB_OUTPUT
+          else
+            echo "benchmarks=false" >> $GITHUB_OUTPUT
+          fi
 
   benchmarks:
     needs: check-paths
