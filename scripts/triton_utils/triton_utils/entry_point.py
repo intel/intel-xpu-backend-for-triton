@@ -59,6 +59,7 @@ class Config:  # pylint: disable=R0902
     list_test_instances: bool = False
     list_failure_reasons: bool = False
     pretty_print: bool = False
+    long_names: bool = False
     sort_by: str = "name"
 
     repo: str = "intel/intel-xpu-backend-for-triton"
@@ -274,6 +275,13 @@ class Config:  # pylint: disable=R0902
             required=False,
             help="Pretty print stats",
         )
+        test_stats_parser.add_argument(
+            "--long-names",
+            action="store_true",
+            required=False,
+            help=
+            "Display full test names in pretty-printed tables. May produce wide output; consider redirecting to a file for easier reading.",
+        )
 
         compare_stats_parser = cls._add_parser(
             subparsers,
@@ -296,6 +304,13 @@ class Config:  # pylint: disable=R0902
             default=cls()._report_grouping_level,
             dest="_report_grouping_level",
             help="Grouping level for the report",
+        )
+        compare_stats_parser.add_argument(
+            "--long-names",
+            action="store_true",
+            required=False,
+            help=
+            "Display full test names in pretty-printed tables. May produce wide output; consider redirecting to a file for easier reading.",
         )
 
         convert_to_parser = cls._add_parser(
@@ -528,12 +543,6 @@ class DownloadReportsActionRunner(ActionRunner):
 def run(config: Config) -> Any:  # pylint: disable=R0912
     if config.action == "download_reports":
         return DownloadReportsActionRunner(config=config)()
-    if config.action == "compare_reports":
-        comparison = CompareReportsActionRunner(config=config)()
-        pd.set_option("display.max_rows", None)
-        compare_df = CompareReportsActionRunner(config=config)()
-        print(compare_df)
-        return comparison
     if config.action == "export_to":
         if config.export_format == "csv":
             return ExportReportActionRunner(config=config)()
@@ -542,12 +551,19 @@ def run(config: Config) -> Any:  # pylint: disable=R0912
         summary, ex_code = PassRateActionRunner(config=config)()
         print(summary)
         sys.exit(ex_code)
-    elif config.action == "tests_stats":
-        pd.set_option("display.max_rows", None)
-        print(TestsStatsActionRunner(config=config)())
-    else:
-        raise ValueError(f"Unknown action: {config.action}")
-    return None
+    if config.long_names:
+        pd.set_option("display.max_colwidth", None)
+        pd.set_option("display.width", None)
+    pd.set_option("display.max_rows", None)
+    if config.action == "compare_reports":
+        comparison = CompareReportsActionRunner(config=config)()
+        print(comparison)
+        return comparison
+    if config.action == "tests_stats":
+        tests_stats = TestsStatsActionRunner(config=config)()
+        print(tests_stats)
+        return tests_stats
+    raise ValueError(f"Unknown action: {config.action}")
 
 
 def main():
