@@ -7,7 +7,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "intel/include/TritonIntelGPUToLLVM/TypeConverter.h"
-#include "mlir/IR/BuiltinAttributes.h"
 
 static Type convertTritonPointerType(triton::PointerType type) {
   MLIRContext *ctx = type.getContext();

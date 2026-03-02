@@ -2333,6 +2333,12 @@ struct DescriptorLoadOpToBlockIOConversion
            "unexpected failure when getting linear layout");
 
     // Descriptors are expected to be row-major (stride-1 on last dim).
+    // The tile size computation in getBlockIOTileSize() implicitly validates
+    // layout compatibility and sets isTransposeRequired for column-major
+    // operands. An explicit layout order check was attempted but removed due
+    // to LinearLayout API mismatch (getOrder() returns StringAttr, not
+    // indices).
+    // TODO: Add explicit validation if LinearLayout gains a numeric order API.
     const unsigned rank = tensorType.getRank();
     unsigned contiguousDim = rank - 1;
 
@@ -2440,7 +2446,7 @@ struct DescriptorLoadOpToBlockIOConversion
       unsigned opsPerChannel = dpasLayout.getOpsPerChannel();
       DpasEncodingAttr::OpIdx opIdx = getOpIdx(tensorType);
 
-      auto numDPASOprandsPerLoad = [=](const SmallVector<unsigned> &shape) {
+      auto numDPASOperandsPerLoad = [=](const SmallVector<unsigned> &shape) {
         unsigned elemsPerLanePerDPASInst =
             product<unsigned>(shape) / threadsPerWarp;
         unsigned numOps = 0;
@@ -2456,7 +2462,7 @@ struct DescriptorLoadOpToBlockIOConversion
       switch (opIdx) {
       case DpasEncodingAttr::OpIdx::OperandA: {
         auto [numDPASOperands, elemsPerLanePerDPASInst] =
-            numDPASOprandsPerLoad(dpasLayout.getDPASInstShapeA());
+            numDPASOperandsPerLoad(dpasLayout.getDPASInstShapeA());
 
         if (((opsPerChannel == 4 && elemSizeInBits == 8) ||
              (opsPerChannel == 2 && elemSizeInBits == 16) ||
@@ -2469,7 +2475,7 @@ struct DescriptorLoadOpToBlockIOConversion
       } break;
       case DpasEncodingAttr::OpIdx::OperandB: {
         auto [numDPASOperands, elemsPerLanePerDPASInst] =
-            numDPASOprandsPerLoad(dpasLayout.getDPASInstShapeB());
+            numDPASOperandsPerLoad(dpasLayout.getDPASInstShapeB());
 
         if (((opsPerChannel == 4 && elemSizeInBits == 8) ||
              (opsPerChannel == 2 && elemSizeInBits == 16) ||
@@ -2491,7 +2497,7 @@ struct DescriptorLoadOpToBlockIOConversion
       } break;
       case DpasEncodingAttr::OpIdx::OperandC: {
         auto [numDPASOperands, elemsPerLanePerDPASInst] =
-            numDPASOprandsPerLoad(dpasLayout.getDPASInstShapeC());
+            numDPASOperandsPerLoad(dpasLayout.getDPASInstShapeC());
         if (numElemsPerLoad >= elemsPerLanePerDPASInst) {
           static const bool multipleCPerLoad = triton::tools::getBoolEnv(
               "TRITON_INTEL_2DBLOCK_MULTIPLE_C_MATRICES_PER_LOAD");
@@ -2625,11 +2631,11 @@ struct DescriptorLoadOpToBlockIOConversion
         if (numValsPerDPASOperand != numValuesPerLoad) {
           SmallVector<int32_t> indices(numValsPerDPASOperand);
           for (int i = 0; i < numValsPerDPASOperand; ++i) {
-            unsigned elemIdx =
+            unsigned packedElemIdx =
                 (opsIdx * numValsPerDPASOperand + i) * numPackedVals;
-            unsigned suffleIdx =
-                shuffleMapping.apply({{kRegister, elemIdx}})[0].second;
-            indices[i] = suffleIdx / numPackedVals;
+            unsigned shuffleIdx =
+                shuffleMapping.apply({{kRegister, packedElemIdx}})[0].second;
+            indices[i] = shuffleIdx / numPackedVals;
           }
           DenseI32ArrayAttr attr = rewriter.getDenseI32ArrayAttr(indices);
           Value dpasOperand = LLVM::ShuffleVectorOp::create(
