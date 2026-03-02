@@ -312,6 +312,8 @@ void LayoutRematerialization::cleanup() { eraseUnusedOps(opToDelete); }
 // Return true if the op is an op with a layout we don't want to change. We will
 // propagate the layout starting from anchor ops.
 bool isLayoutAnchor(Operation *op) {
+  if (isa<tt::DescriptorOpInterface>(op))
+    return true;
   if (isa<tt::LoadOp, tt::StoreOp>(op))
     return ttgi::isExpensiveLoadOrStore(op);
   // TODO: we should estimate the cost of the not propagating layout for
@@ -1083,6 +1085,8 @@ bool canBeRemat(Operation *op) {
   if (isa<tt::LoadOp, tt::StoreOp>(op))
     return !ttgi::isExpensiveLoadOrStore(op);
   if (isa<tt::AtomicRMWOp, tt::AtomicCASOp, tt::DotOp>(op))
+    return false;
+  if (isa<tt::DescriptorLoadOp, tt::DescriptorStoreOp>(op))
     return false;
   if (auto gather = dyn_cast<tt::GatherOp>(op))
     return !gather.getEfficientLayout();
