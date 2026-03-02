@@ -551,17 +551,20 @@ def run(config: Config) -> Any:  # pylint: disable=R0912
         summary, ex_code = PassRateActionRunner(config=config)()
         print(summary)
         sys.exit(ex_code)
+    # Configure pandas display options for DataFrame output actions
+    # Use option_context to avoid mutating global pandas state
+    option_args: list[Any] = ["display.max_rows", None]
     if config.long_names:
-        pd.set_option("display.max_colwidth", None)
-        pd.set_option("display.width", None)
-    pd.set_option("display.max_rows", None)
+        option_args.extend(["display.max_colwidth", None, "display.width", None])
     if config.action == "compare_reports":
         comparison = CompareReportsActionRunner(config=config)()
-        print(comparison)
+        with pd.option_context(*option_args):
+            print(comparison)
         return comparison
     if config.action == "tests_stats":
         tests_stats = TestsStatsActionRunner(config=config)()
-        print(tests_stats)
+        with pd.option_context(*option_args):
+            print(tests_stats)
         return tests_stats
     raise ValueError(f"Unknown action: {config.action}")
 
