@@ -582,8 +582,17 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
 
     static const bool enableBlockIOForAllLayout =
         triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS");
-    return enableBlockIOForAllLayout || hasDpasEncoding(tensorTy) ||
-           hasDotDpasEncoding(tensorTy);
+    if (!enableBlockIOForAllLayout && !hasDpasEncoding(tensorTy) &&
+        !hasDotDpasEncoding(tensorTy))
+      return false;
+
+    // Ensure block_io attribute is always set. Descriptors are row-major by
+    // definition; column_major is set by FuseTransWithDescriptorLoad.
+    if (!op->hasAttr(TritonIntelGPUDialect::getBlockIOAttrName())) {
+      op->setAttr(TritonIntelGPUDialect::getBlockIOAttrName(),
+                  StringAttr::get(op->getContext(), "row_major"));
+    }
+    return true;
   }
 
   static bool
@@ -2332,9 +2341,15 @@ struct DescriptorLoadOpToBlockIOConversion
     assert(llEncoding.has_value() &&
            "unexpected failure when getting linear layout");
 
-    // Descriptors are expected to be row-major (stride-1 on last dim).
+    // Read memory layout from block_io attribute. Always set by
+    // isDescriptorBlockIOCandidate (row_major default) or
+    // FuseTransWithDescriptorLoad (column_major).
     const unsigned rank = tensorType.getRank();
-    unsigned contiguousDim = rank - 1;
+    auto blockIOAttr = op->getAttrOfType<StringAttr>(
+        TritonIntelGPUDialect::getBlockIOAttrName());
+    assert(blockIOAttr && "block_io attribute must be set by candidate check");
+    bool memoryRowMajor = (blockIOAttr.getValue() == "row_major");
+    unsigned contiguousDim = memoryRowMajor ? rank - 1 : rank - 2;
 
     Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
@@ -2404,23 +2419,29 @@ struct DescriptorLoadOpToBlockIOConversion
     unsigned baseIdx = 2 * rank;
 
     Value base = descFields[baseIdx];
-    // Shapes and strides are all i64 in the descriptor struct.
-    // Truncate to i32 for 2D block load surface parameters.
-    Value surfaceHeight =
-        b.trunc(i32_ty, descFields[shapeStart + 0]); // shape[0] (rows)
-    Value surfaceWidth =
-        b.trunc(i32_ty, descFields[shapeStart + 1]); // shape[1] (columns)
-    Value strideRow = descFields[strideStart + 0];   // stride[0]
 
-    // Surface parameters for 2D block load.
+    // Surface parameters for descriptor loads.
+    // The descriptor is always row-major (stride-1 on last dim), regardless
+    // of the block_io attribute. Extract in descriptor's natural order.
     Value elemBytes = b.i32_val(elemSizeInBits / 8);
+    Value surfaceWidth = b.trunc(i32_ty, descFields[shapeStart + (rank - 1)]);
+    Value surfaceHeight = b.trunc(i32_ty, descFields[shapeStart + 0]);
     Value baseWidth = b.mul(surfaceWidth, elemBytes);
     Value baseHeight = surfaceHeight;
-    Value pitch = b.mul(b.trunc(i32_ty, strideRow), elemBytes);
+    Value pitch =
+        b.mul(b.trunc(i32_ty, descFields[strideStart + 0]), elemBytes);
 
     // Base offsets from descriptor load indices.
+    // Indices are in descriptor dimension space. When column_major, the result
+    // type dimensions are transposed relative to the descriptor, so we swap
+    // the indices to align with the result type coordinate system used by
+    // the LinearLayout offsets.
     SmallVector<Value> descIndices(adaptor.getIndices().begin(),
                                    adaptor.getIndices().end());
+    if (!memoryRowMajor) {
+      // column_major: result dims are transposed vs descriptor dims.
+      std::reverse(descIndices.begin(), descIndices.end());
+    }
 
     // Replicate base pointer for all tiles.
     unsigned numElems = getTotalElemsPerThread(resultType);
