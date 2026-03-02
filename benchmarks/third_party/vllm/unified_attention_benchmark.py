@@ -1197,10 +1197,14 @@ MMAP_BLOCK_SIZES = [16, 64]
 # Models
 MODEL_CONFIGS = [
     # q_heads, k_heads, head_size, dtype, qdtype
-    # llama3-8B
+    # llama3.1-8B
     (32, 8, 128, torch.bfloat16, None),
-    # llama3-70B
-    (64, 8, 128, torch.bfloat16, None)
+    # llama3.3-70B and llama 4 scout
+    (64, 8, 128, torch.bfloat16, None),
+    # Qwen2.5-235B - for large inputs start alternating between global and sliding window attention
+    # (64, 4, 128, torch.bfloat16, None),
+    # gpt-oss-120b - uses attention sinks, alternations between global attention and sliding window attention 128
+    # (64, 8, 64, torch.bfloat16, None),
 ]
 
 # QDTYPES = [None, torch.float8_e4m3fn] if not current_platform.is_rocm() else [

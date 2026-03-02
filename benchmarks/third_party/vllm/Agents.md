@@ -2,6 +2,8 @@
 
 This folder contains scripts and utilities to run VLLM benchmarks and tests.
 
+Note, if you just want to update the pin, try this prompt: `Update vllm pin to COMMIT_HASH` and make sure that agent have this file in the context.
+
 # VLLM installation
 For the purposes of this repository, vllm installation consists of:
 1. Activating a Python environment that has triton, pytorch, oneapi
@@ -22,7 +24,7 @@ Key files for the installation procedure:
 
 # Environment
 
-Usually user machine contains preistalled conda miniforge installation which you should start from.
+Usually user machine contains preistalled conda miniforge installation which you should start from. Make sure to activate oneapi though with `source /opt/intel/oneapi/setvars.sh --force `
 
 To run benchmarks or tests you need to have triton and pytorch pre-installed. Assume that current repo folder contains python venv with preinstalled triton and pytorch from the main branch. Do not overwrite that installation with vllm dependencies.
 
@@ -71,6 +73,12 @@ During a pin update you need to:
 5. Ensure that the benchmark from the `batched_moe` folder runs before and after applying the patch from [`batched_moe.patch`](batched_moe/batched_moe.patch). Try to keep the patch minimal, for example, by keeping the same line breaks as in the upstream.
 6. Update this instruction if something changed.
 
+To install vllm you need to first remove it with `rm -rf vllm vllm-xpu-kernels` and uninstall with `pip uninstall vllm vllm-xpu-kernels`.
+
+# How to update patch
+
+When updating a patch file it is easy to make mistake or get a corrupt patch. If you have a corrupt patch don't try to fix it in-place, it's too easy to make mistakes that way. Instead try to apply what you have (maybe partially) and then reproduce the desired file state in a local repo clone. Then generate proper patch file from the local repo.
+
 For all patch files, try to keep them minimal, for example, by keeping the same line breaks as in the upstream.
 
-To install vllm you need to first remove it with `rm -rf vllm` and uninstall with `pip uninstall vllm vllm-xpu-kernels`.
+Sometimes you might notice that patch solved some problem for IPEX compatibility that is no loger in the source code. Try to get rid of that part of the patch then and check if tests and benchmarks work that way.

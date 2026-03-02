@@ -13,7 +13,7 @@ index c1dc4195b..3a154f704 100644
 -
 -intel-extension-for-pytorch @ https://intel-extension-for-pytorch.s3.us-east-1.amazonaws.com/ipex_dev/xpu/intel_extension_for_pytorch-2.9.10.post0%2Bxpu-cp312-cp312-linux_x86_64.whl
 diff --git a/tests/conftest.py b/tests/conftest.py
-index a03f40a9a..fdd2a5ed9 100644
+index a03f40a9a..6d354b4bd 100644
 --- a/tests/conftest.py
 +++ b/tests/conftest.py
 @@ -67,7 +67,7 @@ from vllm.transformers_utils.utils import maybe_model_redirect
@@ -25,6 +25,18 @@ index a03f40a9a..fdd2a5ed9 100644
  
  
  if TYPE_CHECKING:
+@@ -218,6 +218,11 @@ def workspace_init():
+ 
+     if torch.cuda.is_available():
+         device = torch.device("cuda:0")
++    elif torch.xpu.is_available():
++        device = torch.device("xpu:0")
++    else:
++        device = None
++    if device is not None:
+         init_workspace_manager(device)
+     yield
+     reset_workspace_manager()
 diff --git a/tests/kernels/attention/test_triton_unified_attention.py b/tests/kernels/attention/test_triton_unified_attention.py
 index 7fb08e578..7609ae4ad 100644
 --- a/tests/kernels/attention/test_triton_unified_attention.py
