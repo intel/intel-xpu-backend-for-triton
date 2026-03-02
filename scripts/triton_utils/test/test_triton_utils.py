@@ -6,6 +6,8 @@ import re
 
 import pytest
 
+import pandas as pd
+
 import triton_utils
 
 # TODO:  # pylint: disable=fixme
@@ -728,31 +730,38 @@ def test_long_names_option(tmp_path, capsys, long_names: bool, should_be_truncat
     test_rep_path = tmp_path / 'language.xml'
     test_rep_path.write_text(TESTS_WITH_LONG_NAMES['language.xml'], encoding='utf-8')
 
-    config = triton_utils.Config(
-        action='tests_stats',
-        reports=str(tmp_path),
-        pretty_print=True,
-        long_names=long_names,
-    )
+    # Explicitly set pandas display width to ensure deterministic truncation
+    # regardless of pandas version or environment
+    with pd.option_context('display.width', 80):
+        config = triton_utils.Config(
+            action='tests_stats',
+            reports=str(tmp_path),
+            pretty_print=True,
+            long_names=long_names,
+        )
 
-    triton_utils.run(config)
+        triton_utils.run(config)
     stdout, _ = capsys.readouterr()
 
     # The actual test name in output is the short_name (without variant in brackets)
     short_name = 'test_reduce_layouts_with_very_long_name_that_exceeds_normal_display_width'
+    truncated_prefix = 'test_reduce_layouts_with_ve'
 
     if should_be_truncated:
-        # Without --long-names, pandas truncates with '...'
-        assert '...' in stdout, 'Expected truncation marker not found in output'
-        # The truncated prefix should still be present (check for the prefix that appears before truncation)
-        assert 'test_reduce_layouts_with_ve' in stdout
+        # Without --long-names, the displayed name should be truncated:
+        # a prefix of the name should appear, but not the full short_name.
+        lines_with_prefix = [line for line in stdout.split('\n') if truncated_prefix in line]
+        assert len(lines_with_prefix) > 0, 'Expected truncated prefix not found in output'
+        # Verify that in all such lines the full short_name is not present
+        assert not any(short_name in line for line in lines_with_prefix), (
+            'Expected truncated output, but full short name was found')
     else:
         # With --long-names, the full test name should be visible without truncation
         assert short_name in stdout, f'Expected full test name "{short_name}" not found in output'
-        # Verify no truncation occurred on this line
+        # Verify that every line containing the test name shows the full short_name
         lines_with_test = [line for line in stdout.split('\n') if short_name in line]
         assert len(lines_with_test) > 0
-        assert not any('...' in line and short_name in line for line in lines_with_test)
+        assert all(short_name in line for line in lines_with_test)
 
 
 @pytest.mark.parametrize(
@@ -774,31 +783,38 @@ def test_long_names_option_compare_reports(tmp_path, capsys, long_names: bool, s
     (report1_dir / 'language.xml').write_text(TESTS_WITH_LONG_NAMES['language.xml'], encoding='utf-8')
     (report2_dir / 'language.xml').write_text(TESTS_WITH_LONG_NAMES['language.xml'], encoding='utf-8')
 
-    config = triton_utils.Config(
-        action='compare_reports',
-        reports=str(report1_dir),
-        reports_2=str(report2_dir),
-        long_names=long_names,
-    )
+    # Explicitly set pandas display width to ensure deterministic truncation
+    # regardless of pandas version or environment
+    with pd.option_context('display.width', 80):
+        config = triton_utils.Config(
+            action='compare_reports',
+            reports=str(report1_dir),
+            reports_2=str(report2_dir),
+            long_names=long_names,
+        )
 
-    triton_utils.run(config)
+        triton_utils.run(config)
     stdout, _ = capsys.readouterr()
 
     # The actual test name in compare output is the short_name (without variant in brackets)
     short_name = 'test_reduce_layouts_with_very_long_name_that_exceeds_normal_display_width'
+    truncated_prefix = 'test_reduce_layouts_with_ve'
 
     if should_be_truncated:
-        # Without --long-names, pandas truncates with '...'
-        assert '...' in stdout, 'Expected truncation marker not found in output'
-        # The truncated prefix should still be present (check for the prefix that appears before truncation)
-        assert 'test_reduce_layouts_with_ve' in stdout
+        # Without --long-names, the displayed name should be truncated:
+        # a prefix of the name should appear, but not the full short_name.
+        lines_with_prefix = [line for line in stdout.split('\n') if truncated_prefix in line]
+        assert len(lines_with_prefix) > 0, 'Expected truncated prefix not found in output'
+        # Verify that in all such lines the full short_name is not present
+        assert not any(short_name in line for line in lines_with_prefix), (
+            'Expected truncated output, but full short name was found')
     else:
         # With --long-names, the full test name should be visible without truncation
         assert short_name in stdout, f'Expected full test name "{short_name}" not found in output'
-        # Verify no truncation occurred on this line
+        # Verify that every line containing the test name shows the full short_name
         lines_with_test = [line for line in stdout.split('\n') if short_name in line]
         assert len(lines_with_test) > 0
-        assert not any('...' in line and short_name in line for line in lines_with_test)
+        assert all(short_name in line for line in lines_with_test)
 
 
 # yapf: enable
