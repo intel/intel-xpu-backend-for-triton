@@ -40,16 +40,20 @@ You can activate that env with: `source .venv/bin/activate`
 # Running benchmarks
 Currently there are the following benchmarks:
 1. [`batched_moe`](batched_moe/) - benchmark with Batched Mixture of Experts GEMM operation.
-2. `unified_attention_benchmark.py` - benchmark with unified attention. Let's forget about it for now, as it is in the process of migrating to the patch system.
+2. [`unified_attention`](unified_attention/) - benchmark with unified attention.
 
 Since XPU Triton requires usage of tensor descriptors, we run benchmarks two times. The first time we run the unmodified vllm version, then we patch the kernel code with tensor descriptor usage and get new performance numbers.
 
-For the `batched_moe` benchmark there are the following files located in its folder [`batched_moe/`](batched_moe/):
-1. [`batched_moe_benchmark.py`](batched_moe/batched_moe_benchmark.py) - Python script that runs the benchmark using code from vllm. As it imports the relevant kernel from vllm, it will just use whatever is available.
-2. [`batched_moe.patch`](batched_moe/batched_moe.patch) - patch that we'll apply to the cloned vllm repo to add necessary changes to improve performance. Note that this patch should be generated after the general patch is applied so it should not duplicate changes from the general patch.
-3. [`run_benchmark.sh`](batched_moe/run_benchmark.sh) - script that will combine the 2 steps above and run both original and modified versions of kernels.
+Both benchmarks follow the same structure. For each benchmark folder (e.g. [`batched_moe/`](batched_moe/), [`unified_attention/`](unified_attention/)):
+1. `<name>_benchmark.py` - Python script that runs the benchmark using code from vllm. As it imports the relevant kernel from vllm, it will just use whatever is available.
+2. `<name>.patch` - patch that we'll apply to the cloned vllm repo to add necessary changes to improve performance. Note that this patch should be generated after the general patch is applied so it should not duplicate changes from the general patch.
 
-You can run benchmark with environment variable `DEBUG_BENCH=1 python benchmarks/third_party/vllm/unified_attention_benchmark.py` to run just one configuration to speed up if the benchmark runs at all.
+The shared [`run_benchmark.sh`](run_benchmark.sh) script orchestrates both steps. It takes the benchmark folder name as the first argument and derives the patch file and benchmark script from the `NAME` convention above. It applies the pattern: run without patch (`TD_PATCHED=0`), apply patch, run again (`TD_PATCHED=1`), revert patch. Any extra arguments (e.g. `--reports`) are forwarded to the benchmark script.
+
+You can run a benchmark with environment variable `DEBUG_BENCH=1` to speed up if the benchmark runs at all. For example:
+```
+DEBUG_BENCH=1 bash benchmarks/third_party/vllm/run_benchmark.sh unified_attention
+```
 
 # Running tests
 We currently support only a small subset of vllm tests, as vllm requires significant changes to support XPU. The subset covers just tests for the 2 benchmarks that we have (unified attention and MOE benchmark). To run these tests, run [`scripts/test-triton.sh --vllm`](../../../scripts/test-triton.sh). It will first install vllm if necessary and then run the available tests.

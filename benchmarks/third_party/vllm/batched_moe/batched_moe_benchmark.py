@@ -116,9 +116,6 @@ def get_batched_mm_benchmark(
     fp8=False,
     is_td_patched=False,
 ):
-    """
-    Returns a Mark object containing a Benchmark object for batched matrix multiplication.
-    """
     supported_providers = {
         'triton' + ('-td' if is_td_patched else ''): 'triton' + ('-td' if is_td_patched else ''),
         'pytorch': 'pytorch',
@@ -267,7 +264,6 @@ def get_batched_mm_benchmark(
 
 
 if __name__ == '__main__':
-    # Run batched MM benchmark
     is_td_patched = os.getenv('TD_PATCHED', '0') == '1'
     print('Running batched MM benchmark...')
     _benchmark_mm = get_batched_mm_benchmark(fp8=(os.getenv('FP8', '0') == '1'), is_td_patched=is_td_patched)
