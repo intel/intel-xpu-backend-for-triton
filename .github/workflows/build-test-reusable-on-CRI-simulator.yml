@@ -429,9 +429,9 @@ jobs:
         with:
           python-version: ${{ inputs.python_version }}
 
-      - name: Install pass_rate dependencies
+      - name: Install triton_utils
         run: |
-          pip install defusedxml
+          pip install ./scripts/triton_utils
 
       - name: Load environment details
         run: |
@@ -439,9 +439,8 @@ jobs:
 
       - name: Pass rate
         run: |
-          python scripts/pass_rate.py --reports reports
-          python scripts/pass_rate.py --reports reports --json > pass_rate.json
-          python scripts/pass_rate.py --reports reports --suite tutorials --json > pass_rate_tutorials.json
+          triton-utils pass_rate --reports reports --save-to-json pass_rate.json --merge-test-results --tests-with-multiple-testsuites
+          triton-utils tests_stats --reports reports --level testsuite --pretty-print --merge-test-results --tests-with-multiple-testsuites
 
       - name: Upload pass rate report
         uses: actions/upload-artifact@v4
