@@ -285,7 +285,7 @@ public:
     if (intAttr || boolAttr) {
       int64_t value{};
       if (intAttr)
-        value = intAttr.getValue().getZExtValue();
+        value = intAttr.getValue().getSExtValue();
       else
         value = boolAttr.getValue() ? 1 : 0;
       return AxisInfo(/*stride=*/{0}, /*contiguity=*/{1},
@@ -296,7 +296,12 @@ public:
     // TODO: generalize to dense attr
     auto splatAttr = dyn_cast<SplatElementsAttr>(op.getValue());
     if (splatAttr && splatAttr.getElementType().isIntOrIndex()) {
-      int64_t value = splatAttr.template getSplatValue<APInt>().getZExtValue();
+      APInt apValue = splatAttr.template getSplatValue<APInt>();
+      // Use getZExtValue for 1-bit integers (booleans) to avoid sign extension
+      // turning true into -1, use getSExtValue for wider integers to properly
+      // handle negative values.
+      int64_t value = apValue.getBitWidth() == 1 ? apValue.getZExtValue()
+                                                 : apValue.getSExtValue();
       TensorType ty = cast<TensorType>(splatAttr.getType());
       return AxisInfo(
           /*stride=*/AxisInfo::DimVectorT(ty.getRank(), 0),
@@ -566,7 +571,8 @@ private:
   std::optional<int64_t> getConstantValue(OpTy op, const AxisInfo &lhs,
                                           const AxisInfo &rhs) override {
     if (lhs.getConstantValue().has_value() &&
-        rhs.getConstantValue().has_value())
+        rhs.getConstantValue().has_value() &&
+        rhs.getConstantValue().value() != 0)
       return {lhs.getConstantValue().value() / rhs.getConstantValue().value()};
     return {};
   }
@@ -663,7 +669,8 @@ private:
   std::optional<int64_t> getConstantValue(OpTy op, const AxisInfo &lhs,
                                           const AxisInfo &rhs) override {
     if (lhs.getConstantValue().has_value() &&
-        rhs.getConstantValue().has_value())
+        rhs.getConstantValue().has_value() &&
+        rhs.getConstantValue().value() != 0)
       return {lhs.getConstantValue().value() % rhs.getConstantValue().value()};
     else if (rhs.getConstantValue().has_value() &&
              rhs.getConstantValue().value() == 1)
