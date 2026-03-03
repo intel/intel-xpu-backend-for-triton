@@ -1,5 +1,5 @@
 diff --git a/vllm/attention/ops/triton_unified_attention.py b/vllm/attention/ops/triton_unified_attention.py
-index c946dbd8a..d2b9bdea7 100644
+index c946dbd8a..8844ee49c 100644
 --- a/vllm/attention/ops/triton_unified_attention.py
 +++ b/vllm/attention/ops/triton_unified_attention.py
 @@ -105,6 +105,8 @@ def kernel_unified_attention_2d(
@@ -156,15 +156,7 @@ index c946dbd8a..d2b9bdea7 100644
  
  
  @triton.jit
-@@ -434,13 +419,14 @@ def kernel_unified_attention_3d(
-     stride_v_cache_3: tl.constexpr,  # int
-     query_start_len_ptr,  # [num_seqs+1]
-     BLOCK_Q: tl.constexpr,  # int
--    num_seqs: tl.int32,
--    BLOCK_M: tl.constexpr,  # int
-+    num_seqs: tl.int32, BLOCK_M: tl.constexpr,  # int
-     NUM_SEGMENTS_PER_SEQ: tl.constexpr,  # int
-     USE_MM_PREFIX: tl.constexpr,  # bool
+@@ -441,6 +426,8 @@ def kernel_unified_attention_3d(
      MAX_MM_RANGES: tl.constexpr,  # int
      mm_prefix_range_ptr,  # [num_seqs] - prefix length for each sequence
  ):
@@ -173,7 +165,7 @@ index c946dbd8a..d2b9bdea7 100644
      q_block_global_idx = tl.program_id(0)
      kv_head_idx = tl.program_id(1)
      segm_idx = tl.program_id(2)
-@@ -472,28 +458,32 @@ def kernel_unified_attention_3d(
+@@ -472,28 +459,32 @@ def kernel_unified_attention_3d(
          return
  
      offs_m = tl.arange(0, BLOCK_M)
@@ -218,7 +210,7 @@ index c946dbd8a..d2b9bdea7 100644
  
      block_table_offset = seq_idx * block_table_stride
  
-@@ -551,32 +541,24 @@ def kernel_unified_attention_3d(
+@@ -551,32 +542,24 @@ def kernel_unified_attention_3d(
          min((segm_idx + 1) * tiles_per_segment, num_tiles),
      ):
          seq_offset = j * TILE_SIZE + offs_t
@@ -266,7 +258,7 @@ index c946dbd8a..d2b9bdea7 100644
  
          if K_load.dtype.is_fp8():
              if Q.dtype.is_fp8():
-@@ -586,13 +568,6 @@ def kernel_unified_attention_3d(
+@@ -586,13 +569,6 @@ def kernel_unified_attention_3d(
          else:
              K = K_load
  
@@ -280,7 +272,7 @@ index c946dbd8a..d2b9bdea7 100644
          if V_load.dtype.is_fp8():
              if Q.dtype.is_fp8():
                  V = V_load
-@@ -684,27 +659,23 @@ def kernel_unified_attention_3d(
+@@ -684,27 +660,23 @@ def kernel_unified_attention_3d(
          L = L * alpha + l_j
          M = m_j
  
@@ -321,7 +313,7 @@ index c946dbd8a..d2b9bdea7 100644
      segm_offset = (
          query_offset_0.to(tl.int64) * (num_query_heads * NUM_SEGMENTS_PER_SEQ)
          + query_offset_1 * NUM_SEGMENTS_PER_SEQ
-@@ -925,25 +896,33 @@ def unified_attention(
+@@ -925,25 +897,33 @@ def unified_attention(
          is_prefill=False,
      )
  
@@ -370,7 +362,7 @@ index c946dbd8a..d2b9bdea7 100644
              output_ptr=out,
              query_ptr=q,
              key_cache_ptr=k,
-@@ -993,9 +972,31 @@ def unified_attention(
+@@ -993,9 +973,31 @@ def unified_attention(
              USE_FP8=output_scale is not None,
          )
      else:
