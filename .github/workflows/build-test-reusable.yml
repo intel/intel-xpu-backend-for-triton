@@ -168,19 +168,19 @@ jobs:
           dest: ${{ steps.pip-cache.outputs.dest }}
 
       - name: Upload Triton wheels
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: triton-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           path: dist/*.whl
 
       - name: Upload PTI wheels
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: pti-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           path: .scripts_cache/pti/dist/*.whl
 
       - name: Upload test reports
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: test-reports-build-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           include-hidden-files: true
@@ -378,7 +378,7 @@ jobs:
           dest: ${{ steps.pip-cache.outputs.dest }}
 
       - name: Upload test reports
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: test-reports-${{ matrix.suite }}-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           include-hidden-files: true
@@ -427,13 +427,13 @@ jobs:
           triton-utils tests_stats --reports reports --level testsuite --pretty-print --merge-test-results --tests-with-multiple-testsuites
 
       - name: Upload pass rate report
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: pass_rate-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           path: pass_rate*.json
 
       - name: Upload tutorials test report
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: test-reports-tutorials-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           include-hidden-files: true
@@ -442,7 +442,7 @@ jobs:
             reports/test-report-tutorials-*/tutorials.xml
 
       - name: Upload tutorials performance report
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: tutorials-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           if-no-files-found: warn
