@@ -192,9 +192,6 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
             # record time of `fn`
             with record_function("__profile_kernel_of_func"):
                 fn()
-                if sync_submitting:
-                    synchronize()
-
         # Record clocks
         synchronize()
 
