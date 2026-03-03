@@ -722,10 +722,6 @@ class TestReport:
         ignore_testsuites_filter: list[str],
         pattern_matcher: PatternMatcher | None = None,
     ) -> TestReport:
-
-        def _generate_tutorials_report():
-            pass
-
         return TestReport(
             cls._extract_test_reports(
                 folder,

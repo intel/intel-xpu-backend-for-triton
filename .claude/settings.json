@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch",
+      "Bash(source *)",
+      "Bash(export *)",
+      "Bash(curl *)",
+      "Bash(jq *)",
+      "Bash(cat *)",
+      "Bash(echo *)",
+      "Bash(which *)",
+      "Bash(wc *)",
+      "Bash(more *)",
+      "Bash(less *)",
+      "Bash(file *)",
+      "Bash(pwd *)",
+      "Bash(mkdir *)",
+      "Bash(touch *)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(find *)",
+      "Bash(sort *)",
+      "Bash(tree *)",
+      "Bash(diff *)",
+      "Bash(gh *)",
+      "Bash(ls *)",
+      "Bash(env *)",
+      "Bash(grep *)",
+      "Bash(rg *)"
+    ]
+  }
+}
