@@ -425,10 +425,14 @@ public:
 private:
   int64_t getStride(arith::MulIOp op, const AxisInfo &lhs, const AxisInfo &rhs,
                     int dim) override {
-    if (lhs.getStride(dim) > 0 && rhs.getConstantValue().has_value())
-      return lhs.getStride(dim) * rhs.getConstantValue().value();
-    if (rhs.getStride(dim) > 0 && lhs.getConstantValue().has_value())
-      return lhs.getConstantValue().value() * rhs.getStride(dim);
+    if (lhs.getStride(dim) > 0 && rhs.getConstantValue().has_value()) {
+      int64_t product = lhs.getStride(dim) * rhs.getConstantValue().value();
+      return product >= 0 ? product : -1;
+    }
+    if (rhs.getStride(dim) > 0 && lhs.getConstantValue().has_value()) {
+      int64_t product = lhs.getConstantValue().value() * rhs.getStride(dim);
+      return product >= 0 ? product : -1;
+    }
     auto strideZero = [&](const AxisInfo axisInfo) {
       return axisInfo.getConstantValue().has_value() ||
              axisInfo.getStride(dim) == 0 || !isa<TensorType>(op.getType());
@@ -495,13 +499,11 @@ private:
     if (getContiguity(op, lhs, rhs, dim) > 1)
       return 1;
     if (lhs.getStride(dim) > 0 && rhs.getConstantValue().has_value() &&
-        rhs.getConstantValue().value() != 0 &&
+        rhs.getConstantValue().value() > 0 &&
         lhs.getStride(dim) % rhs.getConstantValue().value() == 0)
       return lhs.getStride(dim) / rhs.getConstantValue().value();
-    if (rhs.getStride(dim) > 0 && lhs.getConstantValue().has_value() &&
-        lhs.getConstantValue().value() % rhs.getStride(dim) == 0)
-      return lhs.getConstantValue().value() / rhs.getStride(dim);
-    if (lhs.getStride(dim) == 0)
+    if (lhs.getStride(dim) == 0 && rhs.getConstantValue().has_value() &&
+        rhs.getConstantValue().value() != 0)
       return 0;
     return -1;
   }
