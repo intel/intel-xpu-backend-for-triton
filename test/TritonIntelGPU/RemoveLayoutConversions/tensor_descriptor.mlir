@@ -96,6 +96,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 4], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 8], warpsPerCTA = [4, 2], order = [1, 0]}>
 
+// CHECK: #[[$BLOCKED:.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 4], order = [1, 0]}>
 // CHECK: #[[$BLOCKED1:.+]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 8], warpsPerCTA = [4, 2], order = [1, 0]}>
 
 // COM: ============================================================
@@ -108,7 +109,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // CHECK-LABEL: @descriptor_load_not_rematerialized
 // CHECK: %[[LOAD:.*]] = tt.descriptor_load {{.*}} -> tensor<16x64xf32, #[[$BLOCKED1]]>
-// CHECK: ttg.convert_layout %[[LOAD]]
+// CHECK: ttg.convert_layout %[[LOAD]] : tensor<16x64xf32, #[[$BLOCKED1]]> -> tensor<16x64xf32, #[[$BLOCKED]]>
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
   tt.func @descriptor_load_not_rematerialized(%desc: !tt.tensordesc<tensor<16x64xf32>>, %out: tensor<16x64x!tt.ptr<f32>, #blocked>) {
     %c0 = arith.constant 0 : i32
