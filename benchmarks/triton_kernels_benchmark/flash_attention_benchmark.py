@@ -155,19 +155,26 @@ configs = [
 tuner = triton.autotune(configs, key=['N_CTX', 'HEAD_DIM', 'STAGE'])
 
 bwd_configs = [
-    triton.Config({
-        'BLOCK_M1': bm1,
-        'BLOCK_N1': bn1,
-        'BLOCK_M2': bm2,
-        'BLOCK_N2': bn2,
-        'grf_mode': '256',
-    }, num_stages=s, num_warps=w)
-    for bm1 in [32, 64]
-    for bn1 in [64, 128]
-    for bm2 in [64, 128]
-    for bn2 in [32, 64]
-    for s in [2, 3]
-    for w in [8, 16]
+    triton.Config({'BLOCK_M1': 64, 'BLOCK_N1': 64, 'BLOCK_M2': 64, 'BLOCK_N2': 32, 'grf_mode': '256'}),
+    # triton.Config({'BLOCK_M1': 32, 'BLOCK_N1': 64, 'BLOCK_M2': 64, 'BLOCK_N2': 32, 'grf_mode': '256'}),
+    # triton.Config({'BLOCK_M1': 32, 'BLOCK_N1': 64, 'BLOCK_M2': 128, 'BLOCK_N2': 32, 'grf_mode': '256'}),
+    # triton.Config({'BLOCK_M1': 32, 'BLOCK_N1': 64, 'BLOCK_M2': 128, 'BLOCK_N2': 64, 'grf_mode': '256'}),
+    # triton.Config({'BLOCK_M1': 64, 'BLOCK_N1': 64, 'BLOCK_M2': 128, 'BLOCK_N2': 32, 'grf_mode': '256'}),
+    # triton.Config({'BLOCK_M1': 64, 'BLOCK_N1': 64, 'BLOCK_M2': 128, 'BLOCK_N2': 64, 'grf_mode': '256'}),
+    # triton.Config({'BLOCK_M1': 64, 'BLOCK_N1': 128, 'BLOCK_M2': 64, 'BLOCK_N2': 64, 'grf_mode': '256'}),
+    # triton.Config({
+    #     'BLOCK_M1': bm1,
+    #     'BLOCK_N1': bn1,
+    #     'BLOCK_M2': bm2,
+    #     'BLOCK_N2': bn2,
+    #     'grf_mode': '256',
+    # }, num_stages=s, num_warps=w)
+    # for bm1 in [32, 64]
+    # for bn1 in [64, 128]
+    # for bm2 in [64, 128]
+    # for bn2 in [32, 64]
+    # for s in [2, 3]
+    # for w in [8, 16]
 ]
 
 
@@ -187,7 +194,7 @@ def filter_func(_dict):
     return True
 
 
-bwd_configs = list(filter(filter_func, bwd_configs))
+# bwd_configs = list(filter(filter_func, bwd_configs))
 
 
 def early_prune(prune_configs, named_args, **kwargs):
@@ -198,8 +205,8 @@ def early_prune(prune_configs, named_args, **kwargs):
     return prune_configs
 
 
-bwd_tuner = triton.autotune(bwd_configs, key=['N_CTX', 'HEAD_DIM'],
-                            prune_configs_by={'early_config_prune': early_prune})
+bwd_tuner = triton.autotune(bwd_configs, key=['N_CTX', 'HEAD_DIM'],)
+                            #prune_configs_by={'early_config_prune': early_prune})
 
 
 @triton.jit
@@ -714,5 +721,5 @@ def get_benchmark(
 
 
 if __name__ == '__main__':
-    _benchmark = get_benchmark(fa_kernel_mode=os.getenv('FA_KERNEL_MODE', 'fwd'), )
+    _benchmark = get_benchmark(fa_kernel_mode=os.getenv('FA_KERNEL_MODE', 'bwd'), )
     _benchmark.run(show_plots=False, print_data=True)

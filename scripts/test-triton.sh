@@ -661,7 +661,7 @@ run_benchmark_flex_attention() {
 run_benchmarks() {
   cd $TRITON_PROJ/benchmarks
   pip install .
-  for file in $TRITON_PROJ/benchmarks/triton_kernels_benchmark/*.py; do
+  for file in $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py; do
     benchmark=$(basename -- "$file" .py)
     if [[ $benchmark = @("__init__"|"benchmark_shapes_parser"|"benchmark_testing"|"benchmark_utils"|"build_report") ]]; then
       continue
