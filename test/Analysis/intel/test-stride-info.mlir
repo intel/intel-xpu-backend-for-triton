@@ -120,7 +120,7 @@ tt.func @divsi() {
   // stride(1) / const(4): not evenly divisible => -1
   // CHECK: arith.divsi {{.*}} => stride = [-1]
   %3 = arith.divsi %0, %cst4 : tensor<128xi32>
-  // stride(0) / anything = 0
+  // stride(0) / constant = 0
   // CHECK: arith.constant {{.*}} => stride = [0]
   %cst_splat = arith.constant dense<100> : tensor<128xi32>
   // CHECK: arith.divsi {{.*}} => stride = [0]
@@ -130,8 +130,8 @@ tt.func @divsi() {
 
 // -----
 
-// CHECK-LABEL: @remsi
-tt.func @remsi() {
+// CHECK-LABEL: @rem
+tt.func @rem() {
   // CHECK: tt.make_range {{.*}} => stride = [1]
   %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
   // CHECK: arith.constant {{.*}} => stride = [0]
@@ -139,11 +139,15 @@ tt.func @remsi() {
   // lhs stride >= 0 (1) and rhs stride == 0 => preserves lhs stride (1)
   // CHECK: arith.remsi {{.*}} => stride = [1]
   %1 = arith.remsi %0, %cst_mod : tensor<128xi32>
-  // lhs stride == 0 => stride = 0
+  // CHECK: arith.remui {{.*}} => stride = [1]
+  %2 = arith.remui %0, %cst_mod : tensor<128xi32>
+  // lhs stride == 0 and rhs stride == 0 => stride = 0
   // CHECK: arith.constant {{.*}} => stride = [0]
   %cst_val = arith.constant dense<100> : tensor<128xi32>
   // CHECK: arith.remsi {{.*}} => stride = [0]
-  %2 = arith.remsi %cst_val, %cst_mod : tensor<128xi32>
+  %3 = arith.remsi %cst_val, %cst_mod : tensor<128xi32>
+  // CHECK: arith.remui {{.*}} => stride = [0]
+  %4 = arith.remui %cst_val, %cst_mod : tensor<128xi32>
   tt.return
 }
 
@@ -253,8 +257,8 @@ tt.func @make_tensor_desc_pessimistic(%arg0: !tt.ptr<f16>) {
   %c1_i64 = arith.constant 1 : i64
   %c128_i32 = arith.constant 128 : i32
   %c32_i32 = arith.constant 32 : i32
-  // make_tensor_descriptor returns pessimistic stride
-  // CHECK: tt.make_tensor_descriptor {{.*}} => stride = [-1, -1]
+  // make_tensor_descriptor: last dim stride is always 1 (contiguous)
+  // CHECK: tt.make_tensor_descriptor {{.*}} => stride = [-1, 1]
   %0 = tt.make_tensor_descriptor %arg0, [%c128_i32, %c32_i32], [%c1_i64, %c1_i64] : <f16>, <tensor<128x32xf16>>
   tt.return
 }
@@ -434,20 +438,6 @@ tt.func @divui() {
   %1 = arith.muli %0, %cst2 : tensor<128xi32>
   // CHECK: arith.divui {{.*}} => stride = [1]
   %2 = arith.divui %1, %cst2 : tensor<128xi32>
-  tt.return
-}
-
-// -----
-
-// CHECK-LABEL: @remui
-tt.func @remui() {
-  // CHECK: tt.make_range {{.*}} => stride = [1]
-  %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
-  // CHECK: arith.constant {{.*}} => stride = [0]
-  %cst = arith.constant dense<256> : tensor<128xi32>
-  // lhs stride >= 0 (1) and rhs stride == 0 => preserves lhs stride (1)
-  // CHECK: arith.remui {{.*}} => stride = [1]
-  %1 = arith.remui %0, %cst : tensor<128xi32>
   tt.return
 }
 

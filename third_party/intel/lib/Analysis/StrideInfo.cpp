@@ -37,7 +37,7 @@ StrideInfo StrideInfo::join(const StrideInfo &lhs, const StrideInfo &rhs) {
     return lhs;
   assert(lhs.getRank() == rhs.getRank() && "Mismatched ranks");
   DimVectorT result;
-  for (int d = 0; d < lhs.getRank(); ++d) {
+  for (unsigned d = 0; d < lhs.getRank(); ++d) {
     if (lhs.stride[d] == rhs.stride[d])
       result.push_back(lhs.stride[d]);
     else
@@ -177,7 +177,7 @@ public:
     const auto &rhs = operands[1]->getValue();
     auto rank = lhs.getRank();
     StrideInfo::DimVectorT stride;
-    for (int d = 0; d < rank; ++d) {
+    for (unsigned d = 0; d < rank; ++d) {
       if (lhs.getStride(d) < 0 || rhs.getStride(d) < 0) {
         stride.push_back(-1);
       } else if constexpr (std::is_same_v<OpTy, arith::SubIOp>) {
@@ -204,12 +204,14 @@ public:
     auto lhsConst = getScalarIntConstant(op.getLhs());
     auto rhsConst = getScalarIntConstant(op.getRhs());
 
-    for (int d = 0; d < rank; ++d) {
-      if (lhs.getStride(d) > 0 && rhsConst.has_value())
-        stride.push_back(lhs.getStride(d) * rhsConst.value());
-      else if (rhs.getStride(d) > 0 && lhsConst.has_value())
-        stride.push_back(lhsConst.value() * rhs.getStride(d));
-      else {
+    for (unsigned d = 0; d < rank; ++d) {
+      if (lhs.getStride(d) > 0 && rhsConst.has_value()) {
+        int64_t product = lhs.getStride(d) * rhsConst.value();
+        stride.push_back(product >= 0 ? product : -1);
+      } else if (rhs.getStride(d) > 0 && lhsConst.has_value()) {
+        int64_t product = lhsConst.value() * rhs.getStride(d);
+        stride.push_back(product >= 0 ? product : -1);
+      } else {
         auto strideZero = [&](const StrideInfo &si, Value v) {
           return getScalarIntConstant(v).has_value() || si.getStride(d) == 0 ||
                  !isa<TensorType>(op.getType());
@@ -236,16 +238,13 @@ public:
     StrideInfo::DimVectorT stride;
 
     auto rhsConst = getScalarIntConstant(op.getRhs());
-    auto lhsConst = getScalarIntConstant(op.getLhs());
 
-    for (int d = 0; d < rank; ++d) {
+    for (unsigned d = 0; d < rank; ++d) {
       if (lhs.getStride(d) > 0 && rhsConst.has_value() &&
-          rhsConst.value() != 0 && lhs.getStride(d) % rhsConst.value() == 0)
+          rhsConst.value() > 0 && lhs.getStride(d) % rhsConst.value() == 0)
         stride.push_back(lhs.getStride(d) / rhsConst.value());
-      else if (rhs.getStride(d) > 0 && lhsConst.has_value() &&
-               lhsConst.value() % rhs.getStride(d) == 0)
-        stride.push_back(lhsConst.value() / rhs.getStride(d));
-      else if (lhs.getStride(d) == 0)
+      else if (lhs.getStride(d) == 0 && rhsConst.has_value() &&
+               rhsConst.value() != 0)
         stride.push_back(0);
       else
         stride.push_back(-1);
@@ -265,11 +264,9 @@ public:
     auto rank = lhs.getRank();
     StrideInfo::DimVectorT stride;
 
-    for (int d = 0; d < rank; ++d) {
+    for (unsigned d = 0; d < rank; ++d) {
       if (lhs.getStride(d) >= 0 && rhs.getStride(d) == 0)
         stride.push_back(lhs.getStride(d));
-      else if (lhs.getStride(d) == 0)
-        stride.push_back(0);
       else
         stride.push_back(-1);
     }
@@ -329,7 +326,7 @@ public:
     const auto &srcInfo = operands[0]->getValue();
     auto order = op.getOrder();
     StrideInfo::DimVectorT stride;
-    for (int d = 0; d < srcInfo.getRank(); ++d) {
+    for (unsigned d = 0; d < srcInfo.getRank(); ++d) {
       stride.push_back(srcInfo.getStride(order[d]));
     }
     return StrideInfo(std::move(stride));
@@ -352,7 +349,14 @@ public:
   StrideInfo getStrideInfo(
       triton::MakeTensorDescOp op,
       ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) override {
-    return StrideInfo::getPessimisticValueState(op.getResult());
+    // Tensor descriptors require contiguous innermost dimension, so the last
+    // dimension stride is always 1.
+    auto state = StrideInfo::getPessimisticValueState(op.getResult());
+    auto strides = state.getStride();
+    StrideInfo::DimVectorT result(strides.begin(), strides.end());
+    if (!result.empty())
+      result.back() = 1;
+    return StrideInfo(std::move(result));
   }
 };
 

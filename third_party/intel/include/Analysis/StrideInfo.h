@@ -16,7 +16,7 @@ public:
 
   int64_t getStride(size_t dim) const { return stride[dim]; }
   const DimVectorT &getStride() const { return stride; }
-  int getRank() const { return stride.size(); }
+  unsigned getRank() const { return stride.size(); }
 
   bool operator==(const StrideInfo &other) const {
     return stride == other.stride;
@@ -50,4 +50,4 @@ private:
 
 } // namespace mlir::triton::intel
 
-#endif
+#endif // TRITON_INTEL_ANALYSIS_STRIDEINFO_H
