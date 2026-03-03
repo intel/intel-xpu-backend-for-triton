@@ -20,13 +20,7 @@ add_mlir_dialect_library(MLIRDialectPlugin
         MLIRDialectPluginPassesIncGen
 
         LINK_LIBS PUBLIC
-        $<$<PLATFORM_ID:Windows>:
-                MLIRPass
-                LLVMSupport
-                MLIRSupport
-                TritonNVIDIAGPUToLLVM
-        >
-        $<$<NOT:$<PLATFORM_ID:Windows>>:triton>
+        triton
         "$<$<PLATFORM_ID:Darwin>:-undefined dynamic_lookup>"
         )
 
