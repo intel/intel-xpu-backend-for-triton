@@ -1,0 +1,271 @@
+name: Automate upstream Triton merge
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_hash:
+        description: >
+          Upstream triton-lang/triton commit hash to merge.
+          Leave empty to merge the latest commit on upstream main.
+        required: false
+        type: string
+  schedule:
+    # Run daily at 23:30 UTC (after the translator-cid bot at 23:05)
+    - cron: '30 23 * * *'
+
+permissions: read-all
+
+env:
+  PR_BRANCH: bot/upstream-merge
+  UPSTREAM_REPO: https://github.com/triton-lang/triton.git
+
+jobs:
+  upstream-merge:
+    runs-on:
+      - max1100
+      - rolling
+      - runner-0.0.22
+    defaults:
+      run:
+        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+    steps:
+      # ------------------------------------------------------------------
+      # 1. Checkout with full history (needed for merge)
+      # ------------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.BOT_TOKEN }}
+
+      # ------------------------------------------------------------------
+      # 2. Guard: skip if a bot/upstream-merge PR is already open
+      # ------------------------------------------------------------------
+      - name: Check for existing open PR
+        env:
+          GITHUB_TOKEN: ${{ secrets.BOT_TOKEN }}
+        run: |
+          if gh pr list | grep "${PR_BRANCH}"; then
+            echo "Bot upstream-merge PR is still open"
+            PRID=$(gh pr list --search "head:${PR_BRANCH}" --json number --jq ".[].number")
+            echo "TARGET_PRID=${PRID}" >> "$GITHUB_ENV"
+            echo "::notice::Skipping — open PR #${PRID} exists on ${PR_BRANCH}"
+          fi
+
+      # ------------------------------------------------------------------
+      # 3. Setup git identity and rerere
+      # ------------------------------------------------------------------
+      - name: Configure git
+        if: ${{ env.TARGET_PRID == null }}
+        run: |
+          git config --global user.name 'glados-intel'
+          git config --global user.email 'glados@intel.com'
+          git config rerere.enabled true
+          git config rerere.autoupdate true
+
+      # ------------------------------------------------------------------
+      # 4. Fetch upstream and determine target
+      # ------------------------------------------------------------------
+      - name: Fetch upstream
+        if: ${{ env.TARGET_PRID == null }}
+        run: |
+          git remote add upstream-triton "${UPSTREAM_REPO}" 2>/dev/null || true
+          git fetch upstream-triton main --quiet
+
+          CURRENT_HASH=$(tr -d '[:space:]' < upstream-triton-hash.txt)
+          echo "CURRENT_HASH=${CURRENT_HASH}" >> "$GITHUB_ENV"
+
+          if [[ -n "${{ inputs.target_hash }}" ]]; then
+            TARGET_HASH="${{ inputs.target_hash }}"
+          else
+            TARGET_HASH=$(git rev-parse upstream-triton/main)
+          fi
+          TARGET_SHORT="${TARGET_HASH:0:7}"
+
+          echo "TARGET_HASH=${TARGET_HASH}" >> "$GITHUB_ENV"
+          echo "TARGET_SHORT=${TARGET_SHORT}" >> "$GITHUB_ENV"
+          echo "::notice::Current base: ${CURRENT_HASH:0:7} → Target: ${TARGET_SHORT}"
+
+      # ------------------------------------------------------------------
+      # 5. Check if there are new commits
+      # ------------------------------------------------------------------
+      - name: Check for new commits
+        if: ${{ env.TARGET_PRID == null }}
+        run: |
+          if [[ "${CURRENT_HASH}" == "${TARGET_HASH}" ]]; then
+            echo "Already up to date with upstream (${TARGET_SHORT})."
+            echo "UP_TO_DATE=true" >> "$GITHUB_ENV"
+          else
+            COUNT=$(git rev-list "${CURRENT_HASH}..${TARGET_HASH}" --count 2>/dev/null || echo "?")
+            echo "::notice::${COUNT} new upstream commit(s) to merge"
+          fi
+
+      # ------------------------------------------------------------------
+      # 6. Create merge branch and attempt merge
+      # ------------------------------------------------------------------
+      - name: Prepare merge branch
+        if: ${{ env.TARGET_PRID == null && env.UP_TO_DATE != 'true' }}
+        run: |
+          # Delete stale remote branch if it exists
+          if git show-ref --verify --quiet "refs/remotes/origin/${PR_BRANCH}"; then
+            echo "Deleting stale remote branch ${PR_BRANCH}..."
+            git push origin --delete "${PR_BRANCH}" || true
+          fi
+          git checkout -b "${PR_BRANCH}"
+
+      - name: Attempt merge
+        if: ${{ env.TARGET_PRID == null && env.UP_TO_DATE != 'true' }}
+        run: |
+          echo "Attempting merge of ${TARGET_SHORT}..."
+          if git merge "${TARGET_HASH}" --no-edit; then
+            echo "MERGE_CLEAN=true" >> "$GITHUB_ENV"
+            echo "::notice::Merge succeeded cleanly"
+          else
+            echo "MERGE_CLEAN=false" >> "$GITHUB_ENV"
+            # Collect conflict info
+            CONFLICT_FILES=$(git diff --name-only --diff-filter=U 2>/dev/null || true)
+            CONFLICT_COUNT=$(echo "${CONFLICT_FILES}" | grep -c '.' || echo 0)
+            echo "CONFLICT_COUNT=${CONFLICT_COUNT}" >> "$GITHUB_ENV"
+
+            # Store conflict files in a multi-line env var
+            EOF_DELIM="EOF_$(date +%s%N)"
+            {
+              echo "CONFLICT_FILES<<${EOF_DELIM}"
+              echo "${CONFLICT_FILES}"
+              echo "${EOF_DELIM}"
+            } >> "$GITHUB_ENV"
+
+            echo "::warning::Merge has ${CONFLICT_COUNT} conflicting file(s)"
+            echo "${CONFLICT_FILES}" | sed 's/^/  - /'
+          fi
+
+      # ------------------------------------------------------------------
+      # 7. Update tracking file (clean merges only)
+      # ------------------------------------------------------------------
+      - name: Update tracking file
+        if: ${{ env.TARGET_PRID == null && env.UP_TO_DATE != 'true' && env.MERGE_CLEAN == 'true' }}
+        run: |
+          echo "${TARGET_HASH}" > upstream-triton-hash.txt
+          git add upstream-triton-hash.txt
+          git commit --amend --no-edit
+
+      # ------------------------------------------------------------------
+      # 8. Build check (clean merges only)
+      # ------------------------------------------------------------------
+      - name: Load pip cache
+        if: ${{ env.TARGET_PRID == null && env.UP_TO_DATE != 'true' && env.MERGE_CLEAN == 'true' }}
+        uses: ./.github/actions/load
+        env:
+          CACHE_NUMBER: 1
+        with:
+          path: $HOME/.cache/pip
+          key: pip-3.10-${{ hashFiles('pyproject.toml', 'setup.py') }}-${{ env.CACHE_NUMBER }}
+
+      - name: Install Python 3.10
+        if: ${{ env.TARGET_PRID == null && env.UP_TO_DATE != 'true' && env.MERGE_CLEAN == 'true' }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.10'
+
+      - name: Setup PyTorch
+        if: ${{ env.TARGET_PRID == null && env.UP_TO_DATE != 'true' && env.MERGE_CLEAN == 'true' }}
+        uses: ./.github/actions/setup-pytorch
+
+      - name: Setup Triton
+        if: ${{ env.TARGET_PRID == null && env.UP_TO_DATE != 'true' && env.MERGE_CLEAN == 'true' }}
+        uses: ./.github/actions/setup-triton
+
+      - name: Build check
+        if: ${{ env.TARGET_PRID == null && env.UP_TO_DATE != 'true' && env.MERGE_CLEAN == 'true' }}
+        run: |
+          echo "Running build check..."
+          if scripts/compile-triton.sh --triton; then
+            echo "BUILD_OK=true" >> "$GITHUB_ENV"
+            echo "::notice::Build succeeded"
+          else
+            echo "BUILD_OK=false" >> "$GITHUB_ENV"
+            echo "::warning::Build failed — PR will be created as draft"
+          fi
+
+      # ------------------------------------------------------------------
+      # 9. Push and create PR
+      # ------------------------------------------------------------------
+      - name: Push merge branch
+        if: ${{ env.TARGET_PRID == null && env.UP_TO_DATE != 'true' }}
+        run: |
+          # For conflict merges, abort the merge and push just the branch
+          # so Whitney can resolve conflicts on the branch.
+          if [[ "${MERGE_CLEAN}" != "true" ]]; then
+            git merge --abort
+            # Re-apply the merge so the PR diff shows what's coming
+            git merge "${TARGET_HASH}" --no-commit --no-edit || true
+            # Stage everything we can, leave conflicts marked
+            git add -A 2>/dev/null || true
+            git commit --no-verify -m "WIP: Merge upstream ${TARGET_SHORT} (conflicts)" || true
+          fi
+          git push origin "${PR_BRANCH}" --force-with-lease
+
+      - name: Create pull request
+        if: ${{ env.TARGET_PRID == null && env.UP_TO_DATE != 'true' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.BOT_TOKEN }}
+        run: |
+          MERGE_DATE=$(date +'%b %-d')
+          PR_TITLE="Merge OpenAI Triton commit \`${TARGET_SHORT}\`"
+
+          # Determine if PR should be a draft
+          IS_DRAFT="false"
+          DRAFT_FLAG=""
+          EXTRA_BODY=""
+
+          if [[ "${MERGE_CLEAN}" != "true" ]]; then
+            IS_DRAFT="true"
+            DRAFT_FLAG="--draft"
+            EXTRA_BODY="
+          > **Merge conflicts detected** (${CONFLICT_COUNT} file(s)):
+          $(echo "${CONFLICT_FILES}" | sed 's/^/> - `/' | sed 's/$/`/')
+          >
+          > Manual resolution required — assigned to @whitneywhtsang."
+          elif [[ "${BUILD_OK:-}" != "true" ]]; then
+            IS_DRAFT="true"
+            DRAFT_FLAG="--draft"
+            EXTRA_BODY="
+          > **Build check failed.** Please investigate before merging."
+          fi
+
+          PR_BODY="$(cat <<PREOF
+          This PR changes the Triton base from
+          ${CURRENT_HASH} to
+          ${TARGET_HASH} (${MERGE_DATE}).
+
+          *Pass rate will be determined by CI.*
+          ${EXTRA_BODY}
+
+          ---
+          *Automated by \`auto-upstream-merge\` workflow.*
+          PREOF
+          )"
+
+          gh pr create \
+            --title "${PR_TITLE}" \
+            --body "${PR_BODY}" \
+            --head "${PR_BRANCH}" \
+            --base main \
+            --reviewer whitneywhtsang \
+            ${DRAFT_FLAG}
+
+          echo "::notice::PR created (draft=${IS_DRAFT})"
+
+      # ------------------------------------------------------------------
+      # 10. Enable auto-merge for clean, passing builds
+      # ------------------------------------------------------------------
+      - name: Enable auto-merge
+        if: ${{ env.TARGET_PRID == null && env.UP_TO_DATE != 'true' && env.MERGE_CLEAN == 'true' && env.BUILD_OK == 'true' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.BOT_TOKEN }}
+        run: |
+          PR_NUMBER=$(gh pr list --search "head:${PR_BRANCH}" --json number --jq ".[].number")
+          if [[ -n "${PR_NUMBER}" ]]; then
+            gh pr merge "${PR_NUMBER}" --auto --merge || echo "::warning::Could not enable auto-merge (may need branch protection rules)"
+          fi
