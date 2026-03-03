@@ -6,6 +6,8 @@ import re
 
 import pytest
 
+import pandas as pd
+
 import triton_utils
 
 # TODO:  # pylint: disable=fixme
@@ -701,5 +703,96 @@ def test_test_with_no_classname_and_name(tmp_path, capsys):
     assert pass_rate_dict['xfailed'] == 0
     assert pass_rate_dict['failed'] == 0
     assert '[WARNING] Skipping test case with no classname and name' in warnings_out
+
+
+TESTS_WITH_LONG_NAMES = {
+    'language.xml':
+    '''<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+    <testsuite name="pytest" errors="0" failures="0" skipped="0" tests="2" time="0.228" timestamp="2024-04-05T11:03:23.033702" hostname="hostname">
+        <testcase classname="python.test.unit.language.test_core" name="test_reduce_layouts_with_very_long_name_that_exceeds_normal_display_width[sum-int32-reduce2d-1-src_layout8-32-128-additional-params-more-params-even-more-params]" time="0.114" />
+        <testcase classname="python.test.unit.language.test_core" name="test_another_function_with_extremely_long_name_to_test_truncation_behavior[param1-param2-param3-param4-param5-param6-param7-param8-param9-param10]" time="0.114" />
+    </testsuite>
+</testsuites>
+'''
+}
+
+
+@pytest.mark.parametrize('long_names', [False, True])
+def test_long_names_option(tmp_path, capsys, long_names: bool):
+    """Test that --long-names option displays full test names in output."""
+    test_rep_path = tmp_path / 'language.xml'
+    test_rep_path.write_text(TESTS_WITH_LONG_NAMES['language.xml'], encoding='utf-8')
+
+    # Explicitly set pandas display options to ensure deterministic truncation
+    # regardless of pandas version or environment.
+    with pd.option_context('display.width', 200, 'display.max_colwidth', 50):
+        config = triton_utils.Config(
+            action='tests_stats',
+            reports=str(tmp_path),
+            pretty_print=True,
+            long_names=long_names,
+        )
+        triton_utils.run(config)
+    stdout, _ = capsys.readouterr()
+
+    # The actual test name in output is the short_name (without variant in brackets)
+    short_name = 'test_reduce_layouts_with_very_long_name_that_exceeds_normal_display_width'
+    truncated_prefix = 'test_reduce_layouts_with_ve'
+
+    if not long_names:
+        # Without --long-names, the displayed name should be truncated:
+        # a prefix of the name should appear, but not the full short_name.
+        lines_with_prefix = [line for line in stdout.split('\n') if truncated_prefix in line]
+        assert len(lines_with_prefix) > 0, 'Expected truncated prefix not found in output'
+        # Verify that in all such lines the full short_name is not present
+        assert not any(short_name in line for line in lines_with_prefix), (
+            'Expected truncated output, but full short name was found')
+    else:
+        # With --long-names, the full test name should be visible without truncation
+        assert short_name in stdout, f'Expected full test name "{short_name}" not found in output'
+
+
+@pytest.mark.parametrize('long_names', [False, True])
+def test_long_names_option_compare_reports(tmp_path, capsys, long_names: bool):
+    """Test that --long-names option works with compare_reports action."""
+    # Create two report directories
+    report1_dir = tmp_path / 'report1'
+    report2_dir = tmp_path / 'report2'
+    report1_dir.mkdir()
+    report2_dir.mkdir()
+
+    # Write test reports with long names to both directories
+    (report1_dir / 'language.xml').write_text(TESTS_WITH_LONG_NAMES['language.xml'], encoding='utf-8')
+    (report2_dir / 'language.xml').write_text(TESTS_WITH_LONG_NAMES['language.xml'], encoding='utf-8')
+
+    # Explicitly set pandas display options to ensure deterministic truncation
+    # regardless of pandas version or environment.
+    with pd.option_context('display.width', 200, 'display.max_colwidth', 50):
+        config = triton_utils.Config(
+            action='compare_reports',
+            reports=str(report1_dir),
+            reports_2=str(report2_dir),
+            long_names=long_names,
+        )
+        triton_utils.run(config)
+    stdout, _ = capsys.readouterr()
+
+    # The actual test name in compare output is the short_name (without variant in brackets)
+    short_name = 'test_reduce_layouts_with_very_long_name_that_exceeds_normal_display_width'
+    truncated_prefix = 'test_reduce_layouts_with_ve'
+
+    if not long_names:
+        # Without --long-names, the displayed name should be truncated:
+        # a prefix of the name should appear, but not the full short_name.
+        lines_with_prefix = [line for line in stdout.split('\n') if truncated_prefix in line]
+        assert len(lines_with_prefix) > 0, 'Expected truncated prefix not found in output'
+        # Verify that in all such lines the full short_name is not present
+        assert not any(short_name in line for line in lines_with_prefix), (
+            'Expected truncated output, but full short name was found')
+    else:
+        # With --long-names, the full test name should be visible without truncation
+        assert short_name in stdout, f'Expected full test name "{short_name}" not found in output'
+
 
 # yapf: enable

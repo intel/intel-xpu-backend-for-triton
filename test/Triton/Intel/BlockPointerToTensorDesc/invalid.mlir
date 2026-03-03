@@ -3,29 +3,40 @@
 // CHECK-NOT: tt.make_tensor_descriptor
 // CHECK-NOT: tt.descriptor_load
 
-tt.func public @no_boundary_check(%ptr: !tt.ptr<bf16>, %shape0: i64, %shape1: i64, %stride0: i64, %stride1: i64, %offset0: i32, %offset1: i32) {
+tt.func public @unknown_stride1(%arg0: !tt.ptr<bf16>, %shape0: i64, %shape1: i64, %stride0: i64, %stride1: i64, %offset0: i32, %offset1: i32) {
+  // CHECK-LABEL: tt.func public @unknown_stride1
+  %0 = tt.make_tensor_ptr %arg0, [%shape0, %shape1], [%stride0, %stride1], [%offset0, %offset1] {order = array<i32: 1, 0>} : <tensor<256x32xbf16>>
+  %1 = tt.load %0 {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<256x32xbf16>>
+  tt.return
+}
+
+tt.func public @no_boundary_check(%ptr: !tt.ptr<bf16>, %shape0: i64, %shape1: i64, %stride0: i64, %offset0: i32, %offset1: i32) {
   // CHECK-LABEL: tt.func public @no_boundary_check
+  %stride1 = arith.constant 1 : i64
   %0 = tt.make_tensor_ptr %ptr, [%shape0, %shape1], [%stride0, %stride1], [%offset0, %offset1] {order = array<i32: 1, 0>} : <tensor<256x32xbf16>>
   %1 = tt.load %0 : !tt.ptr<tensor<256x32xbf16>>
   tt.return
 }
 
-tt.func public @only_boundary_check_0(%ptr: !tt.ptr<bf16>, %shape0: i64, %shape1: i64, %stride0: i64, %stride1: i64, %offset0: i32, %offset1: i32) {
+tt.func public @only_boundary_check_0(%ptr: !tt.ptr<bf16>, %shape0: i64, %shape1: i64, %stride0: i64, %offset0: i32, %offset1: i32) {
   // CHECK-LABEL: tt.func public @only_boundary_check_0
+  %stride1 = arith.constant 1 : i64
   %0 = tt.make_tensor_ptr %ptr, [%shape0, %shape1], [%stride0, %stride1], [%offset0, %offset1] {order = array<i32: 1, 0>} : <tensor<256x32xbf16>>
   %1 = tt.load %0 {boundaryCheck = array<i32: 0>} : !tt.ptr<tensor<256x32xbf16>>
   tt.return
 }
 
-tt.func public @only_boundary_check_1(%ptr: !tt.ptr<bf16>, %shape0: i64, %shape1: i64, %stride0: i64, %stride1: i64, %offset0: i32, %offset1: i32) {
+tt.func public @only_boundary_check_1(%ptr: !tt.ptr<bf16>, %shape0: i64, %shape1: i64, %stride0: i64, %offset0: i32, %offset1: i32) {
   // CHECK-LABEL: tt.func public @only_boundary_check_1
+  %stride1 = arith.constant 1 : i64
   %0 = tt.make_tensor_ptr %ptr, [%shape0, %shape1], [%stride0, %stride1], [%offset0, %offset1] {order = array<i32: 1, 0>} : <tensor<256x32xbf16>>
   %1 = tt.load %0 {boundaryCheck = array<i32: 1>} : !tt.ptr<tensor<256x32xbf16>>
   tt.return
 }
 
 // COM: Current limitation: it can be extended to return offsets in addition to the descriptors from scf.if in the future.
-tt.func public @if(%ptr: !tt.ptr<bf16>, %shape0: i64, %shape1: i64, %stride0: i64, %stride1: i64, %offset0: i32, %offset1: i32, %cond: i1) {
+tt.func public @if(%ptr: !tt.ptr<bf16>, %shape0: i64, %shape1: i64, %stride0: i64, %offset0: i32, %offset1: i32, %cond: i1) {
+  %stride1 = arith.constant 1 : i64
   // CHECK-LABEL: tt.func public @if
   %0 = scf.if %cond -> (!tt.ptr<tensor<256x32xbf16>>) {
     %1 = tt.make_tensor_ptr %ptr, [%shape0, %shape1], [%stride0, %stride1], [%offset0, %offset1] {order = array<i32: 1, 0>} : <tensor<256x32xbf16>>
