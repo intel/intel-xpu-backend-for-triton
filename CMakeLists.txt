@@ -378,6 +378,9 @@ if(TRITON_BUILD_PYTHON_MODULE)
     pybind11::headers
 
   )
+  if(MSVC)
+    list(REMOVE_ITEM TRITON_LIBRARIES MLIRPass LLVMSupport MLIRSupport TritonNVIDIAGPUToLLVM)
+  endif()
   if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR # Linux arm64
      CMAKE_SYSTEM_PROCESSOR MATCHES "arm64" OR # macOS arm64
      CMAKE_OSX_ARCHITECTURES MATCHES "arm64")  # also macOS arm64
@@ -437,7 +440,11 @@ if(TRITON_BUILD_PYTHON_MODULE)
     set_target_properties(triton PROPERTIES SUFFIX ".pyd")
     set_target_properties(triton PROPERTIES PREFIX "lib")
     if(MSVC)
-      set_target_properties(triton PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+      add_library(triton_helper STATIC "")
+      target_link_libraries(triton_helper PRIVATE MLIRPass LLVMSupport MLIRSupport TritonNVIDIAGPUToLLVM)
+      set_target_properties(triton_helper PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+      add_dependencies(triton triton_helper)
+      target_link_options(triton PRIVATE "/DEF:${CMAKE_CURRENT_BINARY_DIR}/triton_helper.def")
     endif()
     if(DEFINED TRITON_PYD_PATH)
       string(TOUPPER "${CMAKE_BUILD_TYPE}" UPPER_CMAKE_BUILD_TYPE)
