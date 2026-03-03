@@ -114,6 +114,19 @@ private:
   std::vector<std::unique_ptr<StrideInfoVisitor>> visitors;
 };
 
+/// Compute StrideInfo for ops that create a block pointer or tensor descriptor.
+/// Both MakeTensorPtrOp and MakeTensorDescOp expose their memory strides as
+/// operands. For each dimension, if the stride operand is a known constant we
+/// use its value; otherwise the stride is unknown (-1).
+static StrideInfo makeTensorPtrStrideInfo(ValueRange strides) {
+  StrideInfo::DimVectorT result;
+  for (Value s : strides) {
+    auto val = getScalarIntConstant(s);
+    result.push_back(val.has_value() ? val.value() : -1);
+  }
+  return StrideInfo(std::move(result));
+}
+
 // PassThrough: stride passes from operand 0
 template <typename OpTy>
 class PassThroughStrideVisitor final : public StrideInfoVisitorImpl<OpTy> {
@@ -339,7 +352,7 @@ public:
   StrideInfo getStrideInfo(
       triton::MakeTensorPtrOp op,
       ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) override {
-    return StrideInfo::getPessimisticValueState(op.getResult());
+    return makeTensorPtrStrideInfo(op.getStrides());
   }
 };
 
@@ -349,14 +362,7 @@ public:
   StrideInfo getStrideInfo(
       triton::MakeTensorDescOp op,
       ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) override {
-    // Tensor descriptors require contiguous innermost dimension, so the last
-    // dimension stride is always 1.
-    auto state = StrideInfo::getPessimisticValueState(op.getResult());
-    auto strides = state.getStride();
-    StrideInfo::DimVectorT result(strides.begin(), strides.end());
-    if (!result.empty())
-      result.back() = 1;
-    return StrideInfo(std::move(result));
+    return makeTensorPtrStrideInfo(op.getStrides());
   }
 };
 
