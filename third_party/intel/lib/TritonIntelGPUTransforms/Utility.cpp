@@ -28,16 +28,14 @@ namespace ttgi = mlir::triton::gpu::intel;
 
 namespace mlir::triton::gpu::intel {
 
-template <typename OpType> RankedTensorType getRankedTensorType(OpType op) {
-  if constexpr (llvm::is_one_of<OpType, tt::DescriptorLoadOp>::value) {
+template <typename OpType,
+          typename = std::enable_if_t<llvm::is_one_of<
+              OpType, tt::DescriptorLoadOp, tt::DescriptorStoreOp>::value>>
+RankedTensorType getRankedTensorType(OpType op) {
+  if constexpr (std::is_same_v<OpType, tt::DescriptorLoadOp>)
     return op.getType();
-  } else if constexpr (llvm::is_one_of<OpType, tt::DescriptorStoreOp>::value) {
+  if constexpr (std::is_same_v<OpType, tt::DescriptorStoreOp>)
     return op.getSrc().getType();
-  } else {
-    static_assert(llvm::is_one_of<OpType, tt::DescriptorLoadOp,
-                                  tt::DescriptorStoreOp>::value,
-                  "Unsupported operation type for visit");
-  }
 }
 
 RankedTensorType getRankedTensorType(Type ptrTy) {
