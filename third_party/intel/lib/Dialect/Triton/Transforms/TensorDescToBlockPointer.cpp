@@ -9,6 +9,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -157,6 +158,76 @@ Attribute findEncodingFromUsers(Value value) {
   assert(encodings.size() <= 1 &&
          "MakeTensorDescOp with multiple encodings is not yet supported");
   return encodings.empty() ? Attribute() : encodings.front();
+}
+
+// Find and adjust encoding for a tensor descriptor operation.
+// The encoding is found from DescriptorLoad/Store users. If the layout rank
+// differs from the tensor rank (e.g., rank-reducing loads), the encoding is
+// adjusted by adding batch dimensions with size 1.
+Attribute findEncodingForTensorDesc(tt::MakeTensorDescOp op) {
+  auto layout = dyn_cast_or_null<ttg::LayoutEncodingTrait>(
+      findEncodingFromUsers(op.getResult()));
+  if (!layout)
+    return layout;
+
+  ArrayRef<int64_t> blockShape = op.getType().getBlockType().getShape();
+  unsigned tensorRank = blockShape.size();
+  unsigned layoutRank = layout.getRank();
+  if (layoutRank == tensorRank)
+    return layout;
+
+  assert(tensorRank > layoutRank &&
+         "Expected tensor rank to be greater than layout rank");
+
+  ttg::BlockedEncodingAttr blocked = dyn_cast<ttg::BlockedEncodingAttr>(layout);
+  if (blocked) {
+    // Adjust BlockedEncodingAttr to match the tensor rank by adding
+    // dimensions to the front (batch dimensions) with size 1.
+    unsigned addCount = tensorRank - layoutRank;
+
+    SmallVector<unsigned> newSizePerThread(addCount, 1);
+    ArrayRef<unsigned> sizePerThread = blocked.getSizePerThread();
+    newSizePerThread.append(sizePerThread.begin(), sizePerThread.end());
+
+    SmallVector<unsigned> newThreadsPerWarp(addCount, 1);
+    ArrayRef<unsigned> threadsPerWarp = blocked.getThreadsPerWarp();
+    newThreadsPerWarp.append(threadsPerWarp.begin(), threadsPerWarp.end());
+
+    SmallVector<unsigned> newWarpsPerCTA(addCount, 1);
+    ArrayRef<unsigned> warpsPerCTA = blocked.getWarpsPerCTA();
+    newWarpsPerCTA.append(warpsPerCTA.begin(), warpsPerCTA.end());
+
+    SmallVector<unsigned> newOrder;
+    ArrayRef<unsigned> order = blocked.getOrder();
+    for (unsigned idx : order)
+      newOrder.push_back(idx + addCount);
+    for (int i = addCount - 1; i >= 0; --i)
+      newOrder.push_back(i);
+
+    // Extend CGALayout to the new rank by prepending identity layouts for
+    // the new batch dimensions.
+    ttg::CGAEncodingAttr cgaLayout = blocked.getCGALayout();
+    tt::LinearLayout ll = cgaLayout.getLinearLayout();
+    StringAttr kBlock = *ll.getInDimNames().begin();
+    SmallVector<StringAttr> standardOuts =
+        tt::standardOutDimNames(op.getContext(), tensorRank);
+    for (unsigned i = layoutRank; i < tensorRank; ++i)
+      ll = tt::LinearLayout::identity1D(1, kBlock, standardOuts[i]) * ll;
+    // Rename out dims to dim0..dimn-1
+    SmallVector<std::pair<StringAttr, int32_t>> dimSizes = ll.getOutDims();
+    for (auto [i, dim] : llvm::enumerate(standardOuts))
+      dimSizes[i].first = dim;
+    ll = tt::LinearLayout(ll.getBases(), dimSizes, false);
+    ttg::CGAEncodingAttr newCGALayout =
+        ttg::CGAEncodingAttr::get(op.getContext(), std::move(ll));
+
+    return ttg::BlockedEncodingAttr::get(op.getContext(), newSizePerThread,
+                                         newThreadsPerWarp, newWarpsPerCTA,
+                                         newOrder, newCGALayout);
+  }
+
+  // For other encoding types, fall back to default blocked encoding.
+  return maybeGetDefaultBlockedEncoding(op, blockShape);
 }
 
 struct TritonIntelTensorDescToBlockPointer
@@ -325,12 +396,7 @@ private:
       sizes.push_back(size);
     }
 
-    Attribute layout = findEncodingFromUsers(op.getResult());
-    // FIXME: Handle the case where layout and current MakeTensorDescOp has
-    // different rank.
-    if (layout &&
-        cast<ttg::LayoutEncodingTrait>(layout).getRank() != sizes.size())
-      layout = maybeGetDefaultBlockedEncoding(op, sizes);
+    Attribute layout = findEncodingForTensorDesc(op);
     auto tensorPtr = findOrCreateMakeTensorPtr(
         loc, op.getBase(), shapes, strides, offsets, sizes, layout, builder);
     LLVM_DEBUG({
@@ -373,14 +439,9 @@ private:
     else
       opTensorType = cast<RankedTensorType>(op.getSrc().getType());
 
-    // FIXME: If we want to move TensorDescToBlockPointer pass further down in
-    // the pipeline, then we need to handle also non-default layouts.
-    [[maybe_unused]] Attribute defaultLayout =
-        maybeGetDefaultBlockedEncoding(op, opTensorType.getShape());
-    assert((opTensorType.getShape() == descTensorType.getShape()
-                ? opTensorType.getEncoding() == descTensorType.getEncoding()
-                : opTensorType.getEncoding() == defaultLayout) &&
-           "Expecting the same encoding (TODO for different shapes)");
+    assert((opTensorType.getShape() != descTensorType.getShape() ||
+            opTensorType.getEncoding() == descTensorType.getEncoding()) &&
+           "Expecting the same encoding");
 
     Value ptr =
         tt::AdvanceOp::create(builder, loc, ptrType, operand, op.getIndices());
