@@ -66,11 +66,18 @@ static std::optional<int64_t> getScalarIntConstant(Value v) {
   else
     return std::nullopt;
 
-  if (auto intAttr = dyn_cast<IntegerAttr>(attr))
-    return intAttr.getValue().getSExtValue();
+  if (auto intAttr = dyn_cast<IntegerAttr>(attr)) {
+    APInt apValue = intAttr.getValue();
+    // 1-bit integers: use getZExtValue to avoid sign-extending true to -1.
+    return apValue.getBitWidth() == 1 ? apValue.getZExtValue()
+                                      : apValue.getSExtValue();
+  }
   if (auto splatAttr = dyn_cast<SplatElementsAttr>(attr)) {
-    if (splatAttr.getElementType().isIntOrIndex())
-      return splatAttr.getSplatValue<APInt>().getSExtValue();
+    if (splatAttr.getElementType().isIntOrIndex()) {
+      APInt apValue = splatAttr.getSplatValue<APInt>();
+      return apValue.getBitWidth() == 1 ? apValue.getZExtValue()
+                                        : apValue.getSExtValue();
+    }
   }
   return std::nullopt;
 }

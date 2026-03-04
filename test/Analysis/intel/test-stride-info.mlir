@@ -100,6 +100,11 @@ tt.func @muli(%arg0: i32) {
   %c128 = arith.constant 128 : i32
   // CHECK: arith.muli {{.*}} => stride = [0]
   %2 = arith.muli %arg0, %c128 : i32
+  // negative constant: stride * -2 = -2 => clamped to -1 (unknown)
+  // CHECK: arith.constant {{.*}} => stride = [0]
+  %neg = arith.constant dense<-2> : tensor<128xi32>
+  // CHECK: arith.muli {{.*}} => stride = [-1]
+  %3 = arith.muli %0, %neg : tensor<128xi32>
   tt.return
 }
 
@@ -125,6 +130,16 @@ tt.func @divsi() {
   %cst_splat = arith.constant dense<100> : tensor<128xi32>
   // CHECK: arith.divsi {{.*}} => stride = [0]
   %4 = arith.divsi %cst_splat, %cst4 : tensor<128xi32>
+  // negative divisor => -1
+  // CHECK: arith.constant {{.*}} => stride = [0]
+  %neg = arith.constant dense<-4> : tensor<128xi32>
+  // CHECK: arith.divsi {{.*}} => stride = [-1]
+  %5 = arith.divsi %0, %neg : tensor<128xi32>
+  // division by zero => -1
+  // CHECK: arith.constant {{.*}} => stride = [0]
+  %zero = arith.constant dense<0> : tensor<128xi32>
+  // CHECK: arith.divsi {{.*}} => stride = [-1]
+  %6 = arith.divsi %cst4, %zero : tensor<128xi32>
   tt.return
 }
 
