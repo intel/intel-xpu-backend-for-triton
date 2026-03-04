@@ -59,6 +59,7 @@ class Config:  # pylint: disable=R0902
     list_test_instances: bool = False
     list_failure_reasons: bool = False
     pretty_print: bool = False
+    long_names: bool = False
     sort_by: str = "name"
 
     repo: str = "intel/intel-xpu-backend-for-triton"
@@ -171,6 +172,13 @@ class Config:  # pylint: disable=R0902
             action="store_true",
             dest="merge_test_results",
             required=False,
+        )
+        parser.add_argument(
+            "--long-names",
+            action="store_true",
+            required=False,
+            help=
+            "Display full test names in pretty-printed tables. May produce wide output; consider redirecting to a file for easier reading.",
         )
 
     _ALIASES: ClassVar[dict[str, str]] = {
@@ -528,12 +536,6 @@ class DownloadReportsActionRunner(ActionRunner):
 def run(config: Config) -> Any:  # pylint: disable=R0912
     if config.action == "download_reports":
         return DownloadReportsActionRunner(config=config)()
-    if config.action == "compare_reports":
-        comparison = CompareReportsActionRunner(config=config)()
-        pd.set_option("display.max_rows", None)
-        compare_df = CompareReportsActionRunner(config=config)()
-        print(compare_df)
-        return comparison
     if config.action == "export_to":
         if config.export_format == "csv":
             return ExportReportActionRunner(config=config)()
@@ -542,12 +544,22 @@ def run(config: Config) -> Any:  # pylint: disable=R0912
         summary, ex_code = PassRateActionRunner(config=config)()
         print(summary)
         sys.exit(ex_code)
-    elif config.action == "tests_stats":
-        pd.set_option("display.max_rows", None)
-        print(TestsStatsActionRunner(config=config)())
-    else:
-        raise ValueError(f"Unknown action: {config.action}")
-    return None
+    # Configure pandas display options for DataFrame output actions
+    # Use option_context to avoid mutating global pandas state
+    option_args: list[Any] = ["display.max_rows", None]
+    if config.long_names:
+        option_args.extend(["display.max_colwidth", None, "display.width", None])
+    if config.action == "compare_reports":
+        comparison = CompareReportsActionRunner(config=config)()
+        with pd.option_context(*option_args):
+            print(comparison)
+        return comparison
+    if config.action == "tests_stats":
+        tests_stats = TestsStatsActionRunner(config=config)()
+        with pd.option_context(*option_args):
+            print(tests_stats)
+        return tests_stats
+    raise ValueError(f"Unknown action: {config.action}")
 
 
 def main():
