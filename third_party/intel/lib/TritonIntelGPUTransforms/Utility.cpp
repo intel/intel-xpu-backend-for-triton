@@ -28,6 +28,16 @@ namespace ttgi = mlir::triton::gpu::intel;
 
 namespace mlir::triton::gpu::intel {
 
+template <typename OpType,
+          typename = std::enable_if_t<llvm::is_one_of<
+              OpType, tt::DescriptorLoadOp, tt::DescriptorStoreOp>::value>>
+RankedTensorType getRankedTensorType(OpType op) {
+  if constexpr (std::is_same_v<OpType, tt::DescriptorLoadOp>)
+    return op.getType();
+  if constexpr (std::is_same_v<OpType, tt::DescriptorStoreOp>)
+    return op.getSrc().getType();
+}
+
 RankedTensorType getRankedTensorType(Type ptrTy) {
   return tt::isTensorPointerType(ptrTy)
              ? cast<RankedTensorType>(
@@ -114,14 +124,18 @@ Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
 }
 
 bool isExpensiveLoadOrStore(Operation *op) {
-  assert((isa<tt::LoadOp>(op) || isa<tt::StoreOp>(op)) &&
-         "Expecting Triton LoadOp or StoreOp");
+  assert((isa<tt::LoadOp, tt::StoreOp, tt::DescriptorLoadOp,
+              tt::DescriptorStoreOp>(op)) &&
+         "Expecting Triton LoadOp, StoreOp, DescriptorLoadOp or "
+         "DescriptorStoreOp");
   Value base = op->getOperand(0);
 
-  // A size 1 tensor is not expensive since all threads will load the same
-  // value.
-  if (isSingleValue(base))
-    return false;
+  if (isa<tt::LoadOp, tt::StoreOp>(op)) {
+    // A size 1 tensor is not expensive since all threads will load the same
+    // value.
+    if (isSingleValue(base))
+      return false;
+  }
 
   // Loads or stores that use a block pointer are expensive if they cannot be
   // lowered to 2D block read/write operations. Temporarily leverage the
@@ -133,7 +147,16 @@ bool isExpensiveLoadOrStore(Operation *op) {
 
   // Loads or stores that use more threads than elements can be presumed to have
   // a high hit-rate that makes them cheap.
-  if (auto ptrType = getRankedTensorType(base.getType())) {
+  RankedTensorType ptrType;
+  if (auto descLoadOp = dyn_cast<tt::DescriptorLoadOp>(op)) {
+    ptrType = getRankedTensorType(descLoadOp);
+  } else if (auto descStoreOp = dyn_cast<tt::DescriptorStoreOp>(op)) {
+    ptrType = getRankedTensorType(descStoreOp);
+  } else {
+    ptrType = getRankedTensorType(base.getType());
+  }
+
+  if (ptrType) {
     int numWarps = ttg::lookupNumWarps(op);
     auto mod = op->getParentOfType<ModuleOp>();
     int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
@@ -295,10 +318,12 @@ LogicalResult getConvertBackwardSlice(
         continue;
       }
       for (auto [i, operand] : llvm::enumerate(definingOp->getOpOperands())) {
-        auto srcEncoding = ttgi::inferSrcEncoding(definingOp, encoding);
-        if (!srcEncoding)
-          return failure();
-        enqueue(operand, srcEncoding);
+        if (isTensorOrTensorPointerType(operand.get().getType())) {
+          auto srcEncoding = ttgi::inferSrcEncoding(definingOp, encoding);
+          if (!srcEncoding)
+            return failure();
+          enqueue(operand, srcEncoding);
+        }
       }
       continue;
     }
