@@ -182,10 +182,19 @@ jobs:
           source ./scripts/capture-hw-details.sh
 
           cd benchmarks/third_party/vllm
-          python batched_moe_benchmark.py --reports $REPORTS
+          bash batched_moe/run_benchmark.sh --reports $REPORTS
+          # Transform baseline results
           python transform_results.py \
             $REPORTS/moe-gemm-performance.csv \
             $REPORTS/moe-gemm-report.csv \
+            --tag $TAG \
+            --bgroup vllm \
+            --benchmark moe-bf16-benchmark \
+            --param_cols="num_experts,max_tokens_per_expert,K,N"
+          # Transform tensor descriptor patched results
+          python transform_results.py \
+            $REPORTS/moe-gemm-performance-td.csv \
+            $REPORTS/moe-gemm-td-report.csv \
             --tag $TAG \
             --bgroup vllm \
             --benchmark moe-bf16-benchmark \
@@ -198,10 +207,19 @@ jobs:
           source ./scripts/capture-hw-details.sh
 
           cd benchmarks/third_party/vllm
-          FP8="1" python batched_moe_benchmark.py --reports $REPORTS
+          FP8="1" bash batched_moe/run_benchmark.sh --reports $REPORTS
+          # Transform baseline results
           python transform_results.py \
             $REPORTS/moe-gemm-performance.csv \
             $REPORTS/moe-gemm-fp8-report.csv \
+            --tag $TAG \
+            --bgroup vllm \
+            --benchmark moe-fp8-benchmark \
+            --param_cols="num_experts,max_tokens_per_expert,K,N"
+          # Transform tensor descriptor patched results
+          python transform_results.py \
+            $REPORTS/moe-gemm-performance-td.csv \
+            $REPORTS/moe-gemm-fp8-td-report.csv \
             --tag $TAG \
             --bgroup vllm \
             --benchmark moe-fp8-benchmark \
@@ -276,7 +294,7 @@ jobs:
 
       - name: Upload benchmark reports
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: benchmark-reports
           path: reports
