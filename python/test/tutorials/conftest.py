@@ -65,5 +65,4 @@ def pytest_collection_modifyitems(config, items):
         fa_config = item.callspec.params.get("fa_config") if hasattr(item, "callspec") else None
 
         if fa_config not in allowed:
-            item.add_marker(pytest.mark.skip(
-                reason=f"fa_config={fa_config} not run in --tutorial06-mode={mode}"))
+            item.add_marker(pytest.mark.skip(reason=f"fa_config={fa_config} not run in --tutorial06-mode={mode}"))
