@@ -5,6 +5,8 @@
 
 namespace mlir::triton::intel {
 
+class ModuleAxisInfoAnalysis;
+
 /// Per-dimension stride tracked by StrideAnalysis.
 ///   -1 = unknown, 0 = broadcast/constant, >0 = known stride.
 class StrideInfo {
@@ -39,13 +41,15 @@ using StrideInfoMapT = DenseMap<Value, StrideInfo>;
 
 class ModuleStrideAnalysis : public CallGraph<StrideInfoMapT> {
 public:
-  explicit ModuleStrideAnalysis(ModuleOp moduleOp);
+  explicit ModuleStrideAnalysis(ModuleOp moduleOp,
+                                ModuleAxisInfoAnalysis *axisInfo = nullptr);
 
   StrideInfo *getStrideInfo(Value value);
 
 private:
   void initialize(FunctionOpInterface funcOp);
   void update(CallOpInterface callOp, FunctionOpInterface funcOp);
+  ModuleAxisInfoAnalysis *axisInfo = nullptr;
 };
 
 } // namespace mlir::triton::intel

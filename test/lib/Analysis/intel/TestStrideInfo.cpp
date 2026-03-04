@@ -1,3 +1,4 @@
+#include "intel/include/Analysis/AxisInfo.h"
 #include "intel/include/Analysis/StrideInfo.h"
 #include "mlir/Pass/Pass.h"
 
@@ -19,7 +20,9 @@ struct TestStrideInfoPass
   void runOnOperation() override {
     Operation *operation = getOperation();
     ModuleOp moduleOp = cast<ModuleOp>(operation);
-    ModuleStrideAnalysis moduleStrideAnalysis(moduleOp);
+    ModuleAxisInfoAnalysis moduleAxisInfoAnalysis(moduleOp);
+    ModuleStrideAnalysis moduleStrideAnalysis(moduleOp,
+                                              &moduleAxisInfoAnalysis);
     moduleOp.walk([&](triton::FuncOp funcOp) {
       auto &os = llvm::errs();
       auto opName = SymbolTable::getSymbolName(funcOp).getValue().str();

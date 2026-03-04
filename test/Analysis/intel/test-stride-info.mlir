@@ -136,7 +136,7 @@ tt.func @rem() {
   %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
   // CHECK: arith.constant {{.*}} => stride = [0]
   %cst_mod = arith.constant dense<512> : tensor<128xi32>
-  // lhs stride >= 0 (1) and rhs stride == 0 => preserves lhs stride (1)
+  // Range span (127) < modulus (512): no wrap-around, stride preserved.
   // CHECK: arith.remsi {{.*}} => stride = [1]
   %1 = arith.remsi %0, %cst_mod : tensor<128xi32>
   // CHECK: arith.remui {{.*}} => stride = [1]
@@ -148,6 +148,64 @@ tt.func @rem() {
   %3 = arith.remsi %cst_val, %cst_mod : tensor<128xi32>
   // CHECK: arith.remui {{.*}} => stride = [0]
   %4 = arith.remui %cst_val, %cst_mod : tensor<128xi32>
+  tt.return
+}
+
+// -----
+
+// CHECK-LABEL: @rem_stride_wrap
+tt.func @rem_stride_wrap(%arg0: i32) {
+  // CHECK: tt.make_range {{.*}} => stride = [1]
+  %range = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32>
+  // CHECK: arith.constant {{.*}} => stride = [0]
+  %c8 = arith.constant dense<8> : tensor<32xi32>
+  // CHECK: arith.constant {{.*}} => stride = [0]
+  %c64 = arith.constant dense<64> : tensor<32xi32>
+
+  // Range span (31) >= modulus (8): wrap-around breaks stride.
+  // CHECK: arith.remsi {{.*}} => stride = [-1]
+  %rem_wrap = arith.remsi %range, %c8 : tensor<32xi32>
+
+  // Range span (31) < modulus (64): no wrap-around, stride preserved.
+  // CHECK: arith.remsi {{.*}} => stride = [1]
+  %rem_nowrap = arith.remsi %range, %c64 : tensor<32xi32>
+
+  // Non-constant rhs (unknown stride): cannot reason about modulus.
+  // CHECK: tt.splat {{.*}} => stride = [0]
+  %splat_arg = tt.splat %arg0 : i32 -> tensor<32xi32>
+  // CHECK: arith.remsi {{.*}} => stride = [-1]
+  %rem_nonconst = arith.remsi %range, %splat_arg : tensor<32xi32>
+
+  // Unknown lhs stride: cannot preserve.
+  // CHECK: arith.muli {{.*}} => stride = [-1]
+  %unknown = arith.muli %range, %splat_arg : tensor<32xi32>
+  // CHECK: arith.remsi {{.*}} => stride = [-1]
+  %rem_unk_lhs = arith.remsi %unknown, %c8 : tensor<32xi32>
+
+  // Both non-constant strides: unknown.
+  // CHECK: tt.make_range {{.*}} => stride = [1]
+  %rhs_range = tt.make_range {end = 34 : i32, start = 2 : i32} : tensor<32xi32>
+  // CHECK: arith.remsi {{.*}} => stride = [-1]
+  %rem_both_range = arith.remsi %range, %rhs_range : tensor<32xi32>
+
+  // Scaled range: gcd(divisibility=2, modulus=64) = 2, maxVal=62 >= 2 => unknown.
+  // CHECK: arith.constant {{.*}} => stride = [0]
+  %c2 = arith.constant dense<2> : tensor<32xi32>
+  // CHECK: arith.muli {{.*}} => stride = [2]
+  %scaled = arith.muli %range, %c2 : tensor<32xi32>
+  // CHECK: arith.remui {{.*}} => stride = [-1]
+  %rem_scaled = arith.remui %scaled, %c64 : tensor<32xi32>
+
+  // Scaled range: maxVal=62 >= modulus=8 => wrap-around.
+  // CHECK: arith.remui {{.*}} => stride = [-1]
+  %rem_scaled_wrap = arith.remui %scaled, %c8 : tensor<32xi32>
+
+  // Negative modulus: not supported, returns unknown.
+  // CHECK: arith.constant {{.*}} => stride = [0]
+  %cneg = arith.constant dense<-4> : tensor<32xi32>
+  // CHECK: arith.remsi {{.*}} => stride = [-1]
+  %rem_neg_mod = arith.remsi %range, %cneg : tensor<32xi32>
+
   tt.return
 }
 
@@ -480,6 +538,56 @@ tt.func @muli_commutative() {
   // const * range: commutative case
   // CHECK: arith.muli {{.*}} => stride = [8]
   %1 = arith.muli %cst, %0 : tensor<128xi32>
+  tt.return
+}
+
+// -----
+
+// CHECK-LABEL: @rem_stride_divisibility
+// Tests wrap-around detection using gcd(divisibility, modulus).
+tt.func @rem_stride_divisibility() {
+  // divisibility(start=3) = 1
+  // CHECK: tt.make_range {{.*}} => stride = [1]
+  %range_3_7 = tt.make_range {end = 7 : i32, start = 3 : i32} : tensor<4xi32>
+  // CHECK: arith.constant {{.*}} => stride = [0]
+  %c4 = arith.constant dense<4> : tensor<4xi32>
+  // CHECK: arith.constant {{.*}} => stride = [0]
+  %c6 = arith.constant dense<6> : tensor<4xi32>
+
+  // gcd(1, 4) = 1, maxVal=3 >= 1 => wrap
+  // CHECK: arith.remsi {{.*}} => stride = [-1]
+  %rem1 = arith.remsi %range_3_7, %c4 : tensor<4xi32>
+
+  // gcd(1, 6) = 1, maxVal=3 >= 1 => wrap ({3,4,5,6}%6 = {3,4,5,0})
+  // CHECK: arith.remsi {{.*}} => stride = [-1]
+  %rem2 = arith.remsi %range_3_7, %c6 : tensor<4xi32>
+
+  // divisibility(start=16) = 16
+  // CHECK: tt.make_range {{.*}} => stride = [1]
+  %range_16_20 = tt.make_range {end = 20 : i32, start = 16 : i32} : tensor<4xi32>
+
+  // gcd(16, 4) = 4, maxVal=3 < 4 => no wrap
+  // CHECK: arith.remsi {{.*}} => stride = [1]
+  %rem3 = arith.remsi %range_16_20, %c4 : tensor<4xi32>
+
+  // divisibility(start=0) = 2^62
+  // CHECK: tt.make_range {{.*}} => stride = [1]
+  %range_0_4 = tt.make_range {end = 4 : i32, start = 0 : i32} : tensor<4xi32>
+  // CHECK: arith.constant {{.*}} => stride = [0]
+  %c8 = arith.constant dense<8> : tensor<4xi32>
+
+  // gcd(2^62, 8) = 8, maxVal=3 < 8 => no wrap
+  // CHECK: arith.remui {{.*}} => stride = [1]
+  %rem4 = arith.remui %range_0_4, %c8 : tensor<4xi32>
+
+  // gcd(2^62, 8) = 8, maxVal=31 >= 8 => wrap
+  // CHECK: tt.make_range {{.*}} => stride = [1]
+  %range_0_32 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32>
+  // CHECK: arith.constant {{.*}} => stride = [0]
+  %c8_32 = arith.constant dense<8> : tensor<32xi32>
+  // CHECK: arith.remui {{.*}} => stride = [-1]
+  %rem5 = arith.remui %range_0_32, %c8_32 : tensor<32xi32>
+
   tt.return
 }
 

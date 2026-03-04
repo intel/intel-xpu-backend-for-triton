@@ -1,4 +1,5 @@
 #include "intel/include/Analysis/StrideInfo.h"
+#include "intel/include/Analysis/AxisInfo.h"
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -46,6 +47,8 @@ StrideInfo StrideInfo::join(const StrideInfo &lhs, const StrideInfo &rhs) {
   return StrideInfo(std::move(result));
 }
 
+using AxisInfoLookupFn = std::function<AxisInfo *(Value)>;
+
 namespace {
 
 /// Try to extract a scalar integer constant from a Value.
@@ -79,6 +82,13 @@ public:
   getStrideInfo(Operation *op,
                 ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) = 0;
   virtual bool match(Operation *op) = 0;
+
+  void setAxisInfoLookup(AxisInfoLookupFn fn) {
+    axisInfoLookup = std::move(fn);
+  }
+
+protected:
+  AxisInfoLookupFn axisInfoLookup;
 };
 
 template <typename OpTy>
@@ -100,6 +110,11 @@ public:
   template <typename... Ts, typename = std::enable_if_t<sizeof...(Ts) != 0>>
   void append() {
     (visitors.emplace_back(std::make_unique<Ts>()), ...);
+  }
+
+  void setAxisInfoLookup(AxisInfoLookupFn fn) {
+    for (auto &v : visitors)
+      v->setAxisInfoLookup(fn);
   }
 
   StrideInfo apply(Operation *op,
@@ -277,11 +292,39 @@ public:
     auto rank = lhs.getRank();
     StrideInfo::DimVectorT stride;
 
+    auto rhsConst = getScalarIntConstant(op.getRhs());
+
     for (unsigned d = 0; d < rank; ++d) {
-      if (lhs.getStride(d) >= 0 && rhs.getStride(d) == 0)
-        stride.push_back(lhs.getStride(d));
-      else
+      if (lhs.getStride(d) == 0 && rhs.getStride(d) == 0) {
+        // Both sides are uniform/constant — result is uniform.
+        stride.push_back(0);
+      } else if (lhs.getStride(d) > 0 && rhsConst.has_value() &&
+                 rhsConst.value() > 0) {
+        // Stride preserved when range span doesn't cross a modulus boundary.
+        // Effective period is gcd(divisibility, modulus) when AxisInfo is
+        // available; falls back to modulus otherwise.
+        auto resTy = dyn_cast<RankedTensorType>(op.getType());
+        if (resTy) {
+          int64_t dimSize = resTy.getDimSize(d);
+          int64_t maxVal = lhs.getStride(d) * (dimSize - 1);
+          int64_t modulus = rhsConst.value();
+          int64_t g = modulus; // fallback when no AxisInfo
+          if (this->axisInfoLookup) {
+            if (auto *ai = this->axisInfoLookup(op.getLhs())) {
+              int64_t divisibility = ai->getDivisibility(d);
+              g = std::gcd(divisibility, modulus);
+            }
+          }
+          if (maxVal < g)
+            stride.push_back(lhs.getStride(d));
+          else
+            stride.push_back(-1);
+        } else {
+          stride.push_back(-1);
+        }
+      } else {
         stride.push_back(-1);
+      }
     }
     return StrideInfo(std::move(stride));
   }
@@ -405,7 +448,8 @@ private:
   }
 
 public:
-  StrideAnalysis(DataFlowSolver &solver)
+  StrideAnalysis(DataFlowSolver &solver,
+                 AxisInfoLookupFn axisInfoLookup = nullptr)
       : dataflow::SparseForwardDataFlowAnalysis<dataflow::Lattice<StrideInfo>>(
             solver) {
     // PassThrough visitors
@@ -438,6 +482,8 @@ public:
     visitors.append<MakeTensorPtrOpStrideVisitor>();
     visitors.append<MakeTensorDescOpStrideVisitor>();
     visitors.append<DescriptorLoadOpStrideVisitor>();
+    if (axisInfoLookup)
+      visitors.setAxisInfoLookup(std::move(axisInfoLookup));
   }
 
   using dataflow::SparseForwardDataFlowAnalysis<
@@ -469,8 +515,9 @@ public:
 // ModuleStrideAnalysis
 //===----------------------------------------------------------------------===//
 
-ModuleStrideAnalysis::ModuleStrideAnalysis(ModuleOp moduleOp)
-    : CallGraph<StrideInfoMapT>(moduleOp) {
+ModuleStrideAnalysis::ModuleStrideAnalysis(ModuleOp moduleOp,
+                                           ModuleAxisInfoAnalysis *axisInfo)
+    : CallGraph<StrideInfoMapT>(moduleOp), axisInfo(axisInfo) {
   SmallVector<FunctionOpInterface> funcs;
   walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
       [](CallOpInterface callOp, FunctionOpInterface funcOp) {},
@@ -503,7 +550,13 @@ StrideInfo *ModuleStrideAnalysis::getStrideInfo(Value value) {
 
 void ModuleStrideAnalysis::initialize(FunctionOpInterface funcOp) {
   std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
-  StrideAnalysis *analysis = solver->load<StrideAnalysis>();
+  AxisInfoLookupFn lookupFn;
+  if (axisInfo) {
+    lookupFn = [this](Value v) -> AxisInfo * {
+      return axisInfo->getAxisInfo(v);
+    };
+  }
+  StrideAnalysis *analysis = solver->load<StrideAnalysis>(std::move(lookupFn));
   if (failed(solver->initializeAndRun(funcOp)))
     return;
   auto *strideInfoMap = getFuncData(funcOp);
