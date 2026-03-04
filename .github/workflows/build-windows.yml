@@ -23,6 +23,9 @@ jobs:
     runs-on:
       - windows
     steps:
+      - name: llvm
+        uses: ./.github/workflows/build-llvm.yml
+
       - name: Checkout repository
         uses: actions/checkout@v6
 
