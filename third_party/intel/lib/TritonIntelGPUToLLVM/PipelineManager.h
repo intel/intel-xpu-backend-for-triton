@@ -225,6 +225,8 @@ public:
                                                benefit);
 
     intel::populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns, benefit);
+    intel::populateTensorDescOpsToLLVMPatterns(typeConverter, patterns,
+                                               benefit);
     intel::populateHistogramOpToLLVMPatterns(typeConverter, patterns,
                                              targetInfo, benefit);
     intel::populatePrintOpToLLVMPattern(typeConverter, patterns, targetInfo,

@@ -1,6 +1,8 @@
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Utils/Utility.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
@@ -8,6 +10,7 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -48,6 +51,112 @@ Attribute maybeGetDefaultBlockedEncoding(Operation *op,
   return ttg::getDefaultBlockedEncoding(
       builder.getContext(), shape, ttg::lookupNumWarps(op),
       ttg::lookupThreadsPerWarp(builder), ttg::lookupNumCTAs(builder));
+}
+
+// Recursively collect all encodings from DescriptorLoadOp/DescriptorStoreOp
+// users, following through loop arguments and other passthrough operations.
+void collectEncodingsFromUsers(Value value, SmallPtrSetImpl<Value> &visited,
+                               llvm::SetVector<Attribute> &encodings) {
+  if (!visited.insert(value).second)
+    return;
+
+  for (Operation *user : value.getUsers()) {
+    // Direct load/store user.
+    if (auto loadOp = dyn_cast<tt::DescriptorLoadOp>(user)) {
+      if (auto encoding =
+              cast<RankedTensorType>(loadOp.getType()).getEncoding())
+        encodings.insert(encoding);
+      continue;
+    }
+    if (auto storeOp = dyn_cast<tt::DescriptorStoreOp>(user)) {
+      if (auto encoding =
+              cast<RankedTensorType>(storeOp.getSrc().getType()).getEncoding())
+        encodings.insert(encoding);
+      continue;
+    }
+
+    // Follow through loop arguments.
+    if (auto forOp = dyn_cast<scf::ForOp>(user)) {
+      for (auto [initArg, regionArg] :
+           llvm::zip(forOp.getInitArgs(), forOp.getRegionIterArgs())) {
+        if (initArg == value)
+          collectEncodingsFromUsers(regionArg, visited, encodings);
+      }
+      continue;
+    }
+    if (auto whileOp = dyn_cast<scf::WhileOp>(user)) {
+      for (auto [initArg, beforeArg] :
+           llvm::zip(whileOp.getInits(), whileOp.getBeforeArguments())) {
+        if (initArg == value)
+          collectEncodingsFromUsers(beforeArg, visited, encodings);
+      }
+      continue;
+    }
+
+    // Follow through scf.condition to while's "after" region args.
+    if (auto conditionOp = dyn_cast<scf::ConditionOp>(user)) {
+      if (auto whileOp = dyn_cast<scf::WhileOp>(conditionOp->getParentOp())) {
+        for (auto [condArg, afterArg] :
+             llvm::zip(conditionOp.getArgs(), whileOp.getAfterArguments())) {
+          if (condArg == value)
+            collectEncodingsFromUsers(afterArg, visited, encodings);
+        }
+      }
+      continue;
+    }
+
+    // Follow through yield to loop results and back to region iter args.
+    if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
+      if (auto forOp = dyn_cast<scf::ForOp>(yieldOp->getParentOp())) {
+        for (auto [yieldedVal, result, regionArg] :
+             llvm::zip(yieldOp.getOperands(), forOp.getResults(),
+                       forOp.getRegionIterArgs())) {
+          if (yieldedVal == value) {
+            collectEncodingsFromUsers(result, visited, encodings);
+            collectEncodingsFromUsers(regionArg, visited, encodings);
+          }
+        }
+      } else if (auto whileOp =
+                     dyn_cast<scf::WhileOp>(yieldOp->getParentOp())) {
+        // Yield in while's "after" region goes back to "before" region args
+        // and to loop results.
+        for (auto [yieldedVal, result, beforeArg] :
+             llvm::zip(yieldOp.getOperands(), whileOp.getResults(),
+                       whileOp.getBeforeArguments())) {
+          if (yieldedVal == value) {
+            collectEncodingsFromUsers(result, visited, encodings);
+            collectEncodingsFromUsers(beforeArg, visited, encodings);
+          }
+        }
+      } else if (auto ifOp = dyn_cast<scf::IfOp>(yieldOp->getParentOp())) {
+        // Yield in if's then/else region goes to the if's results.
+        for (auto [yieldedVal, result] :
+             llvm::zip(yieldOp.getOperands(), ifOp.getResults())) {
+          if (yieldedVal == value)
+            collectEncodingsFromUsers(result, visited, encodings);
+        }
+      }
+      continue;
+    }
+
+    // Follow through select op.
+    if (auto selectOp = dyn_cast<arith::SelectOp>(user)) {
+      collectEncodingsFromUsers(selectOp.getResult(), visited, encodings);
+      continue;
+    }
+  }
+}
+
+// Find the single encoding from all users of a value.
+// Asserts if multiple different encodings are found.
+Attribute findEncodingFromUsers(Value value) {
+  SmallPtrSet<Value, 8> visited;
+  llvm::SetVector<Attribute> encodings;
+  collectEncodingsFromUsers(value, visited, encodings);
+
+  assert(encodings.size() <= 1 &&
+         "MakeTensorDescOp with multiple encodings is not yet supported");
+  return encodings.empty() ? Attribute() : encodings.front();
 }
 
 struct TritonIntelTensorDescToBlockPointer
@@ -216,7 +325,12 @@ private:
       sizes.push_back(size);
     }
 
-    Attribute layout = maybeGetDefaultBlockedEncoding(op, sizes);
+    Attribute layout = findEncodingFromUsers(op.getResult());
+    // FIXME: Handle the case where layout and current MakeTensorDescOp has
+    // different rank.
+    if (layout &&
+        cast<ttg::LayoutEncodingTrait>(layout).getRank() != sizes.size())
+      layout = maybeGetDefaultBlockedEncoding(op, sizes);
     auto tensorPtr = findOrCreateMakeTensorPtr(
         loc, op.getBase(), shapes, strides, offsets, sizes, layout, builder);
     LLVM_DEBUG({
@@ -263,8 +377,10 @@ private:
     // the pipeline, then we need to handle also non-default layouts.
     [[maybe_unused]] Attribute defaultLayout =
         maybeGetDefaultBlockedEncoding(op, opTensorType.getShape());
-    assert(opTensorType.getEncoding() == defaultLayout &&
-           "Expecting the default blocked encoding");
+    assert((opTensorType.getShape() == descTensorType.getShape()
+                ? opTensorType.getEncoding() == descTensorType.getEncoding()
+                : opTensorType.getEncoding() == defaultLayout) &&
+           "Expecting the same encoding (TODO for different shapes)");
 
     Value ptr =
         tt::AdvanceOp::create(builder, loc, ptrType, operand, op.getIndices());
