@@ -133,6 +133,25 @@ tt.func @mul(%arg0: i64 {tt.divisibility = 16 : i32}) {
 
 // -----
 
+// CHECK-LABEL: @mul_stride
+tt.func @mul_stride() {
+  // CHECK: stride = [1]
+  %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
+  // CHECK-NEXT: stride = [0], {{.*}}constant_value = 2
+  %pos1 = arith.constant dense<2> : tensor<128xi32>
+  // CHECK-NEXT: stride = [2]
+  %1 = arith.muli %0, %pos1 : tensor<128xi32>
+
+  // CHECK-NEXT: stride = [0], {{.*}}constant_value = -2
+  %neg1 = arith.constant dense<-2> : tensor<128xi32>
+  // CHECK-NEXT: stride = [-1]
+  %2 = arith.muli %0, %neg1 : tensor<128xi32>
+  tt.return
+}
+
+// -----
+
+
 // CHECK-LABEL: @div
 tt.func @div() {
   // CHECK: contiguity = [128], divisibility = [1073741824], constancy = [1], constant_value = <none>
@@ -162,6 +181,34 @@ tt.func @div() {
   tt.return
 }
 
+// -----
+
+// CHECK-LABEL: @div_stride
+tt.func @div_stride() {
+  // CHECK: stride = [1]
+  %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
+  // CHECK-NEXT: stride = [0], {{.*}}constant_value = 4
+  %c4 = arith.constant dense<4> : tensor<128xi32>
+  // CHECK-NEXT: stride = [4]
+  %1 = arith.muli %0, %c4 : tensor<128xi32>
+  // CHECK-NEXT: stride = [0], {{.*}}constant_value = 2
+  %c2 = arith.constant dense<2> : tensor<128xi32>
+  // CHECK-NEXT: stride = [2]
+  %2 = arith.divsi %1, %c2 : tensor<128xi32>
+
+  // CHECK-NEXT: stride = [0], {{.*}}constant_value = -2
+  %neg1 = arith.constant dense<-2> : tensor<128xi32>
+  // CHECK-NEXT: stride = [-1]
+  %3 = arith.divsi %0, %neg1 : tensor<128xi32>
+
+  // CHECK: stride = [0]
+  %cst = arith.constant dense<4> : tensor<128xi32>
+  // CHECK-NEXT: stride = [0], {{.*}}constant_value = 0
+  %zero = arith.constant dense<0> : tensor<128xi32>
+  // CHECK-NEXT: stride = [-1]
+  %4 = arith.divsi %cst, %zero : tensor<128xi32>
+  tt.return
+}
 
 // -----
 
@@ -185,6 +232,71 @@ tt.func @rem() {
   %7 = arith.constant dense<66> : tensor<128xi32>
   // CHECK-NEXT: contiguity = [2], divisibility = [2], constancy = [1], constant_value = <none>
   %8 = arith.remui %0, %7 : tensor<128xi32>
+  tt.return
+}
+
+// -----
+
+// CHECK-LABEL: @rem_stride
+tt.func @rem_stride(%arg0: i32) {
+  // CHECK: stride = [1], contiguity = [32], divisibility = [1073741824], constancy = [1], constant_value = <none>
+  %range = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32>
+  // CHECK-NEXT: stride = [0], contiguity = [1], divisibility = [8], constancy = [32], constant_value = 8
+  %c8 = arith.constant dense<8> : tensor<32xi32>
+  // CHECK-NEXT: stride = [0], contiguity = [1], divisibility = [64], constancy = [32], constant_value = 64
+  %c64 = arith.constant dense<64> : tensor<32xi32>
+  // CHECK-NEXT: stride = [0], contiguity = [1], divisibility = [1], constancy = [32], constant_value = 5
+  %c5 = arith.constant dense<5> : tensor<32xi32>
+  // CHECK-NEXT: stride = [1], contiguity = [32], divisibility = [2], constancy = [1], constant_value = <none>
+  %rhs_range = tt.make_range {end = 34 : i32, start = 2 : i32} : tensor<32xi32>
+  // CHECK-NEXT: stride = [0], contiguity = [1], divisibility = [1], constancy = [32], constant_value = <none>
+  %splat_arg = tt.splat %arg0 : i32 -> tensor<32xi32>
+  // CHECK-NEXT: stride = [-1], contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>
+  %unknown = arith.muli %range, %splat_arg : tensor<32xi32>
+  // CHECK-NEXT: stride = [0], contiguity = [1], divisibility = [1], constancy = [32], constant_value = 5
+  %rem_00 = arith.remsi %c5, %c8 : tensor<32xi32>
+  // CHECK-NEXT: stride = [-1]
+  %rem_0u = arith.remsi %c5, %unknown : tensor<32xi32>
+  // CHECK-NEXT: stride = [-1]
+  %rem_0p = arith.remsi %c5, %rhs_range : tensor<32xi32>
+  // CHECK-NEXT: stride = [1]
+  %rem_p0_nowrap = arith.remsi %range, %c64 : tensor<32xi32>
+  // CHECK-NEXT: stride = [-1]
+  %rem_p0_wrap = arith.remsi %range, %c8 : tensor<32xi32>
+  // CHECK-NEXT: stride = [-1]
+  %rem_pu = arith.remsi %range, %unknown : tensor<32xi32>
+  // CHECK-NEXT: stride = [-1]
+  %rem_pp = arith.remsi %range, %rhs_range : tensor<32xi32>
+  // CHECK-NEXT: stride = [-1]
+  %rem_uu = arith.remsi %unknown, %unknown : tensor<32xi32>
+  // CHECK-NEXT: stride = [-1]
+  %rem_u0 = arith.remsi %unknown, %c8 : tensor<32xi32>
+  // CHECK-NEXT: stride = [-1]
+  %rem_up = arith.remsi %unknown, %rhs_range : tensor<32xi32>
+  tt.return
+}
+
+// -----
+
+// CHECK-LABEL: @rem_stride_divisibility
+tt.func @rem_stride_divisibility() {
+  // CHECK: stride = [1], contiguity = [4], divisibility = [1], constancy = [1], constant_value = <none>
+  %range_unaligned = tt.make_range {end = 7 : i32, start = 3 : i32} : tensor<4xi32>
+  // CHECK-NEXT: stride = [1], contiguity = [4], divisibility = [16], constancy = [1], constant_value = <none>
+  %range_aligned = tt.make_range {end = 20 : i32, start = 16 : i32} : tensor<4xi32>
+  // CHECK-NEXT: stride = [0], contiguity = [1], divisibility = [4], constancy = [4], constant_value = 4
+  %c4 = arith.constant dense<4> : tensor<4xi32>
+  // CHECK-NEXT: stride = [-1]
+  %rem_unaligned = arith.remsi %range_unaligned, %c4 : tensor<4xi32>
+  // CHECK-NEXT: stride = [1]
+  %rem_aligned = arith.remsi %range_aligned, %c4 : tensor<4xi32>
+  // CHECK-NEXT: stride = [1], contiguity = [32], divisibility = [1073741824], constancy = [1], constant_value = <none>
+  %range32 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32>
+  // CHECK-NEXT: stride = [0], contiguity = [1], divisibility = [8], constancy = [32], constant_value = 8
+  %c8 = arith.constant dense<8> : tensor<32xi32>
+  // CHECK-NEXT: stride = [-1]
+  %rem_aligned_wrap = arith.remsi %range32, %c8 : tensor<32xi32>
+
   tt.return
 }
 
