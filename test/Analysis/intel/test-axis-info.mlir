@@ -133,6 +133,25 @@ tt.func @mul(%arg0: i64 {tt.divisibility = 16 : i32}) {
 
 // -----
 
+// CHECK-LABEL: @mul_stride
+tt.func @mul_stride() {
+  // CHECK: stride = [1]
+  %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
+  // CHECK-NEXT: stride = [0], {{.*}}constant_value = 2
+  %pos1 = arith.constant dense<2> : tensor<128xi32>
+  // CHECK-NEXT: stride = [2]
+  %1 = arith.muli %0, %pos1 : tensor<128xi32>
+
+  // CHECK-NEXT: stride = [0], {{.*}}constant_value = -2
+  %neg1 = arith.constant dense<-2> : tensor<128xi32>
+  // CHECK-NEXT: stride = [-1]
+  %2 = arith.muli %0, %neg1 : tensor<128xi32>
+  tt.return
+}
+
+// -----
+
+
 // CHECK-LABEL: @div
 tt.func @div() {
   // CHECK: contiguity = [128], divisibility = [1073741824], constancy = [1], constant_value = <none>
@@ -162,6 +181,34 @@ tt.func @div() {
   tt.return
 }
 
+// -----
+
+// CHECK-LABEL: @div_stride
+tt.func @div_stride() {
+  // CHECK: stride = [1]
+  %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
+  // CHECK-NEXT: stride = [0], {{.*}}constant_value = 4
+  %c4 = arith.constant dense<4> : tensor<128xi32>
+  // CHECK-NEXT: stride = [4]
+  %1 = arith.muli %0, %c4 : tensor<128xi32>
+  // CHECK-NEXT: stride = [0], {{.*}}constant_value = 2
+  %c2 = arith.constant dense<2> : tensor<128xi32>
+  // CHECK-NEXT: stride = [2]
+  %2 = arith.divsi %1, %c2 : tensor<128xi32>
+
+  // CHECK-NEXT: stride = [0], {{.*}}constant_value = -2
+  %neg1 = arith.constant dense<-2> : tensor<128xi32>
+  // CHECK-NEXT: stride = [-1]
+  %3 = arith.divsi %0, %neg1 : tensor<128xi32>
+
+  // CHECK: stride = [0]
+  %cst = arith.constant dense<4> : tensor<128xi32>
+  // CHECK-NEXT: stride = [0], {{.*}}constant_value = 0
+  %zero = arith.constant dense<0> : tensor<128xi32>
+  // CHECK-NEXT: stride = [-1]
+  %4 = arith.divsi %cst, %zero : tensor<128xi32>
+  tt.return
+}
 
 // -----
 
