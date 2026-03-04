@@ -24,7 +24,7 @@ if (NOT SPIRVToLLVMTranslator_FOUND)
     set(SPIRVToLLVMTranslator_BINARY_DIR "${CMAKE_BINARY_DIR}/_deps/spirv-llvm-translator-build")
 
     # indirect check that translator build succeeded
-    if(DEFINED LLVM_EXTERNAL_SPIRV_HEADERS_SOURCE_DIR)
+    if(DEFINED SPIRVToLLVMTranslator_LAST_TAG AND SPIRVToLLVMTranslator_LAST_TAG STREQUAL SPIRVToLLVMTranslator_TAG)
             message(STATUS "Using existing SPIRV-LLVM-Translator sources at ${SPIRVToLLVMTranslator_SOURCE_DIR}")
 
             # Import targets directly without FetchContent_MakeAvailable()
@@ -66,6 +66,9 @@ if (NOT SPIRVToLLVMTranslator_FOUND)
     set(LLVM_EXTERNAL_SPIRV_HEADERS_SOURCE_DIR
             "${CMAKE_BINARY_DIR}/_deps/spirv-llvm-translator-build/SPIRV-Headers"
             CACHE STRING "Path to SPIRV-Headers" FORCE)
+    set(SPIRVToLLVMTranslator_LAST_TAG
+            "${SPIRVToLLVMTranslator_TAG}"
+            CACHE STRING "Last built SPIRV-LLVM-Translator tag" FORCE)
 
     find_package_handle_standard_args(
             SPIRVToLLVMTranslator
