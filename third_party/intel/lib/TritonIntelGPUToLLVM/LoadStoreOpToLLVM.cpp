@@ -580,6 +580,14 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     if (makeTensorDesc->getPadding() != triton::PaddingOption::PAD_ZERO)
       return false;
 
+    // Reject non-contiguous inner dimension.
+    Value innerStride = makeTensorDesc->getStrides().back();
+    std::optional<int64_t> cst = mlir::getConstantIntValue(innerStride);
+    if (!cst || *cst != 1) {
+      LDBG("descriptor inner stride is not constant 1; skipping block IO");
+      return false;
+    }
+
     static const bool enableBlockIOForAllLayout =
         triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS");
     return enableBlockIOForAllLayout || hasDpasEncoding(tensorTy) ||
@@ -1364,10 +1372,9 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
       // For shuffle the transposed Dot operands matrix, we can shuffle the
       // loaded matrix in an reverse order.
       auto invertMapping = regMapping.invert();
-      for (unsigned numElemsPerSurjectiveTile = numElemsPerLoad;;
-           numElemsPerSurjectiveTile >>= 1) {
-        assert(numElemsPerSurjectiveTile > 0 &&
-               "cannot find surjective layout for transpose.");
+      bool foundSurjective = false;
+      for (unsigned numElemsPerSurjectiveTile = numElemsPerLoad;
+           numElemsPerSurjectiveTile > 0; numElemsPerSurjectiveTile >>= 1) {
         auto layout =
             invertMapping.resizeInDim(kRegister, numElemsPerSurjectiveTile)
                 .resizeOutDim(kRegister, numElemsPerSurjectiveTile);
@@ -1376,9 +1383,12 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
               layout * LinearLayout::identity1D(numElemsPerLoad /
                                                     numElemsPerSurjectiveTile,
                                                 kRegister, kRegister);
+          foundSurjective = true;
           break;
         }
       }
+      if (!foundSurjective)
+        return failure();
     }
 
     if (numPackedVals > 1 && (widthToTranspose) != threadsPerWarp)
@@ -1451,11 +1461,13 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
         unpackedVal = b.select(pred, unpackedVal, other);
       } else if (nanMaskElems.size() != 0) {
         Type unpackedElemType = getElementTypeOrSelf(unpackedType);
+        auto floatType = cast<FloatType>(unpackedElemType);
 
         SmallVector<Attribute> constOtherElems;
         for (auto i = 0; i < numElemsPerUnpackedType; ++i) {
-          constOtherElems.push_back(FloatAttr::get(
-              unpackedElemType, APFloat::getNaN(APFloat::IEEEsingle())));
+          constOtherElems.push_back(
+              FloatAttr::get(unpackedElemType,
+                             APFloat::getNaN(floatType.getFloatSemantics())));
         }
 
         Value other = b.const_val(
@@ -2421,13 +2433,9 @@ struct DescriptorLoadOpToBlockIOConversion
     assert(llEncoding.has_value() &&
            "unexpected failure when getting linear layout");
 
-    // Descriptors are expected to be row-major (stride-1 on last dim).
-    // The tile size computation in getBlockIOTileSize() implicitly validates
-    // layout compatibility and sets isTransposeRequired for column-major
-    // operands. An explicit layout order check was attempted but removed due
-    // to LinearLayout API mismatch (getOrder() returns StringAttr, not
-    // indices).
-    // TODO: Add explicit validation if LinearLayout gains a numeric order API.
+    // Contiguous inner dimension (stride-1) is validated by
+    // isDescriptorBlockIOCandidate(). getBlockIOTileSize() determines whether
+    // the encoding's fast-changing dimension requires a transpose.
     const unsigned rank = tensorType.getRank();
     unsigned contiguousDim = rank - 1;
 
@@ -2559,9 +2567,11 @@ struct DescriptorLoadOpToBlockIOConversion
                                         /*upperBound=*/nullptr));
 
     // Dimension mapping for offsets.
-    // When transpose is required, the row/col assignment to X/Y swaps.
-    unsigned c = isTransposeRequired ? rowDim : colDim;
-    unsigned r = isTransposeRequired ? colDim : rowDim;
+    // When transpose is required, the row/col assignment to X/Y swaps:
+    //   X (block load column offset) maps to the fast-changing dimension.
+    //   Y (block load row offset) maps to the slow-changing dimension.
+    unsigned colIdx = isTransposeRequired ? rowDim : colDim;
+    unsigned rowIdx = isTransposeRequired ? colDim : rowDim;
 
     SmallVector<Value> unpackedLoadedVals(numElems);
     for (size_t elemIdx = 0; elemIdx < numElems; elemIdx += numElemsPerLoad) {
@@ -2584,10 +2594,12 @@ struct DescriptorLoadOpToBlockIOConversion
       // Boundary check is always enabled for descriptors.
       for (auto [dim, offsetPair] : llvm::enumerate(offsets)) {
         Value adjustedOffset = b.add(descIndices[dim], offsetPair.second);
-        if (dim == r)
+        if (dim == rowIdx)
           offsetY = adjustedOffset;
-        else if (dim == c)
+        else if (dim == colIdx)
           offsetX = adjustedOffset;
+        else
+          assert(false && "unexpected dimension in rank-2 tensor offsets");
       }
 
       assert(numPackedVals > 0 && "numPackedVals should be greater than zero.");
