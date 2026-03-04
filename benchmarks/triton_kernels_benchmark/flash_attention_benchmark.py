@@ -639,7 +639,9 @@ def get_benchmark(
                                                  err_msg=f'Error comparing {name} between triton and torch')
                 triton_fn = lambda: triton_o.backward(dout, retain_graph=True)
 
-            _, min_ms, max_ms, mean, cv = do_bench(triton_fn, grad_to_none=(q, k, v))
+            _, min_ms, max_ms, mean, cv = do_bench(
+                triton_fn, grad_to_none=(q, k, v),
+                benchmark_label='__profile_kernel_of_func_bwd_fa' if MODE == 'bwd' else None)
 
         elif provider == 'xetla':
             if MODE == 'bwd':

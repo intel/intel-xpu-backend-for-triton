@@ -408,3 +408,27 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
     tt.return
   }
 }
+
+// -----
+
+// CHECK: #[[$BLOCKED:.+]] = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [2, 1], order = [1, 0]}>
+// CHECK-NOT: #ttg.blocked
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 2], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [2, 1], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 2 : i32, ttig.support_2d_block_io} {
+// CHECK-LABEL: @test_tdesc_layout_backward
+  tt.func public @test_tdesc_layout_backward(%ptr: !tt.ptr<f16>) -> tensor<4x128xf16, #blocked1> {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i64
+    %c128 = arith.constant 128 : i64
+    %c128_i32 = arith.constant 128 : i32
+    %xoffset = tt.get_program_id x : i32
+    %desc = tt.make_tensor_descriptor %ptr, [%c128_i32, %c128_i32], [%c128, %c1] : <f16>, <tensor<4x128xf16>>
+    %val = tt.descriptor_load %desc[%xoffset, %c0] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<4x128xf16>> -> tensor<4x128xf16, #blocked>
+    // CHECK: tt.descriptor_load {{.*}} -> tensor<4x128xf16, #[[$BLOCKED]]>
+    // CHECK-NOT: ttg.convert_layout
+    // CHECK: tt.return
+    %0 = ttg.convert_layout %val : tensor<4x128xf16, #blocked> -> tensor<4x128xf16, #blocked1>
+    tt.return %0 : tensor<4x128xf16, #blocked1>
+  }
+}

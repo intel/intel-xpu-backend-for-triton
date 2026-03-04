@@ -1082,7 +1082,8 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
 }
 
 bool canBeRemat(Operation *op) {
-  if (isa<tt::LoadOp, tt::StoreOp>(op))
+  if (isa<tt::LoadOp, tt::StoreOp, tt::DescriptorLoadOp, tt::DescriptorStoreOp>(
+          op))
     return !ttgi::isExpensiveLoadOrStore(op);
   if (isa<tt::AtomicRMWOp, tt::AtomicCASOp, tt::DotOp>(op))
     return false;
