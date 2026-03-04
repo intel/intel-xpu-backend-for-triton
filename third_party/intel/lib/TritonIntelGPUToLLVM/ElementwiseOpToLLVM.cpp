@@ -42,32 +42,22 @@ Fp16_to_Fp8E5M2_RTZ(Location loc, ConversionPatternRewriter &rewriter,
           b.extract_element(i8_ty, a1, b.i32_val(3))};
 }
 
+// f8E5M2 → f16 conversion by bit expansion.
+// Both formats use a 5-bit exponent, so we just shift left by 8:
+// (uint16_t)fp8 << 8 preserves sign and exponent and pads mantissa with zeros.
 static SmallVector<Value> Fp8E5M2_to_Fp16(Location loc,
                                           ConversionPatternRewriter &rewriter,
                                           const SmallVector<Value> &v) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto fp8x4VecTy = vec_ty(i8_ty, 4);
-  Value a0 = b.undef(fp8x4VecTy);
-  a0 = b.insert_element(fp8x4VecTy, a0, b.int_val(8, 0), b.i32_val(0));
-  a0 = b.insert_element(fp8x4VecTy, a0, v[0], b.i32_val(1));
-  a0 = b.insert_element(fp8x4VecTy, a0, b.int_val(8, 0), b.i32_val(2));
-  a0 = b.insert_element(fp8x4VecTy, a0, v[1], b.i32_val(3));
-  a0 = b.bitcast(a0, i32_ty);
-  Value a1 = b.undef(fp8x4VecTy);
-  a1 = b.insert_element(fp8x4VecTy, a1, b.int_val(8, 0), b.i32_val(0));
-  a1 = b.insert_element(fp8x4VecTy, a1, v[2], b.i32_val(1));
-  a1 = b.insert_element(fp8x4VecTy, a1, b.int_val(8, 0), b.i32_val(2));
-  a1 = b.insert_element(fp8x4VecTy, a1, v[3], b.i32_val(3));
-  a1 = b.bitcast(a1, i32_ty);
-
-  auto fp16x2VecTy = vec_ty(f16_ty, 2);
-  auto fp16x2Vec0 = b.bitcast(a0, fp16x2VecTy);
-  auto fp16x2Vec1 = b.bitcast(a1, fp16x2VecTy);
-
-  return {b.extract_element(f16_ty, fp16x2Vec0, b.i32_val(0)),
-          b.extract_element(f16_ty, fp16x2Vec0, b.i32_val(1)),
-          b.extract_element(f16_ty, fp16x2Vec1, b.i32_val(0)),
-          b.extract_element(f16_ty, fp16x2Vec1, b.i32_val(1))};
+  SmallVector<Value> result;
+  result.reserve(v.size());
+  for (auto &elem : v) {
+    Value ext = b.zext(i16_ty, elem);
+    Value shifted = b.shl(i16_ty, ext, b.i16_val(8));
+    Value fp16 = b.bitcast(shifted, f16_ty);
+    result.push_back(fp16);
+  }
+  return result;
 }
 
 static SmallVector<Value> Fp8E5M2_to_Bf16(Location loc,

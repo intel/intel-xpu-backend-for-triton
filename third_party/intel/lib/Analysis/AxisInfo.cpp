@@ -576,6 +576,34 @@ public:
   using BinaryOpVisitorImpl<OpTy>::BinaryOpVisitorImpl;
 
 private:
+  int64_t getStride(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
+                    int dim) override {
+    if (lhs.getStride(dim) == 0 && rhs.getStride(dim) == 0)
+      return 0;
+    if (lhs.getStride(dim) > 0 && rhs.getConstantValue().has_value()) {
+      int64_t modulus = rhs.getConstantValue().value();
+      // The first element of lhs (mod modulus) plus the range span must not
+      // cross a modulus boundary; otherwise wrap-around breaks the stride.
+      //   lhs = [3, 4, 5, 6] % 4:  3 + 3 >= 4  -> stride broken
+      //   lhs = [16, 17, 18, 19] % 4:  0 + 3 < 4  -> stride preserved
+      // The first element is some multiple of lhs.getDivisibility(dim), so
+      // (first % modulus) is a multiple of gcd(divisibility, modulus).  The
+      // worst case is modulus - gcd(divisibility, modulus), so we need:
+      //   maxVal < gcd(divisibility, modulus)
+      if (modulus > 0) {
+        auto resTy = ttgi::getRankedTensorType(op.getType());
+        if (resTy) {
+          int64_t dimSize = resTy.getDimSize(dim);
+          int64_t maxVal = lhs.getStride(dim) * (dimSize - 1);
+          int64_t g = std::gcd(lhs.getDivisibility(dim), modulus);
+          if (maxVal < g)
+            return lhs.getStride(dim);
+        }
+      }
+    }
+    return -1;
+  }
+
   int64_t getContiguity(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                         int dim) override {
     auto resTy = ttgi::getRankedTensorType(op.getType());
