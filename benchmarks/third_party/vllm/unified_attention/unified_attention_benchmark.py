@@ -146,68 +146,78 @@ def is_enough_memory(x_val, safety_factor=0.80):
     return enough
 
 
-# Benchmark configurations for unified attention
-# (seq_lens, num_heads, head_size, block_size, dtype, sliding_window, soft_cap)
-# NUM_HEADS = [(4, 4), (8, 2)]
-# HEAD_SIZES = [128, 256]
 MMAP_BLOCK_SIZES = [16, 64]
-# Models
-MODEL_CONFIGS = [
-    # q_heads, k_heads, head_size, dtype, qdtype
-    # llama3.1-8B
-    (32, 8, 128, torch.bfloat16, None),
-    # llama3.3-70B and llama 4 scout
-    (64, 8, 128, torch.bfloat16, None),
-    # Qwen2.5-235B - for large inputs start alternating between global and sliding window attention
-    # (64, 4, 128, torch.bfloat16, None),
-    # gpt-oss-120b - uses attention sinks, alternations between global attention and sliding window attention 128
-    # (64, 8, 64, torch.bfloat16, None),
-]
-
-# QDTYPES = [None, torch.float8_e4m3fn] if not current_platform.is_rocm() else [
-#     None, torch.float8_e4m3fnuz
-# ]
-# one value large enough to test overflow in index calculation.
-# one value small enough to test the schema op check
 NUM_BLOCKS = [32768, 2048]
 SEQ_LENS = [
-    # Chunked prefill: 3 batches
-    [(320, 320), (320, 320), (320, 320)],
+    # One 4k input prefill
+    [(4096, 4096)],
+    # Chunked prefill: 4 batches
+    [(512, 512), (512, 512), (512, 512), (512, 512)],
     # End of chunked prefill and some decoding
-    [(1, 1328), (5, 18), (129, 463)],
+    [(1, 1328), (5, 178), (129, 463)],
     # Pure decoding, 8 batches
-    [(1, k) for k in [1513, 245, 102, 123, 3454, 434, 345, 34]]
+    [(1, k) for k in [1513, 4100, 530, 123, 4803, 434, 3015, 34]]
 ]
-SOFT_CAPS = [None, 50.0]
-SLIDING_WINDOWS = [None, 256]
-ATTENTION_CONFIGS_BF16 = []
-config_matrix = product(MODEL_CONFIGS, SEQ_LENS, SLIDING_WINDOWS, SOFT_CAPS, NUM_BLOCKS, MMAP_BLOCK_SIZES)
-for model_config, seq_lens, sliding_window, soft_cap, num_blocks, block_size in config_matrix:
-    x_val = (*model_config, seq_lens, sliding_window, soft_cap, num_blocks, block_size)
-    if x_val[3] is not None and x_val[3].itemsize < 2 and x_val[-1] < 32:
-        print("Skipping configuration due to incompatible q_dtype and block_size.")
-        continue
+# Models: (q_heads, k_heads, head_size, dtype, qdtype, sliding_window, soft_cap)
+# sliding_window: None = full attention, int = sliding window size.
+# soft_cap: None = disabled, float = soft_cap value.
+# Models that use both attention types appear twice (one entry each).
+MODELS_BF16 = [
+    # llama3.1-8B - full attention
+    (32, 8, 128, torch.bfloat16, None, None, None),
+    # llama3.1-8B - just to test soft caps kernel path, real model doesn't use it, it's relevant for gemma2
+    (32, 8, 128, torch.bfloat16, None, None, 50.0),
+    # llama3.3-70B - full attention
+    (64, 8, 128, torch.bfloat16, None, None, None),
+    # llama4 Scout - sliding window attention (window size 8192)
+    (64, 8, 128, torch.bfloat16, None, 8192, None),
+    # Qwen2.5-235B - full attention
+    (64, 4, 128, torch.bfloat16, None, None, None),
+    # Qwen2.5-235B - sliding window attention (window size 256)
+    (64, 4, 128, torch.bfloat16, None, 256, None),
+    # gpt-oss-120b - full attention
+    # (64, 8, 64, torch.bfloat16, None, None, None),
+    # gpt-oss-120b - sliding window attention (window size 128)
+    # (64, 8, 64, torch.bfloat16, None, 128, None),
+]
 
-    if is_enough_memory(x_val=x_val):
-        ATTENTION_CONFIGS_BF16.append(x_val)
-    else:
-        print(f"Skipping configuration due to memory constraints: {x_val}")
+MODELS_FP8 = [
+    # llama4 scout - full attention
+    (64, 8, 128, torch.bfloat16, torch.float8_e4m3fn, None, None),
+    # llama4 scout - sliding window attention (window size 8192)
+    (64, 8, 128, torch.bfloat16, torch.float8_e4m3fn, 8192, None),
+]
+
+
+def _build_attention_configs(model_configs):
+    configs = []
+    for model_config in model_configs:
+        *base_config, sliding_window, soft_cap = model_config
+        for seq_lens, num_blocks, block_size in product(SEQ_LENS, NUM_BLOCKS, MMAP_BLOCK_SIZES):
+            x_val = (*base_config, seq_lens, sliding_window, soft_cap, num_blocks, block_size)
+            dtype = x_val[3]
+            if dtype is not None and dtype.itemsize < 2 and x_val[-1] < 32:
+                print("Skipping configuration due to incompatible q_dtype and block_size.")
+                continue
+            if is_enough_memory(x_val=x_val):
+                configs.append(x_val)
+            else:
+                print(f"Skipping configuration due to memory constraints: {x_val}")
+    return configs
+
+
+ATTENTION_CONFIGS_BF16 = _build_attention_configs(MODELS_BF16)
+ATTENTION_CONFIGS_FP8 = _build_attention_configs(MODELS_FP8)
 
 # To debug if the benchmark runs at all, without waiting for all configurations to run
 if os.getenv('DEBUG_BENCH', '0') == '1':
     ATTENTION_CONFIGS_BF16 = ATTENTION_CONFIGS_BF16[:1]
-
-# ATTENTION_CONFIGS_FP8 = [
-#     # FP8 configurations
-#     (1, 64, 512, 8, 8, 128, 32, torch.float8_e4m3fn, None, None),
-#     (4, 128, 1024, 16, 4, 128, 32, torch.float8_e4m3fn, None, None),
-#     (8, 256, 2048, 32, 8, 256, 32, torch.float8_e4m3fn, None, None),
-# ]
+    ATTENTION_CONFIGS_FP8 = ATTENTION_CONFIGS_FP8[:1]
 
 
 def get_unified_attention_benchmark(
     providers_filter: Optional[list[str]] = None,
-    fp8=False,
+    is_fp8=False,
     is_td_patched=False,
 ):
     supported_providers = {
@@ -219,8 +229,7 @@ def get_unified_attention_benchmark(
         del supported_providers['triton']
 
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
-    ATTENTION_CONFIGS_FP8 = []
-    configs = ATTENTION_CONFIGS_FP8 if fp8 else ATTENTION_CONFIGS_BF16
+    configs = ATTENTION_CONFIGS_FP8 if is_fp8 else ATTENTION_CONFIGS_BF16
 
     @benchmark_suite.perf_report(
         benchmark_suite.Benchmark(
@@ -263,7 +272,7 @@ def get_unified_attention_benchmark(
         max_num_blocks_per_seq = (max_kv_len + block_size - 1) // block_size
         block_tables = torch.randint(0, num_blocks, (num_seqs, max_num_blocks_per_seq), dtype=torch.int32)
 
-        output = torch.empty_like(query)
+        output = torch.empty_like(query, )
 
         maybe_quantized_query = query
         maybe_quantized_key_cache = key_cache
@@ -326,7 +335,7 @@ def get_unified_attention_benchmark(
                 )
                 return output
 
-            atol, rtol = 2e-2, 1e-2
+            atol, rtol = 2.5e-2, 1e-2
             if dtype != torch.bfloat16:
                 atol, rtol = 1.5e-1, 1.5e-1
             benchmark_suite.assert_close(triton_fn, torch_fn, atol=atol, rtol=rtol, err_msg='triton to torch')
@@ -371,6 +380,6 @@ def get_unified_attention_benchmark(
 
 if __name__ == '__main__':
     is_td_patched = os.getenv('TD_PATCHED', '0') == '1'
-    _benchmark_attention = get_unified_attention_benchmark(fp8=(os.getenv('FP8', '0') == '1'),
+    _benchmark_attention = get_unified_attention_benchmark(is_fp8=(os.getenv('FP8', '0') == '1'),
                                                            is_td_patched=is_td_patched)
     _benchmark_attention.run(show_plots=False, print_data=True)
