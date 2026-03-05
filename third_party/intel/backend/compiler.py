@@ -36,7 +36,6 @@ class XPUOptions:
     optimize_epilogue: bool = False
     enable_fp_fusion: bool = True
     launch_cooperative_grid: bool = False
-    reduce_variable_liveness: bool = True
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e4nv", "fp8e4b15")
     deprecated_fp8_dot_operand_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "tf32"
@@ -316,9 +315,6 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_optimize_dot_operands(pm)
         intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.use_barrier)
-
-        if (opt.reduce_variable_liveness):
-            intel.passes.ttgpuir.add_reduce_variable_liveness(pm)
 
         passes.ttgpuir.add_fuse_nested_loops(pm)
 
