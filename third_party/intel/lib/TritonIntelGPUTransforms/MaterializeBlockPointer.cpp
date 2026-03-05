@@ -165,17 +165,33 @@ private:
 
     LDBG("Considering tensor of pointer of memory accessing op: " << op);
 
-    // The axis info gives the information about the value of the indices
-    // tensor. For example, if the indices tensor is tensor<8x16xi32> and
-    // its value is:
-    //   [[ 0,  1,  2,  3, ..., 12, 13, 14, 15],
-    //    [16, 17, 18, 19, ..., 28, 29, 30, 31],
+    // Axis info describes the value layout of the indices tensor.
+    //
+    // For example, consider an indices tensor of type tensor<8x16xi32> with
+    // values:
+    //   [[  0,  1,  2, ...,  15],
+    //    [ 16, 17, 18, ...,  31],
     //    ...
-    //    [ 96,  97,  98,  99, ..., 108, 109, 110, 111],
-    //    [112, 113, 114, 115, ..., 124, 125, 126, 127]]
-    // Then the global memory refer by the tensor pointer is row-major
-    // contiguous. And the axis info will be: stride: [16, 1],
-    // contiguity: [1, 16], divisibility: [1, 16], constancy: [1, 1].
+    //    [112,113,114, ...,127]]
+    //
+    // In this case, the global memory referenced by the tensor pointer is
+    // row-major contiguous.
+    //
+    // Axis info:
+    //   stride:      [16, 1]
+    //   contiguity:  [1, 16]
+    //
+    // The code inspects the last two dimensions to determine which dimension
+    // changes the fastest in memory. The remaining outer dimensions are treated
+    // as irrelevant batch dimensions.
+    //
+    // Case 1: The innermost dimension is the fast-changing one.
+    //   This corresponds to a row-major contiguous access pattern per 2d slice.
+    //   The axis info reflects this with stride [..., 1].
+    //
+    // Case 2: The second innermost dimension is the fast-changing one.
+    //   This corresponds to a column-major contiguous access pattern per 2d
+    //   slice. The axis info reflects this with stride [..., 1, X].
     const tt::AxisInfo *axisInfo = axisInfoAnalysis.getAxisInfo(ptr);
     unsigned rank = axisInfo->getRank();
     if (rank < 2) {

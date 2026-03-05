@@ -1122,7 +1122,7 @@ makeTensorPtrAxisInfo(ArrayRef<int64_t> blkShape, unsigned rank,
     strideInfo.emplace_back(operands[i]->getValue());
 
   int64_t ptrDivisibility = operands[0]->getValue().getDivisibility(0);
-  // Follow the regular pointer divisibility definition:
+  // Follow the regular pointer divisibility definition in tt.addptr:
   // On each dim, tt is "strided contiguous" with a divisilibity of
   // ptrDivisibility
   AxisInfo::DimVectorT divisibility(rank, ptrDivisibility);
