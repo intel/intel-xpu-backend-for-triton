@@ -95,12 +95,35 @@ bool isLongLifeSpanVariable(Value v, const LivenessBlockInfo *livenessBlockInfo,
       livenessBlockInfo->isLiveIn(v));
 }
 
+/// Returns true if `ptr` depends on a loop argument of `forOp`
+/// Used to check if the load pointer changes inside the loop.
+bool dependsOnForOpArgs(Value ptr, scf::ForOp forOp) {
+  SmallVector<Value> worklist;
+  DenseSet<Value> visited;
+  worklist.push_back(ptr);
+  while (!worklist.empty()) {
+    Value v = worklist.pop_back_val();
+    if (!visited.insert(v).second)
+      continue;
+    // Check if v is a block argument of the forOp body.
+    if (auto blockArg = dyn_cast<BlockArgument>(v)) {
+      if (blockArg.getOwner() == forOp.getBody())
+        return true;
+    }
+    if (Operation *defOp = v.getDefiningOp()) {
+      for (Value operand : defOp->getOperands())
+        worklist.push_back(operand);
+    }
+  }
+  return false;
+}
+
 /// Return true if the \p loadOp is suitable to be moved.
 /// \p expectedElementType is the element type expected for the load to be a
 /// candidate,
 /// \p forOp operation to which we want to move the loadOp
 bool isLoadCandidate(tt::LoadOp loadOp, Type expectedElementType,
-                     Operation *forOp) {
+                     scf::ForOp forOp) {
   if (!tt::isTensorOrTensorPointerType(loadOp.getPtr().getType()))
     return false;
   // LoadOps with non-null mask are not candidates.
@@ -122,6 +145,14 @@ bool isLoadCandidate(tt::LoadOp loadOp, Type expectedElementType,
   // Only loadOp out of the for loop body are considered to be moved
   if (loadOp->getParentOp() == forOp)
     return false;
+  // Don't sink loads with loop-invariant pointers. If the pointer doesn't
+  // depend on loop arguments, the load returns the same value every iteration.
+  if (!dependsOnForOpArgs(loadOp.getPtr(), forOp)) {
+    LLVM_DEBUG(llvm::dbgs()
+               << "ReduceVariableLiveness: skipping loop-invariant load: "
+               << loadOp << "\n");
+    return false;
+  }
   // Multiple users
   if (any_of(loadOp->getUsers(), [&](Operation *user) {
         return ((user->getBlock() == forOp->getBlock()) &&
