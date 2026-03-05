@@ -85,10 +85,10 @@ static std::optional<int64_t> getScalarIntConstant(Value v) {
 class StrideInfoVisitor {
 public:
   virtual ~StrideInfoVisitor() = default;
-  virtual StrideInfo
-  getStrideInfo(Operation *op,
-                ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) = 0;
-  virtual bool match(Operation *op) = 0;
+  virtual StrideInfo getStrideInfo(
+      Operation *op,
+      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const = 0;
+  virtual bool match(Operation *op) const = 0;
 
   void setAxisInfoLookup(AxisInfoLookupFn fn) {
     axisInfoLookup = std::move(fn);
@@ -103,13 +103,13 @@ class StrideInfoVisitorImpl : public StrideInfoVisitor {
 public:
   StrideInfo getStrideInfo(
       Operation *op,
-      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) final {
+      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const final {
     return getStrideInfo(cast<OpTy>(op), operands);
   }
-  bool match(Operation *op) final { return isa<OpTy>(op); }
-  virtual StrideInfo
-  getStrideInfo(OpTy op,
-                ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) = 0;
+  bool match(Operation *op) const final { return isa<OpTy>(op); }
+  virtual StrideInfo getStrideInfo(
+      OpTy op,
+      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const = 0;
 };
 
 class StrideInfoVisitorList {
@@ -124,8 +124,9 @@ public:
       v->setAxisInfoLookup(fn);
   }
 
-  StrideInfo apply(Operation *op,
-                   ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) {
+  StrideInfo
+  apply(Operation *op,
+        ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const {
     for (auto &v : visitors)
       if (v->match(op))
         return v->getStrideInfo(op, operands);
@@ -155,7 +156,7 @@ class PassThroughStrideVisitor final : public StrideInfoVisitorImpl<OpTy> {
 public:
   StrideInfo getStrideInfo(
       OpTy op,
-      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) override {
+      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
     return operands[0]->getValue();
   }
 };
@@ -165,7 +166,7 @@ class MakeRangeOpStrideVisitor final
 public:
   StrideInfo getStrideInfo(
       triton::MakeRangeOp op,
-      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) override {
+      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
     return StrideInfo({1});
   }
 };
@@ -174,7 +175,7 @@ class PoisonOpStrideVisitor final : public StrideInfoVisitorImpl<ub::PoisonOp> {
 public:
   StrideInfo getStrideInfo(
       ub::PoisonOp op,
-      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) override {
+      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
     return StrideInfo::getPessimisticValueState(op.getResult());
   }
 };
@@ -184,7 +185,7 @@ class ConstantOpStrideVisitor final : public StrideInfoVisitorImpl<OpTy> {
 public:
   StrideInfo getStrideInfo(
       OpTy op,
-      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) override {
+      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
     auto splatAttr = dyn_cast<SplatElementsAttr>(op.getValue());
     if (splatAttr && splatAttr.getElementType().isIntOrIndex()) {
       TensorType ty = cast<TensorType>(splatAttr.getType());
@@ -207,7 +208,7 @@ class AddSubStrideVisitor final : public StrideInfoVisitorImpl<OpTy> {
 public:
   StrideInfo getStrideInfo(
       OpTy op,
-      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) override {
+      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
     const auto &lhs = operands[0]->getValue();
     const auto &rhs = operands[1]->getValue();
     auto rank = lhs.getRank();
@@ -230,7 +231,7 @@ class MulIOpStrideVisitor final : public StrideInfoVisitorImpl<arith::MulIOp> {
 public:
   StrideInfo getStrideInfo(
       arith::MulIOp op,
-      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) override {
+      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
     const auto &lhs = operands[0]->getValue();
     const auto &rhs = operands[1]->getValue();
     auto rank = lhs.getRank();
@@ -266,7 +267,7 @@ class DivOpStrideVisitor final : public StrideInfoVisitorImpl<OpTy> {
 public:
   StrideInfo getStrideInfo(
       OpTy op,
-      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) override {
+      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
     const auto &lhs = operands[0]->getValue();
     const auto &rhs = operands[1]->getValue();
     auto rank = lhs.getRank();
@@ -293,7 +294,7 @@ class RemOpStrideVisitor final : public StrideInfoVisitorImpl<OpTy> {
 public:
   StrideInfo getStrideInfo(
       OpTy op,
-      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) override {
+      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
     const auto &lhs = operands[0]->getValue();
     const auto &rhs = operands[1]->getValue();
     auto rank = lhs.getRank();
@@ -342,7 +343,7 @@ class SplatOpStrideVisitor final
 public:
   StrideInfo getStrideInfo(
       triton::SplatOp op,
-      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) override {
+      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
     TensorType retTy = cast<TensorType>(*op->result_type_begin());
     return StrideInfo(StrideInfo::DimVectorT(retTy.getRank(), 0));
   }
@@ -352,7 +353,7 @@ class LoadOpStrideVisitor final : public StrideInfoVisitorImpl<triton::LoadOp> {
 public:
   StrideInfo getStrideInfo(
       triton::LoadOp op,
-      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) override {
+      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
     return StrideInfo::getPessimisticValueState(op.getResult());
   }
 };
@@ -362,7 +363,7 @@ class ExpandDimsOpStrideVisitor final
 public:
   StrideInfo getStrideInfo(
       triton::ExpandDimsOp op,
-      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) override {
+      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
     auto opStride = operands[0]->getValue().getStride();
     StrideInfo::DimVectorT stride(opStride.begin(), opStride.end());
     stride.insert(stride.begin() + op.getAxis(), 0);
@@ -375,7 +376,7 @@ class BroadcastOpStrideVisitor final
 public:
   StrideInfo getStrideInfo(
       triton::BroadcastOp op,
-      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) override {
+      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
     return operands[0]->getValue();
   }
 };
@@ -385,7 +386,7 @@ class TransOpStrideVisitor final
 public:
   StrideInfo getStrideInfo(
       triton::TransOp op,
-      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) override {
+      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
     const auto &srcInfo = operands[0]->getValue();
     auto order = op.getOrder();
     StrideInfo::DimVectorT stride;
@@ -401,7 +402,7 @@ class MakeTensorPtrOpStrideVisitor final
 public:
   StrideInfo getStrideInfo(
       triton::MakeTensorPtrOp op,
-      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) override {
+      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
     return makeTensorPtrStrideInfo(op.getStrides());
   }
 };
@@ -411,7 +412,7 @@ class MakeTensorDescOpStrideVisitor final
 public:
   StrideInfo getStrideInfo(
       triton::MakeTensorDescOp op,
-      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) override {
+      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
     return makeTensorPtrStrideInfo(op.getStrides());
   }
 };
@@ -421,7 +422,7 @@ class DescriptorLoadOpStrideVisitor final
 public:
   StrideInfo getStrideInfo(
       triton::DescriptorLoadOp op,
-      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) override {
+      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
     return StrideInfo::getPessimisticValueState(op.getResult());
   }
 };
