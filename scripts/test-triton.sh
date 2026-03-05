@@ -2,6 +2,30 @@
 
 set -euo pipefail
 
+# Dynamically discover language tests from test_*.py files in the language directory
+# CLI flag is --<name> (with _ replaced by -), variable is TEST_<NAME> (uppercase with _)
+# Excluded: "core" (conflicts with --core category), "mxfp" (handled specially as part of core)
+_script_dir="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+_language_test_dir="$_script_dir/../python/test/unit/language"
+LANGUAGE_TESTS=()
+for _f in "$_language_test_dir"/test_*.py; do
+  _name=$(basename "$_f" .py)       # test_annotations.py -> test_annotations
+  _name="${_name#test_}"            # test_annotations -> annotations
+  # Skip tests that conflict with existing CLI options
+  [[ "$_name" == "core" || "$_name" == "mxfp" ]] && continue
+  LANGUAGE_TESTS+=("$_name")
+done
+unset _language_test_dir _f _name
+
+# Build help text for language tests dynamically
+_language_help=""
+for _t in "${LANGUAGE_TESTS[@]}"; do
+  _flag="${_t//_/-}"  # Replace _ with -
+  _language_help+="    --${_flag}$(printf '%*s' $((18 - ${#_flag})) '')part of language
+"
+done
+unset _t _flag
+
 HELP="\
 Example usage: ./test-triton.sh [TEST]... [OPTION]...
 
@@ -21,6 +45,7 @@ TEST:
     --warnings        part of core
     --tools           part of core
     --regression      part of core
+    ${_language_help}
     --gluon
     --interpreter
     --proton
@@ -70,6 +95,10 @@ TEST_INTEL=false
 TEST_LANGUAGE=false
 TEST_MATMUL=false
 TEST_SCALED_DOT=false
+# Initialize all language test variables to false
+for _test in "${LANGUAGE_TESTS[@]}"; do
+  declare "TEST_${_test^^}=false"
+done
 TEST_RUNTIME=false
 TEST_DEBUG=false
 TEST_WARNINGS=false
@@ -331,7 +360,23 @@ while (( $# != 0 )); do
       exit 0
       ;;
     *)
-      err "Unknown argument: $1."
+      # Check if argument matches a language test (--<name> where <name> is in LANGUAGE_TESTS)
+      _test_name="${1#--}"           # Remove --
+      _test_name="${_test_name//-/_}" # Replace - with _
+      _matched=false
+      for _t in "${LANGUAGE_TESTS[@]}"; do
+        if [ "$_test_name" = "$_t" ]; then
+          declare "TEST_${_test_name^^}=true"
+          TEST_DEFAULT=false
+          _matched=true
+          break
+        fi
+      done
+      if [ "$_matched" = true ]; then
+        shift
+      else
+        err "Unknown argument: $1."
+      fi
       ;;
   esac
 done
@@ -419,47 +464,51 @@ run_intel_tests() {
     run_pytest_command --device xpu .
 }
 
-run_language_tests() {
+run_language_test() {
+  local suite_name="$1"
+  shift
+  local extra_args=("$@")
+
   echo "***************************************************"
-  echo "******     Running Triton Language tests     ******"
+  echo "******     Running Triton ${suite_name} tests     ******"
   echo "***************************************************"
   cd $TRITON_PROJ/python/test/unit
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE="$suite_name" \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu "language/test_${suite_name}.py" "${extra_args[@]}"
+}
+
+run_annotations_tests() { run_language_test annotations; }
+run_block_pointer_tests() { run_language_test block_pointer; }
+run_compile_errors_tests() { run_language_test compile_errors; }
+run_compile_only_tests() { run_language_test compile_only; }
+run_conversions_tests() { run_language_test conversions; }
+run_core_language_tests() { run_language_test core -k "not test_scaled_dot"; }
+run_scaled_dot_tests() { run_language_test core -k "test_scaled_dot"; }
+run_decorator_tests() { run_language_test decorator; }
+run_frontend_tests() { run_language_test frontend; }
+run_libdevice_tests() { run_language_test libdevice; }
+
+run_line_info_tests() {
+  echo "***************************************************"
+  echo "******     Running Triton line_info tests     ******"
+  echo "***************************************************"
   ensure_spirv_dis
-
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=language \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ \
-    --ignore=language/test_line_info.py --ignore=language/test_matmul.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py \
-    -k "not test_mxfp and not test_scaled_dot"
-
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=subprocess \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/test_subprocess.py
-
-  # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
+  cd $TRITON_PROJ/python/test/unit
   TRITON_DISABLE_LINE_INFO=0 TRITON_TEST_SUITE=line_info \
     run_pytest_command -k "not test_line_info_interpreter" --verbose --device xpu language/test_line_info.py
 }
 
-run_matmul_tests() {
-  echo "***************************************************"
-  echo "******    Running Triton matmul tests   ******"
-  echo "***************************************************"
-  cd $TRITON_PROJ/python/test/unit
-
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=matmul \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/test_matmul.py \
-    -k "not test_mxfp and not test_preshuffle_scale_mxfp_cdna4 or test_mxfp8_mxfp4_matmul"
-}
-
-run_scaled_dot_tests() {
-  echo "***************************************************"
-  echo "******    Running Triton scaled_dot tests    ******"
-  echo "***************************************************"
-  cd $TRITON_PROJ/python/test/unit
-
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=scaled_dot \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py --ignore=language/test_frontend.py\
-    -k "test_scaled_dot"
-}
+run_matmul_tests() { run_language_test matmul -k "not test_mxfp and not test_preshuffle_scale_mxfp_cdna4 or test_mxfp8_mxfp4_matmul"; }
+run_module_tests() { run_language_test module; }
+run_mxfp_tests() { run_language_test mxfp; }
+run_pipeliner_tests() { run_language_test pipeliner; }
+run_random_tests() { run_language_test random; }
+run_reproducer_tests() { run_language_test reproducer; }
+run_standard_tests() { run_language_test standard; }
+run_subprocess_tests() { run_language_test subprocess; }
+run_tensor_descriptor_tests() { run_language_test tensor_descriptor; }
+run_tuple_tests() { run_language_test tuple; }
+run_warp_specialization_tests() { run_language_test warp_specialization; }
 
 run_runtime_tests() {
   echo "***************************************************"
@@ -513,6 +562,17 @@ run_regression_tests() {
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=regression \
     run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} -s --device xpu . --ignore=test_performance.py
+}
+
+run_language_tests() {
+  echo "***************************************************"
+  echo "******     Running Triton Language tests     ******"
+  echo "***************************************************"
+  for _test in "${LANGUAGE_TESTS[@]}"; do
+    "run_${_test}_tests"
+  done
+  # scaled_dot is special: uses test_core.py with -k filter, not test_scaled_dot.py
+  run_scaled_dot_tests
 }
 
 run_minicore_tests() {
@@ -976,6 +1036,13 @@ test_triton() {
   if [ "$TEST_SCALED_DOT" = true ]; then
     run_scaled_dot_tests
   fi
+  # Run individual language tests if requested
+  for _test in "${LANGUAGE_TESTS[@]}"; do
+    _var_name="TEST_${_test^^}"
+    if [ "${!_var_name}" = true ]; then
+      "run_${_test}_tests"
+    fi
+  done
   if [ "$TEST_RUNTIME" = true ]; then
     run_runtime_tests
   fi
