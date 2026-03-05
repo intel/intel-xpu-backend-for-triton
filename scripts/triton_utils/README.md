@@ -172,7 +172,12 @@ This mode supports all filtering and merging options from `pass_rate` mode, plus
 
 # Pretty print as table
 --pretty-print
+
+# Display full test names without truncation (useful for long test names)
+--long-names
 ```
+
+**Note:** The `--long-names` option configures pandas to display full test names without truncation. This is particularly useful when test names are very long and would otherwise be cut off in the output. May produce wide output; consider redirecting to a file for easier reading.
 
 ### 4. Export test results
 
@@ -195,6 +200,15 @@ Compare test results between two test runs.
 ```bash
 triton-utils compare --r <reports_folder_1> --r2 <reports_folder_2> --tests-with-multiple-testsuites --level testsuite
 ```
+
+#### Additional options
+
+```bash
+# Display full test names without truncation
+--long-names
+```
+
+This mode supports all filtering and merging options from `pass_rate` mode.
 
 ## Troubleshooting
 

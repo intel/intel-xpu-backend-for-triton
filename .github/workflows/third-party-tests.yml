@@ -90,7 +90,7 @@ jobs:
 
       - name: Upload test report
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: test-main-reports
           path: reports
@@ -147,7 +147,7 @@ jobs:
 
       - name: Upload test report
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: test-liger-reports
           path: reports
