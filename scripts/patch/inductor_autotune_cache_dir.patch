@@ -1,0 +1,65 @@
+diff --git a/torch/_inductor/select_algorithm.py b/torch/_inductor/select_algorithm.py
+--- a/torch/_inductor/select_algorithm.py
++++ b/torch/_inductor/select_algorithm.py
+@@ -78,1 +78,1 @@
+-from .runtime.triton_heuristics import FixedGrid
++from .runtime.triton_heuristics import FixedGrid, triton_cache_dir, triton_hash_to_path_key
+
+ if TYPE_CHECKING:
+@@ -2594,6 +2594,37 @@
+     return choices
+
+
++def _get_triton_cache_dir(choice):
++    """Extract Triton cache directory from a benchmarked TritonTemplateCaller.
++
++    After autotuning, each choice's CachingAutotuner holds compile_results
++    populated by triton.compile().  For regular CompiledKernel the metadata
++    namedtuple carries ``cache_dir`` directly; for StaticallyLaunched variants
++    the metadata is discarded, but the kernel hash is retained so the path can
++    be reconstructed.
++    """
++    try:
++        mod = PyCodeCache.load_by_key_path(
++            choice.bmreq.module_cache_key, choice.bmreq.module_path
++        )
++        kernel = getattr(mod, choice.bmreq.kernel_name, None)
++        if kernel is None or not kernel.compile_results:
++            return None
++        result = kernel.compile_results[0]
++        compiled_kernel = result.kernel
++        # CompiledKernel keeps full metadata including cache_dir
++        metadata = getattr(compiled_kernel, "metadata", None)
++        if metadata is not None:
++            return getattr(metadata, "cache_dir", None)
++        # StaticallyLaunchedXpuKernel/CudaKernel: reconstruct from hash
++        kernel_hash = getattr(compiled_kernel, "hash", None)
++        if kernel_hash is not None:
++            device = result.compile_meta.get("device", 0)
++            return os.path.join(
++                triton_cache_dir(device),
++                triton_hash_to_path_key(kernel_hash),
++            )
++    except Exception:
++        log.debug("Failed to extract triton cache dir", exc_info=True)
++    return None
++
++
+ class AlgorithmSelectorCache(PersistentCache):
+     """
+     A persistent cache for algorithm selection results used in autotuning of GEMMs
+@@ -3626,6 +3657,14 @@
+                 sys.stderr.write(
+                     f"  {choice.name} {result:.4f} ms {best_time / result:.1%} {kernel_description}\n"
+                 )
++                if isinstance(choice, TritonTemplateCaller):
++                    cache_dir = _get_triton_cache_dir(choice)
++                    if cache_dir:
++                        sys.stderr.write(f"    cache_dir: {cache_dir}\n")
++                    else:
++                        sys.stderr.write(
++                            f"    module_path: {choice.bmreq.module_path}\n"
++                        )
+             else:
+                 sys.stderr.write(
+                     f"  {choice.name} {result:.4f} ms <DIVIDED BY ZERO ERROR>\n"
