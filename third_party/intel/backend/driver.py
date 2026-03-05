@@ -358,6 +358,7 @@ class XPUUtils(object):
         self.wait_on_sycl_queue = mod.wait_on_sycl_queue
         self.get_last_selected_build_flags = mod.get_last_selected_build_flags
         self.sycl_queue_memset = mod.sycl_queue_memset
+        self.unload_module = lambda module: None
 
     def get_current_device(self):
         import torch
