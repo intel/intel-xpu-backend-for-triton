@@ -811,7 +811,7 @@ run_vllm_upstream_install() {
 
     # Set specific pin
     cd vllm
-    git checkout "$(<../benchmarks/third_party/vllm/vllm-pin.txt)"
+    git checkout "$(<../benchmarks/vllm/vllm-pin.txt)"
     cd ..
   fi
 
@@ -825,7 +825,7 @@ run_vllm_upstream_install() {
   # Let's not install whole test requirements for now, they are very large and overwrite torch
   # pip install -r vllm/requirements/test.in
   pip install cachetools cbor2 blake3 pybase64 openai_harmony tblib
-  cp -r vllm/tests benchmarks/third_party/vllm/batched_moe/tests
+  cp -r vllm/tests benchmarks/vllm/batched_moe/tests
   VLLM_TARGET_DEVICE=xpu pip install --no-deps --no-build-isolation -e vllm
 }
 
@@ -862,8 +862,8 @@ run_vllm_old_install() {
 
     # Checkout the pinned commit, apply necessary patches and modify tests to run on xpu
     cd vllm
-    git checkout "$(<../benchmarks/third_party/vllm/vllm-pin.txt)"
-    git apply ../benchmarks/third_party/vllm/vllm-fix.patch
+    git checkout "$(<../benchmarks/vllm/vllm-pin.txt)"
+    git apply ../benchmarks/vllm/vllm-fix.patch
     sed -i 's/device="cuda"/device="xpu"/g' \
       tests/kernels/moe/utils.py \
       tests/kernels/moe/test_batched_moe.py \
@@ -875,7 +875,7 @@ run_vllm_old_install() {
     cd ..
   fi
   # These files are neceassary for benchmarking runs
-  cp -r vllm/tests benchmarks/third_party/vllm/batched_moe/tests
+  cp -r vllm/tests benchmarks/vllm/batched_moe/tests
 
   pip install -r vllm/requirements/xpu.txt
 
@@ -885,7 +885,7 @@ run_vllm_old_install() {
   else
     git clone https://github.com/vllm-project/vllm-xpu-kernels
     cd vllm-xpu-kernels
-    git checkout "$(<../benchmarks/third_party/vllm/vllm-kernels-pin.txt)"
+    git checkout "$(<../benchmarks/vllm/vllm-kernels-pin.txt)"
     sed -i '/pytorch\|torch\|triton/d' requirements.txt
     sed -i '/pytorch\|torch\|triton/d' pyproject.toml
     pip install -r requirements.txt
@@ -902,7 +902,7 @@ run_vllm_install() {
   echo "******    Installing VLLM                 ******"
   echo "************************************************"
 
-  local pin_file="$TRITON_PROJ/benchmarks/third_party/vllm/vllm-pin.txt"
+  local pin_file="$TRITON_PROJ/benchmarks/vllm/vllm-pin.txt"
   local current_pin
   current_pin=$(<"$pin_file")
   echo "VLLM pin: $current_pin"
