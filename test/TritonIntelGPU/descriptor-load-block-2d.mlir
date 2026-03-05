@@ -64,6 +64,76 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
 
 // -----
 
+// Negative test: Missing ttig.support_2d_block_io attribute should prevent
+// 2D block load generation, falling back to scalar gather loads.
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @descriptor_load_no_2d_block_io_attr
+  // CHECK-NOT: triton_gen.2Dblockload
+  tt.func public @descriptor_load_no_2d_block_io_attr(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i32, %arg5: i32) {
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <tensor<64x32xf16>>
+    %load = tt.descriptor_load %desc[%arg4, %arg5] : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #dot0>
+    tt.return
+  }
+}
+
+// -----
+
+// Negative test: Blocked encoding (non-DPAS) should prevent 2D block load
+// generation, falling back to scalar gather loads.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 4], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @descriptor_load_blocked_no_block_io
+  // CHECK-NOT: triton_gen.2Dblockload
+  tt.func public @descriptor_load_blocked_no_block_io(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i32, %arg5: i32) {
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <tensor<64x32xf16>>
+    %load = tt.descriptor_load %desc[%arg4, %arg5] : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// Negative test: Non-contiguous inner stride (stride[1] != 1) should prevent
+// 2D block load generation, falling back to scalar gather loads.
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @descriptor_load_non_unit_inner_stride
+  // CHECK-NOT: triton_gen.2Dblockload
+  tt.func public @descriptor_load_non_unit_inner_stride(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i32, %arg5: i32) {
+    %c2_i64 = arith.constant 2 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c2_i64] : <f16>, <tensor<64x32xf16>>
+    %load = tt.descriptor_load %desc[%arg4, %arg5] : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #dot0>
+    tt.return
+  }
+}
+
+// -----
+
+// Negative test: Dynamic (non-constant) inner stride should prevent
+// 2D block load generation, falling back to scalar gather loads.
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @descriptor_load_dynamic_inner_stride
+  // CHECK-NOT: triton_gen.2Dblockload
+  tt.func public @descriptor_load_dynamic_inner_stride(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i64, %arg5: i32, %arg6: i32) {
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %arg4] : <f16>, <tensor<64x32xf16>>
+    %load = tt.descriptor_load %desc[%arg5, %arg6] : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #dot0>
+    tt.return
+  }
+}
+
+// -----
+
 // Test: DescriptorLoadOp feeds into tt.dot, verifying the full matmul pattern.
 
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>

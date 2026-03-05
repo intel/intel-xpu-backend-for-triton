@@ -6,7 +6,10 @@ import contextlib
 
 
 def pytest_configure(config):
-    config.addinivalue_line("markers", "interpreter: indicate whether interpreter supports the test")
+    # If pytest-sugar is not active, enable instafail
+    if not config.pluginmanager.hasplugin("sugar"):
+        config.option.instafail = True
+
     if os.name == "nt":
         config.addinivalue_line("markers", "forked: subprocess analogue of pytest.mark.forked on Windows")
 
