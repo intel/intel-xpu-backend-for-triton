@@ -16,10 +16,10 @@ find_package(SyclTlaLibrary REQUIRED)
 find_package(oneDNNLibrary REQUIRED)
 
 # add the XeTLA kernel.
-add_subdirectory(xetla_kernel)
+#add_subdirectory(xetla_kernel)
 
 # add the SYCL-TLA kernel.
 add_subdirectory(sycl_tla_kernel)
 
 # add the oneDNN kernel.
-add_subdirectory(onednn_kernel)
+#add_subdirectory(onednn_kernel)
