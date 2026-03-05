@@ -21,8 +21,7 @@ struct TestStrideInfoPass
     Operation *operation = getOperation();
     ModuleOp moduleOp = cast<ModuleOp>(operation);
     ModuleAxisInfoAnalysis moduleAxisInfoAnalysis(moduleOp);
-    ModuleStrideAnalysis moduleStrideAnalysis(moduleOp,
-                                              &moduleAxisInfoAnalysis);
+    ModuleStrideAnalysis moduleStrideAnalysis(moduleOp, moduleAxisInfoAnalysis);
     moduleOp.walk([&](triton::FuncOp funcOp) {
       auto &os = llvm::errs();
       auto opName = SymbolTable::getSymbolName(funcOp).getValue().str();

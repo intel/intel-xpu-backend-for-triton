@@ -553,7 +553,7 @@ public:
 //===----------------------------------------------------------------------===//
 
 ModuleStrideAnalysis::ModuleStrideAnalysis(ModuleOp moduleOp,
-                                           ModuleAxisInfoAnalysis *axisInfo)
+                                           ModuleAxisInfoAnalysis &axisInfo)
     : CallGraph<StrideInfoMapT>(moduleOp), axisInfo(axisInfo) {
   SmallVector<FunctionOpInterface> funcs;
   walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
@@ -587,12 +587,9 @@ StrideInfo *ModuleStrideAnalysis::getStrideInfo(Value value) {
 
 void ModuleStrideAnalysis::initialize(FunctionOpInterface funcOp) {
   std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
-  AxisInfoLookupFn lookupFn;
-  if (axisInfo) {
-    lookupFn = [this](Value v) -> AxisInfo * {
-      return axisInfo->getAxisInfo(v);
-    };
-  }
+  AxisInfoLookupFn lookupFn = [this](Value v) -> AxisInfo * {
+    return axisInfo.getAxisInfo(v);
+  };
   StrideAnalysis *analysis = solver->load<StrideAnalysis>(std::move(lookupFn));
   if (failed(solver->initializeAndRun(funcOp)))
     return;

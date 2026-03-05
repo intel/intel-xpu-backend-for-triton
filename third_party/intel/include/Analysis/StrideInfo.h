@@ -42,14 +42,14 @@ using StrideInfoMapT = DenseMap<Value, StrideInfo>;
 class ModuleStrideAnalysis : public CallGraph<StrideInfoMapT> {
 public:
   explicit ModuleStrideAnalysis(ModuleOp moduleOp,
-                                ModuleAxisInfoAnalysis *axisInfo = nullptr);
+                                ModuleAxisInfoAnalysis &axisInfo);
 
   StrideInfo *getStrideInfo(Value value);
 
 private:
   void initialize(FunctionOpInterface funcOp);
   void update(CallOpInterface callOp, FunctionOpInterface funcOp);
-  ModuleAxisInfoAnalysis *axisInfo = nullptr;
+  ModuleAxisInfoAnalysis &axisInfo;
 };
 
 } // namespace mlir::triton::intel
