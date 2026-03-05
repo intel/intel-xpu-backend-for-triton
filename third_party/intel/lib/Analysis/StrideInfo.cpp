@@ -191,14 +191,12 @@ public:
       TensorType ty = cast<TensorType>(splatAttr.getType());
       return StrideInfo(StrideInfo::DimVectorT(ty.getRank(), 0));
     }
+
     auto intAttr = dyn_cast<IntegerAttr>(op.getValue());
-    if (intAttr) {
-      return StrideInfo({0});
-    }
     auto boolAttr = dyn_cast<BoolAttr>(op.getValue());
-    if (boolAttr) {
+    if (intAttr || boolAttr)
       return StrideInfo({0});
-    }
+
     return StrideInfo();
   }
 };
