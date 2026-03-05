@@ -123,7 +123,8 @@ private:
         auto opIdx =
             static_cast<ttgi::DpasEncodingAttr::OpIdx>(dotLayout->getOpIdx());
         auto dotOrder = tt::gpu::getThreadOrder(tensorType);
-        const bool valueRowMajor = (dotOrder[0] == 1 && dotOrder[1] == 0);
+        const bool valueRowMajor =
+            (dotOrder[rank - 2] == 1 && dotOrder[rank - 1] == 0);
         if (opIdx == ttgi::DpasEncodingAttr::OpIdx::OperandA &&
             valueRowMajor ^ isRowMajor) {
           LDBG("Skipping block pointer attribute for transposed A matrix in "
@@ -194,8 +195,8 @@ private:
     }
 
     // Determine if LoadOp is row-major or column-major.
-    auto isMajor = [=](RankedTensorType tensorTy, unsigned fastChangeDim,
-                       const tt::AxisInfo &axisInfo) {
+    auto isMajor = [rank](RankedTensorType tensorTy, unsigned fastChangeDim,
+                          const tt::AxisInfo &axisInfo) {
       assert((fastChangeDim < rank) && "fastChangeDim must be less than rank");
       const unsigned otherDim =
           (fastChangeDim == rank - 1) ? rank - 2 : rank - 1;

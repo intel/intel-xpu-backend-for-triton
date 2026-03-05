@@ -1117,5 +1117,3 @@ tt.func public @ptr_offset(%arg0: i32, %arg1: tensor<128x1xi32>) {
   %8 = arith.muli %arg1, %cst_0 : tensor<128x1xi32>
   tt.return
 }
-
-// -----

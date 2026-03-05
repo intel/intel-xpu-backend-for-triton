@@ -301,7 +301,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, ttg.target = "xpu", "ttg.num-warps"
     // CHECK: tt.load {{.*}} {boundaryCheck = array<i32: 1>, padding = 1 : i32, ttig.block_io = "row_major"}
     // CHECK: tt.load {{.*}} {boundaryCheck = array<i32: 0>, padding = 1 : i32, ttig.block_io = "column_major"}
     %31 = tt.make_tensor_ptr %arg0, [%c0_i64, %c0_i64, %c0_i64], [%pitch, %pitch, %c1_i64], [%c0_i32, %c0_i32, %c0_i32] {order = array<i32: 2, 1, 0>} : <tensor<4x64x32xf16, #dot_a_3d>>
-    %32 = tt.make_tensor_ptr %arg0, [%c0_i64, %c0_i64, %c0_i64], [%pitch, %pitch, %c1_i64], [%c0_i32, %c0_i32, %c0_i32] {order = array<i32: 2, 1, 0>} : <tensor<4x32x64xf16, #dot_b_3d>>
+    %32 = tt.make_tensor_ptr %arg0, [%c0_i64, %c0_i64, %c0_i64], [%pitch, %c1_i64, %pitch], [%c0_i32, %c0_i32, %c0_i32] {order = array<i32: 2, 1, 0>} : <tensor<4x32x64xf16, #dot_b_3d>>
     %34 = tt.load %31 {boundaryCheck = array<i32: 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, padding = 1 : i32} : !tt.ptr<tensor<4x64x32xf16, #dot_a_3d>>
     %35 = tt.load %32 {boundaryCheck = array<i32: 0>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, padding = 1 : i32} : !tt.ptr<tensor<4x32x64xf16, #dot_b_3d>>
     // CHECK: tt.store {{.*}} {boundaryCheck = array<i32: 1>, ttig.block_io = "row_major"}

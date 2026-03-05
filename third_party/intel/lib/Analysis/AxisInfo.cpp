@@ -1211,7 +1211,7 @@ makeTensorPtrAxisInfo(ArrayRef<int64_t> blkShape, unsigned rank,
 
   int64_t ptrDivisibility = operands[0]->getValue().getDivisibility(0);
   // Follow the regular pointer divisibility definition in tt.addptr:
-  // On each dim, tt is "strided contiguous" with a divisilibity of
+  // On each dim, tt is "strided contiguous" with a divisibility of
   // ptrDivisibility
   AxisInfo::DimVectorT divisibility(rank, ptrDivisibility);
   AxisInfo::DimVectorT stride, contiguity, constancy;
@@ -1221,10 +1221,6 @@ makeTensorPtrAxisInfo(ArrayRef<int64_t> blkShape, unsigned rank,
                          : -1);
     contiguity.push_back(strideInfo[dim].getConstantValue() == 1 ? blkShape[dim]
                                                                  : 1);
-    // For 2-D tensors the divisibility of dim d is bounded by the stride of
-    // the *other* dimension; for 1-D tensors the single stride suffices.
-    const AxisInfo &relevantStride =
-        (rank == 2) ? strideInfo[dim == 0 ? 1 : 0] : strideInfo[dim];
     constancy.push_back(1);
   }
 
