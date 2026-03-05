@@ -199,8 +199,6 @@ jobs:
           - gluon
           - triton-kernels
           - rest
-          - tutorial-fa-64
-          - tutorial-fa-128-fwdfp8
           - tutorial-fa-128-nofwdfp8
     timeout-minutes: 720
     runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
@@ -345,12 +343,12 @@ jobs:
 
       # Run 06-fused-attention.py separately, because it is split into 3 configs
       - name: Run Flash Attention tutorials (HEAD_DIM=64)
-        if: matrix.suite == 'tutorial-fa-64'
+        if: matrix.suite == 'rest'
         run: |
           HEAD_DIM=64 ${{ env.TRITON_TEST_CMD }} --tutorial06-run-mode fa_only
 
       - name: Run Flash Attention tutorials (HEAD_DIM=128, FP8 only)
-        if: matrix.suite == 'tutorial-fa-128-fwdfp8'
+        if: matrix.suite == 'rest'
         run: |
           ${{ env.TRITON_TEST_CMD }} --tutorial06-run-mode fp8_only
 
