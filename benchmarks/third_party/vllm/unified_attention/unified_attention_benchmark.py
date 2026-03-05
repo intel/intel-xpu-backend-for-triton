@@ -32,6 +32,8 @@ float8_info = torch.finfo(current_platform.fp8_dtype())
 
 TOTAL_MEMORY_BYTES = benchmark_suite.get_total_gpu_memory_bytes()
 
+IS_FP8 = (os.getenv('FP8', '0') == '1')
+
 
 def ref_paged_attn(
     query: torch.Tensor,
@@ -103,7 +105,8 @@ def is_enough_memory(x_val, safety_factor=0.80):
     precise.  Returns *True* when the total fits within
     ``safety_factor`` of the device's total memory.
     """
-    q_heads, k_heads, head_size, dtype, qdtype, seq_lens, sliding_window, soft_cap, num_blocks, block_size = x_val
+    q_heads, k_heads, head_size, qdtype, seq_lens, sliding_window, soft_cap, num_blocks, block_size = x_val
+    dtype = torch.bfloat16
 
     num_seqs = len(seq_lens)
     query_lens = [s[0] for s in seq_lens]
@@ -146,7 +149,10 @@ def is_enough_memory(x_val, safety_factor=0.80):
     return enough
 
 
-MMAP_BLOCK_SIZES = [16, 64]
+# There is an error right now, for FP8 matmul with block size 16 is not supported
+# Input shapes should have M >= 1, N >= 16 and K >= 32
+# MMAP_BLOCK_SIZES = [64] if IS_FP8 else [16, 64]
+MMAP_BLOCK_SIZES = [64] if IS_FP8 else [16, 64]
 NUM_BLOCKS = [32768, 2048]
 SEQ_LENS = [
     # One 4k input prefill
@@ -158,34 +164,34 @@ SEQ_LENS = [
     # Pure decoding, 8 batches
     [(1, k) for k in [1513, 4100, 530, 123, 4803, 434, 3015, 34]]
 ]
-# Models: (q_heads, k_heads, head_size, dtype, qdtype, sliding_window, soft_cap)
+# Models: (q_heads, k_heads, head_size, qdtype, sliding_window, soft_cap)
 # sliding_window: None = full attention, int = sliding window size.
 # soft_cap: None = disabled, float = soft_cap value.
 # Models that use both attention types appear twice (one entry each).
 MODELS_BF16 = [
     # llama3.1-8B - full attention
-    (32, 8, 128, torch.bfloat16, None, None, None),
+    (32, 8, 128, None, None, None),
     # llama3.1-8B - just to test soft caps kernel path, real model doesn't use it, it's relevant for gemma2
-    (32, 8, 128, torch.bfloat16, None, None, 50.0),
+    (32, 8, 128, None, None, 50.0),
     # llama3.3-70B - full attention
-    (64, 8, 128, torch.bfloat16, None, None, None),
+    (64, 8, 128, None, None, None),
     # llama4 Scout - sliding window attention (window size 8192)
-    (64, 8, 128, torch.bfloat16, None, 8192, None),
+    (64, 8, 128, None, 8192, None),
     # Qwen2.5-235B - full attention
-    (64, 4, 128, torch.bfloat16, None, None, None),
+    (64, 4, 128, None, None, None),
     # Qwen2.5-235B - sliding window attention (window size 256)
-    (64, 4, 128, torch.bfloat16, None, 256, None),
+    (64, 4, 128, None, 256, None),
     # gpt-oss-120b - full attention
-    # (64, 8, 64, torch.bfloat16, None, None, None),
+    # (64, 8, 64, None, None, None),
     # gpt-oss-120b - sliding window attention (window size 128)
-    # (64, 8, 64, torch.bfloat16, None, 128, None),
+    # (64, 8, 64, None, 128, None),
 ]
 
 MODELS_FP8 = [
     # llama4 scout - full attention
-    (64, 8, 128, torch.bfloat16, torch.float8_e4m3fn, None, None),
+    (64, 8, 128, torch.float8_e4m3fn, None, None),
     # llama4 scout - sliding window attention (window size 8192)
-    (64, 8, 128, torch.bfloat16, torch.float8_e4m3fn, 8192, None),
+    (64, 8, 128, torch.float8_e4m3fn, 8192, None),
 ]
 
 
@@ -195,8 +201,8 @@ def _build_attention_configs(model_configs):
         *base_config, sliding_window, soft_cap = model_config
         for seq_lens, num_blocks, block_size in product(SEQ_LENS, NUM_BLOCKS, MMAP_BLOCK_SIZES):
             x_val = (*base_config, seq_lens, sliding_window, soft_cap, num_blocks, block_size)
-            dtype = x_val[3]
-            if dtype is not None and dtype.itemsize < 2 and x_val[-1] < 32:
+            qdtype = x_val[3]
+            if qdtype is not None and qdtype.itemsize < 2 and x_val[-1] < 32:
                 print("Skipping configuration due to incompatible q_dtype and block_size.")
                 continue
             if is_enough_memory(x_val=x_val):
@@ -234,8 +240,8 @@ def get_unified_attention_benchmark(
     @benchmark_suite.perf_report(
         benchmark_suite.Benchmark(
             x_names=[
-                'q_heads', 'k_heads', 'head_size', 'dtype', 'qdtype', 'seq_lens', 'sliding_window', 'soft_cap',
-                'num_blocks', 'block_size'
+                'q_heads', 'k_heads', 'head_size', 'qdtype', 'seq_lens', 'sliding_window', 'soft_cap', 'num_blocks',
+                'block_size'
             ],
             x_vals=configs,
             line_arg='provider',
@@ -246,8 +252,9 @@ def get_unified_attention_benchmark(
             plot_name='unified-attention-performance' + ('-td' if is_td_patched else ''),
             args={},
         ))
-    def benchmark(q_heads, k_heads, head_size, dtype, qdtype, seq_lens, sliding_window, soft_cap, num_blocks,
-                  block_size, provider):
+    def benchmark(q_heads, k_heads, head_size, qdtype, seq_lens, sliding_window, soft_cap, num_blocks, block_size,
+                  provider):
+        dtype = torch.bfloat16
         torch.manual_seed(20)
         n_warmup = 100
         quantiles = [0.5, 0.0, 1.0]
@@ -272,7 +279,7 @@ def get_unified_attention_benchmark(
         max_num_blocks_per_seq = (max_kv_len + block_size - 1) // block_size
         block_tables = torch.randint(0, num_blocks, (num_seqs, max_num_blocks_per_seq), dtype=torch.int32)
 
-        output = torch.empty_like(query, )
+        output = torch.empty_like(query)
 
         maybe_quantized_query = query
         maybe_quantized_key_cache = key_cache
@@ -336,8 +343,8 @@ def get_unified_attention_benchmark(
                 return output
 
             atol, rtol = 2.5e-2, 1e-2
-            if dtype != torch.bfloat16:
-                atol, rtol = 1.5e-1, 1.5e-1
+            if qdtype is not None:
+                atol, rtol = 3 / 8 + 1e-6, 1.5e-1
             benchmark_suite.assert_close(triton_fn, torch_fn, atol=atol, rtol=rtol, err_msg='triton to torch')
 
             _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
@@ -351,14 +358,16 @@ def get_unified_attention_benchmark(
 
         # Calculate performance metrics
         def gbps(ms):
-            n_bytes = dtype.itemsize if hasattr(dtype, 'itemsize') else 2
+            # Input Q/K/V use quantized dtype if available, output is always bf16
+            in_bytes = qdtype.itemsize if qdtype is not None else dtype.itemsize
+            out_bytes = dtype.itemsize  # output is always bf16
             total_query_tokens = sum(query_lens)
-            # Memory: Query + Key cache + Value cache + Output
+            # Memory: Query (in) + Key cache (in) + Value cache (in) + Output (out)
             total_bytes = (
-                total_query_tokens * q_heads * head_size * n_bytes +  # Query
+                total_query_tokens * q_heads * head_size * in_bytes +  # Query
                 sum([min(l, sliding_window) if sliding_window is not None else l
-                     for l in kv_lens]) * k_heads * head_size * n_bytes * 2 +  # KV cache accessed
-                total_query_tokens * q_heads * head_size * n_bytes  # Output
+                     for l in kv_lens]) * k_heads * head_size * in_bytes * 2 +  # KV cache accessed
+                total_query_tokens * q_heads * head_size * out_bytes  # Output
             )
             return total_bytes * (1e-9) / (ms * 1e-3)
 
@@ -380,6 +389,5 @@ def get_unified_attention_benchmark(
 
 if __name__ == '__main__':
     is_td_patched = os.getenv('TD_PATCHED', '0') == '1'
-    _benchmark_attention = get_unified_attention_benchmark(is_fp8=(os.getenv('FP8', '0') == '1'),
-                                                           is_td_patched=is_td_patched)
+    _benchmark_attention = get_unified_attention_benchmark(is_fp8=IS_FP8, is_td_patched=is_td_patched)
     _benchmark_attention.run(show_plots=False, print_data=True)
