@@ -1,6 +1,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
 #include "Dialect/TritonIntelGPU/IR/Attributes.h"
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/LinearLayoutConversions.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "mlir/IR/DialectImplementation.h"
