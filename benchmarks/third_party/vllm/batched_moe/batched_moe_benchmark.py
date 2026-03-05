@@ -32,17 +32,17 @@ MM_CONFIGS_BF16 = sum([[(E, M, hidden_size, int_size * 2, fp8, block_quant),  # 
                         (E, M, int_size, hidden_size, fp8, block_quant)]  # swiglu output -> final output
                        for M in [1, 8, 64, 256]
                        for E, hidden_size, int_size, fp8, block_quant in [
-                           # llama4 scout bf16
+                           # llama4 scout
                            (16, 5120, 8192, False, False),
-                           # gpt-oss 20b mxfp4
+                           # gpt-oss 20b
                            (32, 2880, 2880, False, False),
-                           # gpt-oss 120b mxfp4
+                           # gpt-oss 120b
                            (128, 2880, 2880, False, False),
-                           # qwen3-235b-A22B bf16/fp8
+                           # qwen3-235b-A22B
                            (128, 4096, 1536, False, False),
-                           # qwen3-30b-A3B bf16/fp8
+                           # qwen3-30b-A3B
                            (128, 2048, 768, False, False),
-                           # qwen3-next-80B bf16
+                           # qwen3-next-80B
                            (512, 2048, 512, False, False),
                        ]], [])
 
@@ -50,12 +50,12 @@ MM_CONFIGS_FP8 = sum([[(E, M, hidden_size, int_size * 2, fp8, block_quant),
                        (E, M, int_size, hidden_size, fp8, block_quant)]
                       for M in [1, 8, 64, 256]
                       for E, hidden_size, int_size, fp8, block_quant in [
-                          # deepseek V3, fp8 block quant
+                          # deepseek V3 (R1 is the same)
                           # 3.5 GBs of weights!
                           (256, 7168, 2048, True, True),
-                          #  # qwen3-235b-A22B bf16/fp8
+                          #  # qwen3-235b-A22B
                           (128, 4096, 1536, True, False),
-                          # qwen3-30b-A3B bf16/fp8
+                          # qwen3-30b-A3B
                           (128, 2048, 768, True, False),
                       ]], [])
 
@@ -104,6 +104,11 @@ def filter_by_memory(configs):
 MM_CONFIGS_BF16 = filter_by_memory(MM_CONFIGS_BF16)
 MM_CONFIGS_FP8 = filter_by_memory(MM_CONFIGS_FP8)
 
+# To debug if the benchmark runs at all, without waiting for all configurations to run
+if os.getenv('DEBUG_BENCH', '0') == '1':
+    MM_CONFIGS_BF16 = MM_CONFIGS_BF16[:1]
+    MM_CONFIGS_FP8 = MM_CONFIGS_FP8[:1]
+
 
 def get_batched_mm_benchmark(
     providers_filter: Optional[list[str]] = None,
@@ -111,9 +116,6 @@ def get_batched_mm_benchmark(
     fp8=False,
     is_td_patched=False,
 ):
-    """
-    Returns a Mark object containing a Benchmark object for batched matrix multiplication.
-    """
     supported_providers = {
         'triton' + ('-td' if is_td_patched else ''): 'triton' + ('-td' if is_td_patched else ''),
         'pytorch': 'pytorch',
@@ -262,7 +264,6 @@ def get_batched_mm_benchmark(
 
 
 if __name__ == '__main__':
-    # Run batched MM benchmark
     is_td_patched = os.getenv('TD_PATCHED', '0') == '1'
     print('Running batched MM benchmark...')
     _benchmark_mm = get_batched_mm_benchmark(fp8=(os.getenv('FP8', '0') == '1'), is_td_patched=is_td_patched)
