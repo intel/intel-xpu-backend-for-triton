@@ -47,7 +47,7 @@ StrideInfo StrideInfo::join(const StrideInfo &lhs, const StrideInfo &rhs) {
   return StrideInfo(std::move(result));
 }
 
-using AxisInfoLookupFn = std::function<const AxisInfo *(Value)>;
+using AxisInfoLookupFn = std::function<AxisInfo *(Value)>;
 
 namespace {
 
@@ -552,8 +552,8 @@ public:
 // ModuleStrideAnalysis
 //===----------------------------------------------------------------------===//
 
-ModuleStrideAnalysis::ModuleStrideAnalysis(
-    ModuleOp moduleOp, const ModuleAxisInfoAnalysis &axisInfo)
+ModuleStrideAnalysis::ModuleStrideAnalysis(ModuleOp moduleOp,
+                                           ModuleAxisInfoAnalysis &axisInfo)
     : CallGraph<StrideInfoMapT>(moduleOp), axisInfo(axisInfo) {
   SmallVector<FunctionOpInterface> funcs;
   walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
@@ -574,9 +574,9 @@ ModuleStrideAnalysis::ModuleStrideAnalysis(
   }
 }
 
-const StrideInfo *ModuleStrideAnalysis::getStrideInfo(Value value) const {
+StrideInfo *ModuleStrideAnalysis::getStrideInfo(Value value) {
   auto funcOp = value.getParentRegion()->getParentOfType<FunctionOpInterface>();
-  const auto *strideInfoMap = getFuncData(funcOp);
+  auto *strideInfoMap = getFuncData(funcOp);
   if (!strideInfoMap)
     return nullptr;
   auto it = strideInfoMap->find(value);
@@ -587,7 +587,7 @@ const StrideInfo *ModuleStrideAnalysis::getStrideInfo(Value value) const {
 
 void ModuleStrideAnalysis::initialize(FunctionOpInterface funcOp) {
   std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
-  AxisInfoLookupFn lookupFn = [this](Value v) -> const AxisInfo * {
+  AxisInfoLookupFn lookupFn = [this](Value v) -> AxisInfo * {
     return axisInfo.getAxisInfo(v);
   };
   StrideAnalysis *analysis = solver->load<StrideAnalysis>(std::move(lookupFn));
