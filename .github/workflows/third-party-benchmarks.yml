@@ -167,10 +167,19 @@ jobs:
           source ./scripts/capture-hw-details.sh
 
           cd benchmarks/third_party/vllm
-          python unified_attention_benchmark.py --reports $REPORTS
+          bash run_benchmark.sh unified_attention --reports $REPORTS
+          # Transform baseline results
           python transform_results.py \
             $REPORTS/unified-attention-performance.csv \
             $REPORTS/unified-attention-report.csv \
+            --tag $TAG \
+            --bgroup "vllm" \
+            --benchmark "unified-attn-bf16" \
+            --param_cols "q_heads,k_heads,head_size,dtype,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size"
+          # Transform tensor descriptor patched results
+          python transform_results.py \
+            $REPORTS/unified-attention-performance-td.csv \
+            $REPORTS/unified-attention-td-report.csv \
             --tag $TAG \
             --bgroup "vllm" \
             --benchmark "unified-attn-bf16" \
@@ -182,7 +191,7 @@ jobs:
           source ./scripts/capture-hw-details.sh
 
           cd benchmarks/third_party/vllm
-          bash batched_moe/run_benchmark.sh --reports $REPORTS
+          bash run_benchmark.sh batched_moe --reports $REPORTS
           # Transform baseline results
           python transform_results.py \
             $REPORTS/moe-gemm-performance.csv \
@@ -207,7 +216,7 @@ jobs:
           source ./scripts/capture-hw-details.sh
 
           cd benchmarks/third_party/vllm
-          FP8="1" bash batched_moe/run_benchmark.sh --reports $REPORTS
+          FP8="1" bash run_benchmark.sh batched_moe --reports $REPORTS
           # Transform baseline results
           python transform_results.py \
             $REPORTS/moe-gemm-performance.csv \
