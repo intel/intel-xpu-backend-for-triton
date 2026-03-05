@@ -25,6 +25,7 @@ TEST:
     --interpreter
     --proton
     --benchmarks
+    --llama-kernels
     --softmax
     --gemm
     --flash-attention
@@ -82,6 +83,7 @@ TEST_TUTORIAL=false
 TUTORIAL06_RUN_MODE=all
 TEST_MICRO_BENCHMARKS=false
 TEST_BENCHMARKS=false
+TEST_LLAMA_KERNELS=false
 TEST_BENCHMARK_SOFTMAX=false
 TEST_BENCHMARK_GEMM=false
 TEST_BENCHMARK_FLASH_ATTENTION=false
@@ -210,6 +212,11 @@ while (( $# != 0 )); do
       ;;
     --benchmarks)
       TEST_BENCHMARKS=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --llama-kernels)
+      TEST_LLAMA_KERNELS=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -681,6 +688,29 @@ run_benchmarks() {
   done
 }
 
+run_llama_kernels() {
+  echo "***************************************************"
+  echo "******         Running LLAMA kernels         ******"
+  echo "***************************************************"
+
+  cd frameworks.ai.pytorch.gpu-models
+  gh auth status
+  gh pr checkout 993 # checkout to pr
+  git apply ../scripts/llama3.1_kernels.patch
+  git apply ../scripts/llama3.1_kernel_tests_list.patch
+  cd presi-models/test/reduced-llama/inductor
+  if [ "${GENERATE_DATA:-0}" = "0" ]; then
+    rm -rf kernels
+    curl -sSL http://s3.icx.x1infra.intel.com/ceph-bkt-f9889ed3-723e-4693-99c3-56622282640e/llama3.1_kernels/llama3.1_kernels.tar.gz | tar --use-compress-program="pigz -d" -xf -
+  fi
+  export TORCHINDUCTOR_WORKER_START=fork
+  export TORCHINDUCTOR_COMPILE_THREADS=1
+  # Workaround for 'ModuleNotFoundError: No module named 'xmlrunner''
+  export CI=
+
+  TRITON_TEST_SUITE=llama_kernels run_pytest_command -vvv -s -n ${PYTEST_MAX_PROCESSES:-8} --max-worker-restart=9999 test_triton_kernels.py
+}
+
 run_instrumentation_tests() {
   INSTRUMENTATION_LIB_DIR=$(ls -1d $TRITON_PROJ/build/*lib*/triton/instrumentation) || err "Could not find $TRITON_PROJ/build/*lib*/triton/instrumentation, build Triton first"
   INSTRUMENTATION_LIB_NAME=$(ls -1 $INSTRUMENTATION_LIB_DIR/*GPUInstrumentationTestLib* | head -n1)
@@ -1012,6 +1042,9 @@ test_triton() {
   fi
   if [ "$TEST_BENCHMARKS" = true ]; then
     run_benchmarks
+  fi
+  if [ "$TEST_LLAMA_KERNELS" = true ]; then
+    run_llama_kernels
   fi
   if [ "$TEST_BENCHMARK_SOFTMAX" = true ]; then
     run_benchmark_softmax

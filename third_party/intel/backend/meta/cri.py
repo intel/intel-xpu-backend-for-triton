@@ -5,12 +5,14 @@ import re
 import signal
 import subprocess
 import sys
-import threading
+import time
 import torch
 
 from triton.backends.compiler import BaseBackend
 from .utils import echo, thread_dump
 from .timeout_watchdog import timed, TimeoutWatchdog
+
+simulator_keep_alive = os.getenv("TRITON_INTEL_SIMULATOR_KEEPALIVE", "False").lower() in ("true", "1", "yes", "on")
 
 
 class XPUBackendMeta(type(BaseBackend)):
@@ -64,9 +66,6 @@ class Simulator:
         echo("".join(msg), sys.stdout)
         os.environ["TbxPort"] = "0"
         cls._proc = cls._start_sim()
-        port_set = threading.Event()
-        threading.Thread(target=cls._sim_thread, args=(cls._proc, port_set), name="crisim", daemon=True).start()
-        port_set.wait(10)
         if os.environ["TbxPort"] == "0":
             raise RuntimeError("Failed to start the simulator")
         else:
@@ -93,40 +92,65 @@ class Simulator:
 
     @staticmethod
     def _start_sim():
-        cmd = ["/simulator/run-simulator.sh", "keep_alive"]
-        cmd.extend(["-w", f"fulsim_logs-{os.getpid()}", "-logfile", "-logprefix", "2"])
-        return subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            bufsize=1,
-            text=True,
-        )
+        start_dir = os.getenv("TRITON_INTEL_SIMULATOR_START_DIR", ".")
+        start_dir_prefix = "fulsim_logs_"
+        if current_test := os.getenv("PYTEST_CURRENT_TEST"):
+            start_dir = os.path.join(start_dir, start_dir_prefix + current_test.replace(":", "-"))
+            # This directory may exist already in case of test rerun
+            os.makedirs(start_dir, exist_ok=True)
+            start_dir = os.path.join(start_dir, str(os.getpid()))
+        else:
+            start_dir = os.path.join(start_dir, start_dir_prefix + str(os.getpid()))
+        os.mkdir(start_dir)
+        os.environ["TRITON_INTEL_SIMULATOR_EFFECTIVE_START_DIR"] = start_dir
 
-    @staticmethod
-    def _sim_thread(proc, port_set):
+        cmd = ["/simulator/run-simulator.sh"]
+        if simulator_keep_alive:
+            cmd.append("keep_alive")
+        if extra_args := os.getenv("TRITON_INTEL_SIMULATOR_EXTRA_ARGS"):
+            cmd += extra_args.split()
+        output_file_path = os.path.join(start_dir or ".", "simulator-" + str(os.getpid()) + ".log")
+        with open(output_file_path, "w") as out_file:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=start_dir,
+                stdout=out_file,
+                stderr=subprocess.STDOUT,
+                bufsize=1,
+                text=True,
+            )
+        # Check that output file exists before starting to read it
+        while not os.path.exists(output_file_path):
+            time.sleep(0.1)
+
+        def follow_file(filepath):
+            # Open the file and seek to the end
+            with open(filepath, "r") as infile:
+                infile.seek(0, os.SEEK_END)
+                while True:
+                    # Read new lines
+                    line = infile.readline()
+                    if not line:
+                        # If no new line, wait a bit and check again
+                        time.sleep(0.5)
+                        continue
+                    # Yield the new line for processing
+                    yield line
+
         port_pattern = re.compile(r"Listening on port:\s*(\d+)")
-        with proc.stdout as stdout:
-            for line in stdout:
-                if line is None:
+        for line in follow_file(output_file_path):
+            if line is None:
+                break
+            if port_pattern is not None:
+                if (port := port_pattern.search(line)):
+                    os.environ["TbxPort"] = port.group(1)
                     break
-                if port_pattern is not None:
-                    if (port := port_pattern.search(line)):
-                        os.environ["TbxPort"] = port.group(1)
-                        port_set.set()
-                        port_set = None
-                        port_pattern = None
-                echo(f"[crisim] {line}", sys.stdout)
-        ec = proc.wait()
-        if ec not in (0, -signal.SIGINT, -signal.SIGTERM, -signal.SIGKILL):
-            echo(f"The simulator exited with code {ec} and can not be safely " +
-                 "restarted. Terminating the current process ...\n")
-            TimeoutWatchdog.stop()
-            os._exit(1)
+        return proc
 
 
 def on_exit():
-    Simulator.stop()
+    if simulator_keep_alive:
+        Simulator.stop()
     TimeoutWatchdog.stop()
 
 
@@ -145,7 +169,8 @@ if USE_WRAPPERS:
 if (os.getenv("TRITON_INTEL_ENABLE_SIMULATOR_WRAPPER", "False").lower() in ("true", "1", "yes", "on")
         and Simulator.can_start()):
     sim_pid = Simulator.start()
-    TimeoutWatchdog.start([sim_pid])
+    if simulator_keep_alive:
+        TimeoutWatchdog.start([sim_pid])
 
 if USE_WRAPPERS:
     atexit.register(on_exit)
