@@ -15,6 +15,7 @@ config.mlir_binary_dir = "@MLIR_BINARY_DIR@"
 config.python_executable = "@Python3_EXECUTABLE@"
 config.enable_bindings_python = @MLIR_ENABLE_BINDINGS_PYTHON@
 config.build_shared_libs = @LLVM_BUILD_SHARED_LIBS@
+config.enable_plugins = @TRITON_ENABLE_PLUGINS@
 
 
 import lit.llvm
