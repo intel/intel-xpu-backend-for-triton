@@ -11,6 +11,7 @@
 
 #include "intel/include/Analysis/AxisInfo.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Operation.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include <triton/Tools/Sys/GetEnv.hpp>

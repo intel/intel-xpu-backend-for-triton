@@ -168,19 +168,19 @@ jobs:
           dest: ${{ steps.pip-cache.outputs.dest }}
 
       - name: Upload Triton wheels
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: triton-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           path: dist/*.whl
 
       - name: Upload PTI wheels
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: pti-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           path: .scripts_cache/pti/dist/*.whl
 
       - name: Upload test reports
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: test-reports-build-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           include-hidden-files: true
@@ -199,8 +199,6 @@ jobs:
           # - gluon
           - triton-kernels
           # - rest
-          # - tutorial-fa-64
-          # - tutorial-fa-128-fwdfp8
           # - tutorial-fa-128-nofwdfp8
     timeout-minutes: 720
     runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
@@ -345,12 +343,12 @@ jobs:
 
       # Run 06-fused-attention.py separately, because it is split into 3 configs
       - name: Run Flash Attention tutorials (HEAD_DIM=64)
-        if: matrix.suite == 'tutorial-fa-64'
+        if: matrix.suite == 'rest'
         run: |
           HEAD_DIM=64 ${{ env.TRITON_TEST_CMD }} --tutorial06-run-mode fa_only
 
       - name: Run Flash Attention tutorials (HEAD_DIM=128, FP8 only)
-        if: matrix.suite == 'tutorial-fa-128-fwdfp8'
+        if: matrix.suite == 'rest'
         run: |
           ${{ env.TRITON_TEST_CMD }} --tutorial06-run-mode fp8_only
 
@@ -378,7 +376,7 @@ jobs:
           dest: ${{ steps.pip-cache.outputs.dest }}
 
       - name: Upload test reports
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: test-reports-${{ matrix.suite }}-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           include-hidden-files: true
@@ -427,13 +425,13 @@ jobs:
           triton-utils tests_stats --reports reports --level testsuite --pretty-print --merge-test-results --tests-with-multiple-testsuites
 
       - name: Upload pass rate report
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: pass_rate-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           path: pass_rate*.json
 
       - name: Upload tutorials test report
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: test-reports-tutorials-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           include-hidden-files: true
@@ -442,7 +440,7 @@ jobs:
             reports/test-report-tutorials-*/tutorials.xml
 
       - name: Upload tutorials performance report
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: tutorials-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           if-no-files-found: warn

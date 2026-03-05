@@ -3,6 +3,7 @@
 #include "llvm/ADT/TypeSwitch.h"
 
 #include "intel/include/Analysis/Utility.h"
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 
 namespace mlir::triton::gpu {
 namespace {
