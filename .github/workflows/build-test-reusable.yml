@@ -307,10 +307,10 @@ jobs:
         run: |
           ${{ env.TRITON_TEST_CMD }} --language
 
-      - name: Run mxfp tests
+      - name: Run matmul tests
         if: matrix.suite == 'rest'
         run: |
-          ${{ env.TRITON_TEST_CMD }} --mxfp
+          ${{ env.TRITON_TEST_CMD }} --matmul
 
       - name: Run scaled_dot tests
         if: matrix.suite == 'scaled_dot'
