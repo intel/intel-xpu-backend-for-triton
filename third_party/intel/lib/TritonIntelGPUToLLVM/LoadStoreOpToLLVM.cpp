@@ -1,4 +1,5 @@
 #include "Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/Matchers.h"
