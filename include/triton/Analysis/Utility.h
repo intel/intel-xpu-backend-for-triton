@@ -307,6 +307,13 @@ public:
     return nullptr;
   }
 
+  const T *getFuncData(FunctionOpInterface funcOp) const {
+    auto it = funcMap.find(funcOp);
+    if (it != funcMap.end())
+      return &it->second;
+    return nullptr;
+  }
+
   /// Getters
   ModuleOp getModuleOp() const { return moduleOp; }
   SmallVector<FunctionOpInterface> getRoots() const { return roots; }

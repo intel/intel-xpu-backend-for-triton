@@ -1492,9 +1492,9 @@ ModuleAxisInfoAnalysis::ModuleAxisInfoAnalysis(ModuleOp moduleOp)
   }
 }
 
-AxisInfo *ModuleAxisInfoAnalysis::getAxisInfo(Value value) {
+const AxisInfo *ModuleAxisInfoAnalysis::getAxisInfo(Value value) const {
   auto funcOp = value.getParentRegion()->getParentOfType<FunctionOpInterface>();
-  auto *axisInfoMap = getFuncData(funcOp);
+  const auto *axisInfoMap = getFuncData(funcOp);
   if (!axisInfoMap) {
     return nullptr;
   }
@@ -1505,7 +1505,7 @@ AxisInfo *ModuleAxisInfoAnalysis::getAxisInfo(Value value) {
   return &(it->second);
 }
 
-unsigned ModuleAxisInfoAnalysis::getContiguity(Value value) {
+unsigned ModuleAxisInfoAnalysis::getContiguity(Value value) const {
   auto tensorTy = ttgi::getRankedTensorType(value.getType());
   if (!tensorTy)
     return 1;
@@ -1526,7 +1526,7 @@ unsigned ModuleAxisInfoAnalysis::getContiguity(Value value) {
   return contiguity;
 }
 
-unsigned ModuleAxisInfoAnalysis::getAlignment(Value value) {
+unsigned ModuleAxisInfoAnalysis::getAlignment(Value value) const {
   auto tensorTy = ttgi::getRankedTensorType(value.getType());
   if (!tensorTy)
     return 1;
@@ -1567,7 +1567,7 @@ unsigned ModuleAxisInfoAnalysis::getAlignment(Value value) {
   return alignment;
 }
 
-unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
+unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) const {
   auto tensorTy = ttgi::getRankedTensorType(mask.getType());
   if (!tensorTy)
     return 1;

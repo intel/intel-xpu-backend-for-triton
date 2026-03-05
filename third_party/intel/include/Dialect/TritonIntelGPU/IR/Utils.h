@@ -29,7 +29,7 @@ inline unsigned getNumElementsPerThread(
           ? cast<RankedTensorType>(cast<PointerType>(valTy).getPointeeType())
           : cast<RankedTensorType>(valTy);
   auto shapePerCTA = getShapePerCTA(ty);
-  mlir::triton::AxisInfo &valInfo = *axisInfoAnalysis.getAxisInfo(val);
+  const mlir::triton::AxisInfo &valInfo = *axisInfoAnalysis.getAxisInfo(val);
 
   unsigned elemNumBits = getElementBitWidth(ty);
   unsigned elemNumBytes = std::max(elemNumBits / 8, 1u);

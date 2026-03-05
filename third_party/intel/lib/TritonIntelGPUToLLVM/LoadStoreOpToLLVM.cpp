@@ -152,9 +152,7 @@ struct LoadStoreConversionBase {
       : targetInfo(targetInfo), axisAnalysisPass(axisAnalysisPass) {}
 
   int getStride(Value ptr, unsigned dim) const {
-    AxisInfo *axisInfo =
-        const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
-            .getAxisInfo(ptr);
+    const AxisInfo *axisInfo = axisAnalysisPass.getAxisInfo(ptr);
     if (axisInfo) {
       const SmallVector<int64_t> &stride = axisInfo->getStride();
       if (dim < stride.size()) {
@@ -809,7 +807,8 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
   template <bool IS_LOAD>
   static BlockIOTileSizeInfo
   getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
-                     unsigned elemSizeInBits, AxisInfo *maskAxisInfo = nullptr,
+                     unsigned elemSizeInBits,
+                     const AxisInfo *maskAxisInfo = nullptr,
                      bool oneMatrixPerLoadForBT = false) {
 
     if (elemSizeInBits > 64)
@@ -1681,10 +1680,7 @@ struct PrefetchOpConversion
       // No need to check the constancy of scalar mask.
       if (auto maskTy = dyn_cast_or_null<RankedTensorType>(mask.getType())) {
         maskConstancyHor = maskConstancyVer = 1;
-        AxisInfo *axisInfo =
-            const_cast<triton::intel::ModuleAxisInfoAnalysis &>(
-                axisAnalysisPass)
-                .getAxisInfo(mask);
+        const AxisInfo *axisInfo = axisAnalysisPass.getAxisInfo(mask);
         if (axisInfo) {
           maskConstancyHor = axisInfo->getConstancy(1);
           maskConstancyVer = axisInfo->getConstancy(0);
@@ -2025,11 +2021,9 @@ public:
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
 
     // Get the maximum tile shapes for the given mask constancy.
-    AxisInfo *maskAxisInfo = nullptr;
+    const AxisInfo *maskAxisInfo = nullptr;
     if (op.getMask()) {
-      maskAxisInfo =
-          const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
-              .getAxisInfo(op.getMask());
+      maskAxisInfo = axisAnalysisPass.getAxisInfo(op.getMask());
     }
     BlockIOTileSizeInfo sizeInfo = getBlockIOTileSize<true /*load*/>(
         llEncoding.value(), contiguousDim, elemSizeInBits, maskAxisInfo,
@@ -2943,11 +2937,9 @@ struct StoreOpToBlockIOConversion
     Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
     // Get the maximum tile shapes for the given mask constancy.
-    AxisInfo *maskAxisInfo = nullptr;
+    const AxisInfo *maskAxisInfo = nullptr;
     if (op.getMask()) {
-      maskAxisInfo =
-          const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
-              .getAxisInfo(op.getMask());
+      maskAxisInfo = axisAnalysisPass.getAxisInfo(op.getMask());
     }
     BlockIOTileSizeInfo sizeInfo = getBlockIOTileSize<false /*store*/>(
         llEncoding.value(), contiguousDim, elemSizeInBits, maskAxisInfo);
