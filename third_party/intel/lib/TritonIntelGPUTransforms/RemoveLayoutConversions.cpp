@@ -1086,8 +1086,6 @@ bool canBeRemat(Operation *op) {
     return !ttgi::isExpensiveLoadOrStore(op);
   if (isa<tt::AtomicRMWOp, tt::AtomicCASOp, tt::DotOp>(op))
     return false;
-  if (isa<tt::DescriptorLoadOp, tt::DescriptorStoreOp>(op))
-    return false;
   if (auto gather = dyn_cast<tt::GatherOp>(op))
     return !gather.getEfficientLayout();
 
