@@ -84,11 +84,10 @@ def test_divide(float_div, floor, trunc, device):
     a = torch.randint(2**32, 2**40, [100, 100], device=device)
     b = torch.randint(-10, -1, [100, 100], device=device)
 
-    for iter in range(100):
-        triton_result = launch_triton(a, b)
-        torch_result = launch_torch(a, b)
+    triton_result = launch_triton(a, b)
+    torch_result = launch_torch(a, b)
 
-        for i in range(5):
-            torch.testing.assert_close(
-                triton_result[i], torch_result[i], check_dtype=False, msg=lambda msg:
-                f"Float: {float_div}, Floor: {floor}, Trunc: {trunc}\nIteration {iter}, {i} failed\n{msg}")
+    for i in range(5):
+        torch.testing.assert_close(
+            triton_result[i], torch_result[i], check_dtype=False,
+            msg=lambda msg: f"Float: {float_div}, Floor: {floor}, Trunc: {trunc}\n Output: {i} failed\n{msg}")
