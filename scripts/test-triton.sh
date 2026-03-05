@@ -598,6 +598,8 @@ run_microbench_tests() {
   echo "****************************************************"
   echo "*****   Running Triton Micro Benchmark tests   *****"
   echo "****************************************************"
+  cd $TRITON_PROJ/benchmarks
+  pip install .
   python $TRITON_PROJ/benchmarks/micro_benchmarks/run_benchmarks.py
 }
 
