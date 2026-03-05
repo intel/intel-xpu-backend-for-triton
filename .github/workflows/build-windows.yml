@@ -135,6 +135,10 @@ jobs:
         python3 -m pip install -r llvm-project/mlir/python/requirements.txt
 
         cmake -GNinja -Bllvm-project/build
+        -DLLVM_BUILD_LLVM_DYLIB=ON
+        -DLLVM_BUILD_LLVM_DYLIB_VIS=ON
+        -DLLVM_LINK_LLVM_DYLIB=ON
+        -DCLANG_LINK_CLANG_DYLIB=OFF
         -DCMAKE_BUILD_TYPE=Release
         -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl
         -DCMAKE_INSTALL_PREFIX="${{ env.llvm_install_dir }}"
