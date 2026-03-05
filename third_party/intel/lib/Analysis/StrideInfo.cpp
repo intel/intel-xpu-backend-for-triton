@@ -151,12 +151,43 @@ static StrideInfo makeTensorPtrStrideInfo(ValueRange strides) {
 }
 
 // PassThrough: stride passes from operand 0
-template <typename OpTy>
+template <typename OpTy,
+          typename =
+              std::enable_if_t<OpTy::template hasTrait<OpTrait::OneOperand>()>>
 class PassThroughStrideVisitor final : public StrideInfoVisitorImpl<OpTy> {
 public:
   StrideInfo getStrideInfo(
       OpTy op,
       ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
+    assert(op->getNumOperands() == 1 &&
+           "PassThroughStrideVisitor expects a single-operand op");
+    return operands[0]->getValue();
+  }
+};
+
+// AdvanceOp: stride passes from operand 0 (the pointer operand).
+// AdvanceOp has variadic offsets so it cannot use PassThroughStrideVisitor.
+class AdvanceOpStrideVisitor final
+    : public StrideInfoVisitorImpl<triton::AdvanceOp> {
+public:
+  StrideInfo getStrideInfo(
+      triton::AdvanceOp op,
+      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
+    assert(!operands.empty() && "AdvanceOp must have at least one operand");
+    return operands[0]->getValue();
+  }
+};
+
+// UnrealizedConversionCastOp: stride passes from operand 0.
+// This op has variadic inputs so it cannot use PassThroughStrideVisitor.
+class UnrealizedConversionCastStrideVisitor final
+    : public StrideInfoVisitorImpl<mlir::UnrealizedConversionCastOp> {
+public:
+  StrideInfo getStrideInfo(
+      mlir::UnrealizedConversionCastOp op,
+      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
+    assert(!operands.empty() &&
+           "UnrealizedConversionCastOp must have at least one operand");
     return operands[0]->getValue();
   }
 };
@@ -464,9 +495,9 @@ public:
                     PassThroughStrideVisitor<arith::TruncIOp>,
                     PassThroughStrideVisitor<arith::IndexCastOp>,
                     PassThroughStrideVisitor<triton::gpu::ConvertLayoutOp>,
-                    PassThroughStrideVisitor<mlir::UnrealizedConversionCastOp>,
-                    PassThroughStrideVisitor<triton::BitcastOp>,
-                    PassThroughStrideVisitor<triton::AdvanceOp>>();
+                    PassThroughStrideVisitor<triton::BitcastOp>>();
+    visitors.append<AdvanceOpStrideVisitor>();
+    visitors.append<UnrealizedConversionCastStrideVisitor>();
     visitors.append<MakeRangeOpStrideVisitor>();
     visitors.append<PoisonOpStrideVisitor>();
     visitors.append<ConstantOpStrideVisitor<arith::ConstantOp>,
