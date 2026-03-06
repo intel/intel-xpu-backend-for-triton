@@ -591,8 +591,17 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
 
     const bool enableBlockIOForAllLayout =
         triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS");
-    return enableBlockIOForAllLayout || hasDpasEncoding(tensorTy) ||
-           hasDotDpasEncoding(tensorTy);
+    if (!enableBlockIOForAllLayout && !hasDpasEncoding(tensorTy) &&
+        !hasDotDpasEncoding(tensorTy))
+      return false;
+
+    // Ensure block_io attribute is always set. Descriptors are row-major by
+    // definition; column_major is set by FuseTransWithDescriptorLoad.
+    if (!op->hasAttr(TritonIntelGPUDialect::getBlockIOAttrName())) {
+      op->setAttr(TritonIntelGPUDialect::getBlockIOAttrName(),
+                  StringAttr::get(op->getContext(), "row_major"));
+    }
+    return true;
   }
 
   static bool
@@ -2434,11 +2443,15 @@ struct DescriptorLoadOpToBlockIOConversion
     assert(llEncoding.has_value() &&
            "unexpected failure when getting linear layout");
 
-    // Contiguous inner dimension (stride-1) is validated by
-    // isDescriptorBlockIOCandidate(). getBlockIOTileSize() determines whether
-    // the encoding's fast-changing dimension requires a transpose.
+    // Read memory layout from block_io attribute. Always set by
+    // isDescriptorBlockIOCandidate (row_major default) or
+    // FuseTransWithDescriptorLoad (column_major).
     const unsigned rank = tensorType.getRank();
-    unsigned contiguousDim = rank - 1;
+    auto blockIOAttr = op->getAttrOfType<StringAttr>(
+        TritonIntelGPUDialect::getBlockIOAttrName());
+    assert(blockIOAttr && "block_io attribute must be set by candidate check");
+    bool memoryRowMajor = (blockIOAttr.getValue() == "row_major");
+    unsigned contiguousDim = memoryRowMajor ? rank - 1 : rank - 2;
 
     Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
@@ -2508,23 +2521,29 @@ struct DescriptorLoadOpToBlockIOConversion
     unsigned baseIdx = 2 * rank;
 
     Value base = descFields[baseIdx];
-    // Shapes and strides are all i64 in the descriptor struct.
-    // Truncate to i32 for 2D block load surface parameters.
-    Value surfaceHeight =
-        b.trunc(i32_ty, descFields[shapeStart + 0]); // shape[0] (rows)
-    Value surfaceWidth =
-        b.trunc(i32_ty, descFields[shapeStart + 1]); // shape[1] (columns)
-    Value strideRow = descFields[strideStart + 0];   // stride[0]
 
-    // Surface parameters for 2D block load.
+    // Surface parameters for descriptor loads.
+    // The descriptor is always row-major (stride-1 on last dim), regardless
+    // of the block_io attribute. Extract in descriptor's natural order.
     Value elemBytes = b.i32_val(elemSizeInBits / 8);
+    Value surfaceWidth = b.trunc(i32_ty, descFields[shapeStart + (rank - 1)]);
+    Value surfaceHeight = b.trunc(i32_ty, descFields[shapeStart + 0]);
     Value baseWidth = b.mul(surfaceWidth, elemBytes);
     Value baseHeight = surfaceHeight;
-    Value pitch = b.mul(b.trunc(i32_ty, strideRow), elemBytes);
+    Value pitch =
+        b.mul(b.trunc(i32_ty, descFields[strideStart + 0]), elemBytes);
 
     // Base offsets from descriptor load indices.
+    // Indices are in descriptor dimension space. When column_major, the result
+    // type dimensions are transposed relative to the descriptor, so we swap
+    // the indices to align with the result type coordinate system used by
+    // the LinearLayout offsets.
     SmallVector<Value> descIndices(adaptor.getIndices().begin(),
                                    adaptor.getIndices().end());
+    if (!memoryRowMajor) {
+      // column_major: result dims are transposed vs descriptor dims.
+      std::reverse(descIndices.begin(), descIndices.end());
+    }
 
     // Replicate base pointer for all tiles.
     unsigned numElems = getTotalElemsPerThread(resultType);
@@ -2892,11 +2911,36 @@ struct DescriptorLoadOpConversion
       allDims[i] = static_cast<int32_t>(i);
 
     // Reuse the shared gather/scatter operand computation.
+    // For column_major descriptor loads (created by
+    // FuseTransWithDescriptorLoad), the result type has transposed dimensions
+    // relative to the descriptor's natural [N, K] order. emitIndices uses the
+    // result type's dimension space (dim 0 = K, dim 1 = N for a [BK, BN]
+    // result), but the descriptor struct encodes shapes/strides in descriptor
+    // space (dim 0 = N, dim 1 = K). The base offsets (indices) are also in
+    // descriptor space. Reverse all three so that dimension i of the result
+    // aligns with dimension i of shapes/strides.
     SmallVector<Value> ptrElems, maskElems, otherElems;
-    std::tie(ptrElems, maskElems, otherElems) =
-        convertTensorDescriptorToTensorOfPtr(loc, llDesc, indices, resultType,
-                                             valueElemTy, rewriter, allDims,
-                                             padding);
+    auto blockIOAttr = op->getAttrOfType<StringAttr>(
+        TritonIntelGPUDialect::getBlockIOAttrName());
+    if (blockIOAttr && blockIOAttr.getValue() == "column_major") {
+      const SmallVector<Value> &descElems =
+          unpackLLElements(loc, llDesc, rewriter);
+      Value base = descElems[2 * rank];
+      SmallVector<Value> permShapes(rank), permStrides(rank), permOffsets(rank);
+      for (unsigned i = 0; i < rank; ++i) {
+        permShapes[i] = descElems[rank - 1 - i];
+        permStrides[i] = descElems[rank + (rank - 1 - i)];
+        permOffsets[i] = indices[rank - 1 - i];
+      }
+      std::tie(ptrElems, maskElems, otherElems) = computeGatherScatterOperands(
+          loc, base, permOffsets, permShapes, permStrides, resultType,
+          valueElemTy, rewriter, allDims, padding);
+    } else {
+      std::tie(ptrElems, maskElems, otherElems) =
+          convertTensorDescriptorToTensorOfPtr(loc, llDesc, indices, resultType,
+                                               valueElemTy, rewriter, allDims,
+                                               padding);
+    }
 
     // Determine vectorization
     // NOTE: LoadOp uses getVectorSize(ptr) which relies on axis info analysis.
