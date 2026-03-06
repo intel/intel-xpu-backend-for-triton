@@ -110,8 +110,8 @@ tt.func @muli(%arg0: i32) {
 
 // -----
 
-// CHECK-LABEL: @divsi
-tt.func @divsi() {
+// CHECK-LABEL: @div
+tt.func @div() {
   // CHECK: tt.make_range {{.*}} => stride = [1]
   %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
   // CHECK: arith.constant {{.*}} => stride = [0]
@@ -122,24 +122,32 @@ tt.func @divsi() {
   // stride(4) / const(4) = 1
   // CHECK: arith.divsi {{.*}} => stride = [1]
   %2 = arith.divsi %1, %cst4 : tensor<128xi32>
+  // CHECK: arith.divui {{.*}} => stride = [1]
+  %3 = arith.divui %1, %cst4 : tensor<128xi32>
   // stride(1) / const(4): not evenly divisible => -1
   // CHECK: arith.divsi {{.*}} => stride = [-1]
-  %3 = arith.divsi %0, %cst4 : tensor<128xi32>
+  %4 = arith.divsi %0, %cst4 : tensor<128xi32>
+  // CHECK: arith.divui {{.*}} => stride = [-1]
+  %5 = arith.divui %0, %cst4 : tensor<128xi32>
   // stride(0) / constant = 0
   // CHECK: arith.constant {{.*}} => stride = [0]
   %cst_splat = arith.constant dense<100> : tensor<128xi32>
   // CHECK: arith.divsi {{.*}} => stride = [0]
-  %4 = arith.divsi %cst_splat, %cst4 : tensor<128xi32>
-  // negative divisor => -1
+  %6 = arith.divsi %cst_splat, %cst4 : tensor<128xi32>
+  // CHECK: arith.divui {{.*}} => stride = [0]
+  %7 = arith.divui %cst_splat, %cst4 : tensor<128xi32>
+  // negative divisor => -1 (signed only)
   // CHECK: arith.constant {{.*}} => stride = [0]
   %neg = arith.constant dense<-4> : tensor<128xi32>
   // CHECK: arith.divsi {{.*}} => stride = [-1]
-  %5 = arith.divsi %0, %neg : tensor<128xi32>
+  %8 = arith.divsi %0, %neg : tensor<128xi32>
   // division by zero => -1
   // CHECK: arith.constant {{.*}} => stride = [0]
   %zero = arith.constant dense<0> : tensor<128xi32>
   // CHECK: arith.divsi {{.*}} => stride = [-1]
-  %6 = arith.divsi %cst4, %zero : tensor<128xi32>
+  %9 = arith.divsi %cst4, %zero : tensor<128xi32>
+  // CHECK: arith.divui {{.*}} => stride = [-1]
+  %10 = arith.divui %cst4, %zero : tensor<128xi32>
   tt.return
 }
 
@@ -523,22 +531,6 @@ tt.func @index_cast_passthrough() {
   // index_cast passes through stride
   // CHECK: arith.index_cast {{.*}} => stride = [1]
   %1 = arith.index_cast %0 : tensor<128xi32> to tensor<128xindex>
-  tt.return
-}
-
-// -----
-
-// CHECK-LABEL: @divui
-tt.func @divui() {
-  // CHECK: tt.make_range {{.*}} => stride = [1]
-  %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
-  // CHECK: arith.constant {{.*}} => stride = [0]
-  %cst2 = arith.constant dense<2> : tensor<128xi32>
-  // stride(range)*2 = 2, then 2 / 2 = 1
-  // CHECK: arith.muli {{.*}} => stride = [2]
-  %1 = arith.muli %0, %cst2 : tensor<128xi32>
-  // CHECK: arith.divui {{.*}} => stride = [1]
-  %2 = arith.divui %1, %cst2 : tensor<128xi32>
   tt.return
 }
 
