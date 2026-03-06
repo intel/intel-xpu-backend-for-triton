@@ -6,12 +6,26 @@ on:
   pull_request:
     branches:
       - main
-    paths:
-      - .github/workflows/triton-benchmarks*.yml
-      - benchmarks/**
+    types: [opened, synchronize, reopened, labeled]
 
 jobs:
+  check-paths:
+    runs-on: ubuntu-latest
+    outputs:
+      benchmarks: ${{ steps.check.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Check for benchmark changes
+        id: check
+        uses: ./.github/actions/check-path-changes
+        with:
+          patterns: '^(\.github/workflows/triton-benchmarks.*\.yml|benchmarks/)'
+
   benchmarks:
+    needs: check-paths
+    if: needs.check-paths.outputs.benchmarks == 'true' || github.event.label.name == 'run-benchmarks'
     uses: ./.github/workflows/triton-benchmarks.yml
     with:
       runner_label: max1550

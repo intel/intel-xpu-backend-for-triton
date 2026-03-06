@@ -189,19 +189,17 @@ class SpirvUtils:
 
     def __init__(self, cache_path: str):
         self.shared_library = ctypes.PyDLL(cache_path)
-        methods = ("init_devices", "load_binary", "wait_on_sycl_queue", "has_opencl_extension", "sycl_queue_memset")
+        methods = ("init_devices", "load_binary", "wait_on_sycl_queue", "sycl_queue_memset")
         for method in methods:
             getattr(self.shared_library, method).restype = ctypes.py_object
             getattr(self.shared_library, method).argtypes = (ctypes.py_object, )
         self.shared_library.get_device_properties.restype = ctypes.py_object
         self.shared_library.get_device_properties.argtypes = (ctypes.c_int, )
-        self.shared_library.has_opencl_extension.restype = ctypes.py_object
-        self.shared_library.has_opencl_extension.argtypes = (ctypes.c_int, ctypes.c_char_p)
         self.shared_library.get_last_selected_build_flags.restype = ctypes.py_object
 
     def __getattribute__(self, name):
-        if name in ("get_device_properties", "init_devices", "wait_on_sycl_queue", "has_opencl_extension",
-                    "get_last_selected_build_flags", "sycl_queue_memset"):
+        if name in ("get_device_properties", "init_devices", "wait_on_sycl_queue", "get_last_selected_build_flags",
+                    "sycl_queue_memset"):
             shared_library = super().__getattribute__("shared_library")
             return getattr(shared_library, name)
 
@@ -220,6 +218,38 @@ class SpirvUtils:
                 raise IntelGPUError("Error during Intel load_binary: " + str(e)) from e
             else:
                 raise e
+
+    if os.name != 'nt':
+
+        def __del__(self):
+            if hasattr(self, "shared_library"):
+                handle = self.shared_library._handle
+                self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
+                self.shared_library.dlclose(handle)
+    else:
+
+        def __del__(self):
+            if hasattr(self, "shared_library"):
+                handle = self.shared_library._handle
+                ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
+                ctypes.windll.kernel32.FreeLibrary(handle)
+
+
+class ExtensionUtils:
+    """Lightweight utility for checking device extensions without full driver initialization."""
+
+    def __init__(self, cache_path: str):
+        self.shared_library = ctypes.PyDLL(cache_path)
+        self.shared_library.check_extension.restype = ctypes.py_object
+        self.shared_library.check_extension.argtypes = (ctypes.c_int, ctypes.c_char_p)
+        self.shared_library.get_device_id.restype = ctypes.py_object
+        self.shared_library.get_device_id.argtypes = (ctypes.c_int, )
+
+    def check_extension(self, device_id: int, extension: bytes) -> bool:
+        return self.shared_library.check_extension(device_id, extension)
+
+    def get_device_id(self, device_idx: int) -> int:
+        return self.shared_library.get_device_id(device_idx)
 
     if os.name != 'nt':
 
@@ -295,6 +325,8 @@ def compile_module_from_src(src: str, name: str):
         return ArchParser(cache_path)
     if name == 'spirv_utils':
         return SpirvUtils(cache_path)
+    if name == 'extension_utils_impl':
+        return ExtensionUtils(cache_path)
     if name == '__triton_launcher':
         return TritonLauncher(cache_path)
     if name == 'proton_utils':
@@ -324,9 +356,9 @@ class XPUUtils(object):
         self.get_device_properties = mod.get_device_properties
         self.device_count = mod.init_devices(self.get_sycl_queue())
         self.wait_on_sycl_queue = mod.wait_on_sycl_queue
-        self.has_opencl_extension = mod.has_opencl_extension
         self.get_last_selected_build_flags = mod.get_last_selected_build_flags
         self.sycl_queue_memset = mod.sycl_queue_memset
+        self.unload_module = lambda module: None
 
     def get_current_device(self):
         import torch
@@ -924,29 +956,10 @@ class XPUDriver(DriverBase):
 
     def get_current_target(self):
         import torch
+        from triton.backends.intel.extension_utils import query_device_extensions
+
         device = self.get_current_device()
         dev_property = torch.xpu.get_device_capability(device)
-
-        def update_advanced_features(device, dev_property):
-            if knobs.intel.device_extensions:
-                # May be useful when using the `TRITON INTEL_DEVICE_ARCH` environment variable
-                # to be able to flexibly turn on/off the advanced feature.
-                supported_extensions = set()
-                supported_extensions.update(knobs.intel.device_extensions.split(" "))
-                dev_property[
-                    "has_subgroup_matrix_multiply_accumulate"] = "cl_intel_subgroup_matrix_multiply_accumulate" in supported_extensions
-                dev_property[
-                    "has_subgroup_matrix_multiply_accumulate_tensor_float32"] = "cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32" in supported_extensions
-                dev_property["has_subgroup_2d_block_io"] = "cl_intel_subgroup_2d_block_io" in supported_extensions
-                dev_property["has_bfloat16_conversion"] = "cl_intel_bfloat16_conversions" in supported_extensions
-            else:
-                check = self.utils.has_opencl_extension
-                dev_property["has_subgroup_matrix_multiply_accumulate"] = check(
-                    device, b"cl_intel_subgroup_matrix_multiply_accumulate")
-                dev_property["has_subgroup_matrix_multiply_accumulate_tensor_float32"] = check(
-                    device, b"cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32")
-                dev_property["has_subgroup_2d_block_io"] = check(device, b"cl_intel_subgroup_2d_block_io")
-                dev_property["has_bfloat16_conversion"] = check(device, b"cl_intel_bfloat16_conversions")
 
         def update_device_arch(dev_property):
             if not (arch := knobs.intel.device_arch):
@@ -956,7 +969,12 @@ class XPUDriver(DriverBase):
                 arch = parser.parse_device_arch(dev_property["architecture"])
             dev_property["arch"] = arch
 
-        update_advanced_features(device, dev_property)
+        # All GPUs with the same device_id have the same extensions, so we just
+        # need to query any GPU device
+        device_id = dev_property.get("device_id")
+        extensions = query_device_extensions(device_id)
+        dev_property.update(extensions)
+        dev_property["__intel_already_queried_extensions__"] = True
         update_device_arch(dev_property)
 
         return GPUTarget("xpu", dev_property, warp_size=32)

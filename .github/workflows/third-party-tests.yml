@@ -1,4 +1,4 @@
-name: Third party tests [liger-kernels, vllm, sglang]
+name: Third party tests [liger-kernels, sglang]
 
 on:
   workflow_dispatch:
@@ -11,6 +11,10 @@ on:
         description: Use Python built with pyenv
         type: boolean
         default: false
+      tests:
+        description: JSON list of tests to run, e.g. ["liger", "sglang"]. Leave empty to run all.
+        type: string
+        default: ""
   schedule:
     # About midnight PST Sunday (UTC-8)
     - cron: "5 10 * * SUN"
@@ -24,12 +28,13 @@ concurrency:
 permissions: read-all
 
 env:
-  PYTHON_VERSION: "3.10"
+  PYTHON_VERSION: "3.12"
   TAG: ${{ inputs.tag || (github.event_name == 'pull_request' && format('pr-{0}', github.event.number)) || (github.event_name == 'schedule' && 'ci') || 'test' }}
 
 jobs:
   small-tests:
-    name: Third party tests [vllm, sglang]
+    name: Third party tests [sglang]
+    if: ${{ !inputs.tests || contains(inputs.tests, 'sglang') }}
     runs-on:
       - linux
       - ${{ inputs.runner_label || 'max1550' }}
@@ -74,24 +79,20 @@ jobs:
           echo "REPORTS=$PWD/reports" >> $GITHUB_ENV
 
       - name: Run SGLANG tests
-        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (!inputs.tests || contains(inputs.tests, 'sglang')) }}
         run: |
           ./scripts/test-triton.sh --sglang --skip-pip-install --skip-pytorch-install
 
-      - name: Run VLLM tests
-        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
-        run: |
-          ./scripts/test-triton.sh --vllm --skip-pip-install --skip-pytorch-install
-
       - name: Upload test report
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: test-main-reports
           path: reports
   # We run all tests for Liger, so it's slow and we test it separately
   liger:
     name: Liger testing
+    if: ${{ !inputs.tests || contains(inputs.tests, 'liger') }}
     runs-on:
       - linux
       - ${{ inputs.runner_label || 'max1550' }}
@@ -141,7 +142,7 @@ jobs:
 
       - name: Upload test report
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: test-liger-reports
           path: reports

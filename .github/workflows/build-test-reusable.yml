@@ -168,19 +168,19 @@ jobs:
           dest: ${{ steps.pip-cache.outputs.dest }}
 
       - name: Upload Triton wheels
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: triton-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           path: dist/*.whl
 
       - name: Upload PTI wheels
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: pti-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           path: .scripts_cache/pti/dist/*.whl
 
       - name: Upload test reports
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: test-reports-build-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           include-hidden-files: true
@@ -199,8 +199,6 @@ jobs:
           - gluon
           - triton-kernels
           - rest
-          - tutorial-fa-64
-          - tutorial-fa-128-fwdfp8
           - tutorial-fa-128-nofwdfp8
     timeout-minutes: 720
     runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
@@ -307,10 +305,10 @@ jobs:
         run: |
           ${{ env.TRITON_TEST_CMD }} --language
 
-      - name: Run mxfp tests
+      - name: Run matmul tests
         if: matrix.suite == 'rest'
         run: |
-          ${{ env.TRITON_TEST_CMD }} --mxfp
+          ${{ env.TRITON_TEST_CMD }} --matmul
 
       - name: Run scaled_dot tests
         if: matrix.suite == 'scaled_dot'
@@ -338,31 +336,26 @@ jobs:
           export PYTEST_MAX_PROCESSES=4
           ${{ env.TRITON_TEST_CMD }} --triton-kernels
 
-      - name: Select tutorials to run (rest)
-        if: matrix.suite == 'rest'
-        run: |
-          cat <<EOF | tee tutorials.txt
-          01-vector-add
-          02-fused-softmax
-          03-matrix-multiplication
-          04-low-memory-dropout
-          05-layer-norm
-          07-extern-functions
-          08-grouped-gemm
-          09-persistent-matmul
-          10-experimental-block-pointer
-          EOF
-
       - name: Run Tutorials
         if: matrix.suite == 'rest'
         run: |
-          ${{ env.TRITON_TEST_CMD }} --select-from-file tutorials.txt --tutorial
+          ${{ env.TRITON_TEST_CMD }} --tutorial --tutorial06-run-mode skip
 
       # Run 06-fused-attention.py separately, because it is split into 3 configs
-      - name: Run Flash Attention tutorials
-        if: matrix.suite == 'tutorial-fa-64' || matrix.suite == 'tutorial-fa-128-fwdfp8' || matrix.suite == 'tutorial-fa-128-nofwdfp8'
+      - name: Run Flash Attention tutorials (HEAD_DIM=64)
+        if: matrix.suite == 'rest'
         run: |
-          ${{ env.TRITON_TEST_CMD }} "--${{ matrix.suite }}"
+          HEAD_DIM=64 ${{ env.TRITON_TEST_CMD }} --tutorial06-run-mode fa_only
+
+      - name: Run Flash Attention tutorials (HEAD_DIM=128, FP8 only)
+        if: matrix.suite == 'rest'
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --tutorial06-run-mode fp8_only
+
+      - name: Run Flash Attention tutorials (HEAD_DIM=128, skip FP8)
+        if: matrix.suite == 'tutorial-fa-128-nofwdfp8'
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --tutorial06-run-mode skip_fp8
 
       - name: Install transformers
         if: matrix.suite == 'rest'
@@ -383,7 +376,7 @@ jobs:
           dest: ${{ steps.pip-cache.outputs.dest }}
 
       - name: Upload test reports
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: test-reports-${{ matrix.suite }}-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           include-hidden-files: true
@@ -418,9 +411,9 @@ jobs:
           python_version: ${{ inputs.python_version }}
           use_pyenv: ${{ inputs.use_pyenv_python }}
 
-      - name: Install pass_rate dependencies
+      - name: Install triton_utils
         run: |
-          pip install defusedxml
+          pip install ./scripts/triton_utils
 
       - name: Load environment details
         run: |
@@ -428,25 +421,26 @@ jobs:
 
       - name: Pass rate
         run: |
-          python scripts/pass_rate.py --reports reports
-          python scripts/pass_rate.py --reports reports --json > pass_rate.json
-          python scripts/pass_rate.py --reports reports --suite tutorials --json > pass_rate_tutorials.json
+          triton-utils pass_rate --reports reports --save-to-json pass_rate.json --merge-test-results --tests-with-multiple-testsuites
+          triton-utils tests_stats --reports reports --level testsuite --pretty-print --merge-test-results --tests-with-multiple-testsuites
 
       - name: Upload pass rate report
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: pass_rate-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           path: pass_rate*.json
 
       - name: Upload tutorials test report
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: test-reports-tutorials-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           include-hidden-files: true
-          path: reports/tutorials.xml
+          path: |
+            reports/tutorials*.xml
+            reports/test-report-tutorials-*/tutorials.xml
 
       - name: Upload tutorials performance report
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: tutorials-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           if-no-files-found: warn

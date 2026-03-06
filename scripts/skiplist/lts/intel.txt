@@ -2,3 +2,6 @@
 python/test/unit/intel/test_block_io.py::test_block_io
 python/test/unit/intel/test_block_load.py::test_block_load_asserts
 python/test/unit/intel/test_block_load.py::test_block_load_dpas_layout
+# This test fails on LTS driver due to wrong zeinfo writing for failed kernels
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/5717#issuecomment-3835355337
+python/test/unit/intel/test_driver.py::test_auto_grf_on_build_failure[make_zebin-default-True]

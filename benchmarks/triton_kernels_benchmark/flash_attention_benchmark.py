@@ -154,6 +154,53 @@ configs = [
 
 tuner = triton.autotune(configs, key=['N_CTX', 'HEAD_DIM', 'STAGE'])
 
+bwd_configs = [
+    triton.Config({
+        'BLOCK_M1': bm1,
+        'BLOCK_N1': bn1,
+        'BLOCK_M2': bm2,
+        'BLOCK_N2': bn2,
+        'grf_mode': '256',
+    }, num_stages=s, num_warps=w)
+    for bm1 in [32, 64]
+    for bn1 in [64, 128]
+    for bm2 in [64, 128]
+    for bn2 in [32, 64]
+    for s in [2, 3]
+    for w in [8, 16]
+]
+
+
+def filter_func(_dict):
+    # These combinations result in the following error:
+    # Segmentation fault from GPU at 0xff00ffffffe00000, ctx_id: 1 (CCS) type: 0 \
+    #   (NotPresent), level: 1 (PDE), access: 0 (Read), banned: 1, aborting.
+    skip_dicts = [
+        {'BLOCK_M1': 32, 'BLOCK_N1': 64, 'BLOCK_M2': 64, 'BLOCK_N2': 32, 'grf_mode': '256'},
+        {'BLOCK_M1': 32, 'BLOCK_N1': 64, 'BLOCK_M2': 128, 'BLOCK_N2': 32, 'grf_mode': '256'},
+        {'BLOCK_M1': 32, 'BLOCK_N1': 64, 'BLOCK_M2': 128, 'BLOCK_N2': 64, 'grf_mode': '256'},
+        {'BLOCK_M1': 64, 'BLOCK_N1': 64, 'BLOCK_M2': 128, 'BLOCK_N2': 32, 'grf_mode': '256'},
+        {'BLOCK_M1': 64, 'BLOCK_N1': 64, 'BLOCK_M2': 128, 'BLOCK_N2': 64, 'grf_mode': '256'},
+    ]
+    if _dict.kwargs in skip_dicts:
+        return False
+    return True
+
+
+bwd_configs = list(filter(filter_func, bwd_configs))
+
+
+def early_prune(prune_configs, named_args, **kwargs):
+    if named_args['H'] == 48 and named_args['N_CTX'] == 1024 and kwargs['HEAD_DIM'] == 64:
+        # FIXME: benchmark_suite.assert_close fails for this configuration
+        bad_case = {'BLOCK_M1': 64, 'BLOCK_N1': 128, 'BLOCK_M2': 64, 'BLOCK_N2': 64, 'grf_mode': '256'}
+        prune_configs = list(filter(lambda cfg: cfg.kwargs != bad_case, prune_configs))
+    return prune_configs
+
+
+bwd_tuner = triton.autotune(bwd_configs, key=['N_CTX', 'HEAD_DIM'],
+                            prune_configs_by={'early_config_prune': early_prune})
+
 
 @triton.jit
 def _attn_bwd_preprocess(O, DO,  #
@@ -406,6 +453,7 @@ def _attn_bwd(Q, K, V, sm_scale,  #
 class _attention(torch.autograd.Function):
     tune_attn_fwd: Callable = None
     attn_fwd: Callable = None
+    tune_attn_bwd: Callable = None
 
     @staticmethod
     def forward(ctx, q, k, v, causal, sm_scale):
@@ -452,13 +500,10 @@ class _attention(torch.autograd.Function):
             dv = torch.empty_like(v)
             BATCH, N_HEAD, N_CTX = q.shape[:3]
             PRE_BLOCK = 128
-            NUM_WARPS, NUM_STAGES = 16, 3
-            BLOCK_M1, BLOCK_N1, BLOCK_M2, BLOCK_N2 = 32, 128, 128, 32
             BLK_SLICE_FACTOR = 2
             RCP_LN2 = 1.4426950408889634  # = 1.0 / ln(2)
             arg_k = k
             arg_k = arg_k * (ctx.sm_scale * RCP_LN2)
-            PRE_BLOCK = 128
             assert N_CTX % PRE_BLOCK == 0
             pre_grid = (N_CTX // PRE_BLOCK, BATCH * N_HEAD)
             delta = torch.empty_like(M)
@@ -468,18 +513,14 @@ class _attention(torch.autograd.Function):
                 BATCH, N_HEAD, N_CTX,  #
                 BLOCK_M=PRE_BLOCK, HEAD_DIM=ctx.HEAD_DIM  #
             )
-            grid = (N_CTX // BLOCK_N1, 1, BATCH * N_HEAD)
-            _attn_bwd[grid](
+            # Grid will be inferred from autotune configs, specifically using BLOCK_N1
+            # The lambda ensures grid is computed with the selected config's BLOCK_N1
+            _attention.tune_attn_bwd[(lambda args: (N_CTX // args['BLOCK_N1'], 1, BATCH * N_HEAD))](  # pylint: disable=unsubscriptable-object
                 q, arg_k, v, ctx.sm_scale, do, dq, dk, dv,  #
                 M, delta,  #
                 q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
                 N_HEAD, N_CTX,  #
-                BLOCK_M1=BLOCK_M1, BLOCK_N1=BLOCK_N1,  #
-                BLOCK_M2=BLOCK_M2, BLOCK_N2=BLOCK_N2,  #
-                BLK_SLICE_FACTOR=BLK_SLICE_FACTOR,  #
-                HEAD_DIM=ctx.HEAD_DIM,  #
-                num_warps=NUM_WARPS,  #
-                num_stages=NUM_STAGES  #
+                BLK_SLICE_FACTOR=BLK_SLICE_FACTOR, HEAD_DIM=ctx.HEAD_DIM,  #
             )
 
         return dq, dk, dv, None, None, None, None
@@ -512,6 +553,7 @@ def get_benchmark(
     # Initialize _attention class forward kernel (untuned for the advanced path and tuned for the default path).
     _attention.attn_fwd = attn_fwd
     _attention.tune_attn_fwd = tuner(attn_fwd)
+    _attention.tune_attn_bwd = bwd_tuner(_attn_bwd)
 
     @benchmark_suite.perf_report(
         benchmark_suite.Benchmark(
@@ -539,6 +581,18 @@ def get_benchmark(
     # pylint: disable=too-many-branches
     def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
         modes = ['fwd', 'bwd']
+        if H == 48 and N_CTX == 1024 and D_HEAD == 64:
+            # Clear cache to rerun autotuning and skip problem configs using `early_config_prune` option.
+            # Note: The cache key uses only N_CTX and D_HEAD, so different Z values with the same N_CTX and D_HEAD
+            # will hit the same cache entry. For example:
+            #   Z=16, H=32, N_CTX=1024, D_HEAD=64 -> creates cache entry
+            #   Z=4, H=48, N_CTX=1024, D_HEAD=64 -> cache hit (same key, kernel doesn't depend on Z)
+            # We don't add Z or H to the cache key because the kernel doesn't depend on them, and doing so would
+            # result in more kernel compilations.
+            key = (1024, 64, 'torch.float16', 'torch.float16', 'torch.float16', 'torch.float16', 'torch.float16',
+                   'torch.float16', 'torch.float16', 'torch.float32', 'torch.float32')
+            if key in _attention.tune_attn_bwd.cache:
+                del _attention.tune_attn_bwd.cache[key]
         # This warmup logic improves performance on BMG significantly
         # For FWD mode in triton & sycl-tla: Some configs increase performance with warmup as a step function, but some slowly decrease with saturation
         # Performance is best at 250-400ms range, but we want stable, not just best at ~600ms (triton/sycl-tla providers)
@@ -585,7 +639,9 @@ def get_benchmark(
                                                  err_msg=f'Error comparing {name} between triton and torch')
                 triton_fn = lambda: triton_o.backward(dout, retain_graph=True)
 
-            _, min_ms, max_ms, mean, cv = do_bench(triton_fn, grad_to_none=(q, k, v))
+            _, min_ms, max_ms, mean, cv = do_bench(
+                triton_fn, grad_to_none=(q, k, v),
+                benchmark_label='__profile_kernel_of_func_bwd_fa' if MODE == 'bwd' else None)
 
         elif provider == 'xetla':
             if MODE == 'bwd':

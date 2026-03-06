@@ -24,7 +24,7 @@ env:
   PYTHON_VERSION: "3.10"
   NEW_WORKSPACE: C:\gh${{ github.run_id }}
   SKIPLIST: --skip-list scripts/skiplist/${{ inputs.skip_list }}
-  TRITON_TEST_CMD: bash -x scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --skip-list scripts/skiplist/${{ inputs.skip_list }} --reports-dir reports --ignore-errors
+  TRITON_TEST_CMD: bash -x scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --skip-list scripts/skiplist/${{ inputs.skip_list }} --reports-dir reports --run-all
 
 jobs:
   build:
@@ -146,6 +146,7 @@ jobs:
           pip uninstall pytest_forked -y
 
       - name: Run unit tests
+        if: ${{ !cancelled() }}
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
@@ -153,6 +154,7 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --unit
 
       - name: Run core tests
+        if: ${{ !cancelled() }}
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
@@ -160,6 +162,7 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --core
 
       - name: Run gluon tests
+        if: ${{ !cancelled() }}
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
@@ -167,6 +170,7 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --gluon
 
       - name: Run triton kernels tests
+        if: ${{ !cancelled() }}
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
@@ -174,6 +178,7 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --triton-kernels
 
       - name: Run interpreter tests
+        if: ${{ !cancelled() }}
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
@@ -181,6 +186,7 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --interpreter
 
       - name: Run tutorials
+        if: ${{ !cancelled() }}
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
@@ -190,6 +196,7 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --tutorial
 
       - name: Run instrumentation tests
+        if: ${{ !cancelled() }}
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
@@ -197,29 +204,30 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --instrumentation
 
       - name: Pass rate
+        if: ${{ !cancelled() }}
         run: |
           .venv\Scripts\activate.ps1
           # oneAPI is required for sycl-ls, which is used by scripts/capture-hw-details.sh
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           cd ${{ env.NEW_WORKSPACE }}
-          pip install defusedxml
+          pip install ./scripts/triton_utils
           bash -c "\
             source ./scripts/capture-hw-details.sh; \
-            python scripts/pass_rate.py --reports reports; \
-            python scripts/pass_rate.py --reports reports --json > pass_rate.json; \
-            python scripts/pass_rate.py --reports reports --suite tutorials --json > pass_rate_tutorials.json; \
+            triton-utils pass_rate --reports reports --save-to-json pass_rate.json --merge-test-results --tests-with-multiple-testsuites; \
+            triton-utils tests_stats --reports reports --level testsuite --pretty-print --merge-test-results --tests-with-multiple-testsuites; \
           "
 
       - name: Upload pass rate report
         # upload reports only for the default branch
-        if: github.ref_name == 'main'
-        uses: actions/upload-artifact@v6
+        if: ${{ !cancelled() && github.ref_name == 'main' }}
+        uses: actions/upload-artifact@v7
         with:
           name: pass_rate
           path: ${{ env.NEW_WORKSPACE }}\pass_rate*.json
 
       - name: Upload tutorial performance
-        uses: actions/upload-artifact@v6
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
         with:
           name: tutorials-report
           if-no-files-found: warn

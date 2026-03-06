@@ -14,7 +14,7 @@ TEST:
     --minicore        part of core
     --intel           part of core
     --language        part of core
-    --mxfp            part of core
+    --matmul          part of core
     --scaled-dot      part of core
     --runtime         part of core
     --debug           part of core
@@ -28,9 +28,7 @@ TEST:
     --softmax
     --gemm
     --flash-attention
-    - tutorial-fa-64
-    - tutorial-fa-128-fwdfp8
-    - tutorial-fa-128-nofwdfp8
+    --tutorial06-run-mode MODE   FA run mode: all, skip, fa_only, fp8_only, skip_fp8
     --flex-attention
     --instrumentation
     --inductor
@@ -50,6 +48,7 @@ OPTION:
     --reports-dir DIR
     --warning-reports
     --ignore-errors
+    --run-all
     --skip-list SKIPLIST
     --extra-skip-list-suffixes SEMICOLON-SEPARATED LIST OF SUFFIXES
     --select-from-file SELECTFILE
@@ -69,7 +68,7 @@ TEST_CORE=false
 TEST_MINICORE=false
 TEST_INTEL=false
 TEST_LANGUAGE=false
-TEST_MXFP=false
+TEST_MATMUL=false
 TEST_SCALED_DOT=false
 TEST_RUNTIME=false
 TEST_DEBUG=false
@@ -80,6 +79,7 @@ TEST_GLUON=false
 TEST_INTERPRETER=false
 TEST_PROTON=false
 TEST_TUTORIAL=false
+TUTORIAL06_RUN_MODE=all
 TEST_MICRO_BENCHMARKS=false
 TEST_BENCHMARKS=false
 TEST_BENCHMARK_SOFTMAX=false
@@ -99,6 +99,7 @@ VENV=false
 TRITON_TEST_REPORTS=false
 TRITON_TEST_WARNING_REPORTS=false
 TRITON_TEST_IGNORE_ERRORS=false
+TRITON_TEST_RUN_ALL=false
 SKIP_PIP=false
 SKIP_PYTORCH=false
 TEST_UNSKIP=false
@@ -134,8 +135,8 @@ while (( $# != 0 )); do
       TEST_DEFAULT=false
       shift
       ;;
-    --mxfp)
-      TEST_MXFP=true
+    --matmul)
+      TEST_MATMUL=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -189,26 +190,18 @@ while (( $# != 0 )); do
       TEST_DEFAULT=false
       shift
       ;;
-    --tutorial-fa-64)
+    --tutorial06-run-mode)
       TEST_TUTORIAL=true
-      TEST_TUTORIAL_FA=true
-      FA_CONFIG="HEAD_DIM=64"
+      if [ "$#" -lt 2 ] || [ -z "${2-}" ]; then
+        err "--tutorial06-run-mode requires an argument: one of all, skip, fa_only, fp8_only, skip_fp8."
+      fi
+      case "$2" in
+        all|skip|fa_only|fp8_only|skip_fp8) ;;
+        *) err "Invalid value for --tutorial06-run-mode: '$2'. Expected one of: all, skip, fa_only, fp8_only, skip_fp8." ;;
+      esac
+      TUTORIAL06_RUN_MODE="$2"
       TEST_DEFAULT=false
-      shift
-      ;;
-    --tutorial-fa-128-fwdfp8)
-      TEST_TUTORIAL=true
-      TEST_TUTORIAL_FA=true
-      FA_CONFIG="HEAD_DIM=128 FWD_FP8_ONLY=1"
-      TEST_DEFAULT=false
-      shift
-      ;;
-    --tutorial-fa-128-nofwdfp8)
-      TEST_TUTORIAL=true
-      TEST_TUTORIAL_FA=true
-      FA_CONFIG="HEAD_DIM=128 FWD_FP8_SKIP=1"
-      TEST_DEFAULT=false
-      shift
+      shift 2
       ;;
     --microbench)
       TEST_MICRO_BENCHMARKS=true
@@ -315,6 +308,10 @@ while (( $# != 0 )); do
       TRITON_TEST_IGNORE_ERRORS=true
       shift
       ;;
+    --run-all)
+      TRITON_TEST_RUN_ALL=true
+      shift
+      ;;
     --skip-list)
       # Must be absolute
       TRITON_TEST_SKIPLIST_DIR="$(mkdir -p "$2" && cd "$2" && pwd)"
@@ -394,7 +391,7 @@ run_unit_tests() {
   echo "******       Running Triton LIT tests        ******"
   echo "***************************************************"
   cd $TRITON_PROJ/build/cmake*/test
-  lit -v . || $TRITON_TEST_IGNORE_ERRORS
+  lit -v . || handle_test_error
 }
 
 run_pytest_command() {
@@ -430,8 +427,9 @@ run_language_tests() {
   ensure_spirv_dis
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=language \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py \
-    -k "not test_mxfp and not test_preshuffle_scale_mxfp_cdna4 and not test_scaled_dot"
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ \
+    --ignore=language/test_line_info.py --ignore=language/test_matmul.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py \
+    -k "not test_mxfp and not test_scaled_dot"
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=subprocess \
     run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/test_subprocess.py
@@ -441,14 +439,15 @@ run_language_tests() {
     run_pytest_command -k "not test_line_info_interpreter" --verbose --device xpu language/test_line_info.py
 }
 
-run_mxfp_tests() {
+run_matmul_tests() {
   echo "***************************************************"
-  echo "******    Running Triton matmul mxfp tests   ******"
+  echo "******    Running Triton matmul tests   ******"
   echo "***************************************************"
   cd $TRITON_PROJ/python/test/unit
 
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=mxfp \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/test_matmul.py::test_mxfp8_mxfp4_matmul
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=matmul \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/test_matmul.py \
+    -k "not test_mxfp and not test_preshuffle_scale_mxfp_cdna4 or test_mxfp8_mxfp4_matmul"
 }
 
 run_scaled_dot_tests() {
@@ -533,7 +532,7 @@ run_core_tests() {
   echo "***************************************************"
   run_minicore_tests
   run_language_tests
-  run_mxfp_tests
+  run_matmul_tests
   run_scaled_dot_tests
   run_debug_tests
 }
@@ -573,44 +572,36 @@ run_tutorial_tests() {
   echo "**** Running Triton Tutorial tests           ******"
   echo "***************************************************"
   python -m pip install matplotlib 'pandas<3.0' tabulate -q
-  cd $TRITON_PROJ/python/tutorials
 
-  tutorials=(
-    "01-vector-add"
-    "02-fused-softmax"
-    "03-matrix-multiplication"
-    "04-low-memory-dropout"
-    "05-layer-norm"
-    "06-fused-attention"
-    "07-extern-functions"
-    "08-grouped-gemm"
-    "09-persistent-matmul"
-    "10-experimental-block-pointer"
-  )
-  if [ "${TEST_TUTORIAL_FA:-false}" = true ]; then
-    tutorials=(
-      "06-fused-attention"
-    )
+  cd $TRITON_PROJ/python/test/tutorials
 
-    if [ -n "${FA_CONFIG:-}" ]; then
-      # Containst specific config for Fused attention tutorial
-      export $FA_CONFIG
-    fi
+  # For FA-specific runs, place the report in a subdirectory so each CI
+  # matrix job's tutorials.xml has a unique path within the upload artifact.
+  local saved_reports_dir="$TRITON_TEST_REPORTS_DIR"
+  if [[ "$TUTORIAL06_RUN_MODE" != "all" && "$TUTORIAL06_RUN_MODE" != "skip" ]]; then
+    TRITON_TEST_REPORTS_DIR="$TRITON_TEST_REPORTS_DIR/test-report-tutorials-${TUTORIAL06_RUN_MODE//_/-}"
   fi
 
-  for tutorial in "${tutorials[@]}"; do
-    if [[ -f $TRITON_TEST_SELECTFILE ]] && ! grep -qF "$tutorial" "$TRITON_TEST_SELECTFILE"; then
-        continue
-    fi
+  # For reading them via os.environ for benchmark CSV redirection.
+  export TRITON_TEST_REPORTS
+  export TRITON_TEST_REPORTS_DIR
 
-    run_tutorial_test "$tutorial"
-  done
+  # Run tutorials serially (no -n flag): tutorials execute heavy GPU kernels with
+  # autotuning, sys.argv manipulation, and global allocator changes that are not
+  # safe to parallelize with pytest-xdist.
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=tutorials \
+    run_pytest_command -vvv --device xpu test_tutorials.py --tutorial06-mode "$TUTORIAL06_RUN_MODE"
+
+  # Restore the original reports directory.
+  TRITON_TEST_REPORTS_DIR="$saved_reports_dir"
 }
 
 run_microbench_tests() {
   echo "****************************************************"
   echo "*****   Running Triton Micro Benchmark tests   *****"
   echo "****************************************************"
+  cd $TRITON_PROJ/benchmarks
+  pip install --no-build-isolation .
   python $TRITON_PROJ/benchmarks/micro_benchmarks/run_benchmarks.py
 }
 
@@ -619,7 +610,7 @@ run_benchmark_softmax() {
   echo "*****             Running Softmax              *****"
   echo "****************************************************"
   cd $TRITON_PROJ/benchmarks
-  pip install .
+  pip install --no-build-isolation .
   python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/fused_softmax.py
 }
 
@@ -797,11 +788,53 @@ run_liger_tests() {
   run_pytest_command -vvv Liger-Kernel/test/
 }
 
-run_vllm_install() {
-  echo "************************************************"
-  echo "******    Installing VLLM                 ******"
-  echo "************************************************"
-  CLEAN_MSG="To get a clean install, run: \n    rm -rf ./vllm ./vllm-xpu-kernels && pip uninstall -y vllm vllm-xpu-kernels"
+run_vllm_upstream_install() {
+  # Installs latest vllm that doesn't depend on IPEX (no vllm-xpu-kernels needed)
+  cd "$TRITON_PROJ"
+
+  CLEAN_MSG="To get a clean install, run: \n    rm -rf $TRITON_PROJ/vllm && pip uninstall -y vllm"
+
+  local has_vllm_pip=false
+  pip show vllm >/dev/null 2>&1 && has_vllm_pip=true
+
+  # vllm already installed — nothing to do
+  if [ "$has_vllm_pip" = true ]; then
+    echo "WARNING: vllm is already installed, skipping installation."
+    echo -e $CLEAN_MSG
+    return
+  fi
+
+  # vllm not installed — proceed, reusing existing directory if present
+  if [ -d "./vllm" ]; then
+    echo "WARNING: ./vllm directory already exists, installing from it."
+    echo -e $CLEAN_MSG
+  else
+    git clone https://github.com/vllm-project/vllm.git
+
+    # Set specific pin
+    cd vllm
+    git checkout "$(<../benchmarks/vllm/vllm-pin.txt)"
+    cd ..
+  fi
+
+  # VLLM project tests use pytest-shard which conflicts with pytest-skip
+  pip uninstall pytest-skip -y
+
+  # These files contain specific versions of pytorch and triton, so let's remove them
+  sed -i '/pytorch\|torch\|triton/d' vllm/requirements/xpu.txt
+  sed -i '/pytorch\|torch\|triton/d' vllm/requirements/test.in
+  pip install -r vllm/requirements/xpu.txt
+  # Let's not install whole test requirements for now, they are very large and overwrite torch
+  # pip install -r vllm/requirements/test.in
+  pip install cachetools cbor2 blake3 pybase64 openai_harmony tblib
+  cp -r vllm/tests benchmarks/vllm/batched_moe/tests
+  VLLM_TARGET_DEVICE=xpu pip install --no-deps --no-build-isolation -e vllm
+}
+
+run_vllm_old_install() {
+  # Installs old vllm pin, that requires separate vllm-xpu-kernels due to IPEX dependency
+
+  CLEAN_MSG="To get a clean install, run: \n    rm -rf $TRITON_PROJ/vllm $TRITON_PROJ/vllm-xpu-kernels && pip uninstall -y vllm vllm-xpu-kernels"
 
   local has_vllm_pip=false
   local has_kernels_pip=false
@@ -831,8 +864,8 @@ run_vllm_install() {
 
     # Checkout the pinned commit, apply necessary patches and modify tests to run on xpu
     cd vllm
-    git checkout "$(<../benchmarks/third_party/vllm/vllm-pin.txt)"
-    git apply ../benchmarks/third_party/vllm/vllm-fix.patch
+    git checkout "$(<../benchmarks/vllm/vllm-pin.txt)"
+    git apply ../benchmarks/vllm/vllm-fix.patch
     sed -i 's/device="cuda"/device="xpu"/g' \
       tests/kernels/moe/utils.py \
       tests/kernels/moe/test_batched_moe.py \
@@ -844,7 +877,7 @@ run_vllm_install() {
     cd ..
   fi
   # These files are neceassary for benchmarking runs
-  cp -r vllm/tests benchmarks/third_party/vllm/tests
+  cp -r vllm/tests benchmarks/vllm/batched_moe/tests
 
   pip install -r vllm/requirements/xpu.txt
 
@@ -854,9 +887,9 @@ run_vllm_install() {
   else
     git clone https://github.com/vllm-project/vllm-xpu-kernels
     cd vllm-xpu-kernels
-    git checkout "$(<../benchmarks/third_party/vllm/vllm-kernels-pin.txt)"
-    sed -i '/pytorch\|torch/d' requirements.txt
-    sed -i '/pytorch\|torch/d' pyproject.toml
+    git checkout "$(<../benchmarks/vllm/vllm-kernels-pin.txt)"
+    sed -i '/pytorch\|torch\|triton/d' requirements.txt
+    sed -i '/pytorch\|torch\|triton/d' pyproject.toml
     pip install -r requirements.txt
     cd ..
   fi
@@ -866,6 +899,24 @@ run_vllm_install() {
   pip install cachetools cbor2 blake3 pybase64 openai_harmony tblib
 }
 
+run_vllm_install() {
+  echo "************************************************"
+  echo "******    Installing VLLM                 ******"
+  echo "************************************************"
+
+  local pin_file="$TRITON_PROJ/benchmarks/vllm/vllm-pin.txt"
+  local current_pin
+  current_pin=$(<"$pin_file")
+  echo "VLLM pin: $current_pin"
+
+  # Old pin that we currently have have specific patch to fix it, new version is expected to work OOB
+  # We can remove this when we update the pin to a newer version, but for now we want to be able to test both the old and new versions
+  if [ "$current_pin" = "b5545d9d5cab2625ac04a19f552631a2034c8f47" ]; then
+    run_vllm_old_install
+  else
+    run_vllm_upstream_install
+  fi
+}
 
 run_vllm_tests() {
   echo "************************************************"
@@ -878,6 +929,7 @@ run_vllm_tests() {
   cd vllm
   run_pytest_command -vvv tests/kernels/moe/test_batched_moe.py tests/kernels/attention/test_triton_unified_attention.py
 }
+
 
 run_triton_kernels_tests() {
   echo "***************************************************"
@@ -918,8 +970,8 @@ test_triton() {
   if [ "$TEST_LANGUAGE" = true ]; then
     run_language_tests
   fi
-  if [ "$TEST_MXFP" = true ]; then
-    run_mxfp_tests
+  if [ "$TEST_MATMUL" = true ]; then
+    run_matmul_tests
   fi
   if [ "$TEST_SCALED_DOT" = true ]; then
     run_scaled_dot_tests
@@ -1000,3 +1052,4 @@ test_triton() {
 
 install_deps
 test_triton
+exit $TRITON_TEST_EXIT_CODE

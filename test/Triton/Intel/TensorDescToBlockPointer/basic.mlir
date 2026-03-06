@@ -1,7 +1,7 @@
-// RUN: triton-opt %s -triton-intel-tdesc-to-block-pointer  | FileCheck %s
+// RUN: triton-opt %s -triton-intel-tdesc-to-block-pointer -split-input-file | FileCheck %s
 
 module {
-  tt.func public @test_load(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: i32) {
+  tt.func public @test_no_encoding(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: i32) {
     %c1_i64 = arith.constant 1 : i64
     %c64_i32 = arith.constant 64 : i32
     %c8_i32 = arith.constant 8 : i32
@@ -10,7 +10,7 @@ module {
     %load1 = tt.descriptor_load %desc1[%c8_i32, %c64_i32] : !tt.tensordesc<tensor<16x128xf32>> -> tensor<16x128xf32>
     tt.return
   }
-  // CHECK:      tt.func public @test_load([[PARAM_0:%.+]]: !tt.ptr<f32>, [[PARAM_1:%.+]]: i32, [[PARAM_2:%.+]]: i32) {
+  // CHECK:      tt.func public @test_no_encoding([[PARAM_0:%.+]]: !tt.ptr<f32>, [[PARAM_1:%.+]]: i32, [[PARAM_2:%.+]]: i32) {
   // CHECK-NOT:    tt.make_tensor_descriptor
   // CHECK-NOT:    tt.descriptor_load
   // CHECK-DAG:    [[CST_0_i32:%.+]] = arith.constant 0 : i32
@@ -24,6 +24,37 @@ module {
   // CHECK:        [[LOAD1:%.+]] = tt.load [[TENSOR_PTR1]] {boundaryCheck = array<i32: 0, 1>, padding = 1 : i32} : !tt.ptr<tensor<16x128xf32>>
   // CHECK:        tt.return
   // CHECK:      }
+}
+
+// -----
+
+// CHECK-DAG: #blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+// CHECK-DAG: [[DEFAULT:#.+]] = #ttg.blocked<{sizePerThread = [1, 1, 1, 1, 2], threadsPerWarp = [1, 1, 1, 1, 32], warpsPerCTA = [1, 1, 1, 1, 4], order = [4, 3, 2, 1, 0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @test_load(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: i32) {
+    %c1_i64 = arith.constant 1 : i64
+    %c64_i32 = arith.constant 64 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %0 = arith.extsi %arg2 : i32 to i64
+    %desc1 = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%0, %c1_i64] : <f32>, <tensor<16x128xf32>>
+    %load1 = tt.descriptor_load %desc1[%c8_i32, %c64_i32] : !tt.tensordesc<tensor<16x128xf32>> -> tensor<16x128xf32, #blocked>
+    tt.return
+  }
+  // CHECK:      tt.func public @test_load([[PARAM_0:%.+]]: !tt.ptr<f32>, [[PARAM_1:%.+]]: i32, [[PARAM_2:%.+]]: i32) {
+  // CHECK-NOT:    tt.make_tensor_descriptor
+  // CHECK-NOT:    tt.descriptor_load
+  // CHECK-DAG:    [[CST_0_i32:%.+]] = arith.constant 0 : i32
+  // CHECK-DAG:    [[CST_1_i64:%.+]] = arith.constant 1 : i64
+  // CHECK-DAG:    [[CST_64_i32:%.+]] = arith.constant 64 : i32
+  // CHECK-DAG:    [[CST_8_i32:%.+]] = arith.constant 8 : i32
+  // CHECK-DAG:    [[EXTSI_PARAM_1:%.+]] = arith.extsi [[PARAM_1]] : i32 to i64
+  // CHECK-DAG:    [[EXTSI_PARAM_2:%.+]] = arith.extsi [[PARAM_2]] : i32 to i64
+  // CHECK:        [[TENSOR_PTR:%.+]] = tt.make_tensor_ptr [[PARAM_0]], {{\[}}[[EXTSI_PARAM_1]], [[EXTSI_PARAM_2]]], {{\[}}[[EXTSI_PARAM_2]], [[CST_1_i64]]], {{\[}}[[CST_0_i32]], [[CST_0_i32]]] {{.*}} : <tensor<16x128xf32, #blocked>>
+  // CHECK:        [[TENSOR_PTR1:%.+]] = tt.advance [[TENSOR_PTR]], {{\[}}[[CST_8_i32]], [[CST_64_i32]]] : <tensor<16x128xf32, #blocked>>
+  // CHECK:        [[LOAD1:%.+]] = tt.load [[TENSOR_PTR1]] {boundaryCheck = array<i32: 0, 1>, padding = 1 : i32} : !tt.ptr<tensor<16x128xf32, #blocked>>
+  // CHECK:        tt.return
+  // CHECK:      }
 
   tt.func public @test_load_padding_nan(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: i32) {
     %c1_i64 = arith.constant 1 : i64
@@ -31,7 +62,7 @@ module {
     %c8_i32 = arith.constant 8 : i32
     %0 = arith.extsi %arg2 : i32 to i64
     %desc1 = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%0, %c1_i64] {padding = 2 : i32} : <f32>, <tensor<16x128xf32>>
-    %load1 = tt.descriptor_load %desc1[%c8_i32, %c64_i32] : !tt.tensordesc<tensor<16x128xf32>> -> tensor<16x128xf32>
+    %load1 = tt.descriptor_load %desc1[%c8_i32, %c64_i32] : !tt.tensordesc<tensor<16x128xf32>> -> tensor<16x128xf32, #blocked>
     tt.return
   }
   // CHECK:      tt.func public @test_load_padding_nan([[PARAM_0:%.+]]: !tt.ptr<f32>, [[PARAM_1:%.+]]: i32, [[PARAM_2:%.+]]: i32) {
@@ -43,9 +74,9 @@ module {
   // CHECK-DAG:    [[CST_8_i32:%.+]] = arith.constant 8 : i32
   // CHECK-DAG:    [[EXTSI_PARAM_1:%.+]] = arith.extsi [[PARAM_1]] : i32 to i64
   // CHECK-DAG:    [[EXTSI_PARAM_2:%.+]] = arith.extsi [[PARAM_2]] : i32 to i64
-  // CHECK:        [[TENSOR_PTR:%.+]] = tt.make_tensor_ptr [[PARAM_0]], {{\[}}[[EXTSI_PARAM_1]], [[EXTSI_PARAM_2]]], {{\[}}[[EXTSI_PARAM_2]], [[CST_1_i64]]], {{\[}}[[CST_0_i32]], [[CST_0_i32]]] {{.*}} : <tensor<16x128xf32>>
-  // CHECK:        [[TENSOR_PTR1:%.+]] = tt.advance [[TENSOR_PTR]], {{\[}}[[CST_8_i32]], [[CST_64_i32]]] : <tensor<16x128xf32>>
-  // CHECK:        [[LOAD1:%.+]] = tt.load [[TENSOR_PTR1]] {boundaryCheck = array<i32: 0, 1>, padding = 2 : i32} : !tt.ptr<tensor<16x128xf32>>
+  // CHECK:        [[TENSOR_PTR:%.+]] = tt.make_tensor_ptr [[PARAM_0]], {{\[}}[[EXTSI_PARAM_1]], [[EXTSI_PARAM_2]]], {{\[}}[[EXTSI_PARAM_2]], [[CST_1_i64]]], {{\[}}[[CST_0_i32]], [[CST_0_i32]]] {{.*}} : <tensor<16x128xf32, #blocked>>
+  // CHECK:        [[TENSOR_PTR1:%.+]] = tt.advance [[TENSOR_PTR]], {{\[}}[[CST_8_i32]], [[CST_64_i32]]] : <tensor<16x128xf32, #blocked>>
+  // CHECK:        [[LOAD1:%.+]] = tt.load [[TENSOR_PTR1]] {boundaryCheck = array<i32: 0, 1>, padding = 2 : i32} : !tt.ptr<tensor<16x128xf32, #blocked>>
   // CHECK:        tt.return
   // CHECK:      }
 
@@ -55,9 +86,9 @@ module {
     %c1_i64 = arith.constant 1 : i64
     %c1_i32 = arith.constant 1 : i32
     %0 = tt.make_tensor_descriptor %arg1, [%c1_i32, %c1_i32, %c1_i32, %arg2, %arg3], [%arg4, %arg5, %arg6, %arg7, %c1_i64] : <i8>, <tensor<1x1x1x8x128xui8>>
-    %1 = tt.descriptor_load %0[%c1_i32, %c0_i32, %c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<tensor<1x1x1x8x128xui8>> -> tensor<8x128xi8>
-    %2 = tt.splat %arg0 : !tt.ptr<i8> -> tensor<8x128x!tt.ptr<i8>>
-    tt.store %2, %1 : tensor<8x128x!tt.ptr<i8>>
+    %1 = tt.descriptor_load %0[%c1_i32, %c0_i32, %c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<tensor<1x1x1x8x128xui8>> -> tensor<8x128xi8, #blocked>
+    %2 = tt.splat %arg0 : !tt.ptr<i8> -> tensor<8x128x!tt.ptr<i8>, #blocked>
+    tt.store %2, %1 : tensor<8x128x!tt.ptr<i8>, #blocked>
     tt.return
   }
   // CHECK:       tt.func public @test_load_res_type_contracted([[PARAM_0:%.+]]: !tt.ptr<i8>, [[PARAM_1:%.+]]: !tt.ptr<i8>
@@ -65,10 +96,10 @@ module {
   // CHECK-NOT:     tt.descriptor_load
   // CHECK:         [[CST_0:%.+]] = arith.constant 0 : i32
   // CHECK:         [[CST_1:%.+]] = arith.constant 1 : i32
-  // CHECK:         [[TENSOR_PTR:%.+]] = tt.make_tensor_ptr [[PARAM_1]], {{.*}} : <tensor<1x1x1x8x128xi8>>
-  // CHECK:         [[TENSOR_PTR1:%.+]] = tt.advance [[TENSOR_PTR]], {{\[}}[[CST_1]], [[CST_0]], [[CST_0]], [[CST_0]], [[CST_0]]{{\]}} : <tensor<1x1x1x8x128xi8>>
-  // CHECK:         [[LOAD:%.+]] = tt.load [[TENSOR_PTR1]] {boundaryCheck = array<i32: 0, 1, 2, 3, 4>, padding = 1 : i32} : !tt.ptr<tensor<1x1x1x8x128xi8>>
-  // CHECK:         [[RESHAPE:%.+]] = tt.reshape [[LOAD]] : tensor<1x1x1x8x128xi8> -> tensor<8x128xi8>
+  // CHECK:         [[TENSOR_PTR:%.+]] = tt.make_tensor_ptr [[PARAM_1]], {{.*}} : <tensor<1x1x1x8x128xi8, [[DEFAULT]]>>
+  // CHECK:         [[TENSOR_PTR1:%.+]] = tt.advance [[TENSOR_PTR]], {{\[}}[[CST_1]], [[CST_0]], [[CST_0]], [[CST_0]], [[CST_0]]{{\]}} : <tensor<1x1x1x8x128xi8, [[DEFAULT]]>>
+  // CHECK:         [[LOAD:%.+]] = tt.load [[TENSOR_PTR1]] {boundaryCheck = array<i32: 0, 1, 2, 3, 4>, padding = 1 : i32} : !tt.ptr<tensor<1x1x1x8x128xi8, [[DEFAULT]]>>
+  // CHECK:         [[RESHAPE:%.+]] = tt.reshape [[LOAD]] : tensor<1x1x1x8x128xi8, #blocked1> -> tensor<8x128xi8, #blocked>
   // CHECK:         tt.return
   // CHECK:       }
 
@@ -76,10 +107,10 @@ module {
     %c1_i64 = arith.constant 1 : i64
     %c64_i32 = arith.constant 64 : i32
     %c8_i32 = arith.constant 8 : i32
-    %cst = arith.constant dense<1.000000e+00> : tensor<16x128xf32>
+    %cst = arith.constant dense<1.000000e+00> : tensor<16x128xf32, #blocked>
     %0 = arith.extsi %arg2 : i32 to i64
     %desc1 = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%0, %c1_i64] : <f32>, <tensor<16x128xf32>>
-    tt.descriptor_store %desc1[%c8_i32, %c64_i32], %cst : !tt.tensordesc<tensor<16x128xf32>>, tensor<16x128xf32>
+    tt.descriptor_store %desc1[%c8_i32, %c64_i32], %cst : !tt.tensordesc<tensor<16x128xf32>>, tensor<16x128xf32, #blocked>
     tt.return
   }
   // CHECK:      tt.func public @test_store([[PARAM_0:%.+]]: !tt.ptr<f32>, [[PARAM_1:%.+]]: i32, [[PARAM_2:%.+]]: i32) {
@@ -89,12 +120,12 @@ module {
   // CHECK-DAG:    [[CST_1_i64:%.+]] = arith.constant 1 : i64
   // CHECK-DAG:    [[CST_64_i32:%.+]] = arith.constant 64 : i32
   // CHECK-DAG:    [[CST_8_i32:%.+]] = arith.constant 8 : i32
-  // CHECK-DAG:    [[CST:%.+]] = arith.constant dense<1.000000e+00> : tensor<16x128xf32>
+  // CHECK-DAG:    [[CST:%.+]] = arith.constant dense<1.000000e+00> : tensor<16x128xf32, #blocked>
   // CHECK-DAG:    [[EXTSI_PARAM_1:%.+]] = arith.extsi [[PARAM_1]] : i32 to i64
   // CHECK-DAG:    [[EXTSI_PARAM_2:%.+]] = arith.extsi [[PARAM_2]] : i32 to i64
-  // CHECK:        [[TENSOR_PTR:%.+]] = tt.make_tensor_ptr [[PARAM_0]], {{\[}}[[EXTSI_PARAM_1]], [[EXTSI_PARAM_2]]], {{\[}}[[EXTSI_PARAM_2]], [[CST_1_i64]]], {{\[}}[[CST_0_i32]], [[CST_0_i32]]] {{.*}} : <tensor<16x128xf32>>
-  // CHECK:        [[TENSOR_PTR1:%.+]] = tt.advance [[TENSOR_PTR]], {{\[}}[[CST_8_i32]], [[CST_64_i32]]] : <tensor<16x128xf32>>
-  // CHECK:        tt.store [[TENSOR_PTR1]], [[CST]]  {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<16x128xf32>>
+  // CHECK:        [[TENSOR_PTR:%.+]] = tt.make_tensor_ptr [[PARAM_0]], {{\[}}[[EXTSI_PARAM_1]], [[EXTSI_PARAM_2]]], {{\[}}[[EXTSI_PARAM_2]], [[CST_1_i64]]], {{\[}}[[CST_0_i32]], [[CST_0_i32]]] {{.*}} : <tensor<16x128xf32, #blocked>>
+  // CHECK:        [[TENSOR_PTR1:%.+]] = tt.advance [[TENSOR_PTR]], {{\[}}[[CST_8_i32]], [[CST_64_i32]]] : <tensor<16x128xf32, #blocked>>
+  // CHECK:        tt.store [[TENSOR_PTR1]], [[CST]]  {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<16x128xf32, #blocked>>
   // CHECK:        tt.return
   // CHECK:      }
 }

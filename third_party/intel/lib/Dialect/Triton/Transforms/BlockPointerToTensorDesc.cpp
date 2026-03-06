@@ -1,5 +1,6 @@
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
 #include "intel/include/Utils/Utility.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Verifier.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
@@ -48,6 +49,19 @@ public:
   }
 
 private:
+  // Check if the last stride is 1, which is required for tensor descriptor.
+  bool hasUnitInnerStride(tt::MakeTensorPtrOp makeTensorPtrOp) const {
+    SmallVector<Value> strides = makeTensorPtrOp.getStrides();
+    if (strides.empty())
+      return false;
+    Value innermostStride = strides.back();
+    if (auto cst = innermostStride.getDefiningOp<arith::ConstantOp>()) {
+      if (auto intAttr = dyn_cast<IntegerAttr>(cst.getValue()))
+        return intAttr.getInt() == 1;
+    }
+    return false;
+  }
+
   bool isCandidate(Operation *op) const {
     if (auto loadOp = dyn_cast<tt::LoadOp>(op))
       return isCandidate(loadOp);
@@ -78,6 +92,7 @@ private:
       return ptr;
     };
 
+    tt::MakeTensorPtrOp makeTensorPtrOp;
     if (auto arg = dyn_cast<BlockArgument>(ptr)) {
       Operation *parentOp = arg.getParentBlock()->getParentOp();
       // FIXME: Add support of other loop ops if needed.
@@ -86,37 +101,26 @@ private:
         return false;
       Value initArg =
           forOp.getInitArgs()[arg.getArgNumber() - forOp.getNumInductionVars()];
-      if (!isa_and_nonnull<tt::MakeTensorPtrOp>(
-              skipAdvance(initArg).getDefiningOp()))
+      makeTensorPtrOp = dyn_cast_or_null<tt::MakeTensorPtrOp>(
+          skipAdvance(initArg).getDefiningOp());
+      if (!makeTensorPtrOp)
         return false;
       Value yieldVal = forOp.getYieldedValues()[arg.getArgNumber() -
                                                 forOp.getNumInductionVars()];
       if (skipAdvance(yieldVal) != arg)
         return false;
-    } else if (!isa_and_nonnull<tt::MakeTensorPtrOp>(
-                   skipAdvance(ptr).getDefiningOp())) {
-      return false;
+    } else {
+      makeTensorPtrOp = dyn_cast_or_null<tt::MakeTensorPtrOp>(
+          skipAdvance(ptr).getDefiningOp());
+      if (!makeTensorPtrOp)
+        return false;
     }
+
+    // Only support row-major layout (inner stride == 1).
+    if (!hasUnitInnerStride(makeTensorPtrOp))
+      return false;
 
     return true;
-  }
-
-  arith::TruncIOp getOrCreateTruncI32Op(Value v) const {
-    assert(v.getType().isInteger(64) && "Expecting i64 value");
-    Location loc = v.getLoc();
-    OpBuilder builder(v.getContext());
-    Type targetType = builder.getIntegerType(32);
-
-    if (Operation *defOp = v.getDefiningOp()) {
-      if (auto nextOp = dyn_cast_or_null<arith::TruncIOp>(defOp->getNextNode()))
-        if (nextOp.getType() == targetType && nextOp.getIn() == v)
-          return nextOp;
-      builder.setInsertionPointAfter(defOp);
-    } else {
-      builder.setInsertionPointToStart(v.getParentBlock());
-    }
-
-    return arith::TruncIOp::create(builder, loc, targetType, v);
   }
 
   tt::MakeTensorDescOp
@@ -132,7 +136,8 @@ private:
     Value base = makeTensorPtrOp.getBase();
     SmallVector<Value> shape;
     for (Value s : makeTensorPtrOp.getShape())
-      shape.push_back(getOrCreateTruncI32Op(s));
+      shape.push_back(tt::intel::findOrCreateCastOp(
+          s, IntegerType::get(s.getContext(), 32)));
     SmallVector<Value> strides = makeTensorPtrOp.getStrides();
     return tt::MakeTensorDescOp::create(builder, loc, descTy, base, shape,
                                         strides, padding);
