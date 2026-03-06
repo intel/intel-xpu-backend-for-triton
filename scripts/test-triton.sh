@@ -613,6 +613,8 @@ run_microbench_tests() {
   echo "****************************************************"
   echo "*****   Running Triton Micro Benchmark tests   *****"
   echo "****************************************************"
+  cd $TRITON_PROJ/benchmarks
+  pip install --no-build-isolation .
   python $TRITON_PROJ/benchmarks/micro_benchmarks/run_benchmarks.py
 }
 
@@ -621,7 +623,7 @@ run_benchmark_softmax() {
   echo "*****             Running Softmax              *****"
   echo "****************************************************"
   cd $TRITON_PROJ/benchmarks
-  pip install .
+  pip install --no-build-isolation .
   python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/fused_softmax.py
 }
 
@@ -945,7 +947,7 @@ run_vllm_install() {
 
   # Old pin that we currently have have specific patch to fix it, new version is expected to work OOB
   # We can remove this when we update the pin to a newer version, but for now we want to be able to test both the old and new versions
-  if [ "$current_pin" = "97a042f3bca53417de6405a248e3d11fca568e2c" ]; then
+  if [ "$current_pin" = "b5545d9d5cab2625ac04a19f552631a2034c8f47" ]; then
     run_vllm_old_install
   else
     run_vllm_upstream_install

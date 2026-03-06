@@ -115,7 +115,7 @@ jobs:
         id: install
         run: |
           cd benchmarks
-          pip install .
+          pip install --no-build-isolation .
 
       - name: Run Triton Softmax kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'fused_softmax.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'fused_softmax.py') }}
