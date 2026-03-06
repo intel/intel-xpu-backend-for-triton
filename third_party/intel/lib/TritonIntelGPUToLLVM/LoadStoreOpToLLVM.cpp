@@ -558,15 +558,23 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
            hasDotDpasEncoding(tensorTy);
   }
 
-  // Determine whether the given DescriptorLoadOp can be lowered to using
+  // Determine whether the given descriptor op can be lowered to using
   // block IO instructions.
-  static bool isDescriptorBlockIOCandidate(triton::DescriptorLoadOp op) {
-    ModuleOp mod = op->getParentOfType<ModuleOp>();
+  template <typename OpTy,
+            std::enable_if_t<llvm::is_one_of<OpTy, triton::DescriptorLoadOp,
+                                             triton::DescriptorStoreOp>::value,
+                             bool> = true>
+  static bool isDescriptorBlockIOCandidate(OpTy op) {
+    ModuleOp mod = op->template getParentOfType<ModuleOp>();
     if (!mod->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
                           getSupport2DBlockIOAttrName()))
       return false;
 
-    auto tensorTy = cast<RankedTensorType>(op.getType());
+    RankedTensorType tensorTy;
+    if constexpr (std::is_same_v<OpTy, triton::DescriptorLoadOp>)
+      tensorTy = cast<RankedTensorType>(op.getType());
+    else
+      tensorTy = cast<RankedTensorType>(op.getSrc().getType());
 
     // Only rank 2 initially.
     if (tensorTy.getRank() != 2)
@@ -3180,6 +3188,227 @@ struct DescriptorStoreOpConversion
   }
 };
 
+struct DescriptorStoreOpToBlockIOConversion
+    : public ConvertTritonGPUOpToLLVMPattern<triton::DescriptorStoreOp>,
+      public BlockIOConversionBase {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::DescriptorStoreOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  DescriptorStoreOpToBlockIOConversion(
+      LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
+      const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
+      PatternBenefit benefit)
+      : ConvertTritonGPUOpToLLVMPattern<triton::DescriptorStoreOp>(converter,
+                                                                   benefit),
+        BlockIOConversionBase(targetInfo, axisAnalysisPass) {}
+
+  LogicalResult
+  matchAndRewrite(triton::DescriptorStoreOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
+    // --- Pre-conditions ---
+    if (!isDescriptorBlockIOCandidate(op))
+      return failure();
+
+    // TODO: DescriptorStoreOp does not currently carry a "block_io" attribute
+    // the way StoreOp does (set by MaterializeBlockPointer). Without this
+    // attribute we cannot determine the memory layout (row_major vs
+    // column_major). For now, we assume row_major and rely on layout
+    // encoding checks below to bail out on unsupported cases.
+    // Once the pipeline annotates DescriptorStoreOp with block_io, this
+    // should be updated to read the attribute.
+    const bool memoryRowMajor = true;
+
+    // Get source tensor type and encoding.
+    auto tensorType = cast<RankedTensorType>(op.getSrc().getType());
+    Attribute encoding = tensorType.getEncoding();
+
+    // --- Linear layout and tile size ---
+    std::optional<LinearLayout> llEncoding =
+        cast<DistributedEncodingTrait>(encoding).toLinearLayout(
+            tensorType.getShape());
+    assert(llEncoding.has_value() &&
+           "unexpected failure when getting linear layout");
+
+    unsigned contiguousDim = memoryRowMajor ? 1 : 0;
+    Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
+    unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
+
+    // TODO: DescriptorStoreOp has no mask operand, so maskAxisInfo is always
+    // null. If masking support is added in the future, axis info should be
+    // propagated here.
+    AxisInfo *maskAxisInfo = nullptr;
+
+    BlockIOTileSizeInfo sizeInfo = getBlockIOTileSize<false /*store*/>(
+        llEncoding.value(), contiguousDim, elemSizeInBits, maskAxisInfo);
+    if (!sizeInfo.isValid())
+      return failure();
+
+    auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
+          isTransposeRequired, regPackedBases] = std::move(sizeInfo);
+
+    unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
+    if (!check2DBlockAddressPayloadRestriction(packedElemSizeInBits, tileWidth))
+      return failure();
+
+    // Limit vBlock to 1 for stores.
+    vBlocks = 1;
+
+    if (isTransposeRequired) {
+      // 2D Block store doesn't support transpose.
+      return failure();
+    }
+
+    Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    MLIRContext *ctx = rewriter.getContext();
+    Value warpId = arith::IndexCastOp::create(
+        rewriter, loc, i32_ty,
+        mlir::gpu::SubgroupIdOp::create(rewriter, loc,
+                                        /*upperBound=*/nullptr));
+
+    // --- Unpack tensor descriptor struct ---
+    // TensorDescType struct layout: { shape[rank], stride[rank], base }
+    Value llDesc = adaptor.getDesc();
+    size_t rank = tensorType.getRank();
+    const unsigned descShape = 0, descStride = rank, descBase = 2 * rank;
+    const SmallVector<Value> &descElems =
+        unpackLLElements(loc, llDesc, rewriter);
+
+    Value base = descElems[descBase];
+    unsigned numElems = getTotalElemsPerThread(tensorType);
+
+    // The base pointer is uniform across all elements (unlike tensor-of-
+    // pointers where each element may have a different pointer).
+    SmallVector<Value> ptrElems(numElems, base);
+
+    // --- Shapes (base width / height for 2D block IO payload) ---
+    // TensorDesc carries shape as i64 values. The 2D block IO payload
+    // expects baseWidth in bytes and baseHeight in elements.
+    Value shapeRow = descElems[descShape + rowDim]; // i64
+    Value shapeCol = descElems[descShape + colDim]; // i64
+    Value baseWidth =
+        b.trunc(i32_ty, b.mul(shapeCol, b.i64_val(elemSizeInBits / 8)));
+    Value baseHeight = b.trunc(i32_ty, shapeRow);
+
+    // --- Pitch (row stride in bytes) ---
+    // TODO: DescriptorStoreOp does not expose a "memory order" attribute, so
+    // we always use the row-major stride dimension. Once a memory order
+    // attribute is added, this should be adjusted.
+    Value strideForPitch = descElems[descStride + rowDim]; // i64
+    Value pitch =
+        b.trunc(i32_ty, b.mul(strideForPitch, b.i64_val(elemSizeInBits / 8)));
+
+    // --- Offsets ---
+    // Unlike block pointers which store offsets in the struct, tensor
+    // descriptors receive offsets via the indices operand.
+    auto indices = adaptor.getIndices();
+    SmallVector<Value> baseOffsets(indices.begin(), indices.end());
+
+    // --- Get the LLVM values for store values ---
+    SmallVector<Value> valElems =
+        unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    assert(valElems.size() == numElems &&
+           "the number of store values does not match the number of elements");
+
+    // Although the getBlockTileShape makes sure there is no duplication within
+    // a warp, we still need to deduplicate across warps and blocks.
+    const llvm::MapVector<StringAttr, int> &freeVarMasks =
+        getFreeVariableMasks(tensorType);
+    Value threadPred =
+        emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
+
+    unsigned threadsPerWarp =
+        TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>());
+
+    Type packedType = IntegerType::get(ctx, packedElemSizeInBits);
+    unsigned numPackedElemsPerStore = (tileHeight * tileWidth) / threadsPerWarp;
+    Type store2DGenXType =
+        LLVM::getVectorType(packedType, numPackedElemsPerStore);
+    unsigned numElemsPerStore = numPackedElemsPerStore * numPackedVals;
+    Type store2DComposeType = LLVM::getVectorType(eltTy, numElemsPerStore);
+
+    StringAttr kRegister = str_attr("register");
+    StringAttr kLane = str_attr("lane");
+    StringAttr kWarp = str_attr("warp");
+    StringAttr kBlock = str_attr("block");
+
+    assert(regPackedBases.has_value() &&
+           "invalid register bases for packing elems.");
+    std::vector<std::vector<int>> bases(regPackedBases->size());
+    llvm::transform(*regPackedBases, bases.begin(),
+                    [](int base) { return std::vector<int>{base}; });
+    LinearLayout regMapping({{kRegister, bases}},
+                            {{kRegister, llEncoding->getInDimSize(kRegister)}},
+                            /*requireSurjective=*/true);
+
+    // --- Emit 2D block stores ---
+    for (size_t valIdx = 0; valIdx < numElems; valIdx += numElemsPerStore) {
+      unsigned registerIdx = regMapping.apply({{kRegister, valIdx}})[0].second;
+
+      auto offsets = applyLinearLayout(loc, rewriter, *llEncoding,
+                                       {{kRegister, b.i32_val(registerIdx)},
+                                        {kLane, b.i32_val(0)},
+                                        {kWarp, warpId},
+                                        {kBlock, b.i32_val(0)}});
+      assert(offsets.size() == 2 && "only support 2D tensor for now.");
+
+      Value addrElem = ptrElems[registerIdx];
+
+      // For tensor descriptors, we always have shape information and always
+      // perform boundary protection on all dimensions (unlike block pointers
+      // where boundaryCheck is user-specified).
+      Value offsetX = b.add(baseOffsets[colDim], offsets[colDim].second);
+      Value offsetY = b.add(baseOffsets[rowDim], offsets[rowDim].second);
+
+      // Tensor descriptors always encode full shape bounds, so we always
+      // use the descriptor's baseWidth/baseHeight for HW boundary
+      // protection (no need to expand or adjust like block pointers).
+      Value adjustedBaseWidth = baseWidth;
+      Value adjustedBaseHeight = baseHeight;
+
+      Value pred = threadPred;
+      if (pred) {
+        // We leverage the GPU block I/O hardware out-of-bound protection
+        // feature by setting the offset to an invalid value when 'pred'
+        // is false (the HW will not store out-of-bounds values).
+        offsetY = b.select(pred, offsetY, adjustedBaseHeight);
+      }
+
+      assert(numPackedVals > 0 && "numPackedVals should be greater than zero.");
+
+      // Compose the matrix by stacking the scalars into a vector.
+      Value storeVal = LLVM::UndefOp::create(rewriter, loc, store2DComposeType);
+      for (size_t i = 0; i < numElemsPerStore; ++i) {
+        unsigned registerIdx =
+            regMapping.apply({{kRegister, valIdx + i}})[0].second;
+        storeVal =
+            b.insert_element(storeVal, valElems[registerIdx], b.i32_val(i));
+      }
+      if (store2DComposeType != store2DGenXType)
+        storeVal = b.bitcast(storeVal, store2DGenXType);
+
+      auto newOp = TritonGEN::Matrix2DBlockStoreOp::create(
+          rewriter, loc, addrElem, adjustedBaseWidth, adjustedBaseHeight, pitch,
+          // offsetX was in terms of original elements. The 2D block IO requires
+          // offsetX to be in terms of packed elements.
+          b.udiv(offsetX, b.i32_val(numPackedVals)), offsetY,
+          packedElemSizeInBits, tileWidth, tileHeight,
+          /*v_blocks, only 1 supported*/ 1, storeVal);
+
+      if (failed(newOp.verify())) {
+        // Delete the op so that the verifier will not abort the pass
+        // pipeline later, as we can fail this path and try a different
+        // approach.
+        rewriter.eraseOp(newOp);
+        return failure();
+      }
+    }
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 struct StoreOpToBlockIOConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::StoreOp>,
       public BlockIOConversionBase {
@@ -4079,6 +4308,7 @@ void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
       typeConverter, targetInfo, axisInfoAnalysis, benefit);
   // BlockIO is more efficient than gather load or scatter store.
   patterns.add<LoadOpToBlockIOConversion, StoreOpToBlockIOConversion,
-               DescriptorLoadOpToBlockIOConversion>(
+               DescriptorLoadOpToBlockIOConversion,
+               DescriptorStoreOpToBlockIOConversion>(
       typeConverter, targetInfo, axisInfoAnalysis, benefit.getBenefit() + 2);
 }
