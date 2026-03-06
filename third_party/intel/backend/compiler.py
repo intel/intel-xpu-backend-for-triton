@@ -2,7 +2,6 @@ from triton.backends.compiler import BaseBackend, GPUTarget, Language
 from triton._C.libtriton import ir, passes, llvm, intel
 from triton.backends.intel.driver import compile_module_from_src
 from triton.backends.intel.track import track
-from triton.backends.intel.extension_utils import query_device_extensions
 from triton import knobs
 
 from dataclasses import dataclass
@@ -178,14 +177,6 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         dev_prop['has_f4_conversions'] = tgt_prop.get('has_f4_conversions', False)
         dev_prop['has_f8_conversions'] = tgt_prop.get('has_f8_conversions', False)
         dev_prop['has_256b_prefetch'] = tgt_prop.get('has_256b_prefetch', False)
-
-        if '__intel_already_queried_extensions__' not in tgt_prop:
-            # All GPUs with the same device_id have the same extensions, so we just
-            # need to query any GPU device
-            device_id = tgt_prop.get("device_id")
-            extensions = query_device_extensions(device_id)
-            dev_prop.update(extensions)
-            dev_prop['__intel_already_queried_extensions__'] = True
 
         return dev_prop
 
