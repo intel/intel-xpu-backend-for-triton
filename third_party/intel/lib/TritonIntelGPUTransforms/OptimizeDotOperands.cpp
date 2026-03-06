@@ -463,6 +463,12 @@ private:
     if (!makeTensorDescOp.has_value())
       return false;
 
+    StringRef blockIOAttrName =
+        ttgi::TritonIntelGPUDialect::getBlockIOAttrName();
+    StringAttr attr = descLoadOp->getAttrOfType<StringAttr>(blockIOAttrName);
+    if (!attr || attr != "row_major")
+      return false;
+
     out.targetEncoding = targetEncoding;
     out.lastOpBeforeDot = lastOp;
     return true;
