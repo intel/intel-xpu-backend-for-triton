@@ -188,6 +188,8 @@ public:
       ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
     assert(!operands.empty() &&
            "UnrealizedConversionCastOp must have at least one operand");
+    if (op->getNumOperands() > 1)
+      return StrideInfo();
     return operands[0]->getValue();
   }
 };
