@@ -628,8 +628,8 @@ def test_make_tensor_descriptor_matmul(num_stages, num_ctas, BLOCK_M, BLOCK_N, B
         M, N, K = BLOCK_M, BLOCK_N, BLOCK_K
     else:
         M, N, K = 1024, 512, 256
-    if is_xpu_cri():
-        M = 512
+        if is_xpu_cri():
+            M = 512
 
     torch.manual_seed(42)
     A = torch.randn((M, K), dtype=torch.float16, device=device)
