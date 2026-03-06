@@ -254,6 +254,8 @@ def get_unified_attention_benchmark(
         ))
     def benchmark(q_heads, k_heads, head_size, qdtype, seq_lens, sliding_window, soft_cap, num_blocks, block_size,
                   provider):
+        print("Config:", q_heads, k_heads, head_size, qdtype, seq_lens, sliding_window, soft_cap, num_blocks,
+              block_size, provider)
         dtype = torch.bfloat16
         torch.manual_seed(20)
         n_warmup = 100
