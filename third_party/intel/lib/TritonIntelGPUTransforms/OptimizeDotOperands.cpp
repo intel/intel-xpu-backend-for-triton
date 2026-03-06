@@ -498,13 +498,16 @@ private:
         builder, descLoadOp.getLoc(), newResultType, descLoadOp.getDesc(),
         descLoadOp.getIndices(), descLoadOp.getCache(), descLoadOp.getEvict());
 
-    // Copy any discardable attributes from the original load.
+    // Copy any discardable attributes from the original load,
+    // except block_io which we set explicitly below.
+    StringRef blockIOName = ttgi::TritonIntelGPUDialect::getBlockIOAttrName();
     for (auto attr : descLoadOp->getDiscardableAttrs())
-      newLoad->setDiscardableAttr(attr.getName(), attr.getValue());
+      if (attr.getName() != blockIOName)
+        newLoad->setDiscardableAttr(attr.getName(), attr.getValue());
 
     // Set block_io = "column_major": signals that the result type dimensions
     // are transposed relative to the descriptor's block shape dimensions.
-    newLoad->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
+    newLoad->setAttr(blockIOName,
                      StringAttr::get(transOp.getContext(), "column_major"));
 
     // Replace uses and schedule cleanup.
