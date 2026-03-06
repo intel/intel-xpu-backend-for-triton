@@ -599,7 +599,7 @@ run_microbench_tests() {
   echo "*****   Running Triton Micro Benchmark tests   *****"
   echo "****************************************************"
   cd $TRITON_PROJ/benchmarks
-  pip install .
+  pip install --no-build-isolation .
   python $TRITON_PROJ/benchmarks/micro_benchmarks/run_benchmarks.py
 }
 
@@ -608,7 +608,7 @@ run_benchmark_softmax() {
   echo "*****             Running Softmax              *****"
   echo "****************************************************"
   cd $TRITON_PROJ/benchmarks
-  pip install .
+  pip install --no-build-isolation .
   python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/fused_softmax.py
 }
 
