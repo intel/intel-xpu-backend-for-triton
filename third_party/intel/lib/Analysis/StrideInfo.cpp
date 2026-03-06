@@ -51,9 +51,10 @@ using AxisInfoLookupFn = std::function<AxisInfo *(Value)>;
 
 namespace {
 
-/// Try to extract a scalar integer constant from a Value.
-/// Handles both IntegerAttr (scalar arith.constant) and SplatElementsAttr
-/// (tensor constant like dense<64>).
+/// Try to extract a scalar integer constant from a Value by inspecting the
+/// defining op directly. Only recognises arith.constant and llvm.constant —
+/// for a more robust check that also consults AxisInfo, use
+/// StrideInfoVisitor::getConstantValue() instead.
 static std::optional<int64_t> getScalarIntConstant(Value v) {
   Operation *defOp = v.getDefiningOp();
   if (!defOp)
@@ -95,6 +96,19 @@ public:
   }
 
 protected:
+  /// Try to extract a constant integer value from v.
+  /// First checks for a direct constant op (arith.constant / llvm.constant),
+  /// then falls back to AxisInfo::getConstantValue() when available.
+  std::optional<int64_t> getConstantValue(Value v) const {
+    if (auto c = getScalarIntConstant(v))
+      return c;
+    if (axisInfoLookup) {
+      if (auto *ai = axisInfoLookup(v))
+        return ai->getConstantValue();
+    }
+    return std::nullopt;
+  }
+
   AxisInfoLookupFn axisInfoLookup;
 };
 
@@ -136,19 +150,6 @@ public:
 private:
   std::vector<std::unique_ptr<StrideInfoVisitor>> visitors;
 };
-
-/// Compute StrideInfo for ops that create a block pointer or tensor descriptor.
-/// Both MakeTensorPtrOp and MakeTensorDescOp expose their memory strides as
-/// operands. For each dimension, if the stride operand is a known constant we
-/// use its value; otherwise the stride is unknown (-1).
-static StrideInfo makeTensorPtrStrideInfo(ValueRange strides) {
-  StrideInfo::DimVectorT result;
-  for (Value s : strides) {
-    auto val = getScalarIntConstant(s);
-    result.push_back(val.has_value() ? val.value() : -1);
-  }
-  return StrideInfo(std::move(result));
-}
 
 // PassThrough: stride passes from operand 0
 template <typename OpTy,
@@ -268,8 +269,8 @@ public:
     auto rank = lhs.getRank();
     StrideInfo::DimVectorT stride;
 
-    auto lhsConst = getScalarIntConstant(op.getLhs());
-    auto rhsConst = getScalarIntConstant(op.getRhs());
+    auto lhsConst = this->getConstantValue(op.getLhs());
+    auto rhsConst = this->getConstantValue(op.getRhs());
 
     for (unsigned d = 0; d < rank; ++d) {
       if (lhs.getStride(d) > 0 && rhsConst.has_value()) {
@@ -280,8 +281,8 @@ public:
         stride.push_back(product >= 0 ? product : -1);
       } else {
         auto strideZero = [&](const StrideInfo &si, Value v) {
-          return getScalarIntConstant(v).has_value() || si.getStride(d) == 0 ||
-                 !isa<TensorType>(op.getType());
+          return this->getConstantValue(v).has_value() ||
+                 si.getStride(d) == 0 || !isa<TensorType>(op.getType());
         };
         if (strideZero(lhs, op.getLhs()) && strideZero(rhs, op.getRhs()))
           stride.push_back(0);
@@ -304,7 +305,7 @@ public:
     auto rank = lhs.getRank();
     StrideInfo::DimVectorT stride;
 
-    auto rhsConst = getScalarIntConstant(op.getRhs());
+    auto rhsConst = this->getConstantValue(op.getRhs());
 
     for (unsigned d = 0; d < rank; ++d) {
       if (lhs.getStride(d) > 0 && rhsConst.has_value() &&
@@ -331,7 +332,7 @@ public:
     auto rank = lhs.getRank();
     StrideInfo::DimVectorT stride;
 
-    auto rhsConst = getScalarIntConstant(op.getRhs());
+    auto rhsConst = this->getConstantValue(op.getRhs());
 
     for (unsigned d = 0; d < rank; ++d) {
       if (lhs.getStride(d) == 0 && rhs.getStride(d) == 0) {
@@ -434,7 +435,12 @@ public:
   StrideInfo getStrideInfo(
       triton::MakeTensorPtrOp op,
       ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
-    return makeTensorPtrStrideInfo(op.getStrides());
+    StrideInfo::DimVectorT result;
+    for (Value s : op.getStrides()) {
+      auto val = this->getConstantValue(s);
+      result.push_back(val.has_value() ? val.value() : -1);
+    }
+    return StrideInfo(std::move(result));
   }
 };
 
@@ -444,7 +450,12 @@ public:
   StrideInfo getStrideInfo(
       triton::MakeTensorDescOp op,
       ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
-    return makeTensorPtrStrideInfo(op.getStrides());
+    StrideInfo::DimVectorT result;
+    for (Value s : op.getStrides()) {
+      auto val = this->getConstantValue(s);
+      result.push_back(val.has_value() ? val.value() : -1);
+    }
+    return StrideInfo(std::move(result));
   }
 };
 
