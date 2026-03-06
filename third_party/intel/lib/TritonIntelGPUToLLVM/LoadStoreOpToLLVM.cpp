@@ -2911,11 +2911,36 @@ struct DescriptorLoadOpConversion
       allDims[i] = static_cast<int32_t>(i);
 
     // Reuse the shared gather/scatter operand computation.
+    // For column_major descriptor loads (created by
+    // FuseTransWithDescriptorLoad), the result type has transposed dimensions
+    // relative to the descriptor's natural [N, K] order. emitIndices uses the
+    // result type's dimension space (dim 0 = K, dim 1 = N for a [BK, BN]
+    // result), but the descriptor struct encodes shapes/strides in descriptor
+    // space (dim 0 = N, dim 1 = K). The base offsets (indices) are also in
+    // descriptor space. Reverse all three so that dimension i of the result
+    // aligns with dimension i of shapes/strides.
     SmallVector<Value> ptrElems, maskElems, otherElems;
-    std::tie(ptrElems, maskElems, otherElems) =
-        convertTensorDescriptorToTensorOfPtr(loc, llDesc, indices, resultType,
-                                             valueElemTy, rewriter, allDims,
-                                             padding);
+    auto blockIOAttr = op->getAttrOfType<StringAttr>(
+        TritonIntelGPUDialect::getBlockIOAttrName());
+    if (blockIOAttr && blockIOAttr.getValue() == "column_major") {
+      const SmallVector<Value> &descElems =
+          unpackLLElements(loc, llDesc, rewriter);
+      Value base = descElems[2 * rank];
+      SmallVector<Value> permShapes(rank), permStrides(rank), permOffsets(rank);
+      for (unsigned i = 0; i < rank; ++i) {
+        permShapes[i] = descElems[rank - 1 - i];
+        permStrides[i] = descElems[rank + (rank - 1 - i)];
+        permOffsets[i] = indices[rank - 1 - i];
+      }
+      std::tie(ptrElems, maskElems, otherElems) = computeGatherScatterOperands(
+          loc, base, permOffsets, permShapes, permStrides, resultType,
+          valueElemTy, rewriter, allDims, padding);
+    } else {
+      std::tie(ptrElems, maskElems, otherElems) =
+          convertTensorDescriptorToTensorOfPtr(loc, llDesc, indices, resultType,
+                                               valueElemTy, rewriter, allDims,
+                                               padding);
+    }
 
     // Determine vectorization
     // NOTE: LoadOp uses getVectorSize(ptr) which relies on axis info analysis.

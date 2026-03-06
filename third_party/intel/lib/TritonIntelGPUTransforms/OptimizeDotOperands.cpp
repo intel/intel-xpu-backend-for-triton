@@ -422,6 +422,11 @@ private:
   bool isCandidate(tt::TransOp transOp, FusionCandidate &out) const {
     assert(transOp && "Expecting a valid transpose operation");
 
+    ModuleOp mod = transOp->getParentOfType<ModuleOp>();
+    if (!mod->hasAttr(
+            ttgi::TritonIntelGPUDialect::getSupport2DBlockIOAttrName()))
+      return false;
+
     if (transOp->getParentOfType<scf::WhileOp>())
       return false;
 
@@ -463,6 +468,9 @@ private:
     if (!makeTensorDescOp.has_value())
       return false;
 
+    // Only fuse if the descriptor load carries block_io = "row_major", which
+    // MaterializeBlockPointer sets to confirm the load is a 2D block IO
+    // candidate.
     StringRef blockIOAttrName =
         ttgi::TritonIntelGPUDialect::getBlockIOAttrName();
     StringAttr attr = descLoadOp->getAttrOfType<StringAttr>(blockIOAttrName);
