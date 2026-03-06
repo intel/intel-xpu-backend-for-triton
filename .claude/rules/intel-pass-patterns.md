@@ -13,14 +13,15 @@ applyTo: '**/intel/lib/**/*.cpp, **/intel/lib/**/*.h, **/intel/include/**/Transf
 
 ### Basic Pass Declaration
 ```tablegen
-def TritonIntelGPUCoalesce
-    : Pass<"tritonintelgpu-coalesce", "mlir::ModuleOp"> {
-  let summary = "coalesce";
+def TritonIntelGPUPipeline
+    : Pass<"tritonintelgpu-pipeline", "mlir::ModuleOp"> {
+  let summary = "Pipeline loops";
   let description = [{...}];
-  let dependentDialects = [
-    "mlir::triton::TritonDialect",
-    "mlir::triton::gpu::intel::TritonIntelGPUDialect"
-  ];
+  let dependentDialects = ["mlir::arith::ArithDialect",
+                           "mlir::scf::SCFDialect",
+                           "mlir::spirv::SPIRVDialect",
+                           "mlir::triton::TritonDialect",
+                           "mlir::triton::gpu::intel::TritonIntelGPUDialect"];
 }
 ```
 
@@ -243,7 +244,7 @@ In `Passes.h`, use `GEN_PASS_DECL` and `GEN_PASS_REGISTRATION` in the same names
 ### Debug Macros
 
 ```cpp
-#define DEBUG_TYPE "tritonintelgpu-coalesce"
+#define DEBUG_TYPE "tritonintelgpu-pipeline"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
@@ -255,7 +256,7 @@ LLVM_DEBUG({
 });
 ```
 
-Debug filtering: `-debug-only=tritonintelgpu-coalesce` or `-debug-only=greedy-rewriter`
+Debug filtering: `-debug-only=tritonintelgpu-pipeline` or `-debug-only=greedy-rewriter`
 
 ## 5. Python Binding (triton_xpu.cc)
 
