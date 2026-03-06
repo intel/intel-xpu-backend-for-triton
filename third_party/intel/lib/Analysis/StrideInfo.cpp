@@ -102,10 +102,8 @@ protected:
   std::optional<int64_t> getConstantValue(Value v) const {
     if (auto c = getScalarIntConstant(v))
       return c;
-    if (axisInfoLookup) {
-      if (auto *ai = axisInfoLookup(v))
-        return ai->getConstantValue();
-    }
+    if (auto *ai = axisInfoLookup(v))
+      return ai->getConstantValue();
     return std::nullopt;
   }
 
@@ -349,11 +347,9 @@ public:
           int64_t maxVal = lhs.getStride(d) * (dimSize - 1);
           int64_t modulus = rhsConst.value();
           int64_t g = modulus; // fallback when no AxisInfo
-          if (this->axisInfoLookup) {
-            if (auto *ai = this->axisInfoLookup(op.getLhs())) {
-              int64_t divisibility = ai->getDivisibility(d);
-              g = std::gcd(divisibility, modulus);
-            }
+          if (auto *ai = this->axisInfoLookup(op.getLhs())) {
+            int64_t divisibility = ai->getDivisibility(d);
+            g = std::gcd(divisibility, modulus);
           }
           if (maxVal < g)
             stride.push_back(lhs.getStride(d));
@@ -498,8 +494,7 @@ private:
   }
 
 public:
-  StrideAnalysis(DataFlowSolver &solver,
-                 AxisInfoLookupFn axisInfoLookup = nullptr)
+  StrideAnalysis(DataFlowSolver &solver, AxisInfoLookupFn axisInfoLookup)
       : dataflow::SparseForwardDataFlowAnalysis<dataflow::Lattice<StrideInfo>>(
             solver) {
     // PassThrough visitors
@@ -532,8 +527,7 @@ public:
     visitors.append<MakeTensorPtrOpStrideVisitor>();
     visitors.append<MakeTensorDescOpStrideVisitor>();
     visitors.append<DescriptorLoadOpStrideVisitor>();
-    if (axisInfoLookup)
-      visitors.setAxisInfoLookup(std::move(axisInfoLookup));
+    visitors.setAxisInfoLookup(std::move(axisInfoLookup));
   }
 
   using dataflow::SparseForwardDataFlowAnalysis<
