@@ -1,4 +1,4 @@
-name: Third party benchmarks, BMG
+name: vLLM benchmarks, BMG
 
 permissions: read-all
 
@@ -9,8 +9,7 @@ on:
 
 jobs:
   benchmarks:
-    uses: ./.github/workflows/third-party-benchmarks.yml
+    uses: ./.github/workflows/vllm-benchmarks.yml
     with:
       runner_label: b580
-      benchmarks: '["sglang"]'
     secrets: inherit
