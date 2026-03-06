@@ -548,7 +548,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     if (!blockIOAttr)
       return false;
 
-    static const bool enableBlockIOForAllLayout =
+    const bool enableBlockIOForAllLayout =
         triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS");
 
     // Only lower operation with dpas layout encoding.
@@ -589,7 +589,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
       return false;
     }
 
-    static const bool enableBlockIOForAllLayout =
+    const bool enableBlockIOForAllLayout =
         triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS");
     if (!enableBlockIOForAllLayout && !hasDpasEncoding(tensorTy) &&
         !hasDotDpasEncoding(tensorTy))

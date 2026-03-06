@@ -308,9 +308,9 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.ttir.add_convert_to_ttgpuir(pm, "xpu", opt.num_warps, opt.warp_size, opt.num_ctas)
         # optimize TTGIR
         intel.passes.ttgpuir.add_coalesce(pm)
-        intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
 
+        intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
         intel.passes.ttgpuir.add_materialize_block_pointer(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)

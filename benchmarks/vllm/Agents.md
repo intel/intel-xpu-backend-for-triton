@@ -7,7 +7,7 @@ Note, if you just want to update the pin, try this prompt: `Update vllm pin to C
 # VLLM installation
 For the purposes of this repository, vllm installation consists of:
 1. Activating a Python environment that has triton, pytorch, oneapi
-2. Running [`scripts/test-triton.sh --install-vllm`](../../../scripts/test-triton.sh)
+2. Running [`scripts/test-triton.sh --install-vllm`](../../scripts/test-triton.sh)
 
 This installation internally will clone the vllm repo into a local folder, checkout the commit pinned via [`vllm-pin.txt`](vllm-pin.txt), apply our local patch [`vllm-fix.patch`](vllm-fix.patch), and apply some regexp changes to the vllm repo.
 
@@ -20,7 +20,7 @@ Currently there is also an IPEX dependency in VLLM that our patches and regexps 
 Key files for the installation procedure:
 1. [`vllm-pin.txt`](vllm-pin.txt) - vllm pin that we currently use for benchmarking and testing. CI also uses this pin.
 2. [`vllm-fix.patch`](vllm-fix.patch) - patch that is applied to the pin above to make tests and benchmarks run.
-3. [`scripts/test-triton.sh`](../../../scripts/test-triton.sh) - script that CI and developers use to install vllm and run tests
+3. [`scripts/test-triton.sh`](../../scripts/test-triton.sh) - script that CI and developers use to install vllm and run tests
 
 # Environment
 
@@ -52,16 +52,17 @@ The shared [`run_benchmark.sh`](run_benchmark.sh) script orchestrates both steps
 
 You can run a benchmark with environment variable `DEBUG_BENCH=1` to speed up if the benchmark runs at all. For example:
 ```
-DEBUG_BENCH=1 bash benchmarks/third_party/vllm/run_benchmark.sh unified_attention
+DEBUG_BENCH=1 bash benchmarks/vllm/run_benchmark.sh unified_attention
 ```
 
 # Running tests
-We currently support only a small subset of vllm tests, as vllm requires significant changes to support XPU. The subset covers just tests for the 2 benchmarks that we have (unified attention and MOE benchmark). To run these tests, run [`scripts/test-triton.sh --vllm`](../../../scripts/test-triton.sh). It will first install vllm if necessary and then run the available tests.
+We currently support only a small subset of vllm tests, as vllm requires significant changes to support XPU. The subset covers just tests for the 2 benchmarks that we have (unified attention and MOE benchmark). To run these tests, run [`scripts/test-triton.sh --vllm`](../../scripts/test-triton.sh). It will first install vllm if necessary and then run the available tests.
 
 # CI
 There is CI for running both tests and benchmarks located in these files:
-1. [`.github/workflows/third-party-tests.yml`](../../../.github/workflows/third-party-tests.yml) - CI that runs tests
-2. [`.github/workflows/third-party-benchmarks.yml`](../../../.github/workflows/third-party-benchmarks.yml) - CI that runs benchmarks
+1. [`.github/workflows/vllm-tests.yml`](../../.github/workflows/vllm-tests.yml) - CI that runs tests
+2. [`.github/workflows/vllm-benchmarks.yml`](../../.github/workflows/vllm-benchmarks.yml) - CI that runs benchmarks
+3. [`.github/workflows/vllm-benchmarks-bmg.yml`](../../.github/workflows/vllm-benchmarks-bmg.yml) - CI that runs benchmarks on BMG
 
 Note that during the benchmarking CI there is report generation. Reports need to end with `-report.csv` and follow the format to be uploaded to the DB.
 
@@ -69,12 +70,12 @@ Note that during the benchmarking CI there is report generation. Reports need to
 
 You can find the diff that the upstream had in a specific file by doing:
 1. Go to vllm folder: `cd vllm`
-2. Run `git diff main $(<../benchmarks/third_party/vllm/vllm-pin.txt) -- $FILE`
+2. Run `git diff main $(<../benchmarks/vllm/vllm-pin.txt) -- $FILE`
 
 During a pin update you need to:
 1. Update the pin file.
 2. Ensure that the general patch is updated and applicable.
-3. Ensure that [`./scripts/test-triton.sh --install-vllm`](../../../scripts/test-triton.sh) correctly installs vllm from scratch; update it if something requires changes. Keep the upstream function separate from the old one until vllm removes IPEX from dependencies.
+3. Ensure that [`./scripts/test-triton.sh --install-vllm`](../../scripts/test-triton.sh) correctly installs vllm from scratch; update it if something requires changes. Keep the upstream function separate from the old one until vllm removes IPEX from dependencies.
 4. Ensure that vllm tests from `test-triton.sh --vllm` run.
 5. Ensure that the benchmark from the `batched_moe` folder runs before and after applying the patch from [`batched_moe.patch`](batched_moe/batched_moe.patch). Try to keep the patch minimal, for example, by keeping the same line breaks as in the upstream.
 6. Update this instruction if something changed.
