@@ -1466,6 +1466,11 @@ LayoutRematerialization::propagateToUsers(DenseMap<Value, Attribute> &values,
   SmallVector<Value> changed;
   for (OpOperand &use : value.getUses()) {
     Operation *user = use.getOwner();
+    // Do not propagate layout through side-effecting operations like atomics.
+    // Cloning them with a different encoding would cause them to execute
+    // multiple times, producing incorrect results (e.g., double-counting).
+    if (!canBeRemat(user))
+      continue;
     if (user->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
         user->hasTrait<OpTrait::Elementwise>())
       setEncoding(values, user->getResults(), layout, changed, user);
