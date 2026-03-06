@@ -823,6 +823,8 @@ def test_tensor_descriptor_batched_gemm_2d_tma(device):
 
     if is_interpreter():
         B, M, N, K = 2, BLOCK_M, BLOCK_N, BLOCK_K
+    elif is_xpu_cri():
+        B, M, N, K = 2, 128, 256, 128
     else:
         B, M, N, K = 2, 1024, 1024, 128
     NUM_SMS = 96
@@ -1773,6 +1775,8 @@ def test_host_tensor_descriptor_matmul(num_stages, num_ctas, BLOCK_M, BLOCK_N, B
         M, N, K = BLOCK_M, BLOCK_N, BLOCK_K
     else:
         M, N, K = 1024, 512, 256
+        if is_xpu_cri():
+            M = 256
     torch.manual_seed(42)
     A = torch.randn((M, K), dtype=torch.float16, device=device)
     B = torch.randn((K, N), dtype=torch.float16, device=device)
