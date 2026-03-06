@@ -312,7 +312,8 @@ void LayoutRematerialization::cleanup() { eraseUnusedOps(opToDelete); }
 // Return true if the op is an op with a layout we don't want to change. We will
 // propagate the layout starting from anchor ops.
 bool isLayoutAnchor(Operation *op) {
-  if (isa<tt::LoadOp, tt::StoreOp>(op))
+  if (isa<tt::LoadOp, tt::StoreOp, tt::DescriptorLoadOp, tt::DescriptorStoreOp>(
+          op))
     return ttgi::isExpensiveLoadOrStore(op);
   // TODO: we should estimate the cost of the not propagating layout for
   // AtomicCAS for further performance consideration.
