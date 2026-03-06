@@ -1204,28 +1204,41 @@ public:
 static AxisInfo
 makeTensorPtrAxisInfo(ArrayRef<int64_t> blkShape, unsigned rank,
                       ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) {
-  SmallVector<AxisInfo, 2> strideInfo;
+  SmallVector<AxisInfo, 2> strideInfo, shapeInfo;
+  // Shapes start after base (operand 0).
+  for (unsigned i = 1; i <= rank; ++i)
+    shapeInfo.emplace_back(operands[i]->getValue());
   // Strides start after base (operand 0) and shape operands.
   for (unsigned i = rank + 1; i <= rank * 2; ++i)
     strideInfo.emplace_back(operands[i]->getValue());
 
   int64_t ptrDivisibility = operands[0]->getValue().getDivisibility(0);
-
-  AxisInfo::DimVectorT stride, contiguity, constancy, divisibility;
+  // Follow the regular pointer divisibility definition in tt.addptr:
+  // On each dim, tt is "strided contiguous" with a divisibility of
+  // ptrDivisibility
+  AxisInfo::DimVectorT divisibility(rank, ptrDivisibility);
+  AxisInfo::DimVectorT stride, contiguity, constancy;
   for (unsigned dim = 0; dim < rank; ++dim) {
     stride.push_back(strideInfo[dim].getConstantValue().has_value()
                          ? strideInfo[dim].getConstantValue().value()
                          : -1);
-    contiguity.push_back(strideInfo[dim].getConstantValue() == 1 ? blkShape[dim]
-                                                                 : 1);
-    // For 2-D tensors the divisibility of dim d is bounded by the stride of
-    // the *other* dimension; for 1-D tensors the single stride suffices.
-    const AxisInfo &relevantStride =
-        (rank == 2) ? strideInfo[dim == 0 ? 1 : 0] : strideInfo[dim];
-    divisibility.push_back(
-        contiguity[dim] > 1
-            ? std::min(ptrDivisibility, relevantStride.getDivisibility()[0])
-            : 1);
+    // The maximum contiguity is the divisibility of boundary shape, which is
+    // the case when stride is 1. Take an example of !tt.ptr<tensor<4x4xi8>>: if
+    // the boundary shape is [3, 3] which divisibility is 1. The tensor pointer
+    // axis is like:
+    // clang-format off
+    // [[base    , base + 1, base + 2, nullptr,]
+    //  [base + 4, base + 5, base + 6, nullptr,]
+    //  [base + 8, base + 9, base +10, nullptr,]
+    //  [nullptr,  nullptr,  nullptr,  nullptr,]]
+    // clang-format on
+    // The contiguity of the two dim should be 1.
+    // FIXME: We didn't check the offsets for block pointer as it is going to be
+    // deprecated. Maybe it is required.
+    int64_t contiguous = shapeInfo[dim].getDivisibility(0);
+    contiguity.push_back(strideInfo[dim].getConstantValue() == 1
+                             ? std::min(contiguous, blkShape[dim])
+                             : 1);
     constancy.push_back(1);
   }
 
@@ -1246,10 +1259,6 @@ public:
     auto tensorType = cast<RankedTensorType>(
         cast<PointerType>(op.getResult().getType()).getPointeeType());
     unsigned rank = op.getShape().size();
-
-    // TODO: Support higher rank tensors.
-    if (rank > 2)
-      return AxisInfo();
 
     auto axisInfo =
         makeTensorPtrAxisInfo(tensorType.getShape(), rank, operands);
