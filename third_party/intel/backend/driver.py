@@ -1,6 +1,8 @@
 import importlib.metadata
 import os
 import re
+import json
+import sys
 import hashlib
 import shutil
 import ctypes
@@ -926,9 +928,54 @@ class XPULauncher(object):
         self.constants = constants
         self.signature = signature
 
+    def _dump_launch_params(self, args, constants, signature):
+        # inspired by `def _dump_launch_params(args, kwargs, launcher, kernel_name, grid):` from
+        # torch/_inductor/runtime/triton_heuristics.py
+        grid = args[:3]
+        new_args = args[9:]
+        call_args = []
+        call_kwargs = {}
+        for arg in new_args:
+            if hasattr(arg, "shape"):
+                call_args.append(f"T{list(arg.shape)}")
+            else:
+                call_args.append(str(arg))
+
+        # handle kwargs
+        signature = list(signature.keys())
+        for idx, value in constants.items():
+            # In general this is not the case, but it is sufficient for llama 3.1 kernels
+            assert len(idx) == 1
+            call_kwargs[signature[idx[0]]] = value
+        call_kwargs["num_warps"] = args[5].num_warps
+        call_kwargs["num_stages"] = args[5].num_stages
+
+        # adjust args
+        constants = [(idx[0], value) for idx, value in constants.items()]
+        constants = sorted(constants, reverse=True)
+        for idx, _ in constants:
+            # it have been added as kwargs
+            call_args.pop(idx)
+
+        args_str = [*call_args]
+        args_str.extend(f"{k}={v}" for k, v in call_kwargs.items())
+        args_str = ", ".join(args_str)
+        abs_path = os.path.abspath(sys.argv[0])
+        file_path = f"{abs_path}.launch_params_triton_{os.getpid()}"
+        print(f"file with launch params: {file_path}")
+        with open(file_path, "a") as f:
+            entry = {args[5].name: {"launch_args": args_str, "grid": list(grid)}}
+            f.write(json.dumps(entry) + "\n")
+
     def __call__(self, *args):
         if self.serialize_kernel_args:
             serialize_args(args, self.constants, self.signature)
+
+        if os.environ.get("TRITON_DUMP_LAUNCH_PARAMS") == "1":
+            # This function does not cover all cases, for example when the arguments are tuple,
+            # but it is sufficient for llama 3.1 kernels
+            self._dump_launch_params(args, self.constants, self.signature)
+
         self.launch(args)
 
 
