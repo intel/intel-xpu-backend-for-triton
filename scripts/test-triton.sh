@@ -419,45 +419,57 @@ run_intel_tests() {
     run_pytest_command --device xpu .
 }
 
+run_language_test() {
+  local suite_name="$1"
+  shift
+  local extra_args=("$@")
+  echo "***************************************************"
+  echo "******     Running Triton ${suite_name} tests     ******"
+  echo "***************************************************"
+  cd $TRITON_PROJ/python/test/unit
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE="$suite_name" \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu "language/test_${suite_name}.py" "${extra_args[@]}"
+}
+
 run_language_tests() {
   echo "***************************************************"
   echo "******     Running Triton Language tests     ******"
   echo "***************************************************"
   cd $TRITON_PROJ/python/test/unit
-  ensure_spirv_dis
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=language \
     run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ \
     --ignore=language/test_line_info.py --ignore=language/test_matmul.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py \
     -k "not test_mxfp and not test_scaled_dot"
 
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=subprocess \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/test_subprocess.py
+  run_language_test subprocess
+  run_line_info_tests
+}
 
-  # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
+run_matmul_tests() {
+  run_language_test matmul -k "not test_mxfp and not test_preshuffle_scale_mxfp_cdna4 or test_mxfp8_mxfp4_matmul"
+}
+
+# run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
+run_line_info_tests() {
+  echo "***************************************************"
+  echo "******     Running Triton line_info tests     ******"
+  echo "***************************************************"
+  cd $TRITON_PROJ/python/test/unit
+  ensure_spirv_dis
+
   TRITON_DISABLE_LINE_INFO=0 TRITON_TEST_SUITE=line_info \
     run_pytest_command -k "not test_line_info_interpreter" --verbose --device xpu language/test_line_info.py
 }
 
-run_matmul_tests() {
-  echo "***************************************************"
-  echo "******    Running Triton matmul tests   ******"
-  echo "***************************************************"
-  cd $TRITON_PROJ/python/test/unit
-
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=matmul \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/test_matmul.py \
-    -k "not test_mxfp and not test_preshuffle_scale_mxfp_cdna4 or test_mxfp8_mxfp4_matmul"
-}
-
 run_scaled_dot_tests() {
   echo "***************************************************"
-  echo "******    Running Triton scaled_dot tests    ******"
+  echo "******     Running Triton scaled_dot tests     ******"
   echo "***************************************************"
   cd $TRITON_PROJ/python/test/unit
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=scaled_dot \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py --ignore=language/test_frontend.py\
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/test_core.py \
     -k "test_scaled_dot"
 }
 
