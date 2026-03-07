@@ -101,7 +101,7 @@ env:
   PYTEST_RERUNS: 5
   NUM_SHARDS: 0
   PARALLEL_SUITES: ""
-  SEQUENTIAL_SUITES: "tutorial intel language mxfp scaled_dot runtime debug warnings tools regression gluon triton-kernels interpreter"
+  SEQUENTIAL_SUITES: "tutorial intel language matmul scaled_dot runtime debug warnings tools regression gluon triton-kernels interpreter"
   TRITON_INTEL_ENABLE_SIMULATOR_WRAPPER: 1
 
 jobs:
