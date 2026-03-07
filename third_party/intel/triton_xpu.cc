@@ -89,7 +89,6 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      gpu::intel::createTritonIntelGPURemoveLayoutConversions);
   ADD_PASS_WRAPPER_0("add_optimize_dot_operands",
                      gpu::intel::createTritonIntelGPUOptimizeDotOperands);
-  ADD_PASS_WRAPPER_0("add_coalesce", gpu::intel::createTritonIntelGPUCoalesce);
 
   py::class_<gpu::intel::TritonAnnotateModuleOptions>(m,
                                                       "AnnotateModuleOptions")
