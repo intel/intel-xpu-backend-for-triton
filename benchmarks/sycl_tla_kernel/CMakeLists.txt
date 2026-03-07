@@ -16,11 +16,7 @@ endfunction()
 
 parse_sycl_compiler_version(SYCL_COMPILER_VERSION)
 
-set(SYCL_GPU_TARGETS "intel_gpu_pvc,intel_gpu_bmg_g21")
-
-if (SYCL_COMPILER_VERSION GREATER_EQUAL 20251010)
-  string(APPEND SYCL_GPU_TARGETS ",intel_gpu_bmg_g31")
-endif()
+set(SYCL_GPU_TARGETS "intel_gpu_cri")
 
 set(SPIRV_EXTENSIONS "+SPV_INTEL_split_barrier")
 
@@ -32,14 +28,8 @@ set(SYCL_TLA_KERNEL_FLAGS ${SYCL_TLA_KERNEL_FLAGS}
   -fsycl
   -fsycl-device-code-split=per_kernel
   -fsycl-targets=${SYCL_GPU_TARGETS}
-  "SHELL:-Xspirv-translator=intel_gpu_pvc --spirv-ext=${SPIRV_EXTENSIONS}"
-  "SHELL:-Xspirv-translator=intel_gpu_bmg_g21 --spirv-ext=${SPIRV_EXTENSIONS}"
+  "SHELL:-Xspirv-translator=intel_gpu_cri --spirv-ext=${SPIRV_EXTENSIONS}"
 )
-
-if (SYCL_COMPILER_VERSION GREATER_EQUAL 20251010)
-  list(APPEND CUTLASS_KERNEL_FLAGS
-    "SHELL:-Xspirv-translator=intel_gpu_bmg_g31 --spirv-ext=${SPIRV_EXTENSIONS}")
-endif()
 
 list(APPEND CUTLASS_KERNEL_FLAGS
   -Xs "-options \"-igc_opts 'VISAOptions=-perfmodel,VectorAliasBBThreshold=1000,ExtraOCLOptions=-cl-intel-256-GRF-per-thread'\" -options -ze-opt-large-register-file"
