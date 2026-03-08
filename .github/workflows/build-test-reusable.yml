@@ -106,11 +106,18 @@ jobs:
           use_pyenv: ${{ inputs.use_pyenv_python }}
 
       # Build PyTorch here once, integration tests jobs should load it from cache.
-      - name: Setup PyTorch
-        uses: ./.github/actions/setup-pytorch
-        with:
-          ref: ${{ inputs.pytorch_ref }}
-          mode: ${{ inputs.pytorch_mode }}
+      # - name: Setup PyTorch
+      #   uses: ./.github/actions/setup-pytorch
+      #   with:
+      #     ref: ${{ inputs.pytorch_ref }}
+      #     mode: ${{ inputs.pytorch_mode }}
+
+      - name: Install python-is-python3
+        run: |
+          if ! command -v python3 &> /dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y python-is-python3
+          fi
 
       - name: Build Triton
         uses: ./.github/actions/setup-triton
