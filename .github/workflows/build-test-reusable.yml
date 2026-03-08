@@ -109,7 +109,7 @@ jobs:
         run: |
           if ! command -v python &> /dev/null; then
             sudo apt-get update
-            sudo apt-get install -y python-is-python3
+            sudo apt-get install -y python-is-python3 python3-pip
           fi
 
       # Build PyTorch here once, integration tests jobs should load it from cache.
