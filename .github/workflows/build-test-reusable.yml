@@ -230,11 +230,11 @@ jobs:
           path: $HOME/.cache/pip
           key: pip-${{ inputs.python_version }}-${{ matrix.suite }}-${{ hashFiles('pyproject.toml', 'setup.py') }}-${{ env.PIP_CACHE_NUMBER }}
 
-      - name: Install Python
-        uses: ./.github/actions/setup-python
-        with:
-          python_version: ${{ inputs.python_version }}
-          use_pyenv: ${{ inputs.use_pyenv_python }}
+      # - name: Install Python
+      #   uses: ./.github/actions/setup-python
+      #   with:
+      #     python_version: ${{ inputs.python_version }}
+      #     use_pyenv: ${{ inputs.use_pyenv_python }}
 
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
