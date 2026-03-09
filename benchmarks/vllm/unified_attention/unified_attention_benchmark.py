@@ -151,7 +151,6 @@ def is_enough_memory(x_val, safety_factor=0.80):
 
 # There is an error right now, for FP8 matmul with block size 16 is not supported
 # Input shapes should have M >= 1, N >= 16 and K >= 32
-# MMAP_BLOCK_SIZES = [64] if IS_FP8 else [16, 64]
 MMAP_BLOCK_SIZES = [64] if IS_FP8 else [16, 64]
 NUM_BLOCKS = [32768, 2048]
 SEQ_LENS = [
