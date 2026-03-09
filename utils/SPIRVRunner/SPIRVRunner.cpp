@@ -1,6 +1,6 @@
 #include <level_zero/ze_api.h>
-#include <sycl/sycl.hpp>
 #include <sycl/ext/oneapi/experimental/enqueue_functions.hpp>
+#include <sycl/sycl.hpp>
 
 #include <torch/torch.h>
 
@@ -433,8 +433,8 @@ std::vector<TensorBuffer> launchKernel(sycl::queue stream, sycl::kernel kernel,
   // copy back the output tensors
   for (const auto &item : triton_args.host_outbuffers) {
     syclext::memcpy(stream, tensor_ptr(item.buffer_ptr),
-                  triton_args.dev_buffers.at(item.index),
-                  item.buffer_ptr.nbytes());
+                    triton_args.dev_buffers.at(item.index),
+                    item.buffer_ptr.nbytes());
   }
 
   stream.wait_and_throw();
