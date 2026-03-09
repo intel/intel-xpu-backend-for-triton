@@ -199,7 +199,7 @@ public:
   StrideInfo getStrideInfo(
       triton::MakeRangeOp op,
       ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
-    return StrideInfo(StrideInfo::DimVectorT{1}); //
+    return StrideInfo(StrideInfo::DimVectorT{1});
   }
 };
 
