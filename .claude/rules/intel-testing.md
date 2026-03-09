@@ -119,7 +119,7 @@ lit test/TritonIntelGPU/
 lit test/TritonIntelGPU/accelerate-matmul-pvc.mlir
 
 # Direct triton-opt invocation
-build/.../bin/triton-opt test/TritonIntelGPU/coalesce.mlir -tritonintelgpu-coalesce
+build/.../bin/triton-opt test/TritonIntelGPU/loop-pipeline.mlir -tritonintelgpu-pipeline
 ```
 
 ## Python Tests (pytest)

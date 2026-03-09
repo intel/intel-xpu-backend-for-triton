@@ -14,7 +14,7 @@ TEST:
     --minicore        part of core
     --intel           part of core
     --language        part of core
-    --mxfp            part of core
+    --matmul          part of core
     --scaled-dot      part of core
     --runtime         part of core
     --debug           part of core
@@ -68,7 +68,7 @@ TEST_CORE=false
 TEST_MINICORE=false
 TEST_INTEL=false
 TEST_LANGUAGE=false
-TEST_MXFP=false
+TEST_MATMUL=false
 TEST_SCALED_DOT=false
 TEST_RUNTIME=false
 TEST_DEBUG=false
@@ -135,8 +135,8 @@ while (( $# != 0 )); do
       TEST_DEFAULT=false
       shift
       ;;
-    --mxfp)
-      TEST_MXFP=true
+    --matmul)
+      TEST_MATMUL=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -419,43 +419,57 @@ run_intel_tests() {
     run_pytest_command --device xpu .
 }
 
+run_language_test() {
+  local suite_name="$1"
+  shift
+  local extra_args=("$@")
+  echo "***************************************************"
+  echo "******     Running Triton ${suite_name} tests     ******"
+  echo "***************************************************"
+  cd $TRITON_PROJ/python/test/unit
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE="$suite_name" \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu "language/test_${suite_name}.py" "${extra_args[@]}"
+}
+
 run_language_tests() {
   echo "***************************************************"
   echo "******     Running Triton Language tests     ******"
   echo "***************************************************"
   cd $TRITON_PROJ/python/test/unit
-  ensure_spirv_dis
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=language \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py \
-    -k "not test_mxfp and not test_preshuffle_scale_mxfp_cdna4 and not test_scaled_dot"
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ \
+    --ignore=language/test_line_info.py --ignore=language/test_matmul.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py \
+    -k "not test_mxfp and not test_scaled_dot"
 
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=subprocess \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/test_subprocess.py
+  run_language_test subprocess
+  run_line_info_tests
+}
 
-  # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
+run_matmul_tests() {
+  run_language_test matmul -k "not test_mxfp and not test_preshuffle_scale_mxfp_cdna4 or test_mxfp8_mxfp4_matmul"
+}
+
+# run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
+run_line_info_tests() {
+  echo "***************************************************"
+  echo "******     Running Triton line_info tests     ******"
+  echo "***************************************************"
+  cd $TRITON_PROJ/python/test/unit
+  ensure_spirv_dis
+
   TRITON_DISABLE_LINE_INFO=0 TRITON_TEST_SUITE=line_info \
     run_pytest_command -k "not test_line_info_interpreter" --verbose --device xpu language/test_line_info.py
 }
 
-run_mxfp_tests() {
-  echo "***************************************************"
-  echo "******    Running Triton matmul mxfp tests   ******"
-  echo "***************************************************"
-  cd $TRITON_PROJ/python/test/unit
-
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=mxfp \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/test_matmul.py::test_mxfp8_mxfp4_matmul
-}
-
 run_scaled_dot_tests() {
   echo "***************************************************"
-  echo "******    Running Triton scaled_dot tests    ******"
+  echo "******     Running Triton scaled_dot tests     ******"
   echo "***************************************************"
   cd $TRITON_PROJ/python/test/unit
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=scaled_dot \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py --ignore=language/test_frontend.py\
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/test_core.py \
     -k "test_scaled_dot"
 }
 
@@ -530,7 +544,7 @@ run_core_tests() {
   echo "***************************************************"
   run_minicore_tests
   run_language_tests
-  run_mxfp_tests
+  run_matmul_tests
   run_scaled_dot_tests
   run_debug_tests
 }
@@ -811,7 +825,7 @@ run_vllm_upstream_install() {
 
     # Set specific pin
     cd vllm
-    git checkout "$(<../benchmarks/third_party/vllm/vllm-pin.txt)"
+    git checkout "$(<../benchmarks/vllm/vllm-pin.txt)"
     cd ..
   fi
 
@@ -825,7 +839,7 @@ run_vllm_upstream_install() {
   # Let's not install whole test requirements for now, they are very large and overwrite torch
   # pip install -r vllm/requirements/test.in
   pip install cachetools cbor2 blake3 pybase64 openai_harmony tblib
-  cp -r vllm/tests benchmarks/third_party/vllm/batched_moe/tests
+  cp -r vllm/tests benchmarks/vllm/batched_moe/tests
   VLLM_TARGET_DEVICE=xpu pip install --no-deps --no-build-isolation -e vllm
 }
 
@@ -862,8 +876,8 @@ run_vllm_old_install() {
 
     # Checkout the pinned commit, apply necessary patches and modify tests to run on xpu
     cd vllm
-    git checkout "$(<../benchmarks/third_party/vllm/vllm-pin.txt)"
-    git apply ../benchmarks/third_party/vllm/vllm-fix.patch
+    git checkout "$(<../benchmarks/vllm/vllm-pin.txt)"
+    git apply ../benchmarks/vllm/vllm-fix.patch
     sed -i 's/device="cuda"/device="xpu"/g' \
       tests/kernels/moe/utils.py \
       tests/kernels/moe/test_batched_moe.py \
@@ -875,7 +889,7 @@ run_vllm_old_install() {
     cd ..
   fi
   # These files are neceassary for benchmarking runs
-  cp -r vllm/tests benchmarks/third_party/vllm/batched_moe/tests
+  cp -r vllm/tests benchmarks/vllm/batched_moe/tests
 
   pip install -r vllm/requirements/xpu.txt
 
@@ -885,7 +899,7 @@ run_vllm_old_install() {
   else
     git clone https://github.com/vllm-project/vllm-xpu-kernels
     cd vllm-xpu-kernels
-    git checkout "$(<../benchmarks/third_party/vllm/vllm-kernels-pin.txt)"
+    git checkout "$(<../benchmarks/vllm/vllm-kernels-pin.txt)"
     sed -i '/pytorch\|torch\|triton/d' requirements.txt
     sed -i '/pytorch\|torch\|triton/d' pyproject.toml
     pip install -r requirements.txt
@@ -902,7 +916,7 @@ run_vllm_install() {
   echo "******    Installing VLLM                 ******"
   echo "************************************************"
 
-  local pin_file="$TRITON_PROJ/benchmarks/third_party/vllm/vllm-pin.txt"
+  local pin_file="$TRITON_PROJ/benchmarks/vllm/vllm-pin.txt"
   local current_pin
   current_pin=$(<"$pin_file")
   echo "VLLM pin: $current_pin"
@@ -983,8 +997,8 @@ test_triton() {
   if [ "$TEST_LANGUAGE" = true ]; then
     run_language_tests
   fi
-  if [ "$TEST_MXFP" = true ]; then
-    run_mxfp_tests
+  if [ "$TEST_MATMUL" = true ]; then
+    run_matmul_tests
   fi
   if [ "$TEST_SCALED_DOT" = true ]; then
     run_scaled_dot_tests

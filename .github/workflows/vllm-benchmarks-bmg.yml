@@ -1,0 +1,15 @@
+name: vLLM benchmarks, BMG
+
+permissions: read-all
+
+on:
+  schedule:
+    # About midnight PST (UTC-8)
+    - cron: "5 10 * * *"
+
+jobs:
+  benchmarks:
+    uses: ./.github/workflows/vllm-benchmarks.yml
+    with:
+      runner_label: b580
+    secrets: inherit
