@@ -44,6 +44,8 @@ static void setAttrOnBOperand(Operation *op, StringRef attrName,
     defOp = transOp.getOperand().getDefiningOp();
   if (auto loadOp = dyn_cast_or_null<tt::LoadOp>(defOp))
     loadOp->setAttr(attrName, attr);
+  if (auto descLoadOp = dyn_cast_or_null<tt::DescriptorLoadOp>(defOp))
+    descLoadOp->setAttr(attrName, attr);
 }
 
 unsigned getOpsPerChannel(Type elemType, ModuleOp m) {
