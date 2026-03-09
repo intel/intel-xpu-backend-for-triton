@@ -8,6 +8,8 @@ For the legacy block pointer API, see gemm_block_ptr_benchmark.py.
 This benchmark is come from the Triton tutorial 10-experimental-block-pointer.py
 To compare the performance to XeTLA kernel.
 
+. - just to trigger
+
 """
 from typing import Callable, List, Optional
 import os
