@@ -216,7 +216,7 @@ void XpuptiProfiler::XpuptiProfilerPimpl::completeBuffer(uint8_t *buffer,
   std::map<uint64_t, std::reference_wrapper<XpuptiProfiler::ExternIdState>>
       externIdToStateCache;
   do {
-    status = xpupti::viewGetNextRecord<true>(buffer, validSize, &activity);
+    status = xpupti::viewGetNextRecord<false>(buffer, validSize, &activity);
     if (status == pti_result::PTI_SUCCESS) {
       auto correlationId = processActivity(
           profiler.correlation.corrIdToExternId,
