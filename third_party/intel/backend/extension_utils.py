@@ -47,7 +47,8 @@ def has_device_extension(device_id: int, extension_name: str) -> bool:
         extension_name: Name of the extension (e.g., 'cl_intel_subgroup_2d_block_io')
 
     Returns:
-        True if the extension is supported, False otherwise
+        True/False if the extension is supported/not supported, or
+        None if the specific GPU instance is not found.
     """
     # Try environment variable first (fastest path)
     env_extensions = get_device_extensions_from_env()
@@ -83,7 +84,7 @@ def query_device_extensions(device_id: int):
         "has_bfloat16_conversion":
         has_device_extension(device_id, "cl_intel_bfloat16_conversions"),
     }
-    return extensions
+    return {extension: supported for extension, supported in extensions.items() if supported is not None}
 
 
 def get_device_id(device_idx: int) -> int:
