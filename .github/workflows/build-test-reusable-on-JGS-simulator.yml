@@ -36,14 +36,6 @@ on:
         description: DPCPP_JGS revision, used only if oneapi_mode is 'DPCPP_JGS_revision'
         type: string
         default: ""
-      pti_mode:
-        description: PTI mode, latest or revision
-        type: string
-        default: PTI_JGS_revision
-      pti_jgs_revision:
-        description: PTI JGS revision, used only if pti_mode is 'PTI_JGS_revision'
-        type: string
-        default: ""
       python_version:
         description: Python version
         type: string
@@ -84,10 +76,6 @@ on:
         description: Enable E2E tests
         type: boolean
         default: false
-      nightly_run:
-        description: Whether this is a nightly run, which may enable some extra tests
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -98,16 +86,12 @@ env:
   TRITON_DISABLE_LINE_INFO: 1
   TEST_UNSKIP: ${{ inputs.enable_unskip }}
   LLVM_REPO: ${{ inputs.device == 'jgs' && 'intel-innersource/drivers.gpu.compiler.llvm-pisa' || 'llvm/llvm-project' }}
-  PYTEST_MAX_PROCESSES: 32
+  PYTEST_MAX_PROCESSES: 1
   # Increase this value to reset cache
   PIP_CACHE_NUMBER: 1
-  NUM_SHARDS: 2
-  PARALLEL_SUITES: "llama_kernels"
-  SEQUENTIAL_SUITES: "minicore language mxfp scaled_dot gluon triton-kernels rest scaled_dot_tutorial tutorial-fa-64 tutorial-fa-128-fwdfp8 tutorial-fa-128-nofwdfp8"
-  TRITON_INTEL_ENABLE_SIMULATOR_WRAPPER: 1
-  TRITON_INTEL_SIMULATOR_KEEPALIVE: 1
-  PYTEST_RERUNS: 0
-  PYTEST_TIMEOUT: 3600
+  NUM_SHARDS: 50
+  PARALLEL_SUITES: "minicore mxfp scaled_dot gluon triton-kernels"
+  SEQUENTIAL_SUITES: "rest scaled_dot_tutorial tutorial-fa-64 tutorial-fa-128-fwdfp8 tutorial-fa-128-nofwdfp8"
 
 jobs:
   build:
@@ -118,12 +102,10 @@ jobs:
       run:
         shell: bash
     outputs:
-      oneapi-cache-key: ${{ steps.setup-oneapi.outputs.oneapi-cache-key }}
-      pti-cache-key: ${{ steps.setup-oneapi.outputs.pti-cache-key }}
+      oneapi-cache-key: ${{ steps.setup-oneapi.outputs.cache-key }}
       pytorch-jgs-cache-key: ${{ steps.setup-pytorch-jgs.outputs.cache-key }}
       test-triton-command: ${{ steps.test-triton.outputs.command }}
       integration-tests-matrix: ${{ steps.test-triton.outputs.matrix }}
-      workflow-ref: ${{ steps.get-ref.outputs.ref }}
     steps:
       - name: Print inputs
         run: |
@@ -131,17 +113,8 @@ jobs:
           ${{ toJSON(inputs) }}
           EOF
 
-      - name: Get called workflow ref
-        id: get-ref
-        # Use action name with full repo name because repo was not checked out yet here
-        uses: intel-tools/intel-xpu-backend-for-triton/.github/actions/get-called-workflow-ref@main-js
-
       - name: Checkout repository
         uses: actions/checkout@v5
-        with:
-          # Repository should be specified explicitly to allow reuse from other repositories
-          repository: intel-tools/intel-xpu-backend-for-triton
-          ref: ${{ steps.get-ref.outputs.ref }}
 
       - name: Setup ONE API environment
         id: setup-oneapi
@@ -149,8 +122,10 @@ jobs:
         with:
           oneapi_mode: ${{ inputs.oneapi_mode }}
           dpcpp_jgs_revision: ${{ inputs.dpcpp_jgs_revision }}
-          pti_mode: ${{ inputs.pti_mode }}
-          pti_jgs_revision: ${{ inputs.pti_jgs_revision }}
+
+      - name: Debug oneapi
+        run: |
+          echo OneAPI cache key: ${{ steps.setup-oneapi.outputs.cache-key }}
 
       - name: Load pip cache
         id: pip-cache
@@ -193,6 +168,10 @@ jobs:
           pytorch_mode: ${{ inputs.pytorch_mode }}
           pytorch_jgs_artifactory_revision: ${{ inputs.pytorch_jgs_artifactory_revision }}
 
+      - name: Debug pytorch jgs
+        run: |
+          echo PyTorch JGS cache key: ${{ steps.setup-pytorch-jgs.outputs.cache-key }}
+
       - name: Build Proton with XPU support
         if: inputs.driver_version == 'rolling' && inputs.device == 'max1100'
         run: |
@@ -230,10 +209,7 @@ jobs:
           echo "command=$TRITON_TEST_CMD" | tee -a $GITHUB_OUTPUT
           echo "TRITON_TEST_CMD=$TRITON_TEST_CMD" | tee -a $GITHUB_ENV
 
-          mkdir -p $GITHUB_WORKSPACE/reports/simulator-logs
-          echo "TRITON_INTEL_SIMULATOR_START_DIR=$GITHUB_WORKSPACE/reports/simulator-logs" | tee -a $GITHUB_ENV
-
-          echo matrix="[$( (for k in ${SEQUENTIAL_SUITES}; do echo -n { \"suite\": \"$k\", \"shard_id\": 0 }, ; done ; for i in ${PARALLEL_SUITES}; do for j in $(seq 0 $[NUM_SHARDS-1]); do echo -n { \"suite\": \"$i\", \"shard_id\": $j }, ; done; done) | sed -e 's/,$//')]" | tee -a $GITHUB_OUTPUT
+          echo matrix="[$( (for k in ${SEQUENTIAL_SUITES}; do echo -n { \"suite\": \"$k\" }, ; done ; for i in ${PARALLEL_SUITES}; do for j in $(seq 0 $[NUM_SHARDS-1]); do echo -n { \"suite\": \"$i\", \"shard_id\": $j }, ; done; done) | sed -e 's/,$//')]" | tee -a $GITHUB_OUTPUT
 
       - name: Install test dependencies
         run: |
@@ -293,7 +269,6 @@ jobs:
     needs: build
     strategy:
       fail-fast: false
-      max-parallel: 8
       matrix:
         loop: ${{ fromJson(needs.build.outputs.integration-tests-matrix )}}
     timeout-minutes: 720
@@ -315,24 +290,28 @@ jobs:
       - name: Sleep for random time to avoid cache stampede
         if: ${{ matrix.loop.shard_id != null }}
         run: |
-          [ "${NUM_SHARDS:-1}" = 1 ] || sleep $(( RANDOM % 300 ))
+          set -xeuo pipefail
+          sleep $(( RANDOM % 300 ))
+
+      - name: Get called workflow ref
+        id: get-ref
+        # Use action name with full repo name because repo was not checked out yet here
+        uses: intel-tools/intel-xpu-backend-for-triton/.github/actions/get-called-workflow-ref@main-js
 
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
-          # Repository should be specified explicitly to allow reuse from other repositories
+          # Repository should be specified implicitly to allow reuse from other repositories
           repository: intel-tools/intel-xpu-backend-for-triton
-          ref: ${{ needs.build.outputs.workflow-ref }}
+          token: ${{ secrets.GLADOS_TOKEN }}
+          ref: ${{ steps.get-ref.outputs.ref }}
 
       - name: Setup ONE API environment
         uses: ./.github/actions/setup-oneapi-env
         with:
           oneapi_mode: ${{ inputs.oneapi_mode }}
           dpcpp_jgs_revision: ${{ inputs.dpcpp_jgs_revision }}
-          pti_mode: ${{ inputs.pti_mode }}
-          pti_jgs_revision: ${{ inputs.pti_jgs_revision }}
-          oneapi_cache_key: ${{ needs.build.outputs.oneapi-cache-key }}
-          pti_cache_key: ${{ needs.build.outputs.pti-cache-key }}
+          cache_key: ${{ needs.build.outputs.oneapi-cache-key }}
 
       - name: Load pip cache
         id: pip-cache
@@ -388,8 +367,7 @@ jobs:
       - name: Install Triton
         run: |
           tar zxf llvm.tar.gz -C $HOME
-          shopt -s extglob
-          pip install triton?(_jgs)-*.whl
+          pip install triton-*.whl
           python -c 'import triton; print(triton.__version__)'
 
       - name: Report environment details
@@ -438,9 +416,6 @@ jobs:
             echo TRITON_TEST_CMD="${{ inputs.device == 'jgs' && 'export PATH="$HOME/packages/llvm/bin:$PATH" && source /simulator/simulator-env.sh && ' }}bash -v -x scripts/test-triton.sh --skip-pip-install --warning-reports --skip-pytorch-install --reports-dir $GITHUB_WORKSPACE/reports ${{ inputs.ignore_errors && '--ignore-errors' || '' }} $skiplist"
           } | tee -a $GITHUB_ENV
 
-          mkdir -p $GITHUB_WORKSPACE/reports/simulator-logs
-          echo "TRITON_INTEL_SIMULATOR_START_DIR=$GITHUB_WORKSPACE/reports/simulator-logs" | tee -a $GITHUB_ENV
-
       - name: Install test dependencies
         run: |
           pip install -r scripts/requirements-test.txt git+https://github.com/kwasd/pytest-capturewarnings-ng@v1.2.0
@@ -448,19 +423,6 @@ jobs:
       - name: Set test-triton command line
         run: |
           echo "TRITON_TEST_CMD=${{ needs.build.outputs.test-triton-command }}" | tee -a $GITHUB_ENV
-
-      - name: Determine number of shards for current suite
-        run: |
-          SUITE="${{ matrix.loop.suite }}"
-          PARALLEL_SUITES="${{ env.PARALLEL_SUITES }}"
-
-          if echo "$PARALLEL_SUITES" | grep -qw "$SUITE"; then
-            NUM_SHARDS_FOR_SUITE="${{ env.NUM_SHARDS }}"
-          else
-            NUM_SHARDS_FOR_SUITE=1
-          fi
-
-          echo "NUM_SHARDS_FOR_SUITE=$NUM_SHARDS_FOR_SUITE" | tee -a $GITHUB_ENV
 
       - name: Run Proton tests
         if: matrix.loop.suite == 'rest' && inputs.driver_version == 'rolling' && inputs.device == 'max1100'
@@ -473,35 +435,28 @@ jobs:
       - name: Run minicore tests
         if: matrix.loop.suite == 'minicore'
         run: |
-          export TRITON_TEST_SHARDS=${{ env.NUM_SHARDS_FOR_SUITE }}
+          export TRITON_TEST_SHARDS=${{ env.NUM_SHARDS }}
           export TRITON_TEST_SHARD_NUMBER=${{ matrix.loop.shard_id }}
           ${{ env.TRITON_TEST_CMD }} --minicore
-
-      - name: Run language tests
-        if: matrix.loop.suite == 'language'
-        run: |
-          export TRITON_TEST_SHARDS=${{ env.NUM_SHARDS_FOR_SUITE }}
-          export TRITON_TEST_SHARD_NUMBER=${{ matrix.loop.shard_id }}
-          ${{ env.TRITON_TEST_CMD }} --language
 
       - name: Run mxfp tests
         if: matrix.loop.suite == 'mxfp'
         run: |
-          export TRITON_TEST_SHARDS=${{ env.NUM_SHARDS_FOR_SUITE }}
+          export TRITON_TEST_SHARDS=${{ env.NUM_SHARDS }}
           export TRITON_TEST_SHARD_NUMBER=${{ matrix.loop.shard_id }}
           ${{ env.TRITON_TEST_CMD }} --mxfp
 
       - name: Run scaled_dot tests
         if: matrix.loop.suite == 'scaled_dot'
         run: |
-          export TRITON_TEST_SHARDS=${{ env.NUM_SHARDS_FOR_SUITE }}
+          export TRITON_TEST_SHARDS=${{ env.NUM_SHARDS }}
           export TRITON_TEST_SHARD_NUMBER=${{ matrix.loop.shard_id }}
           ${{ env.TRITON_TEST_CMD }} --scaled-dot
 
       - name: Run gluon tests
         if: matrix.loop.suite == 'gluon' && inputs.driver_version == 'rolling'
         run: |
-          export TRITON_TEST_SHARDS=${{ env.NUM_SHARDS_FOR_SUITE }}
+          export TRITON_TEST_SHARDS=${{ env.NUM_SHARDS }}
           export TRITON_TEST_SHARD_NUMBER=${{ matrix.loop.shard_id }}
           ${{ env.TRITON_TEST_CMD }} --gluon
 
@@ -513,41 +468,9 @@ jobs:
       - name: Run triton kernels tests
         if: matrix.loop.suite == 'triton-kernels'
         run: |
-          export TRITON_TEST_SHARDS=${{ env.NUM_SHARDS_FOR_SUITE }}
+          export TRITON_TEST_SHARDS=${{ env.NUM_SHARDS }}
           export TRITON_TEST_SHARD_NUMBER=${{ matrix.loop.shard_id }}
           ${{ env.TRITON_TEST_CMD }} --triton-kernels
-
-      - name: Clone internal PyTorch gpu models
-        if: matrix.loop.suite == 'llama_kernels' && inputs.nightly_run == 'true'
-        uses: actions/checkout@v5
-        with:
-          repository: intel-innersource/frameworks.ai.pytorch.gpu-models
-          path: frameworks.ai.pytorch.gpu-models
-          token: ${{ secrets.GLADOS_TOKEN }}
-
-      - name: Run LLAMA kernels tests
-        if: matrix.loop.suite == 'llama_kernels' && inputs.nightly_run == 'true'
-        env:
-          TRITON_DUMP_LAUNCH_PARAMS: '1'
-          TRITON_BENCHMARK_KERNEL_IN_LAUNCHER: '1'
-          GENERATE_DATA: '0'
-          GH_TOKEN: ${{ secrets.GLADOS_TOKEN }}
-        run: |
-          export PYTEST_MAX_PROCESSES=36
-          export PYTEST_TIMEOUT=10800
-          export TRITON_TEST_SHARDS=${{ env.NUM_SHARDS_FOR_SUITE }}
-          export TRITON_TEST_SHARD_NUMBER=${{ matrix.loop.shard_id }}
-          export TRITON_INTEL_SIMULATOR_START_DIR="${TRITON_INTEL_SIMULATOR_START_DIR}"/llama_kernels-${{ matrix.loop.shard_id }}
-          mkdir -p "${TRITON_INTEL_SIMULATOR_START_DIR}"
-          export TRITON_INTEL_SIMULATOR_KEEPALIVE=0
-          export TRITON_INTEL_SIMULATOR_EXTRA_ARGS="-cb_cfg stats_enable true tg_cfg_filename TG_ArchTarget_xe4.txt tg_interval 10000 device_info_json_enable true dump_stats_on_cs_busy true staging_dump_stats_on_swtag true hltv_json_enable true"
-
-          # To enable `TRITON_BENCHMARK_KERNEL_IN_LAUNCHER` feature.
-          cd benchmarks
-          pip install -v -e . --no-deps --no-build-isolation
-          cd ..
-
-          ${{ env.TRITON_TEST_CMD }} --llama-kernels
 
       # FIXME: make sure new tutorials are added to one of the groups (scaled_dot, rest, tutorial-faX)
       - name: Select tutorials to run (scaled_dot)
@@ -617,16 +540,10 @@ jobs:
     name: Reports
     runs-on:
       - linux
-    needs:
-      - build
-      - integration-tests
+    needs: integration-tests
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
-        with:
-          # Repository should be specified explicitly to allow reuse from other repositories
-          repository: intel-tools/intel-xpu-backend-for-triton
-          ref: ${{ needs.build.outputs.workflow-ref }}
 
       - name: Load pip cache
         id: pip-cache
@@ -654,12 +571,10 @@ jobs:
         run: |
           set -x
           set -o pipefail
-          pushd scripts/triton_utils
-          pip install -e .
-          popd
-          triton-utils download_reports --download-dir reports --repo ${{ github.repository }} --gh-run-id ${{ github.run_id }}
-          triton-utils pass_rate --reports reports --merge-test-results --tests-with-multiple-testsuites --save-to-json pass_rate.json
-          triton-utils pass_rate --reports reports --merge-test-results --tests-with-multiple-testsuites --suite tutorials --save-to-json pass_rate_tutorials.json
+          cd scripts/triton_utils
+          python -m triton_utils.entry_point download_reports --download-dir reports --repo ${{ github.repository }} --gh-run-id ${{ github.run_id }}
+          python -m triton_utils.entry_point pass_rate --reports reports --merge-test-results --tests-with-multiple-testsuites | tee pass_rate.json
+          python -m triton_utils.entry_point pass_rate --reports reports --merge-test-results --tests-with-multiple-testsuites --suite tutorials | tee pass_rate_tutorials.json
 
       - name: Upload pass rate report
         uses: actions/upload-artifact@v4
@@ -701,10 +616,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
-        with:
-          # Repository should be specified explicitly to allow reuse from other repositories
-          repository: intel-tools/intel-xpu-backend-for-triton
-          ref: ${{ needs.build.outputs.workflow-ref }}
 
       - name: Install Python
         uses: ./.github/actions/setup-python
