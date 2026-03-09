@@ -15,10 +15,6 @@ on:
         description: JSON list of benchmarks to run. Leave empty to run all benchmarks.
         type: string
         default: ""
-      vllm_pin:
-        description: vLLM pin (commit hash), keep empty for default
-        type: string
-        default: ""
       sglang_pin:
         description: SGLang pin (commit hash), keep empty for default
         type: string
@@ -33,10 +29,6 @@ on:
         description: JSON list of benchmarks to run. Leave empty to run all benchmarks.
         type: string
         default: ""
-      vllm_pin:
-        description: vLLM pin (commit hash), keep empty for default
-        type: string
-        default: ""
       sglang_pin:
         description: SGLang pin (commit hash), keep empty for default
         type: string
@@ -48,7 +40,6 @@ on:
 
 permissions: read-all
 
-# VLLM installation from upstream uses vllm-xpu-kernels wheel which is built just for python==3.12
 env:
   PYTHON_VERSION: "3.12"
   TAG: ${{ inputs.tag || (github.event_name == 'pull_request' && format('pr-{0}', github.event.number)) || (github.event_name == 'schedule' && 'ci') || 'test' }}
@@ -73,12 +64,6 @@ jobs:
 
       - name: Checkout repository
         uses: actions/checkout@v6
-
-      - name: Override vLLM pin
-        if: ${{ inputs.vllm_pin }}
-        run: |
-          echo "${{ inputs.vllm_pin }}" > benchmarks/third_party/vllm/vllm-pin.txt
-          echo "Overriding vLLM pin to: ${{ inputs.vllm_pin }}"
 
       - name: Override SGLang pin
         if: ${{ inputs.sglang_pin }}
@@ -131,7 +116,7 @@ jobs:
           ./scripts/test-triton.sh --install-sglang --skip-pip-install --skip-pytorch-install
           cd benchmarks/third_party/sglang
           python scaled_mm_benchmark.py --reports $REPORTS
-          python ../vllm/transform_results.py \
+          python ../../vllm/transform_results.py \
             $REPORTS/scaled_mm_benchmark.csv \
             $REPORTS/scaled-mm-int8-report.csv \
             --tag $TAG \
@@ -146,118 +131,13 @@ jobs:
 
           cd benchmarks/third_party/sglang
           FP8="1" python scaled_mm_benchmark.py --reports $REPORTS
-          python ../vllm/transform_results.py \
+          python ../../vllm/transform_results.py \
             $REPORTS/scaled_mm_benchmark.csv \
             $REPORTS/scaled-mm-fp8-report.csv \
             --tag $TAG \
             --bgroup sglang \
             --benchmark scaled-mm-fp8 \
             --param_cols="M,N,K"
-
-      - name: Install vllm
-        id: install-vllm
-        if: ${{ steps.install-benchmarks.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm')) }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-          ./scripts/test-triton.sh --install-vllm --skip-pip-install --skip-pytorch-install
-
-      - name: Run vllm unified attention bf16
-        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm')) }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-
-          cd benchmarks/third_party/vllm
-          bash run_benchmark.sh unified_attention --reports $REPORTS
-          # Transform baseline results
-          python transform_results.py \
-            $REPORTS/unified-attention-performance.csv \
-            $REPORTS/unified-attention-report.csv \
-            --tag $TAG \
-            --bgroup "vllm" \
-            --benchmark "unified-attn-bf16" \
-            --param_cols "q_heads,k_heads,head_size,dtype,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size"
-          # Transform tensor descriptor patched results
-          python transform_results.py \
-            $REPORTS/unified-attention-performance-td.csv \
-            $REPORTS/unified-attention-td-report.csv \
-            --tag $TAG \
-            --bgroup "vllm" \
-            --benchmark "unified-attn-bf16" \
-            --param_cols "q_heads,k_heads,head_size,dtype,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size"
-
-      - name: Run vllm unified attention fp8
-        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm')) }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-
-          cd benchmarks/third_party/vllm
-          FP8="1" bash run_benchmark.sh unified_attention --reports $REPORTS
-          # Transform baseline results
-          python transform_results.py \
-            $REPORTS/unified-attention-performance.csv \
-            $REPORTS/unified-attention-fp8-report.csv \
-            --tag $TAG \
-            --bgroup "vllm" \
-            --benchmark "unified-attn-fp8" \
-            --param_cols "q_heads,k_heads,head_size,dtype,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size"
-          # Transform tensor descriptor patched results
-          python transform_results.py \
-            $REPORTS/unified-attention-performance-td.csv \
-            $REPORTS/unified-attention-fp8-td-report.csv \
-            --tag $TAG \
-            --bgroup "vllm" \
-            --benchmark "unified-attn-fp8" \
-            --param_cols "q_heads,k_heads,head_size,dtype,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size"
-
-      - name: Run vllm batched moe bf16
-        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm')) }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-
-          cd benchmarks/third_party/vllm
-          bash run_benchmark.sh batched_moe --reports $REPORTS
-          # Transform baseline results
-          python transform_results.py \
-            $REPORTS/moe-gemm-performance.csv \
-            $REPORTS/moe-gemm-report.csv \
-            --tag $TAG \
-            --bgroup vllm \
-            --benchmark moe-bf16-benchmark \
-            --param_cols="num_experts,max_tokens_per_expert,K,N"
-          # Transform tensor descriptor patched results
-          python transform_results.py \
-            $REPORTS/moe-gemm-performance-td.csv \
-            $REPORTS/moe-gemm-td-report.csv \
-            --tag $TAG \
-            --bgroup vllm \
-            --benchmark moe-bf16-benchmark \
-            --param_cols="num_experts,max_tokens_per_expert,K,N"
-
-
-      - name: Run vllm batched moe fp8
-        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm')) }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-
-          cd benchmarks/third_party/vllm
-          FP8="1" bash run_benchmark.sh batched_moe --reports $REPORTS
-          # Transform baseline results
-          python transform_results.py \
-            $REPORTS/moe-gemm-performance.csv \
-            $REPORTS/moe-gemm-fp8-report.csv \
-            --tag $TAG \
-            --bgroup vllm \
-            --benchmark moe-fp8-benchmark \
-            --param_cols="num_experts,max_tokens_per_expert,K,N"
-          # Transform tensor descriptor patched results
-          python transform_results.py \
-            $REPORTS/moe-gemm-performance-td.csv \
-            $REPORTS/moe-gemm-fp8-td-report.csv \
-            --tag $TAG \
-            --bgroup vllm \
-            --benchmark moe-fp8-benchmark \
-            --param_cols="num_experts,max_tokens_per_expert,K,N"
-
 
       - name: Run Liger-Kernel benchmarks
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'liger')) }}
@@ -319,7 +199,7 @@ jobs:
           source scripts/capture-hw-details.sh
           python python/test/microbenchmark/launch_overhead.py --reports $REPORTS
 
-          python benchmarks/third_party/vllm/transform_results.py $REPORTS/launch_overhead_results.csv $REPORTS/launch_overhead-report.csv \
+          python benchmarks/vllm/transform_results.py $REPORTS/launch_overhead_results.csv $REPORTS/launch_overhead-report.csv \
             --tag $TAG \
             --bgroup overhead \
             --benchmark launch-overhead \

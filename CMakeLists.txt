@@ -12,8 +12,14 @@ set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
 project(triton CXX C)
 include(CTest)
+include(GNUInstallDirs)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+
+set(_triton_plugins_default ON)
+if (WIN32)
+  set(_triton_plugins_default OFF)
+endif()
 
 # Options
 option(TRITON_BUILD_PYTHON_MODULE "Build Python Triton bindings" OFF)
@@ -23,6 +29,7 @@ option(TRITON_BUILD_WITH_CCACHE "Build with ccache (if available)" ON)
 option(TRITON_OFFLINE_BUILD "Build without downloading dependencies" OFF)
 option(LLVM_BUILD_SHARED_LIBS
   "Build all libraries as shared libraries instead of static" OFF)
+option(TRITON_ENABLE_PLUGINS "Enable building Triton plugins" ${_triton_plugins_default})
 set(TRITON_CODEGEN_BACKENDS "" CACHE STRING "Enable different codegen backends")
 
 set(TRITON_CACHE_PATH "" CACHE PATH "Path to triton cache")
@@ -37,6 +44,10 @@ set(TRITON_CUDACRT_PATH "" CACHE PATH "Path to CUDA CRT headers.")
 set(TRITON_CUDART_PATH "" CACHE PATH "Path to CUDA Runtime headers")
 set(TRITON_CUPTI_INCLUDE_PATH "" CACHE PATH "Path to CUPTI headers")
 set(TRITON_CUPTI_LIB_PATH "" CACHE PATH "Path to CUPTI libraries")
+
+if (WIN32 AND TRITON_ENABLE_PLUGINS)
+  message(FATAL_ERROR "TRITON_ENABLE_PLUGINS=ON is not supported on Windows.")
+endif()
 
 if(NOT TRITON_CACHE_PATH)
   message(FATAL_ERROR "TRITON_CACHE_PATH must be set or derivable from TRITON_HOME/HOME/USERPROFILE/HOMEPATH.")
@@ -268,7 +279,6 @@ function(add_triton_plugin name)
   add_triton_object(${name} ${ARGN})
 endfunction()
 
-
 # Disable warnings that show up in external code (gtest;pybind11)
 if(NOT MSVC)
   set(TRITON_DISABLE_EH_RTTI_FLAGS "$<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions;-fno-rtti>")
@@ -295,7 +305,6 @@ add_subdirectory(lib)
 if (NOT WIN32 AND NOT APPLE AND NOT BSD)
   link_libraries(stdc++fs)
 endif()
-
 
 # -----
 
@@ -436,6 +445,12 @@ if(TRITON_BUILD_PYTHON_MODULE)
   endif()
   target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
 
+  install(TARGETS triton
+    COMPONENT libraries
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  )
+
   if (NOT DEFINED LLVM_SYSPATH)
       message(FATAL_ERROR "LLVM_SYSPATH must be set.")
   endif()
@@ -489,3 +504,15 @@ if(TRITON_BUILD_UT)
     USES_TERMINAL
   )
 endif()
+
+# Header installation
+
+install(DIRECTORY ${PROJECT_SOURCE_DIR}/include/
+  COMPONENT headers
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+  FILES_MATCHING PATTERN "*.h")
+
+install(DIRECTORY ${PROJECT_BINARY_DIR}/include/
+  COMPONENT headers
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+  FILES_MATCHING PATTERN "*.h.inc")

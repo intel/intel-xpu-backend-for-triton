@@ -12,5 +12,5 @@ jobs:
     uses: ./.github/workflows/third-party-benchmarks.yml
     with:
       runner_label: b580
-      benchmarks: '["sglang", "vllm"]'
+      benchmarks: '["sglang"]'
     secrets: inherit

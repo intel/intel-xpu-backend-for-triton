@@ -106,7 +106,6 @@ Module attributes for device capabilities are listed in `intel-gpu-hardware.md` 
 
 | Pass | CLI Flag | Pattern | Gate |
 |------|----------|---------|------|
-| Coalesce | `tritonintelgpu-coalesce` | Manual walk + axis analysis | — |
 | AccelerateMatmul | `tritonintelgpu-accelerate-matmul` | OpRewritePattern (greedy) | DPASAnalysis |
 | MaterializeBlockPointer | `tritonintelgpu-materialize-block-pointer` | Manual walk + annotation | `support_2d_block_io` |
 | OptimizeDotOperands | `tritonintelgpu-optimize-dot-operands` | OpRewritePattern (greedy) | — |
@@ -173,7 +172,6 @@ TTIR passes:
 - `-triton-intel-fuse-reshape`
 
 TTGIR passes:
-- `-tritonintelgpu-coalesce`
 - `-tritonintelgpu-accelerate-matmul`
 - `-tritonintelgpu-optimize-dot-operands`
 - `-tritonintelgpu-remove-layout-conversions`
