@@ -1,0 +1,62 @@
+name: Build benchmarks wheel
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - benchmarks/**
+      - .github/workflows/build-benchmarks-wheel.yml
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'keep-going') && github.run_id || github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+permissions: read-all
+
+jobs:
+  build:
+    name: Build benchmarks wheel
+    runs-on:
+      - max1100
+      - rolling
+      - runner-0.0.22
+    strategy:
+      matrix:
+        python:
+          - "3.10"
+          - "3.11"
+          - "3.12"
+          - "3.13"
+          - "3.14"
+      fail-fast: false
+      max-parallel: 2
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install Python ${{ matrix.python }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install benchmarks build dependencies
+        run: |
+          pip install -r python/requirements.txt
+
+      - name: Setup PyTorch
+        uses: ./.github/actions/setup-pytorch
+
+      - name: Build benchmarks wheel
+        run: |
+          cd benchmarks
+          python -m build --wheel --no-isolation
+
+      - name: Upload benchmarks wheel
+        uses: actions/upload-artifact@v7
+        with:
+          name: benchmarks-wheel-py${{ matrix.python }}
+          path: benchmarks/dist/*.whl
