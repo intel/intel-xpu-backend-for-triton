@@ -588,6 +588,13 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     Location loc = ptr.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
+    // Print tensor type:
+    if(isTensorPointerType(ptr.getType())) {
+      llvm::errs() << "getPitch for tensor type: " << "\n";
+    } else {
+      llvm::errs() << "getPitch for non-tensor pointer type: " << "\n";
+    }
+
     if (isTensorPointerType(ptr.getType())) {
       // The block pointer struct is expected to have the following layout:
       //    Struct {
@@ -1112,6 +1119,14 @@ struct PrefetchOpConversion
         b.mul(rowStride, b.i64_val(eltTy.getIntOrFloatBitWidth() / 8));
     rowStrideInBytes = b.trunc(i32_ty, rowStrideInBytes);
 
+    // Check if pitch is < 64 bytes and skip 2D block prefetch if so.
+    // The 2DBlockPrefetch hardware instruction requires pitch >= 64.
+    if (auto pitchConst =
+            mlir::triton::intel::getFoldedConstantValue(rowStrideInBytes)) {
+      if (*pitchConst < 64)
+        return failure();
+    }
+
     MLIRContext *ctx = getContext();
     StringAttr kOffset = S("offset");
     StringAttr kWarp = S("warp");
@@ -1296,6 +1311,14 @@ struct PrefetchOpConversion
                                       elemSizeInBits, memoryRowMajor ? 0 : 1);
     if (!rowStrideInBytes)
       return failure();
+
+    // Check if pitch is < 64 bytes and skip 2D block prefetch if so.
+    // The 2DBlockPrefetch hardware instruction requires pitch >= 64.
+    if (auto pitchConst =
+            mlir::triton::intel::getFoldedConstantValue(rowStrideInBytes)) {
+      if (*pitchConst < 64)
+        return failure();
+    }
 
     // If the stride is 0, we want to load only the first row.
     int stride = getStride(op.getPtr(), 0);
@@ -1597,14 +1620,14 @@ struct LoadOpToBlockIOConversion
     if (!pitch)
       return failure();
 
-    bool needRuntimePitchCheck = true;
+    bool needRuntimePitchCheck = false;
 
-    // if (auto pitchConst = mlir::triton::intel::getFoldedConstantValue(pitch)) {
-    //   if ((*pitchConst * elemSizeInBits / 8) < 64)
-    //     return failure();
-    // } else {
-    //   needRuntimePitchCheck = true;
-    // }
+    if (auto pitchConst = mlir::triton::intel::getFoldedConstantValue(pitch)) {
+      if (*pitchConst  < 64)
+        return failure();
+    } else {
+      needRuntimePitchCheck = true;
+    }
 
     SmallVector<Value> baseOffsets = getOffsets(rewriter, ptr, unpackedPtr);
 
@@ -2074,6 +2097,7 @@ struct LoadOpToBlockIOConversion
     };
 
     Value resultStruct;
+
     if (!needRuntimePitchCheck) {
       // No spec-const gating; always use block-IO.
       resultStruct = buildBlockIOResult();

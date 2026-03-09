@@ -308,6 +308,24 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
     return NULL;
   }
 
+  PyObject *objectsRepresentation = PyObject_Repr(py_spec_const_args);
+  if (objectsRepresentation) {
+    const char *s = PyUnicode_AsUTF8(objectsRepresentation);
+    if (s) {
+      std::cout << "String repre spec args: " << s << std::endl;
+    }
+    Py_DECREF(objectsRepresentation);
+  }
+
+  PyObject *objectsRepresentationVal = PyObject_Repr(py_spec_const_values);
+  if (objectsRepresentationVal) {
+    const char *s = PyUnicode_AsUTF8(objectsRepresentationVal);
+    if (s) {
+      std::cout << "String repre spec vals: " << s << std::endl;
+    }
+    Py_DECREF(objectsRepresentationVal);
+  }
+
   std::vector<std::pair<uint32_t, int32_t>> spec_pairs;
   if (py_spec_const_args != Py_None && py_spec_const_values != Py_None) {
     std::vector<int> spec_const_args;

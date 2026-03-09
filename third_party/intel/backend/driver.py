@@ -8,6 +8,7 @@ import sysconfig
 import tempfile
 from pathlib import Path
 from functools import cached_property
+import pdb
 
 from triton import knobs
 from triton.runtime.build import _build, platform_key, _load_module_from_path
@@ -242,6 +243,7 @@ class SpirvUtils:
         return super().__getattribute__(name)
 
     def load_binary(self, *args):
+        #pdb.set_trace()
         spec = args[6] if len(args) >= 7 else None
         if spec:
             n_regs, n_max_threads = self.shared_library.mock_binary((args[3], args[5]))

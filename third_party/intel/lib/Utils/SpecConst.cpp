@@ -301,6 +301,8 @@ static FailureOr<Value> cloneWithBackwardSlice(Value baseValue,
     return failure();
   }
 
+  llvm::errs() << "    Backward slice contains " << slice.size() << " operations\n";
+
   IRMapping mapping;
   mapping.map(leaf, specLeaf);
 
@@ -395,10 +397,28 @@ markRootArgAsSpecConst(Value resultVal, ModuleOp module, Location loc,
     return failure();
   BlockArgument leaf = *leafOr;
 
+  // Print leafOr and resultVal
+  llvm::errs() << "[SpecConst] markRootArgAsSpecConst called:\n";
+  llvm::errs() << "  resultVal: ";
+  resultVal.print(llvm::errs());
+  llvm::errs() << "\n  resultVal type: ";
+  resultVal.getType().print(llvm::errs());
+  llvm::errs() << "\n  leaf arg#: " << leaf.getArgNumber();
+  llvm::errs() << "\n  leaf type: ";
+  leaf.getType().print(llvm::errs());
+  llvm::errs() << "\n  leaf block: @" << (const void *)leaf.getOwner();
+  if (auto fn = leaf.getOwner()->getParentOp()->getParentOfType<LLVM::LLVMFuncOp>()) {
+    llvm::errs() << "\n  function: @" << fn.getName();
+  }
+  llvm::errs() << "\n";
+
   auto idxOr =
       addSpecConstArgIndexToModule(module, leaf.getArgNumber(), diagOp, loc);
   if (failed(idxOr))
     return failure();
+
+  int32_t specConstIndex = *idxOr;
+  llvm::errs() << "  Assigned spec const index: " << specConstIndex << "\n";
 
   // Preserve your current behavior: return arg number (not the deduped slot).
   int32_t arg = leaf.getArgNumber();
@@ -409,6 +429,23 @@ FailureOr<Value> buildSpecConstBasedValue(Value baseValue, Operation *anchorOp,
                                           Location loc,
                                           PatternRewriter &rewriter) {
   assert(anchorOp && "buildSpecConstBasedValue: anchorOp must not be null");
+
+  // Dump entire function.
+  llvm::errs() << "\n[SpecConst] buildSpecConstBasedValue called in function:\n";
+  if (auto fn = anchorOp->getParentOfType<LLVM::LLVMFuncOp>()) {
+    fn.print(llvm::errs());
+    llvm::errs() << "\n";
+  } else if (auto fn = anchorOp->getParentOfType<func::FuncOp>()) {
+    fn.print(llvm::errs());
+    llvm::errs() << "\n";
+  } else {
+    llvm::errs() << "  (Could not find parent function)\n";
+  }
+
+  llvm::errs() << "\n[SpecConst] buildSpecConstBasedValue called\n";
+  llvm::errs() << "  baseValue: ";
+  baseValue.print(llvm::errs());
+  llvm::errs() << "\n  anchorOp: " << anchorOp->getName() << "\n";
 
   ModuleOp module = anchorOp->getParentOfType<ModuleOp>();
   if (!module) {
@@ -450,8 +487,21 @@ FailureOr<Value> buildSpecConstBasedValue(Value baseValue, Operation *anchorOp,
 
   Value specArg = call.getResult();
 
-  return cloneWithBackwardSlice(baseValue, leaf, specArg, loc, rewriter,
-                                diagOp);
+  llvm::errs() << "  Created spec constant call with ID: " << specConstIndex << "\n";
+  llvm::errs() << "  Cloning backward slice...\n";
+
+  auto result = cloneWithBackwardSlice(baseValue, leaf, specArg, loc, rewriter,
+                                       diagOp);
+
+  if (succeeded(result)) {
+    llvm::errs() << "  Success! Result value: ";
+    result->print(llvm::errs());
+    llvm::errs() << "\n\n";
+  } else {
+    llvm::errs() << "  Failed to clone backward slice\n\n";
+  }
+
+  return result;
 }
 
 } // namespace mlir::triton::intel

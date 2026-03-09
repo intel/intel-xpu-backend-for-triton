@@ -16,6 +16,7 @@ import os
 import subprocess
 from pathlib import Path
 from elftools.elf.elffile import ELFFile
+import pdb
 
 try:  # XPUBackend allows metaclasses injection
     from .meta import XPUBackendMeta
@@ -558,6 +559,8 @@ def get_ttig_spec_const_args_from_module(mod):
     Returns: List[int] (arg indices).
     Raises if count is present but any indexed key is missing.
     """
+    # pdb.set_trace()
+
     n = mod.get_int_attr("ttig.spec_const_count")
     n = int(n) if n is not None else 0
 
