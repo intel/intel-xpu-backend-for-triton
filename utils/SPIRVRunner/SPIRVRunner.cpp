@@ -1,5 +1,7 @@
 #include <level_zero/ze_api.h>
 #include <sycl/sycl.hpp>
+#include <sycl/ext/oneapi/experimental/enqueue_functions.hpp>
+
 #include <torch/torch.h>
 
 #include "llvm_parser.h"
@@ -14,6 +16,7 @@
 #include <vector>
 using json = nlohmann::json;
 using ordered_json = nlohmann::ordered_json;
+using syclext = sycl::ext::oneapi::experimental;
 
 auto read_file_as_bytes(const std::string &filename) {
   std::ifstream ins(filename, std::ios::binary);
@@ -319,7 +322,7 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
     double duration = static_cast<double>(end - start) / 1000000;
     std::cout << "Kernel execution time: " << duration << " ms" << std::endl;
   } else {
-    stream.submit(cgf);
+    syclext::submit(stream, cgf);
   }
   stream.wait_and_throw();
 }
@@ -429,12 +432,12 @@ std::vector<TensorBuffer> launchKernel(sycl::queue stream, sycl::kernel kernel,
 
   // copy back the output tensors
   for (const auto &item : triton_args.host_outbuffers) {
-    stream
-        .memcpy(tensor_ptr(item.buffer_ptr),
-                triton_args.dev_buffers.at(item.index),
-                item.buffer_ptr.nbytes())
-        .wait_and_throw();
+    syclext::memcpy(stream, tensor_ptr(item.buffer_ptr),
+                  triton_args.dev_buffers.at(item.index),
+                  item.buffer_ptr.nbytes());
   }
+
+  stream.wait_and_throw();
 
   for (auto *dev_ptr : triton_args.dev_buffers) {
     if (dev_ptr)
