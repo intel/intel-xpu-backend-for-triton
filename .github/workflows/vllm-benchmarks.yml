@@ -126,7 +126,7 @@ jobs:
             --tag $TAG \
             --bgroup "vllm" \
             --benchmark "unified-attn-bf16" \
-            --param_cols "q_heads,k_heads,head_size,dtype,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size"
+            --param_cols "q_heads,k_heads,head_size,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size"
           # Transform tensor descriptor patched results
           python transform_results.py \
             $REPORTS/unified-attention-performance-td.csv \
@@ -134,7 +134,7 @@ jobs:
             --tag $TAG \
             --bgroup "vllm" \
             --benchmark "unified-attn-bf16" \
-            --param_cols "q_heads,k_heads,head_size,dtype,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size"
+            --param_cols "q_heads,k_heads,head_size,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size"
 
       - name: Run vllm unified attention fp8
         if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
@@ -150,7 +150,7 @@ jobs:
             --tag $TAG \
             --bgroup "vllm" \
             --benchmark "unified-attn-fp8" \
-            --param_cols "q_heads,k_heads,head_size,dtype,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size"
+            --param_cols "q_heads,k_heads,head_size,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size"
           # Transform tensor descriptor patched results
           python transform_results.py \
             $REPORTS/unified-attention-performance-td.csv \
@@ -158,7 +158,7 @@ jobs:
             --tag $TAG \
             --bgroup "vllm" \
             --benchmark "unified-attn-fp8" \
-            --param_cols "q_heads,k_heads,head_size,dtype,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size"
+            --param_cols "q_heads,k_heads,head_size,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size"
 
       - name: Run vllm batched moe bf16
         if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
