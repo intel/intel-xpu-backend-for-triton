@@ -1387,9 +1387,6 @@ def test_partitioned_shared_layout(M, K, num_partitions, num_groups, partition_d
     - partition_dim: Dimension along which to partition (0=rows, 1=cols)
     - partition_layout_type: Layout within each piece ("swizzled" or "padded")
     """
-    if is_xpu() and partition_layout_type == "swizzled":
-        pytest.skip("FIXME: #6154")
-
     blocked_layout = ttgl.BlockedLayout(
         size_per_thread=[1, 8],
         threads_per_warp=[THREADS_PER_WARP // 4, 4],
