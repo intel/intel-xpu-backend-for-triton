@@ -489,13 +489,14 @@ private:
 
     // Collect ops to clean up before modifying IR.
     SmallVector<Operation *> opsToClean{transOp};
-    Operation *cur = *transOp->getUsers().begin();
-    while (cur != candidate.lastOpBeforeDot) {
-      opsToClean.push_back(cur);
-      cur = *cur->getUsers().begin();
-    }
-    if (candidate.lastOpBeforeDot != transOp)
+    if (candidate.lastOpBeforeDot != transOp) {
+      Operation *cur = *transOp->getUsers().begin();
+      while (cur != candidate.lastOpBeforeDot) {
+        opsToClean.push_back(cur);
+        cur = *cur->getUsers().begin();
+      }
       opsToClean.push_back(candidate.lastOpBeforeDot);
+    }
 
     // Keep the original descriptor — do NOT reverse it.
     // The descriptor is always row-major (stride-1 on last dim).
