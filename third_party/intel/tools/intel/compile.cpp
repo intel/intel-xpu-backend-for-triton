@@ -5,6 +5,7 @@
 #include <string.h>
 #include <sstream>
 #include <level_zero/ze_api.h>
+#include <sycl/ext/oneapi/experimental/enqueue_functions.hpp>
 #include <sycl/sycl.hpp>
 
 // helpers to check for ze errors
@@ -173,7 +174,7 @@ int32_t {kernel_name}(sycl::queue &stream, {signature}) {{
         cgh.parallel_for(parallel_work_size, sycl_kernel);
     }}
   }};
-  stream.submit(cgf);
+  sycl::ext::oneapi::experimental::submit(stream, cgf);
   stream.wait_and_throw();
   return 0;
 }}
