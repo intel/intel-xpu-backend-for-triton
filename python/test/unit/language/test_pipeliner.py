@@ -218,7 +218,7 @@ def test_pipeline_matmul(scale, device):
         pytest.skip("NYI: scale_dot just implemented in CUDA/HIP/XPU")
     M, N, K = 512, 512, 128
     if is_xpu_cri():
-        M, N = 64, 64
+        M, N = 128, 128
     BLOCK_M, BLOCK_N, BLOCK_K = 64, 64, 32
     NUM_STAGES = 4 if is_cuda() else 2
 
