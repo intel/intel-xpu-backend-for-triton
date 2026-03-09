@@ -389,7 +389,8 @@ private:
 // Transform:
 //   %desc = tt.make_tensor_desc %base, [%N, %K], [%K_stride, %1]
 //         : <tensor<BNxBKxf16>>
-//   %load = tt.descriptor_load %desc[%n, %k] : tensor<BNxBKxf16>
+//   %load = tt.descriptor_load %desc[%n, %k] {ttig.block_io = "row_major"}
+//         : !tt.tensordesc<tensor<BNxBKxf16>> -> tensor<BNxBKxf16>
 //   %trans = tt.trans %load : tensor<BKxBN, blocked_trans>
 //   %cvt = ttg.convert_layout %trans : tensor<BKxBN, dotEnc>
 //   tt.dot(%a, %cvt)

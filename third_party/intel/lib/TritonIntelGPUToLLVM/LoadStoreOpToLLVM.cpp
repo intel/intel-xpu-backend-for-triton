@@ -595,12 +595,6 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
         !hasDotDpasEncoding(tensorTy))
       return false;
 
-    // Ensure block_io attribute is always set. Descriptors are row-major by
-    // definition; column_major is set by FuseTransWithDescriptorLoad.
-    if (!op->hasAttr(TritonIntelGPUDialect::getBlockIOAttrName())) {
-      op->setAttr(TritonIntelGPUDialect::getBlockIOAttrName(),
-                  StringAttr::get(op->getContext(), "row_major"));
-    }
     return true;
   }
 
@@ -2443,13 +2437,14 @@ struct DescriptorLoadOpToBlockIOConversion
     assert(llEncoding.has_value() &&
            "unexpected failure when getting linear layout");
 
-    // Read memory layout from block_io attribute. Always set by
-    // isDescriptorBlockIOCandidate (row_major default) or
-    // FuseTransWithDescriptorLoad (column_major).
+    // Read memory layout from block_io attribute.
+    // Descriptors are row-major by definition; column_major is set by
+    // FuseTransWithDescriptorLoad. Default to row_major when absent.
+    StringRef blockIOName = TritonIntelGPUDialect::getBlockIOAttrName();
+    StringAttr blockIOAttr = op->getAttrOfType<StringAttr>(blockIOName);
+    if (!blockIOAttr)
+      blockIOAttr = StringAttr::get(rewriter.getContext(), "row_major");
     const unsigned rank = tensorType.getRank();
-    auto blockIOAttr = op->getAttrOfType<StringAttr>(
-        TritonIntelGPUDialect::getBlockIOAttrName());
-    assert(blockIOAttr && "block_io attribute must be set by candidate check");
     bool memoryRowMajor = (blockIOAttr.getValue() == "row_major");
     unsigned contiguousDim = memoryRowMajor ? rank - 1 : rank - 2;
 
