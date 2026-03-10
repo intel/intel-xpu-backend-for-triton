@@ -1,5 +1,7 @@
 #include <level_zero/ze_api.h>
+#if __SYCL_COMPILER_VERSION >= 20250604
 #include <sycl/ext/oneapi/experimental/enqueue_functions.hpp>
+#endif
 #include <sycl/sycl.hpp>
 
 #include <torch/torch.h>
@@ -321,7 +323,11 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
     double duration = static_cast<double>(end - start) / 1000000;
     std::cout << "Kernel execution time: " << duration << " ms" << std::endl;
   } else {
+#if __SYCL_COMPILER_VERSION >= 20250604
     sycl::ext::oneapi::experimental::submit(stream, cgf);
+#else
+    stream.submit(cgf);
+#endif
   }
   stream.wait_and_throw();
 }
