@@ -199,7 +199,7 @@ public:
   StrideInfo getStrideInfo(
       triton::MakeRangeOp op,
       ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
-    return StrideInfo({1});
+    return StrideInfo(StrideInfo::DimVectorT{1});
   }
 };
 
@@ -227,7 +227,7 @@ public:
     auto intAttr = dyn_cast<IntegerAttr>(op.getValue());
     auto boolAttr = dyn_cast<BoolAttr>(op.getValue());
     if (intAttr || boolAttr)
-      return StrideInfo({0});
+      return StrideInfo(StrideInfo::DimVectorT{0});
 
     return StrideInfo();
   }
@@ -486,7 +486,7 @@ private:
       ArrayRef<dataflow::Lattice<StrideInfo> *> argLattices) override {
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
       // Induction variable has stride 0 (scalar).
-      auto iv = StrideInfo({0});
+      auto iv = StrideInfo(StrideInfo::DimVectorT{0});
       (void)argLattices[0]->join(iv);
     } else {
       setAllToEntryStates(argLattices);
