@@ -67,6 +67,7 @@ class Config:  # pylint: disable=R0902
     reports_dir: str | None = None
 
     _download_dir: str | None = None
+    artifact_pattern: str | None = None
 
     nightly_run_id: str | None = None
     latest_nightly_gh_run: bool = False
@@ -362,6 +363,13 @@ class Config:  # pylint: disable=R0902
             default="main",
             help="Default repo",
         )
+        nightly_parser.add_argument(
+            "--artifact-pattern",
+            type=str,
+            required=False,
+            default=None,
+            help="Glob pattern to filter artifact names (e.g. 'test-reports-xe2-*')",
+        )
         source_run_group = nightly_parser.add_mutually_exclusive_group(required=True)
         source_run_group.add_argument(
             "--nightly-run-id",
@@ -517,6 +525,7 @@ class DownloadReportsActionRunner(ActionRunner):
                 gh_run_id=config.nightly_run_id,
                 repo=config.repo,
                 branch=config.branch,
+                artifact_pattern=config.artifact_pattern,
             ).download_test_reports()
         elif config.gh_run_id:
             GHABuildTestReportProcessor(
@@ -524,6 +533,7 @@ class DownloadReportsActionRunner(ActionRunner):
                 gh_run_id=config.gh_run_id,
                 repo=config.repo,
                 branch=config.branch,
+                artifact_pattern=config.artifact_pattern,
             ).download_test_reports()
         else:
             raise ValueError(
