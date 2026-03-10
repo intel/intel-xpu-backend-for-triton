@@ -205,7 +205,8 @@ private:
     auto isMajor = [rank, &strideInfo](RankedTensorType tensorTy,
                                        unsigned fastChangeDim,
                                        const tt::AxisInfo &axisInfo) {
-      assert((fastChangeDim < rank) && "fastChangeDim must be less than rank");
+      assert((fastChangeDim == rank - 1 || fastChangeDim == rank - 2) &&
+             "fastChangeDim is expected to be rank - 1 or rank - 2");
       const unsigned otherDim =
           (fastChangeDim == rank - 1) ? rank - 2 : rank - 1;
       // Limit to full row being contiguous.
