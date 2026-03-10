@@ -1,5 +1,7 @@
 import dataclasses
 from typing import Any, cast
+from unittest.mock import patch
+from pathlib import Path
 
 import json
 import re
@@ -793,6 +795,46 @@ def test_long_names_option_compare_reports(tmp_path, capsys, long_names: bool):
     else:
         # With --long-names, the full test name should be visible without truncation
         assert short_name in stdout, f'Expected full test name "{short_name}" not found in output'
+
+
+@pytest.mark.parametrize(
+    ('artifact_pattern', 'expected_names'),
+    [
+        (None, ['test-reports-xe2-bmg', 'test-reports-a770-pvc', 'test-reports-mtl']),
+        ('test-reports-xe2-*', ['test-reports-xe2-bmg']),
+        ('test-reports-a770-*', ['test-reports-a770-pvc']),
+        ('*mtl*', ['test-reports-mtl']),
+        ('no-match-*', None),  # Should raise ValueError
+    ]
+)
+def test_artifact_pattern_filter(artifact_pattern, expected_names):
+    artifacts = [
+        triton_utils.GHArtifact(name='test-reports-xe2-bmg', size_in_bytes=100, expired=False,
+                                created_at='2024-01-01', workflow_run_id='123', repo='test/repo'),
+        triton_utils.GHArtifact(name='test-reports-a770-pvc', size_in_bytes=200, expired=False,
+                                created_at='2024-01-01', workflow_run_id='123', repo='test/repo'),
+        triton_utils.GHArtifact(name='test-reports-mtl', size_in_bytes=300, expired=False,
+                                created_at='2024-01-01', workflow_run_id='123', repo='test/repo'),
+        triton_utils.GHArtifact(name='build-wheels', size_in_bytes=400, expired=False,
+                                created_at='2024-01-01', workflow_run_id='123', repo='test/repo'),
+        triton_utils.GHArtifact(name='test-reports-lts', size_in_bytes=500, expired=False,
+                                created_at='2024-01-01', workflow_run_id='123', repo='test/repo'),
+    ]
+
+    processor = triton_utils.GHTestReportProcessor(
+        download_dir=Path('/tmp/test'),
+        repo='test/repo',
+        branch='main',
+        artifact_pattern=artifact_pattern,
+    )
+
+    with patch.object(processor, 'get_artifacts', return_value=artifacts):
+        if expected_names is None:
+            with pytest.raises(ValueError, match='No test report artifacts found'):
+                processor.get_test_report_artifacts()
+        else:
+            result = processor.get_test_report_artifacts()
+            assert [af.name for af in result] == expected_names
 
 
 # yapf: enable
