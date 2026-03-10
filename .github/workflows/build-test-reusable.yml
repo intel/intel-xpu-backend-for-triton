@@ -249,12 +249,12 @@ jobs:
           pip install triton-*.whl
           python -c 'import triton; print(triton.__version__)'
 
-      - name: Install PTI
-        run: |
-          pip install intel_pti-*.whl
-          PTI_LIBS_DIR=$(python ./scripts/pti_lib.py)
-          ls $PTI_LIBS_DIR
-          echo "LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH" | tee -a $GITHUB_ENV
+      #- name: Install PTI
+      #  run: |
+      #    pip install intel_pti-*.whl
+      #    PTI_LIBS_DIR=$(python ./scripts/pti_lib.py)
+      #    ls $PTI_LIBS_DIR
+      #    echo "LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH" | tee -a $GITHUB_ENV
 
       - name: Report environment details
         timeout-minutes: 1
