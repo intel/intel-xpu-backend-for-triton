@@ -4,7 +4,7 @@ run-name: Nightly merge main-interim into main-cri
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 9 * * 2-4' # Every day at 9:00 UTC
+    - cron: '0 9 * * *' # Every day at 9:00 UTC
 
 permissions:
   contents: write
@@ -33,6 +33,13 @@ jobs:
         run: |
           set -xe
 
+          # Check for existing open PR with the title prefix
+          EXISTING_PR=$(gh pr list --repo intel-tools/intel-xpu-backend-for-triton --state open --json number,title --jq '.[] | select(.title | startswith("[CRI] AUTOMERGE main-interim into main-cri")) | .number')
+          if [ -n "$EXISTING_PR" ]; then
+            echo "A merge PR already exists: #$EXISTING_PR. Skipping PR creation."
+            exit 0
+          fi
+
           TIMESTAMP=$(date +%Y%m%d%H%M%S)
           BRANCH_NAME=merge-main-interim-${TIMESTAMP}
 
@@ -42,13 +49,14 @@ jobs:
 
           git checkout -b "${BRANCH_NAME}" main-cri
           git fetch origin main-interim:main-interim
-          git merge --verbose --commit --no-edit -m "AUTOMERGE main-interim into main-cri" --no-ff --no-squash --stat main-interim
+          TOP_COMMIT=$(git rev-parse origin/main-interim)
+          SHORT_COMMIT=$(git rev-parse --short origin/main-interim)
+          git merge --verbose --commit --no-edit -m "Merge commit '${TOP_COMMIT}'" --no-ff --no-squash --stat ${TOP_COMMIT}
           git push origin "${BRANCH_NAME}"
-          TOP_COMMIT=$(git rev-parse --short HEAD)
 
           gh pr create \
             --repo intel-tools/intel-xpu-backend-for-triton \
-            --title "[CRI] AUTOMERGE main-interim into main-cri commit ${TOP_COMMIT}" \
+            --title "[CRI] AUTOMERGE main-interim into main-cri commit ${SHORT_COMMIT}" \
             --body "Automated merge of main-interim into main-cri. Do not squash!" \
             --reviewer gshimansky,whitneywhtsang \
             --base main-cri \

@@ -10,7 +10,7 @@
 #include "Dialect/TritonIntelGPU/IR/Utils.h"
 #include "SPIRVTargetInfo.h"
 #include "Utility.h"
-#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENMemorySpace.h"
 
 #if defined(_MSC_VER) && !defined(__clang__)
 // from https://gist.github.com/pps83/3210a2f980fd02bb2ba2e5a1fc4a2ef0

@@ -1,6 +1,7 @@
 #ifndef TRITONGPU_CONVERSION_TRITONINTELGPUTOLLVM_PASSES_H
 #define TRITONGPU_CONVERSION_TRITONINTELGPUTOLLVM_PASSES_H
 
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Pass/Pass.h"
 
 namespace mlir::triton::gpu::intel {
