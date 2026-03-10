@@ -12,6 +12,7 @@ import time
 
 import json
 
+from fnmatch import fnmatch
 from pprint import pprint
 
 
@@ -277,6 +278,7 @@ class GHTestReportProcessor:
     download_dir: Path
     repo: str
     branch: str
+    artifact_pattern: str | None = None
 
     @abstractmethod
     def get_artifacts(self) -> list[GHArtifact]:
@@ -295,7 +297,9 @@ class GHTestReportProcessor:
     def get_test_report_artifacts(self) -> list[GHArtifact]:
         artifacts = self.get_artifacts()
         self.print_artifacts("\nArtifacts:\n", artifacts)
-        test_artifacts = [af for af in self.get_artifacts() if self.is_test_report(af)]
+        test_artifacts = [af for af in artifacts if self.is_test_report(af)]
+        if self.artifact_pattern:
+            test_artifacts = [af for af in test_artifacts if fnmatch(af.name, self.artifact_pattern)]
         self.print_artifacts("\nTest report artifacts:\n", test_artifacts)
         print(f"\nTotal artifacts: {len(artifacts)}, test report artifacts: {len(test_artifacts)}\n")
         if len(test_artifacts) == 0:
