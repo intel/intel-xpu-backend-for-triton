@@ -45,3 +45,17 @@ add_triton_ut(
     TritonIntelGPUTransforms
     TritonNvidiaGPUTransforms
 )
+
+add_triton_ut(
+  NAME TestPaddedSharedLayout
+  SRCS PaddedTest.cpp
+  LIBS
+    TritonAnalysis
+    TritonGPUIR
+    TritonNvidiaGPUIR
+    TritonGPUTransforms
+    TritonNvidiaGPUTransforms
+    TritonTools
+    LLVMSupport
+    MLIRSupport
+)
