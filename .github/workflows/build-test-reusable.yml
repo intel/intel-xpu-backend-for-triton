@@ -121,6 +121,18 @@ jobs:
             DEBUG=1
             python -m build --wheel --no-isolation && pip install dist/*.whl
 
+      - name: Build SPIRVRunner
+        run: |
+          source /opt/intel/oneapi/setvars.sh
+          set -x
+          export LLVM_DIR="$HOME/.triton/llvm/llvm-ubuntu-x64"
+          export CMAKE_PREFIX_PATH="$(python scripts/torch_cmake.py)"
+          cd utils/SPIRVRunner
+          mkdir build
+          cd build
+          cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo ..
+          make -j
+
       - name: Build PTI
         run: |
           ./scripts/install-pti.sh --build-level-zero
