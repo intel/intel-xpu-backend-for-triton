@@ -3,6 +3,7 @@ python/test/unit/language/test_core.py::test_dot3d[2-1-64-64-64-32-32-float32-fl
 python/test/unit/language/test_core.py::test_dot3d[2-1-64-64-64-32-32-float64-float64]
 python/test/unit/language/test_core.py::test_dot3d[4-1-64-64-64-32-32-float32-float32]
 python/test/unit/language/test_core.py::test_dot3d[4-1-64-64-64-32-32-float64-float64]
+python/test/unit/language/test_core.py::test_dot3d[8-1-64-64-64-32-32-float32-float32]
 
 # Mismatched elements
 python/test/unit/language/test_core.py::test_dot[1-32-128-64-2-False-False-none-tf32-float32-float32-1-None0]
@@ -23,6 +24,8 @@ python/test/unit/language/test_core.py::test_tensor_atomic_use_result[cas-4-floa
 python/test/unit/language/test_core.py::test_dot_without_load[float16]
 python/test/unit/language/test_core.py::test_scan2d[cummax-int32-shape154-0-False-4]
 
+# Crashed
+python/test/unit/language/test_core.py::test_atomic_cas
 
 # Mismatched elements
 python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_reshape_matmul[float16]
