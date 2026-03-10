@@ -3,6 +3,8 @@ name: Build benchmarks wheel
 on:
   workflow_dispatch:
   pull_request:
+    branches:
+      - main
     paths:
       - benchmarks/**
       - .github/workflows/build-benchmarks-wheel.yml
