@@ -437,11 +437,16 @@ std::vector<TensorBuffer> launchKernel(sycl::queue stream, sycl::kernel kernel,
 
   // copy back the output tensors
   for (const auto &item : triton_args.host_outbuffers) {
+#if __SYCL_COMPILER_VERSION >= 20250604
     sycl::ext::oneapi::experimental::memcpy(
         stream, tensor_ptr(item.buffer_ptr),
         triton_args.dev_buffers.at(item.index), item.buffer_ptr.nbytes());
+#else
+    stream.memcpy(tensor_ptr(item.buffer_ptr),
+                  triton_args.dev_buffers.at(item.index),
+                  item.buffer_ptr.nbytes());
+#endif
   }
-
   stream.wait_and_throw();
 
   for (auto *dev_ptr : triton_args.dev_buffers) {
