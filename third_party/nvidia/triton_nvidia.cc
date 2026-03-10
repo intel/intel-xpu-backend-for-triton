@@ -11,7 +11,13 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "llvm/IR/Constants.h"
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#else
 #include <dlfcn.h>
+#endif
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
@@ -44,6 +50,14 @@ private:
   cuGetErrorString_t cuGetErrorString = nullptr;
 
   template <typename T> T loadSymbol(const char *name) {
+#if defined(_WIN32)
+    auto *symbol = GetProcAddress(static_cast<HMODULE>(dylibHandle), name);
+    if (!symbol) {
+      throw std::runtime_error(
+          "Could not load CUDA driver symbol `" + std::string(name) +
+          "`. Initialize the NVIDIA runtime before using this helper.");
+    }
+#else
     dlerror();
     auto *symbol = dlsym(dylibHandle, name);
     if (const char *error = dlerror()) {
@@ -52,6 +66,7 @@ private:
           "`. Initialize the NVIDIA runtime before using this helper: " +
           std::string(error));
     }
+#endif
     return reinterpret_cast<T>(symbol);
   }
 
@@ -75,12 +90,21 @@ public:
   }
 
   CudaExampleUtils() {
+#if defined(_WIN32)
+    dylibHandle = LoadLibraryA("nvcuda.dll");
+    if (dylibHandle == nullptr) {
+      throw std::runtime_error(
+          "Could not find `nvcuda.dll`. Initialize "
+          "Triton's NVIDIA runtime before using this helper.");
+    }
+#else
     dylibHandle = dlopen("libcuda.so.1", RTLD_NOLOAD | RTLD_LAZY);
     if (dylibHandle == nullptr) {
       throw std::runtime_error(
           "Could not find an already-loaded `libcuda.so.1`. Initialize "
           "Triton's NVIDIA runtime before using this helper.");
     }
+#endif
     cuMemAlloc = loadSymbol<cuMemAlloc_t>("cuMemAlloc_v2");
     cuMemFree = loadSymbol<cuMemFree_t>("cuMemFree_v2");
     cuMemcpyHtoD = loadSymbol<cuMemcpyHtoD_t>("cuMemcpyHtoD_v2");
@@ -91,7 +115,11 @@ public:
 
   ~CudaExampleUtils() {
     if (dylibHandle) {
+#if defined(_WIN32)
+      FreeLibrary(static_cast<HMODULE>(dylibHandle));
+#else
       dlclose(dylibHandle);
+#endif
     }
   }
 
