@@ -116,6 +116,18 @@ static bool gpuAssert(CUresult code, const char *file, int line) {
     }                                                                          \
   } while (0)
 
+static void ensureCudaContext() {
+  CUcontext pctx;
+  CUDA_CHECK(cuCtxGetCurrent(&pctx));
+  if (!pctx) {
+    // Ensure device context.
+    CUdevice device;
+    CUDA_CHECK(cuDeviceGet(&device, 0));
+    CUDA_CHECK(cuDevicePrimaryCtxRetain(&pctx, device));
+    CUDA_CHECK(cuCtxSetCurrent(pctx));
+  }
+}
+
 static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   int device_id;
   if (!PyArg_ParseTuple(args, "i", &device_id))
@@ -157,6 +169,77 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
 
 cleanup:
   return NULL;
+}
+
+static PyObject *getDeviceCapability(PyObject *self, PyObject *args) {
+  int device_id;
+  if (!PyArg_ParseTuple(args, "i", &device_id))
+    return NULL;
+
+  CUdevice device;
+  int major;
+  int minor;
+  CUDA_CHECK_AND_RETURN_NULL(cuDeviceGet(&device, device_id));
+  CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
+      &major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device));
+  CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
+      &minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, device));
+
+  return Py_BuildValue("(ii)", major, minor);
+
+cleanup:
+  return NULL;
+}
+
+static PyObject *getCurrentDevice(PyObject *self, PyObject *args) {
+  if (!PyArg_ParseTuple(args, "")) {
+    return NULL;
+  }
+
+  ensureCudaContext();
+  if (PyErr_Occurred()) {
+    return NULL;
+  }
+
+  CUdevice device;
+  CUDA_CHECK_AND_RETURN_NULL(cuCtxGetDevice(&device));
+  return PyLong_FromLong(device);
+
+cleanup:
+  return NULL;
+}
+
+static PyObject *setCurrentDevice(PyObject *self, PyObject *args) {
+  int device;
+  if (!PyArg_ParseTuple(args, "i", &device)) {
+    return NULL;
+  }
+
+  CUcontext pctx = 0;
+  Py_BEGIN_ALLOW_THREADS;
+  CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(
+      cuDevicePrimaryCtxRetain(&pctx, device));
+  CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(cuCtxSetCurrent(pctx));
+  Py_END_ALLOW_THREADS;
+
+  Py_RETURN_NONE;
+}
+
+static PyObject *getDefaultStream(PyObject *self, PyObject *args) {
+  int device;
+  if (!PyArg_ParseTuple(args, "i", &device)) {
+    return NULL;
+  }
+
+  CUcontext pctx = 0;
+  Py_BEGIN_ALLOW_THREADS;
+  CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(
+      cuDevicePrimaryCtxRetain(&pctx, device));
+  CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(cuCtxSetCurrent(pctx));
+  Py_END_ALLOW_THREADS;
+
+  // CUDA default stream is always 0.
+  return PyLong_FromUnsignedLongLong(0);
 }
 
 static PyObject *loadBinary(PyObject *self, PyObject *args) {
@@ -874,18 +957,6 @@ cleanup:
   return NULL;
 }
 
-static void ensureCudaContext() {
-  CUcontext pctx;
-  CUDA_CHECK(cuCtxGetCurrent(&pctx));
-  if (!pctx) {
-    // Ensure device context.
-    CUdevice device;
-    CUDA_CHECK(cuDeviceGet(&device, 0));
-    CUDA_CHECK(cuDevicePrimaryCtxRetain(&pctx, device));
-    CUDA_CHECK(cuCtxSetCurrent(pctx));
-  }
-}
-
 static void _launch(int gridX, int gridY, int gridZ, int num_warps,
                     int num_ctas, int launch_cooperative_grid, int launch_pdl,
                     int shared_memory, CUstream stream, CUfunction function,
@@ -1441,8 +1512,16 @@ static PyMethodDef ModuleMethods[] = {
      "Load provided cubin into CUDA driver"},
     {"unload_module", unloadModule, METH_VARARGS,
      "Unload provided module to free memory"},
+    {"get_device_capability", getDeviceCapability, METH_VARARGS,
+     "Get compute capability (major, minor) for a given device"},
     {"get_device_properties", getDeviceProperties, METH_VARARGS,
      "Get the properties for a given device"},
+    {"get_current_device", getCurrentDevice, METH_VARARGS,
+     "Get the current CUDA device index"},
+    {"set_current_device", setCurrentDevice, METH_VARARGS,
+     "Set the current CUDA device index"},
+    {"get_default_stream", getDefaultStream, METH_VARARGS,
+     "Get the CUDA default stream for torch-free launches"},
     {"cuOccupancyMaxActiveClusters", occupancyMaxActiveClusters, METH_VARARGS,
      "Python interface for cuOccupancyMaxActiveClusters function"},
     {"set_printf_fifo_size", setPrintfFifoSize, METH_VARARGS,
