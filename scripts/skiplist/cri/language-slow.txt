@@ -1,2 +1,0 @@
-# Long running tests
-python/test/unit/language/test_core.py::test_load_store_same_ptr

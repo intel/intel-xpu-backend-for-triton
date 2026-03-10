@@ -26,6 +26,7 @@ python/test/unit/language/test_core.py::test_scan2d[cummax-int32-shape154-0-Fals
 
 # Crashed
 python/test/unit/language/test_core.py::test_atomic_cas
+python/test/unit/language/test_core.py::test_load_store_same_ptr
 
 # Mismatched elements
 python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_reshape_matmul[float16]
