@@ -121,18 +121,6 @@ jobs:
             DEBUG=1
             python -m build --wheel --no-isolation && pip install dist/*.whl
 
-      - name: Build SPIRVRunner
-        run: |
-          source /opt/intel/oneapi/setvars.sh
-          set -x
-          export LLVM_DIR="$HOME/.triton/llvm/llvm-ubuntu-x64"
-          export CMAKE_PREFIX_PATH="$(python scripts/torch_cmake.py)"
-          cd utils/SPIRVRunner
-          mkdir build
-          cd build
-          cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo ..
-          make -j
-
       - name: Build PTI
         run: |
           ./scripts/install-pti.sh --build-level-zero
@@ -197,6 +185,10 @@ jobs:
           name: test-reports-build-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           include-hidden-files: true
           path: reports
+
+      - name: Setup SPIRVRunner dump dir
+        run: |
+          export TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS="$GITHUB_WORKSPACE/spirv-input-data"
 
   integration-tests:
     name: Integration tests
@@ -393,6 +385,13 @@ jobs:
           name: test-reports-${{ matrix.suite }}-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           include-hidden-files: true
           path: reports
+
+      - name: Upload SPIRVRunner input data
+        uses: actions/upload-artifact@v7
+        with:
+          name: spirvrunner-input-data
+          include-hidden-files: true
+          path: "$TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS"
 
   reports:
     name: Reports
