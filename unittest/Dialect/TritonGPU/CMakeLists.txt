@@ -55,6 +55,7 @@ add_triton_ut(
     TritonNvidiaGPUIR
     TritonGPUTransforms
     TritonNvidiaGPUTransforms
+    TritonIntelGPUTransforms
     TritonTools
     LLVMSupport
     MLIRSupport
