@@ -310,8 +310,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.ttgpuir.add_coalesce(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
 
-        intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
+        intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
         intel.passes.ttgpuir.add_materialize_block_pointer(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_optimize_dot_operands(pm)

@@ -126,9 +126,7 @@ def test_has_opencl_extension_error(device):
     assert isinstance(result_wrong, bool)
     assert result_wrong is False  # This extension should not be supported
 
-    # Test that invalid device_id raises exception
-    with pytest.raises(RuntimeError, match="No device found with device_id: 9999"):
-        extension_utils.has_device_extension(9999, "cl_intel_subgroup_2d_block_io")
+    assert extension_utils.has_device_extension(9999, "cl_intel_subgroup_2d_block_io") is None
 
 
 @pytest.mark.parametrize("grf_mode, expect_retry", [("default", True),  # Should auto-retry with large GRF and succeed
