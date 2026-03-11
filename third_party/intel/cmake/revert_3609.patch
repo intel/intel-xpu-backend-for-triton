@@ -1,0 +1,230 @@
+diff --git a/include/LLVMSPIRVExtensions.inc b/include/LLVMSPIRVExtensions.inc
+index caa9bcbe..0d0d92c2 100644
+--- a/include/LLVMSPIRVExtensions.inc
++++ b/include/LLVMSPIRVExtensions.inc
+@@ -78,8 +78,6 @@ EXT(SPV_INTEL_maximum_registers)
+ EXT(SPV_INTEL_bindless_images)
+ EXT(SPV_INTEL_2d_block_io)
+ EXT(SPV_INTEL_subgroup_matrix_multiply_accumulate)
+-EXT(SPV_INTEL_subgroup_matrix_multiply_accumulate_float4)
+-EXT(SPV_INTEL_subgroup_matrix_multiply_accumulate_float8)
+ EXT(SPV_KHR_bfloat16)
+ EXT(SPV_INTEL_bfloat16_arithmetic)
+ EXT(SPV_INTEL_ternary_bitwise_function)
+diff --git a/lib/SPIRV/libSPIRV/SPIRVInstruction.h b/lib/SPIRV/libSPIRV/SPIRVInstruction.h
+index dd1a74a7..f06f2614 100644
+--- a/lib/SPIRV/libSPIRV/SPIRVInstruction.h
++++ b/lib/SPIRV/libSPIRV/SPIRVInstruction.h
+@@ -4443,66 +4443,6 @@ public:
+   std::optional<ExtensionID> getRequiredExtension() const override {
+     return ExtensionID::SPV_INTEL_subgroup_matrix_multiply_accumulate;
+   }
+-
+-protected:
+-  void validate() const override {
+-    SPIRVInstTemplateBase::validate();
+-
+-    // Check if FP4 or FP8 matrix operands are used
+-    // Operands parameter is the last operand (index 4)
+-    auto *NonConstThis =
+-        const_cast<SPIRVSubgroupMatrixMultiplyAccumulateINTELInst *>(this);
+-    if (NonConstThis->getOperands().size() > 4) {
+-      const SPIRVConstant *OperandsConst =
+-          static_cast<const SPIRVConstant *>(NonConstThis->getOperand(4));
+-      uint64_t OperandsMask = OperandsConst->getZExtIntValue();
+-
+-      // FP4 operand bits
+-      constexpr uint64_t FP4Mask =
+-          spv::internal::
+-              IMatrixMultiplyAccumulateOperandsMatrixAPackedFloat4E2M1INTELMask |
+-          spv::internal::
+-              IMatrixMultiplyAccumulateOperandsMatrixBPackedFloat4E2M1INTELMask;
+-
+-      // FP8 operand bits
+-      constexpr uint64_t FP8Mask =
+-          spv::internal::
+-              IMatrixMultiplyAccumulateOperandsMatrixAPackedFloat8E4M3INTELMask |
+-          spv::internal::
+-              IMatrixMultiplyAccumulateOperandsMatrixBPackedFloat8E4M3INTELMask |
+-          spv::internal::
+-              IMatrixMultiplyAccumulateOperandsMatrixAPackedFloat8E5M2INTELMask |
+-          spv::internal::
+-              IMatrixMultiplyAccumulateOperandsMatrixBPackedFloat8E5M2INTELMask;
+-
+-      if ((OperandsMask & FP4Mask) != 0) {
+-        getModule()->getErrorLog().checkError(
+-            getModule()->isAllowedToUseExtension(
+-                ExtensionID::
+-                    SPV_INTEL_subgroup_matrix_multiply_accumulate_float4),
+-            SPIRVEC_RequiresExtension,
+-            "SPV_INTEL_subgroup_matrix_multiply_accumulate_float4\n"
+-            "SubgroupMatrixMultiplyAccumulateINTEL with FP4 operand flags "
+-            "requires this extension");
+-        getModule()->addExtension(
+-            ExtensionID::SPV_INTEL_subgroup_matrix_multiply_accumulate_float4);
+-      }
+-
+-      if ((OperandsMask & FP8Mask) != 0) {
+-        getModule()->getErrorLog().checkError(
+-            getModule()->isAllowedToUseExtension(
+-                ExtensionID::
+-                    SPV_INTEL_subgroup_matrix_multiply_accumulate_float8),
+-            SPIRVEC_RequiresExtension,
+-            "SPV_INTEL_subgroup_matrix_multiply_accumulate_float8\n"
+-            "SubgroupMatrixMultiplyAccumulateINTEL with FP8 operand flags "
+-            "requires this extension");
+-        getModule()->addExtension(
+-            ExtensionID::SPV_INTEL_subgroup_matrix_multiply_accumulate_float8);
+-      }
+-    }
+-  }
+-
+   SPIRVCapVec getRequiredCapability() const override {
+     return getVec(CapabilitySubgroupMatrixMultiplyAccumulateINTEL);
+   }
+diff --git a/lib/SPIRV/libSPIRV/spirv_internal.hpp b/lib/SPIRV/libSPIRV/spirv_internal.hpp
+index 87cb1204..c197884c 100644
+--- a/lib/SPIRV/libSPIRV/spirv_internal.hpp
++++ b/lib/SPIRV/libSPIRV/spirv_internal.hpp
+@@ -151,17 +151,6 @@ enum InternalBuiltIn {
+   IBuiltInDeviceBarrierValidINTEL = 6186,
+ };
+ 
+-enum InternalMatrixMultiplyAccumulateOperandsMask {
+-  // FP8 matrix operands
+-  IMatrixMultiplyAccumulateOperandsMatrixAPackedFloat8E4M3INTELMask = 0x4000,
+-  IMatrixMultiplyAccumulateOperandsMatrixBPackedFloat8E4M3INTELMask = 0x8000,
+-  IMatrixMultiplyAccumulateOperandsMatrixAPackedFloat8E5M2INTELMask = 0x10000,
+-  IMatrixMultiplyAccumulateOperandsMatrixBPackedFloat8E5M2INTELMask = 0x20000,
+-  // FP4 matrix operands
+-  IMatrixMultiplyAccumulateOperandsMatrixAPackedFloat4E2M1INTELMask = 0x40000,
+-  IMatrixMultiplyAccumulateOperandsMatrixBPackedFloat4E2M1INTELMask = 0x80000,
+-};
+-
+ #define _SPIRV_OP(x, y) constexpr x x##y = static_cast<x>(I##x##y);
+ _SPIRV_OP(Capability, JointMatrixWIInstructionsINTEL)
+ _SPIRV_OP(Capability, CooperativeMatrixTF32ComponentTypeINTEL)
+diff --git a/test/extensions/INTEL/SPV_INTEL_subgroup_matrix_multiply_accumulate/subgroup_matrix_multiply_accumulate_fp4.ll b/test/extensions/INTEL/SPV_INTEL_subgroup_matrix_multiply_accumulate/subgroup_matrix_multiply_accumulate_fp4.ll
+deleted file mode 100644
+index c7a2c0c6..00000000
+--- a/test/extensions/INTEL/SPV_INTEL_subgroup_matrix_multiply_accumulate/subgroup_matrix_multiply_accumulate_fp4.ll
++++ /dev/null
+@@ -1,52 +0,0 @@
+-; This test checks that SubgroupMatrixMultiplyAccumulateINTEL with FP4 operand flags
+-; requires the SPV_INTEL_subgroup_matrix_multiply_accumulate_float4 extension.
+-
+-; RUN: llvm-spirv %s -o %t.spv --spirv-ext=+SPV_INTEL_subgroup_matrix_multiply_accumulate,+SPV_INTEL_subgroup_matrix_multiply_accumulate_float4
+-; RUN: llvm-spirv %t.spv -o %t.spt --to-text
+-; RUN: FileCheck < %t.spt %s --check-prefix=CHECK-SPIRV
+-
+-; RUN: not llvm-spirv %s -o %t.spv --spirv-ext=+SPV_INTEL_subgroup_matrix_multiply_accumulate 2>&1 | FileCheck %s --check-prefix=CHECK-ERROR
+-
+-; CHECK-ERROR: RequiresExtension: Feature requires the following SPIR-V extension:
+-; CHECK-ERROR: SPV_INTEL_subgroup_matrix_multiply_accumulate_float4
+-
+-; CHECK-SPIRV-DAG: Capability SubgroupMatrixMultiplyAccumulateINTEL
+-; CHECK-SPIRV-DAG: Extension "SPV_INTEL_subgroup_matrix_multiply_accumulate"
+-; CHECK-SPIRV-DAG: Extension "SPV_INTEL_subgroup_matrix_multiply_accumulate_float4"
+-; CHECK-SPIRV-DAG: SubgroupMatrixMultiplyAccumulateINTEL {{[0-9]+}} {{[0-9]+}} {{[0-9]+}} {{[0-9]+}} {{[0-9]+}} {{[0-9]+}} 262144
+-; CHECK-SPIRV-DAG: SubgroupMatrixMultiplyAccumulateINTEL {{[0-9]+}} {{[0-9]+}} {{[0-9]+}} {{[0-9]+}} {{[0-9]+}} {{[0-9]+}} 524288
+-; CHECK-SPIRV-DAG: SubgroupMatrixMultiplyAccumulateINTEL {{[0-9]+}} {{[0-9]+}} {{[0-9]+}} {{[0-9]+}} {{[0-9]+}} {{[0-9]+}} 786432
+-
+-target datalayout = "e-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:256-v256:256-v512:512-v1024:1024"
+-target triple = "spir64-unknown-unknown"
+-
+-; Test MatrixAPackedFloat4E2M1INTEL operand (0x40000 = 262144)
+-define spir_func <4 x float> @test_fp4_matrix_a(<4 x float> %c, <4 x i8> %a, <8 x i8> %b) {
+-entry:
+-  %result = call spir_func <4 x float> @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv4_hDv8_hDv4_fi(i32 8, <4 x i8> %a, <8 x i8> %b, <4 x float> %c, i32 262144)
+-  ret <4 x float> %result
+-}
+-
+-; Test MatrixBPackedFloat4E2M1INTEL operand (0x80000 = 524288)
+-define spir_func <4 x float> @test_fp4_matrix_b(<4 x float> %c, <4 x i8> %a, <8 x i8> %b) {
+-entry:
+-  %result = call spir_func <4 x float> @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv4_hDv8_hDv4_fi(i32 8, <4 x i8> %a, <8 x i8> %b, <4 x float> %c, i32 524288)
+-  ret <4 x float> %result
+-}
+-
+-; Test both FP4 operands (0xC0000 = 786432)
+-define spir_func <4 x float> @test_fp4_matrix_both(<4 x float> %c, <4 x i8> %a, <8 x i8> %b) {
+-entry:
+-  %result = call spir_func <4 x float> @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv4_hDv8_hDv4_fi(i32 8, <4 x i8> %a, <8 x i8> %b, <4 x float> %c, i32 786432)
+-  ret <4 x float> %result
+-}
+-
+-declare spir_func <4 x float> @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv4_hDv8_hDv4_fi(i32, <4 x i8>, <8 x i8>, <4 x float>, i32)
+-
+-!opencl.spir.version = !{!0}
+-!spirv.Source = !{!1}
+-!llvm.ident = !{!2}
+-
+-!0 = !{i32 1, i32 0}
+-!1 = !{i32 4, i32 100000}
+-!2 = !{!"clang version 17.0.0"}
+diff --git a/test/extensions/INTEL/SPV_INTEL_subgroup_matrix_multiply_accumulate/subgroup_matrix_multiply_accumulate_fp8.ll b/test/extensions/INTEL/SPV_INTEL_subgroup_matrix_multiply_accumulate/subgroup_matrix_multiply_accumulate_fp8.ll
+deleted file mode 100644
+index d0782ef2..00000000
+--- a/test/extensions/INTEL/SPV_INTEL_subgroup_matrix_multiply_accumulate/subgroup_matrix_multiply_accumulate_fp8.ll
++++ /dev/null
+@@ -1,60 +0,0 @@
+-; This test checks that SubgroupMatrixMultiplyAccumulateINTEL with FP8 operand flags
+-; requires the SPV_INTEL_subgroup_matrix_multiply_accumulate_float8 extension.
+-
+-; RUN: llvm-spirv %s -o %t.spv --spirv-ext=+SPV_INTEL_subgroup_matrix_multiply_accumulate,+SPV_INTEL_subgroup_matrix_multiply_accumulate_float8
+-; RUN: llvm-spirv %t.spv -o %t.spt --to-text
+-; RUN: FileCheck < %t.spt %s --check-prefix=CHECK-SPIRV
+-
+-; RUN: not llvm-spirv %s -o %t.spv --spirv-ext=+SPV_INTEL_subgroup_matrix_multiply_accumulate 2>&1 | FileCheck %s --check-prefix=CHECK-ERROR
+-
+-; CHECK-ERROR: RequiresExtension: Feature requires the following SPIR-V extension:
+-; CHECK-ERROR: SPV_INTEL_subgroup_matrix_multiply_accumulate_float8
+-
+-; CHECK-SPIRV-DAG: Capability SubgroupMatrixMultiplyAccumulateINTEL
+-; CHECK-SPIRV-DAG: Extension "SPV_INTEL_subgroup_matrix_multiply_accumulate"
+-; CHECK-SPIRV-DAG: Extension "SPV_INTEL_subgroup_matrix_multiply_accumulate_float8"
+-; CHECK-SPIRV-DAG: SubgroupMatrixMultiplyAccumulateINTEL {{[0-9]+}} {{[0-9]+}} {{[0-9]+}} {{[0-9]+}} {{[0-9]+}} {{[0-9]+}} 16384
+-; CHECK-SPIRV-DAG: SubgroupMatrixMultiplyAccumulateINTEL {{[0-9]+}} {{[0-9]+}} {{[0-9]+}} {{[0-9]+}} {{[0-9]+}} {{[0-9]+}} 32768
+-; CHECK-SPIRV-DAG: SubgroupMatrixMultiplyAccumulateINTEL {{[0-9]+}} {{[0-9]+}} {{[0-9]+}} {{[0-9]+}} {{[0-9]+}} {{[0-9]+}} 65536
+-; CHECK-SPIRV-DAG: SubgroupMatrixMultiplyAccumulateINTEL {{[0-9]+}} {{[0-9]+}} {{[0-9]+}} {{[0-9]+}} {{[0-9]+}} {{[0-9]+}} 131072
+-
+-target datalayout = "e-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:256-v256:256-v512:512-v1024:1024"
+-target triple = "spir64-unknown-unknown"
+-
+-; Test MatrixAPackedFloat8E4M3INTEL operand (0x4000 = 16384)
+-define spir_func <4 x float> @test_fp8_e4m3_matrix_a(<4 x float> %c, <4 x i8> %a, <8 x i8> %b) {
+-entry:
+-  %result = call spir_func <4 x float> @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv4_hDv8_hDv4_fi(i32 8, <4 x i8> %a, <8 x i8> %b, <4 x float> %c, i32 16384)
+-  ret <4 x float> %result
+-}
+-
+-; Test MatrixBPackedFloat8E4M3INTEL operand (0x8000 = 32768)
+-define spir_func <4 x float> @test_fp8_e4m3_matrix_b(<4 x float> %c, <4 x i8> %a, <8 x i8> %b) {
+-entry:
+-  %result = call spir_func <4 x float> @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv4_hDv8_hDv4_fi(i32 8, <4 x i8> %a, <8 x i8> %b, <4 x float> %c, i32 32768)
+-  ret <4 x float> %result
+-}
+-
+-; Test MatrixAPackedFloat8E5M2INTEL operand (0x10000 = 65536)
+-define spir_func <4 x float> @test_fp8_e5m2_matrix_a(<4 x float> %c, <4 x i8> %a, <8 x i8> %b) {
+-entry:
+-  %result = call spir_func <4 x float> @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv4_hDv8_hDv4_fi(i32 8, <4 x i8> %a, <8 x i8> %b, <4 x float> %c, i32 65536)
+-  ret <4 x float> %result
+-}
+-
+-; Test MatrixBPackedFloat8E5M2INTEL operand (0x20000 = 131072)
+-define spir_func <4 x float> @test_fp8_e5m2_matrix_b(<4 x float> %c, <4 x i8> %a, <8 x i8> %b) {
+-entry:
+-  %result = call spir_func <4 x float> @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv4_hDv8_hDv4_fi(i32 8, <4 x i8> %a, <8 x i8> %b, <4 x float> %c, i32 131072)
+-  ret <4 x float> %result
+-}
+-
+-declare spir_func <4 x float> @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv4_hDv8_hDv4_fi(i32, <4 x i8>, <8 x i8>, <4 x float>, i32)
+-
+-!opencl.spir.version = !{!0}
+-!spirv.Source = !{!1}
+-!llvm.ident = !{!2}
+-
+-!0 = !{i32 1, i32 0}
+-!1 = !{i32 4, i32 100000}
+-!2 = !{!"clang version 17.0.0"}
