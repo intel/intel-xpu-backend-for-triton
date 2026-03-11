@@ -1,5 +1,4 @@
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
-#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Utils/Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -458,13 +457,15 @@ private:
       if (OpToPaddingMap.contains(op))
         padding = OpToPaddingMap[op];
 
-      auto loadOp = builder.createOrFold<tt::LoadOp>(
-          loc, ptr, boundaryCheck, padding, op.getCache(), op.getEvict(),
-          /*volatile*/ false);
+      auto loadOp = tt::LoadOp::create(builder, loc, ptr, boundaryCheck,
+                                       padding, op.getCache(), op.getEvict(),
+                                       /*isVolatile*/ false);
+      for (auto attr : op->getDiscardableAttrs())
+        loadOp->setDiscardableAttr(attr.getName(), attr.getValue());
 
       if (descTensorType == opTensorType) {
         LLVM_DEBUG(llvm::dbgs().indent(2) << loadOp << "\n");
-        op.replaceAllUsesWith(loadOp);
+        op.replaceAllUsesWith(loadOp.getResult());
       } else {
         // Note: the Triton combine pass might 'combine' a reshape op with the
         // descriptor load op by changing the result yielded by the descriptor
@@ -477,16 +478,18 @@ private:
         assert(descTensorType.getElementType() ==
                    opTensorType.getElementType() &&
                "Expecting the same element type");
-        auto reshapeOp =
-            builder.createOrFold<tt::ReshapeOp>(loc, resShape, loadOp);
+        auto reshapeOp = builder.createOrFold<tt::ReshapeOp>(
+            loc, resShape, loadOp.getResult());
         LLVM_DEBUG(llvm::dbgs().indent(2) << loadOp << "\n";
                    llvm::dbgs().indent(2) << reshapeOp << "\n");
         op.replaceAllUsesWith(reshapeOp);
       }
     } else {
-      [[maybe_unused]] auto storeOp = builder.createOrFold<tt::StoreOp>(
-          loc, ptr, op.getSrc(), boundaryCheck, tt::CacheModifier::NONE,
-          tt::EvictionPolicy::NORMAL);
+      auto storeOp = tt::StoreOp::create(builder, loc, ptr, op.getSrc(),
+                                         boundaryCheck, tt::CacheModifier::NONE,
+                                         tt::EvictionPolicy::NORMAL);
+      for (auto attr : op->getDiscardableAttrs())
+        storeOp->setDiscardableAttr(attr.getName(), attr.getValue());
       LLVM_DEBUG(llvm::dbgs().indent(2) << storeOp << "\n");
     }
 

@@ -1,7 +1,7 @@
 #include "LibCallEmitter.h"
 
 #include "Dialect/TritonIntelGPU/IR/Utils.h"
-#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENMemorySpace.h"
 
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
