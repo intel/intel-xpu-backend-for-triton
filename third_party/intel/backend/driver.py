@@ -1,6 +1,5 @@
 import importlib.metadata
 import os
-import re
 import json
 import sys
 import hashlib
