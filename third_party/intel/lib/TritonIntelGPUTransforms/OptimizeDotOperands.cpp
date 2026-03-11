@@ -377,6 +377,166 @@ private:
   }
 };
 
+// Fuse tt.trans into tt.descriptor_load for dot operands.
+//
+// The descriptor is always row-major (stride-1 on the last dimension) and is
+// never modified. Instead, the DescriptorLoadOp is replaced with one whose
+// result type has transposed dimensions. The "column_major" block_io attribute
+// signals to the lowering that the result dimensions are transposed relative
+// to the descriptor's block shape, so it must swap indices and request a
+// hardware-transposed 2D block load.
+//
+// Transform:
+//   %desc = tt.make_tensor_desc %base, [%N, %K], [%K_stride, %1]
+//         : <tensor<BNxBKxf16>>
+//   %load = tt.descriptor_load %desc[%n, %k] {ttig.block_io = "row_major"}
+//         : !tt.tensordesc<tensor<BNxBKxf16>> -> tensor<BNxBKxf16>
+//   %trans = tt.trans %load : tensor<BKxBN, blocked_trans>
+//   %cvt = ttg.convert_layout %trans : tensor<BKxBN, dotEnc>
+//   tt.dot(%a, %cvt)
+// into:
+//   %desc = tt.make_tensor_desc %base, [%N, %K], [%K_stride, %1]
+//         : <tensor<BNxBKxf16>> (unchanged)
+//   %load = tt.descriptor_load %desc[%n, %k] {block_io = "column_major"}
+//         : !tt.tensordesc<tensor<BNxBKxf16>> -> tensor<BKxBN, dotEnc>
+//   tt.dot(%a, %load)
+class FuseTransWithDescriptorLoad {
+public:
+  void run(ModuleOp moduleOp) {
+    moduleOp.walk([&](tt::TransOp transOp) {
+      FusionCandidate candidate;
+      if (isCandidate(transOp, candidate))
+        fuse(transOp, candidate);
+    });
+    if (!cleanUp.empty())
+      tt::intel::eraseOperations(cleanUp);
+  }
+
+private:
+  struct FusionCandidate {
+    Attribute targetEncoding;
+    Operation *lastOpBeforeDot;
+  };
+
+  SmallPtrSet<Operation *, 8> cleanUp;
+
+  bool isCandidate(tt::TransOp transOp, FusionCandidate &out) const {
+    assert(transOp && "Expecting a valid transpose operation");
+
+    ModuleOp mod = transOp->getParentOfType<ModuleOp>();
+    if (!mod->hasAttr(
+            ttgi::TritonIntelGPUDialect::getSupport2DBlockIOAttrName()))
+      return false;
+
+    if (transOp->getParentOfType<scf::WhileOp>())
+      return false;
+
+    if (!transOp->hasOneUse())
+      return false;
+
+    // Walk through ConvertLayoutOps to find DotOp and the target encoding.
+    Operation *user = *transOp->getUsers().begin();
+    Attribute targetEncoding = transOp.getType().getEncoding();
+    Operation *lastOp = transOp;
+
+    while (auto cvtOp = dyn_cast<ttg::ConvertLayoutOp>(user)) {
+      if (!cvtOp->hasOneUse())
+        return false;
+      targetEncoding = cvtOp.getType().getEncoding();
+      lastOp = cvtOp;
+      user = *cvtOp->getUsers().begin();
+    }
+
+    if (!isa<tt::DotOp, tt::DotScaledOp>(user))
+      return false;
+
+    if (!targetEncoding || !isa<ttg::DotOperandEncodingAttr>(targetEncoding))
+      return false;
+
+    // Source must be DescriptorLoadOp with single use and rank 2.
+    auto descLoadOp = dyn_cast_or_null<tt::DescriptorLoadOp>(
+        transOp.getSrc().getDefiningOp());
+    if (!descLoadOp || !descLoadOp->hasOneUse())
+      return false;
+
+    if (cast<RankedTensorType>(descLoadOp.getType()).getRank() != 2)
+      return false;
+
+    // Must be able to find the defining MakeTensorDescOp.
+    auto makeTensorDescOp =
+        tt::intel::findDefiningOpOfType<tt::MakeTensorDescOp>(
+            descLoadOp.getDesc());
+    if (!makeTensorDescOp.has_value())
+      return false;
+
+    // Only fuse if the descriptor load carries block_io = "row_major", which
+    // MaterializeBlockPointer sets to confirm the load is a 2D block IO
+    // candidate.
+    StringRef blockIOAttrName =
+        ttgi::TritonIntelGPUDialect::getBlockIOAttrName();
+    StringAttr attr = descLoadOp->getAttrOfType<StringAttr>(blockIOAttrName);
+    if (!attr || attr != "row_major")
+      return false;
+
+    out.targetEncoding = targetEncoding;
+    out.lastOpBeforeDot = lastOp;
+    return true;
+  }
+
+  void fuse(tt::TransOp transOp, const FusionCandidate &candidate) {
+    auto descLoadOp =
+        cast<tt::DescriptorLoadOp>(transOp.getSrc().getDefiningOp());
+
+    // Collect ops to clean up before modifying IR.
+    SmallVector<Operation *> opsToClean{transOp};
+    if (candidate.lastOpBeforeDot != transOp) {
+      Operation *cur = *transOp->getUsers().begin();
+      while (cur != candidate.lastOpBeforeDot) {
+        opsToClean.push_back(cur);
+        cur = *cur->getUsers().begin();
+      }
+      opsToClean.push_back(candidate.lastOpBeforeDot);
+    }
+
+    // Keep the original descriptor — do NOT reverse it.
+    // The descriptor is always row-major (stride-1 on last dim).
+    auto descType = cast<tt::TensorDescType>(descLoadOp.getDesc().getType());
+    RankedTensorType blockType = descType.getBlockType();
+    SmallVector<int64_t> transposedShape(llvm::reverse(blockType.getShape()));
+
+    // Create new DescriptorLoadOp with transposed result type + target
+    // encoding. The verifier allows result shape to differ from descriptor
+    // block shape as long as the total element count matches.
+    OpBuilder builder(descLoadOp);
+    auto newResultType = RankedTensorType::get(
+        transposedShape, blockType.getElementType(), candidate.targetEncoding);
+    auto newLoad = tt::DescriptorLoadOp::create(
+        builder, descLoadOp.getLoc(), newResultType, descLoadOp.getDesc(),
+        descLoadOp.getIndices(), descLoadOp.getCache(), descLoadOp.getEvict());
+
+    // Copy any discardable attributes from the original load,
+    // except block_io which we set explicitly below.
+    StringRef blockIOName = ttgi::TritonIntelGPUDialect::getBlockIOAttrName();
+    for (auto attr : descLoadOp->getDiscardableAttrs())
+      if (attr.getName() != blockIOName)
+        newLoad->setDiscardableAttr(attr.getName(), attr.getValue());
+
+    // Set block_io = "column_major": signals that the result type dimensions
+    // are transposed relative to the descriptor's block shape dimensions.
+    newLoad->setAttr(blockIOName,
+                     StringAttr::get(transOp.getContext(), "column_major"));
+
+    // Replace uses and schedule cleanup.
+    candidate.lastOpBeforeDot->replaceAllUsesWith(
+        ValueRange{newLoad.getResult()});
+
+    for (Operation *op : opsToClean)
+      cleanUp.insert(op);
+    cleanUp.insert(descLoadOp);
+    // Do NOT clean up MakeTensorDescOp — it's unchanged, may have other uses
+  }
+};
+
 } // namespace
 
 class TritonIntelGPUOptimizeDotOperandsPass
@@ -392,6 +552,8 @@ public:
     ModuleOp moduleOp = getOperation();
     FuseTransWithLoad fuser;
     fuser.run(moduleOp);
+    FuseTransWithDescriptorLoad descFuser;
+    descFuser.run(moduleOp);
     assert(succeeded(verify(moduleOp)) && "Module verification failed");
   }
 };
