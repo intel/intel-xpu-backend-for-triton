@@ -78,6 +78,34 @@ def TTIG_PrefetchOp : TTIG_Op<"prefetch", [
   }];
 }
 
+
+def TTIG_DescriptorPrefetchOp : TTIG_Op<"descriptor_prefetch", [MemoryEffects<[MemWrite<L2Cache>]>]> {
+  let summary = "Tensor descriptor prefetch operation";
+  let description = [{
+    The `descriptor_prefetch` operation prefetches data using a tensor descriptor.
+    Example:
+      ```mlir
+      ttig.descriptor_prefetch %desc[%x, %y] cacheModifier = none evictionPolicy = normal
+          : !tt.tensor_desc<tensor<256x32xf16>>
+      ```
+  }];
+  let arguments = (ins
+    Arg<TT_TensorDescType, "Global memory pointer", [MemRead]>:$desc,
+    Variadic<I32>:$indices,
+    DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
+    DefaultValuedAttr<TT_EvictionPolicyAttr, "::mlir::triton::EvictionPolicy::NORMAL">:$evict
+  );
+  let results = (outs);
+  let assemblyFormat = [{
+    $desc `[` $indices `]`
+    oilist(
+      `cacheModifier` `=` $cache |
+      `evictionPolicy` `=` $evict
+    )
+    attr-dict `:` qualified(type($desc))
+  }];
+}
+
 // same as tt.broadcast except that we don't require SameOperandsAndResultEncoding
 def TTIG_BroadcastOp : TTIG_Op<"broadcast", [Pure, SameOperandsAndResultElementType]> {
   let summary = "broadcast a tensor";
