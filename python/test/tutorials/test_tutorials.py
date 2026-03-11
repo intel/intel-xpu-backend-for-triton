@@ -93,12 +93,17 @@ def _run_tutorial(name: str, monkeypatch, tutorial_environment):
 
         monkeypatch.setattr(triton.testing, "perf_report", perf_report)
 
-    spec = importlib.util.spec_from_file_location('__main__', tutorial_path)
-    if not spec or not spec.loader:
-        raise AssertionError(f'Failed to load module from {tutorial_path}')
-    module = importlib.util.module_from_spec(spec)
-    monkeypatch.setattr(sys, "argv", [str(tutorial_path)])
-    spec.loader.exec_module(module)
+    saved_environ = os.environ.copy()
+    try:
+        spec = importlib.util.spec_from_file_location('__main__', tutorial_path)
+        if not spec or not spec.loader:
+            raise AssertionError(f'Failed to load module from {tutorial_path}')
+        module = importlib.util.module_from_spec(spec)
+        monkeypatch.setattr(sys, "argv", [str(tutorial_path)])
+        spec.loader.exec_module(module)
+    finally:
+        os.environ.clear()
+        os.environ.update(saved_environ)
 
 
 # Hyphens become underscores for valid Python identifiers.
