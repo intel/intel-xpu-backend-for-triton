@@ -27,18 +27,9 @@
 #define GET_OP_CLASSES
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENOps.h.inc"
 
-namespace mlir::triton::TritonGEN {
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENMemorySpace.h"
 
-/// TritonGEN memory space identifiers following SPIRV storage class convention
-/// https://github.com/KhronosGroup/SPIRV-LLVM-Translator/blob/main/docs/SPIRVRepresentationInLLVM.rst#address-spaces
-///
-enum TritonGENMemorySpace {
-  kFunction = 0,        // OpenCL workitem address space
-  kCrossWorkgroup = 1,  // OpenCL Global memory
-  kUniformConstant = 2, // OpenCL Constant memory
-  kWorkgroup = 3,       // OpenCL Local memory
-  kGeneric = 4          // OpenCL Generic memory
-};
+namespace mlir::triton::TritonGEN {
 
 struct L2Cache : public SideEffects::Resource::Base<L2Cache> {
   StringRef getName() final { return "<L2Cache>"; }
