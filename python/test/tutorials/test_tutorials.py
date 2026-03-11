@@ -54,6 +54,8 @@ def tutorial_environment(monkeypatch) -> pathlib.Path | None:
     """Prevent tutorials from leaking global state between test runs."""
     monkeypatch.setattr(sys, "argv", sys.argv[:])
 
+    monkeypatch.setattr(os, "environ", os.environ.copy())
+    
     # Save and restore the triton allocator so tutorials that call
     # triton.set_allocator() (06, 08, 09) don't leak into subsequent tests.
     from triton.runtime import _allocation
@@ -93,17 +95,12 @@ def _run_tutorial(name: str, monkeypatch, tutorial_environment):
 
         monkeypatch.setattr(triton.testing, "perf_report", perf_report)
 
-    saved_environ = os.environ.copy()
-    try:
-        spec = importlib.util.spec_from_file_location('__main__', tutorial_path)
-        if not spec or not spec.loader:
-            raise AssertionError(f'Failed to load module from {tutorial_path}')
-        module = importlib.util.module_from_spec(spec)
-        monkeypatch.setattr(sys, "argv", [str(tutorial_path)])
-        spec.loader.exec_module(module)
-    finally:
-        os.environ.clear()
-        os.environ.update(saved_environ)
+    spec = importlib.util.spec_from_file_location('__main__', tutorial_path)
+    if not spec or not spec.loader:
+        raise AssertionError(f'Failed to load module from {tutorial_path}')
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setattr(sys, "argv", [str(tutorial_path)])
+    spec.loader.exec_module(module)
 
 
 # Hyphens become underscores for valid Python identifiers.
