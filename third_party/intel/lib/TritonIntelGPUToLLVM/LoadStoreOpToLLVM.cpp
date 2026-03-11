@@ -1922,6 +1922,32 @@ private:
   }
 };
 
+struct DescriptorPrefetchOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<
+          triton::gpu::intel::DescriptorPrefetchOp>,
+      public BlockIOConversionBase {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::gpu::intel::DescriptorPrefetchOp>::
+      ConvertTritonGPUOpToLLVMPattern;
+
+  DescriptorPrefetchOpConversion(
+      LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
+      const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
+      PatternBenefit benefit)
+      : ConvertTritonGPUOpToLLVMPattern<
+            triton::gpu::intel::DescriptorPrefetchOp>(converter, benefit),
+        BlockIOConversionBase(targetInfo, axisAnalysisPass) {}
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::intel::DescriptorPrefetchOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
+    // TODO: implement it.
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 struct LoadOpToBlockIOConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::LoadOp>,
       public BlockIOConversionBase {
@@ -4075,8 +4101,9 @@ void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
     PatternBenefit benefit) {
   patterns.add<AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
                DescriptorLoadOpConversion, StoreOpConversion,
-               DescriptorStoreOpConversion, PrefetchOpConversion>(
-      typeConverter, targetInfo, axisInfoAnalysis, benefit);
+               DescriptorStoreOpConversion, PrefetchOpConversion,
+               DescriptorPrefetchOpConversion>(typeConverter, targetInfo,
+                                               axisInfoAnalysis, benefit);
   // BlockIO is more efficient than gather load or scatter store.
   patterns.add<LoadOpToBlockIOConversion, StoreOpToBlockIOConversion,
                DescriptorLoadOpToBlockIOConversion>(
