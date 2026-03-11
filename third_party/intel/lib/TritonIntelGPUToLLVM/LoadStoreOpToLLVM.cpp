@@ -548,13 +548,13 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     if (!blockIOAttr)
       return false;
 
-    const bool enableBlockIOForAllLayout =
-        triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS");
+    const bool onlyEnableForDPAS = triton::tools::getBoolEnv(
+        "TRITON_INTEL_2DBLOCK_ONLY_ENABLE_BLOCK_IO_FOR_DPAS_LAYOUT");
 
     // Only lower operation with dpas layout encoding.
     auto tensorTy =
         cast<RankedTensorType>(getPointeeType(op.getPtr().getType()));
-    return enableBlockIOForAllLayout || hasDpasEncoding(tensorTy) ||
+    return !onlyEnableForDPAS || hasDpasEncoding(tensorTy) ||
            hasDotDpasEncoding(tensorTy);
   }
 
