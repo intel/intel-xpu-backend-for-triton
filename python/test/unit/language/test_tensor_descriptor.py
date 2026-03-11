@@ -1682,8 +1682,6 @@ def test_host_tensor_descriptor_load(dtype_str, num_ctas, M_BLOCK, N_BLOCK, devi
 @pytest.mark.interpreter()
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
 def test_host_tensor_descriptor_in_tuple(dtype_str, device):
-    if is_xpu():
-        pytest.skip("FIXME: #6197")
 
     @triton.jit(debug=True)
     def kernel(out_ptr, payload, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
