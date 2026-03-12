@@ -3725,7 +3725,7 @@ struct AtomicCASOpConversion
                              mask ? mask : b.true_val(), {zero});
         ret = endBlock->getArgument(0);
       } else {
-        if (op.getResult().use_empty())
+        if (op.getResult().use_empty() && memSem != MemSemantic::RELAXED)
           TritonGEN::BarrierOp::create(rewriter, loc,
                                        TritonGEN::MemFence::GLOBAL);
 
@@ -3956,7 +3956,7 @@ struct AtomicRMWOpConversion
             maybeAnd(rewriter, loc, b.true_val(), rmwMask), {zero});
         ret = endBlock->getArgument(0);
       } else {
-        if (op.getResult().use_empty())
+        if (op.getResult().use_empty() && memSem != MemSemantic::RELAXED)
           TritonGEN::BarrierOp::create(rewriter, loc,
                                        TritonGEN::MemFence::GLOBAL);
 
