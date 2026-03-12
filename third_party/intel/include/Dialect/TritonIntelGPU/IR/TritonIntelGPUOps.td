@@ -11,6 +11,7 @@
 
 include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
+include "triton/Dialect/Triton/IR/TritonOpInterfaces.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUOpInterfaces.td"
 include "intel/include/Dialect/TritonIntelGPU/IR/TritonIntelGPUAttrDefs.td"
@@ -79,7 +80,7 @@ def TTIG_PrefetchOp : TTIG_Op<"prefetch", [
 }
 
 
-def TTIG_DescriptorPrefetchOp : TTIG_Op<"descriptor_prefetch", [MemoryEffects<[MemWrite<L2Cache>]>]> {
+def TTIG_DescriptorPrefetchOp : TTIG_Op<"descriptor_prefetch", [MemoryEffects<[MemWrite<L2Cache>]>, TT_DescriptorOpInterface]> {
   let summary = "Tensor descriptor prefetch operation";
   let description = [{
     The `descriptor_prefetch` operation prefetches data using a tensor descriptor.
@@ -104,6 +105,7 @@ def TTIG_DescriptorPrefetchOp : TTIG_Op<"descriptor_prefetch", [MemoryEffects<[M
     )
     attr-dict `:` qualified(type($desc))
   }];
+  let hasVerifier = 1;
 }
 
 // same as tt.broadcast except that we don't require SameOperandsAndResultEncoding
