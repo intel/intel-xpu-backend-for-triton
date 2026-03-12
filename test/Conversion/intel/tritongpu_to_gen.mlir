@@ -1147,11 +1147,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-NEXT:   [[UNDEF2:%.*]] = llvm.mlir.undef : vector<1xf32>
     // CHECK:        [[IE2:%.*]] = llvm.insertelement [[EV1_ARG2]], [[UNDEF2]][{{.*}} : i64] : vector<1xf32>
     // CHECK-NEXT:   [[ZERO2:%.*]] = llvm.mlir.constant(0.000000e+00 : f32) : f32
-    // CHECK:        [[WGSCOPE:%.*]] = llvm.mlir.constant(2 : i32) : i32
-    // CHECK:        [[WGMEMSCOPE:%.*]] = llvm.mlir.constant(2 : i32) : i32
-    // CHECK:        [[GLOBAL:%.*]] = llvm.mlir.constant(528 : i32) : i32
-    // CHECK:        llvm.call spir_funccc @_Z22__spirv_ControlBarrieriii([[WGSCOPE]], [[WGMEMSCOPE]], [[GLOBAL]]) {convergent, no_unwind, will_return} : (i32, i32, i32) -> ()
-    // CHECK-NEXT:   llvm.cond_br [[EV1_ARG1]], ^bb3, ^bb4([[ZERO2]] : f32)
+    // COM: Relaxed semantics with unused result should not emit a global barrier (issue #5983).
+    // CHECK-NOT:    __spirv_ControlBarrieriii
+    // CHECK:        llvm.cond_br [[EV1_ARG1]], ^bb3, ^bb4([[ZERO2]] : f32)
     // CHECK-NEXT: ^bb3:
     // CHECK-NEXT:   [[BCAST2:%.*]] = llvm.bitcast [[IE2]] : vector<1xf32> to f32
     // CHECK-NEXT:   [[RMW_RES2:%.*]] = llvm.atomicrmw fadd [[EV1_ARG0]], [[BCAST2]] monotonic : !llvm.ptr<1>, f32
@@ -1183,11 +1181,9 @@ module attributes {"ttg.target" = "xpu", "ttg.num-ctas" = 1 : i32, "ttg.num-warp
     // CHECK:      [[IE1:%.*]] = llvm.insertelement %arg2, [[UNDEF1]][{{.*}} : i64] : vector<1xf32>
     // CHECK:      [[PRED:%.*]] = llvm.and %arg1, [[MASK]]  : i1
     // CHECK-NEXT: [[ZERO:%.*]] = llvm.mlir.constant(0.000000e+00 : f32) : f32
-    // CHECK:      [[WGSCOPE:%.*]] = llvm.mlir.constant(2 : i32) : i32
-    // CHECK:      [[WGMEMSCOPE:%.*]] = llvm.mlir.constant(2 : i32) : i32
-    // CHECK:      [[GLOBAL:%.*]] = llvm.mlir.constant(528 : i32) : i32
-    // CHECK:      llvm.call spir_funccc @_Z22__spirv_ControlBarrieriii([[WGSCOPE]], [[WGMEMSCOPE]], [[GLOBAL]]) {convergent, no_unwind, will_return} : (i32, i32, i32) -> ()
-    // CHECK-NEXT: llvm.cond_br [[PRED]], ^bb1, ^bb2([[ZERO]] : f32)
+    // COM: Relaxed semantics with unused result should not emit a global barrier (issue #5983).
+    // CHECK-NOT:  __spirv_ControlBarrieriii
+    // CHECK:      llvm.cond_br [[PRED]], ^bb1, ^bb2([[ZERO]] : f32)
     // CHECK-NEXT: ^bb1:
     // CHECK-NEXT:   [[BCAST2:%.*]] = llvm.bitcast [[IE1]] : vector<1xf32> to f32
     // CHECK-NEXT:   [[RMW_RES:%.*]] = llvm.atomicrmw fadd %arg0, [[BCAST2]] monotonic : !llvm.ptr<1>, f32
@@ -1292,6 +1288,42 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK: llvm.atomicrmw fadd %{{.*}}, %{{.*}} acq_rel : !llvm.ptr<1>, f32
     // CHECK: llvm.atomicrmw fadd %{{.*}}, %{{.*}} acq_rel : !llvm.ptr<1>, f32
     %0 = tt.atomic_rmw fadd, acq_rel, sys, %arg0, %arg2, %arg1 : (tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xf32, #blocked0>, tensor<256xi1, #blocked0>) -> tensor<256xf32, #blocked0>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Verify that acq_rel atomics with unused result still emit the global barrier (issue #5983).
+#blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: atomic_add_f32_acq_rel_unused
+  tt.func @atomic_add_f32_acq_rel_unused(%arg0 : tensor<256x!tt.ptr<f32>, #blocked0>, %arg1 : tensor<256xi1, #blocked0>, %arg2 : tensor<256xf32, #blocked0>) {
+    // CHECK:      llvm.atomicrmw fadd %{{.*}}, %{{.*}} acq_rel : !llvm.ptr<1>, f32
+    // CHECK:      [[WGSCOPE:%.*]] = llvm.mlir.constant(2 : i32) : i32
+    // CHECK:      [[WGMEMSCOPE:%.*]] = llvm.mlir.constant(2 : i32) : i32
+    // CHECK:      [[GLOBAL:%.*]] = llvm.mlir.constant(528 : i32) : i32
+    // CHECK:      llvm.call spir_funccc @_Z22__spirv_ControlBarrieriii([[WGSCOPE]], [[WGMEMSCOPE]], [[GLOBAL]]) {convergent, no_unwind, will_return} : (i32, i32, i32) -> ()
+    // CHECK:      llvm.atomicrmw fadd %{{.*}}, %{{.*}} acq_rel : !llvm.ptr<1>, f32
+    %0 = tt.atomic_rmw fadd, acq_rel, gpu, %arg0, %arg2, %arg1 : (tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xf32, #blocked0>, tensor<256xi1, #blocked0>) -> tensor<256xf32, #blocked0>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Verify that release atomics with unused result still emit the global barrier (issue #5983).
+#blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: atomic_add_f32_release_unused
+  tt.func @atomic_add_f32_release_unused(%arg0 : tensor<256x!tt.ptr<f32>, #blocked0>, %arg1 : tensor<256xi1, #blocked0>, %arg2 : tensor<256xf32, #blocked0>) {
+    // CHECK:      llvm.atomicrmw fadd %{{.*}}, %{{.*}} release : !llvm.ptr<1>, f32
+    // CHECK:      [[WGSCOPE:%.*]] = llvm.mlir.constant(2 : i32) : i32
+    // CHECK:      [[WGMEMSCOPE:%.*]] = llvm.mlir.constant(2 : i32) : i32
+    // CHECK:      [[GLOBAL:%.*]] = llvm.mlir.constant(528 : i32) : i32
+    // CHECK:      llvm.call spir_funccc @_Z22__spirv_ControlBarrieriii([[WGSCOPE]], [[WGMEMSCOPE]], [[GLOBAL]]) {convergent, no_unwind, will_return} : (i32, i32, i32) -> ()
+    // CHECK:      llvm.atomicrmw fadd %{{.*}}, %{{.*}} release : !llvm.ptr<1>, f32
+    %0 = tt.atomic_rmw fadd, release, gpu, %arg0, %arg2, %arg1 : (tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xf32, #blocked0>, tensor<256xi1, #blocked0>) -> tensor<256xf32, #blocked0>
     tt.return
   }
 }
