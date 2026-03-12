@@ -54,6 +54,7 @@ def tutorial_environment(monkeypatch) -> pathlib.Path | None:
     """Prevent tutorials from leaking global state between test runs."""
     monkeypatch.setattr(sys, "argv", sys.argv[:])
 
+    monkeypatch.setattr(os, "environ", os.environ.copy())
     # Save and restore the triton allocator so tutorials that call
     # triton.set_allocator() (06, 08, 09) don't leak into subsequent tests.
     from triton.runtime import _allocation
