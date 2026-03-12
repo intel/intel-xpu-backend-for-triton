@@ -1,4 +1,5 @@
-// RUN: triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s
+// RUN: TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=0 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefixes=CHECK,DPAS-LAYOUT
+// RUN: TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=1 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefixes=CHECK,ALL-LAYOUT
 
 // Test: MakeTensorDescOp lowers to LLVM struct packing and
 // DescriptorLoadOp with dot_op A encoding generates 2D block loads.
@@ -88,7 +89,8 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 4], order = [1, 0]}>
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
   // CHECK-LABEL: @descriptor_load_blocked_no_block_io
-  // CHECK-NOT: triton_gen.2Dblockload
+  // DPAS-LAYOUT-NOT: triton_gen.2Dblockload
+  // ALL-LAYOUT-COUNT-32: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 1, v_blocks = 1, transpose = false, vnni_transform = false, cache_control = Default}
   tt.func public @descriptor_load_blocked_no_block_io(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i32, %arg5: i32) {
     %c1_i64 = arith.constant 1 : i64
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <tensor<64x32xf16>>
@@ -155,6 +157,63 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK-COUNT-8: triton_gen.dpas {{.*}} {pa = f16, pb = f16, rc = 8}
     %D = tt.dot %A, %B, %C, inputPrecision = tf32 : tensor<64x32xf16, #dot0> * tensor<32x64xf16, #dot1> -> tensor<64x64xf32, #dpas>
     %0 = ttg.convert_layout %D : tensor<64x64xf32, #dpas> -> tensor<64x64xf32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// Test: DescriptorLoadOp with column_major block_io attribute (result of
+// FuseTransWithDescriptorLoad) generates 2D block loads with transpose=true.
+// The descriptor is always row-major (stride-1 on last dim). The result type
+// dimensions are transposed relative to the descriptor's block shape.
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @descriptor_load_column_major
+  tt.func public @descriptor_load_column_major(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i32, %arg5: i32) {
+    %c1_i64 = arith.constant 1 : i64
+    // Row-major descriptor: shape [N, K], strides [K_stride, 1], block <64x32>.
+    // The load produces a transposed result tensor<32x64, dot1>.
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <tensor<64x32xf16>>
+    // For DPAS B with column_major f16: should generate transposed 2D block loads.
+    // CHECK-COUNT-2: triton_gen.2Dblockload {{.*}} transpose = true, vnni_transform = false
+    %load = tt.descriptor_load %desc[%arg4, %arg5] {ttig.block_io = "column_major"} : !tt.tensordesc<tensor<64x32xf16>> -> tensor<32x64xf16, #dot1>
+    tt.return
+  }
+}
+
+// -----
+
+// Test: DescriptorLoadOp with explicit row_major block_io attribute generates
+// standard (non-transposed) 2D block loads, same as the no-attribute case.
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @descriptor_load_explicit_row_major
+  tt.func public @descriptor_load_explicit_row_major(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i32, %arg5: i32) {
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <tensor<32x64xf16>>
+    // CHECK-COUNT-2: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 1, transpose = false, vnni_transform = true, cache_control = Default}
+    %load = tt.descriptor_load %desc[%arg4, %arg5] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<32x64xf16>> -> tensor<32x64xf16, #dot1>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Test that when a column_major tt.descriptor_load is present but descriptor is not traceable to
+// COM: a MakeTensorDescOp (passed as function argument) the code generated uses the "gather path".
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @descriptor_load_column_major_fallback
+  tt.func public @descriptor_load_column_major_fallback(%desc: !tt.tensordesc<tensor<64x32xf16>>, %row: i32, %col: i32) {
+    // CHECK-NOT: triton_gen.2Dblockload
+    // CHECK: llvm.getelementptr
+    %load = tt.descriptor_load %desc[%row, %col] {ttig.block_io = "column_major"} : !tt.tensordesc<tensor<64x32xf16>> -> tensor<32x64xf16, #dot1>
     tt.return
   }
 }
