@@ -1,3 +1,4 @@
+import os
 import itertools
 
 import numpy as np
@@ -7,6 +8,12 @@ import pathlib
 
 import triton
 from triton._internal_testing import is_xpu
+
+
+@pytest.fixture(autouse=True)
+def triton_block_io(monkeypatch):
+    monkeypatch.setenv("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS", "1")
+    yield
 
 
 class DpasLayout:
