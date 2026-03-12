@@ -189,3 +189,7 @@ if USE_WRAPPERS:
         pytest.mark.forked = lambda fn: fn  # Disable tests forking
     except ImportError:
         pass  # Ignore if pytest is not installed
+
+# Disable block IO for all layouts, which is currently not working correctly in the simulator and causes hang.
+# FIXME: Remove once the issue is fixed in the simulator.
+os.environ["TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS"] = "0"
