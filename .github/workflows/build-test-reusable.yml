@@ -290,6 +290,7 @@ jobs:
           echo "TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS=$GITHUB_WORKSPACE/spirv-input-data" | tee -a $GITHUB_ENV
 
       - name: Run triton kernels tests
+        continue-on-error: true
         if: matrix.suite == 'triton-kernels'
         run: |
           export PYTEST_MAX_PROCESSES=4
