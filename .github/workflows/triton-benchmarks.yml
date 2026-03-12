@@ -343,7 +343,12 @@ jobs:
       - name: Aggregate compilation reports
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
-          echo "Aggregation step placeholder"
+          source scripts/capture-hw-details.sh
+          python scripts/prepare_compilation_report.py \
+            $COMPILE_REPORTS \
+            $REPORTS/compile_stats \
+            --tag $TAG \
+            --benchmark_group "triton-benchmarks"
 
       - name: Upload benchmark reports
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
