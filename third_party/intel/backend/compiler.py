@@ -317,8 +317,6 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.ttgpuir.add_optimize_dot_operands(pm)
         intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.use_barrier)
 
-        if (opt.reduce_variable_liveness):
-            intel.passes.ttgpuir.add_reduce_variable_liveness(pm)
 
         passes.ttgpuir.add_fuse_nested_loops(pm)
 
