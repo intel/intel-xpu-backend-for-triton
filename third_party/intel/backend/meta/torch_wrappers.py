@@ -327,6 +327,7 @@ class _PathFinderWrapper(importlib.abc.MetaPathFinder):
         self.wrap("triton.backends.intel.driver", self.wrap_driver)
         self.wrap("triton.testing", self.wrap_triton_testing)
         self.wrap("pytest", self.wrap_pytest)
+        self.wrap("torch._inductor.runtime.triton_heuristics", self.wrap_pointwise)
 
     def wrap(self, name, wrapper):
         if name in sys.modules:
@@ -387,6 +388,26 @@ class _PathFinderWrapper(importlib.abc.MetaPathFinder):
 
         _pytest_raises = pytest.raises
         pytest.raises = lambda *args, **kwargs: RaisesContextWrapper(_pytest_raises(*args, **kwargs))
+
+    @staticmethod
+    def wrap_pointwise(mod):
+
+        def _pointwise_config_filter(func):
+            """
+            Filter out the configuration that num_warps=1, which is extrem slow on CRI sim.
+            """
+
+            def wrapper(*args, **kwargs):
+                configs = func(*args, **kwargs)
+                cfgs = [c for c in configs if c.num_warps > 1]
+                if len(cfgs) > 0:
+                    configs = cfgs
+                return configs
+
+            return wrapper
+
+        mod._maybe_filter_configs_for_tma_restrictions = _pointwise_config_filter(
+            mod._maybe_filter_configs_for_tma_restrictions)
 
     def find_spec(self, fullname, path, target=None):
         if (spec := importlib.machinery.PathFinder.find_spec(fullname, path)) is None:
