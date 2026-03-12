@@ -566,20 +566,6 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                    warpId, rewriter, targetInfo, maybeMaxVecElems, emitLdSt);
 }
 
-// Build a vector containing multiple base pointers for dynamic indexing.
-static Value buildBasePtrVector(Location loc, RewriterBase &rewriter,
-                                ArrayRef<Value> smemBases) {
-  assert(smemBases.size() > 1 && "Need multiple bases to build a vector");
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto ptrTy = smemBases[0].getType();
-  auto vecTy = VectorType::get({static_cast<int64_t>(smemBases.size())}, ptrTy);
-  Value basesVec = b.undef(vecTy);
-  for (size_t i = 0; i < smemBases.size(); ++i) {
-    basesVec = b.insert_element(basesVec, smemBases[i], b.i32_val(i));
-  }
-  return basesVec;
-}
-
 SmallVector<Value>
 lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
           ArrayRef<Value> valsArray, // Input for store, output for load
@@ -616,10 +602,8 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
   // Extract the partition sublayout before stripping it for vectorization.
   auto inDimNames = to_vector(cvt.getInDimNames());
   LinearLayout partitionLayout;
-  Value basesVec;
   if (isPartitioned) {
     partitionLayout = cvt.sublayout(inDimNames, {kPartition});
-    basesVec = buildBasePtrVector(loc, rewriter, smemBases);
   }
 
   // Strip kPartition output for vectorization analysis.
@@ -709,7 +693,10 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
       regIdxAddI8 = applyPadding(regIdxAddI8, paddingShifts);
       Value innerOffset = b.add(offset, b.i32_val(regIdxAddI8));
 
-      // Select the appropriate base pointer for partitioned tensors
+      // Select the appropriate base pointer for partitioned tensors.
+      // Use a select chain instead of vector-of-pointers extraction to avoid
+      // generating LLVM IR that requires SPV_INTEL_masked_gather_scatter for
+      // SPIR-V translation.
       Value smemBase = smemBases[0];
       if (isPartitioned) {
         // Compute the partition index dynamically.
@@ -719,7 +706,10 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
                                                   {kWarp, warpId},
                                                   {kBlock, blockId}});
         Value partitionIdx = partitionResult[0].second;
-        smemBase = b.extract_element(basesVec, partitionIdx);
+        for (size_t p = 1; p < smemBases.size(); ++p) {
+          Value cmp = b.icmp_eq(partitionIdx, b.i32_val(p));
+          smemBase = b.select(cmp, smemBases[p], smemBase);
+        }
       }
 
       std::optional<Value> innerCtaOffset;
