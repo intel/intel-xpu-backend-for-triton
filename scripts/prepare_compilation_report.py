@@ -40,7 +40,7 @@ def parse_results_rec(data: dict | float, comp_uuid: str, name: str, parent: str
     sample = {
         'comp_uuid': comp_uuid,
         'name': name,
-        'full_name': f"{parent}/{name}" if parent else name,
+        'full_name': f'{parent}/{name}' if parent else name,
         'parent': parent,
     }
     if isinstance(data, (int, float)):
