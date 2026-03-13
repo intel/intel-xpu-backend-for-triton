@@ -62,6 +62,18 @@ Name: test-reports-linux, size: 1234567 bytes
 ...
 ```
 
+#### Filter artifacts by name
+
+Use `--artifact-pattern` to download only artifacts matching a glob pattern (applied after the built-in test-report filter):
+
+```bash
+# Download only xe2 test reports
+triton-utils download_reports --download-dir ./reports --gh-run-id 18661995769 --artifact-pattern "test-reports-xe2-*"
+
+# Download only mtl test reports
+triton-utils download_reports --download-dir ./reports --gh-run-id 18661995769 --artifact-pattern "*mtl*"
+```
+
 #### Notes
 
 - Default repo is `intel/intel-xpu-backend-for-triton`. To change use `--repo <repo_org/repo_name>`.

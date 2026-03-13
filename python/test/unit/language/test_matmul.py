@@ -1391,8 +1391,13 @@ def test_batched_mxfp(BATCH_SIZE, BLOCK_BATCH_SIZE, BLOCK_M, BLOCK_N, BLOCK_K, N
         if is_hip_cdna4() and NUM_STAGES > 1 and max(BLOCK_M, BLOCK_N) > 64:
             pytest.skip("Config requires too much shared memory")
     elif is_xpu():
-        if BLOCK_BATCH_SIZE == 4 and BLOCK_N == 64:
-            pytest.skip("FIXME: #5762")
+        # dot_scaled with e5m2 promotes operands to bf16 (2 bytes); ReduceDataDuplication
+        # creates SLM buffers for both 3D dot operands (blocked -> dot_op conversion)
+        dot_op_slm = BLOCK_BATCH_SIZE * (BLOCK_M * BLOCK_K + BLOCK_K * BLOCK_N) * 2
+        max_slm = triton.runtime.driver.active.utils.get_device_properties(
+            triton.runtime.driver.active.get_current_device())["max_shared_mem"]
+        if dot_op_slm >= max_slm:
+            pytest.xfail("Config requires too much shared memory")
         if is_xpu_cri() and ([BLOCK_M, BLOCK_N, BLOCK_K] == [64, 64, 128]):
             pytest.skip("FIXME: #929")
 

@@ -55,6 +55,12 @@ def is_hip_cdna4():
 
 
 @constexpr_function
+def is_hip_gfx1250():
+    target = current_target()
+    return target is not None and target.arch == "gfx1250"
+
+
+@constexpr_function
 def is_xpu():
     target = current_target()
     return target is not None and target.backend == "xpu"

@@ -32,12 +32,12 @@ MM_CONFIGS_BF16 = sum([[(E, M, hidden_size, int_size * 2, fp8, block_quant),  # 
                         (E, M, int_size, hidden_size, fp8, block_quant)]  # swiglu output -> final output
                        for M in [1, 8, 64, 256]
                        for E, hidden_size, int_size, fp8, block_quant in [
-                           # llama4 scout
-                           (16, 5120, 8192, False, False),
                            # gpt-oss 20b
                            (32, 2880, 2880, False, False),
                            # gpt-oss 120b
                            (128, 2880, 2880, False, False),
+                           # llama4 scout
+                           (16, 5120, 8192, False, False),
                            # qwen3-235b-A22B
                            (128, 4096, 1536, False, False),
                            # qwen3-30b-A3B
@@ -46,18 +46,20 @@ MM_CONFIGS_BF16 = sum([[(E, M, hidden_size, int_size * 2, fp8, block_quant),  # 
                            (512, 2048, 512, False, False),
                        ]], [])
 
-MM_CONFIGS_FP8 = sum([[(E, M, hidden_size, int_size * 2, fp8, block_quant),
-                       (E, M, int_size, hidden_size, fp8, block_quant)]
-                      for M in [1, 8, 64, 256]
-                      for E, hidden_size, int_size, fp8, block_quant in [
-                          # deepseek V3 (R1 is the same)
-                          # 3.5 GBs of weights!
-                          (256, 7168, 2048, True, True),
-                          #  # qwen3-235b-A22B
-                          (128, 4096, 1536, True, False),
-                          # qwen3-30b-A3B
-                          (128, 2048, 768, True, False),
-                      ]], [])
+MM_CONFIGS_FP8 = sum(
+    [[(E, M, hidden_size, int_size * 2, fp8, block_quant), (E, M, int_size, hidden_size, fp8, block_quant)]
+     for M in [1, 8, 64, 256]
+     for E, hidden_size, int_size, fp8, block_quant in [
+         # deepseek V3 (R1 is the same)
+         # 3.5 GB of weights, so can overflow int32 pointer, which can hold 2GB max
+         (256, 7168, 2048, True, True),
+         # llama4 scout
+         (16, 5120, 8192, True, False),
+         #  # qwen3-235b-A22B
+         (128, 4096, 1536, True, False),
+         # qwen3-30b-A3B
+         (128, 2048, 768, True, False),
+     ]], [])
 
 DEVICE_TOTAL_MEMORY_BYTES = benchmark_suite.get_total_gpu_memory_bytes()
 
@@ -113,19 +115,19 @@ if os.getenv('DEBUG_BENCH', '0') == '1':
 def get_batched_mm_benchmark(
     providers_filter: Optional[list[str]] = None,
     per_act_token_quant: bool = False,
-    fp8=False,
+    is_fp8=False,
     is_td_patched=False,
 ):
     supported_providers = {
         'triton' + ('-td' if is_td_patched else ''): 'triton' + ('-td' if is_td_patched else ''),
         'pytorch': 'pytorch',
     }
-    if fp8:
+    if is_fp8:
         # pytorch is very slow with fp8 case, for (8, 64, 1024, 2048) case it has ~0.15 TFlops vs 1.5 for triton
         del supported_providers['pytorch']
 
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
-    configs = MM_CONFIGS_FP8 if fp8 else MM_CONFIGS_BF16
+    configs = MM_CONFIGS_FP8 if is_fp8 else MM_CONFIGS_BF16
 
     @benchmark_suite.perf_report(
         benchmark_suite.Benchmark(
@@ -143,9 +145,9 @@ def get_batched_mm_benchmark(
         torch.manual_seed(20)
         n_warmup = 600
 
-        act_dtype = torch.bfloat16
+        dtype = torch.bfloat16
         use_fp8_w8a8 = fp8
-        quant_dtype = torch.float8_e4m3fn if fp8 else None
+        ab_dtype = torch.float8_e4m3fn if fp8 else None
 
         block_shape = (128, 128) if block_quant else None
 
@@ -159,8 +161,8 @@ def get_batched_mm_benchmark(
             num_experts,
             max_tokens_per_expert,
             K,
-            in_dtype=act_dtype,
-            quant_dtype=quant_dtype,
+            in_dtype=dtype,
+            quant_dtype=ab_dtype,
             block_shape=block_shape,
             per_act_token_quant=per_act_token_quant,
         )
@@ -170,22 +172,22 @@ def get_batched_mm_benchmark(
             num_experts,
             N,
             K,
-            in_dtype=act_dtype,
-            quant_dtype=quant_dtype,
+            in_dtype=dtype,
+            quant_dtype=ab_dtype,
             block_shape=block_shape,
             per_out_ch_quant=per_act_token_quant,
         )
 
         # Free unused bf16 originals in the fp8 case
-        if quant_dtype is not None:
+        if ab_dtype is not None:
             del A, B
         quantiles = [0.5, 0.0, 1.0]
 
-        C = torch.zeros(out_shape, device='xpu', dtype=act_dtype)
+        C = torch.zeros(out_shape, device='xpu', dtype=dtype)
         compute_tl_dtype = {torch.float16: tl.float16, torch.bfloat16: tl.bfloat16, torch.float32: tl.float32}[C.dtype]
-        rtol = 6e-2 if act_dtype == torch.bfloat16 else 1e-2
-        atol = 6e-2 if act_dtype == torch.bfloat16 else 1e-2
-        ref = torch.zeros(out_shape, device='xpu', dtype=act_dtype)
+        rtol = 6e-2 if dtype == torch.bfloat16 else 1e-2
+        atol = 6e-2 if dtype == torch.bfloat16 else 1e-2
+        ref = torch.zeros(out_shape, device='xpu', dtype=dtype)
 
         def torch_fn():
             native_batched_masked_quant_matmul(A_q, B_q, ref, num_expert_tokens, A_scale, B_scale, block_shape,
@@ -266,5 +268,5 @@ def get_batched_mm_benchmark(
 if __name__ == '__main__':
     is_td_patched = os.getenv('TD_PATCHED', '0') == '1'
     print('Running batched MM benchmark...')
-    _benchmark_mm = get_batched_mm_benchmark(fp8=(os.getenv('FP8', '0') == '1'), is_td_patched=is_td_patched)
+    _benchmark_mm = get_batched_mm_benchmark(is_fp8=(os.getenv('FP8', '0') == '1'), is_td_patched=is_td_patched)
     _benchmark_mm.run(show_plots=False, print_data=True)

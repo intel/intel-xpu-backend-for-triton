@@ -15,7 +15,7 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 
-#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENMemorySpace.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 
 #define GET_OP_CLASSES
@@ -91,6 +91,16 @@ void PrefetchOp::build(OpBuilder &builder, OperationState &state, Value ptr,
                        CacheModifier cache, EvictionPolicy evict,
                        bool isVolatile) {
   PrefetchOp::build(builder, state, ptr, /*mask=*/{}, cache, evict, isVolatile);
+}
+
+LogicalResult DescriptorPrefetchOp::verify() {
+  auto descType = getDesc().getType();
+  unsigned blockRank = descType.getBlockType().getRank();
+  if (getIndices().size() != blockRank) {
+    return emitOpError("expected ")
+           << blockRank << " indices, but got " << getIndices().size();
+  }
+  return success();
 }
 
 LogicalResult SubGroupTransposeOp::verify() {

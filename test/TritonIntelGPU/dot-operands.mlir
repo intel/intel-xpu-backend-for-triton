@@ -390,3 +390,180 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK-LABEL: doNotFuseLoadWithTrans5
   // CHECK: tt.trans
 }
+
+// -----
+
+// COM: Descriptor load fusion tests.
+// COM: tt.trans infers its result type by transposing the input encoding,
+// COM: so the real pattern has: descriptor_load -> trans -> convert_layout -> dot.
+
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked_trans = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 1], warpsPerCTA = [1, 8], order = [0, 1]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // COM: tt.descriptor_load -> tt.trans -> convert_layout -> tt.dot chain.
+  // COM: Fusion keeps the descriptor unchanged and eliminates the transpose
+  // COM: by producing a transposed result type from the original descriptor.
+  tt.func public @fuseDescriptorLoadWithTrans1(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %M: i32, %N: i32, %K: i32, %strideAm: i64, %strideBn: i64) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
+    %descA = tt.make_tensor_descriptor %arg0, [%M, %K], [%strideAm, %c1_i64] : <f16>, <tensor<64x32xf16>>
+    %descB = tt.make_tensor_descriptor %arg1, [%N, %K], [%strideBn, %c1_i64] : <f16>, <tensor<64x32xf16>>
+    %loadA = tt.descriptor_load %descA[%c0_i32, %c0_i32] : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #dot0>
+    %loadB = tt.descriptor_load %descB[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #blocked>
+    %transB = tt.trans %loadB {order = array<i32: 1, 0>} : tensor<64x32xf16, #blocked> -> tensor<32x64xf16, #blocked_trans>
+    %cvtB = ttg.convert_layout %transB : tensor<32x64xf16, #blocked_trans> -> tensor<32x64xf16, #dot1>
+    %dot = tt.dot %loadA, %cvtB, %cst : tensor<64x32xf16, #dot0> * tensor<32x64xf16, #dot1> -> tensor<64x64xf32, #mma>
+    tt.return
+  }
+  // CHECK-LABEL: fuseDescriptorLoadWithTrans1
+  // CHECK: tt.make_tensor_descriptor %arg1, [%arg3, %arg4], [%arg6, %c1_i64]
+  // CHECK-SAME: <tensor<64x32xf16>>
+  // CHECK: tt.descriptor_load {{.*}} {ttig.block_io = "column_major"} : !tt.tensordesc<tensor<64x32xf16>> -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
+  // CHECK-NOT: tt.trans
+  // CHECK-NOT: ttg.convert_layout
+  // CHECK: tt.dot
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked_trans = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 1], warpsPerCTA = [1, 8], order = [0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // COM: Descriptor load -> trans, but trans NOT used by dot -> no fusion.
+  tt.func public @doNotFuseDescriptorLoadWithTrans1(%arg0: !tt.ptr<f16>, %N: i32, %K: i32, %strideBn: i64) -> tensor<32x64xf16, #blocked_trans> {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %descB = tt.make_tensor_descriptor %arg0, [%N, %K], [%strideBn, %c1_i64] : <f16>, <tensor<64x32xf16>>
+    %loadB = tt.descriptor_load %descB[%c0_i32, %c0_i32] : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #blocked>
+    %transB = tt.trans %loadB {order = array<i32: 1, 0>} : tensor<64x32xf16, #blocked> -> tensor<32x64xf16, #blocked_trans>
+    tt.return %transB : tensor<32x64xf16, #blocked_trans>
+  }
+  // CHECK-LABEL: doNotFuseDescriptorLoadWithTrans1
+  // CHECK: tt.trans
+}
+
+// -----
+
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked_trans = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 1], warpsPerCTA = [1, 8], order = [0, 1]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // COM: Descriptor load -> trans -> convert_layout -> dot inside while loop -> no fusion.
+  tt.func public @doNotFuseDescriptorLoadWithTrans2(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %M: i32, %N: i32, %K: i32, %strideAm: i64, %strideBn: i64, %cond: i1) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
+    %descA = tt.make_tensor_descriptor %arg0, [%M, %K], [%strideAm, %c1_i64] : <f16>, <tensor<64x32xf16>>
+    %descB = tt.make_tensor_descriptor %arg1, [%N, %K], [%strideBn, %c1_i64] : <f16>, <tensor<64x32xf16>>
+    %0 = scf.while (%iter = %c0_i32) : (i32) -> (i32) {
+      scf.condition(%cond) %iter : i32
+    } do {
+    ^bb0(%arg3: i32):
+      %loadA = tt.descriptor_load %descA[%c0_i32, %c0_i32] : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #dot0>
+      %loadB = tt.descriptor_load %descB[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #blocked>
+      %transB = tt.trans %loadB {order = array<i32: 1, 0>} : tensor<64x32xf16, #blocked> -> tensor<32x64xf16, #blocked_trans>
+      %cvtB = ttg.convert_layout %transB : tensor<32x64xf16, #blocked_trans> -> tensor<32x64xf16, #dot1>
+      %dot = tt.dot %loadA, %cvtB, %cst : tensor<64x32xf16, #dot0> * tensor<32x64xf16, #dot1> -> tensor<64x64xf32, #mma>
+      scf.yield %arg3 : i32
+    }
+    tt.return
+  }
+  // CHECK-LABEL: doNotFuseDescriptorLoadWithTrans2
+  // CHECK: tt.trans
+}
+
+// -----
+
+// COM: Verify that cache/evict attributes and discardable attributes are
+// COM: preserved through fusion.
+
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked_trans = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 1], warpsPerCTA = [1, 8], order = [0, 1]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  tt.func public @fuseDescriptorLoadWithTransPreservesAttrs(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %M: i32, %N: i32, %K: i32, %strideAm: i64, %strideBn: i64) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
+    %descA = tt.make_tensor_descriptor %arg0, [%M, %K], [%strideAm, %c1_i64] : <f16>, <tensor<64x32xf16>>
+    %descB = tt.make_tensor_descriptor %arg1, [%N, %K], [%strideBn, %c1_i64] : <f16>, <tensor<64x32xf16>>
+    %loadA = tt.descriptor_load %descA[%c0_i32, %c0_i32] : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #dot0>
+    %loadB = tt.descriptor_load %descB[%c0_i32, %c0_i32] cacheModifier = ca evictionPolicy = evict_first {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #blocked>
+    %transB = tt.trans %loadB {order = array<i32: 1, 0>} : tensor<64x32xf16, #blocked> -> tensor<32x64xf16, #blocked_trans>
+    %cvtB = ttg.convert_layout %transB : tensor<32x64xf16, #blocked_trans> -> tensor<32x64xf16, #dot1>
+    %dot = tt.dot %loadA, %cvtB, %cst : tensor<64x32xf16, #dot0> * tensor<32x64xf16, #dot1> -> tensor<64x64xf32, #mma>
+    tt.return
+  }
+  // CHECK-LABEL: fuseDescriptorLoadWithTransPreservesAttrs
+  // CHECK: tt.descriptor_load {{.*}} cacheModifier = ca evictionPolicy = evict_first {ttig.block_io = "column_major"}
+  // CHECK-SAME: -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
+  // CHECK-NOT: tt.trans
+  // CHECK: tt.dot
+}
+
+// -----
+
+// COM: No fusion when hardware does not support 2D block IO.
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked_trans = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 1], warpsPerCTA = [1, 8], order = [0, 1]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  tt.func public @doNotFuseDescriptorLoadWithTrans_NoBlockIO(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %M: i32, %N: i32, %K: i32, %strideAm: i64, %strideBn: i64) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
+    %descA = tt.make_tensor_descriptor %arg0, [%M, %K], [%strideAm, %c1_i64] : <f16>, <tensor<64x32xf16>>
+    %descB = tt.make_tensor_descriptor %arg1, [%N, %K], [%strideBn, %c1_i64] : <f16>, <tensor<64x32xf16>>
+    %loadA = tt.descriptor_load %descA[%c0_i32, %c0_i32] : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #dot0>
+    %loadB = tt.descriptor_load %descB[%c0_i32, %c0_i32] : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #blocked>
+    %transB = tt.trans %loadB {order = array<i32: 1, 0>} : tensor<64x32xf16, #blocked> -> tensor<32x64xf16, #blocked_trans>
+    %cvtB = ttg.convert_layout %transB : tensor<32x64xf16, #blocked_trans> -> tensor<32x64xf16, #dot1>
+    %dot = tt.dot %loadA, %cvtB, %cst : tensor<64x32xf16, #dot0> * tensor<32x64xf16, #dot1> -> tensor<64x64xf32, #mma>
+    tt.return
+  }
+  // CHECK-LABEL: doNotFuseDescriptorLoadWithTrans_NoBlockIO
+  // COM: Transpose must be preserved — no column_major descriptor load created.
+  // CHECK: tt.trans
+  // CHECK-NOT: ttig.block_io = "column_major"
+}
+
+// -----
+
+// COM: No fusion when descriptor load lacks block_io = "row_major", even with
+// COM: ttig.support_2d_block_io present. Tests the isCandidate guard that
+// COM: requires MaterializeBlockPointer to have already confirmed the load is
+// COM: a 2D block IO candidate.
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked_trans = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 1], warpsPerCTA = [1, 8], order = [0, 1]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  tt.func public @doNotFuseDescriptorLoadWithTrans_MissingBlockIOAttr(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %M: i32, %N: i32, %K: i32, %strideAm: i64, %strideBn: i64) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
+    %descA = tt.make_tensor_descriptor %arg0, [%M, %K], [%strideAm, %c1_i64] : <f16>, <tensor<64x32xf16>>
+    %descB = tt.make_tensor_descriptor %arg1, [%N, %K], [%strideBn, %c1_i64] : <f16>, <tensor<64x32xf16>>
+    %loadA = tt.descriptor_load %descA[%c0_i32, %c0_i32] : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #dot0>
+    // No ttig.block_io attribute on loadB -- fusion must not occur.
+    %loadB = tt.descriptor_load %descB[%c0_i32, %c0_i32] : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #blocked>
+    %transB = tt.trans %loadB {order = array<i32: 1, 0>} : tensor<64x32xf16, #blocked> -> tensor<32x64xf16, #blocked_trans>
+    %cvtB = ttg.convert_layout %transB : tensor<32x64xf16, #blocked_trans> -> tensor<32x64xf16, #dot1>
+    %dot = tt.dot %loadA, %cvtB, %cst : tensor<64x32xf16, #dot0> * tensor<32x64xf16, #dot1> -> tensor<64x64xf32, #mma>
+    tt.return
+  }
+  // CHECK-LABEL: doNotFuseDescriptorLoadWithTrans_MissingBlockIOAttr
+  // CHECK: tt.trans
+  // CHECK-NOT: ttig.block_io = "column_major"
+}
