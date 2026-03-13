@@ -16,6 +16,9 @@ def parse_args():
     parser.add_argument('--tag', help='Tag for the benchmark run', default='')
     parser.add_argument('--benchmark_group', help='Benchmark group name, e.g. triton-benchmarks-pvc',
                         default='triton-benchmarks')
+    parser.add_argument(
+        '--save_passes', action='store_true', default=False,
+        help='Save per-pass timing CSV (passes-compile-stats.csv). Omitted by default due to large file size.')
     return parser.parse_args()
 
 
@@ -160,11 +163,11 @@ def main():
     print('Kernels shape', kernel_df.shape)
     print('Passes shape', passes_df.shape)
 
-    # mkdir and save both csvs
     target_dir = Path(args.target)
     os.makedirs(target_dir, exist_ok=True)
     kernel_df.to_csv(target_dir / 'kernels-compile-stats.csv', index=False)
-    passes_df.to_csv(target_dir / 'passes-compile-stats.csv', index=False)
+    if args.save_passes:
+        passes_df.to_csv(target_dir / 'passes-compile-stats.csv', index=False)
 
 
 if __name__ == '__main__':

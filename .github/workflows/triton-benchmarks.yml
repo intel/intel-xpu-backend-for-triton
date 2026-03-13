@@ -40,6 +40,10 @@ on:
         description: JSON list of benchmarks to skip
         type: string
         default: "[]"
+      save_passes:
+        description: Save per-pass timing CSV (passes-compile-stats.csv). Large file, disabled by default.
+        type: boolean
+        default: false
 
   # This workflow is also called from workflows triton-benchmarks-*.yml.
   workflow_call:
@@ -51,6 +55,10 @@ on:
         description: JSON list of benchmarks to skip
         type: string
         default: "[]"
+      save_passes:
+        description: Save per-pass timing CSV
+        type: boolean
+        default: false
 
 # Cancels in-progress PR runs when the PR is updated. Manual runs are never cancelled.
 concurrency:
@@ -348,7 +356,8 @@ jobs:
             $COMPILE_REPORTS \
             $REPORTS/compile_stats \
             --tag $TAG \
-            --benchmark_group "triton-benchmarks"
+            --benchmark_group "triton-benchmarks" \
+            ${{ inputs.save_passes && '--save_passes' || '' }}
 
       - name: Upload benchmark reports
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
