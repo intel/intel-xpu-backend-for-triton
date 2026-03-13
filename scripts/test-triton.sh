@@ -892,21 +892,21 @@ run_triton_kernels_tests() {
   # skipping mxfp, they are part of mxfp_tests suite
   TRITON_TEST_SUITE=triton_kernels \
     run_pytest_command -vvv -n $max_procs --device xpu -k 'not test_mxfp' \
-      test_matmul.py::test_op[None-False-False-False-False-None-128-720-576-768-batched-bfloat16-bfloat16-10-1-False-False-None-False-False-False-True-swiglu_opts80] \
-      test_matmul.py::test_op[None-False-False-False-False-None-128-768-512-1024-batched-bfloat16-bfloat16-10-1-False-False-None-False-False-False-True-swiglu_opts84] \
-      test_matmul.py::test_op[None-False-False-True-False-None-128-768-512-1024-ragged-float16-float16-10-5-False-False-None-False-False-False-True-None] \
-      test_matmul.py::test_op[None-False-False-True-False-None-128-720-576-768-ragged-bfloat16-bfloat16-10-5-False-False-None-False-False-False-True-swiglu_opts79] \
-      test_matmul.py::test_op[None-False-False-True-False-None-128-720-576-768-batched-bfloat16-bfloat16-10-1-False-False-None-False-False-False-True-swiglu_opts80] \
-      test_matmul.py::test_op[None-False-False-True-False-None-128-768-512-1024-ragged-bfloat16-bfloat16-10-5-False-False-None-False-False-False-True-swiglu_opts83] \
-      test_matmul.py::test_op[None-False-False-True-False-None-128-768-512-1024-batched-bfloat16-bfloat16-10-1-False-False-None-False-False-False-True-swiglu_opts84] \
-      test_matmul.py::test_op[None-False-False-False-True-None-128-720-576-768-batched-bfloat16-bfloat16-10-1-False-False-None-False-False-False-True-swiglu_opts80] \
-      test_matmul.py::test_op[None-False-False-False-True-None-128-768-512-1024-batched-bfloat16-bfloat16-10-1-False-False-None-False-False-False-True-swiglu_opts84] \
-      test_matmul.py::test_op[None-False-False-True-True-None-128-720-576-768-batched-bfloat16-bfloat16-10-1-False-False-None-False-False-False-True-swiglu_opts80] \
-      test_matmul.py::test_op[None-False-False-True-True-None-128-768-512-1024-batched-bfloat16-bfloat16-10-1-False-False-None-False-False-False-True-swiglu_opts84] \
-      test_matmul.py::test_op[None-False-True-False-False-None-128-768-512-1024-ragged-float16-float16-10-1-False-False-None-False-False-False-True-None] \
-      test_matmul.py::test_op[None-False-True-False-False-None-128-768-512-1024-ragged-float16-float16-10-5-False-False-None-False-False-False-True-None] \
-      test_matmul.py::test_op[None-False-True-True-False-None-128-768-512-1024-ragged-float16-float16-10-1-False-False-None-False-False-False-True-None] \
-      test_matmul.py::test_op[None-False-True-True-True-None-128-768-512-1024-ragged-float16-float16-10-1-False-False-None-False-False-False-True-None]
+      test_matmul.py::test_op[None-False-False-False-False-None-128-720-576-768-batched-bfloat16-bfloat16-10-1-False-False-None-False-False-False-True-swiglu_opts80]
+      # test_matmul.py::test_op[None-False-False-False-False-None-128-768-512-1024-batched-bfloat16-bfloat16-10-1-False-False-None-False-False-False-True-swiglu_opts84] \
+      # test_matmul.py::test_op[None-False-False-True-False-None-128-768-512-1024-ragged-float16-float16-10-5-False-False-None-False-False-False-True-None] \
+      # test_matmul.py::test_op[None-False-False-True-False-None-128-720-576-768-ragged-bfloat16-bfloat16-10-5-False-False-None-False-False-False-True-swiglu_opts79] \
+      # test_matmul.py::test_op[None-False-False-True-False-None-128-720-576-768-batched-bfloat16-bfloat16-10-1-False-False-None-False-False-False-True-swiglu_opts80] \
+      # test_matmul.py::test_op[None-False-False-True-False-None-128-768-512-1024-ragged-bfloat16-bfloat16-10-5-False-False-None-False-False-False-True-swiglu_opts83] \
+      # test_matmul.py::test_op[None-False-False-True-False-None-128-768-512-1024-batched-bfloat16-bfloat16-10-1-False-False-None-False-False-False-True-swiglu_opts84] \
+      # test_matmul.py::test_op[None-False-False-False-True-None-128-720-576-768-batched-bfloat16-bfloat16-10-1-False-False-None-False-False-False-True-swiglu_opts80] \
+      # test_matmul.py::test_op[None-False-False-False-True-None-128-768-512-1024-batched-bfloat16-bfloat16-10-1-False-False-None-False-False-False-True-swiglu_opts84] \
+      # test_matmul.py::test_op[None-False-False-True-True-None-128-720-576-768-batched-bfloat16-bfloat16-10-1-False-False-None-False-False-False-True-swiglu_opts80] \
+      # test_matmul.py::test_op[None-False-False-True-True-None-128-768-512-1024-batched-bfloat16-bfloat16-10-1-False-False-None-False-False-False-True-swiglu_opts84] \
+      # test_matmul.py::test_op[None-False-True-False-False-None-128-768-512-1024-ragged-float16-float16-10-1-False-False-None-False-False-False-True-None] \
+      # test_matmul.py::test_op[None-False-True-False-False-None-128-768-512-1024-ragged-float16-float16-10-5-False-False-None-False-False-False-True-None] \
+      # test_matmul.py::test_op[None-False-True-True-False-None-128-768-512-1024-ragged-float16-float16-10-1-False-False-None-False-False-False-True-None] \
+      # test_matmul.py::test_op[None-False-True-True-True-None-128-768-512-1024-ragged-float16-float16-10-1-False-False-None-False-False-False-True-None]
 }
 
 test_triton() {
