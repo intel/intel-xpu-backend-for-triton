@@ -384,70 +384,14 @@ jobs:
 
   reports:
     name: Reports
-    runs-on:
-      - runner-0.0.22
     needs: integration-tests
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Load pip cache
-        id: pip-cache
-        uses: ./.github/actions/load
-        with:
-          path: $HOME/.cache/pip
-          key: pip-${{ inputs.python_version }}-${{ hashFiles('pyproject.toml', 'setup.py') }}-${{ env.PIP_CACHE_NUMBER }}
-
-      - name: Download test reports
-        uses: actions/download-artifact@v7
-        with:
-          pattern: test-reports-*-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
-          path: reports
-          merge-multiple: true
-
-      - name: Install Python
-        uses: ./.github/actions/setup-python
-        with:
-          python_version: ${{ inputs.python_version }}
-          use_pyenv: ${{ inputs.use_pyenv_python }}
-
-      - name: Install triton_utils
-        run: |
-          pip install ./scripts/triton_utils
-
-      - name: Load environment details
-        run: |
-          cat ./reports/.env | tee -a $GITHUB_ENV
-
-      - name: Pass rate
-        run: |
-          triton-utils pass_rate --reports reports --save-to-json pass_rate.json --merge-test-results --tests-with-multiple-testsuites
-          triton-utils tests_stats --reports reports --level testsuite --pretty-print --merge-test-results --tests-with-multiple-testsuites
-
-      - name: Upload pass rate report
-        uses: actions/upload-artifact@v7
-        with:
-          name: pass_rate-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
-          path: pass_rate*.json
-
-      - name: Upload tutorials test report
-        uses: actions/upload-artifact@v7
-        with:
-          name: test-reports-tutorials-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
-          include-hidden-files: true
-          path: |
-            reports/tutorials*.xml
-            reports/test-report-tutorials-*/tutorials.xml
-
-      - name: Upload tutorials performance report
-        uses: actions/upload-artifact@v7
-        with:
-          name: tutorials-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
-          if-no-files-found: warn
-          include-hidden-files: true
-          path: |
-            reports/*/*.csv
-            reports/.env
+    uses: ./.github/workflows/reports-reusable.yml
+    with:
+      python_version: ${{ inputs.python_version }}
+      runner_label: ${{ inputs.runner_label }}
+      driver_version: ${{ inputs.driver_version }}
+      use_pyenv_python: ${{ inputs.use_pyenv_python }}
+      runner_version: ${{ inputs.runner_version }}
 
   check-jobs:
     runs-on: runner-0.0.22
