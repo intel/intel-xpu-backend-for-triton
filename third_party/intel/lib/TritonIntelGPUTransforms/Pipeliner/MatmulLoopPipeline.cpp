@@ -217,6 +217,66 @@ static void addOps(scf::ForOp forOp, int stage,
   }
 }
 
+/// Compute the number of GRFs needed for the given per-thread element count.
+/// Each GRF is 32 bytes; with SIMD16 each element occupies ceil(bitWidth/16)
+/// GRFs across the subgroup.
+static unsigned elemsPerThreadToGRFs(unsigned elemsPerThread,
+                                     unsigned elemBitWidth) {
+  unsigned grfsPerElem = (elemBitWidth + 15) / 16;
+  return elemsPerThread * grfsPerElem;
+}
+
+/// Clamp pipeline stages based on accumulator GRF pressure.
+///
+/// The fp32 accumulator is always fully live throughout the loop body.
+/// When it consumes a large fraction of the 256-GRF budget, each extra
+/// pipeline stage adds address bookkeeping that pushes IGC into heavy
+/// spilling. This function reduces numStages when the accumulator alone
+/// signals high register pressure.
+static int clampStagesToGRFBudget(scf::ForOp forOp, int numStages,
+                                  ArrayRef<LoadDotOperand> loads) {
+  if (numStages <= 2)
+    return numStages;
+
+  tt::DotOp dotOp;
+  for (Operation &op : forOp.getBody()->without_terminator()) {
+    if (auto dot = dyn_cast<tt::DotOp>(&op)) {
+      dotOp = dot;
+      break;
+    }
+  }
+  if (!dotOp)
+    return numStages;
+
+  auto resultType = dyn_cast<RankedTensorType>(dotOp.getType());
+  if (!resultType)
+    return numStages;
+
+  if (!isa<ttgi::DpasEncodingAttr>(resultType.getEncoding()))
+    return numStages;
+
+  unsigned cElemsPerThread = ttg::getTotalElemsPerThread(
+      resultType.getEncoding(), resultType.getShape());
+  unsigned cGRFs = elemsPerThreadToGRFs(cElemsPerThread, /*fp32=*/32);
+
+  // With 256 GRFs total, if the accumulator uses >= 192 (75%), there is
+  // insufficient room for load data + addresses + temporaries without
+  // severe spilling. Reduce to 2 stages (minimum for prefetch benefit).
+  constexpr unsigned highPressureThreshold = 192;
+
+  if (cGRFs >= highPressureThreshold) {
+    LDBG("Clamping pipeline stages from "
+         << numStages << " to 2"
+         << " (accumulator GRFs=" << cGRFs
+         << " >= threshold=" << highPressureThreshold << ")");
+    return 2;
+  }
+
+  LDBG("Register pressure OK for " << numStages << " stages"
+                                   << " (accumulator GRFs=" << cGRFs << ")");
+  return numStages;
+}
+
 /// Create the schedule for a matmul loop. This is ad hoc based on how we know
 /// matmul loops should be pipelined and is not a generic scheduler.
 static std::vector<std::pair<Operation *, unsigned>>
@@ -322,15 +382,18 @@ bool ttgi::preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
            << " in " << numStages << " stages\n";
   });
 
-  // 2. Create the prefetching operations for the loads collected.
+  // 2. Clamp the number of pipeline stages to avoid register spilling.
+  numStages = clampStagesToGRFBudget(forOp, numStages, loads);
+
+  // 3. Create the prefetching operations for the loads collected.
   createPrefetchOps(forOp, loads);
 
-  // 3. Create the final schedule for the kernel loop. This will dictate the
+  // 4. Create the final schedule for the kernel loop. This will dictate the
   // stages and order of operations to the pipeline expander.
   std::vector<std::pair<Operation *, unsigned>> schedule =
       createSchedule(forOp, numStages);
 
-  // 4. Fill out the pipeline options.
+  // 5. Fill out the pipeline options.
   options.getScheduleFn =
       [schedule](scf::ForOp forOp,
                  std::vector<std::pair<Operation *, unsigned>> &s) {
