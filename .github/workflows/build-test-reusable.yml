@@ -302,7 +302,7 @@ jobs:
         with:
           name: spirvrunner-input-data
           include-hidden-files: true
-          path: "$TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS"
+          path: ${{ env.TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS }}
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}
