@@ -22,6 +22,7 @@
 #include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
 #include "mlir/IR/PatternMatch.h"
 
+#include "intel/include/Analysis/StrideInfo.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Utils.h"
 #include "intel/include/GPUToTritonGEN/GPUToTritonGENPass.h"
 #include "intel/include/TritonGENToLLVM/TritonGENToLLVMPass.h"
@@ -203,6 +204,7 @@ public:
   void
   populateConversionPatterns(RewritePatternSet &patterns,
                              ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                             ModuleStrideAnalysis &strideAnalysis,
                              TritonIntelGPUToLLVMTypeConverter &typeConverter,
                              TargetInfo &targetInfo, int benefit) const {
     using namespace mlir;
@@ -213,8 +215,9 @@ public:
     intel::populateDotOpToLLVMPatterns(typeConverter, patterns, benefit);
     intel::populateElementwiseOpToLLVMPatterns(
         typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
-    intel::populateLoadStoreOpToLLVMPatterns(
-        typeConverter, targetInfo, patterns, axisInfoAnalysis, benefit);
+    intel::populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo,
+                                             patterns, axisInfoAnalysis,
+                                             strideAnalysis, benefit);
     mlir::triton::populateReduceOpToLLVMPatterns(typeConverter, patterns,
                                                  targetInfo, benefit);
     mlir::triton::populateScanOpToLLVMPatterns(typeConverter, patterns,

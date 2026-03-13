@@ -12,7 +12,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_hip, is_xpu
+from triton._internal_testing import is_hip
 
 
 @triton.jit
@@ -976,8 +976,6 @@ def test_preload_higher_order_kernels(device, fresh_triton_cache) -> None:
 
 
 def test_module_load_unload(device, fresh_knobs):
-    if is_xpu():
-        pytest.skip("FIXME: #6166")
 
     @triton.jit
     def kernel(out_ptr, val) -> None:

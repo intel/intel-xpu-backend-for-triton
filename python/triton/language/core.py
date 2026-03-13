@@ -1686,6 +1686,167 @@ def _aggregate(cls):
     return aggregate_value
 
 
+def _is_block_ptr(value) -> bool:
+    return isinstance(value, base_value) and getattr(value, "__triton_block_ptr__", False)
+
+
+def _as_list_like(values):
+    normalized = _normalize_tuple(values)
+    if isinstance(normalized, (list, builtins.tuple, tuple)):
+        return list(normalized)
+    return [normalized]
+
+
+def _canonicalize_block_ptr_static_tuple(values, name: str, *, positive: bool = False) -> tuple:
+    converted = []
+    for value in _as_list_like(values):
+        value = _unwrap_if_constexpr(value)
+        if not isinstance(value, int):
+            raise ValueError(f"Expected `{name}` to contain only integers")
+        if positive and value <= 0:
+            raise ValueError(f"Expected `{name}` to contain only positive integers")
+        converted.append(constexpr(value))
+    return tuple(converted)
+
+
+def _canonicalize_block_ptr_dynamic_tuple(values, name: str, _semantic) -> tuple:
+    converted = []
+    for value in _as_list_like(values):
+        value = _semantic.to_tensor(value)
+        if value.shape:
+            raise ValueError(f"Expected `{name}` entries to be scalar tensors")
+        if not value.dtype.is_int():
+            raise ValueError(f"Expected `{name}` entries to be integers")
+        if value.dtype != int64:
+            value = _semantic.cast(value, int64)
+        converted.append(value)
+    return tuple(converted)
+
+
+def _canonicalize_block_ptr_boundary_check(boundary_check, rank: int) -> builtins.tuple[int, ...]:
+    checked = set()
+    if boundary_check is None:
+        return checked
+
+    for dim in _as_list_like(boundary_check):
+        dim = _unwrap_if_constexpr(dim)
+        if not isinstance(dim, int) or not (0 <= dim < rank):
+            raise ValueError(f"Expected `boundary_check` to contain dimensions in [0, {rank})")
+        checked.add(dim)
+    if len(checked) != len(boundary_check):
+        raise ValueError("Duplicate dimension in `boundary_check`")
+    return checked
+
+
+@_aggregate
+class _block_ptr:
+    base: tensor
+    shape: tuple
+    strides: tuple
+    offsets: tuple
+    block_shape: tuple
+    order: tuple
+
+    __triton_block_ptr__ = True
+
+    def __init__(self, base, shape, strides, offsets, block_shape, order, _semantic=None):
+        if not base.type.is_ptr() or base.type.is_block():
+            raise ValueError("Expected `base` to be a scalar pointer type")
+        if isinstance(base.type.element_ty, block_type):
+            raise ValueError("Expected `base` to point to a scalar element type")
+
+        self.base = base
+        self.shape = _canonicalize_block_ptr_dynamic_tuple(shape, "shape", _semantic)
+        self.strides = _canonicalize_block_ptr_dynamic_tuple(strides, "strides", _semantic)
+        self.offsets = _canonicalize_block_ptr_dynamic_tuple(offsets, "offsets", _semantic)
+        self.block_shape = _canonicalize_block_ptr_static_tuple(block_shape, "block_shape", positive=True)
+        self.order = _canonicalize_block_ptr_static_tuple(order, "order")
+
+        rank = len(self.block_shape)
+        if rank == 0:
+            raise ValueError("Expected `make_block_ptr` to describe at least one dimension")
+        for field_name, field_value in (("shape", self.shape), ("strides", self.strides), ("offsets", self.offsets),
+                                        ("order", self.order)):
+            if len(field_value) != rank:
+                raise ValueError(
+                    f"Expected `shape`, `strides`, `offsets`, `block_shape`, and `order` to have the same length; "
+                    f"`{field_name}` has length {len(field_value)} but expected {rank}")
+        order_values = [_unwrap_if_constexpr(value) for value in self.order]
+        if sorted(order_values) != list(builtins.range(rank)):
+            raise ValueError(f"Expected `order` to be a permutation of 0..{rank - 1}")
+
+    def _tile_shape(self):
+        return [_unwrap_if_constexpr(extent) for extent in self.block_shape]
+
+    def _materialize(self, boundary_check=(), _semantic=None):
+        tile_shape = self._tile_shape()
+        checked_dims = _canonicalize_block_ptr_boundary_check(boundary_check, len(tile_shape))
+        ptrs = self.base
+        mask = None
+        for dim, extent in enumerate(tile_shape):
+            coord = add(self.offsets[dim], arange(0, extent, _semantic=_semantic), _semantic=_semantic)
+            for _ in builtins.range(dim):
+                coord = expand_dims(coord, 0, _semantic=_semantic)
+            for _ in builtins.range(dim + 1, len(tile_shape)):
+                coord = expand_dims(coord, -1, _semantic=_semantic)
+            coord = broadcast_to(coord, tile_shape, _semantic=_semantic)
+            ptrs = add(ptrs, mul(coord, self.strides[dim], _semantic=_semantic), _semantic=_semantic)
+            if dim in checked_dims:
+                valid = _semantic.and_(_semantic.greater_equal(coord, 0), _semantic.less_than(coord, self.shape[dim]))
+                mask = valid if mask is None else _semantic.and_(mask, valid)
+        return ptrs, mask
+
+    def advance(self, offsets, _semantic=None):
+        new_offsets = []
+        offsets = _canonicalize_block_ptr_dynamic_tuple(offsets, "offsets", _semantic)
+        if len(offsets) != len(self.offsets):
+            raise ValueError(f"Expected `offsets` to have length {len(self.offsets)} but received {len(offsets)}")
+        for old_offset, delta in zip(self.offsets, offsets):
+            new_offsets.append(add(old_offset, delta, _semantic=_semantic))
+        return _block_ptr(self.base, self.shape, self.strides, tuple(new_offsets), self.block_shape, self.order,
+                          _semantic=_semantic)
+
+    def load(self, mask=None, other=None, boundary_check=(), padding_option="", cache_modifier="", eviction_policy="",
+             volatile=False, _semantic=None):
+        if mask is not None or other is not None:
+            raise ValueError("`mask` and `other` arguments cannot be specified for loading block pointers")
+
+        padding_option = _unwrap_if_constexpr(padding_option)
+        cache_modifier = _unwrap_if_constexpr(cache_modifier)
+        eviction_policy = _unwrap_if_constexpr(eviction_policy)
+        volatile = _unwrap_if_constexpr(volatile)
+        if padding_option is None:
+            padding_option = ""
+        ptrs, mask = self._materialize(boundary_check, _semantic=_semantic)
+
+        if padding_option == "":
+            generated_other = None
+        elif padding_option == "zero":
+            generated_other = 0
+        elif padding_option == "nan":
+            if self.base.dtype.element_ty.is_int():
+                raise ValueError("Padding option `nan` is not supported for integer block pointers")
+            generated_other = float("nan")
+        else:
+            raise ValueError(f"Padding option {padding_option} not supported")
+
+        return load(ptrs, mask=mask, other=generated_other, cache_modifier=cache_modifier,
+                    eviction_policy=eviction_policy, volatile=volatile, _semantic=_semantic)
+
+    def store(self, value, mask=None, boundary_check=(), cache_modifier="", eviction_policy="", _semantic=None):
+        if mask is not None:
+            raise ValueError("`mask` argument cannot be specified for storing block pointers")
+
+        cache_modifier = _unwrap_if_constexpr(cache_modifier)
+        eviction_policy = _unwrap_if_constexpr(eviction_policy)
+        ptrs, mask = self._materialize(boundary_check, _semantic=_semantic)
+        return store(ptrs, value, mask=mask, cache_modifier=cache_modifier, eviction_policy=eviction_policy,
+                     _semantic=_semantic)
+
+
+_block_ptr.__triton_block_ptr__ = True
+_block_ptr.dtype = property(lambda self: self.base.dtype)
+
 # -----------------------
 # SPMD Programming Model
 # -----------------------
