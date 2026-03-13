@@ -260,7 +260,7 @@ def get_unified_attention_benchmark(
         n_warmup = 100
         quantiles = [0.5, 0.0, 1.0]
 
-        torch.set_default_device("xpu")
+        torch.set_default_device("cuda")
 
         num_seqs = len(seq_lens)
         query_lens = [x[0] for x in seq_lens]

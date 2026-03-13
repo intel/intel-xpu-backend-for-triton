@@ -152,7 +152,7 @@ def get_batched_mm_benchmark(
         block_shape = (128, 128) if block_quant else None
 
         # Create random number of expert tokens
-        num_expert_tokens = torch.randint(low=0, high=max_tokens_per_expert + 1, size=(num_experts, ), device='xpu',
+        num_expert_tokens = torch.randint(low=0, high=max_tokens_per_expert + 1, size=(num_experts, ), device='cuda',
                                           dtype=torch.int32)
         out_shape = (num_experts, max_tokens_per_expert, N)
 
@@ -183,11 +183,11 @@ def get_batched_mm_benchmark(
             del A, B
         quantiles = [0.5, 0.0, 1.0]
 
-        C = torch.zeros(out_shape, device='xpu', dtype=dtype)
+        C = torch.zeros(out_shape, device='cuda', dtype=dtype)
         compute_tl_dtype = {torch.float16: tl.float16, torch.bfloat16: tl.bfloat16, torch.float32: tl.float32}[C.dtype]
         rtol = 6e-2 if dtype == torch.bfloat16 else 1e-2
         atol = 6e-2 if dtype == torch.bfloat16 else 1e-2
-        ref = torch.zeros(out_shape, device='xpu', dtype=dtype)
+        ref = torch.zeros(out_shape, device='cuda', dtype=dtype)
 
         def torch_fn():
             native_batched_masked_quant_matmul(A_q, B_q, ref, num_expert_tokens, A_scale, B_scale, block_shape,

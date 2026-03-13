@@ -32,7 +32,7 @@ from triton.testing import assert_close as triton_assert_close, Benchmark, do_be
 from triton_kernels_benchmark import build_report
 from triton_kernels_benchmark.benchmark_shapes_parser import ShapePatternParser
 
-BENCHMARKING_METHOD = os.getenv("BENCHMARKING_METHOD", "UPSTREAM_PYTORCH_PROFILER")
+BENCHMARKING_METHOD = os.getenv("BENCHMARKING_METHOD", "ELAPSED_TIME")
 BENCHMARKING_CONFIG = {
     "verify": os.getenv("VERIFY", "1") == "1",
 }
@@ -76,7 +76,7 @@ def _summarize_statistics(times, quantiles, return_mode):
 
 
 def do_bench_elapsed_time(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quantiles=None, return_mode="mean",
-                          device="xpu", time_warmup=False, benchmark_label=None,  # pylint: disable=W0613
+                          device="cuda", time_warmup=False, benchmark_label=None,  # pylint: disable=W0613
                           ):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
@@ -102,8 +102,8 @@ def do_bench_elapsed_time(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quan
     cache = torch.empty(int(cache_size // 4), dtype=torch.int, device=device)
 
     # Estimate the runtime of the function
-    start_event = torch.xpu.Event(enable_timing=True)
-    end_event = torch.xpu.Event(enable_timing=True)
+    start_event = torch.cuda.Event(enable_timing=True)
+    end_event = torch.cuda.Event(enable_timing=True)
     start_event.record()
     for _ in range(5):
         cache.zero_()
@@ -129,7 +129,7 @@ def do_bench_elapsed_time(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quan
 
 
 def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quantiles=None,
-                                       return_mode="mean", device="xpu", sync_submitting=True, time_warmup=True,
+                                       return_mode="mean", device="cuda", sync_submitting=True, time_warmup=True,
                                        benchmark_label=None, max_iters=1500):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
@@ -177,7 +177,7 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
                 synchronize()
 
     # Benchmark
-    with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.XPU]) as prof:
+    with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:
         for _ in range(n_repeat):
             # we don't want `fn` to accumulate gradient values
             # if it contains a backward pass. So we clear the
@@ -217,7 +217,7 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
     if not (len(kernels) >= n_repeat - 1 if relax_profiling_data_check else len(kernels) == n_repeat):
         raise AssertionError(
             f"the profiling number not match; {n_repeat=}, {kernels=}, "
-            f"top functions by xpu_time:\n {prof.key_averages(group_by_stack_n=5).table(sort_by='xpu_time')}",
+            f"top functions by cuda_time:\n {prof.key_averages(group_by_stack_n=5).table(sort_by='cuda_time')}",
             "You may try to relax profiling check by setting env variable TRITON_RELAX_PROFILING_CHECK=1",
         )
     # Make the time to the milliseconds.
@@ -225,7 +225,7 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
     return _summarize_statistics(times, quantiles, return_mode)
 
 
-def do_bench_proton(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quantiles=None, return_mode="mean", device="xpu",
+def do_bench_proton(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quantiles=None, return_mode="mean", device="cuda",
                     sync_submitting=True, time_warmup=True, benchmark_label=None, max_iters=1500):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
@@ -350,7 +350,7 @@ def filter_providers(
 
 
 def get_gpu_info():
-    device_name = torch.xpu.is_available() and torch.xpu.get_device_name()
+    device_name = torch.cuda.is_available() and torch.cuda.get_device_name()
     if device_name is None:
         print("Couldn't read device name.")
         return None, None

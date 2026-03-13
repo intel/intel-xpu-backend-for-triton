@@ -1,5 +1,5 @@
 diff --git a/vllm/model_executor/layers/fused_moe/fused_batched_moe.py b/vllm/model_executor/layers/fused_moe/fused_batched_moe.py
-index 7fd8511e2..dd284261e 100644
+index 7fd8511e2..a437623d0 100644
 --- a/vllm/model_executor/layers/fused_moe/fused_batched_moe.py
 +++ b/vllm/model_executor/layers/fused_moe/fused_batched_moe.py
 @@ -23,8 +23,8 @@ from vllm.triton_utils import tl, triton
@@ -126,24 +126,24 @@ index 7fd8511e2..dd284261e 100644
 +def get_batched_moe_configs():
 +    return [
 +        triton.Config({'BLOCK_M': 256, 'BLOCK_N': 256, 'BLOCK_K': 32,
-+                       'grf_mode': '256'}, num_stages=s, num_warps=32)
++                       }, num_stages=s, num_warps=32)
 +        for s in [2, 3]
 +    ] + [
 +        triton.Config({'BLOCK_M': 256, 'BLOCK_N': 128, 'BLOCK_K': 32,
-+                       'grf_mode': m}, num_stages=s, num_warps=w)
++                       }, num_stages=s, num_warps=w)
 +        for s in [2]
 +        for (m, w) in ([('256', 32), ('128', 64)])
 +    ] + [
 +        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 32,
-+                       'grf_mode': '256'}, num_stages=s, num_warps=32)
++                       }, num_stages=s, num_warps=32)
 +        for s in [2]
 +    ] + [
 +        triton.Config({'BLOCK_M': 8, 'BLOCK_N': 512, 'BLOCK_K': 64,
-+                       'grf_mode': '256'}, num_stages=s, num_warps=32)
++                       }, num_stages=s, num_warps=32)
 +        for s in [2]
 +    ] + [
 +        triton.Config({'BLOCK_M': 8, 'BLOCK_N': 128, 'BLOCK_K': 64,
-+                       'grf_mode': '256'}, num_stages=s, num_warps=4)
++                       }, num_stages=s, num_warps=4)
 +        for s in [2]
 +    ]
 +
