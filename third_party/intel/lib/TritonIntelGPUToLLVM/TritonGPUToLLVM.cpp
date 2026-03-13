@@ -8,6 +8,7 @@
 #include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
 
 #include "intel/include/Analysis/AxisInfo.h"
+#include "intel/include/Analysis/StrideInfo.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/GPUToTritonGEN/GPUToTritonGENPass.h"
@@ -120,12 +121,15 @@ struct ConvertTritonGPUToLLVM
     }
 
     mlir::triton::intel::ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
+    mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(mod,
+                                                             axisInfoAnalysis);
     OpBuilder::InsertPoint indexInsertPoint;
 
     RewritePatternSet patterns(context);
     int benefit = patternBenefitPrioritizeOverLLVMConversions;
-    pipelineManager.populateConversionPatterns(
-        patterns, axisInfoAnalysis, typeConverter, *targetInfo, benefit);
+    pipelineManager.populateConversionPatterns(patterns, axisInfoAnalysis,
+                                               strideAnalysis, typeConverter,
+                                               *targetInfo, benefit);
 
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();
