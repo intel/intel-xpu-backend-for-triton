@@ -287,13 +287,13 @@ jobs:
       - name: Set SPIRVRunner dump dir
         if: matrix.suite == 'triton-kernels'
         run: |
-          echo "TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS=$GITHUB_WORKSPACE/spirv-input-data" | tee -a $GITHUB_ENV
+          echo "TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS=$GITHUB_WORKSPACE/spirvrunner-input-data" | tee -a $GITHUB_ENV
 
-      - name: Set IGC dump dir
+      - name: Set IGC shader dump dir
         if: matrix.suite == 'triton-kernels'
         run: |
           echo "IGC_ShaderDumpEnable=1" | tee -a $GITHUB_ENV
-          echo "IGC_DumpToCustomDir=$GITHUB_WORKSPACE/igc-dumps" | tee -a $GITHUB_ENV
+          echo "IGC_DumpToCustomDir=$GITHUB_WORKSPACE/igc-shader-dumps" | tee -a $GITHUB_ENV
 
       - name: Run triton kernels tests
         continue-on-error: true
@@ -314,7 +314,7 @@ jobs:
         if: matrix.suite == 'triton-kernels'
         uses: actions/upload-artifact@v7
         with:
-          name: igc-dumps
+          name: igc-shader-dumps
           include-hidden-files: true
           path: ${{ env.IGC_DumpToCustomDir }}
 
