@@ -11,6 +11,7 @@
 
 include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
+include "triton/Dialect/Triton/IR/TritonOpInterfaces.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUOpInterfaces.td"
 include "intel/include/Dialect/TritonIntelGPU/IR/TritonIntelGPUAttrDefs.td"
@@ -76,6 +77,35 @@ def TTIG_PrefetchOp : TTIG_Op<"prefetch", [
   let assemblyFormat = [{
     $ptr (`,` $mask^)? attr-dict `:` type($ptr)
   }];
+}
+
+
+def TTIG_DescriptorPrefetchOp : TTIG_Op<"descriptor_prefetch", [MemoryEffects<[MemWrite<L2Cache>]>, TT_DescriptorOpInterface]> {
+  let summary = "Tensor descriptor prefetch operation";
+  let description = [{
+    The `descriptor_prefetch` operation prefetches data using a tensor descriptor.
+    Example:
+      ```mlir
+      ttig.descriptor_prefetch %desc[%x, %y] cacheModifier = none evictionPolicy = normal
+          : !tt.tensor_desc<tensor<256x32xf16>>
+      ```
+  }];
+  let arguments = (ins
+    Arg<TT_TensorDescType, "Global memory pointer", [MemRead]>:$desc,
+    Variadic<I32>:$indices,
+    DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
+    DefaultValuedAttr<TT_EvictionPolicyAttr, "::mlir::triton::EvictionPolicy::NORMAL">:$evict
+  );
+  let results = (outs);
+  let assemblyFormat = [{
+    $desc `[` $indices `]`
+    oilist(
+      `cacheModifier` `=` $cache |
+      `evictionPolicy` `=` $evict
+    )
+    attr-dict `:` qualified(type($desc))
+  }];
+  let hasVerifier = 1;
 }
 
 // same as tt.broadcast except that we don't require SameOperandsAndResultEncoding

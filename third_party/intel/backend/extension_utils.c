@@ -123,8 +123,7 @@ extern "C" EXPORT_FUNC PyObject *check_extension(int device_id,
     }
 
     if (devices->empty()) {
-      PyErr_SetString(PyExc_RuntimeError, "No GPU devices available");
-      return NULL;
+      Py_RETURN_NONE;
     }
 
     // Find the device matching the provided device_id
@@ -137,9 +136,7 @@ extern "C" EXPORT_FUNC PyObject *check_extension(int device_id,
     }
 
     if (device_idx == -1) {
-      PyErr_Format(PyExc_RuntimeError, "No device found with device_id: %d",
-                   device_id);
-      return NULL;
+      Py_RETURN_NONE;
     }
 
     const sycl::device target_device = (*devices)[device_idx];
@@ -160,8 +157,7 @@ extern "C" EXPORT_FUNC PyObject *check_extension(int device_id,
     Py_RETURN_FALSE;
 
   } catch (const std::exception &e) {
-    PyErr_SetString(PyExc_RuntimeError, e.what());
-    return NULL;
+    Py_RETURN_FALSE;
   }
 }
 

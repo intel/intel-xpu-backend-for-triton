@@ -104,6 +104,14 @@ std::optional<OpTy> findDefiningOpOfType(Value val) {
         return std::nullopt;
       return trueDef;
     }
+    if (auto castOp = dyn_cast<mlir::UnrealizedConversionCastOp>(defOp)) {
+      // Follow through unrealized conversion casts inserted by the type
+      // conversion framework (e.g. applyPartialConversion remapping of
+      // function arguments).
+      if (castOp.getInputs().size() == 1)
+        return findDefiningOpOfType<OpTy>(castOp.getInputs()[0]);
+      return std::nullopt;
+    }
 
     llvm::errs() << "defOp: " << *defOp << "\n";
     assert(false && "unhandled operation");
