@@ -125,6 +125,22 @@ def get_matmul_batched_autotune_configs() -> List[triton.Config]:
         triton.Config(
             {'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'grf_mode': '256'},
             num_stages=s, num_warps=4) for s in [2]
+    ] + [
+        triton.Config(
+            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8, 'grf_mode': '256'},
+            num_stages=2,
+            num_warps=32,
+        ),
+        triton.Config(
+            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8, 'grf_mode': '256'},
+            num_stages=3,
+            num_warps=32,
+        ),
+        triton.Config(
+            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 8, 'grf_mode': '256'},
+            num_stages=2,
+            num_warps=16,
+        ),
     ]
     return configs
 
