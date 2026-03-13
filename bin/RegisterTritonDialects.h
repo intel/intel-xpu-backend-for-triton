@@ -87,6 +87,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::registerTritonPasses();
   mlir::triton::gpu::registerTritonGPUPasses();
   mlir::triton::nvidia_gpu::registerTritonNvidiaGPUPasses();
+  mlir::triton::nvidia_gpu::registerConSanNVIDIAHooks();
   mlir::test::intel::registerTestAxisInfoPass();
   mlir::test::intel::registerTestRangeAnalysisPass();
   mlir::test::intel::registerTestStrideInfoPass();

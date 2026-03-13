@@ -1,5 +1,4 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
-#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
@@ -95,6 +94,7 @@ tt::MakeTensorPtrOp tt::getMakeTensorPtrOp(Value v) {
   }
   llvm_unreachable("Unable to getMakeTensorPtr()");
 }
+
 
 Value tt::getLastInductionValue(OpBuilder &b, scf::ForOp loop) {
   Location loc = loop.getLoc();
