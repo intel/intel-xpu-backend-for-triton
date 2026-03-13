@@ -1584,10 +1584,9 @@ def _wrap_init_args(x):
 
 
 def _aggregate(cls):
-    field_annotations = typing.get_type_hints(cls)
-    field_names = builtins.tuple(field_annotations.keys())
     init = cls.__dict__.get("__init__", None)
     if init is None:
+        field_names = builtins.tuple(cls.__annotations__.keys())
 
         def init(self, *args, **kwargs):
             if len(args) > len(field_names):
@@ -1617,7 +1616,7 @@ def _aggregate(cls):
     class aggregate_value(base_value):
         __triton_builtin__ = True
         __triton_aggregate__ = True
-        __annotations__ = field_annotations
+        __annotations__ = cls.__annotations__
 
         @classmethod
         def _get_instance(this_cls):
@@ -1638,7 +1637,7 @@ def _aggregate(cls):
             init(instance, *args, **extra_kwargs, **kwargs)
 
             # Require that the user-defined constructor initialized all fields.
-            for name in field_names:
+            for name in cls.__annotations__.keys():
                 if not hasattr(instance, name):
                     raise AttributeError(f"constructor for {cls.__name__} did not initialize attribute '{name}'")
 
@@ -1646,23 +1645,24 @@ def _aggregate(cls):
 
         # Only allow setting attributes defined in the class annotations.
         def __setattr__(self, name, value):
-            if name not in field_annotations:
+            if name not in cls.__annotations__:
                 raise AttributeError(f"{cls.__name__} has no attribute '{name}'")
-            if not isinstance(value, field_annotations[name]):
-                raise TypeError(f"Expected {field_annotations[name]} for attribute '{name}', got {type(value)}")
+            if not isinstance(value, cls.__annotations__[name]):
+                raise TypeError(f"Expected {cls.__annotations__[name]} for attribute '{name}', got {type(value)}")
             super().__setattr__(name, value)
 
         def _set_name(self, builder: ir.builder, name: str) -> None:
-            for key_name in field_names:
+            for key_name in cls.__annotations__.keys():
                 getattr(self, key_name)._set_name(builder, f"{name}.{key_name}")
 
         def _flatten_ir(self, handles: List[ir.value]) -> None:
-            for name in field_names:
+            for name in cls.__annotations__.keys():
                 getattr(self, name)._flatten_ir(handles)
 
         @property
         def type(self):
-            return _aggregate_type(aggregate_value, [(name, getattr(self, name).type) for name in field_names])
+            return _aggregate_type(aggregate_value,
+                                   [(name, getattr(self, name).type) for name in cls.__annotations__.keys()])
 
     hash_attrs = [init]
 
@@ -2427,11 +2427,6 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
     :param volatile: changes volatile option in NVIDIA PTX
     :type volatile: bool, optional
     """
-    if _is_block_ptr(pointer):
-        return pointer.load(mask=mask, other=other, boundary_check=boundary_check, padding_option=padding_option,
-                            cache_modifier=cache_modifier, eviction_policy=eviction_policy, volatile=volatile,
-                            _semantic=_semantic)
-
     # `mask` and `other` can be constexpr
     mask = _unwrap_if_constexpr(mask)
     other = _unwrap_if_constexpr(other)
@@ -2502,10 +2497,6 @@ def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", evict
     :param eviction_policy: changes eviction policy in NVIDIA PTX
     :type eviction_policy: str, optional, should be one of {"", "evict_first", "evict_last"}
     """
-    if _is_block_ptr(pointer):
-        return pointer.store(value, mask=mask, boundary_check=boundary_check, cache_modifier=cache_modifier,
-                             eviction_policy=eviction_policy, _semantic=_semantic)
-
     # `value` can be constexpr
     value = _semantic.to_tensor(value)
     mask = _unwrap_if_constexpr(mask)
@@ -2529,7 +2520,7 @@ def make_block_ptr(base: tensor, shape, strides, offsets, block_shape, order, _s
     :param order: The order of the original data format
     """
     warn("tl.make_block_ptr is deprecated. Use TensorDescriptor or tl.make_tensor_descriptor instead.")
-    return _block_ptr(base, shape, strides, offsets, block_shape, order, _semantic=_semantic)
+    return _semantic.make_block_ptr(base, shape, strides, offsets, block_shape, order)
 
 
 @must_use_result(
@@ -2544,9 +2535,7 @@ def advance(base, offsets, _semantic=None):
     :param base: the block pointer to advance
     :param offsets: the offsets to advance, a tuple by dimension
     """
-    if _is_block_ptr(base):
-        return base.advance(offsets, _semantic=_semantic)
-    raise ValueError("`tl.advance` only supports block pointers created by `tl.make_block_ptr`")
+    return _semantic.advance(base, offsets)
 
 
 @builtin

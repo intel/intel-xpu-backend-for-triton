@@ -55,7 +55,7 @@ def TT_PtrType : TritonTypeDef<"Pointer", "ptr"> {
     let summary = "Pointer type (`::mlir::triton::PointerType`) in Triton IR type system";
 
     let description = [{
-        Pointer type in Triton IR type system. Pointer types may only point to scalar element types.
+        Pointer type in Triton IR type system, which could be pointing to scalars or tensors.
     }];
 
     let parameters = (ins "Type":$pointeeType, "int":$addressSpace);
@@ -70,7 +70,6 @@ def TT_PtrType : TritonTypeDef<"Pointer", "ptr"> {
     ];
 
     let hasCustomAssemblyFormat = 1;
-    let genVerifyDecl = 1;
 
     let skipDefaultBuilders = 1;
 }
@@ -88,8 +87,11 @@ def TT_PtrLike : AnyTypeOf<[TT_Ptr, TT_PtrTensor]>;
 def TT_FpIntTensor : RankedTensorOf<[TT_Float, TT_Int]>;
 def TT_Tensor : RankedTensorOf<[TT_Float, TT_Int, TT_Ptr]>;
 
+// Pointer Type to Tensor Type: `ptr<tensor<>>`
+def TT_TensorPtr : TT_PtrOf<[TT_Tensor]>;
+
 // Any Type in Triton IR
-def TT_Type : AnyTypeOf<[TT_FloatLike, TT_IntLike, TT_PtrLike]>;
+def TT_Type : AnyTypeOf<[TT_FloatLike, TT_IntLike, TT_PtrLike, TT_TensorPtr]>;
 
 // Type constraint for any type implementing TensorDescInterface
 def TT_AnyTensorDescType : Type<

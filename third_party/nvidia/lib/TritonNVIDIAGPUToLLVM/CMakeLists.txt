@@ -13,6 +13,7 @@ add_triton_library(TritonNVIDIAGPUToLLVM
     TMAToLLVM.cpp
     SPMDOpToLLVM.cpp
     TensorMemoryToLLVM.cpp
+    TensorPtrOpsToLLVM.cpp
     ClusterOpsToLLVM.cpp
     PTXAsmFormat.cpp
     Utility.cpp

@@ -52,14 +52,6 @@ void PointerType::print(AsmPrinter &printer) const {
   }
 }
 
-LogicalResult PointerType::verify(function_ref<InFlightDiagnostic()> emitError,
-                                  Type pointeeType, int addressSpace) {
-  if (isa<RankedTensorType>(pointeeType)) {
-    return emitError() << "pointer types cannot point to ranked tensor types";
-  }
-  return success();
-}
-
 namespace mlir {
 
 namespace triton {
@@ -124,6 +116,23 @@ int getAddressSpace(Type type) {
   if (auto ptrType = dyn_cast<PointerType>(type))
     return ptrType.getAddressSpace();
   return 1;
+}
+
+bool isTensorPointerType(Type type) {
+  if (auto ptrType = dyn_cast<PointerType>(type))
+    return isa<RankedTensorType>(ptrType.getPointeeType());
+  return false;
+}
+
+bool isTensorOrTensorPointerType(Type type) {
+  return isa<RankedTensorType>(type) || isTensorPointerType(type);
+}
+
+Type getElementTypeOfTensorPointerType(Type type) {
+  if (auto ptrType = dyn_cast<PointerType>(type))
+    if (auto tensorTy = dyn_cast<RankedTensorType>(ptrType.getPointeeType()))
+      return tensorTy.getElementType();
+  return {};
 }
 
 } // namespace triton
