@@ -50,7 +50,7 @@ public:
 
 private:
   // Check if the last stride is 1, which is required for tensor descriptor.
-  bool hasUnitInnerStride(tt::MakeTensorPtrOp makeTensorPtrOp) const {
+  bool hasUnitInnerStride(tt::intel::MakeTensorPtrOp makeTensorPtrOp) const {
     SmallVector<Value> strides = makeTensorPtrOp.getStrides();
     if (strides.empty())
       return false;
@@ -87,12 +87,12 @@ private:
 
     auto skipAdvance = [](Value ptr) {
       while (auto advanceOp =
-                 dyn_cast_or_null<tt::AdvanceOp>(ptr.getDefiningOp()))
+                 dyn_cast_or_null<tt::intel::AdvanceOp>(ptr.getDefiningOp()))
         ptr = advanceOp.getPtr();
       return ptr;
     };
 
-    tt::MakeTensorPtrOp makeTensorPtrOp;
+    tt::intel::MakeTensorPtrOp makeTensorPtrOp;
     if (auto arg = dyn_cast<BlockArgument>(ptr)) {
       Operation *parentOp = arg.getParentBlock()->getParentOp();
       // FIXME: Add support of other loop ops if needed.
@@ -101,7 +101,7 @@ private:
         return false;
       Value initArg =
           forOp.getInitArgs()[arg.getArgNumber() - forOp.getNumInductionVars()];
-      makeTensorPtrOp = dyn_cast_or_null<tt::MakeTensorPtrOp>(
+        makeTensorPtrOp = dyn_cast_or_null<tt::intel::MakeTensorPtrOp>(
           skipAdvance(initArg).getDefiningOp());
       if (!makeTensorPtrOp)
         return false;
@@ -110,7 +110,7 @@ private:
       if (skipAdvance(yieldVal) != arg)
         return false;
     } else {
-      makeTensorPtrOp = dyn_cast_or_null<tt::MakeTensorPtrOp>(
+        makeTensorPtrOp = dyn_cast_or_null<tt::intel::MakeTensorPtrOp>(
           skipAdvance(ptr).getDefiningOp());
       if (!makeTensorPtrOp)
         return false;
@@ -124,7 +124,7 @@ private:
   }
 
   tt::MakeTensorDescOp
-  createMakeTensorDescOp(tt::MakeTensorPtrOp makeTensorPtrOp,
+  createMakeTensorDescOp(tt::intel::MakeTensorPtrOp makeTensorPtrOp,
                          tt::PaddingOption padding) {
     OpBuilder builder(makeTensorPtrOp);
     Location loc = makeTensorPtrOp.getLoc();
@@ -168,20 +168,21 @@ private:
 
     auto accumulateIndices = [&](Value v, SmallVector<Value> &indices) {
       Value curr = v;
-      SmallVector<tt::AdvanceOp> advanceOps;
+      SmallVector<tt::intel::AdvanceOp> advanceOps;
       while (auto advanceOp =
-                 dyn_cast_or_null<tt::AdvanceOp>(curr.getDefiningOp())) {
+                 dyn_cast_or_null<tt::intel::AdvanceOp>(curr.getDefiningOp())) {
         advanceOps.push_back(advanceOp);
         curr = advanceOp.getPtr();
         cleanUp.insert(advanceOp);
       }
       if (auto makeTensorPtrOp =
-              dyn_cast_or_null<tt::MakeTensorPtrOp>(curr.getDefiningOp())) {
+              dyn_cast_or_null<tt::intel::MakeTensorPtrOp>(
+                  curr.getDefiningOp())) {
         OpBuilder builder(makeTensorPtrOp);
         addIndices(builder, makeTensorPtrOp.getLoc(),
                    makeTensorPtrOp.getOffsets(), indices);
       }
-      for (tt::AdvanceOp advanceOp : llvm::reverse(advanceOps)) {
+      for (tt::intel::AdvanceOp advanceOp : llvm::reverse(advanceOps)) {
         OpBuilder builder(advanceOp);
         addIndices(builder, advanceOp.getLoc(), advanceOp.getOffsets(),
                    indices);
@@ -257,7 +258,8 @@ private:
                 bool> = true>
   DescOpTy rewriteBlockPointer(OpTy op) {
     auto makeTensorPtrOp =
-        *tt::intel::findDefiningOpOfType<tt::MakeTensorPtrOp>(op.getPtr());
+      *tt::intel::findDefiningOpOfType<tt::intel::MakeTensorPtrOp>(
+        op.getPtr());
     auto padding = tt::PaddingOption::PAD_ZERO;
     if constexpr (std::is_same_v<OpTy, tt::LoadOp>)
       if (op.getPadding().has_value())
@@ -285,7 +287,7 @@ private:
       llvm::MapVector<scf::ForOp, llvm::SmallSetVector<unsigned, 4>>
           &forOpsToClean) const {
     for (Operation *op : ops) {
-      auto makeTensorPtrOp = dyn_cast<tt::MakeTensorPtrOp>(op);
+      auto makeTensorPtrOp = dyn_cast<tt::intel::MakeTensorPtrOp>(op);
       if (!makeTensorPtrOp || !makeTensorPtrOp->hasOneUse())
         continue;
 
@@ -302,7 +304,7 @@ private:
         continue;
 
       Operation *nextOp = arg.use_begin()->getOwner();
-      while (auto advanceOp = dyn_cast<tt::AdvanceOp>(nextOp)) {
+      while (auto advanceOp = dyn_cast<tt::intel::AdvanceOp>(nextOp)) {
         if (!advanceOp->hasOneUse() || !ops.contains(advanceOp))
           break;
         nextOp = advanceOp->use_begin()->getOwner();

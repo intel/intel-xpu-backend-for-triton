@@ -39,9 +39,9 @@ public:
       LLVM_DEBUG(llvm::dbgs()
                  << "Analyzing boundaryCheck for: " << loadOp << "\n");
 
-      auto makeTensorPtrOp =
-          *tt::intel::findDefiningOpOfType<tt::MakeTensorPtrOp>(
-              loadOp.getPtr());
+        auto makeTensorPtrOp =
+          *tt::intel::findDefiningOpOfType<tt::intel::MakeTensorPtrOp>(
+            loadOp.getPtr());
 
       SmallVector<int> newBoundaryCheck;
       for (int boundIdx : loadOp.getBoundaryCheck()) {
@@ -129,13 +129,16 @@ private:
     if (!tt::isTensorPointerType(ptrType))
       return false;
 
-    std::optional<tt::MakeTensorPtrOp> makeTensorPtrOp =
-        tt::intel::findDefiningOpOfType<tt::MakeTensorPtrOp>(loadOp.getPtr());
+    std::optional<tt::intel::MakeTensorPtrOp> makeTensorPtrOp =
+      tt::intel::findDefiningOpOfType<tt::intel::MakeTensorPtrOp>(
+        loadOp.getPtr());
     if (!makeTensorPtrOp)
       return false;
 
-    if (llvm::any_of((*makeTensorPtrOp)->getUsers(),
-                     [](Operation *user) { return isa<tt::AdvanceOp>(user); }))
+    if (llvm::any_of(
+            (*makeTensorPtrOp)->getUsers(), [](Operation *user) {
+              return isa<tt::intel::AdvanceOp>(user);
+            }))
       return false;
 
     return true;

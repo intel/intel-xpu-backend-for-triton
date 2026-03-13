@@ -1,5 +1,6 @@
 #include "intel/include/Analysis/StrideInfo.h"
 #include "intel/include/Analysis/AxisInfo.h"
+#include "intel/include/Utils/Utility.h"
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -167,10 +168,10 @@ public:
 // AdvanceOp: stride passes from operand 0 (the pointer operand).
 // AdvanceOp has variadic offsets so it cannot use PassThroughStrideVisitor.
 class AdvanceOpStrideVisitor final
-    : public StrideInfoVisitorImpl<triton::AdvanceOp> {
+    : public StrideInfoVisitorImpl<AdvanceOp> {
 public:
   StrideInfo getStrideInfo(
-      triton::AdvanceOp op,
+      AdvanceOp op,
       ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
     assert(!operands.empty() && "AdvanceOp must have at least one operand");
     return operands[0]->getValue();
@@ -426,10 +427,10 @@ public:
 };
 
 class MakeTensorPtrOpStrideVisitor final
-    : public StrideInfoVisitorImpl<triton::MakeTensorPtrOp> {
+    : public StrideInfoVisitorImpl<MakeTensorPtrOp> {
 public:
   StrideInfo getStrideInfo(
-      triton::MakeTensorPtrOp op,
+      MakeTensorPtrOp op,
       ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
     StrideInfo::DimVectorT result;
     for (Value s : op.getStrides()) {

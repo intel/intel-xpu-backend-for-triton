@@ -288,7 +288,7 @@ private:
   // Otherwise, return the existing one. The function takes the base, shape,
   // strides, offsets, sizes of the block pointer to create/lookup and its
   // tensor element type (to ensure the block pointer has the tensor layout).
-  tt::MakeTensorPtrOp
+  tt::intel::MakeTensorPtrOp
   findOrCreateMakeTensorPtr(Location loc, Value base, ValueRange shape,
                             ValueRange strides, ValueRange offsets,
                             ArrayRef<int64_t> sizes, Attribute layout,
@@ -296,7 +296,7 @@ private:
     Block *block = builder.getInsertionBlock();
     const Block::iterator insertPoint = builder.getInsertionPoint();
     auto it = std::find_if(block->begin(), insertPoint, [&](Operation &op) {
-      if (auto makeTensorPtrOp = dyn_cast<tt::MakeTensorPtrOp>(op)) {
+      if (auto makeTensorPtrOp = dyn_cast<tt::intel::MakeTensorPtrOp>(op)) {
         triton::PointerType resType = makeTensorPtrOp.getResult().getType();
         auto tensorType = cast<RankedTensorType>(resType.getPointeeType());
         auto sameShape = [](ArrayRef<int64_t> arr1, ArrayRef<int64_t> arr2) {
@@ -323,13 +323,13 @@ private:
           RankedTensorType::get(sizes, pointerType.getPointeeType(), layout);
       auto tensorPtrType =
           tt::PointerType::get(tensorType, pointerType.getAddressSpace());
-      auto makeTensorPtr = tt::MakeTensorPtrOp::create(
+      auto makeTensorPtr = tt::intel::MakeTensorPtrOp::create(
           builder, loc, tensorPtrType, base, shape, strides, offsets,
           builder.getDenseI32ArrayAttr({1, 0}));
       return makeTensorPtr;
     };
 
-    return (it != insertPoint) ? cast<tt::MakeTensorPtrOp>(*it)
+    return (it != insertPoint) ? cast<tt::intel::MakeTensorPtrOp>(*it)
                                : makeTensorPtrOp();
   }
 
@@ -442,8 +442,8 @@ private:
             opTensorType.getEncoding() == descTensorType.getEncoding()) &&
            "Expecting the same encoding");
 
-    Value ptr =
-        tt::AdvanceOp::create(builder, loc, ptrType, operand, op.getIndices());
+    Value ptr = tt::intel::AdvanceOp::create(builder, loc, ptrType, operand,
+                         op.getIndices());
 
     SmallVector<int32_t> boundaryCheck;
     for (size_t i = 0; i < descTensorType.getRank(); ++i)

@@ -66,14 +66,14 @@ private:
       return MaterializeTensorOfPointers(op, axisInfoAnalysis, strideAnalysis);
 
     // Find the make tensor ptr operation that created the base ptr.
-    std::optional<tt::MakeTensorPtrOp> defOp =
-        tt::intel::findDefiningOpOfType<tt::MakeTensorPtrOp>(ptr);
+    std::optional<tt::intel::MakeTensorPtrOp> defOp =
+      tt::intel::findDefiningOpOfType<tt::intel::MakeTensorPtrOp>(ptr);
     if (!defOp) {
       LDBG("Could not find make tensor ptr op for: " << *op);
       return;
     }
 
-    tt::MakeTensorPtrOp makeTensorPtrOp = *defOp;
+    tt::intel::MakeTensorPtrOp makeTensorPtrOp = *defOp;
     LDBG("Make tensor ptr op: " << makeTensorPtrOp);
 
     Operation::operand_range shape = makeTensorPtrOp.getShape();
@@ -286,7 +286,7 @@ private:
   }
 
   std::optional<unsigned>
-  getStrideOneDim(tt::MakeTensorPtrOp makeTensorPtrOp) const {
+  getStrideOneDim(tt::intel::MakeTensorPtrOp makeTensorPtrOp) const {
     assert(makeTensorPtrOp && "Expected a make tensor ptr op.");
     Operation::operand_range strides = makeTensorPtrOp.getStrides();
     std::optional<unsigned> strideOneDim{std::nullopt};
@@ -309,10 +309,10 @@ private:
 
     // Find the make tensor ptr operation that created the base ptr for the load
     // operation.
-    std::optional<tt::MakeTensorPtrOp> defOp =
-        tt::intel::findDefiningOpOfType<tt::MakeTensorPtrOp>(ptr);
+    std::optional<tt::intel::MakeTensorPtrOp> defOp =
+      tt::intel::findDefiningOpOfType<tt::intel::MakeTensorPtrOp>(ptr);
     assert(defOp && "Expected a make tensor ptr op.");
-    tt::MakeTensorPtrOp makeTensorPtrOp = *defOp;
+    tt::intel::MakeTensorPtrOp makeTensorPtrOp = *defOp;
     Operation::operand_range shape = makeTensorPtrOp.getShape();
     if (shape.size() == 1)
       return false;
@@ -383,7 +383,7 @@ private:
 
     auto checkUsers = [&](Value::user_range users) {
       return llvm::all_of(users, [&](Operation *user) {
-        if (isa<tt::MakeTensorPtrOp>(user))
+        if (isa<tt::intel::MakeTensorPtrOp>(user))
           return true;
         if (Operation *addOp = dyn_cast<arith::AddIOp>(user)) {
           auto other = llvm::find_if(addOp->getOperands(),

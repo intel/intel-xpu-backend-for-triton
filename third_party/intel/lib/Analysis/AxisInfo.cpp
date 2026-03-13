@@ -1,5 +1,6 @@
 #include "intel/include/Analysis/AxisInfo.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+#include "intel/include/Utils/Utility.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
@@ -1143,12 +1144,12 @@ makeTensorPtrAxisInfo(ArrayRef<int64_t> blkShape, unsigned rank,
 }
 
 class MakeTensorPtrOpAxisInfoVisitor final
-    : public AxisInfoVisitorImpl<triton::MakeTensorPtrOp> {
+    : public AxisInfoVisitorImpl<MakeTensorPtrOp> {
 public:
-  using AxisInfoVisitorImpl<triton::MakeTensorPtrOp>::AxisInfoVisitorImpl;
+  using AxisInfoVisitorImpl<MakeTensorPtrOp>::AxisInfoVisitorImpl;
 
   AxisInfo
-  getAxisInfo(triton::MakeTensorPtrOp op,
+  getAxisInfo(MakeTensorPtrOp op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
     LDBG("MakeTensorPtrOpAxisInfoVisitor: " << *op);
 
@@ -1175,11 +1176,11 @@ public:
 };
 
 class AdvanceOpAxisInfoVisitor final
-    : public AxisInfoVisitorImpl<triton::AdvanceOp> {
+    : public AxisInfoVisitorImpl<AdvanceOp> {
 public:
-  using AxisInfoVisitorImpl<triton::AdvanceOp>::AxisInfoVisitorImpl;
+  using AxisInfoVisitorImpl<AdvanceOp>::AxisInfoVisitorImpl;
   AxisInfo
-  getAxisInfo(triton::AdvanceOp op,
+  getAxisInfo(AdvanceOp op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
     return operands[0]->getValue();
   }

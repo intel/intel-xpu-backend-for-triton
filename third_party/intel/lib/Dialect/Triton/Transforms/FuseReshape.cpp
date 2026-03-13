@@ -56,7 +56,7 @@ public:
         llvm::TypeSwitch<Operation *>(srcOp)
             .Case<tt::LoadOp>([&](auto loadOp) {
               auto makeTensorPtrOp =
-                  *tt::intel::findDefiningOpOfType<tt::MakeTensorPtrOp>(
+                  *tt::intel::findDefiningOpOfType<tt::intel::MakeTensorPtrOp>(
                       loadOp.getPtr());
               manager.createChains(makeTensorPtrOp, reshapeOp);
             })
@@ -108,7 +108,7 @@ private:
            "Expecting 'chain' to be terminated by a 'tt.reshape' operation");
 
     llvm::TypeSwitch<Operation *>(chain.getStart())
-        .Case<tt::MakeTensorPtrOp>([&](auto makeTensorPtrOp) {
+        .Case<tt::intel::MakeTensorPtrOp>([&](auto makeTensorPtrOp) {
           fuseMakeTensorPtrOp(chain, makeTensorPtrOp);
         })
         .Case<tt::MakeTensorDescOp>([&](auto makeTensorDescOp) {
@@ -120,7 +120,7 @@ private:
   }
 
   void fuseMakeTensorPtrOp(const DefUseChain &chain,
-                           tt::MakeTensorPtrOp makeTensorPtrOp) {
+                           tt::intel::MakeTensorPtrOp makeTensorPtrOp) {
     assert(chain.getStart() == makeTensorPtrOp &&
            "Unexpected 'chain' start operation");
     assert(isa<tt::ReshapeOp>(chain.getEnd()) &&
@@ -189,7 +189,7 @@ private:
             arith::TruncIOp::create(builder, loc, offsets[0].getType(), div)),
         newOffsets[newOutermostDimIdx]);
 
-    Value ptr = tt::MakeTensorPtrOp::create(
+    Value ptr = tt::intel::MakeTensorPtrOp::create(
         builder, loc, newPtrType, makeTensorPtrOp.getBase(), newShape,
         newStrides, newOffsets,
         DenseI32ArrayAttr::get(
@@ -377,8 +377,9 @@ private:
     if (!tt::isTensorPointerType(ptrType))
       return false;
 
-    std::optional<tt::MakeTensorPtrOp> makeTensorPtrOp =
-        tt::intel::findDefiningOpOfType<tt::MakeTensorPtrOp>(loadOp.getPtr());
+    std::optional<tt::intel::MakeTensorPtrOp> makeTensorPtrOp =
+      tt::intel::findDefiningOpOfType<tt::intel::MakeTensorPtrOp>(
+        loadOp.getPtr());
     if (!makeTensorPtrOp)
       return false;
 
@@ -450,11 +451,12 @@ private:
     }
 
     Location loc = user->getLoc();
-    if (auto advanceOp = dyn_cast<tt::AdvanceOp>(user)) {
+    if (auto advanceOp = dyn_cast<tt::intel::AdvanceOp>(user)) {
       OpBuilder rewriter(advanceOp);
       SmallVector<Value> newOffsets(advanceOp.getOffsets().drop_front());
-      auto newAdvanceOp = tt::AdvanceOp::create(rewriter, loc, newVal.getType(),
-                                                newVal, newOffsets);
+      auto newAdvanceOp =
+          tt::intel::AdvanceOp::create(rewriter, loc, newVal.getType(), newVal,
+                                       newOffsets);
       mapping.map(static_cast<Operation *>(advanceOp),
                   static_cast<Operation *>(newAdvanceOp));
       LLVM_DEBUG(llvm::dbgs().indent(2)

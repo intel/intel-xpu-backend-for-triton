@@ -802,12 +802,14 @@ void LayoutPropagation::rewriteAssertOp(tt::AssertOp assertOp) {
 
 // Recursively update the operands in a chain of AdvanceOps, after setting the
 // pointer operand of the first one.
-static void updateAdvanceOpChain(tt::AdvanceOp advanceOp, tt::StoreOp storeOp,
-                                 Value parentPtr, Value dataToStore) {
+static void updateAdvanceOpChain(tt::intel::AdvanceOp advanceOp,
+                 tt::StoreOp storeOp, Value parentPtr,
+                 Value dataToStore) {
   OpBuilder rewriter(advanceOp);
   auto newAdvanceOp =
-      tt::AdvanceOp::create(rewriter, advanceOp.getLoc(), parentPtr.getType(),
-                            parentPtr, advanceOp.getOffsets());
+    tt::intel::AdvanceOp::create(rewriter, advanceOp.getLoc(),
+                   parentPtr.getType(), parentPtr,
+                   advanceOp.getOffsets());
 
   SmallVector<Operation *> advanceOpUsers(advanceOp->getUsers());
   for (Operation *user : advanceOpUsers) {
@@ -820,7 +822,7 @@ static void updateAdvanceOpChain(tt::AdvanceOp advanceOp, tt::StoreOp storeOp,
       // The inconsistency will be corrected in the subsequent code,
       // however, there is room for improvement.
       continue;
-    } else if (auto nextAdvanceOp = dyn_cast<tt::AdvanceOp>(user)) {
+    } else if (auto nextAdvanceOp = dyn_cast<tt::intel::AdvanceOp>(user)) {
       updateAdvanceOpChain(nextAdvanceOp, storeOp, newAdvanceOp, dataToStore);
     } else {
       llvm::errs() << "user: " << *user << "\n";
@@ -843,12 +845,12 @@ bool LayoutPropagation::rewriteTensorPtrStoreOp(tt::StoreOp storeOp) {
     return false;
 
   // Locate the operation that created the block pointer.
-  std::optional<tt::MakeTensorPtrOp> defOp =
-      tt::intel::findDefiningOpOfType<tt::MakeTensorPtrOp>(ptr);
+  std::optional<tt::intel::MakeTensorPtrOp> defOp =
+      tt::intel::findDefiningOpOfType<tt::intel::MakeTensorPtrOp>(ptr);
   if (!defOp)
     return false;
 
-  triton::MakeTensorPtrOp makeTensorPtrOp = *defOp;
+  triton::intel::MakeTensorPtrOp makeTensorPtrOp = *defOp;
 
   // DPAS encoding have to be propagated if conversion from a DPAS layout to
   // another layout has been done before.
@@ -888,7 +890,7 @@ bool LayoutPropagation::rewriteTensorPtrStoreOp(tt::StoreOp storeOp) {
 
   // Create a new MakeTensorPtrOp with the new layout.
   OpBuilder rewriter(makeTensorPtrOp);
-  Value newMakeTensorPtrOp = tt::MakeTensorPtrOp::create(
+  Value newMakeTensorPtrOp = tt::intel::MakeTensorPtrOp::create(
       rewriter, makeTensorPtrOp.getLoc(), newPtrType, makeTensorPtrOp.getBase(),
       makeTensorPtrOp.getShape(), makeTensorPtrOp.getStrides(),
       makeTensorPtrOp.getOffsets(), makeTensorPtrOp.getOrderAttr());
@@ -902,17 +904,17 @@ bool LayoutPropagation::rewriteTensorPtrStoreOp(tt::StoreOp storeOp) {
         storeOp.setOperand(0, newMakeTensorPtrOp);
         storeOp.setOperand(1, dataToStore);
       }
-    } else if (auto advanceOp = dyn_cast<tt::AdvanceOp>(user)) {
+    } else if (auto advanceOp = dyn_cast<tt::intel::AdvanceOp>(user)) {
       SmallPtrSet<Operation *, 2> visited;
-      std::function<bool(tt::AdvanceOp)> chainIsTerminatedByCurrentStore =
-          [&](tt::AdvanceOp advanceOp) {
+      std::function<bool(tt::intel::AdvanceOp)> chainIsTerminatedByCurrentStore =
+          [&](tt::intel::AdvanceOp advanceOp) {
             if (!visited.insert(advanceOp.getOperation()).second)
               return false; // Already visited, avoid cycles
 
             for (Operation *user : advanceOp->getUsers()) {
               if (isa<tt::StoreOp>(user) && cast<tt::StoreOp>(user) == storeOp)
                 return true;
-              if (auto nextAdvanceOp = dyn_cast<tt::AdvanceOp>(user))
+              if (auto nextAdvanceOp = dyn_cast<tt::intel::AdvanceOp>(user))
                 if (chainIsTerminatedByCurrentStore(nextAdvanceOp))
                   return true;
             }
@@ -1094,10 +1096,11 @@ void LayoutRematerialization::reduceLoopCarriedValues() {
                      << "\t" << *newStoreOp << "\n";
             });
           })
-          .Case<tt::AdvanceOp>([&](auto advanceOp) {
+          .Case<tt::intel::AdvanceOp>([&](auto advanceOp) {
             auto newAdvanceOp =
-                tt::AdvanceOp::create(rewriter, loc, rematRes.getType(),
-                                      rematRes, advanceOp.getOffsets());
+                tt::intel::AdvanceOp::create(rewriter, loc,
+                                             rematRes.getType(), rematRes,
+                                             advanceOp.getOffsets());
             opToDelete.insert(advanceOp);
             LLVM_DEBUG({
               DBGS() << "Replaced:\n\t" << *advanceOp << "\n"

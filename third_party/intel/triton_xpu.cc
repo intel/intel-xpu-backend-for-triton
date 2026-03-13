@@ -11,6 +11,7 @@
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
+#include "intel/include/Dialect/Triton/IR/TritonIntelDialect.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"

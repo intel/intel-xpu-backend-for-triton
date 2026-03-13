@@ -50,8 +50,8 @@ private:
     if (!tt::isTensorPointerType(ptr.getType()))
       return false;
 
-    std::optional<tt::MakeTensorPtrOp> makeTensorPtrOp =
-        tt::intel::findDefiningOpOfType<tt::MakeTensorPtrOp>(ptr);
+    std::optional<tt::intel::MakeTensorPtrOp> makeTensorPtrOp =
+      tt::intel::findDefiningOpOfType<tt::intel::MakeTensorPtrOp>(ptr);
     if (!makeTensorPtrOp)
       return false;
 
@@ -189,8 +189,8 @@ public:
     for (Operation *op : ops) {
       Operation *newOp = op->clone();
       Value versionedStride = opToStride[op];
-      if (isa<tt::MakeTensorPtrOp>(op))
-        updateStride(cast<tt::MakeTensorPtrOp>(newOp).getStridesMutable(),
+      if (isa<tt::intel::MakeTensorPtrOp>(op))
+        updateStride(cast<tt::intel::MakeTensorPtrOp>(newOp).getStridesMutable(),
                      versionedStride, oneVal);
       else if (isa<tt::MakeTensorDescOp>(op))
         updateStride(cast<tt::MakeTensorDescOp>(newOp).getStridesMutable(),
@@ -278,7 +278,7 @@ private:
            "Expecting a tensor pointer");
 
     auto makeTensorPtrOp =
-        *tt::intel::findDefiningOpOfType<tt::MakeTensorPtrOp>(ptr);
+        *tt::intel::findDefiningOpOfType<tt::intel::MakeTensorPtrOp>(ptr);
     OperandRange strides = makeTensorPtrOp.getStrides();
     ArrayRef<int> order = makeTensorPtrOp.getOrder();
 

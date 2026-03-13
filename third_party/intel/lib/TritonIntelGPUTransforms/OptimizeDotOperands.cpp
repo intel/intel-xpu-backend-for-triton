@@ -62,7 +62,7 @@ public:
       if (isCandidate(transOp)) {
         auto loadOp = cast<tt::LoadOp>(transOp.getSrc().getDefiningOp());
         auto makeTensorPtrOp =
-            *tt::intel::findDefiningOpOfType<tt::MakeTensorPtrOp>(
+          *tt::intel::findDefiningOpOfType<tt::intel::MakeTensorPtrOp>(
                 loadOp.getPtr());
         manager.createChains(makeTensorPtrOp, transOp);
       }
@@ -103,12 +103,12 @@ public:
 private:
   void fuse(const DefUseChain &chain) {
     assert(
-        isa<tt::MakeTensorPtrOp>(chain.getStart()) &&
+      isa<tt::intel::MakeTensorPtrOp>(chain.getStart()) &&
         "Expecting 'chain' to be rooted by a 'tt.make_tensor_ptr' operation");
     assert(isa<tt::TransOp>(chain.getEnd()) &&
            "Expecting 'chain' to be terminated by a 'tt.trans' operation");
 
-    auto makeTensorPtrOp = cast<tt::MakeTensorPtrOp>(chain.getStart());
+    auto makeTensorPtrOp = cast<tt::intel::MakeTensorPtrOp>(chain.getStart());
     auto transOp = cast<tt::TransOp>(chain.getEnd());
     auto loadOp = cast<tt::LoadOp>(transOp.getSrc().getDefiningOp());
     LLVM_DEBUG(llvm::dbgs()
@@ -125,7 +125,7 @@ private:
     SmallVector<Value> newOffsets(llvm::reverse(makeTensorPtrOp.getOffsets()));
 
     OpBuilder builder(makeTensorPtrOp);
-    Value ptr = tt::MakeTensorPtrOp::create(
+    Value ptr = tt::intel::MakeTensorPtrOp::create(
         builder, makeTensorPtrOp.getLoc(), newPtrType,
         makeTensorPtrOp.getBase(), newShape, newStrides, newOffsets,
         makeTensorPtrOp.getOrderAttr());
@@ -188,8 +188,9 @@ private:
                 .getRank() != 2)
       return false;
 
-    std::optional<tt::MakeTensorPtrOp> makeTensorPtrOp =
-        tt::intel::findDefiningOpOfType<tt::MakeTensorPtrOp>(loadOp.getPtr());
+    std::optional<tt::intel::MakeTensorPtrOp> makeTensorPtrOp =
+      tt::intel::findDefiningOpOfType<tt::intel::MakeTensorPtrOp>(
+        loadOp.getPtr());
 
     return makeTensorPtrOp.has_value();
   }
@@ -314,11 +315,12 @@ private:
     }
 
     Location loc = user->getLoc();
-    if (auto advanceOp = dyn_cast<tt::AdvanceOp>(user)) {
+    if (auto advanceOp = dyn_cast<tt::intel::AdvanceOp>(user)) {
       OpBuilder rewriter(advanceOp);
       SmallVector<Value> newOffsets(llvm::reverse(advanceOp.getOffsets()));
-      auto newAdvanceOp = tt::AdvanceOp::create(rewriter, loc, newVal.getType(),
-                                                newVal, newOffsets);
+      auto newAdvanceOp =
+          tt::intel::AdvanceOp::create(rewriter, loc, newVal.getType(), newVal,
+                                       newOffsets);
       LLVM_DEBUG(llvm::dbgs().indent(2)
                  << "newAdvanceOp: " << newAdvanceOp << "\n");
       cleanUp.insert(advanceOp);

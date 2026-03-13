@@ -1,0 +1,6 @@
+set(LLVM_TARGET_DEFINITIONS TritonIntelOps.td)
+mlir_tablegen(TritonIntelDialect.h.inc -gen-dialect-decls -dialect=tti)
+mlir_tablegen(TritonIntelDialect.cpp.inc -gen-dialect-defs -dialect=tti)
+mlir_tablegen(TritonIntelOps.h.inc -gen-op-decls)
+mlir_tablegen(TritonIntelOps.cpp.inc -gen-op-defs)
+add_public_tablegen_target(TritonIntelTableGen)

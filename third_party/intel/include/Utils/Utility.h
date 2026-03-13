@@ -18,6 +18,9 @@ class LoopLikeOpInterface;
 
 namespace mlir::triton::intel {
 
+using MakeTensorPtrOp = ::mlir::triton::MakeTensorPtrOp;
+using AdvanceOp = ::mlir::triton::AdvanceOp;
+
 Value findOrCreateCastOp(Value val, Type targetType);
 
 // Lookup for a integer constant with the given value and bitwidth in the
@@ -43,7 +46,7 @@ void eraseOperations(SmallPtrSetImpl<Operation *> &operations);
 // Note: traverses block arguments and loop yields, etc...
 template <typename OpTy,
           typename = std::enable_if<llvm::is_one_of<
-              OpTy, triton::MakeTensorPtrOp, triton::MakeTensorDescOp>::value>>
+        OpTy, intel::MakeTensorPtrOp, triton::MakeTensorDescOp>::value>>
 std::optional<OpTy> findDefiningOpOfType(Value val) {
   if (auto arg = dyn_cast<BlockArgument>(val)) {
     Operation *parentOp = arg.getParentBlock()->getParentOp();
@@ -65,7 +68,7 @@ std::optional<OpTy> findDefiningOpOfType(Value val) {
     return std::nullopt;
   if (auto callOp = val.getDefiningOp<triton::CallOp>())
     return std::nullopt;
-  if (auto advanceOp = val.getDefiningOp<triton::AdvanceOp>())
+  if (auto advanceOp = val.getDefiningOp<intel::AdvanceOp>())
     return findDefiningOpOfType<OpTy>(advanceOp.getPtr());
   if (auto makePtrOp = val.getDefiningOp<OpTy>())
     return makePtrOp;
