@@ -551,13 +551,15 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     if (!blockIOAttr)
       return false;
 
-    const bool enableBlockIOForAllLayout =
-        triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS");
+    std::optional<bool> enableBlockIOForAllLayout =
+        mlir::triton::tools::isEnvValueBool(mlir::triton::tools::getStrEnv(
+            "TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS"));
 
     // Only lower operation with dpas layout encoding.
     auto tensorTy =
         cast<RankedTensorType>(getPointeeType(op.getPtr().getType()));
-    return enableBlockIOForAllLayout || hasDpasEncoding(tensorTy) ||
+    return !enableBlockIOForAllLayout.has_value() ||
+           enableBlockIOForAllLayout.value() || hasDpasEncoding(tensorTy) ||
            hasDotDpasEncoding(tensorTy);
   }
 
@@ -600,9 +602,11 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
       return false;
     }
 
-    const bool enableBlockIOForAllLayout =
-        triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS");
-    if (!enableBlockIOForAllLayout && !hasDpasEncoding(tensorTy) &&
+    std::optional<bool> enableBlockIOForAllLayout =
+        mlir::triton::tools::isEnvValueBool(mlir::triton::tools::getStrEnv(
+            "TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS"));
+    if (enableBlockIOForAllLayout.has_value() &&
+        !enableBlockIOForAllLayout.value() && !hasDpasEncoding(tensorTy) &&
         !hasDotDpasEncoding(tensorTy))
       return false;
 
