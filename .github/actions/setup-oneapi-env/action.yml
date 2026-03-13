@@ -42,6 +42,23 @@ runs:
         ${{ toJSON(inputs) }}
         EOF
 
+    - name: Set default values for inputs
+      shell: bash
+      id: set-versions
+      run: |
+        set -xeuo pipefail
+
+        if [[ -z "${{ inputs.dpcpp_jgs_revision }}" ]]; then
+          echo dpcpp_jgs_revision=$(cat .github/pins/dpcpp_jgs.txt) >> $GITHUB_OUTPUT
+        else
+          echo dpcpp_jgs_revision=${{ inputs.dpcpp_jgs_revision }} >> $GITHUB_OUTPUT
+        fi
+        if [[ -z "${{ inputs.pti_jgs_revision }}" ]]; then
+          echo pti_jgs_revision=$(cat .github/pins/pti_jgs.txt) >> $GITHUB_OUTPUT
+        else
+          echo pti_jgs_revision=${{ inputs.pti_jgs_revision }} >> $GITHUB_OUTPUT
+        fi
+
 # ONEAPI ------------------------------------------
 
     - name: Download DPCPP_JGS latest version and generate cache key for it
@@ -58,7 +75,7 @@ runs:
       shell: bash
       run: |
         set -xeuo pipefail
-        ONEAPI_CACHE_KEY=$(echo DPCPP_JGS_revision: ${{ inputs.dpcpp_jgs_revision }} | sha256sum - | cut -d\  -f1)
+        ONEAPI_CACHE_KEY=$(echo DPCPP_JGS_revision: ${{ steps.set-versions.outputs.dpcpp_jgs_revision }} | sha256sum - | cut -d\  -f1)
         echo "ONEAPI_CACHE_KEY=$ONEAPI_CACHE_KEY" | tee -a $GITHUB_ENV
 
     - name: Set oneapi_cache-key output variable
@@ -99,7 +116,7 @@ runs:
       run: |
         set -xeou pipefail
         mkdir oneapi_jgs
-        curl -sSL -o oneapi_jgs/DPCPP_JGS-v0.1.0-${{ inputs.dpcpp_jgs_revision }}.tgz https://artifactory-kfs.habana-labs.com/artifactory/bin-generic-dev-local/DPCPP_JGS/DPCPP_JGS-v0.1.0-${{ inputs.dpcpp_jgs_revision }}.tgz
+        curl -sSL -o oneapi_jgs/DPCPP_JGS-v0.1.0-${{ steps.set-versions.outputs.dpcpp_jgs_revision }}.tgz https://artifactory-kfs.habana-labs.com/artifactory/bin-generic-dev-local/DPCPP_JGS/DPCPP_JGS-v0.1.0-${{ steps.set-versions.outputs.dpcpp_jgs_revision }}.tgz
 
     - name: Save DPCPP_JGS if it was not found in Cache
       if: ${{ (inputs.oneapi_mode == 'DPCPP_JGS_revision' || inputs.oneapi_mode == 'DPCPP_JGS_latest') && steps.oneapi-cache.outputs.status == 'miss' }}
@@ -125,7 +142,7 @@ runs:
       shell: bash
       run: |
         set -xeuo pipefail
-        PTI_CACHE_KEY=$(echo PTI_JGS_revision: ${{ inputs.pti_jgs_revision }} | sha256sum - | cut -d\  -f1)
+        PTI_CACHE_KEY=$(echo PTI_JGS_revision: ${{ steps.set-versions.outputs.pti_jgs_revision }} | sha256sum - | cut -d\  -f1)
         echo "PTI_CACHE_KEY=$PTI_CACHE_KEY" | tee -a $GITHUB_ENV
 
     - name: Set pti_cache-key output variable
@@ -165,7 +182,7 @@ runs:
       run: |
         set -xeou pipefail
         mkdir pti_jgs
-        curl -sSL -o pti_jgs/PROFILING_TOOLS_JGS-v0.1.0-${{ inputs.pti_jgs_revision }}.tgz https://artifactory-kfs.habana-labs.com/artifactory/bin-generic-dev-local/PROFILING_TOOLS_JGS/PROFILING_TOOLS_JGS-v0.1.0-${{ inputs.pti_jgs_revision }}.tgz
+        curl -sSL -o pti_jgs/PROFILING_TOOLS_JGS-v0.1.0-${{ steps.set-versions.outputs.pti_jgs_revision }}.tgz https://artifactory-kfs.habana-labs.com/artifactory/bin-generic-dev-local/PROFILING_TOOLS_JGS/PROFILING_TOOLS_JGS-v0.1.0-${{ steps.set-versions.outputs.pti_jgs_revision }}.tgz
 
     - name: Save PTI if it was not found in Cache
       if: ${{ steps.pti-cache.outputs.status == 'miss' }}
@@ -186,14 +203,14 @@ runs:
         if [[ "${{ inputs.oneapi_mode }}" == "DPCPP_JGS_latest" ]]; then
           sudo tar -zxf oneapi_jgs/DPCPP_JGS-v0.1.0.tgz -C /opt/intel/DPCPP_JGS
         else
-          sudo tar -zxf oneapi_jgs/DPCPP_JGS-v0.1.0-${{ inputs.dpcpp_jgs_revision }}.tgz -C /opt/intel/DPCPP_JGS
+          sudo tar -zxf oneapi_jgs/DPCPP_JGS-v0.1.0-${{ steps.set-versions.outputs.dpcpp_jgs_revision }}.tgz -C /opt/intel/DPCPP_JGS
         fi
 
         sudo mkdir /opt/intel/PROFILING_TOOLS_JGS
         if [[ "${{ inputs.pti_mode }}" == "PTI_JGS_latest" ]]; then
           sudo tar -zxf pti_jgs/PROFILING_TOOLS_JGS-v0.1.0.tgz -C /opt/intel/PROFILING_TOOLS_JGS
         else
-          sudo tar -zxf pti_jgs/PROFILING_TOOLS_JGS-v0.1.0-${{ inputs.pti_jgs_revision }}.tgz -C /opt/intel/PROFILING_TOOLS_JGS
+          sudo tar -zxf pti_jgs/PROFILING_TOOLS_JGS-v0.1.0-${{ steps.set-versions.outputs.pti_jgs_revision }}.tgz -C /opt/intel/PROFILING_TOOLS_JGS
         fi
 
     - name: Set up OneAPI environment
