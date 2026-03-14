@@ -95,7 +95,16 @@ jobs:
       - name: Load environment details
         run: |
           if [ -f ./reports/.env ]; then
-            cat ./reports/.env | tee -a $GITHUB_ENV
+            while IFS= read -r line; do
+              # Skip empty lines and comments
+              if [ -z "$line" ] || echo "$line" | grep -Eq '^[[:space:]]*#'; then
+                continue
+              fi
+              # Only accept simple KEY=VALUE pairs where KEY is [A-Z0-9_]+
+              if echo "$line" | grep -Eq '^[A-Z0-9_]+=.*$'; then
+                echo "$line" >> "$GITHUB_ENV"
+              fi
+            done < ./reports/.env
           fi
 
       # --- Pass rate ---
