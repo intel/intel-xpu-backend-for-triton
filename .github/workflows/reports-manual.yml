@@ -46,6 +46,9 @@ jobs:
     name: Download reports
     runs-on:
       - runner-0.0.22
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -61,13 +64,22 @@ jobs:
           pip install ./scripts/triton_utils
 
       - name: Download base reports
+        shell: bash
+        env:
+          ARTIFACT_PATTERN: ${{ inputs.artifact_pattern }}
         run: |
-          triton-utils download \
-            --run "${{ inputs.gh_run_id }}" \
-            -R "${{ inputs.repo }}" \
-            -B "${{ inputs.branch }}" \
-            -D reports \
-            ${{ inputs.artifact_pattern && format('--artifact-pattern "{0}"', inputs.artifact_pattern) || '' }}
+          set -euo pipefail
+          args=(
+            download
+            --run "${{ inputs.gh_run_id }}"
+            -R "${{ inputs.repo }}"
+            -B "${{ inputs.branch }}"
+            -D reports
+          )
+          if [[ -n "${ARTIFACT_PATTERN:-}" ]]; then
+            args+=(--artifact-pattern "$ARTIFACT_PATTERN")
+          fi
+          triton-utils "${args[@]}"
 
       - name: Upload base reports as artifact
         uses: actions/upload-artifact@v7
