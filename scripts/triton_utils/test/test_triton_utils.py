@@ -567,7 +567,7 @@ def test_args(args: str, config: triton_utils.Config):
         ),
         (
             {'exclude_subdir_patterns': [re.compile(r'subdir2')], 'include_subdir_patterns': [re.compile(r'^.*$')]},
-            'test_core.test_reduce_layouts',
+            'python/test/unit/language/test_core.py::test_reduce_layouts',
             {'passed': [1, 0, -1]},
             'test'
         ),
@@ -738,21 +738,21 @@ def test_long_names_option(tmp_path, capsys, long_names: bool):
         triton_utils.run(config)
     stdout, _ = capsys.readouterr()
 
-    # The actual test name in output is the short_name (without variant in brackets)
-    short_name = 'test_reduce_layouts_with_very_long_name_that_exceeds_normal_display_width'
-    truncated_prefix = 'test_reduce_layouts_with_ve'
+    # The actual test name in output is the pytest-friendly name (without variant in brackets)
+    full_name = 'python/test/unit/language/test_core.py::test_reduce_layouts_with_very_long_name_that_exceeds_normal_display_width'
+    truncated_prefix = 'python/test/unit/language/test_core'
 
     if not long_names:
         # Without --long-names, the displayed name should be truncated:
-        # a prefix of the name should appear, but not the full short_name.
+        # a prefix of the name should appear, but not the full name.
         lines_with_prefix = [line for line in stdout.split('\n') if truncated_prefix in line]
         assert len(lines_with_prefix) > 0, 'Expected truncated prefix not found in output'
-        # Verify that in all such lines the full short_name is not present
-        assert not any(short_name in line for line in lines_with_prefix), (
-            'Expected truncated output, but full short name was found')
+        # Verify that in all such lines the full name is not present
+        assert not any(full_name in line for line in lines_with_prefix), (
+            'Expected truncated output, but full name was found')
     else:
         # With --long-names, the full test name should be visible without truncation
-        assert short_name in stdout, f'Expected full test name "{short_name}" not found in output'
+        assert full_name in stdout, f'Expected full test name "{full_name}" not found in output'
 
 
 @pytest.mark.parametrize('long_names', [False, True])
@@ -780,21 +780,21 @@ def test_long_names_option_compare_reports(tmp_path, capsys, long_names: bool):
         triton_utils.run(config)
     stdout, _ = capsys.readouterr()
 
-    # The actual test name in compare output is the short_name (without variant in brackets)
-    short_name = 'test_reduce_layouts_with_very_long_name_that_exceeds_normal_display_width'
-    truncated_prefix = 'test_reduce_layouts_with_ve'
+    # The actual test name in compare output is the pytest-friendly name (without variant in brackets)
+    full_name = 'python/test/unit/language/test_core.py::test_reduce_layouts_with_very_long_name_that_exceeds_normal_display_width'
+    truncated_prefix = 'python/test/unit/language/test_core'
 
     if not long_names:
         # Without --long-names, the displayed name should be truncated:
-        # a prefix of the name should appear, but not the full short_name.
+        # a prefix of the name should appear, but not the full name.
         lines_with_prefix = [line for line in stdout.split('\n') if truncated_prefix in line]
         assert len(lines_with_prefix) > 0, 'Expected truncated prefix not found in output'
-        # Verify that in all such lines the full short_name is not present
-        assert not any(short_name in line for line in lines_with_prefix), (
-            'Expected truncated output, but full short name was found')
+        # Verify that in all such lines the full name is not present
+        assert not any(full_name in line for line in lines_with_prefix), (
+            'Expected truncated output, but full name was found')
     else:
         # With --long-names, the full test name should be visible without truncation
-        assert short_name in stdout, f'Expected full test name "{short_name}" not found in output'
+        assert full_name in stdout, f'Expected full test name "{full_name}" not found in output'
 
 
 @pytest.mark.parametrize(
