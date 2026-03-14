@@ -145,13 +145,25 @@ jobs:
 
       - name: Download comparison reports
         if: inputs.compare_run_id != ''
+        env:
+          COMPARE_ARTIFACT_PATTERN: ${{ inputs.compare_artifact_pattern }}
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          triton-utils download \
-            --run "${{ inputs.compare_run_id }}" \
-            -R "${{ inputs.compare_repo }}" \
-            -B "${{ inputs.compare_branch }}" \
-            -D reports_compare \
-            ${{ inputs.compare_artifact_pattern && format('--artifact-pattern "{0}"', inputs.compare_artifact_pattern) || '' }}
+          set -euo pipefail
+          args=(
+            download
+            --run "${{ inputs.compare_run_id }}"
+            -R "${{ inputs.compare_repo }}"
+            -B "${{ inputs.compare_branch }}"
+            -D reports_compare
+          )
+
+          if [ -n "${COMPARE_ARTIFACT_PATTERN:-}" ]; then
+            args+=("--artifact-pattern" "$COMPARE_ARTIFACT_PATTERN")
+          fi
+
+          triton-utils "${args[@]}"
 
       - name: Comparison by testsuite
         if: inputs.compare_run_id != ''
