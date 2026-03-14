@@ -317,7 +317,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.ttgpuir.add_optimize_dot_operands(pm)
         intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.use_barrier)
 
-        if (opt.reduce_variable_liveness):
+        if (opt.reduce_variable_liveness and os.environ.get("TRITON_INTEL_DISABLE_REDUCE_LIVENESS") != "1"):
             intel.passes.ttgpuir.add_reduce_variable_liveness(pm)
 
         passes.ttgpuir.add_fuse_nested_loops(pm)
@@ -330,7 +330,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.ttgpuir.add_optimize_thread_locality(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         passes.common.add_cse(pm)
-        passes.ttgpuir.add_prefetch(pm)
+        if os.environ.get("TRITON_INTEL_DISABLE_PREFETCH") != "1":
+            passes.ttgpuir.add_prefetch(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_reduce_data_duplication(pm)
@@ -427,8 +428,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             paths = [path for (name, path) in options.extern_libs]
             llvm.link_extern_libs(llvm_mod, paths)
 
-        cls.optimize_llvm_mod(llvm_mod, options)
         intel.post_process_llir(llvm_mod)
+        cls.optimize_llvm_mod(llvm_mod, options)
 
         # Get some metadata
         total_num_warps = src.get_int_attr("ttg.total-num-warps")
@@ -459,9 +460,9 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             if options.num_warps > 32:
                 raise RuntimeError("grf_mode = 256 cannot be used with num_warps > 32")
             metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
-        elif options.grf_mode == 'auto':
+        elif options.grf_mode == 'auto' or options.grf_mode == 'default':
             metadata["build_flags"] += " -cl-intel-enable-auto-large-GRF-mode"
-        elif options.grf_mode != 'default':
+        else:
             raise RuntimeError(f"Unknown grf_mode: {options.grf_mode}")
 
         if knobs.intel.disable_igc_opt:
@@ -472,6 +473,11 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     @track
     def make_zebin(cls, src, metadata, options):
         metadata["binary_ext"] = "zebin"
+
+        # Enable IGC Loop-Invariant Code Motion: this allows IGC to hoist
+        # loop-invariant parts of 2D block descriptor setup out of inner
+        # loops, reducing overhead in GEMM K-loops by ~5 percentage points.
+        os.environ.setdefault("IGC_EnableLICM", "1")
 
         shader_dump_opt = ""
         if knobs.intel.dump_shader_info:
@@ -493,7 +499,13 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
             try:
                 subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
-                if options.grf_mode == 'default':
+                # When auto GRF mode is used (default or explicit 'auto'), IGC
+                # handles register allocation automatically. Only attempt a
+                # forced 256-GRF retry when no GRF flag was set at all.
+                if options.grf_mode == 'default' and \
+                        "-cl-intel-enable-auto-large-GRF-mode" not in metadata.get("build_flags", "") and \
+                        "-cl-intel-256-GRF-per-thread" not in metadata.get("build_flags", "") and \
+                        "-cl-intel-128-GRF-per-thread" not in metadata.get("build_flags", ""):
                     spill_size = extract_spill_size_from_zebin(fbin)
                     # The threshold of 1000 for spill_size is chosen based on empirical observations
                     # and aligned with triton/backends/intel/driver.c
