@@ -1114,27 +1114,59 @@ public:
 /// The only difference between the two ops is how the block shape and rank are
 /// extracted from the result type, which is passed in by the caller.
 static AxisInfo
-makeTensorPtrAxisInfo(ArrayRef<int64_t> blkShape, unsigned rank,
+makeTensorPtrAxisInfo(Type elemTy, ArrayRef<int64_t> blkShape, unsigned rank,
                       ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) {
-  SmallVector<AxisInfo, 2> strideInfo;
+  SmallVector<AxisInfo, 2> strideInfo, shapeInfo;
+  // Shapes start after base (operand 0).
+  for (unsigned i = 1; i <= rank; ++i)
+    shapeInfo.emplace_back(operands[i]->getValue());
   // Strides start after base (operand 0) and shape operands.
   for (unsigned i = rank + 1; i <= rank * 2; ++i)
     strideInfo.emplace_back(operands[i]->getValue());
 
   int64_t ptrDivisibility = operands[0]->getValue().getDivisibility(0);
-
+  // Follow the regular pointer divisibility definition in tt.addptr:
+  // On each dim, tt is "strided contiguous" with a divisibility of
+  // ptrDivisibility
   AxisInfo::DimVectorT contiguity, constancy, divisibility;
+
+  auto combineStrideGCD = [&](unsigned excludeDim) {
+    int64_t strideVal = 0;
+    for (auto [i, stride] : llvm::enumerate(strideInfo)) {
+      if (i == excludeDim)
+        continue;
+      strideVal = gcd(stride.getDivisibility(0), strideVal);
+    }
+    return strideVal;
+  };
+
+  unsigned elemBytes = elemTy.getIntOrFloatBitWidth() / 8;
   for (unsigned dim = 0; dim < rank; ++dim) {
-    contiguity.push_back(strideInfo[dim].getConstantValue() == 1 ? blkShape[dim]
-                                                                 : 1);
-    // For 2-D tensors the divisibility of dim d is bounded by the stride of
-    // the *other* dimension; for 1-D tensors the single stride suffices.
-    const AxisInfo &relevantStride =
-        (rank == 2) ? strideInfo[dim == 0 ? 1 : 0] : strideInfo[dim];
+    // The maximum contiguity is the divisibility of boundary shape, which is
+    // the case when stride is 1. Take an example of !tt.ptr<tensor<4x4xi8>>: if
+    // the boundary shape is [3, 3] which divisibility is 1. The tensor pointer
+    // axis is like:
+    // clang-format off
+    // [[base    , base + 1, base + 2, nullptr,]
+    //  [base + 4, base + 5, base + 6, nullptr,]
+    //  [base + 8, base + 9, base +10, nullptr,]
+    //  [nullptr,  nullptr,  nullptr,  nullptr,]]
+    // clang-format on
+    // The contiguity of the two dim should be 1.
+    // FIXME: We didn't check the offsets for block pointer as it is going to be
+    // deprecated.
+    int64_t contiguous = shapeInfo[dim].getDivisibility(0);
+    contiguity.push_back(strideInfo[dim].getConstantValue() == 1
+                             ? std::min(contiguous, blkShape[dim])
+                             : 1);
+
+    // The divisibility of dim d is bounded by the stride of
+    // the *other* dimension;
+    int64_t relevantStrideDivisibility = combineStrideGCD(dim) * elemBytes;
     divisibility.push_back(
-        contiguity[dim] > 1
-            ? std::min(ptrDivisibility, relevantStride.getDivisibility()[0])
-            : 1);
+        contiguity[dim] > 1 ? gcd(ptrDivisibility, relevantStrideDivisibility)
+                            : 1);
+
     constancy.push_back(1);
   }
 
@@ -1156,12 +1188,8 @@ public:
         cast<PointerType>(op.getResult().getType()).getPointeeType());
     unsigned rank = op.getShape().size();
 
-    // TODO: Support higher rank tensors.
-    if (rank > 2)
-      return AxisInfo();
-
-    auto axisInfo =
-        makeTensorPtrAxisInfo(tensorType.getShape(), rank, operands);
+    auto axisInfo = makeTensorPtrAxisInfo(
+        tensorType.getElementType(), tensorType.getShape(), rank, operands);
 
     LLVM_DEBUG({
       std::string axisStr;
@@ -1208,8 +1236,8 @@ public:
     assert(operands.size() >= rank * 2 + 1 &&
            "Insufficient operands for MakeTensorDescOp AxisInfo analysis");
 
-    auto axisInfo =
-        makeTensorPtrAxisInfo(tensorType.getShape(), rank, operands);
+    auto axisInfo = makeTensorPtrAxisInfo(
+        tensorType.getElementType(), tensorType.getShape(), rank, operands);
 
     LLVM_DEBUG({
       std::string axisStr;
