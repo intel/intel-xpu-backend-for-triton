@@ -43,10 +43,10 @@ namespace {
 class FuseReshapeWithLoad : public tt::intel::Fuser {
 public:
   void run(ModuleOp moduleOp) {
-    // Collect def-use chains originating at a `MakeTensorPtrOp` operation
+    // Collect def-use chains originating at a `MakeTensorDescOp` operation
     // and terminating at a candidate `tt::ReshapeOp` operation.
     // Note: A candidate `reshapeOp` must use the result of a `loadOp` using a
-    // ptr created by the `MakeTensorPtrOp` rooting the def-use chain.
+    // ptr created by the `MakeTensorDescOp` rooting the def-use chain.
     DefUseChainManager manager;
     moduleOp.walk([&](tt::ReshapeOp reshapeOp) {
       if (isCandidate(reshapeOp)) {
@@ -54,12 +54,6 @@ public:
         assert(srcOp && "Expected a valid source operation");
 
         llvm::TypeSwitch<Operation *>(srcOp)
-            .Case<tt::LoadOp>([&](auto loadOp) {
-              auto makeTensorPtrOp =
-                  *tt::intel::findDefiningOpOfType<tt::MakeTensorPtrOp>(
-                      loadOp.getPtr());
-              manager.createChains(makeTensorPtrOp, reshapeOp);
-            })
             .Case<tt::DescriptorLoadOp>([&](auto descLoadOp) {
               auto makeTensorDescOp =
                   *tt::intel::findDefiningOpOfType<tt::MakeTensorDescOp>(
@@ -108,111 +102,12 @@ private:
            "Expecting 'chain' to be terminated by a 'tt.reshape' operation");
 
     llvm::TypeSwitch<Operation *>(chain.getStart())
-        .Case<tt::MakeTensorPtrOp>([&](auto makeTensorPtrOp) {
-          fuseMakeTensorPtrOp(chain, makeTensorPtrOp);
-        })
         .Case<tt::MakeTensorDescOp>([&](auto makeTensorDescOp) {
           fuseMakeTensorDescOp(chain, makeTensorDescOp);
         })
         .Default([](Operation *) {
           llvm_unreachable("Unexpected 'chain' root operation kind");
         });
-  }
-
-  void fuseMakeTensorPtrOp(const DefUseChain &chain,
-                           tt::MakeTensorPtrOp makeTensorPtrOp) {
-    assert(chain.getStart() == makeTensorPtrOp &&
-           "Unexpected 'chain' start operation");
-    assert(isa<tt::ReshapeOp>(chain.getEnd()) &&
-           "Expecting 'chain' to be terminated by a 'tt.reshape' operation");
-
-    auto reshapeOp = cast<tt::ReshapeOp>(chain.getEnd());
-    auto loadOp = cast<tt::LoadOp>(reshapeOp.getSrc().getDefiningOp());
-    LLVM_DEBUG(llvm::dbgs() << "Fusing:\n  " << reshapeOp << "\nwith:\n  "
-                            << loadOp << "\n");
-
-    // Create a MakeTensorPtrOp yielding a 2-dim block pointer.
-    auto ptrType = cast<tt::PointerType>(makeTensorPtrOp.getType());
-    [[maybe_unused]] ArrayRef<int64_t> resShape =
-        cast<RankedTensorType>(ptrType.getPointeeType()).getShape();
-    assert(resShape[0] == 1 && "Result shape should have extent equal to 1 in "
-                               "the outermost dimension");
-
-    auto tensorType = cast<RankedTensorType>(reshapeOp.getType());
-    auto newPtrType =
-        tt::PointerType::get(tensorType, ptrType.getAddressSpace());
-
-    // Compute the index of the innermost dimension.
-    ArrayRef<int> order = makeTensorPtrOp.getOrder();
-    assert(order.size() == 3 && order[0] == 2 && "Invalid order");
-
-    unsigned innermostDimIdx = 0;
-    for (int elem : order) {
-      if (elem == 0)
-        break;
-      ++innermostDimIdx;
-    }
-
-    OpBuilder builder(makeTensorPtrOp);
-    Location loc = makeTensorPtrOp.getLoc();
-    OperandRange shapes = makeTensorPtrOp.getShape();
-    OperandRange strides = makeTensorPtrOp.getStrides();
-    OperandRange offsets = makeTensorPtrOp.getOffsets();
-
-    // Collapse the 3-dim tensor into a 2-dim tensor.
-    // Given a make_tensor_ptr with:
-    //   shape  [s0, s1, s2]
-    //   stride [a, b, c]
-    //   offset [x, y, z]
-    //   order  [2, 1, 0]
-    // Create a make_tensor_ptr with:
-    //   shape  [s0 * a / b + s1, s2]
-    //   stride [b, c]
-    //   offset [x * a / b + y, z]
-    //   order  [1, 0]
-    SmallVector<Value> newShape(makeTensorPtrOp.getShape().drop_front());
-    SmallVector<Value> newStrides(makeTensorPtrOp.getStrides().drop_front());
-    SmallVector<Value> newOffsets(makeTensorPtrOp.getOffsets().drop_front());
-
-    unsigned newInnermostDimIdx = (innermostDimIdx - 1);
-    unsigned newOutermostDimIdx = !newInnermostDimIdx;
-    auto div = arith::DivUIOp::create(builder, loc, strides[0],
-                                      newStrides[newOutermostDimIdx]);
-
-    newShape[newOutermostDimIdx] = arith::AddIOp::create(
-        builder, loc, arith::MulIOp::create(builder, loc, shapes[0], div),
-        newShape[newOutermostDimIdx]);
-    newOffsets[newOutermostDimIdx] = arith::AddIOp::create(
-        builder, loc,
-        arith::MulIOp::create(
-            builder, loc, offsets[0],
-            arith::TruncIOp::create(builder, loc, offsets[0].getType(), div)),
-        newOffsets[newOutermostDimIdx]);
-
-    Value ptr = tt::MakeTensorPtrOp::create(
-        builder, loc, newPtrType, makeTensorPtrOp.getBase(), newShape,
-        newStrides, newOffsets,
-        DenseI32ArrayAttr::get(
-            builder.getContext(),
-            makeTensorPtrOp.getOrderAttr().asArrayRef().drop_front()));
-
-    LLVM_DEBUG(llvm::dbgs() << "newMakeTensorPtrOp:\n  " << ptr << "\n");
-
-    // Propagate the new ptr through the def-use chain.
-    IRMapping mapping;
-    propagateToUsers(ptr, chain, mapping);
-    cleanUp.insert(makeTensorPtrOp);
-
-    // We have collapsed 2 dimensions into one, therefore we need to adjust the
-    // boundary check of the new load.
-    auto newLoadOp =
-        cast<tt::LoadOp>(mapping.lookup(static_cast<Operation *>(loadOp)));
-    ArrayRef<int> boundaryCheck = newLoadOp.getBoundaryCheck();
-    for (int idx : boundaryCheck) {
-      assert(idx == (newInnermostDimIdx + 1) &&
-             "Unexpected boundary check idx");
-      newLoadOp.setBoundaryCheck({static_cast<int>(newInnermostDimIdx)});
-    }
   }
 
   void fuseMakeTensorDescOp(const DefUseChain &chain,
@@ -361,47 +256,10 @@ private:
     Operation *defOp = reshapeOp.getSrc().getDefiningOp();
     if (!defOp)
       return false;
-    if (auto loadOp = dyn_cast<tt::LoadOp>(defOp))
-      return isCandidate(loadOp);
     if (auto descLoadOp = dyn_cast<tt::DescriptorLoadOp>(defOp))
       return isCandidate(descLoadOp);
 
     return false;
-  }
-
-  bool isCandidate(tt::LoadOp loadOp) const {
-    if (!loadOp->hasOneUse())
-      return false;
-
-    Type ptrType = loadOp.getPtr().getType();
-    if (!tt::isTensorPointerType(ptrType))
-      return false;
-
-    std::optional<tt::MakeTensorPtrOp> makeTensorPtrOp =
-        tt::intel::findDefiningOpOfType<tt::MakeTensorPtrOp>(loadOp.getPtr());
-    if (!makeTensorPtrOp)
-      return false;
-
-    tt::PointerType ptrTy = makeTensorPtrOp->getResult().getType();
-    auto tensorTy = cast<RankedTensorType>(ptrTy.getPointeeType());
-    assert((tensorTy.getRank() == 3 && tensorTy.getDimSize(0) == 1) &&
-           "Unexpected tensor type");
-
-    // Ensure the outermost dimension is the one with highest order.
-    ArrayRef<int> order = makeTensorPtrOp->getOrder();
-    if (order.front() != tensorTy.getRank() - 1)
-      return false;
-
-    unsigned innermostDimIdx = 0;
-    for (int idx : order) {
-      if (idx == 0)
-        break;
-      ++innermostDimIdx;
-    }
-
-    // Ensure the load operation checks at most the innermost dimension.
-    return llvm::all_of(loadOp.getBoundaryCheck(),
-                        [&](int idx) { return idx == innermostDimIdx; });
   }
 
   bool isCandidate(tt::DescriptorLoadOp descLoadOp) const {
