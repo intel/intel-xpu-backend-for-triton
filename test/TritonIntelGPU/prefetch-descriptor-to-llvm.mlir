@@ -84,13 +84,10 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
 // -----
 
 // COM: Test descriptor prefetch with support_prefetch_256b module attribute.
+// COM: Base width/height/pitch/offset computation is verified by @prefetch_descriptor_row_major;
+// COM: here we only verify the base_ptr extraction and the final prefetch tile parameters.
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_prefetch_256b} {
 // CHECK-LABEL:   llvm.func spir_kernelcc @prefetch_descriptor_256b(
-// CHECK-SAME:                                                      %[[BASE:[0-9]+|[a-zA-Z$._-][a-zA-Z0-9$._-]*]]: !llvm.ptr<1>,
-// CHECK-SAME:                                                      %[[BASE_HEIGHT:[0-9]+|[a-zA-Z$._-][a-zA-Z0-9$._-]*]]: i64,
-// CHECK-SAME:                                                      %[[BASE_WIDTH:[0-9]+|[a-zA-Z$._-][a-zA-Z0-9$._-]*]]: i64,
-// CHECK-SAME:                                                      %[[ROW_STRIDE:[0-9]+|[a-zA-Z$._-][a-zA-Z0-9$._-]*]]: i64,
-// CHECK-SAME:                                                      %[[PTR_1:.*]]: !llvm.ptr<1>) attributes {intel_reqd_sub_group_size = 16 : i32, reqd_work_group_size = array<i32: 128, 1, 1>} {
   tt.func public @prefetch_descriptor_256b(%arg0: !tt.ptr<f16>, %arg2: i64, %arg4: i64, %arg5: i64) {
     %c0_i32 = arith.constant 0 : i32
     %c1_i64 = arith.constant 1 : i64
@@ -101,26 +98,10 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     %desc = tt.make_tensor_descriptor %arg0, [%c16_i32, %c256_i32], [%arg5, %c1_i64] : <f16>, <tensor<16x256xf16>>
 
     // CHECK:     %[[DESC:.*]] = llvm.insertvalue %{{.*}}, %{{.*}}[4] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
-    // CHECK:     %[[SHAPE0:.*]] = llvm.extractvalue %[[DESC]][0] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
-    // CHECK:     %[[SHAPE1:.*]] = llvm.extractvalue %[[DESC]][1] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
-    // CHECK:     %[[STRIDE0:.*]] = llvm.extractvalue %[[DESC]][2] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
-    // CHECK:     %[[STRIDE1:.*]] = llvm.extractvalue %[[DESC]][3] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
     // CHECK:     %[[BASE_PTR:.*]] = llvm.extractvalue %[[DESC]][4] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
-    // CHECK:     %[[CST_2:.*]] = llvm.mlir.constant(2 : i64) : i64
-    // CHECK:     %[[WIDTH_BYTES:.*]] = llvm.mul %[[SHAPE1]], %[[CST_2]] : i64
-    // CHECK:     %[[BASE_WIDTH_I32:.*]] = llvm.trunc %[[WIDTH_BYTES]] : i64 to i32
-    // CHECK:     %[[BASE_HEIGHT_I32:.*]] = llvm.trunc %[[SHAPE0]] : i64 to i32
-    // CHECK:     %[[CST_2_:.*]] = llvm.mlir.constant(2 : i64) : i64
-    // CHECK:     %[[STRIDE_BYTES:.*]] = llvm.mul %[[STRIDE0]], %[[CST_2_]] : i64
-    // CHECK:     %[[PITCH:.*]] = llvm.trunc %[[STRIDE_BYTES]] : i64 to i32
-    // CHECK:     %[[SUB_GROUP_ID_RAW:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id() {no_unwind, will_return} : () -> i32
-    // CHECK:     %[[SUB_GROUP_ID_EXT:.*]] = llvm.zext %[[SUB_GROUP_ID_RAW]] : i32 to i64
-    // CHECK:     %[[SUB_GROUP_ID:.*]] = llvm.trunc %[[SUB_GROUP_ID_EXT]] : i64 to i32
-    // CHECK:     %[[OFFSET_X:.*]] = llvm.add {{.*}}, %{{.*}} : i32
-    // CHECK:     %[[OFFSET_Y:.*]] = llvm.add {{.*}}, %{{.*}} : i32
 
     // COM: 16x256xf16 with 256B support → tile_width=128, tile_height=4, v_blocks=1.
-    // CHECK:     triton_gen.2Dblockprefetch %[[BASE_PTR]], %[[BASE_WIDTH_I32]], %[[BASE_HEIGHT_I32]], %[[PITCH]], %[[OFFSET_X]], %[[OFFSET_Y]] {elem_size_in_bits = 16, tile_width = 128, tile_height = 4, v_blocks = 1, cache_control = L1C_L3C}
+    // CHECK:     triton_gen.2Dblockprefetch %[[BASE_PTR]], {{.*}} {elem_size_in_bits = 16, tile_width = 128, tile_height = 4, v_blocks = 1, cache_control = L1C_L3C}
     ttig.descriptor_prefetch %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<16x256xf16>>
 
     tt.return
@@ -130,6 +111,8 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 // -----
 
 // COM: Test 256B prefetch with fallback to 64 bytes per row (128 bytes/row < 256B threshold).
+// COM: Base width/height/pitch/offset computation is verified by @prefetch_descriptor_row_major;
+// COM: here we only verify the base_ptr extraction and the final prefetch tile parameters.
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_prefetch_256b} {
 // CHECK-LABEL:   llvm.func spir_kernelcc @prefetch_descriptor_256b_fallback(
   tt.func public @prefetch_descriptor_256b_fallback(%arg0: !tt.ptr<f16>, %arg5: i64) {
@@ -142,26 +125,10 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     %desc = tt.make_tensor_descriptor %arg0, [%c16_i32, %c64_i32], [%arg5, %c1_i64] : <f16>, <tensor<16x64xf16>>
 
     // CHECK:     %[[DESC:.*]] = llvm.insertvalue %{{.*}}, %{{.*}}[4] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
-    // CHECK:     %[[SHAPE0:.*]] = llvm.extractvalue %[[DESC]][0] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
-    // CHECK:     %[[SHAPE1:.*]] = llvm.extractvalue %[[DESC]][1] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
-    // CHECK:     %[[STRIDE0:.*]] = llvm.extractvalue %[[DESC]][2] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
-    // CHECK:     %[[STRIDE1:.*]] = llvm.extractvalue %[[DESC]][3] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
     // CHECK:     %[[BASE_PTR:.*]] = llvm.extractvalue %[[DESC]][4] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
-    // CHECK:     %[[CST_2:.*]] = llvm.mlir.constant(2 : i64) : i64
-    // CHECK:     %[[WIDTH_BYTES:.*]] = llvm.mul %[[SHAPE1]], %[[CST_2]] : i64
-    // CHECK:     %[[BASE_WIDTH_I32:.*]] = llvm.trunc %[[WIDTH_BYTES]] : i64 to i32
-    // CHECK:     %[[BASE_HEIGHT_I32:.*]] = llvm.trunc %[[SHAPE0]] : i64 to i32
-    // CHECK:     %[[CST_2_:.*]] = llvm.mlir.constant(2 : i64) : i64
-    // CHECK:     %[[STRIDE_BYTES:.*]] = llvm.mul %[[STRIDE0]], %[[CST_2_]] : i64
-    // CHECK:     %[[PITCH:.*]] = llvm.trunc %[[STRIDE_BYTES]] : i64 to i32
-    // CHECK:     %[[SUB_GROUP_ID_RAW:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id() {no_unwind, will_return} : () -> i32
-    // CHECK:     %[[SUB_GROUP_ID_EXT:.*]] = llvm.zext %[[SUB_GROUP_ID_RAW]] : i32 to i64
-    // CHECK:     %[[SUB_GROUP_ID:.*]] = llvm.trunc %[[SUB_GROUP_ID_EXT]] : i64 to i32
-    // CHECK:     %[[OFFSET_X:.*]] = llvm.add {{.*}}, %{{.*}} : i32
-    // CHECK:     %[[OFFSET_Y:.*]] = llvm.add {{.*}}, %{{.*}} : i32
 
     // COM: 128 bytes per row falls back to 64 bytes prefetch → tile_width=16, tile_height=4, v_blocks=2.
-    // CHECK:     triton_gen.2Dblockprefetch %[[BASE_PTR]], %[[BASE_WIDTH_I32]], %[[BASE_HEIGHT_I32]], %[[PITCH]], %[[OFFSET_X]], %[[OFFSET_Y]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 4, v_blocks = 2, cache_control = L1C_L3C}
+    // CHECK:     triton_gen.2Dblockprefetch %[[BASE_PTR]], {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 4, v_blocks = 2, cache_control = L1C_L3C}
     ttig.descriptor_prefetch %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<16x64xf16>>
 
     tt.return

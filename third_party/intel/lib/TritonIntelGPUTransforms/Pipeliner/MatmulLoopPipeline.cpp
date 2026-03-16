@@ -161,7 +161,7 @@ static void collectOpsToPipeline(scf::ForOp forOp,
       RankedTensorType resultTy =
           dyn_cast<RankedTensorType>(op.getResultTypes()[0]);
       // Currently we can only prefetch 2D loads.
-      if (resultTy && resultTy.getRank() != 2) {
+      if (!resultTy || resultTy.getRank() != 2) {
         LDBG("Skipping LoadOp with non 2D tensor type" << op);
         continue;
       }
