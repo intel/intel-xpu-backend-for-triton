@@ -861,3 +861,17 @@ module attributes {"ttg.num-warps" = 64 : i32, "ttg.threads-per-warp" = 16 : i32
     tt.return %0 : tensor<32x2x16xf32, #blocked>
   }
 }
+
+// -----
+
+// COM: The block I/O uses a tile shape of only one row, which results in suboptimal performance compared to gather I/O. Falling back to gather I/O for improved performance.
+#mma = #ttig.dpas<{repeatCount = 1, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1]}>
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @kernel_trans(
+  // CHECK: llvm.load
+  // CHECK-NOT: triton_gen.2Dblockload
+  tt.func public @kernel_trans(%arg0: tensor<1x128x!tt.ptr<f16>, #mma>) -> tensor<1x128xf16, #mma> {
+    %0 = tt.load %arg0 {ttig.block_io = "row_major"} : tensor<1x128x!tt.ptr<f16>, #mma>
+    tt.return %0 : tensor<1x128xf16, #mma>
+  }
+}
