@@ -1139,8 +1139,11 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
         return BlockIOTileSizeInfo::unknown();
     }
 
+    // If rowDim is not determined. The tile shape is of only one row, which
+    // results in suboptimal performance compared to gather I/O. Falling back to
+    // gather I/O for improved performance.
     if (rowDim < 0)
-      rowDim = (fastChangeDim != 0) ? 0 : 1;
+      return BlockIOTileSizeInfo::unknown();
 
     if (transpose && elemSizeInBits == 64) {
       // D64 transpose only supports 8 rows.
