@@ -146,13 +146,6 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
     """
     assert return_mode in ["min", "max", "mean", "median", "all"]
 
-    di = runtime.driver.active.get_device_interface()
-
-    fn()
-    di.synchronize()
-
-    cache = runtime.driver.active.get_empty_cache_for_benchmark()
-
     # Simulation-based execution environments do not require multiple runs to produce stable results. For such cases we skip the estimation and warn the user if their configuration includes warmup or repetitions other than 1.
     simulation_env = knobs.intel.device_arch in ("jgs", "cri")
     if simulation_env:
@@ -160,6 +153,15 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
         warnings.warn(
             "Running benchmarking in the simulation, warmup and rep parameters will be ignored. A single run will be performed."
         )
+
+    di = runtime.driver.active.get_device_interface()
+
+    if not simulation_env:
+        # skip the initializing phase in the simulation environment as they are not necessary and can add significant overhead.
+        fn()
+        di.synchronize()
+
+    cache = runtime.driver.active.get_empty_cache_for_benchmark()
 
     # Estimate the runtime of the function
     if simulation_env:
