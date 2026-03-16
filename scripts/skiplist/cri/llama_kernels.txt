@@ -1,0 +1,21 @@
+# Page fault
+# #1272
+frameworks.ai.pytorch.gpu-models/presi-models/test/reduced-llama/inductor/test_triton_kernels.py::TestGraph_cy77lwjrkltm4x4oaxrzfyuqe3vl6kfaas7c6bhn3qqach4koszfXPU::test_triton_poi_fused__scaled_dot_product_fused_attention_overrideable__to_copy__unsafe_view_add_arange_bitwise_and_cat_clone_cos_expand_index_le_mul_neg_scalar_tensor_sin_unsqueeze_view_where_3_xpu
+# Page fault
+# #1275
+frameworks.ai.pytorch.gpu-models/presi-models/test/reduced-llama/inductor/test_triton_kernels.py::TestGraph_cy77lwjrkltm4x4oaxrzfyuqe3vl6kfaas7c6bhn3qqach4koszfXPU::test_triton_poi_fused__scaled_dot_product_fused_attention_overrideable__to_copy__unsafe_view_add_arange_bitwise_and_cat_clone_cos_expand_index_le_mul_neg_scalar_tensor_sin_unsqueeze_view_where_5_xpu
+# CHECK ../../../ip_command_streamer/cs/src/cs_multiq.cpp:1411 (in function context_group_load) CHECK(m_mq_execution_queue.at(0).sData.Valid)  [FATAL CHECK][2026-03-12 02:08:12] MultiQ, context group submitted with Q0 invalid
+# #1267
+frameworks.ai.pytorch.gpu-models/presi-models/test/reduced-llama/inductor/test_triton_kernels.py::TestGraph_cy77lwjrkltm4x4oaxrzfyuqe3vl6kfaas7c6bhn3qqach4koszfXPU::test_triton_poi_fused__to_copy_add_cat_cos_mul_neg_sin_unsqueeze_2_xpu
+# Terminating with exception: Terminate due to CB_CHECK/CB_FATAL log message :  Invalid dword 0xdeadbeef dw_address = 0x0 cacheline data =deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef
+# #1269
+frameworks.ai.pytorch.gpu-models/presi-models/test/reduced-llama/inductor/test_triton_kernels.py::TestGraph_cy77lwjrkltm4x4oaxrzfyuqe3vl6kfaas7c6bhn3qqach4koszfXPU::test_triton_poi_fused_mul_silu_8_xpu
+# Flacky page fault - FATAL ../../../ip_mempipe/ats/src/GamControl.cpp:1495 (in function PrintGamPageFault)  [tile_0.mempipe_module.mempipe_functional_unit.mempipe_gam.GamControl][ 2150429000 ps | 4300858 clk ][2026-03-12 15:20:00]
+# #1271
+frameworks.ai.pytorch.gpu-models/presi-models/test/reduced-llama/inductor/test_triton_kernels.py::TestGraph_cijqgauprdopmetfxldyxed4clq5fzhff5pwjn3hbx32ipjy52byXPU::test_triton_poi_fused__scaled_dot_product_fused_attention_overrideable__to_copy__unsafe_view_add_arange_bitwise_and_cat_clone_cos_index_le_mul_neg_scalar_tensor_sin_unsqueeze_view_where_4_xpu
+# Flacky page fault
+# #1284
+frameworks.ai.pytorch.gpu-models/presi-models/test/reduced-llama/inductor/test_triton_kernels.py::TestGraph_cy77lwjrkltm4x4oaxrzfyuqe3vl6kfaas7c6bhn3qqach4koszfXPU::test_triton_red_fused__to_copy_add_embedding_mean_mul_pow_rsqrt_7_xpu
+# Flacky page fault
+# #1285
+frameworks.ai.pytorch.gpu-models/presi-models/test/reduced-llama/inductor/test_triton_kernels.py::TestGraph_ctvh7zupnmq4mzpthouexdrnbshmgkjuk325sfaz5l2y6t6oxmkrXPU::test_triton_poi_fused__scaled_dot_product_fused_attention_overrideable__to_copy__unsafe_view_add_arange_bitwise_and_cat_clone_cos_index_le_mul_neg_scalar_tensor_sin_unsqueeze_view_where_6_xpu
