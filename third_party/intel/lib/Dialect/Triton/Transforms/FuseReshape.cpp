@@ -29,16 +29,16 @@ namespace mlir::triton::intel {
 namespace {
 
 // Transform:
-//   %ptr = tt.make_tensor_ptr %base, [%s0,%s1,%s2], [%a,%b,%c], [%x,%y,%z]
-//                       {order = array<i32: 2, 1, 0>} : <tensor<1x512x64xf16>>
-//   %load = tt.load %ptr : !tt.ptr<tensor<1x512x64xf16>>
+//   %desc = tt.make_tensor_descriptor %base, [%s0,%s1,%s2], [%a,%b,%c]
+//                       : !tt.tensordesc<tensor<1x512x64xf16>>
+//   %load = tt.descriptor_load %desc[%x,%y,%z] -> tensor<1x512x64xf16>
 //   %A = tt.reshape %load : tensor<1x512x64xf16> -> tensor<512x64xf16>
 //   dot %A, ... : tensor<512x64xf16> x tensor<64x32xf16> -> tensor<512x32xf16>
 // into:
 //   %d = %a / %b
-//   %ptr = tt.make_tensor_ptr %base, [%s0*%d+%s1,%s2], [%b,%c], [%x*%div+%y,%z]
-//                       {order = array<i32: 1, 0>} : <tensor<512x64xf16>>
-//   %A = tt.load %ptr : !tt.ptr<tensor<512x64xf16>>
+//   %desc = tt.make_tensor_descriptor %base, [%s0*%d+%s1,%s2], [%b,%c]
+//                       : !tt.tensordesc<tensor<512x64xf16>>
+//   %A = tt.descriptor_load %desc[%x*%d+%y,%z] -> tensor<512x64xf16>
 //   dot %A, ... : tensor<512x64xf16> x tensor<64x32xf16> -> tensor<512x32xf16>
 class FuseReshapeWithLoad : public tt::intel::Fuser {
 public:
@@ -46,7 +46,7 @@ public:
     // Collect def-use chains originating at a `MakeTensorDescOp` operation
     // and terminating at a candidate `tt::ReshapeOp` operation.
     // Note: A candidate `reshapeOp` must use the result of a `loadOp` using a
-    // ptr created by the `MakeTensorDescOp` rooting the def-use chain.
+    // descriptor created by the `MakeTensorDescOp` rooting the def-use chain.
     DefUseChainManager manager;
     moduleOp.walk([&](tt::ReshapeOp reshapeOp) {
       if (isCandidate(reshapeOp)) {
@@ -142,10 +142,10 @@ private:
     OperandRange strides = makeTensorDescOp.getStrides();
 
     // Collapse the 3-dim tensor into a 2-dim tensor.
-    // Given a make_tensor_desc with:
+    // Given a make_tensor_descriptor with:
     //   shape  [s0, s1, s2]
     //   stride [a, b, c]
-    // Create a make_tensor_desc with:
+    // Create a make_tensor_descriptor with:
     //   shape  [s0 * a / b + s1, s2]
     //   stride [b, c]
     SmallVector<Value> newShape(makeTensorDescOp.getShape().drop_front());
@@ -169,7 +169,7 @@ private:
     LLVM_DEBUG(llvm::dbgs() << "new MakeTensorDescOp:\n  " << newDesc << "\n");
 
     // Adjust the descriptor load operation indices.
-    // Given a make_tensor_desc with shape/strides:
+    // Given a make_tensor_descriptor with shape/strides:
     //   shape  [s0, s1, s2]
     //   stride [a, b, c]
     // And a descriptor_load with offsets:
@@ -208,10 +208,8 @@ private:
   //    which is a 3-dim tensor with outermost dimension extent equal to one
   //  - the reshape result is used by a dot operation
   //  - the reshape operation uses the result of a 3-dim load operation on a
-  //    block pointer (transitively) defined by a `make_tensor_ptr` operation,
-  //    or the result of a 3-dim descriptor load operation (transitively)
-  //    defined by a `make_tensor_desc` operation
-  //  - the block pointer/tensor descriptor refers to a tensor that has extent
+  //    tensor descriptor (transitively) defined by a `make_tensor_descriptor`
+  //  - the tensor descriptor refers to a tensor that has extent
   //    equal to 1 on the outermost dimension
   //  - the load operation doesn't have boundary checks on either of the
   //    dimensions collapsed
