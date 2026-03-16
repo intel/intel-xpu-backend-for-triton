@@ -204,8 +204,8 @@ public:
         if (!isCandidateLoop(forOp))
           return WalkResult::advance();
 
-        // Collect candidate operations. These are load/store operations that
-        // use a block ptr with no stride equal to one (at compile time).
+        // Collect candidate operations. These are descriptor load/store
+        // operations with no stride equal to one (at compile time).
         OpSelector selector;
         OpsCollector collector(forOp, selector);
         if (collector.collectOps() == 0)

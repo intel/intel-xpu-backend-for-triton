@@ -100,31 +100,37 @@ def TritonIntelFuseReshape
 
 def TritonIntelStrideVersioning
     : Pass<"triton-intel-stride-versioning", "mlir::ModuleOp"> {
-  let summary = "Version loops containing block pointers loads if none of them is 1";
+  let summary = "Version loops containing tensor descriptor loads if none of the strides is 1";
 
   let description = [{
-    This pass versions loops that contain tt.load on a block pointer, if none of the block pointer strides is 1.
+    This pass versions loops that contain tt.descriptor_load on a tensor descriptor, if none of the descriptor strides is 1.
     For example, given:
 
     %cst = arith.constant ...
-    %ptr = tt.make_tensor_ptr %base, [%s0, %s1], [%cst, %b], [%x, %y] : <tensor<512x64xf16>>
+    %desc = tt.make_tensor_descriptor %base, [%s0, %s1], [%cst, %b]
+            : !tt.tensordesc<tensor<512x64xf16>>
     scf.for ... {
-      %load = tt.load %ptr : !tt.ptr<tensor<512x64xf16>>
+      %load = tt.descriptor_load %desc[%x, %y]
+              : !tt.tensordesc<tensor<512x64xf16>> -> tensor<512x64xf16>
       ...
     }
 
     The transformation creates:
 
-    %ptr = tt.make_tensor_ptr %base, [%s0, %s1], [%a, %b], [%x, %y] : <tensor<512x64xf16>>
-    %ptr' = tt.make_tensor_ptr %base, [%s0, %s1], [%a, 1], [%x, %y] : <tensor<512x64xf16>>
+    %desc = tt.make_tensor_descriptor %base, [%s0, %s1], [%a, %b]
+            : !tt.tensordesc<tensor<512x64xf16>>
+    %desc' = tt.make_tensor_descriptor %base, [%s0, %s1], [%a, 1]
+             : !tt.tensordesc<tensor<512x64xf16>>
     if (%b == 1)
       scf.for ... {
-        %load = tt.load %ptr' : !tt.ptr<tensor<512x64xf16>>
+        %load = tt.descriptor_load %desc'[%x, %y]
+                : !tt.tensordesc<tensor<512x64xf16>> -> tensor<512x64xf16>
         ...
       }
     else
       scf.for ... {
-        %load = tt.load %ptr : !tt.ptr<tensor<512x64xf16>>
+        %load = tt.descriptor_load %desc[%x, %y]
+                : !tt.tensordesc<tensor<512x64xf16>> -> tensor<512x64xf16>
         ...
       }
   }];
