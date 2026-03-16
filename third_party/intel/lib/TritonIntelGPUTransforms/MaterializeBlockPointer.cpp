@@ -1,4 +1,5 @@
 #include "intel/include/Analysis/AxisInfo.h"
+#include "intel/include/Analysis/StrideInfo.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
@@ -42,23 +43,27 @@ public:
       return;
 
     tt::intel::ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
+    tt::intel::ModuleStrideAnalysis strideAnalysis(mod, axisInfoAnalysis);
     MLIRContext *context = &getContext();
-    mod.walk(
-        [&](tt::LoadOp op) { return visit(op, axisInfoAnalysis, context); });
-    mod.walk(
-        [&](tt::StoreOp op) { return visit(op, axisInfoAnalysis, context); });
+    mod.walk([&](tt::LoadOp op) {
+      return visit(op, axisInfoAnalysis, strideAnalysis, context);
+    });
+    mod.walk([&](tt::StoreOp op) {
+      return visit(op, axisInfoAnalysis, strideAnalysis, context);
+    });
   }
 
 private:
   template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
                                  OpType, tt::LoadOp, tt::StoreOp>::value>>
   void visit(OpType op, tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+             tt::intel::ModuleStrideAnalysis &strideAnalysis,
              MLIRContext *context) const {
     LDBG("Considering op: " << *op);
 
     Value ptr = op.getPtr();
     if (!tt::isTensorPointerType(ptr.getType()))
-      return MaterializeTensorOfPointers(op, axisInfoAnalysis);
+      return MaterializeTensorOfPointers(op, axisInfoAnalysis, strideAnalysis);
 
     // Find the make tensor ptr operation that created the base ptr.
     std::optional<tt::MakeTensorPtrOp> defOp =
@@ -141,7 +146,8 @@ private:
   template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
                                  OpType, tt::LoadOp, tt::StoreOp>::value>>
   void MaterializeTensorOfPointers(
-      OpType op, tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) const {
+      OpType op, tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+      tt::intel::ModuleStrideAnalysis &strideAnalysis) const {
     if constexpr (std::is_same_v<OpType, tt::LoadOp>) {
       if (op.getMask()) {
         LDBG("Load op has mask, skip block IO attribute");
@@ -178,8 +184,10 @@ private:
     }
 
     // Determine if LoadOp is row-major or column-major.
-    auto isMajor = [](RankedTensorType tensorTy, unsigned fastChangeDim,
-                      const tt::AxisInfo &axisInfo) {
+    tt::intel::StrideInfo *strideInfo = strideAnalysis.getStrideInfo(ptr);
+    auto isMajor = [&strideInfo](RankedTensorType tensorTy,
+                                 unsigned fastChangeDim,
+                                 const tt::AxisInfo &axisInfo) {
       assert((fastChangeDim == 0 || fastChangeDim == 1) &&
              "fastChangeDim is expected to be 0 or 1");
       const unsigned otherDim = !fastChangeDim;
@@ -192,8 +200,10 @@ private:
       }
 
       // Value -1 is used to represent the unknown stride.
-      if (axisInfo.getStride(otherDim) < 0) {
-        LDBG("Found unknown stride: " << axisInfo.getStride(otherDim));
+      int64_t otherDimStride =
+          strideInfo ? strideInfo->getStride(otherDim) : -1;
+      if (otherDimStride < 0) {
+        LDBG("Found unknown stride: " << otherDimStride);
         return false;
       }
 
@@ -201,9 +211,8 @@ private:
       Type elemTy =
           cast<tt::PointerType>(tensorTy.getElementType()).getPointeeType();
       unsigned elemSizeInBytes = elemTy.getIntOrFloatBitWidth() / 8;
-      if ((axisInfo.getStride(otherDim) * elemSizeInBytes) % 16 != 0) {
-        LDBG("Found Non 16 bytes aligned stride: "
-             << axisInfo.getStride(otherDim));
+      if ((otherDimStride * elemSizeInBytes) % 16 != 0) {
+        LDBG("Found Non 16 bytes aligned stride: " << otherDimStride);
         return false;
       }
 
