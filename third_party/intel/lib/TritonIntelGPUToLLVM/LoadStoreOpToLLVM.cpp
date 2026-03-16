@@ -1566,6 +1566,94 @@ static LinearLayout getPrefetchLinearLayout(MLIRContext *ctx,
                                 tensorShape);
 }
 
+/// Emit 2D block prefetch operations for a tiled prefetch.
+///
+/// Converts base dimensions to bytes, determines vBlocks from element size,
+/// computes per-tile offsets via the linear layout, and creates
+/// Matrix2DBlockPrefetchOp for each tile. Erases the original op on success.
+static LogicalResult emit2DBlockPrefetchOps(
+    Operation *op, ConversionPatternRewriter &rewriter, Location loc,
+    Value base, Value baseWidth, Value baseHeight, Value rowStride,
+    Value offsetBaseX, Value offsetBaseY, Type eltTy, unsigned tileWidthInElem,
+    unsigned tileHeightInElem, unsigned numTilesPerWarp,
+    unsigned tileSizeInElem, const LinearLayout &llEncoding) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  MLIRContext *ctx = rewriter.getContext();
+
+  // Convert baseWidth and rowStride to bytes and truncate to i32.
+  baseWidth = b.mul(baseWidth, b.i64_val(eltTy.getIntOrFloatBitWidth() / 8));
+  baseWidth = b.trunc(i32_ty, baseWidth);
+
+  baseHeight = b.trunc(i32_ty, baseHeight);
+
+  Value rowStrideInBytes =
+      b.mul(rowStride, b.i64_val(eltTy.getIntOrFloatBitWidth() / 8));
+  rowStrideInBytes = b.trunc(i32_ty, rowStrideInBytes);
+
+  unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
+  unsigned vBlocks = 1;
+  switch (elemSizeInBits) {
+  case 8:
+    if (tileWidthInElem == 64) {
+      // OCL interface supports 8b_?r32x2c for 64 bytes per row of 8 bits
+      // element.
+      vBlocks = 2;
+      tileWidthInElem = 32;
+    }
+    break;
+  case 16:
+    if (tileWidthInElem == 32) {
+      // OCL interface supports 16b_?r16x2c for 64 bytes per row of 16 bits
+      // element.
+      vBlocks = 2;
+      tileWidthInElem = 16;
+    }
+    break;
+  }
+
+  StringAttr kOffset = S("offset");
+  StringAttr kWarp = S("warp");
+  StringAttr kBlock = S("block");
+
+  Value warpId = arith::IndexCastOp::create(
+      rewriter, loc, i32_ty,
+      mlir::gpu::SubgroupIdOp::create(rewriter, loc,
+                                      /*upperBound=*/nullptr));
+
+  for (unsigned tile = 0; tile < numTilesPerWarp; ++tile) {
+    unsigned off = tile * tileSizeInElem;
+    auto offsets = applyLinearLayout(
+        loc, rewriter, llEncoding,
+        {{kOffset, b.i32_val(off)}, {kWarp, warpId}, {kBlock, b.i32_val(0)}});
+    Value offsetX = b.add(offsets[1].second, offsetBaseX);
+    Value offsetY = b.add(offsets[0].second, offsetBaseY);
+
+    auto newOp = TritonGEN::Matrix2DBlockPrefetchOp::create(
+        rewriter, loc,
+        /*ptr*/ base,
+        /*base_width*/ baseWidth,
+        /*base_height*/ baseHeight,
+        /*base_pitch*/ rowStrideInBytes,
+        /*x*/ offsetX,
+        /*y*/ offsetY,
+        /*elem_size_in_bits*/ elemSizeInBits,
+        /*tile_width*/ tileWidthInElem,
+        /*tile_height*/ tileHeightInElem,
+        /*v_blocks*/ vBlocks,
+        /*cache_opt*/ TritonGEN::LoadCacheControl::L1C_L3C);
+    if (failed(newOp.verify())) {
+      // Delete the op so that the verifier will not abort the pass
+      // pipeline later, as we can fail this path and try a different
+      // approach.
+      rewriter.eraseOp(newOp);
+      return failure();
+    }
+  }
+
+  rewriter.eraseOp(op);
+  return success();
+}
+
 struct PrefetchOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::intel::PrefetchOp>,
       public BlockIOConversionBase {
@@ -1644,27 +1732,6 @@ struct PrefetchOpConversion
     unsigned numTilesPerWarp =
         (tensorShape[0] * tensorShape[1]) / (tileSizeInElem * numWarps);
 
-    unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
-    unsigned vBlocks = 1;
-    switch (elemSizeInBits) {
-    case 8:
-      if (tileWidthInElem == 64) {
-        // OCL interface supports 8b_?r32x2c for 64 bytes per row of 8 bits
-        // element.
-        vBlocks = 2;
-        tileWidthInElem = 32;
-      }
-      break;
-    case 16:
-      if (tileWidthInElem == 32) {
-        // OCL interface supports 16b_?r16x2c for 64 bytes per row of 16 bits
-        // element.
-        vBlocks = 2;
-        tileWidthInElem = 16;
-      }
-      break;
-    }
-
     auto [base, baseWidth, baseHeight, rowStride, colStride, offsetBaseX,
           offsetBaseY] =
         getValuesFromBlockPointerStruct(adaptor.getPtr(), rewriter);
@@ -1676,57 +1743,10 @@ struct PrefetchOpConversion
       std::swap(offsetBaseX, offsetBaseY);
     }
 
-    baseWidth = b.mul(baseWidth, b.i64_val(eltTy.getIntOrFloatBitWidth() / 8));
-    baseWidth = b.trunc(i32_ty, baseWidth);
-
-    baseHeight = b.trunc(i32_ty, baseHeight);
-
-    Value rowStrideInBytes =
-        b.mul(rowStride, b.i64_val(eltTy.getIntOrFloatBitWidth() / 8));
-    rowStrideInBytes = b.trunc(i32_ty, rowStrideInBytes);
-
-    MLIRContext *ctx = getContext();
-    StringAttr kOffset = S("offset");
-    StringAttr kWarp = S("warp");
-    StringAttr kBlock = S("block");
-
-    Value warpId = arith::IndexCastOp::create(
-        rewriter, loc, i32_ty,
-        mlir::gpu::SubgroupIdOp::create(rewriter, loc,
-                                        /*upperBound=*/nullptr));
-
-    for (unsigned tile = 0; tile < numTilesPerWarp; ++tile) {
-      unsigned off = tile * tileSizeInElem;
-      auto offsets = applyLinearLayout(
-          loc, rewriter, llEncoding,
-          {{kOffset, b.i32_val(off)}, {kWarp, warpId}, {kBlock, b.i32_val(0)}});
-      Value offsetX = b.add(offsets[1].second, offsetBaseX);
-      Value offsetY = b.add(offsets[0].second, offsetBaseY);
-
-      auto newOp = TritonGEN::Matrix2DBlockPrefetchOp::create(
-          rewriter, loc,
-          /*ptr*/ base,
-          /*base_width*/ baseWidth,
-          /*base_height*/ baseHeight,
-          /*base_pitch*/ rowStrideInBytes,
-          /*x*/ offsetX,
-          /*y*/ offsetY,
-          /*elem_size_in_bits*/ elemSizeInBits,
-          /*tile_width*/ tileWidthInElem,
-          /*tile_height*/ tileHeightInElem,
-          /*v_blocks*/ vBlocks,
-          /*cache_opt*/ TritonGEN::LoadCacheControl::L1C_L3C);
-      if (failed(newOp.verify())) {
-        // delete the op so that the verifier will not abort the pass
-        // pipeline later, as we can fail this path and try a different
-        // approach.
-        rewriter.eraseOp(newOp);
-        return failure();
-      }
-    }
-
-    rewriter.eraseOp(op);
-    return success();
+    return emit2DBlockPrefetchOps(
+        op, rewriter, loc, base, baseWidth, baseHeight, rowStride, offsetBaseX,
+        offsetBaseY, eltTy, tileWidthInElem, tileHeightInElem, numTilesPerWarp,
+        tileSizeInElem, llEncoding);
   }
 
   LogicalResult
@@ -2013,27 +2033,6 @@ struct DescriptorPrefetchOpConversion
     unsigned numTilesPerWarp =
         (tensorShape[0] * tensorShape[1]) / (tileSizeInElem * numWarps);
 
-    unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
-    unsigned vBlocks = 1;
-    switch (elemSizeInBits) {
-    case 8:
-      if (tileWidthInElem == 64) {
-        // OCL interface supports 8b_?r32x2c for 64 bytes per row of 8 bits
-        // element.
-        vBlocks = 2;
-        tileWidthInElem = 32;
-      }
-      break;
-    case 16:
-      if (tileWidthInElem == 32) {
-        // OCL interface supports 16b_?r16x2c for 64 bytes per row of 16 bits
-        // element.
-        vBlocks = 2;
-        tileWidthInElem = 16;
-      }
-      break;
-    }
-
     // Unpack the tensor descriptor struct.
     // TensorDescType struct layout: { shape[rank], stride[rank], base }
     // This differs from block pointers which have: { offset[rank], shape[rank],
@@ -2069,58 +2068,11 @@ struct DescriptorPrefetchOpConversion
     Value offsetBaseY = indices[0]; // row offset
     Value offsetBaseX = indices[1]; // col offset
 
-    // Convert baseWidth to bytes (same as rewriteTensorPointerPrefetch).
-    baseWidth = b.mul(baseWidth, b.i64_val(eltTy.getIntOrFloatBitWidth() / 8));
-    baseWidth = b.trunc(i32_ty, baseWidth);
-
-    baseHeight = b.trunc(i32_ty, baseHeight);
-
-    Value rowStrideInBytes =
-        b.mul(rowStride, b.i64_val(eltTy.getIntOrFloatBitWidth() / 8));
-    rowStrideInBytes = b.trunc(i32_ty, rowStrideInBytes);
-
-    MLIRContext *ctx = getContext();
-    StringAttr kOffset = S("offset");
-    StringAttr kWarp = S("warp");
-    StringAttr kBlock = S("block");
-
-    Value warpId = arith::IndexCastOp::create(
-        rewriter, loc, i32_ty,
-        mlir::gpu::SubgroupIdOp::create(rewriter, loc,
-                                        /*upperBound=*/nullptr));
-
-    for (unsigned tile = 0; tile < numTilesPerWarp; ++tile) {
-      unsigned off = tile * tileSizeInElem;
-      auto offsets = applyLinearLayout(
-          loc, rewriter, llEncoding,
-          {{kOffset, b.i32_val(off)}, {kWarp, warpId}, {kBlock, b.i32_val(0)}});
-      Value offsetX = b.add(offsets[1].second, offsetBaseX);
-      Value offsetY = b.add(offsets[0].second, offsetBaseY);
-
-      auto newOp = TritonGEN::Matrix2DBlockPrefetchOp::create(
-          rewriter, loc,
-          /*ptr*/ base,
-          /*base_width*/ baseWidth,
-          /*base_height*/ baseHeight,
-          /*base_pitch*/ rowStrideInBytes,
-          /*x*/ offsetX,
-          /*y*/ offsetY,
-          /*elem_size_in_bits*/ elemSizeInBits,
-          /*tile_width*/ tileWidthInElem,
-          /*tile_height*/ tileHeightInElem,
-          /*v_blocks*/ vBlocks,
-          /*cache_opt*/ TritonGEN::LoadCacheControl::L1C_L3C);
-      if (failed(newOp.verify())) {
-        // Delete the op so that the verifier will not abort the pass
-        // pipeline later, as we can fail this path and try a different
-        // approach.
-        rewriter.eraseOp(newOp);
-        return failure();
-      }
-    }
-
-    rewriter.eraseOp(op);
-    return success();
+    // Emit the 2D block prefetch operations.
+    return emit2DBlockPrefetchOps(
+        op, rewriter, loc, base, baseWidth, baseHeight, rowStride, offsetBaseX,
+        offsetBaseY, eltTy, tileWidthInElem, tileHeightInElem, numTilesPerWarp,
+        tileSizeInElem, llEncoding);
   }
 };
 
