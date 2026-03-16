@@ -53,119 +53,148 @@ Attribute maybeGetDefaultBlockedEncoding(Operation *op,
       ttg::lookupThreadsPerWarp(builder), ttg::lookupNumCTAs(builder));
 }
 
-// Recursively collect all encodings from DescriptorLoadOp/DescriptorStoreOp
-// users, following through loop arguments and other passthrough operations.
-void collectEncodingsFromUsers(Value value, SmallPtrSetImpl<Value> &visited,
-                               llvm::SetVector<Attribute> &encodings) {
+// Collect all DescriptorLoadOp/DescriptorStoreOp operations reachable from
+// `value` through value flow (loop args, yields, selects, conditions).
+void collectDescriptorLoadStoreUsers(Value value,
+                                     SmallPtrSetImpl<Value> &visited,
+                                     SmallVectorImpl<Operation *> &users) {
   if (!visited.insert(value).second)
     return;
 
   for (Operation *user : value.getUsers()) {
-    // Direct load/store user.
-    if (auto loadOp = dyn_cast<tt::DescriptorLoadOp>(user)) {
-      if (auto encoding =
-              cast<RankedTensorType>(loadOp.getType()).getEncoding())
-        encodings.insert(encoding);
+    if (isa<tt::DescriptorLoadOp, tt::DescriptorStoreOp>(user)) {
+      users.push_back(user);
       continue;
     }
-    if (auto storeOp = dyn_cast<tt::DescriptorStoreOp>(user)) {
-      if (auto encoding =
-              cast<RankedTensorType>(storeOp.getSrc().getType()).getEncoding())
-        encodings.insert(encoding);
-      continue;
-    }
-
-    // Follow through loop arguments.
     if (auto forOp = dyn_cast<scf::ForOp>(user)) {
       for (auto [initArg, regionArg] :
-           llvm::zip(forOp.getInitArgs(), forOp.getRegionIterArgs())) {
+           llvm::zip(forOp.getInitArgs(), forOp.getRegionIterArgs()))
         if (initArg == value)
-          collectEncodingsFromUsers(regionArg, visited, encodings);
-      }
+          collectDescriptorLoadStoreUsers(regionArg, visited, users);
       continue;
     }
     if (auto whileOp = dyn_cast<scf::WhileOp>(user)) {
       for (auto [initArg, beforeArg] :
-           llvm::zip(whileOp.getInits(), whileOp.getBeforeArguments())) {
+           llvm::zip(whileOp.getInits(), whileOp.getBeforeArguments()))
         if (initArg == value)
-          collectEncodingsFromUsers(beforeArg, visited, encodings);
-      }
+          collectDescriptorLoadStoreUsers(beforeArg, visited, users);
       continue;
     }
-
-    // Follow through scf.condition to while's "after" region args.
     if (auto conditionOp = dyn_cast<scf::ConditionOp>(user)) {
-      if (auto whileOp = dyn_cast<scf::WhileOp>(conditionOp->getParentOp())) {
+      if (auto whileOp = dyn_cast<scf::WhileOp>(conditionOp->getParentOp()))
         for (auto [condArg, afterArg] :
-             llvm::zip(conditionOp.getArgs(), whileOp.getAfterArguments())) {
+             llvm::zip(conditionOp.getArgs(), whileOp.getAfterArguments()))
           if (condArg == value)
-            collectEncodingsFromUsers(afterArg, visited, encodings);
-        }
-      }
+            collectDescriptorLoadStoreUsers(afterArg, visited, users);
       continue;
     }
-
-    // Follow through yield to loop results and back to region iter args.
     if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
       if (auto forOp = dyn_cast<scf::ForOp>(yieldOp->getParentOp())) {
         for (auto [yieldedVal, result, regionArg] :
              llvm::zip(yieldOp.getOperands(), forOp.getResults(),
-                       forOp.getRegionIterArgs())) {
+                       forOp.getRegionIterArgs()))
           if (yieldedVal == value) {
-            collectEncodingsFromUsers(result, visited, encodings);
-            collectEncodingsFromUsers(regionArg, visited, encodings);
+            collectDescriptorLoadStoreUsers(result, visited, users);
+            collectDescriptorLoadStoreUsers(regionArg, visited, users);
           }
-        }
       } else if (auto whileOp =
                      dyn_cast<scf::WhileOp>(yieldOp->getParentOp())) {
-        // Yield in while's "after" region goes back to "before" region args
-        // and to loop results.
         for (auto [yieldedVal, result, beforeArg] :
              llvm::zip(yieldOp.getOperands(), whileOp.getResults(),
-                       whileOp.getBeforeArguments())) {
+                       whileOp.getBeforeArguments()))
           if (yieldedVal == value) {
-            collectEncodingsFromUsers(result, visited, encodings);
-            collectEncodingsFromUsers(beforeArg, visited, encodings);
+            collectDescriptorLoadStoreUsers(result, visited, users);
+            collectDescriptorLoadStoreUsers(beforeArg, visited, users);
           }
-        }
       } else if (auto ifOp = dyn_cast<scf::IfOp>(yieldOp->getParentOp())) {
-        // Yield in if's then/else region goes to the if's results.
         for (auto [yieldedVal, result] :
-             llvm::zip(yieldOp.getOperands(), ifOp.getResults())) {
+             llvm::zip(yieldOp.getOperands(), ifOp.getResults()))
           if (yieldedVal == value)
-            collectEncodingsFromUsers(result, visited, encodings);
-        }
+            collectDescriptorLoadStoreUsers(result, visited, users);
       }
       continue;
     }
-
-    // Follow through select op.
     if (auto selectOp = dyn_cast<arith::SelectOp>(user)) {
-      collectEncodingsFromUsers(selectOp.getResult(), visited, encodings);
+      collectDescriptorLoadStoreUsers(selectOp.getResult(), visited, users);
       continue;
     }
   }
 }
 
-// Find the single encoding from all users of a value.
-// Asserts if multiple different encodings are found.
-Attribute findEncodingFromUsers(Value value) {
-  SmallPtrSet<Value, 8> visited;
-  llvm::SetVector<Attribute> encodings;
-  collectEncodingsFromUsers(value, visited, encodings);
+// For each MakeTensorDescOp whose load/store users have more than one distinct
+// encoding, clone the descriptor once per extra encoding and redirect those
+// users' descriptor operand (operand 0) to the appropriate clone. Afterwards
+// every MakeTensorDescOp has at most one encoding across all its users.
+//
+// Returns a map from each descriptor (originals and clones) to its single
+// encoding, so callers avoid a second traversal.
+//
+// For uses that flow through loops/selects we replace operand 0 of the
+// load/store directly (bypassing the loop-threaded value). This is valid
+// because TensorDescType is immutable – the base pointer, shape and strides
+// recorded in the descriptor do not change across loop iterations.
+DenseMap<tt::MakeTensorDescOp, Attribute>
+splitDescriptorsByEncoding(ModuleOp moduleOp) {
+  DenseMap<tt::MakeTensorDescOp, Attribute> descToEncoding;
 
-  assert(encodings.size() <= 1 &&
-         "MakeTensorDescOp with multiple encodings is not yet supported");
-  return encodings.empty() ? Attribute() : encodings.front();
+  SmallVector<tt::MakeTensorDescOp> descOps;
+  moduleOp->walk([&](tt::MakeTensorDescOp op) { descOps.push_back(op); });
+
+  for (tt::MakeTensorDescOp descOp : descOps) {
+    // Collect all reachable descriptor load/store users.
+    SmallVector<Operation *> loadStoreUsers;
+    SmallPtrSet<Value, 8> visited;
+    collectDescriptorLoadStoreUsers(descOp.getResult(), visited,
+                                    loadStoreUsers);
+
+    // Group them by encoding.
+    DenseMap<Attribute, SmallVector<Operation *>> encodingToOps;
+    for (Operation *userOp : loadStoreUsers) {
+      Attribute encoding;
+      if (auto loadOp = dyn_cast<tt::DescriptorLoadOp>(userOp))
+        encoding = cast<RankedTensorType>(loadOp.getType()).getEncoding();
+      else if (auto storeOp = dyn_cast<tt::DescriptorStoreOp>(userOp))
+        encoding =
+            cast<RankedTensorType>(storeOp.getSrc().getType()).getEncoding();
+      encodingToOps[encoding].push_back(userOp);
+    }
+
+    if (encodingToOps.size() <= 1) {
+      // Single (or no) encoding: record it and move on.
+      descToEncoding[descOp] =
+          encodingToOps.empty() ? Attribute() : encodingToOps.begin()->first;
+      continue;
+    }
+
+    // Multiple encodings: keep the first on the original, clone for the rest.
+    OpBuilder builder(descOp.getContext());
+    builder.setInsertionPointAfter(descOp);
+    bool isFirst = true;
+    for (auto &[encoding, ops] : encodingToOps) {
+      if (isFirst) {
+        descToEncoding[descOp] = encoding;
+        isFirst = false;
+        continue;
+      }
+      auto clone = cast<tt::MakeTensorDescOp>(builder.clone(*descOp));
+      descToEncoding[clone] = encoding;
+      for (Operation *userOp : ops)
+        userOp->setOperand(0, clone.getResult());
+    }
+  }
+
+  return descToEncoding;
 }
 
-// Find and adjust encoding for a tensor descriptor operation.
-// The encoding is found from DescriptorLoad/Store users. If the layout rank
-// differs from the tensor rank (e.g., rank-reducing loads), the encoding is
-// adjusted by adding batch dimensions with size 1.
-Attribute findEncodingForTensorDesc(tt::MakeTensorDescOp op) {
+// Adjust the encoding for a tensor descriptor operation.
+// If the layout rank differs from the tensor rank (e.g., rank-reducing loads),
+// the encoding is adjusted by adding batch dimensions with size 1.
+Attribute findEncodingForTensorDesc(
+    tt::MakeTensorDescOp op,
+    const DenseMap<tt::MakeTensorDescOp, Attribute> &descToEncoding) {
+  auto it = descToEncoding.find(op);
   auto layout = dyn_cast_or_null<ttg::LayoutEncodingTrait>(
-      findEncodingFromUsers(op.getResult()));
+      it != descToEncoding.end() ? it->second : Attribute());
   if (!layout)
     return layout;
 
@@ -239,6 +268,11 @@ public:
   void runOnOperation() final {
     ModuleOp moduleOp = getOperation();
 
+    // Ensure every MakeTensorDescOp has a single encoding across all its
+    // load/store users before the main rewriting walk, and record each
+    // descriptor's encoding to avoid re-traversing during rewriting.
+    descToEncoding = splitDescriptorsByEncoding(moduleOp);
+
     moduleOp->walk<WalkOrder::PreOrder>([&](tt::DescriptorLoadOp loadOp) {
       // Retrieve the padding option from the MakeTensorDescOp.
       std::optional<tt::MakeTensorDescOp> makeTensorDescOp =
@@ -284,6 +318,10 @@ public:
   }
 
 private:
+  // Maps each MakeTensorDescOp to the single encoding of its load/store users.
+  // Populated by splitDescriptorsByEncoding at the start of runOnOperation.
+  DenseMap<tt::MakeTensorDescOp, Attribute> descToEncoding;
+
   // Create a new block pointer if a suitable one doesn't already exist.
   // Otherwise, return the existing one. The function takes the base, shape,
   // strides, offsets, sizes of the block pointer to create/lookup and its
@@ -395,7 +433,7 @@ private:
       sizes.push_back(size);
     }
 
-    Attribute layout = findEncodingForTensorDesc(op);
+    Attribute layout = findEncodingForTensorDesc(op, descToEncoding);
     auto tensorPtr = findOrCreateMakeTensorPtr(
         loc, op.getBase(), shapes, strides, offsets, sizes, layout, builder);
     LLVM_DEBUG({
