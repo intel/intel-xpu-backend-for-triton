@@ -244,3 +244,11 @@ ls -la <reports_dir>/**/*.xml
 If you see "Test contains test cases from multiple testsuites", either:
 1. Add `--tests-with-multiple-testsuites` flag
 2. Exclude one testsuite with `--ignore-testsuite <name>`
+
+## Changelog
+
+### 0.4.3
+
+- **Bug fix**: Fixed incorrect test name generation for reports containing pytest class-based tests (e.g., `test_triton_kernels.TestGraph_...XPU`). The last segment of the classname was incorrectly treated as a module name instead of a class name, producing malformed paths.
+- **New property**: Added `pytest_name` field to `TestCase` and `Test`, producing pytest-compatible test node ids (e.g., `path/to/test_module.py::ClassName::test_name[variant]`). These can be passed directly to pytest for re-running tests.
+- **Output change**: Non-pretty outputs for `tests_stats` and `compare` modes now use `pytest_name` format instead of the internal path format.
