@@ -76,7 +76,7 @@ private:
 
   // Implementation for descriptor operations
   template <typename OpType>
-  void visitDescriptorImpl(OpType op, Type resultType,
+  void visitDescriptorImpl(OpType op, RankedTensorType tensorType,
                            tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
                            MLIRContext *context) const {
     LDBG("Considering descriptor op: " << *op);
@@ -104,11 +104,6 @@ private:
       return;
     }
 
-    RankedTensorType tensorType = dyn_cast<RankedTensorType>(resultType);
-    if (!tensorType) {
-      LDBG("Result type is not a RankedTensorType");
-      return;
-    }
     unsigned elementWidth = tensorType.getElementTypeBitWidth();
     LDBG("elementWidth: " << elementWidth);
 
