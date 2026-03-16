@@ -1,4 +1,5 @@
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Utils/Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -15,12 +16,14 @@
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include <algorithm>
 
 #define DEBUG_TYPE "triton-intel-tdesc-to-block-pointer"
 
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
+namespace ttgi = mlir::triton::gpu::intel;
 
 namespace mlir::triton::intel {
 #define GEN_PASS_DEF_TRITONINTELTENSORDESCTOBLOCKPOINTER
@@ -148,13 +151,22 @@ void collectDescriptorLoadStoreUsers(
   }
 }
 
+// Represents the three possible ttig.block_io attribute values.
+enum class BlockIOMode { None, RowMajor, ColumnMajor };
+
+struct DescriptorUserInfo {
+  Attribute encoding;
+  BlockIOMode blockIOMode = BlockIOMode::None;
+};
+
 // For each MakeTensorDescOp whose load/store users have more than one distinct
-// encoding, clone the descriptor once per extra encoding and redirect those
-// users' descriptor operand (operand 0) to the appropriate clone. Afterwards
-// every MakeTensorDescOp has at most one encoding across all its users.
+// (encoding, blockIOMode) combination, clone the descriptor once per extra
+// combination and redirect those users' descriptor operand (operand 0) to the
+// appropriate clone. Afterwards every MakeTensorDescOp has at most one encoding
+// and one access pattern (None/RowMajor/ColumnMajor) across all its users.
 //
-// Returns a map from each descriptor (originals and clones) to its single
-// encoding, so callers avoid a second traversal.
+// Returns a map from each descriptor (originals and clones) to its
+// DescriptorUserInfo (encoding + blockIOMode), so callers avoid re-traversal.
 //
 // For uses that flow through loops/yields (but not if/select) we replace
 // operand 0 of the load/store directly. This is valid only for direct uses and
@@ -165,9 +177,9 @@ void collectDescriptorLoadStoreUsers(
 // For users reached through if/select operations, the descriptor is not cloned
 // to avoid breaking control flow semantics. Such descriptors can only have a
 // single encoding across all their users.
-DenseMap<tt::MakeTensorDescOp, Attribute>
-splitDescriptorsByEncoding(ModuleOp moduleOp) {
-  DenseMap<tt::MakeTensorDescOp, Attribute> descToEncoding;
+DenseMap<tt::MakeTensorDescOp, DescriptorUserInfo>
+splitDescriptorsByUserInfo(ModuleOp moduleOp) {
+  DenseMap<tt::MakeTensorDescOp, DescriptorUserInfo> descToInfo;
 
   SmallVector<tt::MakeTensorDescOp> descOps;
   moduleOp->walk([&](tt::MakeTensorDescOp op) { descOps.push_back(op); });
@@ -181,8 +193,20 @@ splitDescriptorsByEncoding(ModuleOp moduleOp) {
     collectDescriptorLoadStoreUsers(descOp.getResult(), visitedNoIfSelect,
                                     visitedWithIfSelect, loadStoreUsers);
 
-    // Group them by encoding.
-    llvm::MapVector<Attribute, SmallVector<Operation *>> encodingToOps;
+    auto getBlockIOMode = [](Operation *userOp) {
+      if (auto attr = userOp->getAttrOfType<StringAttr>(
+              ttgi::TritonIntelGPUDialect::getBlockIOAttrName())) {
+        if (attr.getValue() == "column_major")
+          return BlockIOMode::ColumnMajor;
+        if (attr.getValue() == "row_major")
+          return BlockIOMode::RowMajor;
+      }
+      return BlockIOMode::None;
+    };
+
+    // Group users by (encoding, blockIOMode) so each clone has a uniform
+    // layout and access pattern.
+    SmallVector<std::pair<DescriptorUserInfo, SmallVector<Operation *>>> groups;
     for (auto &[userOp, reachedThroughIfSelect] : loadStoreUsers) {
       (void)reachedThroughIfSelect;
       Attribute encoding;
@@ -191,23 +215,30 @@ splitDescriptorsByEncoding(ModuleOp moduleOp) {
       else if (auto storeOp = dyn_cast<tt::DescriptorStoreOp>(userOp))
         encoding =
             cast<RankedTensorType>(storeOp.getSrc().getType()).getEncoding();
-      encodingToOps[encoding].push_back(userOp);
+      DescriptorUserInfo key{encoding, getBlockIOMode(userOp)};
+      auto it = llvm::find_if(groups, [&](const auto &g) {
+        return g.first.encoding == key.encoding &&
+               g.first.blockIOMode == key.blockIOMode;
+      });
+      if (it == groups.end())
+        groups.push_back({key, {userOp}});
+      else
+        it->second.push_back(userOp);
     }
 
-    if (encodingToOps.size() <= 1) {
-      // Single (or no) encoding: record it and move on.
-      descToEncoding[descOp] =
-          encodingToOps.empty() ? Attribute() : encodingToOps.begin()->first;
+    if (groups.size() <= 1) {
+      descToInfo[descOp] =
+          groups.empty() ? DescriptorUserInfo{} : groups.front().first;
       continue;
     }
 
-    // Multiple encodings: keep the first on the original, clone for the rest.
+    // Multiple groups: keep the first on the original, clone for the rest.
     OpBuilder builder(descOp.getContext());
     builder.setInsertionPointAfter(descOp);
     bool isFirst = true;
-    for (auto &[encoding, ops] : encodingToOps) {
+    for (auto &[info, ops] : groups) {
       if (isFirst) {
-        descToEncoding[descOp] = encoding;
+        descToInfo[descOp] = info;
         isFirst = false;
         continue;
       }
@@ -225,7 +256,7 @@ splitDescriptorsByEncoding(ModuleOp moduleOp) {
                                   "encodings that flow through if/select.");
 
       auto clone = cast<tt::MakeTensorDescOp>(builder.clone(*descOp));
-      descToEncoding[clone] = encoding;
+      descToInfo[clone] = info;
       for (Operation *userOp : ops) {
         if (auto loadOp = dyn_cast<tt::DescriptorLoadOp>(userOp))
           loadOp.getDescMutable().assign(clone.getResult());
@@ -235,18 +266,15 @@ splitDescriptorsByEncoding(ModuleOp moduleOp) {
     }
   }
 
-  return descToEncoding;
+  return descToInfo;
 }
 
 // Adjust the encoding for a tensor descriptor operation.
 // If the layout rank differs from the tensor rank (e.g., rank-reducing loads),
 // the encoding is adjusted by adding batch dimensions with size 1.
-Attribute findEncodingForTensorDesc(
-    tt::MakeTensorDescOp op,
-    const DenseMap<tt::MakeTensorDescOp, Attribute> &descToEncoding) {
-  auto it = descToEncoding.find(op);
-  auto layout = dyn_cast_or_null<ttg::LayoutEncodingTrait>(
-      it != descToEncoding.end() ? it->second : Attribute());
+Attribute findEncodingForTensorDesc(tt::MakeTensorDescOp op,
+                                    Attribute encoding) {
+  auto layout = dyn_cast_or_null<ttg::LayoutEncodingTrait>(encoding);
   if (!layout)
     return layout;
 
@@ -323,7 +351,7 @@ public:
     // Ensure every MakeTensorDescOp has a single encoding across all its
     // load/store users before the main rewriting walk, and record each
     // descriptor's encoding to avoid re-traversing during rewriting.
-    descToEncoding = splitDescriptorsByEncoding(moduleOp);
+    descToEncoding = splitDescriptorsByUserInfo(moduleOp);
 
     moduleOp->walk<WalkOrder::PreOrder>([&](tt::DescriptorLoadOp loadOp) {
       // Retrieve the padding option from the MakeTensorDescOp.
@@ -371,20 +399,33 @@ public:
 
 private:
   // Maps each MakeTensorDescOp to the single encoding of its load/store users.
-  // Populated by splitDescriptorsByEncoding at the start of runOnOperation.
-  DenseMap<tt::MakeTensorDescOp, Attribute> descToEncoding;
+  // Populated by splitDescriptorsByUserInfo at the start of runOnOperation.
+  DenseMap<tt::MakeTensorDescOp, DescriptorUserInfo> descToEncoding;
 
   // Create a new block pointer if a suitable one doesn't already exist.
   // Otherwise, return the existing one. The function takes the base, shape,
   // strides, offsets, sizes of the block pointer to create/lookup and its
   // tensor element type (to ensure the block pointer has the tensor layout).
+  // For column_major descriptors, the shape and strides are swapped.
   tt::MakeTensorPtrOp
   findOrCreateMakeTensorPtr(Location loc, Value base, ValueRange shape,
                             ValueRange strides, ValueRange offsets,
                             ArrayRef<int64_t> sizes, Attribute layout,
-                            OpBuilder &builder) {
+                            OpBuilder &builder, bool isColumnMajor) {
     Block *block = builder.getInsertionBlock();
     const Block::iterator insertPoint = builder.getInsertionPoint();
+
+    // For column_major, swap the order of shape and strides
+    SmallVector<Value> swappedShape, swappedStrides;
+    swappedShape.assign(shape.begin(), shape.end());
+    swappedStrides.assign(strides.begin(), strides.end());
+    SmallVector<int64_t> tensorPtrSizes(sizes.begin(), sizes.end());
+    if (isColumnMajor) {
+      std::reverse(swappedShape.begin(), swappedShape.end());
+      std::reverse(swappedStrides.begin(), swappedStrides.end());
+      std::reverse(tensorPtrSizes.begin(), tensorPtrSizes.end());
+    }
+
     auto it = std::find_if(block->begin(), insertPoint, [&](Operation &op) {
       if (auto makeTensorPtrOp = dyn_cast<tt::MakeTensorPtrOp>(op)) {
         triton::PointerType resType = makeTensorPtrOp.getResult().getType();
@@ -398,10 +439,10 @@ private:
         };
 
         return makeTensorPtrOp.getBase() == base &&
-               makeTensorPtrOp.getShape() == shape &&
-               makeTensorPtrOp.getStrides() == strides &&
+               makeTensorPtrOp.getShape() == swappedShape &&
+               makeTensorPtrOp.getStrides() == swappedStrides &&
                makeTensorPtrOp.getOffsets() == offsets &&
-               sameShape(tensorType.getShape(), sizes) &&
+               sameShape(tensorType.getShape(), tensorPtrSizes) &&
                tensorType.getEncoding() == layout;
       }
       return false;
@@ -409,13 +450,16 @@ private:
 
     auto makeTensorPtrOp = [&]() {
       auto pointerType = cast<tt::PointerType>(base.getType());
-      auto tensorType =
-          RankedTensorType::get(sizes, pointerType.getPointeeType(), layout);
+      auto tensorType = RankedTensorType::get(
+          tensorPtrSizes, pointerType.getPointeeType(), layout);
       auto tensorPtrType =
           tt::PointerType::get(tensorType, pointerType.getAddressSpace());
+      // For column_major, use order {0, 1} instead of {1, 0}
+      auto order = isColumnMajor ? builder.getDenseI32ArrayAttr({0, 1})
+                                 : builder.getDenseI32ArrayAttr({1, 0});
       auto makeTensorPtr = tt::MakeTensorPtrOp::create(
-          builder, loc, tensorPtrType, base, shape, strides, offsets,
-          builder.getDenseI32ArrayAttr({1, 0}));
+          builder, loc, tensorPtrType, base, swappedShape, swappedStrides,
+          offsets, order);
       return makeTensorPtr;
     };
 
@@ -485,9 +529,12 @@ private:
       sizes.push_back(size);
     }
 
-    Attribute layout = findEncodingForTensorDesc(op, descToEncoding);
-    auto tensorPtr = findOrCreateMakeTensorPtr(
-        loc, op.getBase(), shapes, strides, offsets, sizes, layout, builder);
+    DescriptorUserInfo userInfo = descToEncoding[op];
+    Attribute layout = findEncodingForTensorDesc(op, userInfo.encoding);
+    bool isColumnMajor = userInfo.blockIOMode == BlockIOMode::ColumnMajor;
+    auto tensorPtr =
+        findOrCreateMakeTensorPtr(loc, op.getBase(), shapes, strides, offsets,
+                                  sizes, layout, builder, isColumnMajor);
     LLVM_DEBUG({
       llvm::dbgs() << "With:\n";
       llvm::dbgs().indent(2) << tensorPtr << "\n";
@@ -532,8 +579,15 @@ private:
             opTensorType.getEncoding() == descTensorType.getEncoding()) &&
            "Expecting the same encoding");
 
-    Value ptr =
-        tt::AdvanceOp::create(builder, loc, ptrType, operand, op.getIndices());
+    // For column_major loads/stores, reverse the indices to match the swapped
+    // shape/strides ordering in the block pointer.
+    SmallVector<Value> indices(op.getIndices().begin(), op.getIndices().end());
+    if (StringAttr blockIOAttr = op->template getAttrOfType<StringAttr>(
+            ttgi::TritonIntelGPUDialect::getBlockIOAttrName());
+        blockIOAttr && blockIOAttr.getValue() == "column_major")
+      std::reverse(indices.begin(), indices.end());
+
+    Value ptr = tt::AdvanceOp::create(builder, loc, ptrType, operand, indices);
 
     SmallVector<int32_t> boundaryCheck;
     for (size_t i = 0; i < descTensorType.getRank(); ++i)
