@@ -51,34 +51,32 @@ public:
     mod.walk([&](tt::StoreOp op) {
       visit(op, axisInfoAnalysis, strideAnalysis, context);
     });
-    mod.walk([&](tt::DescriptorLoadOp op) {
-      visitDescriptor(op, axisInfoAnalysis, context);
-    });
+    mod.walk(
+        [&](tt::DescriptorLoadOp op) { visit(op, axisInfoAnalysis, context); });
     mod.walk([&](tt::DescriptorStoreOp op) {
-      visitDescriptor(op, axisInfoAnalysis, context);
+      visit(op, axisInfoAnalysis, context);
     });
   }
 
 private:
   // Visit method for descriptor operations
-  void visitDescriptor(tt::DescriptorLoadOp op,
-                       tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                       MLIRContext *context) const {
-    visitDescriptorImpl(op, op.getResult().getType(), axisInfoAnalysis,
-                        context);
+  void visit(tt::DescriptorLoadOp op,
+             tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+             MLIRContext *context) const {
+    visitDescriptor(op, op.getResult().getType(), axisInfoAnalysis, context);
   }
 
-  void visitDescriptor(tt::DescriptorStoreOp op,
-                       tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                       MLIRContext *context) const {
-    visitDescriptorImpl(op, op.getSrc().getType(), axisInfoAnalysis, context);
+  void visit(tt::DescriptorStoreOp op,
+             tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+             MLIRContext *context) const {
+    visitDescriptor(op, op.getSrc().getType(), axisInfoAnalysis, context);
   }
 
   // Implementation for descriptor operations
   template <typename OpType>
-  void visitDescriptorImpl(OpType op, RankedTensorType tensorType,
-                           tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                           MLIRContext *context) const {
+  void visitDescriptor(OpType op, RankedTensorType tensorType,
+                       tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                       MLIRContext *context) const {
     LDBG("Considering descriptor op: " << *op);
 
     Value desc = op.getDesc();
