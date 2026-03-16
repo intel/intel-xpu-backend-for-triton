@@ -92,10 +92,20 @@ protected:
 // Intel-specific visitors
 //===----------------------------------------------------------------------===//
 
+/// Compute AxisInfo for ops that create a block pointer or tensor descriptor.
+///
+/// Both MakeTensorPtrOp and MakeTensorDescOp share the same operand layout:
+///   operand 0            – base pointer
+///   operands [1, rank)   – shape values  (rank operands)
+///   operands [rank+1, 2*rank] – stride values (rank operands)
+/// and the same stride / contiguity / divisibility / constancy logic.
+/// The only difference between the two ops is how the block shape and rank are
+/// extracted from the result type, which is passed in by the caller.
 static AxisInfo
 makeTensorPtrAxisInfo(ArrayRef<int64_t> blkShape, unsigned rank,
                       ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) {
   SmallVector<AxisInfo, 2> strideInfo;
+  // Strides start after base (operand 0) and shape operands.
   for (unsigned i = rank + 1; i <= rank * 2; ++i)
     strideInfo.emplace_back(operands[i]->getValue());
 
@@ -105,6 +115,8 @@ makeTensorPtrAxisInfo(ArrayRef<int64_t> blkShape, unsigned rank,
   for (unsigned dim = 0; dim < rank; ++dim) {
     contiguity.push_back(strideInfo[dim].getConstantValue() == 1 ? blkShape[dim]
                                                                  : 1);
+    // For 2-D tensors the divisibility of dim d is bounded by the stride of
+    // the *other* dimension; for 1-D tensors the single stride suffices.
     const AxisInfo &relevantStride =
         (rank == 2) ? strideInfo[dim == 0 ? 1 : 0] : strideInfo[dim];
     divisibility.push_back(
@@ -132,6 +144,7 @@ public:
         cast<PointerType>(op.getResult().getType()).getPointeeType());
     unsigned rank = op.getShape().size();
 
+    // TODO: Support higher rank tensors.
     if (rank > 2)
       return AxisInfo();
 
@@ -174,6 +187,7 @@ public:
         cast<TensorDescType>(op.getResult().getType()).getBlockType();
     unsigned rank = op.getShape().size();
 
+    // TODO: Support higher rank tensors.
     if (rank > 2) {
       LDBG("Unsupported tensor rank > 2, returning default AxisInfo");
       return AxisInfo();
@@ -211,6 +225,7 @@ public:
 
     AxisInfo::DimVectorT contiguity, divisibility, constancy;
 
+    // For descriptor loads, return conservative axis info.
     for (unsigned d = 0; d < rank; ++d) {
       contiguity.push_back(1);
       divisibility.push_back(1);
@@ -268,9 +283,13 @@ public:
                       /*constancy=*/{1},
                       /*knownConstantValue=*/{value});
     }
+    // TODO: generalize to dense attr
     auto splatAttr = dyn_cast<SplatElementsAttr>(op.getValue());
     if (splatAttr && splatAttr.getElementType().isIntOrIndex()) {
       APInt apValue = splatAttr.template getSplatValue<APInt>();
+      // Use getZExtValue for 1-bit integers (booleans) to avoid sign extension
+      // turning true into -1, use getSExtValue for wider integers to properly
+      // handle negative values.
       int64_t value = apValue.getBitWidth() == 1 ? apValue.getZExtValue()
                                                  : apValue.getSExtValue();
       TensorType ty = cast<TensorType>(splatAttr.getType());
@@ -330,6 +349,8 @@ void AxisInfoExt::addVisitors(AxisInfoVisitorList &visitors) {
   visitors.append<MakeTensorDescOpAxisInfoVisitor>();
   visitors.append<DescriptorLoadOpAxisInfoVisitor>();
   visitors.append<CastOpAxisInfoVisitor<arith::IndexCastOp>>();
+  // TODO: Remove rules for LLVM::ConstantOp, LLVM::AddOp
+  // when scf.for supports integer induction variables
   visitors.append<ConstantOpAxisInfoVisitor<LLVM::ConstantOp>>();
   visitors.append<AddSubOpAxisInfoVisitor<LLVM::AddOp>>();
 }
