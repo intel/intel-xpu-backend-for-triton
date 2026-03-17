@@ -292,10 +292,19 @@ private:
   // by all of its users to an identical dot layout, return that layout;
   // return nullopt for operations without results or without such a dot layout.
   std::optional<ttg::DotOperandEncodingAttr> getDotLayout(Operation *op) const {
+    Type resultType;
     auto resultTypes = op->getResultTypes();
-    if (resultTypes.size() == 0)
-      return std::nullopt; // Store op;
-    RankedTensorType tensorType = dyn_cast<RankedTensorType>(resultTypes[0]);
+    if (resultTypes.size() == 0) {
+      // Store op;
+      if (auto storeOp = dyn_cast<tt::StoreOp>(op)) {
+        resultType = storeOp.getValue().getType();
+      } else if (auto descStoreOp = dyn_cast<tt::DescriptorStoreOp>(op)) {
+        resultType = descStoreOp.getSrc().getType();
+      }
+    } else {
+      resultType = resultTypes[0];
+    }
+    RankedTensorType tensorType = ttgi::getRankedTensorType(resultType);
     if (!tensorType)
       return std::nullopt;
 
