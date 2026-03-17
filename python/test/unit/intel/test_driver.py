@@ -10,6 +10,7 @@ import pathlib
 from triton.runtime.driver import driver
 from triton._internal_testing import is_xpu_cri
 from triton.backends.intel import extension_utils
+from triton.runtime.errors import IntelGPUError
 
 
 @pytest.mark.xfail(is_xpu_cri(), reason="unable to get spill_size")
@@ -82,7 +83,7 @@ def test_load_binary_error_kernel_error(device, tmp_path: pathlib.Path):
 
     device = driver.active.get_current_device()
 
-    with pytest.raises(RuntimeError, match=r".*ZE_RESULT_ERROR_INVALID_KERNEL_NAME.*"):
+    with pytest.raises(IntelGPUError, match=r".*ZE_RESULT_ERROR_INVALID_KERNEL_NAME.*"):
         _ = driver.active.utils.load_binary("invalid name", kernel.kernel, kernel.metadata.shared,
                                             kernel.metadata.build_flags, not kernel.metadata.generate_native_code,
                                             device)
@@ -170,7 +171,7 @@ def test_auto_grf_on_build_failure(device, monkeypatch, capfd, grf_mode, expect_
     try:
         _register_heavy_kernel[(1, )](out, x, q, size, BLOCK=BLOCK, grf_mode=grf_mode,
                                       generate_native_code=generate_native_code)
-    except RuntimeError:
+    except IntelGPUError:
         pass
 
     outs = capfd.readouterr().out
