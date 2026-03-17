@@ -105,14 +105,16 @@ private:
   void MaterializeStructuredPointer(
       Operation *memoryAccessOp, std::optional<MakePtrOpType> defOp,
       tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) const {
-    // Find the make tensor ptr operation that created the base ptr.
+    // Find the make tensor pointer/descriptor operation that created the base
+    // pointer.
     if (!defOp) {
-      LDBG("Could not find make tensor ptr op for: " << *memoryAccessOp);
+      LDBG("Could not find make tensor pointer/descriptor op for: "
+           << *memoryAccessOp);
       return;
     }
 
     MakePtrOpType makePointerOp = *defOp;
-    LDBG("Make tensor ptr op: " << makePointerOp);
+    LDBG("Make tensor pointer/descriptor op: " << makePointerOp);
 
     Operation::operand_range shape = makePointerOp.getShape();
     unsigned rank = shape.size();
