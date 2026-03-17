@@ -51,7 +51,8 @@ static PyObject *getIntelGPUErrorClass() {
   return g_intel_gpu_error_class;
 }
 
-static void zeConstructError(const char *file, int line, const char *message) {
+static void zeConstructError(const char *file, int line, const char *message,
+                             bool useIntelGPUError = false) {
   const char *prefix = "Triton Error [ZE] %s:%d: ";
   char err[1024] = {0};
   snprintf(err, sizeof(err), prefix, file, line);
@@ -60,32 +61,36 @@ static void zeConstructError(const char *file, int line, const char *message) {
   PyGILState_STATE gil_state;
   gil_state = PyGILState_Ensure();
 
-  PyObject *exc_class = getIntelGPUErrorClass();
-  if (exc_class != NULL) {
-    PyErr_SetString(exc_class, err);
-  } else {
-    // Fallback to RuntimeError if IntelGPUError class cannot be retrieved.
-    // Fetch the actual error message from getIntelGPUErrorClass failure.
-    PyObject *orig_type, *orig_value, *orig_tb;
-    PyErr_Fetch(&orig_type, &orig_value, &orig_tb);
+  if (useIntelGPUError) {
+    PyObject *exc_class = getIntelGPUErrorClass();
+    if (exc_class != NULL) {
+      PyErr_SetString(exc_class, err);
+    } else {
+      // Fallback to RuntimeError if IntelGPUError class cannot be retrieved.
+      // Fetch the actual error message from getIntelGPUErrorClass failure.
+      PyObject *orig_type, *orig_value, *orig_tb;
+      PyErr_Fetch(&orig_type, &orig_value, &orig_tb);
 
-    if (orig_value != NULL) {
-      PyObject *str_repr = PyObject_Str(orig_value);
-      if (str_repr != NULL) {
-        const char *orig_msg = PyUnicode_AsUTF8(str_repr);
-        if (orig_msg != NULL) {
-          strcat(err, " (IntelGPUError not available: ");
-          strcat(err, orig_msg);
-          strcat(err, ")");
+      if (orig_value != NULL) {
+        PyObject *str_repr = PyObject_Str(orig_value);
+        if (str_repr != NULL) {
+          const char *orig_msg = PyUnicode_AsUTF8(str_repr);
+          if (orig_msg != NULL) {
+            strcat(err, " (IntelGPUError not available: ");
+            strcat(err, orig_msg);
+            strcat(err, ")");
+          }
+          Py_DECREF(str_repr);
         }
-        Py_DECREF(str_repr);
       }
+
+      Py_XDECREF(orig_type);
+      Py_XDECREF(orig_value);
+      Py_XDECREF(orig_tb);
+
+      PyErr_SetString(PyExc_RuntimeError, err);
     }
-
-    Py_XDECREF(orig_type);
-    Py_XDECREF(orig_value);
-    Py_XDECREF(orig_tb);
-
+  } else {
     PyErr_SetString(PyExc_RuntimeError, err);
   }
 
@@ -100,7 +105,8 @@ checkZeCodeAndSetPyErr(const std::tuple<T, ze_result_t> syclTuple,
   if (code == ZE_RESULT_SUCCESS)
     return std::get<0>(syclTuple);
 
-  zeConstructError(file, line, parseZeResultCode(code).data());
+  zeConstructError(file, line, parseZeResultCode(code).data(),
+                   /* useIntelGPUError */ true);
   return std::get<0>(syclTuple);
 }
 
