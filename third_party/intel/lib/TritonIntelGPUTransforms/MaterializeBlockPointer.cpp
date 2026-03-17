@@ -181,6 +181,9 @@ private:
         }
       }
 
+      if constexpr (std::is_same_v<MakePtrOpType, tt::MakeTensorDescOp>) {
+        assert(isRowMajor && "tensor descriptor is expected to be row major");
+      }
       memoryAccessOp->setAttr(
           ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
           StringAttr::get(memoryAccessOp->getContext(),
