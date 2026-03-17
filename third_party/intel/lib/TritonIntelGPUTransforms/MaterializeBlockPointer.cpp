@@ -366,7 +366,8 @@ private:
     // Ensure the base ptr is 4-byte aligned.
     // Note: the HW requires the address to be 64-byte aligned, however we will
     // compensate by imposing restrictions on the offsetX and baseWidth.
-    const tt::AxisInfo *axisInfo = axisInfoAnalysis.getAxisInfo(makePointerOp);
+    const tt::AxisInfo *axisInfo =
+        axisInfoAnalysis.getAxisInfo(makePointerOp.getResult());
     if (axisInfo->getDivisibility(strideOneDimVal) % 4 != 0) {
       LDBG("Found non 4 bytes aligned base: "
            << axisInfo->getDivisibility(strideOneDimVal));
