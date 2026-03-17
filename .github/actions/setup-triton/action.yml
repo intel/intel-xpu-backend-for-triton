@@ -11,6 +11,12 @@ inputs:
   use_spirv_backend:
     description: Use SPIR-V backend
     default: "false"
+  llvm_repo:
+    description: LLVM repository
+    default: "llvm/llvm-project"
+  gh_token:
+    description: GitHub token
+    required: true
   command:
     description: Command to execute
     default: DEBUG=1 pip install -v '.[build,tests,tutorials]'
@@ -36,7 +42,7 @@ runs:
       uses: ./.github/actions/load
       env:
         # Increase this value to reset cache
-        CACHE_NUMBER: 3
+        CACHE_NUMBER: 4
       with:
         path: $HOME/packages
         key: packages-${{ env.LLVM_CACHE_KEY }}-${{ env.CACHE_NUMBER }}
@@ -45,10 +51,11 @@ runs:
       if: ${{ inputs.build_llvm == 'true' && steps.llvm-cache.outputs.status == 'miss' }}
       uses: actions/checkout@v5
       with:
-        repository: llvm/llvm-project
+        repository: ${{ inputs.llvm_repo }}
         ref: ${{ env.LLVM_COMMIT_ID }}
         path: llvm
         submodules: recursive
+        token: ${{ inputs.gh_token }}
 
     - name: Use SPIR-V backend
       if: ${{ inputs.use_spirv_backend == 'true' }}
@@ -59,9 +66,13 @@ runs:
     - name: Build LLVM
       if: ${{ inputs.build_llvm == 'true' && steps.llvm-cache.outputs.status == 'miss' }}
       shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.gh_token }}
       run: |
+        set -x
         export BASE=$HOME
-        ln -s $PWD/llvm $BASE/llvm
+        ln -sv $PWD/llvm $BASE/llvm
+        ln -sv $PWD $BASE/$(basename $PWD)
         ./scripts/compile-triton.sh --llvm
 
     - name: Set LLVM_SYSPATH

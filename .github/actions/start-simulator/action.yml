@@ -1,0 +1,23 @@
+name: start-simulator
+description: Start JGS simulator process in background
+outputs:
+  sim-pid:
+    description: Simulator process ID
+    value: ${{ steps.start-simulator.outputs.SIM_PID }}
+runs:
+  using: "composite"
+  steps:
+    - name: Start simulator
+      id: start-simulator
+      shell: bash
+      run: |
+        env > sim-before.env
+        source /simulator/simulator-env.sh
+        env > sim-after.env
+        comm -3 <(sort sim-before.env) <(sort sim-after.env) | tr -d '\t' | tee -a "$GITHUB_ENV"
+
+        mkdir -p reports/simulator-logs
+        cd reports/simulator-logs
+        (while true; do /simulator/run-simulator.sh; done) &> jgs-sim.log &
+        SIM_PID=$!
+        echo "SIM_PID=$SIM_PID" | tee -a ${GITHUB_OUTPUT}

@@ -1,0 +1,54 @@
+name: Run nightly profiling tests of llama kernels on JGS and CRI simulators
+run-name: ${{ inputs.run_name }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_name:
+        description: Custom run name
+        type: string
+        default: "Llama kernels profiling on simulators"
+
+  schedule:
+    - cron: '0 5 * * *' # every day at 5 AM UTC, which is 11 PM CST or 12 AM CDT
+
+env:
+  DEVICES: "jgs cri"
+
+jobs:
+  build-and-test:
+    name: Profiling tests matrix
+    strategy:
+      fail-fast: false
+      matrix:
+        device:
+          - jgs
+          - cri
+
+    uses: intel-tools/intel-xpu-backend-for-triton/.github/workflows/llama-kernels-simulator-profiling-nightly-reusable.yml@main-interim
+    secrets: inherit
+    with:
+      device: ${{ matrix.device }}
+
+  check-jobs:
+    runs-on: linux
+    if: always()
+    needs:
+      - build-and-test
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          # Repository should be specified explicitly to allow reuse from other repositories
+          repository: intel-tools/intel-xpu-backend-for-triton
+          ref: needs.build.outputs.code-ref
+
+      - name: Install Python (using actions/setup-python) ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Ensure job status
+        uses: re-actors/alls-green@05ac9388f0aebcb5727afa17fcccfecd6f8ec5fe
+        with:
+          jobs: ${{ toJSON(needs) }}

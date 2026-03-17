@@ -1,0 +1,230 @@
+name: setup-oneapi-env
+description: Download DPCPP or use DLE in container and sets up necessary environment variables
+inputs:
+  oneapi_mode:
+    description: oneAPI mode, DLE or DPCPP_JGS
+    type: string
+    default: DPCPP_JGS_revision
+  dpcpp_jgs_revision:
+    description: DPCPP_JGS revision, used only if oneapi_mode is 'DPCPP_JGS_revision'
+    type: string
+    default: ""
+  pti_mode:
+    description: PTI mode, latest or revision
+    type: string
+    default: "PTI_JGS_revision"
+  pti_jgs_revision:
+    description: PTI JGS revision, used only if pti_mode is 'PTI_JGS_revision'
+    type: string
+    default: ""
+  oneapi_cache_key:
+    description: oneAPI cache key computed by previous jobs
+    type: string
+    default: ""
+  pti_cache_key:
+    description: PTI cache key computed by previous jobs
+    type: string
+    default: ""
+outputs:
+  oneapi-cache-key:
+    description: DPCPP_JGS cache key to load it from cache
+    value: ${{ steps.oneapi-cache-key.outputs.oneapi-cache-key }}
+  pti-cache-key:
+    description: PTI_JGS cache key to load it from cache
+    value: ${{ steps.pti-cache-key.outputs.pti-cache-key }}
+runs:
+  using: "composite"
+  steps:
+    - name: Print inputs
+      shell: bash
+      run: |
+        cat <<EOF
+        ${{ toJSON(inputs) }}
+        EOF
+
+    - name: Set default values for inputs
+      shell: bash
+      id: set-versions
+      run: |
+        set -xeuo pipefail
+
+        if [[ -z "${{ inputs.dpcpp_jgs_revision }}" ]]; then
+          echo dpcpp_jgs_revision=$(cat .github/pins/dpcpp_jgs.txt) >> $GITHUB_OUTPUT
+        else
+          echo dpcpp_jgs_revision=${{ inputs.dpcpp_jgs_revision }} >> $GITHUB_OUTPUT
+        fi
+        if [[ -z "${{ inputs.pti_jgs_revision }}" ]]; then
+          echo pti_jgs_revision=$(cat .github/pins/pti_jgs.txt) >> $GITHUB_OUTPUT
+        else
+          echo pti_jgs_revision=${{ inputs.pti_jgs_revision }} >> $GITHUB_OUTPUT
+        fi
+
+# ONEAPI ------------------------------------------
+
+    - name: Download DPCPP_JGS latest version and generate cache key for it
+      if: ${{ inputs.oneapi_cache_key == '' && inputs.oneapi_mode == 'DPCPP_JGS_latest' }}
+      shell: bash
+      run: |
+        set -xeou pipefail
+        mkdir oneapi_jgs_downloads
+        curl -sSL -o oneapi_jgs_downloads/DPCPP_JGS-v0.1.0.tgz https://artifactory-kfs.habana-labs.com/artifactory/bin-generic-dev-local/DPCPP_JGS/latest/DPCPP_JGS-v0.1.0.tgz
+        ONEAPI_CACHE_KEY=$(echo DPCPP_JGS_latest ${{ hashFiles('oneapi_jgs_downloads/DPCPP_JGS-v0.1.0.tgz') }} | sha256sum - | cut -d\  -f1)
+
+    - name: Generate DPCPP_JGS revision cache key
+      if: ${{ inputs.oneapi_cache_key == '' && inputs.oneapi_mode == 'DPCPP_JGS_revision' }}
+      shell: bash
+      run: |
+        set -xeuo pipefail
+        ONEAPI_CACHE_KEY=$(echo DPCPP_JGS_revision: ${{ steps.set-versions.outputs.dpcpp_jgs_revision }} | sha256sum - | cut -d\  -f1)
+        echo "ONEAPI_CACHE_KEY=$ONEAPI_CACHE_KEY" | tee -a $GITHUB_ENV
+
+    - name: Set oneapi_cache-key output variable
+      if: ${{ inputs.oneapi_cache_key == '' }}
+      id: oneapi-cache-key
+      shell: bash
+      run: |
+        echo "oneapi_cache-key=$ONEAPI_CACHE_KEY" >> $GITHUB_OUTPUT
+
+    - name: Set provided oneAPI cache key
+      if: ${{ inputs.oneapi_cache_key != '' && inputs.oneapi_mode != 'DLE' }}
+      shell: bash
+      run: |
+        set -xeuo pipefail
+        echo "ONEAPI_CACHE_KEY=${{ inputs.oneapi_cache_key }}" | tee -a $GITHUB_ENV
+
+    - name: Load OneAPI cache
+      if: ${{ inputs.oneapi_mode != 'DLE' }}
+      id: oneapi-cache
+      uses: ./.github/actions/load
+      env:
+        # Increase this value to reset cache
+        CACHE_NUMBER: 1
+      with:
+        path: oneapi_jgs
+        key: oneapi_jgs-${{ env.ONEAPI_CACHE_KEY }}-${{ env.CACHE_NUMBER }}
+
+    - name: Use downloaded DPCPP_JGS latest if cache missed
+      if: ${{ steps.oneapi-cache.outputs.status == 'miss' && inputs.oneapi_mode == 'DPCPP_JGS_latest' }}
+      shell: bash
+      run: |
+        set -xeou pipefail
+        mv oneapi_jgs_downloads oneapi_jgs
+
+    - name: Download DPCPP_JGS revision archive if cache missed
+      if: ${{ inputs.oneapi_mode == 'DPCPP_JGS_revision' && steps.oneapi-cache.outputs.status == 'miss' }}
+      shell: bash
+      run: |
+        set -xeou pipefail
+        mkdir oneapi_jgs
+        curl -sSL -o oneapi_jgs/DPCPP_JGS-v0.1.0-${{ steps.set-versions.outputs.dpcpp_jgs_revision }}.tgz https://artifactory-kfs.habana-labs.com/artifactory/bin-generic-dev-local/DPCPP_JGS/DPCPP_JGS-v0.1.0-${{ steps.set-versions.outputs.dpcpp_jgs_revision }}.tgz
+
+    - name: Save DPCPP_JGS if it was not found in Cache
+      if: ${{ (inputs.oneapi_mode == 'DPCPP_JGS_revision' || inputs.oneapi_mode == 'DPCPP_JGS_latest') && steps.oneapi-cache.outputs.status == 'miss' }}
+      id: oneapi-save
+      uses: ./.github/actions/save
+      with:
+        path: ${{ steps.oneapi-cache.outputs.path }}
+        dest: ${{ steps.oneapi-cache.outputs.dest }}
+
+# PTI ------------------------------------------
+
+    - name: Download PTI latest version and generate cache key for it
+      if: ${{ inputs.pti_cache_key == '' && inputs.pti_mode == 'PTI_JGS_latest' }}
+      shell: bash
+      run: |
+        set -xeou pipefail
+        mkdir pti_downloads
+        curl -sSL -o pti_downloads/PROFILING_TOOLS_JGS-v0.1.0.tgz https://artifactory-kfs.habana-labs.com/artifactory/bin-generic-dev-local/PROFILING_TOOLS_JGS/latest/PROFILING_TOOLS_JGS-v0.1.0.tgz
+        PTI_CACHE_KEY=$(echo PTI_JGS_latest ${{ hashFiles('pti_downloads/PROFILING_TOOLS_JGS-v0.1.0.tgz') }} | sha256sum - | cut -d\  -f1)
+
+    - name: Generate PTI_JGS revision cache key
+      if: ${{ inputs.pti_cache_key == '' && inputs.pti_mode == 'PTI_JGS_revision' }}
+      shell: bash
+      run: |
+        set -xeuo pipefail
+        PTI_CACHE_KEY=$(echo PTI_JGS_revision: ${{ steps.set-versions.outputs.pti_jgs_revision }} | sha256sum - | cut -d\  -f1)
+        echo "PTI_CACHE_KEY=$PTI_CACHE_KEY" | tee -a $GITHUB_ENV
+
+    - name: Set pti_cache-key output variable
+      if: ${{ inputs.pti_cache_key == '' }}
+      id: pti-cache-key
+      shell: bash
+      run: |
+        echo "pti_cache-key=$PTI_CACHE_KEY" >> $GITHUB_OUTPUT
+
+    - name: Set provided PTI cache key
+      if: ${{ inputs.pti_cache_key != '' }}
+      shell: bash
+      run: |
+        set -xeuo pipefail
+        echo "PTI_CACHE_KEY=${{ inputs.pti_cache_key }}" | tee -a $GITHUB_ENV
+
+    - name: Load PTI cache
+      id: pti-cache
+      uses: ./.github/actions/load
+      env:
+        # Increase this value to reset cache
+        CACHE_NUMBER: 1
+      with:
+        path: pti_jgs
+        key: pti_jgs-${{ env.PTI_CACHE_KEY }}-${{ env.CACHE_NUMBER }}
+
+    - name: Use downloaded PTI latest if cache missed
+      if: ${{ steps.pti-cache.outputs.status == 'miss' && inputs.pti_mode == 'PTI_JGS_latest' }}
+      shell: bash
+      run: |
+        set -xeou pipefail
+        mv pti_jgs_downloads pti_jgs
+
+    - name: Download PTI revision archive if cache missed
+      if: ${{ inputs.pti_mode == 'PTI_JGS_revision' && steps.pti-cache.outputs.status == 'miss' }}
+      shell: bash
+      run: |
+        set -xeou pipefail
+        mkdir pti_jgs
+        curl -sSL -o pti_jgs/PROFILING_TOOLS_JGS-v0.1.0-${{ steps.set-versions.outputs.pti_jgs_revision }}.tgz https://artifactory-kfs.habana-labs.com/artifactory/bin-generic-dev-local/PROFILING_TOOLS_JGS/PROFILING_TOOLS_JGS-v0.1.0-${{ steps.set-versions.outputs.pti_jgs_revision }}.tgz
+
+    - name: Save PTI if it was not found in Cache
+      if: ${{ steps.pti-cache.outputs.status == 'miss' }}
+      id: pti-save
+      uses: ./.github/actions/save
+      with:
+        path: ${{ steps.pti-cache.outputs.path }}
+        dest: ${{ steps.pti-cache.outputs.dest }}
+
+# COMMON ------------------------------------------
+
+    - name: Unpack OneAPI DPCPP_JGS and PTI
+      if: ${{ inputs.oneapi_mode == 'DPCPP_JGS_latest' || inputs.oneapi_mode == 'DPCPP_JGS_revision' }}
+      shell: bash
+      run: |
+        set -xeou pipefail
+        sudo mkdir /opt/intel/DPCPP_JGS
+        if [[ "${{ inputs.oneapi_mode }}" == "DPCPP_JGS_latest" ]]; then
+          sudo tar -zxf oneapi_jgs/DPCPP_JGS-v0.1.0.tgz -C /opt/intel/DPCPP_JGS
+        else
+          sudo tar -zxf oneapi_jgs/DPCPP_JGS-v0.1.0-${{ steps.set-versions.outputs.dpcpp_jgs_revision }}.tgz -C /opt/intel/DPCPP_JGS
+        fi
+
+        sudo mkdir /opt/intel/PROFILING_TOOLS_JGS
+        if [[ "${{ inputs.pti_mode }}" == "PTI_JGS_latest" ]]; then
+          sudo tar -zxf pti_jgs/PROFILING_TOOLS_JGS-v0.1.0.tgz -C /opt/intel/PROFILING_TOOLS_JGS
+        else
+          sudo tar -zxf pti_jgs/PROFILING_TOOLS_JGS-v0.1.0-${{ steps.set-versions.outputs.pti_jgs_revision }}.tgz -C /opt/intel/PROFILING_TOOLS_JGS
+        fi
+
+    - name: Set up OneAPI environment
+      shell: bash
+      run: |
+        # Don't enable set -u because setvars.sh may reference undefined variables
+        set -xeo pipefail
+        env > oneapi-before.env
+        if [[ "${{ inputs.oneapi_mode }}" == "DLE" ]]; then
+          source /opt/intel/oneapi/setvars.sh
+        else
+          source /opt/intel/DPCPP_JGS/setvars.sh
+          export LD_LIBRARY_PATH=/opt/intel/PROFILING_TOOLS_JGS/lib:$LD_LIBRARY_PATH
+        fi
+        env > oneapi-after.env
+        comm -3 <(sort oneapi-before.env) <(sort oneapi-after.env) | tr -d '\t' | tee -a "$GITHUB_ENV"
+        echo $PATH | tee -a "$GITHUB_PATH"

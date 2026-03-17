@@ -1,0 +1,112 @@
+name: setup-pytorch-jgs
+description: Install Pytorch JGS build from artifactory
+inputs:
+  pytorch_mode:
+    description: PyTorch mode, source or wheels or JGS pytorch artifactory revision
+    type: string
+    default: jgs_artifactory_revision
+  pytorch_jgs_artifactory_revision:
+    description: PyTorch JGS artifactory revision, used only if pytorch_mode is 'jgs_artifactory_revision'
+    type: string
+    default: ""
+  cache_key:
+    description: oneAPI cache key computed by previous jobs
+    type: string
+    default: ""
+outputs:
+  cache-key:
+    description: Pytorch JGS cache key to load it from cache
+    value: ${{ steps.pytorch-cache-key.outputs.cache-key }}
+runs:
+  using: "composite"
+  steps:
+    - name: Print inputs
+      shell: bash
+      run: |
+        cat <<EOF
+        ${{ toJSON(inputs) }}
+        EOF
+
+    - name: Set default values for inputs
+      shell: bash
+      id: set-versions
+      run: |
+        set -xeuo pipefail
+        if [[ -z "${{ inputs.pytorch_jgs_artifactory_revision }}" ]]; then
+          echo pytorch_jgs_artifactory_revision=$(cat .github/pins/pytorch_jgs.txt) >> $GITHUB_OUTPUT
+        else
+          echo pytorch_jgs_artifactory_revision=${{ inputs.pytorch_jgs_artifactory_revision }} >> $GITHUB_OUTPUT
+        fi
+
+    - name: Calculate Pytorch JGS cache key
+      if: ${{ inputs.cache_key == '' }}
+      id: pytorch-cache-key
+      shell: bash
+      run: |
+        if [[ "${{ inputs.pytorch_mode }}" == "jgs_artifactory_latest" ]]; then
+          mkdir -p pytorch_jgs_downloads
+          curl -sSL -o pytorch_jgs_downloads/PYTORCH_JGS-v0.1.0.tgz https://artifactory-kfs.habana-labs.com/artifactory/bin-generic-dev-local/PYTORCH_JGS/latest/PYTORCH_JGS-v0.1.0.tgz
+          PYTORCH_CACHE_KEY=$(echo PYTORCH_JGS_latest ${{ hashFiles('pytorch_jgs/PYTORCH_JGS-v0.1.0.tgz') }} | sha256sum - | cut -d\  -f1)
+        elif [[ "${{ inputs.pytorch_mode }}" == "jgs_artifactory_revision" ]]; then
+          PYTORCH_CACHE_KEY=$(echo PYTORCH_JGS_revision: ${{ steps.set-versions.outputs.pytorch_jgs_artifactory_revision }} | sha256sum - | cut -d\  -f1)
+        else
+          echo "ERROR: Unsupported pytorch_mode '${{ inputs.pytorch_mode }}'"
+          exit 1
+        fi
+        echo "cache-key=$PYTORCH_CACHE_KEY" >> $GITHUB_OUTPUT
+        echo "PYTORCH_CACHE_KEY=$PYTORCH_CACHE_KEY" | tee -a $GITHUB_ENV
+
+    - name: Set provided Pytorch JGS cache key
+      if: ${{ inputs.cache_key != '' }}
+      shell: bash
+      run: |
+        set -xeuo pipefail
+        echo "PYTORCH_CACHE_KEY=${{ inputs.cache_key }}" | tee -a $GITHUB_ENV
+
+    - name: Load Pytorch JGS cache
+      id: pytorch-cache
+      uses: ./.github/actions/load
+      env:
+        # Increase this value to reset cache
+        CACHE_NUMBER: 1
+      with:
+        path: pytorch_jgs
+        key: pytorch_jgs-${{ env.PYTORCH_CACHE_KEY }}-${{ env.CACHE_NUMBER }}
+
+    - name: Use downloaded Pytorch JGS latest if cache missed
+      if: ${{ inputs.pytorch_mode == 'jgs_artifactory_latest' && steps.pytorch-cache.outputs.status == 'miss' }}
+      shell: bash
+      run: |
+        set -xeuo pipefail
+        mv pytorch_jgs_downloads pytorch_jgs
+
+    - name: Download pytorch if cache missed
+      if: ${{ inputs.pytorch_mode == 'jgs_artifactory_revision' && steps.pytorch-cache.outputs.status == 'miss' }}
+      shell: bash
+      run: |
+        set -xeuo pipefail
+        mkdir -p pytorch_jgs
+        curl -sSL -o pytorch_jgs/PYTORCH_JGS-${{ steps.set-versions.outputs.pytorch_jgs_artifactory_revision }}.tgz https://artifactory-kfs.habana-labs.com/artifactory/bin-generic-dev-local/PYTORCH_JGS/PYTORCH_JGS-v0.1.0-${{ steps.set-versions.outputs.pytorch_jgs_artifactory_revision }}.tgz
+
+    - name: Unpack Pytorch JGS
+      if: ${{ steps.pytorch-cache.outputs.status == 'miss' }}
+      shell: bash
+      run: |
+        set -xeuo pipefail
+        tar -xzf pytorch_jgs/PYTORCH_JGS-*.tgz -C pytorch_jgs
+        rm pytorch_jgs/*.tgz
+
+    - name: Save Pytorch JGS if it was not found in Cache
+      if: ${{ steps.pytorch-cache.outputs.status == 'miss' }}
+      id: pytorch-save
+      uses: ./.github/actions/save
+      with:
+        path: ${{ steps.pytorch-cache.outputs.path }}
+        dest: ${{ steps.pytorch-cache.outputs.dest }}
+
+    - name: Setup Pytorch JGS
+      shell: bash
+      run: |
+        set -xeuo pipefail
+        pip install pytorch_jgs/torch-*.whl
+        pip install -r https://github.com/pytorch/pytorch/raw/refs/heads/main/requirements.txt

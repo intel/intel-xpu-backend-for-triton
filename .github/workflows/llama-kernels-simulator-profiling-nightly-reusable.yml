@@ -1,0 +1,390 @@
+name: Run nightly profiling tests of llama kernels on JGS and CRI simulators
+run-name: ${{ inputs.run_name }}
+
+on:
+  workflow_call:
+    inputs:
+      run_name:
+        description: Custom run name
+        type: string
+        default: "Llama kernels profiling on simulators"
+      device:
+        description: Device to run tests on, jgs or cri
+        type: string
+        default: ""
+
+env:
+  PIP_CACHE_NUMBER: 1 # Increase this value to reset pip cache
+  PYTHON_VERSION: "3.12"
+  TRITON_INTEL_ENABLE_SIMULATOR_WRAPPER: 1
+  TRITON_INTEL_SIMULATOR_KEEPALIVE: 1
+  NUM_SHARDS: 2
+  PARALLEL_SUITES: "llama_kernels"
+  SEQUENTIAL_SUITES: ""
+
+jobs:
+  build:
+    name: Build triton for ${{ inputs.device }}
+    timeout-minutes: 720
+    runs-on: ${{ inputs.device }}
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      code-ref: ${{ steps.get-branch.outputs.ref }}
+      oneapi-cache-key: ${{ steps.setup-oneapi.outputs.oneapi-cache-key }}
+      pti-cache-key: ${{ steps.setup-oneapi.outputs.pti-cache-key }}
+      pytorch-jgs-cache-key: ${{ steps.setup-pytorch-jgs.outputs.cache-key }}
+      test-triton-command: ${{ steps.test-triton.outputs.command }}
+      integration-tests-matrix: ${{ steps.test-triton.outputs.matrix }}
+    env:
+      LLVM_REPO: ${{ inputs.device == 'jgs' && 'intel-innersource/drivers.gpu.compiler.llvm-pisa' || 'llvm/llvm-project' }}
+    steps:
+      - name: Get branch name
+        id: get-branch
+        run: |
+          if [ ${{ inputs.device }} == 'jgs' ]; then
+            echo "ref=main-js" >> $GITHUB_OUTPUT
+          else
+            echo "ref=main-cri" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          # Repository should be specified explicitly to allow reuse from other repositories
+          repository: intel-tools/intel-xpu-backend-for-triton
+          ref: ${{ steps.get-branch.outputs.ref }}
+
+      - name: Setup ONE API environment
+        id: setup-oneapi
+        uses: intel-tools/intel-xpu-backend-for-triton/.github/actions/setup-oneapi-env@main-interim
+
+      - name: Load pip cache
+        id: pip-cache
+        uses: intel-tools/intel-xpu-backend-for-triton/.github/actions/load@main-interim
+        with:
+          path: $HOME/.cache/pip
+          key: pip-${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml', 'setup.py') }}-${{ env.PIP_CACHE_NUMBER }}
+
+      - name: Install Python (using actions/setup-python) ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Setup PyTorch from JGS artifactory
+        id: setup-pytorch-jgs
+        uses: intel-tools/intel-xpu-backend-for-triton/.github/actions/setup-pytorch-jgs@main-interim
+
+      - name: Build Triton
+        uses: intel-tools/intel-xpu-backend-for-triton/.github/actions/setup-triton@main-interim
+        with:
+          build_llvm: ${{ inputs.device == 'jgs' }}
+          llvm_repo: ${{ env.LLVM_REPO }}
+          gh_token: ${{ secrets.GLADOS_TOKEN }}
+          command: >
+            DEBUG=1
+            python setup.py bdist_wheel && pip install dist/*.whl
+
+      - name: Set test-triton command line
+        id: test-triton
+        run: |
+          skiplist="$GITHUB_WORKSPACE/scripts/skiplist/default"
+
+          if [[ "${{ inputs.device }}" == 'jgs' ]]; then
+            skiplist="$GITHUB_WORKSPACE/scripts/skiplist/xe4"
+          elif [[ "${{ inputs.device }}" == 'cri' ]]; then
+            skiplist="$GITHUB_WORKSPACE/scripts/skiplist/cri"
+          fi
+
+          if [ -d "$skiplist" ]; then
+            skiplist="--skip-list $skiplist"
+          else
+            skiplist="--skip-list $GITHUB_WORKSPACE/scripts/skiplist/default"
+          fi
+
+          TRITON_TEST_CMD="${{ inputs.device == 'jgs' && 'export PATH="$HOME/packages/llvm/bin:$PATH" && ' || ' ' }} bash -x scripts/test-triton.sh --skip-pip-install --warning-reports --skip-pytorch-install --reports-dir $GITHUB_WORKSPACE/reports $skiplist"
+          echo "command=$TRITON_TEST_CMD" | tee -a $GITHUB_OUTPUT
+          echo "TRITON_TEST_CMD=$TRITON_TEST_CMD" | tee -a $GITHUB_ENV
+
+          mkdir -p $GITHUB_WORKSPACE/reports/simulator-logs
+          echo "TRITON_INTEL_SIMULATOR_START_DIR=$GITHUB_WORKSPACE/reports/simulator-logs" | tee -a $GITHUB_ENV
+
+          matrix=''
+          if [ ! -z "${PARALLEL_SUITES}" ] && [ "${NUM_SHARDS:-0}" -gt 0 ]; then
+            for s in ${PARALLEL_SUITES}; do
+              for n in $(seq 0 $((NUM_SHARDS - 1))); do
+                matrix="$matrix, {\"suite\":\"$s\",\"shard_id\":$n}"
+              done
+            done
+          fi
+          if [ ! -z "${SEQUENTIAL_SUITES}" ]; then
+            for s in ${SEQUENTIAL_SUITES}; do
+              matrix="$matrix, {\"suite\":\"$s\"}"
+            done
+          fi
+          echo "matrix=[${matrix#,}]" | tee -a $GITHUB_OUTPUT
+
+      - name: Install test dependencies
+        run: |
+          pip install -r scripts/requirements-test.txt git+https://github.com/kwasd/pytest-capturewarnings-ng@v1.2.0
+          pip install git+https://github.com/vlad-penkin/pytest-skip.git
+
+      # Unit tests require `build` directory.
+      - name: Run unit tests
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --unit
+
+      # Instrumentation tests require `build` directory.
+      - name: Run instrumentation tests
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --instrumentation
+
+      - name: Save pip cache
+        if: ${{ steps.pip-cache.outputs.status == 'miss' }}
+        uses: intel-tools/intel-xpu-backend-for-triton/.github/actions/save@main-interim
+        with:
+          path: ${{ steps.pip-cache.outputs.path }}
+          dest: ${{ steps.pip-cache.outputs.dest }}
+
+      - name: Upload Triton wheels
+        uses: actions/upload-artifact@v6
+        with:
+          name: triton-${{ env.PYTHON_VERSION }}-${{ inputs.device }}
+          path: dist/*.whl
+
+      - name: Pack llvm build
+        if: ${{ inputs.device == 'jgs' }}
+        run: |
+          tar zcf llvm.tar.gz -C $HOME packages
+
+      - name: Upload llvm build ${{ env.LLVM_REPO }}
+        if: ${{ inputs.device == 'jgs' }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: llvm
+          path: llvm.tar.gz
+
+      - name: Upload test reports
+        uses: actions/upload-artifact@v6
+        with:
+          name: test-reports-build-${{ github.run_attempt }}-${{ env.PYTHON_VERSION }}-${{ inputs.device }}
+          include-hidden-files: true
+          path: reports
+
+  tests:
+    name: Run tests on ${{ inputs.device }}
+    needs: build
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        loop: ${{ fromJson(needs.build.outputs.integration-tests-matrix )}}
+    timeout-minutes: 720
+    runs-on: ${{ inputs.device }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          # Repository should be specified explicitly to allow reuse from other repositories
+          repository: intel-tools/intel-xpu-backend-for-triton
+          ref: ${{ needs.build.outputs.code-ref }}
+
+      - name: Setup ONE API environment
+        id: setup-oneapi
+        uses: intel-tools/intel-xpu-backend-for-triton/.github/actions/setup-oneapi-env@main-interim
+        with:
+          oneapi_cache_key: ${{ needs.build.outputs.oneapi-cache-key }}
+          pti_cache_key: ${{ needs.build.outputs.pti-cache-key }}
+
+      - name: Load pip cache
+        id: pip-cache
+        uses: intel-tools/intel-xpu-backend-for-triton/.github/actions/load@main-interim
+        with:
+          path: $HOME/.cache/pip
+          key: pip-${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml', 'setup.py') }}-${{ env.PIP_CACHE_NUMBER }}
+
+      - name: Install Python (using actions/setup-python) ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Setup PyTorch from JGS artifactory
+        id: setup-pytorch-jgs
+        uses: intel-tools/intel-xpu-backend-for-triton/.github/actions/setup-pytorch-jgs@main-interim
+        with:
+          cache_key: ${{ needs.build.outputs.pytorch-jgs-cache-key }}
+
+      - name: Download LLVM build
+        if: ${{ inputs.device == 'jgs' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: llvm
+
+      - name: Download Triton wheels
+        uses: actions/download-artifact@v8
+        with:
+          name: triton-${{ env.PYTHON_VERSION }}-${{ inputs.device }}
+
+      - name: Install Triton
+        run: |
+          if [[ ${{ inputs.device }} == 'jgs' ]]; then
+            tar zxf llvm.tar.gz -C $HOME
+          fi
+          shopt -s extglob
+          pip install triton?(_jgs)-*.whl
+          python -c 'import triton; print(triton.__version__)'
+
+      - name: Report environment details
+        run: |
+          reports_file="reports/.env"
+
+          mkdir -p reports
+          cat <<EOF | tee "$reports_file"
+          TIMESTAMP=$(date '+%Y%m%d%H%M%S')
+          GITHUB_RUN_ID=$GITHUB_RUN_ID
+          GITHUB_RUN_NUMBER=$GITHUB_RUN_NUMBER
+          GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT
+          PYTHON_VERSION=${{ env.PYTHON_VERSION }}
+          PYTORCH_REPO=$PYTORCH_REPO
+          PYTORCH_COMMIT_ID=$PYTORCH_COMMIT_ID
+          PYTORCH_VERSION=$PYTORCH_VERSION
+          TRITON_REPO=$GITHUB_REPOSITORY
+          TRITON_COMMIT_ID=$GITHUB_SHA
+          TRITON_BRANCH=$GITHUB_REF_NAME
+          OS=${{ runner.os }}
+          EOF
+          ./scripts/capture-hw-details.sh | tee -a "$reports_file"
+
+      - name: Install test dependencies
+        run: |
+          pip install -r scripts/requirements-test.txt git+https://github.com/kwasd/pytest-capturewarnings-ng@v1.2.0
+
+      - name: Clone internal PyTorch gpu models
+        if: matrix.loop.suite == 'llama_kernels'
+        uses: actions/checkout@v6
+        with:
+          repository: intel-innersource/frameworks.ai.pytorch.gpu-models
+          path: frameworks.ai.pytorch.gpu-models
+          token: ${{ secrets.GLADOS_TOKEN }}
+
+      - name: Run LLAMA kernels tests
+        if: matrix.loop.suite == 'llama_kernels'
+        env:
+          TRITON_DUMP_LAUNCH_PARAMS: '1'
+          TRITON_BENCHMARK_KERNEL_IN_LAUNCHER: '1'
+          GENERATE_DATA: '0'
+          GH_TOKEN: ${{ secrets.GLADOS_TOKEN }}
+        run: |
+          export TORCHINDUCTOR_USE_STATIC_CUDA_LAUNCHER=0
+          export PYTEST_MAX_PROCESSES=36
+          export PYTEST_TIMEOUT=7200
+          export TRITON_TEST_SHARDS=${{ env.NUM_SHARDS }}
+          export TRITON_TEST_SHARD_NUMBER=${{ matrix.loop.shard_id }}
+          export TRITON_INTEL_SIMULATOR_START_DIR=${GITHUB_WORKSPACE}/reports/simulator-logs
+          export TRITON_INTEL_SIMULATOR_START_DIR="${TRITON_INTEL_SIMULATOR_START_DIR}"/llama_kernels-${{ matrix.loop.shard_id }}
+          mkdir -p "${TRITON_INTEL_SIMULATOR_START_DIR}"
+          export TRITON_INTEL_SIMULATOR_KEEPALIVE=0
+          export TRITON_INTEL_SIMULATOR_EXTRA_ARGS="-cb_cfg stats_enable true tg_cfg_filename TG_ArchTarget_xe4.txt tg_interval 10000 device_info_json_enable true dump_stats_on_cs_busy true staging_dump_stats_on_swtag true hltv_json_enable true"
+
+          # To enable `TRITON_BENCHMARK_KERNEL_IN_LAUNCHER` feature.
+          cd benchmarks
+          pip install -v -e . --no-deps --no-build-isolation
+          cd ..
+
+          ${{ needs.build.outputs.test-triton-command }} --llama-kernels
+
+      - name: Save pip cache
+        if: ${{ steps.pip-cache.outputs.status == 'miss' }}
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.pip-cache.outputs.path }}
+          dest: ${{ steps.pip-cache.outputs.dest }}
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-${{ github.run_attempt }}-${{ matrix.loop.suite }}-${{ matrix.loop.shard_id || 0 }}-${{ inputs.device }}
+          include-hidden-files: true
+          path: reports
+
+  reports:
+    name: Report results for ${{ inputs.device }}
+    runs-on:
+      - linux
+    needs:
+      - build
+      - tests
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          # Repository should be specified explicitly to allow reuse from other repositories
+          repository: intel-tools/intel-xpu-backend-for-triton
+          ref: ${{ needs.build.outputs.code-ref }}
+
+      - name: Load pip cache
+        id: pip-cache
+        uses: intel-tools/intel-xpu-backend-for-triton/.github/actions/load@main-interim
+        with:
+          path: $HOME/.cache/pip
+          key: pip-${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml', 'setup.py') }}-${{ env.PIP_CACHE_NUMBER }}
+
+      - name: Install Python (using actions/setup-python) ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install pass_rate dependencies
+        run: |
+          pip install defusedxml typing_extensions pandas
+
+      - name: Load environment details
+        run: |
+          cat ./reports/.env | tee -a $GITHUB_ENV
+
+      - name: Pass rate
+        env:
+          GH_TOKEN: ${{ secrets.GLADOS_TOKEN }}
+        run: |
+          set -x
+          set -o pipefail
+          pushd scripts/triton_utils
+          pip install -e .
+          popd
+          triton-utils download_reports --download-dir reports --repo ${{ github.repository }} --gh-run-id ${{ github.run_id }} --artifact-pattern "*${{ inputs.device }}*"
+          triton-utils pass_rate --reports reports --merge-test-results --tests-with-multiple-testsuites --save-to-json pass_rate.json
+          triton-utils pass_rate --reports reports --merge-test-results --tests-with-multiple-testsuites --suite tutorials --save-to-json pass_rate_tutorials.json
+
+      - name: Upload pass rate report
+        uses: actions/upload-artifact@v6
+        with:
+          name: pass_rate-${{ env.PYTHON_VERSION }}
+          path: pass_rate*.json
+
+      - name: Upload tutorials test report
+        uses: actions/upload-artifact@v6
+        with:
+          name: test-reports-tutorials-${{ env.PYTHON_VERSION }}
+          include-hidden-files: true
+          path: reports/tutorials.xml
+
+      - name: Upload tutorials performance report
+        uses: actions/upload-artifact@v6
+        with:
+          name: tutorials-${{ env.PYTHON_VERSION }}
+          if-no-files-found: warn
+          include-hidden-files: true
+          path: |
+            reports/*/*.csv
+            reports/.env
+
+      - name: Upload test reports
+        uses: actions/upload-artifact@v6
+        with:
+          name: test-reports-${{ env.PYTHON_VERSION }}
+          path: reports
