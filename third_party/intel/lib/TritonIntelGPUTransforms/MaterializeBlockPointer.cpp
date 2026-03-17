@@ -87,7 +87,7 @@ private:
         return MaterializeTensorOfPointers(op, axisInfoAnalysis,
                                            strideAnalysis);
       else {
-        return MaterializeStructedPointer(
+        return MaterializeStructuredPointer(
             op, tt::intel::findDefiningOpOfType<tt::MakeTensorPtrOp>(ptr),
             axisInfoAnalysis);
       }
@@ -95,14 +95,14 @@ private:
 
     if constexpr (llvm::is_one_of<OpType, tt::DescriptorLoadOp,
                                   tt::DescriptorStoreOp>::value)
-      return MaterializeStructedPointer(
+      return MaterializeStructuredPointer(
           op,
           tt::intel::findDefiningOpOfType<tt::MakeTensorDescOp>(op.getDesc()),
           axisInfoAnalysis);
   }
 
   template <typename MakePtrOpType>
-  void MaterializeStructedPointer(
+  void MaterializeStructuredPointer(
       Operation *memoryAccessOp, std::optional<MakePtrOpType> defOp,
       tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) const {
     // Find the make tensor ptr operation that created the base ptr.
