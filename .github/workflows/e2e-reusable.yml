@@ -42,6 +42,10 @@ on:
         description: Runner label, keep empty for default
         type: string
         default: ""
+      driver_version:
+        description: Driver version (rolling or lts)
+        type: string
+        default: rolling
       TORCH_COMPILE_DEBUG:
         description: TORCH_COMPILE_DEBUG
         type: string
@@ -57,7 +61,7 @@ env:
 jobs:
   run_tests:
     name: Test ${{ inputs.suite }} ${{ inputs.dtype }} ${{ inputs.mode }} ${{ inputs.test_mode }}
-    runs-on: ${{ fromJSON((inputs.runner_label == '' || startsWith(inputs.runner_label, 'max')) && format('["linux", "rolling", "{0}"]', inputs.runner_label || 'max1550') || format('["linux", "{0}"]', inputs.runner_label)) }}
+    runs-on: ${{ fromJSON((inputs.runner_label == '' || startsWith(inputs.runner_label, 'max')) && format('["linux", "{0}", "{1}"]', inputs.driver_version, inputs.runner_label || 'max1550') || format('["linux", "{0}"]', inputs.runner_label)) }}
     timeout-minutes: 720
     defaults:
       run:
