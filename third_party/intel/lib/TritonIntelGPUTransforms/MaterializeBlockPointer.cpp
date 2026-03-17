@@ -132,8 +132,6 @@ private:
       return;
     }
 
-    // TODO: analyze the offset in the tt.descriptor_load (issue #6385).
-
     Operation::operand_range strides = makePointerOp.getStrides();
     std::optional<unsigned> strideOneDim = getStrideOneDim(strides);
     assert((strideOneDim && strideOneDim.value() < strides.size()) &&
@@ -400,22 +398,33 @@ private:
     }
     LDBG("baseWidth: " << baseWidth);
 
+    Value offset;
     if constexpr (std::is_same_v<OpType, tt::MakeTensorPtrOp>) {
-      // Analyze the initial offset corresponding to the stride one dimension to
-      // ensure it satisfies HW constraints.
-      Value offset =
+      offset =
           tt::intel::getFinalValue(makePointerOp.getOffsets()[strideOneDimVal]);
+    }
+    if constexpr (std::is_same_v<OpType, tt::MakeTensorDescOp>) {
+      if (auto descLoadOp = dyn_cast<triton::DescriptorLoadOp>(loadOp))
+        offset =
+            tt::intel::getFinalValue(descLoadOp.getIndices()[strideOneDimVal]);
+      if (auto descStoreOp = dyn_cast<triton::DescriptorStoreOp>(loadOp))
+        offset =
+            tt::intel::getFinalValue(descStoreOp.getIndices()[strideOneDimVal]);
+    }
+    assert(offset && "Expected to find offset operand");
+    // Analyze the load/store-time index in the stride-one dimension to ensure
+    // it satisfies HW constraints.
+    if (!ttgi::isDivisible(offset, divisor)) {
+      LLVM_DEBUG({
+        llvm::dbgs() << "offset does not satisfies HW constraints: ";
+        offset.printAsOperand(llvm::dbgs(), {});
+        llvm::dbgs() << "\ndivisor: " << divisor << "\n";
+      });
+      return false;
+    }
+    LDBG("offset: " << offset);
 
-      if (!ttgi::isDivisible(offset, divisor)) {
-        LLVM_DEBUG({
-          llvm::dbgs() << "offset does not satisfies HW constraints: ";
-          offset.printAsOperand(llvm::dbgs(), {});
-          llvm::dbgs() << "\ndivisor: " << divisor << "\n";
-        });
-        return false;
-      }
-      LDBG("offset: " << offset);
-
+    if constexpr (std::is_same_v<OpType, tt::MakeTensorPtrOp>) {
       Region *loadRgn = loadOp->getParentRegion();
       Region *makeTensorPtrRgn = makePointerOp->getParentRegion();
       bool inSameRegion = (loadRgn == makeTensorPtrRgn);
