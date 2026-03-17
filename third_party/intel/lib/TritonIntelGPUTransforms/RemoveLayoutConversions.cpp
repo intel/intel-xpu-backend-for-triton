@@ -299,7 +299,7 @@ private:
   void forwardPropagateRemat(DenseMap<Value, Attribute> &values);
 
   void updateRematMapping(SmallVector<std::tuple<Value, Value>> &values);
-  void reduceLoopCarriedValues();
+  bool reduceLoopCarriedValues();
 
   // Existing tuples of (value, layout) that needs to be updated when recreating
   // scf ops. This prevents keeping track of Values that have been delete when
@@ -1036,7 +1036,8 @@ void LayoutRematerialization::updateRematMapping(
 
 /// Reduce loop carried values if the value is used after the loop and can be
 /// removed by using another loop yielded value plus a convert layout operation.
-void LayoutRematerialization::reduceLoopCarriedValues() {
+bool LayoutRematerialization::reduceLoopCarriedValues() {
+  bool changed = false;
   for (auto [pair, val] : rematMapping) {
     auto arg = dyn_cast<BlockArgument>(pair.first);
     if (!arg)
@@ -1068,6 +1069,7 @@ void LayoutRematerialization::reduceLoopCarriedValues() {
                 rewriter, loc, loadOp.getType(), newLoadOp.getResult());
             loadOp->replaceAllUsesWith(convOp);
             opToDelete.insert(loadOp);
+            changed = true;
             LLVM_DEBUG({
               DBGS() << "Replaced:\n\t" << *loadOp << "\n"
                      << "with:\n\t" << *newLoadOp << "\n"
@@ -1088,6 +1090,7 @@ void LayoutRematerialization::reduceLoopCarriedValues() {
                 rewriter, loc, rematRes, convOp, storeOp.getBoundaryCheck(),
                 storeOp.getCache(), storeOp.getEvict());
             opToDelete.insert(storeOp);
+            changed = true;
             LLVM_DEBUG({
               DBGS() << "Replaced:\n\t" << *storeOp << "\n"
                      << "with:\n\t" << *convOp << "\n"
@@ -1099,6 +1102,7 @@ void LayoutRematerialization::reduceLoopCarriedValues() {
                 tt::AdvanceOp::create(rewriter, loc, rematRes.getType(),
                                       rematRes, advanceOp.getOffsets());
             opToDelete.insert(advanceOp);
+            changed = true;
             LLVM_DEBUG({
               DBGS() << "Replaced:\n\t" << *advanceOp << "\n"
                      << "with:\n\t" << *newAdvanceOp << "\n";
@@ -1126,6 +1130,7 @@ void LayoutRematerialization::reduceLoopCarriedValues() {
     for (Operation *user : loopRes.getUsers())
       processUser(user, rematRes);
   }
+  return changed;
 }
 
 void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
@@ -1612,7 +1617,7 @@ bool LayoutRematerialization::backwardRematerialization() {
     }
   }
 
-  reduceLoopCarriedValues();
+  changed |= reduceLoopCarriedValues();
   return changed;
 }
 
