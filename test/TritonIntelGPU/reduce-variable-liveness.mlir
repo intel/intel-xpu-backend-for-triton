@@ -72,7 +72,7 @@ module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 32 : i32, "ttg.th
 module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bfloat16_conversion, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_2d_block_io, ttig.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
   tt.func @_attn_fwd(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: f32, %arg4: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg5: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     // CHECK-LABEL:   tt.func @_attn_fwd
-    // COM: This test checks that the Q matrix load is moved inside the loop for the attention kernel.
+    // COM: This test checks that a loop-invariant Q matrix load is NOT moved inside the loop.
     %c8192_i64 = arith.constant 8192 : i64
     %c128_i32 = arith.constant 128 : i32
     %c128_i64 = arith.constant 128 : i64
@@ -98,14 +98,13 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bfloat16_conversion
     %11 = tt.addptr %arg5, %3 : !tt.ptr<f32>, i64
     %12 = tt.make_tensor_ptr %11, [%c128_i64, %c64_i64], [%c64_i64, %c1_i64], [%5, %c0_i32] {order = array<i32: 1, 0>} : <tensor<512x128xf32, #mma>>
     %13 = arith.mulf %arg3, %cst : f32
-    // CHECK:      ttig.prefetch {{.*}} : !tt.ptr<tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>>
-    // CHECK-NOT:  tt.load {{.*}} : !tt.ptr<tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>>
+    // CHECK:      tt.load {{.*}} : !tt.ptr<tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>>
     %14 = tt.load %6 {ttig.block_io = "row_major"} : !tt.ptr<tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
     %15 = tt.splat %13 : f32 -> tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma}>>
     %16 = tt.splat %13 : f32 -> tensor<512x128xf32, #mma>
     %17:5 = scf.for %arg6 = %c0_i32 to %c128_i32 step %c64_i32 iter_args(%arg7 = %cst_0, %arg8 = %cst_2, %arg9 = %cst_1, %arg10 = %10, %arg11 = %8) -> (tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma}>>, tensor<512x128xf32, #mma>, tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma}>>, !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>, !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>)  : i32 {
       // CHECK:  scf.for
-      // CHECK:  tt.load {{.*}} : !tt.ptr<tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>>
+      // CHECK-NOT:  tt.load {{.*}} : !tt.ptr<tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>>
       %21 = tt.load %arg10 {ttig.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
       %22 = tt.dot %14, %21, %cst_2, inputPrecision = tf32 : tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<512x128xf32, #mma>
       %23 = "tt.reduce"(%22) <{axis = 1 : i32}> ({
@@ -158,7 +157,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bfloat16_conversion
 module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bfloat16_conversion, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_2d_block_io, ttig.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
   tt.func @_attn_fwd_tensor_of_pointers(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: f32, %arg4: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg5: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg6: i32 {tt.divisibility = 16 : i32}, %arg7: i32 {tt.divisibility = 16 : i32}, %arg8: i32 {tt.divisibility = 16 : i32}, %arg9: i32 {tt.divisibility = 16 : i32}, %arg10: i32 {tt.divisibility = 16 : i32}, %arg11: i32 {tt.divisibility = 16 : i32}, %arg12: i32 {tt.divisibility = 16 : i32}, %arg13: i32 {tt.divisibility = 16 : i32}, %arg14: i32 {tt.divisibility = 16 : i32}, %arg15: i32 {tt.divisibility = 16 : i32}, %arg16: i32 {tt.divisibility = 16 : i32}, %arg17: i32 {tt.divisibility = 16 : i32}, %arg18: i32, %arg19: i32 {tt.divisibility = 16 : i32}, %arg20: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     // CHECK-LABEL:   tt.func @_attn_fwd_tensor_of_pointers
-    // COM: This test checks that the Q matrix load is moved inside the loop
+    // COM: This test checks that the Q matrix load is NOT moved inside the loop
     // COM: for an attention kernel that uses tensor of pointers (instead of block pointer)
     %c256_i32 = arith.constant 256 : i32
     %c64_i64 = arith.constant 64 : i64
@@ -206,8 +205,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bfloat16_conversion
     %34 = arith.addi %32, %33 : tensor<256x128xi32, #blocked>
     %35 = tt.splat %24 : !tt.ptr<f16> -> tensor<256x128x!tt.ptr<f16>, #blocked>
     %36 = tt.addptr %35, %34 : tensor<256x128x!tt.ptr<f16>, #blocked>, tensor<256x128xi32, #blocked>
-    // CHECK:      ttig.prefetch {{.*}} : tensor<256x128x!tt.ptr<f16>, #blocked>
-    // CHECK-NOT:  tt.load {{.*}} {ttig.block_io = "row_major"} : tensor<256x128x!tt.ptr<f16>, #blocked>
+    // CHECK:      tt.load {{.*}} {ttig.block_io = "row_major"} : tensor<256x128x!tt.ptr<f16>, #blocked>
     %37 = tt.addptr %arg1, %10 : !tt.ptr<f16>, i64
     %38 = tt.addptr %arg2, %10 : !tt.ptr<f16>, i64
     %39 = arith.mulf %arg3, %cst : f32
@@ -225,7 +223,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bfloat16_conversion
     %51 = tt.splat %38 : !tt.ptr<f16> -> tensor<128x128x!tt.ptr<f16>, #blocked2>
     %52:3 = scf.for %arg21 = %c0_i32 to %arg20 step %c64_i32 iter_args(%arg22 = %cst_0, %arg23 = %cst_2, %arg24 = %cst_1) -> (tensor<256xf32, #ttg.slice<{dim = 1, parent = #mma}>>, tensor<256x128xf32, #mma>, tensor<256xf32, #ttg.slice<{dim = 1, parent = #mma}>>)  : i32 {
       // CHECK:  scf.for
-      // CHECK:  tt.load {{.*}} {ttig.block_io = "row_major"} : tensor<256x128x!tt.ptr<f16>, #blocked>
+      // CHECK-NOT:  tt.load {{.*}} {ttig.block_io = "row_major"} : tensor<256x128x!tt.ptr<f16>, #blocked>
       %65 = arith.muli %arg21, %c64_i32 : i32
       %66 = tt.splat %65 : i32 -> tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked2}>>
       %67 = tt.splat %65 : i32 -> tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked2}>>
@@ -388,8 +386,8 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bfloat16_conversion
 module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bfloat16_conversion, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_2d_block_io, ttig.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
   tt.func @_attn_fwd_other_use_after_loop(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: f32, %arg4: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg5: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     // CHECK-LABEL:   tt.func @_attn_fwd_other_use_after_loop
-    // COM: This test checks that a load is moved inside the loop and after it,
-    // COM: if the data is used by a second user after the loop.
+    // COM: This test checks that a loop-invariant load is NOT moved inside the loop,
+    // COM: and is also used by a second user after the loop without a separate reload.
     %c8192_i64 = arith.constant 8192 : i64
     %c128_i32 = arith.constant 128 : i32
     %c128_i64 = arith.constant 128 : i64
@@ -415,14 +413,13 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bfloat16_conversion
     %11 = tt.addptr %arg5, %3 : !tt.ptr<f32>, i64
     %12 = tt.make_tensor_ptr %11, [%c128_i64, %c64_i64], [%c64_i64, %c1_i64], [%5, %c0_i32] {order = array<i32: 1, 0>} : <tensor<512x128xf32, #mma>>
     %13 = arith.mulf %arg3, %cst : f32
-    // CHECK:      ttig.prefetch {{.*}} : !tt.ptr<tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>>
-    // CHECK-NOT:  tt.load {{.*}} : !tt.ptr<tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>>
+    // CHECK:      tt.load {{.*}} : !tt.ptr<tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>>
     %14 = tt.load %6 {ttig.block_io = "row_major"} : !tt.ptr<tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
     %15 = tt.splat %13 : f32 -> tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma}>>
     %16 = tt.splat %13 : f32 -> tensor<512x128xf32, #mma>
     %17:5 = scf.for %arg6 = %c0_i32 to %c128_i32 step %c64_i32 iter_args(%arg7 = %cst_0, %arg8 = %cst_2, %arg9 = %cst_1, %arg10 = %10, %arg11 = %8) -> (tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma}>>, tensor<512x128xf32, #mma>, tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma}>>, !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>, !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>)  : i32 {
       // CHECK:  scf.for
-      // CHECK:  tt.load {{.*}} : !tt.ptr<tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>>
+      // CHECK-NOT:  tt.load {{.*}} : !tt.ptr<tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>>
       %21 = tt.load %arg10 {ttig.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
       %22 = tt.dot %14, %21, %cst_2, inputPrecision = tf32 : tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<512x128xf32, #mma>
       %23 = "tt.reduce"(%22) <{axis = 1 : i32}> ({
@@ -458,7 +455,6 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bfloat16_conversion
       scf.yield %35, %42, %25, %44, %43 : tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma}>>, tensor<512x128xf32, #mma>, tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma}>>, !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>, !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
     } {tt.divisibility_arg1 = dense<64> : tensor<1xi32>}
     // CHECK:  scf.yield
-    // CHECK:  tt.load {{.*}} : !tt.ptr<tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>>
     %100 = tt.load %10 {ttig.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
     %101 = tt.dot %14, %100, %cst_2, inputPrecision = tf32 : tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<512x128xf32, #mma>
     tt.store %12, %101 : !tt.ptr<tensor<512x128xf32, #mma>>
@@ -478,8 +474,8 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bfloat16_conversion
 module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bfloat16_conversion, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_2d_block_io, ttig.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
   tt.func @_attn_fwd_with_block_pointers_causal(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: f32, %arg4: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg5: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     // CHECK-LABEL:   tt.func @_attn_fwd_with_block_pointers_causal
-    // COM: This test checks that the Q matrix load is moved inside the two loop bodies
-    // COM: when it is used by two users in two different loops
+    // COM: This test checks that the Q matrix load is NOT moved inside the two loop bodies
+    // COM: when its pointer does not depend on any loop argument (loop-invariant pointer)
     %cst = arith.constant dense<1.000000e+00> : tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>
     %cst_0 = arith.constant dense<0xFF800000> : tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>
     %cst_1 = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #mma>
@@ -517,8 +513,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bfloat16_conversion
     %19 = arith.addi %18, %17 : tensor<128xi32, #ttg.slice<{dim = 1, parent = #mma}>>
     %20 = arith.mulf %arg3, %cst_2 : f32
     %21 = tt.load %10 {ttig.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
-    // CHECK:      ttig.prefetch {{.*}} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>>
-    // CHECK-NOT:  tt.load {{.*}} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>>
+    // CHECK:      tt.load {{.*}} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>>
     %22 = tt.splat %20 : f32 -> tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>
     %23 = tt.splat %20 : f32 -> tensor<128x128xf32, #mma>
     %24 = arith.cmpi sgt, %9, %c0_i32 : i32
@@ -528,7 +523,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bfloat16_conversion
     ttig.prefetch %12, %26 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, ttig.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
     %27:5 = scf.for %arg6 = %c0_i32 to %9 step %c64_i32 iter_args(%arg7 = %cst, %arg8 = %cst_1, %arg9 = %cst_0, %arg10 = %14, %arg11 = %12) -> (tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>, tensor<128x128xf32, #mma>, tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>, !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>, !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>)  : i32 {
       // CHECK:  scf.for
-      // CHECK:  tt.load {{.*}} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>>
+      // CHECK-NOT:  tt.load {{.*}} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>>
       %44 = arith.subi %9, %c64_i32 : i32
       %45 = arith.cmpi slt, %arg6, %44 : i32
       %46 = tt.advance %arg11, [%c64_i32, %c0_i32] : <tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
@@ -585,7 +580,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bfloat16_conversion
     ttig.prefetch %32, %39 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, ttig.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
     %40:5 = scf.for %arg6 = %28 to %30 step %c64_i32 iter_args(%arg7 = %27#0, %arg8 = %27#1, %arg9 = %27#2, %arg10 = %31, %arg11 = %32) -> (tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>, tensor<128x128xf32, #mma>, tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>, !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>, !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>)  : i32 {
       // CHECK:  scf.for
-      // CHECK:  tt.load {{.*}} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>>
+      // CHECK-NOT:  tt.load {{.*}} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>>
       %44 = arith.subi %30, %c64_i32 : i32
       %45 = arith.cmpi slt, %arg6, %44 : i32
       %46 = tt.advance %arg11, [%c64_i32, %c0_i32] : <tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
@@ -649,7 +644,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bfloat16_conversion
   tt.func @_attn_fwd_with_block_pointers_other_users_in_loop_before(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: f32, %arg4: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg5: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     // CHECK-LABEL:   tt.func @_attn_fwd_with_block_pointers_other_users_in_loop_before
     // COM: This test checks that in case of multiple users in the same loop
-    // COM: the loadOp is moved before the first user. (case where the other user is before the dotOp)
+    // COM: the loadOp is NOT moved inside the loop when its pointer does not depend on any loop argument
     %c1984_i32 = arith.constant 1984 : i32
     %c4194304_i64 = arith.constant 4194304 : i64
     %c131072_i64 = arith.constant 131072 : i64
@@ -684,15 +679,14 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bfloat16_conversion
     %17 = tt.make_tensor_ptr %16, [%c2048_i64, %c64_i64], [%c64_i64, %c1_i64], [%9, %c0_i32] {order = array<i32: 1, 0>} : <tensor<128x128xf32, #mma>>
     %18 = arith.mulf %arg3, %cst : f32
     %20 = tt.load %11 {ttig.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #blocked>>
-    // CHECK:      ttig.prefetch {{.*}} : !tt.ptr<tensor<128x128xf16,  #[[$BLOCKED]]>>
-    // CHECK-NOT:  tt.load {{.*}} : !tt.ptr<tensor<128x128xf16, #[[$BLOCKED]]>>
+    // CHECK:      tt.load {{.*}} : !tt.ptr<tensor<128x128xf16, #[[$BLOCKED]]>>
     %21 = tt.splat %18 : f32 -> tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>
     %22 = tt.splat %18 : f32 -> tensor<128x128xf32, #mma>
     ttig.prefetch %15 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, ttig.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
     ttig.prefetch %13 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, ttig.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
     %23:5 = scf.for %arg6 = %c0_i32 to %c2048_i32 step %c64_i32 iter_args(%arg7 = %cst_0, %arg8 = %cst_2, %arg9 = %cst_1, %arg10 = %15, %arg11 = %13) -> (tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>, tensor<128x128xf32, #mma>, tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>, !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>, !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>)  : i32 {
       // CHECK:  scf.for
-      // CHECK:  %[[LOAD1:.*]] = tt.load {{.*}} : !tt.ptr<tensor<128x128xf16, #[[$BLOCKED]]>>
+      // CHECK-NOT:  tt.load {{.*}} : !tt.ptr<tensor<128x128xf16, #[[$BLOCKED]]>>
       %27 = arith.cmpi slt, %arg6, %c1984_i32 : i32
       %28 = tt.advance %arg11, [%c64_i32, %c0_i32] : <tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
       %29 = tt.advance %arg10, [%c0_i32, %c64_i32] : <tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
@@ -701,7 +695,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bfloat16_conversion
       ttig.prefetch %28, %30 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, ttig.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
       %31 = tt.load %arg10 {ttig.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
       %32 = tt.load %arg11 {ttig.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
-      // CHECK: tt.store {{.*}}, %[[LOAD1]] : !tt.ptr<tensor<128x128xf16, #[[$BLOCKED]]>>
+      // CHECK: tt.store {{.*}} : !tt.ptr<tensor<128x128xf16, #[[$BLOCKED]]>>
       tt.store %11, %20 : !tt.ptr<tensor<128x128xf16, #blocked>>
       %100 = ttg.convert_layout %20 : tensor<128x128xf16, #blocked> -> tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
       %33 = tt.dot %100, %31, %cst_2, inputPrecision = tf32 : tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<128x128xf32, #mma>
@@ -753,7 +747,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bfloat16_conversion
   tt.func @_attn_fwd_with_block_pointers_other_users_in_loop_after(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: f32, %arg4: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg5: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     // CHECK-LABEL:   tt.func @_attn_fwd_with_block_pointers_other_users_in_loop_after
     // COM: This test checks that in case of multiple users in the same loop
-    // COM: the loadOp is moved before the first user. (case where the other user is after the dotOp)
+    // COM: the loadOp is NOT moved inside the loop when its pointer does not depend on any loop argument
     %c1984_i32 = arith.constant 1984 : i32
     %c4194304_i64 = arith.constant 4194304 : i64
     %c131072_i64 = arith.constant 131072 : i64
@@ -788,15 +782,14 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bfloat16_conversion
     %17 = tt.make_tensor_ptr %16, [%c2048_i64, %c64_i64], [%c64_i64, %c1_i64], [%9, %c0_i32] {order = array<i32: 1, 0>} : <tensor<128x128xf32, #mma>>
     %18 = arith.mulf %arg3, %cst : f32
     %20 = tt.load %11 {ttig.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #blocked>>
-    // CHECK:      ttig.prefetch {{.*}} : !tt.ptr<tensor<128x128xf16,  #[[$BLOCKED]]>>
-    // CHECK-NOT:  tt.load {{.*}} : !tt.ptr<tensor<128x128xf16, #[[$BLOCKED]]>>
+    // CHECK:      tt.load {{.*}} : !tt.ptr<tensor<128x128xf16, #[[$BLOCKED]]>>
     %21 = tt.splat %18 : f32 -> tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>
     %22 = tt.splat %18 : f32 -> tensor<128x128xf32, #mma>
     ttig.prefetch %15 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, ttig.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
     ttig.prefetch %13 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, ttig.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
     %23:5 = scf.for %arg6 = %c0_i32 to %c2048_i32 step %c64_i32 iter_args(%arg7 = %cst_0, %arg8 = %cst_2, %arg9 = %cst_1, %arg10 = %15, %arg11 = %13) -> (tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>, tensor<128x128xf32, #mma>, tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>, !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>, !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>)  : i32 {
       // CHECK:  scf.for
-      // CHECK:  %[[LOAD1:.*]] = tt.load {{.*}} : !tt.ptr<tensor<128x128xf16, #[[$BLOCKED]]>>
+      // CHECK-NOT:  tt.load {{.*}} : !tt.ptr<tensor<128x128xf16, #[[$BLOCKED]]>>
       %27 = arith.cmpi slt, %arg6, %c1984_i32 : i32
       %28 = tt.advance %arg11, [%c64_i32, %c0_i32] : <tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
       %29 = tt.advance %arg10, [%c0_i32, %c64_i32] : <tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
@@ -834,7 +827,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bfloat16_conversion
       %50 = arith.truncf %41 : tensor<128x128xf32, #mma> to tensor<128x128xf16, #mma>
       %51 = ttg.convert_layout %50 : tensor<128x128xf16, #mma> -> tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
       %52 = tt.dot %51, %32, %49, inputPrecision = tf32 : tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<128x128xf32, #mma>
-      // CHECK: tt.store {{.*}}, %[[LOAD1]] : !tt.ptr<tensor<128x128xf16, #[[$BLOCKED]]>>
+      // CHECK: tt.store {{.*}} : !tt.ptr<tensor<128x128xf16, #[[$BLOCKED]]>>
       tt.store %11, %20 : !tt.ptr<tensor<128x128xf16, #blocked>>
       scf.yield %46, %52, %36, %29, %28 : tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>, tensor<128x128xf32, #mma>, tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>, !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>, !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
     }
