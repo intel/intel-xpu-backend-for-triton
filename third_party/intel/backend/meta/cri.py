@@ -181,6 +181,7 @@ if USE_WRAPPERS:
     wrappers.wrap_launch = timed(wrappers.wrap_launch)
     torch.xpu.synchronize = timed(torch.xpu.synchronize)
     torch.xpu.device_count = timed(torch.xpu.device_count, 120)
+    torch.Tensor.to = timed(torch.Tensor.to, 600)
 
     try:
         import pytest

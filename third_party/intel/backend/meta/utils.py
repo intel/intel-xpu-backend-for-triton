@@ -26,3 +26,7 @@ def thread_dump(*_):
         msg.extend(traceback.format_stack(frame))
     msg.append("\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n")
     echo("".join(msg))
+    logfile = os.path.join(os.environ.get("TRITON_INTEL_SIMULATOR_EFFECTIVE_START_DIR", "."),
+                           f"stackdump-{os.getpid()}.log")
+    with open(logfile, "w") as f:
+        echo("".join(msg), file=f)
