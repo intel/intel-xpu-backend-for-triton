@@ -9,6 +9,7 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -148,7 +149,7 @@ splitDescriptorsByEncoding(ModuleOp moduleOp) {
                                     loadStoreUsers);
 
     // Group them by encoding.
-    DenseMap<Attribute, SmallVector<Operation *>> encodingToOps;
+    llvm::MapVector<Attribute, SmallVector<Operation *>> encodingToOps;
     for (Operation *userOp : loadStoreUsers) {
       Attribute encoding;
       if (auto loadOp = dyn_cast<tt::DescriptorLoadOp>(userOp))
@@ -178,8 +179,12 @@ splitDescriptorsByEncoding(ModuleOp moduleOp) {
       }
       auto clone = cast<tt::MakeTensorDescOp>(builder.clone(*descOp));
       descToEncoding[clone] = encoding;
-      for (Operation *userOp : ops)
-        userOp->setOperand(0, clone.getResult());
+      for (Operation *userOp : ops) {
+        if (auto loadOp = dyn_cast<tt::DescriptorLoadOp>(userOp))
+          loadOp.getDescMutable().assign(clone.getResult());
+        else if (auto storeOp = dyn_cast<tt::DescriptorStoreOp>(userOp))
+          storeOp.getDescMutable().assign(clone.getResult());
+      }
     }
   }
 
