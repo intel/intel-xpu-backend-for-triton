@@ -4,6 +4,7 @@ from triton.backends.intel.driver import compile_module_from_src
 from triton.backends.intel.track import track
 from triton.backends.intel.extension_utils import query_device_extensions
 from triton import knobs
+from triton.runtime.errors import IntelGPUError
 
 from dataclasses import dataclass
 import functools
@@ -81,7 +82,6 @@ def extract_spill_size_from_zebin(file):
         elf = ELFFile(f)
         zeinfo = elf.get_section_by_name(".ze_info")
         if zeinfo is None:
-            from triton.runtime.errors import IntelGPUError
             raise IntelGPUError('Internal Triton ZEBIN codegen error:'
                                 'Section .ze_info not found in zebin')
         text = zeinfo.data().decode('utf-8')
@@ -527,9 +527,9 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                     else:
                         error = f'`ocloc` failed with error code {e.returncode}'
 
-                    raise RuntimeError(f'{error}\n'
-                                       f'`ocloc` stderr:\n{e.output}\n'
-                                       f'Repro command: {ocloc_cmd}\n') from e
+                    raise IntelGPUError(f'{error}\n'
+                                        f'`ocloc` stderr:\n{e.output}\n'
+                                        f'Repro command: {ocloc_cmd}\n') from e
 
             with open(fbin, 'rb') as f:
                 zebin = f.read()
