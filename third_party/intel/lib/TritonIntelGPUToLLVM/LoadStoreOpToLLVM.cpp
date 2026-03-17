@@ -1132,6 +1132,14 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
       regPackBases.insert(1 << regBaseIter);
     }
 
+    if (transpose) {
+      // For transpose, the row dim has to be the memory contiguous dim.
+      // If rowDim is determined (>= 0) and it is not memory contiguous dim,
+      // reject.
+      if (rowDim >= 0 && rowDim != memContiguousDim)
+        return BlockIOTileSizeInfo::unknown();
+    }
+
     if (rowDim < 0)
       rowDim = (fastChangeDim != 0) ? 0 : 1;
 
