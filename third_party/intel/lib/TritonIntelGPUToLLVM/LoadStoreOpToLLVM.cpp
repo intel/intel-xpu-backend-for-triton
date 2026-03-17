@@ -645,6 +645,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
   template <
       typename OpTy,
       std::enable_if_t<llvm::is_one_of<OpTy, triton::gpu::intel::PrefetchOp,
+                                       triton::gpu::intel::DescriptorPrefetchOp,
                                        triton::LoadOp, triton::StoreOp>::value,
                        bool> = true>
   static bool isMemoryRowMajor(OpTy op) {
@@ -2021,8 +2022,12 @@ struct DescriptorPrefetchOpConversion
     const ArrayRef<int64_t> shapeRef = tensorType.getShape();
     SmallVector<int64_t> tensorShape{shapeRef.begin(), shapeRef.end()};
 
-    // TODO: Revisit when TensorDescriptor supports column-major layout.
-    // Currently, TensorDescriptor is always row major.
+    const bool memoryRowMajor = isMemoryRowMajor(op);
+    if (!memoryRowMajor) {
+      // Swap the shape to make it row major and then get the tiling
+      // size base on row major shape.
+      std::swap(tensorShape[0], tensorShape[1]);
+    }
 
     unsigned numWarps = triton::gpu::lookupNumWarps(op);
 
@@ -2067,6 +2072,7 @@ struct DescriptorPrefetchOpConversion
 
     // Get the row stride from the descriptor stride fields.
     Value rowStride = descElems[descStride];
+    Value colStride = descElems[descStride + 1];
 
     // Get offset bases from the indices operand.
     // For tensor descriptors, indices are supplied explicitly via the op
@@ -2075,6 +2081,13 @@ struct DescriptorPrefetchOpConversion
            "Expected indices count to match tensor rank");
     Value offsetBaseY = indices[0]; // row offset
     Value offsetBaseX = indices[1]; // col offset
+
+    if (!memoryRowMajor) {
+      // Swap the width/height and strides to the row major.
+      std::swap(baseWidth, baseHeight);
+      std::swap(colStride, rowStride);
+      std::swap(offsetBaseX, offsetBaseY);
+    }
 
     // Emit the 2D block prefetch operations.
     return emit2DBlockPrefetchOps(
