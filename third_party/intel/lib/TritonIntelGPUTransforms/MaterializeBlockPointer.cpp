@@ -354,7 +354,7 @@ private:
             typename = std::enable_if_t<llvm::is_one_of<
                 OpType, tt::MakeTensorPtrOp, tt::MakeTensorDescOp>::value>>
   bool satisfies2DBlockReadAlignment(
-      OpType makePointerOp, unsigned elementWidth, Operation *loadOp,
+      OpType makePointerOp, unsigned elementWidth, Operation *memoryAccessOp,
       tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) const {
 
     // Find the make tensor ptr operation that created the base ptr for the load
@@ -409,10 +409,11 @@ private:
           tt::intel::getFinalValue(makePointerOp.getOffsets()[strideOneDimVal]);
     }
     if constexpr (std::is_same_v<OpType, tt::MakeTensorDescOp>) {
-      if (auto descLoadOp = dyn_cast<triton::DescriptorLoadOp>(loadOp))
+      if (auto descLoadOp = dyn_cast<triton::DescriptorLoadOp>(memoryAccessOp))
         offset =
             tt::intel::getFinalValue(descLoadOp.getIndices()[strideOneDimVal]);
-      if (auto descStoreOp = dyn_cast<triton::DescriptorStoreOp>(loadOp))
+      if (auto descStoreOp =
+              dyn_cast<triton::DescriptorStoreOp>(memoryAccessOp))
         offset =
             tt::intel::getFinalValue(descStoreOp.getIndices()[strideOneDimVal]);
     }
@@ -430,7 +431,7 @@ private:
     LDBG("offset: " << offset);
 
     if constexpr (std::is_same_v<OpType, tt::MakeTensorPtrOp>) {
-      Region *loadRgn = loadOp->getParentRegion();
+      Region *loadRgn = memoryAccessOp->getParentRegion();
       Region *makeTensorPtrRgn = makePointerOp->getParentRegion();
       bool inSameRegion = (loadRgn == makeTensorPtrRgn);
       if (inSameRegion)
