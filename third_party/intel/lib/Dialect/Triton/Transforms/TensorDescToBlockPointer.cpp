@@ -152,11 +152,12 @@ void collectDescriptorLoadStoreUsers(
   }
 }
 
-// Represents the three possible ttig.block_io attribute values.
+// Local indexable enum for the three possible ttig.block_io attribute values.
+// Values 1 and 2 align with ttgi::BlockIOMode::{RowMajor, ColumnMajor}.
 enum BlockIOMode {
-  None,
-  RowMajor,
-  ColumnMajor,
+  None = 0,
+  RowMajor = static_cast<int>(ttgi::BlockIOMode::RowMajor) + 1,
+  ColumnMajor = static_cast<int>(ttgi::BlockIOMode::ColumnMajor) + 1,
   NumBlockIOModes,
 };
 
@@ -199,13 +200,11 @@ splitDescriptorsByUserInfo(ModuleOp moduleOp) {
     collectDescriptorLoadStoreUsers(descOp.getResult(), visitedNoIfSelect,
                                     visitedWithIfSelect, loadStoreUsers);
 
-    auto getBlockIOMode = [](Operation *userOp) {
+    auto getBlockIOMode = [](Operation *userOp) -> BlockIOMode {
       if (auto attr = userOp->getAttrOfType<StringAttr>(
               ttgi::TritonIntelGPUDialect::getBlockIOAttrName())) {
-        if (attr.getValue() == "column_major")
-          return ColumnMajor;
-        if (attr.getValue() == "row_major")
-          return RowMajor;
+        if (auto mode = ttgi::symbolizeBlockIOMode(attr.getValue()))
+          return static_cast<BlockIOMode>(static_cast<int>(*mode) + 1);
       }
       return None;
     };
@@ -595,7 +594,8 @@ private:
     SmallVector<Value> indices(op.getIndices().begin(), op.getIndices().end());
     if (StringAttr blockIOAttr = op->template getAttrOfType<StringAttr>(
             ttgi::TritonIntelGPUDialect::getBlockIOAttrName());
-        blockIOAttr && blockIOAttr.getValue() == "column_major") {
+        blockIOAttr && ttgi::symbolizeBlockIOMode(blockIOAttr.getValue()) ==
+                           ttgi::BlockIOMode::ColumnMajor) {
       assert(isLoad && "Expecting column_major access pattern only on loads");
       std::reverse(indices.begin(), indices.end());
     }

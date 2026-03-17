@@ -652,11 +652,9 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
         op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
     assert(blockIOAttr && "Expecting block IO attribute");
 
-    StringRef memoryLayoutInfo = cast<StringAttr>(blockIOAttr).getValue();
-    assert((memoryLayoutInfo == "row_major" ||
-            memoryLayoutInfo == "column_major") &&
-           "Only row_major or column_major is supported");
-    return memoryLayoutInfo == "row_major";
+    auto mode = symbolizeBlockIOMode(cast<StringAttr>(blockIOAttr).getValue());
+    assert(mode && "Only row_major or column_major is supported");
+    return *mode == BlockIOMode::RowMajor;
   }
 
   static DpasEncodingAttr::OpIdx getOpIdx(RankedTensorType tensorTy) {
@@ -2469,9 +2467,11 @@ struct DescriptorLoadOpToBlockIOConversion
     StringRef blockIOName = TritonIntelGPUDialect::getBlockIOAttrName();
     StringAttr blockIOAttr = op->getAttrOfType<StringAttr>(blockIOName);
     if (!blockIOAttr)
-      blockIOAttr = StringAttr::get(rewriter.getContext(), "row_major");
+      blockIOAttr = StringAttr::get(
+          rewriter.getContext(), stringifyBlockIOMode(BlockIOMode::RowMajor));
     const unsigned rank = tensorType.getRank();
-    bool memoryRowMajor = (blockIOAttr.getValue() == "row_major");
+    auto mode = symbolizeBlockIOMode(blockIOAttr.getValue());
+    bool memoryRowMajor = mode && *mode == BlockIOMode::RowMajor;
     unsigned contiguousDim = memoryRowMajor ? rank - 1 : rank - 2;
 
     Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
@@ -2945,7 +2945,8 @@ struct DescriptorLoadOpConversion
     SmallVector<Value> ptrElems, maskElems, otherElems;
     auto blockIOAttr = op->getAttrOfType<StringAttr>(
         TritonIntelGPUDialect::getBlockIOAttrName());
-    if (blockIOAttr && blockIOAttr.getValue() == "column_major") {
+    if (blockIOAttr && symbolizeBlockIOMode(blockIOAttr.getValue()) ==
+                           BlockIOMode::ColumnMajor) {
       const SmallVector<Value> &descElems =
           unpackLLElements(loc, llDesc, rewriter);
       Value base = descElems[2 * rank];

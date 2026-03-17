@@ -142,7 +142,8 @@ private:
 
     // Tensor descriptors are always row major.
     op->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
-                StringAttr::get(context, "row_major"));
+                StringAttr::get(context, ttgi::stringifyBlockIOMode(
+                                             ttgi::BlockIOMode::RowMajor)));
   }
 
   template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
@@ -230,7 +231,10 @@ private:
 
       op->setAttr(
           ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
-          StringAttr::get(context, isRowMajor ? "row_major" : "column_major"));
+          StringAttr::get(context,
+                          ttgi::stringifyBlockIOMode(
+                              isRowMajor ? ttgi::BlockIOMode::RowMajor
+                                         : ttgi::BlockIOMode::ColumnMajor)));
     }
   }
 
@@ -322,12 +326,16 @@ private:
     const bool isRowMajor = isMajor(tensorTy, 1 /*fastChangeDim*/, *axisInfo);
     if (isRowMajor)
       op->setAttr(blockIOAttrName,
-                  StringAttr::get(op.getContext(), "row_major"));
+                  StringAttr::get(
+                      op.getContext(),
+                      ttgi::stringifyBlockIOMode(ttgi::BlockIOMode::RowMajor)));
 
     const bool isColMajor = isMajor(tensorTy, 0 /*fastChangeDim*/, *axisInfo);
     if (isColMajor)
       op->setAttr(blockIOAttrName,
-                  StringAttr::get(op.getContext(), "column_major"));
+                  StringAttr::get(op.getContext(),
+                                  ttgi::stringifyBlockIOMode(
+                                      ttgi::BlockIOMode::ColumnMajor)));
   }
 
   // Return the load layout if it is a dot layout. If it is not, check if the
