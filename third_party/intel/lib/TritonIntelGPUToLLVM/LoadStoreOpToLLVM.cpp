@@ -602,6 +602,11 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
       return false;
     }
 
+    // Require block_io attribute (set by MaterializeBlockPointer).
+    if (!op->template getAttrOfType<StringAttr>(
+            triton::gpu::intel::TritonIntelGPUDialect::getBlockIOAttrName()))
+      return false;
+
     std::optional<bool> enableBlockIOForAllLayout =
         mlir::triton::tools::isEnvValueBool(mlir::triton::tools::getStrEnv(
             "TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS"));
@@ -2463,13 +2468,14 @@ struct DescriptorLoadOpToBlockIOConversion
     assert(llEncoding.has_value() &&
            "unexpected failure when getting linear layout");
 
-    // Read memory layout from block_io attribute.
-    // Descriptors are row-major by definition; column_major is set by
-    // FuseTransWithDescriptorLoad. Default to row_major when absent.
+    // Read memory layout from block_io attribute (set by
+    // MaterializeBlockPointer; column_major set by
+    // FuseTransWithDescriptorLoad).
     StringRef blockIOName = TritonIntelGPUDialect::getBlockIOAttrName();
     StringAttr blockIOAttr = op->getAttrOfType<StringAttr>(blockIOName);
-    if (!blockIOAttr)
-      blockIOAttr = StringAttr::get(rewriter.getContext(), "row_major");
+    assert(
+        blockIOAttr &&
+        "block_io attribute required; checked by isDescriptorBlockIOCandidate");
     const unsigned rank = tensorType.getRank();
     bool memoryRowMajor = (blockIOAttr.getValue() == "row_major");
     unsigned contiguousDim = memoryRowMajor ? rank - 1 : rank - 2;
@@ -3270,14 +3276,15 @@ struct DescriptorStoreOpToBlockIOConversion
     if (!isDescriptorBlockIOCandidate(op))
       return failure();
 
-    // TODO: DescriptorStoreOp does not currently carry a "block_io" attribute
-    // the way StoreOp does (set by MaterializeBlockPointer). Without this
-    // attribute we cannot determine the memory layout (row_major vs
-    // column_major). For now, we assume row_major and rely on layout
-    // encoding checks below to bail out on unsupported cases.
-    // Once the pipeline annotates DescriptorStoreOp with block_io, this
-    // should be updated to read the attribute.
-    const bool memoryRowMajor = true;
+    // Read memory layout from block_io attribute (set by
+    // MaterializeBlockPointer).
+    StringRef blockIOName = TritonIntelGPUDialect::getBlockIOAttrName();
+    StringAttr blockIOAttr = op->getAttrOfType<StringAttr>(blockIOName);
+    assert(
+        blockIOAttr &&
+        "block_io attribute required; checked by isDescriptorBlockIOCandidate");
+    const bool memoryRowMajor = (blockIOAttr.getValue() == "row_major");
+    assert(memoryRowMajor && "column_major descriptor store not yet supported");
 
     // Get source tensor type and encoding.
     auto tensorType = cast<RankedTensorType>(op.getSrc().getType());
