@@ -284,9 +284,10 @@ private:
                   StringAttr::get(op.getContext(), "column_major"));
   }
 
-  // Return the load layout if it is a dot layout. If it is not, check if the
-  // load result is converted to a dot layout. If so, return the dot layout,
-  // otherwise return nullopt.
+  // Inspect the first result of the given operation: if its type has a dot
+  // layout, return that layout. Otherwise, if the first result is converted
+  // by all of its users to an identical dot layout, return that layout;
+  // return nullopt for operations without results or without such a dot layout.
   std::optional<ttg::DotOperandEncodingAttr> getDotLayout(Operation *op) const {
     auto resultTypes = op->getResultTypes();
     if (resultTypes.size() == 0)
