@@ -55,30 +55,41 @@ Attribute maybeGetDefaultBlockedEncoding(Operation *op,
 }
 
 // Collect all DescriptorLoadOp/DescriptorStoreOp operations reachable from
-// `value` through value flow (loop args, yields, selects, conditions).
-void collectDescriptorLoadStoreUsers(Value value,
-                                     SmallPtrSetImpl<Value> &visited,
-                                     SmallVectorImpl<Operation *> &users) {
+// `value`, and record whether each load/store is reached through if/select
+// control flow.
+//
+// A descriptor use is marked `true` in `users` if at least one path from the
+// source descriptor to that use goes through if/select.
+void collectDescriptorLoadStoreUsers(
+    Value value, SmallPtrSetImpl<Value> &visitedNoIfSelect,
+    SmallPtrSetImpl<Value> &visitedWithIfSelect,
+    llvm::MapVector<Operation *, bool> &users, bool throughIfSelect = false) {
+  SmallPtrSetImpl<Value> &visited =
+      throughIfSelect ? visitedWithIfSelect : visitedNoIfSelect;
   if (!visited.insert(value).second)
     return;
 
   for (Operation *user : value.getUsers()) {
     if (isa<tt::DescriptorLoadOp, tt::DescriptorStoreOp>(user)) {
-      users.push_back(user);
+      users[user] = users.lookup(user) || throughIfSelect;
       continue;
     }
     if (auto forOp = dyn_cast<scf::ForOp>(user)) {
       for (auto [initArg, regionArg] :
            llvm::zip(forOp.getInitArgs(), forOp.getRegionIterArgs()))
         if (initArg == value)
-          collectDescriptorLoadStoreUsers(regionArg, visited, users);
+          collectDescriptorLoadStoreUsers(regionArg, visitedNoIfSelect,
+                                          visitedWithIfSelect, users,
+                                          throughIfSelect);
       continue;
     }
     if (auto whileOp = dyn_cast<scf::WhileOp>(user)) {
       for (auto [initArg, beforeArg] :
            llvm::zip(whileOp.getInits(), whileOp.getBeforeArguments()))
         if (initArg == value)
-          collectDescriptorLoadStoreUsers(beforeArg, visited, users);
+          collectDescriptorLoadStoreUsers(beforeArg, visitedNoIfSelect,
+                                          visitedWithIfSelect, users,
+                                          throughIfSelect);
       continue;
     }
     if (auto conditionOp = dyn_cast<scf::ConditionOp>(user)) {
@@ -86,7 +97,9 @@ void collectDescriptorLoadStoreUsers(Value value,
         for (auto [condArg, afterArg] :
              llvm::zip(conditionOp.getArgs(), whileOp.getAfterArguments()))
           if (condArg == value)
-            collectDescriptorLoadStoreUsers(afterArg, visited, users);
+            collectDescriptorLoadStoreUsers(afterArg, visitedNoIfSelect,
+                                            visitedWithIfSelect, users,
+                                            throughIfSelect);
       continue;
     }
     if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
@@ -95,8 +108,12 @@ void collectDescriptorLoadStoreUsers(Value value,
              llvm::zip(yieldOp.getOperands(), forOp.getResults(),
                        forOp.getRegionIterArgs()))
           if (yieldedVal == value) {
-            collectDescriptorLoadStoreUsers(result, visited, users);
-            collectDescriptorLoadStoreUsers(regionArg, visited, users);
+            collectDescriptorLoadStoreUsers(result, visitedNoIfSelect,
+                                            visitedWithIfSelect, users,
+                                            throughIfSelect);
+            collectDescriptorLoadStoreUsers(regionArg, visitedNoIfSelect,
+                                            visitedWithIfSelect, users,
+                                            throughIfSelect);
           }
       } else if (auto whileOp =
                      dyn_cast<scf::WhileOp>(yieldOp->getParentOp())) {
@@ -104,19 +121,28 @@ void collectDescriptorLoadStoreUsers(Value value,
              llvm::zip(yieldOp.getOperands(), whileOp.getResults(),
                        whileOp.getBeforeArguments()))
           if (yieldedVal == value) {
-            collectDescriptorLoadStoreUsers(result, visited, users);
-            collectDescriptorLoadStoreUsers(beforeArg, visited, users);
+            collectDescriptorLoadStoreUsers(result, visitedNoIfSelect,
+                                            visitedWithIfSelect, users,
+                                            throughIfSelect);
+            collectDescriptorLoadStoreUsers(beforeArg, visitedNoIfSelect,
+                                            visitedWithIfSelect, users,
+                                            throughIfSelect);
           }
-      } else if (auto ifOp = dyn_cast<scf::IfOp>(yieldOp->getParentOp())) {
+      } else if (isa<scf::IfOp>(yieldOp->getParentOp())) {
+        auto ifOp = cast<scf::IfOp>(yieldOp->getParentOp());
         for (auto [yieldedVal, result] :
              llvm::zip(yieldOp.getOperands(), ifOp.getResults()))
           if (yieldedVal == value)
-            collectDescriptorLoadStoreUsers(result, visited, users);
+            collectDescriptorLoadStoreUsers(result, visitedNoIfSelect,
+                                            visitedWithIfSelect, users,
+                                            /*throughIfSelect=*/true);
       }
       continue;
     }
     if (auto selectOp = dyn_cast<arith::SelectOp>(user)) {
-      collectDescriptorLoadStoreUsers(selectOp.getResult(), visited, users);
+      collectDescriptorLoadStoreUsers(selectOp.getResult(), visitedNoIfSelect,
+                                      visitedWithIfSelect, users,
+                                      /*throughIfSelect=*/true);
       continue;
     }
   }
@@ -130,10 +156,15 @@ void collectDescriptorLoadStoreUsers(Value value,
 // Returns a map from each descriptor (originals and clones) to its single
 // encoding, so callers avoid a second traversal.
 //
-// For uses that flow through loops/selects we replace operand 0 of the
-// load/store directly (bypassing the loop-threaded value). This is valid
-// because TensorDescType is immutable – the base pointer, shape and strides
-// recorded in the descriptor do not change across loop iterations.
+// For uses that flow through loops/yields (but not if/select) we replace
+// operand 0 of the load/store directly. This is valid only for direct uses and
+// loop-threaded uses because TensorDescType is immutable – the base pointer,
+// shape and strides recorded in the descriptor do not change across loop
+// iterations.
+//
+// For users reached through if/select operations, the descriptor is not cloned
+// to avoid breaking control flow semantics. Such descriptors can only have a
+// single encoding across all their users.
 DenseMap<tt::MakeTensorDescOp, Attribute>
 splitDescriptorsByEncoding(ModuleOp moduleOp) {
   DenseMap<tt::MakeTensorDescOp, Attribute> descToEncoding;
@@ -142,15 +173,18 @@ splitDescriptorsByEncoding(ModuleOp moduleOp) {
   moduleOp->walk([&](tt::MakeTensorDescOp op) { descOps.push_back(op); });
 
   for (tt::MakeTensorDescOp descOp : descOps) {
-    // Collect all reachable descriptor load/store users.
-    SmallVector<Operation *> loadStoreUsers;
-    SmallPtrSet<Value, 8> visited;
-    collectDescriptorLoadStoreUsers(descOp.getResult(), visited,
-                                    loadStoreUsers);
+    // Collect all reachable descriptor load/store users in one traversal and
+    // record whether each user is reached through if/select.
+    llvm::MapVector<Operation *, bool> loadStoreUsers;
+    SmallPtrSet<Value, 8> visitedNoIfSelect;
+    SmallPtrSet<Value, 8> visitedWithIfSelect;
+    collectDescriptorLoadStoreUsers(descOp.getResult(), visitedNoIfSelect,
+                                    visitedWithIfSelect, loadStoreUsers);
 
     // Group them by encoding.
     llvm::MapVector<Attribute, SmallVector<Operation *>> encodingToOps;
-    for (Operation *userOp : loadStoreUsers) {
+    for (auto &[userOp, reachedThroughIfSelect] : loadStoreUsers) {
+      (void)reachedThroughIfSelect;
       Attribute encoding;
       if (auto loadOp = dyn_cast<tt::DescriptorLoadOp>(userOp))
         encoding = cast<RankedTensorType>(loadOp.getType()).getEncoding();
@@ -177,6 +211,19 @@ splitDescriptorsByEncoding(ModuleOp moduleOp) {
         isFirst = false;
         continue;
       }
+
+      // Check if any of these ops are only reachable through if/select.
+      // If so, we cannot safely clone the descriptor.
+      bool hasIfSelectUsers = false;
+      for (Operation *op : ops) {
+        if (loadStoreUsers.lookup(op)) {
+          hasIfSelectUsers = true;
+          break;
+        }
+      }
+      assert(!hasIfSelectUsers && "FIXME: Support TensorDescOp with multiple "
+                                  "encodings that flow through if/select.");
+
       auto clone = cast<tt::MakeTensorDescOp>(builder.clone(*descOp));
       descToEncoding[clone] = encoding;
       for (Operation *userOp : ops) {
