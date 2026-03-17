@@ -1,5 +1,6 @@
 import argparse
 import os
+import re
 import uuid
 import json
 from datetime import datetime
@@ -12,7 +13,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Parse compilation report folders into a CSV')
     parser.add_argument('source',
                         help='Path to the root compilation report folder (contains per-benchmark subdirectories)')
-    parser.add_argument('target', help='Path to output CSV file')
+    parser.add_argument('target', help='Path to the output folder where CSV files will be saved')
     parser.add_argument('--tag', help='Tag for the benchmark run', default='')
     parser.add_argument('--benchmark_group', help='Benchmark group name, e.g. triton-benchmarks-pvc',
                         default='triton-benchmarks')
@@ -67,11 +68,14 @@ def parse_flat_results(data: dict, comp_uuid: str) -> list[dict]:
     return acc
 
 
-def prepare_benchmark_reports(bench_dir, ts, tag, benchmark_group) -> tuple[list[dict], list[dict]]:  # pylint: disable=too-many-locals
-    benchmark_uuid = uuid.uuid4().hex
+# Matches: XPUBackend.<stage>[_<hash>].json
+_INDUCTOR_FORMAT_RE = re.compile(
+    r'^XPUBackend\.(make_ttir|make_ttgir|make_llir|make_spv|make_zebin)(?:_([^.]+))?\.json$')
 
+
+def _prepare_benchmark_reports_triton(  # pylint: disable=too-many-locals
+        bench_dir, ts, tag, benchmark_group, benchmark_uuid) -> tuple[list[dict], list[dict]]:
     benchmark = bench_dir.name
-
     passes_rows: list[dict] = []
     kernel_rows: list[dict] = []
 
@@ -95,18 +99,15 @@ def prepare_benchmark_reports(bench_dir, ts, tag, benchmark_group) -> tuple[list
             loc = data['asm']
 
             kernel_rows.append({
-                # Same for all kernels in the benchmark
                 'ts': ts,
                 'tag': tag,
                 'benchmark_group': benchmark_group,
                 'benchmark': benchmark,
                 'benchmark_uuid': benchmark_uuid,
-                # Kernel-specific
                 'kernel_uuid': kernel_uuid,
                 'comp_uuid': comp_uuid,
                 'kernel_name': kernel_name,
                 'params': params,
-                # Aggregated results
                 'time_s': data['time'],
                 'loc_source': loc['source'],
                 'loc_ttir': loc['ttir'],
@@ -119,7 +120,57 @@ def prepare_benchmark_reports(bench_dir, ts, tag, benchmark_group) -> tuple[list
     return kernel_rows, passes_rows
 
 
-def parse_reports(source_dir: Path, tag: str, benchmark_group: str) -> pd.DataFrame:
+def _prepare_benchmark_reports_inductor(  # pylint: disable=too-many-locals
+        bench_dir, ts, tag, benchmark_group, benchmark_uuid) -> tuple[list[dict], list[dict]]:
+    benchmark = bench_dir.name
+    passes_rows: list[dict] = []
+    kernel_rows: list[dict] = []
+
+    for json_file in sorted(bench_dir.glob('XPUBackend.*.json')):
+        m = _INDUCTOR_FORMAT_RE.match(json_file.name)
+        if not m:
+            print(f'File {json_file} does not match expected format, skipping')
+            continue
+
+        kernel_name = m.group(1)
+        params = ''
+
+        with open(json_file, encoding='utf-8') as f:
+            data = json.load(f)
+
+        comp_uuid = uuid.uuid4().hex
+
+        kernel_rows.append({
+            'ts': ts,
+            'tag': tag,
+            'benchmark_group': benchmark_group,
+            'benchmark': benchmark,
+            'benchmark_uuid': benchmark_uuid,
+            'kernel_uuid': uuid.uuid4().hex,
+            'comp_uuid': comp_uuid,
+            'kernel_name': kernel_name,
+            'params': params,
+            'time_s': data['time'],
+            'loc_source': '',
+            'loc_ttir': '',
+            'loc_ttgir': '',
+            'loc_llir': '',
+            'loc_spv': '',
+        })
+
+        passes_rows.extend(parse_flat_results(data, comp_uuid))
+    return kernel_rows, passes_rows
+
+
+def prepare_benchmark_reports(bench_dir, ts, tag, benchmark_group) -> tuple[list[dict], list[dict]]:
+    benchmark_uuid = uuid.uuid4().hex
+
+    if any(bench_dir.glob('XPUBackend.*.json')):
+        return _prepare_benchmark_reports_inductor(bench_dir, ts, tag, benchmark_group, benchmark_uuid)
+    return _prepare_benchmark_reports_triton(bench_dir, ts, tag, benchmark_group, benchmark_uuid)
+
+
+def parse_reports(source_dir: Path, tag: str, benchmark_group: str):
     ts = datetime.now().isoformat()
 
     kernel_rows: list[dict] = []
