@@ -152,17 +152,29 @@ class TestCase:  #  pylint: disable=too-many-instance-attributes
     path_without_variant: str = field(init=False)
     # intel::test/unit/intel/test_block_load/test_block_load.py::test_block_load_dpas_layout[True-int8-256-64]
     key: str = field(init=False)
+    # TestGraph_c55uxh25dhggnpnm666db2a5xn6yhinukzlhsmg37d7bjkwvwxv5XPU (empty if no class)
+    test_class: str = field(init=False)
+    # pytest-friendly name: test/unit/intel/test_block_load.py::test_block_load_dpas_layout[True-int8-256-64]
+    pytest_name: str = field(init=False)
 
     def __post_init__(self):
         raw_name = self.name
         test_classname = self.classname
         test_subpaths = test_classname.rsplit(".", 1)
+        self.test_class = ""
         if len(test_subpaths) == 1:
-            self.path = ""
             self.module = test_subpaths[0]
         else:
-            self.path = test_subpaths[0]
-            self.module = test_subpaths[1]
+            last_part = test_subpaths[1]
+            preceding_part = test_subpaths[0].rsplit(".", 1)[-1]
+            # Detect class name: the last segment is a class (not a module) when
+            # it doesn't follow the test_*.py naming convention and the preceding
+            # segment does (confirming it's the actual module).
+            if not last_part.startswith("test_") and preceding_part.startswith("test_"):
+                self.test_class = last_part
+                self.module = preceding_part
+            else:
+                self.module = last_part
         index = raw_name.find("[")
         if index != -1:
             self.test = raw_name[:index]
@@ -171,9 +183,24 @@ class TestCase:  #  pylint: disable=too-many-instance-attributes
             self.test = raw_name
             self.variant = ""
 
-        self.path_without_variant = f"{self.classname.replace('.', '/')}/{self.module}.py::{self.test}"
+        if self.test_class:
+            module_path = test_classname[:test_classname.rfind(".")].replace(".", "/")
+            self.path_without_variant = f"{module_path}/{self.module}.py::{self.test_class}::{self.test}"
+        else:
+            self.path_without_variant = f"{self.classname.replace('.', '/')}/{self.module}.py::{self.test}"
         self.path = f"{self.path_without_variant}{self.variant}"
         self.key = f"{self.testsuite}::{self.path}"
+
+        # pytest-friendly name: path/to/module.py::[ClassName::]test[variant]
+        if self.test_class:
+            module_dotted = test_classname[:test_classname.rfind(".")]
+        else:
+            module_dotted = test_classname
+        pytest_file = module_dotted.replace(".", "/") + ".py"
+        if self.test_class:
+            self.pytest_name = f"{pytest_file}::{self.test_class}::{self.test}{self.variant}"
+        else:
+            self.pytest_name = f"{pytest_file}::{self.test}{self.variant}"
 
 
 @dataclass
@@ -243,13 +270,24 @@ class Test:
 
     @property
     def short_name(self) -> str:
-        pattern = re.compile(r"(?:.*/)?(?:([^/]+)/)?([^/]*?)\.py::([-\w\[\]]+)")
+        pattern = re.compile(r"(?:.*/)?(?:([^/]+)/)?([^/]*?)\.py::([-\w\[\]]+(?:::[-\w\[\]]+)?)")
         match = pattern.match(self.testname)
         if match:
             _, module, test = match.groups()
         else:
             raise ValueError(f"Cannot extract short name from testname: {self.testname}")
         return f"{self.testsuite}::{module}.{test}"
+
+    @property
+    def pytest_name(self) -> str:
+        """Pytest-friendly test node id (without variant)."""
+        if self.test_cases:
+            tc = self.test_cases[0]
+            # Strip variant from pytest_name to get the base test id
+            if tc.variant and tc.pytest_name.endswith(tc.variant):
+                return tc.pytest_name[:-len(tc.variant)]
+            return tc.pytest_name
+        return self.testname
 
     def get_reason_messages(self) -> str:
         reasons_by_result: dict[RunResult, set[str]] = {}
@@ -290,7 +328,7 @@ class Test:
         return test_variants_str
 
     def get_stats(self) -> ReportStats:
-        stats = ReportStats(name=f"{self.testsuite}::{self.testname}")
+        stats = ReportStats(name=f"{self.testsuite}::{self.pytest_name}")
         for test_case in self.test_cases:
             if test_case.result == RunResult.PASSED:
                 stats.passed += 1
@@ -531,9 +569,10 @@ class TestReport:
                     reports_stats.append(report_stats)
                 case TestGroupingLevel.TEST:
                     for test_key, test in report.tests.items():
+                        pytest_key = f"{test.testsuite}::{test.pytest_name}"
                         report_stats = report_stats | TestReport(tests={
-                            test.short_name: test
-                        }, name=test.short_name).get_summary_stats().to_named_dict(fields_filter=fields_filter)
+                            pytest_key: test
+                        }, name=pytest_key).get_summary_stats().to_named_dict(fields_filter=fields_filter)
                     reports_stats.append(report_stats)
                 case _:
                     raise ValueError(f"Unsupported grouping level {grouping_level}")
