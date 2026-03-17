@@ -360,7 +360,8 @@ private:
     // Find the make tensor ptr operation that created the base ptr for the load
     // operation.
     Operation::operand_range shape = makePointerOp.getShape();
-    if (shape.size() == 1)
+    unsigned rank = shape.size();
+    if (rank == 1)
       return false;
 
     Operation::operand_range strides = makePointerOp.getStrides();
@@ -372,6 +373,10 @@ private:
 
     unsigned strideOneDimVal = strideOneDim.value();
     LDBG("strideOneDim: " << strideOneDimVal);
+
+    // TODO: Support higher rank tensors in AxisInfo.
+    if (rank > 2)
+      return false;
 
     // Ensure the base ptr is 4-byte aligned.
     // Note: the HW requires the address to be 64-byte aligned, however we will
