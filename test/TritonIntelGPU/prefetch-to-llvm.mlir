@@ -293,3 +293,32 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     tt.return
   }
 }
+
+// -----
+
+// COM: Test rank-3 block pointer prefetch. The batch dimension should be folded
+// COM: into the base pointer via GEP, and 2D block prefetch ops should be
+// COM: emitted for each batch slice.
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+// CHECK-LABEL:   llvm.func spir_kernelcc @prefetch_block_ptr_rank3(
+  tt.func public @prefetch_block_ptr_rank3(%arg0: !tt.ptr<f16>, %arg1: i64, %arg2: i64, %arg3: i64, %arg4: i64) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+
+    // COM: Rank-3 block pointer struct: (i32, i32, i32, i64, i64, i64, i64, i64, i64, ptr<1>)
+    // COM: = {offset[3], shape[3], stride[3], base}
+    // CHECK:     %[[BP:.*]] = llvm.insertvalue {{.*}}[9] : !llvm.struct<(i32, i32, i32, i64, i64, i64, i64, i64, i64, ptr<1>)>
+    // CHECK:     %[[BASE:.*]] = llvm.extractvalue %[[BP]][9] : !llvm.struct<(i32, i32, i32, i64, i64, i64, i64, i64, i64, ptr<1>)>
+
+    // COM: Verify that batch dimension is folded into base pointer via GEP and
+    // COM: 2D block prefetch ops are emitted for each batch-tile combination.
+    // CHECK:     llvm.getelementptr
+    // CHECK:     triton_gen.2Dblockprefetch {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 4, v_blocks = 2, cache_control = L1C_L3C}
+    // CHECK:     llvm.getelementptr
+    // CHECK:     triton_gen.2Dblockprefetch {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 4, v_blocks = 2, cache_control = L1C_L3C}
+    %ptr = tt.make_tensor_ptr %arg0, [%arg1, %arg2, %arg3], [%arg4, %arg3, %c1_i64], [%c0_i32, %c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<2x16x32xf16>>
+    ttig.prefetch %ptr {cache = 1 : i32, evict = 1 : i32, isVolatile = false, ttig.block_io = "row_major"} : !tt.ptr<tensor<2x16x32xf16>>
+
+    tt.return
+  }
+}
