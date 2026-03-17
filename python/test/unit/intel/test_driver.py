@@ -83,7 +83,7 @@ def test_load_binary_error_kernel_error(device, tmp_path: pathlib.Path):
 
     device = driver.active.get_current_device()
 
-    with pytest.raises(RuntimeError, match=r".*ZE_RESULT_ERROR_INVALID_KERNEL_NAME.*"):
+    with pytest.raises(IntelGPUError, match=r".*ZE_RESULT_ERROR_INVALID_KERNEL_NAME.*"):
         _ = driver.active.utils.load_binary("invalid name", kernel.kernel, kernel.metadata.shared,
                                             kernel.metadata.build_flags, not kernel.metadata.generate_native_code,
                                             device)
