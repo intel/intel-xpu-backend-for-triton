@@ -217,3 +217,18 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     tt.return
   }
 }
+
+// -----
+
+// COM: The blocked layout with threadsPerWarp = [8, 2, 1], order = [1, 2, 0] defines a tile on dimensions 0 and 1.
+// COM: However, only dimension 2 is contiguous in memory, so a transposed block load is not legal for this layout.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [8, 2, 1], warpsPerCTA = [64, 1, 1], order = [1, 2, 0]}>
+module attributes {"ttg.num-warps" = 64 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @kernel_trans(
+  // CHECK: llvm.load
+  // CHECK-NOT: triton_gen.2Dblockload
+  tt.func public @kernel_trans(%arg0: !tt.tensordesc<tensor<32x2x16xf32>>, %idx: i32) -> tensor<32x2x16xf32, #blocked> {
+    %0 = tt.descriptor_load %arg0[%idx, %idx, %idx] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<32x2x16xf32>> -> tensor<32x2x16xf32, #blocked>
+    tt.return %0 : tensor<32x2x16xf32, #blocked>
+  }
+}
