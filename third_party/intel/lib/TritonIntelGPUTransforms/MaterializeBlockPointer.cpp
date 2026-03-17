@@ -58,18 +58,20 @@ public:
   }
 
 private:
-  template <typename OpType,
-            typename = std::enable_if_t<llvm::is_one_of<
-                OpType, tt::MakeTensorPtrOp, tt::MakeTensorDescOp>::value>>
-  static RankedTensorType getRankedTensorType(OpType makePointerOp) {
-    if constexpr (std::is_same_v<OpType, tt::MakeTensorPtrOp>) {
-      auto ptrType = cast<tt::PointerType>(makePointerOp.getType());
-      return cast<RankedTensorType>(ptrType.getPointeeType());
+  static RankedTensorType getMemoryAccessTensorType(Operation *memoryAccessOp) {
+    Type resultType;
+    auto resultTypes = memoryAccessOp->getResultTypes();
+    if (resultTypes.empty()) {
+      if (auto storeOp = dyn_cast<tt::StoreOp>(memoryAccessOp))
+        resultType = storeOp.getValue().getType();
+      else if (auto descStoreOp =
+                   dyn_cast<tt::DescriptorStoreOp>(memoryAccessOp))
+        resultType = descStoreOp.getSrc().getType();
+    } else {
+      resultType = resultTypes.front();
     }
 
-    if constexpr (std::is_same_v<OpType, tt::MakeTensorDescOp>) {
-      return makePointerOp.getType().getBlockType();
-    }
+    return ttgi::getRankedTensorType(resultType);
   }
 
   template <typename OpType,
@@ -122,8 +124,9 @@ private:
     if (rank == 1)
       return;
 
-    RankedTensorType tensorType = getRankedTensorType(makePointerOp);
-    unsigned elementWidth = tensorType.getElementTypeBitWidth();
+    RankedTensorType memoryAccessTensorType =
+        getMemoryAccessTensorType(memoryAccessOp);
+    unsigned elementWidth = memoryAccessTensorType.getElementTypeBitWidth();
     LDBG("elementWidth: " << elementWidth);
 
     if (!satisfies2DBlockReadAlignment(makePointerOp, elementWidth,
@@ -168,8 +171,8 @@ private:
         LDBG("dotLayout: " << *dotLayout);
         auto opIdx =
             static_cast<ttgi::DpasEncodingAttr::OpIdx>(dotLayout->getOpIdx());
-        auto dotOrder =
-            tt::gpu::getThreadOrder(*dotLayout, tensorType.getShape());
+        auto dotOrder = tt::gpu::getThreadOrder(
+            *dotLayout, memoryAccessTensorType.getShape());
         const bool valueRowMajor = (dotOrder[0] == 1 && dotOrder[1] == 0);
         if (opIdx == ttgi::DpasEncodingAttr::OpIdx::OperandA &&
             valueRowMajor ^ isRowMajor) {
@@ -290,19 +293,7 @@ private:
   // by all of its users to an identical dot layout, return that layout;
   // return nullopt for operations without results or without such a dot layout.
   std::optional<ttg::DotOperandEncodingAttr> getDotLayout(Operation *op) const {
-    Type resultType;
-    auto resultTypes = op->getResultTypes();
-    if (resultTypes.size() == 0) {
-      // Store op;
-      if (auto storeOp = dyn_cast<tt::StoreOp>(op)) {
-        resultType = storeOp.getValue().getType();
-      } else if (auto descStoreOp = dyn_cast<tt::DescriptorStoreOp>(op)) {
-        resultType = descStoreOp.getSrc().getType();
-      }
-    } else {
-      resultType = resultTypes[0];
-    }
-    RankedTensorType tensorType = ttgi::getRankedTensorType(resultType);
+    RankedTensorType tensorType = getMemoryAccessTensorType(op);
     if (!tensorType)
       return std::nullopt;
 
