@@ -19,7 +19,7 @@
 
 namespace mlir::triton::gpu::intel {
 struct L2Cache : public SideEffects::Resource::Base<L2Cache> {
-  StringRef getName() final { return "<intel::L2Cache>"; }
+  StringRef getName() const final { return "<intel::L2Cache>"; }
 };
 } // namespace mlir::triton::gpu::intel
 
