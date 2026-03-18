@@ -778,6 +778,7 @@ def test_convert_warp_local_layouts(M, N, src_layout, dst_layout, dtype, device)
 
 
 @pytest.mark.skipif(is_hip(), reason="Assumes 32 threads per warp")
+@pytest.mark.xfail(not is_cuda(), reason="Requires CUDA", run=False)
 def test_regress_warp_shuffle_convert_layout(tmp_path):
     rows = 2
     cols = 8
