@@ -45,147 +45,98 @@ public:
     tt::intel::ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
     tt::intel::ModuleStrideAnalysis strideAnalysis(mod, axisInfoAnalysis);
     MLIRContext *context = &getContext();
-    mod.walk([&](tt::LoadOp op) {
-      visit(op, axisInfoAnalysis, strideAnalysis, context);
-    });
-    mod.walk([&](tt::StoreOp op) {
-      visit(op, axisInfoAnalysis, strideAnalysis, context);
-    });
-    mod.walk(
-        [&](tt::DescriptorLoadOp op) { visit(op, axisInfoAnalysis, context); });
-    mod.walk([&](tt::DescriptorStoreOp op) {
-      visit(op, axisInfoAnalysis, context);
+    mod.walk([&](Operation *op) {
+      if (auto loadOp = dyn_cast<tt::LoadOp>(op))
+        return visit(loadOp, axisInfoAnalysis, strideAnalysis, context);
+      if (auto storeOp = dyn_cast<tt::StoreOp>(op))
+        return visit(storeOp, axisInfoAnalysis, strideAnalysis, context);
+      if (auto loadOp = dyn_cast<tt::DescriptorLoadOp>(op))
+        return visit(loadOp, axisInfoAnalysis, strideAnalysis, context);
+      if (auto storeOp = dyn_cast<tt::DescriptorStoreOp>(op))
+        return visit(storeOp, axisInfoAnalysis, strideAnalysis, context);
     });
   }
 
 private:
-  // Visit method for descriptor operations
-  void visit(tt::DescriptorLoadOp op,
-             tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-             MLIRContext *context) const {
-    visitDescriptor(op, op.getResult().getType(), axisInfoAnalysis, context);
-  }
-
-  void visit(tt::DescriptorStoreOp op,
-             tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-             MLIRContext *context) const {
-    visitDescriptor(op, op.getSrc().getType(), axisInfoAnalysis, context);
-  }
-
-  // Implementation for descriptor operations
-  template <typename OpType>
-  void visitDescriptor(OpType op, RankedTensorType tensorType,
-                       tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                       MLIRContext *context) const {
-    LDBG("Considering descriptor op: " << *op);
-
-    Value desc = op.getDesc();
-    // Find the make tensor desc operation that created the descriptor.
-    std::optional<tt::MakeTensorDescOp> defOp =
-        tt::intel::findDefiningOpOfType<tt::MakeTensorDescOp>(desc);
-    if (!defOp) {
-      LDBG("Could not find make tensor desc op for: " << *op);
-      return;
+  static RankedTensorType getMemoryAccessTensorType(Operation *memoryAccessOp) {
+    Type resultType;
+    auto resultTypes = memoryAccessOp->getResultTypes();
+    if (resultTypes.empty()) {
+      if (auto storeOp = dyn_cast<tt::StoreOp>(memoryAccessOp))
+        resultType = storeOp.getValue().getType();
+      else if (auto descStoreOp =
+                   dyn_cast<tt::DescriptorStoreOp>(memoryAccessOp))
+        resultType = descStoreOp.getSrc().getType();
+    } else {
+      resultType = resultTypes.front();
     }
 
-    tt::MakeTensorDescOp makeTensorDescOp = *defOp;
-    LDBG("Make tensor desc op: " << makeTensorDescOp);
-
-    Operation::operand_range shape = makeTensorDescOp.getShape();
-    unsigned rank = shape.size();
-    LDBG("Rank: " << rank);
-    if (rank == 1)
-      return;
-
-    if (!satisfies2DBlockReadAlignmentForDesc(op, axisInfoAnalysis)) {
-      LDBG("Alignment checks failed for: " << *op);
-      return;
-    }
-
-    unsigned elementWidth = tensorType.getElementTypeBitWidth();
-    LDBG("elementWidth: " << elementWidth);
-
-    Operation::operand_range strides = makeTensorDescOp.getStrides();
-    // For tensor descriptors, the last stride is always one (row major).
-    unsigned strideOneDimVal = rank - 1;
-
-    // Verify that tensor descriptor has stride=1 in last dimension.
-    Value fastChangeStride = strides[strideOneDimVal];
-    assert(tt::intel::isConstant(fastChangeStride, 1) &&
-           "Tensor descriptor must have stride=1 in last dimension");
-
-    // Across Intel platforms, the strictest pitch restriction is to be a
-    // multiple of OWord(128 bits).
-    Value pitch = strides[rank - 2];
-    LDBG("Pitch: " << pitch);
-    if (!ttgi::isDivisible(pitch, llvm::divideCeil(128, elementWidth)))
-      return;
-
-    std::optional<ttg::DotOperandEncodingAttr> dotLayout =
-        getDotLayoutForDesc(op);
-    if (dotLayout) {
-      // Check if the load is being used by a tt.dot operation, and if so is
-      // this the first operand and is it a transposed row major matrix. If
-      // so, skip the block descriptor attribute as performance is worse than
-      // if we remove the tensor descriptor.
-      LDBG("dotLayout: " << *dotLayout);
-      auto opIdx =
-          static_cast<ttgi::DpasEncodingAttr::OpIdx>(dotLayout->getOpIdx());
-      auto dotOrder = tt::gpu::getThreadOrder(tensorType);
-      const bool valueRowMajor = (dotOrder[0] == 1 && dotOrder[1] == 0);
-      if (opIdx == ttgi::DpasEncodingAttr::OpIdx::OperandA && !valueRowMajor) {
-        LDBG("Skipping block descriptor attribute for transposed A matrix in "
-             "dot operation");
-        return;
-      }
-    }
-
-    // Tensor descriptors are always row major.
-    op->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
-                StringAttr::get(context, ttgi::stringifyBlockIOMode(
-                                             ttgi::BlockIOMode::RowMajor)));
+    return ttgi::getRankedTensorType(resultType);
   }
 
-  template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
-                                 OpType, tt::LoadOp, tt::StoreOp>::value>>
+  template <typename OpType,
+            typename = std::enable_if_t<llvm::is_one_of<
+                OpType, tt::LoadOp, tt::StoreOp, tt::DescriptorLoadOp,
+                tt::DescriptorStoreOp>::value>>
   void visit(OpType op, tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
              tt::intel::ModuleStrideAnalysis &strideAnalysis,
              MLIRContext *context) const {
     LDBG("Considering op: " << *op);
 
-    Value ptr = op.getPtr();
-    if (!tt::isTensorPointerType(ptr.getType()))
-      return MaterializeTensorOfPointers(op, axisInfoAnalysis, strideAnalysis);
+    if constexpr (llvm::is_one_of<OpType, tt::LoadOp, tt::StoreOp>::value) {
+      Value ptr = op.getPtr();
+      if (!tt::isTensorPointerType(ptr.getType()))
+        return MaterializeTensorOfPointers(op, axisInfoAnalysis,
+                                           strideAnalysis);
+      else {
+        return MaterializeStructuredPointer(
+            op, tt::intel::findDefiningOpOfType<tt::MakeTensorPtrOp>(ptr),
+            axisInfoAnalysis);
+      }
+    }
 
-    // Find the make tensor ptr operation that created the base ptr.
-    std::optional<tt::MakeTensorPtrOp> defOp =
-        tt::intel::findDefiningOpOfType<tt::MakeTensorPtrOp>(ptr);
+    if constexpr (llvm::is_one_of<OpType, tt::DescriptorLoadOp,
+                                  tt::DescriptorStoreOp>::value)
+      return MaterializeStructuredPointer(
+          op,
+          tt::intel::findDefiningOpOfType<tt::MakeTensorDescOp>(op.getDesc()),
+          axisInfoAnalysis);
+  }
+
+  template <typename MakePtrOpType>
+  void MaterializeStructuredPointer(
+      Operation *memoryAccessOp, std::optional<MakePtrOpType> defOp,
+      tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) const {
+    // Find the make tensor pointer/descriptor operation that created the base
+    // pointer.
     if (!defOp) {
-      LDBG("Could not find make tensor ptr op for: " << *op);
+      LDBG("Could not find make tensor pointer/descriptor op for: "
+           << *memoryAccessOp);
       return;
     }
 
-    tt::MakeTensorPtrOp makeTensorPtrOp = *defOp;
-    LDBG("Make tensor ptr op: " << makeTensorPtrOp);
+    MakePtrOpType makePointerOp = *defOp;
+    LDBG("Make tensor pointer/descriptor op: " << makePointerOp);
 
-    Operation::operand_range shape = makeTensorPtrOp.getShape();
+    Operation::operand_range shape = makePointerOp.getShape();
     unsigned rank = shape.size();
     LDBG("Rank: " << rank);
     if (rank == 1)
       return;
 
-    if (!satisfies2DBlockReadAlignment(op, axisInfoAnalysis)) {
-      LDBG("Alignment checks failed for: " << *op);
+    RankedTensorType memoryAccessTensorType =
+        getMemoryAccessTensorType(memoryAccessOp);
+    unsigned elementWidth = memoryAccessTensorType.getElementTypeBitWidth();
+    LDBG("elementWidth: " << elementWidth);
+
+    if (!satisfies2DBlockReadAlignment(makePointerOp, elementWidth,
+                                       memoryAccessOp, axisInfoAnalysis)) {
+      LDBG("Alignment checks failed for: " << *memoryAccessOp);
       return;
     }
 
-    auto ptrType = cast<tt::PointerType>(makeTensorPtrOp.getType());
-    auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
-    unsigned elementWidth = tensorType.getElementTypeBitWidth();
-    LDBG("elementWidth: " << elementWidth);
-
-    Operation::operand_range strides = makeTensorPtrOp.getStrides();
-    std::optional<unsigned> strideOneDim = getStrideOneDim(makeTensorPtrOp);
+    Operation::operand_range strides = makePointerOp.getStrides();
+    std::optional<unsigned> strideOneDim = getStrideOneDim(strides);
     assert((strideOneDim && strideOneDim.value() < strides.size()) &&
            "Expected strideOneDim to be set and less than strides.size()");
     unsigned strideOneDimVal = strideOneDim.value();
@@ -210,7 +161,8 @@ private:
         return;
 
       const bool isRowMajor = (strideOneDimVal == rank - 1);
-      std::optional<ttg::DotOperandEncodingAttr> dotLayout = getDotLayout(op);
+      std::optional<ttg::DotOperandEncodingAttr> dotLayout =
+          getDotLayout(memoryAccessOp);
       if (dotLayout) {
         // Check if the load is being used by a tt.dot operation, and if so is
         // this the first operand and is it a transposed row major matrix. If
@@ -219,7 +171,8 @@ private:
         LDBG("dotLayout: " << *dotLayout);
         auto opIdx =
             static_cast<ttgi::DpasEncodingAttr::OpIdx>(dotLayout->getOpIdx());
-        auto dotOrder = tt::gpu::getThreadOrder(tensorType);
+        auto dotOrder = tt::gpu::getThreadOrder(
+            *dotLayout, memoryAccessTensorType.getShape());
         const bool valueRowMajor = (dotOrder[0] == 1 && dotOrder[1] == 0);
         if (opIdx == ttgi::DpasEncodingAttr::OpIdx::OperandA &&
             valueRowMajor ^ isRowMajor) {
@@ -229,9 +182,12 @@ private:
         }
       }
 
-      op->setAttr(
+      if constexpr (std::is_same_v<MakePtrOpType, tt::MakeTensorDescOp>) {
+        assert(isRowMajor && "tensor descriptor is expected to be row major");
+      }
+      memoryAccessOp->setAttr(
           ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
-          StringAttr::get(context,
+          StringAttr::get(memoryAccessOp->getContext(),
                           ttgi::stringifyBlockIOMode(
                               isRowMajor ? ttgi::BlockIOMode::RowMajor
                                          : ttgi::BlockIOMode::ColumnMajor)));
@@ -338,17 +294,12 @@ private:
                                       ttgi::BlockIOMode::ColumnMajor)));
   }
 
-  // Return the load layout if it is a dot layout. If it is not, check if the
-  // load result is converted to a dot layout. If so, return the dot layout,
-  // otherwise return nullopt.
-  template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
-                                 OpType, tt::LoadOp, tt::StoreOp>::value>>
-  std::optional<ttg::DotOperandEncodingAttr> getDotLayout(OpType op) const {
-    Value ptr = op.getPtr();
-    if (!tt::isTensorPointerType(ptr.getType()))
-      return std::nullopt;
-
-    RankedTensorType tensorType = ttgi::getRankedTensorType(ptr.getType());
+  // Inspect the first result of the given operation: if its type has a dot
+  // layout, return that layout. Otherwise, if the first result is converted
+  // by all of its users to an identical dot layout, return that layout;
+  // return nullopt for operations without results or without such a dot layout.
+  std::optional<ttg::DotOperandEncodingAttr> getDotLayout(Operation *op) const {
+    RankedTensorType tensorType = getMemoryAccessTensorType(op);
     if (!tensorType)
       return std::nullopt;
 
@@ -384,10 +335,8 @@ private:
     return std::nullopt;
   }
 
-  std::optional<unsigned>
-  getStrideOneDim(tt::MakeTensorPtrOp makeTensorPtrOp) const {
-    assert(makeTensorPtrOp && "Expected a make tensor ptr op.");
-    Operation::operand_range strides = makeTensorPtrOp.getStrides();
+  std::optional<unsigned> static getStrideOneDim(
+      const Operation::operand_range &strides) {
     std::optional<unsigned> strideOneDim{std::nullopt};
     for (auto [idx, stride] : llvm::enumerate(strides)) {
       if (!tt::intel::isConstant(stride, 1))
@@ -400,78 +349,26 @@ private:
 
   template <typename OpType,
             typename = std::enable_if_t<llvm::is_one_of<
-                OpType, tt::DescriptorLoadOp, tt::DescriptorStoreOp>::value>>
-  std::optional<ttg::DotOperandEncodingAttr>
-  getDotLayoutForDesc(OpType op) const {
-    // Get the tensor type from the operation's result (load) or value (store)
-    Type resultType;
-    if constexpr (std::is_same_v<OpType, tt::DescriptorLoadOp>) {
-      resultType = op.getResult().getType();
-    } else {
-      resultType = op.getSrc().getType();
-    }
-    RankedTensorType tensorType = ttgi::getRankedTensorType(resultType);
-    if (!tensorType)
-      return std::nullopt;
+                OpType, tt::MakeTensorPtrOp, tt::MakeTensorDescOp>::value>>
+  bool satisfies2DBlockReadAlignment(
+      OpType makePointerOp, unsigned elementWidth, Operation *memoryAccessOp,
+      tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) const {
 
-    auto dotLayout = ttgi::getDotEncoding(tensorType);
-    if (dotLayout)
-      return dotLayout;
-
-    auto allUsersAreConvertOps = [](Operation::user_range users) {
-      return llvm::all_of(users, [](Operation *user) {
-        return isa<ttg::ConvertLayoutOp>(user);
-      });
-    };
-
-    auto allUserHaveIdenticalLayout = [](Operation::user_range users) {
-      Attribute firstUserLayout =
-          cast<ttg::ConvertLayoutOp>(*users.begin()).getType().getEncoding();
-      return llvm::all_of(users, [&firstUserLayout](Operation *user) {
-        return firstUserLayout ==
-               cast<ttg::ConvertLayoutOp>(user).getType().getEncoding();
-      });
-    };
-
-    Operation::user_range users = op->getUsers();
-    if (!users.empty() && allUsersAreConvertOps(users) &&
-        allUserHaveIdenticalLayout(users)) {
-      Attribute firstUserLayout =
-          cast<ttg::ConvertLayoutOp>(*users.begin()).getType().getEncoding();
-      if (isa<ttg::DotOperandEncodingAttr>(firstUserLayout))
-        return dyn_cast<ttg::DotOperandEncodingAttr>(firstUserLayout);
-      return std::nullopt;
-    }
-
-    return std::nullopt;
-  }
-
-  template <typename OpType,
-            typename = std::enable_if_t<llvm::is_one_of<
-                OpType, tt::DescriptorLoadOp, tt::DescriptorStoreOp>::value>>
-  bool satisfies2DBlockReadAlignmentForDesc(
-      OpType op, tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) const {
-    Value desc = op.getDesc();
-
-    // Find the make tensor desc operation that created the descriptor for the
-    // load/store operation.
-    std::optional<tt::MakeTensorDescOp> defOp =
-        tt::intel::findDefiningOpOfType<tt::MakeTensorDescOp>(desc);
-    assert(defOp && "Expected a make tensor desc op.");
-    tt::MakeTensorDescOp makeTensorDescOp = *defOp;
-    Operation::operand_range shape = makeTensorDescOp.getShape();
+    // Find the make tensor ptr operation that created the base ptr for the load
+    // operation.
+    Operation::operand_range shape = makePointerOp.getShape();
     unsigned rank = shape.size();
     if (rank == 1)
       return false;
 
-    // For tensor descriptors, the last stride is always one (row major).
-    unsigned strideOneDimVal = rank - 1;
+    Operation::operand_range strides = makePointerOp.getStrides();
+    std::optional<unsigned> strideOneDim = getStrideOneDim(strides);
+    if (!strideOneDim) {
+      LDBG("Could not find stride one dimension in: " << makePointerOp);
+      return false;
+    }
 
-    // Get the tensor type from the descriptor
-    tt::TensorDescType descType =
-        cast<tt::TensorDescType>(makeTensorDescOp.getType());
-    RankedTensorType tensorType = descType.getBlockType();
-    unsigned elementWidth = tensorType.getElementTypeBitWidth();
+    unsigned strideOneDimVal = strideOneDim.value();
     LDBG("strideOneDim: " << strideOneDimVal);
 
     // TODO: Support higher rank tensors in AxisInfo.
@@ -481,7 +378,8 @@ private:
     // Ensure the base ptr is 4-byte aligned.
     // Note: the HW requires the address to be 64-byte aligned, however we will
     // compensate by imposing restrictions on the offsetX and baseWidth.
-    const tt::AxisInfo *axisInfo = axisInfoAnalysis.getAxisInfo(desc);
+    const tt::AxisInfo *axisInfo =
+        axisInfoAnalysis.getAxisInfo(makePointerOp.getResult());
     if (axisInfo->getDivisibility(strideOneDimVal) % 4 != 0) {
       LDBG("Found non 4 bytes aligned base: "
            << axisInfo->getDivisibility(strideOneDimVal));
@@ -502,80 +400,23 @@ private:
     }
     LDBG("baseWidth: " << baseWidth);
 
+    Value offset;
+    if constexpr (std::is_same_v<OpType, tt::MakeTensorPtrOp>) {
+      offset =
+          tt::intel::getFinalValue(makePointerOp.getOffsets()[strideOneDimVal]);
+    }
+    if constexpr (std::is_same_v<OpType, tt::MakeTensorDescOp>) {
+      if (auto descLoadOp = dyn_cast<triton::DescriptorLoadOp>(memoryAccessOp))
+        offset =
+            tt::intel::getFinalValue(descLoadOp.getIndices()[strideOneDimVal]);
+      if (auto descStoreOp =
+              dyn_cast<triton::DescriptorStoreOp>(memoryAccessOp))
+        offset =
+            tt::intel::getFinalValue(descStoreOp.getIndices()[strideOneDimVal]);
+    }
+    assert(offset && "Expected to find offset operand");
     // Analyze the load/store-time index in the stride-one dimension to ensure
     // it satisfies HW constraints.
-    Value offset = tt::intel::getFinalValue(op.getIndices()[strideOneDimVal]);
-    if (!ttgi::isDivisible(offset, divisor)) {
-      LLVM_DEBUG({
-        llvm::dbgs() << "descriptor index does not satisfy HW constraints: ";
-        offset.printAsOperand(llvm::dbgs(), {});
-        llvm::dbgs() << "\ndivisor: " << divisor << "\n";
-      });
-      return false;
-    }
-    LDBG("offset: " << offset);
-
-    return true;
-  }
-
-  template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
-                                 OpType, tt::LoadOp, tt::StoreOp>::value>>
-  bool satisfies2DBlockReadAlignment(
-      OpType op, tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) const {
-    Value ptr = op.getPtr();
-    assert(tt::isTensorPointerType(ptr.getType()) &&
-           "Expected a ptr to a tensor of ptrs.");
-
-    // Find the make tensor ptr operation that created the base ptr for the load
-    // operation.
-    std::optional<tt::MakeTensorPtrOp> defOp =
-        tt::intel::findDefiningOpOfType<tt::MakeTensorPtrOp>(ptr);
-    assert(defOp && "Expected a make tensor ptr op.");
-    tt::MakeTensorPtrOp makeTensorPtrOp = *defOp;
-    Operation::operand_range shape = makeTensorPtrOp.getShape();
-    if (shape.size() == 1)
-      return false;
-
-    std::optional<unsigned> strideOneDim = getStrideOneDim(makeTensorPtrOp);
-    if (!strideOneDim) {
-      LDBG("Could not find stride one dimension in: " << makeTensorPtrOp);
-      return false;
-    }
-
-    auto ptrType = cast<tt::PointerType>(makeTensorPtrOp.getType());
-    auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
-    unsigned elementWidth = tensorType.getElementTypeBitWidth();
-    unsigned strideOneDimVal = strideOneDim.value();
-    LDBG("strideOneDim: " << strideOneDimVal);
-
-    // Ensure the base ptr is 4-byte aligned.
-    // Note: the HW requires the address to be 64-byte aligned, however we will
-    // compensate by imposing restrictions on the offsetX and baseWidth.
-    const tt::AxisInfo *axisInfo = axisInfoAnalysis.getAxisInfo(ptr);
-    if (axisInfo->getDivisibility(strideOneDimVal) % 4 != 0) {
-      LDBG("Found non 4 bytes aligned base: "
-           << axisInfo->getDivisibility(strideOneDimVal));
-      return false;
-    }
-
-    // Analyze the shape of the stride one dimension to ensure it satisfies HW
-    // constraints.
-    Value baseWidth = tt::intel::getFinalValue(shape[strideOneDimVal]);
-    unsigned divisor = llvm::divideCeil(32, elementWidth);
-    if (!ttgi::isDivisible(baseWidth, divisor)) {
-      LLVM_DEBUG({
-        llvm::dbgs() << "baseWidth does not satisfies HW constraint: ";
-        baseWidth.printAsOperand(llvm::dbgs(), {});
-        llvm::dbgs() << "\ndivisor: " << divisor << "\n";
-      });
-      return false;
-    }
-    LDBG("baseWidth: " << baseWidth);
-
-    // Analyze the initial offset corresponding to the stride one dimension to
-    // ensure it satisfies HW constraints.
-    Value offset =
-        tt::intel::getFinalValue(makeTensorPtrOp.getOffsets()[strideOneDimVal]);
     if (!ttgi::isDivisible(offset, divisor)) {
       LLVM_DEBUG({
         llvm::dbgs() << "offset does not satisfies HW constraints: ";
@@ -586,13 +427,13 @@ private:
     }
     LDBG("offset: " << offset);
 
-    Region *loadRgn = op->getParentRegion();
-    Region *makeTensorPtrRgn = makeTensorPtrOp->getParentRegion();
-    bool inSameRegion = (loadRgn == makeTensorPtrRgn);
-    if (inSameRegion)
-      return satisfies2DBlockReadAlignment(offset, divisor);
-
-    // TODO: analyze tt.advance (issue #3762).
+    if constexpr (std::is_same_v<OpType, tt::MakeTensorPtrOp>) {
+      Region *loadRgn = memoryAccessOp->getParentRegion();
+      Region *makeTensorPtrRgn = makePointerOp->getParentRegion();
+      bool inSameRegion = (loadRgn == makeTensorPtrRgn);
+      if (inSameRegion)
+        return satisfies2DBlockReadAlignment(offset, divisor);
+    }
 
     return true;
   }
