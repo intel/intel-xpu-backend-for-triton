@@ -15,8 +15,10 @@ namespace ttgi = mlir::triton::gpu::intel;
 
 namespace {
 
-// Upstream AxisInfoVisitorImpl / BinaryOpVisitorImpl are in the upstream .cpp
-// anonymous namespace, so we replicate the base template here.
+// Upstream AxisInfoVisitorImpl / BinaryOpVisitorImpl / AddSubOpAxisInfoVisitor
+// are defined in an anonymous namespace in lib/Analysis/AxisInfo.cpp, so they
+// cannot be instantiated or subclassed from outside that translation unit.  We
+// replicate the base templates here for Intel-specific op visitors.
 template <typename OpTy> class AxisInfoVisitorImpl : public AxisInfoVisitor {
 public:
   using AxisInfoVisitor::AxisInfoVisitor;
@@ -305,6 +307,21 @@ public:
   }
 };
 
+// AddSubOpAxisInfoVisitor for LLVM::AddOp.
+//
+// We cannot reuse the upstream AddSubOpAxisInfoVisitor<> template because:
+//  1. It lives in an anonymous namespace (lib/Analysis/AxisInfo.cpp) and cannot
+//     be instantiated from here.
+//  2. Upstream's getConstantValue() has if-constexpr branches for
+//  arith::AddIOp,
+//     arith::SubIOp, and triton::AddPtrOp, but no branch for LLVM::AddOp — so
+//     constant folding would silently return {} (no value).
+//  3. Upstream's getDivisibility() both-contiguous path calls multiplyDivisor()
+//     and gcd(), which are also in the upstream anonymous namespace.
+//
+// This simplified version is equivalent to the upstream template instantiated
+// for a plain integer addition (no SubIOp sign-flip, no AddPtrOp pointer
+// arithmetic) and correctly folds constants for LLVM::AddOp.
 template <typename OpTy>
 class AddSubOpAxisInfoVisitor final : public BinaryOpVisitorImpl<OpTy> {
 public:
