@@ -28,17 +28,6 @@ using namespace mlir::triton::gpu::intel;
 
 #define S(v) StringAttr::get(ctx, (v))
 
-#if defined(_MSC_VER) && !defined(__clang__)
-// from https://gist.github.com/pps83/3210a2f980fd02bb2ba2e5a1fc4a2ef0
-#include <intrin.h>
-
-static int __builtin_ctz(unsigned x) {
-  unsigned long r;
-  _BitScanForward(&r, x);
-  return static_cast<int>(r);
-}
-#endif
-
 namespace {
 
 Value maybeAnd(RewriterBase &rewriter, Location loc, Value a, Value b) {
@@ -130,22 +119,6 @@ SmallVector<unsigned, 2> get2DPrefetchShapePerWarp(RankedTensorType tensorTy) {
   unsigned numCols = std::min<unsigned>(tensorShape[rank - 1],
                                         maxBytesPerCol / elemSizeInBytes);
   return {numRows, numCols};
-}
-
-/// Get the 2D warps per CTA given the tensor shape and the prefetch
-/// shape per warp.
-SmallVector<unsigned, 2>
-getWarpsPerCTA(const ArrayRef<int64_t> tensorShape,
-               const SmallVector<unsigned, 2> &shapePerWarp,
-               unsigned numWarps) {
-  assert(tensorShape.size() >= 2 && shapePerWarp.size() == 2 &&
-         "only inner 2D dims are used");
-  unsigned rank = tensorShape.size();
-  unsigned repNumPerRow =
-      mlir::ceil((unsigned)tensorShape[rank - 1], shapePerWarp[1]);
-  unsigned warpNumPerRow = std::min(numWarps, repNumPerRow);
-  unsigned warpNumRow = mlir::ceil(numWarps, warpNumPerRow);
-  return {warpNumRow, warpNumPerRow};
 }
 
 // Contains some helper functions for both Load and Store conversions.

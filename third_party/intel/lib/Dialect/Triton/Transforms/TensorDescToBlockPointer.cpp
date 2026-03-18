@@ -57,7 +57,7 @@ Attribute maybeGetDefaultBlockedEncoding(Operation *op,
       ttg::lookupThreadsPerWarp(builder), ttg::lookupNumCTAs(builder));
 }
 
-// Collect all DescriptorLoadOp/DescriptorStoreOp operations reachable from
+// Collect all descriptor memory operations reachable from
 // `value`, and record whether each load/store is reached through if/select
 // control flow.
 //
@@ -73,7 +73,8 @@ void collectDescriptorLoadStoreUsers(
     return;
 
   for (Operation *user : value.getUsers()) {
-    if (isa<tt::DescriptorLoadOp, tt::DescriptorStoreOp>(user)) {
+    if (isa<tt::DescriptorLoadOp, tt::DescriptorStoreOp,
+            ttgi::DescriptorPrefetchOp>(user)) {
       users[user] = users.lookup(user) || throughIfSelect;
       continue;
     }
@@ -218,6 +219,10 @@ splitDescriptorsByUserInfo(ModuleOp moduleOp) {
       else if (auto storeOp = dyn_cast<tt::DescriptorStoreOp>(userOp))
         encoding =
             cast<RankedTensorType>(storeOp.getSrc().getType()).getEncoding();
+      else if (auto prefetchOp = dyn_cast<ttgi::DescriptorPrefetchOp>(userOp))
+        encoding = cast<tt::TensorDescType>(prefetchOp.getDesc().getType())
+                       .getBlockType()
+                       .getEncoding();
       BlockIOMode blockIOMode = getBlockIOMode(userOp);
       groupedUsers[{encoding, blockIOMode}].push_back(userOp);
     }
@@ -262,6 +267,8 @@ splitDescriptorsByUserInfo(ModuleOp moduleOp) {
           loadOp.getDescMutable().assign(clone.getResult());
         else if (auto storeOp = dyn_cast<tt::DescriptorStoreOp>(userOp))
           storeOp.getDescMutable().assign(clone.getResult());
+        else if (auto prefetchOp = dyn_cast<ttgi::DescriptorPrefetchOp>(userOp))
+          prefetchOp.getDescMutable().assign(clone.getResult());
       }
     }
   }
@@ -380,6 +387,8 @@ public:
               [&](auto loadOrStoreOp) {
                 rewriteDescriptorLoadOrStoreOp(loadOrStoreOp);
               })
+          .Case<ttgi::DescriptorPrefetchOp>(
+              [&](auto prefetchOp) { rewriteDescriptorPrefetchOp(prefetchOp); })
           .Default([&](auto) {});
       return WalkResult::advance();
     });
@@ -643,6 +652,36 @@ private:
       LLVM_DEBUG(llvm::dbgs().indent(2) << storeOp << "\n");
     }
 
+    cleanUp.insert(op);
+  }
+
+  void rewriteDescriptorPrefetchOp(ttgi::DescriptorPrefetchOp op) {
+    assert(op && "Expecting a valid operation");
+
+    LLVM_DEBUG(llvm::dbgs() << "Rewriting: " << op << "\n");
+
+    OpBuilder builder(op);
+    Location loc = op.getLoc();
+    Value operand = op.getOperand(0);
+    assert(triton::isTensorPointerType(operand.getType()) &&
+           "Expecting a block ptr");
+    auto ptrType = cast<tt::PointerType>(operand.getType());
+
+    SmallVector<Value> indices(op.getIndices().begin(), op.getIndices().end());
+    if (StringAttr blockIOAttr = op->getAttrOfType<StringAttr>(
+            ttgi::TritonIntelGPUDialect::getBlockIOAttrName());
+        blockIOAttr && blockIOAttr.getValue() == "column_major") {
+      std::reverse(indices.begin(), indices.end());
+    }
+
+    Value ptr = tt::AdvanceOp::create(builder, loc, ptrType, operand, indices);
+    auto prefetchOp = ttgi::PrefetchOp::create(builder, loc, ptr, op.getCache(),
+                                               op.getEvict(),
+                                               /*isVolatile=*/false);
+    for (auto attr : op->getDiscardableAttrs())
+      prefetchOp->setDiscardableAttr(attr.getName(), attr.getValue());
+
+    LLVM_DEBUG(llvm::dbgs().indent(2) << prefetchOp << "\n");
     cleanUp.insert(op);
   }
 
