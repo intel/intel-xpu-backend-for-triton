@@ -336,8 +336,9 @@ private:
 
       StringRef blockIOAttrName =
           ttgi::TritonIntelGPUDialect::getBlockIOAttrName();
-      auto attr = loadOp->getAttrOfType<StringAttr>(blockIOAttrName);
-      auto mode = ttgi::symbolizeBlockIOMode(attr.getValue());
+      StringAttr attr = loadOp->getAttrOfType<StringAttr>(blockIOAttrName);
+      std::optional<ttgi::BlockIOMode> mode =
+          ttgi::symbolizeBlockIOMode(attr.getValue());
       assert(mode && "Expecting a valid blockIO attribute");
       auto newMode = (*mode == ttgi::BlockIOMode::RowMajor)
                          ? ttgi::BlockIOMode::ColumnMajor

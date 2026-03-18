@@ -17,7 +17,6 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
-#include <array>
 
 #define DEBUG_TYPE "triton-intel-tdesc-to-block-pointer"
 
@@ -152,18 +151,12 @@ void collectDescriptorLoadStoreUsers(
   }
 }
 
-// Local indexable enum for the three possible ttig.block_io attribute values.
-// Values 1 and 2 align with ttgi::BlockIOMode::{RowMajor, ColumnMajor}.
-enum BlockIOMode {
-  None = 0,
-  RowMajor = static_cast<int>(ttgi::BlockIOMode::RowMajor) + 1,
-  ColumnMajor = static_cast<int>(ttgi::BlockIOMode::ColumnMajor) + 1,
-  NumBlockIOModes,
-};
+// Represents the three possible ttig.block_io attribute values.
+enum class BlockIOMode { None, RowMajor, ColumnMajor };
 
 struct DescriptorUserInfo {
   Attribute encoding;
-  BlockIOMode blockIOMode = None;
+  BlockIOMode blockIOMode = BlockIOMode::None;
 };
 
 // For each MakeTensorDescOp whose load/store users have more than one distinct
@@ -200,19 +193,23 @@ splitDescriptorsByUserInfo(ModuleOp moduleOp) {
     collectDescriptorLoadStoreUsers(descOp.getResult(), visitedNoIfSelect,
                                     visitedWithIfSelect, loadStoreUsers);
 
-    auto getBlockIOMode = [](Operation *userOp) -> BlockIOMode {
+    auto getBlockIOMode = [](Operation *userOp) {
       if (auto attr = userOp->getAttrOfType<StringAttr>(
               ttgi::TritonIntelGPUDialect::getBlockIOAttrName())) {
-        if (auto mode = ttgi::symbolizeBlockIOMode(attr.getValue()))
-          return static_cast<BlockIOMode>(static_cast<int>(*mode) + 1);
+        if (auto mode = ttgi::symbolizeBlockIOMode(attr.getValue())) {
+          if (*mode == ttgi::BlockIOMode::ColumnMajor)
+            return BlockIOMode::ColumnMajor;
+          if (*mode == ttgi::BlockIOMode::RowMajor)
+            return BlockIOMode::RowMajor;
+        }
       }
-      return None;
+      return BlockIOMode::None;
     };
 
     // Group users by (encoding, blockIOMode) so each clone has a uniform
     // layout and access pattern.
-    using UsersPerMode = std::array<SmallVector<Operation *>, NumBlockIOModes>;
-    llvm::MapVector<Attribute, UsersPerMode> groupedUsers;
+    using UserGroupKey = std::pair<Attribute, BlockIOMode>;
+    llvm::MapVector<UserGroupKey, SmallVector<Operation *>> groupedUsers;
     for (auto &[userOp, reachedThroughIfSelect] : loadStoreUsers) {
       (void)reachedThroughIfSelect;
       Attribute encoding;
@@ -222,20 +219,15 @@ splitDescriptorsByUserInfo(ModuleOp moduleOp) {
         encoding =
             cast<RankedTensorType>(storeOp.getSrc().getType()).getEncoding();
       BlockIOMode blockIOMode = getBlockIOMode(userOp);
-      groupedUsers[encoding][blockIOMode].push_back(userOp);
+      groupedUsers[{encoding, blockIOMode}].push_back(userOp);
     }
 
-    SmallVector<std::pair<DescriptorUserInfo, SmallVector<Operation *>>> groups;
-    for (auto &[encoding, usersPerMode] : groupedUsers)
-      for (size_t modeIdx = 0; modeIdx < usersPerMode.size(); ++modeIdx)
-        if (!usersPerMode[modeIdx].empty())
-          groups.push_back(
-              {DescriptorUserInfo{encoding, static_cast<BlockIOMode>(modeIdx)},
-               std::move(usersPerMode[modeIdx])});
-
-    if (groups.size() <= 1) {
+    if (groupedUsers.size() <= 1) {
       descToInfo[descOp] =
-          groups.empty() ? DescriptorUserInfo{} : groups.front().first;
+          groupedUsers.empty()
+              ? DescriptorUserInfo{}
+              : DescriptorUserInfo{groupedUsers.front().first.first,
+                                   groupedUsers.front().first.second};
       continue;
     }
 
@@ -243,7 +235,8 @@ splitDescriptorsByUserInfo(ModuleOp moduleOp) {
     OpBuilder builder(descOp.getContext());
     builder.setInsertionPointAfter(descOp);
     bool isFirst = true;
-    for (auto &[info, ops] : groups) {
+    for (auto &[groupKey, ops] : groupedUsers) {
+      DescriptorUserInfo info{groupKey.first, groupKey.second};
       if (isFirst) {
         descToInfo[descOp] = info;
         isFirst = false;
@@ -541,7 +534,7 @@ private:
            "Expected descriptor user info for MakeTensorDescOp");
     DescriptorUserInfo userInfo = userInfoIt->second;
     Attribute layout = findEncodingForTensorDesc(op, userInfo.encoding);
-    bool isColumnMajor = userInfo.blockIOMode == ColumnMajor;
+    bool isColumnMajor = userInfo.blockIOMode == BlockIOMode::ColumnMajor;
     auto tensorPtr =
         findOrCreateMakeTensorPtr(loc, op.getBase(), shapes, strides, offsets,
                                   sizes, layout, builder, isColumnMajor);
