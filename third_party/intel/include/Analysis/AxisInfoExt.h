@@ -35,4 +35,4 @@ public:
 
 } // namespace mlir::triton::intel
 
-#endif
+#endif // TRITON_INTEL_ANALYSIS_AXISINFOEXT_H
