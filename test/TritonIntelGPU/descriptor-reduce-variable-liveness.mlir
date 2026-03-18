@@ -391,8 +391,11 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bfloat16_conversion
     // CHECK-NOT:  tt.descriptor_load {{.*}} : !tt.tensordesc<tensor<128x128xf16>> -> tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS3]], kWidth = 1}>>
     %22 = tt.splat %20 : f32 -> tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma3}>>
     %23 = tt.splat %20 : f32 -> tensor<128x128xf32, #mma3>
-    ttig.descriptor_prefetch %14[%c0_i32, %c0_i32] {ttig.block_io = "column_major"} : !tt.tensordesc<tensor<128x128xf16>>
-    ttig.descriptor_prefetch %12[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<128x128xf16>>
+    %24 = arith.cmpi sgt, %9, %c0_i32 : i32
+    scf.if %24 {
+      ttig.descriptor_prefetch %14[%c0_i32, %c0_i32] {ttig.block_io = "column_major"} : !tt.tensordesc<tensor<128x128xf16>>
+      ttig.descriptor_prefetch %12[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<128x128xf16>>
+    }
     %27:4 = scf.for %arg6 = %c0_i32 to %9 step %c64_i32 iter_args(%arg7 = %cst, %arg8 = %cst_1, %arg9 = %cst_0, %arg10 = %c0_i32) -> (tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma3}>>, tensor<128x128xf32, #mma3>, tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma3}>>, i32)  : i32 {
       // CHECK:  scf.for
       // CHECK:  tt.descriptor_load {{.*}} : !tt.tensordesc<tensor<128x128xf16>> -> tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS3]], kWidth = 1}>>
