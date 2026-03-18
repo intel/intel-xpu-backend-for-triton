@@ -116,8 +116,8 @@ getValuesFromBlockPointerStruct(Value blockPointerStruct,
 
 /// Unpacked tensor descriptor fields: { shape[rank], stride[rank], base }.
 struct DescriptorFields {
-  SmallVector<Value> shapes;  // shapes[0..rank-1]
-  SmallVector<Value> strides; // strides[0..rank-1]
+  SmallVector<Value, 4> shapes;  // shapes[0..rank-1]
+  SmallVector<Value, 4> strides; // strides[0..rank-1]
   Value base;
 };
 
@@ -130,7 +130,7 @@ struct DescriptorFields {
 static DescriptorFields unpackDescriptor(Value llDesc, unsigned rank,
                                          Location loc,
                                          ConversionPatternRewriter &rewriter) {
-  SmallVector<Value> elems = unpackLLElements(loc, llDesc, rewriter);
+  const SmallVector<Value> &elems = unpackLLElements(loc, llDesc, rewriter);
   assert(elems.size() == 2 * rank + 1 && "unexpected descriptor struct size");
   DescriptorFields f;
   f.shapes.assign(elems.begin(), elems.begin() + rank);
