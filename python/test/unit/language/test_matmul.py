@@ -18,10 +18,16 @@ def f8_to_f16(x, dtype):
         x = tl.load(X + offs, mask=mask)
         tl.store(Y + offs, x, mask=mask)
 
+    def next_power_of_2(n):
+        if n <= 0:
+            return 1  # 2^0 is 1, a common expectation for n=0 or negative input
+        return 1 << (n - 1).bit_length()
+
     ret = torch.empty(x.shape, dtype=torch.float16, device=x.device)
     grid = lambda META: (triton.cdiv(x.numel(), META['BLOCK_SIZE']), )
     dtype = getattr(tl, dtype)
-    kernel[grid](ret, triton.reinterpret(x, dtype), ret.numel(), BLOCK_SIZE=1024)
+    block_size = next_power_of_2(min(1024 * 8, x.numel()))
+    kernel[grid](ret, triton.reinterpret(x, dtype), ret.numel(), BLOCK_SIZE=block_size, num_warps=32)
     return ret
 
 
@@ -1374,10 +1380,10 @@ def batched_mxfp_matmul(  #
 @pytest.mark.parametrize("BATCH_SIZE, BLOCK_BATCH_SIZE", [(1, 1), (16, 1), (16, 4)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 64), (128, 64, 128), (64, 64, 128)])
 @pytest.mark.parametrize("NUM_STAGES", [1, 2 if is_hip() else 3])
-@pytest.mark.parametrize("NUM_WARPS", [4, 8])
+@pytest.mark.parametrize("NUM_WARPS", [32 if is_xpu_cri() else 4, 8])
 @pytest.mark.parametrize("nonKDim", ([0, 16, 32] if (is_hip_cdna() or is_hip_gfx1250()) else [0]))
 def test_batched_mxfp(BATCH_SIZE, BLOCK_BATCH_SIZE, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS, device):
-    M, N, K = 1024, 512, 2048
+    M, N, K = [128, 128, 512] if is_xpu_cri() else [1024, 512, 2048]
 
     if K % BLOCK_K != 0:
         pytest.xfail("Kernel requires shapes aligned by K dimension")
@@ -1464,3 +1470,6 @@ def test_batched_mxfp(BATCH_SIZE, BLOCK_BATCH_SIZE, BLOCK_M, BLOCK_N, BLOCK_K, N
     if is_cuda() and torch.cuda.get_device_capability()[0] == 12:
         ptx = out.asm["ptx"]
         assert "mma.sync.aligned.m16n8k32.row.col.kind::mxf8f6f4.block_scale.scale_vec::1X" in ptx
+    if is_xpu_cri():
+        llir = out.asm["llir"]
+        assert "llvm.genx.GenISA.sub.group.bdpas" in llir
