@@ -16,7 +16,7 @@ from typing import Optional
 
 import torch
 
-import triton_kernels_benchmark as benchmark_suite
+import triton.testing as benchmark_suite
 
 # This supports both current upstream and pinned version
 try:
@@ -30,7 +30,7 @@ from vllm.platforms import current_platform
 
 float8_info = torch.finfo(current_platform.fp8_dtype())
 
-TOTAL_MEMORY_BYTES = benchmark_suite.get_total_gpu_memory_bytes()
+TOTAL_MEMORY_BYTES = torch.cuda.get_device_properties(torch.cuda.current_device()).total_memory
 
 IS_FP8 = (os.getenv('FP8', '0') == '1')
 
@@ -260,7 +260,7 @@ def get_unified_attention_benchmark(
         # Skip triton providers if interpreter is used because if fails
         del supported_providers['triton']
 
-    providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
+    providers = supported_provider
     configs = ATTENTION_CONFIGS_FP8 if is_fp8 else ATTENTION_CONFIGS_BF16
 
     @benchmark_suite.perf_report(
@@ -287,7 +287,7 @@ def get_unified_attention_benchmark(
         n_warmup = 100
         quantiles = [0.5, 0.0, 1.0]
 
-        torch.set_default_device("xpu")
+        torch.set_default_device("cuda")
 
         num_seqs = len(seq_lens)
         query_lens = [x[0] for x in seq_lens]

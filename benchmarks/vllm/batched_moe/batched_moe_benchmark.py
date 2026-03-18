@@ -16,7 +16,7 @@ from typing import Optional
 import torch
 import triton.language as tl
 
-import triton_kernels_benchmark as benchmark_suite
+import triton.testing as benchmark_suite
 
 from vllm.model_executor.layers.fused_moe.fused_batched_moe import invoke_moe_batched_triton_kernel
 
@@ -61,7 +61,7 @@ MM_CONFIGS_FP8 = sum(
          (128, 2048, 768, True, False),
      ]], [])
 
-DEVICE_TOTAL_MEMORY_BYTES = benchmark_suite.get_total_gpu_memory_bytes()
+DEVICE_TOTAL_MEMORY_BYTES = torch.cuda.get_device_properties(torch.cuda.current_device()).total_memory
 
 
 def is_enough_memory(x_val, safety_factor=0.80):
@@ -126,7 +126,7 @@ def get_batched_mm_benchmark(
         # pytorch is very slow with fp8 case, for (8, 64, 1024, 2048) case it has ~0.15 TFlops vs 1.5 for triton
         del supported_providers['pytorch']
 
-    providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
+    providers = supported_providers
     configs = MM_CONFIGS_FP8 if is_fp8 else MM_CONFIGS_BF16
 
     @benchmark_suite.perf_report(
@@ -152,7 +152,7 @@ def get_batched_mm_benchmark(
         block_shape = (128, 128) if block_quant else None
 
         # Create random number of expert tokens
-        num_expert_tokens = torch.randint(low=0, high=max_tokens_per_expert + 1, size=(num_experts, ), device='xpu',
+        num_expert_tokens = torch.randint(low=0, high=max_tokens_per_expert + 1, size=(num_experts, ), device='cuda',
                                           dtype=torch.int32)
         out_shape = (num_experts, max_tokens_per_expert, N)
 
@@ -183,11 +183,11 @@ def get_batched_mm_benchmark(
             del A, B
         quantiles = [0.5, 0.0, 1.0]
 
-        C = torch.zeros(out_shape, device='xpu', dtype=dtype)
+        C = torch.zeros(out_shape, device='cuda', dtype=dtype)
         compute_tl_dtype = {torch.float16: tl.float16, torch.bfloat16: tl.bfloat16, torch.float32: tl.float32}[C.dtype]
         rtol = 6e-2 if dtype == torch.bfloat16 else 1e-2
         atol = 6e-2 if dtype == torch.bfloat16 else 1e-2
-        ref = torch.zeros(out_shape, device='xpu', dtype=dtype)
+        ref = torch.zeros(out_shape, device='cuda', dtype=dtype)
 
         def torch_fn():
             native_batched_masked_quant_matmul(A_q, B_q, ref, num_expert_tokens, A_scale, B_scale, block_shape,
