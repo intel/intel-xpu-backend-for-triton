@@ -122,12 +122,13 @@ getValuesFromBlockPointerStruct(Value blockPointerStruct,
 SmallVector<unsigned, 2> get2DPrefetchShapePerWarp(RankedTensorType tensorTy) {
   Type eltTy = tensorTy.getElementType();
   const ArrayRef<int64_t> tensorShape = tensorTy.getShape();
+  unsigned rank = tensorShape.size();
   unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
   unsigned elemSizeInBytes = elemSizeInBits / 8;
   unsigned maxBytesPerCol = 64;
-  unsigned numRows = std::min<unsigned>(tensorShape[0], 32);
-  unsigned numCols =
-      std::min<unsigned>(tensorShape[1], maxBytesPerCol / elemSizeInBytes);
+  unsigned numRows = std::min<unsigned>(tensorShape[rank - 2], 32);
+  unsigned numCols = std::min<unsigned>(tensorShape[rank - 1],
+                                        maxBytesPerCol / elemSizeInBytes);
   return {numRows, numCols};
 }
 
@@ -137,10 +138,11 @@ SmallVector<unsigned, 2>
 getWarpsPerCTA(const ArrayRef<int64_t> tensorShape,
                const SmallVector<unsigned, 2> &shapePerWarp,
                unsigned numWarps) {
-  assert(tensorShape.size() == 2 && shapePerWarp.size() == 2 &&
-         "only 2D tensors are supported");
-
-  unsigned repNumPerRow = mlir::ceil((unsigned)tensorShape[1], shapePerWarp[1]);
+  assert(tensorShape.size() >= 2 && shapePerWarp.size() == 2 &&
+         "only inner 2D dims are used");
+  unsigned rank = tensorShape.size();
+  unsigned repNumPerRow =
+      mlir::ceil((unsigned)tensorShape[rank - 1], shapePerWarp[1]);
   unsigned warpNumPerRow = std::min(numWarps, repNumPerRow);
   unsigned warpNumRow = mlir::ceil(numWarps, warpNumPerRow);
   return {warpNumRow, warpNumPerRow};
@@ -1560,22 +1562,33 @@ get2DPrefetchWarpsPerCTA(ArrayRef<int64_t> tensorShape, Type eltTy,
 }
 
 // Get the linear layout for cooperative prefetching.
+// tileShape and warpsPerCTA are always rank-2 (inner M×N dims).
+// For rank > 2 tensors, they are padded with leading 1s for batch dims.
 static LinearLayout getPrefetchLinearLayout(MLIRContext *ctx,
                                             ArrayRef<int64_t> tensorShape,
                                             ArrayRef<unsigned> tileShape,
                                             ArrayRef<unsigned> warpsPerCTA) {
-  unsigned rank = warpsPerCTA.size();
-  assert(rank >= 2 && "Only rank >= 2 tensor is supported for now");
-  SmallVector<unsigned> order(rank);
-  for (size_t i = 0; i < warpsPerCTA.size(); ++i) {
-    // The fastest change dim is the first.
-    order[i] = rank - i - 1;
-  }
-  LinearLayout ctaLayout = identityStandardND(S("offset"), tileShape, order) *
-                           identityStandardND(S("warp"), warpsPerCTA, order);
+  unsigned tensorRank = tensorShape.size();
+  assert(tensorRank >= 2 && "Only rank >= 2 tensor is supported");
+
+  // Pad tile/warp shapes with leading 1s for batch dimensions.
+  SmallVector<unsigned> fullTileShape(tensorRank, 1);
+  SmallVector<unsigned> fullWarpsPerCTA(tensorRank, 1);
+  fullTileShape[tensorRank - 2] = tileShape[0];
+  fullTileShape[tensorRank - 1] = tileShape[1];
+  fullWarpsPerCTA[tensorRank - 2] = warpsPerCTA[0];
+  fullWarpsPerCTA[tensorRank - 1] = warpsPerCTA[1];
+
+  SmallVector<unsigned> order(tensorRank);
+  for (unsigned i = 0; i < tensorRank; ++i)
+    order[i] = tensorRank - i - 1;
+
+  LinearLayout ctaLayout =
+      identityStandardND(S("offset"), fullTileShape, order) *
+      identityStandardND(S("warp"), fullWarpsPerCTA, order);
 
   return combineCtaCgaWithShape(std::move(ctaLayout),
-                                CGAEncodingAttr::get1CTALayout(ctx, rank),
+                                CGAEncodingAttr::get1CTALayout(ctx, tensorRank),
                                 tensorShape);
 }
 
@@ -1589,7 +1602,12 @@ static LogicalResult emit2DBlockPrefetchOps(
     Value base, Value baseWidth, Value baseHeight, Value rowStride,
     Value offsetBaseX, Value offsetBaseY, Type eltTy, unsigned tileWidthInElem,
     unsigned tileHeightInElem, unsigned numTilesPerWarp,
-    unsigned tileSizeInElem, const LinearLayout &llEncoding) {
+    unsigned tileSizeInElem, const LinearLayout &llEncoding, unsigned rank = 2,
+    ArrayRef<Value> extraDimStridesInBytes = {},
+    ArrayRef<Value> extraDimBaseOffsets = {}) {
+  assert(extraDimStridesInBytes.size() == rank - 2 &&
+         extraDimBaseOffsets.size() == rank - 2 &&
+         "extraDim arrays must have rank - 2 elements");
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   MLIRContext *ctx = rewriter.getContext();
 
@@ -1638,12 +1656,23 @@ static LogicalResult emit2DBlockPrefetchOps(
     auto offsets = applyLinearLayout(
         loc, rewriter, llEncoding,
         {{kOffset, b.i32_val(off)}, {kWarp, warpId}, {kBlock, b.i32_val(0)}});
-    Value offsetX = b.add(offsets[1].second, offsetBaseX);
-    Value offsetY = b.add(offsets[0].second, offsetBaseY);
+    Value offsetX = b.add(offsets[rank - 1].second, offsetBaseX);
+    Value offsetY = b.add(offsets[rank - 2].second, offsetBaseY);
+
+    // Fold extra dimensions (beyond the inner 2) into the base pointer.
+    Value adjustedBase = base;
+    Type i8Ty = IntegerType::get(ctx, 8);
+    Type i64Ty = IntegerType::get(ctx, 64);
+    for (unsigned d = 0; d < rank - 2; ++d) {
+      Value extraOff = b.add(b.zext(i64Ty, extraDimBaseOffsets[d]),
+                             b.zext(i64Ty, offsets[d].second));
+      Value byteOff = b.mul(extraOff, extraDimStridesInBytes[d]);
+      adjustedBase = b.gep(ptr_ty(ctx, 1), i8Ty, adjustedBase, byteOff);
+    }
 
     auto newOp = TritonGEN::Matrix2DBlockPrefetchOp::create(
         rewriter, loc,
-        /*ptr*/ base,
+        /*ptr*/ adjustedBase,
         /*base_width*/ baseWidth,
         /*base_height*/ baseHeight,
         /*base_pitch*/ rowStrideInBytes,
@@ -1723,11 +1752,13 @@ struct PrefetchOpConversion
     const ArrayRef<int64_t> shapeRef = tensorType.getShape();
     SmallVector<int64_t> tensorShape{shapeRef.begin(), shapeRef.end()};
 
+    unsigned rank = tensorType.getRank();
+
     const bool memoryRowMajor = isMemoryRowMajor(op);
     if (!memoryRowMajor) {
-      // Swap the shape to make it row major and then get the tiling
-      // size base on row major shape.
-      std::swap(tensorShape[0], tensorShape[1]);
+      // Swap the inner 2 dims to make it row major and then get the tiling
+      // size based on row major shape.
+      std::swap(tensorShape[rank - 2], tensorShape[rank - 1]);
     }
     unsigned numWarps = triton::gpu::lookupNumWarps(op);
 
@@ -1742,12 +1773,30 @@ struct PrefetchOpConversion
         {warpsM, warpsN});
 
     unsigned tileSizeInElem = tileHeightInElem * tileWidthInElem;
-    unsigned numTilesPerWarp =
-        (tensorShape[0] * tensorShape[1]) / (tileSizeInElem * numWarps);
+    int64_t totalElems = 1;
+    for (auto s : tensorShape)
+      totalElems *= s;
+    unsigned numTilesPerWarp = totalElems / (tileSizeInElem * numWarps);
 
-    auto [base, baseWidth, baseHeight, rowStride, colStride, offsetBaseX,
-          offsetBaseY] =
-        getValuesFromBlockPointerStruct(adaptor.getPtr(), rewriter);
+    // Unpack block pointer struct: { offset[rank], shape[rank], stride[rank],
+    // base }
+    const SmallVector<Value> &elems =
+        unpackLLElements(loc, adaptor.getPtr(), rewriter);
+    assert((elems.size() - 1) % 3 == 0 &&
+           "unexpected block pointer struct size");
+    unsigned bpRank = (elems.size() - 1) / 3;
+    assert(bpRank == rank && "block pointer rank mismatch");
+    unsigned blockOffset = 0, blockShape = rank, blockStride = 2 * rank,
+             blockBase = 3 * rank;
+
+    Value base = elems[blockBase];
+    unsigned rowIdx = rank - 2, colIdx = rank - 1;
+    Value baseWidth = elems[blockShape + colIdx];
+    Value baseHeight = elems[blockShape + rowIdx];
+    Value rowStride = elems[blockStride + rowIdx];
+    Value colStride = elems[blockStride + colIdx];
+    Value offsetBaseX = elems[blockOffset + colIdx];
+    Value offsetBaseY = elems[blockOffset + rowIdx];
 
     if (!memoryRowMajor) {
       // Swap the width/height and strides to the row major.
@@ -1756,10 +1805,20 @@ struct PrefetchOpConversion
       std::swap(offsetBaseX, offsetBaseY);
     }
 
+    // Prepare extra-dim strides (in bytes, i64) and base offsets (i32) for
+    // dimensions beyond the inner 2.
+    unsigned elemSizeInBytes = eltTy.getIntOrFloatBitWidth() / 8;
+    SmallVector<Value> extraDimStrides, extraDimBaseOffsets;
+    for (unsigned d = 0; d < rank - 2; ++d) {
+      extraDimStrides.push_back(
+          b.mul(elems[blockStride + d], b.i64_val(elemSizeInBytes)));
+      extraDimBaseOffsets.push_back(b.trunc(i32_ty, elems[blockOffset + d]));
+    }
+
     return emit2DBlockPrefetchOps(
         op, rewriter, loc, base, baseWidth, baseHeight, rowStride, offsetBaseX,
         offsetBaseY, eltTy, tileWidthInElem, tileHeightInElem, numTilesPerWarp,
-        tileSizeInElem, llEncoding);
+        tileSizeInElem, llEncoding, rank, extraDimStrides, extraDimBaseOffsets);
   }
 
   LogicalResult
@@ -1787,30 +1846,33 @@ struct PrefetchOpConversion
     ArrayRef<unsigned> cluster = dpasLayout.getRepCluster();
     SmallVector<unsigned> repCluster{cluster.begin(), cluster.end()};
     ArrayRef<int64_t> tensorShape = tensorOfPointers.getShape();
+    unsigned rank = tensorShape.size();
     DpasEncodingAttr::OpIdx opIdx = getOpIdx(tensorOfPointers);
     SmallVector<int64_t> repetitions =
         dpasLayout.getDPASRepetitions(tensorShape, opIdx);
-    assert(repetitions.size() == 3 &&
-           "getDPASRepetitions always return rank 3 size");
-    SmallVector<unsigned> numReps{repetitions.begin() + 1, repetitions.end()};
+    // getDPASRepetitions prepends a batch dimension; strip it.
+    SmallVector<unsigned> numReps;
+    for (size_t i = 1; i < repetitions.size(); ++i)
+      numReps.push_back(repetitions[i]);
 
-    SmallVector<int64_t, 2> shardTensorShape;
+    SmallVector<int64_t> shardTensorShape(tensorShape.begin(),
+                                          tensorShape.end());
     switch (opIdx) {
     case DpasEncodingAttr::OpIdx::OperandA: {
-      shardTensorShape = {
-          std::min<unsigned>(tensorShape[0], dpasLayout.getShapeA()[0]),
-          tensorShape[1]};
-      warpsPerCTA[1] = 1;
-      repCluster[1] = 1;
-      numReps[1] = 1;
+      shardTensorShape[rank - 2] =
+          std::min<int64_t>(tensorShape[rank - 2], dpasLayout.getShapeA()[0]);
+      // K dim (last) not distributed across warps.
+      warpsPerCTA[rank - 1] = 1;
+      repCluster[rank - 1] = 1;
+      numReps[rank - 1] = 1;
     } break;
     case DpasEncodingAttr::OpIdx::OperandB: {
-      shardTensorShape = {
-          tensorShape[0],
-          std::min<unsigned>(tensorShape[1], dpasLayout.getShapeB()[1])};
-      warpsPerCTA[0] = 1;
-      repCluster[0] = 1;
-      numReps[0] = 1;
+      shardTensorShape[rank - 1] =
+          std::min<int64_t>(tensorShape[rank - 1], dpasLayout.getShapeB()[1]);
+      // K dim (second-to-last) not distributed across warps.
+      warpsPerCTA[rank - 2] = 1;
+      repCluster[rank - 2] = 1;
+      numReps[rank - 2] = 1;
     } break;
     case DpasEncodingAttr::OpIdx::OperandC: {
       llvm_unreachable("unexpected OpIdx::OperandC");
@@ -1834,8 +1896,8 @@ struct PrefetchOpConversion
                 axisAnalysisPass)
                 .getAxisInfo(mask);
         if (axisInfo) {
-          maskConstancyHor = axisInfo->getConstancy(1);
-          maskConstancyVer = axisInfo->getConstancy(0);
+          maskConstancyHor = axisInfo->getConstancy(rank - 1);
+          maskConstancyVer = axisInfo->getConstancy(rank - 2);
         }
       }
     }
@@ -1846,8 +1908,8 @@ struct PrefetchOpConversion
                      std::min<unsigned>(prefetchShape[1], maskConstancyHor)};
 
     SmallVector<int64_t> numPrefetchsPerRep = {
-        mlir::ceil<int64_t>(shardTensorShape[0], prefetchShape[0]),
-        mlir::ceil<int64_t>(shardTensorShape[1], prefetchShape[1])};
+        mlir::ceil<int64_t>(shardTensorShape[rank - 2], prefetchShape[0]),
+        mlir::ceil<int64_t>(shardTensorShape[rank - 1], prefetchShape[1])};
 
     Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
@@ -1904,62 +1966,87 @@ struct PrefetchOpConversion
       return failure();
 
     // If the stride is 0, we want to load only the first row.
-    int stride = getStride(op.getPtr(), 0);
+    int stride = getStride(op.getPtr(), rank - 2);
     Value baseHeight = b.i32_val(stride == 0 ? 1 : tileHeightInElem);
     Value baseWidth = b.i32_val(
         std::max(64u, vBlocks * tileWidthInElem * (elemSizeInBits / 8)));
     Value offsetBaseX = b.i32_val(0);
     Value offsetBaseY = b.i32_val(0);
 
-    for (int row = 0; row < numReps[0]; ++row) {
-      for (int col = 0; col < numReps[1]; ++col) {
-        // Prefetch the data for each repetitions.
-        for (int i = 0; i < numPrefetchsPerRep[0]; ++i)
-          for (int j = 0; j < numPrefetchsPerRep[1]; ++j) {
-            unsigned offsetN = col * warpsPerCTA[1] * shardTensorShape[1] +
-                               j * prefetchShape[1];
-            unsigned offsetM = row * warpsPerCTA[0] * shardTensorShape[0] +
-                               i * prefetchShape[0];
+    // Compute total batch repetitions for dims beyond the inner 2.
+    int64_t totalBatchReps = 1;
+    for (unsigned d = 0; d < rank - 2; ++d)
+      totalBatchReps *= numReps[d];
 
-            Value pred;
-            if (llMask)
-              pred = (maskElems.size() > 1)
-                         ? targetInfo.shuffleIdx(rewriter, loc,
-                                                 masks[{offsetM, offsetN}], 0)
-                         : maskElems[0];
+    for (int64_t batchIdx = 0; batchIdx < totalBatchReps; ++batchIdx) {
+      // Decompose batchIdx into per-dim batch indices.
+      SmallVector<unsigned> batchOffsets(rank - 2);
+      int64_t remaining = batchIdx;
+      for (int d = static_cast<int>(rank) - 3; d >= 0; --d) {
+        batchOffsets[d] = remaining % numReps[d];
+        remaining /= numReps[d];
+      }
+      assert(remaining == 0 &&
+             "batchIdx decomposition inconsistent with totalBatchReps");
 
-            else
-              pred = b.int_val(1, 1);
+      for (unsigned row = 0; row < numReps[rank - 2]; ++row) {
+        for (unsigned col = 0; col < numReps[rank - 1]; ++col) {
+          // Prefetch the data for each repetition.
+          for (int64_t i = 0; i < numPrefetchsPerRep[0]; ++i)
+            for (int64_t j = 0; j < numPrefetchsPerRep[1]; ++j) {
+              unsigned offsetN =
+                  col * warpsPerCTA[rank - 1] * shardTensorShape[rank - 1] +
+                  j * prefetchShape[1];
+              unsigned offsetM =
+                  row * warpsPerCTA[rank - 2] * shardTensorShape[rank - 2] +
+                  i * prefetchShape[0];
 
-            // If the mask exists and evaluates to false, we set offsetY to be
-            // equal to baseHeight, which causes the HW to ignore the generated
-            // prefetch operation (given that the block to be prefetched would
-            // be outside the baseWidth X baseHeight shape).
-            Value offsetY = b.select(pred, b.i32_val(0), baseHeight);
-            Value addr = targetInfo.shuffleIdx(
-                rewriter, loc, baseAddrs[{offsetM, offsetN}], 0);
+              // Build the full offset key for the baseAddrs/masks map.
+              SmallVector<unsigned> key;
+              for (unsigned d = 0; d < rank - 2; ++d)
+                key.push_back(batchOffsets[d] * warpsPerCTA[d] *
+                              shardTensorShape[d]);
+              key.push_back(offsetM);
+              key.push_back(offsetN);
 
-            auto newOp = TritonGEN::Matrix2DBlockPrefetchOp::create(
-                rewriter, loc,
-                /*ptr*/ addr,
-                /*base_width*/ baseWidth,
-                /*base_height*/ baseHeight,
-                /*base_pitch*/ rowStrideInBytes,
-                /*x*/ offsetBaseX,
-                /*y*/ offsetY,
-                /*elem_size_in_bits*/ elemSizeInBits,
-                /*tile_width*/ tileWidthInElem,
-                /*tile_height*/ tileHeightInElem,
-                /*v_blocks*/ vBlocks,
-                /*cache_opt*/ TritonGEN::LoadCacheControl::L1C_L3C);
-            if (failed(newOp.verify())) {
-              // delete the op so that the verifier will not abort the pass
-              // pipeline later, as we can fail this path and try a different
-              // approach.
-              rewriter.eraseOp(newOp);
-              return failure();
+              Value pred;
+              if (llMask)
+                pred = (maskElems.size() > 1)
+                           ? targetInfo.shuffleIdx(rewriter, loc, masks[key], 0)
+                           : maskElems[0];
+              else
+                pred = b.int_val(1, 1);
+
+              // If the mask exists and evaluates to false, we set offsetY to be
+              // equal to baseHeight, which causes the HW to ignore the
+              // generated prefetch operation (given that the block to be
+              // prefetched would be outside the baseWidth X baseHeight shape).
+              Value offsetY = b.select(pred, b.i32_val(0), baseHeight);
+              Value addr =
+                  targetInfo.shuffleIdx(rewriter, loc, baseAddrs[key], 0);
+
+              auto newOp = TritonGEN::Matrix2DBlockPrefetchOp::create(
+                  rewriter, loc,
+                  /*ptr*/ addr,
+                  /*base_width*/ baseWidth,
+                  /*base_height*/ baseHeight,
+                  /*base_pitch*/ rowStrideInBytes,
+                  /*x*/ offsetBaseX,
+                  /*y*/ offsetY,
+                  /*elem_size_in_bits*/ elemSizeInBits,
+                  /*tile_width*/ tileWidthInElem,
+                  /*tile_height*/ tileHeightInElem,
+                  /*v_blocks*/ vBlocks,
+                  /*cache_opt*/ TritonGEN::LoadCacheControl::L1C_L3C);
+              if (failed(newOp.verify())) {
+                // delete the op so that the verifier will not abort the pass
+                // pipeline later, as we can fail this path and try a different
+                // approach.
+                rewriter.eraseOp(newOp);
+                return failure();
+              }
             }
-          }
+        }
       }
     }
 
@@ -2043,8 +2130,10 @@ struct DescriptorPrefetchOpConversion
         {warpsM, warpsN});
 
     unsigned tileSizeInElem = tileHeightInElem * tileWidthInElem;
-    unsigned numTilesPerWarp =
-        (tensorShape[0] * tensorShape[1]) / (tileSizeInElem * numWarps);
+    int64_t totalElems = 1;
+    for (auto s : tensorShape)
+      totalElems *= s;
+    unsigned numTilesPerWarp = totalElems / (tileSizeInElem * numWarps);
 
     // Unpack the tensor descriptor struct.
     // TensorDescType struct layout: { shape[rank], stride[rank], base }
@@ -2055,6 +2144,7 @@ struct DescriptorPrefetchOpConversion
     Value llDesc = adaptor.getDesc();
     auto indices = adaptor.getIndices();
     size_t rank = tensorType.getRank();
+    unsigned rowIdx = rank - 2, colIdx = rank - 1;
     const unsigned descShape = 0, descStride = rank, descBase = 2 * rank;
     const SmallVector<Value> &descElems =
         unpackLLElements(loc, llDesc, rewriter);
@@ -2067,25 +2157,35 @@ struct DescriptorPrefetchOpConversion
     // underlying memory, not the tile shape. For tensor descriptors, the shape
     // fields in the struct similarly represent the underlying memory bounds
     // (set by MakeTensorDescOp). Verify this is consistent.
-    Value baseWidth = descElems[descShape + 1];
-    Value baseHeight = descElems[descShape + 0];
+    Value baseWidth = descElems[descShape + colIdx];
+    Value baseHeight = descElems[descShape + rowIdx];
 
     // Get the row stride from the descriptor stride fields.
-    Value rowStride = descElems[descStride];
+    Value rowStride = descElems[descStride + rowIdx];
 
     // Get offset bases from the indices operand.
     // For tensor descriptors, indices are supplied explicitly via the op
     // (unlike block pointers where offsets are embedded in the struct).
     assert(indices.size() == rank &&
            "Expected indices count to match tensor rank");
-    Value offsetBaseY = indices[0]; // row offset
-    Value offsetBaseX = indices[1]; // col offset
+    Value offsetBaseY = indices[rowIdx]; // row offset
+    Value offsetBaseX = indices[colIdx]; // col offset
+
+    // Prepare extra-dim strides (in bytes, i64) and base offsets (i32) for
+    // dimensions beyond the inner 2.
+    unsigned elemSizeInBytes = eltTy.getIntOrFloatBitWidth() / 8;
+    SmallVector<Value> extraDimStrides, extraDimBaseOffsets;
+    for (unsigned d = 0; d < rank - 2; ++d) {
+      extraDimStrides.push_back(
+          b.mul(descElems[descStride + d], b.i64_val(elemSizeInBytes)));
+      extraDimBaseOffsets.push_back(indices[d]);
+    }
 
     // Emit the 2D block prefetch operations.
     return emit2DBlockPrefetchOps(
         op, rewriter, loc, base, baseWidth, baseHeight, rowStride, offsetBaseX,
         offsetBaseY, eltTy, tileWidthInElem, tileHeightInElem, numTilesPerWarp,
-        tileSizeInElem, llEncoding);
+        tileSizeInElem, llEncoding, rank, extraDimStrides, extraDimBaseOffsets);
   }
 };
 
