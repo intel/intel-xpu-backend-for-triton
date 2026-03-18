@@ -377,6 +377,9 @@ unsigned ModuleAxisInfoAnalysis::getContiguity(Value value) {
   auto tensorTy = ttgi::getRankedTensorType(value.getType());
   if (!tensorTy)
     return 1;
+  // FIXME: This is not as good as it could be, as we don't need to restrict
+  // the analysis to one dimension. We should determine contiguity on the
+  // flattenOuts() layout
   auto linAttr = gpu::toLinearEncoding(tensorTy);
   auto order = linAttr.getOrder();
   unsigned align = getAlignment(value);
@@ -401,6 +404,9 @@ unsigned ModuleAxisInfoAnalysis::getAlignment(Value value) {
   auto linAttr = gpu::toLinearEncoding(tensorTy);
   auto order = linAttr.getOrder();
 
+  // FIXME: should this be an assertion instead?
+  // Temporarily added to avoid crashing on some tests.
+  // See issue #3842.
   if (order[0] >= axisInfo->getRank())
     return 1;
 
@@ -408,6 +414,7 @@ unsigned ModuleAxisInfoAnalysis::getAlignment(Value value) {
   auto maxContig = axisInfo->getContiguity(order[0]);
 
   auto elemTy = tensorTy.getElementType();
+  // Get the pointee type if we have a tensor of ptrs to compute contiguity for
   if (auto ptrTy = dyn_cast<PointerType>(elemTy))
     elemTy = ptrTy.getPointeeType();
   auto elemNumBits = elemTy.getIntOrFloatBitWidth();
@@ -436,6 +443,9 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
     return 1;
   auto linAttr = gpu::toLinearEncoding(tensorTy);
 
+  // FIXME: should this be an assertion instead?
+  // Temporarily added to avoid crashing on some tests.
+  // See issue #3842.
   auto maskOrder = linAttr.getOrder();
   if (maskOrder[0] >= axisInfo->getRank())
     return 1;
