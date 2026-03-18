@@ -116,9 +116,9 @@ getValuesFromBlockPointerStruct(Value blockPointerStruct,
 
 /// Unpacked tensor descriptor fields: { shape[rank], stride[rank], base }.
 struct DescriptorFields {
-  Value base;
   SmallVector<Value> shapes;  // shapes[0..rank-1]
   SmallVector<Value> strides; // strides[0..rank-1]
+  Value base;
 };
 
 /// Unpack a tensor descriptor struct into its constituent fields.
