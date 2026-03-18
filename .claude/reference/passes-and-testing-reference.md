@@ -93,7 +93,6 @@ Module attributes for device capabilities are listed in `intel-gpu-hardware.md` 
 
 | Pass | CLI Flag | Pattern | Gate |
 |------|----------|---------|------|
-| RemoveBoundaryChecks | `triton-intel-remove-boundary-checks` | Manual walk | — |
 | RemoveMasks | `triton-intel-remove-masks` | Manual walk + TypeSwitch | — |
 | StrideVersioning | `triton-intel-stride-versioning` | Manual walk + if-conversion | — |
 | BlockPointerToTensorDesc | `triton-intel-block-pointer-to-tdesc` | Manual pattern matching | — |
@@ -143,7 +142,6 @@ Intel-specific tests are in these directories:
 test/
 ├── Triton/Intel/                     # TTIR Intel passes
 │   ├── BlockPointerToTensorDesc/
-│   ├── RemoveBoundaryChecks/
 │   ├── RemoveMasks/
 │   ├── StrideVersioning/
 │   └── ...
@@ -164,7 +162,6 @@ test/
 ### Intel Pass CLI Flags
 
 TTIR passes:
-- `-triton-intel-remove-boundary-checks`
 - `-triton-intel-remove-masks`
 - `-triton-intel-stride-versioning`
 - `-triton-intel-block-pointer-to-tdesc`
