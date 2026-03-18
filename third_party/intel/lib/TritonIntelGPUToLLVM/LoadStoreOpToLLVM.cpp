@@ -28,17 +28,6 @@ using namespace mlir::triton::gpu::intel;
 
 #define S(v) StringAttr::get(ctx, (v))
 
-#if defined(_MSC_VER) && !defined(__clang__)
-// from https://gist.github.com/pps83/3210a2f980fd02bb2ba2e5a1fc4a2ef0
-#include <intrin.h>
-
-static int __builtin_ctz(unsigned x) {
-  unsigned long r;
-  _BitScanForward(&r, x);
-  return static_cast<int>(r);
-}
-#endif
-
 namespace {
 
 Value maybeAnd(RewriterBase &rewriter, Location loc, Value a, Value b) {
@@ -130,22 +119,6 @@ SmallVector<unsigned, 2> get2DPrefetchShapePerWarp(RankedTensorType tensorTy) {
   unsigned numCols = std::min<unsigned>(tensorShape[rank - 1],
                                         maxBytesPerCol / elemSizeInBytes);
   return {numRows, numCols};
-}
-
-/// Get the 2D warps per CTA given the tensor shape and the prefetch
-/// shape per warp.
-SmallVector<unsigned, 2>
-getWarpsPerCTA(const ArrayRef<int64_t> tensorShape,
-               const SmallVector<unsigned, 2> &shapePerWarp,
-               unsigned numWarps) {
-  assert(tensorShape.size() >= 2 && shapePerWarp.size() == 2 &&
-         "only inner 2D dims are used");
-  unsigned rank = tensorShape.size();
-  unsigned repNumPerRow =
-      mlir::ceil((unsigned)tensorShape[rank - 1], shapePerWarp[1]);
-  unsigned warpNumPerRow = std::min(numWarps, repNumPerRow);
-  unsigned warpNumRow = mlir::ceil(numWarps, warpNumPerRow);
-  return {warpNumRow, warpNumPerRow};
 }
 
 // Contains some helper functions for both Load and Store conversions.
@@ -583,8 +556,8 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     else
       tensorTy = cast<RankedTensorType>(op.getSrc().getType());
 
-    // Only rank 2 initially.
-    if (tensorTy.getRank() != 2)
+    // Rank must be at least 2 for 2D block I/O.
+    if (tensorTy.getRank() < 2)
       return false;
 
     // Verify the descriptor traces back to a MakeTensorDescOp with PAD_ZERO.
@@ -1002,10 +975,11 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     int rowDim = -1;
     for (size_t i = 0; i < rank; ++i) {
       if (tileShape[i] > 1) {
-        sliceRank++;
+        if (i >= rank - 2)
+          sliceRank++;
         // if the slice has more than one non-zero size. Chose the
-        // non-fast change dim as the row dim.
-        if (i != fastChangeDim)
+        // non-fast change dim as the row dim (only from inner 2 dims).
+        if (i != fastChangeDim && i >= rank - 2)
           rowDim = i;
       }
     }
@@ -1114,7 +1088,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
       if (!validateBase(base))
         continue; // Skip as the bases are not trivial.
       int dim = getFirstNonZeroDim(base);
-      if (rowDim < 0 && dim != fastChangeDim) {
+      if (rowDim < 0 && dim != fastChangeDim && dim >= (int)(rank - 2)) {
         rowDim = dim;
         // The mask constancy has to be power of 2 for block IO.
         if (maskAxisInfo &&
@@ -1148,7 +1122,8 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     }
 
     if (rowDim < 0)
-      rowDim = (fastChangeDim != 0) ? 0 : 1;
+      rowDim = (fastChangeDim != (int)(rank - 1)) ? (int)(rank - 1)
+                                                  : (int)(rank - 2);
 
     if (transpose && elemSizeInBits == 64) {
       // D64 transpose only supports 8 rows.
@@ -2789,11 +2764,11 @@ struct DescriptorLoadOpToBlockIOConversion
     // of the block_io attribute. Extract in descriptor's natural order.
     Value elemBytes = b.i32_val(elemSizeInBits / 8);
     Value surfaceWidth = b.trunc(i32_ty, descFields[shapeStart + (rank - 1)]);
-    Value surfaceHeight = b.trunc(i32_ty, descFields[shapeStart + 0]);
+    Value surfaceHeight = b.trunc(i32_ty, descFields[shapeStart + (rank - 2)]);
     Value baseWidth = b.mul(surfaceWidth, elemBytes);
     Value baseHeight = surfaceHeight;
     Value pitch =
-        b.mul(b.trunc(i32_ty, descFields[strideStart + 0]), elemBytes);
+        b.mul(b.trunc(i32_ty, descFields[strideStart + (rank - 2)]), elemBytes);
 
     // Base offsets from descriptor load indices.
     // Indices are in descriptor dimension space. When column_major, the result
@@ -2804,7 +2779,8 @@ struct DescriptorLoadOpToBlockIOConversion
                                    adaptor.getIndices().end());
     if (!memoryRowMajor) {
       // column_major: result dims are transposed vs descriptor dims.
-      std::reverse(descIndices.begin(), descIndices.end());
+      // Only swap the inner 2 dims; batch dims stay in place.
+      std::swap(descIndices[rank - 2], descIndices[rank - 1]);
     }
 
     // Replicate base pointer for all tiles.
@@ -2880,8 +2856,16 @@ struct DescriptorLoadOpToBlockIOConversion
           offsetY = adjustedOffset;
         else if (dim == colIdx)
           offsetX = adjustedOffset;
-        else
-          assert(false && "unexpected dimension in rank-2 tensor offsets");
+        else {
+          // Fold extra dimension offset into base pointer.
+          Type i8Ty = IntegerType::get(ctx, 8);
+          Type i64Ty = IntegerType::get(ctx, 64);
+          Value extraStride = descFields[strideStart + dim];
+          Value extraOff = b.zext(i64Ty, adjustedOffset);
+          Value byteOff = b.mul(
+              extraOff, b.mul(extraStride, b.i64_val(elemSizeInBits / 8)));
+          addrElem = b.gep(ptr_ty(ctx, 1), i8Ty, addrElem, byteOff);
+        }
       }
 
       assert(numPackedVals > 0 && "numPackedVals should be greater than zero.");
