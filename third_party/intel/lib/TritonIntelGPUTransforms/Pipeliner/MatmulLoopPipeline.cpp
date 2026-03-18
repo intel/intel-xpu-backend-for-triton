@@ -25,10 +25,10 @@ namespace {
 /// Represent a candidate load operation which is used by operations that
 /// convert its layout to a 'dot' layout (e.g. ttg.convert_layout).
 struct LoadDotOperand {
-  LoadDotOperand(tt::LoadOp load,
+  LoadDotOperand(Operation *load,
                  ttg::DotOperandEncodingAttr dotOperandEncoding)
       : load(load), dotOperandEncoding(dotOperandEncoding) {}
-  tt::LoadOp load;
+  Operation *load;
   ttg::DotOperandEncodingAttr dotOperandEncoding;
 };
 
@@ -98,20 +98,40 @@ static void createPrefetchOp(scf::ForOp &forOp, tt::LoadOp loadOp) {
   prefetchOp->setAttrs(attrs);
 }
 
+/// Create a prefetch operation for the given load operation.
+static void createPrefetchOp(scf::ForOp &forOp, tt::DescriptorLoadOp loadOp) {
+  OpBuilder builder(forOp);
+  builder.setInsertionPoint(loadOp);
+  auto prefetchOp = ttgi::DescriptorPrefetchOp::create(
+      builder, loadOp->getLoc(), loadOp.getDesc(), loadOp.getIndices(),
+      loadOp.getCache(), loadOp.getEvict());
+
+  // inherit attributes from the load operation
+  auto attrs = loadOp->getAttrDictionary();
+  prefetchOp->setAttrs(attrs);
+}
+
 /// Create prefetch operations for the given loads.
 static void createPrefetchOps(scf::ForOp &forOp,
                               ArrayRef<LoadDotOperand> loads) {
   assert(!loads.empty() && "Expecting at least one load operation");
   for (const LoadDotOperand &loadOperand : loads) {
-    tt::LoadOp loadOp = loadOperand.load;
-    createPrefetchOp(forOp, loadOp);
+    if (auto loadOp = dyn_cast<tt::LoadOp>(loadOperand.load)) {
+      createPrefetchOp(forOp, loadOp);
+    } else if (auto descriptorLoadOp =
+                   dyn_cast<tt::DescriptorLoadOp>(loadOperand.load)) {
+      createPrefetchOp(forOp, descriptorLoadOp);
+    } else {
+      llvm_unreachable("Unsupported load operation type");
+    }
   }
 }
 
 /// Return the transitive use of the load which is a dot operand.
-static std::optional<LoadDotOperand> loadDotOperand(tt::LoadOp loadOp) {
+static std::optional<LoadDotOperand> loadDotOperand(Operation *loadOp) {
+  Value result = loadOp->getResult(0);
   if (ttg::DotOperandEncodingAttr attr =
-          allTransitiveUsesHaveDotEncoding(loadOp.getResult()))
+          allTransitiveUsesHaveDotEncoding(result))
     return LoadDotOperand(loadOp, attr);
   return std::nullopt;
 }
@@ -127,24 +147,26 @@ static void collectOpsToPipeline(scf::ForOp forOp,
   // We cannot use forOp.walk(...) here because we only want to visit the
   // operations in the loop body block.
   for (Operation &op : forOp) {
-    if (auto loadOp = dyn_cast<tt::LoadOp>(&op)) {
+    if (isa<tt::LoadOp, tt::DescriptorLoadOp>(&op)) {
       // In order to avoid polluting the cache, do not prefetch loads unless the
       // memory they reference is densely structured.
       Attribute blockIOAttr =
-          loadOp->getAttr(mlir::triton::gpu::intel::TritonIntelGPUDialect::
-                              getBlockIOAttrName());
+          op.getAttr(mlir::triton::gpu::intel::TritonIntelGPUDialect::
+                         getBlockIOAttrName());
       if (!blockIOAttr) {
-        LDBG("Skipping LoadOp without block_io attribute" << *loadOp);
+        LDBG("Skipping LoadOp without block_io attribute" << op);
         continue;
       }
 
+      RankedTensorType resultTy =
+          dyn_cast<RankedTensorType>(op.getResultTypes()[0]);
       // Currently we can only prefetch 2D loads.
-      if (cast<RankedTensorType>(loadOp.getType()).getRank() != 2) {
-        LDBG("Skipping LoadOp with non 2D tensor type" << *loadOp);
+      if (!resultTy || resultTy.getRank() != 2) {
+        LDBG("Skipping LoadOp with non 2D tensor type" << op);
         continue;
       }
 
-      std::optional<LoadDotOperand> loadWithDotOperand = loadDotOperand(loadOp);
+      std::optional<LoadDotOperand> loadWithDotOperand = loadDotOperand(&op);
       if (loadWithDotOperand.has_value())
         loadOps.push_back(loadWithDotOperand.value());
     }
@@ -165,7 +187,8 @@ static Operation *predicateOp(RewriterBase &rewriter, Operation *op,
                                      op.getMask(), pred);
         op.getMaskMutable().assign(mask);
         return op;
-      });
+      })
+      .Default([](auto op) { return op; });
 }
 
 /// Helper to get the defining operation of a value.
@@ -226,7 +249,7 @@ createSchedule(scf::ForOp forOp, int numStages) {
   // Find the prefetch/load ops that will go respectively in stage 0 and stage
   // `numStages - 1`. All the other operations will go in stage `numStages - 1`.
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (isa<ttgi::PrefetchOp>(op))
+    if (isa<ttgi::PrefetchOp, ttgi::DescriptorPrefetchOp>(op))
       prefetchOps.emplace_back(&op);
     if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
       // Loads that are neither tensors nor pointers to tensor are not
@@ -237,6 +260,8 @@ createSchedule(scf::ForOp forOp, int numStages) {
       if (mlir::triton::isTensorOrTensorPointerType(loadOp.getPtr().getType()))
         loadOps.emplace_back(&op);
     }
+    if (isa<tt::DescriptorLoadOp>(op))
+      loadOps.emplace_back(&op);
   }
 
   DenseSet<Operation *> prefetchAndDeps;
@@ -303,9 +328,10 @@ bool ttgi::preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
     DBGS() << "Loads to pipeline:\n";
     unsigned prefetchBytes = 0;
     for (LoadDotOperand &load : loads) {
-      tt::LoadOp &op = load.load;
-      if (auto tensorType =
-              dyn_cast<RankedTensorType>(op.getResult().getType())) {
+      Operation *op = load.load;
+      RankedTensorType tensorType =
+          dyn_cast<RankedTensorType>(op->getResultTypes()[0]);
+      if (tensorType) {
         ArrayRef<int64_t> shape = tensorType.getShape();
         auto numElems = product<int64_t>(shape);
         prefetchBytes +=
