@@ -134,3 +134,36 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     tt.return
   }
 }
+
+// -----
+
+// COM: Test rank-3 descriptor prefetch. The batch dimension should be folded
+// COM: into the base pointer via GEP, and 2D block prefetch ops should be
+// COM: emitted for each batch slice.
+// COM: Tensor descriptor struct layout for rank-3: { shape[3], stride[3], base }
+// COM: = !llvm.struct<(i64, i64, i64, i64, i64, i64, ptr<1>)>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+// CHECK-LABEL:   llvm.func spir_kernelcc @prefetch_descriptor_rank3(
+  tt.func public @prefetch_descriptor_rank3(%arg0: !tt.ptr<f16>, %arg5: i64, %arg6: i64) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c2_i32 = arith.constant 2 : i32
+    %c16_i32 = arith.constant 16 : i32
+    %c32_i32 = arith.constant 32 : i32
+
+    // COM: Create a rank-3 tensor descriptor for 2x16x32xf16.
+    %desc = tt.make_tensor_descriptor %arg0, [%c2_i32, %c16_i32, %c32_i32], [%arg6, %arg5, %c1_i64] : <f16>, <tensor<2x16x32xf16>>
+
+    // CHECK:     %[[DESC:.*]] = llvm.insertvalue %{{.*}}, %{{.*}}[6] : !llvm.struct<(i64, i64, i64, i64, i64, i64, ptr<1>)>
+    // CHECK:     %[[BASE_PTR:.*]] = llvm.extractvalue %[[DESC]][6] : !llvm.struct<(i64, i64, i64, i64, i64, i64, ptr<1>)>
+
+    // COM: Verify batch dimension folded via GEP and 2D prefetch ops emitted.
+    // CHECK:     llvm.getelementptr
+    // CHECK:     triton_gen.2Dblockprefetch {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 4, v_blocks = 2, cache_control = L1C_L3C}
+    // CHECK:     llvm.getelementptr
+    // CHECK:     triton_gen.2Dblockprefetch {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 4, v_blocks = 2, cache_control = L1C_L3C}
+    ttig.descriptor_prefetch %desc[%c0_i32, %c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<2x16x32xf16>>
+
+    tt.return
+  }
+}
