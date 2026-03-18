@@ -32,7 +32,7 @@
 namespace mlir::triton::TritonGEN {
 
 struct L2Cache : public SideEffects::Resource::Base<L2Cache> {
-  StringRef getName() final { return "<L2Cache>"; }
+  StringRef getName() const final { return "<L2Cache>"; }
 };
 
 } // namespace mlir::triton::TritonGEN
