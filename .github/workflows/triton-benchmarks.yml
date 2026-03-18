@@ -358,6 +358,8 @@ jobs:
             --tag $TAG \
             --benchmark_group "triton-benchmarks" \
             ${{ inputs.save_passes && '--save_passes' || '' }}
+          # Remove raw compile reports to save space
+          rm -rf $COMPILE_REPORTS
 
       - name: Upload benchmark reports
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
