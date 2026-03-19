@@ -4,6 +4,9 @@
 
 #include "intel/include/Analysis/Utility.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Tools/LayoutUtils.h"
+#include "triton/Tools/LinearLayout.h"
 
 namespace mlir::triton::gpu {
 namespace {
@@ -51,7 +54,120 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         return success();
       }
     }
+    // For small warp/block-dimension conversions, use non-swizzled SLM to avoid
+    // the upstream swizzle producing sub-byte XOR patterns (llvm.bitreverse.i4)
+    // that crash IGC. Large conversions have enough index bits for safe
+    // swizzle. See issue #6138.
+    // Sub-byte types (i1, i4) are excluded: they don't trigger the bitreverse
+    // issue (promoted to i8 before swizzle), and the upstream allocation
+    // computes scratch size using original bitwidth which underestimates the
+    // buffer needed after i8 promotion.
+    StringAttr kWarp = str_attr("warp");
+    StringAttr kBlock = str_attr("block");
+    if (llvm::is_contained(dims, kWarp) || llvm::is_contained(dims, kBlock)) {
+      Type elemTy = srcTy.getElementType();
+      unsigned elemBits = isa<triton::PointerType>(elemTy)
+                              ? 64
+                              : elemTy.getIntOrFloatBitWidth();
+      if (elemBits < 8)
+        return failure();
+      auto elemBytes = elemBits / 8;
+      auto totalBytes =
+          static_cast<int64_t>(srcTy.getNumElements()) * elemBytes;
+      constexpr int64_t kSmallTileThreshold = 1024;
+      if (totalBytes < kSmallTileThreshold) {
+        return performNonSwizzledSLMConversion(op, srcLayout, dstLayout,
+                                               adaptor, rewriter);
+      }
+    }
     return failure();
+  }
+
+  // Non-swizzled SLM path for warp/block-dimension conversions.
+  // Uses flat (identity) SLM mapping instead of optimalSwizzlingLdSt to avoid
+  // XOR-based bank-conflict patterns that LLVM may optimize into sub-byte
+  // bitreverse intrinsics unsupported by IGC (issue #6138).
+  LogicalResult performNonSwizzledSLMConversion(
+      ConvertLayoutOp op, const LinearLayout &srcLayout,
+      const LinearLayout &dstLayout, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const {
+    Location loc = op.getLoc();
+    auto *ctx = op.getContext();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    auto srcTy = cast<RankedTensorType>(op.getSrc().getType());
+    Type llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
+    auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+
+    Type origElemTy = llvmElemTy;
+
+    if (llvmElemTy.isIntOrFloat() && llvmElemTy.getIntOrFloatBitWidth() < 8) {
+      auto i8Ty = IntegerType::get(ctx, 8);
+      for (auto &v : inVals)
+        v = b.zext(i8Ty, v).getResult();
+      llvmElemTy = i8Ty;
+    }
+
+    if (isa<LLVM::LLVMPointerType>(origElemTy)) {
+      auto i64Ty = IntegerType::get(ctx, 64);
+      for (auto &v : inVals)
+        v = b.ptrtoint(i64Ty, v).getResult();
+      llvmElemTy = i64Ty;
+    }
+
+    auto kOffset = str_attr("offset");
+    auto kBlock = str_attr("block");
+
+    auto srcClean = srcLayout;
+    auto removeBroadcastSrc = actionRemoveBroadcastedRegs(srcLayout);
+    if (!removeBroadcastSrc.isIdentity()) {
+      srcClean = removeBroadcastSrc.apply(srcLayout);
+      inVals = removeBroadcastSrc.apply(ValueRange(inVals));
+    }
+
+    auto dstClean = dstLayout;
+    auto removeBroadcastDst = actionRemoveBroadcastedRegs(dstLayout);
+    if (!removeBroadcastDst.isIdentity())
+      dstClean = removeBroadcastDst.apply(dstLayout);
+
+    auto srcFlat = srcClean.flattenOuts();
+    auto dstFlat = dstClean.flattenOuts();
+
+    auto nBlock = srcFlat.getInDimSize(kBlock);
+    auto nOffset = srcFlat.getTotalOutDimSize() / nBlock;
+
+    auto storeCvt = srcFlat.reshapeOuts({{kOffset, nOffset}, {kBlock, nBlock}});
+    auto loadCvt = dstFlat.reshapeOuts({{kOffset, nOffset}, {kBlock, nBlock}});
+
+    Value smemBase =
+        LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
+
+    lowerLdStShared(loc, ctx, storeCvt, inVals, llvmElemTy, smemBase,
+                    /*paddingShifts=*/{}, b.i32_val(0),
+                    /*maskSpanAffineOffset=*/0, rewriter, targetInfo);
+
+    targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
+
+    auto outVals =
+        lowerLdStShared(loc, ctx, loadCvt, /*valsArray=*/{}, llvmElemTy,
+                        smemBase, /*paddingShifts=*/{}, b.i32_val(0),
+                        /*maskSpanAffineOffset=*/0, rewriter, targetInfo);
+
+    if (!removeBroadcastDst.isIdentity())
+      outVals = broadcastAs(outVals, dstLayout);
+
+    if (isa<LLVM::LLVMPointerType>(origElemTy)) {
+      for (auto &v : outVals)
+        v = b.inttoptr(origElemTy, v);
+    } else if (origElemTy != llvmElemTy) {
+      for (auto &v : outVals)
+        v = b.trunc(origElemTy, v);
+    }
+
+    Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
+                                  op.getType());
+    rewriter.replaceOp(op, result);
+    return success();
   }
 
   int getNumContiguousRowsForShuffle(const LinearLayout &srcLayout,
