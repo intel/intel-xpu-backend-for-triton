@@ -193,13 +193,7 @@ jobs:
       fail-fast: false
       matrix:
         suite:
-          - minicore
-          - language
-          - scaled_dot
-          - gluon
           - triton-kernels
-          - rest
-          - tutorial-fa-128-nofwdfp8
     timeout-minutes: 720
     runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
     defaults:

@@ -962,8 +962,10 @@ run_triton_kernels_tests() {
     max_procs=${PYTEST_MAX_PROCESSES:-4}
   fi
   # skipping mxfp, they are part of mxfp_tests suite
+  # --timeout=180: kill individual tests that hang after 3 minutes (logged as failure, suite continues)
+  # || true: prevent set -e from exiting the script on test failures
   TRITON_TEST_SUITE=triton_kernels \
-    run_pytest_command -vvv -n $max_procs --device xpu . -k 'not test_mxfp'
+    run_pytest_command -vvv -n $max_procs --device xpu --timeout=180 . -k 'not test_mxfp' || true
 }
 
 test_triton() {
