@@ -832,6 +832,7 @@ run_vllm_install() {
     git checkout "$(<../benchmarks/vllm/vllm-pin.txt)"
     git apply ../benchmarks/vllm/vllm-fix.patch
     sed -i 's/device="cuda"/device="xpu"/g' \
+      tests/kernels/moe/utils.py \
       tests/kernels/attention/test_triton_unified_attention.py
 
     sed -i 's/set_default_device("cuda")/set_default_device("xpu")/g' \
@@ -851,6 +852,7 @@ run_vllm_install() {
   # Let's not install whole test requirements for now, they are very large and overwrite torch
   # pip install -r vllm/requirements/test.in
   pip install cachetools cbor2 blake3 pybase64 openai_harmony tblib
+  rm -rf benchmarks/vllm/batched_moe/tests
   cp -r vllm/tests benchmarks/vllm/batched_moe/tests
   VLLM_TARGET_DEVICE=xpu pip install --no-deps --no-build-isolation -e vllm
 }
