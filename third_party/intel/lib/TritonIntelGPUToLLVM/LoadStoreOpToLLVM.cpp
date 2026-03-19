@@ -2466,12 +2466,14 @@ public:
     SmallVector<Value> shapes = getShapes(rewriter, ptr, unpackedPtr);
     Value baseWidth, baseHeight;
     if (isTensorPointerType(ptr.getType())) {
-      baseWidth = b.trunc(i32_ty, shapes[memoryRowMajor ? colDim : rowDim]);
-      baseHeight = b.trunc(i32_ty, shapes[memoryRowMajor ? rowDim : colDim]);
+      baseWidth =
+          b.trunc(i32_ty, shapes[isTransposeRequired ? rowDim : colDim]);
+      baseHeight =
+          b.trunc(i32_ty, shapes[isTransposeRequired ? colDim : rowDim]);
       baseWidth = b.mul(baseWidth, b.i32_val(elemSizeInBits / 8));
     } else {
       // If the stride is 0, we want to load only the first row.
-      int stride = getStride(ptr, memoryRowMajor ? rowDim : colDim);
+      int stride = getStride(ptr, isTransposeRequired ? colDim : rowDim);
       baseHeight = b.i32_val((stride == 0 ? 1 : tileHeight));
       baseWidth = b.i32_val(vBlocks * tileWidth * (packedElemSizeInBits / 8));
     }
@@ -2764,11 +2766,15 @@ struct DescriptorLoadOpToBlockIOConversion
     // of the block_io attribute. Extract in descriptor's natural order.
     unsigned rowIdx = rank - 2, colIdx = rank - 1;
     Value elemBytes = b.i32_val(elemSizeInBits / 8);
-    Value surfaceWidth = b.trunc(i32_ty, desc.shapes[colIdx]);
-    Value surfaceHeight = b.trunc(i32_ty, desc.shapes[rowIdx]);
+    Value surfaceWidth =
+        b.trunc(i32_ty, desc.shapes[isTransposeRequired ? rowIdx : colIdx]);
+    Value surfaceHeight =
+        b.trunc(i32_ty, desc.shapes[isTransposeRequired ? colIdx : rowIdx]);
     Value baseWidth = b.mul(surfaceWidth, elemBytes);
     Value baseHeight = surfaceHeight;
-    Value pitch = b.mul(b.trunc(i32_ty, desc.strides[rowIdx]), elemBytes);
+    Value pitch = b.mul(
+        b.trunc(i32_ty, desc.strides[isTransposeRequired ? colIdx : rowIdx]),
+        elemBytes);
 
     // Base offsets from descriptor load indices.
     // Indices are in descriptor dimension space. When column_major, the result
