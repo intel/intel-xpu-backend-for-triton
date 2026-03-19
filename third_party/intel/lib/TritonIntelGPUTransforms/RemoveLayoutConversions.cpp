@@ -212,14 +212,14 @@ public:
   }
 
   void cleanup();
-  void backwardRematerialization();
+  bool backwardRematerialization();
   void backwardRematerialization(ttg::ConvertLayoutOp convertOp);
   // TODO: Merge the three hoistConvert*(); functions as they are duplicate code
-  void hoistConvertDotOperand();
+  bool hoistConvertDotOperand();
   void hoistConvertDotOperand(ttg::ConvertLayoutOp convertOp);
-  void hoistConvertOnTopOfExtOrBroadcast();
+  bool hoistConvertOnTopOfExtOrBroadcast();
   void hoistConvertOnTopOfExtOrBroadcast(ttg::ConvertLayoutOp convertOp);
-  void hoistConvertIntoConditionals();
+  bool hoistConvertIntoConditionals();
   void hoistConvertIntoConditionals(ttg::ConvertLayoutOp convertOp);
   void rewriteSlice(SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
                     ttg::ConvertLayoutOp convertOp, IRMapping &mapping);
@@ -299,7 +299,7 @@ private:
   void forwardPropagateRemat(DenseMap<Value, Attribute> &values);
 
   void updateRematMapping(SmallVector<std::tuple<Value, Value>> &values);
-  void reduceLoopCarriedValues();
+  bool reduceLoopCarriedValues();
 
   // Existing tuples of (value, layout) that needs to be updated when recreating
   // scf ops. This prevents keeping track of Values that have been delete when
@@ -1036,7 +1036,8 @@ void LayoutRematerialization::updateRematMapping(
 
 /// Reduce loop carried values if the value is used after the loop and can be
 /// removed by using another loop yielded value plus a convert layout operation.
-void LayoutRematerialization::reduceLoopCarriedValues() {
+bool LayoutRematerialization::reduceLoopCarriedValues() {
+  bool changed = false;
   for (auto [pair, val] : rematMapping) {
     auto arg = dyn_cast<BlockArgument>(pair.first);
     if (!arg)
@@ -1068,6 +1069,7 @@ void LayoutRematerialization::reduceLoopCarriedValues() {
                 rewriter, loc, loadOp.getType(), newLoadOp.getResult());
             loadOp->replaceAllUsesWith(convOp);
             opToDelete.insert(loadOp);
+            changed = true;
             LLVM_DEBUG({
               DBGS() << "Replaced:\n\t" << *loadOp << "\n"
                      << "with:\n\t" << *newLoadOp << "\n"
@@ -1088,6 +1090,7 @@ void LayoutRematerialization::reduceLoopCarriedValues() {
                 rewriter, loc, rematRes, convOp, storeOp.getBoundaryCheck(),
                 storeOp.getCache(), storeOp.getEvict());
             opToDelete.insert(storeOp);
+            changed = true;
             LLVM_DEBUG({
               DBGS() << "Replaced:\n\t" << *storeOp << "\n"
                      << "with:\n\t" << *convOp << "\n"
@@ -1099,6 +1102,7 @@ void LayoutRematerialization::reduceLoopCarriedValues() {
                 tt::AdvanceOp::create(rewriter, loc, rematRes.getType(),
                                       rematRes, advanceOp.getOffsets());
             opToDelete.insert(advanceOp);
+            changed = true;
             LLVM_DEBUG({
               DBGS() << "Replaced:\n\t" << *advanceOp << "\n"
                      << "with:\n\t" << *newAdvanceOp << "\n";
@@ -1126,6 +1130,7 @@ void LayoutRematerialization::reduceLoopCarriedValues() {
     for (Operation *user : loopRes.getUsers())
       processUser(user, rematRes);
   }
+  return changed;
 }
 
 void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
@@ -1594,11 +1599,12 @@ LogicalResult LayoutRematerialization::getRematerializableSlice(
   return success();
 }
 
-void LayoutRematerialization::backwardRematerialization() {
+bool LayoutRematerialization::backwardRematerialization() {
   // Go through each ConvertLayoutOp.
   SmallVector<ttg::ConvertLayoutOp> convertOps;
   funcOp.walk(
       [&](ttg::ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
+  bool changed = false;
   for (ttg::ConvertLayoutOp convertOp : convertOps) {
     backwardRematerialization(convertOp);
     if (!opToDelete.contains(convertOp)) {
@@ -1606,17 +1612,21 @@ void LayoutRematerialization::backwardRematerialization() {
       // backward slices.
       addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
                     convertOp.getResult());
+    } else {
+      changed = true;
     }
   }
 
-  reduceLoopCarriedValues();
+  changed |= reduceLoopCarriedValues();
+  return changed;
 }
 
-void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast() {
+bool LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast() {
   // Go through each ConvertLayoutOp.
   SmallVector<ttg::ConvertLayoutOp> convertOps;
   funcOp.walk(
       [&](ttg::ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
+  bool changed = false;
   for (ttg::ConvertLayoutOp convertOp : convertOps) {
     hoistConvertOnTopOfExtOrBroadcast(convertOp);
     if (!opToDelete.contains(convertOp)) {
@@ -1624,15 +1634,19 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast() {
       // backward slices.
       addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
                     convertOp.getResult());
+    } else {
+      changed = true;
     }
   }
+  return changed;
 }
 
-void LayoutRematerialization::hoistConvertIntoConditionals() {
+bool LayoutRematerialization::hoistConvertIntoConditionals() {
   // Go through each ConvertLayoutOp.
   SmallVector<ttg::ConvertLayoutOp> convertOps;
   funcOp.walk(
       [&](ttg::ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
+  bool changed = false;
   for (ttg::ConvertLayoutOp convertOp : convertOps) {
     hoistConvertIntoConditionals(convertOp);
     if (!opToDelete.contains(convertOp)) {
@@ -1640,8 +1654,11 @@ void LayoutRematerialization::hoistConvertIntoConditionals() {
       // backward slices.
       addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
                     convertOp.getResult());
+    } else {
+      changed = true;
     }
   }
+  return changed;
 }
 
 static bool isExpensiveMathOp(Operation *op) {
@@ -1855,11 +1872,12 @@ void LayoutRematerialization::backwardRematerialization(
   forwardPropagateRemat(forwardPropagateCandidates);
 }
 
-void LayoutRematerialization::hoistConvertDotOperand() {
+bool LayoutRematerialization::hoistConvertDotOperand() {
   // Go through each ConvertLayoutOp.
   SmallVector<ttg::ConvertLayoutOp> convertOps;
   funcOp.walk(
       [&](ttg::ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
+  bool changed = false;
   for (ttg::ConvertLayoutOp convertOp : convertOps) {
     hoistConvertDotOperand(convertOp);
     if (!opToDelete.contains(convertOp)) {
@@ -1867,8 +1885,11 @@ void LayoutRematerialization::hoistConvertDotOperand() {
       // backward slices.
       addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
                     convertOp.getResult());
+    } else {
+      changed = true;
     }
   }
+  return changed;
 }
 
 void LayoutRematerialization::hoistConvertDotOperand(
@@ -2198,12 +2219,14 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
   rewriteSlice(slice, layout, convertOp, mapping);
 }
 
-void backwardRematerialization(ModuleOp module) {
-  module.walk([](tt::FuncOp funcOp) {
+bool backwardRematerialization(ModuleOp module) {
+  bool changed = false;
+  module.walk([&](tt::FuncOp funcOp) {
     LayoutRematerialization layoutRemat(funcOp);
-    layoutRemat.backwardRematerialization();
+    changed |= layoutRemat.backwardRematerialization();
     layoutRemat.cleanup();
   });
+  return changed;
 }
 
 void hoistConvert(ModuleOp module) {
@@ -2267,16 +2290,31 @@ public:
     cleanupConvertOps();
 
     // 2. For remaining convert ops, try to rematerialize the slice of producer
-    // operation to avoid having to convert.
-    backwardRematerialization(m);
-    LLVM_DEBUG({
-      DBGS() << "Module after backward remat:\n";
-      m.dump();
-      assert(succeeded(verify(m)) && "Module verification failed");
-    });
+    // operation to avoid having to convert. Iterate until a fixed point since
+    // one rematerialization may expose new opportunities.
+    // Use an iteration cap as a safety guard: Intel-specific extensions
+    // (reduceLoopCarriedValues, forwardPropagateRemat) can create new
+    // ConvertLayoutOps during each iteration, so bound the loop to prevent
+    // non-termination in pathological cases.
+    constexpr unsigned kMaxBackwardRematIterations = 10;
+    unsigned iteration = 0;
+    bool changed = false;
+    do {
+      changed = backwardRematerialization(m);
+      LLVM_DEBUG({
+        DBGS() << "Module after backward remat (iteration " << iteration
+               << "):\n";
+        m.dump();
+        assert(succeeded(verify(m)) && "Module verification failed");
+      });
 
-    // Cleanup dummy converts created during backward remat.
-    cleanupConvertOps();
+      // Cleanup dummy converts created during backward remat.
+      cleanupConvertOps();
+    } while (changed && ++iteration < kMaxBackwardRematIterations);
+
+    if (iteration >= kMaxBackwardRematIterations)
+      LDBG("backward rematerialization reached iteration cap ("
+           << kMaxBackwardRematIterations << ")");
 
     // 3. For remaining converts, try to hoist them above cast generating larger
     // size types in order to reduce the cost of the convert op.
@@ -2287,10 +2325,13 @@ public:
       assert(succeeded(verify(m)) && "Module verification failed");
     });
 
-    // 4. Apply clean up patterns to remove remove dead convert and dead code
-    // generated by the previous transformations.
+    // 4. Prepare dead iter args to be cleaned up by dead code elimination in
+    // the pattern rewriter below.
+    runDeadIterArgElimination(m);
+
+    // 5. Apply clean up patterns to remove dead convert and dead code generated
+    // by the previous transformations.
     RewritePatternSet cleanUpPatterns2(context);
-    populateForOpDeadArgumentElimination(cleanUpPatterns2);
     scf::ForOp::getCanonicalizationPatterns(cleanUpPatterns2, context);
     scf::IfOp::getCanonicalizationPatterns(cleanUpPatterns2, context);
     ttg::ConvertLayoutOp::getCanonicalizationPatterns(cleanUpPatterns2,

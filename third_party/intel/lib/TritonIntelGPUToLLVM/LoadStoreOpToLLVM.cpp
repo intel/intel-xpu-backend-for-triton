@@ -13,6 +13,7 @@
 #include "Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
+#include "intel/include/Analysis/StrideInfo.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "intel/include/Utils/Utility.h"
@@ -121,12 +122,13 @@ getValuesFromBlockPointerStruct(Value blockPointerStruct,
 SmallVector<unsigned, 2> get2DPrefetchShapePerWarp(RankedTensorType tensorTy) {
   Type eltTy = tensorTy.getElementType();
   const ArrayRef<int64_t> tensorShape = tensorTy.getShape();
+  unsigned rank = tensorShape.size();
   unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
   unsigned elemSizeInBytes = elemSizeInBits / 8;
   unsigned maxBytesPerCol = 64;
-  unsigned numRows = std::min<unsigned>(tensorShape[0], 32);
-  unsigned numCols =
-      std::min<unsigned>(tensorShape[1], maxBytesPerCol / elemSizeInBytes);
+  unsigned numRows = std::min<unsigned>(tensorShape[rank - 2], 32);
+  unsigned numCols = std::min<unsigned>(tensorShape[rank - 1],
+                                        maxBytesPerCol / elemSizeInBytes);
   return {numRows, numCols};
 }
 
@@ -136,10 +138,11 @@ SmallVector<unsigned, 2>
 getWarpsPerCTA(const ArrayRef<int64_t> tensorShape,
                const SmallVector<unsigned, 2> &shapePerWarp,
                unsigned numWarps) {
-  assert(tensorShape.size() == 2 && shapePerWarp.size() == 2 &&
-         "only 2D tensors are supported");
-
-  unsigned repNumPerRow = mlir::ceil((unsigned)tensorShape[1], shapePerWarp[1]);
+  assert(tensorShape.size() >= 2 && shapePerWarp.size() == 2 &&
+         "only inner 2D dims are used");
+  unsigned rank = tensorShape.size();
+  unsigned repNumPerRow =
+      mlir::ceil((unsigned)tensorShape[rank - 1], shapePerWarp[1]);
   unsigned warpNumPerRow = std::min(numWarps, repNumPerRow);
   unsigned warpNumRow = mlir::ceil(numWarps, warpNumPerRow);
   return {warpNumRow, warpNumPerRow};
@@ -149,15 +152,15 @@ getWarpsPerCTA(const ArrayRef<int64_t> tensorShape,
 struct LoadStoreConversionBase {
   explicit LoadStoreConversionBase(
       const triton::intel::TargetInfo &targetInfo,
-      const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass)
-      : targetInfo(targetInfo), axisAnalysisPass(axisAnalysisPass) {}
+      const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
+      triton::intel::ModuleStrideAnalysis &strideAnalysis)
+      : targetInfo(targetInfo), axisAnalysisPass(axisAnalysisPass),
+        strideAnalysis(strideAnalysis) {}
 
   int getStride(Value ptr, unsigned dim) const {
-    AxisInfo *axisInfo =
-        const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
-            .getAxisInfo(ptr);
-    if (axisInfo) {
-      const SmallVector<int64_t> &stride = axisInfo->getStride();
+    triton::intel::StrideInfo *strideInfo = strideAnalysis.getStrideInfo(ptr);
+    if (strideInfo) {
+      const auto &stride = strideInfo->getStride();
       if (dim < stride.size()) {
         return stride[dim];
       }
@@ -522,14 +525,16 @@ struct LoadStoreConversionBase {
 
 protected:
   const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass;
+  triton::intel::ModuleStrideAnalysis &strideAnalysis;
   const triton::intel::TargetInfo &targetInfo;
 };
 
 struct BlockIOConversionBase : public LoadStoreConversionBase {
   explicit BlockIOConversionBase(
       const triton::intel::TargetInfo &targetInfo,
-      const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass)
-      : LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+      const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
+      triton::intel::ModuleStrideAnalysis &strideAnalysis)
+      : LoadStoreConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
 
   // Determine whether the given operation can be lowered to using block IO
   // instructions.
@@ -548,25 +553,35 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     if (!blockIOAttr)
       return false;
 
-    const bool enableBlockIOForAllLayout =
-        triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS");
+    std::optional<bool> enableBlockIOForAllLayout =
+        mlir::triton::tools::isEnvValueBool(mlir::triton::tools::getStrEnv(
+            "TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS"));
 
     // Only lower operation with dpas layout encoding.
     auto tensorTy =
         cast<RankedTensorType>(getPointeeType(op.getPtr().getType()));
-    return enableBlockIOForAllLayout || hasDpasEncoding(tensorTy) ||
+    return !enableBlockIOForAllLayout.has_value() ||
+           enableBlockIOForAllLayout.value() || hasDpasEncoding(tensorTy) ||
            hasDotDpasEncoding(tensorTy);
   }
 
-  // Determine whether the given DescriptorLoadOp can be lowered to using
+  // Determine whether the given descriptor op can be lowered to using
   // block IO instructions.
-  static bool isDescriptorBlockIOCandidate(triton::DescriptorLoadOp op) {
-    ModuleOp mod = op->getParentOfType<ModuleOp>();
+  template <typename OpTy,
+            std::enable_if_t<llvm::is_one_of<OpTy, triton::DescriptorLoadOp,
+                                             triton::DescriptorStoreOp>::value,
+                             bool> = true>
+  static bool isDescriptorBlockIOCandidate(OpTy op) {
+    ModuleOp mod = op->template getParentOfType<ModuleOp>();
     if (!mod->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
                           getSupport2DBlockIOAttrName()))
       return false;
 
-    auto tensorTy = cast<RankedTensorType>(op.getType());
+    RankedTensorType tensorTy;
+    if constexpr (std::is_same_v<OpTy, triton::DescriptorLoadOp>)
+      tensorTy = cast<RankedTensorType>(op.getType());
+    else
+      tensorTy = cast<RankedTensorType>(op.getSrc().getType());
 
     // Only rank 2 initially.
     if (tensorTy.getRank() != 2)
@@ -589,9 +604,16 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
       return false;
     }
 
-    const bool enableBlockIOForAllLayout =
-        triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS");
-    if (!enableBlockIOForAllLayout && !hasDpasEncoding(tensorTy) &&
+    // Require block_io attribute (set by MaterializeBlockPointer).
+    if (!op->template getAttrOfType<StringAttr>(
+            triton::gpu::intel::TritonIntelGPUDialect::getBlockIOAttrName()))
+      return false;
+
+    std::optional<bool> enableBlockIOForAllLayout =
+        mlir::triton::tools::isEnvValueBool(mlir::triton::tools::getStrEnv(
+            "TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS"));
+    if (enableBlockIOForAllLayout.has_value() &&
+        !enableBlockIOForAllLayout.value() && !hasDpasEncoding(tensorTy) &&
         !hasDotDpasEncoding(tensorTy))
       return false;
 
@@ -1117,6 +1139,14 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
       regPackBases.insert(1 << regBaseIter);
     }
 
+    if (transpose) {
+      // For transpose, the row dim has to be the memory contiguous dim.
+      // If rowDim is determined (>= 0) and it is not memory contiguous dim,
+      // reject.
+      if (rowDim >= 0 && rowDim != memContiguousDim)
+        return BlockIOTileSizeInfo::unknown();
+    }
+
     if (rowDim < 0)
       rowDim = (fastChangeDim != 0) ? 0 : 1;
 
@@ -1498,6 +1528,174 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
   }
 };
 
+// Compute the 2D prefetch tile shape and warp tiling for cooperative
+// prefetching. The tensor shape must be in row-major order.
+// Returns: {tileHeight, tileWidth, warpsM, warpsN}
+static std::tuple<unsigned, unsigned, unsigned, unsigned>
+get2DPrefetchWarpsPerCTA(ArrayRef<int64_t> tensorShape, Type eltTy,
+                         unsigned numWarps, bool isPrefetch256BSupported) {
+  unsigned rank = tensorShape.size();
+  assert(rank >= 2 && "Only rank >= 2 tensor is supported for now");
+  unsigned dimM = rank - 2, dimN = rank - 1;
+  unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
+  unsigned elemSizeInBytes = elemSizeInBits / 8;
+  unsigned numColsPerPrefOps = std::min<unsigned>(
+      tensorShape[dimN],
+      (isPrefetch256BSupported ? 256 : 64) / elemSizeInBytes);
+  if (isPrefetch256BSupported && (numColsPerPrefOps * elemSizeInBytes) != 256) {
+    // Fallback to 64 bytes per row.
+    numColsPerPrefOps =
+        std::min<unsigned>(numColsPerPrefOps, 64 / elemSizeInBytes);
+  }
+
+  unsigned repNumN = mlir::ceil((unsigned)tensorShape[dimN], numColsPerPrefOps);
+  unsigned warpsNumN = std::min(numWarps, repNumN);
+  unsigned warpsNumM = mlir::ceil(numWarps, warpsNumN);
+
+  // Get the number of rows per warp to fit the shape to the tensor shape to
+  // avoid duplication in prefetching.
+  unsigned rowNumPerWarp = mlir::ceil<unsigned>(tensorShape[dimM], warpsNumM);
+  constexpr unsigned maxNumRows = 32u;
+  unsigned numRowsPerPrefOps = std::min<unsigned>(rowNumPerWarp, maxNumRows);
+
+  return {numRowsPerPrefOps, numColsPerPrefOps, warpsNumM, warpsNumN};
+}
+
+// Get the linear layout for cooperative prefetching.
+// tileShape and warpsPerCTA are always rank-2 (inner M×N dims).
+// For rank > 2 tensors, they are padded with leading 1s for batch dims.
+static LinearLayout getPrefetchLinearLayout(MLIRContext *ctx,
+                                            ArrayRef<int64_t> tensorShape,
+                                            ArrayRef<unsigned> tileShape,
+                                            ArrayRef<unsigned> warpsPerCTA) {
+  unsigned tensorRank = tensorShape.size();
+  assert(tensorRank >= 2 && "Only rank >= 2 tensor is supported");
+
+  // Pad tile/warp shapes with leading 1s for batch dimensions.
+  SmallVector<unsigned> fullTileShape(tensorRank, 1);
+  SmallVector<unsigned> fullWarpsPerCTA(tensorRank, 1);
+  fullTileShape[tensorRank - 2] = tileShape[0];
+  fullTileShape[tensorRank - 1] = tileShape[1];
+  fullWarpsPerCTA[tensorRank - 2] = warpsPerCTA[0];
+  fullWarpsPerCTA[tensorRank - 1] = warpsPerCTA[1];
+
+  SmallVector<unsigned> order(tensorRank);
+  for (unsigned i = 0; i < tensorRank; ++i)
+    order[i] = tensorRank - i - 1;
+
+  LinearLayout ctaLayout =
+      identityStandardND(S("offset"), fullTileShape, order) *
+      identityStandardND(S("warp"), fullWarpsPerCTA, order);
+
+  return combineCtaCgaWithShape(std::move(ctaLayout),
+                                CGAEncodingAttr::get1CTALayout(ctx, tensorRank),
+                                tensorShape);
+}
+
+/// Emit 2D block prefetch operations for a tiled prefetch.
+///
+/// Converts base dimensions to bytes, determines vBlocks from element size,
+/// computes per-tile offsets via the linear layout, and creates
+/// Matrix2DBlockPrefetchOp for each tile. Erases the original op on success.
+static LogicalResult emit2DBlockPrefetchOps(
+    Operation *op, ConversionPatternRewriter &rewriter, Location loc,
+    Value base, Value baseWidth, Value baseHeight, Value rowStride,
+    Value offsetBaseX, Value offsetBaseY, Type eltTy, unsigned tileWidthInElem,
+    unsigned tileHeightInElem, unsigned numTilesPerWarp,
+    unsigned tileSizeInElem, const LinearLayout &llEncoding, unsigned rank = 2,
+    ArrayRef<Value> extraDimStridesInBytes = {},
+    ArrayRef<Value> extraDimBaseOffsets = {}) {
+  assert(extraDimStridesInBytes.size() == rank - 2 &&
+         extraDimBaseOffsets.size() == rank - 2 &&
+         "extraDim arrays must have rank - 2 elements");
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  MLIRContext *ctx = rewriter.getContext();
+
+  // Convert baseWidth and rowStride to bytes and truncate to i32.
+  baseWidth = b.mul(baseWidth, b.i64_val(eltTy.getIntOrFloatBitWidth() / 8));
+  baseWidth = b.trunc(i32_ty, baseWidth);
+
+  baseHeight = b.trunc(i32_ty, baseHeight);
+
+  Value rowStrideInBytes =
+      b.mul(rowStride, b.i64_val(eltTy.getIntOrFloatBitWidth() / 8));
+  rowStrideInBytes = b.trunc(i32_ty, rowStrideInBytes);
+
+  unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
+  unsigned vBlocks = 1;
+  switch (elemSizeInBits) {
+  case 8:
+    if (tileWidthInElem == 64) {
+      // OCL interface supports 8b_?r32x2c for 64 bytes per row of 8 bits
+      // element.
+      vBlocks = 2;
+      tileWidthInElem = 32;
+    }
+    break;
+  case 16:
+    if (tileWidthInElem == 32) {
+      // OCL interface supports 16b_?r16x2c for 64 bytes per row of 16 bits
+      // element.
+      vBlocks = 2;
+      tileWidthInElem = 16;
+    }
+    break;
+  }
+
+  StringAttr kOffset = S("offset");
+  StringAttr kWarp = S("warp");
+  StringAttr kBlock = S("block");
+
+  Value warpId = arith::IndexCastOp::create(
+      rewriter, loc, i32_ty,
+      mlir::gpu::SubgroupIdOp::create(rewriter, loc,
+                                      /*upperBound=*/nullptr));
+
+  for (unsigned tile = 0; tile < numTilesPerWarp; ++tile) {
+    unsigned off = tile * tileSizeInElem;
+    auto offsets = applyLinearLayout(
+        loc, rewriter, llEncoding,
+        {{kOffset, b.i32_val(off)}, {kWarp, warpId}, {kBlock, b.i32_val(0)}});
+    Value offsetX = b.add(offsets[rank - 1].second, offsetBaseX);
+    Value offsetY = b.add(offsets[rank - 2].second, offsetBaseY);
+
+    // Fold extra dimensions (beyond the inner 2) into the base pointer.
+    Value adjustedBase = base;
+    Type i8Ty = IntegerType::get(ctx, 8);
+    Type i64Ty = IntegerType::get(ctx, 64);
+    for (unsigned d = 0; d < rank - 2; ++d) {
+      Value extraOff = b.add(b.zext(i64Ty, extraDimBaseOffsets[d]),
+                             b.zext(i64Ty, offsets[d].second));
+      Value byteOff = b.mul(extraOff, extraDimStridesInBytes[d]);
+      adjustedBase = b.gep(ptr_ty(ctx, 1), i8Ty, adjustedBase, byteOff);
+    }
+
+    auto newOp = TritonGEN::Matrix2DBlockPrefetchOp::create(
+        rewriter, loc,
+        /*ptr*/ adjustedBase,
+        /*base_width*/ baseWidth,
+        /*base_height*/ baseHeight,
+        /*base_pitch*/ rowStrideInBytes,
+        /*x*/ offsetX,
+        /*y*/ offsetY,
+        /*elem_size_in_bits*/ elemSizeInBits,
+        /*tile_width*/ tileWidthInElem,
+        /*tile_height*/ tileHeightInElem,
+        /*v_blocks*/ vBlocks,
+        /*cache_opt*/ TritonGEN::LoadCacheControl::L1C_L3C);
+    if (failed(newOp.verify())) {
+      // Delete the op so that the verifier will not abort the pass
+      // pipeline later, as we can fail this path and try a different
+      // approach.
+      rewriter.eraseOp(newOp);
+      return failure();
+    }
+  }
+
+  rewriter.eraseOp(op);
+  return success();
+}
+
 struct PrefetchOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::intel::PrefetchOp>,
       public BlockIOConversionBase {
@@ -1507,10 +1705,11 @@ struct PrefetchOpConversion
   PrefetchOpConversion(
       LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
+      triton::intel::ModuleStrideAnalysis &strideAnalysis,
       PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::gpu::intel::PrefetchOp>(
             converter, benefit),
-        BlockIOConversionBase(targetInfo, axisAnalysisPass) {}
+        BlockIOConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
 
   LogicalResult
   matchAndRewrite(triton::gpu::intel::PrefetchOp op, OpAdaptor adaptor,
@@ -1553,11 +1752,13 @@ struct PrefetchOpConversion
     const ArrayRef<int64_t> shapeRef = tensorType.getShape();
     SmallVector<int64_t> tensorShape{shapeRef.begin(), shapeRef.end()};
 
+    unsigned rank = tensorType.getRank();
+
     const bool memoryRowMajor = isMemoryRowMajor(op);
     if (!memoryRowMajor) {
-      // Swap the shape to make it row major and then get the tiling
-      // size base on row major shape.
-      std::swap(tensorShape[0], tensorShape[1]);
+      // Swap the inner 2 dims to make it row major and then get the tiling
+      // size based on row major shape.
+      std::swap(tensorShape[rank - 2], tensorShape[rank - 1]);
     }
     unsigned numWarps = triton::gpu::lookupNumWarps(op);
 
@@ -1567,37 +1768,35 @@ struct PrefetchOpConversion
     auto [tileHeightInElem, tileWidthInElem, warpsM, warpsN] =
         get2DPrefetchWarpsPerCTA(tensorShape, eltTy, numWarps,
                                  isPrefetch256BSupported);
-    auto llEncoding = getLinearLayout(
-        tensorShape, {tileHeightInElem, tileWidthInElem}, {warpsM, warpsN});
+    auto llEncoding = getPrefetchLinearLayout(
+        getContext(), tensorShape, {tileHeightInElem, tileWidthInElem},
+        {warpsM, warpsN});
 
     unsigned tileSizeInElem = tileHeightInElem * tileWidthInElem;
-    unsigned numTilesPerWarp =
-        (tensorShape[0] * tensorShape[1]) / (tileSizeInElem * numWarps);
+    int64_t totalElems = 1;
+    for (auto s : tensorShape)
+      totalElems *= s;
+    unsigned numTilesPerWarp = totalElems / (tileSizeInElem * numWarps);
 
-    unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
-    unsigned vBlocks = 1;
-    switch (elemSizeInBits) {
-    case 8:
-      if (tileWidthInElem == 64) {
-        // OCL interface supports 8b_?r32x2c for 64 bytes per row of 8 bits
-        // element.
-        vBlocks = 2;
-        tileWidthInElem = 32;
-      }
-      break;
-    case 16:
-      if (tileWidthInElem == 32) {
-        // OCL interface supports 16b_?r16x2c for 64 bytes per row of 16 bits
-        // element.
-        vBlocks = 2;
-        tileWidthInElem = 16;
-      }
-      break;
-    }
+    // Unpack block pointer struct: { offset[rank], shape[rank], stride[rank],
+    // base }
+    const SmallVector<Value> &elems =
+        unpackLLElements(loc, adaptor.getPtr(), rewriter);
+    assert((elems.size() - 1) % 3 == 0 &&
+           "unexpected block pointer struct size");
+    unsigned bpRank = (elems.size() - 1) / 3;
+    assert(bpRank == rank && "block pointer rank mismatch");
+    unsigned blockOffset = 0, blockShape = rank, blockStride = 2 * rank,
+             blockBase = 3 * rank;
 
-    auto [base, baseWidth, baseHeight, rowStride, colStride, offsetBaseX,
-          offsetBaseY] =
-        getValuesFromBlockPointerStruct(adaptor.getPtr(), rewriter);
+    Value base = elems[blockBase];
+    unsigned rowIdx = rank - 2, colIdx = rank - 1;
+    Value baseWidth = elems[blockShape + colIdx];
+    Value baseHeight = elems[blockShape + rowIdx];
+    Value rowStride = elems[blockStride + rowIdx];
+    Value colStride = elems[blockStride + colIdx];
+    Value offsetBaseX = elems[blockOffset + colIdx];
+    Value offsetBaseY = elems[blockOffset + rowIdx];
 
     if (!memoryRowMajor) {
       // Swap the width/height and strides to the row major.
@@ -1606,57 +1805,20 @@ struct PrefetchOpConversion
       std::swap(offsetBaseX, offsetBaseY);
     }
 
-    baseWidth = b.mul(baseWidth, b.i64_val(eltTy.getIntOrFloatBitWidth() / 8));
-    baseWidth = b.trunc(i32_ty, baseWidth);
-
-    baseHeight = b.trunc(i32_ty, baseHeight);
-
-    Value rowStrideInBytes =
-        b.mul(rowStride, b.i64_val(eltTy.getIntOrFloatBitWidth() / 8));
-    rowStrideInBytes = b.trunc(i32_ty, rowStrideInBytes);
-
-    MLIRContext *ctx = getContext();
-    StringAttr kOffset = S("offset");
-    StringAttr kWarp = S("warp");
-    StringAttr kBlock = S("block");
-
-    Value warpId = arith::IndexCastOp::create(
-        rewriter, loc, i32_ty,
-        mlir::gpu::SubgroupIdOp::create(rewriter, loc,
-                                        /*upperBound=*/nullptr));
-
-    for (unsigned tile = 0; tile < numTilesPerWarp; ++tile) {
-      unsigned off = tile * tileSizeInElem;
-      auto offsets = applyLinearLayout(
-          loc, rewriter, llEncoding,
-          {{kOffset, b.i32_val(off)}, {kWarp, warpId}, {kBlock, b.i32_val(0)}});
-      Value offsetX = b.add(offsets[1].second, offsetBaseX);
-      Value offsetY = b.add(offsets[0].second, offsetBaseY);
-
-      auto newOp = TritonGEN::Matrix2DBlockPrefetchOp::create(
-          rewriter, loc,
-          /*ptr*/ base,
-          /*base_width*/ baseWidth,
-          /*base_height*/ baseHeight,
-          /*base_pitch*/ rowStrideInBytes,
-          /*x*/ offsetX,
-          /*y*/ offsetY,
-          /*elem_size_in_bits*/ elemSizeInBits,
-          /*tile_width*/ tileWidthInElem,
-          /*tile_height*/ tileHeightInElem,
-          /*v_blocks*/ vBlocks,
-          /*cache_opt*/ TritonGEN::LoadCacheControl::L1C_L3C);
-      if (failed(newOp.verify())) {
-        // delete the op so that the verifier will not abort the pass
-        // pipeline later, as we can fail this path and try a different
-        // approach.
-        rewriter.eraseOp(newOp);
-        return failure();
-      }
+    // Prepare extra-dim strides (in bytes, i64) and base offsets (i32) for
+    // dimensions beyond the inner 2.
+    unsigned elemSizeInBytes = eltTy.getIntOrFloatBitWidth() / 8;
+    SmallVector<Value> extraDimStrides, extraDimBaseOffsets;
+    for (unsigned d = 0; d < rank - 2; ++d) {
+      extraDimStrides.push_back(
+          b.mul(elems[blockStride + d], b.i64_val(elemSizeInBytes)));
+      extraDimBaseOffsets.push_back(b.trunc(i32_ty, elems[blockOffset + d]));
     }
 
-    rewriter.eraseOp(op);
-    return success();
+    return emit2DBlockPrefetchOps(
+        op, rewriter, loc, base, baseWidth, baseHeight, rowStride, offsetBaseX,
+        offsetBaseY, eltTy, tileWidthInElem, tileHeightInElem, numTilesPerWarp,
+        tileSizeInElem, llEncoding, rank, extraDimStrides, extraDimBaseOffsets);
   }
 
   LogicalResult
@@ -1684,30 +1846,33 @@ struct PrefetchOpConversion
     ArrayRef<unsigned> cluster = dpasLayout.getRepCluster();
     SmallVector<unsigned> repCluster{cluster.begin(), cluster.end()};
     ArrayRef<int64_t> tensorShape = tensorOfPointers.getShape();
+    unsigned rank = tensorShape.size();
     DpasEncodingAttr::OpIdx opIdx = getOpIdx(tensorOfPointers);
     SmallVector<int64_t> repetitions =
         dpasLayout.getDPASRepetitions(tensorShape, opIdx);
-    assert(repetitions.size() == 3 &&
-           "getDPASRepetitions always return rank 3 size");
-    SmallVector<unsigned> numReps{repetitions.begin() + 1, repetitions.end()};
+    // getDPASRepetitions prepends a batch dimension; strip it.
+    SmallVector<unsigned> numReps;
+    for (size_t i = 1; i < repetitions.size(); ++i)
+      numReps.push_back(repetitions[i]);
 
-    SmallVector<int64_t, 2> shardTensorShape;
+    SmallVector<int64_t> shardTensorShape(tensorShape.begin(),
+                                          tensorShape.end());
     switch (opIdx) {
     case DpasEncodingAttr::OpIdx::OperandA: {
-      shardTensorShape = {
-          std::min<unsigned>(tensorShape[0], dpasLayout.getShapeA()[0]),
-          tensorShape[1]};
-      warpsPerCTA[1] = 1;
-      repCluster[1] = 1;
-      numReps[1] = 1;
+      shardTensorShape[rank - 2] =
+          std::min<int64_t>(tensorShape[rank - 2], dpasLayout.getShapeA()[0]);
+      // K dim (last) not distributed across warps.
+      warpsPerCTA[rank - 1] = 1;
+      repCluster[rank - 1] = 1;
+      numReps[rank - 1] = 1;
     } break;
     case DpasEncodingAttr::OpIdx::OperandB: {
-      shardTensorShape = {
-          tensorShape[0],
-          std::min<unsigned>(tensorShape[1], dpasLayout.getShapeB()[1])};
-      warpsPerCTA[0] = 1;
-      repCluster[0] = 1;
-      numReps[0] = 1;
+      shardTensorShape[rank - 1] =
+          std::min<int64_t>(tensorShape[rank - 1], dpasLayout.getShapeB()[1]);
+      // K dim (second-to-last) not distributed across warps.
+      warpsPerCTA[rank - 2] = 1;
+      repCluster[rank - 2] = 1;
+      numReps[rank - 2] = 1;
     } break;
     case DpasEncodingAttr::OpIdx::OperandC: {
       llvm_unreachable("unexpected OpIdx::OperandC");
@@ -1731,8 +1896,8 @@ struct PrefetchOpConversion
                 axisAnalysisPass)
                 .getAxisInfo(mask);
         if (axisInfo) {
-          maskConstancyHor = axisInfo->getConstancy(1);
-          maskConstancyVer = axisInfo->getConstancy(0);
+          maskConstancyHor = axisInfo->getConstancy(rank - 1);
+          maskConstancyVer = axisInfo->getConstancy(rank - 2);
         }
       }
     }
@@ -1743,8 +1908,8 @@ struct PrefetchOpConversion
                      std::min<unsigned>(prefetchShape[1], maskConstancyHor)};
 
     SmallVector<int64_t> numPrefetchsPerRep = {
-        mlir::ceil<int64_t>(shardTensorShape[0], prefetchShape[0]),
-        mlir::ceil<int64_t>(shardTensorShape[1], prefetchShape[1])};
+        mlir::ceil<int64_t>(shardTensorShape[rank - 2], prefetchShape[0]),
+        mlir::ceil<int64_t>(shardTensorShape[rank - 1], prefetchShape[1])};
 
     Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
@@ -1801,127 +1966,226 @@ struct PrefetchOpConversion
       return failure();
 
     // If the stride is 0, we want to load only the first row.
-    int stride = getStride(op.getPtr(), 0);
+    int stride = getStride(op.getPtr(), rank - 2);
     Value baseHeight = b.i32_val(stride == 0 ? 1 : tileHeightInElem);
     Value baseWidth = b.i32_val(
         std::max(64u, vBlocks * tileWidthInElem * (elemSizeInBits / 8)));
     Value offsetBaseX = b.i32_val(0);
     Value offsetBaseY = b.i32_val(0);
 
-    for (int row = 0; row < numReps[0]; ++row) {
-      for (int col = 0; col < numReps[1]; ++col) {
-        // Prefetch the data for each repetitions.
-        for (int i = 0; i < numPrefetchsPerRep[0]; ++i)
-          for (int j = 0; j < numPrefetchsPerRep[1]; ++j) {
-            unsigned offsetN = col * warpsPerCTA[1] * shardTensorShape[1] +
-                               j * prefetchShape[1];
-            unsigned offsetM = row * warpsPerCTA[0] * shardTensorShape[0] +
-                               i * prefetchShape[0];
+    // Compute total batch repetitions for dims beyond the inner 2.
+    int64_t totalBatchReps = 1;
+    for (unsigned d = 0; d < rank - 2; ++d)
+      totalBatchReps *= numReps[d];
 
-            Value pred;
-            if (llMask)
-              pred = (maskElems.size() > 1)
-                         ? targetInfo.shuffleIdx(rewriter, loc,
-                                                 masks[{offsetM, offsetN}], 0)
-                         : maskElems[0];
+    for (int64_t batchIdx = 0; batchIdx < totalBatchReps; ++batchIdx) {
+      // Decompose batchIdx into per-dim batch indices.
+      SmallVector<unsigned> batchOffsets(rank - 2);
+      int64_t remaining = batchIdx;
+      for (int d = static_cast<int>(rank) - 3; d >= 0; --d) {
+        batchOffsets[d] = remaining % numReps[d];
+        remaining /= numReps[d];
+      }
+      assert(remaining == 0 &&
+             "batchIdx decomposition inconsistent with totalBatchReps");
 
-            else
-              pred = b.int_val(1, 1);
+      for (unsigned row = 0; row < numReps[rank - 2]; ++row) {
+        for (unsigned col = 0; col < numReps[rank - 1]; ++col) {
+          // Prefetch the data for each repetition.
+          for (int64_t i = 0; i < numPrefetchsPerRep[0]; ++i)
+            for (int64_t j = 0; j < numPrefetchsPerRep[1]; ++j) {
+              unsigned offsetN =
+                  col * warpsPerCTA[rank - 1] * shardTensorShape[rank - 1] +
+                  j * prefetchShape[1];
+              unsigned offsetM =
+                  row * warpsPerCTA[rank - 2] * shardTensorShape[rank - 2] +
+                  i * prefetchShape[0];
 
-            // If the mask exists and evaluates to false, we set offsetY to be
-            // equal to baseHeight, which causes the HW to ignore the generated
-            // prefetch operation (given that the block to be prefetched would
-            // be outside the baseWidth X baseHeight shape).
-            Value offsetY = b.select(pred, b.i32_val(0), baseHeight);
-            Value addr = targetInfo.shuffleIdx(
-                rewriter, loc, baseAddrs[{offsetM, offsetN}], 0);
+              // Build the full offset key for the baseAddrs/masks map.
+              SmallVector<unsigned> key;
+              for (unsigned d = 0; d < rank - 2; ++d)
+                key.push_back(batchOffsets[d] * warpsPerCTA[d] *
+                              shardTensorShape[d]);
+              key.push_back(offsetM);
+              key.push_back(offsetN);
 
-            auto newOp = TritonGEN::Matrix2DBlockPrefetchOp::create(
-                rewriter, loc,
-                /*ptr*/ addr,
-                /*base_width*/ baseWidth,
-                /*base_height*/ baseHeight,
-                /*base_pitch*/ rowStrideInBytes,
-                /*x*/ offsetBaseX,
-                /*y*/ offsetY,
-                /*elem_size_in_bits*/ elemSizeInBits,
-                /*tile_width*/ tileWidthInElem,
-                /*tile_height*/ tileHeightInElem,
-                /*v_blocks*/ vBlocks,
-                /*cache_opt*/ TritonGEN::LoadCacheControl::L1C_L3C);
-            if (failed(newOp.verify())) {
-              // delete the op so that the verifier will not abort the pass
-              // pipeline later, as we can fail this path and try a different
-              // approach.
-              rewriter.eraseOp(newOp);
-              return failure();
+              Value pred;
+              if (llMask)
+                pred = (maskElems.size() > 1)
+                           ? targetInfo.shuffleIdx(rewriter, loc, masks[key], 0)
+                           : maskElems[0];
+              else
+                pred = b.int_val(1, 1);
+
+              // If the mask exists and evaluates to false, we set offsetY to be
+              // equal to baseHeight, which causes the HW to ignore the
+              // generated prefetch operation (given that the block to be
+              // prefetched would be outside the baseWidth X baseHeight shape).
+              Value offsetY = b.select(pred, b.i32_val(0), baseHeight);
+              Value addr =
+                  targetInfo.shuffleIdx(rewriter, loc, baseAddrs[key], 0);
+
+              auto newOp = TritonGEN::Matrix2DBlockPrefetchOp::create(
+                  rewriter, loc,
+                  /*ptr*/ addr,
+                  /*base_width*/ baseWidth,
+                  /*base_height*/ baseHeight,
+                  /*base_pitch*/ rowStrideInBytes,
+                  /*x*/ offsetBaseX,
+                  /*y*/ offsetY,
+                  /*elem_size_in_bits*/ elemSizeInBits,
+                  /*tile_width*/ tileWidthInElem,
+                  /*tile_height*/ tileHeightInElem,
+                  /*v_blocks*/ vBlocks,
+                  /*cache_opt*/ TritonGEN::LoadCacheControl::L1C_L3C);
+              if (failed(newOp.verify())) {
+                // delete the op so that the verifier will not abort the pass
+                // pipeline later, as we can fail this path and try a different
+                // approach.
+                rewriter.eraseOp(newOp);
+                return failure();
+              }
             }
-          }
+        }
       }
     }
 
     rewriter.eraseOp(op);
     return success();
   }
+};
 
-private:
-  // tensor shape has to be in row major.
-  // Returns:
-  // Prefetch Op Shape in {M, N}
-  // Warps per CTA in {M, N}
-  std::tuple<unsigned, unsigned, unsigned, unsigned>
-  get2DPrefetchWarpsPerCTA(const ArrayRef<int64_t> tensorShape, Type eltTy,
-                           unsigned numWarps,
-                           bool isPrefetch256BSupported) const {
-    unsigned rank = tensorShape.size();
-    assert(rank >= 2 && "Only rank >= 2 tensor is supported for now");
-    unsigned dimM = rank - 2, dimN = rank - 1;
-    unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
-    unsigned elemSizeInBytes = elemSizeInBits / 8;
-    unsigned numColsPerPrefOps = std::min<unsigned>(
-        tensorShape[dimN],
-        (isPrefetch256BSupported ? 256 : 64) / elemSizeInBytes);
-    if (isPrefetch256BSupported &&
-        (numColsPerPrefOps * elemSizeInBytes) != 256) {
-      // Fallback to 64 bytes per row.
-      numColsPerPrefOps =
-          std::min<unsigned>(numColsPerPrefOps, 64 / elemSizeInBytes);
+struct DescriptorPrefetchOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<
+          triton::gpu::intel::DescriptorPrefetchOp>,
+      public BlockIOConversionBase {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::gpu::intel::DescriptorPrefetchOp>::
+      ConvertTritonGPUOpToLLVMPattern;
+
+  DescriptorPrefetchOpConversion(
+      LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
+      const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
+      triton::intel::ModuleStrideAnalysis &strideAnalysis,
+      PatternBenefit benefit)
+      : ConvertTritonGPUOpToLLVMPattern<
+            triton::gpu::intel::DescriptorPrefetchOp>(converter, benefit),
+        BlockIOConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::intel::DescriptorPrefetchOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
+    LogicalResult res = rewriteTensorDescriptorPrefetch(op, adaptor, rewriter);
+
+    // FIXME: the prefetch lowering code should never fail. Currently it does in
+    // some cases. We should address those cases instead of removing the
+    // prefetch operation.
+    if (failed(res)) {
+      op.emitWarning("Descriptor prefetch operation could not be converted to "
+                     "LLVM. The operation was erased.");
+      rewriter.eraseOp(op);
     }
 
-    unsigned repNumN =
-        mlir::ceil((unsigned)tensorShape[dimN], numColsPerPrefOps);
-    unsigned warpsNumN = std::min(numWarps, repNumN);
-    unsigned warpsNumM = mlir::ceil(numWarps, warpsNumN);
-
-    // Get the number of rows per warp to fit the shape to the tensor shape to
-    // avoid duplication in prefetching.
-    unsigned rowNumPerWarp = mlir::ceil<unsigned>(tensorShape[dimM], warpsNumM);
-    constexpr unsigned maxNumRows = 32u;
-    unsigned numRowsPerPrefOps = std::min<unsigned>(rowNumPerWarp, maxNumRows);
-    SmallVector<unsigned, 2> tilePerPrefOps{numRowsPerPrefOps,
-                                            numColsPerPrefOps};
-
-    return {numRowsPerPrefOps, numColsPerPrefOps, warpsNumM, warpsNumN};
+    return success();
   }
 
-  // Get the linear layout for the cooperative prefetching.
-  LinearLayout getLinearLayout(const ArrayRef<int64_t> tensorShape,
-                               const ArrayRef<unsigned> tileShape,
-                               const ArrayRef<unsigned> warpsPerCTA) const {
-    MLIRContext *ctx = getContext();
-    unsigned rank = warpsPerCTA.size();
-    assert(rank >= 2 && "Only rank >= 2 tensor is supported for now");
-    SmallVector<unsigned> order(rank);
-    for (size_t i = 0; i < warpsPerCTA.size(); ++i) {
-      // The fastest change dim is the first.
-      order[i] = rank - i - 1;
+  LogicalResult
+  rewriteTensorDescriptorPrefetch(triton::gpu::intel::DescriptorPrefetchOp op,
+                                  OpAdaptor adaptor,
+                                  ConversionPatternRewriter &rewriter) const {
+    Attribute blockIOAttr =
+        op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
+    if (!blockIOAttr) {
+      rewriter.eraseOp(op);
+      return success();
     }
-    LinearLayout ctaLayout = identityStandardND(S("offset"), tileShape, order) *
-                             identityStandardND(S("warp"), warpsPerCTA, order);
 
-    return combineCtaCgaWithShape(std::move(ctaLayout),
-                                  CGAEncodingAttr::get1CTALayout(ctx, rank),
-                                  tensorShape);
+    Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    // Extract the tensor type from the TensorDescType.
+    // Unlike PrefetchOp which gets its type from PointerType::getPointeeType(),
+    // DescriptorPrefetchOp gets it from TensorDescType::getBlockType().
+    auto descType = cast<triton::TensorDescType>(op.getDesc().getType());
+    RankedTensorType tensorType = descType.getBlockType();
+    Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
+    const ArrayRef<int64_t> shapeRef = tensorType.getShape();
+    SmallVector<int64_t> tensorShape{shapeRef.begin(), shapeRef.end()};
+
+    // TODO: Revisit when TensorDescriptor supports column-major layout.
+    // Currently, TensorDescriptor is always row major.
+
+    unsigned numWarps = triton::gpu::lookupNumWarps(op);
+
+    auto m = op->getParentOfType<ModuleOp>();
+    bool isPrefetch256BSupported =
+        m->hasAttr(TritonIntelGPUDialect::getSupportPrefetch256BAttrName());
+
+    auto [tileHeightInElem, tileWidthInElem, warpsM, warpsN] =
+        get2DPrefetchWarpsPerCTA(tensorShape, eltTy, numWarps,
+                                 isPrefetch256BSupported);
+    auto llEncoding = getPrefetchLinearLayout(
+        getContext(), tensorShape, {tileHeightInElem, tileWidthInElem},
+        {warpsM, warpsN});
+
+    unsigned tileSizeInElem = tileHeightInElem * tileWidthInElem;
+    int64_t totalElems = 1;
+    for (auto s : tensorShape)
+      totalElems *= s;
+    unsigned numTilesPerWarp = totalElems / (tileSizeInElem * numWarps);
+
+    // Unpack the tensor descriptor struct.
+    // TensorDescType struct layout: { shape[rank], stride[rank], base }
+    // This differs from block pointers which have: { offset[rank], shape[rank],
+    // stride[rank], base }. For tensor descriptors, offsets (indices) are
+    // supplied explicitly via the op operands rather than being embedded in the
+    // struct.
+    Value llDesc = adaptor.getDesc();
+    auto indices = adaptor.getIndices();
+    size_t rank = tensorType.getRank();
+    unsigned rowIdx = rank - 2, colIdx = rank - 1;
+    const unsigned descShape = 0, descStride = rank, descBase = 2 * rank;
+    const SmallVector<Value> &descElems =
+        unpackLLElements(loc, llDesc, rewriter);
+
+    Value base = descElems[descBase];
+
+    // Get base width and height from the descriptor shape fields.
+    // TODO: For a block pointer, baseWidth/baseHeight come from the
+    // MakeTensorPtrOp shape operands which represent the bounds of the
+    // underlying memory, not the tile shape. For tensor descriptors, the shape
+    // fields in the struct similarly represent the underlying memory bounds
+    // (set by MakeTensorDescOp). Verify this is consistent.
+    Value baseWidth = descElems[descShape + colIdx];
+    Value baseHeight = descElems[descShape + rowIdx];
+
+    // Get the row stride from the descriptor stride fields.
+    Value rowStride = descElems[descStride + rowIdx];
+
+    // Get offset bases from the indices operand.
+    // For tensor descriptors, indices are supplied explicitly via the op
+    // (unlike block pointers where offsets are embedded in the struct).
+    assert(indices.size() == rank &&
+           "Expected indices count to match tensor rank");
+    Value offsetBaseY = indices[rowIdx]; // row offset
+    Value offsetBaseX = indices[colIdx]; // col offset
+
+    // Prepare extra-dim strides (in bytes, i64) and base offsets (i32) for
+    // dimensions beyond the inner 2.
+    unsigned elemSizeInBytes = eltTy.getIntOrFloatBitWidth() / 8;
+    SmallVector<Value> extraDimStrides, extraDimBaseOffsets;
+    for (unsigned d = 0; d < rank - 2; ++d) {
+      extraDimStrides.push_back(
+          b.mul(descElems[descStride + d], b.i64_val(elemSizeInBytes)));
+      extraDimBaseOffsets.push_back(indices[d]);
+    }
+
+    // Emit the 2D block prefetch operations.
+    return emit2DBlockPrefetchOps(
+        op, rewriter, loc, base, baseWidth, baseHeight, rowStride, offsetBaseX,
+        offsetBaseY, eltTy, tileWidthInElem, tileHeightInElem, numTilesPerWarp,
+        tileSizeInElem, llEncoding, rank, extraDimStrides, extraDimBaseOffsets);
   }
 };
 
@@ -1939,9 +2203,10 @@ struct LoadOpToBlockIOConversion
   LoadOpToBlockIOConversion(
       LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
+      triton::intel::ModuleStrideAnalysis &strideAnalysis,
       PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::LoadOp>(converter, benefit),
-        BlockIOConversionBase(targetInfo, axisAnalysisPass) {}
+        BlockIOConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
 
 private:
   /// Adjust row dimension offset and address for boundary checking.
@@ -2416,10 +2681,11 @@ struct DescriptorLoadOpToBlockIOConversion
   DescriptorLoadOpToBlockIOConversion(
       LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
+      triton::intel::ModuleStrideAnalysis &strideAnalysis,
       PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::DescriptorLoadOp>(converter,
                                                                   benefit),
-        BlockIOConversionBase(targetInfo, axisAnalysisPass) {}
+        BlockIOConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
 
   LogicalResult
   matchAndRewrite(triton::DescriptorLoadOp op, OpAdaptor adaptor,
@@ -2437,13 +2703,14 @@ struct DescriptorLoadOpToBlockIOConversion
     assert(llEncoding.has_value() &&
            "unexpected failure when getting linear layout");
 
-    // Read memory layout from block_io attribute.
-    // Descriptors are row-major by definition; column_major is set by
-    // FuseTransWithDescriptorLoad. Default to row_major when absent.
+    // Read memory layout from block_io attribute (set by
+    // MaterializeBlockPointer; column_major set by
+    // FuseTransWithDescriptorLoad).
     StringRef blockIOName = TritonIntelGPUDialect::getBlockIOAttrName();
     StringAttr blockIOAttr = op->getAttrOfType<StringAttr>(blockIOName);
-    if (!blockIOAttr)
-      blockIOAttr = StringAttr::get(rewriter.getContext(), "row_major");
+    assert(
+        blockIOAttr &&
+        "block_io attribute required; checked by isDescriptorBlockIOCandidate");
     const unsigned rank = tensorType.getRank();
     bool memoryRowMajor = (blockIOAttr.getValue() == "row_major");
     unsigned contiguousDim = memoryRowMajor ? rank - 1 : rank - 2;
@@ -2659,9 +2926,10 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
   LoadOpConversion(
       LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
+      triton::intel::ModuleStrideAnalysis &strideAnalysis,
       PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::LoadOp>(converter, benefit),
-        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
 
   LogicalResult
   matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
@@ -2863,9 +3131,10 @@ struct DescriptorLoadOpConversion
   DescriptorLoadOpConversion(
       LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
+      triton::intel::ModuleStrideAnalysis &strideAnalysis,
       PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::DescriptorLoadOp>(converter, benefit),
-        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
 
   LogicalResult
   matchAndRewrite(triton::DescriptorLoadOp op, OpAdaptor adaptor,
@@ -3068,9 +3337,10 @@ struct DescriptorStoreOpConversion
   DescriptorStoreOpConversion(
       LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
+      triton::intel::ModuleStrideAnalysis &strideAnalysis,
       PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::DescriptorStoreOp>(converter, benefit),
-        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
 
   LogicalResult
   matchAndRewrite(triton::DescriptorStoreOp op, OpAdaptor adaptor,
@@ -3219,6 +3489,229 @@ struct DescriptorStoreOpConversion
   }
 };
 
+struct DescriptorStoreOpToBlockIOConversion
+    : public ConvertTritonGPUOpToLLVMPattern<triton::DescriptorStoreOp>,
+      public BlockIOConversionBase {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::DescriptorStoreOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  DescriptorStoreOpToBlockIOConversion(
+      LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
+      const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
+      triton::intel::ModuleStrideAnalysis &strideAnalysis,
+      PatternBenefit benefit)
+      : ConvertTritonGPUOpToLLVMPattern<triton::DescriptorStoreOp>(converter,
+                                                                   benefit),
+        BlockIOConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
+
+  LogicalResult
+  matchAndRewrite(triton::DescriptorStoreOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
+    // --- Pre-conditions ---
+    if (!isDescriptorBlockIOCandidate(op))
+      return failure();
+
+    // Read memory layout from block_io attribute (set by
+    // MaterializeBlockPointer).
+    StringRef blockIOName = TritonIntelGPUDialect::getBlockIOAttrName();
+    StringAttr blockIOAttr = op->getAttrOfType<StringAttr>(blockIOName);
+    assert(
+        blockIOAttr &&
+        "block_io attribute required; checked by isDescriptorBlockIOCandidate");
+    const bool memoryRowMajor = (blockIOAttr.getValue() == "row_major");
+    assert(memoryRowMajor && "column_major descriptor store not yet supported");
+
+    // Get source tensor type and encoding.
+    auto tensorType = cast<RankedTensorType>(op.getSrc().getType());
+    Attribute encoding = tensorType.getEncoding();
+
+    // --- Linear layout and tile size ---
+    std::optional<LinearLayout> llEncoding =
+        cast<DistributedEncodingTrait>(encoding).toLinearLayout(
+            tensorType.getShape());
+    assert(llEncoding.has_value() &&
+           "unexpected failure when getting linear layout");
+
+    unsigned contiguousDim = memoryRowMajor ? 1 : 0;
+    Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
+    unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
+
+    // TODO: DescriptorStoreOp has no mask operand, so maskAxisInfo is always
+    // null. If masking support is added in the future, axis info should be
+    // propagated here.
+    AxisInfo *maskAxisInfo = nullptr;
+
+    BlockIOTileSizeInfo sizeInfo = getBlockIOTileSize<false /*store*/>(
+        llEncoding.value(), contiguousDim, elemSizeInBits, maskAxisInfo);
+    if (!sizeInfo.isValid())
+      return failure();
+
+    auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
+          isTransposeRequired, regPackedBases] = std::move(sizeInfo);
+
+    unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
+    if (!check2DBlockAddressPayloadRestriction(packedElemSizeInBits, tileWidth))
+      return failure();
+
+    // Limit vBlock to 1 for stores.
+    vBlocks = 1;
+
+    if (isTransposeRequired) {
+      // 2D Block store doesn't support transpose.
+      return failure();
+    }
+
+    Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    MLIRContext *ctx = rewriter.getContext();
+    Value warpId = arith::IndexCastOp::create(
+        rewriter, loc, i32_ty,
+        mlir::gpu::SubgroupIdOp::create(rewriter, loc,
+                                        /*upperBound=*/nullptr));
+
+    // --- Unpack tensor descriptor struct ---
+    // TensorDescType struct layout: { shape[rank], stride[rank], base }
+    Value llDesc = adaptor.getDesc();
+    size_t rank = tensorType.getRank();
+    const unsigned descShape = 0, descStride = rank, descBase = 2 * rank;
+    const SmallVector<Value> &descElems =
+        unpackLLElements(loc, llDesc, rewriter);
+
+    Value base = descElems[descBase];
+    unsigned numElems = getTotalElemsPerThread(tensorType);
+
+    // The base pointer is uniform across all elements (unlike tensor-of-
+    // pointers where each element may have a different pointer).
+    SmallVector<Value> ptrElems(numElems, base);
+
+    // --- Shapes (base width / height for 2D block IO payload) ---
+    // TensorDesc carries shape as i64 values. The 2D block IO payload
+    // expects baseWidth in bytes and baseHeight in elements.
+    Value shapeRow = descElems[descShape + rowDim]; // i64
+    Value shapeCol = descElems[descShape + colDim]; // i64
+    Value baseWidth =
+        b.trunc(i32_ty, b.mul(shapeCol, b.i64_val(elemSizeInBits / 8)));
+    Value baseHeight = b.trunc(i32_ty, shapeRow);
+
+    // --- Pitch (row stride in bytes) ---
+    // TODO: DescriptorStoreOp does not expose a "memory order" attribute, so
+    // we always use the row-major stride dimension. Once a memory order
+    // attribute is added, this should be adjusted.
+    Value strideForPitch = descElems[descStride + rowDim]; // i64
+    Value pitch =
+        b.trunc(i32_ty, b.mul(strideForPitch, b.i64_val(elemSizeInBits / 8)));
+
+    // --- Offsets ---
+    // Unlike block pointers which store offsets in the struct, tensor
+    // descriptors receive offsets via the indices operand.
+    auto indices = adaptor.getIndices();
+    SmallVector<Value> baseOffsets(indices.begin(), indices.end());
+
+    // --- Get the LLVM values for store values ---
+    SmallVector<Value> valElems =
+        unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    assert(valElems.size() == numElems &&
+           "the number of store values does not match the number of elements");
+
+    // Although the getBlockTileShape makes sure there is no duplication within
+    // a warp, we still need to deduplicate across warps and blocks.
+    const llvm::MapVector<StringAttr, int> &freeVarMasks =
+        getFreeVariableMasks(tensorType);
+    Value threadPred =
+        emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
+
+    unsigned threadsPerWarp =
+        TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>());
+
+    Type packedType = IntegerType::get(ctx, packedElemSizeInBits);
+    unsigned numPackedElemsPerStore = (tileHeight * tileWidth) / threadsPerWarp;
+    Type store2DGenXType =
+        LLVM::getVectorType(packedType, numPackedElemsPerStore);
+    unsigned numElemsPerStore = numPackedElemsPerStore * numPackedVals;
+    Type store2DComposeType = LLVM::getVectorType(eltTy, numElemsPerStore);
+
+    StringAttr kRegister = str_attr("register");
+    StringAttr kLane = str_attr("lane");
+    StringAttr kWarp = str_attr("warp");
+    StringAttr kBlock = str_attr("block");
+
+    assert(regPackedBases.has_value() &&
+           "invalid register bases for packing elems.");
+    std::vector<std::vector<int>> bases(regPackedBases->size());
+    llvm::transform(*regPackedBases, bases.begin(),
+                    [](int base) { return std::vector<int>{base}; });
+    LinearLayout regMapping({{kRegister, bases}},
+                            {{kRegister, llEncoding->getInDimSize(kRegister)}},
+                            /*requireSurjective=*/true);
+
+    // --- Emit 2D block stores ---
+    for (size_t valIdx = 0; valIdx < numElems; valIdx += numElemsPerStore) {
+      unsigned registerIdx = regMapping.apply({{kRegister, valIdx}})[0].second;
+
+      auto offsets = applyLinearLayout(loc, rewriter, *llEncoding,
+                                       {{kRegister, b.i32_val(registerIdx)},
+                                        {kLane, b.i32_val(0)},
+                                        {kWarp, warpId},
+                                        {kBlock, b.i32_val(0)}});
+      assert(offsets.size() == 2 && "only support 2D tensor for now.");
+
+      Value addrElem = ptrElems[registerIdx];
+
+      // For tensor descriptors, we always have shape information and always
+      // perform boundary protection on all dimensions (unlike block pointers
+      // where boundaryCheck is user-specified).
+      Value offsetX = b.add(baseOffsets[colDim], offsets[colDim].second);
+      Value offsetY = b.add(baseOffsets[rowDim], offsets[rowDim].second);
+
+      // Tensor descriptors always encode full shape bounds, so we always
+      // use the descriptor's baseWidth/baseHeight for HW boundary
+      // protection (no need to expand or adjust like block pointers).
+      Value adjustedBaseWidth = baseWidth;
+      Value adjustedBaseHeight = baseHeight;
+
+      Value pred = threadPred;
+      if (pred) {
+        // We leverage the GPU block I/O hardware out-of-bound protection
+        // feature by setting the offset to an invalid value when 'pred'
+        // is false (the HW will not store out-of-bounds values).
+        offsetY = b.select(pred, offsetY, adjustedBaseHeight);
+      }
+
+      assert(numPackedVals > 0 && "numPackedVals should be greater than zero.");
+
+      // Compose the matrix by stacking the scalars into a vector.
+      Value storeVal = LLVM::UndefOp::create(rewriter, loc, store2DComposeType);
+      for (size_t i = 0; i < numElemsPerStore; ++i) {
+        unsigned registerIdx =
+            regMapping.apply({{kRegister, valIdx + i}})[0].second;
+        storeVal =
+            b.insert_element(storeVal, valElems[registerIdx], b.i32_val(i));
+      }
+      if (store2DComposeType != store2DGenXType)
+        storeVal = b.bitcast(storeVal, store2DGenXType);
+
+      auto newOp = TritonGEN::Matrix2DBlockStoreOp::create(
+          rewriter, loc, addrElem, adjustedBaseWidth, adjustedBaseHeight, pitch,
+          // offsetX was in terms of original elements. The 2D block IO requires
+          // offsetX to be in terms of packed elements.
+          b.udiv(offsetX, b.i32_val(numPackedVals)), offsetY,
+          packedElemSizeInBits, tileWidth, tileHeight,
+          /*v_blocks, only 1 supported*/ 1, storeVal);
+
+      if (failed(newOp.verify())) {
+        // Delete the op so that the verifier will not abort the pass
+        // pipeline later, as we can fail this path and try a different
+        // approach.
+        rewriter.eraseOp(newOp);
+        return failure();
+      }
+    }
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 struct StoreOpToBlockIOConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::StoreOp>,
       public BlockIOConversionBase {
@@ -3228,9 +3721,10 @@ struct StoreOpToBlockIOConversion
   StoreOpToBlockIOConversion(
       LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
+      triton::intel::ModuleStrideAnalysis &strideAnalysis,
       PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::StoreOp>(converter, benefit),
-        BlockIOConversionBase(targetInfo, axisAnalysisPass) {}
+        BlockIOConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
 
   LogicalResult
   matchAndRewrite(triton::StoreOp op, OpAdaptor adaptor,
@@ -3504,9 +3998,10 @@ struct StoreOpConversion
   StoreOpConversion(
       LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
+      triton::intel::ModuleStrideAnalysis &strideAnalysis,
       PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::StoreOp>(converter, benefit),
-        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
 
   LogicalResult
   matchAndRewrite(triton::StoreOp op, OpAdaptor adaptor,
@@ -3658,10 +4153,11 @@ struct AtomicCASOpConversion
   AtomicCASOpConversion(
       LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
+      triton::intel::ModuleStrideAnalysis &strideAnalysis,
       PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::AtomicCASOp>(converter,
                                                              benefit),
-        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
 
   LogicalResult
   matchAndRewrite(triton::AtomicCASOp op, OpAdaptor adaptor,
@@ -3725,7 +4221,7 @@ struct AtomicCASOpConversion
                              mask ? mask : b.true_val(), {zero});
         ret = endBlock->getArgument(0);
       } else {
-        if (op.getResult().use_empty())
+        if (op.getResult().use_empty() && memSem != MemSemantic::RELAXED)
           TritonGEN::BarrierOp::create(rewriter, loc,
                                        TritonGEN::MemFence::GLOBAL);
 
@@ -3855,10 +4351,11 @@ struct AtomicRMWOpConversion
   AtomicRMWOpConversion(
       LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
+      triton::intel::ModuleStrideAnalysis &strideAnalysis,
       PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::AtomicRMWOp>(converter,
                                                              benefit),
-        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
 
   LogicalResult
   matchAndRewrite(triton::AtomicRMWOp op, OpAdaptor adaptor,
@@ -3956,7 +4453,7 @@ struct AtomicRMWOpConversion
             maybeAnd(rewriter, loc, b.true_val(), rmwMask), {zero});
         ret = endBlock->getArgument(0);
       } else {
-        if (op.getResult().use_empty())
+        if (op.getResult().use_empty() && memSem != MemSemantic::RELAXED)
           TritonGEN::BarrierOp::create(rewriter, loc,
                                        TritonGEN::MemFence::GLOBAL);
 
@@ -4111,13 +4608,17 @@ void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
     RewritePatternSet &patterns,
     const intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    PatternBenefit benefit) {
+    intel::ModuleStrideAnalysis &strideAnalysis, PatternBenefit benefit) {
+
   patterns.add<AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
                DescriptorLoadOpConversion, StoreOpConversion,
-               DescriptorStoreOpConversion, PrefetchOpConversion>(
-      typeConverter, targetInfo, axisInfoAnalysis, benefit);
+               DescriptorStoreOpConversion, PrefetchOpConversion,
+               DescriptorPrefetchOpConversion>(
+      typeConverter, targetInfo, axisInfoAnalysis, strideAnalysis, benefit);
   // BlockIO is more efficient than gather load or scatter store.
   patterns.add<LoadOpToBlockIOConversion, StoreOpToBlockIOConversion,
-               DescriptorLoadOpToBlockIOConversion>(
-      typeConverter, targetInfo, axisInfoAnalysis, benefit.getBenefit() + 2);
+               DescriptorLoadOpToBlockIOConversion,
+               DescriptorStoreOpToBlockIOConversion>(
+      typeConverter, targetInfo, axisInfoAnalysis, strideAnalysis,
+      benefit.getBenefit() + 2);
 }

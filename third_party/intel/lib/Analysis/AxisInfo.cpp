@@ -114,39 +114,28 @@ public:
     assert(isa<RankedTensorType>(op.getType()) ||
            rank == 1 && "Expected ranked tensor or scalar");
     assert(operands.size() == 2 && "Expected two operands");
-    AxisInfo::DimVectorT stride;
     AxisInfo::DimVectorT contiguity;
     AxisInfo::DimVectorT divisibility;
     AxisInfo::DimVectorT constancy;
     auto constantValue = getConstantValue(op, lhsInfo, rhsInfo);
     for (auto d = 0; d < rank; ++d) {
       if (constantValue.has_value()) {
-        stride.push_back(0);
         contiguity.push_back(1);
         constancy.push_back(
             std::max(lhsInfo.getConstancy(d), rhsInfo.getConstancy(d)));
         divisibility.push_back(
             highestPowOf2Divisor<int64_t>(constantValue.value()));
       } else {
-        stride.push_back(getStride(op, lhsInfo, rhsInfo, d));
         contiguity.push_back(getContiguity(op, lhsInfo, rhsInfo, d));
         constancy.push_back(getConstancy(op, lhsInfo, rhsInfo, d));
         divisibility.push_back(getDivisibility(op, lhsInfo, rhsInfo, d));
       }
     }
-    return AxisInfo(std::move(stride), std::move(contiguity),
-                    std::move(divisibility), std::move(constancy),
-                    constantValue);
+    return AxisInfo(std::move(contiguity), std::move(divisibility),
+                    std::move(constancy), constantValue);
   }
 
 protected:
-  virtual int64_t getStride(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
-                            int dim) {
-    if (getContiguity(op, lhs, rhs, dim) > 1)
-      return 1;
-    return -1;
-  }
-
   virtual int64_t getContiguity(OpTy op, const AxisInfo &lhs,
                                 const AxisInfo &rhs, int dim) {
     return 1;
@@ -288,7 +277,7 @@ public:
         value = intAttr.getValue().getSExtValue();
       else
         value = boolAttr.getValue() ? 1 : 0;
-      return AxisInfo(/*stride=*/{0}, /*contiguity=*/{1},
+      return AxisInfo(/*contiguity=*/{1},
                       /*divisibility=*/{highestPowOf2Divisor(value)},
                       /*constancy=*/{1},
                       /*knownConstantValue=*/{value});
@@ -304,7 +293,6 @@ public:
                                                  : apValue.getSExtValue();
       TensorType ty = cast<TensorType>(splatAttr.getType());
       return AxisInfo(
-          /*stride=*/AxisInfo::DimVectorT(ty.getRank(), 0),
           /*contiguity=*/AxisInfo::DimVectorT(ty.getRank(), 1),
           /*divisibility=*/
           AxisInfo::DimVectorT(ty.getRank(), highestPowOf2Divisor(value)),
@@ -349,15 +337,6 @@ public:
   using BinaryOpVisitorImpl<OpTy>::BinaryOpVisitorImpl;
 
 private:
-  int64_t getStride(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
-                    int dim) override {
-    if (lhs.getStride(dim) < 0 || rhs.getStride(dim) < 0)
-      return -1;
-    if (isa<arith::SubIOp>(op))
-      return std::max(lhs.getStride(dim) - rhs.getStride(dim), int64_t(-1));
-    return lhs.getStride(dim) + rhs.getStride(dim);
-  }
-
   int64_t getContiguity(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                         int dim) override {
     // Contiguity assumes an increasing sequence. So for SubIOp contiguous
@@ -428,25 +407,6 @@ public:
   using BinaryOpVisitorImpl<arith::MulIOp>::BinaryOpVisitorImpl;
 
 private:
-  int64_t getStride(arith::MulIOp op, const AxisInfo &lhs, const AxisInfo &rhs,
-                    int dim) override {
-    if (lhs.getStride(dim) > 0 && rhs.getConstantValue().has_value()) {
-      int64_t product = lhs.getStride(dim) * rhs.getConstantValue().value();
-      return product >= 0 ? product : -1;
-    }
-    if (rhs.getStride(dim) > 0 && lhs.getConstantValue().has_value()) {
-      int64_t product = lhs.getConstantValue().value() * rhs.getStride(dim);
-      return product >= 0 ? product : -1;
-    }
-    auto strideZero = [&](const AxisInfo axisInfo) {
-      return axisInfo.getConstantValue().has_value() ||
-             axisInfo.getStride(dim) == 0 || !isa<TensorType>(op.getType());
-    };
-    if (strideZero(lhs) && strideZero(rhs))
-      return 0;
-    return -1;
-  }
-
   int64_t getContiguity(arith::MulIOp op, const AxisInfo &lhs,
                         const AxisInfo &rhs, int dim) override {
     // lhs * 1 = lhs
@@ -499,20 +459,6 @@ public:
   using BinaryOpVisitorImpl<OpTy>::BinaryOpVisitorImpl;
 
 private:
-  int64_t getStride(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
-                    int dim) override {
-    if (getContiguity(op, lhs, rhs, dim) > 1)
-      return 1;
-    if (lhs.getStride(dim) > 0 && rhs.getConstantValue().has_value() &&
-        rhs.getConstantValue().value() > 0 &&
-        lhs.getStride(dim) % rhs.getConstantValue().value() == 0)
-      return lhs.getStride(dim) / rhs.getConstantValue().value();
-    if (lhs.getStride(dim) == 0 && rhs.getConstantValue().has_value() &&
-        rhs.getConstantValue().value() != 0)
-      return 0;
-    return -1;
-  }
-
   int64_t getContiguity(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                         int dim) override {
     // lhs / 1 = lhs
@@ -584,34 +530,6 @@ public:
   using BinaryOpVisitorImpl<OpTy>::BinaryOpVisitorImpl;
 
 private:
-  int64_t getStride(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
-                    int dim) override {
-    if (lhs.getStride(dim) == 0 && rhs.getStride(dim) == 0)
-      return 0;
-    if (lhs.getStride(dim) > 0 && rhs.getConstantValue().has_value()) {
-      int64_t modulus = rhs.getConstantValue().value();
-      // The first element of lhs (mod modulus) plus the range span must not
-      // cross a modulus boundary; otherwise wrap-around breaks the stride.
-      //   lhs = [3, 4, 5, 6] % 4:  3 + 3 >= 4  -> stride broken
-      //   lhs = [16, 17, 18, 19] % 4:  0 + 3 < 4  -> stride preserved
-      // The first element is some multiple of lhs.getDivisibility(dim), so
-      // (first % modulus) is a multiple of gcd(divisibility, modulus).  The
-      // worst case is modulus - gcd(divisibility, modulus), so we need:
-      //   maxVal < gcd(divisibility, modulus)
-      if (modulus > 0) {
-        auto resTy = ttgi::getRankedTensorType(op.getType());
-        if (resTy) {
-          int64_t dimSize = resTy.getDimSize(dim);
-          int64_t maxVal = lhs.getStride(dim) * (dimSize - 1);
-          int64_t g = std::gcd(lhs.getDivisibility(dim), modulus);
-          if (maxVal < g)
-            return lhs.getStride(dim);
-        }
-      }
-    }
-    return -1;
-  }
-
   int64_t getContiguity(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                         int dim) override {
     auto resTy = ttgi::getRankedTensorType(op.getType());
@@ -690,18 +608,16 @@ public:
     Type _retTy = *op->result_type_begin();
     TensorType retTy = cast<TensorType>(_retTy);
     AxisInfo opInfo = operands[0]->getValue();
-    AxisInfo::DimVectorT stride;
     AxisInfo::DimVectorT contiguity;
     AxisInfo::DimVectorT divisibility;
     AxisInfo::DimVectorT constancy;
     for (int d = 0; d < retTy.getRank(); ++d) {
-      stride.push_back(0);
       contiguity.push_back(1);
       divisibility.push_back(opInfo.getDivisibility(0));
       constancy.push_back(retTy.getShape()[d]);
     }
-    return AxisInfo(std::move(stride), std::move(contiguity),
-                    std::move(divisibility), std::move(constancy),
+    return AxisInfo(std::move(contiguity), std::move(divisibility),
+                    std::move(constancy),
                     operands[0]->getValue().getConstantValue());
   }
 };
@@ -746,7 +662,6 @@ public:
   getAxisInfo(triton::ExpandDimsOp op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
     AxisInfo opInfo = operands[0]->getValue();
-    AxisInfo::DimVectorT stride = opInfo.getStride();
     AxisInfo::DimVectorT contiguity = opInfo.getContiguity();
     AxisInfo::DimVectorT divisibility = opInfo.getDivisibility();
     AxisInfo::DimVectorT constancy = opInfo.getConstancy();
@@ -765,12 +680,11 @@ public:
                 opInfo.getContiguity(d) > 1 ? 1 : opInfo.getDivisibility(d));
       }
     }
-    stride.insert(stride.begin() + op.getAxis(), 0);
     contiguity.insert(contiguity.begin() + op.getAxis(), 1);
     divisibility.insert(divisibility.begin() + op.getAxis(), newDivisibility);
     constancy.insert(constancy.begin() + op.getAxis(), 1);
-    return AxisInfo(std::move(stride), std::move(contiguity),
-                    std::move(divisibility), std::move(constancy),
+    return AxisInfo(std::move(contiguity), std::move(divisibility),
+                    std::move(constancy),
                     operands[0]->getValue().getConstantValue());
   }
 };
@@ -790,19 +704,17 @@ public:
     ArrayRef<int64_t> retShape = retTy.getShape();
     ArrayRef<int64_t> opShape = opTy.getShape();
     AxisInfo opInfo = operands[0]->getValue();
-    AxisInfo::DimVectorT stride;
     AxisInfo::DimVectorT contiguity;
     AxisInfo::DimVectorT divisibility;
     AxisInfo::DimVectorT constancy;
     for (int d = 0; d < retTy.getRank(); ++d) {
-      stride.push_back(opInfo.getStride(d));
       contiguity.push_back(opShape[d] == 1 ? 1 : opInfo.getContiguity(d));
       divisibility.push_back(opInfo.getDivisibility(d));
       constancy.push_back(opShape[d] == 1 ? retShape[d]
                                           : opInfo.getConstancy(d));
     }
-    return AxisInfo(std::move(stride), std::move(contiguity),
-                    std::move(divisibility), std::move(constancy),
+    return AxisInfo(std::move(contiguity), std::move(divisibility),
+                    std::move(constancy),
                     operands[0]->getValue().getConstantValue());
   }
 };
@@ -1211,11 +1123,8 @@ makeTensorPtrAxisInfo(ArrayRef<int64_t> blkShape, unsigned rank,
 
   int64_t ptrDivisibility = operands[0]->getValue().getDivisibility(0);
 
-  AxisInfo::DimVectorT stride, contiguity, constancy, divisibility;
+  AxisInfo::DimVectorT contiguity, constancy, divisibility;
   for (unsigned dim = 0; dim < rank; ++dim) {
-    stride.push_back(strideInfo[dim].getConstantValue().has_value()
-                         ? strideInfo[dim].getConstantValue().value()
-                         : -1);
     contiguity.push_back(strideInfo[dim].getConstantValue() == 1 ? blkShape[dim]
                                                                  : 1);
     // For 2-D tensors the divisibility of dim d is bounded by the stride of
@@ -1229,8 +1138,8 @@ makeTensorPtrAxisInfo(ArrayRef<int64_t> blkShape, unsigned rank,
     constancy.push_back(1);
   }
 
-  return AxisInfo(std::move(stride), std::move(contiguity),
-                  std::move(divisibility), std::move(constancy), std::nullopt);
+  return AxisInfo(std::move(contiguity), std::move(divisibility),
+                  std::move(constancy), std::nullopt);
 }
 
 class MakeTensorPtrOpAxisInfoVisitor final
@@ -1436,9 +1345,8 @@ LogicalResult AxisInfoAnalysis::visitOperation(
     auto vals = cast<DenseElementsAttr>(attr).getValues<int>();
     newConstancy = AxisInfo::DimVectorT(vals.begin(), vals.end());
   }
-  curr = AxisInfo(curr.getStride(), std::move(newContiguity),
-                  std::move(newDivisibility), std::move(newConstancy),
-                  curr.getConstantValue());
+  curr = AxisInfo(std::move(newContiguity), std::move(newDivisibility),
+                  std::move(newConstancy), curr.getConstantValue());
   // join all lattice elements
   for (auto *result : results)
     propagateIfChanged(result, result->join(curr));

@@ -1,4 +1,5 @@
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Utils/Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -9,17 +10,20 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include <algorithm>
 
 #define DEBUG_TYPE "triton-intel-tdesc-to-block-pointer"
 
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
+namespace ttgi = mlir::triton::gpu::intel;
 
 namespace mlir::triton::intel {
 #define GEN_PASS_DEF_TRITONINTELTENSORDESCTOBLOCKPOINTER
@@ -53,119 +57,229 @@ Attribute maybeGetDefaultBlockedEncoding(Operation *op,
       ttg::lookupThreadsPerWarp(builder), ttg::lookupNumCTAs(builder));
 }
 
-// Recursively collect all encodings from DescriptorLoadOp/DescriptorStoreOp
-// users, following through loop arguments and other passthrough operations.
-void collectEncodingsFromUsers(Value value, SmallPtrSetImpl<Value> &visited,
-                               llvm::SetVector<Attribute> &encodings) {
+// Collect all descriptor memory operations reachable from
+// `value`, and record whether each load/store is reached through if/select
+// control flow.
+//
+// A descriptor use is marked `true` in `users` if at least one path from the
+// source descriptor to that use goes through if/select.
+void collectDescriptorLoadStoreUsers(
+    Value value, SmallPtrSetImpl<Value> &visitedNoIfSelect,
+    SmallPtrSetImpl<Value> &visitedWithIfSelect,
+    llvm::MapVector<Operation *, bool> &users, bool throughIfSelect = false) {
+  SmallPtrSetImpl<Value> &visited =
+      throughIfSelect ? visitedWithIfSelect : visitedNoIfSelect;
   if (!visited.insert(value).second)
     return;
 
   for (Operation *user : value.getUsers()) {
-    // Direct load/store user.
-    if (auto loadOp = dyn_cast<tt::DescriptorLoadOp>(user)) {
-      if (auto encoding =
-              cast<RankedTensorType>(loadOp.getType()).getEncoding())
-        encodings.insert(encoding);
+    if (isa<tt::DescriptorLoadOp, tt::DescriptorStoreOp,
+            ttgi::DescriptorPrefetchOp>(user)) {
+      users[user] = users.lookup(user) || throughIfSelect;
       continue;
     }
-    if (auto storeOp = dyn_cast<tt::DescriptorStoreOp>(user)) {
-      if (auto encoding =
-              cast<RankedTensorType>(storeOp.getSrc().getType()).getEncoding())
-        encodings.insert(encoding);
-      continue;
-    }
-
-    // Follow through loop arguments.
     if (auto forOp = dyn_cast<scf::ForOp>(user)) {
       for (auto [initArg, regionArg] :
-           llvm::zip(forOp.getInitArgs(), forOp.getRegionIterArgs())) {
+           llvm::zip(forOp.getInitArgs(), forOp.getRegionIterArgs()))
         if (initArg == value)
-          collectEncodingsFromUsers(regionArg, visited, encodings);
-      }
+          collectDescriptorLoadStoreUsers(regionArg, visitedNoIfSelect,
+                                          visitedWithIfSelect, users,
+                                          throughIfSelect);
       continue;
     }
     if (auto whileOp = dyn_cast<scf::WhileOp>(user)) {
       for (auto [initArg, beforeArg] :
-           llvm::zip(whileOp.getInits(), whileOp.getBeforeArguments())) {
+           llvm::zip(whileOp.getInits(), whileOp.getBeforeArguments()))
         if (initArg == value)
-          collectEncodingsFromUsers(beforeArg, visited, encodings);
-      }
+          collectDescriptorLoadStoreUsers(beforeArg, visitedNoIfSelect,
+                                          visitedWithIfSelect, users,
+                                          throughIfSelect);
       continue;
     }
-
-    // Follow through scf.condition to while's "after" region args.
     if (auto conditionOp = dyn_cast<scf::ConditionOp>(user)) {
-      if (auto whileOp = dyn_cast<scf::WhileOp>(conditionOp->getParentOp())) {
+      if (auto whileOp = dyn_cast<scf::WhileOp>(conditionOp->getParentOp()))
         for (auto [condArg, afterArg] :
-             llvm::zip(conditionOp.getArgs(), whileOp.getAfterArguments())) {
+             llvm::zip(conditionOp.getArgs(), whileOp.getAfterArguments()))
           if (condArg == value)
-            collectEncodingsFromUsers(afterArg, visited, encodings);
-        }
-      }
+            collectDescriptorLoadStoreUsers(afterArg, visitedNoIfSelect,
+                                            visitedWithIfSelect, users,
+                                            throughIfSelect);
       continue;
     }
-
-    // Follow through yield to loop results and back to region iter args.
     if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
       if (auto forOp = dyn_cast<scf::ForOp>(yieldOp->getParentOp())) {
         for (auto [yieldedVal, result, regionArg] :
              llvm::zip(yieldOp.getOperands(), forOp.getResults(),
-                       forOp.getRegionIterArgs())) {
+                       forOp.getRegionIterArgs()))
           if (yieldedVal == value) {
-            collectEncodingsFromUsers(result, visited, encodings);
-            collectEncodingsFromUsers(regionArg, visited, encodings);
+            collectDescriptorLoadStoreUsers(result, visitedNoIfSelect,
+                                            visitedWithIfSelect, users,
+                                            throughIfSelect);
+            collectDescriptorLoadStoreUsers(regionArg, visitedNoIfSelect,
+                                            visitedWithIfSelect, users,
+                                            throughIfSelect);
           }
-        }
       } else if (auto whileOp =
                      dyn_cast<scf::WhileOp>(yieldOp->getParentOp())) {
-        // Yield in while's "after" region goes back to "before" region args
-        // and to loop results.
         for (auto [yieldedVal, result, beforeArg] :
              llvm::zip(yieldOp.getOperands(), whileOp.getResults(),
-                       whileOp.getBeforeArguments())) {
+                       whileOp.getBeforeArguments()))
           if (yieldedVal == value) {
-            collectEncodingsFromUsers(result, visited, encodings);
-            collectEncodingsFromUsers(beforeArg, visited, encodings);
+            collectDescriptorLoadStoreUsers(result, visitedNoIfSelect,
+                                            visitedWithIfSelect, users,
+                                            throughIfSelect);
+            collectDescriptorLoadStoreUsers(beforeArg, visitedNoIfSelect,
+                                            visitedWithIfSelect, users,
+                                            throughIfSelect);
           }
-        }
-      } else if (auto ifOp = dyn_cast<scf::IfOp>(yieldOp->getParentOp())) {
-        // Yield in if's then/else region goes to the if's results.
+      } else if (isa<scf::IfOp>(yieldOp->getParentOp())) {
+        auto ifOp = cast<scf::IfOp>(yieldOp->getParentOp());
         for (auto [yieldedVal, result] :
-             llvm::zip(yieldOp.getOperands(), ifOp.getResults())) {
+             llvm::zip(yieldOp.getOperands(), ifOp.getResults()))
           if (yieldedVal == value)
-            collectEncodingsFromUsers(result, visited, encodings);
-        }
+            collectDescriptorLoadStoreUsers(result, visitedNoIfSelect,
+                                            visitedWithIfSelect, users,
+                                            /*throughIfSelect=*/true);
       }
       continue;
     }
-
-    // Follow through select op.
     if (auto selectOp = dyn_cast<arith::SelectOp>(user)) {
-      collectEncodingsFromUsers(selectOp.getResult(), visited, encodings);
+      collectDescriptorLoadStoreUsers(selectOp.getResult(), visitedNoIfSelect,
+                                      visitedWithIfSelect, users,
+                                      /*throughIfSelect=*/true);
       continue;
     }
   }
 }
 
-// Find the single encoding from all users of a value.
-// Asserts if multiple different encodings are found.
-Attribute findEncodingFromUsers(Value value) {
-  SmallPtrSet<Value, 8> visited;
-  llvm::SetVector<Attribute> encodings;
-  collectEncodingsFromUsers(value, visited, encodings);
+// Represents the three possible ttig.block_io attribute values.
+enum class BlockIOMode { None, RowMajor, ColumnMajor };
 
-  assert(encodings.size() <= 1 &&
-         "MakeTensorDescOp with multiple encodings is not yet supported");
-  return encodings.empty() ? Attribute() : encodings.front();
+struct DescriptorUserInfo {
+  Attribute encoding;
+  BlockIOMode blockIOMode = BlockIOMode::None;
+};
+
+// For each MakeTensorDescOp whose load/store users have more than one distinct
+// (encoding, blockIOMode) combination, clone the descriptor once per extra
+// combination and redirect those users' descriptor operand (operand 0) to the
+// appropriate clone. Afterwards every MakeTensorDescOp has at most one encoding
+// and one access pattern (None/RowMajor/ColumnMajor) across all its users.
+//
+// Returns a map from each descriptor (originals and clones) to its
+// DescriptorUserInfo (encoding + blockIOMode), so callers avoid re-traversal.
+//
+// For uses that flow through loops/yields (but not if/select) we replace
+// operand 0 of the load/store directly. This is valid only for direct uses and
+// loop-threaded uses because TensorDescType is immutable – the base pointer,
+// shape and strides recorded in the descriptor do not change across loop
+// iterations.
+//
+// For users reached through if/select operations, the descriptor is not cloned
+// to avoid breaking control flow semantics. Such descriptors can only have a
+// single encoding across all their users.
+DenseMap<tt::MakeTensorDescOp, DescriptorUserInfo>
+splitDescriptorsByUserInfo(ModuleOp moduleOp) {
+  DenseMap<tt::MakeTensorDescOp, DescriptorUserInfo> descToInfo;
+
+  SmallVector<tt::MakeTensorDescOp> descOps;
+  moduleOp->walk([&](tt::MakeTensorDescOp op) { descOps.push_back(op); });
+
+  for (tt::MakeTensorDescOp descOp : descOps) {
+    // Collect all reachable descriptor load/store users in one traversal and
+    // record whether each user is reached through if/select.
+    llvm::MapVector<Operation *, bool> loadStoreUsers;
+    SmallPtrSet<Value, 8> visitedNoIfSelect;
+    SmallPtrSet<Value, 8> visitedWithIfSelect;
+    collectDescriptorLoadStoreUsers(descOp.getResult(), visitedNoIfSelect,
+                                    visitedWithIfSelect, loadStoreUsers);
+
+    auto getBlockIOMode = [](Operation *userOp) {
+      if (auto attr = userOp->getAttrOfType<StringAttr>(
+              ttgi::TritonIntelGPUDialect::getBlockIOAttrName())) {
+        if (attr.getValue() == "column_major")
+          return BlockIOMode::ColumnMajor;
+        if (attr.getValue() == "row_major")
+          return BlockIOMode::RowMajor;
+      }
+      return BlockIOMode::None;
+    };
+
+    // Group users by (encoding, blockIOMode) so each clone has a uniform
+    // layout and access pattern.
+    using UserGroupKey = std::pair<Attribute, BlockIOMode>;
+    llvm::MapVector<UserGroupKey, SmallVector<Operation *>> groupedUsers;
+    for (auto &[userOp, reachedThroughIfSelect] : loadStoreUsers) {
+      (void)reachedThroughIfSelect;
+      Attribute encoding;
+      if (auto loadOp = dyn_cast<tt::DescriptorLoadOp>(userOp))
+        encoding = cast<RankedTensorType>(loadOp.getType()).getEncoding();
+      else if (auto storeOp = dyn_cast<tt::DescriptorStoreOp>(userOp))
+        encoding =
+            cast<RankedTensorType>(storeOp.getSrc().getType()).getEncoding();
+      else if (auto prefetchOp = dyn_cast<ttgi::DescriptorPrefetchOp>(userOp))
+        encoding = cast<tt::TensorDescType>(prefetchOp.getDesc().getType())
+                       .getBlockType()
+                       .getEncoding();
+      BlockIOMode blockIOMode = getBlockIOMode(userOp);
+      groupedUsers[{encoding, blockIOMode}].push_back(userOp);
+    }
+
+    if (groupedUsers.size() <= 1) {
+      descToInfo[descOp] =
+          groupedUsers.empty()
+              ? DescriptorUserInfo{}
+              : DescriptorUserInfo{groupedUsers.front().first.first,
+                                   groupedUsers.front().first.second};
+      continue;
+    }
+
+    // Multiple groups: keep the first on the original, clone for the rest.
+    OpBuilder builder(descOp.getContext());
+    builder.setInsertionPointAfter(descOp);
+    bool isFirst = true;
+    for (auto &[groupKey, ops] : groupedUsers) {
+      DescriptorUserInfo info{groupKey.first, groupKey.second};
+      if (isFirst) {
+        descToInfo[descOp] = info;
+        isFirst = false;
+        continue;
+      }
+
+      // Check if any of these ops are only reachable through if/select.
+      // If so, we cannot safely clone the descriptor.
+      bool hasIfSelectUsers = false;
+      for (Operation *op : ops) {
+        if (loadStoreUsers.lookup(op)) {
+          hasIfSelectUsers = true;
+          break;
+        }
+      }
+      assert(!hasIfSelectUsers && "FIXME: Support TensorDescOp with multiple "
+                                  "encodings that flow through if/select.");
+
+      auto clone = cast<tt::MakeTensorDescOp>(builder.clone(*descOp));
+      descToInfo[clone] = info;
+      for (Operation *userOp : ops) {
+        if (auto loadOp = dyn_cast<tt::DescriptorLoadOp>(userOp))
+          loadOp.getDescMutable().assign(clone.getResult());
+        else if (auto storeOp = dyn_cast<tt::DescriptorStoreOp>(userOp))
+          storeOp.getDescMutable().assign(clone.getResult());
+        else if (auto prefetchOp = dyn_cast<ttgi::DescriptorPrefetchOp>(userOp))
+          prefetchOp.getDescMutable().assign(clone.getResult());
+      }
+    }
+  }
+
+  return descToInfo;
 }
 
-// Find and adjust encoding for a tensor descriptor operation.
-// The encoding is found from DescriptorLoad/Store users. If the layout rank
-// differs from the tensor rank (e.g., rank-reducing loads), the encoding is
-// adjusted by adding batch dimensions with size 1.
-Attribute findEncodingForTensorDesc(tt::MakeTensorDescOp op) {
-  auto layout = dyn_cast_or_null<ttg::LayoutEncodingTrait>(
-      findEncodingFromUsers(op.getResult()));
+// Adjust the encoding for a tensor descriptor operation.
+// If the layout rank differs from the tensor rank (e.g., rank-reducing loads),
+// the encoding is adjusted by adding batch dimensions with size 1.
+Attribute findEncodingForTensorDesc(tt::MakeTensorDescOp op,
+                                    Attribute encoding) {
+  auto layout = dyn_cast_or_null<ttg::LayoutEncodingTrait>(encoding);
   if (!layout)
     return layout;
 
@@ -239,6 +353,11 @@ public:
   void runOnOperation() final {
     ModuleOp moduleOp = getOperation();
 
+    // Ensure every MakeTensorDescOp has a single descriptor user info across
+    // all its load/store users before the main rewriting walk, and record each
+    // descriptor's user info to avoid re-traversing during rewriting.
+    descToUserInfo = splitDescriptorsByUserInfo(moduleOp);
+
     moduleOp->walk<WalkOrder::PreOrder>([&](tt::DescriptorLoadOp loadOp) {
       // Retrieve the padding option from the MakeTensorDescOp.
       std::optional<tt::MakeTensorDescOp> makeTensorDescOp =
@@ -266,6 +385,8 @@ public:
               [&](auto loadOrStoreOp) {
                 rewriteDescriptorLoadOrStoreOp(loadOrStoreOp);
               })
+          .Case<ttgi::DescriptorPrefetchOp>(
+              [&](auto prefetchOp) { rewriteDescriptorPrefetchOp(prefetchOp); })
           .Default([&](auto) {});
       return WalkResult::advance();
     });
@@ -284,17 +405,34 @@ public:
   }
 
 private:
+  // Maps each MakeTensorDescOp to descriptor user information.
+  // Populated by splitDescriptorsByUserInfo at the start of runOnOperation.
+  DenseMap<tt::MakeTensorDescOp, DescriptorUserInfo> descToUserInfo;
+
   // Create a new block pointer if a suitable one doesn't already exist.
   // Otherwise, return the existing one. The function takes the base, shape,
   // strides, offsets, sizes of the block pointer to create/lookup and its
   // tensor element type (to ensure the block pointer has the tensor layout).
+  // For column_major descriptors, the shape and strides are swapped.
   tt::MakeTensorPtrOp
   findOrCreateMakeTensorPtr(Location loc, Value base, ValueRange shape,
                             ValueRange strides, ValueRange offsets,
                             ArrayRef<int64_t> sizes, Attribute layout,
-                            OpBuilder &builder) {
+                            OpBuilder &builder, bool isColumnMajor) {
     Block *block = builder.getInsertionBlock();
     const Block::iterator insertPoint = builder.getInsertionPoint();
+
+    // For column_major, swap the order of shape and strides
+    SmallVector<Value> swappedShape, swappedStrides;
+    swappedShape.assign(shape.begin(), shape.end());
+    swappedStrides.assign(strides.begin(), strides.end());
+    SmallVector<int64_t> tensorPtrSizes(sizes.begin(), sizes.end());
+    if (isColumnMajor) {
+      std::reverse(swappedShape.begin(), swappedShape.end());
+      std::reverse(swappedStrides.begin(), swappedStrides.end());
+      std::reverse(tensorPtrSizes.begin(), tensorPtrSizes.end());
+    }
+
     auto it = std::find_if(block->begin(), insertPoint, [&](Operation &op) {
       if (auto makeTensorPtrOp = dyn_cast<tt::MakeTensorPtrOp>(op)) {
         triton::PointerType resType = makeTensorPtrOp.getResult().getType();
@@ -308,10 +446,10 @@ private:
         };
 
         return makeTensorPtrOp.getBase() == base &&
-               makeTensorPtrOp.getShape() == shape &&
-               makeTensorPtrOp.getStrides() == strides &&
+               makeTensorPtrOp.getShape() == swappedShape &&
+               makeTensorPtrOp.getStrides() == swappedStrides &&
                makeTensorPtrOp.getOffsets() == offsets &&
-               sameShape(tensorType.getShape(), sizes) &&
+               sameShape(tensorType.getShape(), tensorPtrSizes) &&
                tensorType.getEncoding() == layout;
       }
       return false;
@@ -319,13 +457,16 @@ private:
 
     auto makeTensorPtrOp = [&]() {
       auto pointerType = cast<tt::PointerType>(base.getType());
-      auto tensorType =
-          RankedTensorType::get(sizes, pointerType.getPointeeType(), layout);
+      auto tensorType = RankedTensorType::get(
+          tensorPtrSizes, pointerType.getPointeeType(), layout);
       auto tensorPtrType =
           tt::PointerType::get(tensorType, pointerType.getAddressSpace());
+      // For column_major, use order {0, 1} instead of {1, 0}
+      auto order = isColumnMajor ? builder.getDenseI32ArrayAttr({0, 1})
+                                 : builder.getDenseI32ArrayAttr({1, 0});
       auto makeTensorPtr = tt::MakeTensorPtrOp::create(
-          builder, loc, tensorPtrType, base, shape, strides, offsets,
-          builder.getDenseI32ArrayAttr({1, 0}));
+          builder, loc, tensorPtrType, base, swappedShape, swappedStrides,
+          offsets, order);
       return makeTensorPtr;
     };
 
@@ -395,9 +536,15 @@ private:
       sizes.push_back(size);
     }
 
-    Attribute layout = findEncodingForTensorDesc(op);
-    auto tensorPtr = findOrCreateMakeTensorPtr(
-        loc, op.getBase(), shapes, strides, offsets, sizes, layout, builder);
+    auto userInfoIt = descToUserInfo.find(op);
+    assert(userInfoIt != descToUserInfo.end() &&
+           "Expected descriptor user info for MakeTensorDescOp");
+    DescriptorUserInfo userInfo = userInfoIt->second;
+    Attribute layout = findEncodingForTensorDesc(op, userInfo.encoding);
+    bool isColumnMajor = userInfo.blockIOMode == BlockIOMode::ColumnMajor;
+    auto tensorPtr =
+        findOrCreateMakeTensorPtr(loc, op.getBase(), shapes, strides, offsets,
+                                  sizes, layout, builder, isColumnMajor);
     LLVM_DEBUG({
       llvm::dbgs() << "With:\n";
       llvm::dbgs().indent(2) << tensorPtr << "\n";
@@ -442,8 +589,17 @@ private:
             opTensorType.getEncoding() == descTensorType.getEncoding()) &&
            "Expecting the same encoding");
 
-    Value ptr =
-        tt::AdvanceOp::create(builder, loc, ptrType, operand, op.getIndices());
+    // For column_major loads, reverse the indices to match the swapped
+    // shape/strides ordering in the block pointer.
+    SmallVector<Value> indices(op.getIndices().begin(), op.getIndices().end());
+    if (StringAttr blockIOAttr = op->template getAttrOfType<StringAttr>(
+            ttgi::TritonIntelGPUDialect::getBlockIOAttrName());
+        blockIOAttr && blockIOAttr.getValue() == "column_major") {
+      assert(isLoad && "Expecting column_major access pattern only on loads");
+      std::reverse(indices.begin(), indices.end());
+    }
+
+    Value ptr = tt::AdvanceOp::create(builder, loc, ptrType, operand, indices);
 
     SmallVector<int32_t> boundaryCheck;
     for (size_t i = 0; i < descTensorType.getRank(); ++i)
@@ -493,6 +649,36 @@ private:
       LLVM_DEBUG(llvm::dbgs().indent(2) << storeOp << "\n");
     }
 
+    cleanUp.insert(op);
+  }
+
+  void rewriteDescriptorPrefetchOp(ttgi::DescriptorPrefetchOp op) {
+    assert(op && "Expecting a valid operation");
+
+    LLVM_DEBUG(llvm::dbgs() << "Rewriting: " << op << "\n");
+
+    OpBuilder builder(op);
+    Location loc = op.getLoc();
+    Value operand = op.getOperand(0);
+    assert(triton::isTensorPointerType(operand.getType()) &&
+           "Expecting a block ptr");
+    auto ptrType = cast<tt::PointerType>(operand.getType());
+
+    SmallVector<Value> indices(op.getIndices().begin(), op.getIndices().end());
+    if (StringAttr blockIOAttr = op->getAttrOfType<StringAttr>(
+            ttgi::TritonIntelGPUDialect::getBlockIOAttrName());
+        blockIOAttr && blockIOAttr.getValue() == "column_major") {
+      std::reverse(indices.begin(), indices.end());
+    }
+
+    Value ptr = tt::AdvanceOp::create(builder, loc, ptrType, operand, indices);
+    auto prefetchOp = ttgi::PrefetchOp::create(builder, loc, ptr, op.getCache(),
+                                               op.getEvict(),
+                                               /*isVolatile=*/false);
+    for (auto attr : op->getDiscardableAttrs())
+      prefetchOp->setDiscardableAttr(attr.getName(), attr.getValue());
+
+    LLVM_DEBUG(llvm::dbgs().indent(2) << prefetchOp << "\n");
     cleanUp.insert(op);
   }
 
