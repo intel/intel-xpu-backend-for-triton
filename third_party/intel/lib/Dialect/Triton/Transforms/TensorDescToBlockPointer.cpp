@@ -197,10 +197,12 @@ splitDescriptorsByUserInfo(ModuleOp moduleOp) {
     auto getBlockIOMode = [](Operation *userOp) {
       if (auto attr = userOp->getAttrOfType<StringAttr>(
               ttgi::TritonIntelGPUDialect::getBlockIOAttrName())) {
-        if (attr.getValue() == "column_major")
-          return BlockIOMode::ColumnMajor;
-        if (attr.getValue() == "row_major")
-          return BlockIOMode::RowMajor;
+        if (auto mode = ttgi::symbolizeBlockIOMode(attr.getValue())) {
+          if (*mode == ttgi::BlockIOMode::ColumnMajor)
+            return BlockIOMode::ColumnMajor;
+          if (*mode == ttgi::BlockIOMode::RowMajor)
+            return BlockIOMode::RowMajor;
+        }
       }
       return BlockIOMode::None;
     };
@@ -594,7 +596,8 @@ private:
     SmallVector<Value> indices(op.getIndices().begin(), op.getIndices().end());
     if (StringAttr blockIOAttr = op->template getAttrOfType<StringAttr>(
             ttgi::TritonIntelGPUDialect::getBlockIOAttrName());
-        blockIOAttr && blockIOAttr.getValue() == "column_major") {
+        blockIOAttr && ttgi::symbolizeBlockIOMode(blockIOAttr.getValue()) ==
+                           ttgi::BlockIOMode::ColumnMajor) {
       assert(isLoad && "Expecting column_major access pattern only on loads");
       std::reverse(indices.begin(), indices.end());
     }
