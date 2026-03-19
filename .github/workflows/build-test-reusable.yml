@@ -194,7 +194,7 @@ jobs:
       matrix:
         suite:
           - triton-kernels
-    timeout-minutes: 720
+    timeout-minutes: 360
     runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
     defaults:
       run:
