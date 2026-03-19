@@ -597,7 +597,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
   }
   // CHECK-LABEL: fuseDescriptorLoadWithTrans_rank3
   // COM: Descriptor B shape is unchanged -- still <tensor<2x64x32xf16>>.
-  // CHECK: tt.make_tensor_descriptor %arg1 {{.*}} <tensor<2x64x32xf16>>
+  // CHECK: tt.make_tensor_descriptor %arg1{{.*}}<tensor<2x64x32xf16>>
   // COM: The descriptor_load now produces the transposed result directly with column_major.
   // CHECK: tt.descriptor_load {{.*}} {ttig.block_io = "column_major"} : !tt.tensordesc<tensor<2x64x32xf16>> -> tensor<2x32x64xf16>
   // CHECK-NOT: tt.trans
