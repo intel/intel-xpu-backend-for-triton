@@ -35,8 +35,7 @@ on:
         default: ""
 
   schedule:
-    # About midnight PST (UTC-8)
-    - cron: "5 10 * * *"
+    - cron: "0 9 * * *"
 
 permissions: read-all
 
