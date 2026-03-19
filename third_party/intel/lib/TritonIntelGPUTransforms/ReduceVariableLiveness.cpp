@@ -113,7 +113,6 @@ bool isLoadCandidate(LoadOpT loadOp, Type expectedElementType,
       return false;
     loadSource = loadOp.getPtr();
   } else {
-    // TODO: Add DescriptorLoadOp-specific source type validation if needed.
     loadSource = loadOp.getDesc();
   }
   auto loadType = cast<RankedTensorType>(loadOp.getResult().getType());
@@ -165,9 +164,9 @@ void createPrefetchOp(LoadOpT loadOp) {
     auto attrs = loadOp->getAttrDictionary();
     prefetchOp->setAttrs(attrs);
   } else {
-    // TODO: Determine correct insertion point for DescriptorLoadOp prefetch.
-    OpBuilder builder(loadOp);
-    builder.setInsertionPoint(loadOp);
+    Operation *op = loadOp.getDesc().getDefiningOp();
+    OpBuilder builder(op);
+    builder.setInsertionPointAfter(op);
     auto prefetchOp = ttgi::DescriptorPrefetchOp::create(
         builder, loadOp->getLoc(), loadOp.getDesc(), loadOp.getIndices(),
         loadOp.getCache(), loadOp.getEvict());
