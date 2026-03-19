@@ -878,35 +878,15 @@ run_vllm_old_install() {
     cd vllm
     git checkout "$(<../benchmarks/vllm/vllm-pin.txt)"
     git apply ../benchmarks/vllm/vllm-fix.patch
-    sed -i 's/device="cuda"/device="xpu"/g' \
-      tests/kernels/moe/utils.py \
-      tests/kernels/moe/test_batched_moe.py \
-      tests/kernels/attention/test_triton_unified_attention.py
-
-    sed -i 's/set_default_device("cuda")/set_default_device("xpu")/g' \
-      tests/kernels/attention/test_triton_unified_attention.py
 
     cd ..
   fi
   # These files are neceassary for benchmarking runs
   cp -r vllm/tests benchmarks/vllm/batched_moe/tests
 
-  pip install -r vllm/requirements/xpu.txt
+  pip install -r vllm/requirements/cuda.txt
 
-  if [ -d "./vllm-xpu-kernels" ]; then
-    echo "WARNING: ./vllm-xpu-kernels directory already exists, installing from it."
-    echo $CLEAN_MSG
-  else
-    git clone https://github.com/vllm-project/vllm-xpu-kernels
-    cd vllm-xpu-kernels
-    git checkout "$(<../benchmarks/vllm/vllm-kernels-pin.txt)"
-    sed -i '/pytorch\|torch\|triton/d' requirements.txt
-    sed -i '/pytorch\|torch\|triton/d' pyproject.toml
-    pip install -r requirements.txt
-    cd ..
-  fi
-  VLLM_TARGET_DEVICE=xpu pip install --no-build-isolation -e vllm-xpu-kernels
-  VLLM_TARGET_DEVICE=xpu pip install --no-deps --no-build-isolation -e vllm
+  VLLM_TARGET_DEVICE=cuda pip install --no-deps --no-build-isolation -e vllm
 
   pip install cachetools cbor2 blake3 pybase64 openai_harmony tblib
 }
