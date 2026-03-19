@@ -260,7 +260,7 @@ def get_unified_attention_benchmark(
         # Skip triton providers if interpreter is used because if fails
         del supported_providers['triton']
 
-    providers = supported_provider
+    providers = supported_providers
     configs = ATTENTION_CONFIGS_FP8 if is_fp8 else ATTENTION_CONFIGS_BF16
 
     @benchmark_suite.perf_report(
@@ -339,13 +339,32 @@ def get_unified_attention_benchmark(
                 soft_cap=soft_cap,
             )
 
+        def _summarize_statistics(times, quantiles, return_mode):
+            times = torch.tensor(times, dtype=torch.float32)
+            if quantiles is not None:
+                ret = torch.quantile(times, torch.tensor(quantiles, dtype=torch.float)).tolist()
+                if times.numel() > 2:
+                    # exclude max and min times
+                    times = torch.sort(times).values[1:-1]
+                # add coefficient of the variance.
+                std = torch.std(times)
+                mean = torch.mean(times)
+                cv = std / mean
+                ret.extend([mean.tolist(), cv.tolist()])
+                if len(ret) == 1:
+                    ret = ret[0]
+                return ret
+            return getattr(torch, return_mode)(times).item()
+
         if provider == 'pytorch':
-            _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
+            times = benchmark_suite.do_bench(
                 torch_fn,
-                n_warmup=n_warmup,
-                n_repeat=10,
-                quantiles=quantiles,
+                warmup=n_warmup,
+                rep=10,
+                return_mode="all",
             )
+            _, min_ms, max_ms, mean_ms, cv = _summarize_statistics(times, quantiles, "mean")
+
 
         elif provider.startswith('triton'):
 
@@ -373,14 +392,15 @@ def get_unified_attention_benchmark(
             atol, rtol = 2.5e-2, 1e-2
             if qdtype is not None:
                 atol, rtol = 3 / 8 + 1e-6, 1.5e-1
-            benchmark_suite.assert_close(triton_fn, torch_fn, atol=atol, rtol=rtol, err_msg='triton to torch')
+            benchmark_suite.assert_close(triton_fn(), torch_fn(), atol=atol, rtol=rtol, err_msg='triton to torch')
 
-            _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
+            times = benchmark_suite.do_bench(
                 triton_fn,
-                n_warmup=n_warmup,
-                n_repeat=10,
-                quantiles=quantiles,
+                warmup=n_warmup,
+                rep=10,
+                return_mode="all",
             )
+            _, min_ms, max_ms, mean_ms, cv = _summarize_statistics(times, quantiles, "mean")
         else:
             raise NotImplementedError(f'Unsupported provider {provider}')
 
@@ -410,7 +430,7 @@ def get_unified_attention_benchmark(
                 total_flops += flops_per_head * q_heads
             return total_flops * (1e-12) / (ms * 1e-3)
 
-        return (gbps(mean_ms), gbps(max_ms), gbps(min_ms)), (tflops(mean_ms), tflops(max_ms), tflops(min_ms)), cv
+        return (gbps(mean_ms), gbps(max_ms), gbps(min_ms))#, (tflops(mean_ms), tflops(max_ms), tflops(min_ms)))#, cv
 
     return benchmark
 
