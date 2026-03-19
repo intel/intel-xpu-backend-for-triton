@@ -337,13 +337,14 @@ private:
       StringRef blockIOAttrName =
           ttgi::TritonIntelGPUDialect::getBlockIOAttrName();
       StringAttr attr = loadOp->getAttrOfType<StringAttr>(blockIOAttrName);
-      StringAttr newAttr =
-          (attr == "row_major")
-              ? StringAttr::get(loadOp->getContext(), "column_major")
-          : (attr == "column_major")
-              ? StringAttr::get(loadOp->getContext(), "row_major")
-              : nullptr;
-      assert(newAttr && "Expecting a valid blockIO attribute");
+      std::optional<ttgi::BlockIOMode> mode =
+          ttgi::symbolizeBlockIOMode(attr.getValue());
+      assert(mode && "Expecting a valid blockIO attribute");
+      auto newMode = (*mode == ttgi::BlockIOMode::RowMajor)
+                         ? ttgi::BlockIOMode::ColumnMajor
+                         : ttgi::BlockIOMode::RowMajor;
+      auto newAttr = StringAttr::get(loadOp->getContext(),
+                                     ttgi::stringifyBlockIOMode(newMode));
 
       newLoadOp->setAttrs(loadOp->getAttrs());
       newLoadOp->setAttr(blockIOAttrName, newAttr);
@@ -475,7 +476,8 @@ private:
     StringRef blockIOAttrName =
         ttgi::TritonIntelGPUDialect::getBlockIOAttrName();
     StringAttr attr = descLoadOp->getAttrOfType<StringAttr>(blockIOAttrName);
-    if (!attr || attr != "row_major")
+    if (!attr || ttgi::symbolizeBlockIOMode(attr.getValue()) !=
+                     ttgi::BlockIOMode::RowMajor)
       return false;
 
     out.targetEncoding = targetEncoding;
@@ -525,10 +527,12 @@ private:
       if (attr.getName() != blockIOName)
         newLoad->setDiscardableAttr(attr.getName(), attr.getValue());
 
-    // Set block_io = "column_major": signals that the result type dimensions
+    // Set block_io = column_major: signals that the result type dimensions
     // are transposed relative to the descriptor's block shape dimensions.
     newLoad->setAttr(blockIOName,
-                     StringAttr::get(transOp.getContext(), "column_major"));
+                     StringAttr::get(transOp.getContext(),
+                                     ttgi::stringifyBlockIOMode(
+                                         ttgi::BlockIOMode::ColumnMajor)));
 
     // Replace uses and schedule cleanup.
     candidate.lastOpBeforeDot->replaceAllUsesWith(

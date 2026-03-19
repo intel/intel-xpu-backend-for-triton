@@ -91,6 +91,8 @@ static LogicalResult parseUInt(AsmParser &parser, const NamedAttribute &attr,
 #define GET_ATTRDEF_CLASSES
 #include "intel/include/Dialect/TritonIntelGPU/IR/TritonIntelGPUAttrDefs.cpp.inc"
 
+#include "intel/include/Dialect/TritonIntelGPU/IR/TritonIntelGPUEnums.cpp.inc"
+
 //===----------------------------------------------------------------------===//
 // DpasEncodingAttr
 //===----------------------------------------------------------------------===//
