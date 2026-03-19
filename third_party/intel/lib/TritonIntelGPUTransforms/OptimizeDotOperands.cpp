@@ -453,13 +453,13 @@ private:
     if (!targetEncoding || !isa<ttg::DotOperandEncodingAttr>(targetEncoding))
       return false;
 
-    // Source must be DescriptorLoadOp with single use and rank 2.
+    // Source must be DescriptorLoadOp with single use and rank >= 2.
     auto descLoadOp = dyn_cast_or_null<tt::DescriptorLoadOp>(
         transOp.getSrc().getDefiningOp());
     if (!descLoadOp || !descLoadOp->hasOneUse())
       return false;
 
-    if (cast<RankedTensorType>(descLoadOp.getType()).getRank() != 2)
+    if (cast<RankedTensorType>(descLoadOp.getType()).getRank() < 2)
       return false;
 
     // Must be able to find the defining MakeTensorDescOp.
@@ -502,7 +502,11 @@ private:
     // The descriptor is always row-major (stride-1 on last dim).
     auto descType = cast<tt::TensorDescType>(descLoadOp.getDesc().getType());
     RankedTensorType blockType = descType.getBlockType();
-    SmallVector<int64_t> transposedShape(llvm::reverse(blockType.getShape()));
+    ArrayRef<int64_t> origShape = blockType.getShape();
+    ArrayRef<int> perm = transOp.getOrder();
+    SmallVector<int64_t> transposedShape(origShape.size());
+    for (unsigned i = 0; i < origShape.size(); ++i)
+      transposedShape[i] = origShape[perm[i]];
 
     // Create new DescriptorLoadOp with transposed result type + target
     // encoding. The verifier allows result shape to differ from descriptor
