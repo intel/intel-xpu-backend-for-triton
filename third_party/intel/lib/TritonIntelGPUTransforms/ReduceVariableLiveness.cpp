@@ -185,10 +185,6 @@ bool optimizeDotOperands(scf::ForOp forOp, SmallVector<Value> &prefetchedValue,
   Block *loop = forOp.getBody();
   bool opMoved = false;
 
-  auto getEncoding = [](Value v) {
-    return cast<RankedTensorType>(v.getType()).getEncoding();
-  };
-
   // Returns the load-like operation that produces the value v, walking back
   // through ConvertLayoutOps. Returns nullptr if no LoadOp or
   // DescriptorLoadOp is found.
