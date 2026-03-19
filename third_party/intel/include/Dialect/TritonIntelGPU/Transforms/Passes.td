@@ -40,6 +40,27 @@ def TritonIntelGPUOptimizeDotOperands
                            "mlir::triton::gpu::TritonGPUDialect"];
 }
 
+def TritonIntelGPUHoistLayoutConversions
+    : Pass<"tritonintelgpu-hoist-layout-conversions", "mlir::ModuleOp"> {
+  let summary = "Hoist layout conversions out of loops";
+  let description = [{
+    Hoist `ttg.convert_layout` operations out of `scf.for` loops when the
+    destination encoding is `DotOperandEncodingAttr` and the source operand is
+    defined outside the loop. This keeps loop-invariant dot operand layout
+    conversions in registers, avoiding redundant conversion on every iteration.
+
+    Hoisting is only performed when the resulting register pressure (measured
+    via liveness analysis) stays within 80% of the GRF budget for the given
+    GRF mode.
+  }];
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
+
+  let options = [
+    Option<"grfMode", "grf-mode", "std::string", /*default*/"\"default\"",
+           "GRF mode (default, 128, 256, or auto)">,
+  ];
+}
+
 def TritonIntelGPUPipeline : Pass<"tritonintelgpu-pipeline", "mlir::ModuleOp"> {
   let summary = "Pipeline loops";
 
