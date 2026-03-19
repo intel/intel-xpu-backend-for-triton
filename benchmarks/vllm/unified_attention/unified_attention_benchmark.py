@@ -430,7 +430,7 @@ def get_unified_attention_benchmark(
                 total_flops += flops_per_head * q_heads
             return total_flops * (1e-12) / (ms * 1e-3)
 
-        return (gbps(mean_ms), gbps(max_ms), gbps(min_ms))#, (tflops(mean_ms), tflops(max_ms), tflops(min_ms)))#, cv
+        return (gbps(mean_ms), gbps(max_ms), gbps(min_ms))
 
     return benchmark
 

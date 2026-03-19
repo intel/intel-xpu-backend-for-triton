@@ -194,14 +194,32 @@ def get_batched_mm_benchmark(
                                                per_act_token_quant)
             return ref
 
+        def _summarize_statistics(times, quantiles, return_mode):
+            times = torch.tensor(times, dtype=torch.float32)
+            if quantiles is not None:
+                ret = torch.quantile(times, torch.tensor(quantiles, dtype=torch.float)).tolist()
+                if times.numel() > 2:
+                    # exclude max and min times
+                    times = torch.sort(times).values[1:-1]
+                # add coefficient of the variance.
+                std = torch.std(times)
+                mean = torch.mean(times)
+                cv = std / mean
+                ret.extend([mean.tolist(), cv.tolist()])
+                if len(ret) == 1:
+                    ret = ret[0]
+                return ret
+            return getattr(torch, return_mode)(times).item()
+
         if provider == 'pytorch':
             # PyTorch reference implementation using native_batched_masked_quant_matmul
-            _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
+            times = benchmark_suite.do_bench(
                 torch_fn,
                 n_warmup=n_warmup,
                 n_repeat=10,
                 quantiles=quantiles,
             )
+            _, min_ms, max_ms, mean_ms, cv = _summarize_statistics(times, quantiles, "mean")
 
         elif provider.startswith('triton'):
 
@@ -227,12 +245,13 @@ def get_batched_mm_benchmark(
 
             # Verify correctness against reference
             benchmark_suite.assert_close(triton_fn, torch_fn, atol=atol, rtol=rtol, err_msg='triton to torch')
-            _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
+            times = benchmark_suite.do_bench(
                 triton_fn,
                 n_warmup=n_warmup,
                 n_repeat=10,
                 quantiles=quantiles,
             )
+            _, min_ms, max_ms, mean_ms, cv = _summarize_statistics(times, quantiles, "mean")
 
         else:
             raise NotImplementedError(f'Unsupported provider {provider}')
@@ -260,7 +279,7 @@ def get_batched_mm_benchmark(
             total_flops = num_experts * max_tokens_per_expert * N * K * 2
             return total_flops * (1e-12) / (ms * 1e-3)
 
-        return (gbps(mean_ms), gbps(max_ms), gbps(min_ms)), (tflops(mean_ms), tflops(max_ms), tflops(min_ms)), cv
+        return (gbps(mean_ms), gbps(max_ms), gbps(min_ms))
 
     return benchmark
 
