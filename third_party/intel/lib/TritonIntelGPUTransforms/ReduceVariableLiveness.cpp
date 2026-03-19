@@ -307,6 +307,7 @@ bool optimizeDotOperands(scf::ForOp forOp, SmallVector<Value> &prefetchedValue,
   }
   return opMoved;
 }
+
 class ReduceVariableLivenessPass
     : public triton::gpu::intel::impl::TritonIntelGPUReduceVariableLivenessBase<
           ReduceVariableLivenessPass> {
