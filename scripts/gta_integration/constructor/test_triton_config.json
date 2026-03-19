@@ -13,13 +13,11 @@
     "third_party": "minicore",
     "tools": "minicore",
     "triton-kernels": "triton-kernels",
+    "tutorials": "tutorial",
     "warnings": "minicore"
   },
   "exclude": {
     "mxfp": "mxfp",
-    "scaled-dot": "scaled-dot",
-    "tutorial": "tutorial",
-    "tutorial-fa-64": "tutorial-fa-64",
-    "tutorial-fa-128-fwdfp8": "tutorial-fa-128-fwdfp8"
+    "scaled-dot": "scaled-dot"
   }
 }

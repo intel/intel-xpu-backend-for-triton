@@ -7,7 +7,7 @@ import triton_utils
 
 
 def normalize_key(raw_key: str) -> str:
-    return raw_key.replace("::", "__").replace("/", "_").replace(".", "___")
+    return raw_key.replace("::", "__").replace("/", "_").replace(".", "___").replace("[", "_").replace("]", "_")
 
 
 def main():
@@ -46,23 +46,31 @@ def main():
     print(report.summary_detailed)
     tests = list(report.tests)
     json_data = {}
-    # Remove this after the option to run tutorials as pytest tests will be added
-    tests.append(triton_utils.Test(testsuite="tutorials", testname="all_tutorials"))
+
     for test in tests:
-        json_data[normalize_key(f"{test.testsuite}__{test.testname}")] = {
-            "api": "L0",
-            "commandLine": f"run_triton_tests.sh --suite {test.testsuite} --test {test.testname}",
-            "validReturnCodes": [0],
-            "passRatesFunctionalCheck": True,
-            "passRatesRegex": {
-                "blockCount": "",
-                "errorCount": "",
-                "failCount": 'failed": (\\d+)',
-                "passCount": 'passed": (\\d+)',
-                "skipCount": "",
-                "totalCount": "",
-            },
-        }
+        if test.testsuite == "tutorials":
+            # Tutorials are individual pytest test cases (post PR #5997).
+            # Each Test may contain multiple test_cases (e.g. FA variants),
+            # so emit one metadata entry per test_case.
+            test_names = [tc.name for tc in test.test_cases]
+        else:
+            test_names = [test.testname]
+
+        for test_name in test_names:
+            json_data[normalize_key(f"{test.testsuite}__{test_name}")] = {
+                "api": "L0",
+                "commandLine": f"run_triton_tests.sh --suite {test.testsuite} --test {test_name}",
+                "validReturnCodes": [0],
+                "passRatesFunctionalCheck": True,
+                "passRatesRegex": {
+                    "blockCount": "",
+                    "errorCount": "",
+                    "failCount": 'failed": (\\d+)',
+                    "passCount": 'passed": (\\d+)',
+                    "skipCount": "",
+                    "totalCount": "",
+                },
+            }
     json_data["pytorch_tests"] = {
         "api": "L0",
         "commandLine": "run_pytorch_tests.sh",  # use --scripts.additional_cmd_args to select tests
