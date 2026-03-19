@@ -2,7 +2,7 @@
 
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
 // CHECK-LABEL:   llvm.func spir_kernelcc @prefetch_block_ptr(
-// CHECK-SAME:                                                %[[BASE:[0-9]+|[a-zA-Z$._-][a-zA-Z0-9$._-]*]]: !llvm.ptr<1>,
+// CHECK-SAME:                                                %[[BASE:[0-9]+|[a-zA-Z$._-][a-zA-Z0-9$._-]*]]: !llvm.ptr<1> {tt.pointee_type = f16},
 // CHECK-SAME:                                                %[[BASE_HEIGHT:[0-9]+|[a-zA-Z$._-][a-zA-Z0-9$._-]*]]: i64,
 // CHECK-SAME:                                                %[[BASE_WIDTH:[0-9]+|[a-zA-Z$._-][a-zA-Z0-9$._-]*]]: i64,
 // CHECK-SAME:                                                %[[ROW_STRIDE:[0-9]+|[a-zA-Z$._-][a-zA-Z0-9$._-]*]]: i64,
@@ -185,7 +185,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_2d_block_io, ttig.t
 
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_prefetch_256b} {
 // CHECK-LABEL:   llvm.func spir_kernelcc @prefetch_block_ptr(
-// CHECK-SAME:                                                %[[BASE:[0-9]+|[a-zA-Z$._-][a-zA-Z0-9$._-]*]]: !llvm.ptr<1>,
+// CHECK-SAME:                                                %[[BASE:[0-9]+|[a-zA-Z$._-][a-zA-Z0-9$._-]*]]: !llvm.ptr<1> {tt.pointee_type = f16},
 // CHECK-SAME:                                                %[[BASE_HEIGHT:[0-9]+|[a-zA-Z$._-][a-zA-Z0-9$._-]*]]: i64,
 // CHECK-SAME:                                                %[[BASE_WIDTH:[0-9]+|[a-zA-Z$._-][a-zA-Z0-9$._-]*]]: i64,
 // CHECK-SAME:                                                %[[ROW_STRIDE:[0-9]+|[a-zA-Z$._-][a-zA-Z0-9$._-]*]]: i64,
