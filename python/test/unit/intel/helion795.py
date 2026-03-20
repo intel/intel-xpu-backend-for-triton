@@ -26,26 +26,23 @@ def _helion_matmul(x, y, epilogue_closure_0, out, _BLOCK_SIZE_0: tl.constexpr, _
     offset_0 = pid_0 * _BLOCK_SIZE_0
     offset_1 = pid_1 * _BLOCK_SIZE_1
     acc = tl.full([_BLOCK_SIZE_0, _BLOCK_SIZE_1], 0.0, tl.float32)
+    x_desc = tl.make_tensor_descriptor(x, [1024, 1024], [1024, 1], [_BLOCK_SIZE_0, _BLOCK_SIZE_2])
+    y_desc = tl.make_tensor_descriptor(y, [1024, 1024], [1024, 1], [_BLOCK_SIZE_2, _BLOCK_SIZE_1])
     for offset_2 in tl.range(0, 1024, _BLOCK_SIZE_2):
         acc_copy = acc
-        load = tl.load(
-            tl.make_block_ptr(x, [1024, 1024], [1024, 1], [offset_0, offset_2], [_BLOCK_SIZE_0, _BLOCK_SIZE_2], [1, 0]),
-            boundary_check=[0, 1], padding_option='zero')
-        load_1 = tl.load(
-            tl.make_block_ptr(y, [1024, 1024], [1024, 1], [offset_2, offset_1], [_BLOCK_SIZE_2, _BLOCK_SIZE_1], [1, 0]),
-            boundary_check=[0, 1], padding_option='zero')
+        load = x_desc.load([offset_0, offset_2])
+        load_1 = y_desc.load([offset_2, offset_1])
         acc = tl.dot(tl.cast(load, tl.float16), tl.cast(load_1, tl.float16), acc=acc_copy, input_precision='tf32',
                      out_dtype=tl.float32)
-    load_2 = tl.load(
-        tl.make_block_ptr(epilogue_closure_0, [1, 1024], [1024, 1], [0, offset_1], [1, _BLOCK_SIZE_1], [1, 0]))
+    epilogue_desc = tl.make_tensor_descriptor(epilogue_closure_0, [1, 1024], [1024, 1], [1, _BLOCK_SIZE_1])
+    load_2 = epilogue_desc.load([0, offset_1])
     v_0 = tl.cast(load_2, tl.float32)
     v_1 = acc + v_0
     v_2 = tl.full([], 0, tl.int32)
     v_3 = triton_helpers.maximum(v_2, v_1)
     v_4 = tl.cast(v_3, tl.float16)
-    tl.store(
-        tl.make_block_ptr(out, [1024, 1024], [1024, 1], [offset_0, offset_1], [_BLOCK_SIZE_0, _BLOCK_SIZE_1], [1, 0]),
-        v_4, boundary_check=[0, 1])
+    out_desc = tl.make_tensor_descriptor(out, [1024, 1024], [1024, 1], [_BLOCK_SIZE_0, _BLOCK_SIZE_1])
+    out_desc.store([offset_0, offset_1], v_4)
 
 
 def matmul(x, y, epilogue: Callable[[Tensor, tuple[Tensor, ...]], Tensor] = lambda acc, tile: acc, *,
