@@ -18,7 +18,6 @@ import sys
 import tempfile
 from pathlib import Path
 
-
 REPO = "intel/intel-xpu-backend-for-triton"
 WORKFLOW = "triton-benchmarks.yml"
 
@@ -37,12 +36,18 @@ def run_gh(args: list[str], capture: bool = True) -> subprocess.CompletedProcess
 def list_successful_runs(workflow: str, max_runs: int, actor: str) -> list[dict]:
     """List successful workflow runs from GitHub Actions."""
     cmd = [
-        "run", "list",
-        "--repo", REPO,
-        "--workflow", workflow,
-        "--status", "success",
-        "--limit", str(max_runs),
-        "--json", "databaseId,createdAt,headSha,displayTitle",
+        "run",
+        "list",
+        "--repo",
+        REPO,
+        "--workflow",
+        workflow,
+        "--status",
+        "success",
+        "--limit",
+        str(max_runs),
+        "--json",
+        "databaseId,createdAt,headSha,displayTitle",
     ]
     if actor:
         cmd.extend(["--user", actor])
@@ -56,10 +61,15 @@ def list_successful_runs(workflow: str, max_runs: int, actor: str) -> list[dict]
 def download_artifacts(run_id: int, dest_dir: Path) -> bool:
     """Download benchmark-reports artifact for a given run."""
     result = run_gh([
-        "run", "download", str(run_id),
-        "--repo", REPO,
-        "--name", "benchmark-reports",
-        "--dir", str(dest_dir),
+        "run",
+        "download",
+        str(run_id),
+        "--repo",
+        REPO,
+        "--name",
+        "benchmark-reports",
+        "--dir",
+        str(dest_dir),
     ])
     return result.returncode == 0
 

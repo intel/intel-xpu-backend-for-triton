@@ -17,10 +17,10 @@ from typing import Any
 
 import yaml
 
-
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class ThresholdConfig:
@@ -117,6 +117,7 @@ def _scan_all(history_dir: Path) -> dict[str, Path]:
 # Key parsing helpers
 # ---------------------------------------------------------------------------
 
+
 def parse_benchmark_name(key: str) -> str:
     """Extract the benchmark name (first segment before '/')."""
     return key.split("/", 1)[0]
@@ -131,6 +132,7 @@ def parse_params(key: str) -> str:
 # ---------------------------------------------------------------------------
 # Driver change detection
 # ---------------------------------------------------------------------------
+
 
 def detect_driver_change(
     current_run: dict[str, Any],
@@ -154,6 +156,7 @@ def detect_driver_change(
 # ---------------------------------------------------------------------------
 # Core regression detection
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class GpuReport:
@@ -212,9 +215,7 @@ def analyze_gpu(history: list[dict[str, Any]], config: Config) -> GpuReport:
         # Collect baseline values for this key.
         window = baseline_runs[-thresh.rolling_window:]
         baseline_values = [
-            r["results"][key]["tflops"]
-            for r in window
-            if key in r.get("results", {}) and "tflops" in r["results"][key]
+            r["results"][key]["tflops"] for r in window if key in r.get("results", {}) and "tflops" in r["results"][key]
         ]
 
         if len(baseline_values) < thresh.min_history:
@@ -300,6 +301,7 @@ def analyze_gpu(history: list[dict[str, Any]], config: Config) -> GpuReport:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def build_report(history_dir: Path, runner_label: str, config: Config) -> dict[str, Any]:
     """Build the full regression report across requested GPUs."""

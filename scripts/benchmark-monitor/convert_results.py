@@ -232,7 +232,9 @@ def convert(
         if len(history) > MAX_HISTORY_ENTRIES:
             logger.info(
                 "Pruning %s history from %d to %d entries.",
-                platform, len(history), MAX_HISTORY_ENTRIES,
+                platform,
+                len(history),
+                MAX_HISTORY_ENTRIES,
             )
             history = history[-MAX_HISTORY_ENTRIES:]
 
@@ -252,9 +254,7 @@ def convert(
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments."""
-    parser = argparse.ArgumentParser(
-        description="Convert benchmark report CSVs to historical JSON entries.",
-    )
+    parser = argparse.ArgumentParser(description="Convert benchmark report CSVs to historical JSON entries.", )
     parser.add_argument(
         "--reports-dir",
         type=Path,

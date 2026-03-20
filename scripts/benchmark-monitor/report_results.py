@@ -24,10 +24,10 @@ GPU_SHORT_NAMES: dict[str, str] = {
 BENCHMARK_MONITOR_MARKER = "<!-- benchmark-monitor -->"
 MAX_PR_TABLE_ROWS = 20
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _format_params(params_json: str) -> str:
     """Parse a JSON params string and return a compact 'K1=V1, K2=V2' representation."""
@@ -69,6 +69,7 @@ def _sort_improvements(items: list[dict]) -> list[dict]:
 # Table formatting
 # ---------------------------------------------------------------------------
 
+
 def _regression_table_row(item: dict, *, current_label: str = "Current") -> str:
     params = _format_params(item.get("params", ""))
     baseline = item.get("baseline_median", 0)
@@ -89,12 +90,9 @@ def _regression_table(items: list[dict], *, current_label: str = "Current", limi
     Returns:
         Markdown table string.
     """
-    header = (
-        f"| Benchmark | Params | Baseline (TFlops) | {current_label} (TFlops) | Change | Z-Score |\n"
-        "|-----------|--------|-------------------|"
-        + "-" * (len(current_label) + len(" (TFlops) "))
-        + "|--------|---------|"
-    )
+    header = (f"| Benchmark | Params | Baseline (TFlops) | {current_label} (TFlops) | Change | Z-Score |\n"
+              "|-----------|--------|-------------------|" + "-" * (len(current_label) + len(" (TFlops) ")) +
+              "|--------|---------|")
     rows = [_regression_table_row(r, current_label=current_label) for r in (items[:limit] if limit else items)]
     table = header + "\n" + "\n".join(rows)
     if limit and len(items) > limit:
@@ -113,12 +111,9 @@ def _improvement_table_row(item: dict, *, current_label: str = "Current") -> str
 
 def _improvement_table(items: list[dict], *, current_label: str = "Current", limit: int = 0) -> str:
     """Build a markdown table for improvements."""
-    header = (
-        f"| Benchmark | Params | Baseline (TFlops) | {current_label} (TFlops) | Change | Z-Score |\n"
-        "|-----------|--------|-------------------|"
-        + "-" * (len(current_label) + len(" (TFlops) "))
-        + "|--------|---------|"
-    )
+    header = (f"| Benchmark | Params | Baseline (TFlops) | {current_label} (TFlops) | Change | Z-Score |\n"
+              "|-----------|--------|-------------------|" + "-" * (len(current_label) + len(" (TFlops) ")) +
+              "|--------|---------|")
     rows = [_improvement_table_row(r, current_label=current_label) for r in (items[:limit] if limit else items)]
     table = header + "\n" + "\n".join(rows)
     if limit and len(items) > limit:
@@ -130,14 +125,13 @@ def _improvement_table(items: list[dict], *, current_label: str = "Current", lim
 # CI mode: GitHub Issues
 # ---------------------------------------------------------------------------
 
+
 def _driver_change_notice(driver_change: list[dict] | None) -> str:
     if not driver_change:
         return ""
     parts = [f"{c.get('field', '?')}: {c.get('from', '?')} \u2192 {c.get('to', '?')}" for c in driver_change]
-    return (
-        f"\n> **Note:** This regression coincides with a driver version change "
-        f"({', '.join(parts)}) and may be driver-caused.\n"
-    )
+    return (f"\n> **Note:** This regression coincides with a driver version change "
+            f"({', '.join(parts)}) and may be driver-caused.\n")
 
 
 def _build_issue_body(
@@ -178,13 +172,20 @@ def _find_existing_issue(repo: str, gpu_key: str) -> int | None:
     """Search for an open perf-regression issue for the given GPU. Returns the issue number or None."""
     gpu_name = GPU_SHORT_NAMES.get(gpu_key, gpu_key.upper())
     result = _run_gh([
-        "issue", "list",
-        "--repo", repo,
-        "--label", "perf-regression",
-        "--state", "open",
-        "--search", gpu_name,
-        "--json", "number,title",
-        "--limit", "10",
+        "issue",
+        "list",
+        "--repo",
+        repo,
+        "--label",
+        "perf-regression",
+        "--state",
+        "open",
+        "--search",
+        gpu_name,
+        "--json",
+        "number,title",
+        "--limit",
+        "10",
     ])
     if result.returncode != 0:
         return None
@@ -223,9 +224,13 @@ def _create_or_update_issue(
     if existing_number is not None:
         logger.info("Found existing issue #%d for %s, adding comment.", existing_number, gpu_name)
         result = _run_gh([
-            "issue", "comment", str(existing_number),
-            "--repo", repo,
-            "--body", body,
+            "issue",
+            "comment",
+            str(existing_number),
+            "--repo",
+            repo,
+            "--body",
+            body,
         ])
         if result.returncode == 0:
             return f"https://github.com/{repo}/issues/{existing_number}"
@@ -237,11 +242,16 @@ def _create_or_update_issue(
         title = f"[Perf Regression] {n_regressions} benchmarks regressed on {gpu_name}"
 
     result = _run_gh([
-        "issue", "create",
-        "--repo", repo,
-        "--title", title,
-        "--label", "perf-regression",
-        "--body", body,
+        "issue",
+        "create",
+        "--repo",
+        repo,
+        "--title",
+        title,
+        "--label",
+        "perf-regression",
+        "--body",
+        body,
     ])
     if result.returncode == 0:
         issue_url = result.stdout.strip()
@@ -269,10 +279,10 @@ def handle_ci(report: dict, run_url: str, repo: str) -> None:
             logger.info("No regressions on %s, skipping issue creation.", gpu_name)
 
 
-
 # ---------------------------------------------------------------------------
 # PR mode
 # ---------------------------------------------------------------------------
+
 
 def _build_pr_comment(report: dict) -> str:
     """Build the full PR comment body covering all GPUs."""
@@ -313,7 +323,8 @@ def _find_existing_pr_comment(repo: str, pr_number: str) -> int | None:
         "api",
         f"repos/{repo}/issues/{pr_number}/comments",
         "--paginate",
-        "--jq", f'[.[] | select(.body | contains("{BENCHMARK_MONITOR_MARKER}"))][0].id',
+        "--jq",
+        f'[.[] | select(.body | contains("{BENCHMARK_MONITOR_MARKER}"))][0].id',
     ])
     if result.returncode != 0:
         return None
@@ -336,21 +347,28 @@ def handle_pr(report: dict, pr_number: str, repo: str) -> None:
         _run_gh([
             "api",
             f"repos/{repo}/issues/comments/{existing_comment_id}",
-            "--method", "PATCH",
-            "--field", f"body={body}",
+            "--method",
+            "PATCH",
+            "--field",
+            f"body={body}",
         ])
     else:
         logger.info("Creating new PR comment on #%s.", pr_number)
         _run_gh([
-            "pr", "comment", pr_number,
-            "--repo", repo,
-            "--body", body,
+            "pr",
+            "comment",
+            pr_number,
+            "--repo",
+            repo,
+            "--body",
+            body,
         ])
 
 
 # ---------------------------------------------------------------------------
 # Default mode: stdout summary
 # ---------------------------------------------------------------------------
+
 
 def handle_default(report: dict, tag: str) -> None:
     """Print a summary to stdout for non-ci, non-pr tags."""
@@ -391,13 +409,15 @@ def handle_default(report: dict, tag: str) -> None:
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Post benchmark regression results to GitHub and Slack.")
     parser.add_argument("--report", required=True, help="Path to regression-report.json")
     parser.add_argument("--tag", required=True, help='Run tag (e.g., "ci", "pr-123", "test")')
     parser.add_argument("--pr-number", default="", help="PR number (empty string if not a PR run)")
     parser.add_argument("--run-url", default="", help="Full URL to the GitHub Actions run")
-    parser.add_argument("--repo", default="intel/intel-xpu-backend-for-triton", help='Repository in "owner/repo" format')
+    parser.add_argument("--repo", default="intel/intel-xpu-backend-for-triton",
+                        help='Repository in "owner/repo" format')
     return parser.parse_args(argv)
 
 
