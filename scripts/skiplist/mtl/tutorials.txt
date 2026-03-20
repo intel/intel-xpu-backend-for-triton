@@ -1,7 +1,7 @@
 python/test/tutorials/test_tutorials.py::test_02_fused_softmax
 python/test/tutorials/test_tutorials.py::test_03_matrix_multiplication
+python/test/tutorials/test_tutorials.py::test_03a_matrix-multiplication_tensor_descriptor
 python/test/tutorials/test_tutorials.py::test_06_fused_attention[default]
 python/test/tutorials/test_tutorials.py::test_06_fused_attention[fp8_only]
 python/test/tutorials/test_tutorials.py::test_06_fused_attention[skip_fp8]
 python/test/tutorials/test_tutorials.py::test_08_grouped_gemm
-python/test/tutorials/test_tutorials.py::test_10_experimental_block_pointer
