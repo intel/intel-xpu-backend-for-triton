@@ -21,7 +21,7 @@ TUTORIALS = [
     "07-extern-functions",
     "08-grouped-gemm",
     "09-persistent-matmul",
-    "10-experimental-block-pointer",
+    "10-gemm-tensor-descriptor",
 ]
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]

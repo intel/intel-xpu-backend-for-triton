@@ -1,90 +1,83 @@
 """
-Block Pointer (Experimental)
-============================
-This tutorial will guide you through writing a matrix multiplication algorithm that utilizes block pointer semantics.
-These semantics are more friendly for Triton to optimize and can result in better performance on specific hardware.
-Note that this feature is still experimental and may change in the future.
+Tensor Descriptors
+==================
+This tutorial will guide you through writing a matrix multiplication algorithm that utilizes tensor descriptor
+semantics. Tensor descriptors provide hardware-aware, bounds-checked block loads and stores that give the compiler
+direct knowledge of the memory access pattern, enabling it to emit optimal hardware instructions.
 
 """
 
 # %%
 # Motivations
 # -----------
-# In the previous matrix multiplication tutorial, we constructed blocks of values by de-referencing blocks of pointers,
-# i.e., :code:`load(block<pointer_type<element_type>>) -> block<element_type>`, which involved loading blocks of
-# elements from memory. This approach allowed for flexibility in using hardware-managed cache and implementing complex
-# data structures, such as tensors of trees or unstructured look-up tables.
+# In the previous matrix multiplication tutorial, we constructed blocks of values by computing a tensor of pointers
+# and passing it to :code:`tl.load` / :code:`tl.store`, together with an explicit mask for out-of-bounds elements.
+# While flexible, this approach requires the programmer to manage pointer arithmetic, strides, and masking manually,
+# and relies on the compiler to reconstruct the memory access pattern from first principles.
 #
-# However, the drawback of this approach is that it relies heavily on complex optimization passes by the compiler to
-# optimize memory access patterns. This can result in brittle code that may suffer from performance degradation when the
-# optimizer fails to perform adequately. Additionally, as memory controllers specialize to accommodate dense spatial
-# data structures commonly used in machine learning workloads, this problem is likely to worsen.
+# *Tensor descriptors* offer a higher-level alternative: you describe the memory region once — its shape, strides, and
+# tile size — and then simply request tiles by their logical offset. The compiler has direct visibility into the access
+# pattern, which allows it to emit optimally scheduled hardware instructions with no manual masking needed.
 #
-# To address this issue, we will use block pointers :code:`pointer_type<block<element_type>>` and load them into
-# :code:`block<element_type>`, in which way gives better friendliness for the compiler to optimize memory access
-# patterns.
-#
-# Let's start with the previous matrix multiplication example and demonstrate how to rewrite it to utilize block pointer
-# semantics.
+# Let's demonstrate how to write the matrix multiplication kernel using tensor descriptors.
 
 # %%
-# Make a Block Pointer
-# --------------------
-# A block pointer pointers to a block in a parent tensor and is constructed by :code:`make_block_ptr` function,
-# which takes the following information as arguments:
+# Make a Tensor Descriptor
+# ------------------------
+# A tensor descriptor is constructed with :code:`tl.make_tensor_descriptor` and takes the following arguments:
 #
-# * :code:`base`: the base pointer to the parent tensor;
+# * :code:`base`: the base pointer to the start of the memory region;
 #
-# * :code:`shape`: the shape of the parent tensor;
+# * :code:`shape`: the shape of the tensor — used for automatic out-of-bounds masking;
 #
-# * :code:`strides`: the strides of the parent tensor, which means how much to increase the pointer by when moving by 1 element in a specific axis;
+# * :code:`strides`: the strides of the tensor in number of elements per dimension;
 #
-# * :code:`offsets`: the offsets of the block;
+# * :code:`block_shape`: the shape of the tile to load or store at each access.
 #
-# * :code:`block_shape`: the shape of the block;
-#
-# * :code:`order`: the order of the block, which means how the block is laid out in memory.
-#
-# For example, to a block pointer to a :code:`BLOCK_SIZE_M * BLOCK_SIZE_K` block in a row-major 2D matrix A by
-# offsets :code:`(pid_m * BLOCK_SIZE_M, 0)` and strides :code:`(stride_am, stride_ak)`, we can use the following code
-# (exactly the same as the previous matrix multiplication tutorial):
+# For example, to create a tensor descriptor for a :code:`BLOCK_SIZE_M x BLOCK_SIZE_K` tile in a row-major
+# 2D matrix A with strides :code:`(stride_am, stride_ak)`:
 #
 # .. code-block:: python
 #
-#     a_block_ptr = tl.make_block_ptr(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
-#                                     offsets=(pid_m * BLOCK_SIZE_M, 0), block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K),
-#                                     order=(1, 0))
+#     a_desc = tl.make_tensor_descriptor(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
+#                                        block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K))
 #
-# Note that the :code:`order` argument is set to :code:`(1, 0)`, which means the second axis is the inner dimension in
-# terms of storage, and the first axis is the outer dimension. This information may sound redundant, but it is necessary
-# for some hardware backends to optimize for better performance.
+# The memory layout is fully described by :code:`strides`, and the tile offset is supplied at load/store time.
 
 # %%
-# Load/Store a Block Pointer
-# --------------------------
-# To load/store a block pointer, we can use :code:`load/store` function, which takes a block pointer as an argument,
-# de-references it, and loads/stores a block. You may mask some values in the block, here we have an extra argument
-# :code:`boundary_check` to specify whether to check the boundary of each axis for the block pointer. With check on,
-# out-of-bound values will be masked according to the :code:`padding_option` argument (load only), which can be
-# :code:`zero` or :code:`nan`. Temporarily, we do not support other values due to some hardware limitations. In this
-# mode of block pointer load/store does not support :code:`mask` or :code:`other` arguments in the legacy mode.
+# Load/Store with a Tensor Descriptor
+# ------------------------------------
+# To load a tile, call :code:`.load()` on the descriptor and pass the offset of the top-left corner:
 #
-# So to load the block pointer of A in the previous section, we can simply write
-# :code:`a = tl.load(a_block_ptr, boundary_check=(0, 1))`. Boundary check may cost extra performance, so if you can
-# guarantee that the block pointer is always in-bound in some axis, you can turn off the check by not passing the index
-# into the :code:`boundary_check` argument. For example, if we know that :code:`M` is a multiple of
-# :code:`BLOCK_SIZE_M`, we can replace with :code:`a = tl.load(a_block_ptr, boundary_check=(1, ))`, since axis 0 is
-# always in bound.
+# .. code-block:: python
+#
+#     a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
+#
+# Out-of-bounds accesses are automatically masked to zero using the :code:`shape` provided at construction time —
+# no explicit mask argument is required.
+#
+# To store a result tile back to memory, call :code:`.store()`:
+#
+# .. code-block:: python
+#
+#     c_desc.store([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], c)
+#
+# Boundary masking on store is also handled automatically.
 
 # %%
-# Advance a Block Pointer
-# -----------------------
-# To advance a block pointer, we can use :code:`advance` function, which takes a block pointer and the increment for
-# each axis as arguments and returns a new block pointer with the same shape and strides as the original one,
-# but with the offsets advanced by the specified amount.
+# Iterating over K
+# ----------------
+# The offset of the tile to load is passed directly to :code:`.load()` at each iteration. A simple integer
+# counter :code:`off_k` tracks the current position along the K dimension:
 #
-# For example, to advance the block pointer by :code:`BLOCK_SIZE_K` in the second axis
-# (no need to multiply with strides), we can write :code:`a_block_ptr = tl.advance(a_block_ptr, (0, BLOCK_SIZE_K))`.
+# .. code-block:: python
+#
+#     off_k = 0
+#     for _ in range(0, K, BLOCK_SIZE_K):
+#         a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
+#         b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
+#         accumulator += tl.dot(a, b)
+#         off_k += BLOCK_SIZE_K
 
 # %%
 # Final Result
@@ -115,17 +108,17 @@ import triton.language as tl
     key=['M', 'N', 'K'],
 )
 @triton.jit
-def matmul_kernel_with_block_pointers(
+def matmul_kernel_with_tensor_descriptors(
         # Pointers to matrices
         a_ptr, b_ptr, c_ptr,
         # Matrix dimensions
-        M, N, K,
+        M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,
         # The stride variables represent how much to increase the ptr by when moving by 1
         # element in a particular dimension. E.g. `stride_am` is how much to increase `a_ptr`
         # by to get the element one row down (A has M rows).
-        stride_am, stride_ak,  #
-        stride_bk, stride_bn,  #
-        stride_cm, stride_cn,  #
+        stride_am: tl.constexpr, stride_ak: tl.constexpr,  #
+        stride_bk: tl.constexpr, stride_bn: tl.constexpr,  #
+        stride_cm: tl.constexpr, stride_cn: tl.constexpr,  #
         ACCUMULATOR_DTYPE: tl.constexpr,
         # Meta-parameters
         BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr):
@@ -147,42 +140,38 @@ def matmul_kernel_with_block_pointers(
     pid_n = (pid % num_pid_in_group) // group_size_m
 
     # ----------------------------------------------------------
-    # Create block pointers for the first blocks of A and B.
-    # We will advance this pointer as we move in the K direction and accumulate.
-    # See above `Make a Block Pointer` section for details.
-    a_block_ptr = tl.make_block_ptr(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
-                                    offsets=(pid_m * BLOCK_SIZE_M, 0), block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K),
-                                    order=(1, 0))
-    b_block_ptr = tl.make_block_ptr(base=b_ptr, shape=(K, N), strides=(stride_bk, stride_bn),
-                                    offsets=(0, pid_n * BLOCK_SIZE_N), block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N),
-                                    order=(1, 0))
+    # Create tensor descriptors for A and B.
+    # The descriptor encodes the base pointer, tensor shape, strides, and tile shape.
+    # The tile offset is supplied later at each descriptor.load([row, col]) call.
+    # See above `Make a Tensor Descriptor` section for details.
+    a_desc = tl.make_tensor_descriptor(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
+                                       block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K))
+    b_desc = tl.make_tensor_descriptor(base=b_ptr, shape=(K, N), strides=(stride_bk, stride_bn),
+                                       block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N))
 
     # -----------------------------------------------------------
     # Iterate to compute a block of the C matrix.
     # We accumulate into a `[BLOCK_SIZE_M, BLOCK_SIZE_N]` block.
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=ACCUMULATOR_DTYPE)
-    for k in range(0, K, BLOCK_SIZE_K):
-        # Load with boundary checks, no need to calculate the mask manually.
-        # For better performance, you may remove some axis from the boundary
-        # check, if you can guarantee that the access is always in-bound in
-        # that axis.
-        # See above `Load/Store a Block Pointer` section for details.
-        a = tl.load(a_block_ptr, boundary_check=(0, 1))
-        b = tl.load(b_block_ptr, boundary_check=(0, 1))
+    off_k = 0
+    for _ in range(0, K, BLOCK_SIZE_K):
+        # Load the next tile of A and B. Out-of-bounds accesses are masked to zero automatically.
+        # See above `Load/Store with a Tensor Descriptor` section for details.
+        a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
+        b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
         # We accumulate along the K dimension.
         accumulator += tl.dot(a, b, out_dtype=ACCUMULATOR_DTYPE)
-        # Advance the block pointer to the next K block.
-        # See above `Advance a Block Pointer` section for details.
-        a_block_ptr = tl.advance(a_block_ptr, (0, BLOCK_SIZE_K))
-        b_block_ptr = tl.advance(b_block_ptr, (BLOCK_SIZE_K, 0))
+        # Advance the K offset for the next iteration.
+        # See above `Iterating over K` section for details.
+        off_k += BLOCK_SIZE_K
     c = accumulator.to(c_ptr.type.element_ty)
     # ----------------------------------------------------------------
-    # Write back the block of the output matrix C with boundary checks.
-    # See above `Load/Store a Block Pointer` section for details.
-    c_block_ptr = tl.make_block_ptr(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
-                                    offsets=(pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N),
-                                    block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N), order=(1, 0))
-    tl.store(c_block_ptr, c, boundary_check=(0, 1))
+    # Write back the block of the output matrix C.
+    # Tensor descriptor store handles boundary masking automatically.
+    # See above `Load/Store with a Tensor Descriptor` section for details.
+    c_desc = tl.make_tensor_descriptor(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
+                                       block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N))
+    c_desc.store([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], c)
 
 
 @triton.autotune(
@@ -199,22 +188,22 @@ def matmul_kernel_with_block_pointers(
     key=['M', 'N', 'K'],
 )
 @triton.jit
-def matmul_kernel_with_block_pointers_batched(
+def matmul_kernel_with_tensor_descriptors_batched(
         # Pointers to matrices
         a_ptr, b_ptr, c_ptr,
         # Matrix dimensions
-        B, M, N, K,
+        B: tl.constexpr, M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,
         # The stride variables represent how much to increase the ptr by when moving by 1
         # element in a particular dimension. E.g. `stride_am` is how much to increase `a_ptr`
         # by to get the element one row down (A has M rows).
-        stride_az, stride_am, stride_ak,  #
-        stride_bz, stride_bk, stride_bn,  #
-        stride_cz, stride_cm, stride_cn,  #
+        stride_az: tl.constexpr, stride_am: tl.constexpr, stride_ak: tl.constexpr,  #
+        stride_bz: tl.constexpr, stride_bk: tl.constexpr, stride_bn: tl.constexpr,  #
+        stride_cz: tl.constexpr, stride_cm: tl.constexpr, stride_cn: tl.constexpr,  #
         ACCUMULATOR_DTYPE: tl.constexpr,
         # Meta-parameters
         BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr):
-    """Kernel for computing the matmul C = A x B.
-    A has shape (M, K), B has shape (K, N) and C has shape (M, N)
+    """Kernel for computing the batched matmul C = A x B.
+    A has shape (B, M, K), B has shape (B, K, N) and C has shape (B, M, N)
     """
     # -----------------------------------------------------------
     # Map program ids `pid` to the block of C it should compute.
@@ -234,43 +223,39 @@ def matmul_kernel_with_block_pointers_batched(
     offset_a = bid.to(tl.int64) * stride_az
     offset_b = bid.to(tl.int64) * stride_bz
     # ----------------------------------------------------------
-    # Create block pointers for the first blocks of A and B.
-    # We will advance this pointer as we move in the K direction and accumulate.
-    # See above `Make a Block Pointer` section for details.
-    a_block_ptr = tl.make_block_ptr(base=a_ptr + offset_a, shape=(M, K), strides=(stride_am, stride_ak),
-                                    offsets=(pid_m * BLOCK_SIZE_M, 0), block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K),
-                                    order=(1, 0))
-    b_block_ptr = tl.make_block_ptr(base=b_ptr + offset_b, shape=(K, N), strides=(stride_bk, stride_bn),
-                                    offsets=(0, pid_n * BLOCK_SIZE_N), block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N),
-                                    order=(1, 0))
+    # Create tensor descriptors for this batch slice of A and B.
+    # The batch offset is folded into the base pointer so that each
+    # descriptor covers a single [M, K] / [K, N] slice.
+    # See above `Make a Tensor Descriptor` section for details.
+    a_desc = tl.make_tensor_descriptor(base=a_ptr + offset_a, shape=(M, K), strides=(stride_am, stride_ak),
+                                       block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K))
+    b_desc = tl.make_tensor_descriptor(base=b_ptr + offset_b, shape=(K, N), strides=(stride_bk, stride_bn),
+                                       block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N))
 
     # -----------------------------------------------------------
     # Iterate to compute a block of the C matrix.
     # We accumulate into a `[BLOCK_SIZE_M, BLOCK_SIZE_N]` block.
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=ACCUMULATOR_DTYPE)
-    for k in range(0, K, BLOCK_SIZE_K):
-        # Load with boundary checks, no need to calculate the mask manually.
-        # For better performance, you may remove some axis from the boundary
-        # check, if you can guarantee that the access is always in-bound in
-        # that axis.
-        # See above `Load/Store a Block Pointer` section for details.
-        a = tl.load(a_block_ptr, boundary_check=(0, 1))
-        b = tl.load(b_block_ptr, boundary_check=(0, 1))
+    off_k = 0
+    for _ in range(0, K, BLOCK_SIZE_K):
+        # Load the next tile of A and B. Out-of-bounds accesses are masked to zero automatically.
+        # See above `Load/Store with a Tensor Descriptor` section for details.
+        a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
+        b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
         # We accumulate along the K dimension.
         accumulator += tl.dot(a, b, out_dtype=ACCUMULATOR_DTYPE)
-        # Advance the block pointer to the next K block.
-        # See above `Advance a Block Pointer` section for details.
-        a_block_ptr = tl.advance(a_block_ptr, (0, BLOCK_SIZE_K))
-        b_block_ptr = tl.advance(b_block_ptr, (BLOCK_SIZE_K, 0))
+        # Advance the K offset for the next iteration.
+        # See above `Iterating over K` section for details.
+        off_k += BLOCK_SIZE_K
     c = accumulator.to(c_ptr.type.element_ty)
     # ----------------------------------------------------------------
-    # Write back the block of the output matrix C with boundary checks.
-    # See above `Load/Store a Block Pointer` section for details.
+    # Write back the block of the output matrix C.
+    # Tensor descriptor store handles boundary masking automatically.
+    # See above `Load/Store with a Tensor Descriptor` section for details.
     offset_c = bid.to(tl.int64) * stride_cz
-    c_block_ptr = tl.make_block_ptr(base=c_ptr + offset_c, shape=(M, N), strides=(stride_cm, stride_cn),
-                                    offsets=(pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N),
-                                    block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N), order=(1, 0))
-    tl.store(c_block_ptr, c, boundary_check=(0, 1))
+    c_desc = tl.make_tensor_descriptor(base=c_ptr + offset_c, shape=(M, N), strides=(stride_cm, stride_cn),
+                                       block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N))
+    c_desc.store([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], c)
 
 
 # We can now create a convenience wrapper function that only takes two input tensors,
@@ -292,7 +277,7 @@ def matmul(a, b, accum_dtype, res_dtype):
             triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
             B,
         )
-        matmul_kernel_with_block_pointers_batched[grid](
+        matmul_kernel_with_tensor_descriptors_batched[grid](
             a, b, c,  #
             B, M, N, K,  #
             a.stride(0), a.stride(1), a.stride(2),  #
@@ -311,7 +296,7 @@ def matmul(a, b, accum_dtype, res_dtype):
         triton_accum_dtype = tl.dtype(str(accum_dtype)[6:].replace('bfloat', 'bf').replace('float', 'fp'))
         # 1D launch kernel where each block gets its own program.
         grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
-        matmul_kernel_with_block_pointers[grid](
+        matmul_kernel_with_tensor_descriptors[grid](
             a, b, c,  #
             M, N, K,  #
             a.stride(0), a.stride(1),  #
@@ -328,7 +313,7 @@ def matmul(a, b, accum_dtype, res_dtype):
 # Unit Test
 # ---------
 #
-# Still we can test our matrix multiplication with block pointers against a native torch implementation (i.e., cuBLAS).
+# We can test our matrix multiplication with tensor descriptors against a native torch implementation.
 
 FP16_TYPES = [(torch.float16, torch.float16, torch.float16), (torch.float16, torch.float32, torch.float16),
               (torch.float16, torch.float32, torch.float32), (torch.bfloat16, torch.bfloat16, torch.bfloat16),
