@@ -929,6 +929,13 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     if ((product<unsigned>(tileShape) / numElemPerPackedVal) != numLanes)
       return BlockIOTileSizeInfo::unknown();
 
+    // 2D block I/O cannot span batch dimensions -- reject if any batch dim
+    // (i.e., dims outside the inner 2) has a non-unit tile size.
+    for (size_t i = 0; i + 2 < rank; ++i) {
+      if (tileShape[i] > 1)
+        return BlockIOTileSizeInfo::unknown();
+    }
+
     unsigned sliceRank = 0;
     int rowDim = -1;
     for (size_t i = 0; i < rank; ++i) {
