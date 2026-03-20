@@ -193,7 +193,9 @@ def benchmark(Z, H, N_CTX, D_HEAD, MASK, MODE, provider):
         mask = None
 
     if provider == 'triton':
-        kernel_options = {'num_stages': 2, 'num_warps': 16 if D_HEAD == 128 else 8, 'BLOCKS_ARE_CONTIGUOUS': True}
+        kernel_options = {
+            'num_stages': 2, 'num_warps': 16 if D_HEAD == 128 else 8, 'BLOCKS_ARE_CONTIGUOUS': True, 'USE_TMA': True
+        }
 
         triton_fn = lambda: bench_func(q, k, v, score_mod, block_mask, kernel_options)
         if MODE == 'bwd':
