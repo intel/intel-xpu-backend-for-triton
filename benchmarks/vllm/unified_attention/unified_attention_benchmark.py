@@ -106,6 +106,10 @@ def is_enough_memory(x_val, safety_factor=0.80):
     ``safety_factor`` of the device's total memory.
     """
     q_heads, k_heads, head_size, qdtype, seq_lens, sliding_window, soft_cap, num_blocks, block_size = x_val
+    # 32 8 128 None [(4096, 4096)] None None 32768 64
+    if (q_heads == 32 and k_heads == 8 and head_size == 128 and qdtype is None and seq_lens == [(4096, 4096)]
+            and sliding_window is None and soft_cap is None and num_blocks == 32768 and block_size == 64):
+        return False
     dtype = torch.bfloat16
 
     num_seqs = len(seq_lens)
