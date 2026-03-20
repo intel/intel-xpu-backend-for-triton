@@ -473,10 +473,6 @@ private:
     unsigned elementWidth = tensorType.getElementTypeBitWidth();
     LDBG("strideOneDim: " << strideOneDimVal);
 
-    // TODO: Support higher rank tensors in AxisInfo.
-    if (rank > 2)
-      return false;
-
     // Ensure the base ptr is 4-byte aligned.
     // Note: the HW requires the address to be 64-byte aligned, however we will
     // compensate by imposing restrictions on the offsetX and baseWidth.

@@ -567,8 +567,8 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     else
       tensorTy = cast<RankedTensorType>(op.getSrc().getType());
 
-    // Only rank 2 initially.
-    if (tensorTy.getRank() != 2)
+    // Rank must be at least 2 for 2D block I/O.
+    if (tensorTy.getRank() < 2)
       return false;
 
     // Verify the descriptor traces back to a MakeTensorDescOp with PAD_ZERO.
@@ -927,14 +927,22 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     if ((product<unsigned>(tileShape) / numElemPerPackedVal) != numLanes)
       return BlockIOTileSizeInfo::unknown();
 
+    // 2D block I/O cannot span batch dimensions -- reject if any batch dim
+    // (i.e., dims outside the inner 2) has a non-unit tile size.
+    for (size_t i = 0; i + 2 < rank; ++i) {
+      if (tileShape[i] > 1)
+        return BlockIOTileSizeInfo::unknown();
+    }
+
     unsigned sliceRank = 0;
     int rowDim = -1;
     for (size_t i = 0; i < rank; ++i) {
       if (tileShape[i] > 1) {
-        sliceRank++;
+        if (i >= rank - 2)
+          sliceRank++;
         // if the slice has more than one non-zero size. Chose the
-        // non-fast change dim as the row dim.
-        if (i != fastChangeDim)
+        // non-fast change dim as the row dim (only from inner 2 dims).
+        if (i != fastChangeDim && i >= rank - 2)
           rowDim = i;
       }
     }
@@ -1043,7 +1051,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
       if (!validateBase(base))
         continue; // Skip as the bases are not trivial.
       int dim = getFirstNonZeroDim(base);
-      if (rowDim < 0 && dim != fastChangeDim) {
+      if (rowDim < 0 && dim != fastChangeDim && dim >= (int)(rank - 2)) {
         rowDim = dim;
         // The mask constancy has to be power of 2 for block IO.
         if (maskAxisInfo &&
@@ -1077,7 +1085,8 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     }
 
     if (rowDim < 0)
-      rowDim = (fastChangeDim != 0) ? 0 : 1;
+      rowDim = (fastChangeDim != (int)(rank - 1)) ? (int)(rank - 1)
+                                                  : (int)(rank - 2);
 
     if (transpose && elemSizeInBits == 64) {
       // D64 transpose only supports 8 rows.
@@ -2711,7 +2720,8 @@ struct DescriptorLoadOpToBlockIOConversion
                                    adaptor.getIndices().end());
     if (!memoryRowMajor) {
       // column_major: result dims are transposed vs descriptor dims.
-      std::reverse(descIndices.begin(), descIndices.end());
+      // Only swap the inner 2 dims; batch dims stay in place.
+      std::swap(descIndices[rank - 2], descIndices[rank - 1]);
     }
 
     // Replicate base pointer for all tiles.
@@ -2786,8 +2796,16 @@ struct DescriptorLoadOpToBlockIOConversion
           offsetY = adjustedOffset;
         else if (dim == colIdx)
           offsetX = adjustedOffset;
-        else
-          assert(false && "unexpected dimension in rank-2 tensor offsets");
+        else {
+          // Fold extra dimension offset into base pointer.
+          Type i8Ty = IntegerType::get(ctx, 8);
+          Type i64Ty = IntegerType::get(ctx, 64);
+          Value extraStride = desc.strides[dim];
+          Value extraOff = b.zext(i64Ty, adjustedOffset);
+          Value byteOff = b.mul(
+              extraOff, b.mul(extraStride, b.i64_val(elemSizeInBits / 8)));
+          addrElem = b.gep(ptr_ty(ctx, 1), i8Ty, addrElem, byteOff);
+        }
       }
 
       assert(numPackedVals > 0 && "numPackedVals should be greater than zero.");

@@ -232,3 +232,68 @@ module attributes {"ttg.num-warps" = 64 : i32, "ttg.threads-per-warp" = 16 : i32
     tt.return %0 : tensor<32x2x16xf32, #blocked>
   }
 }
+
+// -----
+
+// COM: Test rank-3 descriptor load lowering to 2D block loads.
+// COM: For rank-3 tensors, the batch dimension (dim 0) is folded into the
+// COM: base pointer via GEP with stride multiplication, and 2D block loads
+// COM: are emitted for each batch slice over the inner 2 dimensions.
+// COM: Tensor descriptor struct layout for rank-3:
+// COM:   !llvm.struct<(i64, i64, i64, i64, i64, i64, ptr<1>)>
+// COM:   [0]: shape0, [1]: shape1, [2]: shape2,
+// COM:   [3]: stride0, [4]: stride1, [5]: stride2, [6]: base_ptr
+
+// COM: Test: Rank-3 row-major descriptor load with dot operand A encoding.
+// COM: Tensor shape 4x64x32xf16 (batch=4, M=64, K=32).
+// COM: Each batch slice is 64x32 with the same 2D tile parameters as rank-2:
+// COM:   tile_height=8, tile_width=16, v_blocks=2 (covers 8x32 per load).
+// COM: Per warp: 64/(4 warps in dim1)=16 rows -> 16/8=2 loads per batch slice.
+// COM: With batch=4 / 1 batch warp = 4 slices per warp: 4*2=8 loads total.
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4, 2], repCluster = [1, 1, 1], A = [1, 8, 16], B = [1, 16, 16], C = [1, 8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @descriptor_load_rank3_dot_a
+  tt.func public @descriptor_load_rank3_dot_a(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i64, %arg5: i64, %arg6: i32, %arg7: i32, %arg8: i32) {
+    %c1_i64 = arith.constant 1 : i64
+    // COM: Verify struct packing for rank-3 MakeTensorDescOp:
+    //   struct { i64 shape[3], i64 stride[3], ptr<1> base }
+    // CHECK: llvm.insertvalue {{.*}}[0] : !llvm.struct<(i64, i64, i64, i64, i64, i64, ptr<1>)>
+    // CHECK: llvm.insertvalue {{.*}}[1] : !llvm.struct<(i64, i64, i64, i64, i64, i64, ptr<1>)>
+    // CHECK: llvm.insertvalue {{.*}}[2] : !llvm.struct<(i64, i64, i64, i64, i64, i64, ptr<1>)>
+    // CHECK: llvm.insertvalue {{.*}}[3] : !llvm.struct<(i64, i64, i64, i64, i64, i64, ptr<1>)>
+    // CHECK: llvm.insertvalue {{.*}}[4] : !llvm.struct<(i64, i64, i64, i64, i64, i64, ptr<1>)>
+    // CHECK: llvm.insertvalue {{.*}}[5] : !llvm.struct<(i64, i64, i64, i64, i64, i64, ptr<1>)>
+    // CHECK: llvm.insertvalue {{.*}}[6] : !llvm.struct<(i64, i64, i64, i64, i64, i64, ptr<1>)>
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2, %arg3], [%arg4, %arg5, %c1_i64] : <f16>, <tensor<4x64x32xf16>>
+    // COM: Verify batch dimension is folded via GEP and 2D block loads are emitted.
+    // COM: Expect 8 loads: 4 batch slices * 2 loads per slice.
+    // CHECK-COUNT-8: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 2, transpose = false, vnni_transform = false, cache_control = Default}
+    %load = tt.descriptor_load %desc[%arg6, %arg7, %arg8] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<4x64x32xf16>> -> tensor<4x64x32xf16, #dot0>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Test: Rank-3 row-major descriptor load with dot operand B encoding.
+// COM: Tensor shape 4x32x64xf16 (batch=4, K=32, N=64).
+// COM: For DPAS B with f16: tile_height=32, tile_width=16, v_blocks=1, vnni_transform=true.
+// COM: Per warp: 64/(2 warps in dim2)=32 cols -> 32/16=2 loads per batch slice.
+// COM: With batch=4 / 1 batch warp = 4 slices per warp: 4*2=8 loads total.
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4, 2], repCluster = [1, 1, 1], A = [1, 8, 16], B = [1, 16, 16], C = [1, 8, 16]}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @descriptor_load_rank3_dot_b
+  tt.func public @descriptor_load_rank3_dot_b(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i64, %arg5: i64, %arg6: i32, %arg7: i32, %arg8: i32) {
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2, %arg3], [%arg4, %arg5, %c1_i64] : <f16>, <tensor<4x32x64xf16>>
+    // COM: Verify batch dimension is folded via GEP and 2D block loads with VNNI transform are emitted.
+    // COM: Expect 8 loads: 4 batch slices * 2 loads per slice.
+    // CHECK-COUNT-8: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 1, transpose = false, vnni_transform = true, cache_control = Default}
+    %load = tt.descriptor_load %desc[%arg6, %arg7, %arg8] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<4x32x64xf16>> -> tensor<4x32x64xf16, #dot1>
+    tt.return
+  }
+}

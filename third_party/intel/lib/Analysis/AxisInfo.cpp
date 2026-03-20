@@ -1156,10 +1156,6 @@ public:
         cast<PointerType>(op.getResult().getType()).getPointeeType());
     unsigned rank = op.getShape().size();
 
-    // TODO: Support higher rank tensors.
-    if (rank > 2)
-      return AxisInfo();
-
     auto axisInfo =
         makeTensorPtrAxisInfo(tensorType.getShape(), rank, operands);
 
@@ -1198,12 +1194,6 @@ public:
     RankedTensorType tensorType =
         cast<TensorDescType>(op.getResult().getType()).getBlockType();
     unsigned rank = op.getShape().size();
-
-    // TODO: Support higher rank tensors.
-    if (rank > 2) {
-      LDBG("Unsupported tensor rank > 2, returning default AxisInfo");
-      return AxisInfo();
-    }
 
     assert(operands.size() >= rank * 2 + 1 &&
            "Insufficient operands for MakeTensorDescOp AxisInfo analysis");
