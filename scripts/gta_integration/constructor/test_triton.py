@@ -1,12 +1,37 @@
 import argparse
 import os
+import re
 import sys
 import subprocess
 from pathlib import Path
 import json
-import re
 
 import triton_utils
+
+_FA_VARIANT_TO_MODE = {
+    "default": "fa_only",
+    "fp8_only": "fp8_only",
+    "skip_fp8": "skip_fp8",
+}
+
+_FA_MODE_ENV = {
+    "fa_only": {"HEAD_DIM": "64"},
+    "fp8_only": {},
+    "skip_fp8": {},
+}
+
+
+def _tutorial06_run_mode(test_name: str) -> str:
+    match = re.search(r"test_06_fused_attention\[([^\]]+)\]", test_name)
+    if match:
+        variant = match.group(1)
+        if variant not in _FA_VARIANT_TO_MODE:
+            raise ValueError(f"Unknown FA variant '{variant}' in '{test_name}'. "
+                             f"Expected one of: {', '.join(_FA_VARIANT_TO_MODE)}")
+        return _FA_VARIANT_TO_MODE[variant]
+    if "test_06_fused_attention" in test_name:
+        return "fa_only"
+    return "skip"
 
 
 def make_select_option(test_name: str) -> list[str]:
@@ -41,7 +66,6 @@ def main():  # pylint: disable=too-many-locals
     # - Test name filtering by short name without path
     # - Test name filtering by test variant for run and reporting
     # - Skiplist selection based on platform
-    # - Bring back tutorials support
     # - Bring back benchmarks support
     # - Option to ignore testsuite exclude list
 
@@ -125,11 +149,17 @@ def main():  # pylint: disable=too-many-locals
     if os.path.isdir(reports_dir):
         print("[WARNING] Triton xpu tests reports have been already run. Test results will be reused")
     else:
-        if testsuite == "tutorials":
-            raise NotImplementedError("Tutorials suite is not supported by this script.")
         if testsuite in ["flash-attention", "softmax", "gemm", "triton-benchmarks"]:
             raise NotImplementedError("Benchmarks suite is not supported by this script.")
-        subprocess.run(full_cmd, check=False, stdout=sys.stdout, stderr=sys.stderr)
+
+        if testsuite == "tutorials":
+            mode = _tutorial06_run_mode(test_name)
+            full_cmd += ["--tutorial06-run-mode", mode]
+            env = {**os.environ, **_FA_MODE_ENV.get(mode, {})}
+        else:
+            env = None
+
+        subprocess.run(full_cmd, check=False, stdout=sys.stdout, stderr=sys.stderr, env=env)
 
     config = triton_utils.Config(
         reports=reports_dir,
