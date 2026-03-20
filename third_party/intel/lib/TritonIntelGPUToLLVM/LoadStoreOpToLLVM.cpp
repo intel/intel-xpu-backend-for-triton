@@ -2397,12 +2397,14 @@ public:
     SmallVector<Value> shapes = getShapes(rewriter, ptr, unpackedPtr);
     Value baseWidth, baseHeight;
     if (isTensorPointerType(ptr.getType())) {
-      baseWidth = b.trunc(i32_ty, shapes[memoryRowMajor ? colDim : rowDim]);
-      baseHeight = b.trunc(i32_ty, shapes[memoryRowMajor ? rowDim : colDim]);
+      baseWidth =
+          b.trunc(i32_ty, shapes[isTransposeRequired ? rowDim : colDim]);
+      baseHeight =
+          b.trunc(i32_ty, shapes[isTransposeRequired ? colDim : rowDim]);
       baseWidth = b.mul(baseWidth, b.i32_val(elemSizeInBits / 8));
     } else {
       // If the stride is 0, we want to load only the first row.
-      int stride = getStride(ptr, memoryRowMajor ? rowDim : colDim);
+      int stride = getStride(ptr, isTransposeRequired ? colDim : rowDim);
       baseHeight = b.i32_val((stride == 0 ? 1 : tileHeight));
       baseWidth = b.i32_val(vBlocks * tileWidth * (packedElemSizeInBits / 8));
     }
