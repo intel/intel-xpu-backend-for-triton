@@ -68,6 +68,32 @@ def parse_flat_results(data: dict, comp_uuid: str) -> list[dict]:
     return acc
 
 
+def load_last_json_object(json_path: Path):
+    text = json_path.read_text(encoding='utf-8')
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as decode_err:
+        if decode_err.msg != 'Extra data':
+            raise
+
+    decoder = json.JSONDecoder()
+    index = 0
+    text_len = len(text)
+    last_obj = None
+
+    while index < text_len:
+        while index < text_len and text[index].isspace():
+            index += 1
+        if index >= text_len:
+            break
+        obj, index = decoder.raw_decode(text, index)
+        last_obj = obj
+
+    if last_obj is None:
+        raise ValueError(f'No JSON object decoded from file: {json_path}')
+    return last_obj
+
+
 # Matches: XPUBackend.<stage>[_<hash>].json
 _INDUCTOR_FORMAT_RE = re.compile(
     r'^XPUBackend\.(make_ttir|make_ttgir|make_llir|make_spv|make_zebin)(?:_([^.]+))?\.json$')
@@ -93,8 +119,7 @@ def _prepare_benchmark_reports_triton(  # pylint: disable=too-many-locals
         for json_file in json_files:
             comp_uuid = uuid.uuid4().hex
 
-            with open(json_file, encoding='utf-8') as f:
-                data = json.load(f)
+            data = load_last_json_object(json_file)
 
             loc = data['asm']
 
@@ -135,8 +160,7 @@ def _prepare_benchmark_reports_inductor(  # pylint: disable=too-many-locals
         kernel_name = m.group(1)
         params = ''
 
-        with open(json_file, encoding='utf-8') as f:
-            data = json.load(f)
+        data = load_last_json_object(json_file)
 
         comp_uuid = uuid.uuid4().hex
 
