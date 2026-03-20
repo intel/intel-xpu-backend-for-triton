@@ -2771,8 +2771,8 @@ struct DescriptorLoadOpToBlockIOConversion
     // When transpose is required, the row/col assignment to X/Y swaps:
     //   X (block load column offset) maps to the fast-changing dimension.
     //   Y (block load row offset) maps to the slow-changing dimension.
-    unsigned colIdx = isTransposeRequired ? rowDim : colDim;
-    unsigned rowIdx = isTransposeRequired ? colDim : rowDim;
+    unsigned blockColIdx = isTransposeRequired ? rowDim : colDim;
+    unsigned blockRowIdx = isTransposeRequired ? colDim : rowDim;
 
     SmallVector<Value> unpackedLoadedVals(numElems);
     for (size_t elemIdx = 0; elemIdx < numElems; elemIdx += numElemsPerLoad) {
@@ -2794,9 +2794,9 @@ struct DescriptorLoadOpToBlockIOConversion
       // Boundary check is always enabled for descriptors.
       for (auto [dim, offsetPair] : llvm::enumerate(offsets)) {
         Value adjustedOffset = b.add(descIndices[dim], offsetPair.second);
-        if (dim == rowIdx)
+        if (dim == blockRowIdx)
           offsetY = adjustedOffset;
-        else if (dim == colIdx)
+        else if (dim == blockColIdx)
           offsetX = adjustedOffset;
         else
           assert(false && "unexpected dimension in rank-2 tensor offsets");
