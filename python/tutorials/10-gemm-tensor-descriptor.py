@@ -10,10 +10,15 @@ direct knowledge of the memory access pattern, enabling it to emit optimal hardw
 # %%
 # Motivations
 # -----------
-# In the previous matrix multiplication tutorial, we constructed blocks of values by computing a tensor of pointers
-# and passing it to :code:`tl.load` / :code:`tl.store`, together with an explicit mask for out-of-bounds elements.
-# While flexible, this approach requires the programmer to manage pointer arithmetic, strides, and masking manually,
-# and relies on the compiler to reconstruct the memory access pattern from first principles.
+# In the previous matrix multiplication tutorial, we constructed blocks of values by de-referencing blocks of pointers,
+# i.e., :code:`load(block<pointer_type<element_type>>) -> block<element_type>`, which involved loading blocks of
+# elements from memory. This approach allowed for flexibility in using hardware-managed cache and implementing complex
+# data structures, such as tensors of trees or unstructured look-up tables.
+#
+# However, the drawback of this approach is that it relies heavily on complex optimization passes by the compiler to
+# optimize memory access patterns. This can result in brittle code that may suffer from performance degradation when the
+# optimizer fails to perform adequately. Additionally, as memory controllers specialize to accommodate dense spatial
+# data structures commonly used in machine learning workloads, this problem is likely to worsen.
 #
 # *Tensor descriptors* offer a higher-level alternative: you describe the memory region once — its shape, strides, and
 # tile size — and then simply request tiles by their logical offset. The compiler has direct visibility into the access
