@@ -117,13 +117,13 @@ def matmul_kernel_with_tensor_descriptors(
         # Pointers to matrices
         a_ptr, b_ptr, c_ptr,
         # Matrix dimensions
-        M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,
+        M, N, K,
         # The stride variables represent how much to increase the ptr by when moving by 1
         # element in a particular dimension. E.g. `stride_am` is how much to increase `a_ptr`
         # by to get the element one row down (A has M rows).
-        stride_am: tl.constexpr, stride_ak: tl.constexpr,  #
-        stride_bk: tl.constexpr, stride_bn: tl.constexpr,  #
-        stride_cm: tl.constexpr, stride_cn: tl.constexpr,  #
+        stride_am, stride_ak: tl.constexpr,  #
+        stride_bk, stride_bn: tl.constexpr,  #
+        stride_cm, stride_cn: tl.constexpr,  #
         ACCUMULATOR_DTYPE: tl.constexpr,
         # Meta-parameters
         BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr):
@@ -197,13 +197,13 @@ def matmul_kernel_with_tensor_descriptors_batched(
         # Pointers to matrices
         a_ptr, b_ptr, c_ptr,
         # Matrix dimensions
-        B: tl.constexpr, M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,
+        B, M, N, K,
         # The stride variables represent how much to increase the ptr by when moving by 1
         # element in a particular dimension. E.g. `stride_am` is how much to increase `a_ptr`
         # by to get the element one row down (A has M rows).
-        stride_az: tl.constexpr, stride_am: tl.constexpr, stride_ak: tl.constexpr,  #
-        stride_bz: tl.constexpr, stride_bk: tl.constexpr, stride_bn: tl.constexpr,  #
-        stride_cz: tl.constexpr, stride_cm: tl.constexpr, stride_cn: tl.constexpr,  #
+        stride_az, stride_am, stride_ak: tl.constexpr,  #
+        stride_bz, stride_bk, stride_bn: tl.constexpr,  #
+        stride_cz, stride_cm, stride_cn: tl.constexpr,  #
         ACCUMULATOR_DTYPE: tl.constexpr,
         # Meta-parameters
         BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr):
