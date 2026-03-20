@@ -966,7 +966,7 @@ run_triton_kernels_tests() {
   # --timeout=180: kill individual tests that hang after 3 minutes (signal method, no xdist)
   # || true: prevent set -e from exiting the script on test failures
   TRITON_TEST_SUITE=triton_kernels \
-    run_pytest_command -vvv --device xpu --timeout=180 -p no:xdist . -k 'not test_mxfp' \
+    run_pytest_command -vvv --device xpu --timeout=180 -n0 . -k 'not test_mxfp' \
     --ignore=test_compaction.py \
     --ignore=test_distributed.py \
     --ignore=test_matmul.py \
