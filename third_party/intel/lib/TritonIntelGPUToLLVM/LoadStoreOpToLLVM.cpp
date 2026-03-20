@@ -74,33 +74,45 @@ unsigned getCanonicalIndex(unsigned index, unsigned freeVarMask) {
   return index & ~freeVarMask;
 }
 
-/// Holds the values related to a block pointer.
-/// It includes the base pointer, base width and height, row and column
-/// stride, and offset base for X and Y.
-struct BlockPointerValues {
+/// Unpacked block pointer fields: { offset[rank], shape[rank], stride[rank],
+/// base }.
+struct BlockPointerFields {
+  SmallVector<Value> offsets; // offsets[0..rank-1]
+  SmallVector<Value> shapes;  // shapes[0..rank-1]
+  SmallVector<Value> strides; // strides[0..rank-1]
   Value base;
-  Value baseWidth;
-  Value baseHeight;
-  Value rowStride;
-  Value colStride;
-  Value offsetBaseX;
-  Value offsetBaseY;
 };
 
-// Unpack values as the params to 2DBlockLoad Payload: offsetBaseY,
-// offsetBaseX, baseHeight, baseWidth, rowStride, colStride, base.
-// FIXME: Only supports 2D matrices for now.
-BlockPointerValues
-getValuesFromBlockPointerStruct(Value blockPointerStruct,
-                                ConversionPatternRewriter &rewriter) {
-  const SmallVector<Value> &elems = unpackLLElements(
-      blockPointerStruct.getLoc(), blockPointerStruct, rewriter);
-  assert(elems.size() == sizeof(BlockPointerValues) / sizeof(Value) &&
-         "unexpected number of values unpacked from a block pointer");
-  return {/*base=*/elems[6],       /*baseWidth=*/elems[3],
-          /*baseHeight=*/elems[2], /*rowStride=*/elems[4],
-          /*colStride=*/elems[5],  /*offsetBaseX=*/elems[1],
-          /*offsetBaseY=*/elems[0]};
+/// Construct BlockPointerFields from an already-unpacked element vector
+/// (e.g. when the caller already called unpackLLElements).
+/// Block pointer struct layout: { offset[rank], shape[rank], stride[rank],
+/// base }
+static BlockPointerFields
+unpackBlockPointer(const SmallVectorImpl<Value> &elems, unsigned rank) {
+  assert(elems.size() == 3 * rank + 1 &&
+         "unexpected block pointer struct size");
+  BlockPointerFields f;
+  f.offsets.assign(elems.begin(), elems.begin() + rank);
+  f.shapes.assign(elems.begin() + rank, elems.begin() + 2 * rank);
+  f.strides.assign(elems.begin() + 2 * rank, elems.begin() + 3 * rank);
+  f.base = elems[3 * rank];
+  return f;
+}
+
+/// Unpack a block pointer struct into its constituent fields.
+static BlockPointerFields
+unpackBlockPointer(Value llPtr, unsigned rank, Location loc,
+                   ConversionPatternRewriter &rewriter) {
+  const SmallVector<Value> &elems = unpackLLElements(loc, llPtr, rewriter);
+  return unpackBlockPointer(elems, rank);
+}
+
+/// Infer the tensor rank from an unpacked block pointer element vector.
+/// Block pointer struct layout: { offset[rank], shape[rank], stride[rank],
+/// base }.
+static unsigned getBlockPointerRank(const SmallVectorImpl<Value> &elems) {
+  assert((elems.size() - 1) % 3 == 0 && "invalid block pointer struct");
+  return (elems.size() - 1) / 3;
 }
 
 /// Unpacked tensor descriptor fields: { shape[rank], stride[rank], base }.
@@ -296,19 +308,8 @@ struct LoadStoreConversionBase {
 
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     size_t rank = tensorType.getRank();
-    // The block pointer struct is expected to have the following layout:
-    //    Struct {
-    //      Value offset[rank];
-    //      Value shape[rank];
-    //      Value stride[rank];
-    //      Value base;
-    //    }
-    // All the values are decomposed by `unpackLLElements` into a vector.
-    // Defines the indices for the block pointer struct.
-    const unsigned blockOffset = 0, blockShape = 1 * rank,
-                   blockStride = 2 * rank, blockBase = 3 * rank;
-    const SmallVector<Value> &blockPtr =
-        unpackLLElements(loc, blockPointerStruct, rewriter);
+    BlockPointerFields bp =
+        unpackBlockPointer(blockPointerStruct, rank, loc, rewriter);
 
     const unsigned numElems = getTotalElemsPerThread(tensorType);
 
@@ -343,13 +344,11 @@ struct LoadStoreConversionBase {
       SmallVector<Value> index = indices[i];
       SmallVector<Value> indicesInTensor(rank);
       for (unsigned j = 0; j < rank; ++j)
-        indicesInTensor[j] = b.add(index[j], blockPtr[blockOffset + j]);
+        indicesInTensor[j] = b.add(index[j], bp.offsets[j]);
 
       // Get the LLVM values for mask
       maskElems.push_back(linearize(
-          indicesInTensor,
-          {blockPtr.begin() + blockShape, blockPtr.begin() + blockStride},
-          b.int_val(1, 1),
+          indicesInTensor, bp.shapes, b.int_val(1, 1),
           [&](const Value &index, const Value &shape, const Value &mask) {
             // mask = mask && (index < shape) && idx >= 0
             auto is_pos_idx = b.icmp_sge(index, b.i32_val(0));
@@ -377,19 +376,12 @@ struct LoadStoreConversionBase {
       std::optional<PaddingOption> padding = std::nullopt) const {
 
     size_t rank = tensorType.getRank();
-    const unsigned blockOffset = 0, blockShape = 1 * rank,
-                   blockStride = 2 * rank, blockBase = 3 * rank;
-    const SmallVector<Value> &blockPtr =
-        unpackLLElements(loc, blockPointerStruct, rewriter);
+    BlockPointerFields bp =
+        unpackBlockPointer(blockPointerStruct, rank, loc, rewriter);
 
-    Value base = blockPtr[blockBase];
-    ArrayRef<Value> offsets(&blockPtr[blockOffset], rank);
-    ArrayRef<Value> shapes(&blockPtr[blockShape], rank);
-    ArrayRef<Value> strides(&blockPtr[blockStride], rank);
-
-    return computeGatherScatterOperands(loc, base, offsets, shapes, strides,
-                                        tensorType, valueElemTy, rewriter,
-                                        boundaryCheck, padding);
+    return computeGatherScatterOperands(loc, bp.base, bp.offsets, bp.shapes,
+                                        bp.strides, tensorType, valueElemTy,
+                                        rewriter, boundaryCheck, padding);
   }
 
   /// Convenience overload that unpacks a tensor descriptor struct and
@@ -651,11 +643,9 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
         op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
     assert(blockIOAttr && "Expecting block IO attribute");
 
-    StringRef memoryLayoutInfo = cast<StringAttr>(blockIOAttr).getValue();
-    assert((memoryLayoutInfo == "row_major" ||
-            memoryLayoutInfo == "column_major") &&
-           "Only row_major or column_major is supported");
-    return memoryLayoutInfo == "row_major";
+    auto mode = symbolizeBlockIOMode(cast<StringAttr>(blockIOAttr).getValue());
+    assert(mode && "Only row_major or column_major is supported");
+    return *mode == BlockIOMode::RowMajor;
   }
 
   static DpasEncodingAttr::OpIdx getOpIdx(RankedTensorType tensorTy) {
@@ -681,18 +671,9 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
                               unsigned numElems) const {
     SmallVector<Value> ptrElems;
     if (isTensorPointerType(ptr.getType())) {
-      // The block pointer struct is expected to have the following layout:
-      //    Struct {
-      //      Value offset[rank];
-      //      Value shape[rank];
-      //      Value stride[rank];
-      //      Value base;
-      //    }
-      assert((unpackedPtrs.size() - 1) % 3 == 0 &&
-             "unexpected number of values unpacked from a block pointer");
-      unsigned rank = (unpackedPtrs.size() - 1) / 3;
-      unsigned blockBase = 3 * rank;
-      ptrElems.assign(numElems, unpackedPtrs[blockBase]);
+      unsigned rank = getBlockPointerRank(unpackedPtrs);
+      BlockPointerFields bp = unpackBlockPointer(unpackedPtrs, rank);
+      ptrElems.assign(numElems, bp.base);
     } else {
       ptrElems = unpackedPtrs;
     }
@@ -703,23 +684,10 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
   // Unpack the shapes from regular pointer or block pointer.
   SmallVector<Value> getShapes(ConversionPatternRewriter &rewriter, Value ptr,
                                const SmallVector<Value> &unpackedPtrs) const {
-    Location loc = ptr.getLoc();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
     if (isTensorPointerType(ptr.getType())) {
-      // The block pointer struct is expected to have the following layout:
-      //    Struct {
-      //      Value offset[rank];
-      //      Value shape[rank];
-      //      Value stride[rank];
-      //      Value base;
-      //    }
-      assert((unpackedPtrs.size() - 1) % 3 == 0 &&
-             "unexpected number of values unpacked from a block pointer");
-      unsigned rank = (unpackedPtrs.size() - 1) / 3;
-      unsigned blockShape = 1 * rank, blockStride = 2 * rank;
-
-      return SmallVector<Value>(unpackedPtrs.begin() + blockShape,
-                                unpackedPtrs.begin() + blockStride);
+      unsigned rank = getBlockPointerRank(unpackedPtrs);
+      BlockPointerFields bp = unpackBlockPointer(unpackedPtrs, rank);
+      return bp.shapes;
     }
 
     // For the regular pointers, there is no shape boundary. Return empty
@@ -735,18 +703,9 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
     if (isTensorPointerType(ptr.getType())) {
-      // The block pointer struct is expected to have the following layout:
-      //    Struct {
-      //      Value offset[rank];
-      //      Value shape[rank];
-      //      Value stride[rank];
-      //      Value base;
-      //    }
-      assert((unpackedPtrs.size() - 1) % 3 == 0 &&
-             "unexpected number of values unpacked from a block pointer");
-      unsigned rank = (unpackedPtrs.size() - 1) / 3;
-      unsigned blockStride = 2 * rank;
-      Value stride = unpackedPtrs[blockStride + dim];
+      unsigned rank = getBlockPointerRank(unpackedPtrs);
+      BlockPointerFields bp = unpackBlockPointer(unpackedPtrs, rank);
+      Value stride = bp.strides[dim];
       return b.mul(b.trunc(i32_ty, stride), b.i32_val(elemSizeInBits / 8));
     } else {
       // Regular pointer.
@@ -776,19 +735,9 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
     if (isTensorPointerType(ptr.getType())) {
-      // The block pointer struct is expected to have the following layout:
-      //    Struct {
-      //      Value offset[rank];
-      //      Value shape[rank];
-      //      Value stride[rank];
-      //      Value base;
-      //    }
-      assert((unpackedPtrs.size() - 1) % 3 == 0 &&
-             "unexpected number of values unpacked from a block pointer");
-      unsigned rank = (unpackedPtrs.size() - 1) / 3;
-      unsigned blockStride = 2 * rank, blockBase = 3 * rank;
-      return {unpackedPtrs.begin() + blockStride,
-              unpackedPtrs.begin() + blockBase};
+      unsigned rank = getBlockPointerRank(unpackedPtrs);
+      BlockPointerFields bp = unpackBlockPointer(unpackedPtrs, rank);
+      return bp.strides;
     }
 
     // Regular pointer.
@@ -808,22 +757,10 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
   // Returns the offsets of the block from regular pointer or block pointer.
   SmallVector<Value> getOffsets(ConversionPatternRewriter &rewriter, Value ptr,
                                 const SmallVector<Value> &unpackedPtrs) const {
-    Location loc = ptr.getLoc();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
     if (isTensorPointerType(ptr.getType())) {
-      // The block pointer struct is expected to have the following layout:
-      //    Struct {
-      //      Value offset[rank];
-      //      Value shape[rank];
-      //      Value stride[rank];
-      //      Value base;
-      //    }
-      assert((unpackedPtrs.size() - 1) % 3 == 0 &&
-             "unexpected number of values unpacked from a block pointer");
-      unsigned rank = (unpackedPtrs.size() - 1) / 3;
-      unsigned blockOffset = 0, blockShape = 1 * rank;
-      return SmallVector<Value>(unpackedPtrs.begin() + blockOffset,
-                                unpackedPtrs.begin() + blockShape);
+      unsigned rank = getBlockPointerRank(unpackedPtrs);
+      BlockPointerFields bp = unpackBlockPointer(unpackedPtrs, rank);
+      return bp.offsets;
     }
 
     // For the regular pointers, the offsets have already been added into
@@ -1772,23 +1709,17 @@ struct PrefetchOpConversion
 
     // Unpack block pointer struct: { offset[rank], shape[rank], stride[rank],
     // base }
-    const SmallVector<Value> &elems =
-        unpackLLElements(loc, adaptor.getPtr(), rewriter);
-    assert((elems.size() - 1) % 3 == 0 &&
-           "unexpected block pointer struct size");
-    unsigned bpRank = (elems.size() - 1) / 3;
-    assert(bpRank == rank && "block pointer rank mismatch");
-    unsigned blockOffset = 0, blockShape = rank, blockStride = 2 * rank,
-             blockBase = 3 * rank;
+    BlockPointerFields bp =
+        unpackBlockPointer(adaptor.getPtr(), rank, loc, rewriter);
 
-    Value base = elems[blockBase];
+    Value base = bp.base;
     unsigned rowIdx = rank - 2, colIdx = rank - 1;
-    Value baseWidth = elems[blockShape + colIdx];
-    Value baseHeight = elems[blockShape + rowIdx];
-    Value rowStride = elems[blockStride + rowIdx];
-    Value colStride = elems[blockStride + colIdx];
-    Value offsetBaseX = elems[blockOffset + colIdx];
-    Value offsetBaseY = elems[blockOffset + rowIdx];
+    Value baseWidth = bp.shapes[colIdx];
+    Value baseHeight = bp.shapes[rowIdx];
+    Value rowStride = bp.strides[rowIdx];
+    Value colStride = bp.strides[colIdx];
+    Value offsetBaseX = bp.offsets[colIdx];
+    Value offsetBaseY = bp.offsets[rowIdx];
 
     if (!memoryRowMajor) {
       // Swap the width/height and strides to the row major.
@@ -1803,8 +1734,8 @@ struct PrefetchOpConversion
     SmallVector<Value> extraDimStrides, extraDimBaseOffsets;
     for (unsigned d = 0; d < rank - 2; ++d) {
       extraDimStrides.push_back(
-          b.mul(elems[blockStride + d], b.i64_val(elemSizeInBytes)));
-      extraDimBaseOffsets.push_back(b.trunc(i32_ty, elems[blockOffset + d]));
+          b.mul(bp.strides[d], b.i64_val(elemSizeInBytes)));
+      extraDimBaseOffsets.push_back(b.trunc(i32_ty, bp.offsets[d]));
     }
 
     return emit2DBlockPrefetchOps(
@@ -2694,7 +2625,8 @@ struct DescriptorLoadOpToBlockIOConversion
         blockIOAttr &&
         "block_io attribute required; checked by isDescriptorBlockIOCandidate");
     const unsigned rank = tensorType.getRank();
-    bool memoryRowMajor = (blockIOAttr.getValue() == "row_major");
+    auto mode = symbolizeBlockIOMode(blockIOAttr.getValue());
+    bool memoryRowMajor = mode && *mode == BlockIOMode::RowMajor;
     unsigned contiguousDim = memoryRowMajor ? rank - 1 : rank - 2;
 
     Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
@@ -3161,7 +3093,8 @@ struct DescriptorLoadOpConversion
     SmallVector<Value> ptrElems, maskElems, otherElems;
     auto blockIOAttr = op->getAttrOfType<StringAttr>(
         TritonIntelGPUDialect::getBlockIOAttrName());
-    if (blockIOAttr && blockIOAttr.getValue() == "column_major") {
+    if (blockIOAttr && symbolizeBlockIOMode(blockIOAttr.getValue()) ==
+                           BlockIOMode::ColumnMajor) {
       DescriptorFields desc = unpackDescriptor(llDesc, rank, loc, rewriter);
       SmallVector<Value> permShapes(rank), permStrides(rank), permOffsets(rank);
       for (unsigned i = 0; i < rank; ++i) {
@@ -3763,21 +3696,21 @@ struct StoreOpToBlockIOConversion
     unsigned numElems = getTotalElemsPerThread(tensorType);
     bool isBlockPointer = isTensorPointerType(ptr.getType());
     if (isBlockPointer) {
-      auto [base, width, height, rowStride, colStride, offsetX, offsetY] =
-          getValuesFromBlockPointerStruct(llPtr, rewriter);
+      BlockPointerFields bp =
+          unpackBlockPointer(llPtr, /*rank=*/2, loc, rewriter);
 
-      ptrElems = SmallVector<Value>(numElems, base);
+      ptrElems = SmallVector<Value>(numElems, bp.base);
 
       Value elemSizeInBytes = b.i32_val(elemSizeInBits / 8);
-      width = b.trunc(i32_ty, width);
-      rowStride = b.trunc(i32_ty, rowStride);
+      Value width = b.trunc(i32_ty, bp.shapes[1]);
+      Value stride = b.trunc(i32_ty, bp.strides[0]);
       // encoded as bytes.
       baseWidth = b.mul(width, elemSizeInBytes);
-      baseHeight = b.trunc(i32_ty, height);
+      baseHeight = b.trunc(i32_ty, bp.shapes[0]);
       // encoded as bytes.
-      pitch = b.mul(rowStride, elemSizeInBytes);
-      offsetBaseX = offsetX;
-      offsetBaseY = offsetY;
+      pitch = b.mul(stride, elemSizeInBytes);
+      offsetBaseX = bp.offsets[1];
+      offsetBaseY = bp.offsets[0];
     } else {
       // Get the LLVM values for pointers
       ptrElems = unpackLLElements(loc, llPtr, rewriter);
