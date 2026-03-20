@@ -381,13 +381,16 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bfloat16_conversion
 
 // -----
 
-// COM: Ensure prefetch operations aren't generated for 3D loads.
+// COM: 3D block pointer loads: load A qualifies for prefetch (reshape to dot_op),
+// COM: load B does not (reshape to linear encoding, not traced).
 #linear = #ttg.linear<{register = [[0, 1, 0], [0, 2, 0], [0, 4, 0], [0, 8, 0], [0, 16, 0], [0, 0, 16], [0, 0, 32], [0, 64, 0]], lane = [[0, 0, 1], [0, 0, 2], [0, 0, 4], [0, 0, 8]], warp = [[0, 0, 0], [0, 0, 0], [0, 32, 0]], block = []}>
 #linear1 = #ttg.linear<{register = [[0, 0, 1], [0, 0, 2], [0, 0, 4], [0, 0, 8], [0, 16, 0], [0, 0, 16], [0, 0, 32], [0, 128, 0]], lane = [[0, 1, 0], [0, 2, 0], [0, 4, 0], [0, 8, 0]], warp = [[0, 32, 0], [0, 64, 0], [0, 0, 0]], block = []}>
 #linear2 = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [16, 0], [0, 16], [0, 32], [128, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0]], warp = [[32, 0], [64, 0], [0, 0]], block = []}>
 #mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 4], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
 module attributes {ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_2d_block_io, ttig.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: batched_gemm_3d_tma_kernel
+  // COM: Load A qualifies for prefetch (reshape -> dot_op encoding).
+  // CHECK: ttig.prefetch {{.*}} : !tt.ptr<tensor<1x128x64xf16
   tt.func public @batched_gemm_3d_tma_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: i32, %arg6: i32 {tt.divisibility = 16 : i32}) {
     %c1_i32 = arith.constant 1 : i32
     %c0_i32 = arith.constant 0 : i32
@@ -398,7 +401,6 @@ module attributes {ttig.support_subgroup_matrix_multiply_accumulate, ttig.suppor
     %16 = arith.extsi %arg6 : i32 to i64
     %24 = arith.extsi %arg3 : i32 to i64
     %26:1 = scf.for %arg7 = %c0_i32 to %c64_i32 step %c1_i32 iter_args(%arg8 = %c1_i32) -> (i32)  : i32 {
-      // CHECK-NOT: prefetch
       %27 = arith.cmpi eq, %arg8, %c1_i32 : i32
       %29 = arith.select %27, %c0_i32, %arg8 : i32
       %33 = tt.make_tensor_ptr %arg0, [%24, %24, %16], [%16, %16, %c1_i64], [%arg8, %arg8, %29] {order = array<i32: 1, 0>} : <tensor<1x128x64xf16, #linear>>
