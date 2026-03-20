@@ -4,8 +4,7 @@ permissions: read-all
 
 on:
   schedule:
-    # About midnight PST (UTC-8)
-    - cron: "5 10 * * *"
+    - cron: "0 8 * * *"
 
 jobs:
   benchmarks:
