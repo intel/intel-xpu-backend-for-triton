@@ -42,6 +42,7 @@ class ReportStats:  # pylint: disable=R0801
 
     RESULT_FIELDS: ClassVar[list[str]] = ["passed", "failed", "skipped", "xfailed"]
     METRIC_FIELDS: ClassVar[list[str]] = ["time", "pass_rate_without_xfailed"]
+    COMPARE_FIELDS: ClassVar[list[str]] = ["passed", "failed", "skipped", "xfailed", "time"]
 
     @property
     def total(self):
@@ -130,6 +131,51 @@ class TestGroupingLevel(Enum):
     REPORT = "report"
     TESTSUITE = "testsuite"
     TEST = "test"
+
+
+class CompareScope(Enum):
+    ANY = "any"
+    R1_ONLY = "r1-only"
+    R2_ONLY = "r2-only"
+    BOTH = "both"
+
+
+class SortByStats(str, Enum):
+    NAME = "name"
+    PASSED = "passed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+    XFAILED = "xfailed"
+    TIME = "time"
+    PASS_RATE = "pass_rate_without_xfailed"
+
+
+class SortByCompare(str, Enum):
+    NAME = "name"
+    PASSED_R1 = "passed.r1"
+    PASSED_R2 = "passed.r2"
+    PASSED_DELTA = "passed.Δ"
+    FAILED_R1 = "failed.r1"
+    FAILED_R2 = "failed.r2"
+    FAILED_DELTA = "failed.Δ"
+    SKIPPED_R1 = "skipped.r1"
+    SKIPPED_R2 = "skipped.r2"
+    SKIPPED_DELTA = "skipped.Δ"
+    XFAILED_R1 = "xfailed.r1"
+    XFAILED_R2 = "xfailed.r2"
+    XFAILED_DELTA = "xfailed.Δ"
+    TIME_R1 = "time.r1"
+    TIME_R2 = "time.r2"
+    TIME_DELTA = "time.Δ"
+
+    @classmethod
+    def _missing_(cls, value: object):
+        if isinstance(value, str) and value.endswith(".delta"):
+            canonical = value.replace(".delta", ".Δ")
+            for member in cls:
+                if member.value == canonical:
+                    return member
+        return None
 
 
 @dataclass
@@ -590,8 +636,10 @@ class TestReport:
         grouping_level: TestGroupingLevel,
         sort_by: str = "name",
     ) -> pd.DataFrame:
-        if sort_by not in ReportStats.RESULT_FIELDS + ReportStats.METRIC_FIELDS + ["name"]:
-            raise ValueError(f"Unsupported sort_by field: {sort_by}")
+        try:
+            SortByStats(sort_by)
+        except ValueError as e:
+            raise ValueError(f"Unsupported sort_by field: {sort_by}") from e
         summary_df = self._df_w_total_row(
             self._get_report_dfs(
                 [self],
@@ -701,13 +749,58 @@ class TestReport:
         with open(json_file, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
 
+    @staticmethod
+    def _minify_name(
+        name: str,
+        omit_testsuite: bool = False,
+        omit_module: bool = False,
+        omit_class: bool = False,
+    ) -> str:
+        """Minify a test name by stripping testsuite, module path, and/or class name.
+
+        Index format: <testsuite>::<path>/<module>.py[::<class>]::<test>
+        The class segment is optional.
+        """
+        if name in ("Σ", ""):
+            return name
+        parts = name.split("::")
+        # Classify each part by its nature
+        result = []
+        for part in parts:
+            if part.endswith(".py"):
+                if not omit_module:
+                    result.append(part)
+            elif part.startswith("test_"):
+                # This is a test function — always keep
+                result.append(part)
+            elif "/" in part or "." in part:
+                # Looks like a path segment (module without .py) — treat as module
+                if not omit_module:
+                    result.append(part)
+            elif result or not omit_testsuite:
+                # First non-path, non-test part before any module = testsuite
+                # After module = class
+                is_first = len(result) == 0 and not any(p.endswith(".py") for p in parts[:parts.index(part)])
+                if is_first:
+                    if not omit_testsuite:
+                        result.append(part)
+                else:
+                    if not omit_class:
+                        result.append(part)
+        return "::".join(result)
+
     @classmethod
-    def compare(  # pylint: disable=R0914
+    def compare(  # pylint: disable=R0914, too-many-arguments, too-many-positional-arguments
         cls,
         reports: list[TestReport],
         grouping_level: TestGroupingLevel = TestGroupingLevel.TESTSUITE,
+        sort_by: SortByCompare = SortByCompare.NAME,
+        compare_scope: CompareScope = CompareScope.ANY,
+        omit_testsuite_name: bool = False,
+        omit_test_module_name: bool = False,
+        omit_test_class_name: bool = False,
     ) -> pd.DataFrame:
-        reports_stats, columns = cls._get_report_dfs(reports, grouping_level)
+        reports_stats, columns = cls._get_report_dfs(reports, grouping_level, fields_filter=ReportStats.COMPARE_FIELDS)
         left_r = reports_stats[0]
         right_r = reports_stats[1]
         left_r, right_r = left_r.align(right_r, join="outer")
@@ -722,13 +815,50 @@ class TestReport:
             axis=1,
         ).swaplevel(axis=1).sort_index(axis=1, level=0).round(0)
         comparison = comparison.reindex(columns=columns, level=0)
+
+        # Filter by compare scope
+        if compare_scope != CompareScope.ANY:
+            r1_has = left_r.notna().any(axis=1)
+            r2_has = right_r.notna().any(axis=1)
+            match compare_scope:
+                case CompareScope.R1_ONLY:
+                    mask = r1_has & ~r2_has
+                case CompareScope.R2_ONLY:
+                    mask = ~r1_has & r2_has
+                case CompareScope.BOTH:
+                    mask = r1_has & r2_has
+                case _:
+                    raise ValueError(f"Invalid compare_scope: '{compare_scope}'")
+            comparison = comparison.loc[mask]
+
+        # Sort
+        if sort_by != SortByCompare.NAME:
+            metric, source = sort_by.value.rsplit(".", 1)
+            comparison = comparison.sort_values(by=(metric, source), ascending=False)
+
+        # Add total row
         comparison_with_total = cls._df_w_total_row(comparison)
 
+        # Format: time as float, others as int, NaN as "NA"
         def _to_int_or_na(val):
             if pd.isna(val):
                 return "NA"
             return int(round(val))
 
+        def _to_float_or_na(val):
+            if pd.isna(val):
+                return "NA"
+            return round(float(val), 3)
+
+        comparison_result = comparison_with_total.copy()
+        for col in comparison_result.columns:
+            metric = col[0]
+            if metric == "time":
+                comparison_result[col] = comparison_result[col].map(_to_float_or_na)
+            else:
+                comparison_result[col] = comparison_result[col].map(_to_int_or_na)
+
+        # Insert group headers only when sorting by name (default)
         def _insert_group_headers(df: pd.DataFrame) -> pd.DataFrame:
             mask = df.index != "Σ"
             df_no_total = df[mask]
@@ -739,7 +869,6 @@ class TestReport:
             frames = []
             for group, subdf in df_no_total.groupby(groups):
                 header = pd.DataFrame([[""] * df.shape[1]], columns=df.columns, index=[group])
-
                 subdf2 = subdf.copy()
                 subdf2.index = tests.loc[subdf.index]
                 frames.append(header)
@@ -748,9 +877,20 @@ class TestReport:
                 frames.append(df_total)
             return pd.concat(frames)
 
-        comparison_result = comparison_with_total.map(_to_int_or_na)
-        if grouping_level == TestGroupingLevel.TEST:
-            return _insert_group_headers(comparison_result)
+        # Minify index names (before group headers, which depend on :: splitting)
+        has_omit = omit_testsuite_name or omit_test_module_name or omit_test_class_name
+        if has_omit:
+            comparison_result.index = [
+                cls._minify_name(name, omit_testsuite_name, omit_test_module_name, omit_test_class_name)
+                for name in comparison_result.index
+            ]
+
+        # Insert group headers only when sorting by name and no omit flags
+        use_group_headers = (grouping_level == TestGroupingLevel.TEST and sort_by == SortByCompare.NAME
+                             and not has_omit)
+        if use_group_headers:
+            comparison_result = _insert_group_headers(comparison_result)
+
         return comparison_result
 
     @classmethod
