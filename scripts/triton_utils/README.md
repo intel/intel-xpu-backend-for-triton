@@ -243,7 +243,7 @@ triton-utils compare --r <reports_folder_1> --r2 <reports_folder_2> --tests-with
 
 The `--sort-by` option accepts values in `<metric>.<source>` format where:
 - **metric**: `passed`, `failed`, `skipped`, `xfailed`, `time`
-- **source**: `r1` (first report), `r2` (second report), `Δ` or `delta` (difference)
+- **source**: `r1` (first report), `r2` (second report), `Δ` or `delta` (difference), `%Δ` or `%delta` (percentage change, time only)
 
 Default: `name` (alphabetical sort by test name).
 
@@ -278,7 +278,7 @@ If you see "Test contains test cases from multiple testsuites", either:
 
 ### 0.5.0
 
-- **Compare mode: time column** — Comparison output now includes `time` with `r1`, `r2`, and `Δ` columns.
+- **Compare mode: time column** — Comparison output now includes `time` with `r1`, `r2`, `Δ`, and `%Δ` (percentage change) columns. Time values are shown with 2-decimal precision.
 - **Compare mode: `--sort-by`** — Sort comparison results by any column using `<metric>.<source>` notation (e.g., `passed.r1`, `time.delta`). Accepts `delta` as an alias for `Δ`.
 - **Compare mode: `--compare-scope`** — Filter comparison rows by test presence: `any` (default), `r1-only`, `r2-only`, `both`.
 - **Compare mode: `--pretty`** — Accepted for CLI consistency with `stats` mode.

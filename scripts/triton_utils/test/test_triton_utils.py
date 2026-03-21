@@ -1047,4 +1047,65 @@ def test_compare_omit_flags_warn_on_testsuite_level(tmp_path, capsys):
     assert 'omit-testsuite-name' in stderr
 
 
+def test_compare_omit_testsuite_and_module_preserves_class(tmp_path):
+    """Verify _minify_name keeps class when both testsuite and module are omitted."""
+    r1, r2 = _setup_compare_reports(tmp_path, TESTS_FOR_COMPARE_CLASS)
+    config = triton_utils.Config(
+        action='compare_reports',
+        reports=r1,
+        reports_2=r2,
+        _report_grouping_level='test',
+        omit_testsuite_name=True,
+        omit_test_module_name=True,
+    )
+    result = triton_utils.run(config)
+    data_rows = [idx for idx in result.index if idx != 'Σ' and result.loc[idx].ne('').any()]
+    assert any('TestGraphXPU' in row for row in data_rows)
+
+
+def test_compare_time_pct_delta_column(tmp_path):
+    """Verify time.%Δ column shows percentage change."""
+    r1, r2 = _setup_compare_reports(tmp_path, TESTS_FOR_COMPARE_SCOPE)
+    config = triton_utils.Config(
+        action='compare_reports',
+        reports=r1,
+        reports_2=r2,
+        _report_grouping_level='testsuite',
+    )
+    result = triton_utils.run(config)
+    assert ('time', '%Δ') in result.columns
+    # language testsuite: r1 time=3.0, r2 time=4.0 → %Δ = 33.33%
+    pct_val = result.loc['language', ('time', '%Δ')]
+    assert '%' in str(pct_val)
+
+
+def test_compare_sort_by_time_pct_delta(tmp_path):
+    """Verify sorting by time.%Δ works."""
+    r1, r2 = _setup_compare_reports(tmp_path, TESTS_FOR_COMPARE_SCOPE)
+    config = triton_utils.Config(
+        action='compare_reports',
+        reports=r1,
+        reports_2=r2,
+        sort_by='time.%delta',
+        _report_grouping_level='testsuite',
+    )
+    result = triton_utils.run(config)
+    assert result.index[-1] == 'Σ'
+
+
+def test_compare_time_precision(tmp_path):
+    """Verify time columns have 2-decimal precision, not rounded to int."""
+    r1, r2 = _setup_compare_reports(tmp_path, TESTS_FOR_COMPARE_SCOPE)
+    config = triton_utils.Config(
+        action='compare_reports',
+        reports=r1,
+        reports_2=r2,
+        _report_grouping_level='testsuite',
+    )
+    result = triton_utils.run(config)
+    # r1 time for language = 3.0, check it's a float not int
+    time_r1 = result.loc['language', ('time', 'r1')]
+    assert isinstance(time_r1, float)
+
+
 # yapf: enable

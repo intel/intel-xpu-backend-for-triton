@@ -167,14 +167,21 @@ class SortByCompare(str, Enum):
     TIME_R1 = "time.r1"
     TIME_R2 = "time.r2"
     TIME_DELTA = "time.Δ"
+    TIME_PCT_DELTA = "time.%Δ"
 
     @classmethod
     def _missing_(cls, value: object):
-        if isinstance(value, str) and value.endswith(".delta"):
-            canonical = value.replace(".delta", ".Δ")
-            for member in cls:
-                if member.value == canonical:
-                    return member
+        if isinstance(value, str):
+            if value.endswith(".%delta"):
+                canonical = value.replace(".%delta", ".%Δ")
+                for member in cls:
+                    if member.value == canonical:
+                        return member
+            if value.endswith(".delta"):
+                canonical = value.replace(".delta", ".Δ")
+                for member in cls:
+                    if member.value == canonical:
+                        return member
         return None
 
 
@@ -764,33 +771,26 @@ class TestReport:
         if name in ("Σ", ""):
             return name
         parts = name.split("::")
-        # Classify each part by its nature
-        result = []
+        result: list[str] = []
+        seen_module = False
         for part in parts:
-            if part.endswith(".py"):
+            is_module = part.endswith(".py") or (("/" in part or "." in part) and not part.startswith("test_"))
+            if is_module:
+                seen_module = True
                 if not omit_module:
                     result.append(part)
             elif part.startswith("test_"):
-                # This is a test function — always keep
                 result.append(part)
-            elif "/" in part or "." in part:
-                # Looks like a path segment (module without .py) — treat as module
-                if not omit_module:
+            elif not seen_module:
+                if not omit_testsuite:
                     result.append(part)
-            elif result or not omit_testsuite:
-                # First non-path, non-test part before any module = testsuite
-                # After module = class
-                is_first = len(result) == 0 and not any(p.endswith(".py") for p in parts[:parts.index(part)])
-                if is_first:
-                    if not omit_testsuite:
-                        result.append(part)
-                else:
-                    if not omit_class:
-                        result.append(part)
+            else:
+                if not omit_class:
+                    result.append(part)
         return "::".join(result)
 
     @classmethod
-    def compare(  # pylint: disable=R0914, too-many-arguments, too-many-positional-arguments
+    def compare(  # pylint: disable=R0912, R0914, R0915, too-many-arguments, too-many-positional-arguments
         cls,
         reports: list[TestReport],
         grouping_level: TestGroupingLevel = TestGroupingLevel.TESTSUITE,
@@ -806,15 +806,41 @@ class TestReport:
         left_r, right_r = left_r.align(right_r, join="outer")
         diff_abs = right_r.fillna(0) - left_r.fillna(0)
 
+        # Compute percentage delta for time: 100 * (r2 - r1) / r1
+        time_pct = pd.DataFrame(index=left_r.index)
+        if "time" in left_r.columns:
+            left_time = left_r["time"].fillna(0)
+            right_time = right_r["time"].fillna(0)
+            time_pct["time"] = (100.0 * (right_time - left_time) / left_time.where(left_time != 0)).round(2)
+
         comparison = pd.concat(
             {
                 "r1": left_r,
                 "r2": right_r,
                 "Δ": diff_abs,
+                "%Δ": time_pct,
             },
             axis=1,
-        ).swaplevel(axis=1).sort_index(axis=1, level=0).round(0)
+        ).swaplevel(axis=1).sort_index(axis=1, level=0)
         comparison = comparison.reindex(columns=columns, level=0)
+
+        # Reorder sources within each metric: r1, r2, Δ, %Δ
+        source_order = ["r1", "r2", "Δ", "%Δ"]
+        ordered_cols = []
+        for metric in columns:
+            for source in source_order:
+                if (metric, source) in comparison.columns:
+                    ordered_cols.append((metric, source))
+        comparison = comparison[ordered_cols]
+
+        # Round count metrics to integers, keep time with 2-decimal precision
+        count_metrics = ["passed", "failed", "skipped", "xfailed"]
+        count_cols = [col for col in comparison.columns if col[0] in count_metrics]
+        time_cols = [col for col in comparison.columns if col[0] == "time"]
+        if count_cols:
+            comparison[count_cols] = comparison[count_cols].round(0)
+        if time_cols:
+            comparison[time_cols] = comparison[time_cols].round(2)
 
         # Filter by compare scope
         if compare_scope != CompareScope.ANY:
@@ -839,6 +865,15 @@ class TestReport:
         # Add total row
         comparison_with_total = cls._df_w_total_row(comparison)
 
+        # Recompute %Δ for total row from summed time values
+        if ("time", "%Δ") in comparison_with_total.columns:
+            total_r1 = comparison_with_total.loc["Σ", ("time", "r1")]
+            total_r2 = comparison_with_total.loc["Σ", ("time", "r2")]
+            if pd.notna(total_r1) and total_r1 != 0:
+                comparison_with_total.loc["Σ", ("time", "%Δ")] = round(100.0 * (total_r2 - total_r1) / total_r1, 2)
+            else:
+                comparison_with_total.loc["Σ", ("time", "%Δ")] = float("nan")
+
         # Format: time as float, others as int, NaN as "NA"
         def _to_int_or_na(val):
             if pd.isna(val):
@@ -848,12 +883,19 @@ class TestReport:
         def _to_float_or_na(val):
             if pd.isna(val):
                 return "NA"
-            return round(float(val), 3)
+            return round(float(val), 2)
+
+        def _to_pct_or_na(val):
+            if pd.isna(val):
+                return "NA"
+            return f"{round(float(val), 2)}%"
 
         comparison_result = comparison_with_total.copy()
         for col in comparison_result.columns:
-            metric = col[0]
-            if metric == "time":
+            metric, source = col[0], col[1]
+            if source == "%Δ":
+                comparison_result[col] = comparison_result[col].map(_to_pct_or_na)
+            elif metric == "time":
                 comparison_result[col] = comparison_result[col].map(_to_float_or_na)
             else:
                 comparison_result[col] = comparison_result[col].map(_to_int_or_na)

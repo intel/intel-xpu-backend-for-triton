@@ -319,7 +319,9 @@ class Config:  # pylint: disable=R0902
             "--sort-by",
             default=cls().sort_by,
             type=str,
-            choices=[s.value for s in SortByCompare],
+            choices=([s.value for s in SortByCompare] +
+                     [s.value.replace(".Δ", ".delta") for s in SortByCompare if ".Δ" in s.value] +
+                     [s.value.replace(".%Δ", ".%delta") for s in SortByCompare if ".%Δ" in s.value]),
             help="Sort by column in <metric>.<source> format (e.g., passed.r1, time.delta)",
         )
         compare_stats_parser.add_argument(
