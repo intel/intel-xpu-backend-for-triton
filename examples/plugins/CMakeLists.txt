@@ -31,7 +31,10 @@ foreach( plugin ${TRITON_PLUGIN_PASSES} )
       TritonCanonicalizeIncGen
       TritonPluginsIncGen
     )
-    target_link_libraries(${plugin} PRIVATE MLIRPass)
+    target_link_libraries(${plugin} PRIVATE
+      $<$<PLATFORM_ID:Windows>:MLIRPass>
+      $<$<NOT:$<PLATFORM_ID:Windows>>:triton>
+    )
 
     # CMAKE_LIBRARY_OUTPUT_DIRECTORY is only set during the Python
     # build. It is empty if building directly from the root
