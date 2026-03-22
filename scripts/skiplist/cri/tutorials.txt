@@ -1,6 +1,6 @@
 # Native API returns: 17 (UR_RESULT_ERROR_PROFILING_INFO_NOT_AVAILABLE)
 python/test/tutorials/test_tutorials.py::test_03_matrix_multiplication
+python/test/tutorials/test_tutorials.py::test_03a_matrix_multiplication_tensor_descriptor
 python/test/tutorials/test_tutorials.py::test_05_layer_norm
 python/test/tutorials/test_tutorials.py::test_08_grouped_gemm
 python/test/tutorials/test_tutorials.py::test_09_persistent_matmul
-python/test/tutorials/test_tutorials.py::test_10_experimental_block_pointer
