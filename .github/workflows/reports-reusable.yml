@@ -1,0 +1,203 @@
+name: Reports reusable workflow
+
+on:
+  workflow_call:
+    inputs:
+      reports_dir:
+        description: Path to the reports directory (used when called from build-test-reusable)
+        type: string
+        default: ""
+      artifact_pattern:
+        description: Glob pattern to download test report artifacts
+        type: string
+        default: ""
+      python_version:
+        description: Python version
+        type: string
+        default: "3.10"
+      runner_label:
+        description: Runner label
+        type: string
+        default: ""
+      driver_version:
+        description: Driver version
+        type: string
+        default: "rolling"
+      use_pyenv_python:
+        description: Use Python built with pyenv
+        type: boolean
+        default: false
+      runner_version:
+        description: Runner label for version
+        type: string
+        default: runner-0.0.22
+
+      # Comparison parameters
+      compare_run_id:
+        description: GH run ID to compare against (leave empty to skip comparison)
+        type: string
+        default: ""
+      compare_repo:
+        description: Repository for the comparison run
+        type: string
+        default: "intel/intel-xpu-backend-for-triton"
+      compare_branch:
+        description: Branch for the comparison run
+        type: string
+        default: "main"
+      compare_artifact_pattern:
+        description: Artifact pattern for the comparison run
+        type: string
+        default: ""
+
+permissions: read-all
+
+jobs:
+  reports:
+    name: Reports
+    runs-on:
+      - ${{ inputs.runner_version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install Python
+        uses: ./.github/actions/setup-python
+        with:
+          python_version: ${{ inputs.python_version }}
+          use_pyenv: ${{ inputs.use_pyenv_python }}
+
+      - name: Install triton_utils
+        run: |
+          pip install ./scripts/triton_utils
+
+      # Download artifacts from the current workflow run (when called from build-test-reusable)
+      - name: Download test reports (artifacts)
+        if: inputs.reports_dir == ''
+        uses: actions/download-artifact@v8
+        with:
+          pattern: ${{ inputs.artifact_pattern || format('test-reports-*-{0}-{1}', inputs.python_version, inputs.runner_label || inputs.driver_version) }}
+          path: reports
+          merge-multiple: true
+
+      # Use pre-existing reports directory (when reports_dir is provided)
+      - name: Use provided reports directory
+        if: inputs.reports_dir != ''
+        run: |
+          if [ ! -d "${{ inputs.reports_dir }}" ]; then
+            echo "Error: reports directory '${{ inputs.reports_dir }}' does not exist"
+            exit 1
+          fi
+          if [ "${{ inputs.reports_dir }}" != "reports" ]; then
+            ln -sfn "${{ inputs.reports_dir }}" reports
+          fi
+
+      - name: Load environment details
+        run: |
+          if [ -f ./reports/.env ]; then
+            while IFS= read -r line; do
+              # Skip empty lines and comments
+              if [ -z "$line" ] || echo "$line" | grep -Eq '^[[:space:]]*#'; then
+                continue
+              fi
+              # Only accept simple KEY=VALUE pairs where KEY is [A-Z0-9_]+
+              if echo "$line" | grep -Eq '^[A-Z0-9_]+=.*$'; then
+                echo "$line" >> "$GITHUB_ENV"
+              fi
+            done < ./reports/.env
+          fi
+
+      # --- Pass rate ---
+
+      - name: Pass rate
+        run: |
+          triton-utils pass_rate --reports reports --save-to-json pass_rate.json --merge-test-results --tests-with-multiple-testsuites
+
+      # --- Stats by testsuite ---
+
+      - name: Stats by testsuite (sorted by name)
+        run: |
+          triton-utils stats --reports reports --level testsuite --pretty --merge --long-names --multiple-suites
+
+      - name: Stats by testsuite (sorted by skipped)
+        run: |
+          triton-utils stats --reports reports --level testsuite --pretty --merge --long-names --multiple-suites --sort-by skipped
+
+      - name: Stats by testsuite (sorted by time)
+        run: |
+          triton-utils stats --reports reports --level testsuite --pretty --merge --long-names --multiple-suites --sort-by time
+
+      # --- Stats by test ---
+
+      - name: Stats by test (sorted by name)
+        run: |
+          triton-utils stats --reports reports --level test --pretty --merge --long-names --multiple-suites
+
+      - name: Stats by test (sorted by skipped)
+        run: |
+          triton-utils stats --reports reports --level test --pretty --merge --long-names --multiple-suites --sort-by skipped
+
+      - name: Stats by test (sorted by time)
+        run: |
+          triton-utils stats --reports reports --level test --pretty --merge --long-names --multiple-suites --sort-by time
+
+      # --- Comparison with another run ---
+
+      - name: Download comparison reports
+        if: inputs.compare_run_id != ''
+        env:
+          COMPARE_ARTIFACT_PATTERN: ${{ inputs.compare_artifact_pattern }}
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          args=(
+            download
+            --run "${{ inputs.compare_run_id }}"
+            -R "${{ inputs.compare_repo }}"
+            -B "${{ inputs.compare_branch }}"
+            -D reports_compare
+          )
+
+          if [ -n "${COMPARE_ARTIFACT_PATTERN:-}" ]; then
+            args+=("--artifact-pattern" "$COMPARE_ARTIFACT_PATTERN")
+          fi
+
+          triton-utils "${args[@]}"
+
+      - name: Comparison by testsuite
+        if: inputs.compare_run_id != ''
+        run: |
+          triton-utils compare --r reports --r2 reports_compare --level testsuite --merge --long-names --multiple-suites
+
+      - name: Comparison by test
+        if: inputs.compare_run_id != ''
+        run: |
+          triton-utils compare --r reports --r2 reports_compare --level test --merge --long-names --multiple-suites
+
+      # --- Upload artifacts ---
+
+      - name: Upload pass rate report
+        uses: actions/upload-artifact@v7
+        with:
+          name: pass_rate-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          path: pass_rate*.json
+
+      - name: Upload tutorials test report
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-reports-tutorials-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          include-hidden-files: true
+          path: |
+            reports/tutorials*.xml
+            reports/test-report-tutorials-*/tutorials.xml
+
+      - name: Upload tutorials performance report
+        uses: actions/upload-artifact@v7
+        with:
+          name: tutorials-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          if-no-files-found: warn
+          include-hidden-files: true
+          path: |
+            reports/*/*.csv
+            reports/.env
