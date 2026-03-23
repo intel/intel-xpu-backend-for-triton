@@ -218,8 +218,8 @@ public:
     intel::populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo,
                                              patterns, axisInfoAnalysis,
                                              strideAnalysis, benefit);
-    mlir::triton::populateReduceOpToLLVMPatterns(typeConverter, patterns,
-                                                 targetInfo, benefit);
+    intel::populateReduceOpToLLVMPatterns(typeConverter, patterns, targetInfo,
+                                          benefit);
     mlir::triton::populateScanOpToLLVMPatterns(typeConverter, patterns,
                                                targetInfo, benefit);
     mlir::triton::populateGatherOpToLLVMPatterns(typeConverter, patterns,
