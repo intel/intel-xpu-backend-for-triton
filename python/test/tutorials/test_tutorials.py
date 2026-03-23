@@ -15,13 +15,13 @@ TUTORIALS = [
     "01-vector-add",
     "02-fused-softmax",
     "03-matrix-multiplication",
+    "03a-matrix-multiplication-tensor-descriptor",
     "04-low-memory-dropout",
     "05-layer-norm",
     "06-fused-attention",
     "07-extern-functions",
     "08-grouped-gemm",
     "09-persistent-matmul",
-    "10-experimental-block-pointer",
 ]
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]

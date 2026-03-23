@@ -79,7 +79,8 @@ def ref_paged_attn(
         if soft_cap is not None and soft_cap > 0:
             attn = soft_cap * torch.tanh(attn / soft_cap)
         attn.masked_fill_(mask, float("-inf"))
-        attn = torch.softmax(attn, dim=-1).to(v.dtype)
+        attn = torch.softmax(attn, dim=-1)  # expected peak memory usage is here
+        attn = attn.to(v.dtype)  # cast in a second step to reduce peak memory usage
         out = torch.einsum("hqk,khd->qhd", attn, v)
 
         outputs.append(out)
@@ -99,10 +100,11 @@ def _dtype_size(dtype):
 
 
 def is_enough_memory(x_val, safety_factor=0.80):
-    """Check whether all tensors created by the benchmark fit in GPU memory.
+    """
+    Check whether all tensors created by the benchmark fit in GPU memory.
 
-    Mirrors every allocation inside ``benchmark()`` so the estimate is
-    precise.  Returns *True* when the total fits within
+    Mirrors every allocation inside ``benchmark()`` and the expected peak memory
+    usage of ``ref_paged_attn()``. Returns *True* when the total fits within
     ``safety_factor`` of the device's total memory.
     """
     q_heads, k_heads, head_size, qdtype, seq_lens, sliding_window, soft_cap, num_blocks, block_size = x_val
@@ -141,7 +143,32 @@ def is_enough_memory(x_val, safety_factor=0.80):
         # k_descale, v_descale: (num_seqs, k_heads) float32
         q_quant_mem += 2 * num_seqs * k_heads * 4
 
-    total_memory = (query_mem + kv_cache_mem + output_mem + cu_mem + kvl_mem + bt_mem + q_quant_mem)
+    triton_memory = (query_mem + kv_cache_mem + output_mem + cu_mem + kvl_mem + bt_mem + q_quant_mem)
+
+    # --- peak memory usage in ref_paged_attn() ---
+    ref_memory = 0
+    for query_len, kv_len in seq_lens:
+        kv_repeat_mem = 0
+        if q_heads != k_heads:
+            # kv copies: (kv_len, q_heads, head_size) dtype
+            kv_repeat_mem = 2 * kv_len * q_heads * head_size * d_bytes
+        # attn: (q_heads, query_len, kv_len) float32
+        attn_mem = q_heads * query_len * kv_len * 4
+        softmax_mem = q_heads * query_len * kv_len * 4
+        # empty_mask: (query_len, kv_len) float32
+        empty_mask_mem = query_len * kv_len * 4
+        # mask: (query_len, kv_len) bool
+        mask_mem = query_len * kv_len
+        sliding_window_mask_mem = 0
+        if sliding_window is not None:
+            # sliding_window_mask: (query_len, kv_len) bool
+            sliding_window_mask_mem = query_len * kv_len
+
+        ref_memory = max(ref_memory,
+                         kv_repeat_mem + attn_mem + softmax_mem + empty_mask_mem + mask_mem + sliding_window_mask_mem)
+
+    # benchmark() and ref_paged_attn() allocations overlap.
+    total_memory = triton_memory + ref_memory
 
     threshold = TOTAL_MEMORY_BYTES * safety_factor
     enough = total_memory < threshold
@@ -305,7 +332,7 @@ def get_unified_attention_benchmark(
                 key_cache=key_cache,
                 value_cache=value_cache,
                 query_lens=query_lens,
-                kv_lens=kv_lens_tensor,
+                kv_lens=kv_lens,
                 block_tables=block_tables,
                 scale=scale,
                 sliding_window=sliding_window,
