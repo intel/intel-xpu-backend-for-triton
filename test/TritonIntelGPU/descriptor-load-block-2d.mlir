@@ -232,3 +232,23 @@ module attributes {"ttg.num-warps" = 64 : i32, "ttg.threads-per-warp" = 16 : i32
     tt.return %0 : tensor<32x2x16xf32, #blocked>
   }
 }
+
+// -----
+
+// COM: Rank-3 descriptor load with column_major block_io attribute (produced by
+// COM: FuseTransWithDescriptorLoad for rank-3 tensors). The descriptor has shape
+// COM: [2, 64, 32] and the result has inner dims transposed: [2, 32, 64].
+// COM: Since 2D block IO only supports rank-2 tensors, the lowering falls back
+// COM: to the gather path using llvm.getelementptr.
+#blocked3d = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 1, 16], warpsPerCTA = [1, 8, 1], order = [2, 1, 0]}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @descriptor_load_rank3_column_major(
+  // CHECK-NOT: triton_gen.2Dblockload
+  // CHECK: llvm.getelementptr
+  tt.func public @descriptor_load_rank3_column_major(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i64, %arg5: i64, %arg6: i32, %arg7: i32, %arg8: i32) {
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2, %arg3], [%arg4, %arg5, %c1_i64] : <f16>, <tensor<2x64x32xf16>>
+    %load = tt.descriptor_load %desc[%arg6, %arg7, %arg8] {ttig.block_io = "column_major"} : !tt.tensordesc<tensor<2x64x32xf16>> -> tensor<2x32x64xf16, #blocked3d>
+    tt.return
+  }
+}

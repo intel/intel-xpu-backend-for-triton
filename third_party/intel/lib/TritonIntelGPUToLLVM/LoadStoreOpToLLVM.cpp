@@ -3103,6 +3103,7 @@ struct DescriptorLoadOpConversion
         permOffsets[i] = indices[i];
       }
       // Swap only the inner 2 dimensions (2D block I/O constraint).
+      assert(rank >= 2 && "column_major descriptor load requires rank >= 2");
       std::swap(permShapes[rank - 2], permShapes[rank - 1]);
       std::swap(permStrides[rank - 2], permStrides[rank - 1]);
       std::swap(permOffsets[rank - 2], permOffsets[rank - 1]);

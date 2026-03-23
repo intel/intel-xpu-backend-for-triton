@@ -604,3 +604,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
   // CHECK-NOT: ttg.convert_layout
   // CHECK: tt.dot
 }
+
+// -----
+
+// COM: Negative test: rank-3 TransOp with exotic order [1, 0, 2] swaps the
+// COM: outer (batch) and middle dims instead of the innermost two dims.
+// COM: This transpose does NOT produce a shape usable by tt.dot, so the
+// COM: descriptor_load + trans fusion must NOT fire.
+#mma3d = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4, 2], repCluster = [1, 1, 1]}>
+#blocked3d = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 1, 16], warpsPerCTA = [1, 8, 1], order = [2, 1, 0]}>
+#blocked3d_exotic_trans = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 1, 16], warpsPerCTA = [8, 1, 1], order = [2, 0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  tt.func public @doNotFuseDescriptorLoadWithTrans_exoticOrder(%arg0: !tt.ptr<f16>, %N: i32, %K: i32, %strideBb: i64, %strideBn: i64) -> tensor<64x2x32xf16, #blocked3d_exotic_trans> {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %descB = tt.make_tensor_descriptor %arg0, [%N, %N, %K], [%strideBb, %strideBn, %c1_i64] : <f16>, <tensor<2x64x32xf16>>
+    %loadB = tt.descriptor_load %descB[%c0_i32, %c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<2x64x32xf16>> -> tensor<2x64x32xf16, #blocked3d>
+    %transB = tt.trans %loadB {order = array<i32: 1, 0, 2>} : tensor<2x64x32xf16, #blocked3d> -> tensor<64x2x32xf16, #blocked3d_exotic_trans>
+    tt.return %transB : tensor<64x2x32xf16, #blocked3d_exotic_trans>
+  }
+  // CHECK-LABEL: doNotFuseDescriptorLoadWithTrans_exoticOrder
+  // CHECK: tt.trans
+  // CHECK-NOT: ttig.block_io = "column_major"
+}
