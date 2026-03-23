@@ -15,7 +15,7 @@ from typing_extensions import Any, Self
 
 import pandas as pd
 
-from .pass_rate_utils import Test, TestReport, TestGroupingLevel
+from .pass_rate_utils import Test, TestReport, TestGroupingLevel, CompareScope, SortByStats, SortByCompare
 from .gh_utils import GHANightlyTestReportProcessor, GHABuildTestReportProcessor
 from .pattern_matcher import PatternMatcher
 
@@ -61,6 +61,10 @@ class Config:  # pylint: disable=R0902
     pretty_print: bool = False
     long_names: bool = False
     sort_by: str = "name"
+    _compare_scope: str = CompareScope.ANY.value
+    omit_testsuite_name: bool = False
+    omit_test_module_name: bool = False
+    omit_test_class_name: bool = False
 
     repo: str = "intel/intel-xpu-backend-for-triton"
     branch: str = "main"
@@ -81,6 +85,10 @@ class Config:  # pylint: disable=R0902
     @property
     def report_grouping_level(self) -> TestGroupingLevel:
         return TestGroupingLevel(self._report_grouping_level)
+
+    @property
+    def compare_scope(self) -> CompareScope:
+        return CompareScope(self._compare_scope)
 
     @property
     def download_dir(self) -> Path:
@@ -253,6 +261,7 @@ class Config:  # pylint: disable=R0902
             "--sort-by",
             default=cls().sort_by,
             type=str,
+            choices=[s.value for s in SortByStats],
             help="Sort by column name",
         )
         test_stats_parser.add_argument(
@@ -305,6 +314,47 @@ class Config:  # pylint: disable=R0902
             default=cls()._report_grouping_level,
             dest="_report_grouping_level",
             help="Grouping level for the report",
+        )
+        compare_stats_parser.add_argument(
+            "--sort-by",
+            default=cls().sort_by,
+            type=str,
+            choices=([s.value for s in SortByCompare] +
+                     [s.value.replace(".Δ", ".delta") for s in SortByCompare if ".Δ" in s.value] +
+                     [s.value.replace(".%Δ", ".%delta") for s in SortByCompare if ".%Δ" in s.value]),
+            help="Sort by column in <metric>.<source> format (e.g., passed.r1, time.delta)",
+        )
+        compare_stats_parser.add_argument(
+            "--pretty-print",
+            "--pretty",
+            action="store_true",
+            required=False,
+            help="Pretty print (accepted for consistency, compare always outputs a table)",
+        )
+        compare_stats_parser.add_argument(
+            "--compare-scope",
+            choices=[scope.value for scope in CompareScope],
+            default=cls()._compare_scope,
+            dest="_compare_scope",
+            help="Filter: any (all), r1-only (in r1 not r2), r2-only (in r2 not r1), both",
+        )
+        compare_stats_parser.add_argument(
+            "--omit-testsuite-name",
+            action="store_true",
+            required=False,
+            help="Omit testsuite name prefix from displayed test names",
+        )
+        compare_stats_parser.add_argument(
+            "--omit-test-module-name",
+            action="store_true",
+            required=False,
+            help="Omit test module path and name from displayed test names",
+        )
+        compare_stats_parser.add_argument(
+            "--omit-test-class-name",
+            action="store_true",
+            required=False,
+            help="Omit test class name from displayed test names",
         )
 
         convert_to_parser = cls._add_parser(
@@ -500,7 +550,28 @@ class TestsStatsActionRunner(ReportActionRunner):
 class CompareReportsActionRunner(ReportActionRunner):
 
     def compare(self) -> pd.DataFrame:
-        return TestReport.compare(self.reports, grouping_level=self.config.report_grouping_level)
+        config = self.config
+        omit_flags = {
+            "omit_testsuite_name": config.omit_testsuite_name,
+            "omit_test_module_name": config.omit_test_module_name,
+            "omit_test_class_name": config.omit_test_class_name,
+        }
+        if config.report_grouping_level == TestGroupingLevel.TEST:
+            effective_omit = omit_flags
+        else:
+            for flag_name, flag_value in omit_flags.items():
+                if flag_value:
+                    flag_cli = flag_name.replace("_", "-")
+                    print(f"[WARNING] --{flag_cli} is only effective"
+                          f" with --level test, ignoring", file=sys.stderr)
+            effective_omit = {k: False for k in omit_flags}
+        return TestReport.compare(
+            self.reports,
+            grouping_level=config.report_grouping_level,
+            sort_by=SortByCompare(config.sort_by),
+            compare_scope=config.compare_scope,
+            **effective_omit,
+        )
 
     def __call__(self, *args: Any, **kwds: Any) -> pd.DataFrame:
         return self.compare()

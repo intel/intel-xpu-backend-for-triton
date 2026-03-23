@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from .pass_rate_utils import (
     TestGroupingLevel,
+    CompareScope,
+    SortByStats,
+    SortByCompare,
     Test,
     TestReport,
     TestCase,
