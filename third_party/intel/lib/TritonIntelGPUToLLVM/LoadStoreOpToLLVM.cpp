@@ -927,22 +927,14 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     if ((product<unsigned>(tileShape) / numElemPerPackedVal) != numLanes)
       return BlockIOTileSizeInfo::unknown();
 
-    // 2D block I/O cannot span batch dimensions -- reject if any batch dim
-    // (i.e., dims outside the inner 2) has a non-unit tile size.
-    for (size_t i = 0; i + 2 < rank; ++i) {
-      if (tileShape[i] > 1)
-        return BlockIOTileSizeInfo::unknown();
-    }
-
     unsigned sliceRank = 0;
     int rowDim = -1;
     for (size_t i = 0; i < rank; ++i) {
       if (tileShape[i] > 1) {
-        if (i >= rank - 2)
-          sliceRank++;
+        sliceRank++;
         // if the slice has more than one non-zero size. Chose the
-        // non-fast change dim as the row dim (only from inner 2 dims).
-        if (i != fastChangeDim && i >= rank - 2)
+        // non-fast change dim as the row dim.
+        if (i != fastChangeDim)
           rowDim = i;
       }
     }
@@ -1051,7 +1043,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
       if (!validateBase(base))
         continue; // Skip as the bases are not trivial.
       int dim = getFirstNonZeroDim(base);
-      if (rowDim < 0 && dim != fastChangeDim && dim >= (int)(rank - 2)) {
+      if (rowDim < 0 && dim != fastChangeDim) {
         rowDim = dim;
         // The mask constancy has to be power of 2 for block IO.
         if (maskAxisInfo &&
@@ -2656,6 +2648,11 @@ struct DescriptorLoadOpToBlockIOConversion
         llEncoding.value(), contiguousDim, elemSizeInBits,
         /*maskAxisInfo=*/nullptr, /*oneMatrixPerLoadForBT=*/false);
     if (!sizeInfo.isValid())
+      return failure();
+
+    // For descriptor loads, the 2D block I/O tile must use only the inner 2
+    // dims. Reject if rowDim or colDim falls in a batch dimension.
+    if (sizeInfo.rowDim < (int)(rank - 2) || sizeInfo.colDim < (int)(rank - 2))
       return failure();
 
     int tileHeight = sizeInfo.tileHeight;
