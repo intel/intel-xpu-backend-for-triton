@@ -1,4 +1,4 @@
-#include "intel/include/Analysis/AxisInfo.h"
+#include "intel/include/Analysis/AxisInfoExt.h"
 #include "intel/include/Analysis/StrideInfo.h"
 #include "mlir/Pass/Pass.h"
 
