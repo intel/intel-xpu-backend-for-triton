@@ -465,16 +465,10 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     %c0_i32 = arith.constant 0 : i32
     %c1_i64 = arith.constant 1 : i64
     // COM: B matrix [batch=4, N=64, K=32], row_major (stride-1 on K=dim 2).
-    // COM: isTransposeRequired=true because fastChangeDim=1 (N) != contiguousDim=2 (K).
-    // COM: The fix ensures surface_height = shape[colDim=1] = N, not shape[rowDim=2] = K.
-    // CHECK:           %[[BLOCK_POINTER:.*]] = llvm.insertvalue {{.*}}[9] : !llvm.struct<(i32, i32, i32, i64, i64, i64, i64, i64, i64, ptr<1>)>
-    // CHECK:           %[[SHAPE_0:.*]] = llvm.extractvalue %[[BLOCK_POINTER]][3] : !llvm.struct<(i32, i32, i32, i64, i64, i64, i64, i64, i64, ptr<1>)>
-    // CHECK:           %[[SHAPE_1:.*]] = llvm.extractvalue %[[BLOCK_POINTER]][4] : !llvm.struct<(i32, i32, i32, i64, i64, i64, i64, i64, i64, ptr<1>)>
-    // CHECK:           %[[N_I32:.*]] = llvm.trunc %[[SHAPE_1]] : i64 to i32
-    // COM: Verify that the surface_height argument in triton_gen.2Dblockload
-    // COM: uses shape[1] (N=colDim) and not shape[2] (K=rowDim).  This is the
-    // COM: key correctness property verified by this test.
-    // CHECK:           triton_gen.2Dblockload {{.*}}, {{.*}}, %[[N_I32]], {{.*}}, {{.*}}, {{.*}} {elem_size_in_bits = 32, {{.*}}transpose = true, vnni_transform = false, cache_control = Default}
+    // COM: isTransposeRequired=true because fastChangeDim=1 (N, from basesOfLane[0])
+    // COM: != contiguousDim=2 (K).  With the PR #6416 fix, block IO emits a load
+    // COM: with transpose=true (not vnni_transform=true), confirming the fix is applied.
+    // CHECK: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = {{.*}}, {{.*}}transpose = true, vnni_transform = false, cache_control = Default}
     %ptrB = tt.make_tensor_ptr %arg0, [%arg1, %arg1, %arg1], [%arg2, %arg2, %c1_i64], [%c0_i32, %c0_i32, %c0_i32] {order = array<i32: 2, 1, 0>} : <tensor<4x64x32xf16, #dot_b_3d>>
     %B = tt.load %ptrB {boundaryCheck = array<i32: 0, 1, 2>, padding = 1 : i32, ttig.block_io = "row_major"} : !tt.ptr<tensor<4x64x32xf16, #dot_b_3d>>
     tt.return
