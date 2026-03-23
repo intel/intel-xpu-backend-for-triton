@@ -2704,6 +2704,13 @@ struct DescriptorLoadOpToBlockIOConversion
       std::swap(desc.strides[rank - 2], desc.strides[rank - 1]);
     }
 
+    // column_major descriptor loads must always produce transposed block I/O
+    // (contiguousDim = rank-2 forces transpose in getBlockIOTileSize). If this
+    // invariant breaks, the surface parameters below would be incorrect because
+    // they index the already-swapped shapes/strides via isTransposeRequired.
+    assert((!permuteDescDim || isTransposeRequired) &&
+           "column_major descriptor load expects transposed block I/O");
+
     Value elemBytes = b.i32_val(elemSizeInBits / 8);
     Value surfaceWidth =
         b.trunc(i32_ty, desc.shapes[isTransposeRequired ? rowDim : colDim]);
