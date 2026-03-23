@@ -1,6 +1,6 @@
 add_triton_library(TritonIntelAnalysis
     Allocation.cpp
-    AxisInfo.cpp
+    AxisInfoExt.cpp
     Liveness.cpp
     StrideInfo.cpp
     Membar.cpp
