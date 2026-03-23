@@ -11,11 +11,10 @@ import torch
 import torch.nn.functional as F
 from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch.nn.attention.bias import causal_lower_right
-import torch._inductor
-import torch._inductor.lowering
-import torch._inductor.kernel
-import torch._inductor.kernel.flex.flex_attention as flex_attn
-from torch._inductor.template_heuristics.triton import FlexConfig, FlexDecodeConfig
+import torch._inductor  # pylint: disable=protected-access
+import torch._inductor.choices  # pylint: disable=protected-access
+from torch._inductor.choices import InductorChoices
+from torch._inductor.template_heuristics.triton import FlexBwDConfig, FlexConfig, FlexDecodeConfig
 
 import triton_kernels_benchmark as benchmark_suite
 import triton
@@ -37,6 +36,11 @@ def get_flex_attn_fwd_configs(*args, **kwargs):  # pylint: disable=unused-argume
     return configs
 
 
+def get_flex_attn_bwd_configs(*args, **kwargs):  # pylint: disable=unused-argument
+    configs = [FlexBwDConfig(BLOCK, BLOCK, BLOCK, BLOCK, s, w) for BLOCK in [32, 64] for s in [1, 2] for w in ([4])]
+    return configs
+
+
 def get_flex_decode_configs(*args, **kwargs):  # pylint: disable=unused-argument
     configs = [
         FlexDecodeConfig(32, 1, 2),
@@ -54,8 +58,9 @@ def get_flex_decode_configs(*args, **kwargs):  # pylint: disable=unused-argument
 # There is a auto-tuning requirement to get the best configuration for the flex attention.
 # The pytorch flex attention doesn't support auto-tuning by user by default.
 # Overriding the get_flex_attention_fwd_configs method to provide custom configurations for auto-tuning on XPU.
-flex_attn.V.choices.get_flex_attention_fwd_configs = get_flex_attn_fwd_configs
-flex_attn.V.choices.get_flex_decode_configs = get_flex_decode_configs
+InductorChoices.get_flex_attention_fwd_configs = get_flex_attn_fwd_configs
+InductorChoices.get_flex_attention_bwd_configs = get_flex_attn_bwd_configs
+InductorChoices.get_flex_decode_configs = get_flex_decode_configs
 
 torch._dynamo.config.recompile_limit = 100  # pylint: disable=protected-access
 
