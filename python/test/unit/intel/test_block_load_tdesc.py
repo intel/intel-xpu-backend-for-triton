@@ -253,8 +253,7 @@ def test_block_tdesc_dot_product(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP
 
 
 # ---------------------------------------------------------------------------
-# Column-major descriptor load (mirrors the permuteDescDim refactor in PR
-# DescriptorLoadOpToBlockIOConversion).
+# Column-major descriptor load
 # ---------------------------------------------------------------------------
 @pytest.mark.skipif(not is_xpu(), reason="Block descriptor tests are specific to the XPU backend")
 @pytest.mark.xfail(
