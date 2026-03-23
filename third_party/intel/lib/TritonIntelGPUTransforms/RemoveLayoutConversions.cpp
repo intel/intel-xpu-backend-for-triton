@@ -1704,19 +1704,16 @@ static int64_t getConvertCost(Value convertSrc) {
   return 32 * convertLayoutBytes * 3;
 }
 
-/// Determine whether rematerializing \p slice is beneficial given that it will
-/// eliminate \p convertOp and require creating new convert ops with cost \p
-/// newCvtCost.
-static bool isRematBeneficial(ttg::ConvertLayoutOp convertOp,
-                              const SetVector<Value> &slice,
-                              int64_t newCvtCost) {
+/// Compute the set of values in \p slice that are transitively used outside
+/// the slice (excluding uses by \p convertOp). Values used only within the
+/// slice are "slice-only" and don't contribute to rematerialization cost.
+static SetVector<Value> getNonSliceOnlyValues(const SetVector<Value> &slice,
+                                              ttg::ConvertLayoutOp convertOp) {
   SetVector<Operation *> sliceOps;
   for (Value v : slice)
     if (Operation *op = v.getDefiningOp())
       sliceOps.insert(op);
 
-  // Determine which values are used by operations outside the slice.
-  // Only operations with external uses contribute to rematerialization cost.
   SetVector<Value> nonSliceOnlyValues;
   for (Value v : slice) {
     for (auto &use : v.getUses()) {
@@ -1737,6 +1734,21 @@ static bool isRematBeneficial(ttg::ConvertLayoutOp convertOp,
     }
     // TODO: Handle block arguments.
   }
+  return nonSliceOnlyValues;
+}
+
+/// Determine whether rematerializing \p slice is beneficial given that it will
+/// eliminate \p convertOp and require creating new convert ops with cost \p
+/// newCvtCost.
+static bool isRematBeneficial(ttg::ConvertLayoutOp convertOp,
+                              const SetVector<Value> &slice,
+                              int64_t newCvtCost) {
+  auto nonSliceOnlyValues = getNonSliceOnlyValues(slice, convertOp);
+
+  SetVector<Operation *> sliceOps;
+  for (Value v : slice)
+    if (Operation *op = v.getDefiningOp())
+      sliceOps.insert(op);
 
   int64_t convertLayoutCost = getConvertCost(convertOp.getSrc());
   int64_t rematerialisationCost = newCvtCost;
@@ -1817,7 +1829,7 @@ void LayoutRematerialization::backwardRematerialization(
 
   // 2. Determine whether rematerialisation is beneficial.
   if (!isRematBeneficial(convertOp, slice, /*newCvtCost=*/0)) {
-    LDBG("  skipped rematerialization due to higher cost");
+    LDBG("  skipped rematerialization");
     return;
   }
 
@@ -1827,36 +1839,17 @@ void LayoutRematerialization::backwardRematerialization(
       DBGS() << "    " << v << '\n';
   });
 
-  // 3. Rewrite the slice.
-  rewriteSlice(slice, layout, convertOp);
-
-  // Collect rematerialization candidates for forward propagation.
-  // Identify operations in the slice that have uses outside the slice;
-  // these are candidates whose remat'ed values can be forward-propagated.
+  // Compute external-use analysis before rewriteSlice mutates slice.
+  auto nonSliceOnlyValues = getNonSliceOnlyValues(slice, convertOp);
   SetVector<Operation *> sliceOps;
   for (Value v : slice)
     if (Operation *op = v.getDefiningOp())
       sliceOps.insert(op);
 
-  SetVector<Value> nonSliceOnlyValues;
-  for (Value v : slice) {
-    for (auto &use : v.getUses()) {
-      auto *user = use.getOwner();
-      if (user == convertOp || sliceOps.contains(user))
-        continue;
-      nonSliceOnlyValues.insert(v);
-      break;
-    }
-  }
-  for (size_t i = 0; i < nonSliceOnlyValues.size(); ++i) {
-    Value v = nonSliceOnlyValues[i];
-    if (auto *op = v.getDefiningOp()) {
-      for (auto operand : op->getOperands())
-        if (slice.contains(operand))
-          nonSliceOnlyValues.insert(operand);
-    }
-  }
+  // 3. Rewrite the slice.
+  rewriteSlice(slice, layout, convertOp);
 
+  // Build forward propagation candidates using pre-rewrite analysis.
   DenseMap<Value, Attribute> forwardPropagateCandidates;
   for (Operation *op : sliceOps) {
     bool isOpUsedOutsideSlice = llvm::any_of(op->getResults(), [&](Value v) {
