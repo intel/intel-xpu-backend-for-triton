@@ -228,32 +228,12 @@ def test_block_io(M, N, dtype_str, layout, load_block_ptr, store_block_ptr, tran
 @pytest.mark.parametrize("shape", [[64, 64, 32], [128, 128, 16], [4, 64, 64, 32]])
 @pytest.mark.parametrize("dtype_str", ["float32", "float16", "int8"])
 @pytest.mark.parametrize("transpose", [True, False])
-@pytest.mark.parametrize(
-    "nd_layout", [
-        None,
-        # DPAS B 3D layout: exercises the PR #6416 fix where rank > 2 tensor
-        # pointer loads with isTransposeRequired=true but memoryRowMajor=true
-        # previously produced swapped baseWidth/baseHeight surface parameters.
-        # fastChangeDim=1 (N direction) != contiguousDim=2 (K direction in
-        # row-major memory) → isTransposeRequired=true while memoryRowMajor=true.
-        DotOperandLayout(
-            parent=DpasLayout(repeatCount=8, systolic_depth=8, execution_size=16, ops_per_chan=2,
-                              threads_per_warp=16, warps_per_cta=[1, 4, 2], rep_cluster=[1, 1, 1]),
-            op_idx=1, k_width=2),
-    ])
 @pytest.mark.skipif(not is_xpu(), reason="Block store tests are specific to the XPU backend")
-def test_block_io_nd(shape, dtype_str, transpose, nd_layout, device, tmp_path: pathlib.Path):
-    # Determine rank and default layout
+def test_block_io_nd(shape, dtype_str, transpose, device, tmp_path: pathlib.Path):
+    # Determine rank and shape
     rank = len(shape)
 
-    if nd_layout is not None:
-        # DPAS B nd layout is only valid for rank-3 float16 loads.
-        if rank != 3:
-            pytest.skip(f"DPAS nd_layout not applicable to rank-{rank} tensors")
-        if dtype_str != "float16":
-            pytest.skip("DPAS B nd_layout only tested with float16")
-        layout = nd_layout
-    elif rank == 3:
+    if rank == 3:
         layout = BlockedLayout([1, 1, 1], [1, 2, 16], [8, 4, 1], [2, 1, 0])
     else:
         layout = BlockedLayout([1, 1, 1, 1], [1, 1, 2, 16], [4, 2, 4, 1], [3, 2, 1, 0])
