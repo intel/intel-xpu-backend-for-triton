@@ -164,9 +164,8 @@ void createPrefetchOp(LoadOpT loadOp) {
     auto attrs = loadOp->getAttrDictionary();
     prefetchOp->setAttrs(attrs);
   } else {
-    Operation *op = loadOp.getDesc().getDefiningOp();
-    OpBuilder builder(op);
-    builder.setInsertionPointAfter(op);
+    OpBuilder builder(loadOp);
+    builder.setInsertionPoint(loadOp);
     auto prefetchOp = ttgi::DescriptorPrefetchOp::create(
         builder, loadOp->getLoc(), loadOp.getDesc(), loadOp.getIndices(),
         loadOp.getCache(), loadOp.getEvict());
