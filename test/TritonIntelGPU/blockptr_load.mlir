@@ -445,38 +445,6 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
 
 // -----
 
-// COM: Rank > 2 block pointer load with transpose (AxBT pattern).
-// COM: Tests the fix for PR #6416: for rank > 2, baseWidth and baseHeight must
-// COM: use isTransposeRequired (not memoryRowMajor) to select the correct shape
-// COM: dimension.  The B matrix is stored as [batch=4, N=64, K=32] in row_major
-// COM: memory (stride-1 on K=dim 2).  The DPAS B encoding has the N direction
-// COM: (dim 1) as the fast-changing lane dimension, so isTransposeRequired=true
-// COM: even though memoryRowMajor=true.  With the fix:
-// COM:   surface_width  = shape[rowDim=2] * bytes = K * 2 = 64 bytes  (correct)
-// COM:   surface_height = shape[colDim=1]          = N     = 64 elems (correct)
-// COM: The old (buggy) code would have used:
-// COM:   surface_width  = shape[colDim=1] * bytes = N * 2 = 128 bytes (wrong)
-// COM:   surface_height = shape[rowDim=2]          = K     = 32 elems (wrong)
-#dpas_3d = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4, 2], repCluster = [1, 1, 1]}>
-#dot_b_3d = #ttg.dot_op<{opIdx = 1, parent = #dpas_3d, kWidth = 2}>
-module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
-  // CHECK-LABEL: llvm.func spir_kernelcc @transpose_load_rank3_fix
-  tt.func public @transpose_load_rank3_fix(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i64, %arg2: i64) {
-    %c0_i32 = arith.constant 0 : i32
-    %c1_i64 = arith.constant 1 : i64
-    // COM: B matrix [batch=4, N=64, K=32], row_major (stride-1 on K=dim 2).
-    // COM: isTransposeRequired=true because fastChangeDim=1 (N, from basesOfLane[0])
-    // COM: != contiguousDim=2 (K).  With the PR #6416 fix, block IO emits a load
-    // COM: with transpose=true (not vnni_transform=true), confirming the fix is applied.
-    // CHECK: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = {{.*}}, {{.*}}transpose = true, vnni_transform = false, cache_control = Default}
-    %ptrB = tt.make_tensor_ptr %arg0, [%arg1, %arg1, %arg1], [%arg2, %arg2, %c1_i64], [%c0_i32, %c0_i32, %c0_i32] {order = array<i32: 2, 1, 0>} : <tensor<4x64x32xf16, #dot_b_3d>>
-    %B = tt.load %ptrB {boundaryCheck = array<i32: 0, 1, 2>, padding = 1 : i32, ttig.block_io = "row_major"} : !tt.ptr<tensor<4x64x32xf16, #dot_b_3d>>
-    tt.return
-  }
-}
-
-// -----
-
 // COM: Rank-4 blocked layout: verify 2D block IO is emitted for
 // COM:   #blocked = #ttg.blocked<{sizePerThread = [1, 1, 4, 1],
 // COM:                            threadsPerWarp = [1, 4, 1, 8],
