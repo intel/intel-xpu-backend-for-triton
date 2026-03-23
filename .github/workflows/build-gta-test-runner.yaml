@@ -117,7 +117,7 @@ jobs:
           # TODO: https://github.com/intel-tools/intel-xpu-backend-for-triton/issues/501
           # pip uninstall -y torch triton triton-kernels-benchmark triton_utils
           pip uninstall -y torch triton triton_utils
-          pip freeze >requirements-offline.txt
+          pip list --format=freeze >requirements-offline.txt
           pip download -r requirements-offline.txt -d wheels
 
           # Create Triton test env wheels and repo tarballs
