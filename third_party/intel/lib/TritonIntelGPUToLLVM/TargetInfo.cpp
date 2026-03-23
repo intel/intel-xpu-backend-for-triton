@@ -364,6 +364,48 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
   return true;
 }
 
+bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
+                            SmallVector<Value> &acc, triton::ReduceOp op,
+                            unsigned numLaneToReduce,
+                            unsigned interleave) const {
+  // No horizontal reduce required.
+  if (numLaneToReduce == 1)
+    return false;
+  // Horizontal reduce with interleave stride not supported.
+  // TODO: It can be supported.
+  if (interleave > 1)
+    return false;
+  // Check if it is a simple reduce operation supported by
+  // TritonGEN::SubGroupReduceOp.
+  if (op.getNumOperands() != 1 || op.getNumResults() != 1)
+    return false;
+  Region &combineOp = op.getCombineOp();
+  if (combineOp.getBlocks().size() > 1)
+    return false;
+  Block &block = *combineOp.begin();
+  Operation *yield = block.getTerminator();
+  Operation *reduceOp = yield->getOperand(0).getDefiningOp();
+  if (!reduceOp || reduceOp->getNumOperands() != 2 ||
+      reduceOp->getNumResults() != 1)
+    return false;
+  if (reduceOp->getOperand(0) != block.getArgument(0) ||
+      reduceOp->getOperand(1) != block.getArgument(1))
+    return false;
+
+  auto mod = op->getParentOfType<ModuleOp>();
+  unsigned warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+
+  if (!isSupportedWarpReduceOp(reduceOp, numLaneToReduce, warpSize))
+    return false;
+
+  for (unsigned i = 0; i < acc.size(); ++i) {
+    acc[i] = genWarpReduce(rewriter, loc, acc[i], reduceOp, numLaneToReduce,
+                           warpSize);
+  }
+
+  return true;
+}
+
 std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {
   std::string funcName =
       resultElementTy.isInteger(32) ? "__imf_umulhi" : "__imf_umul64hi";
