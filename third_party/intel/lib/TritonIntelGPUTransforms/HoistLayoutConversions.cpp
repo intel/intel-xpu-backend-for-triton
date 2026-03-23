@@ -69,8 +69,10 @@ unsigned getBlockLiveInSizeInBytes(const LivenessBlockInfo *livenessBlockInfo) {
 /// \param cvtOp      The convert_layout operation to consider for hoisting.
 /// \param liveness   Module-level liveness analysis results.
 /// \param grfBudget  The GRF budget in bytes per thread for the current mode.
-static void hoistCvtDotOpOutOfLoop(ttg::ConvertLayoutOp cvtOp,
-                                   Liveness &liveness, unsigned grfBudget) {
+static void
+hoistCvtDotOpOutOfLoop(ttg::ConvertLayoutOp cvtOp, Liveness &liveness,
+                       unsigned grfBudget,
+                       DenseMap<Operation *, unsigned> &cumulativeHoistBytes) {
   // Check the destination has DotOperandEncodingAttr.
   auto rtType = dyn_cast<RankedTensorType>(cvtOp.getType());
   if (!rtType)
@@ -89,10 +91,9 @@ static void hoistCvtDotOpOutOfLoop(ttg::ConvertLayoutOp cvtOp,
   if (cvtOp->getParentRegion() != &parentForOp.getRegion())
     return;
 
-  // Check the source is loop-invariant: either defined outside the loop
-  // or is a block argument (e.g., function argument).
-  Operation *srcDefOp = cvtOp.getSrc().getDefiningOp();
-  if (srcDefOp && parentForOp->isAncestor(srcDefOp))
+  // Check the source is loop-invariant (defined outside the loop).
+  // isDefinedOutsideOfLoop correctly rejects iter_args and induction vars.
+  if (!parentForOp.isDefinedOutsideOfLoop(cvtOp.getSrc()))
     return;
 
   // Liveness check.
@@ -107,8 +108,11 @@ static void hoistCvtDotOpOutOfLoop(ttg::ConvertLayoutOp cvtOp,
   // Only hoist if the additional register pressure from the hoisted tensor
   // stays within 80% of the GRF budget. The 20% headroom accounts for
   // scalars, temporaries, and loop-internal values not tracked by liveness.
-  if ((liveInBytes + hoistBytes) >= static_cast<unsigned>(grfBudget * 0.80f)) {
+  // Use integer arithmetic (4/5) to avoid float-to-unsigned truncation.
+  unsigned alreadyHoisted = cumulativeHoistBytes.lookup(parentForOp);
+  if ((liveInBytes + alreadyHoisted + hoistBytes) >= grfBudget * 4 / 5) {
     LDBG("Skipping hoist: liveIn=" << liveInBytes
+                                   << " + alreadyHoisted=" << alreadyHoisted
                                    << " + hoistBytes=" << hoistBytes
                                    << " exceeds 80% of budget=" << grfBudget);
     return;
@@ -118,10 +122,13 @@ static void hoistCvtDotOpOutOfLoop(ttg::ConvertLayoutOp cvtOp,
        << liveInBytes << " hoistBytes=" << hoistBytes
        << " budget=" << grfBudget);
   // Hoist the conversion out of the loop.
+  Operation *srcDefOp = cvtOp.getSrc().getDefiningOp();
   if (srcDefOp)
     cvtOp->moveAfter(srcDefOp);
   else
     cvtOp->moveBefore(parentForOp);
+
+  cumulativeHoistBytes[parentForOp] += hoistBytes;
 }
 
 class TritonIntelGPUHoistLayoutConversionsPass
@@ -140,8 +147,9 @@ class TritonIntelGPUHoistLayoutConversionsPass
     SmallVector<ttg::ConvertLayoutOp> cvtOps;
     mod.walk([&](ttg::ConvertLayoutOp cvtOp) { cvtOps.push_back(cvtOp); });
 
+    DenseMap<Operation *, unsigned> cumulativeHoistBytes;
     for (auto cvtOp : cvtOps)
-      hoistCvtDotOpOutOfLoop(cvtOp, liveness, grfBudget);
+      hoistCvtDotOpOutOfLoop(cvtOp, liveness, grfBudget, cumulativeHoistBytes);
   }
 };
 

@@ -240,3 +240,32 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     tt.return %outer : tensor<128x16xf32, #dpas8>
   }
 }
+
+// -----
+
+// COM: Case 9: Do NOT hoist ConvertLayoutOp when the source is an iter_arg.
+// COM: Iter args are block arguments of the loop body, so getDefiningOp()
+// COM: returns null. They are loop-carried values that change every iteration,
+// COM: so the convert_layout must remain inside the loop.
+
+#blocked9 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dpas9 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
+#dot_a9 = #ttg.dot_op<{opIdx = 0, parent = #dpas9, kWidth = 1}>
+#dot_b9 = #ttg.dot_op<{opIdx = 1, parent = #dpas9, kWidth = 2}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: tt.func @no_hoist_iter_arg_source
+  tt.func @no_hoist_iter_arg_source(%arg0: tensor<128x16xf16, #blocked9>, %arg1: tensor<16x16xf16, #dot_b9>, %arg2: tensor<128x16xf32, #dpas9>) -> tensor<128x16xf32, #dpas9> {
+    %c0_i32 = arith.constant 0 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %c1_i32 = arith.constant 1 : i32
+    // CHECK: scf.for
+    // CHECK: ttg.convert_layout
+    %result = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%iter = %arg0) -> (tensor<128x16xf16, #blocked9>) : i32 {
+      %cvt = ttg.convert_layout %iter : tensor<128x16xf16, #blocked9> -> tensor<128x16xf16, #dot_a9>
+      %dot = tt.dot %cvt, %arg1, %arg2, inputPrecision = tf32 : tensor<128x16xf16, #dot_a9> * tensor<16x16xf16, #dot_b9> -> tensor<128x16xf32, #dpas9>
+      %updated = arith.addf %iter, %iter : tensor<128x16xf16, #blocked9>
+      scf.yield %updated : tensor<128x16xf16, #blocked9>
+    }
+    tt.return %arg2 : tensor<128x16xf32, #dpas9>
+  }
+}
