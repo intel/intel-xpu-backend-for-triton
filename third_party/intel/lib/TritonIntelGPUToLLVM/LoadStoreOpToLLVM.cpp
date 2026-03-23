@@ -643,11 +643,9 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
         op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
     assert(blockIOAttr && "Expecting block IO attribute");
 
-    StringRef memoryLayoutInfo = cast<StringAttr>(blockIOAttr).getValue();
-    assert((memoryLayoutInfo == "row_major" ||
-            memoryLayoutInfo == "column_major") &&
-           "Only row_major or column_major is supported");
-    return memoryLayoutInfo == "row_major";
+    auto mode = symbolizeBlockIOMode(cast<StringAttr>(blockIOAttr).getValue());
+    assert(mode && "Only row_major or column_major is supported");
+    return *mode == BlockIOMode::RowMajor;
   }
 
   static DpasEncodingAttr::OpIdx getOpIdx(RankedTensorType tensorTy) {
@@ -2408,12 +2406,14 @@ public:
     SmallVector<Value> shapes = getShapes(rewriter, ptr, unpackedPtr);
     Value baseWidth, baseHeight;
     if (isTensorPointerType(ptr.getType())) {
-      baseWidth = b.trunc(i32_ty, shapes[memoryRowMajor ? colDim : rowDim]);
-      baseHeight = b.trunc(i32_ty, shapes[memoryRowMajor ? rowDim : colDim]);
+      baseWidth =
+          b.trunc(i32_ty, shapes[isTransposeRequired ? rowDim : colDim]);
+      baseHeight =
+          b.trunc(i32_ty, shapes[isTransposeRequired ? colDim : rowDim]);
       baseWidth = b.mul(baseWidth, b.i32_val(elemSizeInBits / 8));
     } else {
       // If the stride is 0, we want to load only the first row.
-      int stride = getStride(ptr, memoryRowMajor ? rowDim : colDim);
+      int stride = getStride(ptr, isTransposeRequired ? colDim : rowDim);
       baseHeight = b.i32_val((stride == 0 ? 1 : tileHeight));
       baseWidth = b.i32_val(vBlocks * tileWidth * (packedElemSizeInBits / 8));
     }
@@ -2636,7 +2636,8 @@ struct DescriptorLoadOpToBlockIOConversion
         blockIOAttr &&
         "block_io attribute required; checked by isDescriptorBlockIOCandidate");
     const unsigned rank = tensorType.getRank();
-    bool memoryRowMajor = (blockIOAttr.getValue() == "row_major");
+    auto mode = symbolizeBlockIOMode(blockIOAttr.getValue());
+    bool memoryRowMajor = mode && *mode == BlockIOMode::RowMajor;
     unsigned contiguousDim = memoryRowMajor ? rank - 1 : rank - 2;
 
     Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
@@ -3112,7 +3113,8 @@ struct DescriptorLoadOpConversion
     SmallVector<Value> ptrElems, maskElems, otherElems;
     auto blockIOAttr = op->getAttrOfType<StringAttr>(
         TritonIntelGPUDialect::getBlockIOAttrName());
-    if (blockIOAttr && blockIOAttr.getValue() == "column_major") {
+    if (blockIOAttr && symbolizeBlockIOMode(blockIOAttr.getValue()) ==
+                           BlockIOMode::ColumnMajor) {
       DescriptorFields desc = unpackDescriptor(llDesc, rank, loc, rewriter);
       SmallVector<Value> permShapes(rank), permStrides(rank), permOffsets(rank);
       for (unsigned i = 0; i < rank; ++i) {

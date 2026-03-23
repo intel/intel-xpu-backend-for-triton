@@ -2,8 +2,22 @@
 #define TRITON_INTEL_GPU_ATTRDEFS
 
 include "mlir/IR/AttrTypeBase.td"
+include "mlir/IR/EnumAttr.td"
 include "intel/include/Dialect/TritonIntelGPU/IR/TritonIntelGPUDialect.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td"
+
+//===----------------------------------------------------------------------===//
+// Block IO Mode Enum
+//===----------------------------------------------------------------------===//
+
+def TTIG_RowMajor    : I32EnumAttrCase<"RowMajor",    0, "row_major">;
+def TTIG_ColumnMajor : I32EnumAttrCase<"ColumnMajor", 1, "column_major">;
+
+def TTIG_BlockIOMode : I32EnumAttr<"BlockIOMode",
+  "TritonIntelGPU block IO mode",
+  [TTIG_RowMajor, TTIG_ColumnMajor]> {
+  let cppNamespace = "::mlir::triton::gpu::intel";
+}
 
 //===----------------------------------------------------------------------===//
 // Intel DPAS Layout Encoding
