@@ -53,7 +53,6 @@ class XPUOptions:
     sanitize_overflow: bool = False
     generate_native_code: bool = False
     arch: str = None
-    # FIXME: enable for XPU: https://github.com/intel/intel-xpu-backend-for-triton/issues/4954
     instrumentation_mode: str = ""
 
     def __post_init__(self):
@@ -338,6 +337,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.common.add_symbol_dce(pm)
         passes.common.add_sccp(pm)
         passes.common.add_canonicalizer(pm)
+        if opt.instrumentation_mode == "fpsan":
+            passes.ttgpuir.add_fp_sanitizer(pm)
         if knobs.intel.opt_reduction_locality:
             intel.passes.ttgpuir.add_optimize_reduction_locality(pm)
         intel.passes.arith.add_arith_emulate_unsupported_floats(pm, ["bf16"], "f32")
@@ -355,6 +356,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.ttir.add_loop_aware_cse(pm)
         passes.gluon.add_canonicalizer(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
+        if options.instrumentation_mode == "fpsan":
+            passes.ttgpuir.add_fp_sanitizer(pm)
 
         pm.run(mod, 'gluon_to_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
