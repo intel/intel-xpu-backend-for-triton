@@ -4,10 +4,10 @@ Reads historical benchmark data from JSON files, computes rolling baselines
 from CI-tagged runs, and flags regressions/improvements that exceed
 configurable thresholds.
 """
+# pylint: disable=too-many-locals,too-many-branches,too-many-statements
 
 from __future__ import annotations
 
-import argparse
 import json
 import statistics
 import sys
@@ -47,7 +47,7 @@ class Config:
 
 def load_config(path: Path) -> Config:
     """Load thresholds.yaml and return a Config."""
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
 
     defaults_raw = raw.get("defaults", {})
@@ -312,7 +312,7 @@ def build_report(history_dir: Path, runner_label: str, config: Config) -> dict[s
     gpus_output: dict[str, Any] = {}
 
     for gpu_name, hpath in gpu_paths.items():
-        with open(hpath) as f:
+        with open(hpath, encoding="utf-8") as f:
             history: list[dict[str, Any]] = json.load(f)
 
         if not history:
@@ -337,45 +337,3 @@ def build_report(history_dir: Path, runner_label: str, config: Config) -> dict[s
         "commit_sha": latest_run.get("commit_sha", ""),
         "gpus": gpus_output,
     }
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Detect benchmark performance regressions using Modified Z-Score.")
-    parser.add_argument("--history-dir", type=Path, required=True, help="Directory containing <gpu>/history.json files")
-    parser.add_argument("--runner-label", type=str, default="", help="Runner label (e.g. max1550, b580). Empty = all.")
-    parser.add_argument("--output", type=Path, required=True, help="Path to write regression-report.json")
-    parser.add_argument(
-        "--config",
-        type=Path,
-        default=Path("scripts/benchmark-monitor/thresholds.yaml"),
-        help="Path to thresholds.yaml",
-    )
-    args = parser.parse_args()
-
-    config = load_config(args.config)
-    report = build_report(args.history_dir, args.runner_label, config)
-
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    with open(args.output, "w") as f:
-        json.dump(report, f, indent=2)
-        f.write("\n")
-
-    # Print summary to stderr.
-    for gpu_name, gpu_data in report.get("gpus", {}).items():
-        n_reg = len(gpu_data.get("regressions", []))
-        n_imp = len(gpu_data.get("improvements", []))
-        print(
-            f"[{gpu_name}] checked={gpu_data['total_checked']}  "
-            f"regressions={n_reg}  improvements={n_imp}  skipped={gpu_data['skipped']}",
-            file=sys.stderr,
-        )
-
-    # Exit non-zero if any regressions detected (useful for CI gating).
-    total_regressions = sum(len(g.get("regressions", [])) for g in report.get("gpus", {}).values())
-    if total_regressions > 0:
-        print(f"FAIL: {total_regressions} regression(s) detected.", file=sys.stderr)
-        sys.exit(1)
-
-
-if __name__ == "__main__":
-    main()

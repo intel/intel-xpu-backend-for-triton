@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from convert_results import (
+from benchmark_monitor.convert_results import (
     build_history_entry,
     detect_platform,
     load_report_csvs,

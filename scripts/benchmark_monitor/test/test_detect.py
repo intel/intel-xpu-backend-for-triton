@@ -4,6 +4,7 @@ Covers key-parsing helpers, driver change detection, threshold configuration,
 statistical analysis (analyze_gpu), GPU resolution, and the top-level
 build_report integration path.
 """
+# pylint: disable=too-many-arguments,too-many-positional-arguments,use-implicit-booleaness-not-comparison
 
 from __future__ import annotations
 
@@ -12,12 +13,7 @@ from pathlib import Path
 
 import yaml
 
-# Ensure the benchmark-monitor package is importable.
-import sys
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from detect_regressions import (
+from benchmark_monitor.detect_regressions import (
     Config,
     ThresholdConfig,
     analyze_gpu,

@@ -5,14 +5,13 @@ Supports three modes based on the --tag argument:
   - "pr-*": Post/update a PR comment with benchmark results.
   - Other: Print a summary to stdout only.
 """
+# pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,unused-argument
 
 from __future__ import annotations
 
-import argparse
 import json
 import logging
 import subprocess
-import sys
 
 logger = logging.getLogger(__name__)
 
@@ -403,47 +402,3 @@ def handle_default(report: dict, tag: str) -> None:
         if not regressions and not improvements:
             print("  No significant changes.")
         print()
-
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
-
-
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Post benchmark regression results to GitHub and Slack.")
-    parser.add_argument("--report", required=True, help="Path to regression-report.json")
-    parser.add_argument("--tag", required=True, help='Run tag (e.g., "ci", "pr-123", "test")')
-    parser.add_argument("--pr-number", default="", help="PR number (empty string if not a PR run)")
-    parser.add_argument("--run-url", default="", help="Full URL to the GitHub Actions run")
-    parser.add_argument("--repo", default="intel/intel-xpu-backend-for-triton",
-                        help='Repository in "owner/repo" format')
-    return parser.parse_args(argv)
-
-
-def main(argv: list[str] | None = None) -> None:
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-    args = parse_args(argv)
-
-    try:
-        with open(args.report, encoding="utf-8") as f:
-            report = json.load(f)
-    except (OSError, json.JSONDecodeError) as exc:
-        logger.error("Failed to read report file %s: %s", args.report, exc)
-        sys.exit(1)
-
-    match args.tag:
-        case "ci":
-            handle_ci(report, run_url=args.run_url, repo=args.repo)
-        case tag if tag.startswith("pr-") or args.pr_number:
-            pr_number = args.pr_number or tag.removeprefix("pr-")
-            if not pr_number:
-                logger.error("PR number could not be determined from --tag or --pr-number.")
-                sys.exit(1)
-            handle_pr(report, pr_number=pr_number, repo=args.repo)
-        case _:
-            handle_default(report, tag=args.tag)
-
-
-if __name__ == "__main__":
-    main()

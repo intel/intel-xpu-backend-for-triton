@@ -2,18 +2,12 @@
 
 Covers GPU detection from CSV files and report parsing into history entries.
 """
-# pylint: disable=wrong-import-position
-
 from __future__ import annotations
 
 import csv
-import sys
 from pathlib import Path
 
-# Ensure the benchmark-monitor package is importable.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from bootstrap_history import detect_gpu, parse_reports
+from benchmark_monitor.bootstrap_history import detect_gpu, parse_reports
 
 # ---------------------------------------------------------------------------
 # Helpers

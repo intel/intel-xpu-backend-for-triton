@@ -70,14 +70,14 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.10"
 
-      - name: Install dependencies
-        run: pip install pandas pyyaml
+      - name: Install benchmark-monitor
+        run: pip install ./scripts/benchmark_monitor
 
       - name: Convert results to history format
         run: |
-          python scripts/benchmark-monitor/convert_results.py \
+          benchmark-monitor convert \
             --reports-dir reports \
             --history-dir benchmark-data \
             --tag "$TAG" \
@@ -88,17 +88,17 @@ jobs:
         id: detect
         continue-on-error: true
         run: |
-          python scripts/benchmark-monitor/detect_regressions.py \
+          benchmark-monitor detect \
             --history-dir benchmark-data \
             --runner-label "$RUNNER_LABEL" \
             --output reports/regression-report.json \
-            --config scripts/benchmark-monitor/thresholds.yaml
+            --config scripts/benchmark_monitor/thresholds.yaml
 
       - name: Report results
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          python scripts/benchmark-monitor/report_results.py \
+          benchmark-monitor report \
             --report reports/regression-report.json \
             --tag "$TAG" \
             --pr-number "$PR_NUMBER" \

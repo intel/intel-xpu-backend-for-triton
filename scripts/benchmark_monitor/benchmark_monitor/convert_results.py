@@ -4,13 +4,12 @@ Reads *-report.csv files produced by build_report.py, filters to triton-compiler
 results, and appends a single timestamped entry per GPU platform (PVC or BMG) to
 the corresponding history.json in the benchmark-data branch checkout.
 """
+# pylint: disable=too-many-locals,invalid-name
 
 from __future__ import annotations
 
-import argparse
 import json
 import logging
-import sys
 from pathlib import Path
 
 import pandas as pd
@@ -114,7 +113,7 @@ def build_history_entry(
         if pd.notna(tflops):
             metrics["tflops"] = float(tflops)
 
-        # TODO: Collect and analyze hbm_gbs (memory bandwidth) metric once
+        # TODO: Collect and analyze hbm_gbs (memory bandwidth) metric once  # pylint: disable=fixme
         # detect_regressions.py supports multi-metric analysis.
 
         if metrics:
@@ -245,64 +244,3 @@ def convert(
             len(entry["results"]),
             run_id,
         )
-
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
-
-
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    """Parse command-line arguments."""
-    parser = argparse.ArgumentParser(description="Convert benchmark report CSVs to historical JSON entries.", )
-    parser.add_argument(
-        "--reports-dir",
-        type=Path,
-        required=True,
-        help="Directory containing *-report.csv files.",
-    )
-    parser.add_argument(
-        "--history-dir",
-        type=Path,
-        required=True,
-        help="Directory containing pvc/history.json and bmg/history.json.",
-    )
-    parser.add_argument(
-        "--tag",
-        required=True,
-        help="Run tag (e.g. 'ci', 'pr-123', 'test').",
-    )
-    parser.add_argument(
-        "--run-id",
-        required=True,
-        help="GitHub Actions run ID.",
-    )
-    parser.add_argument(
-        "--commit-sha",
-        required=True,
-        help="Git commit SHA.",
-    )
-    return parser.parse_args(argv)
-
-
-def main(argv: list[str] | None = None) -> None:
-    """Entry point."""
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-
-    args = parse_args(argv)
-
-    if not args.reports_dir.is_dir():
-        logger.error("Reports directory does not exist: %s", args.reports_dir)
-        sys.exit(1)
-
-    convert(
-        args.reports_dir,
-        args.history_dir,
-        tag=args.tag,
-        run_id=args.run_id,
-        commit_sha=args.commit_sha,
-    )
-
-
-if __name__ == "__main__":
-    main()

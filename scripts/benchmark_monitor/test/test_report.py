@@ -3,24 +3,29 @@
 Covers formatting helpers, table generation, issue/PR comment building,
 and the CI/PR handler integration paths with mocked gh CLI calls.
 """
-# pylint: disable=wrong-import-position,redefined-outer-name
+# pylint: disable=redefined-outer-name
 
 from __future__ import annotations
 
 import json
 import subprocess
-import sys
-from pathlib import Path
 
 import pytest
 
-# Ensure the benchmark-monitor package is importable.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from report_results import (  # noqa: E402
-    BENCHMARK_MONITOR_MARKER, _build_issue_body, _build_pr_comment, _create_or_update_issue, _driver_change_notice,
-    _find_existing_issue, _format_params, _improvement_table, _regression_table, _sort_improvements, _sort_regressions,
-    handle_ci, handle_pr,
+from benchmark_monitor.report_results import (
+    BENCHMARK_MONITOR_MARKER,
+    _build_issue_body,
+    _build_pr_comment,
+    _create_or_update_issue,
+    _driver_change_notice,
+    _find_existing_issue,
+    _format_params,
+    _improvement_table,
+    _regression_table,
+    _sort_improvements,
+    _sort_regressions,
+    handle_ci,
+    handle_pr,
 )
 
 # ---------------------------------------------------------------------------
@@ -70,7 +75,7 @@ def mock_gh(monkeypatch):
         calls.append({"args": args, "input": _kwargs.get("input_text")})
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
-    monkeypatch.setattr("report_results._run_gh", fake_run_gh)
+    monkeypatch.setattr("benchmark_monitor.report_results._run_gh", fake_run_gh)
     return calls
 
 
@@ -82,7 +87,7 @@ def _mock_gh_with_issues(monkeypatch, issues_json):
         calls.append({"args": args, "input": _kwargs.get("input_text")})
         return subprocess.CompletedProcess(args, 0, stdout=json.dumps(issues_json), stderr="")
 
-    monkeypatch.setattr("report_results._run_gh", fake)
+    monkeypatch.setattr("benchmark_monitor.report_results._run_gh", fake)
     return calls
 
 
@@ -370,7 +375,7 @@ class TestFindExistingIssue:
         def fake(args, **_kwargs):
             return subprocess.CompletedProcess(args, 1, stdout="", stderr="error")
 
-        monkeypatch.setattr("report_results._run_gh", fake)
+        monkeypatch.setattr("benchmark_monitor.report_results._run_gh", fake)
         result = _find_existing_issue("owner/repo", "pvc")
         assert result is None
 
@@ -394,7 +399,7 @@ class TestCreateOrUpdateIssue:
                 return subprocess.CompletedProcess(args, 0, stdout="https://github.com/o/r/issues/1\n", stderr="")
             return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
-        monkeypatch.setattr("report_results._run_gh", fake)
+        monkeypatch.setattr("benchmark_monitor.report_results._run_gh", fake)
 
         gpu_data = {"regressions": [_make_regression()], "improvements": [], "total_checked": 10, "skipped": 0}
         url = _create_or_update_issue("o/r", "pvc", gpu_data, "1", "url", "sha", "date")
@@ -415,7 +420,7 @@ class TestCreateOrUpdateIssue:
                 return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
             return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
-        monkeypatch.setattr("report_results._run_gh", fake)
+        monkeypatch.setattr("benchmark_monitor.report_results._run_gh", fake)
 
         gpu_data = {"regressions": [_make_regression()], "improvements": [], "total_checked": 10, "skipped": 0}
         url = _create_or_update_issue("o/r", "pvc", gpu_data, "1", "url", "sha", "date")
@@ -440,7 +445,7 @@ class TestCreateOrUpdateIssue:
                 return subprocess.CompletedProcess(args, 0, stdout="https://github.com/o/r/issues/2\n", stderr="")
             return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
-        monkeypatch.setattr("report_results._run_gh", fake)
+        monkeypatch.setattr("benchmark_monitor.report_results._run_gh", fake)
 
         gpu_data = {
             "regressions": [_make_regression()],
@@ -475,7 +480,7 @@ class TestHandleCi:
                 return subprocess.CompletedProcess(args, 0, stdout="https://github.com/o/r/issues/1\n", stderr="")
             return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
-        monkeypatch.setattr("report_results._run_gh", fake)
+        monkeypatch.setattr("benchmark_monitor.report_results._run_gh", fake)
 
         report = {
             "run_id": "123",
@@ -529,7 +534,7 @@ class TestHandlePr:
                 return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
             return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
-        monkeypatch.setattr("report_results._run_gh", fake)
+        monkeypatch.setattr("benchmark_monitor.report_results._run_gh", fake)
 
         report = {
             "gpus": {
@@ -552,7 +557,7 @@ class TestHandlePr:
                 return subprocess.CompletedProcess(args, 0, stdout="99887766", stderr="")
             return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
-        monkeypatch.setattr("report_results._run_gh", fake)
+        monkeypatch.setattr("benchmark_monitor.report_results._run_gh", fake)
 
         report = {
             "gpus": {

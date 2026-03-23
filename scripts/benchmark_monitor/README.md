@@ -6,6 +6,12 @@ GPU platform, and flags statistically significant regressions using a Modified
 Z-Score algorithm. Results are posted as GitHub issues (CI runs) or PR comments
 (pull request runs).
 
+## Installation
+
+```bash
+pip install ./scripts/benchmark_monitor
+```
+
 ## Architecture
 
 Benchmark execution and regression detection are split across two workflows:
@@ -34,35 +40,35 @@ triton-benchmark-regressions.yml (permissions: contents+issues+PRs write)
   |  downloads benchmark-reports artifact via gh CLI
   |
   v
-convert_results.py
+benchmark-monitor convert
   - reads *-report.csv files, filters to compiler=triton
   - detects GPU platform (PVC / BMG) from gpu_device column
   - appends a timestamped entry to <gpu>/history.json on the benchmark-data branch
   |
   v
-detect_regressions.py
+benchmark-monitor detect
   - loads <gpu>/history.json
   - builds a rolling baseline from CI-tagged runs
   - compares the most recent run against the baseline using Modified Z-Score
   - writes regression-report.json
   |
   v
-report_results.py
+benchmark-monitor report
   - CI runs:  creates or updates a GitHub issue labeled "perf-regression"
   - PR runs:  posts or updates a PR comment with a benchmark results table
   - Other:    prints a summary to stdout
 ```
 
-## Scripts
+## CLI Subcommands
 
-### convert_results.py
+### benchmark-monitor convert
 
 Parses `*-report.csv` files and appends the current run to the per-GPU
 `history.json`. Deduplicates by run ID and prunes history to 200 entries.
 
 Key arguments: `--reports-dir`, `--history-dir`, `--tag`, `--run-id`, `--commit-sha`
 
-### detect_regressions.py
+### benchmark-monitor detect
 
 Analyzes the most recent run against the rolling CI baseline and writes a
 JSON report. Exits non-zero if any regressions are detected (for CI gating).
@@ -80,14 +86,14 @@ Runner labels map to GPU platform directories:
 If the label is empty or unknown, all GPUs under `history-dir/*/history.json`
 are analyzed.
 
-### report_results.py
+### benchmark-monitor report
 
 Reads the regression report JSON and posts results to GitHub. Behavior
 depends on the `--tag` value: `ci` creates issues, `pr-*` posts PR comments.
 
 Key arguments: `--report`, `--tag`, `--pr-number`, `--run-url`, `--repo`
 
-### bootstrap_history.py
+### benchmark-monitor bootstrap
 
 One-time setup script that downloads benchmark artifacts from past GitHub
 Actions runs and populates the initial `history.json` files.
@@ -175,7 +181,7 @@ Before analyzing a metric, the detector computes the coefficient of variation
 (CV = stdev / mean) of the baseline values. If CV exceeds `max_cv` (default
 0.15), the metric is skipped as too noisy for reliable analysis. This catches
 bimodal distributions (e.g. autotuning alternating between two performance
-levels) where the Modified Z-Score — designed for unimodal data — would produce
+levels) where the Modified Z-Score -- designed for unimodal data -- would produce
 false positives. Standard deviation is used instead of MAD because it is more
 sensitive to bimodal spread.
 
@@ -197,16 +203,17 @@ full CI baseline without contributing to it.
 ## Running Tests
 
 ```bash
-cd scripts/benchmark-monitor && python -m pytest tests/ -v
+cd scripts/benchmark_monitor && pip install -e . && python -m pytest test/ -v
 ```
 
 ## Troubleshooting
 
 **Missing benchmark-data branch.**
 The history files live on a separate `benchmark-data` branch. On the first CI
-run, the workflow creates the branch if it does not exist. `convert_results.py`
-then creates the GPU subdirectories (`pvc/`, `bmg/`) and `history.json` files
-when appending data. For initial seeding from past runs, use `bootstrap_history.py`.
+run, the workflow creates the branch if it does not exist. The `convert`
+subcommand then creates the GPU subdirectories (`pvc/`, `bmg/`) and
+`history.json` files when appending data. For initial seeding from past runs,
+use `benchmark-monitor bootstrap`.
 
 **Noisy benchmarks producing false positives.**
 Add or increase `min_drop_pct` for the benchmark in the `overrides` section of
@@ -225,7 +232,7 @@ Compare these against the threshold config to confirm or dismiss the flag.
 
 **History pruning.**
 Each GPU history file is capped at 200 entries. Older entries are pruned
-automatically by `convert_results.py` when appending new data.
+automatically by the `convert` subcommand when appending new data.
 
 **Concurrent CI runs causing push conflicts.**
 The `benchmark-data` branch push uses 5 retry attempts with exponential backoff.
