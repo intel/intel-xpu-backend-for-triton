@@ -2252,6 +2252,11 @@ class TritonIntelGPURemoveLayoutConversionsPass
     : public triton::gpu::intel::impl::
           TritonIntelGPURemoveLayoutConversionsBase<
               TritonIntelGPURemoveLayoutConversionsPass> {
+  using Base =
+      triton::gpu::intel::impl::TritonIntelGPURemoveLayoutConversionsBase<
+          TritonIntelGPURemoveLayoutConversionsPass>;
+  using Base::Base;
+
 public:
   // Cleanup convert ops.
   void cleanupConvertOps() {
@@ -2297,7 +2302,9 @@ public:
     // (reduceLoopCarriedValues, forwardPropagateRemat) can create new
     // ConvertLayoutOps during each iteration, so bound the loop to prevent
     // non-termination in pathological cases.
-    constexpr unsigned kMaxBackwardRematIterations = 10;
+    // TODO: Increase the default once the IGC crash on paged-attention kernels
+    // is resolved (see
+    // https://github.com/intel/intel-xpu-backend-for-triton/issues/6447).
     unsigned iteration = 0;
     bool changed = false;
     do {
@@ -2311,11 +2318,11 @@ public:
 
       // Cleanup dummy converts created during backward remat.
       cleanupConvertOps();
-    } while (changed && ++iteration < kMaxBackwardRematIterations);
+    } while (changed && ++iteration < maxBackwardRematIterations);
 
-    if (iteration >= kMaxBackwardRematIterations)
+    if (iteration >= maxBackwardRematIterations)
       LDBG("backward rematerialization reached iteration cap ("
-           << kMaxBackwardRematIterations << ")");
+           << maxBackwardRematIterations << ")");
 
     // 3. For remaining converts, try to hoist them above cast generating larger
     // size types in order to reduce the cost of the convert op.

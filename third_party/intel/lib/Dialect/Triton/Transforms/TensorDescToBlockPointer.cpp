@@ -421,55 +421,58 @@ private:
                             ValueRange strides, ValueRange offsets,
                             ArrayRef<int64_t> sizes, Attribute layout,
                             OpBuilder &builder, bool isColumnMajor) {
+    // For column_major, reverse the tensor shape to match the transposed
+    // interpretation used by block pointer lowering.
+    SmallVector<int64_t> tensorPtrSizes(sizes.begin(), sizes.end());
+    if (isColumnMajor)
+      std::reverse(tensorPtrSizes.begin(), tensorPtrSizes.end());
+
+    auto pointerType = cast<tt::PointerType>(base.getType());
+    auto tensorType = RankedTensorType::get(
+        tensorPtrSizes, pointerType.getPointeeType(), layout);
+    auto tensorPtrType =
+        tt::PointerType::get(tensorType, pointerType.getAddressSpace());
+
+    return findOrCreateMakeTensorPtrWithType(loc, base, shape, strides, offsets,
+                                             tensorPtrType, builder,
+                                             isColumnMajor);
+  }
+
+  // Create or reuse a block pointer with the exact result type.
+  // This is used when a MakeTensorDescOp result was already retagged to a
+  // tensor-pointer type while propagating loop-carried types.
+  tt::MakeTensorPtrOp
+  findOrCreateMakeTensorPtrWithType(Location loc, Value base, ValueRange shape,
+                                    ValueRange strides, ValueRange offsets,
+                                    tt::PointerType resultType,
+                                    OpBuilder &builder, bool isColumnMajor) {
     Block *block = builder.getInsertionBlock();
     const Block::iterator insertPoint = builder.getInsertionPoint();
 
-    // For column_major, swap the order of shape and strides
-    SmallVector<Value> swappedShape, swappedStrides;
-    swappedShape.assign(shape.begin(), shape.end());
-    swappedStrides.assign(strides.begin(), strides.end());
-    SmallVector<int64_t> tensorPtrSizes(sizes.begin(), sizes.end());
+    SmallVector<Value> adjustedShape(shape.begin(), shape.end());
+    SmallVector<Value> adjustedStrides(strides.begin(), strides.end());
     if (isColumnMajor) {
-      std::reverse(swappedShape.begin(), swappedShape.end());
-      std::reverse(swappedStrides.begin(), swappedStrides.end());
-      std::reverse(tensorPtrSizes.begin(), tensorPtrSizes.end());
+      std::reverse(adjustedShape.begin(), adjustedShape.end());
+      std::reverse(adjustedStrides.begin(), adjustedStrides.end());
     }
 
     auto it = std::find_if(block->begin(), insertPoint, [&](Operation &op) {
       if (auto makeTensorPtrOp = dyn_cast<tt::MakeTensorPtrOp>(op)) {
-        triton::PointerType resType = makeTensorPtrOp.getResult().getType();
-        auto tensorType = cast<RankedTensorType>(resType.getPointeeType());
-        auto sameShape = [](ArrayRef<int64_t> arr1, ArrayRef<int64_t> arr2) {
-          for (auto [dim1, dim2] : llvm::zip(arr1, arr2)) {
-            if (dim1 != dim2)
-              return false;
-          }
-          return true;
-        };
-
-        return makeTensorPtrOp.getBase() == base &&
-               makeTensorPtrOp.getShape() == swappedShape &&
-               makeTensorPtrOp.getStrides() == swappedStrides &&
-               makeTensorPtrOp.getOffsets() == offsets &&
-               sameShape(tensorType.getShape(), tensorPtrSizes) &&
-               tensorType.getEncoding() == layout;
+        return makeTensorPtrOp.getResult().getType() == resultType &&
+               makeTensorPtrOp.getBase() == base &&
+               makeTensorPtrOp.getShape() == adjustedShape &&
+               makeTensorPtrOp.getStrides() == adjustedStrides &&
+               makeTensorPtrOp.getOffsets() == offsets;
       }
       return false;
     });
 
     auto makeTensorPtrOp = [&]() {
-      auto pointerType = cast<tt::PointerType>(base.getType());
-      auto tensorType = RankedTensorType::get(
-          tensorPtrSizes, pointerType.getPointeeType(), layout);
-      auto tensorPtrType =
-          tt::PointerType::get(tensorType, pointerType.getAddressSpace());
-      // For column_major, use order {0, 1} instead of {1, 0}
       auto order = isColumnMajor ? builder.getDenseI32ArrayAttr({0, 1})
                                  : builder.getDenseI32ArrayAttr({1, 0});
-      auto makeTensorPtr = tt::MakeTensorPtrOp::create(
-          builder, loc, tensorPtrType, base, swappedShape, swappedStrides,
-          offsets, order);
-      return makeTensorPtr;
+      return tt::MakeTensorPtrOp::create(builder, loc, resultType, base,
+                                         adjustedShape, adjustedStrides,
+                                         offsets, order);
     };
 
     return (it != insertPoint) ? cast<tt::MakeTensorPtrOp>(*it)
@@ -520,14 +523,19 @@ private:
 
     OpBuilder builder(op);
     Location loc = op.getLoc();
-    tt::TensorDescType tDescType = op.getType();
 
     // Create a new block pointer if a suitable one doesn't already exist.
     SmallVector<Value> shapes, strides, offsets;
-    SmallVector<int64_t> sizes;
-    for (const auto [shape, stride, size] :
-         llvm::zip(op.getShape(), op.getStrides(),
-                   tDescType.getBlockType().getShape())) {
+    SmallVector<int64_t> descSizes;
+    Type resultType = op->getResult(0).getType();
+    auto tDescType = dyn_cast<tt::TensorDescType>(resultType);
+    ArrayRef<int64_t> blockShape;
+    if (tDescType)
+      blockShape = tDescType.getBlockType().getShape();
+
+    unsigned dim = 0;
+    for (const auto [shape, stride] :
+         llvm::zip(op.getShape(), op.getStrides())) {
       shapes.push_back(tt::intel::findOrCreateCastOp(
           shape, builder.getIntegerType(shapeAndStridesBitwidth)));
       strides.push_back(tt::intel::findOrCreateCastOp(
@@ -535,18 +543,32 @@ private:
       Value zero =
           tt::intel::findOrCreateIntConstant(loc, 0, offsetBitwidth, builder);
       offsets.push_back(zero);
-      sizes.push_back(size);
+      if (tDescType)
+        descSizes.push_back(blockShape[dim]);
+      ++dim;
     }
 
     auto userInfoIt = descToUserInfo.find(op);
     assert(userInfoIt != descToUserInfo.end() &&
            "Expected descriptor user info for MakeTensorDescOp");
     DescriptorUserInfo userInfo = userInfoIt->second;
-    Attribute layout = findEncodingForTensorDesc(op, userInfo.encoding);
     bool isColumnMajor = userInfo.blockIOMode == BlockIOMode::ColumnMajor;
-    auto tensorPtr =
-        findOrCreateMakeTensorPtr(loc, op.getBase(), shapes, strides, offsets,
-                                  sizes, layout, builder, isColumnMajor);
+    tt::MakeTensorPtrOp tensorPtr;
+
+    if (tDescType) {
+      Attribute layout = findEncodingForTensorDesc(op, userInfo.encoding);
+      tensorPtr =
+          findOrCreateMakeTensorPtr(loc, op.getBase(), shapes, strides, offsets,
+                                    descSizes, layout, builder, isColumnMajor);
+    } else {
+      auto ptrType = dyn_cast<tt::PointerType>(resultType);
+      assert(ptrType && triton::isTensorPointerType(resultType) &&
+             "Expected TensorDescType or tensor pointer type");
+      tensorPtr = findOrCreateMakeTensorPtrWithType(loc, op.getBase(), shapes,
+                                                    strides, offsets, ptrType,
+                                                    builder, isColumnMajor);
+    }
+
     LLVM_DEBUG({
       llvm::dbgs() << "With:\n";
       llvm::dbgs().indent(2) << tensorPtr << "\n";

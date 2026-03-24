@@ -281,4 +281,43 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK:          scf.yield [[ARG4]] : !tt.ptr<tensor<8x128xf32, #blocked>>
   // CHECK:        }
 
+  // COM: Regression: rewriting the loop-carried descriptor can retag a later
+  // COM: make_tensor_descriptor result to tensor pointer type via type
+  // COM: propagation.
+  tt.func public @retagged_make_tensor_desc_in_loop(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c4_i32 = arith.constant 4 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %arg2_i64 = arith.extsi %arg2 : i32 to i64
+    %init_desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg2_i64, %c1_i64] : <f16>, <tensor<16x32xf16>>
+
+    %final_desc = scf.for %iv = %c0_i32 to %c4_i32 step %c1_i32 iter_args(%iter_desc = %init_desc) -> (!tt.tensordesc<tensor<16x32xf16>>) : i32 {
+      %inner_desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg2_i64, %c1_i64] : <f16>, <tensor<16x32xf16>>
+      %loaded = tt.descriptor_load %iter_desc[%c8_i32, %c0_i32] : !tt.tensordesc<tensor<16x32xf16>> -> tensor<16x32xf16, #blocked>
+      %is_zero = arith.cmpi eq, %iv, %c0_i32 : i32
+      %next_desc = arith.select %is_zero, %iter_desc, %inner_desc : !tt.tensordesc<tensor<16x32xf16>>
+      scf.yield %next_desc : !tt.tensordesc<tensor<16x32xf16>>
+    }
+
+    %loaded_out = tt.descriptor_load %init_desc[%c8_i32, %c0_i32] : !tt.tensordesc<tensor<16x32xf16>> -> tensor<16x32xf16, #blocked>
+    tt.return
+  }
+  // CHECK:      tt.func public @retagged_make_tensor_desc_in_loop({{.*}}) {
+  // CHECK-NOT:    tt.make_tensor_descriptor
+  // CHECK-NOT:    tt.descriptor_load
+  // CHECK:        [[INIT_PTR:%.+]] = tt.make_tensor_ptr {{.*}} : <tensor<16x32xf16, #blocked>>
+  // CHECK:        [[FOR_RES:%.+]] = scf.for [[IV:%.+]] = {{.*}} iter_args([[ITER_DESC:%.+]] = [[INIT_PTR]]) -> (!tt.ptr<tensor<16x32xf16, #blocked>>) : i32 {
+  // CHECK:          [[INNER_PTR:%.+]] = tt.make_tensor_ptr {{.*}} : <tensor<16x32xf16, #blocked>>
+  // CHECK:          [[ADV_IN:%.+]] = tt.advance [[ITER_DESC]], {{.*}} : <tensor<16x32xf16, #blocked>>
+  // CHECK:          tt.load [[ADV_IN]] {boundaryCheck = array<i32: 0, 1>, padding = 1 : i32} : !tt.ptr<tensor<16x32xf16, #blocked>>
+  // CHECK:          [[NEXT_PTR:%.+]] = arith.select {{.*}}, [[ITER_DESC]], [[INNER_PTR]] : !tt.ptr<tensor<16x32xf16, #blocked>>
+  // CHECK:          scf.yield [[NEXT_PTR]] : !tt.ptr<tensor<16x32xf16, #blocked>>
+  // CHECK:        }
+  // CHECK:        [[ADV_OUT:%.+]] = tt.advance [[INIT_PTR]], {{.*}} : <tensor<16x32xf16, #blocked>>
+  // CHECK:        tt.load [[ADV_OUT]] {boundaryCheck = array<i32: 0, 1>, padding = 1 : i32} : !tt.ptr<tensor<16x32xf16, #blocked>>
+  // CHECK:        tt.return
+  // CHECK:      }
+
 }
