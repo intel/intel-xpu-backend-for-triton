@@ -2397,12 +2397,14 @@ public:
     SmallVector<Value> shapes = getShapes(rewriter, ptr, unpackedPtr);
     Value baseWidth, baseHeight;
     if (isTensorPointerType(ptr.getType())) {
-      baseWidth = b.trunc(i32_ty, shapes[memoryRowMajor ? colDim : rowDim]);
-      baseHeight = b.trunc(i32_ty, shapes[memoryRowMajor ? rowDim : colDim]);
+      baseWidth =
+          b.trunc(i32_ty, shapes[isTransposeRequired ? rowDim : colDim]);
+      baseHeight =
+          b.trunc(i32_ty, shapes[isTransposeRequired ? colDim : rowDim]);
       baseWidth = b.mul(baseWidth, b.i32_val(elemSizeInBits / 8));
     } else {
       // If the stride is 0, we want to load only the first row.
-      int stride = getStride(ptr, memoryRowMajor ? rowDim : colDim);
+      int stride = getStride(ptr, isTransposeRequired ? colDim : rowDim);
       baseHeight = b.i32_val((stride == 0 ? 1 : tileHeight));
       baseWidth = b.i32_val(vBlocks * tileWidth * (packedElemSizeInBits / 8));
     }
@@ -2626,8 +2628,16 @@ struct DescriptorLoadOpToBlockIOConversion
         "block_io attribute required; checked by isDescriptorBlockIOCandidate");
     const unsigned rank = tensorType.getRank();
     auto mode = symbolizeBlockIOMode(blockIOAttr.getValue());
-    bool memoryRowMajor = mode && *mode == BlockIOMode::RowMajor;
-    unsigned contiguousDim = memoryRowMajor ? rank - 1 : rank - 2;
+    // The ColumnMajor mode means the descriptor load needs to permute
+    // the last 2 dim to align the load result type.
+    bool permuteDescDim = mode && *mode == BlockIOMode::ColumnMajor;
+    // For the permuted case, the tensor descriptor's dimension space needs to
+    // be aligned with the result type. Specifically, the (rank - 1) dimension
+    // of the tensor descriptor is mapped to the (rank - 2) dimension of the
+    // result type when permuted. Note: The getBlockIOTileSize function expects
+    // the input dimension based on the result type, not the tensor descriptor
+    // type.
+    unsigned contiguousDim = !permuteDescDim ? rank - 1 : rank - 2;
 
     Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
@@ -2691,16 +2701,28 @@ struct DescriptorLoadOpToBlockIOConversion
     DescriptorFields desc =
         unpackDescriptor(adaptor.getDesc(), rank, loc, rewriter);
 
-    // Surface parameters for descriptor loads.
-    // The descriptor is always row-major (stride-1 on last dim), regardless
-    // of the block_io attribute. Extract in descriptor's natural order.
-    unsigned rowIdx = rank - 2, colIdx = rank - 1;
+    if (permuteDescDim) {
+      std::swap(desc.shapes[rank - 2], desc.shapes[rank - 1]);
+      std::swap(desc.strides[rank - 2], desc.strides[rank - 1]);
+    }
+
+    // column_major descriptor loads must always produce transposed block I/O
+    // (contiguousDim = rank-2 forces transpose in getBlockIOTileSize). If this
+    // invariant breaks, the surface parameters below would be incorrect because
+    // they index the already-swapped shapes/strides via isTransposeRequired.
+    assert((!permuteDescDim || isTransposeRequired) &&
+           "column_major descriptor load expects transposed block I/O");
+
     Value elemBytes = b.i32_val(elemSizeInBits / 8);
-    Value surfaceWidth = b.trunc(i32_ty, desc.shapes[colIdx]);
-    Value surfaceHeight = b.trunc(i32_ty, desc.shapes[rowIdx]);
+    Value surfaceWidth =
+        b.trunc(i32_ty, desc.shapes[isTransposeRequired ? rowDim : colDim]);
+    Value surfaceHeight =
+        b.trunc(i32_ty, desc.shapes[isTransposeRequired ? colDim : rowDim]);
     Value baseWidth = b.mul(surfaceWidth, elemBytes);
     Value baseHeight = surfaceHeight;
-    Value pitch = b.mul(b.trunc(i32_ty, desc.strides[rowIdx]), elemBytes);
+    Value pitch = b.mul(
+        b.trunc(i32_ty, desc.strides[isTransposeRequired ? colDim : rowDim]),
+        elemBytes);
 
     // Base offsets from descriptor load indices.
     // Indices are in descriptor dimension space. When column_major, the result
@@ -2709,9 +2731,8 @@ struct DescriptorLoadOpToBlockIOConversion
     // the LinearLayout offsets.
     SmallVector<Value> descIndices(adaptor.getIndices().begin(),
                                    adaptor.getIndices().end());
-    if (!memoryRowMajor) {
-      // column_major: result dims are transposed vs descriptor dims.
-      std::reverse(descIndices.begin(), descIndices.end());
+    if (permuteDescDim) {
+      std::swap(descIndices[rank - 2], descIndices[rank - 1]);
     }
 
     // Replicate base pointer for all tiles.
@@ -2759,8 +2780,8 @@ struct DescriptorLoadOpToBlockIOConversion
     // When transpose is required, the row/col assignment to X/Y swaps:
     //   X (block load column offset) maps to the fast-changing dimension.
     //   Y (block load row offset) maps to the slow-changing dimension.
-    colIdx = isTransposeRequired ? rowDim : colDim;
-    rowIdx = isTransposeRequired ? colDim : rowDim;
+    unsigned blockColIdx = isTransposeRequired ? rowDim : colDim;
+    unsigned blockRowIdx = isTransposeRequired ? colDim : rowDim;
 
     SmallVector<Value> unpackedLoadedVals(numElems);
     for (size_t elemIdx = 0; elemIdx < numElems; elemIdx += numElemsPerLoad) {
@@ -2782,9 +2803,9 @@ struct DescriptorLoadOpToBlockIOConversion
       // Boundary check is always enabled for descriptors.
       for (auto [dim, offsetPair] : llvm::enumerate(offsets)) {
         Value adjustedOffset = b.add(descIndices[dim], offsetPair.second);
-        if (dim == rowIdx)
+        if (dim == blockRowIdx)
           offsetY = adjustedOffset;
-        else if (dim == colIdx)
+        else if (dim == blockColIdx)
           offsetX = adjustedOffset;
         else
           assert(false && "unexpected dimension in rank-2 tensor offsets");
