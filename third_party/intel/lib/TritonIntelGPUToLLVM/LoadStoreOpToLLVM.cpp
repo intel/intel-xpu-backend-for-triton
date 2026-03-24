@@ -3118,14 +3118,14 @@ struct DescriptorLoadOpConversion
       allDims[i] = static_cast<int32_t>(i);
 
     // Reuse the shared gather/scatter operand computation.
-    // For column_major descriptor loads (created by
-    // FuseTransWithDescriptorLoad), the result type has transposed dimensions
-    // relative to the descriptor's natural [N, K] order. emitIndices uses the
-    // result type's dimension space (dim 0 = K, dim 1 = N for a [BK, BN]
-    // result), but the descriptor struct encodes shapes/strides in descriptor
-    // space (dim 0 = N, dim 1 = K). The base offsets (indices) are also in
-    // descriptor space. Reverse all three so that dimension i of the result
-    // aligns with dimension i of shapes/strides.
+    // For column_major descriptor loads the result type has its inner 2
+    // dimensions transposed relative to the descriptor's natural order. For
+    // example, a rank-2 descriptor [N, K] produces result [K, N], and a rank-3
+    // descriptor [Batch, N, K] produces result [Batch, K, N]. emitIndices uses
+    // the result type's dimension space, but the descriptor struct encodes
+    // shapes/strides in descriptor space. Swap the inner 2 dimensions of
+    // shapes, strides, and offsets so that they align with the result type's
+    // dimension order. Outer (batch) dimensions are preserved unchanged.
     SmallVector<Value> ptrElems, maskElems, otherElems;
     auto blockIOAttr = op->getAttrOfType<StringAttr>(
         TritonIntelGPUDialect::getBlockIOAttrName());
@@ -3134,10 +3134,15 @@ struct DescriptorLoadOpConversion
       DescriptorFields desc = unpackDescriptor(llDesc, rank, loc, rewriter);
       SmallVector<Value> permShapes(rank), permStrides(rank), permOffsets(rank);
       for (unsigned i = 0; i < rank; ++i) {
-        permShapes[i] = desc.shapes[rank - 1 - i];
-        permStrides[i] = desc.strides[rank - 1 - i];
-        permOffsets[i] = indices[rank - 1 - i];
+        permShapes[i] = desc.shapes[i];
+        permStrides[i] = desc.strides[i];
+        permOffsets[i] = indices[i];
       }
+      // Swap only the inner 2 dimensions (2D block I/O constraint).
+      assert(rank >= 2 && "column_major descriptor load requires rank >= 2");
+      std::swap(permShapes[rank - 2], permShapes[rank - 1]);
+      std::swap(permStrides[rank - 2], permStrides[rank - 1]);
+      std::swap(permOffsets[rank - 2], permOffsets[rank - 1]);
       std::tie(ptrElems, maskElems, otherElems) = computeGatherScatterOperands(
           loc, desc.base, permOffsets, permShapes, permStrides, resultType,
           valueElemTy, rewriter, allDims, padding);
