@@ -47,7 +47,7 @@ mkdir $TRITON_REPO_DIR/python/build
 pip install -r $TRITON_REPO_DIR/scripts/requirements-test.txt
 pip install defusedxml
 pip uninstall -y torch triton
-pip freeze >requirements-offline.txt
+pip list --format=freeze >requirements-offline.txt
 mkdir -p third-party-wheels
 pip download -r requirements-offline.txt -d wheels
 

@@ -102,14 +102,15 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bfloat16_conversion
     // Output descriptor (row_major): shape [128, 64], strides [64, 1]
     %12 = tt.make_tensor_descriptor %11, [%c128_i32, %c64_i32], [%c64_i64, %c1_i64] : <f32>, <tensor<512x128xf32>>
     %13 = arith.mulf %arg3, %cst : f32
-    // CHECK:      ttig.descriptor_prefetch {{.*}} : !tt.tensordesc<tensor<512x128xf16>>
+    // CHECK:      %[[OFFSET0:.*]] = arith.muli {{.*}}, {{.*}} : i32
+    // CHECK:      ttig.descriptor_prefetch %{{.*}}[%[[OFFSET0]], %{{.*}}] {{.*}} : !tt.tensordesc<tensor<512x128xf16>>
     // CHECK-NOT:  tt.descriptor_load {{.*}} : !tt.tensordesc<tensor<512x128xf16>>
     %14 = tt.descriptor_load %6[%5, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<512x128xf16>> -> tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
     %15 = tt.splat %13 : f32 -> tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma}>>
     %16 = tt.splat %13 : f32 -> tensor<512x128xf32, #mma>
     %17:4 = scf.for %arg6 = %c0_i32 to %c128_i32 step %c64_i32 iter_args(%arg7 = %cst_0, %arg8 = %cst_2, %arg9 = %cst_1, %arg10 = %c0_i32) -> (tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma}>>, tensor<512x128xf32, #mma>, tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma}>>, i32)  : i32 {
       // CHECK:  scf.for
-      // CHECK:  tt.descriptor_load {{.*}} : !tt.tensordesc<tensor<512x128xf16>> -> tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>
+      // CHECK:  tt.descriptor_load %{{.*}}[%[[OFFSET0]], %{{.*}}] {{.*}} : !tt.tensordesc<tensor<512x128xf16>> -> tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>
       %21 = tt.descriptor_load %10[%arg10, %c0_i32] {ttig.block_io = "column_major"} : !tt.tensordesc<tensor<128x128xf16>> -> tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
       %22 = tt.dot %14, %21, %cst_2, inputPrecision = tf32 : tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<512x128xf32, #mma>
       %23 = "tt.reduce"(%22) <{axis = 1 : i32}> ({
