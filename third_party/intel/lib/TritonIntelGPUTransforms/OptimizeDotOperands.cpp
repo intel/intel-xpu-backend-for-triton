@@ -444,14 +444,31 @@ private:
       user = *user->getUsers().begin();
     }
 
-    // Source must be DescriptorLoadOp with single use and rank 2.
+    // Source must be DescriptorLoadOp with single use and rank >= 2.
     auto descLoadOp = dyn_cast_or_null<tt::DescriptorLoadOp>(
         transOp.getSrc().getDefiningOp());
     if (!descLoadOp || !descLoadOp->hasOneUse())
       return false;
 
-    if (cast<RankedTensorType>(descLoadOp.getType()).getRank() != 2)
+    if (cast<RankedTensorType>(descLoadOp.getType()).getRank() < 2)
       return false;
+
+    // Validate that the transpose only swaps the innermost 2 dimensions
+    // (identity on outer dims). block_io = "column_major" in the lowering
+    // only handles this inner-2-dim swap.
+    // TODO: Support general permutations when a richer block_io encoding is
+    //       available.
+    {
+      ArrayRef<int32_t> order = transOp.getOrder();
+      unsigned rank = order.size();
+      for (unsigned i = 0; i + 2 < rank; ++i) {
+        if (order[i] != static_cast<int32_t>(i))
+          return false;
+      }
+      if (order[rank - 2] != static_cast<int32_t>(rank - 1) ||
+          order[rank - 1] != static_cast<int32_t>(rank - 2))
+        return false;
+    }
 
     // Must be able to find the defining MakeTensorDescOp.
     auto makeTensorDescOp =
@@ -481,7 +498,11 @@ private:
     // The descriptor is always row-major (stride-1 on last dim).
     auto descType = cast<tt::TensorDescType>(descLoadOp.getDesc().getType());
     RankedTensorType blockType = descType.getBlockType();
-    SmallVector<int64_t> transposedShape(llvm::reverse(blockType.getShape()));
+    ArrayRef<int64_t> origShape = blockType.getShape();
+    ArrayRef<int> perm = transOp.getOrder();
+    SmallVector<int64_t> transposedShape(origShape.size());
+    for (unsigned i = 0; i < origShape.size(); ++i)
+      transposedShape[i] = origShape[perm[i]];
 
     // Create a new DescriptorLoadOp that directly produces the transpose
     // result type. The verifier allows result shape to differ from the
@@ -502,8 +523,12 @@ private:
       if (attr.getName() != blockIOName)
         newLoad->setDiscardableAttr(attr.getName(), attr.getValue());
 
-    // Set block_io = column_major: signals that the result type dimensions
-    // are transposed relative to the descriptor's block shape dimensions.
+    // Set block_io = column_major: signals that the result type's inner two
+    // dimensions are transposed relative to the descriptor's block shape.
+    // Outer (batch) dimensions are preserved unchanged.
+    // TODO: To support general permutations (not just inner-2-dim swap),
+    //       replace column_major with a richer encoding carrying the full
+    //       permutation (e.g., an ArrayAttr).
     newLoad->setAttr(blockIOName,
                      StringAttr::get(transOp.getContext(),
                                      ttgi::stringifyBlockIOMode(
