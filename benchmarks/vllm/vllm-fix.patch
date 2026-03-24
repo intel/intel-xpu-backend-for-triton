@@ -36,22 +36,3 @@ index d78e1947f..e7ffb39e3 100644
  @pytest.mark.parametrize("block_shape", [None, [128, 128]])
  @pytest.mark.parametrize("input_scales", [False])
  def test_fused_moe_batched_experts(
-diff --git a/tests/kernels/moe/utils.py b/tests/kernels/moe/utils.py
-index 4b693d8c8..a04281e13 100644
---- a/tests/kernels/moe/utils.py
-+++ b/tests/kernels/moe/utils.py
-@@ -314,7 +314,13 @@ def make_test_weight(
-                 w_16[idx], None, quant_dtype, per_out_ch_quant, block_shape
-             )
- 
--        w = torch.stack(w_l)
-+        new_shape = torch.Size((len(w_l), ) + w_l[0].shape)
-+        new_w = torch.zeros(new_shape,
-+                            dtype=w_l[0].dtype,
-+                            device=w_l[0].device)
-+        for (i, wt) in enumerate(w_l):
-+            new_w[i] = wt
-+        w = new_w
-         w_s = torch.stack(w_s_l)
-         if e > 0 and w_gs_l[0] is not None:
-             w_gs = torch.stack(w_gs_l)
