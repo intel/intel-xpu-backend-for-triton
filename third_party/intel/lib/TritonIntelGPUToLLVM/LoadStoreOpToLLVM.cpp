@@ -1076,9 +1076,10 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
         return BlockIOTileSizeInfo::unknown();
     }
 
-    if (rowDim < 0)
-      rowDim = (fastChangeDim != (int)(rank - 1)) ? (int)(rank - 1)
-                                                  : (int)(rank - 2);
+    if (rowDim < 0) {
+      int lastDim = static_cast<int>(rank - 1);
+      rowDim = (fastChangeDim != lastDim) ? lastDim : lastDim - 1;
+    }
 
     if (transpose && elemSizeInBits == 64) {
       // D64 transpose only supports 8 rows.
@@ -2652,7 +2653,8 @@ struct DescriptorLoadOpToBlockIOConversion
 
     // For descriptor loads, the 2D block I/O tile must use only the inner 2
     // dims. Reject if rowDim or colDim falls in a batch dimension.
-    if (sizeInfo.rowDim < (int)(rank - 2) || sizeInfo.colDim < (int)(rank - 2))
+    int innerDimStart = static_cast<int>(rank - 2);
+    if (sizeInfo.rowDim < innerDimStart || sizeInfo.colDim < innerDimStart)
       return failure();
 
     int tileHeight = sizeInfo.tileHeight;
