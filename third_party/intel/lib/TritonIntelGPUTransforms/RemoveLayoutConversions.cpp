@@ -1695,6 +1695,104 @@ static int64_t getByteCount(Value result, int64_t minElementCount = 0,
   return (elementCount * dtypeBitWidth) >> 3;
 }
 
+/// Compute the cost of a ConvertLayoutOp with source \p convertSrc.
+static int64_t getConvertCost(Value convertSrc) {
+  auto convertLayoutBytes = getByteCount(convertSrc, 32, 32);
+  // Intel GPU tuning: 3x factor accounts for higher SLM synchronization cost.
+  // FIXME: measure cost of smem load/store and synchronisation on Intel GPUs,
+  // and refine this model further. (#5476)
+  return 32 * convertLayoutBytes * 3;
+}
+
+/// Compute the set of values in \p slice that are transitively used outside
+/// the slice (excluding uses by \p convertOp). Values used only within the
+/// slice are "slice-only" and don't contribute to rematerialization cost.
+static SetVector<Value> getNonSliceOnlyValues(const SetVector<Value> &slice,
+                                              ttg::ConvertLayoutOp convertOp) {
+  SetVector<Operation *> sliceOps;
+  for (Value v : slice)
+    if (Operation *op = v.getDefiningOp())
+      sliceOps.insert(op);
+
+  SetVector<Value> nonSliceOnlyValues;
+  for (Value v : slice) {
+    for (auto &use : v.getUses()) {
+      auto *user = use.getOwner();
+      if (user == convertOp || sliceOps.contains(user))
+        continue;
+      nonSliceOnlyValues.insert(v);
+      break;
+    }
+  }
+  // Expand the set to all transitive operands in the slice.
+  for (size_t i = 0; i < nonSliceOnlyValues.size(); ++i) {
+    Value v = nonSliceOnlyValues[i];
+    if (auto *op = v.getDefiningOp()) {
+      for (auto operand : op->getOperands())
+        if (slice.contains(operand))
+          nonSliceOnlyValues.insert(operand);
+    }
+    // TODO: Handle block arguments.
+  }
+  return nonSliceOnlyValues;
+}
+
+/// Determine whether rematerializing \p slice is beneficial given that it will
+/// eliminate \p convertOp and require creating new convert ops with cost \p
+/// newCvtCost.
+static bool isRematBeneficial(ttg::ConvertLayoutOp convertOp,
+                              const SetVector<Value> &slice,
+                              int64_t newCvtCost) {
+  auto nonSliceOnlyValues = getNonSliceOnlyValues(slice, convertOp);
+
+  SetVector<Operation *> sliceOps;
+  for (Value v : slice)
+    if (Operation *op = v.getDefiningOp())
+      sliceOps.insert(op);
+
+  int64_t convertLayoutCost = getConvertCost(convertOp.getSrc());
+  int64_t rematerialisationCost = newCvtCost;
+
+  for (Operation *op : sliceOps) {
+    auto dialect = op->getDialect();
+    // If all of the results of the op are only used within the slice, when we
+    // rematerialise, this operation does not get duplicated so it does not
+    // contribute to our cost model.
+    bool isOpUsedOutsideSlice = llvm::any_of(op->getResults(), [&](Value v) {
+      return nonSliceOnlyValues.contains(v);
+    });
+    if (!isOpUsedOutsideSlice)
+      continue;
+
+    if (isa<arith::ConstantOp>(op)) {
+      continue;
+    } else if (isa<tt::LoadOp>(op) || isa<ttg::LocalLoadOp>(op)) {
+      for (Value result : op->getResults())
+        rematerialisationCost += 8 * getByteCount(result);
+    } else if (isa<arith::ArithDialect, math::MathDialect>(dialect)) {
+      int64_t multiplier = isExpensiveMathOp(op) ? 8 : 1;
+      for (Value result : op->getResults())
+        rematerialisationCost += multiplier * getByteCount(result);
+    } else if (isa<tt::ReduceOp>(op)) {
+      auto reduceOp = dyn_cast<tt::ReduceOp>(op);
+      ReduceOpHelper helper(reduceOp);
+      if (!helper.isAssociative()) {
+        LDBG("  skipped rematerialization due to non-associative reduce");
+        return false;
+      }
+      rematerialisationCost += helper.getIntraWarpSizeWithUniqueData();
+      rematerialisationCost += 8 * helper.getInterWarpSizeWithUniqueData();
+    }
+  }
+
+  LLVM_DEBUG({
+    DBGS() << "  convert layout cost: " << convertLayoutCost << "\n";
+    DBGS() << "  rematerialisation cost: " << rematerialisationCost << "\n";
+  });
+
+  return convertLayoutCost >= rematerialisationCost;
+}
+
 void LayoutRematerialization::backwardRematerialization(
     ttg::ConvertLayoutOp convertOp) {
   RankedTensorType targetType = convertOp.getType();
@@ -1730,115 +1828,8 @@ void LayoutRematerialization::backwardRematerialization(
   }
 
   // 2. Determine whether rematerialisation is beneficial.
-
-  // Identify all operations in the slice
-  SetVector<Operation *> sliceOps;
-  for (Value v : slice) {
-    if (Operation *op = v.getDefiningOp()) {
-      sliceOps.insert(op);
-    }
-  }
-
-  // Compute single-use operations
-  DenseMap<Operation *, bool> isSingleUse;
-  std::function<bool(Operation *)> isOpSingleUse;
-  isOpSingleUse = [&](Operation *op) -> bool {
-    // lookup in memoization array:
-    auto it = isSingleUse.find(op);
-    if (it != isSingleUse.end()) {
-      return it->second;
-    }
-
-    bool singleUse = true;
-
-    for (Value result : op->getResults()) {
-      for (Operation *user : result.getUsers()) {
-        if (user == convertOp) {
-          continue;
-        }
-        if (sliceOps.contains(user)) {
-          if (!isOpSingleUse(user)) {
-            singleUse = false;
-            break;
-          }
-        } else {
-          singleUse = false;
-          break;
-        }
-      }
-      if (!singleUse) {
-        break;
-      }
-    }
-
-    // insert into memoization array:
-    isSingleUse[op] = singleUse;
-    return singleUse;
-  };
-
-  // Measure the number of bytes that we're manipulating with the
-  // ConvertLayoutOp. We pessimistically assume that we round-trip
-  // through shared memory and that we cannot vectorise sub-register
-  // loads/stores, so we set a minimum element count of 32 (the warp
-  // size and number of shared memory banks) and minimum bitwidth of
-  // 32 (the width per bank of the shared memory load/store unit).
-  int64_t convertLayoutBytes = getByteCount(convertOp.getSrc(), 32, 32);
-
-  // We measure costs in standardised milli-SM-cycles. The smem load
-  // and store each cost 8 * convertLayoutBytes, and then we double
-  // it to account for extra cost due to synchronisation.
-  // FIXME: measure cost of smem load/store and synchronisation on Intel GPUs,
-  // and refine this model further. (#5476)
-  int64_t convertLayoutCost = 32 * convertLayoutBytes * 3;
-  int64_t rematerialisationCost = 0;
-
-  for (Operation *op : sliceOps) {
-    auto dialect = op->getDialect();
-    if (isOpSingleUse(op)) {
-      // when we rematerialise, this operation does not get duplicated
-      // so it does not contribute to our cost model:
-      continue;
-    } else if (isa<arith::ConstantOp>(op)) {
-      // special-case: arith.constant has zero cost
-      continue;
-    } else if (isa<tt::LoadOp>(op) || isa<ttg::LocalLoadOp>(op)) {
-      // optimistically assume L1-cached:
-      for (Value result : op->getResults()) {
-        rematerialisationCost += 8 * getByteCount(result);
-      }
-    } else if (isa<arith::ArithDialect, math::MathDialect>(dialect)) {
-      // this is an arithmetic operation; we distinguish between cheap
-      // operations (such as floating point add/mul which can be fused
-      // as halves of a single-cycle FMA instruction) and expensive
-      // operations which use the special function unit and/or involve
-      // multiple instructions.
-      int64_t multiplier = isExpensiveMathOp(op) ? 8 : 1;
-      for (Value result : op->getResults()) {
-        rematerialisationCost += multiplier * getByteCount(result);
-      }
-    } else if (isa<tt::ReduceOp>(op)) {
-      // Reduce op introduce much cost.
-      auto reduceOp = dyn_cast<tt::ReduceOp>(op);
-      ReduceOpHelper helper(reduceOp);
-      if (!helper.isAssociative()) {
-        // We shouldn't rematerize a no associative reduce op if it has multiple
-        // use chain.
-        LDBG("  skipped rematerialization due to non-associative reduce in the "
-             "slice");
-        return;
-      }
-      rematerialisationCost += helper.getIntraWarpSizeWithUniqueData();
-      rematerialisationCost += 8 * helper.getInterWarpSizeWithUniqueData();
-    }
-  }
-
-  LLVM_DEBUG({
-    DBGS() << "  convert layout cost: " << convertLayoutCost << "\n";
-    DBGS() << "  rematerialisation cost: " << rematerialisationCost << "\n";
-  });
-
-  if (rematerialisationCost > convertLayoutCost) {
-    LDBG("  skipped rematerialization due to higher cost");
+  if (!isRematBeneficial(convertOp, slice, /*newCvtCost=*/0)) {
+    LDBG("  skipped rematerialization");
     return;
   }
 
@@ -1848,13 +1839,23 @@ void LayoutRematerialization::backwardRematerialization(
       DBGS() << "    " << v << '\n';
   });
 
+  // Compute external-use analysis before rewriteSlice mutates slice.
+  auto nonSliceOnlyValues = getNonSliceOnlyValues(slice, convertOp);
+  SetVector<Operation *> sliceOps;
+  for (Value v : slice)
+    if (Operation *op = v.getDefiningOp())
+      sliceOps.insert(op);
+
   // 3. Rewrite the slice.
   rewriteSlice(slice, layout, convertOp);
 
-  // Collect rematerialization candidates for forward propagation.
+  // Build forward propagation candidates using pre-rewrite analysis.
   DenseMap<Value, Attribute> forwardPropagateCandidates;
   for (Operation *op : sliceOps) {
-    if (isOpSingleUse(op))
+    bool isOpUsedOutsideSlice = llvm::any_of(op->getResults(), [&](Value v) {
+      return nonSliceOnlyValues.contains(v);
+    });
+    if (!isOpUsedOutsideSlice)
       continue;
     for (Value result : op->getResults()) {
       for (Operation *user : result.getUsers()) {
