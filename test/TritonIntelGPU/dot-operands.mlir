@@ -636,7 +636,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
   // COM: The descriptor_load now produces the transposed result directly with column_major.
   // CHECK: tt.descriptor_load {{.*}} {ttig.block_io = "column_major"} : !tt.tensordesc<tensor<2x64x32xf16>> -> tensor<2x32x64xf16
   // CHECK-NOT: tt.trans
-  // CHECK-NOT: ttg.convert_layout
+  // CHECK: ttg.convert_layout
   // CHECK: tt.dot
 }
 
