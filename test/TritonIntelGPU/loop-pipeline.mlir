@@ -391,6 +391,8 @@ module attributes {ttig.support_subgroup_matrix_multiply_accumulate, ttig.suppor
   // CHECK-LABEL: batched_gemm_3d_tma_kernel
   // COM: Load A qualifies for prefetch (reshape -> dot_op encoding).
   // CHECK: ttig.prefetch {{.*}} : !tt.ptr<tensor<1x128x64xf16
+  // COM: Load B (1x256x64) should not qualify for prefetch.
+  // CHECK-NOT: ttig.prefetch {{.*}} : !tt.ptr<tensor<1x256x64xf16
   tt.func public @batched_gemm_3d_tma_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: i32, %arg6: i32 {tt.divisibility = 16 : i32}) {
     %c1_i32 = arith.constant 1 : i32
     %c0_i32 = arith.constant 0 : i32
