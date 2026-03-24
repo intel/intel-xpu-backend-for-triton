@@ -330,7 +330,6 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.common.add_cse(pm)
         passes.ttgpuir.add_prefetch(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
-        intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_reduce_data_duplication(pm)
         passes.ttgpuir.add_reorder_instructions(pm)
@@ -341,6 +340,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if knobs.intel.opt_reduction_locality:
             intel.passes.ttgpuir.add_optimize_reduction_locality(pm)
         intel.passes.arith.add_arith_emulate_unsupported_floats(pm, ["bf16"], "f32")
+        intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
         pm.run(mod, 'make_ttgir')
         return mod
 
