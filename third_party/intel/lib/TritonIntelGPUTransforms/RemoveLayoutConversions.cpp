@@ -182,6 +182,7 @@ public:
   // return true if the StoreOp has been rewritten.
   bool rewriteTensorPtrStoreOp(tt::StoreOp storeOp);
   bool rewriteStoreOp(tt::StoreOp storeOp);
+  bool rewriteDescriptorStoreOp(tt::DescriptorStoreOp storeOp);
   Attribute getEncodingBeforeRewrite(Value value) const;
   void setEncodingInPlace(Value value, Attribute encoding);
   void rewriteGenericOpInPlace(Operation *op, Attribute encoding);
@@ -399,7 +400,7 @@ void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
     bool hasChanged = false;
     for (auto encoding : info.encodings) {
       Attribute dstEncoding;
-      if (isa<tt::StoreOp, ttg::ConvertLayoutOp>(op)) {
+      if (isa<tt::StoreOp, tt::DescriptorStoreOp, ttg::ConvertLayoutOp>(op)) {
         // Try to remove the convert by making the dst encoding match the source
         // encoding.
         dstEncoding = encoding;
@@ -417,6 +418,18 @@ void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
 SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
                                                        LayoutInfo &info) {
   SmallVector<Value> changed;
+  auto checkMMAorMMADerived = [](Attribute encoding) {
+    bool isMMAorMMADerived = isa<ttg::MmaEncodingTrait>(encoding);
+    if (isa<ttg::SliceEncodingAttr>(encoding)) {
+      isMMAorMMADerived |= isa<ttg::MmaEncodingTrait>(
+          cast<ttg::SliceEncodingAttr>(encoding).getParent());
+    } else if (isa<ttg::DotOperandEncodingAttr>(encoding)) {
+      isMMAorMMADerived |= isa<ttg::MmaEncodingTrait>(
+          cast<ttg::DotOperandEncodingAttr>(encoding).getParent());
+    }
+    return isMMAorMMADerived;
+  };
+
   for (OpOperand &use : value.getUses()) {
     Operation *user = use.getOwner();
     if (auto forOp = dyn_cast<scf::ForOp>(user)) {
@@ -474,21 +487,18 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
       }
     }
     if (auto storeOp = dyn_cast<tt::StoreOp>(user)) {
-      auto checkMMAorMMADerived = [](Attribute encoding) {
-        bool isMMAorMMADerived = isa<ttg::MmaEncodingTrait>(encoding);
-        if (isa<ttg::SliceEncodingAttr>(encoding)) {
-          isMMAorMMADerived |= isa<ttg::MmaEncodingTrait>(
-              cast<ttg::SliceEncodingAttr>(encoding).getParent());
-        } else if (isa<ttg::DotOperandEncodingAttr>(encoding)) {
-          isMMAorMMADerived |= isa<ttg::MmaEncodingTrait>(
-              cast<ttg::DotOperandEncodingAttr>(encoding).getParent());
-        }
-        return isMMAorMMADerived;
-      };
       if (llvm::all_of(info.encodings, checkMMAorMMADerived)) {
         SmallVector<Value> valuesToChange{storeOp.getPtr(), storeOp.getValue()};
         if (storeOp.getMask())
           valuesToChange.emplace_back(storeOp.getMask());
+        setEncoding(valuesToChange, info, changed, user);
+      }
+      continue;
+    }
+    if (auto descStoreOp = dyn_cast<tt::DescriptorStoreOp>(user)) {
+      if (llvm::all_of(info.encodings, checkMMAorMMADerived)) {
+        SmallVector<Value> valuesToChange{descStoreOp.getDesc(),
+                                          descStoreOp.getSrc()};
         setEncoding(valuesToChange, info, changed, user);
       }
       continue;
@@ -612,6 +622,10 @@ void LayoutPropagation::rewriteRegion(Region &region) {
       } else {
         if (auto storeOp = dyn_cast<tt::StoreOp>(&op)) {
           if (rewriteStoreOp(storeOp))
+            continue;
+        }
+        if (auto descStoreOp = dyn_cast<tt::DescriptorStoreOp>(&op)) {
+          if (rewriteDescriptorStoreOp(descStoreOp))
             continue;
         }
         // If we don't need to rewrite the op we still need to remap the
@@ -964,6 +978,31 @@ bool LayoutPropagation::rewriteStoreOp(tt::StoreOp storeOp) {
   }
 
   return false;
+}
+
+bool LayoutPropagation::rewriteDescriptorStoreOp(
+    tt::DescriptorStoreOp storeOp) {
+  if (auto convertOp = storeOp.getSrc().getDefiningOp<ttg::ConvertLayoutOp>()) {
+    storeOp.getSrcMutable().assign(convertOp.getSrc());
+    return true;
+  }
+
+  Value src = storeOp.getSrc();
+  auto it = layouts.find(src);
+  if (it == layouts.end())
+    return false;
+
+  LayoutInfo &info = it->second;
+  assert(info.encodings.size() == 1 &&
+         "we should have resolved to a single encoding");
+  Attribute srcEncoding = getEncodingBeforeRewrite(src);
+  Attribute targetEncoding = info.encodings[0];
+  if (srcEncoding == targetEncoding)
+    return false;
+
+  Value newSrc = getValueAs(src, targetEncoding);
+  storeOp.getSrcMutable().assign(newSrc);
+  return true;
 }
 
 void LayoutPropagation::rewriteOp(Operation *op) {
