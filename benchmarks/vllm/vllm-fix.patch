@@ -14,25 +14,3 @@ index 719bfa5ed..0199ce057 100644
          init_workspace_manager(device)
      yield
      reset_workspace_manager()
-diff --git a/tests/kernels/moe/test_batched_moe.py b/tests/kernels/moe/test_batched_moe.py
-index d78e1947f..e7ffb39e3 100644
---- a/tests/kernels/moe/test_batched_moe.py
-+++ b/tests/kernels/moe/test_batched_moe.py
-@@ -104,7 +104,7 @@ class BatchedMMTensors:
- @pytest.mark.parametrize("N", [128, 1024])
- @pytest.mark.parametrize("dtype", DTYPES)
- @pytest.mark.parametrize("block_shape", [None, [128, 128]])
--@pytest.mark.parametrize("per_act_token_quant", [False, True])
-+@pytest.mark.parametrize("per_act_token_quant", [False])
- def test_batched_mm(
-     num_experts: int,
-     max_tokens_per_expert: int,
-@@ -236,7 +236,7 @@ def test_batched_mm(
- @pytest.mark.parametrize("e", NUM_EXPERTS)
- @pytest.mark.parametrize("topk", TOP_KS)
- @pytest.mark.parametrize("dtype", DTYPES)
--@pytest.mark.parametrize("per_act_token_quant", [False, True])
-+@pytest.mark.parametrize("per_act_token_quant", [False])
- @pytest.mark.parametrize("block_shape", [None, [128, 128]])
- @pytest.mark.parametrize("input_scales", [False])
- def test_fused_moe_batched_experts(
