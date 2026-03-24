@@ -4,6 +4,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include <numeric>
 
 #define DEBUG_TYPE "intel-axis-info-ext"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -117,6 +118,8 @@ protected:
 static AxisInfo
 makeTensorPtrAxisInfo(Type elemTy, ArrayRef<int64_t> blkShape, unsigned rank,
                       ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) {
+  assert(operands.size() >= rank * 2 + 1 &&
+         "Insufficient operands for AxisInfo analysis");
   SmallVector<AxisInfo, 2> strideInfo, shapeInfo;
   // Shapes start after base (operand 0).
   for (unsigned i = 1; i <= rank; ++i)
