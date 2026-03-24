@@ -311,3 +311,61 @@ def test_block_io_nd(shape, dtype_str, transpose, device, tmp_path: pathlib.Path
         llir = kernel.asm["llir"]
         load_count = llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead')
         assert load_count > 0 or transpose
+
+
+@pytest.mark.skipif(not is_xpu(), reason="Block store tests are specific to the XPU backend")
+def test_block_io_4d_blocked(device, tmp_path: pathlib.Path):
+    """Test block IO with a rank-4 blocked layout.
+
+    Uses the specific layout:
+      #blocked = #ttg.blocked<{sizePerThread = [1, 1, 4, 1],
+                               threadsPerWarp = [1, 4, 1, 8],
+                               warpsPerCTA = [4, 1, 1, 2],
+                               order = [2, 1, 3, 0]}>
+    and tensor<4x4x4x16xi32> to verify that 4D block IO loads and stores
+    round-trip correctly.
+    """
+    layout = BlockedLayout([1, 1, 4, 1], [1, 4, 1, 8], [4, 1, 1, 2], [2, 1, 3, 0])
+    num_warps = int(np.prod(warps_per_cta(layout)))
+    threads_per_warp = int(np.prod(layout.threads_per_warp))
+    support_block_io = triton.runtime.driver.active.get_current_target().arch.get('has_2d_block_io', False)
+
+    ir = f"""
+    #layout = {layout}
+    module attributes {{{"ttig.support_2d_block_io," if support_block_io else ""} "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = {num_warps} : i32, ttg.target = "xpu", "ttg.threads-per-warp" = {threads_per_warp} : i32}} {{
+        tt.func public @block_io_4d(%src: !tt.ptr<i32> {{tt.divisibility = 16 : i32}}, %dst: !tt.ptr<i32> {{tt.divisibility = 16 : i32}}) {{
+            %dim0 = arith.constant 4 : i64
+            %dim1 = arith.constant 4 : i64
+            %dim2 = arith.constant 4 : i64
+            %dim3 = arith.constant 16 : i64
+            %stride0 = arith.constant 256 : i64
+            %stride1 = arith.constant 64 : i64
+            %stride2 = arith.constant 16 : i64
+            %stride3 = arith.constant 1 : i64
+            %c0_i32 = arith.constant 0 : i32
+
+            %src_ptr = tt.make_tensor_ptr %src, [%dim0, %dim1, %dim2, %dim3], [%stride0, %stride1, %stride2, %stride3], [%c0_i32, %c0_i32, %c0_i32, %c0_i32] {{order = array<i32: 3, 2, 1, 0>}} : <tensor<4x4x4x16xi32, #layout>>
+            %val = tt.load %src_ptr {{ttig.block_io = "row_major", boundaryCheck = array<i32: 0, 1, 2, 3>, padding = 1 : i32}} : !tt.ptr<tensor<4x4x4x16xi32, #layout>>
+
+            %dst_ptr = tt.make_tensor_ptr %dst, [%dim0, %dim1, %dim2, %dim3], [%stride0, %stride1, %stride2, %stride3], [%c0_i32, %c0_i32, %c0_i32, %c0_i32] {{order = array<i32: 3, 2, 1, 0>}} : <tensor<4x4x4x16xi32, #layout>>
+            tt.store %dst_ptr, %val {{ttig.block_io = "row_major", boundaryCheck = array<i32: 0, 1, 2, 3>}} : !tt.ptr<tensor<4x4x4x16xi32, #layout>>
+
+            tt.return
+        }}
+    }}
+    """
+
+    a = torch.randint(low=-127, high=128, size=[4, 4, 4, 16], dtype=torch.int32, device=device)
+    x = torch.empty_like(a)
+
+    temp_file = tmp_path / "test_block_io_4d_blocked.ttgir"
+    temp_file.write_text(ir)
+    kernel = triton.compile(str(temp_file))
+
+    kernel[(1, 1, 1)](a, x)
+    assert torch.equal(a, x)
+
+    if support_block_io:
+        llir = kernel.asm["llir"]
+        load_count = llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead')
+        assert load_count > 0

@@ -3,6 +3,8 @@
 
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 
+#include "intel/include/Dialect/TritonIntelGPU/IR/TritonIntelGPUEnums.h.inc"
+
 namespace mlir {
 class ModuleOp;
 }

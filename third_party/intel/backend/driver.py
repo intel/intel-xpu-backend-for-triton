@@ -523,9 +523,6 @@ def make_launcher(constants, signature):
 #include <iostream>
 #include <iomanip>
 #include <level_zero/ze_api.h>
-#if __SYCL_COMPILER_VERSION >= 20250604
-#include <sycl/ext/oneapi/experimental/enqueue_functions.hpp>
-#endif
 #include <sycl/sycl.hpp>
 { "#include <ATen/record_function.h>" if COMPILATION_HELPER.inject_pytorch_dep else "" }
 
@@ -696,11 +693,7 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
       cgh.parallel_for(parallel_work_size, kernel_ptr);
     }}
   }};
-#if __SYCL_COMPILER_VERSION >= 20250604
-  sycl::ext::oneapi::experimental::submit(stream, cgf);
-#else
-  stream.submit(cgf);
-#endif
+  auto event = stream.submit(cgf);
 }}
 // end sycl
 

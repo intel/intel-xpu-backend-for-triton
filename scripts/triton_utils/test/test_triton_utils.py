@@ -1,3 +1,4 @@
+# pylint: disable=too-many-lines
 import dataclasses
 from typing import Any, cast
 from unittest.mock import patch
@@ -567,7 +568,7 @@ def test_args(args: str, config: triton_utils.Config):
         ),
         (
             {'exclude_subdir_patterns': [re.compile(r'subdir2')], 'include_subdir_patterns': [re.compile(r'^.*$')]},
-            'test_core.test_reduce_layouts',
+            'python/test/unit/language/test_core.py::test_reduce_layouts',
             {'passed': [1, 0, -1]},
             'test'
         ),
@@ -738,21 +739,21 @@ def test_long_names_option(tmp_path, capsys, long_names: bool):
         triton_utils.run(config)
     stdout, _ = capsys.readouterr()
 
-    # The actual test name in output is the short_name (without variant in brackets)
-    short_name = 'test_reduce_layouts_with_very_long_name_that_exceeds_normal_display_width'
-    truncated_prefix = 'test_reduce_layouts_with_ve'
+    # The actual test name in output is the pytest-friendly name (without variant in brackets)
+    full_name = 'python/test/unit/language/test_core.py::test_reduce_layouts_with_very_long_name_that_exceeds_normal_display_width'
+    truncated_prefix = 'python/test/unit/language/test_core'
 
     if not long_names:
         # Without --long-names, the displayed name should be truncated:
-        # a prefix of the name should appear, but not the full short_name.
+        # a prefix of the name should appear, but not the full name.
         lines_with_prefix = [line for line in stdout.split('\n') if truncated_prefix in line]
         assert len(lines_with_prefix) > 0, 'Expected truncated prefix not found in output'
-        # Verify that in all such lines the full short_name is not present
-        assert not any(short_name in line for line in lines_with_prefix), (
-            'Expected truncated output, but full short name was found')
+        # Verify that in all such lines the full name is not present
+        assert not any(full_name in line for line in lines_with_prefix), (
+            'Expected truncated output, but full name was found')
     else:
         # With --long-names, the full test name should be visible without truncation
-        assert short_name in stdout, f'Expected full test name "{short_name}" not found in output'
+        assert full_name in stdout, f'Expected full test name "{full_name}" not found in output'
 
 
 @pytest.mark.parametrize('long_names', [False, True])
@@ -780,21 +781,21 @@ def test_long_names_option_compare_reports(tmp_path, capsys, long_names: bool):
         triton_utils.run(config)
     stdout, _ = capsys.readouterr()
 
-    # The actual test name in compare output is the short_name (without variant in brackets)
-    short_name = 'test_reduce_layouts_with_very_long_name_that_exceeds_normal_display_width'
-    truncated_prefix = 'test_reduce_layouts_with_ve'
+    # The actual test name in compare output is the pytest-friendly name (without variant in brackets)
+    full_name = 'python/test/unit/language/test_core.py::test_reduce_layouts_with_very_long_name_that_exceeds_normal_display_width'
+    truncated_prefix = 'python/test/unit/language/test_core'
 
     if not long_names:
         # Without --long-names, the displayed name should be truncated:
-        # a prefix of the name should appear, but not the full short_name.
+        # a prefix of the name should appear, but not the full name.
         lines_with_prefix = [line for line in stdout.split('\n') if truncated_prefix in line]
         assert len(lines_with_prefix) > 0, 'Expected truncated prefix not found in output'
-        # Verify that in all such lines the full short_name is not present
-        assert not any(short_name in line for line in lines_with_prefix), (
-            'Expected truncated output, but full short name was found')
+        # Verify that in all such lines the full name is not present
+        assert not any(full_name in line for line in lines_with_prefix), (
+            'Expected truncated output, but full name was found')
     else:
         # With --long-names, the full test name should be visible without truncation
-        assert short_name in stdout, f'Expected full test name "{short_name}" not found in output'
+        assert full_name in stdout, f'Expected full test name "{full_name}" not found in output'
 
 
 @pytest.mark.parametrize(
@@ -835,6 +836,276 @@ def test_artifact_pattern_filter(artifact_pattern, expected_names):
         else:
             result = processor.get_test_report_artifacts()
             assert [af.name for af in result] == expected_names
+
+
+# -- Compare mode enhancement tests --
+
+# r1 has tests A, B, C; r2 has tests B, C, D — so A is r1-only, D is r2-only, B/C are both
+TESTS_FOR_COMPARE_SCOPE = {
+    'report1/language.xml':
+    '''<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+    <testsuite name="pytest" errors="0" failures="0" skipped="0" tests="3" time="3.0">
+        <testcase classname="python.test.unit.language.test_core" name="test_a" time="1.0" />
+        <testcase classname="python.test.unit.language.test_core" name="test_b" time="1.5" />
+        <testcase classname="python.test.unit.language.test_matmul" name="test_c" time="0.5" />
+    </testsuite>
+</testsuites>
+''',
+    'report2/language.xml':
+    '''<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+    <testsuite name="pytest" errors="0" failures="1" skipped="0" tests="3" time="4.0">
+        <testcase classname="python.test.unit.language.test_core" name="test_b" time="2.0" />
+        <testcase classname="python.test.unit.language.test_matmul" name="test_c" time="1.0" />
+        <testcase classname="python.test.unit.language.test_matmul" name="test_d" time="1.0">
+            <failure message="assert False">assert False</failure>
+        </testcase>
+    </testsuite>
+</testsuites>
+''',
+}
+
+TESTS_FOR_COMPARE_CLASS = {
+    'report1/language.xml':
+    '''<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+    <testsuite name="pytest" errors="0" failures="0" skipped="0" tests="1" time="1.0">
+        <testcase classname="python.test.unit.language.test_triton_kernels.TestGraphXPU" name="test_fused_op" time="1.0" />
+    </testsuite>
+</testsuites>
+''',
+    'report2/language.xml':
+    '''<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+    <testsuite name="pytest" errors="0" failures="0" skipped="0" tests="1" time="2.0">
+        <testcase classname="python.test.unit.language.test_triton_kernels.TestGraphXPU" name="test_fused_op" time="2.0" />
+    </testsuite>
+</testsuites>
+''',
+}
+
+
+def _setup_compare_reports(tmp_path, test_data):
+    for report_name, doc_str in test_data.items():
+        parts = report_name.split('/')
+        subdir_path = tmp_path / parts[0]
+        subdir_path.mkdir(parents=True, exist_ok=True)
+        (subdir_path / parts[1]).write_text(doc_str, encoding='utf-8')
+    return str(tmp_path / 'report1'), str(tmp_path / 'report2')
+
+
+def test_compare_reports_includes_time(tmp_path):
+    r1, r2 = _setup_compare_reports(tmp_path, TESTS_FOR_COMPARE_SCOPE)
+    config = triton_utils.Config(
+        action='compare_reports',
+        reports=r1,
+        reports_2=r2,
+        _report_grouping_level='testsuite',
+    )
+    result = triton_utils.run(config)
+    assert ('time', 'r1') in result.columns
+    assert ('time', 'r2') in result.columns
+    assert ('time', 'Δ') in result.columns
+
+
+@pytest.mark.parametrize('sort_by', ['passed.r1', 'time.delta', 'failed.r2'])
+def test_compare_sort_by(tmp_path, sort_by):
+    r1, r2 = _setup_compare_reports(tmp_path, TESTS_FOR_COMPARE_SCOPE)
+    config = triton_utils.Config(
+        action='compare_reports',
+        reports=r1,
+        reports_2=r2,
+        sort_by=sort_by,
+        _report_grouping_level='testsuite',
+    )
+    result = triton_utils.run(config)
+    assert result.index[-1] == 'Σ'
+    assert len(result) > 1
+
+
+@pytest.mark.parametrize(
+    ('sort_by', 'expected_error'),
+    [
+        ('invalid', ValueError),
+        ('passed.invalid', ValueError),
+        ('invalid.r1', ValueError),
+        ('passed', ValueError),
+    ]
+)
+def test_compare_sort_by_invalid(tmp_path, sort_by, expected_error):
+    r1, r2 = _setup_compare_reports(tmp_path, TESTS_FOR_COMPARE_SCOPE)
+    config = triton_utils.Config(
+        action='compare_reports',
+        reports=r1,
+        reports_2=r2,
+        sort_by=sort_by,
+        _report_grouping_level='testsuite',
+    )
+    with pytest.raises(expected_error):
+        triton_utils.run(config)
+
+
+# r1: test_a, test_b, test_c; r2: test_b, test_c, test_d
+# At test level: r1-only=1 (test_a), r2-only=1 (test_d), both=2 (test_b, test_c)
+@pytest.mark.parametrize(
+    ('compare_scope', 'expected_test_rows'),
+    [
+        ('r1-only', 1),
+        ('r2-only', 1),
+        ('both', 2),
+        ('any', 4),
+    ]
+)
+def test_compare_scope(tmp_path, compare_scope, expected_test_rows):
+    r1, r2 = _setup_compare_reports(tmp_path, TESTS_FOR_COMPARE_SCOPE)
+    config = triton_utils.Config(
+        action='compare_reports',
+        reports=r1,
+        reports_2=r2,
+        _compare_scope=compare_scope,
+        _report_grouping_level='test',
+    )
+    result = triton_utils.run(config)
+    # Subtract total row and group header rows (empty string values)
+    data_rows = [idx for idx in result.index if idx != 'Σ' and result.loc[idx].ne('').any()]
+    assert len(data_rows) == expected_test_rows
+
+
+def test_compare_pretty_flag_accepted():
+    config = triton_utils.Config.from_args(
+        'compare --r /path/r1 --r2 /path/r2 --pretty'
+    )
+    assert config.pretty_print is True
+
+
+def test_compare_sort_by_arg_accepted():
+    config = triton_utils.Config.from_args(
+        'compare --r /path/r1 --r2 /path/r2 --sort-by passed.r1'
+    )
+    assert config.sort_by == 'passed.r1'
+
+
+def test_compare_scope_arg_accepted():
+    config = triton_utils.Config.from_args(
+        'compare --r /path/r1 --r2 /path/r2 --compare-scope both'
+    )
+    assert config.compare_scope == triton_utils.CompareScope.BOTH
+
+
+@pytest.mark.parametrize(
+    ('omit_flags', 'expected_prefix'),
+    [
+        # Full name: language::python/test/unit/language/test_core.py::test_b
+        ({'omit_testsuite_name': True}, 'python/test/unit/language/test_core.py::test_b'),
+        ({'omit_test_module_name': True}, 'language::test_b'),
+        ({'omit_testsuite_name': True, 'omit_test_module_name': True}, 'test_b'),
+    ]
+)
+def test_compare_omit_name_flags(tmp_path, omit_flags, expected_prefix):
+    r1, r2 = _setup_compare_reports(tmp_path, TESTS_FOR_COMPARE_SCOPE)
+    config = triton_utils.Config(
+        action='compare_reports',
+        reports=r1,
+        reports_2=r2,
+        _report_grouping_level='test',
+        _compare_scope='both',
+        **omit_flags,
+    )
+    result = triton_utils.run(config)
+    data_rows = [idx for idx in result.index if idx != 'Σ' and result.loc[idx].ne('').any()]
+    assert any(expected_prefix in row for row in data_rows)
+
+
+def test_compare_omit_class_name(tmp_path):
+    r1, r2 = _setup_compare_reports(tmp_path, TESTS_FOR_COMPARE_CLASS)
+    config = triton_utils.Config(
+        action='compare_reports',
+        reports=r1,
+        reports_2=r2,
+        _report_grouping_level='test',
+        omit_test_class_name=True,
+    )
+    result = triton_utils.run(config)
+    data_rows = [idx for idx in result.index if idx != 'Σ' and result.loc[idx].ne('').any()]
+    for row in data_rows:
+        assert 'TestGraphXPU' not in row
+
+
+def test_compare_omit_flags_warn_on_testsuite_level(tmp_path, capsys):
+    r1, r2 = _setup_compare_reports(tmp_path, TESTS_FOR_COMPARE_SCOPE)
+    config = triton_utils.Config(
+        action='compare_reports',
+        reports=r1,
+        reports_2=r2,
+        _report_grouping_level='testsuite',
+        omit_testsuite_name=True,
+    )
+    triton_utils.run(config)
+    _, stderr = capsys.readouterr()
+    assert '[WARNING]' in stderr
+    assert 'omit-testsuite-name' in stderr
+
+
+def test_compare_omit_testsuite_and_module_preserves_class(tmp_path):
+    """Verify _minify_name keeps class when both testsuite and module are omitted."""
+    r1, r2 = _setup_compare_reports(tmp_path, TESTS_FOR_COMPARE_CLASS)
+    config = triton_utils.Config(
+        action='compare_reports',
+        reports=r1,
+        reports_2=r2,
+        _report_grouping_level='test',
+        omit_testsuite_name=True,
+        omit_test_module_name=True,
+    )
+    result = triton_utils.run(config)
+    data_rows = [idx for idx in result.index if idx != 'Σ' and result.loc[idx].ne('').any()]
+    assert any('TestGraphXPU' in row for row in data_rows)
+
+
+def test_compare_time_pct_delta_column(tmp_path):
+    """Verify time.%Δ column shows percentage change."""
+    r1, r2 = _setup_compare_reports(tmp_path, TESTS_FOR_COMPARE_SCOPE)
+    config = triton_utils.Config(
+        action='compare_reports',
+        reports=r1,
+        reports_2=r2,
+        _report_grouping_level='testsuite',
+    )
+    result = triton_utils.run(config)
+    assert ('time', '%Δ') in result.columns
+    # language testsuite: r1 time=3.0, r2 time=4.0 → %Δ = 33.33%
+    pct_val = result.loc['language', ('time', '%Δ')]
+    assert '%' in str(pct_val)
+
+
+def test_compare_sort_by_time_pct_delta(tmp_path):
+    """Verify sorting by time.%Δ works."""
+    r1, r2 = _setup_compare_reports(tmp_path, TESTS_FOR_COMPARE_SCOPE)
+    config = triton_utils.Config(
+        action='compare_reports',
+        reports=r1,
+        reports_2=r2,
+        sort_by='time.%delta',
+        _report_grouping_level='testsuite',
+    )
+    result = triton_utils.run(config)
+    assert result.index[-1] == 'Σ'
+
+
+def test_compare_time_precision(tmp_path):
+    """Verify time columns have 2-decimal precision, not rounded to int."""
+    r1, r2 = _setup_compare_reports(tmp_path, TESTS_FOR_COMPARE_SCOPE)
+    config = triton_utils.Config(
+        action='compare_reports',
+        reports=r1,
+        reports_2=r2,
+        _report_grouping_level='testsuite',
+    )
+    result = triton_utils.run(config)
+    # r1 time for language = 3.0, check it's a float not int
+    time_r1 = result.loc['language', ('time', 'r1')]
+    assert isinstance(time_r1, float)
 
 
 # yapf: enable

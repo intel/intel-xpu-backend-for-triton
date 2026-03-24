@@ -35,4 +35,3 @@ apply_patch() {
 echo "Applying PyTorch patches in $REPO_ROOT"
 
 # put your patch applies here
-apply_patch ./patch/skip_page_attention_ut.patch

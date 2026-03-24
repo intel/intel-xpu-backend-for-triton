@@ -22,7 +22,7 @@ Intel® XPU Backend for Triton\* is an out of tree backend module for [Triton](h
   * Latest [Long Term Support (LTS) Release](https://dgpu-docs.intel.com/driver/installation-lts2.html)
   * Latest [The Kobuk team Intel® Graphics PPA](https://launchpad.net/~kobuk-team/+archive/ubuntu/intel-graphics)
 * Toolchain:
-  * [Intel® Deep Learning Essentials 2025.3.1](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html?packages=dl-essentials&dl-lin=offline&dl-essentials-os=linux)
+  * [Intel® Deep Learning Essentials 2025.3.2](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html?packages=dl-essentials&dl-lin=offline&dl-essentials-os=linux)
 
 Note that Intel® XPU Backend for Triton\* is not compatible with Intel® Extension for PyTorch\* and Intel® oneAPI Base Toolkit\*.
 
@@ -42,6 +42,7 @@ Basic rules:
 2. **Type Annotations:** Use proper type annotations for your kernels. Good type annotations allow for better optimization, but be careful to avoid excessive recompilation.
 3. **Benchmark:** Experiment with the performance of your kernel. You can use `triton.testing.do_bench` for basic benchmarking, as demonstrated in the [tutorials](../python/tutorials/02-fused-softmax.py).
 4. **Tiling and Autotuning:** Pick appropriate tiling for your machine and tensor shapes.
+5. **Grid Dimension Ordering:** On XPU, the first grid dimension changes fastest. Place computation tile indices on `axis=0` and batch/expert indices on higher dimensions to preserve cache locality. Misordering can cost 20% to 2x performance.
 
 More details below.
 
@@ -400,12 +401,47 @@ The Intel-specific option `grf_mode` determines the number of registers allocate
 Setting it higher can be good for a kernel that uses many registers, but it will decrease hardware utilization.
 You can set high value with `grf_mode = "256"` if you have to.
 
+### Grid Dimension Ordering
+
+On XPU, the ordering of dimensions in the kernel launch grid has a significant impact on performance. The hardware dispatches work-groups by iterating over the first grid dimension fastest. This means that work-groups with adjacent values on `axis=0` are likely to execute concurrently on neighboring execution units.
+
+To maximize cache locality and memory throughput, place the dimension responsible for **computation tiling** (e.g., the combined M/N tile index for GEMM) on `axis=0`, and place dimensions that select **different data segments** (e.g., batch index or expert index) on `axis=1` or `axis=2`. This way, concurrently running work-groups share the same input data and benefit from cache reuse, rather than each pulling in a completely different data slice.
+
+Getting the grid order wrong can degrade performance by 20% or even 2x, depending on the kernel and problem size.
+
+This is particularly important for:
+
+- **Batched GEMM kernels** — the batch dimension should go on `axis=1`, not `axis=0`.
+- **Mixture-of-Experts (MoE) kernels** (e.g., `batched_moe` from vLLM) — the expert index should go on a higher-numbered axis, keeping the token/tile index on `axis=0`.
+
+**Example — Batched GEMM grid (from [gemm_benchmark.py](../benchmarks/triton_kernels_benchmark/gemm_benchmark.py)):**
+
+```python
+# Good: tile index on axis=0, batch on axis=1
+grid = lambda META: (
+    triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
+    B,
+)
+# Inside the kernel:
+bid = tl.program_id(axis=1)  # batch index
+pid = tl.program_id(axis=0)  # tile index
+
+# Bad: batch on axis=0, tile index on axis=1
+# Adjacent work-groups would operate on different batches, destroying cache locality.
+grid = lambda META: (
+    B,
+    triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
+)
+```
+
+**Rule of thumb:** Put the fast-changing tile index on `axis=0`. Move batch, expert, or other data-selecting indices to `axis=1` or higher.
+
 # Quick Installation
 
 ## Prerequisites
 
 1. Latest [Rolling Release](https://dgpu-docs.intel.com/driver/installation-rolling.html) or [Long Term Support Release](https://dgpu-docs.intel.com/driver/installation-lts2.html) of GPU driver
-2. [Intel® Deep Learning Essentials 2025.3.1](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html?packages=dl-essentials&dl-lin=offline&dl-essentials-os=linux)
+2. [Intel® Deep Learning Essentials 2025.3.2](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html?packages=dl-essentials&dl-lin=offline&dl-essentials-os=linux)
 
 ## Install PyTorch and Triton from nightly wheels
 

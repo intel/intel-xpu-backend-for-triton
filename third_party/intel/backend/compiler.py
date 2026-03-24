@@ -4,6 +4,7 @@ from triton.backends.intel.driver import compile_module_from_src
 from triton.backends.intel.track import track
 from triton.backends.intel.extension_utils import query_device_extensions
 from triton import knobs
+from triton.runtime.errors import IntelGPUError
 
 from dataclasses import dataclass
 import functools
@@ -81,7 +82,6 @@ def extract_spill_size_from_zebin(file):
         elf = ELFFile(f)
         zeinfo = elf.get_section_by_name(".ze_info")
         if zeinfo is None:
-            from triton.runtime.errors import IntelGPUError
             raise IntelGPUError('Internal Triton ZEBIN codegen error:'
                                 'Section .ze_info not found in zebin')
         text = zeinfo.data().decode('utf-8')
@@ -273,7 +273,6 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
         passes.common.add_cse(pm)
         passes.ttir.add_triton_licm(pm)
-        intel.passes.ttir.add_remove_boundary_checks(pm)
         intel.passes.ttir.add_remove_masks(pm)
         intel.passes.ttir.add_stride_versioning(pm)
         intel.passes.ttir.add_fuse_reshape(pm)
@@ -311,11 +310,11 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
 
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
-        intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
         intel.passes.ttgpuir.add_materialize_block_pointer(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_optimize_dot_operands(pm)
         intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.use_barrier)
+        intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
 
         if (opt.reduce_variable_liveness):
             intel.passes.ttgpuir.add_reduce_variable_liveness(pm)
@@ -527,9 +526,9 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                     else:
                         error = f'`ocloc` failed with error code {e.returncode}'
 
-                    raise RuntimeError(f'{error}\n'
-                                       f'`ocloc` stderr:\n{e.output}\n'
-                                       f'Repro command: {ocloc_cmd}\n') from e
+                    raise IntelGPUError(f'{error}\n'
+                                        f'`ocloc` stderr:\n{e.output}\n'
+                                        f'Repro command: {ocloc_cmd}\n') from e
 
             with open(fbin, 'rb') as f:
                 zebin = f.read()

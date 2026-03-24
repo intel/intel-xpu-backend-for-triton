@@ -105,7 +105,6 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::test::registerTestTritonAMDGPURangeAnalysis();
   mlir::triton::registerConvertTritonToTritonGPUPass();
   mlir::triton::intel::registerTritonIntelFuseReshape();
-  mlir::triton::intel::registerTritonIntelRemoveBoundaryChecks();
   mlir::triton::intel::registerTritonIntelRemoveMasks();
   mlir::triton::intel::registerTritonIntelStrideVersioning();
   mlir::triton::intel::registerTritonIntelBlockPointerToTensorDesc();
@@ -167,6 +166,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::registerTritonAMDGPUInsertInstructionSchedHints();
   mlir::triton::registerTritonAMDGPULowerInstructionSchedHints();
   mlir::registerTritonAMDFoldTrueCmpI();
+  mlir::registerTritonAMDGPUFpSanitizer();
   mlir::triton::amdgpu::registerTritonAMDGPUOptimizeDotOperands();
 
   // NVWS passes
