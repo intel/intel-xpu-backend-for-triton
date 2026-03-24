@@ -295,6 +295,13 @@ jobs:
           echo "IGC_ShaderDumpEnable=1" | tee -a $GITHUB_ENV
           echo "IGC_DumpToCustomDir=$GITHUB_WORKSPACE/igc-shader-dumps" | tee -a $GITHUB_ENV
 
+      - name: Set clean Triton cache dir
+        if: matrix.suite == 'triton-kernels'
+        run: |
+          rm -rf "$GITHUB_WORKSPACE/tmp_triton_cache"
+          mkdir -p "$GITHUB_WORKSPACE/tmp_triton_cache"
+          echo "TRITON_CACHE_DIR=$GITHUB_WORKSPACE/tmp_triton_cache" | tee -a $GITHUB_ENV
+
       - name: Run triton kernels tests
         continue-on-error: true
         if: matrix.suite == 'triton-kernels'
