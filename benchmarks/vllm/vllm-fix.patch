@@ -55,25 +55,3 @@ index 4b693d8c8..a04281e13 100644
          w_s = torch.stack(w_s_l)
          if e > 0 and w_gs_l[0] is not None:
              w_gs = torch.stack(w_gs_l)
-diff --git a/vllm/model_executor/layers/fused_moe/fused_batched_moe.py b/vllm/model_executor/layers/fused_moe/fused_batched_moe.py
-index 9df94b72d..22c0e8ba9 100644
---- a/vllm/model_executor/layers/fused_moe/fused_batched_moe.py
-+++ b/vllm/model_executor/layers/fused_moe/fused_batched_moe.py
-@@ -778,7 +778,7 @@ class NaiveBatchedExperts(mk.FusedMoEExpertsModular):
-             # Indexing expert_num_tokens doesn't work w/cudagraphs or inductor
-             if (
-                 torch.compiler.is_compiling()
--                or torch.cuda.is_current_stream_capturing()
-+                or (torch.cuda.is_available() and torch.cuda.is_current_stream_capturing())
-             ):
-                 num = hidden_states.shape[1]
-             else:
-@@ -819,7 +819,7 @@ def batched_moe_kernel_quantize_input(
-     per_act_token_quant: bool,
-     block_shape: list[int] | None = None,
- ) -> tuple[torch.Tensor, torch.Tensor | None]:
--    if torch.compiler.is_compiling() or torch.cuda.is_current_stream_capturing():
-+    if torch.compiler.is_compiling() or (torch.cuda.is_available() and torch.cuda.is_current_stream_capturing()):
-         # Note: this does a bunch of extra work because expert_num_tokens is
-         # ignored but it does support torch.compile + cudagraphs.
-         hidden_dim = A.size(-1)
