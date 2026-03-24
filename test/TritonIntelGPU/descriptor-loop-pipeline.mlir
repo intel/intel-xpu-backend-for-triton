@@ -149,33 +149,60 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bfloat16_conversion
 
 // -----
 
-// COM: Ensure prefetch operations aren't generated for 3D descriptor loads.
-#linear = #ttg.linear<{register = [[0, 1, 0], [0, 2, 0], [0, 4, 0], [0, 8, 0], [0, 16, 0], [0, 0, 16], [0, 0, 32], [0, 64, 0]], lane = [[0, 0, 1], [0, 0, 2], [0, 0, 4], [0, 0, 8]], warp = [[0, 0, 0], [0, 0, 0], [0, 32, 0]], block = []}>
-#linear1 = #ttg.linear<{register = [[0, 0, 1], [0, 0, 2], [0, 0, 4], [0, 0, 8], [0, 16, 0], [0, 0, 16], [0, 0, 32], [0, 128, 0]], lane = [[0, 1, 0], [0, 2, 0], [0, 4, 0], [0, 8, 0]], warp = [[0, 32, 0], [0, 64, 0], [0, 0, 0]], block = []}>
-#linear2 = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [16, 0], [0, 16], [0, 32], [128, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0]], warp = [[32, 0], [64, 0], [0, 0]], block = []}>
+// COM: Test that rank-3 descriptor loads inside scf.for loops get prefetched when their
+// COM: transitive uses flow through blocked encodings to dot operand encodings.
+// COM: Load A: 3D blocked -> reshape -> 2D blocked -> convert_layout -> dot_op (opIdx=0)
+// COM: Load B: 3D blocked -> reshape -> 2D blocked -> convert_layout -> dot_op (opIdx=1)
+
+#blocked3d = #ttg.blocked<{sizePerThread = [1, 1, 8], threadsPerWarp = [1, 4, 4], warpsPerCTA = [1, 2, 4], order = [2, 1, 0]}>
+#blocked2d = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 4], warpsPerCTA = [2, 4], order = [1, 0]}>
 #mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 4], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
+
 module attributes {ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_2d_block_io, ttig.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
-  // CHECK-LABEL: batched_gemm_3d_tma_kernel
-  tt.func public @batched_gemm_3d_tma_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: i32, %arg6: i32 {tt.divisibility = 16 : i32}) {
+  // CHECK-LABEL: tt.func public @rank3_descriptor_prefetch
+  tt.func public @rank3_descriptor_prefetch(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: i32, %arg6: i32 {tt.divisibility = 16 : i32}) {
     %c0_i32 = arith.constant 0 : i32
     %c1_i32 = arith.constant 1 : i32
     %c64_i32 = arith.constant 64 : i32
     %c1_i64 = arith.constant 1 : i64
     %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #mma>
-    %16 = arith.extsi %arg6 : i32 to i64
+    %0 = arith.extsi %arg6 : i32 to i64
 
     // COM: Create 3D tensor descriptors outside the loop.
-    %descA = tt.make_tensor_descriptor %arg0, [%arg3, %arg3, %arg6], [%16, %16, %c1_i64] : <f16>, <tensor<1x128x64xf16>>
-    %descB = tt.make_tensor_descriptor %arg1, [%arg3, %arg6, %arg6], [%16, %16, %c1_i64] : <f16>, <tensor<1x256x64xf16>>
+    %descA = tt.make_tensor_descriptor %arg0, [%arg3, %arg3, %arg6], [%0, %0, %c1_i64] : <f16>, <tensor<1x128x64xf16>>
+    %descB = tt.make_tensor_descriptor %arg1, [%arg3, %arg6, %arg6], [%0, %0, %c1_i64] : <f16>, <tensor<1x64x256xf16>>
 
-    scf.for %arg7 = %c0_i32 to %c64_i32 step %c1_i32  : i32 {
-      // CHECK-NOT: prefetch
-      %34 = tt.descriptor_load %descA[%c0_i32, %arg7, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<1x128x64xf16>> -> tensor<1x128x64xf16, #linear>
-      %35 = tt.reshape %34 : tensor<1x128x64xf16, #linear> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
-      %37 = tt.descriptor_load %descB[%c0_i32, %arg7, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<1x256x64xf16>> -> tensor<1x256x64xf16, #linear1>
-      %38 = tt.reshape %37 : tensor<1x256x64xf16, #linear1> -> tensor<256x64xf16, #linear2>
-      %39 = tt.trans %38 {order = array<i32: 1, 0>} : tensor<256x64xf16, #linear2> -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
-      %40 = tt.dot %35, %39, %cst : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<128x256xf32, #mma>
+    // COM: 3-stage pipeline: prefetch iterations 0 and 1 before the loop,
+    // COM: iteration i+2 inside the loop.
+    // CHECK-DAG:  %[[DESCA:.*]] = tt.make_tensor_descriptor %arg0{{.*}}<tensor<1x128x64xf16>>
+    // CHECK-DAG:  %[[DESCB:.*]] = tt.make_tensor_descriptor %arg1{{.*}}<tensor<1x64x256xf16>>
+    // COM: Iteration 0: prefetch at initial offset.
+    // CHECK:      ttig.descriptor_prefetch %[[DESCA]][%[[C0:.*]], %[[C0]], %[[C0]]] {{.*}} : !tt.tensordesc<tensor<1x128x64xf16>>
+    // CHECK:      ttig.descriptor_prefetch %[[DESCB]][%[[C0]], %[[C0]], %[[C0]]] {{.*}} : !tt.tensordesc<tensor<1x64x256xf16>>
+    // COM: Iteration 1: prefetch at advanced offset. descA advances dim 2, descB advances dim 1.
+    // COM: Capture OFF1 from descA prefetch, verify same value used in descB prefetch.
+    // CHECK:      ttig.descriptor_prefetch %[[DESCA]][%[[C0]], %[[C0]], %[[OFF1:.*]]] {{.*}} : !tt.tensordesc<tensor<1x128x64xf16>>
+    // CHECK:      ttig.descriptor_prefetch %[[DESCB]][%[[C0]], %[[OFF1]], %[[C0]]] {{.*}} : !tt.tensordesc<tensor<1x64x256xf16>>
+    // COM: Inside the loop: prefetch uses an advanced offset computed from arith.addi,
+    // COM: load uses the current iteration offset — verifying prefetch is ahead.
+    // CHECK:      scf.for %[[IV:.*]] = {{.*}}
+    // CHECK:        %[[OFFN:.*]] = arith.addi
+    // CHECK:        ttig.descriptor_prefetch %[[DESCA]][%[[C0]], %[[C0]], %[[OFFN]]] {{.*}} : !tt.tensordesc<tensor<1x128x64xf16>>
+    // CHECK:        ttig.descriptor_prefetch %[[DESCB]][%[[C0]], %[[OFFN]], %[[C0]]] {{.*}} : !tt.tensordesc<tensor<1x64x256xf16>>
+    // CHECK:        tt.descriptor_load %[[DESCA]][%[[C0]], %[[C0]], %[[CURR:.*]]] {{.*}} : !tt.tensordesc<tensor<1x128x64xf16>>
+    // CHECK:        tt.descriptor_load %[[DESCB]][%[[C0]], %[[CURR]], %[[C0]]] {{.*}} : !tt.tensordesc<tensor<1x64x256xf16>>
+    // CHECK:        tt.dot
+    // CHECK:        scf.yield
+    %result:2 = scf.for %k = %c0_i32 to %c64_i32 step %c1_i32 iter_args(%acc = %cst, %koff = %c0_i32) -> (tensor<128x256xf32, #mma>, i32) : i32 {
+      %a3d = tt.descriptor_load %descA[%c0_i32, %c0_i32, %koff] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<1x128x64xf16>> -> tensor<1x128x64xf16, #blocked3d>
+      %a2d = tt.reshape %a3d : tensor<1x128x64xf16, #blocked3d> -> tensor<128x64xf16, #blocked2d>
+      %a = ttg.convert_layout %a2d : tensor<128x64xf16, #blocked2d> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+      %b3d = tt.descriptor_load %descB[%c0_i32, %koff, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<1x64x256xf16>> -> tensor<1x64x256xf16, #blocked3d>
+      %b2d = tt.reshape %b3d : tensor<1x64x256xf16, #blocked3d> -> tensor<64x256xf16, #blocked2d>
+      %b = ttg.convert_layout %b2d : tensor<64x256xf16, #blocked2d> -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
+      %d = tt.dot %a, %b, %acc, inputPrecision = tf32 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<128x256xf32, #mma>
+      %next_koff = arith.addi %koff, %c1_i32 : i32
+      scf.yield %d, %next_koff : tensor<128x256xf32, #mma>, i32
     }
     tt.return
   }
