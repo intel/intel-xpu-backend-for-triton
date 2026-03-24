@@ -833,6 +833,7 @@ run_vllm_install() {
     git apply ../benchmarks/vllm/vllm-fix.patch
     sed -i 's/device="cuda"/device="xpu"/g' \
       tests/kernels/moe/utils.py \
+      tests/kernels/moe/test_batched_moe.py \
       tests/kernels/attention/test_triton_unified_attention.py
 
     sed -i 's/set_default_device("cuda")/set_default_device("xpu")/g' \
