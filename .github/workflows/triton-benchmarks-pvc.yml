@@ -21,11 +21,20 @@ jobs:
         id: check
         uses: ./.github/actions/check-path-changes
         with:
-          patterns: '^(\.github/workflows/triton-benchmarks.*\.yml|benchmarks/)'
+          patterns: '^(\.github/workflows/(triton-benchmarks|build-benchmarks-wheel).*\.yml|\.github/actions/(install|validate)-benchmarks/|benchmarks/)'
 
-  benchmarks:
+  build-wheel:
     needs: check-paths
     if: needs.check-paths.outputs.benchmarks == 'true' || github.event.label.name == 'run-benchmarks'
+    uses: ./.github/workflows/build-benchmarks-wheel.yml
+    with:
+      python-version: "3.10"
+
+  benchmarks:
+    needs: [check-paths, build-wheel]
+    if: >-
+      always() && !cancelled() &&
+      (needs.check-paths.outputs.benchmarks == 'true' || github.event.label.name == 'run-benchmarks')
     uses: ./.github/workflows/triton-benchmarks.yml
     with:
       runner_label: max1550

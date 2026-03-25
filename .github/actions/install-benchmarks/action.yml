@@ -1,0 +1,90 @@
+name: Install benchmarks
+description: Install benchmarks from pre-built wheel artifact with source build fallback
+
+inputs:
+  python-version:
+    description: Python version for wheel artifact matching
+    required: true
+  github-token:
+    description: GitHub token for artifact download
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Download benchmarks wheel (same run)
+      id: same-run-download
+      uses: actions/download-artifact@v7
+      continue-on-error: true
+      with:
+        name: benchmarks-wheel-py${{ inputs.python-version }}
+        path: ${{ runner.temp }}/benchmarks-wheel-same-run
+
+    - name: Install benchmarks wheel (same run)
+      id: same-run-install
+      if: steps.same-run-download.outcome == 'success'
+      continue-on-error: true
+      shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+      run: |
+        # Uninstall first to ensure clean install. We can't use --force-reinstall
+        # because it would reinstall torch and clobber the XPU-specific PyTorch build.
+        # Plain pip install won't upgrade because the wheel uses a PEP 440 local
+        # version (3.7.1+git...) and pip treats different local suffixes as the same.
+        pip uninstall -y triton-kernels-benchmark 2>/dev/null || true
+        cd "$RUNNER_TEMP/benchmarks-wheel-same-run"
+        pip install *.whl
+
+    - name: Validate benchmarks (same run)
+      id: same-run-validate
+      if: steps.same-run-install.outcome == 'success'
+      uses: ./.github/actions/validate-benchmarks
+      continue-on-error: true
+
+    - name: Install triton-utils
+      if: steps.same-run-validate.outcome != 'success'
+      shell: bash
+      run: pip install "$GITHUB_WORKSPACE/scripts/triton_utils"
+
+    - name: Download and install benchmarks wheel (main)
+      id: main-wheel
+      if: steps.same-run-validate.outcome != 'success'
+      continue-on-error: true
+      shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        # $RUNNER_TEMP is auto-cleaned per job — avoids stale wheels on self-hosted runners.
+        triton-utils wheels \
+          --latest-wf-run benchmarks \
+          --wheel-set bench \
+          --python-version "${{ inputs.python-version }}" \
+          -D "$RUNNER_TEMP/benchmarks-wheel" \
+          -R "$GITHUB_REPOSITORY"
+
+        # See "Install benchmarks wheel (same run)" step for why uninstall-then-install.
+        pip uninstall -y triton-kernels-benchmark 2>/dev/null || true
+        cd "$RUNNER_TEMP/benchmarks-wheel"/*
+        pip install *.whl
+
+    - name: Validate benchmarks (main)
+      id: main-validate
+      if: steps.main-wheel.outcome == 'success'
+      uses: ./.github/actions/validate-benchmarks
+      continue-on-error: true
+
+    - name: Report wheel installation success
+      if: steps.same-run-validate.outcome == 'success' || steps.main-validate.outcome == 'success'
+      shell: bash
+      run: |
+        if [[ "${{ steps.same-run-validate.outcome }}" == "success" ]]; then
+          echo "::notice::Installed benchmarks from same-run wheel artifact"
+        else
+          echo "::notice::Installed benchmarks from main branch wheel artifact"
+        fi
+
+    - name: Fallback to source build
+      if: steps.same-run-validate.outcome != 'success' && steps.main-validate.outcome != 'success'
+      shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+      run: |
+        echo "::warning::Pre-built wheel unavailable, falling back to source build"
+        (cd "$GITHUB_WORKSPACE/benchmarks" && pip install --no-build-isolation .)
