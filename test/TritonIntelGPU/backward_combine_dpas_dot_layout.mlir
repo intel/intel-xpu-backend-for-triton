@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-remove-layout-conversions 2>&1 | FileCheck %s
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-remove-layout-conversions='max-backward-remat-iterations=10' 2>&1 | FileCheck %s
 
 // COM: Case 1:
 // COM: Checks that the loads for the operands of a tt.dot operation are placed
