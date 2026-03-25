@@ -1,5 +1,5 @@
-// RUN: env TRITON_INTEL_REMOVELAYOUTCONVERSION_SUPPORT_FOR_LOOP=0 triton-opt %s -split-input-file -allow-unregistered-dialect -tritonintelgpu-remove-layout-conversions 2>&1 | FileCheck --check-prefixes=CHECK %s
-// RUN: env TRITON_INTEL_REMOVELAYOUTCONVERSION_SUPPORT_FOR_LOOP=1 triton-opt %s -split-input-file -allow-unregistered-dialect -tritonintelgpu-remove-layout-conversions 2>&1 | FileCheck --check-prefixes=CHECK,FOR-SUPPORT %s
+// RUN: env TRITON_INTEL_REMOVELAYOUTCONVERSION_SUPPORT_FOR_LOOP=0 triton-opt %s -split-input-file -allow-unregistered-dialect -tritonintelgpu-remove-layout-conversions='max-backward-remat-iterations=10' 2>&1 | FileCheck --check-prefixes=CHECK %s
+// RUN: env TRITON_INTEL_REMOVELAYOUTCONVERSION_SUPPORT_FOR_LOOP=1 triton-opt %s -split-input-file -allow-unregistered-dialect -tritonintelgpu-remove-layout-conversions='max-backward-remat-iterations=10' 2>&1 | FileCheck --check-prefixes=CHECK,FOR-SUPPORT %s
 
 #layout0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #layout1 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
