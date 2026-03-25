@@ -547,8 +547,8 @@ void LayoutPropagation::resolveConflicts() {
     // TODO: add a proper heuristic.
     Attribute encoding = *info.encodings.begin();
     bool isLoadOrStore =
-        op &&
-        isa<tt::LoadOp, tt::StoreOp, tt::AtomicRMWOp, tt::AtomicCASOp>(op);
+        op && isa<tt::LoadOp, tt::StoreOp, tt::DescriptorLoadOp,
+                  tt::DescriptorStoreOp, tt::AtomicRMWOp, tt::AtomicCASOp>(op);
     for (Attribute e : info.encodings) {
       if ((isLoadOrStore && isa<ttg::BlockedEncodingAttr>(e)) ||
           (!isLoadOrStore && isa<ttg::MmaEncodingTrait>(e))) {
@@ -982,11 +982,6 @@ bool LayoutPropagation::rewriteStoreOp(tt::StoreOp storeOp) {
 
 bool LayoutPropagation::rewriteDescriptorStoreOp(
     tt::DescriptorStoreOp storeOp) {
-  if (auto convertOp = storeOp.getSrc().getDefiningOp<ttg::ConvertLayoutOp>()) {
-    storeOp.getSrcMutable().assign(convertOp.getSrc());
-    return true;
-  }
-
   Value src = storeOp.getSrc();
   auto it = layouts.find(src);
   if (it == layouts.end())
@@ -997,6 +992,17 @@ bool LayoutPropagation::rewriteDescriptorStoreOp(
          "we should have resolved to a single encoding");
   Attribute srcEncoding = getEncodingBeforeRewrite(src);
   Attribute targetEncoding = info.encodings[0];
+
+  if (auto convertOp = src.getDefiningOp<ttg::ConvertLayoutOp>()) {
+    Attribute convertSrcEncoding = getEncodingBeforeRewrite(convertOp.getSrc());
+    // Forward through the trailing convert only when analysis selected the
+    // source encoding as the descriptor store target.
+    if (convertSrcEncoding == targetEncoding) {
+      storeOp.getSrcMutable().assign(convertOp.getSrc());
+      return true;
+    }
+  }
+
   if (srcEncoding == targetEncoding)
     return false;
 
