@@ -160,9 +160,10 @@ static void collectOpsToPipeline(scf::ForOp forOp,
 
       RankedTensorType resultTy =
           dyn_cast<RankedTensorType>(op.getResultTypes()[0]);
-      // Currently we can only prefetch 2D loads.
-      if (!resultTy || resultTy.getRank() != 2) {
-        LDBG("Skipping LoadOp with non 2D tensor type" << op);
+      // Rank > 2 tensors are handled by folding batch dims into the base
+      // pointer via GEP (see emit2DBlockPrefetchOps in LoadStoreOpToLLVM.cpp).
+      if (!resultTy || resultTy.getRank() < 2) {
+        LDBG("Skipping LoadOp with rank < 2 tensor type" << op);
         continue;
       }
 
