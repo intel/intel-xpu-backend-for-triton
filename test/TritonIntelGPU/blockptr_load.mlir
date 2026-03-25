@@ -442,3 +442,38 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     tt.return %A, %B, %C : tensor<4x32x32xf16, #dot0>, tensor<4x32x32xf16, #dot1>, tensor<4x32x32xf16, #dpas>
   }
 }
+
+// -----
+
+// COM: Rank-4 blocked layout: verify 2D block IO is emitted for
+// COM:   #blocked = #ttg.blocked<{sizePerThread = [1, 1, 4, 1],
+// COM:                            threadsPerWarp = [1, 4, 1, 8],
+// COM:                            warpsPerCTA = [4, 1, 1, 2],
+// COM:                            order = [2, 1, 3, 0]}>
+// COM:   tensor<4x4x4x16xi32> with row_major block IO.
+// COM: threadsPerWarp = [1, 4, 1, 8] → first non-trivial lane dim is 1 (4 threads).
+// COM: basesOfLane[0] = [0,1,0,0] → fastChangeDim=1.
+// COM: memContiguousDim = rank-1 = 3 (row_major).
+// COM: Since fastChangeDim=1 != contiguousDim=3, isTransposeRequired=true.
+// COM: tileHeight = tileShape[fastChangeDim=1] = 4 (4 lane threads in dim 1).
+// COM: tileWidth  = tileShape[rowDim=3] = 8 (8 lane threads in dim 3).
+// COM: elem_size_in_bits = 32 (i32).
+// COM: sizePerThread[2]=4 → 4 iterations → 4 2Dblockload calls per warp.
+#blocked_4d = #ttg.blocked<{sizePerThread = [1, 1, 4, 1], threadsPerWarp = [1, 4, 1, 8], warpsPerCTA = [4, 1, 1, 2], order = [2, 1, 3, 0]}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @blocked_4d_row_major_load
+  tt.func public @blocked_4d_row_major_load(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c4_i64 = arith.constant 4 : i64
+    %c16_i64 = arith.constant 16 : i64
+    %c64_i64 = arith.constant 64 : i64
+    %c256_i64 = arith.constant 256 : i64
+    // COM: 4 loads: one per sizePerThread[2]=4 elements along dim 2.
+    // COM: Each load covers the full (dim1=4) x (dim3=8) tile with transpose.
+    // CHECK-COUNT-4: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 32, tile_width = 8, tile_height = 4, v_blocks = 1, transpose = true, vnni_transform = false, cache_control = Default}
+    %ptr = tt.make_tensor_ptr %arg0, [%c4_i64, %c4_i64, %c4_i64, %c16_i64], [%c256_i64, %c64_i64, %c16_i64, %c1_i64], [%c0_i32, %c0_i32, %c0_i32, %c0_i32] {order = array<i32: 3, 2, 1, 0>} : <tensor<4x4x4x16xi32, #blocked_4d>>
+    %val = tt.load %ptr {ttig.block_io = "row_major", boundaryCheck = array<i32: 0, 1, 2, 3>, padding = 1 : i32} : !tt.ptr<tensor<4x4x4x16xi32, #blocked_4d>>
+    tt.return
+  }
+}

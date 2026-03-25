@@ -2397,12 +2397,14 @@ public:
     SmallVector<Value> shapes = getShapes(rewriter, ptr, unpackedPtr);
     Value baseWidth, baseHeight;
     if (isTensorPointerType(ptr.getType())) {
-      baseWidth = b.trunc(i32_ty, shapes[memoryRowMajor ? colDim : rowDim]);
-      baseHeight = b.trunc(i32_ty, shapes[memoryRowMajor ? rowDim : colDim]);
+      baseWidth =
+          b.trunc(i32_ty, shapes[isTransposeRequired ? rowDim : colDim]);
+      baseHeight =
+          b.trunc(i32_ty, shapes[isTransposeRequired ? colDim : rowDim]);
       baseWidth = b.mul(baseWidth, b.i32_val(elemSizeInBits / 8));
     } else {
       // If the stride is 0, we want to load only the first row.
-      int stride = getStride(ptr, memoryRowMajor ? rowDim : colDim);
+      int stride = getStride(ptr, isTransposeRequired ? colDim : rowDim);
       baseHeight = b.i32_val((stride == 0 ? 1 : tileHeight));
       baseWidth = b.i32_val(vBlocks * tileWidth * (packedElemSizeInBits / 8));
     }
@@ -2626,8 +2628,16 @@ struct DescriptorLoadOpToBlockIOConversion
         "block_io attribute required; checked by isDescriptorBlockIOCandidate");
     const unsigned rank = tensorType.getRank();
     auto mode = symbolizeBlockIOMode(blockIOAttr.getValue());
-    bool memoryRowMajor = mode && *mode == BlockIOMode::RowMajor;
-    unsigned contiguousDim = memoryRowMajor ? rank - 1 : rank - 2;
+    // The ColumnMajor mode means the descriptor load needs to permute
+    // the last 2 dim to align the load result type.
+    bool permuteDescDim = mode && *mode == BlockIOMode::ColumnMajor;
+    // For the permuted case, the tensor descriptor's dimension space needs to
+    // be aligned with the result type. Specifically, the (rank - 1) dimension
+    // of the tensor descriptor is mapped to the (rank - 2) dimension of the
+    // result type when permuted. Note: The getBlockIOTileSize function expects
+    // the input dimension based on the result type, not the tensor descriptor
+    // type.
+    unsigned contiguousDim = !permuteDescDim ? rank - 1 : rank - 2;
 
     Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
@@ -2691,16 +2701,28 @@ struct DescriptorLoadOpToBlockIOConversion
     DescriptorFields desc =
         unpackDescriptor(adaptor.getDesc(), rank, loc, rewriter);
 
-    // Surface parameters for descriptor loads.
-    // The descriptor is always row-major (stride-1 on last dim), regardless
-    // of the block_io attribute. Extract in descriptor's natural order.
-    unsigned rowIdx = rank - 2, colIdx = rank - 1;
+    if (permuteDescDim) {
+      std::swap(desc.shapes[rank - 2], desc.shapes[rank - 1]);
+      std::swap(desc.strides[rank - 2], desc.strides[rank - 1]);
+    }
+
+    // column_major descriptor loads must always produce transposed block I/O
+    // (contiguousDim = rank-2 forces transpose in getBlockIOTileSize). If this
+    // invariant breaks, the surface parameters below would be incorrect because
+    // they index the already-swapped shapes/strides via isTransposeRequired.
+    assert((!permuteDescDim || isTransposeRequired) &&
+           "column_major descriptor load expects transposed block I/O");
+
     Value elemBytes = b.i32_val(elemSizeInBits / 8);
-    Value surfaceWidth = b.trunc(i32_ty, desc.shapes[colIdx]);
-    Value surfaceHeight = b.trunc(i32_ty, desc.shapes[rowIdx]);
+    Value surfaceWidth =
+        b.trunc(i32_ty, desc.shapes[isTransposeRequired ? rowDim : colDim]);
+    Value surfaceHeight =
+        b.trunc(i32_ty, desc.shapes[isTransposeRequired ? colDim : rowDim]);
     Value baseWidth = b.mul(surfaceWidth, elemBytes);
     Value baseHeight = surfaceHeight;
-    Value pitch = b.mul(b.trunc(i32_ty, desc.strides[rowIdx]), elemBytes);
+    Value pitch = b.mul(
+        b.trunc(i32_ty, desc.strides[isTransposeRequired ? colDim : rowDim]),
+        elemBytes);
 
     // Base offsets from descriptor load indices.
     // Indices are in descriptor dimension space. When column_major, the result
@@ -2709,9 +2731,8 @@ struct DescriptorLoadOpToBlockIOConversion
     // the LinearLayout offsets.
     SmallVector<Value> descIndices(adaptor.getIndices().begin(),
                                    adaptor.getIndices().end());
-    if (!memoryRowMajor) {
-      // column_major: result dims are transposed vs descriptor dims.
-      std::reverse(descIndices.begin(), descIndices.end());
+    if (permuteDescDim) {
+      std::swap(descIndices[rank - 2], descIndices[rank - 1]);
     }
 
     // Replicate base pointer for all tiles.
@@ -2759,8 +2780,8 @@ struct DescriptorLoadOpToBlockIOConversion
     // When transpose is required, the row/col assignment to X/Y swaps:
     //   X (block load column offset) maps to the fast-changing dimension.
     //   Y (block load row offset) maps to the slow-changing dimension.
-    colIdx = isTransposeRequired ? rowDim : colDim;
-    rowIdx = isTransposeRequired ? colDim : rowDim;
+    unsigned blockColIdx = isTransposeRequired ? rowDim : colDim;
+    unsigned blockRowIdx = isTransposeRequired ? colDim : rowDim;
 
     SmallVector<Value> unpackedLoadedVals(numElems);
     for (size_t elemIdx = 0; elemIdx < numElems; elemIdx += numElemsPerLoad) {
@@ -2782,9 +2803,9 @@ struct DescriptorLoadOpToBlockIOConversion
       // Boundary check is always enabled for descriptors.
       for (auto [dim, offsetPair] : llvm::enumerate(offsets)) {
         Value adjustedOffset = b.add(descIndices[dim], offsetPair.second);
-        if (dim == rowIdx)
+        if (dim == blockRowIdx)
           offsetY = adjustedOffset;
-        else if (dim == colIdx)
+        else if (dim == blockColIdx)
           offsetX = adjustedOffset;
         else
           assert(false && "unexpected dimension in rank-2 tensor offsets");
@@ -3082,14 +3103,14 @@ struct DescriptorLoadOpConversion
       allDims[i] = static_cast<int32_t>(i);
 
     // Reuse the shared gather/scatter operand computation.
-    // For column_major descriptor loads (created by
-    // FuseTransWithDescriptorLoad), the result type has transposed dimensions
-    // relative to the descriptor's natural [N, K] order. emitIndices uses the
-    // result type's dimension space (dim 0 = K, dim 1 = N for a [BK, BN]
-    // result), but the descriptor struct encodes shapes/strides in descriptor
-    // space (dim 0 = N, dim 1 = K). The base offsets (indices) are also in
-    // descriptor space. Reverse all three so that dimension i of the result
-    // aligns with dimension i of shapes/strides.
+    // For column_major descriptor loads the result type has its inner 2
+    // dimensions transposed relative to the descriptor's natural order. For
+    // example, a rank-2 descriptor [N, K] produces result [K, N], and a rank-3
+    // descriptor [Batch, N, K] produces result [Batch, K, N]. emitIndices uses
+    // the result type's dimension space, but the descriptor struct encodes
+    // shapes/strides in descriptor space. Swap the inner 2 dimensions of
+    // shapes, strides, and offsets so that they align with the result type's
+    // dimension order. Outer (batch) dimensions are preserved unchanged.
     SmallVector<Value> ptrElems, maskElems, otherElems;
     auto blockIOAttr = op->getAttrOfType<StringAttr>(
         TritonIntelGPUDialect::getBlockIOAttrName());
@@ -3098,10 +3119,15 @@ struct DescriptorLoadOpConversion
       DescriptorFields desc = unpackDescriptor(llDesc, rank, loc, rewriter);
       SmallVector<Value> permShapes(rank), permStrides(rank), permOffsets(rank);
       for (unsigned i = 0; i < rank; ++i) {
-        permShapes[i] = desc.shapes[rank - 1 - i];
-        permStrides[i] = desc.strides[rank - 1 - i];
-        permOffsets[i] = indices[rank - 1 - i];
+        permShapes[i] = desc.shapes[i];
+        permStrides[i] = desc.strides[i];
+        permOffsets[i] = indices[i];
       }
+      // Swap only the inner 2 dimensions (2D block I/O constraint).
+      assert(rank >= 2 && "column_major descriptor load requires rank >= 2");
+      std::swap(permShapes[rank - 2], permShapes[rank - 1]);
+      std::swap(permStrides[rank - 2], permStrides[rank - 1]);
+      std::swap(permOffsets[rank - 2], permOffsets[rank - 1]);
       std::tie(ptrElems, maskElems, otherElems) = computeGatherScatterOperands(
           loc, desc.base, permOffsets, permShapes, permStrides, resultType,
           valueElemTy, rewriter, allDims, padding);
