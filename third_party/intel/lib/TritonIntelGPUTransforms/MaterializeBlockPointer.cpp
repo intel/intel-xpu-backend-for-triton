@@ -132,7 +132,10 @@ private:
       auto opIdx =
           static_cast<ttgi::DpasEncodingAttr::OpIdx>(dotLayout->getOpIdx());
       auto dotOrder = tt::gpu::getThreadOrder(tensorType);
-      const bool valueRowMajor = (dotOrder[0] == 1 && dotOrder[1] == 0);
+      // Row-major means the last dim (rank-1) is the fastest-varying, i.e.,
+      // it appears first in the thread order vector.
+      const bool valueRowMajor =
+          (dotOrder[0] == rank - 1 && dotOrder[1] == rank - 2);
       if (opIdx == ttgi::DpasEncodingAttr::OpIdx::OperandA && !valueRowMajor) {
         LDBG("Skipping block descriptor attribute for transposed A matrix in "
              "dot operation");
@@ -219,7 +222,10 @@ private:
         auto opIdx =
             static_cast<ttgi::DpasEncodingAttr::OpIdx>(dotLayout->getOpIdx());
         auto dotOrder = tt::gpu::getThreadOrder(tensorType);
-        const bool valueRowMajor = (dotOrder[0] == 1 && dotOrder[1] == 0);
+        // Row-major means the last dim (rank-1) is the fastest-varying, i.e.,
+        // it appears first in the thread order vector.
+        const bool valueRowMajor =
+            (dotOrder[0] == rank - 1 && dotOrder[1] == rank - 2);
         if (opIdx == ttgi::DpasEncodingAttr::OpIdx::OperandA &&
             valueRowMajor ^ isRowMajor) {
           LDBG("Skipping block pointer attribute for transposed A matrix in "

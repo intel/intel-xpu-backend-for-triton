@@ -117,10 +117,14 @@ makeTensorPtrAxisInfo(ArrayRef<int64_t> blkShape, unsigned rank,
   for (unsigned dim = 0; dim < rank; ++dim) {
     contiguity.push_back(strideInfo[dim].getConstantValue() == 1 ? blkShape[dim]
                                                                  : 1);
-    // For 2-D tensors the divisibility of dim d is bounded by the stride of
-    // the *other* dimension; for 1-D tensors the single stride suffices.
-    const AxisInfo &relevantStride =
-        (rank == 2) ? strideInfo[dim == 0 ? 1 : 0] : strideInfo[dim];
+    // 2D block I/O operates on the inner 2 dimensions (rank-2 and rank-1).
+    // For those dims the divisibility is bounded by the stride of the *other*
+    // inner dimension; for batch dims (dim < rank-2) use conservative
+    // divisibility of 1; for 1-D tensors the single stride suffices.
+    unsigned relevantIdx = (rank >= 2 && dim == rank - 1)   ? rank - 2
+                           : (rank >= 2 && dim == rank - 2) ? rank - 1
+                                                            : dim;
+    const AxisInfo &relevantStride = strideInfo[relevantIdx];
     divisibility.push_back(
         contiguity[dim] > 1
             ? std::min(ptrDivisibility, relevantStride.getDivisibility()[0])
@@ -146,7 +150,9 @@ public:
         cast<PointerType>(op.getResult().getType()).getPointeeType());
     unsigned rank = op.getShape().size();
 
-    // TODO: Support higher rank tensors.
+    // TODO: Support higher rank tensors.  The makeTensorPtrAxisInfo helper
+    // now handles rank > 2 (for MakeTensorDescOp), so this guard can be
+    // removed once MakeTensorPtrOp callers are validated with rank > 2.
     if (rank > 2)
       return AxisInfo();
 
@@ -188,12 +194,6 @@ public:
     RankedTensorType tensorType =
         cast<TensorDescType>(op.getResult().getType()).getBlockType();
     unsigned rank = op.getShape().size();
-
-    // TODO: Support higher rank tensors.
-    if (rank > 2) {
-      LDBG("Unsupported tensor rank > 2, returning default AxisInfo");
-      return AxisInfo();
-    }
 
     assert(operands.size() >= rank * 2 + 1 &&
            "Insufficient operands for MakeTensorDescOp AxisInfo analysis");
