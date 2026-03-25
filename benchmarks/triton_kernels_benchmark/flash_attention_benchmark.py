@@ -3,6 +3,7 @@ import contextlib
 from typing import Callable, Optional
 
 import torch
+from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch.profiler import record_function
 import triton
 import triton.language as tl
@@ -695,10 +696,17 @@ def get_benchmark(
                 _, min_ms, max_ms, mean, cv = do_bench(sycl_tla_fwd_fn)
 
             else:
-                min_ms = float('nan')
-                max_ms = float('nan')
-                mean = float('nan')
-                cv = float('nan')
+                dout = torch.randn_like(q)
+
+                with sdpa_kernel(backends=[SDPBackend.FLASH_ATTENTION]):
+                    sycl_tla_o = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None,
+                                                                                  dropout_p=0.0, is_causal=CAUSAL,
+                                                                                  scale=sm_scale)
+
+                sycl_tla_bwd_fn = lambda: sycl_tla_o.backward(dout, retain_graph=True)
+
+                _, min_ms, max_ms, mean, cv = do_bench(sycl_tla_bwd_fn, grad_to_none=(q, k, v),
+                                                       benchmark_label='ScaledDotProductFlashAttentionBackward0')
 
         else:
             raise NotImplementedError(f'Unsupported provider {provider}')
