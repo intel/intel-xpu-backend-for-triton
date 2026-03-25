@@ -41,7 +41,7 @@ jobs:
         with:
           # Repository should be specified explicitly to allow reuse from other repositories
           repository: intel-tools/intel-xpu-backend-for-triton
-          ref: needs.build.outputs.code-ref
+          ref: main-interim
 
       - name: Install Python (using actions/setup-python) ${{ env.PYTHON_VERSION }}
         uses: actions/setup-python@v6

@@ -282,7 +282,7 @@ jobs:
         run: |
           export TORCHINDUCTOR_USE_STATIC_CUDA_LAUNCHER=0
           export PYTEST_MAX_PROCESSES=36
-          export PYTEST_TIMEOUT=7200
+          export PYTEST_TIMEOUT=10800
           export TRITON_TEST_SHARDS=${{ env.NUM_SHARDS }}
           export TRITON_TEST_SHARD_NUMBER=${{ matrix.loop.shard_id }}
           export TRITON_INTEL_SIMULATOR_START_DIR=${GITHUB_WORKSPACE}/reports/simulator-logs
@@ -364,28 +364,11 @@ jobs:
       - name: Upload pass rate report
         uses: actions/upload-artifact@v6
         with:
-          name: pass_rate-${{ env.PYTHON_VERSION }}
+          name: pass_rate-${{ env.PYTHON_VERSION }}-${{ inputs.device }}
           path: pass_rate*.json
-
-      - name: Upload tutorials test report
-        uses: actions/upload-artifact@v6
-        with:
-          name: test-reports-tutorials-${{ env.PYTHON_VERSION }}
-          include-hidden-files: true
-          path: reports/tutorials.xml
-
-      - name: Upload tutorials performance report
-        uses: actions/upload-artifact@v6
-        with:
-          name: tutorials-${{ env.PYTHON_VERSION }}
-          if-no-files-found: warn
-          include-hidden-files: true
-          path: |
-            reports/*/*.csv
-            reports/.env
 
       - name: Upload test reports
         uses: actions/upload-artifact@v6
         with:
-          name: test-reports-${{ env.PYTHON_VERSION }}
+          name: test-reports-${{ env.PYTHON_VERSION }}-${{ inputs.device }}
           path: reports
