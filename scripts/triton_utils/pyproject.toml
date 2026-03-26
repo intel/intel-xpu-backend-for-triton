@@ -1,14 +1,166 @@
 [project]
 name = "triton_utils"
 version = "0.6.0"
+requires-python = ">=3.10"
 dependencies = ["packaging", "typing_extensions", "defusedxml", "pandas"]
 
 [project.scripts]
 triton-utils = "triton_utils.entry_point:main"
 
-[tool.setuptools]
-packages = ["triton_utils"]
-
 [build-system]
-requires = ["setuptools>=75.0", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["uv-build>=0.7.0,<1.0"]
+build-backend = "uv_build"
+
+# --- Dependency groups (PEP 735) ---
+
+[dependency-groups]
+dev = [
+  "ruff>=0.14.0",
+  "yapf>=0.43.0",
+  "mypy>=1.15.0",
+  "pylint>=3.3.0",
+  "basedpyright>=1.31.0",
+  "bandit[toml]>=1.7.10",
+  "pytest>=8.3",
+  "pytest-cov>=6.0",
+  "coverage>=7.0",
+  "pre-commit",
+]
+experimental = [
+  "ty>=0.0.1a16",
+]
+
+# --- Tool configs ---
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+force-exclude = true
+extend-exclude = ["build", "dist", ".venv", "__pycache__"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+  # Formatting — yapf handles these
+  "Q000",     # bad-quotes-inline-string
+  "Q001",     # bad-quotes-multiline-string
+  "COM812",   # missing-trailing-comma
+  "COM819",   # prohibited-trailing-comma
+  "E501",     # line-too-long
+  # Deferred — code-level fixes in follow-up PR
+  "F401",     # unused-import (re-exports in __init__.py need `as X`)
+  "S108",     # hardcoded-temp-file (replace with tempfile.gettempdir)
+  "S101",     # assert — used for internal invariants
+  "S105",     # hardcoded-password-string (false positive on "pass_rate")
+  "S106",     # hardcoded-password-func-arg (false positive on pass_rate_level)
+  "PLR0913",  # too-many-arguments (refactor to dataclasses)
+  "PLR0912",  # too-many-branches
+  "PLR0915",  # too-many-statements
+  "PLR2004",  # magic-value-comparison
+  "PLR5501",  # collapsible-else-if
+  "C901",     # complex-structure
+  "SLF001",   # private-member-access (restructure)
+  "ARG002",   # unused-method-argument (interface contracts)
+  "SIM108",   # if-else-block-instead-of-if-exp
+  "SIM102",   # collapsible-if
+  "SIM110",   # reimplemented-builtin
+  "B007",     # unused-loop-control-variable
+  "B011",     # assert-false
+  "INP001",   # implicit-namespace-package
+  "N817",     # camelcase-imported-as-acronym
+  "ICN001",   # unconventional-import-alias
+  "PD002",    # pandas-use-of-inplace-argument
+  "PERF401",  # manual-list-comprehension
+  "PIE807",   # reimplemented-container-builtin
+  "PT015",    # pytest-assert-always-false
+  "PT017",    # pytest-assert-in-except
+  "PTH",      # flake8-use-pathlib (defer all pathlib replacements)
+  "RET504",   # unnecessary-assign
+  "RUF015",   # unnecessary-iterable-allocation-for-first-element
+  "RUF021",   # parenthesize-chained-operators
+  "RUF046",   # unnecessary-cast-to-int
+  "FURB171",  # single-item-membership-test
+  "TC",       # flake8-type-checking
+  "UP",       # pyupgrade (defer modernization)
+  # Permanently ignored
+  "D",        # pydocstyle — defer docstring enforcement
+  "ANN",      # flake8-annotations — defer full type annotations
+  "T20",      # flake8-print — CLI tool uses print
+  "FBT",      # flake8-boolean-trap — too noisy for existing code
+  "TD",       # flake8-todos — allow TODO comments
+  "FIX",      # flake8-fixme — allow FIXME comments
+  "ERA",      # eradicate — allow commented-out code during development
+  "TRY003",   # tryceratops — allow long exception messages
+  "EM101",    # flake8-errmsg — allow string literals in exceptions
+  "EM102",    # flake8-errmsg — allow f-string literals in exceptions
+  "S603",     # subprocess-without-shell-check — we call gh CLI intentionally
+  "S607",     # start-process-with-partial-path — we call gh by name intentionally
+]
+
+[tool.ruff.lint.per-file-ignores]
+"test/**/*.py" = [
+  "S101",     # assert allowed in tests
+  "PLR2004",  # magic values allowed in tests
+  "ARG",      # unused arguments (fixtures)
+  "SLF001",   # private member access in tests
+]
+
+[tool.yapf]
+based_on_style = "pep8"
+column_limit = 120
+dedent_closing_brackets = true
+split_before_first_argument = true
+
+[tool.mypy]
+python_version = "3.10"
+pretty = true
+show_error_codes = true
+warn_unused_configs = true
+ignore_missing_imports = true
+
+[tool.pylint.main]
+py-version = "3.10"
+
+[tool.pylint.format]
+max-line-length = 120
+
+[tool.pylint.messages_control]
+disable = [
+  "line-too-long",
+  "import-error",
+  "unused-import",
+  "missing-docstring",
+  "too-few-public-methods",
+]
+
+[tool.basedpyright]
+pythonVersion = "3.10"
+typeCheckingMode = "strict"
+include = ["src", "test"]
+exclude = ["**/__pycache__", "**/.venv", "build", "dist"]
+reportMissingImports = "error"
+reportMissingTypeStubs = "warning"
+reportUnknownVariableType = "warning"
+reportUnknownMemberType = "warning"
+reportUnknownArgumentType = "warning"
+reportUnknownParameterType = "warning"
+reportUntypedFunctionDecorator = "warning"
+reportUntypedClassDecorator = "warning"
+
+[tool.bandit]
+exclude_dirs = ["test", "build", "dist", ".venv"]
+skips = ["B101", "B404", "B405", "B105"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["test"]
+addopts = ["-ra", "--strict-markers", "--strict-config"]
+xfail_strict = true
+
+[tool.coverage.run]
+branch = true
+source = ["triton_utils"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false

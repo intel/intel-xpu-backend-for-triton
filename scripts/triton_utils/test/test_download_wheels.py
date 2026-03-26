@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 import triton_utils
-from triton_utils.gh_utils import GHAWheelDownloader, GHArtifact
+from triton_utils.gh_utils import GHArtifact, GHAWheelDownloader
 
 
 def test_config_parse_minimal():
@@ -29,9 +29,11 @@ def test_config_parse_alias():
 
 def test_config_parse_full():
     """Full invocation with all options."""
-    config = triton_utils.Config.from_args("wheels -D /tmp/wheels --latest-wf-run benchmarks "
-                                           "--wheel-set torch --wheel-set triton --python-version 3.12 "
-                                           "-R my/repo -B dev")
+    config = triton_utils.Config.from_args(
+        "wheels -D /tmp/wheels --latest-wf-run benchmarks "
+        "--wheel-set torch --wheel-set triton --python-version 3.12 "
+        "-R my/repo -B dev"
+    )
     assert config.action == "download_wheels"
     assert config._download_dir == "/tmp/wheels"
     assert config.latest_wf_run == "benchmarks"
@@ -107,10 +109,22 @@ def test_filter_artifacts_by_python():
     """Python version filters artifacts by name."""
     d = GHAWheelDownloader(download_dir=Path("/tmp"), python_version="3.12")
     artifacts = [
-        GHArtifact(name="wheels-pytorch-py3.12-20250101", size_in_bytes=100, expired=False, created_at="",
-                   workflow_run_id="1", repo="test"),
-        GHArtifact(name="wheels-pytorch-py3.10-20250101", size_in_bytes=100, expired=False, created_at="",
-                   workflow_run_id="1", repo="test"),
+        GHArtifact(
+            name="wheels-pytorch-py3.12-20250101",
+            size_in_bytes=100,
+            expired=False,
+            created_at="",
+            workflow_run_id="1",
+            repo="test"
+        ),
+        GHArtifact(
+            name="wheels-pytorch-py3.10-20250101",
+            size_in_bytes=100,
+            expired=False,
+            created_at="",
+            workflow_run_id="1",
+            repo="test"
+        ),
     ]
     filtered = d._filter_artifacts_by_python(artifacts)
     assert len(filtered) == 1
@@ -121,10 +135,12 @@ def test_filter_artifacts_by_python_none():
     """No python version → return all."""
     d = GHAWheelDownloader(download_dir=Path("/tmp"), python_version=None)
     artifacts = [
-        GHArtifact(name="wheels-py3.10", size_in_bytes=100, expired=False, created_at="", workflow_run_id="1",
-                   repo="test"),
-        GHArtifact(name="wheels-py3.12", size_in_bytes=100, expired=False, created_at="", workflow_run_id="1",
-                   repo="test"),
+        GHArtifact(
+            name="wheels-py3.10", size_in_bytes=100, expired=False, created_at="", workflow_run_id="1", repo="test"
+        ),
+        GHArtifact(
+            name="wheels-py3.12", size_in_bytes=100, expired=False, created_at="", workflow_run_id="1", repo="test"
+        ),
     ]
     assert len(d._filter_artifacts_by_python(artifacts)) == 2
 
