@@ -61,7 +61,8 @@ def _find_compiler(language: str) -> str:
             return cc
         clang = shutil.which("clang")
         gcc = shutil.which("gcc")
-        cc = gcc if gcc is not None else clang
+        cl = shutil.which("cl") if os.name == "nt" else None
+        cc = cl or gcc or clang
         if cc is not None:
             return cc
         raise RuntimeError(
