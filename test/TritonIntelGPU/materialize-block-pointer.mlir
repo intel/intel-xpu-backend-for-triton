@@ -196,22 +196,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
 
 // -----
 
-// COM: Ensure tt.contiguity hint recovers stride after remsi wrap-around,
-// COM: enabling block IO.
+// COM: Ensure tt.contiguity hint recovers stride after remsi, enabling block IO.
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 4], warpsPerCTA = [32, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
   // CHECK-LABEL: tt.func public @contiguity_hint_enables_block_io
-  tt.func public @contiguity_hint_enables_block_io(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 16 : i32}) {
-    %c128_i32 = arith.constant 128 : i32
-    %pid = tt.get_program_id x : i32
-    %base = arith.muli %pid, %c128_i32 : i32
+  tt.func public @contiguity_hint_enables_block_io(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}) {
     %range_row = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked2}>>
-    %base_splat = tt.splat %base : i32 -> tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked2}>>
-    %row_idx = arith.addi %base_splat, %range_row : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked2}>>
-
-    // Without tt.contiguity hint, remsi wrap-around makes stride unknown.
     %c8 = arith.constant dense<8> : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked2}>>
-    %row_rem = arith.remsi %row_idx, %c8 {tt.contiguity = dense<128> : tensor<1xi32>} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked2}>>
+    %row_rem = arith.remsi %range_row, %c8 {tt.contiguity = dense<128> : tensor<1xi32>} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked2}>>
 
     %c32 = arith.constant dense<32> : tensor<128x1xi32, #blocked2>
     %row_exp = tt.expand_dims %row_rem {axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked2}>> -> tensor<128x1xi32, #blocked2>

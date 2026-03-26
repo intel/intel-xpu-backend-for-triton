@@ -547,11 +547,7 @@ public:
       setAllToEntryStates(results);
       return success();
     }
-    // Honor tt.contiguity hints: if the hint says the full dimension is
-    // contiguous, override unknown stride to 1. This mirrors how AxisInfo
-    // applies hints (lib/Analysis/AxisInfo.cpp) and is needed because
-    // user/inductor hints (tl.max_contiguous) assert contiguity that the
-    // analysis cannot prove (e.g., after modulo operations).
+    // Override stride from tt.contiguity hint.
     if (auto contiguityAttr = op->getDiscardableAttr("tt.contiguity")) {
       if (auto resTy = dyn_cast<RankedTensorType>(op->getResult(0).getType())) {
         AxisInfo::DimVectorT hintContiguity;
