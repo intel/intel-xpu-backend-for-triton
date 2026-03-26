@@ -20,6 +20,11 @@ def build_config_map(file_paths):
                     match = pattern.match(stripped)
                     if match:
                         name = match.group('name')
+                        # Only keep RRR-family configs (RRR, SplitK_RRR, StreamK_RRR).
+                        # Other layouts (RCR, CCR, CRR, etc.) expect column-major B
+                        # which the benchmark does not provide.
+                        if '_RRR_' not in name:
+                            continue
                         l = int(match.group('l'))
                         m = int(match.group('m'))
                         k = int(match.group('k'))
