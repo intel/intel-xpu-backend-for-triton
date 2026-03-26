@@ -28,6 +28,30 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 
 // -----
 
+// COM: Regression test for rank-reducing descriptor load. The descriptor has
+// COM: rank 3 while the load result has rank 2. This used to assert in
+// COM: ConvertTritonIntelGPUToLLVM descriptor unpacking.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
+                   "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @descriptor_load_rank_reducing_row_major
+  // CHECK-COUNT-2: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 2, transpose = false, vnni_transform = false, cache_control = Default}
+  tt.func public @descriptor_load_rank_reducing_row_major(
+      %arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i32,
+      %arg5: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c1_i64 = arith.constant 1 : i64
+
+    %desc = tt.make_tensor_descriptor %arg0, [%c1_i32, %arg1, %arg2], [%arg3, %c1_i64, %c1_i64] : <f16>, <tensor<1x64x32xf16>>
+    %load = tt.descriptor_load %desc[%c0_i32, %arg4, %arg5] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<1x64x32xf16>> -> tensor<64x32xf16, #dot0>
+    tt.return
+  }
+}
+
+// -----
+
 // Test: DescriptorLoadOp with dot_op B encoding generates 2D block loads
 // with VNNI transform.
 
