@@ -81,3 +81,9 @@ def next_power_of_2(n: int):
     n |= n >> 32
     n += 1
     return n
+
+try:
+    from .runtime.build import perf_log as _perf_log
+    _perf_log.record_milestone("triton package fully loaded")
+except Exception:
+    pass

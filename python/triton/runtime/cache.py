@@ -286,6 +286,8 @@ def make_so_cache_key(version_hash, signature, constants, ids, **kwargs):
 
 @functools.lru_cache()
 def triton_key():
+    import time as _time
+    _t0 = _time.perf_counter()
     import pkgutil
     TRITON_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     contents = []
@@ -317,6 +319,9 @@ def triton_key():
     for lib in pkgutil.walk_packages([language_path], prefix="triton.language."):
         with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
             contents += [hashlib.sha256(f.read()).hexdigest()]
+    _elapsed = _time.perf_counter() - _t0
+    from .build import perf_log
+    perf_log.log("triton_key", f"hashed compiler+backend files", _elapsed)
     return f'{__version__}' + '-'.join(contents)
 
 

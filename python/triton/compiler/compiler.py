@@ -460,6 +460,10 @@ class CompiledKernel:
         if self.module is not None:
             return
 
+        from ..runtime.build import perf_log
+        import time as _time
+        _t0_total = _time.perf_counter() if perf_log.enabled else 0
+
         def raise_(err):
             # clone the exception object so that the one saved in the closure
             # of the partial function below doesn't get assigned a stack trace
@@ -472,7 +476,10 @@ class CompiledKernel:
 
         device = driver.active.get_current_device()
         # create launcher
+        _t_launcher = _time.perf_counter() if perf_log.enabled else 0
         self._run = driver.active.launcher_cls(self.src, self.metadata)
+        if perf_log.enabled:
+            perf_log.log("launcher_cls", f"{self.name}", _time.perf_counter() - _t_launcher)
         # not enough shared memory to run the kernel
         max_shared = max_shared_mem(device)
         if self.metadata.shared > max_shared:
@@ -485,9 +492,12 @@ class CompiledKernel:
         if knobs.runtime.kernel_load_start_hook is not None:
             knobs.runtime.kernel_load_start_hook(self.module, self.function, self.name, self.metadata_group, self.hash)
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
+        _t_load = _time.perf_counter() if perf_log.enabled else 0
         self.module, self.function, self.n_regs, self.n_spills, self.n_max_threads = driver.active.utils.load_binary(
             self.name, self.kernel, self.metadata.shared, self.metadata.build_flags,
             not self.metadata.generate_native_code, device)
+        if perf_log.enabled:
+            perf_log.log("load_binary", f"{self.name}", _time.perf_counter() - _t_load)
         # PyTorch could use the updated build flags in load binary.
         if hasattr(driver.active.utils, "get_last_selected_build_flags"):
             new_build_flags = driver.active.utils.get_last_selected_build_flags()
@@ -502,6 +512,8 @@ class CompiledKernel:
             raise_(OutOfResources(self.metadata.num_warps * warp_size, self.n_max_threads, "threads"))
         if knobs.runtime.kernel_load_end_hook is not None:
             knobs.runtime.kernel_load_end_hook(self.module, self.function, self.name, self.metadata_group, self.hash)
+        if perf_log.enabled:
+            perf_log.log("_init_handles", f"{self.name} total", _time.perf_counter() - _t0_total)
 
     @property
     def run(self):
