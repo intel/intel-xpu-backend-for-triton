@@ -13,7 +13,11 @@ def build_config_map(file_paths):
         try:
             with open(path, 'r', encoding='utf-8') as f:
                 for line in f:
-                    match = pattern.match(line.strip())
+                    # Strip inline comments and whitespace.
+                    stripped = line.split('#')[0].strip()
+                    if not stripped:
+                        continue
+                    match = pattern.match(stripped)
                     if match:
                         name = match.group('name')
                         l = int(match.group('l'))
