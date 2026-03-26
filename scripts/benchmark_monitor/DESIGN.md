@@ -37,29 +37,62 @@ entry_point.py → imports all layers, wires them together
 3. **Storage abstraction** — backends are interchangeable (JSON ↔ Parquet) with identical results
 4. **Dual-use** — every subcommand works locally without CI infrastructure
 
-## Detection Algorithm
+## Key Design Decisions
 
-### Modified Z-Score over mean/stdev
+### 1. Modified Z-Score over mean/stdev
 
 | Approach | Pros | Cons |
 |----------|------|------|
-| Mean + stdev | Simple | Single outlier skews both |
-| **Modified Z-Score (chosen)** | Robust — median + MAD | Assumes unimodal (mitigated by CV filter) |
+| **Mean + stdev** | Simple, well-known | Single outlier skews both mean and stdev |
+| **Modified Z-Score (chosen)** | Robust — uses median + MAD | Assumes unimodal data (mitigated by CV filter) |
 
-### Dual gate (statistical + practical)
+The 0.6745 normalization constant makes scores comparable to standard Z-scores.
+A threshold of 3.0 corresponds roughly to 99.7% confidence under normality.
 
-Both conditions must hold: `modified_z < -3.0` AND `drop_pct < -5.0%`.
-Prevents false positives from tiny stable changes and large noisy fluctuations.
+### 2. Dual gate (statistical + practical)
 
-### Dual-median baseline with improvement lock-in
+Both conditions must hold to flag a regression:
+- `modified_z < -3.0` (statistically significant)
+- `drop_pct < -5.0%` (practically significant)
 
-Locks baseline at recent median when improvement > 8% and stable (MAD < 5%).
-Prevents the rolling median from masking regressions after genuine improvements.
+**Rationale**: prevents two classes of false positives:
+- Tiny absolute changes on extremely stable benchmarks (stat-significant but irrelevant)
+- Large one-off fluctuations on noisy benchmarks (large drop but expected)
 
-### CV filter
+### 3. Dual-median baseline with improvement lock-in
 
-Skips metrics with CV > 15%. Catches bimodal/autotuning patterns where
-Modified Z-Score would produce false positives.
+After a genuine improvement, the rolling median lags behind the new level, masking
+subsequent regressions. The detector locks baseline at the recent median when:
+- Recent median > full median by `improvement_lock_pct` (default 8%)
+- Recent values are stable (MAD < 5% of recent median)
+
+**Alternative considered**: simply shrinking the rolling window — rejected because
+it reduces baseline robustness for all metrics, not just improved ones.
+
+### 4. Coefficient of variation (CV) filter
+
+Skips metrics with CV > 15% (bimodal/autotuning). Uses stdev-based CV instead of
+MAD-based because stdev is more sensitive to bimodal spread — exactly the pattern
+we want to detect.
+
+### 5. Per-benchmark threshold overrides (YAML)
+
+`thresholds.yaml` provides code-level defaults plus per-benchmark overrides.
+Overrides inherit all defaults and only specify parameters that differ. This
+avoids hardcoding benchmark-specific knowledge in Python code.
+
+### 6. Composable output over direct posting
+
+The package produces formatted strings (`--format` flag) and never calls
+`gh issue create` or `gh pr comment` directly. CI workflows compose the output
+with `gh` CLI calls. This keeps the package locally useful and decoupled from
+GitHub's API surface.
+
+### 7. Storage abstraction
+
+The `HistoryBackend` ABC decouples the detection algorithm from storage format.
+JSON and Parquet backends produce identical results. Database backend is stubbed
+for future use. This enables storage migration without touching analysis code.
 
 ## Storage Backends
 
@@ -71,6 +104,28 @@ Modified Z-Score would produce false positives.
 
 All backends implement `HistoryBackend` ABC: `load()`, `save()`, `list_gpus()`.
 Deduplication (by run_id) and pruning (to 200 entries) happen in the storage layer.
+
+## Risk Areas
+
+### MAD = 0 fallback
+For perfectly stable benchmarks (identical TFLOPS across all runs), MAD = 0.
+**Mitigation**: uses 1% of baseline median as proxy. Risk: a 1% change on a
+perfectly stable benchmark would need `modified_z = 0.6745 * delta / (0.01 * median)`,
+so a 5% drop gives z ≈ 3.37, which correctly triggers. Seems reasonable.
+
+### Config drift (resolved)
+The original code had `thresholds.yaml` defaults (min_history=8, rolling_window=20,
+improvement_lock_pct=8.0) that differed from code-level fallback defaults (5, 10, 10.0).
+**Resolution**: code defaults now match YAML defaults exactly.
+
+### Report table truncation
+PR comments cap regression/improvement tables at 20 rows. If a driver change
+causes >20 regressions, some are omitted from the PR comment (but all
+appear in the JSON report).
+
+### History cap at 200 entries
+At 1 CI run/day/GPU, 200 entries ≈ 200 days. Pruning happens in the storage
+layer during save. Configurable via `MAX_HISTORY_ENTRIES` constant in `storage.py`.
 
 ## Test Coverage
 
