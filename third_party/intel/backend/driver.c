@@ -516,3 +516,114 @@ extern "C" EXPORT_FUNC PyObject *sycl_queue_memset(PyObject *args) {
 
   Py_RETURN_NONE;
 }
+
+// ============================================================
+// Generic launcher — precompiled, type-erased kernel launch.
+// Eliminates per-kernel C++ compilation (icpx -fsycl) overhead.
+// Enabled by TRITON_XPU_GENERIC_LAUNCHER=1
+//
+// Python packs all kernel arg values into a flat buffer of 8-byte
+// slots and passes a parallel type-id array.  This keeps the C side
+// simple: just dispatch set_arg by byte width.
+// ============================================================
+
+// Size-based type IDs — must match _ARG_* constants in driver.py.
+enum ArgType : uint8_t { ARG_PTR = 0, ARG_1B, ARG_2B, ARG_4B, ARG_8B };
+
+static inline void setArgByType(sycl::handler &cgh, int idx,
+                                uint8_t ty, const void *slot) {
+  switch (ty) {
+  case ARG_PTR: cgh.set_arg(idx, *static_cast<void *const *>(slot)); break;
+  case ARG_1B:  cgh.set_arg(idx, *static_cast<const uint8_t *>(slot)); break;
+  case ARG_2B:  cgh.set_arg(idx, *static_cast<const uint16_t *>(slot)); break;
+  case ARG_4B:  cgh.set_arg(idx, *static_cast<const uint32_t *>(slot)); break;
+  default:      cgh.set_arg(idx, *static_cast<const uint64_t *>(slot)); break;
+  }
+}
+
+// generic_launch(gridX, gridY, gridZ, stream, kernel, kernel_metadata,
+//                launch_metadata, enter_hook, exit_hook,
+//                n_args, arg_types_bytes, arg_values_buffer)
+extern "C" EXPORT_FUNC PyObject *generic_launch(PyObject *args) {
+  int gridX, gridY, gridZ;
+  PyObject *pyStream, *pyKernel;
+  PyObject *kernelMeta, *launchMeta, *enterHook, *exitHook;
+  int nArgs;
+  Py_buffer typeBuf, valBuf;
+
+  if (!PyArg_ParseTuple(args, "iiiOOOOOOis*s*",
+                        &gridX, &gridY, &gridZ,
+                        &pyStream, &pyKernel,
+                        &kernelMeta, &launchMeta,
+                        &enterHook, &exitHook,
+                        &nArgs, &typeBuf, &valBuf)) {
+    return NULL;
+  }
+
+  // Extract kernel metadata.
+  PyObject *numWarpsAttr = PyObject_GetAttrString(kernelMeta, "num_warps");
+  int numWarps = PyLong_AsLong(numWarpsAttr);
+  Py_DECREF(numWarpsAttr);
+  PyObject *sharedAttr = PyObject_GetAttrString(kernelMeta, "shared");
+  int sharedMemory = PyLong_AsLong(sharedAttr);
+  Py_DECREF(sharedAttr);
+  PyObject *tpwAttr = PyObject_GetAttrString(kernelMeta, "threads_per_warp");
+  int threadsPerWarp = PyLong_AsLong(tpwAttr);
+  Py_DECREF(tpwAttr);
+
+  // Launch hooks.
+  if (enterHook != Py_None) {
+    PyObject *ret = PyObject_CallOneArg(enterHook, launchMeta);
+    if (!ret) { PyBuffer_Release(&typeBuf); PyBuffer_Release(&valBuf); return NULL; }
+    Py_DECREF(ret);
+  }
+
+  void *pStream = PyLong_AsVoidPtr(pyStream);
+  if (!pStream || !pyKernel) {
+    PyBuffer_Release(&typeBuf); PyBuffer_Release(&valBuf); return NULL;
+  }
+  sycl::queue stream = *static_cast<sycl::queue *>(pStream);
+  sycl::kernel *kernelPtr = reinterpret_cast<sycl::kernel *>(
+      PyCapsule_GetPointer(pyKernel, "kernel"));
+  if (!kernelPtr) {
+    PyBuffer_Release(&typeBuf); PyBuffer_Release(&valBuf); return NULL;
+  }
+  sycl::kernel kernel = *kernelPtr;
+
+  const auto *types = static_cast<const uint8_t *>(typeBuf.buf);
+  const auto *vals  = static_cast<const uint8_t *>(valBuf.buf);
+
+  sycl::range<3> globalRange(gridZ, gridY,
+                             (size_t)gridX * threadsPerWarp * numWarps);
+  sycl::range<3> localRange(1, 1, (size_t)numWarps * threadsPerWarp);
+  sycl::nd_range<3> ndRange(globalRange, localRange);
+
+  auto cgf = [&](sycl::handler &cgh) {
+    for (int i = 0; i < nArgs; ++i)
+      setArgByType(cgh, i, types[i], vals + i * 8);
+
+    // Implicit params: global_scratch, profile_scratch (nullptr).
+    void *nullPtr = nullptr;
+    cgh.set_arg(nArgs, nullPtr);
+    cgh.set_arg(nArgs + 1, nullPtr);
+
+    if (sharedMemory) {
+      auto localBuf = sycl::local_accessor<int8_t, 1>(sharedMemory, cgh);
+      cgh.set_arg(nArgs + 2, localBuf);
+    }
+    cgh.parallel_for(ndRange, kernel);
+  };
+
+  stream.submit(cgf);
+
+  PyBuffer_Release(&typeBuf);
+  PyBuffer_Release(&valBuf);
+
+  if (exitHook != Py_None) {
+    PyObject *ret = PyObject_CallOneArg(exitHook, launchMeta);
+    if (!ret) return NULL;
+    Py_DECREF(ret);
+  }
+
+  Py_RETURN_NONE;
+}

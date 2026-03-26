@@ -198,6 +198,13 @@ class SpirvUtils:
             getattr(self.shared_library, method).argtypes = (ctypes.py_object, )
         self.shared_library.get_device_properties.restype = ctypes.py_object
         self.shared_library.get_device_properties.argtypes = (ctypes.c_int, )
+        # generic_launch may not exist in older cached builds
+        if hasattr(self.shared_library, "generic_launch"):
+            self.shared_library.generic_launch.restype = ctypes.py_object
+            self.shared_library.generic_launch.argtypes = (ctypes.py_object, )
+            self.generic_launch = self.shared_library.generic_launch
+        else:
+            self.generic_launch = None
         self.shared_library.get_last_selected_build_flags.restype = ctypes.py_object
 
     def __getattribute__(self, name):
@@ -361,6 +368,7 @@ class XPUUtils(object):
         self.wait_on_sycl_queue = mod.wait_on_sycl_queue
         self.get_last_selected_build_flags = mod.get_last_selected_build_flags
         self.sycl_queue_memset = mod.sycl_queue_memset
+        self.generic_launch = getattr(mod, "generic_launch", None)
         self.unload_module = lambda module: None
 
     def get_current_device(self):
@@ -893,6 +901,85 @@ def serialize_args(args, constants, signature):
         json.dump(args_dict, json_file, indent=4)
 
 
+import struct
+
+# Size-based type IDs — must match ArgType enum in driver.c.
+_ARG_PTR = 0
+_ARG_1B = 1
+_ARG_2B = 2
+_ARG_4B = 3
+_ARG_8B = 4
+
+# Triton type string -> (size_id, struct pack format)
+_TY_INFO: dict[str, tuple[int, str]] = {
+    "i1": (_ARG_1B, "<Bxxxxxxx"), "i8": (_ARG_1B, "<bxxxxxxx"),
+    "i16": (_ARG_2B, "<hxxxxxx"), "i32": (_ARG_4B, "<ixxxx"),
+    "i64": (_ARG_8B, "<q"),
+    "u1": (_ARG_1B, "<Bxxxxxxx"), "u8": (_ARG_1B, "<Bxxxxxxx"),
+    "u16": (_ARG_2B, "<Hxxxxxx"), "u32": (_ARG_4B, "<Ixxxx"),
+    "u64": (_ARG_8B, "<Q"),
+    "fp16": (_ARG_2B, "<exxxxxx"), "fp32": (_ARG_4B, "<fxxxx"),
+    "f32": (_ARG_4B, "<fxxxx"), "fp64": (_ARG_8B, "<d"),
+    "bf16": (_ARG_2B, None),  # special-cased below
+}
+
+
+def _pack_bf16(val: float) -> bytes:
+    """Pack a float as bf16 in an 8-byte slot."""
+    bf16 = int.from_bytes(struct.pack("<f", val), "little") >> 16
+    return struct.pack("<Hxxxxxx", bf16)
+
+
+def _make_generic_launcher(constants, signature, metadata):
+    """Build a launcher closure using the precompiled generic_launch C function."""
+    import triton
+
+    expanded = upstream_expand_signature(signature.values(), tensordesc_meta=None, descriptor_type="*i8")
+    flat = [s for sig in expanded for s in (sig if isinstance(sig, tuple) else (sig,))]
+
+    type_ids = []
+    pack_fmts = []
+    is_bf16 = []
+    arg_indices = []
+    for i, ty in enumerate(flat):
+        if ty == "constexpr":
+            continue
+        if ty[0] == '*':
+            type_ids.append(_ARG_PTR)
+            pack_fmts.append("<Q")
+            is_bf16.append(False)
+        else:
+            info = _TY_INFO.get(ty, (_ARG_8B, "<q"))
+            type_ids.append(info[0])
+            pack_fmts.append(info[1])
+            is_bf16.append(info[1] is None)
+        arg_indices.append(i)
+
+    type_bytes = bytes(type_ids)
+    n_args = len(type_ids)
+
+    generic_launch_fn = triton.runtime.driver.active.utils.generic_launch
+    if generic_launch_fn is None:
+        raise RuntimeError("generic_launch not available. Clear ~/.triton/cache and rebuild.")
+
+    def launcher(all_args):
+        kernel_args = all_args[9:]
+        buf = bytearray(n_args * 8)
+        for j, idx in enumerate(arg_indices):
+            val = kernel_args[idx]
+            off = j * 8
+            if type_ids[j] == _ARG_PTR:
+                p = val.data_ptr() if hasattr(val, "data_ptr") else (0 if val is None else int(val))
+                struct.pack_into("<Q", buf, off, p)
+            elif is_bf16[j]:
+                buf[off:off + 8] = _pack_bf16(float(val))
+            else:
+                struct.pack_into(pack_fmts[j], buf, off, val)
+        generic_launch_fn((*all_args[:9], n_args, type_bytes, bytes(buf)))
+
+    return launcher
+
+
 class XPULauncher(object):
 
     def __init__(self, src, metadata):
@@ -900,9 +987,13 @@ class XPULauncher(object):
         arg_idx = lambda x: (src.fn.arg_names.index(x), ) if isinstance(x, str) else x
         constants = {arg_idx(idx): value for idx, value in constants.items()}
         signature = {idx: value for idx, value in src.signature.items()}
-        src = make_launcher(constants, signature)
-        self.mod = compile_module_from_src(src=src, name="__triton_launcher")
-        self.launch = wrap_handle_tensordesc(self.mod.launch, signature)
+
+        if os.environ.get("TRITON_XPU_GENERIC_LAUNCHER", "0") == "1":
+            self.launch = _make_generic_launcher(constants, signature, metadata)
+        else:
+            launcher_src = make_launcher(constants, signature)
+            self.mod = compile_module_from_src(src=launcher_src, name="__triton_launcher")
+            self.launch = wrap_handle_tensordesc(self.mod.launch, signature)
 
         # Serialize KernelArguments for SPIR-V Runner
         self.serialize_kernel_args = knobs.intel.dump_spirv_kernel_args
