@@ -16,7 +16,7 @@ from typing_extensions import Any, Self
 import pandas as pd
 
 from .pass_rate_utils import Test, TestReport, TestGroupingLevel, CompareScope, SortByStats, SortByCompare
-from .gh_utils import GHANightlyTestReportProcessor, GHABuildTestReportProcessor
+from .gh_utils import GHANightlyTestReportProcessor, GHABuildTestReportProcessor, GHAWheelDownloader
 from .pattern_matcher import PatternMatcher
 
 
@@ -82,6 +82,13 @@ class Config:  # pylint: disable=R0902
 
     save_to_json: str | None = None
     pass_rate_level: str = "all"
+
+    # download_wheels fields
+    wheel_set: list[str] = field(default_factory=list)
+    python_version: str | None = None
+    download_for_all_pythons: bool = False
+    latest_wf_run: str | None = None
+    latest_wf_run_pattern: str | None = None
 
     @property
     def report_grouping_level(self) -> TestGroupingLevel:
@@ -196,6 +203,7 @@ class Config:  # pylint: disable=R0902
         "compare": "compare_reports",
         "export": "export_to",
         "download": "download_reports",
+        "wheels": "download_wheels",
     }
 
     _CANONICAL_NAMES: ClassVar[dict[str, str]] = {v: k for k, v in _ALIASES.items()}
@@ -213,7 +221,7 @@ class Config:  # pylint: disable=R0902
         return subparsers.add_parser(name, help=help_str)
 
     @classmethod
-    def build_parser(cls) -> argparse.ArgumentParser:
+    def build_parser(cls) -> argparse.ArgumentParser:  # pylint: disable=R0915
         parser = argparse.ArgumentParser(add_help=False)
 
         subparsers = parser.add_subparsers(dest="action", required=True)
@@ -451,6 +459,90 @@ class Config:  # pylint: disable=R0902
             default="",
             help="GH run id",
         )
+        wheels_parser = cls._add_parser(
+            subparsers,
+            "download_wheels",
+            help_str="Download wheel artifacts from CI",
+        )
+        wheels_parser.add_argument(
+            "--download-dir",
+            "-D",
+            type=str,
+            required=True,
+            dest="_download_dir",
+            help="Directory to download wheels to",
+        )
+        wheels_parser.add_argument(
+            "--repo",
+            "-R",
+            type=str,
+            required=False,
+            default="intel/intel-xpu-backend-for-triton",
+            help="GitHub repository (default: intel/intel-xpu-backend-for-triton)",
+        )
+        wheels_parser.add_argument(
+            "--branch",
+            "-B",
+            type=str,
+            required=False,
+            default="main",
+            help="Branch to search for successful runs (default: main)",
+        )
+        wheels_parser.add_argument(
+            "--wheel-set",
+            "--ws",
+            action="append",
+            dest="wheel_set",
+            default=[],
+            choices=list(GHAWheelDownloader.WHEEL_SETS.keys()),
+            help=("Filter by predefined wheel set (repeatable). "
+                  "Presets: torch (torch, torchvision, torchaudio, timm), "
+                  "triton (triton), bench (triton_kernels_benchmark), pti (intel_pti)"),
+        )
+        wheels_parser.add_argument(
+            "--artifact-pattern",
+            type=str,
+            required=False,
+            default=None,
+            help="fnmatch pattern to filter wheel filenames (power-user)",
+        )
+        wheels_parser.add_argument(
+            "--python-version",
+            type=str,
+            required=False,
+            default=None,
+            help="Python version for artifact matching (default: current python)",
+        )
+        wheels_parser.add_argument(
+            "--download-for-all-pythons",
+            action="store_true",
+            help="Disable Python version filtering — download wheels for all Python versions",
+        )
+        wheels_run_group = wheels_parser.add_mutually_exclusive_group()
+        wheels_run_group.add_argument(
+            "--gh-run-id",
+            "--run",
+            type=str,
+            required=False,
+            default=None,
+            help="Specific GH Actions run ID to download from",
+        )
+        wheels_run_group.add_argument(
+            "--latest-wf-run",
+            type=str,
+            required=False,
+            default=None,
+            help=("Preset name for workflow to find latest successful run. "
+                  "Presets: nightly (default), benchmarks, build-test, wheels, wheels-triton, wheels-pytorch"),
+        )
+        wheels_run_group.add_argument(
+            "--latest-wf-run-pattern",
+            type=str,
+            required=False,
+            default=None,
+            help="fnmatch pattern to match workflow path (e.g., 'build-benchmarks-*.yml')",
+        )
+
         return parser
 
     @classmethod
@@ -623,7 +715,35 @@ class DownloadReportsActionRunner(ActionRunner):
         return self.download_reports()
 
 
+class DownloadWheelsActionRunner(ActionRunner):  # pylint: disable=R0903
+
+    def __call__(self, *args: Any, **kwds: Any) -> None:
+        config = self.config
+        python_version = config.python_version
+        if not python_version and not config.download_for_all_pythons:
+            python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+
+        downloader = GHAWheelDownloader(
+            download_dir=config.download_dir,
+            repo=config.repo,
+            branch=config.branch,
+            wheel_set=config.wheel_set,
+            artifact_pattern=config.artifact_pattern,
+            python_version=python_version if not config.download_for_all_pythons else None,
+            gh_run_id=config.gh_run_id or None,
+            latest_wf_run=config.latest_wf_run,
+            latest_wf_run_pattern=config.latest_wf_run_pattern,
+        )
+        downloaded = downloader.download()
+        for whl_path in downloaded:
+            print(whl_path)
+        if not downloaded:
+            print("[WARNING] No wheels matched the specified filters", file=sys.stderr)
+
+
 def run(config: Config) -> Any:  # pylint: disable=R0912
+    if config.action == "download_wheels":
+        return DownloadWheelsActionRunner(config=config)()
     if config.action == "download_reports":
         return DownloadReportsActionRunner(config=config)()
     if config.action == "export_to":
