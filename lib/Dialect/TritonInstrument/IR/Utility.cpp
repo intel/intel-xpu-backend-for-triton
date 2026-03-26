@@ -391,9 +391,10 @@ Operation *createStoreScratchMemory(OpBuilder &b, Location loc, Value alloc,
     }
   }
   auto ptrTensor = createPointerTensor(b, loc, alloc, tensorType);
-  return StoreOp::create(b, loc, ptrTensor, tensor, Value(),
-                         CacheModifier::NONE, EvictionPolicy::NORMAL,
-                         /*ignore_cta=*/true);
+  auto storeOp = StoreOp::create(b, loc, ptrTensor, tensor, CacheModifier::NONE,
+                                 EvictionPolicy::NORMAL);
+  storeOp.setIgnoreCta(true);
+  return storeOp;
 }
 
 Value createLoadScratchMemory(OpBuilder &b, Location loc, Value alloc,
