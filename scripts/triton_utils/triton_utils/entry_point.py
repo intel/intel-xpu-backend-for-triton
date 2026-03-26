@@ -81,6 +81,7 @@ class Config:  # pylint: disable=R0902
     file_name: str = "test_report.csv"
 
     save_to_json: str | None = None
+    pass_rate_level: str = "all"
 
     @property
     def report_grouping_level(self) -> TestGroupingLevel:
@@ -242,6 +243,13 @@ class Config:  # pylint: disable=R0902
             type=str,
             required=False,
             help="Json file to save pass rate summary.",
+        )
+        pass_rate_parser.add_argument(
+            "--level",
+            choices=["all", "testsuite"],
+            default="all",
+            dest="pass_rate_level",
+            help="Grouping level for pass rate report (default: all)",
         )
 
         test_stats_parser = cls._add_parser(
@@ -537,7 +545,8 @@ class PassRateActionRunner(ReportActionRunner):
 
     def __call__(self, *args: Any, **kwds: Any) -> tuple[str, int]:
         if self.config.save_to_json:
-            self.base_report.to_pass_rate_json(self.config.save_to_json)
+            self.base_report.to_pass_rate_json_by_level(json_file=self.config.save_to_json,
+                                                        level=self.config.pass_rate_level)
         return self.base_report.get_pass_rate_summary(), self._exit_code()
 
 

@@ -729,10 +729,10 @@ class TestReport:
             writer.writeheader()
             writer.writerows(tests_dict)
 
-    def to_pass_rate_json(self, json_file: str):  # pylint: disable=R0801
-        """Print JSON stats."""
+    def get_pass_rate_json_data(self, testsuite_name: str = "all") -> dict:
+        """Generate pass rate JSON data dictionary."""
         stats = self.get_summary_stats()
-        data = {
+        return {
             "ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
             "os": platform.system(),
             "git_ref": os.getenv("GITHUB_REF_NAME", ""),
@@ -743,7 +743,7 @@ class TestReport:
             "gpu_device": os.getenv("GPU_DEVICE", ""),
             "python_version": platform.python_version(),
             "pytorch_version": os.getenv("PYTORCH_VERSION", ""),
-            "testsuite": "all",
+            "testsuite": testsuite_name,
             "passed": stats.passed,
             "failed": stats.failed,
             "skipped": stats.skipped,
@@ -753,8 +753,46 @@ class TestReport:
             "pass_rate_1": stats.pass_rate,
             "pass_rate_2": stats.pass_rate_without_xfailed,
         }  # yapf: disable
+
+    def to_pass_rate_json_by_level(self, json_file: str, level: str = "all"):  # pylint: disable=R0801
+        """
+        Save pass rate JSON report based on grouping level.
+
+        Args:
+            json_file: Path to output file
+            level: Grouping level ("all" or "testsuite")
+                - "all": Creates a single JSON file with aggregate stats (one iteration)
+                - "testsuite": Creates a JSONL file with one JSON per testsuite (multiple iterations)
+        """
+        # Group tests by testsuite (or "all" for level="all")
+        testsuites: dict[str, dict[str, Test]] = {}
+
+        if level == "all":
+            # For "all" level: group all tests under single "all" key
+            testsuites["all"] = self.tests
+        elif level == "testsuite":
+            # For "testsuite" level: group by actual testsuite name
+            for test_key, test in self.tests.items():
+                if test.testsuite not in testsuites:
+                    testsuites[test.testsuite] = {}
+                testsuites[test.testsuite][test_key] = test
+        else:
+            raise ValueError(f"Unsupported level: {level}. Must be 'all' or 'testsuite'")
+
+        # Write file - same logic for both cases, just different number of iterations
         with open(json_file, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+            for testsuite_name, testsuite_tests in testsuites.items():
+                # Create a TestReport for this testsuite (or "all")
+                testsuite_report = TestReport(tests=testsuite_tests, name=testsuite_name)
+
+                # Get data dict using helper method
+                data = testsuite_report.get_pass_rate_json_data(testsuite_name=testsuite_name)
+
+                # Write using json.dumps() - formatted for "all", single-line for "testsuite"
+                if level == "all":
+                    f.write(json.dumps(data, indent=2))
+                else:  # level == "testsuite"
+                    f.write(json.dumps(data) + "\n")
 
     @staticmethod
     def _minify_name(
