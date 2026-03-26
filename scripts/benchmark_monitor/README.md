@@ -124,33 +124,87 @@ with the YAML defaults (no silent drift).
 
 ### `overrides` section
 
-Per-benchmark overrides keyed by benchmark name. Each override inherits all
-defaults and only specifies parameters that differ.
+Per-benchmark overrides are keyed by the benchmark name (the first segment of
+the metric key, matching the `--benchmark` name used in `build_report.py`).
+Each override inherits all defaults and only needs to specify the parameters
+that differ.
+
+Current overrides:
+
+| Benchmark                | Override        | Reason                                       |
+|--------------------------|-----------------|----------------------------------------------|
+| `softmax`                | min_drop_pct: 3 | Very stable benchmark; tighter threshold     |
+| `flash-attn`             | min_drop_pct: 8 | Noisy due to kernel complexity               |
+| `flash-attn-bwd`         | min_drop_pct: 8 | Noisy due to kernel complexity               |
+| `flex-attn-causal`       | min_drop_pct: 8 | Noisy due to mask complexity and autotuning  |
+| `flex-attn-causal-batch4`  | min_drop_pct: 8 | Same as above                              |
+| `flex-attn-causal-batch16` | min_drop_pct: 8 | Same as above                              |
+| `flex-attn-causal-bwd`  | min_drop_pct: 8 | Same as above                                |
+| `flex-attn-masks`        | min_drop_pct: 8 | Same as above                                |
 
 ## Detection Algorithm
 
 ### Modified Z-Score
 
+The detector uses the Modified Z-Score, which is robust to outliers:
+
 ```
 modified_z = 0.6745 * (current - baseline_median) / baseline_MAD
 ```
 
-Robust to outliers. MAD=0 fallback uses 1% of baseline median.
+where `baseline_median` may be the full-window or recent-window median (see
+dual-median baseline below), and MAD is the Median Absolute Deviation. The constant
+0.6745 normalizes the score so that it is comparable to a standard Z-score for
+normally distributed data. If MAD is zero (perfectly stable benchmark), a proxy
+of 1% of the median is used.
 
 ### Dual gate
 
-A metric is flagged only when **both** conditions hold:
-1. `modified_z < -z_threshold` (statistically significant)
-2. `drop_pct < -min_drop_pct` (practically significant)
+A metric is flagged as a regression only when **both** conditions are met:
+
+1. `modified_z < -z_threshold` (statistically significant deviation)
+2. `relative_drop_pct < -min_drop_pct` (practically significant drop)
+
+This avoids false positives from tiny absolute changes that happen to be
+statistically significant, and from large but statistically expected fluctuations
+in noisy benchmarks. The same logic (with reversed signs) applies to improvements.
 
 ### Dual-median baseline
 
-Locks baseline at recent median when a stable improvement is detected,
-preventing the rolling median from masking subsequent regressions.
+When a benchmark has a genuine recent improvement, the rolling median lags behind
+the new performance level, causing the improved values to mask real regressions.
+To counter this, the detector checks whether the recent window of values is both:
 
-### CV filter
+- Significantly higher than the full-window median (by `improvement_lock_pct`)
+- Stable (MAD < 5% of the recent median)
 
-Skips metrics with coefficient of variation > `max_cv` (bimodal/autotuning).
+When both conditions hold, the baseline locks in at the recent median, making
+regressions from the new level detectable immediately.
+
+### Coefficient of variation filter
+
+Before analyzing a metric, the detector computes the coefficient of variation
+(CV = stdev / mean) of the baseline values. If CV exceeds `max_cv` (default
+0.15), the metric is skipped as too noisy for reliable analysis. This catches
+bimodal distributions (e.g. autotuning alternating between two performance
+levels) where the Modified Z-Score — designed for unimodal data — would produce
+false positives. Standard deviation is used instead of MAD because it is more
+sensitive to bimodal spread.
+
+### CI vs PR runs
+
+CI runs (tagged `ci`) form the baseline. When analyzing a CI run, it is excluded
+from its own baseline. PR runs (tagged `pr-<number>`) are compared against the
+full CI baseline without contributing to it.
+
+## Adding a New Benchmark
+
+1. Add a `build_report.py` call in `triton-benchmarks.yml` with
+   `--benchmark <name>` to produce the CSV report.
+2. Optionally add an override entry in `thresholds.yaml` if the benchmark is
+   noisy or unusually stable.
+3. No other changes are needed. The benchmark name (first segment of the metric
+   key, before the first `/`) is used automatically for override matching.
 
 ## Running Tests
 
@@ -159,6 +213,32 @@ cd scripts/benchmark_monitor && uv run pytest test/ -v
 ```
 
 158 tests across 6 per-layer test files.
+
+## Troubleshooting
+
+**Noisy benchmarks producing false positives.**
+Add or increase `min_drop_pct` for the benchmark in the `overrides` section of
+`thresholds.yaml`. Values of 8-10% work well for attention-family benchmarks.
+
+**Bimodal benchmarks (e.g. autotuning alternates between two levels).**
+Metrics with coefficient of variation > `max_cv` (default 15%) are automatically
+skipped. If a benchmark is known to be bimodal but its CV is borderline, lower
+`max_cv` for that benchmark in the `overrides` section. If it is stable but
+being skipped, raise `max_cv`.
+
+**Investigating a flagged regression.**
+Inspect the `regression-report.json` artifact from the CI run. Each entry
+includes `modified_z`, `drop_pct`, `baseline_median`, and `current_tflops`.
+Compare these against the threshold config to confirm or dismiss the flag.
+
+**History pruning.**
+Each GPU history file is capped at 200 entries. Older entries are pruned
+automatically by the storage backend when saving.
+
+**Driver change notifications.**
+When a regression coincides with a driver version change (agama or libigc1),
+the report includes a notice. This helps distinguish compiler regressions from
+driver-caused changes.
 
 ## E2E Validation
 
