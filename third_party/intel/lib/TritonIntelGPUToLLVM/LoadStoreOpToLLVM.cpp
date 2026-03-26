@@ -146,7 +146,7 @@ static DescriptorFields unpackDescriptor(Value llDesc, unsigned rank,
 /// For rank-reducing ops, the result/source tensor shape must exactly match the
 /// inner dimensions of the descriptor block type after stripping the leading
 /// (outer) dimensions:
-///
+///   desc_shape[i] == 1                        for all i in [0, rankDelta)
 ///   desc_shape[rankDelta + i] == tensor_shape[i]   for all i in [0, rank)
 ///
 /// This is not checked by the upstream verifier (which only checks total
@@ -159,6 +159,16 @@ static void assertDescriptorInnerShapeCompatible(
   const size_t rank = tensorShape.size();
   assert(descRank >= rank && "descriptor rank must be >= tensor rank");
   const size_t rankDelta = descRank - rank;
+  for (size_t i = 0; i < rankDelta; ++i) {
+    if (descBlockShape[i] != 1) {
+      op->emitError()
+          << "rank-reducing descriptor op only supports dropping leading "
+             "dimensions of size 1, but descriptor dim["
+          << i << "] = " << descBlockShape[i];
+      llvm_unreachable("rank-reducing descriptor dropped dim mismatch");
+    }
+  }
+
   for (size_t i = 0; i < rank; ++i) {
     size_t descDim = rankDelta + i;
     if (permuteInnerDims && rank >= 2) {

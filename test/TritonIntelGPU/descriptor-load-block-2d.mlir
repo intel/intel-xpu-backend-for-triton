@@ -36,7 +36,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
                    "ttig.support_2d_block_io"} {
   // CHECK-LABEL: @descriptor_load_rank_reducing_row_major
-  // CHECK: triton_gen.2Dblockload
+  // CHECK-COUNT-2: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 2, transpose = false, vnni_transform = false, cache_control = Default}
   tt.func public @descriptor_load_rank_reducing_row_major(
       %arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i32,
       %arg5: i32) {
