@@ -67,13 +67,16 @@ jobs:
         shell: bash
         env:
           ARTIFACT_PATTERN: ${{ inputs.artifact_pattern }}
+          GH_RUN_ID: ${{ inputs.gh_run_id }}
+          REPO: ${{ inputs.repo }}
+          BRANCH: ${{ inputs.branch }}
         run: |
           set -euo pipefail
           args=(
             download
-            --run "${{ inputs.gh_run_id }}"
-            -R "${{ inputs.repo }}"
-            -B "${{ inputs.branch }}"
+            --run "$GH_RUN_ID"
+            -R "$REPO"
+            -B "$BRANCH"
             -D reports
           )
           if [[ -n "${ARTIFACT_PATTERN:-}" ]]; then

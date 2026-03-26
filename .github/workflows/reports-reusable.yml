@@ -83,13 +83,15 @@ jobs:
       # Use pre-existing reports directory (when reports_dir is provided)
       - name: Use provided reports directory
         if: inputs.reports_dir != ''
+        env:
+          REPORTS_DIR: ${{ inputs.reports_dir }}
         run: |
-          if [ ! -d "${{ inputs.reports_dir }}" ]; then
-            echo "Error: reports directory '${{ inputs.reports_dir }}' does not exist"
+          if [ ! -d "$REPORTS_DIR" ]; then
+            echo "Error: reports directory '$REPORTS_DIR' does not exist"
             exit 1
           fi
-          if [ "${{ inputs.reports_dir }}" != "reports" ]; then
-            ln -sfn "${{ inputs.reports_dir }}" reports
+          if [ "$REPORTS_DIR" != "reports" ]; then
+            ln -sfn "$REPORTS_DIR" reports
           fi
 
       - name: Load environment details
@@ -147,15 +149,18 @@ jobs:
         if: inputs.compare_run_id != ''
         env:
           COMPARE_ARTIFACT_PATTERN: ${{ inputs.compare_artifact_pattern }}
+          COMPARE_RUN_ID: ${{ inputs.compare_run_id }}
+          COMPARE_REPO: ${{ inputs.compare_repo }}
+          COMPARE_BRANCH: ${{ inputs.compare_branch }}
           GH_TOKEN: ${{ github.token }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           args=(
             download
-            --run "${{ inputs.compare_run_id }}"
-            -R "${{ inputs.compare_repo }}"
-            -B "${{ inputs.compare_branch }}"
+            --run "$COMPARE_RUN_ID"
+            -R "$COMPARE_REPO"
+            -B "$COMPARE_BRANCH"
             -D reports_compare
           )
 
