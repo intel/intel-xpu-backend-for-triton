@@ -326,7 +326,8 @@ private:
   MaskInfo getMaskInfo(scf::ForOp &forOp, Value mask) const {
     assert(isValidMask(forOp, mask) && "Expecting a valid mask");
 
-    auto cmpOp = cast<arith::CmpIOp>(mask.getDefiningOp());
+    Value finalMask = tt::intel::getFinalValue(mask);
+    auto cmpOp = cast<arith::CmpIOp>(finalMask.getDefiningOp());
     Operation *lhs = tt::intel::getFinalValue(cmpOp.getLhs()).getDefiningOp();
     Operation *rhs = tt::intel::getFinalValue(cmpOp.getRhs()).getDefiningOp();
     return MaskInfo{cast<arith::SubIOp>(rhs).getLhs(),
@@ -605,6 +606,10 @@ public:
         maskConds.insert(
             tt::intel::getFinalValue(storeOp.getMask()).getDefiningOp());
     }
+
+    // Early return if no mask conditions were collected.
+    if (maskConds.empty())
+      return false;
 
     // Combine the versioning conditions.
     OpBuilder builder(forOp);
