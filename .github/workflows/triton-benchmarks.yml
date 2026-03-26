@@ -338,18 +338,6 @@ jobs:
           cd benchmarks/micro_benchmarks
           python run_benchmarks.py --reports $REPORTS
 
-      - name: Write benchmark metadata
-        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
-        run: |
-          jq -n \
-            --arg tag "$TAG" \
-            --arg runner_label "${{ inputs.runner_label || 'max1550' }}" \
-            --arg commit_sha "${{ github.event.pull_request.head.sha || github.sha }}" \
-            --arg pr_number "${{ github.event.pull_request.number || '' }}" \
-            --arg event_name "${{ github.event_name }}" \
-            '{tag: $tag, runner_label: $runner_label, commit_sha: $commit_sha, pr_number: $pr_number, event_name: $event_name}' \
-            > reports/metadata.json
-
       - name: Upload benchmark reports
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         uses: actions/upload-artifact@v7
