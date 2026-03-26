@@ -8,6 +8,8 @@ add_triton_library(GPUToTritonGEN
   DEPENDS
   GPUToTritonGENConversionPassIncGen
   GPUToTritonGENIncGen
+  TritonGENAttrDefsIncGen
+  TritonGENTableGen
 
   LINK_LIBS PUBLIC
   MLIRArithToLLVM
@@ -18,4 +20,5 @@ add_triton_library(GPUToTritonGEN
   MLIRLLVMDialect
   MLIRMemRefToLLVM
   MLIRPass
+  TritonGENIR
 )
