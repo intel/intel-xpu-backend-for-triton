@@ -341,7 +341,6 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if knobs.intel.opt_reduction_locality:
             intel.passes.ttgpuir.add_optimize_reduction_locality(pm)
         intel.passes.arith.add_arith_emulate_unsupported_floats(pm, ["bf16"], "f32")
-        intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
         pm.run(mod, 'make_ttgir')
         return mod
 
