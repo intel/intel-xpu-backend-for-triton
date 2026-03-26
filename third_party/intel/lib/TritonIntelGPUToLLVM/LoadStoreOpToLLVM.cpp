@@ -140,6 +140,46 @@ static DescriptorFields unpackDescriptor(Value llDesc, unsigned rank,
   return f;
 }
 
+/// Verify that a rank-reducing tensor descriptor load/store is
+/// shape-compatible.
+///
+/// For rank-reducing ops, the result/source tensor shape must exactly match the
+/// inner dimensions of the descriptor block type after stripping the leading
+/// (outer) dimensions:
+///
+///   desc_shape[rankDelta + i] == tensor_shape[i]   for all i in [0, rank)
+///
+/// This is not checked by the upstream verifier (which only checks total
+/// element count), so we assert it here before relying on the mapping in
+/// lowering.
+static void assertDescriptorInnerShapeCompatible(
+    Operation *op, ArrayRef<int64_t> descBlockShape,
+    ArrayRef<int64_t> tensorShape, bool permuteInnerDims = false) {
+  const size_t descRank = descBlockShape.size();
+  const size_t rank = tensorShape.size();
+  assert(descRank >= rank && "descriptor rank must be >= tensor rank");
+  const size_t rankDelta = descRank - rank;
+  for (size_t i = 0; i < rank; ++i) {
+    size_t descDim = rankDelta + i;
+    if (permuteInnerDims && rank >= 2) {
+      if (i == rank - 2)
+        descDim = descRank - 1;
+      else if (i == rank - 1)
+        descDim = descRank - 2;
+    }
+
+    if (descBlockShape[descDim] != tensorShape[i]) {
+      op->emitError()
+          << "rank-reducing descriptor op requires that the result/source "
+             "tensor shape matches the inner dimensions of the descriptor "
+             "block type, but descriptor inner dim["
+          << i << "] = " << descBlockShape[descDim] << " != tensor dim[" << i
+          << "] = " << tensorShape[i];
+      llvm_unreachable("rank-reducing descriptor inner shape mismatch");
+    }
+  }
+}
+
 /// Compute the 2D prefetch shape for each warp given an input 2D tensor.
 /// Because a cache line is 64 bytes, and we want to prefetch one cache line a
 /// time (per thread), the maximum number of bytes per column is 64. We know
@@ -2658,6 +2698,8 @@ struct DescriptorLoadOpToBlockIOConversion
     // The ColumnMajor mode means the descriptor load needs to permute
     // the last 2 dim to align the load result type.
     bool permuteDescDim = mode && *mode == BlockIOMode::ColumnMajor;
+    assertDescriptorInnerShapeCompatible(op, descType.getBlockType().getShape(),
+                                         tensorType.getShape(), permuteDescDim);
     // For the permuted case, the tensor descriptor's dimension space needs to
     // be aligned with the result type. Specifically, the (rank - 1) dimension
     // of the tensor descriptor is mapped to the (rank - 2) dimension of the
@@ -3120,6 +3162,13 @@ struct DescriptorLoadOpConversion
     auto descType = cast<triton::TensorDescType>(op.getDesc().getType());
     RankedTensorType descTensorType = descType.getBlockType();
     size_t descRank = descTensorType.getRank();
+    auto blockIOAttr = op->getAttrOfType<StringAttr>(
+        TritonIntelGPUDialect::getBlockIOAttrName());
+    bool permuteDescDim =
+        blockIOAttr && symbolizeBlockIOMode(blockIOAttr.getValue()) ==
+                           BlockIOMode::ColumnMajor;
+    assertDescriptorInnerShapeCompatible(op, descTensorType.getShape(),
+                                         resultType.getShape(), permuteDescDim);
 
     // Try to get the padding option from the defining MakeTensorDescOp.
     // NOTE: This method only works when the descriptor is defined locally
@@ -3151,10 +3200,7 @@ struct DescriptorLoadOpConversion
     // shapes, strides, and offsets so that they align with the result type's
     // dimension order. Outer (batch) dimensions are preserved unchanged.
     SmallVector<Value> ptrElems, maskElems, otherElems;
-    auto blockIOAttr = op->getAttrOfType<StringAttr>(
-        TritonIntelGPUDialect::getBlockIOAttrName());
-    if (blockIOAttr && symbolizeBlockIOMode(blockIOAttr.getValue()) ==
-                           BlockIOMode::ColumnMajor) {
+    if (permuteDescDim) {
       DescriptorFields desc = unpackDescriptor(llDesc, descRank, loc, rewriter);
       SmallVector<Value> permShapes(descRank), permStrides(descRank),
           permOffsets(descRank);
@@ -3346,6 +3392,8 @@ struct DescriptorStoreOpConversion
     auto descType = cast<triton::TensorDescType>(op.getDesc().getType());
     RankedTensorType descTensorType = descType.getBlockType();
     size_t descRank = descTensorType.getRank();
+    assertDescriptorInnerShapeCompatible(op, descTensorType.getShape(),
+                                         valueTy.getShape());
 
     // Boundary check all dimensions — tensor descriptors always encode shape
     // bounds and don't have a user-facing boundaryCheck attribute.
@@ -3563,6 +3611,8 @@ struct DescriptorStoreOpToBlockIOConversion
     assert(descRank >= rank &&
            "descriptor rank must be >= source rank for descriptor store");
     unsigned rankDelta = descRank - rank;
+    assertDescriptorInnerShapeCompatible(op, descType.getBlockType().getShape(),
+                                         tensorType.getShape());
     auto mapSrcDimToDescDim = [rankDelta](unsigned dim) {
       return dim + rankDelta;
     };
