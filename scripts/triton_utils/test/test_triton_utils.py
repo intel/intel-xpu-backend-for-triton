@@ -624,6 +624,14 @@ def test_tests_with_multiple_results(  # pylint: disable=R0913, R0914, R0917
             )
         ),
         (
+            'pass_rate --reports /path/to/reports --level testsuite',
+            triton_utils.Config(
+                action='pass_rate',
+                reports='/path/to/reports',
+                pass_rate_level='testsuite',
+            )
+        ),
+        (
             'tests_stats --r /path/to/reports --status skipped',
             triton_utils.Config(
                 action='tests_stats',
