@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import functools
 import hashlib
 import importlib.util
@@ -11,12 +12,162 @@ import subprocess
 import sys
 import sysconfig
 import tempfile
+import time
 import re
 
 from types import ModuleType
 
 from .cache import get_cache_manager
 from .. import knobs
+
+
+class _PerfLogger:
+    """Centralized performance logger gated by TRITON_XPU_PERF_LOG env var.
+
+    Levels:
+      0 / unset: disabled
+      1: only events slower than threshold (100ms)
+      2: all events
+      summary: print per-category summary at process exit
+    """
+
+    def __init__(self):
+        val = os.environ.get("TRITON_XPU_PERF_LOG", "0").strip().lower()
+        self.level = 0  # 0=off, 1=slow-only, 2=all, 3=summary
+        self.summary_mode = False
+        if val in ("1",):
+            self.level = 1
+        elif val in ("2",):
+            self.level = 2
+        elif val == "summary":
+            self.level = 2  # also log all events for accumulation
+            self.summary_mode = True
+        # running totals for summary mode
+        self._totals: dict[str, list[float]] = {}
+        # wall-clock tracking
+        self._create_time = time.perf_counter()
+        # Get actual process start time from /proc for Linux
+        self._process_start: float | None = None
+        try:
+            import struct
+            clock_ticks = os.sysconf("SC_CLK_TCK")
+            with open("/proc/self/stat", "r") as f:
+                fields = f.read().split(")")[-1].split()
+                # field index 19 (0-based from after comm) = starttime in clock ticks
+                starttime_ticks = int(fields[19])
+            with open("/proc/stat", "r") as f:
+                for line in f:
+                    if line.startswith("btime "):
+                        btime = int(line.split()[1])
+                        break
+            process_start_epoch = btime + starttime_ticks / clock_ticks
+            # Convert to perf_counter scale: current epoch - current perf_counter = epoch_offset
+            import time as _time_mod
+            epoch_offset = _time_mod.time() - _time_mod.perf_counter()
+            self._process_start = process_start_epoch - epoch_offset
+        except Exception:
+            self._process_start = None
+        self._first_log_time: float | None = None
+        self._last_log_time: float = 0.0
+        # import-time milestones (filled in by other modules via record_milestone)
+        self._milestones: list[tuple[str, float]] = []
+        self._milestones.append(("triton.runtime.build imported", self._create_time))
+        if self.summary_mode:
+            atexit.register(self.print_summary)
+
+    @property
+    def enabled(self):
+        return self.level > 0
+
+    def record_milestone(self, name: str) -> None:
+        """Record a wall-clock milestone for the summary timeline."""
+        if self.summary_mode:
+            self._milestones.append((name, time.perf_counter()))
+
+    def log(self, category: str, msg: str, elapsed_s: float, threshold_s: float = 0.1):
+        if not self.enabled:
+            return
+        now = time.perf_counter()
+        if self._first_log_time is None:
+            self._first_log_time = now - elapsed_s  # approximate start of first timed call
+        self._last_log_time = now
+        if self.summary_mode:
+            self._totals.setdefault(category, []).append(elapsed_s)
+        if self.level >= 2 or (self.level == 1 and elapsed_s >= threshold_s):
+            import sys as _sys
+            print(f"[TRITON_PERF] {category}: {msg}  ({elapsed_s*1000:.1f}ms)", file=_sys.stderr, flush=True)
+
+    def print_summary(self):
+        import sys as _sys
+        # Define the display hierarchy so nested timers are indented
+        _HIERARCHY = [
+            ("JITFunction.run", 0),
+            ("create_binder", 1),
+            ("compile", 1),
+            ("triton_key", 2),
+            ("_init_handles", 1),
+            ("launcher_cls", 2),
+            ("load_binary", 2),
+            ("kernel_launch", 1),
+        ]
+        known = {name for name, _ in _HIERARCHY}
+        print("\n[TRITON_PERF] === Process Summary ===", file=_sys.stderr)
+        for cat, indent in _HIERARCHY:
+            times = self._totals.get(cat)
+            if times is None:
+                continue
+            total = sum(times)
+            n = len(times)
+            avg = total / n if n else 0
+            prefix = "  " * indent
+            label = f"{prefix}{cat}"
+            print(f"[TRITON_PERF] {label:42s}: {total*1000:10.1f}ms total, {n:5d} calls, avg {avg*1000:.1f}ms",
+                  file=_sys.stderr)
+        # Print any categories not in the hierarchy (future-proofing)
+        for cat in sorted(self._totals.keys()):
+            if cat in known:
+                continue
+            times = self._totals[cat]
+            total = sum(times)
+            n = len(times)
+            avg = total / n if n else 0
+            print(f"[TRITON_PERF] {cat:42s}: {total*1000:10.1f}ms total, {n:5d} calls, avg {avg*1000:.1f}ms",
+                  file=_sys.stderr)
+        # Wall-clock accounting: show where the uninstrumented time goes
+        summary_time = time.perf_counter()
+        wall_since_import = summary_time - self._create_time
+        # JITFunction.run is the only true top-level timer (triton_key is nested inside compile)
+        instrumented = sum(self._totals.get("JITFunction.run", []))
+        before_triton = (self._first_log_time - self._create_time) if self._first_log_time is not None else 0.0
+        after_triton = summary_time - self._last_log_time if self._last_log_time else 0.0
+        between_calls = wall_since_import - before_triton - instrumented - after_triton
+        print(f"[TRITON_PERF] ---", file=_sys.stderr)
+        if self._process_start is not None:
+            proc_to_import = self._create_time - self._process_start
+            proc_to_first = (self._first_log_time - self._process_start) if self._first_log_time is not None else 0.0
+            total_wall = summary_time - self._process_start
+            print(f"[TRITON_PERF] Process total wall time                  : {total_wall*1000:10.1f}ms", file=_sys.stderr)
+            print(f"[TRITON_PERF]   python start → triton import           : {proc_to_import*1000:10.1f}ms", file=_sys.stderr)
+            print(f"[TRITON_PERF]   triton import → first Triton API call  : {before_triton*1000:10.1f}ms", file=_sys.stderr)
+        else:
+            print(f"[TRITON_PERF] Wall time since triton import             : {wall_since_import*1000:10.1f}ms", file=_sys.stderr)
+            print(f"[TRITON_PERF]   before first Triton API call            : {before_triton*1000:10.1f}ms", file=_sys.stderr)
+        print(f"[TRITON_PERF]   Triton JITFunction.run (top-level)      : {instrumented*1000:10.1f}ms", file=_sys.stderr)
+        print(f"[TRITON_PERF]   between Triton calls (host/test work)   : {between_calls*1000:10.1f}ms", file=_sys.stderr)
+        print(f"[TRITON_PERF]   after last Triton API call              : {after_triton*1000:10.1f}ms", file=_sys.stderr)
+        # Print milestone timeline relative to process start
+        if self._milestones and self._process_start is not None:
+            print(f"[TRITON_PERF] --- Timeline (from process start) ---", file=_sys.stderr)
+            for mname, mtime in sorted(self._milestones, key=lambda x: x[1]):
+                offset = (mtime - self._process_start) * 1000
+                print(f"[TRITON_PERF]   {offset:10.1f}ms  {mname}", file=_sys.stderr)
+            if self._first_log_time is not None:
+                print(f"[TRITON_PERF]   {(self._first_log_time - self._process_start)*1000:10.1f}ms  first JITFunction.run() started", file=_sys.stderr)
+            print(f"[TRITON_PERF]   {(self._last_log_time - self._process_start)*1000:10.1f}ms  last JITFunction.run() ended", file=_sys.stderr)
+        print("[TRITON_PERF] === End Summary ===", file=_sys.stderr, flush=True)
+
+
+perf_log = _PerfLogger()
 
 _IS_WINDOWS = sys.platform == "win32"
 SUBPROCESS_DECODE_ARGS = (locale.getpreferredencoding(), ) if _IS_WINDOWS else ()
@@ -146,6 +297,7 @@ def _load_module_from_path(name: str, path: str) -> ModuleType:
 def compile_module_from_src(src: str, name: str, library_dirs: list[str] | None = None,
                             include_dirs: list[str] | None = None, libraries: list[str] | None = None,
                             ccflags: list[str] | None = None) -> ModuleType:
+    t0 = time.perf_counter() if perf_log.enabled else 0
     key = hashlib.sha256((src + platform_key()).encode("utf-8")).hexdigest()
     cache = get_cache_manager(key)
     suffix = sysconfig.get_config_var("EXT_SUFFIX")
@@ -153,7 +305,10 @@ def compile_module_from_src(src: str, name: str, library_dirs: list[str] | None 
 
     if cache_path is not None:
         try:
-            return _load_module_from_path(name, cache_path)
+            mod = _load_module_from_path(name, cache_path)
+            if perf_log.enabled:
+                perf_log.log("compile_module_from_src", f"{name} [cache HIT]", time.perf_counter() - t0)
+            return mod
         except (RuntimeError, ImportError):
             log = logging.getLogger(__name__)
             log.warning(f"Triton cache error: compiled module {name}.so could not be loaded")
@@ -166,4 +321,7 @@ def compile_module_from_src(src: str, name: str, library_dirs: list[str] | None 
         with open(so, "rb") as f:
             cache_path = cache.put(f.read(), f"{name}{suffix}", binary=True)
 
-    return _load_module_from_path(name, cache_path)
+    mod = _load_module_from_path(name, cache_path)
+    if perf_log.enabled:
+        perf_log.log("compile_module_from_src", f"{name} [cache MISS, compiled]", time.perf_counter() - t0)
+    return mod

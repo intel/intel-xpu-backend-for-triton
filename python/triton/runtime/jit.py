@@ -682,6 +682,9 @@ class JITFunction(JITCallable, KernelInterface[T]):
         """
         Precompute as much as possible.
         """
+        from ..runtime.build import perf_log
+        import time as _time
+        _t0 = _time.perf_counter() if perf_log.enabled else 0
         from ..compiler import CompiledKernel, compile, ASTSource, make_backend
         target = driver.active.get_current_target()
         backend = make_backend(target)
@@ -689,6 +692,8 @@ class JITFunction(JITCallable, KernelInterface[T]):
         self.compile = compile
         self.ASTSource = ASTSource
         binder = create_function_from_signature(self.signature, self.params, backend)
+        if perf_log.enabled:
+            perf_log.log("create_binder", f"{self._fn_name} (device_caches init)", _time.perf_counter() - _t0)
         return {}, {}, target, backend, binder
 
     def _pack_args(self, backend, kwargs, bound_args, specialization, options):
@@ -719,6 +724,10 @@ class JITFunction(JITCallable, KernelInterface[T]):
         kwargs["debug"] = kwargs.get("debug", self.debug) or knobs.runtime.debug
         kwargs["instrumentation_mode"] = knobs.compilation.instrumentation_mode
 
+        from ..runtime.build import perf_log
+        import time as _time
+        _run_t0 = _time.perf_counter() if perf_log.enabled else 0
+
         # parse options
         device = driver.active.get_current_device()
         stream = driver.active.get_current_stream(device)
@@ -746,7 +755,10 @@ class JITFunction(JITCallable, KernelInterface[T]):
             options, signature, constexprs, attrs = self._pack_args(backend, kwargs, bound_args, specialization,
                                                                     options)
 
+            _t_compile = _time.perf_counter() if perf_log.enabled else 0
             kernel = self._do_compile(key, signature, device, constexprs, options, attrs, warmup)
+            if perf_log.enabled:
+                perf_log.log("compile", f"{self._fn_name}", _time.perf_counter() - _t_compile)
             if kernel is None:
                 return None
 
@@ -768,8 +780,14 @@ class JITFunction(JITCallable, KernelInterface[T]):
             grid_2 = grid[2] if grid_size > 2 else 1
             # launch kernel
             launch_metadata = kernel.launch_metadata(grid, stream, *bound_args.values())
+            _t_launch = _time.perf_counter() if perf_log.enabled else 0
             kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
                        knobs.runtime.launch_enter_hook, knobs.runtime.launch_exit_hook, *bound_args.values())
+            if perf_log.enabled:
+                perf_log.log("kernel_launch", f"{self._fn_name}", _time.perf_counter() - _t_launch)
+        if perf_log.enabled:
+            _cache_status = "HIT" if kernel is not None and key in kernel_cache else "compiled"
+            perf_log.log("JITFunction.run", f"{self._fn_name} [{_cache_status}]", _time.perf_counter() - _run_t0)
         return kernel
 
     def repr(self, _):
@@ -1150,3 +1168,10 @@ def constexpr_function(fn):
     returns a constexpr result.
     """
     return ConstexprFunction(fn)
+
+
+try:
+    from .build import perf_log as _perf_log
+    _perf_log.record_milestone("triton.runtime.jit loaded")
+except Exception:
+    pass
