@@ -37,11 +37,11 @@ set(SYCL_TLA_KERNEL_FLAGS ${SYCL_TLA_KERNEL_FLAGS}
 )
 
 if (SYCL_COMPILER_VERSION GREATER_EQUAL 20251010)
-  list(APPEND SYCL_TLA_KERNEL_FLAGS
+  list(APPEND CUTLASS_KERNEL_FLAGS
     "SHELL:-Xspirv-translator=intel_gpu_bmg_g31 --spirv-ext=${SPIRV_EXTENSIONS}")
 endif()
 
-list(APPEND SYCL_TLA_KERNEL_FLAGS
+list(APPEND CUTLASS_KERNEL_FLAGS
   -Xs "-options \"-igc_opts 'VISAOptions=-perfmodel,VectorAliasBBThreshold=1000,ExtraOCLOptions=-cl-intel-256-GRF-per-thread'\" -options -ze-opt-large-register-file"
 )
 
@@ -49,12 +49,7 @@ list(APPEND SYCL_TLA_KERNEL_FLAGS
 set(CONFIG_TOOL ${CMAKE_CURRENT_SOURCE_DIR}/config-tool.py)
 
 # Input and output files
-# Use the GEMM configuration files from the upstream SYCL-TLA library.
-# Both files are needed to cover all benchmark shapes.
-set(GEMM_CONFIG_INPUT
-  ${SyclTlaLibrary_BENCHMARK_CONFIG_DIR}/input_gemm.in
-  ${SyclTlaLibrary_BENCHMARK_CONFIG_DIR}/input_pytorch_2.in
-)
+set(GEMM_CONFIG_INPUT ${CMAKE_CURRENT_SOURCE_DIR}/gemm/input_gemm.in)
 set(GEMM_CONFIG_OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/gemm_table.hpp)
 set(GEMM_CONFIG_NAME "gemm_config")
 

@@ -13,18 +13,9 @@ def build_config_map(file_paths):
         try:
             with open(path, 'r', encoding='utf-8') as f:
                 for line in f:
-                    # Strip inline comments and whitespace.
-                    stripped = line.split('#')[0].strip()
-                    if not stripped:
-                        continue
-                    match = pattern.match(stripped)
+                    match = pattern.match(line.strip())
                     if match:
                         name = match.group('name')
-                        # Only keep RRR-family configs (RRR, SplitK_RRR, StreamK_RRR).
-                        # Other layouts (RCR, CCR, CRR, etc.) expect column-major B
-                        # which the benchmark does not provide.
-                        if '_RRR_' not in name:
-                            continue
                         l = int(match.group('l'))
                         m = int(match.group('m'))
                         k = int(match.group('k'))
