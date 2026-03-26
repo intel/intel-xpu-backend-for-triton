@@ -298,9 +298,9 @@ jobs:
       - name: Set clean Triton cache dir
         if: matrix.suite == 'triton-kernels'
         run: |
-          rm -rf "$GITHUB_WORKSPACE/tmp_triton_cache"
-          mkdir -p "$GITHUB_WORKSPACE/tmp_triton_cache"
-          echo "TRITON_CACHE_DIR=$GITHUB_WORKSPACE/tmp_triton_cache" | tee -a "$GITHUB_ENV"
+          rm -rf "$GITHUB_WORKSPACE/triton_cache"
+          mkdir -p "$GITHUB_WORKSPACE/triton_cache"
+          echo "TRITON_CACHE_DIR=$GITHUB_WORKSPACE/triton_cache" | tee -a "$GITHUB_ENV"
 
       - name: Run triton kernels tests
         continue-on-error: true
@@ -324,6 +324,14 @@ jobs:
           name: igc-shader-dumps
           include-hidden-files: true
           path: ${{ env.IGC_DumpToCustomDir }}
+
+      - name: Upload Triton cache
+        if: matrix.suite == 'triton-kernels'
+        uses: actions/upload-artifact@v7
+        with:
+          name: triton-cache
+          include-hidden-files: true
+          path: ${{ env.TRITON_CACHE_DIR }}
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}
