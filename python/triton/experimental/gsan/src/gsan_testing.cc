@@ -6,6 +6,10 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#ifdef _MSC_VER
+#include <BaseTsd.h>
+using ssize_t = SSIZE_T;
+#endif
 #include <sstream>
 #include <string>
 #include <vector>
@@ -150,7 +154,7 @@ PyScalarClock toPyScalarClock(const gsan::ScalarClock &clock) {
   PyScalarClock out;
   out.epoch = clock.epoch;
   out.threadId = static_cast<uint16_t>(clock.threadId);
-  out.scope = clock.scope;
+  out.scope = static_cast<gsan::AtomicScope>(clock.scope);
   return out;
 }
 
