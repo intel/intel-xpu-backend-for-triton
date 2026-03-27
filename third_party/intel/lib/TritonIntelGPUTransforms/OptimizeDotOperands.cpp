@@ -1,26 +1,20 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
-#include "intel/include/Utils/DefUseChain.h"
 #include "intel/include/Utils/Utility.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
-#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/IR/Visitors.h"
-#include "mlir/Interfaces/LoopLikeInterface.h"
-#include "mlir/Pass/PassManager.h"
+#include "mlir/Pass/Pass.h"
 #include "mlir/Support/LogicalResult.h"
-#include "mlir/Transforms/Passes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SetVector.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/ErrorHandling.h"
 #include <optional>
 
 #define DEBUG_TYPE "tritonintelgpu-optimize-dot-operands"
@@ -93,9 +87,9 @@ private:
       return false;
 
     // Walk through an arbitrary single-use chain until a dot operation is
-    // reached. Unlike the block-pointer path, this rewrite only replaces the
-    // transpose result directly, so intermediate ops such as
-    // `ttg.convert_layout` and `tt.fp_to_fp` can remain untouched.
+    // reached. This rewrite only replaces the transpose result directly, so
+    // intermediate ops such as `ttg.convert_layout` and `tt.fp_to_fp` can
+    // remain untouched.
     Operation *user = *transOp->getUsers().begin();
     while (!isa<tt::DotOp, tt::DotScaledOp>(user)) {
       if (!user->hasOneUse())

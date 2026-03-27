@@ -97,7 +97,7 @@ private:
     if (rank == 1)
       return;
 
-    if (!satisfies2DBlockReadAlignmentForDesc(op, axisInfoAnalysis)) {
+    if (!satisfies2DBlockReadAlignment(op, axisInfoAnalysis)) {
       LDBG("Alignment checks failed for: " << *op);
       return;
     }
@@ -121,8 +121,7 @@ private:
     if (!ttgi::isDivisible(pitch, llvm::divideCeil(128, elementWidth)))
       return;
 
-    std::optional<ttg::DotOperandEncodingAttr> dotLayout =
-        getDotLayoutForDesc(op);
+    std::optional<ttg::DotOperandEncodingAttr> dotLayout = getDotLayout(op);
     if (dotLayout) {
       // Check if the load is being used by a tt.dot operation, and if so is
       // this the first operand and is it a transposed row major matrix. If
@@ -267,57 +266,10 @@ private:
                                       ttgi::BlockIOMode::ColumnMajor)));
   }
 
-  // Return the load layout if it is a dot layout. If it is not, check if the
-  // load result is converted to a dot layout. If so, return the dot layout,
-  // otherwise return nullopt.
-  template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
-                                 OpType, tt::LoadOp, tt::StoreOp>::value>>
-  std::optional<ttg::DotOperandEncodingAttr> getDotLayout(OpType op) const {
-    Value ptr = op.getPtr();
-    if (!tt::isTensorPointerType(ptr.getType()))
-      return std::nullopt;
-
-    RankedTensorType tensorType = ttgi::getRankedTensorType(ptr.getType());
-    if (!tensorType)
-      return std::nullopt;
-
-    auto dotLayout = ttgi::getDotEncoding(tensorType);
-    if (dotLayout)
-      return dotLayout;
-
-    auto allUsersAreConvertOps = [](Operation::user_range users) {
-      return llvm::all_of(users, [](Operation *user) {
-        return isa<ttg::ConvertLayoutOp>(user);
-      });
-    };
-
-    auto allUserHaveIdenticalLayout = [](Operation::user_range users) {
-      Attribute firstUserLayout =
-          cast<ttg::ConvertLayoutOp>(*users.begin()).getType().getEncoding();
-      return llvm::all_of(users, [&firstUserLayout](Operation *user) {
-        return firstUserLayout ==
-               cast<ttg::ConvertLayoutOp>(user).getType().getEncoding();
-      });
-    };
-
-    Operation::user_range users = op->getUsers();
-    if (!users.empty() && allUsersAreConvertOps(users) &&
-        allUserHaveIdenticalLayout(users)) {
-      Attribute firstUserLayout =
-          cast<ttg::ConvertLayoutOp>(*users.begin()).getType().getEncoding();
-      if (isa<ttg::DotOperandEncodingAttr>(firstUserLayout))
-        return dyn_cast<ttg::DotOperandEncodingAttr>(firstUserLayout);
-      return std::nullopt;
-    }
-
-    return std::nullopt;
-  }
-
   template <typename OpType,
             typename = std::enable_if_t<llvm::is_one_of<
                 OpType, tt::DescriptorLoadOp, tt::DescriptorStoreOp>::value>>
-  std::optional<ttg::DotOperandEncodingAttr>
-  getDotLayoutForDesc(OpType op) const {
+  std::optional<ttg::DotOperandEncodingAttr> getDotLayout(OpType op) const {
     // Get the tensor type from the operation's result (load) or value (store)
     Type resultType;
     if constexpr (std::is_same_v<OpType, tt::DescriptorLoadOp>) {
@@ -364,7 +316,7 @@ private:
   template <typename OpType,
             typename = std::enable_if_t<llvm::is_one_of<
                 OpType, tt::DescriptorLoadOp, tt::DescriptorStoreOp>::value>>
-  bool satisfies2DBlockReadAlignmentForDesc(
+  bool satisfies2DBlockReadAlignment(
       OpType op, tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) const {
     Value desc = op.getDesc();
 
