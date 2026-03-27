@@ -830,7 +830,7 @@ run_vllm_install() {
     # Checkout the pinned commit, apply necessary patches and modify tests to run on xpu
     cd vllm
     git checkout "$(<../benchmarks/vllm/vllm-pin.txt)"
-
+    git apply ../benchmarks/vllm/vllm-fix.patch
     sed -i 's/device="cuda"/device="xpu"/g' \
       tests/kernels/moe/utils.py \
       tests/kernels/moe/test_batched_moe.py \
