@@ -25,12 +25,12 @@ class ModuleAxisInfoAnalysis : public triton::ModuleAxisInfoAnalysis {
 public:
   explicit ModuleAxisInfoAnalysis(ModuleOp moduleOp);
 
-  AxisInfo *getAxisInfo(Value value);
+  AxisInfo *getAxisInfo(Value value) const;
 
-  unsigned getContiguity(Value value);
-  unsigned getAlignment(Value value);
+  unsigned getContiguity(Value value) const;
+  unsigned getAlignment(Value value) const;
 
-  unsigned getMaskAlignment(Value mask);
+  unsigned getMaskAlignment(Value mask) const;
 };
 
 } // namespace mlir::triton::intel
