@@ -1,4 +1,4 @@
-#include "intel/include/Analysis/AxisInfo.h"
+#include "intel/include/Analysis/AxisInfoExt.h"
 #include "intel/include/Analysis/StrideInfo.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
@@ -132,7 +132,8 @@ private:
       auto opIdx =
           static_cast<ttgi::DpasEncodingAttr::OpIdx>(dotLayout->getOpIdx());
       auto dotOrder = tt::gpu::getThreadOrder(tensorType);
-      const bool valueRowMajor = (dotOrder[0] == 1 && dotOrder[1] == 0);
+      const bool valueRowMajor =
+          (dotOrder[rank - 2] == 1 && dotOrder[rank - 1] == 0);
       if (opIdx == ttgi::DpasEncodingAttr::OpIdx::OperandA && !valueRowMajor) {
         LDBG("Skipping block descriptor attribute for transposed A matrix in "
              "dot operation");
@@ -219,7 +220,8 @@ private:
         auto opIdx =
             static_cast<ttgi::DpasEncodingAttr::OpIdx>(dotLayout->getOpIdx());
         auto dotOrder = tt::gpu::getThreadOrder(tensorType);
-        const bool valueRowMajor = (dotOrder[0] == 1 && dotOrder[1] == 0);
+        const bool valueRowMajor =
+            (dotOrder[rank - 2] == 1 && dotOrder[rank - 1] == 0);
         if (opIdx == ttgi::DpasEncodingAttr::OpIdx::OperandA &&
             valueRowMajor ^ isRowMajor) {
           LDBG("Skipping block pointer attribute for transposed A matrix in "
@@ -259,32 +261,49 @@ private:
 
     LDBG("Considering tensor of pointer of memory accessing op: " << op);
 
-    // The axis info gives the information about the value of the indices
-    // tensor. For example, if the indices tensor is tensor<8x16xi32> and
-    // its value is:
-    //   [[ 0,  1,  2,  3, ..., 12, 13, 14, 15],
-    //    [16, 17, 18, 19, ..., 28, 29, 30, 31],
+    // Axis info describes the value layout of the indices tensor.
+    //
+    // For example, consider an indices tensor of type tensor<8x16xi32> with
+    // values:
+    //   [[  0,  1,  2, ...,  15],
+    //    [ 16, 17, 18, ...,  31],
     //    ...
-    //    [ 96,  97,  98,  99, ..., 108, 109, 110, 111],
-    //    [112, 113, 114, 115, ..., 124, 125, 126, 127]]
-    // Then the global memory refer by the tensor pointer is row-major
-    // contiguous. And the axis info will be: stride: [16, 1],
-    // contiguity: [1, 16], divisibility: [1, 16], constancy: [1, 1].
+    //    [112,113,114, ...,127]]
+    //
+    // In this case, the global memory referenced by the tensor pointer is
+    // row-major contiguous.
+    //
+    // Axis info:
+    //   stride:      [16, 1]
+    //   contiguity:  [1, 16]
+    //
+    // The code inspects the last two dimensions to determine which dimension
+    // changes the fastest in memory. The remaining outer dimensions are treated
+    // as irrelevant batch dimensions.
+    //
+    // Case 1: The innermost dimension is the fast-changing one.
+    //   This corresponds to a row-major contiguous access pattern per 2d slice.
+    //   The axis info reflects this with stride [..., 1].
+    //
+    // Case 2: The second innermost dimension is the fast-changing one.
+    //   This corresponds to a column-major contiguous access pattern per 2d
+    //   slice. The axis info reflects this with stride [..., 1, X].
     const tt::AxisInfo *axisInfo = axisInfoAnalysis.getAxisInfo(ptr);
     unsigned rank = axisInfo->getRank();
-    if (rank != 2) {
-      LDBG("Rank is not 2, skip block IO attribute");
+    if (rank < 2) {
+      LDBG("Rank is < 2, skip block IO attribute");
       return;
     }
 
     // Determine if LoadOp is row-major or column-major.
     tt::intel::StrideInfo *strideInfo = strideAnalysis.getStrideInfo(ptr);
-    auto isMajor = [&strideInfo](RankedTensorType tensorTy,
-                                 unsigned fastChangeDim,
-                                 const tt::AxisInfo &axisInfo) {
-      assert((fastChangeDim == 0 || fastChangeDim == 1) &&
-             "fastChangeDim is expected to be 0 or 1");
-      const unsigned otherDim = !fastChangeDim;
+    auto isMajor = [rank, &strideInfo](RankedTensorType tensorTy,
+                                       unsigned fastChangeDim,
+                                       const tt::AxisInfo &axisInfo) {
+      assert((fastChangeDim == rank - 1 || fastChangeDim == rank - 2) &&
+             "fastChangeDim is expected to be rank - 1 or rank - 2");
+      const unsigned otherDim =
+          (fastChangeDim == rank - 1) ? rank - 2 : rank - 1;
       // Limit to full row being contiguous.
       if (axisInfo.getContiguity(fastChangeDim) !=
           tensorTy.getDimSize(fastChangeDim)) {
@@ -322,14 +341,16 @@ private:
 
     const StringRef blockIOAttrName =
         ttgi::TritonIntelGPUDialect::getBlockIOAttrName();
-    const bool isRowMajor = isMajor(tensorTy, 1 /*fastChangeDim*/, *axisInfo);
+    const bool isRowMajor =
+        isMajor(tensorTy, rank - 1 /*fastChangeDim*/, *axisInfo);
     if (isRowMajor)
       op->setAttr(blockIOAttrName,
                   StringAttr::get(
                       op.getContext(),
                       ttgi::stringifyBlockIOMode(ttgi::BlockIOMode::RowMajor)));
 
-    const bool isColMajor = isMajor(tensorTy, 0 /*fastChangeDim*/, *axisInfo);
+    const bool isColMajor =
+        isMajor(tensorTy, rank - 2 /*fastChangeDim*/, *axisInfo);
     if (isColMajor)
       op->setAttr(blockIOAttrName,
                   StringAttr::get(op.getContext(),
@@ -472,10 +493,6 @@ private:
     RankedTensorType tensorType = descType.getBlockType();
     unsigned elementWidth = tensorType.getElementTypeBitWidth();
     LDBG("strideOneDim: " << strideOneDimVal);
-
-    // TODO: Support higher rank tensors in AxisInfo.
-    if (rank > 2)
-      return false;
 
     // Ensure the base ptr is 4-byte aligned.
     // Note: the HW requires the address to be 64-byte aligned, however we will

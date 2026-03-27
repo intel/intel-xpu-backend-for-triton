@@ -216,9 +216,38 @@ triton-utils compare --r <reports_folder_1> --r2 <reports_folder_2> --tests-with
 #### Additional options
 
 ```bash
+# Sort by a specific column (format: <metric>.<source>)
+--sort-by passed.r1       # Sort by passed count in first report (descending)
+--sort-by time.delta      # Sort by time difference ("delta" is an alias for "Δ")
+--sort-by failed.r2       # Sort by failed count in second report
+
+# Filter rows by test presence
+--compare-scope any       # Show all tests (default)
+--compare-scope both      # Only tests present in both reports
+--compare-scope r1-only   # Only tests present in first report but not second
+--compare-scope r2-only   # Only tests present in second report but not first
+
+# Minify displayed test names (combinable, only effective with --level test)
+--omit-testsuite-name     # Remove testsuite prefix (e.g., "language::")
+--omit-test-module-name   # Remove module path (e.g., "python/test/.../test_core.py::")
+--omit-test-class-name    # Remove class name (e.g., "TestGraphXPU::")
+
 # Display full test names without truncation
 --long-names
+
+# Pretty print (accepted for consistency with stats mode, no-op for compare)
+--pretty-print
 ```
+
+#### Available sort-by values
+
+The `--sort-by` option accepts values in `<metric>.<source>` format where:
+- **metric**: `passed`, `failed`, `skipped`, `xfailed`, `time`
+- **source**: `r1` (first report), `r2` (second report), `Δ` or `delta` (difference), `%Δ` or `%delta` (percentage change, time only)
+
+Default: `name` (alphabetical sort by test name).
+
+**Note:** When sorting by a column other than `name`, testsuite group headers are replaced by inline `<testsuite>::` prefixes in the test names to preserve sort order.
 
 This mode supports all filtering and merging options from `pass_rate` mode.
 
@@ -246,6 +275,16 @@ If you see "Test contains test cases from multiple testsuites", either:
 2. Exclude one testsuite with `--ignore-testsuite <name>`
 
 ## Changelog
+
+### 0.5.0
+
+- **Compare mode: time column** — Comparison output now includes `time` with `r1`, `r2`, `Δ`, and `%Δ` (percentage change) columns. Time values are shown with 2-decimal precision.
+- **Compare mode: `--sort-by`** — Sort comparison results by any column using `<metric>.<source>` notation (e.g., `passed.r1`, `time.delta`). Accepts `delta` as an alias for `Δ`.
+- **Compare mode: `--compare-scope`** — Filter comparison rows by test presence: `any` (default), `r1-only`, `r2-only`, `both`.
+- **Compare mode: `--pretty`** — Accepted for CLI consistency with `stats` mode.
+- **Compare mode: name minification** — Three new flags to shorten displayed test names: `--omit-testsuite-name`, `--omit-test-module-name`, `--omit-test-class-name`. Only effective with `--level test`.
+- **Enums for sort-by** — Added `SortByStats` and `SortByCompare` enums for validated sort options in `stats` and `compare` modes respectively.
+- **Enum for compare scope** — Added `CompareScope` enum (`any`, `r1-only`, `r2-only`, `both`).
 
 ### 0.4.3
 

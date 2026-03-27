@@ -1081,7 +1081,7 @@ def test_abs_fp8(in_dtype, device):
             pytest.skip("float8e4b8/float8e5b16 not supported on CUDA")
     elif is_xpu():
         if in_dtype in (tl.float8e4b8, tl.float8e5b16):
-            pytest.skip("FIXME: Ensure float8e4b8/float8e5b16 not supported on XPU (#6326)")
+            pytest.xfail("float8e4b8/float8e5b16 not supported on XPU")
 
     @triton.jit
     def abs_kernel(X, Z, SIZE: tl.constexpr):
@@ -3609,7 +3609,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         else:
             assert re.search(r'[mma|wgmma.mma_async].sync.aligned.m\d+n\d+k16(?:.row.col)?.f16.f16.f16', ptx)
     elif in_dtype == 'int8':
-        if is_tcgen5:
+        if is_tcgen5 and capability[0:2] != (10, 3):
             assert re.search(r'tcgen05.mma.cta_group::1.kind::i8', ptx)
         elif capability[0] == 7 and capability[1] == 5:  # Turing
             assert 'mma.sync.aligned.m8n8k16.row.col.satfinite.s32.s8.s8.s32' in ptx

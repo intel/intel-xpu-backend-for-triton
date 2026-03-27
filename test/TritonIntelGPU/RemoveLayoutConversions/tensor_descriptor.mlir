@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-remove-layout-conversions 2>&1 | FileCheck %s
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-remove-layout-conversions 2>&1 | FileCheck %s --enable-var-scope
 
 // Test that tt.descriptor_load/tt.descriptor_store are treated as layout
 // anchors and that unnecessary convert_layout ops are eliminated when tensor
@@ -116,6 +116,28 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     %load = tt.descriptor_load %desc[%c0, %c0] : !tt.tensordesc<tensor<16x64xf32>> -> tensor<16x64xf32, #blocked1>
     %cvt = ttg.convert_layout %load : tensor<16x64xf32, #blocked1> -> tensor<16x64xf32, #blocked>
     tt.store %out, %cvt : tensor<16x64x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+
+// COM: ============================================================
+// COM: Test 5: Descriptor store drops a trailing convert_layout from
+// COM: a DPAS source layout and stores directly from the source.
+// COM: ============================================================
+
+// CHECK-LABEL: @descriptor_store_dpas_source_forwarding
+// CHECK-NOT: ttg.convert_layout
+// CHECK: tt.descriptor_store {{.*}}, %arg1 : !tt.tensordesc<tensor<8x32xf16>>, tensor<8x32xf16, #mma>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  tt.func @descriptor_store_dpas_source_forwarding(%arg0: !tt.tensordesc<tensor<8x32xf16>>, %arg1: tensor<8x32xf16, #mma>) {
+    %c0_i32 = arith.constant 0 : i32
+    %0 = ttg.convert_layout %arg1 : tensor<8x32xf16, #mma> -> tensor<8x32xf16, #blocked>
+    tt.descriptor_store %arg0[%c0_i32, %c0_i32], %0 : !tt.tensordesc<tensor<8x32xf16>>, tensor<8x32xf16, #blocked>
     tt.return
   }
 }

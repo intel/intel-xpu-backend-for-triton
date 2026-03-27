@@ -4,7 +4,7 @@ import pytest
 import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
-from triton._internal_testing import is_xpu, is_cuda, is_hip, is_hopper_or_newer, get_hip_lds_size
+from triton._internal_testing import is_xpu, is_xpu_cri, is_cuda, is_hip, is_hopper_or_newer, get_hip_lds_size
 from triton.experimental.gluon.language.amd.gfx1250 import PartitionedSharedLayout
 
 THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
@@ -1451,8 +1451,8 @@ def test_partitioned_shared_layout(M, K, num_partitions, num_groups, partition_d
     - partition_dim: Dimension along which to partition (0=rows, 1=cols)
     - partition_layout_type: Layout within each piece ("swizzled" or "padded")
     """
-    if is_xpu() and partition_layout_type == "swizzled":
-        pytest.skip("FIXME: #6154")
+    if is_xpu_cri() and partition_layout_type == "swizzled":
+        pytest.skip("FIXME: #6480")
 
     blocked_layout = ttgl.BlockedLayout(
         size_per_thread=[1, 8],

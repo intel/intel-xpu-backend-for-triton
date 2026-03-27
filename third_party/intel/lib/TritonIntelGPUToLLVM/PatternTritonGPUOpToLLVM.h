@@ -3,7 +3,7 @@
 
 #include "TargetInfo.h"
 #include "TritonGPUToLLVMBase.h"
-#include "intel/include/Analysis/AxisInfo.h"
+#include "intel/include/Analysis/AxisInfoExt.h"
 #include "intel/include/Analysis/StrideInfo.h"
 #include "intel/include/TritonIntelGPUToLLVM/TypeConverter.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"

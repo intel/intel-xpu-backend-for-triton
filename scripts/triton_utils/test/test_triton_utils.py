@@ -1,3 +1,4 @@
+# pylint: disable=too-many-lines
 import dataclasses
 from typing import Any, cast
 from unittest.mock import patch
@@ -187,19 +188,116 @@ def test_export_to_csv(tmp_path):
         assert e.code == 0
 
 
-def test_save_to_pass_rate_json(tmp_path):
-    rep1 = tmp_path / 'language.xml'
-    rep1.write_text(TESTS_WITH_DIFFERENT_STATUSES['language.xml'], encoding='utf-8')
-    config = dataclasses.replace(
-        triton_utils.Config(),
+@pytest.mark.parametrize(
+    ('has_explicit_level', 'expected_total'),
+    [
+        (False, 8),  # Default: both language (5) and scaled_dot (3)
+        (True, 8),   # Explicit level='all': same result
+    ]
+)
+def test_pass_rate_level_all(tmp_path, has_explicit_level, expected_total):
+    """Test that level='all' creates a single JSON file (default and explicit)."""
+    language_xml = tmp_path / 'language.xml'
+    language_xml.write_text(TESTS_WITH_DIFFERENT_STATUSES['language.xml'], encoding='utf-8')
+
+    scaled_dot_xml = tmp_path / 'scaled_dot.xml'
+    scaled_dot_xml.write_text(TESTS_WITH_DIFFERENT_STATUSES['scaled_dot.xml'], encoding='utf-8')
+
+    json_file = tmp_path / 'report.json'
+
+    # Build config with or without explicit level
+    config_kwargs = {
+        'action': 'pass_rate',
+        'reports': str(tmp_path),
+        'save_to_json': str(json_file),
+    }
+    if has_explicit_level:
+        config_kwargs['pass_rate_level'] = 'all'
+
+    config = triton_utils.Config(**config_kwargs)
+    triton_utils.PassRateActionRunner(config=config)()
+
+    # Verify single JSON file created
+    assert json_file.exists()
+    with open(json_file, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+
+    # Should have aggregate stats for all testsuites
+    assert data['testsuite'] == 'all'
+    assert data['total'] == expected_total
+    assert 'passed' in data
+    assert 'failed' in data
+
+
+def test_pass_rate_level_testsuite_jsonl(tmp_path):
+    """Test that level='testsuite' creates a JSONL file with one JSON per testsuite."""
+    language_xml = tmp_path / 'language.xml'
+    language_xml.write_text(TESTS_WITH_DIFFERENT_STATUSES['language.xml'], encoding='utf-8')
+
+    scaled_dot_xml = tmp_path / 'scaled_dot.xml'
+    scaled_dot_xml.write_text(TESTS_WITH_DIFFERENT_STATUSES['scaled_dot.xml'], encoding='utf-8')
+
+    jsonl_file = tmp_path / 'report.jsonl'
+    config = triton_utils.Config(
         action='pass_rate',
         reports=str(tmp_path),
-        save_to_json=str(tmp_path / 'pass_rate.json'),
+        save_to_json=str(jsonl_file),
+        pass_rate_level='testsuite',
     )
-    try:
-        triton_utils.run(config)
-    except SystemExit as e:
-        assert e.code == 0
+    triton_utils.PassRateActionRunner(config=config)()
+
+    # Verify JSONL file created
+    assert jsonl_file.exists()
+
+    # Read and parse JSONL (one JSON per line)
+    with open(jsonl_file, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+
+    # Should have 2 lines (one per testsuite)
+    assert len(lines) == 2
+
+    # Parse each line as JSON
+    testsuites_data = [json.loads(line) for line in lines]
+
+    # Verify structure
+    testsuite_names = {data['testsuite'] for data in testsuites_data}
+    assert testsuite_names == {'language', 'scaled_dot'}
+
+    # Verify each has stats
+    for data in testsuites_data:
+        assert 'testsuite' in data
+        assert 'passed' in data
+        assert 'failed' in data
+        assert 'total' in data
+        assert 'ts' in data  # Common metadata present
+        assert 'git_ref' in data
+
+    # Verify language testsuite stats
+    language_data = next(d for d in testsuites_data if d['testsuite'] == 'language')
+    assert language_data['total'] == 5
+
+    # Verify scaled_dot testsuite stats
+    scaled_dot_data = next(d for d in testsuites_data if d['testsuite'] == 'scaled_dot')
+    assert scaled_dot_data['total'] == 3
+
+
+def test_pass_rate_invalid_level(tmp_path):
+    """Test that invalid level value raises an error."""
+    language_xml = tmp_path / 'language.xml'
+    language_xml.write_text(TESTS_WITH_DIFFERENT_STATUSES['language.xml'], encoding='utf-8')
+
+    json_file = tmp_path / 'report.json'
+    config = triton_utils.Config(
+        action='pass_rate',
+        reports=str(tmp_path),
+        save_to_json=str(json_file),
+        pass_rate_level='invalid',  # This should be caught by argparse
+    )
+
+    # Note: argparse validation happens at CLI level, so this test is mainly
+    # for completeness if someone bypasses CLI and calls directly
+    with pytest.raises(ValueError, match='Unsupported level'):
+        triton_utils.PassRateActionRunner(config=config)()
 
 
 def test_multiple_test_suites(tmp_path):
@@ -526,6 +624,14 @@ def test_tests_with_multiple_results(  # pylint: disable=R0913, R0914, R0917
             )
         ),
         (
+            'pass_rate --reports /path/to/reports --level testsuite',
+            triton_utils.Config(
+                action='pass_rate',
+                reports='/path/to/reports',
+                pass_rate_level='testsuite',
+            )
+        ),
+        (
             'tests_stats --r /path/to/reports --status skipped',
             triton_utils.Config(
                 action='tests_stats',
@@ -835,6 +941,276 @@ def test_artifact_pattern_filter(artifact_pattern, expected_names):
         else:
             result = processor.get_test_report_artifacts()
             assert [af.name for af in result] == expected_names
+
+
+# -- Compare mode enhancement tests --
+
+# r1 has tests A, B, C; r2 has tests B, C, D — so A is r1-only, D is r2-only, B/C are both
+TESTS_FOR_COMPARE_SCOPE = {
+    'report1/language.xml':
+    '''<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+    <testsuite name="pytest" errors="0" failures="0" skipped="0" tests="3" time="3.0">
+        <testcase classname="python.test.unit.language.test_core" name="test_a" time="1.0" />
+        <testcase classname="python.test.unit.language.test_core" name="test_b" time="1.5" />
+        <testcase classname="python.test.unit.language.test_matmul" name="test_c" time="0.5" />
+    </testsuite>
+</testsuites>
+''',
+    'report2/language.xml':
+    '''<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+    <testsuite name="pytest" errors="0" failures="1" skipped="0" tests="3" time="4.0">
+        <testcase classname="python.test.unit.language.test_core" name="test_b" time="2.0" />
+        <testcase classname="python.test.unit.language.test_matmul" name="test_c" time="1.0" />
+        <testcase classname="python.test.unit.language.test_matmul" name="test_d" time="1.0">
+            <failure message="assert False">assert False</failure>
+        </testcase>
+    </testsuite>
+</testsuites>
+''',
+}
+
+TESTS_FOR_COMPARE_CLASS = {
+    'report1/language.xml':
+    '''<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+    <testsuite name="pytest" errors="0" failures="0" skipped="0" tests="1" time="1.0">
+        <testcase classname="python.test.unit.language.test_triton_kernels.TestGraphXPU" name="test_fused_op" time="1.0" />
+    </testsuite>
+</testsuites>
+''',
+    'report2/language.xml':
+    '''<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+    <testsuite name="pytest" errors="0" failures="0" skipped="0" tests="1" time="2.0">
+        <testcase classname="python.test.unit.language.test_triton_kernels.TestGraphXPU" name="test_fused_op" time="2.0" />
+    </testsuite>
+</testsuites>
+''',
+}
+
+
+def _setup_compare_reports(tmp_path, test_data):
+    for report_name, doc_str in test_data.items():
+        parts = report_name.split('/')
+        subdir_path = tmp_path / parts[0]
+        subdir_path.mkdir(parents=True, exist_ok=True)
+        (subdir_path / parts[1]).write_text(doc_str, encoding='utf-8')
+    return str(tmp_path / 'report1'), str(tmp_path / 'report2')
+
+
+def test_compare_reports_includes_time(tmp_path):
+    r1, r2 = _setup_compare_reports(tmp_path, TESTS_FOR_COMPARE_SCOPE)
+    config = triton_utils.Config(
+        action='compare_reports',
+        reports=r1,
+        reports_2=r2,
+        _report_grouping_level='testsuite',
+    )
+    result = triton_utils.run(config)
+    assert ('time', 'r1') in result.columns
+    assert ('time', 'r2') in result.columns
+    assert ('time', 'Δ') in result.columns
+
+
+@pytest.mark.parametrize('sort_by', ['passed.r1', 'time.delta', 'failed.r2'])
+def test_compare_sort_by(tmp_path, sort_by):
+    r1, r2 = _setup_compare_reports(tmp_path, TESTS_FOR_COMPARE_SCOPE)
+    config = triton_utils.Config(
+        action='compare_reports',
+        reports=r1,
+        reports_2=r2,
+        sort_by=sort_by,
+        _report_grouping_level='testsuite',
+    )
+    result = triton_utils.run(config)
+    assert result.index[-1] == 'Σ'
+    assert len(result) > 1
+
+
+@pytest.mark.parametrize(
+    ('sort_by', 'expected_error'),
+    [
+        ('invalid', ValueError),
+        ('passed.invalid', ValueError),
+        ('invalid.r1', ValueError),
+        ('passed', ValueError),
+    ]
+)
+def test_compare_sort_by_invalid(tmp_path, sort_by, expected_error):
+    r1, r2 = _setup_compare_reports(tmp_path, TESTS_FOR_COMPARE_SCOPE)
+    config = triton_utils.Config(
+        action='compare_reports',
+        reports=r1,
+        reports_2=r2,
+        sort_by=sort_by,
+        _report_grouping_level='testsuite',
+    )
+    with pytest.raises(expected_error):
+        triton_utils.run(config)
+
+
+# r1: test_a, test_b, test_c; r2: test_b, test_c, test_d
+# At test level: r1-only=1 (test_a), r2-only=1 (test_d), both=2 (test_b, test_c)
+@pytest.mark.parametrize(
+    ('compare_scope', 'expected_test_rows'),
+    [
+        ('r1-only', 1),
+        ('r2-only', 1),
+        ('both', 2),
+        ('any', 4),
+    ]
+)
+def test_compare_scope(tmp_path, compare_scope, expected_test_rows):
+    r1, r2 = _setup_compare_reports(tmp_path, TESTS_FOR_COMPARE_SCOPE)
+    config = triton_utils.Config(
+        action='compare_reports',
+        reports=r1,
+        reports_2=r2,
+        _compare_scope=compare_scope,
+        _report_grouping_level='test',
+    )
+    result = triton_utils.run(config)
+    # Subtract total row and group header rows (empty string values)
+    data_rows = [idx for idx in result.index if idx != 'Σ' and result.loc[idx].ne('').any()]
+    assert len(data_rows) == expected_test_rows
+
+
+def test_compare_pretty_flag_accepted():
+    config = triton_utils.Config.from_args(
+        'compare --r /path/r1 --r2 /path/r2 --pretty'
+    )
+    assert config.pretty_print is True
+
+
+def test_compare_sort_by_arg_accepted():
+    config = triton_utils.Config.from_args(
+        'compare --r /path/r1 --r2 /path/r2 --sort-by passed.r1'
+    )
+    assert config.sort_by == 'passed.r1'
+
+
+def test_compare_scope_arg_accepted():
+    config = triton_utils.Config.from_args(
+        'compare --r /path/r1 --r2 /path/r2 --compare-scope both'
+    )
+    assert config.compare_scope == triton_utils.CompareScope.BOTH
+
+
+@pytest.mark.parametrize(
+    ('omit_flags', 'expected_prefix'),
+    [
+        # Full name: language::python/test/unit/language/test_core.py::test_b
+        ({'omit_testsuite_name': True}, 'python/test/unit/language/test_core.py::test_b'),
+        ({'omit_test_module_name': True}, 'language::test_b'),
+        ({'omit_testsuite_name': True, 'omit_test_module_name': True}, 'test_b'),
+    ]
+)
+def test_compare_omit_name_flags(tmp_path, omit_flags, expected_prefix):
+    r1, r2 = _setup_compare_reports(tmp_path, TESTS_FOR_COMPARE_SCOPE)
+    config = triton_utils.Config(
+        action='compare_reports',
+        reports=r1,
+        reports_2=r2,
+        _report_grouping_level='test',
+        _compare_scope='both',
+        **omit_flags,
+    )
+    result = triton_utils.run(config)
+    data_rows = [idx for idx in result.index if idx != 'Σ' and result.loc[idx].ne('').any()]
+    assert any(expected_prefix in row for row in data_rows)
+
+
+def test_compare_omit_class_name(tmp_path):
+    r1, r2 = _setup_compare_reports(tmp_path, TESTS_FOR_COMPARE_CLASS)
+    config = triton_utils.Config(
+        action='compare_reports',
+        reports=r1,
+        reports_2=r2,
+        _report_grouping_level='test',
+        omit_test_class_name=True,
+    )
+    result = triton_utils.run(config)
+    data_rows = [idx for idx in result.index if idx != 'Σ' and result.loc[idx].ne('').any()]
+    for row in data_rows:
+        assert 'TestGraphXPU' not in row
+
+
+def test_compare_omit_flags_warn_on_testsuite_level(tmp_path, capsys):
+    r1, r2 = _setup_compare_reports(tmp_path, TESTS_FOR_COMPARE_SCOPE)
+    config = triton_utils.Config(
+        action='compare_reports',
+        reports=r1,
+        reports_2=r2,
+        _report_grouping_level='testsuite',
+        omit_testsuite_name=True,
+    )
+    triton_utils.run(config)
+    _, stderr = capsys.readouterr()
+    assert '[WARNING]' in stderr
+    assert 'omit-testsuite-name' in stderr
+
+
+def test_compare_omit_testsuite_and_module_preserves_class(tmp_path):
+    """Verify _minify_name keeps class when both testsuite and module are omitted."""
+    r1, r2 = _setup_compare_reports(tmp_path, TESTS_FOR_COMPARE_CLASS)
+    config = triton_utils.Config(
+        action='compare_reports',
+        reports=r1,
+        reports_2=r2,
+        _report_grouping_level='test',
+        omit_testsuite_name=True,
+        omit_test_module_name=True,
+    )
+    result = triton_utils.run(config)
+    data_rows = [idx for idx in result.index if idx != 'Σ' and result.loc[idx].ne('').any()]
+    assert any('TestGraphXPU' in row for row in data_rows)
+
+
+def test_compare_time_pct_delta_column(tmp_path):
+    """Verify time.%Δ column shows percentage change."""
+    r1, r2 = _setup_compare_reports(tmp_path, TESTS_FOR_COMPARE_SCOPE)
+    config = triton_utils.Config(
+        action='compare_reports',
+        reports=r1,
+        reports_2=r2,
+        _report_grouping_level='testsuite',
+    )
+    result = triton_utils.run(config)
+    assert ('time', '%Δ') in result.columns
+    # language testsuite: r1 time=3.0, r2 time=4.0 → %Δ = 33.33%
+    pct_val = result.loc['language', ('time', '%Δ')]
+    assert '%' in str(pct_val)
+
+
+def test_compare_sort_by_time_pct_delta(tmp_path):
+    """Verify sorting by time.%Δ works."""
+    r1, r2 = _setup_compare_reports(tmp_path, TESTS_FOR_COMPARE_SCOPE)
+    config = triton_utils.Config(
+        action='compare_reports',
+        reports=r1,
+        reports_2=r2,
+        sort_by='time.%delta',
+        _report_grouping_level='testsuite',
+    )
+    result = triton_utils.run(config)
+    assert result.index[-1] == 'Σ'
+
+
+def test_compare_time_precision(tmp_path):
+    """Verify time columns have 2-decimal precision, not rounded to int."""
+    r1, r2 = _setup_compare_reports(tmp_path, TESTS_FOR_COMPARE_SCOPE)
+    config = triton_utils.Config(
+        action='compare_reports',
+        reports=r1,
+        reports_2=r2,
+        _report_grouping_level='testsuite',
+    )
+    result = triton_utils.run(config)
+    # r1 time for language = 3.0, check it's a float not int
+    time_r1 = result.loc['language', ('time', 'r1')]
+    assert isinstance(time_r1, float)
 
 
 # yapf: enable
