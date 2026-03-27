@@ -104,7 +104,9 @@ class _PerfLogger:
         # Children times should add up to parent. Any gap is shown as "other".
         _TREE = {
             "JITFunction.run": ["create_binder", "compile", "_init_handles", "kernel_launch"],
-            "create_binder": ["binder.import", "binder.make_backend", "binder.create_fn_sig"],
+            "create_binder": ["binder.import", "binder.get_target", "binder.backend_init", "binder.create_fn_sig"],
+            "binder.get_target": ["target.get_device", "target.get_capability", "ext.compile_checker", "ext.sycl_query", "arch.compile_parser", "arch.parse_call"],
+            "binder.backend_init": ["backend.find_active", "backend.constructor"],
             "compile": [
                 "triton_key", "compile.make_ir",
                 "compile.ttir", "compile.ttgir", "compile.llir",
@@ -120,7 +122,14 @@ class _PerfLogger:
         _DISPLAY_ORDER = [
             "JITFunction.run",
             "create_binder",
-            "binder.import", "binder.make_backend", "binder.create_fn_sig",
+            "binder.import",
+            "binder.get_target",
+            "target.get_device", "target.get_capability",
+            "ext.compile_checker", "ext.sycl_query",
+            "arch.compile_parser", "arch.parse_call",
+            "binder.backend_init",
+            "backend.find_active", "backend.constructor",
+            "binder.create_fn_sig",
             "compile",
             "triton_key", "compile.make_ir",
             "compile.ttir", "compile.ttgir",
@@ -135,6 +144,8 @@ class _PerfLogger:
             "launcher.generic_setup", "launcher.codegen", "launcher.c_compile",
             "load_binary",
             "kernel_launch",
+            # Cross-cutting: compile_module_from_src breakdown (standalone, not in tree)
+            "cmod.cache_check", "cmod.c_compile", "cmod.load_module",
         ]
 
         def _get_total(name):

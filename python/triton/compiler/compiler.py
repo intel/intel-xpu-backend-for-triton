@@ -383,11 +383,20 @@ def compile(src, target=None, options=None, _env_vars=None):
 
 
 def make_backend(target: GPUTarget) -> BaseBackend:
+    from ..runtime.build import perf_log
+    import time as _time
+    _t0 = _time.perf_counter() if perf_log.enabled else 0
     actives = [x.compiler for x in backends.values() if x.compiler.supports_target(target)]
     if len(actives) != 1:
         raise RuntimeError(
             f"{len(actives)} compatible backends for target ({target.backend}) ({actives}). There should only be one.")
-    return actives[0](target)
+    if perf_log.enabled:
+        perf_log.log("backend.find_active", f"{target.backend}", _time.perf_counter() - _t0)
+    _t1 = _time.perf_counter() if perf_log.enabled else 0
+    result = actives[0](target)
+    if perf_log.enabled:
+        perf_log.log("backend.constructor", f"{actives[0].__name__}()", _time.perf_counter() - _t1)
+    return result
 
 
 class LazyDict:

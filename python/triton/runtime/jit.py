@@ -691,9 +691,12 @@ class JITFunction(JITCallable, KernelInterface[T]):
             perf_log.log("binder.import", f"{self._fn_name}", _time.perf_counter() - _t_import)
         _t_target = _time.perf_counter() if perf_log.enabled else 0
         target = driver.active.get_current_target()
+        if perf_log.enabled:
+            perf_log.log("binder.get_target", f"{self._fn_name}", _time.perf_counter() - _t_target)
+        _t_backend = _time.perf_counter() if perf_log.enabled else 0
         backend = make_backend(target)
         if perf_log.enabled:
-            perf_log.log("binder.make_backend", f"{self._fn_name}", _time.perf_counter() - _t_target)
+            perf_log.log("binder.backend_init", f"{self._fn_name}", _time.perf_counter() - _t_backend)
         self.CompiledKernel = CompiledKernel
         self.compile = compile
         self.ASTSource = ASTSource

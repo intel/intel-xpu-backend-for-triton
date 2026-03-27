@@ -308,13 +308,22 @@ class TritonLauncher:
 
 
 def compile_module_from_src(src: str, name: str):
+    from triton.runtime.build import perf_log
+    import time as _time
+
+    _t_hash = _time.perf_counter() if perf_log.enabled else 0
     hasher = hashlib.sha256(__CACHE_VERSION.encode("utf-8"))
     hasher.update((src + platform_key()).encode("utf-8"))
     key = hasher.hexdigest()
     cache = get_cache_manager(key)
     suffix = sysconfig.get_config_var("EXT_SUFFIX")
     cache_path = cache.get_file(f"{name}{suffix}")
+    cache_hit = cache_path is not None
+    if perf_log.enabled:
+        perf_log.log("cmod.cache_check", f"module={name} hit={cache_hit}", _time.perf_counter() - _t_hash)
+
     if cache_path is None:
+        _t_build = _time.perf_counter() if perf_log.enabled else 0
         with tempfile.TemporaryDirectory() as tmpdir:
             src_path = os.path.join(tmpdir, "main.cpp")
             with open(src_path, "w") as f:
@@ -330,19 +339,26 @@ def compile_module_from_src(src: str, name: str):
                         COMPILATION_HELPER.libraries, ccflags=extra_compiler_args)
             with open(so, "rb") as f:
                 cache_path = cache.put(f.read(), f"{name}{suffix}", binary=True)
+        if perf_log.enabled:
+            perf_log.log("cmod.c_compile", f"module={name}", _time.perf_counter() - _t_build)
 
+    _t_load = _time.perf_counter() if perf_log.enabled else 0
     if name == 'arch_utils':
-        return ArchParser(cache_path)
-    if name == 'spirv_utils':
-        return SpirvUtils(cache_path)
-    if name == 'extension_utils_impl':
-        return ExtensionUtils(cache_path)
-    if name == '__triton_launcher':
-        return TritonLauncher(cache_path)
-    if name == 'proton_utils':
-        return cache_path
+        result = ArchParser(cache_path)
+    elif name == 'spirv_utils':
+        result = SpirvUtils(cache_path)
+    elif name == 'extension_utils_impl':
+        result = ExtensionUtils(cache_path)
+    elif name == '__triton_launcher':
+        result = TritonLauncher(cache_path)
+    elif name == 'proton_utils':
+        result = cache_path
+    else:
+        result = _load_module_from_path(name, cache_path)
+    if perf_log.enabled:
+        perf_log.log("cmod.load_module", f"module={name}", _time.perf_counter() - _t_load)
 
-    return _load_module_from_path(name, cache_path)
+    return result
 
 
 # ------------------------
@@ -1087,26 +1103,51 @@ class XPUDriver(DriverBase):
 
     def get_current_target(self):
         import torch
-        from triton.backends.intel.extension_utils import query_device_extensions
+        from triton.backends.intel.extension_utils import query_device_extensions, _get_extension_checker
+        from triton.runtime.build import perf_log
+        from triton import knobs
+        import time as _time
 
+        _t0 = _time.perf_counter() if perf_log.enabled else 0
         device = self.get_current_device()
-        dev_property = torch.xpu.get_device_capability(device)
+        if perf_log.enabled:
+            perf_log.log("target.get_device", f"device={device}", _time.perf_counter() - _t0)
 
-        def update_device_arch(dev_property):
-            if not (arch := knobs.intel.device_arch):
-                dirname = os.path.dirname(os.path.realpath(__file__))
-                parser = compile_module_from_src(src=Path(os.path.join(dirname, "arch_parser.c")).read_text(),
-                                                 name="arch_utils")
-                arch = parser.parse_device_arch(dev_property["architecture"])
-            dev_property["arch"] = arch
+        _t1 = _time.perf_counter() if perf_log.enabled else 0
+        dev_property = torch.xpu.get_device_capability(device)
+        if perf_log.enabled:
+            perf_log.log("target.get_capability", f"device={device}", _time.perf_counter() - _t1)
 
         # All GPUs with the same device_id have the same extensions, so we just
         # need to query any GPU device
         device_id = dev_property.get("device_id")
+
+        _t2a = _time.perf_counter() if perf_log.enabled else 0
+        _get_extension_checker()  # force compilation / cache load
+        if perf_log.enabled:
+            perf_log.log("ext.compile_checker", f"module=extension_utils_impl", _time.perf_counter() - _t2a)
+
+        _t2b = _time.perf_counter() if perf_log.enabled else 0
         extensions = query_device_extensions(device_id)
         dev_property.update(extensions)
         dev_property["__intel_already_queried_extensions__"] = True
-        update_device_arch(dev_property)
+        if perf_log.enabled:
+            perf_log.log("ext.sycl_query", f"device_id={device_id} n_exts={len(extensions)}", _time.perf_counter() - _t2b)
+
+        arch = knobs.intel.device_arch
+        if not arch:
+            _t3a = _time.perf_counter() if perf_log.enabled else 0
+            dirname = os.path.dirname(os.path.realpath(__file__))
+            parser = compile_module_from_src(src=Path(os.path.join(dirname, "arch_parser.c")).read_text(),
+                                            name="arch_utils")
+            if perf_log.enabled:
+                perf_log.log("arch.compile_parser", f"module=arch_utils", _time.perf_counter() - _t3a)
+
+            _t3b = _time.perf_counter() if perf_log.enabled else 0
+            arch = parser.parse_device_arch(dev_property["architecture"])
+            if perf_log.enabled:
+                perf_log.log("arch.parse_call", f"arch={arch}", _time.perf_counter() - _t3b)
+        dev_property["arch"] = arch
 
         return GPUTarget("xpu", dev_property, warp_size=32)
 
