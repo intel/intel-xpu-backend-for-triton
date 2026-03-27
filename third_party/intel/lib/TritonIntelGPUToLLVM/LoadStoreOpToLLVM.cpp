@@ -257,6 +257,9 @@ struct LoadStoreConversionBase {
                                 Type valueElemTy,
                                 StringAttr blockIOAttr) const {
     unsigned rank = resultType.getRank();
+    if (rank == 0)
+      return 1;
+
     AxisInfo *descAxisInfo = axisAnalysisPass.getAxisInfo(desc);
     if (!descAxisInfo || static_cast<unsigned>(descAxisInfo->getRank()) != rank)
       return 1;
@@ -270,11 +273,12 @@ struct LoadStoreConversionBase {
     // dimensions: the result layout's fast dim (order[0]) maps to the other of
     // the two innermost descriptor dimensions.
     unsigned descDim = order[0];
-    if (blockIOAttr &&
-        symbolizeBlockIOMode(blockIOAttr.getValue()) ==
-            BlockIOMode::ColumnMajor &&
-        rank >= 2 && order[0] >= rank - 2) {
-      descDim = (order[0] == rank - 2) ? rank - 1 : rank - 2;
+    if (blockIOAttr) {
+      auto mode = symbolizeBlockIOMode(blockIOAttr.getValue());
+      if (mode && *mode == BlockIOMode::ColumnMajor && rank >= 2 &&
+          order[0] >= rank - 2) {
+        descDim = (order[0] == rank - 2) ? rank - 1 : rank - 2;
+      }
     }
 
     unsigned descContiguity = descAxisInfo->getContiguity(descDim);
@@ -283,7 +287,7 @@ struct LoadStoreConversionBase {
 
     unsigned pointeeBitWidth =
         std::max(8u, valueElemTy.getIntOrFloatBitWidth());
-    unsigned maxVec = 128 / pointeeBitWidth;
+    unsigned maxVec = std::max(1u, 128 / pointeeBitWidth);
     unsigned threadContig = contigPerThread[order[0]];
     // Note: descContiguity and threadContig refer to the same logical dimension
     // but are indexed in different coordinate spaces. descContiguity uses
