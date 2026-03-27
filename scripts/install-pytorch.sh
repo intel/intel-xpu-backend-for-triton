@@ -62,13 +62,16 @@ Usage: ./install-pytorch.sh [options]
 
 Options:
   --source                Build PyTorch from source using pinned commit.
-  --prepare-source        Prepare patched PyTorch source only (clone/reset + patch),
-                          without build/install.
+  --prepare-source        Prepare PyTorch source only (clone/reset + patch),
+                          without build/install. With --no-clean and an
+                          existing source tree, checkout/reset and patching
+                          are skipped and the tree is reused as-is.
   --latest                Build PyTorch from the latest commit in the main branch.
   --force-reinstall       Force reinstallation of PyTorch and pinned dependencies.
   --check-wheel           Check if a prebuilt PyTorch wheel already exists before building.
   --venv                  Activate Python virtual environment from .venv/ before installation.
-  -nc, --no-clean         Do not clean existing PyTorch source directory before build.
+  -nc, --no-clean         Reuse existing PyTorch source tree without cleanup;
+                          skips checkout/reset and patching when source exists.
 
   --triton-repo <repo>          GitHub repo to fetch prebuilt PyTorch wheels from
                                 (default: intel/intel-xpu-backend-for-triton)
@@ -230,7 +233,7 @@ function clone_pytorch_source {
   cd $BASE
   rm -rf "$PYTORCH_PROJ"
   echo "**** Cloning PyTorch into $PYTORCH_PROJ ****"
-  git clone --single-branch -b main --recurse-submodules https://github.com/pytorch/pytorch.git
+  git clone --single-branch -b main --recurse-submodules https://github.com/pytorch/pytorch.git "$PYTORCH_PROJ"
   cd "$PYTORCH_PROJ"
 
   if [ "$BUILD_LATEST" = false ]; then
@@ -243,9 +246,16 @@ function clone_pytorch_source {
 function prepare_pytorch_source {
   if [ -d "$PYTORCH_PROJ" ]; then
     if [ "$CLEAN" = true ]; then
+      local reset_ref
+      if [ "$BUILD_LATEST" = true ]; then
+        reset_ref="origin/main"
+      else
+        reset_ref="${PYTORCH_PINNED_COMMIT:-main}"
+      fi
+
       if cd "$PYTORCH_PROJ" && \
         git fetch --recurse-submodules && \
-        git reset --hard ${PYTORCH_PINNED_COMMIT:-main} && \
+        git reset --hard "$reset_ref" && \
         git submodule update --init --recursive && \
         git clean -xffd; then
         echo "**** Cleaning $PYTORCH_PROJ before build ****"
