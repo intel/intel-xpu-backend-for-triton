@@ -337,11 +337,11 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.common.add_symbol_dce(pm)
         passes.common.add_sccp(pm)
         passes.common.add_canonicalizer(pm)
-        if opt.instrumentation_mode == "fpsan":
-            passes.ttgpuir.add_fp_sanitizer(pm)
         if knobs.intel.opt_reduction_locality:
             intel.passes.ttgpuir.add_optimize_reduction_locality(pm)
         intel.passes.arith.add_arith_emulate_unsupported_floats(pm, ["bf16"], "f32")
+        if opt.instrumentation_mode == "fpsan":
+            passes.ttgpuir.add_fp_sanitizer(pm)
         pm.run(mod, 'make_ttgir')
         return mod
 

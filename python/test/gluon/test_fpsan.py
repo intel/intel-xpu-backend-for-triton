@@ -7,8 +7,12 @@ import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton import language as tl
-from triton._internal_testing import is_blackwell, is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_gfx1250, is_interpreter
-from triton.experimental.gluon.language.nvidia.blackwell import TensorMemoryLayout, allocate_tensor_memory, mbarrier, tcgen05_mma
+from triton._internal_testing import is_blackwell, is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_gfx1250, is_interpreter, is_xpu
+
+try:
+    from triton.experimental.gluon.language.nvidia.blackwell import TensorMemoryLayout, allocate_tensor_memory, mbarrier, tcgen05_mma
+except ImportError:
+    pass  # NVIDIA-specific; not available on XPU
 
 THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
 
@@ -17,10 +21,19 @@ def _hip_device_supports_fpsan():
     return is_hip_cdna3() or is_hip_cdna4() or is_hip_gfx1250()
 
 
-def _require_cuda_backend(device: str):
-    # CUDA and HIP both use torch device 'cuda'. fpsan is plumbed through both CUDAOptions and HIPOptions.
+def _require_backend(device: str):
+    """Guard: skip/xfail when the current device doesn't support fpsan."""
+    if device == "xpu":
+        if is_interpreter():
+            pytest.skip("fpsan tests require a real backend (not the interpreter)")
+        if not is_xpu():
+            pytest.skip("fpsan tests require XPU")
+        if not torch.xpu.is_available():
+            pytest.skip("XPU is not available")
+        return
+    # CUDA / HIP path
     if device != "cuda":
-        pytest.xfail("fpsan tests require torch device 'cuda'")
+        pytest.xfail("fpsan tests require torch device 'cuda' or 'xpu'")
     if is_interpreter():
         pytest.skip("fpsan tests require a real backend (not the interpreter)")
     if not (is_cuda() or is_hip()):
@@ -174,6 +187,13 @@ UNARY_EXTERN_SYMBOLS = {
         ("log1p", "__ocml_log1p_f32"),
         ("round", "__ocml_round_f32"),
     ],
+    "xpu": [
+        ("tan", "__imf_tanf"),
+        ("tanh", "__imf_tanhf"),
+        ("log1p", "__imf_log1pf"),
+        ("cbrt", "__imf_cbrtf"),
+        ("round", "__imf_roundf"),
+    ],
 }
 
 BINARY_EXTERN_SYMBOLS = {
@@ -187,6 +207,11 @@ BINARY_EXTERN_SYMBOLS = {
         ("hypot", "__ocml_hypot_f32"),
         ("pow", "__ocml_pow_f32"),
     ],
+    "xpu": [
+        ("atan2", "__imf_atan2f"),
+        ("hypot", "__imf_hypotf"),
+        ("pow", "__imf_powf"),
+    ],
 }
 
 TERNARY_EXTERN_SYMBOLS = {
@@ -195,6 +220,9 @@ TERNARY_EXTERN_SYMBOLS = {
     ],
     "hip": [
         ("fma", "__ocml_fma_f32"),
+    ],
+    "xpu": [
+        ("fma", "__imf_fmaf"),
     ],
 }
 
@@ -205,12 +233,17 @@ MIXED_EXTERN_SYMBOLS = {
     "hip": [
         ("ldexp", "__ocml_ldexp_f32"),
     ],
+    "xpu": [
+        ("ldexp", "__imf_ldexpf"),
+    ],
 }
 
 
 def _extern_backend_name() -> str:
     if is_hip():
         return "hip"
+    if is_xpu():
+        return "xpu"
     return "cuda"
 
 
@@ -283,7 +316,7 @@ def _binop_kernel(x_ptr, y_ptr, out_ptr, n_elements, OP: gl.constexpr, BLOCK: gl
     ],
 )
 def test_binops_payload_semantics(device, op, expected_fn, fresh_knobs):
-    _require_cuda_backend(device)
+    _require_backend(device)
 
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
 
@@ -291,11 +324,11 @@ def test_binops_payload_semantics(device, op, expected_fn, fresh_knobs):
     n_elements = 1024
     BLOCK = 256
 
-    g = torch.Generator(device="cuda")
+    g = torch.Generator(device=device)
     g.manual_seed(0)
-    x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
-    y = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
-    out = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
+    x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device=device, generator=g)
+    y = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device=device, generator=g)
+    out = torch.empty((n_elements, ), dtype=torch.int32, device=device)
 
     xw = triton.TensorWrapper(x, dtype=torch.float32)
     yw = triton.TensorWrapper(y, dtype=torch.float32)
@@ -318,20 +351,20 @@ def test_binops_payload_semantics(device, op, expected_fn, fresh_knobs):
     ],
 )
 def test_binops_payload_semantics_zero_denominator(device, op, expected_fn, fresh_knobs):
-    _require_cuda_backend(device)
+    _require_backend(device)
 
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
 
     n_elements = 1024
     BLOCK = 256
 
-    g = torch.Generator(device="cuda")
+    g = torch.Generator(device=device)
     g.manual_seed(123)
-    x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
-    y = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
+    x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device=device, generator=g)
+    y = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device=device, generator=g)
     y[::7] = 0
 
-    out = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
+    out = torch.empty((n_elements, ), dtype=torch.int32, device=device)
 
     xw = triton.TensorWrapper(x, dtype=torch.float32)
     yw = triton.TensorWrapper(y, dtype=torch.float32)
@@ -376,7 +409,7 @@ def _unary_math_kernel(x_ptr, out_ptr, n_elements, OP: gl.constexpr, BLOCK: gl.c
     ],
 )
 def test_unary_math_identity(device, op, fresh_knobs):
-    _require_cuda_backend(device)
+    _require_backend(device)
 
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
 
@@ -387,8 +420,8 @@ def test_unary_math_identity(device, op, fresh_knobs):
     xf = rs.randn(n_elements).astype(np.float32)
     x_bits = xf.view(np.int32)
 
-    x = torch.tensor(x_bits, dtype=torch.int32, device="cuda")
-    out = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
+    x = torch.tensor(x_bits, dtype=torch.int32, device=device)
+    out = torch.empty((n_elements, ), dtype=torch.int32, device=device)
 
     grid = (triton.cdiv(n_elements, BLOCK), )
     _unary_math_kernel[grid](
@@ -433,7 +466,7 @@ def _extern_unary_math_kernel(x_ptr, out_ptr, n_elements, OP: gl.constexpr, BLOC
     EXTERN_UNARY_CASES,
 )
 def test_extern_unary_payload_semantics(device, op, symbol, fresh_knobs):
-    _require_cuda_backend(device)
+    _require_backend(device)
 
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
 
@@ -443,8 +476,8 @@ def test_extern_unary_payload_semantics(device, op, symbol, fresh_knobs):
     xf = rs.randn(n_elements).astype(np.float32)
     x_bits = xf.view(np.int32)
 
-    x = torch.tensor(x_bits, dtype=torch.int32, device="cuda")
-    out = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
+    x = torch.tensor(x_bits, dtype=torch.int32, device=device)
+    out = torch.empty((n_elements, ), dtype=torch.int32, device=device)
 
     grid = (triton.cdiv(n_elements, BLOCK), )
     _extern_unary_math_kernel[grid](
@@ -521,17 +554,17 @@ def _extern_mixed_math_kernel(x_ptr, y_ptr, out_ptr, n_elements, OP: gl.constexp
     EXTERN_BINARY_CASES,
 )
 def test_extern_binary_payload_semantics(device, op, symbol, fresh_knobs):
-    _require_cuda_backend(device)
+    _require_backend(device)
 
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
 
     n_elements = 1024
     BLOCK = 256
-    g = torch.Generator(device="cuda")
+    g = torch.Generator(device=device)
     g.manual_seed(23)
-    x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
-    y = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
-    out = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
+    x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device=device, generator=g)
+    y = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device=device, generator=g)
+    out = torch.empty((n_elements, ), dtype=torch.int32, device=device)
 
     xw = triton.TensorWrapper(x, dtype=torch.float32)
     yw = triton.TensorWrapper(y, dtype=torch.float32)
@@ -553,18 +586,18 @@ def test_extern_binary_payload_semantics(device, op, symbol, fresh_knobs):
     EXTERN_TERNARY_CASES,
 )
 def test_extern_ternary_payload_semantics(device, op, symbol, fresh_knobs):
-    _require_cuda_backend(device)
+    _require_backend(device)
 
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
 
     n_elements = 1024
     BLOCK = 256
-    g = torch.Generator(device="cuda")
+    g = torch.Generator(device=device)
     g.manual_seed(29)
-    x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
-    y = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
-    z = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
-    out = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
+    x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device=device, generator=g)
+    y = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device=device, generator=g)
+    z = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device=device, generator=g)
+    out = torch.empty((n_elements, ), dtype=torch.int32, device=device)
 
     xw = triton.TensorWrapper(x, dtype=torch.float32)
     yw = triton.TensorWrapper(y, dtype=torch.float32)
@@ -591,17 +624,17 @@ def test_extern_ternary_payload_semantics(device, op, symbol, fresh_knobs):
     EXTERN_MIXED_CASES,
 )
 def test_extern_mixed_payload_semantics(device, op, symbol, fresh_knobs):
-    _require_cuda_backend(device)
+    _require_backend(device)
 
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
 
     n_elements = 1024
     BLOCK = 256
-    g = torch.Generator(device="cuda")
+    g = torch.Generator(device=device)
     g.manual_seed(31)
-    x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
-    y = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
-    out = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
+    x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device=device, generator=g)
+    y = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device=device, generator=g)
+    out = torch.empty((n_elements, ), dtype=torch.int32, device=device)
 
     xw = triton.TensorWrapper(x, dtype=torch.float32)
     outw = triton.TensorWrapper(out, dtype=torch.float32)
@@ -650,19 +683,19 @@ def _fma_kernel(x_ptr, y_ptr, z_ptr, out_ptr, n_elements, BLOCK: gl.constexpr, T
 
 
 def test_fma_payload_semantics(device, fresh_knobs):
-    _require_cuda_backend(device)
+    _require_backend(device)
 
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
 
     n_elements = 1024
     BLOCK = 256
 
-    g = torch.Generator(device="cuda")
+    g = torch.Generator(device=device)
     g.manual_seed(7)
-    x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
-    y = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
-    z = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
-    out = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
+    x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device=device, generator=g)
+    y = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device=device, generator=g)
+    z = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device=device, generator=g)
+    out = torch.empty((n_elements, ), dtype=torch.int32, device=device)
 
     xw = triton.TensorWrapper(x, dtype=torch.float32)
     yw = triton.TensorWrapper(y, dtype=torch.float32)
@@ -695,17 +728,17 @@ def _cast_trunc_ext_kernel(x_ptr, out_ptr, n_elements, BLOCK: gl.constexpr, THRE
 
 
 def test_cast_trunc_ext_payload_semantics(device, fresh_knobs):
-    _require_cuda_backend(device)
+    _require_backend(device)
 
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
 
     n_elements = 1024
     BLOCK = 256
 
-    g = torch.Generator(device="cuda")
+    g = torch.Generator(device=device)
     g.manual_seed(17)
-    x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
-    out = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
+    x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device=device, generator=g)
+    out = torch.empty((n_elements, ), dtype=torch.int32, device=device)
 
     xw = triton.TensorWrapper(x, dtype=torch.float32)
     outw = triton.TensorWrapper(out, dtype=torch.float32)
@@ -731,17 +764,17 @@ def _cast_ext_kernel(x_ptr, out_ptr, n_elements, BLOCK: gl.constexpr, THREADS_PE
 
 
 def test_cast_ext_payload_semantics(device, fresh_knobs):
-    _require_cuda_backend(device)
+    _require_backend(device)
 
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
 
     n_elements = 1024
     BLOCK = 256
 
-    g = torch.Generator(device="cuda")
+    g = torch.Generator(device=device)
     g.manual_seed(19)
-    x = torch.randint(-(2**15), 2**15 - 1, (n_elements, ), dtype=torch.int16, device="cuda", generator=g)
-    out = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
+    x = torch.randint(-(2**15), 2**15 - 1, (n_elements, ), dtype=torch.int16, device=device, generator=g)
+    out = torch.empty((n_elements, ), dtype=torch.int32, device=device)
 
     xw = triton.TensorWrapper(x, dtype=torch.float16)
     outw = triton.TensorWrapper(out, dtype=torch.float32)
@@ -773,8 +806,9 @@ def _mm_payload_u32(a_i32: np.ndarray, b_i32: np.ndarray, c_i32: np.ndarray = No
     return out.astype(np.uint32).view(np.int32)
 
 
+@pytest.mark.skipif(is_xpu(), reason="dot_fma with BlockedLayout crashes on Intel XPU (IGC compiler issue)")
 def test_dot_fma(device, fresh_knobs):
-    _require_cuda_backend(device)
+    _require_backend(device)
 
     B = 16
     BLOCK = gl.constexpr(B)
@@ -809,10 +843,10 @@ def test_dot_fma(device, fresh_knobs):
     c_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
     exp_bits = _mm_payload_u32(a_bits, b_bits.T, c_bits)
 
-    a = torch.tensor(a_bits, device="cuda", dtype=torch.int32)
-    b = torch.tensor(b_bits, device="cuda", dtype=torch.int32)
-    c = torch.tensor(c_bits, device="cuda", dtype=torch.int32)
-    out = torch.empty((B, B), device="cuda", dtype=torch.int32)
+    a = torch.tensor(a_bits, device=device, dtype=torch.int32)
+    b = torch.tensor(b_bits, device=device, dtype=torch.int32)
+    c = torch.tensor(c_bits, device=device, dtype=torch.int32)
+    out = torch.empty((B, B), device=device, dtype=torch.int32)
 
     # Wrap int storage as fp32 so fpsan operates on payload bits.
     aw = triton.TensorWrapper(a, dtype=torch.float32)
@@ -825,10 +859,11 @@ def test_dot_fma(device, fresh_knobs):
     _assert_payload_equal(out, exp_bits)
 
 
+@pytest.mark.skipif(is_xpu(), reason="NVIDIA Blackwell specific")
 @pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
 @pytest.mark.parametrize("use_acc", [False, True])
 def test_tcgen05_mma(device, use_acc, fresh_knobs):
-    _require_cuda_backend(device)
+    _require_backend(device)
 
     B = 64
     BLOCK = gl.constexpr(B)
@@ -885,10 +920,10 @@ def test_tcgen05_mma(device, use_acc, fresh_knobs):
     c_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
     exp_bits = _mm_payload_u32(a_bits, b_bits.T, c_bits if use_acc else None)
 
-    a = torch.tensor(a_bits, device="cuda", dtype=torch.int32)
-    b = torch.tensor(b_bits, device="cuda", dtype=torch.int32)
-    c = torch.tensor(c_bits, device="cuda", dtype=torch.int32)
-    out = torch.empty((B, B), device="cuda", dtype=torch.int32)
+    a = torch.tensor(a_bits, device=device, dtype=torch.int32)
+    b = torch.tensor(b_bits, device=device, dtype=torch.int32)
+    c = torch.tensor(c_bits, device=device, dtype=torch.int32)
+    out = torch.empty((B, B), device=device, dtype=torch.int32)
 
     aw = triton.TensorWrapper(a, dtype=torch.float32)
     bw = triton.TensorWrapper(b, dtype=torch.float32)
@@ -900,9 +935,10 @@ def test_tcgen05_mma(device, use_acc, fresh_knobs):
     _assert_payload_equal(out, exp_bits)
 
 
+@pytest.mark.skipif(is_xpu(), reason="NVIDIA Blackwell specific")
 @pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
 def test_tmem_index_subslice(device, fresh_knobs):
-    _require_cuda_backend(device)
+    _require_backend(device)
 
     B = 64
     BLOCK = gl.constexpr(B)
@@ -935,8 +971,8 @@ def test_tmem_index_subslice(device, fresh_knobs):
     x_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, 32), dtype=np.int32)
     exp_bits = x_bits.copy()
 
-    x = torch.tensor(x_bits, device="cuda", dtype=torch.int32)
-    out = torch.empty((B, 32), device="cuda", dtype=torch.int32)
+    x = torch.tensor(x_bits, device=device, dtype=torch.int32)
+    out = torch.empty((B, 32), device=device, dtype=torch.int32)
 
     xw = triton.TensorWrapper(x, dtype=torch.float32)
     outw = triton.TensorWrapper(out, dtype=torch.float32)
@@ -947,7 +983,7 @@ def test_tmem_index_subslice(device, fresh_knobs):
 
 
 def test_reduction(device, fresh_knobs):
-    _require_cuda_backend(device)
+    _require_backend(device)
 
     @triton.jit
     def reduce_kernel(a_ptr, c_ptr, M: tl.constexpr, N: tl.constexpr, stride_am: tl.constexpr, stride_ak: tl.constexpr,
@@ -958,12 +994,18 @@ def test_reduction(device, fresh_knobs):
         r2 = tl.sum(r1, axis=ORDER - 1)
         tl.store(c_ptr, r2)
 
-    M, N = 512, 512
+    # XPU needs smaller matrix to avoid resource exhaustion.
+    if is_xpu():
+        M, N = 128, 128
+        split = 16
+    else:
+        M, N = 512, 512
+        split = 64
     torch.manual_seed(0)
     a = torch.randn((M, N), dtype=torch.float32, device=device)
     # Make non-associativity visible and deterministic: large + tiny magnitudes.
-    a[:, :64] *= 1e10
-    a[:, 64:] *= 1e-10
+    a[:, :split] *= 1e10
+    a[:, split:] *= 1e-10
     c1 = torch.empty((1, ), device=device, dtype=torch.float32)
     c2 = torch.empty((1, ), device=device, dtype=torch.float32)
 
@@ -980,7 +1022,7 @@ def test_reduction(device, fresh_knobs):
 
 @pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
 def test_mfma_dot(device, fresh_knobs):
-    _require_cuda_backend(device)
+    _require_backend(device)
 
     M, N, K = 16, 16, 32
 
@@ -1023,10 +1065,10 @@ def test_mfma_dot(device, fresh_knobs):
     c_bits = rs.randint(-(2**31), 2**31 - 1, size=(M, N), dtype=np.int32)
     exp_bits = _mm_payload_u32(a_bits, b_bits, c_bits)
 
-    a = torch.tensor(a_bits, device="cuda", dtype=torch.int32)
-    b = torch.tensor(b_bits, device="cuda", dtype=torch.int32)
-    c = torch.tensor(c_bits, device="cuda", dtype=torch.int32)
-    out = torch.empty((M, N), device="cuda", dtype=torch.int32)
+    a = torch.tensor(a_bits, device=device, dtype=torch.int32)
+    b = torch.tensor(b_bits, device=device, dtype=torch.int32)
+    c = torch.tensor(c_bits, device=device, dtype=torch.int32)
+    out = torch.empty((M, N), device=device, dtype=torch.int32)
 
     aw = triton.TensorWrapper(a, dtype=torch.float32)
     bw = triton.TensorWrapper(b, dtype=torch.float32)
@@ -1041,7 +1083,7 @@ def test_mfma_dot(device, fresh_knobs):
 
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires gfx1250")
 def test_wmma_dot(device, fresh_knobs):
-    _require_cuda_backend(device)
+    _require_backend(device)
 
     B = 32
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
@@ -1076,10 +1118,10 @@ def test_wmma_dot(device, fresh_knobs):
     c_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
     exp_bits = _mm_payload_u32(a_bits, b_bits, c_bits)
 
-    a = torch.tensor(a_bits, device="cuda", dtype=torch.int32)
-    b = torch.tensor(b_bits, device="cuda", dtype=torch.int32)
-    c = torch.tensor(c_bits, device="cuda", dtype=torch.int32)
-    out = torch.empty((B, B), device="cuda", dtype=torch.int32)
+    a = torch.tensor(a_bits, device=device, dtype=torch.int32)
+    b = torch.tensor(b_bits, device=device, dtype=torch.int32)
+    c = torch.tensor(c_bits, device=device, dtype=torch.int32)
+    out = torch.empty((B, B), device=device, dtype=torch.int32)
 
     aw = triton.TensorWrapper(a, dtype=torch.float32)
     bw = triton.TensorWrapper(b, dtype=torch.float32)
