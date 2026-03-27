@@ -372,6 +372,9 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     @classmethod
     @track
     def make_llir(cls, src, metadata, options):
+        from triton.runtime.build import perf_log
+        import time as _time
+        _t0 = _time.perf_counter() if perf_log.enabled else 0
         mod = src
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
@@ -401,6 +404,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if cls.instrumentation:
             cls.instrumentation.patch("llvmir_to_llvm", pm, mod.context)
         pm.run(mod, 'make_llir')
+        if perf_log.enabled:
+            perf_log.log("stage.llir_mlir_passes", "MLIR→LLVM-IR passes", _time.perf_counter() - _t0)
 
         if knobs.compilation.dump_ir_extract_di_local_variables:
             # comments below on why separate it
@@ -421,6 +426,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             pm.run(mod, 'make_llir.dump_ir_extract_di_local_variables')
 
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
+        _t_llvm = _time.perf_counter() if perf_log.enabled else 0
         llvm.init_targets()
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
@@ -428,8 +434,13 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if options.extern_libs:
             paths = [path for (name, path) in options.extern_libs]
             llvm.link_extern_libs(llvm_mod, paths)
+        if perf_log.enabled:
+            perf_log.log("stage.llir_to_llvm", "MLIR→LLVM module + link libs", _time.perf_counter() - _t_llvm)
 
+        _t_opt = _time.perf_counter() if perf_log.enabled else 0
         cls.optimize_llvm_mod(llvm_mod, options)
+        if perf_log.enabled:
+            perf_log.log("stage.llir_llvm_opt", "LLVM O3 optimize", _time.perf_counter() - _t_opt)
         intel.post_process_llir(llvm_mod)
 
         # Get some metadata

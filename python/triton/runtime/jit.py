@@ -690,13 +690,22 @@ class JITFunction(JITCallable, KernelInterface[T]):
         from ..runtime.build import perf_log
         import time as _time
         _t0 = _time.perf_counter() if perf_log.enabled else 0
+        _t_import = _time.perf_counter() if perf_log.enabled else 0
         from ..compiler import CompiledKernel, compile, ASTSource, make_backend
+        if perf_log.enabled:
+            perf_log.log("binder.import", f"{self._fn_name}", _time.perf_counter() - _t_import)
+        _t_target = _time.perf_counter() if perf_log.enabled else 0
         target = driver.active.get_current_target()
         backend = make_backend(target)
+        if perf_log.enabled:
+            perf_log.log("binder.make_backend", f"{self._fn_name}", _time.perf_counter() - _t_target)
         self.CompiledKernel = CompiledKernel
         self.compile = compile
         self.ASTSource = ASTSource
+        _t_sig = _time.perf_counter() if perf_log.enabled else 0
         binder = create_function_from_signature(self.signature, self.params, backend)
+        if perf_log.enabled:
+            perf_log.log("binder.create_fn_sig", f"{self._fn_name}", _time.perf_counter() - _t_sig)
         if perf_log.enabled:
             perf_log.log("create_binder", f"{self._fn_name} (device_caches init)", _time.perf_counter() - _t0)
         return {}, {}, target, backend, binder
