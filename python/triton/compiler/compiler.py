@@ -493,15 +493,21 @@ class CompiledKernel:
             knobs.runtime.kernel_load_start_hook(self.module, self.function, self.name, self.metadata_group, self.hash)
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
         _t_load = _time.perf_counter() if perf_log.enabled else 0
-        self.module, self.function, self.n_regs, self.n_spills, self.n_max_threads = driver.active.utils.load_binary(
-            self.name, self.kernel, self.metadata.shared, self.metadata.build_flags,
-            not self.metadata.generate_native_code, device)
+        build_flags = getattr(self.metadata, 'build_flags', '')
+        generate_native_code = getattr(self.metadata, 'generate_native_code', True)
+        if hasattr(self.metadata, 'build_flags'):
+            self.module, self.function, self.n_regs, self.n_spills, self.n_max_threads = driver.active.utils.load_binary(
+                self.name, self.kernel, self.metadata.shared, build_flags,
+                not generate_native_code, device)
+        else:
+            self.module, self.function, self.n_regs, self.n_spills, self.n_max_threads = driver.active.utils.load_binary(
+                self.name, self.kernel, self.metadata.shared, device)
         if perf_log.enabled:
             perf_log.log("load_binary", f"{self.name}", _time.perf_counter() - _t_load)
         # PyTorch could use the updated build flags in load binary.
         if hasattr(driver.active.utils, "get_last_selected_build_flags"):
             new_build_flags = driver.active.utils.get_last_selected_build_flags()
-            if new_build_flags != self.metadata.build_flags:
+            if new_build_flags != build_flags:
                 self.metadata = self.metadata._replace(build_flags=new_build_flags)
 
         if hasattr(self.metadata, "threads_per_warp"):
