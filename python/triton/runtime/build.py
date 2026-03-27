@@ -99,44 +99,122 @@ class _PerfLogger:
 
     def print_summary(self):
         import sys as _sys
-        # Define the display hierarchy so nested timers are indented
-        _HIERARCHY = [
-            ("JITFunction.run", 0),
-            ("create_binder", 1),
-            ("compile", 1),
-            ("triton_key", 2),
-            ("_init_handles", 1),
-            ("launcher_cls", 2),
-            ("load_binary", 2),
-            ("kernel_launch", 1),
+
+        # Tree structure: each node has (name, [children_names])
+        # Children times should add up to parent. Any gap is shown as "other".
+        _TREE = {
+            "JITFunction.run": ["create_binder", "compile", "_init_handles", "kernel_launch"],
+            "create_binder": ["binder.import", "binder.make_backend", "binder.create_fn_sig"],
+            "compile": [
+                "triton_key", "compile.make_ir",
+                "compile.ttir", "compile.ttgir", "compile.llir",
+                "compile.ptx", "compile.cubin",
+                "compile.spv", "compile.zebin",
+            ],
+            "compile.llir": ["stage.llir_mlir_passes", "stage.llir_to_llvm", "stage.llir_llvm_opt"],
+            "compile.cubin": ["stage.cubin_ptxas"],
+            "_init_handles": ["launcher_cls", "load_binary"],
+            "launcher_cls": ["launcher.generic_setup", "launcher.codegen", "launcher.c_compile"],
+        }
+        # Display order (flat list for iteration)
+        _DISPLAY_ORDER = [
+            "JITFunction.run",
+            "create_binder",
+            "binder.import", "binder.make_backend", "binder.create_fn_sig",
+            "compile",
+            "triton_key", "compile.make_ir",
+            "compile.ttir", "compile.ttgir",
+            "compile.llir",
+            "stage.llir_mlir_passes", "stage.llir_to_llvm", "stage.llir_llvm_opt",
+            "compile.ptx",
+            "compile.cubin",
+            "stage.cubin_ptxas",
+            "compile.spv", "compile.zebin",
+            "_init_handles",
+            "launcher_cls",
+            "launcher.generic_setup", "launcher.codegen", "launcher.c_compile",
+            "load_binary",
+            "kernel_launch",
         ]
-        known = {name for name, _ in _HIERARCHY}
-        print("\n[TRITON_PERF] === Process Summary ===", file=_sys.stderr)
-        for cat, indent in _HIERARCHY:
-            times = self._totals.get(cat)
+
+        def _get_total(name):
+            times = self._totals.get(name)
             if times is None:
+                return 0.0
+            return sum(times)
+
+        def _get_count(name):
+            times = self._totals.get(name)
+            if times is None:
+                return 0
+            return len(times)
+
+        # Compute indent from tree structure
+        def _get_indent(name, tree, depth=0):
+            if depth == 0 and name in ("JITFunction.run",):
+                return 0
+            for parent, children in tree.items():
+                if name in children:
+                    return _get_indent(parent, tree, depth + 1) + 1
+            return 0
+
+        # Find parent of a node
+        def _get_parent(name):
+            for parent, children in _TREE.items():
+                if name in children:
+                    return parent
+            return None
+
+        print("\n[TRITON_PERF] === Process Summary ===", file=_sys.stderr)
+        printed = set()
+        for cat in _DISPLAY_ORDER:
+            total_s = _get_total(cat)
+            n = _get_count(cat)
+            if n == 0:
                 continue
-            total = sum(times)
-            n = len(times)
-            avg = total / n if n else 0
+            printed.add(cat)
+            avg = total_s / n if n else 0
+            indent = _get_indent(cat, _TREE)
             prefix = "  " * indent
+            parent = _get_parent(cat)
+            parent_total = _get_total(parent) if parent else 0
+
+            # Format: name : total, calls, avg, %parent
             label = f"{prefix}{cat}"
-            print(f"[TRITON_PERF] {label:42s}: {total*1000:10.1f}ms total, {n:5d} calls, avg {avg*1000:.1f}ms",
+            pct_str = ""
+            if parent_total > 0:
+                pct = (total_s / parent_total) * 100
+                pct_str = f"  ({pct:5.1f}%)"
+            print(f"[TRITON_PERF] {label:42s}: {total_s*1000:10.1f}ms  {n:5d} calls  avg {avg*1000:8.1f}ms{pct_str}",
                   file=_sys.stderr)
-        # Print any categories not in the hierarchy (future-proofing)
+
+            # After printing all children of a node, print "other" if there's a gap
+            children = _TREE.get(cat)
+            if children:
+                children_total = sum(_get_total(c) for c in children)
+                gap = total_s - children_total
+                if abs(gap) > 0.001:  # > 1ms
+                    child_indent = "  " * (indent + 1)
+                    gap_label = f"{child_indent}(other/overhead)"
+                    pct = (gap / total_s) * 100 if total_s > 0 else 0
+                    print(f"[TRITON_PERF] {gap_label:42s}: {gap*1000:10.1f}ms                          ({pct:5.1f}%)",
+                          file=_sys.stderr)
+
+        # Print any categories not in the display order (future-proofing)
+        known = set(_DISPLAY_ORDER)
         for cat in sorted(self._totals.keys()):
             if cat in known:
                 continue
             times = self._totals[cat]
-            total = sum(times)
+            total_s = sum(times)
             n = len(times)
-            avg = total / n if n else 0
-            print(f"[TRITON_PERF] {cat:42s}: {total*1000:10.1f}ms total, {n:5d} calls, avg {avg*1000:.1f}ms",
+            avg = total_s / n if n else 0
+            print(f"[TRITON_PERF] {'??? ' + cat:42s}: {total_s*1000:10.1f}ms  {n:5d} calls  avg {avg*1000:8.1f}ms",
                   file=_sys.stderr)
-        # Wall-clock accounting: show where the uninstrumented time goes
+
+        # Wall-clock accounting
         summary_time = time.perf_counter()
         wall_since_import = summary_time - self._create_time
-        # JITFunction.run is the only true top-level timer (triton_key is nested inside compile)
         instrumented = sum(self._totals.get("JITFunction.run", []))
         before_triton = (self._first_log_time - self._create_time) if self._first_log_time is not None else 0.0
         after_triton = summary_time - self._last_log_time if self._last_log_time else 0.0
@@ -144,7 +222,6 @@ class _PerfLogger:
         print(f"[TRITON_PERF] ---", file=_sys.stderr)
         if self._process_start is not None:
             proc_to_import = self._create_time - self._process_start
-            proc_to_first = (self._first_log_time - self._process_start) if self._first_log_time is not None else 0.0
             total_wall = summary_time - self._process_start
             print(f"[TRITON_PERF] Process total wall time                  : {total_wall*1000:10.1f}ms", file=_sys.stderr)
             print(f"[TRITON_PERF]   python start → triton import           : {proc_to_import*1000:10.1f}ms", file=_sys.stderr)

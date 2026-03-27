@@ -983,16 +983,28 @@ def _make_generic_launcher(constants, signature, metadata):
 class XPULauncher(object):
 
     def __init__(self, src, metadata):
+        from triton.runtime.build import perf_log
+        import time as _time
+
         constants = src.constants if hasattr(src, "constants") else dict()
         arg_idx = lambda x: (src.fn.arg_names.index(x), ) if isinstance(x, str) else x
         constants = {arg_idx(idx): value for idx, value in constants.items()}
         signature = {idx: value for idx, value in src.signature.items()}
 
         if os.environ.get("TRITON_XPU_GENERIC_LAUNCHER", "0") == "1":
+            _t = _time.perf_counter() if perf_log.enabled else 0
             self.launch = _make_generic_launcher(constants, signature, metadata)
+            if perf_log.enabled:
+                perf_log.log("launcher.generic_setup", "generic launcher Python setup", _time.perf_counter() - _t)
         else:
+            _t = _time.perf_counter() if perf_log.enabled else 0
             launcher_src = make_launcher(constants, signature)
+            if perf_log.enabled:
+                perf_log.log("launcher.codegen", "C launcher source gen", _time.perf_counter() - _t)
+            _t2 = _time.perf_counter() if perf_log.enabled else 0
             self.mod = compile_module_from_src(src=launcher_src, name="__triton_launcher")
+            if perf_log.enabled:
+                perf_log.log("launcher.c_compile", "C launcher compilation", _time.perf_counter() - _t2)
             self.launch = wrap_handle_tensordesc(self.mod.launch, signature)
 
         # Serialize KernelArguments for SPIR-V Runner

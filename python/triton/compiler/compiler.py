@@ -297,6 +297,8 @@ def compile(src, target=None, options=None, _env_vars=None):
 
     metadata["cache_dir"] = fn_cache_manager.cache_dir
     metadata["triton_version"] = __version__
+    from ..runtime.build import perf_log
+    import time as _stage_time
     # run compilation pipeline  and populate metadata
     stages = dict()
     backend.add_stages(stages, options, src.language)
@@ -314,11 +316,14 @@ def compile(src, target=None, options=None, _env_vars=None):
 
     codegen_fns = backend.get_codegen_implementation(options)
     module_map = backend.get_module_map()
+    _t_make_ir = _stage_time.perf_counter() if perf_log.enabled else 0
     try:
         module = src.make_ir(target, options, codegen_fns, module_map, context)
     except Exception as e:
         filter_traceback(e)
         raise
+    if perf_log.enabled:
+        perf_log.log("compile.make_ir", f"{file_name}", _stage_time.perf_counter() - _t_make_ir)
 
     if ir_source:
         ir_filename = f"{file_name}.{src.ext}"
@@ -335,7 +340,10 @@ def compile(src, target=None, options=None, _env_vars=None):
     if compilation_listener:
         timer.finished_ir_initialization()
     for ext, compile_ir in list(stages.items())[first_stage:]:
+        _t_stage = _stage_time.perf_counter() if perf_log.enabled else 0
         next_module = compile_ir(module, metadata)
+        if perf_log.enabled:
+            perf_log.log(f"compile.{ext}", f"{file_name}", _stage_time.perf_counter() - _t_stage)
         ir_filename = f"{file_name}.{ext}"
         if fn_override_manager is None:
             # Users can override kernels at scale by setting `ir_override` in autotune config

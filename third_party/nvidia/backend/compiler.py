@@ -347,6 +347,9 @@ class CUDABackend(BaseBackend):
         return mod
 
     def make_llir(self, src, metadata, options, capability):
+        from triton.runtime.build import perf_log
+        import time as _time
+        _t0 = _time.perf_counter() if perf_log.enabled else 0
         ptx_version = get_ptx_version_from_options(options, self.target.arch)
 
         mod = src
@@ -388,6 +391,8 @@ class CUDABackend(BaseBackend):
             CUDABackend.instrumentation.patch("llvmir_to_llvm", pm, mod.context)
 
         pm.run(mod, 'make_llir')
+        if perf_log.enabled:
+            perf_log.log("stage.llir_mlir_passes", "MLIR→LLVM-IR passes", _time.perf_counter() - _t0)
 
         if knobs.compilation.dump_ir_extract_di_local_variables:
             # comments below on why separate it
@@ -408,6 +413,7 @@ class CUDABackend(BaseBackend):
             pm.run(mod, 'make_llir.dump_ir_extract_di_local_variables')
 
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
+        _t_llvm = _time.perf_counter() if perf_log.enabled else 0
         llvm.init_targets()
         context = llvm.context()
         if knobs.compilation.enable_asan:
@@ -425,8 +431,13 @@ class CUDABackend(BaseBackend):
         if options.extern_libs and nvidia.has_extern_deps(llvm_mod):
             paths = [path for (name, path) in options.extern_libs]
             llvm.link_extern_libs(llvm_mod, paths)
+        if perf_log.enabled:
+            perf_log.log("stage.llir_to_llvm", "MLIR→LLVM module + link libs", _time.perf_counter() - _t_llvm)
 
+        _t_opt = _time.perf_counter() if perf_log.enabled else 0
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
+        if perf_log.enabled:
+            perf_log.log("stage.llir_llvm_opt", "LLVM O3 optimize", _time.perf_counter() - _t_opt)
 
         # Get some metadata
         # warp-specialization mutates num_warps
@@ -471,6 +482,8 @@ class CUDABackend(BaseBackend):
         return ret
 
     def make_cubin(self, src, metadata, opt, capability):
+        from triton.runtime.build import perf_log
+        import time as _time
         ptxas = get_ptxas(self.target.arch).path
         with tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.ptx') as fsrc, \
             tempfile.NamedTemporaryFile(delete=False, mode='r', suffix='.log') as flog:
@@ -510,7 +523,10 @@ class CUDABackend(BaseBackend):
                 fsrc.name, '-o', fbin
             ]
             try:
+                _t_ptxas = _time.perf_counter() if perf_log.enabled else 0
                 subprocess.run(ptxas_cmd, check=True, close_fds=False, stderr=flog)
+                if perf_log.enabled:
+                    perf_log.log("stage.cubin_ptxas", "ptxas compile", _time.perf_counter() - _t_ptxas)
                 if knobs.nvidia.dump_ptxas_log:
                     with open(flog.name) as log_file:
                         print(log_file.read())
