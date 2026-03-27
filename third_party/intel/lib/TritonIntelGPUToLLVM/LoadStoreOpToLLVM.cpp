@@ -636,8 +636,8 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     else
       tensorTy = cast<RankedTensorType>(op.getSrc().getType());
 
-    // Only rank 2 initially.
-    if (tensorTy.getRank() != 2)
+    // Rank must be at least 2 for 2D block I/O.
+    if (tensorTy.getRank() < 2)
       return false;
 
     // Verify the descriptor traces back to a MakeTensorDescOp with PAD_ZERO.
@@ -1145,8 +1145,10 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
         return BlockIOTileSizeInfo::unknown();
     }
 
-    if (rowDim < 0)
-      rowDim = (fastChangeDim != 0) ? 0 : 1;
+    if (rowDim < 0) {
+      int lastDim = static_cast<int>(rank - 1);
+      rowDim = (fastChangeDim != lastDim) ? lastDim : lastDim - 1;
+    }
 
     if (transpose && elemSizeInBits == 64) {
       // D64 transpose only supports 8 rows.
@@ -2728,6 +2730,12 @@ struct DescriptorLoadOpToBlockIOConversion
     if (!sizeInfo.isValid())
       return failure();
 
+    // For descriptor loads, the 2D block I/O tile must use only the inner 2
+    // dims. Reject if rowDim or colDim falls in a batch dimension.
+    int innerDimStart = static_cast<int>(rank - 2);
+    if (sizeInfo.rowDim < innerDimStart || sizeInfo.colDim < innerDimStart)
+      return failure();
+
     int tileHeight = sizeInfo.tileHeight;
     int tileWidth = sizeInfo.tileWidth;
     int numPackedVals = sizeInfo.numElemPerPackedVal;
@@ -2817,6 +2825,7 @@ struct DescriptorLoadOpToBlockIOConversion
     assert(descIndices.size() == descRank &&
            "descriptor index count must match descriptor rank");
     if (permuteDescDim) {
+      // Only swap the inner 2 dims; batch dims stay in place.
       std::swap(descIndices[descRank - 2], descIndices[descRank - 1]);
     }
 
@@ -2893,8 +2902,16 @@ struct DescriptorLoadOpToBlockIOConversion
           offsetY = adjustedOffset;
         else if (dim == blockColIdx)
           offsetX = adjustedOffset;
-        else
-          assert(false && "unexpected dimension in rank-2 tensor offsets");
+        else {
+          // Fold extra dimension offset into base pointer.
+          Type i8Ty = IntegerType::get(ctx, 8);
+          Type i64Ty = IntegerType::get(ctx, 64);
+          Value extraStride = desc.strides[dim];
+          Value extraOff = b.zext(i64Ty, adjustedOffset);
+          Value byteOff = b.mul(
+              extraOff, b.mul(extraStride, b.i64_val(elemSizeInBits / 8)));
+          addrElem = b.gep(ptr_ty(ctx, 1), i8Ty, addrElem, byteOff);
+        }
       }
 
       assert(numPackedVals > 0 && "numPackedVals should be greater than zero.");
