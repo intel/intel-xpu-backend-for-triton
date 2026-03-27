@@ -523,7 +523,14 @@ def make_launcher(constants, signature):
 #include <iostream>
 #include <iomanip>
 #include <level_zero/ze_api.h>
+
+#define __DPCPP_ENABLE_UNFINISHED_KHR_EXTENSIONS
 #include <sycl/sycl.hpp>
+
+#if __SYCL_COMPILER_VERSION >= 20250604
+#include <sycl/khr/free_function_commands.hpp>
+#endif
+
 { "#include <ATen/record_function.h>" if COMPILATION_HELPER.inject_pytorch_dep else "" }
 
 #if defined(_WIN32)
@@ -681,19 +688,47 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
   }}
   assert(num_params == expected_num_params && "number of kernel param not matched");
   // Submit the imported kernel.
-  auto cgf = [&](sycl::handler &cgh) {{
-    {" ".join(f'set_scalar_arg<{ty_to_cpp(item)}>(cgh, {idx}, params[{idx}]);' for idx, item in enumerate([signature[i] for i in signature if signature[i] != "constexpr"]))}
-    {" ".join(f'set_scalar_arg<{ty_to_cpp(item)}>(cgh, {idx}, params[{idx}]);' for idx, item in enumerate(["*global_scratch", "*profile_scratch"], start=num_params-2))}
-    if (shared_memory) {{
-      using share_mem_t = sycl::local_accessor<int8_t, 1>;
-      share_mem_t local_buffer = share_mem_t(shared_memory, cgh);
-      cgh.set_arg(num_params, local_buffer);
-      cgh.parallel_for(parallel_work_size, kernel_ptr);
-    }} else {{
-      cgh.parallel_for(parallel_work_size, kernel_ptr);
-    }}
-  }};
-  auto event = stream.submit(cgf);
+  // TODO: Eliminate local_accessor dependency so that we can change this case
+  // to use launch_grouped as well. See https://github.com/intel/intel-xpu-backend-for-triton/issues/6315
+  if (shared_memory) {{
+    auto cgf = [&](sycl::handler &cgh) {{
+        {" ".join(f'set_scalar_arg<{ty_to_cpp(item)}>(cgh, {idx}, params[{idx}]);' for idx, item in enumerate([signature[i] for i in signature if signature[i] != "constexpr"]))}
+        {" ".join(f'set_scalar_arg<{ty_to_cpp(item)}>(cgh, {idx}, params[{idx}]);' for idx, item in enumerate(["*global_scratch", "*profile_scratch"], start=num_params-2))}
+        using share_mem_t = sycl::local_accessor<int8_t, 1>;
+        share_mem_t local_buffer = share_mem_t(shared_memory, cgh);
+        cgh.set_arg(num_params, local_buffer);
+        cgh.parallel_for(parallel_work_size, kernel_ptr);
+    }};
+  stream.submit(cgf);
+  }}
+  else {{
+#if __SYCL_COMPILER_VERSION >= 20250604
+    {(
+      "sycl::khr::launch_grouped(stream, global_range, local_range, kernel_ptr"
+      + "".join(
+          f', *static_cast<const {ty_to_cpp(item)} *>(params[{idx}])'
+          for idx, item in enumerate(
+              [signature[i] for i in signature if signature[i] != "constexpr"]
+          )
+      )
+      + "".join(
+          f', *static_cast<const {ty_to_cpp(item)} *>(params[{idx}])'
+          for idx, item in enumerate(
+              ["*global_scratch", "*profile_scratch"],
+              start=num_params - 2,
+          )
+      )
+      + ");"
+    )}
+#else
+    auto cgf = [&](sycl::handler &cgh) {{
+        {" ".join(f'set_scalar_arg<{ty_to_cpp(item)}>(cgh, {idx}, params[{idx}]);' for idx, item in enumerate([signature[i] for i in signature if signature[i] != "constexpr"]))}
+        {" ".join(f'set_scalar_arg<{ty_to_cpp(item)}>(cgh, {idx}, params[{idx}]);' for idx, item in enumerate(["*global_scratch", "*profile_scratch"], start=num_params-2))}
+        cgh.parallel_for(parallel_work_size, kernel_ptr);
+    }};
+  stream.submit(cgf);
+#endif
+   }}
 }}
 // end sycl
 
