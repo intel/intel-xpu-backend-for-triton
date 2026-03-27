@@ -326,7 +326,8 @@ private:
   MaskInfo getMaskInfo(scf::ForOp &forOp, Value mask) const {
     assert(isValidMask(forOp, mask) && "Expecting a valid mask");
 
-    auto cmpOp = cast<arith::CmpIOp>(mask.getDefiningOp());
+    Value finalMask = tt::intel::getFinalValue(mask);
+    auto cmpOp = cast<arith::CmpIOp>(finalMask.getDefiningOp());
     Operation *lhs = tt::intel::getFinalValue(cmpOp.getLhs()).getDefiningOp();
     Operation *rhs = tt::intel::getFinalValue(cmpOp.getRhs()).getDefiningOp();
     return MaskInfo{cast<arith::SubIOp>(rhs).getLhs(),
@@ -391,7 +392,8 @@ public:
 
     OpBuilder builder(forOp);
     Location loc = forOp.getLoc();
-    auto cmpOp = cast<arith::CmpIOp>(mask.getDefiningOp());
+    Value finalMask = tt::intel::getFinalValue(mask);
+    auto cmpOp = cast<arith::CmpIOp>(finalMask.getDefiningOp());
     Value lhsVal = tt::intel::getFinalValue(cmpOp.getLhs());
     Value rhsVal = tt::intel::getFinalValue(cmpOp.getRhs());
     Operation *lhs = tt::intel::getFinalValue(lhsVal).getDefiningOp();
@@ -593,14 +595,21 @@ public:
     assert(!collector.getMaskedOps().empty() &&
            "Expecting a non-empty collection of masked operations");
 
-    // Collect the (loop invariant) mask conditions.
+    // Collect the (loop invariant) mask conditions, looking through
+    // broadcast/splat/expand_dims to find the underlying CmpIOp.
     SmallPtrSet<Operation *, 8> maskConds;
     for (Operation *maskedOp : collector.getMaskedOps()) {
       if (auto loadOp = dyn_cast<tt::LoadOp>(maskedOp))
-        maskConds.insert(loadOp.getMask().getDefiningOp());
+        maskConds.insert(
+            tt::intel::getFinalValue(loadOp.getMask()).getDefiningOp());
       if (auto storeOp = dyn_cast<tt::StoreOp>(maskedOp))
-        maskConds.insert(storeOp.getMask().getDefiningOp());
+        maskConds.insert(
+            tt::intel::getFinalValue(storeOp.getMask()).getDefiningOp());
     }
+
+    // Early return if no mask conditions were collected.
+    if (maskConds.empty())
+      return false;
 
     // Combine the versioning conditions.
     OpBuilder builder(forOp);

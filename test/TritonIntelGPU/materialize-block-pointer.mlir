@@ -196,6 +196,36 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
 
 // -----
 
+// COM: Ensure tt.contiguity hint recovers stride after remsi, enabling block IO.
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 4], warpsPerCTA = [32, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func public @contiguity_hint_enables_block_io
+  tt.func public @contiguity_hint_enables_block_io(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}) {
+    %range_row = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked2}>>
+    %c8 = arith.constant dense<8> : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked2}>>
+    %row_rem = arith.remsi %range_row, %c8 {tt.contiguity = dense<128> : tensor<1xi32>} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked2}>>
+
+    %c32 = arith.constant dense<32> : tensor<128x1xi32, #blocked2>
+    %row_exp = tt.expand_dims %row_rem {axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked2}>> -> tensor<128x1xi32, #blocked2>
+    %row_off = arith.muli %row_exp, %c32 : tensor<128x1xi32, #blocked2>
+    %row_off_bc = tt.broadcast %row_off : tensor<128x1xi32, #blocked2> -> tensor<128x32xi32, #blocked2>
+
+    %range_col = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked2}>>
+    %col_exp = tt.expand_dims %range_col {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked2}>> -> tensor<1x32xi32, #blocked2>
+    %col_off_bc = tt.broadcast %col_exp : tensor<1x32xi32, #blocked2> -> tensor<128x32xi32, #blocked2>
+
+    %offsets = arith.addi %row_off_bc, %col_off_bc : tensor<128x32xi32, #blocked2>
+    %ptr_splat = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<128x32x!tt.ptr<bf16>, #blocked2>
+    %ptrs = tt.addptr %ptr_splat, %offsets : tensor<128x32x!tt.ptr<bf16>, #blocked2>, tensor<128x32xi32, #blocked2>
+
+    // CHECK: tt.load {{.*}} {ttig.block_io = "row_major"}
+    tt.load %ptrs : tensor<128x32x!tt.ptr<bf16>, #blocked2>
+    tt.return
+  }
+}
+
+// -----
+
 // COM: Ensure i64 element type is supported in materialize block pointer.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>

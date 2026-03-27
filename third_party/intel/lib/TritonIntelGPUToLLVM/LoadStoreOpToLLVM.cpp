@@ -140,6 +140,56 @@ static DescriptorFields unpackDescriptor(Value llDesc, unsigned rank,
   return f;
 }
 
+/// Verify that a rank-reducing tensor descriptor load/store is
+/// shape-compatible.
+///
+/// For rank-reducing ops, the result/source tensor shape must exactly match the
+/// inner dimensions of the descriptor block type after stripping the leading
+/// (outer) dimensions:
+///   desc_shape[i] == 1                        for all i in [0, rankDelta)
+///   desc_shape[rankDelta + i] == tensor_shape[i]   for all i in [0, rank)
+///
+/// This is not checked by the upstream verifier (which only checks total
+/// element count), so we assert it here before relying on the mapping in
+/// lowering.
+static void assertDescriptorInnerShapeCompatible(
+    Operation *op, ArrayRef<int64_t> descBlockShape,
+    ArrayRef<int64_t> tensorShape, bool permuteInnerDims = false) {
+  const size_t descRank = descBlockShape.size();
+  const size_t rank = tensorShape.size();
+  assert(descRank >= rank && "descriptor rank must be >= tensor rank");
+  const size_t rankDelta = descRank - rank;
+  for (size_t i = 0; i < rankDelta; ++i) {
+    if (descBlockShape[i] != 1) {
+      op->emitError()
+          << "rank-reducing descriptor op only supports dropping leading "
+             "dimensions of size 1, but descriptor dim["
+          << i << "] = " << descBlockShape[i];
+      llvm_unreachable("rank-reducing descriptor dropped dim mismatch");
+    }
+  }
+
+  for (size_t i = 0; i < rank; ++i) {
+    size_t descDim = rankDelta + i;
+    if (permuteInnerDims && rank >= 2) {
+      if (i == rank - 2)
+        descDim = descRank - 1;
+      else if (i == rank - 1)
+        descDim = descRank - 2;
+    }
+
+    if (descBlockShape[descDim] != tensorShape[i]) {
+      op->emitError()
+          << "rank-reducing descriptor op requires that the result/source "
+             "tensor shape matches the inner dimensions of the descriptor "
+             "block type, but descriptor inner dim["
+          << i << "] = " << descBlockShape[descDim] << " != tensor dim[" << i
+          << "] = " << tensorShape[i];
+      llvm_unreachable("rank-reducing descriptor inner shape mismatch");
+    }
+  }
+}
+
 /// Compute the 2D prefetch shape for each warp given an input 2D tensor.
 /// Because a cache line is 64 bytes, and we want to prefetch one cache line a
 /// time (per thread), the maximum number of bytes per column is 64. We know
@@ -393,16 +443,35 @@ struct LoadStoreConversionBase {
   std::tuple<SmallVector<Value>, SmallVector<Value>, SmallVector<Value>>
   convertTensorDescriptorToTensorOfPtr(
       Location loc, Value descriptorStruct, ValueRange indices,
-      RankedTensorType tensorType, Type valueElemTy,
+      RankedTensorType tensorType, unsigned descriptorRank, Type valueElemTy,
       ConversionPatternRewriter &rewriter, ArrayRef<int32_t> boundaryCheck = {},
       std::optional<PaddingOption> padding = std::nullopt) const {
 
     DescriptorFields desc =
-        unpackDescriptor(descriptorStruct, tensorType.getRank(), loc, rewriter);
-    SmallVector<Value> offsets(indices.begin(), indices.end());
+        unpackDescriptor(descriptorStruct, descriptorRank, loc, rewriter);
+    const size_t rank = tensorType.getRank();
+    assert(descriptorRank >= rank &&
+           "descriptor rank must be >= result/source tensor rank");
+    const size_t rankDelta = descriptorRank - rank;
 
-    return computeGatherScatterOperands(loc, desc.base, offsets, desc.shapes,
-                                        desc.strides, tensorType, valueElemTy,
+    SmallVector<Value> offsets;
+    offsets.reserve(rank);
+    if (indices.size() == descriptorRank) {
+      for (size_t i = 0; i < rank; ++i)
+        offsets.push_back(indices[i + rankDelta]);
+    } else {
+      assert(indices.size() == rank && "unexpected descriptor indices rank");
+      offsets.append(indices.begin(), indices.end());
+    }
+
+    SmallVector<Value> mappedShapes(rank), mappedStrides(rank);
+    for (size_t i = 0; i < rank; ++i) {
+      mappedShapes[i] = desc.shapes[i + rankDelta];
+      mappedStrides[i] = desc.strides[i + rankDelta];
+    }
+
+    return computeGatherScatterOperands(loc, desc.base, offsets, mappedShapes,
+                                        mappedStrides, tensorType, valueElemTy,
                                         rewriter, boundaryCheck, padding);
   }
 
@@ -2629,10 +2698,20 @@ struct DescriptorLoadOpToBlockIOConversion
         blockIOAttr &&
         "block_io attribute required; checked by isDescriptorBlockIOCandidate");
     const unsigned rank = tensorType.getRank();
+    auto descType = cast<triton::TensorDescType>(op.getDesc().getType());
+    const unsigned descRank = descType.getBlockType().getRank();
+    assert(descRank >= rank &&
+           "descriptor rank must be >= result rank for descriptor load");
+    const unsigned rankDelta = descRank - rank;
+    auto mapResultDimToDescDim = [rankDelta](unsigned dim) {
+      return dim + rankDelta;
+    };
     auto mode = symbolizeBlockIOMode(blockIOAttr.getValue());
     // The ColumnMajor mode means the descriptor load needs to permute
     // the last 2 dim to align the load result type.
     bool permuteDescDim = mode && *mode == BlockIOMode::ColumnMajor;
+    assertDescriptorInnerShapeCompatible(op, descType.getBlockType().getShape(),
+                                         tensorType.getShape(), permuteDescDim);
     // For the permuted case, the tensor descriptor's dimension space needs to
     // be aligned with the result type. Specifically, the (rank - 1) dimension
     // of the tensor descriptor is mapped to the (rank - 2) dimension of the
@@ -2707,11 +2786,14 @@ struct DescriptorLoadOpToBlockIOConversion
 
     // Unpack descriptor struct: { shape[rank], stride[rank], base }.
     DescriptorFields desc =
-        unpackDescriptor(adaptor.getDesc(), rank, loc, rewriter);
+        unpackDescriptor(adaptor.getDesc(), descRank, loc, rewriter);
+
+    const unsigned descRowDim = mapResultDimToDescDim(rowDim);
+    const unsigned descColDim = mapResultDimToDescDim(colDim);
 
     if (permuteDescDim) {
-      std::swap(desc.shapes[rank - 2], desc.shapes[rank - 1]);
-      std::swap(desc.strides[rank - 2], desc.strides[rank - 1]);
+      std::swap(desc.shapes[descRank - 2], desc.shapes[descRank - 1]);
+      std::swap(desc.strides[descRank - 2], desc.strides[descRank - 1]);
     }
 
     // column_major descriptor loads must always produce transposed block I/O
@@ -2722,14 +2804,15 @@ struct DescriptorLoadOpToBlockIOConversion
            "column_major descriptor load expects transposed block I/O");
 
     Value elemBytes = b.i32_val(elemSizeInBits / 8);
-    Value surfaceWidth =
-        b.trunc(i32_ty, desc.shapes[isTransposeRequired ? rowDim : colDim]);
-    Value surfaceHeight =
-        b.trunc(i32_ty, desc.shapes[isTransposeRequired ? colDim : rowDim]);
+    Value surfaceWidth = b.trunc(
+        i32_ty, desc.shapes[isTransposeRequired ? descRowDim : descColDim]);
+    Value surfaceHeight = b.trunc(
+        i32_ty, desc.shapes[isTransposeRequired ? descColDim : descRowDim]);
     Value baseWidth = b.mul(surfaceWidth, elemBytes);
     Value baseHeight = surfaceHeight;
     Value pitch = b.mul(
-        b.trunc(i32_ty, desc.strides[isTransposeRequired ? colDim : rowDim]),
+        b.trunc(i32_ty,
+                desc.strides[isTransposeRequired ? descColDim : descRowDim]),
         elemBytes);
 
     // Base offsets from descriptor load indices.
@@ -2739,9 +2822,11 @@ struct DescriptorLoadOpToBlockIOConversion
     // the LinearLayout offsets.
     SmallVector<Value> descIndices(adaptor.getIndices().begin(),
                                    adaptor.getIndices().end());
+    assert(descIndices.size() == descRank &&
+           "descriptor index count must match descriptor rank");
     if (permuteDescDim) {
       // Only swap the inner 2 dims; batch dims stay in place.
-      std::swap(descIndices[rank - 2], descIndices[rank - 1]);
+      std::swap(descIndices[descRank - 2], descIndices[descRank - 1]);
     }
 
     // Replicate base pointer for all tiles.
@@ -2811,7 +2896,8 @@ struct DescriptorLoadOpToBlockIOConversion
       // Compute per-tile offsets: descriptor indices + linear layout offsets.
       // Boundary check is always enabled for descriptors.
       for (auto [dim, offsetPair] : llvm::enumerate(offsets)) {
-        Value adjustedOffset = b.add(descIndices[dim], offsetPair.second);
+        unsigned descDim = mapResultDimToDescDim(dim);
+        Value adjustedOffset = b.add(descIndices[descDim], offsetPair.second);
         if (dim == blockRowIdx)
           offsetY = adjustedOffset;
         else if (dim == blockColIdx)
@@ -3095,9 +3181,21 @@ struct DescriptorLoadOpConversion
 
     // Get result type information
     auto resultType = cast<RankedTensorType>(op.getType());
+    size_t resultRank = resultType.getRank();
     Type valueElemTy = typeConverter->convertType(resultType.getElementType());
     unsigned numElems = getTotalElemsPerThread(resultType);
-    size_t rank = resultType.getRank();
+
+    // Descriptor rank may differ from result rank for rank-reducing loads.
+    auto descType = cast<triton::TensorDescType>(op.getDesc().getType());
+    RankedTensorType descTensorType = descType.getBlockType();
+    size_t descRank = descTensorType.getRank();
+    auto blockIOAttr = op->getAttrOfType<StringAttr>(
+        TritonIntelGPUDialect::getBlockIOAttrName());
+    bool permuteDescDim =
+        blockIOAttr && symbolizeBlockIOMode(blockIOAttr.getValue()) ==
+                           BlockIOMode::ColumnMajor;
+    assertDescriptorInnerShapeCompatible(op, descTensorType.getShape(),
+                                         resultType.getShape(), permuteDescDim);
 
     // Try to get the padding option from the defining MakeTensorDescOp.
     // NOTE: This method only works when the descriptor is defined locally
@@ -3115,8 +3213,8 @@ struct DescriptorLoadOpConversion
 
     // Boundary check all dimensions — tensor descriptors always encode shape
     // bounds and don't have a user-facing boundaryCheck attribute.
-    SmallVector<int32_t> allDims(rank);
-    for (size_t i = 0; i < rank; ++i)
+    SmallVector<int32_t> allDims(resultRank);
+    for (size_t i = 0; i < resultRank; ++i)
       allDims[i] = static_cast<int32_t>(i);
 
     // Reuse the shared gather/scatter operand computation.
@@ -3129,30 +3227,37 @@ struct DescriptorLoadOpConversion
     // shapes, strides, and offsets so that they align with the result type's
     // dimension order. Outer (batch) dimensions are preserved unchanged.
     SmallVector<Value> ptrElems, maskElems, otherElems;
-    auto blockIOAttr = op->getAttrOfType<StringAttr>(
-        TritonIntelGPUDialect::getBlockIOAttrName());
-    if (blockIOAttr && symbolizeBlockIOMode(blockIOAttr.getValue()) ==
-                           BlockIOMode::ColumnMajor) {
-      DescriptorFields desc = unpackDescriptor(llDesc, rank, loc, rewriter);
-      SmallVector<Value> permShapes(rank), permStrides(rank), permOffsets(rank);
-      for (unsigned i = 0; i < rank; ++i) {
+    if (permuteDescDim) {
+      DescriptorFields desc = unpackDescriptor(llDesc, descRank, loc, rewriter);
+      SmallVector<Value> permShapes(descRank), permStrides(descRank),
+          permOffsets(descRank);
+      for (unsigned i = 0; i < descRank; ++i) {
         permShapes[i] = desc.shapes[i];
         permStrides[i] = desc.strides[i];
         permOffsets[i] = indices[i];
       }
       // Swap only the inner 2 dimensions (2D block I/O constraint).
-      assert(rank >= 2 && "column_major descriptor load requires rank >= 2");
-      std::swap(permShapes[rank - 2], permShapes[rank - 1]);
-      std::swap(permStrides[rank - 2], permStrides[rank - 1]);
-      std::swap(permOffsets[rank - 2], permOffsets[rank - 1]);
+      assert(descRank >= 2 &&
+             "column_major descriptor load requires rank >= 2");
+      std::swap(permShapes[descRank - 2], permShapes[descRank - 1]);
+      std::swap(permStrides[descRank - 2], permStrides[descRank - 1]);
+      std::swap(permOffsets[descRank - 2], permOffsets[descRank - 1]);
+      SmallVector<Value> mappedShapes(resultRank), mappedStrides(resultRank),
+          mappedOffsets(resultRank);
+      const size_t rankDelta = descRank - resultRank;
+      for (size_t i = 0; i < resultRank; ++i) {
+        mappedShapes[i] = permShapes[i + rankDelta];
+        mappedStrides[i] = permStrides[i + rankDelta];
+        mappedOffsets[i] = permOffsets[i + rankDelta];
+      }
       std::tie(ptrElems, maskElems, otherElems) = computeGatherScatterOperands(
-          loc, desc.base, permOffsets, permShapes, permStrides, resultType,
-          valueElemTy, rewriter, allDims, padding);
+          loc, desc.base, mappedOffsets, mappedShapes, mappedStrides,
+          resultType, valueElemTy, rewriter, allDims, padding);
     } else {
       std::tie(ptrElems, maskElems, otherElems) =
           convertTensorDescriptorToTensorOfPtr(loc, llDesc, indices, resultType,
-                                               valueElemTy, rewriter, allDims,
-                                               padding);
+                                               descRank, valueElemTy, rewriter,
+                                               allDims, padding);
     }
 
     // Determine vectorization
@@ -3308,19 +3413,27 @@ struct DescriptorStoreOpConversion
     auto valueTy = cast<RankedTensorType>(op.getSrc().getType());
     Type valueElemTy = typeConverter->convertType(valueTy.getElementType());
     unsigned numElems = getTotalElemsPerThread(valueTy);
-    size_t rank = valueTy.getRank();
+
+    // Descriptor rank may differ from stored value rank for rank-reducing
+    // stores.
+    auto descType = cast<triton::TensorDescType>(op.getDesc().getType());
+    RankedTensorType descTensorType = descType.getBlockType();
+    size_t descRank = descTensorType.getRank();
+    assertDescriptorInnerShapeCompatible(op, descTensorType.getShape(),
+                                         valueTy.getShape());
 
     // Boundary check all dimensions — tensor descriptors always encode shape
     // bounds and don't have a user-facing boundaryCheck attribute.
-    SmallVector<int32_t> allDims(rank);
-    for (size_t i = 0; i < rank; ++i)
+    SmallVector<int32_t> allDims(valueTy.getRank());
+    for (size_t i = 0; i < valueTy.getRank(); ++i)
       allDims[i] = static_cast<int32_t>(i);
 
     // Reuse the shared gather/scatter operand computation.
     SmallVector<Value> ptrElems, maskElems, dummyOther;
     std::tie(ptrElems, maskElems, dummyOther) =
         convertTensorDescriptorToTensorOfPtr(loc, llDesc, indices, valueTy,
-                                             valueElemTy, rewriter, allDims);
+                                             descRank, valueElemTy, rewriter,
+                                             allDims);
 
     // Unpack the value elements
     auto valueElems = unpackLLElements(loc, llValue, rewriter);
@@ -3520,8 +3633,21 @@ struct DescriptorStoreOpToBlockIOConversion
 
     // --- Unpack tensor descriptor struct ---
     unsigned rank = tensorType.getRank();
+    auto descType = cast<triton::TensorDescType>(op.getDesc().getType());
+    unsigned descRank = descType.getBlockType().getRank();
+    assert(descRank >= rank &&
+           "descriptor rank must be >= source rank for descriptor store");
+    unsigned rankDelta = descRank - rank;
+    assertDescriptorInnerShapeCompatible(op, descType.getBlockType().getShape(),
+                                         tensorType.getShape());
+    auto mapSrcDimToDescDim = [rankDelta](unsigned dim) {
+      return dim + rankDelta;
+    };
     DescriptorFields desc =
-        unpackDescriptor(adaptor.getDesc(), rank, loc, rewriter);
+        unpackDescriptor(adaptor.getDesc(), descRank, loc, rewriter);
+
+    const unsigned descRowDim = mapSrcDimToDescDim(rowDim);
+    const unsigned descColDim = mapSrcDimToDescDim(colDim);
 
     unsigned numElems = getTotalElemsPerThread(tensorType);
 
@@ -3532,8 +3658,8 @@ struct DescriptorStoreOpToBlockIOConversion
     // --- Shapes (base width / height for 2D block IO payload) ---
     // TensorDesc carries shape as i64 values. The 2D block IO payload
     // expects baseWidth in bytes and baseHeight in elements.
-    Value shapeRow = desc.shapes[rowDim]; // i64
-    Value shapeCol = desc.shapes[colDim]; // i64
+    Value shapeRow = desc.shapes[descRowDim]; // i64
+    Value shapeCol = desc.shapes[descColDim]; // i64
     Value baseWidth =
         b.trunc(i32_ty, b.mul(shapeCol, b.i64_val(elemSizeInBits / 8)));
     Value baseHeight = b.trunc(i32_ty, shapeRow);
@@ -3542,7 +3668,7 @@ struct DescriptorStoreOpToBlockIOConversion
     // TODO: DescriptorStoreOp does not expose a "memory order" attribute, so
     // we always use the row-major stride dimension. Once a memory order
     // attribute is added, this should be adjusted.
-    Value strideForPitch = desc.strides[rowDim]; // i64
+    Value strideForPitch = desc.strides[descRowDim]; // i64
     Value pitch =
         b.trunc(i32_ty, b.mul(strideForPitch, b.i64_val(elemSizeInBits / 8)));
 
@@ -3550,6 +3676,8 @@ struct DescriptorStoreOpToBlockIOConversion
     // Unlike block pointers which store offsets in the struct, tensor
     // descriptors receive offsets via the indices operand.
     auto indices = adaptor.getIndices();
+    assert(indices.size() == descRank &&
+           "descriptor index count must match descriptor rank");
     SmallVector<Value> baseOffsets(indices.begin(), indices.end());
 
     // --- Get the LLVM values for store values ---
@@ -3605,8 +3733,8 @@ struct DescriptorStoreOpToBlockIOConversion
       // For tensor descriptors, we always have shape information and always
       // perform boundary protection on all dimensions (unlike block pointers
       // where boundaryCheck is user-specified).
-      Value offsetX = b.add(baseOffsets[colDim], offsets[colDim].second);
-      Value offsetY = b.add(baseOffsets[rowDim], offsets[rowDim].second);
+      Value offsetX = b.add(baseOffsets[descColDim], offsets[colDim].second);
+      Value offsetY = b.add(baseOffsets[descRowDim], offsets[rowDim].second);
 
       // Tensor descriptors always encode full shape bounds, so we always
       // use the descriptor's baseWidth/baseHeight for HW boundary
