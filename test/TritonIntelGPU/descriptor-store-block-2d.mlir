@@ -98,7 +98,7 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
 module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
 // CHECK-LABEL:   llvm.func spir_kernelcc @dpas_tdesc_2d_store(
-// CHECK-SAME:    %[[BASE_PTR:.*]]: !llvm.ptr<1>, %[[SHAPE0_I32:.*]]: i32, %[[SHAPE1_I32:.*]]: i32, %[[STRIDE0:.*]]: i64,
+// CHECK-SAME:    %[[BASE_PTR:.*]]: !llvm.ptr<1> {tt.pointee_type = f16}, %[[SHAPE0_I32:.*]]: i32, %[[SHAPE1_I32:.*]]: i32, %[[STRIDE0:.*]]: i64,
   tt.func public @dpas_tdesc_2d_store(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64) {
     %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf16, #dpas>
     %c0_i32 = arith.constant 0 : i32
