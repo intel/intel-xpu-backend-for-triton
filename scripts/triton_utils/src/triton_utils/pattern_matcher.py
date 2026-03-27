@@ -1,12 +1,11 @@
-from dataclasses import dataclass, field
-
 import re
+from dataclasses import dataclass, field
 
 
 @dataclass
 class PatternMatcher:
-    include_patterns: list[re.Pattern[str]] = field(default_factory=lambda: [], )
-    exclude_patterns: list[re.Pattern[str]] = field(default_factory=lambda: [])
+    include_patterns: list[re.Pattern[str]] = field(default_factory=list, )
+    exclude_patterns: list[re.Pattern[str]] = field(default_factory=list)
 
     def matches(self, text: str) -> bool:
         if self.exclude_patterns:
