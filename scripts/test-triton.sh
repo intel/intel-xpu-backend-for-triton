@@ -831,6 +831,7 @@ run_vllm_install() {
     cd vllm
     git checkout "$(<../benchmarks/vllm/vllm-pin.txt)"
     git apply ../benchmarks/vllm/vllm-fix.patch
+
     sed -i 's/device="cuda"/device="xpu"/g' \
       tests/kernels/moe/utils.py \
       tests/kernels/moe/test_batched_moe.py \
@@ -838,6 +839,12 @@ run_vllm_install() {
 
     sed -i 's/set_default_device("cuda")/set_default_device("xpu")/g' \
       tests/kernels/attention/test_triton_unified_attention.py
+
+    sed -i 's/torch\.cuda\.is_available()/torch\.xpu\.is_available()/g' \
+      tests/conftest.py
+
+    sed -i 's/torch\.device("cuda:0")/torch\.device("xpu:0")/g' \
+      tests/conftest.py
 
     cd ..
   fi
