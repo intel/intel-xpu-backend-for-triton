@@ -146,33 +146,15 @@ bool isLoadCandidate(LoadOpT loadOp, Type expectedElementType,
 }
 
 /// Create a prefetch operation for the given load operation.
-template <typename LoadOpT,
-          typename = std::enable_if_t<llvm::is_one_of<
-              LoadOpT, tt::LoadOp, tt::DescriptorLoadOp>::value>>
-void createPrefetchOp(LoadOpT loadOp) {
-  if constexpr (std::is_same_v<LoadOpT, tt::LoadOp>) {
-    Operation *op = loadOp.getPtr().getDefiningOp();
-    OpBuilder builder(op);
-    // TODO: Add prefetchOp after last dependency between ptr and mask,
-    // if this support is extended to support masks.
-    builder.setInsertionPointAfter(op);
-    auto prefetchOp = ttgi::PrefetchOp::create(
-        builder, loadOp->getLoc(), loadOp.getPtr(), loadOp.getCache(),
-        loadOp.getEvict(), loadOp.getIsVolatile());
+void createPrefetchOp(tt::DescriptorLoadOp loadOp) {
+  OpBuilder builder(loadOp);
+  auto prefetchOp = ttgi::DescriptorPrefetchOp::create(
+      builder, loadOp->getLoc(), loadOp.getDesc(), loadOp.getIndices(),
+      loadOp.getCache(), loadOp.getEvict());
 
-    // inherit attributes from the load operation
-    auto attrs = loadOp->getAttrDictionary();
-    prefetchOp->setAttrs(attrs);
-  } else {
-    OpBuilder builder(loadOp);
-    auto prefetchOp = ttgi::DescriptorPrefetchOp::create(
-        builder, loadOp->getLoc(), loadOp.getDesc(), loadOp.getIndices(),
-        loadOp.getCache(), loadOp.getEvict());
-
-    // inherit attributes from the load operation
-    auto attrs = loadOp->getAttrDictionary();
-    prefetchOp->setAttrs(attrs);
-  }
+  // inherit attributes from the load operation
+  auto attrs = loadOp->getAttrDictionary();
+  prefetchOp->setAttrs(attrs);
 }
 
 /// Investigate opportunities for the reducing register pressure by moving DotOp
@@ -230,10 +212,7 @@ bool optimizeDotOperands(scf::ForOp forOp, SmallVector<Value> &prefetchedValue,
     Value prefetchKey = getPrefetchKey(loadOp);
     if (std::find(prefetchedValue.begin(), prefetchedValue.end(),
                   prefetchKey) == prefetchedValue.end()) {
-      if (auto load = dyn_cast<tt::LoadOp>(loadOp))
-        createPrefetchOp(load);
-      else
-        createPrefetchOp(cast<tt::DescriptorLoadOp>(loadOp));
+      createPrefetchOp(cast<tt::DescriptorLoadOp>(loadOp));
       prefetchedValue.push_back(prefetchKey);
     }
     b.setInsertionPoint(insertBeforeOp);
@@ -275,9 +254,6 @@ bool optimizeDotOperands(scf::ForOp forOp, SmallVector<Value> &prefetchedValue,
     auto tensorType = cast<RankedTensorType>(operand.getType());
     Type elTy = tensorType.getElementType();
     bool isCandidate = llvm::TypeSwitch<Operation *, bool>(loadOp)
-                           .Case<tt::LoadOp>([&](auto op) {
-                             return isLoadCandidate(op, elTy, forOp);
-                           })
                            .Case<tt::DescriptorLoadOp>([&](auto op) {
                              return isLoadCandidate(op, elTy, forOp);
                            })

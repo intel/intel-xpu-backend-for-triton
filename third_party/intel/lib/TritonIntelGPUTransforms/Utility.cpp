@@ -97,11 +97,6 @@ bool isDivisible(Value value, unsigned divisor) {
 }
 
 Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
-  if (auto makeTensorPtrOp = dyn_cast<MakeTensorPtrOp>(op))
-    return encoding;
-  if (auto advanceOp = dyn_cast<AdvanceOp>(op))
-    return encoding;
-
   if (auto dotEnc = dyn_cast<DotOperandEncodingAttr>(encoding)) {
     if (auto parentEnc = dyn_cast<DpasEncodingAttr>(dotEnc.getParent())) {
       if (auto fp4ToFpOp = dyn_cast<gpu::Fp4ToFpOp>(op)) {

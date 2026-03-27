@@ -180,7 +180,6 @@ public:
   void rewriteAssertOp(tt::AssertOp assertOp);
   // Rewrite a StoreOp with the forwarded DPAS layout if applicable.
   // return true if the StoreOp has been rewritten.
-  bool rewriteTensorPtrStoreOp(tt::StoreOp storeOp);
   bool rewriteStoreOp(tt::StoreOp storeOp);
   bool rewriteDescriptorStoreOp(tt::DescriptorStoreOp storeOp);
   Attribute getEncodingBeforeRewrite(Value value) const;
@@ -814,144 +813,7 @@ void LayoutPropagation::rewriteAssertOp(tt::AssertOp assertOp) {
   assertOp->setOperand(0, newOperand);
 }
 
-// Recursively update the operands in a chain of AdvanceOps, after setting the
-// pointer operand of the first one.
-static void updateAdvanceOpChain(tt::AdvanceOp advanceOp, tt::StoreOp storeOp,
-                                 Value parentPtr, Value dataToStore) {
-  OpBuilder rewriter(advanceOp);
-  auto newAdvanceOp =
-      tt::AdvanceOp::create(rewriter, advanceOp.getLoc(), parentPtr.getType(),
-                            parentPtr, advanceOp.getOffsets());
-
-  SmallVector<Operation *> advanceOpUsers(advanceOp->getUsers());
-  for (Operation *user : advanceOpUsers) {
-    if (auto storeUser = dyn_cast<tt::StoreOp>(user)) {
-      if (storeUser == storeOp) {
-        storeOp.setOperand(0, newAdvanceOp);
-        storeOp.setOperand(1, dataToStore);
-      }
-    } else if (auto loadUser = dyn_cast<tt::LoadOp>(user)) {
-      // The inconsistency will be corrected in the subsequent code,
-      // however, there is room for improvement.
-      continue;
-    } else if (auto nextAdvanceOp = dyn_cast<tt::AdvanceOp>(user)) {
-      updateAdvanceOpChain(nextAdvanceOp, storeOp, newAdvanceOp, dataToStore);
-    } else {
-      llvm::errs() << "user: " << *user << "\n";
-      llvm_unreachable("Unexpected user");
-    }
-  }
-}
-
-bool LayoutPropagation::rewriteTensorPtrStoreOp(tt::StoreOp storeOp) {
-  // Disable 2D block store on LTS.
-  if (!storeOp->getParentOfType<ModuleOp>()->hasAttr(
-          ttgi::TritonIntelGPUDialect::getSupport2DBlockIOAttrName()))
-    return false;
-
-  // If storeOp is a pointer to a tensor, we try to find out if the
-  // data has initially a DPAS encoding and forward it to the StoreOp
-  // to enable 2D block store.
-  Value ptr = storeOp.getPtr();
-  if (!tt::isTensorPointerType(ptr.getType()))
-    return false;
-
-  // Locate the operation that created the block pointer.
-  std::optional<tt::MakeTensorPtrOp> defOp =
-      tt::intel::findDefiningOpOfType<tt::MakeTensorPtrOp>(ptr);
-  if (!defOp)
-    return false;
-
-  triton::MakeTensorPtrOp makeTensorPtrOp = *defOp;
-
-  // DPAS encoding have to be propagated if conversion from a DPAS layout to
-  // another layout has been done before.
-  auto convertOp = storeOp.getValue().getDefiningOp<ttg::ConvertLayoutOp>();
-  tt::PointerType newPtrType;
-  Attribute encoding;
-  Value value;
-  if (!convertOp) {
-    // If the Defining op is not a ConvertLayoutOp that means that conversion
-    // has not been hoisted out of the loop yet.
-    // We try then to find the layout in the map of the processed layouts.
-    value = storeOp.getValue();
-    auto it = layouts.find(value);
-    if (it == layouts.end())
-      return false;
-
-    encoding = *(it->second.encodings.begin());
-
-    if (!isa<ttgi::DpasEncodingAttr>(encoding))
-      return false;
-
-    auto ptrType = cast<tt::PointerType>(makeTensorPtrOp.getType());
-    auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
-
-    auto tmpType = tensorType.cloneWithEncoding(encoding);
-    newPtrType = tt::PointerType::get(tmpType, ptrType.getAddressSpace());
-  } else {
-    RankedTensorType convertOpSrcType = convertOp.getSrc().getType();
-
-    auto ptrType = cast<tt::PointerType>(makeTensorPtrOp.getType());
-    newPtrType =
-        tt::PointerType::get(convertOpSrcType, ptrType.getAddressSpace());
-
-    value = convertOp.getSrc();
-    encoding = convertOpSrcType.getEncoding();
-  }
-
-  // Create a new MakeTensorPtrOp with the new layout.
-  OpBuilder rewriter(makeTensorPtrOp);
-  Value newMakeTensorPtrOp = tt::MakeTensorPtrOp::create(
-      rewriter, makeTensorPtrOp.getLoc(), newPtrType, makeTensorPtrOp.getBase(),
-      makeTensorPtrOp.getShape(), makeTensorPtrOp.getStrides(),
-      makeTensorPtrOp.getOffsets(), makeTensorPtrOp.getOrderAttr());
-
-  // Update the store operation with the new layout.
-  SmallVector<Operation *> makeTensorPtrOpUsers(makeTensorPtrOp->getUsers());
-  Value dataToStore = getValueAs(value, encoding);
-  for (Operation *user : makeTensorPtrOpUsers) {
-    if (auto storeUser = dyn_cast<tt::StoreOp>(user)) {
-      if (storeUser == storeOp) {
-        storeOp.setOperand(0, newMakeTensorPtrOp);
-        storeOp.setOperand(1, dataToStore);
-      }
-    } else if (auto advanceOp = dyn_cast<tt::AdvanceOp>(user)) {
-      SmallPtrSet<Operation *, 2> visited;
-      std::function<bool(tt::AdvanceOp)> chainIsTerminatedByCurrentStore =
-          [&](tt::AdvanceOp advanceOp) {
-            if (!visited.insert(advanceOp.getOperation()).second)
-              return false; // Already visited, avoid cycles
-
-            for (Operation *user : advanceOp->getUsers()) {
-              if (isa<tt::StoreOp>(user) && cast<tt::StoreOp>(user) == storeOp)
-                return true;
-              if (auto nextAdvanceOp = dyn_cast<tt::AdvanceOp>(user))
-                if (chainIsTerminatedByCurrentStore(nextAdvanceOp))
-                  return true;
-            }
-            return false;
-          };
-
-      if (chainIsTerminatedByCurrentStore(advanceOp))
-        updateAdvanceOpChain(advanceOp, storeOp, newMakeTensorPtrOp,
-                             dataToStore);
-    }
-  }
-
-  // If the DPAS encoding is forwarded, we do not need the
-  // convertOp anymore if the convertOp was only used by the
-  // storeOp. Same for the initial MakeTensorPtrOp, if it was
-  // only used by the storeOp. If this is the case, these
-  // instructions are removed by the clean-up step performed at
-  // the end of this pass (step 4).
-  return true;
-}
-
 bool LayoutPropagation::rewriteStoreOp(tt::StoreOp storeOp) {
-  if (rewriteTensorPtrStoreOp(storeOp))
-    return true;
-
   Operation *op = storeOp.getOperation();
   llvm::MutableArrayRef<OpOperand> operands = op->getOpOperands();
   // Check if all store op operands should use new encoding.
@@ -1141,20 +1003,6 @@ bool LayoutRematerialization::reduceLoopCarriedValues() {
                      << "with:\n\t" << *convOp << "\n"
                      << "\t" << *newStoreOp << "\n";
             });
-          })
-          .Case<tt::AdvanceOp>([&](auto advanceOp) {
-            auto newAdvanceOp =
-                tt::AdvanceOp::create(rewriter, loc, rematRes.getType(),
-                                      rematRes, advanceOp.getOffsets());
-            opToDelete.insert(advanceOp);
-            changed = true;
-            LLVM_DEBUG({
-              DBGS() << "Replaced:\n\t" << *advanceOp << "\n"
-                     << "with:\n\t" << *newAdvanceOp << "\n";
-            });
-
-            for (Operation *user : advanceOp->getUsers())
-              processUser(user, newAdvanceOp.getResult());
           })
           .Case<scf::ForOp>([&](auto forOp) {
             LLVM_DEBUG({
