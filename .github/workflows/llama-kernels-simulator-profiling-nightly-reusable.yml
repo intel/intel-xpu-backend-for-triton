@@ -291,6 +291,11 @@ jobs:
           export TRITON_INTEL_SIMULATOR_KEEPALIVE=0
           export TRITON_INTEL_SIMULATOR_EXTRA_ARGS="-cb_cfg stats_enable true tg_cfg_filename TG_ArchTarget_xe4.txt tg_interval 10000 device_info_json_enable true dump_stats_on_cs_busy true staging_dump_stats_on_swtag true hltv_json_enable true"
 
+          export TRITON_KERNEL_DUMP=1
+          export TRITON_DUMP_DIR="${GITHUB_WORKSPACE}/reports/simulator-logs/kernel_artifacts"
+          export TRITON_DUMP_LAUNCH_PARAMS=1
+          export TRITON_PRINT_AUTOTUNING=1
+
           # To enable `TRITON_BENCHMARK_KERNEL_IN_LAUNCHER` feature.
           cd benchmarks
           pip install -v -e . --no-deps --no-build-isolation
