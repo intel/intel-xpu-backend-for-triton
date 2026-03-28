@@ -258,17 +258,22 @@ public:
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
     LDBG("DescriptorLoadOpAxisInfoVisitor: " << *op);
 
+    // Match upstream LoadOp semantics: loaded values have no guaranteed
+    // contiguity or divisibility (those are address-level properties), but
+    // constancy transfers — identical addresses yield identical values.
+    const AxisInfo &descInfo = operands[0]->getValue();
     auto resultType = cast<RankedTensorType>(op.getResult().getType());
-    unsigned rank = resultType.getRank();
+    unsigned resultRank = resultType.getRank();
 
-    AxisInfo::DimVectorT contiguity, divisibility, constancy;
+    // Rank mismatch safety: the verifier allows different ranks if total
+    // element count matches, but AxisInfo is rank-dependent.
+    if (descInfo.getRank() == 0 ||
+        static_cast<unsigned>(descInfo.getRank()) != resultRank)
+      return AxisInfo::getPessimisticValueState(op.getResult());
 
-    // For descriptor loads, return conservative axis info.
-    for (unsigned d = 0; d < rank; ++d) {
-      contiguity.push_back(1);
-      divisibility.push_back(1);
-      constancy.push_back(1);
-    }
+    AxisInfo::DimVectorT contiguity(resultRank, 1);
+    AxisInfo::DimVectorT divisibility(resultRank, 1);
+    AxisInfo::DimVectorT constancy = descInfo.getConstancy();
 
     auto axisInfo = AxisInfo(std::move(contiguity), std::move(divisibility),
                              std::move(constancy));
@@ -422,9 +427,12 @@ ModuleAxisInfoAnalysis::ModuleAxisInfoAnalysis(ModuleOp moduleOp)
     : triton::ModuleAxisInfoAnalysis(moduleOp,
                                      AxisInfoAnalysisExt::loadAnalysis) {}
 
-AxisInfo *ModuleAxisInfoAnalysis::getAxisInfo(Value value) {
+AxisInfo *ModuleAxisInfoAnalysis::getAxisInfo(Value value) const {
   auto funcOp = value.getParentRegion()->getParentOfType<FunctionOpInterface>();
-  auto *axisInfoMap = getFuncData(funcOp);
+  // const_cast: getFuncData lacks a const overload in upstream CallGraph<T>,
+  // but this method only performs a map lookup — logically const.
+  auto *axisInfoMap =
+      const_cast<ModuleAxisInfoAnalysis *>(this)->getFuncData(funcOp);
   if (!axisInfoMap)
     return nullptr;
   auto it = axisInfoMap->find(value);
@@ -433,7 +441,7 @@ AxisInfo *ModuleAxisInfoAnalysis::getAxisInfo(Value value) {
   return &(it->second);
 }
 
-unsigned ModuleAxisInfoAnalysis::getContiguity(Value value) {
+unsigned ModuleAxisInfoAnalysis::getContiguity(Value value) const {
   auto tensorTy = ttgi::getRankedTensorType(value.getType());
   if (!tensorTy)
     return 1;
@@ -454,7 +462,7 @@ unsigned ModuleAxisInfoAnalysis::getContiguity(Value value) {
   return contiguity;
 }
 
-unsigned ModuleAxisInfoAnalysis::getAlignment(Value value) {
+unsigned ModuleAxisInfoAnalysis::getAlignment(Value value) const {
   auto tensorTy = ttgi::getRankedTensorType(value.getType());
   if (!tensorTy)
     return 1;
@@ -494,7 +502,7 @@ unsigned ModuleAxisInfoAnalysis::getAlignment(Value value) {
   return alignment;
 }
 
-unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
+unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) const {
   auto tensorTy = ttgi::getRankedTensorType(mask.getType());
   if (!tensorTy)
     return 1;
