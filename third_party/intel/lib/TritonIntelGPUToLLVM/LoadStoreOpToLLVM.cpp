@@ -2771,9 +2771,11 @@ struct DescriptorLoadOpToBlockIOConversion
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
 
     // Tile size computation (no mask for descriptors).
+    bool oneMatrixPerLoadForBT = op->hasAttr(
+        triton::gpu::intel::TritonIntelGPUDialect::getOneMatrixPerLoadAttrName());
     BlockIOTileSizeInfo sizeInfo = getBlockIOTileSize<true /*load*/>(
         llEncoding.value(), contiguousDim, elemSizeInBits,
-        /*maskAxisInfo=*/nullptr, /*oneMatrixPerLoadForBT=*/false);
+        /*maskAxisInfo=*/nullptr, oneMatrixPerLoadForBT);
     if (!sizeInfo.isValid())
       return failure();
 
