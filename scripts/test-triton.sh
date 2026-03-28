@@ -808,7 +808,7 @@ run_vllm_install() {
 
   cd "$TRITON_PROJ"
 
-  CLEAN_MSG="To get a clean install, run: \n    rm -rf $TRITON_PROJ/vllm && pip uninstall -y vllm"
+  local CLEAN_MSG="To get a clean install, run: \n    rm -rf $TRITON_PROJ/vllm && pip uninstall -y vllm"
 
   local has_vllm_pip=false
   pip show vllm >/dev/null 2>&1 && has_vllm_pip=true
@@ -816,14 +816,14 @@ run_vllm_install() {
   # vllm already installed — nothing to do
   if [ "$has_vllm_pip" = true ]; then
     echo "WARNING: vllm is already installed, skipping installation."
-    echo -e $CLEAN_MSG
+    echo -e "$CLEAN_MSG"
     return
   fi
 
   # vllm not installed — proceed, reusing existing directory if present
   if [ -d "./vllm" ]; then
     echo "WARNING: ./vllm directory already exists, installing from it."
-    echo -e $CLEAN_MSG
+    echo -e "$CLEAN_MSG"
   else
     git clone https://github.com/vllm-project/vllm.git
 
@@ -831,12 +831,20 @@ run_vllm_install() {
     cd vllm
     git checkout "$(<../benchmarks/vllm/vllm-pin.txt)"
     git apply ../benchmarks/vllm/vllm-fix.patch
+
     sed -i 's/device="cuda"/device="xpu"/g' \
       tests/kernels/moe/utils.py \
+      tests/kernels/moe/test_batched_moe.py \
       tests/kernels/attention/test_triton_unified_attention.py
 
     sed -i 's/set_default_device("cuda")/set_default_device("xpu")/g' \
       tests/kernels/attention/test_triton_unified_attention.py
+
+    sed -i 's/torch\.cuda\.is_available()/torch\.xpu\.is_available()/g' \
+      tests/conftest.py
+
+    sed -i 's/torch\.device("cuda:0")/torch\.device("xpu:0")/g' \
+      tests/conftest.py
 
     cd ..
   fi
