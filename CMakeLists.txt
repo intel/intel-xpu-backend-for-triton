@@ -16,11 +16,6 @@ include(GNUInstallDirs)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
-set(_triton_plugins_default ON)
-if (WIN32)
-  set(_triton_plugins_default OFF)
-endif()
-
 # Options
 option(TRITON_BUILD_PYTHON_MODULE "Build Python Triton bindings" OFF)
 option(TRITON_BUILD_PROTON "Build the Triton Proton profiler" ON)
@@ -29,7 +24,6 @@ option(TRITON_BUILD_WITH_CCACHE "Build with ccache (if available)" ON)
 option(TRITON_OFFLINE_BUILD "Build without downloading dependencies" OFF)
 option(LLVM_BUILD_SHARED_LIBS
   "Build all libraries as shared libraries instead of static" OFF)
-option(TRITON_ENABLE_PLUGINS "Enable building Triton plugins" ${_triton_plugins_default})
 set(TRITON_CODEGEN_BACKENDS "" CACHE STRING "Enable different codegen backends")
 
 set(TRITON_CACHE_PATH "" CACHE PATH "Path to triton cache")
@@ -45,10 +39,6 @@ set(TRITON_CUDART_PATH "" CACHE PATH "Path to CUDA Runtime headers")
 set(TRITON_CUPTI_INCLUDE_PATH "" CACHE PATH "Path to CUPTI headers")
 set(TRITON_CUPTI_LIB_PATH "" CACHE PATH "Path to CUPTI libraries")
 set(TRITON_CUDA_STDLIB_PATH "" CACHE PATH "Path to CUDA standard library headers")
-
-if (WIN32 AND TRITON_ENABLE_PLUGINS)
-  message(FATAL_ERROR "TRITON_ENABLE_PLUGINS=ON is not supported on Windows.")
-endif()
 
 if(NOT TRITON_CACHE_PATH)
   message(FATAL_ERROR "TRITON_CACHE_PATH must be set or derivable from TRITON_HOME/HOME/USERPROFILE/HOMEPATH.")

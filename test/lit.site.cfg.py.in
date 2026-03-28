@@ -13,7 +13,6 @@ config.llvm_exe_ext = "@EXEEXT@"
 config.lit_tools_dir = "@LLVM_LIT_TOOLS_DIR@"
 config.mlir_binary_dir = "@MLIR_BINARY_DIR@"
 config.python_executable = "@Python3_EXECUTABLE@"
-config.enable_plugins = "@TRITON_ENABLE_PLUGINS@"
 config.enable_bindings_python = @MLIR_ENABLE_BINDINGS_PYTHON@
 config.build_shared_libs = @LLVM_BUILD_SHARED_LIBS@
 
