@@ -183,25 +183,25 @@ class SortByCompare(str, Enum):
 class TestCase:  #  pylint: disable=too-many-instance-attributes
     # intel
     testsuite: str
-    # test.unit.intel.test_block_load
+    # test.unit.intel.test_block_io
     classname: str
-    # test_block_load_dpas_layout[True-int8-256-64]
+    # test_block_io[256-64-float16-row_major-True-True-False]
     name: str
-    # test_block_load
+    # test_block_io
     module: str = field(init=False)
-    # [True-int8-256-64]
+    # [256-64-float16-row_major-True-True-False]
     variant: str = field(init=False)
-    # test_block_load_dpas_layout
+    # test_block_io
     test: str = field(init=False)
-    # test/unit/intel/test_block_load/test_block_load.py::test_block_load_dpas_layout[True-int8-256-64]
+    # test/unit/intel/test_block_io/test_block_io.py::test_block_io[256-64-float16-row_major-True-True-False]
     path: str = field(init=False)
-    # test/unit/intel/test_block_load/test_block_load.py::test_block_load_dpas_layout
+    # test/unit/intel/test_block_io/test_block_io.py::test_block_io
     path_without_variant: str = field(init=False)
-    # intel::test/unit/intel/test_block_load/test_block_load.py::test_block_load_dpas_layout[True-int8-256-64]
+    # intel::test/unit/intel/test_block_io/test_block_io.py::test_block_io[256-64-float16-row_major-True-True-False]
     key: str = field(init=False)
     # TestGraph_c55uxh25dhggnpnm666db2a5xn6yhinukzlhsmg37d7bjkwvwxv5XPU (empty if no class)
     test_class: str = field(init=False)
-    # pytest-friendly name: test/unit/intel/test_block_load.py::test_block_load_dpas_layout[True-int8-256-64]
+    # pytest-friendly name: test/unit/intel/test_block_io.py::test_block_io[256-64-float16-row_major-True-True-False]
     pytest_name: str = field(init=False)
 
     def __post_init__(self):
