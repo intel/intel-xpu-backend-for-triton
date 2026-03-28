@@ -1,0 +1,23 @@
+name: Validate benchmarks installation
+description: Verify that triton_kernels_benchmark C++ extensions are present
+
+runs:
+  using: composite
+  steps:
+    - name: Validate benchmarks C++ extensions
+      shell: bash
+      run: |
+        python -c "
+        import os, sys, sysconfig
+        ext = sysconfig.get_config_var('EXT_SUFFIX')
+        for p in sys.path:
+            pkg_dir = os.path.join(p, 'triton_kernels_benchmark')
+            if os.path.isdir(pkg_dir):
+                missing = [m for m in ('xetla_kernel', 'sycl_tla_kernel', 'onednn_kernel')
+                           if not os.path.exists(os.path.join(pkg_dir, m + ext))]
+                assert not missing, f'Missing C++ extensions: {missing}'
+                print('Benchmarks validation passed: all C++ extensions present')
+                break
+        else:
+            raise RuntimeError('triton_kernels_benchmark package not found on sys.path')
+        "
