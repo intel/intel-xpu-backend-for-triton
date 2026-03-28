@@ -1,664 +1,84 @@
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-optimize-dot-operands | FileCheck %s
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-optimize-dot-operands -canonicalize | FileCheck %s
 
-#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [16, 0], [0, 16], [128, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0]], warp = [[32, 0], [64, 0], [0, 0], [0, 0], [0, 0]], block = []}>
-#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 4], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  // COM: tt.load -> tt.trans -> tt.dot chain, not in a loop.
-  tt.func public @fuseLoadWithTrans1(%arg0: !tt.ptr<tensor<256x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>, %arg1: !tt.ptr<bf16>) {
-    %c0_i32 = arith.constant 0 : i32
-    %c1_i64 = arith.constant 1 : i64
-    %c256_i32 = arith.constant 256 : i32
-    %c1024_i64 = arith.constant 1024 : i64
-    %cst = arith.constant dense<0.000000e+00> : tensor<256x256xf32, #mma>
-    %0 = tt.make_tensor_ptr %arg1, [%c1024_i64, %c1_i64], [%c1_i64, %c1024_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<256x32xbf16, #linear>>
-    %1 = tt.load %arg0 {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "row_major"} : !tt.ptr<tensor<256x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
-    %2 = tt.advance %0, [%c256_i32, %c0_i32] : <tensor<256x32xbf16, #linear>>
-    %3 = tt.load %2 {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "column_major"} : !tt.ptr<tensor<256x32xbf16, #linear>>
-    %4 = tt.trans %3 {order = array<i32: 1, 0>} : tensor<256x32xbf16, #linear> -> tensor<32x256xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
-    %5 = tt.dot %1, %4, %cst, inputPrecision = tf32 : tensor<256x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<32x256xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<256x256xf32, #mma>
-    tt.return
-  }
-  // CHECK-LABEL: fuseLoadWithTrans1
+
+#brow = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+#bcol = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 2], warpsPerCTA = [1, 8], order = [0, 1]}>
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>
+module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: tt.func @fuse_trans_with_descriptor_load
   // CHECK-NOT: tt.trans
-  // CHECK: [[PTR:%.*]] = tt.make_tensor_ptr %arg1, [%c1_i64, %c1024_i64], [%c1024_i64, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<32x256xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
-  // CHECK: [[ADV:%.*]] = tt.advance [[PTR]], [%c0_i32, %c256_i32] : <tensor<32x256xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
-  // CHECK: [[LOAD_B:%.*]] = tt.load [[ADV]] {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "row_major"} : !tt.ptr<tensor<32x256xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
-  // CHECK: tt.dot {{.*}}, [[LOAD_B]], {{.*}}, inputPrecision = tf32 : tensor<256x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<32x256xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<256x256xf32, #mma>
-}
-
-// -----
-
-#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [16, 0], [0, 16], [128, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0]], warp = [[32, 0], [64, 0], [0, 0], [0, 0], [0, 0]], block = []}>
-#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 4], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  // COM: tt.load -> tt.trans -> tt.dot chain, in a loop.
-  // COM: where the 'make_tensor_ptr' result is not loop carried.
-  tt.func public @fuseLoadWithTrans2(%arg0: !tt.ptr<tensor<256x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>, %arg1: !tt.ptr<bf16>) {
+  // CHECK: %[[LD:.*]] = tt.descriptor_load {{.*}} {ttig.block_io = "column_major"} : !tt.tensordesc<tensor<64x32xf16>> -> tensor<32x64xf16, #[[BCOL:[a-z]+]]>
+  // CHECK: ttg.convert_layout %[[LD]] : tensor<32x64xf16, #[[BCOL]]> -> tensor<32x64xf16, {{.*}}>
+  tt.func @fuse_trans_with_descriptor_load(%ptr: !tt.ptr<f16>, %a: tensor<64x32xf16, #dot0>) -> tensor<64x64xf32, #dpas> {
     %c0_i32 = arith.constant 0 : i32
     %c1_i64 = arith.constant 1 : i64
     %c32_i32 = arith.constant 32 : i32
-    %c256_i32 = arith.constant 256 : i32
-    %c1024_i64 = arith.constant 1024 : i64
-    %c1024_i32 = arith.constant 1024 : i32
-    %cst = arith.constant dense<0.000000e+00> : tensor<256x256xf32, #mma>
-    %0 = tt.make_tensor_ptr %arg1, [%c1024_i64, %c1_i64], [%c1_i64, %c1024_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<256x32xbf16, #linear>>
-    %res:2 = scf.for %arg3 = %c0_i32 to %c1024_i32 step %c32_i32 iter_args(%arg4 = %cst, %arg5 = %c0_i32) -> (tensor<256x256xf32, #mma>, i32) : i32 {
-      %1 = tt.load %arg0 {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "row_major"} : !tt.ptr<tensor<256x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
-      %2 = tt.advance %0, [%c256_i32, %c0_i32] : <tensor<256x32xbf16, #linear>>
-      %3 = tt.load %2 {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "column_major"} : !tt.ptr<tensor<256x32xbf16, #linear>>
-      %4 = tt.trans %3 {order = array<i32: 1, 0>} : tensor<256x32xbf16, #linear> -> tensor<32x256xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
-      %5 = tt.dot %1, %4, %arg4, inputPrecision = tf32 : tensor<256x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<32x256xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<256x256xf32, #mma>
-      %6 = arith.addi %arg5, %c32_i32 : i32
-      scf.yield %5, %6 : tensor<256x256xf32, #mma>, i32
-    }
-    tt.return
+    %c64_i32 = arith.constant 64 : i32
+    %c32_i64 = arith.constant 32 : i64
+    %c = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #dpas>
+    %desc = tt.make_tensor_descriptor %ptr, [%c64_i32, %c32_i32], [%c32_i64, %c1_i64] : <f16>, <tensor<64x32xf16>>
+    %ld = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #brow>
+    %tr = tt.trans %ld {order = array<i32: 1, 0>} : tensor<64x32xf16, #brow> -> tensor<32x64xf16, #bcol>
+    %b = ttg.convert_layout %tr : tensor<32x64xf16, #bcol> -> tensor<32x64xf16, #dot1>
+    %d = tt.dot %a, %b, %c, inputPrecision = tf32 : tensor<64x32xf16, #dot0> * tensor<32x64xf16, #dot1> -> tensor<64x64xf32, #dpas>
+    tt.return %d : tensor<64x64xf32, #dpas>
   }
-  // CHECK-LABEL: fuseLoadWithTrans2
-  // CHECK-NOT: tt.trans
-  // CHECK: [[PTR:%.*]] = tt.make_tensor_ptr %arg1, [%c1_i64, %c1024_i64], [%c1024_i64, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<32x256xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
-  // CHECK: scf.for
-  // CHECK:   [[ADV:%.*]] = tt.advance [[PTR]], [%c0_i32, %c256_i32] : <tensor<32x256xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
-  // CHECK:   [[LOAD_B:%.*]] = tt.load [[ADV]] {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "row_major"} : !tt.ptr<tensor<32x256xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
-  // CHECK:   tt.dot {{.*}}, [[LOAD_B]], {{.*}}, inputPrecision = tf32 : tensor<256x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<32x256xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<256x256xf32, #mma>
 }
 
 // -----
 
-#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [16, 0], [0, 16], [128, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0]], warp = [[32, 0], [64, 0], [0, 0], [0, 0], [0, 0]], block = []}>
-#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 4], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  // COM: tt.load -> tt.trans -> tt.dot chain, in a loop.
-  // COM: where the 'make_tensor_ptr' result is loop carried.
-  tt.func public @fuseLoadWithTrans3(%arg0: !tt.ptr<bf16>, %arg1: !tt.ptr<bf16>) {
-    %c1024_i32 = arith.constant 1024 : i32
-    %c0_i32 = arith.constant 0 : i32
-    %c32_i32 = arith.constant 32 : i32
-    %c256_i32 = arith.constant 256 : i32
-    %c16_i32 = arith.constant 16 : i32
-    %c1_i64 = arith.constant 1 : i64
-    %c1024_i64 = arith.constant 1024 : i64
-    %cst = arith.constant dense<0.000000e+00> : tensor<256x256xf32, #mma>
-    %9 = tt.make_tensor_ptr %arg0, [%c1024_i64, %c1024_i64], [%c1024_i64, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<256x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
-    %10 = tt.make_tensor_ptr %arg1, [%c1024_i64, %c1_i64], [%c1_i64, %c1024_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<256x32xbf16, #linear>>
-    %res:3 = scf.for %arg3 = %c0_i32 to %c1024_i32 step %c32_i32 iter_args(%arg4 = %cst, %arg5 = %c0_i32, %arg6 = %10) -> (tensor<256x256xf32, #mma>, i32, !tt.ptr<tensor<256x32xbf16, #linear>>) : i32 {
-      %17 = tt.advance %9, [%c256_i32, %arg5] : <tensor<256x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
-      %18 = tt.load %17 {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "row_major"} : !tt.ptr<tensor<256x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
-      %19 = tt.advance %arg6, [%c16_i32, %arg5] : <tensor<256x32xbf16, #linear>>
-      %20 = tt.load %19 {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "column_major"} : !tt.ptr<tensor<256x32xbf16, #linear>>
-      %21 = tt.trans %20 {order = array<i32: 1, 0>} : tensor<256x32xbf16, #linear> -> tensor<32x256xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
-      %22 = tt.dot %18, %21, %arg4, inputPrecision = tf32 : tensor<256x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<32x256xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<256x256xf32, #mma>
-      %23 = arith.addi %arg5, %c32_i32 : i32
-      scf.yield %22, %23, %19 : tensor<256x256xf32, #mma>, i32, !tt.ptr<tensor<256x32xbf16, #linear>>
-    }
-    tt.return
-  }
-  // CHECK-LABEL: fuseLoadWithTrans3
-  // CHECK-NOT: tt.trans
-  // CHECK: [[PTR:%.*]] = tt.make_tensor_ptr %arg1, [%c1_i64, %c1024_i64], [%c1024_i64, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<32x256xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
-  // CHECK: scf.for {{.*}} iter_args({{.*}}, [[ARG5:%.*]] = {{.*}}, [[ARG6:%.*]] = [[PTR]])
-  // CHECK:   [[ADV:%.*]] = tt.advance [[ARG6]], [[[ARG5]], %c16_i32] : <tensor<32x256xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
-  // CHECK:   [[LOAD_B:%.*]] = tt.load [[ADV]] {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "row_major"} : !tt.ptr<tensor<32x256xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
-  // CHECK:   tt.dot {{.*}}, [[LOAD_B]], {{.*}}, inputPrecision = tf32 : tensor<256x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<32x256xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<256x256xf32, #mma>
-  // CHECK:   scf.yield {{.*}}, {{.*}}, [[ADV]]
-}
-
-// -----
-
-#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [16, 0], [0, 16], [0, 32]], lane = [[1, 0], [2, 0], [4, 0], [8, 0]], warp = [[0, 0], [0, 0]], block = []}>
-#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  // COM: tt.load -> tt.trans -> tt.dot chain, in 2 loops.
-  // COM: Where the block ptr used by the loads in the 2 loops is created by the same make_tensor_ptr operation.
-  tt.func public @fuseLoadWithTrans4(%arg0: i32, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f16>) {
-    %c32_i32 = arith.constant 32 : i32
-    %c0_i32 = arith.constant 0 : i32
-    %c64_i64 = arith.constant 64 : i64
-    %c1_i64 = arith.constant 1 : i64
-    %cst_3 = arith.constant dense<0.000000e+00> : tensor<64x32xf32, #mma>
-    %7 = tt.make_tensor_ptr %arg1, [%c1_i64, %c64_i64], [%c64_i64, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
-    %9 = tt.make_tensor_ptr %arg2, [%c1_i64, %c64_i64], [%c64_i64, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<32x64xf16, #linear>>
-    %24 = tt.advance %7, [%arg0, %c0_i32] : <tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
-    %25 = tt.load %24 {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "row_major"} : !tt.ptr<tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
-    %res1:1 = scf.for %arg9 = %c0_i32 to %arg0 step %c32_i32 iter_args(%arg13 = %arg0) -> (i32) : i32 {
-      %adv1 = tt.advance %9, [%arg13, %c0_i32] : <tensor<32x64xf16, #linear>>
-      %load1 = tt.load %adv1 {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "row_major"} : !tt.ptr<tensor<32x64xf16, #linear>>
-      %trans1 = tt.trans %load1 {order = array<i32: 1, 0>} : tensor<32x64xf16, #linear> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
-      %dot1 = tt.dot %25, %trans1, %cst_3, inputPrecision = tf32 : tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<64x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<64x32xf32, #mma>
-      %76 = arith.addi %arg13, %c32_i32 : i32
-      scf.yield %76 : i32
-    }
-    %res2:1 = scf.for %arg9 = %c0_i32 to %arg0 step %c32_i32 iter_args(%arg13 = %arg0) -> (i32) : i32 {
-      %adv2 = tt.advance %9, [%arg13, %c0_i32] : <tensor<32x64xf16, #linear>>
-      %load2 = tt.load %adv2 {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "row_major"} : !tt.ptr<tensor<32x64xf16, #linear>>
-      %trans2 = tt.trans %load2 {order = array<i32: 1, 0>} : tensor<32x64xf16, #linear> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
-      %dot2 = tt.dot %25, %trans2, %cst_3, inputPrecision = tf32 : tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<64x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<64x32xf32, #mma>
-      %81 = arith.addi %arg13, %c32_i32 : i32
-      scf.yield %81 : i32
-    }
-    tt.return
-  }
-  // CHECK-LABEL: fuseLoadWithTrans4
-  // CHECK-NOT: tt.trans
-  // CHECK-COUNT-2: tt.make_tensor_ptr %arg2, [%c64_i64, %c1_i64], [%c1_i64, %c64_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<64x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
-  // CHECK: scf.for
-  // CHECK:   [[ADV1:%.*]] = tt.advance {{.*}}, {{.*}} : <tensor<64x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
-  // CHECK:   [[LOAD_B1:%.*]] = tt.load [[ADV1]] {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "column_major"} : !tt.ptr<tensor<64x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
-  // CHECK:   tt.dot {{.*}}, [[LOAD_B1]], {{.*}}, inputPrecision = tf32 : tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<64x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<64x32xf32, #mma>
-  // CHECK: scf.for
-  // CHECK:   [[ADV2:%.*]] = tt.advance {{.*}}, {{.*}} : <tensor<64x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
-  // CHECK:   [[LOAD_B2:%.*]] = tt.load [[ADV2]] {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "column_major"} : !tt.ptr<tensor<64x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
-  // CHECK:   tt.dot {{.*}}, [[LOAD_B2]], {{.*}}, inputPrecision = tf32 : tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<64x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<64x32xf32, #mma>
-}
-
-// -----
-
-#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [16, 0], [0, 16], [0, 32]], lane = [[1, 0], [2, 0], [4, 0], [8, 0]], warp = [[0, 0], [0, 0]], block = []}>
-#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  // COM: tt.load -> tt.trans -> tt.dot chain, in 3 loops.
-  // COM: Where the block ptr used by the loads in 1st and last loop cannot be fused due to overlapping def-use chains (on an operation that is not the chains root), and the load+trans in the 2nd loop can be fused.
-  tt.func public @fuseLoadWithTrans5(%arg0: i32, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f16>) {
-    %c32_i32 = arith.constant 32 : i32
-    %c0_i32 = arith.constant 0 : i32
-    %c64_i64 = arith.constant 64 : i64
-    %c1_i64 = arith.constant 1 : i64
-    %cst = arith.constant dense<0.000000e+00> : tensor<64x32xf32, #mma>
-    %7 = tt.make_tensor_ptr %arg1, [%c1_i64, %c64_i64], [%c64_i64, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
-    %9 = tt.make_tensor_ptr %arg2, [%c1_i64, %c64_i64], [%c64_i64, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<32x64xf16, #linear>>
-    %24 = tt.advance %7, [%arg0, %c0_i32] : <tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
-    %25 = tt.load %24 {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "row_major"} : !tt.ptr<tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
-    %adv1 = tt.advance %9, [%arg0, %c0_i32] : <tensor<32x64xf16, #linear>>
-    %res1:1 = scf.for %arg9 = %c0_i32 to %arg0 step %c32_i32 iter_args(%arg13 = %arg0) -> (i32) : i32 {
-      %load1 = tt.load %adv1 {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "row_major"} : !tt.ptr<tensor<32x64xf16, #linear>>
-      %trans1 = tt.trans %load1 {order = array<i32: 1, 0>} : tensor<32x64xf16, #linear> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
-      %dot1 = tt.dot %25, %trans1, %cst, inputPrecision = tf32 : tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<64x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<64x32xf32, #mma>
-      %76 = arith.addi %arg13, %c32_i32 : i32
-      scf.yield %76 : i32
-    }
-    %res2:1 = scf.for %arg9 = %c0_i32 to %arg0 step %c32_i32 iter_args(%arg13 = %arg0) -> (i32) : i32 {
-      %adv2 = tt.advance %9, [%arg13, %c0_i32] : <tensor<32x64xf16, #linear>>
-      %load2 = tt.load %adv2 {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "row_major"} : !tt.ptr<tensor<32x64xf16, #linear>>
-      %trans2 = tt.trans %load2 {order = array<i32: 1, 0>} : tensor<32x64xf16, #linear> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
-      %dot2 = tt.dot %25, %trans2, %cst, inputPrecision = tf32 : tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<64x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<64x32xf32, #mma>
-      %81 = arith.addi %arg13, %c32_i32 : i32
-      scf.yield %81 : i32
-    }
-    %res3:1 = scf.for %arg9 = %c0_i32 to %arg0 step %c32_i32 iter_args(%arg13 = %arg0) -> (i32) : i32 {
-      %load3 = tt.load %adv1 {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "row_major"} : !tt.ptr<tensor<32x64xf16, #linear>>
-      %trans3 = tt.trans %load3 {order = array<i32: 1, 0>} : tensor<32x64xf16, #linear> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
-      %dot3 = tt.dot %25, %trans3, %cst, inputPrecision = tf32 : tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<64x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<64x32xf32, #mma>
-      %81 = arith.addi %arg13, %c32_i32 : i32
-      scf.yield %81 : i32
-    }
-    tt.return
-  }
-  // CHECK-LABEL: fuseLoadWithTrans5
-  // CHECK: [[PTR1:%.*]] = tt.make_tensor_ptr %arg2, [%c64_i64, %c1_i64], [%c1_i64, %c64_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<64x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
-  // CHECK: scf.for
-  // CHECK:   tt.trans
-  // CHECK: scf.for
-  // CHECK-NOT: tt.trans
-  // CHECK:   [[ADV:%.*]] = tt.advance [[PTR1]], {{.*}} : <tensor<64x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
-  // CHECK:   [[LOAD_B:%.*]] = tt.load [[ADV]] {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "column_major"} : !tt.ptr<tensor<64x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
-  // CHECK:   tt.dot {{.*}}, [[LOAD_B]], {{.*}}, inputPrecision = tf32 : tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<64x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<64x32xf32, #mma>
-  // CHECK: scf.for
-  // CHECK:   tt.trans
-}
-
-// -----
-
-#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [16, 0], [0, 16], [128, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0]], warp = [[32, 0], [64, 0], [0, 0], [0, 0], [0, 0]], block = []}>
-#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 4], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  // COM: Ensure load is not fused with transpose if the loop result corresponding to the pointer used by the load that 'feeds' the transpose operation is used.
-  tt.func public @doNotFuseLoadWithTrans1(%arg0: !tt.ptr<bf16>, %arg1: !tt.ptr<bf16>) {
-    %c1024_i32 = arith.constant 1024 : i32
-    %c0_i32 = arith.constant 0 : i32
-    %c32_i32 = arith.constant 32 : i32
-    %c256_i32 = arith.constant 256 : i32
-    %c16_i32 = arith.constant 16 : i32
-    %c1_i64 = arith.constant 1 : i64
-    %c1024_i64 = arith.constant 1024 : i64
-    %cst = arith.constant dense<0.000000e+00> : tensor<256x256xf32, #mma>
-    %9 = tt.make_tensor_ptr %arg0, [%c1024_i64, %c1024_i64], [%c1024_i64, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<256x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
-    %10 = tt.make_tensor_ptr %arg1, [%c1024_i64, %c1_i64], [%c1_i64, %c1024_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<256x32xbf16, #linear>>
-    %13:3 = scf.for %arg3 = %c0_i32 to %c1024_i32 step %c32_i32 iter_args(%arg4 = %cst, %arg5 = %c0_i32, %arg6 = %10) -> (tensor<256x256xf32, #mma>, i32, !tt.ptr<tensor<256x32xbf16, #linear>>) : i32 {
-      %17 = tt.advance %9, [%c256_i32, %arg5] : <tensor<256x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
-      %18 = tt.load %17 {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "row_major"} : !tt.ptr<tensor<256x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
-      %19 = tt.advance %arg6, [%c16_i32, %arg5] : <tensor<256x32xbf16, #linear>>
-      %20 = tt.load %19 {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "column_major"} : !tt.ptr<tensor<256x32xbf16, #linear>>
-      %21 = tt.trans %20 {order = array<i32: 1, 0>} : tensor<256x32xbf16, #linear> -> tensor<32x256xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
-      %22 = tt.dot %18, %21, %arg4, inputPrecision = tf32 : tensor<256x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<32x256xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<256x256xf32, #mma>
-      %23 = arith.addi %arg5, %c32_i32 : i32
-      scf.yield %22, %23, %19 : tensor<256x256xf32, #mma>, i32, !tt.ptr<tensor<256x32xbf16, #linear>>
-    }
-    %15 = tt.advance %13#2, [%c16_i32, %c16_i32] : <tensor<256x32xbf16, #linear>>
-    tt.return
-  }
-  // CHECK-LABEL: doNotFuseLoadWithTrans1
+#brow = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+#bcol = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 2], warpsPerCTA = [1, 8], order = [0, 1]}>
+#bcolf32 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 2], warpsPerCTA = [1, 8], order = [0, 1]}>
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>
+module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: tt.func @do_not_fuse_when_trans_has_multiple_uses
+  // CHECK: tt.descriptor_load {{.*}} {ttig.block_io = "row_major"}
   // CHECK: tt.trans
-}
-
-// -----
-
-#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [16, 0], [0, 16], [128, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0]], warp = [[32, 0], [64, 0], [0, 0], [0, 0], [0, 0]], block = []}>
-#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 4], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  // COM: Ensure load is not fused with transpose if there are multiple users of an operation in the def-use chain containing the load + transpose.
-  // COM: In this case `%19` is used by the load that feeds the transpose and by a store operation.
-  tt.func public @doNotFuseLoadWithTrans2(%arg0: !tt.ptr<bf16>, %arg1: !tt.ptr<bf16>) {
-    %c4_i32 = arith.constant 4 : i32
-    %c1024_i32 = arith.constant 1024 : i32
-    %c0_i32 = arith.constant 0 : i32
-    %c32_i32 = arith.constant 32 : i32
-    %c256_i32 = arith.constant 256 : i32
-    %c16_i32 = arith.constant 16 : i32
-    %c1_i64 = arith.constant 1 : i64
-    %c1024_i64 = arith.constant 1024 : i64
-    %cst = arith.constant dense<0.000000e+00> : tensor<256x256xf32, #mma>
-    %cst_1 = arith.constant dense<1.000000e+00> : tensor<256x32xbf16, #linear>
-    %0 = tt.get_program_id x : i32
-    %1 = arith.divsi %0, %c16_i32 : i32
-    %2 = arith.muli %1, %c4_i32 : i32
-    %3 = arith.subi %c4_i32, %2 : i32
-    %4 = arith.minsi %3, %c4_i32 : i32
-    %5 = arith.remsi %0, %c16_i32 : i32
-    %6 = arith.remsi %5, %4 : i32
-    %7 = arith.addi %2, %6 : i32
-    %8 = arith.divsi %5, %4 : i32
-    %9 = tt.make_tensor_ptr %arg0, [%c1024_i64, %c1024_i64], [%c1024_i64, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<256x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
-    %10 = tt.make_tensor_ptr %arg1, [%c1024_i64, %c1_i64], [%c1_i64, %c1024_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<256x32xbf16, #linear>>
-    %13:3 = scf.for %arg3 = %c0_i32 to %c1024_i32 step %c32_i32 iter_args(%arg4 = %cst, %arg5 = %c0_i32, %arg6 = %10) -> (tensor<256x256xf32, #mma>, i32, !tt.ptr<tensor<256x32xbf16, #linear>>) : i32 {
-      %17 = tt.advance %9, [%c256_i32, %arg5] : <tensor<256x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
-      %18 = tt.load %17 {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "row_major"} : !tt.ptr<tensor<256x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
-      %19 = tt.advance %arg6, [%c16_i32, %arg5] : <tensor<256x32xbf16, #linear>>
-      %20 = tt.load %19 {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "column_major"} : !tt.ptr<tensor<256x32xbf16, #linear>>
-      %21 = tt.trans %20 {order = array<i32: 1, 0>} : tensor<256x32xbf16, #linear> -> tensor<32x256xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
-      %22 = tt.dot %18, %21, %arg4, inputPrecision = tf32 : tensor<256x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<32x256xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<256x256xf32, #mma>
-      tt.store %19, %cst_1 {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<256x32xbf16, #linear>>
-      %23 = arith.addi %arg5, %c32_i32 : i32
-      scf.yield %22, %23, %19 : tensor<256x256xf32, #mma>, i32, !tt.ptr<tensor<256x32xbf16, #linear>>
-    }
-    tt.return
-  }
-  // CHECK-LABEL: doNotFuseLoadWithTrans2
-  // CHECK: tt.trans
-}
-
-// -----
-
-#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [16, 0], [0, 16], [128, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0]], warp = [[32, 0], [64, 0], [0, 0], [0, 0], [0, 0]], block = []}>
-#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 4], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  // COM: Ensure load is not fused with transpose if the block ptr used by the load operation is yielded by a if statement (current limitation).
-  tt.func public @doNotFuseLoadWithTrans3(%arg0: !tt.ptr<tensor<256x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>, %arg1: !tt.ptr<bf16>, %cond: i1) {
+  tt.func @do_not_fuse_when_trans_has_multiple_uses(%ptr: !tt.ptr<f16>, %a: tensor<64x32xf16, #dot0>) -> tensor<32x64xf32, #bcolf32> {
     %c0_i32 = arith.constant 0 : i32
     %c1_i64 = arith.constant 1 : i64
     %c32_i32 = arith.constant 32 : i32
-    %c256_i32 = arith.constant 256 : i32
-    %c1024_i64 = arith.constant 1024 : i64
-    %c1024_i32 = arith.constant 1024 : i32
-    %cst = arith.constant dense<0.000000e+00> : tensor<256x256xf32, #mma>
-    %0 = tt.make_tensor_ptr %arg1, [%c1024_i64, %c1_i64], [%c1_i64, %c1024_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<256x32xbf16, #linear>>
-    %a = tt.make_tensor_ptr %arg1, [%c1024_i64, %c1_i64], [%c1_i64, %c1024_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<256x32xbf16, #linear>>
-
-    %res:2 = scf.for %arg3 = %c0_i32 to %c1024_i32 step %c32_i32 iter_args(%arg4 = %cst, %arg5 = %c0_i32) -> (tensor<256x256xf32, #mma>, i32) : i32 {
-      %1 = tt.load %arg0 {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "row_major"} : !tt.ptr<tensor<256x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
-      %2 = tt.advance %0, [%c256_i32, %c0_i32] : <tensor<256x32xbf16, #linear>>
-      %3 = scf.if %cond -> !tt.ptr<tensor<256x32xbf16, #linear>> {
-        scf.yield %2 : !tt.ptr<tensor<256x32xbf16, #linear>>
-      } else {
-        scf.yield %a : !tt.ptr<tensor<256x32xbf16, #linear>>
-      }
-      %a4 = tt.load %3 {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "column_major"} : !tt.ptr<tensor<256x32xbf16, #linear>>
-      %b4 = tt.load %2 {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "column_major"} : !tt.ptr<tensor<256x32xbf16, #linear>>
-      %5 = tt.trans %b4 {order = array<i32: 1, 0>} : tensor<256x32xbf16, #linear> -> tensor<32x256xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
-      %6 = tt.dot %1, %5, %arg4, inputPrecision = tf32 : tensor<256x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<32x256xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<256x256xf32, #mma>
-      %7 = arith.addi %arg5, %c32_i32 : i32
-      scf.yield %6, %7 : tensor<256x256xf32, #mma>, i32
-    }
-    tt.return
+    %c64_i32 = arith.constant 64 : i32
+    %c32_i64 = arith.constant 32 : i64
+    %c = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #dpas>
+    %desc = tt.make_tensor_descriptor %ptr, [%c64_i32, %c32_i32], [%c32_i64, %c1_i64] : <f16>, <tensor<64x32xf16>>
+    %ld = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #brow>
+    %tr = tt.trans %ld {order = array<i32: 1, 0>} : tensor<64x32xf16, #brow> -> tensor<32x64xf16, #bcol>
+    %b = ttg.convert_layout %tr : tensor<32x64xf16, #bcol> -> tensor<32x64xf16, #dot1>
+    %d = tt.dot %a, %b, %c, inputPrecision = tf32 : tensor<64x32xf16, #dot0> * tensor<32x64xf16, #dot1> -> tensor<64x64xf32, #dpas>
+    %use = arith.extf %tr : tensor<32x64xf16, #bcol> to tensor<32x64xf32, #bcolf32>
+    tt.return %use : tensor<32x64xf32, #bcolf32>
   }
-  // CHECK-LABEL: doNotFuseLoadWithTrans3
-  // CHECK: tt.trans
 }
 
 // -----
 
-#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [16, 0], [0, 16], [128, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0]], warp = [[32, 0], [64, 0], [0, 0], [0, 0], [0, 0]], block = []}>
-#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 4], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  // COM: Ensure load is not fused with transpose when it is in a while loop (current limitation).
-  tt.func public @doNotFuseLoadWithTrans4(%arg0: !tt.ptr<tensor<256x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>, %arg1: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg2: i1) {
+#brow = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+#bcol = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 2], warpsPerCTA = [1, 8], order = [0, 1]}>
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>
+module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: tt.func @do_not_fuse_when_load_is_not_row_major
+  // CHECK: tt.descriptor_load {{.*}} {ttig.block_io = "column_major"}
+  // CHECK: tt.trans
+  tt.func @do_not_fuse_when_load_is_not_row_major(%ptr: !tt.ptr<f16>, %a: tensor<64x32xf16, #dot0>) -> tensor<64x64xf32, #dpas> {
     %c0_i32 = arith.constant 0 : i32
     %c1_i64 = arith.constant 1 : i64
     %c32_i32 = arith.constant 32 : i32
-    %c256_i32 = arith.constant 256 : i32
-    %c1024_i64 = arith.constant 1024 : i64
-    %cst = arith.constant dense<0.000000e+00> : tensor<256x256xf32, #mma>
-    %0 = tt.make_tensor_ptr %arg1, [%c1024_i64, %c1_i64], [%c1_i64, %c1024_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<256x32xbf16, #linear>>
-    %1:2 = scf.while (%arg3 = %0, %arg4 = %c0_i32) : (!tt.ptr<tensor<256x32xbf16, #linear>>, i32) -> (!tt.ptr<tensor<256x32xbf16, #linear>>, i32) {
-      scf.condition(%arg2) %arg3, %arg4 : !tt.ptr<tensor<256x32xbf16, #linear>>, i32
-    } do {
-    ^bb0(%arg3: !tt.ptr<tensor<256x32xbf16, #linear>>, %arg4: i32):
-      %2 = tt.load %arg0 {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "row_major"} : !tt.ptr<tensor<256x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
-      %3 = tt.advance %arg3, [%c256_i32, %c0_i32] : <tensor<256x32xbf16, #linear>>
-      %4 = tt.load %3 {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "column_major"} : !tt.ptr<tensor<256x32xbf16, #linear>>
-      %5 = tt.trans %4 {order = array<i32: 1, 0>} : tensor<256x32xbf16, #linear> -> tensor<32x256xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
-      %6 = tt.dot %2, %5, %cst, inputPrecision = tf32 : tensor<256x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<32x256xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<256x256xf32, #mma>
-      %7 = arith.addi %arg4, %c32_i32 : i32
-      scf.yield %3, %7 : !tt.ptr<tensor<256x32xbf16, #linear>>, i32
-    }
-    tt.return
+    %c64_i32 = arith.constant 64 : i32
+    %c32_i64 = arith.constant 32 : i64
+    %c = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #dpas>
+    %desc = tt.make_tensor_descriptor %ptr, [%c64_i32, %c32_i32], [%c32_i64, %c1_i64] : <f16>, <tensor<64x32xf16>>
+    %ld = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.block_io = "column_major"} : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #brow>
+    %tr = tt.trans %ld {order = array<i32: 1, 0>} : tensor<64x32xf16, #brow> -> tensor<32x64xf16, #bcol>
+    %b = ttg.convert_layout %tr : tensor<32x64xf16, #bcol> -> tensor<32x64xf16, #dot1>
+    %d = tt.dot %a, %b, %c, inputPrecision = tf32 : tensor<64x32xf16, #dot0> * tensor<32x64xf16, #dot1> -> tensor<64x64xf32, #dpas>
+    tt.return %d : tensor<64x64xf32, #dpas>
   }
-  // CHECK-LABEL: doNotFuseLoadWithTrans4
-  // CHECK: tt.trans
-}
-
-// -----
-
-#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [16, 0], [0, 16], [0, 32]], lane = [[1, 0], [2, 0], [4, 0], [8, 0]], warp = [[0, 0], [0, 0]], block = []}>
-#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  // COM: Ensure tt.trans is not fused with tt.load when the load uses a pointer yielded by a function call.
-  tt.func @func(%cond: i1, %p1: !tt.ptr<tensor<32x64xf16, #linear>>, %p2: !tt.ptr<tensor<32x64xf16, #linear>>) -> !tt.ptr<tensor<32x64xf16, #linear>> attributes {noinline = true} {
-    %0 = arith.select %cond, %p1, %p2 : i1, !tt.ptr<tensor<32x64xf16, #linear>>
-    tt.return %0 : !tt.ptr<tensor<32x64xf16, #linear>>
-  }
-  tt.func public @doNotFuseLoadWithTrans5(%arg0: i32, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f16>, %cond: i1) {
-    %c32_i32 = arith.constant 32 : i32
-    %c0_i32 = arith.constant 0 : i32
-    %c64_i64 = arith.constant 64 : i64
-    %c1_i64 = arith.constant 1 : i64
-    %cst_3 = arith.constant dense<0.000000e+00> : tensor<64x32xf32, #mma>
-    %7 = tt.make_tensor_ptr %arg1, [%c1_i64, %c64_i64], [%c64_i64, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
-    %9 = tt.make_tensor_ptr %arg2, [%c1_i64, %c64_i64], [%c64_i64, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<32x64xf16, #linear>>
-    %24 = tt.advance %7, [%arg0, %c0_i32] : <tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
-    %25 = tt.load %24 {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "row_major"} : !tt.ptr<tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
-    %29:1 = scf.for %arg9 = %c0_i32 to %arg0 step %c32_i32 iter_args(%arg13 = %arg0) -> (i32) : i32 {
-      %adv1 = tt.advance %9, [%arg13, %c0_i32] : <tensor<32x64xf16, #linear>>
-      %adv2 = tt.advance %9, [%c0_i32, %arg13] : <tensor<32x64xf16, #linear>>
-      %adv3 = tt.call @func(%cond, %adv1, %adv2) : (i1, !tt.ptr<tensor<32x64xf16, #linear>>, !tt.ptr<tensor<32x64xf16, #linear>>) -> !tt.ptr<tensor<32x64xf16, #linear>>
-      %load1 = tt.load %adv3 {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "row_major"} : !tt.ptr<tensor<32x64xf16, #linear>>
-      %trans1 = tt.trans %load1 {order = array<i32: 1, 0>} : tensor<32x64xf16, #linear> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
-      %dot1 = tt.dot %25, %trans1, %cst_3, inputPrecision = tf32 : tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<64x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<64x32xf32, #mma>
-      %76 = arith.addi %arg13, %c32_i32 : i32
-      scf.yield %76 : i32
-    }
-    tt.return
-  }
-  // CHECK-LABEL: doNotFuseLoadWithTrans5
-  // CHECK: tt.trans
-}
-
-// -----
-
-// COM: Descriptor load fusion tests.
-// COM: tt.trans infers its result type by transposing the input encoding,
-// COM: so the real pattern has: descriptor_load -> trans -> convert_layout -> dot.
-
-#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
-#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
-#blocked_trans = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 1], warpsPerCTA = [1, 8], order = [0, 1]}>
-#dot0 = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>
-#dot1 = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
-  // COM: tt.descriptor_load -> tt.trans -> convert_layout -> tt.dot chain.
-  // COM: Fusion keeps the descriptor unchanged and eliminates the transpose
-  // COM: by producing a transposed result type from the original descriptor.
-  // COM: The remaining convert_layout is preserved.
-  tt.func public @fuseDescriptorLoadWithTrans1(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %M: i32, %N: i32, %K: i32, %strideAm: i64, %strideBn: i64) {
-    %c0_i32 = arith.constant 0 : i32
-    %c1_i64 = arith.constant 1 : i64
-    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
-    %descA = tt.make_tensor_descriptor %arg0, [%M, %K], [%strideAm, %c1_i64] : <f16>, <tensor<64x32xf16>>
-    %descB = tt.make_tensor_descriptor %arg1, [%N, %K], [%strideBn, %c1_i64] : <f16>, <tensor<64x32xf16>>
-    %loadA = tt.descriptor_load %descA[%c0_i32, %c0_i32] : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #dot0>
-    %loadB = tt.descriptor_load %descB[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #blocked>
-    %transB = tt.trans %loadB {order = array<i32: 1, 0>} : tensor<64x32xf16, #blocked> -> tensor<32x64xf16, #blocked_trans>
-    %cvtB = ttg.convert_layout %transB : tensor<32x64xf16, #blocked_trans> -> tensor<32x64xf16, #dot1>
-    %dot = tt.dot %loadA, %cvtB, %cst : tensor<64x32xf16, #dot0> * tensor<32x64xf16, #dot1> -> tensor<64x64xf32, #mma>
-    tt.return
-  }
-  // CHECK-LABEL: fuseDescriptorLoadWithTrans1
-  // CHECK: tt.make_tensor_descriptor %arg1, [%arg3, %arg4], [%arg6, %c1_i64]
-  // CHECK-SAME: <tensor<64x32xf16>>
-  // CHECK: tt.descriptor_load {{.*}} {ttig.block_io = "column_major"} : !tt.tensordesc<tensor<64x32xf16>> -> tensor<32x64xf16, #blocked>
-  // CHECK-NOT: tt.trans
-  // CHECK: ttg.convert_layout
-  // CHECK: tt.dot
-}
-
-// -----
-
-#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
-#blocked_trans = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 1], warpsPerCTA = [1, 8], order = [0, 1]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  // COM: Descriptor load -> trans, but trans NOT used by dot -> no fusion.
-  tt.func public @doNotFuseDescriptorLoadWithTrans1(%arg0: !tt.ptr<f16>, %N: i32, %K: i32, %strideBn: i64) -> tensor<32x64xf16, #blocked_trans> {
-    %c0_i32 = arith.constant 0 : i32
-    %c1_i64 = arith.constant 1 : i64
-    %descB = tt.make_tensor_descriptor %arg0, [%N, %K], [%strideBn, %c1_i64] : <f16>, <tensor<64x32xf16>>
-    %loadB = tt.descriptor_load %descB[%c0_i32, %c0_i32] : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #blocked>
-    %transB = tt.trans %loadB {order = array<i32: 1, 0>} : tensor<64x32xf16, #blocked> -> tensor<32x64xf16, #blocked_trans>
-    tt.return %transB : tensor<32x64xf16, #blocked_trans>
-  }
-  // CHECK-LABEL: doNotFuseDescriptorLoadWithTrans1
-  // CHECK: tt.trans
-}
-
-// -----
-
-#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
-#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
-#blocked_trans = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 1], warpsPerCTA = [1, 8], order = [0, 1]}>
-#dot0 = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>
-#dot1 = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
-  // COM: Descriptor load -> trans -> fp_to_fp -> convert_layout -> dot.
-  // COM: Fusion should still remove the transpose and keep the rest of the
-  // COM: single-use chain intact.
-  tt.func public @fuseDescriptorLoadWithTransFpToFp(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f8E4M3FN>, %M: i32, %N: i32, %K: i32, %strideAm: i64, %strideBn: i64) {
-    %c0_i32 = arith.constant 0 : i32
-    %c1_i64 = arith.constant 1 : i64
-    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
-    %descA = tt.make_tensor_descriptor %arg0, [%M, %K], [%strideAm, %c1_i64] : <f16>, <tensor<64x32xf16>>
-    %descB = tt.make_tensor_descriptor %arg1, [%N, %K], [%strideBn, %c1_i64] : <f8E4M3FN>, <tensor<64x32xf8E4M3FN>>
-    %loadA = tt.descriptor_load %descA[%c0_i32, %c0_i32] : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #dot0>
-    %loadB = tt.descriptor_load %descB[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<64x32xf8E4M3FN>> -> tensor<64x32xf8E4M3FN, #blocked>
-    %transB = tt.trans %loadB {order = array<i32: 1, 0>} : tensor<64x32xf8E4M3FN, #blocked> -> tensor<32x64xf8E4M3FN, #blocked_trans>
-    %castB = tt.fp_to_fp %transB : tensor<32x64xf8E4M3FN, #blocked_trans> -> tensor<32x64xf16, #blocked_trans>
-    %cvtB = ttg.convert_layout %castB : tensor<32x64xf16, #blocked_trans> -> tensor<32x64xf16, #dot1>
-    %dot = tt.dot %loadA, %cvtB, %cst : tensor<64x32xf16, #dot0> * tensor<32x64xf16, #dot1> -> tensor<64x64xf32, #mma>
-    tt.return
-  }
-  // CHECK-LABEL: fuseDescriptorLoadWithTransFpToFp
-  // CHECK: tt.descriptor_load {{.*}} {ttig.block_io = "column_major"} : !tt.tensordesc<tensor<64x32xf8E4M3FN>> -> tensor<32x64xf8E4M3FN, #blocked>
-  // CHECK-NOT: tt.trans
-  // CHECK: tt.fp_to_fp
-  // CHECK: ttg.convert_layout
-  // CHECK: tt.dot
-}
-
-// -----
-
-#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
-#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
-#blocked_trans = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 1], warpsPerCTA = [1, 8], order = [0, 1]}>
-#dot0 = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>
-#dot1 = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
-  // COM: Descriptor load -> trans -> convert_layout -> dot inside while loop -> no fusion.
-  tt.func public @doNotFuseDescriptorLoadWithTrans2(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %M: i32, %N: i32, %K: i32, %strideAm: i64, %strideBn: i64, %cond: i1) {
-    %c0_i32 = arith.constant 0 : i32
-    %c1_i64 = arith.constant 1 : i64
-    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
-    %descA = tt.make_tensor_descriptor %arg0, [%M, %K], [%strideAm, %c1_i64] : <f16>, <tensor<64x32xf16>>
-    %descB = tt.make_tensor_descriptor %arg1, [%N, %K], [%strideBn, %c1_i64] : <f16>, <tensor<64x32xf16>>
-    %0 = scf.while (%iter = %c0_i32) : (i32) -> (i32) {
-      scf.condition(%cond) %iter : i32
-    } do {
-    ^bb0(%arg3: i32):
-      %loadA = tt.descriptor_load %descA[%c0_i32, %c0_i32] : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #dot0>
-      %loadB = tt.descriptor_load %descB[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #blocked>
-      %transB = tt.trans %loadB {order = array<i32: 1, 0>} : tensor<64x32xf16, #blocked> -> tensor<32x64xf16, #blocked_trans>
-      %cvtB = ttg.convert_layout %transB : tensor<32x64xf16, #blocked_trans> -> tensor<32x64xf16, #dot1>
-      %dot = tt.dot %loadA, %cvtB, %cst : tensor<64x32xf16, #dot0> * tensor<32x64xf16, #dot1> -> tensor<64x64xf32, #mma>
-      scf.yield %arg3 : i32
-    }
-    tt.return
-  }
-  // CHECK-LABEL: doNotFuseDescriptorLoadWithTrans2
-  // CHECK: tt.trans
-}
-
-// -----
-
-// COM: Verify that cache/evict attributes and discardable attributes are
-// COM: preserved through fusion.
-
-#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
-#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
-#blocked_trans = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 1], warpsPerCTA = [1, 8], order = [0, 1]}>
-#dot0 = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>
-#dot1 = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
-  tt.func public @fuseDescriptorLoadWithTransPreservesAttrs(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %M: i32, %N: i32, %K: i32, %strideAm: i64, %strideBn: i64) {
-    %c0_i32 = arith.constant 0 : i32
-    %c1_i64 = arith.constant 1 : i64
-    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
-    %descA = tt.make_tensor_descriptor %arg0, [%M, %K], [%strideAm, %c1_i64] : <f16>, <tensor<64x32xf16>>
-    %descB = tt.make_tensor_descriptor %arg1, [%N, %K], [%strideBn, %c1_i64] : <f16>, <tensor<64x32xf16>>
-    %loadA = tt.descriptor_load %descA[%c0_i32, %c0_i32] : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #dot0>
-    %loadB = tt.descriptor_load %descB[%c0_i32, %c0_i32] cacheModifier = ca evictionPolicy = evict_first {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #blocked>
-    %transB = tt.trans %loadB {order = array<i32: 1, 0>} : tensor<64x32xf16, #blocked> -> tensor<32x64xf16, #blocked_trans>
-    %cvtB = ttg.convert_layout %transB : tensor<32x64xf16, #blocked_trans> -> tensor<32x64xf16, #dot1>
-    %dot = tt.dot %loadA, %cvtB, %cst : tensor<64x32xf16, #dot0> * tensor<32x64xf16, #dot1> -> tensor<64x64xf32, #mma>
-    tt.return
-  }
-  // CHECK-LABEL: fuseDescriptorLoadWithTransPreservesAttrs
-  // CHECK: tt.descriptor_load {{.*}} cacheModifier = ca evictionPolicy = evict_first {ttig.block_io = "column_major"}
-  // CHECK-SAME: -> tensor<32x64xf16, #blocked>
-  // CHECK-NOT: tt.trans
-  // CHECK: ttg.convert_layout
-  // CHECK: tt.dot
-}
-
-// -----
-
-// COM: No fusion when hardware does not support 2D block IO.
-#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
-#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
-#blocked_trans = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 1], warpsPerCTA = [1, 8], order = [0, 1]}>
-#dot0 = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>
-#dot1 = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  tt.func public @doNotFuseDescriptorLoadWithTrans_NoBlockIO(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %M: i32, %N: i32, %K: i32, %strideAm: i64, %strideBn: i64) {
-    %c0_i32 = arith.constant 0 : i32
-    %c1_i64 = arith.constant 1 : i64
-    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
-    %descA = tt.make_tensor_descriptor %arg0, [%M, %K], [%strideAm, %c1_i64] : <f16>, <tensor<64x32xf16>>
-    %descB = tt.make_tensor_descriptor %arg1, [%N, %K], [%strideBn, %c1_i64] : <f16>, <tensor<64x32xf16>>
-    %loadA = tt.descriptor_load %descA[%c0_i32, %c0_i32] : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #dot0>
-    %loadB = tt.descriptor_load %descB[%c0_i32, %c0_i32] : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #blocked>
-    %transB = tt.trans %loadB {order = array<i32: 1, 0>} : tensor<64x32xf16, #blocked> -> tensor<32x64xf16, #blocked_trans>
-    %cvtB = ttg.convert_layout %transB : tensor<32x64xf16, #blocked_trans> -> tensor<32x64xf16, #dot1>
-    %dot = tt.dot %loadA, %cvtB, %cst : tensor<64x32xf16, #dot0> * tensor<32x64xf16, #dot1> -> tensor<64x64xf32, #mma>
-    tt.return
-  }
-  // CHECK-LABEL: doNotFuseDescriptorLoadWithTrans_NoBlockIO
-  // COM: Transpose must be preserved — no column_major descriptor load created.
-  // CHECK: tt.trans
-  // CHECK-NOT: ttig.block_io = "column_major"
-}
-
-// -----
-
-// COM: No fusion when descriptor load lacks block_io = "row_major", even with
-// COM: ttig.support_2d_block_io present. Tests the isCandidate guard that
-// COM: requires MaterializeBlockPointer to have already confirmed the load is
-// COM: a 2D block IO candidate.
-#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
-#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
-#blocked_trans = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 1], warpsPerCTA = [1, 8], order = [0, 1]}>
-#dot0 = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>
-#dot1 = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
-  tt.func public @doNotFuseDescriptorLoadWithTrans_MissingBlockIOAttr(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %M: i32, %N: i32, %K: i32, %strideAm: i64, %strideBn: i64) {
-    %c0_i32 = arith.constant 0 : i32
-    %c1_i64 = arith.constant 1 : i64
-    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
-    %descA = tt.make_tensor_descriptor %arg0, [%M, %K], [%strideAm, %c1_i64] : <f16>, <tensor<64x32xf16>>
-    %descB = tt.make_tensor_descriptor %arg1, [%N, %K], [%strideBn, %c1_i64] : <f16>, <tensor<64x32xf16>>
-    %loadA = tt.descriptor_load %descA[%c0_i32, %c0_i32] : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #dot0>
-    // No ttig.block_io attribute on loadB -- fusion must not occur.
-    %loadB = tt.descriptor_load %descB[%c0_i32, %c0_i32] : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #blocked>
-    %transB = tt.trans %loadB {order = array<i32: 1, 0>} : tensor<64x32xf16, #blocked> -> tensor<32x64xf16, #blocked_trans>
-    %cvtB = ttg.convert_layout %transB : tensor<32x64xf16, #blocked_trans> -> tensor<32x64xf16, #dot1>
-    %dot = tt.dot %loadA, %cvtB, %cst : tensor<64x32xf16, #dot0> * tensor<32x64xf16, #dot1> -> tensor<64x64xf32, #mma>
-    tt.return
-  }
-  // CHECK-LABEL: doNotFuseDescriptorLoadWithTrans_MissingBlockIOAttr
-  // CHECK: tt.trans
-  // CHECK-NOT: ttig.block_io = "column_major"
-}
-
-// -----
-
-// COM: Rank-3 descriptor load fusion: batch dimension preserved, inner two
-// COM: dims transposed. Pattern: descriptor_load -> trans [0,2,1] ->
-// COM: convert_layout -> dot.
-#mma3d = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4, 2], repCluster = [1, 1, 1]}>
-#blocked3d = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 1, 16], warpsPerCTA = [1, 8, 1], order = [2, 1, 0]}>
-#blocked3d_trans = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 16, 1], warpsPerCTA = [1, 1, 8], order = [1, 2, 0]}>
-#dot0_3d = #ttg.dot_op<{opIdx = 0, parent = #mma3d, kWidth = 1}>
-#dot1_3d = #ttg.dot_op<{opIdx = 1, parent = #mma3d, kWidth = 2}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
-  // COM: Descriptor B has shape [2, 64, 32] (batch=2, N=64, K=32).
-  // COM: After transposing inner dims [0,2,1] we get [2, 32, 64] (batch=2, K=32, N=64).
-  // COM: Fusion should eliminate the transpose and change block_io to "column_major".
-  tt.func public @fuseDescriptorLoadWithTrans_rank3(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %M: i32, %N: i32, %K: i32, %strideAb: i64, %strideAm: i64, %strideBb: i64, %strideBn: i64) {
-    %c0_i32 = arith.constant 0 : i32
-    %c1_i64 = arith.constant 1 : i64
-    %cst = arith.constant dense<0.000000e+00> : tensor<2x32x64xf32, #mma3d>
-    %descA = tt.make_tensor_descriptor %arg0, [%M, %N, %K], [%strideAb, %strideAm, %c1_i64] : <f16>, <tensor<2x32x32xf16>>
-    %descB = tt.make_tensor_descriptor %arg1, [%M, %N, %K], [%strideBb, %strideBn, %c1_i64] : <f16>, <tensor<2x64x32xf16>>
-    %loadA = tt.descriptor_load %descA[%c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<tensor<2x32x32xf16>> -> tensor<2x32x32xf16, #dot0_3d>
-    %loadB = tt.descriptor_load %descB[%c0_i32, %c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<2x64x32xf16>> -> tensor<2x64x32xf16, #blocked3d>
-    %transB = tt.trans %loadB {order = array<i32: 0, 2, 1>} : tensor<2x64x32xf16, #blocked3d> -> tensor<2x32x64xf16, #blocked3d_trans>
-    %cvtB = ttg.convert_layout %transB : tensor<2x32x64xf16, #blocked3d_trans> -> tensor<2x32x64xf16, #dot1_3d>
-    %dot = tt.dot %loadA, %cvtB, %cst : tensor<2x32x32xf16, #dot0_3d> * tensor<2x32x64xf16, #dot1_3d> -> tensor<2x32x64xf32, #mma3d>
-    tt.return
-  }
-  // CHECK-LABEL: fuseDescriptorLoadWithTrans_rank3
-  // COM: Descriptor B shape is unchanged -- still <tensor<2x64x32xf16>>.
-  // CHECK: tt.make_tensor_descriptor %arg1{{.*}}<tensor<2x64x32xf16>>
-  // COM: The descriptor_load now produces the transposed result directly with column_major.
-  // CHECK: tt.descriptor_load {{.*}} {ttig.block_io = "column_major"} : !tt.tensordesc<tensor<2x64x32xf16>> -> tensor<2x32x64xf16
-  // CHECK-NOT: tt.trans
-  // CHECK: ttg.convert_layout
-  // CHECK: tt.dot
-}
-
-// -----
-
-// COM: Negative test: rank-3 TransOp with exotic order [1, 0, 2] swaps the
-// COM: outer (batch) and middle dims instead of the innermost two dims.
-// COM: This transpose does NOT produce a shape usable by tt.dot, so the
-// COM: descriptor_load + trans fusion must NOT fire.
-#mma3d = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4, 2], repCluster = [1, 1, 1]}>
-#blocked3d = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 1, 16], warpsPerCTA = [1, 8, 1], order = [2, 1, 0]}>
-#blocked3d_exotic_trans = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 1, 16], warpsPerCTA = [8, 1, 1], order = [2, 0, 1]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
-  tt.func public @doNotFuseDescriptorLoadWithTrans_exoticOrder(%arg0: !tt.ptr<f16>, %N: i32, %K: i32, %strideBb: i64, %strideBn: i64) -> tensor<64x2x32xf16, #blocked3d_exotic_trans> {
-    %c0_i32 = arith.constant 0 : i32
-    %c1_i64 = arith.constant 1 : i64
-    %descB = tt.make_tensor_descriptor %arg0, [%N, %N, %K], [%strideBb, %strideBn, %c1_i64] : <f16>, <tensor<2x64x32xf16>>
-    %loadB = tt.descriptor_load %descB[%c0_i32, %c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<2x64x32xf16>> -> tensor<2x64x32xf16, #blocked3d>
-    %transB = tt.trans %loadB {order = array<i32: 1, 0, 2>} : tensor<2x64x32xf16, #blocked3d> -> tensor<64x2x32xf16, #blocked3d_exotic_trans>
-    tt.return %transB : tensor<64x2x32xf16, #blocked3d_exotic_trans>
-  }
-  // CHECK-LABEL: doNotFuseDescriptorLoadWithTrans_exoticOrder
-  // CHECK: tt.trans
-  // CHECK-NOT: ttig.block_io = "column_major"
 }
