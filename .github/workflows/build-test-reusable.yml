@@ -387,6 +387,7 @@ jobs:
       - name: Pass rate
         run: |
           triton-utils pass_rate --reports reports --save-to-json pass_rate.json --merge-test-results --tests-with-multiple-testsuites
+          triton-utils pass_rate --reports reports --merge-test-results --tests-with-multiple-testsuites --suite tutorials --level testsuite --save-to-json pass_rate_tutorials.json
           triton-utils tests_stats --reports reports --level testsuite --pretty-print --merge-test-results --tests-with-multiple-testsuites
 
       - name: Upload pass rate report

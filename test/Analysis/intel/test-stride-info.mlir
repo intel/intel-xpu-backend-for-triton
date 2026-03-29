@@ -600,6 +600,37 @@ tt.func @rem_stride_divisibility() {
 
 // -----
 
+// CHECK-LABEL: @contiguity_hint
+// tt.contiguity hint overrides unknown stride when hint covers full dimension.
+tt.func @contiguity_hint() {
+  // CHECK: tt.make_range {{.*}} => stride = [1]
+  %range = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32>
+  // CHECK: arith.constant {{.*}} => stride = [0]
+  %c8 = arith.constant dense<8> : tensor<32xi32>
+  // Without hint: wrap-around (span 31 >= modulus 8) => unknown stride.
+  // With tt.contiguity hint covering full dim (32 >= 32) => stride = [1].
+  // CHECK: arith.remsi {{.*}} => stride = [1]
+  %0 = arith.remsi %range, %c8 {tt.contiguity = dense<32> : tensor<1xi32>} : tensor<32xi32>
+  tt.return
+}
+
+// -----
+
+// CHECK-LABEL: @contiguity_hint_partial
+// Hint does not cover full dimension, so stride stays unknown.
+tt.func @contiguity_hint_partial() {
+  // CHECK: tt.make_range {{.*}} => stride = [1]
+  %range = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32>
+  // CHECK: arith.constant {{.*}} => stride = [0]
+  %c8 = arith.constant dense<8> : tensor<32xi32>
+  // Hint (16) < dim size (32) => not fully contiguous, stride stays unknown.
+  // CHECK: arith.remsi {{.*}} => stride = [-1]
+  %0 = arith.remsi %range, %c8 {tt.contiguity = dense<16> : tensor<1xi32>} : tensor<32xi32>
+  tt.return
+}
+
+// -----
+
 // CHECK-LABEL: @advance_passthrough
 tt.func @advance_passthrough(%arg0: !tt.ptr<f16>) {
   %c0_i32 = arith.constant 0 : i32

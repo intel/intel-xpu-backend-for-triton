@@ -109,6 +109,11 @@ def TritonIntelGPURemoveLayoutConversions : Pass<"tritonintelgpu-remove-layout-c
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::TritonDialect"];
 
+  let options = [
+    Option<"maxBackwardRematIterations", "max-backward-remat-iterations",
+           "unsigned", /*default*/"1",
+           "Maximum number of backward rematerialization iterations">,
+  ];
 }
 
 def TritonIntelGPUReduceDataDuplication: Pass<"tritonintelgpu-reduce-data-duplication", "mlir::ModuleOp"> {
