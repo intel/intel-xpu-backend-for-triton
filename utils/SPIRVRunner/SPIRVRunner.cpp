@@ -302,9 +302,9 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
       cgh.set_arg(narg++, nullptr);
     }
     if (triton_args.shared_memory) {
-      using share_mem_t = sycl::local_accessor<int8_t, 1>;
-      share_mem_t local_buffer = share_mem_t(triton_args.shared_memory, cgh);
-      cgh.set_arg(narg, local_buffer);
+      sycl::ext::oneapi::experimental::work_group_memory<char[]> mem(
+          triton_args.shared_memory, cgh);
+      cgh.set_arg(num_params, mem);
     }
     assert(narg == expected_num_params);
     cgh.parallel_for(parallel_work_size, kernel_ptr);
