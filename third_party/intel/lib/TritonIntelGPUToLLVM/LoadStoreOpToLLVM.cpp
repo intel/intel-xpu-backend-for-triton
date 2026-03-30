@@ -236,6 +236,11 @@ struct LoadStoreConversionBase {
     return axisAnalysisPass.getContiguity(ptr);
   }
 
+  /// Maximum number of elements that fit in a 128-bit vector load/store.
+  static unsigned getMaxVecWidth(unsigned pointeeBitWidth) {
+    return std::max(1u, 128 / std::max(8u, pointeeBitWidth));
+  }
+
   unsigned getVectorSize(Value ptr) const {
     if (!isTensorOrTensorPointerType(ptr.getType()))
       return 1;
@@ -243,7 +248,7 @@ struct LoadStoreConversionBase {
     unsigned contiguity = getContiguity(ptr);
     unsigned pointeeBitWidth = triton::getPointeeBitWidth(ptr.getType());
     // The maximum vector size is 128 bits.
-    return std::min<unsigned>(128 / pointeeBitWidth, contiguity);
+    return std::min<unsigned>(getMaxVecWidth(pointeeBitWidth), contiguity);
   }
 
   unsigned getMaskAlignment(Value mask) const {
@@ -285,9 +290,8 @@ struct LoadStoreConversionBase {
     if (descContiguity <= 1)
       return 1; // Stride is not 1 on this dimension
 
-    unsigned pointeeBitWidth =
-        std::max(8u, valueElemTy.getIntOrFloatBitWidth());
-    unsigned maxVec = std::max(1u, 128 / pointeeBitWidth);
+    unsigned pointeeBitWidth = valueElemTy.getIntOrFloatBitWidth();
+    unsigned maxVec = getMaxVecWidth(pointeeBitWidth);
     unsigned threadContig = contigPerThread[order[0]];
     // Note: descContiguity and threadContig refer to the same logical dimension
     // but are indexed in different coordinate spaces. descContiguity uses
