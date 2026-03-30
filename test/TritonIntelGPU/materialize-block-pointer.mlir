@@ -272,9 +272,9 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32,
     %37 = tt.broadcast %36 : tensor<1x1x32xi32, #blocked> -> tensor<2x32x32xi32, #blocked>
     %38 = arith.addi %26, %37 : tensor<2x32x32xi32, #blocked>
     %39 = tt.addptr %27, %38 : tensor<2x32x32x!tt.ptr<f16>, #blocked>, tensor<2x32x32xi32, #blocked>
-    // CHECK: tt.load {{.*}} {ttig.block_io = "row_major"}
+    // REVERT-CHECK: tt.load {{.*}} {ttig.block_io = "row_major"}
     %40 = tt.load %39 evictionPolicy = evict_last : tensor<2x32x32x!tt.ptr<f16>, #blocked>
-    // CHECK: tt.store {{.*}} {ttig.block_io = "row_major"}
+    // REVERT-CHECK: tt.store {{.*}} {ttig.block_io = "row_major"}
     tt.store %39, %40 : tensor<2x32x32x!tt.ptr<f16>, #blocked>
     tt.return
   }

@@ -290,7 +290,7 @@ private:
     //   slice. The axis info reflects this with stride [..., 1, X].
     const tt::AxisInfo *axisInfo = axisInfoAnalysis.getAxisInfo(ptr);
     unsigned rank = axisInfo->getRank();
-    if (rank < 2) {
+    if (rank != 2) {
       LDBG("Rank is < 2, skip block IO attribute");
       return;
     }
