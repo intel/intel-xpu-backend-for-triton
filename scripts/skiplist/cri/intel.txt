@@ -1,2 +1,0 @@
-# Simulator error
-python/test/unit/intel/test_block_load.py::test_block_load_asserts
