@@ -427,7 +427,7 @@ ModuleAxisInfoAnalysis::ModuleAxisInfoAnalysis(ModuleOp moduleOp)
     : triton::ModuleAxisInfoAnalysis(moduleOp,
                                      AxisInfoAnalysisExt::loadAnalysis) {}
 
-const AxisInfo *ModuleAxisInfoAnalysis::getAxisInfo(Value value) const {
+AxisInfo *ModuleAxisInfoAnalysis::getAxisInfo(Value value) const {
   auto funcOp = value.getParentRegion()->getParentOfType<FunctionOpInterface>();
   // const_cast: getFuncData lacks a const overload in upstream CallGraph<T>,
   // but this method only performs a map lookup — logically const.
