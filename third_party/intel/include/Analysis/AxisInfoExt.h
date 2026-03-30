@@ -25,7 +25,7 @@ class ModuleAxisInfoAnalysis : public triton::ModuleAxisInfoAnalysis {
 public:
   explicit ModuleAxisInfoAnalysis(ModuleOp moduleOp);
 
-  AxisInfo *getAxisInfo(Value value) const;
+  const AxisInfo *getAxisInfo(Value value) const;
 
   unsigned getContiguity(Value value) const;
   unsigned getAlignment(Value value) const;

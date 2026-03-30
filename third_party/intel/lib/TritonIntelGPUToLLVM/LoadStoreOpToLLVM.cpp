@@ -260,7 +260,7 @@ struct LoadStoreConversionBase {
     if (rank == 0)
       return 1;
 
-    AxisInfo *descAxisInfo = axisAnalysisPass.getAxisInfo(desc);
+    const AxisInfo *descAxisInfo = axisAnalysisPass.getAxisInfo(desc);
     if (!descAxisInfo || static_cast<unsigned>(descAxisInfo->getRank()) != rank)
       return 1;
 
@@ -1937,7 +1937,7 @@ struct PrefetchOpConversion
       // No need to check the constancy of scalar mask.
       if (auto maskTy = dyn_cast_or_null<RankedTensorType>(mask.getType())) {
         maskConstancyHor = maskConstancyVer = 1;
-        AxisInfo *axisInfo = axisAnalysisPass.getAxisInfo(mask);
+        const AxisInfo *axisInfo = axisAnalysisPass.getAxisInfo(mask);
         if (axisInfo) {
           maskConstancyHor = axisInfo->getConstancy(rank - 1);
           maskConstancyVer = axisInfo->getConstancy(rank - 2);
