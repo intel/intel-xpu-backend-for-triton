@@ -233,7 +233,8 @@ struct LoadStoreConversionBase {
   }
 
   unsigned getContiguity(Value ptr) const {
-    return axisAnalysisPass.getContiguity(ptr);
+    return const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
+        .getContiguity(ptr);
   }
 
   /// Maximum number of elements that fit in a 128-bit vector load/store.
@@ -252,7 +253,8 @@ struct LoadStoreConversionBase {
   }
 
   unsigned getMaskAlignment(Value mask) const {
-    return axisAnalysisPass.getMaskAlignment(mask);
+    return const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
+        .getMaskAlignment(mask);
   }
 
   /// Compute vectorization factor for descriptor load/store gather fallback.
@@ -265,7 +267,9 @@ struct LoadStoreConversionBase {
     if (rank == 0)
       return 1;
 
-    AxisInfo *descAxisInfo = axisAnalysisPass.getAxisInfo(desc);
+    AxisInfo *descAxisInfo =
+        const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
+            .getAxisInfo(desc);
     if (!descAxisInfo || static_cast<unsigned>(descAxisInfo->getRank()) != rank)
       return 1;
 
@@ -1941,7 +1945,10 @@ struct PrefetchOpConversion
       // No need to check the constancy of scalar mask.
       if (auto maskTy = dyn_cast_or_null<RankedTensorType>(mask.getType())) {
         maskConstancyHor = maskConstancyVer = 1;
-        AxisInfo *axisInfo = axisAnalysisPass.getAxisInfo(mask);
+        AxisInfo *axisInfo =
+            const_cast<triton::intel::ModuleAxisInfoAnalysis &>(
+                axisAnalysisPass)
+                .getAxisInfo(mask);
         if (axisInfo) {
           maskConstancyHor = axisInfo->getConstancy(rank - 1);
           maskConstancyVer = axisInfo->getConstancy(rank - 2);
@@ -2374,7 +2381,9 @@ public:
     // Get the maximum tile shapes for the given mask constancy.
     AxisInfo *maskAxisInfo = nullptr;
     if (op.getMask()) {
-      maskAxisInfo = axisAnalysisPass.getAxisInfo(op.getMask());
+      maskAxisInfo =
+          const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
+              .getAxisInfo(op.getMask());
     }
     BlockIOTileSizeInfo sizeInfo = getBlockIOTileSize<true /*load*/>(
         llEncoding.value(), contiguousDim, elemSizeInBits, maskAxisInfo,
@@ -3859,7 +3868,9 @@ struct StoreOpToBlockIOConversion
     // Get the maximum tile shapes for the given mask constancy.
     AxisInfo *maskAxisInfo = nullptr;
     if (op.getMask()) {
-      maskAxisInfo = axisAnalysisPass.getAxisInfo(op.getMask());
+      maskAxisInfo =
+          const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
+              .getAxisInfo(op.getMask());
     }
     BlockIOTileSizeInfo sizeInfo = getBlockIOTileSize<false /*store*/>(
         llEncoding.value(), contiguousDim, elemSizeInBits, maskAxisInfo);

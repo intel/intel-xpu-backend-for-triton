@@ -427,12 +427,9 @@ ModuleAxisInfoAnalysis::ModuleAxisInfoAnalysis(ModuleOp moduleOp)
     : triton::ModuleAxisInfoAnalysis(moduleOp,
                                      AxisInfoAnalysisExt::loadAnalysis) {}
 
-AxisInfo *ModuleAxisInfoAnalysis::getAxisInfo(Value value) const {
+AxisInfo *ModuleAxisInfoAnalysis::getAxisInfo(Value value) {
   auto funcOp = value.getParentRegion()->getParentOfType<FunctionOpInterface>();
-  // const_cast: getFuncData lacks a const overload in upstream CallGraph<T>,
-  // but this method only performs a map lookup — logically const.
-  auto *axisInfoMap =
-      const_cast<ModuleAxisInfoAnalysis *>(this)->getFuncData(funcOp);
+  auto *axisInfoMap = getFuncData(funcOp);
   if (!axisInfoMap)
     return nullptr;
   auto it = axisInfoMap->find(value);
@@ -441,7 +438,7 @@ AxisInfo *ModuleAxisInfoAnalysis::getAxisInfo(Value value) const {
   return &(it->second);
 }
 
-unsigned ModuleAxisInfoAnalysis::getContiguity(Value value) const {
+unsigned ModuleAxisInfoAnalysis::getContiguity(Value value) {
   auto tensorTy = ttgi::getRankedTensorType(value.getType());
   if (!tensorTy)
     return 1;
@@ -462,7 +459,7 @@ unsigned ModuleAxisInfoAnalysis::getContiguity(Value value) const {
   return contiguity;
 }
 
-unsigned ModuleAxisInfoAnalysis::getAlignment(Value value) const {
+unsigned ModuleAxisInfoAnalysis::getAlignment(Value value) {
   auto tensorTy = ttgi::getRankedTensorType(value.getType());
   if (!tensorTy)
     return 1;
@@ -502,7 +499,7 @@ unsigned ModuleAxisInfoAnalysis::getAlignment(Value value) const {
   return alignment;
 }
 
-unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) const {
+unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
   auto tensorTy = ttgi::getRankedTensorType(mask.getType());
   if (!tensorTy)
     return 1;
