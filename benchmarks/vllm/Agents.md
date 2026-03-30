@@ -80,7 +80,7 @@ During a pin update you need to:
 5. Ensure that the benchmarks for `batched_moe` and `unified_attention` folders work as expected. That includes checking that appropriate patch can be applied wihout any issues. Try to keep the patch minimal, for example, by keeping the same line breaks as in the upstream. You can use `DEBUG_BENCH=1` env variable to test if benchmark runs.
 6. Update this instruction if something changed.
 
-To install vllm you need to first remove it with `rm -rf vllm` and uninstall with `pip uninstall vllm`.
+To install vllm you need to first remove it with `rm -rf vllm` and uninstall with `pip uninstall vllm vllm-xpu-kernels`.
 
 # How to update patch
 

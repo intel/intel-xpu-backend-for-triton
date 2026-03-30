@@ -802,49 +802,44 @@ run_liger_tests() {
 
 run_vllm_install() {
   echo "************************************************"
-  echo "******    Installing VLLM                 ******"
+  echo "******    Installing vLLM                 ******"
   echo "************************************************"
-  echo "VLLM pin: $(<"$TRITON_PROJ/benchmarks/vllm/vllm-pin.txt")"
+  echo "vllm pin: $(<"$TRITON_PROJ/benchmarks/vllm/vllm-pin.txt")"
 
   cd "$TRITON_PROJ"
 
-  local CLEAN_MSG="To get a clean install, run: \n    rm -rf $TRITON_PROJ/vllm && pip uninstall -y vllm"
-
-  local has_vllm_pip=false
-  pip show vllm >/dev/null 2>&1 && has_vllm_pip=true
+  local CLEAN_MSG="To get a clean install, run:\n    rm -rf $TRITON_PROJ/vllm && pip uninstall -y vllm"
 
   # vllm already installed — nothing to do
-  if [ "$has_vllm_pip" = true ]; then
+  if pip show vllm >/dev/null 2>&1; then
     echo "WARNING: vllm is already installed, skipping installation."
     echo -e "$CLEAN_MSG"
     return
   fi
 
   # vllm not installed — proceed, reusing existing directory if present
-  if [ -d "./vllm" ]; then
-    echo "WARNING: ./vllm directory already exists, installing from it."
+  if [ -d vllm ]; then
+    echo "WARNING: $TRITON_PROJ/vllm directory already exists, installing from it."
     echo -e "$CLEAN_MSG"
   else
     git clone https://github.com/vllm-project/vllm.git
-
-    # Checkout the pinned commit, apply necessary patches and modify tests to run on xpu
     cd vllm
+
+    # checkout the pinned commit and apply the XPU support patch
     git checkout "$(<../benchmarks/vllm/vllm-pin.txt)"
     git apply ../benchmarks/vllm/vllm-fix.patch
 
-    sed -i 's/device="cuda"/device="xpu"/g' \
-      tests/kernels/moe/utils.py \
-      tests/kernels/moe/test_batched_moe.py \
-      tests/kernels/attention/test_triton_unified_attention.py
-
+    # replace CUDA with XPU in vllm
+    sed -i \
+      -e 's/torch\.cuda\.is_available()/torch\.xpu\.is_available()/g' \
+      -e 's/torch\.device("cuda:0")/torch\.device("xpu:0")/g' \
+      tests/conftest.py
     sed -i 's/set_default_device("cuda")/set_default_device("xpu")/g' \
       tests/kernels/attention/test_triton_unified_attention.py
-
-    sed -i 's/torch\.cuda\.is_available()/torch\.xpu\.is_available()/g' \
-      tests/conftest.py
-
-    sed -i 's/torch\.device("cuda:0")/torch\.device("xpu:0")/g' \
-      tests/conftest.py
+    sed -i 's/device="cuda"/device="xpu"/g' \
+      tests/kernels/attention/test_triton_unified_attention.py \
+      tests/kernels/moe/test_batched_moe.py \
+      tests/kernels/moe/utils.py
 
     cd ..
   fi
@@ -854,14 +849,25 @@ run_vllm_install() {
 
   # These files contain specific versions of pytorch and triton, so let's remove them
   # vllm_xpu_kernels wheel URL is preserved and installed from pre-built wheel
-  sed -i '/pytorch\|torch\|triton/d' vllm/requirements/xpu.txt
-  sed -i '/pytorch\|torch\|triton/d' vllm/requirements/test.in
+  sed -i \
+   -e '/torch/d' \
+   -e '/triton/d' \
+    vllm/requirements/xpu.txt \
+    vllm/requirements/test.in
   pip install -r vllm/requirements/xpu.txt
   # Let's not install whole test requirements for now, they are very large and overwrite torch
   # pip install -r vllm/requirements/test.in
-  pip install cachetools cbor2 blake3 pybase64 openai_harmony tblib
+  pip install \
+    blake3 \
+    cachetools \
+    cbor2 \
+    openai_harmony \
+    pybase64 \
+    tblib
+
   rm -rf benchmarks/vllm/batched_moe/tests
   cp -r vllm/tests benchmarks/vllm/batched_moe/tests
+
   VLLM_TARGET_DEVICE=xpu pip install --no-deps --no-build-isolation -e vllm
 }
 
