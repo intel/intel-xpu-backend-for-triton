@@ -1526,6 +1526,26 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
       }
     }
   }
+
+  /// Adjust other dimension offsets and optionally add boundary checking.
+  /// Used by both LoadOp and DescriptorLoadOp to handle batch dimensions.
+  void adjustOtherDimension(Value &adjustedOffset, Value &addrElem, Value &pred,
+                            Type eltTy, ArrayRef<Value> strides,
+                            ArrayRef<Value> shapes, unsigned dim,
+                            bool hasBoundaryCheck, Location loc,
+                            ConversionPatternRewriter &rewriter,
+                            TritonLLVMOpBuilder &b) const {
+    MLIRContext *ctx = rewriter.getContext();
+    Type i64Ty = IntegerType::get(ctx, 64);
+    adjustedOffset = b.zext(i64Ty, adjustedOffset);
+    Value p = b.mul(adjustedOffset, strides[dim]);
+    addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, p);
+    if (hasBoundaryCheck) {
+      // Add boundary checking for other dims with predication.
+      pred = maybeAnd(rewriter, loc, pred,
+                      b.icmp_ult(adjustedOffset, shapes[dim]));
+    }
+  }
 };
 
 // Compute the 2D prefetch tile shape and warp tiling for cooperative
@@ -2231,25 +2251,6 @@ private:
     offsetX = b.i32_val(0);
   }
 
-  /// Adjust other dimension offsets and optionally add boundary checking.
-  void adjustOtherDimension(Value &adjustedOffset, Value &addrElem, Value &pred,
-                            Type eltTy, ArrayRef<Value> strides,
-                            ArrayRef<Value> shapes, unsigned dim,
-                            bool hasBoundaryCheck, Location loc,
-                            ConversionPatternRewriter &rewriter,
-                            TritonLLVMOpBuilder &b) const {
-    MLIRContext *ctx = rewriter.getContext();
-    Type i64Ty = IntegerType::get(ctx, 64);
-    adjustedOffset = b.zext(i64Ty, adjustedOffset);
-    Value p = b.mul(adjustedOffset, strides[dim]);
-    addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, p);
-    if (hasBoundaryCheck) {
-      // Add boundary checking for other dims with predication.
-      pred = maybeAnd(rewriter, loc, pred,
-                      b.icmp_ult(adjustedOffset, shapes[dim]));
-    }
-  }
-
   /// Compute and apply offsets for tensor pointer type.
   void computeTensorPointerOffsets(
       Value &addrElem, Value &offsetX, Value &offsetY, Value &adjustedBaseWidth,
@@ -2910,14 +2911,11 @@ struct DescriptorLoadOpToBlockIOConversion
         else if (dim == blockColIdx)
           offsetX = adjustedOffset;
         else {
-          // Fold extra dimension offset into base pointer.
-          Type i8Ty = IntegerType::get(ctx, 8);
-          Type i64Ty = IntegerType::get(ctx, 64);
-          Value extraStride = desc.strides[dim];
-          Value extraOff = b.zext(i64Ty, adjustedOffset);
-          Value byteOff = b.mul(
-              extraOff, b.mul(extraStride, b.i64_val(elemSizeInBits / 8)));
-          addrElem = b.gep(ptr_ty(ctx, 1), i8Ty, addrElem, byteOff);
+          // Batch dimensions: fold into base pointer via GEP.
+          Value pred; // Unused for descriptors (boundary checking is built-in).
+          adjustOtherDimension(adjustedOffset, addrElem, pred, eltTy,
+                               desc.strides, desc.shapes, dim,
+                               /*hasBoundaryCheck=*/false, loc, rewriter, b);
         }
       }
 
