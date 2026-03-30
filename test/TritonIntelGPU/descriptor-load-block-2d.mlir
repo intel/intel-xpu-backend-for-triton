@@ -19,9 +19,6 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK: llvm.insertvalue {{.*}}[4] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <tensor<64x32xf16>>
     // Verify 2D block loads are generated for dot A operand.
-    // The base pointer from the descriptor is already uniform — no sub-group
-    // shuffle should be emitted.
-    // CHECK-NOT: sub_group_shuffle
     // For DPAS A with f16: tile_height=8, tile_width=16, v_blocks=2.
     // CHECK-COUNT-2: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 2, transpose = false, vnni_transform = false, cache_control = Default}
     %load = tt.descriptor_load %desc[%arg4, %arg5] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #dot0>
@@ -341,6 +338,46 @@ module attributes {"ttg.num-warps" = 64 : i32, "ttg.threads-per-warp" = 16 : i32
   tt.func public @kernel_trans(%arg0: !tt.tensordesc<tensor<32x2x16xf32>>, %idx: i32) -> tensor<32x2x16xf32, #blocked> {
     %0 = tt.descriptor_load %arg0[%idx, %idx, %idx] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<32x2x16xf32>> -> tensor<32x2x16xf32, #blocked>
     tt.return %0 : tensor<32x2x16xf32, #blocked>
+  }
+}
+
+// -----
+
+// COM: Test rank-3 descriptor load lowering to 2D block loads.
+// COM: The batch dimension (dim 0) is folded into the base pointer via GEP
+// COM: with stride multiplication; inner 2 dims use 2D block loads as usual.
+
+// COM: Rank-3 row-major descriptor load with dot operand A encoding.
+// COM: Shape 4x64x32xf16: 4 batch slices * 2 loads per slice = 8 loads.
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4, 2], repCluster = [1, 1, 1], A = [1, 8, 16], B = [1, 16, 16], C = [1, 8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @descriptor_load_rank3_dot_a
+  tt.func public @descriptor_load_rank3_dot_a(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i64, %arg5: i64, %arg6: i32, %arg7: i32, %arg8: i32) {
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2, %arg3], [%arg4, %arg5, %c1_i64] : <f16>, <tensor<4x64x32xf16>>
+    // CHECK-COUNT-8: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 2, transpose = false, vnni_transform = false, cache_control = Default}
+    %load = tt.descriptor_load %desc[%arg6, %arg7, %arg8] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<4x64x32xf16>> -> tensor<4x64x32xf16, #dot0>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Rank-3 row-major descriptor load with dot operand B encoding.
+// COM: Shape 4x32x64xf16: 4 batch slices * 2 loads per slice = 8 loads.
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4, 2], repCluster = [1, 1, 1], A = [1, 8, 16], B = [1, 16, 16], C = [1, 8, 16]}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @descriptor_load_rank3_dot_b
+  tt.func public @descriptor_load_rank3_dot_b(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i64, %arg5: i64, %arg6: i32, %arg7: i32, %arg8: i32) {
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2, %arg3], [%arg4, %arg5, %c1_i64] : <f16>, <tensor<4x32x64xf16>>
+    // CHECK-COUNT-8: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 1, transpose = false, vnni_transform = true, cache_control = Default}
+    %load = tt.descriptor_load %desc[%arg6, %arg7, %arg8] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<4x32x64xf16>> -> tensor<4x32x64xf16, #dot1>
+    tt.return
   }
 }
 

@@ -636,8 +636,8 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     else
       tensorTy = cast<RankedTensorType>(op.getSrc().getType());
 
-    // Only rank 2 initially.
-    if (tensorTy.getRank() != 2)
+    // Rank must be at least 2 for 2D block I/O.
+    if (tensorTy.getRank() < 2)
       return false;
 
     // Verify the descriptor traces back to a MakeTensorDescOp with PAD_ZERO.
@@ -1145,8 +1145,10 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
         return BlockIOTileSizeInfo::unknown();
     }
 
-    if (rowDim < 0)
-      rowDim = (fastChangeDim != 0) ? 0 : 1;
+    if (rowDim < 0) {
+      int lastDim = static_cast<int>(rank - 1);
+      rowDim = (fastChangeDim != lastDim) ? lastDim : lastDim - 1;
+    }
 
     if (transpose && elemSizeInBits == 64) {
       // D64 transpose only supports 8 rows.
@@ -1522,6 +1524,26 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
         unpackedLoadedVals[registerIdx] =
             b.extract_element(unpackedVal, b.i32_val(i));
       }
+    }
+  }
+
+  /// Adjust other dimension offsets and optionally add boundary checking.
+  /// Used by both LoadOp and DescriptorLoadOp to handle batch dimensions.
+  void adjustOtherDimension(Value &adjustedOffset, Value &addrElem, Value &pred,
+                            Type eltTy, ArrayRef<Value> strides,
+                            ArrayRef<Value> shapes, unsigned dim,
+                            bool hasBoundaryCheck, Location loc,
+                            ConversionPatternRewriter &rewriter,
+                            TritonLLVMOpBuilder &b) const {
+    MLIRContext *ctx = rewriter.getContext();
+    Type i64Ty = IntegerType::get(ctx, 64);
+    adjustedOffset = b.zext(i64Ty, adjustedOffset);
+    Value p = b.mul(adjustedOffset, strides[dim]);
+    addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, p);
+    if (hasBoundaryCheck) {
+      // Add boundary checking for other dims with predication.
+      pred = maybeAnd(rewriter, loc, pred,
+                      b.icmp_ult(adjustedOffset, shapes[dim]));
     }
   }
 };
@@ -2229,25 +2251,6 @@ private:
     offsetX = b.i32_val(0);
   }
 
-  /// Adjust other dimension offsets and optionally add boundary checking.
-  void adjustOtherDimension(Value &adjustedOffset, Value &addrElem, Value &pred,
-                            Type eltTy, ArrayRef<Value> strides,
-                            ArrayRef<Value> shapes, unsigned dim,
-                            bool hasBoundaryCheck, Location loc,
-                            ConversionPatternRewriter &rewriter,
-                            TritonLLVMOpBuilder &b) const {
-    MLIRContext *ctx = rewriter.getContext();
-    Type i64Ty = IntegerType::get(ctx, 64);
-    adjustedOffset = b.zext(i64Ty, adjustedOffset);
-    Value p = b.mul(adjustedOffset, strides[dim]);
-    addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, p);
-    if (hasBoundaryCheck) {
-      // Add boundary checking for other dims with predication.
-      pred = maybeAnd(rewriter, loc, pred,
-                      b.icmp_ult(adjustedOffset, shapes[dim]));
-    }
-  }
-
   /// Compute and apply offsets for tensor pointer type.
   void computeTensorPointerOffsets(
       Value &addrElem, Value &offsetX, Value &offsetY, Value &adjustedBaseWidth,
@@ -2736,6 +2739,12 @@ struct DescriptorLoadOpToBlockIOConversion
     if (!sizeInfo.isValid())
       return failure();
 
+    // For descriptor loads, the 2D block I/O tile must use only the inner 2
+    // dims. Reject if rowDim or colDim falls in a batch dimension.
+    int innerDimStart = static_cast<int>(rank - 2);
+    if (sizeInfo.rowDim < innerDimStart || sizeInfo.colDim < innerDimStart)
+      return failure();
+
     int tileHeight = sizeInfo.tileHeight;
     int tileWidth = sizeInfo.tileWidth;
     int numPackedVals = sizeInfo.numElemPerPackedVal;
@@ -2825,6 +2834,7 @@ struct DescriptorLoadOpToBlockIOConversion
     assert(descIndices.size() == descRank &&
            "descriptor index count must match descriptor rank");
     if (permuteDescDim) {
+      // Only swap the inner 2 dims; batch dims stay in place.
       std::swap(descIndices[descRank - 2], descIndices[descRank - 1]);
     }
 
@@ -2900,8 +2910,13 @@ struct DescriptorLoadOpToBlockIOConversion
           offsetY = adjustedOffset;
         else if (dim == blockColIdx)
           offsetX = adjustedOffset;
-        else
-          assert(false && "unexpected dimension in rank-2 tensor offsets");
+        else {
+          // Batch dimensions: fold into base pointer via GEP.
+          Value pred; // Unused for descriptors (boundary checking is built-in).
+          adjustOtherDimension(adjustedOffset, addrElem, pred, eltTy,
+                               desc.strides, desc.shapes, dim,
+                               /*hasBoundaryCheck=*/false, loc, rewriter, b);
+        }
       }
 
       assert(numPackedVals > 0 && "numPackedVals should be greater than zero.");
