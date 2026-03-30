@@ -31,7 +31,7 @@ set(SYCL_TLA_KERNEL_FLAGS ${SYCL_TLA_KERNEL_FLAGS}
   "SHELL:-Xspirv-translator=intel_gpu_cri --spirv-ext=${SPIRV_EXTENSIONS}"
 )
 
-list(APPEND CUTLASS_KERNEL_FLAGS
+list(APPEND SYCL_TLA_KERNEL_FLAGS
   -Xs "-options \"-igc_opts 'VISAOptions=-perfmodel,VectorAliasBBThreshold=1000,ExtraOCLOptions=-cl-intel-256-GRF-per-thread'\" -options -ze-opt-large-register-file"
 )
 

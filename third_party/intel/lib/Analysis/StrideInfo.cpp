@@ -547,6 +547,22 @@ public:
       setAllToEntryStates(results);
       return success();
     }
+    // Override stride from tt.contiguity hint.
+    if (auto contiguityAttr = op->getDiscardableAttr("tt.contiguity")) {
+      if (auto resTy = dyn_cast<RankedTensorType>(op->getResult(0).getType())) {
+        AxisInfo::DimVectorT hintContiguity;
+        AxisInfo::initDimVectorFromHint(contiguityAttr, &hintContiguity);
+        const auto &stride = curr.getStride();
+        StrideInfo::DimVectorT newStride(stride.begin(), stride.end());
+        for (unsigned d = 0; d < curr.getRank() && d < hintContiguity.size();
+             ++d) {
+          if (newStride[d] < 0 && hintContiguity[d] >= resTy.getDimSize(d)) {
+            newStride[d] = 1;
+          }
+        }
+        curr = StrideInfo(std::move(newStride));
+      }
+    }
     for (auto *result : results)
       propagateIfChanged(result, result->join(curr));
     return success();
