@@ -398,10 +398,11 @@ private:
 } // anonymous namespace
 
 //===----------------------------------------------------------------------===//
-// AxisInfoExt
+// AxisInfoAnalysisExt
 //===----------------------------------------------------------------------===//
 
-void AxisInfoExt::addVisitors(AxisInfoVisitorList &visitors) {
+AxisInfoAnalysisExt::AxisInfoAnalysisExt(DataFlowSolver &solver)
+    : triton::AxisInfoAnalysis(solver) {
   visitors.append<MakeTensorPtrOpAxisInfoVisitor>();
   visitors.append<AdvanceOpAxisInfoVisitor>();
   visitors.append<MakeTensorDescOpAxisInfoVisitor>();
@@ -413,12 +414,18 @@ void AxisInfoExt::addVisitors(AxisInfoVisitorList &visitors) {
   visitors.append<AddSubOpAxisInfoVisitor<LLVM::AddOp>>();
 }
 
+triton::AxisInfoAnalysis *
+AxisInfoAnalysisExt::loadAnalysis(DataFlowSolver *solver) {
+  return solver->load<AxisInfoAnalysisExt>();
+}
+
 //===----------------------------------------------------------------------===//
 // ModuleAxisInfoAnalysis
 //===----------------------------------------------------------------------===//
 
 ModuleAxisInfoAnalysis::ModuleAxisInfoAnalysis(ModuleOp moduleOp)
-    : triton::ModuleAxisInfoAnalysis(moduleOp, AxisInfoExt::addVisitors) {}
+    : triton::ModuleAxisInfoAnalysis(moduleOp,
+                                     AxisInfoAnalysisExt::loadAnalysis) {}
 
 const AxisInfo *ModuleAxisInfoAnalysis::getAxisInfo(Value value) const {
   auto funcOp = value.getParentRegion()->getParentOfType<FunctionOpInterface>();
