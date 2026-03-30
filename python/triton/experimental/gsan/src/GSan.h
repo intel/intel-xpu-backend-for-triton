@@ -30,8 +30,15 @@ using epoch_t = uint16_t;
 struct alignas(4) ScalarClock {
   epoch_t epoch;
   thread_id_t threadId : 12; // Supports 4096 threads
+#ifdef _MSC_VER
+  // MSVC allocates bitfields of different underlying types into separate
+  // allocation units. Use uint16_t to match threadId and keep sizeof == 4.
+  uint16_t scope : 2;
+#else
   AtomicScope scope : 2;
+#endif
 };
+
 static constexpr int kMaxThreads = 1 << 12;
 static_assert(sizeof(ScalarClock) == 4);
 static_assert(static_cast<int>(AtomicScope::MAX_VALUE) == 3);
