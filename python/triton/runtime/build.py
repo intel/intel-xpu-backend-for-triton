@@ -106,7 +106,7 @@ class _PerfLogger:
         _TREE = {
             "JITFunction.run": ["create_binder", "compile", "_init_handles", "kernel_launch"],
             "create_binder": ["binder.import", "binder.get_target", "binder.backend_init", "binder.create_fn_sig"],
-            "binder.get_target": ["target.get_device", "target.get_capability", "ext.compile_checker", "ext.sycl_query", "arch.compile_parser", "arch.parse_call"],
+            "binder.get_target": ["target.get_device", "target.cache_hit", "target.get_capability", "ext.compile_checker", "ext.sycl_query", "arch.compile_parser", "arch.parse_call", "target.cache_store"],
             "binder.backend_init": ["backend.find_active", "backend.constructor"],
             "compile": [
                 "triton_key", "compile.make_ir",
@@ -125,9 +125,9 @@ class _PerfLogger:
             "create_binder",
             "binder.import",
             "binder.get_target",
-            "target.get_device", "target.get_capability",
+            "target.get_device", "target.cache_hit", "target.get_capability",
             "ext.compile_checker", "ext.sycl_query",
-            "arch.compile_parser", "arch.parse_call",
+            "arch.compile_parser", "arch.parse_call", "target.cache_store",
             "binder.backend_init",
             "backend.find_active", "backend.constructor",
             "binder.create_fn_sig",

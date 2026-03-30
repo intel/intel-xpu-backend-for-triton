@@ -1145,7 +1145,9 @@ class XPUDriver(DriverBase):
                 perf_log.log("arch.parse_call", f"arch={arch}", _time.perf_counter() - _t3b)
         dev_property["arch"] = arch
 
-        return GPUTarget("xpu", dev_property, warp_size=32)
+        target = GPUTarget("xpu", dev_property, warp_size=32)
+
+        return target
 
     def get_current_target(self):
         device = self.get_current_device()
