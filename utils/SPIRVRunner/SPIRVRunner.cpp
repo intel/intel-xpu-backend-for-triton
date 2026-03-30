@@ -304,7 +304,7 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
     if (triton_args.shared_memory) {
       sycl::ext::oneapi::experimental::work_group_memory<char[]> mem(
           triton_args.shared_memory, cgh);
-      cgh.set_arg(num_params, mem);
+      cgh.set_arg(narg, mem);
     }
     assert(narg == expected_num_params);
     cgh.parallel_for(parallel_work_size, kernel_ptr);
