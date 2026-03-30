@@ -2724,9 +2724,17 @@ struct DescriptorLoadOpToBlockIOConversion
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
 
     // Tile size computation (no mask for descriptors).
+    // FIXME: Remove once IGC can split large 2D block loads.
+    std::optional<bool> oneMatrixPerLoadForBT =
+        mlir::triton::tools::isEnvValueBool(mlir::triton::tools::getStrEnv(
+            "TRITON_INTEL_ONE_MATRIX_PER_LOAD_BT"));
+    if (!oneMatrixPerLoadForBT.has_value())
+      oneMatrixPerLoadForBT =
+          op->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
+                          getOneMatrixPerLoadAttrName());
     BlockIOTileSizeInfo sizeInfo = getBlockIOTileSize<true /*load*/>(
         llEncoding.value(), contiguousDim, elemSizeInBits,
-        /*maskAxisInfo=*/nullptr, /*oneMatrixPerLoadForBT=*/false);
+        /*maskAxisInfo=*/nullptr, *oneMatrixPerLoadForBT);
     if (!sizeInfo.isValid())
       return failure();
 
@@ -2887,8 +2895,7 @@ struct DescriptorLoadOpToBlockIOConversion
                                         {kWarp, warpId},
                                         {kBlock, b.i32_val(0)}});
 
-      // Use the base pointer for all tiles (descriptors share a single base).
-      Value addrElem = targetInfo.shuffleIdx(rewriter, loc, desc.base, 0);
+      Value addrElem = desc.base;
       Value offsetX, offsetY;
       Value adjustedBaseWidth = baseWidth;
       Value adjustedBaseHeight = baseHeight;

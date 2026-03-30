@@ -1,15 +1,13 @@
 # pylint: disable=too-many-lines
 import dataclasses
-from typing import Any, cast
-from unittest.mock import patch
-from pathlib import Path
-
 import json
 import re
-
-import pytest
+from pathlib import Path
+from typing import Any, cast
+from unittest.mock import patch
 
 import pandas as pd
+import pytest
 
 import triton_utils
 
@@ -60,7 +58,8 @@ TESTS_WITH_MULTIPLE_TESTSUITES = {
         <testcase classname="test.unit.language.test_core" name="test_reduce_layouts[sum-int32-reduce2d-1-src_layout8-32-128]" time="0.114" />
     </testsuite>
 </testsuites>
-''', 'interpreter.xml':
+''',
+    'interpreter.xml':
     '''<?xml version="1.0" encoding="utf-8"?>
 <testsuites>
     <testsuite name="pytest" errors="0" failures="0" skipped="0" tests="1" time="0.114" timestamp="2024-04-05T11:03:23.033702" hostname="hostname">
@@ -219,7 +218,7 @@ def test_pass_rate_level_all(tmp_path, has_explicit_level, expected_total):
 
     # Verify single JSON file created
     assert json_file.exists()
-    with open(json_file, 'r', encoding='utf-8') as f:
+    with open(json_file, encoding='utf-8') as f:
         data = json.load(f)
 
     # Should have aggregate stats for all testsuites
@@ -250,7 +249,7 @@ def test_pass_rate_level_testsuite_jsonl(tmp_path):
     assert jsonl_file.exists()
 
     # Read and parse JSONL (one JSON per line)
-    with open(jsonl_file, 'r', encoding='utf-8') as f:
+    with open(jsonl_file, encoding='utf-8') as f:
         lines = f.readlines()
 
     # Should have 2 lines (one per testsuite)
@@ -773,7 +772,7 @@ def test_flaky_tests_detection(  # pylint: disable=R0913, R0914, R0917
     assert pass_rate_dict['xfailed'] == xfailed
     assert pass_rate_dict['failed'] == failed
 
-    assert is_flaky and '[WARNING] Flaky test detected:' in warnings_out or not is_flaky
+    assert (is_flaky and '[WARNING] Flaky test detected:' in warnings_out) or not is_flaky
 
 
 TESTS_WITH_NO_CLASSNAME_AND_NAME = {

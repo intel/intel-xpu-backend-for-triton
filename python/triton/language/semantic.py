@@ -1614,6 +1614,8 @@ class TritonSemantic(Generic[TensorTy]):
         def _to_scale_handle(scale):
             if scale is None or isinstance(scale, tl.constexpr):
                 return None
+            elif isinstance(scale, tl.tensor) and scale.numel.value == 1:
+                return None
 
             return scale.handle
 

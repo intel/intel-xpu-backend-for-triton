@@ -97,7 +97,7 @@ private:
     if (rank == 1)
       return;
 
-    if (!satisfies2DBlockReadAlignmentForDesc(op, axisInfoAnalysis)) {
+    if (!satisfies2DBlockReadAlignment(op, axisInfoAnalysis)) {
       LDBG("Alignment checks failed for: " << *op);
       return;
     }
@@ -121,8 +121,7 @@ private:
     if (!ttgi::isDivisible(pitch, llvm::divideCeil(128, elementWidth)))
       return;
 
-    std::optional<ttg::DotOperandEncodingAttr> dotLayout =
-        getDotLayoutForDesc(op);
+    std::optional<ttg::DotOperandEncodingAttr> dotLayout = getDotLayout(op);
     if (dotLayout) {
       // Check if the load is being used by a tt.dot operation, and if so is
       // this the first operand and is it a transposed row major matrix. If
@@ -362,71 +361,10 @@ private:
                                       ttgi::BlockIOMode::ColumnMajor)));
   }
 
-  // Return the load layout if it is a dot layout. If it is not, check if the
-  // load result is converted to a dot layout. If so, return the dot layout,
-  // otherwise return nullopt.
-  template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
-                                 OpType, tt::LoadOp, tt::StoreOp>::value>>
-  std::optional<ttg::DotOperandEncodingAttr> getDotLayout(OpType op) const {
-    Value ptr = op.getPtr();
-    if (!tt::isTensorPointerType(ptr.getType()))
-      return std::nullopt;
-
-    RankedTensorType tensorType = ttgi::getRankedTensorType(ptr.getType());
-    if (!tensorType)
-      return std::nullopt;
-
-    auto dotLayout = ttgi::getDotEncoding(tensorType);
-    if (dotLayout)
-      return dotLayout;
-
-    auto allUsersAreConvertOps = [](Operation::user_range users) {
-      return llvm::all_of(users, [](Operation *user) {
-        return isa<ttg::ConvertLayoutOp>(user);
-      });
-    };
-
-    auto allUserHaveIdenticalLayout = [](Operation::user_range users) {
-      Attribute firstUserLayout =
-          cast<ttg::ConvertLayoutOp>(*users.begin()).getType().getEncoding();
-      return llvm::all_of(users, [&firstUserLayout](Operation *user) {
-        return firstUserLayout ==
-               cast<ttg::ConvertLayoutOp>(user).getType().getEncoding();
-      });
-    };
-
-    Operation::user_range users = op->getUsers();
-    if (!users.empty() && allUsersAreConvertOps(users) &&
-        allUserHaveIdenticalLayout(users)) {
-      Attribute firstUserLayout =
-          cast<ttg::ConvertLayoutOp>(*users.begin()).getType().getEncoding();
-      if (isa<ttg::DotOperandEncodingAttr>(firstUserLayout))
-        return dyn_cast<ttg::DotOperandEncodingAttr>(firstUserLayout);
-      return std::nullopt;
-    }
-
-    return std::nullopt;
-  }
-
-  std::optional<unsigned>
-  getStrideOneDim(tt::MakeTensorPtrOp makeTensorPtrOp) const {
-    assert(makeTensorPtrOp && "Expected a make tensor ptr op.");
-    Operation::operand_range strides = makeTensorPtrOp.getStrides();
-    std::optional<unsigned> strideOneDim{std::nullopt};
-    for (auto [idx, stride] : llvm::enumerate(strides)) {
-      if (!tt::intel::isConstant(stride, 1))
-        continue;
-      strideOneDim = idx;
-      break;
-    }
-    return strideOneDim;
-  }
-
   template <typename OpType,
             typename = std::enable_if_t<llvm::is_one_of<
                 OpType, tt::DescriptorLoadOp, tt::DescriptorStoreOp>::value>>
-  std::optional<ttg::DotOperandEncodingAttr>
-  getDotLayoutForDesc(OpType op) const {
+  std::optional<ttg::DotOperandEncodingAttr> getDotLayout(OpType op) const {
     // Get the tensor type from the operation's result (load) or value (store)
     Type resultType;
     if constexpr (std::is_same_v<OpType, tt::DescriptorLoadOp>) {
@@ -473,7 +411,7 @@ private:
   template <typename OpType,
             typename = std::enable_if_t<llvm::is_one_of<
                 OpType, tt::DescriptorLoadOp, tt::DescriptorStoreOp>::value>>
-  bool satisfies2DBlockReadAlignmentForDesc(
+  bool satisfies2DBlockReadAlignment(
       OpType op, tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) const {
     Value desc = op.getDesc();
 
@@ -534,113 +472,6 @@ private:
       return false;
     }
     LDBG("offset: " << offset);
-
-    return true;
-  }
-
-  template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
-                                 OpType, tt::LoadOp, tt::StoreOp>::value>>
-  bool satisfies2DBlockReadAlignment(
-      OpType op, tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) const {
-    Value ptr = op.getPtr();
-    assert(tt::isTensorPointerType(ptr.getType()) &&
-           "Expected a ptr to a tensor of ptrs.");
-
-    // Find the make tensor ptr operation that created the base ptr for the load
-    // operation.
-    std::optional<tt::MakeTensorPtrOp> defOp =
-        tt::intel::findDefiningOpOfType<tt::MakeTensorPtrOp>(ptr);
-    assert(defOp && "Expected a make tensor ptr op.");
-    tt::MakeTensorPtrOp makeTensorPtrOp = *defOp;
-    Operation::operand_range shape = makeTensorPtrOp.getShape();
-    if (shape.size() == 1)
-      return false;
-
-    std::optional<unsigned> strideOneDim = getStrideOneDim(makeTensorPtrOp);
-    if (!strideOneDim) {
-      LDBG("Could not find stride one dimension in: " << makeTensorPtrOp);
-      return false;
-    }
-
-    auto ptrType = cast<tt::PointerType>(makeTensorPtrOp.getType());
-    auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
-    unsigned elementWidth = tensorType.getElementTypeBitWidth();
-    unsigned strideOneDimVal = strideOneDim.value();
-    LDBG("strideOneDim: " << strideOneDimVal);
-
-    // Ensure the base ptr is 4-byte aligned.
-    // Note: the HW requires the address to be 64-byte aligned, however we will
-    // compensate by imposing restrictions on the offsetX and baseWidth.
-    const tt::AxisInfo *axisInfo = axisInfoAnalysis.getAxisInfo(ptr);
-    if (axisInfo->getDivisibility(strideOneDimVal) % 4 != 0) {
-      LDBG("Found non 4 bytes aligned base: "
-           << axisInfo->getDivisibility(strideOneDimVal));
-      return false;
-    }
-
-    // Analyze the shape of the stride one dimension to ensure it satisfies HW
-    // constraints.
-    Value baseWidth = tt::intel::getFinalValue(shape[strideOneDimVal]);
-    unsigned divisor = llvm::divideCeil(32, elementWidth);
-    if (!ttgi::isDivisible(baseWidth, divisor)) {
-      LLVM_DEBUG({
-        llvm::dbgs() << "baseWidth does not satisfies HW constraint: ";
-        baseWidth.printAsOperand(llvm::dbgs(), {});
-        llvm::dbgs() << "\ndivisor: " << divisor << "\n";
-      });
-      return false;
-    }
-    LDBG("baseWidth: " << baseWidth);
-
-    // Analyze the initial offset corresponding to the stride one dimension to
-    // ensure it satisfies HW constraints.
-    Value offset =
-        tt::intel::getFinalValue(makeTensorPtrOp.getOffsets()[strideOneDimVal]);
-    if (!ttgi::isDivisible(offset, divisor)) {
-      LLVM_DEBUG({
-        llvm::dbgs() << "offset does not satisfies HW constraints: ";
-        offset.printAsOperand(llvm::dbgs(), {});
-        llvm::dbgs() << "\ndivisor: " << divisor << "\n";
-      });
-      return false;
-    }
-    LDBG("offset: " << offset);
-
-    Region *loadRgn = op->getParentRegion();
-    Region *makeTensorPtrRgn = makeTensorPtrOp->getParentRegion();
-    bool inSameRegion = (loadRgn == makeTensorPtrRgn);
-    if (inSameRegion)
-      return satisfies2DBlockReadAlignment(offset, divisor);
-
-    // TODO: analyze tt.advance (issue #3762).
-
-    return true;
-  }
-
-  bool satisfies2DBlockReadAlignment(Value offset, unsigned divisor) const {
-    assert(divisor != 0 && "Expected divisor to be non-zero");
-
-    auto checkUsers = [&](Value::user_range users) {
-      return llvm::all_of(users, [&](Operation *user) {
-        if (isa<tt::MakeTensorPtrOp>(user))
-          return true;
-        if (Operation *addOp = dyn_cast<arith::AddIOp>(user)) {
-          auto other = llvm::find_if(addOp->getOperands(),
-                                     [&](Value op) { return op != offset; });
-          if (!ttgi::isDivisible(*other, divisor)) {
-            LDBG("Found a non-divisible increment: " << *addOp);
-            return false;
-          }
-          return true;
-        }
-        LDBG("Unhandled user kind: " << user);
-        return false;
-      });
-    };
-
-    // Ensure that the offset is incremented by a multiple of the divisor.
-    if (auto blockArg = dyn_cast<BlockArgument>(offset))
-      return checkUsers(blockArg.getUsers());
 
     return true;
   }

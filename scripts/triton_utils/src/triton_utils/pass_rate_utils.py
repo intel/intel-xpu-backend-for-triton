@@ -1,27 +1,21 @@
 from __future__ import annotations
 
-from typing import Any, ClassVar
-from enum import Enum
-from collections import defaultdict
-from dataclasses import field, fields, dataclass
-
-import os
-import sys
-import pathlib
-import glob
-
-import platform
-import datetime
-
-import re
-
-import json
 import csv
-
+import datetime
+import glob
+import json
+import os
+import pathlib
+import platform
+import re
+import sys
 import xml.etree.ElementTree as stdET
+from collections import defaultdict
+from dataclasses import dataclass, field, fields
+from enum import Enum
+from typing import Any, ClassVar
 
 import defusedxml.ElementTree as ET
-
 import pandas as pd
 
 from .pattern_matcher import PatternMatcher
@@ -189,25 +183,25 @@ class SortByCompare(str, Enum):
 class TestCase:  #  pylint: disable=too-many-instance-attributes
     # intel
     testsuite: str
-    # test.unit.intel.test_block_load
+    # test.unit.intel.test_block_io
     classname: str
-    # test_block_load_dpas_layout[True-int8-256-64]
+    # test_block_io[256-64-float16-row_major-True-True-False]
     name: str
-    # test_block_load
+    # test_block_io
     module: str = field(init=False)
-    # [True-int8-256-64]
+    # [256-64-float16-row_major-True-True-False]
     variant: str = field(init=False)
-    # test_block_load_dpas_layout
+    # test_block_io
     test: str = field(init=False)
-    # test/unit/intel/test_block_load/test_block_load.py::test_block_load_dpas_layout[True-int8-256-64]
+    # test/unit/intel/test_block_io/test_block_io.py::test_block_io[256-64-float16-row_major-True-True-False]
     path: str = field(init=False)
-    # test/unit/intel/test_block_load/test_block_load.py::test_block_load_dpas_layout
+    # test/unit/intel/test_block_io/test_block_io.py::test_block_io
     path_without_variant: str = field(init=False)
-    # intel::test/unit/intel/test_block_load/test_block_load.py::test_block_load_dpas_layout[True-int8-256-64]
+    # intel::test/unit/intel/test_block_io/test_block_io.py::test_block_io[256-64-float16-row_major-True-True-False]
     key: str = field(init=False)
     # TestGraph_c55uxh25dhggnpnm666db2a5xn6yhinukzlhsmg37d7bjkwvwxv5XPU (empty if no class)
     test_class: str = field(init=False)
-    # pytest-friendly name: test/unit/intel/test_block_load.py::test_block_load_dpas_layout[True-int8-256-64]
+    # pytest-friendly name: test/unit/intel/test_block_io.py::test_block_io[256-64-float16-row_major-True-True-False]
     pytest_name: str = field(init=False)
 
     def __post_init__(self):
@@ -405,7 +399,8 @@ class Test:
         self.testsuite = test_case.testsuite
         if self.testname and test_case.path_without_variant != self.testname:
             raise ValueError(
-                f"Test contains test cases from multiple tests:{self.testname} - {test_case.path_without_variant}")
+                f"Test contains test cases from multiple tests:{self.testname} - {test_case.path_without_variant}"
+            )
         if test_case.classname == "" and test_case.name == "":
             print(f"[WARNING] Skipping test case with no classname and name in {self.testsuite}", file=sys.stderr)
             return
@@ -468,8 +463,10 @@ class TestReport:
             folder for folder in search_folder_path.iterdir() if folder.is_dir() and not any(folder.glob("*.xml"))
         ]
         if len(empty_subfolders) > 0:
-            print("\n".join("WARNING: No junit xml files - " + str(folder) for folder in empty_subfolders),
-                  file=sys.stderr)
+            print(
+                "\n".join("WARNING: No junit xml files - " + str(folder) for folder in empty_subfolders),
+                file=sys.stderr
+            )
 
         tests: dict[str, Test] = {}
         for file_path in all_paths:
@@ -520,8 +517,8 @@ class TestReport:
     def merge_test_results(self) -> TestReport:
 
         def _check_flaky_results(case_name: str, existing_result: RunResult, new_result: RunResult) -> bool:
-            if (existing_result == RunResult.PASSED and new_result == RunResult.FAILED
-                    or existing_result == RunResult.FAILED and new_result == RunResult.PASSED):
+            if ((existing_result == RunResult.PASSED and new_result == RunResult.FAILED)
+                    or (existing_result == RunResult.FAILED and new_result == RunResult.PASSED)):
                 print(f"[WARNING] Flaky test detected: {case_name}")
                 return True
             return False
@@ -541,9 +538,8 @@ class TestReport:
                         continue
                     if existing_test_case.result == RunResult.FAILED and test_case.result == RunResult.PASSED:
                         best_test_cases[test_case.variant] = test_case
-                    if existing_test_case.result == RunResult.SKIPPED and test_case.result in [
-                            RunResult.PASSED, RunResult.FAILED
-                    ]:
+                    if existing_test_case.result == RunResult.SKIPPED and test_case.result in [RunResult.PASSED,
+                                                                                               RunResult.FAILED]:
                         best_test_cases[test_case.variant] = test_case
                     if existing_test_case.result == RunResult.XFAILED and test_case.result in [
                             RunResult.PASSED, RunResult.FAILED, RunResult.SKIPPED
@@ -618,14 +614,17 @@ class TestReport:
                         testsuites[test.testsuite][test_key] = test
                     for testsuite, tests in testsuites.items():
                         report_stats = report_stats | TestReport(
-                            tests=tests, name=testsuite).get_summary_stats().to_named_dict(fields_filter=fields_filter)
+                            tests=tests, name=testsuite
+                        ).get_summary_stats().to_named_dict(fields_filter=fields_filter)
                     reports_stats.append(report_stats)
                 case TestGroupingLevel.TEST:
                     for test_key, test in report.tests.items():
                         pytest_key = f"{test.testsuite}::{test.pytest_name}"
-                        report_stats = report_stats | TestReport(tests={
-                            pytest_key: test
-                        }, name=pytest_key).get_summary_stats().to_named_dict(fields_filter=fields_filter)
+                        report_stats = report_stats | TestReport(
+                            tests={
+                                pytest_key: test
+                            }, name=pytest_key
+                        ).get_summary_stats().to_named_dict(fields_filter=fields_filter)
                     reports_stats.append(report_stats)
                 case _:
                     raise ValueError(f"Unsupported grouping level {grouping_level}")
@@ -653,7 +652,8 @@ class TestReport:
                 grouping_level=grouping_level,
                 fields_filter=ReportStats.RESULT_FIELDS + ReportStats.METRIC_FIELDS,
                 sort_by=sort_by,
-            )[0][0], )
+            )[0][0],
+        )
         summary_df = summary_df.rename(columns={"pass_rate_without_xfailed": "pass_rate"})
 
         passed = summary_df.loc["Σ", "passed"]
@@ -710,15 +710,17 @@ class TestReport:
 
     def to_csv(self, csv_file: str):
         tests = self.list_test_instances(False)
-        tests_dict: list[dict[str, Any]] = [{
-            "testsuite": test_case.testsuite,
-            "classname": test_case.classname,
-            "module": test_case.module,
-            "test": test_case.test,
-            "variant": test_case.variant,
-            "time": test_case.time,
-            "status": test_case.result.value,
-        } for test_case in tests]
+        tests_dict: list[dict[str, Any]] = [
+            {
+                "testsuite": test_case.testsuite,
+                "classname": test_case.classname,
+                "module": test_case.module,
+                "test": test_case.test,
+                "variant": test_case.variant,
+                "time": test_case.time,
+                "status": test_case.result.value,
+            } for test_case in tests
+        ]
         with open(
                 csv_file,
                 mode="w",
@@ -822,9 +824,8 @@ class TestReport:
             elif not seen_module:
                 if not omit_testsuite:
                     result.append(part)
-            else:
-                if not omit_class:
-                    result.append(part)
+            elif not omit_class:
+                result.append(part)
         return "::".join(result)
 
     @classmethod
@@ -859,7 +860,9 @@ class TestReport:
                 "%Δ": time_pct,
             },
             axis=1,
-        ).swaplevel(axis=1).sort_index(axis=1, level=0)
+        ).swaplevel(axis=1).sort_index(
+            axis=1, level=0
+        )
         comparison = comparison.reindex(columns=columns, level=0)
 
         # Reorder sources within each metric: r1, r2, Δ, %Δ
@@ -966,8 +969,9 @@ class TestReport:
             ]
 
         # Insert group headers only when sorting by name and no omit flags
-        use_group_headers = (grouping_level == TestGroupingLevel.TEST and sort_by == SortByCompare.NAME
-                             and not has_omit)
+        use_group_headers = (
+            grouping_level == TestGroupingLevel.TEST and sort_by == SortByCompare.NAME and not has_omit
+        )
         if use_group_headers:
             comparison_result = _insert_group_headers(comparison_result)
 
@@ -987,4 +991,5 @@ class TestReport:
                 tests_with_multiple_testsuites,
                 ignore_testsuites_filter,
                 pattern_matcher=pattern_matcher,
-            ))
+            )
+        )

@@ -19,6 +19,9 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK: llvm.insertvalue {{.*}}[4] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <tensor<64x32xf16>>
     // Verify 2D block loads are generated for dot A operand.
+    // The base pointer from the descriptor is already uniform — no sub-group
+    // shuffle should be emitted.
+    // CHECK-NOT: sub_group_shuffle
     // For DPAS A with f16: tile_height=8, tile_width=16, v_blocks=2.
     // CHECK-COUNT-2: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 2, transpose = false, vnni_transform = false, cache_control = Default}
     %load = tt.descriptor_load %desc[%arg4, %arg5] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #dot0>
@@ -267,6 +270,27 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
     // For DPAS B with column_major f32: transposed block loads, elem_size = 32.
     // CHECK-COUNT-2: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 32, {{.*}}transpose = true, vnni_transform = false, cache_control = Default}
     %load = tt.descriptor_load %desc[%arg4, %arg5] {ttig.block_io = "column_major"} : !tt.tensordesc<tensor<64x32xf32>> -> tensor<32x64xf32, #dot1>
+    tt.return
+  }
+}
+
+// -----
+
+// Test: DescriptorLoadOp with column_major and ttig.one_matrix_per_load attribute
+// generates transposed 2D block loads with smaller tile_height (16 instead of 32).
+// This verifies that the descriptor load path respects the one_matrix_per_load
+// attribute, matching the block pointer load behavior.
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @descriptor_load_column_major_one_matrix_per_load
+  tt.func public @descriptor_load_column_major_one_matrix_per_load(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i32, %arg5: i32) {
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <tensor<32x64xf16>>
+    // With one_matrix_per_load, tile_height should be 16 (not doubled to 32).
+    // CHECK-COUNT-8: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 32, tile_width = 8, tile_height = 16, v_blocks = 1, transpose = true, vnni_transform = false, cache_control = Default}
+    %load = tt.descriptor_load %desc[%arg4, %arg5] {ttig.block_io = "column_major", ttig.one_matrix_per_load} : !tt.tensordesc<tensor<32x64xf16>> -> tensor<64x32xf16, #dot1>
     tt.return
   }
 }
