@@ -439,8 +439,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         maxtol, rmstol = 4e-1, 4e-2
     elif b_dtype.is_mxfloat4:
         maxtol, rmstol = 3e-2, None
-    torch.save(ref_y, os.path.join(os.environ["TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS"], "expected-output.pt"))
-    torch.save(tri_y, os.path.join(os.environ["TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS"], "actual-output.pt"))
+    torch.save(ref_y.unsqueeze(0).cpu(), os.path.join(os.environ["TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS"], "expected_output.pt"))
     assert_close(ref_y, tri_y, maxtol=maxtol, rmstol=rmstol)
     if c_dtype.has_global_scale:
         assert torch.all((ref_y_scale - tri_y_scale).abs() < 1e-10), \
