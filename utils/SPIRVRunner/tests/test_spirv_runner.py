@@ -9,6 +9,7 @@ SPIRV_RUNNER_TESTS = os.getenv("SPIRV_RUNNER_TESTS")
 # Define CLI arguments per directory
 SPIRV_CLI_ARGS = {
     os.path.join(SPIRV_RUNNER_TESTS, "add_kernel"): ["-o", "tensor_2", "-p", "-v", "expected_output.pt"],
+    os.path.join(SPIRV_RUNNER_TESTS, "5984"): ["-o", "tensor_0", "-p", "-v", "expected_output.pt"],
     os.path.join(SPIRV_RUNNER_TESTS, "dot"): ["-o", "tensor_3", "-p", "-v", "expected_output.pt"]
 }
 

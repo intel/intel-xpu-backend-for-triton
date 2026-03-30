@@ -1,0 +1,169 @@
+{
+    "gridX": 60,
+    "gridY": 1,
+    "gridZ": 1,
+    "num_warps": 4,
+    "threads_per_warp": 16,
+    "shared_memory": 65536,
+    "kernel_name": "_matmul_NNN_fp16xfp16xfp16_128x128x128x1",
+    "spv_name": "_matmul_NNN_fp16xfp16xfp16_128x128x128x1.spv",
+    "build_flags": "",
+    "argument_list": [
+        {
+            "name": "tensor_0",
+            "type": "tensor",
+            "dtype": "torch.float16",
+            "ctype": "*fp16"
+        },
+        {
+            "name": "tensor_1",
+            "type": "tensor",
+            "dtype": "torch.float16",
+            "ctype": "*fp16"
+        },
+        {
+            "name": "scalarArg_0",
+            "type": "scalar",
+            "value": 393216,
+            "ctype": "i32"
+        },
+        {
+            "name": "scalarArg_1",
+            "type": "scalar",
+            "value": 393216,
+            "ctype": "i32"
+        },
+        {
+            "name": "scalarArg_2",
+            "type": "scalar",
+            "value": 512,
+            "ctype": "i32"
+        },
+        {
+            "name": "tensor_2",
+            "type": "tensor",
+            "dtype": "torch.float16",
+            "ctype": "*fp16"
+        },
+        {
+            "name": "tensor_3",
+            "type": "tensor",
+            "dtype": "torch.float16",
+            "ctype": "*fp16"
+        },
+        {
+            "name": "scalarArg_4",
+            "type": "scalar",
+            "value": 0,
+            "ctype": "i32"
+        },
+        {
+            "name": "scalarArg_5",
+            "type": "scalar",
+            "value": 1024,
+            "ctype": "i32"
+        },
+        {
+            "name": "tensor_4",
+            "type": "tensor",
+            "dtype": "torch.float16",
+            "ctype": "*fp16"
+        },
+        {
+            "name": "tensor_5",
+            "type": "tensor",
+            "dtype": "torch.float16",
+            "ctype": "*fp16"
+        },
+        {
+            "name": "scalarArg_8",
+            "type": "scalar",
+            "value": 524288,
+            "ctype": "i32"
+        },
+        {
+            "name": "scalarArg_9",
+            "type": "scalar",
+            "value": 512,
+            "ctype": "i32"
+        },
+        {
+            "name": "tensor_6",
+            "type": "tensor",
+            "dtype": "torch.float32",
+            "ctype": "*fp32"
+        },
+        {
+            "name": "scalarArg_12",
+            "type": "scalar",
+            "value": 512,
+            "ctype": "i32"
+        },
+        {
+            "name": "scalarArg_13",
+            "type": "scalar",
+            "value": 512,
+            "ctype": "i32"
+        },
+        {
+            "name": "scalarArg_14",
+            "type": "scalar",
+            "value": 1024,
+            "ctype": "i32"
+        },
+        {
+            "name": "scalarArg_15",
+            "type": "scalar",
+            "value": 1024,
+            "ctype": "i32"
+        },
+        {
+            "name": "tensor_7",
+            "type": "tensor",
+            "dtype": "torch.float32",
+            "ctype": "*fp32"
+        },
+        {
+            "name": "tensor_8",
+            "type": "tensor",
+            "dtype": "torch.int32",
+            "ctype": "*i32"
+        },
+        {
+            "name": "tensor_9",
+            "type": "tensor",
+            "dtype": "torch.int32",
+            "ctype": "*i32"
+        },
+        {
+            "name": "tensor_10",
+            "type": "tensor",
+            "dtype": "torch.int32",
+            "ctype": "*i32"
+        },
+        {
+            "name": "tensor_11",
+            "type": "tensor",
+            "dtype": "torch.int32",
+            "ctype": "*i32"
+        },
+        {
+            "name": "scalarArg_18",
+            "type": "scalar",
+            "value": 15,
+            "ctype": "i32"
+        },
+        {
+            "name": "scalarArg_19",
+            "type": "scalar",
+            "value": 4,
+            "ctype": "i32"
+        },
+        {
+            "name": "scalarArg_40",
+            "type": "scalar",
+            "value": 0,
+            "ctype": "i32"
+        }
+    ]
+}
