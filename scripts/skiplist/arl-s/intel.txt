@@ -1,2 +1,0 @@
-# https://github.com/intel/intel-xpu-backend-for-triton/issues/3921
-python/test/unit/intel/test_block_load.py::test_block_load_dpas_layout
