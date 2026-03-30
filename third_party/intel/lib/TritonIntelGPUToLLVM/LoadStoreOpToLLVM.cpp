@@ -2886,8 +2886,7 @@ struct DescriptorLoadOpToBlockIOConversion
                                         {kWarp, warpId},
                                         {kBlock, b.i32_val(0)}});
 
-      // Use the base pointer for all tiles (descriptors share a single base).
-      Value addrElem = targetInfo.shuffleIdx(rewriter, loc, desc.base, 0);
+      Value addrElem = desc.base;
       Value offsetX, offsetY;
       Value adjustedBaseWidth = baseWidth;
       Value adjustedBaseHeight = baseHeight;
