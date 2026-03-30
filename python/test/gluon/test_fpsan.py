@@ -843,6 +843,8 @@ def _dot_scaled_payload_u32(a_data: np.ndarray, b_data: np.ndarray, a_scale, b_s
 
 
 def test_dot_fma(device, fresh_knobs):
+    if device != "cuda":
+        pytest.skip("dot_fma not yet supported on non-CUDA backends")
     _require_backend(device)
 
     B = 16
@@ -899,7 +901,7 @@ def test_dot_fma(device, fresh_knobs):
 @pytest.mark.parametrize("type_a", ["e2m1", "e4m3", "e5m2"])
 @pytest.mark.parametrize("type_b", ["e2m1", "e4m3", "e5m2", "bf16"])
 def test_dot_scaled(device, type_a, type_b, fresh_knobs):
-    _require_cuda_backend(device)
+    _require_backend(device)
 
     B = 32
     K = 64
@@ -1127,7 +1129,7 @@ def test_reduction(device, fresh_knobs):
 
 
 def test_reduction_matches_loop(device, fresh_knobs):
-    _require_cuda_backend(device)
+    _require_backend(device)
 
     @triton.jit
     def reduce_sum_kernel(x_ptr, out_ptr, N: tl.constexpr):
@@ -1142,10 +1144,10 @@ def test_reduction_matches_loop(device, fresh_knobs):
         tl.store(out_ptr, acc)
 
     N = 256
-    pattern = torch.tensor([1e20, 1.0, -1e20, 1.0], dtype=torch.float32, device="cuda")
+    pattern = torch.tensor([1e20, 1.0, -1e20, 1.0], dtype=torch.float32, device=device)
     x = pattern.repeat(N // pattern.numel())
-    reduce_out = torch.empty((1, ), dtype=torch.float32, device="cuda")
-    loop_out = torch.empty((1, ), dtype=torch.float32, device="cuda")
+    reduce_out = torch.empty((1, ), dtype=torch.float32, device=device)
+    loop_out = torch.empty((1, ), dtype=torch.float32, device=device)
 
     reduce_sum_kernel[(1, )](x, reduce_out, N=N)
     loop_sum_kernel[(1, )](x, loop_out, N=N)
