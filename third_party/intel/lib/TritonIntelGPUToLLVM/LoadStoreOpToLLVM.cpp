@@ -237,6 +237,11 @@ struct LoadStoreConversionBase {
         .getContiguity(ptr);
   }
 
+  /// Maximum number of elements that fit in a 128-bit vector load/store.
+  static unsigned getMaxVecWidth(unsigned pointeeBitWidth) {
+    return std::max(1u, 128 / std::max(8u, pointeeBitWidth));
+  }
+
   unsigned getVectorSize(Value ptr) const {
     if (!isTensorOrTensorPointerType(ptr.getType()))
       return 1;
@@ -244,12 +249,69 @@ struct LoadStoreConversionBase {
     unsigned contiguity = getContiguity(ptr);
     unsigned pointeeBitWidth = triton::getPointeeBitWidth(ptr.getType());
     // The maximum vector size is 128 bits.
-    return std::min<unsigned>(128 / pointeeBitWidth, contiguity);
+    return std::min<unsigned>(getMaxVecWidth(pointeeBitWidth), contiguity);
   }
 
   unsigned getMaskAlignment(Value mask) const {
     return const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
         .getMaskAlignment(mask);
+  }
+
+  /// Compute vectorization factor for descriptor load/store gather fallback.
+  /// Queries the descriptor's address-level AxisInfo (analogous to how
+  /// getVectorSize queries the pointer operand's AxisInfo for LoadOp).
+  unsigned getDescriptorVecSize(Value desc, RankedTensorType resultType,
+                                Type valueElemTy,
+                                StringAttr blockIOAttr) const {
+    unsigned rank = resultType.getRank();
+    if (rank == 0)
+      return 1;
+
+    AxisInfo *descAxisInfo =
+        const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
+            .getAxisInfo(desc);
+    if (!descAxisInfo || static_cast<unsigned>(descAxisInfo->getRank()) != rank)
+      return 1;
+
+    LinearEncodingAttr linAttr = triton::gpu::toLinearEncoding(resultType);
+    SmallVector<unsigned> order = linAttr.getOrder();
+    SmallVector<unsigned> contigPerThread = linAttr.getContigPerThread();
+
+    // Map result layout's fast dimension to the corresponding descriptor
+    // dimension. Column-major descriptor loads transpose the inner 2
+    // dimensions: the result layout's fast dim (order[0]) maps to the other of
+    // the two innermost descriptor dimensions.
+    unsigned descDim = order[0];
+    if (blockIOAttr) {
+      auto mode = symbolizeBlockIOMode(blockIOAttr.getValue());
+      if (mode && *mode == BlockIOMode::ColumnMajor && rank >= 2 &&
+          order[0] >= rank - 2) {
+        descDim = (order[0] == rank - 2) ? rank - 1 : rank - 2;
+      }
+    }
+
+    unsigned descContiguity = descAxisInfo->getContiguity(descDim);
+    if (descContiguity <= 1)
+      return 1; // Stride is not 1 on this dimension
+
+    unsigned pointeeBitWidth = valueElemTy.getIntOrFloatBitWidth();
+    unsigned maxVec = getMaxVecWidth(pointeeBitWidth);
+    unsigned threadContig = contigPerThread[order[0]];
+    // Note: descContiguity and threadContig refer to the same logical dimension
+    // but are indexed in different coordinate spaces. descContiguity uses
+    // descDim (descriptor space, remapped for column-major), while
+    // threadContig uses order[0] (result layout space). The min() below
+    // correctly intersects address-level and layout-level constraints.
+
+    // Use descriptor's divisibility (bytes) for pointer alignment.
+    unsigned descDivisibility = descAxisInfo->getDivisibility(descDim);
+    unsigned elemBytes = std::max(1u, pointeeBitWidth / 8);
+    unsigned ptrAlignElems = std::max(1u, descDivisibility / elemBytes);
+
+    unsigned vec =
+        std::min({maxVec, threadContig, descContiguity, ptrAlignElems});
+    assert(vec > 0 && "vec must be positive for Log2_32");
+    return std::max(1u, 1u << llvm::Log2_32(vec));
   }
 
   std::tuple<SmallVector<Value>, SmallVector<Value>, SmallVector<Value>>
@@ -3265,13 +3327,12 @@ struct DescriptorLoadOpConversion
                                                allDims, padding);
     }
 
-    // Determine vectorization
-    // NOTE: LoadOp uses getVectorSize(ptr) which relies on axis info analysis.
-    // DescriptorLoadOp doesn't have a ptr operand in the same way.
-    // For now, use vec=1 (scalar loads). This could be optimized later.
-    // TODO: Add axis info analysis support for DescriptorLoadOp to enable
-    // vectorization.
-    unsigned vec = 1;
+    // Determine vectorization by querying the descriptor's address-level
+    // AxisInfo, analogous to how LoadOp queries getVectorSize(ptr).
+    unsigned vec =
+        getDescriptorVecSize(op.getDesc(), resultType, valueElemTy,
+                             op->getAttrOfType<StringAttr>(
+                                 TritonIntelGPUDialect::getBlockIOAttrName()));
 
     // vectorized iteration through all pointer elements
     const int valueElemNBits =
@@ -3453,13 +3514,10 @@ struct DescriptorStoreOpConversion
         emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
     uint32_t regMask = freeVarMasks[str_attr("register")];
 
-    // Determine vectorization
-    // NOTE: StoreOp uses getVectorSize(ptr) which relies on axis info analysis.
-    // DescriptorStoreOp doesn't have a ptr operand in the same way.
-    // For now, use vec=1 (scalar stores). This could be optimized later.
-    // TODO: Add axis info analysis support for DescriptorStoreOp to enable
-    // vectorization.
-    unsigned vec = 1;
+    // Determine vectorization by querying the descriptor's address-level
+    // AxisInfo, analogous to how StoreOp queries getVectorSize(ptr).
+    unsigned vec = getDescriptorVecSize(op.getDesc(), valueTy, valueElemTy,
+                                        /*blockIOAttr=*/nullptr);
 
     const size_t dtsize =
         std::max<int>(1, valueElemTy.getIntOrFloatBitWidth() / 8);

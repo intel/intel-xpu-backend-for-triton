@@ -258,17 +258,22 @@ public:
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
     LDBG("DescriptorLoadOpAxisInfoVisitor: " << *op);
 
+    // Match upstream LoadOp semantics: loaded values have no guaranteed
+    // contiguity or divisibility (those are address-level properties), but
+    // constancy transfers — identical addresses yield identical values.
+    const AxisInfo &descInfo = operands[0]->getValue();
     auto resultType = cast<RankedTensorType>(op.getResult().getType());
-    unsigned rank = resultType.getRank();
+    unsigned resultRank = resultType.getRank();
 
-    AxisInfo::DimVectorT contiguity, divisibility, constancy;
+    // Rank mismatch safety: the verifier allows different ranks if total
+    // element count matches, but AxisInfo is rank-dependent.
+    if (descInfo.getRank() == 0 ||
+        static_cast<unsigned>(descInfo.getRank()) != resultRank)
+      return AxisInfo::getPessimisticValueState(op.getResult());
 
-    // For descriptor loads, return conservative axis info.
-    for (unsigned d = 0; d < rank; ++d) {
-      contiguity.push_back(1);
-      divisibility.push_back(1);
-      constancy.push_back(1);
-    }
+    AxisInfo::DimVectorT contiguity(resultRank, 1);
+    AxisInfo::DimVectorT divisibility(resultRank, 1);
+    AxisInfo::DimVectorT constancy = descInfo.getConstancy();
 
     auto axisInfo = AxisInfo(std::move(contiguity), std::move(divisibility),
                              std::move(constancy));
