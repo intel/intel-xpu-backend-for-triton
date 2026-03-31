@@ -610,12 +610,35 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
         mlir::triton::tools::isEnvValueBool(mlir::triton::tools::getStrEnv(
             "TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS"));
 
-    // Only lower operation with dpas layout encoding.
+    // Only lower operation with dpas layout encoding, or stores explicitly
+    // annotated with a stride attribute from the 1D→2D reshape.
     auto tensorTy =
         cast<RankedTensorType>(getPointeeType(op.getPtr().getType()));
+    bool hasDpas = hasDpasEncoding(tensorTy) || hasDotDpasEncoding(tensorTy);
     return !enableBlockIOForAllLayout.has_value() ||
-           enableBlockIOForAllLayout.value() || hasDpasEncoding(tensorTy) ||
-           hasDotDpasEncoding(tensorTy);
+           enableBlockIOForAllLayout.value() || hasDpas ||
+           hasAnnotated1DReshapeStride(op);
+  }
+
+  /// Check whether a store was annotated by the 1D→2D reshape in
+  /// MaterializeBlockPointer. Only applies to StoreOp; returns false for
+  /// loads.
+  template <typename OpTy> static bool hasAnnotated1DReshapeStride(OpTy op) {
+    if constexpr (std::is_same_v<OpTy, triton::StoreOp>)
+      return op->hasAttr(TritonIntelGPUDialect::getBlockIOStrideAttrName());
+    return false;
+  }
+
+  /// Return the pitch (in bytes) for a store annotated by the 1D→2D reshape.
+  /// The stride attribute is in elements; this converts to bytes.
+  /// Returns std::nullopt if the attribute is absent.
+  static std::optional<int64_t>
+  getAnnotated1DReshapePitch(triton::StoreOp op, unsigned elemSizeInBits) {
+    auto strideAttr = op->getAttrOfType<IntegerAttr>(
+        TritonIntelGPUDialect::getBlockIOStrideAttrName());
+    if (!strideAttr)
+      return std::nullopt;
+    return strideAttr.getInt() * elemSizeInBits / 8;
   }
 
   // Determine whether the given descriptor op can be lowered to using
@@ -3836,8 +3859,34 @@ struct StoreOpToBlockIOConversion
           const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
               .getAxisInfo(op.getMask());
     }
-    BlockIOTileSizeInfo sizeInfo = getBlockIOTileSize<false /*store*/>(
-        llEncoding.value(), contiguousDim, elemSizeInBits, maskAxisInfo);
+    BlockIOTileSizeInfo sizeInfo = BlockIOTileSizeInfo::unknown();
+    MLIRContext *ctx = rewriter.getContext();
+
+    if (hasAnnotated1DReshapeStride(op)) {
+      // For stores annotated by the 1D→2D reshape, the encoding was inferred
+      // by tt.reshape and may not satisfy getBlockIOTileSize constraints.
+      // We know the exact tile parameters from the reshape: the contiguous
+      // width dimension is stored per-subgroup, and each warp handles a
+      // stripe of rows.
+      unsigned numWarpsRow =
+          cast<BlockedEncodingAttr>(encoding).getWarpsPerCTA()[0];
+      int height = rank > 1 ? tensorType.getDimSize(0) / numWarpsRow : 1;
+      int width = tensorType.getDimSize(rank - 1);
+      // Build register bases as identity mapping — every register holds one
+      // element (numPackedVals=1), so all bases are included.
+      StringAttr kRegister = str_attr("register");
+      unsigned regDimSize = llEncoding->getInDimSize(kRegister);
+      SetVector<unsigned> regPackBases;
+      for (unsigned i = 1; i < regDimSize; i <<= 1)
+        regPackBases.insert(i);
+      sizeInfo = BlockIOTileSizeInfo(height, width, /*numElemPerPackedVal=*/1,
+                                     /*vBlocks=*/1, /*rowDim=*/0,
+                                     /*colDim=*/rank - 1, /*transpose=*/false,
+                                     std::move(regPackBases));
+    } else {
+      sizeInfo = getBlockIOTileSize<false /*store*/>(
+          llEncoding.value(), contiguousDim, elemSizeInBits, maskAxisInfo);
+    }
     if (!sizeInfo.isValid())
       return failure();
     auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
@@ -3857,7 +3906,6 @@ struct StoreOpToBlockIOConversion
 
     Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    MLIRContext *ctx = rewriter.getContext();
     Value warpId = arith::IndexCastOp::create(
         rewriter, loc, i32_ty,
         mlir::gpu::SubgroupIdOp::create(rewriter, loc,
@@ -3906,9 +3954,15 @@ struct StoreOpToBlockIOConversion
 
       baseWidth = b.i32_val(vBlocks * tileWidth * (packedElemSizeInBits / 8));
       baseHeight = b.i32_val(tileHeight);
-      // Always get the stride of the row dim since block store only supports
-      // row major matrix.
-      pitch = getPitch(rewriter, ptr, ptrElems, elemSizeInBits, rowDim);
+      // Use the explicit stride attribute if set by the 1D→2D reshape,
+      // otherwise compute pitch from pointer element analysis.
+      if (auto pitchBytes = getAnnotated1DReshapePitch(op, elemSizeInBits)) {
+        pitch = b.i32_val(*pitchBytes);
+      } else {
+        // Always get the stride of the row dim since block store only supports
+        // row major matrix.
+        pitch = getPitch(rewriter, ptr, ptrElems, elemSizeInBits, rowDim);
+      }
       if (!pitch)
         return failure();
       offsetBaseX = b.i32_val(0);

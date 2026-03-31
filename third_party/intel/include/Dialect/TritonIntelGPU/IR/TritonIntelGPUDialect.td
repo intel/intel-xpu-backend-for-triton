@@ -92,6 +92,12 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.block_io";
     }
 
+    /// Get the name of the attribute used to convey the stride (in elements)
+    /// for 2D block IO on stores reshaped from 1D tensor-of-pointers.
+    static constexpr llvm::StringRef getBlockIOStrideAttrName() {
+      return "ttig.block_io_stride";
+    }
+
     /// Get the name of the attribute used to specify the target architecture. This
     /// attribute matches architecture in a target triple used for the resulting LLVM
     /// IR module.

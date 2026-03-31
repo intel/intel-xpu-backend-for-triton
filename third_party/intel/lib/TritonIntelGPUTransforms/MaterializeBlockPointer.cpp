@@ -4,9 +4,11 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "intel/include/Utils/Utility.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/Visitors.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
 #include <optional>
@@ -200,6 +202,16 @@ private:
     //   slice. The axis info reflects this with stride [..., 1, X].
     const tt::AxisInfo *axisInfo = axisInfoAnalysis.getAxisInfo(ptr);
     unsigned rank = axisInfo->getRank();
+
+    // For 1D StoreOps, try to detect strided access patterns and reshape
+    // to 2D for block IO lowering.
+    if constexpr (std::is_same_v<OpType, tt::StoreOp>) {
+      if (rank == 1) {
+        reshape1DStridedStore(op, tensorTy, context);
+        return;
+      }
+    }
+
     if (rank < 2) {
       LDBG("Rank is < 2, skip block IO attribute");
       return;
@@ -266,6 +278,274 @@ private:
                   StringAttr::get(op.getContext(),
                                   ttgi::stringifyBlockIOMode(
                                       ttgi::BlockIOMode::ColumnMajor)));
+  }
+
+  /// Look through index_cast, extui, extsi, trunci wrappers to find the
+  /// underlying arithmetic operation.
+  static Value lookThroughCasts(Value val) {
+    while (val) {
+      if (auto castOp = val.getDefiningOp<arith::IndexCastOp>()) {
+        val = castOp.getIn();
+      } else if (auto extOp = val.getDefiningOp<arith::ExtUIOp>()) {
+        val = extOp.getIn();
+      } else if (auto extOp = val.getDefiningOp<arith::ExtSIOp>()) {
+        val = extOp.getIn();
+      } else if (auto truncOp = val.getDefiningOp<arith::TruncIOp>()) {
+        val = truncOp.getIn();
+      } else {
+        break;
+      }
+    }
+    return val;
+  }
+
+  /// Check whether val is a unit-stride linear index of length expectedEnd.
+  /// Accepts two forms:
+  ///   1. tt.make_range(0, N)
+  ///   2. arith.addi(tt.splat(scalar_offset), tt.make_range(0, N))
+  ///      where scalar_offset is a multiple of W (so rem/div semantics are
+  ///      preserved: (offset + i) % W == i % W when offset % W == 0).
+  static bool isCanonicalLinearIndex(Value val, int64_t expectedEnd,
+                                     int64_t W) {
+    val = lookThroughCasts(val);
+    // Form 1: bare make_range.
+    if (auto makeRange = val.getDefiningOp<tt::MakeRangeOp>())
+      return makeRange.getStart() == 0 &&
+             static_cast<int64_t>(makeRange.getEnd()) == expectedEnd;
+    // Form 2: addi(splat(offset), make_range) or addi(make_range, splat(...)).
+    auto addI = val.getDefiningOp<arith::AddIOp>();
+    if (!addI)
+      return false;
+    Value lhs = lookThroughCasts(addI.getLhs());
+    Value rhs = lookThroughCasts(addI.getRhs());
+    // Try both orderings.
+    for (int i = 0; i < 2; ++i) {
+      auto makeRange = lhs.getDefiningOp<tt::MakeRangeOp>();
+      auto splatOp = rhs.getDefiningOp<tt::SplatOp>();
+      if (makeRange && splatOp && makeRange.getStart() == 0 &&
+          static_cast<int64_t>(makeRange.getEnd()) == expectedEnd) {
+        // The splat offset must be a multiple of W for rem/div correctness.
+        // We don't need to know the exact value — the Triton frontend always
+        // generates program_id * XBLOCK where XBLOCK % W == 0 for these
+        // patterns. We verify this structurally: the offset must be
+        // muli(program_id, XBLOCK) where XBLOCK % W == 0.
+        Value scalar = splatOp.getSrc();
+        if (auto mulI = scalar.getDefiningOp<arith::MulIOp>()) {
+          // Check if either operand is a constant divisible by W.
+          for (Value operand : {mulI.getLhs(), mulI.getRhs()}) {
+            if (auto cst = getScalarConstantValue(operand))
+              if (*cst % W == 0)
+                return true;
+          }
+        }
+        return false;
+      }
+      std::swap(lhs, rhs);
+    }
+    return false;
+  }
+
+  /// Extract a scalar integer constant (not tensor), looking through casts.
+  static std::optional<int64_t> getScalarConstantValue(Value val) {
+    val = lookThroughCasts(val);
+    if (!val)
+      return std::nullopt;
+    auto constOp = val.getDefiningOp<arith::ConstantOp>();
+    if (!constOp)
+      return std::nullopt;
+    if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue()))
+      return intAttr.getValue().getSExtValue();
+    return std::nullopt;
+  }
+
+  /// Try to extract a constant integer value from a Value, looking through
+  /// casts. Handles both scalar IntegerAttr and splat DenseIntElementsAttr
+  /// (tensor constants like `arith.constant dense<32> : tensor<Nxi32>`).
+  static std::optional<int64_t> getConstantValue(Value val) {
+    val = lookThroughCasts(val);
+    if (!val)
+      return std::nullopt;
+    auto constOp = val.getDefiningOp<arith::ConstantOp>();
+    if (!constOp)
+      return std::nullopt;
+    // Scalar constant.
+    if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue()))
+      return intAttr.getValue().getSExtValue();
+    // Splat tensor constant (e.g., arith.constant dense<32> : tensor<Nxi32>).
+    if (auto denseAttr = dyn_cast<DenseIntElementsAttr>(constOp.getValue())) {
+      if (denseAttr.isSplat())
+        return denseAttr.getSplatValue<APInt>().getSExtValue();
+    }
+    return std::nullopt;
+  }
+
+  /// Detect 1D tensor-of-pointers StoreOp with strided access pattern
+  /// (address = base + remui(idx, W) + muli(divui(idx, W), S)) and reshape
+  /// to 2D store with block IO attributes.
+  ///
+  /// This enables the existing StoreOpToBlockIOConversion lowering to use
+  /// hardware 2D block store instructions for what would otherwise be
+  /// scalar scatter writes.
+  void reshape1DStridedStore(tt::StoreOp op, RankedTensorType ptrTensorTy,
+                             MLIRContext *ctx) const {
+    LDBG("Attempting 1D strided store reshape for: " << *op);
+
+    // 1. Reject masked stores — we only handle unmasked or splat(true).
+    if (Value mask = op.getMask()) {
+      // Allow splat(true) masks — they are equivalent to no mask.
+      bool isTrivialMask = false;
+      if (auto splatOp = mask.getDefiningOp<tt::SplatOp>()) {
+        if (auto constOp =
+                splatOp.getSrc().getDefiningOp<arith::ConstantOp>()) {
+          if (auto boolAttr = dyn_cast<BoolAttr>(constOp.getValue()))
+            isTrivialMask = boolAttr.getValue();
+        }
+      }
+      if (!isTrivialMask) {
+        LDBG("Store has non-trivial mask, skip 1D reshape");
+        return;
+      }
+    }
+
+    // 2. Trace pointer through tt.addptr to find the offset tensor.
+    Value ptr = op.getPtr();
+    auto addPtrOp = ptr.getDefiningOp<tt::AddPtrOp>();
+    if (!addPtrOp) {
+      LDBG("Pointer not defined by tt.addptr, skip 1D reshape");
+      return;
+    }
+    Value offset = addPtrOp.getOffset();
+
+    // 3. Pattern-match the offset for:
+    //    arith.addi(arith.remui(idx, W), arith.muli(arith.divui(idx, W), S))
+    //    Look through cast wrappers at each step.
+    Value offsetUnwrapped = lookThroughCasts(offset);
+    auto addIOp = offsetUnwrapped.getDefiningOp<arith::AddIOp>();
+    if (!addIOp) {
+      LDBG("Offset not defined by arith.addi, skip 1D reshape");
+      return;
+    }
+
+    // Try both orderings of the addi operands: (remui, muli) or (muli, remui).
+    arith::RemUIOp remOp = nullptr;
+    arith::MulIOp mulOp = nullptr;
+    for (int order = 0; order < 2; ++order) {
+      Value lhs = lookThroughCasts(addIOp.getLhs());
+      Value rhs = lookThroughCasts(addIOp.getRhs());
+      if (order == 1)
+        std::swap(lhs, rhs);
+      remOp = lhs.getDefiningOp<arith::RemUIOp>();
+      mulOp = rhs.getDefiningOp<arith::MulIOp>();
+      if (remOp && mulOp)
+        break;
+    }
+    if (!remOp || !mulOp) {
+      LDBG("Could not match remui/muli pattern, skip 1D reshape");
+      return;
+    }
+
+    // Extract W from remui(idx, W).
+    Value remIdx = lookThroughCasts(remOp.getLhs());
+    std::optional<int64_t> wVal = getConstantValue(remOp.getRhs());
+    if (!wVal || *wVal <= 0) {
+      LDBG("Could not extract constant W from remui, skip 1D reshape");
+      return;
+    }
+    int64_t W = *wVal;
+
+    // Match muli(divui(idx, W'), S) — extract divui and verify W' == W.
+    Value mulLhs = lookThroughCasts(mulOp.getLhs());
+    Value mulRhs = lookThroughCasts(mulOp.getRhs());
+
+    // Try both orderings of muli operands: (divui, S) or (S, divui).
+    arith::DivUIOp divOp = nullptr;
+    std::optional<int64_t> sVal;
+    divOp = mulLhs.getDefiningOp<arith::DivUIOp>();
+    if (divOp) {
+      sVal = getConstantValue(mulRhs);
+    } else {
+      divOp = mulRhs.getDefiningOp<arith::DivUIOp>();
+      sVal = getConstantValue(mulLhs);
+    }
+    if (!divOp || !sVal || *sVal <= 0) {
+      LDBG("Could not match divui/constant in muli, skip 1D reshape");
+      return;
+    }
+    int64_t S = *sVal;
+
+    // Verify divui uses the same index and same W constant as remui.
+    Value divIdx = lookThroughCasts(divOp.getLhs());
+    std::optional<int64_t> divWVal = getConstantValue(divOp.getRhs());
+    if (!divWVal || *divWVal != W) {
+      LDBG("divui W constant (" << (divWVal ? std::to_string(*divWVal) : "?")
+                                << ") does not match remui W (" << W
+                                << "), skip 1D reshape");
+      return;
+    }
+
+    // Verify both remui and divui use the same index.
+    if (remIdx != divIdx) {
+      LDBG("remui and divui use different index values, skip 1D reshape");
+      return;
+    }
+
+    // 4. Compute H = numElements / W and verify evenly divides.
+    int64_t numElements = ptrTensorTy.getDimSize(0);
+
+    // Verify idx is a canonical unit-stride linear index: tt.make_range(0, N).
+    // Without this, a scaled or permuted index that happens to match the
+    // algebraic shape would produce an incorrect reshape.
+    if (!isCanonicalLinearIndex(remIdx, numElements, W)) {
+      LDBG("Index is not a canonical linear index of length "
+           << numElements << " with W=" << W);
+      return;
+    }
+    if (numElements % W != 0) {
+      LDBG("numElements (" << numElements << ") not divisible by W (" << W
+                           << "), skip 1D reshape");
+      return;
+    }
+    int64_t H = numElements / W;
+
+    LDBG("Detected strided pattern: W=" << W << ", H=" << H << ", S=" << S);
+
+    // 5. Create reshaped tensors: [N] -> [H, W].
+    Location loc = op.getLoc();
+    OpBuilder builder(op);
+    SmallVector<int64_t> newShape = {H, W};
+
+    // Use the ReshapeOp builder that infers the 2D encoding automatically.
+    auto ptrReshape = tt::ReshapeOp::create(builder, loc, newShape, ptr,
+                                            /*allowReorder=*/false);
+    Value val = op.getValue();
+    auto valReshape = tt::ReshapeOp::create(builder, loc, newShape, val,
+                                            /*allowReorder=*/false);
+
+    // 6. Create the new 2D store.
+    auto newStore = tt::StoreOp::create(builder, loc, ptrReshape, valReshape,
+                                        op.getCache(), op.getEvict());
+
+    // Copy over boundaryCheck if non-empty.
+    if (!op.getBoundaryCheck().empty())
+      newStore->setAttr("boundaryCheck", op.getBoundaryCheckAttr());
+
+    // Copy ignore_cta if present.
+    if (op.getIgnoreCta())
+      newStore->setAttr("ignore_cta", UnitAttr::get(ctx));
+
+    // 7. Set block IO attributes on the new store.
+    // Stride is validated positive at extraction; assert here so lowering
+    // can trust the attribute without re-checking.
+    assert(S > 0 && "stride must be positive");
+    newStore->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
+                      StringAttr::get(ctx, "row_major"));
+    newStore->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOStrideAttrName(),
+                      IntegerAttr::get(IntegerType::get(ctx, 64), S));
+
+    LDBG("Created 2D block store: " << *newStore);
+
+    // 8. Erase the original 1D store.
+    op.erase();
   }
 
   template <typename OpType,
