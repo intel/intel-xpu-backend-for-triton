@@ -211,6 +211,10 @@ bash scripts/test-triton.sh --vllm-deepgemm --skip-pip-install --skip-pytorch-in
 ## TODO
 
 - Populate skip lists from CI results (`scripts/skiplist/default/vllm_*.txt`)
+- Enable pytest-xdist parallelism (`-n`) for vLLM test suites once skip lists
+  are populated and stable. Currently disabled to match the existing `--vllm`
+  suite behavior and avoid xdist worker timeouts during first-time kernel
+  compilation on XPU.
 - Refactor `run_vllm_install()` in `test-triton.sh` to delegate to `install-vllm.sh`
 - Add dedicated kernel-level tests for KDA (`--vllm-kda`)
 - Resolve pytest-shard/pytest-skip conflict properly (current workaround: uninstall pytest-shard)
