@@ -55,7 +55,7 @@ jobs:
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           cd ${{ env.NEW_WORKSPACE }}
-          pip install -U "setuptools>=70.2.0" wheel pybind11 cmake build
+          pip install -U "setuptools>=70.2.0" wheel pybind11 "cmake>=3.20,<4.0" "ninja<1.13.0" build
           pip install -v '.[build]'
 
       - name: Build Triton wheel
@@ -63,7 +63,7 @@ jobs:
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           cd ${{ env.NEW_WORKSPACE }}
-          python -m build --wheel --no-isolation
+          python -m build --wheel --no-isolation --skip-dependency-check
 
       - name: Upload Triton wheel artifact
         uses: actions/upload-artifact@v7
