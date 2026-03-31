@@ -897,8 +897,11 @@ run_vllm_install() {
     cd ..
   fi
 
-  # VLLM project tests use pytest-shard which conflicts with pytest-skip
-  pip uninstall pytest-skip -y
+  # FIXME: temporary workaround — pytest-shard (from vLLM deps) conflicts with
+  # pytest-skip (from triton CI, needed for --skip-from-file). Uninstall pytest-shard
+  # instead of pytest-skip so skip lists work. Long-term: resolve the conflict properly.
+  echo "WARNING: Uninstalling pytest-shard to preserve pytest-skip (temporary workaround)"
+  pip uninstall pytest-shard -y 2>/dev/null || true
 
   # These files contain specific versions of pytorch and triton, so let's remove them
   # vllm_xpu_kernels wheel URL is preserved and installed from pre-built wheel
@@ -923,9 +926,11 @@ run_vllm_tests() {
   run_test_deps_install
 
   cd vllm
-  FIXME: Make batched_moe and triton_unified_attention proper test suites. run_vllm_tests should run all vll testsuites.
-  FIXME: It looks like tests in CI are running with one xdist worker, we should fix it and do -n ${PYTEST_MAX_PROCESSES:-8}
-  run_pytest_command -vvv tests/kernels/moe/test_batched_moe.py tests/kernels/attention/test_triton_unified_attention.py
+  # FIXME: Make batched_moe and triton_unified_attention proper test suites.
+  # run_vllm_tests should eventually run all vllm testsuites.
+  run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} \
+    tests/kernels/moe/test_batched_moe.py \
+    tests/kernels/attention/test_triton_unified_attention.py
 }
 
 
@@ -938,18 +943,16 @@ run_vllm_spec_decode_tests() {
   run_test_deps_install
 
   cd vllm
-  FIXME: It looks like tests in CI are running with one xdist worker, we should fix it and do -n ${PYTEST_MAX_PROCESSES:-8}
-  FIXME: can we run just one command for the whole spec_decode suite instead of splitting it into multiple commands for different files? Current approach will break reporting - pytest will overwrite junit report for the testsuite.
+  # Include test_max_len.py fully (small file, extra tests won't hurt) to keep
+  # everything in a single pytest command and avoid overwriting the junit report.
   VLLM_USE_V2_MODEL_RUNNER=1 TRITON_TEST_SUITE=vllm_spec_decode \
-    run_pytest_command -vvv \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} \
       tests/v1/spec_decode/test_eagle.py \
       tests/v1/spec_decode/test_mtp.py \
+      tests/v1/spec_decode/test_max_len.py \
       tests/v1/spec_decode/test_speculators_eagle3.py \
       tests/v1/spec_decode/test_synthetic_rejection_sampler_utils.py \
       tests/v1/sample/test_rejection_sampler.py
-  VLLM_USE_V2_MODEL_RUNNER=1 TRITON_TEST_SUITE=vllm_spec_decode \
-    run_pytest_command -vvv \
-      tests/v1/spec_decode/test_max_len.py -k "eagle or mtp"
 }
 
 
@@ -962,9 +965,8 @@ run_vllm_mrv2_tests() {
   run_test_deps_install
 
   cd vllm
-  FIXME: It looks like tests in CI are running with one xdist worker, we should fix it and do -n ${PYTEST_MAX_PROCESSES:-8}
   VLLM_USE_V2_MODEL_RUNNER=1 TRITON_TEST_SUITE=vllm_mrv2 \
-    run_pytest_command -vvv \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} \
       tests/v1/worker/test_gpu_model_runner.py \
       tests/v1/worker/test_gpu_input_batch.py \
       tests/v1/worker/test_gpu_model_runner_v2_eplb.py \
@@ -987,7 +989,7 @@ run_vllm_moe_tests() {
   # fused_moe_kernel_gpta_awq, _silu_mul_fp8_quant_deep_gemm, apply_expert_map,
   # _fwd_kernel_ep_scatter_1, _fwd_kernel_ep_scatter_2, _fwd_kernel_ep_gather
   TRITON_TEST_SUITE=vllm_moe \
-    run_pytest_command -vvv \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} \
       tests/kernels/moe/test_batched_moe.py \
       tests/kernels/moe/test_count_expert_num_tokens.py \
       tests/kernels/moe/test_moe.py \
@@ -1012,7 +1014,7 @@ run_vllm_triton_attn_tests() {
   # _fwd_grouped_kernel_stage1, _fwd_kernel_stage2, kernel_unified_attention_2d,
   # kernel_unified_attention_3d, reduce_segments
   TRITON_TEST_SUITE=vllm_triton_attn \
-    run_pytest_command -vvv \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} \
       tests/kernels/attention/test_merge_attn_states.py \
       tests/kernels/attention/test_triton_decode_attention.py \
       tests/kernels/attention/test_triton_unified_attention.py \
@@ -1036,7 +1038,7 @@ run_vllm_gdn_attn_tests() {
   # layer_norm_fwd_kernel, solve_tril_16x16_kernel, merge_*_inverse_kernel,
   # recompute_w_u_fwd_kernel
   TRITON_TEST_SUITE=vllm_gdn_attn \
-    run_pytest_command -vvv \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} \
       tests/v1/attention/test_gdn_metadata_builder.py
 }
 
@@ -1055,7 +1057,7 @@ run_vllm_mamba_tests() {
   # bmm_chunk_fwd_kernel, chunk_scan_fwd_kernel, chunk_cumsum_fwd_kernel,
   # _chunk_state_fwd_kernel, chunk_state_varlen_kernel, state_passing_fwd_kernel
   TRITON_TEST_SUITE=vllm_mamba \
-    run_pytest_command -vvv \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} \
       tests/kernels/mamba/test_causal_conv1d.py \
       tests/kernels/mamba/test_mamba_ssm.py \
       tests/kernels/mamba/test_mamba_ssm_ssd.py \
@@ -1078,7 +1080,7 @@ run_vllm_quant_tests() {
   # _per_token_group_quant_fp8, _per_token_group_quant_fp8_colmajor,
   # _w8a8_block_fp8_matmul
   TRITON_TEST_SUITE=vllm_quant \
-    run_pytest_command -vvv \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} \
       tests/kernels/quantization/test_triton_scaled_mm.py \
       tests/kernels/quantization/test_awq_triton.py \
       tests/kernels/quantization/test_int8_kernel.py \
@@ -1102,7 +1104,7 @@ run_vllm_linear_attn_tests() {
   # _fwd_diag_kernel, _fwd_kv_parallel, _fwd_kv_reduce,
   # _fwd_none_diag_kernel, linear_attn_decode_kernel
   TRITON_TEST_SUITE=vllm_linear_attn \
-    run_pytest_command -vvv \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} \
       tests/kernels/attention/test_lightning_attn.py
 }
 

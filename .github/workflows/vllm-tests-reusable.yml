@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       suite:
-        description: "Test suite: vllm, vllm-spec-decode, or vllm-mrv2"
+        description: "Test suite: vllm, vllm-spec-decode, vllm-mrv2, etc."
         type: string
         required: true
       runner_label:
@@ -70,29 +70,29 @@ jobs:
         id: install
         uses: ./.github/actions/setup-triton
 
-      - name: Configure skip list
+      - name: Set test-triton command line
         run: |
           skiplist="$GITHUB_WORKSPACE/scripts/skiplist/default"
           if [[ -n "${{ inputs.skip_list }}" ]]; then
             skiplist="$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.skip_list }}"
           fi
-          echo "SKIPLIST=$skiplist" >> $GITHUB_ENV
+          TRITON_TEST_CMD="bash -x scripts/test-triton.sh --skip-pip-install --skip-pytorch-install --reports-dir $GITHUB_WORKSPACE/reports --skip-list $skiplist ${{ inputs.ignore_errors && '--ignore-errors' || '' }}"
+          echo "TRITON_TEST_CMD=$TRITON_TEST_CMD" | tee -a $GITHUB_ENV
 
       - name: Create reports dir
         run: |
           mkdir -p reports
           echo "REPORTS=$PWD/reports" >> $GITHUB_ENV
 
+      - name: Install vLLM
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --install-vllm
+
       - name: Run ${{ inputs.suite }} tests
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
-          ./scripts/test-triton.sh \
-            --${{ inputs.suite }} \
-            --skip-pip-install \
-            --skip-pytorch-install \
-            --reports-dir $GITHUB_WORKSPACE/reports \
-            --skip-list ${{ env.SKIPLIST }} \
-            ${{ inputs.ignore_errors && '--ignore-errors' || '' }}
+          ${{ env.TRITON_TEST_CMD }} --${{ inputs.suite }}
 
       - name: Upload test report
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
