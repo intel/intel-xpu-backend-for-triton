@@ -4,7 +4,9 @@ on:
   workflow_call:
     inputs:
       suite:
-        description: "Test suite: vllm, vllm-spec-decode, vllm-mrv2, etc."
+        description: >
+          Test suite: vllm-spec-decode, vllm-mrv2, vllm-moe, vllm-triton-attn,
+          vllm-mamba, vllm-quant, or vllm-rest (groups: gdn-attn, linear-attn, deepgemm).
         type: string
         required: true
       runner_label:
@@ -30,15 +32,17 @@ env:
   PYTHON_VERSION: ${{ inputs.python_version }}
 
 jobs:
-  run-tests:
-    name: ${{ inputs.suite }}
+  setup:
+    name: Setup
     runs-on:
       - linux
       - ${{ inputs.runner_label || 'max1550' }}
-    timeout-minutes: 120
+    timeout-minutes: 60
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+    outputs:
+      test-triton-command: ${{ steps.test-triton.outputs.command }}
     steps:
       - name: Print inputs
         run: |
@@ -67,36 +71,123 @@ jobs:
         uses: ./.github/actions/setup-pytorch
 
       - name: Setup Triton
-        id: install
         uses: ./.github/actions/setup-triton
 
       - name: Set test-triton command line
+        id: test-triton
         run: |
           skiplist="$GITHUB_WORKSPACE/scripts/skiplist/default"
           if [[ -n "${{ inputs.skip_list }}" ]]; then
             skiplist="$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.skip_list }}"
           fi
           TRITON_TEST_CMD="bash -x scripts/test-triton.sh --skip-pip-install --skip-pytorch-install --reports-dir $GITHUB_WORKSPACE/reports --skip-list $skiplist ${{ inputs.ignore_errors && '--ignore-errors' || '' }}"
-          echo "TRITON_TEST_CMD=$TRITON_TEST_CMD" | tee -a $GITHUB_ENV
+          echo "command=$TRITON_TEST_CMD" | tee -a $GITHUB_OUTPUT
 
       - name: Install test dependencies
         run: |
           pip install -r scripts/requirements-test.txt
 
-      - name: Create reports dir
+      - name: Install vLLM
         run: |
-          mkdir -p reports
-          echo "REPORTS=$PWD/reports" >> $GITHUB_ENV
+          ${{ steps.test-triton.outputs.command }} --install-vllm
+
+  tests:
+    name: ${{ inputs.suite }}
+    needs: setup
+    runs-on:
+      - linux
+      - ${{ inputs.runner_label || 'max1550' }}
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install Python (from pyenv) ${{ inputs.python_version }}
+        uses: ./.github/actions/setup-pyenv-python
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Identify Python version
+        run: |
+          PYTHON_VERSION="$(python -c 'import sys; print(f"{sys.version_info[0]}.{ sys.version_info[1]}")')"
+          echo "PYTHON_VERSION=$PYTHON_VERSION" | tee -a $GITHUB_ENV
+
+      - name: Install Python build dependencies
+        run: |
+          pip install cmake
+
+      - name: Setup PyTorch
+        uses: ./.github/actions/setup-pytorch
+
+      - name: Setup Triton
+        id: install
+        uses: ./.github/actions/setup-triton
+
+      - name: Install test dependencies
+        run: |
+          pip install -r scripts/requirements-test.txt
+
+      - name: Set test-triton command line
+        run: |
+          echo "TRITON_TEST_CMD=${{ needs.setup.outputs.test-triton-command }}" | tee -a $GITHUB_ENV
 
       - name: Install vLLM
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
           ${{ env.TRITON_TEST_CMD }} --install-vllm
 
-      - name: Run ${{ inputs.suite }} tests
-        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+      - name: Create reports dir
         run: |
-          ${{ env.TRITON_TEST_CMD }} --${{ inputs.suite }}
+          mkdir -p reports
+
+      - name: Run spec-decode tests
+        if: ${{ inputs.suite == 'vllm-spec-decode' && steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --vllm-spec-decode
+
+      - name: Run mrv2 tests
+        if: ${{ inputs.suite == 'vllm-mrv2' && steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --vllm-mrv2
+
+      - name: Run moe tests
+        if: ${{ inputs.suite == 'vllm-moe' && steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --vllm-moe
+
+      - name: Run triton-attn tests
+        if: ${{ inputs.suite == 'vllm-triton-attn' && steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --vllm-triton-attn
+
+      - name: Run mamba tests
+        if: ${{ inputs.suite == 'vllm-mamba' && steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --vllm-mamba
+
+      - name: Run quant tests
+        if: ${{ inputs.suite == 'vllm-quant' && steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --vllm-quant
+
+      # vllm-rest groups short suites: gdn-attn, linear-attn, deepgemm
+      - name: Run gdn-attn tests
+        if: ${{ inputs.suite == 'vllm-rest' && steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --vllm-gdn-attn
+
+      - name: Run linear-attn tests
+        if: ${{ inputs.suite == 'vllm-rest' && steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --vllm-linear-attn
+
+      - name: Run deepgemm tests
+        if: ${{ inputs.suite == 'vllm-rest' && steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --vllm-deepgemm
 
       - name: Upload test report
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}

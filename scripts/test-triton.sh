@@ -41,6 +41,8 @@ TEST:
     --vllm-mamba
     --vllm-quant
     --vllm-linear-attn
+    --vllm-deepgemm
+    --vllm-kda
     --install-vllm
     --sglang
     --install-sglang
@@ -109,6 +111,8 @@ TEST_VLLM_GDN_ATTN=false
 TEST_VLLM_MAMBA=false
 TEST_VLLM_QUANT=false
 TEST_VLLM_LINEAR_ATTN=false
+TEST_VLLM_DEEPGEMM=false
+TEST_VLLM_KDA=false
 INSTALL_VLLM=false
 TEST_TRITON_KERNELS=false
 VENV=false
@@ -326,6 +330,16 @@ while (( $# != 0 )); do
       ;;
     --vllm-linear-attn)
       TEST_VLLM_LINEAR_ATTN=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --vllm-deepgemm)
+      TEST_VLLM_DEEPGEMM=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --vllm-kda)
+      TEST_VLLM_KDA=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -1109,6 +1123,36 @@ run_vllm_linear_attn_tests() {
 }
 
 
+run_vllm_deepgemm_tests() {
+  echo "********************************************************"
+  echo "******  Running VLLM DeepGemm tests              *******"
+  echo "********************************************************"
+
+  run_vllm_install
+  run_test_deps_install
+
+  cd vllm
+  # DeepGemm MOE kernels: _silu_mul_fp8_quant_deep_gemm, apply_expert_map,
+  # _fwd_kernel_ep_scatter_1, _fwd_kernel_ep_scatter_2, _fwd_kernel_ep_gather
+  TRITON_TEST_SUITE=vllm_deepgemm \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} \
+      tests/kernels/moe/test_silu_mul_fp8_quant_deep_gemm.py \
+      tests/kernels/moe/test_batched_deepgemm.py \
+      tests/kernels/moe/test_deepgemm.py
+}
+
+
+run_vllm_kda_tests() {
+  echo "********************************************************"
+  echo "******  Running VLLM KDA tests                   *******"
+  echo "********************************************************"
+
+  # No dedicated kernel tests exist yet — KDA is model-level integration only.
+  # This is a placeholder for when kernel-level tests are added.
+  echo "WARNING: No dedicated KDA kernel tests available. Skipping."
+}
+
+
 run_triton_kernels_tests() {
   echo "***************************************************"
   echo "******    Running Triton Kernels tests      *******"
@@ -1246,6 +1290,12 @@ test_triton() {
   fi
   if [ "$TEST_VLLM_LINEAR_ATTN" == true ]; then
     run_vllm_linear_attn_tests
+  fi
+  if [ "$TEST_VLLM_DEEPGEMM" == true ]; then
+    run_vllm_deepgemm_tests
+  fi
+  if [ "$TEST_VLLM_KDA" == true ]; then
+    run_vllm_kda_tests
   fi
   if [ "$TEST_TRITON_KERNELS" == true ]; then
     run_triton_kernels_tests

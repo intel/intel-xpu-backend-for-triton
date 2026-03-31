@@ -12,8 +12,6 @@ Scripts for installing and testing vLLM on Intel XPU as part of the Triton CI.
 
 ## Test Suites
 
-Two test suites are registered in `test-triton.sh`:
-
 ### `--vllm-spec-decode` (TRITON_TEST_SUITE=vllm_spec_decode)
 
 Validates speculative decoding Triton kernels on XPU.
@@ -89,6 +87,109 @@ Validates Triton attention kernels on XPU (decode, prefill, unified, merge).
 | `kernel_unified_attention_3d` | `vllm/v1/attention/ops/triton_unified_attention.py` | `tests/kernels/attention/test_triton_unified_attention.py` |
 | `reduce_segments` | `vllm/v1/attention/ops/triton_unified_attention.py` | `tests/kernels/attention/test_triton_unified_attention.py` |
 
+### `--vllm-gdn-attn` (TRITON_TEST_SUITE=vllm_gdn_attn)
+
+Validates GDN (Gated Delta Net) attention kernels used by Qwen3-Next on XPU.
+Runs in the `vllm-rest` CI job.
+
+| Triton Kernel | Source File | Test File |
+|---|---|---|
+| `chunk_gated_delta_rule_fwd_kernel` | `vllm/model_executor/layers/fla/ops/chunk_delta_h.py` | `tests/v1/attention/test_gdn_metadata_builder.py` |
+| `chunk_fwd_kernel_o` | `vllm/model_executor/layers/fla/ops/chunk_o.py` | `tests/v1/attention/test_gdn_metadata_builder.py` |
+| `chunk_scaled_dot_kkt_fwd_kernel` | `vllm/model_executor/layers/fla/ops/chunk_o.py` | `tests/v1/attention/test_gdn_metadata_builder.py` |
+| `chunk_local_cumsum_*_kernel` | `vllm/model_executor/layers/fla/ops/cumsum.py` | `tests/v1/attention/test_gdn_metadata_builder.py` |
+| `l2norm_fwd_kernel*` | `vllm/model_executor/layers/fla/ops/l2norm.py` | `tests/v1/attention/test_gdn_metadata_builder.py` |
+| `layer_norm_fwd_kernel` | `vllm/model_executor/layers/fla/ops/layernorm_guard.py` | `tests/v1/attention/test_gdn_metadata_builder.py` |
+| `solve_tril_16x16_kernel` | `vllm/model_executor/layers/fla/ops/solve_tril.py` | `tests/v1/attention/test_gdn_metadata_builder.py` |
+| `merge_*_inverse_kernel` | `vllm/model_executor/layers/fla/ops/wy_fast.py` | `tests/v1/attention/test_gdn_metadata_builder.py` |
+| `recompute_w_u_fwd_kernel` | `vllm/model_executor/layers/fla/ops/wy_fast.py` | `tests/v1/attention/test_gdn_metadata_builder.py` |
+
+### `--vllm-mamba` (TRITON_TEST_SUITE=vllm_mamba)
+
+Validates Mamba SSM and causal conv1d Triton kernels on XPU. Also covers
+mamba-mixer kernels (`mamba_ssm.py`, `ssd_*.py`) since they share the same test
+files.
+
+| Triton Kernel | Source File | Test File |
+|---|---|---|
+| `_causal_conv1d_fwd_kernel` | `vllm/model_executor/layers/mamba/ops/causal_conv1d.py` | `tests/kernels/mamba/test_causal_conv1d.py` |
+| `_causal_conv1d_update_kernel` | `vllm/model_executor/layers/mamba/ops/causal_conv1d.py` | `tests/kernels/mamba/test_causal_conv1d.py` |
+| `fused_gdn_gating_kernel` | `vllm/model_executor/layers/mamba/ops/gdn_linear_attn.py` | `tests/kernels/mamba/test_mamba_mixer2.py` |
+| `_selective_scan_update_kernel` | `vllm/model_executor/layers/mamba/ops/mamba_ssm.py` | `tests/kernels/mamba/test_mamba_ssm.py` |
+| `bmm_chunk_fwd_kernel` | `vllm/model_executor/layers/mamba/ops/ssd_bmm.py` | `tests/kernels/mamba/test_mamba_ssm_ssd.py` |
+| `chunk_scan_fwd_kernel` | `vllm/model_executor/layers/mamba/ops/ssd_chunk_scan.py` | `tests/kernels/mamba/test_mamba_ssm_ssd.py` |
+| `chunk_cumsum_fwd_kernel` | `vllm/model_executor/layers/mamba/ops/ssd_chunk_scan.py` | `tests/kernels/mamba/test_mamba_ssm_ssd.py` |
+| `_chunk_state_fwd_kernel` | `vllm/model_executor/layers/mamba/ops/ssd_chunk_state.py` | `tests/kernels/mamba/test_mamba_ssm_ssd.py` |
+| `chunk_state_varlen_kernel` | `vllm/model_executor/layers/mamba/ops/ssd_chunk_state.py` | `tests/kernels/mamba/test_mamba_ssm_ssd.py` |
+| `state_passing_fwd_kernel` | `vllm/model_executor/layers/mamba/ops/ssd_state_passing.py` | `tests/kernels/mamba/test_mamba_ssm_ssd.py` |
+
+### `--vllm-quant` (TRITON_TEST_SUITE=vllm_quant)
+
+Validates quantization Triton kernels on XPU (INT8, FP8, AWQ, scaled matmul).
+Runs in the `vllm-rest` CI job.
+
+| Triton Kernel | Source File | Test File |
+|---|---|---|
+| `scaled_mm_kernel` | `vllm/model_executor/layers/quantization/compressed_tensors/triton_scaled_mm.py` | `tests/kernels/quantization/test_triton_scaled_mm.py` |
+| `awq_dequantize_kernel` | `vllm/model_executor/layers/quantization/awq_triton.py` | `tests/kernels/quantization/test_awq_triton.py` |
+| `awq_gemm_kernel` | `vllm/model_executor/layers/quantization/awq_triton.py` | `tests/kernels/quantization/test_awq_triton.py` |
+| `round_int8` | `vllm/model_executor/layers/quantization/utils/int8_utils.py` | `tests/kernels/quantization/test_int8_kernel.py` |
+| `_per_token_quant_int8` | `vllm/model_executor/layers/quantization/utils/int8_utils.py` | `tests/kernels/quantization/test_int8_kernel.py` |
+| `_per_token_group_quant_int8` | `vllm/model_executor/layers/quantization/utils/int8_utils.py` | `tests/kernels/quantization/test_block_int8.py` |
+| `_w8a8_block_int8_matmul` | `vllm/model_executor/layers/quantization/utils/int8_utils.py` | `tests/kernels/quantization/test_block_int8.py` |
+| `_per_token_group_quant_fp8` | `vllm/model_executor/layers/quantization/utils/fp8_utils.py` | `tests/kernels/quantization/test_fp8_quant.py` |
+| `_per_token_group_quant_fp8_colmajor` | `vllm/model_executor/layers/quantization/utils/fp8_utils.py` | `tests/kernels/quantization/test_fp8_quant_group.py` |
+| `_w8a8_block_fp8_matmul` | `vllm/model_executor/layers/quantization/utils/fp8_utils.py` | `tests/kernels/quantization/test_block_fp8.py` |
+
+### `--vllm-linear-attn` (TRITON_TEST_SUITE=vllm_linear_attn)
+
+Validates linear attention kernels (MiniMax-Text / Lightning Attention) on XPU.
+Runs in the `vllm-rest` CI job.
+
+| Triton Kernel | Source File | Test File |
+|---|---|---|
+| `_fwd_diag_kernel` | `vllm/model_executor/layers/lightning_attn.py` | `tests/kernels/attention/test_lightning_attn.py` |
+| `_fwd_kv_parallel` | `vllm/model_executor/layers/lightning_attn.py` | `tests/kernels/attention/test_lightning_attn.py` |
+| `_fwd_kv_reduce` | `vllm/model_executor/layers/lightning_attn.py` | `tests/kernels/attention/test_lightning_attn.py` |
+| `_fwd_none_diag_kernel` | `vllm/model_executor/layers/lightning_attn.py` | `tests/kernels/attention/test_lightning_attn.py` |
+| `linear_attn_decode_kernel` | `vllm/model_executor/layers/lightning_attn.py` | `tests/kernels/attention/test_lightning_attn.py` |
+
+### `--vllm-deepgemm` (TRITON_TEST_SUITE=vllm_deepgemm)
+
+Validates DeepGemm-specific MOE kernels on XPU. Runs in the `vllm-rest` CI job.
+Note: some test files overlap with `--vllm-moe`.
+
+| Triton Kernel | Source File | Test File |
+|---|---|---|
+| `_silu_mul_fp8_quant_deep_gemm` | `vllm/model_executor/layers/fused_moe/deep_gemm_utils.py` | `tests/kernels/moe/test_silu_mul_fp8_quant_deep_gemm.py` |
+| `apply_expert_map` | `vllm/model_executor/layers/fused_moe/deep_gemm_utils.py` | `tests/kernels/moe/test_batched_deepgemm.py` |
+| `_fwd_kernel_ep_scatter_*` | `vllm/model_executor/layers/fused_moe/deep_gemm_utils.py` | `tests/kernels/moe/test_batched_deepgemm.py` |
+| `_fwd_kernel_ep_gather` | `vllm/model_executor/layers/fused_moe/deep_gemm_utils.py` | `tests/kernels/moe/test_deepgemm.py` |
+
+### `--vllm-kda` (TRITON_TEST_SUITE=vllm_kda)
+
+KDA (Knowledge-Distilled Attention) kernels. No dedicated kernel-level tests
+exist yet — only model-level integration. This suite is a placeholder and
+currently prints a warning and skips.
+
+**Kernel source:** `vllm/model_executor/layers/fla/ops/kda.py`
+
+## CI Workflow
+
+The CI workflow (`.github/workflows/vllm-tests.yml`) runs all suites in
+parallel using a matrix strategy. Short suites are grouped into a single
+`vllm-rest` job to reduce CI overhead:
+
+| CI Matrix Entry | Test Suites Run |
+|---|---|
+| `vllm-spec-decode` | `--vllm-spec-decode` |
+| `vllm-mrv2` | `--vllm-mrv2` |
+| `vllm-moe` | `--vllm-moe` |
+| `vllm-triton-attn` | `--vllm-triton-attn` |
+| `vllm-mamba` | `--vllm-mamba` |
+| `vllm-quant` | `--vllm-quant` |
+| `vllm-rest` | `--vllm-gdn-attn`, `--vllm-linear-attn`, `--vllm-deepgemm` |
+
 ## Usage
 
 ```bash
@@ -100,7 +201,19 @@ bash scripts/test-triton.sh --vllm-spec-decode --skip-pip-install --skip-pytorch
 bash scripts/test-triton.sh --vllm-mrv2 --skip-pip-install --skip-pytorch-install
 bash scripts/test-triton.sh --vllm-moe --skip-pip-install --skip-pytorch-install
 bash scripts/test-triton.sh --vllm-triton-attn --skip-pip-install --skip-pytorch-install
+bash scripts/test-triton.sh --vllm-gdn-attn --skip-pip-install --skip-pytorch-install
+bash scripts/test-triton.sh --vllm-mamba --skip-pip-install --skip-pytorch-install
+bash scripts/test-triton.sh --vllm-quant --skip-pip-install --skip-pytorch-install
+bash scripts/test-triton.sh --vllm-linear-attn --skip-pip-install --skip-pytorch-install
+bash scripts/test-triton.sh --vllm-deepgemm --skip-pip-install --skip-pytorch-install
 ```
+
+## TODO
+
+- Populate skip lists from CI results (`scripts/skiplist/default/vllm_*.txt`)
+- Refactor `run_vllm_install()` in `test-triton.sh` to delegate to `install-vllm.sh`
+- Add dedicated kernel-level tests for KDA (`--vllm-kda`)
+- Resolve pytest-shard/pytest-skip conflict properly (current workaround: uninstall pytest-shard)
 
 ## Reference
 
