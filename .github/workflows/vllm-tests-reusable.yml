@@ -79,6 +79,10 @@ jobs:
           TRITON_TEST_CMD="bash -x scripts/test-triton.sh --skip-pip-install --skip-pytorch-install --reports-dir $GITHUB_WORKSPACE/reports --skip-list $skiplist ${{ inputs.ignore_errors && '--ignore-errors' || '' }}"
           echo "TRITON_TEST_CMD=$TRITON_TEST_CMD" | tee -a $GITHUB_ENV
 
+      - name: Install test dependencies
+        run: |
+          pip install -r scripts/requirements-test.txt
+
       - name: Create reports dir
         run: |
           mkdir -p reports
