@@ -197,30 +197,9 @@ function install_vllm {
   # Create constraints file to prevent pip from replacing pre-installed torch/triton
   # with a PyPI version. common.txt -> transformers -> torch is the main culprit.
   # Also xgrammar -> triton can pull in unwanted triton versions.
+  # Use pip freeze format (package @ file://...) which prevents ANY PyPI version.
   CONSTRAINTS=$(mktemp)
-
-  # Get installed torch/triton versions and convert to constraint format
-  # Extract just package==version (not @ file:// URLs)
-  python -c "
-import sys
-try:
-    import torch
-    # Get version without local path info
-    version = torch.__version__.split('+')[0] if '+' in torch.__version__ else torch.__version__
-    print(f'torch=={torch.__version__}')
-except ImportError:
-    sys.exit(1)
-" >> "$CONSTRAINTS"
-
-  python -c "
-import sys
-try:
-    import triton
-    print(f'triton=={triton.__version__}')
-except ImportError:
-    pass
-" >> "$CONSTRAINTS"
-
+  python -m pip freeze | grep -iE '^(torch|triton)' > "$CONSTRAINTS" || true
   echo "**** Using constraints: $(cat "$CONSTRAINTS") ****"
 
   # Dry-run first: verify pip won't replace torch/triton with unwanted versions
@@ -258,14 +237,9 @@ except ImportError:
   # xgrammar depends on triton, but we already have it installed, so --no-deps is safe
   python -m pip install --no-deps 'xgrammar<1.0.0,>=0.1.32'
 
-  # Install XPU test requirements (locked, stripped of pytest-shard and python-incompatible pins)
-  sed -i '/pytest-shard/d' requirements/xpu-test.txt
-  sed -i '/^torch[=>= ]/d; /^torchaudio/d; /^torchvision/d; /^triton[=>= ]/d' requirements/xpu-test.txt
-  # gpt-oss requires Python 3.12+; skip on 3.10
-  sed -i '/^gpt-oss/d' requirements/xpu-test.txt
-  python -m pip install -c "$CONSTRAINTS" -r requirements/xpu-test.txt
-
-  # Install additional test dependencies not covered by requirements
+  # Install minimal test dependencies only (not the full xpu-test.txt)
+  # The full requirements are very large and cause pip resolver issues.
+  # We only need a small subset for the tests we actually run.
   python -m pip install cachetools cbor2 blake3 pybase64 openai_harmony tblib
 
   rm -f "$CONSTRAINTS"
