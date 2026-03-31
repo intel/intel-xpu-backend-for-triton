@@ -64,26 +64,20 @@ jobs:
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
 
-      - name: Setup Triton
-        uses: ./.github/actions/setup-triton
-
-      - name: Package Triton wheels
+      - name: Build Triton wheel
         run: |
-          mkdir -p triton-dist
-          # Check if wheels exist in common locations
-          if [ -d "python/dist" ] && [ -n "$(ls -A python/dist/*.whl 2>/dev/null)" ]; then
-            cp python/dist/*.whl triton-dist/
-          elif [ -d "dist" ] && [ -n "$(ls -A dist/*.whl 2>/dev/null)" ]; then
-            cp dist/*.whl triton-dist/
-          else
-            echo "Warning: No Triton wheels found, may need to build"
-          fi
+          python -m build --wheel --no-isolation
+          ls -lh python/dist/*.whl
 
-      - name: Upload Triton artifacts
+      - name: Upload Triton wheel
         uses: actions/upload-artifact@v7
         with:
           name: triton-vllm-${{ inputs.python_version }}
-          path: triton-dist/
+          path: python/dist/*.whl
+
+      - name: Install Triton from wheel
+        run: |
+          pip install python/dist/*.whl
 
       - name: Set test-triton command line
         id: test-triton
@@ -138,16 +132,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Download Triton wheels
+      - name: Download Triton wheel
         uses: actions/download-artifact@v8
         with:
           name: triton-vllm-${{ inputs.python_version }}
-          path: triton-dist/
+          path: triton-wheel/
 
       - name: Download vLLM requirements
         uses: actions/download-artifact@v8
         with:
           name: vllm-requirements-${{ inputs.python_version }}
+          path: .
 
       - name: Install Python (from pyenv) ${{ inputs.python_version }}
         uses: ./.github/actions/setup-pyenv-python
@@ -166,16 +161,11 @@ jobs:
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
 
-      - name: Install Triton from artifacts
+      - name: Install Triton from wheel
         id: install
         run: |
-          if [ -f triton-dist/*.whl ]; then
-            pip install triton-dist/*.whl
-            python -c 'import triton; print(triton.__version__)'
-          else
-            echo "Error: Triton wheel not found"
-            exit 1
-          fi
+          pip install triton-wheel/*.whl
+          python -c 'import triton; print(triton.__version__)'
 
       - name: Install test dependencies
         run: |
