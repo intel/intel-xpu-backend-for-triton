@@ -75,6 +75,18 @@ def test_static_assert(cond):
 
 
 def _test_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, tri_func, ref_func, device):
+    # On XPU, __devicelib_assert_fail fires SIGABRT instead of RuntimeError.
+    # Use subprocess to catch the signal. See https://github.com/intel/intel-xpu-backend-for-triton/issues/2755
+    if should_overflow and debug and device == 'xpu':
+        kernel_file = os.path.join(os.path.dirname(__file__), "test_debug_kernels.py")
+        op = tri_func.fn.__name__.removeprefix("_kernel_")
+        result = subprocess.run(
+            [sys.executable, kernel_file, "overflow", op,
+             str(x), str(y), x_dtype, y_dtype,
+             str(debug), device], capture_output=True, text=True)
+        assert result.returncode == -6, (f"Expected SIGABRT but got exit code {result.returncode}. "
+                                         f"stdout: {result.stdout}, stderr: {result.stderr}")
+        return
     x = torch.tensor([x], dtype=getattr(torch, x_dtype), device=device)
     y = torch.tensor([y], dtype=getattr(torch, y_dtype), device=device)
     z = torch.empty_like(x)
