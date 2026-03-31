@@ -55,7 +55,7 @@ jobs:
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           cd ${{ env.NEW_WORKSPACE }}
-          pip install -U pybind11 cmake build
+          pip install -U "setuptools>=70.2.0" wheel pybind11 cmake build
           pip install -v '.[build]'
 
       - name: Build Triton wheel
