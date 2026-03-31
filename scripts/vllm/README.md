@@ -210,6 +210,27 @@ bash scripts/test-triton.sh --vllm-deepgemm --skip-pip-install --skip-pytorch-in
 
 ## TODO
 
+### CI Failure Remediation (first run analysis, 2026-03-31)
+
+All skip lists are empty — failures are expected until populated. Three root
+cause categories:
+
+**1. CUDA unavailable / needs XPU patching** (linear-attn 10/10, mamba 544/544)
+- Tests call `torch.cuda.*` directly (not via `current_platform`)
+- Fix: extend `vllm-xpu-patch.py` to cover these test files, or add to skip lists
+
+**2. Device capability detection returns None** (moe 3713/3714, quant 660/663)
+- `current_platform.get_device_capability()` returns None on XPU at import time
+- Fix: skip tests gated on CUDA compute capability, or patch capability checks
+
+**3. Gated model access / platform constraints** (gdn-attn 8/8, spec-decode
+40/41, mrv2 26+30/56, triton-attn 132/133)
+- HuggingFace 401 errors for gated models (Meta-Llama)
+- triton-attn requires custom CUDA merge kernel for comparison
+- Fix: set up HF token in CI for model tests, skip CUDA-comparison tests
+
+### Other
+
 - Populate skip lists from CI results (`scripts/skiplist/default/vllm_*.txt`)
 - Enable pytest-xdist parallelism (`-n`) for vLLM test suites once skip lists
   are populated and stable. Currently disabled to match the existing `--vllm`
