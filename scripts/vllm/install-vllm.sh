@@ -190,21 +190,49 @@ function install_vllm {
 
   # Strip torch/triton pins from requirements (use pre-installed nightly wheels)
   # Be precise: match torch/torchaudio/torchvision/triton but NOT tritonclient
-  sed -i '/^torch[=>= ]/d; /^torchaudio/d; /^torchvision/d; /^triton[=>= ]/d; /extra-index-url.*pytorch/d' requirements/xpu.txt
-  sed -i '/^torch[=>= ]/d; /^torchaudio/d; /^torchvision/d; /^triton[=>= ]/d' requirements/test.in
+  # Also remove xgrammar which depends on triton (install it separately later)
+  sed -i '/^torch[=>= ]/d; /^torchaudio/d; /^torchvision/d; /^triton[=>= ]/d; /^xgrammar/d; /extra-index-url.*pytorch/d' requirements/xpu.txt requirements/common.txt
+  sed -i '/^torch[=>= ]/d; /^torchaudio/d; /^torchvision/d; /^triton[=>= ]/d; /^xgrammar/d' requirements/test.in
 
-  # Create constraints file to prevent pip from replacing pre-installed torch
+  # Create constraints file to prevent pip from replacing pre-installed torch/triton
   # with a PyPI version. common.txt -> transformers -> torch is the main culprit.
+  # Also xgrammar -> triton can pull in unwanted triton versions.
   CONSTRAINTS=$(mktemp)
-  python -m pip freeze | grep -iE '^(torch|triton)' > "$CONSTRAINTS" || true
+
+  # Get installed torch/triton versions and convert to constraint format
+  # Extract just package==version (not @ file:// URLs)
+  python -c "
+import sys
+try:
+    import torch
+    # Get version without local path info
+    version = torch.__version__.split('+')[0] if '+' in torch.__version__ else torch.__version__
+    print(f'torch=={torch.__version__}')
+except ImportError:
+    sys.exit(1)
+" >> "$CONSTRAINTS"
+
+  python -c "
+import sys
+try:
+    import triton
+    print(f'triton=={triton.__version__}')
+except ImportError:
+    pass
+" >> "$CONSTRAINTS"
+
   echo "**** Using constraints: $(cat "$CONSTRAINTS") ****"
 
   # Dry-run first: verify pip won't replace torch/triton with unwanted versions
   echo "**** Dry-run: checking for unintended torch/triton replacements ****"
   DRY_OUTPUT=$(python -m pip install --dry-run -c "$CONSTRAINTS" -r requirements/xpu.txt 2>&1) || true
-  if echo "$DRY_OUTPUT" | grep -iE "Would install.*(torch|triton)" | grep -ivE "torchvision|torchaudio|tritonclient"; then
+
+  # Extract "Would install" line and check for torch/triton packages
+  # Exclude: torchvision, torchaudio, tritonclient (these are OK to install)
+  # Check if torch or triton would be installed/upgraded (not already satisfied)
+  if echo "$DRY_OUTPUT" | grep "Would install" | grep -E " (torch|triton)-[0-9]" | grep -vE " (torchvision|torchaudio|tritonclient)-"; then
     echo "WARNING: pip would install/replace torch or triton packages:"
-    echo "$DRY_OUTPUT" | grep -iE "torch|triton"
+    echo "$DRY_OUTPUT" | grep "Would install"
     echo ""
     echo "This likely means a transitive dependency is pulling in torch."
     echo "Check constraints file: $CONSTRAINTS"
@@ -212,10 +240,23 @@ function install_vllm {
     rm -f "$CONSTRAINTS"
     exit 1
   fi
+
+  # Additional check: if "torch is already installed" appears, that's fine
+  if echo "$DRY_OUTPUT" | grep -q "torch is already installed"; then
+    echo "**** Dry-run: torch is already installed (good) ****"
+  fi
+  if echo "$DRY_OUTPUT" | grep -q "triton is already installed"; then
+    echo "**** Dry-run: triton is already installed (good) ****"
+  fi
+
   echo "**** Dry-run passed: torch/triton will not be replaced ****"
 
-  # Install XPU requirements with torch constrained
+  # Install XPU requirements with torch/triton constrained
   python -m pip install -c "$CONSTRAINTS" -r requirements/xpu.txt
+
+  # Install xgrammar separately without dependencies (already removed from requirements above)
+  # xgrammar depends on triton, but we already have it installed, so --no-deps is safe
+  python -m pip install --no-deps 'xgrammar<1.0.0,>=0.1.32'
 
   # Install XPU test requirements (locked, stripped of pytest-shard and python-incompatible pins)
   sed -i '/pytest-shard/d' requirements/xpu-test.txt
