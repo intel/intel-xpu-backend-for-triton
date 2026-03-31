@@ -32,68 +32,8 @@ env:
   PYTHON_VERSION: ${{ inputs.python_version }}
 
 jobs:
-  setup:
-    name: Setup
-    runs-on:
-      - linux
-      - ${{ inputs.runner_label || 'max1550' }}
-    timeout-minutes: 60
-    defaults:
-      run:
-        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
-    outputs:
-      test-triton-command: ${{ steps.test-triton.outputs.command }}
-    steps:
-      - name: Print inputs
-        run: |
-          cat <<EOF
-          ${{ toJSON(inputs) }}
-          EOF
-
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Install Python (from pyenv) ${{ inputs.python_version }}
-        uses: ./.github/actions/setup-pyenv-python
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Identify Python version
-        run: |
-          PYTHON_VERSION="$(python -c 'import sys; print(f"{sys.version_info[0]}.{ sys.version_info[1]}")')"
-          echo "PYTHON_VERSION=$PYTHON_VERSION" | tee -a $GITHUB_ENV
-
-      - name: Install Python build dependencies
-        run: |
-          pip install cmake
-
-      - name: Setup PyTorch
-        uses: ./.github/actions/setup-pytorch
-
-      - name: Setup Triton
-        uses: ./.github/actions/setup-triton
-
-      - name: Set test-triton command line
-        id: test-triton
-        run: |
-          skiplist="$GITHUB_WORKSPACE/scripts/skiplist/default"
-          if [[ -n "${{ inputs.skip_list }}" ]]; then
-            skiplist="$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.skip_list }}"
-          fi
-          TRITON_TEST_CMD="bash -x scripts/test-triton.sh --skip-pip-install --skip-pytorch-install --reports-dir $GITHUB_WORKSPACE/reports --skip-list $skiplist ${{ inputs.ignore_errors && '--ignore-errors' || '' }}"
-          echo "command=$TRITON_TEST_CMD" | tee -a $GITHUB_OUTPUT
-
-      - name: Install test dependencies
-        run: |
-          pip install -r scripts/requirements-test.txt
-
-      - name: Install vLLM
-        run: |
-          ${{ steps.test-triton.outputs.command }} --install-vllm
-
   tests:
     name: ${{ inputs.suite }}
-    needs: setup
     runs-on:
       - linux
       - ${{ inputs.runner_label || 'max1550' }}
@@ -102,6 +42,12 @@ jobs:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
     steps:
+      - name: Print inputs
+        run: |
+          cat <<EOF
+          ${{ toJSON(inputs) }}
+          EOF
+
       - name: Checkout repository
         uses: actions/checkout@v6
 
@@ -132,16 +78,21 @@ jobs:
 
       - name: Set test-triton command line
         run: |
-          echo "TRITON_TEST_CMD=${{ needs.setup.outputs.test-triton-command }}" | tee -a $GITHUB_ENV
+          skiplist="$GITHUB_WORKSPACE/scripts/skiplist/default"
+          if [[ -n "${{ inputs.skip_list }}" ]]; then
+            skiplist="$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.skip_list }}"
+          fi
+          TRITON_TEST_CMD="bash -x scripts/test-triton.sh --skip-pip-install --skip-pytorch-install --reports-dir $GITHUB_WORKSPACE/reports --skip-list $skiplist ${{ inputs.ignore_errors && '--ignore-errors' || '' }}"
+          echo "TRITON_TEST_CMD=$TRITON_TEST_CMD" | tee -a $GITHUB_ENV
+
+      - name: Create reports dir
+        run: |
+          mkdir -p reports
 
       - name: Install vLLM
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
           ${{ env.TRITON_TEST_CMD }} --install-vllm
-
-      - name: Create reports dir
-        run: |
-          mkdir -p reports
 
       - name: Run spec-decode tests
         if: ${{ inputs.suite == 'vllm-spec-decode' && steps.install.outcome == 'success' && !cancelled() }}
