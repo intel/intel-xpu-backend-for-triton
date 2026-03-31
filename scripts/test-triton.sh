@@ -37,6 +37,10 @@ TEST:
     --vllm-mrv2
     --vllm-moe
     --vllm-triton-attn
+    --vllm-gdn-attn
+    --vllm-mamba
+    --vllm-quant
+    --vllm-linear-attn
     --install-vllm
     --sglang
     --install-sglang
@@ -101,6 +105,10 @@ TEST_VLLM_SPEC_DECODE=false
 TEST_VLLM_MRV2=false
 TEST_VLLM_MOE=false
 TEST_VLLM_TRITON_ATTN=false
+TEST_VLLM_GDN_ATTN=false
+TEST_VLLM_MAMBA=false
+TEST_VLLM_QUANT=false
+TEST_VLLM_LINEAR_ATTN=false
 INSTALL_VLLM=false
 TEST_TRITON_KERNELS=false
 VENV=false
@@ -298,6 +306,26 @@ while (( $# != 0 )); do
       ;;
     --vllm-triton-attn)
       TEST_VLLM_TRITON_ATTN=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --vllm-gdn-attn)
+      TEST_VLLM_GDN_ATTN=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --vllm-mamba)
+      TEST_VLLM_MAMBA=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --vllm-quant)
+      TEST_VLLM_QUANT=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --vllm-linear-attn)
+      TEST_VLLM_LINEAR_ATTN=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -992,6 +1020,93 @@ run_vllm_triton_attn_tests() {
 }
 
 
+run_vllm_gdn_attn_tests() {
+  echo "********************************************************"
+  echo "******  Running VLLM GDN Attention tests         *******"
+  echo "********************************************************"
+
+  run_vllm_install
+  run_test_deps_install
+
+  cd vllm
+  # GDN (Gated Delta Net) attention kernels used by Qwen3-Next:
+  # chunk_gated_delta_rule_fwd_kernel, chunk_fwd_kernel_o,
+  # chunk_scaled_dot_kkt_fwd_kernel, chunk_local_cumsum_*_kernel,
+  # fused_recurrent_gated_delta_rule_fwd_kernel, l2norm_fwd_kernel*,
+  # layer_norm_fwd_kernel, solve_tril_16x16_kernel, merge_*_inverse_kernel,
+  # recompute_w_u_fwd_kernel
+  TRITON_TEST_SUITE=vllm_gdn_attn \
+    run_pytest_command -vvv \
+      tests/v1/attention/test_gdn_metadata_builder.py
+}
+
+
+run_vllm_mamba_tests() {
+  echo "********************************************************"
+  echo "******  Running VLLM Mamba tests                 *******"
+  echo "********************************************************"
+
+  run_vllm_install
+  run_test_deps_install
+
+  cd vllm
+  # Mamba kernels: _causal_conv1d_fwd_kernel, _causal_conv1d_update_kernel,
+  # fused_gdn_gating_kernel, _selective_scan_update_kernel, softplus,
+  # bmm_chunk_fwd_kernel, chunk_scan_fwd_kernel, chunk_cumsum_fwd_kernel,
+  # _chunk_state_fwd_kernel, chunk_state_varlen_kernel, state_passing_fwd_kernel
+  TRITON_TEST_SUITE=vllm_mamba \
+    run_pytest_command -vvv \
+      tests/kernels/mamba/test_causal_conv1d.py \
+      tests/kernels/mamba/test_mamba_ssm.py \
+      tests/kernels/mamba/test_mamba_ssm_ssd.py \
+      tests/kernels/mamba/test_mamba_mixer2.py
+}
+
+
+run_vllm_quant_tests() {
+  echo "********************************************************"
+  echo "******  Running VLLM Quantization Triton tests   *******"
+  echo "********************************************************"
+
+  run_vllm_install
+  run_test_deps_install
+
+  cd vllm
+  # Quantization Triton kernels: scaled_mm_kernel, awq_dequantize_kernel,
+  # awq_gemm_kernel, round_int8, _per_token_quant_int8,
+  # _per_token_group_quant_int8, _w8a8_block_int8_matmul,
+  # _per_token_group_quant_fp8, _per_token_group_quant_fp8_colmajor,
+  # _w8a8_block_fp8_matmul
+  TRITON_TEST_SUITE=vllm_quant \
+    run_pytest_command -vvv \
+      tests/kernels/quantization/test_triton_scaled_mm.py \
+      tests/kernels/quantization/test_awq_triton.py \
+      tests/kernels/quantization/test_int8_kernel.py \
+      tests/kernels/quantization/test_block_int8.py \
+      tests/kernels/quantization/test_fp8_quant.py \
+      tests/kernels/quantization/test_fp8_quant_group.py \
+      tests/kernels/quantization/test_block_fp8.py
+}
+
+
+run_vllm_linear_attn_tests() {
+  echo "********************************************************"
+  echo "******  Running VLLM Linear Attention tests      *******"
+  echo "********************************************************"
+
+  run_vllm_install
+  run_test_deps_install
+
+  cd vllm
+  # Linear attention kernels (MiniMax-Text / Lightning Attention):
+  # _fwd_diag_kernel, _fwd_kv_parallel, _fwd_kv_reduce,
+  # _fwd_none_diag_kernel, linear_attn_decode_kernel
+  TRITON_TEST_SUITE=vllm_linear_attn \
+    run_pytest_command -vvv \
+      tests/kernels/attention/test_lightning_attn.py
+}
+
+
 run_triton_kernels_tests() {
   echo "***************************************************"
   echo "******    Running Triton Kernels tests      *******"
@@ -1117,6 +1232,18 @@ test_triton() {
   fi
   if [ "$TEST_VLLM_TRITON_ATTN" == true ]; then
     run_vllm_triton_attn_tests
+  fi
+  if [ "$TEST_VLLM_GDN_ATTN" == true ]; then
+    run_vllm_gdn_attn_tests
+  fi
+  if [ "$TEST_VLLM_MAMBA" == true ]; then
+    run_vllm_mamba_tests
+  fi
+  if [ "$TEST_VLLM_QUANT" == true ]; then
+    run_vllm_quant_tests
+  fi
+  if [ "$TEST_VLLM_LINEAR_ATTN" == true ]; then
+    run_vllm_linear_attn_tests
   fi
   if [ "$TEST_TRITON_KERNELS" == true ]; then
     run_triton_kernels_tests
