@@ -369,8 +369,6 @@ def test_get_data(tmp_path: pathlib.Path, device: str):
 
 
 def test_clear_data(tmp_path: pathlib.Path, device: str):
-    if is_xpu():
-        pytest.skip("FIXME: #5754")
     temp_file = tmp_path / "test_clear_data.hatchet"
     session = proton.start(str(temp_file.with_suffix("")), context="shadow")
 
@@ -395,7 +393,7 @@ def test_clear_data(tmp_path: pathlib.Path, device: str):
     assert len(database[0]["children"]) == 1
     assert database[0]["children"][0]["frame"]["name"] == "test1"
     kernel_frame = database[0]["children"][0]["children"][0]
-    assert "elementwise" in kernel_frame["frame"]["name"]
+    assert "elementwise" in kernel_frame["frame"]["name"].lower()
 
 
 def test_clear_data_up_to_phase(tmp_path: pathlib.Path, device: str):
