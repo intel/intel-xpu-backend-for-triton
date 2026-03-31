@@ -118,6 +118,8 @@ class _PerfLogger:
             "compile.cubin": ["stage.cubin_ptxas"],
             "_init_handles": ["launcher_cls", "load_binary"],
             "launcher_cls": ["launcher.generic_setup", "launcher.codegen", "launcher.c_compile"],
+            # compile_module_from_src breakdown (cross-cutting, called from multiple places)
+            "cmod.total": ["cmod.hash", "cmod.cache_lookup", "cmod.c_compile", "cmod.dlopen"],
         }
         # Display order (flat list for iteration)
         _DISPLAY_ORDER = [
@@ -145,8 +147,9 @@ class _PerfLogger:
             "launcher.generic_setup", "launcher.codegen", "launcher.c_compile",
             "load_binary",
             "kernel_launch",
-            # Cross-cutting: compile_module_from_src breakdown (standalone, not in tree)
-            "cmod.cache_check", "cmod.c_compile", "cmod.load_module",
+            # Cross-cutting: compile_module_from_src breakdown
+            "cmod.total",
+            "cmod.hash", "cmod.cache_lookup", "cmod.c_compile", "cmod.dlopen",
         ]
 
         def _get_total(name):

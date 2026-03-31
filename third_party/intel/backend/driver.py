@@ -306,21 +306,27 @@ class TritonLauncher:
                 ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
                 ctypes.windll.kernel32.FreeLibrary(handle)
 
-
 def compile_module_from_src(src: str, name: str):
     from triton.runtime.build import perf_log
     import time as _time
+
+    _t_total = _time.perf_counter() if perf_log.enabled else 0
 
     _t_hash = _time.perf_counter() if perf_log.enabled else 0
     hasher = hashlib.sha256(__CACHE_VERSION.encode("utf-8"))
     hasher.update((src + platform_key()).encode("utf-8"))
     key = hasher.hexdigest()
+    if perf_log.enabled:
+        perf_log.log("cmod.hash", f"module={name} key={key[:16]}", _time.perf_counter() - _t_hash)
+
+    _t_cache_lookup = _time.perf_counter() if perf_log.enabled else 0
     cache = get_cache_manager(key)
+    print("cache is : ", cache, "key: ", key, " name : ", name)
     suffix = sysconfig.get_config_var("EXT_SUFFIX")
     cache_path = cache.get_file(f"{name}{suffix}")
     cache_hit = cache_path is not None
     if perf_log.enabled:
-        perf_log.log("cmod.cache_check", f"module={name} hit={cache_hit}", _time.perf_counter() - _t_hash)
+        perf_log.log("cmod.cache_lookup", f"module={name} hit={cache_hit} path={cache_path}", _time.perf_counter() - _t_cache_lookup)
 
     if cache_path is None:
         _t_build = _time.perf_counter() if perf_log.enabled else 0
@@ -340,7 +346,7 @@ def compile_module_from_src(src: str, name: str):
             with open(so, "rb") as f:
                 cache_path = cache.put(f.read(), f"{name}{suffix}", binary=True)
         if perf_log.enabled:
-            perf_log.log("cmod.c_compile", f"module={name}", _time.perf_counter() - _t_build)
+            perf_log.log("cmod.c_compile", f"module={name} missed_cache_path={cache_path}", _time.perf_counter() - _t_build)
 
     _t_load = _time.perf_counter() if perf_log.enabled else 0
     if name == 'arch_utils':
@@ -356,7 +362,11 @@ def compile_module_from_src(src: str, name: str):
     else:
         result = _load_module_from_path(name, cache_path)
     if perf_log.enabled:
-        perf_log.log("cmod.load_module", f"module={name}", _time.perf_counter() - _t_load)
+        perf_log.log("cmod.dlopen", f"module={name} path={cache_path}", _time.perf_counter() - _t_load)
+
+    if perf_log.enabled:
+        tag = "HIT" if cache_hit else "MISS"
+        perf_log.log("cmod.total", f"module={name} [{tag}]", _time.perf_counter() - _t_total)
 
     return result
 
@@ -1134,6 +1144,7 @@ class XPUDriver(DriverBase):
         if not arch:
             _t3a = _time.perf_counter() if perf_log.enabled else 0
             dirname = os.path.dirname(os.path.realpath(__file__))
+            print("dirname in driver.py: ", dirname)
             parser = compile_module_from_src(src=Path(os.path.join(dirname, "arch_parser.c")).read_text(),
                                             name="arch_utils")
             if perf_log.enabled:
