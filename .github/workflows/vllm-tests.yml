@@ -7,6 +7,12 @@ on:
         description: Runner label, keep empty for default
         type: string
         default: ""
+      suites:
+        description: >
+          JSON list of suites to run, e.g. ["vllm","vllm-spec-decode","vllm-mrv2"].
+          Leave empty to run all.
+        type: string
+        default: ""
   schedule:
     # About midnight PST Sunday (UTC-8)
     - cron: "5 10 * * SUN"
@@ -18,63 +24,13 @@ concurrency:
 
 permissions: read-all
 
-env:
-  PYTHON_VERSION: "3.12"
-
 jobs:
   vllm-tests:
-    name: vLLM tests
-    runs-on:
-      - linux
-      - ${{ inputs.runner_label || 'max1550' }}
-    timeout-minutes: 120
-    defaults:
-      run:
-        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
-    steps:
-      - name: Print inputs
-        run: |
-          cat <<EOF
-          ${{ toJSON(inputs) }}
-          EOF
-
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Install Python (from pyenv) ${{ inputs.python_version }}
-        uses: ./.github/actions/setup-pyenv-python
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Identify Python version
-        run: |
-          PYTHON_VERSION="$(python -c 'import sys; print(f"{sys.version_info[0]}.{ sys.version_info[1]}")')"
-          echo "PYTHON_VERSION=$PYTHON_VERSION" | tee -a $GITHUB_ENV
-
-      - name: Install Python build dependencies
-        run: |
-          pip install cmake
-
-      - name: Setup PyTorch
-        uses: ./.github/actions/setup-pytorch
-
-      - name: Setup Triton
-        id: install
-        uses: ./.github/actions/setup-triton
-
-      - name: Create reports dir
-        run: |
-          mkdir reports
-          echo "REPORTS=$PWD/reports" >> $GITHUB_ENV
-
-      - name: Run VLLM tests
-        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
-        run: |
-          ./scripts/test-triton.sh --vllm --skip-pip-install --skip-pytorch-install
-
-      - name: Upload test report
-        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: test-vllm-reports
-          path: reports
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: ${{ fromJSON(inputs.suites || '["vllm","vllm-spec-decode","vllm-mrv2"]') }}
+    uses: ./.github/workflows/vllm-tests-reusable.yml
+    with:
+      suite: ${{ matrix.suite }}
+      runner_label: ${{ inputs.runner_label || '' }}

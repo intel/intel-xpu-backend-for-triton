@@ -33,6 +33,8 @@ TEST:
     --instrumentation
     --inductor
     --vllm
+    --vllm-spec-decode
+    --vllm-mrv2
     --install-vllm
     --sglang
     --install-sglang
@@ -93,6 +95,8 @@ INSTALL_SGLANG=false
 TEST_LIGER=false
 INSTALL_LIGER=false
 TEST_VLLM=false
+TEST_VLLM_SPEC_DECODE=false
+TEST_VLLM_MRV2=false
 INSTALL_VLLM=false
 TEST_TRITON_KERNELS=false
 VENV=false
@@ -270,6 +274,16 @@ while (( $# != 0 )); do
       ;;
     --install-vllm)
       INSTALL_VLLM=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --vllm-spec-decode)
+      TEST_VLLM_SPEC_DECODE=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --vllm-mrv2)
+      TEST_VLLM_MRV2=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -871,6 +885,47 @@ run_vllm_tests() {
 }
 
 
+run_vllm_spec_decode_tests() {
+  echo "********************************************************"
+  echo "******  Running VLLM Spec Decode tests           *******"
+  echo "********************************************************"
+
+  run_vllm_install
+  run_test_deps_install
+
+  cd vllm
+  VLLM_USE_V2_MODEL_RUNNER=1 TRITON_TEST_SUITE=vllm_spec_decode \
+    run_pytest_command -vvv \
+      tests/v1/spec_decode/test_eagle.py \
+      tests/v1/spec_decode/test_mtp.py \
+      tests/v1/spec_decode/test_speculators_eagle3.py \
+      tests/v1/spec_decode/test_synthetic_rejection_sampler_utils.py \
+      tests/v1/sample/test_rejection_sampler.py
+  VLLM_USE_V2_MODEL_RUNNER=1 TRITON_TEST_SUITE=vllm_spec_decode \
+    run_pytest_command -vvv \
+      tests/v1/spec_decode/test_max_len.py -k "eagle or mtp"
+}
+
+
+run_vllm_mrv2_tests() {
+  echo "********************************************************"
+  echo "******  Running VLLM MRv2 tests                  *******"
+  echo "********************************************************"
+
+  run_vllm_install
+  run_test_deps_install
+
+  cd vllm
+  VLLM_USE_V2_MODEL_RUNNER=1 TRITON_TEST_SUITE=vllm_mrv2 \
+    run_pytest_command -vvv \
+      tests/v1/worker/test_gpu_model_runner.py \
+      tests/v1/worker/test_gpu_input_batch.py \
+      tests/v1/worker/test_gpu_model_runner_v2_eplb.py \
+      tests/v1/sample/test_sampler.py \
+      tests/v1/sample/test_logprobs.py
+}
+
+
 run_triton_kernels_tests() {
   echo "***************************************************"
   echo "******    Running Triton Kernels tests      *******"
@@ -984,6 +1039,12 @@ test_triton() {
   fi
   if [ "$TEST_VLLM" == true ]; then
     run_vllm_tests
+  fi
+  if [ "$TEST_VLLM_SPEC_DECODE" == true ]; then
+    run_vllm_spec_decode_tests
+  fi
+  if [ "$TEST_VLLM_MRV2" == true ]; then
+    run_vllm_mrv2_tests
   fi
   if [ "$TEST_TRITON_KERNELS" == true ]; then
     run_triton_kernels_tests
