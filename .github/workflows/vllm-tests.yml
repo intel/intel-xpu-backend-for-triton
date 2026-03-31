@@ -12,7 +12,7 @@ on:
           JSON list of suites to run, e.g. ["vllm","vllm-spec-decode","vllm-mrv2"].
           Leave empty to run all.
         type: string
-        default: ""
+        default: '["vllm","vllm-spec-decode","vllm-mrv2"]'
   schedule:
     # About midnight PST Sunday (UTC-8)
     - cron: "5 10 * * SUN"
