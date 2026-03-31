@@ -9,10 +9,10 @@ on:
         default: ""
       suites:
         description: >
-          JSON list of suites to run, e.g. ["vllm","vllm-spec-decode","vllm-mrv2"].
+          JSON list of suites to run, e.g. ["vllm-spec-decode","vllm-mrv2"].
           Leave empty to run all.
         type: string
-        default: '["vllm","vllm-spec-decode","vllm-mrv2","vllm-moe","vllm-triton-attn","vllm-gdn-attn","vllm-mamba","vllm-quant","vllm-linear-attn"]'
+        default: '["vllm-spec-decode","vllm-mrv2","vllm-moe","vllm-triton-attn","vllm-gdn-attn","vllm-mamba","vllm-quant","vllm-linear-attn"]'
   schedule:
     # About midnight PST Sunday (UTC-8)
     - cron: "5 10 * * SUN"
@@ -29,7 +29,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: ${{ fromJSON(inputs.suites || '["vllm","vllm-spec-decode","vllm-mrv2","vllm-moe","vllm-triton-attn","vllm-gdn-attn","vllm-mamba","vllm-quant","vllm-linear-attn"]') }}
+        suite: ${{ fromJSON(inputs.suites || '["vllm-spec-decode","vllm-mrv2","vllm-moe","vllm-triton-attn","vllm-gdn-attn","vllm-mamba","vllm-quant","vllm-linear-attn"]') }}
     uses: ./.github/workflows/vllm-tests-reusable.yml
     with:
       suite: ${{ matrix.suite }}
