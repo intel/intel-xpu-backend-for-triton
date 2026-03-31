@@ -284,54 +284,83 @@ jobs:
         run: |
           echo "TRITON_TEST_CMD=${{ needs.build.outputs.test-triton-command }}" | tee -a $GITHUB_ENV
 
-      - name: Set SPIRVRunner dump dir
-        if: matrix.suite == 'triton-kernels'
+      - name: Run Proton tests
+        if: matrix.suite == 'rest'
         run: |
-          echo "TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS=$GITHUB_WORKSPACE/spirvrunner-input-data" | tee -a $GITHUB_ENV
+          ${{ env.TRITON_TEST_CMD }} --proton
 
-      - name: Set IGC shader dump dir
-        if: matrix.suite == 'triton-kernels'
+      - name: Run minicore tests
+        if: matrix.suite == 'minicore'
         run: |
-          echo "IGC_ShaderDumpEnable=1" | tee -a $GITHUB_ENV
-          echo "IGC_DumpToCustomDir=$GITHUB_WORKSPACE/igc-shader-dumps" | tee -a $GITHUB_ENV
+          ${{ env.TRITON_TEST_CMD }} --minicore
 
-      - name: Set clean Triton cache dir
-        if: matrix.suite == 'triton-kernels'
+      - name: Run language tests
+        if: matrix.suite == 'language'
         run: |
-          rm -rf "$GITHUB_WORKSPACE/triton_cache"
-          mkdir -p "$GITHUB_WORKSPACE/triton_cache"
-          echo "TRITON_CACHE_DIR=$GITHUB_WORKSPACE/triton_cache" | tee -a "$GITHUB_ENV"
+          ${{ env.TRITON_TEST_CMD }} --language
+
+      - name: Run matmul tests
+        if: matrix.suite == 'rest'
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --matmul
+
+      - name: Run scaled_dot tests
+        if: matrix.suite == 'scaled_dot'
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --scaled-dot
+
+      - name: Run debug tests
+        if: matrix.suite == 'rest'
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --debug
+
+      - name: Run gluon tests
+        if: matrix.suite == 'gluon' && inputs.driver_version == 'rolling'
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --gluon
+
+      - name: Run interpreter tests
+        if: matrix.suite == 'rest'
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --interpreter
 
       - name: Run triton kernels tests
-        continue-on-error: true
         if: matrix.suite == 'triton-kernels'
         run: |
           export PYTEST_MAX_PROCESSES=4
           ${{ env.TRITON_TEST_CMD }} --triton-kernels
 
-      - name: Upload SPIRVRunner input data
-        if: matrix.suite == 'triton-kernels'
-        uses: actions/upload-artifact@v7
-        with:
-          name: spirvrunner-input-data
-          include-hidden-files: true
-          path: ${{ env.TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS }}
+      - name: Run Tutorials
+        if: matrix.suite == 'rest'
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --tutorial --tutorial06-run-mode skip
 
-      - name: Upload IGC dump
-        if: matrix.suite == 'triton-kernels'
-        uses: actions/upload-artifact@v7
-        with:
-          name: igc-shader-dumps
-          include-hidden-files: true
-          path: ${{ env.IGC_DumpToCustomDir }}
+      # Run 06-fused-attention.py separately, because it is split into 3 configs
+      - name: Run Flash Attention tutorials (HEAD_DIM=64)
+        if: matrix.suite == 'rest'
+        run: |
+          HEAD_DIM=64 ${{ env.TRITON_TEST_CMD }} --tutorial06-run-mode fa_only
 
-      - name: Upload Triton cache
-        if: matrix.suite == 'triton-kernels'
-        uses: actions/upload-artifact@v7
-        with:
-          name: triton-cache
-          include-hidden-files: true
-          path: ${{ env.TRITON_CACHE_DIR }}
+      - name: Run Flash Attention tutorials (HEAD_DIM=128, FP8 only)
+        if: matrix.suite == 'rest'
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --tutorial06-run-mode fp8_only
+
+      - name: Run Flash Attention tutorials (HEAD_DIM=128, skip FP8)
+        if: matrix.suite == 'tutorial-fa-128-nofwdfp8'
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --tutorial06-run-mode skip_fp8
+
+      - name: Install transformers
+        if: matrix.suite == 'rest'
+        run: |
+          cd pytorch
+          pip install -r .ci/docker/ci_commit_pins/huggingface-requirements.txt
+
+      - name: Run E2E test
+        if: matrix.suite == 'rest'
+        run: |
+          timeout -s KILL 4900 ${{ env.TRITON_TEST_CMD }} --inductor || ${{ inputs.ignore_errors }}
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}
