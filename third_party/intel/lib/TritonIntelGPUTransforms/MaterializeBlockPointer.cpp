@@ -324,11 +324,9 @@ private:
       auto splatOp = rhs.getDefiningOp<tt::SplatOp>();
       if (makeRange && splatOp && makeRange.getStart() == 0 &&
           static_cast<int64_t>(makeRange.getEnd()) == expectedEnd) {
-        // The splat offset must be a multiple of W for rem/div correctness.
-        // We don't need to know the exact value — the Triton frontend always
-        // generates program_id * XBLOCK where XBLOCK % W == 0 for these
-        // patterns. We verify this structurally: the offset must be
-        // muli(program_id, XBLOCK) where XBLOCK % W == 0.
+        // The splat offset must be a compile-time multiple of W for
+        // rem/div correctness: (offset + i) % W == i % W when offset % W == 0.
+        // We check structurally that offset = muli(_, C) where C % W == 0.
         Value scalar = splatOp.getSrc();
         if (auto mulI = scalar.getDefiningOp<arith::MulIOp>()) {
           // Check if either operand is a constant divisible by W.
@@ -508,6 +506,54 @@ private:
     int64_t H = numElements / W;
 
     LDBG("Detected strided pattern: W=" << W << ", H=" << H << ", S=" << S);
+
+    // 4b. Validate HW constraints for 2D block store.
+    // Mirrors check2DBlockAddressPayloadRestriction in LoadStoreOpToLLVM.cpp.
+    Type pointeeTy =
+        cast<tt::PointerType>(ptrTensorTy.getElementType()).getPointeeType();
+    unsigned elemBits = pointeeTy.getIntOrFloatBitWidth();
+    unsigned elemBytes = elemBits / 8;
+
+    // Minimum pitch is 64 bytes (LoadStoreOpToLLVM.cpp getPitch()).
+    if (S * elemBytes < 64) {
+      LDBG("Pitch " << S * elemBytes << " bytes < 64, skip 1D reshape");
+      return;
+    }
+
+    // Pitch must be 16-byte aligned (surface pitch HW requirement).
+    if ((S * elemBytes) % 16 != 0) {
+      LDBG("Pitch " << S * elemBytes
+                    << " bytes not 16-byte aligned, skip 1D reshape");
+      return;
+    }
+
+    // Tile width must satisfy HW limits per element size.
+    auto isValidTileWidth = [](unsigned bits, int64_t w) -> bool {
+      switch (bits) {
+      case 8:
+        return w >= 4 && w <= 64;
+      case 16:
+        return w >= 2 && w <= 32;
+      case 32:
+        return w <= 16;
+      case 64:
+        return w <= 8;
+      default:
+        return false;
+      }
+    };
+    if (!isValidTileWidth(elemBits, W)) {
+      LDBG("Tile width " << W << " invalid for " << elemBits
+                         << "-bit elements, skip 1D reshape");
+      return;
+    }
+
+    // Per-warp tile height must be in [1, 8] (MAX_TILE_HEIGHT_STORE=8).
+    unsigned numWarps = ttg::lookupNumWarps(op);
+    if (H % numWarps != 0 || H / numWarps > 8) {
+      LDBG("Per-warp height " << H / numWarps << " invalid, skip 1D reshape");
+      return;
+    }
 
     // 5. Create reshaped tensors: [N] -> [H, W].
     Location loc = op.getLoc();

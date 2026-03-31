@@ -3868,8 +3868,10 @@ struct StoreOpToBlockIOConversion
       // We know the exact tile parameters from the reshape: the contiguous
       // width dimension is stored per-subgroup, and each warp handles a
       // stripe of rows.
-      unsigned numWarpsRow =
-          cast<BlockedEncodingAttr>(encoding).getWarpsPerCTA()[0];
+      auto blockedEnc = dyn_cast<BlockedEncodingAttr>(encoding);
+      if (!blockedEnc)
+        return failure();
+      unsigned numWarpsRow = blockedEnc.getWarpsPerCTA()[0];
       int height = rank > 1 ? tensorType.getDimSize(0) / numWarpsRow : 1;
       int width = tensorType.getDimSize(rank - 1);
       // Build register bases as identity mapping — every register holds one
