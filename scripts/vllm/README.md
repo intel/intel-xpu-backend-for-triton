@@ -239,6 +239,9 @@ cause categories:
 - Refactor `run_vllm_install()` in `test-triton.sh` to delegate to `install-vllm.sh`
 - Add dedicated kernel-level tests for KDA (`--vllm-kda`)
 - Resolve pytest-shard/pytest-skip conflict properly (current workaround: uninstall pytest-shard)
+- After PR [#6360](https://github.com/intel/intel-xpu-backend-for-triton/pull/6360)
+  is merged, replace the inline reports job in `vllm-tests.yml` with
+  `uses: ./.github/workflows/reports-reusable.yml`
 
 ## Reference
 
