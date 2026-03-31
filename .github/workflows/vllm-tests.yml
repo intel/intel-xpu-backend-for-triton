@@ -7,12 +7,14 @@ on:
         description: Runner label, keep empty for default
         type: string
         default: ""
-      suites:
-        description: >
-          JSON list of suites to run, e.g. ["vllm-spec-decode","vllm-mrv2","vllm-rest"].
-          Leave empty to run all.
+      skip_list:
+        description: Skip list directory override
         type: string
-        default: '["vllm-spec-decode","vllm-mrv2","vllm-moe","vllm-triton-attn","vllm-mamba","vllm-quant","vllm-rest"]'
+        default: ""
+      ignore_errors:
+        description: Ignore test errors
+        type: boolean
+        default: false
   schedule:
     # About midnight PST Sunday (UTC-8)
     - cron: "5 10 * * SUN"
@@ -26,14 +28,12 @@ permissions: read-all
 
 jobs:
   vllm-tests:
-    strategy:
-      fail-fast: false
-      matrix:
-        suite: ${{ fromJSON(inputs.suites || '["vllm-spec-decode","vllm-mrv2","vllm-moe","vllm-triton-attn","vllm-mamba","vllm-quant","vllm-rest"]') }}
     uses: ./.github/workflows/vllm-tests-reusable.yml
     with:
-      suite: ${{ matrix.suite }}
       runner_label: ${{ inputs.runner_label || '' }}
+      python_version: "3.12"
+      skip_list: ${{ inputs.skip_list || '' }}
+      ignore_errors: ${{ inputs.ignore_errors || false }}
 
   # TODO: After PR #6360 is merged, replace this inline reports job with:
   #   uses: ./.github/workflows/reports-reusable.yml

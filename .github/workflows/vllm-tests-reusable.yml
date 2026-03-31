@@ -3,12 +3,6 @@ name: vLLM tests reusable workflow
 on:
   workflow_call:
     inputs:
-      suite:
-        description: >
-          Test suite: vllm-spec-decode, vllm-mrv2, vllm-moe, vllm-triton-attn,
-          vllm-mamba, vllm-quant, or vllm-rest (groups: gdn-attn, linear-attn, deepgemm).
-        type: string
-        required: true
       runner_label:
         description: Runner label, keep empty for default
         type: string
@@ -73,6 +67,24 @@ jobs:
       - name: Setup Triton
         uses: ./.github/actions/setup-triton
 
+      - name: Package Triton wheels
+        run: |
+          mkdir -p triton-dist
+          # Check if wheels exist in common locations
+          if [ -d "python/dist" ] && [ -n "$(ls -A python/dist/*.whl 2>/dev/null)" ]; then
+            cp python/dist/*.whl triton-dist/
+          elif [ -d "dist" ] && [ -n "$(ls -A dist/*.whl 2>/dev/null)" ]; then
+            cp dist/*.whl triton-dist/
+          else
+            echo "Warning: No Triton wheels found, may need to build"
+          fi
+
+      - name: Upload Triton artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: triton-vllm-${{ inputs.python_version }}
+          path: triton-dist/
+
       - name: Set test-triton command line
         id: test-triton
         run: |
@@ -91,9 +103,30 @@ jobs:
         run: |
           ${{ steps.test-triton.outputs.command }} --install-vllm
 
+      - name: Freeze vLLM dependencies
+        run: |
+          pip freeze > vllm-requirements.txt
+
+      - name: Upload vLLM requirements
+        uses: actions/upload-artifact@v7
+        with:
+          name: vllm-requirements-${{ inputs.python_version }}
+          path: vllm-requirements.txt
+
   tests:
-    name: ${{ inputs.suite }}
+    name: ${{ matrix.suite }}
     needs: setup
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - vllm-spec-decode
+          - vllm-mrv2
+          - vllm-moe
+          - vllm-triton-attn
+          - vllm-mamba
+          - vllm-quant
+          - vllm-rest
     runs-on:
       - linux
       - ${{ inputs.runner_label || 'max1550' }}
@@ -104,6 +137,17 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+
+      - name: Download Triton wheels
+        uses: actions/download-artifact@v8
+        with:
+          name: triton-vllm-${{ inputs.python_version }}
+          path: triton-dist/
+
+      - name: Download vLLM requirements
+        uses: actions/download-artifact@v8
+        with:
+          name: vllm-requirements-${{ inputs.python_version }}
 
       - name: Install Python (from pyenv) ${{ inputs.python_version }}
         uses: ./.github/actions/setup-pyenv-python
@@ -122,9 +166,16 @@ jobs:
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
 
-      - name: Setup Triton
+      - name: Install Triton from artifacts
         id: install
-        uses: ./.github/actions/setup-triton
+        run: |
+          if [ -f triton-dist/*.whl ]; then
+            pip install triton-dist/*.whl
+            python -c 'import triton; print(triton.__version__)'
+          else
+            echo "Error: Triton wheel not found"
+            exit 1
+          fi
 
       - name: Install test dependencies
         run: |
@@ -134,58 +185,63 @@ jobs:
         run: |
           echo "TRITON_TEST_CMD=${{ needs.setup.outputs.test-triton-command }}" | tee -a $GITHUB_ENV
 
-      - name: Install vLLM
+      - name: Install vLLM from requirements
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
-          ${{ env.TRITON_TEST_CMD }} --install-vllm
+          if [ -f vllm-requirements.txt ]; then
+            pip install -r vllm-requirements.txt
+          else
+            echo "Error: vLLM requirements not found"
+            exit 1
+          fi
 
       - name: Create reports dir
         run: |
           mkdir -p reports
 
       - name: Run spec-decode tests
-        if: ${{ inputs.suite == 'vllm-spec-decode' && steps.install.outcome == 'success' && !cancelled() }}
+        if: ${{ matrix.suite == 'vllm-spec-decode' && steps.install.outcome == 'success' && !cancelled() }}
         run: |
           ${{ env.TRITON_TEST_CMD }} --vllm-spec-decode
 
       - name: Run mrv2 tests
-        if: ${{ inputs.suite == 'vllm-mrv2' && steps.install.outcome == 'success' && !cancelled() }}
+        if: ${{ matrix.suite == 'vllm-mrv2' && steps.install.outcome == 'success' && !cancelled() }}
         run: |
           ${{ env.TRITON_TEST_CMD }} --vllm-mrv2
 
       - name: Run moe tests
-        if: ${{ inputs.suite == 'vllm-moe' && steps.install.outcome == 'success' && !cancelled() }}
+        if: ${{ matrix.suite == 'vllm-moe' && steps.install.outcome == 'success' && !cancelled() }}
         run: |
           ${{ env.TRITON_TEST_CMD }} --vllm-moe
 
       - name: Run triton-attn tests
-        if: ${{ inputs.suite == 'vllm-triton-attn' && steps.install.outcome == 'success' && !cancelled() }}
+        if: ${{ matrix.suite == 'vllm-triton-attn' && steps.install.outcome == 'success' && !cancelled() }}
         run: |
           ${{ env.TRITON_TEST_CMD }} --vllm-triton-attn
 
       - name: Run mamba tests
-        if: ${{ inputs.suite == 'vllm-mamba' && steps.install.outcome == 'success' && !cancelled() }}
+        if: ${{ matrix.suite == 'vllm-mamba' && steps.install.outcome == 'success' && !cancelled() }}
         run: |
           ${{ env.TRITON_TEST_CMD }} --vllm-mamba
 
       - name: Run quant tests
-        if: ${{ inputs.suite == 'vllm-quant' && steps.install.outcome == 'success' && !cancelled() }}
+        if: ${{ matrix.suite == 'vllm-quant' && steps.install.outcome == 'success' && !cancelled() }}
         run: |
           ${{ env.TRITON_TEST_CMD }} --vllm-quant
 
       # vllm-rest groups short suites: gdn-attn, linear-attn, deepgemm
       - name: Run gdn-attn tests
-        if: ${{ inputs.suite == 'vllm-rest' && steps.install.outcome == 'success' && !cancelled() }}
+        if: ${{ matrix.suite == 'vllm-rest' && steps.install.outcome == 'success' && !cancelled() }}
         run: |
           ${{ env.TRITON_TEST_CMD }} --vllm-gdn-attn
 
       - name: Run linear-attn tests
-        if: ${{ inputs.suite == 'vllm-rest' && steps.install.outcome == 'success' && !cancelled() }}
+        if: ${{ matrix.suite == 'vllm-rest' && steps.install.outcome == 'success' && !cancelled() }}
         run: |
           ${{ env.TRITON_TEST_CMD }} --vllm-linear-attn
 
       - name: Run deepgemm tests
-        if: ${{ inputs.suite == 'vllm-rest' && steps.install.outcome == 'success' && !cancelled() }}
+        if: ${{ matrix.suite == 'vllm-rest' && steps.install.outcome == 'success' && !cancelled() }}
         run: |
           ${{ env.TRITON_TEST_CMD }} --vllm-deepgemm
 
@@ -193,5 +249,5 @@ jobs:
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
-          name: test-reports-${{ inputs.suite }}
+          name: test-reports-${{ matrix.suite }}
           path: reports
