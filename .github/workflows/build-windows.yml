@@ -6,10 +6,12 @@ on:
   pull_request:
     branches:
       - main
+      - dev-ci-win
       - release/**
   push:
     branches:
       - main
+      - dev-ci-win
       - release/**
 
 permissions: read-all
@@ -53,8 +55,21 @@ jobs:
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           cd ${{ env.NEW_WORKSPACE }}
-          pip install -U pybind11 cmake
+          pip install -U pybind11 cmake build
           pip install -v '.[build]'
+
+      - name: Build Triton wheel
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cd ${{ env.NEW_WORKSPACE }}
+          python -m build --wheel --no-isolation
+
+      - name: Upload Triton wheel artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: triton-wheel-windows-py310-${{ github.run_id }}
+          path: ${{ env.NEW_WORKSPACE }}\dist\*.whl
 
       - name: Clean
         if: ${{ always() }}
