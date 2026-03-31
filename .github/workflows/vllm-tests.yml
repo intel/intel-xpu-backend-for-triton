@@ -34,3 +34,40 @@ jobs:
     with:
       suite: ${{ matrix.suite }}
       runner_label: ${{ inputs.runner_label || '' }}
+
+  reports:
+    name: Reports
+    runs-on:
+      - runner-0.0.22
+    if: always()
+    needs: vllm-tests
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install Python (from pyenv)
+        uses: ./.github/actions/setup-pyenv-python
+        with:
+          python-version: "3.12"
+
+      - name: Download test reports
+        uses: actions/download-artifact@v8
+        with:
+          pattern: test-reports-vllm-*
+          path: reports
+          merge-multiple: true
+
+      - name: Install triton_utils
+        run: |
+          pip install ./scripts/triton_utils
+
+      - name: Pass rate
+        run: |
+          triton-utils pass_rate --reports reports --save-to-json pass_rate.json --merge-test-results --tests-with-multiple-testsuites
+          triton-utils tests_stats --reports reports --level testsuite --pretty-print --merge-test-results --tests-with-multiple-testsuites
+
+      - name: Upload pass rate report
+        uses: actions/upload-artifact@v7
+        with:
+          name: pass_rate-vllm
+          path: pass_rate*.json
