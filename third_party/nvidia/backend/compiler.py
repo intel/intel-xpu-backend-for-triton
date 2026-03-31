@@ -97,15 +97,8 @@ def file_hash(path):
 
 
 def sm_arch_from_capability(capability: int):
-    # The "a" suffix enables arch-accelerated features only available on
-    # specific GPU implementations:
-    #   sm_90a  — Hopper datacenter (H100, H200)
-    #   sm_100a — Blackwell datacenter (B100, B200)
-    # Consumer Blackwell (sm_120, e.g. RTX 5070 Ti/5080/5090) does NOT
-    # have an "a" variant — using sm_120a causes invalid codegen (tensor
-    # memory instructions that don't exist on consumer hardware), leading
-    # to runtime segfaults.
-    suffix = "a" if capability >= 90 and capability != 120 else ""
+    # TODO: Handle non-"a" sms
+    suffix = "a" if capability >= 90 else ""
     return f"sm_{capability}{suffix}"
 
 
@@ -142,6 +135,12 @@ class CUDAOptions:
         extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)
         if not extern_libs.get('libdevice', None):
             extern_libs['libdevice'] = knobs.nvidia.libdevice_path or str(default_libdir / 'libdevice.10.bc')
+        if "gsan" in self.instrumentation_mode:
+            gsan_lib = default_libdir / "gsan.ll"
+            if not gsan_lib.exists():
+                raise FileNotFoundError(f"GSan runtime is missing at {gsan_lib}. "
+                                        "Rebuild Triton to generate it.")
+            extern_libs['gsan'] = str(gsan_lib)
 
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
         assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
@@ -360,6 +359,9 @@ class CUDABackend(BaseBackend):
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
+
+        if "gsan" in options.instrumentation_mode:
+            passes.ttgpuir.add_global_sanitizer(pm)
 
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
         passes.ttgpuir.add_allocate_warp_groups(pm)

@@ -1,22 +1,19 @@
 from __future__ import annotations
 
-from typing import ClassVar
+import argparse
+import re
+import shlex
+import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-
-import sys
-import shlex
-import argparse
 from pathlib import Path
-
-import re
-
-from typing_extensions import Any, Self
+from typing import ClassVar
 
 import pandas as pd
+from typing_extensions import Any, Self
 
-from .pass_rate_utils import Test, TestReport, TestGroupingLevel
-from .gh_utils import GHANightlyTestReportProcessor, GHABuildTestReportProcessor
+from .gh_utils import GHABuildTestReportProcessor, GHANightlyTestReportProcessor, GHAWheelDownloader
+from .pass_rate_utils import CompareScope, SortByCompare, SortByStats, Test, TestGroupingLevel, TestReport
 from .pattern_matcher import PatternMatcher
 
 
@@ -43,10 +40,11 @@ class Config:  # pylint: disable=R0902
 
     status_filter: list[str] = field(default_factory=lambda: ["passed", "skipped", "failed", "xfailed"])
     suite: str | None = None
-    ignore_testsuite_filter: list[str] = field(default_factory=lambda: [])
+    ignore_testsuite_filter: list[str] = field(default_factory=list)
     testname_filter: str | None = None
     include_subdir_patterns: list[re.Pattern[str]] = field(
-        default_factory=lambda: [re.compile(r"^test-report(?!.*lts$).*")], )
+        default_factory=lambda: [re.compile(r"^test-report(?!.*lts$).*")],
+    )
     exclude_subdir_patterns: list[re.Pattern[str]] = field(
         default_factory=lambda: [re.compile(r"^(?!)$")]  # Match nothing by default
     )
@@ -61,6 +59,10 @@ class Config:  # pylint: disable=R0902
     pretty_print: bool = False
     long_names: bool = False
     sort_by: str = "name"
+    _compare_scope: str = CompareScope.ANY.value
+    omit_testsuite_name: bool = False
+    omit_test_module_name: bool = False
+    omit_test_class_name: bool = False
 
     repo: str = "intel/intel-xpu-backend-for-triton"
     branch: str = "main"
@@ -77,10 +79,22 @@ class Config:  # pylint: disable=R0902
     file_name: str = "test_report.csv"
 
     save_to_json: str | None = None
+    pass_rate_level: str = "all"
+
+    # download_wheels fields
+    wheel_set: list[str] = field(default_factory=list)
+    python_version: str | None = None
+    download_for_all_pythons: bool = False
+    latest_wf_run: str | None = None
+    latest_wf_run_pattern: str | None = None
 
     @property
     def report_grouping_level(self) -> TestGroupingLevel:
         return TestGroupingLevel(self._report_grouping_level)
+
+    @property
+    def compare_scope(self) -> CompareScope:
+        return CompareScope(self._compare_scope)
 
     @property
     def download_dir(self) -> Path:
@@ -149,10 +163,10 @@ class Config:  # pylint: disable=R0902
             dest="include_subdir_patterns",
             default=cls().include_subdir_patterns,
             required=False,
-            help=
-            (f"Include patterns for report subdir or artifact name, default value is `{' '.join(include_pattern_default)}`."
-             f" If the report subdir or artifact name matches include and exclude patterns, exclude pattern will have a priority"
-             ),
+            help=(
+                f"Include patterns for report subdir or artifact name, default value is `{' '.join(include_pattern_default)}`."
+                f" If the report subdir or artifact name matches include and exclude patterns, exclude pattern will have a priority"
+            ),
         )
         exclude_pattern_default = [
             "--exclude-subdir-pattern " + '"' + pattern.pattern + '"' for pattern in cls().exclude_subdir_patterns
@@ -187,6 +201,7 @@ class Config:  # pylint: disable=R0902
         "compare": "compare_reports",
         "export": "export_to",
         "download": "download_reports",
+        "wheels": "download_wheels",
     }
 
     _CANONICAL_NAMES: ClassVar[dict[str, str]] = {v: k for k, v in _ALIASES.items()}
@@ -204,7 +219,7 @@ class Config:  # pylint: disable=R0902
         return subparsers.add_parser(name, help=help_str)
 
     @classmethod
-    def build_parser(cls) -> argparse.ArgumentParser:
+    def build_parser(cls) -> argparse.ArgumentParser:  # pylint: disable=R0915
         parser = argparse.ArgumentParser(add_help=False)
 
         subparsers = parser.add_subparsers(dest="action", required=True)
@@ -235,6 +250,13 @@ class Config:  # pylint: disable=R0902
             required=False,
             help="Json file to save pass rate summary.",
         )
+        pass_rate_parser.add_argument(
+            "--level",
+            choices=["all", "testsuite"],
+            default="all",
+            dest="pass_rate_level",
+            help="Grouping level for pass rate report (default: all)",
+        )
 
         test_stats_parser = cls._add_parser(
             subparsers,
@@ -253,6 +275,7 @@ class Config:  # pylint: disable=R0902
             "--sort-by",
             default=cls().sort_by,
             type=str,
+            choices=[s.value for s in SortByStats],
             help="Sort by column name",
         )
         test_stats_parser.add_argument(
@@ -305,6 +328,49 @@ class Config:  # pylint: disable=R0902
             default=cls()._report_grouping_level,
             dest="_report_grouping_level",
             help="Grouping level for the report",
+        )
+        compare_stats_parser.add_argument(
+            "--sort-by",
+            default=cls().sort_by,
+            type=str,
+            choices=(
+                [s.value
+                 for s in SortByCompare] + [s.value.replace(".Δ", ".delta") for s in SortByCompare if ".Δ" in s.value] +
+                [s.value.replace(".%Δ", ".%delta") for s in SortByCompare if ".%Δ" in s.value]
+            ),
+            help="Sort by column in <metric>.<source> format (e.g., passed.r1, time.delta)",
+        )
+        compare_stats_parser.add_argument(
+            "--pretty-print",
+            "--pretty",
+            action="store_true",
+            required=False,
+            help="Pretty print (accepted for consistency, compare always outputs a table)",
+        )
+        compare_stats_parser.add_argument(
+            "--compare-scope",
+            choices=[scope.value for scope in CompareScope],
+            default=cls()._compare_scope,
+            dest="_compare_scope",
+            help="Filter: any (all), r1-only (in r1 not r2), r2-only (in r2 not r1), both",
+        )
+        compare_stats_parser.add_argument(
+            "--omit-testsuite-name",
+            action="store_true",
+            required=False,
+            help="Omit testsuite name prefix from displayed test names",
+        )
+        compare_stats_parser.add_argument(
+            "--omit-test-module-name",
+            action="store_true",
+            required=False,
+            help="Omit test module path and name from displayed test names",
+        )
+        compare_stats_parser.add_argument(
+            "--omit-test-class-name",
+            action="store_true",
+            required=False,
+            help="Omit test class name from displayed test names",
         )
 
         convert_to_parser = cls._add_parser(
@@ -393,6 +459,94 @@ class Config:  # pylint: disable=R0902
             default="",
             help="GH run id",
         )
+        wheels_parser = cls._add_parser(
+            subparsers,
+            "download_wheels",
+            help_str="Download wheel artifacts from CI",
+        )
+        wheels_parser.add_argument(
+            "--download-dir",
+            "-D",
+            type=str,
+            required=True,
+            dest="_download_dir",
+            help="Directory to download wheels to",
+        )
+        wheels_parser.add_argument(
+            "--repo",
+            "-R",
+            type=str,
+            required=False,
+            default="intel/intel-xpu-backend-for-triton",
+            help="GitHub repository (default: intel/intel-xpu-backend-for-triton)",
+        )
+        wheels_parser.add_argument(
+            "--branch",
+            "-B",
+            type=str,
+            required=False,
+            default="main",
+            help="Branch to search for successful runs (default: main)",
+        )
+        wheels_parser.add_argument(
+            "--wheel-set",
+            "--ws",
+            action="append",
+            dest="wheel_set",
+            default=[],
+            choices=list(GHAWheelDownloader.WHEEL_SETS.keys()),
+            help=(
+                "Filter by predefined wheel set (repeatable). "
+                "Presets: torch (torch, torchvision, torchaudio, timm), "
+                "triton (triton), bench (triton_kernels_benchmark), pti (intel_pti)"
+            ),
+        )
+        wheels_parser.add_argument(
+            "--artifact-pattern",
+            type=str,
+            required=False,
+            default=None,
+            help="fnmatch pattern to filter wheel filenames (power-user)",
+        )
+        wheels_parser.add_argument(
+            "--python-version",
+            type=str,
+            required=False,
+            default=None,
+            help="Python version for artifact matching (default: current python)",
+        )
+        wheels_parser.add_argument(
+            "--download-for-all-pythons",
+            action="store_true",
+            help="Disable Python version filtering — download wheels for all Python versions",
+        )
+        wheels_run_group = wheels_parser.add_mutually_exclusive_group()
+        wheels_run_group.add_argument(
+            "--gh-run-id",
+            "--run",
+            type=str,
+            required=False,
+            default=None,
+            help="Specific GH Actions run ID to download from",
+        )
+        wheels_run_group.add_argument(
+            "--latest-wf-run",
+            type=str,
+            required=False,
+            default=None,
+            help=(
+                "Preset name for workflow to find latest successful run. "
+                "Presets: nightly (default), benchmarks, build-test, wheels, wheels-triton, wheels-pytorch"
+            ),
+        )
+        wheels_run_group.add_argument(
+            "--latest-wf-run-pattern",
+            type=str,
+            required=False,
+            default=None,
+            help="fnmatch pattern to match workflow path (e.g., 'build-benchmarks-*.yml')",
+        )
+
         return parser
 
     @classmethod
@@ -487,7 +641,9 @@ class PassRateActionRunner(ReportActionRunner):
 
     def __call__(self, *args: Any, **kwds: Any) -> tuple[str, int]:
         if self.config.save_to_json:
-            self.base_report.to_pass_rate_json(self.config.save_to_json)
+            self.base_report.to_pass_rate_json_by_level(
+                json_file=self.config.save_to_json, level=self.config.pass_rate_level
+            )
         return self.base_report.get_pass_rate_summary(), self._exit_code()
 
 
@@ -500,7 +656,28 @@ class TestsStatsActionRunner(ReportActionRunner):
 class CompareReportsActionRunner(ReportActionRunner):
 
     def compare(self) -> pd.DataFrame:
-        return TestReport.compare(self.reports, grouping_level=self.config.report_grouping_level)
+        config = self.config
+        omit_flags = {
+            "omit_testsuite_name": config.omit_testsuite_name,
+            "omit_test_module_name": config.omit_test_module_name,
+            "omit_test_class_name": config.omit_test_class_name,
+        }
+        if config.report_grouping_level == TestGroupingLevel.TEST:
+            effective_omit = omit_flags
+        else:
+            for flag_name, flag_value in omit_flags.items():
+                if flag_value:
+                    flag_cli = flag_name.replace("_", "-")
+                    print(f"[WARNING] --{flag_cli} is only effective"
+                          f" with --level test, ignoring", file=sys.stderr)
+            effective_omit = {k: False for k in omit_flags}
+        return TestReport.compare(
+            self.reports,
+            grouping_level=config.report_grouping_level,
+            sort_by=SortByCompare(config.sort_by),
+            compare_scope=config.compare_scope,
+            **effective_omit,
+        )
 
     def __call__(self, *args: Any, **kwds: Any) -> pd.DataFrame:
         return self.compare()
@@ -537,13 +714,42 @@ class DownloadReportsActionRunner(ActionRunner):
             ).download_test_reports()
         else:
             raise ValueError(
-                "Either nightly_run_id or gh_run_id should be provided or latest_nightly_gh_run should be set to True")
+                "Either nightly_run_id or gh_run_id should be provided or latest_nightly_gh_run should be set to True"
+            )
 
     def __call__(self, *args: Any, **kwds: Any) -> None:
         return self.download_reports()
 
 
+class DownloadWheelsActionRunner(ActionRunner):  # pylint: disable=R0903
+
+    def __call__(self, *args: Any, **kwds: Any) -> None:
+        config = self.config
+        python_version = config.python_version
+        if not python_version and not config.download_for_all_pythons:
+            python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+
+        downloader = GHAWheelDownloader(
+            download_dir=config.download_dir,
+            repo=config.repo,
+            branch=config.branch,
+            wheel_set=config.wheel_set,
+            artifact_pattern=config.artifact_pattern,
+            python_version=python_version if not config.download_for_all_pythons else None,
+            gh_run_id=config.gh_run_id or None,
+            latest_wf_run=config.latest_wf_run,
+            latest_wf_run_pattern=config.latest_wf_run_pattern,
+        )
+        downloaded = downloader.download()
+        for whl_path in downloaded:
+            print(whl_path)
+        if not downloaded:
+            print("[WARNING] No wheels matched the specified filters", file=sys.stderr)
+
+
 def run(config: Config) -> Any:  # pylint: disable=R0912
+    if config.action == "download_wheels":
+        return DownloadWheelsActionRunner(config=config)()
     if config.action == "download_reports":
         return DownloadReportsActionRunner(config=config)()
     if config.action == "export_to":
