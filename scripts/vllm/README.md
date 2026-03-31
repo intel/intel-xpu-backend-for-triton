@@ -55,17 +55,51 @@ Validates GPU Model Runner V2 Triton kernels on XPU.
 
 Both suites run with `VLLM_USE_V2_MODEL_RUNNER=1` to activate the V2 code paths.
 
+### `--vllm-moe` (TRITON_TEST_SUITE=vllm_moe)
+
+Validates MOE (Mixture of Experts) Triton kernels on XPU. Covers batched MOE,
+fused MOE, DeepGemm MOE, and expert counting kernels.
+
+| Triton Kernel | Source File | Test File |
+|---|---|---|
+| `moe_mmk` | `vllm/model_executor/layers/fused_moe/fused_batched_moe.py` | `tests/kernels/moe/test_batched_moe.py` |
+| `expert_triton_kernel` | `vllm/model_executor/layers/fused_moe/fused_batched_moe.py` | `tests/kernels/moe/test_batched_moe.py` |
+| `batched_triton_kernel` | `vllm/model_executor/layers/fused_moe/fused_batched_moe.py` | `tests/kernels/moe/test_batched_moe.py` |
+| `write_zeros_to_output` | `vllm/model_executor/layers/fused_moe/fused_moe.py` | `tests/kernels/moe/test_moe.py` |
+| `count_expert_num_tokens` | `vllm/model_executor/layers/fused_moe/utils.py` | `tests/kernels/moe/test_count_expert_num_tokens.py` |
+| `fused_moe_kernel` | `vllm/model_executor/layers/fused_moe/fused_moe.py` | `tests/kernels/moe/test_moe.py` |
+| `fused_moe_kernel_gpta_awq` | `vllm/model_executor/layers/fused_moe/fused_moe.py` | `tests/kernels/moe/test_gpt_oss_triton_kernels.py` |
+| `_silu_mul_fp8_quant_deep_gemm` | `vllm/model_executor/layers/fused_moe/deep_gemm_utils.py` | `tests/kernels/moe/test_silu_mul_fp8_quant_deep_gemm.py` |
+| `apply_expert_map` | `vllm/model_executor/layers/fused_moe/deep_gemm_utils.py` | `tests/kernels/moe/test_batched_deepgemm.py` |
+| `_fwd_kernel_ep_scatter_1` | `vllm/model_executor/layers/fused_moe/deep_gemm_utils.py` | `tests/kernels/moe/test_batched_deepgemm.py` |
+| `_fwd_kernel_ep_scatter_2` | `vllm/model_executor/layers/fused_moe/deep_gemm_utils.py` | `tests/kernels/moe/test_batched_deepgemm.py` |
+| `_fwd_kernel_ep_gather` | `vllm/model_executor/layers/fused_moe/deep_gemm_utils.py` | `tests/kernels/moe/test_batched_deepgemm.py` |
+
+### `--vllm-triton-attn` (TRITON_TEST_SUITE=vllm_triton_attn)
+
+Validates Triton attention kernels on XPU (decode, prefill, unified, merge).
+
+| Triton Kernel | Source File | Test File |
+|---|---|---|
+| `merge_attn_states_kernel` | `vllm/v1/attention/ops/triton_merge_attn_states.py` | `tests/kernels/attention/test_merge_attn_states.py` |
+| `_fwd_kernel_stage1` | `vllm/v1/attention/ops/triton_decode_attention.py` | `tests/kernels/attention/test_triton_decode_attention.py` |
+| `_fwd_grouped_kernel_stage1` | `vllm/v1/attention/ops/triton_decode_attention.py` | `tests/kernels/attention/test_triton_decode_attention.py` |
+| `_fwd_kernel_stage2` | `vllm/v1/attention/ops/triton_decode_attention.py` | `tests/kernels/attention/test_triton_decode_attention.py` |
+| `kernel_unified_attention_2d` | `vllm/v1/attention/ops/triton_unified_attention.py` | `tests/kernels/attention/test_triton_unified_attention.py` |
+| `kernel_unified_attention_3d` | `vllm/v1/attention/ops/triton_unified_attention.py` | `tests/kernels/attention/test_triton_unified_attention.py` |
+| `reduce_segments` | `vllm/v1/attention/ops/triton_unified_attention.py` | `tests/kernels/attention/test_triton_unified_attention.py` |
+
 ## Usage
 
 ```bash
 # Install vLLM (requires pre-installed nightly torch/triton wheels)
 bash scripts/vllm/install-vllm.sh --venv
 
-# Run spec decode tests
+# Run individual suites
 bash scripts/test-triton.sh --vllm-spec-decode --skip-pip-install --skip-pytorch-install
-
-# Run MRv2 tests
 bash scripts/test-triton.sh --vllm-mrv2 --skip-pip-install --skip-pytorch-install
+bash scripts/test-triton.sh --vllm-moe --skip-pip-install --skip-pytorch-install
+bash scripts/test-triton.sh --vllm-triton-attn --skip-pip-install --skip-pytorch-install
 ```
 
 ## Reference

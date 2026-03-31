@@ -35,6 +35,8 @@ TEST:
     --vllm
     --vllm-spec-decode
     --vllm-mrv2
+    --vllm-moe
+    --vllm-triton-attn
     --install-vllm
     --sglang
     --install-sglang
@@ -97,6 +99,8 @@ INSTALL_LIGER=false
 TEST_VLLM=false
 TEST_VLLM_SPEC_DECODE=false
 TEST_VLLM_MRV2=false
+TEST_VLLM_MOE=false
+TEST_VLLM_TRITON_ATTN=false
 INSTALL_VLLM=false
 TEST_TRITON_KERNELS=false
 VENV=false
@@ -284,6 +288,16 @@ while (( $# != 0 )); do
       ;;
     --vllm-mrv2)
       TEST_VLLM_MRV2=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --vllm-moe)
+      TEST_VLLM_MOE=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --vllm-triton-attn)
+      TEST_VLLM_TRITON_ATTN=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -881,6 +895,8 @@ run_vllm_tests() {
   run_test_deps_install
 
   cd vllm
+  FIXME: Make batched_moe and triton_unified_attention proper test suites. run_vllm_tests should run all vll testsuites.
+  FIXME: It looks like tests in CI are running with one xdist worker, we should fix it and do -n ${PYTEST_MAX_PROCESSES:-8}
   run_pytest_command -vvv tests/kernels/moe/test_batched_moe.py tests/kernels/attention/test_triton_unified_attention.py
 }
 
@@ -894,6 +910,8 @@ run_vllm_spec_decode_tests() {
   run_test_deps_install
 
   cd vllm
+  FIXME: It looks like tests in CI are running with one xdist worker, we should fix it and do -n ${PYTEST_MAX_PROCESSES:-8}
+  FIXME: can we run just one command for the whole spec_decode suite instead of splitting it into multiple commands for different files? Current approach will break reporting - pytest will overwrite junit report for the testsuite.
   VLLM_USE_V2_MODEL_RUNNER=1 TRITON_TEST_SUITE=vllm_spec_decode \
     run_pytest_command -vvv \
       tests/v1/spec_decode/test_eagle.py \
@@ -916,6 +934,7 @@ run_vllm_mrv2_tests() {
   run_test_deps_install
 
   cd vllm
+  FIXME: It looks like tests in CI are running with one xdist worker, we should fix it and do -n ${PYTEST_MAX_PROCESSES:-8}
   VLLM_USE_V2_MODEL_RUNNER=1 TRITON_TEST_SUITE=vllm_mrv2 \
     run_pytest_command -vvv \
       tests/v1/worker/test_gpu_model_runner.py \
@@ -923,6 +942,53 @@ run_vllm_mrv2_tests() {
       tests/v1/worker/test_gpu_model_runner_v2_eplb.py \
       tests/v1/sample/test_sampler.py \
       tests/v1/sample/test_logprobs.py
+}
+
+
+run_vllm_moe_tests() {
+  echo "********************************************************"
+  echo "******  Running VLLM MOE Triton kernel tests     *******"
+  echo "********************************************************"
+
+  run_vllm_install
+  run_test_deps_install
+
+  cd vllm
+  # MOE Triton kernels: moe_mmk, expert_triton_kernel, batched_triton_kernel,
+  # write_zeros_to_output, count_expert_num_tokens, fused_moe_kernel,
+  # fused_moe_kernel_gpta_awq, _silu_mul_fp8_quant_deep_gemm, apply_expert_map,
+  # _fwd_kernel_ep_scatter_1, _fwd_kernel_ep_scatter_2, _fwd_kernel_ep_gather
+  TRITON_TEST_SUITE=vllm_moe \
+    run_pytest_command -vvv \
+      tests/kernels/moe/test_batched_moe.py \
+      tests/kernels/moe/test_count_expert_num_tokens.py \
+      tests/kernels/moe/test_moe.py \
+      tests/kernels/moe/test_triton_moe_no_act_mul.py \
+      tests/kernels/moe/test_triton_moe_ptpc_fp8.py \
+      tests/kernels/moe/test_silu_mul_fp8_quant_deep_gemm.py \
+      tests/kernels/moe/test_batched_deepgemm.py \
+      tests/kernels/moe/test_gpt_oss_triton_kernels.py
+}
+
+
+run_vllm_triton_attn_tests() {
+  echo "********************************************************"
+  echo "******  Running VLLM Triton Attention tests      *******"
+  echo "********************************************************"
+
+  run_vllm_install
+  run_test_deps_install
+
+  cd vllm
+  # Triton attention kernels: merge_attn_states_kernel, _fwd_kernel_stage1,
+  # _fwd_grouped_kernel_stage1, _fwd_kernel_stage2, kernel_unified_attention_2d,
+  # kernel_unified_attention_3d, reduce_segments
+  TRITON_TEST_SUITE=vllm_triton_attn \
+    run_pytest_command -vvv \
+      tests/kernels/attention/test_merge_attn_states.py \
+      tests/kernels/attention/test_triton_decode_attention.py \
+      tests/kernels/attention/test_triton_unified_attention.py \
+      tests/kernels/attention/test_triton_prefill_attention.py
 }
 
 
@@ -1045,6 +1111,12 @@ test_triton() {
   fi
   if [ "$TEST_VLLM_MRV2" == true ]; then
     run_vllm_mrv2_tests
+  fi
+  if [ "$TEST_VLLM_MOE" == true ]; then
+    run_vllm_moe_tests
+  fi
+  if [ "$TEST_VLLM_TRITON_ATTN" == true ]; then
+    run_vllm_triton_attn_tests
   fi
   if [ "$TEST_TRITON_KERNELS" == true ]; then
     run_triton_kernels_tests
