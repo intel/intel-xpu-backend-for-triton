@@ -102,6 +102,26 @@ def _find_cuda_patterns(source: str) -> list[dict]:
                     "col": node.col_offset,
                 })
 
+        # pytest.mark.skipif(current_platform.is_rocm(), ...) decorators
+        # These need XPU added for platform-specific tests (e.g., Marlin = NVIDIA-only)
+        if isinstance(node, ast.Call):
+            # Look for pytest.mark.skipif
+            func = node.func
+            if (isinstance(func, ast.Attribute) and func.attr == "skipif"
+                    and isinstance(func.value, ast.Attribute) and func.value.attr == "mark"
+                    and isinstance(func.value.value, ast.Name) and func.value.value.id == "pytest"):
+                # Check if first arg is is_rocm() call
+                if node.args and isinstance(node.args[0], ast.Call):
+                    call = node.args[0]
+                    if (isinstance(call.func, ast.Attribute) and call.func.attr == "is_rocm"
+                            and isinstance(call.func.value, ast.Name)
+                            and call.func.value.id == "current_platform"):
+                        patterns.append({
+                            "type": "skipif_is_rocm",
+                            "line": node.lineno,
+                            "col": node.col_offset,
+                        })
+
     return patterns
 
 
@@ -152,6 +172,16 @@ def _apply_patches(source: str, patterns: list[dict]) -> str:
                 r'if\s+current_platform\.get_device_capability\(\)\s*(<|>|<=|>=|==|!=)',
                 r'if (cap := current_platform.get_device_capability()) is not None and cap \1',
                 line,
+            )
+
+        elif ptype == "skipif_is_rocm":
+            # Handle: @pytest.mark.skipif(current_platform.is_rocm(), reason="...")
+            # Add XPU to skip condition for platform-specific tests
+            # Replace: is_rocm()
+            # With: is_rocm() or current_platform.is_xpu()
+            lines[line_idx] = line.replace(
+                "current_platform.is_rocm()",
+                "current_platform.is_rocm() or current_platform.is_xpu()",
             )
 
     return "\n".join(lines)
