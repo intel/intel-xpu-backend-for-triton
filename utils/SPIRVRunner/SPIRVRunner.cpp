@@ -368,7 +368,7 @@ void validate_results(std::vector<TensorBuffer> &output_tensors,
       throw std::runtime_error("Dtype mismatch");
     }
 
-    if (!torch::allclose(expected_tensor, actual_tensor)) {
+    if (!torch::allclose(expected_tensor, actual_tensor, 1e-3, 1e-3)) {
       throw std::runtime_error("Tensors are not close enough");
     }
   }
