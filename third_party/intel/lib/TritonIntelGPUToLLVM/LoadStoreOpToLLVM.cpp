@@ -3869,10 +3869,10 @@ struct StoreOpToBlockIOConversion
       // width dimension is stored per-subgroup, and each warp handles a
       // stripe of rows.
       auto blockedEnc = dyn_cast<BlockedEncodingAttr>(encoding);
-      if (!blockedEnc)
-        return failure();
+      assert(blockedEnc && "1D reshape store must have BlockedEncodingAttr");
+      assert(rank == 2 && "1D reshape always produces rank-2 tensors");
       unsigned numWarpsRow = blockedEnc.getWarpsPerCTA()[0];
-      int height = rank > 1 ? tensorType.getDimSize(0) / numWarpsRow : 1;
+      int height = tensorType.getDimSize(0) / numWarpsRow;
       int width = tensorType.getDimSize(rank - 1);
       // Build register bases as identity mapping — every register holds one
       // element (numPackedVals=1), so all bases are included.
@@ -3889,8 +3889,10 @@ struct StoreOpToBlockIOConversion
       sizeInfo = getBlockIOTileSize<false /*store*/>(
           llEncoding.value(), contiguousDim, elemSizeInBits, maskAxisInfo);
     }
+
     if (!sizeInfo.isValid())
       return failure();
+
     auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
           isTransposeRequired, regPackedBases] = std::move(sizeInfo);
 
@@ -3956,6 +3958,7 @@ struct StoreOpToBlockIOConversion
 
       baseWidth = b.i32_val(vBlocks * tileWidth * (packedElemSizeInBits / 8));
       baseHeight = b.i32_val(tileHeight);
+
       // Use the explicit stride attribute if set by the 1D→2D reshape,
       // otherwise compute pitch from pointer element analysis.
       if (auto pitchBytes = getAnnotated1DReshapePitch(op, elemSizeInBits)) {
@@ -3967,6 +3970,7 @@ struct StoreOpToBlockIOConversion
       }
       if (!pitch)
         return failure();
+
       offsetBaseX = b.i32_val(0);
       offsetBaseY = b.i32_val(0);
     }

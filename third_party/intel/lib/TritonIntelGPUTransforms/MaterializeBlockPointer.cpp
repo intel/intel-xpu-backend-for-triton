@@ -6,6 +6,7 @@
 #include "intel/include/Utils/Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/Visitors.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -283,18 +284,11 @@ private:
   /// Look through index_cast, extui, extsi, trunci wrappers to find the
   /// underlying arithmetic operation.
   static Value lookThroughCasts(Value val) {
-    while (val) {
-      if (auto castOp = val.getDefiningOp<arith::IndexCastOp>()) {
-        val = castOp.getIn();
-      } else if (auto extOp = val.getDefiningOp<arith::ExtUIOp>()) {
-        val = extOp.getIn();
-      } else if (auto extOp = val.getDefiningOp<arith::ExtSIOp>()) {
-        val = extOp.getIn();
-      } else if (auto truncOp = val.getDefiningOp<arith::TruncIOp>()) {
-        val = truncOp.getIn();
-      } else {
+    while (Operation *def = val.getDefiningOp()) {
+      if (!isa<arith::IndexCastOp, arith::ExtUIOp, arith::ExtSIOp,
+               arith::TruncIOp>(def))
         break;
-      }
+      val = def->getOperand(0);
     }
     return val;
   }
@@ -310,8 +304,7 @@ private:
     val = lookThroughCasts(val);
     // Form 1: bare make_range.
     if (auto makeRange = val.getDefiningOp<tt::MakeRangeOp>())
-      return makeRange.getStart() == 0 &&
-             static_cast<int64_t>(makeRange.getEnd()) == expectedEnd;
+      return makeRange.getStart() == 0 && makeRange.getEnd() == expectedEnd;
     // Form 2: addi(splat(offset), make_range) or addi(make_range, splat(...)).
     auto addI = val.getDefiningOp<arith::AddIOp>();
     if (!addI)
@@ -323,7 +316,7 @@ private:
       auto makeRange = lhs.getDefiningOp<tt::MakeRangeOp>();
       auto splatOp = rhs.getDefiningOp<tt::SplatOp>();
       if (makeRange && splatOp && makeRange.getStart() == 0 &&
-          static_cast<int64_t>(makeRange.getEnd()) == expectedEnd) {
+          makeRange.getEnd() == expectedEnd) {
         // The splat offset must be a compile-time multiple of W for
         // rem/div correctness: (offset + i) % W == i % W when offset % W == 0.
         // We check structurally that offset = muli(_, C) where C % W == 0.
@@ -392,7 +385,7 @@ private:
   ///
   ///   Memory layout (. = padding):
   ///   addr:  0  1  2  3  .  .  6  7  8  9  .  . 12 13 14 15  .  .
-  ///          [── row 0 ──]      [── row 1 ──]      [── row 2 ──]
+  ///          [── row 0 ──]     [── row 1 ──]    [── row 2 ──]
   ///
   ///   idx | col = idx%4 | row = idx/4 | offset = col + row*6
   ///   ----+-------------+-------------+----------------------
@@ -413,18 +406,9 @@ private:
                              MLIRContext *ctx) const {
     LDBG("Attempting 1D strided store reshape for: " << *op);
 
-    // 1. Reject masked stores — we only handle unmasked or splat(true).
+    // 1. Reject masked stores — we only handle unmasked or provably all-true.
     if (Value mask = op.getMask()) {
-      // Allow splat(true) masks — they are equivalent to no mask.
-      bool isTrivialMask = false;
-      if (auto splatOp = mask.getDefiningOp<tt::SplatOp>()) {
-        if (auto constOp =
-                splatOp.getSrc().getDefiningOp<arith::ConstantOp>()) {
-          if (auto boolAttr = dyn_cast<BoolAttr>(constOp.getValue()))
-            isTrivialMask = boolAttr.getValue();
-        }
-      }
-      if (!isTrivialMask) {
+      if (!matchPattern(mask, m_One())) {
         LDBG("Store has non-trivial mask, skip 1D reshape");
         return;
       }
@@ -449,18 +433,14 @@ private:
       return;
     }
 
-    // Try both orderings of the addi operands: (remui, muli) or (muli, remui).
-    arith::RemUIOp remOp = nullptr;
-    arith::MulIOp mulOp = nullptr;
-    for (int order = 0; order < 2; ++order) {
-      Value lhs = lookThroughCasts(addIOp.getLhs());
-      Value rhs = lookThroughCasts(addIOp.getRhs());
-      if (order == 1)
-        std::swap(lhs, rhs);
-      remOp = lhs.getDefiningOp<arith::RemUIOp>();
-      mulOp = rhs.getDefiningOp<arith::MulIOp>();
-      if (remOp && mulOp)
-        break;
+    // Match (remui, muli) in either order of the addi operands.
+    Value lhs = lookThroughCasts(addIOp.getLhs());
+    Value rhs = lookThroughCasts(addIOp.getRhs());
+    auto remOp = lhs.getDefiningOp<arith::RemUIOp>();
+    auto mulOp = rhs.getDefiningOp<arith::MulIOp>();
+    if (!remOp || !mulOp) {
+      remOp = rhs.getDefiningOp<arith::RemUIOp>();
+      mulOp = lhs.getDefiningOp<arith::MulIOp>();
     }
     if (!remOp || !mulOp) {
       LDBG("Could not match remui/muli pattern, skip 1D reshape");
@@ -476,19 +456,14 @@ private:
     }
     int64_t W = *wVal;
 
-    // Match muli(divui(idx, W'), S) — extract divui and verify W' == W.
+    // Match muli(divui(idx, W'), S) in either operand order.
     Value mulLhs = lookThroughCasts(mulOp.getLhs());
     Value mulRhs = lookThroughCasts(mulOp.getRhs());
-
-    // Try both orderings of muli operands: (divui, S) or (S, divui).
-    arith::DivUIOp divOp = nullptr;
-    std::optional<int64_t> sVal;
-    divOp = mulLhs.getDefiningOp<arith::DivUIOp>();
-    if (divOp) {
-      sVal = getConstantValue(mulRhs);
-    } else {
+    auto divOp = mulLhs.getDefiningOp<arith::DivUIOp>();
+    auto sVal = divOp ? getConstantValue(mulRhs) : std::nullopt;
+    if (!divOp || !sVal) {
       divOp = mulRhs.getDefiningOp<arith::DivUIOp>();
-      sVal = getConstantValue(mulLhs);
+      sVal = divOp ? getConstantValue(mulLhs) : std::nullopt;
     }
     if (!divOp || !sVal || *sVal <= 0) {
       LDBG("Could not match divui/constant in muli, skip 1D reshape");
