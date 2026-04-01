@@ -68,17 +68,17 @@ jobs:
       - name: Build Triton wheel
         run: |
           python -m build --wheel --no-isolation
-          ls -lh python/dist/*.whl
+          ls -lh dist/*.whl
 
       - name: Upload Triton wheel
         uses: actions/upload-artifact@v7
         with:
           name: triton-vllm-${{ inputs.python_version }}
-          path: python/dist/*.whl
+          path: dist/*.whl
 
       - name: Install Triton from wheel
         run: |
-          pip install python/dist/*.whl
+          pip install dist/*.whl
 
       - name: Set test-triton command line
         id: test-triton
