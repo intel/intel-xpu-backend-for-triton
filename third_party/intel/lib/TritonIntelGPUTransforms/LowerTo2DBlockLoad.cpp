@@ -183,7 +183,7 @@ private:
     // dims. Reject if rowDim or colDim falls in a batch dimension.
     if (rank > 2) {
       auto sizeInfo = ttgi::getBlockIOTileSize<true>(
-          llEncoding, contiguousDim, elemSizeInBits,
+          llEncoding, contiguousDim, elemSizeInBits, nullptr,
           /*maskAxisInfo=*/nullptr, oneMatrixPerLoadForBT);
       int innerDimStart = static_cast<int>(rank - 2);
       if (sizeInfo.rowDim < innerDimStart || sizeInfo.colDim < innerDimStart) {
@@ -376,8 +376,8 @@ private:
         return;
       }
       auto sizeInfo = ttgi::getBlockIOTileSize<true>(
-          llEncoding, contiguousDim, elemSizeInBits, maskAxisInfo,
-          oneMatrixPerLoadForBT);
+          llEncoding, contiguousDim, elemSizeInBits, /*ptrAxisInfo=*/nullptr,
+          maskAxisInfo, oneMatrixPerLoadForBT);
       rowDim = sizeInfo.rowDim;
       colDim = sizeInfo.colDim;
       tileWidth = sizeInfo.tileWidth;

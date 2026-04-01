@@ -55,16 +55,16 @@ struct BlockIOTileSizeInfo {
 template <bool isLoad>
 BlockIOTileSizeInfo
 getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
-                   unsigned elemSizeInBits, AxisInfo *maskAxisInfo,
-                   bool oneMatrixPerLoadForBT);
+                   unsigned elemSizeInBits, AxisInfo *ptrAxisInfo,
+                   AxisInfo *maskAxisInfo, bool oneMatrixPerLoadForBT);
 
 // Explicit instantiation declarations.
 extern template BlockIOTileSizeInfo
 getBlockIOTileSize<true>(const LinearLayout &, unsigned, unsigned, AxisInfo *,
-                         bool);
+                         AxisInfo *, bool);
 extern template BlockIOTileSizeInfo
 getBlockIOTileSize<false>(const LinearLayout &, unsigned, unsigned, AxisInfo *,
-                          bool);
+                          AxisInfo *, bool);
 
 /// Return the tensor dimension along which consecutive lanes (the fastest-
 /// varying lane bit) advance in `ll` -- the dimension the hardware vectorizes
@@ -105,6 +105,7 @@ bool validate2DBlockLoadTile(const LinearLayout &ll, unsigned memContiguousDim,
                              unsigned elemSizeInBits,
                              RankedTensorType tensorType,
                              bool oneMatrixPerLoadForBT = false,
+                             AxisInfo *ptrAxisInfo = nullptr,
                              AxisInfo *maskAxisInfo = nullptr);
 
 /// Validate that a store with the given encoding and element size can be
@@ -120,7 +121,7 @@ bool validate2DBlockLoadTile(const LinearLayout &ll, unsigned memContiguousDim,
 bool validate2DBlockStoreTile(const LinearLayout &ll, unsigned memContiguousDim,
                               unsigned elemSizeInBits,
                               RankedTensorType tensorType,
-                              AxisInfo *maskAxisInfo,
+                              AxisInfo *ptrAxisInfo, AxisInfo *maskAxisInfo,
                               BlockIOTileSizeInfo &sizeInfoOut);
 
 /// Determine whether memory layout is row-major from the block_io attribute.
