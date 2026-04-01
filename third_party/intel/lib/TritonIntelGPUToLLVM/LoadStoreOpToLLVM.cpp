@@ -24,6 +24,8 @@
 #include <optional>
 #include <triton/Tools/Sys/GetEnv.hpp>
 
+#include "intel/lib/TritonGENToLLVM/GenIntrinsicHelper.h"
+
 using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
@@ -771,7 +773,8 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
   template <bool IS_LOAD>
   static BlockIOTileSizeInfo
   getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
-                     unsigned elemSizeInBits, AxisInfo *maskAxisInfo = nullptr,
+                     unsigned elemSizeInBits, AxisInfo *ptrAxisInfo,
+                     AxisInfo *maskAxisInfo = nullptr,
                      bool oneMatrixPerLoadForBT = false) {
 
     if (elemSizeInBits > 64)
@@ -928,17 +931,20 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     fastChangeDimLimit =
         std::min(fastChangeDimLimit, maskConstancyFastChangeDimLimit);
 
-    unsigned maskConstancyRowDimLimit = std::numeric_limits<unsigned>::max();
     if (rowDim >= 0) {
       // The mask constancy has to be power of 2 for block IO.
       if (maskAxisInfo &&
           !llvm::isPowerOf2_64(maskAxisInfo->getConstancy(rowDim)))
         return BlockIOTileSizeInfo::unknown();
-      if (maskAxisInfo)
-        maskConstancyRowDimLimit = maskAxisInfo->getConstancy(rowDim);
+      if (maskAxisInfo) {
+        unsigned maskConstancyRowDimLimit = maskAxisInfo->getConstancy(rowDim);
+        rowDimLimit = std::min(rowDimLimit, maskConstancyRowDimLimit);
+      }
+      if (ptrAxisInfo) {
+        unsigned ptrContiguityRowDimLimit = ptrAxisInfo->getContiguity(rowDim);
+        rowDimLimit = std::min(rowDimLimit, ptrContiguityRowDimLimit);
+      }
     }
-
-    rowDimLimit = std::min(rowDimLimit, maskConstancyRowDimLimit);
 
     if (tileShape[fastChangeDim] > fastChangeDimLimit)
       return BlockIOTileSizeInfo::unknown();
@@ -1019,8 +1025,16 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
         if (maskAxisInfo &&
             !llvm::isPowerOf2_64(maskAxisInfo->getConstancy(rowDim)))
           return BlockIOTileSizeInfo::unknown();
-        if (maskAxisInfo)
-          maskConstancyRowDimLimit = maskAxisInfo->getConstancy(rowDim);
+        if (maskAxisInfo) {
+          unsigned maskConstancyRowDimLimit =
+              maskAxisInfo->getConstancy(rowDim);
+          rowDimLimit = std::min(rowDimLimit, maskConstancyRowDimLimit);
+        }
+        if (ptrAxisInfo) {
+          unsigned ptrContiguityRowDimLimit =
+              ptrAxisInfo->getContiguity(rowDim);
+          rowDimLimit = std::min(rowDimLimit, ptrContiguityRowDimLimit);
+        }
       }
       if (dim != rowDim || tileShape[rowDim] != base[rowDim])
         continue; // Skip the register not mapped to the row dim.
@@ -1032,7 +1046,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
           break; // The row is the width.
       }
       // The size should not exceed the mask constancy limit.
-      if ((tileShape[rowDim] << 1) > maskConstancyRowDimLimit)
+      if ((tileShape[rowDim] << 1) > rowDimLimit)
         break;
       tileShape[rowDim] <<= 1;
       regPackBases.insert(1 << regBaseIter);
@@ -1678,6 +1692,9 @@ struct PrefetchOpConversion
     if (!blockIOAttr)
       return failure();
 
+    auto mode = symbolizeBlockIOMode(cast<StringAttr>(blockIOAttr).getValue());
+    if (!mode)
+      return failure();
     const bool memoryRowMajor = isMemoryRowMajor(op);
     // TODO: To support more layouts on memory.
     if (!memoryRowMajor)
@@ -1810,7 +1827,7 @@ struct PrefetchOpConversion
 
     Value rowStrideInBytes =
         getPitch(rewriter, op.getPtr(), elemSizeInBits, memoryRowMajor ? 0 : 1);
-    if (!rowStrideInBytes)
+    if (mode && !rowStrideInBytes)
       return failure();
 
     // If the stride is 0, we want to load only the first row.
@@ -2045,6 +2062,76 @@ struct LoadOpToBlockIOConversion
         BlockIOConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
 
 public:
+  enum LSC_DATA_SIZE {
+    LSC_DATA_SIZE_INVALID,
+    LSC_DATA_SIZE_8b,  // DATA:u8...
+    LSC_DATA_SIZE_16b, // DATA:u16...
+    LSC_DATA_SIZE_32b, // DATA:u32...
+    LSC_DATA_SIZE_64b, // DATA:u64...
+                       // data types supporting conversion on load
+    // 8c32b reads load (8) bits, (c)onvert to (32) bits (zero extending)
+    // store truncates
+    //
+    // In DG2 and PVC the upper bits are undefined.
+    // XE2+ makes them zeros.
+    LSC_DATA_SIZE_8c32b,   // DATA:u8c32...   (zero-extend / truncate)
+    LSC_DATA_SIZE_16c32b,  // DATA:u16c32..   (zero-extend / truncate)
+    LSC_DATA_SIZE_16c32bH, // DATA:u16c32h..  h means load to (h)igh 16
+                           // data stored in upper 16; zero-fills bottom 16
+                           // (bfloat raw conversion to 32b float)
+  };
+
+  // The number of elements per address ("vector" size)
+  enum LSC_DATA_ELEMS {
+    LSC_DATA_ELEMS_INVALID,
+    LSC_DATA_ELEMS_1,  // DATA:..x1
+    LSC_DATA_ELEMS_2,  // DATA:..x2
+    LSC_DATA_ELEMS_3,  // DATA:..x3
+    LSC_DATA_ELEMS_4,  // DATA:..x4
+    LSC_DATA_ELEMS_8,  // DATA:..x8
+    LSC_DATA_ELEMS_16, // DATA:..x16
+    LSC_DATA_ELEMS_32, // DATA:..x32
+    LSC_DATA_ELEMS_64, // DATA:..x64
+  };
+
+  static unsigned get1DBlockIODataSize(unsigned elemSizeInBits) {
+    switch (elemSizeInBits) {
+    case 8:
+      return LSC_DATA_SIZE_8b;
+    case 16:
+      return LSC_DATA_SIZE_16b;
+    case 32:
+      return LSC_DATA_SIZE_32b;
+    case 64:
+      return LSC_DATA_SIZE_64b;
+    default:
+      llvm_unreachable("unsupported element size for block IO");
+    }
+  };
+
+  static unsigned get1DBlockIOVectorSize(unsigned vecSize) {
+    switch (vecSize) {
+    case 1:
+      return LSC_DATA_ELEMS_1;
+    case 2:
+      return LSC_DATA_ELEMS_2;
+    case 3:
+      return LSC_DATA_ELEMS_3;
+    case 4:
+      return LSC_DATA_ELEMS_4;
+    case 8:
+      return LSC_DATA_ELEMS_8;
+    case 16:
+      return LSC_DATA_ELEMS_16;
+    case 32:
+      return LSC_DATA_ELEMS_32;
+    case 64:
+      return LSC_DATA_ELEMS_64;
+    default:
+      llvm_unreachable("unsupported element size for block IO");
+    }
+  };
+
   LogicalResult
   matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
@@ -2072,9 +2159,21 @@ public:
 
     // TODO: use the axis info to general the handling for both regular pointer
     // and block pointer.
-    const bool memoryRowMajor = isMemoryRowMajor(op);
+    Attribute blockIOAttr =
+        op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
+    auto mode = symbolizeBlockIOMode(cast<StringAttr>(blockIOAttr).getValue());
     const unsigned rank = tensorType.getRank();
-    unsigned contiguousDim = memoryRowMajor ? rank - 1 : rank - 2;
+    bool use1DBlockIO = true;
+    unsigned contiguousDim;
+    if (mode) {
+      const bool memoryRowMajor = isMemoryRowMajor(op);
+      contiguousDim = memoryRowMajor ? rank - 1 : rank - 2;
+      use1DBlockIO = false;
+    } else {
+      // 1d block IO.
+      auto value = cast<StringAttr>(blockIOAttr).getValue();
+      contiguousDim = atoi(value.data());
+    }
     Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
 
@@ -2085,8 +2184,12 @@ public:
           const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
               .getAxisInfo(op.getMask());
     }
+    AxisInfo *ptrAxisInfo =
+        const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
+            .getAxisInfo(op.getPtr());
     BlockIOTileSizeInfo sizeInfo = getBlockIOTileSize<true /*load*/>(
-        llEncoding.value(), contiguousDim, elemSizeInBits, maskAxisInfo,
+        llEncoding.value(), contiguousDim, elemSizeInBits, ptrAxisInfo,
+        maskAxisInfo,
         oneMatrixPerLoadForBT.has_value() ? *oneMatrixPerLoadForBT : false);
     if (!sizeInfo.isValid())
       return failure();
@@ -2201,7 +2304,7 @@ public:
 
     Value pitch = getPitch(rewriter, ptr, elemSizeInBits,
                            isTransposeRequired ? colDim : rowDim);
-    if (!pitch)
+    if (mode && !pitch)
       return failure();
 
     auto dpasCfg = configureDPASLoadTypes(
@@ -2242,6 +2345,15 @@ public:
                                         /*upperBound=*/nullptr));
 
     SmallVector<Value> unpackedLoadedVals(numElems);
+
+    Intrinsic blockIO1D;
+    if (use1DBlockIO) {
+      blockIO1D = GenISA<llvm::GenISAIntrinsic::ID::GenISA_LSCLoadBlock>(
+          rewriter, load2DGenXType,
+          mlir::LLVM::LLVMPointerType::get(
+              ctx, TritonGEN::TritonGENMemorySpace::kCrossWorkgroup));
+    }
+
     for (size_t elemIdx = 0; elemIdx < numElems; elemIdx += numElemsPerLoad) {
       unsigned registerIdx = regMapping.apply({{kRegister, elemIdx}})[0].second;
 
@@ -2261,51 +2373,77 @@ public:
       Value adjustedBaseWidth = baseWidth, adjustedBaseHeight = baseHeight;
       Value pred;
 
-      // Adjust the baseWidth, offsetX and base address use the original base
-      // of the BLOCK.
-      Value offsetX = offsets[isTransposeRequired ? rowDim : colDim].second;
+      Value offsetX = b.i32_val(0);
       Value offsetY = b.i32_val(0);
-      Value negativeOffsetX = b.sub(b.i32_val(0), offsetX);
-      addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, negativeOffsetX);
-      // The offset is in number of original elements. So we need to scale it
-      // by element bytes size.
-      adjustedBaseWidth =
-          b.add(baseWidth, b.mul(offsetX, b.i32_val(elemSizeInBits / 8)));
-      adjustedBaseWidth =
-          b.umax(adjustedBaseWidth, b.i32_val(MIN_BASE_WIDTH_BYTES));
+
       // Use the top-left address and mask of the block to load the data.
       // (The first value referred to by the registerIdx.)
       if (maskElems.size()) {
         pred = targetInfo.shuffleIdx(rewriter, loc, maskElems[registerIdx], 0);
       }
 
-      if (pred) {
-        // We leverage the GPU block I/O hardware out-of-bound protection
-        // feature by setting the offset to an invalid value when 'pred'
-        // is false (the HW will not read out-of-bounds values). Later on,
-        // after issuing the 2d block read operation, we will select the
-        // result of the load only if the mask evaluate to true, otherwise
-        // we will use 'other'.
-        offsetY = b.select(pred, offsetY, adjustedBaseHeight);
-      }
-
       assert(numPackedVals > 0 && "numPackedVals should be greater than zero.");
-      Value ret = TritonGEN::Matrix2DBlockLoadOp::create(
-          rewriter, loc, load2DGenXType,
-          /*ptr*/ addrElem,
-          /*base_width*/ adjustedBaseWidth,
-          /*base_height*/ adjustedBaseHeight,
-          /*base_pitch*/ pitch,
-          // offsetX was in terms of original elements. The 2d block io requires
-          // offsetX to be in terms of packed elements.
-          /*x*/ b.udiv(offsetX, b.i32_val(numPackedVals)),
-          /*y*/ offsetY,
-          /*elem_size_in_bits*/ packedElemSizeInBits,
-          /*tile_width*/ tileWidth,
-          /*tile_height*/ tileHeight,
-          /*v_blocks*/ vBlocks,
-          /*transpose*/ isTransposeRequired,
-          /*vnni_transform*/ !isTransposeRequired && useVNNIFormat);
+      Value ret;
+      if (use1DBlockIO) {
+        auto create1dLoad = [&]() {
+          return SmallVector<Value>{blockIO1D(
+              rewriter, loc,
+              {addrElem,
+               /*immediate offset (in bytes)*/
+               b.udiv(offsetX, b.i32_val(numPackedVals)),
+               /*data size*/
+               b.i32_val(get1DBlockIODataSize(packedElemSizeInBits)),
+               /*vector size*/ b.i32_val(get1DBlockIOVectorSize(numPackedVals)),
+               /*cache controls*/
+               b.i32_val(static_cast<int>(
+                   mlir::triton::TritonGEN::LoadCacheControl::DEFAULT))})};
+        };
+
+        Block &endBlock = LLVM::intel::createPredicatedBlock(
+            rewriter, loc, maybeAnd(rewriter, loc, pred, b.i1_val(1)),
+            SmallVector<Value, 1>{b.undef(load2DGenXType)}, create1dLoad);
+        ret = *endBlock.args_begin();
+      } else {
+
+        // Adjust the baseWidth, offsetX and base address use the original base
+        // of the BLOCK.
+        offsetX = offsets[isTransposeRequired ? rowDim : colDim].second;
+        Value negativeOffsetX = b.sub(b.i32_val(0), offsetX);
+        addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, negativeOffsetX);
+        // The offset is in number of original elements. So we need to scale it
+        // by element bytes size.
+        adjustedBaseWidth =
+            b.add(baseWidth, b.mul(offsetX, b.i32_val(elemSizeInBits / 8)));
+        adjustedBaseWidth =
+            b.umax(adjustedBaseWidth, b.i32_val(MIN_BASE_WIDTH_BYTES));
+
+        if (pred) {
+          // We leverage the GPU block I/O hardware out-of-bound protection
+          // feature by setting the offset to an invalid value when 'pred'
+          // is false (the HW will not read out-of-bounds values). Later on,
+          // after issuing the 2d block read operation, we will select the
+          // result of the load only if the mask evaluate to true, otherwise
+          // we will use 'other'.
+          offsetY = b.select(pred, offsetY, adjustedBaseHeight);
+        }
+
+        ret = TritonGEN::Matrix2DBlockLoadOp::create(
+            rewriter, loc, load2DGenXType,
+            /*ptr*/ addrElem,
+            /*base_width*/ adjustedBaseWidth,
+            /*base_height*/ adjustedBaseHeight,
+            /*base_pitch*/ pitch ? pitch : adjustedBaseWidth,
+            // offsetX was in terms of original elements. The 2d block io
+            // requires offsetX to be in terms of packed elements.
+            /*x*/ b.udiv(offsetX, b.i32_val(numPackedVals)),
+            /*y*/ offsetY,
+            /*elem_size_in_bits*/ packedElemSizeInBits,
+            /*tile_width*/ tileWidth,
+            /*tile_height*/ tileHeight,
+            /*v_blocks*/ vBlocks,
+            /*transpose*/ isTransposeRequired,
+            /*vnni_transform*/ !isTransposeRequired && useVNNIFormat);
+      }
 
       {
         // When strides[0] is 0, we only want to load the first row, so we
@@ -2454,6 +2592,7 @@ struct DescriptorLoadOpToBlockIOConversion
                           getOneMatrixPerLoadAttrName());
     BlockIOTileSizeInfo sizeInfo = getBlockIOTileSize<true /*load*/>(
         llEncoding.value(), contiguousDim, elemSizeInBits,
+        /*ptrAxisInfo=*/nullptr,
         /*maskAxisInfo=*/nullptr, *oneMatrixPerLoadForBT);
     if (!sizeInfo.isValid())
       return failure();
@@ -3352,7 +3491,8 @@ struct DescriptorStoreOpToBlockIOConversion
     AxisInfo *maskAxisInfo = nullptr;
 
     BlockIOTileSizeInfo sizeInfo = getBlockIOTileSize<false /*store*/>(
-        llEncoding.value(), contiguousDim, elemSizeInBits, maskAxisInfo);
+        llEncoding.value(), contiguousDim, elemSizeInBits, nullptr,
+        maskAxisInfo);
     if (!sizeInfo.isValid())
       return failure();
 
@@ -3564,6 +3704,11 @@ struct StoreOpToBlockIOConversion
 
     // TODO: use the axis info to general the handling for both regular
     // pointer and block pointer.
+    Attribute blockIOAttr =
+        op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
+    auto mode = symbolizeBlockIOMode(cast<StringAttr>(blockIOAttr).getValue());
+    if (!mode)
+      return failure();
     const bool memoryRowMajor = isMemoryRowMajor(op);
     const unsigned rank = tensorType.getRank();
     if (rank > 2)
@@ -3612,7 +3757,8 @@ struct StoreOpToBlockIOConversion
                                      std::move(regPackBases));
     } else {
       sizeInfo = getBlockIOTileSize<false /*store*/>(
-          llEncoding.value(), contiguousDim, elemSizeInBits, maskAxisInfo);
+          llEncoding.value(), contiguousDim, elemSizeInBits, nullptr,
+          maskAxisInfo);
     }
 
     if (!sizeInfo.isValid())
