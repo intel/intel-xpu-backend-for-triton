@@ -89,6 +89,19 @@ def _find_cuda_patterns(source: str) -> list[dict]:
                 "col": node.col_offset,
             })
 
+        # current_platform.get_device_capability() < tuple comparisons
+        if isinstance(node, ast.Compare):
+            if (isinstance(node.left, ast.Call) and isinstance(node.left.func, ast.Attribute)
+                    and node.left.func.attr == "get_device_capability"
+                    and isinstance(node.left.func.value, ast.Name)
+                    and node.left.func.value.id == "current_platform"):
+                # Found: current_platform.get_device_capability() < something
+                patterns.append({
+                    "type": "device_capability_compare",
+                    "line": node.lineno,
+                    "col": node.col_offset,
+                })
+
     return patterns
 
 
@@ -129,6 +142,18 @@ def _apply_patches(source: str, patterns: list[dict]) -> str:
                 "(current_platform.is_cuda() or current_platform.is_xpu())",
             )
 
+        elif ptype == "device_capability_compare":
+            # Handle: if current_platform.get_device_capability() < (X, Y):
+            # Strategy: wrap the call in a helper that returns a safe value
+            # Replace with: if (cap := current_platform.get_device_capability()) is not None and cap
+
+            # Use walrus operator to assign and check in one line
+            lines[line_idx] = re.sub(
+                r'if\s+current_platform\.get_device_capability\(\)\s*(<|>|<=|>=|==|!=)',
+                r'if (cap := current_platform.get_device_capability()) is not None and cap \1',
+                line,
+            )
+
     return "\n".join(lines)
 
 
@@ -160,11 +185,13 @@ def main() -> None:
         print(f"Error: {vllm_root} is not a directory")
         sys.exit(1)
 
-    # Only patch test files in the spec_decode, sample, and worker dirs
+    # Patch test files in spec_decode, sample, worker, moe, and attention dirs
     test_dirs = [
         vllm_root / "tests" / "v1" / "spec_decode",
         vllm_root / "tests" / "v1" / "sample",
         vllm_root / "tests" / "v1" / "worker",
+        vllm_root / "tests" / "kernels" / "moe",
+        vllm_root / "tests" / "kernels" / "attention",
     ]
 
     total_patched = 0
