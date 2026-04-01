@@ -137,7 +137,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: triton-vllm-${{ inputs.python_version }}
-          path: triton-wheel/
+          path: dist/
 
       - name: Download vLLM requirements
         uses: actions/download-artifact@v8
@@ -165,7 +165,7 @@ jobs:
       - name: Install Triton from wheel
         id: install
         run: |
-          pip install triton-wheel/*.whl
+          pip install dist/*.whl
           python -c 'import triton; print(triton.__version__)'
 
       - name: Install test dependencies
