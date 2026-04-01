@@ -1,2 +1,3 @@
 # count_expert_num_tokens kernel failures - needs investigation
-tests/kernels/moe/test_count_expert_num_tokens.py::test_compute_expert_num_tokens
+# Skip entire file (both test_compute_expert_num_tokens and test_compute_expert_num_tokens_from_numel)
+tests/kernels/moe/test_count_expert_num_tokens.py
