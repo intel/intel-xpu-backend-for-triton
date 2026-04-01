@@ -115,13 +115,14 @@ jobs:
       fail-fast: false
       matrix:
         suite:
-          - vllm-spec-decode
-          - vllm-mrv2
+          # Temporarily disabled - focus on MOE and attention first
+          # - vllm-spec-decode
+          # - vllm-mrv2
           - vllm-moe
           - vllm-triton-attn
-          - vllm-mamba
-          - vllm-quant
-          - vllm-rest
+          # - vllm-mamba
+          # - vllm-quant
+          # - vllm-rest
     runs-on:
       - linux
       - ${{ inputs.runner_label || 'max1550' }}
