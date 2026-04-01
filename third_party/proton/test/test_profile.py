@@ -882,8 +882,11 @@ def test_trace(tmp_path: pathlib.Path, device: str):
 @pytest.mark.parametrize("profile_kind,suffix", [("tree", ".hatchet"), ("trace", ".chrome_trace")],
                          ids=["tree", "trace"])
 def test_multi_stream(profile_kind: str, suffix: str, tmp_path: pathlib.Path, device: str):
-    if device == "xpu":
-        pytest.skip("FIXME: #6543")
+    device_module = getattr(torch, device.split(":")[0], None)
+    if device_module is None or not hasattr(device_module, "Stream"):
+        pytest.xfail(f"Multi-stream test not supported on {device}")
+    if device.startswith("xpu") and profile_kind == "trace":
+        pytest.skip("PTI reports the same tid for all kernels instead of distinct SYCL queue IDs per stream")
 
     @triton.jit
     def foo(x, y, size: tl.constexpr):
@@ -894,17 +897,17 @@ def test_multi_stream(profile_kind: str, suffix: str, tmp_path: pathlib.Path, de
     device_obj = torch.device(device)
     x = torch.ones((1024, ), device=device_obj, dtype=torch.float32)
     outputs = [torch.zeros_like(x) for _ in range(2)]
-    streams = [torch.cuda.Stream(device=device_obj) for _ in range(2)]
+    streams = [device_module.Stream(device=device_obj) for _ in range(2)]
     scope_names = [f"stream_scope_{idx}" for idx in range(len(streams))]
 
     foo[(1, )](x, outputs[0], x.numel(), num_warps=4)
-    torch.cuda.synchronize(device_obj)
+    device_module.synchronize(device_obj)
 
     start_kwargs = {"data": "trace"} if profile_kind == "trace" else {}
     proton.start(str(temp_file.with_suffix("")), **start_kwargs)
 
     for scope_name, stream, output in zip(scope_names, streams, outputs):
-        with torch.cuda.stream(stream):
+        with device_module.stream(stream):
             with proton.scope(scope_name):
                 foo[(1, )](x, output, x.numel(), num_warps=4)
 
