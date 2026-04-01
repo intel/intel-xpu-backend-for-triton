@@ -1,0 +1,2 @@
+# count_expert_num_tokens kernel failures - needs investigation
+tests/kernels/moe/test_count_expert_num_tokens.py::test_compute_expert_num_tokens
