@@ -100,7 +100,7 @@ jobs:
 
       - name: Freeze vLLM dependencies
         run: |
-          pip freeze > vllm-requirements.txt
+          pip freeze | grep -v '^vllm' | grep -v '^-e.*vllm' > vllm-requirements.txt
 
       - name: Upload vLLM requirements
         uses: actions/upload-artifact@v7
@@ -176,7 +176,7 @@ jobs:
         run: |
           echo "TRITON_TEST_CMD=${{ needs.setup.outputs.test-triton-command }}" | tee -a $GITHUB_ENV
 
-      - name: Install vLLM from requirements
+      - name: Install vLLM dependencies from frozen requirements
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
           if [ -f vllm-requirements.txt ]; then
@@ -185,6 +185,11 @@ jobs:
             echo "Error: vLLM requirements not found"
             exit 1
           fi
+
+      - name: Install vLLM
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --install-vllm
 
       - name: Create reports dir
         run: |
