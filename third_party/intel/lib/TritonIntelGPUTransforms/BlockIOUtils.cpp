@@ -19,8 +19,8 @@ template <typename T> static T product(const std::vector<T> &vec) {
 template <bool isLoad>
 BlockIOTileSizeInfo
 getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
-                   unsigned elemSizeInBits, AxisInfo *maskAxisInfo,
-                   bool oneMatrixPerLoadForBT) {
+                   unsigned elemSizeInBits, AxisInfo *ptrAxisInfo,
+                   AxisInfo *maskAxisInfo, bool oneMatrixPerLoadForBT) {
   assert((isLoad || !oneMatrixPerLoadForBT) &&
          "oneMatrixPerLoadForBT must be false for stores");
 
@@ -177,17 +177,20 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
   fastChangeDimLimit =
       std::min(fastChangeDimLimit, maskConstancyFastChangeDimLimit);
 
-  unsigned maskConstancyRowDimLimit = std::numeric_limits<unsigned>::max();
   if (rowDim >= 0) {
     // The mask constancy has to be power of 2 for block IO.
     if (maskAxisInfo &&
         !llvm::isPowerOf2_64(maskAxisInfo->getConstancy(rowDim)))
       return BlockIOTileSizeInfo::unknown();
-    if (maskAxisInfo)
-      maskConstancyRowDimLimit = maskAxisInfo->getConstancy(rowDim);
+    if (maskAxisInfo) {
+      unsigned maskConstancyRowDimLimit = maskAxisInfo->getConstancy(rowDim);
+      rowDimLimit = std::min(rowDimLimit, maskConstancyRowDimLimit);
+    }
+    if (ptrAxisInfo) {
+      unsigned ptrContiguityRowDimLimit = ptrAxisInfo->getContiguity(rowDim);
+      rowDimLimit = std::min(rowDimLimit, ptrContiguityRowDimLimit);
+    }
   }
-
-  rowDimLimit = std::min(rowDimLimit, maskConstancyRowDimLimit);
 
   if (tileShape[fastChangeDim] > fastChangeDimLimit)
     return BlockIOTileSizeInfo::unknown();
@@ -268,8 +271,14 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
       if (maskAxisInfo &&
           !llvm::isPowerOf2_64(maskAxisInfo->getConstancy(rowDim)))
         return BlockIOTileSizeInfo::unknown();
-      if (maskAxisInfo)
-        maskConstancyRowDimLimit = maskAxisInfo->getConstancy(rowDim);
+      if (maskAxisInfo) {
+        unsigned maskConstancyRowDimLimit = maskAxisInfo->getConstancy(rowDim);
+        rowDimLimit = std::min(rowDimLimit, maskConstancyRowDimLimit);
+      }
+      if (ptrAxisInfo) {
+        unsigned ptrContiguityRowDimLimit = ptrAxisInfo->getContiguity(rowDim);
+        rowDimLimit = std::min(rowDimLimit, ptrContiguityRowDimLimit);
+      }
     }
     if (dim != rowDim || tileShape[rowDim] != base[rowDim])
       continue; // Skip the register not mapped to the row dim.
@@ -281,7 +290,7 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
         break; // The row is the width.
     }
     // The size should not exceed the mask constancy limit.
-    if ((tileShape[rowDim] << 1) > maskConstancyRowDimLimit)
+    if ((tileShape[rowDim] << 1) > rowDimLimit)
       break;
     tileShape[rowDim] <<= 1;
     regPackBases.insert(1 << regBaseIter);
@@ -362,10 +371,12 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
 // Explicit instantiations.
 template BlockIOTileSizeInfo getBlockIOTileSize<true>(const LinearLayout &,
                                                       unsigned, unsigned,
-                                                      AxisInfo *, bool);
+                                                      AxisInfo *, AxisInfo *,
+                                                      bool);
 template BlockIOTileSizeInfo getBlockIOTileSize<false>(const LinearLayout &,
                                                        unsigned, unsigned,
-                                                       AxisInfo *, bool);
+                                                       AxisInfo *, AxisInfo *,
+                                                       bool);
 
 bool check2DBlockAddressPayloadRestriction(unsigned packedElemSizeInBits,
                                            unsigned tileWidth) {

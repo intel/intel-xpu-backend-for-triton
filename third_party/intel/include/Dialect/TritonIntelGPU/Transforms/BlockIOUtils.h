@@ -46,16 +46,16 @@ struct BlockIOTileSizeInfo {
 template <bool isLoad>
 BlockIOTileSizeInfo
 getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
-                   unsigned elemSizeInBits, AxisInfo *maskAxisInfo,
-                   bool oneMatrixPerLoadForBT);
+                   unsigned elemSizeInBits, AxisInfo *ptrAxisInfo,
+                   AxisInfo *maskAxisInfo, bool oneMatrixPerLoadForBT);
 
 // Explicit instantiation declarations.
 extern template BlockIOTileSizeInfo
 getBlockIOTileSize<true>(const LinearLayout &, unsigned, unsigned, AxisInfo *,
-                         bool);
+                         AxisInfo *, bool);
 extern template BlockIOTileSizeInfo
 getBlockIOTileSize<false>(const LinearLayout &, unsigned, unsigned, AxisInfo *,
-                          bool);
+                          AxisInfo *, bool);
 
 /// Get the DPAS operand index from a tensor type's encoding.
 /// The encoding must be DPAS or DotOperand-with-DPAS parent.
