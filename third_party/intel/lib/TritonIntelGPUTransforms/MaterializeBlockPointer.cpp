@@ -378,12 +378,37 @@ private:
   }
 
   /// Detect 1D tensor-of-pointers StoreOp with strided access pattern
-  /// (address = base + remui(idx, W) + muli(divui(idx, W), S)) and reshape
-  /// to 2D store with block IO attributes.
+  /// and reshape to 2D store with block IO attributes.
   ///
-  /// This enables the existing StoreOpToBlockIOConversion lowering to use
-  /// hardware 2D block store instructions for what would otherwise be
-  /// scalar scatter writes.
+  /// Inductor often flattens a 2D row-major tile into a 1D index:
+  ///
+  ///   offset = (idx % W) + (idx / W) * S
+  ///
+  /// where W is the tile width, H = numElements / W is the tile height,
+  /// and S is the row stride in elements (S >= W when the tile is a slice
+  /// of a wider allocation).
+  ///
+  /// Example — 3x4 tile (H=3, W=4) inside a buffer with stride S=6:
+  ///
+  ///   Memory layout (. = padding):
+  ///   addr:  0  1  2  3  .  .  6  7  8  9  .  . 12 13 14 15  .  .
+  ///          [── row 0 ──]      [── row 1 ──]      [── row 2 ──]
+  ///
+  ///   idx | col = idx%4 | row = idx/4 | offset = col + row*6
+  ///   ----+-------------+-------------+----------------------
+  ///    0  |      0      |      0      |   0
+  ///    1  |      1      |      0      |   1
+  ///    2  |      2      |      0      |   2
+  ///    3  |      3      |      0      |   3
+  ///    4  |      0      |      1      |   6
+  ///    ...
+  ///   11  |      3      |      2      |  15
+  ///
+  /// Without this pass the compiler sees 12 independent pointer
+  /// computations and emits 12 scalar scatter writes.  This method
+  /// recovers W, H, and S from the arithmetic, reshapes the store from
+  /// [12] to [3, 4], and annotates it so that StoreOpToBlockIOConversion
+  /// emits a single LSC2DBlockWrite(base, width=4, height=3, pitch=6).
   void reshape1DStridedStore(tt::StoreOp op, RankedTensorType ptrTensorTy,
                              MLIRContext *ctx) const {
     LDBG("Attempting 1D strided store reshape for: " << *op);
@@ -571,13 +596,22 @@ private:
     auto newStore = tt::StoreOp::create(builder, loc, ptrReshape, valReshape,
                                         op.getCache(), op.getEvict());
 
-    // Copy over boundaryCheck if non-empty.
+    // Copy inherent attributes not covered by the StoreOp builder.
     if (!op.getBoundaryCheck().empty())
       newStore->setAttr("boundaryCheck", op.getBoundaryCheckAttr());
-
-    // Copy ignore_cta if present.
     if (op.getIgnoreCta())
       newStore->setAttr("ignore_cta", UnitAttr::get(ctx));
+
+    // Copy discardable attributes from the original store. Skip the block IO
+    // attributes that we set explicitly below; carry everything else forward so
+    // that analysis hints attached by earlier passes are not silently dropped.
+    for (NamedAttribute attr : op->getDiscardableAttrs()) {
+      StringRef name = attr.getName().getValue();
+      if (name == ttgi::TritonIntelGPUDialect::getBlockIOAttrName() ||
+          name == ttgi::TritonIntelGPUDialect::getBlockIOStrideAttrName())
+        continue;
+      newStore->setDiscardableAttr(attr.getName(), attr.getValue());
+    }
 
     // 7. Set block IO attributes on the new store.
     // Stride is validated positive at extraction; assert here so lowering
