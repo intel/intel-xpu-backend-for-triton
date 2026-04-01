@@ -59,6 +59,7 @@ jobs:
 
       - name: Install Python build dependencies
         run: |
+          pip install cmake
           pip install -r python/requirements.txt
 
       - name: Setup PyTorch
