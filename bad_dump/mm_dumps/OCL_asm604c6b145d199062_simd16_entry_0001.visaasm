@@ -1,0 +1,1106 @@
+.version 4.1
+
+.kernel "matmul_kernel_with_tensor_descriptors"
+
+/// VISA Predefined Variables
+// .decl V0 v_type=G v_name=%null
+// .decl V1 v_type=G v_name=%thread_x
+// .decl V2 v_type=G v_name=%thread_y
+// .decl V3 v_type=G v_name=%group_id_x
+// .decl V4 v_type=G v_name=%group_id_y
+// .decl V5 v_type=G v_name=%group_id_z
+// .decl V6 v_type=G v_name=%tsc
+// .decl V7 v_type=G v_name=%r0
+// .decl V8 v_type=G v_name=%arg
+// .decl V9 v_type=G v_name=%retval
+// .decl V10 v_type=G v_name=%sp
+// .decl V11 v_type=G v_name=%fp
+// .decl V12 v_type=G v_name=%hw_id
+// .decl V13 v_type=G v_name=%sr0
+// .decl V14 v_type=G v_name=%cr0
+// .decl V15 v_type=G v_name=%ce0
+// .decl V16 v_type=G v_name=%dbg0
+// .decl V17 v_type=G v_name=%color
+// .decl V18 v_type=G v_name=%impl_arg_buf_ptr
+// .decl V19 v_type=G v_name=%local_id_buf_ptr
+// .decl V20 v_type=G v_name=%msg0
+// .decl V21 v_type=G v_name=%scratchloc
+// .decl T0 v_type=T v_name=%slm
+// .decl T1 v_type=T v_name=T1
+// .decl T2 v_type=T v_name=T2
+// .decl T3 v_type=T v_name=TSS
+// .decl T4 v_type=T v_name=%bss
+// .decl T5 v_type=T v_name=%scratch
+
+.decl V0032 v_type=G type=d num_elts=16 align=wordx32
+.decl V0033 v_type=G type=d num_elts=16 align=wordx32 alias=<%r0, 0>
+.decl V0034 v_type=G type=uq num_elts=1 align=qword
+.decl V0035 v_type=G type=uq num_elts=1 align=qword
+.decl V0036 v_type=G type=uq num_elts=1 align=qword
+.decl V0037 v_type=G type=d num_elts=8 align=hword
+.decl V0038 v_type=G type=d num_elts=8 align=wordx32 alias=<%r0, 0>
+.decl V0039 v_type=G type=d num_elts=3 align=dword
+.decl V0040 v_type=G type=w num_elts=16 align=hword
+.decl V0041 v_type=G type=w num_elts=16 align=hword
+.decl V0042 v_type=G type=w num_elts=16 align=hword
+.decl V0043 v_type=G type=uq num_elts=1 align=qword
+.decl V0044 v_type=G type=d num_elts=1 align=dword
+.decl V0045 v_type=G type=d num_elts=1 align=dword
+.decl V0046 v_type=G type=d num_elts=1 align=dword
+.decl V0047 v_type=G type=d num_elts=1 align=dword
+.decl V0048 v_type=G type=d num_elts=1 align=dword
+.decl V0049 v_type=G type=d num_elts=1 align=dword
+.decl V0050 v_type=G type=d num_elts=1 align=dword
+.decl V0051 v_type=G type=d num_elts=1 align=dword
+.decl V0052 v_type=G type=d num_elts=1 align=dword
+.decl V0053 v_type=G type=d num_elts=1 align=dword
+.decl V0054 v_type=G type=w num_elts=256 align=wordx32
+.decl V0055 v_type=G type=d num_elts=256 align=wordx32
+.decl V0056 v_type=G type=w num_elts=256 align=wordx32
+.decl V0057 v_type=G type=d num_elts=256 align=wordx32
+.decl V0058 v_type=G type=w num_elts=256 align=wordx32
+.decl V0059 v_type=G type=d num_elts=256 align=wordx32
+.decl V0060 v_type=G type=w num_elts=256 align=wordx32
+.decl V0061 v_type=G type=d num_elts=256 align=wordx32
+.decl V0062 v_type=G type=w num_elts=256 align=wordx32
+.decl V0063 v_type=G type=d num_elts=256 align=wordx32
+.decl V0064 v_type=G type=w num_elts=256 align=wordx32
+.decl V0065 v_type=G type=d num_elts=256 align=wordx32
+.decl V0066 v_type=G type=w num_elts=256 align=wordx32
+.decl V0067 v_type=G type=d num_elts=256 align=wordx32
+.decl V0068 v_type=G type=w num_elts=256 align=wordx32
+.decl V0069 v_type=G type=d num_elts=256 align=wordx32
+.decl V0070 v_type=G type=w num_elts=256 align=wordx32
+.decl V0071 v_type=G type=d num_elts=256 align=wordx32
+.decl V0072 v_type=G type=w num_elts=256 align=wordx32
+.decl V0073 v_type=G type=d num_elts=256 align=wordx32
+.decl V0074 v_type=G type=w num_elts=256 align=wordx32
+.decl V0075 v_type=G type=d num_elts=256 align=wordx32
+.decl V0076 v_type=G type=w num_elts=256 align=wordx32
+.decl V0077 v_type=G type=d num_elts=256 align=wordx32
+.decl V0078 v_type=G type=w num_elts=256 align=wordx32
+.decl V0079 v_type=G type=d num_elts=256 align=wordx32
+.decl V0080 v_type=G type=w num_elts=256 align=wordx32
+.decl V0081 v_type=G type=d num_elts=256 align=wordx32
+.decl V0082 v_type=G type=w num_elts=256 align=wordx32
+.decl V0083 v_type=G type=d num_elts=256 align=wordx32
+.decl V0084 v_type=G type=w num_elts=256 align=wordx32
+.decl V0085 v_type=G type=d num_elts=256 align=wordx32
+.decl V0086 v_type=G type=w num_elts=256 align=wordx32
+.decl V0087 v_type=G type=d num_elts=256 align=wordx32
+.decl V0088 v_type=G type=w num_elts=256 align=wordx32
+.decl V0089 v_type=G type=d num_elts=256 align=wordx32
+.decl V0090 v_type=G type=w num_elts=256 align=wordx32
+.decl V0091 v_type=G type=d num_elts=256 align=wordx32
+.decl V0092 v_type=G type=w num_elts=256 align=wordx32
+.decl V0093 v_type=G type=d num_elts=256 align=wordx32
+.decl V0094 v_type=G type=w num_elts=256 align=wordx32
+.decl V0095 v_type=G type=d num_elts=256 align=wordx32
+.decl V0096 v_type=G type=w num_elts=256 align=wordx32
+.decl V0097 v_type=G type=d num_elts=256 align=wordx32
+.decl V0098 v_type=G type=w num_elts=256 align=wordx32
+.decl V0099 v_type=G type=d num_elts=256 align=wordx32
+.decl V0100 v_type=G type=w num_elts=256 align=wordx32
+.decl V0101 v_type=G type=d num_elts=256 align=wordx32
+.decl V0102 v_type=G type=w num_elts=256 align=wordx32
+.decl V0103 v_type=G type=d num_elts=256 align=wordx32
+.decl V0104 v_type=G type=w num_elts=256 align=wordx32
+.decl V0105 v_type=G type=d num_elts=256 align=wordx32
+.decl V0106 v_type=G type=w num_elts=256 align=wordx32
+.decl V0107 v_type=G type=d num_elts=256 align=wordx32
+.decl V0108 v_type=G type=w num_elts=256 align=wordx32
+.decl V0109 v_type=G type=d num_elts=256 align=wordx32
+.decl V0110 v_type=G type=w num_elts=256 align=wordx32
+.decl V0111 v_type=G type=d num_elts=256 align=wordx32
+.decl V0112 v_type=G type=w num_elts=256 align=wordx32
+.decl V0113 v_type=G type=d num_elts=256 align=wordx32
+.decl V0114 v_type=G type=w num_elts=256 align=wordx32
+.decl V0115 v_type=G type=d num_elts=256 align=wordx32
+.decl V0116 v_type=G type=w num_elts=256 align=wordx32
+.decl V0117 v_type=G type=d num_elts=256 align=wordx32
+.decl V0118 v_type=G type=d num_elts=1 align=dword
+.decl V0119 v_type=G type=d num_elts=1 align=dword
+.decl V0120 v_type=G type=ud num_elts=1 align=dword alias=<V0118, 0>
+.decl V0121 v_type=G type=ud num_elts=1 align=dword alias=<V0119, 0>
+.decl V0122 v_type=G type=d num_elts=1 align=dword
+.decl V0123 v_type=G type=ud num_elts=1 align=dword alias=<V0122, 0>
+.decl V0124 v_type=G type=d num_elts=1 align=dword
+.decl V0125 v_type=G type=d num_elts=1 align=dword
+.decl V0126 v_type=G type=d num_elts=1 align=dword
+.decl V0127 v_type=G type=d num_elts=1 align=dword
+.decl V0128 v_type=G type=d num_elts=1 align=dword
+.decl V0129 v_type=G type=d num_elts=1 align=dword
+.decl V0130 v_type=G type=d num_elts=1 align=dword
+.decl V0131 v_type=G type=d num_elts=1 align=dword
+.decl V0132 v_type=G type=d num_elts=1 align=dword
+.decl V0133 v_type=G type=f num_elts=1 align=dword
+.decl V0134 v_type=G type=ud num_elts=1 align=dword alias=<V0130, 0>
+.decl V0135 v_type=G type=d num_elts=1 align=dword
+.decl V0136 v_type=G type=ud num_elts=1 align=dword alias=<V0135, 0>
+.decl V0137 v_type=G type=d num_elts=1 align=dword
+.decl V0138 v_type=G type=f num_elts=1 align=dword
+.decl V0139 v_type=G type=ud num_elts=1 align=dword alias=<V0132, 0>
+.decl V0140 v_type=G type=f num_elts=1 align=dword
+.decl V0141 v_type=G type=f num_elts=1 align=dword
+.decl V0142 v_type=G type=f num_elts=1 align=dword
+.decl V0143 v_type=G type=d num_elts=1 align=dword
+.decl V0144 v_type=G type=ud num_elts=1 align=dword alias=<V0143, 0>
+.decl V0145 v_type=G type=d num_elts=1 align=dword
+.decl V0146 v_type=G type=d num_elts=1 align=dword
+.decl V0147 v_type=G type=ud num_elts=1 align=dword alias=<V0146, 0>
+.decl V0148 v_type=G type=f num_elts=1 align=dword
+.decl V0149 v_type=G type=ud num_elts=1 align=dword alias=<V0137, 0>
+.decl V0150 v_type=G type=f num_elts=1 align=dword
+.decl V0151 v_type=G type=ud num_elts=1 align=dword alias=<V0145, 0>
+.decl V0152 v_type=G type=f num_elts=1 align=dword
+.decl V0153 v_type=G type=f num_elts=1 align=dword
+.decl V0154 v_type=G type=f num_elts=1 align=dword
+.decl V0155 v_type=G type=f num_elts=1 align=dword
+.decl V0156 v_type=G type=f num_elts=1 align=dword
+.decl V0157 v_type=G type=f num_elts=1 align=dword
+.decl V0158 v_type=G type=f num_elts=1 align=dword
+.decl V0159 v_type=G type=d num_elts=1 align=dword
+.decl V0160 v_type=G type=ud num_elts=1 align=dword alias=<V0159, 0>
+.decl V0161 v_type=G type=d num_elts=1 align=dword
+.decl V0162 v_type=G type=d num_elts=1 align=dword
+.decl V0163 v_type=G type=d num_elts=1 align=dword
+.decl V0164 v_type=G type=d num_elts=1 align=dword
+.decl V0165 v_type=G type=d num_elts=1 align=dword
+.decl V0166 v_type=G type=ud num_elts=1 align=dword alias=<V0164, 0>
+.decl V0167 v_type=G type=ud num_elts=1 align=dword alias=<V0165, 0>
+.decl V0168 v_type=G type=d num_elts=1 align=dword
+.decl V0169 v_type=G type=d num_elts=1 align=dword
+.decl V0170 v_type=G type=d num_elts=1 align=dword
+.decl V0171 v_type=G type=d num_elts=1 align=dword
+.decl V0172 v_type=G type=d num_elts=1 align=dword
+.decl V0173 v_type=G type=b num_elts=32 align=hword alias=<V0038, 0>
+.decl V0174 v_type=G type=b num_elts=1
+.decl V0175 v_type=G type=w num_elts=1 align=word
+.decl V0176 v_type=G type=w num_elts=1 align=word
+.decl V0177 v_type=G type=d num_elts=1 align=dword
+.decl V0178 v_type=G type=ub num_elts=1 alias=<V0174, 0>
+.decl V0179 v_type=G type=d num_elts=1 align=dword
+.decl V0180 v_type=G type=d num_elts=1 align=dword
+.decl V0181 v_type=G type=q num_elts=1 align=qword alias=<V0035, 0>
+.decl V0182 v_type=G type=d num_elts=1 align=dword
+.decl V0183 v_type=G type=d num_elts=1 align=dword
+.decl V0184 v_type=G type=d num_elts=2 align=qword alias=<V0035, 0>
+.decl V0185 v_type=G type=d num_elts=1 align=dword
+.decl V0186 v_type=G type=d num_elts=2 align=dword
+.decl V0187 v_type=G type=q num_elts=1 align=qword
+.decl V0188 v_type=G type=d num_elts=2 align=qword alias=<V0187, 0>
+.decl V0189 v_type=G type=d num_elts=1 align=dword
+.decl V0190 v_type=G type=d num_elts=1 align=dword
+.decl V0191 v_type=G type=d num_elts=1 align=dword
+.decl V0192 v_type=G type=ud num_elts=1 align=dword alias=<V0190, 0>
+.decl V0193 v_type=G type=ud num_elts=1 align=dword alias=<V0191, 0>
+.decl V0194 v_type=G type=d num_elts=1 align=dword
+.decl V0195 v_type=G type=d num_elts=1 align=dword
+.decl V0196 v_type=G type=b num_elts=1
+.decl V0197 v_type=G type=d num_elts=1 align=dword
+.decl V0198 v_type=G type=ub num_elts=1 alias=<V0196, 0>
+.decl V0199 v_type=G type=q num_elts=1 align=qword alias=<V0034, 0>
+.decl V0200 v_type=G type=d num_elts=1 align=dword
+.decl V0201 v_type=G type=d num_elts=1 align=dword
+.decl V0202 v_type=G type=d num_elts=2 align=qword alias=<V0034, 0>
+.decl V0203 v_type=G type=d num_elts=1 align=dword
+.decl V0204 v_type=G type=d num_elts=2 align=dword
+.decl V0205 v_type=G type=q num_elts=1 align=qword
+.decl V0206 v_type=G type=d num_elts=2 align=qword alias=<V0205, 0>
+.decl V0207 v_type=G type=d num_elts=1 align=dword
+.decl V0208 v_type=G type=d num_elts=1 align=dword
+.decl V0209 v_type=G type=d num_elts=1 align=dword
+.decl V0210 v_type=G type=ud num_elts=1 align=dword alias=<V0208, 0>
+.decl V0211 v_type=G type=ud num_elts=1 align=dword alias=<V0209, 0>
+.decl V0212 v_type=G type=d num_elts=1 align=dword
+.decl V0213 v_type=G type=d num_elts=1 align=dword
+.decl V0214 v_type=G type=d num_elts=1 align=dword
+.decl V0215 v_type=G type=d num_elts=1 align=dword
+.decl V0216 v_type=G type=d num_elts=1 align=dword
+.decl V0217 v_type=G type=d num_elts=8 align=wordx32
+.decl V0218 v_type=G type=q num_elts=4 align=wordx32 alias=<V0217, 0>
+.decl V0219 v_type=G type=d num_elts=8 align=wordx32
+.decl V0220 v_type=G type=q num_elts=4 align=wordx32 alias=<V0219, 0>
+.decl V0221 v_type=G type=d num_elts=1 align=dword
+.decl V0222 v_type=G type=d num_elts=1 align=dword
+.decl V0223 v_type=G type=d num_elts=1 align=dword
+.decl V0224 v_type=G type=d num_elts=1 align=dword
+.decl V0225 v_type=G type=d num_elts=1 align=dword
+.decl V0226 v_type=G type=d num_elts=1 align=dword
+.decl V0227 v_type=G type=d num_elts=1 align=dword
+.decl V0228 v_type=G type=d num_elts=1 align=dword
+.decl V0229 v_type=G type=d num_elts=1 align=dword
+.decl V0230 v_type=G type=d num_elts=1 align=dword
+.decl V0231 v_type=G type=d num_elts=1 align=dword
+.decl V0232 v_type=G type=d num_elts=1 align=dword
+.decl V0233 v_type=G type=d num_elts=1 align=dword
+.decl V0234 v_type=G type=d num_elts=1 align=dword
+.decl V0235 v_type=G type=d num_elts=1 align=dword
+.decl V0236 v_type=G type=d num_elts=1 align=dword
+.decl V0237 v_type=G type=d num_elts=1 align=dword
+.decl V0238 v_type=G type=d num_elts=1 align=dword
+.decl V0239 v_type=G type=d num_elts=1 align=dword
+.decl V0240 v_type=G type=d num_elts=1 align=dword
+.decl V0241 v_type=G type=d num_elts=1 align=dword
+.decl V0242 v_type=G type=d num_elts=1 align=dword
+.decl V0243 v_type=G type=d num_elts=1 align=dword
+.decl V0244 v_type=G type=d num_elts=1 align=dword
+.decl V0245 v_type=G type=d num_elts=1 align=dword
+.decl V0246 v_type=G type=d num_elts=1 align=dword
+.decl V0247 v_type=G type=d num_elts=1 align=dword
+.decl V0248 v_type=G type=d num_elts=1 align=dword
+.decl V0249 v_type=G type=d num_elts=1 align=dword
+.decl V0250 v_type=G type=d num_elts=1 align=dword
+.decl V0251 v_type=G type=d num_elts=1 align=dword
+.decl V0252 v_type=G type=f num_elts=128 align=wordx32
+.decl V0253 v_type=G type=d num_elts=1 align=dword
+.decl V0254 v_type=G type=d num_elts=1 align=dword
+.decl V0255 v_type=G type=d num_elts=1 align=dword
+.decl V0256 v_type=G type=d num_elts=1 align=dword
+.decl V0257 v_type=G type=d num_elts=1 align=dword
+.decl V0258 v_type=G type=ud num_elts=128 align=wordx32 alias=<V0054, 0>
+.decl V0259 v_type=G type=ud num_elts=128 align=wordx32 alias=<V0056, 0>
+.decl V0260 v_type=G type=d num_elts=1 align=dword
+.decl V0261 v_type=G type=d num_elts=1 align=dword
+.decl V0262 v_type=G type=d num_elts=1 align=dword
+.decl V0263 v_type=G type=d num_elts=1 align=dword
+.decl V0264 v_type=G type=d num_elts=1 align=dword
+.decl V0265 v_type=G type=ud num_elts=128 align=wordx32 alias=<V0058, 0>
+.decl V0266 v_type=G type=ud num_elts=128 align=wordx32 alias=<V0060, 0>
+.decl V0267 v_type=G type=d num_elts=1 align=dword
+.decl V0268 v_type=G type=d num_elts=1 align=dword
+.decl V0269 v_type=G type=d num_elts=1 align=dword
+.decl V0270 v_type=G type=d num_elts=1 align=dword
+.decl V0271 v_type=G type=d num_elts=1 align=dword
+.decl V0272 v_type=G type=ud num_elts=128 align=wordx32 alias=<V0062, 0>
+.decl V0273 v_type=G type=ud num_elts=128 align=wordx32 alias=<V0064, 0>
+.decl V0274 v_type=G type=d num_elts=1 align=dword
+.decl V0275 v_type=G type=d num_elts=1 align=dword
+.decl V0276 v_type=G type=d num_elts=1 align=dword
+.decl V0277 v_type=G type=d num_elts=1 align=dword
+.decl V0278 v_type=G type=d num_elts=1 align=dword
+.decl V0279 v_type=G type=ud num_elts=128 align=wordx32 alias=<V0066, 0>
+.decl V0280 v_type=G type=ud num_elts=128 align=wordx32 alias=<V0068, 0>
+.decl V0281 v_type=G type=d num_elts=1 align=dword
+.decl V0282 v_type=G type=d num_elts=1 align=dword
+.decl V0283 v_type=G type=d num_elts=1 align=dword
+.decl V0284 v_type=G type=d num_elts=1 align=dword
+.decl V0285 v_type=G type=d num_elts=1 align=dword
+.decl V0286 v_type=G type=ud num_elts=128 align=wordx32 alias=<V0070, 0>
+.decl V0287 v_type=G type=ud num_elts=128 align=wordx32 alias=<V0072, 0>
+.decl V0288 v_type=G type=d num_elts=1 align=dword
+.decl V0289 v_type=G type=d num_elts=1 align=dword
+.decl V0290 v_type=G type=d num_elts=1 align=dword
+.decl V0291 v_type=G type=d num_elts=1 align=dword
+.decl V0292 v_type=G type=d num_elts=1 align=dword
+.decl V0293 v_type=G type=ud num_elts=128 align=wordx32 alias=<V0074, 0>
+.decl V0294 v_type=G type=ud num_elts=128 align=wordx32 alias=<V0076, 0>
+.decl V0295 v_type=G type=d num_elts=1 align=dword
+.decl V0296 v_type=G type=d num_elts=1 align=dword
+.decl V0297 v_type=G type=d num_elts=1 align=dword
+.decl V0298 v_type=G type=d num_elts=1 align=dword
+.decl V0299 v_type=G type=d num_elts=1 align=dword
+.decl V0300 v_type=G type=ud num_elts=128 align=wordx32 alias=<V0078, 0>
+.decl V0301 v_type=G type=ud num_elts=128 align=wordx32 alias=<V0080, 0>
+.decl V0302 v_type=G type=d num_elts=1 align=dword
+.decl V0303 v_type=G type=d num_elts=1 align=dword
+.decl V0304 v_type=G type=d num_elts=1 align=dword
+.decl V0305 v_type=G type=d num_elts=1 align=dword
+.decl V0306 v_type=G type=d num_elts=1 align=dword
+.decl V0307 v_type=G type=ud num_elts=128 align=wordx32 alias=<V0082, 0>
+.decl V0308 v_type=G type=ud num_elts=128 align=wordx32 alias=<V0084, 0>
+.decl V0309 v_type=G type=d num_elts=1 align=dword
+.decl V0310 v_type=G type=d num_elts=1 align=dword
+.decl V0311 v_type=G type=d num_elts=1 align=dword
+.decl V0312 v_type=G type=d num_elts=1 align=dword
+.decl V0313 v_type=G type=d num_elts=1 align=dword
+.decl V0314 v_type=G type=ud num_elts=128 align=wordx32 alias=<V0086, 0>
+.decl V0315 v_type=G type=ud num_elts=128 align=wordx32 alias=<V0088, 0>
+.decl V0316 v_type=G type=d num_elts=1 align=dword
+.decl V0317 v_type=G type=d num_elts=1 align=dword
+.decl V0318 v_type=G type=d num_elts=1 align=dword
+.decl V0319 v_type=G type=d num_elts=1 align=dword
+.decl V0320 v_type=G type=d num_elts=1 align=dword
+.decl V0321 v_type=G type=ud num_elts=128 align=wordx32 alias=<V0090, 0>
+.decl V0322 v_type=G type=ud num_elts=128 align=wordx32 alias=<V0092, 0>
+.decl V0323 v_type=G type=d num_elts=1 align=dword
+.decl V0324 v_type=G type=d num_elts=1 align=dword
+.decl V0325 v_type=G type=d num_elts=1 align=dword
+.decl V0326 v_type=G type=d num_elts=1 align=dword
+.decl V0327 v_type=G type=d num_elts=1 align=dword
+.decl V0328 v_type=G type=ud num_elts=128 align=wordx32 alias=<V0094, 0>
+.decl V0329 v_type=G type=ud num_elts=128 align=wordx32 alias=<V0096, 0>
+.decl V0330 v_type=G type=d num_elts=1 align=dword
+.decl V0331 v_type=G type=d num_elts=1 align=dword
+.decl V0332 v_type=G type=d num_elts=1 align=dword
+.decl V0333 v_type=G type=d num_elts=1 align=dword
+.decl V0334 v_type=G type=d num_elts=1 align=dword
+.decl V0335 v_type=G type=ud num_elts=128 align=wordx32 alias=<V0098, 0>
+.decl V0336 v_type=G type=ud num_elts=128 align=wordx32 alias=<V0100, 0>
+.decl V0337 v_type=G type=d num_elts=1 align=dword
+.decl V0338 v_type=G type=d num_elts=1 align=dword
+.decl V0339 v_type=G type=d num_elts=1 align=dword
+.decl V0340 v_type=G type=d num_elts=1 align=dword
+.decl V0341 v_type=G type=d num_elts=1 align=dword
+.decl V0342 v_type=G type=ud num_elts=128 align=wordx32 alias=<V0102, 0>
+.decl V0343 v_type=G type=ud num_elts=128 align=wordx32 alias=<V0104, 0>
+.decl V0344 v_type=G type=d num_elts=1 align=dword
+.decl V0345 v_type=G type=d num_elts=1 align=dword
+.decl V0346 v_type=G type=d num_elts=1 align=dword
+.decl V0347 v_type=G type=d num_elts=1 align=dword
+.decl V0348 v_type=G type=d num_elts=1 align=dword
+.decl V0349 v_type=G type=ud num_elts=128 align=wordx32 alias=<V0106, 0>
+.decl V0350 v_type=G type=ud num_elts=128 align=wordx32 alias=<V0108, 0>
+.decl V0351 v_type=G type=d num_elts=1 align=dword
+.decl V0352 v_type=G type=d num_elts=1 align=dword
+.decl V0353 v_type=G type=d num_elts=1 align=dword
+.decl V0354 v_type=G type=d num_elts=1 align=dword
+.decl V0355 v_type=G type=d num_elts=1 align=dword
+.decl V0356 v_type=G type=ud num_elts=128 align=wordx32 alias=<V0110, 0>
+.decl V0357 v_type=G type=ud num_elts=128 align=wordx32 alias=<V0112, 0>
+.decl V0358 v_type=G type=d num_elts=1 align=dword
+.decl V0359 v_type=G type=d num_elts=1 align=dword
+.decl V0360 v_type=G type=d num_elts=1 align=dword
+.decl V0361 v_type=G type=d num_elts=1 align=dword
+.decl V0362 v_type=G type=d num_elts=1 align=dword
+.decl V0363 v_type=G type=ud num_elts=128 align=wordx32 alias=<V0114, 0>
+.decl V0364 v_type=G type=ud num_elts=128 align=wordx32 alias=<V0116, 0>
+.decl V0365 v_type=G type=ud num_elts=1 align=dword alias=<V0351, 0>
+.decl V0366 v_type=G type=w num_elts=16 align=wordx32
+.decl V0367 v_type=G type=d num_elts=16 align=wordx32
+.decl V0368 v_type=G type=d num_elts=128 align=wordx32 alias=<V0252, 0>
+.decl V0369 v_type=G type=q num_elts=1 align=qword alias=<V0036, 0>
+.decl V0370 v_type=G type=d num_elts=1 align=dword
+.decl V0371 v_type=G type=d num_elts=1 align=dword
+.decl V0372 v_type=G type=d num_elts=2 align=qword alias=<V0036, 0>
+.decl V0373 v_type=G type=d num_elts=1 align=dword
+.decl V0374 v_type=G type=d num_elts=2 align=dword
+.decl V0375 v_type=G type=q num_elts=1 align=qword
+.decl V0376 v_type=G type=d num_elts=2 align=qword alias=<V0375, 0>
+.decl V0377 v_type=G type=d num_elts=1 align=dword
+.decl V0378 v_type=G type=d num_elts=1 align=dword
+.decl V0379 v_type=G type=d num_elts=1 align=dword
+.decl V0380 v_type=G type=ud num_elts=1 align=dword alias=<V0378, 0>
+.decl V0381 v_type=G type=ud num_elts=1 align=dword alias=<V0379, 0>
+.decl V0382 v_type=G type=d num_elts=1 align=dword
+.decl V0383 v_type=G type=d num_elts=1 align=dword
+.decl V0384 v_type=G type=uq num_elts=1 align=qword
+.decl V0385 v_type=G type=uq num_elts=1 align=qword
+.decl P1 v_type=P num_elts=16
+.decl P2 v_type=P num_elts=16
+.decl P3 v_type=P num_elts=16
+.decl S0 v_type=S num_elts=1 v_name=S000
+.decl T6 v_type=T num_elts=1 v_name=T006
+.input V0040 offset=64 size=32
+.input V0041 offset=128 size=32
+.input V0042 offset=192 size=32
+.input V0034 offset=256 size=8
+.input V0035 offset=264 size=8
+.input V0036 offset=272 size=8
+.input V0384 offset=280 size=8
+.input V0385 offset=320 size=8
+.input V0043 offset=328 size=8
+.kernel_attr Target="3d"
+.kernel_attr SimdSize=16
+.kernel_attr PerThreadInputSize=192    
+
+.function "_main_0"
+_main_0:
+    or (M1_NM, 1) %cr0(0,0)<1> %cr0(0,0)<0;1,0> 0x400004c0:ud                    /// $1
+    mov (M1_NM, 1) V0118(0,0)<1> V0038(0,1)<0;1,0>                               /// $2
+    FILE "/home/gta/workspace/intel-xpu-backend-for-triton/benchmarks/triton_kernels_benchmark/gemm_benchmark.py"
+    LOC 54
+    mulh (M1_NM, 1) V0121(0,0)<1> V0120(0,0)<0;1,0> 0xaaaaaaab:ud                /// $5
+    shr (M1_NM, 1) V0123(0,0)<1> V0121(0,0)<0;1,0> 0x4:d                         /// $6
+    LOC 56
+    add (M1_NM, 1) V0124(0,0)<1> 0x1:w (-)V0122(0,0)<0;1,0>                      /// $8
+    LOC 57
+    mad (M1_NM, 1) V0125(0,0)<1> 0xffffffe8:w V0122(0,0)<0;1,0> V0118(0,0)<0;1,0> /// $10
+    LOC 58
+    cmp.eq (M1_NM, 16) P1 V0122(0,0)<0;1,0> 0x1:d                                /// $12
+    (!P1) goto (M1, 1) _0_007                                                    /// $13
+
+_0_008:
+    mov (M1_NM, 1) V0126(0,0)<1> 0xffffffff:d                                    /// $15
+    goto (M1, 1) _0_009                                                          /// $16
+
+_0_007:
+    asr (M1_NM, 1) V0127(0,0)<1> V0124(0,0)<0;1,0> 0x1f:d                        /// $18
+    asr (M1_NM, 1) V0128(0,0)<1> V0125(0,0)<0;1,0> 0x1f:d                        /// $19
+    add3 (M1_NM, 1) V0129(0,0)<1> V0127(0,0)<0;1,0> (-)V0122(0,0)<0;1,0> 0x1:d   /// $20
+    xor (M1_NM, 1) V0130(0,0)<1> V0129(0,0)<0;1,0> V0127(0,0)<0;1,0>             /// $21
+    add (M1_NM, 1) V0131(0,0)<1> V0128(0,0)<0;1,0> V0125(0,0)<0;1,0>             /// $22
+    xor (M1_NM, 1) V0132(0,0)<1> V0131(0,0)<0;1,0> V0128(0,0)<0;1,0>             /// $23
+    xor (M1_NM, 1) %cr0(0,0)<1> %cr0(0,0)<0;1,0> 0x30:ud                         /// $24
+    mov (M1_NM, 1) V0133(0,0)<1> V0134(0,0)<0;1,0>                               /// $25
+    mov (M1_NM, 1) V0136(0,0)<1> V0133(0,0)<0;1,0>                               /// $26
+    add (M1_NM, 1) V0137(0,0)<1> V0130(0,0)<0;1,0> (-)V0135(0,0)<0;1,0>          /// $27
+    mov (M1_NM, 1) V0138(0,0)<1> V0139(0,0)<0;1,0>                               /// $28
+    inv (M1_NM, 1) V0140(0,0)<1> V0133(0,0)<0;1,0>                               /// $29
+    mad (M1_NM, 1) V0141(0,0)<1> V0140(0,0)<0;1,0> 0xb4c00000:f V0140(0,0)<0;1,0> /// $30
+    mul (M1_NM, 1) V0142(0,0)<1> V0138(0,0)<0;1,0> V0141(0,0)<0;1,0>             /// $31
+    mov (M1_NM, 1) V0144(0,0)<1> V0138(0,0)<0;1,0>                               /// $32
+    add (M1_NM, 1) V0145(0,0)<1> V0132(0,0)<0;1,0> (-)V0143(0,0)<0;1,0>          /// $33
+    mov (M1_NM, 1) V0147(0,0)<1> V0142(0,0)<0;1,0>                               /// $34
+    mov (M1_NM, 1) V0148(0,0)<1> V0149(0,0)<0;1,0>                               /// $35
+    mov (M1_NM, 1) V0150(0,0)<1> V0151(0,0)<0;1,0>                               /// $36
+    mov (M1_NM, 1) V0152(0,0)<1> V0147(0,0)<0;1,0>                               /// $37
+    mov (M1_NM, 1) V0153(0,0)<1> (-)V0133(0,0)<0;1,0>                            /// $38
+    mad (M1_NM, 1) V0154(0,0)<1> V0153(0,0)<0;1,0> V0152(0,0)<0;1,0> V0138(0,0)<0;1,0> /// $39
+    mov (M1_NM, 1) V0155(0,0)<1> (-)V0148(0,0)<0;1,0>                            /// $40
+    mad (M1_NM, 1) V0156(0,0)<1> V0155(0,0)<0;1,0> V0152(0,0)<0;1,0> V0150(0,0)<0;1,0> /// $41
+    add (M1_NM, 1) V0157(0,0)<1> V0154(0,0)<0;1,0> V0156(0,0)<0;1,0>             /// $42
+    mul (M1_NM, 1) V0158(0,0)<1> V0141(0,0)<0;1,0> V0157(0,0)<0;1,0>             /// $43
+    xor (M1_NM, 1) %cr0(0,0)<1> %cr0(0,0)<0;1,0> 0x30:ud                         /// $44
+    mov (M1_NM, 1) V0160(0,0)<1> V0158(0,0)<0;1,0>                               /// $45
+    add (M1_NM, 1) V0161(0,0)<1> V0159(0,0)<0;1,0> V0146(0,0)<0;1,0>             /// $46
+    xor (M1_NM, 1) V0162(0,0)<1> V0127(0,0)<0;1,0> V0128(0,0)<0;1,0>             /// $47
+    mul (M1_NM, 1) V0163(0,0)<1> V0161(0,0)<0;1,0> V0130(0,0)<0;1,0>             /// $48
+    add (M1_NM, 1) V0164(0,0)<1> V0132(0,0)<0;1,0> (-)V0163(0,0)<0;1,0>          /// $49
+    cmp.ge (M1_NM, 1) V0167(0,0)<1> V0166(0,0)<0;1,0> V0134(0,0)<0;1,0>          /// $50
+    add3 (M1_NM, 1) V0168(0,0)<1> V0161(0,0)<0;1,0> V0162(0,0)<0;1,0> (-)V0165(0,0)<0;1,0> /// $51
+    bfn.x96 (M1_NM, 1) V0126(0,0)<1> V0168(0,0)<0;1,0> V0127(0,0)<0;1,0> V0128(0,0)<0;1,0> /// $52
+
+_0_009:
+    LOC 57
+    mul (M1_NM, 1) V0169(0,0)<1> V0126(0,0)<0;1,0> V0124(0,0)<0;1,0>             /// $55
+    add3 (M1_NM, 1) V0170(0,0)<1> V0122(0,0)<0;1,0> V0125(0,0)<0;1,0> (-)V0169(0,0)<0;1,0> /// $56
+    LOC 79
+    shl (M1_NM, 1) V0171(0,0)<1> V0170(0,0)<0;1,0> 0x3:d                         /// $58
+    LOC 83
+    shl (M1_NM, 1) V0172(0,0)<1> V0126(0,0)<0;1,0> 0x9:d                         /// $60
+    mov (M1_NM, 1) V0174(0,0)<1> V0173(0,8)<0;1,0>                               /// $61
+    mov (M1_NM, 1) V0175(0,0)<1> V0174(0,0)<0;1,0>                               /// $62
+    and (M1_NM, 1) V0176(0,0)<1> V0175(0,0)<0;1,0> 0x30:w                        /// $63
+    mov (M1_NM, 1) V0177(0,0)<1> V0178(0,0)<0;1,0>                               /// $64
+    shl (M1_NM, 1) V0179(0,0)<1> V0177(0,0)<0;1,0> 0x5:d                         /// $65
+    and (M1_NM, 1) V0180(0,0)<1> V0179(0,0)<0;1,0> 0x1e0:d                       /// $66
+    mov (M1_NM, 1) V0182(0,0)<1> V0184(0,0)<0;1,0>                               /// $67
+    mov (M1_NM, 1) V0183(0,0)<1> V0184(0,1)<0;1,0>                               /// $68
+    and (M1_NM, 1) V0185(0,0)<1> V0182(0,0)<0;1,0> 0xffffffc0:d                  /// $69
+    mov (M1_NM, 1) V0186(0,0)<1> V0185(0,0)<0;1,0>                               /// $70
+    mov (M1_NM, 1) V0186(0,1)<1> V0183(0,0)<0;1,0>                               /// $71
+    mov (M1_NM, 1) V0188(0,0)<1> V0186(0,0)<0;1,0>                               /// $72
+    mov (M1_NM, 1) V0188(0,1)<1> V0186(0,1)<0;1,0>                               /// $73
+    mov (M1_NM, 1) V0189(0,0)<1> V0181(0,0)<0;1,0>                               /// $74
+    and (M1_NM, 1) V0190(0,0)<1> V0189(0,0)<0;1,0> 0x3f:d                        /// $75
+    shr (M1_NM, 1) V0193(0,0)<1> V0192(0,0)<0;1,0> 0x1:d                         /// $76
+    bfn.xfe (M1_NM, 1) V0194(0,0)<1> V0191(0,0)<0;1,0> V0180(0,0)<0;1,0> V0172(0,0)<0;1,0> /// $77
+    add (M1_NM, 1) V0195(0,0)<1> V0190(0,0)<0;1,0> 0x5fff:w                      /// $78
+    mov (M1_NM, 1) V0196(0,0)<1> V0176(0,0)<0;1,0>                               /// $79
+    mov (M1_NM, 1) V0197(0,0)<1> V0198(0,0)<0;1,0>                               /// $80
+    lsc_load_block2d.ugm.ca.ca (M1, 1)  %null:d16.32x16nn  flat[V0187,V0195,0xFFF,0x5FFF,V0194,V0197] /// $81
+    mov (M1_NM, 1) V0200(0,0)<1> V0202(0,0)<0;1,0>                               /// $82
+    mov (M1_NM, 1) V0201(0,0)<1> V0202(0,1)<0;1,0>                               /// $83
+    and (M1_NM, 1) V0203(0,0)<1> V0200(0,0)<0;1,0> 0xffffffc0:d                  /// $84
+    mov (M1_NM, 1) V0204(0,0)<1> V0203(0,0)<0;1,0>                               /// $85
+    mov (M1_NM, 1) V0204(0,1)<1> V0201(0,0)<0;1,0>                               /// $86
+    mov (M1_NM, 1) V0206(0,0)<1> V0204(0,0)<0;1,0>                               /// $87
+    mov (M1_NM, 1) V0206(0,1)<1> V0204(0,1)<0;1,0>                               /// $88
+    mov (M1_NM, 1) V0207(0,0)<1> V0199(0,0)<0;1,0>                               /// $89
+    and (M1_NM, 1) V0208(0,0)<1> V0207(0,0)<0;1,0> 0x3f:d                        /// $90
+    shr (M1_NM, 1) V0211(0,0)<1> V0210(0,0)<0;1,0> 0x1:d                         /// $91
+    or (M1_NM, 1) V0212(0,0)<1> V0191(0,0)<0;1,0> V0172(0,0)<0;1,0>              /// $92
+    shl (M1_NM, 1) V0213(0,0)<1> V0177(0,0)<0;1,0> 0x4:d                         /// $93
+    and (M1_NM, 1) V0214(0,0)<1> V0213(0,0)<0;1,0> 0x1f0:d                       /// $94
+    add (M1_NM, 1) V0215(0,0)<1> V0208(0,0)<0;1,0> 0x1fff:w                      /// $95
+    add (M1_NM, 1) V0216(0,0)<1> V0212(0,0)<0;1,0> V0214(0,0)<0;1,0>             /// $96
+    mov (M1_NM, 1) V0218(0,0)<1> V0205(0,0)<0;1,0>                               /// $97
+    mov (M1_NM, 1) V0217(0,2)<1> V0215(0,0)<0;1,0>                               /// $98
+    mov (M1_NM, 1) V0217(0,3)<1> 0x3:d                                           /// $99
+    mov (M1_NM, 1) V0217(0,4)<1> 0x1fff:d                                        /// $100
+    mov (M1_NM, 1) V0217(0,5)<1> 0x0:d                                           /// $101
+    mov (M1_NM, 1) V0217(0,6)<1> 0x0:d                                           /// $102
+    mov (M1_NM, 1) V0217(0,7)<1> 0x1070f:d                                       /// $103
+    mov (M1_NM, 1) V0220(0,0)<1> V0187(0,0)<0;1,0>                               /// $104
+    mov (M1_NM, 1) V0219(0,2)<1> V0195(0,0)<0;1,0>                               /// $105
+    mov (M1_NM, 1) V0219(0,3)<1> 0xfff:d                                         /// $106
+    mov (M1_NM, 1) V0219(0,4)<1> 0x5fff:d                                        /// $107
+    mov (M1_NM, 1) V0219(0,5)<1> 0x0:d                                           /// $108
+    mov (M1_NM, 1) V0219(0,6)<1> 0x0:d                                           /// $109
+    mov (M1_NM, 1) V0219(0,7)<1> 0x1f0f:d                                        /// $110
+    LOC 75
+    mov (M1_NM, 1) V0221(0,0)<1> 0x3e0:d                                         /// $112
+    mov (M1_NM, 1) V0222(0,0)<1> 0x3a0:d                                         /// $113
+    mov (M1_NM, 1) V0223(0,0)<1> 0x380:d                                         /// $114
+    mov (M1_NM, 1) V0224(0,0)<1> 0x360:d                                         /// $115
+    mov (M1_NM, 1) V0225(0,0)<1> 0x340:d                                         /// $116
+    mov (M1_NM, 1) V0226(0,0)<1> 0x320:d                                         /// $117
+    mov (M1_NM, 1) V0227(0,0)<1> 0x300:d                                         /// $118
+    mov (M1_NM, 1) V0228(0,0)<1> 0x2e0:d                                         /// $119
+    mov (M1_NM, 1) V0229(0,0)<1> 0x2c0:d                                         /// $120
+    mov (M1_NM, 1) V0230(0,0)<1> 0x2a0:d                                         /// $121
+    mov (M1_NM, 1) V0231(0,0)<1> 0x280:d                                         /// $122
+    mov (M1_NM, 1) V0232(0,0)<1> 0x260:d                                         /// $123
+    mov (M1_NM, 1) V0233(0,0)<1> 0x240:d                                         /// $124
+    mov (M1_NM, 1) V0234(0,0)<1> 0x220:d                                         /// $125
+    mov (M1_NM, 1) V0235(0,0)<1> 0x200:d                                         /// $126
+    mov (M1_NM, 1) V0236(0,0)<1> 0x1e0:d                                         /// $127
+    mov (M1_NM, 1) V0237(0,0)<1> 0x1c0:d                                         /// $128
+    mov (M1_NM, 1) V0238(0,0)<1> 0x1a0:d                                         /// $129
+    mov (M1_NM, 1) V0239(0,0)<1> 0x180:d                                         /// $130
+    mov (M1_NM, 1) V0240(0,0)<1> 0x160:d                                         /// $131
+    mov (M1_NM, 1) V0241(0,0)<1> 0x140:d                                         /// $132
+    mov (M1_NM, 1) V0242(0,0)<1> 0x120:d                                         /// $133
+    mov (M1_NM, 1) V0243(0,0)<1> 0x100:d                                         /// $134
+    mov (M1_NM, 1) V0244(0,0)<1> 0xe0:d                                          /// $135
+    mov (M1_NM, 1) V0245(0,0)<1> 0xc0:d                                          /// $136
+    mov (M1_NM, 1) V0246(0,0)<1> 0xa0:d                                          /// $137
+    mov (M1_NM, 1) V0247(0,0)<1> 0x80:d                                          /// $138
+    mov (M1_NM, 1) V0248(0,0)<1> 0x60:d                                          /// $139
+    mov (M1_NM, 1) V0249(0,0)<1> 0x40:d                                          /// $140
+    mov (M1_NM, 1) V0250(0,0)<1> 0x20:d                                          /// $141
+    mov (M1_NM, 1) V0251(0,0)<1> 0x0:d                                           /// $142
+    mov (M1, 16) V0252(0,0)<1> 0x0:f                                             /// $143
+    mov (M1, 16) V0252(1,0)<1> 0x0:f                                             /// $144
+    mov (M1, 16) V0252(2,0)<1> 0x0:f                                             /// $145
+    mov (M1, 16) V0252(3,0)<1> 0x0:f                                             /// $146
+    mov (M1, 16) V0252(4,0)<1> 0x0:f                                             /// $147
+    mov (M1, 16) V0252(5,0)<1> 0x0:f                                             /// $148
+    mov (M1, 16) V0252(6,0)<1> 0x0:f                                             /// $149
+    mov (M1, 16) V0252(7,0)<1> 0x0:f                                             /// $150
+
+_0_010:
+    LOC 85
+    or (M1_NM, 1) V0253(0,0)<1> V0251(0,0)<0;1,0> 0x40:d                         /// $153
+    LOC 83
+    bfn.xfe (M1_NM, 1) V0254(0,0)<1> V0197(0,0)<0;1,0> V0251(0,0)<0;1,0> V0249(0,0)<0;1,0> /// $155
+    lsc_load_block2d.ugm.ca.ca (M1, 1)  %null:d16.32x16nn  flat[V0187,V0195,0xFFF,0x5FFF,V0194,V0254] /// $156
+    LOC 79
+    or (M1_NM, 1) V0255(0,0)<1> V0251(0,0)<0;1,0> V0209(0,0)<0;1,0>              /// $158
+    or (M1_NM, 1) V0256(0,0)<1> V0251(0,0)<0;1,0> 0x20:d                         /// $159
+    bfn.xfe (M1_NM, 1) V0257(0,0)<1> V0251(0,0)<0;1,0> V0250(0,0)<0;1,0> V0209(0,0)<0;1,0> /// $160
+    mov (M1_NM, 1) V0217(0,5)<1> V0255(0,0)<0;1,0>                               /// $161
+    mov (M1_NM, 1) V0217(0,6)<1> V0171(0,0)<0;1,0>                               /// $162
+    lsc_load_block2d.ugm (M1, 1)  V0054:d16.2x16x8nn  flat[V0217 + (0,0)]        /// $163
+    mov (M1_NM, 1) V0219(0,5)<1> V0216(0,0)<0;1,0>                               /// $164
+    mov (M1_NM, 1) V0219(0,6)<1> V0251(0,0)<0;1,0>                               /// $165
+    lsc_load_block2d.ugm (M1, 1)  V0055:d16.16x32nt  flat[V0219 + (0,0)]         /// $166
+    LOC 83
+    LOC 79
+    LOC 83
+    mov (M1_NM, 1) V0217(0,5)<1> V0257(0,0)<0;1,0>                               /// $170
+    mov (M1_NM, 1) V0217(0,6)<1> V0171(0,0)<0;1,0>                               /// $171
+    lsc_load_block2d.ugm (M1, 1)  V0056:d16.2x16x8nn  flat[V0217 + (0,0)]        /// $172
+    LOC 79
+    mov (M1_NM, 1) V0219(0,5)<1> V0216(0,0)<0;1,0>                               /// $174
+    mov (M1_NM, 1) V0219(0,6)<1> V0256(0,0)<0;1,0>                               /// $175
+    lsc_load_block2d.ugm (M1, 1)  V0057:d16.16x32nt  flat[V0219 + (0,0)]         /// $176
+    LOC 83
+    LOC 79
+    LOC 83
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0055.0 V0258(0,0)                   /// $180
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0055.512 V0258(4,0)                 /// $181
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0057.0 V0259(0,0)                   /// $182
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0057.512 V0259(4,0)                 /// $183
+    LOC 85
+    or (M1_NM, 1) V0260(0,0)<1> V0251(0,0)<0;1,0> 0x80:d                         /// $185
+    LOC 83
+    bfn.xfe (M1_NM, 1) V0261(0,0)<1> V0197(0,0)<0;1,0> V0251(0,0)<0;1,0> V0247(0,0)<0;1,0> /// $187
+    lsc_load_block2d.ugm.ca.ca (M1, 1)  %null:d16.32x16nn  flat[V0187,V0195,0xFFF,0x5FFF,V0194,V0261] /// $188
+    LOC 79
+    bfn.xfe (M1_NM, 1) V0262(0,0)<1> V0251(0,0)<0;1,0> V0249(0,0)<0;1,0> V0209(0,0)<0;1,0> /// $190
+    or (M1_NM, 1) V0263(0,0)<1> V0251(0,0)<0;1,0> 0x60:d                         /// $191
+    bfn.xfe (M1_NM, 1) V0264(0,0)<1> V0251(0,0)<0;1,0> V0248(0,0)<0;1,0> V0209(0,0)<0;1,0> /// $192
+    mov (M1_NM, 1) V0217(0,5)<1> V0262(0,0)<0;1,0>                               /// $193
+    mov (M1_NM, 1) V0217(0,6)<1> V0171(0,0)<0;1,0>                               /// $194
+    lsc_load_block2d.ugm (M1, 1)  V0058:d16.2x16x8nn  flat[V0217 + (0,0)]        /// $195
+    mov (M1_NM, 1) V0219(0,5)<1> V0216(0,0)<0;1,0>                               /// $196
+    mov (M1_NM, 1) V0219(0,6)<1> V0253(0,0)<0;1,0>                               /// $197
+    lsc_load_block2d.ugm (M1, 1)  V0059:d16.16x32nt  flat[V0219 + (0,0)]         /// $198
+    LOC 83
+    LOC 79
+    LOC 83
+    mov (M1_NM, 1) V0217(0,5)<1> V0264(0,0)<0;1,0>                               /// $202
+    mov (M1_NM, 1) V0217(0,6)<1> V0171(0,0)<0;1,0>                               /// $203
+    lsc_load_block2d.ugm (M1, 1)  V0060:d16.2x16x8nn  flat[V0217 + (0,0)]        /// $204
+    LOC 79
+    mov (M1_NM, 1) V0219(0,5)<1> V0216(0,0)<0;1,0>                               /// $206
+    mov (M1_NM, 1) V0219(0,6)<1> V0263(0,0)<0;1,0>                               /// $207
+    lsc_load_block2d.ugm (M1, 1)  V0061:d16.16x32nt  flat[V0219 + (0,0)]         /// $208
+    LOC 83
+    LOC 79
+    LOC 83
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0059.0 V0265(0,0)                   /// $212
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0059.512 V0265(4,0)                 /// $213
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0061.0 V0266(0,0)                   /// $214
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0061.512 V0266(4,0)                 /// $215
+    LOC 85
+    or (M1_NM, 1) V0267(0,0)<1> V0251(0,0)<0;1,0> 0xc0:d                         /// $217
+    LOC 83
+    bfn.xfe (M1_NM, 1) V0268(0,0)<1> V0197(0,0)<0;1,0> V0251(0,0)<0;1,0> V0245(0,0)<0;1,0> /// $219
+    lsc_load_block2d.ugm.ca.ca (M1, 1)  %null:d16.32x16nn  flat[V0187,V0195,0xFFF,0x5FFF,V0194,V0268] /// $220
+    LOC 79
+    bfn.xfe (M1_NM, 1) V0269(0,0)<1> V0251(0,0)<0;1,0> V0247(0,0)<0;1,0> V0209(0,0)<0;1,0> /// $222
+    or (M1_NM, 1) V0270(0,0)<1> V0251(0,0)<0;1,0> 0xa0:d                         /// $223
+    bfn.xfe (M1_NM, 1) V0271(0,0)<1> V0251(0,0)<0;1,0> V0246(0,0)<0;1,0> V0209(0,0)<0;1,0> /// $224
+    mov (M1_NM, 1) V0217(0,5)<1> V0269(0,0)<0;1,0>                               /// $225
+    mov (M1_NM, 1) V0217(0,6)<1> V0171(0,0)<0;1,0>                               /// $226
+    lsc_load_block2d.ugm (M1, 1)  V0062:d16.2x16x8nn  flat[V0217 + (0,0)]        /// $227
+    mov (M1_NM, 1) V0219(0,5)<1> V0216(0,0)<0;1,0>                               /// $228
+    mov (M1_NM, 1) V0219(0,6)<1> V0260(0,0)<0;1,0>                               /// $229
+    lsc_load_block2d.ugm (M1, 1)  V0063:d16.16x32nt  flat[V0219 + (0,0)]         /// $230
+    LOC 83
+    LOC 79
+    LOC 83
+    mov (M1_NM, 1) V0217(0,5)<1> V0271(0,0)<0;1,0>                               /// $234
+    mov (M1_NM, 1) V0217(0,6)<1> V0171(0,0)<0;1,0>                               /// $235
+    lsc_load_block2d.ugm (M1, 1)  V0064:d16.2x16x8nn  flat[V0217 + (0,0)]        /// $236
+    LOC 79
+    mov (M1_NM, 1) V0219(0,5)<1> V0216(0,0)<0;1,0>                               /// $238
+    mov (M1_NM, 1) V0219(0,6)<1> V0270(0,0)<0;1,0>                               /// $239
+    lsc_load_block2d.ugm (M1, 1)  V0065:d16.16x32nt  flat[V0219 + (0,0)]         /// $240
+    LOC 83
+    LOC 79
+    LOC 83
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0063.0 V0272(0,0)                   /// $244
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0063.512 V0272(4,0)                 /// $245
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0065.0 V0273(0,0)                   /// $246
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0065.512 V0273(4,0)                 /// $247
+    LOC 85
+    or (M1_NM, 1) V0274(0,0)<1> V0251(0,0)<0;1,0> 0x100:d                        /// $249
+    LOC 83
+    bfn.xfe (M1_NM, 1) V0275(0,0)<1> V0197(0,0)<0;1,0> V0251(0,0)<0;1,0> V0243(0,0)<0;1,0> /// $251
+    lsc_load_block2d.ugm.ca.ca (M1, 1)  %null:d16.32x16nn  flat[V0187,V0195,0xFFF,0x5FFF,V0194,V0275] /// $252
+    LOC 79
+    bfn.xfe (M1_NM, 1) V0276(0,0)<1> V0251(0,0)<0;1,0> V0245(0,0)<0;1,0> V0209(0,0)<0;1,0> /// $254
+    or (M1_NM, 1) V0277(0,0)<1> V0251(0,0)<0;1,0> 0xe0:d                         /// $255
+    bfn.xfe (M1_NM, 1) V0278(0,0)<1> V0251(0,0)<0;1,0> V0244(0,0)<0;1,0> V0209(0,0)<0;1,0> /// $256
+    mov (M1_NM, 1) V0217(0,5)<1> V0276(0,0)<0;1,0>                               /// $257
+    mov (M1_NM, 1) V0217(0,6)<1> V0171(0,0)<0;1,0>                               /// $258
+    lsc_load_block2d.ugm (M1, 1)  V0066:d16.2x16x8nn  flat[V0217 + (0,0)]        /// $259
+    mov (M1_NM, 1) V0219(0,5)<1> V0216(0,0)<0;1,0>                               /// $260
+    mov (M1_NM, 1) V0219(0,6)<1> V0267(0,0)<0;1,0>                               /// $261
+    lsc_load_block2d.ugm (M1, 1)  V0067:d16.16x32nt  flat[V0219 + (0,0)]         /// $262
+    LOC 83
+    LOC 79
+    LOC 83
+    mov (M1_NM, 1) V0217(0,5)<1> V0278(0,0)<0;1,0>                               /// $266
+    mov (M1_NM, 1) V0217(0,6)<1> V0171(0,0)<0;1,0>                               /// $267
+    lsc_load_block2d.ugm (M1, 1)  V0068:d16.2x16x8nn  flat[V0217 + (0,0)]        /// $268
+    LOC 79
+    mov (M1_NM, 1) V0219(0,5)<1> V0216(0,0)<0;1,0>                               /// $270
+    mov (M1_NM, 1) V0219(0,6)<1> V0277(0,0)<0;1,0>                               /// $271
+    lsc_load_block2d.ugm (M1, 1)  V0069:d16.16x32nt  flat[V0219 + (0,0)]         /// $272
+    LOC 83
+    LOC 79
+    LOC 83
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0067.0 V0279(0,0)                   /// $276
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0067.512 V0279(4,0)                 /// $277
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0069.0 V0280(0,0)                   /// $278
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0069.512 V0280(4,0)                 /// $279
+    LOC 85
+    or (M1_NM, 1) V0281(0,0)<1> V0251(0,0)<0;1,0> 0x140:d                        /// $281
+    LOC 83
+    bfn.xfe (M1_NM, 1) V0282(0,0)<1> V0197(0,0)<0;1,0> V0251(0,0)<0;1,0> V0241(0,0)<0;1,0> /// $283
+    lsc_load_block2d.ugm.ca.ca (M1, 1)  %null:d16.32x16nn  flat[V0187,V0195,0xFFF,0x5FFF,V0194,V0282] /// $284
+    LOC 79
+    bfn.xfe (M1_NM, 1) V0283(0,0)<1> V0251(0,0)<0;1,0> V0243(0,0)<0;1,0> V0209(0,0)<0;1,0> /// $286
+    or (M1_NM, 1) V0284(0,0)<1> V0251(0,0)<0;1,0> 0x120:d                        /// $287
+    bfn.xfe (M1_NM, 1) V0285(0,0)<1> V0251(0,0)<0;1,0> V0242(0,0)<0;1,0> V0209(0,0)<0;1,0> /// $288
+    mov (M1_NM, 1) V0217(0,5)<1> V0283(0,0)<0;1,0>                               /// $289
+    mov (M1_NM, 1) V0217(0,6)<1> V0171(0,0)<0;1,0>                               /// $290
+    lsc_load_block2d.ugm (M1, 1)  V0070:d16.2x16x8nn  flat[V0217 + (0,0)]        /// $291
+    mov (M1_NM, 1) V0219(0,5)<1> V0216(0,0)<0;1,0>                               /// $292
+    mov (M1_NM, 1) V0219(0,6)<1> V0274(0,0)<0;1,0>                               /// $293
+    lsc_load_block2d.ugm (M1, 1)  V0071:d16.16x32nt  flat[V0219 + (0,0)]         /// $294
+    LOC 83
+    LOC 79
+    LOC 83
+    mov (M1_NM, 1) V0217(0,5)<1> V0285(0,0)<0;1,0>                               /// $298
+    mov (M1_NM, 1) V0217(0,6)<1> V0171(0,0)<0;1,0>                               /// $299
+    lsc_load_block2d.ugm (M1, 1)  V0072:d16.2x16x8nn  flat[V0217 + (0,0)]        /// $300
+    LOC 79
+    mov (M1_NM, 1) V0219(0,5)<1> V0216(0,0)<0;1,0>                               /// $302
+    mov (M1_NM, 1) V0219(0,6)<1> V0284(0,0)<0;1,0>                               /// $303
+    lsc_load_block2d.ugm (M1, 1)  V0073:d16.16x32nt  flat[V0219 + (0,0)]         /// $304
+    LOC 83
+    LOC 79
+    LOC 83
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0071.0 V0286(0,0)                   /// $308
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0071.512 V0286(4,0)                 /// $309
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0073.0 V0287(0,0)                   /// $310
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0073.512 V0287(4,0)                 /// $311
+    LOC 85
+    or (M1_NM, 1) V0288(0,0)<1> V0251(0,0)<0;1,0> 0x180:d                        /// $313
+    LOC 83
+    bfn.xfe (M1_NM, 1) V0289(0,0)<1> V0197(0,0)<0;1,0> V0251(0,0)<0;1,0> V0239(0,0)<0;1,0> /// $315
+    lsc_load_block2d.ugm.ca.ca (M1, 1)  %null:d16.32x16nn  flat[V0187,V0195,0xFFF,0x5FFF,V0194,V0289] /// $316
+    LOC 79
+    bfn.xfe (M1_NM, 1) V0290(0,0)<1> V0251(0,0)<0;1,0> V0241(0,0)<0;1,0> V0209(0,0)<0;1,0> /// $318
+    or (M1_NM, 1) V0291(0,0)<1> V0251(0,0)<0;1,0> 0x160:d                        /// $319
+    bfn.xfe (M1_NM, 1) V0292(0,0)<1> V0251(0,0)<0;1,0> V0240(0,0)<0;1,0> V0209(0,0)<0;1,0> /// $320
+    mov (M1_NM, 1) V0217(0,5)<1> V0290(0,0)<0;1,0>                               /// $321
+    mov (M1_NM, 1) V0217(0,6)<1> V0171(0,0)<0;1,0>                               /// $322
+    lsc_load_block2d.ugm (M1, 1)  V0074:d16.2x16x8nn  flat[V0217 + (0,0)]        /// $323
+    mov (M1_NM, 1) V0219(0,5)<1> V0216(0,0)<0;1,0>                               /// $324
+    mov (M1_NM, 1) V0219(0,6)<1> V0281(0,0)<0;1,0>                               /// $325
+    lsc_load_block2d.ugm (M1, 1)  V0075:d16.16x32nt  flat[V0219 + (0,0)]         /// $326
+    LOC 83
+    LOC 79
+    LOC 83
+    mov (M1_NM, 1) V0217(0,5)<1> V0292(0,0)<0;1,0>                               /// $330
+    mov (M1_NM, 1) V0217(0,6)<1> V0171(0,0)<0;1,0>                               /// $331
+    lsc_load_block2d.ugm (M1, 1)  V0076:d16.2x16x8nn  flat[V0217 + (0,0)]        /// $332
+    LOC 79
+    mov (M1_NM, 1) V0219(0,5)<1> V0216(0,0)<0;1,0>                               /// $334
+    mov (M1_NM, 1) V0219(0,6)<1> V0291(0,0)<0;1,0>                               /// $335
+    lsc_load_block2d.ugm (M1, 1)  V0077:d16.16x32nt  flat[V0219 + (0,0)]         /// $336
+    LOC 83
+    LOC 79
+    LOC 83
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0075.0 V0293(0,0)                   /// $340
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0075.512 V0293(4,0)                 /// $341
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0077.0 V0294(0,0)                   /// $342
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0077.512 V0294(4,0)                 /// $343
+    LOC 85
+    or (M1_NM, 1) V0295(0,0)<1> V0251(0,0)<0;1,0> 0x1c0:d                        /// $345
+    LOC 83
+    bfn.xfe (M1_NM, 1) V0296(0,0)<1> V0197(0,0)<0;1,0> V0251(0,0)<0;1,0> V0237(0,0)<0;1,0> /// $347
+    lsc_load_block2d.ugm.ca.ca (M1, 1)  %null:d16.32x16nn  flat[V0187,V0195,0xFFF,0x5FFF,V0194,V0296] /// $348
+    LOC 79
+    bfn.xfe (M1_NM, 1) V0297(0,0)<1> V0251(0,0)<0;1,0> V0239(0,0)<0;1,0> V0209(0,0)<0;1,0> /// $350
+    or (M1_NM, 1) V0298(0,0)<1> V0251(0,0)<0;1,0> 0x1a0:d                        /// $351
+    bfn.xfe (M1_NM, 1) V0299(0,0)<1> V0251(0,0)<0;1,0> V0238(0,0)<0;1,0> V0209(0,0)<0;1,0> /// $352
+    mov (M1_NM, 1) V0217(0,5)<1> V0297(0,0)<0;1,0>                               /// $353
+    mov (M1_NM, 1) V0217(0,6)<1> V0171(0,0)<0;1,0>                               /// $354
+    lsc_load_block2d.ugm (M1, 1)  V0078:d16.2x16x8nn  flat[V0217 + (0,0)]        /// $355
+    mov (M1_NM, 1) V0219(0,5)<1> V0216(0,0)<0;1,0>                               /// $356
+    mov (M1_NM, 1) V0219(0,6)<1> V0288(0,0)<0;1,0>                               /// $357
+    lsc_load_block2d.ugm (M1, 1)  V0079:d16.16x32nt  flat[V0219 + (0,0)]         /// $358
+    LOC 83
+    LOC 79
+    LOC 83
+    mov (M1_NM, 1) V0217(0,5)<1> V0299(0,0)<0;1,0>                               /// $362
+    mov (M1_NM, 1) V0217(0,6)<1> V0171(0,0)<0;1,0>                               /// $363
+    lsc_load_block2d.ugm (M1, 1)  V0080:d16.2x16x8nn  flat[V0217 + (0,0)]        /// $364
+    LOC 79
+    mov (M1_NM, 1) V0219(0,5)<1> V0216(0,0)<0;1,0>                               /// $366
+    mov (M1_NM, 1) V0219(0,6)<1> V0298(0,0)<0;1,0>                               /// $367
+    lsc_load_block2d.ugm (M1, 1)  V0081:d16.16x32nt  flat[V0219 + (0,0)]         /// $368
+    LOC 83
+    LOC 79
+    LOC 83
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0079.0 V0300(0,0)                   /// $372
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0079.512 V0300(4,0)                 /// $373
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0081.0 V0301(0,0)                   /// $374
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0081.512 V0301(4,0)                 /// $375
+    LOC 85
+    or (M1_NM, 1) V0302(0,0)<1> V0251(0,0)<0;1,0> 0x200:d                        /// $377
+    LOC 83
+    bfn.xfe (M1_NM, 1) V0303(0,0)<1> V0197(0,0)<0;1,0> V0251(0,0)<0;1,0> V0235(0,0)<0;1,0> /// $379
+    lsc_load_block2d.ugm.ca.ca (M1, 1)  %null:d16.32x16nn  flat[V0187,V0195,0xFFF,0x5FFF,V0194,V0303] /// $380
+    LOC 79
+    bfn.xfe (M1_NM, 1) V0304(0,0)<1> V0251(0,0)<0;1,0> V0237(0,0)<0;1,0> V0209(0,0)<0;1,0> /// $382
+    or (M1_NM, 1) V0305(0,0)<1> V0251(0,0)<0;1,0> 0x1e0:d                        /// $383
+    bfn.xfe (M1_NM, 1) V0306(0,0)<1> V0251(0,0)<0;1,0> V0236(0,0)<0;1,0> V0209(0,0)<0;1,0> /// $384
+    mov (M1_NM, 1) V0217(0,5)<1> V0304(0,0)<0;1,0>                               /// $385
+    mov (M1_NM, 1) V0217(0,6)<1> V0171(0,0)<0;1,0>                               /// $386
+    lsc_load_block2d.ugm (M1, 1)  V0082:d16.2x16x8nn  flat[V0217 + (0,0)]        /// $387
+    mov (M1_NM, 1) V0219(0,5)<1> V0216(0,0)<0;1,0>                               /// $388
+    mov (M1_NM, 1) V0219(0,6)<1> V0295(0,0)<0;1,0>                               /// $389
+    lsc_load_block2d.ugm (M1, 1)  V0083:d16.16x32nt  flat[V0219 + (0,0)]         /// $390
+    LOC 83
+    LOC 79
+    LOC 83
+    mov (M1_NM, 1) V0217(0,5)<1> V0306(0,0)<0;1,0>                               /// $394
+    mov (M1_NM, 1) V0217(0,6)<1> V0171(0,0)<0;1,0>                               /// $395
+    lsc_load_block2d.ugm (M1, 1)  V0084:d16.2x16x8nn  flat[V0217 + (0,0)]        /// $396
+    LOC 79
+    mov (M1_NM, 1) V0219(0,5)<1> V0216(0,0)<0;1,0>                               /// $398
+    mov (M1_NM, 1) V0219(0,6)<1> V0305(0,0)<0;1,0>                               /// $399
+    lsc_load_block2d.ugm (M1, 1)  V0085:d16.16x32nt  flat[V0219 + (0,0)]         /// $400
+    LOC 83
+    LOC 79
+    LOC 83
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0083.0 V0307(0,0)                   /// $404
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0083.512 V0307(4,0)                 /// $405
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0085.0 V0308(0,0)                   /// $406
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0085.512 V0308(4,0)                 /// $407
+    LOC 85
+    or (M1_NM, 1) V0309(0,0)<1> V0251(0,0)<0;1,0> 0x240:d                        /// $409
+    LOC 83
+    bfn.xfe (M1_NM, 1) V0310(0,0)<1> V0197(0,0)<0;1,0> V0251(0,0)<0;1,0> V0233(0,0)<0;1,0> /// $411
+    lsc_load_block2d.ugm.ca.ca (M1, 1)  %null:d16.32x16nn  flat[V0187,V0195,0xFFF,0x5FFF,V0194,V0310] /// $412
+    LOC 79
+    bfn.xfe (M1_NM, 1) V0311(0,0)<1> V0251(0,0)<0;1,0> V0235(0,0)<0;1,0> V0209(0,0)<0;1,0> /// $414
+    or (M1_NM, 1) V0312(0,0)<1> V0251(0,0)<0;1,0> 0x220:d                        /// $415
+    bfn.xfe (M1_NM, 1) V0313(0,0)<1> V0251(0,0)<0;1,0> V0234(0,0)<0;1,0> V0209(0,0)<0;1,0> /// $416
+    mov (M1_NM, 1) V0217(0,5)<1> V0311(0,0)<0;1,0>                               /// $417
+    mov (M1_NM, 1) V0217(0,6)<1> V0171(0,0)<0;1,0>                               /// $418
+    lsc_load_block2d.ugm (M1, 1)  V0086:d16.2x16x8nn  flat[V0217 + (0,0)]        /// $419
+    mov (M1_NM, 1) V0219(0,5)<1> V0216(0,0)<0;1,0>                               /// $420
+    mov (M1_NM, 1) V0219(0,6)<1> V0302(0,0)<0;1,0>                               /// $421
+    lsc_load_block2d.ugm (M1, 1)  V0087:d16.16x32nt  flat[V0219 + (0,0)]         /// $422
+    LOC 83
+    LOC 79
+    LOC 83
+    mov (M1_NM, 1) V0217(0,5)<1> V0313(0,0)<0;1,0>                               /// $426
+    mov (M1_NM, 1) V0217(0,6)<1> V0171(0,0)<0;1,0>                               /// $427
+    lsc_load_block2d.ugm (M1, 1)  V0088:d16.2x16x8nn  flat[V0217 + (0,0)]        /// $428
+    LOC 79
+    mov (M1_NM, 1) V0219(0,5)<1> V0216(0,0)<0;1,0>                               /// $430
+    mov (M1_NM, 1) V0219(0,6)<1> V0312(0,0)<0;1,0>                               /// $431
+    lsc_load_block2d.ugm (M1, 1)  V0089:d16.16x32nt  flat[V0219 + (0,0)]         /// $432
+    LOC 83
+    LOC 79
+    LOC 83
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0087.0 V0314(0,0)                   /// $436
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0087.512 V0314(4,0)                 /// $437
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0089.0 V0315(0,0)                   /// $438
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0089.512 V0315(4,0)                 /// $439
+    LOC 85
+    or (M1_NM, 1) V0316(0,0)<1> V0251(0,0)<0;1,0> 0x280:d                        /// $441
+    LOC 83
+    bfn.xfe (M1_NM, 1) V0317(0,0)<1> V0197(0,0)<0;1,0> V0251(0,0)<0;1,0> V0231(0,0)<0;1,0> /// $443
+    lsc_load_block2d.ugm.ca.ca (M1, 1)  %null:d16.32x16nn  flat[V0187,V0195,0xFFF,0x5FFF,V0194,V0317] /// $444
+    LOC 79
+    bfn.xfe (M1_NM, 1) V0318(0,0)<1> V0251(0,0)<0;1,0> V0233(0,0)<0;1,0> V0209(0,0)<0;1,0> /// $446
+    or (M1_NM, 1) V0319(0,0)<1> V0251(0,0)<0;1,0> 0x260:d                        /// $447
+    bfn.xfe (M1_NM, 1) V0320(0,0)<1> V0251(0,0)<0;1,0> V0232(0,0)<0;1,0> V0209(0,0)<0;1,0> /// $448
+    mov (M1_NM, 1) V0217(0,5)<1> V0318(0,0)<0;1,0>                               /// $449
+    mov (M1_NM, 1) V0217(0,6)<1> V0171(0,0)<0;1,0>                               /// $450
+    lsc_load_block2d.ugm (M1, 1)  V0090:d16.2x16x8nn  flat[V0217 + (0,0)]        /// $451
+    mov (M1_NM, 1) V0219(0,5)<1> V0216(0,0)<0;1,0>                               /// $452
+    mov (M1_NM, 1) V0219(0,6)<1> V0309(0,0)<0;1,0>                               /// $453
+    lsc_load_block2d.ugm (M1, 1)  V0091:d16.16x32nt  flat[V0219 + (0,0)]         /// $454
+    LOC 83
+    LOC 79
+    LOC 83
+    mov (M1_NM, 1) V0217(0,5)<1> V0320(0,0)<0;1,0>                               /// $458
+    mov (M1_NM, 1) V0217(0,6)<1> V0171(0,0)<0;1,0>                               /// $459
+    lsc_load_block2d.ugm (M1, 1)  V0092:d16.2x16x8nn  flat[V0217 + (0,0)]        /// $460
+    LOC 79
+    mov (M1_NM, 1) V0219(0,5)<1> V0216(0,0)<0;1,0>                               /// $462
+    mov (M1_NM, 1) V0219(0,6)<1> V0319(0,0)<0;1,0>                               /// $463
+    lsc_load_block2d.ugm (M1, 1)  V0093:d16.16x32nt  flat[V0219 + (0,0)]         /// $464
+    LOC 83
+    LOC 79
+    LOC 83
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0091.0 V0321(0,0)                   /// $468
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0091.512 V0321(4,0)                 /// $469
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0093.0 V0322(0,0)                   /// $470
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0093.512 V0322(4,0)                 /// $471
+    LOC 85
+    or (M1_NM, 1) V0323(0,0)<1> V0251(0,0)<0;1,0> 0x2c0:d                        /// $473
+    LOC 83
+    bfn.xfe (M1_NM, 1) V0324(0,0)<1> V0197(0,0)<0;1,0> V0251(0,0)<0;1,0> V0229(0,0)<0;1,0> /// $475
+    lsc_load_block2d.ugm.ca.ca (M1, 1)  %null:d16.32x16nn  flat[V0187,V0195,0xFFF,0x5FFF,V0194,V0324] /// $476
+    LOC 79
+    bfn.xfe (M1_NM, 1) V0325(0,0)<1> V0251(0,0)<0;1,0> V0231(0,0)<0;1,0> V0209(0,0)<0;1,0> /// $478
+    or (M1_NM, 1) V0326(0,0)<1> V0251(0,0)<0;1,0> 0x2a0:d                        /// $479
+    bfn.xfe (M1_NM, 1) V0327(0,0)<1> V0251(0,0)<0;1,0> V0230(0,0)<0;1,0> V0209(0,0)<0;1,0> /// $480
+    mov (M1_NM, 1) V0217(0,5)<1> V0325(0,0)<0;1,0>                               /// $481
+    mov (M1_NM, 1) V0217(0,6)<1> V0171(0,0)<0;1,0>                               /// $482
+    lsc_load_block2d.ugm (M1, 1)  V0094:d16.2x16x8nn  flat[V0217 + (0,0)]        /// $483
+    mov (M1_NM, 1) V0219(0,5)<1> V0216(0,0)<0;1,0>                               /// $484
+    mov (M1_NM, 1) V0219(0,6)<1> V0316(0,0)<0;1,0>                               /// $485
+    lsc_load_block2d.ugm (M1, 1)  V0095:d16.16x32nt  flat[V0219 + (0,0)]         /// $486
+    LOC 83
+    LOC 79
+    LOC 83
+    mov (M1_NM, 1) V0217(0,5)<1> V0327(0,0)<0;1,0>                               /// $490
+    mov (M1_NM, 1) V0217(0,6)<1> V0171(0,0)<0;1,0>                               /// $491
+    lsc_load_block2d.ugm (M1, 1)  V0096:d16.2x16x8nn  flat[V0217 + (0,0)]        /// $492
+    LOC 79
+    mov (M1_NM, 1) V0219(0,5)<1> V0216(0,0)<0;1,0>                               /// $494
+    mov (M1_NM, 1) V0219(0,6)<1> V0326(0,0)<0;1,0>                               /// $495
+    lsc_load_block2d.ugm (M1, 1)  V0097:d16.16x32nt  flat[V0219 + (0,0)]         /// $496
+    LOC 83
+    LOC 79
+    LOC 83
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0095.0 V0328(0,0)                   /// $500
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0095.512 V0328(4,0)                 /// $501
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0097.0 V0329(0,0)                   /// $502
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0097.512 V0329(4,0)                 /// $503
+    LOC 85
+    or (M1_NM, 1) V0330(0,0)<1> V0251(0,0)<0;1,0> 0x300:d                        /// $505
+    LOC 83
+    bfn.xfe (M1_NM, 1) V0331(0,0)<1> V0197(0,0)<0;1,0> V0251(0,0)<0;1,0> V0227(0,0)<0;1,0> /// $507
+    lsc_load_block2d.ugm.ca.ca (M1, 1)  %null:d16.32x16nn  flat[V0187,V0195,0xFFF,0x5FFF,V0194,V0331] /// $508
+    LOC 79
+    bfn.xfe (M1_NM, 1) V0332(0,0)<1> V0251(0,0)<0;1,0> V0229(0,0)<0;1,0> V0209(0,0)<0;1,0> /// $510
+    or (M1_NM, 1) V0333(0,0)<1> V0251(0,0)<0;1,0> 0x2e0:d                        /// $511
+    bfn.xfe (M1_NM, 1) V0334(0,0)<1> V0251(0,0)<0;1,0> V0228(0,0)<0;1,0> V0209(0,0)<0;1,0> /// $512
+    mov (M1_NM, 1) V0217(0,5)<1> V0332(0,0)<0;1,0>                               /// $513
+    mov (M1_NM, 1) V0217(0,6)<1> V0171(0,0)<0;1,0>                               /// $514
+    lsc_load_block2d.ugm (M1, 1)  V0098:d16.2x16x8nn  flat[V0217 + (0,0)]        /// $515
+    mov (M1_NM, 1) V0219(0,5)<1> V0216(0,0)<0;1,0>                               /// $516
+    mov (M1_NM, 1) V0219(0,6)<1> V0323(0,0)<0;1,0>                               /// $517
+    lsc_load_block2d.ugm (M1, 1)  V0099:d16.16x32nt  flat[V0219 + (0,0)]         /// $518
+    LOC 83
+    LOC 79
+    LOC 83
+    mov (M1_NM, 1) V0217(0,5)<1> V0334(0,0)<0;1,0>                               /// $522
+    mov (M1_NM, 1) V0217(0,6)<1> V0171(0,0)<0;1,0>                               /// $523
+    lsc_load_block2d.ugm (M1, 1)  V0100:d16.2x16x8nn  flat[V0217 + (0,0)]        /// $524
+    LOC 79
+    mov (M1_NM, 1) V0219(0,5)<1> V0216(0,0)<0;1,0>                               /// $526
+    mov (M1_NM, 1) V0219(0,6)<1> V0333(0,0)<0;1,0>                               /// $527
+    lsc_load_block2d.ugm (M1, 1)  V0101:d16.16x32nt  flat[V0219 + (0,0)]         /// $528
+    LOC 83
+    LOC 79
+    LOC 83
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0099.0 V0335(0,0)                   /// $532
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0099.512 V0335(4,0)                 /// $533
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0101.0 V0336(0,0)                   /// $534
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0101.512 V0336(4,0)                 /// $535
+    LOC 85
+    or (M1_NM, 1) V0337(0,0)<1> V0251(0,0)<0;1,0> 0x340:d                        /// $537
+    LOC 83
+    bfn.xfe (M1_NM, 1) V0338(0,0)<1> V0197(0,0)<0;1,0> V0251(0,0)<0;1,0> V0225(0,0)<0;1,0> /// $539
+    lsc_load_block2d.ugm.ca.ca (M1, 1)  %null:d16.32x16nn  flat[V0187,V0195,0xFFF,0x5FFF,V0194,V0338] /// $540
+    LOC 79
+    bfn.xfe (M1_NM, 1) V0339(0,0)<1> V0251(0,0)<0;1,0> V0227(0,0)<0;1,0> V0209(0,0)<0;1,0> /// $542
+    or (M1_NM, 1) V0340(0,0)<1> V0251(0,0)<0;1,0> 0x320:d                        /// $543
+    bfn.xfe (M1_NM, 1) V0341(0,0)<1> V0251(0,0)<0;1,0> V0226(0,0)<0;1,0> V0209(0,0)<0;1,0> /// $544
+    mov (M1_NM, 1) V0217(0,5)<1> V0339(0,0)<0;1,0>                               /// $545
+    mov (M1_NM, 1) V0217(0,6)<1> V0171(0,0)<0;1,0>                               /// $546
+    lsc_load_block2d.ugm (M1, 1)  V0102:d16.2x16x8nn  flat[V0217 + (0,0)]        /// $547
+    mov (M1_NM, 1) V0219(0,5)<1> V0216(0,0)<0;1,0>                               /// $548
+    mov (M1_NM, 1) V0219(0,6)<1> V0330(0,0)<0;1,0>                               /// $549
+    lsc_load_block2d.ugm (M1, 1)  V0103:d16.16x32nt  flat[V0219 + (0,0)]         /// $550
+    LOC 83
+    LOC 79
+    LOC 83
+    mov (M1_NM, 1) V0217(0,5)<1> V0341(0,0)<0;1,0>                               /// $554
+    mov (M1_NM, 1) V0217(0,6)<1> V0171(0,0)<0;1,0>                               /// $555
+    lsc_load_block2d.ugm (M1, 1)  V0104:d16.2x16x8nn  flat[V0217 + (0,0)]        /// $556
+    LOC 79
+    mov (M1_NM, 1) V0219(0,5)<1> V0216(0,0)<0;1,0>                               /// $558
+    mov (M1_NM, 1) V0219(0,6)<1> V0340(0,0)<0;1,0>                               /// $559
+    lsc_load_block2d.ugm (M1, 1)  V0105:d16.16x32nt  flat[V0219 + (0,0)]         /// $560
+    LOC 83
+    LOC 79
+    LOC 83
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0103.0 V0342(0,0)                   /// $564
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0103.512 V0342(4,0)                 /// $565
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0105.0 V0343(0,0)                   /// $566
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0105.512 V0343(4,0)                 /// $567
+    LOC 85
+    or (M1_NM, 1) V0344(0,0)<1> V0251(0,0)<0;1,0> 0x380:d                        /// $569
+    LOC 83
+    bfn.xfe (M1_NM, 1) V0345(0,0)<1> V0197(0,0)<0;1,0> V0251(0,0)<0;1,0> V0223(0,0)<0;1,0> /// $571
+    lsc_load_block2d.ugm.ca.ca (M1, 1)  %null:d16.32x16nn  flat[V0187,V0195,0xFFF,0x5FFF,V0194,V0345] /// $572
+    LOC 79
+    bfn.xfe (M1_NM, 1) V0346(0,0)<1> V0251(0,0)<0;1,0> V0225(0,0)<0;1,0> V0209(0,0)<0;1,0> /// $574
+    or (M1_NM, 1) V0347(0,0)<1> V0251(0,0)<0;1,0> 0x360:d                        /// $575
+    bfn.xfe (M1_NM, 1) V0348(0,0)<1> V0251(0,0)<0;1,0> V0224(0,0)<0;1,0> V0209(0,0)<0;1,0> /// $576
+    mov (M1_NM, 1) V0217(0,5)<1> V0346(0,0)<0;1,0>                               /// $577
+    mov (M1_NM, 1) V0217(0,6)<1> V0171(0,0)<0;1,0>                               /// $578
+    lsc_load_block2d.ugm (M1, 1)  V0106:d16.2x16x8nn  flat[V0217 + (0,0)]        /// $579
+    mov (M1_NM, 1) V0219(0,5)<1> V0216(0,0)<0;1,0>                               /// $580
+    mov (M1_NM, 1) V0219(0,6)<1> V0337(0,0)<0;1,0>                               /// $581
+    lsc_load_block2d.ugm (M1, 1)  V0107:d16.16x32nt  flat[V0219 + (0,0)]         /// $582
+    LOC 83
+    LOC 79
+    LOC 83
+    mov (M1_NM, 1) V0217(0,5)<1> V0348(0,0)<0;1,0>                               /// $586
+    mov (M1_NM, 1) V0217(0,6)<1> V0171(0,0)<0;1,0>                               /// $587
+    lsc_load_block2d.ugm (M1, 1)  V0108:d16.2x16x8nn  flat[V0217 + (0,0)]        /// $588
+    LOC 79
+    mov (M1_NM, 1) V0219(0,5)<1> V0216(0,0)<0;1,0>                               /// $590
+    mov (M1_NM, 1) V0219(0,6)<1> V0347(0,0)<0;1,0>                               /// $591
+    lsc_load_block2d.ugm (M1, 1)  V0109:d16.16x32nt  flat[V0219 + (0,0)]         /// $592
+    LOC 83
+    LOC 79
+    LOC 83
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0107.0 V0349(0,0)                   /// $596
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0107.512 V0349(4,0)                 /// $597
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0109.0 V0350(0,0)                   /// $598
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0109.512 V0350(4,0)                 /// $599
+    LOC 85
+    or (M1_NM, 1) V0351(0,0)<1> V0251(0,0)<0;1,0> 0x3c0:d                        /// $601
+    LOC 83
+    or (M1_NM, 1) V0352(0,0)<1> V0197(0,0)<0;1,0> V0351(0,0)<0;1,0>              /// $603
+    lsc_load_block2d.ugm.ca.ca (M1, 1)  %null:d16.32x16nn  flat[V0187,V0195,0xFFF,0x5FFF,V0194,V0352] /// $604
+    LOC 79
+    bfn.xfe (M1_NM, 1) V0353(0,0)<1> V0251(0,0)<0;1,0> V0223(0,0)<0;1,0> V0209(0,0)<0;1,0> /// $606
+    or (M1_NM, 1) V0354(0,0)<1> V0251(0,0)<0;1,0> 0x3a0:d                        /// $607
+    bfn.xfe (M1_NM, 1) V0355(0,0)<1> V0251(0,0)<0;1,0> V0222(0,0)<0;1,0> V0209(0,0)<0;1,0> /// $608
+    mov (M1_NM, 1) V0217(0,5)<1> V0353(0,0)<0;1,0>                               /// $609
+    mov (M1_NM, 1) V0217(0,6)<1> V0171(0,0)<0;1,0>                               /// $610
+    lsc_load_block2d.ugm (M1, 1)  V0110:d16.2x16x8nn  flat[V0217 + (0,0)]        /// $611
+    mov (M1_NM, 1) V0219(0,5)<1> V0216(0,0)<0;1,0>                               /// $612
+    mov (M1_NM, 1) V0219(0,6)<1> V0344(0,0)<0;1,0>                               /// $613
+    lsc_load_block2d.ugm (M1, 1)  V0111:d16.16x32nt  flat[V0219 + (0,0)]         /// $614
+    LOC 83
+    LOC 79
+    LOC 83
+    mov (M1_NM, 1) V0217(0,5)<1> V0355(0,0)<0;1,0>                               /// $618
+    mov (M1_NM, 1) V0217(0,6)<1> V0171(0,0)<0;1,0>                               /// $619
+    lsc_load_block2d.ugm (M1, 1)  V0112:d16.2x16x8nn  flat[V0217 + (0,0)]        /// $620
+    LOC 79
+    mov (M1_NM, 1) V0219(0,5)<1> V0216(0,0)<0;1,0>                               /// $622
+    mov (M1_NM, 1) V0219(0,6)<1> V0354(0,0)<0;1,0>                               /// $623
+    lsc_load_block2d.ugm (M1, 1)  V0113:d16.16x32nt  flat[V0219 + (0,0)]         /// $624
+    LOC 83
+    LOC 79
+    LOC 83
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0111.0 V0356(0,0)                   /// $628
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0111.512 V0356(4,0)                 /// $629
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0113.0 V0357(0,0)                   /// $630
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0113.512 V0357(4,0)                 /// $631
+    LOC 85
+    add (M1_NM, 1) V0358(0,0)<1> V0251(0,0)<0;1,0> 0x400:w                       /// $633
+    LOC 83
+    or (M1_NM, 1) V0359(0,0)<1> V0197(0,0)<0;1,0> V0358(0,0)<0;1,0>              /// $635
+    lsc_load_block2d.ugm.ca.ca (M1, 1)  %null:d16.32x16nn  flat[V0187,V0195,0xFFF,0x5FFF,V0194,V0359] /// $636
+    LOC 79
+    or (M1_NM, 1) V0360(0,0)<1> V0351(0,0)<0;1,0> V0209(0,0)<0;1,0>              /// $638
+    or (M1_NM, 1) V0361(0,0)<1> V0251(0,0)<0;1,0> 0x3e0:d                        /// $639
+    bfn.xfe (M1_NM, 1) V0362(0,0)<1> V0251(0,0)<0;1,0> V0221(0,0)<0;1,0> V0209(0,0)<0;1,0> /// $640
+    mov (M1_NM, 1) V0217(0,5)<1> V0360(0,0)<0;1,0>                               /// $641
+    mov (M1_NM, 1) V0217(0,6)<1> V0171(0,0)<0;1,0>                               /// $642
+    lsc_load_block2d.ugm (M1, 1)  V0114:d16.2x16x8nn  flat[V0217 + (0,0)]        /// $643
+    mov (M1_NM, 1) V0219(0,5)<1> V0216(0,0)<0;1,0>                               /// $644
+    mov (M1_NM, 1) V0219(0,6)<1> V0351(0,0)<0;1,0>                               /// $645
+    lsc_load_block2d.ugm (M1, 1)  V0115:d16.16x32nt  flat[V0219 + (0,0)]         /// $646
+    LOC 83
+    LOC 79
+    LOC 83
+    mov (M1_NM, 1) V0217(0,5)<1> V0362(0,0)<0;1,0>                               /// $650
+    mov (M1_NM, 1) V0217(0,6)<1> V0171(0,0)<0;1,0>                               /// $651
+    lsc_load_block2d.ugm (M1, 1)  V0116:d16.2x16x8nn  flat[V0217 + (0,0)]        /// $652
+    LOC 79
+    mov (M1_NM, 1) V0219(0,5)<1> V0216(0,0)<0;1,0>                               /// $654
+    mov (M1_NM, 1) V0219(0,6)<1> V0361(0,0)<0;1,0>                               /// $655
+    lsc_load_block2d.ugm (M1, 1)  V0117:d16.16x32nt  flat[V0219 + (0,0)]         /// $656
+    LOC 83
+    LOC 79
+    LOC 83
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0115.0 V0363(0,0)                   /// $660
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0115.512 V0363(4,0)                 /// $661
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0117.0 V0364(0,0)                   /// $662
+    dpas.bf.bf.8.8 (M1, 16) V0252.0 V0252.0 V0117.512 V0364(4,0)                 /// $663
+    LOC 75
+    cmp.lt (M1_NM, 16) P2 V0365(0,0)<0;1,0> 0xfc0:ud                             /// $665
+    (!P2) goto (M1, 1) _0_011                                                    /// $666
+
+_0_012:
+    mov (M1_NM, 1) V0251(0,0)<1> V0358(0,0)<0;1,0>                               /// $668
+    goto (M1, 1) _0_010                                                          /// $669
+
+_0_011:
+    LOC 90
+    and (M1, 16) V0366(0,0)<1> V0040(0,0)<1;1,0> 0x200:w                         /// $672
+    cmp.eq (M1, 16) P3 V0366(0,0)<1;1,0> 0x0:w                                   /// $673
+    (P3) sel (M1, 16) V0367(0,0)<1> V0171(0,0)<0;1,0> 0x4:d                      /// $674
+    mov (M1_NM, 1) V0370(0,0)<1> V0372(0,0)<0;1,0>                               /// $675
+    mov (M1_NM, 1) V0371(0,0)<1> V0372(0,1)<0;1,0>                               /// $676
+    and (M1_NM, 1) V0373(0,0)<1> V0370(0,0)<0;1,0> 0xffffffc0:d                  /// $677
+    mov (M1_NM, 1) V0374(0,0)<1> V0373(0,0)<0;1,0>                               /// $678
+    mov (M1_NM, 1) V0374(0,1)<1> V0371(0,0)<0;1,0>                               /// $679
+    mov (M1_NM, 1) V0376(0,0)<1> V0374(0,0)<0;1,0>                               /// $680
+    mov (M1_NM, 1) V0376(0,1)<1> V0374(0,1)<0;1,0>                               /// $681
+    mov (M1_NM, 1) V0377(0,0)<1> V0369(0,0)<0;1,0>                               /// $682
+    and (M1_NM, 1) V0378(0,0)<1> V0377(0,0)<0;1,0> 0x3f:d                        /// $683
+    shr (M1_NM, 1) V0381(0,0)<1> V0380(0,0)<0;1,0> 0x2:d                         /// $684
+    bfn.xfe (M1_NM, 1) V0382(0,0)<1> V0379(0,0)<0;1,0> V0214(0,0)<0;1,0> V0172(0,0)<0;1,0> /// $685
+    add (M1_NM, 1) V0383(0,0)<1> V0378(0,0)<0;1,0> 0xbfff:uw                     /// $686
+    lsc_store_block2d.ugm (M1, 1)  flat[V0375,V0383,0x3,0xBFFF,V0382,V0367]  V0368:d32.16x8nn /// $687
+    LOC 38
+    ret (M1, 1)                                                                  /// $689
+
+//Platform: XE2
+//Build option: "-emitLocation -enableCoalesceScalarMoves -supportLSCImmScale 0 -samplerHeaderWA -enablePreemptionR0Only -hasRNEandDenorm -noStitchExternFunc -useInlineData -emitCrossThreadOffR0Reloc -TotalGRFNum 128 -abortOnSpill 4 -enableBCR -enableBundleCR 3 -freqBasedSpillCost 8 -freqBasedSpillCostFunc 1 -boundsChecking -presched-rp 100 -nodpsendreorder -SBIDDepLoc -PVCSendWARWA -output -binary -dumpcommonisa -dumpcombinedcisa -dumpvisa -printHexFloatInAsm -noverifyCISA -enableHalfLSC -partialInt64 -activeThreadsOnlyBarrier -generateDebugInfo -hashmovs 1615620884 1561956450 -hashmovs1 0 1 "

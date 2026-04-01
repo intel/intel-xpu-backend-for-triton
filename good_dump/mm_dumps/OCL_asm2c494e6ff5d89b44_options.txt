@@ -1,0 +1,1 @@
+ -cl-intel-128-GRF-per-thread
