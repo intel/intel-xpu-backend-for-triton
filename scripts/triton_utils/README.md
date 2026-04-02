@@ -216,11 +216,100 @@ triton-utils compare --r <reports_folder_1> --r2 <reports_folder_2> --tests-with
 #### Additional options
 
 ```bash
+# Sort by a specific column (format: <metric>.<source>)
+--sort-by passed.r1       # Sort by passed count in first report (descending)
+--sort-by time.delta      # Sort by time difference ("delta" is an alias for "Δ")
+--sort-by failed.r2       # Sort by failed count in second report
+
+# Filter rows by test presence
+--compare-scope any       # Show all tests (default)
+--compare-scope both      # Only tests present in both reports
+--compare-scope r1-only   # Only tests present in first report but not second
+--compare-scope r2-only   # Only tests present in second report but not first
+
+# Minify displayed test names (combinable, only effective with --level test)
+--omit-testsuite-name     # Remove testsuite prefix (e.g., "language::")
+--omit-test-module-name   # Remove module path (e.g., "python/test/.../test_core.py::")
+--omit-test-class-name    # Remove class name (e.g., "TestGraphXPU::")
+
 # Display full test names without truncation
 --long-names
+
+# Pretty print (accepted for consistency with stats mode, no-op for compare)
+--pretty-print
 ```
 
+#### Available sort-by values
+
+The `--sort-by` option accepts values in `<metric>.<source>` format where:
+- **metric**: `passed`, `failed`, `skipped`, `xfailed`, `time`
+- **source**: `r1` (first report), `r2` (second report), `Δ` or `delta` (difference), `%Δ` or `%delta` (percentage change, time only)
+
+Default: `name` (alphabetical sort by test name).
+
+**Note:** When sorting by a column other than `name`, testsuite group headers are replaced by inline `<testsuite>::` prefixes in the test names to preserve sort order.
+
 This mode supports all filtering and merging options from `pass_rate` mode.
+
+### 6. Download wheels from CI
+
+Download wheel artifacts from GitHub Actions CI runs. Supports filtering by wheel set, Python version, and workflow presets.
+
+#### Basic usage
+
+```bash
+# Download all nightly wheels for current Python version
+triton-utils wheels -D ./wheels
+
+# Download only PyTorch-related wheels
+triton-utils wheels -D ./wheels --wheel-set torch
+
+# Download benchmarks wheel from benchmarks workflow
+triton-utils wheels --latest-wf-run benchmarks -D ./wheels --wheel-set bench
+
+# Download from a specific run ID
+triton-utils wheels --run 12345678 -D ./wheels --wheel-set torch
+
+# Download wheels for all Python versions
+triton-utils wheels --download-for-all-pythons -D ./wheels
+```
+
+#### Wheel sets
+
+Use `--wheel-set` (repeatable) to filter by predefined wheel sets:
+
+| Preset | Packages |
+|--------|----------|
+| `torch` | torch, torchvision, torchaudio, timm |
+| `triton` | triton |
+| `bench` | triton_kernels_benchmark |
+| `pti` | intel_pti |
+
+#### Workflow presets
+
+Use `--latest-wf-run` to select a workflow by preset name (default: `nightly`):
+
+| Preset | Workflow |
+|--------|----------|
+| `nightly` | `nightly-wheels.yml` |
+| `benchmarks` | `build-benchmarks-wheel.yml` |
+| `build-test` | `build-test-reusable.yml` |
+| `wheels` | `wheels.yml` |
+| `wheels-triton` | `wheels-triton.yml` |
+| `wheels-pytorch` | `wheels-pytorch.yml` |
+
+#### Notes
+
+- Default repo is `intel/intel-xpu-backend-for-triton`. To change use `--repo <repo_org/repo_name>`.
+- Default branch is `main`. To change use `--branch <branch_name>`.
+- This command only downloads wheels. Installation, validation, and fallback are the caller's responsibility.
+- When no wheels match filters, a warning is printed and exit code is 0 (CI-friendly).
+- Output: one absolute path per downloaded `.whl` file per line (enables `pip install $(triton-utils wheels ...)`).
+
+For the full list of options run:
+```bash
+triton-utils download_wheels --help
+```
 
 ## Troubleshooting
 
@@ -246,6 +335,20 @@ If you see "Test contains test cases from multiple testsuites", either:
 2. Exclude one testsuite with `--ignore-testsuite <name>`
 
 ## Changelog
+
+### 0.6.0
+
+- **Download wheels from CI** — New `download_wheels` subcommand (alias: `wheels`) to download wheel artifacts from GitHub Actions CI runs. Supports filtering by predefined wheel sets (`torch`, `triton`, `bench`, `pti`), Python version, workflow presets (`nightly`, `benchmarks`, `build-test`, etc.), and custom fnmatch patterns. Reuses existing `GHAWorkflow`/`GHArtifact` infrastructure from `gh_utils.py`. Composable design: only downloads, leaving installation and fallback to the caller.
+
+### 0.5.0
+
+- **Compare mode: time column** — Comparison output now includes `time` with `r1`, `r2`, `Δ`, and `%Δ` (percentage change) columns. Time values are shown with 2-decimal precision.
+- **Compare mode: `--sort-by`** — Sort comparison results by any column using `<metric>.<source>` notation (e.g., `passed.r1`, `time.delta`). Accepts `delta` as an alias for `Δ`.
+- **Compare mode: `--compare-scope`** — Filter comparison rows by test presence: `any` (default), `r1-only`, `r2-only`, `both`.
+- **Compare mode: `--pretty`** — Accepted for CLI consistency with `stats` mode.
+- **Compare mode: name minification** — Three new flags to shorten displayed test names: `--omit-testsuite-name`, `--omit-test-module-name`, `--omit-test-class-name`. Only effective with `--level test`.
+- **Enums for sort-by** — Added `SortByStats` and `SortByCompare` enums for validated sort options in `stats` and `compare` modes respectively.
+- **Enum for compare scope** — Added `CompareScope` enum (`any`, `r1-only`, `r2-only`, `both`).
 
 ### 0.4.3
 

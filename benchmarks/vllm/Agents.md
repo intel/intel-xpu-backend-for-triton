@@ -15,7 +15,7 @@ These patches are necessary because vllm doesn't yet support XPU completely.
 
 Note that during VLLM installation we never want to install triton or pytorch, we rely on triton and pytorch from this repository which is the latest one. It is probably prebuilt for this environment. You never need to install older pytorch from VLLM requirements, we need to strip all pytorch dependencies during installation procedure.
 
-Currently there is also an IPEX dependency in VLLM that our patches and regexps remove. We never install IPEX in our environments.
+The new pin no longer has an IPEX dependency. We never install IPEX in our environments.
 
 Key files for the installation procedure:
 1. [`vllm-pin.txt`](vllm-pin.txt) - vllm pin that we currently use for benchmarking and testing. CI also uses this pin.
@@ -75,12 +75,12 @@ You can find the diff that the upstream had in a specific file by doing:
 During a pin update you need to:
 1. Update the pin file.
 2. Ensure that the general patch is updated and applicable.
-3. Ensure that [`./scripts/test-triton.sh --install-vllm`](../../scripts/test-triton.sh) correctly installs vllm from scratch; update it if something requires changes. Keep the upstream function separate from the old one until vllm removes IPEX from dependencies.
+3. Ensure that [`./scripts/test-triton.sh --install-vllm`](../../scripts/test-triton.sh) correctly installs vllm from scratch; update it if something requires changes.
 4. Ensure that vllm tests from `test-triton.sh --vllm` run.
-5. Ensure that the benchmark from the `batched_moe` folder runs before and after applying the patch from [`batched_moe.patch`](batched_moe/batched_moe.patch). Try to keep the patch minimal, for example, by keeping the same line breaks as in the upstream.
+5. Ensure that the benchmarks for `batched_moe` and `unified_attention` folders work as expected. That includes checking that appropriate patch can be applied wihout any issues. Try to keep the patch minimal, for example, by keeping the same line breaks as in the upstream. You can use `DEBUG_BENCH=1` env variable to test if benchmark runs.
 6. Update this instruction if something changed.
 
-To install vllm you need to first remove it with `rm -rf vllm vllm-xpu-kernels` and uninstall with `pip uninstall vllm vllm-xpu-kernels`.
+To install vllm you need to first remove it with `rm -rf vllm` and uninstall with `pip uninstall vllm`.
 
 # How to update patch
 

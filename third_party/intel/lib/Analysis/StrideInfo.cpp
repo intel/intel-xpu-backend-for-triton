@@ -1,5 +1,5 @@
 #include "intel/include/Analysis/StrideInfo.h"
-#include "intel/include/Analysis/AxisInfo.h"
+#include "intel/include/Analysis/AxisInfoExt.h"
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -546,6 +546,22 @@ public:
     if (curr.getRank() == 0) {
       setAllToEntryStates(results);
       return success();
+    }
+    // Override stride from tt.contiguity hint.
+    if (auto contiguityAttr = op->getDiscardableAttr("tt.contiguity")) {
+      if (auto resTy = dyn_cast<RankedTensorType>(op->getResult(0).getType())) {
+        AxisInfo::DimVectorT hintContiguity;
+        AxisInfo::initDimVectorFromHint(contiguityAttr, &hintContiguity);
+        const auto &stride = curr.getStride();
+        StrideInfo::DimVectorT newStride(stride.begin(), stride.end());
+        for (unsigned d = 0; d < curr.getRank() && d < hintContiguity.size();
+             ++d) {
+          if (newStride[d] < 0 && hintContiguity[d] >= resTy.getDimSize(d)) {
+            newStride[d] = 1;
+          }
+        }
+        curr = StrideInfo(std::move(newStride));
+      }
     }
     for (auto *result : results)
       propagateIfChanged(result, result->join(curr));

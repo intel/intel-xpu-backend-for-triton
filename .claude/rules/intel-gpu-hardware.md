@@ -89,7 +89,7 @@ loop_unroll
 --- separate pass manager ---
 annotate_module
 --- main pass manager ---
-convert_tdesc_to_block_pointer → convert_to_ttgpuir →
+convert_to_ttgpuir →
 coalesce → remove_layout_conversions →
 accelerate_matmul → materialize_block_pointer → remove_layout_conversions →
 optimize_dot_operands(intel) → pipeline(num_stages, use_barrier) →

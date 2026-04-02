@@ -50,10 +50,9 @@ class XPUOptions:
     extern_libs: dict = None
     debug: bool = False
     backend_name: str = 'intel'
-    sanitize_overflow: bool = False
+    sanitize_overflow: bool = True
     generate_native_code: bool = False
     arch: str = None
-    # FIXME: enable for XPU: https://github.com/intel/intel-xpu-backend-for-triton/issues/4954
     instrumentation_mode: str = ""
 
     def __post_init__(self):
@@ -270,6 +269,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         pm.enable_debug()
         passes.common.add_inliner(pm)
         intel.passes.ttir.add_convert_block_pointer_to_tdesc(pm)
+        passes.ttir.add_rewrite_tensor_pointer(pm)
         intel.passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
         passes.common.add_cse(pm)
         passes.ttir.add_triton_licm(pm)
@@ -313,7 +313,6 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.ttgpuir.add_materialize_block_pointer(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_optimize_dot_operands(pm)
-        intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
         intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.use_barrier)
 
         if (opt.reduce_variable_liveness):
@@ -341,6 +340,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if knobs.intel.opt_reduction_locality:
             intel.passes.ttgpuir.add_optimize_reduction_locality(pm)
         intel.passes.arith.add_arith_emulate_unsupported_floats(pm, ["bf16"], "f32")
+        if opt.instrumentation_mode == "fpsan":
+            passes.ttgpuir.add_fp_sanitizer(pm)
         pm.run(mod, 'make_ttgir')
         return mod
 
@@ -355,6 +356,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.ttir.add_loop_aware_cse(pm)
         passes.gluon.add_canonicalizer(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
+        if options.instrumentation_mode == "fpsan":
+            passes.ttgpuir.add_fp_sanitizer(pm)
 
         pm.run(mod, 'gluon_to_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()

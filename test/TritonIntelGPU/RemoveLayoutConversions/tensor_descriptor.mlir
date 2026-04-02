@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-remove-layout-conversions 2>&1 | FileCheck %s
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-remove-layout-conversions 2>&1 | FileCheck %s --enable-var-scope
 
 // Test that tt.descriptor_load/tt.descriptor_store are treated as layout
 // anchors and that unnecessary convert_layout ops are eliminated when tensor
@@ -37,70 +37,11 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 4], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 8], warpsPerCTA = [4, 2], order = [1, 0]}>
 
-// CHECK: #[[$BLOCKED:.+]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 8], warpsPerCTA = [4, 2], order = [1, 0]}>
-
-// COM: ============================================================
-// COM: Test 2: Forward propagation removes convert between
-// COM: descriptor_load and descriptor_store.
-// COM: The descriptor_load anchors layout #blocked1. The intermediate
-// COM: convert to #blocked and elementwise op in #blocked are
-// COM: rewritten to #blocked1, eliminating the convert_layout ops.
-// COM: ============================================================
-
-// CHECK-LABEL: @descriptor_load_to_store_propagation
-// CHECK-NOT: ttg.convert_layout
-// CHECK: %[[LOAD:.*]] = tt.descriptor_load {{.*}} -> tensor<16x64xf32, #[[$BLOCKED]]>
-// CHECK: %[[NEG:.*]] = arith.negf %[[LOAD]] : tensor<16x64xf32, #[[$BLOCKED]]>
-// CHECK: tt.descriptor_store {{.*}}, %[[NEG]] : !tt.tensordesc<tensor<16x64xf32>>, tensor<16x64xf32, #[[$BLOCKED]]>
-module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  tt.func @descriptor_load_to_store_propagation(%desc_in: !tt.tensordesc<tensor<16x64xf32>>, %desc_out: !tt.tensordesc<tensor<16x64xf32>>) {
-    %c0 = arith.constant 0 : i32
-    %load = tt.descriptor_load %desc_in[%c0, %c0] : !tt.tensordesc<tensor<16x64xf32>> -> tensor<16x64xf32, #blocked1>
-    %cvt_to_blocked = ttg.convert_layout %load : tensor<16x64xf32, #blocked1> -> tensor<16x64xf32, #blocked>
-    %neg = arith.negf %cvt_to_blocked : tensor<16x64xf32, #blocked>
-    %cvt_back = ttg.convert_layout %neg : tensor<16x64xf32, #blocked> -> tensor<16x64xf32, #blocked1>
-    tt.descriptor_store %desc_out[%c0, %c0], %cvt_back : !tt.tensordesc<tensor<16x64xf32>>, tensor<16x64xf32, #blocked1>
-    tt.return
-  }
-}
-
-// -----
-
-#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 4], order = [1, 0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 8], warpsPerCTA = [4, 2], order = [1, 0]}>
-
-// CHECK: #[[$BLOCKED1:.+]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 8], warpsPerCTA = [4, 2], order = [1, 0]}>
-
-// COM: ============================================================
-// COM: Test 3: Descriptor store as anchor — the store's encoding
-// COM: propagates backward through the cheap splat, eliminating
-// COM: the convert_layout entirely.
-// COM: ============================================================
-
-// CHECK-LABEL: @descriptor_store_propagates_backward
-// CHECK-NOT: ttg.convert_layout
-// CHECK: %[[SPLAT:.*]] = tt.splat {{.*}} : f32 -> tensor<16x64xf32, #[[$BLOCKED1]]>
-// CHECK: tt.descriptor_store {{.*}}, %[[SPLAT]] : !tt.tensordesc<tensor<16x64xf32>>, tensor<16x64xf32, #[[$BLOCKED1]]>
-module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  tt.func @descriptor_store_propagates_backward(%desc: !tt.tensordesc<tensor<16x64xf32>>, %val: f32) {
-    %c0 = arith.constant 0 : i32
-    %splat = tt.splat %val : f32 -> tensor<16x64xf32, #blocked>
-    %cvt = ttg.convert_layout %splat : tensor<16x64xf32, #blocked> -> tensor<16x64xf32, #blocked1>
-    tt.descriptor_store %desc[%c0, %c0], %cvt : !tt.tensordesc<tensor<16x64xf32>>, tensor<16x64xf32, #blocked1>
-    tt.return
-  }
-}
-
-// -----
-
-#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 4], order = [1, 0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 8], warpsPerCTA = [4, 2], order = [1, 0]}>
-
 // CHECK: #[[$BLOCKED:.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 4], order = [1, 0]}>
 // CHECK: #[[$BLOCKED1:.+]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 8], warpsPerCTA = [4, 2], order = [1, 0]}>
 
 // COM: ============================================================
-// COM: Test 4: descriptor_load is not rematerialized during backward
+// COM: Test 2: descriptor_load is not rematerialized during backward
 // COM: pass. The expensive load op should not be duplicated.
 // COM: The convert_layout between two different true layouts is
 // COM: preserved; the descriptor_load is NOT cloned with the new
@@ -116,6 +57,28 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     %load = tt.descriptor_load %desc[%c0, %c0] : !tt.tensordesc<tensor<16x64xf32>> -> tensor<16x64xf32, #blocked1>
     %cvt = ttg.convert_layout %load : tensor<16x64xf32, #blocked1> -> tensor<16x64xf32, #blocked>
     tt.store %out, %cvt : tensor<16x64x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+
+// COM: ============================================================
+// COM: Test 3: Descriptor store drops a trailing convert_layout from
+// COM: a DPAS source layout and stores directly from the source.
+// COM: ============================================================
+
+// CHECK-LABEL: @descriptor_store_dpas_source_forwarding
+// CHECK-NOT: ttg.convert_layout
+// CHECK: tt.descriptor_store {{.*}}, %arg1 : !tt.tensordesc<tensor<8x32xf16>>, tensor<8x32xf16, #mma>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  tt.func @descriptor_store_dpas_source_forwarding(%arg0: !tt.tensordesc<tensor<8x32xf16>>, %arg1: tensor<8x32xf16, #mma>) {
+    %c0_i32 = arith.constant 0 : i32
+    %0 = ttg.convert_layout %arg1 : tensor<8x32xf16, #mma> -> tensor<8x32xf16, #blocked>
+    tt.descriptor_store %arg0[%c0_i32, %c0_i32], %0 : !tt.tensordesc<tensor<8x32xf16>>, tensor<8x32xf16, #blocked>
     tt.return
   }
 }

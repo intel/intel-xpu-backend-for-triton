@@ -9,7 +9,7 @@
 #ifndef TRITON_DIALECT_TRITON_INTEL_GPU_IR_UTILS_H
 #define TRITON_DIALECT_TRITON_INTEL_GPU_IR_UTILS_H
 
-#include "intel/include/Analysis/AxisInfo.h"
+#include "intel/include/Analysis/AxisInfoExt.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Operation.h"

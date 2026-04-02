@@ -138,3 +138,45 @@ module {
     tt.return
   }
 }
+
+// -----
+
+module {
+  // COM: test loop versioning for loads with broadcasted invariant mask.
+  // COM: mask in form broadcast(expand_dims([0..END] < splat(X)))
+  tt.func public @test_invariant_broadcast_mask(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32, %arg3: i32) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32>
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32>
+    %1 = tt.splat %arg3 : i32 -> tensor<64xi32>
+    %2 = arith.cmpi slt, %0, %1 : tensor<64xi32>
+    %3 = tt.expand_dims %2 {axis = 0 : i32} : tensor<64xi1> -> tensor<1x64xi1>
+    %4 = tt.broadcast %3 : tensor<1x64xi1> -> tensor<64x64xi1>
+    scf.for %arg4 = %c0_i32 to %arg2 step %c1_i32 : i32 {
+      %5 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<64x64x!tt.ptr<f32>>
+      %6 = tt.load %5, %4, %cst : tensor<64x64x!tt.ptr<f32>>
+    }
+    tt.return
+  }
+
+  // CHECK:         tt.func public @test_invariant_broadcast_mask([[PARAM_0:%.+]]: !tt.ptr<f32> {tt.divisibility = 16 : i32}, [[PARAM_1:%.+]]: i32, [[PARAM_2:%.+]]: i32, [[PARAM_3:%.+]]: i32) {
+  // CHECK:           [[VAR_0:%.+]] = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32>
+  // CHECK:           [[VAR_1:%.+]] = tt.splat [[PARAM_3]] : i32 -> tensor<64xi32>
+  // CHECK:           [[VAR_2:%.+]] = arith.cmpi slt, [[VAR_0]], [[VAR_1]] : tensor<64xi32>
+  // CHECK:           [[VAR_3:%.+]] = tt.expand_dims [[VAR_2]] {axis = 0 : i32} : tensor<64xi1> -> tensor<1x64xi1>
+  // CHECK:           [[VAR_4:%.+]] = tt.broadcast [[VAR_3]] : tensor<1x64xi1> -> tensor<64x64xi1>
+  // CHECK-DAG:       [[CST_63:%.+]] = arith.constant 63 : i32
+  // CHECK:           [[VAR_5:%.+]] = arith.cmpi sgt, [[PARAM_3]], [[CST_63]] : i32
+  // CHECK:           scf.if [[VAR_5]] {
+  // CHECK:             scf.for {{.+}} = {{.+}} to {{.+}} step {{.+}} : i32 {
+  // CHECK-NOT:           tt.load {{.*}}, {{.*}}, {{.*}}
+  // CHECK:             }
+  // CHECK:           } else {
+  // CHECK:             scf.for {{.+}} = {{.+}} to {{.+}} step {{.+}} : i32 {
+  // CHECK:               {{%.+}} = tt.load {{.*}}, [[VAR_4]], {{.*}} : tensor<64x64x!tt.ptr<f32>>
+  // CHECK:             }
+  // CHECK:           }
+  // CHECK:           tt.return
+  // CHECK:         }
+}

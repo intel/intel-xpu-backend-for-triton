@@ -2,7 +2,6 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 
 #include "Dialect/TritonIntelGPU/IR/Attributes.h"
@@ -99,13 +98,9 @@ bool isLongLifeSpanVariable(Value v, const LivenessBlockInfo *livenessBlockInfo,
 /// \p expectedElementType is the element type expected for the load to be a
 /// candidate,
 /// \p forOp operation to which we want to move the loadOp
-bool isLoadCandidate(tt::LoadOp loadOp, Type expectedElementType,
+bool isLoadCandidate(tt::DescriptorLoadOp loadOp, Type expectedElementType,
                      Operation *forOp) {
-  if (!tt::isTensorOrTensorPointerType(loadOp.getPtr().getType()))
-    return false;
-  // LoadOps with non-null mask are not candidates.
-  if (loadOp.getMask())
-    return false;
+  Value loadSource = loadOp.getDesc();
   auto loadType = cast<RankedTensorType>(loadOp.getResult().getType());
   Type loadElType = loadType.getElementType();
   // Types mismatch => Skip this case to avoid inserting too
@@ -131,21 +126,17 @@ bool isLoadCandidate(tt::LoadOp loadOp, Type expectedElementType,
   // We skip the load if the defining op is not is the same region.
   // To avoid prefetching this data in another region
   // (as the prefetch is added after the defining op).
-  if (!loadOp.getPtr().getDefiningOp())
+  if (!loadSource.getDefiningOp())
     return false;
   return true;
 }
 
 /// Create a prefetch operation for the given load operation.
-void createPrefetchOp(tt::LoadOp loadOp) {
-  Operation *op = loadOp.getPtr().getDefiningOp();
-  OpBuilder builder(op);
-  // TODO: Add prefetchOp after last dependency between ptr and mask,
-  // if this support is extended to support masks.
-  builder.setInsertionPointAfter(op);
-  auto prefetchOp = ttgi::PrefetchOp::create(
-      builder, loadOp->getLoc(), loadOp.getPtr(), loadOp.getCache(),
-      loadOp.getEvict(), loadOp.getIsVolatile());
+void createPrefetchOp(tt::DescriptorLoadOp loadOp) {
+  OpBuilder builder(loadOp);
+  auto prefetchOp = ttgi::DescriptorPrefetchOp::create(
+      builder, loadOp->getLoc(), loadOp.getDesc(), loadOp.getIndices(),
+      loadOp.getCache(), loadOp.getEvict());
 
   // inherit attributes from the load operation
   auto attrs = loadOp->getAttrDictionary();
@@ -160,27 +151,23 @@ bool optimizeDotOperands(scf::ForOp forOp, SmallVector<Value> &prefetchedValue,
   Block *loop = forOp.getBody();
   bool opMoved = false;
 
-  auto getEncoding = [](Value v) {
-    return cast<RankedTensorType>(v.getType()).getEncoding();
-  };
-
-  // returns loadOp that loads the value v.
-  auto getLoad = [](Value v) -> std::optional<tt::LoadOp> {
-    // walk back to Load operation
+  // Returns the DescriptorLoadOp that produces the value v, walking back
+  // through ConvertLayoutOps. Returns nullptr if no DescriptorLoadOp is found.
+  auto getLoad = [](Value v) -> tt::DescriptorLoadOp {
     Operation *op = v.getDefiningOp();
     while (op) {
-      if (auto loadOp = dyn_cast<tt::LoadOp>(op))
-        return loadOp;
+      if (auto load = dyn_cast<tt::DescriptorLoadOp>(op))
+        return load;
       if (!isa<ttg::ConvertLayoutOp>(op))
         break;
       op = op->getOperand(0).getDefiningOp();
     }
-    return std::nullopt;
+    return nullptr;
   };
 
   // Prefetch the dotOp operand and move it closer to dotOp.
   auto moveOperand = [&prefetchedValue, &opMoved](uint8_t opId, tt::DotOp dotOp,
-                                                  tt::LoadOp loadOp) {
+                                                  tt::DescriptorLoadOp loadOp) {
     assert(opId < 2 && "opId must be 0 or 1");
     OpBuilder b(dotOp);
     TensorValue tensorV = opId == 0 ? dotOp.getA() : dotOp.getB();
@@ -198,30 +185,52 @@ bool optimizeDotOperands(scf::ForOp forOp, SmallVector<Value> &prefetchedValue,
       }
     }
 
+    Value prefetchKey = loadOp.getDesc();
     if (std::find(prefetchedValue.begin(), prefetchedValue.end(),
-                  loadOp.getPtr()) == prefetchedValue.end()) {
+                  prefetchKey) == prefetchedValue.end()) {
       createPrefetchOp(loadOp);
-      prefetchedValue.push_back(loadOp.getPtr());
+      prefetchedValue.push_back(prefetchKey);
     }
     b.setInsertionPoint(insertBeforeOp);
-    auto newLoad = cast<tt::LoadOp>(b.clone(*loadOp.getOperation()));
+    auto *newLoad = b.clone(*loadOp);
     auto newCvt = ttg::ConvertLayoutOp::create(b, tensorV.getLoc(), tensorType,
-                                               newLoad.getResult());
+                                               newLoad->getResult(0));
     dotOp.setOperand(opId, newCvt.getResult());
 
     // Update other user in the same loop if any
     for (Operation *user : usesInSameLoop)
-      user->replaceUsesOfWith(loadOp.getResult(), newLoad.getResult());
+      user->replaceUsesOfWith(loadOp->getResult(0), newLoad->getResult(0));
 
     // Multiple users:
     // Note that if other users come before the loop, the loadOp is not a
     // candidate for being moved.
     if (!loadOp->use_empty()) {
       b.setInsertionPointAfter(dotOp->getParentOp());
-      auto copyLoad = cast<tt::LoadOp>(b.clone(*loadOp.getOperation()));
+      auto *copyLoad = b.clone(*loadOp);
       loadOp->replaceAllUsesWith(copyLoad);
     }
     opMoved = true;
+  };
+
+  // Try to match and move a dot operand sourced from a descriptor load.
+  auto tryMoveOperand = [&](uint8_t opId, tt::DotOp dot, Value operand,
+                            Operation *forOp) {
+    tt::DescriptorLoadOp loadOp = getLoad(operand);
+    if (!loadOp)
+      return;
+    auto livenessBlockInfo = livenessAnalysis.getLiveness(dot->getBlock());
+    unsigned liveInSizeInBytes = getBlockLiveInSizeInBytes(livenessBlockInfo);
+    // Check liveness on the load's result, not the dot operand, because the
+    // dot operand may be a ConvertLayoutOp result (possibly inside the loop)
+    // while the load result is the truly long-lived value defined outside.
+    Value loadResult = loadOp->getResult(0);
+    if (!isLongLifeSpanVariable(loadResult, livenessBlockInfo,
+                                liveInSizeInBytes))
+      return;
+    auto tensorType = cast<RankedTensorType>(operand.getType());
+    Type elTy = tensorType.getElementType();
+    if (isLoadCandidate(loadOp, elTy, forOp))
+      moveOperand(opId, dot, loadOp);
   };
 
   SmallVector<tt::DotOp> dotsInFor;
@@ -238,26 +247,8 @@ bool optimizeDotOperands(scf::ForOp forOp, SmallVector<Value> &prefetchedValue,
     return false;
 
   for (tt::DotOp dot : dotsInFor) {
-    std::optional<tt::LoadOp> aVals = getLoad(dot.getA());
-    std::optional<tt::LoadOp> bVals = getLoad(dot.getB());
-
-    auto livenessBlockInfo = livenessAnalysis.getLiveness(dot->getBlock());
-    unsigned LiveInSizeInBytes = getBlockLiveInSizeInBytes(livenessBlockInfo);
-
-    if (aVals && isLongLifeSpanVariable(aVals.value(), livenessBlockInfo,
-                                        LiveInSizeInBytes)) {
-      tt::LoadOp loadOp = aVals.value();
-      auto tensorType = cast<RankedTensorType>(dot.getA().getType());
-      if (isLoadCandidate(loadOp, tensorType.getElementType(), forOp))
-        moveOperand(0, dot, loadOp);
-    }
-    if (bVals && isLongLifeSpanVariable(bVals.value(), livenessBlockInfo,
-                                        LiveInSizeInBytes)) {
-      tt::LoadOp loadOp = bVals.value();
-      auto tensorType = cast<RankedTensorType>(dot.getB().getType());
-      if (isLoadCandidate(loadOp, tensorType, forOp))
-        moveOperand(1, dot, loadOp);
-    }
+    tryMoveOperand(0, dot, dot.getA(), forOp);
+    tryMoveOperand(1, dot, dot.getB(), forOp);
   }
   return opMoved;
 }

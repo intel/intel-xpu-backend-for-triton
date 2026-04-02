@@ -29,6 +29,47 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 }
 
 // -----
+// Test: Rank-reducing descriptor store with block IO.
+// Descriptor rank is 3 while source tensor rank is 2.
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @store_rank_reducing_dpas_tdesc
+  // CHECK-COUNT-8: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
+  tt.func public @store_rank_reducing_dpas_tdesc(%arg0: !tt.ptr<f16>, %arg1: i32,
+                                                  %arg2: i32, %arg3: i64) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf16, #dpas>
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%c1_i32, %arg1, %arg2], [%arg3, %c1_i64, %c1_i64] : <f16>, <tensor<1x32x32xf16, #dpas>>
+    tt.descriptor_store %desc[%c0_i32, %c0_i32, %c0_i32], %cst {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<1x32x32xf16, #dpas>>, tensor<32x32xf16, #dpas>
+    tt.return
+  }
+}
+
+// -----
+// Test: Rank-reducing descriptor store without block IO attribute uses generic
+// gather/scatter lowering (no 2D block store emitted).
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @store_rank_reducing_generic_tdesc
+  // CHECK-NOT: triton_gen.2Dblockstore
+  tt.func public @store_rank_reducing_generic_tdesc(%arg0: !tt.ptr<f16>,
+                                                     %arg1: i32, %arg2: i32,
+                                                     %arg3: i64) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf16, #dpas>
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%c1_i32, %arg1, %arg2], [%arg3, %c1_i64, %c1_i64] : <f16>, <tensor<1x32x32xf16, #dpas>>
+    tt.descriptor_store %desc[%c0_i32, %c0_i32, %c0_i32], %cst : !tt.tensordesc<tensor<1x32x32xf16, #dpas>>, tensor<32x32xf16, #dpas>
+    tt.return
+  }
+}
+
+// -----
 // Test 2: f32 dpas layout store — f32 element type produces different tile dims.
 // Mirrors blockptr_store.mlir f32 variant.
 
