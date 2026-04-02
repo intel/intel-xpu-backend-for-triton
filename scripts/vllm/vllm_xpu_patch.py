@@ -256,6 +256,13 @@ def patch_file(filepath: Path) -> bool:
     if not patterns:
         return False
 
+    # Skip is_cuda_check transformation in fp8_utils.py
+    # (it's for runtime branching, not test skipping, and XPU has incompatible signatures)
+    if filepath.name == "fp8_utils.py":
+        patterns = [p for p in patterns if p["type"] != "is_cuda_check"]
+        if not patterns:
+            return False
+
     patched = _apply_patches(source, patterns)
     if patched == source:
         return False
