@@ -222,6 +222,8 @@ def main() -> None:
         vllm_root / "tests" / "v1" / "worker",
         vllm_root / "tests" / "kernels" / "moe",
         vllm_root / "tests" / "kernels" / "attention",
+        vllm_root / "tests" / "kernels" / "quantization",
+        vllm_root / "tests" / "kernels" / "mamba",
     ]
 
     total_patched = 0
