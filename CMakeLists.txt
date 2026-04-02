@@ -42,7 +42,6 @@ set(TRITON_CUDACRT_PATH "" CACHE PATH "Path to CUDA CRT headers.")
 set(TRITON_CUDART_PATH "" CACHE PATH "Path to CUDA Runtime headers")
 set(TRITON_CUPTI_INCLUDE_PATH "" CACHE PATH "Path to CUPTI headers")
 set(TRITON_CUPTI_LIB_PATH "" CACHE PATH "Path to CUPTI libraries")
-set(TRITON_CUDA_STDLIB_PATH "" CACHE PATH "Path to CUDA standard library headers")
 
 if (WIN32 AND TRITON_ENABLE_PLUGINS)
   message(FATAL_ERROR "TRITON_ENABLE_PLUGINS=ON is not supported on Windows.")
@@ -88,9 +87,6 @@ if(NOT "${TRITON_CUPTI_INCLUDE_PATH}" STREQUAL "")
 endif()
 if(NOT "${TRITON_CUPTI_LIB_PATH}" STREQUAL "")
   list(APPEND TRITON_BUILD_HELPER_COMMON_ARGS --triton-cupti-lib-path "${TRITON_CUPTI_LIB_PATH}")
-endif()
-if(NOT "${TRITON_CUDA_STDLIB_PATH}" STREQUAL "")
-  list(APPEND TRITON_BUILD_HELPER_COMMON_ARGS --triton-cuda-stdlib-path "${TRITON_CUDA_STDLIB_PATH}")
 endif()
 
 # Resolve third-party package paths in CMake so direct CMake builds don't rely on setup.py.
