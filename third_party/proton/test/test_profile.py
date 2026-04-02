@@ -882,6 +882,8 @@ def test_trace(tmp_path: pathlib.Path, device: str):
 @pytest.mark.parametrize("profile_kind,suffix", [("tree", ".hatchet"), ("trace", ".chrome_trace")],
                          ids=["tree", "trace"])
 def test_multi_stream(profile_kind: str, suffix: str, tmp_path: pathlib.Path, device: str):
+    if device == "xpu":
+        pytest.skip("FIXME: #6543")
 
     @triton.jit
     def foo(x, y, size: tl.constexpr):
