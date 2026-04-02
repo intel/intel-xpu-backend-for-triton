@@ -616,18 +616,20 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                    warpId, rewriter, targetInfo, maybeMaxVecElems, emitLdSt);
 }
 
-// Build a vector containing multiple base pointers for dynamic indexing.
-static Value buildBasePtrVector(Location loc, RewriterBase &rewriter,
-                                ArrayRef<Value> smemBases) {
-  assert(smemBases.size() > 1 && "Need multiple bases to build a vector");
+// Select the correct base pointer using a chain of select operations.
+// This avoids building a vector of pointers with dynamic extractelement,
+// which would require SPV_INTEL_masked_gather_scatter which is failed
+// by ocloc.
+static Value selectFromBases(Location loc, RewriterBase &rewriter,
+                             ArrayRef<Value> smemBases, Value idx) {
+  assert(smemBases.size() > 1 && "Need multiple bases to select from");
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto ptrTy = smemBases[0].getType();
-  auto vecTy = VectorType::get({static_cast<int64_t>(smemBases.size())}, ptrTy);
-  Value basesVec = b.undef(vecTy);
-  for (size_t i = 0; i < smemBases.size(); ++i) {
-    basesVec = b.insert_element(basesVec, smemBases[i], b.i32_val(i));
+  Value result = smemBases.back();
+  for (int i = static_cast<int>(smemBases.size()) - 2; i >= 0; --i) {
+    Value cmp = b.icmp_eq(idx, b.i32_val(i));
+    result = b.select(cmp, smemBases[i], result);
   }
-  return basesVec;
+  return result;
 }
 
 SmallVector<Value>
@@ -666,10 +668,8 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
   // Extract the partition sublayout before stripping it for vectorization.
   auto inDimNames = to_vector(cvt.getInDimNames());
   LinearLayout partitionLayout;
-  Value basesVec;
   if (isPartitioned) {
     partitionLayout = cvt.sublayout(inDimNames, {kPartition});
-    basesVec = buildBasePtrVector(loc, rewriter, smemBases);
   }
 
   // Strip kPartition output for vectorization analysis.
@@ -769,7 +769,7 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
                                                   {kWarp, warpId},
                                                   {kBlock, blockId}});
         Value partitionIdx = partitionResult[0].second;
-        smemBase = b.extract_element(basesVec, partitionIdx);
+        smemBase = selectFromBases(loc, rewriter, smemBases, partitionIdx);
       }
 
       std::optional<Value> innerCtaOffset;
