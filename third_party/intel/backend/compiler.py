@@ -50,7 +50,7 @@ class XPUOptions:
     extern_libs: dict = None
     debug: bool = False
     backend_name: str = 'intel'
-    sanitize_overflow: bool = False
+    sanitize_overflow: bool = True
     generate_native_code: bool = False
     arch: str = None
     instrumentation_mode: str = ""
@@ -342,7 +342,6 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.arith.add_arith_emulate_unsupported_floats(pm, ["bf16"], "f32")
         if opt.instrumentation_mode == "fpsan":
             passes.ttgpuir.add_fp_sanitizer(pm)
-        intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
         pm.run(mod, 'make_ttgir')
         return mod
 

@@ -52,6 +52,42 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 
 // -----
 
+// Test: Descriptor load pre-applies 64-byte alignment compensation to the base
+// pointer and column offset. This ensures multi-tile loads build tile offsets
+// relative to an alignment-adjusted base, preventing LLVM from factoring out
+// a suboptimal common subexpression across operand loads.
+
+#dpas_align = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0_align = #ttg.dot_op<{opIdx = 0, parent = #dpas_align, kWidth=1}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @descriptor_load_pre_alignment
+  tt.func public @descriptor_load_pre_alignment(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i32, %arg5: i32) {
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <tensor<64x32xf16>>
+
+    // Verify base pointer alignment: ptr & ~0x3f (clear lower 6 bits).
+    // CHECK: %[[BASE:.*]] = llvm.extractvalue {{.*}}[4]
+    // CHECK: %[[ADDR:.*]] = llvm.ptrtoint %[[BASE]] : !llvm.ptr<1> to i64
+    // CHECK: %[[ALIGNED_ADDR:.*]] = llvm.and %[[ADDR]], {{.*}} : i64
+    // CHECK: %[[ALIGNED_PTR:.*]] = llvm.inttoptr %[[ALIGNED_ADDR]] : i64 to !llvm.ptr<1>
+
+    // Verify offset extraction and column index adjustment.
+    // CHECK: %[[OFFSET_BYTES:.*]] = llvm.and %[[ADDR]], {{.*}} : i64
+    // CHECK: %[[OFFSET_I32:.*]] = llvm.trunc %[[OFFSET_BYTES]] : i64 to i32
+    // CHECK: %[[MISALIGN_ELEMS:.*]] = llvm.udiv %[[OFFSET_I32]]
+    // CHECK: %[[ADJ_BASE_WIDTH:.*]] = llvm.add {{.*}}, %[[OFFSET_I32]]
+    // CHECK: %[[ADJ_COL:.*]] = llvm.add %{{.*}}, %[[MISALIGN_ELEMS]]
+
+    // Verify both 2D block loads use the aligned pointer and adjusted width.
+    // CHECK: triton_gen.2Dblockload %[[ALIGNED_PTR]], %[[ADJ_BASE_WIDTH]]
+    // CHECK: triton_gen.2Dblockload %[[ALIGNED_PTR]], %[[ADJ_BASE_WIDTH]]
+    %load = tt.descriptor_load %desc[%arg4, %arg5] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #dot0_align>
+    tt.return
+  }
+}
+
+// -----
+
 // Test: DescriptorLoadOp with dot_op B encoding generates 2D block loads
 // with VNNI transform.
 
