@@ -77,26 +77,26 @@ if (NOT SPIRVToLLVMTranslator_FOUND)
             # FIXME: Don't apply patch when upstream SPIRV-LLVM-Translator supports llvm.sadd.with.overflow.i8
             # https://github.com/KhronosGroup/SPIRV-LLVM-Translator/pull/3673
             execute_process(
-                COMMAND git apply --check ${CMAKE_CURRENT_LIST_DIR}/patch_6533.diff
+                COMMAND git apply --check ${CMAKE_CURRENT_LIST_DIR}/3673.diff
                 WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}
                 ERROR_QUIET
                 RESULT_VARIABLE PATCH_RESULT
             )
             if(PATCH_RESULT EQUAL 0)
                 execute_process(
-                        COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/patch_6533.diff
+                        COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/3673.diff
                         WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}
                         RESULT_VARIABLE PATCH_RESULT
                 )
             else()
                 execute_process( # Check if the patch is already applied
-                        COMMAND git apply --reverse --check ${CMAKE_CURRENT_LIST_DIR}/patch_6533.diff
+                        COMMAND git apply --reverse --check ${CMAKE_CURRENT_LIST_DIR}/3673.diff
                         WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}
                         RESULT_VARIABLE PATCH_RESULT
                 )
             endif()
             if(NOT PATCH_RESULT EQUAL 0)
-                message(FATAL_ERROR "Failed to apply patch_6533.diff to SPIRV-LLVM-Translator")
+                message(FATAL_ERROR "Failed to apply 3673.diff to SPIRV-LLVM-Translator")
             endif()
     endif()
 
