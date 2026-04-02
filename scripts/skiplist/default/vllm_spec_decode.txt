@@ -1,3 +1,5 @@
-# Skip 8B models - too large for CI
-tests/v1/spec_decode/.*Llama-3.1-8B.*@regexp
-tests/v1/spec_decode/.*Meta-Llama-3-8B.*@regexp
+# Skip tests using 8B models - too large for CI
+tests/v1/spec_decode/test_tree_attention.py
+tests/v1/spec_decode/test_acceptance_length.py
+tests/v1/spec_decode/test_max_len.py::test_eagle_max_len
+tests/v1/spec_decode/test_eagle.py

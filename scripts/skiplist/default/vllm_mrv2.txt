@@ -1,0 +1,2 @@
+# Skip tests using Llama-3.2-1B-Instruct - gated model requiring license acceptance
+tests/v1/sample/test_logprobs.py
