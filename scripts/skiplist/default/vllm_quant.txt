@@ -1,0 +1,3 @@
+# Skip GPTQ/Marlin quantization tests - CUDA-only ops (gptq_marlin_repack not available on XPU)
+tests/kernels/quant/.*gptq.*@regexp
+tests/kernels/quant/.*marlin.*@regexp

@@ -113,28 +113,12 @@ jobs:
         run: |
           pip install -r scripts/requirements-test.txt
 
-      - name: Install vLLM
-        env:
-          VLLM_PIN: ${{ inputs.vllm_pin }}
-        run: |
-          ${{ steps.test-triton.outputs.command }} --install-vllm
-
-      - name: Freeze vLLM dependencies
-        run: |
-          pip freeze > vllm-requirements.txt
-
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}
         uses: ./.github/actions/save
         with:
           path: ${{ steps.pip-cache.outputs.path }}
           dest: ${{ steps.pip-cache.outputs.dest }}
-
-      - name: Upload vLLM requirements
-        uses: actions/upload-artifact@v7
-        with:
-          name: vllm-requirements-${{ inputs.python_version }}
-          path: vllm-requirements.txt
 
   tests:
     name: ${{ matrix.suite }}
@@ -174,12 +158,6 @@ jobs:
           name: triton-vllm-${{ inputs.python_version }}
           path: dist/
 
-      - name: Download vLLM requirements
-        uses: actions/download-artifact@v8
-        with:
-          name: vllm-requirements-${{ inputs.python_version }}
-          path: .
-
       - name: Install Python
         uses: ./.github/actions/setup-python
         with:
@@ -212,16 +190,12 @@ jobs:
         run: |
           echo "TRITON_TEST_CMD=${{ needs.setup.outputs.test-triton-command }}" | tee -a $GITHUB_ENV
 
-      - name: Install vLLM from frozen requirements
+      - name: Install vLLM
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        env:
+          VLLM_PIN: ${{ inputs.vllm_pin }}
         run: |
-          if [ -f vllm-requirements.txt ]; then
-            pip install -r vllm-requirements.txt
-            python -c 'import vllm; print(f"vLLM version: {getattr(vllm, \"__version__\", \"installed\")}")'
-          else
-            echo "Error: vLLM requirements not found"
-            exit 1
-          fi
+          $TRITON_TEST_CMD --install-vllm
 
       - name: Create reports dir
         run: |

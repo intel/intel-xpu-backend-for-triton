@@ -1,0 +1,2 @@
+# Skip lightning_attn tests - requires CUDA-specific implementation not available on XPU
+tests/kernels/attention/.*lightning.*@regexp
