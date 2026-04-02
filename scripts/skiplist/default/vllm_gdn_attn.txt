@@ -1,0 +1,2 @@
+# Skip tests using Meta-Llama-3-8B - gated model
+tests/v1/attention/test_gdn_metadata_builder.py::test_gdn_build_classification

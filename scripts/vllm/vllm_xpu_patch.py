@@ -109,6 +109,16 @@ def _find_cuda_patterns(source: str) -> list[dict]:
                 "col": node.col_offset,
             })
 
+        # torch.cuda.get_device_capability() calls
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "get_device_capability"
+                and isinstance(node.func.value, ast.Attribute) and node.func.value.attr == "cuda"
+                and isinstance(node.func.value.value, ast.Name) and node.func.value.value.id == "torch"):
+            patterns.append({
+                "type": "cuda_get_device_capability",
+                "line": node.lineno,
+                "col": node.col_offset,
+            })
+
         # variable = "cuda" assignments
         if isinstance(node, ast.Assign) and len(node.targets) == 1:
             target = node.targets[0]
@@ -198,6 +208,10 @@ def _apply_patches(source: str, patterns: list[dict]) -> str:
             # Replace torch.cuda.Stream() with torch.xpu.Stream()
             lines[line_idx] = line.replace("torch.cuda.Stream()", "torch.xpu.Stream()")
 
+        elif ptype == "cuda_get_device_capability":
+            # Replace torch.cuda.get_device_capability() with torch.xpu.get_device_capability()
+            lines[line_idx] = line.replace("torch.cuda.get_device_capability()", "torch.xpu.get_device_capability()")
+
         elif ptype == "is_cuda_check":
             # In skipif: not current_platform.is_cuda()
             # -> not (current_platform.is_cuda() or current_platform.is_xpu())
@@ -271,6 +285,7 @@ def main() -> None:
         vllm_root / "tests" / "v1" / "worker",
         # Source directories
         vllm_root / "vllm" / "v1" / "worker",
+        vllm_root / "vllm" / "model_executor" / "layers",
     ]
 
     total_patched = 0

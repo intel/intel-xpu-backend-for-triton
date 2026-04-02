@@ -189,13 +189,7 @@ jobs:
       - name: Set test-triton command line
         run: |
           echo "TRITON_TEST_CMD=${{ needs.setup.outputs.test-triton-command }}" | tee -a $GITHUB_ENV
-
-      - name: Install vLLM
-        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
-        env:
-          VLLM_PIN: ${{ inputs.vllm_pin }}
-        run: |
-          $TRITON_TEST_CMD --install-vllm
+          echo "VLLM_PIN=${{ inputs.vllm_pin }}" | tee -a $GITHUB_ENV
 
       - name: Create reports dir
         run: |
