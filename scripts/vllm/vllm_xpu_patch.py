@@ -110,9 +110,10 @@ def _find_cuda_patterns(source: str) -> list[dict]:
             })
 
         # torch.cuda.get_device_capability() calls
-        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "get_device_capability"
-                and isinstance(node.func.value, ast.Attribute) and node.func.value.attr == "cuda"
-                and isinstance(node.func.value.value, ast.Name) and node.func.value.value.id == "torch"):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get_device_capability" and isinstance(node.func.value, ast.Attribute)
+                and node.func.value.attr == "cuda" and isinstance(node.func.value.value, ast.Name)
+                and node.func.value.value.id == "torch"):
             patterns.append({
                 "type": "cuda_get_device_capability",
                 "line": node.lineno,
@@ -142,8 +143,7 @@ def _find_cuda_patterns(source: str) -> list[dict]:
         # current_platform.get_device_capability() < tuple comparisons
         if isinstance(node, ast.Compare):
             if (isinstance(node.left, ast.Call) and isinstance(node.left.func, ast.Attribute)
-                    and node.left.func.attr == "get_device_capability"
-                    and isinstance(node.left.func.value, ast.Name)
+                    and node.left.func.attr == "get_device_capability" and isinstance(node.left.func.value, ast.Name)
                     and node.left.func.value.id == "current_platform"):
                 # Found: current_platform.get_device_capability() < something
                 patterns.append({
@@ -157,15 +157,14 @@ def _find_cuda_patterns(source: str) -> list[dict]:
         if isinstance(node, ast.Call):
             # Look for pytest.mark.skipif
             func = node.func
-            if (isinstance(func, ast.Attribute) and func.attr == "skipif"
-                    and isinstance(func.value, ast.Attribute) and func.value.attr == "mark"
-                    and isinstance(func.value.value, ast.Name) and func.value.value.id == "pytest"):
+            if (isinstance(func, ast.Attribute) and func.attr == "skipif" and isinstance(func.value, ast.Attribute)
+                    and func.value.attr == "mark" and isinstance(func.value.value, ast.Name)
+                    and func.value.value.id == "pytest"):
                 # Check if first arg is is_rocm() call
                 if node.args and isinstance(node.args[0], ast.Call):
                     call = node.args[0]
                     if (isinstance(call.func, ast.Attribute) and call.func.attr == "is_rocm"
-                            and isinstance(call.func.value, ast.Name)
-                            and call.func.value.id == "current_platform"):
+                            and isinstance(call.func.value, ast.Name) and call.func.value.id == "current_platform"):
                         patterns.append({
                             "type": "skipif_is_rocm",
                             "line": node.lineno,
