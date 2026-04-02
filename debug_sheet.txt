@@ -1,0 +1,282 @@
+================================================================================
+  CHEATSHEET: Debugging 2D Block Load Lowering Path (tensor-of-pointers)
+  Intel XPU Backend for Triton
+================================================================================
+
+INPUT KERNEL PATTERN:
+  ptr + offs_m[:, None] * 64 + offs_n[None, :]
+  → tensor<8x16x!tt.ptr<f16>> with stride=[64,1], contiguity=[1,16]
+  → eligible for row_major 2D block IO
+
+INPUT FILE: debug_block_load.mlir (TTGIR, post-Coalesce, pre-MaterializeBlockPointer)
+
+BUILD DIR:
+  BUILD=$(PYTHONPATH="./python" python3 -c 'from build_helpers import get_cmake_dir; print(get_cmake_dir())')
+  TRITON_OPT=$BUILD/bin/triton-opt
+  MLIR=debug_block_load.mlir
+
+================================================================================
+  DLACZEGO triton-opt + LLDB > uruchamianie kernela
+================================================================================
+
+- Nie potrzebujesz GPU
+- Kontrolujesz dokladnie ktore passy uruchomic
+- Mozesz zatrzymac sie po jednym passie
+- Deterministyczny, brak runtime noise'u
+- Mozesz podawac --debug-only=<pass-name> dla verbose LLVM_DEBUG output
+
+================================================================================
+  ETAP 1: AxisInfo / Stride Analysis
+================================================================================
+
+Analiza uruchamia sie WEWNATRZ MaterializeBlockPointer (nie jest osobnym passem).
+Oblicza lattice values: contiguity, divisibility, constancy (AxisInfo)
+oraz per-dimension stride values: -1=unknown, 0=broadcast, >0=known (StrideInfo)
+
+BREAKPOINTY:
+  b MaterializeBlockPointer.cpp:201    # axisInfoAnalysis.getAxisInfo(ptr)
+  b MaterializeBlockPointer.cpp:209    # strideAnalysis.getStrideInfo(ptr)
+  b MaterializeBlockPointer.cpp:210    # isMajor() lambda entry
+  b MaterializeBlockPointer.cpp:218    # contiguity check: fastChangeDim == tensorDimSize?
+  b MaterializeBlockPointer.cpp:228    # stride check: otherDimStride >= 0?
+  b MaterializeBlockPointer.cpp:237    # pitch alignment: (stride * elemBytes) % 16 == 0?
+  b MaterializeBlockPointer.cpp:244    # base ptr alignment: divisibility % 4 == 0?
+
+CO OBSERWOWAC W LLDB:
+  p axisInfo->getContiguity(1)      // oczekiwane: 16 (caly wiersz ciagly)
+  p axisInfo->getContiguity(0)      // oczekiwane: 1
+  p axisInfo->getDivisibility(1)    // oczekiwane: 16 (ptr divisibility=16)
+  p axisInfo->getDivisibility(0)    // oczekiwane: 16
+  p strideInfo->getStride(0)        // oczekiwane: 64 (stride_row)
+  p strideInfo->getStride(1)        // oczekiwane: 1
+
+PLIKI ZRODLOWE:
+  third_party/intel/lib/TritonIntelGPUTransforms/MaterializeBlockPointer.cpp
+  third_party/intel/lib/Analysis/StrideInfo.cpp
+  third_party/intel/lib/Analysis/AxisInfoExt.cpp
+  lib/Analysis/AxisInfo.cpp
+
+================================================================================
+  ETAP 2: Dodanie ttig.block_io atrybutu
+================================================================================
+
+MaterializeBlockPointer ustawia atrybut "ttig.block_io" = "row_major" na tt.load
+jesli analiza z Etapu 1 potwierdzi eligibility.
+
+BREAKPOINTY:
+  b MaterializeBlockPointer.cpp:152    # visit(tt::LoadOp) entry
+  b MaterializeBlockPointer.cpp:154    # sprawdzenie: rank >= 2, brak maski
+  b MaterializeBlockPointer.cpp:254    # isRowMajor = isMajor(tensorTy, rank-1, axisInfo)
+  b MaterializeBlockPointer.cpp:257    # op->setAttr("ttig.block_io", "row_major") ← TU!
+  b MaterializeBlockPointer.cpp:262    # isColMajor = isMajor(tensorTy, rank-2, axisInfo)
+
+KOMENDA:
+  lldb -- $TRITON_OPT $MLIR --tritonintelgpu-materialize-block-pointer
+  (lldb) b MaterializeBlockPointer.cpp:152
+  (lldb) b MaterializeBlockPointer.cpp:257
+  (lldb) run
+
+WYNIK (stdout):
+  PRZED: %data = tt.load %ptrs : tensor<8x16x!tt.ptr<f16>, #blocked>
+  PO:    %data = tt.load %ptrs {ttig.block_io = "row_major"} : tensor<8x16x!tt.ptr<f16>, #blocked>
+
+WERYFIKACJA (bez LLDB):
+  $TRITON_OPT $MLIR --tritonintelgpu-materialize-block-pointer 2>&1 | grep block_io
+
+================================================================================
+  ETAP 3: tt.load{block_io} → triton_gen.2Dblockload
+================================================================================
+
+Pass: convert-triton-intel-gpu-to-llvm
+Plik: third_party/intel/lib/TritonIntelGPUToLLVM/LoadStoreOpToLLVM.cpp
+
+tt.load z atrybutem block_io jest matchowany przez BlockIOLoadOpConversion.
+Tworzy TritonGEN::Matrix2DBlockLoadOp z obliczonymi parametrami:
+  - ptr (base address, 64-byte aligned compensation)
+  - baseWidth, baseHeight, pitch (surface descriptor)
+  - offsetX, offsetY (per-subgroup tile offset)
+  - tileWidth=16, tileHeight=2, vBlocks=1
+
+BREAKPOINTY:
+  b LoadStoreOpToLLVM.cpp:2352    # matchAndRewrite(LoadOp) entry
+  b LoadStoreOpToLLVM.cpp:2354    # isBlockIOCandidate(op) guard
+  b LoadStoreOpToLLVM.cpp:722     # block_io attribute check wewnatrz isBlockIOCandidate
+  b LoadStoreOpToLLVM.cpp:2627    # TritonGEN::Matrix2DBlockLoadOp::create() ← TU!
+
+CO OBSERWOWAC W LLDB:
+  p op.getPtr().getType()           // tensor<8x16x!tt.ptr<f16>, #blocked>
+  p tileWidth                       // oczekiwane: 16
+  p tileHeight                      // oczekiwane: 2 (8 rows / 4 warps)
+  p vBlocks                         // oczekiwane: 1
+  p packedElemSizeInBits            // oczekiwane: 16 (f16)
+  p isTransposeRequired             // oczekiwane: false (row_major)
+
+KOMENDA:
+  lldb -- $TRITON_OPT $MLIR \
+    --tritonintelgpu-materialize-block-pointer \
+    --convert-triton-intel-gpu-to-llvm
+  (lldb) b LoadStoreOpToLLVM.cpp:2627
+  (lldb) run
+
+WYNIK (w IR):
+  %r = triton_gen.2Dblockload %ptr, %w, %h, %pitch, %x, %y
+         {elem_size_in_bits = 16, tile_width = 16, tile_height = 2,
+          v_blocks = 1, transpose = false, vnni_transform = false,
+          cache_control = Default}
+         : (!llvm.ptr<1>, i32, i32, i32, i32, i32) -> vector<1xi16>
+
+================================================================================
+  ETAP 4: triton_gen.2Dblockload → GenISA intrinsic / SPIRV builtin
+================================================================================
+
+Pass: convert-tritongen-to-llvm
+Plik: third_party/intel/lib/TritonGENToLLVM/TritonGENToLLVMPass.cpp
+
+Decyzja SPIRV vs GenISA:
+  - LTS driver (modul ma atrybut "ttig.is_lts") → GenISA
+  - non-LTS driver → SPIRV (z wyjatkami, patrz isSPVBuiltinAvailableImpl)
+  - subgroup size != 16 → GenISA
+
+BREAKPOINTY:
+  b TritonGENToLLVMPass.cpp:877    # matchAndRewrite(Matrix2DBlockLoadOp) entry
+  b TritonGENToLLVMPass.cpp:128    # isSPVBuiltinAvailableImpl() — decyzja SPIRV/GenISA
+  b TritonGENToLLVMPass.cpp:883    # createGenISA2DBlockRead() — sciezka GenISA
+  b TritonGENToLLVMPass.cpp:895    # "__spirv_Subgroup2DBlockLoad" — sciezka SPIRV
+  b TritonGENToLLVMPass.cpp:227    # createGenISA2DBlockRead() implementacja
+
+CO OBSERWOWAC W LLDB:
+  p isSPVBuiltinAvailable(op)       // true = SPIRV, false = GenISA
+  p op.getElemSizeInBits()          // 16
+  p op.getTileWidth()               // 16
+  p op.getTileHeight()              // 2
+  p op.getVBlocks()                 // 1
+  p op.getTranspose()               // false
+  p op.getVnniTransform()           // false
+
+KOMENDA:
+  lldb -- $TRITON_OPT $MLIR \
+    --tritonintelgpu-materialize-block-pointer \
+    --convert-triton-intel-gpu-to-llvm \
+    --convert-tritongen-to-llvm
+  (lldb) b TritonGENToLLVMPass.cpp:877
+  (lldb) run
+
+WYNIK (GenISA — LTS driver):
+  llvm.call @llvm.genx.GenISA.LSC2DBlockRead.v1i16(
+    %ptr_i64, %baseWidth_minus1, %baseHeight_minus1, %basePitch_minus1,
+    %x, %y, %elemSize, %tileWidth, %tileHeight, %vBlocks,
+    %transpose, %vnni, %cacheControl
+  ) -> vector<1xi16>
+
+WYNIK (SPIRV — non-LTS driver):
+  llvm.call @__spirv_Subgroup2DBlockLoad(...) -> vector<1xi16>
+
+NOTE: GenISA args pass baseWidth/Height/Pitch jako value-1 (0-based).
+
+================================================================================
+  ETAP 5 (bonus): Stride Analysis dataflow visitors
+================================================================================
+
+Jesli chcesz przesledzic JAK AxisInfo/Stride oblicza wartosci
+dla kazdej operacji w lancuchu pointer arithmetic:
+
+BREAKPOINTY (StrideInfo.cpp):
+  b StrideInfo.cpp:105     # MakeRangeOpStrideVisitor — [0,1,...7] → stride=1
+  b StrideInfo.cpp:207     # ExpandDimsOpStrideVisitor — dodaje wymiar
+  b StrideInfo.cpp:187     # BroadcastOpStrideVisitor — broadcast stride
+  b StrideInfo.cpp:132     # MulIOpStrideVisitor — offs_m * 64 → stride=64
+  b StrideInfo.cpp:229     # AddPtrOpStrideVisitor — addptr propagation
+
+BREAKPOINTY (AxisInfo.cpp — upstream):
+  b AxisInfo.cpp            # szukaj visitMakeRange, visitExpandDims, visitBroadcast,
+                            # visitAddPtr (upstream visitors)
+
+BREAKPOINTY (AxisInfoExt.cpp — Intel):
+  b AxisInfoExt.cpp:195    # MakeTensorPtrOpAxisInfoVisitor (block pointer path)
+
+PRZEPLYW DANYCH DLA NASZEGO KERNELA:
+  make_range(0..8)          → stride=[1],     contiguity=[8]
+  expand_dims(axis=1)       → stride=[1,0],   contiguity=[1,1]  (nowy dim=broadcast)
+  arith.muli(*, 64)         → stride=[64,0],  contiguity=[1,1]
+  splat(ptr)                → stride=[0,0],   contiguity=[1,1]  (uniform ptr)
+  addptr(splat, muli)       → stride=[64,0],  contiguity=[1,1]
+  make_range(0..16)         → stride=[1],     contiguity=[16]
+  expand_dims(axis=0)       → stride=[0,1],   contiguity=[1,16]
+  broadcast(addptr, 8x16)   → stride=[64,0],  contiguity=[1,1]  (ptr broadcast)
+  broadcast(expand, 8x16)   → stride=[0,1],   contiguity=[1,16] (idx broadcast)
+  addptr(bc_ptr, bc_idx)    → stride=[64,1],  contiguity=[1,16] ← FINAL
+
+WNIOSKI Z ANALIZY:
+  contiguity[1]=16 → caly wiersz (dim=1, 16 elementow) jest ciagly ✓
+  stride[0]=64     → znany stride miedzy wierszami ✓
+  64 * 2 bytes = 128 bytes → 128 % 16 == 0 (pitch alignment) ✓
+  divisibility[1]=16 → 16 % 4 == 0 (base alignment) ✓
+  → KWALIFIKUJE SIE NA row_major 2D block IO
+
+================================================================================
+  SZYBKIE KOMENDY (bez LLDB)
+================================================================================
+
+# 1. Tylko MaterializeBlockPointer (widac block_io annotation):
+$TRITON_OPT $MLIR --tritonintelgpu-materialize-block-pointer
+
+# 2. Print po kazdym passie:
+$TRITON_OPT $MLIR --tritonintelgpu-materialize-block-pointer --mlir-print-ir-after-all
+
+# 3. LLVM debug output (verbose):
+$TRITON_OPT $MLIR --tritonintelgpu-materialize-block-pointer \
+  --debug-only=tritonintelgpu-materialize-block-pointer
+
+# 4. Pelny pipeline do GenISA z debugiem:
+$TRITON_OPT $MLIR \
+  --tritonintelgpu-materialize-block-pointer \
+  --convert-triton-intel-gpu-to-llvm \
+  --convert-tritongen-to-llvm \
+  --mlir-print-ir-after-all
+
+# 5. Pelny pipeline z LLDB i wszystkimi breakpointami:
+lldb -- $TRITON_OPT $MLIR \
+  --tritonintelgpu-materialize-block-pointer \
+  --convert-triton-intel-gpu-to-llvm \
+  --convert-tritongen-to-llvm \
+  --mlir-print-ir-after-all
+
+(lldb) b MaterializeBlockPointer.cpp:152   # visit(LoadOp) entry
+(lldb) b MaterializeBlockPointer.cpp:210   # isMajor() contiguity/stride check
+(lldb) b MaterializeBlockPointer.cpp:257   # setAttr block_io = row_major
+(lldb) b LoadStoreOpToLLVM.cpp:2352        # LoadOp->BlockIO matchAndRewrite entry
+(lldb) b LoadStoreOpToLLVM.cpp:2627        # Matrix2DBlockLoadOp::create()
+(lldb) b TritonGENToLLVMPass.cpp:877       # Matrix2DBlockLoad->GenISA/SPIRV entry
+(lldb) b TritonGENToLLVMPass.cpp:128       # isSPVBuiltinAvailable decision
+(lldb) run
+
+================================================================================
+  PLIKI ZRODLOWE — PELNA MAPA
+================================================================================
+
+ANALIZA:
+  lib/Analysis/AxisInfo.cpp                                  # upstream AxisInfo
+  third_party/intel/lib/Analysis/AxisInfoExt.cpp             # Intel AxisInfo extension
+  third_party/intel/lib/Analysis/StrideInfo.cpp              # Intel StrideAnalysis
+
+MATERIALIZACJA:
+  third_party/intel/lib/TritonIntelGPUTransforms/MaterializeBlockPointer.cpp
+    — visit(tt::LoadOp): analiza + setAttr block_io
+    — visit(tt::DescriptorLoadOp): analiza dla tensor descriptors
+    — satisfies2DBlockReadAlignment(): alignment checks
+
+LOWERING DO TRITONGEN:
+  third_party/intel/lib/TritonIntelGPUToLLVM/LoadStoreOpToLLVM.cpp
+    — BlockIOLoadOpConversion: tt.load{block_io} → triton_gen.2Dblockload
+    — isBlockIOCandidate(): guard checking block_io attribute
+    — computeAlignedBasePtrWidthAndOffset(): 64-byte alignment compensation
+
+LOWERING DO GENISA/SPIRV:
+  third_party/intel/lib/TritonGENToLLVM/TritonGENToLLVMPass.cpp
+    — TritonMatrix2DBlockLoadLowering: triton_gen.2Dblockload → llvm.call
+    — isSPVBuiltinAvailableImpl(): SPIRV vs GenISA decision
+    — createGenISA2DBlockRead(): GenISA intrinsic builder
+
+DEFINICJA OPS:
+  third_party/intel/lib/Dialect/TritonGEN/IR/TritonGENOps.cpp
+  third_party/intel/include/Dialect/TritonGEN/IR/TritonGENOps.td

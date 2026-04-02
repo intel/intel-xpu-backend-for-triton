@@ -1,0 +1,64 @@
+# 1st stage
+build/cmake.linux-x86_64-cpython-3.10/bin/triton-opt debug_block_load.mlir --tritonintelgpu-materialize-block-pointer
+
+# optional:
+--debug-only=tritonintelgpu-materialize-block-pointer
+--mlir-print-ir-after-all
+
+
+# pipeline
+--tritonintelgpu-materialize-block-pointer
+--convert-triton-intel-gpu-to-llvm
+--convert-tritongen-to-llvm
+--mlir-print-ir-after-all
+
+
+# breakpointy
+
+# === info analysis
+
+# MakeTensorPtrOpStrideVisitor (nie dla tensor-of-ptrs)
+b StrideInfo.cpp:431
+
+# MakeRangeOpStrideVisitor - stride [0,1,2,...7] -> stride=1
+b StrideInfo.cpp:105
+
+# ExpandDimsOpStrideVisitor - dodaje wymiar
+b StrideInfo.cpp:207
+
+# BroadcastOpStrideVisitor - broadcast stride
+b StrideInfo.cpp:187
+
+# MulIOpStrideVisitor - offs_m * 64 -> stride=64
+b StrideInfo.cpp:132
+
+# AddPtrOpStrideVisitor = addptr propagation
+b StrideInfo.cpp:229
+
+# MakeTensorPtrOpAxisInfoVisitor (Intel-specific)
+b StrideInfo.cpp:195
+
+
+
+# === end info analysis
+
+# visit(LoadOp) entry
+b MaterializeBlockPointer.cpp:152
+
+# isMajor() contiguity/stride check
+b MaterializeBlockPointer.cpp:210
+
+# setAttr block_io = row_major
+b MaterializeBlockPointer.cpp:257
+
+# LoadOp -> BlockIO matchAndRewrite entry
+b LoadStoreOpToLLVM.cpp:2352
+
+# Matrix2DBlockLoadOp::create()
+b LoadStoreOpToLLVM.cpp:2627
+
+# Matrix2DBlockLoad -> GenISA/SPIR-V entry
+b TritonGENToLLVMPass.cpp:877
+
+# isSPVBuiltinAvailable decision
+b TritonGENToLLVMPass.cpp:128
