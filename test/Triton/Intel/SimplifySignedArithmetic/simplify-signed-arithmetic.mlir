@@ -429,3 +429,59 @@ tt.func public @no_convert_divsi_non_constant_divisor(%arg0: i32) -> i32 {
 // CHECK: arith.divsi
 // CHECK-NOT: arith.divui
 }
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// XOR Floor Division Pattern Tests
+//===----------------------------------------------------------------------===//
+
+// Test: XOR floor division with non-negative dividend and positive constant
+// divisor should be replaced with plain divsi.
+// Pattern: select(x < 0, ~(~x / d), x / d) -> divsi(x, d)
+module {
+tt.func public @xor_floordiv_nonneg_dividend() -> tensor<64xi32> {
+  %x = tt.make_range {start = 0 : i32, end = 64 : i32} : tensor<64xi32>
+  %zero = arith.constant dense<0> : tensor<64xi32>
+  %minus_one = arith.constant dense<-1> : tensor<64xi32>
+  %divisor = arith.constant dense<128> : tensor<64xi32>
+  // XOR floor division pattern
+  %cond = arith.cmpi slt, %x, %zero : tensor<64xi32>
+  %not_x = arith.xori %x, %minus_one : tensor<64xi32>
+  %abs_x = arith.select %cond, %not_x, %x : tensor<64xi1>, tensor<64xi32>
+  %quot = arith.divsi %abs_x, %divisor : tensor<64xi32>
+  %not_q = arith.xori %quot, %minus_one : tensor<64xi32>
+  %result = arith.select %cond, %not_q, %quot : tensor<64xi1>, tensor<64xi32>
+  tt.return %result : tensor<64xi32>
+}
+// CHECK-LABEL: @xor_floordiv_nonneg_dividend
+// CHECK: %[[X:.*]] = tt.make_range
+// CHECK: %[[D:.*]] = arith.constant dense<128>
+// CHECK: %[[DIV:.*]] = arith.divui %[[X]], %[[D]]
+// CHECK: tt.return %[[DIV]]
+}
+
+// -----
+
+// Test: XOR floor division with unknown sign dividend should NOT be replaced.
+module {
+tt.func public @xor_floordiv_unknown_sign(%x: tensor<64xi32>) -> tensor<64xi32> {
+  %zero = arith.constant dense<0> : tensor<64xi32>
+  %minus_one = arith.constant dense<-1> : tensor<64xi32>
+  %divisor = arith.constant dense<128> : tensor<64xi32>
+  %cond = arith.cmpi slt, %x, %zero : tensor<64xi32>
+  %not_x = arith.xori %x, %minus_one : tensor<64xi32>
+  %abs_x = arith.select %cond, %not_x, %x : tensor<64xi1>, tensor<64xi32>
+  %quot = arith.divsi %abs_x, %divisor : tensor<64xi32>
+  %not_q = arith.xori %quot, %minus_one : tensor<64xi32>
+  %result = arith.select %cond, %not_q, %quot : tensor<64xi1>, tensor<64xi32>
+  tt.return %result : tensor<64xi32>
+}
+// CHECK-LABEL: @xor_floordiv_unknown_sign
+// CHECK: arith.cmpi slt
+// CHECK: arith.xori
+// CHECK: arith.select
+// CHECK: arith.divsi
+// CHECK: arith.xori
+// CHECK: arith.select
+}
