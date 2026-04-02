@@ -1,3 +1,6 @@
-# count_expert_num_tokens kernel failures - needs investigation
-# Skip entire file (both test_compute_expert_num_tokens and test_compute_expert_num_tokens_from_numel)
-tests/kernels/moe/test_count_expert_num_tokens.py
+# Other
+tests/kernels/moe/test_count_expert_num_tokens.py::test_compute_expert_num_tokens
+tests/kernels/moe/test_count_expert_num_tokens.py::test_compute_expert_num_tokens_from_numel
+tests/kernels/moe/test_moe.py::test_fused_moe_int64_overflow
+tests/kernels/moe/test_moe.py::test_mixtral_moe
+tests/kernels/moe/test_silu_mul_fp8_quant_deep_gemm.py::test_silu_mul_fp8_quant_deep_gemm

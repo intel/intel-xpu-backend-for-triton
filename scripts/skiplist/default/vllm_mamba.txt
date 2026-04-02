@@ -1,4 +1,4 @@
-# Skip Mamba tests - requires causal_conv1d CUDA extension not available on XPU
-tests/kernels/mamba/.*@regexp
-tests/models/encoder_decoder/language/.*mamba.*@regexp
-tests/models/decoder_only/language/.*mamba.*@regexp
+# Other
+tests/kernels/mamba/test_causal_conv1d.py::test_causal_conv1d_varlen
+tests/kernels/mamba/test_mamba_ssm.py::test_selective_scan
+tests/kernels/mamba/test_mamba_ssm.py::test_selective_scan_varlen
