@@ -387,6 +387,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             cls.instrumentation.patch("ttgpuir_to_llvmir", pm, mod.context)
         intel.passes.ttgpuir.add_to_llvmir(pm)
         intel.passes.ttgpuir.add_gen_to_llvm(pm)
+        # Optimize XOR floor division after AxisInfo is done (gen_to_llvm is the
+        # last pass using AxisInfo). The replacement divsi+remsi pattern allows
+        # LLVM to share division results across warp lanes.
+        intel.passes.ttir.add_simplify_signed_arithmetic(pm)
         passes.common.add_canonicalizer(pm)
         intel.passes.ttgpuir.add_rewrite_stack_ptr(pm)
         passes.common.add_cse(pm)

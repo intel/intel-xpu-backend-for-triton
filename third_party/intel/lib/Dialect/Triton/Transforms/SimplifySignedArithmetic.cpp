@@ -16,9 +16,30 @@ namespace mlir::triton::intel {
 
 namespace {
 
+/// Check if a constant is a splat of the given signed integer value.
+static bool isSplatValue(Value value, int64_t expected) {
+  auto constOp = value.getDefiningOp<arith::ConstantOp>();
+  if (!constOp)
+    return false;
+  if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue()))
+    return intAttr.getValue().getSExtValue() == expected;
+  if (auto denseAttr = dyn_cast<DenseElementsAttr>(constOp.getValue())) {
+    if (denseAttr.getElementType().isSignlessInteger()) {
+      return denseAttr.isSplat() &&
+             denseAttr.getSplatValue<APInt>().getSExtValue() == expected;
+    }
+  }
+  return false;
+}
+
 class SignedArithmeticSimplifier {
 public:
   void run(ModuleOp moduleOp) {
+    // Optimize XOR-based floor division patterns. This is safe to run after
+    // AxisInfo analysis (in make_llir, after gen_to_llvm) because AxisInfo
+    // won't re-analyze the replacement divsi ops.
+    optimizeFloorDivPatterns(moduleOp);
+
     SmallVector<arith::RemSIOp> remOpsToConvert;
     SmallVector<arith::DivSIOp> divOpsToConvert;
 
@@ -183,6 +204,125 @@ private:
       return isPositiveConstant(splatOp.getSrc());
 
     return false;
+  }
+
+  /// Optimize XOR-based floor division patterns.
+  ///
+  /// Detects:
+  ///   %cond   = arith.cmpi slt, %x, 0
+  ///   %not_x  = arith.xori %x, -1
+  ///   %abs_x  = arith.select %cond, %not_x, %x
+  ///   %quot   = arith.divsi %abs_x, %divisor
+  ///   %not_q  = arith.xori %quot, -1
+  ///   %result = arith.select %cond, %not_q, %quot
+  ///
+  /// Replaces with (when divisor is a positive constant):
+  ///   %quot   = arith.divsi %x, %divisor
+  ///   %rem    = arith.remsi %x, %divisor
+  ///   (floor adjustment using quot, rem, and sign of x)
+  void optimizeFloorDivPatterns(ModuleOp moduleOp) {
+    SmallVector<arith::SelectOp> selectOps;
+    moduleOp.walk(
+        [&](arith::SelectOp selectOp) { selectOps.push_back(selectOp); });
+
+    unsigned count = 0;
+    for (auto outerSelect : selectOps) {
+      // Only optimize scalar ops (post-scalarization in make_llir).
+      // Skip tensor ops (make_ttir) to avoid interfering with AxisInfo.
+      if (isa<ShapedType>(outerSelect.getType()))
+        continue;
+
+      Value cond = outerSelect.getCondition();
+      Value trueVal = outerSelect.getTrueValue();
+      Value falseVal = outerSelect.getFalseValue();
+
+      // %not_q = xori(%quot, -1)
+      auto notQuotOp = trueVal.getDefiningOp<arith::XOrIOp>();
+      if (!notQuotOp)
+        continue;
+      Value quotVal;
+      if (isSplatValue(notQuotOp.getRhs(), -1))
+        quotVal = notQuotOp.getLhs();
+      else if (isSplatValue(notQuotOp.getLhs(), -1))
+        quotVal = notQuotOp.getRhs();
+      else
+        continue;
+      if (falseVal != quotVal)
+        continue;
+
+      // %quot = divsi(%abs_x, %divisor)
+      auto divOp = quotVal.getDefiningOp<arith::DivSIOp>();
+      if (!divOp)
+        continue;
+      Value absX = divOp.getLhs();
+      Value divisor = divOp.getRhs();
+      if (!isPositiveConstant(divisor))
+        continue;
+
+      // %abs_x = select(%cond, %not_x, %x)
+      auto innerSelect = absX.getDefiningOp<arith::SelectOp>();
+      if (!innerSelect || innerSelect.getCondition() != cond)
+        continue;
+      Value notX = innerSelect.getTrueValue();
+      Value x = innerSelect.getFalseValue();
+
+      // %not_x = xori(%x, -1)
+      auto notXOp = notX.getDefiningOp<arith::XOrIOp>();
+      if (!notXOp)
+        continue;
+      if (!((notXOp->getOperand(0) == x && isSplatValue(notXOp.getRhs(), -1)) ||
+            (notXOp->getOperand(1) == x && isSplatValue(notXOp.getLhs(), -1))))
+        continue;
+
+      // %cond = cmpi slt, ?, 0 (condition may be shared across lanes)
+      auto cmpOp = cond.getDefiningOp<arith::CmpIOp>();
+      if (!cmpOp)
+        continue;
+      if (cmpOp.getPredicate() != arith::CmpIPredicate::slt)
+        continue;
+      if (!isSplatValue(cmpOp.getRhs(), 0))
+        continue;
+
+      // Replace with divsi(x, d) + remsi(x, d) + floor adjustment.
+      OpBuilder builder(outerSelect);
+      Location loc = outerSelect.getLoc();
+      Type xType = x.getType();
+      auto newDiv = arith::DivSIOp::create(builder, loc, x, divisor);
+      auto newRem = arith::RemSIOp::create(builder, loc, x, divisor);
+
+      auto zero = arith::ConstantOp::create(
+          builder, loc, builder.getZeroAttr(xType));
+      auto one = arith::ConstantOp::create(
+          builder, loc, builder.getIntegerAttr(xType, 1));
+      auto isNeg = arith::CmpIOp::create(builder, loc,
+                                          arith::CmpIPredicate::slt, x, zero);
+      auto hasRem = arith::CmpIOp::create(
+          builder, loc, arith::CmpIPredicate::ne, newRem, zero);
+      auto needAdj = arith::AndIOp::create(builder, loc, isNeg, hasRem);
+      auto adjusted = arith::SubIOp::create(builder, loc, newDiv, one);
+      auto result =
+          arith::SelectOp::create(builder, loc, needAdj, adjusted, newDiv);
+
+      outerSelect.replaceAllUsesWith(result.getResult());
+      if (outerSelect->use_empty())
+        outerSelect.erase();
+      if (notQuotOp->use_empty())
+        notQuotOp.erase();
+      if (divOp->use_empty())
+        divOp.erase();
+      if (innerSelect->use_empty())
+        innerSelect.erase();
+      if (notXOp->use_empty())
+        notXOp.erase();
+
+      ++count;
+    }
+
+    LLVM_DEBUG({
+      if (count > 0)
+        llvm::dbgs() << "Replaced " << count
+                     << " XOR floor division pattern(s)\n";
+    });
   }
 };
 
