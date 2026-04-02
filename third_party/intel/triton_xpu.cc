@@ -291,6 +291,7 @@ void init_triton_intel(py::module &&m) {
           fpm.addPass(FreezeMaskedDivRemPass());
         });
     mpm.addPass(pb.buildPerModuleDefaultPipeline(opt));
+    mpm.addPass(createModuleToFunctionPassAdaptor(ScalarizePtrVectorsPass()));
     mpm.run(*mod, mam);
   });
 
