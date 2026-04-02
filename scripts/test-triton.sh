@@ -876,11 +876,7 @@ run_vllm_install() {
   echo "************************************************"
   echo "vllm pin: $(<"$TRITON_PROJ/benchmarks/vllm/vllm-pin.txt")"
 
-  # Call installer (returns to caller's original directory)
   "$SCRIPTS_DIR/vllm/install-vllm.sh" $([ "$VENV" = true ] && echo --venv) --smoke-test
-
-  # Ensure we're in TRITON_PROJ for subsequent operations
-  cd "$TRITON_PROJ"
 }
 
 
