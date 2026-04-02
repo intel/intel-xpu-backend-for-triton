@@ -276,6 +276,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
             pytest.skip("splitK hasn't been fully tested on AMD GPU.")
 
     elif is_xpu():
+        if act_dtype_str == "nvfp4_e2m1" or weight_dtype_str == "nvfp4_e2m1":
+            pytest.xfail("nvfp4 not supported on XPU")
         if swiglu_opts is not None and do_gamma:
             pytest.xfail("NYI: swiglu and gamma not supported together")
 
