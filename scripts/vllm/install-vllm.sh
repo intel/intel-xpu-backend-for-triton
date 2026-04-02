@@ -203,9 +203,9 @@ function install_vllm {
   # Create constraints file to prevent pip from replacing pre-installed torch/triton
   # with a PyPI version. common.txt -> transformers -> torch is the main culprit.
   # Also xgrammar -> triton can pull in unwanted triton versions.
-  # Use pip freeze format (package @ file://...) which prevents ANY PyPI version.
+  # Extract package==version from pip freeze, stripping @ file:// URLs
   CONSTRAINTS=$(mktemp)
-  python -m pip freeze | grep -iE '^(torch|triton)' > "$CONSTRAINTS" || true
+  python -m pip freeze | grep -iE '^(torch|triton)' | sed 's/ @ file:\/\/.*//' > "$CONSTRAINTS" || true
   echo "**** Using constraints: $(cat "$CONSTRAINTS") ****"
 
   # Dry-run first: verify pip won't replace torch/triton with unwanted versions

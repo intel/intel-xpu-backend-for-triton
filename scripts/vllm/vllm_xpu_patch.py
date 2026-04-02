@@ -292,7 +292,8 @@ def main() -> None:
     for patch_dir in patch_dirs:
         if not patch_dir.is_dir():
             continue
-        for py_file in sorted(patch_dir.glob("*.py")):
+        # Use rglob to recursively scan subdirectories
+        for py_file in sorted(patch_dir.rglob("*.py")):
             print(f"Scanning {py_file.relative_to(vllm_root)}...")
             if patch_file(py_file):
                 total_patched += 1

@@ -1,5 +1,15 @@
-# Skip tests using 8B models - too large for CI
-tests/v1/spec_decode/test_tree_attention.py
-tests/v1/spec_decode/test_acceptance_length.py
+# Skip tests using Llama-3.1-8B-Instruct
+tests/v1/spec_decode/test_eagle.py::test_prepare_next_token_ids
+tests/v1/spec_decode/test_eagle.py::test_prepare_inputs
+tests/v1/spec_decode/test_eagle.py::test_prepare_inputs_padded
+tests/v1/spec_decode/test_eagle.py::test_set_inputs_first_pass_default_eagle
+tests/v1/spec_decode/test_eagle.py::test_set_inputs_first_pass_draft_model
+tests/v1/spec_decode/test_eagle.py::test_set_inputs_first_pass_parallel_drafting
+tests/v1/spec_decode/test_eagle.py::test_load_model
+tests/v1/spec_decode/test_eagle.py::test_propose
+tests/v1/spec_decode/test_eagle.py::test_propose_tree
 tests/v1/spec_decode/test_max_len.py::test_eagle_max_len
-tests/v1/spec_decode/test_eagle.py
+
+# Skip tests that query the available free memory
+tests/v1/spec_decode/test_max_len.py::test_ngram_max_len
+tests/v1/spec_decode/test_speculators_eagle3.py::test_eagle3_speculators_model
