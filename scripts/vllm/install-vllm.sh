@@ -2,6 +2,9 @@
 
 set -euo pipefail
 
+# Save original directory to restore at end (no side effects)
+ORIG_DIR="$(pwd)"
+
 FORCE_REINSTALL=false
 SKIP_INSTALL=false
 SMOKE_TEST=false
@@ -65,7 +68,11 @@ fi
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 SCRIPTS_DIR=$ROOT/scripts
 VLLM_PROJ=$ROOT/vllm
-VLLM_PIN="$(<"$ROOT/benchmarks/vllm/vllm-pin.txt")"
+
+# Use VLLM_PIN environment variable if set, otherwise read from file
+if [ -z "${VLLM_PIN:-}" ]; then
+  VLLM_PIN="$(<"$ROOT/benchmarks/vllm/vllm-pin.txt")"
+fi
 
 echo "**** vLLM pin: $VLLM_PIN ****"
 
@@ -259,3 +266,6 @@ install_vllm
 if [ "$SMOKE_TEST" = true ]; then
   smoke_test_vllm
 fi
+
+# Return to caller's original directory (no side effects)
+cd "$ORIG_DIR"

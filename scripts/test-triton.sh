@@ -872,18 +872,14 @@ run_liger_tests() {
 
 run_vllm_install() {
   echo "************************************************"
-  echo "******    Installing VLLM                 ******"
+  echo "******    Installing vLLM                 ******"
   echo "************************************************"
-  echo "VLLM pin: $(<"$TRITON_PROJ/benchmarks/vllm/vllm-pin.txt")"
+  echo "vllm pin: $(<"$TRITON_PROJ/benchmarks/vllm/vllm-pin.txt")"
 
-  cd "$TRITON_PROJ"
+  # Call installer (returns to caller's original directory)
+  "$SCRIPTS_DIR/vllm/install-vllm.sh" $([ "$VENV" = true ] && echo --venv) --smoke-test
 
-  # Call the dedicated installer with appropriate flags
-  # --venv flag is passed if VENV=true in test-triton.sh
-  # Smoke tests handled separately by test functions
-  "$SCRIPTS_DIR/vllm/install-vllm.sh" $([ $VENV = true ] && echo "--venv")
-
-  # Return to triton project root for test execution
+  # Ensure we're in TRITON_PROJ for subsequent operations
   cd "$TRITON_PROJ"
 }
 
@@ -895,7 +891,7 @@ run_vllm_install() {
 
 run_vllm_tests() {
   echo "************************************************"
-  echo "******    Running VLLM Triton tests       ******"
+  echo "******    Running vLLM Triton tests       ******"
   echo "************************************************"
 
   run_vllm_install
@@ -912,7 +908,7 @@ run_vllm_tests() {
 
 run_vllm_spec_decode_tests() {
   echo "********************************************************"
-  echo "******  Running VLLM Spec Decode tests           *******"
+  echo "******  Running vLLM Spec Decode tests           *******"
   echo "********************************************************"
 
   run_vllm_install
@@ -934,7 +930,7 @@ run_vllm_spec_decode_tests() {
 
 run_vllm_mrv2_tests() {
   echo "********************************************************"
-  echo "******  Running VLLM MRv2 tests                  *******"
+  echo "******  Running vLLM MRv2 tests                  *******"
   echo "********************************************************"
 
   run_vllm_install
@@ -953,7 +949,7 @@ run_vllm_mrv2_tests() {
 
 run_vllm_moe_tests() {
   echo "********************************************************"
-  echo "******  Running VLLM MOE Triton kernel tests     *******"
+  echo "******  Running vLLM MOE Triton kernel tests     *******"
   echo "********************************************************"
 
   run_vllm_install
@@ -979,7 +975,7 @@ run_vllm_moe_tests() {
 
 run_vllm_triton_attn_tests() {
   echo "********************************************************"
-  echo "******  Running VLLM Triton Attention tests      *******"
+  echo "******  Running vLLM Triton Attention tests      *******"
   echo "********************************************************"
 
   run_vllm_install
@@ -1000,7 +996,7 @@ run_vllm_triton_attn_tests() {
 
 run_vllm_gdn_attn_tests() {
   echo "********************************************************"
-  echo "******  Running VLLM GDN Attention tests         *******"
+  echo "******  Running vLLM GDN Attention tests         *******"
   echo "********************************************************"
 
   run_vllm_install
@@ -1021,7 +1017,7 @@ run_vllm_gdn_attn_tests() {
 
 run_vllm_mamba_tests() {
   echo "********************************************************"
-  echo "******  Running VLLM Mamba tests                 *******"
+  echo "******  Running vLLM Mamba tests                 *******"
   echo "********************************************************"
 
   run_vllm_install
@@ -1043,7 +1039,7 @@ run_vllm_mamba_tests() {
 
 run_vllm_quant_tests() {
   echo "********************************************************"
-  echo "******  Running VLLM Quantization Triton tests   *******"
+  echo "******  Running vLLM Quantization Triton tests   *******"
   echo "********************************************************"
 
   run_vllm_install
@@ -1069,7 +1065,7 @@ run_vllm_quant_tests() {
 
 run_vllm_linear_attn_tests() {
   echo "********************************************************"
-  echo "******  Running VLLM Linear Attention tests      *******"
+  echo "******  Running vLLM Linear Attention tests      *******"
   echo "********************************************************"
 
   run_vllm_install
@@ -1087,7 +1083,7 @@ run_vllm_linear_attn_tests() {
 
 run_vllm_deepgemm_tests() {
   echo "********************************************************"
-  echo "******  Running VLLM DeepGemm tests              *******"
+  echo "******  Running vLLM DeepGemm tests              *******"
   echo "********************************************************"
 
   run_vllm_install
@@ -1106,7 +1102,7 @@ run_vllm_deepgemm_tests() {
 
 run_vllm_kda_tests() {
   echo "********************************************************"
-  echo "******  Running VLLM KDA tests                   *******"
+  echo "******  Running vLLM KDA tests                   *******"
   echo "********************************************************"
 
   # No dedicated kernel tests exist yet — KDA is model-level integration only.

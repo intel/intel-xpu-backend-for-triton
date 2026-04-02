@@ -7,6 +7,10 @@ on:
         description: Runner label, keep empty for default
         type: string
         default: ""
+      vllm_pin:
+        description: vLLM pin (commit hash), keep empty for default
+        type: string
+        default: ""
       skip_list:
         description: Skip list directory override
         type: string
@@ -19,11 +23,17 @@ on:
         description: Ignore test errors
         type: boolean
         default: false
+      use_pyenv_python:
+        description: Use Python built with pyenv
+        type: boolean
+        default: true
 
 permissions: read-all
 
 env:
   PYTHON_VERSION: ${{ inputs.python_version }}
+  # Increase this value to reset cache
+  PIP_CACHE_NUMBER: 1
 
 jobs:
   setup:
@@ -47,10 +57,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Install Python (from pyenv) ${{ inputs.python_version }}
-        uses: ./.github/actions/setup-pyenv-python
+      - name: Load pip cache
+        id: pip-cache
+        uses: ./.github/actions/load
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          path: $HOME/.cache/pip
+          key: pip-${{ inputs.python_version }}-${{ hashFiles('pyproject.toml', 'setup.py') }}-${{ env.PIP_CACHE_NUMBER }}
+
+      - name: Install Python
+        uses: ./.github/actions/setup-python
+        with:
+          python_version: ${{ inputs.python_version }}
+          use_pyenv: ${{ inputs.use_pyenv_python }}
 
       - name: Identify Python version
         run: |
@@ -59,7 +77,7 @@ jobs:
 
       - name: Install Python build dependencies
         run: |
-          pip install cmake
+          pip install cmake build
           pip install -r python/requirements.txt
 
       - name: Setup PyTorch
@@ -95,12 +113,33 @@ jobs:
           pip install -r scripts/requirements-test.txt
 
       - name: Install vLLM
+        env:
+          VLLM_PIN: ${{ inputs.vllm_pin }}
         run: |
           ${{ steps.test-triton.outputs.command }} --install-vllm
+
+      - name: Build vLLM wheel
+        run: |
+          cd vllm
+          VLLM_TARGET_DEVICE=xpu python -m build --wheel --no-isolation
+          ls -lh dist/*.whl
+
+      - name: Upload vLLM wheel
+        uses: actions/upload-artifact@v7
+        with:
+          name: vllm-${{ inputs.python_version }}
+          path: vllm/dist/*.whl
 
       - name: Freeze vLLM dependencies
         run: |
           pip freeze | grep -v '^vllm' | grep -v '^-e.*vllm' > vllm-requirements.txt
+
+      - name: Save pip cache
+        if: ${{ steps.pip-cache.outputs.status == 'miss' }}
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.pip-cache.outputs.path }}
+          dest: ${{ steps.pip-cache.outputs.dest }}
 
       - name: Upload vLLM requirements
         uses: actions/upload-artifact@v7
@@ -133,11 +172,24 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      - name: Load pip cache
+        id: pip-cache
+        uses: ./.github/actions/load
+        with:
+          path: $HOME/.cache/pip
+          key: pip-${{ inputs.python_version }}-${{ matrix.suite }}-${{ hashFiles('pyproject.toml', 'setup.py') }}-${{ env.PIP_CACHE_NUMBER }}
+
       - name: Download Triton wheel
         uses: actions/download-artifact@v8
         with:
           name: triton-vllm-${{ inputs.python_version }}
           path: dist/
+
+      - name: Download vLLM wheel
+        uses: actions/download-artifact@v8
+        with:
+          name: vllm-${{ inputs.python_version }}
+          path: vllm-dist/
 
       - name: Download vLLM requirements
         uses: actions/download-artifact@v8
@@ -145,10 +197,11 @@ jobs:
           name: vllm-requirements-${{ inputs.python_version }}
           path: .
 
-      - name: Install Python (from pyenv) ${{ inputs.python_version }}
-        uses: ./.github/actions/setup-pyenv-python
+      - name: Install Python
+        uses: ./.github/actions/setup-python
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          python_version: ${{ inputs.python_version }}
+          use_pyenv: ${{ inputs.use_pyenv_python }}
 
       - name: Identify Python version
         run: |
@@ -186,10 +239,11 @@ jobs:
             exit 1
           fi
 
-      - name: Install vLLM
+      - name: Install vLLM from wheel
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
-          ${{ env.TRITON_TEST_CMD }} --install-vllm
+          pip install vllm-dist/*.whl
+          python -c 'import vllm; print(f"vLLM version: {getattr(vllm, \"__version__\", \"installed\")}")'
 
       - name: Create reports dir
         run: |
@@ -240,6 +294,13 @@ jobs:
         if: ${{ matrix.suite == 'vllm-rest' && steps.install.outcome == 'success' && !cancelled() }}
         run: |
           ${{ env.TRITON_TEST_CMD }} --vllm-deepgemm
+
+      - name: Save pip cache
+        if: ${{ steps.pip-cache.outputs.status == 'miss' }}
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.pip-cache.outputs.path }}
+          dest: ${{ steps.pip-cache.outputs.dest }}
 
       - name: Upload test report
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}

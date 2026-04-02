@@ -25,6 +25,23 @@ def _find_cuda_patterns(source: str) -> list[dict]:
 
     patterns: list[dict] = []
     for node in ast.walk(tree):
+        # device="cuda" in function default parameters
+        if isinstance(node, ast.FunctionDef):
+            defaults = node.args.defaults
+            arg_names = [arg.arg for arg in node.args.args]
+            # Match defaults with their argument names (defaults align to rightmost args)
+            num_defaults = len(defaults)
+            if num_defaults > 0:
+                for i, default in enumerate(defaults):
+                    arg_idx = len(arg_names) - num_defaults + i
+                    arg_name = arg_names[arg_idx]
+                    if arg_name == "device" and isinstance(default, ast.Constant) and default.value == "cuda":
+                        patterns.append({
+                            "type": "device_default_param",
+                            "line": default.lineno,
+                            "col": default.col_offset,
+                        })
+
         # device="cuda" keyword arguments
         if isinstance(node, ast.keyword):
             if (node.arg == "device" and isinstance(node.value, ast.Constant) and node.value.value == "cuda"):
@@ -43,6 +60,19 @@ def _find_cuda_patterns(source: str) -> list[dict]:
                                                             ast.Constant) and node.args[0].value == "cuda":
                 patterns.append({
                     "type": "torch_device",
+                    "line": node.args[0].lineno,
+                    "col": node.args[0].col_offset,
+                })
+
+        # torch.set_default_device("cuda") calls
+        if isinstance(node, ast.Call):
+            func = node.func
+            is_set_default_device = (isinstance(func, ast.Attribute) and func.attr == "set_default_device"
+                                     and isinstance(func.value, ast.Name) and func.value.id == "torch")
+            if is_set_default_device and node.args and isinstance(node.args[0],
+                                                                  ast.Constant) and node.args[0].value == "cuda":
+                patterns.append({
+                    "type": "torch_set_default_device",
                     "line": node.args[0].lineno,
                     "col": node.args[0].col_offset,
                 })
@@ -134,7 +164,7 @@ def _apply_patches(source: str, patterns: list[dict]) -> str:
         line = lines[line_idx]
         ptype = pattern["type"]
 
-        if ptype in ("device_kwarg", "torch_device"):
+        if ptype in ("device_kwarg", "torch_device", "torch_set_default_device", "device_default_param"):
             # Replace "cuda" with "xpu" in device arguments
             lines[line_idx] = line.replace('"cuda"', '"xpu"', 1)
 
@@ -217,13 +247,13 @@ def main() -> None:
 
     # Patch test files in spec_decode, sample, worker, moe, and attention dirs
     test_dirs = [
-        vllm_root / "tests" / "v1" / "spec_decode",
-        vllm_root / "tests" / "v1" / "sample",
-        vllm_root / "tests" / "v1" / "worker",
-        vllm_root / "tests" / "kernels" / "moe",
         vllm_root / "tests" / "kernels" / "attention",
-        vllm_root / "tests" / "kernels" / "quantization",
         vllm_root / "tests" / "kernels" / "mamba",
+        vllm_root / "tests" / "kernels" / "moe",
+        vllm_root / "tests" / "kernels" / "quantization",
+        vllm_root / "tests" / "v1" / "sample",
+        vllm_root / "tests" / "v1" / "spec_decode",
+        vllm_root / "tests" / "v1" / "worker",
     ]
 
     total_patched = 0
