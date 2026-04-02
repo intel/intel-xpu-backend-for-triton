@@ -288,13 +288,6 @@ void init_triton_intel(py::module &&m) {
           // sdiv/srem operands to be well defined.
           fpm.addPass(FreezeMaskedDivRemPass());
         });
-    // Optimize XOR-based floor division pattern before O3 so that
-    // subsequent GVN can share the sdiv result across warp lanes.
-    {
-      FunctionPassManager fpm;
-      fpm.addPass(OptimizeFloorDivPass());
-      mpm.addPass(createModuleToFunctionPassAdaptor(std::move(fpm)));
-    }
     mpm.addPass(pb.buildPerModuleDefaultPipeline(opt));
     mpm.run(*mod, mam);
   });
