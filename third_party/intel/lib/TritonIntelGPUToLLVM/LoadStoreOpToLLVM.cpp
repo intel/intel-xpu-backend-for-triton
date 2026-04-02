@@ -1724,12 +1724,68 @@ struct PrefetchOpConversion
     auto mode = symbolizeBlockIOMode(cast<StringAttr>(blockIOAttr).getValue());
     if (!mode)
       return failure();
-    const bool memoryRowMajor = isMemoryRowMajor(op);
-    // TODO: To support more layouts on memory.
-    if (!memoryRowMajor)
-      return failure();
 
     auto tensorOfPointers = cast<RankedTensorType>(op.getPtr().getType());
+    ArrayRef<int64_t> tensorShape = tensorOfPointers.getShape();
+    unsigned rank = tensorShape.size();
+
+    bool use1DBlockIO = false;
+    unsigned contiguousDim;
+    if (mode) {
+      const bool memoryRowMajor = isMemoryRowMajor(op);
+      contiguousDim = memoryRowMajor ? rank - 1 : rank - 2;
+      use1DBlockIO = false;
+    } else {
+      // 1d block IO.
+      auto value = cast<StringAttr>(blockIOAttr).getValue();
+      contiguousDim = atoi(value.data());
+    }
+
+    std::optional<LinearLayout> llEncoding =
+        cast<DistributedEncodingTrait>(tensorOfPointers.getEncoding())
+            .toLinearLayout(tensorShape);
+    assert(llEncoding.has_value() &&
+           "unexpected failure when getting linear layout");
+
+    auto ptrType = cast<PointerType>(tensorOfPointers.getElementType());
+    Type eltTy = ptrType.getPointeeType();
+    unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
+
+    // Get the maximum tile shapes for the given mask constancy.
+    AxisInfo *maskAxisInfo = nullptr;
+    if (op.getMask()) {
+      maskAxisInfo =
+          const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
+              .getAxisInfo(op.getMask());
+    }
+    AxisInfo *ptrAxisInfo =
+        const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
+            .getAxisInfo(op.getPtr());
+    BlockIOTileSizeInfo sizeInfo = getBlockIOTileSize<true /*load*/>(
+        llEncoding.value(), contiguousDim, elemSizeInBits, ptrAxisInfo,
+        maskAxisInfo, false);
+    if (!sizeInfo.isValid())
+      return failure();
+    // Extract members to regular variables for C++17 compatibility
+    // (capturing structured bindings in lambdas requires C++20)
+    int tileHeight = sizeInfo.tileHeight;
+    int tileWidth = sizeInfo.tileWidth;
+    int numPackedVals = sizeInfo.numElemPerPackedVal;
+    int _vBlocks = sizeInfo.vBlocks;
+    int rowDim = sizeInfo.rowDim;
+    int colDim = sizeInfo.colDim;
+    bool isTransposeRequired = sizeInfo.transpose;
+    bool useVNNIFormat = sizeInfo.vnni;
+    std::optional<SetVector<unsigned>> regPackedBases =
+        std::move(sizeInfo.regPackedBases);
+    // Adjust for tileHeight, tileWidth prefetching which doesn't care about the
+    // return results.
+    if (isTransposeRequired) {
+      tileWidth *= numPackedVals;
+      std::swap(tileHeight, tileWidth);
+    }
+    tileHeight *= _vBlocks;
+
     std::optional<DotOperandEncodingAttr> encoding =
         getDotEncoding(tensorOfPointers);
     if (!encoding)
@@ -1739,8 +1795,6 @@ struct PrefetchOpConversion
     SmallVector<unsigned> warpsPerCTA(dpasLayout.getWarpsPerCTA());
     ArrayRef<unsigned> cluster = dpasLayout.getRepCluster();
     SmallVector<unsigned> repCluster{cluster.begin(), cluster.end()};
-    ArrayRef<int64_t> tensorShape = tensorOfPointers.getShape();
-    unsigned rank = tensorShape.size();
     DpasEncodingAttr::OpIdx opIdx = getOpIdx(tensorOfPointers);
     SmallVector<int64_t> repetitions =
         dpasLayout.getDPASRepetitions(tensorShape, opIdx);
@@ -1773,7 +1827,6 @@ struct PrefetchOpConversion
     } break;
     }
 
-    auto ptrType = cast<PointerType>(tensorOfPointers.getElementType());
     Type elementType = ptrType.getPointeeType();
     auto tensorType = RankedTensorType::get(shardTensorShape, elementType,
                                             tensorOfPointers.getEncoding());
@@ -1805,10 +1858,13 @@ struct PrefetchOpConversion
         mlir::ceil<int64_t>(shardTensorShape[rank - 2], prefetchShape[0]),
         mlir::ceil<int64_t>(shardTensorShape[rank - 1], prefetchShape[1])};
 
-    Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
-    unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
+    // Type eltTy =
+    // getTypeConverter()->convertType(tensorType.getElementType()); unsigned
+    // elemSizeInBits = eltTy.getIntOrFloatBitWidth();
     unsigned tileWidthInElem = prefetchShape[1];
     unsigned tileHeightInElem = prefetchShape[0];
+    tileWidthInElem = tileWidth;
+    tileHeightInElem = tileHeight;
     unsigned vBlocks = 1;
     switch (elemSizeInBits) {
     case 8:
@@ -1855,18 +1911,125 @@ struct PrefetchOpConversion
     }
 
     Value rowStrideInBytes =
-        getPitch(rewriter, op.getPtr(), elemSizeInBits, memoryRowMajor ? 0 : 1);
+        getPitch(rewriter, op.getPtr(), elemSizeInBits, isTransposeRequired ? colDim : rowDim);
     if (!rowStrideInBytes)
       return failure();
 
     // If the stride is 0, we want to load only the first row.
-    int stride = getStride(op.getPtr(), rank - 2);
+    int stride = getStride(op.getPtr(), isTransposeRequired ? rowDim : colDim);
     Value baseHeight = b.i32_val(stride == 0 ? 1 : tileHeightInElem);
     Value baseWidth = b.i32_val(
         std::max(64u, vBlocks * tileWidthInElem * (elemSizeInBits / 8)));
     Value offsetBaseX = b.i32_val(0);
     Value offsetBaseY = b.i32_val(0);
 
+    unsigned threadsPerWarp =
+        TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>());
+    int64_t numElemsPerPrefetch =
+        mlir::ceil(tileWidthInElem * tileHeightInElem, threadsPerWarp);
+    int64_t numElems = getTotalElemsPerThread(tensorOfPointers);
+
+    MLIRContext *ctx = op->getContext();
+    StringAttr kRegister = S("register");
+    StringAttr kLane = S("lane");
+    StringAttr kWarp = S("warp");
+    StringAttr kBlock = S("block");
+    assert(regPackedBases.has_value() &&
+           "invalid register bases for packing elems.");
+    std::vector<std::vector<int>> bases(regPackedBases->size());
+    llvm::transform(*regPackedBases, bases.begin(),
+                    [&](int base) { return std::vector<int>{base}; });
+    LinearLayout regMapping({{kRegister, bases}},
+                            {{kRegister, llEncoding->getInDimSize(kRegister)}},
+                            /*requireSurjective=*/true);
+
+    Value warpId = arith::IndexCastOp::create(
+        rewriter, loc, i32_ty,
+        mlir::gpu::SubgroupIdOp::create(rewriter, loc,
+                                        /*upperBound=*/nullptr));
+
+    static constexpr unsigned MIN_BASE_WIDTH_BYTES = 64;
+    for (size_t elemIdx = 0; elemIdx < numElems;
+         elemIdx += numElemsPerPrefetch) {
+      unsigned registerIdx = regMapping.apply({{kRegister, elemIdx}})[0].second;
+
+      // Need to apply the linear layout to get the offsets to the base of the
+      // block pointer.
+      // TODO: add annotation uniform to the offsets. Make sure the IGC detect
+      // the offsets as uniform.
+      auto offsets = applyLinearLayout(loc, rewriter, *llEncoding,
+                                       {{kRegister, b.i32_val(registerIdx)},
+                                        {kLane, b.i32_val(0)},
+                                        {kWarp, warpId},
+                                        {kBlock, b.i32_val(0)}});
+
+      // Use the top-left address of the block to load the data.
+      Value addrElem = ptrElems[registerIdx];
+      Value offsetX, offsetY;
+      Value adjustedBaseWidth = baseWidth, adjustedBaseHeight = baseHeight;
+      Value pred;
+
+      addrElem = targetInfo.shuffleIdx(rewriter, loc, addrElem, 0);
+
+      // Adjust the baseWidth, offsetX and base address use the original base
+      // of the BLOCK.
+      offsetX = offsets[isTransposeRequired ? rowDim : colDim].second;
+      offsetY = b.i32_val(0);
+      Value negativeOffsetX = b.sub(b.i32_val(0), offsetX);
+      addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, negativeOffsetX);
+      // The offset is in number of original elements. So we need to scale it
+      // by element bytes size.
+      adjustedBaseWidth =
+          b.add(baseWidth, b.mul(offsetX, b.i32_val(elemSizeInBits / 8)));
+      adjustedBaseWidth =
+          b.umax(adjustedBaseWidth, b.i32_val(MIN_BASE_WIDTH_BYTES));
+      // Use the top-left address and mask of the block to load the data.
+      // (The first value referred to by the registerIdx.)
+      if (maskElems.size()) {
+        pred = targetInfo.shuffleIdx(rewriter, loc, maskElems[registerIdx], 0);
+      }
+
+      if (pred) {
+        // We leverage the GPU block I/O hardware out-of-bound protection
+        // feature by setting the offset to an invalid value when 'pred'
+        // is false (the HW will not read out-of-bounds values). Later on,
+        // after issuing the 2d block read operation, we will select the
+        // result of the load only if the mask evaluate to true, otherwise
+        // we will use 'other'.
+        offsetY = b.select(pred, offsetY, adjustedBaseHeight);
+      }
+
+      assert(numPackedVals > 0 && "numPackedVals should be greater than zero.");
+      Value ret;
+      if (use1DBlockIO) {
+        assert(false && "not implemented yet.");
+      } else {
+        auto newOp = TritonGEN::Matrix2DBlockPrefetchOp::create(
+            rewriter, loc,
+            /*ptr*/ addrElem,
+            /*base_width*/ adjustedBaseWidth,
+            /*base_height*/ adjustedBaseHeight,
+            /*base_pitch*/ rowStrideInBytes,
+            // offsetX was in terms of original elements. The 2d block io
+            // requires offsetX to be in terms of packed elements.
+            /*x*/ b.udiv(offsetX, b.i32_val(numPackedVals)),
+            /*y*/ offsetY,
+            /*elem_size_in_bits*/ elemSizeInBits,
+            /*tile_width*/ tileWidthInElem,
+            /*tile_height*/ tileHeightInElem,
+            /*v_blocks*/ vBlocks,
+            /*cache_opt*/ TritonGEN::LoadCacheControl::L1C_L3C);
+        if (failed(newOp.verify())) {
+          // delete the op so that the verifier will not abort the pass
+          // pipeline later, as we can fail this path and try a different
+          // approach.
+          rewriter.eraseOp(newOp);
+          return failure();
+        }
+      }
+    }
+
+#if 0
     // Compute total batch repetitions for dims beyond the inner 2.
     int64_t totalBatchReps = 1;
     for (unsigned d = 0; d < rank - 2; ++d)
@@ -1943,7 +2106,7 @@ struct PrefetchOpConversion
         }
       }
     }
-
+#endif
     rewriter.eraseOp(op);
     return success();
   }
