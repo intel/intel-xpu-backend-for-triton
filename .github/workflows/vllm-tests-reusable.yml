@@ -34,6 +34,7 @@ env:
   PYTHON_VERSION: ${{ inputs.python_version }}
   # Increase this value to reset cache
   PIP_CACHE_NUMBER: 1
+  HF_TOKEN: ${{ secrets.HF_TOKEN || '' }}
 
 jobs:
   setup:
