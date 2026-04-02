@@ -77,7 +77,7 @@ jobs:
 
       - name: Install Python build dependencies
         run: |
-          pip install cmake build
+          pip install cmake
           pip install -r python/requirements.txt
 
       - name: Setup PyTorch
@@ -118,21 +118,9 @@ jobs:
         run: |
           ${{ steps.test-triton.outputs.command }} --install-vllm
 
-      - name: Build vLLM wheel
-        run: |
-          cd vllm
-          VLLM_TARGET_DEVICE=xpu python -m build --wheel --no-isolation
-          ls -lh dist/*.whl
-
-      - name: Upload vLLM wheel
-        uses: actions/upload-artifact@v7
-        with:
-          name: vllm-${{ inputs.python_version }}
-          path: vllm/dist/*.whl
-
       - name: Freeze vLLM dependencies
         run: |
-          pip freeze | grep -v '^vllm' | grep -v '^-e.*vllm' > vllm-requirements.txt
+          pip freeze > vllm-requirements.txt
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}
@@ -185,12 +173,6 @@ jobs:
           name: triton-vllm-${{ inputs.python_version }}
           path: dist/
 
-      - name: Download vLLM wheel
-        uses: actions/download-artifact@v8
-        with:
-          name: vllm-${{ inputs.python_version }}
-          path: vllm-dist/
-
       - name: Download vLLM requirements
         uses: actions/download-artifact@v8
         with:
@@ -229,21 +211,16 @@ jobs:
         run: |
           echo "TRITON_TEST_CMD=${{ needs.setup.outputs.test-triton-command }}" | tee -a $GITHUB_ENV
 
-      - name: Install vLLM dependencies from frozen requirements
+      - name: Install vLLM from frozen requirements
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
           if [ -f vllm-requirements.txt ]; then
             pip install -r vllm-requirements.txt
+            python -c 'import vllm; print(f"vLLM version: {getattr(vllm, \"__version__\", \"installed\")}")'
           else
             echo "Error: vLLM requirements not found"
             exit 1
           fi
-
-      - name: Install vLLM from wheel
-        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
-        run: |
-          pip install vllm-dist/*.whl
-          python -c 'import vllm; print(f"vLLM version: {getattr(vllm, \"__version__\", \"installed\")}")'
 
       - name: Create reports dir
         run: |
