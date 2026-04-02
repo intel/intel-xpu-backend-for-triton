@@ -99,6 +99,16 @@ def _find_cuda_patterns(source: str) -> list[dict]:
                 "col": node.col_offset,
             })
 
+        # torch.cuda.Stream() calls
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "Stream"
+                and isinstance(node.func.value, ast.Attribute) and node.func.value.attr == "cuda"
+                and isinstance(node.func.value.value, ast.Name) and node.func.value.value.id == "torch"):
+            patterns.append({
+                "type": "cuda_stream",
+                "line": node.lineno,
+                "col": node.col_offset,
+            })
+
         # variable = "cuda" assignments
         if isinstance(node, ast.Assign) and len(node.targets) == 1:
             target = node.targets[0]
@@ -184,6 +194,10 @@ def _apply_patches(source: str, patterns: list[dict]) -> str:
                 line,
             )
 
+        elif ptype == "cuda_stream":
+            # Replace torch.cuda.Stream() with torch.xpu.Stream()
+            lines[line_idx] = line.replace("torch.cuda.Stream()", "torch.xpu.Stream()")
+
         elif ptype == "is_cuda_check":
             # In skipif: not current_platform.is_cuda()
             # -> not (current_platform.is_cuda() or current_platform.is_xpu())
@@ -245,8 +259,9 @@ def main() -> None:
         print(f"Error: {vllm_root} is not a directory")
         sys.exit(1)
 
-    # Patch test files in spec_decode, sample, worker, moe, and attention dirs
-    test_dirs = [
+    # Patch test files and source files that need CUDA->XPU transformation
+    patch_dirs = [
+        # Test directories
         vllm_root / "tests" / "kernels" / "attention",
         vllm_root / "tests" / "kernels" / "mamba",
         vllm_root / "tests" / "kernels" / "moe",
@@ -254,13 +269,15 @@ def main() -> None:
         vllm_root / "tests" / "v1" / "sample",
         vllm_root / "tests" / "v1" / "spec_decode",
         vllm_root / "tests" / "v1" / "worker",
+        # Source directories
+        vllm_root / "vllm" / "v1" / "worker",
     ]
 
     total_patched = 0
-    for test_dir in test_dirs:
-        if not test_dir.is_dir():
+    for patch_dir in patch_dirs:
+        if not patch_dir.is_dir():
             continue
-        for py_file in sorted(test_dir.glob("*.py")):
+        for py_file in sorted(patch_dir.glob("*.py")):
             print(f"Scanning {py_file.relative_to(vllm_root)}...")
             if patch_file(py_file):
                 total_patched += 1
