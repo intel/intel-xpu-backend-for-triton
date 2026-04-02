@@ -1,4 +1,9 @@
 #!/usr/bin/env python
+
+# pylint: disable=too-many-locals
+# pylint: disable=too-many-branches
+# pylint: disable=too-many-statements
+# pylint: disable=too-many-boolean-expressions
 """AST-guided XPU patcher for vLLM test files.
 
 Scans Python test files for hardcoded CUDA references and applies
@@ -226,8 +231,8 @@ def _apply_patches(source: str, patterns: list[dict]) -> str:
 
             # Use walrus operator to assign and check in one line
             lines[line_idx] = re.sub(
-                r'if\s+current_platform\.get_device_capability\(\)\s*(<|>|<=|>=|==|!=)',
-                r'if (cap := current_platform.get_device_capability()) is not None and cap \1',
+                r"if\s+current_platform\.get_device_capability\(\)\s*(<|>|<=|>=|==|!=)",
+                r"if (cap := current_platform.get_device_capability()) is not None and cap \1",
                 line,
             )
 
