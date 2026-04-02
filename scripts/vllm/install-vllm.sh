@@ -2,8 +2,7 @@
 
 set -euo pipefail
 
-# Save original directory to restore at end (no side effects)
-ORIG_DIR="$(pwd)"
+OLD_DIR="$(pwd)"
 
 FORCE_REINSTALL=false
 SKIP_INSTALL=false
@@ -267,5 +266,4 @@ if [ "$SMOKE_TEST" = true ]; then
   smoke_test_vllm
 fi
 
-# Return to caller's original directory (no side effects)
-cd "$ORIG_DIR"
+cd "$OLD_DIR"
