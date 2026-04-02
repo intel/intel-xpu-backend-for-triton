@@ -230,7 +230,28 @@ index 000000000..111111111 100644
 +index 000000000..111111111 100644
 +--- a/vllm/model_executor/layers/fused_moe/batched_deep_gemm_moe.py
 ++++ b/vllm/model_executor/layers/fused_moe/batched_deep_gemm_moe.py
-+@@ -210,12 +210,15 @@ def _silu_mul_fp8_quant_deep_gemm(
++@@ -210,12 +210,15 @@ def persistent_masked_m_silu_mul_quant(
++         DeepGemmQuantScaleFMT.UE8M0,
++     ]
++
++-    cuda_arch = current_platform.get_device_capability(
++-        device_id=y.device.index
++-    ).to_int()
++-
++-    if current_platform.is_cuda() and cuda_arch >= 80:
+++    # XPU: Check platform before getting device capability
+++    # ROCm and XPU use Triton fallback path
+++    use_cuda_kernel = False
+++    if current_platform.is_cuda():
+++        cuda_arch = current_platform.get_device_capability(
+++            device_id=y.device.index
+++        ).to_int()
+++        use_cuda_kernel = cuda_arch >= 80
+++    if use_cuda_kernel:
++         torch.ops._C.persistent_masked_m_silu_mul_quant(
++             y, tokens_per_expert, y_q, y_s, ceil_ue8m0
++         )
++@@ -710,12 +713,15 @@ def _silu_mul_fp8_quant_deep_gemm(
 +         DeepGemmQuantScaleFMT.UE8M0,
 +     ]
 +
