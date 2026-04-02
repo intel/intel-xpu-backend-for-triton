@@ -8,4 +8,9 @@ struct FreezeMaskedDivRemPass : PassInfoMixin<FreezeMaskedDivRemPass> {
   static StringRef name() { return "FreezeMaskedDivRemPass"; }
 };
 
+struct OptimizeFloorDivPass : PassInfoMixin<OptimizeFloorDivPass> {
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+  static StringRef name() { return "OptimizeFloorDivPass"; }
+};
+
 } // namespace llvm
