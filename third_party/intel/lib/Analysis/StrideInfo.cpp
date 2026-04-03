@@ -22,9 +22,6 @@ StrideInfo StrideInfo::getPessimisticValueState(Value value) {
   Type ty = value.getType();
   if (auto tensorTy = dyn_cast<RankedTensorType>(ty))
     rank = tensorTy.getRank();
-  else if (auto ptrTy = dyn_cast<triton::PointerType>(ty))
-    if (auto tensorTy = dyn_cast<RankedTensorType>(ptrTy.getPointeeType()))
-      rank = tensorTy.getRank();
   if (auto descTy = dyn_cast<triton::TensorDescInterface>(ty))
     rank = descTy.getBlockType().getRank();
 
@@ -160,19 +157,6 @@ public:
       ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
     assert(op->getNumOperands() == 1 &&
            "PassThroughStrideVisitor expects a single-operand op");
-    return operands[0]->getValue();
-  }
-};
-
-// AdvanceOp: stride passes from operand 0 (the pointer operand).
-// AdvanceOp has variadic offsets so it cannot use PassThroughStrideVisitor.
-class AdvanceOpStrideVisitor final
-    : public StrideInfoVisitorImpl<triton::AdvanceOp> {
-public:
-  StrideInfo getStrideInfo(
-      triton::AdvanceOp op,
-      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
-    assert(!operands.empty() && "AdvanceOp must have at least one operand");
     return operands[0]->getValue();
   }
 };
@@ -425,21 +409,6 @@ public:
   }
 };
 
-class MakeTensorPtrOpStrideVisitor final
-    : public StrideInfoVisitorImpl<triton::MakeTensorPtrOp> {
-public:
-  StrideInfo getStrideInfo(
-      triton::MakeTensorPtrOp op,
-      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
-    StrideInfo::DimVectorT result;
-    for (Value s : op.getStrides()) {
-      auto val = this->getConstantValue(s);
-      result.push_back(val.has_value() ? val.value() : -1);
-    }
-    return StrideInfo(std::move(result));
-  }
-};
-
 class MakeTensorDescOpStrideVisitor final
     : public StrideInfoVisitorImpl<triton::MakeTensorDescOp> {
 public:
@@ -504,7 +473,6 @@ public:
                     PassThroughStrideVisitor<arith::IndexCastOp>,
                     PassThroughStrideVisitor<triton::gpu::ConvertLayoutOp>,
                     PassThroughStrideVisitor<triton::BitcastOp>>();
-    visitors.append<AdvanceOpStrideVisitor>();
     visitors.append<UnrealizedConversionCastStrideVisitor>();
     visitors.append<MakeRangeOpStrideVisitor>();
     visitors.append<PoisonOpStrideVisitor>();
@@ -524,7 +492,6 @@ public:
     visitors.append<ExpandDimsOpStrideVisitor>();
     visitors.append<BroadcastOpStrideVisitor>();
     visitors.append<TransOpStrideVisitor>();
-    visitors.append<MakeTensorPtrOpStrideVisitor>();
     visitors.append<MakeTensorDescOpStrideVisitor>();
     visitors.append<DescriptorLoadOpStrideVisitor>();
     visitors.setAxisInfoLookup(std::move(axisInfoLookup));

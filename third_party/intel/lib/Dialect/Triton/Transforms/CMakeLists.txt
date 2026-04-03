@@ -5,7 +5,6 @@ add_triton_library(TritonIntelTransforms
   RewriteTensorDescriptorToPointer.cpp
   SimplifySignedArithmetic.cpp
   StrideVersioning.cpp
-  TensorDescToBlockPointer.cpp
 
   DEPENDS
   TritonIntelTransformsIncGen
