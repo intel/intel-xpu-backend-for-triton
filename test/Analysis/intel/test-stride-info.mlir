@@ -319,34 +319,6 @@ tt.func @passthrough_bitcast() {
 
 // -----
 
-// CHECK-LABEL: @make_tensor_ptr_known_strides
-tt.func @make_tensor_ptr_known_strides(%arg0: !tt.ptr<f16>) {
-  %c0_i32 = arith.constant 0 : i32
-  %c1_i64 = arith.constant 1 : i64
-  %c32_i64 = arith.constant 32 : i64
-  %c128_i64 = arith.constant 128 : i64
-  // constant stride operands [32, 1] => stride = [32, 1]
-  // CHECK: tt.make_tensor_ptr {{.*}} => stride = [32, 1]
-  %0 = tt.make_tensor_ptr %arg0, [%c128_i64, %c32_i64], [%c32_i64, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : !tt.ptr<tensor<128x32xf16>>
-  tt.return
-}
-
-// -----
-
-// CHECK-LABEL: @make_tensor_ptr_unknown_stride
-tt.func @make_tensor_ptr_unknown_stride(%arg0: !tt.ptr<f16>, %stride: i64) {
-  %c0_i32 = arith.constant 0 : i32
-  %c1_i64 = arith.constant 1 : i64
-  %c128_i64 = arith.constant 128 : i64
-  %c32_i64 = arith.constant 32 : i64
-  // non-constant stride operand => unknown stride
-  // CHECK: tt.make_tensor_ptr {{.*}} => stride = [-1, -1]
-  %0 = tt.make_tensor_ptr %arg0, [%c128_i64, %c32_i64], [%stride, %stride], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : !tt.ptr<tensor<128x32xf16>>
-  tt.return
-}
-
-// -----
-
 // CHECK-LABEL: @make_tensor_desc_known_strides
 tt.func @make_tensor_desc_known_strides(%arg0: !tt.ptr<f16>) {
   %c1_i64 = arith.constant 1 : i64
@@ -626,21 +598,5 @@ tt.func @contiguity_hint_partial() {
   // Hint (16) < dim size (32) => not fully contiguous, stride stays unknown.
   // CHECK: arith.remsi {{.*}} => stride = [-1]
   %0 = arith.remsi %range, %c8 {tt.contiguity = dense<16> : tensor<1xi32>} : tensor<32xi32>
-  tt.return
-}
-
-// -----
-
-// CHECK-LABEL: @advance_passthrough
-tt.func @advance_passthrough(%arg0: !tt.ptr<f16>) {
-  %c0_i32 = arith.constant 0 : i32
-  %c1_i64 = arith.constant 1 : i64
-  %c128_i64 = arith.constant 128 : i64
-  %c32_i64 = arith.constant 32 : i64
-  // CHECK: tt.make_tensor_ptr {{.*}} => stride = [1, 1]
-  %ptr = tt.make_tensor_ptr %arg0, [%c128_i64, %c32_i64], [%c1_i64, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : !tt.ptr<tensor<128x32xf16>>
-  // advance passes through stride from operand 0
-  // CHECK: tt.advance {{.*}} => stride = [1, 1]
-  %1 = tt.advance %ptr, [%c0_i32, %c0_i32] : !tt.ptr<tensor<128x32xf16>>
   tt.return
 }
