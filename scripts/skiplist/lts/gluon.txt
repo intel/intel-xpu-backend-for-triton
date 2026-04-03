@@ -1,0 +1,6 @@
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/5149
+# Unlocked on rolling by PR #6533 (sanitize_overflow + SPIRV translator patch).
+# LTS driver lacks this fix, so these remain skipped here.
+# Fixed since NEO 25.40
+python/test/gluon/test_lowerings.py::test_scan_layouts[r"True-.*"]@regexp
+python/test/gluon/test_lowerings.py::test_reduce_layouts[r".*-True-.*"]@regexp
