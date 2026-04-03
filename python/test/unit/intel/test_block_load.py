@@ -1,11 +1,3 @@
-"""Tests for DescriptorLoadOp → 2D block IO lowering.
-
-Mirrors the structure of test_block_load.py but uses ``tt.make_tensor_descriptor``
-/ ``tt.descriptor_load`` / ``tt.descriptor_store`` (TTGIR tests) and
-``tl.make_tensor_descriptor`` / ``desc.load`` / ``desc.store`` (JIT tests)
-instead of ``tt.make_tensor_ptr`` / ``tt.load`` / ``tt.store``.
-"""
-
 import pytest
 import torch
 import pathlib
