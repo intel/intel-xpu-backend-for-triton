@@ -1721,15 +1721,12 @@ struct PrefetchOpConversion
     if (!blockIOAttr)
       return failure();
 
-    auto mode = symbolizeBlockIOMode(cast<StringAttr>(blockIOAttr).getValue());
-    if (!mode)
-      return failure();
-
     auto tensorOfPointers = cast<RankedTensorType>(op.getPtr().getType());
     ArrayRef<int64_t> tensorShape = tensorOfPointers.getShape();
     unsigned rank = tensorShape.size();
 
-    bool use1DBlockIO = false;
+    auto mode = symbolizeBlockIOMode(cast<StringAttr>(blockIOAttr).getValue());
+    bool use1DBlockIO = true;
     unsigned contiguousDim;
     if (mode) {
       const bool memoryRowMajor = isMemoryRowMajor(op);
@@ -1912,7 +1909,7 @@ struct PrefetchOpConversion
 
     Value rowStrideInBytes =
         getPitch(rewriter, op.getPtr(), elemSizeInBits, isTransposeRequired ? colDim : rowDim);
-    if (!rowStrideInBytes)
+    if (mode && !rowStrideInBytes)
       return failure();
 
     // If the stride is 0, we want to load only the first row.
@@ -1948,6 +1945,15 @@ struct PrefetchOpConversion
         mlir::gpu::SubgroupIdOp::create(rewriter, loc,
                                         /*upperBound=*/nullptr));
 
+    Intrinsic blockIO1D;
+    if (use1DBlockIO) {
+      blockIO1D =
+          GenISA<llvm::GenISAIntrinsic::ID::GenISA_LSCSimdBlockPrefetch>(
+              rewriter,
+              mlir::LLVM::LLVMPointerType::get(
+                  ctx, TritonGEN::TritonGENMemorySpace::kCrossWorkgroup));
+    }
+
     static constexpr unsigned MIN_BASE_WIDTH_BYTES = 64;
     for (size_t elemIdx = 0; elemIdx < numElems;
          elemIdx += numElemsPerPrefetch) {
@@ -1971,48 +1977,56 @@ struct PrefetchOpConversion
 
       addrElem = targetInfo.shuffleIdx(rewriter, loc, addrElem, 0);
 
-      // Adjust the baseWidth, offsetX and base address use the original base
-      // of the BLOCK.
-      offsetX = offsets[isTransposeRequired ? rowDim : colDim].second;
-      offsetY = b.i32_val(0);
-      Value negativeOffsetX = b.sub(b.i32_val(0), offsetX);
-      addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, negativeOffsetX);
-      // The offset is in number of original elements. So we need to scale it
-      // by element bytes size.
-      adjustedBaseWidth =
-          b.add(baseWidth, b.mul(offsetX, b.i32_val(elemSizeInBits / 8)));
-      adjustedBaseWidth =
-          b.umax(adjustedBaseWidth, b.i32_val(MIN_BASE_WIDTH_BYTES));
       // Use the top-left address and mask of the block to load the data.
       // (The first value referred to by the registerIdx.)
       if (maskElems.size()) {
         pred = targetInfo.shuffleIdx(rewriter, loc, maskElems[registerIdx], 0);
       }
 
-      if (pred) {
-        // We leverage the GPU block I/O hardware out-of-bound protection
-        // feature by setting the offset to an invalid value when 'pred'
-        // is false (the HW will not read out-of-bounds values). Later on,
-        // after issuing the 2d block read operation, we will select the
-        // result of the load only if the mask evaluate to true, otherwise
-        // we will use 'other'.
-        offsetY = b.select(pred, offsetY, adjustedBaseHeight);
-      }
-
       assert(numPackedVals > 0 && "numPackedVals should be greater than zero.");
-      Value ret;
+
       if (use1DBlockIO) {
-        assert(false && "not implemented yet.");
+        blockIO1D(rewriter, loc,
+                  {addrElem,
+                   /*data size*/ b.i32_val(elemSizeInBits),
+                   /*vector size*/ b.i32_val(1),
+                   /*cache controls*/
+                   b.i32_val(static_cast<int>(
+                       mlir::triton::TritonGEN::LoadCacheControl::DEFAULT))});
       } else {
+        // Adjust the baseWidth, offsetX and base address use the original base
+        // of the BLOCK.
+        offsetX = offsets[isTransposeRequired ? rowDim : colDim].second;
+        offsetY = b.i32_val(0);
+        Value negativeOffsetX = b.sub(b.i32_val(0), offsetX);
+        addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, negativeOffsetX);
+        // The offset is in number of original elements. So we need to scale it
+        // by element bytes size.
+        adjustedBaseWidth =
+            b.add(baseWidth, b.mul(offsetX, b.i32_val(elemSizeInBits / 8)));
+        adjustedBaseWidth =
+            b.umax(adjustedBaseWidth, b.i32_val(MIN_BASE_WIDTH_BYTES));
+
+        if (pred) {
+          // We leverage the GPU block I/O hardware out-of-bound protection
+          // feature by setting the offset to an invalid value when 'pred'
+          // is false (the HW will not read out-of-bounds values). Later on,
+          // after issuing the 2d block read operation, we will select the
+          // result of the load only if the mask evaluate to true, otherwise
+          // we will use 'other'.
+          offsetY = b.select(pred, offsetY, adjustedBaseHeight);
+        }
+
         auto newOp = TritonGEN::Matrix2DBlockPrefetchOp::create(
             rewriter, loc,
             /*ptr*/ addrElem,
             /*base_width*/ adjustedBaseWidth,
             /*base_height*/ adjustedBaseHeight,
-            /*base_pitch*/ rowStrideInBytes,
+            /*base_pitch*/
+            rowStrideInBytes ? rowStrideInBytes : adjustedBaseWidth,
             // offsetX was in terms of original elements. The 2d block io
             // requires offsetX to be in terms of packed elements.
-            /*x*/ b.udiv(offsetX, b.i32_val(numPackedVals)),
+            /*x*/ offsetX,
             /*y*/ offsetY,
             /*elem_size_in_bits*/ elemSizeInBits,
             /*tile_width*/ tileWidthInElem,
