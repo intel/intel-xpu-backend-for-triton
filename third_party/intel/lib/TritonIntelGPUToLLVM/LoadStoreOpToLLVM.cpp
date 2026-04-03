@@ -537,6 +537,43 @@ struct LoadStoreConversionBase {
                                         rewriter, boundaryCheck, padding);
   }
 
+  /// Build per-element NaN masks for out-of-bounds elements.
+  ///
+  /// Returns a vector of i1 values, one per thread element, where `true`
+  /// means the element is in-bounds. The caller should select NaN for
+  /// elements where the mask is `false`.
+  ///
+  /// \p offsets     Base offsets for each dimension (e.g. descriptor indices).
+  /// \p shapes      Boundary shapes for each dimension (i64).
+  /// \p tensorType  The result tensor type (determines layout and element
+  ///                count).
+  SmallVector<Value> buildNaNMasks(Location loc, ArrayRef<Value> offsets,
+                                   ArrayRef<Value> shapes,
+                                   RankedTensorType tensorType,
+                                   ConversionPatternRewriter &rewriter) const {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    size_t rank = tensorType.getRank();
+    assert(offsets.size() == rank && shapes.size() == rank);
+
+    const unsigned numElems = getTotalElemsPerThread(tensorType);
+    auto indices = emitIndices(loc, rewriter, targetInfo,
+                               tensorType.getEncoding(), tensorType, true);
+
+    SmallVector<Value> maskElems;
+    for (unsigned i = 0; i < numElems; ++i) {
+      SmallVector<Value> index = indices[i];
+      Value mask = b.int_val(1, 1);
+      for (unsigned j = 0; j < rank; ++j) {
+        Value idxInTensor = b.add(index[j], offsets[j]);
+        Value inBounds = b.icmp_slt(idxInTensor, b.trunc(i32_ty, shapes[j]));
+        Value isPos = b.icmp_sge(idxInTensor, b.i32_val(0));
+        mask = b.and_(b.and_(inBounds, mask), isPos).getResult();
+      }
+      maskElems.push_back(mask);
+    }
+    return maskElems;
+  }
+
   // Ensure the operation doesn't have attributes that the IGC predicated
   // instruction cannot handle.
   template <
@@ -702,13 +739,11 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     if (tensorTy.getRank() < 2)
       return false;
 
-    // Verify the descriptor traces back to a MakeTensorDescOp with PAD_ZERO.
+    // Verify the descriptor traces back to a MakeTensorDescOp.
     auto makeTensorDesc =
         triton::intel::findDefiningOpOfType<triton::MakeTensorDescOp>(
             op.getDesc());
     if (!makeTensorDesc)
-      return false;
-    if (makeTensorDesc->getPadding() != triton::PaddingOption::PAD_ZERO)
       return false;
 
     // Reject non-contiguous inner dimension.
@@ -2742,6 +2777,14 @@ struct DescriptorLoadOpToBlockIOConversion
     if (!isDescriptorBlockIOCandidate(op))
       return failure();
 
+    // Get the padding option from the defining MakeTensorDescOp.
+    PaddingOption padding = PaddingOption::PAD_ZERO;
+    if (auto makeDescOp =
+            triton::intel::findDefiningOpOfType<triton::MakeTensorDescOp>(
+                op.getDesc())) {
+      padding = makeDescOp->getPadding();
+    }
+
     // Result type and encoding setup.
     Type resultType = op.getType();
     auto tensorType = cast<RankedTensorType>(resultType);
@@ -2974,6 +3017,21 @@ struct DescriptorLoadOpToBlockIOConversion
           b.add(descIndices[descBlockColIdx], misalignElems);
     }
 
+    // Build NaN masks for PAD_NAN descriptors. The 2D block load hardware
+    // zero-pads OOB accesses; for NaN padding we post-select NaN values.
+    SmallVector<Value> nanMaskElems;
+    if (padding == PaddingOption::PAD_NAN) {
+      // Map descriptor shapes/indices to result dimension space.
+      SmallVector<Value> resultOffsets(rank), resultShapes(rank);
+      for (unsigned i = 0; i < rank; ++i) {
+        unsigned descDim = mapResultDimToDescDim(i);
+        resultOffsets[i] = descIndices[descDim];
+        resultShapes[i] = desc.shapes[descDim];
+      }
+      nanMaskElems =
+          buildNaNMasks(loc, resultOffsets, resultShapes, tensorType, rewriter);
+    }
+
     SmallVector<Value> unpackedLoadedVals(numElems);
     for (size_t elemIdx = 0; elemIdx < numElems; elemIdx += numElemsPerLoad) {
       unsigned registerIdx = regMapping.apply({{kRegister, elemIdx}})[0].second;
@@ -3023,13 +3081,11 @@ struct DescriptorLoadOpToBlockIOConversion
           /*transpose*/ isTransposeRequired,
           /*vnni_transform*/ !isTransposeRequired && useVNNIFormat);
 
-      // Descriptors always have boundary checking, so no mask/other/NaN
-      // padding is needed.
       unpackBlockLoadResult(ret, unpackedLoadedVals, elemIdx, regMapping,
                             shuffleMapping, packedDPASOperandType, unpackedType,
                             numValuesPerLoad, numPackedVals,
-                            /*pred=*/Value(), /*otherElems=*/{},
-                            /*nanMaskElems=*/{}, loc, rewriter, ctx);
+                            /*pred=*/Value(), /*otherElems=*/{}, nanMaskElems,
+                            loc, rewriter, ctx);
     }
 
     auto typeConverter = getTypeConverter();
