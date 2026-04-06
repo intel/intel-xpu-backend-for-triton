@@ -527,8 +527,11 @@ def make_launcher(constants, signature):
 #define __DPCPP_ENABLE_UNFINISHED_KHR_EXTENSIONS
 #include <sycl/sycl.hpp>
 
-#if __SYCL_COMPILER_VERSION >= 20250604
+#if __SYCL_COMPILER_VERSION >= 20260204
 #include <sycl/ext/oneapi/experimental/enqueue_functions.hpp>
+#endif
+
+#if __SYCL_COMPILER_VERSION >= 20250604
 #include <sycl/khr/free_function_commands.hpp>
 #endif
 
