@@ -646,7 +646,8 @@ run_proton_tests() {
   echo "***************************************************"
   cd $TRITON_PROJ/third_party/proton/test
 
-  run_pytest_command -vvv test_api.py test_cmd.py test_lib.py test_profile.py test_viewer.py --device xpu -s
+  TRITON_TEST_SUITE=proton \
+    run_pytest_command -vvv test_api.py test_cmd.py test_lib.py test_profile.py test_viewer.py --device xpu -s
 }
 
 run_tutorial_tests() {
