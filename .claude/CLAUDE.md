@@ -7,7 +7,7 @@ Intel XPU Backend for Triton — out-of-tree Intel GPU backend for the Triton co
 **Build**: `scripts/compile-triton.sh` (incremental) or `make dev-install` (pip-based)
 **Pre-commit**: Install via `pip install pre-commit`. Run `python3 -m pre_commit run --show-diff-on-failure --color=always --all-files --verbose`
 
-→ See `.claude/reference/build-and-debug-reference.md` for: build tips, IR debugging, dependencies
+> **IMPORTANT**: Before build/debug/dependency/project-structure work, read `.claude/reference/build-and-debug-reference.md`.
 
 ## Architecture
 
@@ -16,8 +16,6 @@ Intel-specific code lives in `third_party/intel/` and is symlinked into the Pyth
 - `python/triton/language/extra/intel/` → `third_party/intel/language/intel/`
 
 Runtime stack: SYCL + Level Zero + IGC. The backend registers as the `xpu` target.
-
-→ See `.claude/reference/build-and-debug-reference.md` for: directory structure, runtime stack details
 
 ## Change Discipline
 
