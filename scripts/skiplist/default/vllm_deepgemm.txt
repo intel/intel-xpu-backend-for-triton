@@ -1,0 +1,2 @@
+# Skip tests using get_device_capability
+tests/kernels/moe/test_silu_mul_fp8_quant_deep_gemm.py::test_silu_mul_fp8_quant_deep_gemm

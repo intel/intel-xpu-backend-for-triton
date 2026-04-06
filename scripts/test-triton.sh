@@ -33,6 +33,16 @@ TEST:
     --instrumentation
     --inductor
     --vllm
+    --vllm-spec-decode
+    --vllm-mrv2
+    --vllm-moe
+    --vllm-triton-attn
+    --vllm-gdn-attn
+    --vllm-mamba
+    --vllm-quant
+    --vllm-linear-attn
+    --vllm-deepgemm
+    --vllm-kda
     --install-vllm
     --sglang
     --install-sglang
@@ -93,6 +103,16 @@ INSTALL_SGLANG=false
 TEST_LIGER=false
 INSTALL_LIGER=false
 TEST_VLLM=false
+TEST_VLLM_SPEC_DECODE=false
+TEST_VLLM_MRV2=false
+TEST_VLLM_MOE=false
+TEST_VLLM_TRITON_ATTN=false
+TEST_VLLM_GDN_ATTN=false
+TEST_VLLM_MAMBA=false
+TEST_VLLM_QUANT=false
+TEST_VLLM_LINEAR_ATTN=false
+TEST_VLLM_DEEPGEMM=false
+TEST_VLLM_KDA=false
 INSTALL_VLLM=false
 TEST_TRITON_KERNELS=false
 VENV=false
@@ -270,6 +290,56 @@ while (( $# != 0 )); do
       ;;
     --install-vllm)
       INSTALL_VLLM=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --vllm-spec-decode)
+      TEST_VLLM_SPEC_DECODE=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --vllm-mrv2)
+      TEST_VLLM_MRV2=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --vllm-moe)
+      TEST_VLLM_MOE=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --vllm-triton-attn)
+      TEST_VLLM_TRITON_ATTN=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --vllm-gdn-attn)
+      TEST_VLLM_GDN_ATTN=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --vllm-mamba)
+      TEST_VLLM_MAMBA=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --vllm-quant)
+      TEST_VLLM_QUANT=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --vllm-linear-attn)
+      TEST_VLLM_LINEAR_ATTN=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --vllm-deepgemm)
+      TEST_VLLM_DEEPGEMM=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --vllm-kda)
+      TEST_VLLM_KDA=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -576,7 +646,8 @@ run_proton_tests() {
   echo "***************************************************"
   cd $TRITON_PROJ/third_party/proton/test
 
-  run_pytest_command -vvv test_api.py test_cmd.py test_lib.py test_profile.py test_viewer.py --device xpu -s
+  TRITON_TEST_SUITE=proton \
+    run_pytest_command -vvv test_api.py test_cmd.py test_lib.py test_profile.py test_viewer.py --device xpu -s
 }
 
 run_tutorial_tests() {
@@ -802,72 +873,238 @@ run_liger_tests() {
 
 run_vllm_install() {
   echo "************************************************"
-  echo "******    Installing VLLM                 ******"
+  echo "******    Installing vLLM                 ******"
   echo "************************************************"
-  echo "VLLM pin: $(<"$TRITON_PROJ/benchmarks/vllm/vllm-pin.txt")"
+  echo "vllm pin: $(<"$TRITON_PROJ/benchmarks/vllm/vllm-pin.txt")"
 
-  cd "$TRITON_PROJ"
-
-  CLEAN_MSG="To get a clean install, run: \n    rm -rf $TRITON_PROJ/vllm && pip uninstall -y vllm"
-
-  local has_vllm_pip=false
-  pip show vllm >/dev/null 2>&1 && has_vllm_pip=true
-
-  # vllm already installed — nothing to do
-  if [ "$has_vllm_pip" = true ]; then
-    echo "WARNING: vllm is already installed, skipping installation."
-    echo -e $CLEAN_MSG
-    return
-  fi
-
-  # vllm not installed — proceed, reusing existing directory if present
-  if [ -d "./vllm" ]; then
-    echo "WARNING: ./vllm directory already exists, installing from it."
-    echo -e $CLEAN_MSG
-  else
-    git clone https://github.com/vllm-project/vllm.git
-
-    # Checkout the pinned commit, apply necessary patches and modify tests to run on xpu
-    cd vllm
-    git checkout "$(<../benchmarks/vllm/vllm-pin.txt)"
-    git apply ../benchmarks/vllm/vllm-fix.patch
-    sed -i 's/device="cuda"/device="xpu"/g' \
-      tests/kernels/moe/utils.py \
-      tests/kernels/attention/test_triton_unified_attention.py
-
-    sed -i 's/set_default_device("cuda")/set_default_device("xpu")/g' \
-      tests/kernels/attention/test_triton_unified_attention.py
-
-    cd ..
-  fi
-
-  # VLLM project tests use pytest-shard which conflicts with pytest-skip
-  pip uninstall pytest-skip -y
-
-  # These files contain specific versions of pytorch and triton, so let's remove them
-  # vllm_xpu_kernels wheel URL is preserved and installed from pre-built wheel
-  sed -i '/pytorch\|torch\|triton/d' vllm/requirements/xpu.txt
-  sed -i '/pytorch\|torch\|triton/d' vllm/requirements/test.in
-  pip install -r vllm/requirements/xpu.txt
-  # Let's not install whole test requirements for now, they are very large and overwrite torch
-  # pip install -r vllm/requirements/test.in
-  pip install cachetools cbor2 blake3 pybase64 openai_harmony tblib
-  rm -rf benchmarks/vllm/batched_moe/tests
-  cp -r vllm/tests benchmarks/vllm/batched_moe/tests
-  VLLM_TARGET_DEVICE=xpu pip install --no-deps --no-build-isolation -e vllm
+  "$SCRIPTS_DIR/vllm/install-vllm.sh" $([ "$VENV" = true ] && echo --venv) --smoke-test
 }
 
 
+# TODO: vLLM test functions do not use -n (pytest-xdist parallelism) yet.
+# The existing --vllm suite (moe + attention) ran without -n before this change,
+# and first-time kernel compilation on XPU can cause xdist worker timeouts.
+# Add -n ${PYTEST_MAX_PROCESSES:-8} once skip lists are populated and stable.
+
 run_vllm_tests() {
   echo "************************************************"
-  echo "******    Running VLLM Triton tests       ******"
+  echo "******    Running vLLM Triton tests       ******"
   echo "************************************************"
 
   run_vllm_install
   run_test_deps_install
 
   cd vllm
-  run_pytest_command -vvv tests/kernels/moe/test_batched_moe.py tests/kernels/attention/test_triton_unified_attention.py
+  # FIXME: Make batched_moe and triton_unified_attention proper test suites.
+  # run_vllm_tests should eventually run all vllm testsuites.
+  run_pytest_command -vvv \
+    tests/kernels/moe/test_batched_moe.py \
+    tests/kernels/attention/test_triton_unified_attention.py
+}
+
+
+run_vllm_spec_decode_tests() {
+  echo "********************************************************"
+  echo "******  Running vLLM Spec Decode tests           *******"
+  echo "********************************************************"
+
+  run_vllm_install
+  run_test_deps_install
+
+  cd vllm
+  # Include test_max_len.py fully (small file, extra tests won't hurt) to keep
+  # everything in a single pytest command and avoid overwriting the junit report.
+  VLLM_USE_V2_MODEL_RUNNER=1 TRITON_TEST_SUITE=vllm_spec_decode \
+    run_pytest_command -vvv \
+      tests/v1/spec_decode/test_eagle.py \
+      tests/v1/spec_decode/test_mtp.py \
+      tests/v1/spec_decode/test_max_len.py \
+      tests/v1/spec_decode/test_speculators_eagle3.py \
+      tests/v1/spec_decode/test_synthetic_rejection_sampler_utils.py \
+      tests/v1/sample/test_rejection_sampler.py
+}
+
+
+run_vllm_mrv2_tests() {
+  echo "********************************************************"
+  echo "******  Running vLLM MRv2 tests                  *******"
+  echo "********************************************************"
+
+  run_vllm_install
+  run_test_deps_install
+
+  cd vllm
+  VLLM_USE_V2_MODEL_RUNNER=1 TRITON_TEST_SUITE=vllm_mrv2 \
+    run_pytest_command -vvv \
+      tests/v1/worker/test_gpu_model_runner.py \
+      tests/v1/worker/test_gpu_input_batch.py \
+      tests/v1/worker/test_gpu_model_runner_v2_eplb.py \
+      tests/v1/sample/test_sampler.py \
+      tests/v1/sample/test_logprobs.py
+}
+
+
+run_vllm_moe_tests() {
+  echo "********************************************************"
+  echo "******  Running vLLM MOE Triton kernel tests     *******"
+  echo "********************************************************"
+
+  run_vllm_install
+  run_test_deps_install
+
+  cd vllm
+  # MOE Triton kernels: moe_mmk, expert_triton_kernel, batched_triton_kernel,
+  # write_zeros_to_output, count_expert_num_tokens, fused_moe_kernel,
+  # fused_moe_kernel_gpta_awq, _silu_mul_fp8_quant_deep_gemm, apply_expert_map,
+  # _fwd_kernel_ep_scatter_1, _fwd_kernel_ep_scatter_2, _fwd_kernel_ep_gather
+  TRITON_TEST_SUITE=vllm_moe \
+    run_pytest_command -vvv \
+      tests/kernels/moe/test_batched_moe.py \
+      tests/kernels/moe/test_count_expert_num_tokens.py \
+      tests/kernels/moe/test_moe.py \
+      tests/kernels/moe/test_triton_moe_no_act_mul.py \
+      tests/kernels/moe/test_triton_moe_ptpc_fp8.py \
+      tests/kernels/moe/test_silu_mul_fp8_quant_deep_gemm.py \
+      tests/kernels/moe/test_batched_deepgemm.py \
+      tests/kernels/moe/test_gpt_oss_triton_kernels.py
+}
+
+
+run_vllm_triton_attn_tests() {
+  echo "********************************************************"
+  echo "******  Running vLLM Triton Attention tests      *******"
+  echo "********************************************************"
+
+  run_vllm_install
+  run_test_deps_install
+
+  cd vllm
+  # Triton attention kernels: merge_attn_states_kernel, _fwd_kernel_stage1,
+  # _fwd_grouped_kernel_stage1, _fwd_kernel_stage2, kernel_unified_attention_2d,
+  # kernel_unified_attention_3d, reduce_segments
+  TRITON_TEST_SUITE=vllm_triton_attn \
+    run_pytest_command -vvv \
+      tests/kernels/attention/test_merge_attn_states.py \
+      tests/kernels/attention/test_triton_decode_attention.py \
+      tests/kernels/attention/test_triton_unified_attention.py \
+      tests/kernels/attention/test_triton_prefill_attention.py
+}
+
+
+run_vllm_gdn_attn_tests() {
+  echo "********************************************************"
+  echo "******  Running vLLM GDN Attention tests         *******"
+  echo "********************************************************"
+
+  run_vllm_install
+  run_test_deps_install
+
+  cd vllm
+  # GDN (Gated Delta Net) attention kernels used by Qwen3-Next:
+  # chunk_gated_delta_rule_fwd_kernel, chunk_fwd_kernel_o,
+  # chunk_scaled_dot_kkt_fwd_kernel, chunk_local_cumsum_*_kernel,
+  # fused_recurrent_gated_delta_rule_fwd_kernel, l2norm_fwd_kernel*,
+  # layer_norm_fwd_kernel, solve_tril_16x16_kernel, merge_*_inverse_kernel,
+  # recompute_w_u_fwd_kernel
+  TRITON_TEST_SUITE=vllm_gdn_attn \
+    run_pytest_command -vvv \
+      tests/v1/attention/test_gdn_metadata_builder.py
+}
+
+
+run_vllm_mamba_tests() {
+  echo "********************************************************"
+  echo "******  Running vLLM Mamba tests                 *******"
+  echo "********************************************************"
+
+  run_vllm_install
+  run_test_deps_install
+
+  cd vllm
+  # Mamba kernels: _causal_conv1d_fwd_kernel, _causal_conv1d_update_kernel,
+  # fused_gdn_gating_kernel, _selective_scan_update_kernel, softplus,
+  # bmm_chunk_fwd_kernel, chunk_scan_fwd_kernel, chunk_cumsum_fwd_kernel,
+  # _chunk_state_fwd_kernel, chunk_state_varlen_kernel, state_passing_fwd_kernel
+  TRITON_TEST_SUITE=vllm_mamba \
+    run_pytest_command -vvv \
+      tests/kernels/mamba/test_causal_conv1d.py \
+      tests/kernels/mamba/test_mamba_ssm.py \
+      tests/kernels/mamba/test_mamba_ssm_ssd.py \
+      tests/kernels/mamba/test_mamba_mixer2.py
+}
+
+
+run_vllm_quant_tests() {
+  echo "********************************************************"
+  echo "******  Running vLLM Quantization Triton tests   *******"
+  echo "********************************************************"
+
+  run_vllm_install
+  run_test_deps_install
+
+  cd vllm
+  # Quantization Triton kernels: scaled_mm_kernel, awq_dequantize_kernel,
+  # awq_gemm_kernel, round_int8, _per_token_quant_int8,
+  # _per_token_group_quant_int8, _w8a8_block_int8_matmul,
+  # _per_token_group_quant_fp8, _per_token_group_quant_fp8_colmajor,
+  # _w8a8_block_fp8_matmul
+  TRITON_TEST_SUITE=vllm_quant \
+    run_pytest_command -vvv \
+      tests/kernels/quantization/test_triton_scaled_mm.py \
+      tests/kernels/quantization/test_awq_triton.py \
+      tests/kernels/quantization/test_int8_kernel.py \
+      tests/kernels/quantization/test_block_int8.py \
+      tests/kernels/quantization/test_fp8_quant.py \
+      tests/kernels/quantization/test_fp8_quant_group.py \
+      tests/kernels/quantization/test_block_fp8.py
+}
+
+
+run_vllm_linear_attn_tests() {
+  echo "********************************************************"
+  echo "******  Running vLLM Linear Attention tests      *******"
+  echo "********************************************************"
+
+  run_vllm_install
+  run_test_deps_install
+
+  cd vllm
+  # Linear attention kernels (MiniMax-Text / Lightning Attention):
+  # _fwd_diag_kernel, _fwd_kv_parallel, _fwd_kv_reduce,
+  # _fwd_none_diag_kernel, linear_attn_decode_kernel
+  TRITON_TEST_SUITE=vllm_linear_attn \
+    run_pytest_command -vvv \
+      tests/kernels/attention/test_lightning_attn.py
+}
+
+
+run_vllm_deepgemm_tests() {
+  echo "********************************************************"
+  echo "******  Running vLLM DeepGemm tests              *******"
+  echo "********************************************************"
+
+  run_vllm_install
+  run_test_deps_install
+
+  cd vllm
+  # DeepGemm MOE kernels: _silu_mul_fp8_quant_deep_gemm, apply_expert_map,
+  # _fwd_kernel_ep_scatter_1, _fwd_kernel_ep_scatter_2, _fwd_kernel_ep_gather
+  TRITON_TEST_SUITE=vllm_deepgemm \
+    run_pytest_command -vvv \
+      tests/kernels/moe/test_silu_mul_fp8_quant_deep_gemm.py \
+      tests/kernels/moe/test_batched_deepgemm.py \
+      tests/kernels/moe/test_deepgemm.py
+}
+
+
+run_vllm_kda_tests() {
+  echo "********************************************************"
+  echo "******  Running vLLM KDA tests                   *******"
+  echo "********************************************************"
+
+  # No dedicated kernel tests exist yet — KDA is model-level integration only.
+  # This is a placeholder for when kernel-level tests are added.
+  echo "WARNING: No dedicated KDA kernel tests available. Skipping."
 }
 
 
@@ -999,6 +1236,36 @@ test_triton() {
   fi
   if [ "$TEST_VLLM" == true ]; then
     run_vllm_tests
+  fi
+  if [ "$TEST_VLLM_SPEC_DECODE" == true ]; then
+    run_vllm_spec_decode_tests
+  fi
+  if [ "$TEST_VLLM_MRV2" == true ]; then
+    run_vllm_mrv2_tests
+  fi
+  if [ "$TEST_VLLM_MOE" == true ]; then
+    run_vllm_moe_tests
+  fi
+  if [ "$TEST_VLLM_TRITON_ATTN" == true ]; then
+    run_vllm_triton_attn_tests
+  fi
+  if [ "$TEST_VLLM_GDN_ATTN" == true ]; then
+    run_vllm_gdn_attn_tests
+  fi
+  if [ "$TEST_VLLM_MAMBA" == true ]; then
+    run_vllm_mamba_tests
+  fi
+  if [ "$TEST_VLLM_QUANT" == true ]; then
+    run_vllm_quant_tests
+  fi
+  if [ "$TEST_VLLM_LINEAR_ATTN" == true ]; then
+    run_vllm_linear_attn_tests
+  fi
+  if [ "$TEST_VLLM_DEEPGEMM" == true ]; then
+    run_vllm_deepgemm_tests
+  fi
+  if [ "$TEST_VLLM_KDA" == true ]; then
+    run_vllm_kda_tests
   fi
   if [ "$TEST_TRITON_KERNELS" == true ]; then
     run_triton_kernels_tests
