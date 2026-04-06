@@ -3865,9 +3865,14 @@ struct StoreOpToBlockIOConversion
     if (hasAnnotated1DReshapeStride(op)) {
       // For stores annotated by the 1D→2D reshape, the encoding was inferred
       // by tt.reshape and may not satisfy getBlockIOTileSize constraints.
-      // We know the exact tile parameters from the reshape: the contiguous
-      // width dimension is stored per-subgroup, and each warp handles a
-      // stripe of rows.
+      // Specifically, the reshape produces a blocked encoding with
+      // sizePerThread > maxElemPackedVal (e.g., sizePerThread[1]=8 vs
+      // maxElemPackedVal=4 for f16). This creates a gap between the
+      // register-packed extent and the first lane base that
+      // getBlockIOTileSize cannot bridge.
+      // TODO: extend getBlockIOTileSize to handle register bases in the
+      // contiguous dimension beyond the packing limit, so this special case
+      // can be removed.
       auto blockedEnc = dyn_cast<BlockedEncodingAttr>(encoding);
       assert(blockedEnc && "1D reshape store must have BlockedEncodingAttr");
       assert(rank == 2 && "1D reshape always produces rank-2 tensors");
