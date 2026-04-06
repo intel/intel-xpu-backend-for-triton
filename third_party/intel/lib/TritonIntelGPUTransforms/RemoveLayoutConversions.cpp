@@ -1866,6 +1866,18 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   Attribute srcEncoding = ttgi::inferSrcEncoding(extOrBroadcastOp, dstEncoding);
   if (!srcEncoding)
     return;
+  // Check that hoisting the convert is actually beneficial.
+  // When the ext/broadcast doesn't increase the byte count (e.g.,
+  // tt.expand_dims adds a unit dimension), newCvtCost == originalCvtCost and
+  // even tiny slice duplication costs would incorrectly block the hoist.
+  // Only apply the cost gate when the new convert is strictly more expensive.
+
+  int64_t newCvtCost = getConvertCost(extOrBroadcastOp->getOperand(0));
+  int64_t originalCvtCost = getConvertCost(convertOp.getSrc());
+  if (newCvtCost > originalCvtCost &&
+      !isRematBeneficial(convertOp, slice, newCvtCost))
+    return;
+
   // Move the convert before the ext op and rewrite the slice.
   OpBuilder builder(extOrBroadcastOp);
   auto tensorType =
