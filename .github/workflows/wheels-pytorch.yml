@@ -116,7 +116,8 @@ jobs:
           $env:USE_XCCL = "1"
           $env:CIBW_BEFORE_BUILD = "pip install -r requirements.txt"
 
-          python -m cibuildwheel --output-dir wheelhouse
+          python -m cibuildwheel --output-dir wheelhouse 2>&1 |
+            Select-String -NotMatch "Double arithmetic operation is not supported on this platform with FP64 conversion emulation mode (poison FP64 kernels is enabled)."
 
       - name: Artifact name
         run: |
