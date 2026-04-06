@@ -2,20 +2,26 @@
 # auto-upstream-merge.sh — Attempt to merge new upstream triton-lang/triton
 # commits into the Intel XPU backend fork.
 #
-# This script is designed to be called from the auto-upstream-merge.yml
-# GitHub Actions workflow, but can also be run locally for testing.
+# This is a standalone helper for LOCAL TESTING ONLY. It is NOT invoked by the
+# auto-upstream-merge.yml GitHub Actions workflow, which implements the full
+# pipeline (merge → build → pre-commit → tests → tracking file update → PR)
+# inline. This script only performs the merge step and reports the result.
+#
+# NOTE: This script does NOT update upstream-triton-hash.txt. Per the workflow
+# design, the tracking file is only updated after build, pre-commit, and unit
+# tests all pass — checks that this script does not perform.
 #
 # Usage:
 #   scripts/auto-upstream-merge.sh [--target-hash <hash>]
 #
-# Environment variables (set by the workflow or manually):
+# Environment variables (set manually or by CI):
 #   GITHUB_ENV — If set, outputs are appended here for GitHub Actions.
 #                If unset, outputs are printed to stdout.
 #
 # Outputs (via $GITHUB_ENV or stdout):
 #   CURRENT_HASH     — The upstream hash we're currently based on.
 #   TARGET_HASH      — The upstream hash we're merging to.
-#   TARGET_SHORT      — Short (7-char) version of TARGET_HASH.
+#   TARGET_SHORT     — Short (7-char) version of TARGET_HASH.
 #   MERGE_STATUS     — One of: "up_to_date", "clean", "conflicts", "error".
 #   CONFLICT_FILES   — Newline-separated list of conflicting files (if any).
 #   CONFLICT_COUNT   — Number of conflicting files.
@@ -71,6 +77,9 @@ TARGET_OVERRIDE=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --target-hash)
+            if [[ $# -lt 2 || -z "$2" ]]; then
+                die "Missing value for --target-hash; expected a commit hash."
+            fi
             TARGET_OVERRIDE="$2"
             shift 2
             ;;
@@ -158,20 +167,6 @@ else
 
     echo "==> ${CONFLICT_COUNT} file(s) with conflicts:"
     echo "${CONFLICT_FILES}" | sed 's/^/  - /'
-fi
-
-# ---------------------------------------------------------------------------
-# Update tracking file (on clean merge)
-# ---------------------------------------------------------------------------
-
-if [[ "$(git config --get merge.status 2>/dev/null || true)" != "conflicts" ]]; then
-    # Only update tracking file if merge was clean
-    if ! git diff --name-only --diff-filter=U 2>/dev/null | grep -q .; then
-        echo "${TARGET_HASH}" > "${TRACKING_FILE}"
-        git add "${TRACKING_FILE}"
-        git commit --amend --no-edit 2>/dev/null || true
-        echo "==> Updated ${TRACKING_FILE} to ${TARGET_SHORT}."
-    fi
 fi
 
 # ---------------------------------------------------------------------------
