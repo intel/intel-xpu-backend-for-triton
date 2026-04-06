@@ -1,4 +1,5 @@
 name: vLLM tests
+run-name: ${{ inputs.run_name }}
 
 on:
   workflow_dispatch:
@@ -7,74 +8,107 @@ on:
         description: Runner label, keep empty for default
         type: string
         default: ""
-  schedule:
-    # About midnight PST Sunday (UTC-8)
-    - cron: "5 10 * * SUN"
+      vllm_pin:
+        description: vLLM pin (commit hash), keep empty for default
+        type: string
+        default: ""
+      skip_list:
+        description: Skip list
+        type: string
+        default: ""
+      run_name:
+        description: Custom run name
+        type: string
+        default: "vLLM tests"
+      ignore_errors:
+        description: Ignore test errors
+        type: boolean
+        default: false
+      use_pyenv_python:
+        description: Use Python built with pyenv
+        type: boolean
+        default: false
 
-# Cancels in-progress PR runs when the PR is updated.  Manual runs are never cancelled.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  schedule:
+    # Sunday 2:05AM PST (UTC-8) or 3:05AM PDT (UTC-7)
+    - cron: "5 10 * * SUN"
 
 permissions: read-all
 
-env:
-  PYTHON_VERSION: "3.12"
-
 jobs:
   vllm-tests:
-    name: vLLM tests
-    runs-on:
-      - linux
-      - ${{ inputs.runner_label || 'max1550' }}
-    timeout-minutes: 120
-    defaults:
-      run:
-        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
-    steps:
-      - name: Print inputs
-        run: |
-          cat <<EOF
-          ${{ toJSON(inputs) }}
-          EOF
+    uses: ./.github/workflows/vllm-tests-reusable.yml
+    with:
+      runner_label: ${{ inputs.runner_label || '' }}
+      vllm_pin: ${{ inputs.vllm_pin || '' }}
+      python_version: "3.12"
+      skip_list: ${{ inputs.skip_list || '' }}
+      ignore_errors: ${{ inputs.ignore_errors || false }}
+      use_pyenv_python: ${{ inputs.use_pyenv_python || true }}
 
+  # TODO: After PR #6360 is merged, replace this inline reports job with:
+  #   uses: ./.github/workflows/reports-reusable.yml
+  reports:
+    name: Reports
+    runs-on:
+      - runner-0.0.22
+    if: always()
+    needs: vllm-tests
+    steps:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Install Python (from pyenv) ${{ inputs.python_version }}
-        uses: ./.github/actions/setup-pyenv-python
+      - name: Install Python
+        uses: ./.github/actions/setup-python
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          python_version: "3.12"
+          use_pyenv: true
 
-      - name: Identify Python version
+      - name: Install triton_utils
         run: |
-          PYTHON_VERSION="$(python -c 'import sys; print(f"{sys.version_info[0]}.{ sys.version_info[1]}")')"
-          echo "PYTHON_VERSION=$PYTHON_VERSION" | tee -a $GITHUB_ENV
+          pip install ./scripts/triton_utils
 
-      - name: Install Python build dependencies
+      - name: Download test reports
+        uses: actions/download-artifact@v8
+        with:
+          pattern: test-reports-vllm-*
+          path: reports
+          merge-multiple: true
+
+      - name: Pass rate
         run: |
-          pip install cmake
+          triton-utils pass_rate --reports reports --save-to-json pass_rate.json --merge-test-results --tests-with-multiple-testsuites
 
-      - name: Setup PyTorch
-        uses: ./.github/actions/setup-pytorch
-
-      - name: Setup Triton
-        id: install
-        uses: ./.github/actions/setup-triton
-
-      - name: Create reports dir
+      - name: Stats by testsuite (sorted by name)
         run: |
-          mkdir reports
-          echo "REPORTS=$PWD/reports" >> $GITHUB_ENV
+          triton-utils stats --reports reports --level testsuite --pretty --merge --long-names --multiple-suites
 
-      - name: Run VLLM tests
-        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+      - name: Stats by testsuite (sorted by skipped)
         run: |
-          ./scripts/test-triton.sh --vllm --skip-pip-install --skip-pytorch-install
+          triton-utils stats --reports reports --level testsuite --pretty --merge --long-names --multiple-suites --sort-by skipped
 
-      - name: Upload test report
-        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+      - name: Stats by testsuite (sorted by time)
+        run: |
+          triton-utils stats --reports reports --level testsuite --pretty --merge --long-names --multiple-suites --sort-by time
+
+      - name: Stats by test (sorted by name)
+        run: |
+          triton-utils stats --reports reports --level test --pretty --merge --long-names --multiple-suites
+
+      - name: Stats by test (sorted by skipped)
+        run: |
+          triton-utils stats --reports reports --level test --pretty --merge --long-names --multiple-suites --sort-by skipped
+
+      - name: Stats by test (sorted by time)
+        run: |
+          triton-utils stats --reports reports --level test --pretty --merge --long-names --multiple-suites --sort-by time
+
+      - name: Stats by test (sorted by failed)
+        run: |
+          triton-utils stats --reports reports --level test --pretty --merge --long-names --multiple-suites --sort-by failed
+
+      - name: Upload pass rate report
         uses: actions/upload-artifact@v7
         with:
-          name: test-vllm-reports
-          path: reports
+          name: pass_rate-vllm
+          path: pass_rate*.json

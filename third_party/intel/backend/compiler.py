@@ -50,7 +50,7 @@ class XPUOptions:
     extern_libs: dict = None
     debug: bool = False
     backend_name: str = 'intel'
-    sanitize_overflow: bool = True
+    sanitize_overflow: bool = False
     generate_native_code: bool = False
     arch: str = None
     instrumentation_mode: str = ""
