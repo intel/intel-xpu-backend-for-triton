@@ -1,0 +1,2 @@
+# Skip tests using get_device_capability
+tests/kernels/attention/test_lightning_attn.py::test_lightning_attention_reference
