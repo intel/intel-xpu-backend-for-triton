@@ -703,7 +703,11 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
         cgh.set_arg(num_params, local_buffer);
         cgh.parallel_for(parallel_work_size, kernel_ptr);
     }};
+#if __SYCL_COMPILER_VERSION >= 20260204
+  sycl::ext::oneapi::experimental::submit(stream, cgf);
+#else
   stream.submit(cgf);
+#endif
   }}
   else {{
 #if __SYCL_COMPILER_VERSION >= 20260204
