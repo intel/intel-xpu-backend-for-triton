@@ -312,6 +312,9 @@ std::string GraphLayoutMarker::getColor(const Type &type) const {
 // -------------------------------------------------------------------------- //
 
 static Attribute inferDstEncoding(triton::ReduceOp op, Attribute encoding) {
+  // If the input is rank 1, the output is a scalar value.
+  if (cast<ttg::LayoutEncodingTrait>(encoding).getRank() == 1)
+    return {};
   return triton::gpu::SliceEncodingAttr::get(
       op->getContext(), op.getAxis(),
       cast<ttg::DistributedEncodingTrait>(encoding));
