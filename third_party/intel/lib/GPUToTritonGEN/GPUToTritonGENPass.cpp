@@ -193,8 +193,6 @@ void mlir::triton::populateGPUToTritonGENConversionPatterns(
                                    "__imf_tanh");
   populateOpPatterns<math::TanOp>(converter, patterns, "__imf_tanf",
                                   "__imf_tan");
-  populateOpPatterns<math::ErfOp>(converter, patterns, "__imf_erff",
-                                  "__imf_erf");
 }
 
 std::unique_ptr<OperationPass<mlir::gpu::GPUModuleOp>>

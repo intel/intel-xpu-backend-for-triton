@@ -6,6 +6,8 @@ llvm-project/
 llvm-project-*/
 .llvm-project/
 
+/vllm/
+
 # Triton Python module builds
 dist/
 python/triton*.egg-info/
@@ -106,3 +108,10 @@ docs/sg_execution_times.rst
 .DS_Store
 
 AGENTS.override.md
+
+# Third-party repos cloned for testing/benchmarking (root-level only)
+/vllm/
+/pytorch/
+/sglang/
+/Liger-Kernel/
+/wheels/
