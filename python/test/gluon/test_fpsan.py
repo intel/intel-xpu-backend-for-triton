@@ -506,19 +506,19 @@ def test_unary_math_identity(device, op, fresh_knobs):
 
 
 def test_exp_add_mul_identity(device, fresh_knobs):
-    _require_cuda_backend(device)
+    _require_backend(device)
 
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
 
     n_elements = 1024
     BLOCK = 256
 
-    g = torch.Generator(device="cuda")
+    g = torch.Generator(device=device)
     g.manual_seed(0)
-    x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
-    y = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
-    out_add = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
-    out_mul = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
+    x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device=device, generator=g)
+    y = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device=device, generator=g)
+    out_add = torch.empty((n_elements, ), dtype=torch.int32, device=device)
+    out_mul = torch.empty((n_elements, ), dtype=torch.int32, device=device)
 
     xw = triton.TensorWrapper(x, dtype=torch.float32)
     yw = triton.TensorWrapper(y, dtype=torch.float32)
@@ -535,18 +535,18 @@ def test_exp_add_mul_identity(device, fresh_knobs):
 
 
 def test_exp_exp2_scaled_identity(device, fresh_knobs):
-    _require_cuda_backend(device)
+    _require_backend(device)
 
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
 
     n_elements = 1024
     BLOCK = 256
 
-    g = torch.Generator(device="cuda")
+    g = torch.Generator(device=device)
     g.manual_seed(1)
-    x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
-    out_exp = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
-    out_exp2 = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
+    x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device=device, generator=g)
+    out_exp = torch.empty((n_elements, ), dtype=torch.int32, device=device)
+    out_exp2 = torch.empty((n_elements, ), dtype=torch.int32, device=device)
 
     xw = triton.TensorWrapper(x, dtype=torch.float32)
     out_exp_w = triton.TensorWrapper(out_exp, dtype=torch.float32)
@@ -1204,7 +1204,7 @@ def test_tcgen05_mma(device, use_acc, fresh_knobs):
 @pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
 @pytest.mark.parametrize("elem_type", ["e2m1", "e4m3", "e5m2"])
 def test_tcgen05_mma_scaled(device, elem_type, fresh_knobs):
-    _require_cuda_backend(device)
+    _require_backend(device)
 
     B = 128
     BLOCK = gl.constexpr(B)
