@@ -1,19 +1,26 @@
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Utils/Utility.h"
-
-#include "triton/Dialect/Triton/Transforms/ArithTypeConversion.h"
-#include "triton/Dialect/Triton/Transforms/FunctionTypeConversion.h"
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
+#include "triton/Dialect/Triton/Transforms/ArithTypeConversion.h"
+#include "triton/Dialect/Triton/Transforms/FunctionTypeConversion.h"
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Func/Transforms/FuncConversions.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/SCF/Transforms/Patterns.h"
 #include "mlir/IR/Attributes.h"
+#include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Operation.h"
+#include "mlir/IR/Value.h"
 #include "mlir/IR/ValueRange.h"
+#include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
+#include "mlir/Transforms/DialectConversion.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
@@ -21,12 +28,6 @@
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/LogicalResult.h"
 #include "llvm/Support/raw_ostream.h"
-#include <mlir/Dialect/Arith/IR/Arith.h>
-#include <mlir/Dialect/Func/Transforms/FuncConversions.h>
-#include <mlir/IR/Builders.h>
-#include <mlir/IR/Value.h>
-#include <mlir/Pass/Pass.h>
-#include <mlir/Transforms/DialectConversion.h>
 
 #include <iterator>
 
@@ -34,6 +35,11 @@ namespace mlir::triton::intel {
 
 #define GEN_PASS_DEF_TRITONREWRITETENSORDESCRIPTORTOPOINTER
 #include "intel/include/Dialect/Triton/Transforms/Passes.h.inc"
+
+// Hardware 2D block I/O limits.
+constexpr int64_t MAX_TILE_HEIGHT_LOAD = 32;
+constexpr int64_t MAX_TILE_HEIGHT_STORE = 8;
+constexpr int64_t MAX_BITS_WIDTH = 64 * 8; // 64 bytes per row.
 
 namespace {
 
@@ -299,6 +305,408 @@ SmallVector<mlir::Value> castToI64(OpBuilder &builder,
   });
 }
 
+/// Result of analyzing x_offsets for gather/scatter descriptor ops.
+struct ContiguousOffsetInfo {
+  Value baseOffset; // Start offset — constant or dynamic Value (i32)
+  int64_t count;    // Number of consecutive offsets (N)
+};
+
+/// Analyze whether x_offsets form a contiguous range
+/// [base, base+1, ..., base+N-1].
+/// Returns nullopt if offsets are not provably contiguous.
+///
+/// Walks the SSA def chain of xOffsets looking for the pattern:
+///   arith.addi(tt.splat(scalar), arith.extsi(tt.make_range(start, end)))
+/// or subsets thereof (e.g. just tt.make_range, or with nested extsi/addi).
+static std::optional<ContiguousOffsetInfo>
+analyzeContiguousOffsets(Value xOffsets) {
+  auto tensorTy = dyn_cast<RankedTensorType>(xOffsets.getType());
+  if (!tensorTy || tensorTy.getRank() != 1)
+    return std::nullopt;
+
+  int64_t tensorSize = tensorTy.getDimSize(0);
+
+  // Track accumulated dynamic base offset from splat-adds.
+  Value dynamicBase = nullptr;
+
+  // Walk through the def chain.
+  Value current = xOffsets;
+  while (true) {
+    Operation *defOp = current.getDefiningOp();
+    if (!defOp)
+      return std::nullopt;
+
+    // Strip arith.extsi wrappers.
+    if (auto extsi = dyn_cast<arith::ExtSIOp>(defOp)) {
+      current = extsi.getIn();
+      continue;
+    }
+
+    // Strip arith.addi — if one side is tt.splat(scalar), accumulate it.
+    if (auto addi = dyn_cast<arith::AddIOp>(defOp)) {
+      Value lhs = addi.getLhs();
+      Value rhs = addi.getRhs();
+
+      // Check if rhs is a splat of a scalar.
+      auto rhsSplat = rhs.getDefiningOp<triton::SplatOp>();
+      auto lhsSplat = lhs.getDefiningOp<triton::SplatOp>();
+
+      auto splatOp = rhsSplat ? rhsSplat : lhsSplat;
+      Value splatSide = splatOp ? splatOp.getSrc() : nullptr;
+      Value otherSide = rhsSplat ? lhs : (lhsSplat ? rhs : nullptr);
+
+      if (splatSide) {
+        // Accumulate scalar from splat and recurse on the other side.
+        if (dynamicBase) {
+          if (dynamicBase.getType() != splatSide.getType())
+            return std::nullopt;
+          // Both dynamicBase and splatSide are operands of defOp, so
+          // inserting before defOp guarantees both are defined.
+          OpBuilder builder(defOp);
+          dynamicBase = arith::AddIOp::create(builder, defOp->getLoc(),
+                                              dynamicBase, splatSide);
+        } else {
+          dynamicBase = splatSide;
+        }
+        current = otherSide;
+        continue;
+      }
+
+      // Neither side is a splat — cannot analyze further.
+      return std::nullopt;
+    }
+
+    // Look for tt.make_range at the root.
+    if (auto makeRange = dyn_cast<triton::MakeRangeOp>(defOp)) {
+      int64_t start = makeRange.getStartAttr().getInt();
+      int64_t end = makeRange.getEndAttr().getInt();
+      int64_t count = end - start;
+
+      // Verify the range covers the full tensor dimension with stride 1.
+      if (count != tensorSize)
+        return std::nullopt;
+
+      // Build the final baseOffset combining constant start and dynamic base.
+      // The result must be an i32 scalar (DescriptorLoadOp index type).
+      OpBuilder builder(makeRange);
+      Location loc = makeRange.getLoc();
+
+      // Cast an integer Value to i32 for use as a DescriptorLoadOp index.
+      // Inputs are typically i32 (from make_range/splat) or i64 (after extsi).
+      // Uses ExtSI for narrow types, TruncI for wider — truncation is safe
+      // here since row indices fit in i32.
+      auto castToI32 = [&](Value val) -> Value {
+        unsigned srcWidth = cast<IntegerType>(val.getType()).getWidth();
+        IntegerType i32Ty = builder.getI32Type();
+        if (srcWidth == 32)
+          return val;
+        if (srcWidth < 32)
+          return arith::ExtSIOp::create(builder, loc, i32Ty, val);
+        return arith::TruncIOp::create(builder, loc, i32Ty, val);
+      };
+
+      Value baseOffset;
+      if (dynamicBase) {
+        builder.setInsertionPointAfterValue(dynamicBase);
+        baseOffset = castToI32(dynamicBase);
+        if (start != 0) {
+          Value startVal = arith::ConstantOp::create(
+              builder, loc, builder.getI32IntegerAttr(start));
+          baseOffset =
+              arith::AddIOp::create(builder, loc, baseOffset, startVal);
+        }
+      } else {
+        baseOffset = arith::ConstantOp::create(
+            builder, loc, builder.getI32IntegerAttr(start));
+      }
+
+      return ContiguousOffsetInfo{baseOffset, count};
+    }
+
+    // Unknown op — cannot analyze.
+    return std::nullopt;
+  }
+}
+
+/// Check whether a descriptor gather/scatter can use 2D block I/O.
+static bool canUse2DBlockIO(ModuleOp moduleOp, int64_t numRows,
+                            int64_t rowWidth, unsigned elemBits, bool isLoad) {
+  // Module must have 2D block I/O support.
+  if (!moduleOp->hasAttr(
+          gpu::intel::TritonIntelGPUDialect::getSupport2DBlockIOAttrName()))
+    return false;
+
+  int64_t maxRows = isLoad ? MAX_TILE_HEIGHT_LOAD : MAX_TILE_HEIGHT_STORE;
+  if (numRows > maxRows)
+    return false;
+
+  return rowWidth * elemBits <= MAX_BITS_WIDTH;
+}
+
+/// A contiguous sub-range within compile-time-constant x_offsets.
+struct ContiguousRange {
+  int64_t start;        // First row index in the surface
+  int64_t count;        // Number of consecutive rows
+  int64_t resultOffset; // Starting row index in the gather result
+};
+
+/// Analyze compile-time-constant x_offsets for contiguous sub-ranges.
+/// Returns nullopt if offsets are not all constants.
+///
+/// Example: [0,1,2,3, 8,9,10,11] →
+///   [{start=0, count=4, resultOffset=0}, {start=8, count=4, resultOffset=4}]
+static std::optional<SmallVector<ContiguousRange>>
+analyzeConstantOffsetRanges(Value xOffsets) {
+  auto defOp = xOffsets.getDefiningOp<arith::ConstantOp>();
+  if (!defOp)
+    return std::nullopt;
+
+  auto denseAttr = dyn_cast<DenseIntElementsAttr>(defOp.getValue());
+  if (!denseAttr)
+    return std::nullopt;
+
+  SmallVector<int64_t> values;
+  for (const APInt &val : denseAttr.getValues<APInt>())
+    values.push_back(val.getSExtValue());
+
+  if (values.empty())
+    return std::nullopt;
+
+  // Group consecutive values into sub-ranges.
+  SmallVector<ContiguousRange> ranges;
+  int64_t rangeStart = values[0];
+  int64_t resultOffset = 0;
+  int64_t count = 1;
+
+  for (size_t i = 1; i < values.size(); ++i) {
+    if (values[i] == values[i - 1] + 1) {
+      ++count;
+    } else {
+      ranges.push_back({rangeStart, count, resultOffset});
+      resultOffset += count;
+      rangeStart = values[i];
+      count = 1;
+    }
+  }
+  ranges.push_back({rangeStart, count, resultOffset});
+
+  return ranges;
+}
+
+/// Rewrite contiguous DescriptorGatherOps to DescriptorLoadOps.
+/// When x_offsets form a contiguous range [base, base+N-1], the gather can
+/// be replaced with a single 2D block load which is significantly more
+/// efficient than scattered scalar loads.
+///
+/// Example — single contiguous range:
+///   %desc = tt.make_tensor_desc %ptr, [%H, %W], [%s0, %s1]
+///              : !tt.tensordesc<tensor<1x64xbf16>>
+///   %range = tt.make_range {start = 0, end = 16} : tensor<16xi32>
+///   %off = tt.splat %base : (i32) -> tensor<16xi32>
+///   %x = arith.addi %range, %off : tensor<16xi32>
+///   %v = tt.descriptor_gather %desc[%x, %y]
+///          : (!tt.tensordesc<tensor<1x64xbf16>>, tensor<16xi32>, i32)
+///            -> tensor<16x64xbf16>
+/// Becomes:
+///   %new_desc = tt.make_tensor_desc %ptr, [%H, %W], [%s0, %s1]
+///                  : !tt.tensordesc<tensor<16x64xbf16>>
+///   %v = tt.descriptor_load %new_desc[%base, %y]
+///          : !tt.tensordesc<tensor<16x64xbf16>> -> tensor<16x64xbf16>
+struct RewriteContiguousGather
+    : public OpRewritePattern<triton::DescriptorGatherOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(triton::DescriptorGatherOp gatherOp,
+                                PatternRewriter &rewriter) const override {
+    // 1. Module must support 2D block I/O.
+    ModuleOp moduleOp = gatherOp->getParentOfType<ModuleOp>();
+    if (!moduleOp->hasAttr(
+            gpu::intel::TritonIntelGPUDialect::getSupport2DBlockIOAttrName()))
+      return rewriter.notifyMatchFailure(gatherOp, "no 2D block I/O support");
+
+    // 2. Check if x_offsets are contiguous.
+    std::optional<ContiguousOffsetInfo> contiguousInfo =
+        analyzeContiguousOffsets(gatherOp.getXOffsets());
+    if (!contiguousInfo)
+      return rewriter.notifyMatchFailure(gatherOp,
+                                         "x_offsets are not contiguous");
+
+    // 3. Get result type shape: N rows, W columns.
+    auto resultTy = cast<RankedTensorType>(gatherOp.getResult().getType());
+    if (resultTy.getRank() != 2)
+      return rewriter.notifyMatchFailure(gatherOp, "result is not rank 2");
+
+    int64_t numRows = resultTy.getShape()[0];
+    int64_t rowWidth = resultTy.getShape()[1];
+    Type elemTy = resultTy.getElementType();
+    unsigned elemBits = elemTy.getIntOrFloatBitWidth();
+
+    // 4. Check tile dimension limits.
+    if (!canUse2DBlockIO(moduleOp, numRows, rowWidth, elemBits,
+                         /*isLoad=*/true))
+      return rewriter.notifyMatchFailure(gatherOp, "2D block I/O not feasible");
+
+    // 5. Find the MakeTensorDescOp that defines the descriptor.
+    triton::MakeTensorDescOp makeTensorDescOp =
+        gatherOp.getDesc().getDefiningOp<triton::MakeTensorDescOp>();
+    if (!makeTensorDescOp)
+      return rewriter.notifyMatchFailure(
+          gatherOp, "descriptor not from MakeTensorDescOp");
+
+    // 6. Create a new MakeTensorDescOp with block shape [N, W].
+    Location loc = gatherOp.getLoc();
+    auto newBlockTy = RankedTensorType::get({numRows, rowWidth}, elemTy);
+    auto newDescTy =
+        triton::TensorDescType::get(rewriter.getContext(), newBlockTy);
+    auto newMakeDesc = triton::MakeTensorDescOp::create(
+        rewriter, loc, newDescTy, makeTensorDescOp.getBase(),
+        makeTensorDescOp.getShape(), makeTensorDescOp.getStrides(),
+        makeTensorDescOp.getPadding());
+
+    // 7. Create tt.descriptor_load with offsets [baseOffset, yOffset].
+    SmallVector<Value> indices = {contiguousInfo->baseOffset,
+                                  gatherOp.getYOffset()};
+    auto descLoadOp = triton::DescriptorLoadOp::create(rewriter, loc, resultTy,
+                                                       newMakeDesc, indices);
+
+    // TF32 rounding for f32 types is handled by RewriteLoadPattern
+    // when it converts the DescriptorLoadOp in the subsequent phase.
+    rewriter.replaceOp(gatherOp, descLoadOp.getResult());
+    return success();
+  }
+};
+
+/// Rewrite DescriptorGatherOps with compile-time-constant x_offsets that form
+/// multiple contiguous sub-ranges into one descriptor_load per sub-range,
+/// concatenated with tt.cat.
+///
+/// Example — constant offsets [0,1,2,3, 8,9,10,11] on tensor<1x64xbf16>:
+///   %x = arith.constant dense<[0, 1, 2, 3, 8, 9, 10, 11]> : tensor<8xi32>
+///   %v = tt.descriptor_gather %desc[%x, %y]
+///          : (!tt.tensordesc<tensor<1x64xbf16>>, tensor<8xi32>, i32)
+///            -> tensor<8x64xbf16>
+/// Becomes (2 block loads + concatenation):
+///   %d0 = tt.make_tensor_desc ... : !tt.tensordesc<tensor<4x64xbf16>>
+///   %v0 = tt.descriptor_load %d0[%c0, %y] : ... -> tensor<4x64xbf16>
+///   %d1 = tt.make_tensor_desc ... : !tt.tensordesc<tensor<4x64xbf16>>
+///   %v1 = tt.descriptor_load %d1[%c8, %y] : ... -> tensor<4x64xbf16>
+///   %v  = tt.cat %v0, %v1 : tensor<4x64xbf16> -> tensor<8x64xbf16>
+///
+/// Constraint: all sub-ranges must have equal size (tt.cat requires
+/// SameTypeOperands). Falls back if sub-ranges differ in count.
+struct RewriteMultiRangeGather
+    : public OpRewritePattern<triton::DescriptorGatherOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(triton::DescriptorGatherOp gatherOp,
+                                PatternRewriter &rewriter) const override {
+    // 1. Module must support 2D block I/O.
+    ModuleOp moduleOp = gatherOp->getParentOfType<ModuleOp>();
+    if (!moduleOp->hasAttr(
+            gpu::intel::TritonIntelGPUDialect::getSupport2DBlockIOAttrName()))
+      return rewriter.notifyMatchFailure(gatherOp, "no 2D block I/O support");
+
+    // 2. Try to extract constant offset sub-ranges.
+    std::optional<SmallVector<ContiguousRange>> rangesOpt =
+        analyzeConstantOffsetRanges(gatherOp.getXOffsets());
+    if (!rangesOpt)
+      return rewriter.notifyMatchFailure(gatherOp,
+                                         "x_offsets are not constant");
+
+    SmallVector<ContiguousRange> &ranges = *rangesOpt;
+
+    // Single range is handled by RewriteContiguousGather (higher benefit).
+    if (ranges.size() <= 1)
+      return rewriter.notifyMatchFailure(
+          gatherOp, "single range, defer to contiguous pattern");
+
+    // Cap sub-range count to avoid excessive code generation.
+    constexpr size_t kMaxSubRanges = 4;
+    if (ranges.size() > kMaxSubRanges)
+      return rewriter.notifyMatchFailure(
+          gatherOp, "too many sub-ranges, would generate excessive loads");
+
+    // 3. All sub-ranges must have equal count (tt.cat requires
+    // SameTypeOperands).
+    int64_t rangeCount = ranges[0].count;
+    for (const auto &range : ranges) {
+      if (range.count != rangeCount)
+        return rewriter.notifyMatchFailure(
+            gatherOp,
+            "sub-ranges have unequal sizes, tt.cat requires same type");
+    }
+
+    // 4. Get result shape and element type.
+    auto resultTy = cast<RankedTensorType>(gatherOp.getResult().getType());
+    if (resultTy.getRank() != 2)
+      return rewriter.notifyMatchFailure(gatherOp, "result is not rank 2");
+    int64_t rowWidth = resultTy.getShape()[1];
+    Type elemTy = resultTy.getElementType();
+    unsigned elemBits = elemTy.getIntOrFloatBitWidth();
+
+    // 5. Check tile dimension limits for each sub-range.
+    for (const ContiguousRange &range : ranges) {
+      if (!canUse2DBlockIO(moduleOp, range.count, rowWidth, elemBits,
+                           /*isLoad=*/true))
+        return rewriter.notifyMatchFailure(
+            gatherOp, "sub-range exceeds 2D block I/O limits");
+    }
+
+    // 6. Find the MakeTensorDescOp.
+    auto makeTensorDescOp =
+        gatherOp.getDesc().getDefiningOp<triton::MakeTensorDescOp>();
+    if (!makeTensorDescOp)
+      return rewriter.notifyMatchFailure(
+          gatherOp, "descriptor not from MakeTensorDescOp");
+
+    // 7. Emit one descriptor_load per sub-range.
+    Location loc = gatherOp.getLoc();
+    RankedTensorType sliceTy =
+        RankedTensorType::get({rangeCount, rowWidth}, elemTy);
+    triton::TensorDescType sliceDescTy =
+        triton::TensorDescType::get(rewriter.getContext(), sliceTy);
+
+    SmallVector<Value> loads;
+    for (const auto &range : ranges) {
+      auto desc = triton::MakeTensorDescOp::create(
+          rewriter, loc, sliceDescTy, makeTensorDescOp.getBase(),
+          makeTensorDescOp.getShape(), makeTensorDescOp.getStrides(),
+          makeTensorDescOp.getPadding());
+
+      Value startOffset = arith::ConstantOp::create(
+          rewriter, loc, rewriter.getI32IntegerAttr(range.start));
+      SmallVector<Value> indices = {startOffset, gatherOp.getYOffset()};
+      auto load = triton::DescriptorLoadOp::create(rewriter, loc, sliceTy, desc,
+                                                   indices);
+      loads.push_back(load.getResult());
+    }
+
+    // 8. Concatenate with tt.cat using a balanced reduction tree.
+    //    tt.cat requires SameTypeOperands, so we can only cat tensors of
+    //    equal shape. A balanced tree ensures each pair has the same type.
+    //    Requires the number of ranges to be a power of 2.
+    if (loads.size() & (loads.size() - 1))
+      return rewriter.notifyMatchFailure(
+          gatherOp, "number of sub-ranges is not a power of 2");
+
+    SmallVector<Value> current = std::move(loads);
+    int64_t currentRows = rangeCount;
+    while (current.size() > 1) {
+      SmallVector<Value> next;
+      int64_t nextRows = currentRows * 2;
+      auto catTy = RankedTensorType::get({nextRows, rowWidth}, elemTy);
+      for (size_t i = 0; i < current.size(); i += 2)
+        next.push_back(triton::CatOp::create(rewriter, loc, catTy, current[i],
+                                             current[i + 1]));
+      current = std::move(next);
+      currentRows = nextRows;
+    }
+
+    rewriter.replaceOp(gatherOp, current[0]);
+    return success();
+  }
+};
+
 struct RewriteMakeTensorDesc : OpConversionPattern<triton::MakeTensorDescOp> {
   using OpConversionPattern<triton::MakeTensorDescOp>::OpConversionPattern;
 
@@ -547,7 +955,22 @@ class TritonRewriteTensorDescriptorToPointerPass
     : public triton::intel::impl::TritonRewriteTensorDescriptorToPointerBase<
           TritonRewriteTensorDescriptorToPointerPass> {
   void runOnOperation() override {
-    auto op = getOperation();
+    Operation *op = getOperation();
+
+    // Pre-pass: Rewrite contiguous DescriptorGatherOps to DescriptorLoadOps.
+    // When x_offsets are provably contiguous, replace the gather with a single
+    // 2D block load. For constant offsets with multiple contiguous sub-ranges,
+    // emit one load per sub-range and concatenate with tt.cat.
+    {
+      MLIRContext *ctx = op->getContext();
+      RewritePatternSet patterns(ctx);
+      patterns.add<RewriteContiguousGather>(ctx, /*benefit=*/2);
+      patterns.add<RewriteMultiRangeGather>(ctx, /*benefit=*/1);
+      // Failure here means no patterns matched (e.g. no gathers, or only
+      // non-contiguous offsets). This is expected — unmatched gathers fall
+      // through to the pointer-based conversion below.
+      (void)applyPatternsGreedily(op, std::move(patterns));
+    }
 
     llvm::SmallSetVector<triton::MakeTensorDescOp, 4>
         candidateMakeTensorDescOps;
