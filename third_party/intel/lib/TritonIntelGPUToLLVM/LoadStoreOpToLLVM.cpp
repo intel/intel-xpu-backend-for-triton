@@ -584,14 +584,12 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
         mlir::triton::tools::isEnvValueBool(mlir::triton::tools::getStrEnv(
             "TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS"));
 
-    // Only lower operation with dpas layout encoding, or stores explicitly
-    // annotated with a stride attribute from the 1D→2D reshape.
+    // Only lower operation with dpas layout encoding.
     auto tensorTy =
         cast<RankedTensorType>(getPointeeType(op.getPtr().getType()));
     bool hasDpas = hasDpasEncoding(tensorTy) || hasDotDpasEncoding(tensorTy);
     return !enableBlockIOForAllLayout.has_value() ||
-           enableBlockIOForAllLayout.value() || hasDpas ||
-           hasAnnotated1DReshapeStride(op);
+           enableBlockIOForAllLayout.value() || hasDpas;
   }
 
   /// Check whether a store was annotated by the 1D→2D reshape in

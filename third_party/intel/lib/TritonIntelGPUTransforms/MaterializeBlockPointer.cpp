@@ -9,6 +9,7 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/Visitors.h"
+#include "mlir/Interfaces/CastInterfaces.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
@@ -51,9 +52,10 @@ public:
     mod.walk([&](tt::LoadOp op) {
       visit(op, axisInfoAnalysis, strideAnalysis, context);
     });
-    mod.walk([&](tt::StoreOp op) {
+    SmallVector<tt::StoreOp> storeOps;
+    mod.walk([&](tt::StoreOp op) { storeOps.push_back(op); });
+    for (auto op : storeOps)
       visit(op, axisInfoAnalysis, strideAnalysis, context);
-    });
     mod.walk(
         [&](tt::DescriptorLoadOp op) { visit(op, axisInfoAnalysis, context); });
     mod.walk([&](tt::DescriptorStoreOp op) {
@@ -281,12 +283,11 @@ private:
                                       ttgi::BlockIOMode::ColumnMajor)));
   }
 
-  /// Look through index_cast, extui, extsi, trunci wrappers to find the
-  /// underlying arithmetic operation.
+  /// Look through cast wrappers (index_cast, extui, extsi, trunci, etc.)
+  /// to find the underlying arithmetic operation.
   static Value lookThroughCasts(Value val) {
     while (Operation *def = val.getDefiningOp()) {
-      if (!isa<arith::IndexCastOp, arith::ExtUIOp, arith::ExtSIOp,
-               arith::TruncIOp>(def))
+      if (!isa<CastOpInterface>(def) || def->getNumOperands() != 1)
         break;
       val = def->getOperand(0);
     }
@@ -353,16 +354,17 @@ private:
   /// casts. Handles both scalar IntegerAttr and splat DenseIntElementsAttr
   /// (tensor constants like `arith.constant dense<32> : tensor<Nxi32>`).
   static std::optional<int64_t> getConstantValue(Value val) {
+    // Try scalar constant first.
+    if (auto scalar = getScalarConstantValue(val))
+      return scalar;
+    // Try splat tensor constant (e.g., arith.constant dense<32> :
+    // tensor<Nxi32>).
     val = lookThroughCasts(val);
     if (!val)
       return std::nullopt;
     auto constOp = val.getDefiningOp<arith::ConstantOp>();
     if (!constOp)
       return std::nullopt;
-    // Scalar constant.
-    if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue()))
-      return intAttr.getValue().getSExtValue();
-    // Splat tensor constant (e.g., arith.constant dense<32> : tensor<Nxi32>).
     if (auto denseAttr = dyn_cast<DenseIntElementsAttr>(constOp.getValue())) {
       if (denseAttr.isSplat())
         return denseAttr.getSplatValue<APInt>().getSExtValue();
@@ -491,8 +493,9 @@ private:
     int64_t numElements = ptrTensorTy.getDimSize(0);
 
     // Verify idx is a canonical unit-stride linear index: tt.make_range(0, N).
-    // Without this, a scaled or permuted index that happens to match the
-    // algebraic shape would produce an incorrect reshape.
+    // This is complementary to the structural checks above: those extract W and
+    // S from the arithmetic pattern, while this ensures the base index itself
+    // is a simple sequential range (not scaled, permuted, etc.).
     if (!isCanonicalLinearIndex(remIdx, numElements, W)) {
       LDBG("Index is not a canonical linear index of length "
            << numElements << " with W=" << W);
@@ -571,11 +574,8 @@ private:
     auto newStore = tt::StoreOp::create(builder, loc, ptrReshape, valReshape,
                                         op.getCache(), op.getEvict());
 
-    // Copy inherent attributes not covered by the StoreOp builder.
-    if (!op.getBoundaryCheck().empty())
-      newStore->setAttr("boundaryCheck", op.getBoundaryCheckAttr());
-    if (op.getIgnoreCta())
-      newStore->setAttr("ignore_cta", UnitAttr::get(ctx));
+    // Note: boundaryCheck and ignoreCta are block-pointer-only inherent
+    // attributes, never set on 1D tensor-of-pointers stores.
 
     // Copy discardable attributes from the original store. Skip the block IO
     // attributes that we set explicitly below; carry everything else forward so
