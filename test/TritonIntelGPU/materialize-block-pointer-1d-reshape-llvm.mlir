@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-materialize-block-pointer --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s
+// RUN: env TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=1 triton-opt %s -split-input-file -tritonintelgpu-materialize-block-pointer --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s
 
 // COM: Test that the 1D strided store pattern, after MaterializeBlockPointer
 // COM: reshapes it to a 2D store with ttig.block_io and ttig.block_io_stride,

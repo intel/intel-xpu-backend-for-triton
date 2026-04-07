@@ -574,9 +574,6 @@ private:
     auto newStore = tt::StoreOp::create(builder, loc, ptrReshape, valReshape,
                                         op.getCache(), op.getEvict());
 
-    // Note: boundaryCheck and ignoreCta are block-pointer-only inherent
-    // attributes, never set on 1D tensor-of-pointers stores.
-
     // Copy discardable attributes from the original store. Skip the block IO
     // attributes that we set explicitly below; carry everything else forward so
     // that analysis hints attached by earlier passes are not silently dropped.
