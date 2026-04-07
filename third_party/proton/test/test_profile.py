@@ -882,9 +882,191 @@ def test_trace(tmp_path: pathlib.Path, device: str):
     with temp_file.open() as f:
         data = json.load(f)
         trace_events = data["traceEvents"]
-        assert len(trace_events) == 3
         assert trace_events[-1]["name"] == "foo"
         assert trace_events[-1]["args"]["call_stack"] == ["ROOT", "test", "foo"]
+
+
+@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
+def test_trace_flexible_metrics_scope_ranges(tmp_path: pathlib.Path, device: str):
+
+    @triton.jit
+    def foo(x, y, size: tl.constexpr):
+        offs = tl.arange(0, size)
+        tl.store(y + offs, tl.load(x + offs))
+
+    x = torch.ones((1024, ), device=device, dtype=torch.float32)
+    y = torch.zeros_like(x)
+    temp_file = tmp_path / "test_trace_flexible_metrics_scope_ranges.chrome_trace"
+    proton.start(str(temp_file.with_suffix("")), data="trace")
+
+    with proton.scope("scope_3", metrics={"m3": 3.0}):
+        with proton.scope("scope_2", metrics={"m2": 2.0}):
+            with proton.scope("scope_1", metrics={"m1": 1.0}):
+                foo[(1, )](x, y, x.size()[0], num_warps=4)
+            with proton.scope("scope_4"):
+                foo[(1, )](x, y, x.size()[0], num_warps=4)
+            with proton.scope("scope_5"):
+                foo[(1, )](x, y, x.size()[0], num_warps=4)
+        with proton.scope("scope_6"):
+            with proton.scope("scope_7"):
+                foo[(1, )](x, y, x.size()[0], num_warps=4)
+
+    proton.finalize()
+    with temp_file.open() as f:
+        trace_events = json.load(f)["traceEvents"]
+    kernel_events = [event for event in trace_events if event.get("cat") == "kernel" and event["name"] == "foo"]
+    metric_events = [event for event in trace_events if event.get("cat") == "metric"]
+    scope_events = [event for event in trace_events if event.get("cat") == "scope"]
+    flow_events = [event for event in trace_events if event.get("cat") == "flow"]
+
+    assert (len(kernel_events), len(metric_events), len(scope_events), len(flow_events)) == (4, 3, 4, 8)
+
+    assert {tuple(event["args"]["call_stack"])
+            for event in kernel_events} == {
+                ("ROOT", "scope_3", "scope_2", "scope_1", "foo"),
+                ("ROOT", "scope_3", "scope_2", "scope_4", "foo"),
+                ("ROOT", "scope_3", "scope_2", "scope_5", "foo"),
+                ("ROOT", "scope_3", "scope_6", "scope_7", "foo"),
+            }
+
+    metric_by_name = {next(iter(event["args"]["metrics"])): event for event in metric_events}
+    assert {
+        name: (event["name"], tuple(event["args"]["call_stack"]), event["args"]["metrics"])
+        for name, event in metric_by_name.items()
+    } == {
+        "m1": ("scope_1: <m1, 1.000000>", ("ROOT", "scope_3", "scope_2", "scope_1"), {"m1": "1.000000"}),
+        "m2": ("scope_2: <m2, 2.000000>", ("ROOT", "scope_3", "scope_2"), {"m2": "2.000000"}),
+        "m3": ("scope_3: <m3, 3.000000>", ("ROOT", "scope_3"), {"m3": "3.000000"}),
+    }
+
+    assert {tuple(event["args"]["call_stack"])
+            for event in scope_events} == {
+                ("ROOT", "scope_3", "scope_2", "scope_4"),
+                ("ROOT", "scope_3", "scope_2", "scope_5"),
+                ("ROOT", "scope_3", "scope_6"),
+                ("ROOT", "scope_3", "scope_6", "scope_7"),
+            }
+
+    gpu_tid = kernel_events[0]["tid"]
+    cpu_tid = metric_by_name["m1"]["tid"]
+    flow_starts = {event["id"]: event for event in flow_events if event["ph"] == "s"}
+    flow_finishes = {event["id"]: event for event in flow_events if event["ph"] == "f"}
+    assert set(flow_starts) == set(flow_finishes)
+    assert len(flow_starts) == 4
+    assert all(event["name"] == "launch->kernel" and event["bp"] == "e" and event["tid"] == cpu_tid
+               for event in flow_starts.values())
+    assert all(event["name"] == "launch->kernel" and event["bp"] == "e" and event["tid"] == gpu_tid
+               for event in flow_finishes.values())
+
+
+def test_trace_flexible_metrics_no_kernel_anchor(tmp_path: pathlib.Path):
+    temp_file = tmp_path / "test_trace_flexible_metrics_no_kernel_anchor.chrome_trace"
+    proton.start(str(temp_file.with_suffix("")), data="trace")
+
+    with proton.scope("metric_only", metrics={"foo": 1.0}):
+        pass
+
+    proton.finalize()
+    with temp_file.open() as f:
+        trace_events = json.load(f)["traceEvents"]
+    assert len(trace_events) == 1
+    assert (
+        trace_events[0]["cat"],
+        trace_events[0]["name"],
+        trace_events[0]["args"]["call_stack"],
+        trace_events[0]["args"]["metrics"],
+    ) == ("metric", "metric_only: <foo, 1.000000>", ["ROOT", "metric_only"], {"foo": "1.000000"})
+
+
+@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports cudagraph trace reconstruction")
+def test_trace_cudagraph_graph_scope_ranges(tmp_path: pathlib.Path, device: str):
+    stream = torch.cuda.Stream()
+    torch.cuda.set_stream(stream)
+
+    @triton.jit
+    def foo(x, y, size: tl.constexpr):
+        offs = tl.arange(0, size)
+        tl.store(y + offs, tl.load(x + offs))
+
+    x = torch.ones((128, ), device=device, dtype=torch.float32)
+    y = torch.zeros_like(x)
+    metric_tensor = torch.tensor(1.0, device=device)
+
+    foo[(1, )](x, y, x.numel(), num_warps=4)
+    torch.cuda.synchronize(torch.device(device))
+
+    def fn():
+        with proton.scope("a"):
+            with proton.scope("b"):
+                with proton.scope("c", metrics={"m1": metric_tensor}):
+                    foo[(1, )](x, y, x.numel(), num_warps=4)
+                foo[(1, )](x, y, x.numel(), num_warps=4)
+            foo[(1, )](x, y, x.numel(), num_warps=4)
+
+    temp_file = tmp_path / "test_trace_cudagraph_graph_scope_ranges.chrome_trace"
+    proton.start(str(temp_file.with_suffix("")), data="trace", context="shadow")
+
+    # warmup
+    fn()
+
+    g = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(g):
+        fn()
+
+    with proton.scope("test0"):
+        g.replay()
+
+    proton.finalize()
+    with temp_file.open() as f:
+        trace_events = json.load(f)["traceEvents"]
+
+    thread_name_events = [
+        event for event in trace_events if event.get("ph") == "M" and event.get("name") == "thread_name"
+    ]
+    graph_tids = [event["tid"] for event in thread_name_events if event["args"]["name"].startswith("Graph: Stream ")]
+    assert len(graph_tids) == 1
+    graph_tid = graph_tids[0]
+
+    graph_scope_events = [event for event in trace_events if event.get("cat") == "scope" and event["tid"] == graph_tid]
+    assert {"<captured_at>", "a", "b", "c"}.issubset({event["name"] for event in graph_scope_events})
+    assert not any(event.get("cat") == "metric" and event["tid"] == graph_tid for event in trace_events)
+
+    replay_kernel_events = [
+        event for event in trace_events
+        if event.get("cat") == "kernel" and event.get("args", {}).get("call_stack", [])[:2] == ["ROOT", "test0"]
+    ]
+    foo_events = [event for event in replay_kernel_events if event["name"] == "foo"]
+    metric_kernel_events = [event for event in replay_kernel_events if event["name"] == "<metric>"]
+    metadata_kernel_events = [
+        event for event in replay_kernel_events
+        if COMPUTE_METADATA_SCOPE_NAME in event.get("args", {}).get("call_stack", [])
+    ]
+
+    assert len(foo_events) == 3
+    assert {tuple(event["args"]["call_stack"])
+            for event in foo_events} == {
+                ("ROOT", "test0", "<captured_at>", "a", "b", "c", "foo"),
+                ("ROOT", "test0", "<captured_at>", "a", "b", "foo"),
+                ("ROOT", "test0", "<captured_at>", "a", "foo"),
+            }
+    assert len(metric_kernel_events) == 1
+    assert metric_kernel_events[0]["args"]["call_stack"] == [
+        "ROOT", "test0", "<captured_at>", "a", "b", "c", "<metric>"
+    ]
+    assert all(event["name"] not in {"foo", "<metric>"} for event in metadata_kernel_events)
+
+    test0_scope = next(
+        event for event in trace_events
+        if event.get("cat") == "scope" and event.get("args", {}).get("call_stack", []) == ["ROOT", "test0"])
+    replay_gpu_tid = foo_events[0]["tid"]
+    first_replay_kernel = min(replay_kernel_events, key=lambda event: event["ts"])
+    flow_finish = next(event for event in trace_events
+                       if event.get("cat") == "flow" and event["ph"] == "f" and event["name"] == "launch->kernel"
+                       and event["tid"] == replay_gpu_tid and event["ts"] == first_replay_kernel["ts"])
+    flow_start = next(event for event in trace_events
+                      if event.get("cat") == "flow" and event["ph"] == "s" and event["id"] == flow_finish["id"])
+    assert flow_start["tid"] == test0_scope["tid"]
+    assert test0_scope["ts"] == flow_start["ts"] <= flow_finish["ts"]
 
 
 @pytest.mark.parametrize("profile_kind,suffix", [("tree", ".hatchet"), ("trace", ".chrome_trace")],

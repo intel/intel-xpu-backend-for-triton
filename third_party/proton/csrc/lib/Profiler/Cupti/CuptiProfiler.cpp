@@ -35,7 +35,8 @@ thread_local GPUProfiler<CuptiProfiler>::ThreadState
 namespace {
 
 std::unique_ptr<Metric>
-convertKernelActivityToMetric(CUpti_Activity *activity) {
+convertKernelActivityToMetric(CUpti_Activity *activity,
+                              bool isMetricKernel = false) {
   std::unique_ptr<Metric> metric;
   auto *kernel = reinterpret_cast<CUpti_ActivityKernel5 *>(activity);
   if (kernel->start < kernel->end) {
@@ -44,7 +45,8 @@ convertKernelActivityToMetric(CUpti_Activity *activity) {
                                        static_cast<uint64_t>(kernel->end), 1,
                                        static_cast<uint64_t>(kernel->deviceId),
                                        static_cast<uint64_t>(DeviceType::CUDA),
-                                       static_cast<uint64_t>(kernel->streamId));
+                                       static_cast<uint64_t>(kernel->streamId),
+                                       static_cast<uint64_t>(isMetricKernel));
   } // else: not a valid kernel activity
   return metric;
 }
@@ -122,32 +124,22 @@ uint32_t processActivityKernel(
     if (nodeIdToState) {
       const GraphState::NodeState &nodeState = nodeIdToState->at(
           kernel->graphNodeId); // nodeIdToState must have the nodeId
-      if (!nodeState.status.isMetricNode()) {
-        const bool isMissingName = nodeState.status.isMissingName();
-        for (auto &[data, entry] : externState.dataToGraphEntry) {
-          auto targetEntryIdIter = nodeState.dataToEntryId.find(data);
-          if (targetEntryIdIter != nodeState.dataToEntryId.end()) {
-            auto targetEntryId = targetEntryIdIter->second;
-            if (!isMissingName) {
-              if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-                entry.upsertLinkedMetric(std::move(kernelMetric),
-                                         targetEntryId);
-                detail::updateDataPhases(dataPhases, data, entry.phase);
-              }
-            } else {
-              if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-                auto childEntry =
-                    data->addOp(Data::kVirtualPhase, targetEntryId,
-                                {Context(kernel->name)});
-                entry.upsertLinkedMetric(std::move(kernelMetric),
-                                         childEntry.id);
-                detail::updateDataPhases(dataPhases, data, entry.phase);
-              }
-            }
-          } // else the profiling session has been deactivated during graph
-            // capture when encountering this node
+      if (nodeState.status.isMissingName()) {
+        throw std::runtime_error("Kernel name is missing for a graph node.");
+      }
+      const bool isMetricKernel = nodeState.status.isMetricNode();
+      for (auto &[data, entry] : externState.dataToGraphEntry) {
+        auto targetEntryIdIter = nodeState.dataToEntryId.find(data);
+        if (targetEntryIdIter != nodeState.dataToEntryId.end()) {
+          auto targetEntryId = targetEntryIdIter->second;
+          if (auto kernelMetric =
+                  convertKernelActivityToMetric(activity, isMetricKernel)) {
+            entry.upsertLinkedMetric(std::move(kernelMetric), targetEntryId);
+            detail::updateDataPhases(dataPhases, data, entry.phase);
+          }
         }
-      } // else metric nodes are always skipped
+      } // else the profiling session has been deactivated during graph
+        // capture when encountering this node
     } else {
       // This can happen when graph creation is not captured.
       // Since we don't have per-node info, we just attach the kernel metric to
@@ -485,10 +477,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
       auto &nodeState = graphState.nodeIdToState[nodeId];
       nodeState.nodeId = nodeId;
       const auto &name = threadState.scopeStack.back().name;
-      if (name.empty() ||
-          (threadState.isApiExternOp && threadState.isMetricKernelLaunching)) {
+      if (name.empty())
         nodeState.status.setMissingName();
-      }
       if (threadState.isMetricKernelLaunching) {
         nodeState.status.setMetricNode();
         auto metricKernelNumWords =
@@ -500,8 +490,16 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
       }
       for (auto *data : profiler.dataSet) {
         auto contexts = data->getContexts();
-        if (!threadState.isApiExternOp || !threadState.isMetricKernelLaunching)
+        if (threadState.isMetricKernelLaunching) {
+          if (threadState.isApiExternOp) { // API extern ops
+            contexts.push_back(std::string(GraphState::metricTag));
+          } else { // Triton ops
+            contexts.push_back(name);
+            contexts.push_back(std::string(GraphState::metricTag));
+          }
+        } else {
           contexts.push_back(name);
+        }
         auto staticEntry =
             data->addOp(Data::kVirtualPhase, Data::kRootEntryId, contexts);
         nodeState.dataToEntryId.insert_or_assign(data, staticEntry.id);
@@ -605,7 +603,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
     const auto symbolName = callbackData->context && callbackData->symbolName
                                 ? std::string(callbackData->symbolName)
                                 : "";
-    threadState.enterOp(Scope(symbolName));
+    threadState.enterOp(Scope(std::move(symbolName)));
   }
 
   auto &dataToEntry = threadState.dataToEntry;
@@ -699,14 +697,6 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiExitLaunchCallbacks(
 
 void CuptiProfiler::CuptiProfilerPimpl::handleApiCallbacks(
     CuptiProfiler &profiler, CUpti_CallbackId cbId, const void *cbData) {
-  // Do not track metric kernel launches for triton ops.
-  // In this case, metric kernels are launched after a triton op is entered.
-  // We should track metric kernel launches for scopes.
-  // In this case, the metric kernel's stack has the same name as the scope's
-  // stack.
-  if (threadState.isMetricKernelLaunching && profiler.isOpInProgress())
-    return;
-
   const CUpti_CallbackData *callbackData =
       static_cast<const CUpti_CallbackData *>(cbData);
   handleStreamCaptureCallbacks(cbId);
