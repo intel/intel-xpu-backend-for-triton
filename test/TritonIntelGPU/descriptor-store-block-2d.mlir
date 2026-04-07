@@ -1,5 +1,5 @@
-// RUN: TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=0 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm --check-prefixes=CHECK,DPAS-LAYOUT
-// RUN: TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=1 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm --check-prefixes=CHECK,ALL-LAYOUT
+// RUN: env TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=0 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm --check-prefixes=CHECK,DPAS-LAYOUT
+// RUN: env TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=1 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm --check-prefixes=CHECK,ALL-LAYOUT
 
 // Test that tt.descriptor_store with DPAS encodings is lowered to
 // triton_gen.2Dblockstore when the module has "ttig.support_2d_block_io".
@@ -24,6 +24,47 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // 4 warps x 2 warps, repCluster [1,1], C shape [8,16] => 4 stores total.
     // CHECK-COUNT-4: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
     tt.descriptor_store %desc[%c0_i32, %c0_i32], %cst {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<64x64xf16, #dpas>>, tensor<64x64xf16, #dpas>
+    tt.return
+  }
+}
+
+// -----
+// Test: Rank-reducing descriptor store with block IO.
+// Descriptor rank is 3 while source tensor rank is 2.
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @store_rank_reducing_dpas_tdesc
+  // CHECK-COUNT-8: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
+  tt.func public @store_rank_reducing_dpas_tdesc(%arg0: !tt.ptr<f16>, %arg1: i32,
+                                                  %arg2: i32, %arg3: i64) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf16, #dpas>
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%c1_i32, %arg1, %arg2], [%arg3, %c1_i64, %c1_i64] : <f16>, <tensor<1x32x32xf16, #dpas>>
+    tt.descriptor_store %desc[%c0_i32, %c0_i32, %c0_i32], %cst {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<1x32x32xf16, #dpas>>, tensor<32x32xf16, #dpas>
+    tt.return
+  }
+}
+
+// -----
+// Test: Rank-reducing descriptor store without block IO attribute uses generic
+// gather/scatter lowering (no 2D block store emitted).
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @store_rank_reducing_generic_tdesc
+  // CHECK-NOT: triton_gen.2Dblockstore
+  tt.func public @store_rank_reducing_generic_tdesc(%arg0: !tt.ptr<f16>,
+                                                     %arg1: i32, %arg2: i32,
+                                                     %arg3: i64) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf16, #dpas>
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%c1_i32, %arg1, %arg2], [%arg3, %c1_i64, %c1_i64] : <f16>, <tensor<1x32x32xf16, #dpas>>
+    tt.descriptor_store %desc[%c0_i32, %c0_i32, %c0_i32], %cst : !tt.tensordesc<tensor<1x32x32xf16, #dpas>>, tensor<32x32xf16, #dpas>
     tt.return
   }
 }

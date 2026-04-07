@@ -4,6 +4,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include <numeric>
 
 #define DEBUG_TYPE "intel-axis-info-ext"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -14,6 +15,17 @@ namespace mlir::triton::intel {
 namespace ttgi = mlir::triton::gpu::intel;
 
 namespace {
+
+template <typename... Args> int64_t gcd(int64_t a, int64_t b, Args... args) {
+  if (a == 0)
+    return b;
+  if (b == 0)
+    return a;
+  if constexpr (sizeof...(args) == 0)
+    return std::gcd(a, b);
+  else
+    return gcd(std::gcd(a, b), args...);
+}
 
 // Upstream AxisInfoVisitorImpl / BinaryOpVisitorImpl / AddSubOpAxisInfoVisitor
 // are defined in an anonymous namespace in lib/Analysis/AxisInfo.cpp, so they
@@ -94,86 +106,72 @@ protected:
 // Intel-specific visitors
 //===----------------------------------------------------------------------===//
 
-/// Compute AxisInfo for ops that create a block pointer or tensor descriptor.
+/// Compute AxisInfo for ops that create a tensor descriptor.
 ///
-/// Both MakeTensorPtrOp and MakeTensorDescOp share the same operand layout:
+/// MakeTensorDescOp has the following operand layout:
 ///   operand 0            – base pointer
 ///   operands [1, rank)   – shape values  (rank operands)
 ///   operands [rank+1, 2*rank] – stride values (rank operands)
-/// and the same stride / contiguity / divisibility / constancy logic.
-/// The only difference between the two ops is how the block shape and rank are
-/// extracted from the result type, which is passed in by the caller.
 static AxisInfo
-makeTensorPtrAxisInfo(ArrayRef<int64_t> blkShape, unsigned rank,
-                      ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) {
-  SmallVector<AxisInfo, 2> strideInfo;
+makeTensorDescAxisInfo(Type elemTy, ArrayRef<int64_t> blkShape, unsigned rank,
+                       ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) {
+  assert(operands.size() >= rank * 2 + 1 &&
+         "Insufficient operands for AxisInfo analysis");
+  SmallVector<AxisInfo, 2> strideInfo, shapeInfo;
+  // Shapes start after base (operand 0).
+  for (unsigned i = 1; i <= rank; ++i)
+    shapeInfo.emplace_back(operands[i]->getValue());
   // Strides start after base (operand 0) and shape operands.
   for (unsigned i = rank + 1; i <= rank * 2; ++i)
     strideInfo.emplace_back(operands[i]->getValue());
 
   int64_t ptrDivisibility = operands[0]->getValue().getDivisibility(0);
-
+  // Follow the regular pointer divisibility definition in tt.addptr:
+  // On each dim, tt is "strided contiguous" with a divisibility of
+  // ptrDivisibility
   AxisInfo::DimVectorT contiguity, constancy, divisibility;
+
+  auto combineStrideGCD = [&](unsigned excludeDim) {
+    int64_t strideVal = 0;
+    for (auto [i, stride] : llvm::enumerate(strideInfo)) {
+      if (i == excludeDim)
+        continue;
+      strideVal = gcd(stride.getDivisibility(0), strideVal);
+    }
+    return strideVal;
+  };
+
+  unsigned elemBytes = ceil<unsigned>(elemTy.getIntOrFloatBitWidth(), 8);
   for (unsigned dim = 0; dim < rank; ++dim) {
-    contiguity.push_back(strideInfo[dim].getConstantValue() == 1 ? blkShape[dim]
-                                                                 : 1);
-    // For 2-D tensors the divisibility of dim d is bounded by the stride of
-    // the *other* dimension; for 1-D tensors the single stride suffices.
-    const AxisInfo &relevantStride =
-        (rank == 2) ? strideInfo[dim == 0 ? 1 : 0] : strideInfo[dim];
+    // The maximum contiguity is the divisibility of boundary shape, which is
+    // the case when stride is 1. Take an example of !tt.ptr<tensor<4x4xi8>>: if
+    // the boundary shape is [3, 3] which divisibility is 1. The tensor pointer
+    // axis is like:
+    // clang-format off
+    // [[base    , base + 1, base + 2, nullptr,]
+    //  [base + 4, base + 5, base + 6, nullptr,]
+    //  [base + 8, base + 9, base +10, nullptr,]
+    //  [nullptr,  nullptr,  nullptr,  nullptr,]]
+    // clang-format on
+    // The contiguity of the two dim should be 1.
+    int64_t contiguous = shapeInfo[dim].getDivisibility(0);
+    contiguity.push_back(strideInfo[dim].getConstantValue() == 1
+                             ? std::min(contiguous, blkShape[dim])
+                             : 1);
+
+    // The divisibility of dim d is bounded by the stride of
+    // the *other* dimension;
+    int64_t relevantStrideDivisibility = combineStrideGCD(dim) * elemBytes;
     divisibility.push_back(
-        contiguity[dim] > 1
-            ? std::min(ptrDivisibility, relevantStride.getDivisibility()[0])
-            : 1);
+        contiguity[dim] > 1 ? gcd(ptrDivisibility, relevantStrideDivisibility)
+                            : 1);
+
     constancy.push_back(1);
   }
 
   return AxisInfo(std::move(contiguity), std::move(divisibility),
                   std::move(constancy), std::nullopt);
 }
-
-class MakeTensorPtrOpAxisInfoVisitor final
-    : public AxisInfoVisitorImpl<triton::MakeTensorPtrOp> {
-public:
-  using AxisInfoVisitorImpl<triton::MakeTensorPtrOp>::AxisInfoVisitorImpl;
-
-  AxisInfo
-  getAxisInfo(triton::MakeTensorPtrOp op,
-              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
-    LDBG("MakeTensorPtrOpAxisInfoVisitor: " << *op);
-
-    auto tensorType = cast<RankedTensorType>(
-        cast<PointerType>(op.getResult().getType()).getPointeeType());
-    unsigned rank = op.getShape().size();
-
-    // TODO: Support higher rank tensors.
-    if (rank > 2)
-      return AxisInfo();
-
-    auto axisInfo =
-        makeTensorPtrAxisInfo(tensorType.getShape(), rank, operands);
-
-    LLVM_DEBUG({
-      std::string axisStr;
-      llvm::raw_string_ostream os(axisStr);
-      axisInfo.print(os);
-      LDBG("-- " << axisStr);
-    });
-
-    return axisInfo;
-  }
-};
-
-class AdvanceOpAxisInfoVisitor final
-    : public AxisInfoVisitorImpl<triton::AdvanceOp> {
-public:
-  using AxisInfoVisitorImpl<triton::AdvanceOp>::AxisInfoVisitorImpl;
-  AxisInfo
-  getAxisInfo(triton::AdvanceOp op,
-              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
-    return operands[0]->getValue();
-  }
-};
 
 class MakeTensorDescOpAxisInfoVisitor final
     : public AxisInfoVisitorImpl<triton::MakeTensorDescOp> {
@@ -189,17 +187,11 @@ public:
         cast<TensorDescType>(op.getResult().getType()).getBlockType();
     unsigned rank = op.getShape().size();
 
-    // TODO: Support higher rank tensors.
-    if (rank > 2) {
-      LDBG("Unsupported tensor rank > 2, returning default AxisInfo");
-      return AxisInfo();
-    }
-
     assert(operands.size() >= rank * 2 + 1 &&
            "Insufficient operands for MakeTensorDescOp AxisInfo analysis");
 
-    auto axisInfo =
-        makeTensorPtrAxisInfo(tensorType.getShape(), rank, operands);
+    auto axisInfo = makeTensorDescAxisInfo(
+        tensorType.getElementType(), tensorType.getShape(), rank, operands);
 
     LLVM_DEBUG({
       std::string axisStr;
@@ -222,17 +214,22 @@ public:
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
     LDBG("DescriptorLoadOpAxisInfoVisitor: " << *op);
 
+    // Match upstream LoadOp semantics: loaded values have no guaranteed
+    // contiguity or divisibility (those are address-level properties), but
+    // constancy transfers — identical addresses yield identical values.
+    const AxisInfo &descInfo = operands[0]->getValue();
     auto resultType = cast<RankedTensorType>(op.getResult().getType());
-    unsigned rank = resultType.getRank();
+    unsigned resultRank = resultType.getRank();
 
-    AxisInfo::DimVectorT contiguity, divisibility, constancy;
+    // Rank mismatch safety: the verifier allows different ranks if total
+    // element count matches, but AxisInfo is rank-dependent.
+    if (descInfo.getRank() == 0 ||
+        static_cast<unsigned>(descInfo.getRank()) != resultRank)
+      return AxisInfo::getPessimisticValueState(op.getResult());
 
-    // For descriptor loads, return conservative axis info.
-    for (unsigned d = 0; d < rank; ++d) {
-      contiguity.push_back(1);
-      divisibility.push_back(1);
-      constancy.push_back(1);
-    }
+    AxisInfo::DimVectorT contiguity(resultRank, 1);
+    AxisInfo::DimVectorT divisibility(resultRank, 1);
+    AxisInfo::DimVectorT constancy = descInfo.getConstancy();
 
     auto axisInfo = AxisInfo(std::move(contiguity), std::move(divisibility),
                              std::move(constancy));
@@ -357,12 +354,11 @@ private:
 } // anonymous namespace
 
 //===----------------------------------------------------------------------===//
-// AxisInfoExt
+// AxisInfoAnalysisExt
 //===----------------------------------------------------------------------===//
 
-void AxisInfoExt::addVisitors(AxisInfoVisitorList &visitors) {
-  visitors.append<MakeTensorPtrOpAxisInfoVisitor>();
-  visitors.append<AdvanceOpAxisInfoVisitor>();
+AxisInfoAnalysisExt::AxisInfoAnalysisExt(DataFlowSolver &solver)
+    : triton::AxisInfoAnalysis(solver) {
   visitors.append<MakeTensorDescOpAxisInfoVisitor>();
   visitors.append<DescriptorLoadOpAxisInfoVisitor>();
   visitors.append<CastOpAxisInfoVisitor<arith::IndexCastOp>>();
@@ -372,12 +368,18 @@ void AxisInfoExt::addVisitors(AxisInfoVisitorList &visitors) {
   visitors.append<AddSubOpAxisInfoVisitor<LLVM::AddOp>>();
 }
 
+triton::AxisInfoAnalysis *
+AxisInfoAnalysisExt::loadAnalysis(DataFlowSolver *solver) {
+  return solver->load<AxisInfoAnalysisExt>();
+}
+
 //===----------------------------------------------------------------------===//
 // ModuleAxisInfoAnalysis
 //===----------------------------------------------------------------------===//
 
 ModuleAxisInfoAnalysis::ModuleAxisInfoAnalysis(ModuleOp moduleOp)
-    : triton::ModuleAxisInfoAnalysis(moduleOp, AxisInfoExt::addVisitors) {}
+    : triton::ModuleAxisInfoAnalysis(moduleOp,
+                                     AxisInfoAnalysisExt::loadAnalysis) {}
 
 AxisInfo *ModuleAxisInfoAnalysis::getAxisInfo(Value value) {
   auto funcOp = value.getParentRegion()->getParentOfType<FunctionOpInterface>();

@@ -734,17 +734,7 @@ LinearLayout AMDWmmaEncodingAttr::getTileLayout(unsigned rank) const {
 
 LinearLayout
 AMDWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
-  auto mnkDim = getInstrShape();
   auto rank = shape.size();
-  bool hasBatchDim = rank == 3;
-  int mIndex = 0 + hasBatchDim;
-  int nIndex = 1 + hasBatchDim;
-  unsigned mDim = mnkDim[0], nDim = mnkDim[1];
-  (void)mDim, (void)nDim;
-
-  assert(((shape[mIndex] == 1 || shape[mIndex] >= mDim) &&
-          (shape[nIndex] == 1 || shape[nIndex] >= nDim)) &&
-         "Unsupported tensor shape for given wmma layout");
 
   auto tileLayout = getTileLayout(rank);
   auto ctaLayout = getCtaLayout();
@@ -1745,8 +1735,9 @@ LinearLayout getTDMLinearLayout(ArrayRef<int64_t> blockShape,
 
   auto order = getMatrixOrder(numDims, /*rowMajor=*/false);
 
-  return identityStandardND(S("message"), messageShape, order) *
-         identityStandardND(S("warp"), warpsPerCTA, order) * cgaLayout;
+  return (identityStandardND(S("message"), messageShape, order) *
+          identityStandardND(S("warp"), warpsPerCTA, order) * cgaLayout)
+      .transposeOuts(standardOutDimNames(ctx, numDims));
 }
 
 } // namespace mlir::triton::gpu
