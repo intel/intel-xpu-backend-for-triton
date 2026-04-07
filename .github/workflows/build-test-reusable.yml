@@ -68,41 +68,65 @@ on:
 permissions: read-all
 
 env:
-  PYTHON_VERSION: '3.10'
+  TRITON_DISABLE_LINE_INFO: 1
+  TEST_UNSKIP: ${{ inputs.enable_unskip }}
+  # Increase this value to reset cache
+  PIP_CACHE_NUMBER: 1
 
 jobs:
-  tests:
-    name: Tests
+  build:
+    name: Build
+    timeout-minutes: 720
     runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
-    timeout-minutes: 75 # equal to max + 3*std over the last 600 successful runs
+    defaults:
+      run:
+        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+    outputs:
+      test-triton-command: ${{ steps.test-triton.outputs.command }}
     steps:
+      - name: Print inputs
+        run: |
+          cat <<EOF
+          ${{ toJSON(inputs) }}
+          EOF
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Install Python
-        uses: actions/setup-python@v6
+      - name: Load pip cache
+        id: pip-cache
+        uses: ./.github/actions/load
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          path: $HOME/.cache/pip
+          key: pip-${{ inputs.python_version }}-${{ hashFiles('pyproject.toml', 'setup.py') }}-${{ env.PIP_CACHE_NUMBER }}
 
+      - name: Install Python
+        uses: ./.github/actions/setup-python
+        with:
+          python_version: ${{ inputs.python_version }}
+          use_pyenv: ${{ inputs.use_pyenv_python }}
+
+      # Build PyTorch here once, integration tests jobs should load it from cache.
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
+        with:
+          ref: ${{ inputs.pytorch_ref }}
+          mode: ${{ inputs.pytorch_mode }}
 
-      - name: Setup Triton
+      - name: Build Triton
         uses: ./.github/actions/setup-triton
+        with:
+          build_llvm: ${{ inputs.build_llvm }}
+          use_spirv_backend: ${{ inputs.use_spirv_backend }}
+          command: >
+            DEBUG=1
+            python -m build --wheel --no-isolation && pip install dist/*.whl
 
-      - name: Build SPIRVRunner
+      - name: Build PTI
         run: |
-          source /opt/intel/oneapi/setvars.sh
-          set -x
-          export LLVM_DIR="$HOME/.triton/llvm/llvm-ubuntu-x64"
-          export CMAKE_PREFIX_PATH="$(python scripts/torch_cmake.py)"
-          cd utils/SPIRVRunner
-          mkdir build
-          cd build
-          cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo ..
-          make -j
+          ./scripts/install-pti.sh --build-level-zero
 
-      - name: Test SPIRVRunner
+      - name: Set test-triton command line
+        id: test-triton
         run: |
           skiplist="$GITHUB_WORKSPACE/scripts/skiplist/default"
 
