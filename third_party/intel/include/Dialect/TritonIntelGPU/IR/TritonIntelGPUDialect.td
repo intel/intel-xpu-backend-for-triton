@@ -117,6 +117,12 @@ def TritonIntelGPU_Dialect : Dialect {
     static constexpr llvm::StringRef getOneMatrixPerLoadAttrName() {
       return "ttig.one_matrix_per_load";
     }
+
+    /// Get the name of the attribute used to propagate the padding option
+    /// from MakeTensorDescOp to descriptor load/store operations.
+    static constexpr llvm::StringRef getDescPaddingAttrName() {
+      return "ttig.desc_padding";
+    }
   }];
 
   let useDefaultAttributePrinterParser = 1;
