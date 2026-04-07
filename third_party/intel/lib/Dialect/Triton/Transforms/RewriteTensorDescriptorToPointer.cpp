@@ -1,5 +1,4 @@
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
-#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Utils/Utility.h"
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -35,11 +34,6 @@ namespace mlir::triton::intel {
 
 #define GEN_PASS_DEF_TRITONREWRITETENSORDESCRIPTORTOPOINTER
 #include "intel/include/Dialect/Triton/Transforms/Passes.h.inc"
-
-// Hardware 2D block I/O limits.
-constexpr int64_t MAX_TILE_HEIGHT_LOAD = 32;
-constexpr int64_t MAX_TILE_HEIGHT_STORE = 8;
-constexpr int64_t MAX_BITS_WIDTH = 64 * 8; // 64 bytes per row.
 
 namespace {
 
@@ -428,21 +422,6 @@ analyzeContiguousOffsets(Value xOffsets) {
   }
 }
 
-/// Check whether a descriptor gather/scatter can use 2D block I/O.
-static bool canUse2DBlockIO(ModuleOp moduleOp, int64_t numRows,
-                            int64_t rowWidth, unsigned elemBits, bool isLoad) {
-  // Module must have 2D block I/O support.
-  if (!moduleOp->hasAttr(
-          gpu::intel::TritonIntelGPUDialect::getSupport2DBlockIOAttrName()))
-    return false;
-
-  int64_t maxRows = isLoad ? MAX_TILE_HEIGHT_LOAD : MAX_TILE_HEIGHT_STORE;
-  if (numRows > maxRows)
-    return false;
-
-  return rowWidth * elemBits <= MAX_BITS_WIDTH;
-}
-
 /// A contiguous sub-range within compile-time-constant x_offsets.
 struct ContiguousRange {
   int64_t start;        // First row index in the surface
@@ -518,20 +497,14 @@ struct RewriteContiguousGather
 
   LogicalResult matchAndRewrite(triton::DescriptorGatherOp gatherOp,
                                 PatternRewriter &rewriter) const override {
-    // 1. Module must support 2D block I/O.
-    ModuleOp moduleOp = gatherOp->getParentOfType<ModuleOp>();
-    if (!moduleOp->hasAttr(
-            gpu::intel::TritonIntelGPUDialect::getSupport2DBlockIOAttrName()))
-      return rewriter.notifyMatchFailure(gatherOp, "no 2D block I/O support");
-
-    // 2. Check if x_offsets are contiguous.
+    // 1. Check if x_offsets are contiguous.
     std::optional<ContiguousOffsetInfo> contiguousInfo =
         analyzeContiguousOffsets(gatherOp.getXOffsets());
     if (!contiguousInfo)
       return rewriter.notifyMatchFailure(gatherOp,
                                          "x_offsets are not contiguous");
 
-    // 3. Get result type shape: N rows, W columns.
+    // 2. Get result type shape: N rows, W columns.
     auto resultTy = cast<RankedTensorType>(gatherOp.getResult().getType());
     if (resultTy.getRank() != 2)
       return rewriter.notifyMatchFailure(gatherOp, "result is not rank 2");
@@ -539,21 +512,15 @@ struct RewriteContiguousGather
     int64_t numRows = resultTy.getShape()[0];
     int64_t rowWidth = resultTy.getShape()[1];
     Type elemTy = resultTy.getElementType();
-    unsigned elemBits = elemTy.getIntOrFloatBitWidth();
 
-    // 4. Check tile dimension limits.
-    if (!canUse2DBlockIO(moduleOp, numRows, rowWidth, elemBits,
-                         /*isLoad=*/true))
-      return rewriter.notifyMatchFailure(gatherOp, "2D block I/O not feasible");
-
-    // 5. Find the MakeTensorDescOp that defines the descriptor.
+    // 3. Find the MakeTensorDescOp that defines the descriptor.
     triton::MakeTensorDescOp makeTensorDescOp =
         gatherOp.getDesc().getDefiningOp<triton::MakeTensorDescOp>();
     if (!makeTensorDescOp)
       return rewriter.notifyMatchFailure(
           gatherOp, "descriptor not from MakeTensorDescOp");
 
-    // 6. Create a new MakeTensorDescOp with block shape [N, W].
+    // 4. Create a new MakeTensorDescOp with block shape [N, W].
     Location loc = gatherOp.getLoc();
     auto newBlockTy = RankedTensorType::get({numRows, rowWidth}, elemTy);
     auto newDescTy =
@@ -563,7 +530,7 @@ struct RewriteContiguousGather
         makeTensorDescOp.getShape(), makeTensorDescOp.getStrides(),
         makeTensorDescOp.getPadding());
 
-    // 7. Create tt.descriptor_load with offsets [baseOffset, yOffset].
+    // 5. Create tt.descriptor_load with offsets [baseOffset, yOffset].
     SmallVector<Value> indices = {contiguousInfo->baseOffset,
                                   gatherOp.getYOffset()};
     auto descLoadOp = triton::DescriptorLoadOp::create(rewriter, loc, resultTy,
@@ -600,13 +567,7 @@ struct RewriteMultiRangeGather
 
   LogicalResult matchAndRewrite(triton::DescriptorGatherOp gatherOp,
                                 PatternRewriter &rewriter) const override {
-    // 1. Module must support 2D block I/O.
-    ModuleOp moduleOp = gatherOp->getParentOfType<ModuleOp>();
-    if (!moduleOp->hasAttr(
-            gpu::intel::TritonIntelGPUDialect::getSupport2DBlockIOAttrName()))
-      return rewriter.notifyMatchFailure(gatherOp, "no 2D block I/O support");
-
-    // 2. Try to extract constant offset sub-ranges.
+    // 1. Try to extract constant offset sub-ranges.
     std::optional<SmallVector<ContiguousRange>> rangesOpt =
         analyzeConstantOffsetRanges(gatherOp.getXOffsets());
     if (!rangesOpt)
@@ -626,7 +587,7 @@ struct RewriteMultiRangeGather
       return rewriter.notifyMatchFailure(
           gatherOp, "too many sub-ranges, would generate excessive loads");
 
-    // 3. All sub-ranges must have equal count (tt.cat requires
+    // 2. All sub-ranges must have equal count (tt.cat requires
     // SameTypeOperands).
     int64_t rangeCount = ranges[0].count;
     for (const auto &range : ranges) {
@@ -636,30 +597,21 @@ struct RewriteMultiRangeGather
             "sub-ranges have unequal sizes, tt.cat requires same type");
     }
 
-    // 4. Get result shape and element type.
+    // 3. Get result shape and element type.
     auto resultTy = cast<RankedTensorType>(gatherOp.getResult().getType());
     if (resultTy.getRank() != 2)
       return rewriter.notifyMatchFailure(gatherOp, "result is not rank 2");
     int64_t rowWidth = resultTy.getShape()[1];
     Type elemTy = resultTy.getElementType();
-    unsigned elemBits = elemTy.getIntOrFloatBitWidth();
 
-    // 5. Check tile dimension limits for each sub-range.
-    for (const ContiguousRange &range : ranges) {
-      if (!canUse2DBlockIO(moduleOp, range.count, rowWidth, elemBits,
-                           /*isLoad=*/true))
-        return rewriter.notifyMatchFailure(
-            gatherOp, "sub-range exceeds 2D block I/O limits");
-    }
-
-    // 6. Find the MakeTensorDescOp.
+    // 4. Find the MakeTensorDescOp.
     auto makeTensorDescOp =
         gatherOp.getDesc().getDefiningOp<triton::MakeTensorDescOp>();
     if (!makeTensorDescOp)
       return rewriter.notifyMatchFailure(
           gatherOp, "descriptor not from MakeTensorDescOp");
 
-    // 7. Emit one descriptor_load per sub-range.
+    // 5. Emit one descriptor_load per sub-range.
     Location loc = gatherOp.getLoc();
     RankedTensorType sliceTy =
         RankedTensorType::get({rangeCount, rowWidth}, elemTy);
@@ -681,7 +633,7 @@ struct RewriteMultiRangeGather
       loads.push_back(load.getResult());
     }
 
-    // 8. Concatenate with tt.cat using a balanced reduction tree.
+    // 6. Concatenate with tt.cat using a balanced reduction tree.
     //    tt.cat requires SameTypeOperands, so we can only cat tensors of
     //    equal shape. A balanced tree ensures each pair has the same type.
     //    Requires the number of ranges to be a power of 2.
