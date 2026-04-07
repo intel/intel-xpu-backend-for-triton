@@ -1,18 +1,19 @@
 #include <stack>
 
+#include "intel/include/Dialect/Triton/Transforms/Passes.h"
+
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/Triton/IR/Utility.h"
-#include "triton/Dialect/Triton/Transforms/Passes.h"
+#include "triton/Dialect/Triton/IR/Types.h"
 
-namespace mlir::triton {
+namespace mlir::triton::intel {
 
-#define GEN_PASS_DEF_TRITONREWRITETENSORPOINTER
-#include "triton/Dialect/Triton/Transforms/Passes.h.inc"
+#define GEN_PASS_DEF_TRITONINTELREWRITETENSORPOINTER
+#include "intel/include/Dialect/Triton/Transforms/Passes.h.inc"
 
 static MakeTensorPtrOp getMakeTensorPtrOpImpl(Operation *op, Value v);
 
@@ -274,7 +275,8 @@ public:
 // very fragile and to solve we should expose convert Ptr of tensor to a
 // structure containins all values and not only offsets.
 class RewriteTensorPointerPass
-    : public impl::TritonRewriteTensorPointerBase<RewriteTensorPointerPass> {
+    : public impl::TritonIntelRewriteTensorPointerBase<
+          RewriteTensorPointerPass> {
 private:
   DenseMap<Value, RewritedInfo> rewritedInfo;
 
@@ -613,17 +615,6 @@ public:
   }
 
   void runOnOperation() override {
-    // NOTES(Chenggang): we don't use `ConversionPatternRewriter`, because
-    // MLIR does not support one-multiple value mapping. For example, if we use
-    // `ConversionPatternRewriter`, we can not make a type converter, which
-    // converts `ptr<tensor>` into multiple types `ptr<>, int64, int64, ...`
-    // (containing the base/offsets/strides...). What we can do is to convert
-    // `ptr<tensor>` into a single type `Tuple<ptr<>, int64, int64, ...>`. But
-    // in this way, we also have to define `PackTuple` and `UnpackTuple`
-    // operations and make a canonicalization pass to optimize, which is much
-    // So here we recursively build the IR, to be specific, we have to rewrite
-    // `tt.make_tensor_ptr`, `tt.advance`, `tt.load`, `tt.store`,
-    // `scf.for` (tensor pointer usages may be in a loop fashion)
     std::stack<Operation *> eraser;
     visitOperation(getOperation(), eraser);
 
@@ -638,4 +629,4 @@ public:
   }
 };
 
-} // namespace mlir::triton
+} // namespace mlir::triton::intel
