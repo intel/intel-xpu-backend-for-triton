@@ -145,6 +145,11 @@ private:
     // Tensor descriptors are always row major.
     op->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
                 StringAttr::get(context, "row_major"));
+    // Propagate padding from MakeTensorDescOp so the LLVM lowering can read
+    // it even after MakeTensorDescOp has been converted in the same phase.
+    op->setAttr(
+        ttgi::TritonIntelGPUDialect::getDescPaddingAttrName(),
+        tt::PaddingOptionAttr::get(context, makeTensorDescOp.getPadding()));
   }
 
   template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<

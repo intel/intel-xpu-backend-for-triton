@@ -614,21 +614,6 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     if (tensorTy.getRank() < 2)
       return false;
 
-    // Verify the descriptor traces back to a MakeTensorDescOp.
-    auto makeTensorDesc =
-        triton::intel::findDefiningOpOfType<triton::MakeTensorDescOp>(
-            op.getDesc());
-    if (!makeTensorDesc)
-      return false;
-
-    // Reject non-contiguous inner dimension.
-    Value innerStride = makeTensorDesc->getStrides().back();
-    std::optional<int64_t> cst = mlir::getConstantIntValue(innerStride);
-    if (!cst || *cst != 1) {
-      LDBG("descriptor inner stride is not constant 1; skipping block IO");
-      return false;
-    }
-
     // Require block_io attribute (set by MaterializeBlockPointer).
     if (!op->template getAttrOfType<StringAttr>(
             triton::gpu::intel::TritonIntelGPUDialect::getBlockIOAttrName()))
@@ -2370,13 +2355,12 @@ struct DescriptorLoadOpToBlockIOConversion
     if (!isDescriptorBlockIOCandidate(op))
       return failure();
 
-    // Get the padding option from the defining MakeTensorDescOp.
+    // Get padding from the propagated attribute (set by
+    // MaterializeBlockPointer).
     PaddingOption padding = PaddingOption::PAD_ZERO;
-    if (auto makeDescOp =
-            triton::intel::findDefiningOpOfType<triton::MakeTensorDescOp>(
-                op.getDesc())) {
-      padding = makeDescOp->getPadding();
-    }
+    if (auto paddingAttr = op->getAttrOfType<triton::PaddingOptionAttr>(
+            TritonIntelGPUDialect::getDescPaddingAttrName()))
+      padding = paddingAttr.getValue();
 
     // Result type and encoding setup.
     Type resultType = op.getType();
@@ -2933,19 +2917,12 @@ struct DescriptorLoadOpConversion
     assertDescriptorInnerShapeCompatible(op, descTensorType.getShape(),
                                          resultType.getShape(), permuteDescDim);
 
-    // Try to get the padding option from the defining MakeTensorDescOp.
-    // NOTE: This method only works when the descriptor is defined locally
-    // (i.e., not passed through block arguments, function arguments, or
-    // control flow). For descriptors that flow through control flow, we would
-    // need an analysis pass to propagate tensor descriptor information.
-    // TODO: Implement an analysis pass to propagate MakeTensorDescOp info
-    // through control flow for non-local descriptor definitions.
+    // Get padding from the propagated attribute (set by
+    // MaterializeBlockPointer).
     PaddingOption padding = PaddingOption::PAD_ZERO;
-    if (auto makeDescOp =
-            triton::intel::findDefiningOpOfType<triton::MakeTensorDescOp>(
-                op.getDesc())) {
-      padding = makeDescOp->getPadding();
-    }
+    if (auto paddingAttr = op->getAttrOfType<triton::PaddingOptionAttr>(
+            TritonIntelGPUDialect::getDescPaddingAttrName()))
+      padding = paddingAttr.getValue();
 
     // Boundary check all dimensions — tensor descriptors always encode shape
     // bounds and don't have a user-facing boundaryCheck attribute.
