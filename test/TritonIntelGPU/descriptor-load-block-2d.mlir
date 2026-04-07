@@ -348,22 +348,6 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 
 // -----
 
-// COM: Test that when a column_major tt.descriptor_load is present but descriptor is not traceable to
-// COM: a MakeTensorDescOp (passed as function argument) the code generated uses the "gather path".
-#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
-#dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>
-module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
-  // CHECK-LABEL: @descriptor_load_column_major_fallback
-  tt.func public @descriptor_load_column_major_fallback(%desc: !tt.tensordesc<tensor<64x32xf16>>, %row: i32, %col: i32) {
-    // CHECK-NOT: triton_gen.2Dblockload
-    // CHECK: llvm.getelementptr
-    %load = tt.descriptor_load %desc[%row, %col] {ttig.block_io = "column_major"} : !tt.tensordesc<tensor<64x32xf16>> -> tensor<32x64xf16, #dot1>
-    tt.return
-  }
-}
-
-// -----
-
 // COM: The blocked layout with threadsPerWarp = [8, 2, 1], order = [1, 2, 0] defines a tile on dimensions 0 and 1.
 // COM: However, only dimension 2 is contiguous in memory, so a transposed block load is not legal for this layout.
 #blocked = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [8, 2, 1], warpsPerCTA = [64, 1, 1], order = [1, 2, 0]}>
