@@ -473,72 +473,141 @@ analyzeConstantOffsetRanges(Value xOffsets) {
   return ranges;
 }
 
+/// Validated info for rewriting a contiguous gather/scatter to a block
+/// load/store. Extracted by validateContiguousRewrite().
+struct ContiguousRewriteInfo {
+  ContiguousOffsetInfo offsets; // Base offset and count
+  int64_t numRows;
+  int64_t rowWidth;
+  Type elemTy;
+  triton::MakeTensorDescOp makeTensorDescOp;
+};
+
+/// Common validation for RewriteContiguousGather and RewriteContiguousScatter.
+/// Checks contiguous offsets, rank-2 tensor shape, and MakeTensorDescOp source.
+static std::optional<ContiguousRewriteInfo>
+validateContiguousRewrite(Value xOffsets, RankedTensorType tensorTy, Value desc,
+                          PatternRewriter &rewriter, Operation *op) {
+  auto contiguousInfo = analyzeContiguousOffsets(xOffsets);
+  if (!contiguousInfo) {
+    (void)rewriter.notifyMatchFailure(op, "x_offsets are not contiguous");
+    return std::nullopt;
+  }
+
+  if (tensorTy.getRank() != 2) {
+    (void)rewriter.notifyMatchFailure(op, "tensor is not rank 2");
+    return std::nullopt;
+  }
+
+  auto makeTensorDescOp = desc.getDefiningOp<triton::MakeTensorDescOp>();
+  if (!makeTensorDescOp) {
+    (void)rewriter.notifyMatchFailure(op,
+                                      "descriptor not from MakeTensorDescOp");
+    return std::nullopt;
+  }
+
+  return ContiguousRewriteInfo{*contiguousInfo, tensorTy.getShape()[0],
+                               tensorTy.getShape()[1],
+                               tensorTy.getElementType(), makeTensorDescOp};
+}
+
+/// Validated info for rewriting a multi-range gather/scatter into per-sub-range
+/// block loads/stores. Extracted by validateMultiRangeRewrite().
+struct MultiRangeRewriteInfo {
+  SmallVector<ContiguousRange> ranges;
+  int64_t rangeCount; // Size of each sub-range (all equal)
+  int64_t rowWidth;
+  Type elemTy;
+  triton::MakeTensorDescOp makeTensorDescOp;
+};
+
+/// Common validation for RewriteMultiRangeGather and RewriteMultiRangeScatter.
+/// Checks constant offset sub-ranges, equal sizes, rank-2, and
+/// MakeTensorDescOp.
+static std::optional<MultiRangeRewriteInfo>
+validateMultiRangeRewrite(Value xOffsets, RankedTensorType tensorTy, Value desc,
+                          PatternRewriter &rewriter, Operation *op) {
+  auto rangesOpt = analyzeConstantOffsetRanges(xOffsets);
+  if (!rangesOpt) {
+    (void)rewriter.notifyMatchFailure(op, "x_offsets are not constant");
+    return std::nullopt;
+  }
+
+  auto &ranges = *rangesOpt;
+
+  // Single range is handled by the contiguous pattern (higher benefit).
+  if (ranges.size() <= 1) {
+    (void)rewriter.notifyMatchFailure(
+        op, "single range, defer to contiguous pattern");
+    return std::nullopt;
+  }
+
+  constexpr size_t kMaxSubRanges = 4;
+  if (ranges.size() > kMaxSubRanges) {
+    (void)rewriter.notifyMatchFailure(
+        op, "too many sub-ranges, would generate excessive ops");
+    return std::nullopt;
+  }
+
+  // All sub-ranges must have equal count.
+  int64_t rangeCount = ranges[0].count;
+  for (const auto &range : ranges) {
+    if (range.count != rangeCount) {
+      (void)rewriter.notifyMatchFailure(
+          op, "sub-ranges have unequal sizes, requires same slice shape");
+      return std::nullopt;
+    }
+  }
+
+  if (tensorTy.getRank() != 2) {
+    (void)rewriter.notifyMatchFailure(op, "tensor is not rank 2");
+    return std::nullopt;
+  }
+
+  auto makeTensorDescOp = desc.getDefiningOp<triton::MakeTensorDescOp>();
+  if (!makeTensorDescOp) {
+    (void)rewriter.notifyMatchFailure(op,
+                                      "descriptor not from MakeTensorDescOp");
+    return std::nullopt;
+  }
+
+  return MultiRangeRewriteInfo{std::move(ranges), rangeCount,
+                               tensorTy.getShape()[1],
+                               tensorTy.getElementType(), makeTensorDescOp};
+}
+
 /// Rewrite contiguous DescriptorGatherOps to DescriptorLoadOps.
 /// When x_offsets form a contiguous range [base, base+N-1], the gather can
 /// be replaced with a single 2D block load which is significantly more
 /// efficient than scattered scalar loads.
-///
-/// Example — single contiguous range:
-///   %desc = tt.make_tensor_desc %ptr, [%H, %W], [%s0, %s1]
-///              : !tt.tensordesc<tensor<1x64xbf16>>
-///   %range = tt.make_range {start = 0, end = 16} : tensor<16xi32>
-///   %off = tt.splat %base : (i32) -> tensor<16xi32>
-///   %x = arith.addi %range, %off : tensor<16xi32>
-///   %v = tt.descriptor_gather %desc[%x, %y]
-///          : (!tt.tensordesc<tensor<1x64xbf16>>, tensor<16xi32>, i32)
-///            -> tensor<16x64xbf16>
-/// Becomes:
-///   %new_desc = tt.make_tensor_desc %ptr, [%H, %W], [%s0, %s1]
-///                  : !tt.tensordesc<tensor<16x64xbf16>>
-///   %v = tt.descriptor_load %new_desc[%base, %y]
-///          : !tt.tensordesc<tensor<16x64xbf16>> -> tensor<16x64xbf16>
 struct RewriteContiguousGather
     : public OpRewritePattern<triton::DescriptorGatherOp> {
   using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(triton::DescriptorGatherOp gatherOp,
                                 PatternRewriter &rewriter) const override {
-    // 1. Check if x_offsets are contiguous.
-    std::optional<ContiguousOffsetInfo> contiguousInfo =
-        analyzeContiguousOffsets(gatherOp.getXOffsets());
-    if (!contiguousInfo)
-      return rewriter.notifyMatchFailure(gatherOp,
-                                         "x_offsets are not contiguous");
-
-    // 2. Get result type shape: N rows, W columns.
     auto resultTy = cast<RankedTensorType>(gatherOp.getResult().getType());
-    if (resultTy.getRank() != 2)
-      return rewriter.notifyMatchFailure(gatherOp, "result is not rank 2");
+    auto info =
+        validateContiguousRewrite(gatherOp.getXOffsets(), resultTy,
+                                  gatherOp.getDesc(), rewriter, gatherOp);
+    if (!info)
+      return failure();
 
-    int64_t numRows = resultTy.getShape()[0];
-    int64_t rowWidth = resultTy.getShape()[1];
-    Type elemTy = resultTy.getElementType();
-
-    // 3. Find the MakeTensorDescOp that defines the descriptor.
-    triton::MakeTensorDescOp makeTensorDescOp =
-        gatherOp.getDesc().getDefiningOp<triton::MakeTensorDescOp>();
-    if (!makeTensorDescOp)
-      return rewriter.notifyMatchFailure(
-          gatherOp, "descriptor not from MakeTensorDescOp");
-
-    // 4. Create a new MakeTensorDescOp with block shape [N, W].
     Location loc = gatherOp.getLoc();
-    auto newBlockTy = RankedTensorType::get({numRows, rowWidth}, elemTy);
+    auto newBlockTy =
+        RankedTensorType::get({info->numRows, info->rowWidth}, info->elemTy);
     auto newDescTy =
         triton::TensorDescType::get(rewriter.getContext(), newBlockTy);
     auto newMakeDesc = triton::MakeTensorDescOp::create(
-        rewriter, loc, newDescTy, makeTensorDescOp.getBase(),
-        makeTensorDescOp.getShape(), makeTensorDescOp.getStrides(),
-        makeTensorDescOp.getPadding());
+        rewriter, loc, newDescTy, info->makeTensorDescOp.getBase(),
+        info->makeTensorDescOp.getShape(), info->makeTensorDescOp.getStrides(),
+        info->makeTensorDescOp.getPadding());
 
-    // 5. Create tt.descriptor_load with offsets [baseOffset, yOffset].
-    SmallVector<Value> indices = {contiguousInfo->baseOffset,
+    SmallVector<Value> indices = {info->offsets.baseOffset,
                                   gatherOp.getYOffset()};
     auto descLoadOp = triton::DescriptorLoadOp::create(rewriter, loc, resultTy,
                                                        newMakeDesc, indices);
 
-    // TF32 rounding for f32 types is handled by RewriteLoadPattern
-    // when it converts the DescriptorLoadOp in the subsequent phase.
     rewriter.replaceOp(gatherOp, descLoadOp.getResult());
     return success();
   }
@@ -548,83 +617,35 @@ struct RewriteContiguousGather
 /// multiple contiguous sub-ranges into one descriptor_load per sub-range,
 /// concatenated with tt.cat.
 ///
-/// Example — constant offsets [0,1,2,3, 8,9,10,11] on tensor<1x64xbf16>:
-///   %x = arith.constant dense<[0, 1, 2, 3, 8, 9, 10, 11]> : tensor<8xi32>
-///   %v = tt.descriptor_gather %desc[%x, %y]
-///          : (!tt.tensordesc<tensor<1x64xbf16>>, tensor<8xi32>, i32)
-///            -> tensor<8x64xbf16>
-/// Becomes (2 block loads + concatenation):
-///   %d0 = tt.make_tensor_desc ... : !tt.tensordesc<tensor<4x64xbf16>>
-///   %v0 = tt.descriptor_load %d0[%c0, %y] : ... -> tensor<4x64xbf16>
-///   %d1 = tt.make_tensor_desc ... : !tt.tensordesc<tensor<4x64xbf16>>
-///   %v1 = tt.descriptor_load %d1[%c8, %y] : ... -> tensor<4x64xbf16>
-///   %v  = tt.cat %v0, %v1 : tensor<4x64xbf16> -> tensor<8x64xbf16>
-///
 /// Constraint: all sub-ranges must have equal size (tt.cat requires
-/// SameTypeOperands). Falls back if sub-ranges differ in count.
+/// SameTypeOperands) and their count must be a power of 2.
 struct RewriteMultiRangeGather
     : public OpRewritePattern<triton::DescriptorGatherOp> {
   using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(triton::DescriptorGatherOp gatherOp,
                                 PatternRewriter &rewriter) const override {
-    // 1. Try to extract constant offset sub-ranges.
-    std::optional<SmallVector<ContiguousRange>> rangesOpt =
-        analyzeConstantOffsetRanges(gatherOp.getXOffsets());
-    if (!rangesOpt)
-      return rewriter.notifyMatchFailure(gatherOp,
-                                         "x_offsets are not constant");
-
-    SmallVector<ContiguousRange> &ranges = *rangesOpt;
-
-    // Single range is handled by RewriteContiguousGather (higher benefit).
-    if (ranges.size() <= 1)
-      return rewriter.notifyMatchFailure(
-          gatherOp, "single range, defer to contiguous pattern");
-
-    // Cap sub-range count to avoid excessive code generation.
-    constexpr size_t kMaxSubRanges = 4;
-    if (ranges.size() > kMaxSubRanges)
-      return rewriter.notifyMatchFailure(
-          gatherOp, "too many sub-ranges, would generate excessive loads");
-
-    // 2. All sub-ranges must have equal count (tt.cat requires
-    // SameTypeOperands).
-    int64_t rangeCount = ranges[0].count;
-    for (const auto &range : ranges) {
-      if (range.count != rangeCount)
-        return rewriter.notifyMatchFailure(
-            gatherOp,
-            "sub-ranges have unequal sizes, tt.cat requires same type");
-    }
-
-    // 3. Get result shape and element type.
     auto resultTy = cast<RankedTensorType>(gatherOp.getResult().getType());
-    if (resultTy.getRank() != 2)
-      return rewriter.notifyMatchFailure(gatherOp, "result is not rank 2");
-    int64_t rowWidth = resultTy.getShape()[1];
-    Type elemTy = resultTy.getElementType();
+    auto info =
+        validateMultiRangeRewrite(gatherOp.getXOffsets(), resultTy,
+                                  gatherOp.getDesc(), rewriter, gatherOp);
+    if (!info)
+      return failure();
 
-    // 4. Find the MakeTensorDescOp.
-    auto makeTensorDescOp =
-        gatherOp.getDesc().getDefiningOp<triton::MakeTensorDescOp>();
-    if (!makeTensorDescOp)
-      return rewriter.notifyMatchFailure(
-          gatherOp, "descriptor not from MakeTensorDescOp");
-
-    // 5. Emit one descriptor_load per sub-range.
+    // Emit one descriptor_load per sub-range.
     Location loc = gatherOp.getLoc();
     RankedTensorType sliceTy =
-        RankedTensorType::get({rangeCount, rowWidth}, elemTy);
+        RankedTensorType::get({info->rangeCount, info->rowWidth}, info->elemTy);
     triton::TensorDescType sliceDescTy =
         triton::TensorDescType::get(rewriter.getContext(), sliceTy);
 
     SmallVector<Value> loads;
-    for (const auto &range : ranges) {
+    for (const auto &range : info->ranges) {
       auto desc = triton::MakeTensorDescOp::create(
-          rewriter, loc, sliceDescTy, makeTensorDescOp.getBase(),
-          makeTensorDescOp.getShape(), makeTensorDescOp.getStrides(),
-          makeTensorDescOp.getPadding());
+          rewriter, loc, sliceDescTy, info->makeTensorDescOp.getBase(),
+          info->makeTensorDescOp.getShape(),
+          info->makeTensorDescOp.getStrides(),
+          info->makeTensorDescOp.getPadding());
 
       Value startOffset = arith::ConstantOp::create(
           rewriter, loc, rewriter.getI32IntegerAttr(range.start));
@@ -634,20 +655,18 @@ struct RewriteMultiRangeGather
       loads.push_back(load.getResult());
     }
 
-    // 6. Concatenate with tt.cat using a balanced reduction tree.
-    //    tt.cat requires SameTypeOperands, so we can only cat tensors of
-    //    equal shape. A balanced tree ensures each pair has the same type.
-    //    Requires the number of ranges to be a power of 2.
+    // Concatenate with tt.cat using a balanced reduction tree.
     if (loads.size() & (loads.size() - 1))
       return rewriter.notifyMatchFailure(
           gatherOp, "number of sub-ranges is not a power of 2");
 
     SmallVector<Value> current = std::move(loads);
-    int64_t currentRows = rangeCount;
+    int64_t currentRows = info->rangeCount;
     while (current.size() > 1) {
       SmallVector<Value> next;
       int64_t nextRows = currentRows * 2;
-      auto catTy = RankedTensorType::get({nextRows, rowWidth}, elemTy);
+      auto catTy =
+          RankedTensorType::get({nextRows, info->rowWidth}, info->elemTy);
       for (size_t i = 0; i < current.size(); i += 2)
         next.push_back(triton::CatOp::create(rewriter, loc, catTy, current[i],
                                              current[i + 1]));
@@ -656,6 +675,105 @@ struct RewriteMultiRangeGather
     }
 
     rewriter.replaceOp(gatherOp, current[0]);
+    return success();
+  }
+};
+
+/// Rewrite contiguous DescriptorScatterOps to DescriptorStoreOps.
+/// When x_offsets form a contiguous range [base, base+N-1], the scatter can
+/// be replaced with a single 2D block store which is significantly more
+/// efficient than scattered scalar stores.
+struct RewriteContiguousScatter
+    : public OpRewritePattern<triton::DescriptorScatterOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(triton::DescriptorScatterOp scatterOp,
+                                PatternRewriter &rewriter) const override {
+    auto srcTy = cast<RankedTensorType>(scatterOp.getSrc().getType());
+    auto info =
+        validateContiguousRewrite(scatterOp.getXOffsets(), srcTy,
+                                  scatterOp.getDesc(), rewriter, scatterOp);
+    if (!info)
+      return failure();
+
+    Location loc = scatterOp.getLoc();
+    auto newBlockTy =
+        RankedTensorType::get({info->numRows, info->rowWidth}, info->elemTy);
+    auto newDescTy =
+        triton::TensorDescType::get(rewriter.getContext(), newBlockTy);
+    auto newMakeDesc = triton::MakeTensorDescOp::create(
+        rewriter, loc, newDescTy, info->makeTensorDescOp.getBase(),
+        info->makeTensorDescOp.getShape(), info->makeTensorDescOp.getStrides(),
+        info->makeTensorDescOp.getPadding());
+
+    SmallVector<Value> indices = {info->offsets.baseOffset,
+                                  scatterOp.getYOffset()};
+    triton::DescriptorStoreOp::create(rewriter, loc, newMakeDesc,
+                                      scatterOp.getSrc(), indices);
+
+    rewriter.eraseOp(scatterOp);
+    return success();
+  }
+};
+
+/// Rewrite DescriptorScatterOps with compile-time-constant x_offsets that form
+/// multiple contiguous sub-ranges into one descriptor_store per sub-range.
+/// Each sub-range's rows are extracted from the source tensor using tt.gather.
+///
+/// Constraint: all sub-ranges must have equal size. Falls back if sub-ranges
+/// differ in count.
+struct RewriteMultiRangeScatter
+    : public OpRewritePattern<triton::DescriptorScatterOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(triton::DescriptorScatterOp scatterOp,
+                                PatternRewriter &rewriter) const override {
+    auto srcTy = cast<RankedTensorType>(scatterOp.getSrc().getType());
+    auto info =
+        validateMultiRangeRewrite(scatterOp.getXOffsets(), srcTy,
+                                  scatterOp.getDesc(), rewriter, scatterOp);
+    if (!info)
+      return failure();
+
+    // For each sub-range: extract rows from source via tt.gather, then
+    // store with descriptor_store.
+    Location loc = scatterOp.getLoc();
+    RankedTensorType sliceTy =
+        RankedTensorType::get({info->rangeCount, info->rowWidth}, info->elemTy);
+    triton::TensorDescType sliceDescTy =
+        triton::TensorDescType::get(rewriter.getContext(), sliceTy);
+    auto idxTy = RankedTensorType::get({info->rangeCount, info->rowWidth},
+                                       rewriter.getI32Type());
+
+    for (const auto &range : info->ranges) {
+      // Build index tensor for tt.gather with axis=0.
+      // indices[r][c] = resultOffset + r (uniform across columns).
+      SmallVector<int32_t> idxValues(info->rangeCount * info->rowWidth);
+      for (int64_t r = 0; r < info->rangeCount; ++r)
+        for (int64_t c = 0; c < info->rowWidth; ++c)
+          idxValues[r * info->rowWidth + c] = range.resultOffset + r;
+      auto idxAttr = DenseIntElementsAttr::get(idxTy, idxValues);
+      Value indices = arith::ConstantOp::create(rewriter, loc, idxTy, idxAttr);
+
+      // Extract the slice from the source tensor.
+      Value slice = triton::GatherOp::create(rewriter, loc, sliceTy,
+                                             scatterOp.getSrc(), indices,
+                                             /*axis=*/0);
+
+      // Create descriptor and store the slice.
+      auto desc = triton::MakeTensorDescOp::create(
+          rewriter, loc, sliceDescTy, info->makeTensorDescOp.getBase(),
+          info->makeTensorDescOp.getShape(),
+          info->makeTensorDescOp.getStrides(),
+          info->makeTensorDescOp.getPadding());
+      Value startOffset = arith::ConstantOp::create(
+          rewriter, loc, rewriter.getI32IntegerAttr(range.start));
+      SmallVector<Value> storeIndices = {startOffset, scatterOp.getYOffset()};
+      triton::DescriptorStoreOp::create(rewriter, loc, desc, slice,
+                                        storeIndices);
+    }
+
+    rewriter.eraseOp(scatterOp);
     return success();
   }
 };
@@ -910,19 +1028,23 @@ class TritonRewriteTensorDescriptorToPointerPass
   void runOnOperation() override {
     Operation *op = getOperation();
 
-    // Pre-pass: Rewrite contiguous DescriptorGatherOps to DescriptorLoadOps.
-    // When x_offsets are provably contiguous, replace the gather with a single
-    // 2D block load. For constant offsets with multiple contiguous sub-ranges,
-    // emit one load per sub-range and concatenate with tt.cat.
+    // Pre-pass: Rewrite contiguous DescriptorGatherOps/DescriptorScatterOps to
+    // DescriptorLoadOps/DescriptorStoreOps. When x_offsets are provably
+    // contiguous, replace the gather/scatter with a single 2D block load/store.
+    // For constant offsets with multiple contiguous sub-ranges, emit one
+    // load/store per sub-range (concatenating loads with tt.cat, extracting
+    // store slices with tt.gather).
     // Enabled by default. Set TRITON_INTEL_DISABLE_REWRITE_CONTIGUOUS_GATHER=1
     // to disable.
     if (!tools::getBoolEnv("TRITON_INTEL_DISABLE_REWRITE_CONTIGUOUS_GATHER")) {
       MLIRContext *ctx = op->getContext();
       RewritePatternSet patterns(ctx);
       patterns.add<RewriteContiguousGather>(ctx, /*benefit=*/2);
+      patterns.add<RewriteContiguousScatter>(ctx, /*benefit=*/2);
       patterns.add<RewriteMultiRangeGather>(ctx, /*benefit=*/1);
-      // Failure here means no patterns matched (e.g. no gathers, or only
-      // non-contiguous offsets). This is expected — unmatched gathers fall
+      patterns.add<RewriteMultiRangeScatter>(ctx, /*benefit=*/1);
+      // Failure here means no patterns matched (e.g. no gathers/scatters, or
+      // only non-contiguous offsets). This is expected — unmatched ops fall
       // through to the pointer-based conversion below.
       (void)applyPatternsGreedily(op, std::move(patterns));
     }
