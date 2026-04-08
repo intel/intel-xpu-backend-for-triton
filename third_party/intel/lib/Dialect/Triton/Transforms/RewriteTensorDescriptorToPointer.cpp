@@ -5,6 +5,7 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/Transforms/ArithTypeConversion.h"
 #include "triton/Dialect/Triton/Transforms/FunctionTypeConversion.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/Transforms/FuncConversions.h"
@@ -913,7 +914,9 @@ class TritonRewriteTensorDescriptorToPointerPass
     // When x_offsets are provably contiguous, replace the gather with a single
     // 2D block load. For constant offsets with multiple contiguous sub-ranges,
     // emit one load per sub-range and concatenate with tt.cat.
-    {
+    // Enabled by default. Set TRITON_INTEL_DISABLE_REWRITE_CONTIGUOUS_GATHER=1
+    // to disable.
+    if (!tools::getBoolEnv("TRITON_INTEL_DISABLE_REWRITE_CONTIGUOUS_GATHER")) {
       MLIRContext *ctx = op->getContext();
       RewritePatternSet patterns(ctx);
       patterns.add<RewriteContiguousGather>(ctx, /*benefit=*/2);
