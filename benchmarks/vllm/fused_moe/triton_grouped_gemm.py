@@ -69,7 +69,7 @@ def _resize_cache(x: torch.Tensor, v: tuple[int, ...]) -> torch.Tensor:
     Shrink the given tensor and apply the given view to it.  This is
     used to resize the intermediate fused_moe caches.
     """
-    assert prod(v) <= x.numel(), (f"{v} ({prod(v)}) <= {x.shape} ({x.numel()})")
+    assert prod(v) <= x.numel(), (f"Requested view {v} with {prod(v)} elements exceeds tensor size {x.numel()}")
     return x.flatten()[:prod(v)].view(*v)
 
 

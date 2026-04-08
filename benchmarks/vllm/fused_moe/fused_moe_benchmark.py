@@ -192,7 +192,8 @@ def get_fused_moe_benchmark(
             return total_bytes * 1e-9 / (ms * 1e-3)
 
         def tflops(ms):
-            # Each (token, expert) route pair performs a K×N matrix-vector product
+            # Each (token, expert) route pair performs a K×N matrix-vector product;
+            # *2 accounts for the multiply-add operations in the matrix multiplication.
             total_flops = num_routed_tokens * N * K * 2
             return total_flops * 1e-12 / (ms * 1e-3)
 
