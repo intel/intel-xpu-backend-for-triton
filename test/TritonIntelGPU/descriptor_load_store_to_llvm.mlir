@@ -47,13 +47,9 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK: %[[DIM1_INBOUNDS:.*]] = llvm.and %[[IDX1_LT_SHAPE1]], %[[DIM0_PRED]] : i1
     // CHECK: %[[PRED:.*]] = llvm.and %[[DIM1_INBOUNDS]], %[[IDX1_GE_ZERO]] : i1
 
-    // Verify predicated load: conditional branch based on bounds check
-    // If in-bounds, go to load block; otherwise skip with default value
-    // CHECK: llvm.cond_br %[[PRED]], ^[[BB_LOAD:bb[0-9]+]], ^[[BB_MERGE:bb[0-9]+]](%{{.*}} : i32)
-    // CHECK: ^[[BB_LOAD]]:
-    // CHECK: %[[LOADED:.*]] = llvm.load %{{.*}} : !llvm.ptr<1> -> i32
-    // CHECK: llvm.br ^[[BB_MERGE]](%[[LOADED]] : i32)
-    // CHECK: ^[[BB_MERGE]](%{{.*}}: i32):
+    // Verify unconditional load + select: always load, then select based on bounds
+    // CHECK: %[[LOADED:.*]] = llvm.load %{{.*}} {alignment = 4 : i64} : !llvm.ptr<1> -> i32
+    // CHECK: llvm.select %[[PRED]], %[[LOADED]], %{{.*}} : i1, i32
 
     // CHECK: llvm.return
     %3 = tt.descriptor_load %0[%arg1, %arg2] : !tt.tensordesc<tensor<4x4xf32>> -> tensor<4x4xf32, #blocked>
