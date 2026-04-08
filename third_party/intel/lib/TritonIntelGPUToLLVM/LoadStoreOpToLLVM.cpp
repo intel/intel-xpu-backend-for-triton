@@ -2849,10 +2849,13 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
             rewriter, loc, retTy, addrElem, b.i64_val(alignment), pred, other_,
             cacheModifier);
       } else {
-        Block &endBlock = LLVM::intel::createPredicatedBlock(
-            rewriter, loc, pred, SmallVector<Value, 1>{other_},
-            createLoadWithAttrs);
-        ret = *endBlock.args_begin();
+        // Unconditional load + select avoids LLVM O3 misoptimization of
+        // consecutive CF predicated blocks sharing the same predicate.
+        // SimplifyCFG inserts llvm.assume at a merge point reachable from
+        // the false path, which is UB when the mask is false, causing LLVM
+        // to make downstream stores unconditional.
+        Value loaded = createLoadWithAttrs()[0];
+        ret = b.select(pred, loaded, other_);
       }
       assert(ret && "Expecting a valid value");
 
@@ -3078,10 +3081,13 @@ struct DescriptorLoadOpConversion
             rewriter, loc, retTy, addrElem, b.i64_val(alignment), pred, other_,
             cacheModifier);
       } else {
-        Block &endBlock = LLVM::intel::createPredicatedBlock(
-            rewriter, loc, pred, SmallVector<Value, 1>{other_},
-            createLoadWithAttrs);
-        ret = *endBlock.args_begin();
+        // Unconditional load + select avoids LLVM O3 misoptimization of
+        // consecutive CF predicated blocks sharing the same predicate.
+        // SimplifyCFG inserts llvm.assume at a merge point reachable from
+        // the false path, which is UB when the mask is false, causing LLVM
+        // to make downstream stores unconditional.
+        Value loaded = createLoadWithAttrs()[0];
+        ret = b.select(pred, loaded, other_);
       }
       assert(ret && "Expecting a valid value");
 
