@@ -983,7 +983,7 @@ class XPUDriver(DriverBase):
         return torch.xpu.current_stream().sycl_queue
 
     @lru_cache
-    def _contsruct_target(self, device):
+    def _construct_target(self, device):
         import torch
         from triton.backends.intel.extension_utils import query_device_extensions
 
@@ -1009,7 +1009,7 @@ class XPUDriver(DriverBase):
 
     def get_current_target(self):
         device = self.get_current_device()
-        return self._contsruct_target(device)
+        return self._construct_target(device)
 
     def build_proton_help_lib(self):
         from triton.backends.intel.driver import compile_module_from_src
