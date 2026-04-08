@@ -208,6 +208,28 @@ jobs:
             --benchmark moe-fp8-benchmark \
             --param_cols="num_experts,max_tokens_per_expert,K,N"
 
+      - name: Run vllm fused moe correctness test
+        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
+        run: |
+          cd benchmarks/vllm/fused_moe
+          python test_grouped_gemm.py
+
+      - name: Run vllm fused moe bf16
+        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
+        run: |
+          source ./scripts/capture-hw-details.sh
+
+          cd benchmarks/vllm/fused_moe
+          TD_PATCHED=0 python fused_moe_benchmark.py --reports $REPORTS
+          # Transform baseline results
+          python ../transform_results.py \
+            $REPORTS/fused-moe-gemm-performance.csv \
+            $REPORTS/fused-moe-gemm-report.csv \
+            --tag $TAG \
+            --bgroup vllm \
+            --benchmark fused-moe-bf16-benchmark \
+            --param_cols="num_tokens,output_hidden_size,hidden_size,num_experts,topk"
+
       - name: Upload benchmark reports
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         uses: actions/upload-artifact@v7
