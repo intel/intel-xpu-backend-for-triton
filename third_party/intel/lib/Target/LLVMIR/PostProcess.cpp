@@ -41,7 +41,7 @@ static void expandSaddWithOverflow(Module &module) {
     Value *lhs = call->getArgOperand(0);
     Value *rhs = call->getArgOperand(1);
 
-    Value *sum      = builder.CreateAdd(lhs, rhs);
+    Value *sum = builder.CreateAdd(lhs, rhs);
     Value *overflow = builder.CreateICmpSLT(
         builder.CreateAnd(builder.CreateNot(builder.CreateXor(lhs, rhs)),
                           builder.CreateXor(lhs, sum)),
