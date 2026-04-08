@@ -8,7 +8,7 @@ import ctypes
 import sysconfig
 import tempfile
 from pathlib import Path
-from functools import cached_property
+from functools import cached_property, lru_cache
 
 from triton import knobs
 from triton.runtime.build import _build, platform_key, _load_module_from_path
@@ -981,11 +981,11 @@ class XPUDriver(DriverBase):
         import torch
         return torch.xpu.current_stream().sycl_queue
 
-    def get_current_target(self):
+    @lru_cache
+    def _construct_target(self, device):
         import torch
         from triton.backends.intel.extension_utils import query_device_extensions
 
-        device = self.get_current_device()
         dev_property = torch.xpu.get_device_capability(device)
 
         def update_device_arch(dev_property):
@@ -1005,6 +1005,10 @@ class XPUDriver(DriverBase):
         update_device_arch(dev_property)
 
         return GPUTarget("xpu", dev_property, warp_size=32)
+
+    def get_current_target(self):
+        device = self.get_current_device()
+        return self._construct_target(device)
 
     def build_proton_help_lib(self):
         from triton.backends.intel.driver import compile_module_from_src

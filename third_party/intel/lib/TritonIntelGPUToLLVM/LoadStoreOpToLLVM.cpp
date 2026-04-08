@@ -587,9 +587,30 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     // Only lower operation with dpas layout encoding.
     auto tensorTy =
         cast<RankedTensorType>(getPointeeType(op.getPtr().getType()));
+    bool hasDpas = hasDpasEncoding(tensorTy) || hasDotDpasEncoding(tensorTy);
     return !enableBlockIOForAllLayout.has_value() ||
-           enableBlockIOForAllLayout.value() || hasDpasEncoding(tensorTy) ||
-           hasDotDpasEncoding(tensorTy);
+           enableBlockIOForAllLayout.value() || hasDpas;
+  }
+
+  /// Check whether a store was annotated by the 1D→2D reshape in
+  /// MaterializeBlockPointer. Only applies to StoreOp; returns false for
+  /// loads.
+  template <typename OpTy> static bool hasAnnotated1DReshapeStride(OpTy op) {
+    if constexpr (std::is_same_v<OpTy, triton::StoreOp>)
+      return op->hasAttr(TritonIntelGPUDialect::getBlockIOStrideAttrName());
+    return false;
+  }
+
+  /// Return the pitch (in bytes) for a store annotated by the 1D→2D reshape.
+  /// The stride attribute is in elements; this converts to bytes.
+  /// Returns std::nullopt if the attribute is absent.
+  static std::optional<int64_t>
+  getAnnotated1DReshapePitch(triton::StoreOp op, unsigned elemSizeInBits) {
+    auto strideAttr = op->getAttrOfType<IntegerAttr>(
+        TritonIntelGPUDialect::getBlockIOStrideAttrName());
+    if (!strideAttr)
+      return std::nullopt;
+    return strideAttr.getInt() * elemSizeInBits / 8;
   }
 
   // Determine whether the given descriptor op can be lowered to using
@@ -613,21 +634,6 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     // Rank must be at least 2 for 2D block I/O.
     if (tensorTy.getRank() < 2)
       return false;
-
-    // Verify the descriptor traces back to a MakeTensorDescOp.
-    auto makeTensorDesc =
-        triton::intel::findDefiningOpOfType<triton::MakeTensorDescOp>(
-            op.getDesc());
-    if (!makeTensorDesc)
-      return false;
-
-    // Reject non-contiguous inner dimension.
-    Value innerStride = makeTensorDesc->getStrides().back();
-    std::optional<int64_t> cst = mlir::getConstantIntValue(innerStride);
-    if (!cst || *cst != 1) {
-      LDBG("descriptor inner stride is not constant 1; skipping block IO");
-      return false;
-    }
 
     // Require block_io attribute (set by MaterializeBlockPointer).
     if (!op->template getAttrOfType<StringAttr>(
@@ -2370,13 +2376,12 @@ struct DescriptorLoadOpToBlockIOConversion
     if (!isDescriptorBlockIOCandidate(op))
       return failure();
 
-    // Get the padding option from the defining MakeTensorDescOp.
+    // Get padding from the propagated attribute (set by
+    // MaterializeBlockPointer).
     PaddingOption padding = PaddingOption::PAD_ZERO;
-    if (auto makeDescOp =
-            triton::intel::findDefiningOpOfType<triton::MakeTensorDescOp>(
-                op.getDesc())) {
-      padding = makeDescOp->getPadding();
-    }
+    if (auto paddingAttr = op->getAttrOfType<triton::PaddingOptionAttr>(
+            TritonIntelGPUDialect::getDescPaddingAttrName()))
+      padding = paddingAttr.getValue();
 
     // Result type and encoding setup.
     Type resultType = op.getType();
@@ -2933,19 +2938,12 @@ struct DescriptorLoadOpConversion
     assertDescriptorInnerShapeCompatible(op, descTensorType.getShape(),
                                          resultType.getShape(), permuteDescDim);
 
-    // Try to get the padding option from the defining MakeTensorDescOp.
-    // NOTE: This method only works when the descriptor is defined locally
-    // (i.e., not passed through block arguments, function arguments, or
-    // control flow). For descriptors that flow through control flow, we would
-    // need an analysis pass to propagate tensor descriptor information.
-    // TODO: Implement an analysis pass to propagate MakeTensorDescOp info
-    // through control flow for non-local descriptor definitions.
+    // Get padding from the propagated attribute (set by
+    // MaterializeBlockPointer).
     PaddingOption padding = PaddingOption::PAD_ZERO;
-    if (auto makeDescOp =
-            triton::intel::findDefiningOpOfType<triton::MakeTensorDescOp>(
-                op.getDesc())) {
-      padding = makeDescOp->getPadding();
-    }
+    if (auto paddingAttr = op->getAttrOfType<triton::PaddingOptionAttr>(
+            TritonIntelGPUDialect::getDescPaddingAttrName()))
+      padding = paddingAttr.getValue();
 
     // Boundary check all dimensions — tensor descriptors always encode shape
     // bounds and don't have a user-facing boundaryCheck attribute.
@@ -3563,10 +3561,45 @@ struct StoreOpToBlockIOConversion
           const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
               .getAxisInfo(op.getMask());
     }
-    BlockIOTileSizeInfo sizeInfo = getBlockIOTileSize<false /*store*/>(
-        llEncoding.value(), contiguousDim, elemSizeInBits, maskAxisInfo);
+    BlockIOTileSizeInfo sizeInfo = BlockIOTileSizeInfo::unknown();
+    MLIRContext *ctx = rewriter.getContext();
+
+    if (hasAnnotated1DReshapeStride(op)) {
+      // For stores annotated by the 1D→2D reshape, the encoding was inferred
+      // by tt.reshape and may not satisfy getBlockIOTileSize constraints.
+      // Specifically, the reshape produces a blocked encoding with
+      // sizePerThread > maxElemPackedVal (e.g., sizePerThread[1]=8 vs
+      // maxElemPackedVal=4 for f16). This creates a gap between the
+      // register-packed extent and the first lane base that
+      // getBlockIOTileSize cannot bridge.
+      // TODO: extend getBlockIOTileSize to handle register bases in the
+      // contiguous dimension beyond the packing limit, so this special case
+      // can be removed.
+      auto blockedEnc = dyn_cast<BlockedEncodingAttr>(encoding);
+      assert(blockedEnc && "1D reshape store must have BlockedEncodingAttr");
+      assert(rank == 2 && "1D reshape always produces rank-2 tensors");
+      unsigned numWarpsRow = blockedEnc.getWarpsPerCTA()[0];
+      int height = tensorType.getDimSize(0) / numWarpsRow;
+      int width = tensorType.getDimSize(rank - 1);
+      // Build register bases as identity mapping — every register holds one
+      // element (numPackedVals=1), so all bases are included.
+      StringAttr kRegister = str_attr("register");
+      unsigned regDimSize = llEncoding->getInDimSize(kRegister);
+      SetVector<unsigned> regPackBases;
+      for (unsigned i = 1; i < regDimSize; i <<= 1)
+        regPackBases.insert(i);
+      sizeInfo = BlockIOTileSizeInfo(height, width, /*numElemPerPackedVal=*/1,
+                                     /*vBlocks=*/1, /*rowDim=*/0,
+                                     /*colDim=*/rank - 1, /*transpose=*/false,
+                                     std::move(regPackBases));
+    } else {
+      sizeInfo = getBlockIOTileSize<false /*store*/>(
+          llEncoding.value(), contiguousDim, elemSizeInBits, maskAxisInfo);
+    }
+
     if (!sizeInfo.isValid())
       return failure();
+
     auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
           isTransposeRequired, regPackedBases] = std::move(sizeInfo);
 
@@ -3584,7 +3617,6 @@ struct StoreOpToBlockIOConversion
 
     Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    MLIRContext *ctx = rewriter.getContext();
     Value warpId = arith::IndexCastOp::create(
         rewriter, loc, i32_ty,
         mlir::gpu::SubgroupIdOp::create(rewriter, loc,
@@ -3606,7 +3638,6 @@ struct StoreOpToBlockIOConversion
     Value llMask = adaptor.getMask();
     // Get the LLVM values for mask
     if (llMask) {
-      Value mask = op.getMask();
       maskElems = unpackLLElements(loc, llMask, rewriter);
       assert(maskElems.size() == numElems &&
              "the number of mask values is not matched with the number of "
@@ -3616,9 +3647,17 @@ struct StoreOpToBlockIOConversion
     Value baseWidth =
         b.i32_val(vBlocks * tileWidth * (packedElemSizeInBits / 8));
     Value baseHeight = b.i32_val(tileHeight);
-    // Always get the stride of the row dim since block store only supports
-    // row major matrix.
-    Value pitch = getPitch(rewriter, ptr, elemSizeInBits, rowDim);
+
+    // Use the explicit stride attribute if set by the 1D→2D reshape,
+    // otherwise compute pitch from pointer element analysis.
+    Value pitch;
+    if (auto pitchBytes = getAnnotated1DReshapePitch(op, elemSizeInBits)) {
+      pitch = b.i32_val(*pitchBytes);
+    } else {
+      // Always get the stride of the row dim since block store only supports
+      // row major matrix.
+      pitch = getPitch(rewriter, ptr, elemSizeInBits, rowDim);
+    }
     if (!pitch)
       return failure();
     Value offsetBaseX = b.i32_val(0);

@@ -6,8 +6,6 @@ llvm-project/
 llvm-project-*/
 .llvm-project/
 
-/vllm/
-
 # Triton Python module builds
 dist/
 python/triton*.egg-info/

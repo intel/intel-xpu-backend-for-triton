@@ -80,6 +80,13 @@ Full list of configuration knobs: `python/triton/knobs.py`. Intel-specific knobs
 - **oneAPI**: Primary dependency — install via [Intel PyTorch Dependency Bundle](https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpus.html)
 - **Python requirements**: `python/requirements.txt` (build), `scripts/requirements-test.txt` (test)
 
+### Runtime Stack
+
+The driver (`third_party/intel/backend/driver.py`) integrates with:
+- **SYCL runtime** (`libsycl.so`) — discovered via `icpx`, `ONEAPI_ROOT`, or `intel-sycl-rt` wheel
+- **Level Zero** (`ze_loader`) — low-level GPU access
+- **IGC** (Intel Graphics Compiler) — JIT compilation from SPIR-V
+
 ## From intel-layout-encodings.md
 
 ### DpasEncodingAttr Parameters
