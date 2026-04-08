@@ -1,8 +1,13 @@
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 4ddd47c6d..1d57de712 100644
+index ca5d0e336..98029dfbf 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
-@@ -108,6 +108,8 @@ def kernel_unified_attention_2d(
+@@ -104,10 +104,13 @@ def kernel_unified_attention_2d(
+     BLOCK_Q: tl.constexpr,  # int
+     num_seqs: tl.int32,
+     BLOCK_M: tl.constexpr,  # int
++    BLOCK_Q_IS_POW2: tl.constexpr,  # bool - whether BLOCK_Q is power of 2
+     USE_FP8: tl.constexpr,  # bool
      FP8_MIN: tl.constexpr = float8_info.min,
      FP8_MAX: tl.constexpr = float8_info.max,
  ):
@@ -11,7 +16,7 @@ index 4ddd47c6d..1d57de712 100644
      q_block_global_idx = tl.program_id(0)
      kv_head_idx = tl.program_id(1)
  
-@@ -126,30 +128,32 @@ def kernel_unified_attention_2d(
+@@ -126,30 +129,67 @@ def kernel_unified_attention_2d(
  
      if q_block_local_idx * BLOCK_Q >= cur_batch_query_len:
          return
@@ -40,24 +45,59 @@ index 4ddd47c6d..1d57de712 100644
 -        mask=dim_mask[None, :] & query_mask_0[:, None] & query_mask_1[:, None],
 -        other=0.0,
 -    )
-+    q_base = (query_ptr + (cur_batch_in_all_start_index + q_block_local_idx * BLOCK_Q) * query_stride_0 +
-+              (kv_head_idx * num_queries_per_kv) * query_stride_1)
-+    if HEAD_SIZE == HEAD_SIZE_PADDED:
-+        # This loading is much more efficient on XPU
-+        q_desc = tl.make_tensor_descriptor(base=q_base, shape=(q_block_local_len, num_queries_per_kv * HEAD_SIZE),
-+                                           strides=(query_stride_0, 1),
-+                                           block_shape=(BLOCK_Q, num_queries_per_kv * HEAD_SIZE_PADDED))
-+        Q_raw = q_desc.load([0, 0])  # Shape: (BLOCK_Q, num_queries_per_kv * HEAD_SIZE_PADDED)
++    # Use tensor descriptor only if BLOCK_Q is power of 2 (checked at compile time)
++    if BLOCK_Q_IS_POW2:
++        q_base = (query_ptr + (cur_batch_in_all_start_index + q_block_local_idx * BLOCK_Q) * query_stride_0 +
++                  (kv_head_idx * num_queries_per_kv) * query_stride_1)
++
++        # Check for partial block at runtime
++        if q_block_local_len == BLOCK_Q:
++            if HEAD_SIZE == HEAD_SIZE_PADDED:
++                # This loading is much more efficient on XPU
++                q_desc = tl.make_tensor_descriptor(base=q_base, shape=(BLOCK_Q, num_queries_per_kv * HEAD_SIZE),
++                                                   strides=(query_stride_0, 1),
++                                                   block_shape=(BLOCK_Q, num_queries_per_kv * HEAD_SIZE_PADDED))
++                Q_raw = q_desc.load([0, 0])  # Shape: (BLOCK_Q, num_queries_per_kv * HEAD_SIZE_PADDED)
++            else:
++                q_desc = tl.make_tensor_descriptor(base=q_base, shape=(BLOCK_Q, num_queries_per_kv, HEAD_SIZE),
++                                                   strides=(query_stride_0, query_stride_1, 1),
++                                                   block_shape=(BLOCK_Q, num_queries_per_kv, HEAD_SIZE_PADDED))
++                Q_raw = q_desc.load([0, 0, 0])
++            Q = Q_raw.reshape(BLOCK_M, HEAD_SIZE_PADDED)
++        else:
++            # Partial block: use masked load
++            offs_d = tl.arange(0, HEAD_SIZE_PADDED)
++            query_offset_0 = cur_batch_in_all_start_index + query_pos
++            query_offset = (
++                query_offset_0[:, None] * query_stride_0
++                + query_offset_1[:, None] * query_stride_1
++                + offs_d[None, :]
++            )
++            dim_mask = tl.where(offs_d < HEAD_SIZE, 1, 0).to(tl.int1)
++            Q = tl.load(
++                query_ptr + query_offset,
++                mask=dim_mask[None, :] & query_mask_0[:, None] & query_mask_1[:, None],
++                other=0.0,
++            )
 +    else:
-+        q_desc = tl.make_tensor_descriptor(base=q_base, shape=(q_block_local_len, num_queries_per_kv, HEAD_SIZE),
-+                                           strides=(query_stride_0, query_stride_1, 1),
-+                                           block_shape=(BLOCK_Q, num_queries_per_kv, HEAD_SIZE_PADDED))
-+        Q_raw = q_desc.load([0, 0, 0])
-+    Q = Q_raw.reshape(BLOCK_M, HEAD_SIZE_PADDED)
++        # BLOCK_Q is not power of 2: always use masked load
++        offs_d = tl.arange(0, HEAD_SIZE_PADDED)
++        query_offset_0 = cur_batch_in_all_start_index + query_pos
++        query_offset = (
++            query_offset_0[:, None] * query_stride_0
++            + query_offset_1[:, None] * query_stride_1
++            + offs_d[None, :]
++        )
++        dim_mask = tl.where(offs_d < HEAD_SIZE, 1, 0).to(tl.int1)
++        Q = tl.load(
++            query_ptr + query_offset,
++            mask=dim_mask[None, :] & query_mask_0[:, None] & query_mask_1[:, None],
++            other=0.0,
++        )
  
      block_table_offset = seq_idx * block_table_stride
  
-@@ -232,32 +236,22 @@ def kernel_unified_attention_2d(
+@@ -232,32 +272,22 @@ def kernel_unified_attention_2d(
      # iterate through tiles (now limited to the sliding window range)
      for j in range(tile_start, tile_end):
          seq_offset = j * TILE_SIZE + offs_t
@@ -103,7 +143,7 @@ index 4ddd47c6d..1d57de712 100644
  
          if K_load.dtype.is_fp8():
              if Q.dtype.is_fp8():
-@@ -267,12 +261,7 @@ def kernel_unified_attention_2d(
+@@ -267,12 +297,7 @@ def kernel_unified_attention_2d(
          else:
              K = K_load
  
@@ -117,7 +157,7 @@ index 4ddd47c6d..1d57de712 100644
  
          if V_load.dtype.is_fp8():
              if Q.dtype.is_fp8():
-@@ -375,11 +364,8 @@ def kernel_unified_attention_2d(
+@@ -375,11 +400,8 @@ def kernel_unified_attention_2d(
          L = L * alpha + l_j
          M = m_j
  
@@ -131,7 +171,7 @@ index 4ddd47c6d..1d57de712 100644
  
          # acc : (BLOCK_M, HEAD_SIZE_PADDED)
          acc += tl.dot(P.to(V.dtype), V)
-@@ -390,17 +376,14 @@ def kernel_unified_attention_2d(
+@@ -390,17 +412,48 @@ def kernel_unified_attention_2d(
          acc = acc * tl.load(out_scale)
          acc = tl.clamp(acc, FP8_MIN, FP8_MAX)
  
@@ -146,18 +186,58 @@ index 4ddd47c6d..1d57de712 100644
 -        acc,
 -        mask=dim_mask[None, :] & query_mask_0[:, None] & query_mask_1[:, None],
 -    )
-+    output_offset = (cur_batch_in_all_start_index + q_block_local_idx * BLOCK_Q) * output_stride_0 + (
-+        kv_head_idx * num_queries_per_kv) * output_stride_1
-+    output_base = output_ptr + output_offset
-+    output_desc = tl.make_tensor_descriptor(base=output_base, shape=(q_block_local_len, num_queries_per_kv, HEAD_SIZE),
-+                                            strides=(output_stride_0, output_stride_1, 1),
-+                                            block_shape=(BLOCK_Q, num_queries_per_kv, HEAD_SIZE_PADDED))
-+    acc = acc.to(output_ptr.dtype.element_ty)
-+    output_desc.store([0, 0, 0], acc.reshape(BLOCK_Q, num_queries_per_kv, HEAD_SIZE_PADDED))
++    # Output store: use tensor descriptor only if BLOCK_Q is power of 2
++    if BLOCK_Q_IS_POW2:
++        output_offset = (cur_batch_in_all_start_index + q_block_local_idx * BLOCK_Q) * output_stride_0 + (
++            kv_head_idx * num_queries_per_kv) * output_stride_1
++        output_base = output_ptr + output_offset
++
++        if q_block_local_len == BLOCK_Q:
++            output_desc = tl.make_tensor_descriptor(base=output_base, shape=(BLOCK_Q, num_queries_per_kv, HEAD_SIZE),
++                                                    strides=(output_stride_0, output_stride_1, 1),
++                                                    block_shape=(BLOCK_Q, num_queries_per_kv, HEAD_SIZE_PADDED))
++            acc = acc.to(output_ptr.dtype.element_ty)
++            output_desc.store([0, 0, 0], acc.reshape(BLOCK_Q, num_queries_per_kv, HEAD_SIZE_PADDED))
++        else:
++            # Partial block: use masked store
++            offs_d = tl.arange(0, HEAD_SIZE_PADDED)
++            query_offset_0 = cur_batch_in_all_start_index + query_pos
++            output_offset_full = (
++                query_offset_0[:, None] * output_stride_0
++                + query_offset_1[:, None] * output_stride_1
++                + offs_d[None, :]
++            )
++            dim_mask = tl.where(offs_d < HEAD_SIZE, 1, 0).to(tl.int1)
++            tl.store(
++                output_ptr + output_offset_full,
++                acc,
++                mask=dim_mask[None, :] & query_mask_0[:, None] & query_mask_1[:, None],
++            )
++    else:
++        # BLOCK_Q is not power of 2: always use masked store
++        offs_d = tl.arange(0, HEAD_SIZE_PADDED)
++        query_offset_0 = cur_batch_in_all_start_index + query_pos
++        output_offset_full = (
++            query_offset_0[:, None] * output_stride_0
++            + query_offset_1[:, None] * output_stride_1
++            + offs_d[None, :]
++        )
++        dim_mask = tl.where(offs_d < HEAD_SIZE, 1, 0).to(tl.int1)
++        tl.store(
++            output_ptr + output_offset_full,
++            acc,
++            mask=dim_mask[None, :] & query_mask_0[:, None] & query_mask_1[:, None],
++        )
  
  
  @triton.jit
-@@ -454,6 +437,8 @@ def kernel_unified_attention_3d(
+@@ -449,11 +502,14 @@ def kernel_unified_attention_3d(
+     BLOCK_Q: tl.constexpr,  # int
+     num_seqs: tl.int32,
+     BLOCK_M: tl.constexpr,  # int
++    BLOCK_Q_IS_POW2: tl.constexpr,  # bool - whether BLOCK_Q is power of 2
+     NUM_SEGMENTS_PER_SEQ: tl.constexpr,  # int
+     USE_MM_PREFIX: tl.constexpr,  # bool
      MAX_MM_RANGES: tl.constexpr,  # int
      mm_prefix_range_ptr,  # [num_seqs] - prefix length for each sequence
  ):
@@ -166,7 +246,7 @@ index 4ddd47c6d..1d57de712 100644
      q_block_global_idx = tl.program_id(0)
      kv_head_idx = tl.program_id(1)
      segm_idx = tl.program_id(2)
-@@ -485,28 +470,32 @@ def kernel_unified_attention_3d(
+@@ -485,28 +541,65 @@ def kernel_unified_attention_3d(
          return
  
      offs_m = tl.arange(0, BLOCK_M)
@@ -194,24 +274,57 @@ index 4ddd47c6d..1d57de712 100644
 -        mask=dim_mask[None, :] & query_mask_0[:, None] & query_mask_1[:, None],
 -        other=0.0,
 -    )
-+    q_base = (query_ptr + (cur_batch_in_all_start_index + q_block_local_idx * BLOCK_Q) * query_stride_0 +
-+              (kv_head_idx * num_queries_per_kv) * query_stride_1)
-+    if HEAD_SIZE == HEAD_SIZE_PADDED:
-+        # This loading is much more efficient on XPU
-+        q_desc = tl.make_tensor_descriptor(base=q_base, shape=(q_block_local_len, num_queries_per_kv * HEAD_SIZE),
-+                                           strides=(query_stride_0, 1),
-+                                           block_shape=(BLOCK_Q, num_queries_per_kv * HEAD_SIZE_PADDED))
-+        Q_raw = q_desc.load([0, 0])  # Shape: (BLOCK_Q, num_queries_per_kv * HEAD_SIZE_PADDED)
++    # Use tensor descriptor only if BLOCK_Q is power of 2 (checked at compile time)
++    if BLOCK_Q_IS_POW2:
++        q_base = (query_ptr + (cur_batch_in_all_start_index + q_block_local_idx * BLOCK_Q) * query_stride_0 +
++                  (kv_head_idx * num_queries_per_kv) * query_stride_1)
++
++        # Check for partial block at runtime
++        if q_block_local_len == BLOCK_Q:
++            if HEAD_SIZE == HEAD_SIZE_PADDED:
++                # This loading is much more efficient on XPU
++                q_desc = tl.make_tensor_descriptor(base=q_base, shape=(BLOCK_Q, num_queries_per_kv * HEAD_SIZE),
++                                                   strides=(query_stride_0, 1),
++                                                   block_shape=(BLOCK_Q, num_queries_per_kv * HEAD_SIZE_PADDED))
++                Q_raw = q_desc.load([0, 0])  # Shape: (BLOCK_Q, num_queries_per_kv * HEAD_SIZE_PADDED)
++            else:
++                q_desc = tl.make_tensor_descriptor(base=q_base, shape=(BLOCK_Q, num_queries_per_kv, HEAD_SIZE),
++                                                   strides=(query_stride_0, query_stride_1, 1),
++                                                   block_shape=(BLOCK_Q, num_queries_per_kv, HEAD_SIZE_PADDED))
++                Q_raw = q_desc.load([0, 0, 0])
++            Q = Q_raw.reshape(BLOCK_M, HEAD_SIZE_PADDED)
++        else:
++            # Partial block: use masked load
++            offs_d = tl.arange(0, HEAD_SIZE_PADDED)
++            query_offset = (
++                query_offset_0[:, None] * query_stride_0
++                + query_offset_1[:, None] * query_stride_1
++                + offs_d[None, :]
++            )
++            dim_mask = tl.where(offs_d < HEAD_SIZE, 1, 0).to(tl.int1)
++            Q = tl.load(
++                query_ptr + query_offset,
++                mask=dim_mask[None, :] & query_mask_0[:, None] & query_mask_1[:, None],
++                other=0.0,
++            )
 +    else:
-+        q_desc = tl.make_tensor_descriptor(base=q_base, shape=(q_block_local_len, num_queries_per_kv, HEAD_SIZE),
-+                                           strides=(query_stride_0, query_stride_1, 1),
-+                                           block_shape=(BLOCK_Q, num_queries_per_kv, HEAD_SIZE_PADDED))
-+        Q_raw = q_desc.load([0, 0, 0])
-+    Q = Q_raw.reshape(BLOCK_M, HEAD_SIZE_PADDED)
++        # BLOCK_Q is not power of 2: always use masked load
++        offs_d = tl.arange(0, HEAD_SIZE_PADDED)
++        query_offset = (
++            query_offset_0[:, None] * query_stride_0
++            + query_offset_1[:, None] * query_stride_1
++            + offs_d[None, :]
++        )
++        dim_mask = tl.where(offs_d < HEAD_SIZE, 1, 0).to(tl.int1)
++        Q = tl.load(
++            query_ptr + query_offset,
++            mask=dim_mask[None, :] & query_mask_0[:, None] & query_mask_1[:, None],
++            other=0.0,
++        )
  
      block_table_offset = seq_idx * block_table_stride
  
-@@ -587,32 +576,24 @@ def kernel_unified_attention_3d(
+@@ -587,32 +680,24 @@ def kernel_unified_attention_3d(
          min((segm_idx + 1) * tiles_per_segment, tile_end),
      ):
          seq_offset = j * TILE_SIZE + offs_t
@@ -259,7 +372,7 @@ index 4ddd47c6d..1d57de712 100644
  
          if K_load.dtype.is_fp8():
              if Q.dtype.is_fp8():
-@@ -622,13 +603,6 @@ def kernel_unified_attention_3d(
+@@ -622,13 +707,6 @@ def kernel_unified_attention_3d(
          else:
              K = K_load
  
@@ -273,7 +386,7 @@ index 4ddd47c6d..1d57de712 100644
          if V_load.dtype.is_fp8():
              if Q.dtype.is_fp8():
                  V = V_load
-@@ -729,27 +703,23 @@ def kernel_unified_attention_3d(
+@@ -729,27 +807,50 @@ def kernel_unified_attention_3d(
          L = L * alpha + l_j
          M = m_j
  
@@ -305,16 +418,51 @@ index 4ddd47c6d..1d57de712 100644
 +    segm_output_offset = (cur_batch_in_all_start_index + q_block_local_idx * BLOCK_Q) * (
 +        num_query_heads * NUM_SEGMENTS_PER_SEQ * HEAD_SIZE_PADDED) + (kv_head_idx * num_queries_per_kv) * (
 +            NUM_SEGMENTS_PER_SEQ * HEAD_SIZE_PADDED) + segm_idx * HEAD_SIZE_PADDED
-+    segm_output_desc = tl.make_tensor_descriptor(
-+        base=segm_output_ptr + segm_output_offset, shape=(q_block_local_len, num_queries_per_kv, HEAD_SIZE),
-+        strides=(num_query_heads * NUM_SEGMENTS_PER_SEQ * HEAD_SIZE_PADDED, NUM_SEGMENTS_PER_SEQ * HEAD_SIZE_PADDED, 1),
-+        block_shape=(BLOCK_Q, num_queries_per_kv, HEAD_SIZE_PADDED))
-+    segm_output_desc.store([0, 0, 0], acc.reshape(BLOCK_Q, num_queries_per_kv, HEAD_SIZE_PADDED))
++
++    # Use tensor descriptor only if BLOCK_Q is power of 2 (checked at compile time)
++    if BLOCK_Q_IS_POW2:
++        # Check for partial block at runtime
++        if q_block_local_len == BLOCK_Q:
++            segm_output_desc = tl.make_tensor_descriptor(
++                base=segm_output_ptr + segm_output_offset, shape=(BLOCK_Q, num_queries_per_kv, HEAD_SIZE),
++                strides=(num_query_heads * NUM_SEGMENTS_PER_SEQ * HEAD_SIZE_PADDED, NUM_SEGMENTS_PER_SEQ * HEAD_SIZE_PADDED, 1),
++                block_shape=(BLOCK_Q, num_queries_per_kv, HEAD_SIZE_PADDED))
++            segm_output_desc.store([0, 0, 0], acc.reshape(BLOCK_Q, num_queries_per_kv, HEAD_SIZE_PADDED))
++        else:
++            # Partial block: use masked store
++            offs_d = tl.arange(0, HEAD_SIZE_PADDED)
++            segm_store_offset = (
++                query_offset_0[:, None].to(tl.int64) * (num_query_heads * NUM_SEGMENTS_PER_SEQ * HEAD_SIZE_PADDED)
++                + query_offset_1[:, None] * (NUM_SEGMENTS_PER_SEQ * HEAD_SIZE_PADDED)
++                + segm_idx * HEAD_SIZE_PADDED
++                + offs_d[None, :]
++            )
++            dim_mask = tl.where(offs_d < HEAD_SIZE, 1, 0).to(tl.int1)
++            tl.store(segm_output_ptr + segm_store_offset, acc, mask=dim_mask[None, :] & query_mask_0[:, None] & query_mask_1[:, None])
++    else:
++        # BLOCK_Q is not power of 2: always use masked store
++        offs_d = tl.arange(0, HEAD_SIZE_PADDED)
++        segm_store_offset = (
++            query_offset_0[:, None].to(tl.int64) * (num_query_heads * NUM_SEGMENTS_PER_SEQ * HEAD_SIZE_PADDED)
++            + query_offset_1[:, None] * (NUM_SEGMENTS_PER_SEQ * HEAD_SIZE_PADDED)
++            + segm_idx * HEAD_SIZE_PADDED
++            + offs_d[None, :]
++        )
++        dim_mask = tl.where(offs_d < HEAD_SIZE, 1, 0).to(tl.int1)
++        tl.store(segm_output_ptr + segm_store_offset, acc, mask=dim_mask[None, :] & query_mask_0[:, None] & query_mask_1[:, None])
 +
      segm_offset = (
          query_offset_0.to(tl.int64) * (num_query_heads * NUM_SEGMENTS_PER_SEQ)
          + query_offset_1 * NUM_SEGMENTS_PER_SEQ
-@@ -958,40 +928,38 @@ def unified_attention(
+@@ -943,6 +1044,7 @@ def unified_attention(
+         16 if num_queries_per_kv <= 16 else triton.next_power_of_2(num_queries_per_kv)
+     )
+     BLOCK_Q = BLOCK_M // num_queries_per_kv
++    BLOCK_Q_IS_POW2 = (BLOCK_Q & (BLOCK_Q - 1)) == 0
+ 
+     # Ideally we would launch with kernel with:
+     # \sum_i[ceil(query_len[i] / BLOCK_Q)] blocks.
+@@ -958,40 +1060,38 @@ def unified_attention(
      # Tile sizes for prefill and decode. Gemma3 models use optimized values.
      # Note: tile size must be at least 32 for fp8 (element_size == 1).
      sliding_window_val = 1 + window_size[0] if window_size[0] >= 0 else 0
@@ -383,7 +531,11 @@ index 4ddd47c6d..1d57de712 100644
              output_ptr=out,
              query_ptr=q,
              key_cache_ptr=k,
-@@ -1042,9 +1010,31 @@ def unified_attention(
+@@ -1039,12 +1139,35 @@ def unified_attention(
+             BLOCK_Q=BLOCK_Q,
+             num_seqs=num_seqs,
+             BLOCK_M=BLOCK_M,
++            BLOCK_Q_IS_POW2=BLOCK_Q_IS_POW2,
              USE_FP8=output_scale is not None,
          )
      else:
@@ -418,3 +570,11 @@ index 4ddd47c6d..1d57de712 100644
              segm_output_ptr=softmax_segm_output,
              segm_max_ptr=softmax_segm_max,
              segm_expsum_ptr=softmax_segm_expsum,
+@@ -1091,6 +1214,7 @@ def unified_attention(
+             BLOCK_Q=BLOCK_Q,
+             num_seqs=num_seqs,
+             BLOCK_M=BLOCK_M,
++            BLOCK_Q_IS_POW2=BLOCK_Q_IS_POW2,
+             NUM_SEGMENTS_PER_SEQ=num_par_softmax_segments,
+         )
+         reduce_segments[(q.shape[0], num_query_heads)](
