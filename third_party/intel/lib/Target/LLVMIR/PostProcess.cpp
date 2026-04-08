@@ -62,7 +62,7 @@ void postProcessLLVMIR(llvm::Module &mod) {
   // If a 'fallback' implementation is defined in SYCL libarary, the
   // assertion does not work correctly.
   for (auto &func : mod) {
-    if (func.getName() == "__devicelib_assert_fail") {
+    if (func.getName().str() == "__devicelib_assert_fail") {
       assert(func.isDeclaration() &&
              "__devicelib_assert_fail must be a declaration!");
     }
