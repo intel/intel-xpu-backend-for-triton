@@ -8,4 +8,9 @@ struct FreezeMaskedDivRemPass : PassInfoMixin<FreezeMaskedDivRemPass> {
   static StringRef name() { return "FreezeMaskedDivRemPass"; }
 };
 
+struct ExpandSaddWithOverflowPass : PassInfoMixin<ExpandSaddWithOverflowPass> {
+  PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
+  static StringRef name() { return "ExpandSaddWithOverflowPass"; }
+};
+
 } // namespace llvm

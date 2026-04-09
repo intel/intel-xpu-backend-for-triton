@@ -1,4 +1,5 @@
 #include "third_party/intel/include/Target/LLVMIR/PostProcess.h"
+#include "third_party/intel/lib/Target/LLVMIR/LLVMPasses.h"
 
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Intrinsics.h"
@@ -28,7 +29,7 @@ namespace mlir::triton::intel {
 // Overflow condition (standard sign-bit trick):
 //   overflow = (~(lhs ^ rhs) & (lhs ^ sum)) < 0
 //   i.e. both operands shared a sign but the sum has a different sign.
-static void expandSaddWithOverflow(Module &module) {
+void expandSaddWithOverflow(Module &module) {
   SmallVector<CallInst *> calls;
 
   for (auto &func : module)
@@ -77,3 +78,9 @@ void postProcessLLVMIR(llvm::Module &mod) {
 }
 
 } // namespace mlir::triton::intel
+
+PreservedAnalyses ExpandSaddWithOverflowPass::run(Module &M,
+                                                  ModuleAnalysisManager &) {
+  mlir::triton::intel::expandSaddWithOverflow(M);
+  return PreservedAnalyses::none();
+}
