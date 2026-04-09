@@ -793,6 +793,21 @@ run_test_deps_install() {
   pip install pytest pytest-cov pytest-xdist
 }
 
+# pip install that pins torch/triton to currently installed versions via constraints.
+# Prevents transitive deps from pulling in PyPI torch/triton.
+guarded_pip_install() {
+  local constraints
+  constraints=$(mktemp)
+  python -c "
+import torch; print(f'torch=={torch.__version__}')
+try:
+    import triton; print(f'triton=={triton.__version__}')
+except ImportError: pass
+" > "$constraints"
+  pip install -c "$constraints" "$@"
+  rm -f "$constraints"
+}
+
 run_sglang_install() {
   echo "************************************************"
   echo "******    Installing SGLang                 ****"
@@ -826,7 +841,7 @@ run_sglang_install() {
     cd ..
   fi
 
-  pip install -e "./sglang/python"
+  guarded_pip_install -e "./sglang/python"
 }
 
 run_sglang_tests() {
@@ -856,7 +871,7 @@ run_liger_install() {
   if ! pip list | grep "liger_kernel" ; then
     # Liger requires transformers<5.0
     # https://github.com/linkedin/Liger-Kernel/issues/978
-    pip install 'transformers<5.0' 'pandas<3.0' datasets -e Liger-Kernel
+    guarded_pip_install 'transformers<5.0' 'pandas<3.0' datasets -e Liger-Kernel
   fi
 }
 
