@@ -117,13 +117,6 @@ jobs:
           cd benchmarks
           pip install --no-build-isolation .
 
-      - name: Install vLLM
-        id: install-vllm
-        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-          ./scripts/test-triton.sh --install-vllm --skip-pip-install --skip-pytorch-install
-
       - name: Run Triton Softmax kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'fused_softmax.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'fused_softmax.py') }}
         run: |
@@ -344,101 +337,94 @@ jobs:
           cd benchmarks/micro_benchmarks
           python run_benchmarks.py --reports $REPORTS
 
-      - name: Run vLLM unified attention bf16
-        if: ${{ steps.install.outcome == 'success' && steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_unified_attention')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_unified_attention') }}
+      - name: Install vLLM
+        id: install-vllm
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && ((inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_unified_attention') || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_batched_moe')) && !(contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_unified_attention') && contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_batched_moe'))) }}
         run: |
           source ./scripts/capture-hw-details.sh
+          ./scripts/test-triton.sh --install-vllm --skip-pip-install --skip-pytorch-install
 
+      - name: Run vLLM unified attention bf16
+        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_unified_attention')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_unified_attention') }}
+        run: |
+          source ./scripts/capture-hw-details.sh
           cd benchmarks/vllm
           bash run_benchmark.sh unified_attention --reports $REPORTS
+          cd ../triton_kernels_benchmark
           # Transform baseline results
-          python transform_results.py \
+          python build_report.py \
             $REPORTS/unified-attention-performance.csv \
             $REPORTS/unified-attention-report.csv \
-            --tag $TAG \
-            --bgroup "vllm" \
-            --benchmark "unified-attn-bf16" \
-            --param_cols "q_heads,k_heads,head_size,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size"
+            --benchmark unified-attn-bf16 --compiler triton \
+            --param_cols "q_heads,k_heads,head_size,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size" \
+            --tflops_col triton-TFlops --hbm_col "triton-GB/s" --tag $TAG
           # Transform tensor descriptor patched results
-          python transform_results.py \
+          python build_report.py \
             $REPORTS/unified-attention-performance-td.csv \
             $REPORTS/unified-attention-td-report.csv \
-            --tag $TAG \
-            --bgroup "vllm" \
-            --benchmark "unified-attn-bf16" \
-            --param_cols "q_heads,k_heads,head_size,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size"
+            --benchmark unified-attn-bf16 --compiler triton-td \
+            --param_cols "q_heads,k_heads,head_size,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size" \
+            --tflops_col triton-td-TFlops --hbm_col "triton-td-GB/s" --tag $TAG
 
       - name: Run vLLM unified attention fp8
-        if: ${{ steps.install.outcome == 'success' && steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_unified_attention')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_unified_attention') }}
+        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_unified_attention')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_unified_attention') }}
         run: |
           source ./scripts/capture-hw-details.sh
-
           cd benchmarks/vllm
           FP8="1" bash run_benchmark.sh unified_attention --reports $REPORTS
-          # Transform baseline results
-          python transform_results.py \
+          cd ../triton_kernels_benchmark
+          python build_report.py \
             $REPORTS/unified-attention-performance.csv \
             $REPORTS/unified-attention-fp8-report.csv \
-            --tag $TAG \
-            --bgroup "vllm" \
-            --benchmark "unified-attn-fp8" \
-            --param_cols "q_heads,k_heads,head_size,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size"
-          # Transform tensor descriptor patched results
-          python transform_results.py \
+            --benchmark unified-attn-fp8 --compiler triton \
+            --param_cols "q_heads,k_heads,head_size,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size" \
+            --tflops_col triton-TFlops --hbm_col "triton-GB/s" --tag $TAG
+          python build_report.py \
             $REPORTS/unified-attention-performance-td.csv \
             $REPORTS/unified-attention-fp8-td-report.csv \
-            --tag $TAG \
-            --bgroup "vllm" \
-            --benchmark "unified-attn-fp8" \
-            --param_cols "q_heads,k_heads,head_size,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size"
+            --benchmark unified-attn-fp8 --compiler triton-td \
+            --param_cols "q_heads,k_heads,head_size,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size" \
+            --tflops_col triton-td-TFlops --hbm_col "triton-td-GB/s" --tag $TAG
 
       - name: Run vLLM batched moe bf16
-        if: ${{ steps.install.outcome == 'success' && steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_batched_moe')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_batched_moe') }}
+        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_batched_moe')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_batched_moe') }}
         run: |
           source ./scripts/capture-hw-details.sh
-
           cd benchmarks/vllm
           bash run_benchmark.sh batched_moe --reports $REPORTS
-          # Transform baseline results
-          python transform_results.py \
+          cd ../triton_kernels_benchmark
+          python build_report.py \
             $REPORTS/moe-gemm-performance.csv \
             $REPORTS/moe-gemm-report.csv \
-            --tag $TAG \
-            --bgroup vllm \
-            --benchmark moe-bf16-benchmark \
-            --param_cols="num_experts,max_tokens_per_expert,K,N"
-          # Transform tensor descriptor patched results
-          python transform_results.py \
+            --benchmark moe-bf16-benchmark --compiler triton \
+            --param_cols "num_experts,max_tokens_per_expert,K,N,fp8,block_quant" \
+            --tflops_col triton-TFlops --hbm_col "triton-GB/s" --tag $TAG
+          python build_report.py \
             $REPORTS/moe-gemm-performance-td.csv \
             $REPORTS/moe-gemm-td-report.csv \
-            --tag $TAG \
-            --bgroup vllm \
-            --benchmark moe-bf16-benchmark \
-            --param_cols="num_experts,max_tokens_per_expert,K,N"
+            --benchmark moe-bf16-benchmark --compiler triton-td \
+            --param_cols "num_experts,max_tokens_per_expert,K,N,fp8,block_quant" \
+            --tflops_col triton-td-TFlops --hbm_col "triton-td-GB/s" --tag $TAG
 
       - name: Run vLLM batched moe fp8
-        if: ${{ steps.install.outcome == 'success' && steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_batched_moe')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_batched_moe') }}
+        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_batched_moe')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_batched_moe') }}
         run: |
           source ./scripts/capture-hw-details.sh
-
           cd benchmarks/vllm
           FP8="1" bash run_benchmark.sh batched_moe --reports $REPORTS
-          # Transform baseline results
-          python transform_results.py \
+          cd ../triton_kernels_benchmark
+          python build_report.py \
             $REPORTS/moe-gemm-performance.csv \
             $REPORTS/moe-gemm-fp8-report.csv \
-            --tag $TAG \
-            --bgroup vllm \
-            --benchmark moe-fp8-benchmark \
-            --param_cols="num_experts,max_tokens_per_expert,K,N"
-          # Transform tensor descriptor patched results
-          python transform_results.py \
+            --benchmark moe-fp8-benchmark --compiler triton \
+            --param_cols "num_experts,max_tokens_per_expert,K,N,fp8,block_quant" \
+            --tflops_col triton-TFlops --hbm_col "triton-GB/s" --tag $TAG
+          python build_report.py \
             $REPORTS/moe-gemm-performance-td.csv \
             $REPORTS/moe-gemm-fp8-td-report.csv \
-            --tag $TAG \
-            --bgroup vllm \
-            --benchmark moe-fp8-benchmark \
-            --param_cols="num_experts,max_tokens_per_expert,K,N"
+            --benchmark moe-fp8-benchmark --compiler triton-td \
+            --param_cols "num_experts,max_tokens_per_expert,K,N,fp8,block_quant" \
+            --tflops_col triton-td-TFlops --hbm_col "triton-td-GB/s" --tag $TAG
 
       - name: Upload benchmark reports
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
