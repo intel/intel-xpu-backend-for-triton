@@ -344,7 +344,7 @@ jobs:
           python run_benchmarks.py --reports $REPORTS
 
       - name: Run vLLM unified attention bf16
-        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_unified_attention_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_unified_attention_benchmark.py') }}
+        if: ${{ steps.install.outcome == 'success' && steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_unified_attention_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_unified_attention_benchmark.py') }}
         run: |
           cd benchmarks/triton_kernels_benchmark
           bash ../../benchmarks/vllm/run_benchmark.sh unified_attention --reports $REPORTS --n_runs $N_RUNS
@@ -363,7 +363,7 @@ jobs:
             --tflops_col triton-td-TFlops --hbm_col "triton-td-GB/s" --tag $TAG
 
       - name: Run vLLM unified attention fp8
-        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_unified_attention_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_unified_attention_benchmark.py') }}
+        if: ${{ steps.install.outcome == 'success' && steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_unified_attention_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_unified_attention_benchmark.py') }}
         run: |
           cd benchmarks/triton_kernels_benchmark
           FP8="1" bash ../../benchmarks/vllm/run_benchmark.sh unified_attention --reports $REPORTS --n_runs $N_RUNS
@@ -382,7 +382,7 @@ jobs:
             --tflops_col triton-td-TFlops --hbm_col "triton-td-GB/s" --tag $TAG
 
       - name: Run vLLM batched moe bf16
-        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_batched_moe_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_batched_moe_benchmark.py') }}
+        if: ${{ steps.install.outcome == 'success' && steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_batched_moe_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_batched_moe_benchmark.py') }}
         run: |
           cd benchmarks/triton_kernels_benchmark
           bash ../../benchmarks/vllm/run_benchmark.sh batched_moe --reports $REPORTS --n_runs $N_RUNS
@@ -401,7 +401,7 @@ jobs:
             --tflops_col triton-td-TFlops --hbm_col "triton-td-GB/s" --tag $TAG
 
       - name: Run vLLM batched moe fp8
-        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_batched_moe_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_batched_moe_benchmark.py') }}
+        if: ${{ steps.install.outcome == 'success' && steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_batched_moe_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_batched_moe_benchmark.py') }}
         run: |
           cd benchmarks/triton_kernels_benchmark
           FP8="1" bash ../../benchmarks/vllm/run_benchmark.sh batched_moe --reports $REPORTS --n_runs $N_RUNS
