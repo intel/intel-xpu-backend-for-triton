@@ -66,18 +66,17 @@ We currently support only a small subset of vllm tests, as vllm requires signifi
 
 # CI
 vLLM benchmarks and tests are integrated into the main Triton CI workflows:
-1. [`.github/workflows/vllm-tests.yml`](../../.github/workflows/vllm-tests.yml) - CI that runs vLLM tests
-2. [`.github/workflows/triton-benchmarks.yml`](../../.github/workflows/triton-benchmarks.yml) - Main benchmark CI that includes vLLM benchmarks
-3. [`.github/workflows/vllm-benchmarks-bmg.yml`](../../.github/workflows/vllm-benchmarks-bmg.yml) - CI that runs benchmarks on BMG
+1. [`.github/workflows/vllm-tests.yml`](../../.github/workflows/vllm-tests.yml) - Runs vLLM tests
+2. [`.github/workflows/triton-benchmarks.yml`](../../.github/workflows/triton-benchmarks.yml) - Main benchmark CI (includes vLLM benchmarks)
 
-**Note:** The standalone `vllm-benchmarks.yml` workflow has been **deprecated**. All vLLM benchmark functionality (including patch testing) has been migrated to `triton-benchmarks.yml`. Use `triton-benchmarks.yml` for running vLLM benchmarks with conditional execution:
+All vLLM benchmarks run via `triton-benchmarks.yml` with conditional execution:
 
 ```bash
 # Run specific vLLM benchmarks
-gh workflow run triton-benchmarks.yml --field benchmarks='["vllm_unified_attention"]'
+gh workflow run triton-benchmarks.yml --field benchmarks='["vllm_unified_attention_benchmark.py", "vllm_batched_moe_benchmark.py"]'
 
 # Skip vLLM benchmarks
-gh workflow run triton-benchmarks.yml --field skip_benchmarks='["vllm_unified_attention", "vllm_batched_moe"]'
+gh workflow run triton-benchmarks.yml --field skip_benchmarks='["vllm_unified_attention_benchmark.py", "vllm_batched_moe_benchmark.py"]'
 ```
 
 Note that during the benchmarking CI there is report generation. Reports need to end with `-report.csv` and follow the format to be uploaded to the DB.
