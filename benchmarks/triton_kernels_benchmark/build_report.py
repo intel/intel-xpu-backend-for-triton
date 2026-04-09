@@ -92,23 +92,7 @@ def build_report(args: PassedArgs, results_df: Optional[pd.DataFrame] = None):
             df[p] = df[p].astype(int)
             df_results["params"] = [json.dumps(j) for j in df[[*param_cols, "MASK"]].to_dict("records")]
     else:
-        # Handle mixed types and NaN values in param columns
-        def serialize_params(row):
-            param_dict = {}
-            for p in param_cols:
-                val = row[p]
-                # Handle NaN/None values
-                if pd.isna(val):
-                    param_dict[p] = None
-                else:
-                    # Try to convert to int, fallback to original value
-                    try:
-                        param_dict[p] = int(val)
-                    except (ValueError, TypeError):
-                        param_dict[p] = val
-            return json.dumps(param_dict)
-
-        df_results["params"] = df.apply(serialize_params, axis=1)
+        df_results["params"] = [json.dumps(j) for j in df[param_cols].astype(int).to_dict("records")]
     df_results["tflops"] = df[args.tflops_col]
     if hbm_col is not None:
         df_results["hbm_gbs"] = df[hbm_col]
