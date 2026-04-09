@@ -349,13 +349,12 @@ jobs:
           cd benchmarks/triton_kernels_benchmark
           bash ../../benchmarks/vllm/run_benchmark.sh unified_attention --reports $REPORTS --n_runs $N_RUNS
           source ../../scripts/capture-hw-details.sh
-          cd ../vllm
-          python transform_results.py \
+          python ../../vllm/transform_results.py \
             $REPORTS/unified-attention-performance.csv \
             $REPORTS/unified-attention-report.csv \
             --tag $TAG --bgroup "vllm" --benchmark "unified-attn-bf16" \
             --param_cols "q_heads,k_heads,head_size,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size"
-          python transform_results.py \
+          python ../../vllm/transform_results.py \
             $REPORTS/unified-attention-performance-td.csv \
             $REPORTS/unified-attention-td-report.csv \
             --tag $TAG --bgroup "vllm" --benchmark "unified-attn-bf16-td" \
@@ -367,13 +366,12 @@ jobs:
           cd benchmarks/triton_kernels_benchmark
           FP8="1" bash ../../benchmarks/vllm/run_benchmark.sh unified_attention --reports $REPORTS --n_runs $N_RUNS
           source ../../scripts/capture-hw-details.sh
-          cd ../vllm
-          python transform_results.py \
+          python ../../vllm/transform_results.py \
             $REPORTS/unified-attention-performance.csv \
             $REPORTS/unified-attention-fp8-report.csv \
             --tag $TAG --bgroup "vllm" --benchmark "unified-attn-fp8" \
             --param_cols "q_heads,k_heads,head_size,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size"
-          python transform_results.py \
+          python ../../vllm/transform_results.py \
             $REPORTS/unified-attention-performance-td.csv \
             $REPORTS/unified-attention-fp8-td-report.csv \
             --tag $TAG --bgroup "vllm" --benchmark "unified-attn-fp8-td" \
@@ -385,13 +383,12 @@ jobs:
           cd benchmarks/triton_kernels_benchmark
           bash ../../benchmarks/vllm/run_benchmark.sh batched_moe --reports $REPORTS --n_runs $N_RUNS
           source ../../scripts/capture-hw-details.sh
-          cd ../vllm
-          python transform_results.py \
+          python ../../vllm/transform_results.py \
             $REPORTS/moe-gemm-performance.csv \
             $REPORTS/moe-gemm-report.csv \
             --tag $TAG --bgroup vllm --benchmark moe-bf16-benchmark \
             --param_cols "num_experts,max_tokens_per_expert,K,N,fp8,block_quant"
-          python transform_results.py \
+          python ../../vllm/transform_results.py \
             $REPORTS/moe-gemm-performance-td.csv \
             $REPORTS/moe-gemm-td-report.csv \
             --tag $TAG --bgroup vllm --benchmark moe-bf16-benchmark-td \
@@ -403,13 +400,12 @@ jobs:
           cd benchmarks/triton_kernels_benchmark
           FP8="1" bash ../../benchmarks/vllm/run_benchmark.sh batched_moe --reports $REPORTS --n_runs $N_RUNS
           source ../../scripts/capture-hw-details.sh
-          cd ../vllm
-          python transform_results.py \
+          python ../../vllm/transform_results.py \
             $REPORTS/moe-gemm-performance.csv \
             $REPORTS/moe-gemm-fp8-report.csv \
             --tag $TAG --bgroup vllm --benchmark moe-fp8-benchmark \
             --param_cols "num_experts,max_tokens_per_expert,K,N,fp8,block_quant"
-          python transform_results.py \
+          python ../../vllm/transform_results.py \
             $REPORTS/moe-gemm-performance-td.csv \
             $REPORTS/moe-gemm-fp8-td-report.csv \
             --tag $TAG --bgroup vllm --benchmark moe-fp8-benchmark-td \
