@@ -352,12 +352,16 @@ jobs:
           python ../../vllm/transform_results.py \
             $REPORTS/unified-attention-performance.csv \
             $REPORTS/unified-attention-report.csv \
-            --tag $TAG --bgroup "vllm" --benchmark "unified-attn-bf16" \
+            --tag $TAG \
+            --bgroup "vllm" \
+            --benchmark "unified-attn-bf16" \
             --param_cols "q_heads,k_heads,head_size,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size"
           python ../../vllm/transform_results.py \
             $REPORTS/unified-attention-performance-td.csv \
             $REPORTS/unified-attention-td-report.csv \
-            --tag $TAG --bgroup "vllm" --benchmark "unified-attn-bf16-td" \
+            --tag $TAG \
+            --bgroup "vllm" \
+            --benchmark "unified-attn-bf16" \
             --param_cols "q_heads,k_heads,head_size,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size"
 
       - name: Run vLLM unified attention fp8
@@ -369,12 +373,16 @@ jobs:
           python ../../vllm/transform_results.py \
             $REPORTS/unified-attention-performance.csv \
             $REPORTS/unified-attention-fp8-report.csv \
-            --tag $TAG --bgroup "vllm" --benchmark "unified-attn-fp8" \
+            --tag $TAG \
+            --bgroup "vllm" \
+            --benchmark "unified-attn-fp8" \
             --param_cols "q_heads,k_heads,head_size,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size"
           python ../../vllm/transform_results.py \
             $REPORTS/unified-attention-performance-td.csv \
             $REPORTS/unified-attention-fp8-td-report.csv \
-            --tag $TAG --bgroup "vllm" --benchmark "unified-attn-fp8-td" \
+            --tag $TAG \
+            --bgroup "vllm" \
+            --benchmark "unified-attn-fp8" \
             --param_cols "q_heads,k_heads,head_size,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size"
 
       - name: Run vLLM batched moe bf16
@@ -386,13 +394,17 @@ jobs:
           python ../../vllm/transform_results.py \
             $REPORTS/moe-gemm-performance.csv \
             $REPORTS/moe-gemm-report.csv \
-            --tag $TAG --bgroup vllm --benchmark moe-bf16-benchmark \
-            --param_cols "num_experts,max_tokens_per_expert,K,N,fp8,block_quant"
+            --tag $TAG \
+            --bgroup vllm \
+            --benchmark moe-bf16-benchmark \
+            --param_cols="num_experts,max_tokens_per_expert,K,N"
           python ../../vllm/transform_results.py \
             $REPORTS/moe-gemm-performance-td.csv \
             $REPORTS/moe-gemm-td-report.csv \
-            --tag $TAG --bgroup vllm --benchmark moe-bf16-benchmark-td \
-            --param_cols "num_experts,max_tokens_per_expert,K,N,fp8,block_quant"
+            --tag $TAG \
+            --bgroup vllm \
+            --benchmark moe-bf16-benchmark \
+            --param_cols="num_experts,max_tokens_per_expert,K,N"
 
       - name: Run vLLM batched moe fp8
         if: ${{ steps.install.outcome == 'success' && steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_batched_moe_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_batched_moe_benchmark.py') }}
@@ -403,13 +415,17 @@ jobs:
           python ../../vllm/transform_results.py \
             $REPORTS/moe-gemm-performance.csv \
             $REPORTS/moe-gemm-fp8-report.csv \
-            --tag $TAG --bgroup vllm --benchmark moe-fp8-benchmark \
-            --param_cols "num_experts,max_tokens_per_expert,K,N,fp8,block_quant"
+            --tag $TAG \
+            --bgroup vllm \
+            --benchmark moe-fp8-benchmark \
+            --param_cols="num_experts,max_tokens_per_expert,K,N"
           python ../../vllm/transform_results.py \
             $REPORTS/moe-gemm-performance-td.csv \
             $REPORTS/moe-gemm-fp8-td-report.csv \
-            --tag $TAG --bgroup vllm --benchmark moe-fp8-benchmark-td \
-            --param_cols "num_experts,max_tokens_per_expert,K,N,fp8,block_quant"
+            --tag $TAG \
+            --bgroup vllm \
+            --benchmark moe-fp8-benchmark \
+            --param_cols="num_experts,max_tokens_per_expert,K,N"
 
       - name: Upload benchmark reports
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
