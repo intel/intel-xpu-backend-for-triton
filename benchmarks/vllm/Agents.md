@@ -68,7 +68,7 @@ There is CI for running both tests and benchmarks located in these files:
 All vLLM benchmarks run via `triton-benchmarks.yml` with conditional execution:
 
 ```bash
-# Run specific vLLM benchmarks
+# Run only vLLM benchmarks
 gh workflow run triton-benchmarks.yml --field benchmarks='["vllm_unified_attention_benchmark.py", "vllm_batched_moe_benchmark.py"]'
 
 # Skip vLLM benchmarks
