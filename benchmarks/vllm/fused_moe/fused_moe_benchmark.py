@@ -316,7 +316,7 @@ def get_fused_moe_benchmark(
             total_bytes = (
                 # B matrix: only load weights for activated experts
                 num_activated_experts * K * N * n_bytes +
-                # A matrix: each token is read once per expert assignment
+                # A matrix: each token is read once per expert assignment (topk times total)
                 num_routed_tokens * K * n_bytes +
                 # C matrix: output (one entry per routed token)
                 num_routed_tokens * N * n_bytes)
