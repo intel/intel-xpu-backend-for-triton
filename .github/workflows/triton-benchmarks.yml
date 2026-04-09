@@ -347,17 +347,15 @@ jobs:
       - name: Run vLLM unified attention bf16
         if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_unified_attention_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_unified_attention_benchmark.py') }}
         run: |
-          bash benchmarks/vllm/run_benchmark.sh unified_attention --reports $REPORTS
-          source ./scripts/capture-hw-details.sh
           cd benchmarks/triton_kernels_benchmark
-          # Transform baseline results
+          bash ../../benchmarks/vllm/run_benchmark.sh unified_attention --reports $REPORTS
+          source ../../scripts/capture-hw-details.sh
           python build_report.py \
             $REPORTS/unified-attention-performance.csv \
             $REPORTS/unified-attention-report.csv \
             --benchmark unified-attn-bf16 --compiler triton \
             --param_cols "q_heads,k_heads,head_size,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size" \
             --tflops_col triton-TFlops --hbm_col "triton-GB/s" --tag $TAG
-          # Transform tensor descriptor patched results
           python build_report.py \
             $REPORTS/unified-attention-performance-td.csv \
             $REPORTS/unified-attention-td-report.csv \
@@ -368,9 +366,9 @@ jobs:
       - name: Run vLLM unified attention fp8
         if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_unified_attention_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_unified_attention_benchmark.py') }}
         run: |
-          FP8="1" bash benchmarks/vllm/run_benchmark.sh unified_attention --reports $REPORTS
-          source ./scripts/capture-hw-details.sh
           cd benchmarks/triton_kernels_benchmark
+          FP8="1" bash ../../benchmarks/vllm/run_benchmark.sh unified_attention --reports $REPORTS
+          source ../../scripts/capture-hw-details.sh
           python build_report.py \
             $REPORTS/unified-attention-performance.csv \
             $REPORTS/unified-attention-fp8-report.csv \
@@ -387,9 +385,9 @@ jobs:
       - name: Run vLLM batched moe bf16
         if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_batched_moe_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_batched_moe_benchmark.py') }}
         run: |
-          bash benchmarks/vllm/run_benchmark.sh batched_moe --reports $REPORTS
-          source ./scripts/capture-hw-details.sh
           cd benchmarks/triton_kernels_benchmark
+          bash ../../benchmarks/vllm/run_benchmark.sh batched_moe --reports $REPORTS
+          source ../../scripts/capture-hw-details.sh
           python build_report.py \
             $REPORTS/moe-gemm-performance.csv \
             $REPORTS/moe-gemm-report.csv \
@@ -406,9 +404,9 @@ jobs:
       - name: Run vLLM batched moe fp8
         if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_batched_moe_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_batched_moe_benchmark.py') }}
         run: |
-          FP8="1" bash benchmarks/vllm/run_benchmark.sh batched_moe --reports $REPORTS
-          source ./scripts/capture-hw-details.sh
           cd benchmarks/triton_kernels_benchmark
+          FP8="1" bash ../../benchmarks/vllm/run_benchmark.sh batched_moe --reports $REPORTS
+          source ../../scripts/capture-hw-details.sh
           python build_report.py \
             $REPORTS/moe-gemm-performance.csv \
             $REPORTS/moe-gemm-fp8-report.csv \
