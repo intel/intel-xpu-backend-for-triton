@@ -348,7 +348,7 @@ jobs:
         if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_unified_attention_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_unified_attention_benchmark.py') }}
         run: |
           cd benchmarks/triton_kernels_benchmark
-          bash ../../benchmarks/vllm/run_benchmark.sh unified_attention --reports $REPORTS
+          bash ../../benchmarks/vllm/run_benchmark.sh unified_attention --reports $REPORTS --n_runs $N_RUNS
           source ../../scripts/capture-hw-details.sh
           python build_report.py \
             $REPORTS/unified-attention-performance.csv \
@@ -367,7 +367,7 @@ jobs:
         if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_unified_attention_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_unified_attention_benchmark.py') }}
         run: |
           cd benchmarks/triton_kernels_benchmark
-          FP8="1" bash ../../benchmarks/vllm/run_benchmark.sh unified_attention --reports $REPORTS
+          FP8="1" bash ../../benchmarks/vllm/run_benchmark.sh unified_attention --reports $REPORTS --n_runs $N_RUNS
           source ../../scripts/capture-hw-details.sh
           python build_report.py \
             $REPORTS/unified-attention-performance.csv \
@@ -386,7 +386,7 @@ jobs:
         if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_batched_moe_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_batched_moe_benchmark.py') }}
         run: |
           cd benchmarks/triton_kernels_benchmark
-          bash ../../benchmarks/vllm/run_benchmark.sh batched_moe --reports $REPORTS
+          bash ../../benchmarks/vllm/run_benchmark.sh batched_moe --reports $REPORTS --n_runs $N_RUNS
           source ../../scripts/capture-hw-details.sh
           python build_report.py \
             $REPORTS/moe-gemm-performance.csv \
@@ -405,7 +405,7 @@ jobs:
         if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_batched_moe_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_batched_moe_benchmark.py') }}
         run: |
           cd benchmarks/triton_kernels_benchmark
-          FP8="1" bash ../../benchmarks/vllm/run_benchmark.sh batched_moe --reports $REPORTS
+          FP8="1" bash ../../benchmarks/vllm/run_benchmark.sh batched_moe --reports $REPORTS --n_runs $N_RUNS
           source ../../scripts/capture-hw-details.sh
           python build_report.py \
             $REPORTS/moe-gemm-performance.csv \
