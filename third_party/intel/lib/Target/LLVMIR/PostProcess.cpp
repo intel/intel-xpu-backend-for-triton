@@ -46,10 +46,14 @@ void expandSaddWithOverflow(Module &module) {
     Value *rhs = call->getArgOperand(1);
 
     Value *sum = builder.CreateAdd(lhs, rhs);
-    Value *overflow = builder.CreateICmpSLT(
-        builder.CreateAnd(builder.CreateNot(builder.CreateXor(lhs, rhs)),
-                          builder.CreateXor(lhs, sum)),
-        ConstantInt::get(lhs->getType(), 0));
+    // Use explicit temporaries to guarantee deterministic IR emission
+    // order (nested builder calls have unspecified C++ evaluation order).
+    Value *xorAB = builder.CreateXor(lhs, rhs);
+    Value *notAB = builder.CreateNot(xorAB);
+    Value *xorAS = builder.CreateXor(lhs, sum);
+    Value *andVal = builder.CreateAnd(notAB, xorAS);
+    Value *overflow =
+        builder.CreateICmpSLT(andVal, ConstantInt::get(lhs->getType(), 0));
 
     Value *result = builder.CreateInsertValue(
         builder.CreateInsertValue(UndefValue::get(call->getType()), sum, {0}),
