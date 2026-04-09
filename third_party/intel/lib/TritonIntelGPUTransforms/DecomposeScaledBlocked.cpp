@@ -81,6 +81,12 @@ private:
     assert(computeType == rewriter.getBF16Type() ||
            computeType == rewriter.getF16Type());
 
+    if (isa<FloatType>(scaleTy.getElementType())) {
+      auto scaleType = scaleTy.clone(computeType);
+      return cast<TypedValue<RankedTensorType>>(
+          FpToFpOp::create(rewriter, loc, scaleType, scale).getResult());
+    }
+
     // Choose an fp type that can fit the scale value.
     FloatType largeFpType = computeType == rewriter.getF16Type()
                                 ? rewriter.getF32Type()
@@ -176,23 +182,38 @@ private:
   }
 
   TypedValue<RankedTensorType> maskNan(PatternRewriter &rewriter,
-                                       DotScaledOp scaledDotOp, ModuleOp mod,
+                                       DotScaledOp scaledDotOp,
                                        TypedValue<RankedTensorType> mxfp,
                                        TypedValue<RankedTensorType> scale,
                                        int dim) const {
+    // Skip NaN checks if fastMath
+    if (scaledDotOp.getFastMath())
+      return mxfp;
+
     // Implement tl.where(scale == 0xFF, float("nan"), mxfp)
     auto loc = scale.getLoc();
+    auto mod = scaledDotOp->getParentOfType<ModuleOp>();
 
     // Scale is NaN
     auto scaleTy = scale.getType();
-    auto constFF = arith::ConstantOp::create(
-        rewriter, loc, scaleTy,
-        DenseElementsAttr::get(scaleTy,
-                               APInt(scaleTy.getElementTypeBitWidth(), 0xff)));
-    auto scaleIsNan = cast<TypedValue<RankedTensorType>>(
-        arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::eq, scale,
-                              constFF)
-            .getResult());
+    TypedValue<RankedTensorType> scaleIsNan;
+    if (isa<FloatType>(scaleTy.getElementType())) {
+      auto computeType = cast<FloatType>(mxfp.getType().getElementType());
+      auto scaleFp = scaleTo16(rewriter, scale, computeType);
+      scaleIsNan = cast<TypedValue<RankedTensorType>>(
+          arith::CmpFOp::create(rewriter, loc, arith::CmpFPredicate::UNO,
+                                scaleFp, scaleFp)
+              .getResult());
+    } else {
+      auto constFF = arith::ConstantOp::create(
+          rewriter, loc, scaleTy,
+          DenseElementsAttr::get(
+              scaleTy, APInt(scaleTy.getElementTypeBitWidth(), 0xff)));
+      scaleIsNan = cast<TypedValue<RankedTensorType>>(
+          arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::eq, scale,
+                                constFF)
+              .getResult());
+    }
     auto cond = broadcastScale(rewriter, scaledDotOp, mod, scaleIsNan, dim);
     // Make scale is NaN compatible with mxfp
     auto condTy = cond.getType();
@@ -219,10 +240,8 @@ private:
     auto isFp4 =
         ScaleDotElemType::E2M1 ==
         (opIdx == 0 ? scaledDotOp.getAElemType() : scaledDotOp.getBElemType());
-    auto fastMath = scaledDotOp.getFastMath();
 
     auto loc = v.getLoc();
-    auto mod = scaledDotOp->getParentOfType<ModuleOp>();
     auto rank = v.getType().getRank();
     auto kDim = opIdx == 0 ? rank - 1 : rank - 2;
 
@@ -252,12 +271,8 @@ private:
     auto mxfp = cast<TypedValue<RankedTensorType>>(
         arith::MulFOp::create(rewriter, loc, v, reshapeScale).getResult());
 
-    // Skip NaN checks if fastMath
-    if (fastMath)
-      return mxfp;
-
     // 3) If the scale is NaN, return NaN, else return the scaled value.
-    return maskNan(rewriter, scaledDotOp, mod, mxfp, scale, kDim);
+    return maskNan(rewriter, scaledDotOp, mxfp, scale, kDim);
   }
 };
 
