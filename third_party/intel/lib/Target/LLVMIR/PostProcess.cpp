@@ -8,19 +8,22 @@ using namespace llvm;
 
 namespace mlir::triton::intel {
 
-// W/A for LTS driver - 1146
+// W/A for IGC bug on LTS2 driver (IGC < 2.19.0, Agama <= 1197)
 //
 // Replace every llvm.sadd.with.overflow.iN call with equivalent plain
 // arithmetic before SPIR-V translation.
 //
-// The SPIRV-LLVM-Translator is supposed to lower this intrinsic by linking in
-// a software emulation body (LLVMSaddWithOverflow.h).  It does so via
-// Linker::LinkOnlyNeeded, which assigns available_externally linkage to the
-// body.  LLVMToSPIRVPass then emits it as an Import OpFunction (no body),
-// which IGC cannot call and hangs on.
+// The SPIRV-LLVM-Translator emulates this intrinsic via a helper function
+// returning {iN, i1}. IGC's PromoteBools pass promotes i1->i8 inside that
+// struct, but on LTS2 it uses a whole-struct bitcast ({i32,i1} -> {i32,i8})
+// instead of element-wise promotion. The resulting extractvalue returning i8
+// hits PromoteInt8Type, whose switch has no ExtractValue case — newVal is
+// never set, blocking all downstream i8 consumers in the readiness check and
+// causing an infinite loop in the promotion worklist.
 //
-// Expanding here means the translator never sees the intrinsic and never
-// attempts the broken linking path.
+// Fixed in IGC commit c1d34755f (v2.19.0) which replaced the bitcast with
+// castAggregate() for proper element-by-element promotion. Pre-expanding
+// here avoids the {iN, i1} struct-returning call entirely.
 //
 // Overflow condition (standard sign-bit trick):
 //   overflow = (~(lhs ^ rhs) & (lhs ^ sum)) < 0
@@ -68,8 +71,8 @@ void postProcessLLVMIR(llvm::Module &mod) {
     }
   }
 
-  // Pre-expand llvm.sadd.with.overflow.* so the SPIR-V translator never sees
-  // the intrinsic and never emits the broken emulation-function Import.
+  // Pre-expand llvm.sadd.with.overflow.* so the SPIR-V translator never
+  // links in the {iN, i1} emulation function that triggers the IGC bug.
   expandSaddWithOverflow(mod);
 }
 
