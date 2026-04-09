@@ -60,9 +60,9 @@ DEBUG_BENCH=1 bash benchmarks/vllm/run_benchmark.sh unified_attention
 We currently support only a small subset of vllm tests, as vllm requires significant changes to support XPU. The subset covers just tests for the 2 benchmarks that we have (unified attention and MOE benchmark). To run these tests, run [`scripts/test-triton.sh --vllm`](../../scripts/test-triton.sh). It will first install vllm if necessary and then run the available tests.
 
 # CI
-vLLM benchmarks and tests are integrated into the main Triton CI workflows:
-1. [`.github/workflows/vllm-tests.yml`](../../.github/workflows/vllm-tests.yml) - Runs vLLM tests
-2. [`.github/workflows/triton-benchmarks.yml`](../../.github/workflows/triton-benchmarks.yml) - Main benchmark CI (includes vLLM benchmarks)
+There is CI for running both tests and benchmarks located in these files:
+1. [`.github/workflows/vllm-tests.yml`](../../.github/workflows/vllm-tests.yml) - CI that runs tests
+2. [`.github/workflows/triton-benchmarks.yml`](../../.github/workflows/triton-benchmarks.yml) - CI that runs benchmarks
 
 All vLLM benchmarks run via `triton-benchmarks.yml` with conditional execution:
 
