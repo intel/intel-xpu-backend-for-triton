@@ -49,14 +49,30 @@ def test_sort(M, N, k, descending, dtype_str, device):
 
     z_shape = (M, N if k is None else k)
     x = numpy_random((M, N), dtype_str=dtype_str)
-    x = torch.from_numpy(x).to(device)
+    x_cpu = torch.from_numpy(x)
+    x = x_cpu.to(device)
     z = torch.empty(z_shape, dtype=x.dtype, device=x.device)
+    # Use CPU for reference due to torch.topk bug on XPU
     if k is None or x.numel() < k:
-        y = torch.sort(x, descending=descending)[0]
+        y = torch.sort(x_cpu, descending=descending)[0].to(device)
     else:
-        y = torch.topk(x, k=k, largest=descending).values
+        y = torch.topk(x_cpu, k=k, largest=descending).values.to(device)
     sort_kernel[(1, )](x, x.stride(0), z, z.stride(0), M, N, k, descending, num_warps=8)
     assert (y == z).all(), (y, z)
+
+
+@pytest.mark.parametrize("dtype_str", ['int32', 'float32'])
+def test_torch_topk_xpu_bug(dtype_str, device):
+    """torch.topk on XPU returns wrong results this is why test_sort uses CPU reference."""
+    M, N, k = 8, 64, 8
+    x_np = numpy_random((M, N), dtype_str=dtype_str)
+    x_cpu = torch.from_numpy(x_np)
+    x_dev = x_cpu.to(device)
+
+    ref_cpu = torch.topk(x_cpu, k=k, largest=True).values
+    ref_dev = torch.topk(x_dev, k=k, largest=True).values.cpu()
+
+    assert torch.equal(ref_cpu, ref_dev), f"torch.topk mismatch CPU vs {device}"
 
 
 # ---------------
