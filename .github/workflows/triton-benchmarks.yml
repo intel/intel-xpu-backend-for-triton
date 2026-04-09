@@ -349,18 +349,17 @@ jobs:
           cd benchmarks/triton_kernels_benchmark
           bash ../../benchmarks/vllm/run_benchmark.sh unified_attention --reports $REPORTS --n_runs $N_RUNS
           source ../../scripts/capture-hw-details.sh
-          python build_report.py \
+          cd ../vllm
+          python transform_results.py \
             $REPORTS/unified-attention-performance.csv \
             $REPORTS/unified-attention-report.csv \
-            --benchmark unified-attn-bf16 --compiler triton \
-            --param_cols "q_heads,k_heads,head_size,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size" \
-            --tflops_col triton-TFlops --hbm_col "triton-GB/s" --tag $TAG
-          python build_report.py \
+            --tag $TAG --bgroup "vllm" --benchmark "unified-attn-bf16" \
+            --param_cols "q_heads,k_heads,head_size,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size"
+          python transform_results.py \
             $REPORTS/unified-attention-performance-td.csv \
             $REPORTS/unified-attention-td-report.csv \
-            --benchmark unified-attn-bf16 --compiler triton-td \
-            --param_cols "q_heads,k_heads,head_size,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size" \
-            --tflops_col triton-td-TFlops --hbm_col "triton-td-GB/s" --tag $TAG
+            --tag $TAG --bgroup "vllm" --benchmark "unified-attn-bf16-td" \
+            --param_cols "q_heads,k_heads,head_size,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size"
 
       - name: Run vLLM unified attention fp8
         if: ${{ steps.install.outcome == 'success' && steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_unified_attention_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_unified_attention_benchmark.py') }}
@@ -368,18 +367,17 @@ jobs:
           cd benchmarks/triton_kernels_benchmark
           FP8="1" bash ../../benchmarks/vllm/run_benchmark.sh unified_attention --reports $REPORTS --n_runs $N_RUNS
           source ../../scripts/capture-hw-details.sh
-          python build_report.py \
+          cd ../vllm
+          python transform_results.py \
             $REPORTS/unified-attention-performance.csv \
             $REPORTS/unified-attention-fp8-report.csv \
-            --benchmark unified-attn-fp8 --compiler triton \
-            --param_cols "q_heads,k_heads,head_size,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size" \
-            --tflops_col triton-TFlops --hbm_col "triton-GB/s" --tag $TAG
-          python build_report.py \
+            --tag $TAG --bgroup "vllm" --benchmark "unified-attn-fp8" \
+            --param_cols "q_heads,k_heads,head_size,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size"
+          python transform_results.py \
             $REPORTS/unified-attention-performance-td.csv \
             $REPORTS/unified-attention-fp8-td-report.csv \
-            --benchmark unified-attn-fp8 --compiler triton-td \
-            --param_cols "q_heads,k_heads,head_size,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size" \
-            --tflops_col triton-td-TFlops --hbm_col "triton-td-GB/s" --tag $TAG
+            --tag $TAG --bgroup "vllm" --benchmark "unified-attn-fp8-td" \
+            --param_cols "q_heads,k_heads,head_size,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size"
 
       - name: Run vLLM batched moe bf16
         if: ${{ steps.install.outcome == 'success' && steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_batched_moe_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_batched_moe_benchmark.py') }}
@@ -387,18 +385,17 @@ jobs:
           cd benchmarks/triton_kernels_benchmark
           bash ../../benchmarks/vllm/run_benchmark.sh batched_moe --reports $REPORTS --n_runs $N_RUNS
           source ../../scripts/capture-hw-details.sh
-          python build_report.py \
+          cd ../vllm
+          python transform_results.py \
             $REPORTS/moe-gemm-performance.csv \
             $REPORTS/moe-gemm-report.csv \
-            --benchmark moe-bf16-benchmark --compiler triton \
-            --param_cols "num_experts,max_tokens_per_expert,K,N,fp8,block_quant" \
-            --tflops_col triton-TFlops --hbm_col "triton-GB/s" --tag $TAG
-          python build_report.py \
+            --tag $TAG --bgroup vllm --benchmark moe-bf16-benchmark \
+            --param_cols "num_experts,max_tokens_per_expert,K,N,fp8,block_quant"
+          python transform_results.py \
             $REPORTS/moe-gemm-performance-td.csv \
             $REPORTS/moe-gemm-td-report.csv \
-            --benchmark moe-bf16-benchmark --compiler triton-td \
-            --param_cols "num_experts,max_tokens_per_expert,K,N,fp8,block_quant" \
-            --tflops_col triton-td-TFlops --hbm_col "triton-td-GB/s" --tag $TAG
+            --tag $TAG --bgroup vllm --benchmark moe-bf16-benchmark-td \
+            --param_cols "num_experts,max_tokens_per_expert,K,N,fp8,block_quant"
 
       - name: Run vLLM batched moe fp8
         if: ${{ steps.install.outcome == 'success' && steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_batched_moe_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_batched_moe_benchmark.py') }}
@@ -406,18 +403,17 @@ jobs:
           cd benchmarks/triton_kernels_benchmark
           FP8="1" bash ../../benchmarks/vllm/run_benchmark.sh batched_moe --reports $REPORTS --n_runs $N_RUNS
           source ../../scripts/capture-hw-details.sh
-          python build_report.py \
+          cd ../vllm
+          python transform_results.py \
             $REPORTS/moe-gemm-performance.csv \
             $REPORTS/moe-gemm-fp8-report.csv \
-            --benchmark moe-fp8-benchmark --compiler triton \
-            --param_cols "num_experts,max_tokens_per_expert,K,N,fp8,block_quant" \
-            --tflops_col triton-TFlops --hbm_col "triton-GB/s" --tag $TAG
-          python build_report.py \
+            --tag $TAG --bgroup vllm --benchmark moe-fp8-benchmark \
+            --param_cols "num_experts,max_tokens_per_expert,K,N,fp8,block_quant"
+          python transform_results.py \
             $REPORTS/moe-gemm-performance-td.csv \
             $REPORTS/moe-gemm-fp8-td-report.csv \
-            --benchmark moe-fp8-benchmark --compiler triton-td \
-            --param_cols "num_experts,max_tokens_per_expert,K,N,fp8,block_quant" \
-            --tflops_col triton-td-TFlops --hbm_col "triton-td-GB/s" --tag $TAG
+            --tag $TAG --bgroup vllm --benchmark moe-fp8-benchmark-td \
+            --param_cols "num_experts,max_tokens_per_expert,K,N,fp8,block_quant"
 
       - name: Upload benchmark reports
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
