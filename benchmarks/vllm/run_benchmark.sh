@@ -6,7 +6,9 @@
 #
 # BENCHMARK_FOLDER must contain:
 #   NAME.patch          - patch to apply to the vllm checkout
-#   NAME_benchmark.py   - benchmark script (NAME = basename of BENCHMARK_FOLDER)
+#
+# The benchmark script is located at: benchmarks/triton_kernels_benchmark/vllm_NAME_benchmark.py
+# where NAME = basename of BENCHMARK_FOLDER (e.g., batched_moe, unified_attention)
 #
 # Environment variables forwarded to the benchmark script:
 #   FP8=1         - enable FP8 configurations
@@ -23,7 +25,8 @@ VLLM_DIR="$REPO_ROOT/vllm"
 BENCHMARK_DIR="$(cd "$SCRIPT_DIR/$BENCHMARK_FOLDER" && pwd)"
 NAME="$(basename "$BENCHMARK_DIR")"
 PATCH_FILE="$BENCHMARK_DIR/$NAME.patch"
-BENCHMARK_SCRIPT="$BENCHMARK_DIR/${NAME}_benchmark.py"
+# Benchmark scripts have been moved to triton_kernels_benchmark/
+BENCHMARK_SCRIPT="$REPO_ROOT/benchmarks/triton_kernels_benchmark/vllm_${NAME}_benchmark.py"
 
 # Ensure patch is not already applied before baseline
 cd "$VLLM_DIR"

@@ -42,11 +42,17 @@ Currently there are the following benchmarks:
 1. [`batched_moe`](batched_moe/) - benchmark with Batched Mixture of Experts GEMM operation.
 2. [`unified_attention`](unified_attention/) - benchmark with unified attention.
 
+**Note:** The benchmark Python scripts have been moved to [`../triton_kernels_benchmark/`](../triton_kernels_benchmark/) to integrate with the triton_kernels_benchmark package:
+- `vllm_batched_moe_benchmark.py` - located in triton_kernels_benchmark/
+- `vllm_unified_attention_benchmark.py` - located in triton_kernels_benchmark/
+
+The patches and test files remain in their respective folders here (`batched_moe/`, `unified_attention/`).
+
 Since XPU Triton requires usage of tensor descriptors, we run benchmarks two times. The first time we run the unmodified vllm version, then we patch the kernel code with tensor descriptor usage and get new performance numbers.
 
 Both benchmarks follow the same structure. For each benchmark folder (e.g. [`batched_moe/`](batched_moe/), [`unified_attention/`](unified_attention/)):
-1. `<name>_benchmark.py` - Python script that runs the benchmark using code from vllm. As it imports the relevant kernel from vllm, it will just use whatever is available.
-2. `<name>.patch` - patch that we'll apply to the cloned vllm repo to add necessary changes to improve performance. Note that this patch should be generated after the general patch is applied so it should not duplicate changes from the general patch.
+1. `<name>.patch` - patch that we'll apply to the cloned vllm repo to add necessary changes to improve performance. Note that this patch should be generated after the general patch is applied so it should not duplicate changes from the general patch.
+2. The benchmark Python script is now in `../triton_kernels_benchmark/vllm_<name>_benchmark.py` and imports from vllm to run the benchmark.
 
 The shared [`run_benchmark.sh`](run_benchmark.sh) script orchestrates both steps. It takes the benchmark folder name as the first argument and derives the patch file and benchmark script from the `NAME` convention above. It applies the pattern: run without patch (`TD_PATCHED=0`), apply patch, run again (`TD_PATCHED=1`), revert patch. Any extra arguments (e.g. `--reports`) are forwarded to the benchmark script.
 
@@ -59,10 +65,20 @@ DEBUG_BENCH=1 bash benchmarks/vllm/run_benchmark.sh unified_attention
 We currently support only a small subset of vllm tests, as vllm requires significant changes to support XPU. The subset covers just tests for the 2 benchmarks that we have (unified attention and MOE benchmark). To run these tests, run [`scripts/test-triton.sh --vllm`](../../scripts/test-triton.sh). It will first install vllm if necessary and then run the available tests.
 
 # CI
-There is CI for running both tests and benchmarks located in these files:
-1. [`.github/workflows/vllm-tests.yml`](../../.github/workflows/vllm-tests.yml) - CI that runs tests
-2. [`.github/workflows/vllm-benchmarks.yml`](../../.github/workflows/vllm-benchmarks.yml) - CI that runs benchmarks
+vLLM benchmarks and tests are integrated into the main Triton CI workflows:
+1. [`.github/workflows/vllm-tests.yml`](../../.github/workflows/vllm-tests.yml) - CI that runs vLLM tests
+2. [`.github/workflows/triton-benchmarks.yml`](../../.github/workflows/triton-benchmarks.yml) - Main benchmark CI that includes vLLM benchmarks
 3. [`.github/workflows/vllm-benchmarks-bmg.yml`](../../.github/workflows/vllm-benchmarks-bmg.yml) - CI that runs benchmarks on BMG
+
+**Note:** The standalone `vllm-benchmarks.yml` workflow has been **deprecated**. All vLLM benchmark functionality (including patch testing) has been migrated to `triton-benchmarks.yml`. Use `triton-benchmarks.yml` for running vLLM benchmarks with conditional execution:
+
+```bash
+# Run specific vLLM benchmarks
+gh workflow run triton-benchmarks.yml --field benchmarks='["vllm_unified_attention"]'
+
+# Skip vLLM benchmarks
+gh workflow run triton-benchmarks.yml --field skip_benchmarks='["vllm_unified_attention", "vllm_batched_moe"]'
+```
 
 Note that during the benchmarking CI there is report generation. Reports need to end with `-report.csv` and follow the format to be uploaded to the DB.
 
