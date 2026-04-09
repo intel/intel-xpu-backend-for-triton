@@ -87,6 +87,13 @@ static SmallVector<unsigned> getRepShapeForAtomic(Value result) {
   return smemShape;
 }
 
+unsigned defaultAllocationAnalysisScratchSizeFnOld(Operation *op) {
+  if (auto reduceOp = dyn_cast<ReduceOp>(op)) {
+    return ReduceOpHelper(reduceOp).getScratchSizeInBytesOld();
+  }
+  return defaultAllocationAnalysisScratchSizeFn(op);
+}
+
 unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
   if (auto reduceOp = dyn_cast<ReduceOp>(op)) {
     return ReduceOpHelper(reduceOp).getScratchSizeInBytes();
