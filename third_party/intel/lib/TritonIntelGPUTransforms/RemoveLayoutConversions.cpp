@@ -898,6 +898,8 @@ bool canBeRemat(Operation *op) {
     return false;
   if (auto gather = dyn_cast<tt::GatherOp>(op))
     return !gather.getEfficientLayout();
+  if (auto reshape = dyn_cast<tt::ReshapeOp>(op))
+    return !reshape.getEfficientLayout();
 
   if (isa<scf::WhileOp, scf::ConditionOp>(op))
     return false;
