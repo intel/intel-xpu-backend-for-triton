@@ -47,9 +47,7 @@ Since XPU Triton requires usage of tensor descriptors, we run benchmarks two tim
 Both benchmarks follow the same structure. For each benchmark folder (e.g. [`batched_moe/`](batched_moe/), [`unified_attention/`](unified_attention/)):
 1. `<name>.patch` - patch that we'll apply to the cloned vllm repo to add necessary changes to improve performance. Note that this patch should be generated after the general patch is applied so it should not duplicate changes from the general patch.
 
-The benchmark Python scripts for both benchmarks are located in [`../triton_kernels_benchmark/`](../triton_kernels_benchmark/) and integrated with the `triton_kernels_benchmark` package:
-- [`vllm_batched_moe_benchmark.py`](../triton_kernels_benchmark/vllm_batched_moe_benchmark.py)
-- [`vllm_unified_attention_benchmark.py`](../triton_kernels_benchmark/vllm_unified_attention_benchmark.py)
+The benchmark Python scripts for both benchmarks are located in [`../triton_kernels_benchmark/vllm_<name>_benchmark.py`](../triton_kernels_benchmark/) and integrated with the `triton_kernels_benchmark` package.
 
 The shared [`run_benchmark.sh`](run_benchmark.sh) script orchestrates both steps. It takes the benchmark folder name as the first argument and derives the patch file and benchmark script from the `NAME` convention above. It applies the pattern: run without patch (`TD_PATCHED=0`), apply patch, run again (`TD_PATCHED=1`), revert patch. Any extra arguments (e.g. `--reports`) are forwarded to the benchmark script.
 
