@@ -149,6 +149,32 @@ private:
     return reshapeScale;
   }
 
+  TypedValue<RankedTensorType>
+  extendAndBroadcastScale(PatternRewriter &rewriter, DotScaledOp scaledDotOp,
+                          TypedValue<RankedTensorType> &scale,
+                          FloatType computeType, RankedTensorType dstType,
+                          int opIdx) const {
+    auto loc = scale.getLoc();
+    auto mod = scaledDotOp->getParentOfType<ModuleOp>();
+    auto v = opIdx == 0 ? scaledDotOp.getA() : scaledDotOp.getB();
+    auto rank = v.getType().getRank();
+    auto kDim = opIdx == 0 ? rank - 1 : rank - 2;
+
+    // Transpose scale for RHS operand (inplace — caller sees the change).
+    if (opIdx == 1) {
+      auto order = getTransposeOrder(rank);
+      scale = TransOp::create(rewriter, loc, scale, order);
+    }
+
+    // 1) Cast scale to compute type (fp16/bf16)
+    auto scale16 = scaleTo16(rewriter, scale, computeType);
+
+    // 2) Broadcast scale to the same shape as v and convert the layout
+    auto reshapeScale =
+        broadcastScale(rewriter, scaledDotOp, mod, scale16, kDim);
+    return ConvertLayoutOp::create(rewriter, loc, dstType, reshapeScale);
+  }
+
   TypedValue<RankedTensorType> maskNan(PatternRewriter &rewriter,
                                        DotScaledOp scaledDotOp, ModuleOp mod,
                                        TypedValue<RankedTensorType> mxfp,
@@ -195,7 +221,6 @@ private:
         (opIdx == 0 ? scaledDotOp.getAElemType() : scaledDotOp.getBElemType());
     auto fastMath = scaledDotOp.getFastMath();
 
-    auto *ctx = rewriter.getContext();
     auto loc = v.getLoc();
     auto mod = scaledDotOp->getParentOfType<ModuleOp>();
     auto rank = v.getType().getRank();
@@ -219,24 +244,11 @@ private:
     if (!scale)
       return v;
 
-    // For some weird reason, we take the scale with shape as if it were coming
-    // from the lhs even when it's the rhs. In a normal world, we should accept
-    // this parametre transposed, as we do with the mxfp.
-    if (opIdx == 1) {
-      auto order = getTransposeOrder(rank);
-      scale = TransOp::create(rewriter, loc, scale, order);
-    }
+    // 1) Cast scale to fp16/bf16, broadcast it and convert its layout
+    auto reshapeScale = extendAndBroadcastScale(
+        rewriter, scaledDotOp, scale, computeType, v.getType(), opIdx);
 
-    // 1) Cast scale to compute type (fp16/bf16)
-    auto scale16 = scaleTo16(rewriter, scale, computeType);
-
-    // 2) Broadcast scale to the same shape and layout as v
-    auto reshapeScale =
-        broadcastScale(rewriter, scaledDotOp, mod, scale16, kDim);
-    reshapeScale =
-        ConvertLayoutOp::create(rewriter, loc, v.getType(), reshapeScale);
-
-    // 3) Multiply
+    // 2) Multiply
     auto mxfp = cast<TypedValue<RankedTensorType>>(
         arith::MulFOp::create(rewriter, loc, v, reshapeScale).getResult());
 
@@ -244,7 +256,7 @@ private:
     if (fastMath)
       return mxfp;
 
-    // 4) If the scale is NaN, return NaN, else return the scaled value.
+    // 3) If the scale is NaN, return NaN, else return the scaled value.
     return maskNan(rewriter, scaledDotOp, mod, mxfp, scale, kDim);
   }
 };
