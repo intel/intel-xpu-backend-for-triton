@@ -42,17 +42,14 @@ Currently there are the following benchmarks:
 1. [`batched_moe`](batched_moe/) - benchmark with Batched Mixture of Experts GEMM operation.
 2. [`unified_attention`](unified_attention/) - benchmark with unified attention.
 
-**Note:** The benchmark Python scripts have been moved to [`../triton_kernels_benchmark/`](../triton_kernels_benchmark/) to integrate with the triton_kernels_benchmark package:
-- `vllm_batched_moe_benchmark.py` - located in triton_kernels_benchmark/
-- `vllm_unified_attention_benchmark.py` - located in triton_kernels_benchmark/
-
-The patches and test files remain in their respective folders here (`batched_moe/`, `unified_attention/`).
-
 Since XPU Triton requires usage of tensor descriptors, we run benchmarks two times. The first time we run the unmodified vllm version, then we patch the kernel code with tensor descriptor usage and get new performance numbers.
 
 Both benchmarks follow the same structure. For each benchmark folder (e.g. [`batched_moe/`](batched_moe/), [`unified_attention/`](unified_attention/)):
 1. `<name>.patch` - patch that we'll apply to the cloned vllm repo to add necessary changes to improve performance. Note that this patch should be generated after the general patch is applied so it should not duplicate changes from the general patch.
-2. The benchmark Python script is now in `../triton_kernels_benchmark/vllm_<name>_benchmark.py` and imports from vllm to run the benchmark.
+
+The benchmark Python scripts for both benchmarks are located in [`../triton_kernels_benchmark/`](../triton_kernels_benchmark/) and integrated with the `triton_kernels_benchmark` package:
+- [`vllm_batched_moe_benchmark.py`](../triton_kernels_benchmark/vllm_batched_moe_benchmark.py)
+- [`vllm_unified_attention_benchmark.py`](../triton_kernels_benchmark/vllm_unified_attention_benchmark.py)
 
 The shared [`run_benchmark.sh`](run_benchmark.sh) script orchestrates both steps. It takes the benchmark folder name as the first argument and derives the patch file and benchmark script from the `NAME` convention above. It applies the pattern: run without patch (`TD_PATCHED=0`), apply patch, run again (`TD_PATCHED=1`), revert patch. Any extra arguments (e.g. `--reports`) are forwarded to the benchmark script.
 
