@@ -63,7 +63,7 @@ We currently support only a small subset of vllm tests, as vllm requires signifi
 There is CI for running both tests and benchmarks located in these files:
 1. [`.github/workflows/vllm-tests.yml`](../../.github/workflows/vllm-tests.yml) - CI that runs tests
 2. [`.github/workflows/triton-benchmarks-pvc.yml`](../../.github/workflows/triton-benchmarks-pvc.yml) - CI that runs benchmarks
-3. [`.github/workflows/vllm-benchmarks-bmg.yml`](../../.github/workflows/triton-benchmarks-bmg.yml) - CI that runs benchmarks on BMG
+3. [`.github/workflows/triton-benchmarks-bmg.yml`](../../.github/workflows/triton-benchmarks-bmg.yml) - CI that runs benchmarks on BMG
 
 All vLLM benchmarks run via `triton-benchmarks.yml` with conditional execution:
 
