@@ -608,8 +608,7 @@ extern "C" EXPORT_FUNC PyObject *generic_launch(PyObject *args) {
   }
   Py_DECREF(sharedAttr);
 
-  PyObject *tpwAttr =
-      PyObject_GetAttrString(kernelMeta, "threads_per_warp");
+  PyObject *tpwAttr = PyObject_GetAttrString(kernelMeta, "threads_per_warp");
   if (tpwAttr == nullptr) {
     releaseBuffers();
     return NULL;
@@ -662,8 +661,7 @@ extern "C" EXPORT_FUNC PyObject *generic_launch(PyObject *args) {
   // Validate arg count: user args + global_scratch + profile_scratch [+ slm].
   int nArgs = (int)typeBuf.len;
   int expectedArgs = nArgs + 2 + (sharedMemory ? 1 : 0);
-  int kernelArgs =
-      (int)kernel.get_info<sycl::info::kernel::num_args>();
+  int kernelArgs = (int)kernel.get_info<sycl::info::kernel::num_args>();
   if (expectedArgs != kernelArgs) {
     releaseBuffers();
     PyErr_Format(PyExc_ValueError,

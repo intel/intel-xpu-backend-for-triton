@@ -41,11 +41,9 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str]]:
       AssertionError: if library was not found.
     """
     include_dir = include_dir.copy()
-    assertion_message = (
-        "sycl headers not found, please install `icpx` compiler, "
-        "or provide `ONEAPI_ROOT` environment "
-        "or install `intel-sycl-rt>=2025.0.0` wheel"
-    )
+    assertion_message = ("sycl headers not found, please install `icpx` compiler, "
+                         "or provide `ONEAPI_ROOT` environment "
+                         "or install `intel-sycl-rt>=2025.0.0` wheel")
     icpx_path = shutil.which("icpx")
     if icpx_path:
         # only `icpx` compiler knows where sycl runtime binaries and header files are
@@ -157,10 +155,11 @@ COMPILATION_HELPER = CompilationHelper()
 
 
 class ArchParser:
+
     def __init__(self, cache_path: str):
         self.shared_library = ctypes.CDLL(cache_path)
         self.shared_library.parse_device_arch.restype = ctypes.c_char_p
-        self.shared_library.parse_device_arch.argtypes = (ctypes.c_uint64,)
+        self.shared_library.parse_device_arch.argtypes = (ctypes.c_uint64, )
 
     def __getattribute__(self, name):
         if name == "parse_device_arch":
@@ -179,42 +178,43 @@ class ArchParser:
         def __del__(self):
             if hasattr(self, "shared_library"):
                 handle = self.shared_library._handle
-                self.shared_library.dlclose.argtypes = (ctypes.c_void_p,)
+                self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
                 self.shared_library.dlclose(handle)
     else:
 
         def __del__(self):
             if hasattr(self, "shared_library"):
                 handle = self.shared_library._handle
-                ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64,)
+                ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
                 ctypes.windll.kernel32.FreeLibrary(handle)
 
 
 class SpirvUtils:
+
     def __init__(self, cache_path: str):
         self.shared_library = ctypes.PyDLL(cache_path)
         methods = ("init_devices", "load_binary", "wait_on_sycl_queue", "sycl_queue_memset")
         for method in methods:
             getattr(self.shared_library, method).restype = ctypes.py_object
-            getattr(self.shared_library, method).argtypes = (ctypes.py_object,)
+            getattr(self.shared_library, method).argtypes = (ctypes.py_object, )
         self.shared_library.get_device_properties.restype = ctypes.py_object
-        self.shared_library.get_device_properties.argtypes = (ctypes.c_int,)
+        self.shared_library.get_device_properties.argtypes = (ctypes.c_int, )
         self.shared_library.get_last_selected_build_flags.restype = ctypes.py_object
         # generic_launch may not exist in older cached builds
         if hasattr(self.shared_library, "generic_launch"):
             self.shared_library.generic_launch.restype = ctypes.py_object
-            self.shared_library.generic_launch.argtypes = (ctypes.py_object,)
+            self.shared_library.generic_launch.argtypes = (ctypes.py_object, )
             self.generic_launch = self.shared_library.generic_launch
         else:
             self.generic_launch = None
 
     def __getattribute__(self, name):
         if name in (
-            "get_device_properties",
-            "init_devices",
-            "wait_on_sycl_queue",
-            "get_last_selected_build_flags",
-            "sycl_queue_memset",
+                "get_device_properties",
+                "init_devices",
+                "wait_on_sycl_queue",
+                "get_last_selected_build_flags",
+                "sycl_queue_memset",
         ):
             shared_library = super().__getattribute__("shared_library")
             return getattr(shared_library, name)
@@ -241,14 +241,14 @@ class SpirvUtils:
         def __del__(self):
             if hasattr(self, "shared_library"):
                 handle = self.shared_library._handle
-                self.shared_library.dlclose.argtypes = (ctypes.c_void_p,)
+                self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
                 self.shared_library.dlclose(handle)
     else:
 
         def __del__(self):
             if hasattr(self, "shared_library"):
                 handle = self.shared_library._handle
-                ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64,)
+                ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
                 ctypes.windll.kernel32.FreeLibrary(handle)
 
 
@@ -260,7 +260,7 @@ class ExtensionUtils:
         self.shared_library.check_extension.restype = ctypes.py_object
         self.shared_library.check_extension.argtypes = (ctypes.c_int, ctypes.c_char_p)
         self.shared_library.get_device_id.restype = ctypes.py_object
-        self.shared_library.get_device_id.argtypes = (ctypes.c_int,)
+        self.shared_library.get_device_id.argtypes = (ctypes.c_int, )
 
     def check_extension(self, device_id: int, extension: bytes) -> bool:
         return self.shared_library.check_extension(device_id, extension)
@@ -273,22 +273,23 @@ class ExtensionUtils:
         def __del__(self):
             if hasattr(self, "shared_library"):
                 handle = self.shared_library._handle
-                self.shared_library.dlclose.argtypes = (ctypes.c_void_p,)
+                self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
                 self.shared_library.dlclose(handle)
     else:
 
         def __del__(self):
             if hasattr(self, "shared_library"):
                 handle = self.shared_library._handle
-                ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64,)
+                ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
                 ctypes.windll.kernel32.FreeLibrary(handle)
 
 
 class TritonLauncher:
+
     def __init__(self, cache_path: str):
         self.shared_library = ctypes.PyDLL(cache_path)
         self.shared_library.launch.restype = ctypes.py_object
-        self.shared_library.launch.argtypes = (ctypes.py_object,)
+        self.shared_library.launch.argtypes = (ctypes.py_object, )
 
     def __getattribute__(self, name):
         if name == "launch":
@@ -302,14 +303,14 @@ class TritonLauncher:
         def __del__(self):
             if hasattr(self, "shared_library"):
                 handle = self.shared_library._handle
-                self.shared_library.dlclose.argtypes = (ctypes.c_void_p,)
+                self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
                 self.shared_library.dlclose(handle)
     else:
 
         def __del__(self):
             if hasattr(self, "shared_library"):
                 handle = self.shared_library._handle
-                ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64,)
+                ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
                 ctypes.windll.kernel32.FreeLibrary(handle)
 
 
@@ -364,6 +365,7 @@ def compile_module_from_src(src: str, name: str):
 
 
 class XPUUtils(object):
+
     def __new__(cls):
         if not hasattr(cls, "instance"):
             cls.instance = super(XPUUtils, cls).__new__(cls)
@@ -841,8 +843,8 @@ def wrap_handle_tensordesc(launcher, signature):
             cur = cur.setdefault(step, {})
 
     def inner(args):
-        meta_args = args[: len(_BASE_ARGS_FORMAT)]
-        kernel_args = args[len(_BASE_ARGS_FORMAT) :]
+        meta_args = args[:len(_BASE_ARGS_FORMAT)]
+        kernel_args = args[len(_BASE_ARGS_FORMAT):]
         wrapped = make_tensordesc_args(
             kernel_args,
             signature_vals,
@@ -902,7 +904,7 @@ def serialize_args(args, constants, signature):
             args_dict["argument_list"].append(new_arg)
             counts["tensors"] += 1
         if isinstance(arg, numbers.Number):
-            if (counts["karg_cnt"],) not in constants.keys():
+            if (counts["karg_cnt"], ) not in constants.keys():
                 new_arg = {
                     "name": f"scalarArg_{counts['scalars']}",
                     "type": "scalar",
@@ -932,21 +934,11 @@ _ARG_8B = 4
 # Each slot in the values buffer is exactly 8 bytes; smaller types are
 # zero-padded to fill the slot (little-endian, padding bytes are 'x').
 _TY_INFO: dict[str, tuple[int, str]] = {
-    "i1": (_ARG_1B, "<Bxxxxxxx"),
-    "i8": (_ARG_1B, "<bxxxxxxx"),
-    "i16": (_ARG_2B, "<hxxxxxx"),
-    "i32": (_ARG_4B, "<ixxxx"),
-    "i64": (_ARG_8B, "<q"),
-    "u1": (_ARG_1B, "<Bxxxxxxx"),
-    "u8": (_ARG_1B, "<Bxxxxxxx"),
-    "u16": (_ARG_2B, "<Hxxxxxx"),
-    "u32": (_ARG_4B, "<Ixxxx"),
-    "u64": (_ARG_8B, "<Q"),
-    "fp16": (_ARG_2B, "<exxxxxx"),
-    "fp32": (_ARG_4B, "<fxxxx"),
-    "f32": (_ARG_4B, "<fxxxx"),
-    "fp64": (_ARG_8B, "<d"),
-    "bf16": (_ARG_2B, None),  # special-cased: no struct format letter for bf16
+    "i1": (_ARG_1B, "<Bxxxxxxx"), "i8": (_ARG_1B, "<bxxxxxxx"), "i16": (_ARG_2B, "<hxxxxxx"), "i32":
+    (_ARG_4B, "<ixxxx"), "i64": (_ARG_8B, "<q"), "u1": (_ARG_1B, "<Bxxxxxxx"), "u8": (_ARG_1B, "<Bxxxxxxx"), "u16":
+    (_ARG_2B, "<Hxxxxxx"), "u32": (_ARG_4B, "<Ixxxx"), "u64": (_ARG_8B, "<Q"), "fp16": (_ARG_2B, "<exxxxxx"), "fp32":
+    (_ARG_4B, "<fxxxx"), "f32": (_ARG_4B, "<fxxxx"), "fp64": (_ARG_8B, "<d"), "bf16":
+    (_ARG_2B, None),  # special-cased: no struct format letter for bf16
 }
 
 
@@ -1005,10 +997,8 @@ def _make_generic_launcher(constants, signature):
     # at the cost of a less informative error on an invalid pointer.
     generic_launch_fn = triton.runtime.driver.active.utils.generic_launch
     if generic_launch_fn is None:
-        raise RuntimeError(
-            "generic_launch not available in the XPU driver shared library. "
-            "Clear ~/.triton/cache and rebuild to pick up the updated driver.c."
-        )
+        raise RuntimeError("generic_launch not available in the XPU driver shared library. "
+                           "Clear ~/.triton/cache and rebuild to pick up the updated driver.c.")
 
     def launcher(all_args):
         kernel_args = all_args[9:]
@@ -1020,7 +1010,7 @@ def _make_generic_launcher(constants, signature):
                 p = val.data_ptr() if hasattr(val, "data_ptr") else (0 if val is None else int(val))
                 struct.pack_into("<Q", buf, off, p)
             elif pack_fmts[j] is None:
-                buf[off : off + 8] = _pack_bf16(val)
+                buf[off:off + 8] = _pack_bf16(val)
             else:
                 struct.pack_into(pack_fmts[j], buf, off, val)
         generic_launch_fn((*all_args[:9], type_bytes, buf))
@@ -1029,9 +1019,10 @@ def _make_generic_launcher(constants, signature):
 
 
 class XPULauncher(object):
+
     def __init__(self, src, metadata):
         constants = src.constants if hasattr(src, "constants") else dict()
-        arg_idx = lambda x: (src.fn.arg_names.index(x),) if isinstance(x, str) else x
+        arg_idx = lambda x: (src.fn.arg_names.index(x), ) if isinstance(x, str) else x
         constants = {arg_idx(idx): value for idx, value in constants.items()}
         signature = {idx: value for idx, value in src.signature.items()}
 
@@ -1099,6 +1090,7 @@ class XPULauncher(object):
 
 
 class XPUDriver(DriverBase):
+
     def __init__(self):
         self.launcher_cls = XPULauncher
         super().__init__()
@@ -1130,9 +1122,8 @@ class XPUDriver(DriverBase):
         def update_device_arch(dev_property):
             if not (arch := knobs.intel.device_arch):
                 dirname = os.path.dirname(os.path.realpath(__file__))
-                parser = compile_module_from_src(
-                    src=Path(os.path.join(dirname, "arch_parser.c")).read_text(), name="arch_utils"
-                )
+                parser = compile_module_from_src(src=Path(os.path.join(dirname, "arch_parser.c")).read_text(),
+                                                 name="arch_utils")
                 arch = parser.parse_device_arch(dev_property["architecture"])
             dev_property["arch"] = arch
 
