@@ -876,9 +876,8 @@ void dumpCpuToGpuFlowEvents(
       auto launchEventIt =
           launchEventIdToCpuScopeEvent.find(event.launchEventId);
       if (launchEventIt == launchEventIdToCpuScopeEvent.end()) {
-        throw std::runtime_error(
-            "Cannot find CPU scope event for kernel launch event id: " +
-            std::to_string(event.launchEventId));
+        // FIXME: Graceful fallback — skip if no CPU scope found.
+        continue;
       }
 
       const auto *launchEvent = launchEventIt->second;
@@ -1011,6 +1010,19 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
               // tag. So we need to go one level up to find the actual launch
               // event
               launchEventId = events.at(launchEventId).parentEventId;
+            }
+            // FIXME: Remove once XPU/PTI resolves kernel names at
+            // API_ENTER (XpuptiProfiler.cpp:257). Walk up to find the
+            // nearest ancestor with a CPU time range.
+            while (launchEventId != Trace::Event::DummyId) {
+              auto it = events.find(launchEventId);
+              if (it == events.end()) {
+                launchEventId = Trace::Event::DummyId;
+                break;
+              }
+              if (it->second.hasCpuTimeRange())
+                break;
+              launchEventId = it->second.parentEventId;
             }
             kernelEvents[streamId].emplace_back(kernelMetric, flexibleMetrics,
                                                 contexts, launchEventId,
