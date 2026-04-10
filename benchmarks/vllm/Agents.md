@@ -9,7 +9,7 @@ For the purposes of this repository, vllm installation consists of:
 1. Activating a Python environment that has triton, pytorch, oneapi
 2. Running [`scripts/test-triton.sh --install-vllm`](../../scripts/test-triton.sh)
 
-This installation internally will clone the vllm repo into a local folder, checkout the commit pinned via [`vllm-pin.txt`](vllm-pin.txt), apply our local patch [`vllm-fix.patch`](vllm-fix.patch), and apply some regexp changes to the vllm repo.
+This installation internally will clone the vllm repo into a local folder, checkout the commit pinned via [`vllm-pin.txt`](vllm-pin.txt), apply our local patch [`vllm-fix.patch`](vllm-fix.patch), and apply other common substitutions defined in [`vllm-xpu-patch.py`](../../scripts/vllm/vllm_xpu_patch.py).
 
 These patches are necessary because vllm doesn't yet support XPU completely.
 
