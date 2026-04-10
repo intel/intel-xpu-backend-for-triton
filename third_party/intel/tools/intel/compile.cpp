@@ -165,9 +165,8 @@ int32_t {kernel_name}(sycl::queue &stream, {signature}) {{
         idx++;
     }}
     if (static_cast<bool>({shared})) {{
-        using share_mem_t = sycl::local_accessor<int8_t, 1>;
-        share_mem_t local_buffer = share_mem_t({shared}, cgh);
-        cgh.set_arg(num_params, local_buffer);
+        sycl::ext::oneapi::experimental::work_group_memory<char[]> mem({shared}, cgh);
+        cgh.set_arg(num_params, mem);
         cgh.parallel_for(parallel_work_size, sycl_kernel);
     }} else {{
         cgh.parallel_for(parallel_work_size, sycl_kernel);

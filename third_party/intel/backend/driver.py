@@ -685,9 +685,8 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
     {" ".join(f'set_scalar_arg<{ty_to_cpp(item)}>(cgh, {idx}, params[{idx}]);' for idx, item in enumerate([signature[i] for i in signature if signature[i] != "constexpr"]))}
     {" ".join(f'set_scalar_arg<{ty_to_cpp(item)}>(cgh, {idx}, params[{idx}]);' for idx, item in enumerate(["*global_scratch", "*profile_scratch"], start=num_params-2))}
     if (shared_memory) {{
-      using share_mem_t = sycl::local_accessor<int8_t, 1>;
-      share_mem_t local_buffer = share_mem_t(shared_memory, cgh);
-      cgh.set_arg(num_params, local_buffer);
+      sycl::ext::oneapi::experimental::work_group_memory<char[]> mem(shared_memory, cgh);
+      cgh.set_arg(num_params, mem);
       cgh.parallel_for(parallel_work_size, kernel_ptr);
     }} else {{
       cgh.parallel_for(parallel_work_size, kernel_ptr);
