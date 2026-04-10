@@ -11,6 +11,8 @@ batched MoE implementations using vLLM kernels.
 
 """
 import os
+import sys
+from pathlib import Path
 from typing import Optional
 
 import torch
@@ -20,9 +22,10 @@ import triton_kernels_benchmark as benchmark_suite
 
 from vllm.model_executor.layers.fused_moe.fused_batched_moe import invoke_moe_batched_triton_kernel
 
-# Import utility functions from vLLM tests
-from tests.kernels.moe.utils import make_quantized_test_activations, make_test_weight
-from tests.kernels.quant_utils import native_batched_masked_quant_matmul
+# Add vLLM batched MoE tests path to sys.path to lazily import test utils
+VLLM_BATCHED_MOE_TESTS_PATH = Path(__file__).parent.parent / "vllm" / "batched_moe"
+if str(VLLM_BATCHED_MOE_TESTS_PATH) not in sys.path:
+    sys.path.insert(0, str(VLLM_BATCHED_MOE_TESTS_PATH))
 
 # Benchmark shapes for batched MoE
 # (E: num_experts, M: max_tokens_per_expert, K: hidden_dim, N: intermediate_dim, fp8, block_quant)
@@ -142,6 +145,9 @@ def get_batched_mm_benchmark(
             args={},
         ))
     def benchmark(num_experts, max_tokens_per_expert, K, N, fp8, block_quant, provider):
+        from tests.kernels.moe.utils import make_quantized_test_activations, make_test_weight
+        from tests.kernels.quant_utils import native_batched_masked_quant_matmul
+
         torch.manual_seed(20)
         n_warmup = 600
 

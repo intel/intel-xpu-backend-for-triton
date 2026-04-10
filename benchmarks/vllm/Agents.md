@@ -45,8 +45,9 @@ Currently there are the following benchmarks:
 Since XPU Triton requires usage of tensor descriptors, we run benchmarks two times. The first time we run the unmodified vllm version, then we patch the kernel code with tensor descriptor usage and get new performance numbers.
 
 Both benchmarks follow the same structure. For each benchmark folder (e.g. [`batched_moe/`](batched_moe/), [`unified_attention/`](unified_attention/)):
-1. `<name>_benchmark.py` - Python script that runs the benchmark using code from vllm. As it imports the relevant kernel from vllm, it will just use whatever is available.
-2. `<name>.patch` - patch that we'll apply to the cloned vllm repo to add necessary changes to improve performance. Note that this patch should be generated after the general patch is applied so it should not duplicate changes from the general patch.
+1. `<name>.patch` - patch that we'll apply to the cloned vllm repo to add necessary changes to improve performance. Note that this patch should be generated after the general patch is applied so it should not duplicate changes from the general patch.
+
+The benchmark Python scripts for both benchmarks are located in [`../triton_kernels_benchmark/vllm_<name>_benchmark.py`](../triton_kernels_benchmark/) and integrated with the `triton_kernels_benchmark` package.
 
 The shared [`run_benchmark.sh`](run_benchmark.sh) script orchestrates both steps. It takes the benchmark folder name as the first argument and derives the patch file and benchmark script from the `NAME` convention above. It applies the pattern: run without patch (`TD_PATCHED=0`), apply patch, run again (`TD_PATCHED=1`), revert patch. Any extra arguments (e.g. `--reports`) are forwarded to the benchmark script.
 
@@ -61,8 +62,18 @@ We currently support only a small subset of vllm tests, as vllm requires signifi
 # CI
 There is CI for running both tests and benchmarks located in these files:
 1. [`.github/workflows/vllm-tests.yml`](../../.github/workflows/vllm-tests.yml) - CI that runs tests
-2. [`.github/workflows/vllm-benchmarks.yml`](../../.github/workflows/vllm-benchmarks.yml) - CI that runs benchmarks
-3. [`.github/workflows/vllm-benchmarks-bmg.yml`](../../.github/workflows/vllm-benchmarks-bmg.yml) - CI that runs benchmarks on BMG
+2. [`.github/workflows/triton-benchmarks-pvc.yml`](../../.github/workflows/triton-benchmarks-pvc.yml) - CI that runs benchmarks
+3. [`.github/workflows/triton-benchmarks-bmg.yml`](../../.github/workflows/triton-benchmarks-bmg.yml) - CI that runs benchmarks on BMG
+
+All vLLM benchmarks run via `triton-benchmarks.yml` with conditional execution:
+
+```bash
+# Run only vLLM benchmarks
+gh workflow run triton-benchmarks.yml --field benchmarks='["vllm_unified_attention_benchmark.py", "vllm_batched_moe_benchmark.py"]'
+
+# Skip vLLM benchmarks
+gh workflow run triton-benchmarks.yml --field skip_benchmarks='["vllm_unified_attention_benchmark.py", "vllm_batched_moe_benchmark.py"]'
+```
 
 Note that during the benchmarking CI there is report generation. Reports need to end with `-report.csv` and follow the format to be uploaded to the DB.
 
