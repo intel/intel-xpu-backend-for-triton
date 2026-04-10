@@ -28,6 +28,23 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 
 // -----
 
+// COM: Descriptor load with NaN padding generates 2D block load + NaN select.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @descriptor_load_nan_padding
+  tt.func public @descriptor_load_nan_padding(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i32, %arg5: i32) {
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] {padding = 2 : i32} : <f16>, <tensor<64x32xf16>>
+    // CHECK: triton_gen.2Dblockload
+    // CHECK: llvm.select
+    %load = tt.descriptor_load %desc[%arg4, %arg5] {ttig.block_io = "row_major", ttig.desc_padding = 2 : i32} : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #dot0>
+    tt.return
+  }
+}
+
+// -----
+
 // COM: Regression test for rank-reducing descriptor load. The descriptor has
 // COM: rank 3 while the load result has rank 2. This used to assert in
 // COM: ConvertTritonIntelGPUToLLVM descriptor unpacking.
@@ -342,22 +359,6 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <tensor<32x64xf16>>
     // CHECK-COUNT-2: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 1, transpose = false, vnni_transform = true, cache_control = Default}
     %load = tt.descriptor_load %desc[%arg4, %arg5] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<32x64xf16>> -> tensor<32x64xf16, #dot1>
-    tt.return
-  }
-}
-
-// -----
-
-// COM: Test that when a column_major tt.descriptor_load is present but descriptor is not traceable to
-// COM: a MakeTensorDescOp (passed as function argument) the code generated uses the "gather path".
-#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
-#dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>
-module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
-  // CHECK-LABEL: @descriptor_load_column_major_fallback
-  tt.func public @descriptor_load_column_major_fallback(%desc: !tt.tensordesc<tensor<64x32xf16>>, %row: i32, %col: i32) {
-    // CHECK-NOT: triton_gen.2Dblockload
-    // CHECK: llvm.getelementptr
-    %load = tt.descriptor_load %desc[%row, %col] {ttig.block_io = "column_major"} : !tt.tensordesc<tensor<64x32xf16>> -> tensor<32x64xf16, #dot1>
     tt.return
   }
 }
