@@ -1,2 +1,4 @@
 # https://github.com/intel/intel-xpu-backend-for-triton/issues/5977
-tests/test_roofline.py::test_get_memset_tbps
+# NOTE: After upstream merge of commit 4473e294a (triton-lang/triton#9590), pytest.ini exists at repo root
+# which changes pytest's rootdir. Test IDs now include full path: python/triton_kernels/tests/...
+python/triton_kernels/tests/test_roofline.py::test_get_memset_tbps

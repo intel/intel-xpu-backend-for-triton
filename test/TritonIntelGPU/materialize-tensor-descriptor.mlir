@@ -16,24 +16,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %c32_i64 = arith.constant 32 : i64
 
     // COM: Row-major tensor descriptors with proper alignment
-    // CHECK: tt.descriptor_load {{.*}} {ttig.block_io = "row_major"}
-    // CHECK: tt.descriptor_load {{.*}} {ttig.block_io = "row_major"}
+    // CHECK: tt.descriptor_load {{.*}} {ttig.block_io = "row_major", ttig.desc_padding = 1 : i32}
+    // CHECK: tt.descriptor_load {{.*}} {ttig.block_io = "row_major"{{.*}}}
     %0 = tt.make_tensor_descriptor %arg0, [%c64_i32, %c32_i32], [%pitch, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<tensor<64x32xf16, #dot_a>>
     %1 = tt.make_tensor_descriptor %arg0, [%c32_i32, %c64_i32], [%pitch, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<tensor<32x64xf16, #dot_b>>
     %2 = tt.descriptor_load %0[%c0_i32, %c0_i32] : !tt.tensordesc<tensor<64x32xf16, #dot_a>> -> tensor<64x32xf16, #dot_a>
     %3 = tt.descriptor_load %1[%c0_i32, %c0_i32] : !tt.tensordesc<tensor<32x64xf16, #dot_b>> -> tensor<32x64xf16, #dot_b>
-    // CHECK: tt.descriptor_store {{.*}} {ttig.block_io = "row_major"}
+    // CHECK: tt.descriptor_store {{.*}} {ttig.block_io = "row_major"{{.*}}}
     tt.descriptor_store %0[%c0_i32, %c0_i32], %2 : !tt.tensordesc<tensor<64x32xf16, #dot_a>>, tensor<64x32xf16, #dot_a>
-    // CHECK: tt.descriptor_store {{.*}} {ttig.block_io = "row_major"}
+    // CHECK: tt.descriptor_store {{.*}} {ttig.block_io = "row_major"{{.*}}}
     tt.descriptor_store %1[%c0_i32, %c0_i32], %3 : !tt.tensordesc<tensor<32x64xf16, #dot_b>>, tensor<32x64xf16, #dot_b>
 
     // COM: Non-64 divisible pitch - should not get block_io attribute
-    // CHECK-NOT: tt.descriptor_load {{.*}} {ttig.block_io = "row_major"}
+    // CHECK-NOT: tt.descriptor_load {{.*}} {ttig.block_io = "row_major"{{.*}}}
     %4 = tt.make_tensor_descriptor %arg0, [%c64_i32, %c32_i32], [%pitch_odd, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<tensor<64x32xf16, #dot_a>>
     %5 = tt.descriptor_load %4[%c0_i32, %c0_i32] : !tt.tensordesc<tensor<64x32xf16, #dot_a>> -> tensor<64x32xf16, #dot_a>
 
     // COM: Base pointer not aligned to 4 bytes - should not get block_io attribute
-    // CHECK-NOT: tt.descriptor_store {{.*}} {ttig.block_io = "row_major"}
+    // CHECK-NOT: tt.descriptor_store {{.*}} {ttig.block_io = "row_major"{{.*}}}
     %6 = tt.make_tensor_descriptor %arg1, [%c64_i32, %c32_i32], [%pitch, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<tensor<64x32xf16, #dot_a>>
     %7 = tt.descriptor_load %6[%c0_i32, %c0_i32] : !tt.tensordesc<tensor<64x32xf16, #dot_a>> -> tensor<64x32xf16, #dot_a>
     tt.descriptor_store %6[%c0_i32, %c0_i32], %7 : !tt.tensordesc<tensor<64x32xf16, #dot_a>>, tensor<64x32xf16, #dot_a>
@@ -68,9 +68,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     %9 = arith.muli %0, %c128_i32 : i32
     %10 = tt.make_tensor_descriptor %8, [%c1024_i32, %c64_i32], [%c64_i64, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
     // COM: 4 bytes aligned base (value got from addptr, addi, muli), baseWidth.
-    // CHECK: tt.descriptor_load {{.*}} {ttig.block_io = "row_major"}
+    // CHECK: tt.descriptor_load {{.*}} {ttig.block_io = "row_major"{{.*}}}
     %11 = tt.descriptor_load %10[%9, %c0_i32] : !tt.tensordesc<tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
-    // CHECK: tt.descriptor_store {{.*}} {ttig.block_io = "row_major"}
+    // CHECK: tt.descriptor_store {{.*}} {ttig.block_io = "row_major"{{.*}}}
     tt.descriptor_store %10[%9, %c0_i32], %11 : !tt.tensordesc<tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>, tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
     tt.return
   }
@@ -91,10 +91,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %c64_i64 = arith.constant 64 : i64
     %c32_i64 = arith.constant 32 : i64
 
-    // CHECK: tt.descriptor_load {{.*}} {ttig.block_io = "row_major"}
+    // CHECK: tt.descriptor_load {{.*}} {ttig.block_io = "row_major"{{.*}}}
     %0 = tt.make_tensor_descriptor %arg0, [%c64_i32, %c32_i32], [%pitch, %c1_i64] : !tt.ptr<i64>, !tt.tensordesc<tensor<64x32xi64, #dot_a>>
     %1 = tt.descriptor_load %0[%c0_i32, %c0_i32] : !tt.tensordesc<tensor<64x32xi64, #dot_a>> -> tensor<64x32xi64, #dot_a>
-    // CHECK: tt.descriptor_store {{.*}} {ttig.block_io = "row_major"}
+    // CHECK: tt.descriptor_store {{.*}} {ttig.block_io = "row_major"{{.*}}}
     tt.descriptor_store %0[%c0_i32, %c0_i32], %1 : !tt.tensordesc<tensor<64x32xi64, #dot_a>>, tensor<64x32xi64, #dot_a>
     tt.return
   }
@@ -112,10 +112,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, ttg.target = "xpu", "ttg.num-warps"
     %c0_i32 = arith.constant 0 : i32
     %c1_i64 = arith.constant 1 : i64
 
-    // CHECK: tt.descriptor_load {{.*}} {ttig.block_io = "row_major"}
+    // CHECK: tt.descriptor_load {{.*}} {ttig.block_io = "row_major"{{.*}}}
     %31 = tt.make_tensor_descriptor %arg0, [%c0_i32, %c0_i32, %c0_i32], [%pitch, %pitch, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<tensor<4x64x32xf16>>
     %34 = tt.descriptor_load %31[%c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<tensor<4x64x32xf16>> -> tensor<4x64x32xf16, #dot_a_3d>
-    // CHECK: tt.descriptor_store {{.*}} {ttig.block_io = "row_major"}
+    // CHECK: tt.descriptor_store {{.*}} {ttig.block_io = "row_major"{{.*}}}
     tt.descriptor_store %31[%c0_i32, %c0_i32, %c0_i32], %34 : !tt.tensordesc<tensor<4x64x32xf16>> , tensor<4x64x32xf16, #dot_a_3d>
     tt.return
   }

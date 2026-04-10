@@ -337,9 +337,8 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
     // CHECK:           %[[VAL_155:.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK:           %[[VAL_156:.*]] = llvm.mlir.constant(8 : i32) : i32
     // CHECK:           %[[VAL_157:.*]] = llvm.and %[[VAL_154]], %[[VAL_156]]  : i32
-    // CHECK:           %[[VAL_158:.*]] = llvm.icmp "eq" %[[VAL_157]], %[[VAL_155]] : i32
-    // CHECK:           %[[VAL_159:.*]] = llvm.mlir.constant(2 : i32) : i32
-    // CHECK:           %[[VAL_160:.*]] = llvm.select %[[VAL_158]], %[[VAL_155]], %[[VAL_159]] : i1, i32
+    // CHECK:           %[[VAL_158:.*]] = llvm.mlir.constant(2 : i32) : i32
+    // CHECK:           %[[VAL_160:.*]] = llvm.lshr %[[VAL_157]], %[[VAL_158]] : i32
     // CHECK:           %[[VAL_161:.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK:           %[[VAL_162:.*]] = llvm.or disjoint %[[VAL_160]], %[[VAL_161]] : i32
     // CHECK:           %[[VAL_163:.*]] = llvm.xor %[[VAL_150]], %[[VAL_162]]  : i32

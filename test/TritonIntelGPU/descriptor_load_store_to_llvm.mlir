@@ -1,4 +1,4 @@
-// RUN: TRITON_INTEL_PREDICATED_LOAD=1 TRITON_INTEL_PREDICATED_STORE=1 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s
+// RUN: env TRITON_INTEL_PREDICATED_LOAD=1 env TRITON_INTEL_PREDICATED_STORE=1 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s
 
 // Test that tt.descriptor_load and tt.descriptor_store are converted to LLVM
 // gather loads/stores when going through the Intel GPU to LLVM conversion.

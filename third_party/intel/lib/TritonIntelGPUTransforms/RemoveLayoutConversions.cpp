@@ -20,15 +20,12 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
-#include "intel/include/Utils/Utility.h"
-
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
-#include "llvm/ADT/TypeSwitch.h"
 #include <deque>
 
 namespace mlir::triton::gpu::intel {
@@ -178,9 +175,6 @@ public:
   void rewriteConditionOp(scf::ConditionOp conditionOp);
   void rewriteReduceToScalar(Operation *reduceOp);
   void rewriteAssertOp(tt::AssertOp assertOp);
-  // Rewrite a StoreOp with the forwarded DPAS layout if applicable.
-  // return true if the StoreOp has been rewritten.
-  bool rewriteTensorPtrStoreOp(tt::StoreOp storeOp);
   bool rewriteStoreOp(tt::StoreOp storeOp);
   bool rewriteDescriptorStoreOp(tt::DescriptorStoreOp storeOp);
   Attribute getEncodingBeforeRewrite(Value value) const;
@@ -233,8 +227,8 @@ public:
                           std::function<bool(Operation *)> stopPropagation);
 
   LogicalResult getRematerializableSlice(
-      OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
-      DenseMap<Value, Attribute> &layout,
+      OpOperand &root, Attribute rootEncoding, SetVector<Value> &sliceArg,
+      DenseMap<Value, Attribute> &layoutArg,
       std::function<bool(Operation *)> stopPropagation = nullptr);
 
 private:
@@ -300,7 +294,6 @@ private:
   void forwardPropagateRemat(DenseMap<Value, Attribute> &values);
 
   void updateRematMapping(SmallVector<std::tuple<Value, Value>> &values);
-  bool reduceLoopCarriedValues();
 
   // Existing tuples of (value, layout) that needs to be updated when recreating
   // scf ops. This prevents keeping track of Values that have been delete when
@@ -814,144 +807,7 @@ void LayoutPropagation::rewriteAssertOp(tt::AssertOp assertOp) {
   assertOp->setOperand(0, newOperand);
 }
 
-// Recursively update the operands in a chain of AdvanceOps, after setting the
-// pointer operand of the first one.
-static void updateAdvanceOpChain(tt::AdvanceOp advanceOp, tt::StoreOp storeOp,
-                                 Value parentPtr, Value dataToStore) {
-  OpBuilder rewriter(advanceOp);
-  auto newAdvanceOp =
-      tt::AdvanceOp::create(rewriter, advanceOp.getLoc(), parentPtr.getType(),
-                            parentPtr, advanceOp.getOffsets());
-
-  SmallVector<Operation *> advanceOpUsers(advanceOp->getUsers());
-  for (Operation *user : advanceOpUsers) {
-    if (auto storeUser = dyn_cast<tt::StoreOp>(user)) {
-      if (storeUser == storeOp) {
-        storeOp.setOperand(0, newAdvanceOp);
-        storeOp.setOperand(1, dataToStore);
-      }
-    } else if (auto loadUser = dyn_cast<tt::LoadOp>(user)) {
-      // The inconsistency will be corrected in the subsequent code,
-      // however, there is room for improvement.
-      continue;
-    } else if (auto nextAdvanceOp = dyn_cast<tt::AdvanceOp>(user)) {
-      updateAdvanceOpChain(nextAdvanceOp, storeOp, newAdvanceOp, dataToStore);
-    } else {
-      llvm::errs() << "user: " << *user << "\n";
-      llvm_unreachable("Unexpected user");
-    }
-  }
-}
-
-bool LayoutPropagation::rewriteTensorPtrStoreOp(tt::StoreOp storeOp) {
-  // Disable 2D block store on LTS.
-  if (!storeOp->getParentOfType<ModuleOp>()->hasAttr(
-          ttgi::TritonIntelGPUDialect::getSupport2DBlockIOAttrName()))
-    return false;
-
-  // If storeOp is a pointer to a tensor, we try to find out if the
-  // data has initially a DPAS encoding and forward it to the StoreOp
-  // to enable 2D block store.
-  Value ptr = storeOp.getPtr();
-  if (!tt::isTensorPointerType(ptr.getType()))
-    return false;
-
-  // Locate the operation that created the block pointer.
-  std::optional<tt::MakeTensorPtrOp> defOp =
-      tt::intel::findDefiningOpOfType<tt::MakeTensorPtrOp>(ptr);
-  if (!defOp)
-    return false;
-
-  triton::MakeTensorPtrOp makeTensorPtrOp = *defOp;
-
-  // DPAS encoding have to be propagated if conversion from a DPAS layout to
-  // another layout has been done before.
-  auto convertOp = storeOp.getValue().getDefiningOp<ttg::ConvertLayoutOp>();
-  tt::PointerType newPtrType;
-  Attribute encoding;
-  Value value;
-  if (!convertOp) {
-    // If the Defining op is not a ConvertLayoutOp that means that conversion
-    // has not been hoisted out of the loop yet.
-    // We try then to find the layout in the map of the processed layouts.
-    value = storeOp.getValue();
-    auto it = layouts.find(value);
-    if (it == layouts.end())
-      return false;
-
-    encoding = *(it->second.encodings.begin());
-
-    if (!isa<ttgi::DpasEncodingAttr>(encoding))
-      return false;
-
-    auto ptrType = cast<tt::PointerType>(makeTensorPtrOp.getType());
-    auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
-
-    auto tmpType = tensorType.cloneWithEncoding(encoding);
-    newPtrType = tt::PointerType::get(tmpType, ptrType.getAddressSpace());
-  } else {
-    RankedTensorType convertOpSrcType = convertOp.getSrc().getType();
-
-    auto ptrType = cast<tt::PointerType>(makeTensorPtrOp.getType());
-    newPtrType =
-        tt::PointerType::get(convertOpSrcType, ptrType.getAddressSpace());
-
-    value = convertOp.getSrc();
-    encoding = convertOpSrcType.getEncoding();
-  }
-
-  // Create a new MakeTensorPtrOp with the new layout.
-  OpBuilder rewriter(makeTensorPtrOp);
-  Value newMakeTensorPtrOp = tt::MakeTensorPtrOp::create(
-      rewriter, makeTensorPtrOp.getLoc(), newPtrType, makeTensorPtrOp.getBase(),
-      makeTensorPtrOp.getShape(), makeTensorPtrOp.getStrides(),
-      makeTensorPtrOp.getOffsets(), makeTensorPtrOp.getOrderAttr());
-
-  // Update the store operation with the new layout.
-  SmallVector<Operation *> makeTensorPtrOpUsers(makeTensorPtrOp->getUsers());
-  Value dataToStore = getValueAs(value, encoding);
-  for (Operation *user : makeTensorPtrOpUsers) {
-    if (auto storeUser = dyn_cast<tt::StoreOp>(user)) {
-      if (storeUser == storeOp) {
-        storeOp.setOperand(0, newMakeTensorPtrOp);
-        storeOp.setOperand(1, dataToStore);
-      }
-    } else if (auto advanceOp = dyn_cast<tt::AdvanceOp>(user)) {
-      SmallPtrSet<Operation *, 2> visited;
-      std::function<bool(tt::AdvanceOp)> chainIsTerminatedByCurrentStore =
-          [&](tt::AdvanceOp advanceOp) {
-            if (!visited.insert(advanceOp.getOperation()).second)
-              return false; // Already visited, avoid cycles
-
-            for (Operation *user : advanceOp->getUsers()) {
-              if (isa<tt::StoreOp>(user) && cast<tt::StoreOp>(user) == storeOp)
-                return true;
-              if (auto nextAdvanceOp = dyn_cast<tt::AdvanceOp>(user))
-                if (chainIsTerminatedByCurrentStore(nextAdvanceOp))
-                  return true;
-            }
-            return false;
-          };
-
-      if (chainIsTerminatedByCurrentStore(advanceOp))
-        updateAdvanceOpChain(advanceOp, storeOp, newMakeTensorPtrOp,
-                             dataToStore);
-    }
-  }
-
-  // If the DPAS encoding is forwarded, we do not need the
-  // convertOp anymore if the convertOp was only used by the
-  // storeOp. Same for the initial MakeTensorPtrOp, if it was
-  // only used by the storeOp. If this is the case, these
-  // instructions are removed by the clean-up step performed at
-  // the end of this pass (step 4).
-  return true;
-}
-
 bool LayoutPropagation::rewriteStoreOp(tt::StoreOp storeOp) {
-  if (rewriteTensorPtrStoreOp(storeOp))
-    return true;
-
   Operation *op = storeOp.getOperation();
   llvm::MutableArrayRef<OpOperand> operands = op->getOpOperands();
   // Check if all store op operands should use new encoding.
@@ -1042,6 +898,8 @@ bool canBeRemat(Operation *op) {
     return false;
   if (auto gather = dyn_cast<tt::GatherOp>(op))
     return !gather.getEfficientLayout();
+  if (auto reshape = dyn_cast<tt::ReshapeOp>(op))
+    return !reshape.getEfficientLayout();
 
   if (isa<scf::WhileOp, scf::ConditionOp>(op))
     return false;
@@ -1077,105 +935,6 @@ void LayoutRematerialization::updateRematMapping(
         mappedValues[newV] = std::move(encodings);
     }
   }
-}
-
-/// Reduce loop carried values if the value is used after the loop and can be
-/// removed by using another loop yielded value plus a convert layout operation.
-bool LayoutRematerialization::reduceLoopCarriedValues() {
-  bool changed = false;
-  for (auto [pair, val] : rematMapping) {
-    auto arg = dyn_cast<BlockArgument>(pair.first);
-    if (!arg)
-      continue;
-
-    if (!tt::isTensorPointerType(arg.getType()))
-      continue;
-
-    auto loopOp = dyn_cast<LoopLikeOpInterface>(arg.getOwner()->getParentOp());
-    if (!loopOp)
-      continue;
-
-    // Loop arguments that corresponds to a loop result which is not used are
-    // not interesting.
-    OpResult loopRes = loopOp.getTiedLoopResult(arg);
-    if (loopRes.getNumUses() == 0)
-      continue;
-
-    std::function<void(Operation *, Value)> processUser = [&](Operation *user,
-                                                              Value rematRes) {
-      Location loc = user->getLoc();
-      OpBuilder rewriter(user);
-
-      TypeSwitch<Operation *>(user)
-          .Case<tt::LoadOp>([&](auto loadOp) {
-            auto newLoadOp =
-                tt::LoadOp::create(rewriter, loc, rematRes, loadOp->getAttrs());
-            auto convOp = ttg::ConvertLayoutOp::create(
-                rewriter, loc, loadOp.getType(), newLoadOp.getResult());
-            loadOp->replaceAllUsesWith(convOp);
-            opToDelete.insert(loadOp);
-            changed = true;
-            LLVM_DEBUG({
-              DBGS() << "Replaced:\n\t" << *loadOp << "\n"
-                     << "with:\n\t" << *newLoadOp << "\n"
-                     << "\t" << *convOp << "\n";
-            });
-          })
-          .Case<tt::StoreOp>([&](auto storeOp) {
-            Value data = storeOp.getOperand(1);
-            auto dataType = cast<RankedTensorType>(data.getType());
-            auto newPtrType = cast<tt::PointerType>(rematRes.getType());
-            Attribute encoding =
-                cast<RankedTensorType>(newPtrType.getPointeeType())
-                    .getEncoding();
-            RankedTensorType newDataType = dataType.cloneWithEncoding(encoding);
-            auto convOp =
-                ttg::ConvertLayoutOp::create(rewriter, loc, newDataType, data);
-            auto newStoreOp = tt::StoreOp::create(
-                rewriter, loc, rematRes, convOp, storeOp.getBoundaryCheck(),
-                storeOp.getCache(), storeOp.getEvict());
-            opToDelete.insert(storeOp);
-            changed = true;
-            LLVM_DEBUG({
-              DBGS() << "Replaced:\n\t" << *storeOp << "\n"
-                     << "with:\n\t" << *convOp << "\n"
-                     << "\t" << *newStoreOp << "\n";
-            });
-          })
-          .Case<tt::AdvanceOp>([&](auto advanceOp) {
-            auto newAdvanceOp =
-                tt::AdvanceOp::create(rewriter, loc, rematRes.getType(),
-                                      rematRes, advanceOp.getOffsets());
-            opToDelete.insert(advanceOp);
-            changed = true;
-            LLVM_DEBUG({
-              DBGS() << "Replaced:\n\t" << *advanceOp << "\n"
-                     << "with:\n\t" << *newAdvanceOp << "\n";
-            });
-
-            for (Operation *user : advanceOp->getUsers())
-              processUser(user, newAdvanceOp.getResult());
-          })
-          .Case<scf::ForOp>([&](auto forOp) {
-            LLVM_DEBUG({
-              DBGS() << "Skipping rematerialization for scf.for users: "
-                     << *forOp << "\n";
-            });
-          })
-          .Default([](auto op) {
-            llvm::report_fatal_error(llvm::Twine(
-                "Unsupported operation in backward rematerialization: '" +
-                op->getName().getStringRef() + "'"));
-          });
-    };
-
-    // Replace the loop result corresponding to the argument with an
-    // equivalent loop result.
-    OpResult rematRes = loopOp.getTiedLoopResult(cast<BlockArgument>(val));
-    for (Operation *user : loopRes.getUsers())
-      processUser(user, rematRes);
-  }
-  return changed;
 }
 
 void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
@@ -1318,17 +1077,9 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
           auto it = layout.find(res);
           assert(it != layout.end());
 
-          Type resType = res.getType();
-          if (auto oldType = dyn_cast<RankedTensorType>(resType)) {
-            Type newType = oldType.cloneWithEncoding(it->second);
-            newTypes.push_back(newType);
-          } else if (auto ptrType = dyn_cast<tt::PointerType>(resType)) {
-            auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
-            Type newType = triton::PointerType::get(
-                tensorType.cloneWithEncoding(it->second),
-                ptrType.getAddressSpace());
-            newTypes.push_back(newType);
-          }
+          auto oldType = cast<RankedTensorType>(res.getType());
+          Type newType = oldType.cloneWithEncoding(it->second);
+          newTypes.push_back(newType);
         }
       }
       scf::IfOp newIfOp =
@@ -1380,18 +1131,8 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
       auto it = layout.find(old);
       if (it == layout.end())
         continue;
-      Type oldType = old.getType();
-      Type newType;
-      if (tt::isTensorPointerType(oldType)) {
-        auto ptrType = cast<tt::PointerType>(oldType);
-        auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
-        newType =
-            triton::PointerType::get(tensorType.cloneWithEncoding(it->second),
-                                     ptrType.getAddressSpace());
-      } else {
-        newType =
-            cast<RankedTensorType>(old.getType()).cloneWithEncoding(it->second);
-      }
+      auto newType =
+          cast<RankedTensorType>(old.getType()).cloneWithEncoding(it->second);
       newV.setType(newType);
       addRematValue(old, it->second, newV);
     }
@@ -1626,9 +1367,13 @@ LogicalResult LayoutRematerialization::getConvertBackwardSlice(
 }
 
 LogicalResult LayoutRematerialization::getRematerializableSlice(
-    OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
-    DenseMap<Value, Attribute> &layout,
+    OpOperand &root, Attribute rootEncoding, SetVector<Value> &sliceArg,
+    DenseMap<Value, Attribute> &layoutArg,
     std::function<bool(Operation *)> stopPropagation) {
+  // Operate on copies of the input, we do not want to modify them unless we
+  // have succeeded.
+  SetVector<Value> slice = sliceArg;
+  DenseMap<Value, Attribute> layout = layoutArg;
   LogicalResult result = getConvertBackwardSlice(root, rootEncoding, slice,
                                                  layout, stopPropagation);
   if (result.failed() || slice.empty())
@@ -1641,6 +1386,8 @@ LogicalResult LayoutRematerialization::getRematerializableSlice(
         return failure();
     }
   }
+  sliceArg = std::move(slice);
+  layoutArg = std::move(layout);
   return success();
 }
 
@@ -1662,7 +1409,6 @@ bool LayoutRematerialization::backwardRematerialization() {
     }
   }
 
-  changed |= reduceLoopCarriedValues();
   return changed;
 }
 
@@ -2128,6 +1874,18 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   Attribute srcEncoding = ttgi::inferSrcEncoding(extOrBroadcastOp, dstEncoding);
   if (!srcEncoding)
     return;
+  // Check that hoisting the convert is actually beneficial.
+  // When the ext/broadcast doesn't increase the byte count (e.g.,
+  // tt.expand_dims adds a unit dimension), newCvtCost == originalCvtCost and
+  // even tiny slice duplication costs would incorrectly block the hoist.
+  // Only apply the cost gate when the new convert is strictly more expensive.
+
+  int64_t newCvtCost = getConvertCost(extOrBroadcastOp->getOperand(0));
+  int64_t originalCvtCost = getConvertCost(convertOp.getSrc());
+  if (newCvtCost > originalCvtCost &&
+      !isRematBeneficial(convertOp, slice, newCvtCost))
+    return;
+
   // Move the convert before the ext op and rewrite the slice.
   OpBuilder builder(extOrBroadcastOp);
   auto tensorType =
@@ -2344,9 +2102,9 @@ public:
     // operation to avoid having to convert. Iterate until a fixed point since
     // one rematerialization may expose new opportunities.
     // Use an iteration cap as a safety guard: Intel-specific extensions
-    // (reduceLoopCarriedValues, forwardPropagateRemat) can create new
-    // ConvertLayoutOps during each iteration, so bound the loop to prevent
-    // non-termination in pathological cases.
+    // (forwardPropagateRemat) can create new ConvertLayoutOps during each
+    // iteration, so bound the loop to prevent non-termination in pathological
+    // cases.
     // TODO: Increase the default once the IGC crash on paged-attention kernels
     // is resolved (see
     // https://github.com/intel/intel-xpu-backend-for-triton/issues/6447).

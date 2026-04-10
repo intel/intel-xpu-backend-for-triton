@@ -106,10 +106,10 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::registerConvertTritonToTritonGPUPass();
   mlir::triton::intel::registerTritonIntelFuseReshape();
   mlir::triton::intel::registerTritonIntelRemoveMasks();
+  mlir::triton::intel::registerTritonIntelRewriteTensorPointer();
   mlir::triton::intel::registerTritonIntelStrideVersioning();
   mlir::triton::intel::registerTritonIntelBlockPointerToTensorDesc();
   mlir::triton::intel::registerTritonIntelSimplifySignedArithmetic();
-  mlir::triton::intel::registerTritonIntelTensorDescToBlockPointer();
   mlir::triton::intel::registerTritonRewriteTensorDescriptorToPointer();
   mlir::triton::registerRelayoutTritonGPUPass();
   mlir::triton::gpu::registerAllocateSharedMemoryPass();
@@ -147,6 +147,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
 
   // TritonAMDGPUTransforms passes
   mlir::registerTritonAMDGPUAccelerateMatmul();
+  mlir::registerTritonAMDGPUOptimizeDescriptorEncoding();
   mlir::registerTritonAMDGPUOptimizeEpilogue();
   mlir::registerTritonAMDGPUHoistLayoutConversions();
   mlir::registerTritonAMDGPUSinkLayoutConversions();
@@ -168,6 +169,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::registerTritonAMDFoldTrueCmpI();
   mlir::registerTritonAMDGPUFpSanitizer();
   mlir::triton::amdgpu::registerTritonAMDGPUOptimizeDotOperands();
+  mlir::registerConSanAMDHooks();
 
   // NVWS passes
   mlir::triton::registerNVWSTransformsPasses();
@@ -184,32 +186,10 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::proton::gpu::registerScheduleBufferStorePass();
   mlir::triton::proton::gpu::registerAddSchedBarriersPass();
 
-  // Plugin passes
-  if (std::string filename =
-          mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
-      !filename.empty()) {
-
-    TritonPlugin TP(filename);
-    std::vector<const char *> passNames;
-    if (auto result = TP.getPassHandles(passNames); !result)
-      llvm::report_fatal_error(result.takeError());
-
-    for (const char *passName : passNames)
-      if (auto result = TP.registerPass(passName); !result)
-        llvm::report_fatal_error(result.takeError());
-
-    std::vector<const char *> dialectNames;
-    if (auto result = TP.getDialectHandles(dialectNames); !result)
-      llvm::report_fatal_error(result.takeError());
-
-    for (unsigned i = 0; i < dialectNames.size(); ++i) {
-      const char *dialectName = dialectNames.data()[i];
-      auto result = TP.getDialectPluginInfo(dialectName);
-      if (!result)
-        llvm::report_fatal_error(result.takeError());
-      ::mlir::DialectPluginLibraryInfo dialectPluginInfo = *result;
-      dialectPluginInfo.registerDialectRegistryCallbacks(&registry);
-    }
+  // Register plugin passes and dialects.
+  for (const auto &plugin : mlir::triton::plugin::loadPlugins()) {
+    plugin.registerPasses();
+    plugin.registerDialects(registry);
   }
 
   registry.insert<

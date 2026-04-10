@@ -37,21 +37,6 @@ def TritonIntelBlockPointerToTensorDesc
   ];
 }
 
-def TritonIntelTensorDescToBlockPointer
-    : Pass<"triton-intel-tdesc-to-block-pointer", "mlir::ModuleOp"> {
-  let summary = "Convert tensor descriptors into block pointers";
-
-  let description = [{
-    This pass attempts to convert tensor descriptors into block pointers.
-  }];
-
-  let dependentDialects = [
-    "mlir::arith::ArithDialect",
-    "mlir::scf::SCFDialect",
-    "mlir::triton::TritonDialect"
-  ];
-}
-
 def TritonIntelRemoveMasks
     : Pass<"triton-intel-remove-masks", "mlir::ModuleOp"> {
   let summary = "Remove masks from tt.load and tt.store operations";
@@ -166,6 +151,18 @@ def TritonIntelSimplifySignedArithmetic
   let dependentDialects = [
     "mlir::triton::TritonDialect"
   ];
+}
+
+def TritonIntelRewriteTensorPointer
+    : Pass<"triton-intel-rewrite-tensor-pointer", "mlir::ModuleOp"> {
+  let summary = "Rewrite load/stores with tensor pointers into legacy load/stores";
+  let description = [{
+    This pass rewrites all load/store semantics initiated by a `tt.make_tensor_ptr` and `tt.advance` into legacy
+    semantics. After this pass, `tt.make_tensor_ptr` and `tt.advance` will disappear, and it generates logics to compute
+    the pointer/mask/other for each load/store.
+  }];
+
+  let dependentDialects = ["mlir::triton::TritonDialect"];
 }
 
 #endif // TRITON_DIALECT_TRITON_INTEL_TRANSFORMS_PASSES

@@ -59,8 +59,6 @@ static uint32_t findKernels(llvm::Module &M,
 void init_triton_intel_passes_ttir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_convert_block_pointer_to_tdesc",
                      intel::createTritonIntelBlockPointerToTensorDesc);
-  ADD_PASS_WRAPPER_0("add_convert_tdesc_to_block_pointer",
-                     intel::createTritonIntelTensorDescToBlockPointer);
   ADD_PASS_WRAPPER_0("add_rewrite_tensor_descriptor_to_pointer",
                      intel::createTritonRewriteTensorDescriptorToPointer);
   ADD_PASS_WRAPPER_0("add_remove_masks", intel::createTritonIntelRemoveMasks);
@@ -69,6 +67,8 @@ void init_triton_intel_passes_ttir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_fuse_reshape", intel::createTritonIntelFuseReshape);
   ADD_PASS_WRAPPER_0("add_simplify_signed_arithmetic",
                      intel::createTritonIntelSimplifySignedArithmetic);
+  ADD_PASS_WRAPPER_0("add_rewrite_tensor_pointer",
+                     intel::createTritonIntelRewriteTensorPointer);
 }
 
 void init_triton_intel_passes_ttgpuir(py::module &&m) {

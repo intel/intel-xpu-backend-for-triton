@@ -1,5 +1,5 @@
-// RUN: TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=0 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefixes=CHECK,DPAS-LAYOUT
-// RUN: TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=1 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefixes=CHECK,ALL-LAYOUT
+// RUN: env TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=0 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefixes=CHECK,DPAS-LAYOUT
+// RUN: env TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=1 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefixes=CHECK,ALL-LAYOUT
 
 // Test: MakeTensorDescOp lowers to LLVM struct packing and
 // DescriptorLoadOp with dot_op A encoding generates 2D block loads.
@@ -28,6 +28,23 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 
 // -----
 
+// COM: Descriptor load with NaN padding generates 2D block load + NaN select.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @descriptor_load_nan_padding
+  tt.func public @descriptor_load_nan_padding(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i32, %arg5: i32) {
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] {padding = 2 : i32} : <f16>, <tensor<64x32xf16>>
+    // CHECK: triton_gen.2Dblockload
+    // CHECK: llvm.select
+    %load = tt.descriptor_load %desc[%arg4, %arg5] {ttig.block_io = "row_major", ttig.desc_padding = 2 : i32} : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #dot0>
+    tt.return
+  }
+}
+
+// -----
+
 // COM: Regression test for rank-reducing descriptor load. The descriptor has
 // COM: rank 3 while the load result has rank 2. This used to assert in
 // COM: ConvertTritonIntelGPUToLLVM descriptor unpacking.
@@ -46,6 +63,42 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 
     %desc = tt.make_tensor_descriptor %arg0, [%c1_i32, %arg1, %arg2], [%arg3, %c1_i64, %c1_i64] : <f16>, <tensor<1x64x32xf16>>
     %load = tt.descriptor_load %desc[%c0_i32, %arg4, %arg5] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<1x64x32xf16>> -> tensor<64x32xf16, #dot0>
+    tt.return
+  }
+}
+
+// -----
+
+// Test: Descriptor load pre-applies 64-byte alignment compensation to the base
+// pointer and column offset. This ensures multi-tile loads build tile offsets
+// relative to an alignment-adjusted base, preventing LLVM from factoring out
+// a suboptimal common subexpression across operand loads.
+
+#dpas_align = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0_align = #ttg.dot_op<{opIdx = 0, parent = #dpas_align, kWidth=1}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @descriptor_load_pre_alignment
+  tt.func public @descriptor_load_pre_alignment(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i32, %arg5: i32) {
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <tensor<64x32xf16>>
+
+    // Verify base pointer alignment: ptr & ~0x3f (clear lower 6 bits).
+    // CHECK: %[[BASE:.*]] = llvm.extractvalue {{.*}}[4]
+    // CHECK: %[[ADDR:.*]] = llvm.ptrtoint %[[BASE]] : !llvm.ptr<1> to i64
+    // CHECK: %[[ALIGNED_ADDR:.*]] = llvm.and %[[ADDR]], {{.*}} : i64
+    // CHECK: %[[ALIGNED_PTR:.*]] = llvm.inttoptr %[[ALIGNED_ADDR]] : i64 to !llvm.ptr<1>
+
+    // Verify offset extraction and column index adjustment.
+    // CHECK: %[[OFFSET_BYTES:.*]] = llvm.and %[[ADDR]], {{.*}} : i64
+    // CHECK: %[[OFFSET_I32:.*]] = llvm.trunc %[[OFFSET_BYTES]] : i64 to i32
+    // CHECK: %[[MISALIGN_ELEMS:.*]] = llvm.udiv %[[OFFSET_I32]]
+    // CHECK: %[[ADJ_BASE_WIDTH:.*]] = llvm.add {{.*}}, %[[OFFSET_I32]]
+    // CHECK: %[[ADJ_COL:.*]] = llvm.add %{{.*}}, %[[MISALIGN_ELEMS]]
+
+    // Verify both 2D block loads use the aligned pointer and adjusted width.
+    // CHECK: triton_gen.2Dblockload %[[ALIGNED_PTR]], %[[ADJ_BASE_WIDTH]]
+    // CHECK: triton_gen.2Dblockload %[[ALIGNED_PTR]], %[[ADJ_BASE_WIDTH]]
+    %load = tt.descriptor_load %desc[%arg4, %arg5] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #dot0_align>
     tt.return
   }
 }
@@ -306,22 +359,6 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <tensor<32x64xf16>>
     // CHECK-COUNT-2: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 1, transpose = false, vnni_transform = true, cache_control = Default}
     %load = tt.descriptor_load %desc[%arg4, %arg5] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<32x64xf16>> -> tensor<32x64xf16, #dot1>
-    tt.return
-  }
-}
-
-// -----
-
-// COM: Test that when a column_major tt.descriptor_load is present but descriptor is not traceable to
-// COM: a MakeTensorDescOp (passed as function argument) the code generated uses the "gather path".
-#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
-#dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>
-module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
-  // CHECK-LABEL: @descriptor_load_column_major_fallback
-  tt.func public @descriptor_load_column_major_fallback(%desc: !tt.tensordesc<tensor<64x32xf16>>, %row: i32, %col: i32) {
-    // CHECK-NOT: triton_gen.2Dblockload
-    // CHECK: llvm.getelementptr
-    %load = tt.descriptor_load %desc[%row, %col] {ttig.block_io = "column_major"} : !tt.tensordesc<tensor<64x32xf16>> -> tensor<32x64xf16, #dot1>
     tt.return
   }
 }
