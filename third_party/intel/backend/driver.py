@@ -991,10 +991,9 @@ def _make_generic_launcher(constants, signature):
 
     # Fetch the precompiled launch function once at launcher-creation time,
     # matching the pattern used by CudaLauncher (utils.launch stored at init).
-    # Note: the static icpx-compiled launcher validates pointer args via
-    # zeMemGetAllocProperties.  That check is intentionally omitted here;
-    # the trade-off is faster launch (no Level Zero round-trip per pointer arg)
-    # at the cost of a less informative error on an invalid pointer.
+    # Note: like the static icpx-compiled launcher, generic_launch validates
+    # pointer args via zeMemGetAllocProperties by default.  Set
+    # TRITON_XPU_VALIDATE_POINTERS=0 to skip validation for faster launch.
     generic_launch_fn = triton.runtime.driver.active.utils.generic_launch
     if generic_launch_fn is None:
         raise RuntimeError("generic_launch not available in the XPU driver shared library. "

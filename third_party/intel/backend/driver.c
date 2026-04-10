@@ -658,10 +658,67 @@ extern "C" EXPORT_FUNC PyObject *generic_launch(PyObject *args) {
     return NULL;
   }
 
+  // Pointer validation: matches the per-kernel compiled launcher's
+  // checkDevicePointer behaviour.  Enabled by default; set
+  // TRITON_XPU_VALIDATE_POINTERS=0 to skip (faster launch, no Level Zero
+  // round-trip per pointer arg, but invalid pointers become hard crashes).
+  static bool validatePtrs = []() {
+    const char *s = std::getenv("TRITON_XPU_VALIDATE_POINTERS");
+    if (!s)
+      return true; // default: on
+    std::string v(s);
+    std::transform(v.begin(), v.end(), v.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    return !(v == "0" || v == "false" || v == "off");
+  }();
+  if (validatePtrs) {
+    auto l0Context = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(
+        stream.get_context());
+    int nArgsCheck = (int)typeBuf.len;
+    for (int i = 0; i < nArgsCheck; ++i) {
+      if (types[i] != ARG_PTR)
+        continue;
+      void *ptr;
+      memcpy(&ptr, vals + i * 8, sizeof(ptr));
+      if (!ptr)
+        continue;
+      ze_memory_allocation_properties_t prop = {};
+      prop.stype = ZE_STRUCTURE_TYPE_MEMORY_ALLOCATION_PROPERTIES;
+      ze_device_handle_t device;
+      ze_result_t res = zeMemGetAllocProperties((ze_context_handle_t)l0Context,
+                                                ptr, &prop, &device);
+      if (res != ZE_RESULT_SUCCESS) {
+        releaseBuffers();
+        PyErr_Format(PyExc_ValueError,
+                     "Cannot get memory properties for Pointer argument "
+                     "(at %d, err=%d)",
+                     i, (int)res);
+        return NULL;
+      }
+      if (prop.type == ZE_MEMORY_TYPE_UNKNOWN) {
+        releaseBuffers();
+        PyErr_Format(PyExc_ValueError,
+                     "Pointer argument (at %d) doesn't reference "
+                     "accessible memory.",
+                     i);
+        return NULL;
+      }
+    }
+  }
+
   // Validate arg count: user args + global_scratch + profile_scratch [+ slm].
   int nArgs = (int)typeBuf.len;
   int expectedArgs = nArgs + 2 + (sharedMemory ? 1 : 0);
-  int kernelArgs = (int)kernel.get_info<sycl::info::kernel::num_args>();
+  int kernelArgs = 0;
+  try {
+    kernelArgs = (int)kernel.get_info<sycl::info::kernel::num_args>();
+  } catch (const sycl::exception &e) {
+    releaseBuffers();
+    PyErr_Format(PyExc_RuntimeError,
+                 "generic_launch: failed to query kernel arg count: %s",
+                 e.what());
+    return NULL;
+  }
   if (expectedArgs != kernelArgs) {
     releaseBuffers();
     PyErr_Format(PyExc_ValueError,
@@ -692,7 +749,14 @@ extern "C" EXPORT_FUNC PyObject *generic_launch(PyObject *args) {
     cgh.parallel_for(ndRange, kernel);
   };
 
-  stream.submit(cgf);
+  try {
+    stream.submit(cgf);
+  } catch (const sycl::exception &e) {
+    releaseBuffers();
+    PyErr_Format(PyExc_RuntimeError, "generic_launch: SYCL submit failed: %s",
+                 e.what());
+    return NULL;
+  }
 
   releaseBuffers();
 
