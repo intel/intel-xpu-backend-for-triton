@@ -10,12 +10,8 @@
 
 // RUN: triton-opt -split-input-file %s | FileCheck %s -allow-unused-prefixes --check-prefix=CHECK-BASE
 
-<<<<<<< HEAD
-// REQUIRES: plugins, shared-libs
-=======
-// REQUIRES: triton-ext-enabled
+// REQUIRES: plugins, triton-ext-enabled
 // XFAIL: *
->>>>>>> 6cb844590c72cd8e0e827007c2d5cd04fc64b1bb
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.target" = "cuda:80"} {
   // CHECK-PLUGIN: func @foo()

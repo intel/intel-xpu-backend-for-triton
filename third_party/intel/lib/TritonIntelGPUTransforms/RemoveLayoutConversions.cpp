@@ -227,8 +227,8 @@ public:
                           std::function<bool(Operation *)> stopPropagation);
 
   LogicalResult getRematerializableSlice(
-      OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
-      DenseMap<Value, Attribute> &layout,
+      OpOperand &root, Attribute rootEncoding, SetVector<Value> &sliceArg,
+      DenseMap<Value, Attribute> &layoutArg,
       std::function<bool(Operation *)> stopPropagation = nullptr);
 
 private:
@@ -898,6 +898,8 @@ bool canBeRemat(Operation *op) {
     return false;
   if (auto gather = dyn_cast<tt::GatherOp>(op))
     return !gather.getEfficientLayout();
+  if (auto reshape = dyn_cast<tt::ReshapeOp>(op))
+    return !reshape.getEfficientLayout();
 
   if (isa<scf::WhileOp, scf::ConditionOp>(op))
     return false;
@@ -1365,9 +1367,13 @@ LogicalResult LayoutRematerialization::getConvertBackwardSlice(
 }
 
 LogicalResult LayoutRematerialization::getRematerializableSlice(
-    OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
-    DenseMap<Value, Attribute> &layout,
+    OpOperand &root, Attribute rootEncoding, SetVector<Value> &sliceArg,
+    DenseMap<Value, Attribute> &layoutArg,
     std::function<bool(Operation *)> stopPropagation) {
+  // Operate on copies of the input, we do not want to modify them unless we
+  // have succeeded.
+  SetVector<Value> slice = sliceArg;
+  DenseMap<Value, Attribute> layout = layoutArg;
   LogicalResult result = getConvertBackwardSlice(root, rootEncoding, slice,
                                                  layout, stopPropagation);
   if (result.failed() || slice.empty())
@@ -1380,6 +1386,8 @@ LogicalResult LayoutRematerialization::getRematerializableSlice(
         return failure();
     }
   }
+  sliceArg = std::move(slice);
+  layoutArg = std::move(layout);
   return success();
 }
 
@@ -1866,6 +1874,18 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   Attribute srcEncoding = ttgi::inferSrcEncoding(extOrBroadcastOp, dstEncoding);
   if (!srcEncoding)
     return;
+  // Check that hoisting the convert is actually beneficial.
+  // When the ext/broadcast doesn't increase the byte count (e.g.,
+  // tt.expand_dims adds a unit dimension), newCvtCost == originalCvtCost and
+  // even tiny slice duplication costs would incorrectly block the hoist.
+  // Only apply the cost gate when the new convert is strictly more expensive.
+
+  int64_t newCvtCost = getConvertCost(extOrBroadcastOp->getOperand(0));
+  int64_t originalCvtCost = getConvertCost(convertOp.getSrc());
+  if (newCvtCost > originalCvtCost &&
+      !isRematBeneficial(convertOp, slice, newCvtCost))
+    return;
+
   // Move the convert before the ext op and rewrite the slice.
   OpBuilder builder(extOrBroadcastOp);
   auto tensorType =

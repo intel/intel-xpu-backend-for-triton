@@ -92,6 +92,12 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.block_io";
     }
 
+    /// Get the name of the attribute used to convey the stride (in elements)
+    /// for 2D block IO on stores reshaped from 1D tensor-of-pointers.
+    static constexpr llvm::StringRef getBlockIOStrideAttrName() {
+      return "ttig.block_io_stride";
+    }
+
     /// Get the name of the attribute used to specify the target architecture. This
     /// attribute matches architecture in a target triple used for the resulting LLVM
     /// IR module.
@@ -116,6 +122,12 @@ def TritonIntelGPU_Dialect : Dialect {
     /// should use 'one matrix per load'.
     static constexpr llvm::StringRef getOneMatrixPerLoadAttrName() {
       return "ttig.one_matrix_per_load";
+    }
+
+    /// Get the name of the attribute used to propagate the padding option
+    /// from MakeTensorDescOp to descriptor load/store operations.
+    static constexpr llvm::StringRef getDescPaddingAttrName() {
+      return "ttig.desc_padding";
     }
   }];
 

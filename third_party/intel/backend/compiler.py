@@ -50,7 +50,7 @@ class XPUOptions:
     extern_libs: dict = None
     debug: bool = False
     backend_name: str = 'intel'
-    sanitize_overflow: bool = False
+    sanitize_overflow: bool = True
     generate_native_code: bool = False
     arch: str = None
     instrumentation_mode: str = ""
@@ -166,10 +166,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             'has_subgroup_matrix_multiply_accumulate_tensor_float32', False)
         dev_prop['has_16bit_atomics'] = tgt_prop.get('has_16bit_atomics', False)
         dev_prop['has_2d_block_io'] = tgt_prop.get('has_2d_block_io', False)
-        dev_prop['has_bfloat16_arithmetic'] = tgt_prop.get('has_bfloat16_arithmetic', False)
-        dev_prop['has_bfloat16_conversion'] = tgt_prop.get('has_bfloat16_conversion', True)
-        dev_prop['has_predicated_io'] = tgt_prop.get('has_predicated_io',
-                                                     not self.is_lts(tgt_prop.get('driver_version')))
+        is_lts = self.is_lts(tgt_prop.get('driver_version'))
+        dev_prop['has_bfloat16_arithmetic'] = tgt_prop.get('has_bfloat16_arithmetic', not is_lts)
+        dev_prop['has_bfloat16_conversion'] = tgt_prop.get('has_bfloat16_conversion', False)
+        dev_prop['has_predicated_io'] = tgt_prop.get('has_predicated_io', not is_lts)
         dev_prop['has_subgroup_matrix_multiply_accumulate'] = tgt_prop.get('has_subgroup_matrix_multiply_accumulate',
                                                                            False)
         dev_prop['has_subgroup_scaled_matrix_multiply_accumulate'] = tgt_prop.get(
