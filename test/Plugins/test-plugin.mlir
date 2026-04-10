@@ -10,7 +10,7 @@
 
 // RUN: triton-opt -split-input-file %s | FileCheck %s -allow-unused-prefixes --check-prefix=CHECK-BASE
 
-// REQUIRES: plugins, triton-ext-enabled
+// REQUIRES: triton-ext-enabled
 // XFAIL: *
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.target" = "cuda:80"} {

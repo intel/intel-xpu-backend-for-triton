@@ -63,10 +63,6 @@ tools = [
     ToolSubst('%PYTHON', config.python_executable, unresolved='ignore'),
 ]
 
-# Example plugins are not built if TRITON_ENABLE_PLUGINS is OFF.
-if config.enable_plugins:
-    config.available_features.add("plugins")
-
 # Static libraries are not built if TRITON_EXT_ENABLED is ON.
 if config.triton_ext_enabled:
     config.available_features.add("triton-ext-enabled")
