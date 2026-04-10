@@ -166,13 +166,6 @@ private:
              MLIRContext *context) const {
     LDBG("Considering op: " << *op);
 
-    if constexpr (std::is_same_v<OpType, tt::LoadOp>) {
-      if (op.getMask()) {
-        LDBG("Load op has mask, skip block IO attribute");
-        return;
-      }
-    }
-
     Value ptr = op.getPtr();
     assert(!tt::isTensorPointerType(ptr.getType()) &&
            "Expected pointer refer to a tensor.");
@@ -275,19 +268,41 @@ private:
         ttgi::TritonIntelGPUDialect::getBlockIOAttrName();
     const bool isRowMajor =
         isMajor(tensorTy, rank - 1 /*fastChangeDim*/, *axisInfo);
-    if (isRowMajor)
+    if (isRowMajor) {
       op->setAttr(blockIOAttrName,
                   StringAttr::get(
                       op.getContext(),
                       ttgi::stringifyBlockIOMode(ttgi::BlockIOMode::RowMajor)));
+      return;
+    }
 
     const bool isColMajor =
         isMajor(tensorTy, rank - 2 /*fastChangeDim*/, *axisInfo);
-    if (isColMajor)
+    if (isColMajor) {
       op->setAttr(blockIOAttrName,
                   StringAttr::get(op.getContext(),
                                   ttgi::stringifyBlockIOMode(
                                       ttgi::BlockIOMode::ColumnMajor)));
+      return;
+    }
+
+    auto contiguousDim = [rank](RankedTensorType tensorTy,
+                                const tt::AxisInfo &axisInfo) {
+      for (int32_t dim = 0; dim < rank; ++dim) {
+        // Limit to full row being contiguous.
+        if (axisInfo.getContiguity(dim) == tensorTy.getDimSize(dim)) {
+          return dim;
+        }
+      }
+      return -1;
+    };
+
+    const int32_t contiguousDimVal = contiguousDim(tensorTy, *axisInfo);
+    if (contiguousDimVal >= 0) {
+      op->setAttr(
+          blockIOAttrName,
+          StringAttr::get(op.getContext(), std::to_string(contiguousDimVal)));
+    }
   }
 
   /// Look through cast wrappers (index_cast, extui, extsi, trunci, etc.)
