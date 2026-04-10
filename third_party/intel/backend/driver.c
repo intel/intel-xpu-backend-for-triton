@@ -659,13 +659,26 @@ extern "C" EXPORT_FUNC PyObject *generic_launch(PyObject *args) {
     return NULL;
   }
 
+  // Validate arg count: user args + global_scratch + profile_scratch [+ slm].
+  int nArgs = (int)typeBuf.len;
+  int expectedArgs = nArgs + 2 + (sharedMemory ? 1 : 0);
+  int kernelArgs =
+      (int)kernel.get_info<sycl::info::kernel::num_args>();
+  if (expectedArgs != kernelArgs) {
+    releaseBuffers();
+    PyErr_Format(PyExc_ValueError,
+                 "generic_launch: argument count mismatch: expected %d "
+                 "(user %d + implicit %d) but kernel has %d",
+                 expectedArgs, nArgs, expectedArgs - nArgs, kernelArgs);
+    return NULL;
+  }
+
   sycl::range<3> globalRange(gridZ, gridY,
                              (size_t)gridX * threadsPerWarp * numWarps);
   sycl::range<3> localRange(1, 1, (size_t)numWarps * threadsPerWarp);
   sycl::nd_range<3> ndRange(globalRange, localRange);
 
   auto cgf = [&](sycl::handler &cgh) {
-    int nArgs = (int)typeBuf.len;
     for (int i = 0; i < nArgs; ++i)
       setArgByType(cgh, i, types[i], vals + i * 8);
 
