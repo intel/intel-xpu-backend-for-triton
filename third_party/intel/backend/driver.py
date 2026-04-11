@@ -5,6 +5,7 @@ import sys
 import hashlib
 import shutil
 import ctypes
+import struct
 import sysconfig
 import tempfile
 from pathlib import Path
@@ -55,7 +56,7 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str]]:
     if oneapi_root:
         include_dir += [
             os.path.join(oneapi_root, "compiler/latest/include"),
-            os.path.join(oneapi_root, "compiler/latest/include/sycl")
+            os.path.join(oneapi_root, "compiler/latest/include/sycl"),
         ]
         sycl_dir = os.path.join(oneapi_root, "compiler/latest/lib")
         return include_dir, [sycl_dir]
@@ -96,7 +97,7 @@ class CompilationHelper:
         self._library_dir = None
         self._include_dir = None
         self._libsycl_dir = None
-        self.libraries = ['sycl', 'ze_loader']
+        self.libraries = ["sycl", "ze_loader"]
 
     @property
     def inject_pytorch_dep(self):
@@ -129,7 +130,7 @@ class CompilationHelper:
                 os.path.join(torch_path, "../../include/torch/csrc/api/include"),
             ]
             library_dir += [os.path.join(torch_path, "../../lib")]
-            self.libraries += ['torch']
+            self.libraries += ["torch"]
 
         self._library_dir = library_dir
         self._include_dir = include_dir
@@ -172,7 +173,7 @@ class ArchParser:
 
         return super().__getattribute__(name)
 
-    if os.name != 'nt':
+    if os.name != "nt":
 
         def __del__(self):
             if hasattr(self, "shared_library"):
@@ -199,10 +200,22 @@ class SpirvUtils:
         self.shared_library.get_device_properties.restype = ctypes.py_object
         self.shared_library.get_device_properties.argtypes = (ctypes.c_int, )
         self.shared_library.get_last_selected_build_flags.restype = ctypes.py_object
+        # generic_launch may not exist in older cached builds
+        if hasattr(self.shared_library, "generic_launch"):
+            self.shared_library.generic_launch.restype = ctypes.py_object
+            self.shared_library.generic_launch.argtypes = (ctypes.py_object, )
+            self.generic_launch = self.shared_library.generic_launch
+        else:
+            self.generic_launch = None
 
     def __getattribute__(self, name):
-        if name in ("get_device_properties", "init_devices", "wait_on_sycl_queue", "get_last_selected_build_flags",
-                    "sycl_queue_memset"):
+        if name in (
+                "get_device_properties",
+                "init_devices",
+                "wait_on_sycl_queue",
+                "get_last_selected_build_flags",
+                "sycl_queue_memset",
+        ):
             shared_library = super().__getattribute__("shared_library")
             return getattr(shared_library, name)
 
@@ -218,11 +231,12 @@ class SpirvUtils:
         except Exception as e:
             if str(e).startswith("ZE_"):
                 from triton.runtime.errors import IntelGPUError
+
                 raise IntelGPUError("Error during Intel load_binary: " + str(e)) from e
             else:
                 raise e
 
-    if os.name != 'nt':
+    if os.name != "nt":
 
         def __del__(self):
             if hasattr(self, "shared_library"):
@@ -254,7 +268,7 @@ class ExtensionUtils:
     def get_device_id(self, device_idx: int) -> int:
         return self.shared_library.get_device_id(device_idx)
 
-    if os.name != 'nt':
+    if os.name != "nt":
 
         def __del__(self):
             if hasattr(self, "shared_library"):
@@ -284,7 +298,7 @@ class TritonLauncher:
 
         return super().__getattribute__(name)
 
-    if os.name != 'nt':
+    if os.name != "nt":
 
         def __del__(self):
             if hasattr(self, "shared_library"):
@@ -319,20 +333,27 @@ def compile_module_from_src(src: str, name: str):
                 else:
                     extra_compiler_args += ["-Wl,-rpath," + dir for dir in COMPILATION_HELPER.libsycl_dir]
 
-            so = _build(name, src_path, tmpdir, COMPILATION_HELPER.library_dir, COMPILATION_HELPER.include_dir,
-                        COMPILATION_HELPER.libraries, ccflags=extra_compiler_args)
+            so = _build(
+                name,
+                src_path,
+                tmpdir,
+                COMPILATION_HELPER.library_dir,
+                COMPILATION_HELPER.include_dir,
+                COMPILATION_HELPER.libraries,
+                ccflags=extra_compiler_args,
+            )
             with open(so, "rb") as f:
                 cache_path = cache.put(f.read(), f"{name}{suffix}", binary=True)
 
-    if name == 'arch_utils':
+    if name == "arch_utils":
         return ArchParser(cache_path)
-    if name == 'spirv_utils':
+    if name == "spirv_utils":
         return SpirvUtils(cache_path)
-    if name == 'extension_utils_impl':
+    if name == "extension_utils_impl":
         return ExtensionUtils(cache_path)
-    if name == '__triton_launcher':
+    if name == "__triton_launcher":
         return TritonLauncher(cache_path)
-    if name == 'proton_utils':
+    if name == "proton_utils":
         return cache_path
 
     return _load_module_from_path(name, cache_path)
@@ -361,14 +382,17 @@ class XPUUtils(object):
         self.wait_on_sycl_queue = mod.wait_on_sycl_queue
         self.get_last_selected_build_flags = mod.get_last_selected_build_flags
         self.sycl_queue_memset = mod.sycl_queue_memset
+        self.generic_launch = getattr(mod, "generic_launch", None)
         self.unload_module = lambda module: None
 
     def get_current_device(self):
         import torch
+
         return torch.xpu.current_device()
 
     def get_sycl_queue(self):
         import torch
+
         return torch.xpu.current_stream().sycl_queue
 
     def wait(self):
@@ -385,7 +409,7 @@ class XPUUtils(object):
 
 
 def ty_to_cpp(ty):
-    if ty[0] == '*':
+    if ty[0] == "*":
         return "void*"
     return {
         "i1": "int8_t",
@@ -435,9 +459,9 @@ def make_launcher(constants, signature):
 
     def _extracted_type(ty):
         if isinstance(ty, tuple):
-            val = ','.join(map(_extracted_type, ty))
+            val = ",".join(map(_extracted_type, ty))
             return f"[{val}]"
-        if ty[0] == '*':
+        if ty[0] == "*":
             return "PyObject*"
         if ty in ("constexpr"):
             return "PyObject*"
@@ -445,9 +469,9 @@ def make_launcher(constants, signature):
 
     def format_of(ty):
         if isinstance(ty, tuple):
-            val = ''.join(map(format_of, ty))
+            val = "".join(map(format_of, ty))
             return f"({val})"
-        if ty[0] == '*':
+        if ty[0] == "*":
             return "O"
         if ty in ("constexpr"):
             return "O"
@@ -469,14 +493,14 @@ def make_launcher(constants, signature):
     expand_signature = upstream_expand_signature(signature.values(), tensordesc_meta=None, descriptor_type="*i8")
     signature = {i: s for i, s in enumerate(expand_signature)}
 
-    args_format = ''.join([format_of(ty) for ty in signature.values()])
+    args_format = "".join([format_of(ty) for ty in signature.values()])
     format = _BASE_ARGS_FORMAT + args_format
 
     flat_signature = []
     for sig in signature.values():
         _flatten_signature(sig, flat_signature)
     signature = {i: s for i, s in enumerate(flat_signature)}
-    args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
+    args_list = ", " + ", ".join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ""
     # Record the end of regular arguments;
     # subsequent arguments are architecture-specific descriptors.
     arg_decl_list = []
@@ -487,7 +511,7 @@ def make_launcher(constants, signature):
             arg_decl_list.append(f"{FLOAT_STORAGE_TYPE[ty]} arg{i}")
         else:
             arg_decl_list.append(f"{ty_to_cpp(ty)} arg{i}")
-    arg_decls = ', '.join(arg_decl_list)
+    arg_decls = ", ".join(arg_decl_list)
     internal_args_list = []
     for i, ty in signature.items():
         if ty[0] == "*":
@@ -498,7 +522,7 @@ def make_launcher(constants, signature):
             internal_args_list.append(f"_arg{i}")
 
     # generate glue code
-    newline = '\n  '
+    newline = "\n  "
     ptr_decls = [
         f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}, stream); if (!ptr_info{i}.valid) return NULL;"
         for i, ty in signature.items()
@@ -524,7 +548,7 @@ def make_launcher(constants, signature):
 #include <iomanip>
 #include <level_zero/ze_api.h>
 #include <sycl/sycl.hpp>
-{ "#include <ATen/record_function.h>" if COMPILATION_HELPER.inject_pytorch_dep else "" }
+{"#include <ATen/record_function.h>" if COMPILATION_HELPER.inject_pytorch_dep else ""}
 
 #if defined(_WIN32)
 #define EXPORT_FUNC __declspec(dllexport)
@@ -638,10 +662,10 @@ static inline void set_scalar_arg(sycl::handler &cgh, int index, const void *val
 static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
                                int num_warps, int threads_per_warp, int shared_memory,
                                sycl::queue& stream, sycl::kernel& kernel_ptr,
-                               void* global_scratch, void* profile_scratch{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
+                               void* global_scratch, void* profile_scratch{", " + arg_decls if len(arg_decls) > 0 else ""}) {{
 
   std::string kernel_name = kernel_ptr.get_info<sycl::info::kernel::function_name>();
-  { 'RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {});' if COMPILATION_HELPER.inject_pytorch_dep else "" }
+  {'RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {});' if COMPILATION_HELPER.inject_pytorch_dep else ""}
 
   {params_decl};
   uint32_t num_params = {num_params};
@@ -682,8 +706,8 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
   assert(num_params == expected_num_params && "number of kernel param not matched");
   // Submit the imported kernel.
   auto cgf = [&](sycl::handler &cgh) {{
-    {" ".join(f'set_scalar_arg<{ty_to_cpp(item)}>(cgh, {idx}, params[{idx}]);' for idx, item in enumerate([signature[i] for i in signature if signature[i] != "constexpr"]))}
-    {" ".join(f'set_scalar_arg<{ty_to_cpp(item)}>(cgh, {idx}, params[{idx}]);' for idx, item in enumerate(["*global_scratch", "*profile_scratch"], start=num_params-2))}
+    {" ".join(f"set_scalar_arg<{ty_to_cpp(item)}>(cgh, {idx}, params[{idx}]);" for idx, item in enumerate([signature[i] for i in signature if signature[i] != "constexpr"]))}
+    {" ".join(f"set_scalar_arg<{ty_to_cpp(item)}>(cgh, {idx}, params[{idx}]);" for idx, item in enumerate(["*global_scratch", "*profile_scratch"], start=num_params - 2))}
     if (shared_memory) {{
       using share_mem_t = sycl::local_accessor<int8_t, 1>;
       share_mem_t local_buffer = share_mem_t(shared_memory, cgh);
@@ -775,7 +799,7 @@ extern "C" EXPORT_FUNC PyObject* launch(PyObject* args) {{
 
   {newline.join(ptr_decls)}
   {newline.join(float_storage_decls)}
-  sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp, shared_memory, stream, kernel, global_scratch, profile_scratch{',' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
+  sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp, shared_memory, stream, kernel, global_scratch, profile_scratch{"," + ", ".join(internal_args_list) if len(internal_args_list) > 0 else ""});
   if (PyErr_Occurred()) {{
     return NULL;
   }}
@@ -837,18 +861,19 @@ def wrap_handle_tensordesc(launcher, signature):
 def serialize_args(args, constants, signature):
     import torch
     import numbers
+
     dir_path = knobs.intel.dump_spirv_kernel_args
     if not os.path.exists(dir_path):
         os.makedirs(dir_path)
         print(f"Path to directory consisting of SPIR-V Runner data: {dir_path}")
 
     def serialize_kernel_metadata(arg, args_dict):
-        args_dict['num_warps'] = arg.num_warps
-        args_dict['threads_per_warp'] = arg.threads_per_warp
-        args_dict['shared_memory'] = arg.shared
-        args_dict['kernel_name'] = arg.name
-        args_dict['spv_name'] = f"{arg.name}.spv"
-        args_dict['build_flags'] = arg.build_flags
+        args_dict["num_warps"] = arg.num_warps
+        args_dict["threads_per_warp"] = arg.threads_per_warp
+        args_dict["shared_memory"] = arg.shared
+        args_dict["kernel_name"] = arg.name
+        args_dict["spv_name"] = f"{arg.name}.spv"
+        args_dict["build_flags"] = arg.build_flags
 
     cnt = 0
     args_dict = {"gridX": int(args[cnt]), "gridY": int(args[cnt + 1]), "gridZ": int(args[cnt + 2])}
@@ -860,37 +885,136 @@ def serialize_args(args, constants, signature):
     # 6: launch_metadata
     # 7: launch_enter_hook
     # 8: launch_exit_hook
-    args_dict['argument_list'] = []
+    args_dict["argument_list"] = []
     counts = {"tensors": 0, "scalars": 0, "karg_cnt": 0}
     cnt += 9
     for arg in args[cnt:]:
-        sig_name = list(signature.keys())[counts['karg_cnt']]
+        sig_name = list(signature.keys())[counts["karg_cnt"]]
         if isinstance(arg, torch.Tensor):
             cpu_tensor = arg.cpu()
             tensor_path = os.path.join(dir_path, f"tensor_{counts['tensors']}.pt")
-            with open(tensor_path, 'wb') as f:
+            with open(tensor_path, "wb") as f:
                 torch.save(cpu_tensor, f)
             new_arg = {
-                "name": f"tensor_{counts['tensors']}", "type": "tensor", "dtype": str(arg.dtype), "ctype":
-                signature[sig_name]
+                "name": f"tensor_{counts['tensors']}",
+                "type": "tensor",
+                "dtype": str(arg.dtype),
+                "ctype": signature[sig_name],
             }
-            args_dict['argument_list'].append(new_arg)
-            counts['tensors'] += 1
+            args_dict["argument_list"].append(new_arg)
+            counts["tensors"] += 1
         if isinstance(arg, numbers.Number):
-            if (counts['karg_cnt'], ) not in constants.keys():
+            if (counts["karg_cnt"], ) not in constants.keys():
                 new_arg = {
-                    "name": f"scalarArg_{counts['scalars']}", "type": "scalar", "value": arg, "ctype":
-                    signature[sig_name]
+                    "name": f"scalarArg_{counts['scalars']}",
+                    "type": "scalar",
+                    "value": arg,
+                    "ctype": signature[sig_name],
                 }
-                args_dict['argument_list'].append(new_arg)
-            counts['scalars'] += 1
-        counts['karg_cnt'] += 1
+                args_dict["argument_list"].append(new_arg)
+            counts["scalars"] += 1
+        counts["karg_cnt"] += 1
 
     # Dump argument info as a JSON file
-    json_path = os.path.join(dir_path, 'args_data.json')
-    with open(json_path, 'w') as json_file:
+    json_path = os.path.join(dir_path, "args_data.json")
+    with open(json_path, "w") as json_file:
         import json
+
         json.dump(args_dict, json_file, indent=4)
+
+
+# Size-based type IDs — must match ArgType enum in driver.c.
+_ARG_PTR = 0
+_ARG_1B = 1
+_ARG_2B = 2
+_ARG_4B = 3
+_ARG_8B = 4
+
+# Triton type string -> (size_id, struct pack format).
+# Each slot in the values buffer is exactly 8 bytes; smaller types are
+# zero-padded to fill the slot (little-endian, padding bytes are 'x').
+_TY_INFO: dict[str, tuple[int, str]] = {
+    "i1": (_ARG_1B, "<Bxxxxxxx"), "i8": (_ARG_1B, "<bxxxxxxx"), "i16": (_ARG_2B, "<hxxxxxx"), "i32":
+    (_ARG_4B, "<ixxxx"), "i64": (_ARG_8B, "<q"), "u1": (_ARG_1B, "<Bxxxxxxx"), "u8": (_ARG_1B, "<Bxxxxxxx"), "u16":
+    (_ARG_2B, "<Hxxxxxx"), "u32": (_ARG_4B, "<Ixxxx"), "u64": (_ARG_8B, "<Q"), "fp16": (_ARG_2B, "<exxxxxx"), "fp32":
+    (_ARG_4B, "<fxxxx"), "f32": (_ARG_4B, "<fxxxx"), "fp64": (_ARG_8B, "<d"), "bf16":
+    (_ARG_2B, None),  # special-cased: no struct format letter for bf16
+}
+
+
+def _pack_bf16(val: float) -> bytes:
+    """Pack a Python float as a bf16 value in an 8-byte slot (little-endian)."""
+    raw = struct.pack("<f", float(val))
+    bf16_bits = int.from_bytes(raw, "little") >> 16
+    return struct.pack("<Hxxxxxx", bf16_bits)
+
+
+def _make_generic_launcher(constants, signature):
+    """Return a launcher that calls the precompiled generic_launch C function.
+
+    Arg types are resolved once at init; values are packed into a flat
+    8-bytes-per-slot buffer on every call, avoiding per-kernel icpx compilation.
+    """
+    import triton
+
+    expanded = upstream_expand_signature(signature.values(), tensordesc_meta=None, descriptor_type="*i8")
+
+    def _flatten(sig, out):
+        if isinstance(sig, tuple):
+            for x in sig:
+                _flatten(x, out)
+        else:
+            out.append(sig)
+
+    flat = []
+    for sig in expanded:
+        _flatten(sig, flat)
+
+    type_ids = []
+    pack_fmts = []
+    arg_indices = []
+    for i, ty in enumerate(flat):
+        if ty == "constexpr":
+            continue
+        if ty[0] == "*":
+            type_ids.append(_ARG_PTR)
+            pack_fmts.append("<Q")
+        else:
+            if ty not in _TY_INFO:
+                raise TypeError(f"Unsupported Triton argument type in launcher signature: {ty}")
+            tid, fmt = _TY_INFO[ty]
+            type_ids.append(tid)
+            pack_fmts.append(fmt)
+        arg_indices.append(i)
+
+    type_bytes = bytes(type_ids)
+
+    # Fetch the precompiled launch function once at launcher-creation time,
+    # matching the pattern used by CudaLauncher (utils.launch stored at init).
+    # Note: like the static icpx-compiled launcher, generic_launch validates
+    # pointer args via zeMemGetAllocProperties by default.  Set
+    # TRITON_XPU_VALIDATE_POINTERS=0 to skip validation for faster launch.
+    generic_launch_fn = triton.runtime.driver.active.utils.generic_launch
+    if generic_launch_fn is None:
+        raise RuntimeError("generic_launch not available in the XPU driver shared library. "
+                           "Clear ~/.triton/cache and rebuild to pick up the updated driver.c.")
+
+    def launcher(all_args):
+        kernel_args = all_args[9:]
+        buf = bytearray(len(type_ids) * 8)
+        for j, idx in enumerate(arg_indices):
+            val = kernel_args[idx]
+            off = j * 8
+            if type_ids[j] == _ARG_PTR:
+                p = val.data_ptr() if hasattr(val, "data_ptr") else (0 if val is None else int(val))
+                struct.pack_into("<Q", buf, off, p)
+            elif pack_fmts[j] is None:
+                buf[off:off + 8] = _pack_bf16(val)
+            else:
+                struct.pack_into(pack_fmts[j], buf, off, val)
+        generic_launch_fn((*all_args[:9], type_bytes, buf))
+
+    return launcher
 
 
 class XPULauncher(object):
@@ -900,9 +1024,13 @@ class XPULauncher(object):
         arg_idx = lambda x: (src.fn.arg_names.index(x), ) if isinstance(x, str) else x
         constants = {arg_idx(idx): value for idx, value in constants.items()}
         signature = {idx: value for idx, value in src.signature.items()}
-        src = make_launcher(constants, signature)
-        self.mod = compile_module_from_src(src=src, name="__triton_launcher")
-        self.launch = wrap_handle_tensordesc(self.mod.launch, signature)
+
+        if os.environ.get("TRITON_XPU_GENERIC_LAUNCHER", "1") == "1":
+            self.launch = wrap_handle_tensordesc(_make_generic_launcher(constants, signature), signature)
+        else:
+            launcher_src = make_launcher(constants, signature)
+            self.mod = compile_module_from_src(src=launcher_src, name="__triton_launcher")
+            self.launch = wrap_handle_tensordesc(self.mod.launch, signature)
 
         # Serialize KernelArguments for SPIR-V Runner
         self.serialize_kernel_args = knobs.intel.dump_spirv_kernel_args
@@ -980,6 +1108,7 @@ class XPUDriver(DriverBase):
 
     def get_current_stream(self, device):
         import torch
+
         return torch.xpu.current_stream().sycl_queue
 
     @lru_cache
@@ -1019,16 +1148,19 @@ class XPUDriver(DriverBase):
 
     def get_active_torch_device(self):
         import torch
+
         return torch.device("xpu", self.get_current_device())
 
     def get_device_interface(self):
         import torch
+
         return torch.xpu
 
     @staticmethod
     def is_active():
         try:
             import torch
+
             return torch.xpu.is_available()
         except ImportError:
             return False
@@ -1038,6 +1170,7 @@ class XPUDriver(DriverBase):
 
     def get_benchmarker(self):
         from triton.testing import do_bench
+
         return do_bench
 
     def get_empty_cache_for_benchmark(self):
@@ -1047,7 +1180,7 @@ class XPUDriver(DriverBase):
         # before each kernel call to make sure that the L2 cache
         # doesn't contain any input data before the run
         cache_size = 256 * 1024 * 1024
-        return torch.empty(int(cache_size // 4), dtype=torch.int, device='xpu')
+        return torch.empty(int(cache_size // 4), dtype=torch.int, device="xpu")
 
     def clear_cache(self, cache):
         cache.zero_()
