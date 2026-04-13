@@ -8,8 +8,7 @@ namespace mlir::triton::intel {
 /// Intel-specific AxisInfo extension.
 ///
 /// Subclasses AxisInfoAnalysis to register Intel-specific visitors
-/// (MakeTensorPtrOp, AdvanceOp, MakeTensorDescOp, DescriptorLoadOp,
-/// LLVM dialect ops, IndexCastOp).
+/// (MakeTensorDescOp, DescriptorLoadOp, LLVM dialect ops, IndexCastOp).
 class AxisInfoAnalysisExt : public triton::AxisInfoAnalysis {
 public:
   AxisInfoAnalysisExt(DataFlowSolver &solver);

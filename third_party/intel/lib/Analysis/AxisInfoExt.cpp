@@ -106,18 +106,15 @@ protected:
 // Intel-specific visitors
 //===----------------------------------------------------------------------===//
 
-/// Compute AxisInfo for ops that create a block pointer or tensor descriptor.
+/// Compute AxisInfo for ops that create a tensor descriptor.
 ///
-/// Both MakeTensorPtrOp and MakeTensorDescOp share the same operand layout:
+/// MakeTensorDescOp has the following operand layout:
 ///   operand 0            – base pointer
 ///   operands [1, rank)   – shape values  (rank operands)
 ///   operands [rank+1, 2*rank] – stride values (rank operands)
-/// and the same stride / contiguity / divisibility / constancy logic.
-/// The only difference between the two ops is how the block shape and rank are
-/// extracted from the result type, which is passed in by the caller.
 static AxisInfo
-makeTensorPtrAxisInfo(Type elemTy, ArrayRef<int64_t> blkShape, unsigned rank,
-                      ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) {
+makeTensorDescAxisInfo(Type elemTy, ArrayRef<int64_t> blkShape, unsigned rank,
+                       ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) {
   assert(operands.size() >= rank * 2 + 1 &&
          "Insufficient operands for AxisInfo analysis");
   SmallVector<AxisInfo, 2> strideInfo, shapeInfo;
@@ -157,8 +154,6 @@ makeTensorPtrAxisInfo(Type elemTy, ArrayRef<int64_t> blkShape, unsigned rank,
     //  [nullptr,  nullptr,  nullptr,  nullptr,]]
     // clang-format on
     // The contiguity of the two dim should be 1.
-    // FIXME: We didn't check the offsets for block pointer as it is going to be
-    // deprecated.
     int64_t contiguous = shapeInfo[dim].getDivisibility(0);
     contiguity.push_back(strideInfo[dim].getConstantValue() == 1
                              ? std::min(contiguous, blkShape[dim])
@@ -178,45 +173,6 @@ makeTensorPtrAxisInfo(Type elemTy, ArrayRef<int64_t> blkShape, unsigned rank,
                   std::move(constancy), std::nullopt);
 }
 
-class MakeTensorPtrOpAxisInfoVisitor final
-    : public AxisInfoVisitorImpl<triton::MakeTensorPtrOp> {
-public:
-  using AxisInfoVisitorImpl<triton::MakeTensorPtrOp>::AxisInfoVisitorImpl;
-
-  AxisInfo
-  getAxisInfo(triton::MakeTensorPtrOp op,
-              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
-    LDBG("MakeTensorPtrOpAxisInfoVisitor: " << *op);
-
-    auto tensorType = cast<RankedTensorType>(
-        cast<PointerType>(op.getResult().getType()).getPointeeType());
-    unsigned rank = op.getShape().size();
-
-    auto axisInfo = makeTensorPtrAxisInfo(
-        tensorType.getElementType(), tensorType.getShape(), rank, operands);
-
-    LLVM_DEBUG({
-      std::string axisStr;
-      llvm::raw_string_ostream os(axisStr);
-      axisInfo.print(os);
-      LDBG("-- " << axisStr);
-    });
-
-    return axisInfo;
-  }
-};
-
-class AdvanceOpAxisInfoVisitor final
-    : public AxisInfoVisitorImpl<triton::AdvanceOp> {
-public:
-  using AxisInfoVisitorImpl<triton::AdvanceOp>::AxisInfoVisitorImpl;
-  AxisInfo
-  getAxisInfo(triton::AdvanceOp op,
-              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
-    return operands[0]->getValue();
-  }
-};
-
 class MakeTensorDescOpAxisInfoVisitor final
     : public AxisInfoVisitorImpl<triton::MakeTensorDescOp> {
 public:
@@ -234,7 +190,7 @@ public:
     assert(operands.size() >= rank * 2 + 1 &&
            "Insufficient operands for MakeTensorDescOp AxisInfo analysis");
 
-    auto axisInfo = makeTensorPtrAxisInfo(
+    auto axisInfo = makeTensorDescAxisInfo(
         tensorType.getElementType(), tensorType.getShape(), rank, operands);
 
     LLVM_DEBUG({
@@ -403,8 +359,6 @@ private:
 
 AxisInfoAnalysisExt::AxisInfoAnalysisExt(DataFlowSolver &solver)
     : triton::AxisInfoAnalysis(solver) {
-  visitors.append<MakeTensorPtrOpAxisInfoVisitor>();
-  visitors.append<AdvanceOpAxisInfoVisitor>();
   visitors.append<MakeTensorDescOpAxisInfoVisitor>();
   visitors.append<DescriptorLoadOpAxisInfoVisitor>();
   visitors.append<CastOpAxisInfoVisitor<arith::IndexCastOp>>();

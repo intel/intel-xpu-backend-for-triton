@@ -44,6 +44,7 @@ def test_device_assert(cond, mask, opt_flag, env_var, jit_flag, device):
                                         f"stdout: {result.stdout}, stderr: {result.stderr}")
 
 
+@pytest.mark.forked
 def test_device_assert_barrier(monkeypatch, device):
     monkeypatch.setenv("TRITON_DEBUG", "1")
     triton.knobs.refresh_knobs()
