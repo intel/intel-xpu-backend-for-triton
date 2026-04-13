@@ -303,7 +303,10 @@ def triton_key():
     ]
     for path, prefix in path_prefixes:
         for lib in pkgutil.walk_packages([path], prefix=prefix):
-            with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
+            spec = lib.module_finder.find_spec(lib.name)
+            if spec is None or spec.origin is None:
+                continue
+            with open(spec.origin, "rb") as f:
                 contents += [hashlib.sha256(f.read()).hexdigest()]
 
     # backend
@@ -319,7 +322,10 @@ def triton_key():
     # language
     language_path = os.path.join(TRITON_PATH, 'language')
     for lib in pkgutil.walk_packages([language_path], prefix="triton.language."):
-        with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
+        spec = lib.module_finder.find_spec(lib.name)
+        if spec is None or spec.origin is None:
+            continue
+        with open(spec.origin, "rb") as f:
             contents += [hashlib.sha256(f.read()).hexdigest()]
     return f'{__version__}' + '-'.join(contents)
 

@@ -752,18 +752,11 @@ void init_triton_llvm(py::module_ &m) {
         PassBuilder pb(/*targetMachine=*/targetMachine.get(), tuningOptions,
                        std::nullopt, instrCbPtr);
 
-        if (!pluginFile.empty()) {
-          // TODO: Add some logging here that we inserted a pass into the LLVM
-          // pass pipeline
-          auto passPlugin = llvm::PassPlugin::Load(pluginFile);
-          if (!passPlugin) {
-            llvm::Error Err = passPlugin.takeError();
-            std::string ErrMsg =
-                "Pass Plugin Error: " + llvm::toString(std::move(Err));
-            throw std::runtime_error(ErrMsg);
-          }
-          passPlugin->registerPassBuilderCallbacks(pb);
-        }
+        // Optional LLVM IR-level plugins. In embedded builds (such as when
+        // Triton is vendored into Triton-distributed) we may choose to disable
+        // pass plugins entirely to avoid depending on llvm::PassPlugin::Load.
+        // For now we simply ignore LLVM_PASS_PLUGIN_PATH in this configuration.
+        (void)pluginFile;
 
         pb.registerModuleAnalyses(mam);
         pb.registerCGSCCAnalyses(cgam);

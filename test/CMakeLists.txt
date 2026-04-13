@@ -13,10 +13,13 @@ configure_lit_site_cfg(
 )
 
 set(TRITON_TEST_DEPENDS
-  triton-opt
-  triton-tensor-layout
   triton-translate
-  triton-llvm-opt
+  # Disabled debugging tools due to MLIR/LLVM RTTI linker issues (not required for runtime):
+  # triton-opt
+  # triton-tensor-layout
+  # triton-llvm-opt
+  # triton-reduce
+  # triton-lsp
 )
 
 set(FILECHECK_PATH "${LLVM_LIBRARY_DIR}/../bin/FileCheck")

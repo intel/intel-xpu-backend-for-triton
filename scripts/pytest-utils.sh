@@ -36,6 +36,10 @@ pytest() {
     pytest_extra_args=(
         "--dist=worksteal"
     )
+    # Avoid torch+XPU segfault in xdist workers: run in main process (no xdist)
+    if [[ "${TRITON_TEST_NO_XDIST:-0}" = "1" ]]; then
+        pytest_extra_args=(-p no:xdist)
+    fi
 
     if [[ -v TRITON_TEST_SUITE && $TRITON_TEST_REPORTS = true ]]; then
         mkdir -p "$TRITON_TEST_REPORTS_DIR"
@@ -85,7 +89,43 @@ pytest() {
     fi
 
     export TEST_UNSKIP
+    # When xdist is disabled, drop -n and its argument so pytest does not see them
+    if [[ "${TRITON_TEST_NO_XDIST:-0}" = "1" ]]; then
+        filtered_args=()
+        skip_next=0
+        for a in "$@"; do
+            if [[ $skip_next -eq 1 ]]; then
+                skip_next=0
+                continue
+            fi
+            if [[ "$a" = "-n" ]]; then
+                skip_next=1
+                continue
+            fi
+            filtered_args+=("$a")
+        done
+        set -- "${filtered_args[@]}"
+    fi
     python -u -m pytest "${pytest_extra_args[@]}" "$@" || handle_test_error
+}
+
+run_tutorial_test() {
+    echo
+    echo "****** Running $1 test ******"
+    echo
+
+    run_tutorial_args=(
+        "--skip-list=$TRITON_TEST_SKIPLIST_DIR/tutorials.txt"
+        "$1.py"
+    )
+
+    if [[ $TRITON_TEST_REPORTS = true ]]; then
+        run_tutorial_args+=(
+            "--reports=$TRITON_TEST_REPORTS_DIR"
+        )
+    fi
+
+    python -u "$SCRIPTS_DIR/run_tutorial.py" "${run_tutorial_args[@]}" || handle_test_error
 }
 
 capture_runtime_env() {

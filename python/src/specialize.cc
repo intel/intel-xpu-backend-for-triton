@@ -516,8 +516,9 @@ std::pair<py::object, py::object> specialize_arg(PyObject *backend,
     return it->second(backend, arg, is_const, specialize_value, align);
   }
 
-  // separate handling of None
-  if (Py_IsNone(arg)) {
+  // separate handling of None; use the portable macro rather than Py_IsNone
+  // to remain compatible with older Python C APIs.
+  if (arg == Py_None) {
     return {from_borrowed_ref(constexpr_str), py::none()};
   }
 

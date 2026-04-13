@@ -10,7 +10,7 @@ from typing import Union, Callable, List, Sequence, TypeVar, Optional, Tuple, TY
 from dataclasses import dataclass
 import builtins
 from .. import knobs
-from ..runtime.jit import JITCallable
+from ..runtime.jit import JITCallable, constexpr_function
 import inspect
 
 from .._C.libtriton import ir

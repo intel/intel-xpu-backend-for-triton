@@ -28,7 +28,7 @@ You can install the Python package from source by running the following commands
 
 .. code-block:: bash
 
-      git clone https://github.com/triton-lang/triton.git
+      git clone git@github.com:intel/intel-xpu-backend-for-triton.git
       cd triton
 
       pip install -r python/requirements.txt # build-time dependencies

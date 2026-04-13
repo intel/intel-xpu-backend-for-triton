@@ -9,10 +9,20 @@
 #include "intel/include/TritonGENToSPIRV/Passes.h"
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 
+// AMD dialect and passes are optional; they can be compiled out when
+// TRITON_ENABLE_AMD is OFF.
+#if TRITON_ENABLE_AMD && __has_include("amd/include/Dialect/TritonAMDGPU/IR/Dialect.h.inc")
 #include "amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "amd/include/TritonAMDGPUTransforms/Passes.h"
+#include "TritonAMDGPUToLLVM/Passes.h"
+#include "TritonAMDGPUTransforms/Passes.h"
+#include "TritonAMDGPUTransforms/TritonGPUConversion.h"
+#endif
 #include "nvidia/include/Dialect/NVGPU/IR/Dialect.h"
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
+// Proton dialect and passes are optional; they can be compiled out when
+// TRITON_ENABLE_PROTON is OFF.
+#if TRITON_ENABLE_PROTON && __has_include("proton/Dialect/include/Dialect/Proton/IR/Dialect.h")
 #include "proton/Dialect/include/Conversion/ProtonGPUToLLVM/Passes.h"
 #include "proton/Dialect/include/Conversion/ProtonGPUToLLVM/ProtonAMDGPUToLLVM/Passes.h"
 #include "proton/Dialect/include/Conversion/ProtonGPUToLLVM/ProtonNvidiaGPUToLLVM/Passes.h"
@@ -20,16 +30,12 @@
 #include "proton/Dialect/include/Dialect/Proton/IR/Dialect.h"
 #include "proton/Dialect/include/Dialect/ProtonGPU/IR/Dialect.h"
 #include "proton/Dialect/include/Dialect/ProtonGPU/Transforms/Passes.h"
+#endif
 #include "triton/Dialect/Gluon/Transforms/Passes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-
-// Below headers will allow registration to ROCm passes
-#include "TritonAMDGPUToLLVM/Passes.h"
-#include "TritonAMDGPUTransforms/Passes.h"
-#include "TritonAMDGPUTransforms/TritonGPUConversion.h"
 
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
@@ -95,6 +101,8 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::gluon::registerGluonPasses();
   mlir::test::registerTestAliasPass();
   mlir::test::registerTestAlignmentPass();
+  // AMD-specific test passes
+#if TRITON_ENABLE_AMD && __has_include("amd/include/Dialect/TritonAMDGPU/IR/Dialect.h.inc")
   mlir::test::registerAMDTestAlignmentPass();
   mlir::test::registerTestAllocationPass();
   mlir::test::registerTestBufferRegionPass();
@@ -103,6 +111,10 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::test::registerTestLoopPeelingPass();
   mlir::test::registerTestAMDGPUMembarPass();
   mlir::test::registerTestTritonAMDGPURangeAnalysis();
+#else
+  mlir::test::registerTestMembarPass();
+  mlir::test::registerTestLoopPeelingPass();
+#endif
   mlir::triton::registerConvertTritonToTritonGPUPass();
   mlir::triton::intel::registerTritonIntelDescriptorVersioning();
   mlir::triton::intel::registerTritonIntelFuseReshape();
@@ -135,7 +147,8 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::NVVM::registerInlinerInterface(registry);
   mlir::registerLLVMDILocalVariable();
 
-  // TritonAMDGPUToLLVM passes
+  // TritonAMDGPUToLLVM passes (optional)
+#if TRITON_ENABLE_AMD && __has_include("amd/include/Dialect/TritonAMDGPU/IR/Dialect.h.inc")
   mlir::triton::registerAllocateAMDGPUSharedMemory();
   mlir::triton::registerTritonAMDGPUConvertWarpSpecializeToLLVM();
   mlir::triton::registerConvertTritonAMDGPUToLLVM();
@@ -172,6 +185,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::registerTritonAMDGPUFpSanitizer();
   mlir::triton::amdgpu::registerTritonAMDGPUOptimizeDotOperands();
   mlir::registerConSanAMDHooks();
+#endif
 
   // NVWS passes
   mlir::triton::registerNVWSTransformsPasses();
@@ -179,7 +193,8 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   // NVGPU transform passes
   mlir::registerNVHopperTransformsPasses();
 
-  // Proton passes
+  // Proton passes (optional)
+#if TRITON_ENABLE_PROTON && __has_include("proton/Dialect/include/Dialect/Proton/IR/Dialect.h")
   mlir::test::proton::registerTestScopeIdAllocationPass();
   mlir::triton::proton::registerConvertProtonToProtonGPU();
   mlir::triton::proton::gpu::registerConvertProtonNvidiaGPUToLLVM();
@@ -187,6 +202,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::proton::gpu::registerAllocateProtonSharedMemoryPass();
   mlir::triton::proton::gpu::registerScheduleBufferStorePass();
   mlir::triton::proton::gpu::registerAddSchedBarriersPass();
+#endif
 
   // Register plugin passes and dialects.
   for (const auto &plugin : mlir::triton::plugin::loadPlugins()) {
@@ -202,9 +218,14 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
       mlir::math::MathDialect, mlir::arith::ArithDialect, mlir::scf::SCFDialect,
       mlir::gpu::GPUDialect, mlir::LLVM::LLVMDialect, mlir::NVVM::NVVMDialect,
       mlir::triton::nvgpu::NVGPUDialect, mlir::triton::nvws::NVWSDialect,
+#if TRITON_ENABLE_AMD && __has_include("amd/include/Dialect/TritonAMDGPU/IR/Dialect.h.inc")
       mlir::triton::amdgpu::TritonAMDGPUDialect,
+#endif
+#if TRITON_ENABLE_PROTON && __has_include("proton/Dialect/include/Dialect/Proton/IR/Dialect.h")
       mlir::triton::proton::ProtonDialect,
-      mlir::triton::proton::gpu::ProtonGPUDialect, mlir::ROCDL::ROCDLDialect,
+      mlir::triton::proton::gpu::ProtonGPUDialect,
+#endif
+      mlir::ROCDL::ROCDLDialect,
       mlir::triton::gpu::intel::TritonIntelGPUDialect,
       mlir::triton::TritonGEN::TritonGENDialect,
       mlir::triton::gluon::GluonDialect>();

@@ -41,7 +41,7 @@ Binary wheels are available for CPython 3.10-3.14.
 # Install from source
 
 ```shell
-git clone https://github.com/triton-lang/triton.git
+git clone git@github.com:intel/intel-xpu-backend-for-triton.git
 cd triton
 
 pip install -r python/requirements.txt # build-time dependencies
@@ -51,7 +51,7 @@ pip install -e .
 Or with a virtualenv:
 
 ```shell
-git clone https://github.com/triton-lang/triton.git
+git clone git@github.com:intel/intel-xpu-backend-for-triton.git
 cd triton
 
 python -m venv .venv --prompt triton

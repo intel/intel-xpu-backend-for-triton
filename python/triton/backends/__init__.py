@@ -48,10 +48,15 @@ def _discover_backends() -> dict[str, Backend]:
                 continue
             if name.startswith('__'):
                 continue
-            compiler = importlib.import_module(f"triton.backends.{name}.compiler")
-            driver = importlib.import_module(f"triton.backends.{name}.driver")
-            backends[name] = Backend(_find_concrete_subclasses(compiler, BaseBackend),
-                                     _find_concrete_subclasses(driver, DriverBase))
+            # Skip backends that fail to import (e.g., AMD when disabled)
+            try:
+                compiler = importlib.import_module(f"triton.backends.{name}.compiler")
+                driver = importlib.import_module(f"triton.backends.{name}.driver")
+                backends[name] = Backend(_find_concrete_subclasses(compiler, BaseBackend),
+                                         _find_concrete_subclasses(driver, DriverBase))
+            except (ImportError, ModuleNotFoundError) as e:
+                # Silently skip backends that can't be imported (e.g., disabled components)
+                continue
         return backends
 
     # Default path: discover via entry points for out-of-tree/downstream plugins.
