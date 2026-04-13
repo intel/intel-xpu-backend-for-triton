@@ -1833,33 +1833,14 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     if (!op)
       continue;
     if (isExtOrBroadcastOp(op)) {
-      SetVector<Value> tempSlice;
-      DenseMap<Value, Attribute> tempLayout;
       Attribute srcEncoding = ttgi::inferSrcEncoding(op, layout[v]);
       if (!srcEncoding)
         return;
-      LogicalResult result = getRematerializableSlice(
-          op->getOpOperand(0), srcEncoding, tempSlice, tempLayout);
-
-      // If a value is already assigned to a _different_ layout,
-      // we cannot propagate past this op (as it would conflict with
-      // an already-assigned layout).
-      for (auto [val, enc] : tempLayout) {
-        auto preexistingLayout = layout.find(val);
-        if (preexistingLayout != layout.end() &&
-            preexistingLayout->second != enc) {
-          result = failure();
-          break;
-        }
-      }
-
       // If we can rematerialize the rest of the ext slice we can ignore this
       // ext as it won't need a convert.
-      if (result.succeeded()) {
-        slice.insert(tempSlice.begin(), tempSlice.end());
-        layout.insert(tempLayout.begin(), tempLayout.end());
+      if (succeeded(getRematerializableSlice(op->getOpOperand(0), srcEncoding,
+                                             slice, layout)))
         continue;
-      }
       // Only apply it if there is a single ext op otherwise we would have to
       // duplicate the convert.
       if (extOrBroadcastOp != nullptr)

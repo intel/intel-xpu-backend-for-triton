@@ -156,13 +156,6 @@ function patch_vllm {
     echo "**** vllm-fix.patch already applied or conflicts, skipping. ****"
   fi
 
-  # Targeted sed transformations for kernel test files
-  sed -i 's/device="cuda"/device="xpu"/g' \
-    tests/kernels/moe/utils.py \
-    tests/kernels/attention/test_triton_unified_attention.py
-  sed -i 's/set_default_device("cuda")/set_default_device("xpu")/g' \
-    tests/kernels/attention/test_triton_unified_attention.py
-
   # AST-based XPU adaptation for spec_decode/mrv2 test files
   python "$SCRIPTS_DIR/vllm/vllm_xpu_patch.py" "$VLLM_PROJ"
 
