@@ -710,40 +710,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
   // CHECK-LABEL: convert_layout_blocked_blocked
   tt.func @convert_layout_blocked_blocked(%arg0: tensor<32x32xf32, #blocked0>) {
-    // CHECK: llvm.store
-    // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
-    // CHECK: [[ONE:%.*]] = llvm.mlir.constant(3 : i32) : i32
-    // CHECK-NEXT: llvm.call spir_funccc  @_Z7barrierj([[ONE]]) {{.*}} : (i32) -> ()
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3>
+    // COM: Flat SLM path: 8 stores of vector<1xf32>, barrier, 2 loads of vector<4xf32>.
+    // CHECK-COUNT-8: llvm.store {{.*}} : vector<1xf32>, !llvm.ptr<3>
+    // CHECK: llvm.call spir_funccc  @_Z7barrierj({{.*}}) {{.*}} : (i32) -> ()
+    // CHECK-COUNT-2: llvm.load {{.*}} : !llvm.ptr<3> -> vector<4xf32>
     %0 = ttg.convert_layout %arg0 : tensor<32x32xf32, #blocked0> -> tensor<32x32xf32, #blocked1>
     tt.return
   }
@@ -757,16 +727,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
   // CHECK-LABEL: convert_layout_blocked_blocked_vec
   tt.func @convert_layout_blocked_blocked_vec(%arg0: tensor<32x32xf32, #blocked0>) {
-    // CHECK: llvm.store
-    // CHECK-SAME: vector<4xf32>, !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: vector<4xf32>, !llvm.ptr<3>
-    // CHECK: [[ONE:%.*]] = llvm.mlir.constant(3 : i32) : i32
-    // CHECK-NEXT: llvm.call spir_funccc @_Z7barrierj([[ONE]]) {{.*}} : (i32) -> ()
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3> -> vector<4xf32>
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3> -> vector<4xf32>
+    // COM: Flat SLM path: 8 stores of vector<1xf32>, barrier, 8 loads of vector<1xf32>.
+    // CHECK-COUNT-8: llvm.store {{.*}} : vector<1xf32>, !llvm.ptr<3>
+    // CHECK: llvm.call spir_funccc @_Z7barrierj({{.*}}) {{.*}} : (i32) -> ()
+    // CHECK-COUNT-8: llvm.load {{.*}} : !llvm.ptr<3> -> vector<1xf32>
     %0 = ttg.convert_layout %arg0 : tensor<32x32xf32, #blocked0> -> tensor<32x32xf32, #blocked1>
     tt.return
   }
@@ -829,13 +793,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
   // CHECK-LABEL: convert_layout_dpas_block
   tt.func @convert_layout_dpas_blocked(%arg0: tensor<32x16xf32, #dpas>) {
-    // CHECK: llvm.store
-    // CHECK-SAME: vector<2xf32>, !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: vector<2xf32>, !llvm.ptr<3>
+    // COM: Flat SLM path: 4 stores of vector<4xf32>, barrier, 8 loads of vector<1xf32>.
+    // CHECK-COUNT-4: llvm.store {{.*}} : vector<4xf32>, !llvm.ptr<3>
     // CHECK: llvm.call spir_funccc @_Z7barrierj({{.*}}) {{.*}} : (i32) -> ()
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3> -> vector<2xf32>
+    // CHECK-COUNT-8: llvm.load {{.*}} : !llvm.ptr<3> -> vector<1xf32>
     %0 = ttg.convert_layout %arg0 : tensor<32x16xf32, #dpas> -> tensor<32x16xf32, #blocked0>
     tt.return
   }
@@ -849,17 +810,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
   // CHECK-LABEL: convert_layout_dpas_block
   tt.func @convert_layout_dpas_blocked(%arg0: tensor<32x64xf32, #dpas>) {
-    // CHECK: llvm.store
-    // CHECK-SAME: vector<4xf32>, !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: vector<4xf32>, !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: vector<4xf32>, !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: vector<4xf32>, !llvm.ptr<3>
+    // COM: Flat SLM path: 8 stores of vector<4xf32>, barrier, 32 loads of vector<4xf32>.
+    // CHECK-COUNT-8: llvm.store {{.*}} : vector<4xf32>, !llvm.ptr<3>
     // CHECK: llvm.call spir_funccc @_Z7barrierj({{.*}}) {{.*}} : (i32) -> ()
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3> -> vector<4xf32>
+    // CHECK-COUNT-32: llvm.load {{.*}} : !llvm.ptr<3> -> vector<4xf32>
     %0 = ttg.convert_layout %arg0 : tensor<32x64xf32, #dpas> -> tensor<32x64xf32, #blocked>
     tt.return
   }
@@ -872,9 +826,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: convert_layout_dpas_transpose
   tt.func @convert_layout_dpas_transpose(%arg0: tensor<128x256xf8E5M2, #dpas>) {
-    // CHECK-COUNT-16: llvm.store %{{.*}} : vector<16xi8>, !llvm.ptr<3>
+    // COM: Flat SLM path: 32 stores of vector<8xi8>, barrier, 16 loads of vector<16xi8>.
+    // CHECK-COUNT-32: llvm.store %{{.*}} : vector<8xi8>, !llvm.ptr<3>
     // CHECK: llvm.call spir_funccc @_Z7barrierj({{.*}}) {{.*}} : (i32) -> ()
-    // CHECK-COUNT-2: llvm.load %{{.*}} : !llvm.ptr<3> -> vector<16xi8>
+    // CHECK-COUNT-16: llvm.load %{{.*}} : !llvm.ptr<3> -> vector<16xi8>
     %0 = ttg.convert_layout %arg0 : tensor<128x256xf8E5M2, #dpas> -> tensor<128x256xf8E5M2, #blocked>
     tt.return
   }
