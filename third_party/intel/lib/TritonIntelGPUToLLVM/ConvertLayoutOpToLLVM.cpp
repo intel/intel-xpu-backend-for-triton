@@ -4,6 +4,9 @@
 
 #include "intel/include/Analysis/Utility.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Tools/LayoutUtils.h"
+#include "triton/Tools/LinearLayout.h"
 
 namespace mlir::triton::gpu {
 namespace {
@@ -51,7 +54,96 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         return success();
       }
     }
+    StringAttr kWarp = str_attr("warp");
+    StringAttr kBlock = str_attr("block");
+    if (llvm::is_contained(dims, kWarp) || llvm::is_contained(dims, kBlock)) {
+      return performNonSwizzledSLMConversion(op, srcLayout, dstLayout, adaptor,
+                                             rewriter);
+    }
     return failure();
+  }
+
+  LogicalResult performNonSwizzledSLMConversion(
+      ConvertLayoutOp op, const LinearLayout &srcLayout,
+      const LinearLayout &dstLayout, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const {
+    Location loc = op.getLoc();
+    auto *ctx = op.getContext();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    auto srcTy = cast<RankedTensorType>(op.getSrc().getType());
+    Type llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
+    auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+
+    Type origElemTy = llvmElemTy;
+
+    if (llvmElemTy.isIntOrFloat() && llvmElemTy.getIntOrFloatBitWidth() < 8) {
+      auto i8Ty = IntegerType::get(ctx, 8);
+      for (auto &v : inVals)
+        v = b.zext(i8Ty, v).getResult();
+      llvmElemTy = i8Ty;
+    }
+
+    if (isa<LLVM::LLVMPointerType>(origElemTy)) {
+      auto i64Ty = IntegerType::get(ctx, 64);
+      for (auto &v : inVals)
+        v = b.ptrtoint(i64Ty, v).getResult();
+      llvmElemTy = i64Ty;
+    }
+
+    auto kOffset = str_attr("offset");
+    auto kBlock = str_attr("block");
+
+    auto srcClean = srcLayout;
+    auto removeBroadcastSrc = actionRemoveBroadcastedRegs(srcLayout);
+    if (!removeBroadcastSrc.isIdentity()) {
+      srcClean = removeBroadcastSrc.apply(srcLayout);
+      inVals = removeBroadcastSrc.apply(ValueRange(inVals));
+    }
+
+    auto dstClean = dstLayout;
+    auto removeBroadcastDst = actionRemoveBroadcastedRegs(dstLayout);
+    if (!removeBroadcastDst.isIdentity())
+      dstClean = removeBroadcastDst.apply(dstLayout);
+
+    auto srcFlat = srcClean.flattenOuts();
+    auto dstFlat = dstClean.flattenOuts();
+
+    auto nBlock = srcFlat.getInDimSize(kBlock);
+    auto nOffset = srcFlat.getTotalOutDimSize() / nBlock;
+
+    auto storeCvt = srcFlat.reshapeOuts({{kOffset, nOffset}, {kBlock, nBlock}});
+    auto loadCvt = dstFlat.reshapeOuts({{kOffset, nOffset}, {kBlock, nBlock}});
+
+    Value smemBase =
+        LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
+
+    lowerLdStShared(loc, ctx, storeCvt, inVals, llvmElemTy, smemBase,
+                    /*paddingShifts=*/{}, b.i32_val(0),
+                    /*maskSpanAffineOffset=*/0, rewriter, targetInfo);
+
+    targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
+
+    auto outVals =
+        lowerLdStShared(loc, ctx, loadCvt, /*valsArray=*/{}, llvmElemTy,
+                        smemBase, /*paddingShifts=*/{}, b.i32_val(0),
+                        /*maskSpanAffineOffset=*/0, rewriter, targetInfo);
+
+    if (!removeBroadcastDst.isIdentity())
+      outVals = broadcastAs(outVals, dstLayout);
+
+    if (isa<LLVM::LLVMPointerType>(origElemTy)) {
+      for (auto &v : outVals)
+        v = b.inttoptr(origElemTy, v);
+    } else if (origElemTy != llvmElemTy) {
+      for (auto &v : outVals)
+        v = b.trunc(origElemTy, v);
+    }
+
+    Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
+                                  op.getType());
+    rewriter.replaceOp(op, result);
+    return success();
   }
 
   int getNumContiguousRowsForShuffle(const LinearLayout &srcLayout,
