@@ -244,8 +244,8 @@ function install_vllm {
   rm -f "$CONSTRAINTS"
 
   # Copy tests for benchmark use
-  rm -rf "$ROOT/benchmarks/vllm/batched_moe/tests"
-  cp -r tests "$ROOT/benchmarks/vllm/batched_moe/tests"
+  rm -rf "$ROOT/benchmarks/triton_kernels_benchmark/vllm/batched_moe/tests"
+  cp -r tests "$ROOT/benchmarks/triton_kernels_benchmark/vllm/batched_moe/tests"
 
   # Install vLLM in editable mode (--no-deps: don't resolve deps again)
   VLLM_TARGET_DEVICE=xpu python -m pip install --no-deps --no-build-isolation -e .

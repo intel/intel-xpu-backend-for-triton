@@ -23,7 +23,7 @@ import triton_kernels_benchmark as benchmark_suite
 from vllm.model_executor.layers.fused_moe.fused_batched_moe import invoke_moe_batched_triton_kernel
 
 # Add vLLM batched MoE tests path to sys.path to lazily import test utils
-VLLM_BATCHED_MOE_TESTS_PATH = Path(__file__).parent.parent / "vllm" / "batched_moe"
+VLLM_BATCHED_MOE_TESTS_PATH = Path(__file__).parent / "vllm" / "batched_moe"
 if str(VLLM_BATCHED_MOE_TESTS_PATH) not in sys.path:
     sys.path.insert(0, str(VLLM_BATCHED_MOE_TESTS_PATH))
 
