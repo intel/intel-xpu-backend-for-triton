@@ -53,7 +53,7 @@ The shared [`run_benchmark.sh`](run_benchmark.sh) script orchestrates both steps
 
 You can run a benchmark with environment variable `DEBUG_BENCH=1` to speed up if the benchmark runs at all. For example:
 ```
-DEBUG_BENCH=1 bash benchmarks/vllm/run_benchmark.sh unified_attention
+DEBUG_BENCH=1 bash benchmarks/triton_kernels_benchmark/vllm/run_benchmark.sh unified_attention
 ```
 
 # Running tests
