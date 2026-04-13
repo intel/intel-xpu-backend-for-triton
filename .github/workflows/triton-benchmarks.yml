@@ -117,9 +117,59 @@ jobs:
           cd benchmarks
           pip install --no-build-isolation .
 
+      - name: Check if vLLM is needed
+        id: check-vllm
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          BENCHMARKS='${{ inputs.benchmarks }}'
+          SKIP='${{ inputs.skip_benchmarks }}'
+
+          echo "Benchmarks input: $BENCHMARKS"
+          echo "Skip input: $SKIP"
+
+          # Empty benchmarks means run all
+          if [ "$BENCHMARKS" = "" ]; then
+            echo "Empty benchmarks list - will run all benchmarks including vLLM"
+            echo "needed=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Check if any vllm benchmark is in the list
+          VLLM_MATCHES=$(echo "$BENCHMARKS" | grep -o '"vllm_[^"]*_benchmark\.py"' || true)
+          if [ -z "$VLLM_MATCHES" ]; then
+            echo "No vLLM benchmarks requested"
+            echo "needed=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "vLLM benchmarks found: $VLLM_MATCHES"
+
+          # Count how many vLLM benchmarks are requested
+          VLLM_COUNT=$(echo "$VLLM_MATCHES" | wc -l)
+
+          # Count how many vLLM benchmarks are skipped
+          SKIP_VLLM=$(echo "$SKIP" | grep -o '"vllm_[^"]*_benchmark\.py"' || true)
+          if [ -z "$SKIP_VLLM" ]; then
+            SKIP_COUNT=0
+          else
+            SKIP_COUNT=$(echo "$SKIP_VLLM" | wc -l)
+          fi
+
+          echo "vLLM benchmarks requested: $VLLM_COUNT"
+          echo "vLLM benchmarks skipped: $SKIP_COUNT"
+
+          # Need vLLM if not all requested benchmarks are skipped
+          if [ "$VLLM_COUNT" -gt "$SKIP_COUNT" ]; then
+            echo "vLLM installation needed"
+            echo "needed=true" >> $GITHUB_OUTPUT
+          else
+            echo "All vLLM benchmarks are skipped - no installation needed"
+            echo "needed=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Install vLLM
         id: install-vllm
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && ((inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_batched_moe_benchmark.py') || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_fused_moe_benchmark.py') || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_unified_attention_benchmark.py')) && !(contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_batched_moe_benchmark.py') && contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_fused_moe_benchmark.py') && contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_unified_attention_benchmark.py'))) }}
+        if: ${{ steps.check-vllm.outputs.needed == 'true' && !cancelled() }}
         run: |
           ./scripts/test-triton.sh --install-vllm --skip-pip-install --skip-pytorch-install
 
