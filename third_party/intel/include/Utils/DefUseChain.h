@@ -5,9 +5,14 @@
 #include "mlir/IR/Value.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
 #include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include <unordered_set>
 
 namespace mlir::triton::intel {
+
+// Forward declare so Fuser destructor compiles even if Utility.h is not fully
+// visible in every translation unit that includes this header.
+void eraseOperations(llvm::SmallPtrSetImpl<Operation *> &operations);
 
 /// \class DefUseChain
 /// Represent a def-use chain rooted at an operation 'start' and terminating at

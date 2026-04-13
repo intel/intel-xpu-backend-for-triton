@@ -8,9 +8,6 @@
 #include <numeric>
 #include <optional>
 
-// Include shared C-compatible TDM utilities
-#include "../../backend/include/TDMCommon.h"
-
 namespace mlir::LLVM::AMD {
 
 namespace {
