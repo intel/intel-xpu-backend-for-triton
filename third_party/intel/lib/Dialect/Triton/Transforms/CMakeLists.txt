@@ -12,5 +12,6 @@ add_triton_library(TritonIntelTransforms
   LINK_LIBS PUBLIC
   MLIRPass
   MLIRTransformUtils
+  TritonIntelAnalysis
   TritonIR
 )

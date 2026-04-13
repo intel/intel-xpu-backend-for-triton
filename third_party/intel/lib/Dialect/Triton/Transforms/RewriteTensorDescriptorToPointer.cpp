@@ -1,3 +1,5 @@
+#include "intel/include/Analysis/AxisInfoExt.h"
+#include "intel/include/Analysis/StrideInfo.h"
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
 #include "intel/include/Utils/Utility.h"
 
@@ -300,26 +302,18 @@ SmallVector<mlir::Value> castToI64(OpBuilder &builder,
   });
 }
 
-/// Result of analyzing x_offsets for gather/scatter descriptor ops.
-struct ContiguousOffsetInfo {
-  Value baseOffset; // Start offset — constant or dynamic Value (i32)
-  int64_t count;    // Number of consecutive offsets (N)
-};
-
-/// Analyze whether x_offsets form a contiguous range
-/// [base, base+1, ..., base+N-1].
-/// Returns nullopt if offsets are not provably contiguous.
+/// Extract the scalar base offset from x_offsets that form a contiguous range.
+/// Assumes contiguity has already been verified (e.g. via StrideInfo).
 ///
 /// Walks the SSA def chain of xOffsets looking for the pattern:
 ///   arith.addi(tt.splat(scalar), arith.extsi(tt.make_range(start, end)))
 /// or subsets thereof (e.g. just tt.make_range, or with nested extsi/addi).
-static std::optional<ContiguousOffsetInfo>
-analyzeContiguousOffsets(Value xOffsets) {
+/// Returns the i32 scalar base offset Value, or nullopt if the pattern is
+/// not recognized.
+static std::optional<Value> extractBaseOffset(Value xOffsets) {
   auto tensorTy = dyn_cast<RankedTensorType>(xOffsets.getType());
   if (!tensorTy || tensorTy.getRank() != 1)
     return std::nullopt;
-
-  int64_t tensorSize = tensorTy.getDimSize(0);
 
   // Track accumulated dynamic base offset from splat-adds.
   Value dynamicBase = nullptr;
@@ -374,12 +368,6 @@ analyzeContiguousOffsets(Value xOffsets) {
     // Look for tt.make_range at the root.
     if (auto makeRange = dyn_cast<triton::MakeRangeOp>(defOp)) {
       int64_t start = makeRange.getStartAttr().getInt();
-      int64_t end = makeRange.getEndAttr().getInt();
-      int64_t count = end - start;
-
-      // Verify the range covers the full tensor dimension with stride 1.
-      if (count != tensorSize)
-        return std::nullopt;
 
       // Build the final baseOffset combining constant start and dynamic base.
       // The result must be an i32 scalar (DescriptorLoadOp index type).
@@ -415,7 +403,7 @@ analyzeContiguousOffsets(Value xOffsets) {
             builder, loc, builder.getI32IntegerAttr(start));
       }
 
-      return ContiguousOffsetInfo{baseOffset, count};
+      return baseOffset;
     }
 
     // Unknown op — cannot analyze.
@@ -494,18 +482,26 @@ analyzeConstantOffsetRanges(Value xOffsets) {
 ///          : !tt.tensordesc<tensor<16x64xbf16>> -> tensor<16x64xbf16>
 struct RewriteContiguousGather
     : public OpRewritePattern<triton::DescriptorGatherOp> {
-  using OpRewritePattern::OpRewritePattern;
+  RewriteContiguousGather(MLIRContext *context,
+                          intel::ModuleStrideAnalysis *strideAnalysis,
+                          PatternBenefit benefit = 2)
+      : OpRewritePattern(context, benefit), strideAnalysis(strideAnalysis) {}
 
   LogicalResult matchAndRewrite(triton::DescriptorGatherOp gatherOp,
                                 PatternRewriter &rewriter) const override {
-    // 1. Check if x_offsets are contiguous.
-    std::optional<ContiguousOffsetInfo> contiguousInfo =
-        analyzeContiguousOffsets(gatherOp.getXOffsets());
-    if (!contiguousInfo)
-      return rewriter.notifyMatchFailure(gatherOp,
-                                         "x_offsets are not contiguous");
+    // 1. Check contiguity via StrideInfo.
+    auto *si = strideAnalysis->getStrideInfo(gatherOp.getXOffsets());
+    if (!si || si->getStride(0) != 1)
+      return rewriter.notifyMatchFailure(
+          gatherOp, "x_offsets stride != 1 per StrideInfo");
 
-    // 2. Get result type shape: N rows, W columns.
+    // 2. Extract base offset for descriptor_load index.
+    auto baseOffset = extractBaseOffset(gatherOp.getXOffsets());
+    if (!baseOffset)
+      return rewriter.notifyMatchFailure(gatherOp,
+                                         "cannot extract base offset");
+
+    // 3. Get result type shape: N rows, W columns.
     auto resultTy = cast<RankedTensorType>(gatherOp.getResult().getType());
     if (resultTy.getRank() != 2)
       return rewriter.notifyMatchFailure(gatherOp, "result is not rank 2");
@@ -514,14 +510,14 @@ struct RewriteContiguousGather
     int64_t rowWidth = resultTy.getShape()[1];
     Type elemTy = resultTy.getElementType();
 
-    // 3. Find the MakeTensorDescOp that defines the descriptor.
+    // 4. Find the MakeTensorDescOp that defines the descriptor.
     triton::MakeTensorDescOp makeTensorDescOp =
         gatherOp.getDesc().getDefiningOp<triton::MakeTensorDescOp>();
     if (!makeTensorDescOp)
       return rewriter.notifyMatchFailure(
           gatherOp, "descriptor not from MakeTensorDescOp");
 
-    // 4. Create a new MakeTensorDescOp with block shape [N, W].
+    // 5. Create a new MakeTensorDescOp with block shape [N, W].
     Location loc = gatherOp.getLoc();
     auto newBlockTy = RankedTensorType::get({numRows, rowWidth}, elemTy);
     auto newDescTy =
@@ -531,9 +527,8 @@ struct RewriteContiguousGather
         makeTensorDescOp.getShape(), makeTensorDescOp.getStrides(),
         makeTensorDescOp.getPadding());
 
-    // 5. Create tt.descriptor_load with offsets [baseOffset, yOffset].
-    SmallVector<Value> indices = {contiguousInfo->baseOffset,
-                                  gatherOp.getYOffset()};
+    // 6. Create tt.descriptor_load with offsets [baseOffset, yOffset].
+    SmallVector<Value> indices = {*baseOffset, gatherOp.getYOffset()};
     auto descLoadOp = triton::DescriptorLoadOp::create(rewriter, loc, resultTy,
                                                        newMakeDesc, indices);
 
@@ -542,6 +537,9 @@ struct RewriteContiguousGather
     rewriter.replaceOp(gatherOp, descLoadOp.getResult());
     return success();
   }
+
+private:
+  intel::ModuleStrideAnalysis *strideAnalysis;
 };
 
 /// Rewrite DescriptorGatherOps with compile-time-constant x_offsets that form
@@ -917,9 +915,14 @@ class TritonRewriteTensorDescriptorToPointerPass
     // Enabled by default. Set TRITON_INTEL_DISABLE_REWRITE_CONTIGUOUS_GATHER=1
     // to disable.
     if (!tools::getBoolEnv("TRITON_INTEL_DISABLE_REWRITE_CONTIGUOUS_GATHER")) {
+      auto moduleOp = cast<ModuleOp>(op);
+      intel::ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
+      intel::ModuleStrideAnalysis strideAnalysis(moduleOp, axisInfoAnalysis);
+
       MLIRContext *ctx = op->getContext();
       RewritePatternSet patterns(ctx);
-      patterns.add<RewriteContiguousGather>(ctx, /*benefit=*/2);
+      patterns.add<RewriteContiguousGather>(ctx, &strideAnalysis,
+                                            /*benefit=*/2);
       patterns.add<RewriteMultiRangeGather>(ctx, /*benefit=*/1);
       // Failure here means no patterns matched (e.g. no gathers, or only
       // non-contiguous offsets). This is expected — unmatched gathers fall
