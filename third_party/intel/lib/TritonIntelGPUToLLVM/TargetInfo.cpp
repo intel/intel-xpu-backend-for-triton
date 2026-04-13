@@ -158,7 +158,76 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
                             unsigned reduceLaneIdMask) const {
-  llvm_unreachable("FIXME: implement warpReduce for Intel GPU");
+  /**
+  The reduceLaneIdMask is the bit map of the bases of the linear layout to be
+  reduced within warp. Here is the code pieces of ReduceOpToLLVM.cpp:
+  ```
+    const auto &laneBases = layout.getBases().lookup(kLane);
+    unsigned reduceLaneIdMask = 0;
+    for (unsigned bit = 0; bit < laneBases.size(); ++bit) {
+      if (laneBases[bit][op.getAxis()] != 0) {
+        reduceLaneIdMask |= 1u << bit;
+      }
+    }
+  ```
+  For example of warp size=32:
+  1. For a 32-lane reduction with interleave 1, the reduce of lanes are [0, 1,
+  2, 3, 4, 5, 6, 7, ... 31], and the reduceLaneIdMask is 0b11111.
+  2. For a 4-lane reduction with interleave 1, the reduce of lanes are [0, 1, 2,
+  3], [4, 5, 6, 7], ... [28, 29, 30 ,31], and the reduceLaneIdMask is 0b00011.
+  3. For a 4-lane reduction with interleave 2, the reduce of lanes are [0, 2, 4,
+  6], [1, 3, 5, 7], ... [24, 26, 28 ,30], [25, 27, 29 ,31], and the
+  reduceLaneIdMask is 0b00110. For other cases there is 0 in the middle of 1's,
+  e.g: 0b00101. the reduce of lanes are [0, 1, 4, 5], ..., It is not supported
+  by single intrinsic trivially.
+  */
+  assert(reduceLaneIdMask && "reduceLaneIdMask cannot be 0");
+  unsigned tailingZeros = __builtin_ctz(reduceLaneIdMask);
+  unsigned interleave = 0x1 << tailingZeros;
+  unsigned bitMap = reduceLaneIdMask >> tailingZeros;
+  unsigned numLaneToReduce = 1;
+  while (bitMap & 0x1) {
+    numLaneToReduce <<= 1;
+    bitMap >>= 1;
+  }
+  if (bitMap)
+    return false;
+  // No horizontal reduce required.
+  if (numLaneToReduce == 1)
+    return false;
+  // Horizontal reduce with interleave stride not supported.
+  // TODO: It can be supported.
+  if (interleave > 1)
+    return false;
+  // Check if it is a simple reduce operation supported by
+  // TritonGEN::SubGroupReduceOp.
+  if (op.getNumOperands() != 1 || op.getNumResults() != 1)
+    return false;
+  Region &combineOp = op.getCombineOp();
+  if (combineOp.getBlocks().size() > 1)
+    return false;
+  Block &block = *combineOp.begin();
+  Operation *yield = block.getTerminator();
+  Operation *reduceOp = yield->getOperand(0).getDefiningOp();
+  if (!reduceOp || reduceOp->getNumOperands() != 2 ||
+      reduceOp->getNumResults() != 1)
+    return false;
+  if (reduceOp->getOperand(0) != block.getArgument(0) ||
+      reduceOp->getOperand(1) != block.getArgument(1))
+    return false;
+
+  auto mod = op->getParentOfType<ModuleOp>();
+  unsigned warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+
+  if (!isSupportedWarpReduceOp(reduceOp, numLaneToReduce, warpSize))
+    return false;
+
+  for (unsigned i = 0; i < acc.size(); ++i) {
+    acc[i] = genWarpReduce(rewriter, loc, acc[i], reduceOp, numLaneToReduce,
+                           warpSize);
+  }
+
+  return true;
 }
 
 std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {
