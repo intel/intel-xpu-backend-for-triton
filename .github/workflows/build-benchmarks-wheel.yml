@@ -74,7 +74,8 @@ jobs:
           pip install *.whl
 
       - name: Validate benchmarks wheel
-        uses: ./.github/actions/validate-benchmarks
+        run: |
+          triton-benchmarks-validate
 
       - name: Upload benchmarks wheel
         uses: actions/upload-artifact@v7

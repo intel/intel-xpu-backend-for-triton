@@ -37,7 +37,8 @@ runs:
     - name: Validate benchmarks (same run)
       id: same-run-validate
       if: steps.same-run-install.outcome == 'success'
-      uses: ./.github/actions/validate-benchmarks
+      shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+      run: triton-benchmarks describe ALL
       continue-on-error: true
 
     - name: Install triton-utils
@@ -69,7 +70,8 @@ runs:
     - name: Validate benchmarks (main)
       id: main-validate
       if: steps.main-wheel.outcome == 'success'
-      uses: ./.github/actions/validate-benchmarks
+      shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+      run: triton-benchmarks describe ALL
       continue-on-error: true
 
     - name: Report wheel installation success
