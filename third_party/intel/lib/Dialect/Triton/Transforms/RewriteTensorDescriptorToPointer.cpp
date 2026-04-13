@@ -310,6 +310,20 @@ SmallVector<mlir::Value> castToI64(OpBuilder &builder,
 /// or subsets thereof (e.g. just tt.make_range, or with nested extsi/addi).
 /// Returns the i32 scalar base offset Value, or nullopt if the pattern is
 /// not recognized.
+///
+/// Example: given the following IR:
+///   %range = tt.make_range {start = 0, end = 16} : tensor<16xi32>
+///   %splat = tt.splat %arg1 : i32 -> tensor<16xi32>
+///   %x     = arith.addi %range, %splat : tensor<16xi32>
+///
+/// The walk proceeds bottom-up from %x:
+///   1. arith.addi — one side is tt.splat(%arg1), accumulate dynamicBase=%arg1,
+///      recurse on %range.
+///   2. tt.make_range {start=0} — terminal. start=0, so return dynamicBase
+///      as-is: %arg1.
+///
+/// The returned Value (%arg1) is used as the x-index in:
+///   tt.descriptor_load %desc[%arg1, %y] -> tensor<16x...>
 static std::optional<Value> extractBaseOffset(Value xOffsets) {
   auto tensorTy = dyn_cast<RankedTensorType>(xOffsets.getType());
   if (!tensorTy || tensorTy.getRank() != 1)
