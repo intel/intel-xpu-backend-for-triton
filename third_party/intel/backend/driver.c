@@ -517,115 +517,368 @@ extern "C" EXPORT_FUNC PyObject *sycl_queue_memset(PyObject *args) {
   Py_RETURN_NONE;
 }
 
-// Generic launcher: precompiled, type-erased kernel launch.
-// Python packs arg values into a flat 8-byte-per-slot buffer with a
-// parallel type-id array; this function dispatches set_arg by byte width.
-// Enabled by TRITON_XPU_GENERIC_LAUNCHER=1
+// ==========================================================================
+// Generic launcher — matches the CUDA/AMD design:
+//   - buildSignatureMetadata: called ONCE at kernel init; maps type strings
+//     to extractor indices (a bytes object cached in the Python launcher).
+//   - generic_launch: called on EVERY launch; receives raw Python arg objects
+//     and the cached bytes blob; uses alloca (no heap) and a function-pointer
+//     table (no switch) to extract and set each argument.
+// ==========================================================================
 
-// Size-based type IDs — must match _ARG_* constants in driver.py.
-enum ArgType : uint8_t { ARG_PTR = 0, ARG_1B, ARG_2B, ARG_4B, ARG_8B };
+// --------------------------------------------------------------------------
+// Extractor type enum and function-pointer table
+// --------------------------------------------------------------------------
 
-static inline void setArgByType(sycl::handler &cgh, int idx, uint8_t ty,
-                                const void *slot) {
-  // Use memcpy to read from the unaligned Python buffer (Py_buffer guarantees
-  // only 1-byte alignment).  Casting directly to uint16_t*/uint32_t*/uint64_t*
-  // and dereferencing would be undefined behaviour on strict-alignment targets.
-  switch (ty) {
-  case ARG_PTR: {
-    void *v;
-    memcpy(&v, slot, sizeof(v));
-    cgh.set_arg(idx, v);
-    break;
+typedef bool (*ExtractorFunc)(void *dst, PyObject *obj);
+typedef void (*SetArgFunc)(sycl::handler &cgh, int idx, const void *val);
+
+typedef struct {
+  ExtractorFunc extract; // write the C value from a Python object into dst
+  SetArgFunc setArg;     // call cgh.set_arg with the correctly-typed value
+  size_t size;           // sizeof the C type
+  const char *names[3];  // Triton type strings that map to this extractor
+} Extractor;
+
+// Extractor indices — stored in the pre-built signature metadata bytes.
+typedef enum {
+  EX_UNKNOWN = 0,
+  EX_PTR,  // any '*...' pointer type
+  EX_I8,   // i8
+  EX_I16,  // i16
+  EX_I32,  // i1, i32
+  EX_I64,  // i64
+  EX_U8,   // u8
+  EX_U16,  // u16
+  EX_U32,  // u1, u32
+  EX_U64,  // u64
+  EX_FP16, // fp16
+  EX_BF16, // bf16
+  EX_FP32, // fp32, f32
+  EX_FP64, // fp64
+  EX_COUNT
+} ExtractorIndex;
+
+// --- individual extractor functions ---
+
+static bool extractPtr(void *dst, PyObject *obj) {
+  void **out = static_cast<void **>(dst);
+  if (obj == Py_None) {
+    *out = nullptr;
+    return true;
   }
-  case ARG_1B:
-    cgh.set_arg(idx, *static_cast<const uint8_t *>(slot));
-    break;
-  case ARG_2B: {
-    uint16_t v;
-    memcpy(&v, slot, sizeof(v));
-    cgh.set_arg(idx, v);
-    break;
+  if (PyLong_Check(obj)) {
+    *out = PyLong_AsVoidPtr(obj);
+    return !PyErr_Occurred();
   }
-  case ARG_4B: {
-    uint32_t v;
-    memcpy(&v, slot, sizeof(v));
-    cgh.set_arg(idx, v);
-    break;
-  }
-  default: {
-    uint64_t v;
-    memcpy(&v, slot, sizeof(v));
-    cgh.set_arg(idx, v);
-    break;
-  }
-  }
+  // obj has a .data_ptr() method (e.g. torch.Tensor)
+  static PyObject *s_data_ptr = PyUnicode_InternFromString("data_ptr");
+  PyObject *ret = PyObject_CallMethodNoArgs(obj, s_data_ptr);
+  if (!ret)
+    return false;
+  *out = PyLong_AsVoidPtr(ret);
+  Py_DECREF(ret);
+  return !PyErr_Occurred();
 }
 
+static bool extractI8(void *dst, PyObject *obj) {
+  *static_cast<int8_t *>(dst) = (int8_t)PyLong_AsLong(obj);
+  return !PyErr_Occurred();
+}
+static bool extractI16(void *dst, PyObject *obj) {
+  *static_cast<int16_t *>(dst) = (int16_t)PyLong_AsLong(obj);
+  return !PyErr_Occurred();
+}
+static bool extractI32(void *dst, PyObject *obj) {
+  *static_cast<int32_t *>(dst) = (int32_t)PyLong_AsLong(obj);
+  return !PyErr_Occurred();
+}
+static bool extractI64(void *dst, PyObject *obj) {
+  *static_cast<int64_t *>(dst) = PyLong_AsLongLong(obj);
+  return !PyErr_Occurred();
+}
+static bool extractU8(void *dst, PyObject *obj) {
+  *static_cast<uint8_t *>(dst) = (uint8_t)PyLong_AsUnsignedLong(obj);
+  return !PyErr_Occurred();
+}
+static bool extractU16(void *dst, PyObject *obj) {
+  *static_cast<uint16_t *>(dst) = (uint16_t)PyLong_AsUnsignedLong(obj);
+  return !PyErr_Occurred();
+}
+static bool extractU32(void *dst, PyObject *obj) {
+  *static_cast<uint32_t *>(dst) = (uint32_t)PyLong_AsUnsignedLong(obj);
+  return !PyErr_Occurred();
+}
+static bool extractU64(void *dst, PyObject *obj) {
+  *static_cast<uint64_t *>(dst) = PyLong_AsUnsignedLongLong(obj);
+  return !PyErr_Occurred();
+}
+static bool extractFP16(void *dst, PyObject *obj) {
+  double d = PyFloat_AsDouble(obj);
+  if (PyErr_Occurred())
+    return false;
+  uint16_t v;
+  PyFloat_Pack2(d, reinterpret_cast<char *>(&v), 1);
+  *static_cast<uint16_t *>(dst) = v;
+  return !PyErr_Occurred();
+}
+static bool extractBF16(void *dst, PyObject *obj) {
+  float f = (float)PyFloat_AsDouble(obj);
+  if (PyErr_Occurred())
+    return false;
+  uint32_t u;
+  memcpy(&u, &f, sizeof(u));
+  *static_cast<uint16_t *>(dst) = (uint16_t)(u >> 16);
+  return true;
+}
+static bool extractFP32(void *dst, PyObject *obj) {
+  float f = (float)PyFloat_AsDouble(obj);
+  if (PyErr_Occurred())
+    return false;
+  memcpy(dst, &f, sizeof(f));
+  return true;
+}
+static bool extractFP64(void *dst, PyObject *obj) {
+  double d = PyFloat_AsDouble(obj);
+  if (PyErr_Occurred())
+    return false;
+  memcpy(dst, &d, sizeof(d));
+  return true;
+}
+
+// The table — indexed by ExtractorIndex.
+
+// setArg_* helpers: call cgh.set_arg with the correctly-typed value.
+// SYCL's set_arg is a template, so we need one wrapper per type.
+#define DEFINE_SET_ARG(name, T)                                                \
+  static void setArg_##name(sycl::handler &cgh, int idx, const void *val) {    \
+    cgh.set_arg(idx, *static_cast<const T *>(val));                            \
+  }
+// Pointer needs its own implementation: val points to a void* (the pointer
+// value), and casting const void* -> const void** removes qualifiers.
+// Use memcpy to load the stored pointer value safely.
+static void setArg_ptr(sycl::handler &cgh, int idx, const void *val) {
+  void *p;
+  memcpy(&p, val, sizeof(p));
+  cgh.set_arg(idx, p);
+}
+DEFINE_SET_ARG(i8, int8_t)
+DEFINE_SET_ARG(i16, int16_t)
+DEFINE_SET_ARG(i32, int32_t)
+DEFINE_SET_ARG(i64, int64_t)
+DEFINE_SET_ARG(u8, uint8_t)
+DEFINE_SET_ARG(u16, uint16_t)
+DEFINE_SET_ARG(u32, uint32_t)
+DEFINE_SET_ARG(u64, uint64_t)
+DEFINE_SET_ARG(fp16, uint16_t) // fp16/bf16 stored as raw bits in uint16_t
+DEFINE_SET_ARG(bf16, uint16_t)
+DEFINE_SET_ARG(fp32, float)
+DEFINE_SET_ARG(fp64, double)
+#undef DEFINE_SET_ARG
+
+static const Extractor g_extractors[EX_COUNT] = {
+    [EX_UNKNOWN] = {nullptr, nullptr, 0, {}},
+    [EX_PTR] = {extractPtr, setArg_ptr, sizeof(void *), {}},
+    [EX_I8] = {extractI8, setArg_i8, sizeof(int8_t), {"i8", nullptr, nullptr}},
+    [EX_I16] = {extractI16,
+                setArg_i16,
+                sizeof(int16_t),
+                {"i16", nullptr, nullptr}},
+    [EX_I32] = {extractI32,
+                setArg_i32,
+                sizeof(int32_t),
+                {"i1", "i32", nullptr}},
+    [EX_I64] = {extractI64,
+                setArg_i64,
+                sizeof(int64_t),
+                {"i64", nullptr, nullptr}},
+    [EX_U8] = {extractU8, setArg_u8, sizeof(uint8_t), {"u8", nullptr, nullptr}},
+    [EX_U16] = {extractU16,
+                setArg_u16,
+                sizeof(uint16_t),
+                {"u16", nullptr, nullptr}},
+    [EX_U32] = {extractU32,
+                setArg_u32,
+                sizeof(uint32_t),
+                {"u1", "u32", nullptr}},
+    [EX_U64] = {extractU64,
+                setArg_u64,
+                sizeof(uint64_t),
+                {"u64", nullptr, nullptr}},
+    [EX_FP16] = {extractFP16,
+                 setArg_fp16,
+                 sizeof(uint16_t),
+                 {"fp16", nullptr, nullptr}},
+    [EX_BF16] = {extractBF16,
+                 setArg_bf16,
+                 sizeof(uint16_t),
+                 {"bf16", nullptr, nullptr}},
+    [EX_FP32] = {extractFP32,
+                 setArg_fp32,
+                 sizeof(float),
+                 {"fp32", "f32", nullptr}},
+    [EX_FP64] = {extractFP64,
+                 setArg_fp64,
+                 sizeof(double),
+                 {"fp64", nullptr, nullptr}},
+};
+
+static ExtractorIndex getExtractorIndex(const char *ty) {
+  if (ty[0] == '*')
+    return EX_PTR;
+  for (int i = EX_I8; i < EX_COUNT; ++i) {
+    for (int j = 0; j < 3 && g_extractors[i].names[j]; ++j) {
+      if (strcmp(ty, g_extractors[i].names[j]) == 0)
+        return (ExtractorIndex)i;
+    }
+  }
+  return EX_UNKNOWN;
+}
+
+// --------------------------------------------------------------------------
+// Pointer validation helper — shared between buildSignatureMetadata (which
+// checks at launch time) and the inline check inside generic_launch.
+// --------------------------------------------------------------------------
+
+static bool validatePointer(void *ptr, int idx, ze_context_handle_t l0ctx) {
+  if (!ptr)
+    return true; // nullptr is always valid
+  ze_memory_allocation_properties_t prop = {};
+  prop.stype = ZE_STRUCTURE_TYPE_MEMORY_ALLOCATION_PROPERTIES;
+  ze_device_handle_t dev;
+  ze_result_t res = zeMemGetAllocProperties(l0ctx, ptr, &prop, &dev);
+  if (res != ZE_RESULT_SUCCESS) {
+    PyErr_Format(PyExc_ValueError,
+                 "Cannot get memory properties for Pointer argument "
+                 "(at %d, err=%d)",
+                 idx, (int)res);
+    return false;
+  }
+  if (prop.type == ZE_MEMORY_TYPE_UNKNOWN) {
+    PyErr_Format(PyExc_ValueError,
+                 "Pointer argument (at %d) doesn't reference "
+                 "accessible memory.",
+                 idx);
+    return false;
+  }
+  return true;
+}
+
+// --------------------------------------------------------------------------
+// buildSignatureMetadata(sig_list) -> bytes
+//
+// Called ONCE when a kernel is first compiled.  Converts a Python list of
+// Triton type strings (e.g. ['*f32', 'i32', 'constexpr']) into a compact
+// bytes object of ExtractorIndex values.  EX_UNKNOWN (0) is used for
+// constexpr entries so generic_launch can skip them with a single check.
+// --------------------------------------------------------------------------
+
+extern "C" EXPORT_FUNC PyObject *buildSignatureMetadata(PyObject *args) {
+  PyObject *sig_list;
+  if (!PyArg_ParseTuple(args, "O", &sig_list))
+    return NULL;
+
+  PyObject *fast = PySequence_Fast(sig_list, "signature must be a sequence");
+  if (!fast)
+    return NULL;
+
+  Py_ssize_t n = PySequence_Fast_GET_SIZE(fast);
+  PyObject *result = PyBytes_FromStringAndSize(nullptr, n);
+  if (!result) {
+    Py_DECREF(fast);
+    return NULL;
+  }
+  char *buf = PyBytes_AS_STRING(result);
+
+  PyObject **items = PySequence_Fast_ITEMS(fast);
+  for (Py_ssize_t i = 0; i < n; ++i) {
+    const char *ty = PyUnicode_AsUTF8(items[i]);
+    if (!ty) {
+      Py_DECREF(fast);
+      Py_DECREF(result);
+      return NULL;
+    }
+    ExtractorIndex idx =
+        (strcmp(ty, "constexpr") == 0) ? EX_UNKNOWN : getExtractorIndex(ty);
+    if (idx == EX_UNKNOWN && strcmp(ty, "constexpr") != 0) {
+      PyErr_Format(PyExc_ValueError,
+                   "buildSignatureMetadata: unknown Triton type '%s'", ty);
+      Py_DECREF(fast);
+      Py_DECREF(result);
+      return NULL;
+    }
+    buf[i] = (char)(uint8_t)idx;
+  }
+
+  Py_DECREF(fast);
+  return result;
+}
+
+// --------------------------------------------------------------------------
 // generic_launch(gridX, gridY, gridZ, stream, kernel, kernel_metadata,
 //                launch_metadata, enter_hook, exit_hook,
-//                arg_types_bytes, arg_values_buffer)
+//                sig_metadata,   <- bytes from buildSignatureMetadata
+//                kernel_args)    <- tuple of raw Python arg objects
+//
+// Hot path: no heap allocation, no Python-side packing loop.
+// alloca() keeps everything on the C stack (like CUDA/AMD backends).
+// --------------------------------------------------------------------------
+
 extern "C" EXPORT_FUNC PyObject *generic_launch(PyObject *args) {
   int gridX, gridY, gridZ;
   PyObject *pyStream, *pyKernel;
   PyObject *kernelMeta, *launchMeta, *enterHook, *exitHook;
-  Py_buffer typeBuf, valBuf;
+  Py_buffer sigBuf;
+  PyObject *kernelArgs;
 
-  if (!PyArg_ParseTuple(args, "iiiOOOOOOs*s*", &gridX, &gridY, &gridZ,
-                        &pyStream, &pyKernel, &kernelMeta, &launchMeta,
-                        &enterHook, &exitHook, &typeBuf, &valBuf)) {
+  if (!PyArg_ParseTuple(args, "iiiOOOOOOs*O", &gridX, &gridY, &gridZ, &pyStream,
+                        &pyKernel, &kernelMeta, &launchMeta, &enterHook,
+                        &exitHook, &sigBuf, &kernelArgs)) {
     return NULL;
   }
-
-  auto releaseBuffers = [&]() {
-    PyBuffer_Release(&typeBuf);
-    PyBuffer_Release(&valBuf);
-  };
 
   // Extract kernel metadata.
   PyObject *numWarpsAttr = PyObject_GetAttrString(kernelMeta, "num_warps");
-  if (numWarpsAttr == nullptr) {
-    releaseBuffers();
+  if (!numWarpsAttr) {
+    PyBuffer_Release(&sigBuf);
     return NULL;
   }
-  int numWarps = PyLong_AsLong(numWarpsAttr);
-  if (numWarps == -1 && PyErr_Occurred()) {
-    Py_DECREF(numWarpsAttr);
-    releaseBuffers();
-    return NULL;
-  }
+  int numWarps = (int)PyLong_AsLong(numWarpsAttr);
   Py_DECREF(numWarpsAttr);
+  if (numWarps == -1 && PyErr_Occurred()) {
+    PyBuffer_Release(&sigBuf);
+    return NULL;
+  }
 
   PyObject *sharedAttr = PyObject_GetAttrString(kernelMeta, "shared");
-  if (sharedAttr == nullptr) {
-    releaseBuffers();
+  if (!sharedAttr) {
+    PyBuffer_Release(&sigBuf);
     return NULL;
   }
-  int sharedMemory = PyLong_AsLong(sharedAttr);
-  if (sharedMemory == -1 && PyErr_Occurred()) {
-    Py_DECREF(sharedAttr);
-    releaseBuffers();
-    return NULL;
-  }
+  int sharedMemory = (int)PyLong_AsLong(sharedAttr);
   Py_DECREF(sharedAttr);
+  if (sharedMemory == -1 && PyErr_Occurred()) {
+    PyBuffer_Release(&sigBuf);
+    return NULL;
+  }
 
   PyObject *tpwAttr = PyObject_GetAttrString(kernelMeta, "threads_per_warp");
-  if (tpwAttr == nullptr) {
-    releaseBuffers();
+  if (!tpwAttr) {
+    PyBuffer_Release(&sigBuf);
     return NULL;
   }
-  int threadsPerWarp = PyLong_AsLong(tpwAttr);
-  if (threadsPerWarp == -1 && PyErr_Occurred()) {
-    Py_DECREF(tpwAttr);
-    releaseBuffers();
-    return NULL;
-  }
+  int threadsPerWarp = (int)PyLong_AsLong(tpwAttr);
   Py_DECREF(tpwAttr);
+  if (threadsPerWarp == -1 && PyErr_Occurred()) {
+    PyBuffer_Release(&sigBuf);
+    return NULL;
+  }
 
   // Launch enter hook.
   if (enterHook != Py_None) {
     PyObject *ret = PyObject_CallOneArg(enterHook, launchMeta);
     if (!ret) {
-      releaseBuffers();
+      PyBuffer_Release(&sigBuf);
       return NULL;
     }
     Py_DECREF(ret);
@@ -633,118 +886,124 @@ extern "C" EXPORT_FUNC PyObject *generic_launch(PyObject *args) {
 
   void *pStream = PyLong_AsVoidPtr(pyStream);
   if (!pStream || !pyKernel) {
-    releaseBuffers();
+    PyBuffer_Release(&sigBuf);
     return NULL;
   }
   sycl::queue stream = *static_cast<sycl::queue *>(pStream);
   sycl::kernel *kernelPtr = reinterpret_cast<sycl::kernel *>(
       PyCapsule_GetPointer(pyKernel, "kernel"));
   if (!kernelPtr) {
-    releaseBuffers();
+    PyBuffer_Release(&sigBuf);
     return NULL;
   }
   sycl::kernel kernel = *kernelPtr;
 
-  const auto *types = static_cast<const uint8_t *>(typeBuf.buf);
-  const auto *vals = static_cast<const uint8_t *>(valBuf.buf);
+  // sig_metadata is a bytes object built by buildSignatureMetadata.
+  // Each byte is an ExtractorIndex; EX_UNKNOWN means constexpr (skip).
+  const uint8_t *sigData = static_cast<const uint8_t *>(sigBuf.buf);
+  Py_ssize_t sigLen = sigBuf.len;
 
-  // Each arg occupies exactly 8 bytes in the value buffer.
-  if (valBuf.len != (Py_ssize_t)typeBuf.len * 8) {
-    releaseBuffers();
-    PyErr_Format(
-        PyExc_ValueError,
-        "generic_launch: valBuf length (%zd) != typeBuf length (%zd) * 8",
-        valBuf.len, typeBuf.len);
+  // Flatten kernelArgs into a fast sequence.
+  PyObject *fastArgs =
+      PySequence_Fast(kernelArgs, "kernel_args must be a sequence");
+  if (!fastArgs) {
+    PyBuffer_Release(&sigBuf);
     return NULL;
   }
+  Py_ssize_t nRawArgs = PySequence_Fast_GET_SIZE(fastArgs);
+  PyObject **rawArgs = PySequence_Fast_ITEMS(fastArgs);
 
-  // Pointer validation: matches the per-kernel compiled launcher's
-  // checkDevicePointer behaviour.  Enabled by default; set
-  // TRITON_XPU_VALIDATE_POINTERS=0 to skip (faster launch, no Level Zero
-  // round-trip per pointer arg, but invalid pointers become hard crashes).
+  // Count kernel (non-constexpr) args.
+  int nKernelArgs = 0;
+  for (Py_ssize_t i = 0; i < sigLen; ++i)
+    if (sigData[i] != EX_UNKNOWN)
+      ++nKernelArgs;
+
+  // Stack-allocate an array of (storage_ptr, setArg_fn) pairs — one per
+  // kernel arg.  Both alloca calls MUST stay in this function's stack frame.
+  void **params = static_cast<void **>(alloca(nKernelArgs * sizeof(void *)));
+  SetArgFunc *setArgFns =
+      static_cast<SetArgFunc *>(alloca(nKernelArgs * sizeof(SetArgFunc)));
+
+  // Pointer validation flag — read once, static.
   static bool validatePtrs = []() {
     const char *s = std::getenv("TRITON_XPU_VALIDATE_POINTERS");
     if (!s)
-      return true; // default: on
+      return true;
     std::string v(s);
     std::transform(v.begin(), v.end(), v.begin(),
                    [](unsigned char c) { return std::tolower(c); });
     return !(v == "0" || v == "false" || v == "off");
   }();
-  if (validatePtrs) {
-    auto l0Context = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(
-        stream.get_context());
-    int nArgsCheck = (int)typeBuf.len;
-    for (int i = 0; i < nArgsCheck; ++i) {
-      if (types[i] != ARG_PTR)
-        continue;
-      void *ptr;
-      memcpy(&ptr, vals + i * 8, sizeof(ptr));
-      if (!ptr)
-        continue;
-      ze_memory_allocation_properties_t prop = {};
-      prop.stype = ZE_STRUCTURE_TYPE_MEMORY_ALLOCATION_PROPERTIES;
-      ze_device_handle_t device;
-      ze_result_t res = zeMemGetAllocProperties((ze_context_handle_t)l0Context,
-                                                ptr, &prop, &device);
-      if (res != ZE_RESULT_SUCCESS) {
-        releaseBuffers();
-        PyErr_Format(PyExc_ValueError,
-                     "Cannot get memory properties for Pointer argument "
-                     "(at %d, err=%d)",
-                     i, (int)res);
-        return NULL;
-      }
-      if (prop.type == ZE_MEMORY_TYPE_UNKNOWN) {
-        releaseBuffers();
-        PyErr_Format(PyExc_ValueError,
-                     "Pointer argument (at %d) doesn't reference "
-                     "accessible memory.",
-                     i);
+
+  ze_context_handle_t l0ctx = nullptr;
+  if (validatePtrs)
+    l0ctx = static_cast<ze_context_handle_t>(
+        sycl::get_native<sycl::backend::ext_oneapi_level_zero>(
+            stream.get_context()));
+
+  // Extract each arg from the Python object using the pre-built metadata.
+  int paramIdx = 0;
+  Py_ssize_t rawIdx = 0;
+  for (Py_ssize_t i = 0; i < sigLen; ++i) {
+    uint8_t exIdx = sigData[i];
+    if (exIdx == EX_UNKNOWN) { // constexpr — skip
+      ++rawIdx;
+      continue;
+    }
+    if (rawIdx >= nRawArgs) {
+      PyErr_SetString(PyExc_ValueError,
+                      "generic_launch: fewer kernel args than signature slots");
+      Py_DECREF(fastArgs);
+      PyBuffer_Release(&sigBuf);
+      return NULL;
+    }
+    const Extractor &ex = g_extractors[exIdx];
+    void *storage = alloca(ex.size);
+    PyObject *obj = rawArgs[rawIdx++];
+    if (!ex.extract(storage, obj)) {
+      Py_DECREF(fastArgs);
+      PyBuffer_Release(&sigBuf);
+      return NULL;
+    }
+    // Validate pointers against the Level Zero memory model.
+    if (validatePtrs && exIdx == EX_PTR) {
+      void *ptr = *static_cast<void **>(storage);
+      if (!validatePointer(ptr, paramIdx, l0ctx)) {
+        Py_DECREF(fastArgs);
+        PyBuffer_Release(&sigBuf);
         return NULL;
       }
     }
+    params[paramIdx] = storage;
+    setArgFns[paramIdx] = ex.setArg;
+    ++paramIdx;
   }
 
-  // Validate arg count: user args + global_scratch + profile_scratch [+ slm].
-  int nArgs = (int)typeBuf.len;
-  int expectedArgs = nArgs + 2 + (sharedMemory ? 1 : 0);
-  int kernelArgs = 0;
-  try {
-    kernelArgs = (int)kernel.get_info<sycl::info::kernel::num_args>();
-  } catch (const sycl::exception &e) {
-    releaseBuffers();
-    PyErr_Format(PyExc_RuntimeError,
-                 "generic_launch: failed to query kernel arg count: %s",
-                 e.what());
-    return NULL;
-  }
-  if (expectedArgs != kernelArgs) {
-    releaseBuffers();
-    PyErr_Format(PyExc_ValueError,
-                 "generic_launch: argument count mismatch: expected %d "
-                 "(user %d + implicit %d) but kernel has %d",
-                 expectedArgs, nArgs, expectedArgs - nArgs, kernelArgs);
-    return NULL;
-  }
+  Py_DECREF(fastArgs);
+  PyBuffer_Release(&sigBuf);
 
   sycl::range<3> globalRange(gridZ, gridY,
                              (size_t)gridX * threadsPerWarp * numWarps);
   sycl::range<3> localRange(1, 1, (size_t)numWarps * threadsPerWarp);
   sycl::nd_range<3> ndRange(globalRange, localRange);
 
+  // Capture nKernelArgs and sharedMemory by value so the lambda is safe
+  // after this function returns (submit is asynchronous w.r.t. the host,
+  // but the command-group function itself is called synchronously before
+  // submit() returns — so stack-allocated params[] are safe here).
   auto cgf = [&](sycl::handler &cgh) {
-    for (int i = 0; i < nArgs; ++i)
-      setArgByType(cgh, i, types[i], vals + i * 8);
+    for (int i = 0; i < nKernelArgs; ++i)
+      setArgFns[i](cgh, i, params[i]);
 
     // Implicit params: global_scratch, profile_scratch (nullptr).
     void *nullPtr = nullptr;
-    cgh.set_arg(nArgs, nullPtr);
-    cgh.set_arg(nArgs + 1, nullPtr);
+    cgh.set_arg(nKernelArgs, nullPtr);
+    cgh.set_arg(nKernelArgs + 1, nullPtr);
 
     if (sharedMemory) {
       auto localBuf = sycl::local_accessor<int8_t, 1>(sharedMemory, cgh);
-      cgh.set_arg(nArgs + 2, localBuf);
+      cgh.set_arg(nKernelArgs + 2, localBuf);
     }
     cgh.parallel_for(ndRange, kernel);
   };
@@ -752,13 +1011,10 @@ extern "C" EXPORT_FUNC PyObject *generic_launch(PyObject *args) {
   try {
     stream.submit(cgf);
   } catch (const sycl::exception &e) {
-    releaseBuffers();
     PyErr_Format(PyExc_RuntimeError, "generic_launch: SYCL submit failed: %s",
                  e.what());
     return NULL;
   }
-
-  releaseBuffers();
 
   // Launch exit hook.
   if (exitHook != Py_None) {
