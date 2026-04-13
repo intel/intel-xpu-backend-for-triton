@@ -119,7 +119,7 @@ jobs:
 
       - name: Install vLLM
         id: install-vllm
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && ((inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_unified_attention_benchmark.py') || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_batched_moe_benchmark.py')) && !(contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_unified_attention_benchmark.py') && contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_batched_moe_benchmark.py'))) }}
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && ((inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_batched_moe_benchmark.py') || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_fused_moe_benchmark.py') || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_unified_attention_benchmark.py')) && !(contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_batched_moe_benchmark.py') && contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_fused_moe_benchmark.py') && contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_unified_attention_benchmark.py'))) }}
         run: |
           ./scripts/test-triton.sh --install-vllm --skip-pip-install --skip-pytorch-install
 
