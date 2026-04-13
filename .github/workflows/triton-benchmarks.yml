@@ -386,7 +386,7 @@ jobs:
             --param_cols="num_experts,max_tokens_per_expert,K,N"
 
       - name: Run vllm fused moe
-        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
+        if: ${{ steps.install.outcome == 'success' && steps.install-vllm.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'vllm_fused_moe_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'vllm_fused_moe_benchmark.py') }}
         run: |
           cd benchmarks/triton_kernels_benchmark
           bash vllm/run_benchmark.sh fused_moe --reports $REPORTS --n_runs $N_RUNS
