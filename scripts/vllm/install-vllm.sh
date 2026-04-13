@@ -149,8 +149,8 @@ function patch_vllm {
   cd "$VLLM_PROJ"
 
   # Apply the main vLLM fix patch (conftest, batched_moe, fused_batched_moe, etc.)
-  if git apply --check "$ROOT/benchmarks/vllm/vllm-fix.patch" 2>/dev/null; then
-    git apply "$ROOT/benchmarks/vllm/vllm-fix.patch"
+  if git apply --check "$ROOT/benchmarks/triton_kernels_benchmark/vllm/vllm-fix.patch" 2>/dev/null; then
+    git apply "$ROOT/benchmarks/triton_kernels_benchmark/vllm/vllm-fix.patch"
     echo "**** Applied vllm-fix.patch ****"
   else
     echo "**** vllm-fix.patch already applied or conflicts, skipping. ****"
