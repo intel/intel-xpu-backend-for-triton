@@ -1585,9 +1585,10 @@ def _wrap_init_args(x):
 
 
 def _aggregate(cls):
+    field_annotations = typing.get_type_hints(cls)
+    field_names = builtins.tuple(field_annotations.keys())
     init = cls.__dict__.get("__init__", None)
     if init is None:
-        field_names = builtins.tuple(cls.__annotations__.keys())
 
         def init(self, *args, **kwargs):
             if len(args) > len(field_names):
@@ -1617,7 +1618,7 @@ def _aggregate(cls):
     class aggregate_value(base_value):
         __triton_builtin__ = True
         __triton_aggregate__ = True
-        __annotations__ = cls.__annotations__
+        __annotations__ = field_annotations
 
         @classmethod
         def _get_instance(this_cls):
@@ -1638,7 +1639,7 @@ def _aggregate(cls):
             init(instance, *args, **extra_kwargs, **kwargs)
 
             # Require that the user-defined constructor initialized all fields.
-            for name in cls.__annotations__.keys():
+            for name in field_names:
                 if not hasattr(instance, name):
                     raise AttributeError(f"constructor for {cls.__name__} did not initialize attribute '{name}'")
 
@@ -1646,24 +1647,23 @@ def _aggregate(cls):
 
         # Only allow setting attributes defined in the class annotations.
         def __setattr__(self, name, value):
-            if name not in cls.__annotations__:
+            if name not in field_annotations:
                 raise AttributeError(f"{cls.__name__} has no attribute '{name}'")
-            if not isinstance(value, cls.__annotations__[name]):
-                raise TypeError(f"Expected {cls.__annotations__[name]} for attribute '{name}', got {type(value)}")
+            if not isinstance(value, field_annotations[name]):
+                raise TypeError(f"Expected {field_annotations[name]} for attribute '{name}', got {type(value)}")
             super().__setattr__(name, value)
 
         def _set_name(self, builder: ir.builder, name: str) -> None:
-            for key_name in cls.__annotations__.keys():
+            for key_name in field_names:
                 getattr(self, key_name)._set_name(builder, f"{name}.{key_name}")
 
         def _flatten_ir(self, handles: List[ir.value]) -> None:
-            for name in cls.__annotations__.keys():
+            for name in field_names:
                 getattr(self, name)._flatten_ir(handles)
 
         @property
         def type(self):
-            return _aggregate_type(aggregate_value,
-                                   [(name, getattr(self, name).type) for name in cls.__annotations__.keys()])
+            return _aggregate_type(aggregate_value, [(name, getattr(self, name).type) for name in field_names])
 
     hash_attrs = [init]
 
