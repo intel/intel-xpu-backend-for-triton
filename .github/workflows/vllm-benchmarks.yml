@@ -213,7 +213,7 @@ jobs:
         run: |
           source ./scripts/capture-hw-details.sh
 
-          cd benchmark/triton_kernels_benchmarks/vllm
+          cd benchmarks/triton_kernels_benchmarks/vllm
           bash run_benchmark.sh fused_moe --reports $REPORTS
           # Transform baseline results
           python ../../transform_results.py \
