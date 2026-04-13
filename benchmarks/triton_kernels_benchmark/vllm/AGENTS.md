@@ -81,7 +81,7 @@ Note that during the benchmarking CI there is report generation. Reports need to
 
 You can find the diff that the upstream had in a specific file by doing:
 1. Go to vllm folder: `cd vllm`
-2. Run `git diff main $(<../benchmarks/vllm/vllm-pin.txt) -- $FILE`
+2. Run `git diff main $(<../benchmarks/triton_kernels_benchmark/vllm/vllm-pin.txt) -- $FILE`
 
 During a pin update you need to:
 1. Update the pin file.

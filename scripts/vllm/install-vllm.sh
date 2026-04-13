@@ -70,7 +70,7 @@ VLLM_PROJ=$ROOT/vllm
 
 # Use VLLM_PIN environment variable if set, otherwise read from file
 if [ -z "${VLLM_PIN:-}" ]; then
-  VLLM_PIN="$(<"$ROOT/benchmarks/vllm/vllm-pin.txt")"
+  VLLM_PIN="$(<"$ROOT/benchmarks/triton_kernels_benchmark/vllm/vllm-pin.txt")"
 fi
 
 echo "**** vLLM pin: $VLLM_PIN ****"
