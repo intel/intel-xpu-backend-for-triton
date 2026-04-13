@@ -130,14 +130,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   tt.func @reduce_tpw16_2d_axis0(%f : tensor<4x64xf32, #blocked>) -> tensor<64xf32, #ttg.slice<{dim = 0, parent = #blocked}>> {
 
   // COM: No intra-warp reduce (threads are [1, 16], no lanes along dim 0).
-  // COM: Inter-warp: 4 warps store to shared memory, then ClusteredReduce.
+  // COM: Inter-warp: 4 warps store to shared memory, barrier, load, then ClusteredReduce.
 
-  // Store partial results to shared memory (vectorized as vector<4xf32>)
-  // CHECK:     llvm.store %{{.*}}, %{{.*}} : vector<4xf32>, !llvm.ptr<3>
+  // Store partial results to shared memory (vectorized as vector<1xf32>)
+  // CHECK:     llvm.store %{{.*}}, %{{.*}} : vector<1xf32>, !llvm.ptr<3>
   // CHECK:     llvm.call spir_funccc @_Z7barrierj(%{{.*}}) {{.*}} : (i32) -> ()
 
-  // Inter-warp reduce: load from shared memory and ClusteredReduce with cluster_size=4 (4 args)
-  // CHECK:     llvm.load %{{.*}} : !llvm.ptr<3> -> vector<4xf32>
+  // Inter-warp reduce: load from shared memory, then ClusteredReduce with cluster_size=4 (4 args)
+  // CHECK:     llvm.load %{{.*}} : !llvm.ptr<3> -> vector<1xf32>
   // CHECK:     llvm.call spir_funccc @_Z27__spirv_GroupNonUniformFAddiifj(%{{.*}}) {{.*}} : (i32, i32, f32, i32) -> f32
 
     %g = "tt.reduce" (%f) ({

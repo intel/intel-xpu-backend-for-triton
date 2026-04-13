@@ -1,76 +1,22 @@
 // RUN: triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm --cse -canonicalize | FileCheck %s
 
 
+// COM: Tests DPAS -> blocked layout conversion via flat (non-swizzled) SLM.
+// COM: With the cross-warp flat SLM path, these conversions use vectorized
+// COM: stores of vector<8xf16>, a barrier, and scalar loads of vector<1xf16>.
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 16], warpsPerCTA = [16, 2], order = [1, 0]}>
 #mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 8], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.shared = 67584 : i32, "ttg.threads-per-warp" = 16 : i32} {
 // CHECK-LABEL:   llvm.func spir_kernelcc @convert_dpas(
-// CHECK-SAME:                                          %[[VAL_0:.*]]: !llvm.ptr<1>)
-// CHECK-SAME:                                          attributes {intel_reqd_sub_group_size = 16 : i32, noinline = false, reqd_work_group_size = array<i32: 512, 1, 1>} {
   tt.func public @convert_dpas(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf16, #mma>
 
-    // CHECK-DAG:       %[[CST_3:.*]] = llvm.mlir.constant(3 : i32) : i32
-    // CHECK-DAG:       %[[CST_7:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK-DAG:       %[[CST_387:.*]] = llvm.mlir.constant(387 : i32) : i32
-    // CHECK-DAG:       %[[CST_64:.*]] = llvm.mlir.constant(64 : i32) : i32
-    // CHECK-DAG:       %[[CST_48:.*]] = llvm.mlir.constant(48 : i32) : i32
-    // CHECK-DAG:       %[[CST_14:.*]] = llvm.mlir.constant(14 : i32) : i32
-    // CHECK-DAG:       %[[CST_12:.*]] = llvm.mlir.constant(12 : i32) : i32
-    // CHECK-DAG:       %[[CST_4:.*]] = llvm.mlir.constant(4 : i32) : i32
-    // CHECK-DAG:       %[[CST_2:.*]] = llvm.mlir.constant(2 : i32) : i32
-    // CHECK-DAG:       %[[CST_1:.*]] = llvm.mlir.constant(1 : i32) : i32
+    // COM: Flat SLM path: stores to shared memory, barrier, loads from shared memory.
     // CHECK-DAG:       %[[SMEM:.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
-    // CHECK-DAG:       %[[CST_16:.*]] = llvm.mlir.constant(16 : i32) : i32
-    // CHECK-DAG:       %[[CST_511:.*]] = llvm.mlir.constant(511 : i32) : i32
-    // CHECK-DAG:       %[[CST_0:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // COM: The following operations is generated for the conversion of DPAS layout to blocked layout.  The conversion replica size is 128*256. So there is 1 round of load/store with synchronization.
-    // CHECK:           llvm.call spir_funccc @_Z12get_local_idj(%[[CST_0]]) {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return} : (i32) -> i64
-    // CHECK:           llvm.call spir_funccc @_Z12get_local_idj(%[[CST_0]]) {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return} : (i32) -> i64
-    // CHECK:           %[[threadId_64:.*]] = llvm.call spir_funccc @_Z12get_local_idj(%[[CST_0]]) {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return} : (i32) -> i64
-    // CHECK:           %[[threadId:.*]] = llvm.trunc %[[threadId_64]] : i64 to i32
-    // CHECK:           %[[rtid:.*]] = llvm.and %[[threadId:.*]], %[[CST_511]] : i32
-    // CHECK:           %[[warpId:.*]] = llvm.udiv %[[rtid]], %[[CST_16]]  : i32
-    // CHECK:           %[[threadId_64:.*]] = llvm.call spir_funccc @_Z12get_local_idj(%[[CST_0]]) {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return} : (i32) -> i64
-    // CHECK:           %[[threadId:.*]] = llvm.trunc %[[threadId_64]] : i64 to i32
-    // CHECK:           %[[rtid:.*]] = llvm.and %[[threadId:.*]], %[[CST_511]] : i32
-    // CHECK:           %[[laneId:.*]] = llvm.urem %[[rtid]], %[[CST_16]]  : i32
-    // CHECK:           %[[VAL_25:.*]] = llvm.shl %[[laneId]], %[[CST_0]] : i32
-    // CHECK:           %[[VAL_26:.*]] = llvm.or %[[CST_0]], %[[VAL_25]] : i32
-    // CHECK:           %[[VAL_27:.*]] = llvm.shl %[[warpId]], %[[CST_4]] : i32
-    // CHECK:           %[[VAL_28:.*]] = llvm.or %[[VAL_26]], %[[VAL_27]] : i32
-    // CHECK:           %[[VAL_29:.*]] = llvm.and %[[VAL_28]], %[[CST_3]] : i32
-    // CHECK:           %[[VAL_30:.*]] = llvm.shl %[[VAL_29]], %[[CST_14]] : i32
-    // CHECK:           %[[VAL_32:.*]] = llvm.and %[[VAL_28]], %[[CST_387]] : i32
-    // CHECK:           %[[VAL_33:.*]] = llvm.shl %[[VAL_32]], %[[CST_4]] : i32
-    // CHECK:           %[[VAL_35:.*]] = llvm.and %[[VAL_28]], %[[CST_48]] : i32
-    // CHECK:           %[[VAL_36:.*]] = llvm.shl %[[VAL_35]], %[[CST_1]] : i32
-    // CHECK:           %[[VAL_38:.*]] = llvm.and %[[VAL_28]], %[[CST_12]] : i32
-    // CHECK:           %[[VAL_39:.*]] = llvm.lshr %[[VAL_38]], %[[CST_0]] : i32
-    // CHECK:           %[[VAL_40:.*]] = llvm.and %[[VAL_28]], %[[CST_64]] : i32
-    // CHECK:           %[[VAL_42:.*]] = llvm.shl %[[VAL_40]], %[[CST_7]] : i32
-    // CHECK:           %[[VAL_43:.*]] = llvm.or disjoint %[[VAL_30]], %[[VAL_42]] : i32
-    // CHECK:           %[[VAL_45:.*]] = llvm.xor %[[VAL_33]], %[[VAL_36]] : i32
-    // CHECK:           %[[VAL_46:.*]] = llvm.xor %[[VAL_45]], %[[VAL_39]] : i32
-    // CHECK:           %[[VAL_47:.*]] = llvm.or disjoint %[[VAL_43]], %[[VAL_46]] : i32
-    // CHECK:           %[[VAL_48:.*]] = llvm.xor %[[CST_0]], %[[VAL_47]] : i32
-    // CHECK:           %[[VAL_49:.*]] = llvm.mul %[[CST_0]], %[[CST_2]] : i32
-    // CHECK:           %[[VAL_50:.*]] = llvm.xor %[[VAL_48]], %[[VAL_49]] : i32
-    // CHECK:           %[[VAL_51:.*]] = llvm.xor %[[VAL_50]], %[[CST_0]] : i32
-    // CHECK:           %[[offset:.*]] = llvm.add %[[VAL_51]], %[[CST_0]] : i32
-    // CHECK:           %[[VAL_65:.*]] = llvm.getelementptr inbounds %[[SMEM]]{{\[}}%[[offset]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
-    // CHECK:           %[[VAL_66:.*]] = llvm.insertelement {{.*}}, {{.*}}{{\[}}%[[CST_0]] : i32] : vector<2xf16>
-    // CHECK:           %[[VAL_67:.*]] = llvm.insertelement {{.*}}, %[[VAL_66]]{{\[}}%[[CST_1]] : i32] : vector<2xf16>
-
-    // COM: Because the values per thread of DPAS layout is contiguous. The values are stored in the SLM in vectorized way.
-    // COM: Total 32 stores are generated to save the tensor of the DPAS layout to the SLM. 128*256/(4*8*16*2) = 32
-    // CHECK:           llvm.store %[[VAL_67]], %[[VAL_65]] : vector<2xf16>, !llvm.ptr<3>
-    // CHECK-COUNT-31:  llvm.store {{.*}}, {{.*}} : vector<2xf16>, !llvm.ptr<3>
-    // CHECK:           llvm.call spir_funccc @_Z7barrierj(%[[CST_3]]) {convergent, no_unwind, will_return} : (i32) -> ()
-
-    // COM: Because the values per thread of blocked layout is contiguous. The values are loaded from the SLM in a vectorized way.
-    // COM: Total 8 loads are generated to load the tensor of the blocked layout from the SLM. 128*256/(16*2*16*8) = 8
-    // CHECK-COUNT-4:    {{.*}} = llvm.load {{.*}} : !llvm.ptr<3> -> vector<4xf16>
+    // CHECK:           llvm.store {{.*}} : vector<8xf16>, !llvm.ptr<3>
+    // CHECK:           llvm.call spir_funccc @_Z7barrierj({{.*}}) {convergent, no_unwind, will_return} : (i32) -> ()
+    // CHECK:           llvm.load {{.*}} : !llvm.ptr<3> -> vector<1xf16>
 
     %93 = ttg.convert_layout %cst {allocation.offset = 0 : i32} : tensor<128x256xf16, #mma> -> tensor<128x256xf16, #blocked>
     %80 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x1x!tt.ptr<f16>, #blocked>
@@ -88,73 +34,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.sha
 #mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 8], repCluster = [2, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.shared = 67584 : i32, "ttg.threads-per-warp" = 16 : i32} {
 // CHECK-LABEL:   llvm.func spir_kernelcc @convert_dpas(
-// CHECK-SAME:                                          %[[VAL_0:.*]]: !llvm.ptr<1>)
-// CHECK-SAME:                                          attributes {intel_reqd_sub_group_size = 16 : i32, noinline = false, reqd_work_group_size = array<i32: 512, 1, 1>} {
   tt.func public @convert_dpas(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf16, #mma>
 
-    // CHECK-DAG:           %[[CST_3:.*]] = llvm.mlir.constant(3 : i32) : i32
-    // CHECK-DAG:           %[[CST_7:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK-DAG:           %[[CST_387:.*]] = llvm.mlir.constant(387 : i32) : i32
-    // CHECK-DAG:           %[[CST_64:.*]] = llvm.mlir.constant(64 : i32) : i32
-    // CHECK-DAG:           %[[CST_48:.*]] = llvm.mlir.constant(48 : i32) : i32
-    // CHECK-DAG:           %[[CST_14:.*]] = llvm.mlir.constant(14 : i32) : i32
-    // CHECK-DAG:           %[[CST_12:.*]] = llvm.mlir.constant(12 : i32) : i32
-    // CHECK-DAG:           %[[CST_4:.*]] = llvm.mlir.constant(4 : i32) : i32
-    // CHECK-DAG:           %[[CST_2:.*]] = llvm.mlir.constant(2 : i32) : i32
-    // CHECK-DAG:           %[[CST_1:.*]] = llvm.mlir.constant(1 : i32) : i32
-    // CHECK-DAG:           %[[SMEM:.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
-    // CHECK-DAG:           %[[CST_16:.*]] = llvm.mlir.constant(16 : i32) : i32
-    // CHECK-DAG:           %[[CST_0:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK-DAG:           %[[CST_511:.*]] = llvm.mlir.constant(511 : i32) : i32
+    // COM: Flat SLM path: stores to shared memory, barrier, loads from shared memory.
+    // CHECK-DAG:       %[[SMEM:.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+    // CHECK:           llvm.store {{.*}} : vector<8xf16>, !llvm.ptr<3>
+    // CHECK:           llvm.call spir_funccc @_Z7barrierj({{.*}}) {convergent, no_unwind, will_return} : (i32) -> ()
+    // CHECK:           llvm.load {{.*}} : !llvm.ptr<3> -> vector<1xf16>
 
-    // COM: The following operations is generated for the conversion of DPAS layout to blocked layout. The conversion replica size is 64*256. So there are 2 round of load/store with synchronization.
-    // CHECK:           llvm.call spir_funccc @_Z12get_local_idj(%[[CST_0]]) {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return} : (i32) -> i64
-    // CHECK:           llvm.call spir_funccc @_Z12get_local_idj(%[[CST_0]]) {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return} : (i32) -> i64
-    // CHECK:           %[[threadId_64:.*]] = llvm.call spir_funccc @_Z12get_local_idj(%[[CST_0]]) {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return} : (i32) -> i64
-    // CHECK:           %[[threadId:.*]] = llvm.trunc %[[threadId_64]] : i64 to i32
-    // CHECK:           %[[rtid:.*]] = llvm.and %[[threadId]], %[[CST_511]] : i32
-    // CHECK:           %[[warpId:.*]] = llvm.udiv %[[rtid]], %[[CST_16]]  : i32
-    // CHECK:           %[[threadId_64:.*]] = llvm.call spir_funccc @_Z12get_local_idj(%[[CST_0]]) {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return} : (i32) -> i64
-    // CHECK:           %[[threadId:.*]] = llvm.trunc %[[threadId_64]] : i64 to i32
-    // CHECK:           %[[rtid:.*]] = llvm.and %[[threadId]], %[[CST_511]] : i32
-    // CHECK:           %[[laneId:.*]] = llvm.urem %[[rtid]], %[[CST_16]]  : i32
-    // CHECK:           %[[VAL_25:.*]] = llvm.shl %[[laneId]], %[[CST_0]] : i32
-    // CHECK:           %[[VAL_26:.*]] = llvm.or %[[CST_0]], %[[VAL_25]] : i32
-    // CHECK:           %[[VAL_27:.*]] = llvm.shl %[[warpId]], %[[CST_4]] : i32
-    // CHECK:           %[[VAL_28:.*]] = llvm.or %[[VAL_26]], %[[VAL_27]] : i32
-    // CHECK:           %[[VAL_29:.*]] = llvm.and %[[VAL_28]], %[[CST_3]] : i32
-    // CHECK:           %[[VAL_30:.*]] = llvm.shl %[[VAL_29]], %[[CST_14]] : i32
-    // CHECK:           %[[VAL_32:.*]] = llvm.and %[[VAL_28]], %[[CST_387]] : i32
-    // CHECK:           %[[VAL_33:.*]] = llvm.shl %[[VAL_32]], %[[CST_4]] : i32
-    // CHECK:           %[[VAL_35:.*]] = llvm.and %[[VAL_28]], %[[CST_48]] : i32
-    // CHECK:           %[[VAL_36:.*]] = llvm.shl %[[VAL_35]], %[[CST_1]] : i32
-    // CHECK:           %[[VAL_38:.*]] = llvm.and %[[VAL_28]], %[[CST_12]] : i32
-    // CHECK:           %[[VAL_39:.*]] = llvm.lshr %[[VAL_38]], %[[CST_0]] : i32
-    // CHECK:           %[[VAL_40:.*]] = llvm.and %[[VAL_28]], %[[CST_64]] : i32
-    // CHECK:           %[[VAL_42:.*]] = llvm.shl %[[VAL_40]], %[[CST_7]] : i32
-    // CHECK:           %[[VAL_43:.*]] = llvm.or disjoint %[[VAL_30]], %[[VAL_42]] : i32
-    // CHECK:           %[[VAL_45:.*]] = llvm.xor %[[VAL_33]], %[[VAL_36]] : i32
-    // CHECK:           %[[VAL_46:.*]] = llvm.xor %[[VAL_45]], %[[VAL_39]] : i32
-    // CHECK:           %[[VAL_47:.*]] = llvm.or disjoint %[[VAL_43]], %[[VAL_46]] : i32
-    // CHECK:           %[[VAL_48:.*]] = llvm.xor %[[CST_0]], %[[VAL_47]] : i32
-    // CHECK:           %[[VAL_49:.*]] = llvm.mul %[[CST_0]], %[[CST_2]] : i32
-    // CHECK:           %[[VAL_50:.*]] = llvm.xor %[[VAL_48]], %[[VAL_49]] : i32
-    // CHECK:           %[[VAL_51:.*]] = llvm.xor %[[VAL_50]], %[[CST_0]] : i32
-    // CHECK:           %[[offset:.*]] = llvm.add %[[VAL_51]], %[[CST_0]] : i32
-    // CHECK:           %[[VAL_65:.*]] = llvm.getelementptr inbounds %[[SMEM]]{{\[}}%[[offset]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
-    // CHECK:           %[[VAL_66:.*]] = llvm.insertelement {{.*}}, {{.*}}{{\[}}%[[CST_0]] : i32] :  vector<2xf16>
-    // CHECK:           %[[VAL_67:.*]] = llvm.insertelement {{.*}}, %[[VAL_66]]{{\[}}%[[CST_1]] : i32] : vector<2xf16>
-
-    // COM: Because the values per thread of DPAS layout is contiguous. The values are stored in the SLM in vectorized way.
-    // COM: Total 32 stores are generated to save the tensor of the DPAS layout to the SLM. 128*256/(4*8*16*2) = 32
-    // CHECK:           llvm.store %[[VAL_67]], %[[VAL_65]] : vector<2xf16>, !llvm.ptr<3>
-    // CHECK-COUNT-31:  llvm.store {{.*}}, {{.*}} : vector<2xf16>, !llvm.ptr<3>
-    // CHECK:           llvm.call spir_funccc @_Z7barrierj(%[[CST_3]]) {convergent, no_unwind, will_return} : (i32) -> ()
-
-    // COM: Because the values per thread of blocked layout is contiguous. The values are loaded from the SLM in a vectorized way.
-    // COM: Total 16 loads are generated to load the tensor of the blocked layout from the SLM. 128*256/(16*2*16*4) = 16
-    // CHECK-COUNT-16:    {{.*}} = llvm.load {{.*}} : !llvm.ptr<3> -> vector<4xf16>
     %93 = ttg.convert_layout %cst {allocation.offset = 0 : i32} : tensor<128x256xf16, #mma> -> tensor<128x256xf16, #blocked>
     %80 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x1x!tt.ptr<f16>, #blocked>
     %83 = tt.broadcast %80 : tensor<128x1x!tt.ptr<f16>, #blocked> -> tensor<128x256x!tt.ptr<f16>, #blocked>

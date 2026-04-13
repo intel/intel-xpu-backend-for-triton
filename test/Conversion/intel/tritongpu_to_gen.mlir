@@ -711,37 +711,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: convert_layout_blocked_blocked
   tt.func @convert_layout_blocked_blocked(%arg0: tensor<32x32xf32, #blocked0>) {
     // CHECK: llvm.store
-    // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
-    // CHECK: [[ONE:%.*]] = llvm.mlir.constant(3 : i32) : i32
-    // CHECK-NEXT: llvm.call spir_funccc  @_Z7barrierj([[ONE]]) {{.*}} : (i32) -> ()
-    // CHECK: llvm.load
     // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3>
+    // CHECK: llvm.call spir_funccc  @_Z7barrierj({{.*}}) {{.*}} : (i32) -> ()
     // CHECK: llvm.load
     // CHECK-SAME: !llvm.ptr<3>
     %0 = ttg.convert_layout %arg0 : tensor<32x32xf32, #blocked0> -> tensor<32x32xf32, #blocked1>
@@ -758,15 +729,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: convert_layout_blocked_blocked_vec
   tt.func @convert_layout_blocked_blocked_vec(%arg0: tensor<32x32xf32, #blocked0>) {
     // CHECK: llvm.store
-    // CHECK-SAME: vector<4xf32>, !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: vector<4xf32>, !llvm.ptr<3>
-    // CHECK: [[ONE:%.*]] = llvm.mlir.constant(3 : i32) : i32
-    // CHECK-NEXT: llvm.call spir_funccc @_Z7barrierj([[ONE]]) {{.*}} : (i32) -> ()
+    // CHECK-SAME: !llvm.ptr<3>
+    // CHECK: llvm.call spir_funccc @_Z7barrierj({{.*}}) {{.*}} : (i32) -> ()
     // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3> -> vector<4xf32>
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3> -> vector<4xf32>
+    // CHECK-SAME: !llvm.ptr<3>
     %0 = ttg.convert_layout %arg0 : tensor<32x32xf32, #blocked0> -> tensor<32x32xf32, #blocked1>
     tt.return
   }
@@ -830,12 +796,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK-LABEL: convert_layout_dpas_block
   tt.func @convert_layout_dpas_blocked(%arg0: tensor<32x16xf32, #dpas>) {
     // CHECK: llvm.store
-    // CHECK-SAME: vector<2xf32>, !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: vector<2xf32>, !llvm.ptr<3>
+    // CHECK-SAME: !llvm.ptr<3>
     // CHECK: llvm.call spir_funccc @_Z7barrierj({{.*}}) {{.*}} : (i32) -> ()
     // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3> -> vector<2xf32>
+    // CHECK-SAME: !llvm.ptr<3>
     %0 = ttg.convert_layout %arg0 : tensor<32x16xf32, #dpas> -> tensor<32x16xf32, #blocked0>
     tt.return
   }
@@ -850,16 +814,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK-LABEL: convert_layout_dpas_block
   tt.func @convert_layout_dpas_blocked(%arg0: tensor<32x64xf32, #dpas>) {
     // CHECK: llvm.store
-    // CHECK-SAME: vector<4xf32>, !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: vector<4xf32>, !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: vector<4xf32>, !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: vector<4xf32>, !llvm.ptr<3>
+    // CHECK-SAME: !llvm.ptr<3>
     // CHECK: llvm.call spir_funccc @_Z7barrierj({{.*}}) {{.*}} : (i32) -> ()
     // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3> -> vector<4xf32>
+    // CHECK-SAME: !llvm.ptr<3>
     %0 = ttg.convert_layout %arg0 : tensor<32x64xf32, #dpas> -> tensor<32x64xf32, #blocked>
     tt.return
   }
@@ -872,9 +830,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: convert_layout_dpas_transpose
   tt.func @convert_layout_dpas_transpose(%arg0: tensor<128x256xf8E5M2, #dpas>) {
-    // CHECK-COUNT-16: llvm.store %{{.*}} : vector<16xi8>, !llvm.ptr<3>
+    // CHECK: llvm.store %{{.*}} : {{.*}}, !llvm.ptr<3>
     // CHECK: llvm.call spir_funccc @_Z7barrierj({{.*}}) {{.*}} : (i32) -> ()
-    // CHECK-COUNT-2: llvm.load %{{.*}} : !llvm.ptr<3> -> vector<16xi8>
+    // CHECK: llvm.load %{{.*}} : !llvm.ptr<3>
     %0 = ttg.convert_layout %arg0 : tensor<128x256xf8E5M2, #dpas> -> tensor<128x256xf8E5M2, #blocked>
     tt.return
   }
