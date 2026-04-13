@@ -69,6 +69,10 @@ void init_triton_intel_passes_ttir(py::module &&m) {
                      intel::createTritonIntelSimplifySignedArithmetic);
   ADD_PASS_WRAPPER_0("add_rewrite_tensor_pointer",
                      intel::createTritonIntelRewriteTensorPointer);
+  ADD_PASS_WRAPPER_0("add_fold_true_cmpi",
+                     intel::createTritonIntelGPUFoldTrueCmpI);
+  ADD_FUNC_PASS_WRAPPER_0("add_prepare_if_combining",
+                          intel::createTritonIntelGPUPrepareIfCombining);
 }
 
 void init_triton_intel_passes_ttgpuir(py::module &&m) {

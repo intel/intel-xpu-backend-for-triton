@@ -165,4 +165,25 @@ def TritonIntelRewriteTensorPointer
   let dependentDialects = ["mlir::triton::TritonDialect"];
 }
 
+def TritonIntelGPUFoldTrueCmpI
+    : Pass<"triton-intel-fold-true-cmpi", "mlir::ModuleOp"> {
+  let summary = "Fold provably true/false arith.cmpi to constants";
+  let description = [{
+    Uses integer range analysis to fold arith.cmpi comparisons that are
+    provably always true or always false into constant values. Cleans up
+    dead branches created by RemoveMasks loop versioning.
+  }];
+  let dependentDialects = ["mlir::arith::ArithDialect"];
+}
+
+def TritonIntelGPUPrepareIfCombining
+    : Pass<"triton-intel-prepare-if-combining", "mlir::triton::FuncOp"> {
+  let summary = "Move ops between scf.if pairs to enable combining";
+  let description = [{
+    Moves pure operations from between scf.if pairs that share the same
+    condition, enabling canonicalization to combine them into a single scf.if.
+  }];
+  let dependentDialects = [];
+}
+
 #endif // TRITON_DIALECT_TRITON_INTEL_TRANSFORMS_PASSES
