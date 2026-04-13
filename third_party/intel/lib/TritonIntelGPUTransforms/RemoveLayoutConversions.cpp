@@ -959,9 +959,44 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
     assert(layoutIt != layout.end());
     // If we already have a remat value for this value, use it.
     if (Value remat = getRematValue(v, layoutIt->second)) {
-      mapping.map(v, remat);
-      valuesWithExistingRemat.insert(v);
-      continue;
+      // Only reuse the existing rematerialization if it dominates the
+      // defining op of `v`.  The cloned ops are inserted right before the
+      // original ops in the slice, so `remat` must dominate `v`'s defining
+      // op to be a valid operand for those clones.
+      bool canReuse = true;
+      if (auto *defOp = v.getDefiningOp()) {
+        canReuse = domInfo.properlyDominates(remat, defOp);
+      }
+      if (canReuse) {
+        mapping.map(v, remat);
+        valuesWithExistingRemat.insert(v);
+        continue;
+      }
+      // The cached remat value exists but doesn't dominate `v`'s defining
+      // op.  This happens when a previous hoist iteration registered a remat
+      // for `v` that is placed later in the block.  The backward-slice
+      // computation stopped tracing through `v` (because it found the cached
+      // remat), so `v`'s operand dependencies are NOT in the current slice.
+      // We cannot simply fall through and try to clone `v`'s defining op,
+      // because its operands would have the wrong encoding.
+      //
+      // Instead, insert a fresh convert_layout of `v` (in its original
+      // encoding) to the target encoding, placed right after `v`'s
+      // defining op.  This gives us a value that dominates all the cloned
+      // ops that will use it.
+      if (auto *defOp = v.getDefiningOp()) {
+        OpBuilder cvtBuilder(defOp->getContext());
+        cvtBuilder.setInsertionPointAfter(defOp);
+        auto origType = cast<RankedTensorType>(v.getType());
+        auto newType = RankedTensorType::get(
+            origType.getShape(), origType.getElementType(), layoutIt->second);
+        Value newCvt =
+            ttg::ConvertLayoutOp::create(cvtBuilder, v.getLoc(), newType, v);
+        mapping.map(v, newCvt);
+        addRematValue(v, layoutIt->second, newCvt);
+        valuesWithExistingRemat.insert(v);
+        continue;
+      }
     }
     if (v.getDefiningOp()) {
       opsToRewrite.insert(v.getDefiningOp());
