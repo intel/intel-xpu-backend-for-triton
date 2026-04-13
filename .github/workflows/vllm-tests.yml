@@ -30,8 +30,14 @@ on:
         default: false
 
   schedule:
-    # Sunday 2:05AM PST (UTC-8) or 3:05AM PDT (UTC-7)
+    # Thursday/Sunday 2:05AM PST (UTC-8) or 3:05AM PDT (UTC-7)
+    - cron: "5 10 * * THU"
     - cron: "5 10 * * SUN"
+
+# Cancel in-progress scheduled runs. Manual runs are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'ci' }}
+  cancel-in-progress: true
 
 permissions: read-all
 

@@ -646,7 +646,8 @@ run_proton_tests() {
   echo "***************************************************"
   cd $TRITON_PROJ/third_party/proton/test
 
-  run_pytest_command -vvv test_api.py test_cmd.py test_lib.py test_profile.py test_viewer.py --device xpu -s
+  TRITON_TEST_SUITE=proton \
+    run_pytest_command -vvv test_api.py test_cmd.py test_lib.py test_profile.py test_viewer.py --device xpu -s
 }
 
 run_tutorial_tests() {
@@ -855,7 +856,7 @@ run_liger_install() {
   if ! pip list | grep "liger_kernel" ; then
     # Liger requires transformers<5.0
     # https://github.com/linkedin/Liger-Kernel/issues/978
-    pip install 'transformers<5.0' 'pandas<3.0' datasets -e Liger-Kernel
+    pip install 'compressed-tensors<0.15' 'transformers<5.0' 'pandas<3.0' datasets -e Liger-Kernel
   fi
 }
 
