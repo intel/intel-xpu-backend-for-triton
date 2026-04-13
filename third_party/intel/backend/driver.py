@@ -954,9 +954,12 @@ def _make_generic_launcher(constants, signature):
     expanded = upstream_expand_signature(signature.values(), tensordesc_meta=None, descriptor_type="*i8")
 
     flat_types = []
+    has_tuple_arg = False
 
     def _flatten_types(sig):
+        nonlocal has_tuple_arg
         if isinstance(sig, tuple):
+            has_tuple_arg = True
             for x in sig:
                 _flatten_types(x)
         else:
@@ -970,10 +973,33 @@ def _make_generic_launcher(constants, signature):
     # it correctly (same ctypes/PyDLL calling convention as generic_launch).
     sig_bytes = build_sig_meta((flat_types,))
 
-    def launcher(all_args):
-        # Hot path: pass raw Python objects directly to C.
-        # C side extracts values, allocates on the stack, and calls set_arg.
-        generic_launch_fn((*all_args[:9], sig_bytes, all_args[9:]))
+    if has_tuple_arg:
+        # Some kernel args are tuples (e.g. fn_args, strides).  The C extractor
+        # expects a flat sequence of scalar/pointer values matching flat_types.
+        # We must flatten tuple-typed args while keeping scalar/constexpr args
+        # as single slots (so C's rawIdx accounting stays correct — one slot per
+        # top-level expanded-signature entry for constexpr, one slot per scalar,
+        # and N slots for an N-element tuple).
+        def _flatten_val(val, sig_type, out):
+            """Flatten val according to sig_type structure."""
+            if isinstance(sig_type, tuple):
+                # val should be a tuple of the same length
+                for v, t in zip(val, sig_type):
+                    _flatten_val(v, t, out)
+            else:
+                out.append(val)
+
+        def launcher(all_args):
+            flat = []
+            for v, sig_type in zip(all_args[9:], expanded):
+                _flatten_val(v, sig_type, flat)
+            generic_launch_fn((*all_args[:9], sig_bytes, flat))
+    else:
+
+        def launcher(all_args):
+            # Hot path: pass raw Python objects directly to C.
+            # C side extracts values, allocates on the stack, and calls set_arg.
+            generic_launch_fn((*all_args[:9], sig_bytes, all_args[9:]))
 
     return launcher
 
