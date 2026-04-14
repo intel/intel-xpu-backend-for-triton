@@ -1,8 +1,8 @@
 #include "intel/include/Analysis/Range.h"
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/Utils/InferIntRangeCommon.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/Utility.h"
 
 using namespace mlir;
@@ -24,50 +24,51 @@ static std::optional<bool> evaluateCmpI(const DataFlowSolver &solver,
           tt::intel::collectRanges(solver, ValueRange{cmpOp.getOperands()})) {
     intrange::CmpPredicate pred =
         static_cast<intrange::CmpPredicate>(cmpOp.getPredicate());
-    if (!(*inputRanges)[0] || !(*inputRanges)[1])
+    std::optional<ConstantIntRanges> lhs = (*inputRanges)[0];
+    std::optional<ConstantIntRanges> rhs = (*inputRanges)[1];
+    if (!lhs || !rhs)
       return std::nullopt;
-    return intrange::evaluatePred(pred, *(*inputRanges)[0], *(*inputRanges)[1]);
+
+    return intrange::evaluatePred(pred, *lhs, *rhs);
   }
   return std::nullopt;
 }
-
-/// Fold arith.cmpi operations that are provably true or false into constants.
-struct FoldTrueCmpIOp : OpRewritePattern<arith::CmpIOp> {
-  using OpRewritePattern::OpRewritePattern;
-
-  FoldTrueCmpIOp(MLIRContext *context, DataFlowSolver *solver)
-      : OpRewritePattern(context), solver(solver) {};
-
-  LogicalResult matchAndRewrite(arith::CmpIOp cmpOp,
-                                PatternRewriter &rewriter) const override {
-    auto result = evaluateCmpI(*solver, cmpOp);
-    if (!result)
-      return failure();
-
-    TypedAttr constAttr = *result ? rewriter.getOneAttr(cmpOp.getType())
-                                  : rewriter.getZeroAttr(cmpOp.getType());
-    rewriter.replaceOpWithNewOp<arith::ConstantOp>(cmpOp, constAttr);
-    return success();
-  }
-
-  DataFlowSolver *solver;
-};
 
 struct FoldTrueCmpIPass
     : public tt::intel::impl::TritonIntelGPUFoldTrueCmpIBase<FoldTrueCmpIPass> {
 
   void runOnOperation() override {
     ModuleOp mod = getOperation();
+
+    // Phase 1: Run range analysis.
     std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
     solver->load<tt::intel::IntegerRangeAnalysis>(mod,
                                                   getAnalysis<DominanceInfo>());
-
-    if (failed(solver->initializeAndRun(getOperation())))
+    if (failed(solver->initializeAndRun(mod)))
       return signalPassFailure();
 
-    RewritePatternSet patterns(&getContext());
-    patterns.add<FoldTrueCmpIOp>(&getContext(), solver.get());
-    (void)applyPatternsGreedily(mod, std::move(patterns));
+    // Phase 2: Collect all foldable cmpi ops and their results.
+    // Using a collect-then-apply approach instead of applyPatternsGreedily
+    // avoids interleaved canonicalization that can erase Values and create new
+    // ones reusing the same memory addresses, causing the solver to return
+    // stale lattice entries with mismatched bitwidths.
+    SmallVector<std::pair<arith::CmpIOp, bool>> folds;
+    mod.walk([&](arith::CmpIOp cmpOp) {
+      if (auto result = evaluateCmpI(*solver, cmpOp))
+        folds.emplace_back(cmpOp, *result);
+    });
+
+    // Phase 3: Apply all replacements.
+    IRRewriter rewriter(&getContext());
+    for (auto [cmpOp, result] : folds) {
+      rewriter.setInsertionPoint(cmpOp);
+      TypedAttr constAttr = result ? rewriter.getOneAttr(cmpOp.getType())
+                                   : rewriter.getZeroAttr(cmpOp.getType());
+      auto constOp =
+          arith::ConstantOp::create(rewriter, cmpOp.getLoc(), constAttr);
+      rewriter.replaceAllUsesWith(cmpOp.getResult(), constOp.getResult());
+      rewriter.eraseOp(cmpOp);
+    }
   }
 };
 
