@@ -128,7 +128,8 @@ private:
       }
 
       Operation &combinerOp = op.getCombineOp().front().front();
-      unsigned arity = targetInfo.getReductionTreeArity(&combinerOp);
+      // unsigned arity = targetInfo.getReductionTreeArity(&combinerOp);
+      unsigned arity = 2;
       unsigned regs = accVecs.front().size();
       if (regs % axisPack != 0)
         return rewriter.notifyMatchFailure(
