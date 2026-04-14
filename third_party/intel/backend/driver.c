@@ -7,12 +7,21 @@
 //===----------------------------------------------------------------------===//
 
 #include <cstddef>
+#include <cstring>
 #include <iostream>
 #include <stdalign.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <string>
 #include <utility>
 #include <vector>
+
+#include <level_zero/ze_api.h>
+#include <sycl/sycl.hpp>
+// FIXME
+// #include <ATen/record_function.h>
+// { "#include <ATen/record_function.h>" if
+// COMPILATION_HELPER.inject_pytorch_dep else "" }
 
 #if defined(_WIN32)
 #define EXPORT_FUNC __declspec(dllexport)
@@ -519,27 +528,6 @@ extern "C" EXPORT_FUNC PyObject *sycl_queue_memset(PyObject *args) {
   Py_RETURN_NONE;
 }
 
-#include <Python.h>
-#include <cstddef>
-#include <iomanip>
-#include <iostream>
-#include <level_zero/ze_api.h>
-#include <string>
-#include <sycl/sycl.hpp>
-// FIXME
-// #include <ATen/record_function.h>
-// { "#include <ATen/record_function.h>" if
-// COMPILATION_HELPER.inject_pytorch_dep else "" }
-
-#if defined(_WIN32)
-#define EXPORT_FUNC __declspec(dllexport)
-#else
-#define EXPORT_FUNC __attribute__((visibility("default")))
-#endif
-
-#include <Python.h>
-#include <stdio.h>
-
 typedef enum { ARG_CONSTEXPR = 0, ARG_KERNEL = 1, ARG_TUPLE = 2 } ArgType;
 
 // Annotation struct to know how the argument should be handled.
@@ -584,21 +572,6 @@ static PyTypeObject PyKernelArgType = {
     .tp_init = (initproc)PyKernelArg_init,
     .tp_dealloc = (destructor)PyKernelArg_dealloc,
 };
-
-namespace {
-
-bool _getBoolEnv(const std::string &env) {
-  const char *s = std::getenv(env.c_str());
-  std::string str(s ? s : "");
-  std::transform(str.begin(), str.end(), str.begin(), [](unsigned char c) {
-    {
-      return std::tolower(c);
-    }
-  });
-  return (str == "on" || str == "true" || str == "1");
-}
-
-} // namespace
 
 static inline void gpuAssert(ze_result_t code, const char *file, int line) {
   if (code != ZE_RESULT_SUCCESS) {
@@ -738,6 +711,61 @@ static inline void setScalarArgByType(sycl::handler &cgh, int index,
   default:
     break;
   }
+}
+
+static inline void printScalarArgByType(uint32_t index, const void *value,
+                                        uint8_t type_idx) {
+  std::cout << "  param[" << index << "] value=";
+  switch ((ExtractorTypeIndex)type_idx) {
+  case EXTRACTOR_POINTER_INDEX:
+    std::cout << *static_cast<void *const *>(value);
+    break;
+  case EXTRACTOR_INT8_INDEX:
+    std::cout << static_cast<int>(*static_cast<const int8_t *>(value));
+    break;
+  case EXTRACTOR_INT16_INDEX:
+    std::cout << *static_cast<const int16_t *>(value);
+    break;
+  case EXTRACTOR_INT32_INDEX:
+    std::cout << *static_cast<const int32_t *>(value);
+    break;
+  case EXTRACTOR_INT64_INDEX:
+    std::cout << *static_cast<const int64_t *>(value);
+    break;
+  case EXTRACTOR_UINT8_INDEX:
+    std::cout << static_cast<unsigned>(*static_cast<const uint8_t *>(value));
+    break;
+  case EXTRACTOR_UINT16_INDEX:
+    std::cout << *static_cast<const uint16_t *>(value);
+    break;
+  case EXTRACTOR_UINT32_INDEX:
+    std::cout << *static_cast<const uint32_t *>(value);
+    break;
+  case EXTRACTOR_UINT64_INDEX:
+    std::cout << *static_cast<const uint64_t *>(value);
+    break;
+  case EXTRACTOR_FP16_INDEX:
+  case EXTRACTOR_BF16_INDEX:
+    // Stored as 16-bit payload; print raw bits for debugging.
+    std::cout << *static_cast<const uint16_t *>(value);
+    break;
+  case EXTRACTOR_FP32_INDEX: {
+    float fp32;
+    std::memcpy(&fp32, value, sizeof(fp32));
+    std::cout << fp32;
+    break;
+  }
+  case EXTRACTOR_FP64_INDEX: {
+    double fp64;
+    std::memcpy(&fp64, value, sizeof(fp64));
+    std::cout << fp64;
+    break;
+  }
+  default:
+    std::cout << "<unknown>";
+    break;
+  }
+  std::cout << std::endl;
 }
 
 static PyObject *data_ptr_str = NULL;
@@ -977,11 +1005,13 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
               << std::endl;
     std::cout << "  shared_memory: " << shared_memory << std::endl;
 
-    // FIXME
-    //{" ".join(f'std::cout << "  param {idx}:" <<
-    //*({ty_to_cpp(item)}*)params[{idx}] << std::endl;' for idx, item in
-    // enumerate([signature[i] for i in signature if signature[i] !=
-    //"constexpr"]))}
+    for (uint32_t idx = 0; idx < num_params - 2; ++idx)
+      printScalarArgByType(idx, params[idx], extractor_data[idx]);
+    // print scratch memory arguments
+    printScalarArgByType(num_params - 2, params[num_params - 2],
+                         EXTRACTOR_POINTER_INDEX);
+    printScalarArgByType(num_params - 1, params[num_params - 1],
+                         EXTRACTOR_POINTER_INDEX);
   }
   assert(num_params == expected_num_params &&
          "number of kernel param not matched");
