@@ -463,19 +463,18 @@ struct LoadStoreConversionBase {
     // There's an IGC bug with predicated load so it is disabled by default.
     // On the other hand, predicated store is expected to be correct and it is
     // enabled by default. Both can be overridden by env vars.
-    static const std::optional<bool> usePredicatedLoad =
-        tools::isEnvValueBool(tools::getStrEnv("TRITON_INTEL_PREDICATED_LOAD"));
+    static const bool canUsePredicatedLoad =
+        tools::getBoolEnv("TRITON_INTEL_PREDICATED_LOAD");
     static const std::optional<bool> usePredicatedStore = tools::isEnvValueBool(
         tools::getStrEnv("TRITON_INTEL_PREDICATED_STORE"));
 
     // SPIRV predicated load/store does not support volatile qualifier.
     if constexpr (std::is_same_v<OpType, LoadOp>) {
-      return (!usePredicatedLoad.has_value() || usePredicatedLoad.value()) &&
-             !op.getIsVolatile();
+      return canUsePredicatedLoad && !op.getIsVolatile();
     } else if constexpr (std::is_same_v<OpType, StoreOp>) {
       return !usePredicatedStore.has_value() || usePredicatedStore.value();
     } else if constexpr (std::is_same_v<OpType, DescriptorLoadOp>) {
-      return !usePredicatedLoad.has_value() || usePredicatedLoad.value();
+      return canUsePredicatedLoad;
     } else if constexpr (std::is_same_v<OpType, DescriptorStoreOp>) {
       return !usePredicatedStore.has_value() || usePredicatedStore.value();
     }
