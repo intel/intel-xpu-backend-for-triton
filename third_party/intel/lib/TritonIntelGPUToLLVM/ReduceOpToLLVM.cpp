@@ -439,58 +439,45 @@ private:
     // The common lowering logic works on LinearLayout + SSA vectors of values.
     // We reconstruct (layout, values) from the post-step-2 Intel state:
     //  - layout is the reducedRegLaneLayout for the src type.
-    //  - values are taken from accs in the canonical per-thread register order.
+    //  - values are taken from accs in the canonical per-thread register order
+    //    of the *reduced* layout (i.e., after step 1/2 have collapsed axis).
     //
     // This keeps the numeric behavior of step 1/2 unchanged, and only changes
     // the cross-warp orchestration.
     unsigned axis = op.getAxis();
 
-    LinearLayout regLl = triton::gpu::toLinearLayout(helper.getSrcTy());
-    // After Intel step 1/2, we should be at the same point as common lowering
-    // after its first two phases.
-    regLl = ReduceOpHelper::reducedRegLaneLayout(helper.getSrcTy(), axis);
+    LinearLayout regLl =
+        ReduceOpHelper::reducedRegLaneLayout(helper.getSrcTy(), axis);
 
     // Materialize per-operand register values from the (key -> acc) map.
     // Keys are indices in the reduced layout with the reduction axis set to 0.
     SmallVector<SmallVector<Value>> llAccs(op.getNumOperands());
 
-    // We need the per-thread register offsets for the reduced layout.
-    // element type doesn’t matter for offsets.
+    // The important bit: `llAccs[*]` must be in the same register order that
+    // `packLLElements` expects for the tensor type we create in
+    // convertLayoutValues().  That order corresponds to
+    // `emitOffsetForLayout(<reduced-encoding>, <reduced-tensor-type>)`.
     auto srcTy = cast<RankedTensorType>(op.getOperandTypes().front());
-    auto srcEncoding = cast<DistributedEncodingTrait>(srcTy.getEncoding());
-    auto regTensorTy = RankedTensorType::get(
-        srcTy.getShape(), srcTy.getElementType(), srcTy.getEncoding());
-    (void)regTensorTy;
+    auto reducedShape = llvm::to_vector(srcTy.getShape());
+    reducedShape[axis] = 1;
 
-    // Use emitIndices/emitOffsetForLayout on the *src* layout to define a
-    // stable ordering of registers. Then map each register key to the reduced
-    // key (axis=0). This matches how reduceWithinThreads builds accs.
-    SmallVector<SmallVector<unsigned>> offsets =
-        emitOffsetForLayout(helper.getSrcLayout(), srcTy);
+    // Create a tensor type whose encoding matches `regLl`.
+    auto regEnc = triton::gpu::LinearEncodingAttr::get(ctx, regLl);
+    auto reducedTensorTy =
+        RankedTensorType::get(reducedShape, srcTy.getElementType(), regEnc);
 
-    // offsets.size() can have duplicates due to broadcasting.
-    llvm::MapVector<ArrayRef<unsigned>, int> uniqueOffsets;
-    for (int i = 0; i < static_cast<int>(offsets.size()); ++i)
-      uniqueOffsets.insert({offsets[i], i});
+    SmallVector<SmallVector<unsigned>> regOffsets =
+        emitOffsetForLayout(regEnc, reducedTensorTy);
 
-    // Reorder unique offsets by their original index to keep deterministic.
-    SmallVector<int> uniqueIdx;
-    uniqueIdx.reserve(uniqueOffsets.size());
-    for (const auto &it : uniqueOffsets)
-      uniqueIdx.push_back(it.second);
-    llvm::sort(uniqueIdx);
-
-    // For each unique register, compute the corresponding reduced key.
-    for (int i : uniqueIdx) {
-      SmallVector<unsigned> key = offsets[i];
+    for (const SmallVector<unsigned> &off : regOffsets) {
+      SmallVector<unsigned> key = off;
+      // Be robust: the reduced encoding should already have axis=0, but keep it
+      // explicit since our accs map is keyed that way.
       key[axis] = 0;
       auto it = accs.find(key);
-      if (it == accs.end()) {
-        // Should not happen; indicates mismatch between offset computation and
-        // accumulator keys.
+      if (it == accs.end())
         return rewriter.notifyMatchFailure(op,
                                            "failed to find accumulator key");
-      }
       for (unsigned opIdx = 0; opIdx < op.getNumOperands(); ++opIdx)
         llAccs[opIdx].push_back(it->second[opIdx]);
     }
