@@ -213,11 +213,15 @@ class SpirvUtils:
 
     def __getattribute__(self, name):
         if name in ("get_device_properties", "init_devices", "wait_on_sycl_queue", "get_last_selected_build_flags",
-                    "sycl_queue_memset", "launch", "build_signature_metadata", "init_PyKernelArgType"):
+                    "sycl_queue_memset", "build_signature_metadata", "init_PyKernelArgType"):
             shared_library = super().__getattribute__("shared_library")
             return getattr(shared_library, name)
 
         return super().__getattribute__(name)
+
+    def launch(self, *args):
+        # the same reason as for `load_binary`
+        return self.shared_library.launch(args)
 
     def load_binary(self, *args):
         # if we don't use parameter passing in this way,
@@ -514,11 +518,10 @@ class XPULauncher(object):
         constants = {arg_idx(idx): value for idx, value in constants.items()}
         signature = {idx: value for idx, value in src.signature.items()}
         launcher = triton.runtime.driver.active.utils.launch
-        # breakpoint()
         expanded_signature = expand_signature(signature.values(), tensordesc_meta=None, descriptor_type="*i8")
         self.arg_annotations = annotate_arguments(expanded_signature)
         self.kernel_signature = make_kernel_signature(expanded_signature)
-        self.launch = wrap_handle_tensordesc(launcher, signature, tensordesc_meta=None)
+        self.launch = wrap_handle_tensordesc(launcher, signature, tensordesc_meta=[])
 
         # Serialize KernelArguments for SPIR-V Runner
         self.serialize_kernel_args = knobs.intel.dump_spirv_kernel_args
@@ -576,8 +579,8 @@ class XPULauncher(object):
             self._dump_launch_params((gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata,
                                       launch_enter_hook, launch_exit_hook, *args), self.constants, self.signature)
 
-        self.launch((gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
-                     launch_exit_hook, self.arg_annotations, self.kernel_signature, args))
+        self.launch(gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
+                    launch_exit_hook, self.arg_annotations, self.kernel_signature, args)
 
 
 class XPUDriver(DriverBase):

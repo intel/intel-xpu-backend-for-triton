@@ -952,7 +952,7 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
   // FIXME
   // RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {});
   //{ 'RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {});' if
-  //COMPILATION_HELPER.inject_pytorch_dep else "" }
+  // COMPILATION_HELPER.inject_pytorch_dep else "" }
 
   uint32_t expected_num_params =
       kernel_ptr.get_info<sycl::info::kernel::num_args>();
@@ -1000,7 +1000,7 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
     // FIXME
     //{" ".join(f'std::cout << "  param {idx}:" <<
     //*({ty_to_cpp(item)}*)params[{idx}] << std::endl;' for idx, item in
-    //enumerate([signature[i] for i in signature if signature[i] !=
+    // enumerate([signature[i] for i in signature if signature[i] !=
     //"constexpr"]))}
   }
   assert(num_params == expected_num_params &&
