@@ -69,16 +69,15 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 
 // -----
 
-// Test: Descriptor load pre-applies 64-byte alignment compensation to the base
-// pointer and column offset. This ensures multi-tile loads build tile offsets
-// relative to an alignment-adjusted base, preventing LLVM from factoring out
-// a suboptimal common subexpression across operand loads.
+// Test: Descriptor load pre-applies 64-byte alignment compensation when the
+// column descriptor index is non-zero. This prevents LLVM CSE from factoring
+// out a suboptimal common subexpression across operand loads.
 
 #dpas_align = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0_align = #ttg.dot_op<{opIdx = 0, parent = #dpas_align, kWidth=1}>
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
-  // CHECK-LABEL: @descriptor_load_pre_alignment
-  tt.func public @descriptor_load_pre_alignment(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i32, %arg5: i32) {
+  // CHECK-LABEL: @descriptor_load_pre_alignment_nonzero_col
+  tt.func public @descriptor_load_pre_alignment_nonzero_col(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i32, %arg5: i32) {
     %c1_i64 = arith.constant 1 : i64
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <tensor<64x32xf16>>
 
@@ -98,7 +97,38 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // Verify both 2D block loads use the aligned pointer and adjusted width.
     // CHECK: triton_gen.2Dblockload %[[ALIGNED_PTR]], %[[ADJ_BASE_WIDTH]]
     // CHECK: triton_gen.2Dblockload %[[ALIGNED_PTR]], %[[ADJ_BASE_WIDTH]]
+
+    // Both indices are non-zero runtime values, so pre-alignment is applied.
     %load = tt.descriptor_load %desc[%arg4, %arg5] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #dot0_align>
+    tt.return
+  }
+}
+
+// -----
+
+// Test: Descriptor load skips pre-alignment when the column descriptor index
+// is a known constant zero. This preserves the natural expression tree that
+// LLVM optimizes well (matching the block pointer lowering path).
+
+#dpas_noalign = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0_noalign = #ttg.dot_op<{opIdx = 0, parent = #dpas_noalign, kWidth=1}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @descriptor_load_no_pre_alignment_zero_col
+  tt.func public @descriptor_load_no_pre_alignment_zero_col(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <tensor<64x32xf16>>
+
+    // Column index is constant 0: no pre-alignment should be applied.
+    // The base pointer should be passed directly to the 2D block load
+    // (alignment handled later by computeAlignedBasePtrWidthAndOffset in
+    // TritonGEN lowering). No llvm.inttoptr (alignment) should appear
+    // between the base extraction and the 2D block loads.
+    // CHECK: %[[BASE:.*]] = llvm.extractvalue {{.*}}[4]
+    // CHECK-NOT: llvm.inttoptr
+    // CHECK: triton_gen.2Dblockload %[[BASE]]
+    // CHECK: triton_gen.2Dblockload %[[BASE]]
+    %load = tt.descriptor_load %desc[%arg4, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #dot0_noalign>
     tt.return
   }
 }
